@@ -2,18 +2,23 @@
 
 use std::{collections::BTreeSet, fmt};
 
+use iroha_crypto::{Algorithm, Hash, KeyPair, SignatureOf};
 use iroha_data_model::{
     ChainId,
     block::{
         BlockHeader, SignedBlock,
+        consensus_v2::SumeragiV2Status,
         consensus_v2::finality::{V2FinalityArtifact, V2QuorumCertificateVerificationError},
     },
     bridge::{
-        BRIDGE_FINALITY_PROOF_VERSION_V1, BridgeCommitment, BridgeFinalityBundle,
-        BridgeFinalityProof, SccpGovernedRouteV1, SccpOutboundMessageKeyV1,
+        BRIDGE_FINALITY_ATTESTATION_VERSION_V1, BRIDGE_FINALITY_PROOF_VERSION_V1, BridgeCommitment,
+        BridgeFinalityAttestationBodyV1, BridgeFinalityAttestationV1,
+        BridgeFinalityAttestationValidationError, BridgeFinalityBundle, BridgeFinalityProof,
+        SccpGovernedRouteV1, SccpOutboundMessageKeyV1,
     },
     isi::InstructionBox,
     name::Name,
+    peer::PeerId,
     transaction::{Executable, TransactionEntrypoint},
 };
 use iroha_sccp::{
@@ -1321,6 +1326,174 @@ fn build_finality_proof_from_verified(
     })
 }
 
+/// Build and sign one challenge-bound attestation for the exact committed state tip.
+///
+/// The first block hash and requested tip are taken from one immutable state view. The
+/// embedded proof is loaded from Kura's verified finality boundary, and the reducer status
+/// must name that exact proof before the node key is allowed to sign anything.
+///
+/// # Errors
+///
+/// Returns [`BridgeFinalityAttestationBuildError`] when the state is empty, the requested
+/// height is not its exact tip, finality is unavailable, the status/proof body is inconsistent,
+/// or the configured signer cannot produce a verifiable signature.
+pub fn build_finality_attestation(
+    state: &impl StateReadOnly,
+    status: SumeragiV2Status,
+    height: u64,
+    challenge: [u8; 32],
+    signer: &KeyPair,
+) -> Result<BridgeFinalityAttestationV1, BridgeFinalityAttestationBuildError> {
+    if signer.algorithm() != Algorithm::BlsNormal {
+        return Err(BridgeFinalityAttestationBuildError::InvalidSignerAlgorithm);
+    }
+    let committed_height = u64::try_from(state.block_hashes().len())
+        .map_err(|_| BridgeFinalityAttestationBuildError::HeightOverflow)?;
+    if committed_height == 0 {
+        return Err(BridgeFinalityAttestationBuildError::EmptyState);
+    }
+    require_exact_durable_tip_height(height, committed_height)?;
+    let genesis_block_hash = state
+        .block_hashes()
+        .first()
+        .copied()
+        .ok_or(BridgeFinalityAttestationBuildError::EmptyState)?;
+    let committed_tip_hash = state
+        .block_hashes()
+        .last()
+        .copied()
+        .ok_or(BridgeFinalityAttestationBuildError::EmptyState)?;
+    let genesis_finality_proof = build_finality_proof(state, 1)
+        .map_err(BridgeFinalityAttestationBuildError::GenesisFinalityProof)?;
+    require_finality_proof_at_committed_genesis(
+        genesis_block_hash,
+        genesis_finality_proof.finality_artifact.block_hash,
+    )?;
+    let finality_proof = build_finality_proof(state, height)
+        .map_err(BridgeFinalityAttestationBuildError::FinalityProof)?;
+    require_finality_proof_at_committed_tip(
+        committed_tip_hash,
+        finality_proof.finality_artifact.block_hash,
+    )?;
+    let node_id = PeerId::new(signer.public_key().clone());
+    let node_fingerprint = Hash::new(norito::codec::Encode::encode(&node_id));
+    let body = BridgeFinalityAttestationBodyV1 {
+        version: BRIDGE_FINALITY_ATTESTATION_VERSION_V1,
+        challenge,
+        chain_id: state.chain_id().clone(),
+        node_id,
+        node_fingerprint,
+        genesis_block_hash,
+        genesis_finality_proof,
+        status,
+        finality_proof,
+    };
+    body.validate_consistency()
+        .map_err(BridgeFinalityAttestationBuildError::InvalidBody)?;
+    let signature = SignatureOf::try_from_hash(signer.private_key(), body.signing_hash())
+        .map_err(|error| BridgeFinalityAttestationBuildError::Signing(error.to_string()))?;
+    let attestation = BridgeFinalityAttestationV1 { body, signature };
+    attestation
+        .verify()
+        .map_err(BridgeFinalityAttestationBuildError::InvalidBody)?;
+    Ok(attestation)
+}
+
+fn require_finality_proof_at_committed_tip(
+    committed_tip_hash: iroha_crypto::HashOf<BlockHeader>,
+    proof_block_hash: iroha_crypto::HashOf<BlockHeader>,
+) -> Result<(), BridgeFinalityAttestationBuildError> {
+    if proof_block_hash != committed_tip_hash {
+        return Err(BridgeFinalityAttestationBuildError::FinalityTipMismatch {
+            committed_tip_hash,
+            proof_block_hash,
+        });
+    }
+    Ok(())
+}
+
+fn require_exact_durable_tip_height(
+    requested: u64,
+    committed: u64,
+) -> Result<(), BridgeFinalityAttestationBuildError> {
+    if requested != committed {
+        return Err(BridgeFinalityAttestationBuildError::HeightIsNotDurableTip {
+            requested,
+            committed,
+        });
+    }
+    Ok(())
+}
+
+fn require_finality_proof_at_committed_genesis(
+    committed_genesis_hash: iroha_crypto::HashOf<BlockHeader>,
+    proof_block_hash: iroha_crypto::HashOf<BlockHeader>,
+) -> Result<(), BridgeFinalityAttestationBuildError> {
+    if proof_block_hash != committed_genesis_hash {
+        return Err(
+            BridgeFinalityAttestationBuildError::GenesisFinalityMismatch {
+                committed_genesis_hash,
+                proof_block_hash,
+            },
+        );
+    }
+    Ok(())
+}
+
+/// Failure while producing a node-signed durable-tip finality attestation.
+#[derive(Debug, Error)]
+pub enum BridgeFinalityAttestationBuildError {
+    /// No committed genesis exists in the state snapshot.
+    #[error("cannot attest finality for an empty state")]
+    EmptyState,
+    /// The committed block count cannot be represented on the wire.
+    #[error("committed height does not fit into u64")]
+    HeightOverflow,
+    /// Only the exact durable tip may be attested.
+    #[error("requested height {requested} is not durable tip {committed}")]
+    HeightIsNotDurableTip {
+        /// Requested block height.
+        requested: u64,
+        /// Exact committed state-view tip.
+        committed: u64,
+    },
+    /// The verified finality record is not for the immutable state-view tip hash.
+    #[error(
+        "finality proof block hash {proof_block_hash:?} does not match committed tip {committed_tip_hash:?}"
+    )]
+    FinalityTipMismatch {
+        /// Last block hash in the immutable state view.
+        committed_tip_hash: iroha_crypto::HashOf<BlockHeader>,
+        /// Block hash authenticated by the loaded finality proof.
+        proof_block_hash: iroha_crypto::HashOf<BlockHeader>,
+    },
+    /// The verified height-one finality record is not for the immutable state-view genesis hash.
+    #[error(
+        "genesis finality proof block hash {proof_block_hash:?} does not match committed genesis {committed_genesis_hash:?}"
+    )]
+    GenesisFinalityMismatch {
+        /// First block hash in the immutable state view.
+        committed_genesis_hash: iroha_crypto::HashOf<BlockHeader>,
+        /// Block hash authenticated by the loaded height-one proof.
+        proof_block_hash: iroha_crypto::HashOf<BlockHeader>,
+    },
+    /// The production node signer is not the current BLS consensus identity.
+    #[error("finality attestation signer must use BlsNormal")]
+    InvalidSignerAlgorithm,
+    /// Kura could not produce the exact verified proof for the requested tip.
+    #[error("failed to build durable-tip finality proof: {0:?}")]
+    FinalityProof(BridgeFinalityError),
+    /// Kura could not produce the exact verified proof for committed height one.
+    #[error("failed to build committed-genesis finality proof: {0:?}")]
+    GenesisFinalityProof(BridgeFinalityError),
+    /// Status, node identity, genesis, or proof duplicate bindings disagree.
+    #[error("finality attestation body is inconsistent: {0}")]
+    InvalidBody(BridgeFinalityAttestationValidationError),
+    /// The configured private key failed to sign the domain-separated body hash.
+    #[error("failed to sign finality attestation: {0}")]
+    Signing(String),
+}
+
 /// Build an SCCP Groth16 request from a bundle bound to one already verified local artifact.
 ///
 /// The marker is the trust boundary: Kura mints it after cache-backed verification, while
@@ -1693,6 +1866,86 @@ mod tests {
     fn checked_bls_keypair() -> KeyPair {
         KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)
             .expect("bridge BLS fixture key generation should succeed")
+    }
+
+    #[test]
+    fn finality_attestation_requires_exact_state_view_tip_hash() {
+        let committed_tip = BlockHeader::new(
+            NonZeroU64::new(2).expect("non-zero height"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        )
+        .hash();
+        let another_tip = BlockHeader::new(
+            NonZeroU64::new(3).expect("non-zero height"),
+            Some(committed_tip),
+            None,
+            None,
+            0,
+            0,
+        )
+        .hash();
+
+        require_finality_proof_at_committed_tip(committed_tip, committed_tip)
+            .expect("exact tip must bind");
+        assert!(matches!(
+            require_finality_proof_at_committed_tip(committed_tip, another_tip),
+            Err(BridgeFinalityAttestationBuildError::FinalityTipMismatch {
+                committed_tip_hash,
+                proof_block_hash,
+            }) if committed_tip_hash == committed_tip && proof_block_hash == another_tip
+        ));
+    }
+
+    #[test]
+    fn finality_attestation_fails_closed_when_requested_tip_races_state_view() {
+        require_exact_durable_tip_height(7, 7).expect("same immutable tip height");
+        assert!(matches!(
+            require_exact_durable_tip_height(7, 8),
+            Err(BridgeFinalityAttestationBuildError::HeightIsNotDurableTip {
+                requested: 7,
+                committed: 8,
+            })
+        ));
+    }
+
+    #[test]
+    fn finality_attestation_requires_exact_state_view_genesis_hash() {
+        let committed_genesis = BlockHeader::new(
+            NonZeroU64::new(1).expect("non-zero height"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        )
+        .hash();
+        let substituted_genesis = BlockHeader::new(
+            NonZeroU64::new(1).expect("non-zero height"),
+            None,
+            None,
+            None,
+            1,
+            0,
+        )
+        .hash();
+
+        require_finality_proof_at_committed_genesis(committed_genesis, committed_genesis)
+            .expect("exact genesis must bind");
+        assert!(matches!(
+            require_finality_proof_at_committed_genesis(
+                committed_genesis,
+                substituted_genesis,
+            ),
+            Err(BridgeFinalityAttestationBuildError::GenesisFinalityMismatch {
+                committed_genesis_hash,
+                proof_block_hash,
+            }) if committed_genesis_hash == committed_genesis
+                && proof_block_hash == substituted_genesis
+        ));
     }
 
     fn canonical_test_sccp_payload_bytes(payload: &SccpPayloadV1) -> Vec<u8> {

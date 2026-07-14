@@ -13,10 +13,10 @@ final class NativeBridgeLoaderTests: XCTestCase {
         XCTAssertFalse(NoritoBridgeLoader.isSupportedBridgeAbiVersion(19, for: "macos-arm64"))
         XCTAssertFalse(NoritoBridgeLoader.isSupportedBridgeAbiVersion(nil, for: "macos-arm64"))
         XCTAssertTrue(KagemushaRecursiveSpend.requiredProtocolSymbols.contains(
-            "connect_norito_kagemusha_recursive_spend_artifact_begin_v3"
+            "connect_norito_kagemusha_recursive_spend_artifact_begin_v4"
         ))
         XCTAssertTrue(KagemushaRecursiveSpend.requiredProtocolSymbols.contains(
-            "connect_norito_kagemusha_recursive_spend_artifact_set_install_v3"
+            "connect_norito_kagemusha_recursive_spend_artifact_set_install_v4"
         ))
     }
 

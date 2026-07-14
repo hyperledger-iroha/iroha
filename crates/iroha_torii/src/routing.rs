@@ -6117,6 +6117,44 @@ pub(crate) async fn handle_v1_bridge_finality(
     .await
 }
 
+/// GET /v1/bridge/finality/attestation/{height} — Challenge-bound node-signed
+/// finality proof for the exact durable state tip plus its committed genesis.
+#[iroha_futures::telemetry_future]
+pub(crate) async fn handle_v1_bridge_finality_attestation(
+    state: Arc<CoreState>,
+    status: iroha_data_model::block::consensus_v2::SumeragiV2Status,
+    height: u64,
+    challenge: [u8; 32],
+    signer: KeyPair,
+    format: crate::utils::ResponseFormat,
+    admission: crate::QueryAdmissionPermit,
+) -> Result<Response> {
+    run_admitted_blocking(
+        admission,
+        "bridge finality attestation worker failed",
+        move || {
+            let view = state.view();
+            let attestation = iroha_core::bridge::build_finality_attestation(
+                &view, status, height, challenge, &signer,
+            )
+            .map_err(map_bridge_finality_attestation_error)?;
+
+            if matches!(format, crate::utils::ResponseFormat::Norito) {
+                return Ok(crate::NoritoBody(attestation).into_response());
+            }
+
+            let body = json::to_json_pretty(&attestation).map_err(norito_internal_error)?;
+            let mut resp = axum::response::Response::new(axum::body::Body::from(body));
+            resp.headers_mut().insert(
+                axum::http::header::CONTENT_TYPE,
+                axum::http::HeaderValue::from_static("application/json"),
+            );
+            Ok(resp)
+        },
+    )
+    .await
+}
+
 /// GET /v1/bridge/finality/bundle/{height} — Compact commitment + exact v2 proof for a block.
 #[iroha_futures::telemetry_future]
 pub(crate) async fn handle_v1_bridge_finality_bundle(
@@ -6161,6 +6199,36 @@ fn map_bridge_finality_error(err: iroha_core::bridge::BridgeFinalityError) -> Er
             iroha_data_model::ValidationFail::InternalError(format!("{err:?}")),
         ),
     }
+}
+
+fn map_bridge_finality_attestation_error(
+    err: iroha_core::bridge::BridgeFinalityAttestationBuildError,
+) -> Error {
+    use iroha_core::bridge::{
+        BridgeFinalityAttestationBuildError as BuildError, BridgeFinalityError,
+    };
+
+    let not_found = matches!(
+        &err,
+        BuildError::EmptyState
+            | BuildError::HeightIsNotDurableTip { .. }
+            | BuildError::FinalityProof(
+                BridgeFinalityError::InvalidHeight(_)
+                    | BridgeFinalityError::FinalityArtifactNotFound(_)
+            )
+            | BuildError::GenesisFinalityProof(
+                BridgeFinalityError::InvalidHeight(_)
+                    | BridgeFinalityError::FinalityArtifactNotFound(_)
+            )
+    );
+    if not_found {
+        return Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::NotFound,
+        ));
+    }
+    Error::Query(iroha_data_model::ValidationFail::InternalError(
+        err.to_string(),
+    ))
 }
 
 fn sccp_bad_request(message: impl Into<String>) -> Error {
@@ -20670,6 +20738,29 @@ fn reject_unverified_multisig_alias_selector(selector: &MultisigAccountSelectorD
         ));
     }
     Ok(())
+}
+
+#[cfg(all(test, feature = "app_api"))]
+mod multisig_alias_selector_guard_tests {
+    use super::*;
+
+    #[test]
+    fn unsigned_scaffold_rejects_alias_even_when_body_asserts_a_signer() {
+        let selector = MultisigAccountSelectorDto {
+            multisig_account_id: None,
+            multisig_account_alias: Some("treasury@universal".to_owned()),
+        };
+
+        let error = reject_unverified_multisig_alias_selector(&selector)
+            .expect_err("body-asserted signer identity must not authorize alias resolution");
+        assert!(matches!(
+            error,
+            Error::AppForbidden {
+                code: "multisig_alias_signature_required",
+                ..
+            }
+        ));
+    }
 }
 
 #[cfg(feature = "app_api")]
@@ -69524,6 +69615,79 @@ pub struct MultisigAccountOnboardingRequestDto {
 }
 
 #[cfg(feature = "app_api")]
+const MAX_ONBOARDING_MULTISIG_MEMBERS: usize = 255;
+#[cfg(feature = "app_api")]
+const DEFAULT_ONBOARDING_MULTISIG_TRANSACTION_TTL_MS: u64 = 86_400_000;
+#[cfg(feature = "app_api")]
+const MAX_ONBOARDING_MULTISIG_TRANSACTION_TTL_MS: u64 = 86_400_000;
+
+#[cfg(feature = "app_api")]
+fn onboarding_multisig_transaction_ttl_ms(requested: Option<u64>) -> Result<NonZeroU64> {
+    let ttl_ms = requested.unwrap_or(DEFAULT_ONBOARDING_MULTISIG_TRANSACTION_TTL_MS);
+    if !(1..=MAX_ONBOARDING_MULTISIG_TRANSACTION_TTL_MS).contains(&ttl_ms) {
+        return Err(onboarding_invalid_request(
+            "transaction_ttl_ms must be between 1 and 86400000",
+        ));
+    }
+    Ok(NonZeroU64::new(ttl_ms).expect("validated onboarding multisig TTL is non-zero"))
+}
+
+#[cfg(all(feature = "app_api", test))]
+mod onboarding_multisig_validation_tests {
+    use super::*;
+
+    #[test]
+    fn transaction_ttl_is_positive_bounded_and_defaults_to_one_day() {
+        assert_eq!(
+            onboarding_multisig_transaction_ttl_ms(None)
+                .expect("default TTL")
+                .get(),
+            DEFAULT_ONBOARDING_MULTISIG_TRANSACTION_TTL_MS
+        );
+        assert_eq!(
+            onboarding_multisig_transaction_ttl_ms(Some(1))
+                .expect("minimum TTL")
+                .get(),
+            1
+        );
+        assert_eq!(
+            onboarding_multisig_transaction_ttl_ms(Some(
+                MAX_ONBOARDING_MULTISIG_TRANSACTION_TTL_MS
+            ))
+            .expect("maximum TTL")
+            .get(),
+            MAX_ONBOARDING_MULTISIG_TRANSACTION_TTL_MS
+        );
+        for invalid in [0, MAX_ONBOARDING_MULTISIG_TRANSACTION_TTL_MS + 1, u64::MAX] {
+            let error = onboarding_multisig_transaction_ttl_ms(Some(invalid))
+                .expect_err("out-of-range TTL must fail closed");
+            assert!(matches!(
+                error,
+                crate::Error::AccountOnboardingValidation {
+                    code: "multisig_ttl_out_of_range",
+                    ..
+                }
+            ));
+        }
+    }
+
+    #[test]
+    fn existing_multisig_alias_mismatch_has_a_stable_public_code() {
+        let error = onboarding_invalid_request(
+            "existing multisig account is not bound to the requested alias",
+        );
+        assert!(matches!(
+            error,
+            crate::Error::AccountOnboardingValidation {
+                code: "existing_multisig_alias_mismatch",
+                hint: Some(_),
+                ..
+            }
+        ));
+    }
+}
+
+#[cfg(feature = "app_api")]
 #[derive(Debug, crate::json_macros::JsonSerialize)]
 pub struct MultisigAccountOnboardingResponseDto {
     pub account_id: String,
@@ -69531,15 +69695,6 @@ pub struct MultisigAccountOnboardingResponseDto {
     pub status: &'static str,
     #[norito(skip_serializing_if = "Option::is_none")]
     pub lease: Option<AccountAliasLeaseDto>,
-}
-
-#[cfg(feature = "app_api")]
-impl crate::utils::extractors::SupportsNoritoDecode for AccountOnboardingRequestDto {
-    fn decode_norito(bytes: &[u8]) -> Result<Self, norito::Error> {
-        norito::json::from_slice::<Self>(bytes).map_err(|err| {
-            norito::Error::Message(format!("invalid AccountOnboardingRequestDto: {err}"))
-        })
-    }
 }
 
 #[cfg(feature = "app_api")]
@@ -69556,17 +69711,6 @@ impl crate::utils::extractors::SupportsNoritoDecode for ConfidentialRelaySubmitR
     fn decode_norito(bytes: &[u8]) -> Result<Self, norito::Error> {
         norito::json::from_slice::<Self>(bytes).map_err(|err| {
             norito::Error::Message(format!("invalid ConfidentialRelaySubmitRequestDto: {err}"))
-        })
-    }
-}
-
-#[cfg(feature = "app_api")]
-impl crate::utils::extractors::SupportsNoritoDecode for MultisigAccountOnboardingRequestDto {
-    fn decode_norito(bytes: &[u8]) -> Result<Self, norito::Error> {
-        norito::json::from_slice::<Self>(bytes).map_err(|err| {
-            norito::Error::Message(format!(
-                "invalid MultisigAccountOnboardingRequestDto: {err}"
-            ))
         })
     }
 }
@@ -69609,6 +69753,18 @@ fn onboarding_error_metadata(reason: &str) -> (&'static str, Option<&'static str
             Some(
                 "Enable Torii account onboarding in node configuration before exposing this route.",
             ),
+        )
+    } else if normalized.contains("existing multisig account is not bound") {
+        (
+            "existing_multisig_alias_mismatch",
+            Some(
+                "Use the alias already bound to this exact multisig policy or choose a new policy.",
+            ),
+        )
+    } else if normalized.contains("transaction_ttl_ms") {
+        (
+            "multisig_ttl_out_of_range",
+            Some("Use a multisig transaction TTL between 1 millisecond and 24 hours."),
         )
     } else if normalized.contains("alias must not be empty")
         || normalized.contains("account alias")
@@ -70558,7 +70714,7 @@ fn build_onboarding_alias_auto_renew_instructions(
 #[cfg(feature = "app_api")]
 pub async fn handle_v1_accounts_onboard(
     app: crate::SharedAppState,
-    crate::NoritoJson(req): crate::NoritoJson<AccountOnboardingRequestDto>,
+    crate::CanonicalJsonOnly(req): crate::CanonicalJsonOnly<AccountOnboardingRequestDto>,
     telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse> {
     let Some(signer) = app.uaid_onboarding.as_ref() else {
@@ -71030,7 +71186,7 @@ pub async fn handle_v1_accounts_faucet(
 #[cfg(feature = "app_api")]
 pub async fn handle_v1_accounts_onboard_multisig(
     app: crate::SharedAppState,
-    crate::NoritoJson(req): crate::NoritoJson<MultisigAccountOnboardingRequestDto>,
+    crate::CanonicalJsonOnly(req): crate::CanonicalJsonOnly<MultisigAccountOnboardingRequestDto>,
     telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse> {
     use iroha_data_model::account::{MultisigMember, MultisigPolicy};
@@ -71065,9 +71221,9 @@ pub async fn handle_v1_accounts_onboard_multisig(
         .map_err(|err| onboarding_invalid_request(&err.to_string()))?;
     let (alias_dataspace, alias_domain_text) =
         account_alias_scope_strings(&alias_label, &nexus.dataspace_catalog)?;
-    if member_account_ids.len() < 2 {
+    if !(2..=MAX_ONBOARDING_MULTISIG_MEMBERS).contains(&member_account_ids.len()) {
         return Err(onboarding_invalid_request(
-            "multisig onboarding requires at least two member accounts",
+            "multisig onboarding requires between 2 and 255 member accounts",
         ));
     }
 
@@ -71095,9 +71251,14 @@ pub async fn handle_v1_accounts_onboard_multisig(
         ));
     }
 
-    let threshold = u16::from(required_signers.max(1));
-    let total_weight: u16 = weights.iter().map(|weight| u16::from(*weight)).sum();
-    if threshold > total_weight {
+    if required_signers == 0 {
+        return Err(onboarding_invalid_request(
+            "required_signers must be positive",
+        ));
+    }
+    let threshold = u16::from(required_signers);
+    let total_weight: u32 = weights.iter().map(|weight| u32::from(*weight)).sum();
+    if u32::from(threshold) > total_weight {
         return Err(onboarding_invalid_request(
             "required_signers exceeds total member weight",
         ));
@@ -71128,6 +71289,21 @@ pub async fn handle_v1_accounts_onboard_multisig(
         .map_err(|_| onboarding_invalid_request("invalid multisig policy"))?;
     let multisig_account = AccountId::new_multisig(policy);
     if app.state.world_view().account(&multisig_account).is_ok() {
+        let bound_aliases = iroha_data_model::query::account::prelude::FindAliasesByAccountId::new(
+            multisig_account.clone(),
+            None,
+            None,
+        )
+        .execute(&app.state.view())
+        .map_err(|err| Error::Query(iroha_data_model::ValidationFail::QueryFailed(err)))?;
+        if !bound_aliases
+            .iter()
+            .any(|binding| binding.alias == canonical_alias)
+        {
+            return Err(onboarding_invalid_request(
+                "existing multisig account is not bound to the requested alias",
+            ));
+        }
         let response = MultisigAccountOnboardingResponseDto {
             account_id: multisig_account.to_string(),
             tx_hash_hex: String::new(),
@@ -71146,8 +71322,7 @@ pub async fn handle_v1_accounts_onboard_multisig(
 
     let quorum = NonZeroU16::new(threshold)
         .ok_or_else(|| onboarding_invalid_request("required_signers must be positive"))?;
-    let transaction_ttl_ms = NonZeroU64::new(transaction_ttl_ms.unwrap_or(86_400_000).max(1))
-        .ok_or_else(|| onboarding_invalid_request("transaction_ttl_ms must be positive"))?;
+    let transaction_ttl_ms = onboarding_multisig_transaction_ttl_ms(transaction_ttl_ms)?;
     let lease_term_years = signer.alias_lease_term_years.max(1);
     let lease_quote = quote_account_alias_registration_with_configured_fee_asset(
         &app.state.world_view(),
@@ -82182,6 +82357,7 @@ mod subscription_api_tests {
             app_state.uaid_onboarding = Some(crate::AccountOnboardingSigner {
                 authority: provider.clone(),
                 private_key: ExposedPrivateKey(ALICE_KEYPAIR.private_key().clone()),
+                api_token_hash: Some([0xA5; 32]),
                 allowed_permissions: std::collections::BTreeSet::new(),
                 alias_resolve_dataspaces: std::collections::BTreeSet::new(),
                 alias_resolve_domains: std::collections::BTreeSet::new(),

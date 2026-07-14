@@ -396,16 +396,15 @@ final class OfflineDeviceAttestationCodec {
 
   private static void p256PublicKey(final NoritoEncoder encoder, final byte[] value) {
     final byte[] key = KagemushaP256Codec.requireUncompressedPublicKey(value);
-    encoder.writeLength(key.length, compact(encoder));
     encoder.writeBytes(key);
   }
 
   private static byte[] readP256PublicKey(final NoritoDecoder decoder) {
-    final int length = checkedLength(decoder.readLength(compact(decoder)), "P-256 public key");
-    if (length != KagemushaP256Codec.PUBLIC_KEY_BYTES) {
+    if (decoder.remaining() != KagemushaP256Codec.PUBLIC_KEY_BYTES) {
       throw new IllegalArgumentException("P-256 public key must contain exactly 65 bytes");
     }
-    return KagemushaP256Codec.requireUncompressedPublicKey(decoder.readBytes(length));
+    return KagemushaP256Codec.requireUncompressedPublicKey(
+        decoder.readBytes(KagemushaP256Codec.PUBLIC_KEY_BYTES));
   }
 
   private static void optionString(final NoritoEncoder encoder, final String value) {

@@ -86,7 +86,7 @@ address = "addr:0.0.0.0:8080#B922"
 max_content_len = 1073741824
 
 [torii.cors]
-allowed_headers = ["accept", "authorization", "content-type", "idempotency-key"]
+allowed_headers = ["accept", "authorization", "content-type", "idempotency-key", "x-api-token", "x-iroha-onboarding-token"]
 allowed_methods = ["GET", "POST", "DELETE", "OPTIONS"]
 allowed_origins = ["http://127.0.0.1:3000", "http://localhost:3000", "https://test.soraswap.org"]
 enabled = true

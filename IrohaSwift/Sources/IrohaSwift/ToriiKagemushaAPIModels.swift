@@ -41,8 +41,8 @@ public enum KagemushaOperationError: Error, LocalizedError, Equatable, Sendable 
 
 /// A schema-bound Kagemusha top-up command submitted directly to Torii.
 public struct KagemushaTopUpRequest: Equatable, Sendable {
-    /// Conservative SDK ceiling matching Torii's first-release default body limit.
-    public static let maximumArchiveBytes = 64_000_000
+    /// Exact ABI-20/V4 top-up archive ceiling enforced by Torii.
+    public static let maximumArchiveBytes = 512 * 1_024
     /// Lowercase hex derived from the archive's nonzero 32-byte operation ID.
     public let operationId: String
     private let archive: Data
@@ -52,8 +52,9 @@ public struct KagemushaTopUpRequest: Equatable, Sendable {
         let validated = try KagemushaOperationValidation.requestArchive(
             noritoArchive,
             schema: KagemushaRecursiveSpend.topUpRequestWireName,
-            operationIdFieldIndex: 5,
-            fieldCount: 7,
+            operationIdFieldIndex: 6,
+            fieldCount: 8,
+            expectedWireVersion: KagemushaRecursiveSpend.wireVersionV4,
             maximumArchiveBytes: Self.maximumArchiveBytes
         )
         self.operationId = validated.operationId
@@ -65,8 +66,8 @@ public struct KagemushaTopUpRequest: Equatable, Sendable {
 
 /// A schema-bound Kagemusha redemption command submitted directly to Torii.
 public struct KagemushaRedeemRequest: Equatable, Sendable {
-    /// Conservative SDK ceiling matching Torii's first-release default body limit.
-    public static let maximumArchiveBytes = 64_000_000
+    /// Exact ABI-20/V4 redemption archive ceiling enforced by Torii.
+    public static let maximumArchiveBytes = 48 * 1_024 * 1_024
     /// Lowercase hex derived from the archive's nonzero 32-byte operation ID.
     public let operationId: String
     private let archive: Data
@@ -76,8 +77,9 @@ public struct KagemushaRedeemRequest: Equatable, Sendable {
         let validated = try KagemushaOperationValidation.requestArchive(
             noritoArchive,
             schema: KagemushaRecursiveSpend.redeemRequestWireName,
-            operationIdFieldIndex: 7,
-            fieldCount: 9,
+            operationIdFieldIndex: 8,
+            fieldCount: 10,
+            expectedWireVersion: KagemushaRecursiveSpend.wireVersionV4,
             maximumArchiveBytes: Self.maximumArchiveBytes
         )
         self.operationId = validated.operationId
@@ -164,10 +166,10 @@ public struct KagemushaTopUpAnchor: Equatable, Sendable {
                 <= KagemushaRecursiveSpend.topUpFinalityAnchorMaximumArchiveBytes else {
             throw KagemushaOperationError.invalidNoritoArchive
         }
-        let wireValue = try KagemushaRecursiveSpendCodecs.decodeTopUpAnchor(
+        let wireValue = try KagemushaRecursiveSpendCodecs.decodeTopUpAnchorV4(
             Data(noritoArchive)
         )
-        self.archive = Data(wireValue.archive)
+        self.archive = Data(wireValue.noritoArchive)
         self.anchorDigest = Data(wireValue.anchorDigest)
         self.operationId = wireValue.topUpOperationID.hexLowercased()
         self.finalizedTransactionHash = wireValue.finalizedTransactionHash.hexLowercased()
@@ -643,7 +645,7 @@ public enum KagemushaOperationCodec {
             try $0.readBytes($0.remaining())
         }
         let anchorArchive = KagemushaRecursiveSpend.frameArchive(
-            schema: KagemushaRecursiveSpend.topUpAnchorWireName,
+            schema: KagemushaRecursiveSpend.topUpAnchorWireNameV4,
             payload: anchorPayload
         )
         let anchor = try KagemushaTopUpAnchor(noritoArchive: anchorArchive)
@@ -1020,6 +1022,7 @@ private enum KagemushaOperationValidation {
         schema: String,
         operationIdFieldIndex: Int,
         fieldCount: Int,
+        expectedWireVersion: UInt16,
         maximumArchiveBytes: Int
     ) throws -> (archive: Data, operationId: String) {
         guard let requiredPaddingLength = KagemushaRecursiveSpend
@@ -1049,6 +1052,19 @@ private enum KagemushaOperationValidation {
             throw KagemushaOperationError.invalidNoritoArchive
         }
         guard reader.remaining() == 0 else {
+            throw KagemushaOperationError.invalidNoritoArchive
+        }
+
+        guard fields[0].count == MemoryLayout<UInt16>.size else {
+            throw KagemushaOperationError.invalidNoritoArchive
+        }
+        var decodedVersion: UInt16 = 0
+        fields[0].withUnsafeBytes { buffer in
+            if let baseAddress = buffer.baseAddress {
+                memcpy(&decodedVersion, baseAddress, MemoryLayout<UInt16>.size)
+            }
+        }
+        guard UInt16(littleEndian: decodedVersion) == expectedWireVersion else {
             throw KagemushaOperationError.invalidNoritoArchive
         }
 

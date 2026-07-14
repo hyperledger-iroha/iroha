@@ -463,7 +463,8 @@ pub(crate) mod utils;
 pub use utils::{
     JsonBody, NoritoBody, ResponseFormat,
     extractors::{
-        JsonOnly, Norito, NoritoJson, NoritoJsonWithBytes, NoritoQuery, NoritoStringQuery,
+        CanonicalJsonOnly, JsonOnly, Norito, NoritoJson, NoritoJsonWithBytes, NoritoQuery,
+        NoritoStringQuery,
     },
 };
 #[cfg(feature = "app_api")]
@@ -3268,10 +3269,11 @@ mod preauth_connection_lifetime_tests {
         extract::Extension,
         http::{Request, StatusCode, header},
         response::Response,
-        routing::get,
+        routing::{get, post},
     };
     use futures::StreamExt as _;
     use http_body_util::BodyExt as _;
+    use iroha_crypto::Algorithm;
     use tokio::sync::{Semaphore, mpsc};
     use tower::ServiceExt as _;
 
@@ -3294,6 +3296,252 @@ mod preauth_connection_lifetime_tests {
             }],
         }));
         app
+    }
+
+    const TEST_ONBOARDING_TOKEN: &str = "torii-onboarding-test-token-32-bytes";
+
+    fn app_with_onboarding_auth(require_global_token: bool) -> SharedAppState {
+        let mut app = crate::mk_app_state_for_tests();
+        let state = Arc::get_mut(&mut app).expect("test app state must be uniquely owned");
+        state.require_api_token = require_global_token;
+        state.api_tokens_set = if require_global_token {
+            Arc::new(HashSet::from(["valid-global-token".to_owned()]))
+        } else {
+            Arc::new(HashSet::new())
+        };
+        let key_pair = KeyPair::try_from_seed(vec![0xA5; 32], Algorithm::Ed25519)
+            .expect("deterministic onboarding test key");
+        state.uaid_onboarding = Some(AccountOnboardingSigner {
+            authority: AccountId::new(key_pair.public_key().clone()),
+            private_key: ExposedPrivateKey(key_pair.private_key().clone()),
+            api_token_hash: Some(*blake3::hash(TEST_ONBOARDING_TOKEN.as_bytes()).as_bytes()),
+            allowed_permissions: BTreeSet::new(),
+            alias_resolve_dataspaces: BTreeSet::new(),
+            alias_resolve_domains: BTreeSet::new(),
+            fee_sponsor_account: None,
+            alias_lease_term_years: 1,
+            alias_auto_renew_enabled: false,
+            alias_auto_renew_retry_backoff_ms: 86_400_000,
+            alias_auto_renew_max_failures: 5,
+            alias_auto_renew_subscription_domain: None,
+        });
+        app
+    }
+
+    #[derive(Clone, Debug, crate::json_macros::JsonDeserialize)]
+    struct OnboardingAuthBoundaryBody {
+        value: u32,
+    }
+
+    async fn onboarding_auth_boundary_handler(
+        headers: HeaderMap,
+        CanonicalJsonOnly(body): CanonicalJsonOnly<OnboardingAuthBoundaryBody>,
+    ) -> StatusCode {
+        if headers.contains_key(HEADER_ONBOARDING_API_TOKEN) || body.value != 7 {
+            StatusCode::INTERNAL_SERVER_ERROR
+        } else {
+            StatusCode::OK
+        }
+    }
+
+    fn onboarding_auth_boundary_router(app: SharedAppState) -> Router {
+        Router::new()
+            .route(
+                route_catalog::application_api::ACCOUNTS_ONBOARD_POST.path(),
+                post(onboarding_auth_boundary_handler),
+            )
+            .route(
+                route_catalog::application_api::ACCOUNTS_ONBOARD_MULTISIG_POST.path(),
+                post(onboarding_auth_boundary_handler),
+            )
+            .layer(axum::middleware::from_fn(capture_response_format))
+            .layer(axum::middleware::from_fn(coalesce_accept_headers))
+            .layer(axum::middleware::from_fn_with_state(
+                Arc::clone(&app),
+                enforce_onboarding_api_token,
+            ))
+            .layer(axum::middleware::from_fn_with_state(
+                Arc::clone(&app),
+                enforce_api_token,
+            ))
+            .layer(axum::middleware::from_fn_with_state(app, enforce_preauth))
+            .layer(axum::middleware::from_fn(enforce_typed_error_contract))
+    }
+
+    fn onboarding_auth_boundary_request(
+        descriptor: iroha_torii_shared::route_catalog::RouteDescriptor,
+        global_tokens: &[&str],
+        onboarding_tokens: &[&str],
+        accept: &str,
+        content_types: &[&str],
+        body: &'static str,
+    ) -> Request<Body> {
+        let mut builder = Request::builder()
+            .method(axum::http::Method::POST)
+            .uri(descriptor.path())
+            .header(header::ACCEPT, accept);
+        for value in global_tokens {
+            builder = builder.header(HEADER_API_TOKEN, *value);
+        }
+        for value in onboarding_tokens {
+            builder = builder.header(HEADER_ONBOARDING_API_TOKEN, *value);
+        }
+        for value in content_types {
+            builder = builder.header(header::CONTENT_TYPE, *value);
+        }
+        let mut request = builder.body(Body::from(body)).expect("onboarding request");
+        request
+            .extensions_mut()
+            .insert(MatchedRouteMetadata::from_descriptor(descriptor));
+        request
+    }
+
+    async fn typed_error_code(response: Response) -> String {
+        let body = response
+            .into_body()
+            .collect()
+            .await
+            .expect("collect typed error response")
+            .to_bytes();
+        let envelope: ErrorEnvelope =
+            norito::json::from_slice(&body).expect("decode typed error response");
+        envelope.code().to_owned()
+    }
+
+    #[tokio::test]
+    async fn onboarding_authentication_precedes_media_and_body_on_both_routes() {
+        let router = onboarding_auth_boundary_router(app_with_onboarding_auth(true));
+        for descriptor in [
+            route_catalog::application_api::ACCOUNTS_ONBOARD_POST,
+            route_catalog::application_api::ACCOUNTS_ONBOARD_MULTISIG_POST,
+        ] {
+            let missing_global = router
+                .clone()
+                .oneshot(onboarding_auth_boundary_request(
+                    descriptor,
+                    &[],
+                    &[],
+                    "application/json;q=2",
+                    &["application/json; charset==utf-8"],
+                    "not-json",
+                ))
+                .await
+                .expect("missing global token response");
+            assert_eq!(missing_global.status(), StatusCode::UNAUTHORIZED);
+            assert_eq!(
+                missing_global.headers().get(header::WWW_AUTHENTICATE),
+                Some(&HeaderValue::from_static("IrohaApiToken realm=\"torii\""))
+            );
+            assert_eq!(typed_error_code(missing_global).await, "api_token_required");
+
+            let missing_onboarding = router
+                .clone()
+                .oneshot(onboarding_auth_boundary_request(
+                    descriptor,
+                    &["valid-global-token"],
+                    &[],
+                    "application/json;q=2",
+                    &["application/json; charset==utf-8"],
+                    "not-json",
+                ))
+                .await
+                .expect("missing onboarding token response");
+            assert_eq!(missing_onboarding.status(), StatusCode::UNAUTHORIZED);
+            assert_eq!(
+                missing_onboarding.headers().get(header::WWW_AUTHENTICATE),
+                Some(&HeaderValue::from_static("IrohaOnboardingToken"))
+            );
+            assert_eq!(
+                typed_error_code(missing_onboarding).await,
+                "onboarding_auth_required"
+            );
+
+            let duplicate_onboarding = router
+                .clone()
+                .oneshot(onboarding_auth_boundary_request(
+                    descriptor,
+                    &["valid-global-token"],
+                    &[TEST_ONBOARDING_TOKEN, TEST_ONBOARDING_TOKEN],
+                    "application/json;q=2",
+                    &["application/json; charset==utf-8"],
+                    "not-json",
+                ))
+                .await
+                .expect("duplicate onboarding token response");
+            assert_eq!(duplicate_onboarding.status(), StatusCode::UNAUTHORIZED);
+            assert_eq!(
+                typed_error_code(duplicate_onboarding).await,
+                "onboarding_auth_required"
+            );
+
+            let invalid_accept = router
+                .clone()
+                .oneshot(onboarding_auth_boundary_request(
+                    descriptor,
+                    &["valid-global-token"],
+                    &[TEST_ONBOARDING_TOKEN],
+                    "application/json;q=2",
+                    &["application/json; charset==utf-8"],
+                    "not-json",
+                ))
+                .await
+                .expect("invalid Accept response");
+            assert_eq!(invalid_accept.status(), StatusCode::NOT_ACCEPTABLE);
+            assert_eq!(
+                typed_error_code(invalid_accept).await,
+                "response_not_acceptable"
+            );
+
+            let norito_media = router
+                .clone()
+                .oneshot(onboarding_auth_boundary_request(
+                    descriptor,
+                    &["valid-global-token"],
+                    &[TEST_ONBOARDING_TOKEN],
+                    "application/json",
+                    &["application/x-norito"],
+                    "not-json",
+                ))
+                .await
+                .expect("Norito media response");
+            assert_eq!(norito_media.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+            assert_eq!(
+                typed_error_code(norito_media).await,
+                "request_content_type_unsupported"
+            );
+
+            let duplicate_content_type = router
+                .clone()
+                .oneshot(onboarding_auth_boundary_request(
+                    descriptor,
+                    &["valid-global-token"],
+                    &[TEST_ONBOARDING_TOKEN],
+                    "application/json",
+                    &["application/json", "application/json"],
+                    "not-json",
+                ))
+                .await
+                .expect("duplicate Content-Type response");
+            assert_eq!(duplicate_content_type.status(), StatusCode::BAD_REQUEST);
+            assert_eq!(
+                typed_error_code(duplicate_content_type).await,
+                "request_content_type_invalid"
+            );
+
+            let accepted = router
+                .clone()
+                .oneshot(onboarding_auth_boundary_request(
+                    descriptor,
+                    &["valid-global-token"],
+                    &[TEST_ONBOARDING_TOKEN],
+                    "application/json",
+                    &["application/json"],
+                    r#"{"value":7}"#,
+                ))
+                .await
+                .expect("accepted onboarding boundary response");
+            assert_eq!(accepted.status(), StatusCode::OK);
+        }
     }
 
     fn request(path: &str, websocket: bool) -> Request<Body> {
@@ -3894,6 +4142,92 @@ fn api_token_rejection(app: &AppState, headers: &HeaderMap) -> Option<Response> 
     );
     append_vary_accept(response.headers_mut());
     Some(response)
+}
+
+#[cfg(feature = "app_api")]
+fn onboarding_api_token_rejection(app: &AppState, headers: &HeaderMap) -> Option<Response> {
+    let format = early_rejection_response_format(headers);
+    let Some(expected_hash) = app
+        .uaid_onboarding
+        .as_ref()
+        .and_then(|signer| signer.api_token_hash)
+    else {
+        let mut response = utils::respond_with_status_and_format(
+            StatusCode::SERVICE_UNAVAILABLE,
+            ErrorEnvelope::new(
+                "onboarding_auth_unavailable",
+                "Signer-backed account onboarding is unavailable because its dedicated token hash is not configured.",
+            ),
+            format,
+        );
+        append_vary_accept(response.headers_mut());
+        return Some(response);
+    };
+
+    let mut values = headers.get_all(HEADER_ONBOARDING_API_TOKEN).iter();
+    let supplied = values.next().and_then(|value| value.to_str().ok());
+    let one_value = values.next().is_none();
+    let valid = supplied
+        .filter(|token| {
+            (32..=256).contains(&token.len())
+                && token
+                    .as_bytes()
+                    .iter()
+                    .all(|byte| (b'!'..=b'~').contains(byte))
+        })
+        .map(|token| *blake3::hash(token.as_bytes()).as_bytes())
+        .is_some_and(|actual_hash| {
+            iroha_torii_shared::connect_sdk::constant_time_eq(&expected_hash, &actual_hash)
+        })
+        && one_value;
+    if valid {
+        return None;
+    }
+
+    let mut response = utils::respond_with_status_and_format(
+        StatusCode::UNAUTHORIZED,
+        ErrorEnvelope::new(
+            "onboarding_auth_required",
+            "A valid dedicated onboarding token is required.",
+        ),
+        format,
+    );
+    response.headers_mut().insert(
+        axum::http::header::WWW_AUTHENTICATE,
+        HeaderValue::from_static("IrohaOnboardingToken"),
+    );
+    append_vary_accept(response.headers_mut());
+    Some(response)
+}
+
+#[cfg(feature = "app_api")]
+async fn enforce_onboarding_api_token(
+    State(app): State<SharedAppState>,
+    mut request: axum::http::Request<Body>,
+    next: Next,
+) -> Result<Response, Infallible> {
+    let protected_route = request
+        .extensions()
+        .get::<MatchedRouteMetadata>()
+        .is_some_and(|route| {
+            let stable_route_id = route.stable_route_id();
+            stable_route_id
+                == route_catalog::application_api::ACCOUNTS_ONBOARD_POST.stable_route_id()
+                || stable_route_id
+                    == route_catalog::application_api::ACCOUNTS_ONBOARD_MULTISIG_POST
+                        .stable_route_id()
+        });
+    if !protected_route {
+        return Ok(next.run(request).await);
+    }
+    if let Some(value) = request.headers_mut().get_mut(HEADER_ONBOARDING_API_TOKEN) {
+        value.set_sensitive(true);
+    }
+    if let Some(response) = onboarding_api_token_rejection(&app, request.headers()) {
+        return Ok(response);
+    }
+    request.headers_mut().remove(HEADER_ONBOARDING_API_TOKEN);
+    Ok(next.run(request).await)
 }
 
 async fn enforce_api_token(
@@ -8078,7 +8412,145 @@ fn negotiate_heavy_query_response_format(
 }
 
 const FINALITY_HEAVY_QUERY_RATE_COST: u64 = 8;
+const BRIDGE_FINALITY_CHALLENGE_HEADER: &str = "x-iroha-finality-challenge";
 const SCCP_RECENT_QUERY_RATE_COST: u64 = 4;
+
+fn bridge_finality_challenge(headers: &axum::http::HeaderMap) -> Result<[u8; 32], Error> {
+    let all_values = headers.get_all(BRIDGE_FINALITY_CHALLENGE_HEADER);
+    let mut values = all_values.iter();
+    let value = values
+        .next()
+        .ok_or_else(|| bridge_finality_challenge_error("missing challenge header"))?;
+    if values.next().is_some() {
+        return Err(bridge_finality_challenge_error(
+            "challenge header must occur exactly once",
+        ));
+    }
+    let value = value
+        .to_str()
+        .map_err(|_| bridge_finality_challenge_error("challenge header is not ASCII"))?;
+    if value.len() != 64
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(bridge_finality_challenge_error(
+            "challenge must be exactly 64 lowercase hexadecimal characters",
+        ));
+    }
+    let decoded = hex::decode(value)
+        .map_err(|_| bridge_finality_challenge_error("challenge hexadecimal is invalid"))?;
+    let challenge: [u8; 32] = decoded
+        .try_into()
+        .map_err(|_| bridge_finality_challenge_error("challenge must decode to 32 bytes"))?;
+    if challenge.iter().all(|byte| *byte == 0) {
+        return Err(bridge_finality_challenge_error(
+            "challenge must be non-zero",
+        ));
+    }
+    Ok(challenge)
+}
+
+fn bridge_finality_challenge_error(message: &str) -> Error {
+    Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+        iroha_data_model::query::error::QueryExecutionFail::Conversion(message.to_owned()),
+    ))
+}
+
+fn protect_bridge_finality_attestation_response(response: &mut AxResponse) {
+    response.headers_mut().insert(
+        axum::http::header::CACHE_CONTROL,
+        axum::http::HeaderValue::from_static("no-store"),
+    );
+    response.headers_mut().insert(
+        axum::http::header::VARY,
+        axum::http::HeaderValue::from_static("X-Iroha-Finality-Challenge, Accept"),
+    );
+}
+
+fn finalize_bridge_finality_attestation_response(result: Result<AxResponse, Error>) -> AxResponse {
+    let mut response = match result {
+        Ok(response) => response,
+        Err(error) => error.into_response(),
+    };
+    protect_bridge_finality_attestation_response(&mut response);
+    response
+}
+
+#[cfg(test)]
+mod bridge_finality_attestation_route_tests {
+    use super::*;
+
+    #[test]
+    fn challenge_header_is_exact_nonzero_lowercase_hex() {
+        let raw = [0xAB; 32];
+        let canonical = hex::encode(raw);
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(
+            BRIDGE_FINALITY_CHALLENGE_HEADER,
+            axum::http::HeaderValue::from_str(&canonical).expect("canonical header"),
+        );
+        assert_eq!(bridge_finality_challenge(&headers).expect("challenge"), raw);
+
+        for hostile in [
+            canonical.to_ascii_uppercase(),
+            "00".repeat(32),
+            "ab".repeat(31),
+            format!("{}g", "ab".repeat(31)),
+        ] {
+            let mut headers = axum::http::HeaderMap::new();
+            headers.insert(
+                BRIDGE_FINALITY_CHALLENGE_HEADER,
+                axum::http::HeaderValue::from_str(&hostile).expect("ASCII hostile header"),
+            );
+            assert!(bridge_finality_challenge(&headers).is_err(), "{hostile}");
+        }
+        assert!(bridge_finality_challenge(&axum::http::HeaderMap::new()).is_err());
+
+        let mut duplicated = axum::http::HeaderMap::new();
+        let value = axum::http::HeaderValue::from_str(&canonical).expect("canonical header");
+        duplicated.append(BRIDGE_FINALITY_CHALLENGE_HEADER, value.clone());
+        duplicated.append(BRIDGE_FINALITY_CHALLENGE_HEADER, value);
+        assert!(bridge_finality_challenge(&duplicated).is_err());
+    }
+
+    #[test]
+    fn attestation_responses_are_never_cacheable_and_vary_by_challenge() {
+        let mut response = axum::response::Response::new(axum::body::Body::empty());
+        protect_bridge_finality_attestation_response(&mut response);
+        assert_eq!(
+            response
+                .headers()
+                .get(axum::http::header::CACHE_CONTROL)
+                .and_then(|value| value.to_str().ok()),
+            Some("no-store")
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get(axum::http::header::VARY)
+                .and_then(|value| value.to_str().ok()),
+            Some("X-Iroha-Finality-Challenge, Accept")
+        );
+
+        let propagated_error = bridge_finality_challenge_error("invalid challenge");
+        let response = finalize_bridge_finality_attestation_response(Err(propagated_error));
+        assert_eq!(
+            response
+                .headers()
+                .get(axum::http::header::CACHE_CONTROL)
+                .and_then(|value| value.to_str().ok()),
+            Some("no-store")
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get(axum::http::header::VARY)
+                .and_then(|value| value.to_str().ok()),
+            Some("X-Iroha-Finality-Challenge, Accept")
+        );
+    }
+}
 
 #[cfg(test)]
 fn loopback_connect_info() -> axum::extract::ConnectInfo<std::net::SocketAddr> {
@@ -10226,14 +10698,12 @@ async fn handler_accounts_onboard(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    request: crate::utils::extractors::NoritoJson<crate::routing::AccountOnboardingRequestDto>,
-) -> Result<Response, Error> {
+    request: crate::CanonicalJsonOnly<crate::routing::AccountOnboardingRequestDto>,
+) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
     if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
-        return account_onboarding_response(
-            &headers,
-            routing::handle_v1_accounts_onboard(app.clone(), request, app.telemetry.clone()).await,
-        );
+        return routing::handle_v1_accounts_onboard(app.clone(), request, app.telemetry.clone())
+            .await;
     }
 
     let enforce =
@@ -10247,51 +10717,7 @@ async fn handler_accounts_onboard(
     )
     .await?;
 
-    account_onboarding_response(
-        &headers,
-        routing::handle_v1_accounts_onboard(app.clone(), request, app.telemetry.clone()).await,
-    )
-}
-
-#[cfg(feature = "app_api")]
-fn account_onboarding_response<T: IntoResponse>(
-    headers: &axum::http::HeaderMap,
-    result: Result<T, Error>,
-) -> Result<Response, Error> {
-    match result {
-        Ok(response) => Ok(response.into_response()),
-        Err(Error::AccountOnboardingValidation {
-            code,
-            message,
-            hint,
-        }) if account_onboarding_wants_json_error(headers) => {
-            let mut payload = Map::new();
-            payload.insert("error_code".to_owned(), Value::String(code.to_owned()));
-            payload.insert("message".to_owned(), Value::String(message));
-            if let Some(hint) = hint {
-                payload.insert("hint".to_owned(), Value::String(hint.to_owned()));
-            }
-            let mut response = utils::JsonBody(Value::Object(payload)).into_response();
-            *response.status_mut() = StatusCode::BAD_REQUEST;
-            Ok(response)
-        }
-        Err(err) => Err(err),
-    }
-}
-
-#[cfg(feature = "app_api")]
-fn account_onboarding_wants_json_error(headers: &axum::http::HeaderMap) -> bool {
-    let Some(accept) = headers.get(axum::http::header::ACCEPT) else {
-        return true;
-    };
-    let Ok(accept) = accept.to_str() else {
-        return true;
-    };
-    let accept = accept.to_ascii_lowercase();
-    if accept.contains("application/x-norito") && !accept.contains("application/json") {
-        return false;
-    }
-    accept.contains("application/json") || accept.contains("*/*")
+    routing::handle_v1_accounts_onboard(app.clone(), request, app.telemetry.clone()).await
 }
 
 #[cfg(feature = "app_api")]
@@ -10336,9 +10762,7 @@ async fn handler_accounts_onboard_multisig(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    request: crate::utils::extractors::NoritoJson<
-        crate::routing::MultisigAccountOnboardingRequestDto,
-    >,
+    request: crate::CanonicalJsonOnly<crate::routing::MultisigAccountOnboardingRequestDto>,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
     if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
@@ -10976,6 +11400,28 @@ struct OfflineKagemushaReadinessQuery {
 }
 
 #[cfg(feature = "app_api")]
+const fn offline_top_up_body_limit(transaction_max_content_len: usize) -> usize {
+    if transaction_max_content_len
+        < iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_TOPUP_REQUEST_MAX_BYTES_V4
+    {
+        transaction_max_content_len
+    } else {
+        iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_TOPUP_REQUEST_MAX_BYTES_V4
+    }
+}
+
+#[cfg(feature = "app_api")]
+const fn offline_redeem_body_limit(transaction_max_content_len: usize) -> usize {
+    if transaction_max_content_len
+        < iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_REDEEM_REQUEST_MAX_BYTES_V4
+    {
+        transaction_max_content_len
+    } else {
+        iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_REDEEM_REQUEST_MAX_BYTES_V4
+    }
+}
+
+#[cfg(feature = "app_api")]
 fn offline_kagemusha_readiness_error(message: impl Into<String>) -> Error {
     Error::AppServiceUnavailable {
         code: "readiness_unavailable",
@@ -11293,6 +11739,145 @@ fn offline_readiness_blocker(
 }
 
 #[cfg(feature = "app_api")]
+struct OfflineKagemushaRecursiveV4Evaluation {
+    step_eq: Option<iroha_torii_shared::offline_api::OfflineActiveRecursiveStepEqVerifier>,
+    step_ep: Option<iroha_torii_shared::offline_api::OfflineActiveRecursiveStepEpVerifier>,
+    artifact_set: Option<iroha_torii_shared::offline_api::OfflineAuthenticatedArtifactSet>,
+    proof_backend_available: bool,
+    blockers: Vec<iroha_torii_shared::offline_api::OfflineReadinessBlocker>,
+}
+
+#[cfg(feature = "app_api")]
+fn offline_kagemusha_readiness_capability_flags(
+    proof_backend_available: bool,
+    artifact_set_available: bool,
+    recursive_step_eq_available: bool,
+    recursive_step_ep_available: bool,
+    blockers: &[iroha_torii_shared::offline_api::OfflineReadinessBlocker],
+) -> (bool, bool, bool) {
+    let recursive_lineage_supported = proof_backend_available
+        && artifact_set_available
+        && recursive_step_eq_available
+        && recursive_step_ep_available;
+    (
+        proof_backend_available,
+        recursive_lineage_supported,
+        blockers.is_empty(),
+    )
+}
+
+#[cfg(feature = "app_api")]
+fn project_kagemusha_recursive_verifier_v4(
+    verifier: iroha_core::smartcontracts::isi::offline::KagemushaRecursiveVerifierReadinessV4,
+) -> iroha_torii_shared::offline_api::OfflineActiveTransferVerifier {
+    iroha_torii_shared::offline_api::OfflineActiveTransferVerifier {
+        id: iroha_torii_shared::offline_api::OfflineVerifierId {
+            backend: verifier.id.backend.as_str().to_owned(),
+            name: verifier.id.name,
+        },
+        version: verifier.version,
+        circuit_id: verifier.circuit_id,
+        commitment: hex::encode(verifier.commitment),
+        public_inputs_schema_hash: hex::encode(verifier.public_inputs_schema_hash),
+        max_proof_bytes: verifier.max_proof_bytes,
+        activation_height: verifier.activation_height,
+        withdrawal_height: verifier.withdrawal_height,
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn offline_kagemusha_recursive_v4_evaluation_from_resolution(
+    resolution: Result<
+        Option<iroha_core::smartcontracts::isi::offline::KagemushaRecursiveReadinessV4>,
+        String,
+    >,
+) -> OfflineKagemushaRecursiveV4Evaluation {
+    let unavailable_components = || {
+        vec![
+            offline_readiness_blocker(
+                "recursive_step_eq_verifier_unavailable",
+                "The authenticated ABI-20 V4 recursive StepEq verifier is unavailable.",
+            ),
+            offline_readiness_blocker(
+                "recursive_step_ep_verifier_unavailable",
+                "The authenticated ABI-20 V4 recursive StepEp verifier is unavailable.",
+            ),
+            offline_readiness_blocker(
+                "proof_backend_unavailable",
+                "The ABI-20 V4 proof backend cannot be constructed without an authenticated active recursive release.",
+            ),
+            offline_readiness_blocker(
+                "recursive_lineage_unavailable",
+                "The authenticated ABI-20 V4 recursive lineage proof path is unavailable.",
+            ),
+        ]
+    };
+    let Some(resolved) = (match resolution {
+        Ok(resolved) => resolved,
+        Err(error) => {
+            let mut blockers = vec![offline_readiness_blocker(
+                "recursive_v4_registry_malformed",
+                format!("The ABI-20 V4 recursive registry failed authentication: {error}"),
+            )];
+            blockers.extend(unavailable_components());
+            return OfflineKagemushaRecursiveV4Evaluation {
+                step_eq: None,
+                step_ep: None,
+                artifact_set: None,
+                proof_backend_available: false,
+                blockers,
+            };
+        }
+    }) else {
+        let mut blockers = vec![offline_readiness_blocker(
+            "recursive_v4_registry_unavailable",
+            "No active atomic ABI-20 V4 Eq/Ep verifier release is installed at the evaluated block.",
+        )];
+        blockers.extend(unavailable_components());
+        return OfflineKagemushaRecursiveV4Evaluation {
+            step_eq: None,
+            step_ep: None,
+            artifact_set: None,
+            proof_backend_available: false,
+            blockers,
+        };
+    };
+
+    let proof_backend_available = resolved.proof_backend_error.is_none();
+    let mut blockers = Vec::new();
+    if let Some(error) = resolved.proof_backend_error {
+        blockers.push(offline_readiness_blocker(
+            "proof_backend_unavailable",
+            format!("The authenticated ABI-20 V4 proof backend could not be constructed: {error}"),
+        ));
+        blockers.push(offline_readiness_blocker(
+            "recursive_lineage_unavailable",
+            "The authenticated ABI-20 V4 recursive lineage proof path is unavailable because the proof backend could not be constructed.",
+        ));
+    }
+    OfflineKagemushaRecursiveV4Evaluation {
+        step_eq: Some(project_kagemusha_recursive_verifier_v4(resolved.step_eq)),
+        step_ep: Some(project_kagemusha_recursive_verifier_v4(resolved.step_ep)),
+        artifact_set: Some(
+            iroha_torii_shared::offline_api::OfflineAuthenticatedArtifactSet {
+                generation: resolved.artifact_set.generation,
+                manifest_sha256: hex::encode(resolved.artifact_set.manifest_sha256),
+                release_policy_sha256: hex::encode(resolved.artifact_set.release_policy_sha256),
+                release_attestation_sha256: hex::encode(
+                    resolved.artifact_set.release_attestation_sha256,
+                ),
+                activation_height: resolved.artifact_set.activation_height,
+                withdrawal_height: resolved.artifact_set.withdrawal_height,
+                max_proof_bytes: resolved.artifact_set.max_proof_bytes,
+                asset_scale: resolved.artifact_set.asset_scale,
+            },
+        ),
+        proof_backend_available,
+        blockers,
+    }
+}
+
+#[cfg(feature = "app_api")]
 fn encode_offline_readiness_representation(
     payload: &iroha_torii_shared::offline_api::OfflineReadiness,
     format: crate::utils::ResponseFormat,
@@ -11380,13 +11965,28 @@ async fn handler_offline_readiness(
         .into(),
         iroha_core::zk::confidential_v2::CONFIDENTIAL_V2_MAX_PROOF_BYTES,
     )?;
-    // ABI-20 V4 uses a different authenticated layout and has no authoritative
-    // on-chain verifier registry records yet. Never reinterpret the retired V3
-    // registry entries as V4 readiness metadata.
-    let recursive_step_eq: Option<iroha_torii_shared::offline_api::OfflineActiveTransferVerifier> =
-        None;
-    let recursive_step_ep: Option<iroha_torii_shared::offline_api::OfflineActiveTransferVerifier> =
-        None;
+    let recursive_v4 = offline_kagemusha_recursive_v4_evaluation_from_resolution(
+        asset_scale.map_or(Ok(None), |scale| {
+            iroha_core::smartcontracts::isi::offline::resolve_kagemusha_recursive_readiness_v4(
+                world,
+                &state_view.kagemusha_release_catalog,
+                app.chain_id.as_ref(),
+                &asset_definition_id,
+                scale,
+                block_height,
+            )
+        }),
+    );
+    let issuance_window_active = recursive_v4
+        .artifact_set
+        .as_ref()
+        .is_some_and(|artifact_set| {
+            block_height >= artifact_set.activation_height
+                && block_height < artifact_set.withdrawal_height
+        });
+    let recursive_backend_constructed = recursive_v4.proof_backend_available;
+    let recursive_step_eq = recursive_v4.step_eq;
+    let recursive_step_ep = recursive_v4.step_ep;
     ensure_offline_readiness_verifier_roles_are_distinct([
         ("transfer", transfer.as_ref()),
         ("topup_shield", topup_shield.as_ref()),
@@ -11394,11 +11994,7 @@ async fn handler_offline_readiness(
         ("recursive_step_eq", recursive_step_eq.as_ref()),
         ("recursive_step_ep", recursive_step_ep.as_ref()),
     ])?;
-    let proof_backend_available =
-        iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PROOF_BACKEND_AVAILABLE;
-    let recursive_lineage_supported =
-        proof_backend_available && recursive_step_eq.is_some() && recursive_step_ep.is_some();
-    let mut blockers = Vec::new();
+    let mut blockers = recursive_v4.blockers;
     match offline_command_readiness {
         None => blockers.push(offline_readiness_blocker(
             "issuer_unavailable",
@@ -11410,10 +12006,10 @@ async fn handler_offline_readiness(
         }
         Some(Err(error)) => return Err(error),
     }
-    if !app.state.settlement.offline.kagemusha_enabled {
+    if recursive_v4.artifact_set.is_some() && !issuance_window_active {
         blockers.push(offline_readiness_blocker(
-            "kagemusha_disabled",
-            "Kagemusha settlement is disabled by the active chain parameters.",
+            "recursive_release_outside_issuance_window",
+            "The authenticated ABI-20/V4 release is not inside its issuance window.",
         ));
     }
     if asset_scale.is_none() {
@@ -11450,22 +12046,16 @@ async fn handler_offline_readiness(
             blockers.push(offline_readiness_blocker(code, message));
         }
     }
-    blockers.push(offline_readiness_blocker(
-        "recursive_v4_registry_unavailable",
-        "The authoritative ABI-20 V4 recursive verifier registry is unavailable.",
-    ));
-    if !proof_backend_available {
-        blockers.push(offline_readiness_blocker(
-            "proof_backend_unavailable",
-            "The offline proof backend is unavailable in this build.",
-        ));
-    }
-    if !recursive_lineage_supported {
-        blockers.push(offline_readiness_blocker(
-            "recursive_lineage_unavailable",
-            "Recursive lineage verification and redemption are not available.",
-        ));
-    }
+    // Role distinctness was checked above. Preserve the recursive capabilities
+    // independently from unrelated issuer, transfer, or issuance blockers.
+    let (proof_backend_available, recursive_lineage_supported, ready) =
+        offline_kagemusha_readiness_capability_flags(
+            recursive_backend_constructed,
+            recursive_v4.artifact_set.is_some(),
+            recursive_step_eq.is_some(),
+            recursive_step_ep.is_some(),
+            &blockers,
+        );
     let payload = iroha_torii_shared::offline_api::OfflineReadiness {
         required_bridge_abi_version:
             iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4,
@@ -11479,9 +12069,10 @@ async fn handler_offline_readiness(
         active_unshield_verifier: unshield,
         active_recursive_step_eq_verifier: recursive_step_eq,
         active_recursive_step_ep_verifier: recursive_step_ep,
+        artifact_set: recursive_v4.artifact_set,
         proof_backend_available,
         recursive_lineage_supported,
-        ready: blockers.is_empty(),
+        ready,
         blockers,
     };
     let response_format = crate::utils::current_response_format();
@@ -11539,9 +12130,78 @@ mod offline_kagemusha_readiness_tests {
         encode_offline_readiness_representation,
         ensure_offline_readiness_verifier_roles_are_distinct,
         offline_kagemusha_asset_transfer_verifier_record,
-        offline_kagemusha_readiness_verifier_record, offline_readiness_blocker,
-        strong_etag_for_representation,
+        offline_kagemusha_readiness_capability_flags, offline_kagemusha_readiness_verifier_record,
+        offline_kagemusha_recursive_v4_evaluation_from_resolution, offline_readiness_blocker,
+        offline_redeem_body_limit, offline_top_up_body_limit, strong_etag_for_representation,
     };
+
+    #[test]
+    fn readiness_requires_compiled_backend_and_exact_release_selection() {
+        assert!(
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PROOF_BACKEND_AVAILABLE,
+            "the ABI-20/V4 prover and verifier must be compiled",
+        );
+        let source = include_str!("lib.rs");
+        let handler_start = source
+            .find("async fn handler_offline_readiness")
+            .expect("offline readiness handler");
+        let tests_start = source
+            .find("mod offline_kagemusha_readiness_tests")
+            .expect("offline readiness tests");
+        let handler = &source[handler_start..tests_start];
+        assert!(
+            !handler.contains("KAGEMUSHA_RECURSIVE_SPEND_PROOF_BACKEND_AVAILABLE"),
+            "readiness must authenticate a concrete release instead of treating compile capability as runtime readiness",
+        );
+        assert!(handler.contains("offline_kagemusha_readiness_capability_flags"));
+    }
+
+    #[test]
+    fn recursive_capabilities_survive_unrelated_readiness_blockers() {
+        let blockers = vec![offline_readiness_blocker(
+            "issuer_unavailable",
+            "The offline command issuer is unavailable.",
+        )];
+        assert_eq!(
+            offline_kagemusha_readiness_capability_flags(true, true, true, true, &blockers),
+            (true, true, false),
+            "an unrelated issuer blocker must not erase authenticated backend or lineage facts",
+        );
+        assert_eq!(
+            offline_kagemusha_readiness_capability_flags(true, true, true, true, &[]),
+            (true, true, true),
+        );
+
+        let lineage_blockers = vec![
+            offline_readiness_blocker("proof_backend_unavailable", "unavailable"),
+            offline_readiness_blocker("recursive_lineage_unavailable", "unavailable"),
+        ];
+        assert_eq!(
+            offline_kagemusha_readiness_capability_flags(
+                false,
+                true,
+                true,
+                true,
+                &lineage_blockers,
+            ),
+            (false, false, false),
+        );
+    }
+
+    #[test]
+    fn offline_command_body_limits_are_protocol_specific_and_never_raise_the_tx_cap() {
+        let top_up_max =
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_TOPUP_REQUEST_MAX_BYTES_V4;
+        let redeem_max =
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_REDEEM_REQUEST_MAX_BYTES_V4;
+
+        assert_eq!(offline_top_up_body_limit(1), 1);
+        assert_eq!(offline_top_up_body_limit(top_up_max), top_up_max);
+        assert_eq!(offline_top_up_body_limit(usize::MAX), top_up_max);
+        assert_eq!(offline_redeem_body_limit(1), 1);
+        assert_eq!(offline_redeem_body_limit(redeem_max), redeem_max);
+        assert_eq!(offline_redeem_body_limit(usize::MAX), redeem_max);
+    }
 
     fn projected_verifier(
         role: &str,
@@ -11640,11 +12300,187 @@ mod offline_kagemusha_readiness_tests {
         )
     }
 
+    fn resolved_recursive_v4(
+        proof_backend_error: Option<&str>,
+    ) -> iroha_core::smartcontracts::isi::offline::KagemushaRecursiveReadinessV4 {
+        use iroha_core::smartcontracts::isi::offline::{
+            KagemushaAuthenticatedArtifactSetReadinessV4, KagemushaRecursiveReadinessV4,
+            KagemushaRecursiveVerifierReadinessV4,
+        };
+        use iroha_data_model::proof::VerifyingKeyId;
+
+        let verifier = |name: &str, circuit_id: &str, commitment, schema| {
+            KagemushaRecursiveVerifierReadinessV4 {
+                id: VerifyingKeyId::new("halo2/ipa", name),
+                version: 4,
+                circuit_id: circuit_id.to_owned(),
+                commitment: [commitment; 32],
+                public_inputs_schema_hash: [schema; 32],
+                max_proof_bytes: 65_536,
+                activation_height: 40,
+                withdrawal_height: Some(80),
+            }
+        };
+        KagemushaRecursiveReadinessV4 {
+            step_eq: verifier(
+                iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_STEP_EQ_V4,
+                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4,
+                0x14,
+                0x24,
+            ),
+            step_ep: verifier(
+                iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_STEP_EP_V4,
+                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V4,
+                0x15,
+                0x25,
+            ),
+            artifact_set: KagemushaAuthenticatedArtifactSetReadinessV4 {
+                generation: "release-v4".to_owned(),
+                manifest_sha256: [0x56; 32],
+                release_policy_sha256: [0x67; 32],
+                release_attestation_sha256: [0x78; 32],
+                activation_height: 40,
+                withdrawal_height: 80,
+                max_proof_bytes: 65_536,
+                asset_scale: 9,
+            },
+            proof_backend_error: proof_backend_error.map(str::to_owned),
+        }
+    }
+
     #[test]
     fn readiness_blockers_have_stable_codes() {
         let blocker = offline_readiness_blocker("proof_backend_unavailable", "unavailable");
         assert_eq!(blocker.code, "proof_backend_unavailable");
         assert_eq!(blocker.message, "unavailable");
+    }
+
+    #[test]
+    fn readiness_projects_exact_abi20_five_role_registry_and_artifact_set() {
+        let transfer = projected_verifier("transfer", "transfer-circuit", 0x11, 0x21);
+        let topup = projected_verifier("topup", "topup-circuit", 0x12, 0x22);
+        let unshield = projected_verifier("unshield", "unshield-circuit", 0x13, 0x23);
+        let recursive = offline_kagemusha_recursive_v4_evaluation_from_resolution(Ok(Some(
+            resolved_recursive_v4(None),
+        )));
+
+        assert!(recursive.proof_backend_available);
+        assert!(recursive.blockers.is_empty());
+        let step_eq = recursive.step_eq.expect("authenticated Eq projection");
+        let step_ep = recursive.step_ep.expect("authenticated Ep projection");
+        ensure_offline_readiness_verifier_roles_are_distinct([
+            ("transfer", Some(&transfer)),
+            ("topup", Some(&topup)),
+            ("unshield", Some(&unshield)),
+            ("step_eq", Some(&step_eq)),
+            ("step_ep", Some(&step_ep)),
+        ])
+        .expect("the exact ABI-20 readiness projection has five distinct roles");
+        let artifact_set = recursive.artifact_set.expect("authenticated artifact set");
+        assert_eq!(artifact_set.generation, "release-v4");
+        assert_eq!(artifact_set.manifest_sha256, "56".repeat(32));
+        assert_eq!(artifact_set.release_policy_sha256, "67".repeat(32));
+        assert_eq!(artifact_set.release_attestation_sha256, "78".repeat(32));
+        assert_eq!(artifact_set.asset_scale, 9);
+
+        let payload = iroha_torii_shared::offline_api::OfflineReadiness {
+            required_bridge_abi_version:
+                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4,
+            max_hops: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2,
+            asset_definition_id: "xor#wonderland".to_owned(),
+            asset_scale: Some(9),
+            evaluated_block_height: 40,
+            evaluated_block_hash: "ab".repeat(32),
+            active_transfer_verifier: Some(transfer),
+            active_topup_shield_verifier: Some(topup),
+            active_unshield_verifier: Some(unshield),
+            active_recursive_step_eq_verifier: Some(step_eq),
+            active_recursive_step_ep_verifier: Some(step_ep),
+            artifact_set: Some(artifact_set),
+            proof_backend_available: true,
+            recursive_lineage_supported: true,
+            ready: true,
+            blockers: Vec::new(),
+        };
+        let json = norito::json::to_vec(&payload).expect("encode ABI-20 readiness JSON");
+        let decoded: iroha_torii_shared::offline_api::OfflineReadiness =
+            norito::json::from_slice(&json).expect("decode ABI-20 readiness JSON");
+        assert_eq!(decoded, payload);
+    }
+
+    #[test]
+    fn readiness_reports_unavailable_v4_registry_without_fallback() {
+        let recursive = offline_kagemusha_recursive_v4_evaluation_from_resolution(Ok(None));
+
+        assert!(recursive.step_eq.is_none());
+        assert!(recursive.step_ep.is_none());
+        assert!(recursive.artifact_set.is_none());
+        assert!(!recursive.proof_backend_available);
+        assert_eq!(
+            recursive
+                .blockers
+                .iter()
+                .map(|blocker| blocker.code.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "recursive_v4_registry_unavailable",
+                "recursive_step_eq_verifier_unavailable",
+                "recursive_step_ep_verifier_unavailable",
+                "proof_backend_unavailable",
+                "recursive_lineage_unavailable",
+            ]
+        );
+    }
+
+    #[test]
+    fn readiness_reports_malformed_v4_registry_without_fallback() {
+        let recursive = offline_kagemusha_recursive_v4_evaluation_from_resolution(Err(
+            "release attestation digest mismatch".to_owned(),
+        ));
+
+        assert!(recursive.step_eq.is_none());
+        assert!(recursive.step_ep.is_none());
+        assert!(recursive.artifact_set.is_none());
+        assert!(!recursive.proof_backend_available);
+        assert_eq!(
+            recursive
+                .blockers
+                .iter()
+                .map(|blocker| blocker.code.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "recursive_v4_registry_malformed",
+                "recursive_step_eq_verifier_unavailable",
+                "recursive_step_ep_verifier_unavailable",
+                "proof_backend_unavailable",
+                "recursive_lineage_unavailable",
+            ]
+        );
+        assert!(
+            recursive.blockers[0]
+                .message
+                .contains("release attestation digest mismatch")
+        );
+    }
+
+    #[test]
+    fn readiness_preserves_authenticated_v4_identity_when_backend_construction_fails() {
+        let recursive = offline_kagemusha_recursive_v4_evaluation_from_resolution(Ok(Some(
+            resolved_recursive_v4(Some("processed verifier key is malformed")),
+        )));
+
+        assert!(recursive.step_eq.is_some());
+        assert!(recursive.step_ep.is_some());
+        assert!(recursive.artifact_set.is_some());
+        assert!(!recursive.proof_backend_available);
+        assert_eq!(recursive.blockers.len(), 2);
+        assert_eq!(recursive.blockers[0].code, "proof_backend_unavailable");
+        assert_eq!(recursive.blockers[1].code, "recursive_lineage_unavailable");
+        assert!(
+            recursive.blockers[0]
+                .message
+                .contains("processed verifier key is malformed")
+        );
     }
 
     #[test]
@@ -11719,6 +12555,7 @@ mod offline_kagemusha_readiness_tests {
             active_unshield_verifier: None,
             active_recursive_step_eq_verifier: None,
             active_recursive_step_ep_verifier: None,
+            artifact_set: None,
             proof_backend_available: false,
             recursive_lineage_supported: false,
             ready: false,
@@ -11728,8 +12565,32 @@ mod offline_kagemusha_readiness_tests {
                     "The transfer verifier is unavailable.",
                 ),
                 offline_readiness_blocker(
+                    "topup_shield_verifier_unavailable",
+                    "The top-up shield verifier is unavailable.",
+                ),
+                offline_readiness_blocker(
+                    "unshield_verifier_unavailable",
+                    "The unshield verifier is unavailable.",
+                ),
+                offline_readiness_blocker(
+                    "recursive_v4_registry_unavailable",
+                    "The authenticated V4 registry is unavailable.",
+                ),
+                offline_readiness_blocker(
+                    "recursive_step_eq_verifier_unavailable",
+                    "The recursive StepEq verifier is unavailable.",
+                ),
+                offline_readiness_blocker(
+                    "recursive_step_ep_verifier_unavailable",
+                    "The recursive StepEp verifier is unavailable.",
+                ),
+                offline_readiness_blocker(
                     "proof_backend_unavailable",
                     "The proof backend is unavailable.",
+                ),
+                offline_readiness_blocker(
+                    "recursive_lineage_unavailable",
+                    "Recursive lineage is unavailable.",
                 ),
             ],
         };
@@ -19102,6 +19963,19 @@ fn torii_proxy_error_response(
 }
 
 #[cfg(feature = "app_api")]
+fn torii_canonical_auth_required_response(
+    code: &'static str,
+    message: impl Into<String>,
+) -> Response {
+    let mut response = torii_proxy_error_response(StatusCode::UNAUTHORIZED, code, message);
+    response.headers_mut().insert(
+        axum::http::header::WWW_AUTHENTICATE,
+        HeaderValue::from_static("Signature"),
+    );
+    response
+}
+
+#[cfg(feature = "app_api")]
 fn torii_alias_permission_denied_response(message: impl Into<String>) -> Response {
     torii_proxy_error_response(StatusCode::FORBIDDEN, "permission_denied", message)
 }
@@ -25156,7 +26030,242 @@ mod torii_routed_read_tests {
             norito::json::from_slice(&body).expect("alias-resolve response");
         assert_eq!(payload.alias, "merchant@universal");
         assert_eq!(payload.account_id, authority.to_string());
-        assert_eq!(payload.source.as_deref(), Some("rekey_record"));
+        assert_eq!(payload.source.as_deref(), Some("active_sns"));
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn routed_alias_resolve_sanitizer_rejects_forged_account_payload() {
+        let authority = routed_read_test_account(0x94);
+        let forged = routed_read_test_account(0x95);
+        let app = mk_app_state_for_tests_with_world(world_with_account(&authority));
+        bind_account_alias_for_test(&app, &authority, "merchant@universal");
+        let route = resolve_torii_route_for_dataspace_id(app.as_ref(), DataSpaceId::UNIVERSAL)
+            .expect("universal route");
+        let request_body = norito::json::to_vec(&routing::AliasResolveRequestDto {
+            alias: "merchant@universal".to_owned(),
+        })
+        .expect("encode request");
+        let forged_body = norito::json::to_vec(&routing::AliasResolveResponseDto {
+            alias: "merchant@universal".to_owned(),
+            account_id: forged.to_string(),
+            index: None,
+            source: Some("active_sns".to_owned()),
+        })
+        .expect("encode forged response");
+        let response = Response::builder()
+            .status(StatusCode::OK)
+            .body(Body::from(forged_body))
+            .expect("forged response");
+
+        let response = sanitize_exact_alias_route_response(
+            &app,
+            route,
+            ToriiReadEndpointV1::AliasResolve,
+            &request_body,
+            response,
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-reject-code")
+                .and_then(|value| value.to_str().ok()),
+            Some("invalid_proxy_response")
+        );
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn routed_alias_index_sanitizer_rejects_mismatched_alias_payload() {
+        let authority = routed_read_test_account(0x96);
+        let app = mk_app_state_for_tests_with_world(world_with_account(&authority));
+        bind_account_alias_for_test(&app, &authority, "merchant@universal");
+        let route = resolve_torii_route_for_dataspace_id(app.as_ref(), DataSpaceId::UNIVERSAL)
+            .expect("universal route");
+        let request_body = norito::json::to_vec(&routing::AliasResolveIndexRequestDto { index: 0 })
+            .expect("encode request");
+        let forged_body = norito::json::to_vec(&routing::AliasResolveIndexResponseDto {
+            index: 0,
+            alias: "attacker@universal".to_owned(),
+            account_id: authority.to_string(),
+            source: Some("active_sns".to_owned()),
+        })
+        .expect("encode forged response");
+        let response = Response::builder()
+            .status(StatusCode::OK)
+            .body(Body::from(forged_body))
+            .expect("forged response");
+
+        let response = sanitize_exact_alias_route_response(
+            &app,
+            route,
+            ToriiReadEndpointV1::AliasResolveIndex,
+            &request_body,
+            response,
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-reject-code")
+                .and_then(|value| value.to_str().ok()),
+            Some("invalid_proxy_response")
+        );
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn protected_alias_index_read_ignores_unsigned_public_upstream() {
+        let authority = routed_read_test_account(0x97);
+        let mut app = mk_app_state_for_tests_with_world(world_with_account(&authority));
+        bind_account_alias_for_test(&app, &authority, "merchant@universal");
+        Arc::get_mut(&mut app)
+            .expect("unique app state")
+            .public_dataspace_upstreams = Arc::new(BTreeMap::from([(
+            DataSpaceId::UNIVERSAL,
+            "http://127.0.0.1:9".to_owned(),
+        )]));
+        let route = resolve_torii_route_for_dataspace_id(app.as_ref(), DataSpaceId::UNIVERSAL)
+            .expect("universal route");
+        let body = norito::json::to_vec(&routing::AliasResolveIndexRequestDto { index: 0 })
+            .expect("encode request");
+
+        let response = execute_torii_read_for_route(
+            &app,
+            route,
+            torii_read_request(
+                ToriiReadEndpointV1::AliasResolveIndex,
+                route,
+                Vec::new(),
+                None,
+                body,
+            ),
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-routed-by")
+                .and_then(|value| value.to_str().ok()),
+            Some("local")
+        );
+    }
+
+    #[cfg(feature = "app_api")]
+    #[test]
+    fn exact_alias_resolve_rejects_expired_authoritative_lease() {
+        let authority = routed_read_test_account(0x98);
+        let app = mk_app_state_for_tests_with_world(world_with_account(&authority));
+        let alias_literal = "merchant@universal";
+        bind_account_alias_for_test(&app, &authority, alias_literal);
+        let catalog = app.state.nexus_snapshot().dataspace_catalog;
+        let alias = AccountAlias::from_literal(alias_literal, &catalog).expect("account alias");
+        let selector = iroha_core::sns::selector_for_account_alias(&alias, &catalog)
+            .expect("account alias selector");
+        let account_address = AccountAddress::from_account_id(&authority).expect("account address");
+        let expired = iroha_data_model::sns::NameRecordV1::new(
+            selector.clone(),
+            authority.clone(),
+            vec![iroha_data_model::sns::NameControllerV1::account(
+                &account_address,
+            )],
+            0,
+            0,
+            1,
+            1,
+            1,
+            iroha_data_model::metadata::Metadata::default(),
+        );
+        let height = app
+            .state
+            .latest_block_header_fast()
+            .map_or(1, |header| header.height().get().saturating_add(1));
+        let header = BlockHeader::new(
+            std::num::NonZeroU64::new(height).expect("nonzero height"),
+            None,
+            None,
+            None,
+            2,
+            0,
+        );
+        let mut block = app.state.block(header);
+        let mut tx = block.transaction();
+        tx.world_mut_for_testing()
+            .smart_contract_state_mut_for_testing()
+            .insert(
+                iroha_core::sns::record_storage_key(&selector),
+                norito::codec::Encode::encode(&expired),
+            );
+        tx.apply();
+        block.commit().expect("commit expired alias lease");
+
+        let route = resolve_torii_route_for_dataspace_id(app.as_ref(), DataSpaceId::UNIVERSAL)
+            .expect("universal route");
+        let response = execute_alias_resolve_local_read(
+            &app,
+            route,
+            &routing::AliasResolveRequestDto {
+                alias: alias_literal.to_owned(),
+            },
+        )
+        .expect("expired alias should produce a not-found response");
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[cfg(feature = "app_api")]
+    #[test]
+    fn exact_alias_resolve_rejects_rekey_index_split_brain() {
+        let authority = routed_read_test_account(0x99);
+        let forged = routed_read_test_account(0x9a);
+        let app = mk_app_state_for_tests_with_world(world_with_account(&authority));
+        let alias_literal = "merchant@universal";
+        bind_account_alias_for_test(&app, &authority, alias_literal);
+        let alias = AccountAlias::from_literal(
+            alias_literal,
+            &app.state.nexus_snapshot().dataspace_catalog,
+        )
+        .expect("account alias");
+        let height = app
+            .state
+            .latest_block_header_fast()
+            .map_or(1, |header| header.height().get().saturating_add(1));
+        let header = BlockHeader::new(
+            std::num::NonZeroU64::new(height).expect("nonzero height"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        );
+        let mut block = app.state.block(header);
+        let mut tx = block.transaction();
+        tx.world_mut_for_testing()
+            .account_rekey_records_mut_for_testing()
+            .insert(
+                alias.clone(),
+                iroha_data_model::account::rekey::AccountRekeyRecord::new(alias, forged),
+            );
+        tx.apply();
+        block.commit().expect("commit split-brain rekey record");
+
+        let route = resolve_torii_route_for_dataspace_id(app.as_ref(), DataSpaceId::UNIVERSAL)
+            .expect("universal route");
+        let response = execute_alias_resolve_local_read(
+            &app,
+            route,
+            &routing::AliasResolveRequestDto {
+                alias: alias_literal.to_owned(),
+            },
+        )
+        .expect("split-brain alias should produce a not-found response");
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 
     #[cfg(feature = "app_api")]
@@ -25209,7 +26318,7 @@ mod torii_routed_read_tests {
         assert_eq!(payload.index, 0);
         assert_eq!(payload.alias, "merchant@secondary");
         assert_eq!(payload.account_id, authority.to_string());
-        assert_eq!(payload.source.as_deref(), Some("on_chain"));
+        assert_eq!(payload.source.as_deref(), Some("active_sns"));
     }
 
     #[cfg(feature = "app_api")]
@@ -34963,6 +36072,90 @@ async fn handler_bridge_finality_proof(
     .await
 }
 
+async fn handler_bridge_finality_attestation(
+    State(app): State<SharedAppState>,
+    axum::extract::Path(height): axum::extract::Path<u64>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+) -> Result<AxResponse, Error> {
+    let result = handler_bridge_finality_attestation_inner(app, height, headers, remote).await;
+    Ok(finalize_bridge_finality_attestation_response(result))
+}
+
+async fn handler_bridge_finality_attestation_inner(
+    app: SharedAppState,
+    height: u64,
+    headers: axum::http::HeaderMap,
+    remote: std::net::SocketAddr,
+) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
+    validate_api_token(app.as_ref(), &headers)?;
+    let challenge = bridge_finality_challenge(&headers)?;
+    let _token_hdr = headers
+        .get("x-api-token")
+        .and_then(|value| value.to_str().ok())
+        .map(ToString::to_string);
+    let format = match negotiate_heavy_query_response_format(&headers) {
+        Ok(format) => format,
+        Err(response) => return Ok(response),
+    };
+    let key = rate_limit_key(
+        &headers,
+        Some(remote_ip),
+        "/v1/bridge/finality/attestation/{height}",
+        app.api_token_enforced(),
+    );
+    rate_limit_requests_with_cost(&app, &key, FINALITY_HEAVY_QUERY_RATE_COST).await?;
+    let query_permit = acquire_query_admission(app.as_ref(), true).await?;
+    let restart_required = app
+        .sumeragi
+        .as_ref()
+        .is_some_and(iroha_core::sumeragi::SumeragiHandle::restart_required);
+    let Some(status) =
+        iroha_core::sumeragi::status::v2_status_with_restart_required(restart_required)
+    else {
+        let mut response = axum::http::StatusCode::SERVICE_UNAVAILABLE.into_response();
+        protect_bridge_finality_attestation_response(&mut response);
+        return Ok(response);
+    };
+    if status.restart_required {
+        let mut response = axum::http::StatusCode::SERVICE_UNAVAILABLE.into_response();
+        protect_bridge_finality_attestation_response(&mut response);
+        return Ok(response);
+    }
+    #[cfg(feature = "telemetry")]
+    if let Some(api_token) = _token_hdr {
+        crate::telemetry::report_torii_api_hit(
+            &app.telemetry,
+            &api_token,
+            "v1/bridge/finality/attestation",
+        );
+    }
+    let mut response = routing::handle_v1_bridge_finality_attestation(
+        app.state.clone(),
+        status,
+        height,
+        challenge,
+        app.torii_proxy_bridge_signer.clone(),
+        format,
+        query_permit,
+    )
+    .await?
+    .into_response();
+    protect_bridge_finality_attestation_response(&mut response);
+    let mut response = proof_response_with_exact_egress(
+        app.as_ref(),
+        &headers,
+        Some(remote_ip),
+        "v1/bridge/finality/attestation",
+        response,
+        true,
+    )
+    .await?;
+    protect_bridge_finality_attestation_response(&mut response);
+    Ok(response)
+}
+
 async fn handler_bridge_finality_bundle(
     State(app): State<SharedAppState>,
     axum::extract::Path(height): axum::extract::Path<u64>,
@@ -43224,11 +44417,10 @@ fn require_signed_alias_request(
 ) -> Result<AccountId, Error> {
     match crate::app_auth::verify_canonical_request(&app.state, headers, method, uri, body, None)? {
         Some(verified) => Ok(verified.account),
-        None => Err(Error::Query(
-            iroha_data_model::ValidationFail::NotPermitted(
-                "signed account headers are required".to_owned(),
-            ),
-        )),
+        None => Err(Error::AppUnauthorized {
+            code: "alias_auth_required",
+            message: "signed account headers are required".to_owned(),
+        }),
     }
 }
 
@@ -43297,24 +44489,22 @@ async fn handler_alias_resolve(
     headers: axum::http::HeaderMap,
     body: axum::body::Bytes,
 ) -> Result<AxResponse, Error> {
+    let caller = require_signed_alias_request(&app, &headers, &method, &uri, body.as_ref())?;
     let request: routing::AliasResolveRequestDto = norito::json::from_slice(body.as_ref())
         .map_err(|err| {
             Error::Query(iroha_data_model::ValidationFail::QueryFailed(
                 iroha_data_model::query::error::QueryExecutionFail::Conversion(err.to_string()),
             ))
         })?;
-    let _ = torii_visibility_account_from_headers(
-        &app,
-        &headers,
-        &method,
-        &uri,
-        body.as_ref(),
-        "v1/aliases/resolve",
-    )?;
     let (canonical, alias_label) = parse_exact_account_alias_label_with_catalog(
         request.alias.as_str(),
         &app.state.nexus_snapshot().dataspace_catalog,
     )?;
+    if !torii_authority_can_resolve_account_alias(app.state.view().world(), &caller, &alias_label) {
+        return Ok(torii_alias_permission_denied_response(
+            "exact account-alias resolve permission is required for the requested dataspace and domain",
+        ));
+    }
     let candidate_routes = match resolve_torii_target_alias_routes(app.as_ref(), &alias_label) {
         Ok(routes) => routes,
         Err(queue::RoutingResolveError::NoLaneForDataspace { .. }) => {
@@ -43356,13 +44546,13 @@ async fn handler_alias_resolve_index(
     headers: axum::http::HeaderMap,
     body: axum::body::Bytes,
 ) -> Result<AxResponse, Error> {
+    let caller = require_signed_alias_request(&app, &headers, &method, &uri, body.as_ref())?;
     let request: routing::AliasResolveIndexRequestDto = norito::json::from_slice(body.as_ref())
         .map_err(|err| {
             Error::Query(iroha_data_model::ValidationFail::QueryFailed(
                 iroha_data_model::query::error::QueryExecutionFail::Conversion(err.to_string()),
             ))
         })?;
-    let caller = require_signed_alias_request(&app, &headers, &method, &uri, body.as_ref())?;
     let candidate_routes = torii_all_dataspace_routes(app.as_ref());
     let (allowed_routes, denied_routes) = torii_partition_alias_index_routes_by_permission(
         &app,
@@ -43425,13 +44615,13 @@ async fn handler_alias_lookup_by_account(
     headers: axum::http::HeaderMap,
     body: axum::body::Bytes,
 ) -> Result<AxResponse, Error> {
+    let caller = require_signed_alias_request(&app, &headers, &method, &uri, body.as_ref())?;
     let request: routing::AliasLookupByAccountRequestDto = norito::json::from_slice(body.as_ref())
         .map_err(|err| {
             Error::Query(iroha_data_model::ValidationFail::QueryFailed(
                 iroha_data_model::query::error::QueryExecutionFail::Conversion(err.to_string()),
             ))
         })?;
-    let caller = require_signed_alias_request(&app, &headers, &method, &uri, body.as_ref())?;
     let (target_account, _) = parse_exact_account_id_literal(&request.account_id)?;
     validate_exact_alias_lookup_filters(&app, &request)?;
     let visibility = ToriiAccountReadVisibility::Signed(caller);
@@ -43587,8 +44777,7 @@ async fn recipient_lookup_access_gate(
     let visibility =
         torii_visibility_account_from_headers(app, headers, method, uri, body, endpoint)?;
     let Some(caller) = visibility.caller().cloned() else {
-        return Ok(Err(torii_proxy_error_response(
-            StatusCode::UNAUTHORIZED,
+        return Ok(Err(torii_canonical_auth_required_response(
             "recipient_lookup_signature_required",
             "recipient lookup requires canonical request signing",
         )));
@@ -43802,6 +44991,19 @@ async fn handler_retail_recipient_route(
     headers: axum::http::HeaderMap,
     body: axum::body::Bytes,
 ) -> Result<AxResponse, Error> {
+    let access = match recipient_lookup_access_gate(
+        &app,
+        &headers,
+        &method,
+        &uri,
+        body.as_ref(),
+        "v1/retail/recipients/route",
+    )
+    .await?
+    {
+        Ok(access) => access,
+        Err(response) => return Ok(response),
+    };
     let request: routing::RetailRecipientRouteRequestDto = norito::json::from_slice(body.as_ref())
         .map_err(|err| {
             Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -43833,19 +45035,6 @@ async fn handler_retail_recipient_route(
             "account_id must use the canonical I105 encoding",
         ));
     }
-    let access = match recipient_lookup_access_gate(
-        &app,
-        &headers,
-        &method,
-        &uri,
-        body.as_ref(),
-        "v1/retail/recipients/route",
-    )
-    .await?
-    {
-        Ok(access) => access,
-        Err(response) => return Ok(response),
-    };
     let response = match recipient_route_for_account(
         app.as_ref(),
         &access.caller,
@@ -43867,6 +45056,20 @@ async fn handler_fee_sponsor_policy_by_id(
     headers: axum::http::HeaderMap,
     body: axum::body::Bytes,
 ) -> Result<AxResponse, Error> {
+    let visibility = torii_visibility_account_from_headers(
+        &app,
+        &headers,
+        &method,
+        &uri,
+        body.as_ref(),
+        "v1/fee-sponsor-policies/by-id",
+    )?;
+    if !visibility.is_signed() {
+        return Ok(torii_canonical_auth_required_response(
+            "fee_sponsor_policy_signature_required",
+            "fee sponsor policy lookup requires canonical request signing",
+        ));
+    }
     let request: routing::FeeSponsorPolicyByIdRequestDto = norito::json::from_slice(body.as_ref())
         .map_err(|err| {
             Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -43920,21 +45123,6 @@ async fn handler_fee_sponsor_policy_by_id(
         ));
     }
     let policy_id = FeeSponsorPolicyId::new(sponsor, policy_name);
-    let visibility = torii_visibility_account_from_headers(
-        &app,
-        &headers,
-        &method,
-        &uri,
-        body.as_ref(),
-        "v1/fee-sponsor-policies/by-id",
-    )?;
-    if !visibility.is_signed() {
-        return Ok(torii_proxy_error_response(
-            StatusCode::UNAUTHORIZED,
-            "fee_sponsor_policy_signature_required",
-            "fee sponsor policy lookup requires canonical request signing",
-        ));
-    }
     let nexus = app.state.nexus_snapshot();
     let is_configured_default =
         nexus
@@ -43986,6 +45174,19 @@ async fn handler_retail_recipient_lookup(
     headers: axum::http::HeaderMap,
     body: axum::body::Bytes,
 ) -> Result<AxResponse, Error> {
+    let access = match recipient_lookup_access_gate(
+        &app,
+        &headers,
+        &method,
+        &uri,
+        body.as_ref(),
+        "v1/retail/recipients/lookup",
+    )
+    .await?
+    {
+        Ok(access) => access,
+        Err(response) => return Ok(response),
+    };
     let request: routing::RetailRecipientLookupRequestDto = norito::json::from_slice(body.as_ref())
         .map_err(|err| {
             Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -44006,20 +45207,6 @@ async fn handler_retail_recipient_lookup(
             "alias_fqn must be canonical without surrounding whitespace",
         ));
     }
-
-    let access = match recipient_lookup_access_gate(
-        &app,
-        &headers,
-        &method,
-        &uri,
-        body.as_ref(),
-        "v1/retail/recipients/lookup",
-    )
-    .await?
-    {
-        Ok(access) => access,
-        Err(response) => return Ok(response),
-    };
 
     let requested_account_id_literal = request.account_id.trim().to_owned();
     let (account_id, _, _) = AccountId::parse_encoded(request.account_id.trim())
@@ -45365,6 +46552,7 @@ const ZK_IVM_ROUTE_TIMEOUT: Duration = Duration::from_mins(10);
 const HEADER_NORITO_RPC_ERROR: &str = "x-iroha-error-code";
 const NORITO_RPC_RETRY_AFTER_SECONDS: &str = "300";
 const HEADER_API_TOKEN: &str = "x-api-token";
+pub(crate) const HEADER_ONBOARDING_API_TOKEN: &str = "x-iroha-onboarding-token";
 const HEADER_MTLS_FORWARD: &str = "x-forwarded-client-cert";
 const NORITO_RPC_DISABLED_CODE: &str = "norito_rpc_disabled";
 const NORITO_RPC_CANARY_DENIED_CODE: &str = "norito_rpc_canary_denied";
@@ -45412,6 +46600,7 @@ impl FeePolicy {
 struct AccountOnboardingSigner {
     authority: AccountId,
     private_key: ExposedPrivateKey,
+    api_token_hash: Option<[u8; 32]>,
     allowed_permissions: std::collections::BTreeSet<String>,
     alias_resolve_dataspaces: std::collections::BTreeSet<DataSpaceId>,
     alias_resolve_domains: std::collections::BTreeSet<DomainId>,
@@ -45988,6 +47177,10 @@ impl Torii {
         mount_get!(VRF_PENALTIES, handler_sumeragi_vrf_penalties);
         mount_get!(VRF_EPOCH, handler_sumeragi_vrf_epoch);
         mount_get!(BRIDGE_FINALITY, handler_bridge_finality_proof);
+        mount_get!(
+            BRIDGE_FINALITY_ATTESTATION,
+            handler_bridge_finality_attestation
+        );
         mount_get!(BRIDGE_FINALITY_BUNDLE, handler_bridge_finality_bundle);
 
         #[cfg(feature = "telemetry")]
@@ -46118,28 +47311,38 @@ impl Torii {
         builder.route(
             &route_catalog::aliases::RESOLVE,
             catalog_post(handler_public_alias_resolve)
-                .layer(DefaultBodyLimit::max(EXACT_ALIAS_READ_MAX_BODY_BYTES)),
+                .layer(DefaultBodyLimit::max(EXACT_ALIAS_READ_MAX_BODY_BYTES))
+                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
         );
         builder.route(
             &route_catalog::aliases::RESOLVE_INDEX,
-            catalog_post(handler_alias_resolve_index),
+            catalog_post(handler_alias_resolve_index)
+                .layer(DefaultBodyLimit::max(EXACT_ALIAS_READ_MAX_BODY_BYTES))
+                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
         );
         builder.route(
             &route_catalog::aliases::BY_ACCOUNT,
             catalog_post(handler_public_alias_lookup_by_account)
-                .layer(DefaultBodyLimit::max(EXACT_ALIAS_READ_MAX_BODY_BYTES)),
+                .layer(DefaultBodyLimit::max(EXACT_ALIAS_READ_MAX_BODY_BYTES))
+                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
         );
         builder.route(
             &route_catalog::aliases::RETAIL_RECIPIENT_LOOKUP,
-            catalog_post(handler_retail_recipient_lookup),
+            catalog_post(handler_retail_recipient_lookup)
+                .layer(DefaultBodyLimit::max(EXACT_ALIAS_READ_MAX_BODY_BYTES))
+                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
         );
         builder.route(
             &route_catalog::aliases::RETAIL_RECIPIENT_ROUTE,
-            catalog_post(handler_retail_recipient_route),
+            catalog_post(handler_retail_recipient_route)
+                .layer(DefaultBodyLimit::max(EXACT_ALIAS_READ_MAX_BODY_BYTES))
+                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
         );
         builder.route(
             &route_catalog::aliases::FEE_SPONSOR_POLICY_BY_ID,
-            catalog_post(handler_fee_sponsor_policy_by_id),
+            catalog_post(handler_fee_sponsor_policy_by_id)
+                .layer(DefaultBodyLimit::max(EXACT_ALIAS_READ_MAX_BODY_BYTES))
+                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
         );
         builder.route(
             &route_catalog::aliases::ASSET_RESOLVE,
@@ -47180,11 +48383,15 @@ impl Torii {
     /// App-facing typed and protocol-native endpoints.
     #[cfg(feature = "app_api")]
     fn add_app_api_routes(&self, builder: &mut RouterBuilder) {
-        let offline_command_body_limit: usize = self
+        let transaction_max_content_len: usize = self
             .transaction_max_content_len
             .get()
             .try_into()
             .expect("shouldn't exceed usize");
+        let offline_top_up_body_limit_bytes =
+            offline_top_up_body_limit(transaction_max_content_len);
+        let offline_redeem_body_limit_bytes =
+            offline_redeem_body_limit(transaction_max_content_len);
         builder.route(
             &route_catalog::offline::READINESS,
             catalog_get(handler_offline_readiness),
@@ -47192,12 +48399,12 @@ impl Torii {
         builder.route(
             &route_catalog::offline::TOP_UP,
             catalog_post(handler_offline_top_up)
-                .layer(DefaultBodyLimit::max(offline_command_body_limit)),
+                .layer(DefaultBodyLimit::max(offline_top_up_body_limit_bytes)),
         );
         builder.route(
             &route_catalog::offline::REDEEM,
             catalog_post(handler_offline_redeem)
-                .layer(DefaultBodyLimit::max(offline_command_body_limit)),
+                .layer(DefaultBodyLimit::max(offline_redeem_body_limit_bytes)),
         );
         builder.route(
             &route_catalog::offline::OPERATION,
@@ -47357,7 +48564,7 @@ impl Torii {
         );
         builder.route(
             &route_catalog::application_api::ACCOUNTS_ONBOARD_POST,
-            catalog_post(handler_accounts_onboard),
+            catalog_post(handler_accounts_onboard).authenticated_onboarding(),
         );
         builder.route(
             &route_catalog::application_api::ACCOUNTS_FAUCET_PUZZLE_GET,
@@ -47369,7 +48576,7 @@ impl Torii {
         );
         builder.route(
             &route_catalog::application_api::ACCOUNTS_ONBOARD_MULTISIG_POST,
-            catalog_post(handler_accounts_onboard_multisig),
+            catalog_post(handler_accounts_onboard_multisig).authenticated_onboarding(),
         );
         builder.route(
             &route_catalog::application_api::ACCOUNTS_BY_ACCOUNT_ID_ALIASES_GET,
@@ -49081,6 +50288,7 @@ impl Torii {
             let signer = AccountOnboardingSigner {
                 authority: cfg.authority.clone(),
                 private_key: cfg.private_key.clone(),
+                api_token_hash: cfg.api_token_hash,
                 allowed_permissions: cfg.allowed_permissions.iter().cloned().collect(),
                 alias_resolve_dataspaces: cfg.alias_resolve_dataspaces.iter().copied().collect(),
                 alias_resolve_domains: cfg.alias_resolve_domains.iter().cloned().collect(),
@@ -49933,7 +51141,19 @@ impl Torii {
         // representation parsing.
         let mut router = router
             .layer(axum::middleware::from_fn(capture_response_format))
-            .layer(axum::middleware::from_fn(coalesce_accept_headers))
+            .layer(axum::middleware::from_fn(coalesce_accept_headers));
+        #[cfg(feature = "app_api")]
+        {
+            // Added outside media parsing but inside the listener-wide API
+            // token gate. Exact onboarding authentication therefore wins over
+            // malformed Accept/Content-Type and body input without changing
+            // the precedence of the deployment-wide credential.
+            router = router.layer(axum::middleware::from_fn_with_state(
+                app_state.clone(),
+                enforce_onboarding_api_token,
+            ));
+        }
+        let mut router = router
             .layer(axum::middleware::from_fn_with_state(
                 app_state.clone(),
                 enforce_api_token,
@@ -51813,6 +53033,13 @@ pub enum Error {
         /// Optional operator-facing remediation hint.
         hint: Option<&'static str>,
     },
+    /// Authentication is required for app-facing operation `{code}`: {message}
+    AppUnauthorized {
+        /// Stable machine-readable code.
+        code: &'static str,
+        /// Human-readable error message.
+        message: String,
+    },
     /// Forbidden error for app-facing operation `{code}`: {message}
     AppForbidden {
         /// Stable machine-readable code.
@@ -52087,9 +53314,34 @@ impl IntoResponse for Error {
                 response
             }
             #[cfg(feature = "app_api")]
-            Self::AccountOnboardingValidation { code, message, .. } => {
-                let payload = ErrorEnvelope::new(code, message);
+            Self::AccountOnboardingValidation {
+                code,
+                message,
+                hint,
+            } => {
+                let payload = ErrorEnvelope::new(code, message).with_details(ErrorDetails {
+                    hint: hint.map(str::to_owned),
+                    ..Default::default()
+                });
                 utils::respond_with_status_and_format(StatusCode::BAD_REQUEST, payload, format)
+            }
+            Self::AppUnauthorized { code, message } => {
+                let payload = ErrorEnvelope::new(code, message);
+                let mut response = utils::respond_with_status_and_format(
+                    StatusCode::UNAUTHORIZED,
+                    payload,
+                    format,
+                );
+                response.headers_mut().insert(
+                    axum::http::header::WWW_AUTHENTICATE,
+                    HeaderValue::from_static("Signature"),
+                );
+                if let Ok(header) = HeaderValue::from_str(code) {
+                    response
+                        .headers_mut()
+                        .insert(HeaderName::from_static("x-iroha-reject-code"), header);
+                }
+                response
             }
             Self::AppForbidden { code, message } => {
                 let payload = ErrorEnvelope::new(code, message);
@@ -52351,23 +53603,6 @@ pub(crate) mod tests_runtime_handlers {
             )) => Some(message.as_str()),
             _ => None,
         }
-    }
-
-    #[cfg(feature = "app_api")]
-    #[test]
-    fn account_onboarding_json_errors_preserve_explicit_norito_accept() {
-        let mut headers = HeaderMap::new();
-        assert!(super::account_onboarding_wants_json_error(&headers));
-        headers.insert(
-            axum::http::header::ACCEPT,
-            HeaderValue::from_static("application/json"),
-        );
-        assert!(super::account_onboarding_wants_json_error(&headers));
-        headers.insert(
-            axum::http::header::ACCEPT,
-            HeaderValue::from_static("application/x-norito"),
-        );
-        assert!(!super::account_onboarding_wants_json_error(&headers));
     }
 
     pub fn mk_app_state_for_tests() -> SharedAppState {
@@ -72676,9 +73911,15 @@ impl Error {
             }
             Self::AppQueryValidation { code, message } => ErrorEnvelope::new(code, message),
             #[cfg(feature = "app_api")]
-            Self::AccountOnboardingValidation { code, message, .. } => {
-                ErrorEnvelope::new(code, message)
-            }
+            Self::AccountOnboardingValidation {
+                code,
+                message,
+                hint,
+            } => ErrorEnvelope::new(code, message).with_details(ErrorDetails {
+                hint: hint.map(str::to_owned),
+                ..Default::default()
+            }),
+            Self::AppUnauthorized { code, message } => ErrorEnvelope::new(code, message),
             Self::AppForbidden { code, message } => ErrorEnvelope::new(code, message),
             Self::AppNotFound { code, message } => ErrorEnvelope::new(code, message),
             Self::AppConflict { code, message } => ErrorEnvelope::new(code, message),
@@ -72748,6 +73989,7 @@ impl Error {
             AppQueryValidation { .. } => StatusCode::BAD_REQUEST,
             #[cfg(feature = "app_api")]
             AccountOnboardingValidation { .. } => StatusCode::BAD_REQUEST,
+            AppUnauthorized { .. } => StatusCode::UNAUTHORIZED,
             AppForbidden { .. } => StatusCode::FORBIDDEN,
             AppNotFound { .. } => StatusCode::NOT_FOUND,
             AppConflict { .. } => StatusCode::CONFLICT,
@@ -74229,6 +75471,21 @@ mod tests {
             .expect("commit should persist alias resolve permission");
     }
 
+    fn signed_alias_resolve_headers_for_test(
+        app: &SharedAppState,
+        account_id: &AccountId,
+        keypair: &KeyPair,
+        alias: &AccountAlias,
+        body: &[u8],
+    ) -> HeaderMap {
+        grant_alias_resolve_permissions(app, account_id, alias);
+        let method = Method::POST;
+        let uri: Uri = "/v1/aliases/resolve"
+            .parse()
+            .expect("alias resolve test URI");
+        signed_app_headers(account_id, keypair, &method, &uri, body)
+    }
+
     fn grant_alias_resolve_dataspace_permission(
         app: &SharedAppState,
         account_id: &AccountId,
@@ -74457,33 +75714,50 @@ mod tests {
                 .and_then(|value| value.to_str().ok()),
             Some("recipient_lookup_signature_required")
         );
+        assert_eq!(
+            response
+                .headers()
+                .get(axum::http::header::WWW_AUTHENTICATE)
+                .and_then(|value| value.to_str().ok()),
+            Some("Signature")
+        );
     }
 
     #[tokio::test]
     async fn retail_recipient_lookup_rejects_noncanonical_whitespace() {
-        let authority = checked_torii_test_account_id(
+        let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
+        let caller_keypair = checked_torii_test_ed25519_keypair(
             0x92,
-            "derive recipient lookup restricted target fixture key",
+            "derive recipient lookup validation caller fixture key",
         );
-        let mut app = mk_app_state_for_tests_with_world(world_with_account(&authority));
+        let caller = AccountId::new(caller_keypair.public_key().clone());
+        let target = checked_torii_test_account_id(
+            0x95,
+            "derive recipient lookup validation target fixture key",
+        );
+        let mut app =
+            mk_app_state_for_tests_with_world(recipient_lookup_world_for_test(&caller, &target));
         configure_recipient_lookup_sbp_dataspace_for_test(
             &mut app,
             iroha_data_model::nexus::LaneVisibility::Restricted,
         );
-        bind_account_alias_for_test(&app, &authority, "payee@hbl.sbp");
+        install_recipient_lookup_policy_for_test(&app);
 
         let body = norito::json::to_vec(&routing::RetailRecipientLookupRequestDto {
-            account_id: format!(" {}", authority),
+            account_id: format!(" {target}"),
             alias_fqn: "payee@hbl.sbp ".to_owned(),
         })
         .expect("encode request");
+        let method = axum::http::Method::POST;
+        let uri: axum::http::Uri = "/v1/retail/recipients/lookup"
+            .parse()
+            .expect("recipient lookup uri");
+        let headers = signed_app_headers(&caller, &caller_keypair, &method, &uri, &body);
         let response = handler_retail_recipient_lookup(
             State(app),
-            axum::http::Method::POST,
-            "/v1/retail/recipients/lookup"
-                .parse()
-                .expect("recipient lookup uri"),
-            HeaderMap::new(),
+            method,
+            uri,
+            headers,
             axum::body::Bytes::from(body),
         )
         .await
@@ -74783,37 +76057,63 @@ mod tests {
 
     #[tokio::test]
     async fn retail_recipient_route_and_sponsor_policy_reject_noncanonical_or_malformed_bodies() {
+        let caller_keypair = checked_torii_test_ed25519_keypair(
+            0x9a,
+            "derive recipient validation caller fixture key",
+        );
+        let caller = AccountId::new(caller_keypair.public_key().clone());
         let target = checked_torii_test_account_id(
             0x9b,
             "derive recipient route validation target fixture key",
         );
-        let app = mk_app_state_for_tests_with_world(world_with_account(&target));
+        let mut app =
+            mk_app_state_for_tests_with_world(recipient_lookup_world_for_test(&caller, &target));
+        configure_recipient_lookup_sbp_dataspace_for_test(
+            &mut app,
+            iroha_data_model::nexus::LaneVisibility::Public,
+        );
+        install_recipient_lookup_policy_for_test(&app);
 
         let whitespace_route = norito::json::to_vec(&routing::RetailRecipientRouteRequestDto {
             account_id: format!(" {target}"),
         })
         .expect("encode whitespace route request");
+        let method = axum::http::Method::POST;
+        let route_uri: axum::http::Uri = "/v1/retail/recipients/route"
+            .parse()
+            .expect("recipient route uri");
+        let headers = signed_app_headers(
+            &caller,
+            &caller_keypair,
+            &method,
+            &route_uri,
+            &whitespace_route,
+        );
         let response = handler_retail_recipient_route(
             State(app.clone()),
-            axum::http::Method::POST,
-            "/v1/retail/recipients/route"
-                .parse()
-                .expect("recipient route uri"),
-            HeaderMap::new(),
+            method.clone(),
+            route_uri.clone(),
+            headers,
             axum::body::Bytes::from(whitespace_route),
         )
         .await
         .expect("whitespace route response");
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 
+        let malformed_body = br#"{"account_id":"unterminated"#;
+        let headers = signed_app_headers(
+            &caller,
+            &caller_keypair,
+            &method,
+            &route_uri,
+            malformed_body,
+        );
         let malformed = handler_retail_recipient_route(
             State(app.clone()),
-            axum::http::Method::POST,
-            "/v1/retail/recipients/route"
-                .parse()
-                .expect("recipient route uri"),
-            HeaderMap::new(),
-            axum::body::Bytes::from_static(br#"{"account_id":"unterminated"#),
+            method.clone(),
+            route_uri.clone(),
+            headers,
+            axum::body::Bytes::from_static(malformed_body),
         )
         .await
         .expect_err("malformed route JSON must fail")
@@ -74825,13 +76125,13 @@ mod tests {
             format!(r#"{{"account_id":"{target}","account_id":"{target}"}}"#).into_bytes(),
             br#"[]"#.to_vec(),
         ] {
+            let headers =
+                signed_app_headers(&caller, &caller_keypair, &method, &route_uri, &invalid_body);
             let response = handler_retail_recipient_route(
                 State(app.clone()),
-                axum::http::Method::POST,
-                "/v1/retail/recipients/route"
-                    .parse()
-                    .expect("recipient route uri"),
-                HeaderMap::new(),
+                method.clone(),
+                route_uri.clone(),
+                headers,
                 axum::body::Bytes::from(invalid_body),
             )
             .await
@@ -74839,6 +76139,9 @@ mod tests {
             assert_eq!(response.status(), StatusCode::BAD_REQUEST);
         }
 
+        let lookup_uri: axum::http::Uri = "/v1/retail/recipients/lookup"
+            .parse()
+            .expect("recipient lookup uri");
         for invalid_body in [
             format!(
                 r#"{{"account_id":"{target}","alias_fqn":"payee@hbl.sbp","extra":true}}"#
@@ -74850,13 +76153,18 @@ mod tests {
             .into_bytes(),
             br#"[]"#.to_vec(),
         ] {
+            let headers = signed_app_headers(
+                &caller,
+                &caller_keypair,
+                &method,
+                &lookup_uri,
+                &invalid_body,
+            );
             let response = handler_retail_recipient_lookup(
                 State(app.clone()),
-                axum::http::Method::POST,
-                "/v1/retail/recipients/lookup"
-                    .parse()
-                    .expect("recipient lookup uri"),
-                HeaderMap::new(),
+                method.clone(),
+                lookup_uri.clone(),
+                headers,
                 axum::body::Bytes::from(invalid_body),
             )
             .await
@@ -74869,27 +76177,41 @@ mod tests {
             policy_name: "wallet_fx ".to_owned(),
         })
         .expect("encode whitespace sponsor request");
+        let sponsor_uri: axum::http::Uri = "/v1/fee-sponsor-policies/by-id"
+            .parse()
+            .expect("fee sponsor policy uri");
+        let headers = signed_app_headers(
+            &caller,
+            &caller_keypair,
+            &method,
+            &sponsor_uri,
+            &whitespace_sponsor,
+        );
         let response = handler_fee_sponsor_policy_by_id(
             State(app.clone()),
-            axum::http::Method::POST,
-            "/v1/fee-sponsor-policies/by-id"
-                .parse()
-                .expect("fee sponsor policy uri"),
-            HeaderMap::new(),
+            method.clone(),
+            sponsor_uri.clone(),
+            headers,
             axum::body::Bytes::from(whitespace_sponsor),
         )
         .await
         .expect("whitespace sponsor response");
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 
+        let malformed_body = br#"{"policy_name":"#;
+        let headers = signed_app_headers(
+            &caller,
+            &caller_keypair,
+            &method,
+            &sponsor_uri,
+            malformed_body,
+        );
         let malformed = handler_fee_sponsor_policy_by_id(
             State(app.clone()),
-            axum::http::Method::POST,
-            "/v1/fee-sponsor-policies/by-id"
-                .parse()
-                .expect("fee sponsor policy uri"),
-            HeaderMap::new(),
-            axum::body::Bytes::from_static(br#"{"policy_name":"#),
+            method.clone(),
+            sponsor_uri.clone(),
+            headers,
+            axum::body::Bytes::from_static(malformed_body),
         )
         .await
         .expect_err("malformed sponsor JSON must fail")
@@ -74907,19 +76229,151 @@ mod tests {
             .into_bytes(),
             br#"[]"#.to_vec(),
         ] {
+            let headers = signed_app_headers(
+                &caller,
+                &caller_keypair,
+                &method,
+                &sponsor_uri,
+                &invalid_body,
+            );
             let response = handler_fee_sponsor_policy_by_id(
                 State(app.clone()),
-                axum::http::Method::POST,
-                "/v1/fee-sponsor-policies/by-id"
-                    .parse()
-                    .expect("fee sponsor policy uri"),
-                HeaderMap::new(),
+                method.clone(),
+                sponsor_uri.clone(),
+                headers,
                 axum::body::Bytes::from(invalid_body),
             )
             .await
             .map_or_else(IntoResponse::into_response, |response| response);
             assert_eq!(response.status(), StatusCode::BAD_REQUEST);
         }
+    }
+
+    #[tokio::test]
+    async fn protected_alias_and_recipient_reads_authenticate_before_parsing() {
+        let app = mk_app_state_for_tests();
+        let method = axum::http::Method::POST;
+
+        macro_rules! assert_alias_auth_first {
+            ($handler:ident, $path:literal) => {{
+                let error = $handler(
+                    State(app.clone()),
+                    method.clone(),
+                    $path.parse().expect("protected alias route uri"),
+                    HeaderMap::new(),
+                    axum::body::Bytes::from_static(b"{"),
+                )
+                .await
+                .expect_err("unsigned malformed alias request must fail authentication first");
+                assert!(matches!(
+                    &error,
+                    Error::AppUnauthorized {
+                        code: "alias_auth_required",
+                        ..
+                    }
+                ));
+                let response = error.into_response();
+                assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+                assert_eq!(
+                    response
+                        .headers()
+                        .get("x-iroha-reject-code")
+                        .and_then(|value| value.to_str().ok()),
+                    Some("alias_auth_required")
+                );
+                assert_eq!(
+                    response
+                        .headers()
+                        .get(axum::http::header::WWW_AUTHENTICATE)
+                        .and_then(|value| value.to_str().ok()),
+                    Some("Signature")
+                );
+            }};
+        }
+        assert_alias_auth_first!(handler_alias_resolve, "/v1/aliases/resolve");
+        assert_alias_auth_first!(handler_alias_resolve_index, "/v1/aliases/resolve-index");
+        assert_alias_auth_first!(handler_alias_lookup_by_account, "/v1/aliases/by-account");
+
+        let route = handler_retail_recipient_route(
+            State(app.clone()),
+            method.clone(),
+            "/v1/retail/recipients/route"
+                .parse()
+                .expect("recipient route uri"),
+            HeaderMap::new(),
+            axum::body::Bytes::from_static(b"{"),
+        )
+        .await
+        .expect("unsigned recipient route rejection");
+        assert_eq!(route.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            route
+                .headers()
+                .get("x-iroha-reject-code")
+                .and_then(|value| value.to_str().ok()),
+            Some("recipient_lookup_signature_required")
+        );
+        assert_eq!(
+            route
+                .headers()
+                .get(axum::http::header::WWW_AUTHENTICATE)
+                .and_then(|value| value.to_str().ok()),
+            Some("Signature")
+        );
+
+        let lookup = handler_retail_recipient_lookup(
+            State(app.clone()),
+            method.clone(),
+            "/v1/retail/recipients/lookup"
+                .parse()
+                .expect("recipient lookup uri"),
+            HeaderMap::new(),
+            axum::body::Bytes::from_static(b"{"),
+        )
+        .await
+        .expect("unsigned recipient lookup rejection");
+        assert_eq!(lookup.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            lookup
+                .headers()
+                .get("x-iroha-reject-code")
+                .and_then(|value| value.to_str().ok()),
+            Some("recipient_lookup_signature_required")
+        );
+        assert_eq!(
+            lookup
+                .headers()
+                .get(axum::http::header::WWW_AUTHENTICATE)
+                .and_then(|value| value.to_str().ok()),
+            Some("Signature")
+        );
+
+        let sponsor = handler_fee_sponsor_policy_by_id(
+            State(app),
+            method,
+            "/v1/fee-sponsor-policies/by-id"
+                .parse()
+                .expect("fee sponsor policy uri"),
+            HeaderMap::new(),
+            axum::body::Bytes::from_static(b"{"),
+        )
+        .await
+        .expect("unsigned fee sponsor policy rejection");
+        assert_eq!(sponsor.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            sponsor
+                .headers()
+                .get("x-iroha-reject-code")
+                .and_then(|value| value.to_str().ok()),
+            Some("fee_sponsor_policy_signature_required")
+        );
+        assert_eq!(
+            sponsor
+                .headers()
+                .get(axum::http::header::WWW_AUTHENTICATE)
+                .and_then(|value| value.to_str().ok()),
+            Some("Signature")
+        );
     }
 
     #[tokio::test]
@@ -75119,7 +76573,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn alias_resolve_accepts_unsigned_request() {
+    async fn alias_resolve_rejects_unsigned_request() {
         let authority = checked_torii_test_account_id(
             0x84,
             "derive alias resolve unsigned authority fixture key",
@@ -75146,7 +76600,7 @@ mod tests {
             alias: "banking@centralbank.universal".to_string(),
         };
         let body = norito::json::to_vec(&request).expect("encode request");
-        let response = handler_alias_resolve(
+        let error = handler_alias_resolve(
             State(app),
             axum::http::Method::POST,
             "/v1/aliases/resolve".parse().expect("alias resolve uri"),
@@ -75154,10 +76608,11 @@ mod tests {
             axum::body::Bytes::from(body),
         )
         .await
-        .expect("unsigned request should succeed")
+        .expect_err("unsigned exact alias resolution must fail closed")
         .into_response();
 
-        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(error.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(typed_error_code(error).await, "alias_auth_required");
     }
 
     #[tokio::test]
@@ -75224,10 +76679,19 @@ mod tests {
 
     #[tokio::test]
     async fn public_exact_alias_reads_use_independent_route_rate_limits() {
-        let authority =
-            checked_torii_test_account_id(0x86, "derive public exact alias rate-limit fixture key");
+        let authority_keypair = checked_torii_test_ed25519_keypair(
+            0x86,
+            "derive public exact alias rate-limit fixture key",
+        );
+        let authority = AccountId::new(authority_keypair.public_key().clone());
         let mut app = mk_app_state_for_tests_with_world(world_with_account(&authority));
         bind_account_alias_for_test(&app, &authority, "banking@universal");
+        let alias_label = AccountAlias::new(
+            "banking".parse().expect("label"),
+            None,
+            DataSpaceId::UNIVERSAL,
+        );
+        grant_alias_resolve_permissions(&app, &authority, &alias_label);
         Arc::get_mut(&mut app)
             .expect("unique app state")
             .rate_limiter = limits::RateLimiter::new(Some(1), Some(1));
@@ -75238,12 +76702,19 @@ mod tests {
         .expect("encode resolve request");
         let resolve_uri: axum::http::Uri =
             "/v1/aliases/resolve".parse().expect("alias resolve uri");
+        let first_resolve_headers = signed_app_headers(
+            &authority,
+            &authority_keypair,
+            &axum::http::Method::POST,
+            &resolve_uri,
+            &resolve_body,
+        );
 
         let first = handler_public_alias_resolve(
             State(app.clone()),
             axum::http::Method::POST,
             resolve_uri.clone(),
-            HeaderMap::new(),
+            first_resolve_headers,
             connect_info,
             axum::body::Bytes::from(resolve_body.clone()),
         )
@@ -75251,11 +76722,18 @@ mod tests {
         .expect("first exact resolve should be admitted")
         .into_response();
         assert_eq!(first.status(), StatusCode::OK);
+        let second_resolve_headers = signed_app_headers(
+            &authority,
+            &authority_keypair,
+            &axum::http::Method::POST,
+            &resolve_uri,
+            &resolve_body,
+        );
         let throttled = handler_public_alias_resolve(
             State(app.clone()),
             axum::http::Method::POST,
             resolve_uri,
-            HeaderMap::new(),
+            second_resolve_headers,
             crate::loopback_connect_info(),
             axum::body::Bytes::from(resolve_body),
         )
@@ -75270,13 +76748,21 @@ mod tests {
             domain: None,
         })
         .expect("encode reverse lookup request");
+        let lookup_uri: axum::http::Uri = "/v1/aliases/by-account"
+            .parse()
+            .expect("alias by-account uri");
+        let lookup_headers = signed_app_headers(
+            &authority,
+            &authority_keypair,
+            &axum::http::Method::POST,
+            &lookup_uri,
+            &lookup_body,
+        );
         let lookup = handler_public_alias_lookup_by_account(
             State(app),
             axum::http::Method::POST,
-            "/v1/aliases/by-account"
-                .parse()
-                .expect("alias by-account uri"),
-            HeaderMap::new(),
+            lookup_uri,
+            lookup_headers,
             crate::loopback_connect_info(),
             axum::body::Bytes::from(lookup_body),
         )
@@ -75658,27 +77144,34 @@ mod tests {
 
     #[tokio::test]
     async fn alias_resolve_returns_not_found_for_unknown_alias() {
-        let authority = checked_torii_test_account_id(
+        let authority_keypair = checked_torii_test_ed25519_keypair(
             0x89,
             "derive alias resolve missing-alias authority fixture key",
         );
+        let authority = AccountId::new(authority_keypair.public_key().clone());
         let authority_account = Account::new(authority.clone()).build(&authority);
         let app = mk_app_state_for_tests_with_world(World::with([], [authority_account], []));
+        let alias_label =
+            AccountAlias::domainless("missing".parse().expect("label"), DataSpaceId::UNIVERSAL);
         let request = routing::AliasResolveRequestDto {
-            alias: AccountAlias::domainless(
-                "missing".parse().expect("label"),
-                DataSpaceId::UNIVERSAL,
-            )
-            .to_literal(&app.state.nexus_snapshot().dataspace_catalog)
-            .expect("alias literal"),
+            alias: alias_label
+                .to_literal(&app.state.nexus_snapshot().dataspace_catalog)
+                .expect("alias literal"),
         };
         let body = norito::json::to_vec(&request).expect("encode request");
+        let headers = signed_alias_resolve_headers_for_test(
+            &app,
+            &authority,
+            &authority_keypair,
+            &alias_label,
+            &body,
+        );
 
         let response = handler_alias_resolve(
             State(app),
             axum::http::Method::POST,
             "/v1/aliases/resolve".parse().expect("alias resolve uri"),
-            HeaderMap::new(),
+            headers,
             axum::body::Bytes::from(body),
         )
         .await
@@ -75756,22 +77249,24 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn alias_resolve_allows_unsigned_request_without_permission() {
-        let authority = checked_torii_test_account_id(
+    async fn alias_resolve_rejects_signed_request_without_exact_permission() {
+        let authority_keypair = checked_torii_test_ed25519_keypair(
             0x8c,
             "derive alias resolve permissionless authority fixture key",
         );
+        let authority = AccountId::new(authority_keypair.public_key().clone());
         let authority_account = Account::new(authority.clone()).build(&authority);
         let domain_id: DomainId = DomainId::try_new("centralbank", "universal").expect("domain id");
         let domain = Domain::new(domain_id.clone()).build(&authority);
+        let alias_label = AccountAlias::new(
+            "banking".parse().expect("label"),
+            Some(iroha_data_model::account::rekey::AccountAliasDomain::new(
+                "centralbank".parse::<Name>().expect("domain"),
+            )),
+            DataSpaceId::UNIVERSAL,
+        );
         let account = Account::new(authority.clone())
-            .with_label(Some(AccountAlias::new(
-                "banking".parse().expect("label"),
-                Some(iroha_data_model::account::rekey::AccountAliasDomain::new(
-                    "centralbank".parse::<Name>().expect("domain"),
-                )),
-                DataSpaceId::UNIVERSAL,
-            )))
+            .with_label(Some(alias_label))
             .build(&authority);
         let app = mk_app_state_for_tests_with_world(World::with(
             [domain],
@@ -75782,29 +77277,38 @@ mod tests {
             alias: "banking@centralbank.universal".to_string(),
         };
         let body = norito::json::to_vec(&request).expect("encode request");
+        let method = axum::http::Method::POST;
+        let uri: axum::http::Uri = "/v1/aliases/resolve".parse().expect("alias resolve uri");
+        let headers = signed_app_headers(&authority, &authority_keypair, &method, &uri, &body);
         let response = handler_alias_resolve(
             State(app),
-            axum::http::Method::POST,
-            "/v1/aliases/resolve".parse().expect("alias resolve uri"),
-            HeaderMap::new(),
+            method,
+            uri,
+            headers,
             axum::body::Bytes::from(body),
         )
         .await
-        .expect("public alias resolve should succeed")
+        .expect("authenticated permission denial should be a typed response")
         .into_response();
 
-        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
     }
 
     #[tokio::test]
     async fn alias_resolve_routes_to_matching_dataspace_instead_of_local_default_miss() {
-        let authority = checked_torii_test_account_id(
+        let authority_keypair = checked_torii_test_ed25519_keypair(
             0x8d,
             "derive alias resolve secondary-dataspace authority fixture key",
         );
+        let authority = AccountId::new(authority_keypair.public_key().clone());
         let mut app = mk_app_state_for_tests_with_world(world_with_account(&authority));
         configure_multiple_dataspace_routes_for_test(&mut app);
         bind_account_alias_for_test(&app, &authority, "merchant@secondary");
+        let alias_label = AccountAlias::new(
+            "merchant".parse().expect("label"),
+            None,
+            DataSpaceId::new(1),
+        );
 
         let request = routing::AliasResolveRequestDto {
             alias: "merchant@secondary".to_string(),
@@ -75827,12 +77331,19 @@ mod tests {
             StatusCode::NOT_FOUND,
             "the default/universal route must not resolve a secondary dataspace alias locally",
         );
+        let headers = signed_alias_resolve_headers_for_test(
+            &app,
+            &authority,
+            &authority_keypair,
+            &alias_label,
+            &body,
+        );
 
         let response = handler_alias_resolve(
             State(app),
             axum::http::Method::POST,
             "/v1/aliases/resolve".parse().expect("alias resolve uri"),
-            HeaderMap::new(),
+            headers,
             axum::body::Bytes::from(body),
         )
         .await
@@ -75858,11 +77369,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn alias_resolve_allows_unsigned_request_for_restricted_target_dataspace() {
-        let authority = checked_torii_test_account_id(
+    async fn alias_resolve_allows_signed_exact_permission_for_restricted_target_dataspace() {
+        let authority_keypair = checked_torii_test_ed25519_keypair(
             0x8e,
             "derive alias resolve restricted-dataspace authority fixture key",
         );
+        let authority = AccountId::new(authority_keypair.public_key().clone());
         let uaid = UniversalAccountId::from_hash(Hash::new(b"torii::alias-resolve-denied"));
         let mut app = mk_app_state_for_tests_with_world(world_with_account_bound_to_dataspace(
             &authority,
@@ -75871,16 +77383,28 @@ mod tests {
         ));
         configure_private_ingress_routes_for_test(&mut app);
         bind_account_alias_for_test(&app, &authority, "merchant@restricted");
+        let alias_label = AccountAlias::new(
+            "merchant".parse().expect("label"),
+            None,
+            DataSpaceId::new(10),
+        );
 
         let request = routing::AliasResolveRequestDto {
             alias: "merchant@restricted".to_string(),
         };
         let body = norito::json::to_vec(&request).expect("encode request");
+        let headers = signed_alias_resolve_headers_for_test(
+            &app,
+            &authority,
+            &authority_keypair,
+            &alias_label,
+            &body,
+        );
         let response = handler_alias_resolve(
             State(app),
             axum::http::Method::POST,
             "/v1/aliases/resolve".parse().expect("alias resolve uri"),
-            HeaderMap::new(),
+            headers,
             axum::body::Bytes::from(body),
         )
         .await
@@ -75907,10 +77431,11 @@ mod tests {
 
     #[tokio::test]
     async fn alias_resolve_reads_local_binding_when_dataspace_has_no_lane() {
-        let authority = checked_torii_test_account_id(
+        let authority_keypair = checked_torii_test_ed25519_keypair(
             0x8f,
             "derive alias resolve no-lane authority fixture key",
         );
+        let authority = AccountId::new(authority_keypair.public_key().clone());
         let mut app = mk_app_state_for_tests_with_world(world_with_account(&authority));
         let lane_catalog = iroha_data_model::nexus::LaneCatalog::new(
             NonZeroU32::new(1).expect("nonzero lane count"),
@@ -75941,16 +77466,28 @@ mod tests {
             app_state.queue.reconfigure_nexus(&nexus, &state_view, None);
         }
         bind_account_alias_for_test(&app, &authority, "banking@paynet");
+        let alias_label = AccountAlias::new(
+            "banking".parse().expect("label"),
+            None,
+            DataSpaceId::new(10),
+        );
 
         let request = routing::AliasResolveRequestDto {
             alias: "banking@paynet".to_string(),
         };
         let body = norito::json::to_vec(&request).expect("encode request");
+        let headers = signed_alias_resolve_headers_for_test(
+            &app,
+            &authority,
+            &authority_keypair,
+            &alias_label,
+            &body,
+        );
         let response = handler_alias_resolve(
             State(app),
             axum::http::Method::POST,
             "/v1/aliases/resolve".parse().expect("alias resolve uri"),
-            HeaderMap::new(),
+            headers,
             axum::body::Bytes::from(body),
         )
         .await
@@ -75985,8 +77522,14 @@ mod tests {
         let (_local_route, _foreign_route) =
             crate::tests_runtime_handlers::configure_private_ingress_with_offline_foreign_route_for_test(
                 &mut app,
-            );
+        );
         bind_account_alias_for_test(&app, &authority, "merchant@foreign-restricted");
+        let alias_label = AccountAlias::new(
+            "merchant".parse().expect("label"),
+            None,
+            DataSpaceId::new(12),
+        );
+        grant_alias_resolve_permissions(&app, &authority, &alias_label);
 
         let request = routing::AliasResolveRequestDto {
             alias: "merchant@foreign-restricted".to_string(),
@@ -76018,21 +77561,25 @@ mod tests {
 
     #[tokio::test]
     async fn alias_resolve_rejects_empty_alias() {
-        let authority = checked_torii_test_account_id(
+        let authority_keypair = checked_torii_test_ed25519_keypair(
             0x95,
             "derive alias resolve empty-alias authority fixture key",
         );
+        let authority = AccountId::new(authority_keypair.public_key().clone());
         let app = mk_app_state_for_tests_with_world(world_with_account(&authority));
         let request = routing::AliasResolveRequestDto {
             alias: "   ".to_string(),
         };
         let body = norito::json::to_vec(&request).expect("encode request");
+        let method = axum::http::Method::POST;
+        let uri: axum::http::Uri = "/v1/aliases/resolve".parse().expect("alias resolve uri");
+        let headers = signed_app_headers(&authority, &authority_keypair, &method, &uri, &body);
 
         let err = handler_alias_resolve(
             State(app),
-            axum::http::Method::POST,
-            "/v1/aliases/resolve".parse().expect("alias resolve uri"),
-            HeaderMap::new(),
+            method,
+            uri,
+            headers,
             axum::body::Bytes::from(body),
         )
         .await
@@ -76048,19 +77595,23 @@ mod tests {
 
     #[tokio::test]
     async fn alias_resolve_rejects_noncanonical_exact_literal() {
-        let authority =
-            checked_torii_test_account_id(0x91, "derive noncanonical exact alias fixture key");
+        let authority_keypair =
+            checked_torii_test_ed25519_keypair(0x91, "derive noncanonical exact alias fixture key");
+        let authority = AccountId::new(authority_keypair.public_key().clone());
         let app = mk_app_state_for_tests_with_world(world_with_account(&authority));
         let body = norito::json::to_vec(&routing::AliasResolveRequestDto {
             alias: " banking@universal".to_owned(),
         })
         .expect("encode request");
+        let method = axum::http::Method::POST;
+        let uri: axum::http::Uri = "/v1/aliases/resolve".parse().expect("alias resolve uri");
+        let headers = signed_app_headers(&authority, &authority_keypair, &method, &uri, &body);
 
         let error = handler_alias_resolve(
             State(app),
-            axum::http::Method::POST,
-            "/v1/aliases/resolve".parse().expect("alias resolve uri"),
-            HeaderMap::new(),
+            method,
+            uri,
+            headers,
             axum::body::Bytes::from(body),
         )
         .await
@@ -76076,21 +77627,25 @@ mod tests {
 
     #[tokio::test]
     async fn alias_resolve_rejects_malformed_alias_literal() {
-        let authority = checked_torii_test_account_id(
+        let authority_keypair = checked_torii_test_ed25519_keypair(
             0x96,
             "derive alias resolve malformed-alias authority fixture key",
         );
+        let authority = AccountId::new(authority_keypair.public_key().clone());
         let app = mk_app_state_for_tests_with_world(world_with_account(&authority));
         let request = routing::AliasResolveRequestDto {
             alias: "merchant@missing-dataspace".to_string(),
         };
         let body = norito::json::to_vec(&request).expect("encode request");
+        let method = axum::http::Method::POST;
+        let uri: axum::http::Uri = "/v1/aliases/resolve".parse().expect("alias resolve uri");
+        let headers = signed_app_headers(&authority, &authority_keypair, &method, &uri, &body);
 
         let err = handler_alias_resolve(
             State(app),
-            axum::http::Method::POST,
-            "/v1/aliases/resolve".parse().expect("alias resolve uri"),
-            HeaderMap::new(),
+            method,
+            uri,
+            headers,
             axum::body::Bytes::from(body),
         )
         .await
@@ -76109,18 +77664,23 @@ mod tests {
 
     #[tokio::test]
     async fn alias_resolve_rejects_malformed_json_body() {
-        let authority = checked_torii_test_account_id(
+        let authority_keypair = checked_torii_test_ed25519_keypair(
             0x97,
             "derive alias resolve malformed-json authority fixture key",
         );
+        let authority = AccountId::new(authority_keypair.public_key().clone());
         let app = mk_app_state_for_tests_with_world(world_with_account(&authority));
+        let body = b"{";
+        let method = axum::http::Method::POST;
+        let uri: axum::http::Uri = "/v1/aliases/resolve".parse().expect("alias resolve uri");
+        let headers = signed_app_headers(&authority, &authority_keypair, &method, &uri, body);
 
         let err = handler_alias_resolve(
             State(app),
-            axum::http::Method::POST,
-            "/v1/aliases/resolve".parse().expect("alias resolve uri"),
-            HeaderMap::new(),
-            axum::body::Bytes::from_static(b"{"),
+            method,
+            uri,
+            headers,
+            axum::body::Bytes::from_static(body),
         )
         .await
         .expect_err("malformed alias-resolve bodies should be rejected");
@@ -76154,10 +77714,11 @@ mod tests {
 
     #[tokio::test]
     async fn alias_lookup_by_account_lists_primary_and_secondary_aliases() {
-        let authority = checked_torii_test_account_id(
+        let authority_keypair = checked_torii_test_ed25519_keypair(
             0xa0,
             "derive alias lookup primary-secondary authority fixture key",
         );
+        let authority = AccountId::new(authority_keypair.public_key().clone());
         let primary_label = AccountAlias::new(
             "banking".parse().expect("label"),
             Some(iroha_data_model::account::rekey::AccountAliasDomain::new(
@@ -76178,19 +77739,23 @@ mod tests {
         ));
         bind_account_alias_for_test(&app, &authority, "banking@centralbank.universal");
         bind_account_alias_for_test(&app, &authority, "public@universal");
+        grant_alias_resolve_permissions(&app, &authority, &primary_label);
         let request = routing::AliasLookupByAccountRequestDto {
             account_id: authority.to_string(),
             dataspace: None,
             domain: None,
         };
         let body = norito::json::to_vec(&request).expect("encode request");
+        let method = Method::POST;
+        let uri: axum::http::Uri = "/v1/aliases/by-account"
+            .parse()
+            .expect("alias by-account uri");
+        let headers = signed_app_headers(&authority, &authority_keypair, &method, &uri, &body);
         let response = handler_alias_lookup_by_account(
             State(app),
-            axum::http::Method::POST,
-            "/v1/aliases/by-account"
-                .parse()
-                .expect("alias by-account uri"),
-            HeaderMap::new(),
+            method,
+            uri,
+            headers,
             axum::body::Bytes::from(body),
         )
         .await
@@ -76269,10 +77834,11 @@ mod tests {
 
     #[tokio::test]
     async fn alias_lookup_by_account_filters_by_dataspace_and_domain() {
-        let authority = checked_torii_test_account_id(
+        let authority_keypair = checked_torii_test_ed25519_keypair(
             0xa1,
             "derive alias lookup filtered authority fixture key",
         );
+        let authority = AccountId::new(authority_keypair.public_key().clone());
         let primary_label = AccountAlias::new(
             "banking".parse().expect("label"),
             Some(iroha_data_model::account::rekey::AccountAliasDomain::new(
@@ -76292,19 +77858,23 @@ mod tests {
             [],
         ));
         bind_account_alias_for_test(&app, &authority, "banking@centralbank.universal");
+        grant_alias_resolve_permissions(&app, &authority, &primary_label);
         let request = routing::AliasLookupByAccountRequestDto {
             account_id: authority.to_string(),
             dataspace: Some("universal".to_string()),
             domain: Some("centralbank".to_string()),
         };
         let body = norito::json::to_vec(&request).expect("encode request");
+        let method = Method::POST;
+        let uri: axum::http::Uri = "/v1/aliases/by-account"
+            .parse()
+            .expect("alias by-account uri");
+        let headers = signed_app_headers(&authority, &authority_keypair, &method, &uri, &body);
         let response = handler_alias_lookup_by_account(
             State(app),
-            axum::http::Method::POST,
-            "/v1/aliases/by-account"
-                .parse()
-                .expect("alias by-account uri"),
-            HeaderMap::new(),
+            method,
+            uri,
+            headers,
             axum::body::Bytes::from(body),
         )
         .await
@@ -76325,8 +77895,11 @@ mod tests {
 
     #[tokio::test]
     async fn alias_lookup_by_account_returns_not_found_for_unknown_account() {
-        let authority =
-            checked_torii_test_account_id(0xa2, "derive alias lookup known authority fixture key");
+        let authority_keypair = checked_torii_test_ed25519_keypair(
+            0xa2,
+            "derive alias lookup known authority fixture key",
+        );
+        let authority = AccountId::new(authority_keypair.public_key().clone());
         let authority_account = Account::new(authority.clone()).build(&authority);
         let app = mk_app_state_for_tests_with_world(World::with([], [authority_account], []));
         let missing =
@@ -76337,13 +77910,16 @@ mod tests {
             domain: None,
         };
         let body = norito::json::to_vec(&request).expect("encode request");
+        let method = Method::POST;
+        let uri: axum::http::Uri = "/v1/aliases/by-account"
+            .parse()
+            .expect("alias by-account uri");
+        let headers = signed_app_headers(&authority, &authority_keypair, &method, &uri, &body);
         let response = handler_alias_lookup_by_account(
             State(app),
-            axum::http::Method::POST,
-            "/v1/aliases/by-account"
-                .parse()
-                .expect("alias by-account uri"),
-            HeaderMap::new(),
+            method,
+            uri,
+            headers,
             axum::body::Bytes::from(body),
         )
         .await
@@ -76355,10 +77931,11 @@ mod tests {
 
     #[tokio::test]
     async fn alias_lookup_by_account_rejects_invalid_account_id() {
-        let authority = checked_torii_test_account_id(
+        let authority_keypair = checked_torii_test_ed25519_keypair(
             0xa4,
             "derive alias lookup invalid-account authority fixture key",
         );
+        let authority = AccountId::new(authority_keypair.public_key().clone());
         let app = mk_app_state_for_tests_with_world(world_with_account(&authority));
         let request = routing::AliasLookupByAccountRequestDto {
             account_id: "not-an-account".to_string(),
@@ -76366,14 +77943,17 @@ mod tests {
             domain: None,
         };
         let body = norito::json::to_vec(&request).expect("encode request");
+        let method = Method::POST;
+        let uri: axum::http::Uri = "/v1/aliases/by-account"
+            .parse()
+            .expect("alias by-account uri");
+        let headers = signed_app_headers(&authority, &authority_keypair, &method, &uri, &body);
 
         let err = handler_alias_lookup_by_account(
             State(app),
-            axum::http::Method::POST,
-            "/v1/aliases/by-account"
-                .parse()
-                .expect("alias by-account uri"),
-            HeaderMap::new(),
+            method,
+            uri,
+            headers,
             axum::body::Bytes::from(body),
         )
         .await
@@ -76392,10 +77972,11 @@ mod tests {
 
     #[tokio::test]
     async fn alias_lookup_by_account_rejects_empty_account_id() {
-        let authority = checked_torii_test_account_id(
+        let authority_keypair = checked_torii_test_ed25519_keypair(
             0xa5,
             "derive alias lookup empty-account authority fixture key",
         );
+        let authority = AccountId::new(authority_keypair.public_key().clone());
         let app = mk_app_state_for_tests_with_world(world_with_account(&authority));
         let request = routing::AliasLookupByAccountRequestDto {
             account_id: "   ".to_string(),
@@ -76403,14 +77984,17 @@ mod tests {
             domain: None,
         };
         let body = norito::json::to_vec(&request).expect("encode request");
+        let method = Method::POST;
+        let uri: axum::http::Uri = "/v1/aliases/by-account"
+            .parse()
+            .expect("alias by-account uri");
+        let headers = signed_app_headers(&authority, &authority_keypair, &method, &uri, &body);
 
         let err = handler_alias_lookup_by_account(
             State(app),
-            axum::http::Method::POST,
-            "/v1/aliases/by-account"
-                .parse()
-                .expect("alias by-account uri"),
-            HeaderMap::new(),
+            method,
+            uri,
+            headers,
             axum::body::Bytes::from(body),
         )
         .await
@@ -76426,8 +78010,11 @@ mod tests {
 
     #[tokio::test]
     async fn alias_lookup_by_account_rejects_noncanonical_account_or_scope() {
-        let authority =
-            checked_torii_test_account_id(0xa6, "derive noncanonical reverse alias fixture key");
+        let authority_keypair = checked_torii_test_ed25519_keypair(
+            0xa6,
+            "derive noncanonical reverse alias fixture key",
+        );
+        let authority = AccountId::new(authority_keypair.public_key().clone());
         let app = mk_app_state_for_tests_with_world(world_with_account(&authority));
         let account_body = norito::json::to_vec(&routing::AliasLookupByAccountRequestDto {
             account_id: format!(" {}", authority),
@@ -76435,13 +78022,17 @@ mod tests {
             domain: None,
         })
         .expect("encode request");
+        let method = Method::POST;
+        let uri: axum::http::Uri = "/v1/aliases/by-account"
+            .parse()
+            .expect("alias by-account uri");
+        let account_headers =
+            signed_app_headers(&authority, &authority_keypair, &method, &uri, &account_body);
         handler_alias_lookup_by_account(
             State(app.clone()),
-            axum::http::Method::POST,
-            "/v1/aliases/by-account"
-                .parse()
-                .expect("alias by-account uri"),
-            HeaderMap::new(),
+            method.clone(),
+            uri.clone(),
+            account_headers,
             axum::body::Bytes::from(account_body),
         )
         .await
@@ -76453,13 +78044,13 @@ mod tests {
             domain: None,
         })
         .expect("encode request");
+        let scope_headers =
+            signed_app_headers(&authority, &authority_keypair, &method, &uri, &scope_body);
         handler_alias_lookup_by_account(
             State(app),
-            axum::http::Method::POST,
-            "/v1/aliases/by-account"
-                .parse()
-                .expect("alias by-account uri"),
-            HeaderMap::new(),
+            method,
+            uri,
+            scope_headers,
             axum::body::Bytes::from(scope_body),
         )
         .await
@@ -76468,20 +78059,25 @@ mod tests {
 
     #[tokio::test]
     async fn alias_lookup_by_account_rejects_malformed_json_body() {
-        let authority = checked_torii_test_account_id(
+        let authority_keypair = checked_torii_test_ed25519_keypair(
             0xa6,
             "derive alias lookup malformed-json authority fixture key",
         );
+        let authority = AccountId::new(authority_keypair.public_key().clone());
         let app = mk_app_state_for_tests_with_world(world_with_account(&authority));
+        let method = axum::http::Method::POST;
+        let uri: axum::http::Uri = "/v1/aliases/by-account"
+            .parse()
+            .expect("alias by-account uri");
+        let body = b"{";
+        let headers = signed_app_headers(&authority, &authority_keypair, &method, &uri, body);
 
         let err = handler_alias_lookup_by_account(
             State(app),
-            axum::http::Method::POST,
-            "/v1/aliases/by-account"
-                .parse()
-                .expect("alias by-account uri"),
-            HeaderMap::new(),
-            axum::body::Bytes::from_static(b"{"),
+            method,
+            uri,
+            headers,
+            axum::body::Bytes::from_static(body),
         )
         .await
         .expect_err("malformed alias by-account bodies should be rejected");
@@ -76513,6 +78109,12 @@ mod tests {
         configure_private_ingress_routes_for_test(&mut app);
         bind_account_alias_for_test(&app, &authority, "merchant@universal");
         bind_account_alias_for_test(&app, &authority, "merchant@restricted");
+        let catalog = app.state.nexus_snapshot().dataspace_catalog;
+        for alias_literal in ["merchant@universal", "merchant@restricted"] {
+            let alias = AccountAlias::from_literal(alias_literal, &catalog)
+                .expect("configured account alias");
+            grant_alias_resolve_permissions(&app, &authority, &alias);
+        }
 
         let request = routing::AliasLookupByAccountRequestDto {
             account_id: authority.to_string(),
@@ -76568,7 +78170,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn alias_lookup_by_account_unsigned_exact_read_includes_public_and_restricted_aliases() {
+    async fn alias_lookup_by_account_rejects_unsigned_reverse_enumeration() {
         let authority = checked_torii_test_account_id(
             0xa8,
             "derive alias lookup denied-routes warning authority fixture key",
@@ -76589,7 +78191,7 @@ mod tests {
             domain: None,
         };
         let body = norito::json::to_vec(&request).expect("encode request");
-        let response = handler_alias_lookup_by_account(
+        let error = handler_alias_lookup_by_account(
             State(app),
             axum::http::Method::POST,
             "/v1/aliases/by-account"
@@ -76599,43 +78201,19 @@ mod tests {
             axum::body::Bytes::from(body),
         )
         .await
-        .expect("handler should succeed")
-        .into_response();
+        .expect_err("unsigned reverse enumeration must fail closed");
 
-        assert_eq!(response.status(), StatusCode::OK);
-        assert_eq!(
-            response
-                .headers()
-                .get("x-iroha-fanout-routes-denied")
-                .and_then(|value| value.to_str().ok()),
-            Some("0")
-        );
-        assert!(
-            response
-                .headers()
-                .get(axum::http::header::WARNING)
-                .is_none(),
-            "exact public reverse lookups must not report permission filtering",
-        );
-        let body = http_body_util::BodyExt::collect(response.into_body())
-            .await
-            .unwrap()
-            .to_bytes();
-        let dto: routing::AliasLookupByAccountResponseDto =
-            norito::json::from_slice(&body).expect("json decode");
-        assert_eq!(dto.total, 2);
-        assert_eq!(dto.source.as_deref(), Some("fanout"));
-        assert_eq!(
-            dto.items
-                .iter()
-                .map(|item| item.alias.as_str())
-                .collect::<Vec<_>>(),
-            vec!["merchant@restricted", "merchant@universal"]
-        );
+        assert!(matches!(
+            error,
+            Error::AppUnauthorized {
+                code: "alias_auth_required",
+                ..
+            }
+        ));
     }
 
     #[tokio::test]
-    async fn alias_lookup_by_account_unsigned_exact_read_resolves_restricted_alias() {
+    async fn alias_lookup_by_account_rejects_unsigned_restricted_alias_lookup() {
         let authority = checked_torii_test_account_id(
             0xa9,
             "derive alias lookup hidden-route authority fixture key",
@@ -76655,7 +78233,7 @@ mod tests {
             domain: None,
         };
         let body = norito::json::to_vec(&request).expect("encode request");
-        let response = handler_alias_lookup_by_account(
+        let error = handler_alias_lookup_by_account(
             State(app),
             axum::http::Method::POST,
             "/v1/aliases/by-account"
@@ -76665,29 +78243,19 @@ mod tests {
             axum::body::Bytes::from(body),
         )
         .await
-        .expect("handler should succeed")
-        .into_response();
+        .expect_err("unsigned restricted alias lookup must fail closed");
 
-        assert_eq!(response.status(), StatusCode::OK);
-        assert_eq!(
-            response
-                .headers()
-                .get("x-iroha-fanout-routes-denied")
-                .and_then(|value| value.to_str().ok()),
-            Some("0")
-        );
-        let body = http_body_util::BodyExt::collect(response.into_body())
-            .await
-            .unwrap()
-            .to_bytes();
-        let dto: routing::AliasLookupByAccountResponseDto =
-            norito::json::from_slice(&body).expect("json decode");
-        assert_eq!(dto.total, 1);
-        assert_eq!(dto.items[0].alias, "merchant@restricted");
+        assert!(matches!(
+            error,
+            Error::AppUnauthorized {
+                code: "alias_auth_required",
+                ..
+            }
+        ));
     }
 
     #[tokio::test]
-    async fn alias_lookup_by_account_signed_exact_read_does_not_require_resolve_permission() {
+    async fn alias_lookup_by_account_signed_read_requires_exact_resolve_permission() {
         let caller_keypair = checked_torii_test_ed25519_keypair(
             0x35,
             "derive alias lookup permission caller fixture key",
@@ -76730,35 +78298,66 @@ mod tests {
         .expect("handler should succeed")
         .into_response();
 
-        assert_eq!(response.status(), StatusCode::OK);
-        assert_eq!(
-            response
-                .headers()
-                .get("x-iroha-fanout-routes-attempted")
-                .and_then(|value| value.to_str().ok()),
-            Some("3")
-        );
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
         assert_eq!(
             response
                 .headers()
                 .get("x-iroha-fanout-routes-denied")
                 .and_then(|value| value.to_str().ok()),
-            Some("0")
+            Some("3")
         );
-        let body = http_body_util::BodyExt::collect(response.into_body())
-            .await
-            .unwrap()
-            .to_bytes();
-        let dto: routing::AliasLookupByAccountResponseDto =
-            norito::json::from_slice(&body).expect("json decode");
-        assert_eq!(dto.account_id, target.to_string());
-        assert_eq!(dto.total, 1);
-        assert_eq!(dto.items[0].alias, "merchant@restricted");
-        assert_eq!(dto.source.as_deref(), Some("fanout"));
     }
 
     #[tokio::test]
-    async fn alias_lookup_by_account_public_exact_read_does_not_filter_domain_aliases() {
+    async fn account_alias_enumeration_rejects_signed_caller_without_exact_scope() {
+        let caller_keypair = checked_torii_test_ed25519_keypair(
+            0x39,
+            "derive account alias enumeration caller fixture key",
+        );
+        let caller = AccountId::new(caller_keypair.public_key().clone());
+        let target = checked_torii_test_account_id(
+            0x3a,
+            "derive account alias enumeration target fixture key",
+        );
+        let world = World::with(
+            [],
+            [
+                Account::new(caller.clone()).build(&caller),
+                Account::new(target.clone()).build(&target),
+            ],
+            [],
+        );
+        let app = mk_app_state_for_tests_with_world(world);
+        bind_account_alias_for_test(&app, &target, "merchant@universal");
+
+        let method = Method::GET;
+        let uri: axum::http::Uri = format!("/v1/accounts/{target}/aliases")
+            .parse()
+            .expect("account aliases uri");
+        let headers = signed_app_headers(&caller, &caller_keypair, &method, &uri, &[]);
+        let error = match handler_account_aliases(
+            State(app),
+            method,
+            uri,
+            headers,
+            crate::loopback_connect_info(),
+            AxPath(target.to_string()),
+        )
+        .await
+        {
+            Err(error) => error,
+            Ok(_) => panic!("caller without exact alias scope must not enumerate bindings"),
+        };
+
+        assert!(matches!(
+            error,
+            Error::Query(ValidationFail::NotPermitted(message))
+                if message == "exact account-alias resolve permission is required"
+        ));
+    }
+
+    #[tokio::test]
+    async fn alias_lookup_by_account_filters_domain_aliases_until_exact_domain_grant() {
         let caller_keypair = checked_torii_test_ed25519_keypair(
             0x37,
             "derive alias lookup permission filter caller fixture key",
@@ -76781,6 +78380,7 @@ mod tests {
         configure_private_ingress_routes_for_test(&mut app);
         bind_account_alias_for_test(&app, &target, "merchant@restricted");
         bind_account_alias_for_test(&app, &target, "merchant@bank.restricted");
+        grant_alias_resolve_dataspace_permission(&app, &caller, restricted_dataspace);
 
         let request = routing::AliasLookupByAccountRequestDto {
             account_id: target.to_string(),
@@ -76794,11 +78394,11 @@ mod tests {
             .expect("alias by-account uri");
         let headers = signed_app_headers(&caller, &caller_keypair, &method, &uri, &body);
         let response = handler_alias_lookup_by_account(
-            State(app),
-            method,
-            uri,
-            headers,
-            axum::body::Bytes::from(body),
+            State(app.clone()),
+            method.clone(),
+            uri.clone(),
+            headers.clone(),
+            axum::body::Bytes::from(body.clone()),
         )
         .await
         .expect("handler should succeed")
@@ -76811,12 +78411,37 @@ mod tests {
             .to_bytes();
         let dto: routing::AliasLookupByAccountResponseDto =
             norito::json::from_slice(&body).expect("json decode");
+        assert_eq!(dto.total, 1);
+        assert_eq!(dto.items[0].alias, "merchant@restricted");
+
+        let domain_alias = AccountAlias::from_literal(
+            "merchant@bank.restricted",
+            &app.state.nexus_snapshot().dataspace_catalog,
+        )
+        .expect("domain alias");
+        grant_alias_resolve_permissions(&app, &caller, &domain_alias);
+        let response = handler_alias_lookup_by_account(
+            State(app),
+            method,
+            uri,
+            headers,
+            axum::body::Bytes::from(body),
+        )
+        .await
+        .expect("handler should succeed after exact domain grant")
+        .into_response();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = http_body_util::BodyExt::collect(response.into_body())
+            .await
+            .unwrap()
+            .to_bytes();
+        let dto: routing::AliasLookupByAccountResponseDto =
+            norito::json::from_slice(&body).expect("json decode");
         assert_eq!(dto.total, 2);
         assert!(
             dto.items
                 .iter()
-                .any(|item| item.alias == "merchant@bank.restricted"),
-            "exact public reverse lookups include the account's domain aliases"
+                .any(|item| item.alias == "merchant@bank.restricted")
         );
     }
 
@@ -76839,6 +78464,12 @@ mod tests {
                 &mut app,
             );
         bind_account_alias_for_test(&app, &authority, "merchant@foreign-restricted");
+        let alias = AccountAlias::from_literal(
+            "merchant@foreign-restricted",
+            &app.state.nexus_snapshot().dataspace_catalog,
+        )
+        .expect("foreign account alias");
+        grant_alias_resolve_permissions(&app, &authority, &alias);
 
         let request = routing::AliasLookupByAccountRequestDto {
             account_id: authority.to_string(),
@@ -76890,7 +78521,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn alias_resolve_scans_account_labels_when_alias_index_is_missing() {
+    async fn alias_resolve_rejects_account_label_without_authoritative_binding() {
         let alias = "banking@centralbank.universal";
         let alias_label = iroha_data_model::account::rekey::AccountAlias::new(
             "banking".parse::<Name>().expect("label"),
@@ -76900,10 +78531,11 @@ mod tests {
             iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
         );
         let domain_id: DomainId = DomainId::try_new("centralbank", "universal").expect("domain id");
-        let authority = checked_torii_test_account_id(
+        let authority_keypair = checked_torii_test_ed25519_keypair(
             0xab,
             "derive alias resolve account-label fallback authority fixture key",
         );
+        let authority = AccountId::new(authority_keypair.public_key().clone());
         let domain = Domain::new(domain_id.clone()).build(&authority);
         let authority_account = Account::new(authority.clone()).build(&authority);
         let account_id = authority.clone();
@@ -76940,32 +78572,30 @@ mod tests {
             alias: alias.to_string(),
         };
         let body = norito::json::to_vec(&request).expect("encode request");
+        let headers = signed_alias_resolve_headers_for_test(
+            &app,
+            &authority,
+            &authority_keypair,
+            &alias_label,
+            &body,
+        );
 
         let response = handler_alias_resolve(
             State(app),
             axum::http::Method::POST,
             "/v1/aliases/resolve".parse().expect("alias resolve uri"),
-            HeaderMap::new(),
+            headers,
             axum::body::Bytes::from(body),
         )
         .await
         .expect("handler should succeed")
         .into_response();
 
-        assert_eq!(response.status(), StatusCode::OK);
-        let body = http_body_util::BodyExt::collect(response.into_body())
-            .await
-            .expect("body")
-            .to_bytes();
-        let dto: routing::AliasResolveResponseDto =
-            norito::json::from_slice(&body).expect("json decode");
-        assert_eq!(dto.alias, alias);
-        assert_eq!(dto.account_id, authority.to_string());
-        assert_eq!(dto.source.as_deref(), Some("account_label"));
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]
-    async fn alias_resolve_uses_rekey_record_when_alias_index_is_missing() {
+    async fn alias_resolve_rejects_rekey_record_without_authoritative_binding() {
         let alias = "banking@centralbank.universal";
         let alias_label = iroha_data_model::account::rekey::AccountAlias::new(
             "banking".parse::<Name>().expect("label"),
@@ -76974,10 +78604,11 @@ mod tests {
             )),
             iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
         );
-        let authority = checked_torii_test_account_id(
+        let authority_keypair = checked_torii_test_ed25519_keypair(
             0xac,
             "derive alias resolve rekey-record fallback authority fixture key",
         );
+        let authority = AccountId::new(authority_keypair.public_key().clone());
         let authority_account = Account::new(authority.clone()).build(&authority);
         let app = mk_app_state_for_tests_with_world(World::with([], [authority_account], []));
         {
@@ -76989,7 +78620,7 @@ mod tests {
                 .insert(
                     alias_label.clone(),
                     iroha_data_model::account::rekey::AccountRekeyRecord::new(
-                        alias_label,
+                        alias_label.clone(),
                         authority.clone(),
                     ),
                 );
@@ -77000,28 +78631,26 @@ mod tests {
             alias: alias.to_string(),
         };
         let body = norito::json::to_vec(&request).expect("encode request");
+        let headers = signed_alias_resolve_headers_for_test(
+            &app,
+            &authority,
+            &authority_keypair,
+            &alias_label,
+            &body,
+        );
 
         let response = handler_alias_resolve(
             State(app),
             axum::http::Method::POST,
             "/v1/aliases/resolve".parse().expect("alias resolve uri"),
-            HeaderMap::new(),
+            headers,
             axum::body::Bytes::from(body),
         )
         .await
         .expect("handler should succeed")
         .into_response();
 
-        assert_eq!(response.status(), StatusCode::OK);
-        let body = http_body_util::BodyExt::collect(response.into_body())
-            .await
-            .expect("body")
-            .to_bytes();
-        let dto: routing::AliasResolveResponseDto =
-            norito::json::from_slice(&body).expect("json decode");
-        assert_eq!(dto.alias, alias);
-        assert_eq!(dto.account_id, authority.to_string());
-        assert_eq!(dto.source.as_deref(), Some("rekey_record"));
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 
     #[cfg(feature = "app_api")]
@@ -81200,27 +82829,34 @@ mod tests {
 
         assert!(matches!(
             error,
-            Error::Query(ValidationFail::NotPermitted(message))
-                if message == "signed account headers are required"
+            Error::AppUnauthorized {
+                code: "alias_auth_required",
+                ..
+            }
         ));
     }
 
     #[tokio::test]
     async fn alias_resolve_index_rejects_malformed_json_body() {
-        let authority = checked_torii_test_account_id(
+        let authority_keypair = checked_torii_test_ed25519_keypair(
             0x0b,
             "derive alias resolve-index malformed body authority fixture key",
         );
+        let authority = AccountId::new(authority_keypair.public_key().clone());
         let app = mk_app_state_for_tests_with_world(world_with_account(&authority));
+        let method = axum::http::Method::POST;
+        let uri: axum::http::Uri = "/v1/aliases/resolve-index"
+            .parse()
+            .expect("alias resolve-index uri");
+        let body = b"{";
+        let headers = signed_app_headers(&authority, &authority_keypair, &method, &uri, body);
 
         let err = handler_alias_resolve_index(
             State(app),
-            axum::http::Method::POST,
-            "/v1/aliases/resolve-index"
-                .parse()
-                .expect("alias resolve-index uri"),
-            HeaderMap::new(),
-            axum::body::Bytes::from_static(b"{"),
+            method,
+            uri,
+            headers,
+            axum::body::Bytes::from_static(body),
         )
         .await
         .expect_err("malformed resolve-index bodies should be rejected");
@@ -81236,8 +82872,19 @@ mod tests {
         }
     }
 
+    fn unsigned_multisig_request<T>(value: T) -> NoritoJsonWithBytes<T>
+    where
+        T: norito::json::JsonSerialize,
+    {
+        let raw = norito::json::to_vec(&value).expect("encode multisig request");
+        NoritoJsonWithBytes {
+            value,
+            raw: axum::body::Bytes::from(raw),
+        }
+    }
+
     #[tokio::test]
-    async fn multisig_spec_does_not_forbid_unsigned_request_for_alias_selector() {
+    async fn multisig_spec_rejects_unsigned_alias_selector() {
         let request = routing::MultisigSpecRequestDto {
             selector: routing::MultisigAccountSelectorDto {
                 multisig_account_id: None,
@@ -81246,19 +82893,21 @@ mod tests {
         };
         let response = handler_post_multisig_spec(
             State(mk_app_state_for_tests()),
+            Method::POST,
+            "/v1/multisig/spec".parse().expect("multisig spec uri"),
             HeaderMap::new(),
             crate::loopback_connect_info(),
-            NoritoJson(request),
+            unsigned_multisig_request(request),
         )
         .await
-        .expect_err("missing alias should still fail lookup")
+        .expect_err("unsigned alias selectors must fail closed")
         .into_response();
 
-        assert_ne!(response.status(), StatusCode::FORBIDDEN);
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     }
 
     #[tokio::test]
-    async fn multisig_proposals_query_does_not_forbid_unsigned_request_for_alias_selector() {
+    async fn multisig_proposals_query_rejects_unsigned_alias_selector() {
         let request = routing::MultisigProposalsQueryRequestDto {
             selector: routing::MultisigAccountSelectorDto {
                 multisig_account_id: None,
@@ -81270,19 +82919,23 @@ mod tests {
         };
         let response = handler_post_multisig_proposals_query(
             State(mk_app_state_for_tests()),
+            Method::POST,
+            "/v1/multisig/proposals/query"
+                .parse()
+                .expect("multisig query uri"),
             HeaderMap::new(),
             crate::loopback_connect_info(),
-            NoritoJson(request),
+            unsigned_multisig_request(request),
         )
         .await
-        .expect_err("missing alias should still fail lookup")
+        .expect_err("unsigned alias selectors must fail closed")
         .into_response();
 
-        assert_ne!(response.status(), StatusCode::FORBIDDEN);
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     }
 
     #[tokio::test]
-    async fn multisig_proposals_lookup_does_not_forbid_unsigned_request_for_alias_selector() {
+    async fn multisig_proposals_lookup_rejects_unsigned_alias_selector() {
         let request = routing::MultisigProposalLookupRequestDto {
             selector: routing::MultisigAccountSelectorDto {
                 multisig_account_id: None,
@@ -81293,19 +82946,23 @@ mod tests {
         };
         let response = handler_post_multisig_proposals_lookup(
             State(mk_app_state_for_tests()),
+            Method::POST,
+            "/v1/multisig/proposals/lookup"
+                .parse()
+                .expect("multisig lookup uri"),
             HeaderMap::new(),
             crate::loopback_connect_info(),
-            NoritoJson(request),
+            unsigned_multisig_request(request),
         )
         .await
-        .expect_err("missing alias should still fail lookup")
+        .expect_err("unsigned alias selectors must fail closed")
         .into_response();
 
-        assert_ne!(response.status(), StatusCode::FORBIDDEN);
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     }
 
     #[tokio::test]
-    async fn multisig_proposals_resolve_does_not_forbid_unsigned_request_for_alias_selector() {
+    async fn multisig_proposals_resolve_rejects_unsigned_alias_selector() {
         let request = routing::MultisigProposalsResolveRequestDto {
             selector: routing::MultisigAccountSelectorDto {
                 multisig_account_id: None,
@@ -81316,15 +82973,19 @@ mod tests {
         };
         let response = handler_post_multisig_proposals_resolve(
             State(mk_app_state_for_tests()),
+            Method::POST,
+            "/v1/multisig/proposals/resolve"
+                .parse()
+                .expect("multisig resolve uri"),
             HeaderMap::new(),
             crate::loopback_connect_info(),
-            NoritoJson(request),
+            unsigned_multisig_request(request),
         )
         .await
-        .expect_err("missing alias should still fail lookup")
+        .expect_err("unsigned alias selectors must fail closed")
         .into_response();
 
-        assert_ne!(response.status(), StatusCode::FORBIDDEN);
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     }
 
     fn multisig_read_contract_test_router(app: SharedAppState) -> Router {
@@ -81390,8 +83051,8 @@ mod tests {
             .expect("unsigned spec response");
         assert_eq!(
             unsigned.status(),
-            StatusCode::NOT_FOUND,
-            "unsigned request must reach alias resolution"
+            StatusCode::UNAUTHORIZED,
+            "unsigned alias selectors must fail before alias resolution"
         );
 
         for path in [
@@ -81578,12 +83239,14 @@ mod tests {
         };
         let spec_response = handler_post_multisig_spec(
             State(app.clone()),
+            Method::POST,
+            "/v1/multisig/spec".parse().expect("multisig spec uri"),
             headers.clone(),
             crate::loopback_connect_info(),
-            NoritoJson(spec_request),
+            unsigned_multisig_request(spec_request),
         )
         .await
-        .expect_err("missing alias should still fail lookup")
+        .expect_err("unsigned alias selectors must fail closed")
         .into_response();
         assert_ne!(spec_response.status(), StatusCode::TOO_MANY_REQUESTS);
 
@@ -81595,12 +83258,16 @@ mod tests {
         };
         let query_response = handler_post_multisig_proposals_query(
             State(app.clone()),
+            Method::POST,
+            "/v1/multisig/proposals/query"
+                .parse()
+                .expect("multisig query uri"),
             headers.clone(),
             crate::loopback_connect_info(),
-            NoritoJson(query_request),
+            unsigned_multisig_request(query_request),
         )
         .await
-        .expect_err("missing alias should still fail lookup")
+        .expect_err("unsigned alias selectors must fail closed")
         .into_response();
         assert_ne!(query_response.status(), StatusCode::TOO_MANY_REQUESTS);
 
@@ -81611,12 +83278,16 @@ mod tests {
         };
         let resolve_response = handler_post_multisig_proposals_resolve(
             State(app),
+            Method::POST,
+            "/v1/multisig/proposals/resolve"
+                .parse()
+                .expect("multisig resolve uri"),
             headers,
             crate::loopback_connect_info(),
-            NoritoJson(resolve_request),
+            unsigned_multisig_request(resolve_request),
         )
         .await
-        .expect_err("missing alias should still fail lookup")
+        .expect_err("unsigned alias selectors must fail closed")
         .into_response();
         assert_ne!(resolve_response.status(), StatusCode::TOO_MANY_REQUESTS);
     }
@@ -81650,12 +83321,14 @@ mod tests {
         };
         let spec_response = handler_post_multisig_spec(
             State(app.clone()),
+            Method::POST,
+            "/v1/multisig/spec".parse().expect("multisig spec uri"),
             headers.clone(),
             crate::loopback_connect_info(),
-            NoritoJson(spec_request),
+            unsigned_multisig_request(spec_request),
         )
         .await
-        .expect_err("missing alias should still fail lookup")
+        .expect_err("unsigned alias selectors must fail closed")
         .into_response();
         assert_ne!(spec_response.status(), StatusCode::TOO_MANY_REQUESTS);
 
@@ -81667,12 +83340,16 @@ mod tests {
         };
         let query_response = handler_post_multisig_proposals_query(
             State(app),
+            Method::POST,
+            "/v1/multisig/proposals/query"
+                .parse()
+                .expect("multisig query uri"),
             headers,
             crate::loopback_connect_info(),
-            NoritoJson(query_request),
+            unsigned_multisig_request(query_request),
         )
         .await
-        .expect_err("missing alias should still fail lookup")
+        .expect_err("unsigned alias selectors must fail closed")
         .into_response();
         assert_ne!(query_response.status(), StatusCode::TOO_MANY_REQUESTS);
     }

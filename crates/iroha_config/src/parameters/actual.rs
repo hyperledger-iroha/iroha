@@ -7126,6 +7126,10 @@ pub struct ToriiOnboarding {
     pub authority: AccountId,
     /// Private key corresponding to the onboarding authority.
     pub private_key: ExposedPrivateKey,
+    /// Optional BLAKE3 digest of the dedicated onboarding API token.
+    ///
+    /// When absent, signer-backed onboarding routes fail closed with service unavailable.
+    pub api_token_hash: Option<[u8; 32]>,
     /// Permission names that onboarding may grant to newly registered accounts.
     pub allowed_permissions: Vec<String>,
     /// Exact account-alias dataspaces automatically granted for read-only resolution.
@@ -9339,10 +9343,10 @@ pub struct Offline {
     pub escrow_required: bool,
     /// Escrow accounts keyed by Kagemusha asset definition.
     pub escrow_accounts: BTreeMap<AssetDefinitionId, AccountId>,
-    /// Whether Kagemusha shielded offline-offline payments are active.
-    ///
-    /// Chain execution enforces this gate before any Kagemusha mutation.
-    pub kagemusha_enabled: bool,
+    /// Canonical Norito policy authenticating promoted Kagemusha releases.
+    pub kagemusha_release_policy_path: Option<PathBuf>,
+    /// Directory containing manifest-digest-addressed Kagemusha release artifacts.
+    pub kagemusha_artifact_dir: Option<PathBuf>,
 }
 
 impl Default for Offline {
@@ -9350,7 +9354,9 @@ impl Default for Offline {
         Self {
             escrow_required: false,
             escrow_accounts: BTreeMap::new(),
-            kagemusha_enabled: defaults::settlement::offline::KAGEMUSHA_ENABLED,
+            kagemusha_release_policy_path:
+                defaults::settlement::offline::kagemusha_release_policy_path(),
+            kagemusha_artifact_dir: defaults::settlement::offline::kagemusha_artifact_dir(),
         }
     }
 }
@@ -10812,12 +10818,10 @@ mod tests {
     }
 
     #[test]
-    fn offline_defaults_keep_kagemusha_enabled() {
+    fn offline_defaults_leave_kagemusha_release_unconfigured() {
         let offline = Offline::default();
-        assert!(
-            offline.kagemusha_enabled,
-            "Kagemusha must remain enabled by default"
-        );
+        assert!(offline.kagemusha_release_policy_path.is_none());
+        assert!(offline.kagemusha_artifact_dir.is_none());
     }
 
     #[test]

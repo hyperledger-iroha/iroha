@@ -63,11 +63,16 @@ final class KagemushaNearbyTests: XCTestCase {
         XCTAssertEqual(decodedRequest.payload, .receiveRequest(request))
         XCTAssertEqual(decodedRequest.pairingChallenge, challenge)
 
-        let decodedPayment = try KagemushaNearbyEnvelopeCodec.decode(
-            KagemushaNearbyEnvelopeCodec.encode(.payment(payment))
-        )
-        XCTAssertEqual(decodedPayment.payload, .payment(payment))
-        XCTAssertNil(decodedPayment.pairingChallenge)
+        let encodedPayment = try KagemushaNearbyEnvelopeCodec.encode(.payment(payment))
+        if KagemushaRecursiveSpend.hasRequiredNativeSymbols {
+            let decodedPayment = try KagemushaNearbyEnvelopeCodec.decode(encodedPayment)
+            XCTAssertEqual(decodedPayment.payload, .payment(payment))
+            XCTAssertNil(decodedPayment.pairingChallenge)
+        } else {
+            XCTAssertThrowsError(try KagemushaNearbyEnvelopeCodec.decode(encodedPayment)) { error in
+                XCTAssertEqual(error as? KagemushaNearbyError, .invalidMessage)
+            }
+        }
 
         let decodedAcknowledgement = try KagemushaNearbyEnvelopeCodec.decode(
             KagemushaNearbyEnvelopeCodec.encode(.acknowledgement(acknowledgement))

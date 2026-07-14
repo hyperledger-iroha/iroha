@@ -513,6 +513,123 @@ fn json_response_with_headers(description: &str, schema: Value, headers: Map) ->
     Value::Object(body)
 }
 
+fn canonical_request_auth_required_response(
+    description: &str,
+    reject_code: &'static str,
+    reject_code_description: &str,
+) -> Value {
+    let mut headers = exact_reject_code_headers(reject_code_description, &[reject_code]);
+    headers.insert(
+        "WWW-Authenticate".to_owned(),
+        norito::json!({
+            "description": "Canonical request-signature authentication challenge.",
+            "schema": {
+                "type": "string",
+                "const": "Signature"
+            }
+        }),
+    );
+    json_response_with_headers(description, error_schema_reference(), headers)
+}
+
+fn alias_auth_required_response(description: &str) -> Value {
+    canonical_request_auth_required_response(
+        description,
+        "alias_auth_required",
+        "Stable code returned when canonical request authentication is required for alias resolution.",
+    )
+}
+
+fn onboarding_auth_required_response() -> Value {
+    let mut response = typed_dual_format_response(
+        "Authentication failed before onboarding body processing. The ErrorEnvelope code is `api_token_required` when deployment-wide Torii authentication fails, or `onboarding_auth_required` when the dedicated token is missing, duplicated, malformed, or does not match the configured BLAKE3 digest.",
+        "#/components/schemas/ErrorEnvelope",
+    );
+    if let Value::Object(response) = &mut response {
+        response.insert(
+            "headers".to_owned(),
+            norito::json!({
+                "WWW-Authenticate": {
+                    "description": "The authentication layer which rejected the request.",
+                    "schema": {
+                        "type": "string",
+                        "enum": [
+                            "IrohaApiToken realm=\"torii\"",
+                            "IrohaOnboardingToken"
+                        ]
+                    }
+                },
+                "Vary": {
+                    "description": "The authentication error representation is negotiated from Accept.",
+                    "schema": {
+                        "type": "string",
+                        "const": "Accept"
+                    }
+                }
+            }),
+        );
+    }
+    response
+}
+
+fn onboarding_auth_unavailable_response() -> Value {
+    let mut response = typed_dual_format_response(
+        "Authentication or bounded pre-auth admission is unavailable. The ErrorEnvelope code is `api_token_unavailable`, `onboarding_auth_unavailable`, or a `preauth_*_capacity` availability code. Every 503 is retryable after one second.",
+        "#/components/schemas/ErrorEnvelope",
+    );
+    if let Value::Object(response) = &mut response {
+        response.insert(
+            "headers".to_owned(),
+            norito::json!({
+                "Vary": {
+                    "description": "The availability error representation is negotiated from Accept.",
+                    "schema": {
+                        "type": "string",
+                        "const": "Accept"
+                    }
+                },
+                "Retry-After": {
+                    "description": "Minimum retry delay applied by the typed error boundary.",
+                    "schema": {
+                        "type": "string",
+                        "const": "1"
+                    }
+                }
+            }),
+        );
+    }
+    response
+}
+
+fn onboarding_rate_limited_response() -> Value {
+    let mut response = typed_dual_format_response(
+        "Bounded pre-auth admission rejected the request with a `preauth_*_capacity`, `preauth_rate_limited`, or `preauth_temporarily_banned` ErrorEnvelope code. Retry after one second.",
+        "#/components/schemas/ErrorEnvelope",
+    );
+    if let Value::Object(response) = &mut response {
+        response.insert(
+            "headers".to_owned(),
+            norito::json!({
+                "Vary": {
+                    "description": "The admission error representation is negotiated from Accept.",
+                    "schema": {
+                        "type": "string",
+                        "const": "Accept"
+                    }
+                },
+                "Retry-After": {
+                    "description": "Minimum retry delay applied by the typed error boundary.",
+                    "schema": {
+                        "type": "string",
+                        "const": "1"
+                    }
+                }
+            }),
+        );
+    }
+    response
+}
+
 fn offline_reject_headers() -> Map {
     let mut header = Map::new();
     header.insert(
@@ -1004,13 +1121,14 @@ fn offline_paths() -> Map {
         "/v1/offline/readiness".to_owned(),
         Value::Object(offline_readiness_operation()),
     );
-    for (path, operation_id, summary, description, norito_schema) in [
+    for (path, operation_id, summary, description, norito_schema, maximum_bytes) in [
         (
             "/v1/offline/top-up",
             "offlineTopUp",
             "Submit an offline top-up.",
             "Submit one canonical Norito-encoded Kagemusha OfflineTopUpRequest using application/x-norito. Acceptance is asynchronous and returns the operation resource in Location.",
             iroha_torii_shared::offline_api::OFFLINE_TOP_UP_REQUEST_SCHEMA_NAME,
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_TOPUP_REQUEST_MAX_BYTES_V4,
         ),
         (
             "/v1/offline/redeem",
@@ -1018,6 +1136,7 @@ fn offline_paths() -> Map {
             "Submit an offline redemption.",
             "Submit one canonical Norito-encoded Kagemusha OfflineRedeemRequest using application/x-norito. Acceptance is asynchronous and returns the operation resource in Location.",
             iroha_torii_shared::offline_api::OFFLINE_REDEEM_REQUEST_SCHEMA_NAME,
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_REDEEM_REQUEST_MAX_BYTES_V4,
         ),
     ] {
         paths.insert(
@@ -1027,6 +1146,7 @@ fn offline_paths() -> Map {
                 summary,
                 description,
                 norito_schema,
+                maximum_bytes,
             )),
         );
     }
@@ -1054,7 +1174,7 @@ fn offline_readiness_operation() -> Map {
     operation.insert(
         "description".into(),
         Value::String(
-            "Evaluate Kagemusha readiness for one asset definition at a specific committed block. The response binds the live asset scale and active verifier records to that same height and block hash so clients can cross-check capabilities and release manifests. A successfully evaluated but unavailable capability returns 200 with ready=false and typed blockers. A 503 readiness_unavailable response means Torii could not evaluate readiness."
+            "Evaluate Kagemusha readiness for one asset definition at a specific committed block. The response binds the live asset scale, five distinct active verifier records, and exact authenticated ABI-20 V4 release identity to that same height and block hash so clients can cross-check capabilities and release artifacts atomically. proof_backend_available reports exact backend construction independently; recursive_lineage_supported additionally requires the authenticated artifact set and distinct active Eq/Ep records. ready is true exactly when no typed blocker remains, so unrelated blockers do not erase backend or lineage facts. A successfully evaluated but unavailable capability returns 200 with ready=false and typed blockers. A 503 readiness_unavailable response means Torii could not evaluate readiness."
                 .to_owned(),
         ),
     );
@@ -1152,6 +1272,7 @@ fn offline_async_operation(
     summary: &str,
     description: &str,
     norito_schema: &str,
+    maximum_bytes: usize,
 ) -> Map {
     let mut operation = Map::new();
     operation.insert(
@@ -1173,7 +1294,7 @@ fn offline_async_operation(
     );
     operation.insert(
         "requestBody".into(),
-        Value::Object(offline_typed_request_body(norito_schema)),
+        Value::Object(offline_typed_request_body(norito_schema, maximum_bytes)),
     );
     let mut responses = Map::new();
     let mut accepted = dual_format_response(
@@ -1334,7 +1455,7 @@ fn offline_operation_status_operation() -> Map {
     methods
 }
 
-fn offline_typed_request_body(norito_schema: &str) -> Map {
+fn offline_typed_request_body(norito_schema: &str, maximum_bytes: usize) -> Map {
     let mut body = Map::new();
     body.insert("required".into(), Value::Bool(true));
     body.insert(
@@ -1344,7 +1465,8 @@ fn offline_typed_request_body(norito_schema: &str) -> Map {
                 "schema": {
                     "type": "string",
                     "format": "binary",
-                    "x-iroha-norito-schema": norito_schema
+                    "x-iroha-norito-schema": norito_schema,
+                    "x-iroha-max-bytes": maximum_bytes
                 }
             }
         }),
@@ -3000,6 +3122,134 @@ fn multisig_post_operation(
     methods
 }
 
+fn multisig_alias_read_operation(
+    summary: &str,
+    description: &str,
+    request_schema_ref: &str,
+    response_schema_ref: &str,
+    not_found_description: &str,
+) -> Map {
+    let mut methods = multisig_post_operation(
+        summary,
+        description,
+        request_schema_ref,
+        response_schema_ref,
+        not_found_description,
+    );
+    let operation = methods
+        .get_mut("post")
+        .and_then(Value::as_object_mut)
+        .expect("multisig POST operation");
+    operation.insert(
+        "description".into(),
+        Value::String(format!(
+            "{description} A canonical `multisig_account_id` selector remains available without request-signing headers. A `multisig_account_alias` selector requires canonical request signing; body fields never establish signer identity."
+        )),
+    );
+    operation.insert(
+        "parameters".into(),
+        Value::Array(canonical_request_auth_header_parameters()),
+    );
+    operation
+        .get_mut("responses")
+        .and_then(Value::as_object_mut)
+        .expect("multisig POST responses")
+        .insert(
+            "401".to_owned(),
+            alias_auth_required_response(
+                "Canonical request signing is required when the selector uses `multisig_account_alias`; a body-only alias selector is not authentication.",
+            ),
+        );
+    methods
+}
+
+fn multisig_bearer_viewer_operation(
+    summary: &str,
+    description: &str,
+    request_schema_ref: &str,
+    response_schema_ref: &str,
+    not_found_description: &str,
+) -> Map {
+    let mut methods = multisig_post_operation(
+        summary,
+        description,
+        request_schema_ref,
+        response_schema_ref,
+        not_found_description,
+    );
+    let operation = methods
+        .get_mut("post")
+        .and_then(Value::as_object_mut)
+        .expect("multisig POST operation");
+    operation.insert(
+        "description".into(),
+        Value::String(format!(
+            "{description} Viewer scope comes only from the required `Authorization: Bearer <JWT>` header; request-body selector fields never establish viewer identity."
+        )),
+    );
+    operation.insert(
+        "parameters".into(),
+        Value::Array(vec![string_header_param(
+            "Authorization",
+            "Bearer JWT whose validated subject and dataspace claims define the transaction-history viewer scope.",
+            true,
+        )]),
+    );
+    operation
+        .get_mut("responses")
+        .and_then(Value::as_object_mut)
+        .expect("multisig POST responses")
+        .insert(
+            "401".to_owned(),
+            json_response(
+                "The Bearer JWT is missing or invalid, or lacks a valid subject or dataspace claim (`tx_history_authorization_missing`, `tx_history_authorization_invalid`, `tx_history_subject_missing`, `tx_history_dataspace_missing`, or `tx_history_subject_invalid`).",
+                error_schema_reference(),
+            ),
+        );
+    methods
+}
+
+fn multisig_authority_read_operation(
+    summary: &str,
+    description: &str,
+    request_schema_ref: &str,
+    response_schema_ref: &str,
+    not_found_description: &str,
+) -> Map {
+    let mut methods = multisig_post_operation(
+        summary,
+        description,
+        request_schema_ref,
+        response_schema_ref,
+        not_found_description,
+    );
+    let operation = methods
+        .get_mut("post")
+        .and_then(Value::as_object_mut)
+        .expect("multisig POST operation");
+    operation.insert(
+        "description".into(),
+        Value::String(format!(
+            "{description} The authority comes only from canonical request-signing headers; request-body fields never establish signer identity."
+        )),
+    );
+    operation.insert(
+        "parameters".into(),
+        Value::Array(canonical_request_auth_header_parameters()),
+    );
+    operation
+        .get_mut("responses")
+        .and_then(Value::as_object_mut)
+        .expect("multisig POST responses")
+        .insert(
+            "401".to_owned(),
+            alias_auth_required_response(
+                "Canonical request signing is required to establish the authority; request-body fields are not authentication.",
+            ),
+        );
+    methods
+}
+
 fn multisig_paths() -> Map {
     let mut paths = Map::new();
     paths.insert(
@@ -3054,7 +3304,7 @@ fn multisig_paths() -> Map {
     );
     paths.insert(
         "/v1/multisig/spec".to_owned(),
-        Value::Object(multisig_post_operation(
+        Value::Object(multisig_alias_read_operation(
             "Fetch the active multisig spec.",
             "Resolve a multisig selector and return the current active concrete authority plus its multisig specification.",
             "#/components/schemas/MultisigSpecRequest",
@@ -3064,7 +3314,7 @@ fn multisig_paths() -> Map {
     );
     paths.insert(
         "/v1/multisig/proposals/query".to_owned(),
-        Value::Object(multisig_post_operation(
+        Value::Object(multisig_alias_read_operation(
             "Query multisig proposals.",
             "Resolve a multisig selector and query lifecycle-filtered active or terminal proposals for the active concrete multisig authority.",
             "#/components/schemas/MultisigProposalsQueryRequest",
@@ -3074,7 +3324,7 @@ fn multisig_paths() -> Map {
     );
     paths.insert(
         "/v1/multisig/proposals/lookup".to_owned(),
-        Value::Object(multisig_post_operation(
+        Value::Object(multisig_alias_read_operation(
             "Look up a multisig proposal.",
             "Resolve a multisig selector and look up a proposal by `proposal_id` or `instructions_hash`.",
             "#/components/schemas/MultisigProposalsResolveRequest",
@@ -3084,7 +3334,7 @@ fn multisig_paths() -> Map {
     );
     paths.insert(
         "/v1/multisig/proposals/resolve".to_owned(),
-        Value::Object(multisig_post_operation(
+        Value::Object(multisig_alias_read_operation(
             "Resolve a multisig proposal.",
             "Resolve a multisig selector and fetch a proposal by `proposal_id` or `instructions_hash`.",
             "#/components/schemas/MultisigProposalsResolveRequest",
@@ -3094,7 +3344,7 @@ fn multisig_paths() -> Map {
     );
     paths.insert(
         "/v1/multisig/approvals/query".to_owned(),
-        Value::Object(multisig_post_operation(
+        Value::Object(multisig_bearer_viewer_operation(
             "Query visible multisig approvals.",
             "Query lifecycle-filtered multisig proposals visible to the authenticated signer.",
             "#/components/schemas/MultisigApprovalsQueryRequest",
@@ -3104,7 +3354,7 @@ fn multisig_paths() -> Map {
     );
     paths.insert(
         "/v1/multisig/approvals/lookup".to_owned(),
-        Value::Object(multisig_post_operation(
+        Value::Object(multisig_bearer_viewer_operation(
             "Look up a visible multisig approval.",
             "Look up one signer-visible proposal by multisig account reference and proposal id or instruction hash.",
             "#/components/schemas/MultisigApprovalLookupRequest",
@@ -3114,7 +3364,7 @@ fn multisig_paths() -> Map {
     );
     paths.insert(
         "/v1/multisig/approvals/query-for-authority".to_owned(),
-        Value::Object(multisig_post_operation(
+        Value::Object(multisig_authority_read_operation(
             "Query multisig approvals for a signed authority.",
             "Query lifecycle-filtered multisig proposals visible to the authority authenticated by canonical request-signing headers.",
             "#/components/schemas/MultisigApprovalsQueryRequest",
@@ -3124,7 +3374,7 @@ fn multisig_paths() -> Map {
     );
     paths.insert(
         "/v1/multisig/approvals/lookup-for-authority".to_owned(),
-        Value::Object(multisig_post_operation(
+        Value::Object(multisig_authority_read_operation(
             "Look up a multisig approval for a signed authority.",
             "Look up one authority-visible proposal using canonical request-signing headers.",
             "#/components/schemas/MultisigApprovalLookupRequest",
@@ -4047,14 +4297,7 @@ fn account_paths() -> Map {
     );
     paths.insert(
         "/v1/accounts/onboard".to_owned(),
-        Value::Object(json_post_operation(
-            "Accounts",
-            "Onboard an account.",
-            "Register or onboard an account with an explicit canonical UAID. The request must provide `uaid` plus either `account_id` or `public_key_hex`; raw identity metadata is rejected, and optional identity evidence must be submitted only as `identity_commitment_hex`. When the UAID is not bound to the universal dataspace, Torii publishes a default manifest to bind it (requires CanPublishSpaceDirectoryManifest{dataspace=0}).",
-            "#/components/schemas/AccountOnboardingRequest",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
+        Value::Object(account_onboarding_operation()),
     );
     let mut account_get = json_get_operation(
         "Accounts",
@@ -4218,6 +4461,99 @@ fn account_paths() -> Map {
         }),
     );
     paths
+}
+
+fn account_onboarding_operation() -> Map {
+    let mut operation = Map::new();
+    operation.insert(
+        "tags".to_owned(),
+        Value::Array(vec![Value::String("Accounts".to_owned())]),
+    );
+    operation.insert(
+        "summary".to_owned(),
+        Value::String("Onboard an account.".to_owned()),
+    );
+    operation.insert(
+        "description".to_owned(),
+        Value::String(
+            "Register an account, bind its alias and explicit UAID, and queue the signer-backed onboarding transaction. Supply `uaid` plus exactly one of `account_id` or `public_key_hex`; raw identity metadata is rejected, while optional identity evidence is accepted only as `identity_commitment_hex`. The dedicated onboarding token is required even for CIDR-allowlisted callers and is independent of any global Torii API token. A 202 response means the transaction is queued, not finalized on the ledger."
+                .to_owned(),
+        ),
+    );
+    operation.insert(
+        "parameters".to_owned(),
+        Value::Array(vec![
+            onboarding_token_header_parameter(),
+            string_header_param(
+                "X-API-Token",
+                "Optional deployment-wide Torii API token; required only when the node enables global API-token enforcement. It is independent of the required onboarding token.",
+                false,
+            ),
+        ]),
+    );
+    operation.insert(
+        "requestBody".to_owned(),
+        Value::Object(json_request_body(
+            "#/components/schemas/AccountOnboardingRequest",
+        )),
+    );
+    let mut responses = Map::new();
+    responses.insert(
+        "202".to_owned(),
+        json_response(
+            "The signer-backed onboarding transaction was accepted into the queue; this does not assert ledger finality.",
+            schema_ref("AccountOnboardingResponse"),
+        ),
+    );
+    responses.insert(
+        "400".to_owned(),
+        typed_dual_format_response(
+            "The canonical JSON body, headers, account/UAID/alias binding, requested permissions, or onboarding transaction policy is invalid. The response is a canonical ErrorEnvelope with a stable validation code and optional details.hint.",
+            "#/components/schemas/ErrorEnvelope",
+        ),
+    );
+    responses.insert("401".to_owned(), onboarding_auth_required_response());
+    responses.insert(
+        "406".to_owned(),
+        json_response(
+            "Accept does not permit the endpoint's JSON success representation (`response_not_acceptable`).",
+            error_schema_reference(),
+        ),
+    );
+    responses.insert(
+        "415".to_owned(),
+        typed_dual_format_response(
+            "Content-Type is missing or is not canonical application/json (`request_content_type_missing` or `request_content_type_unsupported`).",
+            "#/components/schemas/ErrorEnvelope",
+        ),
+    );
+    responses.insert("429".to_owned(), onboarding_rate_limited_response());
+    responses.insert("503".to_owned(), onboarding_auth_unavailable_response());
+    operation.insert("responses".to_owned(), Value::Object(responses));
+
+    let mut methods = Map::new();
+    methods.insert("post".to_owned(), Value::Object(operation));
+    methods
+}
+
+fn onboarding_token_header_parameter() -> Value {
+    let mut parameter = string_header_param(
+        "X-Iroha-Onboarding-Token",
+        "Exactly one opaque raw onboarding token header value. Torii requires 32 through 256 printable non-whitespace ASCII bytes (`!` through `~`) whose BLAKE3 digest matches the dedicated configured digest. Send the secret only over protected transport; CIDR allowlisting and the global Torii API token do not replace it.",
+        true,
+    );
+    let schema = parameter
+        .as_object_mut()
+        .and_then(|parameter| parameter.get_mut("schema"))
+        .and_then(Value::as_object_mut)
+        .expect("string header parameter has a schema");
+    schema.insert("minLength".to_owned(), Value::from(32_u64));
+    schema.insert("maxLength".to_owned(), Value::from(256_u64));
+    schema.insert(
+        "pattern".to_owned(),
+        Value::String("^[!-~]{32,256}$".to_owned()),
+    );
+    parameter
 }
 
 fn identifier_paths() -> Map {
@@ -7462,6 +7798,10 @@ fn sumeragi_paths() -> Map {
         Value::Object(bridge_finality_operation()),
     );
     paths.insert(
+        "/v1/bridge/finality/attestation/{height}".to_owned(),
+        Value::Object(bridge_finality_attestation_operation()),
+    );
+    paths.insert(
         "/v1/bridge/finality/bundle/{height}".to_owned(),
         Value::Object(bridge_finality_bundle_operation()),
     );
@@ -8096,6 +8436,100 @@ fn bridge_finality_operation() -> Map {
         ),
     );
     responses.insert("406".into(), not_acceptable_response());
+    operation.insert("responses".into(), Value::Object(responses));
+    let mut methods = Map::new();
+    methods.insert("get".to_owned(), Value::Object(operation));
+    methods
+}
+
+fn bridge_finality_attestation_operation() -> Map {
+    let mut operation = Map::new();
+    operation.insert(
+        "tags".into(),
+        Value::Array(vec![Value::String("Bridge".to_owned())]),
+    );
+    operation.insert(
+        "summary".into(),
+        Value::String(
+            "Return a challenge-bound node-signed attestation for the exact durable tip."
+                .to_owned(),
+        ),
+    );
+    operation.insert(
+        "description".into(),
+        Value::String(
+            "Signs the caller's exact non-zero 32-byte challenge, canonical node identity, \
+             current authoritative Sumeragi-v2 status, exact durable-tip proof, committed \
+             genesis block hash, and Kura-backed height-one genesis proof. The requested \
+             height must equal the immutable state-view tip. Responses are never cacheable."
+                .to_owned(),
+        ),
+    );
+    operation.insert(
+        "operationId".into(),
+        Value::String("bridgeFinalityAttestation".to_owned()),
+    );
+    operation.insert(
+        "parameters".into(),
+        Value::Array(vec![
+            Value::Object(block_height_parameter()),
+            norito::json!({
+                "name": "X-Iroha-Finality-Challenge",
+                "in": "header",
+                "required": true,
+                "description": "Exact non-zero 32-byte freshness challenge as 64 lowercase hexadecimal characters.",
+                "schema": {
+                    "type": "string",
+                    "minLength": 64,
+                    "maxLength": 64,
+                    "pattern": "^[0-9a-f]{64}$"
+                }
+            }),
+        ]),
+    );
+    let mut responses = Map::new();
+    let success = typed_dual_format_response(
+        "Challenge-bound durable-tip finality attestation.",
+        "#/components/schemas/BridgeFinalityAttestationV1",
+    );
+    responses.insert("200".into(), success);
+    responses.insert(
+        "400".into(),
+        json_response(
+            "Challenge header is missing or invalid.",
+            error_schema_reference(),
+        ),
+    );
+    responses.insert(
+        "404".into(),
+        json_response(
+            "Requested height is not the exact durable tip or finality is unavailable.",
+            error_schema_reference(),
+        ),
+    );
+    responses.insert(
+        "503".into(),
+        json_response(
+            "Authoritative Sumeragi-v2 status is unavailable or restart is required.",
+            error_schema_reference(),
+        ),
+    );
+    responses.insert("406".into(), not_acceptable_response());
+    let protected_headers = norito::json!({
+        "Cache-Control": {
+            "description": "Finality-attestation responses must never be cached.",
+            "schema": { "type": "string", "const": "no-store" }
+        },
+        "Vary": {
+            "description": "The response varies by challenge and representation.",
+            "schema": { "type": "string", "const": "X-Iroha-Finality-Challenge, Accept" }
+        }
+    });
+    for response in responses.values_mut() {
+        if let Some(response) = response.as_object_mut() {
+            response.insert("headers".into(), protected_headers.clone());
+        }
+    }
     operation.insert("responses".into(), Value::Object(responses));
     let mut methods = Map::new();
     methods.insert("get".to_owned(), Value::Object(operation));
@@ -9676,9 +10110,9 @@ fn alias_resolve_operation() -> Map {
         "description".into(),
         Value::String(
             "Accepts one exact canonical fully-qualified alias, routes it through the Nexus \
-             read proxy using the encoded dataspace, and returns its public account binding. \
-             Unsigned requests are allowed; when canonical-signature headers are supplied, \
-             they must verify and never downgrade to anonymous access. The route is \
+             read proxy using the encoded dataspace, and returns its account binding. Canonical \
+             request signing is required, and the signer must hold exact alias-resolution \
+             permission for the alias dataspace and its qualified domain. The route is \
              independently rate limited."
                 .to_owned(),
         ),
@@ -9686,6 +10120,10 @@ fn alias_resolve_operation() -> Map {
     operation.insert(
         "operationId".into(),
         Value::String("aliasResolve".to_owned()),
+    );
+    operation.insert(
+        "parameters".into(),
+        Value::Array(canonical_request_auth_header_parameters()),
     );
     operation.insert("requestBody".into(), alias_resolve_request_body());
     operation.insert("responses".into(), Value::Object(alias_resolve_responses()));
@@ -9728,6 +10166,12 @@ fn alias_resolve_responses() -> Map {
         ),
     );
     responses.insert(
+        "401".to_owned(),
+        alias_auth_required_response(
+            "Canonical request signing is required for exact account-alias resolution.",
+        ),
+    );
+    responses.insert(
         "404".to_owned(),
         json_response("Alias not found.", error_schema_reference()),
     );
@@ -9741,7 +10185,7 @@ fn alias_resolve_responses() -> Map {
     responses.insert(
         "403".to_owned(),
         json_response(
-            "Supplied canonical-signature headers are invalid.",
+            "The canonical request proof is invalid or the signed caller lacks exact alias-resolution permission for the requested dataspace or domain.",
             error_schema_reference(),
         ),
     );
@@ -9782,6 +10226,10 @@ fn alias_resolve_index_operation() -> Map {
     operation.insert(
         "operationId".into(),
         Value::String("aliasResolveIndex".to_owned()),
+    );
+    operation.insert(
+        "parameters".into(),
+        Value::Array(canonical_request_auth_header_parameters()),
     );
     operation.insert("requestBody".into(), alias_resolve_index_request_body());
     operation.insert(
@@ -9838,16 +10286,21 @@ fn alias_lookup_by_account_operation() -> Map {
         "description".into(),
         Value::String(
             "Accepts one exact canonical I105 account identifier, routes the public reverse \
-             lookup through that account's Nexus routes, merges and deterministically sorts \
-             at most 64 deduplicated public alias rows, and recomputes `total`. Unsigned \
-             requests are allowed; supplied canonical-signature headers must verify. The \
-             route is independently rate limited and does not expose prefix or index search."
+             lookup through caller-permitted Nexus routes, merges and deterministically sorts \
+             at most 64 deduplicated alias rows, and recomputes `total`. Canonical request \
+             signing is required, and the signed caller must hold the exact alias-resolution \
+             permissions needed for returned bindings. The route is independently rate limited \
+             and does not expose prefix or index search."
                 .to_owned(),
         ),
     );
     operation.insert(
         "operationId".into(),
         Value::String("aliasLookupByAccount".to_owned()),
+    );
+    operation.insert(
+        "parameters".into(),
+        Value::Array(canonical_request_auth_header_parameters()),
     );
     operation.insert("requestBody".into(), alias_lookup_by_account_request_body());
     operation.insert(
@@ -9884,6 +10337,10 @@ fn retail_recipient_lookup_operation() -> Map {
         Value::String("retailRecipientLookup".to_owned()),
     );
     operation.insert(
+        "parameters".into(),
+        Value::Array(canonical_request_auth_header_parameters()),
+    );
+    operation.insert(
         "requestBody".into(),
         Value::Object(json_request_body(
             "#/components/schemas/RetailRecipientLookupRequest",
@@ -9899,9 +10356,10 @@ fn retail_recipient_lookup_operation() -> Map {
     );
     responses.insert(
         "401".to_owned(),
-        json_response(
+        canonical_request_auth_required_response(
             "Canonical request signing is required.",
-            error_schema_reference(),
+            "recipient_lookup_signature_required",
+            "Stable code returned when canonical request authentication is required for retail recipient lookup or routing.",
         ),
     );
     responses.insert(
@@ -9969,6 +10427,10 @@ fn retail_recipient_route_operation() -> Map {
         Value::String("retailRecipientRoute".to_owned()),
     );
     operation.insert(
+        "parameters".into(),
+        Value::Array(canonical_request_auth_header_parameters()),
+    );
+    operation.insert(
         "requestBody".into(),
         Value::Object(json_request_body(
             "#/components/schemas/RetailRecipientRouteRequest",
@@ -9977,7 +10439,6 @@ fn retail_recipient_route_operation() -> Map {
     let mut responses = single_json_response("#/components/schemas/RetailRecipientRouteResponse");
     for (status, description) in [
         ("400", "Malformed or noncanonical request."),
-        ("401", "Canonical request signing is required."),
         (
             "403",
             "The signer lacks a positive policy-scoped source balance.",
@@ -9998,6 +10459,14 @@ fn retail_recipient_route_operation() -> Map {
             json_response(description, error_schema_reference()),
         );
     }
+    responses.insert(
+        "401".to_owned(),
+        canonical_request_auth_required_response(
+            "Canonical request signing is required.",
+            "recipient_lookup_signature_required",
+            "Stable code returned when canonical request authentication is required for retail recipient lookup or routing.",
+        ),
+    );
     operation.insert("responses".into(), Value::Object(responses));
     let mut methods = Map::new();
     methods.insert("post".to_owned(), Value::Object(operation));
@@ -10027,6 +10496,10 @@ fn fee_sponsor_policy_by_id_operation() -> Map {
         Value::String("feeSponsorPolicyById".to_owned()),
     );
     operation.insert(
+        "parameters".into(),
+        Value::Array(canonical_request_auth_header_parameters()),
+    );
+    operation.insert(
         "requestBody".into(),
         Value::Object(json_request_body(
             "#/components/schemas/FeeSponsorPolicyByIdRequest",
@@ -10035,7 +10508,6 @@ fn fee_sponsor_policy_by_id_operation() -> Map {
     let mut responses = single_json_response("#/components/schemas/FeeSponsorPolicy");
     for (status, description) in [
         ("400", "Malformed or noncanonical policy identifier."),
-        ("401", "Canonical request signing is required."),
         (
             "404",
             "The policy is absent or not selected by dataspace configuration.",
@@ -10046,6 +10518,14 @@ fn fee_sponsor_policy_by_id_operation() -> Map {
             json_response(description, error_schema_reference()),
         );
     }
+    responses.insert(
+        "401".to_owned(),
+        canonical_request_auth_required_response(
+            "Canonical request signing is required.",
+            "fee_sponsor_policy_signature_required",
+            "Stable code returned when canonical request authentication is required for an exact fee-sponsor policy lookup.",
+        ),
+    );
     operation.insert("responses".into(), Value::Object(responses));
     let mut methods = Map::new();
     methods.insert("post".to_owned(), Value::Object(operation));
@@ -10126,9 +10606,15 @@ fn alias_resolve_index_responses() -> Map {
         ),
     );
     responses.insert(
+        "401".to_owned(),
+        alias_auth_required_response(
+            "Canonical request signing is required for alias-index enumeration.",
+        ),
+    );
+    responses.insert(
         "403".to_owned(),
         json_response(
-            "Canonical request signing is missing or the signed caller cannot read any matching route.",
+            "The canonical request proof is invalid or the signed caller cannot read any matching route.",
             error_schema_reference(),
         ),
     );
@@ -10184,9 +10670,15 @@ fn alias_lookup_by_account_responses() -> Map {
         ),
     );
     responses.insert(
+        "401".to_owned(),
+        alias_auth_required_response(
+            "Canonical request signing is required for reverse-alias enumeration.",
+        ),
+    );
+    responses.insert(
         "403".to_owned(),
         json_response(
-            "Supplied canonical-signature headers are invalid.",
+            "The canonical request proof is invalid or the signed caller lacks an exact alias-resolution permission required by the lookup.",
             error_schema_reference(),
         ),
     );
@@ -11116,6 +11608,79 @@ fn insert_offline_typed_schemas(schemas: &mut Map) {
             }),
         ),
         (
+            "OfflineRecursiveStateBoundary",
+            norito::json!({
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["layout_version", "state_limbs"],
+                "properties": {
+                    "layout_version": {
+                        "type": "integer", "format": "uint16",
+                        "minimum": (iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STATE_BOUNDARY_VERSION_V2),
+                        "maximum": (iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STATE_BOUNDARY_VERSION_V2)
+                    },
+                    "state_limbs": {
+                        "type": "array",
+                        "minItems": (iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V2),
+                        "maxItems": (iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V2),
+                        "items": { "type": "integer", "format": "uint32", "minimum": 0 }
+                    }
+                },
+                "description": "Exact selector-free recursive state crossing the Pasta field boundary."
+            }),
+        ),
+        (
+            "OfflinePastaCycleProofEnvelope",
+            norito::json!({
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                    "version", "proof_backend", "transcript_profile",
+                    "step_eq_circuit_id", "step_ep_circuit_id",
+                    "artifact_generation", "manifest_sha256",
+                    "step_eq_parameter_generation", "step_ep_parameter_generation",
+                    "step_eq_circuit_params_sha256", "step_ep_circuit_params_sha256",
+                    "step_eq_verifier_key_sha256", "step_ep_verifier_key_sha256",
+                    "state_boundary", "proof"
+                ],
+                "properties": {
+                    "version": { "type": "integer", "format": "uint16", "minimum": 4, "maximum": 4 },
+                    "proof_backend": { "type": "string", "minLength": 1 },
+                    "transcript_profile": { "type": "string", "minLength": 1 },
+                    "step_eq_circuit_id": { "type": "string", "minLength": 1 },
+                    "step_ep_circuit_id": { "type": "string", "minLength": 1 },
+                    "artifact_generation": { "type": "string", "minLength": 1, "maxLength": 128 },
+                    "manifest_sha256": { "$ref": "#/components/schemas/OfflineFixed32Bytes" },
+                    "step_eq_parameter_generation": { "type": "string", "minLength": 1 },
+                    "step_ep_parameter_generation": { "type": "string", "minLength": 1 },
+                    "step_eq_circuit_params_sha256": { "$ref": "#/components/schemas/OfflineFixed32Bytes" },
+                    "step_ep_circuit_params_sha256": { "$ref": "#/components/schemas/OfflineFixed32Bytes" },
+                    "step_eq_verifier_key_sha256": { "$ref": "#/components/schemas/OfflineFixed32Bytes" },
+                    "step_ep_verifier_key_sha256": { "$ref": "#/components/schemas/OfflineFixed32Bytes" },
+                    "state_boundary": { "$ref": "#/components/schemas/OfflineRecursiveStateBoundary" },
+                    "proof": { "$ref": "#/components/schemas/OfflineOpaqueProof" }
+                },
+                "description": "Authenticated ABI-20/V4 Eq/Ep proof-pair envelope."
+            }),
+        ),
+        (
+            "OfflineRecursiveOperationVector",
+            norito::json!({
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["limbs"],
+                "properties": {
+                    "limbs": {
+                        "type": "array",
+                        "minItems": (iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_OPERATION_LIMBS_V4),
+                        "maxItems": (iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_OPERATION_LIMBS_V4),
+                        "items": { "type": "integer", "format": "uint32", "minimum": 0 }
+                    }
+                },
+                "description": "Exact canonical ABI-20 operation row independently carried by the bundle."
+            }),
+        ),
+        (
             "OfflineVerifyingKeyId",
             norito::json!({
                 "type": "object",
@@ -11455,9 +12020,10 @@ fn insert_offline_typed_schemas(schemas: &mut Map) {
             "OfflineArtifactBinding",
             norito::json!({
                 "type": "object",
-                "required": ["generation", "manifest_sha256"],
+                "required": ["version", "generation", "manifest_sha256"],
                 "additionalProperties": false,
                 "properties": {
+                    "version": { "type": "integer", "format": "uint16", "minimum": 4, "maximum": 4 },
                     "generation": { "type": "string", "minLength": 1, "maxLength": 128 },
                     "manifest_sha256": { "$ref": "#/components/schemas/OfflineFixed32Bytes" }
                 },
@@ -11504,7 +12070,7 @@ fn insert_offline_typed_schemas(schemas: &mut Map) {
                     "anchor_digest"
                 ],
                 "properties": {
-                    "version": { "type": "integer", "format": "uint16", "enum": [2] },
+                    "version": { "type": "integer", "format": "uint16", "minimum": 4, "maximum": 4 },
                     "chain_id": { "type": "string" },
                     "payer": { "type": "string" },
                     "asset": { "type": "string" },
@@ -11732,6 +12298,7 @@ fn insert_offline_typed_schemas(schemas: &mut Map) {
                     "asset",
                     "asset_scale",
                     "final_root",
+                    "next_zero_leaf_index",
                     "topup_anchor_refs",
                     "proof_step_count",
                     "peer_hop_count",
@@ -11745,6 +12312,10 @@ fn insert_offline_typed_schemas(schemas: &mut Map) {
                     "asset": { "type": "string" },
                     "asset_scale": { "type": "integer", "format": "uint32", "minimum": 0 },
                     "final_root": { "$ref": "#/components/schemas/OfflineFixed32Bytes" },
+                    "next_zero_leaf_index": {
+                        "type": "integer", "format": "uint32", "minimum": 0,
+                        "maximum": (iroha_data_model::offline::KAGEMUSHA_TOPUP_SHIELD_TREE_CAPACITY_V2 - 1)
+                    },
                     "topup_anchor_refs": {
                         "type": "array",
                         "minItems": 1,
@@ -11775,11 +12346,11 @@ fn insert_offline_typed_schemas(schemas: &mut Map) {
             "OfflineSpendProof",
             norito::json!({
                 "type": "object",
-                "required": ["verifier_key_id", "public_statement_digest", "proof"],
+                "required": ["verifier_key_id", "public_statement_digest", "proof_envelope"],
                 "properties": {
                     "verifier_key_id": { "$ref": "#/components/schemas/OfflineVerifyingKeyId" },
                     "public_statement_digest": { "$ref": "#/components/schemas/OfflineFixed32Bytes" },
-                    "proof": { "$ref": "#/components/schemas/OfflineOpaqueProof" }
+                    "proof_envelope": { "$ref": "#/components/schemas/OfflinePastaCycleProofEnvelope" }
                 }
             }),
         ),
@@ -11787,9 +12358,10 @@ fn insert_offline_typed_schemas(schemas: &mut Map) {
             "OfflineSpendBundle",
             norito::json!({
                 "type": "object",
-                "required": ["statement", "recursive_proof"],
+                "required": ["statement", "operation", "recursive_proof"],
                 "properties": {
                     "statement": { "$ref": "#/components/schemas/OfflineSpendStatement" },
+                    "operation": { "$ref": "#/components/schemas/OfflineRecursiveOperationVector" },
                     "recursive_proof": { "$ref": "#/components/schemas/OfflineSpendProof" }
                 }
             }),
@@ -14035,6 +14607,51 @@ fn bridge_finality_schemas(schemas: &mut Map) {
                 }
             },
             "description": "Version-one bridge proof carrying only a canonical block header and the exact independently-verifiable durable v2 artifact."
+        }),
+    );
+    schemas.insert(
+        "BridgeFinalityAttestationBodyV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "version", "challenge", "chain_id", "node_id", "node_fingerprint",
+                "genesis_block_hash", "genesis_finality_proof", "status", "finality_proof"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "version": { "type": "integer", "format": "uint8", "enum": [1] },
+                "challenge": { "$ref": "#/components/schemas/SumeragiV2Fixed32ByteArray" },
+                "chain_id": { "type": "string", "minLength": 1 },
+                "node_id": {
+                    "type": "string",
+                    "description": "Canonical PeerId of the BLS node key which signed this attestation."
+                },
+                "node_fingerprint": { "$ref": "#/components/schemas/Hash" },
+                "genesis_block_hash": { "$ref": "#/components/schemas/Hash" },
+                "genesis_finality_proof": {
+                    "$ref": "#/components/schemas/BridgeFinalityProof"
+                },
+                "status": { "$ref": "#/components/schemas/SumeragiStatusResponse" },
+                "finality_proof": { "$ref": "#/components/schemas/BridgeFinalityProof" }
+            },
+            "description": "Exact challenge-bound statement produced from one immutable committed StateView and authoritative reducer status."
+        }),
+    );
+    schemas.insert(
+        "BridgeFinalityAttestationV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["body", "signature"],
+            "additionalProperties": false,
+            "properties": {
+                "body": { "$ref": "#/components/schemas/BridgeFinalityAttestationBodyV1" },
+                "signature": {
+                    "type": "string",
+                    "minLength": 2,
+                    "pattern": "^(?:[0-9A-F]{2})+$",
+                    "description": "Canonical uppercase node signature over the domain-separated typed body hash."
+                }
+            }
         }),
     );
     schemas.insert(
@@ -16383,8 +17000,15 @@ fn openapi_schemas() -> Map {
             "description": "Schema documentation for the typed OfflineTopUpRequest carried directly as application/x-norito. The command route has no JSON request representation and accepts no encoded-byte wrapper.",
             "x-iroha-norito-schema": offline_top_up_norito_schema,
             "additionalProperties": false,
-            "required": ["asset", "amount", "current_note", "shield_evidence", "artifact_binding", "operation_id", "authorization"],
+            "required": ["version", "asset", "amount", "current_note", "shield_evidence", "artifact_binding", "operation_id", "authorization"],
             "properties": {
+                "version": {
+                    "type": "integer",
+                    "format": "uint16",
+                    "minimum": 4,
+                    "maximum": 4,
+                    "description": "Exact ABI-20/V4 chain-request wire version."
+                },
                 "asset": {
                     "type": "string",
                     "description": "Canonical online asset id charged by the top-up."
@@ -16414,8 +17038,15 @@ fn openapi_schemas() -> Map {
             "description": "Schema documentation for the typed OfflineRedeemRequest carried directly as application/x-norito. The command route has no JSON request representation and accepts no encoded-byte wrapper.",
             "x-iroha-norito-schema": offline_redeem_norito_schema,
             "additionalProperties": false,
-            "required": ["bundle", "recipient", "amount", "redeem_proof", "redemption", "block_height", "operation_id", "authorization"],
+            "required": ["version", "bundle", "recipient", "amount", "redeem_proof", "redemption", "block_height", "operation_id", "authorization"],
             "properties": {
+                "version": {
+                    "type": "integer",
+                    "format": "uint16",
+                    "minimum": 4,
+                    "maximum": 4,
+                    "description": "Exact ABI-20/V4 chain-request wire version."
+                },
                 "bundle": {
                     "$ref": "#/components/schemas/OfflineSpendBundle",
                     "description": "Typed scale-carrying recursive state being redeemed."
@@ -16553,8 +17184,8 @@ fn openapi_schemas() -> Map {
                 "version": {
                     "type": "integer",
                     "format": "uint32",
-                    "minimum": 0,
-                    "description": "Governance-managed monotonic verifier-record version."
+                    "minimum": 1,
+                    "description": "Positive governance-managed monotonic verifier-record version."
                 },
                 "circuit_id": {
                     "type": "string",
@@ -16564,12 +17195,18 @@ fn openapi_schemas() -> Map {
                 "commitment": {
                     "type": "string",
                     "pattern": "^[0-9a-f]{64}$",
-                    "description": "Lowercase 32-byte commitment of the registered verifying key."
+                    "not": {
+                        "const": "0000000000000000000000000000000000000000000000000000000000000000"
+                    },
+                    "description": "Non-zero lowercase 32-byte commitment of the registered verifying key."
                 },
                 "public_inputs_schema_hash": {
                     "type": "string",
                     "pattern": "^[0-9a-f]{64}$",
-                    "description": "Lowercase 32-byte public-input schema hash."
+                    "not": {
+                        "const": "0000000000000000000000000000000000000000000000000000000000000000"
+                    },
+                    "description": "Non-zero lowercase 32-byte public-input schema hash."
                 },
                 "max_proof_bytes": {
                     "type": "integer",
@@ -16607,6 +17244,84 @@ fn openapi_schemas() -> Map {
         }),
     );
     schemas.insert(
+        "OfflineAuthenticatedArtifactSet".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "generation", "manifest_sha256", "release_policy_sha256",
+                "release_attestation_sha256", "activation_height",
+                "withdrawal_height", "max_proof_bytes", "asset_scale"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "generation": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128,
+                    "pattern": "^(?!(?:[Cc][Oo][Nn]|[Pp][Rr][Nn]|[Aa][Uu][Xx]|[Nn][Uu][Ll]|[Cc][Oo][Mm][1-9]|[Ll][Pp][Tt][1-9])(?:\\.|$))[A-Za-z0-9](?:[A-Za-z0-9._-]{0,126}[A-Za-z0-9])?$",
+                    "description": "Canonical cross-platform generation identifier: ASCII alphanumeric, dot, underscore, or hyphen; starts and ends alphanumeric; and excludes Windows reserved basenames."
+                },
+                "manifest_sha256": {
+                    "type": "string",
+                    "minLength": 64,
+                    "maxLength": 64,
+                    "pattern": "^[0-9a-f]{64}$",
+                    "not": {
+                        "const": "0000000000000000000000000000000000000000000000000000000000000000"
+                    },
+                    "description": "Lowercase hexadecimal SHA-256 digest of the canonical ABI-20 V4 release manifest."
+                },
+                "release_policy_sha256": {
+                    "type": "string",
+                    "minLength": 64,
+                    "maxLength": 64,
+                    "pattern": "^[0-9a-f]{64}$",
+                    "not": {
+                        "const": "0000000000000000000000000000000000000000000000000000000000000000"
+                    },
+                    "description": "Lowercase hexadecimal SHA-256 digest of the locally trusted ABI-20 V4 release policy."
+                },
+                "release_attestation_sha256": {
+                    "type": "string",
+                    "minLength": 64,
+                    "maxLength": 64,
+                    "pattern": "^[0-9a-f]{64}$",
+                    "not": {
+                        "const": "0000000000000000000000000000000000000000000000000000000000000000"
+                    },
+                    "description": "Lowercase hexadecimal SHA-256 digest of the canonical signed ABI-20 V4 release attestation."
+                },
+                "activation_height": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 1,
+                    "description": "First height at which this authenticated release may issue notes."
+                },
+                "withdrawal_height": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 2,
+                    "description": "First height at which new issuance must stop; strictly greater than activation_height."
+                },
+                "max_proof_bytes": {
+                    "type": "integer",
+                    "format": "uint32",
+                    "minimum": 1,
+                    "maximum": (iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4),
+                    "description": "Authenticated upper bound for one canonical ABI-20 V4 proof-pair payload."
+                },
+                "asset_scale": {
+                    "type": "integer",
+                    "format": "uint32",
+                    "minimum": 0,
+                    "maximum": (iroha_data_model::offline::KAGEMUSHA_SCALED_AMOUNT_MAX_SCALE_V2),
+                    "description": "Authoritative fixed asset scale authenticated by this release."
+                }
+            },
+            "description": "Exact authenticated ABI-20 V4 release identity selected at the readiness snapshot after Core authenticates its policy, attestation, evidence, manifest, verifier records, and verifier-side artifact bytes. The three non-zero SHA-256 digests identify distinct artifacts."
+        }),
+    );
+    schemas.insert(
         "OfflineReadiness".to_owned(),
         norito::json!({
             "type": "object",
@@ -16616,6 +17331,7 @@ fn openapi_schemas() -> Map {
                 "evaluated_block_hash", "active_transfer_verifier",
                 "active_topup_shield_verifier", "active_unshield_verifier",
                 "active_recursive_step_eq_verifier", "active_recursive_step_ep_verifier",
+                "artifact_set",
                 "proof_backend_available", "recursive_lineage_supported",
                 "ready", "blockers"
             ],
@@ -16624,8 +17340,9 @@ fn openapi_schemas() -> Map {
                 "required_bridge_abi_version": {
                     "type": "integer",
                     "format": "uint32",
-                    "minimum": 19,
-                    "maximum": 19
+                    "minimum": (iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4),
+                    "maximum": (iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4),
+                    "description": "Exact native bridge ABI required by the authenticated ABI-20 V4 recursive release."
                 },
                 "max_hops": {
                     "type": "integer",
@@ -16686,29 +17403,37 @@ fn openapi_schemas() -> Map {
                         { "$ref": "#/components/schemas/OfflineActiveTransferVerifier" },
                         { "type": "null" }
                     ],
-                    "description": "Authoritative active recursive StepEq verifier at the evaluated height."
+                    "description": "Authoritative active ABI-20 V4 recursive StepEq verifier at the evaluated height, or null when the authenticated V4 release cannot be resolved."
                 },
                 "active_recursive_step_ep_verifier": {
                     "anyOf": [
                         { "$ref": "#/components/schemas/OfflineActiveTransferVerifier" },
                         { "type": "null" }
                     ],
-                    "description": "Authoritative active recursive StepEp verifier at the evaluated height."
+                    "description": "Authoritative active ABI-20 V4 recursive StepEp verifier at the evaluated height, or null when the authenticated V4 release cannot be resolved."
+                },
+                "artifact_set": {
+                    "anyOf": [
+                        { "$ref": "#/components/schemas/OfflineAuthenticatedArtifactSet" },
+                        { "type": "null" }
+                    ],
+                    "description": "Exact authenticated ABI-20 V4 release identity selected atomically with the recursive verifiers, or null with an authenticated V4 registry blocker."
                 },
                 "proof_backend_available": {
                     "type": "boolean",
-                    "description": "Whether this Torii/Core build contains the sound recursive proof backend."
+                    "description": "Whether the exact authenticated ABI-20 V4 artifacts constructed the production recursive verifier backend at this snapshot."
                 },
                 "recursive_lineage_supported": {
                     "type": "boolean",
-                    "description": "Whether recursive branches can be verified and redeemed through the production lineage proof path."
+                    "description": "Whether the exact authenticated ABI-20 V4 artifact set, distinct active Eq/Ep records, and constructed backend support chain admission, parent/change recursive verification, and redemption at this snapshot."
                 },
                 "ready": {
                     "type": "boolean",
-                    "description": "True exactly when blockers is empty. False is a successfully evaluated domain state, not a service error."
+                    "description": "True exactly when no readiness blocker remains. False is a successfully evaluated domain state, not a service error and does not erase independently reported backend or lineage capabilities."
                 },
                 "blockers": {
                     "type": "array",
+                    "description": "Empty exactly when ready is true; otherwise contains stable typed blockers for every unavailable requirement.",
                     "items": { "$ref": "#/components/schemas/OfflineReadinessBlocker" }
                 }
             }
@@ -17133,28 +17858,159 @@ fn openapi_schemas() -> Map {
             "properties": {
                 "alias": {
                     "type": "string",
+                    "minLength": 1,
                     "description": "Account alias literal such as `alice@universal` or `merchant@domain.dataspace`."
                 },
                 "account_id": {
                     "type": "string",
+                    "minLength": 1,
                     "description": "Canonical I105 account id to register. Mutually exclusive with generated `public_key_hex` onboarding material."
                 },
                 "public_key_hex": {
                     "type": "string",
+                    "minLength": 64,
+                    "maxLength": 64,
+                    "pattern": "^[0-9A-Fa-f]{64}$",
                     "description": "Raw 32-byte Ed25519 public key bytes as 64 hex characters; Torii derives the canonical account id from this key."
                 },
                 "uaid": {
                     "type": "string",
-                    "description": "Explicit UAID literal (`uaid:<hex>` or raw 64-hex digest with the canonical low bit set)."
+                    "description": "Explicit UAID literal. Torii trims surrounding whitespace and accepts either a case-insensitive `uaid:` prefix followed by a 64-hex digest or the raw 64-hex digest."
                 },
                 "identity_commitment_hex": {
                     "type": "string",
+                    "minLength": 64,
+                    "maxLength": 64,
+                    "pattern": "^[0-9A-Fa-f]{64}$",
                     "description": "Optional 64-hex digest commitment to off-chain identity evidence. Raw identity metadata is not accepted."
                 },
                 "permissions": {
                     "type": "array",
                     "items": { "type": "string" },
                     "description": "Optional permission literals requested from the onboarding allowlist."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "AccountAliasLease".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "alias",
+                "dataspace",
+                "is_primary",
+                "lease_status",
+                "expires_at_ms",
+                "grace_expires_at_ms",
+                "redemption_expires_at_ms",
+                "auto_renew_enabled"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "alias": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Canonical account alias bound by the onboarding transaction."
+                },
+                "dataspace": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Canonical alias of the dataspace that owns the binding."
+                },
+                "domain": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Optional fully qualified alias domain scope. Omitted for a dataspace-root alias."
+                },
+                "is_primary": {
+                    "type": "boolean",
+                    "description": "Whether this is the account's primary alias in the dataspace."
+                },
+                "lease_status": {
+                    "type": "string",
+                    "enum": ["active", "grace_period", "redemption", "frozen", "tombstoned"],
+                    "description": "Current account-alias lease lifecycle state."
+                },
+                "expires_at_ms": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 0,
+                    "description": "Lease expiry timestamp in Unix milliseconds."
+                },
+                "grace_expires_at_ms": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 0,
+                    "description": "Grace-period expiry timestamp in Unix milliseconds."
+                },
+                "redemption_expires_at_ms": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 0,
+                    "description": "Redemption-period expiry timestamp in Unix milliseconds."
+                },
+                "auto_renew_enabled": {
+                    "type": "boolean",
+                    "description": "Whether onboarding configured automatic renewal for this lease."
+                },
+                "subscription_status": {
+                    "type": "string",
+                    "enum": ["active", "paused", "past_due", "canceled", "suspended"],
+                    "description": "Optional auto-renew subscription state."
+                },
+                "next_charge_ms": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 0,
+                    "description": "Optional next automatic charge timestamp in Unix milliseconds."
+                },
+                "last_invoice_status": {
+                    "type": "string",
+                    "enum": ["paid", "failed"],
+                    "description": "Optional outcome of the most recent auto-renew invoice."
+                },
+                "max_charge_amount": {
+                    "$ref": "#/components/schemas/Quantity",
+                    "description": "Optional exact cap on an automatic renewal charge."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "AccountOnboardingResponse".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["account_id", "uaid", "tx_hash_hex", "status", "lease"],
+            "additionalProperties": false,
+            "properties": {
+                "account_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Canonical domainless I105 account identifier queued for registration."
+                },
+                "uaid": {
+                    "type": "string",
+                    "minLength": 69,
+                    "maxLength": 69,
+                    "pattern": "^uaid:[0-9a-f]{64}$",
+                    "description": "Canonical lowercase UAID literal bound to the account."
+                },
+                "tx_hash_hex": {
+                    "type": "string",
+                    "minLength": 64,
+                    "maxLength": 64,
+                    "pattern": "^[0-9a-f]{64}$",
+                    "description": "Canonical lowercase hash of the queued onboarding transaction."
+                },
+                "status": {
+                    "type": "string",
+                    "const": "QUEUED",
+                    "description": "Queue acceptance state; this is not ledger finality."
+                },
+                "lease": {
+                    "$ref": "#/components/schemas/AccountAliasLease",
+                    "description": "Alias lease derived from the accepted onboarding quote."
                 }
             }
         }),
@@ -21219,6 +22075,71 @@ mod tests {
             .unwrap_or_else(|| panic!("{method} {path} operation"))
     }
 
+    fn catalog_openapi_route_enabled(method: CatalogHttpMethod, path: &str) -> bool {
+        RouteCatalog::new(CATALOGED_ROUTES)
+            .project(
+                CatalogProjection::OpenApi,
+                crate::router::builder::compiled_route_features(),
+            )
+            .into_iter()
+            .any(|route| route.method() == method && route.path() == path)
+    }
+
+    fn operation_header_requirements(operation: &Map) -> Vec<(String, bool)> {
+        operation
+            .get("parameters")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter(|parameter| parameter.get("in").and_then(Value::as_str) == Some("header"))
+            .map(|parameter| {
+                (
+                    parameter
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .expect("header parameter name")
+                        .to_owned(),
+                    parameter
+                        .get("required")
+                        .and_then(Value::as_bool)
+                        .expect("header required flag"),
+                )
+            })
+            .collect()
+    }
+
+    fn assert_canonical_auth_required_response(
+        operation: &Map,
+        path: &str,
+        expected_reject_code: &str,
+    ) {
+        let responses = operation
+            .get("responses")
+            .and_then(Value::as_object)
+            .unwrap_or_else(|| panic!("POST {path} responses"));
+        assert_eq!(
+            documented_reject_codes(responses, "401"),
+            vec![expected_reject_code],
+            "POST {path} exact 401 reject code"
+        );
+        let challenge = responses
+            .get("401")
+            .and_then(Value::as_object)
+            .and_then(|response| response.get("headers"))
+            .and_then(Value::as_object)
+            .and_then(|headers| headers.get("WWW-Authenticate"))
+            .and_then(Value::as_object)
+            .and_then(|header| header.get("schema"))
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("const"))
+            .and_then(Value::as_str);
+        assert_eq!(challenge, Some("Signature"), "POST {path} challenge");
+    }
+
+    fn assert_alias_auth_required_response(operation: &Map, path: &str) {
+        assert_canonical_auth_required_response(operation, path, "alias_auth_required");
+    }
+
     fn operation_request_schema_ref<'a>(operation: &'a Map, path: &str) -> &'a str {
         operation
             .get("requestBody")
@@ -21600,6 +22521,288 @@ mod tests {
             reference_count > 0,
             "generated OpenAPI document unexpectedly contains no schema references"
         );
+    }
+
+    #[cfg(feature = "app_api")]
+    #[test]
+    fn account_onboarding_openapi_matches_runtime_auth_and_queue_contract() {
+        use iroha_torii_shared::route_catalog::application_api::{
+            ACCOUNTS_ONBOARD_MULTISIG_POST, ACCOUNTS_ONBOARD_POST,
+        };
+
+        let document = generate_spec();
+        let paths = document
+            .get("paths")
+            .and_then(Value::as_object)
+            .expect("OpenAPI paths");
+        assert!(ACCOUNTS_ONBOARD_POST.projections().openapi());
+        assert!(ACCOUNTS_ONBOARD_POST.projections().sdk());
+        assert!(!ACCOUNTS_ONBOARD_MULTISIG_POST.projections().openapi());
+        assert!(ACCOUNTS_ONBOARD_MULTISIG_POST.projections().sdk());
+        assert!(
+            !paths.contains_key("/v1/accounts/onboard/multisig"),
+            "the SDK-only multisig onboarding route must not enter OpenAPI"
+        );
+
+        let path = "/v1/accounts/onboard";
+        let operation = openapi_operation(&document, path, "post");
+        assert_eq!(
+            operation_header_requirements(operation),
+            vec![
+                ("X-Iroha-Onboarding-Token".to_owned(), true),
+                ("X-API-Token".to_owned(), false),
+            ],
+            "POST {path} dedicated and global token header contract"
+        );
+        let token_parameter = operation
+            .get("parameters")
+            .and_then(Value::as_array)
+            .and_then(|parameters| parameters.first())
+            .and_then(Value::as_object)
+            .expect("onboarding token header parameter");
+        let token_description = token_parameter
+            .get("description")
+            .and_then(Value::as_str)
+            .expect("onboarding token header description");
+        assert!(token_description.contains("Exactly one opaque raw"));
+        assert!(token_description.contains("printable non-whitespace ASCII"));
+        assert!(token_description.contains("BLAKE3 digest"));
+        assert!(token_description.contains("protected transport"));
+        let token_schema = token_parameter
+            .get("schema")
+            .and_then(Value::as_object)
+            .expect("onboarding token header schema");
+        assert_eq!(token_schema.get("minLength"), Some(&Value::from(32_u64)));
+        assert_eq!(token_schema.get("maxLength"), Some(&Value::from(256_u64)));
+        assert_eq!(
+            token_schema.get("pattern").and_then(Value::as_str),
+            Some("^[!-~]{32,256}$")
+        );
+
+        assert_eq!(
+            operation_request_schema_ref(operation, path),
+            "#/components/schemas/AccountOnboardingRequest"
+        );
+        let request_content = operation
+            .get("requestBody")
+            .and_then(Value::as_object)
+            .and_then(|body| body.get("content"))
+            .and_then(Value::as_object)
+            .expect("onboarding request media types");
+        assert_eq!(
+            request_content
+                .keys()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            vec!["application/json"],
+            "onboarding accepts exactly one canonical request representation"
+        );
+
+        let responses = operation
+            .get("responses")
+            .and_then(Value::as_object)
+            .expect("onboarding responses");
+        assert_eq!(
+            responses
+                .keys()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>(),
+            BTreeSet::from(["202", "400", "401", "406", "415", "429", "503"])
+        );
+        assert_eq!(
+            operation_response_schema_ref(operation, "202", path),
+            "#/components/schemas/AccountOnboardingResponse"
+        );
+
+        for (status, codes) in [
+            (
+                "401",
+                &["api_token_required", "onboarding_auth_required"][..],
+            ),
+            (
+                "503",
+                &[
+                    "api_token_unavailable",
+                    "onboarding_auth_unavailable",
+                    "preauth_*_capacity",
+                ][..],
+            ),
+        ] {
+            let response = responses
+                .get(status)
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("onboarding HTTP {status}"));
+            let description = response
+                .get("description")
+                .and_then(Value::as_str)
+                .unwrap_or_else(|| panic!("onboarding HTTP {status} description"));
+            for code in codes {
+                assert!(
+                    description.contains(code),
+                    "HTTP {status} must name ErrorEnvelope code {code}"
+                );
+            }
+            let content = response
+                .get("content")
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("onboarding HTTP {status} content"));
+            assert_eq!(
+                content
+                    .get("application/json")
+                    .and_then(Value::as_object)
+                    .and_then(|media| media.get("schema"))
+                    .and_then(Value::as_object)
+                    .and_then(|schema| schema.get("$ref"))
+                    .and_then(Value::as_str),
+                Some("#/components/schemas/ErrorEnvelope")
+            );
+            let norito_schema = content
+                .get("application/x-norito")
+                .and_then(Value::as_object)
+                .and_then(|media| media.get("schema"))
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("onboarding HTTP {status} Norito schema"));
+            assert_eq!(
+                norito_schema.get("type").and_then(Value::as_str),
+                Some("string")
+            );
+            assert_eq!(
+                norito_schema.get("format").and_then(Value::as_str),
+                Some("binary")
+            );
+            assert_eq!(
+                response
+                    .get("headers")
+                    .and_then(Value::as_object)
+                    .and_then(|headers| headers.get("Vary"))
+                    .and_then(Value::as_object)
+                    .and_then(|header| header.get("schema"))
+                    .and_then(Value::as_object)
+                    .and_then(|schema| schema.get("const"))
+                    .and_then(Value::as_str),
+                Some("Accept")
+            );
+        }
+
+        let unauthorized_headers = responses
+            .get("401")
+            .and_then(Value::as_object)
+            .and_then(|response| response.get("headers"))
+            .and_then(Value::as_object)
+            .expect("onboarding 401 headers");
+        assert_eq!(
+            unauthorized_headers
+                .get("WWW-Authenticate")
+                .and_then(Value::as_object)
+                .and_then(|header| header.get("schema"))
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("enum"))
+                .and_then(Value::as_array),
+            Some(&vec![
+                Value::String("IrohaApiToken realm=\"torii\"".to_owned()),
+                Value::String("IrohaOnboardingToken".to_owned()),
+            ])
+        );
+        let unavailable_headers = responses
+            .get("503")
+            .and_then(Value::as_object)
+            .and_then(|response| response.get("headers"))
+            .and_then(Value::as_object)
+            .expect("onboarding 503 headers");
+        assert!(!unavailable_headers.contains_key("WWW-Authenticate"));
+        assert_eq!(
+            unavailable_headers
+                .get("Retry-After")
+                .and_then(Value::as_object)
+                .and_then(|header| header.get("schema"))
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("const"))
+                .and_then(Value::as_str),
+            Some("1")
+        );
+        let rate_limited_headers = responses
+            .get("429")
+            .and_then(Value::as_object)
+            .and_then(|response| response.get("headers"))
+            .and_then(Value::as_object)
+            .expect("onboarding 429 headers");
+        assert_eq!(
+            rate_limited_headers
+                .get("Retry-After")
+                .and_then(Value::as_object)
+                .and_then(|header| header.get("schema"))
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("const"))
+                .and_then(Value::as_str),
+            Some("1")
+        );
+
+        let schemas = component_schemas(&document);
+        assert_strict_object_schema(
+            schemas,
+            "AccountOnboardingRequest",
+            &["alias", "uaid"],
+            &[
+                "account_id",
+                "public_key_hex",
+                "identity_commitment_hex",
+                "permissions",
+            ],
+        );
+        assert_strict_object_schema(
+            schemas,
+            "AccountOnboardingResponse",
+            &["account_id", "uaid", "tx_hash_hex", "status", "lease"],
+            &[],
+        );
+        assert_strict_object_schema(
+            schemas,
+            "AccountAliasLease",
+            &[
+                "alias",
+                "dataspace",
+                "is_primary",
+                "lease_status",
+                "expires_at_ms",
+                "grace_expires_at_ms",
+                "redemption_expires_at_ms",
+                "auto_renew_enabled",
+            ],
+            &[
+                "domain",
+                "subscription_status",
+                "next_charge_ms",
+                "last_invoice_status",
+                "max_charge_amount",
+            ],
+        );
+        let onboarding_response = schemas
+            .get("AccountOnboardingResponse")
+            .and_then(Value::as_object)
+            .expect("AccountOnboardingResponse schema");
+        let response_properties = onboarding_response
+            .get("properties")
+            .and_then(Value::as_object)
+            .expect("AccountOnboardingResponse properties");
+        assert_eq!(
+            response_properties
+                .get("status")
+                .and_then(Value::as_object)
+                .and_then(|status| status.get("const"))
+                .and_then(Value::as_str),
+            Some("QUEUED")
+        );
+        for field in ["uaid", "tx_hash_hex"] {
+            assert!(
+                response_properties
+                    .get(field)
+                    .and_then(Value::as_object)
+                    .and_then(|property| property.get("pattern"))
+                    .and_then(Value::as_str)
+                    .is_some(),
+                "AccountOnboardingResponse.{field} canonical output pattern"
+            );
+        }
     }
 
     #[test]
@@ -22519,6 +23722,7 @@ mod tests {
             .collect::<BTreeSet<_>>();
         let expected = BTreeSet::from([
             ("/v1/bridge/finality/{height}", "get"),
+            ("/v1/bridge/finality/attestation/{height}", "get"),
             ("/v1/bridge/finality/bundle/{height}", "get"),
             ("/v1/bridge/proofs/submit", "post"),
             ("/v1/bridge/messages", "post"),
@@ -23792,8 +24996,20 @@ mod tests {
         assert!(paths.contains_key("/v1/da/commitments"));
         assert!(paths.contains_key("/v1/da/commitments/prove"));
         assert!(paths.contains_key("/v1/da/commitments/verify"));
-        assert!(paths.contains_key("/v1/sumeragi/commit-certificates"));
+        for path in [
+            "/v1/sumeragi/commit-certificates",
+            "/v1/sumeragi/validator-sets",
+            "/v1/sumeragi/validator-sets/{height}",
+            "/v1/telemetry/live",
+        ] {
+            assert_eq!(
+                paths.contains_key(path),
+                catalog_openapi_route_enabled(CatalogHttpMethod::Get, path),
+                "{path} presence must follow the enabled catalog OpenAPI projection"
+            );
+        }
         assert!(paths.contains_key("/v1/bridge/finality/{height}"));
+        assert!(paths.contains_key("/v1/bridge/finality/attestation/{height}"));
         assert!(paths.contains_key("/v1/bridge/finality/bundle/{height}"));
         assert!(paths.contains_key("/v1/sccp/proofs/message/{message_id}"));
         assert!(paths.contains_key("/v1/sccp/capabilities"));
@@ -23806,8 +25022,6 @@ mod tests {
         assert!(!paths.contains_key("/v1/sccp/artifacts/message/{message_id}"));
         assert!(!paths.contains_key("/v1/sccp/jobs/message/{message_id}"));
         assert!(!paths.contains_key("/v1/sccp/proofs/burn/{message_id}"));
-        assert!(paths.contains_key("/v1/sumeragi/validator-sets"));
-        assert!(paths.contains_key("/v1/sumeragi/validator-sets/{height}"));
         for retired in [
             "/v1/sumeragi/rbc",
             "/v1/sumeragi/rbc/delivered/{height}/{view}",
@@ -23933,7 +25147,6 @@ mod tests {
             assert!(!paths.contains_key("/v1/gov/council/replace"));
             assert!(!paths.contains_key("/v1/gov/council/derive-vrf"));
         }
-        assert!(paths.contains_key("/v1/telemetry/live"));
         assert!(paths.contains_key("/v1/node/query/projection/checkpoint"));
         assert!(paths.contains_key("/v1/node/query/projection/checkpoint/plan"));
         assert!(paths.contains_key("/v1/node/query/projection/checkpoint/publish"));
@@ -24143,12 +25356,21 @@ mod tests {
             .and_then(Value::as_object)
             .and_then(|media| media.get("schema"))
             .and_then(Value::as_object)
-            .and_then(|schema| schema.get("x-iroha-norito-schema"))
-            .and_then(Value::as_str)
-            .expect("stable top-up Norito schema id");
+            .expect("typed top-up Norito schema");
         assert_eq!(
-            topup_norito_schema,
-            iroha_torii_shared::offline_api::OFFLINE_TOP_UP_REQUEST_SCHEMA_NAME
+            topup_norito_schema
+                .get("x-iroha-norito-schema")
+                .and_then(Value::as_str),
+            Some(iroha_torii_shared::offline_api::OFFLINE_TOP_UP_REQUEST_SCHEMA_NAME)
+        );
+        assert_eq!(
+            topup_norito_schema
+                .get("x-iroha-max-bytes")
+                .and_then(Value::as_u64),
+            Some(
+                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_TOPUP_REQUEST_MAX_BYTES_V4
+                    as u64
+            )
         );
         let redeem_request_content = redeem_post
             .get("requestBody")
@@ -24162,6 +25384,27 @@ mod tests {
                 .map(String::as_str)
                 .collect::<Vec<_>>(),
             vec!["application/x-norito"]
+        );
+        let redeem_norito_schema = redeem_request_content
+            .get("application/x-norito")
+            .and_then(Value::as_object)
+            .and_then(|media| media.get("schema"))
+            .and_then(Value::as_object)
+            .expect("typed redeem Norito schema");
+        assert_eq!(
+            redeem_norito_schema
+                .get("x-iroha-norito-schema")
+                .and_then(Value::as_str),
+            Some(iroha_torii_shared::offline_api::OFFLINE_REDEEM_REQUEST_SCHEMA_NAME)
+        );
+        assert_eq!(
+            redeem_norito_schema
+                .get("x-iroha-max-bytes")
+                .and_then(Value::as_u64),
+            Some(
+                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_REDEEM_REQUEST_MAX_BYTES_V4
+                    as u64
+            )
         );
         let accepted = topup_post
             .get("responses")
@@ -24198,6 +25441,7 @@ mod tests {
                     "current_note",
                     "operation_id",
                     "shield_evidence",
+                    "version",
                 ]),
             ),
             (
@@ -24213,6 +25457,7 @@ mod tests {
                     "recipient",
                     "redeem_proof",
                     "redemption",
+                    "version",
                 ]),
             ),
         ] {
@@ -24251,6 +25496,7 @@ mod tests {
         assert_eq!(
             component_required(schemas, "OfflineTopUpRequest"),
             [
+                "version",
                 "asset",
                 "amount",
                 "current_note",
@@ -24259,11 +25505,12 @@ mod tests {
                 "operation_id",
                 "authorization",
             ],
-            "top-up transport fields must exactly match the current typed V2 request"
+            "top-up transport fields must exactly match the authoritative V4 request"
         );
         assert_eq!(
             component_required(schemas, "OfflineRedeemRequest"),
             [
+                "version",
                 "bundle",
                 "recipient",
                 "amount",
@@ -24273,7 +25520,7 @@ mod tests {
                 "operation_id",
                 "authorization",
             ],
-            "redeem transport fields must exactly match the current typed V2 request"
+            "redeem transport fields must exactly match the authoritative V4 request"
         );
         assert_eq!(
             nullable_property_ref(schemas, "OfflineRedeemRequest", "offline_change"),
@@ -24308,6 +25555,7 @@ mod tests {
                 "asset",
                 "asset_scale",
                 "final_root",
+                "next_zero_leaf_index",
                 "topup_anchor_refs",
                 "proof_step_count",
                 "peer_hop_count",
@@ -24320,8 +25568,8 @@ mod tests {
         );
         assert_eq!(
             component_required(schemas, "OfflineSpendBundle"),
-            ["statement", "recursive_proof"],
-            "a spendable bundle must not duplicate statement state"
+            ["statement", "operation", "recursive_proof"],
+            "an ABI-20 spendable bundle must carry its statement and exact operation row"
         );
         for (owner, forbidden) in [
             ("OfflinePeerSplitTransition", "parent_branch_claim_digest"),
@@ -24365,13 +25613,28 @@ mod tests {
             ("OfflineSpendStatement", "proof_step_count", (1, 128)),
             ("OfflineSpendStatement", "peer_hop_count", (0, 8)),
             (
+                "OfflineSpendStatement",
+                "next_zero_leaf_index",
+                (
+                    0,
+                    iroha_data_model::offline::KAGEMUSHA_TOPUP_SHIELD_TREE_CAPACITY_V2 as u64 - 1,
+                ),
+            ),
+            (
                 "OfflineRedemptionIntent",
                 "parent_proof_step_count",
                 (1, 128),
             ),
             ("OfflineRedemptionIntent", "parent_peer_hop_count", (0, 8)),
             ("OfflineBranchPath", "depth", (0, 64)),
+            ("OfflineReadiness", "required_bridge_abi_version", (20, 20)),
             ("OfflineReadiness", "max_hops", (8, 8)),
+            (
+                "OfflineAuthenticatedArtifactSet",
+                "max_proof_bytes",
+                (1, 16 * 1024 * 1024),
+            ),
+            ("OfflineAuthenticatedArtifactSet", "asset_scale", (0, 28)),
         ] {
             assert_eq!(
                 property_integer_bounds(schemas, owner, property),
@@ -24401,7 +25664,7 @@ mod tests {
                 .get("additionalProperties")
                 .and_then(Value::as_bool),
             Some(false),
-            "first-release readiness rejects unknown members"
+            "readiness rejects unknown members"
         );
         assert_eq!(
             component_required(schemas, "OfflineReadiness"),
@@ -24417,6 +25680,7 @@ mod tests {
                 "active_unshield_verifier",
                 "active_recursive_step_eq_verifier",
                 "active_recursive_step_ep_verifier",
+                "artifact_set",
                 "proof_backend_available",
                 "recursive_lineage_supported",
                 "ready",
@@ -24439,6 +25703,129 @@ mod tests {
             assert_eq!(
                 nullable_property_ref(schemas, "OfflineReadiness", field),
                 "#/components/schemas/OfflineActiveTransferVerifier"
+            );
+        }
+        assert_eq!(
+            nullable_property_ref(schemas, "OfflineReadiness", "artifact_set"),
+            "#/components/schemas/OfflineAuthenticatedArtifactSet"
+        );
+        assert_eq!(
+            component_required(schemas, "OfflineAuthenticatedArtifactSet"),
+            [
+                "generation",
+                "manifest_sha256",
+                "release_policy_sha256",
+                "release_attestation_sha256",
+                "activation_height",
+                "withdrawal_height",
+                "max_proof_bytes",
+                "asset_scale",
+            ]
+        );
+        let artifact_set = schemas
+            .get("OfflineAuthenticatedArtifactSet")
+            .and_then(Value::as_object)
+            .expect("authenticated artifact-set schema");
+        assert_eq!(
+            artifact_set
+                .get("additionalProperties")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        let artifact_properties = component_properties(schemas, "OfflineAuthenticatedArtifactSet");
+        let generation = artifact_properties
+            .get("generation")
+            .and_then(Value::as_object)
+            .expect("artifact generation schema");
+        assert_eq!(generation.get("minLength").and_then(Value::as_u64), Some(1));
+        assert_eq!(
+            generation.get("maxLength").and_then(Value::as_u64),
+            Some(128)
+        );
+        assert_eq!(
+            generation.get("pattern").and_then(Value::as_str),
+            Some(
+                "^(?!(?:[Cc][Oo][Nn]|[Pp][Rr][Nn]|[Aa][Uu][Xx]|[Nn][Uu][Ll]|[Cc][Oo][Mm][1-9]|[Ll][Pp][Tt][1-9])(?:\\.|$))[A-Za-z0-9](?:[A-Za-z0-9._-]{0,126}[A-Za-z0-9])?$"
+            )
+        );
+        for digest in [
+            "manifest_sha256",
+            "release_policy_sha256",
+            "release_attestation_sha256",
+        ] {
+            let digest_schema = artifact_properties
+                .get(digest)
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("{digest} schema"));
+            assert_eq!(
+                digest_schema.get("minLength").and_then(Value::as_u64),
+                Some(64)
+            );
+            assert_eq!(
+                digest_schema.get("maxLength").and_then(Value::as_u64),
+                Some(64)
+            );
+            assert_eq!(
+                digest_schema.get("pattern").and_then(Value::as_str),
+                Some("^[0-9a-f]{64}$")
+            );
+            assert_eq!(
+                digest_schema["not"]["const"].as_str(),
+                Some("0000000000000000000000000000000000000000000000000000000000000000")
+            );
+        }
+        assert!(
+            artifact_set["description"]
+                .as_str()
+                .is_some_and(|description| description.contains("distinct artifacts"))
+        );
+        for (height, minimum) in [("activation_height", 1), ("withdrawal_height", 2)] {
+            let height_schema = artifact_properties
+                .get(height)
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("{height} schema"));
+            assert_eq!(
+                height_schema.get("format").and_then(Value::as_str),
+                Some("uint64")
+            );
+            assert_eq!(
+                height_schema.get("minimum").and_then(Value::as_u64),
+                Some(minimum)
+            );
+        }
+        assert!(
+            artifact_properties["withdrawal_height"]["description"]
+                .as_str()
+                .is_some_and(|description| description.contains("strictly greater"))
+        );
+        let readiness_properties = component_properties(schemas, "OfflineReadiness");
+        for property in ["recursive_lineage_supported", "ready"] {
+            assert_eq!(
+                readiness_properties[property]["type"].as_str(),
+                Some("boolean"),
+                "{property} must expose the evaluated exact-release result"
+            );
+            assert!(
+                readiness_properties[property].get("const").is_none(),
+                "{property} must not be frozen independently of exact-release blockers"
+            );
+        }
+        assert!(
+            readiness_properties["blockers"].get("minItems").is_none(),
+            "ready responses must admit an empty blocker list"
+        );
+        for property in [
+            "required_bridge_abi_version",
+            "active_recursive_step_eq_verifier",
+            "active_recursive_step_ep_verifier",
+            "artifact_set",
+            "proof_backend_available",
+        ] {
+            assert!(
+                readiness_properties[property]["description"]
+                    .as_str()
+                    .is_some_and(|description| description.contains("ABI-20 V4")),
+                "{property} must describe the active ABI-20 V4 readiness contract"
             );
         }
         let readiness_scale = readiness
@@ -24476,6 +25863,23 @@ mod tests {
             property_ref(schemas, "OfflineActiveTransferVerifier", "id"),
             "#/components/schemas/OfflineVerifyingKeyId"
         );
+        let verifier_properties = component_properties(schemas, "OfflineActiveTransferVerifier");
+        assert_eq!(
+            verifier_properties["version"]["minimum"].as_u64(),
+            Some(1),
+            "active verifier versions must be positive"
+        );
+        for field in ["commitment", "public_inputs_schema_hash"] {
+            assert_eq!(
+                verifier_properties[field]["pattern"].as_str(),
+                Some("^[0-9a-f]{64}$")
+            );
+            assert_eq!(
+                verifier_properties[field]["not"]["const"].as_str(),
+                Some("0000000000000000000000000000000000000000000000000000000000000000"),
+                "{field} must exclude the all-zero binding"
+            );
+        }
         let blocker_code = schemas
             .get("OfflineReadinessBlocker")
             .and_then(Value::as_object)
@@ -24548,6 +25952,10 @@ mod tests {
             "OfflineTopUpShieldEvidence",
             "OfflineRequestAuthorization",
             "OfflineSpendBundle",
+            "OfflineSpendProof",
+            "OfflinePastaCycleProofEnvelope",
+            "OfflineRecursiveStateBoundary",
+            "OfflineRecursiveOperationVector",
             "OfflineProofAttachment",
             "OfflineRedemptionIntent",
             "OfflineArtifactBinding",
@@ -24556,6 +25964,7 @@ mod tests {
             "OfflineTopUpFinalityProof",
             "OfflineTopUpFinalityCompactQc",
             "OfflineTopUpAnchorMerkleProof",
+            "OfflineAuthenticatedArtifactSet",
             "OfflineBase64Bytes",
             "OfflineLanePrivacyWitness",
         ] {
@@ -24587,6 +25996,7 @@ mod tests {
         assert_eq!(
             component_required(schemas, "OfflineTopUpRequest"),
             [
+                "version",
                 "asset",
                 "amount",
                 "current_note",
@@ -24616,6 +26026,7 @@ mod tests {
         assert_eq!(
             component_required(schemas, "OfflineRedeemRequest"),
             [
+                "version",
                 "bundle",
                 "recipient",
                 "amount",
@@ -24625,6 +26036,69 @@ mod tests {
                 "operation_id",
                 "authorization",
             ]
+        );
+        assert_eq!(
+            property_integer_bounds(schemas, "OfflineTopUpRequest", "version"),
+            (4, 4)
+        );
+        assert_eq!(
+            property_integer_bounds(schemas, "OfflineRedeemRequest", "version"),
+            (4, 4)
+        );
+        assert_eq!(
+            component_required(schemas, "OfflineArtifactBinding"),
+            ["version", "generation", "manifest_sha256"]
+        );
+        assert_eq!(
+            property_integer_bounds(schemas, "OfflineArtifactBinding", "version"),
+            (4, 4)
+        );
+        assert_eq!(
+            component_required(schemas, "OfflineSpendBundle"),
+            ["statement", "operation", "recursive_proof"]
+        );
+        assert_eq!(
+            property_ref(schemas, "OfflineSpendBundle", "operation"),
+            "#/components/schemas/OfflineRecursiveOperationVector"
+        );
+        assert_eq!(
+            component_required(schemas, "OfflineSpendProof"),
+            [
+                "verifier_key_id",
+                "public_statement_digest",
+                "proof_envelope",
+            ]
+        );
+        assert_eq!(
+            property_ref(schemas, "OfflineSpendProof", "proof_envelope"),
+            "#/components/schemas/OfflinePastaCycleProofEnvelope"
+        );
+        assert_eq!(
+            property_array_bounds(schemas, "OfflineRecursiveOperationVector", "limbs"),
+            (
+                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_OPERATION_LIMBS_V4 as u64,
+                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_OPERATION_LIMBS_V4 as u64,
+            )
+        );
+        assert_eq!(
+            property_array_bounds(schemas, "OfflineRecursiveStateBoundary", "state_limbs"),
+            (
+                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V2 as u64,
+                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V2 as u64,
+            )
+        );
+        assert_eq!(
+            property_integer_bounds(
+                schemas,
+                "OfflineRecursiveStateBoundary",
+                "layout_version",
+            ),
+            (
+                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STATE_BOUNDARY_VERSION_V2
+                    as u64,
+                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STATE_BOUNDARY_VERSION_V2
+                    as u64,
+            )
         );
         for (property, component) in [
             ("bundle", "OfflineSpendBundle"),
@@ -24685,17 +26159,11 @@ mod tests {
             ))
         );
 
-        let top_up_anchor = component_properties(schemas, "OfflineTopUpAnchor");
         assert_eq!(
-            top_up_anchor
-                .get("version")
-                .and_then(Value::as_object)
-                .and_then(|schema| schema.get("enum"))
-                .and_then(Value::as_array)
-                .and_then(|values| values.first())
-                .and_then(Value::as_u64),
-            Some(2)
+            property_integer_bounds(schemas, "OfflineTopUpAnchor", "version"),
+            (4, 4)
         );
+        let top_up_anchor = component_properties(schemas, "OfflineTopUpAnchor");
         assert_eq!(
             property_ref(schemas, "OfflineTopUpAnchor", "artifact_binding"),
             "#/components/schemas/OfflineArtifactBinding"
@@ -24737,7 +26205,7 @@ mod tests {
                 "finalized_tx_hash",
                 "anchor_digest",
             ],
-            "top-up anchor must expose the current shield-bound V2 shape"
+            "top-up anchor must expose the authoritative shield-bound V4 shape"
         );
         assert!(
             !top_up_anchor.contains_key("topup_anchor_nullifiers"),
@@ -25451,13 +26919,20 @@ mod tests {
                 .get(path)
                 .and_then(Value::as_object)
                 .and_then(|path| path.get("get"))
-                .and_then(Value::as_object)
-                .unwrap_or_else(|| panic!("missing telemetry operator GET operation: {path}"));
+                .and_then(Value::as_object);
+            let expected = catalog_openapi_route_enabled(CatalogHttpMethod::Get, path);
             assert_eq!(
-                operation.get(TOOL_EFFECT_EXTENSION).and_then(Value::as_str),
-                Some("operator"),
-                "{path} must remain operator-only"
+                operation.is_some(),
+                expected,
+                "{path} presence must follow the enabled catalog OpenAPI projection"
             );
+            if let Some(operation) = operation {
+                assert_eq!(
+                    operation.get(TOOL_EFFECT_EXTENSION).and_then(Value::as_str),
+                    Some("operator"),
+                    "{path} must remain operator-only"
+                );
+            }
         }
 
         for route in RouteCatalog::new(CATALOGED_ROUTES)
@@ -27013,6 +28488,8 @@ mod tests {
             "SccpRouteGovernanceDraftRequestV1",
             "SccpRouteGovernanceDraftResponseV1",
             "BridgeFinalityProof",
+            "BridgeFinalityAttestationBodyV1",
+            "BridgeFinalityAttestationV1",
             "BridgeCommitment",
             "BridgeFinalityBundle",
             "SumeragiV2FinalityArtifact",
@@ -27163,6 +28640,12 @@ mod tests {
             "BridgeFinalityProof",
             &["version", "block_header", "finality_artifact"],
             &["version", "block_header", "finality_artifact"],
+        );
+        assert_closed_shape(
+            &schemas,
+            "BridgeFinalityAttestationV1",
+            &["body", "signature"],
+            &["body", "signature"],
         );
         assert_closed_shape(
             &schemas,
@@ -27497,6 +28980,8 @@ mod tests {
         let mut bridge_components = Map::new();
         for name in [
             "BridgeFinalityProof",
+            "BridgeFinalityAttestationBodyV1",
+            "BridgeFinalityAttestationV1",
             "BridgeCommitment",
             "BridgeFinalityBundle",
             "SumeragiV2FinalityArtifact",
@@ -27863,6 +29348,10 @@ mod tests {
                 "#/components/schemas/BridgeFinalityProof",
             ),
             (
+                "/v1/bridge/finality/attestation/{height}",
+                "#/components/schemas/BridgeFinalityAttestationV1",
+            ),
+            (
                 "/v1/bridge/finality/bundle/{height}",
                 "#/components/schemas/BridgeFinalityBundle",
             ),
@@ -27909,6 +29398,66 @@ mod tests {
                 .unwrap_or_else(|| panic!("missing Norito response schema for {path}"));
             assert_eq!(norito.get("type").and_then(Value::as_str), Some("string"));
             assert_eq!(norito.get("format").and_then(Value::as_str), Some("binary"));
+        }
+
+        let attestation = paths
+            .get("/v1/bridge/finality/attestation/{height}")
+            .and_then(Value::as_object)
+            .and_then(|path| path.get("get"))
+            .and_then(Value::as_object)
+            .expect("attestation GET");
+        let challenge = attestation
+            .get("parameters")
+            .and_then(Value::as_array)
+            .and_then(|parameters| {
+                parameters.iter().find(|parameter| {
+                    parameter
+                        .as_object()
+                        .and_then(|parameter| parameter.get("name"))
+                        .and_then(Value::as_str)
+                        == Some("X-Iroha-Finality-Challenge")
+                })
+            })
+            .and_then(Value::as_object)
+            .expect("attestation challenge parameter");
+        assert_eq!(challenge.get("in").and_then(Value::as_str), Some("header"));
+        assert_eq!(
+            challenge.get("required").and_then(Value::as_bool),
+            Some(true)
+        );
+        let responses = attestation
+            .get("responses")
+            .and_then(Value::as_object)
+            .expect("attestation responses");
+        for status in ["200", "400", "404", "406", "503"] {
+            let headers = responses
+                .get(status)
+                .and_then(Value::as_object)
+                .and_then(|response| response.get("headers"))
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("attestation {status} response headers"));
+            assert_eq!(
+                headers
+                    .get("Cache-Control")
+                    .and_then(Value::as_object)
+                    .and_then(|header| header.get("schema"))
+                    .and_then(Value::as_object)
+                    .and_then(|schema| schema.get("const"))
+                    .and_then(Value::as_str),
+                Some("no-store"),
+                "attestation {status} Cache-Control"
+            );
+            assert_eq!(
+                headers
+                    .get("Vary")
+                    .and_then(Value::as_object)
+                    .and_then(|header| header.get("schema"))
+                    .and_then(Value::as_object)
+                    .and_then(|schema| schema.get("const"))
+                    .and_then(Value::as_str),
+                Some("X-Iroha-Finality-Challenge, Accept"),
+                "attestation {status} Vary"
+            );
         }
     }
 
@@ -28041,9 +29590,12 @@ mod tests {
             .and_then(Value::as_object)
             .and_then(|schema| schema.get("$ref"))
             .and_then(Value::as_str);
+        let status_enabled =
+            catalog_openapi_route_enabled(CatalogHttpMethod::Get, "/v1/sumeragi/status");
         assert_eq!(
             status_schema_ref,
-            Some("#/components/schemas/SumeragiStatusResponse")
+            status_enabled.then_some("#/components/schemas/SumeragiStatusResponse"),
+            "authoritative status presence and schema must follow the enabled catalog OpenAPI projection"
         );
 
         let schemas = doc
@@ -28952,6 +30504,208 @@ mod tests {
             assert!(
                 repo_request_properties.contains_key(field),
                 "repo query request should document {field}"
+            );
+        }
+    }
+
+    #[test]
+    fn protected_alias_and_recipient_openapi_requires_canonical_auth_and_exact_401() {
+        let document = generate_spec();
+        let canonical_headers = vec![
+            ("X-Iroha-Account".to_owned(), false),
+            ("X-Iroha-Signature".to_owned(), false),
+            ("X-Iroha-Timestamp-Ms".to_owned(), false),
+            ("X-Iroha-Nonce".to_owned(), false),
+            ("X-Iroha-Witness".to_owned(), false),
+        ];
+
+        for path in ["/v1/aliases/resolve-index", "/v1/aliases/by-account"] {
+            let operation = openapi_operation(&document, path, "post");
+            assert_eq!(
+                operation_header_requirements(operation),
+                canonical_headers,
+                "POST {path} canonical authentication headers"
+            );
+            assert_alias_auth_required_response(operation, path);
+            assert!(
+                operation
+                    .get("responses")
+                    .and_then(Value::as_object)
+                    .is_some_and(|responses| responses.contains_key("403")),
+                "POST {path} must distinguish authorization failure from missing authentication"
+            );
+        }
+
+        let lookup_description = openapi_operation(&document, "/v1/aliases/by-account", "post")
+            .get("description")
+            .and_then(Value::as_str)
+            .expect("alias by-account description");
+        assert!(lookup_description.contains("Canonical request signing is required"));
+        assert!(lookup_description.contains("exact alias-resolution permissions"));
+        assert!(!lookup_description.contains("Unsigned requests are allowed"));
+
+        let exact_resolve = openapi_operation(&document, "/v1/aliases/resolve", "post");
+        assert_eq!(
+            operation_header_requirements(exact_resolve),
+            canonical_headers,
+            "POST /v1/aliases/resolve canonical authentication headers"
+        );
+        assert_alias_auth_required_response(exact_resolve, "/v1/aliases/resolve");
+        assert!(
+            exact_resolve
+                .get("description")
+                .and_then(Value::as_str)
+                .is_some_and(
+                    |description| description.contains("Canonical request signing is required")
+                )
+        );
+        assert!(
+            exact_resolve
+                .get("responses")
+                .and_then(Value::as_object)
+                .is_some_and(|responses| responses.contains_key("403")),
+            "the exact alias resolve route must distinguish permission failure from missing authentication"
+        );
+
+        for (path, reject_code, requires_authorization_response) in [
+            (
+                "/v1/retail/recipients/lookup",
+                "recipient_lookup_signature_required",
+                true,
+            ),
+            (
+                "/v1/retail/recipients/route",
+                "recipient_lookup_signature_required",
+                true,
+            ),
+            (
+                "/v1/fee-sponsor-policies/by-id",
+                "fee_sponsor_policy_signature_required",
+                false,
+            ),
+        ] {
+            let operation = openapi_operation(&document, path, "post");
+            assert_eq!(
+                operation_header_requirements(operation),
+                canonical_headers,
+                "POST {path} canonical authentication headers"
+            );
+            assert_canonical_auth_required_response(operation, path, reject_code);
+            assert_eq!(
+                operation
+                    .get("responses")
+                    .and_then(Value::as_object)
+                    .is_some_and(|responses| responses.contains_key("403")),
+                requires_authorization_response,
+                "POST {path} authorization response contract"
+            );
+        }
+    }
+
+    #[test]
+    fn multisig_read_auth_contract_is_path_specific() {
+        let document = generate_spec();
+        let canonical_headers = vec![
+            ("X-Iroha-Account".to_owned(), false),
+            ("X-Iroha-Signature".to_owned(), false),
+            ("X-Iroha-Timestamp-Ms".to_owned(), false),
+            ("X-Iroha-Nonce".to_owned(), false),
+            ("X-Iroha-Witness".to_owned(), false),
+        ];
+
+        for path in [
+            "/v1/multisig/spec",
+            "/v1/multisig/proposals/query",
+            "/v1/multisig/proposals/lookup",
+            "/v1/multisig/proposals/resolve",
+        ] {
+            let operation = openapi_operation(&document, path, "post");
+            assert_eq!(
+                operation_header_requirements(operation),
+                canonical_headers,
+                "POST {path} conditional canonical authentication headers"
+            );
+            assert_alias_auth_required_response(operation, path);
+            let description = operation
+                .get("description")
+                .and_then(Value::as_str)
+                .unwrap_or_else(|| panic!("POST {path} description"));
+            assert!(
+                description.contains("`multisig_account_id` selector remains available without")
+            );
+            assert!(description.contains("`multisig_account_alias` selector requires"));
+            assert!(description.contains("body fields never establish signer identity"));
+        }
+
+        for path in [
+            "/v1/multisig/approvals/query",
+            "/v1/multisig/approvals/lookup",
+        ] {
+            let operation = openapi_operation(&document, path, "post");
+            assert_eq!(
+                operation_header_requirements(operation),
+                vec![("Authorization".to_owned(), true)],
+                "POST {path} Bearer viewer authentication"
+            );
+            let responses = operation
+                .get("responses")
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("POST {path} responses"));
+            let unauthorized_description = responses
+                .get("401")
+                .and_then(Value::as_object)
+                .and_then(|response| response.get("description"))
+                .and_then(Value::as_str)
+                .unwrap_or_else(|| panic!("POST {path} 401 description"));
+            assert!(unauthorized_description.contains("tx_history_authorization_missing"));
+            assert!(unauthorized_description.contains("tx_history_authorization_invalid"));
+            assert!(
+                operation
+                    .get("description")
+                    .and_then(Value::as_str)
+                    .is_some_and(|description| {
+                        description.contains(
+                            "request-body selector fields never establish viewer identity",
+                        )
+                    })
+            );
+        }
+
+        for path in [
+            "/v1/multisig/approvals/query-for-authority",
+            "/v1/multisig/approvals/lookup-for-authority",
+        ] {
+            let operation = openapi_operation(&document, path, "post");
+            assert_eq!(
+                operation_header_requirements(operation),
+                canonical_headers,
+                "POST {path} canonical authority authentication"
+            );
+            assert_alias_auth_required_response(operation, path);
+            assert!(
+                operation
+                    .get("description")
+                    .and_then(Value::as_str)
+                    .is_some_and(|description| {
+                        description
+                            .contains("authority comes only from canonical request-signing headers")
+                            && description
+                                .contains("request-body fields never establish signer identity")
+                    })
+            );
+        }
+
+        for path in [
+            "/v1/multisig/propose",
+            "/v1/multisig/approve",
+            "/v1/multisig/cancel",
+            "/v1/contracts/call/multisig/propose",
+            "/v1/contracts/call/multisig/approve",
+        ] {
+            let operation = openapi_operation(&document, path, "post");
+            assert!(
+                operation_header_requirements(operation).is_empty(),
+                "POST {path} must retain its body-authenticated write contract"
             );
         }
     }

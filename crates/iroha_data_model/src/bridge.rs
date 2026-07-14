@@ -535,6 +535,13 @@ pub struct BridgeProofRecord {
 /// Current schema version of [`BridgeFinalityProof`].
 pub const BRIDGE_FINALITY_PROOF_VERSION_V1: u8 = 1;
 
+/// Current schema version of [`BridgeFinalityAttestationBodyV1`].
+pub const BRIDGE_FINALITY_ATTESTATION_VERSION_V1: u8 = 1;
+
+/// Domain separating a Torii finality attestation from every other node signature.
+pub const BRIDGE_FINALITY_ATTESTATION_SIGNATURE_DOMAIN_V1: &[u8] =
+    b"iroha:bridge-finality-attestation:v1\0";
+
 /// Exact Sumeragi-v2 finality proof for one Iroha block.
 ///
 /// The durable finality artifact is the single source of consensus context,
@@ -556,6 +563,218 @@ pub struct BridgeFinalityProof {
     pub block_header: crate::block::BlockHeader,
     /// Exact immutable finality artifact persisted by the Sumeragi-v2 apply path.
     pub finality_artifact: crate::block::consensus_v2::finality::V2FinalityArtifact,
+}
+
+/// Exact challenge-bound statement signed by one Torii node for a durable-tip capture.
+///
+/// `genesis_block_hash` is the first entry of the same committed state snapshot whose
+/// durable tip produced `finality_proof`. The challenge is supplied by the caller and
+/// prevents a previously signed capture from being replayed into a later audit run.
+#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[norito(deny_unknown_fields)]
+pub struct BridgeFinalityAttestationBodyV1 {
+    /// Attestation schema version.
+    pub version: u8,
+    /// Unpredictable caller challenge, required to be non-zero.
+    pub challenge: [u8; 32],
+    /// Chain identifier repeated outside the proof for explicit signed routing identity.
+    pub chain_id: crate::ChainId,
+    /// Canonical identity of the node which signs this body.
+    pub node_id: crate::peer::PeerId,
+    /// Hash of the canonical encoded `node_id`.
+    pub node_fingerprint: iroha_crypto::Hash,
+    /// Actual committed block hash at height one in the captured state snapshot.
+    pub genesis_block_hash: iroha_crypto::HashOf<crate::block::BlockHeader>,
+    /// Exact Kura-backed finality proof for the committed genesis block.
+    ///
+    /// This binds the genesis execution commitment and post-state root, not only
+    /// the signed block header/payload identity.
+    pub genesis_finality_proof: BridgeFinalityProof,
+    /// Authoritative reducer-owned status captured for the same durable tip.
+    pub status: crate::block::consensus_v2::SumeragiV2Status,
+    /// Exact current-source proof for that durable tip.
+    pub finality_proof: BridgeFinalityProof,
+}
+
+impl BridgeFinalityAttestationBodyV1 {
+    /// Return the domain-separated typed digest signed by the reporting node.
+    #[must_use]
+    pub fn signing_hash(&self) -> iroha_crypto::HashOf<Self> {
+        let encoded = self.encode();
+        iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::new_from_chunks(&[
+            BRIDGE_FINALITY_ATTESTATION_SIGNATURE_DOMAIN_V1,
+            &encoded,
+        ]))
+    }
+
+    /// Validate all non-cryptographic duplicate bindings inside the signed body.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BridgeFinalityAttestationValidationError`] when the version,
+    /// challenge, node identity, reducer status, or embedded proof disagree.
+    pub fn validate_consistency(&self) -> Result<(), BridgeFinalityAttestationValidationError> {
+        use crate::block::consensus_v2::PROTOCOL_VERSION;
+
+        if self.version != BRIDGE_FINALITY_ATTESTATION_VERSION_V1 {
+            return Err(
+                BridgeFinalityAttestationValidationError::UnsupportedAttestationVersion {
+                    expected: BRIDGE_FINALITY_ATTESTATION_VERSION_V1,
+                    actual: self.version,
+                },
+            );
+        }
+        if self.challenge.iter().all(|byte| *byte == 0) {
+            return Err(BridgeFinalityAttestationValidationError::ZeroChallenge);
+        }
+        let expected_node_fingerprint = iroha_crypto::Hash::new(self.node_id.encode());
+        if self.node_fingerprint != expected_node_fingerprint {
+            return Err(BridgeFinalityAttestationValidationError::NodeFingerprintMismatch);
+        }
+        if self.status.node_fingerprint != self.node_fingerprint {
+            return Err(BridgeFinalityAttestationValidationError::StatusNodeMismatch);
+        }
+        self.status
+            .validate()
+            .map_err(|_| BridgeFinalityAttestationValidationError::InvalidStatus)?;
+        if self.status.restart_required {
+            return Err(BridgeFinalityAttestationValidationError::RestartRequired);
+        }
+        if self.status.protocol_version != PROTOCOL_VERSION {
+            return Err(BridgeFinalityAttestationValidationError::ProtocolVersionMismatch);
+        }
+        validate_bridge_finality_proof_structure(&self.genesis_finality_proof, &self.chain_id)
+            .map_err(BridgeFinalityAttestationValidationError::InvalidGenesisProof)?;
+        let genesis_artifact = &self.genesis_finality_proof.finality_artifact;
+        if genesis_artifact.protocol_version != self.status.protocol_version {
+            return Err(BridgeFinalityAttestationValidationError::ProtocolVersionMismatch);
+        }
+        if genesis_artifact.height != 1 {
+            return Err(BridgeFinalityAttestationValidationError::GenesisProofHeightMismatch);
+        }
+        if genesis_artifact.block_hash != self.genesis_block_hash {
+            return Err(BridgeFinalityAttestationValidationError::GenesisProofBlockMismatch);
+        }
+        validate_bridge_finality_proof_structure(&self.finality_proof, &self.chain_id)
+            .map_err(BridgeFinalityAttestationValidationError::InvalidProof)?;
+        let artifact = &self.finality_proof.finality_artifact;
+        if artifact.height == 1 && self.genesis_finality_proof != self.finality_proof {
+            return Err(BridgeFinalityAttestationValidationError::HeightOneProofMismatch);
+        }
+        if artifact.protocol_version != self.status.protocol_version {
+            return Err(BridgeFinalityAttestationValidationError::ProtocolVersionMismatch);
+        }
+        if self.status.last_committed_height != artifact.height {
+            return Err(BridgeFinalityAttestationValidationError::StatusHeightMismatch);
+        }
+        if self.status.last_committed_subject.as_ref() != Some(&artifact.subject) {
+            return Err(BridgeFinalityAttestationValidationError::StatusSubjectMismatch);
+        }
+        let Some(status_commit) = self.status.last_commit_qc.as_ref() else {
+            return Err(BridgeFinalityAttestationValidationError::StatusCommitMissing);
+        };
+        if status_commit.certificate != artifact.commit_qc.as_ref() {
+            return Err(BridgeFinalityAttestationValidationError::StatusCommitMismatch);
+        }
+        Ok(())
+    }
+}
+
+/// One node's signature over an exact challenge-bound durable-tip statement.
+#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[norito(deny_unknown_fields)]
+pub struct BridgeFinalityAttestationV1 {
+    /// Complete signed statement.
+    pub body: BridgeFinalityAttestationBodyV1,
+    /// Signature made by `body.node_id` over `body.signing_hash()`.
+    pub signature: iroha_crypto::SignatureOf<BridgeFinalityAttestationBodyV1>,
+}
+
+impl BridgeFinalityAttestationV1 {
+    /// Validate the signed body and its reporting-node signature.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BridgeFinalityAttestationValidationError`] for an inconsistent
+    /// body or a signature which does not verify under the declared node key.
+    pub fn verify(&self) -> Result<(), BridgeFinalityAttestationValidationError> {
+        self.body.validate_consistency()?;
+        self.signature
+            .verify_hash(self.body.node_id.public_key(), self.body.signing_hash())
+            .map_err(|_| BridgeFinalityAttestationValidationError::InvalidNodeSignature)
+    }
+}
+
+/// Failure while validating a challenge-bound node finality attestation.
+#[allow(variant_size_differences)]
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum BridgeFinalityAttestationValidationError {
+    /// Attestation schema version is unsupported.
+    #[error("bridge finality attestation version {actual} is unsupported; expected {expected}")]
+    UnsupportedAttestationVersion {
+        /// Supported version.
+        expected: u8,
+        /// Version carried in the signed body.
+        actual: u8,
+    },
+    /// A zero challenge is replayable and therefore forbidden.
+    #[error("bridge finality attestation challenge must be non-zero")]
+    ZeroChallenge,
+    /// The signed node fingerprint is not the hash of the canonical node id.
+    #[error("bridge finality attestation node fingerprint does not match node id")]
+    NodeFingerprintMismatch,
+    /// The authoritative status belongs to another node.
+    #[error("bridge finality attestation status belongs to another node")]
+    StatusNodeMismatch,
+    /// The reducer status is structurally invalid.
+    #[error("bridge finality attestation contains an invalid Sumeragi-v2 status")]
+    InvalidStatus,
+    /// The reporting node is fail-stopped.
+    #[error("bridge finality attestation status requires a node restart")]
+    RestartRequired,
+    /// Status and proof do not use the compiled current protocol.
+    #[error("bridge finality attestation protocol versions do not match")]
+    ProtocolVersionMismatch,
+    /// The exact proof is structurally invalid or belongs to another chain.
+    #[error("bridge finality attestation proof is invalid: {0}")]
+    InvalidProof(BridgeFinalityVerifyError),
+    /// The height-one proof is structurally invalid or belongs to another chain.
+    #[error("bridge finality attestation genesis proof is invalid: {0}")]
+    InvalidGenesisProof(BridgeFinalityVerifyError),
+    /// The genesis proof is not for height one.
+    #[error("bridge finality attestation genesis proof is not for height one")]
+    GenesisProofHeightMismatch,
+    /// The genesis proof does not authenticate the declared committed genesis hash.
+    #[error("bridge finality attestation genesis proof block does not match genesis block hash")]
+    GenesisProofBlockMismatch,
+    /// At height one, genesis and tip must be the exact same durable Kura proof.
+    #[error("bridge finality attestation height-one genesis and tip proofs do not match exactly")]
+    HeightOneProofMismatch,
+    /// Status and proof name different committed heights.
+    #[error("bridge finality attestation status and proof heights do not match")]
+    StatusHeightMismatch,
+    /// Status and proof name different committed block subjects.
+    #[error("bridge finality attestation status and proof subjects do not match")]
+    StatusSubjectMismatch,
+    /// The status does not expose its latest authenticated durable CommitQC.
+    #[error("bridge finality attestation status has no durable CommitQC")]
+    StatusCommitMissing,
+    /// Status and proof carry different exact CommitQCs.
+    #[error("bridge finality attestation status and proof CommitQCs do not match")]
+    StatusCommitMismatch,
+    /// The signature does not verify under the declared canonical node key.
+    #[error("bridge finality attestation node signature is invalid")]
+    InvalidNodeSignature,
 }
 
 /// Commitment covering a block hash and its exact Sumeragi-v2 context.
@@ -992,7 +1211,7 @@ fn verify_successor_bridge_finality_proof(
 mod tests {
     use std::num::NonZeroU64;
 
-    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature, SignatureOf};
     use iroha_primitives::numeric::Numeric;
     use iroha_version::DecodeAll;
 
@@ -1029,6 +1248,74 @@ mod tests {
 
     fn make_boundary_v2_fixture(chain_id: &str) -> V2Fixture {
         make_v2_fixture_config(chain_id, &[40, 30, 20, 10], &[0, 1, 2], true)
+    }
+
+    fn attestation_for_fixture(fixture: &V2Fixture) -> BridgeFinalityAttestationV1 {
+        use crate::block::consensus_v2::{
+            SumeragiV2BodyState, SumeragiV2CommitQcStatus, SumeragiV2HeightContextStatus,
+            SumeragiV2Status, SumeragiV2StatusPhase,
+        };
+
+        let artifact = &fixture.proof.finality_artifact;
+        let context = &artifact.height_context;
+        let signer = &fixture.keys[0];
+        let node_id = PeerId::new(signer.public_key().clone());
+        let signed_power = artifact
+            .commit_qc
+            .signers
+            .iter()
+            .map(|index| context.roster[usize::try_from(*index).expect("signer index")].power)
+            .sum();
+        let status = SumeragiV2Status {
+            protocol_version: wire::PROTOCOL_VERSION,
+            node_fingerprint: Hash::new(node_id.encode()),
+            build_fingerprint: Hash::new(b"attestation fixture build"),
+            config_fingerprint: Hash::new(b"attestation fixture config"),
+            restart_required: false,
+            height_context_id: context.id(),
+            height: artifact.height,
+            view: artifact.commit_qc.round.view,
+            phase: SumeragiV2StatusPhase::PendingApply,
+            leader: context.leader(artifact.commit_qc.round.view),
+            locked_prepare_qc: None,
+            highest_prepare_qc: None,
+            last_timeout_certificate: None,
+            body_state: SumeragiV2BodyState::Applied,
+            pending_persistence_id: None,
+            last_committed_height: artifact.height,
+            last_committed_subject: Some(artifact.subject),
+            height_context: SumeragiV2HeightContextStatus {
+                epoch: context.epoch,
+                epoch_end_height: context.epoch_end_height,
+                mode: context.mode,
+                epoch_seed: context.leader_seed,
+                validator_count: u32::try_from(context.roster.len()).expect("validator count"),
+                quorum: context.quorum,
+            },
+            last_commit_qc: Some(SumeragiV2CommitQcStatus {
+                certificate: artifact.commit_qc.as_ref(),
+                validator_count: u32::try_from(context.roster.len()).expect("validator count"),
+                signer_count: u32::try_from(artifact.commit_qc.signers.len())
+                    .expect("signer count"),
+                min_signers: context.quorum.min_signers,
+                signed_power,
+                total_power: context.quorum.total_power,
+            }),
+        };
+        let body = BridgeFinalityAttestationBodyV1 {
+            version: BRIDGE_FINALITY_ATTESTATION_VERSION_V1,
+            challenge: *Hash::new(b"unpredictable finality capture challenge").as_ref(),
+            chain_id: context.chain_id.clone(),
+            node_fingerprint: status.node_fingerprint,
+            node_id,
+            genesis_block_hash: fixture.proof.block_header.hash(),
+            genesis_finality_proof: fixture.proof.clone(),
+            status,
+            finality_proof: fixture.proof.clone(),
+        };
+        let signature = SignatureOf::try_from_hash(signer.private_key(), body.signing_hash())
+            .expect("sign finality attestation fixture");
+        BridgeFinalityAttestationV1 { body, signature }
     }
 
     #[expect(
@@ -1996,6 +2283,63 @@ mod tests {
             .finality_artifact
             .verify()
             .expect("roundtripped proof remains cryptographically valid");
+    }
+
+    #[test]
+    fn bridge_finality_attestation_binds_challenge_node_genesis_status_and_proof() {
+        let fixture = make_v2_fixture("attested-proof-chain");
+        let attestation = attestation_for_fixture(&fixture);
+        attestation.verify().expect("valid node attestation");
+
+        let encoded = attestation.encode();
+        let decoded = BridgeFinalityAttestationV1::decode_all(&mut encoded.as_slice())
+            .expect("decode finality attestation");
+        assert_eq!(decoded, attestation);
+        decoded.verify().expect("roundtripped attestation verifies");
+
+        let mut changed_challenge = attestation.clone();
+        changed_challenge.body.challenge = *Hash::new(b"another capture challenge").as_ref();
+        assert_eq!(
+            changed_challenge.verify(),
+            Err(BridgeFinalityAttestationValidationError::InvalidNodeSignature)
+        );
+
+        let mut changed_genesis = attestation.clone();
+        changed_genesis.body.genesis_block_hash =
+            HashOf::from_untyped_unchecked(Hash::new(b"another committed genesis"));
+        assert_eq!(
+            changed_genesis.verify(),
+            Err(BridgeFinalityAttestationValidationError::GenesisProofBlockMismatch)
+        );
+
+        let alternate = make_v2_fixture("attested-proof-chain");
+        let mut substituted_genesis_proof = attestation;
+        substituted_genesis_proof.body.genesis_block_hash = alternate.proof.block_header.hash();
+        substituted_genesis_proof.body.genesis_finality_proof = alternate.proof;
+        assert_eq!(
+            substituted_genesis_proof.verify(),
+            Err(BridgeFinalityAttestationValidationError::HeightOneProofMismatch)
+        );
+    }
+
+    #[test]
+    fn bridge_finality_attestation_rejects_replayable_or_mixed_node_status() {
+        let fixture = make_v2_fixture("strict-attested-proof-chain");
+        let attestation = attestation_for_fixture(&fixture);
+
+        let mut zero_challenge = attestation.clone();
+        zero_challenge.body.challenge = [0; 32];
+        assert_eq!(
+            zero_challenge.body.validate_consistency(),
+            Err(BridgeFinalityAttestationValidationError::ZeroChallenge)
+        );
+
+        let mut mixed_node = attestation;
+        mixed_node.body.status.node_fingerprint = Hash::new(b"another Torii node");
+        assert_eq!(
+            mixed_node.body.validate_consistency(),
+            Err(BridgeFinalityAttestationValidationError::StatusNodeMismatch)
+        );
     }
 
     #[cfg(feature = "json")]

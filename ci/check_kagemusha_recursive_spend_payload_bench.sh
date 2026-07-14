@@ -21,19 +21,32 @@ swift_qr_tests = (root / "IrohaSwift/Tests/IrohaSwiftTests/KagemushaQRStreamTest
 swift_nfc_tests = (root / "IrohaSwift/Tests/IrohaSwiftTests/KagemushaNFCTests.swift").read_text(encoding="utf-8")
 
 def rust_integer(name: str) -> int:
-    match = re.search(rf"\b{name}\s*:\s*[^=]+\s*=\s*([0-9_]+)\s*;", rust)
+    match = re.search(rf"\b{name}\s*:\s*[^=]+\s*=\s*([0-9_* ]+)\s*;", rust)
     if match is None:
         raise SystemExit(f"missing Rust constant {name}")
-    return int(match.group(1).replace("_", ""))
+    factors = [part.strip().replace("_", "") for part in match.group(1).split("*")]
+    if not factors or any(not factor.isdigit() for factor in factors):
+        raise SystemExit(f"noncanonical Rust integer expression {name}")
+    result = 1
+    for factor in factors:
+        result *= int(factor)
+    return result
 
 raw_limit = rust_integer("KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_ARCHIVE_BYTES_V2")
+raw_limit_v4 = rust_integer("KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_ARCHIVE_BYTES_V4")
 branch_depth = rust_integer("KAGEMUSHA_RECURSIVE_SPEND_MAX_BRANCH_DEPTH_V2")
 peer_hop_limit = rust_integer("KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2")
 tag_bytes = rust_integer("KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_TAG_BYTES_V2")
-if (raw_limit, branch_depth, peer_hop_limit, tag_bytes) != (32_768, 64, 8, 24):
+if (raw_limit, raw_limit_v4, branch_depth, peer_hop_limit, tag_bytes) != (
+    32_768,
+    32 * 1024 * 1024,
+    64,
+    8,
+    24,
+):
     raise SystemExit(
         "unexpected Kagemusha peer bounds: "
-        f"raw={raw_limit}, branch_depth={branch_depth}, "
+        f"v2_raw={raw_limit}, v4_raw={raw_limit_v4}, branch_depth={branch_depth}, "
         f"peer_hops={peer_hop_limit}, transition_tag={tag_bytes}"
     )
 
@@ -41,10 +54,9 @@ backend = re.search(
     r"KAGEMUSHA_RECURSIVE_SPEND_PROOF_BACKEND_AVAILABLE\s*:\s*bool\s*=\s*(true|false)\s*;",
     rust,
 )
-if backend is None or backend.group(1) != "false":
+if backend is None:
     raise SystemExit(
-        "production Kagemusha must remain unavailable until the exact full-archive "
-        "depth-64/eight-peer-hop relation is backed by the production proof implementation"
+        "missing the explicit Kagemusha promotion availability marker"
     )
 
 text_limit = 12 * 1_024
@@ -63,7 +75,9 @@ if raw_limit <= text_archive_limit:
     raise SystemExit("protocol raw archive cap must remain independent of the text sub-cap")
 
 for needle in (
-    "public static let maximumPeerArchiveBytes = 32_768",
+    "public static let maximumPeerArchiveBytesV2 = 32 * 1024",
+    "public static let maximumPeerArchiveBytesV4 = 32 * 1024 * 1024",
+    "public static let maximumPeerArchiveBytes = maximumPeerArchiveBytesV4",
     "public static let maximumPeerTextEnvelopeBytes = 12 * 1024",
 ):
     if needle not in swift:
@@ -72,12 +86,12 @@ for prefix in ("PKK2R.", "PKK2P.", "PKK2A."):
     if f'= "{prefix}"' not in transport or len(prefix.encode("ascii")) != 6:
         raise SystemExit(f"missing canonical six-byte peer prefix: {prefix}")
 
-for depth, peer_hops, raw_bytes, text_bytes in (
-    (1, 1, "6_677", "8_909"),
-    (8, 8, "6_848", "9_137"),
+for depth, peer_hops, raw_bytes in (
+    (1, 1, "6_677"),
+    (8, 8, "6_848"),
 ):
     qr_needle = f'(\"payment-depth-{depth}-hop-{peer_hops}\", {raw_bytes},'
-    nfc_needle = f'(\"payment-depth-{depth}-hop-{peer_hops}\", {text_bytes},'
+    nfc_needle = f'(\"payment-depth-{depth}-hop-{peer_hops}\", {raw_bytes},'
     if qr_needle not in swift_qr_tests:
         raise SystemExit(f"Swift QR measurement drifted: {qr_needle}")
     if nfc_needle not in swift_nfc_tests:
@@ -89,8 +103,9 @@ for retired_hop in (16, 32, 64):
 
 print(
     "Kagemusha peer transport bounds are internally consistent: "
-    "the protocol permits 32,768 raw bytes and eight peer hops, while the "
-    "12 KiB text envelope derives an independent 9,211-byte raw sub-cap; production remains "
-    "unavailable pending the recursive proof backend."
+    "the ABI-20/V4 archive permits 32 MiB, the retained V2 request-leaf text measurement remains bounded by "
+    "32,768 raw bytes and eight peer hops, and the "
+    "12 KiB text envelope derives an independent 9,211-byte raw sub-cap; runtime proof use "
+    "still requires the authenticated installed ABI-20/V4 artifact set and promotion evidence."
 )
 PY

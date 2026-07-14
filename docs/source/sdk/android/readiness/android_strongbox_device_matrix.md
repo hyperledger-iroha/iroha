@@ -1,9 +1,10 @@
 # Kagemusha Android production matrix
 
 This matrix is the physical-device release gate for the single Kagemusha
-offline-cash protocol. Every accepted slot is bound to native bridge ABI 19,
-the packaged Kagemusha recursive-spend prover, the application signing
-certificate, the wallet policy, and the exact application artifact.
+offline-cash protocol. Every accepted slot is bound to native bridge ABI 20,
+manifest V4, the authenticated exact-eight recursive artifact inventory, the
+packaged Kagemusha recursive-spend prover, the application signing certificate,
+the wallet policy, and the exact application artifact.
 
 ## Required device families
 
@@ -29,7 +30,8 @@ satisfy this gate.
 - the app package, signing-certificate digest, Kagemusha wallet artifact and
   policy digests;
 - the StrongBox/KeyMint certificate chain and challenge;
-- native bridge ABI 19 and successful recursive-spend FFI/JNI/prover states;
+- native bridge ABI 20, manifest V4, exact Eq/Ep artifact identities, and
+  successful recursive-spend FFI/JNI/prover states;
 - one-use key rotation and rollback rejection;
 - QR, NFC HCE, and nearby-offline transfer transcripts;
 - the exact raw test commands and every referenced artifact digest.

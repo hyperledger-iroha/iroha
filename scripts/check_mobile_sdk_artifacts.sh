@@ -94,27 +94,31 @@ FAILURES=0
 # The first mobile release is one exact ABI-20/V4 contract. Keep the complete
 # Kagemusha C export allow-list here so Apple archives, Android shared objects,
 # checked-out Rust, and the checked-in header are all compared against the same
-# surface. V2 suffixes below are supporting request/finality primitives used by
-# the V4 lifecycle; V1/V2/V3 lifecycle and V3 artifact entrypoints are retired.
+# surface. V2 suffixes below are unchanged note, authorization, membership, and
+# acknowledgement primitives reused by V4; all recursive V2/V3 aliases are retired.
 KAGEMUSHA_C_SYMBOLS=(
   connect_norito_kagemusha_recursive_spend_capabilities_v4
-  connect_norito_kagemusha_topup_finality_verify_v2
-  connect_norito_kagemusha_topup_shield_build_unsigned_v2
+  connect_norito_kagemusha_topup_finality_verify_v4
+  connect_norito_kagemusha_topup_shield_build_unsigned_v4
   connect_norito_kagemusha_recursive_spend_artifact_begin_v4
   connect_norito_kagemusha_recursive_spend_artifact_write_v4
   connect_norito_kagemusha_recursive_spend_artifact_finalize_v4
   connect_norito_kagemusha_recursive_spend_artifact_cancel_v4
   connect_norito_kagemusha_recursive_spend_artifact_set_install_v4
   connect_norito_kagemusha_recursive_spend_artifact_set_is_installed_v4
+  connect_norito_kagemusha_recursive_spend_installed_manifest_sha256_v4
   connect_norito_kagemusha_recursive_spend_artifact_set_uninstall_v4
+  connect_norito_kagemusha_output_membership_frontier_build_v4
+  connect_norito_kagemusha_output_membership_paths_derive_v4
+  connect_norito_kagemusha_recursive_spend_branch_validate_v4
   connect_norito_kagemusha_recursive_spend_init_v4
-  connect_norito_kagemusha_recursive_spend_topup_unsigned_payload_digest_v2
-  connect_norito_kagemusha_recursive_spend_topup_finalize_request_v2
-  connect_norito_kagemusha_recursive_spend_topup_v2
+  connect_norito_kagemusha_recursive_spend_topup_unsigned_payload_digest_v4
+  connect_norito_kagemusha_recursive_spend_topup_finalize_request_v4
+  connect_norito_kagemusha_recursive_spend_topup_v4
   connect_norito_kagemusha_recursive_spend_append_v4
   connect_norito_kagemusha_recursive_spend_verify_v4
-  connect_norito_kagemusha_recursive_spend_redeem_unsigned_payload_digest_v2
-  connect_norito_kagemusha_recursive_spend_redeem_finalize_request_v2
+  connect_norito_kagemusha_recursive_spend_redeem_unsigned_payload_digest_v4
+  connect_norito_kagemusha_recursive_spend_redeem_finalize_request_v4
   connect_norito_kagemusha_recursive_spend_redeem_v4
   connect_norito_kagemusha_receiver_key_reference_v2
   connect_norito_kagemusha_recipient_output_derive_v2
@@ -127,10 +131,9 @@ KAGEMUSHA_C_SYMBOLS=(
   connect_norito_kagemusha_receiver_acknowledgement_signing_bytes_v2
   connect_norito_kagemusha_receiver_acknowledgement_create_v2
   connect_norito_kagemusha_receiver_acknowledgement_verify_v2
-  connect_norito_kagemusha_recursive_spend_peer_payment_from_split_v2
-  connect_norito_kagemusha_recursive_spend_peer_payment_validate_v2
-  connect_norito_kagemusha_recursive_spend_bundle_summary_v2
-  connect_norito_kagemusha_recursive_spend_build_split_intent_v2
+  connect_norito_kagemusha_recursive_spend_peer_payment_from_split_v4
+  connect_norito_kagemusha_recursive_spend_peer_payment_validate_v4
+  connect_norito_kagemusha_recursive_spend_bundle_summary_v4
 )
 
 REQUIRED_BRIDGE_SYMBOLS=(
@@ -156,6 +159,7 @@ KAGEMUSHA_JNI_METHODS=(
   nativeBridgeAbiVersion
   nativeBuildAppendRequestV4
   nativeBuildInitRequestV4
+  nativeBuildOutputMembershipFrontierV4
   nativeBuildOutputMembershipPathsV4
   nativeBuildRedeemRequestV4
   nativeBuildRedeemV4
@@ -163,6 +167,7 @@ KAGEMUSHA_JNI_METHODS=(
   nativeCreateAcknowledgementV2
   nativeCreateAuthorizationV2
   nativeCreateRecipientRequestV2
+  nativeDeriveOutputMembershipPathsV4
   nativeFinalizeRedeemV2
   nativeFinalizeTopUpV2
   nativeInitSpendV4
@@ -183,6 +188,7 @@ KAGEMUSHA_JNI_METHODS=(
   nativeVerifyAcknowledgementV2
   nativeVerifyRecipientRequestV2
   nativeVerifySpendV4
+  nativeValidateSpendableBranchV4
 )
 
 relpath() {

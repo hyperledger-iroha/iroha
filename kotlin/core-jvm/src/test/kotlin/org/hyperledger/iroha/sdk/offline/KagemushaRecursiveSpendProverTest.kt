@@ -32,27 +32,60 @@ class KagemushaRecursiveSpendProverTest {
     @Test
     fun artifactContractAndInventoryAreCurrentOnly() {
         assertEquals(20, KagemushaRecursiveSpendProver.REQUIRED_NATIVE_BRIDGE_ABI_VERSION)
-        assertEquals(10, KagemushaRecursiveSpendProver.ARTIFACT_COUNT)
+        assertEquals(8, KagemushaRecursiveSpendProver.ARTIFACT_COUNT)
         assertEquals(2, KagemushaRecursiveSpendProver.MAXIMUM_INPUTS_PER_TRANSITION)
         assertEquals(2, KagemushaRecursiveSpendProver.MAXIMUM_LOCAL_APPEND_BUILDER_INPUTS)
         assertEquals(2, KagemushaRecursiveSpendProver.MAXIMUM_BRANCH_CLAIMS)
         assertEquals(8, KagemushaRecursiveSpendProver.MAXIMUM_PEER_HOPS)
-        assertEquals(32 * 1024, KagemushaRecursiveSpendProver.MAX_PEER_ARCHIVE_BYTES)
+        assertEquals(
+            16 * 1024 * 1024,
+            KagemushaRecursiveSpendProver.MAXIMUM_RECURSIVE_PROOF_PAIR_BYTES_V4,
+        )
+        assertEquals(32 * 1024, KagemushaRecursiveSpendProver.MAX_PEER_ARCHIVE_BYTES_V2)
+        assertEquals(32 * 1024 * 1024, KagemushaRecursiveSpendProver.MAX_PEER_ARCHIVE_BYTES_V4)
+        assertEquals(
+            6_488_064,
+            KagemushaRecursiveSpendProver.MAX_TOP_UP_PROVENANCE_ARCHIVE_BYTES_V4,
+        )
+        assertEquals(
+            KagemushaRecursiveSpendProver.MAX_PEER_ARCHIVE_BYTES_V4,
+            KagemushaRecursiveSpendProver.MAX_PEER_ARCHIVE_BYTES,
+        )
+        assertEquals(32 * 1024, KagemushaPeerTransportContract.MAXIMUM_ARCHIVE_BYTES_V2)
+        assertEquals(32 * 1024 * 1024, KagemushaPeerTransportContract.MAXIMUM_ARCHIVE_BYTES_V4)
+        assertEquals(
+            KagemushaPeerTransportContract.MAXIMUM_ARCHIVE_BYTES_V4,
+            KagemushaPeerTransportContract.MAXIMUM_ARCHIVE_BYTES,
+        )
         assertEquals(9_211, KagemushaRecursiveSpendProver.MAX_PEER_TEXT_ARCHIVE_BYTES)
+        assertEquals(
+            512 * 1024,
+            KagemushaRecursiveSpendProver.MAX_TORII_TOP_UP_REQUEST_BYTES_V4,
+        )
+        assertEquals(
+            48 * 1024 * 1024,
+            KagemushaRecursiveSpendProver.MAX_TORII_REDEEM_REQUEST_BYTES_V4,
+        )
         assertEquals(16, KagemushaRecursiveSpendProver.CONFIDENTIAL_TREE_DEPTH)
+        assertEquals(
+            4 * 1024,
+            KagemushaRecursiveSpendProver.MAX_OUTPUT_MEMBERSHIP_FRONTIER_ARCHIVE_BYTES_V4,
+        )
+        assertEquals(
+            16 * 1024,
+            KagemushaRecursiveSpendProver.MAX_OUTPUT_MEMBERSHIP_PATHS_ARCHIVE_BYTES_V4,
+        )
         assertEquals(
             "kagemusha.offline.recursive_spend.artifact_manifest.v4",
             KagemushaRecursiveSpendProver.ARTIFACT_MANIFEST_SCHEMA,
         )
         assertEquals(
             listOf(
-                "step-eq.parameters.krv4",
-                "step-eq.circuit-params.krv4",
+                "step-eq.params-ipa.krv4",
                 "step-eq.proving-key.krv4",
                 "step-eq.verifying-key.krv4",
                 "step-eq.bootstrap-witness.krv4",
-                "step-ep.parameters.krv4",
-                "step-ep.circuit-params.krv4",
+                "step-ep.params-ipa.krv4",
                 "step-ep.proving-key.krv4",
                 "step-ep.verifying-key.krv4",
                 "step-ep.bootstrap-witness.krv4",
@@ -92,6 +125,8 @@ class KagemushaRecursiveSpendProverTest {
                 "appendSpendV4",
                 "buildAppendRequestV4",
                 "buildInitRequestV4",
+                "buildOutputMembershipFrontierV4",
+                "buildTopUpProvenanceV4",
                 "buildRedeemV4",
                 "buildRedeemRequestV4",
                 "buildVerifyRequestV4",
@@ -101,6 +136,7 @@ class KagemushaRecursiveSpendProverTest {
                 "decodeInitResultV4",
                 "decodeNoteMembershipWitness",
                 "decodeNoteOpening",
+                "decodeOutputMembershipFrontierV4",
                 "decodePeerPayment",
                 "decodeRedeemRequestV4",
                 "decodeReceiverAcknowledgement",
@@ -110,13 +146,16 @@ class KagemushaRecursiveSpendProverTest {
                 "decodeSplitResultV4",
                 "decodeTopUpAnchorV4",
                 "decodeTopUpFinalityEvidenceV4",
+                "decodeTopUpProvenanceV4",
                 "decodeTopUpRequest",
                 "decodeVerifyRequestV4",
                 "decodeVerifyResultV4",
                 "decodeTopUpFinalityRosterArtifact",
+                "deriveOutputMembershipPathsV4",
                 "finalizeRedeemV4",
                 "finalizeTopUp",
                 "initSpendV4",
+                "installedArtifactManifestSha256V4",
                 "isArtifactStreamingAvailable",
                 "isProofBackendAvailable",
                 "newToriiClient",
@@ -127,15 +166,24 @@ class KagemushaRecursiveSpendProverTest {
                 "prepareTopUp",
                 "projectOperationStatus",
                 "projectPeerPayment",
+                "projectInitResultV4",
+                "projectRedeemBuildResultV4",
                 "projectRecipientPaymentRequest",
                 "projectReadiness",
+                "projectSplitResultV4",
+                "projectVerifyResultV4",
+                "restoreInitBranchV4",
+                "restorePeerPaymentBranchV4",
+                "restoreRedeemChangeBranchV4",
                 "restoreSpendableBranchV4",
+                "restoreSplitChangeBranchV4",
                 "signAcknowledgement",
                 "signRecipientPaymentRequest",
                 "signRequestAuthorization",
                 "verifyAcknowledgement",
                 "verifyRecipientPaymentRequest",
                 "verifySpendV4",
+                "validateTopUpProvenanceV4",
             ),
             methods,
         )
@@ -164,6 +212,18 @@ class KagemushaRecursiveSpendProverTest {
         assertTrue("branchClaims" in branchMethods)
         assertTrue("bundleDigest" in branchMethods)
         assertFalse("branchClaim" in branchMethods)
+
+        val initProjectionMethods =
+            KagemushaRecursiveSpendProver.InitProjectionV4::class.java.declaredMethods
+                .map { it.name }
+                .toSet()
+        assertTrue("getBranch" in initProjectionMethods)
+        assertTrue("getTopUpProvenance" in initProjectionMethods)
+        val redeemProjectionMethods =
+            KagemushaRecursiveSpendProver.RedeemBuildProjection::class.java.declaredMethods
+                .map { it.name }
+                .toSet()
+        assertTrue("getChangeTopUpProvenance" in redeemProjectionMethods)
         assertFalse("branchClaimDigest" in branchMethods)
         assertFalse("parentBranchClaimDigest" in branchMethods)
         for (name in listOf(
@@ -184,7 +244,14 @@ class KagemushaRecursiveSpendProverTest {
         }
         val appendNative = KagemushaRecursiveSpendProver::class.java.declaredMethods
             .single { it.name == "nativeBuildAppendRequestV4" }
-        assertTrue(appendNative.parameterTypes.take(3).all { it == Array<ByteArray>::class.java })
+        assertTrue(appendNative.parameterTypes.take(4).all { it == Array<ByteArray>::class.java })
+        val verifyBuilder = KagemushaRecursiveSpendProver::class.java.declaredMethods.single {
+            it.name == "buildVerifyRequestV4" && java.lang.reflect.Modifier.isPublic(it.modifiers)
+        }
+        assertEquals(
+            KagemushaRecursiveSpendProver.TopUpProvenanceV4::class.java,
+            verifyBuilder.parameterTypes[2],
+        )
         assertEquals(
             1,
             KagemushaRecursiveSpendProver::class.java.declaredMethods.count {
@@ -194,11 +261,53 @@ class KagemushaRecursiveSpendProverTest {
     }
 
     @Test
+    fun outputMembershipFrontierIsPersistableAndRestoreIsProofBound() {
+        val bytes = archive("connect_norito_bridge::KagemushaOutputMembershipFrontierV4")
+        val frontier = KagemushaRecursiveSpendProver.decodeOutputMembershipFrontierV4(bytes)
+        bytes[bytes.lastIndex] = (bytes.last() + 1).toByte()
+        val first = frontier.noritoEncoded()
+        first[first.lastIndex] = (first.last() + 1).toByte()
+        assertFalse(first.contentEquals(frontier.noritoEncoded()))
+
+        val build = KagemushaRecursiveSpendProver::class.java.getDeclaredMethod(
+            "nativeBuildOutputMembershipFrontierV4",
+            Int::class.javaPrimitiveType,
+            ByteArray::class.java,
+            ByteArray::class.java,
+            ByteArray::class.java,
+        )
+        assertEquals(ByteArray::class.java, build.returnType)
+        val derive = KagemushaRecursiveSpendProver::class.java.getDeclaredMethod(
+            "nativeDeriveOutputMembershipPathsV4",
+            ByteArray::class.java,
+            ByteArray::class.java,
+            ByteArray::class.java,
+        )
+        assertEquals(Array<ByteArray>::class.java, derive.returnType)
+        val validate = KagemushaRecursiveSpendProver::class.java.getDeclaredMethod(
+            "nativeValidateSpendableBranchV4",
+            ByteArray::class.java,
+            ByteArray::class.java,
+            ByteArray::class.java,
+            ByteArray::class.java,
+            Long::class.javaPrimitiveType,
+        )
+        assertEquals(ByteArray::class.java, validate.returnType)
+        assertTrue(
+            KagemushaRecursiveSpendProver.SpendableBranchV4::class.java.methods.any {
+                it.name == "getFrontier" &&
+                    it.returnType ==
+                    KagemushaRecursiveSpendProver.OutputMembershipFrontierV4::class.java
+            },
+        )
+    }
+
+    @Test
     fun artifactRoleInventoryRejectsCountsDuplicatesAndReordering() {
         val canonical = KagemushaRecursiveSpendProver.ArtifactRoleV4.entries
         KagemushaRecursiveSpendProver.requireCanonicalV4ArtifactRoleInventory(canonical)
 
-        for (count in listOf(8, 9, 11)) {
+        for (count in listOf(6, 7, 9)) {
             val invalid = List(count) { canonical[it % canonical.size] }
             assertFailsWith<IllegalArgumentException> {
                 KagemushaRecursiveSpendProver
@@ -254,8 +363,8 @@ class KagemushaRecursiveSpendProverTest {
             ),
         )
         val projection = KagemushaRecursiveSpendProver.BranchProjection(
-            KagemushaRecursiveSpendProver.Bundle(
-                archive("KagemushaRecursiveSpendBundleV2"),
+            KagemushaRecursiveSpendProver.BundleV4(
+                archive("KagemushaRecursiveSpendBundleV4"),
             ),
             KagemushaRecursiveSpendProver.NoteMembershipWitness(
                 archive("KagemushaNoteMembershipWitnessV2"),
@@ -266,8 +375,8 @@ class KagemushaRecursiveSpendProverTest {
             1,
             2,
             ByteArray(32) { 3 },
-            KagemushaRecursiveSpendProver.ArtifactBinding(
-                archive("KagemushaRecursiveSpendArtifactBindingV3"),
+            KagemushaRecursiveSpendProver.ArtifactBindingV4(
+                archive("KagemushaRecursiveSpendArtifactBindingV4"),
             ),
             mutableClaims,
         )
@@ -285,10 +394,10 @@ class KagemushaRecursiveSpendProverTest {
         assertFalse("parentBranchClaimDigest" in methods)
         assertFalse("branchClaimDigest" in methods)
 
-        val tampered = archive("KagemushaRecursiveSpendArtifactBindingV3")
+        val tampered = archive("KagemushaRecursiveSpendArtifactBindingV4")
         tampered[tampered.lastIndex] = (tampered.last().toInt() xor 1).toByte()
         assertFailsWith<IllegalArgumentException> {
-            KagemushaRecursiveSpendProver.ArtifactBinding(tampered)
+            KagemushaRecursiveSpendProver.ArtifactBindingV4(tampered)
         }
     }
 
@@ -383,6 +492,92 @@ class KagemushaRecursiveSpendProverTest {
     }
 
     @Test
+    fun branchRestoreRejectsMissingHeightAndLocalChangeOpeningsBeforeNativeDispatch() {
+        val opening = KagemushaRecursiveSpendProver.decodeNoteOpening(
+            archive("KagemushaNoteOpeningV2"),
+        )
+        val init = KagemushaRecursiveSpendProver.decodeInitResultV4(
+            archive("KagemushaRecursiveSpendInitResultV4"),
+        )
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaRecursiveSpendProver.restoreInitBranchV4(init, opening, 0)
+        }
+        val payment = KagemushaRecursiveSpendProver.decodePeerPayment(
+            archive("KagemushaRecursiveSpendPeerPaymentV4"),
+        )
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaRecursiveSpendProver.restorePeerPaymentBranchV4(payment, opening, 0)
+        }
+
+        val split = KagemushaRecursiveSpendProver.decodeSplitResultV4(
+            archive("KagemushaRecursiveSpendSplitResultV4"),
+            null,
+        )
+        assertFailsWith<IllegalStateException> {
+            KagemushaRecursiveSpendProver.restoreSplitChangeBranchV4(split, 1)
+        }
+        val redeem = KagemushaRecursiveSpendProver.decodeRedeemBuildResultV4(
+            archive("KagemushaRecursiveSpendRedeemBuildResultV4"),
+            null,
+        )
+        assertFailsWith<IllegalStateException> {
+            KagemushaRecursiveSpendProver.restoreRedeemChangeBranchV4(redeem, 1)
+        }
+    }
+
+    @Test
+    fun topUpProvenanceArchiveIsCanonicalBoundedAndDefensive() {
+        val bytes = archive("KagemushaRecursiveSpendTopUpProvenanceV4")
+        val provenance = KagemushaRecursiveSpendProver.decodeTopUpProvenanceV4(bytes)
+        bytes[bytes.lastIndex] = 0
+        assertEquals(0x51, provenance.noritoEncoded().last().toInt() and 0xff)
+
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaRecursiveSpendProver.decodeTopUpProvenanceV4(
+                archive("KagemushaRecursiveSpendTopUpFinalityEvidenceV4"),
+            )
+        }
+        val corrupted = archive("KagemushaRecursiveSpendTopUpProvenanceV4").also {
+            it[it.lastIndex] = (it.last().toInt() xor 1).toByte()
+        }
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaRecursiveSpendProver.decodeTopUpProvenanceV4(corrupted)
+        }
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaRecursiveSpendProver.decodeTopUpProvenanceV4(
+                ByteArray(KagemushaRecursiveSpendProver.MAX_TOP_UP_PROVENANCE_ARCHIVE_BYTES_V4 + 1),
+            )
+        }
+
+        val bundle = KagemushaRecursiveSpendProver.decodeBundleV4(
+            archive("KagemushaRecursiveSpendBundleV4"),
+        )
+        val roster = KagemushaRecursiveSpendProver.decodeTopUpFinalityRosterArtifact(
+            archive("KagemushaTopUpFinalityRosterArtifactV2"),
+        )
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaRecursiveSpendProver.buildTopUpProvenanceV4(
+                bundle,
+                roster,
+                emptyList(),
+                emptyList(),
+                1,
+            )
+        }
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaRecursiveSpendProver.buildTopUpProvenanceV4(
+                bundle,
+                roster,
+                listOf(KagemushaRecursiveSpendProver.decodeTopUpAnchorV4(
+                    archive("KagemushaRecursiveSpendTopUpAnchorV4"),
+                )),
+                emptyList(),
+                1,
+            )
+        }
+    }
+
+    @Test
     fun topUpZeroPathIsTypedDefensiveAndExact() {
         val directions = ByteArray(16)
         directions[0] = 1
@@ -410,44 +605,130 @@ class KagemushaRecursiveSpendProverTest {
     }
 
     @Test
-    fun readinessRequiresEveryVerifierRoleAtOneSnapshot() {
-        fun verifier(withdrawalHeight: Long? = null) =
+    fun readinessPreservesExactReleaseCapabilitiesIndependently() {
+        fun verifier(
+            name: String,
+            circuitId: String,
+            seed: Int,
+            withdrawalHeight: Long? = null,
+        ) =
             KagemushaRecursiveSpendProver.ActiveVerifier(
                 "halo2/ipa",
-                "kagemusha-role",
+                name,
                 1,
-                "kagemusha-circuit",
-                ByteArray(32) { 1 },
-                ByteArray(32) { 2 },
+                circuitId,
+                ByteArray(32) { seed.toByte() },
+                ByteArray(32) { (seed + 16).toByte() },
                 12 * 1024,
                 10,
                 withdrawalHeight,
             )
+        fun artifactSet() = KagemushaRecursiveSpendProver.AuthenticatedArtifactSet(
+            "release-v4",
+            ByteArray(32) { 0x31 },
+            ByteArray(32) { 0x32 },
+            ByteArray(32) { 0x33 },
+            10,
+            30,
+            12 * 1024,
+            9,
+        )
+        val transfer = verifier(
+            "confidential_transfer_v2_verifier_record",
+            "halo2/pasta/ipa/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
+            1,
+        )
+        val topUp = verifier(
+            "kagemusha_topup_shield_v2_verifier_record",
+            "halo2/pasta/ipa/kagemusha-topup-shield-merkle16-axiom-poseidon-v3",
+            2,
+        )
+        val unshield = verifier(
+            "confidential_unshield_v3_verifier_record",
+            "halo2/pasta/ipa/confidential-unshield-change-merkle16-axiom-poseidon-v4",
+            3,
+        )
+        val stepEq = verifier(
+            "kagemusha_recursive_step_eq_v4_verifier_record",
+            "kagemusha-recursive-spend-step-eq-authenticated-layout-v4",
+            4,
+            30,
+        )
+        val stepEp = verifier(
+            "kagemusha_recursive_step_ep_v4_verifier_record",
+            "kagemusha-recursive-spend-step-ep-authenticated-layout-v4",
+            5,
+            30,
+        )
         fun readiness(
-            transfer: KagemushaRecursiveSpendProver.ActiveVerifier? = verifier(),
-            unshield: KagemushaRecursiveSpendProver.ActiveVerifier? = verifier(),
+            transferVerifier: KagemushaRecursiveSpendProver.ActiveVerifier? = transfer,
+            unshieldVerifier: KagemushaRecursiveSpendProver.ActiveVerifier? = unshield,
+            recursiveStepEqVerifier: KagemushaRecursiveSpendProver.ActiveVerifier? = stepEq,
+            artifact: KagemushaRecursiveSpendProver.AuthenticatedArtifactSet? = artifactSet(),
+            proofBackendAvailable: Boolean = true,
         ) = KagemushaRecursiveSpendProver.ReadinessProjection(
-            19,
+            20,
             8,
-            "pkr#sbp",
+            "xor#sora",
             9,
             20,
-            ByteArray(32) { 3 },
+            ByteArray(32) { 0x41 },
+            proofBackendAvailable,
             true,
             true,
-            true,
-            transfer,
-            verifier(),
-            unshield,
-            verifier(),
-            verifier(),
+            transferVerifier,
+            topUp,
+            unshieldVerifier,
+            recursiveStepEqVerifier,
+            stepEp,
+            artifact,
             emptyList(),
         )
 
         assertTrue(readiness().allVerifiersActive)
         assertTrue(readiness().chainArtifactSetReady)
-        assertFalse(readiness(transfer = null).allVerifiersActive)
-        assertFalse(readiness(unshield = verifier(withdrawalHeight = 20)).chainArtifactSetReady)
+        assertFalse(readiness().offlineReady)
+        assertFalse(readiness(transferVerifier = null).allVerifiersActive)
+        assertTrue(readiness(transferVerifier = null).chainArtifactSetReady)
+        assertFalse(
+            readiness(
+                unshieldVerifier = verifier(
+                    "confidential_unshield_v3_verifier_record",
+                    "halo2/pasta/ipa/confidential-unshield-change-merkle16-axiom-poseidon-v4",
+                    3,
+                    20,
+                ),
+            ).allVerifiersActive,
+        )
+        assertFalse(
+            readiness(
+                recursiveStepEqVerifier = verifier(
+                    "kagemusha_recursive_step_eq_v4_verifier_record",
+                    "kagemusha-recursive-spend-step-eq-authenticated-layout-v4",
+                    4,
+                    20,
+                ),
+            ).chainArtifactSetReady,
+        )
+        assertFalse(readiness(artifact = null).chainArtifactSetReady)
+        assertFalse(readiness(proofBackendAvailable = false).chainArtifactSetReady)
+
+        val artifact = artifactSet()
+        val exposedManifestDigest = artifact.manifestSha256()
+        exposedManifestDigest.fill(0)
+        assertEquals(0x31, artifact.manifestSha256()[0].toInt())
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaRecursiveSpendProver.AuthenticatedArtifactSet(
+                "release-v4",
+                ByteArray(32) { 0x31 },
+                ByteArray(32) { 0x31 },
+                ByteArray(32) { 0x33 },
+                10,
+                30,
+                12 * 1024,
+                9,
+            )
+        }
     }
 
     @Test
@@ -496,7 +777,7 @@ class KagemushaRecursiveSpendProverTest {
 
         assertTrue(
             KagemushaRecursiveSpendProver.decodePeerPayment(
-                archive("KagemushaRecursiveSpendPeerPaymentV2"),
+                archive("KagemushaRecursiveSpendPeerPaymentV4"),
             ).noritoEncoded().size > NoritoHeader.HEADER_LENGTH,
         )
         assertTrue(
@@ -517,7 +798,7 @@ class KagemushaRecursiveSpendProverTest {
         assertFailsWith<IllegalArgumentException> {
             KagemushaRecursiveSpendProver.decodePeerPayment(byteArrayOf(1, 2, 3))
         }
-        val corrupted = archive("KagemushaRecursiveSpendPeerPaymentV2")
+        val corrupted = archive("KagemushaRecursiveSpendPeerPaymentV4")
         corrupted[corrupted.lastIndex] = 0
         assertFailsWith<IllegalArgumentException> {
             KagemushaRecursiveSpendProver.decodePeerPayment(corrupted)
@@ -581,14 +862,14 @@ class KagemushaRecursiveSpendProverTest {
             KagemushaNfcProtocol.SAFE_CHUNK_BYTES,
         )
         assertEquals(
-            "802000002602010000002d16b35168fd7dce091904f3b0b2597831528dbf9c19bd154b8eba509b92b1f84c",
+            "8020040026040100000029bbba27b824bd6fe62af468134e1373d2f72257bc05a6a17f4c1bed919c9004e6",
             commands[0].toHex(),
         )
         assertEquals(
-            "802100002d4e5254300000dbb6585e2e75a835bced19003aab7acd000100000000000000de8130dd3f67aeb502519897f659",
+            "802104002d000000004e5254300000dbb6585e2e75a835bced19003aab7acd000100000000000000de8130dd3f67aeb50251",
             commands[1].toHex(),
         )
-        assertEquals("8022000000", commands[2].toHex())
+        assertEquals("8022040000", commands[2].toHex())
         assertEquals(
             "F0504B45504B524E464301",
             KagemushaNfcProtocol.applicationIdentifierHex(
@@ -596,7 +877,7 @@ class KagemushaRecursiveSpendProverTest {
             ),
         )
         assertEquals(220, KagemushaNfcProtocol.SAFE_CHUNK_BYTES)
-        assertEquals(2, KagemushaNfcProtocol.RAW_TRANSPORT_VERSION)
+        assertEquals(4, KagemushaNfcProtocol.RAW_TRANSPORT_VERSION)
         assertTrue(KagemushaNfcProtocol.parseCommand(commands[0]) is KagemushaNfcCommand.WriteMetadata)
 
         val nearby = KagemushaNearbyEnvelopeCodec.encode(
@@ -614,6 +895,86 @@ class KagemushaRecursiveSpendProverTest {
         assertFalse(KagemushaNearbyTransportPolicy.IS_AVAILABLE)
         rawArchive.fill(0)
         nearby.fill(0)
+    }
+
+    @Test
+    fun nfcV4StreamsBeyondLegacyLimitAndRejectsDowngrade() {
+        val payload = ByteArray(70_003) { index -> (index * 29 + 7).toByte() }
+        val commands = KagemushaNfcProtocol.writePayloadCommands(
+            KagemushaPeerPayloadKind.PAYMENT,
+            payload,
+            KagemushaNfcProtocol.MAXIMUM_EXTENDED_WRITE_CHUNK_BYTES,
+        )
+        val metadata = KagemushaNfcProtocol.parseCommand(commands.first())
+            as KagemushaNfcCommand.WriteMetadata
+        assertEquals(payload.size, metadata.payloadLength)
+        val assembler = KagemushaNfcPayloadAssembler(
+            metadata.kind,
+            metadata.payloadLength,
+            metadata.sha256,
+        )
+        commands.subList(1, commands.lastIndex).asReversed().forEach { encoded ->
+            val chunk = KagemushaNfcProtocol.parseCommand(encoded) as KagemushaNfcCommand.WriteChunk
+            assertTrue(assembler.write(chunk.offset, chunk.bytes))
+        }
+        assertTrue(assembler.isComplete)
+        assertTrue(payload.contentEquals(assembler.commit()))
+
+        val atFFFF = KagemushaNfcProtocol.writeChunkCommand(0xffff, byteArrayOf(0x5a))
+        val at10000 = KagemushaNfcProtocol.writeChunkCommand(0x1_0000, byteArrayOf(0x5a))
+        assertEquals("80210400050000ffff5a", atFFFF.toHex())
+        assertEquals("8021040005000100005a", at10000.toHex())
+        assertEquals(
+            0xffff,
+            (KagemushaNfcProtocol.parseCommand(atFFFF) as KagemushaNfcCommand.WriteChunk).offset,
+        )
+        assertEquals(
+            0x1_0000,
+            (KagemushaNfcProtocol.parseCommand(at10000) as KagemushaNfcCommand.WriteChunk).offset,
+        )
+        assertEquals(
+            "80110400060000ffff0400",
+            KagemushaNfcProtocol.readChunkCommand(0xffff, 1_024).toHex(),
+        )
+
+        assertEquals(
+            KagemushaNfcCommand.Invalid,
+            KagemushaNfcProtocol.parseCommand(byteArrayOf(0x80.toByte(), 0x21, 0, 0, 1, 0x5a)),
+        )
+        assertEquals(
+            KagemushaNfcCommand.Invalid,
+            KagemushaNfcProtocol.parseCommand(
+                byteArrayOf(0x80.toByte(), 0x21, 0xff.toByte(), 0xff.toByte(), 1, 0x5a),
+            ),
+        )
+        assertEquals(
+            KagemushaNfcCommand.Invalid,
+            KagemushaNfcProtocol.parseCommand(byteArrayOf(0x80.toByte(), 0x11, 0, 0, 0)),
+        )
+        assertEquals(
+            KagemushaNfcCommand.Invalid,
+            KagemushaNfcProtocol.parseCommand(at10000.copyOf(at10000.size - 1)),
+        )
+
+        val maximumInfo = ByteArray(40).also {
+            it[0] = KagemushaNfcProtocol.RAW_TRANSPORT_VERSION.toByte()
+            it[1] = KagemushaPeerPayloadKind.PAYMENT.code.toByte()
+            it[2] = 0x02
+            it[7] = KagemushaNfcProtocol.SAFE_CHUNK_BYTES.toByte()
+            it[8] = 1
+        }
+        assertEquals(32 * 1024 * 1024, KagemushaNfcProtocol.decodeInfo(maximumInfo)?.payloadLength)
+        maximumInfo[5] = 1
+        assertEquals(null, KagemushaNfcProtocol.decodeInfo(maximumInfo))
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaNfcProtocol.writeChunkCommand(
+                KagemushaNfcProtocol.MAXIMUM_PAYLOAD_BYTES,
+                byteArrayOf(1),
+            )
+        }
+
+        assembler.clear()
+        payload.fill(0)
     }
 
     @Test
@@ -681,7 +1042,7 @@ class KagemushaRecursiveSpendProverTest {
     }
 
     private fun spendableBranch(seed: Int): KagemushaRecursiveSpendProver.SpendableBranchV4 =
-        KagemushaRecursiveSpendProver.restoreSpendableBranchV4(
+        KagemushaRecursiveSpendProver.SpendableBranchV4(
             KagemushaRecursiveSpendProver.decodeBundleV4(
                 archive("KagemushaRecursiveSpendBundleV4", seed),
             ),
@@ -690,6 +1051,15 @@ class KagemushaRecursiveSpendProverTest {
             ),
             KagemushaRecursiveSpendProver.NoteOpening(
                 archive("KagemushaNoteOpeningV2", seed + 2),
+            ),
+            KagemushaRecursiveSpendProver.decodeTopUpProvenanceV4(
+                archive("KagemushaRecursiveSpendTopUpProvenanceV4", seed + 3),
+            ),
+            KagemushaRecursiveSpendProver.decodeOutputMembershipFrontierV4(
+                archive(
+                    "connect_norito_bridge::KagemushaOutputMembershipFrontierV4",
+                    seed + 4,
+                ),
             ),
         )
 

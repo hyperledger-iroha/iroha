@@ -1,102 +1,119 @@
-# Kagemusha wire and proof contract
+# Retained V2 primitives and the V4 lifecycle
 
-Kagemusha is the only offline-cash protocol. Suffixes on Norito types, proof
-envelopes, and artifact manifests are internal schema versions; they do not
-select another lifecycle.
+Kagemusha is the only offline-cash protocol. ABI 20, manifest V4, and the V4
+top-up, recursive, verification, and redemption carriers are the sole
+lifecycle. The `V2` suffix survives only on unchanged leaf primitives that V4
+intentionally embeds: scaled amounts, note descriptors and openings,
+authorization, recipient requests and acknowledgements, membership paths, and
+top-up finality proofs. A V2 or V3 lifecycle archive is never upgraded to V4.
 
-## Exact amounts
+## Exact amounts and notes
 
 `KagemushaScaledAmountV2` contains positive atomic `u128` units and the
 authoritative on-chain asset scale. Conversion from `Numeric` is exact and
 rejects excess precision, overflow, zero, negative values, and unsupported
-scale. The same scaled value is bound into the top-up debit, every recursive
-transition, and the redemption credit.
+scale. `KagemushaSpendableNoteDescriptorV2`, note openings, and membership
+witnesses keep their established commitments and tree semantics; V4 binds
+their exact canonical bytes into its public operation vector.
 
-A transition consumes one parent bundle and creates
-one recipient branch plus optional sender change. Checked arithmetic enforces:
+Initialization has no recursive parent. Append consumes one or two
+canonically ordered parent bundles and creates one recipient branch plus
+optional sender change. The fixed EqAffine/Vesta transition and EpAffine/Pallas
+wrapper prove:
 
 ```text
 sum(parent atomic units) = recipient atomic units + change atomic units
 ```
 
-The first-release contract accepts exactly one parent. Multi-parent merge is
-not part of the protocol surface; fragmented branches remain independently
-spendable or redeemable instead of being combined by host-side logic.
+The same key material and layout handles initialization, one parent, and two
+parents. Parent-presence selectors, ordered state, commitments, nullifiers,
+roots, branch claims, output membership, release identity, and current/result
+instances are circuit constraints. Host-checked equality or an accumulated IPA
+opening is never an acceptance decision.
 
-All non-zero output commitments and nullifiers are distinct. Recipient and
-change are independently spendable and redeemable. Parent replay,
-ancestor/descendant overlap, conflicting transition choices, duplicate
-nullifiers, duplicate commitments, duplicate delivery, and duplicate
-redemption fail closed.
+## V4 top-up and initialization
 
-## Top-up
-
-`KagemushaRecursiveSpendTopUpRequestV2` binds the signed device authorization,
-exact amount, authoritative confidential-tree witness, verifier identity,
-top-up shield proof, and stable operation id. Torii accepts the typed request
-only at `POST /v1/offline/top-up` with parameter-free
+`KagemushaRecursiveSpendTopUpRequestV4` binds the signed V2 authorization leaf,
+exact amount, authoritative confidential-tree witness, shield proof, V4 release
+identity, and stable operation id. Torii accepts the typed request only at
+`POST /v1/offline/top-up` with parameter-free
 `Content-Type: application/x-norito`.
 
-The chain verifies the live asset scale, device authorization, current tree
-root and leaf index, active verifier window, proof public inputs, and operation
-uniqueness before debiting the public balance and committing the finalized
-anchor. Recursive initialization consumes that finalized anchor and its typed
-finality proof; caller-created roots or placeholder finality are invalid.
+Core verifies chain, asset, scale, authorization, replay state, authoritative
+root and leaf index, active shield verifier, proof public inputs, and the
+currently issuing V4 release before any balance, tree, escrow, or receipt
+mutation. Local V4 initialization then authenticates the finalized anchor and
+the unchanged V2 finality proof against the manifest-bound roster.
 
-## Peer transfer
+## V4 peer transfer
 
-The receiver first signs a short-lived `KagemushaRecipientPaymentRequestV2`
-that binds chain, asset, exact amount, recipient output, device identity,
-request nonce, and expiry. The sender verifies it before reserving inputs or
-proving.
+The receiver signs the unchanged `KagemushaRecipientPaymentRequestV2` leaf.
+V4 append binds that request to one or two ordered V4 parents, recipient and
+optional change outputs, output membership, exact conservation, operation id,
+and the release-bound recursive verifier pair. The V4 peer envelope contains
+only the recipient bundle and its secret-free membership witness.
 
-Append binds the ordered parent bundle digests, receiver request digest,
-recipient output, optional change output, exact split, operation id, artifact
-manifest, and value-conserving recursive step. It returns a
-`KagemushaRecursiveSpendSplitResultV2`; the peer envelope carries only the
-recipient branch. Each branch carries a depth-bounded path and the exact
-proof-bound transition history needed to reject overlapping ancestry without
-growing with unrelated wallet state.
+The receiver verifies the V4 proof pair, signed recipient leaf, finality
+origins, artifact generation, chain, asset, scale, amount, commitment, hop
+limit, and branch disjointness before persisting the branch. The unchanged V2
+acknowledgement leaf is signed only after durable receipt. Duplicate delivery
+returns the same bytes, and the sender consumes reserved parents only after the
+acknowledgement verifies.
 
-The receiver verifies the signed request, artifact generation, verifier
-activation, scale, amount, recipient commitment, hop limit, recursive proof,
-and redeemability. It persists the branch atomically before signing the durable
-acknowledgement. The acknowledgement binds the operation, request, accepted
-bundle digest, recipient commitment, device key reference, and one captured
-acceptance time. Duplicate delivery returns the same bytes. The sender commits
-its reserved inputs and change only after verifying that acknowledgement.
+## V4 redemption
 
-## Redemption
+`KagemushaRecursiveSpendRedeemRequestV4` binds the selected V4 branch,
+unshield evidence, V2 authorization leaf, operation id, and optional
+proof-bound V4 change branch. Full redemption has no offline change. Partial
+redemption produces exactly one recursively spendable V4 change branch and is
+therefore new issuance.
 
-`KagemushaRecursiveSpendRedeemRequestV2` binds the selected live branch,
-unshield-v3 evidence, signed device authorization, operation id, and optional
-proof-bound change branch. Torii accepts it only at
-`POST /v1/offline/redeem` with the typed Norito media type. Full redemption has
-no change; partial redemption produces exactly one recursively spendable
-change branch. Chain execution verifies finalized top-up provenance, recursive
-proofs, active unshield and recursive verifier windows, branch conflicts,
-value conservation, and operation uniqueness before crediting the exact
-scaled public amount.
+At and after `withdrawal_height`, top-up, init, append, peer payment, and
+redemption with offline change are rejected. Terminal verification and full
+redemption retain the parent release indefinitely unless it is explicitly
+revoked, so a legitimate branch is not stranded when issuance closes.
 
 ## Artifacts and native bridge
 
-Bridge ABI 19 exposes one Kagemusha capability record. It must report manifest
-schema `kagemusha.offline.recursive_spend.artifact_manifest.v3`, backend
-`halo2/ipa-pasta-cycle-v1`, the fixed transition/state circuit identifiers,
-and an exact proof-backend availability flag.
+Bridge ABI 20 exposes the current Kagemusha artifact contract. It reports
+manifest schema `kagemusha.offline.recursive_spend.artifact_manifest.v4`,
+backend `halo2/ipa-pasta-cycle-v4`, transcript
+`kagemusha-pasta-cycle-poseidon-v4`, and the exact StepEq/StepEp circuit
+identities. There is no product-mode selector.
 
-The authenticated V3 manifest contains exactly two role profiles—transition
-Eq and state Ep—and exactly three content-addressed files per profile:
-parameters, proving key, and verifying key. It binds source revision, chain,
-asset and scale, activation window, proof-size limit, benchmark evidence,
-cryptographic review, release attestation, and top-up-finality roster. A wallet
-must verify the release envelope, manifest digest, every file size and SHA-256,
-role, circuit, ABI, and purpose before atomically installing the set.
+The authenticated V4 manifest contains exactly two profiles in Eq-then-Ep
+order. Each profile contains exactly four external, content-addressed files in
+this order: `ParamsIPA`, processed proving key, processed verifying key, and
+the final-key selector-zero bootstrap witness. The complete external inventory
+is therefore exactly eight files. Each profile's bounded
+`KagemushaStepCircuitParamsV4` configuration is authenticated inline in the
+manifest and digest-bound into every artifact header; circuit parameters are
+not a ninth or tenth streamed file. The manifest also binds source revision,
+chain, asset and scale, activation window, proof-size limit, benchmark
+evidence, cryptographic review, release attestation, and the canonical top-up
+finality roster. A wallet must verify the release policy and attestation,
+manifest digest, every framed and payload size and SHA-256, role, circuit, ABI,
+and purpose before atomically installing the exact eight-file set.
 
-Wallets must require `proof_backend_available == true`, an empty native
-missing-gate list, and a readiness response with all five active verifier
-records before enabling Kagemusha. Symbol presence or locally well-formed
-artifacts are not readiness evidence.
+Authenticated artifact installation and backend construction are necessary
+but not by themselves sufficient for complete node readiness. Torii carries a
+required nullable `artifact_set`: it is present only with the atomic V4
+recursive verifier pair and contains the generation, manifest, policy and
+attestation digests, issuance window, proof-pair bound, and asset scale. A null
+value requires both recursive verifier records and backend construction to be
+unavailable together with exactly one `recursive_v4_registry_unavailable` or
+`recursive_v4_registry_malformed` blocker. A present value forbids both
+registry blockers. `proof_backend_available` reports exact backend
+construction independently. `recursive_lineage_supported` is true only when
+that artifact set, distinct active Eq/Ep records, and the backend are all
+present. `ready` is true exactly when the complete blocker set is empty, and
+`recursive_lineage_unavailable` is present exactly when lineage is false.
+
+Transaction admission authenticates the exact release binding against both
+consensus records and the immutable startup catalog. Top-up and redemption
+change require a currently issuing release. Full redemption authenticates its
+parent release for the longer redemption lifetime and remains valid after that
+release's issuance window closes.
 
 ## Public Torii surface
 
@@ -107,13 +124,21 @@ The complete first-release route set is:
 - `POST /v1/offline/redeem`
 - `GET /v1/offline/operations/{operation_id}`
 
-Readiness is a closed snapshot-bound object. It carries bridge ABI 19, maximum
-hop count, canonical asset and scale, evaluated block height/hash, active
-transfer, top-up-shield, unshield, recursive-transition, and recursive-state
-verifier records, proof availability, recursive-lineage support, readiness,
-and blockers. Each verifier role must have the exact backend/name/circuit and
-must not share a registry id, key commitment, or public-input schema hash with
-another role.
+Readiness is a closed snapshot-bound object. It carries exact bridge ABI 20,
+maximum hop count, canonical asset and scale, evaluated block height/hash,
+active transfer, top-up-shield, unshield, recursive StepEq and recursive StepEp
+verifier records, the required nullable authenticated `artifact_set`, backend
+construction state, recursive-lineage support, readiness, and blockers. The V4
+recursive roles are exactly
+`kagemusha_recursive_step_eq_v4_verifier_record` with circuit
+`kagemusha-recursive-spend-step-eq-authenticated-layout-v4` and
+`kagemusha_recursive_step_ep_v4_verifier_record` with circuit
+`kagemusha-recursive-spend-step-ep-authenticated-layout-v4`. Both use registry
+backend `halo2/ipa`, appear or disappear atomically with `artifact_set`, and
+bind the same activation window and proof-size limit as that artifact set. No
+verifier role may share a registry id, key commitment, or public-input schema
+hash with another role. Missing or malformed release material, Eq/Ep records,
+or backend construction emits typed blockers and keeps admission fail-closed.
 
 Top-up and redemption accept no JSON body or encoded-byte wrapper. A canonical
 lowercase 64-hex `Idempotency-Key` equals the signed operation id. Identical

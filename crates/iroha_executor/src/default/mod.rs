@@ -54,8 +54,9 @@ use iroha_smart_contract::data_model::{
         defi::DeFiInstructionBox,
         governance::{EnactReferendum, ProposeSccpRouteGovernance, RegisterCitizen},
         offline::{
-            RedeemKagemushaRecursiveV2, RegisterOfflineDeviceAttestation,
-            SetOfflineDeviceAttestationPolicy, TopUpKagemushaRecursiveV2,
+            ActivateKagemushaRecursiveReleaseV4, RedeemKagemushaRecursiveV4,
+            RegisterOfflineDeviceAttestation, SetOfflineDeviceAttestationPolicy,
+            TopUpKagemushaRecursiveV4,
         },
         repo::{RepoInstructionBox, RepoIsi, RepoMarginCallIsi, ReverseRepoIsi},
         settlement::SettlementInstructionBox,
@@ -834,10 +835,13 @@ impl InstructionDispatch for InstructionBox {
         // Core owns offline note/device validation and the exact governance permissions for
         // attestation-policy mutations. Forward every native offline instruction so those
         // consensus-critical checks run.
-        if let Some(isi) = any.downcast_ref::<TopUpKagemushaRecursiveV2>() {
+        if let Some(isi) = any.downcast_ref::<TopUpKagemushaRecursiveV4>() {
             execute!(executor, isi);
         }
-        if let Some(isi) = any.downcast_ref::<RedeemKagemushaRecursiveV2>() {
+        if let Some(isi) = any.downcast_ref::<RedeemKagemushaRecursiveV4>() {
+            execute!(executor, isi);
+        }
+        if let Some(isi) = any.downcast_ref::<ActivateKagemushaRecursiveReleaseV4>() {
             execute!(executor, isi);
         }
         if let Some(isi) = any.downcast_ref::<RegisterOfflineDeviceAttestation>() {
@@ -2265,6 +2269,13 @@ pub mod domain {
                         if domain == domain_id
                 )
             }
+            AnyPermission::CanDelegateAccountAliasResolution(permission) => {
+                matches!(
+                    permission.scope,
+                    iroha_executor_data_model::permission::account::AccountAliasPermissionScope::Domain(ref domain)
+                        if domain == domain_id
+                )
+            }
             AnyPermission::CanManageAccountAlias(permission) => {
                 matches!(
                     permission.scope,
@@ -2339,6 +2350,7 @@ pub mod domain {
             | AnyPermission::CanSetParameters(_)
             | AnyPermission::CanManageSccpGovernance(_)
             | AnyPermission::CanProposeSccpRouteGovernance(_)
+            | AnyPermission::CanActivateKagemushaRecursiveReleaseV4(_)
             | AnyPermission::CanManageRoles(_)
             | AnyPermission::CanUpgradeExecutor(_)
             | AnyPermission::CanRegisterSmartContractCode(_)
@@ -2627,6 +2639,7 @@ pub mod account {
             | AnyPermission::CanModifyTrigger(_)
             | AnyPermission::CanModifyTriggerMetadata(_)
             | AnyPermission::CanResolveAccountAlias(_)
+            | AnyPermission::CanDelegateAccountAliasResolution(_)
             | AnyPermission::CanManageAccountAlias(_)
             | AnyPermission::CanManagePeers(_)
             | AnyPermission::CanManageLaneRelayEmergency(_)
@@ -2649,6 +2662,7 @@ pub mod account {
             | AnyPermission::CanSetParameters(_)
             | AnyPermission::CanManageSccpGovernance(_)
             | AnyPermission::CanProposeSccpRouteGovernance(_)
+            | AnyPermission::CanActivateKagemushaRecursiveReleaseV4(_)
             | AnyPermission::CanManageRoles(_)
             | AnyPermission::CanUpgradeExecutor(_)
             | AnyPermission::CanRegisterSmartContractCode(_)
@@ -2883,6 +2897,7 @@ pub mod asset_definition {
             | AnyPermission::CanModifyAccountMetadata(_)
             | AnyPermission::CanReplaceAccountController(_)
             | AnyPermission::CanResolveAccountAlias(_)
+            | AnyPermission::CanDelegateAccountAliasResolution(_)
             | AnyPermission::CanManageAccountAlias(_)
             | AnyPermission::CanRegisterTrigger(_)
             | AnyPermission::CanUnregisterTrigger(_)
@@ -2902,6 +2917,7 @@ pub mod asset_definition {
             | AnyPermission::CanSetParameters(_)
             | AnyPermission::CanManageSccpGovernance(_)
             | AnyPermission::CanProposeSccpRouteGovernance(_)
+            | AnyPermission::CanActivateKagemushaRecursiveReleaseV4(_)
             | AnyPermission::CanManageRoles(_)
             | AnyPermission::CanUpgradeExecutor(_)
             | AnyPermission::CanRegisterSmartContractCode(_)
@@ -4275,6 +4291,7 @@ pub mod trigger {
             | AnyPermission::CanModifyAccountMetadata(_)
             | AnyPermission::CanReplaceAccountController(_)
             | AnyPermission::CanResolveAccountAlias(_)
+            | AnyPermission::CanDelegateAccountAliasResolution(_)
             | AnyPermission::CanManageAccountAlias(_)
             | AnyPermission::CanUnregisterAssetDefinition(_)
             | AnyPermission::CanModifyAssetDefinitionMetadata(_)
@@ -4292,6 +4309,7 @@ pub mod trigger {
             | AnyPermission::CanSetParameters(_)
             | AnyPermission::CanManageSccpGovernance(_)
             | AnyPermission::CanProposeSccpRouteGovernance(_)
+            | AnyPermission::CanActivateKagemushaRecursiveReleaseV4(_)
             | AnyPermission::CanManageRoles(_)
             | AnyPermission::CanRegisterNft(_)
             | AnyPermission::CanUnregisterNft(_)
@@ -4341,7 +4359,10 @@ pub mod trigger {
 
         use iroha_crypto::{Algorithm, KeyPair};
         use iroha_executor_data_model::permission::{
-            account::{AccountAliasPermissionScope, CanManageAccountAlias, CanResolveAccountAlias},
+            account::{
+                AccountAliasPermissionScope, CanDelegateAccountAliasResolution,
+                CanManageAccountAlias, CanResolveAccountAlias,
+            },
             asset::{CanModifyAssetMetadata, CanModifyAssetMetadataWithDefinition},
             nexus::{
                 CanEnrollFeeSponsorPolicyForAccountDomain,
@@ -4623,6 +4644,12 @@ pub mod trigger {
                     scope: AccountAliasPermissionScope::Domain(domain_id.clone()),
                 },
             ));
+            let delegate_permission =
+                Permission::from(AnyPermission::CanDelegateAccountAliasResolution(
+                    CanDelegateAccountAliasResolution {
+                        scope: AccountAliasPermissionScope::Domain(domain_id.clone()),
+                    },
+                ));
             let manage_permission = Permission::from(AnyPermission::CanManageAccountAlias(
                 CanManageAccountAlias {
                     scope: AccountAliasPermissionScope::Domain(domain_id.clone()),
@@ -4636,6 +4663,14 @@ pub mod trigger {
             assert!(
                 !domain::is_permission_domain_associated(&resolve_permission, &other_domain),
                 "alias resolve permission should not bind to other domains"
+            );
+            assert!(
+                domain::is_permission_domain_associated(&delegate_permission, &domain_id),
+                "alias resolve-delegation permission should bind to the matching domain"
+            );
+            assert!(
+                !domain::is_permission_domain_associated(&delegate_permission, &other_domain),
+                "alias resolve-delegation permission should not bind to other domains"
             );
             assert!(
                 domain::is_permission_domain_associated(&manage_permission, &domain_id),
@@ -5518,6 +5553,122 @@ pub mod permission {
         isi: &Revoke<Permission, Account>,
     ) {
         impl_execute!(executor, isi, validate_revoke, Revoke<Permission, Account>);
+    }
+}
+
+#[cfg(test)]
+mod kagemusha_activation_permission_tests {
+    use core::num::NonZeroU64;
+
+    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_data_model::{
+        block::BlockHeader,
+        permission::Permission as PermissionObject,
+        prelude::{AccountId, Grant, Revoke, ValidationFail},
+    };
+    use iroha_executor_data_model::permission::offline::CanActivateKagemushaRecursiveReleaseV4;
+
+    use super::*;
+    use crate::{Iroha, permission::test_override, prelude};
+
+    #[derive(Debug)]
+    struct TestExecutor {
+        host: Iroha,
+        context: prelude::Context,
+        verdict: crate::data_model::executor::Result<(), ValidationFail>,
+    }
+
+    impl TestExecutor {
+        fn post_genesis(authority: AccountId) -> Self {
+            Self {
+                host: Iroha,
+                context: prelude::Context {
+                    authority,
+                    curr_block: BlockHeader::new(
+                        NonZeroU64::new(2).expect("post-genesis block height"),
+                        None,
+                        None,
+                        None,
+                        0,
+                        0,
+                    ),
+                },
+                verdict: Ok(()),
+            }
+        }
+    }
+
+    impl Execute for TestExecutor {
+        fn host(&self) -> &Iroha {
+            &self.host
+        }
+
+        fn context(&self) -> &prelude::Context {
+            &self.context
+        }
+
+        fn context_mut(&mut self) -> &mut prelude::Context {
+            &mut self.context
+        }
+
+        fn verdict(&self) -> &crate::data_model::executor::Result<(), ValidationFail> {
+            &self.verdict
+        }
+
+        fn deny(&mut self, reason: ValidationFail) {
+            self.verdict = Err(reason);
+        }
+    }
+
+    impl Visit for TestExecutor {}
+
+    fn account(seed: u8) -> AccountId {
+        let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("derive deterministic permission fixture account");
+        AccountId::new(key_pair.public_key().clone())
+    }
+
+    fn assert_genesis_only_denial(verdict: &Result<(), ValidationFail>) {
+        let error = verdict
+            .as_ref()
+            .expect_err("post-genesis Kagemusha activation permission mutation must fail");
+        assert!(matches!(error, ValidationFail::NotPermitted(_)));
+        assert!(
+            error
+                .to_string()
+                .contains("only allowed inside the genesis block")
+        );
+    }
+
+    #[test]
+    fn banking_cannot_delegate_kagemusha_activation_to_itself_or_a_third_party() {
+        let banking = account(41);
+        let third_party = account(42);
+        let token = CanActivateKagemushaRecursiveReleaseV4;
+        let previous = test_override::replace_permissions(vec![PermissionObject::from(token)]);
+
+        for destination in [banking.clone(), third_party] {
+            let grant = Grant::account_permission(PermissionObject::from(token), destination);
+            let mut executor = TestExecutor::post_genesis(banking.clone());
+            permission::visit_grant_account_permission(&mut executor, &grant);
+            assert_genesis_only_denial(executor.verdict());
+        }
+
+        test_override::replace_permissions(previous);
+    }
+
+    #[test]
+    fn banking_cannot_revoke_its_kagemusha_activation_permission_post_genesis() {
+        let banking = account(43);
+        let token = CanActivateKagemushaRecursiveReleaseV4;
+        let previous = test_override::replace_permissions(vec![PermissionObject::from(token)]);
+        let revoke = Revoke::account_permission(PermissionObject::from(token), banking.clone());
+        let mut executor = TestExecutor::post_genesis(banking);
+
+        permission::visit_revoke_account_permission(&mut executor, &revoke);
+
+        test_override::replace_permissions(previous);
+        assert_genesis_only_denial(executor.verdict());
     }
 }
 

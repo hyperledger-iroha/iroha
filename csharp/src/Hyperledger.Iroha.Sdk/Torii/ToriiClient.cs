@@ -16,6 +16,8 @@ namespace Hyperledger.Iroha.Torii;
 
 public sealed partial class ToriiClient : IDisposable
 {
+    public const string AccountOnboardingTokenHeaderName = "X-Iroha-Onboarding-Token";
+
     private const int QueryProjectionArchiveVersion = 1;
     private const int QueryProjectionSchemaVersion = 1;
     private const int QueryProjectionBlobClassCustomId = 1001;
@@ -61,7 +63,11 @@ public sealed partial class ToriiClient : IDisposable
         ArgumentNullException.ThrowIfNull(baseUri);
 
         BaseUri = NormalizeBaseUri(baseUri);
-        HttpClient = httpClient ?? new HttpClient();
+        HttpClient = httpClient ?? new HttpClient(new HttpClientHandler
+        {
+            AllowAutoRedirect = false,
+        });
+        HttpClient.DefaultRequestHeaders.Remove(AccountOnboardingTokenHeaderName);
         ownsHttpClient = httpClient is null;
         Options = options?.Snapshot() ?? new ToriiClientOptions();
         serializerOptions = CreateSerializerOptions(Options.JsonSerializerOptions);
@@ -106,6 +112,136 @@ public sealed partial class ToriiClient : IDisposable
         using var content = CreateJsonContent(request);
         using var response = await SendAsync(HttpMethod.Post, path, query, content, cancellationToken: cancellationToken);
         return await DeserializeAsync<TResponse>(response, cancellationToken);
+    }
+
+    private async Task<TResponse> PostAccountOnboardingAsync<TRequest, TResponse>(
+        string path,
+        TRequest request,
+        string exactOnboardingToken,
+        CancellationToken cancellationToken)
+    {
+        using var content = CreateJsonContent(request);
+        try
+        {
+            using var response = await SendAsync(
+                HttpMethod.Post,
+                path,
+                query: null,
+                content,
+                accept: "application/json",
+                configureRequest: httpRequest =>
+                {
+                    httpRequest.Headers.Remove(AccountOnboardingTokenHeaderName);
+                    if (!httpRequest.Headers.TryAddWithoutValidation(
+                            AccountOnboardingTokenHeaderName,
+                            exactOnboardingToken))
+                    {
+                        throw new InvalidOperationException("Unable to set the account onboarding credential header.");
+                    }
+                },
+                cancellationToken);
+            return await DeserializeAccountOnboardingAsync<TResponse>(
+                response,
+                exactOnboardingToken,
+                cancellationToken);
+        }
+        catch (ToriiApiException error)
+        {
+            throw new ToriiApiException(
+                error.StatusCode.GetValueOrDefault(HttpStatusCode.InternalServerError),
+                error.RequestUri,
+                RedactAccountOnboardingCredential(error.ResponseBody, exactOnboardingToken),
+                RedactAccountOnboardingCredential(error.ReasonPhrase, exactOnboardingToken));
+        }
+    }
+
+    private static string? RedactAccountOnboardingCredential(string? value, string credential) =>
+        value?.Replace(credential, "<redacted>", StringComparison.Ordinal);
+
+    private async Task<TResponse> DeserializeAccountOnboardingAsync<TResponse>(
+        HttpResponseMessage response,
+        string exactOnboardingToken,
+        CancellationToken cancellationToken)
+    {
+        var responseText = await ReadStrictUtf8TextContentAsync(
+            response.Content,
+            "Torii account onboarding response body",
+            cancellationToken);
+        var redactedText = RedactAccountOnboardingCredential(responseText, exactOnboardingToken)
+            ?? string.Empty;
+        JsonDocument parsed;
+        try
+        {
+            parsed = JsonDocument.Parse(redactedText, new JsonDocumentOptions { MaxDepth = 128 });
+        }
+        catch (JsonException)
+        {
+            throw new JsonException("Torii account onboarding response body was not valid JSON.");
+        }
+
+        using (parsed)
+        using (var redactedDocument = RedactAccountOnboardingJson(
+                   parsed.RootElement,
+                   exactOnboardingToken))
+        {
+            ToriiIdentifierJson.RejectDuplicateProperties(
+                redactedDocument.RootElement,
+                DuplicatePropertyContext<TResponse>(response));
+            var value = redactedDocument.RootElement.Deserialize<TResponse>(serializerOptions);
+            return value
+                ?? throw new JsonException(
+                    $"Torii response for `{response.RequestMessage?.RequestUri}` deserialized to null.");
+        }
+    }
+
+    private static JsonDocument RedactAccountOnboardingJson(
+        JsonElement root,
+        string exactOnboardingToken)
+    {
+        using var buffer = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(buffer))
+        {
+            WriteRedactedAccountOnboardingJson(writer, root, exactOnboardingToken);
+        }
+        return JsonDocument.Parse(buffer.ToArray(), new JsonDocumentOptions { MaxDepth = 128 });
+    }
+
+    private static void WriteRedactedAccountOnboardingJson(
+        Utf8JsonWriter writer,
+        JsonElement element,
+        string exactOnboardingToken)
+    {
+        switch (element.ValueKind)
+        {
+            case JsonValueKind.Object:
+                writer.WriteStartObject();
+                foreach (var property in element.EnumerateObject())
+                {
+                    writer.WritePropertyName(
+                        RedactAccountOnboardingCredential(property.Name, exactOnboardingToken)!);
+                    WriteRedactedAccountOnboardingJson(
+                        writer,
+                        property.Value,
+                        exactOnboardingToken);
+                }
+                writer.WriteEndObject();
+                break;
+            case JsonValueKind.Array:
+                writer.WriteStartArray();
+                foreach (var item in element.EnumerateArray())
+                {
+                    WriteRedactedAccountOnboardingJson(writer, item, exactOnboardingToken);
+                }
+                writer.WriteEndArray();
+                break;
+            case JsonValueKind.String:
+                writer.WriteStringValue(
+                    RedactAccountOnboardingCredential(element.GetString(), exactOnboardingToken));
+                break;
+            default:
+                element.WriteTo(writer);
+                break;
+        }
     }
 
     public async Task<string> GetHealthAsync(CancellationToken cancellationToken = default)
@@ -617,14 +753,17 @@ public sealed partial class ToriiClient : IDisposable
 
     public async Task<ToriiAccountOnboardingResponse> RegisterAccountAsync(
         ToriiAccountOnboardingRequest request,
+        string onboardingToken,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
+        var exactOnboardingToken = RequireAccountOnboardingToken(onboardingToken);
         var normalizedRequest = NormalizeAccountOnboardingRequest(request);
 
-        var response = await PostAsync<ToriiAccountOnboardingRequest, ToriiAccountOnboardingResponse>(
+        var response = await PostAccountOnboardingAsync<ToriiAccountOnboardingRequest, ToriiAccountOnboardingResponse>(
             "/v1/accounts/onboard",
             normalizedRequest,
+            exactOnboardingToken,
             cancellationToken: cancellationToken);
 
         ValidateAccountOnboardingResponse(response, "account onboarding response");
@@ -823,14 +962,17 @@ public sealed partial class ToriiClient : IDisposable
 
     public async Task<ToriiMultisigAccountOnboardingResponse> RegisterMultisigAccountAsync(
         ToriiMultisigAccountOnboardingRequest request,
+        string onboardingToken,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
+        var exactOnboardingToken = RequireAccountOnboardingToken(onboardingToken);
         var normalizedRequest = NormalizeMultisigAccountOnboardingRequest(request);
 
-        var response = await PostAsync<ToriiMultisigAccountOnboardingRequest, ToriiMultisigAccountOnboardingResponse>(
+        var response = await PostAccountOnboardingAsync<ToriiMultisigAccountOnboardingRequest, ToriiMultisigAccountOnboardingResponse>(
             "/v1/accounts/onboard/multisig",
             normalizedRequest,
+            exactOnboardingToken,
             cancellationToken: cancellationToken);
 
         ValidateMultisigAccountOnboardingResponse(response, "multisig account onboarding response");
@@ -1853,6 +1995,21 @@ public sealed partial class ToriiClient : IDisposable
         }
 
         return value;
+    }
+
+    private static string RequireAccountOnboardingToken(string? onboardingToken)
+    {
+        ArgumentNullException.ThrowIfNull(onboardingToken);
+        var bytes = Encoding.UTF8.GetBytes(onboardingToken);
+        if (bytes.Length is < 32 or > 256
+            || bytes.Any(static value => value is < 0x21 or > 0x7e))
+        {
+            throw new ArgumentException(
+                "Account onboarding token must contain 32...256 printable ASCII bytes without spaces or normalization.",
+                nameof(onboardingToken));
+        }
+
+        return onboardingToken;
     }
 
     private static string RequireExactRequestMethod(string? value, string paramName)

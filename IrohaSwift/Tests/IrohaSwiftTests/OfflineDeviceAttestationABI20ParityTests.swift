@@ -3,8 +3,8 @@ import Foundation
 import XCTest
 @testable import IrohaSwift
 
-/// Exact Rust/Swift golden coverage for the sole ABI-19 device-registration model.
-final class OfflineDeviceAttestationABI19ParityTests: XCTestCase {
+/// Exact Rust/Swift golden coverage for the ABI-20 device-registration model.
+final class OfflineDeviceAttestationABI20ParityTests: XCTestCase {
     func testRegistrationAndChallengeMatchRustCurrentModel() throws {
         let rust = try rustFixture()
         XCTAssertEqual(rust.count, 5)
@@ -13,19 +13,19 @@ final class OfflineDeviceAttestationABI19ParityTests: XCTestCase {
             sec1Bytes: assertionPublicKey
         )
         let signingCertificate = Data(
-            SHA256.hash(data: Data("abi19-unit-test-signing-certificate".utf8))
+            SHA256.hash(data: Data("abi20-unit-test-signing-certificate".utf8))
         )
         let registration = try KagemushaDeviceAttestationRegistration(
             version: 1,
             platform: KagemushaDeviceAttestation.androidKeyMintPlatform,
             keyId: Data(SHA256.hash(data: assertionPublicKey)).hexLowercased(),
-            deviceId: "abi19-android-unit-test-device",
+            deviceId: "abi20-android-unit-test-device",
             accountId: rust[3],
             assetDefinitionId: nil,
             iosTeamId: nil,
             iosBundleId: nil,
             iosEnvironment: nil,
-            androidPackageName: "org.hyperledger.iroha.abi19.fixture",
+            androidPackageName: "org.hyperledger.iroha.abi20.fixture",
             androidSigningCertificateSha256: signingCertificate,
             publicKey: devicePublicKey,
             assertionScheme: KagemushaDeviceAttestation.androidKeyMintAssertionScheme,
@@ -35,9 +35,9 @@ final class OfflineDeviceAttestationABI19ParityTests: XCTestCase {
             assertionUsageCountLimit: 1,
             oneUse: true,
             attestationReport:
-                Data("abi19-unit-test-not-physical-attestation-evidence".utf8),
+                Data("abi20-unit-test-not-physical-attestation-evidence".utf8),
             recentBlockHeight: 42,
-            recentBlockHash: IrohaHash.hash(Data("abi19-unit-test-block".utf8)),
+            recentBlockHash: IrohaHash.hash(Data("abi20-unit-test-block".utf8)),
             expiresAtMs: 2_000_000_000_000
         )
 
@@ -83,7 +83,7 @@ final class OfflineDeviceAttestationABI19ParityTests: XCTestCase {
         process.waitUntilExit()
         guard process.terminationStatus == 0 else {
             throw NSError(
-                domain: "OfflineDeviceAttestationABI19ParityTests",
+                domain: "OfflineDeviceAttestationABI20ParityTests",
                 code: Int(process.terminationStatus),
                 userInfo: [
                     NSLocalizedDescriptionKey:

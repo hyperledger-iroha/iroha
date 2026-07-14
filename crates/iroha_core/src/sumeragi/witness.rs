@@ -26,7 +26,7 @@ use mv::storage::StorageReadOnly;
 
 use super::{
     consensus::{ExecKv, ExecWitness},
-    smt::KAGEMUSHA_V2_TOPUP_ANCHOR_WITNESS_KEY_TAG,
+    smt::KAGEMUSHA_V4_TOPUP_ANCHOR_WITNESS_KEY_TAG,
 };
 use crate::state::{StateBlock, WorldReadOnly};
 
@@ -209,10 +209,10 @@ fn key_asset_def_total(id: &AssetDefinitionId) -> Vec<u8> {
     out
 }
 
-/// Return the consensus-witness key for one finalized Kagemusha V2 top-up anchor.
-pub(crate) fn kagemusha_v2_topup_anchor_witness_key(operation_id: [u8; 32]) -> Vec<u8> {
+/// Return the consensus-witness key for one finalized Kagemusha V4 top-up anchor.
+pub(crate) fn kagemusha_v4_topup_anchor_witness_key(operation_id: [u8; 32]) -> Vec<u8> {
     let mut out = Vec::with_capacity(1 + operation_id.len());
-    out.push(KAGEMUSHA_V2_TOPUP_ANCHOR_WITNESS_KEY_TAG);
+    out.push(KAGEMUSHA_V4_TOPUP_ANCHOR_WITNESS_KEY_TAG);
     out.extend_from_slice(&operation_id);
     out
 }
@@ -358,21 +358,21 @@ pub fn record_write_asset_def_total(
     });
 }
 
-/// Record the pre-state value (or canonical absence) of a Kagemusha V2 top-up anchor.
-pub(crate) fn record_read_kagemusha_v2_topup_anchor(operation_id: [u8; 32], value: Option<&[u8]>) {
-    let key = kagemusha_v2_topup_anchor_witness_key(operation_id);
+/// Record the pre-state value (or canonical absence) of a Kagemusha V4 top-up anchor.
+pub(crate) fn record_read_kagemusha_v4_topup_anchor(operation_id: [u8; 32], value: Option<&[u8]>) {
+    let key = kagemusha_v4_topup_anchor_witness_key(operation_id);
     let value = value.map_or_else(Vec::new, ToOwned::to_owned);
     with_active_slot(|witness| {
         witness.reads.entry(key).or_insert(value);
     });
 }
 
-/// Record the exact canonical anchor digest written by a successful Kagemusha V2 top-up.
-pub(crate) fn record_write_kagemusha_v2_topup_anchor(
+/// Record the canonical digest written by a successful Kagemusha V4 top-up.
+pub(crate) fn record_write_kagemusha_v4_topup_anchor(
     operation_id: [u8; 32],
     canonical_anchor_digest: &[u8; 32],
 ) {
-    let key = kagemusha_v2_topup_anchor_witness_key(operation_id);
+    let key = kagemusha_v4_topup_anchor_witness_key(operation_id);
     with_active_slot(|witness| {
         witness.writes.insert(key, canonical_anchor_digest.to_vec());
     });
@@ -1254,18 +1254,18 @@ mod tests {
     }
 
     #[test]
-    fn kagemusha_v2_topup_anchor_write_has_a_dedicated_provable_witness_leaf() {
+    fn kagemusha_v4_topup_anchor_write_has_a_dedicated_provable_witness_leaf() {
         let _guard = exec_witness_guard();
         start_block();
-        let operation_id = [0x42; 32];
-        let anchor_digest = [0xA5; 32];
-        record_read_kagemusha_v2_topup_anchor(operation_id, None);
-        record_write_kagemusha_v2_topup_anchor(operation_id, &anchor_digest);
+        let operation_id = [0x64; 32];
+        let anchor_digest = [0xA4; 32];
+        record_read_kagemusha_v4_topup_anchor(operation_id, None);
+        record_write_kagemusha_v4_topup_anchor(operation_id, &anchor_digest);
         let witness = drain_exec_witness();
 
-        let expected_key = kagemusha_v2_topup_anchor_witness_key(operation_id);
+        let expected_key = kagemusha_v4_topup_anchor_witness_key(operation_id);
         assert_eq!(expected_key.len(), 33);
-        assert_eq!(expected_key[0], KAGEMUSHA_V2_TOPUP_ANCHOR_WITNESS_KEY_TAG);
+        assert_eq!(expected_key[0], KAGEMUSHA_V4_TOPUP_ANCHOR_WITNESS_KEY_TAG);
         assert_eq!(&expected_key[1..], operation_id.as_slice());
         assert_eq!(witness.reads.len(), 1);
         assert_eq!(witness.reads[0].key, expected_key);
@@ -1281,8 +1281,8 @@ mod tests {
             .collect::<Vec<_>>();
         let target = KvPair::new(expected_key, anchor_digest.to_vec());
         let commitment = crate::sumeragi::smt::build_kagemusha_topup_block_commitment(&writes)
-            .expect("valid top-up witness")
-            .expect("top-up commitment");
+            .expect("valid V4 top-up witness")
+            .expect("V4 top-up commitment");
         assert_eq!(commitment.leaves, vec![target.clone()]);
         assert!(
             crate::sumeragi::smt::verify_kagemusha_topup_write_inclusion(

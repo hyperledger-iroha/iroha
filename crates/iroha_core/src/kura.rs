@@ -65,7 +65,7 @@ use iroha_data_model::{
         decode_framed_signed_block,
     },
     consensus::{Qc, ValidatorSetCheckpoint},
-    isi::offline::{RedeemKagemushaRecursiveV2, TopUpKagemushaRecursiveV2},
+    isi::offline::{RedeemKagemushaRecursiveV4, TopUpKagemushaRecursiveV4},
     merge::{
         MAX_MERGE_EXECUTION_CERTIFIED_SOURCE_BYTES, MAX_MERGE_LEDGER_ENTRY_BYTES,
         MergeExecutionBatch, MergeLaneExecution, MergeLedgerEntry,
@@ -1152,7 +1152,7 @@ pub enum KagemushaTopUpFinalitySidecarFormat {
 /// One canonical Kagemusha top-up anchor and its block-local Merkle path.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct KagemushaTopUpFinalityLeaf {
-    /// Top-up operation identifier (the bytes following witness key tag `0xD1`).
+    /// Top-up operation identifier (the bytes following V4 witness key tag `0xD2`).
     pub operation_id: [u8; 32],
     /// Digest of the complete on-chain top-up anchor.
     pub anchor_digest: [u8; 32],
@@ -2346,10 +2346,10 @@ impl Kura {
         let transaction_authority = transaction.authority();
         for instruction in instructions.iter() {
             let any = instruction.as_any();
-            let operation_id = if let Some(top_up) = any.downcast_ref::<TopUpKagemushaRecursiveV2>()
+            let operation_id = if let Some(top_up) = any.downcast_ref::<TopUpKagemushaRecursiveV4>()
             {
                 top_up.request.authorization.operation_id
-            } else if let Some(redeem) = any.downcast_ref::<RedeemKagemushaRecursiveV2>() {
+            } else if let Some(redeem) = any.downcast_ref::<RedeemKagemushaRecursiveV4>() {
                 redeem.request.authorization.operation_id
             } else {
                 continue;
@@ -12092,7 +12092,7 @@ impl Kura {
                 ));
             }
             let mut key = Vec::with_capacity(33);
-            key.push(crate::sumeragi::smt::KAGEMUSHA_V2_TOPUP_ANCHOR_WITNESS_KEY_TAG);
+            key.push(crate::sumeragi::smt::KAGEMUSHA_V4_TOPUP_ANCHOR_WITNESS_KEY_TAG);
             key.extend_from_slice(&leaf.operation_id);
             let pair = crate::sumeragi::smt::KvPair::new(key, leaf.anchor_digest);
             let path = crate::sumeragi::smt::KagemushaTopUpMerkleProof {
@@ -32898,9 +32898,10 @@ mod tests {
             LaneVisibility,
         },
         offline::{
-            KagemushaRecursiveSpendArtifactBindingV3, KagemushaRecursiveSpendTopUpRequestV2,
-            KagemushaRequestAuthorizationV2, KagemushaScaledAmountV2,
-            KagemushaSpendableNoteDescriptorV2, KagemushaTopUpShieldEvidenceV2,
+            KAGEMUSHA_RECURSIVE_SPEND_WIRE_VERSION_V4, KagemushaRecursiveSpendArtifactBindingV4,
+            KagemushaRecursiveSpendTopUpRequestV4, KagemushaRequestAuthorizationV2,
+            KagemushaScaledAmountV2, KagemushaSpendableNoteDescriptorV2,
+            KagemushaTopUpShieldEvidenceV2,
         },
         peer::PeerId,
         prelude::{Executor, IvmBytecode},
@@ -33340,7 +33341,8 @@ mod tests {
             atomic_units: 7,
             scale: 0,
         };
-        let request = KagemushaRecursiveSpendTopUpRequestV2 {
+        let request = KagemushaRecursiveSpendTopUpRequestV4 {
+            version: KAGEMUSHA_RECURSIVE_SPEND_WIRE_VERSION_V4,
             asset: AssetId::new(definition.clone(), SAMPLE_GENESIS_ACCOUNT_ID.clone()),
             amount,
             current_note: KagemushaSpendableNoteDescriptorV2 {
@@ -33367,7 +33369,8 @@ mod tests {
                     attachment
                 },
             },
-            artifact_binding: KagemushaRecursiveSpendArtifactBindingV3 {
+            artifact_binding: KagemushaRecursiveSpendArtifactBindingV4 {
+                version: KAGEMUSHA_RECURSIVE_SPEND_WIRE_VERSION_V4,
                 generation: "kura-operation-index-fixture".to_owned(),
                 manifest_sha256: [0x39; 32],
             },
@@ -33393,7 +33396,7 @@ mod tests {
             ChainId::from("kura-offline-operation-index"),
             outer_authority_id,
         )
-        .with_instructions([TopUpKagemushaRecursiveV2::new(request)])
+        .with_instructions([TopUpKagemushaRecursiveV4::new(request)])
         .sign(outer_authority.private_key());
         TransactionEntrypoint::External(transaction)
     }
@@ -33822,7 +33825,7 @@ mod tests {
         operation_id: [u8; 32],
         anchor_digest: [u8; 32],
     ) -> (ExecWitness, ExecutionCommitment) {
-        let mut key = vec![crate::sumeragi::smt::KAGEMUSHA_V2_TOPUP_ANCHOR_WITNESS_KEY_TAG];
+        let mut key = vec![crate::sumeragi::smt::KAGEMUSHA_V4_TOPUP_ANCHOR_WITNESS_KEY_TAG];
         key.extend_from_slice(&operation_id);
         let witness = ExecWitness {
             reads: Vec::new(),

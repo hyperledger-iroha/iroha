@@ -7638,9 +7638,10 @@ pub struct Offline {
     /// Escrow account bindings keyed by asset definition id.
     #[config(default = "BTreeMap::new()")]
     pub escrow_accounts: BTreeMap<String, String>,
-    /// Enable Kagemusha shielded offline-offline payments.
-    #[config(default = "defaults::settlement::offline::KAGEMUSHA_ENABLED")]
-    pub kagemusha_enabled: bool,
+    /// Canonical Norito policy authenticating promoted Kagemusha releases.
+    pub kagemusha_release_policy_path: Option<PathBuf>,
+    /// Directory containing manifest-digest-addressed Kagemusha release artifacts.
+    pub kagemusha_artifact_dir: Option<PathBuf>,
 }
 
 impl Default for Offline {
@@ -7648,7 +7649,9 @@ impl Default for Offline {
         Self {
             escrow_required: false,
             escrow_accounts: BTreeMap::new(),
-            kagemusha_enabled: defaults::settlement::offline::KAGEMUSHA_ENABLED,
+            kagemusha_release_policy_path:
+                defaults::settlement::offline::kagemusha_release_policy_path(),
+            kagemusha_artifact_dir: defaults::settlement::offline::kagemusha_artifact_dir(),
         }
     }
 }
@@ -7870,8 +7873,28 @@ impl Offline {
         let Offline {
             escrow_required,
             escrow_accounts,
-            kagemusha_enabled,
+            kagemusha_release_policy_path,
+            kagemusha_artifact_dir,
         } = self;
+        if kagemusha_release_policy_path.is_some() != kagemusha_artifact_dir.is_some() {
+            emitter.emit(
+                Report::new(ParseError::InvalidSettlementConfig).attach(
+                    "settlement.offline.kagemusha_release_policy_path and settlement.offline.kagemusha_artifact_dir must be configured together",
+                ),
+            );
+        }
+        if kagemusha_release_policy_path
+            .as_ref()
+            .is_some_and(|path| path.as_os_str().is_empty())
+            || kagemusha_artifact_dir
+                .as_ref()
+                .is_some_and(|path| path.as_os_str().is_empty())
+        {
+            emitter.emit(
+                Report::new(ParseError::InvalidSettlementConfig)
+                    .attach("settlement.offline Kagemusha release paths must not be empty"),
+            );
+        }
         let mut escrow_bindings = BTreeMap::new();
         for (definition, account) in escrow_accounts {
             let definition_id = match definition.parse() {
@@ -7906,7 +7929,8 @@ impl Offline {
         actual::Offline {
             escrow_required,
             escrow_accounts: escrow_bindings,
-            kagemusha_enabled,
+            kagemusha_release_policy_path,
+            kagemusha_artifact_dir,
         }
     }
 }
@@ -14977,6 +15001,11 @@ pub struct ToriiOnboarding {
     pub authority: String,
     /// Private key corresponding to the onboarding authority.
     pub private_key: ExposedPrivateKey,
+    /// Lowercase hexadecimal BLAKE3 digest of the dedicated onboarding API token.
+    ///
+    /// Omitting the digest keeps signer-backed onboarding configured but makes its HTTP routes
+    /// fail closed. The raw token must never be written to the peer configuration.
+    pub api_token_hash_hex: Option<String>,
     /// Permission names that onboarding is allowed to grant to new accounts.
     #[config(default)]
     #[norito(default = "default_torii_onboarding_allowed_permissions")]
@@ -15029,6 +15058,18 @@ impl ToriiOnboarding {
             },
             iroha_data_model::account::ParsedAccountId::into_account_id,
         );
+        let api_token_hash = self.api_token_hash_hex.map(|value| {
+            let canonical = value.as_str();
+            assert!(
+                canonical.len() == 64
+                    && canonical.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)),
+                "torii.onboarding.api_token_hash_hex must be exactly 64 lowercase hexadecimal characters"
+            );
+            let decoded = hex::decode(canonical)
+                .expect("validated torii.onboarding.api_token_hash_hex must decode");
+            <[u8; 32]>::try_from(decoded.as_slice())
+                .expect("validated torii.onboarding.api_token_hash_hex must be 32 bytes")
+        });
         let allowed_permissions = self
             .allowed_permissions
             .into_iter()
@@ -15077,6 +15118,7 @@ impl ToriiOnboarding {
         Some(actual::ToriiOnboarding {
             authority,
             private_key: self.private_key,
+            api_token_hash,
             allowed_permissions,
             alias_resolve_dataspaces,
             alias_resolve_domains,
@@ -20172,6 +20214,70 @@ private_key = "8926201CA347641228C3B79AA43839DEDC85FA51C0E8B9B6A00F6B0D6B0423E90
             onboarding.alias_auto_renew_subscription_domain.is_none(),
             "subscription domain remains optional"
         );
+        assert!(
+            onboarding.api_token_hash.is_none(),
+            "missing onboarding token digest must remain explicit so Torii can fail closed"
+        );
+    }
+
+    fn table_with_onboarding_token_hash(hash: &str) -> Table {
+        let mut table = base_table();
+        let torii = table
+            .get_mut("torii")
+            .and_then(Value::as_table_mut)
+            .expect("torii table");
+        let authority = iroha_data_model::account::AccountId::new(
+            checked_onboarding_authority_ed25519_key_fixture()
+                .public_key()
+                .clone(),
+        )
+        .to_string();
+        let onboarding: Table = toml::from_str(&format!(
+            r#"
+enabled = true
+authority = "{authority}"
+private_key = "8926201CA347641228C3B79AA43839DEDC85FA51C0E8B9B6A00F6B0D6B0423E902973F"
+api_token_hash_hex = "{hash}"
+"#,
+        ))
+        .expect("parse onboarding table");
+        torii.insert("onboarding".into(), Value::Table(onboarding));
+        table
+    }
+
+    #[test]
+    fn onboarding_api_token_hash_parses_exact_lowercase_blake3_digest() {
+        let actual = load_user_root(table_with_onboarding_token_hash(&"ab".repeat(32)))
+            .parse()
+            .expect("parse user config");
+        assert_eq!(
+            actual
+                .torii
+                .onboarding
+                .expect("onboarding enabled")
+                .api_token_hash,
+            Some([0xab; 32])
+        );
+    }
+
+    #[test]
+    fn onboarding_api_token_hash_rejects_noncanonical_text() {
+        for invalid in [
+            "AB".repeat(32),
+            format!(" {}", "ab".repeat(32)),
+            format!("{} ", "ab".repeat(32)),
+            "ab".repeat(31),
+            "ab".repeat(33),
+            "g0".repeat(32),
+        ] {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _ = load_user_root(table_with_onboarding_token_hash(&invalid)).parse();
+            }));
+            assert!(
+                result.is_err(),
+                "noncanonical onboarding digest `{invalid}` must fail closed"
+            );
+        }
     }
 
     #[test]
@@ -21715,15 +21821,61 @@ mod settlement_offline_tests {
     use super::*;
 
     #[test]
-    fn offline_parse_preserves_enabled_kagemusha_defaults() {
+    fn offline_parse_preserves_unconfigured_kagemusha_defaults() {
         let mut emitter = Emitter::new();
         let actual = Offline::default().parse(&mut emitter);
 
         assert!(emitter.into_result().is_ok());
-        assert!(
-            actual.kagemusha_enabled,
-            "Kagemusha must remain enabled after user-config parsing"
-        );
+        assert!(actual.kagemusha_release_policy_path.is_none());
+        assert!(actual.kagemusha_artifact_dir.is_none());
+    }
+
+    #[test]
+    fn offline_parse_requires_release_paths_as_a_pair() {
+        for offline in [
+            Offline {
+                kagemusha_release_policy_path: Some("policy.norito".into()),
+                ..Offline::default()
+            },
+            Offline {
+                kagemusha_artifact_dir: Some("artifacts".into()),
+                ..Offline::default()
+            },
+        ] {
+            let mut emitter = Emitter::new();
+            let _ = offline.parse(&mut emitter);
+            assert!(emitter.into_result().is_err());
+        }
+    }
+
+    #[test]
+    fn offline_parse_preserves_paired_release_paths() {
+        let policy = PathBuf::from("policy.norito");
+        let artifacts = PathBuf::from("artifacts");
+        let mut emitter = Emitter::new();
+        let actual = Offline {
+            kagemusha_release_policy_path: Some(policy.clone()),
+            kagemusha_artifact_dir: Some(artifacts.clone()),
+            ..Offline::default()
+        }
+        .parse(&mut emitter);
+
+        assert!(emitter.into_result().is_ok());
+        assert_eq!(actual.kagemusha_release_policy_path, Some(policy));
+        assert_eq!(actual.kagemusha_artifact_dir, Some(artifacts));
+    }
+
+    #[test]
+    fn offline_parse_rejects_empty_release_paths() {
+        let mut emitter = Emitter::new();
+        let _ = Offline {
+            kagemusha_release_policy_path: Some(PathBuf::new()),
+            kagemusha_artifact_dir: Some(PathBuf::from("artifacts")),
+            ..Offline::default()
+        }
+        .parse(&mut emitter);
+
+        assert!(emitter.into_result().is_err());
     }
 }
 

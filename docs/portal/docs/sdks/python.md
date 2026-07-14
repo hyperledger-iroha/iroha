@@ -104,6 +104,13 @@ response sets `ready` to `True` exactly when its typed `blockers` tuple is empty
 An unmet requirement is a normal `ready == False` result; HTTP `503` is reserved
 for an evaluation failure.
 
+The same transport-only client submits canonical Norito archives through the
+unchanged `POST /v1/offline/top-up` and `POST /v1/offline/redeem` routes and
+polls `GET /v1/offline/operations/{operation_id}`. It does not install recursive
+artifacts or claim a native prover. Top-up requests are limited to 512 KiB and
+redemption requests to 48 MiB; JSON and whole-request base64 wrappers are not
+accepted.
+
 ```python
 from iroha_python import ToriiClient
 
@@ -118,15 +125,38 @@ print(
     readiness.active_unshield_verifier,
     readiness.active_recursive_step_eq_verifier,
     readiness.active_recursive_step_ep_verifier,
+    readiness.artifact_set,
+    readiness.proof_backend_available,
+    readiness.recursive_lineage_supported,
     readiness.blockers,
 )
 ```
 
 All five verifier fields are required nullable snapshots for distinct roles.
-Each is null exactly with its matching unavailable blocker. `ready=True`
-requires bridge ABI 19, all five active verifiers, and the production proof
-backend. Kagemusha is the only offline protocol; readiness has no selectable or
-negotiated product-mode field.
+Each is null exactly with its matching unavailable blocker. Readiness requires
+exact bridge ABI 20. The recursive records use the exact logical V4 roles
+`kagemusha_recursive_step_eq_v4_verifier_record` and
+`kagemusha_recursive_step_ep_v4_verifier_record`, with circuits
+`kagemusha-recursive-spend-step-eq-authenticated-layout-v4` and
+`kagemusha-recursive-spend-step-ep-authenticated-layout-v4` respectively, and
+backend `halo2/ipa`.
+
+`artifact_set` is required but nullable. When present, it binds the
+authenticated V4 generation, manifest, release-policy and release-attestation
+digests, issuance window, proof-pair bound, and asset scale to both recursive
+verifier records. A null value requires both recursive records and backend
+construction to be unavailable with exactly one
+`recursive_v4_registry_unavailable` or `recursive_v4_registry_malformed`
+blocker; a non-null value forbids both. It may coexist with
+`proof_backend_available=True`, which means that the exact authenticated
+backend was constructed. `recursive_lineage_supported` additionally requires
+the authenticated artifact set and distinct active Eq/Ep records;
+`recursive_lineage_unavailable` is present exactly when that conjunction is
+false. `ready` is true only when the complete blocker set is empty, so unrelated
+blockers do not erase valid backend or lineage facts. The client rejects
+inconsistent combinations. Kagemusha is the only offline protocol; readiness has no
+selectable or negotiated product-mode field.
+
 ## 6. Stream events
 
 Torii SSE helpers return live-only generators. They may reconnect within the

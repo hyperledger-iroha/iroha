@@ -13,6 +13,7 @@ namespace Hyperledger.Iroha.Sdk.Tests;
 
 public sealed class ToriiClientTests
 {
+    private const string AccountOnboardingToken = "0123456789abcdef0123456789ABCDEF";
     private static readonly byte[] CanonicalPrivateKeySeed = Convert.FromHexString("616e64726f69642d666978747572652d7369676e696e672d6b65792d30313032");
     private const string CanonicalAccountId = "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53";
     private static readonly string MultisigMemberAccountId1 = TestAccountId(0x41);
@@ -7759,7 +7760,6 @@ public sealed class ToriiClientTests
         yield return new object[] { "quote", "lease_secs", RemoveTopLevelJsonField(VpnQuoteRawResponseJson("lease_secs", 3600), "lease_secs"), "must not be null" };
         yield return new object[] { "quote", "lease_secs", VpnQuoteRawResponseJson("lease_secs", 0), "positive" };
         yield return new object[] { "quote", "quote_expires_at_ms", RemoveTopLevelJsonField(VpnQuoteRawResponseJson("quote_expires_at_ms", 1700000000000), "quote_expires_at_ms"), "must not be null" };
-        yield return new object[] { "quote", "quote_expires_at_ms", VpnQuoteRawResponseJson("quote_expires_at_ms", 0), "positive" };
         yield return new object[] { "quote", "lease_fee", RemoveTopLevelJsonField(VpnQuoteRawResponseJson("lease_fee", "1000000.25"), "lease_fee"), "must not be null" };
         yield return new object[] { "quote", "lease_fee", VpnQuoteRawResponseJson("lease_fee", "01"), "canonical" };
         yield return new object[] { "quote", "mtu_bytes", RemoveTopLevelJsonField(VpnQuoteRawResponseJson("mtu_bytes", 1280), "mtu_bytes"), "must not be null" };
@@ -7788,9 +7788,7 @@ public sealed class ToriiClientTests
         yield return new object[] { "session", "lease_secs", RemoveTopLevelJsonField(VpnSessionRawResponseJson("lease_secs", 3600), "lease_secs"), "must not be null" };
         yield return new object[] { "session", "lease_secs", VpnSessionRawResponseJson("lease_secs", 0), "positive" };
         yield return new object[] { "session", "expires_at_ms", RemoveTopLevelJsonField(VpnSessionRawResponseJson("expires_at_ms", 1700003000000), "expires_at_ms"), "must not be null" };
-        yield return new object[] { "session", "expires_at_ms", VpnSessionRawResponseJson("expires_at_ms", 0), "positive" };
         yield return new object[] { "session", "connected_at_ms", RemoveTopLevelJsonField(VpnSessionRawResponseJson("connected_at_ms", 1699999400000), "connected_at_ms"), "must not be null" };
-        yield return new object[] { "session", "connected_at_ms", VpnSessionRawResponseJson("connected_at_ms", 0), "positive" };
         yield return new object[] { "session", "expires_at_ms", VpnSessionRawResponseJson("expires_at_ms", 1699999399999), "greater than connected_at_ms" };
         yield return new object[] { "session", "meter_family", VpnSessionRawResponseJson("meter_family", null), "must not be null" };
         yield return new object[] { "session", "quote_id", VpnSessionRawResponseJson("quote_id", null), "must not be null" };
@@ -7828,9 +7826,7 @@ public sealed class ToriiClientTests
         yield return new object[] { "receipt", "relay_endpoint", VpnReceiptRawResponseJson("relay_endpoint", null), "must not be null" };
         yield return new object[] { "receipt", "meter_family", VpnReceiptRawResponseJson("meter_family", null), "must not be null" };
         yield return new object[] { "receipt", "connected_at_ms", RemoveTopLevelJsonField(VpnReceiptRawResponseJson("connected_at_ms", 1699999400000), "connected_at_ms"), "must not be null" };
-        yield return new object[] { "receipt", "connected_at_ms", VpnReceiptRawResponseJson("connected_at_ms", 0), "positive" };
         yield return new object[] { "receipt", "disconnected_at_ms", RemoveTopLevelJsonField(VpnReceiptRawResponseJson("disconnected_at_ms", 1700000000000), "disconnected_at_ms"), "must not be null" };
-        yield return new object[] { "receipt", "disconnected_at_ms", VpnReceiptRawResponseJson("disconnected_at_ms", 0), "positive" };
         yield return new object[] { "receipt", "disconnected_at_ms", VpnReceiptRawResponseJson("disconnected_at_ms", 1699999399999), "greater than or equal to connected_at_ms" };
         yield return new object[] { "receipt", "duration_ms", RemoveTopLevelJsonField(VpnReceiptRawResponseJson("duration_ms", 600000), "duration_ms"), "must not be null" };
         yield return new object[] { "receipt", "bytes_in", RemoveTopLevelJsonField(VpnReceiptRawResponseJson("bytes_in", 123), "bytes_in"), "must not be null" };
@@ -7860,7 +7856,6 @@ public sealed class ToriiClientTests
         yield return new object[] { "receipt-list", "items[0].session_id", RemoveFirstArrayItemObjectJsonField(VpnReceiptListRawResponseJson("total", 1), "items", "session_id"), "must not be null" };
         yield return new object[] { "receipt-list", "items[0].session_id", VpnReceiptListRawNestedReceiptJson("session_id", null), "must not be null" };
         yield return new object[] { "receipt-list", "items[0].connected_at_ms", RemoveFirstArrayItemObjectJsonField(VpnReceiptListRawResponseJson("total", 1), "items", "connected_at_ms"), "must not be null" };
-        yield return new object[] { "receipt-list", "items[0].connected_at_ms", VpnReceiptListRawNestedReceiptJson("connected_at_ms", 0), "positive" };
         yield return new object[] { "receipt-list", "items[0].disconnected_at_ms", RemoveFirstArrayItemObjectJsonField(VpnReceiptListRawResponseJson("total", 1), "items", "disconnected_at_ms"), "must not be null" };
         yield return new object[] { "receipt-list", "items[0].duration_ms", RemoveFirstArrayItemObjectJsonField(VpnReceiptListRawResponseJson("total", 1), "items", "duration_ms"), "must not be null" };
         yield return new object[] { "receipt-list", "items[0].bytes_in", RemoveFirstArrayItemObjectJsonField(VpnReceiptListRawResponseJson("total", 1), "items", "bytes_in"), "must not be null" };
@@ -7947,15 +7942,13 @@ public sealed class ToriiClientTests
     }
 
     [Fact]
-    public void RawVpnQuoteWriteRejectsZeroExpiration()
+    public void RawVpnQuoteWriteAcceptsZeroUnsignedExpiration()
     {
         var quote = ValidVpnQuote();
 
-        var error = Assert.Throws<JsonException>(() =>
-            SerializeWithPrivateField(quote, "quoteExpiresAtMilliseconds", 0UL));
+        var json = SerializeWithPrivateField(quote, "quoteExpiresAtMilliseconds", 0UL);
 
-        Assert.Contains("quote_expires_at_ms", error.Message);
-        Assert.Contains("positive", error.Message);
+        Assert.Contains("\"quote_expires_at_ms\":0", json);
     }
 
     [Fact]
@@ -7976,17 +7969,15 @@ public sealed class ToriiClientTests
     }
 
     [Fact]
-    public void RawVpnSessionWriteRejectsZeroAndReversedTimestamps()
+    public void RawVpnSessionWriteAcceptsZeroConnectedTimestampAndRejectsReversedTimestamps()
     {
         var zeroConnected = ValidVpnSession();
         var reversedExpiry = ValidVpnSession() with { ExpiresAtMilliseconds = 1699999399999 };
 
-        var zeroError = Assert.Throws<JsonException>(() =>
-            SerializeWithPrivateField(zeroConnected, "connectedAtMilliseconds", 0UL));
+        var zeroJson = SerializeWithPrivateField(zeroConnected, "connectedAtMilliseconds", 0UL);
         var orderError = Assert.Throws<JsonException>(() => JsonSerializer.Serialize(reversedExpiry));
 
-        Assert.Contains("connected_at_ms", zeroError.Message);
-        Assert.Contains("positive", zeroError.Message);
+        Assert.Contains("\"connected_at_ms\":0", zeroJson);
         Assert.Contains("expires_at_ms", orderError.Message);
         Assert.Contains("greater than connected_at_ms", orderError.Message);
     }
@@ -8021,17 +8012,18 @@ public sealed class ToriiClientTests
     }
 
     [Fact]
-    public void RawVpnReceiptWriteRejectsZeroAndReversedTimestamps()
+    public void RawVpnReceiptWriteAcceptsZeroTimestampsAndRejectsReversedTimestamps()
     {
-        var zeroDisconnected = ValidVpnReceipt();
+        var zeroTimestamps = ValidVpnReceipt();
+        SetPrivateField(zeroTimestamps, "connectedAtMilliseconds", 0UL);
+        SetPrivateField(zeroTimestamps, "disconnectedAtMilliseconds", 0UL);
         var reversedDisconnect = ValidVpnReceipt() with { DisconnectedAtMilliseconds = 1699999399999 };
 
-        var zeroError = Assert.Throws<JsonException>(() =>
-            SerializeWithPrivateField(zeroDisconnected, "disconnectedAtMilliseconds", 0UL));
+        var zeroJson = JsonSerializer.Serialize(zeroTimestamps);
         var orderError = Assert.Throws<JsonException>(() => JsonSerializer.Serialize(reversedDisconnect));
 
-        Assert.Contains("disconnected_at_ms", zeroError.Message);
-        Assert.Contains("positive", zeroError.Message);
+        Assert.Contains("\"connected_at_ms\":0", zeroJson);
+        Assert.Contains("\"disconnected_at_ms\":0", zeroJson);
         Assert.Contains("disconnected_at_ms", orderError.Message);
         Assert.Contains("greater than or equal to connected_at_ms", orderError.Message);
     }
@@ -14383,6 +14375,12 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             var payload = ReadBodyAsJson(request);
             Assert.Equal("/v1/accounts/onboard", request.RequestUri!.AbsolutePath);
             Assert.Equal(HttpMethod.Post, request.Method);
+            Assert.Equal(
+                AccountOnboardingToken,
+                Assert.Single(request.Headers.GetValues(ToriiClient.AccountOnboardingTokenHeaderName)));
+            Assert.Equal("global-api-token", Assert.Single(request.Headers.GetValues("X-API-Token")));
+            Assert.Equal("application/json", Assert.Single(request.Headers.Accept).MediaType);
+            Assert.Equal("application/json", request.Content!.Headers.ContentType!.MediaType);
             Assert.Equal("merchant@paynet", payload.RootElement.GetProperty("alias").GetString());
             Assert.Equal(CanonicalAccountId, payload.RootElement.GetProperty("account_id").GetString());
             Assert.Equal(
@@ -14391,6 +14389,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             Assert.Equal(
                 "uaid:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
                 payload.RootElement.GetProperty("uaid").GetString());
+            Assert.DoesNotContain(AccountOnboardingToken, request.Content.ReadAsStringAsync().GetAwaiter().GetResult());
 
             return new HttpResponseMessage(HttpStatusCode.Accepted)
             {
@@ -14405,7 +14404,14 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             };
         });
 
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var httpClient = new HttpClient(handler);
+        httpClient.DefaultRequestHeaders.TryAddWithoutValidation("X-API-Token", "global-api-token");
+        httpClient.DefaultRequestHeaders.TryAddWithoutValidation(
+            ToriiClient.AccountOnboardingTokenHeaderName,
+            ["stale-default-token-one", "stale-default-token-two"]);
+        using var client = new ToriiClient(new Uri("https://torii.example"), httpClient);
+        Assert.False(httpClient.DefaultRequestHeaders.Contains(
+            ToriiClient.AccountOnboardingTokenHeaderName));
         var response = await client.RegisterAccountAsync(new ToriiAccountOnboardingRequest
         {
             Alias = "merchant@paynet",
@@ -14413,7 +14419,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             IdentityCommitmentHex = new string('A', 64),
             Uaid = "UAID:0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF",
             Permissions = ["CanResolveAccountAlias"],
-        }, cancellationToken: TestContext.Current.CancellationToken);
+        }, AccountOnboardingToken, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(CanonicalAccountId, response.AccountId);
         Assert.Equal(ToriiTransactionHashHex, response.TransactionHashHex);
@@ -14498,11 +14504,111 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
 
         var error = await Assert.ThrowsAnyAsync<ArgumentException>(() =>
-            client.RegisterAccountAsync(request, cancellationToken: TestContext.Current.CancellationToken));
+            client.RegisterAccountAsync(
+                request,
+                AccountOnboardingToken,
+                cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Equal(expectedParamName, error.ParamName);
         Assert.Contains(expectedMessage, error.Message);
         Assert.Null(handler.LastRequest);
+    }
+
+    public static IEnumerable<object?[]> InvalidAccountOnboardingTokens()
+    {
+        yield return new object?[] { null };
+        yield return new object?[] { string.Empty };
+        yield return new object?[] { new string('T', 31) };
+        yield return new object?[] { new string('T', 257) };
+        yield return new object?[] { new string('T', 31) + " " };
+        yield return new object?[] { new string('T', 31) + "é" };
+    }
+
+    [Theory]
+    [MemberData(nameof(InvalidAccountOnboardingTokens))]
+    public async Task AccountOnboardingApisRejectMalformedCredentialBeforeDispatch(string? onboardingToken)
+    {
+        using var handler = new RecordingHandler(_ =>
+            throw new InvalidOperationException("malformed onboarding token reached HTTP dispatch"));
+        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+
+        foreach (var operation in new Func<Task>[]
+                 {
+                     () => client.RegisterAccountAsync(
+                         ValidAccountOnboardingRequest(),
+                         onboardingToken!,
+                         cancellationToken: TestContext.Current.CancellationToken),
+                     () => client.RegisterMultisigAccountAsync(
+                         ValidMultisigAccountOnboardingRequest(),
+                         onboardingToken!,
+                         cancellationToken: TestContext.Current.CancellationToken),
+                 })
+        {
+            var error = await Assert.ThrowsAnyAsync<ArgumentException>(operation);
+            Assert.Equal("onboardingToken", error.ParamName);
+            if (!string.IsNullOrEmpty(onboardingToken))
+            {
+                Assert.DoesNotContain(onboardingToken, error.Message);
+            }
+        }
+
+        Assert.Null(handler.LastRequest);
+    }
+
+    [Fact]
+    public async Task RegisterAccountAsyncRejectsRedirectWithoutReplayingCredential()
+    {
+        var requestCount = 0;
+        using var handler = new RecordingHandler(_ =>
+        {
+            requestCount++;
+            return new HttpResponseMessage(HttpStatusCode.TemporaryRedirect)
+            {
+                Headers = { Location = new Uri("https://redirect.example/v1/accounts/onboard") },
+                ReasonPhrase = AccountOnboardingToken,
+                Content = new StringContent($"server echoed {AccountOnboardingToken}"),
+            };
+        });
+        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+
+        var error = await Assert.ThrowsAsync<ToriiApiException>(() =>
+            client.RegisterAccountAsync(
+                ValidAccountOnboardingRequest(),
+                AccountOnboardingToken,
+                cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Equal(HttpStatusCode.TemporaryRedirect, error.StatusCode);
+        Assert.DoesNotContain(AccountOnboardingToken, error.Message);
+        Assert.DoesNotContain(AccountOnboardingToken, error.ResponseBody);
+        Assert.Equal("server echoed <redacted>", error.ResponseBody);
+        Assert.Equal(1, requestCount);
+    }
+
+    [Fact]
+    public async Task RegisterAccountAsyncRedactsCredentialBeforeDecodingSuccessResponse()
+    {
+        var escapedOnboardingToken = new string('"', 32);
+        var responseJson = JsonSerializer.Serialize(new Dictionary<string, object?>
+        {
+            ["account_id"] = OnboardingAccountId,
+            ["uaid"] = "uaid:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            ["tx_hash_hex"] = ToriiTransactionHashHex,
+            ["status"] = escapedOnboardingToken,
+        });
+        Assert.DoesNotContain(escapedOnboardingToken, responseJson);
+        using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.Accepted)
+        {
+            Content = new StringContent(responseJson),
+        });
+        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+
+        var error = await Assert.ThrowsAsync<JsonException>(() =>
+            client.RegisterAccountAsync(
+                ValidAccountOnboardingRequest(),
+                escapedOnboardingToken,
+                cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.DoesNotContain(escapedOnboardingToken, error.Message);
     }
 
     [Fact]
@@ -15213,6 +15319,10 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         {
             var payload = ReadBodyAsJson(request);
             Assert.Equal("/v1/accounts/onboard/multisig", request.RequestUri!.AbsolutePath);
+            Assert.Equal(
+                AccountOnboardingToken,
+                Assert.Single(request.Headers.GetValues(ToriiClient.AccountOnboardingTokenHeaderName)));
+            Assert.Equal("application/json", request.Content!.Headers.ContentType!.MediaType);
             Assert.Equal("treasury@paynet", payload.RootElement.GetProperty("alias").GetString());
             Assert.Equal(2, payload.RootElement.GetProperty("required_signers").GetInt32());
             Assert.Equal(MultisigMemberAccountId1, payload.RootElement.GetProperty("member_account_ids")[0].GetString());
@@ -15239,7 +15349,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             MemberAccountIds = [MultisigMemberAccountId1, MultisigMemberAccountId2],
             MemberWeights = [1, 2],
             TransactionTtlMilliseconds = 60_000,
-        }, cancellationToken: TestContext.Current.CancellationToken);
+        }, AccountOnboardingToken, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(MultisigOnboardingAccountId, response.AccountId);
         Assert.Equal(string.Empty, response.TransactionHashHex);
@@ -15283,7 +15393,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             MemberAccountIds = memberAccountIds,
             MemberWeights = memberWeights,
             TransactionTtlMilliseconds = 60_000,
-        }, cancellationToken: TestContext.Current.CancellationToken);
+        }, AccountOnboardingToken, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(MultisigOnboardingAccountId, response.AccountId);
         Assert.Equal(ToriiTransactionHashHex, response.TransactionHashHex);
@@ -15658,7 +15768,10 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
 
         var error = await Assert.ThrowsAnyAsync<ArgumentException>(() =>
-            client.RegisterMultisigAccountAsync(request, cancellationToken: TestContext.Current.CancellationToken));
+            client.RegisterMultisigAccountAsync(
+                request,
+                AccountOnboardingToken,
+                cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Equal(expectedParamName, error.ParamName);
         Assert.Contains(expectedMessage, error.Message);
@@ -30707,12 +30820,16 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     {
         return operation switch
         {
-            "account-onboarding" => client.RegisterAccountAsync(ValidAccountOnboardingRequest()),
+            "account-onboarding" => client.RegisterAccountAsync(
+                ValidAccountOnboardingRequest(),
+                AccountOnboardingToken),
             "account-faucet" => client.ClaimAccountFaucetAsync(new ToriiAccountFaucetRequest
             {
                 AccountId = CanonicalAccountId,
             }),
-            "multisig-account-onboarding" => client.RegisterMultisigAccountAsync(ValidMultisigAccountOnboardingRequest()),
+            "multisig-account-onboarding" => client.RegisterMultisigAccountAsync(
+                ValidMultisigAccountOnboardingRequest(),
+                AccountOnboardingToken),
             "contract-call" => client.CallContractAsync(ValidContractCallRequest()),
             "multisig-propose" => client.ProposeMultisigAsync(ValidMultisigProposeRequest()),
             "multisig-contract-propose" => client.ProposeMultisigContractCallAsync(ValidMultisigContractCallProposeRequest()),

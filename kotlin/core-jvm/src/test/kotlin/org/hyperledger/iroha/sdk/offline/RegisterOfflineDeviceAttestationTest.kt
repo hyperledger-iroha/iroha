@@ -205,9 +205,9 @@ class RegisterOfflineDeviceAttestationTest {
 
         private fun registration(
             accountId: String,
-            packageName: String = "org.hyperledger.iroha.abi19.fixture",
+            packageName: String = "org.hyperledger.iroha.abi20.fixture",
             signingCertificate: ByteArray =
-                sha256(bytes("abi19-unit-test-signing-certificate")),
+                sha256(bytes("abi20-unit-test-signing-certificate")),
             challengeHash: ByteArray? = null,
             reportHash: ByteArray? = null,
             evidenceHash: ByteArray? = null,
@@ -218,7 +218,7 @@ class RegisterOfflineDeviceAttestationTest {
                 version = 1,
                 platform = DeviceAttestationRegistration.ANDROID_KEYMINT_PLATFORM,
                 keyId = hexLower(sha256(assertionPublicKey)),
-                deviceId = "abi19-android-unit-test-device",
+                deviceId = "abi20-android-unit-test-device",
                 accountId = accountId,
                 assetDefinitionId = null,
                 iosTeamId = null,
@@ -237,11 +237,11 @@ class RegisterOfflineDeviceAttestationTest {
                 challengeHash = challengeHash,
                 attestationReportHash = reportHash,
                 attestationReport =
-                    bytes("abi19-unit-test-not-physical-attestation-evidence"),
+                    bytes("abi20-unit-test-not-physical-attestation-evidence"),
                 evidenceHash = evidenceHash,
                 evidence = evidence,
                 recentBlockHeight = 42,
-                recentBlockHash = IrohaHash.prehash(bytes("abi19-unit-test-block")),
+                recentBlockHash = IrohaHash.prehash(bytes("abi20-unit-test-block")),
                 expiresAtMs = 2_000_000_000_000,
             )
         }

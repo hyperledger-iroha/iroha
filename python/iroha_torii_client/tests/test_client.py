@@ -22,22 +22,23 @@ import iroha_torii_client as torii_module  # noqa: E402
 import iroha_torii_client.client as client_module  # noqa: E402
 from iroha_torii_client import (  # noqa: E402  (import depends on sys.path mutation)
     ContractCallResponse,
-    ContractOperationReceipt,
     ContractDeployResponse,
+    ContractOperationReceipt,
     ExplorerAccountQr,
     GovernanceContractResponse,
+    KagemushaRedeemRequestV4,
+    KagemushaTopUpRequestV4,
     MultisigResponse,
     NetworkTimeSnapshot,
     NetworkTimeStatus,
-    SumeragiV2Status,
     OfflineAppliedOperation,
     OfflineAssetScale,
+    OfflineAuthenticatedArtifactSet,
     OfflinePendingOperation,
-    KagemushaRedeemRequestV2,
     OfflineRejectedOperation,
     OfflineTopUpAnchor,
     OfflineTopUpFinalityProof,
-    KagemushaTopUpRequestV2,
+    SumeragiV2Status,
     ToriiCanonicalRequestAuth,
     ToriiClient,
     VpnQuoteCreateRequest,
@@ -57,6 +58,9 @@ from iroha_torii_client.mock import ToriiMockServer  # noqa: E402
 CANONICAL_OWNER = "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6"
 CANONICAL_ASSET_ID = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
 CANONICAL_ASSET_DEFINITION_ID = "7EAD8EFYUx1aVKZPUU1fyKvr8dF1"
+CHECKSUM_INVALID_ASSET_DEFINITION_ID = "7EAD8EFYUx1aVKZPUU1fyKvr8dF2"
+CHECKSUM_VALID_NON_UUID_V4_ASSET_DEFINITION_ID = "7EAD8EFYV3tk2BtyQaGhqhATjFy7"
+CHECKSUM_VALID_NON_RFC4122_ASSET_DEFINITION_ID = "7EAD8EFYUx1bhNP18PQmxXsySxi6"
 
 
 def _contract_operation_receipt(
@@ -5561,7 +5565,10 @@ def test_trigger_registration_deletion_and_query() -> None:
 
 def _offline_active_transfer_verifier(**overrides: Any) -> Dict[str, Any]:
     verifier = {
-        "id": {"backend": "halo2/ipa", "name": "asset-transfer-v2"},
+        "id": {
+            "backend": "halo2/ipa",
+            "name": "confidential_transfer_v2_verifier_record",
+        },
         "version": 7,
         "circuit_id": "halo2/pasta/ipa/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
         "commitment": "44" * 32,
@@ -5576,7 +5583,10 @@ def _offline_active_transfer_verifier(**overrides: Any) -> Dict[str, Any]:
 
 def _offline_active_topup_shield_verifier(**overrides: Any) -> Dict[str, Any]:
     verifier = _offline_active_transfer_verifier(
-        id={"backend": "halo2/ipa", "name": "asset-topup-shield-v2"},
+        id={
+            "backend": "halo2/ipa",
+            "name": "kagemusha_topup_shield_v2_verifier_record",
+        },
         circuit_id=(
             "halo2/pasta/ipa/"
             "kagemusha-topup-shield-merkle16-axiom-poseidon-v3"
@@ -5606,11 +5616,14 @@ def _offline_active_recursive_step_eq_verifier(**overrides: Any) -> Dict[str, An
     verifier = _offline_active_transfer_verifier(
         id={
             "backend": "halo2/ipa",
-            "name": "kagemusha_recursive_step_eq_v3_verifier_record",
+            "name": "kagemusha_recursive_step_eq_v4_verifier_record",
         },
-        circuit_id="kagemusha-recursive-spend-step-eq-two-parent-operation-protocol-v2",
+        circuit_id="kagemusha-recursive-spend-step-eq-authenticated-layout-v4",
         commitment="99" * 32,
         public_inputs_schema_hash="9a" * 32,
+        max_proof_bytes=2 * 1024 * 1024,
+        activation_height=40,
+        withdrawal_height=80,
     )
     verifier.update(overrides)
     return verifier
@@ -5620,19 +5633,65 @@ def _offline_active_recursive_step_ep_verifier(**overrides: Any) -> Dict[str, An
     verifier = _offline_active_transfer_verifier(
         id={
             "backend": "halo2/ipa",
-            "name": "kagemusha_recursive_step_ep_v3_verifier_record",
+            "name": "kagemusha_recursive_step_ep_v4_verifier_record",
         },
-        circuit_id="kagemusha-recursive-spend-step-ep-two-parent-operation-protocol-v2",
+        circuit_id="kagemusha-recursive-spend-step-ep-authenticated-layout-v4",
         commitment="aa" * 32,
         public_inputs_schema_hash="ab" * 32,
+        max_proof_bytes=2 * 1024 * 1024,
+        activation_height=40,
+        withdrawal_height=80,
     )
     verifier.update(overrides)
     return verifier
 
 
+def _offline_authenticated_artifact_set(**overrides: Any) -> Dict[str, Any]:
+    artifact_set = {
+        "generation": "release-v4",
+        "manifest_sha256": "11" * 32,
+        "release_policy_sha256": "22" * 32,
+        "release_attestation_sha256": "33" * 32,
+        "activation_height": 40,
+        "withdrawal_height": 80,
+        "max_proof_bytes": 2 * 1024 * 1024,
+        "asset_scale": 4,
+    }
+    artifact_set.update(overrides)
+    return artifact_set
+
+
+def _offline_recursive_lineage_blocker() -> Dict[str, str]:
+    return {
+        "code": "recursive_lineage_unavailable",
+        "message": "The authenticated recursive lineage path is unavailable.",
+    }
+
+
+def _offline_recursive_v4_unavailable_blockers() -> List[Dict[str, str]]:
+    return [
+        {
+            "code": "recursive_v4_registry_unavailable",
+            "message": "No active atomic ABI-20 V4 release is installed.",
+        },
+        {
+            "code": "recursive_step_eq_verifier_unavailable",
+            "message": "The authenticated ABI-20 V4 StepEq verifier is unavailable.",
+        },
+        {
+            "code": "recursive_step_ep_verifier_unavailable",
+            "message": "The authenticated ABI-20 V4 StepEp verifier is unavailable.",
+        },
+        {
+            "code": "proof_backend_unavailable",
+            "message": "The authenticated ABI-20 V4 proof backend is unavailable.",
+        },
+    ]
+
+
 def _offline_readiness_payload(**overrides: Any) -> Dict[str, Any]:
     payload = {
-        "required_bridge_abi_version": 19,
+        "required_bridge_abi_version": 20,
         "max_hops": 8,
         "asset_definition_id": CANONICAL_ASSET_DEFINITION_ID,
         "asset_scale": 4,
@@ -5645,6 +5704,7 @@ def _offline_readiness_payload(**overrides: Any) -> Dict[str, Any]:
             _offline_active_recursive_step_eq_verifier()
         ),
         "active_recursive_step_ep_verifier": _offline_active_recursive_step_ep_verifier(),
+        "artifact_set": _offline_authenticated_artifact_set(),
         "proof_backend_available": True,
         "recursive_lineage_supported": True,
         "ready": True,
@@ -5662,18 +5722,18 @@ OFFLINE_STATUS_URI = f"/v1/offline/operations/{OFFLINE_OPERATION_ID}"
 
 def _offline_top_up_request(
     *,
-    norito: bytes = b"kagemusha-top-up-v2\x00\x01\x02",
+    norito: bytes = b"kagemusha-top-up-v4\x00\x01\x02",
     operation_id: str = OFFLINE_OPERATION_ID,
-) -> KagemushaTopUpRequestV2:
-    return KagemushaTopUpRequestV2(norito=norito, operation_id=operation_id)
+) -> KagemushaTopUpRequestV4:
+    return KagemushaTopUpRequestV4(norito=norito, operation_id=operation_id)
 
 
 def _offline_redeem_request(
     *,
-    norito: bytes = b"kagemusha-redeem-v2\x03\x04\x05",
+    norito: bytes = b"kagemusha-redeem-v4\x03\x04\x05",
     operation_id: str = OFFLINE_OPERATION_ID,
-) -> KagemushaRedeemRequestV2:
-    return KagemushaRedeemRequestV2(norito=norito, operation_id=operation_id)
+) -> KagemushaRedeemRequestV4:
+    return KagemushaRedeemRequestV4(norito=norito, operation_id=operation_id)
 
 
 def _offline_operation_reference(**overrides: Any) -> Dict[str, Any]:
@@ -5706,7 +5766,7 @@ def _offline_top_up_anchor(**overrides: Any) -> Dict[str, Any]:
         },
     )
     anchor = {
-        "version": 2,
+        "version": 4,
         "chain_id": "wonderland",
         "payer": CANONICAL_OWNER,
         "asset": CANONICAL_ASSET_ID,
@@ -5723,6 +5783,7 @@ def _offline_top_up_anchor(**overrides: Any) -> Dict[str, Any]:
         },
         "shield_verifier_commitment": _offline_fixed_bytes(0x61),
         "artifact_binding": {
+            "version": 4,
             "generation": "generation-1",
             "manifest_sha256": _offline_fixed_bytes(0x81),
         },
@@ -5806,9 +5867,12 @@ def _offline_rejected_status(error: Mapping[str, Any]) -> Dict[str, Any]:
 
 
 def test_offline_public_request_annotations_are_closed_first_release_types() -> None:
-    assert get_type_hints(ToriiClient.submit_kagemusha_top_up)["request"] is KagemushaTopUpRequestV2
-    assert get_type_hints(ToriiClient.submit_kagemusha_redeem)["request"] is KagemushaRedeemRequestV2
+    assert get_type_hints(ToriiClient.submit_kagemusha_top_up)["request"] is KagemushaTopUpRequestV4
+    assert get_type_hints(ToriiClient.submit_kagemusha_redeem)["request"] is KagemushaRedeemRequestV4
     assert get_args(OfflineAssetScale) == tuple(range(29))
+    assert "next_zero_leaf_index" in (
+        client_module.OfflineRecursiveSpendStatementJson.__required_keys__
+    )
 
 
 def test_offline_finality_execution_commitment_requires_executed_wire_hash() -> None:
@@ -5855,7 +5919,7 @@ def test_get_kagemusha_readiness_sends_exact_asset_selector_and_parses_blockers(
     readiness = client.get_kagemusha_readiness(CANONICAL_ASSET_DEFINITION_ID)
 
     assert readiness.asset_definition_id == CANONICAL_ASSET_DEFINITION_ID
-    assert readiness.required_bridge_abi_version == 19
+    assert readiness.required_bridge_abi_version == 20
     assert readiness.max_hops == 8
     assert readiness.asset_scale == 4
     assert readiness.evaluated_block_height == 42
@@ -5864,19 +5928,208 @@ def test_get_kagemusha_readiness_sends_exact_asset_selector_and_parses_blockers(
     assert readiness.active_transfer_verifier.id.backend == "halo2/ipa"
     assert readiness.active_transfer_verifier.max_proof_bytes == 4096
     assert readiness.active_topup_shield_verifier is not None
-    assert readiness.active_topup_shield_verifier.id.name == "asset-topup-shield-v2"
+    assert (
+        readiness.active_topup_shield_verifier.id.name
+        == "kagemusha_topup_shield_v2_verifier_record"
+    )
     assert readiness.active_unshield_verifier is not None
     assert readiness.active_recursive_step_eq_verifier is not None
     assert readiness.active_recursive_step_ep_verifier is not None
+    assert (
+        readiness.active_recursive_step_eq_verifier.id.name
+        == "kagemusha_recursive_step_eq_v4_verifier_record"
+    )
+    assert readiness.active_recursive_step_eq_verifier.max_proof_bytes == 2 * 1024 * 1024
+    assert isinstance(readiness.artifact_set, OfflineAuthenticatedArtifactSet)
+    assert readiness.artifact_set.generation == "release-v4"
+    assert readiness.artifact_set.max_proof_bytes == 2 * 1024 * 1024
+    assert readiness.artifact_set.asset_scale == 4
     assert readiness.proof_backend_available is True
     assert readiness.recursive_lineage_supported is True
     assert readiness.ready is False
-    assert readiness.blockers[0].code == "issuer_unavailable"
+    assert [blocker.code for blocker in readiness.blockers] == ["issuer_unavailable"]
     call = session.calls[0]
     assert call["method"] == "GET"
     assert call["url"].endswith("/v1/offline/readiness")
     assert call["params"] == {"asset_definition_id": CANONICAL_ASSET_DEFINITION_ID}
     assert call["headers"]["Accept"] == "application/json"
+
+
+def test_kagemusha_readiness_accepts_authenticated_v4_artifacts_when_backend_fails() -> None:
+    session = RecordingSession()
+    session.queue(
+        StubResponse(
+            payload=_offline_readiness_payload(
+                proof_backend_available=False,
+                recursive_lineage_supported=False,
+                ready=False,
+                blockers=[
+                    {
+                        "code": "proof_backend_unavailable",
+                        "message": "The authenticated ABI-20 V4 backend could not be constructed.",
+                    },
+                    _offline_recursive_lineage_blocker(),
+                ],
+            )
+        )
+    )
+
+    readiness = ToriiClient("http://node.test", session=session).get_kagemusha_readiness(
+        CANONICAL_ASSET_DEFINITION_ID
+    )
+
+    assert readiness.proof_backend_available is False
+    assert readiness.artifact_set is not None
+    assert readiness.active_recursive_step_eq_verifier is not None
+    assert readiness.active_recursive_step_ep_verifier is not None
+    assert readiness.recursive_lineage_supported is False
+    assert readiness.ready is False
+
+
+def test_kagemusha_readiness_null_artifact_rejects_available_backend() -> None:
+    session = RecordingSession()
+    session.queue(
+        StubResponse(
+            payload=_offline_readiness_payload(
+                active_recursive_step_eq_verifier=None,
+                active_recursive_step_ep_verifier=None,
+                artifact_set=None,
+                proof_backend_available=True,
+                recursive_lineage_supported=False,
+                ready=False,
+                blockers=[
+                    {
+                        "code": "recursive_v4_registry_unavailable",
+                        "message": "The authenticated V4 registry is unavailable.",
+                    },
+                    {
+                        "code": "recursive_step_eq_verifier_unavailable",
+                        "message": "The StepEq verifier is unavailable.",
+                    },
+                    {
+                        "code": "recursive_step_ep_verifier_unavailable",
+                        "message": "The StepEp verifier is unavailable.",
+                    },
+                    _offline_recursive_lineage_blocker(),
+                ],
+            )
+        )
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="proof_backend_available requires an authenticated artifact_set",
+    ):
+        ToriiClient("http://node.test", session=session).get_kagemusha_readiness(
+            CANONICAL_ASSET_DEFINITION_ID
+        )
+
+
+def test_kagemusha_readiness_artifact_set_requires_exact_v4_fields() -> None:
+    for field in (
+        "generation",
+        "manifest_sha256",
+        "release_policy_sha256",
+        "release_attestation_sha256",
+        "activation_height",
+        "withdrawal_height",
+        "max_proof_bytes",
+        "asset_scale",
+    ):
+        artifact_set = _offline_authenticated_artifact_set()
+        artifact_set.pop(field)
+        session = RecordingSession()
+        session.queue(
+            StubResponse(payload=_offline_readiness_payload(artifact_set=artifact_set))
+        )
+        with pytest.raises(RuntimeError, match=rf"artifact_set\.{field} is required"):
+            ToriiClient(
+                "http://node.test", session=session
+            ).get_kagemusha_readiness(CANONICAL_ASSET_DEFINITION_ID)
+
+    session = RecordingSession()
+    session.queue(
+        StubResponse(
+            payload=_offline_readiness_payload(
+                artifact_set=_offline_authenticated_artifact_set(future=True)
+            )
+        )
+    )
+    with pytest.raises(RuntimeError, match="artifact_set.future is not part"):
+        ToriiClient("http://node.test", session=session).get_kagemusha_readiness(
+            CANONICAL_ASSET_DEFINITION_ID
+        )
+
+
+def test_kagemusha_readiness_rejects_malformed_v4_artifact_constraints() -> None:
+    malformed_artifact_sets = [
+        _offline_authenticated_artifact_set(generation=""),
+        _offline_authenticated_artifact_set(generation="rélease-v4"),
+        _offline_authenticated_artifact_set(generation=".release-v4"),
+        _offline_authenticated_artifact_set(generation="release-v4."),
+        _offline_authenticated_artifact_set(generation="CON.release"),
+        _offline_authenticated_artifact_set(generation="com1.release"),
+        _offline_authenticated_artifact_set(generation="a" * 129),
+        _offline_authenticated_artifact_set(manifest_sha256="AA" * 32),
+        _offline_authenticated_artifact_set(manifest_sha256="11" * 31),
+        _offline_authenticated_artifact_set(manifest_sha256="00" * 32),
+        _offline_authenticated_artifact_set(release_policy_sha256="11" * 32),
+        _offline_authenticated_artifact_set(activation_height=0),
+        _offline_authenticated_artifact_set(activation_height=43),
+        _offline_authenticated_artifact_set(activation_height=1 << 64),
+        _offline_authenticated_artifact_set(withdrawal_height=40),
+        _offline_authenticated_artifact_set(withdrawal_height=42),
+        _offline_authenticated_artifact_set(withdrawal_height=1 << 64),
+        _offline_authenticated_artifact_set(max_proof_bytes=0),
+        _offline_authenticated_artifact_set(max_proof_bytes=16 * 1024 * 1024 + 1),
+        _offline_authenticated_artifact_set(max_proof_bytes=True),
+        _offline_authenticated_artifact_set(asset_scale=29),
+    ]
+    payloads = [
+        *[
+            _offline_readiness_payload(artifact_set=artifact_set)
+            for artifact_set in malformed_artifact_sets
+        ],
+        _offline_readiness_payload(
+            artifact_set=_offline_authenticated_artifact_set(asset_scale=5)
+        ),
+        _offline_readiness_payload(
+            artifact_set=_offline_authenticated_artifact_set(activation_height=39)
+        ),
+        _offline_readiness_payload(
+            artifact_set=_offline_authenticated_artifact_set(withdrawal_height=81)
+        ),
+        _offline_readiness_payload(
+            active_recursive_step_eq_verifier=_offline_active_recursive_step_eq_verifier(
+                max_proof_bytes=1024
+            )
+        ),
+        _offline_readiness_payload(
+            active_recursive_step_eq_verifier=_offline_active_recursive_step_eq_verifier(
+                id={
+                    "backend": "halo2/ipa",
+                    "name": "kagemusha_recursive_step_eq_v3_verifier_record",
+                }
+            )
+        ),
+        _offline_readiness_payload(
+            active_recursive_step_eq_verifier=_offline_active_recursive_step_eq_verifier(
+                circuit_id="kagemusha-recursive-spend-step-eq-two-parent-operation-protocol-v2"
+            )
+        ),
+        _offline_readiness_payload(artifact_set=None),
+        _offline_readiness_payload(
+            active_recursive_step_eq_verifier=None,
+            active_recursive_step_ep_verifier=None,
+        ),
+    ]
+    for payload in payloads:
+        session = RecordingSession()
+        session.queue(StubResponse(payload=payload))
+        with pytest.raises(RuntimeError):
+            ToriiClient(
+                "http://node.test", session=session
+            ).get_kagemusha_readiness(CANONICAL_ASSET_DEFINITION_ID)
 
 
 def test_get_kagemusha_readiness_resolves_alias_to_canonical_asset_id() -> None:
@@ -5897,12 +6150,33 @@ def test_get_kagemusha_readiness_rejects_invalid_selector_before_network() -> No
         "",
         "different-asset",
         "XOR#sora",
+        CHECKSUM_INVALID_ASSET_DEFINITION_ID,
+        CHECKSUM_VALID_NON_UUID_V4_ASSET_DEFINITION_ID,
+        CHECKSUM_VALID_NON_RFC4122_ASSET_DEFINITION_ID,
         f" {CANONICAL_ASSET_DEFINITION_ID}",
         f"{CANONICAL_ASSET_DEFINITION_ID} ",
     ):
         with pytest.raises(RuntimeError, match="asset_definition_id"):
             client.get_kagemusha_readiness(asset)
     assert session.calls == []
+
+
+def test_offline_asset_definition_id_validation_matches_canonical_rust_codec() -> None:
+    assert client_module._offline_canonical_asset_definition_id(
+        CANONICAL_ASSET_DEFINITION_ID,
+        "asset_definition_id",
+    ) == CANONICAL_ASSET_DEFINITION_ID
+
+    for invalid in (
+        CHECKSUM_INVALID_ASSET_DEFINITION_ID,
+        CHECKSUM_VALID_NON_UUID_V4_ASSET_DEFINITION_ID,
+        CHECKSUM_VALID_NON_RFC4122_ASSET_DEFINITION_ID,
+    ):
+        with pytest.raises(RuntimeError, match="checksummed UUIDv4"):
+            client_module._offline_canonical_asset_definition_id(
+                invalid,
+                "asset_definition_id",
+            )
 
 
 def test_get_kagemusha_readiness_rejects_adversarial_snapshots() -> None:
@@ -5920,6 +6194,8 @@ def test_get_kagemusha_readiness_rejects_adversarial_snapshots() -> None:
     missing_recursive_step_eq_verifier.pop("active_recursive_step_eq_verifier")
     missing_recursive_step_ep_verifier = _offline_readiness_payload()
     missing_recursive_step_ep_verifier.pop("active_recursive_step_ep_verifier")
+    missing_artifact_set = _offline_readiness_payload()
+    missing_artifact_set.pop("artifact_set")
     payloads = [
         missing_hash,
         missing_scale,
@@ -5928,6 +6204,7 @@ def test_get_kagemusha_readiness_rejects_adversarial_snapshots() -> None:
         missing_unshield_verifier,
         missing_recursive_step_eq_verifier,
         missing_recursive_step_ep_verifier,
+        missing_artifact_set,
         _offline_readiness_payload(unexpected_field="not-part-of-readiness"),
         _offline_readiness_payload(required_bridge_abi_version=17),
         _offline_readiness_payload(max_hops=9),
@@ -5941,6 +6218,19 @@ def test_get_kagemusha_readiness_rejects_adversarial_snapshots() -> None:
         _offline_readiness_payload(evaluated_block_height=1 << 64),
         _offline_readiness_payload(evaluated_block_hash="AB" * 32),
         _offline_readiness_payload(evaluated_block_hash="ab" * 31),
+        _offline_readiness_payload(
+            active_transfer_verifier=_offline_active_transfer_verifier(version=0)
+        ),
+        _offline_readiness_payload(
+            active_transfer_verifier=_offline_active_transfer_verifier(
+                commitment="00" * 32
+            )
+        ),
+        _offline_readiness_payload(
+            active_transfer_verifier=_offline_active_transfer_verifier(
+                public_inputs_schema_hash="00" * 32
+            )
+        ),
         _offline_readiness_payload(blockers=[{"code": "NOT-CANONICAL", "message": "no"}]),
         _offline_readiness_payload(
             ready=False, blockers=[{"code": "not_ready", "message": ""}]
@@ -6077,12 +6367,19 @@ def test_kagemusha_readiness_rejects_unknown_members_and_accepts_exact_unavailab
         StubResponse(
             payload=_offline_readiness_payload(
                 asset_scale=29,
+                active_recursive_step_eq_verifier=None,
+                active_recursive_step_ep_verifier=None,
+                artifact_set=None,
+                proof_backend_available=False,
+                recursive_lineage_supported=False,
                 ready=False,
-                blockers=[
+                blockers=_offline_recursive_v4_unavailable_blockers()
+                + [
                     {
                         "code": "asset_scale_unsupported",
                         "message": "unsupported scale",
-                    }
+                    },
+                    _offline_recursive_lineage_blocker(),
                 ],
             )
         )
@@ -6186,11 +6483,14 @@ def test_kagemusha_command_validation_rejects_noncanonical_inputs_before_network
         with pytest.raises(TypeError):
             client.submit_kagemusha_redeem(malformed)  # type: ignore[arg-type]
 
-    for request_type in (KagemushaTopUpRequestV2, KagemushaRedeemRequestV2):
+    for request_type, maximum_bytes in (
+        (KagemushaTopUpRequestV4, 512 * 1024),
+        (KagemushaRedeemRequestV4, 48 * 1024 * 1024),
+    ):
         with pytest.raises(ValueError, match="must not be empty"):
             request_type(norito=b"", operation_id=OFFLINE_OPERATION_ID)
         with pytest.raises(ValueError, match="exceeds"):
-            request_type(norito=b"x" * (256 * 1024 + 1), operation_id=OFFLINE_OPERATION_ID)
+            request_type(norito=b"x" * (maximum_bytes + 1), operation_id=OFFLINE_OPERATION_ID)
         for norito in (bytearray(b"x"), memoryview(b"x"), "x"):
             with pytest.raises(TypeError, match="immutable bytes"):
                 request_type(norito=norito, operation_id=OFFLINE_OPERATION_ID)  # type: ignore[arg-type]
@@ -6324,10 +6624,13 @@ def test_kagemusha_top_up_anchor_is_closed_typed_and_cross_checked() -> None:
     assert status.result.kind == "top_up"
     typed_anchor = status.result.result.anchor
     assert isinstance(typed_anchor, OfflineTopUpAnchor)
-    assert typed_anchor.version == 2
+    # ABI-20 promotes the finalized anchor and its authenticated artifact
+    # binding atomically to the V4 wire contract.
+    assert typed_anchor.version == 4
     assert typed_anchor.amount.scale == 4
     assert typed_anchor.shield_leaf_index == 7
     assert typed_anchor.shield_verifier_id.backend == "halo2/ipa"
+    assert typed_anchor.artifact_binding.version == 4
     assert typed_anchor.artifact_binding.generation == "generation-1"
     assert typed_anchor.artifact_binding.manifest_sha256 == tuple(
         _offline_fixed_bytes(0x81)
@@ -6469,12 +6772,14 @@ def test_offline_top_up_anchor_rejects_malformed_and_cross_resource_conflicts() 
         _offline_top_up_anchor(shield_verifier_commitment=_offline_fixed_bytes(0)),
         _offline_top_up_anchor(
             artifact_binding={
+                "version": 4,
                 "generation": "é" * 65,
                 "manifest_sha256": _offline_fixed_bytes(0x81),
             }
         ),
         _offline_top_up_anchor(
             artifact_binding={
+                "version": 4,
                 "generation": "generation-1",
                 "manifest_sha256": _offline_fixed_bytes(0),
             }
@@ -6717,6 +7022,7 @@ def test_offline_error_details_reject_malformed_nested_types_and_ranges() -> Non
 def test_offline_json_decoder_rejects_duplicates_non_finite_depth_and_size() -> None:
     valid = json.dumps(_offline_readiness_payload())
     duplicate = valid.replace('"ready": true', '"ready": true, "ready": true')
+    assert duplicate != valid, "duplicate-key fixture must actually introduce a duplicate"
     non_finite = valid.replace('"evaluated_block_height": 42', '"evaluated_block_height": NaN')
     infinity = valid.replace('"evaluated_block_height": 42', '"evaluated_block_height": Infinity')
     deep_value = "0"

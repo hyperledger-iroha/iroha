@@ -608,7 +608,7 @@ final class KagemushaArtifactCoordinatorTests: XCTestCase {
         let digest = Data(repeating: 0xA5, count: 32)
         for invalidDigest in [Data(), Data(repeating: 0, count: 32)] {
             XCTAssertThrowsError(try KagemushaRecursiveSpendArtifactStream(
-                role: .stepEqParameters,
+                role: .stepEqParamsIpa,
                 expectedSHA256: invalidDigest,
                 byteCount: 1
             ) { _ in })
@@ -619,7 +619,7 @@ final class KagemushaArtifactCoordinatorTests: XCTestCase {
             UInt64.max,
         ] {
             XCTAssertThrowsError(try KagemushaRecursiveSpendArtifactStream(
-                role: .stepEqParameters,
+                role: .stepEqParamsIpa,
                 expectedSHA256: digest,
                 byteCount: invalidCount
             ) { _ in }) { error in

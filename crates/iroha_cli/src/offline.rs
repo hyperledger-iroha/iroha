@@ -8,12 +8,14 @@ use std::{
 
 use clap::{Args, Subcommand, ValueEnum};
 use eyre::{Result, WrapErr, eyre};
+use iroha::data_model::isi::{InstructionBox, offline::ActivateKagemushaRecursiveReleaseV4};
 use iroha::data_model::petal_stream::{
     PETAL_CAPTURE_DEFAULT_MIN_SUCCESS_RATIO_BPS, PETAL_CAPTURE_RATIO_BPS_SCALE,
     PETAL_STREAM_GRID_SIZES, PetalStreamCaptureProfile, PetalStreamDecoder, PetalStreamEncoder,
     PetalStreamGrid, PetalStreamOptions, PetalStreamSampleGrid,
     render_petal_capture_samples_with_seed, score_petal_capture_profile_with_seed,
 };
+use iroha_core::smartcontracts::isi::offline::KagemushaReleaseCatalogV4;
 use norito::derive::JsonSerialize;
 
 use crate::{Run, RunContext, cli_output::print_with_optional_text};
@@ -41,6 +43,9 @@ const KATAKANA_HIGH_CONTRAST_STYLE_NAME: &str = "sora-temple-command-high-contra
 
 #[derive(Subcommand, Debug)]
 pub(crate) enum Command {
+    /// Governed Kagemusha recursive-release operations.
+    #[command(subcommand)]
+    Kagemusha(KagemushaCommand),
     /// Petal Stream optical handoff tooling.
     #[command(subcommand)]
     Petal(PetalCommand),
@@ -48,16 +53,79 @@ pub(crate) enum Command {
 
 impl Command {
     pub(crate) fn allows_fallback_config(&self) -> bool {
-        true
+        matches!(self, Self::Petal(_))
     }
 }
 
 impl Run for Command {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
+            Self::Kagemusha(command) => Run::run(command, context),
             Self::Petal(command) => Run::run(command, context),
         }
     }
+}
+
+#[derive(Subcommand, Debug)]
+pub(crate) enum KagemushaCommand {
+    /// Activate an authenticated ABI-20 release and its exact Eq/Ep verifier pair.
+    ActivateReleaseV4(ActivateReleaseV4Args),
+}
+
+impl Run for KagemushaCommand {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        match self {
+            Self::ActivateReleaseV4(args) => args.run(context),
+        }
+    }
+}
+
+#[derive(Args, Debug, Clone)]
+pub(crate) struct ActivateReleaseV4Args {
+    /// Canonical Norito release-policy file configured on the target peers.
+    #[arg(long = "release-policy", value_name = "PATH")]
+    release_policy: PathBuf,
+    /// Authenticated catalog root configured on the target peers.
+    #[arg(long = "artifact-dir", value_name = "DIR")]
+    artifact_dir: PathBuf,
+    /// Canonical lowercase SHA-256 digest naming the release catalog directory.
+    #[arg(
+        long = "manifest-sha256",
+        value_name = "LOWERCASE_HEX",
+        value_parser = parse_canonical_sha256
+    )]
+    manifest_sha256: [u8; 32],
+    /// Next atomic Eq/Ep verifier version in consensus state.
+    #[arg(long = "verifier-version")]
+    verifier_version: u32,
+}
+
+impl Run for ActivateReleaseV4Args {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        let catalog = KagemushaReleaseCatalogV4::load(&self.release_policy, &self.artifact_dir)
+            .map_err(|error| eyre!(error))
+            .wrap_err("failed to authenticate the configured Kagemusha V4 release catalog")?;
+        let activation = catalog
+            .build_activation(self.manifest_sha256, self.verifier_version)
+            .map_err(|error| eyre!(error))
+            .wrap_err("failed to construct the governed Kagemusha V4 activation")?;
+        let instruction = ActivateKagemushaRecursiveReleaseV4::new(activation);
+        context.finish([InstructionBox::from(instruction)])
+    }
+}
+
+fn parse_canonical_sha256(value: &str) -> Result<[u8; 32], String> {
+    if value.len() != 64
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err("expected exactly 64 lowercase hexadecimal characters".to_owned());
+    }
+    let mut digest = [0_u8; 32];
+    hex::decode_to_slice(value, &mut digest)
+        .map_err(|_| "expected exactly 64 lowercase hexadecimal characters".to_owned())?;
+    Ok(digest)
 }
 
 #[derive(Subcommand, Debug)]
@@ -2632,6 +2700,27 @@ mod tests {
     use norito::json::Value;
 
     use super::*;
+
+    #[test]
+    fn kagemusha_manifest_digest_requires_canonical_lowercase_sha256() {
+        let canonical = "ab".repeat(32);
+        assert_eq!(parse_canonical_sha256(&canonical), Ok([0xab; 32]));
+        assert!(parse_canonical_sha256(&canonical.to_uppercase()).is_err());
+        assert!(parse_canonical_sha256(&canonical[..63]).is_err());
+        assert!(parse_canonical_sha256(&format!("0x{canonical}")).is_err());
+    }
+
+    #[test]
+    fn kagemusha_activation_never_allows_fallback_credentials() {
+        let command =
+            Command::Kagemusha(KagemushaCommand::ActivateReleaseV4(ActivateReleaseV4Args {
+                release_policy: PathBuf::from("policy.norito"),
+                artifact_dir: PathBuf::from("catalog"),
+                manifest_sha256: [0x11; 32],
+                verifier_version: 1,
+            }));
+        assert!(!command.allows_fallback_config());
+    }
 
     struct TestContext {
         output_format: crate::CliOutputFormat,

@@ -106,6 +106,13 @@ let toriiAuth = try ToriiClientAuthentication.bearerToken(
 )
 let torii = ToriiClient(baseURL: toriiURL, authentication: toriiAuth)
 
+// Account onboarding requires the dedicated route token explicitly. It remains
+// separate from an optional global X-API-Token configured on the client.
+let onboarding = try await torii.registerAccount(
+    onboardingRequest,
+    onboardingToken: routeToken
+)
+
 // Or opt into any native-bridge signing algorithm explicitly.
 let pqSigningKey = try pqSDK.generateSigningKey()
 let gostSigningKey = try gostSDK.signingKey(fromSeed: Data("seed".utf8))
@@ -175,14 +182,18 @@ rounding.
 
 Wallet applications own encrypted note state and peer transport. Persist the
 opaque bundle, recipient output, optional sender change, artifact binding, and
-operation status at each commit boundary. Fetch the complete V3 artifact set,
+operation status at each commit boundary. Fetch the complete ABI-20/V4 artifact set,
 wrap each one-shot source in `KagemushaRecursiveSpendArtifactStream`, and acquire
-it through `KagemushaRecursiveSpendArtifactCoordinator.shared`. Keep every proof
+it through a `KagemushaRecursiveSpendArtifactCoordinator` created with
+`.authenticated(...)` from deployment-provisioned release trust. Keep every proof
 operation inside the returned lease's `withInstalledArtifactSet` callback. The
-coordinator verifies the exact manifest generation, six-file inventory, lengths,
-offsets, and digests; serializes install, use, rotation, and uninstall; and fails
-stale leases closed. No network or artifact access belongs on the offline send
-or receive path.
+coordinator verifies the exact manifest generation and eight-file inventory:
+`ParamsIPA`, processed proving key, processed verifying key, and final-key
+selector-zero bootstrap witness for each Eq/Ep parity. The two bounded circuit
+parameter records are authenticated inline in the manifest rather than streamed
+as extra files. The coordinator verifies lengths, offsets, and digests;
+serializes install, use, rotation, and uninstall; and fails stale leases closed.
+No network or artifact access belongs on the offline send or receive path.
 
 ### Push Devices
 
@@ -327,7 +338,7 @@ let finality = try await torii.waitForDetachedAssetTransferFinality(
 )
 ```
 
-Preparation fails closed unless ABI-19 native inspection proves the versioned
+Preparation fails closed unless ABI-20 native inspection proves the versioned
 scaffold has the exact authority, chain, definition, source scope, amount,
 destination, memo, fee sponsor, creation time, TTL, and no extra metadata.
 Submission locally verifies Ed25519 authority/signature binding, uses native
@@ -729,37 +740,63 @@ Use `getKagemushaReadiness(assetDefinitionId:)`, `submitKagemushaTopUp`,
 
 `KagemushaTopUpRequest` and `KagemushaRedeemRequest` accept only the corresponding
 typed Kagemusha Norito archive. They derive the lowercase idempotency key from
-the embedded nonzero operation ID; callers cannot override it. Keep a submitted
+the embedded nonzero operation ID; callers cannot override it. Top-up archives
+are limited to 512 KiB and redeem archives to 48 MiB, exactly matching Torii.
+Keep a submitted
 operation and its input note until the operation status reaches final chain
 state. A transport timeout or unknown state is not permission to create a new
 operation ID.
 
-Runtime use requires the exact ABI 19 capability archive, the complete native
-first-release symbol inventory, and a
-validated proof-backend readiness result. The V3 manifest and its six streamed
-key artifacts are content-addressed and installed atomically through
-`KagemushaRecursiveSpendArtifactInstallSessionV3`; a partial or corrupt
-generation never becomes active.
+Artifact and readiness validation requires exact bridge ABI 20 and manifest
+schema `kagemusha.offline.recursive_spend.artifact_manifest.v4`. The V4
+manifest's eight streamed artifacts are content-addressed and installed
+atomically through `KagemushaRecursiveSpendArtifactInstallSessionV4`; a partial,
+corrupt, or role-substituted generation never becomes active. Circuit parameters
+remain authenticated inline in the Eq/Ep profiles.
 
-Top-up uses `KagemushaRecursiveSpendTopUpUnsigned`, an authorization over its
-canonical digest, direct Torii submission, authenticated finality verification,
-and `KagemushaRecursiveSpend.initSpend`. Offline transfer is receiver-initiated:
-verify the nonce-bound `KagemushaRecipientPaymentRequest`, construct an append
-request with recipient and optional change branches, call `appendSpend`, verify
-the result locally, and send only the recipient peer-payment archive.
+`ToriiKagemushaReadiness.artifactSet` is required but nullable. A non-null value
+binds the authenticated generation, manifest, release-policy and
+release-attestation digests, issuance window, proof-pair bound, and asset scale
+to both exact recursive verifier records:
+`kagemusha_recursive_step_eq_v4_verifier_record` with
+`kagemusha-recursive-spend-step-eq-authenticated-layout-v4`, and
+`kagemusha_recursive_step_ep_v4_verifier_record` with
+`kagemusha-recursive-spend-step-ep-authenticated-layout-v4`. Authenticated
+backend construction is not proof admission. A null artifact set requires both
+recursive records and backend construction to be unavailable with exactly one
+`recursive_v4_registry_unavailable` or `recursive_v4_registry_malformed`
+blocker. `proofBackendAvailable` reports exact backend construction
+independently.
+`recursiveLineageSupported` is true only when the artifact set, distinct active
+Eq/Ep records, and backend are all available; its inverse is represented by
+`recursive_lineage_unavailable`. `ready` is true only when the complete blocker
+set is empty, so unrelated issuer or transfer blockers do not erase valid
+backend and lineage facts.
 
-The receiver calls `verifySpend`, checks the exact asset, scale, amount,
+Top-up uses `KagemushaTopUpShieldBuildRequestV4`,
+`KagemushaRecursiveSpendTopUpUnsignedV4`, and an authorization over the
+canonical ABI-20 digest. After direct Torii submission and authenticated
+finality verification, initialize the offline branch with
+`KagemushaRecursiveSpendInitLocalRequestV4` and
+`KagemushaRecursiveSpend.initSpendV4`. Offline transfer is receiver-initiated:
+verify the nonce-bound `KagemushaRecipientPaymentRequest`, construct a
+`KagemushaRecursiveSpendAppendLocalRequestV4` with recipient and optional change
+branches, call `appendSpendV4`, verify the result locally, and send only the V4
+recipient peer-payment archive.
+
+The receiver calls `verifySpendV4`, checks the exact asset, scale, amount,
 recipient commitment, verifier window, hop bound, and lineage requirements,
 then durably stores the bundle before creating a
 `KagemushaReceiverAcknowledgement`. The sender marks its reserved inputs spent
 only after `verifiedForSender` accepts that acknowledgement. Replayed peer
 payments and acknowledgements remain idempotent at the wallet operation layer.
 
-Redemption uses `KagemushaRecursiveSpendRedemptionIntentBuildRequest`, the
-unshield-v3 proof APIs, and `KagemushaRecursiveSpendRedeemUnsigned`. Full redeem
-has no change branch; partial redeem binds one offline change branch to the same
-proof and operation ID. `redeemSpend` returns the canonical request submitted by
-`submitKagemushaRedeem`.
+Redemption uses `KagemushaRecursiveSpendRedeemLocalRequestV4`, the retained
+unshield-v3 primitive proof APIs, and
+`KagemushaRecursiveSpendRedeemUnsignedV4`. Full redeem has no change branch;
+partial redeem binds one offline change branch to the same proof and operation
+ID. `buildRedeemV4` produces the authorization-bound build result; finalizing it
+returns the canonical V4 request submitted by `submitKagemushaRedeem`.
 
 All accumulator, proof, verifier-record, and finality-proof archives are opaque
 to wallet code. The first-release wire API has no separate lineage-witness
@@ -774,7 +811,7 @@ admitted production privacy entrypoints, including
 `buildZkAceAuthorizationProofV1(requestArchive:)`, dispatch through the same
 production archive paths and remain fail-closed while the privacy rows are
 gated. Planned catalog entrypoints stay unexported until their production gates
-pass. Native availability in the first release requires exact ABI 19, the privacy
+pass. Native availability in the first release requires exact ABI 20, the privacy
 capability/build/verify symbols, and successful Norito probe outputs whose
 operation-specific result schema bytes match the called entry point.
 

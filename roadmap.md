@@ -6,54 +6,92 @@ This roadmap is the public, high-level view of current Hyperledger Iroha work.
 Completed history lives in [`status.md`](./status.md).
 
 Kagemusha transport and proof admission are fail-closed for the first release.
-It is the only offline-spend protocol. Bridge ABI 19 and the governed
-`kagemusha.offline.recursive_spend.artifact_manifest.v3` manifest remain the
-current production-admission contract. ABI 20/V4 is a separately versioned,
-fail-closed candidate artifact and circuit foundation; it is not an active
-runtime product selector. Runtime, wallet, and readiness surfaces remain
-selector-free.
-`KAGEMUSHA_RECURSIVE_SPEND_PROOF_BACKEND_AVAILABLE = false` is the
-authoritative release state: Core top-up execution and every proof-gated
-init/append/verify/redeem path remain unavailable. Branch paths retain depth 64,
-while peer spends permit at most eight hops and each transition consumes at most
-two recursive inputs. Redemption-change extends proof lineage without adding a
-peer hop. These are protocol bounds, not availability signals.
-The remaining release work is the two-layer Pasta IPA/Poseidon backend: an
-EqAffine/Vesta transition proof and EpAffine/Pallas state wrapper must
-authenticate the previous recursive proof and current transition proof under
-fixed verifier keys, bind their exact public instances to the Kagemusha
-amount/nullifier/commitment state transition, decide both canonical IPA
-openings, and pass proof/key/parameter/parity/instance/transition substitution
-tests. The checked-in KZG experiment is rejected by payload, latency, and
-memory measurements and must not be used in production.
+It is the only offline-spend protocol. Exact bridge ABI 20 and governed schema
+`kagemusha.offline.recursive_spend.artifact_manifest.v4` are the current
+artifact and readiness contract, not a runtime product selector. Runtime,
+wallet, and readiness surfaces remain selector-free. Each authenticated V4
+manifest has Eq then Ep profiles and exactly eight external cryptographic
+artifacts: `ParamsIPA`, processed proving key, processed verifying key, and
+final-key selector-zero bootstrap witness for each parity. Bounded circuit
+parameters are authenticated inline in the two profiles rather than represented
+as additional streamed artifacts.
+The unreleased recursive state boundary and vector layout have deliberately
+advanced to V2 without changing bridge ABI 20 or manifest V4. The boundary is
+the complete 890-limb canonical state, including the public append-only
+`next_zero_leaf_index`; each fixed Eq/Ep public-input schema is 4,027 limbs.
+There is no fallback for the former layout. All earlier V4 candidate keys,
+bootstrap witnesses, proofs, manifests, and schema digests are invalid and must
+be regenerated after the frontier substitution matrix passes.
+Core and Torii resolve the exact V4 release selected by each transaction's
+artifact binding. Admission requires that release's authenticated Eq/Ep
+registry records and immutable native verifier; top-up and redemption-change
+also require an active issuance window, while full redemption remains available
+after issuance withdrawal. The legacy global backend constant is retained only
+as a compatibility marker and is not a V4 admission selector. Branch paths
+retain depth 64, while peer spends permit at most eight hops and each transition
+consumes at most two recursive inputs. Redemption-change extends proof lineage
+without adding a peer hop. These are protocol bounds, not availability signals.
+The two-layer Pasta IPA/Poseidon backend now contains the fixed-shape
+EqAffine/Vesta transition proof and EpAffine/Pallas wrapper. They authenticate
+parent proofs under release-bound verifier keys, bind the exact public
+instances to the Kagemusha amount/nullifier/commitment transition, and
+terminally decide both canonical IPA openings. The checked-in KZG experiment
+remains rejected by payload, latency, and memory measurements and must not be
+used in production.
+Every continuing transition must insert at the identical frontier committed by
+all active parents, use consecutive recipient/change indices, prove the exact
+next leaf empty, and publish that next index in both parity columns. Restoring a
+persisted branch must terminally reverify its recursive proof under the exact
+installed release before returning that proof-bound frontier. Promotion remains
+blocked until the focused adversarial circuit, bridge, and SDK matrix verifies
+these obligations and fresh artifacts are generated from the resulting layout.
 Each parity must retain one fixed circuit shape across initialization and
 one-/two-parent transitions. The V4 candidate authenticates its degree-20/21
 base-circuit configuration and dynamic public layout, two mandatory
 real-or-bootstrap parent slots, canonical bootstrap-witness artifacts,
 in-circuit presence selectors, fixed post-proof and branch folds, and fixed
 deferred-equation stage plans. Circuit parameters stay inside the signed
-manifest profiles; the external inventory is exactly eight artifacts:
-ParamsIPA, proving key, verifying key, and bootstrap witness for each Eq/Ep
-parity. Concrete StepEq/StepEp circuit, proving, and terminal-verification
-primitives exist in the recursion adapter, and native bridge/JNI ingestion can
-atomically install the exact external artifact set, but no bridge
-proof-lifecycle call, Core executor or admission path, or production
-artifact-resolution call site invokes those primitives. Terminal admission
-therefore remains deliberately closed. Release work must connect,
-independently review, and prove fixed-shape parity before generated V4 material
-can be accepted by production.
-The ABI-19/V3 path retains its 1,600-byte per-step limit and 21,764-byte proof
-payload cap. Its degree-18 prototype produced 7,296-byte ordinary and
+manifest profiles. Concrete StepEq/StepEp circuit, proving, and terminal
+verification primitives exist in the recursion adapter, and native bridge/JNI
+ingestion can atomically install the exact external artifact set and construct an
+authenticated backend. Core/Torii lineage support additionally requires the
+transaction-selected artifact set and distinct active Eq/Ep registry records;
+an unrelated readiness blocker does not erase those capability facts. Release
+work must still complete the full substitution matrix, independent
+cryptographic review, reproducible clean-commit generation, physical-device
+benchmarks, signed threshold approval, and the production promotion corridor
+before publishing an authenticated V4 release. Until then, authoritative
+production availability stays false.
+The historical ABI-19/V3 path had a 1,600-byte per-step limit and 21,764-byte
+proof payload cap. Its degree-18 prototype produced 7,296-byte ordinary and
 7,328-byte augmented proofs even before full confidential/output-membership
-composition. V4 does not alter those V3 limits: its authenticated profile pins
-the measured per-parity proof bound and its manifest pins the pair bound, with
-defensive ceilings of 1 MiB per step and 16 MiB per pair. Those ceilings are
-not shipping limits or availability signals; promotion must pin measured
-values, pass review and device evidence, and explicitly admit the separately
-versioned ABI-20 release.
-The canonical V2 transport/data model is now the only release target; no work
-is planned for decoding or migrating the retired nested-init, full-anchor peer,
-padded tag-history, duplicated peer-identity, or linear lineage-witness shapes.
+composition; it is not the current artifact/readiness contract. V4's
+authenticated profiles pin measured per-parity proof bounds and its manifest
+pins the pair bound, with defensive ceilings of 1 MiB per step and 16 MiB per
+pair. Those ceilings are not shipping limits or availability signals;
+promotion must pin measured values and pass independent review and device
+evidence.
+
+Torii readiness carries a required nullable authenticated `artifact_set` bound
+to exact roles `kagemusha_recursive_step_eq_v4_verifier_record` and
+`kagemusha_recursive_step_ep_v4_verifier_record` with circuits
+`kagemusha-recursive-spend-step-eq-authenticated-layout-v4` and
+`kagemusha-recursive-spend-step-ep-authenticated-layout-v4`, respectively.
+A null set requires both recursive records and backend construction to be
+unavailable with exactly one `recursive_v4_registry_unavailable` or
+`recursive_v4_registry_malformed` blocker; a present set forbids both.
+`proof_backend_available` reports authenticated backend construction
+independently. `recursive_lineage_supported` additionally requires the
+authenticated artifact set and distinct active Eq/Ep records, with
+`recursive_lineage_unavailable` present exactly when that conjunction is
+false. `ready` is true only when the complete blocker set is empty.
+
+The ABI-20/V4 recursive transport and data model are the only release target.
+V2 remains only for unchanged amount, note/opening, authorization, membership,
+finality, recipient/acknowledgement, and other explicitly reused leaf
+primitives. No decoder upgrades retired V2/V3 recursive lifecycle bytes, and no
+work is planned for the retired nested-init, full-anchor peer, padded
+tag-history, duplicated peer-identity, or linear lineage-witness shapes.
 
 SCCP first-release readiness no longer carries a production diagnostic fixture
 activation path: the governance CLI has no TAIRA/TRON diagnostic bundle command,
@@ -759,11 +797,12 @@ operator/mobile validation plus the sound recursive-verifier and production
 artifact gates described below; no legacy offline HTTP surface should be
 revived.
 
-Canonical V2 has no funded first-release path while its proof backend is
-unavailable. Flat init requests, semantic lineage DAGs, and record-backed
-validation exist only for API and fixture convergence; they do not make top-up
-or redemption executable. The active blocker is the reviewed ABI-19 two-layer
-Pasta IPA/Poseidon backend and its signed production artifacts. The
+Canonical V2 has a funded path only when the transaction-selected V4 release
+resolves to its authenticated exact eight-artifact backend and distinct active
+Eq/Ep registry records. Top-up additionally requires active issuance; full
+redemption does not. Flat requests and semantic lineage DAGs alone do not make
+an operation executable, and backend construction without the exact registry
+bindings does not open lineage. The
 `lineage-key-artifacts` command now fails before Halo2 keygen when
 deterministic fixed-window layout estimates exceed the memory guard or when the
 direct verifier-slice row footprint cannot fit the canonical Halo2 domain,
@@ -1794,11 +1833,16 @@ from the first release and must not appear as launch blockers or evidence rows.
 - Kagemusha is the single first-release offline-cash protocol. Every maintained
   data-model, bridge, Torii, CLI, SDK, mobile, packaging, and documentation
   surface must expose exact readiness only, with no runtime product, version,
-  or compatibility selector. The release contract is bridge ABI 19,
-  manifest V3, and the governed two-layer Pasta IPA/Poseidon design; V2/V3
-  identifiers are internal wire and artifact schemas, not selectable products.
-  Proof-gated init, append, verify, top-up, redeem, and change remain fail-closed
-  while `KAGEMUSHA_RECURSIVE_SPEND_PROOF_BACKEND_AVAILABLE` is `false`.
+  or compatibility selector. The current artifact/readiness contract is exact
+  bridge ABI 20 and manifest V4 with exactly eight external Eq/Ep artifacts;
+  bounded circuit parameters remain authenticated inline. Versioned type names
+  are internal wire and artifact schemas, not selectable products.
+  Proof-gated init, append, verify, top-up, redeem, and change are selected by
+  the transaction's exact authenticated release; the legacy false backend
+  constant is not an admission gate. Readiness's required nullable
+  `artifact_set`, distinct active Eq/Ep records, and constructed backend enable
+  lineage together. `ready` remains independent and is true only when no typed
+  blocker remains.
   Release readiness requires the real EqAffine/Vesta transition proof,
   EpAffine/Pallas recursive state wrapper, fixed-key terminal IPA verification,
   authenticated artifacts, adversarial lifecycle tests, independent review, and
@@ -11500,14 +11544,15 @@ from the first release and must not appear as launch blockers or evidence rows.
   `--phase-evidence-dir` logs must report the standard checked layouts without
   echoing the operator-supplied directory.
 - Keep Kagemusha offline-to-offline payments routed only through the single
-  mode-free ABI-19/manifest-V3 protocol. SDK and native bindings may expose the
-  exact typed V2 request/result and V3 artifact schemas required by that
-  protocol, but no runtime product, version, or compatibility selector. All
+  mode-free ABI-20/manifest-V4 protocol. SDK and native bindings expose the
+  exact typed request/result and V4 artifact schemas required by that protocol,
+  but no runtime product, version, or compatibility selector. All
   archive decoders must reject unknown, duplicate,
   malformed, oversized, noncanonical, cross-circuit, and trailing fields before
   native dispatch; caller-owned buffers must be copied before asynchronous or
   native use. Availability is the exact conjunction of the authenticated
-  six-file V3 artifact set, active verifier bindings, real proof backend,
+  exact eight-file V4 artifact set with inline circuit parameters, active
+  verifier bindings, real proof backend,
   cryptographic review, adversarial lifecycle coverage, and physical-device
   performance evidence. Until all gates pass, every proof-producing or
   proof-consuming lifecycle entrypoint remains unavailable and fails closed.
@@ -18308,18 +18353,21 @@ digest-bound pending-XSD source probe summaries for reviewed
   the background trace lane revalidates queued traces but no longer emits
   `zk-trace/mock-proof` artifacts while the real transparent IVM trace prover
   remains future work.
-  Kagemusha is the single mode-free offline-cash protocol. Its public contract is
-  bridge ABI 19 with authenticated manifest V3 artifacts; typed V2/V3 names are
-  internal wire and artifact schema identifiers only. Runtime, SDK, CLI,
+  Kagemusha is the single mode-free offline-cash protocol. Its current artifact
+  and readiness contract is exact bridge ABI 20 with authenticated manifest V4
+  artifacts: exactly eight external Eq/Ep roles with circuit parameters inline.
+  Versioned type names are internal wire and artifact schema identifiers only.
+  Runtime, SDK, CLI,
   packaging, capability, and documentation surfaces expose no product/version
   discriminator or compatibility branch. The real EqAffine/Vesta transition
   proof and EpAffine/Pallas recursive state wrapper must bind amount
   conservation, at most two inputs, lineage/nullifier uniqueness, chain, asset,
   scale, finality, boundary continuity, and the maximum-hop limit under fixed
   verifier keys with terminal IPA verification. Init, append, verify, top-up,
-  redeem, and change remain unavailable while the authoritative proof-backend
-  capability is false. No artifact, benchmark, simulator, or partial native
-  surface may change that state; release requires authenticated production
+  redeem, and change resolve their exact authenticated V4 release rather than a
+  global proof-backend flag. Top-up and change require the selected release's
+  issuance window to be active; full redemption remains available after
+  withdrawal. Release evidence still requires authenticated production
   artifacts, adversarial proof-lifecycle coverage, independent cryptographic
   review, and physical-device performance evidence.
 - Continue dependency, documentation, and release hygiene work required by LF

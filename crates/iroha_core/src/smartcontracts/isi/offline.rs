@@ -1,7 +1,8 @@
 //! Kagemusha offline-cash instruction execution.
 
-mod kagemusha_terminal_registry;
 mod kagemusha_terminal_registry_v4;
+
+pub use kagemusha_terminal_registry_v4::KagemushaReleaseCatalogV4;
 
 use super::prelude::*;
 use crate::smartcontracts::isi::asset::isi::assert_numeric_spec_with;
@@ -23,14 +24,15 @@ use iroha_data_model::{
     isi::{
         error::{InstructionExecutionError, MathError},
         offline::{
-            RedeemKagemushaRecursiveV2, RegisterOfflineDeviceAttestation,
-            SetOfflineDeviceAttestationPolicy, TopUpKagemushaRecursiveV2,
+            ActivateKagemushaRecursiveReleaseV4, RedeemKagemushaRecursiveV4,
+            RegisterOfflineDeviceAttestation, SetOfflineDeviceAttestationPolicy,
+            TopUpKagemushaRecursiveV4,
         },
     },
     name::Name,
     offline::{
         KagemushaRecursiveSpendBranchClaimV2, KagemushaRecursiveSpendBranchPathV2,
-        KagemushaRecursiveSpendTopUpAnchorRefV2, KagemushaRecursiveSpendTopUpAnchorV2,
+        KagemushaRecursiveSpendTopUpAnchorRefV2, KagemushaRecursiveSpendTopUpAnchorV4,
         KagemushaRequestAuthorizationV2, OFFLINE_REJECTION_REASON_PREFIX,
         OfflineAndroidAppAttestationPolicy, OfflineDeviceAttestationPolicy,
         OfflineDeviceAttestationRegistration, OfflineDeviceAttestationTrustedRoot,
@@ -52,6 +54,8 @@ use x509_parser::{
 const CAN_MANAGE_OFFLINE_ESCROW_PERMISSION: &str = "CanManageOfflineEscrow";
 const CAN_MANAGE_OFFLINE_DEVICE_ATTESTATION_POLICY_PERMISSION: &str =
     "CanManageOfflineDeviceAttestationPolicy";
+const CAN_ACTIVATE_KAGEMUSHA_RECURSIVE_RELEASE_V4_PERMISSION: &str =
+    "CanActivateKagemushaRecursiveReleaseV4";
 static OFFLINE_DEVICE_ATTESTATION_POLICY_STATE_KEY: LazyLock<Name> = LazyLock::new(|| {
     "offline_device_attestation_policy"
         .parse()
@@ -62,6 +66,918 @@ fn labeled_invariant(label: &str, message: impl Into<String>) -> InstructionExec
     let message = message.into();
     let boxed: Box<str> = format!("{OFFLINE_REJECTION_REASON_PREFIX}{label}:{message}").into();
     InstructionExecutionError::InvariantViolation(boxed)
+}
+
+/// Key-material-free projection of one authenticated ABI-20 recursive verifier.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KagemushaRecursiveVerifierReadinessV4 {
+    /// Stable logical role identifier exposed by Torii.
+    ///
+    /// Consensus registry records use release-qualified identifiers derived
+    /// from the owner-manifest digest. Readiness intentionally abstracts that
+    /// rotating storage identity into the fixed ABI-20 Eq/Ep role.
+    pub id: iroha_data_model::proof::VerifyingKeyId,
+    /// Governance-managed version of the selected registry record.
+    pub version: u32,
+    /// Backend circuit identifier bound to the verifier.
+    pub circuit_id: String,
+    /// Domain-separated commitment to the verifying key and backend.
+    pub commitment: [u8; 32],
+    /// Stable hash of the verifier's public-input layout.
+    pub public_inputs_schema_hash: [u8; 32],
+    /// Authenticated release proof-pair limit shared with the artifact set.
+    pub max_proof_bytes: u32,
+    /// Inclusive issuance activation height shared with the artifact set.
+    pub activation_height: u64,
+    /// First height at which release issuance closes.
+    ///
+    /// This is not the consensus verifier record's withdrawal height: that
+    /// record remains active so notes issued during the window stay redeemable.
+    pub withdrawal_height: Option<u64>,
+}
+
+/// Exact authenticated V4 release identity safe to publish through readiness.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KagemushaAuthenticatedArtifactSetReadinessV4 {
+    /// Human-readable generation of the authenticated release.
+    pub generation: String,
+    /// SHA-256 digest of the canonical release manifest.
+    pub manifest_sha256: [u8; 32],
+    /// SHA-256 digest of the locally trusted release policy.
+    pub release_policy_sha256: [u8; 32],
+    /// SHA-256 digest of the canonical signed release attestation.
+    pub release_attestation_sha256: [u8; 32],
+    /// First height at which the release may issue notes.
+    pub activation_height: u64,
+    /// First height at which new issuance must stop.
+    pub withdrawal_height: u64,
+    /// Authenticated upper bound for one canonical proof-pair payload.
+    pub max_proof_bytes: u32,
+    /// Authoritative fixed scale of the asset bound to the release.
+    pub asset_scale: u32,
+}
+
+/// Chain-derived V4 recursive readiness selected from one committed snapshot.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KagemushaRecursiveReadinessV4 {
+    /// Selected Eq-step verifier registry projection.
+    pub step_eq: KagemushaRecursiveVerifierReadinessV4,
+    /// Selected Ep-step verifier registry projection.
+    pub step_ep: KagemushaRecursiveVerifierReadinessV4,
+    /// Authenticated release identity shared by both step verifiers.
+    pub artifact_set: KagemushaAuthenticatedArtifactSetReadinessV4,
+    /// `None` only when the authenticated material constructs the production verifier.
+    pub proof_backend_error: Option<String>,
+}
+
+/// Exact transaction-selected ABI-20 release authenticated for admission.
+///
+/// Unlike readiness selection, this projection does not require the release's
+/// issuance window to be open. That distinction lets already-issued notes use
+/// their exact parent verifier throughout its redemption lifetime.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KagemushaRecursiveTransactionReleaseV4 {
+    /// Selected Eq-step verifier registry projection.
+    pub step_eq: KagemushaRecursiveVerifierReadinessV4,
+    /// Selected Ep-step verifier registry projection.
+    pub step_ep: KagemushaRecursiveVerifierReadinessV4,
+    /// Exact authenticated release identity shared by the verifier pair.
+    pub artifact_set: KagemushaAuthenticatedArtifactSetReadinessV4,
+    /// Whether this release may issue a new note at the current block.
+    pub issuance_active: bool,
+}
+
+fn select_active_kagemusha_v4_verifier(
+    world: &impl WorldReadOnly,
+    parity: iroha_data_model::offline::KagemushaPastaCycleParityV1,
+    block_height: u64,
+    role: &str,
+) -> Result<Option<(iroha_data_model::proof::VerifyingKeyId, VerifyingKeyRecord)>, String> {
+    let circuit_id = kagemusha_v4_circuit_id(parity);
+    let mut selected: Option<(iroha_data_model::proof::VerifyingKeyId, VerifyingKeyRecord)> = None;
+    for ((indexed_circuit_id, indexed_version), id) in world.verifying_keys_by_circuit().iter() {
+        if indexed_circuit_id != circuit_id {
+            continue;
+        }
+        let record = world.verifying_keys().get(id).ok_or_else(|| {
+            format!("Kagemusha V4 {role} index version {indexed_version} points at a missing key")
+        })?;
+        if record.version != *indexed_version || record.circuit_id != circuit_id {
+            return Err(format!(
+                "Kagemusha V4 {role} index and verifier record disagree"
+            ));
+        }
+        ensure_release_qualified_kagemusha_v4_verifier_id(id, record, parity, role)?;
+        let supersedes_selected = selected
+            .as_ref()
+            .is_none_or(|(_, selected_record)| record.version > selected_record.version);
+        if record.is_active_at(block_height) && supersedes_selected {
+            selected = Some((id.clone(), record.clone()));
+        }
+    }
+    Ok(selected)
+}
+
+fn indexed_kagemusha_v4_verifier_v4(
+    world: &impl WorldReadOnly,
+    parity: iroha_data_model::offline::KagemushaPastaCycleParityV1,
+    version: u32,
+    role: &str,
+) -> Result<Option<(iroha_data_model::proof::VerifyingKeyId, VerifyingKeyRecord)>, String> {
+    let circuit_id = kagemusha_v4_circuit_id(parity);
+    let index_key = (circuit_id.to_owned(), version);
+    let Some(id) = world.verifying_keys_by_circuit().get(&index_key) else {
+        return Ok(None);
+    };
+    let record = world.verifying_keys().get(id).ok_or_else(|| {
+        format!("Kagemusha V4 {role} index version {version} points at a missing key")
+    })?;
+    if record.version != version || record.circuit_id != circuit_id {
+        return Err(format!(
+            "Kagemusha V4 {role} index and verifier record disagree"
+        ));
+    }
+    ensure_release_qualified_kagemusha_v4_verifier_id(id, record, parity, role)?;
+    Ok(Some((id.clone(), record.clone())))
+}
+
+/// Visit every release whose terminal Eq/Ep verifier records have Active status.
+///
+/// Terminal records deliberately outlive their issuance windows so historic
+/// offline notes can still be redeemed. Startup therefore must authenticate
+/// every Active version, including future-activation records, not merely the
+/// numerically newest registry entry or the releases usable at this snapshot.
+fn visit_active_kagemusha_v4_release_pairs(
+    world: &impl WorldReadOnly,
+    _block_height: u64,
+    mut visit: impl FnMut(&VerifyingKeyRecord, &VerifyingKeyRecord) -> Result<(), String>,
+) -> Result<usize, String> {
+    let mut versions = BTreeSet::new();
+    for ((circuit_id, version), _) in world.verifying_keys_by_circuit().iter() {
+        if circuit_id == iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4
+            || circuit_id
+                == iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V4
+        {
+            versions.insert(*version);
+        }
+    }
+
+    let mut visited = 0_usize;
+    for version in versions {
+        let step_eq = indexed_kagemusha_v4_verifier_v4(
+            world,
+            iroha_data_model::offline::KagemushaPastaCycleParityV1::StepEq,
+            version,
+            "Eq",
+        )?;
+        let step_ep = indexed_kagemusha_v4_verifier_v4(
+            world,
+            iroha_data_model::offline::KagemushaPastaCycleParityV1::StepEp,
+            version,
+            "Ep",
+        )?;
+        let (step_eq_record, step_ep_record) = match (step_eq, step_ep) {
+            (None, None) => continue,
+            (Some((_, record)), None) => {
+                if record.status == ConfidentialStatus::Active {
+                    return Err(format!(
+                        "active Kagemusha V4 Eq/Ep verifier pair version {version} is incomplete"
+                    ));
+                }
+                continue;
+            }
+            (None, Some((_, record))) => {
+                if record.status == ConfidentialStatus::Active {
+                    return Err(format!(
+                        "active Kagemusha V4 Eq/Ep verifier pair version {version} is incomplete"
+                    ));
+                }
+                continue;
+            }
+            (Some((_, step_eq_record)), Some((_, step_ep_record))) => {
+                (step_eq_record, step_ep_record)
+            }
+        };
+        let step_eq_active = step_eq_record.status == ConfidentialStatus::Active;
+        let step_ep_active = step_ep_record.status == ConfidentialStatus::Active;
+        if step_eq_active != step_ep_active {
+            return Err(format!(
+                "Kagemusha V4 Eq/Ep verifier activation version {version} is not atomic"
+            ));
+        }
+        if !step_eq_active {
+            continue;
+        }
+        if version == 0
+            || step_eq_record.activation_height != step_ep_record.activation_height
+            || step_eq_record.withdraw_height != step_ep_record.withdraw_height
+        {
+            return Err(format!(
+                "Kagemusha V4 Eq/Ep verifier activation metadata version {version} is not atomic"
+            ));
+        }
+        visit(&step_eq_record, &step_ep_record)?;
+        visited = visited.saturating_add(1);
+    }
+    Ok(visited)
+}
+
+fn kagemusha_v4_circuit_id(
+    parity: iroha_data_model::offline::KagemushaPastaCycleParityV1,
+) -> &'static str {
+    match parity {
+        iroha_data_model::offline::KagemushaPastaCycleParityV1::StepEq => {
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4
+        }
+        iroha_data_model::offline::KagemushaPastaCycleParityV1::StepEp => {
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V4
+        }
+    }
+}
+
+fn kagemusha_v4_logical_role_id(
+    parity: iroha_data_model::offline::KagemushaPastaCycleParityV1,
+) -> iroha_data_model::proof::VerifyingKeyId {
+    let role = match parity {
+        iroha_data_model::offline::KagemushaPastaCycleParityV1::StepEq => {
+            iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_STEP_EQ_V4
+        }
+        iroha_data_model::offline::KagemushaPastaCycleParityV1::StepEp => {
+            iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_STEP_EP_V4
+        }
+    };
+    // This is a public logical capability, not the consensus registry key.
+    // Actual records use `kagemusha_recursive_spend_verifier_key_id_v4` and
+    // therefore retain their release digest and V4 backend identity.
+    iroha_data_model::proof::VerifyingKeyId::new(crate::zk::ZK_BACKEND_HALO2_IPA, role)
+}
+
+fn ensure_release_qualified_kagemusha_v4_verifier_id(
+    id: &iroha_data_model::proof::VerifyingKeyId,
+    record: &VerifyingKeyRecord,
+    parity: iroha_data_model::offline::KagemushaPastaCycleParityV1,
+    role: &str,
+) -> Result<(), String> {
+    let manifest_sha256 =
+        kagemusha_terminal_registry_v4::verifier_owner_manifest_sha256(record, role)?;
+    let expected = iroha_data_model::offline::kagemusha_recursive_spend_verifier_key_id_v4(
+        parity,
+        manifest_sha256,
+    );
+    if record.circuit_id != kagemusha_v4_circuit_id(parity)
+        || !id.is_portable_registry_id()
+        || id != &expected
+    {
+        return Err(format!(
+            "Kagemusha V4 {role} verifier id is not the exact release-qualified registry identity"
+        ));
+    }
+    Ok(())
+}
+
+fn decode_kagemusha_v4_consensus_release_state(
+    key: &Name,
+    payload: &[u8],
+) -> Result<
+    Option<(
+        iroha_data_model::offline::KagemushaRecursiveSpendArtifactBindingV4,
+        iroha_data_model::offline::KagemushaRecursiveSpendReleaseRecordV4,
+    )>,
+    String,
+> {
+    if !key
+        .as_ref()
+        .starts_with(kagemusha_terminal_registry_v4::TERMINAL_RELEASE_STATE_KEY_PREFIX_V4)
+    {
+        return Ok(None);
+    }
+    let release_record: iroha_data_model::offline::KagemushaRecursiveSpendReleaseRecordV4 =
+        norito::decode_from_bytes(payload)
+            .map_err(|error| format!("failed to decode Kagemusha V4 release state: {error}"))?;
+    release_record
+        .validate_structure()
+        .map_err(|error| format!("invalid Kagemusha V4 release state: {error}"))?;
+    let canonical = norito::to_bytes(&release_record)
+        .map_err(|error| format!("failed to encode Kagemusha V4 release state: {error}"))?;
+    if canonical.as_slice() != payload {
+        return Err("Kagemusha V4 release state is not canonical Norito".to_owned());
+    }
+    let manifest_sha256: [u8; 32] = Sha256::digest(
+        norito::to_bytes(&release_record.manifest)
+            .map_err(|error| format!("failed to encode Kagemusha V4 manifest: {error}"))?,
+    )
+    .into();
+    let binding = iroha_data_model::offline::KagemushaRecursiveSpendArtifactBindingV4 {
+        version: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_WIRE_VERSION_V4,
+        generation: release_record.manifest.generation.clone(),
+        manifest_sha256,
+    };
+    let expected_key = kagemusha_terminal_registry_v4::release_state_key(&binding)?;
+    if key != &expected_key {
+        return Err(
+            "Kagemusha V4 release state key is not content-addressed by its manifest".to_owned(),
+        );
+    }
+    Ok(Some((binding, release_record)))
+}
+
+const fn kagemusha_v4_issuance_active_at(
+    activation_height: u64,
+    withdrawal_height: u64,
+    block_height: u64,
+) -> bool {
+    block_height >= activation_height && block_height < withdrawal_height
+}
+
+const fn kagemusha_v4_issuance_windows_overlap(
+    first_activation_height: u64,
+    first_withdrawal_height: u64,
+    second_activation_height: u64,
+    second_withdrawal_height: u64,
+) -> bool {
+    first_activation_height < second_withdrawal_height
+        && second_activation_height < first_withdrawal_height
+}
+
+fn project_kagemusha_v4_verifier(
+    parity: iroha_data_model::offline::KagemushaPastaCycleParityV1,
+    record: VerifyingKeyRecord,
+    artifact_set: &KagemushaAuthenticatedArtifactSetReadinessV4,
+) -> KagemushaRecursiveVerifierReadinessV4 {
+    KagemushaRecursiveVerifierReadinessV4 {
+        id: kagemusha_v4_logical_role_id(parity),
+        version: record.version,
+        circuit_id: record.circuit_id,
+        commitment: record.commitment,
+        public_inputs_schema_hash: record.public_inputs_schema_hash,
+        max_proof_bytes: artifact_set.max_proof_bytes,
+        activation_height: artifact_set.activation_height,
+        // Verifier records deliberately remain active after issuance closes so
+        // previously issued notes can be redeemed. Readiness reports the
+        // release issuance boundary because SDK atomic binding describes note
+        // creation, not the verifier record's longer redemption lifetime.
+        withdrawal_height: Some(artifact_set.withdrawal_height),
+    }
+}
+
+/// Resolve the exact active ABI-20 Eq/Ep registry release for Torii readiness.
+///
+/// This is read-only and does not admit, verify, or redeem a transaction.
+pub fn resolve_kagemusha_recursive_readiness_v4(
+    world: &impl WorldReadOnly,
+    catalog: &KagemushaReleaseCatalogV4,
+    chain_id: &iroha_data_model::ChainId,
+    asset: &AssetDefinitionId,
+    asset_scale: u32,
+    block_height: u64,
+) -> Result<Option<KagemushaRecursiveReadinessV4>, String> {
+    let step_eq = select_active_kagemusha_v4_verifier(
+        world,
+        iroha_data_model::offline::KagemushaPastaCycleParityV1::StepEq,
+        block_height,
+        "Eq",
+    )?;
+    let step_ep = select_active_kagemusha_v4_verifier(
+        world,
+        iroha_data_model::offline::KagemushaPastaCycleParityV1::StepEp,
+        block_height,
+        "Ep",
+    )?;
+    let ((_, step_eq_record), (_, step_ep_record)) = match (step_eq, step_ep) {
+        (None, None) => return Ok(None),
+        (Some(step_eq), Some(step_ep)) => (step_eq, step_ep),
+        _ => return Err("Kagemusha V4 Eq/Ep activation pair is incomplete".to_owned()),
+    };
+    let cached = catalog.resolve_activation_records(&step_eq_record, &step_ep_record)?;
+    let resolved = cached.resolved();
+    let manifest = resolved.release().manifest();
+    if !kagemusha_v4_issuance_active_at(
+        manifest.activation_height,
+        manifest.withdrawal_height,
+        block_height,
+    ) {
+        return Ok(None);
+    }
+    if &manifest.chain_id != chain_id
+        || &manifest.asset != asset
+        || manifest.asset_scale != asset_scale
+    {
+        return Err(
+            "Kagemusha V4 authenticated release is not bound to the requested chain/asset/scale"
+                .to_owned(),
+        );
+    }
+    let resolved_artifact_set = resolved.artifact_set();
+    let artifact_set = KagemushaAuthenticatedArtifactSetReadinessV4 {
+        generation: resolved_artifact_set.generation,
+        manifest_sha256: resolved_artifact_set.manifest_sha256,
+        release_policy_sha256: resolved_artifact_set.release_policy_sha256,
+        release_attestation_sha256: resolved_artifact_set.release_attestation_sha256,
+        activation_height: resolved_artifact_set.activation_height,
+        withdrawal_height: resolved_artifact_set.withdrawal_height,
+        max_proof_bytes: resolved_artifact_set.max_proof_bytes,
+        asset_scale: resolved_artifact_set.asset_scale,
+    };
+    Ok(Some(KagemushaRecursiveReadinessV4 {
+        step_eq: project_kagemusha_v4_verifier(
+            iroha_data_model::offline::KagemushaPastaCycleParityV1::StepEq,
+            step_eq_record,
+            &artifact_set,
+        ),
+        step_ep: project_kagemusha_v4_verifier(
+            iroha_data_model::offline::KagemushaPastaCycleParityV1::StepEp,
+            step_ep_record,
+            &artifact_set,
+        ),
+        artifact_set,
+        proof_backend_error: None,
+    }))
+}
+
+fn exact_kagemusha_v4_transaction_verifier_record(
+    world: &impl WorldReadOnly,
+    binding: &iroha_data_model::offline::KagemushaRecursiveSpendArtifactBindingV4,
+    parity: iroha_data_model::offline::KagemushaPastaCycleParityV1,
+    requested_height: u64,
+    current_height: u64,
+) -> Result<VerifyingKeyRecord, String> {
+    if requested_height == 0 || requested_height > current_height {
+        return Err(
+            "Kagemusha V4 requested verifier height is zero or ahead of the current block"
+                .to_owned(),
+        );
+    }
+    let circuit_id = kagemusha_v4_circuit_id(parity);
+    let role = match parity {
+        iroha_data_model::offline::KagemushaPastaCycleParityV1::StepEq => "Eq",
+        iroha_data_model::offline::KagemushaPastaCycleParityV1::StepEp => "Ep",
+    };
+    let id = iroha_data_model::offline::kagemusha_recursive_spend_verifier_key_id_v4(
+        parity,
+        binding.manifest_sha256,
+    );
+    let record = world.verifying_keys().get(&id).cloned().ok_or_else(|| {
+        format!("Kagemusha V4 {role} verifier is not registered for the selected release")
+    })?;
+    ensure_release_qualified_kagemusha_v4_verifier_id(&id, &record, parity, role)?;
+    let circuit_key = (circuit_id.to_owned(), record.version);
+    if record.version == 0
+        || record.circuit_id != circuit_id
+        || record.status != ConfidentialStatus::Active
+        || !record.is_active_at(requested_height)
+        || !record.is_active_at(current_height)
+        || world.verifying_keys_by_circuit().get(&circuit_key) != Some(&id)
+    {
+        return Err(format!(
+            "Kagemusha V4 {role} verifier is not the exact active release circuit/version"
+        ));
+    }
+    Ok(record)
+}
+
+/// Resolve one exact transaction binding without imposing an issuance window.
+///
+/// The consensus Eq/Ep records, immutable startup catalog, native verifier,
+/// transaction chain/asset/scale, and content-addressed consensus release
+/// record must all identify the same authenticated release. Callers separately
+/// enforce `issuance_active` only for operations that create a new note.
+pub fn resolve_kagemusha_recursive_transaction_release_v4(
+    world: &impl WorldReadOnly,
+    catalog: &KagemushaReleaseCatalogV4,
+    binding: &iroha_data_model::offline::KagemushaRecursiveSpendArtifactBindingV4,
+    requested_height: u64,
+    current_height: u64,
+    chain_id: &iroha_data_model::ChainId,
+    asset: &AssetDefinitionId,
+    asset_scale: u32,
+) -> Result<KagemushaRecursiveTransactionReleaseV4, String> {
+    binding
+        .validate()
+        .map_err(|error| format!("invalid Kagemusha V4 artifact binding: {error}"))?;
+    let step_eq_record = exact_kagemusha_v4_transaction_verifier_record(
+        world,
+        binding,
+        iroha_data_model::offline::KagemushaPastaCycleParityV1::StepEq,
+        requested_height,
+        current_height,
+    )?;
+    let step_ep_record = exact_kagemusha_v4_transaction_verifier_record(
+        world,
+        binding,
+        iroha_data_model::offline::KagemushaPastaCycleParityV1::StepEp,
+        requested_height,
+        current_height,
+    )?;
+    if step_eq_record.version != step_ep_record.version {
+        return Err("Kagemusha V4 Eq/Ep verifier activation versions are not atomic".to_owned());
+    }
+
+    let cached = catalog.resolve_binding(binding)?;
+    cached.validate_verifier_records(&step_eq_record, &step_ep_record)?;
+    let resolved = cached.resolved();
+    let manifest = resolved.release().manifest();
+    if &manifest.chain_id != chain_id
+        || &manifest.asset != asset
+        || manifest.asset_scale != asset_scale
+    {
+        return Err(
+            "Kagemusha V4 authenticated release does not match the transaction chain, asset, or scale"
+                .to_owned(),
+        );
+    }
+    let release_key = kagemusha_terminal_registry_v4::release_state_key(binding)?;
+    let expected_record = norito::to_bytes(cached.release_record())
+        .map_err(|error| format!("failed to encode cached Kagemusha V4 release record: {error}"))?;
+    if world
+        .smart_contract_state()
+        .get(&release_key)
+        .is_none_or(|record| record != &expected_record)
+    {
+        return Err(
+            "Kagemusha V4 consensus release record differs from local authenticated material"
+                .to_owned(),
+        );
+    }
+
+    let resolved_artifact_set = resolved.artifact_set();
+    let artifact_set = KagemushaAuthenticatedArtifactSetReadinessV4 {
+        generation: resolved_artifact_set.generation,
+        manifest_sha256: resolved_artifact_set.manifest_sha256,
+        release_policy_sha256: resolved_artifact_set.release_policy_sha256,
+        release_attestation_sha256: resolved_artifact_set.release_attestation_sha256,
+        activation_height: resolved_artifact_set.activation_height,
+        withdrawal_height: resolved_artifact_set.withdrawal_height,
+        max_proof_bytes: resolved_artifact_set.max_proof_bytes,
+        asset_scale: resolved_artifact_set.asset_scale,
+    };
+    Ok(KagemushaRecursiveTransactionReleaseV4 {
+        step_eq: project_kagemusha_v4_verifier(
+            iroha_data_model::offline::KagemushaPastaCycleParityV1::StepEq,
+            step_eq_record,
+            &artifact_set,
+        ),
+        step_ep: project_kagemusha_v4_verifier(
+            iroha_data_model::offline::KagemushaPastaCycleParityV1::StepEp,
+            step_ep_record,
+            &artifact_set,
+        ),
+        issuance_active: kagemusha_v4_issuance_active_at(
+            artifact_set.activation_height,
+            artifact_set.withdrawal_height,
+            current_height,
+        ),
+        artifact_set,
+    })
+}
+
+/// Fail startup when consensus selects a V4 release absent from local cache.
+///
+/// Validators call this after authenticated Kura replay and before joining the
+/// voting set. An unactivated, unconfigured node remains valid and unready.
+pub fn ensure_kagemusha_active_release_material_v4(
+    world: &impl WorldReadOnly,
+    catalog: &KagemushaReleaseCatalogV4,
+    block_height: u64,
+) -> Result<(), String> {
+    let mut covered_manifest_digests = BTreeSet::new();
+    visit_active_kagemusha_v4_release_pairs(
+        world,
+        block_height,
+        |step_eq_record, step_ep_record| {
+            let cached = catalog.resolve_activation_records(step_eq_record, step_ep_record)?;
+            let release = cached.resolved().release();
+            let binding = iroha_data_model::offline::KagemushaRecursiveSpendArtifactBindingV4 {
+                version: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_WIRE_VERSION_V4,
+                generation: release.manifest().generation.clone(),
+                manifest_sha256: release.manifest_sha256(),
+            };
+            covered_manifest_digests.insert(binding.manifest_sha256);
+            let release_key = kagemusha_terminal_registry_v4::release_state_key(&binding)?;
+            let expected = norito::to_bytes(cached.release_record()).map_err(|error| {
+                format!("failed to encode Kagemusha V4 release record: {error}")
+            })?;
+            if world
+                .smart_contract_state()
+                .get(&release_key)
+                .is_none_or(|actual| actual != &expected)
+            {
+                return Err(
+                    "active Kagemusha V4 consensus release record is absent or differs from local cache"
+                        .to_owned(),
+                );
+            }
+            Ok(())
+        },
+    )?;
+    for (key, payload) in world.smart_contract_state().iter() {
+        let Some((binding, release_record)) =
+            decode_kagemusha_v4_consensus_release_state(key, payload)?
+        else {
+            continue;
+        };
+        if !covered_manifest_digests.contains(&binding.manifest_sha256) {
+            return Err(
+                "Kagemusha V4 consensus release state has no terminal Active Eq/Ep pair".to_owned(),
+            );
+        }
+        let cached = catalog.resolve_binding(&binding)?;
+        if cached.release_record() != &release_record {
+            return Err(
+                "Kagemusha V4 consensus release record differs from local authenticated material"
+                    .to_owned(),
+            );
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod recursive_readiness_tests {
+    use super::*;
+    use crate::state::World;
+
+    fn release_bound_record(
+        parity: iroha_data_model::offline::KagemushaPastaCycleParityV1,
+        manifest_sha256: [u8; 32],
+    ) -> VerifyingKeyRecord {
+        let binding = iroha_data_model::offline::KagemushaRecursiveSpendArtifactBindingV4 {
+            version: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_WIRE_VERSION_V4,
+            generation: "release-v4".to_owned(),
+            manifest_sha256,
+        };
+        let owner = kagemusha_terminal_registry_v4::verifier_owner_manifest_id(&binding)
+            .expect("test binding has a canonical owner id");
+        let curve = match parity {
+            iroha_data_model::offline::KagemushaPastaCycleParityV1::StepEq => "vesta",
+            iroha_data_model::offline::KagemushaPastaCycleParityV1::StepEp => "pallas",
+        };
+        let mut record = VerifyingKeyRecord::new_with_owner(
+            7,
+            kagemusha_v4_circuit_id(parity),
+            Some(owner),
+            iroha_data_model::offline::KAGEMUSHA_VERIFIER_NAMESPACE,
+            BackendTag::Halo2IpaPasta,
+            curve,
+            [0xA1; 32],
+            [0xB2; 32],
+        );
+        record.max_proof_bytes = 1;
+        record.activation_height = Some(5);
+        record.status = ConfidentialStatus::Active;
+        record
+    }
+
+    fn world_with_active_release_pairs(manifest_digests: &[[u8; 32]]) -> World {
+        let mut world = World::default();
+        for (index, manifest_sha256) in manifest_digests.iter().copied().enumerate() {
+            let version = u32::try_from(index + 1).expect("test release version fits u32");
+            for parity in [
+                iroha_data_model::offline::KagemushaPastaCycleParityV1::StepEq,
+                iroha_data_model::offline::KagemushaPastaCycleParityV1::StepEp,
+            ] {
+                let mut record = release_bound_record(parity, manifest_sha256);
+                record.version = version;
+                let id = iroha_data_model::offline::kagemusha_recursive_spend_verifier_key_id_v4(
+                    parity,
+                    manifest_sha256,
+                );
+                world.verifying_keys.insert(id.clone(), record.clone());
+                world
+                    .verifying_keys_by_circuit
+                    .insert((record.circuit_id.clone(), version), id);
+            }
+        }
+        world
+    }
+
+    #[test]
+    fn release_qualified_verifier_id_rejects_generic_arbitrary_and_suffixed_substitutions() {
+        let manifest_sha256 = [0x42; 32];
+        let parity = iroha_data_model::offline::KagemushaPastaCycleParityV1::StepEq;
+        let record = release_bound_record(parity, manifest_sha256);
+        let exact = iroha_data_model::offline::kagemusha_recursive_spend_verifier_key_id_v4(
+            parity,
+            manifest_sha256,
+        );
+
+        ensure_release_qualified_kagemusha_v4_verifier_id(&exact, &record, parity, "Eq")
+            .expect("the owner-derived release-qualified id must be accepted");
+        assert_eq!(
+            exact.backend.as_str(),
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4
+        );
+
+        let arbitrary = iroha_data_model::offline::kagemusha_recursive_spend_verifier_key_id_v4(
+            parity, [0x43; 32],
+        );
+        let suffixed = iroha_data_model::proof::VerifyingKeyId::new(
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4,
+            format!("{}-substitute", exact.name),
+        );
+        let generic = iroha_data_model::proof::VerifyingKeyId::new(
+            crate::zk::ZK_BACKEND_HALO2_IPA,
+            exact.name.clone(),
+        );
+        for substituted in [&arbitrary, &suffixed, &generic] {
+            assert!(
+                ensure_release_qualified_kagemusha_v4_verifier_id(
+                    substituted,
+                    &record,
+                    parity,
+                    "Eq",
+                )
+                .is_err(),
+                "a substituted registry identity must fail closed: {substituted:?}"
+            );
+        }
+
+        let mut noncanonical_owner = record.clone();
+        noncanonical_owner.owner_manifest_id = Some(format!(
+            "kagemusha-v4-{}",
+            hex::encode(manifest_sha256).to_uppercase()
+        ));
+        assert!(
+            ensure_release_qualified_kagemusha_v4_verifier_id(
+                &exact,
+                &noncanonical_owner,
+                parity,
+                "Eq",
+            )
+            .is_err(),
+            "the owner digest must use its canonical lowercase form"
+        );
+
+        let wrong_parity_record = release_bound_record(
+            iroha_data_model::offline::KagemushaPastaCycleParityV1::StepEp,
+            manifest_sha256,
+        );
+        assert!(
+            ensure_release_qualified_kagemusha_v4_verifier_id(
+                &exact,
+                &wrong_parity_record,
+                parity,
+                "Eq",
+            )
+            .is_err(),
+            "the owner-derived id cannot substitute the opposite parity circuit"
+        );
+    }
+
+    #[test]
+    fn readiness_projects_logical_roles_and_release_issuance_window() {
+        let artifact_set = KagemushaAuthenticatedArtifactSetReadinessV4 {
+            generation: "release-v4".to_owned(),
+            manifest_sha256: [0x42; 32],
+            release_policy_sha256: [0x43; 32],
+            release_attestation_sha256: [0x44; 32],
+            activation_height: 40,
+            withdrawal_height: 80,
+            max_proof_bytes: 65_536,
+            asset_scale: 9,
+        };
+
+        for (parity, role, circuit) in [
+            (
+                iroha_data_model::offline::KagemushaPastaCycleParityV1::StepEq,
+                iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_STEP_EQ_V4,
+                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4,
+            ),
+            (
+                iroha_data_model::offline::KagemushaPastaCycleParityV1::StepEp,
+                iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_STEP_EP_V4,
+                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V4,
+            ),
+        ] {
+            let record = release_bound_record(parity, artifact_set.manifest_sha256);
+            assert_eq!(record.withdraw_height, None);
+            let projected = project_kagemusha_v4_verifier(parity, record, &artifact_set);
+            assert_eq!(
+                projected.id.backend.as_str(),
+                crate::zk::ZK_BACKEND_HALO2_IPA
+            );
+            assert_eq!(projected.id.name, role);
+            assert_eq!(projected.circuit_id, circuit);
+            assert_eq!(projected.max_proof_bytes, artifact_set.max_proof_bytes);
+            assert_eq!(projected.activation_height, artifact_set.activation_height);
+            assert_eq!(
+                projected.withdrawal_height,
+                Some(artifact_set.withdrawal_height)
+            );
+        }
+
+        assert!(!kagemusha_v4_issuance_active_at(40, 80, 39));
+        assert!(kagemusha_v4_issuance_active_at(40, 80, 40));
+        assert!(kagemusha_v4_issuance_active_at(40, 80, 79));
+        assert!(!kagemusha_v4_issuance_active_at(40, 80, 80));
+    }
+
+    #[test]
+    fn startup_coverage_visits_historic_and_future_terminal_active_releases() {
+        let world = world_with_active_release_pairs(&[[0x41; 32], [0x42; 32]]);
+        let mut visited = Vec::new();
+        let count = visit_active_kagemusha_v4_release_pairs(
+            &world.view(),
+            1,
+            |step_eq_record, step_ep_record| {
+                assert_eq!(step_eq_record.version, step_ep_record.version);
+                visited.push(step_eq_record.version);
+                Ok(())
+            },
+        )
+        .expect("historic and not-yet-activated terminal releases must both be covered");
+        assert_eq!(count, 2);
+        assert_eq!(visited, [1, 2]);
+    }
+
+    #[test]
+    fn startup_coverage_fails_when_older_terminal_release_is_missing_locally() {
+        let world = world_with_active_release_pairs(&[[0x41; 32], [0x42; 32]]);
+        let error =
+            visit_active_kagemusha_v4_release_pairs(&world.view(), 5, |step_eq_record, _| {
+                if step_eq_record.version == 1 {
+                    return Err("older terminal release is absent from local catalog".to_owned());
+                }
+                Ok(())
+            })
+            .expect_err("missing historic redemption material must fail startup");
+        assert!(error.contains("older terminal release"));
+    }
+
+    #[test]
+    fn startup_coverage_fails_before_future_release_activation_when_material_is_missing() {
+        let world = world_with_active_release_pairs(&[[0x41; 32], [0x42; 32]]);
+        let error =
+            visit_active_kagemusha_v4_release_pairs(&world.view(), 1, |step_eq_record, _| {
+                if step_eq_record.version == 2 {
+                    return Err("future terminal release is absent from local catalog".to_owned());
+                }
+                Ok(())
+            })
+            .expect_err("snapshot startup must preload future Active release material");
+        assert!(error.contains("future terminal release"));
+    }
+
+    #[test]
+    fn issuance_window_overlap_is_half_open() {
+        assert!(kagemusha_v4_issuance_windows_overlap(10, 20, 19, 30));
+        assert!(kagemusha_v4_issuance_windows_overlap(10, 20, 10, 20));
+        assert!(!kagemusha_v4_issuance_windows_overlap(10, 20, 20, 30));
+        assert!(!kagemusha_v4_issuance_windows_overlap(20, 30, 10, 20));
+    }
+
+    #[test]
+    fn transaction_release_height_rejects_zero_future_and_pre_activation_snapshots() {
+        let manifest_sha256 = [0x41; 32];
+        let world = world_with_active_release_pairs(&[manifest_sha256]);
+        let binding = iroha_data_model::offline::KagemushaRecursiveSpendArtifactBindingV4 {
+            version: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_WIRE_VERSION_V4,
+            generation: "release-v4".to_owned(),
+            manifest_sha256,
+        };
+        let view = world.view();
+        let parity = iroha_data_model::offline::KagemushaPastaCycleParityV1::StepEq;
+        assert!(
+            exact_kagemusha_v4_transaction_verifier_record(&view, &binding, parity, 0, 5).is_err()
+        );
+        assert!(
+            exact_kagemusha_v4_transaction_verifier_record(&view, &binding, parity, 6, 5).is_err()
+        );
+        assert!(
+            exact_kagemusha_v4_transaction_verifier_record(&view, &binding, parity, 4, 5).is_err(),
+            "activation at the executing height must not validate a pre-activation request",
+        );
+        exact_kagemusha_v4_transaction_verifier_record(&view, &binding, parity, 5, 5)
+            .expect("the exact activation-height snapshot is valid");
+    }
+
+    #[test]
+    fn transaction_release_height_rejects_release_withdrawn_by_execution() {
+        let manifest_sha256 = [0x41; 32];
+        let mut world = world_with_active_release_pairs(&[manifest_sha256]);
+        let parity = iroha_data_model::offline::KagemushaPastaCycleParityV1::StepEq;
+        let id = iroha_data_model::offline::kagemusha_recursive_spend_verifier_key_id_v4(
+            parity,
+            manifest_sha256,
+        );
+        let mut withdrawn = world
+            .verifying_keys
+            .view()
+            .get(&id)
+            .cloned()
+            .expect("test Eq verifier");
+        withdrawn.withdraw_height = Some(6);
+        world.verifying_keys.insert(id, withdrawn);
+        let binding = iroha_data_model::offline::KagemushaRecursiveSpendArtifactBindingV4 {
+            version: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_WIRE_VERSION_V4,
+            generation: "release-v4".to_owned(),
+            manifest_sha256,
+        };
+        assert!(
+            exact_kagemusha_v4_transaction_verifier_record(&world.view(), &binding, parity, 5, 6,)
+                .is_err(),
+            "a release active at the signed snapshot but inactive now must fail closed",
+        );
+    }
 }
 
 fn resolve_offline_escrow_account(
@@ -289,16 +1205,16 @@ pub mod isi {
     const KAGEMUSHA_ATTESTATION_REPORT_REPLAY_DOMAIN: &str = "kagemusha-attestation-report";
     const KAGEMUSHA_ATTESTATION_EVIDENCE_REPLAY_DOMAIN: &str = "kagemusha-attestation-evidence";
     const KAGEMUSHA_V2_DEVICE_LINEAGE_DOMAIN: &str = "kagemusha-v2-device-lineage";
-    const KAGEMUSHA_V2_OPERATION_DOMAIN: &str = "kagemusha-v2-operation";
-    const KAGEMUSHA_V2_NONCE_DOMAIN: &str = "kagemusha-v2-authorization-nonce";
-    const KAGEMUSHA_V2_PAYLOAD_DOMAIN: &str = "kagemusha-v2-payload";
-    const KAGEMUSHA_V2_REQUEST_DOMAIN: &str = "kagemusha-v2-request";
-    const KAGEMUSHA_V2_BRANCH_EXACT_DOMAIN: &str = "kagemusha-v2-redeemed-branch";
-    const KAGEMUSHA_V2_BRANCH_DESCENDANT_DOMAIN: &str = "kagemusha-v2-redeemed-descendant";
-    const KAGEMUSHA_V2_TRANSITION_SELECTED_DOMAIN: &str = "kagemusha-v2-transition-selected";
-    const KAGEMUSHA_V2_TRANSITION_CHOICE_DOMAIN: &str = "kagemusha-v2-transition-choice";
-    const KAGEMUSHA_V2_AUTHORIZED_CHANGE_CHILD_DOMAIN: &str =
-        "kagemusha-v2-authorized-change-child";
+    const KAGEMUSHA_V4_OPERATION_DOMAIN: &str = "kagemusha-v4-operation";
+    const KAGEMUSHA_V4_NONCE_DOMAIN: &str = "kagemusha-v4-authorization-nonce";
+    const KAGEMUSHA_V4_PAYLOAD_DOMAIN: &str = "kagemusha-v4-payload";
+    const KAGEMUSHA_V4_REQUEST_DOMAIN: &str = "kagemusha-v4-request";
+    const KAGEMUSHA_V4_BRANCH_EXACT_DOMAIN: &str = "kagemusha-v4-redeemed-branch";
+    const KAGEMUSHA_V4_BRANCH_DESCENDANT_DOMAIN: &str = "kagemusha-v4-redeemed-descendant";
+    const KAGEMUSHA_V4_TRANSITION_SELECTED_DOMAIN: &str = "kagemusha-v4-transition-selected";
+    const KAGEMUSHA_V4_TRANSITION_CHOICE_DOMAIN: &str = "kagemusha-v4-transition-choice";
+    const KAGEMUSHA_V4_AUTHORIZED_CHANGE_CHILD_DOMAIN: &str =
+        "kagemusha-v4-authorized-change-child";
     const OFFLINE_ATTESTATION_EVIDENCE_PREFIX: &[u8] = b"offline-device-attestation-evidence-v1";
     const KAGEMUSHA_ATTESTATION_RECENT_BLOCK_WINDOW: u64 = 128;
     const OFFLINE_ATTESTATION_PLATFORM_IOS_APP_ATTEST: &str = "ios-appattest";
@@ -1687,8 +2603,27 @@ pub mod isi {
         Ok((vk_box, record))
     }
 
-    fn ensure_kagemusha_v2_redeem_public_inputs(
-        request: &iroha_data_model::offline::KagemushaRecursiveSpendRedeemRequestV2,
+    fn ensure_kagemusha_v4_unshield_verifier_window(
+        record: &VerifyingKeyRecord,
+        requested_height: u64,
+        current_height: u64,
+    ) -> Result<(), Error> {
+        if requested_height == 0
+            || requested_height > current_height
+            || !record.is_active_at(requested_height)
+            || !record.is_active_at(current_height)
+        {
+            return Err(labeled_invariant(
+                "verifier_key_inactive",
+                "Kagemusha V4 unshield verifier is outside its requested or current activation window",
+            )
+            .into());
+        }
+        Ok(())
+    }
+
+    fn ensure_kagemusha_v4_redeem_public_inputs(
+        request: &iroha_data_model::offline::KagemushaRecursiveSpendRedeemRequestV4,
         state_transaction: &StateTransaction<'_, '_>,
         vk_record: &VerifyingKeyRecord,
     ) -> Result<(), Error> {
@@ -1697,7 +2632,7 @@ pub mod isi {
         ) {
             return Err(labeled_invariant(
                 "verifier_key_invalid",
-                "Kagemusha V2 redemption requires an unshield-v3 proof attachment",
+                "Kagemusha V4 redemption requires an unshield-v3 proof attachment",
             )
             .into());
         }
@@ -1738,7 +2673,7 @@ pub mod isi {
         {
             return Err(labeled_invariant(
                 "final_commitment_mismatch",
-                "Kagemusha V2 unshield-v3 proof is not bound to the exact note, nullifier, root, scaled amount, asset, chain, and full redemption output",
+                "Kagemusha V4 unshield-v3 proof is not bound to the exact note, nullifier, root, scaled amount, asset, chain, and full redemption output",
             )
             .into());
         }
@@ -1761,7 +2696,7 @@ pub mod isi {
         {
             return Err(labeled_invariant(
                 "proof_binding",
-                "Kagemusha V2 redemption intent does not match the canonical unshield-v3 public inputs",
+                "Kagemusha V4 redemption intent does not match the canonical unshield-v3 public inputs",
             )
             .into());
         }
@@ -1834,7 +2769,7 @@ pub mod isi {
         )
     }
 
-    fn kagemusha_v2_authorization_markers(
+    fn kagemusha_v4_authorization_markers(
         authorization: &KagemushaRequestAuthorizationV2,
     ) -> [Hash; 4] {
         let authority = authorization.authority.to_string();
@@ -1843,19 +2778,19 @@ pub mod isi {
         // operation id while nonce, payload, and exact-request replay remain
         // scoped to their signing authority.
         let operation = kagemusha_v2_marker(
-            KAGEMUSHA_V2_OPERATION_DOMAIN,
+            KAGEMUSHA_V4_OPERATION_DOMAIN,
             &[&authorization.operation_id],
         );
         let nonce = kagemusha_v2_marker(
-            KAGEMUSHA_V2_NONCE_DOMAIN,
+            KAGEMUSHA_V4_NONCE_DOMAIN,
             &[authority.as_bytes(), &authorization.nonce],
         );
         let payload = kagemusha_v2_marker(
-            KAGEMUSHA_V2_PAYLOAD_DOMAIN,
+            KAGEMUSHA_V4_PAYLOAD_DOMAIN,
             &[authority.as_bytes(), &authorization.payload_digest],
         );
         let request = kagemusha_v2_marker(
-            KAGEMUSHA_V2_REQUEST_DOMAIN,
+            KAGEMUSHA_V4_REQUEST_DOMAIN,
             &[
                 authority.as_bytes(),
                 &authorization.operation_id,
@@ -1866,16 +2801,16 @@ pub mod isi {
         [operation, nonce, payload, request]
     }
 
-    enum KagemushaV2ReplayStatus {
+    enum KagemushaV4ReplayStatus {
         Fresh([Hash; 4]),
         Committed,
     }
 
-    fn kagemusha_v2_replay_status(
+    fn kagemusha_v4_replay_status(
         authorization: &KagemushaRequestAuthorizationV2,
         state_transaction: &StateTransaction<'_, '_>,
-    ) -> Result<KagemushaV2ReplayStatus, Error> {
-        let markers = kagemusha_v2_authorization_markers(authorization);
+    ) -> Result<KagemushaV4ReplayStatus, Error> {
+        let markers = kagemusha_v4_authorization_markers(authorization);
         let [operation, nonce, payload, request] = &markers;
         if state_transaction
             .world
@@ -1883,7 +2818,7 @@ pub mod isi {
             .get(request)
             .is_some()
         {
-            return Ok(KagemushaV2ReplayStatus::Committed);
+            return Ok(KagemushaV4ReplayStatus::Committed);
         }
         if [operation, nonce, payload].iter().any(|marker| {
             state_transaction
@@ -1894,14 +2829,14 @@ pub mod isi {
         }) {
             return Err(labeled_invariant(
                 "authorization_replay",
-                "Kagemusha V2 operation id, nonce, or payload digest conflicts with a committed request",
+                "Kagemusha V4 operation id, nonce, or payload digest conflicts with a committed request",
             )
             .into());
         }
-        Ok(KagemushaV2ReplayStatus::Fresh(markers))
+        Ok(KagemushaV4ReplayStatus::Fresh(markers))
     }
 
-    fn commit_kagemusha_v2_replay_markers(
+    fn commit_kagemusha_v4_replay_markers(
         markers: [Hash; 4],
         state_transaction: &mut StateTransaction<'_, '_>,
     ) {
@@ -2003,7 +2938,7 @@ pub mod isi {
         transition_tag: [u8; 24],
     ) -> Hash {
         kagemusha_v2_marker(
-            KAGEMUSHA_V2_TRANSITION_CHOICE_DOMAIN,
+            KAGEMUSHA_V4_TRANSITION_CHOICE_DOMAIN,
             &[
                 &prefix.lineage_root,
                 &[prefix.depth],
@@ -2086,7 +3021,7 @@ pub mod isi {
                 .path
                 .prefix(depth)
                 .map_err(|err| labeled_invariant("branch_conflict", err.to_string()))?;
-            let exact = kagemusha_v2_branch_marker(KAGEMUSHA_V2_BRANCH_EXACT_DOMAIN, prefix);
+            let exact = kagemusha_v2_branch_marker(KAGEMUSHA_V4_BRANCH_EXACT_DOMAIN, prefix);
             if state_transaction
                 .world
                 .kagemusha_replay_keys
@@ -2096,7 +3031,7 @@ pub mod isi {
                 if depth < claim.path.depth {
                     let child = kagemusha_v2_branch_claim_prefix(claim, depth + 1)?;
                     let authorized_child = kagemusha_v2_branch_claim_marker(
-                        KAGEMUSHA_V2_AUTHORIZED_CHANGE_CHILD_DOMAIN,
+                        KAGEMUSHA_V4_AUTHORIZED_CHANGE_CHILD_DOMAIN,
                         &child,
                     );
                     if state_transaction
@@ -2116,7 +3051,7 @@ pub mod isi {
             }
         }
         let has_descendant =
-            kagemusha_v2_branch_marker(KAGEMUSHA_V2_BRANCH_DESCENDANT_DOMAIN, claim.path);
+            kagemusha_v2_branch_marker(KAGEMUSHA_V4_BRANCH_DESCENDANT_DOMAIN, claim.path);
         if state_transaction
             .world
             .kagemusha_replay_keys
@@ -2150,7 +3085,7 @@ pub mod isi {
                     )
                 })?;
                 let selected =
-                    kagemusha_v2_branch_marker(KAGEMUSHA_V2_TRANSITION_SELECTED_DOMAIN, prefix);
+                    kagemusha_v2_branch_marker(KAGEMUSHA_V4_TRANSITION_SELECTED_DOMAIN, prefix);
                 let choice = kagemusha_v2_transition_choice_marker(prefix, transition_tag);
                 let selected_exists = state_transaction
                     .world
@@ -2226,7 +3161,7 @@ pub mod isi {
             .into());
         }
         let marker =
-            kagemusha_v2_branch_claim_marker(KAGEMUSHA_V2_AUTHORIZED_CHANGE_CHILD_DOMAIN, child);
+            kagemusha_v2_branch_claim_marker(KAGEMUSHA_V4_AUTHORIZED_CHANGE_CHILD_DOMAIN, child);
         if state_transaction
             .world
             .kagemusha_replay_keys
@@ -2339,7 +3274,7 @@ pub mod isi {
         }
         for claim in consumed_claims {
             markers.insert(kagemusha_v2_branch_marker(
-                KAGEMUSHA_V2_BRANCH_EXACT_DOMAIN,
+                KAGEMUSHA_V4_BRANCH_EXACT_DOMAIN,
                 claim.path,
             ));
             for depth in 0..claim.path.depth {
@@ -2348,7 +3283,7 @@ pub mod isi {
                     .prefix(depth)
                     .map_err(|err| labeled_invariant("branch_conflict", err.to_string()))?;
                 markers.insert(kagemusha_v2_branch_marker(
-                    KAGEMUSHA_V2_BRANCH_DESCENDANT_DOMAIN,
+                    KAGEMUSHA_V4_BRANCH_DESCENDANT_DOMAIN,
                     prefix,
                 ));
             }
@@ -2360,23 +3295,23 @@ pub mod isi {
         })
     }
 
-    fn kagemusha_v2_topup_anchor_state_key(operation_id: [u8; 32]) -> Result<Name, Error> {
-        format!("kagemusha_v2_topup_anchor_{}", hex::encode(operation_id))
+    fn kagemusha_v4_topup_anchor_state_key(operation_id: [u8; 32]) -> Result<Name, Error> {
+        format!("kagemusha_v4_topup_anchor_{}", hex::encode(operation_id))
             .parse()
             .map_err(|err| {
                 labeled_invariant(
                     "invalid_recursive_topup",
-                    format!("failed to derive Kagemusha V2 anchor state key: {err}"),
+                    format!("failed to derive Kagemusha V4 anchor state key: {err}"),
                 )
                 .into()
             })
     }
 
-    fn load_kagemusha_v2_topup_anchor(
+    fn load_kagemusha_v4_topup_anchor(
         operation_id: [u8; 32],
         state_transaction: &StateTransaction<'_, '_>,
-    ) -> Result<KagemushaRecursiveSpendTopUpAnchorV2, Error> {
-        let key = kagemusha_v2_topup_anchor_state_key(operation_id)?;
+    ) -> Result<KagemushaRecursiveSpendTopUpAnchorV4, Error> {
+        let key = kagemusha_v4_topup_anchor_state_key(operation_id)?;
         let archive = state_transaction
             .world
             .smart_contract_state
@@ -2384,14 +3319,18 @@ pub mod isi {
             .ok_or_else(|| {
                 labeled_invariant(
                     "topup_anchor_missing",
-                    "Kagemusha V2 bundle has no finalized top-up anchor",
+                    "Kagemusha V4 bundle has no finalized top-up anchor",
                 )
             })?;
-        let anchor: KagemushaRecursiveSpendTopUpAnchorV2 = norito::decode_from_bytes(archive)
+        crate::sumeragi::witness::record_read_kagemusha_v4_topup_anchor(
+            operation_id,
+            Some(archive.as_slice()),
+        );
+        let anchor: KagemushaRecursiveSpendTopUpAnchorV4 = norito::decode_from_bytes(archive)
             .map_err(|err| {
                 labeled_invariant(
                     "topup_anchor_invalid",
-                    format!("failed to decode persisted Kagemusha V2 top-up anchor: {err}"),
+                    format!("failed to decode persisted Kagemusha V4 top-up anchor: {err}"),
                 )
             })?;
         anchor
@@ -2402,7 +3341,7 @@ pub mod isi {
                 .map_err(|err| {
                     labeled_invariant(
                         "topup_anchor_invalid",
-                        format!("failed to re-encode persisted Kagemusha V2 top-up anchor: {err}"),
+                        format!("failed to re-encode persisted Kagemusha V4 top-up anchor: {err}"),
                     )
                 })?
                 .as_slice()
@@ -2410,40 +3349,60 @@ pub mod isi {
         {
             return Err(labeled_invariant(
                 "topup_anchor_invalid",
-                "persisted Kagemusha V2 top-up anchor is non-canonical or keyed incorrectly",
+                "persisted Kagemusha V4 top-up anchor is non-canonical or keyed incorrectly",
             )
             .into());
         }
         Ok(anchor)
     }
 
-    fn persist_kagemusha_v2_topup_anchor(
-        anchor: &KagemushaRecursiveSpendTopUpAnchorV2,
+    fn ensure_kagemusha_v4_topup_anchor_absent(
+        operation_id: [u8; 32],
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        let key = kagemusha_v4_topup_anchor_state_key(operation_id)?;
+        let existing = state_transaction.world.smart_contract_state.get(&key);
+        crate::sumeragi::witness::record_read_kagemusha_v4_topup_anchor(
+            operation_id,
+            existing.map(|archive| archive.as_slice()),
+        );
+        if existing.is_some() {
+            return Err(labeled_invariant(
+                "authorization_replay",
+                "Kagemusha V4 top-up anchor exists without its complete replay-marker set",
+            )
+            .into());
+        }
+        Ok(())
+    }
+
+    fn persist_kagemusha_v4_topup_anchor(
+        anchor: &KagemushaRecursiveSpendTopUpAnchorV4,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
         anchor
             .validate_public_binding()
             .map_err(|err| labeled_invariant("topup_anchor_invalid", err.to_string()))?;
-        let key = kagemusha_v2_topup_anchor_state_key(anchor.topup_operation_id)?;
+        let key = kagemusha_v4_topup_anchor_state_key(anchor.topup_operation_id)?;
         let existing = state_transaction.world.smart_contract_state.get(&key);
         if existing.is_some() {
             return Err(labeled_invariant(
                 "authorization_replay",
-                "Kagemusha V2 top-up operation already has a finalized anchor",
+                "Kagemusha V4 top-up operation already has a finalized anchor",
             )
             .into());
         }
-        crate::sumeragi::witness::record_read_kagemusha_v2_topup_anchor(
+        crate::sumeragi::witness::record_read_kagemusha_v4_topup_anchor(
             anchor.topup_operation_id,
             None,
         );
         let archive = norito::to_bytes(anchor).map_err(|err| {
             labeled_invariant(
                 "topup_anchor_invalid",
-                format!("failed to encode Kagemusha V2 top-up anchor: {err}"),
+                format!("failed to encode Kagemusha V4 top-up anchor: {err}"),
             )
         })?;
-        crate::sumeragi::witness::record_write_kagemusha_v2_topup_anchor(
+        crate::sumeragi::witness::record_write_kagemusha_v4_topup_anchor(
             anchor.topup_operation_id,
             &anchor.anchor_digest,
         );
@@ -2454,24 +3413,24 @@ pub mod isi {
         Ok(())
     }
 
-    fn kagemusha_v2_redemption_receipt_state_key(operation_id: [u8; 32]) -> Result<Name, Error> {
-        format!("kagemusha_v2_redemption_{}", hex::encode(operation_id))
+    fn kagemusha_v4_redemption_receipt_state_key(operation_id: [u8; 32]) -> Result<Name, Error> {
+        format!("kagemusha_v4_redemption_{}", hex::encode(operation_id))
             .parse()
             .map_err(|err| {
                 labeled_invariant(
                     "invalid_recursive_redeem",
-                    format!("failed to derive Kagemusha V2 redemption receipt key: {err}"),
+                    format!("failed to derive Kagemusha V4 redemption receipt key: {err}"),
                 )
                 .into()
             })
     }
 
-    fn ensure_kagemusha_v2_redemption_receipt_matches(
+    fn ensure_kagemusha_v4_redemption_receipt_matches(
         operation_id: [u8; 32],
         payload_digest: [u8; 32],
         state_transaction: &StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
-        let key = kagemusha_v2_redemption_receipt_state_key(operation_id)?;
+        let key = kagemusha_v4_redemption_receipt_state_key(operation_id)?;
         let receipt = state_transaction
             .world
             .smart_contract_state
@@ -2479,24 +3438,24 @@ pub mod isi {
             .ok_or_else(|| {
                 labeled_invariant(
                     "authorization_replay",
-                    "Kagemusha V2 redemption replay marker has no committed receipt",
+                    "Kagemusha V4 redemption replay marker has no committed receipt",
                 )
             })?;
         if receipt.as_slice() != payload_digest.as_slice() {
             return Err(labeled_invariant(
                 "authorization_replay",
-                "Kagemusha V2 redemption receipt does not match the retried request",
+                "Kagemusha V4 redemption receipt does not match the retried request",
             )
             .into());
         }
         Ok(())
     }
 
-    fn ensure_kagemusha_v2_redemption_receipt_absent(
+    fn ensure_kagemusha_v4_redemption_receipt_absent(
         operation_id: [u8; 32],
         state_transaction: &StateTransaction<'_, '_>,
     ) -> Result<Name, Error> {
-        let key = kagemusha_v2_redemption_receipt_state_key(operation_id)?;
+        let key = kagemusha_v4_redemption_receipt_state_key(operation_id)?;
         if state_transaction
             .world
             .smart_contract_state
@@ -2505,24 +3464,24 @@ pub mod isi {
         {
             return Err(labeled_invariant(
                 "authorization_replay",
-                "Kagemusha V2 redemption receipt exists without its complete replay-marker set",
+                "Kagemusha V4 redemption receipt exists without its complete replay-marker set",
             )
             .into());
         }
         Ok(key)
     }
 
-    struct KagemushaV2ResolvedTopUpProvenance {
+    struct KagemushaV4ResolvedTopUpProvenance {
         source_asset: AssetId,
     }
 
-    fn validate_kagemusha_v2_finalized_topup_anchors(
+    fn validate_kagemusha_v4_finalized_topup_anchors(
         anchor_refs: &[KagemushaRecursiveSpendTopUpAnchorRefV2],
         current_note_atomic_units: u128,
         requested_height: u64,
         zk_state: &crate::state::ZkAssetState,
         state_transaction: &StateTransaction<'_, '_>,
-    ) -> Result<KagemushaV2ResolvedTopUpProvenance, Error> {
+    ) -> Result<KagemushaV4ResolvedTopUpProvenance, Error> {
         let mut canonical_source_asset = None;
         let mut seen_operations = BTreeSet::new();
         let mut anchored_total = 0_u128;
@@ -2533,12 +3492,12 @@ pub mod isi {
             if !seen_operations.insert(supplied_ref.topup_operation_id) {
                 return Err(labeled_invariant(
                     "topup_anchor_invalid",
-                    "Kagemusha V2 redemption repeats a top-up operation anchor",
+                    "Kagemusha V4 redemption repeats a top-up operation anchor",
                 )
                 .into());
             }
             let persisted =
-                load_kagemusha_v2_topup_anchor(supplied_ref.topup_operation_id, state_transaction)?;
+                load_kagemusha_v4_topup_anchor(supplied_ref.topup_operation_id, state_transaction)?;
             if persisted.anchor_digest != supplied_ref.anchor_digest
                 || persisted
                     .compact_ref()
@@ -2547,7 +3506,7 @@ pub mod isi {
             {
                 return Err(labeled_invariant(
                     "topup_anchor_mismatch",
-                    "Kagemusha V2 redemption anchor differs from the finalized chain receipt",
+                    "Kagemusha V4 redemption anchor differs from the finalized chain receipt",
                 )
                 .into());
             }
@@ -2556,7 +3515,7 @@ pub mod isi {
             {
                 return Err(labeled_invariant(
                     "topup_anchor_invalid",
-                    "Kagemusha V2 redemption predates one of its finalized top-up anchors",
+                    "Kagemusha V4 redemption predates one of its finalized top-up anchors",
                 )
                 .into());
             }
@@ -2566,7 +3525,7 @@ pub mod isi {
             {
                 return Err(labeled_invariant(
                     "topup_anchor_mismatch",
-                    "Kagemusha V2 finalized top-up evidence is inconsistent with confidential ledger state",
+                    "Kagemusha V4 finalized top-up evidence is inconsistent with confidential ledger state",
                 )
                 .into());
             }
@@ -2575,7 +3534,7 @@ pub mod isi {
                 .ok_or_else(|| {
                     labeled_invariant(
                         "amount_mismatch",
-                        "Kagemusha V2 finalized top-up amount total overflows u128",
+                        "Kagemusha V4 finalized top-up amount total overflows u128",
                     )
                 })?;
             let canonical = canonical_kagemusha_asset_id(state_transaction, &persisted.asset)?;
@@ -2585,7 +3544,7 @@ pub mod isi {
                 Some(_) => {
                     return Err(labeled_invariant(
                         "asset_mismatch",
-                        "Kagemusha V2 cannot join top-up anchors from different asset-balance scopes",
+                        "Kagemusha V4 cannot join top-up anchors from different asset-balance scopes",
                     )
                     .into());
                 }
@@ -2594,17 +3553,17 @@ pub mod isi {
         if anchored_total < current_note_atomic_units {
             return Err(labeled_invariant(
                 "amount_mismatch",
-                "Kagemusha V2 spendable note exceeds its finalized top-up provenance",
+                "Kagemusha V4 spendable note exceeds its finalized top-up provenance",
             )
             .into());
         }
         let source_asset = canonical_source_asset.ok_or_else(|| {
             Error::from(labeled_invariant(
                 "topup_anchor_missing",
-                "Kagemusha V2 redemption has no finalized top-up provenance",
+                "Kagemusha V4 redemption has no finalized top-up provenance",
             ))
         })?;
-        Ok(KagemushaV2ResolvedTopUpProvenance { source_asset })
+        Ok(KagemushaV4ResolvedTopUpProvenance { source_asset })
     }
 
     #[derive(Debug)]
@@ -2744,6 +3703,17 @@ pub mod isi {
         authority: &AccountId,
     ) -> bool {
         let required = offline_escrow_manager_permission();
+        world_has_offline_permission(world, authority, &required)
+    }
+
+    fn can_activate_kagemusha_recursive_release_v4(
+        world: &impl WorldReadOnly,
+        authority: &AccountId,
+    ) -> bool {
+        let required = Permission::new(
+            CAN_ACTIVATE_KAGEMUSHA_RECURSIVE_RELEASE_V4_PERMISSION.into(),
+            iroha_primitives::json::Json::new(()),
+        );
         world_has_offline_permission(world, authority, &required)
     }
 
@@ -4304,8 +5274,8 @@ pub mod isi {
         world_has_offline_permission(&state_transaction.world, authority, &required)
     }
 
-    fn ensure_kagemusha_v2_topup_shield_public_inputs(
-        request: &iroha_data_model::offline::KagemushaRecursiveSpendTopUpRequestV2,
+    fn ensure_kagemusha_v4_topup_shield_public_inputs(
+        request: &iroha_data_model::offline::KagemushaRecursiveSpendTopUpRequestV4,
         authoritative_initial_root: [u8; 32],
         authoritative_finalized_root: [u8; 32],
         authoritative_leaf_index: u32,
@@ -4359,9 +5329,9 @@ pub mod isi {
         Ok(())
     }
 
-    fn ensure_kagemusha_v2_anchor_matches_topup_request(
-        anchor: &KagemushaRecursiveSpendTopUpAnchorV2,
-        request: &iroha_data_model::offline::KagemushaRecursiveSpendTopUpRequestV2,
+    fn ensure_kagemusha_v4_anchor_matches_topup_request(
+        anchor: &KagemushaRecursiveSpendTopUpAnchorV4,
+        request: &iroha_data_model::offline::KagemushaRecursiveSpendTopUpRequestV4,
     ) -> Result<(), Error> {
         if anchor.chain_id != request.current_note.chain_id
             || anchor.payer != request.authorization.authority
@@ -4380,22 +5350,22 @@ pub mod isi {
         {
             return Err(labeled_invariant(
                 "topup_anchor_mismatch",
-                "persisted Kagemusha V2 top-up anchor does not match the signed request",
+                "persisted Kagemusha V4 top-up anchor does not match the signed request",
             )
             .into());
         }
         Ok(())
     }
 
-    fn finalized_kagemusha_v2_topup_anchor(
-        request: &iroha_data_model::offline::KagemushaRecursiveSpendTopUpRequestV2,
+    fn finalized_kagemusha_v4_topup_anchor(
+        request: &iroha_data_model::offline::KagemushaRecursiveSpendTopUpRequestV4,
         state_transaction: &StateTransaction<'_, '_>,
-    ) -> Result<KagemushaRecursiveSpendTopUpAnchorV2, Error> {
+    ) -> Result<KagemushaRecursiveSpendTopUpAnchorV4, Error> {
         let shield_verifier_commitment =
             request.shield_evidence.proof.vk_commitment.ok_or_else(|| {
                 labeled_invariant(
                     "verifier_key_invalid",
-                    "Kagemusha V2 top-up shield proof has no verifier commitment",
+                    "Kagemusha V4 top-up shield proof has no verifier commitment",
                 )
             })?;
         let finalized_tx_hash = *state_transaction
@@ -4404,12 +5374,12 @@ pub mod isi {
             .ok_or_else(|| {
                 labeled_invariant(
                     "topup_anchor_invalid",
-                    "current signed transaction hash is unavailable for Kagemusha V2 top-up",
+                    "current signed transaction hash is unavailable for Kagemusha V4 top-up",
                 )
             })?
             .as_ref();
-        let anchor = KagemushaRecursiveSpendTopUpAnchorV2 {
-            version: 2,
+        let anchor = KagemushaRecursiveSpendTopUpAnchorV4 {
+            version: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_TOPUP_ANCHOR_VERSION_V4,
             chain_id: request.current_note.chain_id.clone(),
             payer: request.authorization.authority.clone(),
             asset: request.asset.clone(),
@@ -4429,250 +5399,51 @@ pub mod isi {
         }
         .finalize_digest()
         .map_err(|err| labeled_invariant("topup_anchor_invalid", err.to_string()))?;
-        ensure_kagemusha_v2_anchor_matches_topup_request(&anchor, request)?;
+        ensure_kagemusha_v4_anchor_matches_topup_request(&anchor, request)?;
         Ok(anchor)
     }
 
-    fn resolve_kagemusha_v2_recursive_verifier(
-        bundle: &iroha_data_model::offline::KagemushaRecursiveSpendBundleV2,
+    struct KagemushaResolvedTransactionReleaseV4 {
+        cached: std::sync::Arc<kagemusha_terminal_registry_v4::KagemushaCachedReleaseV4>,
+    }
+
+    fn resolve_kagemusha_v4_transaction_release(
+        binding: &iroha_data_model::offline::KagemushaRecursiveSpendArtifactBindingV4,
         requested_height: u64,
+        chain_id: &iroha_data_model::ChainId,
+        asset: &AssetDefinitionId,
+        asset_scale: u32,
         state_transaction: &StateTransaction<'_, '_>,
-    ) -> Result<(VerifyingKeyRecord, VerifyingKeyRecord), Error> {
-        let step_eq_id = &bundle.recursive_proof.verifier_key_id;
-        let step_eq_record = state_transaction
-            .world
-            .verifying_keys
-            .get(step_eq_id)
-            .cloned()
-            .ok_or_else(|| {
-                labeled_invariant(
-                    "verifier_key_invalid",
-                    "Kagemusha Eq recursive verifier key is not registered",
-                )
-            })?;
-        let step_ep_circuit_key = (
-            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V3.to_owned(),
-            step_eq_record.version,
-        );
-        let step_ep_id = state_transaction
-            .world
-            .verifying_keys_by_circuit
-            .get(&step_ep_circuit_key)
-            .ok_or_else(|| {
-                labeled_invariant(
-                    "verifier_key_invalid",
-                    "Kagemusha Ep recursive verifier circuit/version is not active",
-                )
-            })?;
-        let step_ep_record = state_transaction
-            .world
-            .verifying_keys
-            .get(step_ep_id)
-            .cloned()
-            .ok_or_else(|| {
-                labeled_invariant(
-                    "verifier_key_invalid",
-                    "Kagemusha Ep recursive verifier key is not registered",
-                )
-            })?;
-        let current_height = state_transaction.block_height();
-        for record in [&step_eq_record, &step_ep_record] {
-            ensure_kagemusha_v2_verifier_window(record, requested_height, current_height)?;
-        }
-        ensure_kagemusha_v2_recursive_verifier_shape(
-            bundle,
-            step_eq_id,
-            &step_eq_record,
-            iroha_data_model::offline::KagemushaPastaCycleParityV1::StepEq,
-        )?;
-        ensure_kagemusha_v2_recursive_verifier_shape(
-            bundle,
-            step_ep_id,
-            &step_ep_record,
-            iroha_data_model::offline::KagemushaPastaCycleParityV1::StepEp,
-        )?;
-        if step_eq_record.status != ConfidentialStatus::Active
-            || step_ep_record.status != ConfidentialStatus::Active
-        {
-            return Err(labeled_invariant(
-                "verifier_key_inactive",
-                "one Kagemusha recursive verifier record is not currently active",
-            )
-            .into());
-        }
-        for (id, record) in [(step_eq_id, &step_eq_record), (step_ep_id, &step_ep_record)] {
-            let circuit_key = (record.circuit_id.clone(), record.version);
-            if state_transaction
-                .world
-                .verifying_keys_by_circuit
-                .get(&circuit_key)
-                != Some(id)
-            {
-                return Err(labeled_invariant(
-                    "verifier_key_inactive",
-                    "one Kagemusha recursive verifier circuit/version is not active",
-                )
-                .into());
-            }
-        }
-        Ok((step_eq_record, step_ep_record))
+    ) -> Result<KagemushaResolvedTransactionReleaseV4, Error> {
+        super::resolve_kagemusha_recursive_transaction_release_v4(
+            &state_transaction.world,
+            &state_transaction.kagemusha_release_catalog,
+            binding,
+            requested_height,
+            state_transaction.block_height(),
+            chain_id,
+            asset,
+            asset_scale,
+        )
+        .map_err(|error| labeled_invariant("recursive_release_mismatch", error))?;
+        let cached = state_transaction
+            .kagemusha_release_catalog
+            .resolve_binding(binding)
+            .map_err(|error| labeled_invariant("verifier_key_invalid", error))?
+            .clone();
+        Ok(KagemushaResolvedTransactionReleaseV4 { cached })
     }
 
-    fn ensure_kagemusha_v2_recursive_verifier_shape(
-        bundle: &iroha_data_model::offline::KagemushaRecursiveSpendBundleV2,
-        id: &iroha_data_model::proof::VerifyingKeyId,
-        record: &VerifyingKeyRecord,
-        parity: iroha_data_model::offline::KagemushaPastaCycleParityV1,
+    fn verify_kagemusha_v4_recursive_bundle(
+        bundle: &iroha_data_model::offline::KagemushaRecursiveSpendBundleV4,
+        verifier: &crate::zk::kagemusha_v2::KagemushaPastaCycleOpaqueVerifierV4,
     ) -> Result<(), Error> {
-        let (expected_circuit_id, expected_curve, expected_schema_hash) = match parity {
-            iroha_data_model::offline::KagemushaPastaCycleParityV1::StepEq => (
-                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V3,
-                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_VERIFIER_CURVE_V3,
-                iroha_data_model::offline::kagemusha_recursive_spend_step_eq_public_inputs_schema_hash_v3(),
-            ),
-            iroha_data_model::offline::KagemushaPastaCycleParityV1::StepEp => (
-                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V3,
-                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_VERIFIER_CURVE_V3,
-                iroha_data_model::offline::kagemusha_recursive_spend_step_ep_public_inputs_schema_hash_v3(),
-            ),
-        };
-        if record.circuit_id != expected_circuit_id
-            || id.name != expected_circuit_id
-            || (parity == iroha_data_model::offline::KagemushaPastaCycleParityV1::StepEq
-                && id != &bundle.recursive_proof.verifier_key_id)
-            || record.namespace != iroha_data_model::offline::KAGEMUSHA_VERIFIER_NAMESPACE
-            || record.backend != BackendTag::Halo2IpaPasta
-            || record.curve != expected_curve
-            || record.public_inputs_schema_hash != expected_schema_hash
-            || id.backend.as_str()
-                != iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1
-            || record.commitment == [0; 32]
-            || record.max_proof_bytes == 0
-            || record.max_proof_bytes
-                > iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROOF_BYTES_V3
-            || bundle.recursive_proof.proof.bytes.len() > record.max_proof_bytes as usize
-        {
-            return Err(labeled_invariant(
-                "verifier_key_invalid",
-                "Kagemusha V2 recursive verifier record is inactive or inconsistent with the proof",
-            )
-            .into());
-        }
-        let key = record.key.as_ref().ok_or_else(|| {
-            labeled_invariant(
-                "verifier_key_invalid",
-                "Kagemusha V2 recursive verifier key is not available inline",
-            )
-        })?;
-        if key.backend.as_str()
-            != iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1
-            || key.bytes.is_empty()
-            || u32::try_from(key.bytes.len()).ok() != Some(record.vk_len)
-            || crate::zk::hash_vk(key) != record.commitment
-        {
-            return Err(labeled_invariant(
-                "verifier_key_invalid",
-                "Kagemusha V2 inline recursive verifier key does not match its record",
-            )
-            .into());
-        }
-        Ok(())
+        verifier
+            .verify_bundle_v4(bundle)
+            .map_err(|error| labeled_invariant("invalid_recursive_bundle", error).into())
     }
 
-    fn ensure_kagemusha_v2_verifier_window(
-        record: &VerifyingKeyRecord,
-        requested_height: u64,
-        current_height: u64,
-    ) -> Result<(), Error> {
-        if requested_height == 0
-            || requested_height > current_height
-            || !record.is_active_at(requested_height)
-            || !record.is_active_at(current_height)
-        {
-            return Err(labeled_invariant(
-                "verifier_key_inactive",
-                "Kagemusha V2 verifier is outside its requested or current activation window",
-            )
-            .into());
-        }
-        Ok(())
-    }
-
-    fn verify_kagemusha_v2_recursive_bundle_with_record(
-        bundle: &iroha_data_model::offline::KagemushaRecursiveSpendBundleV2,
-        step_eq_record: &VerifyingKeyRecord,
-        step_ep_record: &VerifyingKeyRecord,
-        state_transaction: &StateTransaction<'_, '_>,
-    ) -> Result<(), Error> {
-        crate::zk::kagemusha_v2::ensure_kagemusha_recursive_spend_v2_proof_envelope_binding(
-            bundle,
-            step_eq_record,
-            step_ep_record,
-        )
-        .map_err(|err| labeled_invariant("invalid_recursive_bundle", err))?;
-
-        let trusted_policy = super::kagemusha_terminal_registry::embedded_release_policy_bytes()
-            .map_err(|err| labeled_invariant("recursive_backend_unavailable", err))?;
-        let resolved = super::kagemusha_terminal_registry::resolve_with_trusted_policy(
-            &bundle.statement.artifact_binding,
-            step_eq_record,
-            step_ep_record,
-            &trusted_policy,
-            |key| {
-                state_transaction
-                    .world
-                    .smart_contract_state
-                    .get(key)
-                    .map(Vec::as_slice)
-            },
-        )
-        .map_err(|err| labeled_invariant("verifier_key_invalid", err))?;
-        let (envelope, _proof_pair) = super::kagemusha_terminal_registry::decode_proof_pair(
-            &bundle.recursive_proof.proof.bytes,
-        )
-        .map_err(|err| labeled_invariant("invalid_recursive_bundle", err))?;
-        envelope
-            .validate_against_manifest_for_context(
-                resolved.release().manifest(),
-                &bundle.statement.chain_id,
-                &bundle.statement.asset,
-                bundle.statement.asset_scale,
-                state_transaction.block_height(),
-            )
-            .map_err(|err| labeled_invariant("invalid_recursive_bundle", err.to_string()))?;
-        debug_assert_eq!(
-            resolved.artifacts().manifest_sha256(),
-            resolved.release().manifest_sha256()
-        );
-
-        // Material selection is now exact and authenticated.  Keep terminal
-        // admission closed until the production Eq/Fp and Ep/Fq exact-state
-        // Step circuit types exist; binding either transition-only circuit
-        // here would parse a processed VK against the wrong circuit shape.
-        Err(labeled_invariant(
-            "recursive_backend_unavailable",
-            "Kagemusha paired terminal verifier material is authenticated, but the exact-state Step circuit verifier is not installed",
-        )
-        .into())
-    }
-
-    fn verify_kagemusha_v2_recursive_bundle(
-        bundle: &iroha_data_model::offline::KagemushaRecursiveSpendBundleV2,
-        requested_height: u64,
-        state_transaction: &StateTransaction<'_, '_>,
-    ) -> Result<(VerifyingKeyRecord, VerifyingKeyRecord), Error> {
-        let (step_eq_record, step_ep_record) =
-            resolve_kagemusha_v2_recursive_verifier(bundle, requested_height, state_transaction)?;
-        verify_kagemusha_v2_recursive_bundle_with_record(
-            bundle,
-            &step_eq_record,
-            &step_ep_record,
-            state_transaction,
-        )?;
-        Ok((step_eq_record, step_ep_record))
-    }
-
-    struct KagemushaV2RedemptionCommitPlan {
+    struct KagemushaV4RedemptionCommitPlan {
         definition_id: AssetDefinitionId,
         zk_asset_state: crate::state::ZkAssetState,
         escrow_credit: KagemushaV2EscrowCreditPlan,
@@ -4682,7 +5453,7 @@ pub mod isi {
         replay_markers: [Hash; 4],
     }
 
-    impl KagemushaV2RedemptionCommitPlan {
+    impl KagemushaV4RedemptionCommitPlan {
         fn commit(self, state_transaction: &mut StateTransaction<'_, '_>) -> Result<(), Error> {
             // The balance move is the only fallible ledger mutation remaining.
             // Every proof, conflict marker, tree update, and receipt collision was
@@ -4701,12 +5472,12 @@ pub mod isi {
                 .world
                 .smart_contract_state
                 .insert(self.receipt_key, self.receipt_digest.to_vec());
-            commit_kagemusha_v2_replay_markers(self.replay_markers, state_transaction);
+            commit_kagemusha_v4_replay_markers(self.replay_markers, state_transaction);
             Ok(())
         }
     }
 
-    struct KagemushaV2RedemptionPlanInput<'a> {
+    struct KagemushaV4RedemptionPlanInput<'a> {
         definition_id: &'a AssetDefinitionId,
         source_asset: &'a AssetId,
         recipient: &'a AccountId,
@@ -4724,10 +5495,10 @@ pub mod isi {
         replay_markers: [Hash; 4],
     }
 
-    fn plan_kagemusha_v2_redemption_state_commit(
-        input: KagemushaV2RedemptionPlanInput<'_>,
+    fn plan_kagemusha_v4_redemption_state_commit(
+        input: KagemushaV4RedemptionPlanInput<'_>,
         state_transaction: &StateTransaction<'_, '_>,
-    ) -> Result<KagemushaV2RedemptionCommitPlan, Error> {
+    ) -> Result<KagemushaV4RedemptionCommitPlan, Error> {
         let mut zk_asset_state = state_transaction
             .world
             .zk_assets
@@ -4736,20 +5507,20 @@ pub mod isi {
             .ok_or_else(|| {
                 labeled_invariant(
                     "verifier_key_invalid",
-                    "Kagemusha V2 redemption requires configured shielded asset state",
+                    "Kagemusha V4 redemption requires configured shielded asset state",
                 )
             })?;
         if !zk_asset_state.allow_unshield {
             return Err(labeled_invariant(
                 "unshield_not_permitted",
-                "Kagemusha V2 redemption is not permitted by asset policy",
+                "Kagemusha V4 redemption is not permitted by asset policy",
             )
             .into());
         }
         if zk_asset_state.nullifiers.contains(&input.current_nullifier) {
             return Err(labeled_invariant(
                 "duplicate_nullifier",
-                "Kagemusha V2 spendable-note nullifier is already redeemed",
+                "Kagemusha V4 spendable-note nullifier is already redeemed",
             )
             .into());
         }
@@ -4759,7 +5530,7 @@ pub mod isi {
         {
             return Err(labeled_invariant(
                 "proof_binding",
-                "Kagemusha V2 spendable-note nullifier collides with a confidential commitment",
+                "Kagemusha V4 spendable-note nullifier collides with a confidential commitment",
             )
             .into());
         }
@@ -4767,7 +5538,7 @@ pub mod isi {
             if zk_asset_state.commitments.contains(&change.note_commitment) {
                 return Err(labeled_invariant(
                     "duplicate_output",
-                    "Kagemusha V2 redemption change commitment already exists",
+                    "Kagemusha V4 redemption change commitment already exists",
                 )
                 .into());
             }
@@ -4776,7 +5547,7 @@ pub mod isi {
             {
                 return Err(labeled_invariant(
                     "duplicate_nullifier",
-                    "Kagemusha V2 redemption change nullifier collides with ledger state",
+                    "Kagemusha V4 redemption change nullifier collides with ledger state",
                 )
                 .into());
             }
@@ -4786,7 +5557,7 @@ pub mod isi {
             {
                 return Err(labeled_invariant(
                     "proof_binding",
-                    "Kagemusha V2 redemption change material overlaps an existing commitment or nullifier",
+                    "Kagemusha V4 redemption change material overlaps an existing commitment or nullifier",
                 )
                 .into());
             }
@@ -4799,7 +5570,7 @@ pub mod isi {
         )?;
 
         if !zk_asset_state.nullifiers.insert(input.current_nullifier) {
-            unreachable!("the V2 nullifier was checked before insertion into the cloned state");
+            unreachable!("the V4 nullifier was checked before insertion into the cloned state");
         }
         if let Some(change) = input.change_output {
             crate::smartcontracts::isi::world::isi::push_confidential_commitment_with_v2_root(
@@ -4820,8 +5591,8 @@ pub mod isi {
             state_transaction,
         )?;
         let receipt_key =
-            ensure_kagemusha_v2_redemption_receipt_absent(input.operation_id, state_transaction)?;
-        Ok(KagemushaV2RedemptionCommitPlan {
+            ensure_kagemusha_v4_redemption_receipt_absent(input.operation_id, state_transaction)?;
+        Ok(KagemushaV4RedemptionCommitPlan {
             definition_id: input.definition_id.clone(),
             zk_asset_state,
             escrow_credit,
@@ -4832,13 +5603,13 @@ pub mod isi {
         })
     }
 
-    fn plan_kagemusha_v2_redemption_commit(
-        request: &iroha_data_model::offline::KagemushaRecursiveSpendRedeemRequestV2,
+    fn plan_kagemusha_v4_redemption_commit(
+        request: &iroha_data_model::offline::KagemushaRecursiveSpendRedeemRequestV4,
         source_asset: &AssetId,
         receipt_digest: [u8; 32],
         replay_markers: [Hash; 4],
         state_transaction: &StateTransaction<'_, '_>,
-    ) -> Result<KagemushaV2RedemptionCommitPlan, Error> {
+    ) -> Result<KagemushaV4RedemptionCommitPlan, Error> {
         let statement = &request.bundle.statement;
         let amount = request.amount.public_quantity();
         let current_nullifier = statement.current_note.spend_nullifier;
@@ -4859,8 +5630,8 @@ pub mod isi {
             } else {
                 (None, Vec::new())
             };
-        plan_kagemusha_v2_redemption_state_commit(
-            KagemushaV2RedemptionPlanInput {
+        plan_kagemusha_v4_redemption_state_commit(
+            KagemushaV4RedemptionPlanInput {
                 definition_id: &statement.asset,
                 source_asset,
                 recipient: &request.recipient,
@@ -4878,7 +5649,7 @@ pub mod isi {
         )
     }
 
-    fn ensure_kagemusha_v2_redemption_policy_will_be_convertible(
+    fn ensure_kagemusha_v4_policy_will_be_convertible(
         definition_id: &AssetDefinitionId,
         state_transaction: &StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
@@ -4900,14 +5671,14 @@ pub mod isi {
         if policy.mode() != ConfidentialPolicyMode::Convertible {
             return Err(labeled_invariant(
                 "unshield_not_permitted",
-                "Kagemusha V2 redemption is not permitted by confidential asset policy",
+                "Kagemusha V4 operation is not permitted by confidential asset policy",
             )
             .into());
         }
         Ok(())
     }
 
-    fn ensure_kagemusha_v2_redemption_live_context(
+    fn ensure_kagemusha_v4_redemption_live_context(
         bundle_chain_id: &iroha_data_model::ChainId,
         redemption_chain_id: &iroha_data_model::ChainId,
         live_chain_id: &iroha_data_model::ChainId,
@@ -4918,65 +5689,310 @@ pub mod isi {
         if bundle_chain_id != live_chain_id || redemption_chain_id != live_chain_id {
             return Err(labeled_invariant(
                 "wrong_chain",
-                "Kagemusha V2 redemption chain id does not match this chain",
+                "Kagemusha V4 redemption chain id does not match this chain",
             )
             .into());
         }
         if amount_scale != live_scale || statement_scale != live_scale {
             return Err(labeled_invariant(
                 "amount_scale_mismatch",
-                "Kagemusha V2 redemption scale does not equal the live asset scale",
+                "Kagemusha V4 redemption scale does not equal the live asset scale",
             )
             .into());
         }
         Ok(())
     }
 
-    fn ensure_kagemusha_v2_proof_backend_available() -> Result<(), Error> {
-        if iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PROOF_BACKEND_AVAILABLE {
-            return Ok(());
-        }
-        // This gate is deliberately fail-closed. Remove it only in the same
-        // release that ships the authenticated V3 recursive verifier and both
-        // chain executors, so readiness can never expose partial execution.
-        Err(labeled_invariant(
-            "kagemusha_v2_proof_backend_unavailable",
-            "Kagemusha V2 state transitions remain disabled until the authenticated V3 recursive verifier is linked",
+    fn kagemusha_v4_release_binding(
+        release_record: &iroha_data_model::offline::KagemushaRecursiveSpendReleaseRecordV4,
+    ) -> Result<iroha_data_model::offline::KagemushaRecursiveSpendArtifactBindingV4, Error> {
+        let manifest_bytes = norito::to_bytes(&release_record.manifest).map_err(|error| {
+            labeled_invariant(
+                "recursive_release_invalid",
+                format!("failed to encode Kagemusha V4 manifest: {error}"),
+            )
+        })?;
+        Ok(
+            iroha_data_model::offline::KagemushaRecursiveSpendArtifactBindingV4 {
+                version: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_WIRE_VERSION_V4,
+                generation: release_record.manifest.generation.clone(),
+                manifest_sha256: Sha256::digest(manifest_bytes).into(),
+            },
         )
-        .into())
     }
 
-    impl Execute for TopUpKagemushaRecursiveV2 {
+    fn kagemusha_v4_next_verifier_version(
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<u32, Error> {
+        let maximum_for = |circuit_id: &str| {
+            state_transaction
+                .world
+                .verifying_keys_by_circuit
+                .iter()
+                .filter_map(|((indexed_circuit, version), _)| {
+                    (indexed_circuit == circuit_id).then_some(*version)
+                })
+                .max()
+                .unwrap_or(0)
+        };
+        let step_eq =
+            maximum_for(iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4);
+        let step_ep =
+            maximum_for(iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V4);
+        if step_eq != step_ep {
+            return Err(labeled_invariant(
+                "recursive_release_overlap",
+                "existing Kagemusha V4 Eq/Ep verifier version history is not atomic",
+            )
+            .into());
+        }
+        step_eq.checked_add(1).ok_or_else(|| {
+            labeled_invariant(
+                "recursive_release_invalid",
+                "Kagemusha V4 verifier version exhausted u32",
+            )
+            .into()
+        })
+    }
+
+    fn ensure_kagemusha_v4_non_overlapping_issuance(
+        binding: &iroha_data_model::offline::KagemushaRecursiveSpendArtifactBindingV4,
+        manifest: &iroha_data_model::offline::KagemushaRecursiveSpendArtifactManifestV4,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<(), Error> {
+        for (state_key, payload) in state_transaction.world.smart_contract_state.iter() {
+            let Some((other_binding, release_record)) =
+                decode_kagemusha_v4_consensus_release_state(state_key, payload)
+                    .map_err(|error| labeled_invariant("recursive_release_invalid", error))?
+            else {
+                continue;
+            };
+            if other_binding.manifest_sha256 == binding.manifest_sha256 {
+                continue;
+            }
+            let cached = state_transaction
+                .kagemusha_release_catalog
+                .resolve_binding(&other_binding)
+                .map_err(|error| labeled_invariant("recursive_release_invalid", error))?;
+            if cached.release_record() != &release_record {
+                return Err(labeled_invariant(
+                    "recursive_release_invalid",
+                    "Kagemusha V4 consensus release record differs from local authenticated material",
+                )
+                .into());
+            }
+            let other = &release_record.manifest;
+            let same_scope = other.chain_id == manifest.chain_id
+                && other.asset == manifest.asset
+                && other.asset_scale == manifest.asset_scale;
+            let overlaps = kagemusha_v4_issuance_windows_overlap(
+                manifest.activation_height,
+                manifest.withdrawal_height,
+                other.activation_height,
+                other.withdrawal_height,
+            );
+            if same_scope && overlaps {
+                return Err(labeled_invariant(
+                    "recursive_release_overlap",
+                    "Kagemusha V4 issuance windows overlap for the same chain, asset, and scale",
+                )
+                .into());
+            }
+        }
+        Ok(())
+    }
+
+    impl Execute for ActivateKagemushaRecursiveReleaseV4 {
         fn execute(
             self,
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            if !state_transaction.settlement.offline.kagemusha_enabled {
+            if !can_activate_kagemusha_recursive_release_v4(&state_transaction.world, authority) {
                 return Err(labeled_invariant(
-                    "kagemusha_disabled",
-                    "Kagemusha V2 recursive top-up is disabled by configuration",
+                    "unauthorized_controller",
+                    "Kagemusha V4 release activation requires CanActivateKagemushaRecursiveReleaseV4",
                 )
                 .into());
             }
-            // This guard must run before replay markers, escrow reservation,
-            // confidential-tree updates, or balance transfers.
-            ensure_kagemusha_v2_proof_backend_available()?;
+            let activation = self.activation;
+            let binding = kagemusha_v4_release_binding(&activation.release_record)?;
+            let cached = state_transaction
+                .kagemusha_release_catalog
+                .resolve_binding(&binding)
+                .map_err(|error| labeled_invariant("recursive_release_invalid", error))?
+                .clone();
+            if activation.configured_policy_sha256
+                != state_transaction
+                    .kagemusha_release_catalog
+                    .configured_policy_sha256()
+                    .ok_or_else(|| {
+                        labeled_invariant(
+                            "recursive_release_invalid",
+                            "this validator has no configured Kagemusha V4 release policy",
+                        )
+                    })?
+                || cached.release_record() != &activation.release_record
+            {
+                return Err(labeled_invariant(
+                    "recursive_release_invalid",
+                    "activation release or configured-policy digest differs from the local authenticated catalog",
+                )
+                .into());
+            }
+            let manifest = &activation.release_record.manifest;
+            if &manifest.chain_id != state_transaction.chain_id() {
+                return Err(labeled_invariant(
+                    "wrong_chain",
+                    "Kagemusha V4 activation manifest targets a different chain",
+                )
+                .into());
+            }
+            let spec = state_transaction.numeric_spec_for(&manifest.asset)?;
+            if spec.scale() != Some(manifest.asset_scale) {
+                return Err(labeled_invariant(
+                    "amount_scale_mismatch",
+                    "Kagemusha V4 activation manifest scale differs from the live asset definition",
+                )
+                .into());
+            }
+            let current_height = state_transaction.block_height();
+            if manifest.activation_height <= current_height {
+                return Err(labeled_invariant(
+                    "recursive_release_invalid",
+                    "Kagemusha V4 activation height must be in the future",
+                )
+                .into());
+            }
+            ensure_kagemusha_v4_non_overlapping_issuance(&binding, manifest, state_transaction)?;
+
+            let expected_eq_id =
+                iroha_data_model::offline::kagemusha_recursive_spend_verifier_key_id_v4(
+                    iroha_data_model::offline::KagemushaPastaCycleParityV1::StepEq,
+                    binding.manifest_sha256,
+                );
+            let expected_ep_id =
+                iroha_data_model::offline::kagemusha_recursive_spend_verifier_key_id_v4(
+                    iroha_data_model::offline::KagemushaPastaCycleParityV1::StepEp,
+                    binding.manifest_sha256,
+                );
+            if activation.step_eq_verifier_key_id != expected_eq_id
+                || activation.step_ep_verifier_key_id != expected_ep_id
+                || activation.step_eq_verifier_key_id == activation.step_ep_verifier_key_id
+            {
+                return Err(labeled_invariant(
+                    "verifier_key_invalid",
+                    "Kagemusha V4 activation verifier ids do not match the release-bound Eq/Ep identities",
+                )
+                .into());
+            }
+            let expected_version = kagemusha_v4_next_verifier_version(state_transaction)?;
+            if activation.step_eq_verifier_record.version != expected_version
+                || activation.step_ep_verifier_record.version != expected_version
+            {
+                return Err(labeled_invariant(
+                    "verifier_key_invalid",
+                    "Kagemusha V4 Eq/Ep verifier records do not use the next atomic version",
+                )
+                .into());
+            }
+            cached
+                .validate_verifier_records(
+                    &activation.step_eq_verifier_record,
+                    &activation.step_ep_verifier_record,
+                )
+                .map_err(|error| labeled_invariant("verifier_key_invalid", error))?;
+            if state_transaction
+                .world
+                .verifying_keys
+                .get(&expected_eq_id)
+                .is_some()
+                || state_transaction
+                    .world
+                    .verifying_keys
+                    .get(&expected_ep_id)
+                    .is_some()
+            {
+                return Err(labeled_invariant(
+                    "recursive_release_overlap",
+                    "Kagemusha V4 release verifier ids are already registered",
+                )
+                .into());
+            }
+            let release_key = kagemusha_terminal_registry_v4::release_state_key(&binding)
+                .map_err(|error| labeled_invariant("recursive_release_invalid", error))?;
+            if state_transaction
+                .world
+                .smart_contract_state
+                .get(&release_key)
+                .is_some()
+            {
+                return Err(labeled_invariant(
+                    "recursive_release_overlap",
+                    "Kagemusha V4 release record is already activated",
+                )
+                .into());
+            }
+            let release_bytes = norito::to_bytes(&activation.release_record).map_err(|error| {
+                labeled_invariant(
+                    "recursive_release_invalid",
+                    format!("failed to encode Kagemusha V4 release record: {error}"),
+                )
+            })?;
+
+            // Every fallible validation completed above. Publish the release
+            // and paired verifier records in this transaction overlay.
+            state_transaction
+                .world
+                .smart_contract_state
+                .insert(release_key, release_bytes);
+            state_transaction.world.verifying_keys.insert(
+                expected_eq_id.clone(),
+                activation.step_eq_verifier_record.clone(),
+            );
+            state_transaction.world.verifying_keys.insert(
+                expected_ep_id.clone(),
+                activation.step_ep_verifier_record.clone(),
+            );
+            state_transaction.world.verifying_keys_by_circuit.insert(
+                (
+                    activation.step_eq_verifier_record.circuit_id.clone(),
+                    expected_version,
+                ),
+                expected_eq_id,
+            );
+            state_transaction.world.verifying_keys_by_circuit.insert(
+                (
+                    activation.step_ep_verifier_record.circuit_id.clone(),
+                    expected_version,
+                ),
+                expected_ep_id,
+            );
+            Ok(())
+        }
+    }
+
+    impl Execute for TopUpKagemushaRecursiveV4 {
+        fn execute(
+            self,
+            authority: &AccountId,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
             let request = self.request;
             request
                 .validate_public_binding()
                 .map_err(|err| labeled_invariant("invalid_recursive_topup", err.to_string()))?;
             let replay_markers =
-                match kagemusha_v2_replay_status(&request.authorization, state_transaction)? {
-                    KagemushaV2ReplayStatus::Committed => {
-                        let anchor = load_kagemusha_v2_topup_anchor(
+                match kagemusha_v4_replay_status(&request.authorization, state_transaction)? {
+                    KagemushaV4ReplayStatus::Committed => {
+                        let anchor = load_kagemusha_v4_topup_anchor(
                             request.authorization.operation_id,
                             state_transaction,
                         )?;
-                        ensure_kagemusha_v2_anchor_matches_topup_request(&anchor, &request)?;
+                        ensure_kagemusha_v4_anchor_matches_topup_request(&anchor, &request)?;
                         return Ok(());
                     }
-                    KagemushaV2ReplayStatus::Fresh(markers) => markers,
+                    KagemushaV4ReplayStatus::Fresh(markers) => markers,
                 };
             request
                 .validate_authorization_at(state_transaction.block_unix_timestamp_ms())
@@ -4984,7 +6000,7 @@ pub mod isi {
             if request.asset.account() != &request.authorization.authority {
                 return Err(labeled_invariant(
                     "unauthorized_controller",
-                    "Kagemusha V2 top-up authority must equal the charged asset account",
+                    "Kagemusha V4 top-up authority must equal the charged asset account",
                 )
                 .into());
             }
@@ -4997,7 +6013,7 @@ pub mod isi {
             if request.current_note.chain_id != *state_transaction.chain_id() {
                 return Err(labeled_invariant(
                     "wrong_chain",
-                    "Kagemusha V2 top-up chain id does not match this chain",
+                    "Kagemusha V4 top-up chain id does not match this chain",
                 )
                 .into());
             }
@@ -5005,13 +6021,31 @@ pub mod isi {
             let live_scale = spec.scale().ok_or_else(|| {
                 labeled_invariant(
                     "amount_scale_invalid",
-                    "Kagemusha V2 requires an asset definition with a fixed numeric scale",
+                    "Kagemusha V4 requires an asset definition with a fixed numeric scale",
                 )
             })?;
             if request.amount.scale != live_scale {
                 return Err(labeled_invariant(
                     "amount_scale_mismatch",
-                    "Kagemusha V2 top-up amount scale does not equal the live asset scale",
+                    "Kagemusha V4 top-up amount scale does not equal the live asset scale",
+                )
+                .into());
+            }
+            let release = resolve_kagemusha_v4_transaction_release(
+                &request.artifact_binding,
+                state_transaction.block_height(),
+                state_transaction.chain_id(),
+                request.asset.definition(),
+                live_scale,
+                state_transaction,
+            )?;
+            if !release
+                .cached
+                .issuance_active_at(state_transaction.block_height())
+            {
+                return Err(labeled_invariant(
+                    "recursive_release_withdrawn",
+                    "Kagemusha V4 top-up is outside the authenticated issuance window",
                 )
                 .into());
             }
@@ -5019,23 +6053,15 @@ pub mod isi {
             if amount.scale() != live_scale {
                 return Err(labeled_invariant(
                     "amount_scale_mismatch",
-                    "Kagemusha V2 top-up Numeric encoding changed the authoritative scale",
+                    "Kagemusha V4 top-up Numeric encoding changed the authoritative scale",
                 )
                 .into());
             }
             assert_numeric_spec_with(amount.as_numeric(), spec)?;
-            let policy_mode = crate::smartcontracts::isi::world::isi::apply_policy_if_due(
-                state_transaction,
+            ensure_kagemusha_v4_policy_will_be_convertible(
                 request.asset.definition(),
-            )?
-            .mode();
-            if policy_mode != ConfidentialPolicyMode::Convertible {
-                return Err(labeled_invariant(
-                    "shield_not_permitted",
-                    "Kagemusha public top-up requires convertible confidential policy",
-                )
-                .into());
-            }
+                state_transaction,
+            )?;
             let mut zk_state = state_transaction
                 .world
                 .zk_assets
@@ -5044,7 +6070,7 @@ pub mod isi {
                 .ok_or_else(|| {
                     labeled_invariant(
                         "verifier_key_invalid",
-                        "Kagemusha V2 top-up requires configured confidential asset state",
+                        "Kagemusha V4 top-up requires configured confidential asset state",
                     )
                 })?;
             if !zk_state.allow_shield {
@@ -5117,13 +6143,15 @@ pub mod isi {
                 &request.shield_evidence.proof,
                 state_transaction,
             )?;
-            ensure_kagemusha_v2_topup_shield_public_inputs(
+            ensure_kagemusha_v4_topup_shield_public_inputs(
                 &request,
                 authoritative_initial_root,
                 authoritative_finalized_root,
                 authoritative_leaf_index,
                 state_transaction,
             )?;
+            let anchor = finalized_kagemusha_v4_topup_anchor(&request, state_transaction)?;
+            ensure_kagemusha_v4_topup_anchor_absent(request.operation_id, state_transaction)?;
             state_transaction
                 .register_confidential_proof(request.shield_evidence.proof.proof.bytes.len())?;
             state_transaction.register_commitments(1)?;
@@ -5136,7 +6164,20 @@ pub mod isi {
             if !report.ok {
                 return Err(labeled_invariant(
                     "invalid_proof",
-                    "Kagemusha V2 top-up shield proof verification failed",
+                    "Kagemusha V4 top-up shield proof verification failed",
+                )
+                .into());
+            }
+
+            let policy_mode = crate::smartcontracts::isi::world::isi::apply_policy_if_due(
+                state_transaction,
+                request.asset.definition(),
+            )?
+            .mode();
+            if policy_mode != ConfidentialPolicyMode::Convertible {
+                return Err(labeled_invariant(
+                    "confidential_policy_changed",
+                    "Kagemusha V4 confidential policy changed after read-only top-up admission",
                 )
                 .into());
             }
@@ -5151,7 +6192,7 @@ pub mod isi {
             if finalized_root != authoritative_finalized_root {
                 return Err(labeled_invariant(
                     "topup_anchor_mismatch",
-                    "Kagemusha V2 shield root does not equal the authoritative finalized root",
+                    "Kagemusha V4 shield root does not equal the authoritative finalized root",
                 )
                 .into());
             }
@@ -5168,35 +6209,18 @@ pub mod isi {
                 .world
                 .zk_assets
                 .insert(request.asset.definition().clone(), zk_state);
-            let anchor = finalized_kagemusha_v2_topup_anchor(&request, state_transaction)?;
-            persist_kagemusha_v2_topup_anchor(&anchor, state_transaction)?;
-            commit_kagemusha_v2_replay_markers(replay_markers, state_transaction);
+            persist_kagemusha_v4_topup_anchor(&anchor, state_transaction)?;
+            commit_kagemusha_v4_replay_markers(replay_markers, state_transaction);
             Ok(())
         }
     }
 
-    // Keep the public instruction fail-closed until the V2 proof backend and chain
-    // executor are enabled together; the capability invariant above prevents a
-    // partially deployed backend from mutating ledger state.
-    impl Execute for RedeemKagemushaRecursiveV2 {
+    impl Execute for RedeemKagemushaRecursiveV4 {
         fn execute(
             self,
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            if !state_transaction.settlement.offline.kagemusha_enabled {
-                return Err(labeled_invariant(
-                    "kagemusha_disabled",
-                    "Kagemusha V2 recursive redemption is disabled by configuration",
-                )
-                .into());
-            }
-            // First-release safety boundary: keep this guard until the recursive
-            // backend proves every transition field and lineage edge in-circuit.
-            // It is intentionally the first operation after the feature flag: no
-            // request parsing, proof metering, receipt, balance, or tree state is
-            // touched while the backend is unavailable.
-            ensure_kagemusha_v2_proof_backend_available()?;
             let request = self.request;
             request
                 .validate_public_binding()
@@ -5205,16 +6229,16 @@ pub mod isi {
                 .unsigned_payload_digest()
                 .map_err(|err| labeled_invariant("invalid_recursive_redeem", err.to_string()))?;
             let replay_markers =
-                match kagemusha_v2_replay_status(&request.authorization, state_transaction)? {
-                    KagemushaV2ReplayStatus::Committed => {
-                        ensure_kagemusha_v2_redemption_receipt_matches(
+                match kagemusha_v4_replay_status(&request.authorization, state_transaction)? {
+                    KagemushaV4ReplayStatus::Committed => {
+                        ensure_kagemusha_v4_redemption_receipt_matches(
                             request.operation_id,
                             payload_digest,
                             state_transaction,
                         )?;
                         return Ok(());
                     }
-                    KagemushaV2ReplayStatus::Fresh(markers) => markers,
+                    KagemushaV4ReplayStatus::Fresh(markers) => markers,
                 };
             request
                 .validate_authorization_at(state_transaction.block_unix_timestamp_ms())
@@ -5236,10 +6260,10 @@ pub mod isi {
             let live_scale = spec.scale().ok_or_else(|| {
                 labeled_invariant(
                     "amount_scale_invalid",
-                    "Kagemusha V2 requires an asset definition with a fixed numeric scale",
+                    "Kagemusha V4 requires an asset definition with a fixed numeric scale",
                 )
             })?;
-            ensure_kagemusha_v2_redemption_live_context(
+            ensure_kagemusha_v4_redemption_live_context(
                 &statement.chain_id,
                 &request.redemption.chain_id,
                 state_transaction.chain_id(),
@@ -5251,11 +6275,74 @@ pub mod isi {
             if amount.scale() != live_scale {
                 return Err(labeled_invariant(
                     "amount_scale_mismatch",
-                    "Kagemusha V2 redemption Numeric encoding changed the authoritative scale",
+                    "Kagemusha V4 redemption Numeric encoding changed the authoritative scale",
                 )
                 .into());
             }
             assert_numeric_spec_with(amount.as_numeric(), spec)?;
+
+            let parent_release = resolve_kagemusha_v4_transaction_release(
+                &statement.artifact_binding,
+                request.block_height,
+                &statement.chain_id,
+                &statement.asset,
+                statement.asset_scale,
+                state_transaction,
+            )?;
+            let change_release = request
+                .offline_change
+                .as_ref()
+                .map(|change| {
+                    resolve_kagemusha_v4_transaction_release(
+                        &change.bundle.statement.artifact_binding,
+                        request.block_height,
+                        &change.bundle.statement.chain_id,
+                        &change.bundle.statement.asset,
+                        change.bundle.statement.asset_scale,
+                        state_transaction,
+                    )
+                })
+                .transpose()?;
+            if change_release.as_ref().is_some_and(|release| {
+                !release
+                    .cached
+                    .issuance_active_at(state_transaction.block_height())
+            }) {
+                return Err(labeled_invariant(
+                    "recursive_release_withdrawn",
+                    "Kagemusha V4 partial redemption with offline change is outside the issuance window",
+                )
+                .into());
+            }
+            let parent_operation =
+                crate::zk::kagemusha_step_transition::KagemushaStepOperationVectorV4::from(
+                    &request.bundle.operation,
+                );
+            parent_operation
+                .to_fields()
+                .map_err(|error| labeled_invariant("invalid_recursive_bundle", error))?;
+            let expected_change_operation = request
+                .offline_change
+                .as_ref()
+                .map(|change| {
+                    let expected = crate::zk::kagemusha_step_transition::KagemushaStepOperationVectorV4::from_redemption_change_public_v4(
+                        &request.redemption,
+                        &change.bundle.statement,
+                    )?;
+                    let carried = crate::zk::kagemusha_step_transition::KagemushaStepOperationVectorV4::from(
+                        &change.bundle.operation,
+                    );
+                    carried.to_fields()?;
+                    if carried != expected {
+                        return Err(
+                            "Kagemusha V4 change operation does not match the submitted redemption"
+                                .to_owned(),
+                        );
+                    }
+                    Ok(expected)
+                })
+                .transpose()
+                .map_err(|error| labeled_invariant("invalid_recursive_bundle", error))?;
 
             let zk_state = state_transaction
                 .world
@@ -5265,10 +6352,10 @@ pub mod isi {
                 .ok_or_else(|| {
                     labeled_invariant(
                         "verifier_key_invalid",
-                        "Kagemusha V2 redemption requires configured shielded asset state",
+                        "Kagemusha V4 redemption requires configured shielded asset state",
                     )
                 })?;
-            let provenance = validate_kagemusha_v2_finalized_topup_anchors(
+            let provenance = validate_kagemusha_v4_finalized_topup_anchors(
                 &statement.topup_anchor_refs,
                 statement.current_note.amount.atomic_units,
                 request.block_height,
@@ -5281,38 +6368,48 @@ pub mod isi {
                 &request.redeem_proof,
                 state_transaction,
             )?;
-            ensure_kagemusha_v2_verifier_window(
+            ensure_kagemusha_v4_unshield_verifier_window(
                 &redeem_record,
                 request.block_height,
                 state_transaction.block_height(),
             )?;
-            ensure_kagemusha_v2_redeem_public_inputs(&request, state_transaction, &redeem_record)?;
-            let commit_plan = plan_kagemusha_v2_redemption_commit(
+            ensure_kagemusha_v4_redeem_public_inputs(&request, state_transaction, &redeem_record)?;
+            let commit_plan = plan_kagemusha_v4_redemption_commit(
                 &request,
                 &provenance.source_asset,
                 payload_digest,
                 replay_markers,
                 state_transaction,
             )?;
-            ensure_kagemusha_v2_redemption_policy_will_be_convertible(
-                &statement.asset,
-                state_transaction,
+            ensure_kagemusha_v4_policy_will_be_convertible(&statement.asset, state_transaction)?;
+            state_transaction.register_confidential_proof(
+                request
+                    .bundle
+                    .recursive_proof
+                    .proof_envelope
+                    .proof
+                    .bytes
+                    .len(),
             )?;
-            state_transaction
-                .register_confidential_proof(request.bundle.recursive_proof.proof.bytes.len())?;
             state_transaction
                 .register_confidential_proof(request.redeem_proof.proof.bytes.len())?;
             if let Some(change) = request.offline_change.as_ref() {
-                state_transaction
-                    .register_confidential_proof(change.bundle.recursive_proof.proof.bytes.len())?;
+                state_transaction.register_confidential_proof(
+                    change
+                        .bundle
+                        .recursive_proof
+                        .proof_envelope
+                        .proof
+                        .bytes
+                        .len(),
+                )?;
                 state_transaction.register_commitments(1)?;
             }
             state_transaction.register_nullifiers(1)?;
 
-            verify_kagemusha_v2_recursive_bundle(
+            verify_kagemusha_v4_recursive_bundle(
                 &request.bundle,
-                request.block_height,
-                state_transaction,
+                parent_release.cached.verifier(),
             )?;
             let redeem_report = crate::zk::verify_backend_with_timing_checked(
                 request.redeem_proof.backend.as_str(),
@@ -5323,16 +6420,20 @@ pub mod isi {
             if !redeem_report.ok {
                 return Err(labeled_invariant(
                     "invalid_proof",
-                    "Kagemusha V2 unshield-v3 proof verification failed",
+                    "Kagemusha V4 unshield proof verification failed",
                 )
                 .into());
             }
-            if let Some(change) = request.offline_change.as_ref() {
-                verify_kagemusha_v2_recursive_bundle(
-                    &change.bundle,
-                    request.block_height,
-                    state_transaction,
-                )?;
+            if let (Some(change), Some(change_release), Some(expected_operation)) = (
+                request.offline_change.as_ref(),
+                change_release.as_ref(),
+                expected_change_operation.as_ref(),
+            ) {
+                change_release
+                    .cached
+                    .verifier()
+                    .verify_bundle_operation_v4(&change.bundle, expected_operation)
+                    .map_err(|error| labeled_invariant("invalid_recursive_bundle", error))?;
             }
 
             let policy_mode = crate::smartcontracts::isi::world::isi::apply_policy_if_due(
@@ -5343,7 +6444,7 @@ pub mod isi {
             if policy_mode != ConfidentialPolicyMode::Convertible {
                 return Err(labeled_invariant(
                     "confidential_policy_changed",
-                    "Kagemusha V2 confidential policy changed after read-only admission",
+                    "Kagemusha V4 confidential policy changed after read-only admission",
                 )
                 .into());
             }
@@ -5379,6 +6480,92 @@ pub mod isi {
         };
 
         const POLICY_TEST_TIME_MS: u64 = 1_800_000_000_000;
+
+        #[test]
+        fn kagemusha_v4_chain_state_namespaces_are_version_distinct() {
+            let operation_id = [0x41; 32];
+            assert_ne!(
+                kagemusha_v2_marker(KAGEMUSHA_V4_OPERATION_DOMAIN, &[&operation_id]),
+                kagemusha_v2_marker("kagemusha-v2-operation", &[&operation_id]),
+            );
+            assert_ne!(
+                kagemusha_v2_marker(KAGEMUSHA_V4_BRANCH_EXACT_DOMAIN, &[&operation_id]),
+                kagemusha_v2_marker("kagemusha-v2-redeemed-branch", &[&operation_id]),
+            );
+            assert!(
+                kagemusha_v4_topup_anchor_state_key(operation_id)
+                    .expect("valid V4 anchor key")
+                    .to_string()
+                    .starts_with("kagemusha_v4_topup_anchor_")
+            );
+            assert!(
+                kagemusha_v4_redemption_receipt_state_key(operation_id)
+                    .expect("valid V4 redemption receipt key")
+                    .to_string()
+                    .starts_with("kagemusha_v4_redemption_")
+            );
+        }
+
+        #[test]
+        fn kagemusha_v4_admission_requires_compiled_backend_and_exact_release_selection() {
+            assert!(
+                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PROOF_BACKEND_AVAILABLE,
+                "the ABI-20/V4 prover and verifier must be compiled",
+            );
+
+            let source = include_str!("offline.rs");
+            let topup_start = source
+                .find("impl Execute for TopUpKagemushaRecursiveV4")
+                .expect("V4 top-up executor");
+            let redeem_start = source
+                .find("impl Execute for RedeemKagemushaRecursiveV4")
+                .expect("V4 redemption executor");
+            let tests_start = redeem_start
+                + source[redeem_start..]
+                    .find("#[cfg(test)]")
+                    .expect("offline executor test module");
+            let topup = &source[topup_start..redeem_start];
+            let redeem = &source[redeem_start..tests_start];
+
+            for (name, executor) in [("top-up", topup), ("redemption", redeem)] {
+                assert!(
+                    !executor.contains("KAGEMUSHA_RECURSIVE_SPEND_PROOF_BACKEND_AVAILABLE"),
+                    "V4 {name} must authenticate a concrete release instead of treating compile capability as runtime readiness",
+                );
+                assert!(
+                    executor.contains("resolve_kagemusha_v4_transaction_release"),
+                    "V4 {name} must resolve the transaction-selected authenticated release",
+                );
+            }
+            assert!(
+                redeem.contains("verify_kagemusha_v4_recursive_bundle"),
+                "full and partial redemption must verify the parent recursive bundle",
+            );
+            assert!(
+                redeem.contains("verify_bundle_operation_v4"),
+                "partial redemption must separately verify its operation-bound change bundle",
+            );
+        }
+
+        #[test]
+        fn kagemusha_v4_activation_overlap_inventory_is_consensus_derived() {
+            let source = include_str!("offline.rs");
+            let start = source
+                .find("fn ensure_kagemusha_v4_non_overlapping_issuance")
+                .expect("V4 issuance-overlap validator");
+            let end = start
+                + source[start..]
+                    .find("impl Execute for ActivateKagemushaRecursiveReleaseV4")
+                    .expect("V4 release activation executor");
+            let validator = &source[start..end];
+            assert!(validator.contains("world.smart_contract_state.iter()"));
+            assert!(validator.contains("decode_kagemusha_v4_consensus_release_state"));
+            assert!(validator.contains("cached.release_record() != &release_record"));
+            assert!(
+                !validator.contains("kagemusha_release_catalog.iter()"),
+                "release-window inventory must not depend on optional local directories",
+            );
+        }
 
         fn offline_permission(name: &str) -> Permission {
             Permission::new(name.to_owned(), Json::new(()))

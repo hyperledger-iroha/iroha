@@ -5,8 +5,8 @@ use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSe
 use crate::ErrorEnvelope;
 
 pub use iroha_data_model::offline::{
-    KagemushaRecursiveSpendRedeemRequestV2 as OfflineRedeemRequest,
-    KagemushaRecursiveSpendTopUpRequestV2 as OfflineTopUpRequest,
+    KagemushaRecursiveSpendRedeemRequestV4 as OfflineRedeemRequest,
+    KagemushaRecursiveSpendTopUpRequestV4 as OfflineTopUpRequest,
     OFFLINE_REDEEM_REQUEST_SCHEMA_NAME, OFFLINE_TOP_UP_REQUEST_SCHEMA_NAME,
 };
 
@@ -14,7 +14,7 @@ pub use iroha_data_model::offline::{
 ///
 /// The underlying consensus wire type remains internally versioned, while the
 /// first-release public transport surface exposes only this current name.
-pub type OfflineTopUpAnchor = iroha_data_model::offline::KagemushaRecursiveSpendTopUpAnchorV2;
+pub type OfflineTopUpAnchor = iroha_data_model::offline::KagemushaRecursiveSpendTopUpAnchorV4;
 
 /// Finality proof returned with an applied offline top-up.
 ///
@@ -82,11 +82,40 @@ pub type OfflineActiveTopUpShieldVerifier = OfflineActiveTransferVerifier;
 /// Active confidential-unshield verifier selected at the readiness snapshot.
 pub type OfflineActiveUnshieldVerifier = OfflineActiveTransferVerifier;
 
-/// Active V3 recursive StepEq verifier selected at the readiness snapshot.
+/// Active ABI-20 V4 recursive StepEq verifier selected at the readiness snapshot.
 pub type OfflineActiveRecursiveStepEqVerifier = OfflineActiveTransferVerifier;
 
-/// Active V3 recursive StepEp verifier selected at the readiness snapshot.
+/// Active ABI-20 V4 recursive StepEp verifier selected at the readiness snapshot.
 pub type OfflineActiveRecursiveStepEpVerifier = OfflineActiveTransferVerifier;
+
+/// Authenticated ABI-20 recursive release selected at a readiness snapshot.
+///
+/// Every digest is lowercase hexadecimal, non-zero, and distinct in public
+/// JSON. The identity is emitted only after Core authenticates the release
+/// policy, attestation, evidence, manifest, verifier records, and verifier-side
+/// artifact bytes.
+#[derive(
+    Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
+)]
+#[norito(deny_unknown_fields)]
+pub struct OfflineAuthenticatedArtifactSet {
+    /// Human-readable generation of the authenticated release.
+    pub generation: String,
+    /// Lowercase hexadecimal SHA-256 digest of the canonical release manifest.
+    pub manifest_sha256: String,
+    /// Lowercase hexadecimal SHA-256 digest of the locally trusted release policy.
+    pub release_policy_sha256: String,
+    /// Lowercase hexadecimal SHA-256 digest of the canonical signed release attestation.
+    pub release_attestation_sha256: String,
+    /// First height at which the release may issue notes.
+    pub activation_height: u64,
+    /// First height at which new issuance must stop.
+    pub withdrawal_height: u64,
+    /// Authenticated upper bound for one canonical proof-pair payload.
+    pub max_proof_bytes: u32,
+    /// Authoritative fixed scale of the asset bound to the release.
+    pub asset_scale: u32,
+}
 
 impl norito::json::JsonDeserialize for OfflineActiveTransferVerifier {
     fn json_deserialize(
@@ -205,14 +234,18 @@ pub struct OfflineReadiness {
     pub active_recursive_step_eq_verifier: Option<OfflineActiveRecursiveStepEqVerifier>,
     /// Active recursive StepEp verifier at the evaluated height.
     pub active_recursive_step_ep_verifier: Option<OfflineActiveRecursiveStepEpVerifier>,
-    /// Whether this Torii/Core build contains the sound V3 recursive backend.
+    /// Exact authenticated ABI-20 release identity, or `None` with a recursive
+    /// registry blocker.
+    pub artifact_set: Option<OfflineAuthenticatedArtifactSet>,
+    /// Whether the authenticated V4 material constructs the production backend.
     pub proof_backend_available: bool,
-    /// Whether recursive branches can be verified and redeemed through the
-    /// production lineage proof path.
+    /// Whether the exact authenticated artifact set, distinct active Eq/Ep
+    /// records, and production backend make the recursive lineage path usable.
     pub recursive_lineage_supported: bool,
     /// Whether every requirement is satisfied at the evaluated snapshot.
     pub ready: bool,
-    /// Empty when `ready` is true; otherwise the complete known blocker set.
+    /// Complete known blocker set. `recursive_lineage_unavailable` is present
+    /// exactly when `recursive_lineage_supported` is false.
     pub blockers: Vec<OfflineReadinessBlocker>,
 }
 
@@ -234,6 +267,7 @@ impl norito::json::JsonDeserialize for OfflineReadiness {
         let mut active_unshield_verifier = None;
         let mut active_recursive_step_eq_verifier = None;
         let mut active_recursive_step_ep_verifier = None;
+        let mut artifact_set = None;
         let mut proof_backend_available = None;
         let mut recursive_lineage_supported = None;
         let mut ready = None;
@@ -315,6 +349,13 @@ impl norito::json::JsonDeserialize for OfflineReadiness {
                         visitor.parse_value::<Option<OfflineActiveRecursiveStepEpVerifier>>()?,
                     );
                 }
+                "artifact_set" => {
+                    if artifact_set.is_some() {
+                        return Err(Error::duplicate_field(field));
+                    }
+                    artifact_set =
+                        Some(visitor.parse_value::<Option<OfflineAuthenticatedArtifactSet>>()?);
+                }
                 "proof_backend_available" => {
                     if proof_backend_available.is_some() {
                         return Err(Error::duplicate_field(field));
@@ -365,6 +406,7 @@ impl norito::json::JsonDeserialize for OfflineReadiness {
                 .ok_or_else(|| Error::missing_field("active_recursive_step_eq_verifier"))?,
             active_recursive_step_ep_verifier: active_recursive_step_ep_verifier
                 .ok_or_else(|| Error::missing_field("active_recursive_step_ep_verifier"))?,
+            artifact_set: artifact_set.ok_or_else(|| Error::missing_field("artifact_set"))?,
             proof_backend_available: proof_backend_available
                 .ok_or_else(|| Error::missing_field("proof_backend_available"))?,
             recursive_lineage_supported: recursive_lineage_supported
@@ -530,6 +572,71 @@ mod tests {
         keyed: BTreeMap<[u8; 2], u8>,
     }
 
+    fn unavailable_readiness(asset_scale: Option<u32>) -> OfflineReadiness {
+        let mut blockers = vec![
+            OfflineReadinessBlocker {
+                code: "transfer_verifier_unavailable".to_owned(),
+                message: "The transfer verifier is unavailable.".to_owned(),
+            },
+            OfflineReadinessBlocker {
+                code: "topup_shield_verifier_unavailable".to_owned(),
+                message: "The top-up shield verifier is unavailable.".to_owned(),
+            },
+            OfflineReadinessBlocker {
+                code: "unshield_verifier_unavailable".to_owned(),
+                message: "The unshield verifier is unavailable.".to_owned(),
+            },
+            OfflineReadinessBlocker {
+                code: "recursive_v4_registry_unavailable".to_owned(),
+                message: "The authenticated V4 registry is unavailable.".to_owned(),
+            },
+            OfflineReadinessBlocker {
+                code: "recursive_step_eq_verifier_unavailable".to_owned(),
+                message: "The recursive StepEq verifier is unavailable.".to_owned(),
+            },
+            OfflineReadinessBlocker {
+                code: "recursive_step_ep_verifier_unavailable".to_owned(),
+                message: "The recursive StepEp verifier is unavailable.".to_owned(),
+            },
+            OfflineReadinessBlocker {
+                code: "proof_backend_unavailable".to_owned(),
+                message: "The proof backend is unavailable.".to_owned(),
+            },
+            OfflineReadinessBlocker {
+                code: "recursive_lineage_unavailable".to_owned(),
+                message: "Recursive lineage is unavailable.".to_owned(),
+            },
+        ];
+        if asset_scale.is_none() {
+            blockers.insert(
+                0,
+                OfflineReadinessBlocker {
+                    code: "asset_scale_unavailable".to_owned(),
+                    message: "The asset scale is unavailable.".to_owned(),
+                },
+            );
+        }
+        OfflineReadiness {
+            required_bridge_abi_version:
+                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4,
+            max_hops: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2,
+            asset_definition_id: "xor#wonderland".to_owned(),
+            asset_scale,
+            evaluated_block_height: 42,
+            evaluated_block_hash: "ab".repeat(32),
+            active_transfer_verifier: None,
+            active_topup_shield_verifier: None,
+            active_unshield_verifier: None,
+            active_recursive_step_eq_verifier: None,
+            active_recursive_step_ep_verifier: None,
+            artifact_set: None,
+            proof_backend_available: false,
+            recursive_lineage_supported: false,
+            ready: false,
+            blockers,
+        }
+    }
+
     #[test]
     fn norito_json_default_byte_and_map_key_mapping_is_exact() {
         let probe = JsonDefaultByteMappingProbe {
@@ -566,7 +673,7 @@ mod tests {
     #[test]
     fn readiness_roundtrips_through_both_public_representations() {
         let readiness = OfflineReadiness {
-            required_bridge_abi_version: 19,
+            required_bridge_abi_version: 20,
             max_hops: 8,
             asset_definition_id: "xor#wonderland".to_owned(),
             asset_scale: Some(9),
@@ -575,7 +682,7 @@ mod tests {
             active_transfer_verifier: Some(OfflineActiveTransferVerifier {
                 id: OfflineVerifierId {
                     backend: "halo2/ipa".to_owned(),
-                    name: "confidential-transfer-v2".to_owned(),
+                    name: iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_TRANSFER_V2.to_owned(),
                 },
                 version: 7,
                 circuit_id: "halo2/pasta/ipa/confidential-transfer-2x2-merkle16-axiom-poseidon-v3"
@@ -589,26 +696,77 @@ mod tests {
             active_topup_shield_verifier: Some(OfflineActiveTopUpShieldVerifier {
                 id: OfflineVerifierId {
                     backend: "halo2/ipa".to_owned(),
-                    name: "kagemusha-topup-shield-v2".to_owned(),
+                    name: iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_TOPUP_SHIELD_V2
+                        .to_owned(),
                 },
                 version: 3,
-                circuit_id: "kagemusha-topup-shield-v2".to_owned(),
+                circuit_id: "halo2/pasta/ipa/kagemusha-topup-shield-merkle16-axiom-poseidon-v3"
+                    .to_owned(),
                 commitment: "12".repeat(32),
                 public_inputs_schema_hash: "34".repeat(32),
                 max_proof_bytes: 196_608,
                 activation_height: 41,
                 withdrawal_height: Some(81),
             }),
-            active_unshield_verifier: None,
-            active_recursive_step_eq_verifier: None,
-            active_recursive_step_ep_verifier: None,
-            proof_backend_available: false,
-            recursive_lineage_supported: false,
-            ready: false,
-            blockers: vec![OfflineReadinessBlocker {
-                code: "proof_backend_unavailable".to_owned(),
-                message: "Proof backend is unavailable.".to_owned(),
-            }],
+            active_unshield_verifier: Some(OfflineActiveUnshieldVerifier {
+                id: OfflineVerifierId {
+                    backend: "halo2/ipa".to_owned(),
+                    name: iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_UNSHIELD_V2.to_owned(),
+                },
+                version: 4,
+                circuit_id:
+                    "halo2/pasta/ipa/confidential-unshield-change-merkle16-axiom-poseidon-v4"
+                        .to_owned(),
+                commitment: "23".repeat(32),
+                public_inputs_schema_hash: "45".repeat(32),
+                max_proof_bytes: 196_608,
+                activation_height: 40,
+                withdrawal_height: Some(80),
+            }),
+            active_recursive_step_eq_verifier: Some(OfflineActiveRecursiveStepEqVerifier {
+                id: OfflineVerifierId {
+                    backend: "halo2/ipa".to_owned(),
+                    name: iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_STEP_EQ_V4.to_owned(),
+                },
+                version: 5,
+                circuit_id:
+                    iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4
+                        .to_owned(),
+                commitment: "56".repeat(32),
+                public_inputs_schema_hash: "67".repeat(32),
+                max_proof_bytes: 65_536,
+                activation_height: 40,
+                withdrawal_height: Some(80),
+            }),
+            active_recursive_step_ep_verifier: Some(OfflineActiveRecursiveStepEpVerifier {
+                id: OfflineVerifierId {
+                    backend: "halo2/ipa".to_owned(),
+                    name: iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_STEP_EP_V4.to_owned(),
+                },
+                version: 5,
+                circuit_id:
+                    iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V4
+                        .to_owned(),
+                commitment: "78".repeat(32),
+                public_inputs_schema_hash: "89".repeat(32),
+                max_proof_bytes: 65_536,
+                activation_height: 40,
+                withdrawal_height: Some(80),
+            }),
+            artifact_set: Some(OfflineAuthenticatedArtifactSet {
+                generation: "release-v4".to_owned(),
+                manifest_sha256: "56".repeat(32),
+                release_policy_sha256: "67".repeat(32),
+                release_attestation_sha256: "78".repeat(32),
+                activation_height: 40,
+                withdrawal_height: 80,
+                max_proof_bytes: 65_536,
+                asset_scale: 9,
+            }),
+            proof_backend_available: true,
+            recursive_lineage_supported: true,
+            ready: true,
+            blockers: Vec::new(),
         };
 
         let json = norito::json::to_vec(&readiness).expect("encode readiness JSON");
@@ -624,23 +782,7 @@ mod tests {
 
     #[test]
     fn readiness_json_rejects_unknown_members_and_type_confusion() {
-        let readiness = OfflineReadiness {
-            required_bridge_abi_version: 19,
-            max_hops: 8,
-            asset_definition_id: "xor#wonderland".to_owned(),
-            asset_scale: Some(9),
-            evaluated_block_height: 42,
-            evaluated_block_hash: "ab".repeat(32),
-            active_transfer_verifier: None,
-            active_topup_shield_verifier: None,
-            active_unshield_verifier: None,
-            active_recursive_step_eq_verifier: None,
-            active_recursive_step_ep_verifier: None,
-            proof_backend_available: false,
-            recursive_lineage_supported: false,
-            ready: false,
-            blockers: Vec::new(),
-        };
+        let readiness = unavailable_readiness(Some(9));
         let canonical = norito::json::to_string(&readiness).expect("encode readiness");
         let unknown = canonical.replacen('{', r#"{"future_metadata":null,"#, 1);
         let error = norito::json::from_str::<OfflineReadiness>(&unknown)
@@ -658,23 +800,7 @@ mod tests {
 
     #[test]
     fn readiness_json_requires_every_first_release_member() {
-        let readiness = OfflineReadiness {
-            required_bridge_abi_version: 19,
-            max_hops: 8,
-            asset_definition_id: "xor#wonderland".to_owned(),
-            asset_scale: Some(9),
-            evaluated_block_height: 42,
-            evaluated_block_hash: "ab".repeat(32),
-            active_transfer_verifier: None,
-            active_topup_shield_verifier: None,
-            active_unshield_verifier: None,
-            active_recursive_step_eq_verifier: None,
-            active_recursive_step_ep_verifier: None,
-            proof_backend_available: false,
-            recursive_lineage_supported: false,
-            ready: false,
-            blockers: Vec::new(),
-        };
+        let readiness = unavailable_readiness(Some(9));
         let canonical = norito::json::to_string(&readiness).expect("encode readiness");
         for member in [
             r#""asset_scale":9,"#,
@@ -682,6 +808,7 @@ mod tests {
             r#""active_unshield_verifier":null,"#,
             r#""active_recursive_step_eq_verifier":null,"#,
             r#""active_recursive_step_ep_verifier":null,"#,
+            r#""artifact_set":null,"#,
             r#""proof_backend_available":false,"#,
         ] {
             let json = canonical.replacen(member, "", 1);
@@ -696,36 +823,7 @@ mod tests {
 
     #[test]
     fn readiness_json_emits_unavailable_authorities_as_explicit_nulls() {
-        let readiness = OfflineReadiness {
-            required_bridge_abi_version: 19,
-            max_hops: 8,
-            asset_definition_id: "xor#wonderland".to_owned(),
-            asset_scale: None,
-            evaluated_block_height: 42,
-            evaluated_block_hash: "ab".repeat(32),
-            active_transfer_verifier: None,
-            active_topup_shield_verifier: None,
-            active_unshield_verifier: None,
-            active_recursive_step_eq_verifier: None,
-            active_recursive_step_ep_verifier: None,
-            proof_backend_available: false,
-            recursive_lineage_supported: false,
-            ready: false,
-            blockers: vec![
-                OfflineReadinessBlocker {
-                    code: "asset_scale_unavailable".to_owned(),
-                    message: "The asset scale is unavailable.".to_owned(),
-                },
-                OfflineReadinessBlocker {
-                    code: "transfer_verifier_unavailable".to_owned(),
-                    message: "The transfer verifier is unavailable.".to_owned(),
-                },
-                OfflineReadinessBlocker {
-                    code: "topup_shield_verifier_unavailable".to_owned(),
-                    message: "The top-up shield verifier is unavailable.".to_owned(),
-                },
-            ],
-        };
+        let readiness = unavailable_readiness(None);
 
         let json = norito::json::to_string(&readiness).expect("encode unavailable readiness");
         assert!(json.contains(r#""asset_scale":null"#));

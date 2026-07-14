@@ -49,12 +49,21 @@ final class KagemushaQRStreamTests: XCTestCase {
 
             let decoder = KagemushaQRStreamDecoder()
             var result: KagemushaQRDecodeResult?
-            for (offset, frame) in frames.reversed().enumerated() {
-                let frameText = text(frame)
-                result = try decoder.ingest(frameText)
-                if offset.isMultiple(of: 3) {
+            do {
+                for (offset, frame) in frames.reversed().enumerated() {
+                    let frameText = text(frame)
                     result = try decoder.ingest(frameText)
+                    if offset.isMultiple(of: 3) {
+                        result = try decoder.ingest(frameText)
+                    }
                 }
+            } catch {
+                if payload.kind == .payment,
+                   !KagemushaRecursiveSpend.hasRequiredNativeSymbols {
+                    XCTAssertEqual(error as? KagemushaQRStreamError, .invalidPayload)
+                    continue
+                }
+                throw error
             }
             XCTAssertEqual(result?.payload, payload, "\(payload.kind)")
             XCTAssertEqual(result?.progress, 1, "\(payload.kind)")
@@ -375,14 +384,14 @@ final class KagemushaQRStreamTests: XCTestCase {
         })
     }
 
-    func testDeclaredFrameTotalIsCappedBeforeBufferingAndFailureRollsBack() throws {
+    func testRepresentableFrameTotalIsAcceptedWithoutPreallocationAndResetAllowsValidStream() throws {
         let payload = KagemushaPeerPayload.receiveRequest(
             try KagemushaPeerTransportTestFixtures.receiveRequest()
         )
         let validTexts = try KagemushaQRStreamCodec.encode(payload)
         let validFrames = try validTexts.map(KagemushaQRStreamCodec.decodeFrameText)
         let dataFrame = try XCTUnwrap(validFrames.first { $0.kind == .data })
-        let oversizedTotal = try KagemushaQRStreamFrame(
+        let maximumRepresentableTotal = try KagemushaQRStreamFrame(
             kind: .data,
             streamID: dataFrame.streamID,
             index: dataFrame.index,
@@ -391,9 +400,8 @@ final class KagemushaQRStreamTests: XCTestCase {
         )
         let decoder = KagemushaQRStreamDecoder()
 
-        XCTAssertThrowsError(try decoder.ingest(text(oversizedTotal))) { error in
-            XCTAssertEqual(error as? KagemushaQRStreamError, .malformedFrame)
-        }
+        XCTAssertNoThrow(try decoder.ingest(text(maximumRepresentableTotal)))
+        decoder.reset()
 
         var result: KagemushaQRDecodeResult?
         for frameText in validTexts.reversed() {

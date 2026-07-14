@@ -53,7 +53,7 @@ public struct KagemushaRecursiveSpendArtifactStream: Sendable {
 public final class KagemushaRecursiveSpendInstalledArtifactLease: @unchecked Sendable {
     public let binding: KagemushaRecursiveSpendArtifactBindingV4
     public let manifestSHA256: Data
-    /// The ten authenticated artifact digests, in canonical V4 role order.
+    /// The eight authenticated artifact digests, in canonical V4 role order.
     public let artifactSHA256s: [Data]
 
     private let token: UUID
@@ -144,7 +144,7 @@ public final class KagemushaRecursiveSpendArtifactCoordinator: @unchecked Sendab
         self.sessionFactory = sessionFactory
     }
 
-    /// Acquire the exact authenticated ten-file generation, reusing an
+    /// Acquire the exact authenticated eight-file generation, reusing an
     /// identical active generation without consuming the supplied streams.
     ///
     /// Installation and reuse checks are serialized process-wide by `shared`.

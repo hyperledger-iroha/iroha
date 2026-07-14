@@ -1,22 +1,82 @@
 use super::*;
 use crate::offline::{
-    KagemushaRecursiveSpendRedeemRequestV2, KagemushaRecursiveSpendTopUpRequestV2,
-    OfflineDeviceAttestationPolicy, OfflineDeviceAttestationRegistration,
+    KagemushaRecursiveSpendRedeemRequestV4, KagemushaRecursiveSpendReleaseActivationV4,
+    KagemushaRecursiveSpendTopUpRequestV4, OfflineDeviceAttestationPolicy,
+    OfflineDeviceAttestationRegistration,
 };
 
-isi! {
+iroha_data_model_derive::model_single! {
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    #[derive(getset::Getters)]
+    #[derive(Decode, Encode)]
+    #[derive(iroha_schema::IntoSchema)]
+    #[getset(get = "pub")]
     /// Charge an online balance and create the first scale-bound Kagemusha state.
-    pub struct TopUpKagemushaRecursiveV2 {
+    pub struct TopUpKagemushaRecursiveV4 {
         /// Canonical top-up request, including payer and device authorization.
-        pub request: KagemushaRecursiveSpendTopUpRequestV2,
+        pub request: KagemushaRecursiveSpendTopUpRequestV4,
     }
 }
 
-isi! {
+iroha_data_model_derive::model_single! {
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    #[derive(getset::Getters)]
+    #[derive(Decode, Encode)]
+    #[derive(iroha_schema::IntoSchema)]
+    #[getset(get = "pub")]
     /// Redeem a branch-safe, scale-bound Kagemusha state.
-    pub struct RedeemKagemushaRecursiveV2 {
+    pub struct RedeemKagemushaRecursiveV4 {
         /// Canonical redemption request with recursive-lineage and unshield evidence.
-        pub request: KagemushaRecursiveSpendRedeemRequestV2,
+        pub request: KagemushaRecursiveSpendRedeemRequestV4,
+    }
+}
+
+impl PartialOrd for TopUpKagemushaRecursiveV4 {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for TopUpKagemushaRecursiveV4 {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        self.encode().cmp(&other.encode())
+    }
+}
+
+impl PartialOrd for RedeemKagemushaRecursiveV4 {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for RedeemKagemushaRecursiveV4 {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        self.encode().cmp(&other.encode())
+    }
+}
+
+iroha_data_model_derive::model_single! {
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    #[derive(getset::Getters)]
+    #[derive(Decode, Encode)]
+    #[derive(iroha_schema::IntoSchema)]
+    #[getset(get = "pub")]
+    /// Atomically activate one signed ABI-20 release and its Eq/Ep verifier records.
+    pub struct ActivateKagemushaRecursiveReleaseV4 {
+        /// Complete authenticated release activation payload.
+        pub activation: KagemushaRecursiveSpendReleaseActivationV4,
+    }
+}
+
+impl PartialOrd for ActivateKagemushaRecursiveReleaseV4 {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for ActivateKagemushaRecursiveReleaseV4 {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        self.encode().cmp(&other.encode())
     }
 }
 
@@ -36,24 +96,33 @@ isi! {
     }
 }
 
-impl crate::seal::Instruction for TopUpKagemushaRecursiveV2 {}
-impl crate::seal::Instruction for RedeemKagemushaRecursiveV2 {}
+impl crate::seal::Instruction for TopUpKagemushaRecursiveV4 {}
+impl crate::seal::Instruction for RedeemKagemushaRecursiveV4 {}
+impl crate::seal::Instruction for ActivateKagemushaRecursiveReleaseV4 {}
 impl crate::seal::Instruction for RegisterOfflineDeviceAttestation {}
 impl crate::seal::Instruction for SetOfflineDeviceAttestationPolicy {}
 
-impl TopUpKagemushaRecursiveV2 {
-    /// Construct a scale-bound Kagemusha top-up instruction.
+impl TopUpKagemushaRecursiveV4 {
+    /// Construct a scale-bound ABI-20 Kagemusha top-up instruction.
     #[must_use]
-    pub fn new(request: KagemushaRecursiveSpendTopUpRequestV2) -> Self {
+    pub fn new(request: KagemushaRecursiveSpendTopUpRequestV4) -> Self {
         Self { request }
     }
 }
 
-impl RedeemKagemushaRecursiveV2 {
-    /// Construct a branch-safe Kagemusha redemption instruction.
+impl RedeemKagemushaRecursiveV4 {
+    /// Construct a branch-safe ABI-20 Kagemusha redemption instruction.
     #[must_use]
-    pub fn new(request: KagemushaRecursiveSpendRedeemRequestV2) -> Self {
+    pub fn new(request: KagemushaRecursiveSpendRedeemRequestV4) -> Self {
         Self { request }
+    }
+}
+
+impl ActivateKagemushaRecursiveReleaseV4 {
+    /// Construct an atomic ABI-20 release activation instruction.
+    #[must_use]
+    pub fn new(activation: KagemushaRecursiveSpendReleaseActivationV4) -> Self {
+        Self { activation }
     }
 }
 
@@ -104,11 +173,14 @@ macro_rules! impl_decode_one_canonical_offline_field {
     };
 }
 
-impl_decode_one_canonical_offline_field!(TopUpKagemushaRecursiveV2 {
-    request: KagemushaRecursiveSpendTopUpRequestV2
+impl_decode_one_canonical_offline_field!(TopUpKagemushaRecursiveV4 {
+    request: KagemushaRecursiveSpendTopUpRequestV4
 });
-impl_decode_one_canonical_offline_field!(RedeemKagemushaRecursiveV2 {
-    request: KagemushaRecursiveSpendRedeemRequestV2
+impl_decode_one_canonical_offline_field!(RedeemKagemushaRecursiveV4 {
+    request: KagemushaRecursiveSpendRedeemRequestV4
+});
+impl_decode_one_canonical_offline_field!(ActivateKagemushaRecursiveReleaseV4 {
+    activation: KagemushaRecursiveSpendReleaseActivationV4
 });
 impl_decode_one_canonical_offline_field!(RegisterOfflineDeviceAttestation {
     registration: OfflineDeviceAttestationRegistration

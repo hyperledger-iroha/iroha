@@ -1,4 +1,4 @@
-//! Authenticated Kagemusha ABI-19/V3 and ABI-20/V4 release verification.
+//! Authenticated Kagemusha ABI-20/V4 release verification and activation preparation.
 
 use std::{
     fs::{self, File, OpenOptions},
@@ -8,31 +8,29 @@ use std::{
 
 use clap::{Args as ClapArgs, Subcommand};
 use color_eyre::eyre::{WrapErr as _, bail, eyre};
+use iroha_core::smartcontracts::isi::offline::KagemushaReleaseCatalogV4;
 use iroha_core::zk::kagemusha_artifact_v4::{
     KagemushaPastaCycleProverArtifactsV4, KagemushaValidatedArtifactPayloadV4,
     read_kagemusha_pasta_cycle_artifact_v4,
 };
-use iroha_core::zk::kagemusha_v2::{
-    KagemushaPastaCycleProverArtifactsV3, KagemushaValidatedArtifactPayloadV3,
-    read_kagemusha_pasta_cycle_artifact_v3, validate_kagemusha_step_bootstrap_payload_v4,
-};
+use iroha_core::zk::kagemusha_v2::validate_kagemusha_step_bootstrap_payload_v4;
+use iroha_crypto::HashOf;
+use iroha_data_model::isi::{InstructionBox, offline::ActivateKagemushaRecursiveReleaseV4};
 use iroha_data_model::offline::{
-    KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_ROLES_V4, KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3,
+    KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_ROLES_V4,
+    KAGEMUSHA_RECURSIVE_SPEND_BENCHMARK_EVIDENCE_FILE_NAME_V1,
+    KAGEMUSHA_RECURSIVE_SPEND_CANDIDATE_SCHEMA_V4, KAGEMUSHA_RECURSIVE_SPEND_CANDIDATE_VERSION_V4,
+    KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_FILE_NAME_V1,
     KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4,
-    KAGEMUSHA_RECURSIVE_SPEND_PROMOTED_RELEASE_SCHEMA_V3,
     KAGEMUSHA_RECURSIVE_SPEND_PROMOTED_RELEASE_SCHEMA_V4,
-    KAGEMUSHA_RECURSIVE_SPEND_RELEASE_ATTESTATION_FILE_NAME_V1,
     KAGEMUSHA_RECURSIVE_SPEND_RELEASE_ATTESTATION_FILE_NAME_V4,
-    KAGEMUSHA_RECURSIVE_SPEND_RELEASE_AUTH_VERSION_V1,
     KAGEMUSHA_RECURSIVE_SPEND_RELEASE_AUTH_VERSION_V4,
     KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_EVIDENCE_BYTES_V1,
-    KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_MAX_BYTES_V2, KagemushaAuthenticatedReleaseV3,
-    KagemushaAuthenticatedReleaseV4, KagemushaPastaCycleArtifactV3, KagemushaPastaCycleArtifactV4,
-    KagemushaPastaCycleParityV1, KagemushaRecursiveSpendArtifactManifestV3,
-    KagemushaRecursiveSpendArtifactManifestV4, KagemushaRecursiveSpendPromotedReleaseV3,
-    KagemushaRecursiveSpendPromotedReleaseV4, KagemushaRecursiveSpendReleaseAttestationV1,
-    KagemushaRecursiveSpendReleaseAttestationV4, KagemushaRecursiveSpendReleasePolicyV1,
-    KagemushaTopUpFinalityRosterArtifactV2, kagemusha_recursive_spend_native_capabilities_v1,
+    KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_MAX_BYTES_V2, KagemushaAuthenticatedReleaseV4,
+    KagemushaPastaCycleArtifactV4, KagemushaPastaCycleParityV1,
+    KagemushaRecursiveSpendArtifactManifestV4, KagemushaRecursiveSpendCandidateV4,
+    KagemushaRecursiveSpendPromotedReleaseV4, KagemushaRecursiveSpendReleaseAttestationV4,
+    KagemushaRecursiveSpendReleasePolicyV1, KagemushaTopUpFinalityRosterArtifactV2,
     kagemusha_recursive_spend_release_sha256,
 };
 
@@ -40,33 +38,19 @@ use crate::{Outcome, RunArgs};
 
 type Result<T> = color_eyre::Result<T>;
 
-const RELEASE_TRUST_ROOT_ENV: &str = "IROHA_KAGEMUSHA_RELEASE_TRUST_ROOT_NORITO_HEX";
-const EMBEDDED_RELEASE_TRUST_ROOT_HEX: Option<&str> =
-    option_env!("IROHA_KAGEMUSHA_RELEASE_TRUST_ROOT_NORITO_HEX");
 const MANIFEST_JSON_FILE_NAME: &str = "manifest.json";
 const MANIFEST_NORITO_FILE_NAME: &str = "manifest.norito";
 const MANIFEST_NORITO_SHA256_FILE_NAME: &str = "manifest.norito.sha256";
-const RELEASE_ATTESTATION_FILE_NAME: &str =
-    KAGEMUSHA_RECURSIVE_SPEND_RELEASE_ATTESTATION_FILE_NAME_V1;
 const RELEASE_ATTESTATION_FILE_NAME_V4: &str =
     KAGEMUSHA_RECURSIVE_SPEND_RELEASE_ATTESTATION_FILE_NAME_V4;
+const PROMOTION_RECORD_FILE_NAME_V4: &str = "promotion-record-v4.norito";
 const MAX_MANIFEST_BYTES: usize = 1024 * 1024;
 const MAX_POLICY_BYTES: usize = 64 * 1024;
 const MAX_ATTESTATION_BYTES: usize = 1024 * 1024;
-const RECURSIVE_STEP_VERIFIER_COMMITMENT_DOMAIN: &[u8] =
-    b"iroha:kagemusha:recursive-step-verifier-commitment:v1";
 const RECURSIVE_STEP_VERIFIER_COMMITMENT_DOMAIN_V4: &[u8] =
     b"iroha:kagemusha:recursive-step-verifier-commitment:v4";
-const REPORT_ARTIFACT_PURPOSES: [&str; 6] = [
-    "step_eq_parameters",
-    "step_eq_proving_key",
-    "step_eq_verifying_key",
-    "step_ep_parameters",
-    "step_ep_proving_key",
-    "step_ep_verifying_key",
-];
 const REPORT_ROSTER_PURPOSE: &str = "topup_finality_roster";
-const REPORT_ARTIFACT_PURPOSES_V4: [&str; 10] = KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_ROLES_V4;
+const REPORT_ARTIFACT_PURPOSES_V4: [&str; 8] = KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_ROLES_V4;
 
 /// Kagemusha release-management command group.
 #[derive(Debug, ClapArgs)]
@@ -77,47 +61,15 @@ pub(super) struct Args {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Verify one complete authenticated ABI-19/V3 release directory.
-    #[command(name = "verify-release")]
-    VerifyRelease(VerifyReleaseArgs),
-    /// Verify a release and atomically write its typed promotion record.
-    #[command(name = "promote-release")]
-    PromoteRelease(PromoteReleaseArgs),
     /// Verify one complete authenticated ABI-20/V4 release directory.
     #[command(name = "verify-release-v4")]
     VerifyReleaseV4(VerifyReleaseV4Args),
     /// Verify an ABI-20/V4 release and atomically write its typed promotion record.
     #[command(name = "promote-release-v4")]
     PromoteReleaseV4(PromoteReleaseV4Args),
-}
-
-#[derive(Debug, ClapArgs)]
-struct VerifyReleaseArgs {
-    /// Immutable directory containing the exact release inventory selected by the subcommand.
-    #[arg(long)]
-    bundle_dir: PathBuf,
-    /// Signed physical-device benchmark evidence file.
-    #[arg(long)]
-    benchmark_evidence: PathBuf,
-    /// Independent cryptographic review evidence file.
-    #[arg(long)]
-    cryptographic_review: PathBuf,
-}
-
-#[derive(Debug, ClapArgs)]
-struct PromoteReleaseArgs {
-    /// Immutable directory containing the exact release inventory selected by the subcommand.
-    #[arg(long)]
-    bundle_dir: PathBuf,
-    /// New path for the canonical Norito promotion record; it is never overwritten.
-    #[arg(long)]
-    promotion_record: PathBuf,
-    /// Signed physical-device benchmark evidence file.
-    #[arg(long)]
-    benchmark_evidence: PathBuf,
-    /// Independent cryptographic review evidence file.
-    #[arg(long)]
-    cryptographic_review: PathBuf,
+    /// Build one release-bound activation instruction from an authenticated V4 catalog.
+    #[command(name = "prepare-activation-v4")]
+    PrepareActivationV4(PrepareActivationV4Args),
 }
 
 #[derive(Debug, ClapArgs)]
@@ -125,7 +77,7 @@ struct VerifyReleaseV4Args {
     /// Immutable directory containing the exact ABI-20/V4 release inventory.
     #[arg(long)]
     bundle_dir: PathBuf,
-    /// Canonical policy file whose exact bytes must match Kagami's embedded trust root.
+    /// Canonical release policy provisioned alongside the candidate release.
     #[arg(long)]
     release_policy: PathBuf,
     /// Signed physical-device benchmark evidence file.
@@ -141,7 +93,7 @@ struct PromoteReleaseV4Args {
     /// Immutable directory containing the exact ABI-20/V4 release inventory.
     #[arg(long)]
     bundle_dir: PathBuf,
-    /// Canonical policy file whose exact bytes must match Kagami's embedded trust root.
+    /// Canonical release policy provisioned alongside the candidate release.
     #[arg(long)]
     release_policy: PathBuf,
     /// New path for the canonical Norito promotion record; it is never overwritten.
@@ -155,138 +107,114 @@ struct PromoteReleaseV4Args {
     cryptographic_review: PathBuf,
 }
 
+#[derive(Debug, ClapArgs)]
+struct PrepareActivationV4Args {
+    /// Root containing lowercase manifest-digest release directories.
+    #[arg(long)]
+    artifact_root: PathBuf,
+    /// Canonical release policy configured on every validator.
+    #[arg(long)]
+    release_policy: PathBuf,
+    /// Exact lowercase SHA-256 directory name of the release to activate.
+    #[arg(long, value_parser = parse_manifest_sha256)]
+    manifest_sha256: [u8; 32],
+    /// Next atomic Eq/Ep verifier version observed from live consensus state.
+    #[arg(long)]
+    verifier_version: u32,
+    /// New private file receiving a JSON array accepted by `iroha multisig propose`.
+    #[arg(long)]
+    output: PathBuf,
+}
+
 impl<T: Write> RunArgs<T> for Args {
     fn run(self, writer: &mut std::io::BufWriter<T>) -> Outcome {
         match self.command {
-            Command::VerifyRelease(args) => {
-                let report = verify_with_embedded_policy(
-                    &args.bundle_dir,
-                    &args.benchmark_evidence,
-                    &args.cryptographic_review,
-                )?;
-                writeln!(writer, "{}", report.canonical_json()?)?;
-            }
-            Command::PromoteRelease(args) => {
-                let verified = verify_release_directory(
-                    &args.bundle_dir,
-                    &embedded_policy_bytes()?,
-                    &args.benchmark_evidence,
-                    &args.cryptographic_review,
-                )?;
-                let record = verified.promotion_record();
-                let record_bytes = norito::to_bytes(&record)
-                    .wrap_err("failed to encode Kagemusha promotion record")?;
-                write_new_durable_file(&args.promotion_record, &record_bytes)?;
-                writeln!(writer, "{}", verified.report.canonical_json()?)?;
-            }
             Command::VerifyReleaseV4(args) => {
-                let policy_bytes = explicit_embedded_policy_bytes(&args.release_policy)?;
-                let report = verify_release_directory_v4(
-                    &args.bundle_dir,
-                    &policy_bytes,
-                    &args.benchmark_evidence,
-                    &args.cryptographic_review,
-                )?
-                .report;
-                writeln!(writer, "{}", report.canonical_json()?)?;
-            }
-            Command::PromoteReleaseV4(args) => {
-                let policy_bytes = explicit_embedded_policy_bytes(&args.release_policy)?;
+                let policy_bytes = configured_policy_bytes(&args.release_policy)?;
                 let verified = verify_release_directory_v4(
                     &args.bundle_dir,
                     &policy_bytes,
                     &args.benchmark_evidence,
                     &args.cryptographic_review,
                 )?;
-                let record = verified.promotion_record();
+                let report = verified.verification_report()?;
+                writeln!(writer, "{}", report.canonical_json()?)?;
+            }
+            Command::PromoteReleaseV4(args) => {
+                let policy_bytes = configured_policy_bytes(&args.release_policy)?;
+                let verified = verify_release_directory_v4(
+                    &args.bundle_dir,
+                    &policy_bytes,
+                    &args.benchmark_evidence,
+                    &args.cryptographic_review,
+                )?;
+                let record = verified.promotion_record()?;
                 record.validate().map_err(|error| eyre!(error))?;
                 let record_bytes = norito::to_bytes(&record)
                     .wrap_err("failed to encode Kagemusha V4 promotion record")?;
                 write_new_durable_file(&args.promotion_record, &record_bytes)?;
-                writeln!(writer, "{}", verified.report.canonical_json()?)?;
+                writeln!(
+                    writer,
+                    "{}",
+                    verified.verification_report()?.canonical_json()?
+                )?;
+            }
+            Command::PrepareActivationV4(args) => {
+                let policy_bytes = configured_policy_bytes(&args.release_policy)?;
+                // Authenticate the explicit policy before the catalog opens any release.
+                if policy_bytes.is_empty() {
+                    bail!("Kagemusha V4 activation policy is empty");
+                }
+                let catalog =
+                    KagemushaReleaseCatalogV4::load(&args.release_policy, &args.artifact_root)
+                        .map_err(|error| eyre!(error))?;
+                let activation = catalog
+                    .build_activation(args.manifest_sha256, args.verifier_version)
+                    .map_err(|error| eyre!(error))?;
+                let instruction = ActivateKagemushaRecursiveReleaseV4::new(activation);
+                let instructions = vec![InstructionBox::from(instruction)];
+                let instructions_hash = HashOf::new(&instructions);
+                let mut instruction_json = norito::json::to_string(&instructions)
+                    .wrap_err("failed to encode Kagemusha V4 activation instruction JSON")?;
+                instruction_json.push('\n');
+                write_new_durable_file(&args.output, instruction_json.as_bytes())?;
+                writeln!(
+                    writer,
+                    "{{\"status\":\"prepared\",\"manifest_sha256\":\"{}\",\"verifier_version\":{},\"instruction_count\":1,\"instructions_hash\":\"{}\"}}",
+                    hex::encode(args.manifest_sha256),
+                    args.verifier_version,
+                    instructions_hash,
+                )?;
             }
         }
         Ok(())
     }
 }
 
-fn verify_with_embedded_policy(
-    bundle_dir: &Path,
-    benchmark_evidence: &Path,
-    cryptographic_review: &Path,
-) -> Result<VerificationReport> {
-    let policy_bytes = embedded_policy_bytes()?;
-    Ok(verify_release_directory(
-        bundle_dir,
-        &policy_bytes,
-        benchmark_evidence,
-        cryptographic_review,
-    )?
-    .report)
-}
-
-fn embedded_policy_bytes() -> Result<Vec<u8>> {
-    let encoded = EMBEDDED_RELEASE_TRUST_ROOT_HEX.ok_or_else(|| {
-        eyre!(
-            "Kagami was built without {RELEASE_TRUST_ROOT_ENV}; authenticated Kagemusha release verification is unavailable"
-        )
-    })?;
-    if encoded.is_empty()
-        || encoded.len() > MAX_POLICY_BYTES * 2
-        || encoded.len() % 2 != 0
-        || !encoded
+fn parse_manifest_sha256(value: &str) -> std::result::Result<[u8; 32], String> {
+    if value.len() != 64
+        || !value
             .bytes()
             .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
     {
-        bail!("embedded Kagemusha release trust root is not canonical lowercase Norito hex");
+        return Err("manifest SHA-256 must be exactly 64 lowercase hexadecimal characters".into());
     }
-    let decoded = hex::decode(encoded).wrap_err("failed to decode embedded release trust root")?;
-    if decoded.is_empty() || decoded.iter().all(|byte| *byte == 0) {
-        bail!("embedded Kagemusha release trust root is empty or all zero");
-    }
-    Ok(decoded)
+    hex::decode(value)
+        .map_err(|_| "manifest SHA-256 is malformed".to_owned())?
+        .try_into()
+        .map_err(|_| "manifest SHA-256 has the wrong length".to_owned())
 }
 
-fn explicit_embedded_policy_bytes(path: &Path) -> Result<Vec<u8>> {
-    let supplied = read_external_bounded(path, MAX_POLICY_BYTES, "Kagemusha V4 release policy")?;
-    let supplied_policy: KagemushaRecursiveSpendReleasePolicyV1 =
-        decode_canonical_norito(&supplied, "supplied Kagemusha V4 release policy")?;
-    supplied_policy.validate().map_err(|error| eyre!(error))?;
-
-    let embedded = embedded_policy_bytes()?;
-    let embedded_policy: KagemushaRecursiveSpendReleasePolicyV1 =
-        decode_canonical_norito(&embedded, "embedded Kagemusha V4 release trust root")?;
-    embedded_policy.validate().map_err(|error| eyre!(error))?;
-    if supplied != embedded || supplied_policy != embedded_policy {
-        bail!(
-            "supplied Kagemusha V4 release policy does not exactly match the embedded trust root"
-        );
-    }
-    Ok(supplied)
-}
-
-struct VerifiedRelease {
-    authenticated: KagemushaAuthenticatedReleaseV3,
-    report: VerificationReport,
-}
-
-impl VerifiedRelease {
-    /// Mint a marker only after the private end-to-end verifier has checked all seven artifacts.
-    fn promotion_record(&self) -> KagemushaRecursiveSpendPromotedReleaseV3 {
-        let capabilities = kagemusha_recursive_spend_native_capabilities_v1();
-        KagemushaRecursiveSpendPromotedReleaseV3 {
-            schema: KAGEMUSHA_RECURSIVE_SPEND_PROMOTED_RELEASE_SCHEMA_V3.to_owned(),
-            version: KAGEMUSHA_RECURSIVE_SPEND_RELEASE_AUTH_VERSION_V1,
-            generation: self.authenticated.manifest().generation.clone(),
-            manifest_sha256: self.authenticated.manifest_sha256(),
-            release_attestation_sha256: self.authenticated.release_attestation_sha256(),
-            release_policy_sha256: self.authenticated.release_policy_sha256(),
-            approved_signers: self.authenticated.approved_signers().to_vec(),
-            artifact_inventory_verified: true,
-            proof_backend_available: capabilities.proof_backend_available,
-            missing_gates: capabilities.missing_gates,
-        }
-    }
+fn configured_policy_bytes(path: &Path) -> Result<Vec<u8>> {
+    let configured = read_external_bounded(
+        path,
+        MAX_POLICY_BYTES,
+        "configured Kagemusha V4 release policy",
+    )?;
+    let policy: KagemushaRecursiveSpendReleasePolicyV1 =
+        decode_canonical_norito(&configured, "configured Kagemusha V4 release policy")?;
+    policy.validate().map_err(|error| eyre!(error))?;
+    Ok(configured)
 }
 
 struct VerifiedReleaseV4 {
@@ -295,11 +223,35 @@ struct VerifiedReleaseV4 {
 }
 
 impl VerifiedReleaseV4 {
-    fn promotion_record(&self) -> KagemushaRecursiveSpendPromotedReleaseV4 {
-        KagemushaRecursiveSpendPromotedReleaseV4 {
+    fn immutable_candidate(&self) -> Result<KagemushaRecursiveSpendCandidateV4> {
+        // Finalization fills exactly these evidence slots in the immutable
+        // candidate manifest. Canonical Norito therefore reconstructs the
+        // byte-identical pre-evidence candidate without trusting a supplied
+        // digest.
+        let mut manifest = self.authenticated.manifest().clone();
+        manifest.benchmark_evidence_sha256 = [0; 32];
+        manifest.cryptographic_review_sha256 = [0; 32];
+        manifest.release_attestation_sha256 = [0; 32];
+        let candidate = KagemushaRecursiveSpendCandidateV4 {
+            schema: KAGEMUSHA_RECURSIVE_SPEND_CANDIDATE_SCHEMA_V4.to_owned(),
+            version: KAGEMUSHA_RECURSIVE_SPEND_CANDIDATE_VERSION_V4,
+            manifest,
+        };
+        candidate
+            .validate()
+            .map_err(|error| eyre!("failed to reconstruct immutable V4 candidate: {error}"))?;
+        Ok(candidate)
+    }
+
+    fn promotion_record(&self) -> Result<KagemushaRecursiveSpendPromotedReleaseV4> {
+        let candidate = self.immutable_candidate()?;
+        let record = KagemushaRecursiveSpendPromotedReleaseV4 {
             schema: KAGEMUSHA_RECURSIVE_SPEND_PROMOTED_RELEASE_SCHEMA_V4.to_owned(),
             version: KAGEMUSHA_RECURSIVE_SPEND_RELEASE_AUTH_VERSION_V4,
             generation: self.authenticated.manifest().generation.clone(),
+            candidate_sha256: candidate
+                .sha256()
+                .map_err(|error| eyre!("failed to identify immutable V4 candidate: {error}"))?,
             manifest_sha256: self.authenticated.manifest_sha256(),
             release_attestation_sha256: self.authenticated.release_attestation_sha256(),
             release_policy_sha256: self.authenticated.release_policy_sha256(),
@@ -310,7 +262,25 @@ impl VerifiedReleaseV4 {
                 .map(str::to_owned)
                 .to_vec(),
             max_proof_bytes: self.authenticated.manifest().max_proof_bytes,
-        }
+        };
+        record
+            .validate_against_candidate_and_authenticated_release(&candidate, &self.authenticated)
+            .map_err(|error| eyre!("invalid candidate-bound V4 promotion record: {error}"))?;
+        Ok(record)
+    }
+
+    fn verification_report(&self) -> Result<VerificationReportV4> {
+        let candidate_sha256 = self
+            .immutable_candidate()?
+            .sha256()
+            .map_err(|error| eyre!("failed to identify immutable V4 candidate: {error}"))?;
+        let promotion_bytes = norito::to_bytes(&self.promotion_record()?)
+            .wrap_err("failed to encode canonical Kagemusha V4 promotion record")?;
+        Ok(VerificationReportV4::from_report(
+            &self.report,
+            candidate_sha256,
+            kagemusha_recursive_spend_release_sha256(&promotion_bytes),
+        ))
     }
 }
 
@@ -322,9 +292,9 @@ fn verify_release_directory_v4(
 ) -> Result<VerifiedReleaseV4> {
     let root = canonical_release_root(bundle_dir)?;
     let policy: KagemushaRecursiveSpendReleasePolicyV1 =
-        decode_canonical_norito(policy_bytes, "Kagemusha release trust root")?;
+        decode_canonical_norito(policy_bytes, "configured Kagemusha release policy")?;
     policy.validate().map_err(|error| eyre!(error))?;
-    let trust_root_sha256 = kagemusha_recursive_spend_release_sha256(policy_bytes);
+    let release_policy_sha256 = kagemusha_recursive_spend_release_sha256(policy_bytes);
 
     let manifest_bytes = read_regular_bounded(
         &root,
@@ -371,8 +341,30 @@ fn verify_release_directory_v4(
     let attestation: KagemushaRecursiveSpendReleaseAttestationV4 =
         decode_canonical_norito(&attestation_bytes, "Kagemusha V4 release attestation")?;
 
-    let benchmark = read_external_evidence(benchmark_evidence_path, "physical-device benchmark")?;
-    let review = read_external_evidence(cryptographic_review_path, "cryptographic review")?;
+    require_release_file_path(
+        &root,
+        benchmark_evidence_path,
+        KAGEMUSHA_RECURSIVE_SPEND_BENCHMARK_EVIDENCE_FILE_NAME_V1,
+        "physical-device benchmark",
+    )?;
+    require_release_file_path(
+        &root,
+        cryptographic_review_path,
+        KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_FILE_NAME_V1,
+        "cryptographic review",
+    )?;
+    let benchmark = read_regular_bounded(
+        &root,
+        KAGEMUSHA_RECURSIVE_SPEND_BENCHMARK_EVIDENCE_FILE_NAME_V1,
+        KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_EVIDENCE_BYTES_V1,
+        "physical-device benchmark",
+    )?;
+    let review = read_regular_bounded(
+        &root,
+        KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_FILE_NAME_V1,
+        KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_EVIDENCE_BYTES_V1,
+        "cryptographic review",
+    )?;
     let authenticated = KagemushaAuthenticatedReleaseV4::verify(
         &manifest,
         &policy,
@@ -388,7 +380,7 @@ fn verify_release_directory_v4(
         .flat_map(|profile| profile.artifacts.iter())
         .collect();
     if descriptors.len() != REPORT_ARTIFACT_PURPOSES_V4.len() {
-        bail!("Kagemusha V4 release does not contain the exact ten-artifact inventory");
+        bail!("Kagemusha V4 release does not contain the exact eight-artifact inventory");
     }
     let mut validated = Vec::with_capacity(descriptors.len());
     for descriptor in &descriptors {
@@ -412,16 +404,14 @@ fn verify_release_directory_v4(
     }
     let [
         step_eq_parameters,
-        step_eq_circuit_params,
         step_eq_proving_key,
         step_eq_verifying_key,
         step_eq_bootstrap_witness,
         step_ep_parameters,
-        step_ep_circuit_params,
         step_ep_proving_key,
         step_ep_verifying_key,
         step_ep_bootstrap_witness,
-    ]: [KagemushaValidatedArtifactPayloadV4; 10] = validated
+    ]: [KagemushaValidatedArtifactPayloadV4; 8] = validated
         .try_into()
         .map_err(|_| eyre!("Kagemusha V4 artifact inventory length changed"))?;
 
@@ -452,12 +442,10 @@ fn verify_release_directory_v4(
     let material = KagemushaPastaCycleProverArtifactsV4::new(
         &authenticated,
         step_eq_parameters,
-        step_eq_circuit_params,
         step_eq_proving_key,
         step_eq_verifying_key,
         step_eq_bootstrap_witness,
         step_ep_parameters,
-        step_ep_circuit_params,
         step_ep_proving_key,
         step_ep_verifying_key,
         step_ep_bootstrap_witness,
@@ -480,182 +468,25 @@ fn verify_release_directory_v4(
         &manifest,
         manifest_sha256,
         subject.manifest_subject_sha256,
-        trust_root_sha256,
+        release_policy_sha256,
         recursive_step_verifier_commitment,
     );
-    Ok(VerifiedReleaseV4 {
+    let verified = VerifiedReleaseV4 {
         authenticated,
         report,
-    })
-}
-
-fn verify_release_directory(
-    bundle_dir: &Path,
-    policy_bytes: &[u8],
-    benchmark_evidence_path: &Path,
-    cryptographic_review_path: &Path,
-) -> Result<VerifiedRelease> {
-    let root = canonical_release_root(bundle_dir)?;
-    let policy: KagemushaRecursiveSpendReleasePolicyV1 =
-        decode_canonical_norito(policy_bytes, "Kagemusha release trust root")?;
-    policy.validate().map_err(|error| eyre!(error))?;
-    let trust_root_sha256 = kagemusha_recursive_spend_release_sha256(policy_bytes);
-
-    let manifest_bytes = read_regular_bounded(
+    };
+    let expected_promotion = norito::to_bytes(&verified.promotion_record()?)
+        .wrap_err("failed to encode canonical Kagemusha V4 promotion record")?;
+    let promotion = read_regular_bounded(
         &root,
-        MANIFEST_NORITO_FILE_NAME,
+        PROMOTION_RECORD_FILE_NAME_V4,
         MAX_MANIFEST_BYTES,
-        "canonical Kagemusha manifest",
+        "Kagemusha V4 promotion record",
     )?;
-    let manifest: KagemushaRecursiveSpendArtifactManifestV3 =
-        decode_canonical_norito(&manifest_bytes, "canonical Kagemusha manifest")?;
-    manifest.validate().map_err(|error| eyre!(error))?;
-    let manifest_sha256 = kagemusha_recursive_spend_release_sha256(&manifest_bytes);
-
-    let manifest_digest = read_regular_bounded(
-        &root,
-        MANIFEST_NORITO_SHA256_FILE_NAME,
-        65,
-        "Kagemusha manifest digest",
-    )?;
-    if manifest_digest != format!("{}\n", hex::encode(manifest_sha256)).as_bytes() {
-        bail!("Kagemusha manifest digest sidecar does not match manifest.norito");
+    if promotion != expected_promotion {
+        bail!("Kagemusha V4 promotion record is not candidate-bound to this release");
     }
-
-    let manifest_json = read_regular_bounded(
-        &root,
-        MANIFEST_JSON_FILE_NAME,
-        MAX_MANIFEST_BYTES,
-        "Kagemusha manifest JSON",
-    )?;
-    let manifest_json = std::str::from_utf8(&manifest_json)
-        .wrap_err("Kagemusha manifest JSON is not strict UTF-8")?;
-    let manifest_from_json: KagemushaRecursiveSpendArtifactManifestV3 =
-        norito::json::from_str(manifest_json)
-            .wrap_err("Kagemusha manifest JSON is malformed or non-canonical in shape")?;
-    if manifest_from_json != manifest {
-        bail!("Kagemusha JSON and Norito manifests are not semantically identical");
-    }
-
-    let attestation_bytes = read_regular_bounded(
-        &root,
-        RELEASE_ATTESTATION_FILE_NAME,
-        MAX_ATTESTATION_BYTES,
-        "Kagemusha release attestation",
-    )?;
-    let attestation: KagemushaRecursiveSpendReleaseAttestationV1 =
-        decode_canonical_norito(&attestation_bytes, "Kagemusha release attestation")?;
-
-    let benchmark = read_external_evidence(benchmark_evidence_path, "physical-device benchmark")?;
-    let review = read_external_evidence(cryptographic_review_path, "cryptographic review")?;
-    let authenticated = KagemushaAuthenticatedReleaseV3::verify(
-        &manifest,
-        &policy,
-        &attestation,
-        &benchmark,
-        &review,
-    )
-    .map_err(|error| eyre!("Kagemusha release authentication failed: {error}"))?;
-
-    let descriptors: Vec<&KagemushaPastaCycleArtifactV3> = manifest
-        .profiles
-        .iter()
-        .flat_map(|profile| profile.artifacts.iter())
-        .collect();
-    if descriptors.len() != 6 {
-        bail!("Kagemusha release does not contain the exact six-key inventory");
-    }
-    let mut validated = Vec::with_capacity(descriptors.len());
-    for descriptor in &descriptors {
-        let bytes = read_regular_bounded(
-            &root,
-            &descriptor.file_name,
-            usize::try_from(descriptor.size_bytes)
-                .map_err(|_| eyre!("Kagemusha artifact size does not fit this host"))?,
-            "Kagemusha key artifact",
-        )?;
-        if u64::try_from(bytes.len()).ok() != Some(descriptor.size_bytes) {
-            bail!("Kagemusha artifact size changed while it was read");
-        }
-        let payload = read_kagemusha_pasta_cycle_artifact_v3(
-            &mut std::io::Cursor::new(bytes),
-            &manifest,
-            descriptor,
-        )
-        .map_err(|error| eyre!(error))?;
-        validated.push(payload);
-    }
-    let [
-        step_eq_parameters,
-        step_eq_proving_key,
-        step_eq_verifying_key,
-        step_ep_parameters,
-        step_ep_proving_key,
-        step_ep_verifying_key,
-    ]: [KagemushaValidatedArtifactPayloadV3; 6] = validated
-        .try_into()
-        .map_err(|_| eyre!("Kagemusha key inventory length changed"))?;
-    let material = KagemushaPastaCycleProverArtifactsV3::new(
-        &manifest,
-        step_eq_parameters,
-        step_eq_proving_key,
-        step_eq_verifying_key,
-        step_ep_parameters,
-        step_ep_proving_key,
-        step_ep_verifying_key,
-    )
-    .map_err(|error| eyre!(error))?;
-    if material.manifest_sha256() != manifest_sha256 {
-        bail!("authenticated Kagemusha material does not bind the canonical manifest");
-    }
-
-    verify_roster(&root, &manifest)?;
-    verify_exact_inventory(&root, &manifest)?;
-
-    let subject = manifest
-        .release_attestation_subject()
-        .map_err(|error| eyre!(error))?;
-    let recursive_step_verifier_commitment = recursive_step_verifier_commitment(&manifest)?;
-    let report = VerificationReport::from_manifest(
-        &manifest,
-        manifest_sha256,
-        subject.manifest_subject_sha256,
-        trust_root_sha256,
-        recursive_step_verifier_commitment,
-    );
-    Ok(VerifiedRelease {
-        authenticated,
-        report,
-    })
-}
-
-fn verify_roster(root: &Path, manifest: &KagemushaRecursiveSpendArtifactManifestV3) -> Outcome {
-    let descriptor = &manifest.topup_finality_roster_artifact;
-    let bytes = read_regular_bounded(
-        root,
-        &descriptor.file_name,
-        usize::try_from(KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_MAX_BYTES_V2)
-            .expect("roster bound fits usize"),
-        "Kagemusha top-up finality roster",
-    )?;
-    if u64::try_from(bytes.len()).ok() != Some(descriptor.size_bytes)
-        || kagemusha_recursive_spend_release_sha256(&bytes) != descriptor.sha256
-    {
-        bail!("Kagemusha top-up finality roster size or digest mismatch");
-    }
-    let roster: KagemushaTopUpFinalityRosterArtifactV2 =
-        decode_canonical_norito(&bytes, "Kagemusha top-up finality roster")?;
-    roster.validate().map_err(|error| eyre!(error))?;
-    if roster.chain_id != manifest.chain_id
-        || roster.artifact_generation != manifest.generation
-        || roster.window_at(manifest.activation_height).is_err()
-        || roster
-            .window_at(manifest.withdrawal_height.saturating_sub(1))
-            .is_err()
-    {
-        bail!("Kagemusha top-up finality roster release binding mismatch");
-    }
-    Ok(())
+    Ok(verified)
 }
 
 fn verify_roster_v4(root: &Path, manifest: &KagemushaRecursiveSpendArtifactManifestV4) -> Outcome {
@@ -687,42 +518,6 @@ fn verify_roster_v4(root: &Path, manifest: &KagemushaRecursiveSpendArtifactManif
     Ok(())
 }
 
-fn verify_exact_inventory(
-    root: &Path,
-    manifest: &KagemushaRecursiveSpendArtifactManifestV3,
-) -> Outcome {
-    let mut expected = std::collections::BTreeSet::from([
-        MANIFEST_JSON_FILE_NAME.to_owned(),
-        MANIFEST_NORITO_FILE_NAME.to_owned(),
-        MANIFEST_NORITO_SHA256_FILE_NAME.to_owned(),
-        RELEASE_ATTESTATION_FILE_NAME.to_owned(),
-        manifest.topup_finality_roster_artifact.file_name.clone(),
-    ]);
-    for artifact in manifest
-        .profiles
-        .iter()
-        .flat_map(|profile| profile.artifacts.iter())
-    {
-        expected.insert(artifact.file_name.clone());
-    }
-    let observed = fs::read_dir(root)
-        .wrap_err("failed to enumerate Kagemusha release directory")?
-        .map(|entry| {
-            entry
-                .map(|entry| entry.file_name().to_string_lossy().into_owned())
-                .wrap_err("failed to inspect Kagemusha release inventory")
-        })
-        .collect::<Result<std::collections::BTreeSet<_>>>()?;
-    if observed != expected {
-        bail!(
-            "Kagemusha release inventory is not exact (missing={:?}, unexpected={:?})",
-            expected.difference(&observed).collect::<Vec<_>>(),
-            observed.difference(&expected).collect::<Vec<_>>()
-        );
-    }
-    Ok(())
-}
-
 fn verify_exact_inventory_v4(
     root: &Path,
     manifest: &KagemushaRecursiveSpendArtifactManifestV4,
@@ -732,6 +527,9 @@ fn verify_exact_inventory_v4(
         MANIFEST_NORITO_FILE_NAME.to_owned(),
         MANIFEST_NORITO_SHA256_FILE_NAME.to_owned(),
         RELEASE_ATTESTATION_FILE_NAME_V4.to_owned(),
+        KAGEMUSHA_RECURSIVE_SPEND_BENCHMARK_EVIDENCE_FILE_NAME_V1.to_owned(),
+        KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_FILE_NAME_V1.to_owned(),
+        PROMOTION_RECORD_FILE_NAME_V4.to_owned(),
         manifest.topup_finality_roster_artifact.file_name.clone(),
     ]);
     for artifact in manifest
@@ -757,19 +555,6 @@ fn verify_exact_inventory_v4(
         );
     }
     Ok(())
-}
-
-fn recursive_step_verifier_commitment(
-    manifest: &KagemushaRecursiveSpendArtifactManifestV3,
-) -> Result<[u8; 32]> {
-    let profiles = norito::to_bytes(&manifest.profiles)
-        .wrap_err("failed to encode Kagemusha verifier profiles")?;
-    let mut preimage =
-        Vec::with_capacity(RECURSIVE_STEP_VERIFIER_COMMITMENT_DOMAIN.len() + 1 + profiles.len());
-    preimage.extend_from_slice(RECURSIVE_STEP_VERIFIER_COMMITMENT_DOMAIN);
-    preimage.push(0);
-    preimage.extend_from_slice(&profiles);
-    Ok(kagemusha_recursive_spend_release_sha256(&preimage))
 }
 
 fn recursive_step_verifier_commitment_v4(
@@ -853,12 +638,18 @@ fn read_external_bounded(path: &Path, maximum: usize, label: &str) -> Result<Vec
     read_regular_bounded(&parent, name, maximum, label)
 }
 
-fn read_external_evidence(path: &Path, label: &str) -> Result<Vec<u8>> {
-    read_external_bounded(
-        path,
-        KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_EVIDENCE_BYTES_V1,
-        label,
-    )
+fn require_release_file_path(root: &Path, supplied: &Path, name: &str, label: &str) -> Outcome {
+    let supplied = supplied
+        .canonicalize()
+        .wrap_err_with(|| format!("failed to canonicalize {label}"))?;
+    let expected = root
+        .join(name)
+        .canonicalize()
+        .wrap_err_with(|| format!("failed to canonicalize in-release {label}"))?;
+    if supplied != expected {
+        bail!("{label} must be the canonical in-release `{name}` file");
+    }
+    Ok(())
 }
 
 fn decode_canonical_norito<T>(bytes: &[u8], label: &str) -> Result<T>
@@ -958,7 +749,7 @@ fn write_new_durable_file(path: &Path, bytes: &[u8]) -> Outcome {
     Ok(())
 }
 
-#[derive(Debug, crate::json_macros::JsonSerialize)]
+#[derive(Clone, Debug, crate::json_macros::JsonSerialize)]
 struct VerificationArtifact {
     purpose: String,
     file_name: String,
@@ -973,7 +764,7 @@ struct VerificationReport {
     status: String,
     envelope_sha256: String,
     manifest_body_sha256: String,
-    trust_root_sha256: String,
+    release_policy_sha256: String,
     generation: String,
     chain_id: String,
     asset_definition_id: String,
@@ -984,56 +775,11 @@ struct VerificationReport {
 }
 
 impl VerificationReport {
-    fn from_manifest(
-        manifest: &KagemushaRecursiveSpendArtifactManifestV3,
-        envelope_sha256: [u8; 32],
-        manifest_body_sha256: [u8; 32],
-        trust_root_sha256: [u8; 32],
-        recursive_step_verifier_commitment: [u8; 32],
-    ) -> Self {
-        let mut artifacts = manifest
-            .profiles
-            .iter()
-            .flat_map(|profile| profile.artifacts.iter())
-            .zip(REPORT_ARTIFACT_PURPOSES)
-            .map(|(artifact, purpose)| VerificationArtifact {
-                purpose: purpose.to_owned(),
-                file_name: artifact.file_name.clone(),
-                size_bytes: artifact.size_bytes,
-                sha256: hex::encode(artifact.sha256),
-                payload_size_bytes: Some(artifact.payload_size_bytes),
-                payload_sha256: Some(hex::encode(artifact.payload_sha256)),
-            })
-            .collect::<Vec<_>>();
-        let roster = &manifest.topup_finality_roster_artifact;
-        artifacts.push(VerificationArtifact {
-            purpose: REPORT_ROSTER_PURPOSE.to_owned(),
-            file_name: roster.file_name.clone(),
-            size_bytes: roster.size_bytes,
-            sha256: hex::encode(roster.sha256),
-            payload_size_bytes: None,
-            payload_sha256: None,
-        });
-        Self {
-            status: "verified".to_owned(),
-            envelope_sha256: hex::encode(envelope_sha256),
-            manifest_body_sha256: hex::encode(manifest_body_sha256),
-            trust_root_sha256: hex::encode(trust_root_sha256),
-            generation: manifest.generation.clone(),
-            chain_id: manifest.chain_id.to_string(),
-            asset_definition_id: manifest.asset.to_string(),
-            asset_scale: manifest.asset_scale,
-            bridge_abi_version: KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3,
-            recursive_step_verifier_commitment: hex::encode(recursive_step_verifier_commitment),
-            artifacts,
-        }
-    }
-
     fn from_manifest_v4(
         manifest: &KagemushaRecursiveSpendArtifactManifestV4,
         envelope_sha256: [u8; 32],
         manifest_body_sha256: [u8; 32],
-        trust_root_sha256: [u8; 32],
+        release_policy_sha256: [u8; 32],
         recursive_step_verifier_commitment: [u8; 32],
     ) -> Self {
         let mut artifacts = manifest
@@ -1063,7 +809,7 @@ impl VerificationReport {
             status: "verified".to_owned(),
             envelope_sha256: hex::encode(envelope_sha256),
             manifest_body_sha256: hex::encode(manifest_body_sha256),
-            trust_root_sha256: hex::encode(trust_root_sha256),
+            release_policy_sha256: hex::encode(release_policy_sha256),
             generation: manifest.generation.clone(),
             chain_id: manifest.chain_id.to_string(),
             asset_definition_id: manifest.asset.to_string(),
@@ -1079,99 +825,79 @@ impl VerificationReport {
     }
 }
 
+#[derive(Debug, crate::json_macros::JsonSerialize)]
+struct VerificationReportV4 {
+    status: String,
+    envelope_sha256: String,
+    manifest_body_sha256: String,
+    candidate_sha256: String,
+    promotion_record_sha256: String,
+    release_policy_sha256: String,
+    generation: String,
+    chain_id: String,
+    asset_definition_id: String,
+    asset_scale: u32,
+    bridge_abi_version: u32,
+    recursive_step_verifier_commitment: String,
+    artifacts: Vec<VerificationArtifact>,
+}
+
+impl VerificationReportV4 {
+    fn from_report(
+        report: &VerificationReport,
+        candidate_sha256: [u8; 32],
+        promotion_record_sha256: [u8; 32],
+    ) -> Self {
+        Self {
+            status: report.status.clone(),
+            envelope_sha256: report.envelope_sha256.clone(),
+            manifest_body_sha256: report.manifest_body_sha256.clone(),
+            candidate_sha256: hex::encode(candidate_sha256),
+            promotion_record_sha256: hex::encode(promotion_record_sha256),
+            release_policy_sha256: report.release_policy_sha256.clone(),
+            generation: report.generation.clone(),
+            chain_id: report.chain_id.clone(),
+            asset_definition_id: report.asset_definition_id.clone(),
+            asset_scale: report.asset_scale,
+            bridge_abi_version: report.bridge_abi_version,
+            recursive_step_verifier_commitment: report.recursive_step_verifier_commitment.clone(),
+            artifacts: report.artifacts.clone(),
+        }
+    }
+
+    fn canonical_json(&self) -> Result<String> {
+        norito::json::to_json(self).wrap_err("failed to encode Kagemusha V4 verification JSON")
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{
-        REPORT_ARTIFACT_PURPOSES, REPORT_ARTIFACT_PURPOSES_V4, REPORT_ROSTER_PURPOSE,
-        VerificationArtifact, VerificationReport,
-    };
+    use super::{REPORT_ARTIFACT_PURPOSES_V4, REPORT_ROSTER_PURPOSE, parse_manifest_sha256};
 
     #[test]
-    fn verification_report_is_one_canonical_ordered_json_line() {
-        let report = VerificationReport {
-            status: "verified".to_owned(),
-            envelope_sha256: "11".repeat(32),
-            manifest_body_sha256: "22".repeat(32),
-            trust_root_sha256: "33".repeat(32),
-            generation: "release-1".to_owned(),
-            chain_id: "chain".to_owned(),
-            asset_definition_id: "asset".to_owned(),
-            asset_scale: 2,
-            bridge_abi_version: 19,
-            recursive_step_verifier_commitment: "44".repeat(32),
-            artifacts: vec![VerificationArtifact {
-                purpose: REPORT_ARTIFACT_PURPOSES[0].to_owned(),
-                file_name: "step-eq.parameters.krv3".to_owned(),
-                size_bytes: 9,
-                sha256: "55".repeat(32),
-                payload_size_bytes: Some(3),
-                payload_sha256: Some("66".repeat(32)),
-            }],
-        };
-        let json = report.canonical_json().expect("canonical report JSON");
-        assert!(!json.contains('\n') && !json.contains('\r'));
-        assert_eq!(
-            json,
-            format!(
-                concat!(
-                    "{{\"status\":\"verified\",",
-                    "\"envelope_sha256\":\"{}\",",
-                    "\"manifest_body_sha256\":\"{}\",",
-                    "\"trust_root_sha256\":\"{}\",",
-                    "\"generation\":\"release-1\",",
-                    "\"chain_id\":\"chain\",",
-                    "\"asset_definition_id\":\"asset\",",
-                    "\"asset_scale\":2,",
-                    "\"bridge_abi_version\":19,",
-                    "\"recursive_step_verifier_commitment\":\"{}\",",
-                    "\"artifacts\":[{{",
-                    "\"purpose\":\"step_eq_parameters\",",
-                    "\"file_name\":\"step-eq.parameters.krv3\",",
-                    "\"size_bytes\":9,",
-                    "\"sha256\":\"{}\",",
-                    "\"payload_size_bytes\":3,",
-                    "\"payload_sha256\":\"{}\"",
-                    "}}]}}"
-                ),
-                "11".repeat(32),
-                "22".repeat(32),
-                "33".repeat(32),
-                "44".repeat(32),
-                "55".repeat(32),
-                "66".repeat(32),
-            )
-        );
-        assert_eq!(
-            REPORT_ARTIFACT_PURPOSES,
-            [
-                "step_eq_parameters",
-                "step_eq_proving_key",
-                "step_eq_verifying_key",
-                "step_ep_parameters",
-                "step_ep_proving_key",
-                "step_ep_verifying_key",
-            ]
-        );
-        assert_eq!(REPORT_ROSTER_PURPOSE, "topup_finality_roster");
+    fn activation_manifest_digest_parser_is_lowercase_and_exact() {
+        assert_eq!(parse_manifest_sha256(&"ab".repeat(32)), Ok([0xab; 32]));
+        assert!(parse_manifest_sha256(&"AB".repeat(32)).is_err());
+        assert!(parse_manifest_sha256(&"a".repeat(63)).is_err());
+        assert!(parse_manifest_sha256(&format!("{}g", "a".repeat(63))).is_err());
     }
 
     #[test]
-    fn v4_report_inventory_is_the_canonical_ten_role_abi20_order() {
+    fn v4_report_inventory_is_the_canonical_eight_role_abi20_order() {
         assert_eq!(
             REPORT_ARTIFACT_PURPOSES_V4,
             [
-                "step_eq_parameters",
-                "step_eq_circuit_params",
+                "step_eq_params_ipa",
                 "step_eq_proving_key",
                 "step_eq_verifying_key",
                 "step_eq_bootstrap_witness",
-                "step_ep_parameters",
-                "step_ep_circuit_params",
+                "step_ep_params_ipa",
                 "step_ep_proving_key",
                 "step_ep_verifying_key",
                 "step_ep_bootstrap_witness",
             ]
         );
-        assert_eq!(REPORT_ARTIFACT_PURPOSES_V4.len(), 10);
+        assert_eq!(REPORT_ARTIFACT_PURPOSES_V4.len(), 8);
+        assert_eq!(REPORT_ROSTER_PURPOSE, "topup_finality_roster");
     }
 }

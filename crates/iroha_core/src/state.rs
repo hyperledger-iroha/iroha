@@ -9816,6 +9816,9 @@ pub struct State {
     pub content: iroha_config::parameters::actual::Content,
     /// Settlement configuration (repo defaults, collateral policies).
     pub settlement: iroha_config::parameters::actual::Settlement,
+    /// Immutable startup-authenticated ABI-20 recursive release catalog.
+    pub kagemusha_release_catalog:
+        Arc<crate::smartcontracts::isi::offline::KagemushaReleaseCatalogV4>,
     /// Unified settlement engine for XOR quoting.
     pub settlement_engine: crate::settlement::SettlementEngine,
     /// Chain identifier from configuration (used in VRF prehash binding).
@@ -10047,6 +10050,9 @@ pub struct StateBlock<'state> {
     pub content: iroha_config::parameters::actual::Content,
     /// Settlement configuration snapshot for this block.
     pub settlement: iroha_config::parameters::actual::Settlement,
+    /// Immutable ABI-20 recursive release catalog snapshot for this block.
+    pub kagemusha_release_catalog:
+        Arc<crate::smartcontracts::isi::offline::KagemushaReleaseCatalogV4>,
     /// Settlement engine snapshot for this block.
     pub settlement_engine: crate::settlement::SettlementEngine,
     /// Chain identifier for this block.
@@ -10602,6 +10608,9 @@ pub struct StateTransaction<'block, 'state> {
     pub content: iroha_config::parameters::actual::Content,
     /// Settlement configuration snapshot for this transaction.
     pub settlement: iroha_config::parameters::actual::Settlement,
+    /// Immutable ABI-20 recursive release catalog snapshot for this transaction.
+    pub kagemusha_release_catalog:
+        Arc<crate::smartcontracts::isi::offline::KagemushaReleaseCatalogV4>,
     /// Settlement engine snapshot for this transaction.
     pub settlement_engine: crate::settlement::SettlementEngine,
     /// Chain identifier (from configuration). Used for VRF prehash binding.
@@ -10935,6 +10944,9 @@ pub struct StateView<'state> {
     pub content: iroha_config::parameters::actual::Content,
     /// Settlement configuration snapshot for this view.
     pub settlement: iroha_config::parameters::actual::Settlement,
+    /// Immutable ABI-20 recursive release catalog snapshot for this view.
+    pub kagemusha_release_catalog:
+        Arc<crate::smartcontracts::isi::offline::KagemushaReleaseCatalogV4>,
     /// Settlement engine snapshot for this view.
     pub settlement_engine: crate::settlement::SettlementEngine,
     /// Chain identifier for this view.
@@ -26065,6 +26077,9 @@ impl State {
                 stripe_layout: iroha_config::parameters::defaults::content::default_stripe_layout(),
             },
             settlement: settlement_cfg,
+            kagemusha_release_catalog: Arc::new(
+                crate::smartcontracts::isi::offline::KagemushaReleaseCatalogV4::empty(),
+            ),
             settlement_engine,
             #[cfg(feature = "telemetry")]
             telemetry,
@@ -26627,6 +26642,7 @@ impl State {
             gov: self.gov.clone(),
             content: self.content.clone(),
             settlement: self.settlement.clone(),
+            kagemusha_release_catalog: Arc::clone(&self.kagemusha_release_catalog),
             settlement_engine: self.settlement_engine.clone(),
             chain_id: self.chain_id.clone(),
             pre_block_npos_seed,
@@ -27188,6 +27204,7 @@ impl State {
             gov: self.gov.clone(),
             content: self.content.clone(),
             settlement: self.settlement.clone(),
+            kagemusha_release_catalog: Arc::clone(&self.kagemusha_release_catalog),
             settlement_engine: self.settlement_engine.clone(),
             chain_id: self.chain_id.clone(),
             pre_block_npos_seed,
@@ -27291,6 +27308,7 @@ impl State {
             gov: self.gov.clone(),
             content: self.content.clone(),
             settlement: self.settlement.clone(),
+            kagemusha_release_catalog: Arc::clone(&self.kagemusha_release_catalog),
             settlement_engine: self.settlement_engine.clone(),
             chain_id: self.chain_id.clone(),
             pre_block_npos_seed,
@@ -28190,6 +28208,7 @@ impl State {
                 gov: self.gov.clone(),
                 content: self.content.clone(),
                 settlement: self.settlement.clone(),
+                kagemusha_release_catalog: Arc::clone(&self.kagemusha_release_catalog),
                 settlement_engine: self.settlement_engine.clone(),
                 chain_id: self.chain_id.clone(),
                 created_at: Instant::now(),
@@ -35327,6 +35346,17 @@ impl State {
         self.settlement_engine = SettlementEngine::from_router_config(&self.settlement.router);
     }
 
+    /// Install the fully authenticated immutable Kagemusha V4 release catalog.
+    ///
+    /// Startup calls this before Kura replay; transaction execution receives an
+    /// `Arc` snapshot and never performs release filesystem access.
+    pub fn set_kagemusha_release_catalog(
+        &mut self,
+        catalog: crate::smartcontracts::isi::offline::KagemushaReleaseCatalogV4,
+    ) {
+        self.kagemusha_release_catalog = Arc::new(catalog);
+    }
+
     /// Current settlement configuration snapshot.
     #[must_use]
     pub fn settlement(&self) -> &iroha_config::parameters::actual::Settlement {
@@ -36170,7 +36200,35 @@ impl State {
 
         // Drop account/role permissions targeting removed dataspaces so
         // permission payload references do not outlive catalog entries.
+        let is_stale_account_alias_scope =
+            |scope: &iroha_executor_data_model::permission::account::AccountAliasPermissionScope| {
+                match scope {
+                    iroha_executor_data_model::permission::account::AccountAliasPermissionScope::Domain(
+                        domain,
+                    ) => !dataspace_aliases.contains(domain.dataspace().as_ref()),
+                    iroha_executor_data_model::permission::account::AccountAliasPermissionScope::Dataspace(
+                        dataspace,
+                    ) => !dataspace_ids.contains(dataspace),
+                }
+            };
         let is_stale_dataspace_permission = |permission: &Permission| {
+            if let Ok(permission) =
+                iroha_executor_data_model::permission::account::CanResolveAccountAlias::try_from(
+                    permission,
+                )
+            {
+                return is_stale_account_alias_scope(&permission.scope);
+            }
+            if let Ok(permission) = iroha_executor_data_model::permission::account::CanDelegateAccountAliasResolution::try_from(permission) {
+                return is_stale_account_alias_scope(&permission.scope);
+            }
+            if let Ok(permission) =
+                iroha_executor_data_model::permission::account::CanManageAccountAlias::try_from(
+                    permission,
+                )
+            {
+                return is_stale_account_alias_scope(&permission.scope);
+            }
             if let Ok(permission) =
                 iroha_executor_data_model::permission::nexus::CanPublishSpaceDirectoryManifest::try_from(
                     permission,
@@ -43527,6 +43585,7 @@ impl<'state> StateBlock<'state> {
             gov: self.gov.clone(),
             content: self.content.clone(),
             settlement: self.settlement.clone(),
+            kagemusha_release_catalog: Arc::clone(&self.kagemusha_release_catalog),
             settlement_engine: self.settlement_engine.clone(),
             chain_id: self.chain_id.clone(),
             settlement_accumulator: &mut self.settlement_accumulator,
@@ -60318,6 +60377,9 @@ pub(crate) mod deserialize {
             gov: default_governance(),
             content: default_content_cfg(),
             settlement: iroha_config::parameters::actual::Settlement::default(),
+            kagemusha_release_catalog: Arc::new(
+                crate::smartcontracts::isi::offline::KagemushaReleaseCatalogV4::empty(),
+            ),
             settlement_engine: SettlementEngine::new_roadmap_default(),
             chain_id,
             snapshot_v2_bootstrap_candidate,
@@ -86939,6 +87001,22 @@ mod tests {
             domain: DomainId::try_new("retained", "other").expect("mismatched domain id"),
         }
         .into();
+        let stale_alias_delegation_permission: Permission =
+            iroha_executor_data_model::permission::account::CanDelegateAccountAliasResolution {
+                scope: iroha_executor_data_model::permission::account::AccountAliasPermissionScope::Domain(
+                    DomainId::try_new("hbl", "historical")
+                        .expect("stale alias-delegation domain"),
+                ),
+            }
+            .into();
+        let retained_alias_delegation_permission: Permission =
+            iroha_executor_data_model::permission::account::CanDelegateAccountAliasResolution {
+                scope: iroha_executor_data_model::permission::account::AccountAliasPermissionScope::Domain(
+                    DomainId::try_new("hbl", "universal")
+                        .expect("retained alias-delegation domain"),
+                ),
+            }
+            .into();
         let holder = ALICE_ID.clone();
         let sponsor = AccountId::new(checked_keypair().public_key().clone());
         let beneficiary = AccountId::new(checked_keypair().public_key().clone());
@@ -86986,6 +87064,8 @@ mod tests {
                 stale_domain_permission.clone(),
                 retained_domain_permission.clone(),
                 mismatched_domain_permission.clone(),
+                stale_alias_delegation_permission.clone(),
+                retained_alias_delegation_permission.clone(),
                 stale_sponsor_permission.clone(),
                 retained_sponsor_permission.clone(),
                 stale_enrollment_permission.clone(),
@@ -87004,6 +87084,8 @@ mod tests {
                     stale_domain_permission.clone(),
                     retained_domain_permission.clone(),
                     mismatched_domain_permission.clone(),
+                    stale_alias_delegation_permission.clone(),
+                    retained_alias_delegation_permission.clone(),
                     stale_sponsor_permission.clone(),
                     retained_sponsor_permission.clone(),
                     stale_enrollment_permission.clone(),
@@ -87017,6 +87099,8 @@ mod tests {
                     (stale_domain_permission.clone(), 1),
                     (retained_domain_permission.clone(), 1),
                     (mismatched_domain_permission.clone(), 1),
+                    (stale_alias_delegation_permission.clone(), 1),
+                    (retained_alias_delegation_permission.clone(), 1),
                     (stale_sponsor_permission.clone(), 1),
                     (retained_sponsor_permission.clone(), 1),
                     (stale_enrollment_permission.clone(), 1),
@@ -87082,6 +87166,14 @@ mod tests {
             "account-domain permission whose domain alias maps to another dataspace must be pruned"
         );
         assert!(
+            account_permissions.contains(&retained_alias_delegation_permission),
+            "alias-resolution delegation in a retained domain must remain on account"
+        );
+        assert!(
+            !account_permissions.contains(&stale_alias_delegation_permission),
+            "alias-resolution delegation in a removed dataspace alias must be pruned from account"
+        );
+        assert!(
             account_permissions.contains(&retained_sponsor_permission),
             "sponsor-use permission in a retained domain must remain on account"
         );
@@ -87141,6 +87233,17 @@ mod tests {
         );
         assert!(
             role.permissions()
+                .any(|permission| permission == &retained_alias_delegation_permission),
+            "retained alias-resolution delegation should remain on role"
+        );
+        assert!(
+            !role
+                .permissions()
+                .any(|permission| permission == &stale_alias_delegation_permission),
+            "stale alias-resolution delegation must be pruned from role"
+        );
+        assert!(
+            role.permissions()
                 .any(|permission| permission == &retained_sponsor_permission),
             "retained sponsor-use permission should remain on role"
         );
@@ -87193,6 +87296,7 @@ mod tests {
         );
         for stale in [
             &mismatched_domain_permission,
+            &stale_alias_delegation_permission,
             &stale_sponsor_permission,
             &stale_enrollment_permission,
         ] {
@@ -87202,6 +87306,7 @@ mod tests {
             );
         }
         for retained_permission in [
+            &retained_alias_delegation_permission,
             &retained_sponsor_permission,
             &retained_enrollment_permission,
         ] {

@@ -1240,14 +1240,20 @@ impl From<crate::isi::musubi::AssertMusubiReleaseExists> for InstructionBox {
         InstructionBox(Box::new(i))
     }
 }
-impl From<crate::isi::offline::TopUpKagemushaRecursiveV2> for InstructionBox {
-    fn from(i: crate::isi::offline::TopUpKagemushaRecursiveV2) -> Self {
+impl From<crate::isi::offline::TopUpKagemushaRecursiveV4> for InstructionBox {
+    fn from(i: crate::isi::offline::TopUpKagemushaRecursiveV4) -> Self {
         InstructionBox(Box::new(i))
     }
 }
 
-impl From<crate::isi::offline::RedeemKagemushaRecursiveV2> for InstructionBox {
-    fn from(i: crate::isi::offline::RedeemKagemushaRecursiveV2) -> Self {
+impl From<crate::isi::offline::RedeemKagemushaRecursiveV4> for InstructionBox {
+    fn from(i: crate::isi::offline::RedeemKagemushaRecursiveV4) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::offline::ActivateKagemushaRecursiveReleaseV4> for InstructionBox {
+    fn from(i: crate::isi::offline::ActivateKagemushaRecursiveReleaseV4) -> Self {
         InstructionBox(Box::new(i))
     }
 }

@@ -49,8 +49,8 @@ public enum KagemushaNearbyEvent: Equatable, Sendable {
     case peerConnected
     case pairingChallenge(KagemushaNearbyPairingChallenge)
     case receiveRequest(KagemushaRecipientPaymentRequest)
-    case paymentQueued(KagemushaRecursiveSpendPeerPayment)
-    case paymentReceived(KagemushaRecursiveSpendPeerPayment)
+    case paymentQueued(KagemushaRecursiveSpendPeerPaymentV4)
+    case paymentReceived(KagemushaRecursiveSpendPeerPaymentV4)
     case acknowledgementQueued(KagemushaReceiverAcknowledgement)
     case acknowledgementReceived(KagemushaReceiverAcknowledgement)
 }
@@ -359,19 +359,19 @@ public final class KagemushaNearbyExchange: @unchecked Sendable {
             confirmPairing: @Sendable (KagemushaNearbyPairingChallenge) async
                 -> KagemushaNearbyPairingDecision,
             createPayment: @Sendable (KagemushaRecipientPaymentRequest) async throws
-                -> KagemushaRecursiveSpendPeerPayment
+                -> KagemushaRecursiveSpendPeerPaymentV4
         )
         case receiver(
             request: KagemushaRecipientPaymentRequest,
             challenge: KagemushaNearbyPairingChallenge,
-            acceptPayment: @Sendable (KagemushaRecursiveSpendPeerPayment) async throws
+            acceptPayment: @Sendable (KagemushaRecursiveSpendPeerPaymentV4) async throws
                 -> KagemushaReceiverAcknowledgement
         )
     }
 
     private enum ExchangeResult {
         case sent(KagemushaPeerSendResult)
-        case received(KagemushaRecursiveSpendPeerPayment)
+        case received(KagemushaRecursiveSpendPeerPaymentV4)
     }
 
     private let lock = NSLock()
@@ -394,7 +394,7 @@ public final class KagemushaNearbyExchange: @unchecked Sendable {
     private var starting = false
     private var cancelled = false
     private var finished = false
-    private var payment: KagemushaRecursiveSpendPeerPayment?
+    private var payment: KagemushaRecursiveSpendPeerPaymentV4?
     private lazy var platformDelegate = KagemushaNearbyPlatformDelegate(owner: self)
 
     public init(timeoutSeconds: UInt64 = 90) {
@@ -427,7 +427,7 @@ public final class KagemushaNearbyExchange: @unchecked Sendable {
         ) async -> KagemushaNearbyPairingDecision,
         createPayment: @escaping @Sendable (
             KagemushaRecipientPaymentRequest
-        ) async throws -> KagemushaRecursiveSpendPeerPayment
+        ) async throws -> KagemushaRecursiveSpendPeerPaymentV4
     ) async throws -> KagemushaPeerSendResult {
         guard Self.isAvailable else { throw KagemushaNearbyError.unavailable }
         let result = try await begin(
@@ -445,9 +445,9 @@ public final class KagemushaNearbyExchange: @unchecked Sendable {
         pairingChallenge: KagemushaNearbyPairingChallenge = .random(),
         onEvent: @escaping @Sendable (KagemushaNearbyEvent) -> Void = { _ in },
         acceptPayment: @escaping @Sendable (
-            KagemushaRecursiveSpendPeerPayment
+            KagemushaRecursiveSpendPeerPaymentV4
         ) async throws -> KagemushaReceiverAcknowledgement
-    ) async throws -> KagemushaRecursiveSpendPeerPayment {
+    ) async throws -> KagemushaRecursiveSpendPeerPaymentV4 {
         guard Self.isAvailable else { throw KagemushaNearbyError.unavailable }
         let result = try await begin(
             mode: .receiver(
@@ -983,7 +983,7 @@ public final class KagemushaNearbyExchange: @unchecked Sendable {
         ) async -> KagemushaNearbyPairingDecision,
         createPayment: @escaping @Sendable (
             KagemushaRecipientPaymentRequest
-        ) async throws -> KagemushaRecursiveSpendPeerPayment
+        ) async throws -> KagemushaRecursiveSpendPeerPaymentV4
     ) async throws -> KagemushaPeerSendResult {
         _ = onEvent; _ = confirmPairing; _ = createPayment
         throw KagemushaNearbyError.unavailable
@@ -993,9 +993,9 @@ public final class KagemushaNearbyExchange: @unchecked Sendable {
         pairingChallenge: KagemushaNearbyPairingChallenge = .random(),
         onEvent: @escaping @Sendable (KagemushaNearbyEvent) -> Void = { _ in },
         acceptPayment: @escaping @Sendable (
-            KagemushaRecursiveSpendPeerPayment
+            KagemushaRecursiveSpendPeerPaymentV4
         ) async throws -> KagemushaReceiverAcknowledgement
-    ) async throws -> KagemushaRecursiveSpendPeerPayment {
+    ) async throws -> KagemushaRecursiveSpendPeerPaymentV4 {
         _ = receiveRequest; _ = pairingChallenge; _ = onEvent; _ = acceptPayment
         throw KagemushaNearbyError.unavailable
     }

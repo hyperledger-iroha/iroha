@@ -168,6 +168,7 @@ declare_permissions! {
     iroha_executor_data_model::permission::account::{CanModifyAccountMetadata},
     iroha_executor_data_model::permission::account::{CanReplaceAccountController},
     iroha_executor_data_model::permission::account::{CanManageAccountAlias},
+    iroha_executor_data_model::permission::account::{CanDelegateAccountAliasResolution},
     iroha_executor_data_model::permission::account::{CanResolveAccountAlias},
 
     iroha_executor_data_model::permission::asset_definition::{CanUnregisterAssetDefinition},
@@ -193,6 +194,7 @@ declare_permissions! {
     iroha_executor_data_model::permission::parameter::{CanSetParameters},
     iroha_executor_data_model::permission::sccp::{CanManageSccpGovernance},
     iroha_executor_data_model::permission::sccp::{CanProposeSccpRouteGovernance},
+    iroha_executor_data_model::permission::offline::{CanActivateKagemushaRecursiveReleaseV4},
     iroha_executor_data_model::permission::role::{CanManageRoles},
 
     iroha_executor_data_model::permission::trigger::{CanRegisterTrigger},
@@ -1037,6 +1039,28 @@ mod sccp {
     }
 }
 
+mod offline {
+    //! Pass conditions for governed offline-settlement releases.
+    use iroha_executor_data_model::permission::offline::CanActivateKagemushaRecursiveReleaseV4;
+
+    use super::*;
+
+    impl ValidateGrantRevoke for CanActivateKagemushaRecursiveReleaseV4 {
+        fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
+            OnlyGenesis::from(self).validate(authority, host, context)
+        }
+
+        fn validate_revoke(
+            &self,
+            authority: &AccountId,
+            context: &Context,
+            host: &Iroha,
+        ) -> Result {
+            OnlyGenesis::from(self).validate(authority, host, context)
+        }
+    }
+}
+
 pub mod asset {
     //! Module with pass conditions for asset related tokens
 
@@ -1495,9 +1519,9 @@ pub mod account {
     //! Module with pass conditions for asset related tokens
 
     use iroha_executor_data_model::permission::account::{
-        AccountAliasPermissionScope, CanManageAccountAlias, CanModifyAccountMetadata,
-        CanRegisterAccount, CanReplaceAccountController, CanResolveAccountAlias,
-        CanUnregisterAccount,
+        AccountAliasPermissionScope, CanDelegateAccountAliasResolution, CanManageAccountAlias,
+        CanModifyAccountMetadata, CanRegisterAccount, CanReplaceAccountController,
+        CanResolveAccountAlias, CanUnregisterAccount,
     };
 
     use super::*;
@@ -1546,6 +1570,37 @@ pub mod account {
         host: &Iroha,
     ) -> Result {
         super::domain::Owner { domain }.validate(authority, host, context)
+    }
+
+    fn validate_account_alias_scope_owner(
+        scope: &AccountAliasPermissionScope,
+        authority: &AccountId,
+        context: &Context,
+        host: &Iroha,
+    ) -> Result {
+        match scope {
+            AccountAliasPermissionScope::Domain(domain) => {
+                validate_account_alias_domain_owner(domain, authority, context, host)
+            }
+            AccountAliasPermissionScope::Dataspace(dataspace) => {
+                validate_dataspace_alias_owner(*dataspace, authority, host)
+            }
+        }
+    }
+
+    fn can_delegate_account_alias_resolve(
+        authority: &AccountId,
+        scope: &AccountAliasPermissionScope,
+        context: &Context,
+        host: &Iroha,
+    ) -> bool {
+        let exact_delegation_permission = CanDelegateAccountAliasResolution {
+            scope: scope.clone(),
+        };
+        let account_permissions_allow_delegation =
+            exact_delegation_permission.is_owned_by(authority, host);
+        account_permissions_allow_delegation
+            || validate_account_alias_scope_owner(scope, authority, context, host).is_ok()
     }
 
     impl PassCondition for Owner<'_> {
@@ -1618,14 +1673,14 @@ pub mod account {
 
     impl ValidateGrantRevoke for CanResolveAccountAlias {
         fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
-            match &self.scope {
-                AccountAliasPermissionScope::Domain(domain) => {
-                    validate_account_alias_domain_owner(domain, authority, context, host)
-                }
-                AccountAliasPermissionScope::Dataspace(dataspace) => {
-                    validate_dataspace_alias_owner(*dataspace, authority, host)
-                }
+            if can_delegate_account_alias_resolve(authority, &self.scope, context, host) {
+                return Ok(());
             }
+
+            Err(ValidationFail::NotPermitted(
+                "Can't grant or revoke account-alias resolution outside an owned or exactly delegated scope"
+                    .to_owned(),
+            ))
         }
 
         fn validate_revoke(
@@ -1638,16 +1693,24 @@ pub mod account {
         }
     }
 
+    impl ValidateGrantRevoke for CanDelegateAccountAliasResolution {
+        fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
+            validate_account_alias_scope_owner(&self.scope, authority, context, host)
+        }
+
+        fn validate_revoke(
+            &self,
+            authority: &AccountId,
+            context: &Context,
+            host: &Iroha,
+        ) -> Result {
+            validate_account_alias_scope_owner(&self.scope, authority, context, host)
+        }
+    }
+
     impl ValidateGrantRevoke for CanManageAccountAlias {
         fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
-            match &self.scope {
-                AccountAliasPermissionScope::Domain(domain) => {
-                    validate_account_alias_domain_owner(domain, authority, context, host)
-                }
-                AccountAliasPermissionScope::Dataspace(dataspace) => {
-                    validate_dataspace_alias_owner(*dataspace, authority, host)
-                }
-            }
+            validate_account_alias_scope_owner(&self.scope, authority, context, host)
         }
 
         fn validate_revoke(
@@ -2115,7 +2178,11 @@ mod tests {
     use std::{num::NonZeroU64, vec::Vec};
 
     use iroha_crypto::{Hash, PublicKey};
+    use iroha_executor_data_model::permission::offline::CanActivateKagemushaRecursiveReleaseV4;
     use iroha_executor_data_model::permission::{
+        account::{
+            AccountAliasPermissionScope, CanDelegateAccountAliasResolution, CanResolveAccountAlias,
+        },
         asset::CanMintAssetWithDefinition,
         domain::CanRegisterDomain,
         nexus::{
@@ -2301,6 +2368,127 @@ mod tests {
             .validate(&authority, &Iroha, &context)
             .expect_err("expected rejection");
         assert!(matches!(err, ValidationFail::NotPermitted(_)));
+    }
+
+    #[test]
+    fn kagemusha_v4_activation_permission_is_immutable_after_genesis() {
+        let banking_authority = make_account_id();
+        let fi_mobile_or_validator_destination = make_third_account_id();
+        assert_ne!(banking_authority, fi_mobile_or_validator_destination);
+        let context = make_context(&banking_authority, 2);
+        let permission = CanActivateKagemushaRecursiveReleaseV4;
+        let previous = test_override::replace_permissions(vec![PermissionObject::from(permission)]);
+
+        let self_delegation = permission.validate_grant(&banking_authority, &context, &Iroha);
+        let grant_to_third_party = permission.validate_grant(&banking_authority, &context, &Iroha);
+        let revoke_from_banking = permission.validate_revoke(&banking_authority, &context, &Iroha);
+
+        test_override::replace_permissions(previous);
+        for result in [self_delegation, grant_to_third_party, revoke_from_banking] {
+            let error = result.expect_err(
+                "the genesis-seeded activation permission must not be mutated post-genesis",
+            );
+            assert!(matches!(error, ValidationFail::NotPermitted(_)));
+            assert!(
+                error
+                    .to_string()
+                    .contains("only allowed inside the genesis block")
+            );
+        }
+    }
+
+    #[test]
+    fn kagemusha_v4_activation_permission_can_only_be_seeded_in_genesis() {
+        let genesis_authority = make_account_id();
+        let context = make_context(&genesis_authority, 1);
+        let permission = CanActivateKagemushaRecursiveReleaseV4;
+
+        assert!(
+            permission
+                .validate_grant(&genesis_authority, &context, &Iroha)
+                .is_ok()
+        );
+        assert!(
+            permission
+                .validate_revoke(&genesis_authority, &context, &Iroha)
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn alias_resolution_delegate_can_grant_and_revoke_only_the_exact_scope() {
+        let authority = make_account_id();
+        let context = make_context(&authority, 2);
+        let delegated_scope = AccountAliasPermissionScope::Dataspace(DataSpaceId::new(10));
+        let other_scope = AccountAliasPermissionScope::Dataspace(DataSpaceId::new(12));
+        let held = CanDelegateAccountAliasResolution {
+            scope: delegated_scope.clone(),
+        };
+        let exact = CanResolveAccountAlias {
+            scope: delegated_scope,
+        };
+        let other = CanResolveAccountAlias { scope: other_scope };
+        let previous =
+            test_override::replace_permissions(vec![PermissionObject::from(held.clone())]);
+
+        let exact_grant = exact.validate_grant(&authority, &context, &Iroha);
+        let exact_revoke = exact.validate_revoke(&authority, &context, &Iroha);
+        let cross_scope_grant = other.validate_grant(&authority, &context, &Iroha);
+        let recursive_delegation = held.validate_grant(&authority, &context, &Iroha);
+
+        test_override::replace_permissions(previous);
+        assert!(exact_grant.is_ok());
+        assert!(exact_revoke.is_ok());
+        assert!(matches!(
+            cross_scope_grant,
+            Err(ValidationFail::NotPermitted(_))
+        ));
+        assert!(matches!(
+            recursive_delegation,
+            Err(ValidationFail::NotPermitted(_))
+        ));
+    }
+
+    #[test]
+    fn alias_resolution_domain_delegate_cannot_widen_or_cross_scope_kind() {
+        let authority = make_account_id();
+        let context = make_context(&authority, 2);
+        let delegated_scope = AccountAliasPermissionScope::Domain(
+            iroha_data_model::domain::DomainId::try_new("hbl", "sbp")
+                .expect("HBL SBP domain fixture"),
+        );
+        let sibling_scope = AccountAliasPermissionScope::Domain(
+            iroha_data_model::domain::DomainId::try_new("ubl", "sbp")
+                .expect("UBL SBP domain fixture"),
+        );
+        let held = CanDelegateAccountAliasResolution {
+            scope: delegated_scope.clone(),
+        };
+        let exact = CanResolveAccountAlias {
+            scope: delegated_scope,
+        };
+        let sibling = CanResolveAccountAlias {
+            scope: sibling_scope,
+        };
+        let dataspace = CanResolveAccountAlias {
+            scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::new(10)),
+        };
+        let previous = test_override::replace_permissions(vec![PermissionObject::from(held)]);
+
+        let exact_grant = exact.validate_grant(&authority, &context, &Iroha);
+        let sibling_grant = sibling.validate_grant(&authority, &context, &Iroha);
+        let dataspace_grant = dataspace.validate_grant(&authority, &context, &Iroha);
+
+        test_override::replace_permissions(previous);
+        assert!(exact_grant.is_ok());
+        assert!(matches!(
+            sibling_grant,
+            Err(ValidationFail::NotPermitted(_))
+        ));
+        assert!(matches!(
+            dataspace_grant,
+            Err(ValidationFail::NotPermitted(_))
+        ));
     }
 
     #[test]

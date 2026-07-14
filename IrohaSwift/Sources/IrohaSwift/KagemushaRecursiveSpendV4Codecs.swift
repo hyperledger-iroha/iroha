@@ -125,17 +125,10 @@ enum KagemushaRecursiveSpendCodecsV4 {
             field: "verifyRequestV4.recipientRequest"
         ))
         writer.writeField(try nestedPayload(
-            request.topUpFinalityRosterArtifact.noritoArchive,
-            schema: KagemushaRecursiveSpend.topUpFinalityRosterArtifactWireName,
-            field: "verifyRequestV4.topUpFinalityRosterArtifact"
+            request.topUpProvenance.noritoArchive,
+            schema: KagemushaRecursiveSpend.topUpProvenanceWireNameV4,
+            field: "verifyRequestV4.topUpProvenance"
         ))
-        writer.writeField(try sequence(request.topUpFinalityEvidence.enumerated().map {
-            try nestedPayload(
-                $0.element.noritoArchive,
-                schema: KagemushaRecursiveSpend.topUpFinalityEvidenceWireNameV4,
-                field: "verifyRequestV4.topUpFinalityEvidence[\($0.offset)]"
-            )
-        }))
         writer.writeField(uint32(request.maximumHops))
         writer.writeField(artifactBinding(request.artifactBinding))
         writer.writeField(uint64(request.blockHeight))
@@ -168,6 +161,11 @@ enum KagemushaRecursiveSpendCodecsV4 {
             request.input.bundle.noritoArchive,
             schema: KagemushaRecursiveSpend.bundleWireNameV4,
             field: "redeemLocalRequestV4.bundle"
+        ))
+        writer.writeField(try nestedPayload(
+            request.input.topUpProvenance.noritoArchive,
+            schema: KagemushaRecursiveSpend.topUpProvenanceWireNameV4,
+            field: "redeemLocalRequestV4.topUpProvenance"
         ))
         writer.writeField(try noteOpening(
             request.input.opening,
@@ -207,6 +205,11 @@ enum KagemushaRecursiveSpendCodecsV4 {
             schema: KagemushaRecursiveSpend.bundleWireNameV4,
             field: "appendInputV4.previousBundle"
         ))
+        writer.writeField(try nestedPayload(
+            input.topUpProvenance.noritoArchive,
+            schema: KagemushaRecursiveSpend.topUpProvenanceWireNameV4,
+            field: "appendInputV4.topUpProvenance"
+        ))
         return writer.data
     }
 
@@ -214,6 +217,7 @@ enum KagemushaRecursiveSpendCodecsV4 {
         _ value: KagemushaRecursiveSpendArtifactBindingV4
     ) -> Data {
         var writer = CompactNoritoWriter()
+        writer.writeField(uint16(KagemushaRecursiveSpend.wireVersionV4))
         writer.writeField(CompactNorito.encodeString(value.generation))
         writer.writeField(value.manifestSHA256)
         return writer.data

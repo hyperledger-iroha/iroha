@@ -53,6 +53,20 @@ client = create_torii_client(
 )
 ```
 
+Account onboarding uses a dedicated credential in addition to any global
+`X-API-Token`. Callers must pass the raw 32–256 byte printable-ASCII value for
+each request; the SDK does not trim it, store it in default headers, put it in
+the JSON body, retry the POST, or forward it across redirects.
+
+```python
+response = client.onboard_account(
+    onboarding_token=route_token,
+    alias="alice@universal",
+    uaid="uaid:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    public_key_hex="ab" * 32,
+)
+```
+
 ## Exact Kotodama numbers
 
 `KotodamaInt`, `KotodamaDecimal`, and `KotodamaQuantity` implement the

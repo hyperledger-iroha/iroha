@@ -10,6 +10,144 @@ export type JsonValue =
   | JsonValue[]
   | { [key: string]: JsonValue };
 
+export const KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION: 20;
+export const KAGEMUSHA_MANIFEST_VERSION: 4;
+export const KAGEMUSHA_MAX_HOPS: 8;
+export const KAGEMUSHA_TOP_UP_REQUEST_MAX_BYTES: 524288;
+export const KAGEMUSHA_REDEEM_REQUEST_MAX_BYTES: 50331648;
+
+export interface KagemushaNoritoRequestV4 {
+  readonly version: 4;
+  readonly operationId: string;
+  readonly norito: Uint8Array;
+}
+
+export interface KagemushaReadinessBlocker {
+  readonly code: string;
+  readonly message: string;
+}
+
+export interface KagemushaVerifierId {
+  readonly backend: "halo2/ipa";
+  readonly name: string;
+}
+
+export interface KagemushaActiveVerifier {
+  readonly id: KagemushaVerifierId;
+  readonly version: number;
+  readonly circuit_id: string;
+  readonly commitment: string;
+  readonly public_inputs_schema_hash: string;
+  readonly max_proof_bytes: number;
+  readonly activation_height: number;
+  readonly withdrawal_height: number | null;
+}
+
+export interface KagemushaAuthenticatedArtifactSetV4 {
+  readonly generation: string;
+  readonly manifest_sha256: string;
+  readonly release_policy_sha256: string;
+  readonly release_attestation_sha256: string;
+  readonly activation_height: number;
+  readonly withdrawal_height: number;
+  readonly max_proof_bytes: number;
+  readonly asset_scale: number;
+}
+
+export interface KagemushaReadinessV4 {
+  readonly required_bridge_abi_version: 20;
+  readonly max_hops: 8;
+  readonly asset_definition_id: string;
+  readonly asset_scale: number | null;
+  readonly evaluated_block_height: number;
+  readonly evaluated_block_hash: string;
+  readonly active_transfer_verifier: KagemushaActiveVerifier | null;
+  readonly active_topup_shield_verifier: KagemushaActiveVerifier | null;
+  readonly active_unshield_verifier: KagemushaActiveVerifier | null;
+  readonly active_recursive_step_eq_verifier: KagemushaActiveVerifier | null;
+  readonly active_recursive_step_ep_verifier: KagemushaActiveVerifier | null;
+  readonly artifact_set: KagemushaAuthenticatedArtifactSetV4 | null;
+  readonly proof_backend_available: boolean;
+  readonly recursive_lineage_supported: boolean;
+  readonly ready: boolean;
+  readonly blockers: readonly KagemushaReadinessBlocker[];
+}
+
+export type KagemushaOperationKind = Readonly<{
+  kind: "top_up" | "redeem";
+  value: null;
+}>;
+
+export interface KagemushaOperationReference {
+  readonly operation_id: string;
+  readonly kind: KagemushaOperationKind;
+  readonly state: Readonly<{ state: "pending"; value: null }>;
+  readonly transaction_hash: string;
+  readonly status_uri: string;
+  readonly submitted_at_ms: number;
+}
+
+export type KagemushaOperationStatus =
+  | Readonly<{
+      state: "pending";
+      value: Readonly<{
+        operation_id: string;
+        kind: KagemushaOperationKind;
+        transaction_hash: string;
+        submitted_at_ms: number;
+      }>;
+    }>
+  | Readonly<{
+      state: "applied";
+      value: Readonly<{
+        operation_id: string;
+        result: Readonly<{
+          kind: "top_up" | "redeem";
+          result: Readonly<Record<string, JsonValue>>;
+        }>;
+      }>;
+    }>
+  | Readonly<{
+      state: "rejected";
+      value: Readonly<{
+        operation_id: string;
+        kind: KagemushaOperationKind;
+        transaction_hash: string;
+        error: Readonly<{
+          code: string;
+          message: string;
+          details?: Readonly<Record<string, JsonValue>>;
+        }>;
+      }>;
+    }>;
+
+export function normalizeKagemushaAssetSelector(value: string, context?: string): string;
+export function normalizeKagemushaOperationId(value: string, context?: string): string;
+export function normalizeKagemushaTopUpRequestV4(
+  value: KagemushaNoritoRequestV4,
+  context?: string,
+): KagemushaNoritoRequestV4;
+export function normalizeKagemushaRedeemRequestV4(
+  value: KagemushaNoritoRequestV4,
+  context?: string,
+): KagemushaNoritoRequestV4;
+export function normalizeKagemushaReadinessV4(
+  payload: Record<string, unknown>,
+  requestedAssetSelector: string,
+): KagemushaReadinessV4;
+export function normalizeKagemushaOperationReference(
+  payload: Record<string, unknown>,
+  expected: {
+    expectedOperationId: string;
+    expectedKind: "top_up" | "redeem";
+    location: string | null;
+  },
+): KagemushaOperationReference;
+export function normalizeKagemushaOperationStatus(
+  payload: Record<string, unknown>,
+  expectedOperationId: string,
+): KagemushaOperationStatus;
+
 export type CryptoAlgorithm =
   | "ed25519"
   | "secp256k1"
@@ -11164,6 +11302,22 @@ export declare class ToriiBrowserHttpError extends Error {
 
 export declare class ToriiBrowserClient {
   constructor(baseUrl: string | URL, options?: ToriiBrowserClientOptions);
+  getKagemushaReadinessV4(
+    assetDefinitionId: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<KagemushaReadinessV4>;
+  submitKagemushaTopUpV4(
+    request: KagemushaNoritoRequestV4,
+    options?: { signal?: AbortSignal },
+  ): Promise<KagemushaOperationReference>;
+  submitKagemushaRedeemV4(
+    request: KagemushaNoritoRequestV4,
+    options?: { signal?: AbortSignal },
+  ): Promise<KagemushaOperationReference>;
+  getKagemushaOperationStatus(
+    operationId: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<KagemushaOperationStatus>;
   listExplorerAccounts(options?: Record<string, unknown>): Promise<unknown>;
   getExplorerAccount(
     accountId: string,
@@ -11299,6 +11453,22 @@ export declare class ToriiBrowserClient {
 
 export declare class ToriiClient {
   constructor(baseUrl: string, options?: ToriiClientOptions);
+  getKagemushaReadinessV4(
+    assetDefinitionId: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<KagemushaReadinessV4>;
+  submitKagemushaTopUpV4(
+    request: KagemushaNoritoRequestV4,
+    options?: { signal?: AbortSignal },
+  ): Promise<KagemushaOperationReference>;
+  submitKagemushaRedeemV4(
+    request: KagemushaNoritoRequestV4,
+    options?: { signal?: AbortSignal },
+  ): Promise<KagemushaOperationReference>;
+  getKagemushaOperationStatus(
+    operationId: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<KagemushaOperationStatus>;
   listAccounts<T = ToriiAccountListItem>(
     options?: IterableListOptions,
   ): Promise<ToriiIterableListResponse<T>>;

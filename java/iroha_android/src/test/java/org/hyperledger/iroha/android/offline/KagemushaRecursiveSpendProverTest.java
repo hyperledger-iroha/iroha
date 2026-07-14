@@ -23,14 +23,19 @@ public final class KagemushaRecursiveSpendProverTest {
   public static void main(final String[] args) {
     exactAbiIsRequired();
     artifactContractIsFixed();
+    frontierContractIsPersistableAndProofBound();
     artifactRoleInventoryRejectsCountsDuplicatesAndReordering();
     releaseAuthenticationIsMandatoryAndBounded();
+    readinessPreservesExactReleaseCapabilitiesIndependently();
     canonicalPeerCodecsAreTypedAndDefensive();
     lifecycleArchivesAreTypedDefensiveAndFailClosed();
+    branchRestoreRejectsMissingHeightAndLocalChangeOpeningsBeforeNativeDispatch();
+    topUpProvenanceArchiveIsCanonicalBoundedAndDefensive();
     appendJoinRejectsZeroAndThreeInputsBeforeNativeDispatch();
     scaledAmountsAreExactAndNeverRound();
     peerTransportGoldenVectorsAreExact();
     qrNfcAndNearbyGoldenVectorsAreExact();
+    nfcV4StreamsBeyondLegacyLimitAndRejectsDowngrade();
     toriiLifecycleRoutesAndHeadersAreExact();
     publicSurfaceIsKagemushaOnly();
   }
@@ -48,25 +53,40 @@ public final class KagemushaRecursiveSpendProverTest {
 
   private static void artifactContractIsFixed() {
     assert KagemushaRecursiveSpendProver.REQUIRED_NATIVE_BRIDGE_ABI_VERSION == 20;
-    assert KagemushaRecursiveSpendProver.ARTIFACT_COUNT == 10;
+    assert KagemushaRecursiveSpendProver.ARTIFACT_COUNT == 8;
     assert KagemushaRecursiveSpendProver.MAXIMUM_INPUTS_PER_TRANSITION == 2;
     assert KagemushaRecursiveSpendProver.MAXIMUM_LOCAL_APPEND_BUILDER_INPUTS == 2;
     assert KagemushaRecursiveSpendProver.MAXIMUM_BRANCH_CLAIMS == 2;
     assert KagemushaRecursiveSpendProver.MAXIMUM_PEER_HOPS == 8;
-    assert KagemushaRecursiveSpendProver.MAX_PEER_ARCHIVE_BYTES == 32 * 1024;
+    assert KagemushaRecursiveSpendProver.MAXIMUM_RECURSIVE_PROOF_PAIR_BYTES_V4
+        == 16 * 1024 * 1024;
+    assert KagemushaRecursiveSpendProver.MAX_PEER_ARCHIVE_BYTES_V2 == 32 * 1024;
+    assert KagemushaRecursiveSpendProver.MAX_PEER_ARCHIVE_BYTES_V4 == 32 * 1024 * 1024;
+    assert KagemushaRecursiveSpendProver.MAX_TOP_UP_PROVENANCE_ARCHIVE_BYTES_V4 == 6_488_064;
+    assert KagemushaRecursiveSpendProver.MAX_PEER_ARCHIVE_BYTES
+        == KagemushaRecursiveSpendProver.MAX_PEER_ARCHIVE_BYTES_V4;
+    assert KagemushaPeerTransport.MAXIMUM_ARCHIVE_BYTES_V2 == 32 * 1024;
+    assert KagemushaPeerTransport.MAXIMUM_ARCHIVE_BYTES_V4 == 32 * 1024 * 1024;
+    assert KagemushaPeerTransport.MAXIMUM_ARCHIVE_BYTES
+        == KagemushaPeerTransport.MAXIMUM_ARCHIVE_BYTES_V4;
     assert KagemushaRecursiveSpendProver.MAX_PEER_TEXT_ARCHIVE_BYTES == 9_211;
+    assert KagemushaRecursiveSpendProver.MAX_TORII_TOP_UP_REQUEST_BYTES_V4 == 512 * 1024;
+    assert KagemushaRecursiveSpendProver.MAX_TORII_REDEEM_REQUEST_BYTES_V4
+        == 48 * 1024 * 1024;
     assert KagemushaRecursiveSpendProver.CONFIDENTIAL_TREE_DEPTH == 16;
+    assert KagemushaRecursiveSpendProver.MAX_OUTPUT_MEMBERSHIP_FRONTIER_ARCHIVE_BYTES_V4
+        == 4 * 1024;
+    assert KagemushaRecursiveSpendProver.MAX_OUTPUT_MEMBERSHIP_PATHS_ARCHIVE_BYTES_V4
+        == 16 * 1024;
     assert "kagemusha.offline.recursive_spend.artifact_manifest.v4"
         .equals(KagemushaRecursiveSpendProver.ARTIFACT_MANIFEST_SCHEMA);
     assert KagemushaRecursiveSpendProver.ARTIFACT_FILES.equals(
         Arrays.asList(
-            "step-eq.parameters.krv4",
-            "step-eq.circuit-params.krv4",
+            "step-eq.params-ipa.krv4",
             "step-eq.proving-key.krv4",
             "step-eq.verifying-key.krv4",
             "step-eq.bootstrap-witness.krv4",
-            "step-ep.parameters.krv4",
-            "step-ep.circuit-params.krv4",
+            "step-ep.params-ipa.krv4",
             "step-ep.proving-key.krv4",
             "step-ep.verifying-key.krv4",
             "step-ep.bootstrap-witness.krv4"));
@@ -78,6 +98,7 @@ public final class KagemushaRecursiveSpendProverTest {
     assert appendNative.getParameterTypes()[0] == byte[][].class;
     assert appendNative.getParameterTypes()[1] == byte[][].class;
     assert appendNative.getParameterTypes()[2] == byte[][].class;
+    assert appendNative.getParameterTypes()[3] == byte[][].class;
     assert Arrays.stream(methods)
         .filter(method -> method.getName().equals("buildAppendRequestV4"))
         .count() == 1;
@@ -117,6 +138,52 @@ public final class KagemushaRecursiveSpendProverTest {
         "artifactBinding", "branchClaims", "bundleDigest", "proofStepCount"));
     assert !branchMethods.contains("parentBranchClaimDigest");
     assert !branchMethods.contains("branchClaimDigest");
+    assert Arrays.stream(KagemushaRecursiveSpendProver.InitProjectionV4.class.getMethods())
+        .map(Method::getName)
+        .anyMatch("topUpProvenance"::equals);
+    assert Arrays.stream(KagemushaRecursiveSpendProver.InitProjectionV4.class.getMethods())
+        .map(Method::getName)
+        .anyMatch("branch"::equals);
+    assert Arrays.stream(KagemushaRecursiveSpendProver.RedeemBuildProjection.class.getMethods())
+        .map(Method::getName)
+        .anyMatch("changeTopUpProvenance"::equals);
+  }
+
+  private static void frontierContractIsPersistableAndProofBound() {
+    final byte[] archive = archive(
+        "connect_norito_bridge::KagemushaOutputMembershipFrontierV4");
+    final KagemushaRecursiveSpendProver.OutputMembershipFrontierV4 frontier =
+        KagemushaRecursiveSpendProver.decodeOutputMembershipFrontierV4(archive);
+    archive[archive.length - 1] ^= 0x5a;
+    final byte[] first = frontier.noritoEncoded();
+    first[first.length - 1] ^= 0x33;
+    assert !Arrays.equals(first, frontier.noritoEncoded());
+
+    final Method build = declaredMethod(
+        "nativeBuildOutputMembershipFrontierV4",
+        int.class,
+        byte[].class,
+        byte[].class,
+        byte[].class);
+    assert build.getReturnType() == byte[].class;
+    final Method derive = declaredMethod(
+        "nativeDeriveOutputMembershipPathsV4",
+        byte[].class,
+        byte[].class,
+        byte[].class);
+    assert derive.getReturnType() == byte[][].class;
+    final Method validate = declaredMethod(
+        "nativeValidateSpendableBranchV4",
+        byte[].class,
+        byte[].class,
+        byte[].class,
+        byte[].class,
+        long.class);
+    assert validate.getReturnType() == byte[].class;
+    assert Arrays.stream(KagemushaRecursiveSpendProver.SpendableBranchV4.class.getMethods())
+        .anyMatch(method -> method.getName().equals("frontier")
+            && method.getReturnType()
+                == KagemushaRecursiveSpendProver.OutputMembershipFrontierV4.class);
   }
 
   private static void artifactRoleInventoryRejectsCountsDuplicatesAndReordering() {
@@ -124,7 +191,7 @@ public final class KagemushaRecursiveSpendProverTest {
         Arrays.asList(KagemushaRecursiveSpendProver.ArtifactRoleV4.values());
     KagemushaRecursiveSpendProver.requireCanonicalV4ArtifactRoleInventory(canonical);
 
-    for (final int count : new int[] {8, 9, 11}) {
+    for (final int count : new int[] {6, 7, 9}) {
       final List<KagemushaRecursiveSpendProver.ArtifactRoleV4> invalid =
           new ArrayList<>();
       for (int index = 0; index < count; index++) {
@@ -168,6 +235,143 @@ public final class KagemushaRecursiveSpendProverTest {
             one,
             one,
             one));
+  }
+
+  private static void readinessPreservesExactReleaseCapabilitiesIndependently() {
+    final KagemushaRecursiveSpendProver.ActiveVerifier transfer = readinessVerifier(
+        "confidential_transfer_v2_verifier_record",
+        "halo2/pasta/ipa/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
+        1,
+        null);
+    final KagemushaRecursiveSpendProver.ActiveVerifier unshield = readinessVerifier(
+        "confidential_unshield_v3_verifier_record",
+        "halo2/pasta/ipa/confidential-unshield-change-merkle16-axiom-poseidon-v4",
+        3,
+        null);
+    final KagemushaRecursiveSpendProver.ActiveVerifier stepEq = readinessVerifier(
+        "kagemusha_recursive_step_eq_v4_verifier_record",
+        "kagemusha-recursive-spend-step-eq-authenticated-layout-v4",
+        4,
+        30L);
+    final KagemushaRecursiveSpendProver.AuthenticatedArtifactSet artifactSet =
+        authenticatedArtifactSet();
+    final KagemushaRecursiveSpendProver.ReadinessProjection readiness = readinessProjection(
+        transfer,
+        unshield,
+        stepEq,
+        artifactSet,
+        true);
+
+    assert readiness.allVerifiersActive();
+    assert readiness.chainArtifactSetReady();
+    assert !readiness.offlineReady();
+    assert !readinessProjection(null, unshield, stepEq, artifactSet, true)
+        .allVerifiersActive();
+    assert readinessProjection(null, unshield, stepEq, artifactSet, true)
+        .chainArtifactSetReady();
+    assert !readinessProjection(
+            transfer,
+            readinessVerifier(
+                "confidential_unshield_v3_verifier_record",
+                "halo2/pasta/ipa/confidential-unshield-change-merkle16-axiom-poseidon-v4",
+                3,
+                20L),
+            stepEq,
+            artifactSet,
+            true)
+        .allVerifiersActive();
+    assert !readinessProjection(
+            transfer,
+            unshield,
+            readinessVerifier(
+                "kagemusha_recursive_step_eq_v4_verifier_record",
+                "kagemusha-recursive-spend-step-eq-authenticated-layout-v4",
+                4,
+                20L),
+            artifactSet,
+            true)
+        .chainArtifactSetReady();
+    assert !readinessProjection(transfer, unshield, stepEq, null, true)
+        .chainArtifactSetReady();
+    assert !readinessProjection(transfer, unshield, stepEq, artifactSet, false)
+        .chainArtifactSetReady();
+
+    final byte[] exposedManifestDigest = artifactSet.manifestSha256();
+    Arrays.fill(exposedManifestDigest, (byte) 0);
+    assert artifactSet.manifestSha256()[0] == (byte) 0x31;
+    assertThrowsIllegalArgument(() ->
+        new KagemushaRecursiveSpendProver.AuthenticatedArtifactSet(
+            "release-v4",
+            filled(0x31),
+            filled(0x31),
+            filled(0x33),
+            10,
+            30,
+            12 * 1024,
+            9));
+  }
+
+  private static KagemushaRecursiveSpendProver.ActiveVerifier readinessVerifier(
+      final String name,
+      final String circuitId,
+      final int seed,
+      final Long withdrawalHeight) {
+    return new KagemushaRecursiveSpendProver.ActiveVerifier(
+        "halo2/ipa",
+        name,
+        1,
+        circuitId,
+        filled(seed),
+        filled(seed + 16),
+        12 * 1024,
+        10,
+        withdrawalHeight);
+  }
+
+  private static KagemushaRecursiveSpendProver.AuthenticatedArtifactSet
+      authenticatedArtifactSet() {
+    return new KagemushaRecursiveSpendProver.AuthenticatedArtifactSet(
+        "release-v4",
+        filled(0x31),
+        filled(0x32),
+        filled(0x33),
+        10,
+        30,
+        12 * 1024,
+        9);
+  }
+
+  private static KagemushaRecursiveSpendProver.ReadinessProjection readinessProjection(
+      final KagemushaRecursiveSpendProver.ActiveVerifier transfer,
+      final KagemushaRecursiveSpendProver.ActiveVerifier unshield,
+      final KagemushaRecursiveSpendProver.ActiveVerifier stepEq,
+      final KagemushaRecursiveSpendProver.AuthenticatedArtifactSet artifactSet,
+      final boolean proofBackendAvailable) {
+    return new KagemushaRecursiveSpendProver.ReadinessProjection(
+        20,
+        8,
+        "xor#sora",
+        9,
+        20,
+        filled(0x41),
+        proofBackendAvailable,
+        true,
+        true,
+        transfer,
+        readinessVerifier(
+            "kagemusha_topup_shield_v2_verifier_record",
+            "halo2/pasta/ipa/kagemusha-topup-shield-merkle16-axiom-poseidon-v3",
+            2,
+            null),
+        unshield,
+        stepEq,
+        readinessVerifier(
+            "kagemusha_recursive_step_ep_v4_verifier_record",
+            "kagemusha-recursive-spend-step-ep-authenticated-layout-v4",
+            5,
+            30L),
+        artifactSet,
+        Collections.emptyList());
   }
 
   private static void appendJoinRejectsZeroAndThreeInputsBeforeNativeDispatch() {
@@ -257,6 +461,65 @@ public final class KagemushaRecursiveSpendProverTest {
     assert destroyedRejected;
   }
 
+  private static void topUpProvenanceArchiveIsCanonicalBoundedAndDefensive() {
+    final byte[] bytes = archive("KagemushaRecursiveSpendTopUpProvenanceV4");
+    final KagemushaRecursiveSpendProver.TopUpProvenanceV4 provenance =
+        KagemushaRecursiveSpendProver.decodeTopUpProvenanceV4(bytes);
+    bytes[bytes.length - 1] = 0;
+    assert provenance.noritoEncoded()[provenance.noritoEncoded().length - 1] == 0x51;
+
+    assertThrowsIllegalArgument(() -> KagemushaRecursiveSpendProver.decodeTopUpProvenanceV4(
+        archive("KagemushaRecursiveSpendTopUpFinalityEvidenceV4")));
+    final byte[] corrupted = archive("KagemushaRecursiveSpendTopUpProvenanceV4");
+    corrupted[corrupted.length - 1] ^= 1;
+    assertThrowsIllegalArgument(() ->
+        KagemushaRecursiveSpendProver.decodeTopUpProvenanceV4(corrupted));
+    assertThrowsIllegalArgument(() -> KagemushaRecursiveSpendProver.decodeTopUpProvenanceV4(
+        new byte[KagemushaRecursiveSpendProver.MAX_TOP_UP_PROVENANCE_ARCHIVE_BYTES_V4 + 1]));
+
+    final KagemushaRecursiveSpendProver.BundleV4 bundle =
+        KagemushaRecursiveSpendProver.decodeBundleV4(
+            archive("KagemushaRecursiveSpendBundleV4"));
+    final KagemushaRecursiveSpendProver.TopUpFinalityRosterArtifact roster =
+        KagemushaRecursiveSpendProver.decodeTopUpFinalityRosterArtifact(
+            archive("KagemushaTopUpFinalityRosterArtifactV2"));
+    assertThrowsIllegalArgument(() -> KagemushaRecursiveSpendProver.buildTopUpProvenanceV4(
+        bundle, roster, Collections.emptyList(), Collections.emptyList(), 1));
+    assertThrowsIllegalArgument(() -> KagemushaRecursiveSpendProver.buildTopUpProvenanceV4(
+        bundle,
+        roster,
+        Collections.singletonList(KagemushaRecursiveSpendProver.decodeTopUpAnchorV4(
+            archive("KagemushaRecursiveSpendTopUpAnchorV4"))),
+        Collections.emptyList(),
+        1));
+  }
+
+  private static void branchRestoreRejectsMissingHeightAndLocalChangeOpeningsBeforeNativeDispatch() {
+    final KagemushaRecursiveSpendProver.NoteOpening opening =
+        KagemushaRecursiveSpendProver.decodeNoteOpening(archive("KagemushaNoteOpeningV2"));
+    final KagemushaRecursiveSpendProver.InitResultV4 init =
+        KagemushaRecursiveSpendProver.decodeInitResultV4(
+            archive("KagemushaRecursiveSpendInitResultV4"));
+    assertThrowsIllegalArgument(() ->
+        KagemushaRecursiveSpendProver.restoreInitBranchV4(init, opening, 0));
+    final KagemushaRecursiveSpendProver.PeerPayment payment =
+        KagemushaRecursiveSpendProver.decodePeerPayment(
+            archive("KagemushaRecursiveSpendPeerPaymentV4"));
+    assertThrowsIllegalArgument(() ->
+        KagemushaRecursiveSpendProver.restorePeerPaymentBranchV4(payment, opening, 0));
+
+    final KagemushaRecursiveSpendProver.SplitResultV4 split =
+        KagemushaRecursiveSpendProver.decodeSplitResultV4(
+            archive("KagemushaRecursiveSpendSplitResultV4"), null);
+    assertThrowsIllegalState(() ->
+        KagemushaRecursiveSpendProver.restoreSplitChangeBranchV4(split, 1));
+    final KagemushaRecursiveSpendProver.RedeemBuildResultV4 redeem =
+        KagemushaRecursiveSpendProver.decodeRedeemBuildResultV4(
+            archive("KagemushaRecursiveSpendRedeemBuildResultV4"), null);
+    assertThrowsIllegalState(() ->
+        KagemushaRecursiveSpendProver.restoreRedeemChangeBranchV4(redeem, 1));
+  }
+
   private static void scaledAmountsAreExactAndNeverRound() {
     final KagemushaScaledAmount amount = KagemushaScaledAmount.fromDecimal("10.75", 9);
     assert amount.atomicUnits().equals("10750000000");
@@ -299,7 +562,7 @@ public final class KagemushaRecursiveSpendProverTest {
     assert request.noritoEncoded()[request.noritoEncoded().length - 1] == 0x51;
 
     assert KagemushaRecursiveSpendProver.decodePeerPayment(
-            archive("KagemushaRecursiveSpendPeerPaymentV2"))
+            archive("KagemushaRecursiveSpendPeerPaymentV4"))
         .noritoEncoded().length > NoritoHeader.HEADER_LENGTH;
     assert KagemushaRecursiveSpendProver.decodeReceiverAcknowledgement(
             archive("KagemushaReceiverAcknowledgementV2"))
@@ -325,7 +588,7 @@ public final class KagemushaRecursiveSpendProverTest {
     }
     assert malformedRejected;
 
-    final byte[] corrupted = archive("KagemushaRecursiveSpendPeerPaymentV2");
+    final byte[] corrupted = archive("KagemushaRecursiveSpendPeerPaymentV4");
     corrupted[corrupted.length - 1] = 0;
     boolean checksumRejected = false;
     try {
@@ -337,7 +600,14 @@ public final class KagemushaRecursiveSpendProverTest {
   }
 
   private static byte[] archive(final String schema) {
-    final byte[] payload = new byte[] {0x51};
+    return archive(schema, 1);
+  }
+
+  private static byte[] archive(final String schema, final int payloadLength) {
+    final byte[] payload = new byte[payloadLength];
+    for (int index = 0; index < payload.length; index++) {
+      payload[index] = (byte) (0x51 + index * 17);
+    }
     final NoritoHeader header =
         new NoritoHeader(
             SchemaHash.hash16(schema),
@@ -391,13 +661,13 @@ public final class KagemushaRecursiveSpendProverTest {
     final List<byte[]> apdus = KagemushaNfcProtocol.writePayloadApdus(
         KagemushaNfcProtocol.PayloadKind.RECEIVE_REQUEST, rawArchive, 220);
     assert hex(apdus.get(0)).equals(
-        "802000002602010000002d16b35168fd7dce091904f3b0b2597831528dbf9c19bd154b8eba509b92b1f84c");
+        "8020040026040100000029bbba27b824bd6fe62af468134e1373d2f72257bc05a6a17f4c1bed919c9004e6");
     assert hex(apdus.get(1)).equals(
-        "802100002d4e5254300000dbb6585e2e75a835bced19003aab7acd000100000000000000de8130dd3f67aeb502519897f659");
-    assert hex(apdus.get(2)).equals("8022000000");
+        "802104002d000000004e5254300000dbb6585e2e75a835bced19003aab7acd000100000000000000de8130dd3f67aeb50251");
+    assert hex(apdus.get(2)).equals("8022040000");
     assert KagemushaNfcProtocol.AID_HEX.equals("F0504B45504B524E464301");
     assert KagemushaNfcProtocol.SAFE_CHUNK_BYTES == 220;
-    assert KagemushaNfcProtocol.RAW_TRANSPORT_VERSION == 2;
+    assert KagemushaNfcProtocol.RAW_TRANSPORT_VERSION == 4;
     assert KagemushaNfcProtocol.parseCommand(apdus.get(0)).type()
         == KagemushaNfcProtocol.Type.WRITE_META;
 
@@ -409,6 +679,72 @@ public final class KagemushaRecursiveSpendProverTest {
     assert !KagemushaNearby.IS_AVAILABLE;
     Arrays.fill(rawArchive, (byte) 0);
     Arrays.fill(nearby, (byte) 0);
+  }
+
+  private static void nfcV4StreamsBeyondLegacyLimitAndRejectsDowngrade() {
+    final byte[] payload = new byte[70_003];
+    for (int index = 0; index < payload.length; index++) {
+      payload[index] = (byte) (index * 29 + 7);
+    }
+    final List<byte[]> commands = KagemushaNfcProtocol.writePayloadApdus(
+        KagemushaNfcProtocol.PayloadKind.PAYMENT,
+        payload,
+        KagemushaNfcProtocol.MAX_EXTENDED_WRITE_CHUNK_BYTES);
+    final KagemushaNfcProtocol.Command metadata =
+        KagemushaNfcProtocol.parseCommand(commands.get(0));
+    assert metadata.type() == KagemushaNfcProtocol.Type.WRITE_META;
+    assert metadata.payloadLength() == payload.length;
+    final KagemushaNfcProtocol.PayloadAssembler assembler =
+        new KagemushaNfcProtocol.PayloadAssembler(
+            metadata.kind(), metadata.payloadLength(), metadata.sha256());
+    for (int index = commands.size() - 2; index >= 1; index--) {
+      final KagemushaNfcProtocol.Command chunk =
+          KagemushaNfcProtocol.parseCommand(commands.get(index));
+      assert chunk.type() == KagemushaNfcProtocol.Type.WRITE_CHUNK;
+      assert assembler.write(chunk.offset(), chunk.bytes());
+    }
+    assert assembler.isComplete();
+    assert Arrays.equals(payload, assembler.commit());
+
+    final byte[] atFFFF = KagemushaNfcProtocol.writeChunkApdu(0xFFFF, new byte[] {0x5A});
+    final byte[] at10000 = KagemushaNfcProtocol.writeChunkApdu(0x1_0000, new byte[] {0x5A});
+    assert hex(atFFFF).equals("80210400050000ffff5a");
+    assert hex(at10000).equals("8021040005000100005a");
+    assert KagemushaNfcProtocol.parseCommand(atFFFF).offset() == 0xFFFF;
+    assert KagemushaNfcProtocol.parseCommand(at10000).offset() == 0x1_0000;
+    assert hex(KagemushaNfcProtocol.readChunkApdu(0xFFFF, 1024))
+        .equals("80110400060000ffff0400");
+
+    // V2 encoded offsets in P1/P2, including offset zero, are not V4 commands.
+    assert KagemushaNfcProtocol.parseCommand(
+        new byte[] {(byte) 0x80, 0x21, 0, 0, 1, 0x5A}).type()
+        == KagemushaNfcProtocol.Type.INVALID;
+    assert KagemushaNfcProtocol.parseCommand(
+        new byte[] {(byte) 0x80, 0x21, (byte) 0xFF, (byte) 0xFF, 1, 0x5A}).type()
+        == KagemushaNfcProtocol.Type.INVALID;
+    assert KagemushaNfcProtocol.parseCommand(
+        new byte[] {(byte) 0x80, 0x11, 0, 0, 0}).type()
+        == KagemushaNfcProtocol.Type.INVALID;
+    final byte[] truncated = Arrays.copyOf(at10000, at10000.length - 1);
+    assert KagemushaNfcProtocol.parseCommand(truncated).type()
+        == KagemushaNfcProtocol.Type.INVALID;
+
+    final byte[] maximumInfo = new byte[40];
+    maximumInfo[0] = (byte) KagemushaNfcProtocol.RAW_TRANSPORT_VERSION;
+    maximumInfo[1] = (byte) KagemushaNfcProtocol.PayloadKind.PAYMENT.code();
+    maximumInfo[2] = 0x02;
+    maximumInfo[6] = 0x00;
+    maximumInfo[7] = (byte) KagemushaNfcProtocol.SAFE_CHUNK_BYTES;
+    maximumInfo[8] = 1;
+    assert KagemushaNfcProtocol.decodeInfo(maximumInfo).payloadLength()
+        == 32 * 1024 * 1024;
+    maximumInfo[5] = 1;
+    assert KagemushaNfcProtocol.decodeInfo(maximumInfo) == null;
+    assertThrowsIllegalArgument(() -> KagemushaNfcProtocol.writeChunkApdu(
+        KagemushaNfcProtocol.MAXIMUM_PAYLOAD_BYTES, new byte[] {1}));
+
+    assembler.clear();
+    Arrays.fill(payload, (byte) 0);
   }
 
   private static String hex(final byte[] bytes) {
@@ -483,6 +819,8 @@ public final class KagemushaRecursiveSpendProverTest {
             "appendSpendV4",
             "buildAppendRequestV4",
             "buildInitRequestV4",
+            "buildOutputMembershipFrontierV4",
+            "buildTopUpProvenanceV4",
             "buildRedeemV4",
             "buildRedeemRequestV4",
             "buildVerifyRequestV4",
@@ -492,6 +830,7 @@ public final class KagemushaRecursiveSpendProverTest {
             "decodeInitResultV4",
             "decodeNoteMembershipWitness",
             "decodeNoteOpening",
+            "decodeOutputMembershipFrontierV4",
             "decodePeerPayment",
             "decodeRedeemRequestV4",
             "decodeReceiverAcknowledgement",
@@ -501,13 +840,16 @@ public final class KagemushaRecursiveSpendProverTest {
             "decodeSplitResultV4",
             "decodeTopUpAnchorV4",
             "decodeTopUpFinalityEvidenceV4",
+            "decodeTopUpProvenanceV4",
             "decodeTopUpRequest",
             "decodeVerifyRequestV4",
             "decodeVerifyResultV4",
             "decodeTopUpFinalityRosterArtifact",
             "finalizeRedeemV4",
             "finalizeTopUp",
+            "deriveOutputMembershipPathsV4",
             "initSpendV4",
+            "installedArtifactManifestSha256V4",
             "isArtifactStreamingAvailable",
             "isProofBackendAvailable",
             "newToriiClient",
@@ -516,17 +858,26 @@ public final class KagemushaRecursiveSpendProverTest {
             "prepareRecipientPaymentRequest",
             "prepareRequestAuthorization",
             "prepareTopUp",
+            "projectInitResultV4",
             "projectOperationStatus",
             "projectPeerPayment",
             "projectRecipientPaymentRequest",
+            "projectRedeemBuildResultV4",
             "projectReadiness",
+            "projectSplitResultV4",
+            "projectVerifyResultV4",
+            "restoreInitBranchV4",
+            "restorePeerPaymentBranchV4",
+            "restoreRedeemChangeBranchV4",
             "restoreSpendableBranchV4",
+            "restoreSplitChangeBranchV4",
             "signAcknowledgement",
             "signRecipientPaymentRequest",
             "signRequestAuthorization",
             "verifyAcknowledgement",
             "verifyRecipientPaymentRequest",
-            "verifySpendV4"))) : methods;
+            "verifySpendV4",
+            "validateTopUpProvenanceV4"))) : methods;
     final Set<String> declaredNames = new TreeSet<>();
     for (final Method method : KagemushaRecursiveSpendProver.class.getDeclaredMethods()) {
       declaredNames.add(method.getName());
@@ -552,6 +903,14 @@ public final class KagemushaRecursiveSpendProverTest {
     }
     assert appendBuilder != null;
     assert appendBuilder.getParameterTypes()[0].equals(List.class);
+    final Method verifyBuilder = Arrays.stream(
+            KagemushaRecursiveSpendProver.class.getDeclaredMethods())
+        .filter(method -> Modifier.isPublic(method.getModifiers()))
+        .filter(method -> method.getName().equals("buildVerifyRequestV4"))
+        .findFirst()
+        .orElseThrow();
+    assert verifyBuilder.getParameterTypes()[2]
+        == KagemushaRecursiveSpendProver.TopUpProvenanceV4.class;
     final Set<String> branchMethods = new TreeSet<>();
     for (final Method method : KagemushaRecursiveSpendProver.BranchProjection.class
         .getDeclaredMethods()) {
@@ -621,6 +980,23 @@ public final class KagemushaRecursiveSpendProverTest {
       assert false : "expected IllegalArgumentException";
     } catch (final IllegalArgumentException expected) {
       // Expected fail-closed validation.
+    }
+  }
+
+  private static void assertThrowsIllegalState(final Runnable action) {
+    try {
+      action.run();
+      assert false : "expected IllegalStateException";
+    } catch (final IllegalStateException expected) {
+      // Expected.
+    }
+  }
+
+  private static Method declaredMethod(final String name, final Class<?>... parameterTypes) {
+    try {
+      return KagemushaRecursiveSpendProver.class.getDeclaredMethod(name, parameterTypes);
+    } catch (final ReflectiveOperationException failure) {
+      throw new AssertionError("missing method " + name, failure);
     }
   }
 

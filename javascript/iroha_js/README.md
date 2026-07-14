@@ -97,9 +97,23 @@ proof, `validatePdpCommitmentChallenge(...)` or
 
 ## Offline cash SDK boundary
 
-The JavaScript package is a general-purpose chain SDK. Kagemusha wallet
-operations are supported by the Swift SDK, so JavaScript does not publish a
-wallet lifecycle, Torii wallet helpers, proof wrappers, or peer transport.
+The JavaScript package exposes the four stable Kagemusha Torii routes through
+`getKagemushaReadinessV4`, `submitKagemushaTopUpV4`,
+`submitKagemushaRedeemV4`, and `getKagemushaOperationStatus`. Readiness is
+accepted only for bridge ABI 20, a maximum of eight hops, and the authenticated
+manifest-V4 Eq/Ep verifier pair. ABI-19 and V3 responses are rejected rather
+than upgraded.
+
+This is deliberately a transport-only boundary. Command helpers require an
+externally produced `{ version: 4, operationId, norito }` archive and never
+derive witnesses, install recursive artifacts, or claim a native prover. Use a
+supported Swift or JVM wallet implementation to create the archive, then pass a
+detached copy to JavaScript only when a web or Node service owns Torii
+submission and operation polling. Top-up archives are limited to 512 KiB and
+redeem archives to 48 MiB; the exported
+`KAGEMUSHA_TOP_UP_REQUEST_MAX_BYTES` and
+`KAGEMUSHA_REDEEM_REQUEST_MAX_BYTES` constants expose those exact Torii
+boundaries.
 
 ## Native Privacy Bridge
 
@@ -3367,11 +3381,12 @@ Asset and RWA quantities use the stricter `QuantityInput` surface:
 `number` is deliberately rejected, and strings are never trimmed or rewritten;
 for example `"1"` is valid while `" 1"`, `"01"`, `"+1"`, and `"1.0"` are not.
 
-Kagemusha offline cash is intentionally not exposed through the JavaScript
-client in the first release. Its top-up and redemption bodies are canonical
-Norito archives and its peer-transfer keys must remain device-bound, so browser
-and Node applications must not hand-encode or submit those payloads. Use the
-IrohaSwift or JVM Kagemusha APIs in a trusted mobile client.
+Kagemusha proving is intentionally not exposed through the JavaScript client.
+Its top-up and redemption bodies are canonical manifest-V4 Norito archives and
+its peer-transfer keys must remain device-bound, so browser and Node
+applications must not hand-encode those payloads. They may submit and poll an
+archive produced by a supported IrohaSwift or JVM wallet through the typed
+ABI-20/V4 Torii helpers described above.
 
 for await (const assetDef of torii.iterateAssetDefinitions({
   pageSize: 50,

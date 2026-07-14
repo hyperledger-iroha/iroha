@@ -347,16 +347,16 @@ internal object OfflineDeviceAttestationCodec {
 
     private fun p256PublicKey(encoder: NoritoEncoder, value: ByteArray) {
         val key = KagemushaP256Codec.requireUncompressedPublicKey(value)
-        encoder.writeLength(key.size.toLong(), compact(encoder))
         encoder.writeBytes(key)
     }
 
     private fun readP256PublicKey(decoder: NoritoDecoder): ByteArray {
-        val length = checkedLength(decoder.readLength(compact(decoder)), "P-256 public key")
-        require(length == KagemushaP256Codec.PUBLIC_KEY_BYTES) {
+        require(decoder.remaining() == KagemushaP256Codec.PUBLIC_KEY_BYTES) {
             "P-256 public key must contain exactly 65 bytes"
         }
-        return KagemushaP256Codec.requireUncompressedPublicKey(decoder.readBytes(length))
+        return KagemushaP256Codec.requireUncompressedPublicKey(
+            decoder.readBytes(KagemushaP256Codec.PUBLIC_KEY_BYTES),
+        )
     }
 
     private fun optionString(encoder: NoritoEncoder, value: String?) {

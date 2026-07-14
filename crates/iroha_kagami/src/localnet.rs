@@ -47,6 +47,8 @@ use iroha_primitives::json::Json;
 use iroha_primitives::numeric::{Numeric, Quantity};
 use iroha_test_samples::{ALICE_ID, REAL_GENESIS_ACCOUNT_KEYPAIR};
 use iroha_version::BuildLine;
+use rand::{TryRngCore as _, rngs::OsRng};
+use zeroize::{Zeroize as _, Zeroizing};
 
 use crate::{
     Outcome, RunArgs,
@@ -89,6 +91,14 @@ pub struct LocalnetOptions {
     pub block_cadence_ms: Option<u64>,
     /// Consensus mode to commit in signed genesis.
     pub consensus_mode: SumeragiConsensusMode,
+}
+
+impl Drop for LocalnetOptions {
+    fn drop(&mut self) {
+        if let Some(seed) = self.seed.as_mut() {
+            seed.zeroize();
+        }
+    }
 }
 
 /// Asset definition plus optional minting target for sample generation.
@@ -582,16 +592,19 @@ fn localnet_kagemusha_asset_literal() -> String {
     LOCALNET_KAGEMUSHA_ASSET_ID.to_owned()
 }
 
-fn localnet_kagemusha_asset_spec() -> AssetSpec {
-    let client_account_id = localnet_client_account_id();
+fn localnet_kagemusha_asset_spec_for_client(client_account_id: &AccountId) -> AssetSpec {
     AssetSpec {
         id: localnet_kagemusha_asset_literal(),
         name: LOCALNET_KAGEMUSHA_ASSET_NAME.to_owned(),
         alias: Some(LOCALNET_KAGEMUSHA_ASSET_ALIAS.to_owned()),
         owned_by: client_account_id.clone(),
-        mint_to: client_account_id,
+        mint_to: client_account_id.clone(),
         quantity: LOCALNET_KAGEMUSHA_INITIAL_QUANTITY,
     }
+}
+
+fn localnet_kagemusha_asset_spec() -> AssetSpec {
+    localnet_kagemusha_asset_spec_for_client(&localnet_client_account_id())
 }
 
 fn requested_localnet_asset_spec(asset_definition_id: &str) -> Result<AssetSpec> {
@@ -613,14 +626,29 @@ fn requested_localnet_asset_spec(asset_definition_id: &str) -> Result<AssetSpec>
 }
 
 fn effective_localnet_assets(extra_assets: &[AssetSpec]) -> Vec<AssetSpec> {
+    effective_localnet_assets_for_client(extra_assets, &localnet_client_account_id())
+}
+
+fn effective_localnet_assets_for_client(
+    extra_assets: &[AssetSpec],
+    client_account_id: &AccountId,
+) -> Vec<AssetSpec> {
     let mut assets = Vec::with_capacity(extra_assets.len() + 1);
     let mut seen_asset_ids = BTreeSet::new();
-    let built_in = localnet_kagemusha_asset_spec();
+    let built_in = localnet_kagemusha_asset_spec_for_client(client_account_id);
     seen_asset_ids.insert(built_in.id.clone());
     assets.push(built_in);
     for asset in extra_assets {
         if seen_asset_ids.insert(asset.id.clone()) {
-            assets.push(asset.clone());
+            let mut asset = asset.clone();
+            let default_client = localnet_client_account_id();
+            if asset.owned_by == default_client {
+                asset.owned_by = client_account_id.clone();
+            }
+            if asset.mint_to == default_client {
+                asset.mint_to = client_account_id.clone();
+            }
+            assets.push(asset);
         }
     }
     assets
@@ -635,6 +663,13 @@ pub struct Args {
     /// Optional UTF-8 seed for deterministic keys.
     #[arg(long, short)]
     seed: Option<String>,
+    /// Generate every private key from a fresh OS-random, process-local seed.
+    ///
+    /// The seed is never accepted through argv, written to the generated
+    /// bundle, or printed. This mode is intended for real first-release
+    /// custody; use `--seed` only for reproducible development fixtures.
+    #[arg(long, conflicts_with = "seed")]
+    fresh_random_keys: bool,
     /// Select the build line (`iroha2` or `iroha3`) for DA/RBC defaults.
     /// Defaults to `iroha3`; consensus still defaults to `permissioned` unless a profile or
     /// perf preset requires `npos`.
@@ -686,6 +721,16 @@ pub struct Args {
     consensus_mode: Option<ConsensusModeArg>,
 }
 
+fn fresh_localnet_seed() -> Result<String> {
+    let mut raw = [0_u8; 32];
+    OsRng
+        .try_fill_bytes(&mut raw)
+        .wrap_err("failed to obtain OS entropy for fresh localnet custody")?;
+    let encoded = hex::encode(raw);
+    raw.zeroize();
+    Ok(encoded)
+}
+
 fn resolve_requested_consensus_mode(
     explicit_mode: Option<ConsensusModeArg>,
     perf_profile: Option<LocalnetPerfProfile>,
@@ -721,12 +766,18 @@ impl<T: Write> RunArgs<T> for Args {
         for asset_definition_id in self.asset_definition_id {
             assets.push(requested_localnet_asset_spec(&asset_definition_id)?);
         }
-        let opts = LocalnetOptions {
+        let fresh_random_keys = self.fresh_random_keys;
+        let seed = if fresh_random_keys {
+            Some(fresh_localnet_seed()?)
+        } else {
+            self.seed
+        };
+        let mut opts = LocalnetOptions {
             build_line,
             sora_profile,
             perf_profile,
             peers: self.peers,
-            seed: self.seed,
+            seed,
             bind_host: self.bind_host,
             public_host: self.public_host,
             base_api_port: self.base_api_port,
@@ -737,7 +788,11 @@ impl<T: Write> RunArgs<T> for Args {
             consensus_mode,
             block_cadence_ms: self.block_cadence_ms,
         };
-        generate_localnet(&opts, writer)
+        let outcome = generate_localnet_with_line(&opts, writer, fresh_random_keys);
+        if fresh_random_keys && let Some(seed) = opts.seed.as_mut() {
+            seed.zeroize();
+        }
+        outcome
     }
 }
 
@@ -767,7 +822,7 @@ struct BlsEntry {
 /// # Errors
 /// Returns an error if port ranges are invalid or if config, genesis, or script files cannot be written.
 pub fn generate_localnet<T: Write>(opts: &LocalnetOptions, writer: &mut BufWriter<T>) -> Outcome {
-    generate_localnet_with_line(opts, writer)
+    generate_localnet_with_line(opts, writer, false)
 }
 
 #[allow(clippy::too_many_lines)]
@@ -890,12 +945,19 @@ fn localnet_client_account_literal(chain_discriminant: Option<u16>) -> String {
 fn generate_localnet_with_line<T: Write>(
     opts: &LocalnetOptions,
     writer: &mut BufWriter<T>,
+    redact_seed_metadata: bool,
 ) -> Outcome {
     init_instruction_registry();
     let build_line = opts.build_line;
     let hosts = validate_localnet_options(opts)?;
     validate_port_ranges(opts.peers, opts.base_api_port, opts.base_p2p_port)?;
-    fs::create_dir_all(&opts.out_dir).wrap_err("failed to create output directory for localnet")?;
+    if redact_seed_metadata {
+        crate::secure_fs::prepare_empty_private_directory(&opts.out_dir)
+            .wrap_err("prepare fresh localnet private output directory")?;
+    } else {
+        fs::create_dir_all(&opts.out_dir)
+            .wrap_err("failed to create output directory for localnet")?;
+    }
     let out_dir = fs::canonicalize(&opts.out_dir).wrap_err_with(|| {
         format!(
             "failed to canonicalize output directory for localnet: {}",
@@ -913,6 +975,7 @@ fn generate_localnet_with_line<T: Write>(
         opts.base_p2p_port,
     )
     .wrap_err("failed to generate localnet peer keys")?;
+    let client_identity = localnet_client_identity(seed_bytes, redact_seed_metadata)?;
 
     tui::status("Generating genesis manifest");
     let npos_bootstrap = localnet_uses_npos(opts.consensus_mode);
@@ -945,7 +1008,7 @@ fn generate_localnet_with_line<T: Write>(
     let (genesis_public_key, genesis_private) = generate_genesis_key_pair(seed_bytes, GENESIS_SEED)
         .wrap_err("failed to generate localnet genesis key pair")?;
     let genesis_account_id = AccountId::new(genesis_public_key.clone());
-    let assets = effective_localnet_assets(&opts.assets);
+    let assets = effective_localnet_assets_for_client(&opts.assets, &client_identity.account_id);
     let gas_account_id = if npos_bootstrap {
         Some(localnet_gas_account_id(&genesis_public_key)?)
     } else {
@@ -967,7 +1030,11 @@ fn generate_localnet_with_line<T: Write>(
         block_max_transactions,
         opts.consensus_mode,
     );
-    genesis = append_localnet_contract_permissions(genesis, &genesis_account_id);
+    genesis = append_localnet_contract_permissions_for_client(
+        genesis,
+        &genesis_account_id,
+        &client_identity.account_id,
+    );
     genesis = append_peer_pop(genesis, &peers);
     if npos_bootstrap {
         let gas_account_id = gas_account_id
@@ -975,12 +1042,13 @@ fn generate_localnet_with_line<T: Write>(
             .expect("gas account id required for NPoS bootstrap");
         let stake_amount =
             localnet_npos_stake_amount(&genesis.effective_parameters()?, requested_stake_amount);
-        genesis = append_localnet_npos_bootstrap(
+        genesis = append_localnet_npos_bootstrap_for_client(
             genesis,
             &peers,
             gas_account_id,
             stake_amount,
             opts.sora_profile,
+            &client_identity.account_id,
         )?;
     }
     genesis = apply_localnet_crypto_overrides(genesis, npos_bootstrap);
@@ -1004,6 +1072,7 @@ fn generate_localnet_with_line<T: Write>(
             pop_hex: format!("0x{}", hex::encode(&p.bls_pop)),
         })
         .collect::<Vec<_>>();
+    let client_account_literal = client_identity.account_literal(chain_discriminant);
     let bootstrap_peer = peers
         .first()
         .expect("localnet always has at least one peer");
@@ -1030,6 +1099,8 @@ fn generate_localnet_with_line<T: Write>(
             mcp_enabled,
             nexus_enabled,
             npos_bootstrap,
+            client_account: &client_account_literal,
+            client_private_key: client_identity.private_key.as_str(),
         },
         opts.sora_profile,
         dataspace_fault_tolerance,
@@ -1047,6 +1118,12 @@ fn generate_localnet_with_line<T: Write>(
     let genesis = genesis
         .with_consensus_mode(opts.consensus_mode)
         .with_consensus_meta();
+    if redact_seed_metadata {
+        write_fresh_genesis_private_key(
+            &out_dir.join(FRESH_GENESIS_PRIVATE_KEY_FILE),
+            &genesis_private,
+        )?;
+    }
     write_genesis(
         &genesis,
         &genesis_public_key,
@@ -1107,6 +1184,8 @@ fn generate_localnet_with_line<T: Write>(
                 mcp_enabled,
                 nexus_enabled,
                 npos_bootstrap,
+                client_account: &client_account_literal,
+                client_private_key: client_identity.private_key.as_str(),
             },
             opts.sora_profile,
             dataspace_fault_tolerance,
@@ -1124,7 +1203,6 @@ fn generate_localnet_with_line<T: Write>(
     tui::success("Peer configs written");
 
     tui::status("Writing start/stop scripts");
-    let client_account_literal = localnet_client_account_literal(chain_discriminant);
     let fee_asset_definition_id = localnet_fee_asset_literal();
     write_scripts(
         &out_dir,
@@ -1145,6 +1223,7 @@ fn generate_localnet_with_line<T: Write>(
         &hosts.public,
         &chain_id,
         chain_discriminant,
+        &client_identity,
     )?;
     let primary_torii_url = hosts.public.torii_url(opts.base_api_port);
     let client_config_path = out_dir.join("client.toml");
@@ -1154,7 +1233,11 @@ fn generate_localnet_with_line<T: Write>(
         &out_dir,
         &chain_id,
         build_line,
-        opts.seed.as_deref(),
+        if redact_seed_metadata {
+            None
+        } else {
+            opts.seed.as_deref()
+        },
         opts.consensus_mode,
         opts.peers.get(),
         &primary_torii_url,
@@ -1163,8 +1246,12 @@ fn generate_localnet_with_line<T: Write>(
         &client_config_path,
         &start_path,
         &stop_path,
-        &account_id_runtime_literal(&localnet_client_account_id(), chain_discriminant),
+        &client_identity.account_literal(chain_discriminant),
     )?;
+    if redact_seed_metadata {
+        crate::secure_fs::harden_private_tree(&out_dir)
+            .wrap_err("harden fresh localnet private artifact tree")?;
+    }
     tui::success("Localnet ready");
 
     writeln!(writer, "out_dir: {}", out_dir.display())?;
@@ -1522,10 +1609,12 @@ fn configured_chain_id() -> String {
 }
 
 #[derive(Clone, Copy)]
-struct RenderPeerFeatures {
+struct RenderPeerFeatures<'a> {
     mcp_enabled: bool,
     nexus_enabled: bool,
     npos_bootstrap: bool,
+    client_account: &'a str,
+    client_private_key: &'a str,
 }
 
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
@@ -1543,7 +1632,7 @@ fn render_peer_config(
     chain_id: &str,
     chain_discriminant: Option<u16>,
     hosts: (&CanonicalHost, &CanonicalHost),
-    features: RenderPeerFeatures,
+    features: RenderPeerFeatures<'_>,
     sora_profile: Option<SoraProfile>,
     dataspace_fault_tolerance: Option<u32>,
     gas_account_id: Option<&str>,
@@ -1560,8 +1649,10 @@ fn render_peer_config(
         mcp_enabled,
         nexus_enabled,
         npos_bootstrap,
+        client_account,
+        client_private_key,
     } = features;
-    let localnet_client_account = localnet_client_account_literal(chain_discriminant);
+    let localnet_client_account = client_account.to_owned();
 
     let trusted_list = trusted_peers
         .iter()
@@ -2150,7 +2241,7 @@ fn render_peer_config(
     );
     onboarding.insert(
         "private_key".into(),
-        Value::String(CLIENT_ACCOUNT_PRIVATE.to_owned()),
+        Value::String(client_private_key.to_owned()),
     );
     onboarding.insert("allowed_permissions".into(), Value::Array(Vec::new()));
     if npos_bootstrap {
@@ -2169,7 +2260,7 @@ fn render_peer_config(
     );
     faucet.insert(
         "private_key".into(),
-        Value::String(CLIENT_ACCOUNT_PRIVATE.to_owned()),
+        Value::String(client_private_key.to_owned()),
     );
     faucet.insert(
         "asset_definition_id".into(),
@@ -2548,10 +2639,21 @@ fn append_localnet_contract_permissions(
     genesis: RawGenesisTransaction,
     genesis_account_id: &AccountId,
 ) -> RawGenesisTransaction {
+    append_localnet_contract_permissions_for_client(
+        genesis,
+        genesis_account_id,
+        &localnet_client_account_id(),
+    )
+}
+
+fn append_localnet_contract_permissions_for_client(
+    genesis: RawGenesisTransaction,
+    genesis_account_id: &AccountId,
+    client_account_id: &AccountId,
+) -> RawGenesisTransaction {
     let enact_governance: Permission = CanEnactGovernance.into();
     let manage_offline_escrow = Permission::new("CanManageOfflineEscrow".into(), Json::new(()));
     let manage_verifying_keys = Permission::new("CanManageVerifyingKeys".into(), Json::new(()));
-    let client_account_id = localnet_client_account_id();
     let manage_account_alias: Permission = CanManageAccountAlias {
         scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::UNIVERSAL),
     }
@@ -2585,8 +2687,8 @@ fn append_localnet_contract_permissions(
     push_unique(manage_verifying_keys, client_account_id.clone());
     push_unique(manage_account_alias, client_account_id.clone());
     push_unique(publish_manifest, client_account_id.clone());
-    if client_account_id != *ALICE_ID {
-        push_unique(manage_offline_escrow, client_account_id);
+    if *client_account_id != *ALICE_ID {
+        push_unique(manage_offline_escrow, client_account_id.clone());
     }
 
     let mut builder = genesis.into_builder();
@@ -2660,12 +2762,29 @@ fn append_localnet_npos_bootstrap(
     stake_amount: Quantity,
     sora_profile: Option<SoraProfile>,
 ) -> Result<RawGenesisTransaction> {
+    append_localnet_npos_bootstrap_for_client(
+        genesis,
+        peers,
+        gas_account_id,
+        stake_amount,
+        sora_profile,
+        &localnet_client_account_id(),
+    )
+}
+
+fn append_localnet_npos_bootstrap_for_client(
+    genesis: RawGenesisTransaction,
+    peers: &[Peer],
+    gas_account_id: &AccountId,
+    stake_amount: Quantity,
+    sora_profile: Option<SoraProfile>,
+    client_account_id: &AccountId,
+) -> Result<RawGenesisTransaction> {
     let nexus_domain = DomainId::parse_fully_qualified(LOCALNET_NEXUS_DOMAIN)?;
     let ivm_domain = DomainId::parse_fully_qualified(LOCALNET_IVM_DOMAIN)?;
     let universal_domain = DomainId::parse_fully_qualified(LOCALNET_UNIVERSAL_DOMAIN)?;
     let stake_asset_id = localnet_stake_asset_definition_id();
     let fee_asset_id = localnet_fee_asset_definition_id();
-    let client_account_id = localnet_client_account_id();
     let public_validator_lanes = localnet_public_validator_lanes(sora_profile);
     let lane_count = u64::try_from(public_validator_lanes.len())
         .expect("public validator lane count must fit in u64");
@@ -2751,14 +2870,14 @@ fn append_localnet_npos_bootstrap(
             AssetId::new(fee_asset_id.clone(), validator_id.clone()),
         ));
     }
-    if !registrations.accounts.contains(&client_account_id) {
+    if !registrations.accounts.contains(client_account_id) {
         builder =
             builder.append_instruction(Register::account(Account::new(client_account_id.clone())));
         registrations.accounts.insert(client_account_id.clone());
     }
     builder = builder.append_instruction(Mint::asset_quantity(
         LOCALNET_FAUCET_AUTHORITY_BALANCE,
-        AssetId::new(fee_asset_id, client_account_id),
+        AssetId::new(fee_asset_id, client_account_id.clone()),
     ));
 
     for lane_id in public_validator_lanes {
@@ -2824,6 +2943,18 @@ fn write_genesis(
     let mut file = BufWriter::new(File::create(signed_path)?);
     file.write_all(&framed)?;
     Ok(())
+}
+
+fn write_fresh_genesis_private_key(path: &Path, key: &ExposedPrivateKey) -> Result<()> {
+    let canonical = Zeroizing::new(
+        key.try_to_multihash_string()
+            .wrap_err("encode fresh genesis private key")?,
+    );
+    let mut raw = Zeroizing::new(Vec::with_capacity(canonical.len() + 1));
+    raw.extend_from_slice(canonical.as_bytes());
+    raw.push(b'\n');
+    crate::secure_fs::write_private_file_atomic(path, raw.as_slice())
+        .wrap_err("write fresh genesis private key")
 }
 
 fn parse_localnet_peer_config(rendered_config: &str) -> Result<actual::Root> {
@@ -3324,6 +3455,45 @@ const CLIENT_ACCOUNT_PUBLIC: &str =
     "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03";
 const CLIENT_ACCOUNT_PRIVATE: &str =
     "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53";
+/// Owner-only genesis signing key emitted by `--fresh-random-keys`.
+pub const FRESH_GENESIS_PRIVATE_KEY_FILE: &str = "genesis.private_key";
+
+struct LocalnetClientIdentity {
+    account_id: AccountId,
+    public_key: iroha_crypto::PublicKey,
+    private_key: Zeroizing<String>,
+}
+
+impl LocalnetClientIdentity {
+    fn account_literal(&self, chain_discriminant: Option<u16>) -> String {
+        account_id_runtime_literal(&self.account_id, chain_discriminant)
+    }
+}
+
+fn localnet_client_identity(
+    base_seed: Option<&[u8]>,
+    fresh_random_keys: bool,
+) -> Result<LocalnetClientIdentity> {
+    if fresh_random_keys {
+        let seed = base_seed.ok_or_else(|| {
+            eyre!("fresh localnet client generation requires process-local OS entropy")
+        })?;
+        let (public_key, private_key) = generate_account_key_pair(seed.into(), b"client-root")?;
+        return Ok(LocalnetClientIdentity {
+            account_id: AccountId::new(public_key.clone()),
+            public_key,
+            private_key: Zeroizing::new(private_key.to_string()),
+        });
+    }
+    let public_key = CLIENT_ACCOUNT_PUBLIC
+        .parse::<iroha_crypto::PublicKey>()
+        .expect("localnet client public key must parse");
+    Ok(LocalnetClientIdentity {
+        account_id: AccountId::new(public_key.clone()),
+        public_key,
+        private_key: Zeroizing::new(CLIENT_ACCOUNT_PRIVATE.to_owned()),
+    })
+}
 
 fn localnet_client_account_id() -> AccountId {
     let public_key = CLIENT_ACCOUNT_PUBLIC
@@ -3338,6 +3508,7 @@ fn write_client_config(
     torii_host: &CanonicalHost,
     chain_id: &str,
     chain_discriminant: Option<u16>,
+    client: &LocalnetClientIdentity,
 ) -> Result<()> {
     let path = out_dir.join("client.toml");
     // Render explicitly to avoid pretty-printer wrapping the long keys.
@@ -3372,8 +3543,8 @@ fn write_client_config(
         status_timeout_ms = LOCALNET_CLIENT_STATUS_TIMEOUT_MS,
         domain = CLIENT_ACCOUNT_DOMAIN,
         chain_discriminant_line = chain_discriminant_line,
-        private_key = CLIENT_ACCOUNT_PRIVATE,
-        public_key = CLIENT_ACCOUNT_PUBLIC,
+        private_key = client.private_key.as_str(),
+        public_key = client.public_key,
     );
 
     fs::write(&path, rendered)
@@ -3398,7 +3569,12 @@ fn write_localnet_readme(
 ) -> Result<()> {
     let readme_path = out_dir.join("README.md");
     let seed_line = seed
-        .map(|seed| format!("- Base seed: `{seed}`\n"))
+        .map(|seed| {
+            format!(
+                "- Base seed BLAKE3 fingerprint: `{}`\n",
+                blake3::hash(seed.as_bytes()).to_hex()
+            )
+        })
         .unwrap_or_default();
     let rendered = format!(
         concat!(
@@ -5549,8 +5725,15 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tmp dir");
         let host =
             CanonicalHost::parse(DEFAULT_PUBLIC_HOST, "--public-host").expect("canonicalize host");
-        write_client_config(tmp.path(), 8080, &host, DEFAULT_CHAIN_ID, None)
-            .expect("write client config");
+        write_client_config(
+            tmp.path(),
+            8080,
+            &host,
+            DEFAULT_CHAIN_ID,
+            None,
+            &localnet_client_identity(None, false).expect("default client"),
+        )
+        .expect("write client config");
         let contents =
             fs::read_to_string(tmp.path().join("client.toml")).expect("read client config");
         assert!(contents.contains("private_key = \"802620"));
@@ -5581,8 +5764,15 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tmp dir");
         let host =
             CanonicalHost::parse(DEFAULT_PUBLIC_HOST, "--public-host").expect("canonicalize host");
-        write_client_config(tmp.path(), 8080, &host, DEFAULT_CHAIN_ID, Some(369))
-            .expect("write client config");
+        write_client_config(
+            tmp.path(),
+            8080,
+            &host,
+            DEFAULT_CHAIN_ID,
+            Some(369),
+            &localnet_client_identity(None, false).expect("default client"),
+        )
+        .expect("write client config");
         let contents =
             fs::read_to_string(tmp.path().join("client.toml")).expect("read client config");
         let value: toml::Value = toml::from_str(&contents).expect("parse client config");
@@ -5879,15 +6069,22 @@ mod tests {
     fn client_config_renders_ipv6_torii_url() {
         let tmp = tempfile::tempdir().expect("tmp dir");
         let host = CanonicalHost::parse("::1", "--public-host").expect("ipv6 host");
-        write_client_config(tmp.path(), 8080, &host, DEFAULT_CHAIN_ID, None)
-            .expect("write client config");
+        write_client_config(
+            tmp.path(),
+            8080,
+            &host,
+            DEFAULT_CHAIN_ID,
+            None,
+            &localnet_client_identity(None, false).expect("default client"),
+        )
+        .expect("write client config");
         let contents =
             fs::read_to_string(tmp.path().join("client.toml")).expect("read client config");
         assert!(contents.contains("torii_url = \"http://[::1]:8080/\""));
     }
 
     #[test]
-    fn localnet_readme_records_base_seed_when_present() {
+    fn localnet_readme_records_only_base_seed_fingerprint_when_present() {
         let tmp = tempfile::tempdir().expect("tmp dir");
         write_localnet_readme(
             tmp.path(),
@@ -5906,7 +6103,10 @@ mod tests {
         )
         .expect("write readme");
         let contents = fs::read_to_string(tmp.path().join("README.md")).expect("read readme");
-        assert!(contents.contains("- Base seed: `Iroha`"));
+        let fingerprint = blake3::hash(b"Iroha").to_hex();
+        assert!(contents.contains(&format!("- Base seed BLAKE3 fingerprint: `{fingerprint}`")));
+        assert!(!contents.contains("- Base seed: `Iroha`"));
+        assert!(!contents.contains("`Iroha`"));
         assert!(contents.contains(LOCALNET_KAGEMUSHA_ASSET_ALIAS));
         assert!(contents.contains("- Localnet app authority: `"));
         assert!(
@@ -5915,6 +6115,17 @@ mod tests {
             )
         );
         assert!(!contents.contains("Localnet app authority / escrow account"));
+    }
+
+    #[test]
+    fn fresh_localnet_seed_uses_independent_256_bit_os_entropy() {
+        let first = fresh_localnet_seed().expect("first OS-random seed");
+        let second = fresh_localnet_seed().expect("second OS-random seed");
+        assert_eq!(first.len(), 64);
+        assert_eq!(second.len(), 64);
+        assert!(first.bytes().all(|byte| byte.is_ascii_hexdigit()));
+        assert!(second.bytes().all(|byte| byte.is_ascii_hexdigit()));
+        assert_ne!(first, second);
     }
 
     fn mandatory_da_localnet_options(build_line: BuildLine, out_dir: PathBuf) -> LocalnetOptions {

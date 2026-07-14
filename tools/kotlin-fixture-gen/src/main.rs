@@ -76,19 +76,19 @@ fn emit_offline_device_attestation() {
     );
     let account_id = parity_account_id();
     let assertion_public_key = hex::decode(P256_GENERATOR).expect("P-256 generator hex");
-    let signing_certificate_sha256 = sha256(b"abi19-unit-test-signing-certificate").to_vec();
+    let signing_certificate_sha256 = sha256(b"abi20-unit-test-signing-certificate").to_vec();
     let public_key = KagemushaDevicePublicKeyV2::from_sec1_bytes(&assertion_public_key)
         .expect("canonical P-256 device authority");
-    let recent_block_hash = Hash::new(b"abi19-unit-test-block");
+    let recent_block_hash = Hash::new(b"abi20-unit-test-block");
     let challenge = OfflineAndroidKeyMintChallenge {
         version: 1,
-        device_id: "abi19-android-unit-test-device".to_owned(),
+        device_id: "abi20-android-unit-test-device".to_owned(),
         account_id: account_id.clone(),
         asset_definition_id: None,
         ios_team_id: None,
         ios_bundle_id: None,
         ios_environment: None,
-        android_package_name: Some("org.hyperledger.iroha.abi19.fixture".to_owned()),
+        android_package_name: Some("org.hyperledger.iroha.abi20.fixture".to_owned()),
         android_signing_certificate_sha256: Some(signing_certificate_sha256.clone()),
         public_key: public_key.clone(),
         assertion_scheme: OFFLINE_DEVICE_ATTESTATION_ANDROID_KEYMINT_ASSERTION_SCHEME.to_owned(),
@@ -103,7 +103,7 @@ fn emit_offline_device_attestation() {
     let challenge_hash = challenge
         .canonical_challenge_hash()
         .expect("encode Android KeyMint challenge");
-    let attestation_report = b"abi19-unit-test-not-physical-attestation-evidence".to_vec();
+    let attestation_report = b"abi20-unit-test-not-physical-attestation-evidence".to_vec();
     let attestation_report_hash = Hash::new(&attestation_report);
     let mut evidence = b"offline-device-attestation-evidence-v1".to_vec();
     evidence.extend_from_slice(attestation_report_hash.as_ref());

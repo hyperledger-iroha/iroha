@@ -72,6 +72,16 @@ import {
 } from "./sccp.js";
 import { snapshotValidationFeePolicyVerificationContext } from "./validationFeePolicy.js";
 import { IVM_ARTIFACT_MAX_BYTES } from "./ivmArtifact.js";
+import {
+  normalizeKagemushaAssetSelector,
+  normalizeKagemushaOperationId,
+  normalizeKagemushaOperationReference,
+  normalizeKagemushaOperationStatus,
+  normalizeKagemushaRedeemRequestV4,
+  normalizeKagemushaReadinessV4,
+  normalizeKagemushaTopUpRequestV4,
+  requireKagemushaJsonContentType,
+} from "./kagemushaOffline.js";
 
 const DEFAULT_PAGE_SIZE = 100;
 const VALIDATION_FEE_VERIFICATION_CONTEXTS = new WeakMap();
@@ -1668,6 +1678,111 @@ export class ToriiClient {
         "ToriiClient: auth/api tokens require an https base URL; pass allowInsecure: true for local/dev use only.",
       );
     }
+  }
+
+  /** Fetch the transport-only ABI-20/V4 Kagemusha readiness projection. */
+  async getKagemushaReadinessV4(assetDefinitionId, options = {}) {
+    const selector = normalizeKagemushaAssetSelector(assetDefinitionId);
+    const { signal, rest } = ToriiClient._normalizeOptionsWithSignal(
+      options,
+      "getKagemushaReadinessV4",
+    );
+    assertSupportedOptionKeys(rest, new Set([]), "getKagemushaReadinessV4 options");
+    const response = await this._request("GET", "/v1/offline/readiness", {
+      params: { asset_definition_id: selector },
+      headers: JSON_ACCEPT_HEADERS,
+      signal,
+    });
+    await this._expectStatus(response, [200]);
+    requireKagemushaJsonContentType(
+      this._getHeader(response, "content-type"),
+      "Kagemusha readiness response",
+    );
+    const payload = await this._maybeJson(response);
+    if (!payload) {
+      throw new TypeError("Kagemusha readiness response must contain JSON");
+    }
+    return normalizeKagemushaReadinessV4(payload, selector);
+  }
+
+  /** Submit an externally produced manifest-V4 top-up Norito archive. */
+  submitKagemushaTopUpV4(request, options = {}) {
+    return this._submitKagemushaCommandV4(
+      "/v1/offline/top-up",
+      "top_up",
+      request,
+      options,
+      "submitKagemushaTopUpV4",
+    );
+  }
+
+  /** Submit an externally produced manifest-V4 redemption Norito archive. */
+  submitKagemushaRedeemV4(request, options = {}) {
+    return this._submitKagemushaCommandV4(
+      "/v1/offline/redeem",
+      "redeem",
+      request,
+      options,
+      "submitKagemushaRedeemV4",
+    );
+  }
+
+  /** Poll one Kagemusha operation through the unchanged operation route. */
+  async getKagemushaOperationStatus(operationId, options = {}) {
+    const canonicalId = normalizeKagemushaOperationId(operationId);
+    const { signal, rest } = ToriiClient._normalizeOptionsWithSignal(
+      options,
+      "getKagemushaOperationStatus",
+    );
+    assertSupportedOptionKeys(rest, new Set([]), "getKagemushaOperationStatus options");
+    const response = await this._request(
+      "GET",
+      `/v1/offline/operations/${canonicalId}`,
+      { headers: JSON_ACCEPT_HEADERS, signal },
+    );
+    await this._expectStatus(response, [200]);
+    requireKagemushaJsonContentType(
+      this._getHeader(response, "content-type"),
+      "Kagemusha operation status response",
+    );
+    const payload = await this._maybeJson(response);
+    if (!payload) {
+      throw new TypeError("Kagemusha operation status response must contain JSON");
+    }
+    return normalizeKagemushaOperationStatus(payload, canonicalId);
+  }
+
+  async _submitKagemushaCommandV4(path, kind, request, options, context) {
+    const normalizeRequest = kind === "top_up"
+      ? normalizeKagemushaTopUpRequestV4
+      : normalizeKagemushaRedeemRequestV4;
+    const normalized = normalizeRequest(request, `${context} request`);
+    const { signal, rest } = ToriiClient._normalizeOptionsWithSignal(options, context);
+    assertSupportedOptionKeys(rest, new Set([]), `${context} options`);
+    const response = await this._request("POST", path, {
+      headers: {
+        Accept: APPLICATION_JSON,
+        "Content-Type": "application/x-norito",
+        "Idempotency-Key": normalized.operationId,
+      },
+      body: Buffer.from(normalized.norito),
+      signal,
+    });
+    await this._expectStatus(response, [202]);
+    requireKagemushaJsonContentType(
+      this._getHeader(response, "content-type"),
+      "Kagemusha operation reference response",
+    );
+    const location = this._getHeader(response, "location");
+    const payload = await this._maybeJson(response);
+    if (!payload) {
+      throw new TypeError("Kagemusha operation reference response must contain JSON");
+    }
+    return normalizeKagemushaOperationReference(payload, {
+      expectedOperationId: normalized.operationId,
+      expectedKind: kind,
+      location,
+    });
   }
 
   /**

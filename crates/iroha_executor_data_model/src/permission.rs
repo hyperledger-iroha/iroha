@@ -206,6 +206,19 @@ pub mod account {
     }
 
     permission! {
+        /// Permission to grant or revoke alias-resolution access in the specified scope.
+        ///
+        /// Only the corresponding domain or dataspace-alias owner may grant or
+        /// revoke this delegation token. Holding it authorizes delegation of
+        /// [`CanResolveAccountAlias`] for the exact same scope; it never
+        /// authorizes alias mutation or further delegation of this token.
+        pub struct CanDelegateAccountAliasResolution {
+            /// Exact alias scope whose resolution access may be delegated.
+            pub scope: AccountAliasPermissionScope,
+        }
+    }
+
+    permission! {
         /// Permission to register, bind, or update account aliases in the specified scope.
         pub struct CanManageAccountAlias {
             /// Alias permission scope.
@@ -254,6 +267,22 @@ pub mod account {
                 .collect::<Vec<_>>();
 
             assert_eq!(tags, vec!["domain", "dataspace"]);
+        }
+
+        #[test]
+        fn alias_resolution_delegation_roundtrips_with_an_exact_scope() {
+            let permission = CanDelegateAccountAliasResolution {
+                scope: AccountAliasPermissionScope::Domain(
+                    DomainId::try_new("hbl", "sbp").expect("canonical HBL domain"),
+                ),
+            };
+            let encoded = norito::json::to_json(&permission)
+                .expect("serialize alias-resolution delegation permission");
+            let decoded: CanDelegateAccountAliasResolution = norito::json::from_str(&encoded)
+                .expect("deserialize alias-resolution delegation permission");
+
+            assert_eq!(decoded, permission);
+            assert!(encoded.contains("hbl.sbp"));
         }
     }
 }
@@ -374,6 +403,17 @@ pub mod escrow {
         /// Permission to resolve a disputed native asset escrow.
         #[derive(Copy)]
         pub struct CanResolveEscrowDispute;
+    }
+}
+
+/// Permission tokens covering governed offline-settlement releases.
+pub mod offline {
+    use super::*;
+
+    permission! {
+        /// Permission to activate an authenticated Kagemusha ABI-20/V4 recursive release.
+        #[derive(Copy)]
+        pub struct CanActivateKagemushaRecursiveReleaseV4;
     }
 }
 

@@ -8510,14 +8510,14 @@ async fn dispatch_route_with_extra_header_policy(
     let dispatched_remote_ip = dispatched_remote_ip(inbound_headers);
     let dispatched_connect_addr = dispatched_connect_addr(dispatched_remote_ip);
     let mut request = Request::builder()
-        .method(method)
+        .method(method.clone())
         .uri(path_and_query)
         .body(Body::from(body))
         .map_err(|err| format!("build request: {err}"))?;
 
     {
         let headers = request.headers_mut();
-        forward_auth_headers(headers, inbound_headers);
+        forward_dispatch_auth_headers(headers, inbound_headers, &method, path_and_query)?;
         apply_extra_headers_with_policy(headers, extra_headers, extra_header_policy)?;
         if let Some(accept_value) = accept {
             let value = HeaderValue::from_str(&accept_value)
@@ -8700,6 +8700,51 @@ fn forward_auth_headers(out: &mut HeaderMap, inbound: &HeaderMap) {
     }
 }
 
+fn forward_dispatch_auth_headers(
+    out: &mut HeaderMap,
+    inbound: &HeaderMap,
+    method: &Method,
+    path_and_query: &str,
+) -> Result<(), String> {
+    forward_auth_headers(out, inbound);
+    if is_onboarding_dispatch_route(method, path_and_query) {
+        forward_onboarding_auth_header(out, inbound)?;
+    }
+    Ok(())
+}
+
+fn is_onboarding_dispatch_route(method: &Method, path_and_query: &str) -> bool {
+    if method != Method::POST {
+        return false;
+    }
+
+    matches!(
+        path_and_query
+            .split_once('?')
+            .map_or(path_and_query, |(path, _)| path),
+        "/v1/accounts/onboard" | "/v1/accounts/onboard/multisig"
+    )
+}
+
+fn forward_onboarding_auth_header(out: &mut HeaderMap, inbound: &HeaderMap) -> Result<(), String> {
+    let header_name = HeaderName::from_static(crate::HEADER_ONBOARDING_API_TOKEN);
+    let mut supplied = inbound.get_all(&header_name).iter();
+    let Some(value) = supplied.next() else {
+        return Ok(());
+    };
+    if supplied.next().is_some() {
+        return Err(format!(
+            "multiple {} headers are not allowed",
+            crate::HEADER_ONBOARDING_API_TOKEN
+        ));
+    }
+
+    let mut value = value.clone();
+    value.set_sensitive(true);
+    out.insert(header_name, value);
+    Ok(())
+}
+
 fn apply_extra_headers(out: &mut HeaderMap, value: Option<&Value>) -> Result<(), String> {
     apply_extra_headers_with_policy(out, value, ExtraHeaderPolicy::Default)
 }
@@ -8744,6 +8789,7 @@ fn is_reserved_extra_header(lowered: &str) -> bool {
     ) || lowered == HEADER_X_API_TOKEN
         || lowered == HEADER_X_IROHA_ACCOUNT
         || lowered == HEADER_X_IROHA_SIGNATURE
+        || lowered == crate::HEADER_ONBOARDING_API_TOKEN
         || lowered == limits::REMOTE_ADDR_HEADER
         || lowered.starts_with("x-iroha-internal-")
 }
@@ -11987,7 +12033,7 @@ fn iroha_accounts_onboard_tool() -> ToolSpec {
         name: "iroha.accounts.onboard".to_owned(),
         effect: manual_tool_effect_from_name("iroha.accounts.onboard"),
         description:
-            "Onboard an account (`alias` + `account_id` or `public_key_hex` shortcuts supported when `body` is omitted)."
+            "Onboard an account (`alias` + `account_id` or `public_key_hex` shortcuts supported when `body` is omitted). Send the dedicated onboarding token only as the outer MCP HTTP `X-Iroha-Onboarding-Token` header; it is forwarded to this route and cannot be supplied through tool arguments."
                 .to_owned(),
         method: Method::POST,
         path_template: "/v1/accounts/onboard".to_owned(),
@@ -12037,7 +12083,8 @@ fn iroha_accounts_onboard_tool() -> ToolSpec {
                 },
                 "headers": {
                     "type": "object",
-                    "additionalProperties": { "type": "string" }
+                    "additionalProperties": { "type": "string" },
+                    "description": "Optional non-authentication request headers. `X-Iroha-Onboarding-Token` is reserved and must be sent on the outer MCP HTTP request."
                 },
                 "accept": { "type": "string" }
             }
@@ -14901,6 +14948,7 @@ mod tests {
             "x-forwarded-client-cert": "present",
             "authorization": "Bearer injected",
             "x-api-token": "injected",
+            "x-iroha-onboarding-token": "injected",
             "x-iroha-account": "injected",
             "x-iroha-signature": "injected",
             "x-iroha-timestamp-ms": "injected",
@@ -14919,12 +14967,167 @@ mod tests {
         assert!(!out.contains_key("x-forwarded-client-cert"));
         assert!(!out.contains_key("authorization"));
         assert!(!out.contains_key("x-api-token"));
+        assert!(!out.contains_key("x-iroha-onboarding-token"));
         assert!(!out.contains_key("x-iroha-account"));
         assert!(!out.contains_key("x-iroha-signature"));
         assert!(!out.contains_key("x-iroha-timestamp-ms"));
         assert!(!out.contains_key("x-iroha-nonce"));
         assert!(!out.contains_key("x-iroha-witness"));
         assert!(!out.contains_key("x-iroha-internal-route"));
+    }
+
+    #[test]
+    fn onboarding_token_is_forwarded_only_to_exact_onboarding_routes() {
+        let onboarding_header = HeaderName::from_static(crate::HEADER_ONBOARDING_API_TOKEN);
+        let api_header = HeaderName::from_static(HEADER_X_API_TOKEN);
+        let mut inbound = HeaderMap::new();
+        inbound.insert(
+            onboarding_header.clone(),
+            HeaderValue::from_static("dedicated-onboarding-token-123456"),
+        );
+        inbound.insert(
+            api_header.clone(),
+            HeaderValue::from_static("global-api-token"),
+        );
+
+        for route in ["/v1/accounts/onboard", "/v1/accounts/onboard/multisig"] {
+            let mut out = HeaderMap::new();
+            forward_dispatch_auth_headers(&mut out, &inbound, &Method::POST, route)
+                .expect("single onboarding token accepted");
+
+            let forwarded = out
+                .get(&onboarding_header)
+                .expect("onboarding token forwarded");
+            assert_eq!(
+                forwarded.to_str().expect("ASCII token"),
+                "dedicated-onboarding-token-123456"
+            );
+            assert!(forwarded.is_sensitive(), "forwarded token must stay secret");
+            assert_eq!(
+                out.get(&api_header).and_then(|value| value.to_str().ok()),
+                Some("global-api-token"),
+                "global API-token forwarding must remain intact"
+            );
+        }
+
+        for (method, route) in [
+            (Method::GET, "/v1/accounts/onboard"),
+            (Method::POST, "/v1/accounts/onboard/extra"),
+            (Method::POST, "/v1/accounts/faucet"),
+        ] {
+            let mut out = HeaderMap::new();
+            forward_dispatch_auth_headers(&mut out, &inbound, &method, route)
+                .expect("unprotected route forwarding succeeds");
+
+            assert!(
+                !out.contains_key(&onboarding_header),
+                "dedicated token must not leak to {method} {route}"
+            );
+            assert_eq!(
+                out.get(&api_header).and_then(|value| value.to_str().ok()),
+                Some("global-api-token")
+            );
+        }
+    }
+
+    #[test]
+    fn onboarding_token_cannot_be_injected_or_overridden_by_tool_headers() {
+        let onboarding_header = HeaderName::from_static(crate::HEADER_ONBOARDING_API_TOKEN);
+        let injected = norito::json!({
+            "X-Iroha-Onboarding-Token": "attacker-controlled-token"
+        });
+
+        for route in ["/v1/accounts/onboard", "/v1/accounts/onboard/multisig"] {
+            let mut without_outer = HeaderMap::new();
+            forward_dispatch_auth_headers(
+                &mut without_outer,
+                &HeaderMap::new(),
+                &Method::POST,
+                route,
+            )
+            .expect("missing outer token is left for inner authentication to reject");
+            apply_extra_headers(&mut without_outer, Some(&injected)).expect("headers accepted");
+            assert!(
+                !without_outer.contains_key(&onboarding_header),
+                "tool arguments cannot manufacture the dedicated token"
+            );
+
+            let mut inbound = HeaderMap::new();
+            inbound.insert(
+                onboarding_header.clone(),
+                HeaderValue::from_static("trusted-outer-onboarding-token"),
+            );
+            let mut with_outer = HeaderMap::new();
+            forward_dispatch_auth_headers(&mut with_outer, &inbound, &Method::POST, route)
+                .expect("outer token forwarded");
+            apply_extra_headers(&mut with_outer, Some(&injected)).expect("headers accepted");
+            let forwarded = with_outer
+                .get(&onboarding_header)
+                .expect("trusted outer token remains present");
+            assert_eq!(
+                forwarded.to_str().expect("ASCII token"),
+                "trusted-outer-onboarding-token"
+            );
+            assert!(forwarded.is_sensitive());
+        }
+    }
+
+    #[test]
+    fn wrong_onboarding_token_is_forwarded_unchanged_for_inner_rejection() {
+        let onboarding_header = HeaderName::from_static(crate::HEADER_ONBOARDING_API_TOKEN);
+        let mut inbound = HeaderMap::new();
+        inbound.insert(
+            onboarding_header.clone(),
+            HeaderValue::from_static("wrong-onboarding-token-value"),
+        );
+
+        for route in ["/v1/accounts/onboard", "/v1/accounts/onboard/multisig"] {
+            let mut out = HeaderMap::new();
+            forward_dispatch_auth_headers(&mut out, &inbound, &Method::POST, route)
+                .expect("single syntactically valid header forwarded");
+            let forwarded = out
+                .get(&onboarding_header)
+                .expect("wrong token reaches authoritative inner auth gate");
+            assert_eq!(
+                forwarded.to_str().expect("ASCII token"),
+                "wrong-onboarding-token-value"
+            );
+            assert!(forwarded.is_sensitive());
+        }
+    }
+
+    #[test]
+    fn duplicate_outer_onboarding_tokens_fail_closed_without_secret_leakage() {
+        let onboarding_header = HeaderName::from_static(crate::HEADER_ONBOARDING_API_TOKEN);
+        let mut inbound = HeaderMap::new();
+        inbound.append(
+            onboarding_header.clone(),
+            HeaderValue::from_static("first-private-onboarding-token"),
+        );
+        inbound.append(
+            onboarding_header.clone(),
+            HeaderValue::from_static("second-private-onboarding-token"),
+        );
+
+        for route in ["/v1/accounts/onboard", "/v1/accounts/onboard/multisig"] {
+            let mut out = HeaderMap::new();
+            let error = forward_dispatch_auth_headers(&mut out, &inbound, &Method::POST, route)
+                .expect_err("duplicates must fail before inner dispatch");
+            assert!(error.contains(crate::HEADER_ONBOARDING_API_TOKEN));
+            assert!(!error.contains("first-private-onboarding-token"));
+            assert!(!error.contains("second-private-onboarding-token"));
+            assert!(!out.contains_key(&onboarding_header));
+        }
+
+        let mut unrelated = HeaderMap::new();
+        forward_dispatch_auth_headers(
+            &mut unrelated,
+            &inbound,
+            &Method::POST,
+            "/v1/accounts/faucet",
+        )
+        .expect("unrelated routes neither consume nor forward the dedicated token");
+        assert!(!unrelated.contains_key(&onboarding_header));
     }
 
     #[test]

@@ -11,6 +11,7 @@ MODE="${1:-}"
 SELF_TESTS=(
   --self-test-bad-abi
   --self-test-missing-header-symbol
+  --self-test-forbidden-v3-alias
   --self-test-bad-capability-signature
   --self-test-bad-proof-signature
   --self-test-bad-artifact-signature
@@ -59,47 +60,36 @@ KAGEMUSHA_EXPORTS = {
     "connect_norito_kagemusha_recipient_payment_request_create_v2",
     "connect_norito_kagemusha_recipient_payment_request_signing_bytes_v2",
     "connect_norito_kagemusha_recipient_payment_request_verify_v2",
-    "connect_norito_kagemusha_recursive_spend_append_v2",
-    "connect_norito_kagemusha_recursive_spend_append_v3",
+    "connect_norito_kagemusha_output_membership_frontier_build_v4",
+    "connect_norito_kagemusha_output_membership_paths_derive_v4",
     "connect_norito_kagemusha_recursive_spend_append_v4",
-    "connect_norito_kagemusha_recursive_spend_artifact_begin_v3",
     "connect_norito_kagemusha_recursive_spend_artifact_begin_v4",
-    "connect_norito_kagemusha_recursive_spend_artifact_cancel_v3",
     "connect_norito_kagemusha_recursive_spend_artifact_cancel_v4",
-    "connect_norito_kagemusha_recursive_spend_artifact_finalize_v3",
     "connect_norito_kagemusha_recursive_spend_artifact_finalize_v4",
-    "connect_norito_kagemusha_recursive_spend_artifact_set_install_v3",
     "connect_norito_kagemusha_recursive_spend_artifact_set_install_v4",
-    "connect_norito_kagemusha_recursive_spend_artifact_set_is_installed_v3",
     "connect_norito_kagemusha_recursive_spend_artifact_set_is_installed_v4",
-    "connect_norito_kagemusha_recursive_spend_artifact_set_uninstall_v3",
+    "connect_norito_kagemusha_recursive_spend_installed_manifest_sha256_v4",
     "connect_norito_kagemusha_recursive_spend_artifact_set_uninstall_v4",
-    "connect_norito_kagemusha_recursive_spend_artifact_write_v3",
     "connect_norito_kagemusha_recursive_spend_artifact_write_v4",
-    "connect_norito_kagemusha_recursive_spend_build_split_intent_v2",
-    "connect_norito_kagemusha_recursive_spend_bundle_summary_v2",
-    "connect_norito_kagemusha_recursive_spend_capabilities_v1",
+    "connect_norito_kagemusha_recursive_spend_bundle_summary_v4",
+    "connect_norito_kagemusha_recursive_spend_branch_validate_v4",
     "connect_norito_kagemusha_recursive_spend_capabilities_v4",
-    "connect_norito_kagemusha_recursive_spend_init_v2",
-    "connect_norito_kagemusha_recursive_spend_init_v3",
     "connect_norito_kagemusha_recursive_spend_init_v4",
-    "connect_norito_kagemusha_recursive_spend_peer_payment_from_split_v2",
-    "connect_norito_kagemusha_recursive_spend_peer_payment_validate_v2",
-    "connect_norito_kagemusha_recursive_spend_redeem_finalize_request_v2",
-    "connect_norito_kagemusha_recursive_spend_redeem_unsigned_payload_digest_v2",
-    "connect_norito_kagemusha_recursive_spend_redeem_v2",
-    "connect_norito_kagemusha_recursive_spend_redeem_v3",
+    "connect_norito_kagemusha_recursive_spend_peer_payment_from_split_v4",
+    "connect_norito_kagemusha_recursive_spend_peer_payment_validate_v4",
+    "connect_norito_kagemusha_recursive_spend_redeem_finalize_request_v4",
+    "connect_norito_kagemusha_recursive_spend_redeem_unsigned_payload_digest_v4",
     "connect_norito_kagemusha_recursive_spend_redeem_v4",
-    "connect_norito_kagemusha_recursive_spend_topup_finalize_request_v2",
-    "connect_norito_kagemusha_recursive_spend_topup_unsigned_payload_digest_v2",
-    "connect_norito_kagemusha_recursive_spend_topup_v2",
-    "connect_norito_kagemusha_recursive_spend_verify_v2",
-    "connect_norito_kagemusha_recursive_spend_verify_v3",
+    "connect_norito_kagemusha_recursive_spend_topup_finalize_request_v4",
+    "connect_norito_kagemusha_recursive_spend_topup_provenance_build_v4",
+    "connect_norito_kagemusha_recursive_spend_topup_provenance_validate_v4",
+    "connect_norito_kagemusha_recursive_spend_topup_unsigned_payload_digest_v4",
+    "connect_norito_kagemusha_recursive_spend_topup_v4",
     "connect_norito_kagemusha_recursive_spend_verify_v4",
     "connect_norito_kagemusha_request_authorization_create_v2",
     "connect_norito_kagemusha_request_authorization_signing_bytes_v2",
-    "connect_norito_kagemusha_topup_finality_verify_v2",
-    "connect_norito_kagemusha_topup_shield_build_unsigned_v2",
+    "connect_norito_kagemusha_topup_finality_verify_v4",
+    "connect_norito_kagemusha_topup_shield_build_unsigned_v4",
 }
 
 required_privacy_ffi = (
@@ -298,28 +288,10 @@ swift_proof_exports = swift_array("requiredProofSymbols")
 swift_protocol_exports = swift_array("requiredProtocolSymbols")
 if swift_proof_exports & swift_protocol_exports:
     raise SystemExit("Swift proof and protocol symbol inventories must be disjoint")
-if len(swift_proof_exports) != 4 or len(swift_protocol_exports) != 30:
-    raise SystemExit("Swift ABI-20 inventory must contain 4 proof and 30 protocol symbols")
+if len(swift_proof_exports) != 4 or len(swift_protocol_exports) != 35:
+    raise SystemExit("Swift ABI-20 inventory must contain 4 proof and 35 protocol symbols")
 swift_exports = swift_proof_exports | swift_protocol_exports
-swift_compatibility_exports = {
-    "connect_norito_kagemusha_recursive_spend_capabilities_v1",
-    "connect_norito_kagemusha_recursive_spend_init_v2",
-    "connect_norito_kagemusha_recursive_spend_append_v2",
-    "connect_norito_kagemusha_recursive_spend_verify_v2",
-    "connect_norito_kagemusha_recursive_spend_redeem_v2",
-    "connect_norito_kagemusha_recursive_spend_artifact_begin_v3",
-    "connect_norito_kagemusha_recursive_spend_artifact_write_v3",
-    "connect_norito_kagemusha_recursive_spend_artifact_finalize_v3",
-    "connect_norito_kagemusha_recursive_spend_artifact_cancel_v3",
-    "connect_norito_kagemusha_recursive_spend_artifact_set_install_v3",
-    "connect_norito_kagemusha_recursive_spend_artifact_set_is_installed_v3",
-    "connect_norito_kagemusha_recursive_spend_artifact_set_uninstall_v3",
-    "connect_norito_kagemusha_recursive_spend_init_v3",
-    "connect_norito_kagemusha_recursive_spend_append_v3",
-    "connect_norito_kagemusha_recursive_spend_verify_v3",
-    "connect_norito_kagemusha_recursive_spend_redeem_v3",
-}
-exact("Swift Kagemusha", KAGEMUSHA_EXPORTS - swift_compatibility_exports, swift_exports)
+exact("Swift Kagemusha", KAGEMUSHA_EXPORTS, swift_exports)
 if re.search(r"requiredNativeSymbols\s*=\s*requiredProofSymbols\s*\+\s*requiredProtocolSymbols", swift) is None:
     raise SystemExit("Swift requiredNativeSymbols must combine the exact proof and protocol inventories")
 
@@ -423,31 +395,36 @@ if [[ "${MODE}" == --self-test-* ]]; then
       ;;
     --self-test-missing-header-symbol)
       replace_once "${tmp_header}" \
-        "connect_norito_kagemusha_recursive_spend_redeem_v2" \
-        "removed_connect_norito_kagemusha_recursive_spend_redeem_v2"
+        "connect_norito_kagemusha_recursive_spend_redeem_v4" \
+        "removed_connect_norito_kagemusha_recursive_spend_redeem_v4"
+      ;;
+    --self-test-forbidden-v3-alias)
+      replace_once "${tmp_header}" \
+        "connect_norito_kagemusha_recursive_spend_init_v4" \
+        "connect_norito_kagemusha_recursive_spend_init_v3"
       ;;
     --self-test-bad-capability-signature)
       replace_regex_once "${tmp_header}" \
-        '(connect_norito_kagemusha_recursive_spend_capabilities_v1\s*\(\s*)uint8_t\*\*' \
+        '(connect_norito_kagemusha_recursive_spend_capabilities_v4\s*\(\s*)uint8_t\*\*' \
         '\g<1>uint8_t*'
       ;;
     --self-test-bad-proof-signature)
       replace_regex_once "${tmp_header}" \
-        '(connect_norito_kagemusha_recursive_spend_init_v2\s*\(\s*)const uint8_t\*' \
+        '(connect_norito_kagemusha_recursive_spend_init_v4\s*\(\s*)const uint8_t\*' \
         '\g<1>uint8_t*'
       ;;
     --self-test-bad-artifact-signature)
       replace_regex_once "${tmp_header}" \
-        '(connect_norito_kagemusha_recursive_spend_artifact_begin_v3\s*\([^;]*?)uint64_t\* out_handle' \
+        '(connect_norito_kagemusha_recursive_spend_artifact_begin_v4\s*\([^;]*?)uint64_t\* out_handle' \
         '\g<1>uint32_t* out_handle'
       ;;
     --self-test-missing-export-pair)
       replace_once "${tmp_rust}" \
-        "connect_norito_kagemusha_recursive_spend_bundle_summary_v2" \
-        "removed_connect_norito_kagemusha_recursive_spend_bundle_summary_v2"
+        "connect_norito_kagemusha_recursive_spend_bundle_summary_v4" \
+        "removed_connect_norito_kagemusha_recursive_spend_bundle_summary_v4"
       replace_once "${tmp_header}" \
-        "connect_norito_kagemusha_recursive_spend_bundle_summary_v2" \
-        "removed_connect_norito_kagemusha_recursive_spend_bundle_summary_v2"
+        "connect_norito_kagemusha_recursive_spend_bundle_summary_v4" \
+        "removed_connect_norito_kagemusha_recursive_spend_bundle_summary_v4"
       ;;
     --self-test-missing-protocol-export)
       replace_once "${tmp_rust}" \
@@ -474,13 +451,13 @@ if [[ "${MODE}" == --self-test-* ]]; then
       ;;
     --self-test-bad-capability-rust-signature)
       replace_regex_once "${tmp_rust}" \
-        '(fn connect_norito_kagemusha_recursive_spend_capabilities_v1\s*\(\s*out_capabilities_ptr:\s*)\*mut \*mut c_uchar' \
+        '(fn connect_norito_kagemusha_recursive_spend_capabilities_v4\s*\(\s*out_capabilities_ptr:\s*)\*mut \*mut c_uchar' \
         '\g<1>*mut c_uchar'
       ;;
     --self-test-missing-swift-symbol)
       replace_once "${tmp_swift}" \
-        '"connect_norito_kagemusha_topup_shield_build_unsigned_v2"' \
-        '"removed_connect_norito_kagemusha_topup_shield_build_unsigned_v2"'
+        '"connect_norito_kagemusha_topup_shield_build_unsigned_v4"' \
+        '"removed_connect_norito_kagemusha_topup_shield_build_unsigned_v4"'
       ;;
     --self-test-bad-deallocator-signature)
       replace_once "${tmp_header}" \
@@ -489,8 +466,8 @@ if [[ "${MODE}" == --self-test-* ]]; then
       ;;
     --self-test-missing-rust-symbol)
       replace_once "${tmp_rust}" \
-        "connect_norito_kagemusha_recursive_spend_artifact_set_uninstall_v3" \
-        "removed_connect_norito_kagemusha_recursive_spend_artifact_set_uninstall_v3"
+        "connect_norito_kagemusha_recursive_spend_artifact_set_uninstall_v4" \
+        "removed_connect_norito_kagemusha_recursive_spend_artifact_set_uninstall_v4"
       ;;
     --self-test-missing-privacy-header-symbol)
       replace_once "${tmp_header}" \

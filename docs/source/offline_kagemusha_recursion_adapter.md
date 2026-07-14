@@ -1,6 +1,7 @@
 # Kagemusha recursive-verifier adapter audit
 
-This note records the proof-system boundary for Kagemusha recursive spend V2.
+This note records the proof-system boundary for the sole ABI-20/V4 Kagemusha
+recursive-spend lifecycle.
 It is an implementation audit, not a readiness claim. The production backend
 remains unavailable until the fixed-key paired deferred verifier and its
 release artifacts pass every soundness, device, and chain gate.
@@ -188,7 +189,7 @@ The Pasta commitment cycle needs two current-proof artifact roles. Every
 logical transition carries an `EqAffine`/Vesta proof and an `EpAffine`/Pallas
 proof for the same exact transition. The next pair closes both parent halves;
 it never replaces one current parity with a temporal predecessor proof.
-Artifacts bind both VKs, both parameter generations, and the complete 889-limb
+Artifacts bind both VKs, both parameter generations, and the complete 890-limb
 field-neutral state. The supported same-scalar-field tuples compile: an
 `EqAffine` proof can be loaded in an `Fp` circuit and the reciprocal `EpAffine`
 proof in an `Fq` circuit. This is not a trait blocker. It is still structurally
@@ -208,106 +209,117 @@ opening residual is not an IPA decision. Native/in-circuit transcript parity,
 substitution tests, both outer proofs, recursive accumulation, and both terminal
 decisions are mandatory before `CircuitVerifierUnavailable` can be removed.
 
-## ABI-19 and artifact V3 contract
+## ABI-20 and artifact V4 contract
 
-The fail-closed production contract is explicit even though the complete loader
-is not yet available. Native capabilities report bridge ABI `19`, manifest schema
-`kagemusha.offline.recursive_spend.artifact_manifest.v3`, proof backend
-`halo2/ipa-pasta-cycle-v1`, and transcript profile
-`kagemusha-pasta-cycle-poseidon-v1`. They carry no mode field. The two fixed
-circuit roles are:
+The current contract is bridge ABI `20`, manifest schema
+`kagemusha.offline.recursive_spend.artifact_manifest.v4`, proof backend
+`halo2/ipa-pasta-cycle-v4`, and transcript profile
+`kagemusha-pasta-cycle-poseidon-v4`. These values carry no mode field. The two
+fixed recursive circuit roles are:
 
-- `kagemusha-recursive-spend-step-eq-two-parent-operation-protocol-v2`, an EqAffine/Vesta transition
-  proof; and
-- `kagemusha-recursive-spend-step-ep-two-parent-operation-protocol-v2`, an EpAffine/Pallas
-  transition proof.
+- registry role `kagemusha_recursive_step_eq_v4_verifier_record` with circuit
+  `kagemusha-recursive-spend-step-eq-authenticated-layout-v4`, the EqAffine/Vesta
+  half; and
+- registry role `kagemusha_recursive_step_ep_v4_verifier_record` with circuit
+  `kagemusha-recursive-spend-step-ep-authenticated-layout-v4`, the EpAffine/Pallas
+  half.
 
-`KagemushaRecursiveSpendStateBoundaryV1` crosses the field boundary as a
-layout version followed by all 889 explicit little-endian `u32` result-state
-limbs. Each proof's public column additionally carries `parent_count` and two
-ordered 889-limb parent-state slots; absent slots must be all zero and present
-slots must be in canonical order. Per-slot Eq and Ep deferred-equation SHA-256
-joins bind the reciprocal scalar and point verifier halves. The lengths and
-state-layout markers are validated exactly; no hash stands in for any carried
-state. `KagemushaPastaCycleProofEnvelopeV3` binds that boundary, both
-ordered Eq/Ep circuit identifiers, artifact generation, the SHA-256 of the
-exact authenticated manifest, both `ParamsIPA` generations, both raw
-verifier-key payload SHA-256 values, and the ordered Eq/Ep proof pair. There is
-no step-parity selector: every transition carries and terminally verifies both
-current proofs. A V3 manifest has exactly the Eq profile followed by the Ep profile;
-each profile binds exactly one parameters, proving-key, and verifying-key file.
-Each descriptor records both the complete framed-file digest and the unframed
-payload digest/length, so a role header cannot disguise duplicated key material.
-Every file is content-addressed, is at most 256 MiB, and a release additionally
-binds its source revision, the SHA-256 of the exact tracked and untracked source
-tree, whether that tree was dirty, chain, asset/scale,
-activation/withdrawal heights, physical-device benchmark evidence,
-cryptographic review, signed release attestation, and the canonical top-up
-finality-roster archive. Finality verification accepts the roster only when its
-canonical bytes match the SHA-256 selected by the authenticated manifest; a
-human-readable generation label is not a trust anchor.
+Both registry records use backend `halo2/ipa`. They must be selected atomically,
+remain independently keyed, and agree with one authenticated release's
+activation window and proof-pair limit.
 
-The supported bundle packager is:
+`KagemushaRecursiveSpendStateBoundaryV2` still crosses the field boundary as a
+layout version followed by all 890 explicit little-endian `u32` result-state
+limbs. Layout V2 adds the statement's append-only `next_zero_leaf_index` to the
+exact state. This is a deliberate pre-production reset: ABI 20 and manifest V4
+remain the only lifecycle, but keys, bootstrap witnesses, proofs, manifests,
+and schema hashes from the former 889-limb layout are incompatible and must not
+be reused. V4 derives the single public-instance-column layout from each
+authenticated `KagemushaStepCircuitParamsV4`. That inline structure binds the
+parameter-layout version, IPA degree, advice and lookup-advice columns by
+phase, fixed and instance columns, lookup width, exact public-input length,
+minimum unusable rows, and parent-proof byte bound. Its default value is an
+invalid sentinel; neither local configuration nor FFI input may replace the
+value authenticated by the manifest.
+
+Each live V4 step carries the exact operation vector, ordered parent state and
+lineage slots, post-proof and branch folds, deferred-equation audit words, and
+the live selector derived from that authenticated layout. Missing parent slots
+use the manifest-bound final-key selector-zero bootstrap witness; they are not
+host-created zero placeholders. `KagemushaPastaCycleProofEnvelopeV4` binds the
+state boundary, both ordered circuit identifiers, artifact generation,
+authenticated manifest SHA-256, both parameter generations, both inline
+circuit-parameter identities, both processed verifier-key payload SHA-256
+values, and the canonical opaque Eq/Ep proof pair. There is no parity selector:
+the pair and both terminal IPA decisions remain inseparable.
+
+A V4 manifest contains exactly the Eq profile followed by the Ep profile. Each
+profile contains exactly four external files, in order: `ParamsIPA`, processed
+proving key, processed verifying key, and the final-key selector-zero bootstrap
+witness. The external cryptographic inventory is exactly eight files. Circuit
+parameters are authenticated inline in the two profiles and digest-bound into
+each `KRV4KEY` header; they are not additional streamed artifacts. Every
+descriptor records both framed-file and unframed-payload lengths and SHA-256
+digests, so a role header cannot disguise duplicated or substituted material.
+Each file is content-addressed and bounded, while the release additionally
+binds its source revision and tree, chain, asset and scale, issuance window,
+measured proof bounds, physical-device evidence, independent review, signed
+release attestation, and canonical top-up-finality roster. A generation label
+is not a trust anchor.
+
+The supported two-stage packager is:
 
 ```text
-cargo run -p iroha_core --bin kagemusha_recursive_spend_v3_bundle -- \
+cargo run -p iroha_core --bin kagemusha_recursive_spend_v4_bundle -- \
+  generate-candidate \
   --out-dir <new-directory> \
   --chain-id <chain> --asset-definition-id <asset> --asset-scale <u32> \
-  --generation <id> --parameter-generation <id> --source-commit <40-lower-hex> \
-  --source-tree-sha256 <64-lower-hex> --source-repo-dirty <true|false> \
+  --generation <id> --parameter-generation <id> \
+  --source-commit <40-lower-hex> --source-tree-sha256 <64-lower-hex> \
   --activation-height <u64> --withdrawal-height <u64> \
-  --benchmark-evidence-sha256 <64-lower-hex> \
-  --cryptographic-review-sha256 <64-lower-hex> \
-  --release-attestation-sha256 <64-lower-hex> \
-  --transition-parameters <file> --transition-proving-key <file> \
-  --transition-verifying-key <file> --state-parameters <file> \
-  --state-proving-key <file> --state-verifying-key <file> \
+  --step-eq-circuit-params <canonical-norito-file> \
+  --step-ep-circuit-params <canonical-norito-file> \
   --topup-finality-roster <canonical-norito-file>
+
+cargo run -p iroha_core --bin kagemusha_recursive_spend_v4_bundle -- \
+  finalize-release \
+  --candidate-dir <generated-candidate> \
+  --out-dir <new-final-directory> \
+  --release-policy <canonical-norito-file> \
+  --release-attestation <canonical-norito-file> \
+  --benchmark-evidence <exact-file> \
+  --cryptographic-review <exact-file>
 ```
 
-The command consumes six externally generated and reviewed raw artifacts; it
-does not substitute deterministic or runtime key generation for the missing
-production prover. It opens each input once with no-follow/nonblocking safety,
-rejects non-regular files, empty or oversized inputs, duplicate paths,
-hardlinks, duplicate raw payloads, source mutation, non-canonical release
-fields, roster gaps, an untrusted output-parent chain, and an existing output
-entry before publication. It writes owner-only files into a private random
-staging directory, reads every staged file back through held no-follow
-descriptors, hashes both raw and complete framed bytes into the 2×3 inventory,
-and fsyncs the files and directory. Only then does it promote the complete
-directory with one descriptor-relative no-replace rename and fsync the parent.
-Runtime and proof-envelope validation consume the exact Norito bytes; JSON is
-an operator view and is never re-encoded into a trust anchor. A failure removes
-the unpublished staging directory and never exposes a partial output path. The
-durable publication corridor currently supports Linux, Android, macOS, and iOS
-and fails closed elsewhere. The packager is deliberately an unsigned staging step:
-evidence digests and the Norito content address are recorded, but
-release-signature authentication happens in the separate release process.
-The small file header does not embed the manifest digest because a manifest
-that contains framed-file digests would make that content address circular;
-proof envelopes bind the final authenticated manifest digest instead.
+Candidate generation records the clean source and exact inline Eq/Ep circuit
+parameters and emits the eight role-separated artifacts. The candidate is not
+an approved release. Finalization authenticates the policy and attestation,
+binds the exact evidence files, and rechecks the staged bytes before publishing
+a new immutable directory. Runtime and proof-envelope validation consume the
+canonical Norito bytes; JSON remains an operator view and is never re-encoded
+into a trust anchor. A partial candidate or finalization failure cannot expose
+an active generation.
 
-The bridge exports a capability archive plus bounded, manifest-bound V3
-streaming ingestion. Ingestion checks header/descriptor fields plus raw and
-framed hashes, but never authorizes proving. Exactly one finalized handle for
-each of the six roles must be installed as a single manifest-bound set. Native
-installation revalidates the held anonymous files, stores them in canonical
-manifest role order, consumes all six handles only after every check succeeds,
-and leaves the prior generation unchanged on failure. Rotation is atomic;
-in-flight calls retain the selected generation by reference, and digest-guarded
-uninstall cannot remove a replacement generation. The capability record names
-every missing gate and reports `proof_backend_available = false`; all proof-gated
-entrypoints fail closed. Symbol presence and successful ingestion are not
-readiness signals. `authenticated_release_envelope` remains an explicit
-missing gate until a signer/policy-bound verifier produces the trusted manifest
-digest consumed by native verification. `paired_deferred_verifier` covers the
-sound fixed-key scalar/point verifier halves and their terminal IPA decision;
-`proof_bound_output_membership_witnesses` covers in-proof binding of every
-recipient/change output and membership edge. Recursive init must also consume
-the verified finality result before the backend can be enabled. The availability
-constant may change only in the audited release that supplies those two
-cryptographic gates, release-envelope authentication, adversarial substitution
-tests, independent review, and physical-device evidence.
+The bridge's bounded V4 ingestion authenticates headers, descriptors, framed
+and payload hashes, inline circuit-parameter identities, and the exact
+eight-role order before atomically installing a generation. Successful
+installation can permit construction of an authenticated backend, but it never
+authorizes proof admission by itself. Torii exposes that distinction through a
+required nullable `artifact_set` and `proof_backend_available`. The artifact
+set binds generation, manifest, release-policy and release-attestation digests,
+issuance window, proof-pair bound, and asset scale to both exact recursive
+verifier records. A null set requires both records and backend construction to
+be unavailable with exactly one `recursive_v4_registry_unavailable` or
+`recursive_v4_registry_malformed` blocker; a non-null set forbids both.
+
+Lineage admission is selected by the exact authenticated release rather than a
+process-wide flag. `recursive_lineage_supported` is true only when the non-null
+artifact set, distinct active Eq/Ep records, and production backend are all
+present; `recursive_lineage_unavailable` is its exact inverse. `ready` is true
+only when every typed blocker is absent. Symbol presence or partial artifact
+ingestion remains insufficient: transaction admission also authenticates the
+release-qualified consensus records, immutable startup catalog, and consensus
+release record.
 
 ## Branch-bound recipient and change proofs
 

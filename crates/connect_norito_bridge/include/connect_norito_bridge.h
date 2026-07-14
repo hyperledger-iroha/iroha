@@ -14,11 +14,11 @@
 extern "C" {
 #endif
 
+#define CONNECT_NORITO_BRIDGE_ABI_VERSION 20
+
 #define CONNECT_NORITO_ERR_ACCOUNT_ADDRESS -200
 #define CONNECT_NORITO_ERR_UNSUPPORTED_ALGORITHM -21
 #define CONNECT_NORITO_ERR_KAGEMUSHA_PROVE -311
-#define CONNECT_NORITO_ERR_KAGEMUSHA_RECURSIVE_SPEND_V2_UNAVAILABLE -314
-#define CONNECT_NORITO_ERR_KAGEMUSHA_RECURSIVE_SPEND_V2_ARTIFACT -315
 #define CONNECT_NORITO_ERR_KAGEMUSHA_RECURSIVE_SPEND_V4_UNAVAILABLE -316
 #define CONNECT_NORITO_ERR_KAGEMUSHA_RECURSIVE_SPEND_V4_ARTIFACT -317
 #define CONNECT_NORITO_ERR_SORAFS_REFERENCE -114
@@ -133,7 +133,7 @@ int32_t connect_norito_decode_ciphertext_frame(
     uint8_t* out_sid, uint8_t* out_dir, uint64_t* out_seq,
     uint8_t** out_aead_ptr, unsigned long* out_aead_len);
 
-// ---------------- Kagemusha recursive spend ABI 19/V3 and ABI 20/V4 ----------------
+// ---------------- Kagemusha recursive spend ABI 20/V4 ----------------
 // JVM/Android projection tuples use an exact four-byte big-endian version and
 // carry canonical exact-state claim archives plus the authenticated output
 // artifact binding. Append builders accept this ABI's full one-or-two input
@@ -141,13 +141,6 @@ int32_t connect_norito_decode_ciphertext_frame(
 #define CONNECT_NORITO_KAGEMUSHA_JVM_EXACT_STATE_PROJECTION_VERSION 1
 #define CONNECT_NORITO_KAGEMUSHA_RECURSIVE_SPEND_MAX_INPUTS 2
 #define CONNECT_NORITO_KAGEMUSHA_RECURSIVE_SPEND_MAX_BRANCH_CLAIMS 2
-
-// Returns canonical Norito `KagemushaRecursiveSpendNativeCapabilitiesV1`.
-// Callers must require `proof_backend_available`; symbol presence alone is not
-// a production-readiness signal.
-int32_t connect_norito_kagemusha_recursive_spend_capabilities_v1(
-    uint8_t** out_capabilities_ptr,
-    unsigned long* out_capabilities_len);
 
 // Returns canonical Norito `KagemushaRecursiveSpendNativeCapabilitiesV4`.
 // ABI20 callers must require `proof_backend_available`; this build reports
@@ -158,8 +151,8 @@ int32_t connect_norito_kagemusha_recursive_spend_capabilities_v4(
     unsigned long* out_capabilities_len);
 
 // Verifies canonical Norito `KagemushaTopUpFinalityProofV2` against the
-// complete canonical `KagemushaRecursiveSpendTopUpAnchorV2` and a canonical,
-// pre-fetched `KagemushaTopUpFinalityRosterArtifactV2`. The canonical V3
+// complete canonical `KagemushaRecursiveSpendTopUpAnchorV4` and a canonical,
+// pre-fetched `KagemushaTopUpFinalityRosterArtifactV2`. The canonical V4
 // manifest and its exact nonzero SHA-256 are passed directly; native code
 // selects the roster descriptor from that typed manifest rather than trusting
 // a parallel JSON projection or generation label. Returns 0 only after the
@@ -167,7 +160,7 @@ int32_t connect_norito_kagemusha_recursive_spend_capabilities_v4(
 // exact anchor path all verify. Recursive init performs this same verification
 // inside its native boundary. This standalone symbol remains unavailable until
 // the authenticated release-envelope trust root is wired.
-int32_t connect_norito_kagemusha_topup_finality_verify_v2(
+int32_t connect_norito_kagemusha_topup_finality_verify_v4(
     const uint8_t* proof_norito_ptr,
     unsigned long proof_norito_len,
     const uint8_t* roster_norito_ptr,
@@ -179,65 +172,12 @@ int32_t connect_norito_kagemusha_topup_finality_verify_v2(
     const uint8_t* expected_manifest_sha256_ptr,
     unsigned long expected_manifest_sha256_len);
 
-// Streams one complete published KRV3KEY package. Begin pins the canonical
-// Norito manifest to a trusted SHA-256 and selects exactly one content-
-// addressed artifact from it. Finalize re-parses and re-hashes the actual open
-// file descriptor. A finalized handle does not authorize proving until all
-// six roles are installed atomically and native capabilities also report the
-// audited proof backend available.
-int32_t connect_norito_kagemusha_recursive_spend_artifact_begin_v3(
-    const uint8_t* manifest_norito_ptr,
-    unsigned long manifest_norito_len,
-    const uint8_t* expected_manifest_sha256_ptr,
-    unsigned long expected_manifest_sha256_len,
-    const uint8_t* expected_artifact_sha256_ptr,
-    unsigned long expected_artifact_sha256_len,
-    uint64_t* out_handle);
-int32_t connect_norito_kagemusha_recursive_spend_artifact_write_v3(
-    uint64_t handle,
-    const uint8_t* chunk_ptr,
-    unsigned long chunk_len);
-int32_t connect_norito_kagemusha_recursive_spend_artifact_finalize_v3(uint64_t handle);
-int32_t connect_norito_kagemusha_recursive_spend_artifact_cancel_v3(uint64_t handle);
-
-// Authenticates the exact manifest against a locally trusted release policy,
-// signed role-threshold attestation, physical-device benchmark evidence, and
-// independent cryptographic review before consuming exactly six finalized
-// handles atomically. Caller handle order is ignored; native code retains
-// manifest role order. Failure consumes none and leaves the active generation
-// unchanged.
-int32_t connect_norito_kagemusha_recursive_spend_artifact_set_install_v3(
-    const uint8_t* manifest_norito_ptr,
-    unsigned long manifest_norito_len,
-    const uint8_t* expected_manifest_sha256_ptr,
-    unsigned long expected_manifest_sha256_len,
-    const uint8_t* trusted_policy_norito_ptr,
-    unsigned long trusted_policy_norito_len,
-    const uint8_t* release_attestation_norito_ptr,
-    unsigned long release_attestation_norito_len,
-    const uint8_t* benchmark_evidence_ptr,
-    unsigned long benchmark_evidence_len,
-    const uint8_t* cryptographic_review_ptr,
-    unsigned long cryptographic_review_len,
-    const uint64_t* handles_ptr,
-    unsigned long handles_len);
-int32_t connect_norito_kagemusha_recursive_spend_artifact_set_is_installed_v3(
-    const uint8_t* manifest_norito_ptr,
-    unsigned long manifest_norito_len,
-    const uint8_t* expected_manifest_sha256_ptr,
-    unsigned long expected_manifest_sha256_len,
-    uint8_t* out_installed);
-// The digest guard prevents a stale owner from uninstalling a newer release.
-int32_t connect_norito_kagemusha_recursive_spend_artifact_set_uninstall_v3(
-    const uint8_t* expected_manifest_sha256_ptr,
-    unsigned long expected_manifest_sha256_len);
-
-// ABI20 uses a distinct exact ten-artifact KRV4 inventory. Canonical order is
-// Eq then Ep and, within each parity: ParamsIPA, raw canonical CircuitParams,
-// proving key, verifying key, and BootstrapV4. Each CircuitParams stream is an
-// independent framed role authenticated by the signed manifest. These
-// entrypoints never accept or consume ABI19/V3 sessions. Begin/finalize authenticate one
-// framed artifact; install consumes all ten finalized handles atomically
+// ABI20 uses a distinct exact eight-artifact KRV4 inventory. Canonical order is
+// Eq then Ep and, within each parity: ParamsIPA, proving key, verifying key, and
+// BootstrapV4. Circuit configuration lives only in the signed manifest profile;
+// every framed header binds its domain-separated digest. These entrypoints
+// never accept or consume ABI19/V3 sessions. Begin/finalize authenticate one
+// framed artifact; install consumes all eight finalized handles atomically
 // after authenticating the release policy, signed attestation, device evidence,
 // and crypto review.
 // Caller handle order is ignored; native retains the canonical role order.
@@ -276,6 +216,9 @@ int32_t connect_norito_kagemusha_recursive_spend_artifact_set_is_installed_v4(
     const uint8_t* expected_manifest_sha256_ptr,
     unsigned long expected_manifest_sha256_len,
     uint8_t* out_installed);
+int32_t connect_norito_kagemusha_recursive_spend_installed_manifest_sha256_v4(
+    uint8_t* out_manifest_sha256,
+    unsigned long out_manifest_sha256_len);
 int32_t connect_norito_kagemusha_recursive_spend_artifact_set_uninstall_v4(
     const uint8_t* expected_manifest_sha256_ptr,
     unsigned long expected_manifest_sha256_len);
@@ -303,15 +246,6 @@ int32_t connect_norito_kagemusha_recipient_output_derive_v2(
     unsigned long receiver_note_opening_len,
     uint8_t** out_result_ptr,
     unsigned long* out_result_len);
-
-// Input is canonical `KagemushaRecursiveSpendSplitIntentBuildRequestV2`.
-// Parent provenance is derived exclusively from the embedded opaque bundles;
-// output is canonical `KagemushaRecursiveSpendSplitIntentV2`.
-int32_t connect_norito_kagemusha_recursive_spend_build_split_intent_v2(
-    const uint8_t* request_norito_ptr,
-    unsigned long request_norito_len,
-    uint8_t** out_intent_ptr,
-    unsigned long* out_intent_len);
 
 int32_t connect_norito_kagemusha_recipient_payment_request_signing_bytes_v2(
     const uint8_t* payload_norito_ptr,
@@ -391,43 +325,101 @@ int32_t connect_norito_kagemusha_receiver_acknowledgement_verify_v2(
     uint8_t** out_result_ptr,
     unsigned long* out_result_len);
 
-// Recipient-only peer transport. The projection validates the split result
-// and deliberately omits sender change. Validation returns the canonical
-// payment archive for typed SDK decoding.
-int32_t connect_norito_kagemusha_recursive_spend_peer_payment_from_split_v2(
+// Recipient-only peer transport. The projection validates the split result,
+// carries the exact manifest-bound top-up roster plus ordered finality
+// evidence needed for fully offline verification, and deliberately omits
+// sender change. Validation returns the canonical payment archive for typed
+// SDK decoding.
+int32_t connect_norito_kagemusha_recursive_spend_peer_payment_from_split_v4(
     const uint8_t* split_result_norito_ptr,
     unsigned long split_result_norito_len,
     uint8_t** out_payment_ptr,
     unsigned long* out_payment_len);
 
-int32_t connect_norito_kagemusha_recursive_spend_peer_payment_validate_v2(
+int32_t connect_norito_kagemusha_recursive_spend_peer_payment_validate_v4(
     const uint8_t* payment_norito_ptr,
     unsigned long payment_norito_len,
     uint8_t** out_payment_ptr,
     unsigned long* out_payment_len);
 
 // Proof/accumulator internals remain opaque to the SDK; this helper returns the
-// validated wallet-safe `KagemushaRecursiveSpendBundleSummaryV2` archive.
-int32_t connect_norito_kagemusha_recursive_spend_bundle_summary_v2(
+// validated wallet-safe `KagemushaRecursiveSpendBundleSummaryV4` archive.
+int32_t connect_norito_kagemusha_recursive_spend_bundle_summary_v4(
     const uint8_t* bundle_norito_ptr,
     unsigned long bundle_norito_len,
     uint8_t** out_summary_ptr,
     unsigned long* out_summary_len);
 
-int32_t connect_norito_kagemusha_recursive_spend_init_v2(
-    const uint8_t* request_norito_ptr,
-    unsigned long request_norito_len,
-    uint8_t** out_init_result_ptr,
-    unsigned long* out_init_result_len);
+// Canonical ABI-20 append-only frontier. Construction recomputes the supplied
+// empty-leaf path with the consensus Poseidon domains before returning it.
+int32_t connect_norito_kagemusha_output_membership_frontier_build_v4(
+    uint32_t leaf_index,
+    const uint8_t* flattened_siblings_ptr,
+    unsigned long flattened_siblings_len,
+    const uint8_t* directions_ptr,
+    unsigned long directions_len,
+    const uint8_t* root_ptr,
+    unsigned long root_len,
+    uint8_t** out_frontier_ptr,
+    unsigned long* out_frontier_len);
 
-// V3 and V4 accept only their explicitly versioned native-local carriers: the
-// public init request plus the owned note opening and exact output-insertion
-// paths. Neither symbol reinterprets a V2 archive.
-int32_t connect_norito_kagemusha_recursive_spend_init_v3(
-    const uint8_t* request_norito_ptr,
-    unsigned long request_norito_len,
-    uint8_t** out_init_result_ptr,
-    unsigned long* out_init_result_len);
+// Advances an authenticated frontier by one or two exact consecutive outputs.
+// A null pointer with zero length means that output is absent. At least one
+// output must be present; when both are present recipient precedes change.
+int32_t connect_norito_kagemusha_output_membership_paths_derive_v4(
+    const uint8_t* frontier_norito_ptr,
+    unsigned long frontier_norito_len,
+    const uint8_t* recipient_commitment_ptr,
+    unsigned long recipient_commitment_len,
+    const uint8_t* change_commitment_ptr,
+    unsigned long change_commitment_len,
+    uint8_t** out_paths_ptr,
+    unsigned long* out_paths_len);
+
+// Revalidates bundle, provenance, opening, owned membership, installed release,
+// and current-height finality before returning the branch's proof-bound frontier.
+int32_t connect_norito_kagemusha_recursive_spend_branch_validate_v4(
+    const uint8_t* bundle_norito_ptr,
+    unsigned long bundle_norito_len,
+    const uint8_t* provenance_norito_ptr,
+    unsigned long provenance_norito_len,
+    const uint8_t* witness_norito_ptr,
+    unsigned long witness_norito_len,
+    const uint8_t* opening_norito_ptr,
+    unsigned long opening_norito_len,
+    uint64_t block_height,
+    uint8_t** out_frontier_ptr,
+    unsigned long* out_frontier_len);
+
+// Builds the mandatory, canonical provenance for a newly initialized bundle.
+// The first-origin boundary accepts exactly one complete anchor/proof pair and
+// verifies it against the installed authenticated roster/manifest before return.
+int32_t connect_norito_kagemusha_recursive_spend_topup_provenance_build_v4(
+    const uint8_t* bundle_norito_ptr,
+    unsigned long bundle_norito_len,
+    const uint8_t* roster_norito_ptr,
+    unsigned long roster_norito_len,
+    const uint8_t* anchor_norito_ptr,
+    unsigned long anchor_norito_len,
+    const uint8_t* finality_proof_norito_ptr,
+    unsigned long finality_proof_norito_len,
+    uint64_t block_height,
+    uint8_t** out_provenance_ptr,
+    unsigned long* out_provenance_len);
+
+// Canonically decodes and fully verifies a one- or two-origin provenance
+// archive against the supplied bundle and installed authenticated release.
+int32_t connect_norito_kagemusha_recursive_spend_topup_provenance_validate_v4(
+    const uint8_t* bundle_norito_ptr,
+    unsigned long bundle_norito_len,
+    const uint8_t* provenance_norito_ptr,
+    unsigned long provenance_norito_len,
+    uint64_t block_height,
+    uint8_t** out_provenance_ptr,
+    unsigned long* out_provenance_len);
+
+// V4 accepts only its explicitly versioned native-local carrier: the public
+// init request plus the owned note opening and exact output-insertion paths.
 int32_t connect_norito_kagemusha_recursive_spend_init_v4(
     const uint8_t* request_norito_ptr,
     unsigned long request_norito_len,
@@ -437,19 +429,19 @@ int32_t connect_norito_kagemusha_recursive_spend_init_v4(
 // Builds a canonical unsigned top-up from a local-only secret witness and the
 // authoritative next-zero path returned by POST /v1/zk/merkle-path. Secret
 // material is zeroized by native code and never appears in the output archive.
-int32_t connect_norito_kagemusha_topup_shield_build_unsigned_v2(
+int32_t connect_norito_kagemusha_topup_shield_build_unsigned_v4(
     const uint8_t* request_norito_ptr,
     unsigned long request_norito_len,
     uint8_t** out_unsigned_ptr,
     unsigned long* out_unsigned_len);
 
-int32_t connect_norito_kagemusha_recursive_spend_topup_unsigned_payload_digest_v2(
+int32_t connect_norito_kagemusha_recursive_spend_topup_unsigned_payload_digest_v4(
     const uint8_t* unsigned_norito_ptr,
     unsigned long unsigned_norito_len,
     uint8_t** out_digest_ptr,
     unsigned long* out_digest_len);
 
-int32_t connect_norito_kagemusha_recursive_spend_topup_finalize_request_v2(
+int32_t connect_norito_kagemusha_recursive_spend_topup_finalize_request_v4(
     const uint8_t* unsigned_norito_ptr,
     unsigned long unsigned_norito_len,
     const uint8_t* authorization_norito_ptr,
@@ -457,38 +449,22 @@ int32_t connect_norito_kagemusha_recursive_spend_topup_finalize_request_v2(
     uint8_t** out_request_ptr,
     unsigned long* out_request_len);
 
-int32_t connect_norito_kagemusha_recursive_spend_topup_v2(
+int32_t connect_norito_kagemusha_recursive_spend_topup_v4(
     const uint8_t* request_norito_ptr,
     unsigned long request_norito_len,
     uint8_t** out_instruction_ptr,
     unsigned long* out_instruction_len);
 
-// V2 is the retained legacy boundary. V3/V4 below accept only their
-// native-only canonical local carriers containing:
-// opaque parents plus local note openings, exact Merkle membership witnesses,
-// mandatory recipient insertion paths, optional sender-change opening and
-// insertion paths, active transfer verifier binding, operation id, and block
-// height. Secrets are zeroized before return. The entrypoint
+// V4 accepts only its native-local canonical carrier containing:
+// opaque parents plus one explicit complete top-up-provenance archive per
+// parent, local note openings, exact Merkle membership witnesses, mandatory
+// recipient insertion paths, optional sender-change opening and insertion
+// paths, active transfer verifier binding, operation id, and block height.
+// Parent provenance is mandatory, canonicalized under one exact authenticated
+// roster, and fully verified before proving. Secrets are zeroized before return. The entrypoint
 // remains unavailable until recursive append can atomically return both the
 // split result and proof-output-bound recipient/change membership witnesses;
 // a bundle without those witnesses is not spendable cash.
-int32_t connect_norito_kagemusha_recursive_spend_append_v2(
-    const uint8_t* request_norito_ptr,
-    unsigned long request_norito_len,
-    const uint8_t* recipient_request_norito_ptr,
-    unsigned long recipient_request_norito_len,
-    uint64_t verified_at_ms,
-    uint8_t** out_split_result_ptr,
-    unsigned long* out_split_result_len);
-
-int32_t connect_norito_kagemusha_recursive_spend_append_v3(
-    const uint8_t* request_norito_ptr,
-    unsigned long request_norito_len,
-    const uint8_t* recipient_request_norito_ptr,
-    unsigned long recipient_request_norito_len,
-    uint64_t verified_at_ms,
-    uint8_t** out_split_result_ptr,
-    unsigned long* out_split_result_len);
 int32_t connect_norito_kagemusha_recursive_spend_append_v4(
     const uint8_t* request_norito_ptr,
     unsigned long request_norito_len,
@@ -498,32 +474,22 @@ int32_t connect_norito_kagemusha_recursive_spend_append_v4(
     uint8_t** out_split_result_ptr,
     unsigned long* out_split_result_len);
 
-int32_t connect_norito_kagemusha_recursive_spend_verify_v2(
-    const uint8_t* request_norito_ptr,
-    unsigned long request_norito_len,
-    uint8_t** out_result_ptr,
-    unsigned long* out_result_len);
-int32_t connect_norito_kagemusha_recursive_spend_verify_v3(
-    const uint8_t* request_norito_ptr,
-    unsigned long request_norito_len,
-    uint8_t** out_result_ptr,
-    unsigned long* out_result_len);
 int32_t connect_norito_kagemusha_recursive_spend_verify_v4(
     const uint8_t* request_norito_ptr,
     unsigned long request_norito_len,
     uint8_t** out_result_ptr,
     unsigned long* out_result_len);
 
-int32_t connect_norito_kagemusha_recursive_spend_redeem_unsigned_payload_digest_v2(
+int32_t connect_norito_kagemusha_recursive_spend_redeem_unsigned_payload_digest_v4(
     const uint8_t* unsigned_norito_ptr,
     unsigned long unsigned_norito_len,
     uint8_t** out_digest_ptr,
     unsigned long* out_digest_len);
 
-// Input is the canonical `KagemushaRecursiveSpendRedeemBuildResultV2`
+// Input is the canonical `KagemushaRecursiveSpendRedeemBuildResultV4`
 // returned by the native proof builder. Finalization preserves its optional
 // offline change bundle and proof-bound membership witness atomically.
-int32_t connect_norito_kagemusha_recursive_spend_redeem_finalize_request_v2(
+int32_t connect_norito_kagemusha_recursive_spend_redeem_finalize_request_v4(
     const uint8_t* build_result_norito_ptr,
     unsigned long build_result_norito_len,
     const uint8_t* authorization_norito_ptr,
@@ -531,24 +497,13 @@ int32_t connect_norito_kagemusha_recursive_spend_redeem_finalize_request_v2(
     uint8_t** out_result_ptr,
     unsigned long* out_result_len);
 
-// V2 is the retained legacy boundary. V3/V4 accept their explicit local
-// carriers with
+// V4 accepts its explicit local carrier with
 // the owned opening, exact membership/dummy paths, exact scaled public amount,
 // optional private change opening plus mandatory change insertion paths, and
 // active unshield-v3 verifier binding. Native derives the unshield proof
 // attachment and redemption intent; callers cannot supply either. This
 // remains unavailable until partial redemption can atomically return the
 // proof-bound offline-change membership witness.
-int32_t connect_norito_kagemusha_recursive_spend_redeem_v2(
-    const uint8_t* request_norito_ptr,
-    unsigned long request_norito_len,
-    uint8_t** out_build_result_ptr,
-    unsigned long* out_build_result_len);
-int32_t connect_norito_kagemusha_recursive_spend_redeem_v3(
-    const uint8_t* request_norito_ptr,
-    unsigned long request_norito_len,
-    uint8_t** out_build_result_ptr,
-    unsigned long* out_build_result_len);
 int32_t connect_norito_kagemusha_recursive_spend_redeem_v4(
     const uint8_t* request_norito_ptr,
     unsigned long request_norito_len,

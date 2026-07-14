@@ -227,6 +227,35 @@ DEFAULT_I105_DISCRIMINANT = 0x02F1
 # Must match `iroha_data_model::DATA_MODEL_VERSION` on the node.
 DATA_MODEL_VERSION = 1
 ACCOUNT_FAUCET_POW_DOMAIN_SEPARATOR = b"iroha:accounts:faucet:pow:v2"
+ACCOUNT_ONBOARDING_TOKEN_HEADER = "X-Iroha-Onboarding-Token"
+
+
+def _require_account_onboarding_token(value: Any) -> str:
+    if not isinstance(value, str):
+        raise TypeError("onboarding_token must be a string")
+    encoded = value.encode("utf-8")
+    if not 32 <= len(encoded) <= 256 or any(byte < 0x21 or byte > 0x7E for byte in encoded):
+        raise ValueError(
+            "onboarding_token must contain 32..256 printable ASCII bytes "
+            "without spaces or normalization"
+        )
+    return value
+
+
+def _set_exact_header(headers: MutableMapping[str, str], name: str, value: str) -> None:
+    lower_name = name.lower()
+    for existing in list(headers):
+        if existing.lower() == lower_name:
+            del headers[existing]
+    headers[name] = value
+
+
+def _reject_default_onboarding_header(headers: Mapping[str, Any], context: str) -> None:
+    if any(str(name).lower() == ACCOUNT_ONBOARDING_TOKEN_HEADER.lower() for name in headers):
+        raise ValueError(
+            f"{context} must not contain {ACCOUNT_ONBOARDING_TOKEN_HEADER}; "
+            "pass onboarding_token explicitly to onboard_account"
+        )
 
 
 def _reject_alias_keys(source: Mapping[str, Any],
@@ -11209,6 +11238,7 @@ class ToriiClient(_BaseToriiClient):
         }
         self._default_headers: Dict[str, str] = {"Accept": "application/json"}
         if default_headers:
+            _reject_default_onboarding_header(default_headers, "default_headers")
             self._default_headers.update(default_headers)
         self._auth_token: Optional[str] = None
         self._api_token: Optional[str] = None
@@ -11589,6 +11619,7 @@ class ToriiClient(_BaseToriiClient):
     def update_default_headers(self, headers: Mapping[str, str]) -> None:
         """Merge `headers` into the default header set applied to every request."""
 
+        _reject_default_onboarding_header(headers, "headers")
         self._default_headers.update(headers)
 
     def request_json(
@@ -14462,13 +14493,15 @@ class ToriiClient(_BaseToriiClient):
         json_body: Optional[Mapping[str, Any]] = None,
         timeout: Optional[float] = None,
         allow_retry: bool = True,
+        allow_redirects: bool = True,
     ) -> requests.Response:
         if json_body is not None and data is not None:
             raise ValueError("provide either `json_body` or `data`, not both")
 
         final_headers: Dict[str, str] = dict(self._default_headers)
         if headers:
-            final_headers.update(headers)
+            for name, value in headers.items():
+                _set_exact_header(final_headers, str(name), str(value))
 
         payload: Optional[bytes]
         if json_body is not None:
@@ -14493,6 +14526,7 @@ class ToriiClient(_BaseToriiClient):
                     headers=final_headers or None,
                     data=payload,
                     timeout=request_timeout,
+                    allow_redirects=allow_redirects,
                 )
             except requests.RequestException:
                 if attempt == max_attempts - 1:
@@ -16381,28 +16415,69 @@ class ToriiClient(_BaseToriiClient):
     def onboard_account(
         self,
         *,
+        onboarding_token: str,
         alias: str,
-        public_key_hex: str,
-        gas_asset_id: Optional[str] = None,
-        identity: Optional[Mapping[str, Any]] = None,
+        uaid: str,
+        account_id: Optional[str] = None,
+        public_key_hex: Optional[str] = None,
+        identity_commitment_hex: Optional[str] = None,
+        permissions: Optional[Sequence[str]] = None,
     ) -> requests.Response:
-        """Submit an account onboarding request and return the raw response."""
+        """Submit a JSON-only account onboarding request with an explicit route credential."""
 
+        exact_onboarding_token = _require_account_onboarding_token(onboarding_token)
+        if (account_id is None) == (public_key_hex is None):
+            raise ValueError(
+                "onboard_account requires exactly one of account_id or public_key_hex"
+            )
         payload: Dict[str, Any] = {
             "alias": _require_non_empty_string(alias, "onboard_account.alias"),
-            "public_key_hex": _require_non_empty_string(
+            "uaid": _normalize_uaid_literal(uaid, context="onboard_account.uaid"),
+        }
+        if account_id is not None:
+            canonical_account_id = self._normalize_canonical_account_id(
+                account_id,
+                "onboard_account.account_id",
+            )
+            if "@" in canonical_account_id:
+                raise ValueError("onboard_account.account_id must be a canonical I105 account id")
+            payload["account_id"] = canonical_account_id
+        else:
+            assert public_key_hex is not None
+            payload["public_key_hex"] = _normalize_32_byte_hex(
                 public_key_hex,
                 "onboard_account.public_key_hex",
-            ),
-        }
-        if gas_asset_id is not None:
-            payload["gas_asset_id"] = _require_non_empty_string(
-                gas_asset_id,
-                "onboard_account.gas_asset_id",
             )
-        if identity is not None:
-            payload["identity"] = _json_safe_value(identity)
-        return self._request("POST", "/v1/accounts/onboard", json_body=payload)
+        if identity_commitment_hex is not None:
+            payload["identity_commitment_hex"] = _normalize_32_byte_hex(
+                identity_commitment_hex,
+                "onboard_account.identity_commitment_hex",
+            )
+        if permissions is not None:
+            if isinstance(permissions, (str, bytes, bytearray)):
+                raise TypeError("onboard_account.permissions must be a sequence of strings")
+            normalized_permissions: List[str] = []
+            for index, permission in enumerate(permissions):
+                normalized = _require_non_empty_string(
+                    permission,
+                    f"onboard_account.permissions[{index}]",
+                )
+                if normalized not in normalized_permissions:
+                    normalized_permissions.append(normalized)
+            if normalized_permissions:
+                payload["permissions"] = normalized_permissions
+        return self._request(
+            "POST",
+            "/v1/accounts/onboard",
+            headers={
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+                ACCOUNT_ONBOARDING_TOKEN_HEADER: exact_onboarding_token,
+            },
+            json_body=payload,
+            allow_retry=False,
+            allow_redirects=False,
+        )
 
     def find_domain(self, domain_id: str, *, limit: int = 200) -> Optional[Mapping[str, Any]]:
         """Fetch a domain by id, falling back to paginated listing on route gaps."""

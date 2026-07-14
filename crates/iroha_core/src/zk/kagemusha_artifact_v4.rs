@@ -1,6 +1,6 @@
 //! Authenticated framing and role-safe carriers for Kagemusha ABI-20 artifacts.
 //!
-//! V4 packages are intentionally disjoint from the historical ABI-19/KRV3
+//! V4 packages are selector-free and intentionally reject any pre-release
 //! format. Every release-sized allocation is preceded by a fixed upper-bound,
 //! descriptor, and framing check. Framed bytes are first authenticated against
 //! the canonical manifest; production constructors then require a separately
@@ -27,17 +27,16 @@ use iroha_data_model::offline::{
     KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4,
     KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V4,
     KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_BOOTSTRAP_FILE_NAME_V4,
-    KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PARAMETERS_FILE_NAME_V4,
+    KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PARAMS_IPA_FILE_NAME_V4,
     KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PROVING_KEY_FILE_NAME_V4,
     KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_VERIFYING_KEY_FILE_NAME_V4,
     KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_BOOTSTRAP_FILE_NAME_V4,
-    KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PARAMETERS_FILE_NAME_V4,
+    KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PARAMS_IPA_FILE_NAME_V4,
     KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PROVING_KEY_FILE_NAME_V4,
     KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_VERIFYING_KEY_FILE_NAME_V4, KagemushaAuthenticatedReleaseV4,
     KagemushaPastaCycleArtifactKindV4, KagemushaPastaCycleArtifactV4,
     KagemushaPastaCycleFramedArtifactHeaderV4, KagemushaPastaCycleParityV1,
     KagemushaPastaCycleProofProfileV4, KagemushaRecursiveSpendArtifactManifestV4,
-    KagemushaStepCircuitParamsV4,
 };
 use sha2::{Digest as _, Sha256};
 
@@ -61,8 +60,8 @@ pub const fn kagemusha_artifact_file_name_v4(
     kind: KagemushaPastaCycleArtifactKindV4,
 ) -> &'static str {
     match (parity, kind) {
-        (KagemushaPastaCycleParityV1::StepEq, KagemushaPastaCycleArtifactKindV4::Parameters) => {
-            KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PARAMETERS_FILE_NAME_V4
+        (KagemushaPastaCycleParityV1::StepEq, KagemushaPastaCycleArtifactKindV4::ParamsIpa) => {
+            KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PARAMS_IPA_FILE_NAME_V4
         }
         (KagemushaPastaCycleParityV1::StepEq, KagemushaPastaCycleArtifactKindV4::ProvingKey) => {
             KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PROVING_KEY_FILE_NAME_V4
@@ -74,8 +73,8 @@ pub const fn kagemusha_artifact_file_name_v4(
             KagemushaPastaCycleParityV1::StepEq,
             KagemushaPastaCycleArtifactKindV4::BootstrapWitness,
         ) => KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_BOOTSTRAP_FILE_NAME_V4,
-        (KagemushaPastaCycleParityV1::StepEp, KagemushaPastaCycleArtifactKindV4::Parameters) => {
-            KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PARAMETERS_FILE_NAME_V4
+        (KagemushaPastaCycleParityV1::StepEp, KagemushaPastaCycleArtifactKindV4::ParamsIpa) => {
+            KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PARAMS_IPA_FILE_NAME_V4
         }
         (KagemushaPastaCycleParityV1::StepEp, KagemushaPastaCycleArtifactKindV4::ProvingKey) => {
             KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PROVING_KEY_FILE_NAME_V4
@@ -554,7 +553,7 @@ impl KagemushaPastaCycleVerifierArtifactsV4 {
             (
                 &step_eq_parameters,
                 KagemushaPastaCycleParityV1::StepEq,
-                KagemushaPastaCycleArtifactKindV4::Parameters,
+                KagemushaPastaCycleArtifactKindV4::ParamsIpa,
             ),
             (
                 &step_eq_verifying_key,
@@ -569,7 +568,7 @@ impl KagemushaPastaCycleVerifierArtifactsV4 {
             (
                 &step_ep_parameters,
                 KagemushaPastaCycleParityV1::StepEp,
-                KagemushaPastaCycleArtifactKindV4::Parameters,
+                KagemushaPastaCycleArtifactKindV4::ParamsIpa,
             ),
             (
                 &step_ep_verifying_key,
@@ -628,18 +627,6 @@ impl KagemushaPastaCycleVerifierArtifactsV4 {
     #[must_use]
     pub(crate) fn step_ep_profile(&self) -> &KagemushaPastaCycleProofProfileV4 {
         &self.release.manifest().profiles[1]
-    }
-
-    /// Authenticated Eq base-circuit configuration.
-    #[must_use]
-    pub(crate) fn step_eq_circuit_params(&self) -> &KagemushaStepCircuitParamsV4 {
-        &self.step_eq_profile().circuit_params
-    }
-
-    /// Authenticated Ep base-circuit configuration.
-    #[must_use]
-    pub(crate) fn step_ep_circuit_params(&self) -> &KagemushaStepCircuitParamsV4 {
-        &self.step_ep_profile().circuit_params
     }
 
     pub(crate) fn step_eq_parameters(&self) -> &[u8] {

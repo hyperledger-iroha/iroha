@@ -24,8 +24,9 @@ Example
 'ab01cdf...'
 >>> client.delete_attachment(meta["id"])
 
-The helper keeps dependencies minimal (``requests`` only) so it can be reused
-from tests or scripts without pulling the full CLI.
+The helper keeps dependencies minimal (``requests`` plus ``blake3`` for exact
+asset-definition address validation) so it can be reused from tests or scripts
+without pulling the full CLI.
 """
 
 from __future__ import annotations
@@ -59,6 +60,7 @@ from typing import (
 from urllib.parse import parse_qsl, quote, urlencode, urlsplit
 
 import requests
+from blake3 import blake3
 
 from .norito_frame import validate_norito_frame
 from .sccp import (
@@ -98,6 +100,7 @@ _SCCP_PROOF_REQUEST_NORITO_TYPE_NAME = (
 
 
 BASE58_ALPHABET = tuple("123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz")
+BASE58_INDEX = {symbol: idx for idx, symbol in enumerate(BASE58_ALPHABET)}
 IROHA_POEM_KANA_HALFWIDTH = (
     "ｲ", "ﾛ", "ﾊ", "ﾆ", "ﾎ", "ﾍ", "ﾄ", "ﾁ", "ﾘ", "ﾇ", "ﾙ", "ｦ", "ﾜ", "ｶ", "ﾖ", "ﾀ",
     "ﾚ", "ｿ", "ﾂ", "ﾈ", "ﾅ", "ﾗ", "ﾑ", "ｳ", "ヰ", "ﾉ", "ｵ", "ｸ", "ﾔ", "ﾏ", "ｹ", "ﾌ",
@@ -688,6 +691,7 @@ __all__ = [
     "OfflineActiveUnshieldVerifier",
     "OfflineActiveRecursiveStepEqVerifier",
     "OfflineActiveRecursiveStepEpVerifier",
+    "OfflineAuthenticatedArtifactSet",
     "OfflineReadiness",
     "OfflineAssetScale",
     "OfflineScaledAmountJson",
@@ -717,7 +721,7 @@ __all__ = [
     "OfflineBranchPathJson",
     "OfflineBranchClaimJson",
     "OfflineSpendBranchJson",
-    "KagemushaArtifactBindingJson",
+    "KagemushaArtifactBindingV4Json",
     "OfflinePeerSplitTransitionJson",
     "OfflineRedemptionChangeTransitionJson",
     "OfflinePeerSplitTransitionVariantJson",
@@ -728,15 +732,15 @@ __all__ = [
     "OfflineUnshieldPublicInputsJson",
     "OfflineRedemptionIntentJson",
     "OfflineRedeemChangeJson",
-    "KagemushaTopUpRequestV2",
-    "KagemushaRedeemRequestV2",
+    "KagemushaTopUpRequestV4",
+    "KagemushaRedeemRequestV4",
     "OfflineOperationKind",
     "OfflinePendingState",
     "OfflineOperationReference",
     "OfflineScaledAmount",
     "OfflineSpendableNote",
     "OfflineVerifierKeyId",
-    "KagemushaArtifactBinding",
+    "KagemushaArtifactBindingV4",
     "OfflineTopUpAnchor",
     "OfflineTopUpFinalityProofAnchor",
     "OfflineTopUpFinalityConsensusMode",
@@ -2855,9 +2859,10 @@ class OfflineSpendBranchJson(_OfflineTaggedUnitJsonOptional):
     branch: Literal["recipient", "change"]
 
 
-class KagemushaArtifactBindingJson(TypedDict):
-    """Identity of the one authenticated Kagemusha V3 artifact installation."""
+class KagemushaArtifactBindingV4Json(TypedDict):
+    """Identity of the one authenticated Kagemusha ABI-20/V4 release."""
 
+    version: Literal[4]
     generation: str
     manifest_sha256: List[int]
 
@@ -2914,12 +2919,13 @@ class OfflineRecursiveSpendStatementJson(_OfflineRecursiveSpendStatementJsonOpti
     asset: str
     asset_scale: OfflineAssetScale
     final_root: List[int]
+    next_zero_leaf_index: int
     topup_anchor_refs: List[OfflineTopUpAnchorReferenceJson]
     proof_step_count: int
     peer_hop_count: int
     current_note: OfflineSpendableNoteJson
     branch_claims: List[OfflineBranchClaimJson]
-    artifact_binding: KagemushaArtifactBindingJson
+    artifact_binding: KagemushaArtifactBindingV4Json
     verifier_key_id: OfflineVerifierKeyIdJson
 
 
@@ -2954,7 +2960,7 @@ class OfflineUnshieldPublicInputsJson(TypedDict):
 
 class _OfflineRedemptionIntentJsonOptional(TypedDict, total=False):
     change_output: Optional[OfflineSpendableNoteJson]
-    change_artifact_binding: Optional[KagemushaArtifactBindingJson]
+    change_artifact_binding: Optional[KagemushaArtifactBindingV4Json]
 
 
 class OfflineRedemptionIntentJson(_OfflineRedemptionIntentJsonOptional):
@@ -2985,27 +2991,35 @@ class OfflineRedeemChangeJson(TypedDict):
 
 
 @dataclass(frozen=True)
-class KagemushaTopUpRequestV2:
-    """Canonical Norito top-up request plus its embedded operation identifier."""
+class KagemushaTopUpRequestV4:
+    """Canonical ABI-20/V4 Norito top-up request and operation identifier."""
 
     norito: bytes
     operation_id: str
 
     def __post_init__(self) -> None:
-        _validate_kagemusha_norito_request(self.norito, "KagemushaTopUpRequestV2.norito")
+        _validate_kagemusha_norito_request(
+            self.norito,
+            _KAGEMUSHA_TOP_UP_MAX_NORITO_REQUEST_BYTES,
+            "KagemushaTopUpRequestV4.norito",
+        )
         object.__setattr__(self, "norito", bytes(self.norito))
         object.__setattr__(self, "operation_id", _require_offline_operation_id(self.operation_id))
 
 
 @dataclass(frozen=True)
-class KagemushaRedeemRequestV2:
-    """Canonical Norito redemption request plus its embedded operation identifier."""
+class KagemushaRedeemRequestV4:
+    """Canonical ABI-20/V4 Norito redemption request and operation identifier."""
 
     norito: bytes
     operation_id: str
 
     def __post_init__(self) -> None:
-        _validate_kagemusha_norito_request(self.norito, "KagemushaRedeemRequestV2.norito")
+        _validate_kagemusha_norito_request(
+            self.norito,
+            _KAGEMUSHA_REDEEM_MAX_NORITO_REQUEST_BYTES,
+            "KagemushaRedeemRequestV4.norito",
+        )
         object.__setattr__(self, "norito", bytes(self.norito))
         object.__setattr__(self, "operation_id", _require_offline_operation_id(self.operation_id))
 
@@ -3037,9 +3051,19 @@ _OFFLINE_HASH_LITERAL_RE = re.compile(r"^hash:([0-9A-F]{64})#([0-9A-F]{4})$")
 _OFFLINE_BLS_VALIDATOR_ID_RE = re.compile(r"^ea0130[0-9A-F]{96}$")
 _OFFLINE_MAX_JSON_DEPTH = 128
 _OFFLINE_MAX_JSON_RESPONSE_BYTES = 256 * 1024
-_KAGEMUSHA_MAX_NORITO_REQUEST_BYTES = 256 * 1024
-_KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION = 19
+_KAGEMUSHA_TOP_UP_MAX_NORITO_REQUEST_BYTES = 512 * 1024
+_KAGEMUSHA_REDEEM_MAX_NORITO_REQUEST_BYTES = 48 * 1024 * 1024
+_KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION = 20
 _KAGEMUSHA_MAX_HOPS = 8
+_KAGEMUSHA_RECURSIVE_PROOF_PAIR_MAX_BYTES_V4 = 16 * 1024 * 1024
+_KAGEMUSHA_VERIFIER_BACKEND = "halo2/ipa"
+_KAGEMUSHA_VERIFIER_ROLES = {
+    "active_transfer_verifier": "confidential_transfer_v2_verifier_record",
+    "active_topup_shield_verifier": "kagemusha_topup_shield_v2_verifier_record",
+    "active_unshield_verifier": "confidential_unshield_v3_verifier_record",
+    "active_recursive_step_eq_verifier": "kagemusha_recursive_step_eq_v4_verifier_record",
+    "active_recursive_step_ep_verifier": "kagemusha_recursive_step_ep_v4_verifier_record",
+}
 _KAGEMUSHA_VERIFIER_CIRCUITS = {
     "active_transfer_verifier":
         "halo2/pasta/ipa/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
@@ -3048,20 +3072,24 @@ _KAGEMUSHA_VERIFIER_CIRCUITS = {
     "active_unshield_verifier":
         "halo2/pasta/ipa/confidential-unshield-change-merkle16-axiom-poseidon-v4",
     "active_recursive_step_eq_verifier":
-        "kagemusha-recursive-spend-step-eq-two-parent-operation-protocol-v2",
+        "kagemusha-recursive-spend-step-eq-authenticated-layout-v4",
     "active_recursive_step_ep_verifier":
-        "kagemusha-recursive-spend-step-ep-two-parent-operation-protocol-v2",
+        "kagemusha-recursive-spend-step-ep-authenticated-layout-v4",
 }
 
 
-def _validate_kagemusha_norito_request(value: Any, context: str) -> None:
+def _validate_kagemusha_norito_request(
+    value: Any,
+    maximum_bytes: int,
+    context: str,
+) -> None:
     if type(value) is not bytes:
         raise TypeError(f"{context} must be immutable bytes")
     if not value:
         raise ValueError(f"{context} must not be empty")
-    if len(value) > _KAGEMUSHA_MAX_NORITO_REQUEST_BYTES:
+    if len(value) > maximum_bytes:
         raise ValueError(
-            f"{context} exceeds {_KAGEMUSHA_MAX_NORITO_REQUEST_BYTES} bytes"
+            f"{context} exceeds {maximum_bytes} bytes"
         )
 
 
@@ -3081,12 +3109,9 @@ def _offline_exact_string(value: Any, context: str, *, non_empty: bool = True) -
 
 def _offline_asset_selector(value: Any, context: str) -> str:
     selector = _offline_exact_string(value, context)
-    pattern = (
-        _OFFLINE_ASSET_ALIAS_RE
-        if "#" in selector
-        else _OFFLINE_ASSET_DEFINITION_ID_RE
-    )
-    if pattern.fullmatch(selector) is None:
+    if "#" not in selector:
+        return _offline_canonical_asset_definition_id(selector, context)
+    if _OFFLINE_ASSET_ALIAS_RE.fullmatch(selector) is None:
         raise RuntimeError(
             f"{context} must be a canonical Base58 asset definition id or lowercase scoped asset alias"
         )
@@ -3098,6 +3123,23 @@ def _offline_canonical_asset_definition_id(value: Any, context: str) -> str:
     if _OFFLINE_ASSET_DEFINITION_ID_RE.fullmatch(asset_definition_id) is None:
         raise RuntimeError(
             f"{context} must be a canonical unprefixed Base58 asset definition id"
+        )
+    # Keep this complete validation synchronized with the normative Rust codec:
+    # `iroha_data_model::asset::AssetDefinitionId::parse_address_literal`.
+    payload = _decode_base_n(
+        [BASE58_INDEX[symbol] for symbol in asset_definition_id],
+        len(BASE58_ALPHABET),
+    )
+    uuid_bytes = payload[1:17]
+    if (
+        len(payload) != 21
+        or payload[0] != 1
+        or payload[17:] != blake3(payload[:17]).digest(length=4)
+        or (uuid_bytes[6] >> 4) != 0b0100
+        or (uuid_bytes[8] & 0b1100_0000) != 0b1000_0000
+    ):
+        raise RuntimeError(
+            f"{context} must be a canonical checksummed UUIDv4 asset definition id"
         )
     return asset_definition_id
 
@@ -3394,6 +3436,20 @@ class OfflineActiveTransferVerifier:
     withdrawal_height: Optional[int]
 
 
+@dataclass(frozen=True)
+class OfflineAuthenticatedArtifactSet:
+    """Exact authenticated ABI-20 V4 recursive release selected for readiness."""
+
+    generation: str
+    manifest_sha256: str
+    release_policy_sha256: str
+    release_attestation_sha256: str
+    activation_height: int
+    withdrawal_height: int
+    max_proof_bytes: int
+    asset_scale: int
+
+
 # Every readiness role exposes the same key-material-free registry record
 # shape. Distinct aliases keep role substitution visible at the API boundary.
 OfflineActiveTopUpShieldVerifier = OfflineActiveTransferVerifier
@@ -3442,6 +3498,7 @@ def _offline_active_transfer_verifier(
         _offline_required(record, "version", context),
         f"{context}.version",
         _OFFLINE_MAX_U32,
+        positive=True,
     )
     circuit_id = _offline_exact_string(
         _offline_required(record, "circuit_id", context),
@@ -3455,6 +3512,10 @@ def _offline_active_transfer_verifier(
         _offline_required(record, "public_inputs_schema_hash", context),
         f"{context}.public_inputs_schema_hash",
     )
+    if commitment == "0" * 64 or public_inputs_schema_hash == "0" * 64:
+        raise RuntimeError(
+            f"{context} commitment and public_inputs_schema_hash must be non-zero"
+        )
     max_proof_bytes = _offline_unsigned(
         _offline_required(record, "max_proof_bytes", context),
         f"{context}.max_proof_bytes",
@@ -3493,6 +3554,114 @@ def _offline_active_transfer_verifier(
     )
 
 
+def _offline_authenticated_artifact_set(
+    value: Any,
+    evaluated_block_height: int,
+    context: str,
+) -> OfflineAuthenticatedArtifactSet:
+    record = _offline_mapping(value, context)
+    _offline_exact_object_fields(
+        record,
+        context,
+        required=(
+            "generation",
+            "manifest_sha256",
+            "release_policy_sha256",
+            "release_attestation_sha256",
+            "activation_height",
+            "withdrawal_height",
+            "max_proof_bytes",
+            "asset_scale",
+        ),
+    )
+    generation = _offline_exact_string(
+        _offline_required(record, "generation", context),
+        f"{context}.generation",
+    )
+    try:
+        generation_bytes = generation.encode("ascii")
+    except UnicodeEncodeError as exc:
+        raise RuntimeError(
+            f"{context}.generation must be a canonical portable artifact identifier"
+        ) from exc
+    if (
+        len(generation_bytes) > 128
+        or not generation_bytes[0:1].isalnum()
+        or not generation_bytes[-1:].isalnum()
+        or any(
+            not (byte < 128 and (chr(byte).isalnum() or byte in b"._-"))
+            for byte in generation_bytes
+        )
+    ):
+        raise RuntimeError(
+            f"{context}.generation must be a canonical portable artifact identifier"
+        )
+    basename = generation.split(".", 1)[0].lower()
+    if basename in {"con", "prn", "aux", "nul"} or (
+        len(basename) == 4
+        and basename[:3] in {"com", "lpt"}
+        and basename[3] in "123456789"
+    ):
+        raise RuntimeError(
+            f"{context}.generation must not use a Windows reserved basename"
+        )
+
+    digests: Dict[str, str] = {}
+    for field in (
+        "manifest_sha256",
+        "release_policy_sha256",
+        "release_attestation_sha256",
+    ):
+        digest = _offline_required(record, field, context)
+        if not isinstance(digest, str) or _OFFLINE_TRANSACTION_HASH_RE.fullmatch(digest) is None:
+            raise RuntimeError(
+                f"{context}.{field} must be a lowercase 64-character SHA-256 digest"
+            )
+        digests[field] = digest
+    if any(digest == "0" * 64 for digest in digests.values()) or len(set(digests.values())) != 3:
+        raise RuntimeError(f"{context} digests must be non-zero and pairwise distinct")
+
+    activation_height = _offline_unsigned(
+        _offline_required(record, "activation_height", context),
+        f"{context}.activation_height",
+        _OFFLINE_MAX_U64,
+        positive=True,
+    )
+    withdrawal_height = _offline_unsigned(
+        _offline_required(record, "withdrawal_height", context),
+        f"{context}.withdrawal_height",
+        _OFFLINE_MAX_U64,
+        positive=True,
+    )
+    if withdrawal_height <= activation_height:
+        raise RuntimeError(f"{context}.withdrawal_height must be after activation_height")
+    if activation_height > evaluated_block_height:
+        raise RuntimeError(f"{context}.activation_height is after the evaluated block")
+    if withdrawal_height <= evaluated_block_height:
+        raise RuntimeError(f"{context}.withdrawal_height is not after the evaluated block")
+    max_proof_bytes = _offline_unsigned(
+        _offline_required(record, "max_proof_bytes", context),
+        f"{context}.max_proof_bytes",
+        _KAGEMUSHA_RECURSIVE_PROOF_PAIR_MAX_BYTES_V4,
+        positive=True,
+    )
+    asset_scale = _offline_unsigned(
+        _offline_required(record, "asset_scale", context),
+        f"{context}.asset_scale",
+        _OFFLINE_MAX_ASSET_SCALE,
+    )
+    return OfflineAuthenticatedArtifactSet(
+        generation=generation,
+        manifest_sha256=digests["manifest_sha256"],
+        release_policy_sha256=digests["release_policy_sha256"],
+        release_attestation_sha256=digests["release_attestation_sha256"],
+        activation_height=activation_height,
+        withdrawal_height=withdrawal_height,
+        max_proof_bytes=max_proof_bytes,
+        asset_scale=asset_scale,
+    )
+
+
 @dataclass(frozen=True)
 class OfflineReadiness:
     """Snapshot-bound offline readiness for one asset definition."""
@@ -3508,6 +3677,7 @@ class OfflineReadiness:
     active_unshield_verifier: Optional[OfflineActiveUnshieldVerifier]
     active_recursive_step_eq_verifier: Optional[OfflineActiveRecursiveStepEqVerifier]
     active_recursive_step_ep_verifier: Optional[OfflineActiveRecursiveStepEpVerifier]
+    artifact_set: Optional[OfflineAuthenticatedArtifactSet]
     proof_backend_available: bool
     recursive_lineage_supported: bool
     ready: bool
@@ -3539,6 +3709,7 @@ class OfflineReadiness:
                 "active_unshield_verifier",
                 "active_recursive_step_eq_verifier",
                 "active_recursive_step_ep_verifier",
+                "artifact_set",
                 "proof_backend_available",
                 "recursive_lineage_supported",
                 "ready",
@@ -3635,7 +3806,16 @@ class OfflineReadiness:
                 )
             )
         for field, verifier in parsed_verifiers.items():
-            if verifier is not None and verifier.circuit_id != _KAGEMUSHA_VERIFIER_CIRCUITS[field]:
+            if verifier is None:
+                continue
+            if (
+                verifier.id.backend != _KAGEMUSHA_VERIFIER_BACKEND
+                or verifier.id.name != _KAGEMUSHA_VERIFIER_ROLES[field]
+            ):
+                raise RuntimeError(
+                    f"{context}.{field}.id does not match its production Kagemusha role"
+                )
+            if verifier.circuit_id != _KAGEMUSHA_VERIFIER_CIRCUITS[field]:
                 raise RuntimeError(
                     f"{context}.{field}.circuit_id does not match its Kagemusha role"
                 )
@@ -3646,11 +3826,71 @@ class OfflineReadiness:
         active_recursive_step_ep_verifier = parsed_verifiers[
             "active_recursive_step_ep_verifier"
         ]
+        raw_artifact_set = _offline_required(record, "artifact_set", context)
+        artifact_set = (
+            None
+            if raw_artifact_set is None
+            else _offline_authenticated_artifact_set(
+                raw_artifact_set,
+                evaluated_block_height,
+                f"{context}.artifact_set",
+            )
+        )
         active_records = [verifier for verifier in parsed_verifiers.values() if verifier is not None]
         if len({(record.id.backend, record.id.name) for record in active_records}) != len(active_records):
             raise RuntimeError(f"{context} must not reuse a verifier id across roles")
         if len({record.commitment for record in active_records}) != len(active_records):
             raise RuntimeError(f"{context} must not reuse a verifier commitment across roles")
+        if len({record.public_inputs_schema_hash for record in active_records}) != len(
+            active_records
+        ):
+            raise RuntimeError(
+                f"{context} must not reuse a verifier public-input schema hash across roles"
+            )
+        recursive_verifiers = (
+            active_recursive_step_eq_verifier,
+            active_recursive_step_ep_verifier,
+        )
+        if (recursive_verifiers[0] is None) != (recursive_verifiers[1] is None):
+            raise RuntimeError(
+                f"{context} must report the ABI-20 V4 recursive verifier pair atomically"
+            )
+        if artifact_set is None:
+            if any(verifier is not None for verifier in recursive_verifiers):
+                raise RuntimeError(
+                    f"{context}.artifact_set must accompany the ABI-20 V4 recursive verifier pair"
+                )
+        else:
+            if any(verifier is None for verifier in recursive_verifiers):
+                raise RuntimeError(
+                    f"{context}.artifact_set requires the ABI-20 V4 recursive verifier pair"
+                )
+            if asset_scale != artifact_set.asset_scale:
+                raise RuntimeError(
+                    f"{context}.artifact_set.asset_scale must equal the authoritative asset scale"
+                )
+            for field, verifier in zip(
+                ("active_recursive_step_eq_verifier", "active_recursive_step_ep_verifier"),
+                recursive_verifiers,
+            ):
+                if verifier is None:
+                    raise RuntimeError(
+                        f"{context}.{field} is required with the ABI-20 V4 artifact set"
+                    )
+                if verifier.version == 0:
+                    raise RuntimeError(f"{context}.{field}.version must be positive for ABI-20 V4")
+                if verifier.max_proof_bytes != artifact_set.max_proof_bytes:
+                    raise RuntimeError(
+                        f"{context}.{field}.max_proof_bytes must equal artifact_set.max_proof_bytes"
+                    )
+                if verifier.activation_height != artifact_set.activation_height:
+                    raise RuntimeError(
+                        f"{context}.{field}.activation_height must equal artifact_set.activation_height"
+                    )
+                if verifier.withdrawal_height != artifact_set.withdrawal_height:
+                    raise RuntimeError(
+                        f"{context}.{field}.withdrawal_height must equal artifact_set.withdrawal_height"
+                    )
         proof_backend_available = _offline_required(
             record, "proof_backend_available", context
         )
@@ -3697,8 +3937,23 @@ class OfflineReadiness:
                     f"{blocker_context}.message must not exceed 1024 Unicode characters"
                 )
             blockers.append(OfflineReadinessBlocker(code=code, message=message))
-        if ready != (len(blockers) == 0):
-            raise RuntimeError(f"{context}.ready must be true exactly when blockers is empty")
+        recursive_registry_codes = blocker_codes & {
+            "recursive_v4_registry_unavailable",
+            "recursive_v4_registry_malformed",
+        }
+        if artifact_set is None:
+            if len(recursive_registry_codes) != 1:
+                raise RuntimeError(
+                    f"{context}.artifact_set null requires exactly one ABI-20 V4 registry blocker"
+                )
+            if proof_backend_available:
+                raise RuntimeError(
+                    f"{context}.proof_backend_available requires an authenticated artifact_set"
+                )
+        elif recursive_registry_codes:
+            raise RuntimeError(
+                f"{context}.artifact_set contradicts the ABI-20 V4 registry blocker set"
+            )
         if ("asset_scale_unavailable" in blocker_codes) != (asset_scale is None):
             raise RuntimeError(
                 f"{context}.asset_scale_unavailable must be present exactly when asset_scale is null"
@@ -3737,30 +3992,37 @@ class OfflineReadiness:
             raise RuntimeError(
                 f"{context}.proof_backend_available contradicts the blocker set"
             )
-        expected_recursive_lineage = (
+        expected_recursive_lineage_supported = (
             proof_backend_available
+            and artifact_set is not None
             and active_recursive_step_eq_verifier is not None
             and active_recursive_step_ep_verifier is not None
         )
-        if recursive_lineage_supported != expected_recursive_lineage:
+        if recursive_lineage_supported != expected_recursive_lineage_supported:
             raise RuntimeError(
-                f"{context}.recursive_lineage_supported contradicts the recursive verifier state"
+                f"{context}.recursive_lineage_supported must equal the exact authenticated ABI-20 lineage conjunction"
             )
-        if ("recursive_lineage_unavailable" in blocker_codes) == recursive_lineage_supported:
+        lineage_blocked = "recursive_lineage_unavailable" in blocker_codes
+        if lineage_blocked == recursive_lineage_supported:
             raise RuntimeError(
                 f"{context}.recursive_lineage_supported contradicts the blocker set"
             )
-        if ready and (
-            asset_scale is None
-            or asset_scale > _OFFLINE_MAX_ASSET_SCALE
-            or active_transfer_verifier is None
-            or active_topup_shield_verifier is None
-            or active_unshield_verifier is None
-            or not proof_backend_available
-            or not recursive_lineage_supported
-        ):
+        expected_ready = (
+            proof_backend_available
+            and recursive_lineage_supported
+            and artifact_set is not None
+            and asset_scale is not None
+            and asset_scale <= _OFFLINE_MAX_ASSET_SCALE
+            and active_transfer_verifier is not None
+            and active_topup_shield_verifier is not None
+            and active_unshield_verifier is not None
+            and active_recursive_step_eq_verifier is not None
+            and active_recursive_step_ep_verifier is not None
+            and not blockers
+        )
+        if ready != expected_ready:
             raise RuntimeError(
-                f"{context}.ready requires a supported scale and active transfer and top-up shield verifiers"
+                f"{context}.ready must equal the complete ABI-20 runtime conjunction"
             )
         return cls(
             required_bridge_abi_version=required_bridge_abi_version,
@@ -3774,6 +4036,7 @@ class OfflineReadiness:
             active_unshield_verifier=active_unshield_verifier,
             active_recursive_step_eq_verifier=active_recursive_step_eq_verifier,
             active_recursive_step_ep_verifier=active_recursive_step_ep_verifier,
+            artifact_set=artifact_set,
             proof_backend_available=proof_backend_available,
             recursive_lineage_supported=recursive_lineage_supported,
             ready=ready,
@@ -3837,9 +4100,10 @@ class OfflineVerifierKeyId:
 
 
 @dataclass(frozen=True)
-class KagemushaArtifactBinding:
-    """Content-addressed recursive proof artifact installation."""
+class KagemushaArtifactBindingV4:
+    """Content-addressed ABI-20/V4 recursive proof release."""
 
+    version: Literal[4]
     generation: str
     manifest_sha256: Tuple[int, ...]
 
@@ -3848,7 +4112,7 @@ class KagemushaArtifactBinding:
 class OfflineTopUpAnchor:
     """Closed, cross-checked finalized receipt returned by an applied top-up."""
 
-    version: Literal[2]
+    version: Literal[4]
     chain_id: str
     payer: str
     asset: str
@@ -3861,7 +4125,7 @@ class OfflineTopUpAnchor:
     topup_operation_id: Tuple[int, ...]
     shield_verifier_id: OfflineVerifierKeyId
     shield_verifier_commitment: Tuple[int, ...]
-    artifact_binding: KagemushaArtifactBinding
+    artifact_binding: KagemushaArtifactBindingV4
     finalized_height: int
     finalized_tx_hash: Tuple[int, ...]
     anchor_digest: Tuple[int, ...]
@@ -4986,8 +5250,8 @@ def _offline_top_up_anchor(
     version = _offline_unsigned(
         _offline_required(record, "version", context), f"{context}.version", (1 << 16) - 1
     )
-    if version != 2:
-        raise RuntimeError(f"{context}.version must be 2")
+    if version != 4:
+        raise RuntimeError(f"{context}.version must be 4")
     amount = _offline_scaled_amount_model(
         _offline_required(record, "amount", context), f"{context}.amount"
     )
@@ -5068,8 +5332,15 @@ def _offline_top_up_anchor(
     _offline_exact_object_fields(
         artifact_record,
         artifact_context,
-        required=("generation", "manifest_sha256"),
+        required=("version", "generation", "manifest_sha256"),
     )
+    artifact_version = _offline_unsigned(
+        _offline_required(artifact_record, "version", artifact_context),
+        f"{artifact_context}.version",
+        (1 << 16) - 1,
+    )
+    if artifact_version != 4:
+        raise RuntimeError(f"{artifact_context}.version must be 4")
     artifact_generation = _offline_exact_string(
         _offline_required(artifact_record, "generation", artifact_context),
         f"{artifact_context}.generation",
@@ -5078,7 +5349,8 @@ def _offline_top_up_anchor(
         raise RuntimeError(
             f"{artifact_context}.generation must contain at most 128 UTF-8 bytes"
         )
-    artifact_binding = KagemushaArtifactBinding(
+    artifact_binding = KagemushaArtifactBindingV4(
+        version=4,
         generation=artifact_generation,
         manifest_sha256=_offline_fixed_bytes(
             _offline_required(artifact_record, "manifest_sha256", artifact_context),
@@ -5088,7 +5360,7 @@ def _offline_top_up_anchor(
     )
 
     return OfflineTopUpAnchor(
-        version=2,
+        version=4,
         chain_id=chain_id,
         payer=_offline_exact_string(
             _offline_required(record, "payer", context), f"{context}.payer"
@@ -10568,12 +10840,12 @@ class ToriiClient:
         return OfflineReadiness.from_payload(payload, asset)
 
     def submit_kagemusha_top_up(
-        self, request: KagemushaTopUpRequestV2
+        self, request: KagemushaTopUpRequestV4
     ) -> OfflineOperationReference:
         """Submit one canonical typed Norito Kagemusha top-up request."""
 
-        if not isinstance(request, KagemushaTopUpRequestV2):
-            raise TypeError("request must be KagemushaTopUpRequestV2")
+        if not isinstance(request, KagemushaTopUpRequestV4):
+            raise TypeError("request must be KagemushaTopUpRequestV4")
         return self._submit_kagemusha_command(
             _OFFLINE_TOP_UP_PATH,
             "top_up",
@@ -10582,12 +10854,12 @@ class ToriiClient:
         )
 
     def submit_kagemusha_redeem(
-        self, request: KagemushaRedeemRequestV2
+        self, request: KagemushaRedeemRequestV4
     ) -> OfflineOperationReference:
         """Submit one canonical typed Norito Kagemusha redemption request."""
 
-        if not isinstance(request, KagemushaRedeemRequestV2):
-            raise TypeError("request must be KagemushaRedeemRequestV2")
+        if not isinstance(request, KagemushaRedeemRequestV4):
+            raise TypeError("request must be KagemushaRedeemRequestV4")
         return self._submit_kagemusha_command(
             _OFFLINE_REDEEM_PATH,
             "redeem",

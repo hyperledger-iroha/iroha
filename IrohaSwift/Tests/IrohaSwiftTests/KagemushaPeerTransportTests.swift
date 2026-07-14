@@ -41,14 +41,16 @@ final class KagemushaPeerTransportTests: XCTestCase {
         ), text)
     }
 
-    func testCanonicalPaymentFixtureUsesFirstReleaseVerifier() throws {
+    func testCanonicalPaymentFixtureUsesFirstReleaseABI20Envelope() throws {
         let request = try KagemushaPeerTransportTestFixtures.receiveRequest()
         let payment = try KagemushaPeerTransportTestFixtures.payment(request: request)
 
+        let frame = try XCTUnwrap(noritoDecodeFrame(payment.recipientBundle.noritoArchive))
         XCTAssertEqual(
-            payment.recipientBundle.summary.verifierKeyID,
-            "\(KagemushaRecursiveSpend.pastaCycleBackend):\(KagemushaRecursiveSpend.stepEqCircuitID)"
+            frame.header.schema,
+            noritoSchemaHash(forTypeName: KagemushaRecursiveSpend.bundleWireNameV4)
         )
+        XCTAssertEqual(KagemushaRecursiveSpend.wireVersionV4, 4)
     }
 
     func testUserPresentedBoundaryNormalizationIsNarrowAndExplicit() throws {
@@ -130,7 +132,15 @@ final class KagemushaPeerTransportTests: XCTestCase {
     }
 
     func testDirectTextArchiveLimitMapsExactlyToTwelveKiBText() {
-        XCTAssertEqual(KagemushaPeerTransportContract.maximumArchiveBytes, 32_768)
+        XCTAssertEqual(KagemushaPeerTransportContract.maximumArchiveBytesV2, 32_768)
+        XCTAssertEqual(
+            KagemushaPeerTransportContract.maximumArchiveBytesV4,
+            32 * 1_024 * 1_024
+        )
+        XCTAssertEqual(
+            KagemushaPeerTransportContract.maximumArchiveBytes,
+            KagemushaPeerTransportContract.maximumArchiveBytesV4
+        )
         XCTAssertEqual(KagemushaPeerTransportContract.maximumTextArchiveBytes, 9_211)
         let archive = Data(
             repeating: 0xA5,

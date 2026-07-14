@@ -87,7 +87,14 @@ This initial slice provides the foundation needed for a usable managed SDK:
   account, and member-weight lists on assignment and access, and direct
   permission/member-account list initialization rejects null elements; multisig
   normalization also copies the member lists into dispatch snapshots before
-  HTTP serialization
+  HTTP serialization; both onboarding APIs require the dedicated raw
+  `X-Iroha-Onboarding-Token` argument (32–256 printable ASCII bytes), keep it
+  separate from a global API token, emit it exactly once outside the JSON body,
+  and use a non-redirecting default transport
+
+When injecting a custom `HttpClient`, configure its underlying
+`HttpClientHandler.AllowAutoRedirect` to `false`; redirect policy belongs to the
+injected transport and cannot be changed after `HttpClient` construction.
 - multisig propose/approve helpers reject zero `creation_time_ms` when supplied, and generic/contract-call multisig response DTOs reject zero returned `creation_time_ms` before callers trust signing material
 - native multisig propose instruction-list DTOs snapshot assigned arrays, return
   detached arrays on access, reject null instruction elements during direct
@@ -374,6 +381,22 @@ This initial slice provides the foundation needed for a usable managed SDK:
 - fixture-backed unit tests against the repo's canonical address vectors
 
 Broader iterable families beyond the current fast_dsl subset, richer typed event coverage beyond the current pipeline/proof/explorer SSE projections, broader contract admin/lifecycle helpers beyond deploy/activate/call/multisig plus verified-source job helpers, Connect, Nexus, and the remaining parity work are still planned.
+
+## Kagemusha Torii transport
+
+The managed SDK exposes the unchanged Kagemusha routes through
+`GetKagemushaReadinessV4Async`, `SubmitKagemushaTopUpV4Async`,
+`SubmitKagemushaRedeemV4Async`, and `GetKagemushaOperationStatusAsync`.
+Readiness accepts bridge ABI 20 and the manifest-V4 Eq/Ep verifier identity;
+ABI-19 and V3 projections fail instead of being upgraded.
+
+The C# surface is transport-only and does not claim a native prover. Top-up and
+redemption methods accept bounded canonical Norito archives created by a
+supported wallet/prover implementation, snapshot the bytes, and bind
+`Idempotency-Key` to the signed operation id. Witness construction, recursive
+artifact installation, and device-key handling remain outside this SDK. The
+transport accepts at most 512 KiB for top-up and 48 MiB for redemption, matching
+Torii's route-specific request limits.
 
 `CreateVpnQuoteAsync(...)`, `CreateVpnSessionAsync(...)`,
 `SubmitVpnReceiptAsync(...)`, and `DeleteVpnSessionAsync(...)` call signed Torii

@@ -26,6 +26,7 @@ mod kura;
 pub mod localnet;
 mod localnet_tui;
 mod schema;
+mod secure_fs;
 mod swarm;
 mod tui;
 mod verify;
@@ -359,6 +360,18 @@ mod tests {
         assert!(
             parse("kagami advanced client-configs --base-config ./client.toml --names alice")
                 .is_ok()
+        );
+        assert!(
+            parse(
+                "kagami advanced client-configs --base-config ./client.toml --names alice --fresh-random-keys"
+            )
+            .is_ok()
+        );
+        assert!(
+            parse(
+                "kagami advanced client-configs --base-config ./client.toml --names alice --fresh-random-keys --seed-prefix forbidden"
+            )
+            .is_err()
         );
     }
 

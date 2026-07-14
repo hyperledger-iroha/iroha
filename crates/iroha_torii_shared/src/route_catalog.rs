@@ -63,12 +63,23 @@ pub enum Listener {
     Torii,
 }
 
-/// Authentication applied before a route handler runs.
+/// Authentication contract enforced by the route boundary.
+///
+/// Most policies are middleware-backed. Protocol exchanges and explicitly
+/// reviewed canonical-account handlers may enforce their credential while
+/// entering the handler, before parsing or acting on protected request data.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AuthenticationPolicy {
     /// The listener's configured API-token policy applies.
     ToriiDefault,
-    /// The route requires a request signature bound to the submitted identity.
+    /// The listener's configured API-token policy applies and the route also
+    /// requires exactly one dedicated signer-backed onboarding token.
+    OnboardingToken,
+    /// The route requires canonical `X-Iroha-*` request authentication bound to
+    /// an on-ledger account identity.
+    CanonicalAccountSignature,
+    /// The route requires an operator-style request signature bound to a
+    /// handler-validated dynamic key identity.
     IdentityBoundSignature,
     /// The route additionally requires an operator signature.
     OperatorSignature,
@@ -1004,7 +1015,10 @@ pub mod offline {
 
 /// Alias lookup, private evaluation, and recipient-resolution descriptors.
 pub mod aliases {
-    use super::{ApiSurface, FeatureGate, HttpMethod, Listener, RouteDescriptor, RouteProjections};
+    use super::{
+        ApiSurface, AuthenticationPolicy, FeatureGate, HttpMethod, Listener, RouteDescriptor,
+        RouteProjections,
+    };
 
     const fn public_lookup(stable_route_id: &'static str, path: &'static str) -> RouteDescriptor {
         RouteDescriptor::new(
@@ -1020,22 +1034,28 @@ pub mod aliases {
     }
 
     /// Resolve an account alias.
-    pub const RESOLVE: RouteDescriptor = public_lookup("aliases.resolve", "/v1/aliases/resolve");
+    pub const RESOLVE: RouteDescriptor = public_lookup("aliases.resolve", "/v1/aliases/resolve")
+        .with_authentication(AuthenticationPolicy::CanonicalAccountSignature);
     /// Resolve the deterministic numeric alias index.
     pub const RESOLVE_INDEX: RouteDescriptor =
-        public_lookup("aliases.resolve_index", "/v1/aliases/resolve-index");
+        public_lookup("aliases.resolve_index", "/v1/aliases/resolve-index")
+            .with_authentication(AuthenticationPolicy::CanonicalAccountSignature);
     /// List aliases bound to an account.
     pub const BY_ACCOUNT: RouteDescriptor =
-        public_lookup("aliases.by_account", "/v1/aliases/by-account");
+        public_lookup("aliases.by_account", "/v1/aliases/by-account")
+            .with_authentication(AuthenticationPolicy::CanonicalAccountSignature);
     /// Resolve a retail recipient reference.
     pub const RETAIL_RECIPIENT_LOOKUP: RouteDescriptor =
-        public_lookup("retail.recipient.lookup", "/v1/retail/recipients/lookup");
+        public_lookup("retail.recipient.lookup", "/v1/retail/recipients/lookup")
+            .with_authentication(AuthenticationPolicy::CanonicalAccountSignature);
     /// Resolve a privacy-minimized retail recipient route.
     pub const RETAIL_RECIPIENT_ROUTE: RouteDescriptor =
-        public_lookup("retail.recipient.route", "/v1/retail/recipients/route");
+        public_lookup("retail.recipient.route", "/v1/retail/recipients/route")
+            .with_authentication(AuthenticationPolicy::CanonicalAccountSignature);
     /// Read one exact on-chain fee sponsor policy.
     pub const FEE_SPONSOR_POLICY_BY_ID: RouteDescriptor =
-        public_lookup("fee_sponsor_policy.by_id", "/v1/fee-sponsor-policies/by-id");
+        public_lookup("fee_sponsor_policy.by_id", "/v1/fee-sponsor-policies/by-id")
+            .with_authentication(AuthenticationPolicy::CanonicalAccountSignature);
     /// Resolve an asset alias.
     pub const ASSET_RESOLVE: RouteDescriptor =
         public_lookup("assets.alias.resolve", "/v1/assets/aliases/resolve");
@@ -2327,6 +2347,12 @@ pub mod sumeragi {
     /// Read a self-contained bridge finality proof.
     pub const BRIDGE_FINALITY: RouteDescriptor =
         public_get("bridge.finality_proof.read", "/v1/bridge/finality/{height}");
+    /// Read a challenge-bound node-signed durable-tip finality attestation.
+    pub const BRIDGE_FINALITY_ATTESTATION: RouteDescriptor = public_get(
+        "bridge.finality_attestation.read",
+        "/v1/bridge/finality/attestation/{height}",
+    )
+    .with_projections(RouteProjections::OPENAPI);
     /// Read a bridge finality commitment and justification bundle.
     pub const BRIDGE_FINALITY_BUNDLE: RouteDescriptor = public_get(
         "bridge.finality_bundle.read",
@@ -2388,6 +2414,7 @@ pub mod sumeragi {
         CHECKPOINTS,
         COMMIT_CERTIFICATES,
         BRIDGE_FINALITY,
+        BRIDGE_FINALITY_ATTESTATION,
         BRIDGE_FINALITY_BUNDLE,
         VALIDATOR_SETS,
         VALIDATOR_SET_BY_HEIGHT,
@@ -2645,7 +2672,8 @@ pub mod runtime_governance {
     pub const GOV_PROTECTED_POST: RouteDescriptor = app_operator_post(
         "operator.governance.protected_namespaces.update",
         "/v1/gov/protected-namespaces",
-    );
+    )
+    .with_projections(RouteProjections::OPENAPI.union(RouteProjections::MCP));
     /// Read the protected namespace set.
     pub const GOV_PROTECTED_GET: RouteDescriptor = app_get(
         "governance.protected_namespaces.read",
@@ -3393,6 +3421,14 @@ pub mod application_api {
         app_post(id, path).with_projections(RouteProjections::SDK)
     }
 
+    const fn onboarding_post(id: &'static str, path: &'static str) -> RouteDescriptor {
+        app_post(id, path).with_authentication(AuthenticationPolicy::OnboardingToken)
+    }
+
+    const fn onboarding_sdk_post(id: &'static str, path: &'static str) -> RouteDescriptor {
+        onboarding_post(id, path).with_projections(RouteProjections::SDK)
+    }
+
     const fn app_delete(id: &'static str, path: &'static str) -> RouteDescriptor {
         RouteDescriptor::new(
             id,
@@ -3514,10 +3550,10 @@ pub mod application_api {
         ACCOUNTS_QUERY_POST => app_post("application.accounts_query_post", "/v1/accounts/query");
         TRANSACTIONS_QUERY_POST => app_post("application.transactions_query_post", "/v1/transactions/query");
         TRANSACTIONS_VISIBLE_QUERY_POST => app_post("application.transactions_visible_query_post", "/v1/transactions/visible/query");
-        ACCOUNTS_ONBOARD_POST => app_post("application.accounts_onboard_post", "/v1/accounts/onboard");
+        ACCOUNTS_ONBOARD_POST => onboarding_post("application.accounts_onboard_post", "/v1/accounts/onboard");
         ACCOUNTS_FAUCET_PUZZLE_GET => app_get("application.accounts_faucet_puzzle_get", "/v1/accounts/faucet/puzzle");
         ACCOUNTS_FAUCET_POST => app_post("application.accounts_faucet_post", "/v1/accounts/faucet");
-        ACCOUNTS_ONBOARD_MULTISIG_POST => app_sdk_post("application.accounts_onboard_multisig_post", "/v1/accounts/onboard/multisig");
+        ACCOUNTS_ONBOARD_MULTISIG_POST => onboarding_sdk_post("application.accounts_onboard_multisig_post", "/v1/accounts/onboard/multisig");
         ACCOUNTS_BY_ACCOUNT_ID_ALIASES_GET => app_sdk_get("application.accounts_by_account_id_aliases_get", "/v1/accounts/{account_id}/aliases");
         ACCOUNTS_BY_ACCOUNT_ID_ALIASES_BY_LITERAL_RENEW_POST => app_sdk_post("application.accounts_by_account_id_aliases_by_literal_renew_post", "/v1/accounts/{account_id}/aliases/{literal}/renew");
         ACCOUNTS_BY_ACCOUNT_ID_ALIASES_BY_LITERAL_AUTO_RENEW_POST => app_sdk_post("application.accounts_by_account_id_aliases_by_literal_auto_renew_post", "/v1/accounts/{account_id}/aliases/{literal}/auto-renew");
@@ -4146,6 +4182,7 @@ pub const CATALOGED_ROUTES: &[RouteDescriptor] = &[
     sumeragi::CHECKPOINTS,
     sumeragi::COMMIT_CERTIFICATES,
     sumeragi::BRIDGE_FINALITY,
+    sumeragi::BRIDGE_FINALITY_ATTESTATION,
     sumeragi::BRIDGE_FINALITY_BUNDLE,
     sumeragi::VALIDATOR_SETS,
     sumeragi::VALIDATOR_SET_BY_HEIGHT,
@@ -4715,8 +4752,30 @@ mod tests {
     }
 
     #[test]
+    fn protected_namespace_update_is_an_explicit_operator_mcp_route() {
+        let route = runtime_governance::GOV_PROTECTED_POST;
+        assert_eq!(route.surface(), ApiSurface::Operator);
+        assert_eq!(
+            route.authentication(),
+            AuthenticationPolicy::OperatorSignature
+        );
+        assert!(route.projections().openapi());
+        assert!(!route.projections().sdk());
+        assert!(route.projections().mcp());
+
+        let routes = [route];
+        let projected = RouteCatalog::new(&routes)
+            .project(CatalogProjection::Mcp, EnabledFeatures::new(&["app_api"]));
+        assert_eq!(projected, vec![&routes[0]]);
+    }
+
+    #[test]
     fn bridge_finality_routes_are_not_telemetry_gated() {
-        for route in [sumeragi::BRIDGE_FINALITY, sumeragi::BRIDGE_FINALITY_BUNDLE] {
+        for route in [
+            sumeragi::BRIDGE_FINALITY,
+            sumeragi::BRIDGE_FINALITY_ATTESTATION,
+            sumeragi::BRIDGE_FINALITY_BUNDLE,
+        ] {
             assert_eq!(route.feature_gate(), FeatureGate::Always);
         }
     }
@@ -4822,6 +4881,54 @@ mod tests {
                 .iter()
                 .all(|route| route.path() != "/soradns/{fqdn}/"),
             "the first-release gateway must not expose a trailing-slash alias"
+        );
+    }
+
+    #[test]
+    fn dedicated_onboarding_authentication_is_exactly_scoped() {
+        for route in [
+            application_api::ACCOUNTS_ONBOARD_POST,
+            application_api::ACCOUNTS_ONBOARD_MULTISIG_POST,
+        ] {
+            assert_eq!(
+                route.authentication(),
+                AuthenticationPolicy::OnboardingToken,
+                "{} must advertise its dedicated credential",
+                route.stable_route_id()
+            );
+        }
+        assert_eq!(
+            CATALOGED_ROUTES
+                .iter()
+                .filter(|route| { route.authentication() == AuthenticationPolicy::OnboardingToken })
+                .count(),
+            2,
+            "no unrelated route may inherit the onboarding credential policy"
+        );
+    }
+
+    #[test]
+    fn account_alias_and_recipient_reads_declare_canonical_account_authentication() {
+        for route in [
+            aliases::RESOLVE,
+            aliases::RESOLVE_INDEX,
+            aliases::BY_ACCOUNT,
+            aliases::RETAIL_RECIPIENT_LOOKUP,
+            aliases::RETAIL_RECIPIENT_ROUTE,
+            aliases::FEE_SPONSOR_POLICY_BY_ID,
+        ] {
+            assert_eq!(
+                route.authentication(),
+                AuthenticationPolicy::CanonicalAccountSignature,
+                "{} must not advertise permissionless alias or recipient data",
+                route.stable_route_id()
+            );
+        }
+
+        assert_eq!(
+            aliases::ASSET_RESOLVE.authentication(),
+            AuthenticationPolicy::ToriiDefault,
+            "public asset aliases do not expose an account binding"
         );
     }
 

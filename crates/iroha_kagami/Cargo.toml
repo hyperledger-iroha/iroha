@@ -36,9 +36,15 @@ derive_more.workspace = true
 toml = { version = "0.9.8" }
 
 tiny-keccak.workspace = true
+blake3.workspace = true
 hex = { workspace = true }
-
+rand = { workspace = true }
+zeroize = { version = "1.8.2", default-features = false, features = ["alloc", "std"] }
 inquire = "0.9.1"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2.177"
+rustix = { version = "1.1.4", features = ["process"] }
 
 [dev-dependencies]
 tempfile = { workspace = true }
@@ -60,6 +66,14 @@ codec = []
 [[bin]]
 name = "kagami"
 path = "src/main.rs"
+
+[[bin]]
+name = "iroha_onboarding_token_hash"
+path = "src/bin/iroha_onboarding_token_hash.rs"
+
+[[bin]]
+name = "pk3_genesis_binding_verify"
+path = "src/bin/pk3_genesis_binding_verify.rs"
 
 [[example]]
 name = "codec_samples"

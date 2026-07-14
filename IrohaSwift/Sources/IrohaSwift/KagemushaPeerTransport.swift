@@ -61,7 +61,11 @@ public enum KagemushaPeerTransportContract {
     public static let paymentContentType = "text/vnd.pk.kagemusha-v2.payment"
     public static let acknowledgementContentType = "text/vnd.pk.kagemusha-v2.ack"
 
-    public static let maximumArchiveBytes = KagemushaRecursiveSpend.maximumPeerArchiveBytes
+    public static let maximumArchiveBytesV2 =
+        KagemushaRecursiveSpend.maximumPeerArchiveBytesV2
+    public static let maximumArchiveBytesV4 =
+        KagemushaRecursiveSpend.maximumPeerArchiveBytesV4
+    public static let maximumArchiveBytes = maximumArchiveBytesV4
     /// Largest raw archive that fits in a direct `PKK2?.` text envelope.
     public static let maximumTextArchiveBytes =
         KagemushaRecursiveSpend.maximumPeerTextArchiveBytes
@@ -72,7 +76,7 @@ public enum KagemushaPeerTransportContract {
 /// A canonical, decoded Kagemusha peer archive.
 public enum KagemushaPeerPayload: Equatable, Sendable {
     case receiveRequest(KagemushaRecipientPaymentRequest)
-    case payment(KagemushaRecursiveSpendPeerPayment)
+    case payment(KagemushaRecursiveSpendPeerPaymentV4)
     case acknowledgement(KagemushaReceiverAcknowledgement)
 
     public var kind: KagemushaPeerPayloadKind {
@@ -117,7 +121,7 @@ public enum KagemushaPeerPayload: Equatable, Sendable {
                     try KagemushaRecursiveSpendCodecs.decodeRecipientRequest(archive)
                 )
             case .payment:
-                return .payment(try KagemushaRecursiveSpendPeerPayment.decode(archive))
+                return .payment(try KagemushaRecursiveSpendPeerPaymentV4(noritoArchive: archive))
             case .acknowledgement:
                 return .acknowledgement(
                     try KagemushaRecursiveSpendCodecs.decodeAcknowledgement(archive)
@@ -135,11 +139,11 @@ public enum KagemushaPeerPayload: Equatable, Sendable {
 /// acknowledgement's cryptographic sender verification before releasing any
 /// locally reserved inputs.
 public struct KagemushaPeerSendResult: Equatable, Sendable {
-    public let payment: KagemushaRecursiveSpendPeerPayment
+    public let payment: KagemushaRecursiveSpendPeerPaymentV4
     public let acknowledgement: KagemushaReceiverAcknowledgement
 
     public init(
-        payment: KagemushaRecursiveSpendPeerPayment,
+        payment: KagemushaRecursiveSpendPeerPaymentV4,
         acknowledgement: KagemushaReceiverAcknowledgement
     ) {
         self.payment = payment

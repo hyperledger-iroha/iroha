@@ -52,7 +52,6 @@ internal static class ToriiVpnJson
         RequireVpnExitClass(response.ExitClass, $"{context}.exit_class");
         ToriiSseEventJson.RequireExactTokenText(response.RelayEndpoint, $"{context}.relay_endpoint");
         RequireUInt64Range(response.LeaseSeconds, 1, uint.MaxValue, $"{context}.lease_secs");
-        RequirePositiveUInt64(response.QuoteExpiresAtMilliseconds, $"{context}.quote_expires_at_ms");
         ToriiSseEventJson.RequireExactTokenText(response.FeeAssetId, $"{context}.fee_asset_id");
         RequireCanonicalAccountId(response.EscrowAccountId, $"{context}.escrow_account_id");
         RequireCanonicalAccountId(response.OperatorAccountId, $"{context}.operator_account_id");
@@ -80,8 +79,6 @@ internal static class ToriiVpnJson
         RequireVpnExitClass(response.ExitClass, $"{context}.exit_class");
         ToriiSseEventJson.RequireExactTokenText(response.RelayEndpoint, $"{context}.relay_endpoint");
         RequireUInt64Range(response.LeaseSeconds, 1, uint.MaxValue, $"{context}.lease_secs");
-        RequirePositiveUInt64(response.ExpiresAtMilliseconds, $"{context}.expires_at_ms");
-        RequirePositiveUInt64(response.ConnectedAtMilliseconds, $"{context}.connected_at_ms");
         if (response.ExpiresAtMilliseconds <= response.ConnectedAtMilliseconds)
         {
             throw new JsonException($"{context}.expires_at_ms must be greater than connected_at_ms.");
@@ -119,8 +116,6 @@ internal static class ToriiVpnJson
         RequireVpnExitClass(response.ExitClass, $"{context}.exit_class");
         ToriiSseEventJson.RequireExactTokenText(response.RelayEndpoint, $"{context}.relay_endpoint");
         ToriiSseEventJson.RequireExactTokenText(response.MeterFamily, $"{context}.meter_family");
-        RequirePositiveUInt64(response.ConnectedAtMilliseconds, $"{context}.connected_at_ms");
-        RequirePositiveUInt64(response.DisconnectedAtMilliseconds, $"{context}.disconnected_at_ms");
         if (response.DisconnectedAtMilliseconds < response.ConnectedAtMilliseconds)
         {
             throw new JsonException($"{context}.disconnected_at_ms must be greater than or equal to connected_at_ms.");

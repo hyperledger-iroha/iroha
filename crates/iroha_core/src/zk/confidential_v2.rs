@@ -4063,6 +4063,217 @@ pub fn derive_confidential_next_zero_path_v2(
     })
 }
 
+/// One exact append-only output path derived from an authenticated next-zero frontier.
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+#[derive(Debug, Clone)]
+pub struct ConfidentialSequentialAppendLeafPathsV3 {
+    /// Consecutive confidential-tree leaf index assigned to this output.
+    pub leaf_index: usize,
+    /// Empty-leaf path against the root immediately before this output is inserted.
+    pub update_path: ConfidentialMerklePathV2,
+    /// Output membership path against the root after every requested output is inserted.
+    pub membership_path: ConfidentialMerklePathV2,
+}
+
+/// Canonical result of advancing one authenticated confidential-tree frontier.
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+#[derive(Debug, Clone)]
+pub struct ConfidentialSequentialAppendPathsV3 {
+    /// Root authenticated by the supplied next-zero frontier.
+    pub initial_root: [u8; 32],
+    /// Root after inserting every requested output in order.
+    pub final_root: [u8; 32],
+    /// One or two consecutive output path pairs.
+    pub leaves: Vec<ConfidentialSequentialAppendLeafPathsV3>,
+    /// First canonical empty leaf after the inserted outputs.
+    pub next_zero_leaf_index: usize,
+    /// Empty-leaf path against `final_root` at `next_zero_leaf_index`.
+    pub next_zero_path: ConfidentialMerklePathV2,
+}
+
+/// Recompute and validate one canonical empty-leaf frontier against its supplied root.
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+pub fn validate_confidential_next_zero_path_v3(
+    next_zero_leaf_index: usize,
+    next_zero_path: &ConfidentialMerklePathV2,
+) -> Result<ConfidentialMerklePathV2, String> {
+    normalize_supplied_confidential_merkle_path_v2(
+        [0; 32],
+        Some(next_zero_leaf_index),
+        next_zero_path,
+        next_zero_path.root,
+        "confidential next-zero frontier",
+    )
+}
+
+/// Recompute and validate one non-empty commitment membership path against its supplied root.
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+pub fn validate_confidential_membership_path_v3(
+    commitment: [u8; 32],
+    leaf_index: usize,
+    membership_path: &ConfidentialMerklePathV2,
+) -> Result<ConfidentialMerklePathV2, String> {
+    if scalar_from_repr(commitment).is_none_or(|value| value == Scalar::ZERO) {
+        return Err("confidential membership commitment must be non-zero and canonical".to_owned());
+    }
+    normalize_supplied_confidential_merkle_path_v2(
+        commitment,
+        Some(leaf_index),
+        membership_path,
+        membership_path.root,
+        "confidential membership path",
+    )
+}
+
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+fn replace_confidential_path_leaf_v3(
+    commitment: [u8; 32],
+    leaf_index: usize,
+    supplied: &ConfidentialMerklePathV2,
+    context: &str,
+) -> Result<ConfidentialMerklePathV2, String> {
+    if leaf_index >= CONFIDENTIAL_TREE_CAPACITY_V2 {
+        return Err(format!(
+            "{context} leaf_index must be < {CONFIDENTIAL_TREE_CAPACITY_V2}"
+        ));
+    }
+    if supplied.siblings.len() != CONFIDENTIAL_TREE_DEPTH_V2
+        || supplied.directions.len() != CONFIDENTIAL_TREE_DEPTH_V2
+    {
+        return Err(format!(
+            "{context} must contain exactly {CONFIDENTIAL_TREE_DEPTH_V2} siblings and directions"
+        ));
+    }
+    let commitment = scalar_from_repr(commitment)
+        .filter(|value| *value != Scalar::ZERO)
+        .ok_or_else(|| format!("{context} commitment must be non-zero and canonical"))?;
+    let mut node =
+        confidential_poseidon_hash_v3(CONFIDENTIAL_POSEIDON_MERKLE_LEAF_DOMAIN_V3, &[commitment]);
+    let mut current_index = leaf_index;
+    let mut witness_nodes = Vec::with_capacity(CONFIDENTIAL_TREE_DEPTH_V2);
+    for level in 0..CONFIDENTIAL_TREE_DEPTH_V2 {
+        let expected_direction = u8::from(!current_index.is_multiple_of(2));
+        if supplied.directions[level] != expected_direction {
+            return Err(format!(
+                "{context} direction[{level}] does not match leaf_index"
+            ));
+        }
+        let sibling = scalar_from_repr(supplied.siblings[level]).ok_or_else(|| {
+            format!("{context} sibling[{level}] must be a canonical Pasta scalar")
+        })?;
+        node = if expected_direction == 0 {
+            merkle_parent_v3(node, sibling)
+        } else {
+            merkle_parent_v3(sibling, node)
+        };
+        witness_nodes.push(scalar_to_repr_bytes(node));
+        current_index /= 2;
+    }
+    Ok(ConfidentialMerklePathV2 {
+        siblings: supplied.siblings.clone(),
+        directions: supplied.directions.clone(),
+        witness_nodes,
+        root: scalar_to_repr_bytes(node),
+    })
+}
+
+/// Advance an authenticated append-only frontier by exactly one or two output commitments.
+///
+/// The supplied path must prove the canonical empty leaf at `next_zero_leaf_index`. Outputs are
+/// inserted consecutively, and every returned membership path is rebound to the final root. This
+/// is the only supported local derivation for ABI-20 output-membership witnesses.
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+pub fn derive_confidential_sequential_append_paths_v3(
+    next_zero_leaf_index: usize,
+    next_zero_path: &ConfidentialMerklePathV2,
+    commitments: &[[u8; 32]],
+) -> Result<ConfidentialSequentialAppendPathsV3, String> {
+    if commitments.is_empty() || commitments.len() > 2 {
+        return Err(
+            "sequential confidential append requires exactly one or two outputs".to_owned(),
+        );
+    }
+    let initial_root = next_zero_path.root;
+    let mut frontier =
+        validate_confidential_next_zero_path_v3(next_zero_leaf_index, next_zero_path)?;
+    let mut leaves = Vec::with_capacity(commitments.len());
+    let mut frontier_index = next_zero_leaf_index;
+    for (offset, commitment) in commitments.iter().copied().enumerate() {
+        let expected_index = next_zero_leaf_index
+            .checked_add(offset)
+            .ok_or_else(|| "sequential confidential append index overflowed".to_owned())?;
+        if frontier_index != expected_index {
+            return Err("sequential confidential append frontier is discontinuous".to_owned());
+        }
+        let membership_path = replace_confidential_path_leaf_v3(
+            commitment,
+            frontier_index,
+            &frontier,
+            "sequential confidential output",
+        )?;
+        let next_frontier = derive_confidential_next_zero_path_v2(
+            commitment,
+            frontier_index,
+            &membership_path,
+            membership_path.root,
+        )?;
+        leaves.push(ConfidentialSequentialAppendLeafPathsV3 {
+            leaf_index: frontier_index,
+            update_path: frontier,
+            membership_path,
+        });
+        frontier_index = frontier_index
+            .checked_add(1)
+            .ok_or_else(|| "sequential confidential append index overflowed".to_owned())?;
+        frontier = next_frontier;
+    }
+
+    let final_root = frontier.root;
+    if leaves.len() == 2 {
+        let first_index = leaves[0].leaf_index;
+        let second_index = leaves[1].leaf_index;
+        let differing_level =
+            usize::BITS as usize - 1 - (first_index ^ second_index).leading_zeros() as usize;
+        let second_subtree = if differing_level == 0 {
+            let commitment = scalar_from_repr(commitments[1])
+                .filter(|value| *value != Scalar::ZERO)
+                .ok_or_else(|| {
+                    "second sequential confidential output must be non-zero and canonical"
+                        .to_owned()
+                })?;
+            confidential_poseidon_hash_v3(
+                CONFIDENTIAL_POSEIDON_MERKLE_LEAF_DOMAIN_V3,
+                &[commitment],
+            )
+        } else {
+            scalar_from_repr(leaves[1].membership_path.witness_nodes[differing_level - 1])
+                .ok_or_else(|| {
+                    "second sequential confidential output subtree is not canonical".to_owned()
+                })?
+        };
+        leaves[0].membership_path.siblings[differing_level] = scalar_to_repr_bytes(second_subtree);
+        leaves[0].membership_path = replace_confidential_path_leaf_v3(
+            commitments[0],
+            first_index,
+            &leaves[0].membership_path,
+            "first sequential confidential output final membership",
+        )?;
+    }
+    if leaves
+        .iter()
+        .any(|leaf| leaf.membership_path.root != final_root)
+    {
+        return Err("sequential confidential append did not converge on one final root".to_owned());
+    }
+    Ok(ConfidentialSequentialAppendPathsV3 {
+        initial_root,
+        final_root,
+        leaves,
+        next_zero_leaf_index: frontier_index,
+        next_zero_path: frontier,
+    })
+}
+
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 pub(super) fn normalize_supplied_confidential_merkle_path_v2(
     leaf_commitment: [u8; 32],
@@ -8606,6 +8817,17 @@ pub fn build_confidential_unshield_proof_v3_with_paths(
 #[cfg(test)]
 mod tests {
     #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+    fn scalar_bytes(value: u64) -> [u8; 32] {
+        use halo2_proofs::halo2curves::{ff::PrimeField as _, pasta::Fp};
+
+        Fp::from(value)
+            .to_repr()
+            .as_ref()
+            .try_into()
+            .expect("Pallas scalar representation")
+    }
+
+    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     #[test]
     fn recursive_step_inactive_relation_padding_is_fully_valid() {
         let padding = super::KagemushaStepSecureWitnessV3::deterministic_padding()
@@ -9128,6 +9350,126 @@ mod tests {
                 "witness nodes len={len}"
             );
         }
+    }
+
+    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+    #[test]
+    fn sequential_append_paths_match_complete_tree_recomputation() {
+        for initial_len in 0usize..10 {
+            let initial: Vec<[u8; 32]> = (0..initial_len)
+                .map(|index| scalar_bytes(u64::try_from(800 + index).expect("fixture fits")))
+                .collect();
+            for output_count in 1usize..=2 {
+                let outputs: Vec<[u8; 32]> = (0..output_count)
+                    .map(|index| scalar_bytes(u64::try_from(900 + index).expect("fixture fits")))
+                    .collect();
+                let initial_frontier =
+                    super::compute_confidential_merkle_path_v3(&initial, initial.len())
+                        .expect("initial next-zero frontier");
+                let derived = super::derive_confidential_sequential_append_paths_v3(
+                    initial.len(),
+                    &initial_frontier,
+                    &outputs,
+                )
+                .expect("sequential append paths");
+                let mut final_commitments = initial.clone();
+                final_commitments.extend_from_slice(&outputs);
+                let expected_final_root =
+                    super::compute_confidential_root_v3(&final_commitments).expect("final root");
+                assert_eq!(derived.initial_root, initial_frontier.root);
+                assert_eq!(derived.final_root, expected_final_root);
+                assert_eq!(derived.leaves.len(), output_count);
+                for (offset, leaf) in derived.leaves.iter().enumerate() {
+                    let mut before = initial.clone();
+                    before.extend_from_slice(&outputs[..offset]);
+                    let expected_update =
+                        super::compute_confidential_merkle_path_v3(&before, initial.len() + offset)
+                            .expect("expected update path");
+                    let expected_membership = super::compute_confidential_merkle_path_v3(
+                        &final_commitments,
+                        initial.len() + offset,
+                    )
+                    .expect("expected final membership path");
+                    assert_eq!(leaf.leaf_index, initial.len() + offset);
+                    assert_eq!(leaf.update_path.root, expected_update.root);
+                    assert_eq!(leaf.update_path.siblings, expected_update.siblings);
+                    assert_eq!(leaf.update_path.directions, expected_update.directions);
+                    assert_eq!(leaf.membership_path.root, expected_membership.root);
+                    assert_eq!(leaf.membership_path.siblings, expected_membership.siblings);
+                    assert_eq!(
+                        leaf.membership_path.directions,
+                        expected_membership.directions
+                    );
+                }
+                let expected_frontier = super::compute_confidential_merkle_path_v3(
+                    &final_commitments,
+                    final_commitments.len(),
+                )
+                .expect("expected final frontier");
+                assert_eq!(derived.next_zero_leaf_index, final_commitments.len());
+                assert_eq!(derived.next_zero_path.root, expected_frontier.root);
+                assert_eq!(derived.next_zero_path.siblings, expected_frontier.siblings);
+                assert_eq!(
+                    derived.next_zero_path.directions,
+                    expected_frontier.directions
+                );
+            }
+        }
+    }
+
+    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+    #[test]
+    fn sequential_append_paths_reject_tamper_and_invalid_cardinality() {
+        let commitments = vec![scalar_bytes(1001), scalar_bytes(1002)];
+        let frontier = super::compute_confidential_merkle_path_v3(&commitments, commitments.len())
+            .expect("frontier");
+        let output = scalar_bytes(1003);
+
+        let mut wrong_root = frontier.clone();
+        wrong_root.root[0] ^= 1;
+        assert!(
+            super::derive_confidential_sequential_append_paths_v3(
+                commitments.len(),
+                &wrong_root,
+                &[output],
+            )
+            .is_err()
+        );
+
+        let mut wrong_direction = frontier.clone();
+        wrong_direction.directions[0] ^= 1;
+        assert!(
+            super::derive_confidential_sequential_append_paths_v3(
+                commitments.len(),
+                &wrong_direction,
+                &[output],
+            )
+            .is_err()
+        );
+        assert!(
+            super::derive_confidential_sequential_append_paths_v3(
+                commitments.len(),
+                &frontier,
+                &[],
+            )
+            .is_err()
+        );
+        assert!(
+            super::derive_confidential_sequential_append_paths_v3(
+                commitments.len(),
+                &frontier,
+                &[output, scalar_bytes(1004), scalar_bytes(1005)],
+            )
+            .is_err()
+        );
+        assert!(
+            super::derive_confidential_sequential_append_paths_v3(
+                commitments.len(),
+                &frontier,
+                &[[0; 32]],
+            )
+            .is_err()
+        );
     }
 
     #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]

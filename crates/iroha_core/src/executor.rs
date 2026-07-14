@@ -1115,21 +1115,8 @@ fn redeem_funded_nexus_fee_capacity(
     for instruction in instructions {
         let any = instruction.as_any();
         if let Some(redeem) =
-            any.downcast_ref::<iroha_data_model::isi::offline::RedeemKagemushaRecursiveV2>()
+            any.downcast_ref::<iroha_data_model::isi::offline::RedeemKagemushaRecursiveV4>()
         {
-            // Do not admit a transaction against credit that execution cannot
-            // produce.  The public V2 wire type remains decodable while its
-            // recursive proof backend is unavailable, but Core rejects the
-            // instruction before mutating balances.  Returning `None` also
-            // denies mixed batches rather than letting another redeem mask the
-            // unsupported instruction.
-            // ABI V1 never admits fee credit from a proof-gated instruction
-            // that Core cannot execute. A future ABI may change that contract
-            // only by shipping admission and the complete execution backend
-            // atomically.
-            if !iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PROOF_BACKEND_AVAILABLE {
-                return Ok(None);
-            }
             if &redeem.request.recipient != payer {
                 return Ok(None);
             }
@@ -11906,21 +11893,33 @@ mod tests {
         )
     }
 
-    fn kagemusha_fee_test_recursive_redeem_v2(
+    fn kagemusha_fee_test_recursive_redeem_v4(
         asset: AssetDefinitionId,
         recipient: AccountId,
         signer: &KeyPair,
-    ) -> iroha_data_model::isi::offline::RedeemKagemushaRecursiveV2 {
+        with_change: bool,
+    ) -> iroha_data_model::isi::offline::RedeemKagemushaRecursiveV4 {
         use iroha_data_model::{
             offline::{
-                KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V3,
-                KagemushaRecursiveSpendArtifactBindingV3, KagemushaRecursiveSpendBranchClaimV2,
-                KagemushaRecursiveSpendBundleV2, KagemushaRecursiveSpendProofV2,
-                KagemushaRecursiveSpendPublicStatementV2, KagemushaRecursiveSpendRedeemRequestV2,
-                KagemushaRecursiveSpendRedemptionIntentBuildRequestV2,
-                KagemushaRecursiveSpendTopUpAnchorV2, KagemushaRequestAuthorizationV2,
-                KagemushaScaledAmountV2, KagemushaSpendableNoteDescriptorV2,
-                KagemushaUnshieldPublicInputsBindingV2, kagemusha_recursive_spend_lineage_root_v2,
+                KAGEMUSHA_RECURSIVE_SPEND_OPERATION_LIMBS_V4,
+                KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4,
+                KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_PROOF_ENVELOPE_VERSION_V4,
+                KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V4,
+                KAGEMUSHA_RECURSIVE_SPEND_STATE_BOUNDARY_VERSION_V2,
+                KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V2,
+                KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V2,
+                KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V4,
+                KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4,
+                KAGEMUSHA_RECURSIVE_SPEND_WIRE_VERSION_V4, KagemushaPastaCycleProofEnvelopeV4,
+                KagemushaRecursiveSpendArtifactBindingV4, KagemushaRecursiveSpendBranchClaimV2,
+                KagemushaRecursiveSpendBundleV4, KagemushaRecursiveSpendOperationVectorV4,
+                KagemushaRecursiveSpendProofV4, KagemushaRecursiveSpendPublicStatementV4,
+                KagemushaRecursiveSpendRedeemChangeBranchV4,
+                KagemushaRecursiveSpendRedeemRequestV4, KagemushaRecursiveSpendRedemptionIntentV4,
+                KagemushaRecursiveSpendStateBoundaryV2, KagemushaRecursiveSpendTopUpAnchorRefV2,
+                KagemushaRequestAuthorizationV2, KagemushaScaledAmountV2,
+                KagemushaSpendableNoteDescriptorV2, KagemushaUnshieldPublicInputsBindingV2,
+                kagemusha_recursive_spend_lineage_root_v2,
             },
             proof::{ProofBox, VerifyingKeyId},
         };
@@ -11937,68 +11936,80 @@ mod tests {
             spend_nullifier: [0x42; 32],
             amount,
         };
-        let artifact_binding = KagemushaRecursiveSpendArtifactBindingV3 {
-            generation: "fee-policy-v3".to_owned(),
+        let artifact_binding = KagemushaRecursiveSpendArtifactBindingV4 {
+            version: KAGEMUSHA_RECURSIVE_SPEND_WIRE_VERSION_V4,
+            generation: "fee-policy-v4".to_owned(),
             manifest_sha256: [0x43; 32],
         };
-        let topup_operation_id = [0x47; 32];
-        let topup_anchor = KagemushaRecursiveSpendTopUpAnchorV2 {
-            version: 2,
-            chain_id: chain_id.clone(),
-            payer: recipient.clone(),
-            asset: AssetId::new(asset.clone(), recipient.clone()),
-            asset_scale: amount.scale,
-            amount,
-            initial_root: [0x44; 32],
-            finalized_root: [0x45; 32],
-            shield_leaf_index: 0,
-            current_note: note.clone(),
-            topup_operation_id,
-            shield_verifier_id: VerifyingKeyId::new(
-                "halo2/ipa",
-                "fee-policy-kagemusha-topup-shield-v2",
-            ),
-            shield_verifier_commitment: [0x53; 32],
-            artifact_binding: artifact_binding.clone(),
-            finalized_height: 1,
-            finalized_tx_hash: [0x54; 32],
-            anchor_digest: [0; 32],
-        }
-        .finalize_digest()
-        .expect("canonical fee-policy V2 top-up anchor");
-        let topup_anchor_ref = topup_anchor
-            .compact_ref()
-            .expect("canonical fee-policy V2 anchor reference");
+        let topup_anchor_ref = KagemushaRecursiveSpendTopUpAnchorRefV2 {
+            topup_operation_id: [0x47; 32],
+            anchor_digest: [0x45; 32],
+        };
         let lineage_root =
             kagemusha_recursive_spend_lineage_root_v2(topup_anchor_ref.anchor_digest)
-                .expect("canonical fee-policy V2 lineage root");
+                .expect("canonical fee-policy V4 lineage root");
         let branch_claim = KagemushaRecursiveSpendBranchClaimV2::root(lineage_root)
-            .expect("canonical fee-policy V2 root claim");
-        let verifier_key_id =
-            VerifyingKeyId::new("halo2/ipa", KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V3);
-        let statement = KagemushaRecursiveSpendPublicStatementV2 {
+            .expect("canonical fee-policy V4 root claim");
+        let verifier_key_id = VerifyingKeyId::new(
+            KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4,
+            KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4,
+        );
+        let statement = KagemushaRecursiveSpendPublicStatementV4 {
             chain_id: chain_id.clone(),
             asset: asset.clone(),
             asset_scale: amount.scale,
-            final_root: topup_anchor.finalized_root,
+            final_root: [0x45; 32],
+            next_zero_leaf_index: 1,
             topup_anchor_refs: vec![topup_anchor_ref],
             proof_step_count: 1,
             peer_hop_count: 0,
             current_note: note.clone(),
             branch_claims: vec![branch_claim],
             transition: None,
-            artifact_binding,
+            artifact_binding: artifact_binding.clone(),
             verifier_key_id: verifier_key_id.clone(),
         };
         let public_statement_digest = statement
             .digest()
-            .expect("canonical fee-policy V2 public statement");
-        let bundle = KagemushaRecursiveSpendBundleV2 {
+            .expect("canonical fee-policy V4 public statement");
+        let mut operation_limbs = [0_u32; KAGEMUSHA_RECURSIVE_SPEND_OPERATION_LIMBS_V4];
+        operation_limbs[0] = 1;
+        let mut state_limbs = vec![0_u32; KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V2];
+        state_limbs[0] = KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V2;
+        let bundle = KagemushaRecursiveSpendBundleV4 {
             statement,
-            recursive_proof: KagemushaRecursiveSpendProofV2 {
-                verifier_key_id: verifier_key_id.clone(),
+            operation: KagemushaRecursiveSpendOperationVectorV4 {
+                limbs: operation_limbs,
+            },
+            recursive_proof: KagemushaRecursiveSpendProofV4 {
+                verifier_key_id,
                 public_statement_digest,
-                proof: ProofBox::new("halo2/ipa".parse().expect("backend ident"), vec![0x49; 32]),
+                proof_envelope: KagemushaPastaCycleProofEnvelopeV4 {
+                    version: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_PROOF_ENVELOPE_VERSION_V4,
+                    proof_backend: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4.to_owned(),
+                    transcript_profile: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V4
+                        .to_owned(),
+                    step_eq_circuit_id: KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4.to_owned(),
+                    step_ep_circuit_id: KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V4.to_owned(),
+                    artifact_generation: artifact_binding.generation.clone(),
+                    manifest_sha256: artifact_binding.manifest_sha256,
+                    step_eq_parameter_generation: "fee-policy-v4-eq-params".to_owned(),
+                    step_ep_parameter_generation: "fee-policy-v4-ep-params".to_owned(),
+                    step_eq_circuit_params_sha256: [0x54; 32],
+                    step_ep_circuit_params_sha256: [0x55; 32],
+                    step_eq_verifier_key_sha256: [0x56; 32],
+                    step_ep_verifier_key_sha256: [0x57; 32],
+                    state_boundary: KagemushaRecursiveSpendStateBoundaryV2 {
+                        layout_version: KAGEMUSHA_RECURSIVE_SPEND_STATE_BOUNDARY_VERSION_V2,
+                        state_limbs,
+                    },
+                    proof: ProofBox::new(
+                        KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4
+                            .parse()
+                            .expect("V4 backend ident"),
+                        vec![0x49; 32],
+                    ),
+                },
             },
         };
         let operation_id = [0x4A; 32];
@@ -12015,23 +12026,29 @@ mod tests {
             asset_tag: [0x4B; 32],
             chain_tag: [0x4C; 32],
         };
-        let redemption = KagemushaRecursiveSpendRedemptionIntentBuildRequestV2 {
-            previous_bundle: bundle.clone(),
+        let redemption = KagemushaRecursiveSpendRedemptionIntentV4 {
+            chain_id,
+            asset: asset.clone(),
+            input_note: note,
+            parent_branch_claims: bundle.statement.branch_claims.clone(),
+            parent_topup_anchor_refs: bundle.statement.topup_anchor_refs.clone(),
+            parent_proof_step_count: bundle.statement.proof_step_count,
+            parent_peer_hop_count: bundle.statement.peer_hop_count,
+            parent_bundle_digest: [0x50; 32],
+            input_root: bundle.statement.final_root,
             recipient: recipient.clone(),
             public_amount: amount,
             change_output: None,
             change_artifact_binding: None,
-            unshield_public_inputs,
             unshield_public_inputs_digest: unshield_public_inputs
                 .digest()
-                .expect("canonical fee-policy V2 unshield digest"),
+                .expect("canonical fee-policy V4 unshield digest"),
+            unshield_public_inputs,
             operation_id,
-        }
-        .into_intent()
-        .expect("canonical fee-policy V2 redemption intent");
+        };
         let authorization = KagemushaRequestAuthorizationV2 {
             authority: recipient.clone(),
-            device_id: "fee-policy-v2-device".to_owned(),
+            device_id: "fee-policy-v4-device".to_owned(),
             operation_id,
             issued_at_ms: 1,
             expires_at_ms: 2,
@@ -12041,22 +12058,28 @@ mod tests {
             app_attest_evidence: None,
             signature: iroha_crypto::Signature::try_new(
                 signer.private_key(),
-                b"fee-policy-v2-unsupported",
+                b"fee-policy-v4-classification-only",
             )
             .expect("fixture signature"),
         };
-        let request = KagemushaRecursiveSpendRedeemRequestV2 {
+        let offline_change = with_change.then(|| KagemushaRecursiveSpendRedeemChangeBranchV4 {
+            output: bundle.statement.current_note.clone(),
+            branch_claims: bundle.statement.branch_claims.clone(),
+            bundle: bundle.clone(),
+        });
+        let request = KagemushaRecursiveSpendRedeemRequestV4 {
+            version: KAGEMUSHA_RECURSIVE_SPEND_WIRE_VERSION_V4,
             bundle,
             recipient,
             amount,
-            redeem_proof: kagemusha_fee_test_proof_attachment("fee-policy-kagemusha-redeem-v2"),
+            redeem_proof: kagemusha_fee_test_proof_attachment("fee-policy-kagemusha-redeem-v4"),
             redemption,
-            offline_change: None,
+            offline_change,
             block_height: 1,
             operation_id,
             authorization,
         };
-        iroha_data_model::isi::offline::RedeemKagemushaRecursiveV2::new(request)
+        iroha_data_model::isi::offline::RedeemKagemushaRecursiveV4::new(request)
     }
 
     fn signed_fee_policy_transaction(
@@ -13529,31 +13552,31 @@ mod tests {
     }
 
     #[test]
-    fn unavailable_kagemusha_v2_redeem_cannot_self_fund_nexus_fee() {
-        assert!(
-            !iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PROOF_BACKEND_AVAILABLE,
-            "this regression test must be replaced by end-to-end V2 execution coverage when the backend ships"
-        );
+    fn kagemusha_v4_redeem_can_self_fund_nexus_fee_before_exact_execution_validation() {
         let (mut state, authority_id, authority_kp, asset_def_id) =
             nexus_fee_lane_relay_burn_admission_fixture();
         state.nexus.get_mut().fees.fee_asset_id = asset_def_id.to_string();
-        let redeem = kagemusha_fee_test_recursive_redeem_v2(
-            asset_def_id,
-            authority_id.clone(),
-            &authority_kp,
-        );
-        let tx = signed_fee_policy_transaction(authority_id, &authority_kp, redeem.into());
 
-        let view = state.view();
-        let capacity =
-            redeem_funded_nexus_fee_capacity(&view.world, &view.nexus.fees, &tx, 0, false)
-                .expect("unsupported V2 classification must not fail");
-        assert_eq!(
-            capacity, None,
-            "an unavailable V2 proof backend cannot produce fee-paying credit"
-        );
-        drop(view);
-        assert_lane_relay_burn_requires_fee_budget(&state, &tx);
+        for with_change in [false, true] {
+            let redeem = kagemusha_fee_test_recursive_redeem_v4(
+                asset_def_id.clone(),
+                authority_id.clone(),
+                &authority_kp,
+                with_change,
+            );
+            let tx =
+                signed_fee_policy_transaction(authority_id.clone(), &authority_kp, redeem.into());
+
+            let view = state.view();
+            let capacity =
+                redeem_funded_nexus_fee_capacity(&view.world, &view.nexus.fees, &tx, 0, false)
+                    .expect("V4 recursive redemption classification must not fail")
+                    .expect("pending V4 redemption credit must fund admission");
+            assert_eq!(capacity.payer, authority_id);
+            assert_eq!(capacity.capacity, Numeric::from(1_u32));
+            check_external_nexus_fee_admission(&view.world, &view.nexus, &tx, 0, 2, None)
+                .expect("pending V4 redemption credit must cover the Nexus admission fee");
+        }
     }
 
     #[test]

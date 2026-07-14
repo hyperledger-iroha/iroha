@@ -69,7 +69,7 @@ public final class RegisterOfflineDeviceAttestationTests {
         () ->
             registration(
                 accountId,
-                "org.hyperledger.iroha.abi19.fixture",
+                "org.hyperledger.iroha.abi20.fixture",
                 signingCertificate(),
                 IrohaHash.prehash(bytes("wrong-challenge")),
                 null,
@@ -80,7 +80,7 @@ public final class RegisterOfflineDeviceAttestationTests {
         () ->
             registration(
                 accountId,
-                "org.hyperledger.iroha.abi19.fixture",
+                "org.hyperledger.iroha.abi20.fixture",
                 signingCertificate(),
                 null,
                 IrohaHash.prehash(bytes("wrong-report")),
@@ -91,7 +91,7 @@ public final class RegisterOfflineDeviceAttestationTests {
         () ->
             registration(
                 accountId,
-                "org.hyperledger.iroha.abi19.fixture",
+                "org.hyperledger.iroha.abi20.fixture",
                 signingCertificate(),
                 null,
                 null,
@@ -102,7 +102,7 @@ public final class RegisterOfflineDeviceAttestationTests {
         () ->
             registration(
                 accountId,
-                "org.hyperledger.iroha.abi19.fixture",
+                "org.hyperledger.iroha.abi20.fixture",
                 signingCertificate(),
                 null,
                 null,
@@ -126,7 +126,7 @@ public final class RegisterOfflineDeviceAttestationTests {
         () ->
             registration(
                 accountId,
-                "org.hyperledger.iroha.abi19.fixture",
+                "org.hyperledger.iroha.abi20.fixture",
                 sha256(bytes("substituted-signing-certificate")),
                 canonical.challengeHash(),
                 null,
@@ -225,7 +225,7 @@ public final class RegisterOfflineDeviceAttestationTests {
       throws Exception {
     return registration(
         accountId,
-        "org.hyperledger.iroha.abi19.fixture",
+        "org.hyperledger.iroha.abi20.fixture",
         signingCertificate(),
         null,
         null,
@@ -247,7 +247,7 @@ public final class RegisterOfflineDeviceAttestationTests {
         1,
         DeviceAttestationRegistration.ANDROID_KEYMINT_PLATFORM,
         hexLower(sha256(assertionPublicKey)),
-        "abi19-android-unit-test-device",
+        "abi20-android-unit-test-device",
         accountId,
         null,
         null,
@@ -263,16 +263,16 @@ public final class RegisterOfflineDeviceAttestationTests {
         true,
         challengeHash,
         reportHash,
-        bytes("abi19-unit-test-not-physical-attestation-evidence"),
+        bytes("abi20-unit-test-not-physical-attestation-evidence"),
         evidenceHash,
         evidence,
         42,
-        IrohaHash.prehash(bytes("abi19-unit-test-block")),
+        IrohaHash.prehash(bytes("abi20-unit-test-block")),
         2_000_000_000_000L);
   }
 
   private static byte[] signingCertificate() throws Exception {
-    return sha256(bytes("abi19-unit-test-signing-certificate"));
+    return sha256(bytes("abi20-unit-test-signing-certificate"));
   }
 
   private static List<String> rustFixture() throws Exception {
@@ -288,19 +288,19 @@ public final class RegisterOfflineDeviceAttestationTests {
                 StandardOpenOption.READ,
                 StandardOpenOption.WRITE);
         java.nio.channels.FileLock ignored = channel.lock()) {
-      if (!binary.isFile()) {
-        final ProcessBuilder build =
-            new ProcessBuilder("cargo", "build", "-p", "kotlin-fixture-gen")
-                .directory(root)
-                .redirectErrorStream(true);
-        build.environment().put("CARGO_TARGET_DIR", target.getAbsolutePath());
-        final Process process = build.start();
-        final String output =
-            new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
-        final int exit = process.waitFor();
-        if (exit != 0) {
-          throw new IllegalStateException("kotlin-fixture-gen build failed: " + output);
-        }
+      // Always ask Cargo to refresh the generator. Finding an older binary is not
+      // sufficient after a wire-ABI cutover and can compare Java against stale Rust bytes.
+      final ProcessBuilder build =
+          new ProcessBuilder("cargo", "build", "-p", "kotlin-fixture-gen")
+              .directory(root)
+              .redirectErrorStream(true);
+      build.environment().put("CARGO_TARGET_DIR", target.getAbsolutePath());
+      final Process process = build.start();
+      final String output =
+          new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+      final int exit = process.waitFor();
+      if (exit != 0) {
+        throw new IllegalStateException("kotlin-fixture-gen build failed: " + output);
       }
     }
     final Process process =

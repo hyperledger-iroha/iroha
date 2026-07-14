@@ -38,6 +38,12 @@ use tower::ServiceExt as _;
 #[path = "fixtures.rs"]
 mod fixtures;
 
+const ONBOARDING_API_TOKEN: &str = "torii-onboarding-test-token-32-bytes";
+
+fn onboarding_api_token_hash() -> [u8; 32] {
+    *blake3::hash(ONBOARDING_API_TOKEN.as_bytes()).as_bytes()
+}
+
 fn checked_onboard_ed25519_key_fixture() -> KeyPair {
     KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
         .expect("generate checked account onboarding Ed25519 fixture keypair")
@@ -55,7 +61,10 @@ fn accounts_onboard_ed25519_fixture_uses_checked_key_generation() {
 }
 
 async fn post_account_onboarding_for_validation(
+    uri: &str,
     body: norito::json::Value,
+    token_headers: &[&str],
+    configured_token_hash: Option<[u8; 32]>,
 ) -> (StatusCode, norito::json::Value) {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let (kiso, _child) = KisoHandle::start(cfg.clone());
@@ -110,7 +119,10 @@ async fn post_account_onboarding_for_validation(
     cfg.torii.onboarding = Some(iroha_config::parameters::actual::ToriiOnboarding {
         authority: authority_id,
         private_key: ExposedPrivateKey(authority_kp.private_key().clone()),
+        api_token_hash: configured_token_hash,
         allowed_permissions: Vec::new(),
+        alias_resolve_dataspaces: Vec::new(),
+        alias_resolve_domains: Vec::new(),
         fee_sponsor_account: None,
         alias_lease_term_years: 1,
         alias_auto_renew_enabled: false,
@@ -181,13 +193,15 @@ async fn post_account_onboarding_for_validation(
     };
 
     let body = norito::json::to_json(&body).expect("serialize onboarding request");
-    let mut req = Request::builder()
+    let mut builder = Request::builder()
         .method("POST")
-        .uri("/v1/accounts/onboard")
+        .uri(uri)
         .header(axum::http::header::CONTENT_TYPE, "application/json")
-        .header(axum::http::header::ACCEPT, "application/json")
-        .body(axum::body::Body::from(body))
-        .unwrap();
+        .header(axum::http::header::ACCEPT, "application/json");
+    for token in token_headers {
+        builder = builder.header("x-iroha-onboarding-token", *token);
+    }
+    let mut req = builder.body(axum::body::Body::from(body)).unwrap();
     req.extensions_mut()
         .insert(ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 0))));
 
@@ -253,15 +267,119 @@ async fn accounts_onboard_rejects_invalid_uaid_contract() {
     ];
 
     for (expected_code, body) in cases {
-        let (status, payload) = post_account_onboarding_for_validation(body).await;
+        let (status, payload) = post_account_onboarding_for_validation(
+            "/v1/accounts/onboard",
+            body,
+            &[ONBOARDING_API_TOKEN],
+            Some(onboarding_api_token_hash()),
+        )
+        .await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "payload: {payload:?}");
         assert_eq!(
             payload
                 .as_object()
-                .and_then(|payload| payload.get("error_code"))
+                .and_then(|payload| payload.get("code"))
                 .and_then(norito::json::Value::as_str),
             Some(expected_code)
         );
+    }
+}
+
+#[tokio::test]
+async fn accounts_onboard_requires_one_exact_dedicated_token_and_fails_closed_without_hash() {
+    const SHORT_TOKEN: &str = "too-short";
+    const WHITESPACE_TOKEN: &str = "torii onboarding token with spaces 0001";
+    let requests = [
+        (
+            "/v1/accounts/onboard",
+            norito::json!({
+                "alias": "auth-gate@universal",
+                "account_id": (AccountId::new(checked_onboard_ed25519_key_fixture().public_key().clone()).to_string()),
+                "uaid": (UniversalAccountId::from_hash(Hash::new(b"accounts-onboard::auth-gate")).to_string())
+            }),
+        ),
+        (
+            "/v1/accounts/onboard/multisig",
+            norito::json!({
+                "alias": "multisig-auth-gate@universal",
+                "required_signers": 2,
+                "member_account_ids": [
+                    (AccountId::new(checked_onboard_ed25519_key_fixture().public_key().clone()).to_string()),
+                    (AccountId::new(checked_onboard_ed25519_key_fixture().public_key().clone()).to_string())
+                ]
+            }),
+        ),
+        (
+            "/v1/accounts/onboard",
+            norito::json!({ "malformed_for_onboarding": true }),
+        ),
+        (
+            "/v1/accounts/onboard/multisig",
+            norito::json!({ "malformed_for_onboarding": true }),
+        ),
+    ];
+    let cases = [
+        (
+            "missing",
+            Vec::<&str>::new(),
+            Some(onboarding_api_token_hash()),
+            StatusCode::UNAUTHORIZED,
+            "onboarding_auth_required",
+        ),
+        (
+            "wrong",
+            vec!["wrong-onboarding-token-that-is-32-bytes"],
+            Some(onboarding_api_token_hash()),
+            StatusCode::UNAUTHORIZED,
+            "onboarding_auth_required",
+        ),
+        (
+            "duplicate",
+            vec![ONBOARDING_API_TOKEN, ONBOARDING_API_TOKEN],
+            Some(onboarding_api_token_hash()),
+            StatusCode::UNAUTHORIZED,
+            "onboarding_auth_required",
+        ),
+        (
+            "short_even_when_digest_matches",
+            vec![SHORT_TOKEN],
+            Some(*blake3::hash(SHORT_TOKEN.as_bytes()).as_bytes()),
+            StatusCode::UNAUTHORIZED,
+            "onboarding_auth_required",
+        ),
+        (
+            "whitespace_even_when_digest_matches",
+            vec![WHITESPACE_TOKEN],
+            Some(*blake3::hash(WHITESPACE_TOKEN.as_bytes()).as_bytes()),
+            StatusCode::UNAUTHORIZED,
+            "onboarding_auth_required",
+        ),
+        (
+            "unconfigured",
+            vec![ONBOARDING_API_TOKEN],
+            None,
+            StatusCode::SERVICE_UNAVAILABLE,
+            "onboarding_auth_unavailable",
+        ),
+    ];
+    for (uri, body) in requests {
+        for (label, tokens, configured_hash, expected_status, expected_code) in &cases {
+            let (status, payload) =
+                post_account_onboarding_for_validation(uri, body.clone(), tokens, *configured_hash)
+                    .await;
+            assert_eq!(
+                status, *expected_status,
+                "route={uri} case={label} payload={payload:?}"
+            );
+            assert_eq!(
+                payload
+                    .as_object()
+                    .and_then(|payload| payload.get("code"))
+                    .and_then(norito::json::Value::as_str),
+                Some(*expected_code),
+                "route={uri} case={label} payload={payload:?}",
+            );
+        }
     }
 }
 
@@ -332,7 +450,10 @@ async fn accounts_onboard_publishes_global_manifest_and_binding() {
     cfg.torii.onboarding = Some(iroha_config::parameters::actual::ToriiOnboarding {
         authority: authority_id.clone(),
         private_key: ExposedPrivateKey(authority_kp.private_key().clone()),
+        api_token_hash: Some(onboarding_api_token_hash()),
         allowed_permissions: Vec::new(),
+        alias_resolve_dataspaces: Vec::new(),
+        alias_resolve_domains: Vec::new(),
         fee_sponsor_account: None,
         alias_lease_term_years: 1,
         alias_auto_renew_enabled: true,
@@ -415,6 +536,7 @@ async fn accounts_onboard_publishes_global_manifest_and_binding() {
     let mut req = Request::builder()
         .method("POST")
         .uri("/v1/accounts/onboard")
+        .header("x-iroha-onboarding-token", ONBOARDING_API_TOKEN)
         .header(axum::http::header::CONTENT_TYPE, "application/json")
         .body(axum::body::Body::from(body))
         .unwrap();
@@ -623,7 +745,10 @@ async fn accounts_onboard_multisig_registers_multisig_account() {
     cfg.torii.onboarding = Some(iroha_config::parameters::actual::ToriiOnboarding {
         authority: authority_id.clone(),
         private_key: ExposedPrivateKey(authority_kp.private_key().clone()),
+        api_token_hash: Some(onboarding_api_token_hash()),
         allowed_permissions: Vec::new(),
+        alias_resolve_dataspaces: Vec::new(),
+        alias_resolve_domains: Vec::new(),
         fee_sponsor_account: None,
         alias_lease_term_years: 1,
         alias_auto_renew_enabled: true,
@@ -708,6 +833,7 @@ async fn accounts_onboard_multisig_registers_multisig_account() {
     let mut req = Request::builder()
         .method("POST")
         .uri("/v1/accounts/onboard/multisig")
+        .header("x-iroha-onboarding-token", ONBOARDING_API_TOKEN)
         .header(axum::http::header::CONTENT_TYPE, "application/json")
         .body(axum::body::Body::from(body))
         .unwrap();
@@ -832,7 +958,10 @@ async fn accounts_onboard_succeeds_without_auto_renew_subscription_domain_when_d
     cfg.torii.onboarding = Some(iroha_config::parameters::actual::ToriiOnboarding {
         authority: authority_id.clone(),
         private_key: ExposedPrivateKey(authority_kp.private_key().clone()),
+        api_token_hash: Some(onboarding_api_token_hash()),
         allowed_permissions: Vec::new(),
+        alias_resolve_dataspaces: Vec::new(),
+        alias_resolve_domains: Vec::new(),
         fee_sponsor_account: None,
         alias_lease_term_years: 1,
         alias_auto_renew_enabled: false,
@@ -915,6 +1044,7 @@ async fn accounts_onboard_succeeds_without_auto_renew_subscription_domain_when_d
     let mut req = Request::builder()
         .method("POST")
         .uri("/v1/accounts/onboard")
+        .header("x-iroha-onboarding-token", ONBOARDING_API_TOKEN)
         .header(axum::http::header::CONTENT_TYPE, "application/json")
         .body(axum::body::Body::from(body))
         .unwrap();
@@ -1046,7 +1176,10 @@ async fn accounts_onboard_multisig_succeeds_without_auto_renew_subscription_doma
     cfg.torii.onboarding = Some(iroha_config::parameters::actual::ToriiOnboarding {
         authority: authority_id.clone(),
         private_key: ExposedPrivateKey(authority_kp.private_key().clone()),
+        api_token_hash: Some(onboarding_api_token_hash()),
         allowed_permissions: Vec::new(),
+        alias_resolve_dataspaces: Vec::new(),
+        alias_resolve_domains: Vec::new(),
         fee_sponsor_account: None,
         alias_lease_term_years: 1,
         alias_auto_renew_enabled: false,
@@ -1131,6 +1264,7 @@ async fn accounts_onboard_multisig_succeeds_without_auto_renew_subscription_doma
     let mut req = Request::builder()
         .method("POST")
         .uri("/v1/accounts/onboard/multisig")
+        .header("x-iroha-onboarding-token", ONBOARDING_API_TOKEN)
         .header(axum::http::header::CONTENT_TYPE, "application/json")
         .body(axum::body::Body::from(body))
         .unwrap();

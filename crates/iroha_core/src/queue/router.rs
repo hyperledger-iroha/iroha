@@ -24,7 +24,7 @@ use iroha_data_model::{
         musubi::{
             AssertMusubiReleaseExists, PublishMusubiRelease, SetMusubiShortAlias, YankMusubiRelease,
         },
-        offline::{RedeemKagemushaRecursiveV2, TopUpKagemushaRecursiveV2},
+        offline::{RedeemKagemushaRecursiveV4, TopUpKagemushaRecursiveV4},
         settlement::{
             DvpIsi, FxCorridorPolicy, FxCorridorPolicyRegistry, PvpIsi, SetFxCorridorPolicy,
             SettleFxCorridor, SettlementInstructionBox,
@@ -58,7 +58,10 @@ use iroha_executor_data_model::isi::multisig::{
     MultisigApprove, MultisigInstructionBox, MultisigProposalState, MultisigPropose,
 };
 use iroha_executor_data_model::permission::{
-    account::{AccountAliasPermissionScope, CanManageAccountAlias, CanResolveAccountAlias},
+    account::{
+        AccountAliasPermissionScope, CanDelegateAccountAliasResolution, CanManageAccountAlias,
+        CanResolveAccountAlias,
+    },
     asset::{
         CanBurnAssetWithDefinition, CanMintAssetWithDefinition,
         CanModifyAssetMetadataWithDefinition, CanTransferAssetWithDefinition,
@@ -3422,10 +3425,10 @@ fn multisig_propose_transaction_dataspace_target_with_world<W: WorldReadOnly>(
 }
 
 fn confidential_asset_definition_target(any: &dyn std::any::Any) -> Option<&AssetDefinitionId> {
-    if let Some(topup) = any.downcast_ref::<TopUpKagemushaRecursiveV2>() {
+    if let Some(topup) = any.downcast_ref::<TopUpKagemushaRecursiveV4>() {
         return Some(topup.request.asset.definition());
     }
-    if let Some(redeem) = any.downcast_ref::<RedeemKagemushaRecursiveV2>() {
+    if let Some(redeem) = any.downcast_ref::<RedeemKagemushaRecursiveV4>() {
         return Some(&redeem.request.bundle.statement.asset);
     }
     if let Some(shield) = any.downcast_ref::<Shield>() {
@@ -4675,6 +4678,17 @@ fn dataspace_scoped_permission_target(
                         state_view,
                     )
                 }),
+            "CanDelegateAccountAliasResolution" => permission
+                .payload()
+                .try_into_any_norito::<CanDelegateAccountAliasResolution>()
+                .ok()
+                .and_then(|token| {
+                    account_alias_permission_scope_dataspace_target_with_state(
+                        &token.scope,
+                        dataspace_catalog,
+                        state_view,
+                    )
+                }),
             "CanUseFeeSponsor" => permission
                 .payload()
                 .try_into_any_norito::<CanUseFeeSponsor>()
@@ -4834,6 +4848,18 @@ fn dataspace_scoped_permission_target_with_world<W: WorldReadOnly>(
             "CanResolveAccountAlias" => permission
                 .payload()
                 .try_into_any_norito::<CanResolveAccountAlias>()
+                .ok()
+                .and_then(|token| {
+                    account_alias_permission_scope_dataspace_target_with_world(
+                        &token.scope,
+                        dataspace_catalog,
+                        world,
+                        ledger_time_ms,
+                    )
+                }),
+            "CanDelegateAccountAliasResolution" => permission
+                .payload()
+                .try_into_any_norito::<CanDelegateAccountAliasResolution>()
                 .ok()
                 .and_then(|token| {
                     account_alias_permission_scope_dataspace_target_with_world(
@@ -6917,7 +6943,10 @@ mod tests {
         transaction::TransactionBuilder,
     };
     use iroha_executor_data_model::permission::{
-        account::{AccountAliasPermissionScope, CanManageAccountAlias, CanResolveAccountAlias},
+        account::{
+            AccountAliasPermissionScope, CanDelegateAccountAliasResolution, CanManageAccountAlias,
+            CanResolveAccountAlias,
+        },
         nexus::{
             CanEnrollFeeSponsorPolicyForAccountDomain, CanPublishSpaceDirectoryManifest,
             CanPublishSpaceDirectoryManifestForAccountDomain,
@@ -17025,6 +17054,47 @@ mod tests {
             router
                 .try_route_without_state(&tx)
                 .expect("domain alias permission should route without world state"),
+            Some(RoutingDecision::new(lane_id, dataspace_id))
+        );
+    }
+
+    #[test]
+    fn account_alias_resolution_delegation_routes_by_exact_scope() {
+        let (submitter_id, submitter_keypair) = gen_account_in("wonderland");
+        let (holder_id, _) = gen_account_in("wonderland");
+        let dataspace_id = DataSpaceId::new(10);
+        let lane_id = LaneId::new(3);
+        let catalog = dataspace_catalog(&[(dataspace_id, "paynet")]);
+        let lane_catalog = catalog_with_lane_dataspaces(&[
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            (lane_id, dataspace_id),
+        ]);
+        let router = ConfigLaneRouter::new(
+            LaneRoutingPolicy {
+                default_lane: LaneId::SINGLE,
+                default_dataspace: DataSpaceId::UNIVERSAL,
+                rules: Vec::new(),
+            },
+            catalog,
+            lane_catalog,
+        );
+        let permission = Permission::from(CanDelegateAccountAliasResolution {
+            scope: AccountAliasPermissionScope::Domain(
+                DomainId::try_new("mibank", "paynet").expect("domain id"),
+            ),
+        });
+        let tx = sample_transaction(
+            &submitter_id,
+            submitter_keypair.private_key(),
+            vec![InstructionBox::from(Grant::account_permission(
+                permission, holder_id,
+            ))],
+        );
+
+        assert_eq!(
+            router
+                .try_route_without_state(&tx)
+                .expect("alias-resolution delegation should route by its exact scope"),
             Some(RoutingDecision::new(lane_id, dataspace_id))
         );
     }
