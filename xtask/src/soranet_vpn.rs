@@ -6,6 +6,7 @@ use iroha_data_model::soranet::vpn::{
     VpnControlPlaneV1, VpnCoverPlanEntryV1, VpnCoverScheduleV1, VpnExitClassParseError,
     VpnExitClassV1, VpnFlowLabelV1, VpnPaddedCellV1, VpnRouteV1, VpnSessionReceiptV1,
 };
+use iroha_primitives::numeric::Quantity;
 use thiserror::Error;
 
 /// Errors raised when assembling VPN control-plane/receipt payloads from config.
@@ -126,7 +127,7 @@ pub fn session_receipt(
         ended_at_ms: 0,
         exit_class: exit_class_from_label(&cfg.exit_class)?,
         meter_hash,
-        earned_fee_nanos: 0,
+        earned_fee: Quantity::zero(),
         highest_voucher_sequence: 0,
         client_voucher_hash: [0u8; 32],
     })

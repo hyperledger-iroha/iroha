@@ -8,6 +8,7 @@ import {fileURLToPath, pathToFileURL} from 'node:url';
 
 import {verifyOpenApiSignature} from './lib/openapi-signature.mjs';
 import {validateOpenApiGeneratorProvenance} from './lib/openapi-provenance.mjs';
+import {isAllowedSigner, loadAllowedSigners} from './lib/openapi-signers.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -479,77 +480,6 @@ function normalizeVersions(manifest, versionsFile) {
     );
   }
   return labels;
-}
-
-async function loadAllowedSigners(allowedSignersFile) {
-  let raw = null;
-  try {
-    raw = await readFile(allowedSignersFile, 'utf8');
-  } catch (error) {
-    throw new Error(
-      `failed to read allowed signers file ${allowedSignersFile}: ${error.message ?? error}`,
-    );
-  }
-  let parsed = null;
-  try {
-    parsed = JSON.parse(raw);
-  } catch (error) {
-    throw new Error(`failed to parse ${allowedSignersFile}: ${error.message ?? error}`);
-  }
-  if (!parsed || !Array.isArray(parsed.allow)) {
-    throw new Error(`${allowedSignersFile} must contain an allow array`);
-  }
-  if (parsed.version !== 1) {
-    throw new Error(`${allowedSignersFile} unsupported version ${parsed.version ?? '(missing)'}`);
-  }
-  const entries = [];
-  const issues = [];
-  const seenSigners = new Set();
-  for (const [index, entry] of parsed.allow.entries()) {
-    const algorithm = normalizeAlgorithm(entry?.algorithm);
-    const publicKey = normalizeHex(entry?.public_key_hex ?? entry?.publicKeyHex);
-    if (!algorithm) {
-      issues.push(`entry ${index} missing algorithm`);
-    } else if (algorithm !== 'ed25519') {
-      issues.push(`entry ${index} unsupported algorithm ${algorithm}`);
-    }
-    if (!publicKey) {
-      issues.push(`entry ${index} missing public_key_hex`);
-    } else if (!isEd25519PublicKeyHex(publicKey)) {
-      issues.push(`entry ${index} invalid public_key_hex`);
-    }
-    if (algorithm && publicKey && algorithm === 'ed25519' && isEd25519PublicKeyHex(publicKey)) {
-      const signerKey = formatSignerKey(algorithm, publicKey);
-      if (seenSigners.has(signerKey)) {
-        issues.push(`entry ${index} duplicates allowed signer`);
-      } else {
-        seenSigners.add(signerKey);
-        entries.push(signerKey);
-      }
-    }
-  }
-  if (entries.length === 0) {
-    issues.push('no allowed signers specified');
-  }
-  if (issues.length > 0) {
-    throw new Error(
-      `invalid ${allowedSignersFile}:\n${issues.map((issue) => `- ${issue}`).join('\n')}`,
-    );
-  }
-  return new Set(entries);
-}
-
-function formatSignerKey(algorithm, publicKey) {
-  return `${algorithm}:${publicKey}`;
-}
-
-function isAllowedSigner(allowedSigners, signature) {
-  const algorithm = normalizeAlgorithm(signature.algorithm);
-  const publicKey = normalizeHex(signature.publicKey);
-  if (!algorithm || !publicKey) {
-    return false;
-  }
-  return allowedSigners.has(formatSignerKey(algorithm, publicKey));
 }
 
 function normalizeRelative(value) {

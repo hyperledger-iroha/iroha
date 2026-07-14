@@ -12,6 +12,7 @@ use iroha_crypto::{Hash, HashOf, KeyPair};
 use iroha_data_model::{
     ValidationFail,
     account::AccountId,
+    asset::AssetId,
     isi::{
         InstructionBox,
         offline::{RedeemKagemushaRecursiveV2, TopUpKagemushaRecursiveV2},
@@ -48,6 +49,7 @@ const ADMITTED_OPERATION_ACCOUNTED_BYTES: usize =
 pub(crate) struct OfflineCommandRuntime {
     authority: AccountId,
     key_pair: KeyPair,
+    minimum_xor_balance: Quantity,
     max_tx_value: Quantity,
     admission: Arc<Mutex<OfflineOperationRegistry>>,
 }
@@ -57,6 +59,7 @@ impl OfflineCommandRuntime {
         Self {
             authority: config.authority,
             key_pair: config.key_pair,
+            minimum_xor_balance: config.minimum_xor_balance,
             max_tx_value: config.max_tx_value,
             admission: Arc::new(Mutex::new(OfflineOperationRegistry::new(
                 config.operation_registry_max_entries,
@@ -1789,12 +1792,77 @@ fn offline_topup_finality_proof_unavailable() -> Error {
 }
 
 fn require_issuer(app: &AppState) -> Result<Arc<OfflineCommandRuntime>, Error> {
-    app.offline_commands
+    let issuer = app
+        .offline_commands
         .clone()
         .ok_or_else(|| Error::AppServiceUnavailable {
             code: "offline_service_unavailable",
             message: "Offline operation signing is not configured on this Torii node.".to_owned(),
-        })
+        })?;
+    ensure_kagemusha_v2_backend_available()?;
+    ensure_offline_command_authority_ready(app, &issuer)?;
+    Ok(issuer)
+}
+
+pub(crate) fn ensure_offline_command_authority_ready(
+    app: &AppState,
+    issuer: &OfflineCommandRuntime,
+) -> Result<(), Error> {
+    let state = app.state.view();
+    let fee_asset_selector = app.state.nexus_snapshot().fees.fee_asset_id;
+    ensure_offline_command_authority_ready_in_world(
+        state.world(),
+        issuer,
+        &fee_asset_selector,
+        kagemusha_v2_snapshot_time_ms(&state),
+    )
+}
+
+fn ensure_offline_command_authority_ready_in_world(
+    world: &impl WorldReadOnly,
+    issuer: &OfflineCommandRuntime,
+    fee_asset_selector: &str,
+    snapshot_time_ms: u64,
+) -> Result<(), Error> {
+    if world.account(&issuer.authority).is_err()
+        || !iroha_core::smartcontracts::isi::offline::isi::world_has_offline_escrow_manager_permission(
+            world,
+            &issuer.authority,
+        )
+    {
+        return Err(Error::AppServiceUnavailable {
+            code: "offline_command_authority_not_ready",
+            message: "Offline command authority is not registered with the exact CanManageOfflineEscrow permission."
+                .to_owned(),
+        });
+    }
+
+    let fee_asset_definition =
+        routing::resolve_asset_definition_selector(world, fee_asset_selector, snapshot_time_ms)
+            .map_err(|error| {
+                iroha_logger::error!(
+                    ?error,
+                    %fee_asset_selector,
+                    "offline command authority XOR fee asset could not be resolved"
+                );
+                Error::AppServiceUnavailable {
+                    code: "offline_command_fee_asset_not_ready",
+                    message: "Offline command authority XOR fee asset is not available.".to_owned(),
+                }
+            })?;
+    let fee_asset = AssetId::new(fee_asset_definition, issuer.authority.clone());
+    let balance = world
+        .asset(&fee_asset)
+        .map(|entry| entry.value().as_ref().clone())
+        .unwrap_or_else(|_| Quantity::zero());
+    if balance < issuer.minimum_xor_balance {
+        return Err(Error::AppServiceUnavailable {
+            code: "offline_command_authority_unfunded",
+            message: "Offline command authority does not meet its configured minimum XOR balance."
+                .to_owned(),
+        });
+    }
+    Ok(())
 }
 
 fn offline_transaction_signing_error(
@@ -1866,8 +1934,9 @@ mod tests {
     use iroha_core::kura::Kura;
     use iroha_crypto::{Algorithm, Hash, Signature, SignatureOf};
     use iroha_data_model::{
-        ChainId,
-        asset::{AssetDefinitionId, AssetId},
+        ChainId, Registrable as _,
+        account::Account,
+        asset::{Asset, AssetDefinition, AssetDefinitionId, AssetId},
         block::{
             BlockExecutionContextBundle, BlockHeader, BlockSignature,
             CertifiedMergeLedgerReference, SignedBlock,
@@ -1890,6 +1959,7 @@ mod tests {
             KagemushaTopUpShieldEvidenceV2,
         },
         peer::PeerId,
+        permission::{Permission, Permissions},
         proof::{ProofAttachment, ProofBox, VerifyingKeyId},
         transaction::signed::TransactionResultInner,
         trigger::DataTriggerSequence,
@@ -1897,6 +1967,7 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
+    use iroha_core::state::World;
 
     fn submission_test_issuer() -> Arc<OfflineCommandRuntime> {
         submission_test_issuer_with_limits(64, 64 * ADMITTED_OPERATION_ACCOUNTED_BYTES)
@@ -1911,12 +1982,95 @@ mod tests {
         Arc::new(OfflineCommandRuntime {
             authority: AccountId::new(key_pair.public_key().clone()),
             key_pair,
+            minimum_xor_balance: Quantity::from(25_u32),
             max_tx_value: Quantity::from(1_000_u32),
             admission: Arc::new(Mutex::new(OfflineOperationRegistry::new(
                 NonZeroUsize::new(max_entries).expect("positive registry count"),
                 NonZeroUsize::new(max_accounted_bytes).expect("positive registry byte budget"),
             ))),
         })
+    }
+
+    fn command_authority_readiness_world(
+        issuer: &OfflineCommandRuntime,
+        permission: Permission,
+        xor_balance: Quantity,
+    ) -> (World, String) {
+        let fee_asset_definition_id: AssetDefinitionId =
+            iroha_config::parameters::defaults::nexus::fees::fee_asset_id()
+                .parse()
+                .expect("canonical XOR asset definition id");
+        let account = Account::new(issuer.authority.clone()).build(&issuer.authority);
+        let definition =
+            AssetDefinition::numeric(fee_asset_definition_id.clone()).build(&issuer.authority);
+        let asset = Asset::new(
+            AssetId::new(fee_asset_definition_id.clone(), issuer.authority.clone()),
+            xor_balance,
+        );
+        let mut world = World::with_assets([], [account], [definition], [asset], []);
+        let mut permissions = Permissions::new();
+        permissions.insert(permission);
+        world
+            .account_permissions_mut_for_testing()
+            .insert(issuer.authority.clone(), permissions);
+        (world, fee_asset_definition_id.to_string())
+    }
+
+    fn assert_offline_readiness_code(error: Error, expected: &'static str) {
+        match error {
+            Error::AppServiceUnavailable { code, .. } => assert_eq!(code, expected),
+            other => panic!("unexpected offline readiness error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn command_authority_readiness_requires_exact_permission_and_xor_floor() {
+        let issuer = submission_test_issuer();
+        let wrong_permission = Permission::new(
+            "CanManageOfflineEscrow".to_owned(),
+            iroha_primitives::json::Json::new("wildcard"),
+        );
+        let (mut world, fee_asset_selector) = command_authority_readiness_world(
+            &issuer,
+            wrong_permission,
+            issuer.minimum_xor_balance.clone(),
+        );
+        let error = ensure_offline_command_authority_ready_in_world(
+            &world.view(),
+            &issuer,
+            &fee_asset_selector,
+            0,
+        )
+        .expect_err("same-name wildcard payload must not authorize offline commands");
+        assert_offline_readiness_code(error, "offline_command_authority_not_ready");
+
+        world.account_permissions_mut_for_testing().insert(
+            issuer.authority.clone(),
+            [iroha_core::smartcontracts::isi::offline::isi::offline_escrow_manager_permission()]
+                .into_iter()
+                .collect(),
+        );
+        ensure_offline_command_authority_ready_in_world(
+            &world.view(),
+            &issuer,
+            &fee_asset_selector,
+            0,
+        )
+        .expect("exact manager permission and configured XOR floor must be ready");
+
+        let (underfunded_world, underfunded_fee_asset_selector) = command_authority_readiness_world(
+            &issuer,
+            iroha_core::smartcontracts::isi::offline::isi::offline_escrow_manager_permission(),
+            Quantity::from(24_u32),
+        );
+        let error = ensure_offline_command_authority_ready_in_world(
+            &underfunded_world.view(),
+            &issuer,
+            &underfunded_fee_asset_selector,
+            0,
+        )
+        .expect_err("balance below the configured XOR floor must stay unavailable");
+        assert_offline_readiness_code(error, "offline_command_authority_unfunded");
     }
 
     fn submission_test_request(operation_seed: u8) -> OfflineTopUpRequest {

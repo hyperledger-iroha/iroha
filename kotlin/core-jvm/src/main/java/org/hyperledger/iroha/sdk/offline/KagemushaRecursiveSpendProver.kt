@@ -9,34 +9,60 @@ import java.util.concurrent.CompletableFuture
 import org.hyperledger.iroha.sdk.client.transport.TransportExecutor
 import org.hyperledger.iroha.sdk.client.transport.TransportRequest
 import org.hyperledger.iroha.sdk.client.transport.TransportResponse
+import org.hyperledger.iroha.sdk.client.ZkMerklePathEntry
 import org.hyperledger.iroha.sdk.client.ZkMerklePathResponse
 import org.hyperledger.iroha.sdk.norito.NoritoHeader
 import org.hyperledger.iroha.sdk.norito.SchemaHash
 
 /**
- * ABI-19 Kagemusha V3 artifact streaming and capability bridge.
+ * ABI-20 Kagemusha V4 artifact streaming and capability bridge.
  *
- * This is the sole first-release offline-cash surface. It installs the opaque six-file proof
+ * This is the sole first-release offline-cash surface. It authenticates the opaque ten-file proof
  * artifact set and validates exact typed request/payment/acknowledgement and proof-bound membership
  * archives. Proof execution remains fail-closed while the native backend reports unavailable.
- * Init-result projection and persisted-branch restoration are intentionally absent: the current
- * init wire has no membership witness, and structural path bytes alone are not a proof verifier.
+ * V4 lifecycle results remain opaque until dedicated ABI-20 projections are available; no V2
+ * result decoder is used as a substitute.
  */
 class KagemushaRecursiveSpendProver private constructor() {
+    /** Canonical ABI-20 artifact roles. Declaration order is part of the native contract. */
+    enum class ArtifactRoleV4(val fileName: String) {
+        STEP_EQ_PARAMETERS("step-eq.parameters.krv4"),
+        STEP_EQ_CIRCUIT_PARAMS("step-eq.circuit-params.krv4"),
+        STEP_EQ_PROVING_KEY("step-eq.proving-key.krv4"),
+        STEP_EQ_VERIFYING_KEY("step-eq.verifying-key.krv4"),
+        STEP_EQ_BOOTSTRAP_WITNESS("step-eq.bootstrap-witness.krv4"),
+        STEP_EP_PARAMETERS("step-ep.parameters.krv4"),
+        STEP_EP_CIRCUIT_PARAMS("step-ep.circuit-params.krv4"),
+        STEP_EP_PROVING_KEY("step-ep.proving-key.krv4"),
+        STEP_EP_VERIFYING_KEY("step-ep.verifying-key.krv4"),
+        STEP_EP_BOOTSTRAP_WITNESS("step-ep.bootstrap-witness.krv4"),
+    }
+
     companion object {
-        const val REQUIRED_NATIVE_BRIDGE_ABI_VERSION: Int = 19
-        const val ARTIFACT_MANIFEST_SCHEMA: String =
-            "kagemusha.offline.recursive_spend.artifact_manifest.v3"
-        val ARTIFACT_FILES: List<String> = listOf(
-            "step-eq.parameters.krv3",
-            "step-eq.proving-key.krv3",
-            "step-eq.verifying-key.krv3",
-            "step-ep.parameters.krv3",
-            "step-ep.proving-key.krv3",
-            "step-ep.verifying-key.krv3",
+        const val V4_REQUIRED_NATIVE_BRIDGE_ABI_VERSION: Int = 20
+        const val REQUIRED_NATIVE_BRIDGE_ABI_VERSION: Int = V4_REQUIRED_NATIVE_BRIDGE_ABI_VERSION
+        const val V4_ARTIFACT_MANIFEST_SCHEMA: String =
+            "kagemusha.offline.recursive_spend.artifact_manifest.v4"
+        const val ARTIFACT_MANIFEST_SCHEMA: String = V4_ARTIFACT_MANIFEST_SCHEMA
+        val V4_ARTIFACT_FILES: List<String> = listOf(
+            "step-eq.parameters.krv4",
+            "step-eq.circuit-params.krv4",
+            "step-eq.proving-key.krv4",
+            "step-eq.verifying-key.krv4",
+            "step-eq.bootstrap-witness.krv4",
+            "step-ep.parameters.krv4",
+            "step-ep.circuit-params.krv4",
+            "step-ep.proving-key.krv4",
+            "step-ep.verifying-key.krv4",
+            "step-ep.bootstrap-witness.krv4",
         )
-        const val ARTIFACT_COUNT: Int = 6
+        val ARTIFACT_FILES: List<String> = V4_ARTIFACT_FILES
+        const val V4_ARTIFACT_COUNT: Int = 10
+        const val ARTIFACT_COUNT: Int = V4_ARTIFACT_COUNT
         const val MAX_MANIFEST_BYTES: Int = 1024 * 1024
+        const val MAX_TRUSTED_RELEASE_POLICY_BYTES: Int = 64 * 1024
+        const val MAX_RELEASE_ATTESTATION_BYTES: Int = 1024 * 1024
+        const val MAX_RELEASE_EVIDENCE_BYTES: Int = 16 * 1024 * 1024
         const val MAX_PEER_TEXT_ENVELOPE_BYTES: Int = 12 * 1024
         const val MAX_PEER_TEXT_ARCHIVE_BYTES: Int = 9_211
         const val MAX_PEER_ARCHIVE_BYTES: Int = 32 * 1024
@@ -57,6 +83,15 @@ class KagemushaRecursiveSpendProver private constructor() {
         private val artifactBridgeAvailable = loadArtifactBridge()
         private val proofBackendAvailable = loadProofBackendCapability()
 
+        internal fun requireCanonicalV4ArtifactRoleInventory(roles: List<ArtifactRoleV4>) {
+            require(roles.size == ArtifactRoleV4.entries.size) {
+                "artifact roles must contain exactly ten entries"
+            }
+            require(roles == ArtifactRoleV4.entries) {
+                "artifact roles are not in canonical V4 order"
+            }
+        }
+
         @JvmStatic
         fun isArtifactStreamingAvailable(): Boolean = artifactBridgeAvailable
 
@@ -73,7 +108,7 @@ class KagemushaRecursiveSpendProver private constructor() {
             val manifest = requireManifest(manifestNorito)
             val manifestDigest = requireDigest(manifestSha256, "manifestSha256")
             val artifactDigest = requireDigest(expectedArtifactSha256, "expectedArtifactSha256")
-            val handle = nativeArtifactBeginV3(manifest, manifestDigest, artifactDigest)
+            val handle = nativeArtifactBeginV4(manifest, manifestDigest, artifactDigest)
             check(handle > 0) { "native Kagemusha artifact ingest returned no handle" }
             return ArtifactIngest(handle)
         }
@@ -82,11 +117,13 @@ class KagemushaRecursiveSpendProver private constructor() {
         fun beginArtifactInstallSession(
             manifestNorito: ByteArray,
             manifestSha256: ByteArray,
+            releaseAuthentication: ReleaseAuthentication,
         ): ArtifactInstallSession {
             requireArtifactBridge()
             return ArtifactInstallSession(
                 requireManifest(manifestNorito),
                 requireDigest(manifestSha256, "manifestSha256"),
+                releaseAuthentication,
             )
         }
 
@@ -110,40 +147,58 @@ class KagemushaRecursiveSpendProver private constructor() {
         fun decodeNoteOpening(archive: ByteArray): NoteOpening = NoteOpening(archive)
 
         @JvmStatic
-        fun decodeInitRequest(archive: ByteArray): InitRequest = InitRequest(archive)
+        fun decodeInitRequestV4(archive: ByteArray): InitRequestV4 = InitRequestV4(archive)
 
         @JvmStatic
-        fun decodeAppendRequest(
+        fun decodeAppendRequestV4(
             archive: ByteArray,
             changeOpening: NoteOpening?,
-        ): AppendRequest = AppendRequest(archive, changeOpening)
+        ): AppendRequestV4 = AppendRequestV4(archive, changeOpening)
 
         @JvmStatic
-        fun decodeVerifyRequest(archive: ByteArray): VerifyRequest = VerifyRequest(archive)
+        fun decodeVerifyRequestV4(archive: ByteArray): VerifyRequestV4 = VerifyRequestV4(archive)
 
         @JvmStatic
-        fun decodeRedeemRequest(
+        fun decodeTopUpAnchorV4(archive: ByteArray): TopUpAnchorV4 = TopUpAnchorV4(archive)
+
+        @JvmStatic
+        fun decodeBundleV4(archive: ByteArray): BundleV4 = BundleV4(archive)
+
+        @JvmStatic
+        fun decodeTopUpFinalityEvidenceV4(archive: ByteArray): TopUpFinalityEvidenceV4 =
+            TopUpFinalityEvidenceV4(archive)
+
+        /** Restore one secret-bearing V4 branch from independently persisted typed archives. */
+        @JvmStatic
+        fun restoreSpendableBranchV4(
+            bundle: BundleV4,
+            membershipWitness: NoteMembershipWitness,
+            opening: NoteOpening,
+        ): SpendableBranchV4 = SpendableBranchV4(bundle, membershipWitness, opening)
+
+        @JvmStatic
+        fun decodeRedeemRequestV4(
             archive: ByteArray,
             changeOpening: NoteOpening?,
-        ): RedeemRequest = RedeemRequest(archive, changeOpening)
+        ): RedeemRequestV4 = RedeemRequestV4(archive, changeOpening)
 
         @JvmStatic
-        fun decodeInitResult(archive: ByteArray): InitResult = InitResult(archive)
+        fun decodeInitResultV4(archive: ByteArray): InitResultV4 = InitResultV4(archive)
 
         @JvmStatic
-        fun decodeSplitResult(
+        fun decodeSplitResultV4(
             archive: ByteArray,
             changeOpening: NoteOpening?,
-        ): SplitResult = SplitResult(archive, changeOpening)
+        ): SplitResultV4 = SplitResultV4(archive, changeOpening)
 
         @JvmStatic
-        fun decodeVerifyResult(archive: ByteArray): VerifyResult = VerifyResult(archive)
+        fun decodeVerifyResultV4(archive: ByteArray): VerifyResultV4 = VerifyResultV4(archive)
 
         @JvmStatic
-        fun decodeRedeemBuildResult(
+        fun decodeRedeemBuildResultV4(
             archive: ByteArray,
             changeOpening: NoteOpening?,
-        ): RedeemBuildResult = RedeemBuildResult(archive, changeOpening)
+        ): RedeemBuildResultV4 = RedeemBuildResultV4(archive, changeOpening)
 
         @JvmStatic
         fun decodeTopUpFinalityRosterArtifact(archive: ByteArray): TopUpFinalityRosterArtifact =
@@ -375,20 +430,14 @@ class KagemushaRecursiveSpendProver private constructor() {
         }
 
         @JvmStatic
-        fun finalizeRedeem(
-            buildResult: RedeemBuildResult,
+        fun finalizeRedeemV4(
+            buildResult: RedeemBuildResultV4,
             authorization: RequestAuthorization,
         ): RedeemFinalization {
-            requireArtifactBridge()
-            val fields = nativeFinalizeRedeemV2(
-                buildResult.noritoEncoded(),
-                authorization.noritoEncoded(),
-            )
-            requireFieldCount(fields, 2, "redeem finalization")
-            return RedeemFinalization(
-                RedeemSubmissionRequest(fields[0]),
-                requireDigest(fields[1], "operationId"),
-            )
+            buildResult.noritoEncoded()
+            authorization.noritoEncoded()
+            requireV4ProofBackend()
+            error("native Kagemusha V4 redeem finalization is unavailable")
         }
 
         @JvmStatic
@@ -520,88 +569,86 @@ class KagemushaRecursiveSpendProver private constructor() {
         }
 
         @JvmStatic
-        fun buildInitRequest(
-            topUpAnchor: TopUpAnchor,
+        fun buildInitRequestV4(
+            topUpAnchor: TopUpAnchorV4,
             topUpFinalityProof: TopUpFinalityProof,
             topUpFinalityRosterArtifact: TopUpFinalityRosterArtifact,
-        ): InitRequest {
+            opening: NoteOpening,
+            outputMembershipPaths: OutputMembershipPaths,
+        ): InitRequestV4 {
             requireArtifactBridge()
-            return InitRequest(
-                nativeBuildInitRequestV2(
+            requireV4ProofBackend()
+            require(outputMembershipPaths.recipient != null && outputMembershipPaths.change == null) {
+                "initialization requires exactly one recipient output path"
+            }
+            val openingArchive = opening.noritoEncoded()
+            val membershipArchive = outputMembershipPaths.nativeArchive()
+            return try {
+                InitRequestV4(nativeBuildInitRequestV4(
                     topUpAnchor.noritoEncoded(),
                     topUpFinalityProof.noritoEncoded(),
                     topUpFinalityRosterArtifact.noritoEncoded(),
-                ),
-            )
-        }
-
-        private fun compareUnsigned(left: ByteArray, right: ByteArray): Int {
-            for (index in left.indices) {
-                val difference = (left[index].toInt() and 0xff) - (right[index].toInt() and 0xff)
-                if (difference != 0) return difference
+                    openingArchive,
+                    membershipArchive,
+                ))
+            } finally {
+                openingArchive.fill(0)
+                membershipArchive.fill(0)
             }
-            return left.size - right.size
         }
 
         /** Build one canonical append request from one or two independently spendable inputs. */
         @JvmStatic
-        fun buildAppendRequest(
-            inputs: List<SpendableBranch>,
+        fun buildAppendRequestV4(
+            inputs: List<SpendableBranchV4>,
             changeOpening: NoteOpening?,
+            outputMembershipPaths: OutputMembershipPaths,
             transferVerifierCommitment: ByteArray,
             operationId: ByteArray,
             blockHeight: Long,
-        ): AppendRequest {
+        ): AppendRequestV4 {
             require(inputs.size in 1..MAXIMUM_LOCAL_APPEND_BUILDER_INPUTS) {
                 "inputs must contain one or two spendable branches"
             }
-            val canonicalInputs = inputs.toList().sortedWith { left, right ->
-                compareUnsigned(left.bundleDigest(), right.bundleDigest())
+            require(inputs.map { it.bundle }.distinct().size == inputs.size) {
+                "inputs must refer to distinct V4 bundles"
             }
-            require(
-                canonicalInputs.zipWithNext().none { (left, right) ->
-                    left.bundleDigest().contentEquals(right.bundleDigest())
-                },
-            ) { "inputs must not contain duplicate bundles" }
+            require(outputMembershipPaths.recipient != null) {
+                "append requires a recipient output path"
+            }
+            require((outputMembershipPaths.change != null) == (changeOpening != null)) {
+                "change output membership must be present exactly when changeOpening is present"
+            }
             requireArtifactBridge()
-            val bundles = canonicalInputs.map { it.bundle.noritoEncoded() }.toTypedArray()
-            val openings = canonicalInputs.map { it.opening.noritoEncoded() }.toTypedArray()
-            val witnesses = canonicalInputs.map { it.membershipWitness.noritoEncoded() }.toTypedArray()
+            requireV4ProofBackend()
+            val bundles = inputs.map { it.bundle.noritoEncoded() }.toTypedArray()
+            val openings = inputs.map { it.opening.noritoEncoded() }.toTypedArray()
+            val witnesses = inputs.map { it.membershipWitness.noritoEncoded() }.toTypedArray()
             val change = changeOpening?.noritoEncoded() ?: byteArrayOf()
+            val outputMembership = outputMembershipPaths.nativeArchive()
             val verifier = requireDigest(transferVerifierCommitment, "transferVerifierCommitment")
             val operation = requireDigest(operationId, "operationId")
             val archive = try {
-                nativeBuildAppendRequestV2(
-                    bundles, openings, witnesses, change, verifier, operation, blockHeight,
+                nativeBuildAppendRequestV4(
+                    bundles,
+                    openings,
+                    witnesses,
+                    change,
+                    outputMembership,
+                    verifier,
+                    operation,
+                    blockHeight,
                 )
             } finally {
                 bundles.forEach { it.fill(0) }
                 openings.forEach { it.fill(0) }
                 witnesses.forEach { it.fill(0) }
                 change.fill(0)
+                outputMembership.fill(0)
                 verifier.fill(0)
                 operation.fill(0)
             }
-            return AppendRequest(archive, changeOpening)
-        }
-
-        @JvmStatic
-        fun projectSplitResult(result: SplitResult): SplitProjection {
-            requireArtifactBridge()
-            val fields = nativeProjectSplitResultV2(result.noritoEncoded())
-            val cursor = ProjectionCursor(fields, "split result projection")
-            projectionVersion(cursor.next("version"), "split result projection")
-            val payment = PeerPayment(cursor.next("peerPayment"))
-            val operationId = cursor.next("operationId")
-            val requestDigest = cursor.next("requestDigest")
-            val splitBindingDigest = cursor.next("splitBindingDigest")
-            val recipient = branchProjection(cursor)
-            val changePresent = bool(cursor.next("changePresent"), "changePresent")
-            val change = if (changePresent) {
-                branchProjection(cursor)
-            } else null
-            cursor.finish()
-            return SplitProjection(payment, recipient, change, operationId, requestDigest, splitBindingDigest)
+            return AppendRequestV4(archive, changeOpening)
         }
 
         @JvmStatic
@@ -621,113 +668,86 @@ class KagemushaRecursiveSpendProver private constructor() {
         }
 
         @JvmStatic
-        fun buildVerifyRequest(
-            payment: PeerPayment,
+        fun buildVerifyRequestV4(
+            bundle: BundleV4,
             recipientRequest: RecipientPaymentRequest,
+            topUpFinalityRosterArtifact: TopUpFinalityRosterArtifact,
+            topUpFinalityEvidence: List<TopUpFinalityEvidenceV4>,
             maximumHops: Int,
             blockHeight: Long,
             verifiedAtMilliseconds: Long,
-        ): VerifyRequest {
+        ): VerifyRequestV4 {
             requireArtifactBridge()
-            return VerifyRequest(
-                nativeBuildVerifyRequestV2(
-                    payment.noritoEncoded(), recipientRequest.noritoEncoded(), maximumHops,
-                    blockHeight, verifiedAtMilliseconds,
-                ),
-            )
+            requireV4ProofBackend()
+            val evidence = topUpFinalityEvidence.map { it.noritoEncoded() }.toTypedArray()
+            return try {
+                VerifyRequestV4(nativeBuildVerifyRequestV4(
+                    bundle.noritoEncoded(),
+                    recipientRequest.noritoEncoded(),
+                    topUpFinalityRosterArtifact.noritoEncoded(),
+                    evidence,
+                    maximumHops,
+                    blockHeight,
+                    verifiedAtMilliseconds,
+                ))
+            } finally {
+                evidence.forEach { it.fill(0) }
+            }
         }
 
         @JvmStatic
-        fun projectVerifyResult(result: VerifyResult): VerifyProjection {
-            requireArtifactBridge()
-            val fields = nativeProjectVerifyResultV2(result.noritoEncoded())
-            val cursor = ProjectionCursor(fields, "verify result projection")
-            projectionVersion(cursor.next("version"), "verify result projection")
-            val valid = bool(cursor.next("valid"), "valid")
-            val chainAdmissible = bool(cursor.next("chainAdmissible"), "chainAdmissible")
-            val lineageRedeemable = bool(cursor.next("lineageRedeemable"), "lineageRedeemable")
-            val witnessless = bool(
-                cursor.next("witnesslessRedemptionSupported"),
-                "witnesslessRedemptionSupported",
-            )
-            val commitment = cursor.next("commitment")
-            val nullifier = cursor.next("spendNullifier")
-            val amount = amount(cursor.next("atomicUnits"), cursor.next("scale"))
-            val hopCount = integer(cursor.next("hopCount"), "hopCount")
-            val proofStepCount = integer(cursor.next("proofStepCount"), "proofStepCount")
-            val bundleDigest = cursor.next("bundleDigest")
-            val assetDefinitionId = canonicalText(cursor.next("assetDefinitionId"), "assetDefinitionId")
-            val artifactBinding = ArtifactBinding(cursor.next("artifactBinding"))
-            val requestDigest = cursor.next("requestDigest")
-            val outputBindingDigest = cursor.next("outputBindingDigest")
-            val verifierBackend = canonicalText(cursor.next("verifierBackend"), "verifierBackend")
-            val verifierName = canonicalText(cursor.next("verifierName"), "verifierName")
-            val verifierCircuitId = canonicalText(cursor.next("verifierCircuitId"), "verifierCircuitId")
-            val verifierActivationHeight = cursor.next("verifierActivationHeight")
-                .takeIf { it.isNotEmpty() }
-                ?.let { longInteger(it, "verifierActivationHeight") }
-            val verifierWithdrawalHeight = cursor.next("verifierWithdrawalHeight")
-                .takeIf { it.isNotEmpty() }
-                ?.let { longInteger(it, "verifierWithdrawalHeight") }
-            val verifiedAtBlockHeight = longInteger(
-                cursor.next("verifiedAtBlockHeight"), "verifiedAtBlockHeight",
-            )
-            val verifiedAtMilliseconds = longInteger(
-                cursor.next("verifiedAtMilliseconds"), "verifiedAtMilliseconds",
-            )
-            val claimCount = projectionCount(cursor.next("branchClaimCount"), "branchClaim")
-            val claims = List(claimCount) { BranchClaim(cursor.next("branchClaim[$it]")) }
-            cursor.finish()
-            return VerifyProjection(
-                valid, chainAdmissible, lineageRedeemable, witnessless,
-                commitment, nullifier, amount, hopCount, proofStepCount,
-                bundleDigest, assetDefinitionId, artifactBinding, requestDigest,
-                outputBindingDigest, verifierBackend, verifierName, verifierCircuitId,
-                verifierActivationHeight, verifierWithdrawalHeight,
-                verifiedAtBlockHeight, verifiedAtMilliseconds, claims,
-            )
-        }
-
-        @JvmStatic
-        fun buildRedeemRequest(
-            input: SpendableBranch,
+        fun buildRedeemRequestV4(
+            input: SpendableBranchV4,
             recipientAccountId: String,
             amount: KagemushaScaledAmount,
             changeOpening: NoteOpening?,
+            changeOutputMembershipPaths: OutputMembershipPaths?,
             unshieldVerifierCommitment: ByteArray,
             operationId: ByteArray,
             blockHeight: Long,
-        ): RedeemRequest {
+        ): RedeemRequestV4 {
             requireArtifactBridge()
-            return RedeemRequest(
-                nativeBuildRedeemRequestV2(
-                    input.bundle.noritoEncoded(), input.opening.noritoEncoded(),
-                    input.membershipWitness.noritoEncoded(),
-                    utf8(recipientAccountId, "recipientAccountId"),
-                    utf8(amount.atomicUnits, "atomicUnits"), amount.scale,
-                    changeOpening?.noritoEncoded() ?: byteArrayOf(),
-                    requireDigest(unshieldVerifierCommitment, "unshieldVerifierCommitment"),
-                    requireDigest(operationId, "operationId"), blockHeight,
-                ),
-                changeOpening,
+            requireV4ProofBackend()
+            require((changeOpening != null) == (changeOutputMembershipPaths != null)) {
+                "change output membership must be present exactly when changeOpening is present"
+            }
+            changeOutputMembershipPaths?.let {
+                require(it.recipient == null && it.change != null) {
+                    "redemption change requires exactly one change output path"
+                }
+            }
+            val change = changeOpening?.noritoEncoded() ?: byteArrayOf()
+            val outputMembership = changeOutputMembershipPaths?.nativeArchive() ?: byteArrayOf()
+            val verifier = requireDigest(
+                unshieldVerifierCommitment,
+                "unshieldVerifierCommitment",
             )
-        }
-
-        @JvmStatic
-        fun projectRedeemBuildResult(result: RedeemBuildResult): RedeemBuildProjection {
-            requireArtifactBridge()
-            val fields = nativeProjectRedeemBuildResultV2(result.noritoEncoded())
-            val cursor = ProjectionCursor(fields, "redeem build projection")
-            projectionVersion(cursor.next("version"), "redeem build projection")
-            val unsigned = cursor.next("unsignedRequest")
-            val authorizationDigest = cursor.next("authorizationDigest")
-            val operationId = cursor.next("operationId")
-            val changePresent = bool(cursor.next("changePresent"), "changePresent")
-            val change = if (changePresent) {
-                branchProjection(cursor)
-            } else null
-            cursor.finish()
-            return RedeemBuildProjection(unsigned, authorizationDigest, change, operationId)
+            val operation = requireDigest(operationId, "operationId")
+            val bundleArchive = input.bundle.noritoEncoded()
+            val openingArchive = input.opening.noritoEncoded()
+            val witnessArchive = input.membershipWitness.noritoEncoded()
+            val recipient = utf8(recipientAccountId, "recipientAccountId")
+            val atomicUnits = utf8(amount.atomicUnits, "atomicUnits")
+            return try {
+                RedeemRequestV4(
+                    nativeBuildRedeemRequestV4(
+                        bundleArchive, openingArchive, witnessArchive, recipient,
+                        atomicUnits, amount.scale,
+                        change, outputMembership, verifier, operation, blockHeight,
+                    ),
+                    changeOpening,
+                )
+            } finally {
+                change.fill(0)
+                outputMembership.fill(0)
+                verifier.fill(0)
+                operation.fill(0)
+                bundleArchive.fill(0)
+                openingArchive.fill(0)
+                witnessArchive.fill(0)
+                recipient.fill(0)
+                atomicUnits.fill(0)
+            }
         }
 
         @JvmStatic
@@ -780,20 +800,20 @@ class KagemushaRecursiveSpendProver private constructor() {
 
         /** Build the first spendable branch from a finalized top-up anchor. */
         @JvmStatic
-        fun initSpend(request: InitRequest): InitResult {
+        fun initSpendV4(request: InitRequestV4): InitResultV4 {
             requireProofBackend()
-            return InitResult(callNativeLifecycle("init spend") {
-                nativeInitSpendV2(request.noritoEncoded())
+            return InitResultV4(callNativeLifecycle("init spend") {
+                nativeInitSpendV4(request.noritoEncoded())
             })
         }
 
         /** Prove one exact recipient output and optional independently spendable sender change. */
         @JvmStatic
-        fun appendSpend(
-            request: AppendRequest,
+        fun appendSpendV4(
+            request: AppendRequestV4,
             recipientRequest: RecipientPaymentRequest,
             verifiedAtMilliseconds: Long,
-        ): SplitResult {
+        ): SplitResultV4 {
             require(verifiedAtMilliseconds > 0) {
                 "verifiedAtMilliseconds must be positive"
             }
@@ -801,9 +821,9 @@ class KagemushaRecursiveSpendProver private constructor() {
             val changeOpening = request.changeOpening
             val secretArchive = request.consumeAndDestroy()
             return try {
-                SplitResult(
+                SplitResultV4(
                     callNativeLifecycle("append spend") {
-                        nativeAppendSpendV2(
+                        nativeAppendSpendV4(
                             secretArchive,
                             recipientRequest.noritoEncoded(),
                             verifiedAtMilliseconds,
@@ -818,23 +838,23 @@ class KagemushaRecursiveSpendProver private constructor() {
 
         /** Verify the recursive proof, exact split bindings, membership, and hop limit. */
         @JvmStatic
-        fun verifySpend(request: VerifyRequest): VerifyResult {
+        fun verifySpendV4(request: VerifyRequestV4): VerifyResultV4 {
             requireProofBackend()
-            return VerifyResult(callNativeLifecycle("verify spend") {
-                nativeVerifySpendV2(request.noritoEncoded())
+            return VerifyResultV4(callNativeLifecycle("verify spend") {
+                nativeVerifySpendV4(request.noritoEncoded())
             })
         }
 
         /** Build a full or partial redemption and its optional proof-bound offline change. */
         @JvmStatic
-        fun buildRedeem(request: RedeemRequest): RedeemBuildResult {
+        fun buildRedeemV4(request: RedeemRequestV4): RedeemBuildResultV4 {
             requireProofBackend()
             val changeOpening = request.changeOpening
             val secretArchive = request.consumeAndDestroy()
             return try {
-                RedeemBuildResult(
+                RedeemBuildResultV4(
                     callNativeLifecycle("build redeem") {
-                        nativeBuildRedeemV2(secretArchive)
+                        nativeBuildRedeemV4(secretArchive)
                     },
                     changeOpening,
                 )
@@ -871,7 +891,7 @@ class KagemushaRecursiveSpendProver private constructor() {
                 abiVersion = { nativeBridgeAbiVersion() },
                 symbolProbe = {
                     expectIllegalArgumentProbe {
-                        nativeArtifactBeginV3(byteArrayOf(0), ByteArray(32), ByteArray(32))
+                        nativeArtifactBeginV4(byteArrayOf(0), ByteArray(32), ByteArray(32))
                     }
                 },
             )
@@ -880,7 +900,7 @@ class KagemushaRecursiveSpendProver private constructor() {
             detectExactNativeAvailability(
                 loadLibrary = { System.loadLibrary(LIBRARY_NAME) },
                 abiVersion = { nativeBridgeAbiVersion() },
-                symbolProbe = { nativePastaCycleV3BackendAvailable() },
+                symbolProbe = { nativePastaCycleV4BackendAvailable() },
             )
 
         private fun expectIllegalArgumentProbe(probe: () -> Unit): Boolean = try {
@@ -891,12 +911,20 @@ class KagemushaRecursiveSpendProver private constructor() {
         }
 
         private fun requireArtifactBridge() {
+            requireV4ArtifactBridge()
+        }
+
+        private fun requireV4ArtifactBridge() {
             check(artifactBridgeAvailable) {
                 "$LIBRARY_NAME ABI $REQUIRED_NATIVE_BRIDGE_ABI_VERSION artifact streaming is unavailable"
             }
         }
 
         private fun requireProofBackend() {
+            requireV4ProofBackend()
+        }
+
+        private fun requireV4ProofBackend() {
             check(proofBackendAvailable) {
                 "$LIBRARY_NAME ABI $REQUIRED_NATIVE_BRIDGE_ABI_VERSION Kagemusha proof backend is unavailable"
             }
@@ -1043,6 +1071,17 @@ class KagemushaRecursiveSpendProver private constructor() {
             return value.copyOf()
         }
 
+        private fun requireBoundedBytes(
+            value: ByteArray?,
+            name: String,
+            maximumBytes: Int,
+        ): ByteArray {
+            require(value != null && value.isNotEmpty() && value.size <= maximumBytes) {
+                "$name must contain 1..$maximumBytes bytes"
+            }
+            return value.copyOf()
+        }
+
         private fun requireChunk(value: ByteArray?): ByteArray {
             require(value != null && value.isNotEmpty()) { "chunk must not be empty" }
             return value.copyOf()
@@ -1085,55 +1124,59 @@ class KagemushaRecursiveSpendProver private constructor() {
         private external fun nativeBridgeAbiVersion(): Int
 
         @JvmStatic
-        private external fun nativePastaCycleV3BackendAvailable(): Boolean
+        private external fun nativePastaCycleV4BackendAvailable(): Boolean
 
         @JvmStatic
-        private external fun nativeArtifactBeginV3(
+        private external fun nativeArtifactBeginV4(
             manifestNorito: ByteArray,
             manifestSha256: ByteArray,
             expectedArtifactSha256: ByteArray,
         ): Long
 
         @JvmStatic
-        private external fun nativeArtifactWriteV3(handle: Long, chunk: ByteArray)
+        private external fun nativeArtifactWriteV4(handle: Long, chunk: ByteArray)
 
         @JvmStatic
-        private external fun nativeArtifactFinalizeV3(handle: Long)
+        private external fun nativeArtifactFinalizeV4(handle: Long)
 
         @JvmStatic
-        private external fun nativeArtifactCancelV3(handle: Long)
+        private external fun nativeArtifactCancelV4(handle: Long)
 
         @JvmStatic
-        private external fun nativeArtifactSetInstallV3(
+        private external fun nativeArtifactSetInstallV4(
             manifestNorito: ByteArray,
             manifestSha256: ByteArray,
+            trustedPolicyNorito: ByteArray,
+            releaseAttestationNorito: ByteArray,
+            benchmarkEvidence: ByteArray,
+            cryptographicReview: ByteArray,
             artifactHandles: LongArray,
         )
 
         @JvmStatic
-        private external fun nativeArtifactSetIsInstalledV3(
+        private external fun nativeArtifactSetIsInstalledV4(
             manifestNorito: ByteArray,
             manifestSha256: ByteArray,
         ): Boolean
 
         @JvmStatic
-        private external fun nativeArtifactSetUninstallV3(manifestSha256: ByteArray)
+        private external fun nativeArtifactSetUninstallV4(manifestSha256: ByteArray)
 
         @JvmStatic
-        private external fun nativeInitSpendV2(requestNorito: ByteArray): ByteArray?
+        private external fun nativeInitSpendV4(requestNorito: ByteArray): ByteArray?
 
         @JvmStatic
-        private external fun nativeAppendSpendV2(
+        private external fun nativeAppendSpendV4(
             requestNorito: ByteArray,
             recipientRequestNorito: ByteArray,
             verifiedAtMilliseconds: Long,
         ): ByteArray?
 
         @JvmStatic
-        private external fun nativeVerifySpendV2(requestNorito: ByteArray): ByteArray?
+        private external fun nativeVerifySpendV4(requestNorito: ByteArray): ByteArray?
 
         @JvmStatic
-        private external fun nativeBuildRedeemV2(requestNorito: ByteArray): ByteArray?
+        private external fun nativeBuildRedeemV4(requestNorito: ByteArray): ByteArray?
 
         @JvmStatic
         private external fun nativePrepareRecipientRequestV2(
@@ -1154,13 +1197,18 @@ class KagemushaRecursiveSpendProver private constructor() {
 
         @JvmStatic private external fun nativeCreateRecipientRequestV2(payload: ByteArray, signature: ByteArray): ByteArray
         @JvmStatic private external fun nativeVerifyRecipientRequestV2(request: ByteArray, verifiedAtMilliseconds: Long): ByteArray
+        @JvmStatic private external fun nativeBuildOutputMembershipPathsV4(initialRoot: ByteArray, finalRoot: ByteArray, recipientFields: Array<ByteArray>, changeFields: Array<ByteArray>, dummyFields: Array<ByteArray>): ByteArray
         @JvmStatic private external fun nativeBuildInitRequestV2(anchor: ByteArray, proof: ByteArray, roster: ByteArray): ByteArray
+        @JvmStatic private external fun nativeBuildInitRequestV4(anchor: ByteArray, proof: ByteArray, roster: ByteArray, opening: ByteArray, outputMembership: ByteArray): ByteArray
         @JvmStatic private external fun nativeBuildAppendRequestV2(bundles: Array<ByteArray>, openings: Array<ByteArray>, witnesses: Array<ByteArray>, changeOpening: ByteArray, verifierCommitment: ByteArray, operationId: ByteArray, blockHeight: Long): ByteArray
+        @JvmStatic private external fun nativeBuildAppendRequestV4(bundles: Array<ByteArray>, openings: Array<ByteArray>, witnesses: Array<ByteArray>, changeOpening: ByteArray, outputMembership: ByteArray, verifierCommitment: ByteArray, operationId: ByteArray, blockHeight: Long): ByteArray
         @JvmStatic private external fun nativeProjectPeerPaymentV2(payment: ByteArray): Array<ByteArray>
         @JvmStatic private external fun nativeProjectSplitResultV2(result: ByteArray): Array<ByteArray>
         @JvmStatic private external fun nativeBuildVerifyRequestV2(payment: ByteArray, request: ByteArray, maximumHops: Int, blockHeight: Long, verifiedAtMilliseconds: Long): ByteArray
+        @JvmStatic private external fun nativeBuildVerifyRequestV4(bundle: ByteArray, recipientRequest: ByteArray, roster: ByteArray, finalityEvidence: Array<ByteArray>, maximumHops: Int, blockHeight: Long, verifiedAtMilliseconds: Long): ByteArray
         @JvmStatic private external fun nativeProjectVerifyResultV2(result: ByteArray): Array<ByteArray>
         @JvmStatic private external fun nativeBuildRedeemRequestV2(bundle: ByteArray, opening: ByteArray, witness: ByteArray, recipient: ByteArray, atomicUnits: ByteArray, scale: Int, changeOpening: ByteArray, verifierCommitment: ByteArray, operationId: ByteArray, blockHeight: Long): ByteArray
+        @JvmStatic private external fun nativeBuildRedeemRequestV4(bundle: ByteArray, opening: ByteArray, membershipWitness: ByteArray, recipient: ByteArray, atomicUnits: ByteArray, scale: Int, changeOpening: ByteArray, changeOutputMembership: ByteArray, verifierCommitment: ByteArray, operationId: ByteArray, blockHeight: Long): ByteArray
         @JvmStatic private external fun nativeProjectRedeemBuildResultV2(result: ByteArray): Array<ByteArray>
         @JvmStatic private external fun nativePrepareAcknowledgementV2(request: ByteArray, payment: ByteArray, acceptedAtMilliseconds: Long): Array<ByteArray>
         @JvmStatic private external fun nativeCreateAcknowledgementV2(payload: ByteArray, signature: ByteArray, request: ByteArray, payment: ByteArray): ByteArray
@@ -1270,6 +1318,14 @@ class KagemushaRecursiveSpendProver private constructor() {
         MAX_LOCAL_REQUEST_ARCHIVE_BYTES,
     )
 
+    /** Opaque ABI-20 recursive state; it is never decoded as a V2/V3 bundle. */
+    class BundleV4 internal constructor(archive: ByteArray) : CanonicalArchive(
+        archive,
+        "KagemushaRecursiveSpendBundleV4",
+        "bundleV4",
+        MAX_LOCAL_REQUEST_ARCHIVE_BYTES,
+    )
+
     /** Opaque current lineage claim; native comparison implements all overlap rules. */
     class BranchClaim internal constructor(archive: ByteArray) : CanonicalArchive(
         archive,
@@ -1311,6 +1367,14 @@ class KagemushaRecursiveSpendProver private constructor() {
         MAX_TORII_RESPONSE_BYTES,
     )
 
+    /** Finalized ABI-20 top-up receipt with a V4 artifact binding. */
+    class TopUpAnchorV4 internal constructor(archive: ByteArray) : CanonicalArchive(
+        archive,
+        "KagemushaRecursiveSpendTopUpAnchorV4",
+        "topUpAnchorV4",
+        MAX_TORII_RESPONSE_BYTES,
+    )
+
     class TopUpFinalityProof internal constructor(archive: ByteArray) : CanonicalArchive(
         archive,
         "KagemushaTopUpFinalityProofV2",
@@ -1322,6 +1386,14 @@ class KagemushaRecursiveSpendProver private constructor() {
         archive,
         "KagemushaTopUpFinalityRosterArtifactV2",
         "topUpFinalityRosterArtifact",
+        MAX_TORII_RESPONSE_BYTES,
+    )
+
+    /** Complete V4 origin plus its stable compact-finality proof. */
+    class TopUpFinalityEvidenceV4 internal constructor(archive: ByteArray) : CanonicalArchive(
+        archive,
+        "KagemushaRecursiveSpendTopUpFinalityEvidenceV4",
+        "topUpFinalityEvidenceV4",
         MAX_TORII_RESPONSE_BYTES,
     )
 
@@ -1406,76 +1478,236 @@ class KagemushaRecursiveSpendProver private constructor() {
         }
     }
 
-    class InitRequest internal constructor(archive: ByteArray) : CanonicalArchive(
+    /** One authenticated confidential-tree path used by the V4 output-update witness. */
+    class OutputMembershipPath(
+        val leafIndex: Int,
+        siblings: List<ByteArray>,
+        directions: ByteArray,
+        root: ByteArray,
+    ) {
+        private val siblingsValue: List<ByteArray>
+        private val directionsValue: ByteArray
+        private val rootValue: ByteArray
+
+        init {
+            require(leafIndex in 0 until (1 shl CONFIDENTIAL_TREE_DEPTH)) {
+                "leafIndex is outside the confidential tree"
+            }
+            require(siblings.size == CONFIDENTIAL_TREE_DEPTH && siblings.all { it.size == 32 }) {
+                "siblings must contain exactly $CONFIDENTIAL_TREE_DEPTH 32-byte nodes"
+            }
+            require(directions.size == CONFIDENTIAL_TREE_DEPTH && directions.all { it.toInt() in 0..1 }) {
+                "directions must contain exactly $CONFIDENTIAL_TREE_DEPTH binary values"
+            }
+            val encodedLeaf = directions.withIndex().fold(0) { value, (level, direction) ->
+                value or (direction.toInt() shl level)
+            }
+            require(encodedLeaf == leafIndex) { "directions do not encode leafIndex" }
+            siblingsValue = siblings.map(ByteArray::copyOf)
+            directionsValue = directions.copyOf()
+            rootValue = requireDigest(root, "root")
+        }
+
+        fun siblings(): List<ByteArray> = siblingsValue.map(ByteArray::copyOf)
+
+        fun directions(): ByteArray = directionsValue.copyOf()
+
+        fun root(): ByteArray = rootValue.copyOf()
+
+        internal fun flattenedSiblings(): ByteArray =
+            ByteArray(CONFIDENTIAL_TREE_DEPTH * 32).also { flattened ->
+                siblingsValue.forEachIndexed { index, sibling ->
+                    sibling.copyInto(flattened, index * 32)
+                }
+            }
+
+        companion object {
+            /** Convert one validated Torii path entry without weakening its root/index binding. */
+            @JvmStatic
+            fun from(entry: ZkMerklePathEntry): OutputMembershipPath = OutputMembershipPath(
+                entry.leafIndex,
+                entry.siblingBytes(),
+                entry.directions,
+                entry.rootBytes(),
+            )
+        }
+    }
+
+    /** Insertion path plus membership path for one output at the operation's final root. */
+    class OutputMembershipLeafPaths(
+        val updatePath: OutputMembershipPath,
+        val membershipPath: OutputMembershipPath,
+    ) {
+        val leafIndex: Int = updatePath.leafIndex
+
+        init {
+            require(membershipPath.leafIndex == leafIndex) {
+                "updatePath and membershipPath must address the same leaf"
+            }
+        }
+
+        internal fun nativeFields(): Array<ByteArray> = arrayOf(
+            leafIndex.toString().toByteArray(StandardCharsets.UTF_8),
+            updatePath.flattenedSiblings(),
+            updatePath.directions(),
+            updatePath.root(),
+            membershipPath.flattenedSiblings(),
+            membershipPath.directions(),
+            membershipPath.root(),
+        )
+    }
+
+    /** Complete V4 output-update witness; commitments are derived and bound by native code. */
+    class OutputMembershipPaths(
+        initialRoot: ByteArray,
+        finalRoot: ByteArray,
+        val recipient: OutputMembershipLeafPaths?,
+        val change: OutputMembershipLeafPaths?,
+        val dummyPath: OutputMembershipPath,
+    ) {
+        private val initialRootValue = requireDigest(initialRoot, "initialRoot")
+        private val finalRootValue = requireDigest(finalRoot, "finalRoot")
+
+        init {
+            require(!initialRootValue.contentEquals(finalRootValue)) {
+                "initialRoot and finalRoot must differ"
+            }
+            require(recipient != null || change != null) {
+                "at least one output membership leaf is required"
+            }
+            require(dummyPath.root().contentEquals(finalRootValue)) {
+                "dummyPath must be rooted at finalRoot"
+            }
+            recipient?.let {
+                require(it.membershipPath.root().contentEquals(finalRootValue)) {
+                    "recipient membershipPath must be rooted at finalRoot"
+                }
+            }
+            change?.let {
+                require(it.membershipPath.root().contentEquals(finalRootValue)) {
+                    "change membershipPath must be rooted at finalRoot"
+                }
+            }
+            if (recipient != null) {
+                require(recipient.updatePath.root().contentEquals(initialRootValue)) {
+                    "recipient updatePath must be rooted at initialRoot"
+                }
+            } else {
+                require(change!!.updatePath.root().contentEquals(initialRootValue)) {
+                    "change updatePath must be rooted at initialRoot"
+                }
+            }
+            if (recipient != null && change != null) {
+                require(recipient.leafIndex + 1 == change.leafIndex) {
+                    "change output must immediately follow the recipient output"
+                }
+            }
+            val occupied = listOfNotNull(recipient?.leafIndex, change?.leafIndex) + dummyPath.leafIndex
+            require(occupied.distinct().size == occupied.size) {
+                "output and dummy paths must address distinct leaves"
+            }
+        }
+
+        fun initialRoot(): ByteArray = initialRootValue.copyOf()
+
+        fun finalRoot(): ByteArray = finalRootValue.copyOf()
+
+        internal fun nativeArchive(): ByteArray {
+            requireArtifactBridge()
+            val recipientFields = recipient?.nativeFields() ?: emptyArray()
+            val changeFields = change?.nativeFields() ?: emptyArray()
+            val dummyFields = arrayOf(
+                dummyPath.leafIndex.toString().toByteArray(StandardCharsets.UTF_8),
+                dummyPath.flattenedSiblings(),
+                dummyPath.directions(),
+                dummyPath.root(),
+            )
+            return try {
+                nativeBuildOutputMembershipPathsV4(
+                    initialRootValue,
+                    finalRootValue,
+                    recipientFields,
+                    changeFields,
+                    dummyFields,
+                )
+            } finally {
+                recipientFields.forEach { it.fill(0) }
+                changeFields.forEach { it.fill(0) }
+                dummyFields.forEach { it.fill(0) }
+            }
+        }
+    }
+
+    class InitRequestV4 internal constructor(archive: ByteArray) : CanonicalArchive(
         archive,
-        "KagemushaRecursiveSpendInitRequestV2",
+        "KagemushaRecursiveSpendInitLocalRequestV4",
         "initRequest",
         MAX_LOCAL_REQUEST_ARCHIVE_BYTES,
     )
 
     /** Local secret-bearing append input. Native code consumes and wipes its openings. */
-    class AppendRequest internal constructor(
+    class AppendRequestV4 internal constructor(
         archive: ByteArray,
         internal val changeOpening: NoteOpening? = null,
     ) : CanonicalArchive(
             archive,
-            "KagemushaRecursiveSpendAppendLocalRequestV2",
+            "KagemushaRecursiveSpendAppendLocalRequestV4",
             "appendRequest",
             MAX_LOCAL_REQUEST_ARCHIVE_BYTES,
         ), AutoCloseable {
         override fun close() = destroy()
     }
 
-    class VerifyRequest internal constructor(archive: ByteArray) : CanonicalArchive(
+    class VerifyRequestV4 internal constructor(archive: ByteArray) : CanonicalArchive(
         archive,
-        "KagemushaRecursiveSpendVerifyRequestV2",
+        "KagemushaRecursiveSpendVerifyLocalRequestV4",
         "verifyRequest",
         MAX_LOCAL_REQUEST_ARCHIVE_BYTES,
     )
 
     /** Local secret-bearing redemption input. Native code consumes and wipes its openings. */
-    class RedeemRequest internal constructor(
+    class RedeemRequestV4 internal constructor(
         archive: ByteArray,
         internal val changeOpening: NoteOpening? = null,
     ) : CanonicalArchive(
             archive,
-            "KagemushaRecursiveSpendRedeemLocalRequestV2",
+            "KagemushaRecursiveSpendRedeemLocalRequestV4",
             "redeemRequest",
             MAX_LOCAL_REQUEST_ARCHIVE_BYTES,
         ), AutoCloseable {
         override fun close() = destroy()
     }
 
-    class InitResult internal constructor(archive: ByteArray) : CanonicalArchive(
+    class InitResultV4 internal constructor(archive: ByteArray) : CanonicalArchive(
         archive,
-        "KagemushaRecursiveSpendInitResultV2",
+        "KagemushaRecursiveSpendInitResultV4",
         "initResult",
         MAX_LOCAL_RESULT_ARCHIVE_BYTES,
     )
 
-    class SplitResult internal constructor(
+    class SplitResultV4 internal constructor(
         archive: ByteArray,
         internal val changeOpening: NoteOpening? = null,
     ) : CanonicalArchive(
             archive,
-            "KagemushaRecursiveSpendSplitResultV2",
+        "KagemushaRecursiveSpendSplitResultV4",
             "splitResult",
             MAX_LOCAL_RESULT_ARCHIVE_BYTES,
         )
 
-    class VerifyResult internal constructor(archive: ByteArray) : CanonicalArchive(
+    class VerifyResultV4 internal constructor(archive: ByteArray) : CanonicalArchive(
         archive,
-        "KagemushaRecursiveSpendVerifyResultV2",
+        "KagemushaRecursiveSpendVerifyResultV4",
         "verifyResult",
         MAX_LOCAL_RESULT_ARCHIVE_BYTES,
     )
 
-    class RedeemBuildResult internal constructor(
+    class RedeemBuildResultV4 internal constructor(
         archive: ByteArray,
         internal val changeOpening: NoteOpening? = null,
     ) : CanonicalArchive(
             archive,
-            "KagemushaRecursiveSpendRedeemBuildResultV2",
+        "KagemushaRecursiveSpendRedeemBuildResultV4",
             "redeemBuildResult",
             MAX_LOCAL_RESULT_ARCHIVE_BYTES,
         )
@@ -1653,6 +1885,13 @@ class KagemushaRecursiveSpendProver private constructor() {
     ) : BranchProjection(
         bundle, membershipWitness, commitment, spendNullifier, amount, hopCount,
         proofStepCount, bundleDigest, artifactBinding, branchClaims,
+    )
+
+    /** Secret-bearing local state used only by the genuine ABI-20 builders. */
+    class SpendableBranchV4 internal constructor(
+        val bundle: BundleV4,
+        val membershipWitness: NoteMembershipWitness,
+        val opening: NoteOpening,
     )
 
     class PeerPaymentProjection internal constructor(
@@ -2050,13 +2289,13 @@ class KagemushaRecursiveSpendProver private constructor() {
         @Synchronized
         fun write(chunk: ByteArray) {
             requireOpen(allowFinalized = false)
-            nativeArtifactWriteV3(handle, requireChunk(chunk))
+            nativeArtifactWriteV4(handle, requireChunk(chunk))
         }
 
         @Synchronized
         fun finish() {
             requireOpen(allowFinalized = false)
-            nativeArtifactFinalizeV3(handle)
+            nativeArtifactFinalizeV4(handle)
             finalized = true
         }
 
@@ -2067,7 +2306,7 @@ class KagemushaRecursiveSpendProver private constructor() {
         override fun close() {
             if (handle == 0L) return
             check(!installClaimed) { "artifact ingest is being installed" }
-            nativeArtifactCancelV3(handle)
+            nativeArtifactCancelV4(handle)
             handle = 0
             finalized = false
         }
@@ -2103,34 +2342,86 @@ class KagemushaRecursiveSpendProver private constructor() {
         }
     }
 
-    /** Coordinates one atomic six-artifact generation install. */
+    /**
+     * Locally trusted material required to authenticate one published Kagemusha release.
+     *
+     * The policy must be provisioned from the deployment trust root, not copied from the
+     * downloaded release. Native verifies signer-role thresholds and hashes both evidence files
+     * before consuming any finalized artifact handle.
+     */
+    class ReleaseAuthentication(
+        trustedPolicyNorito: ByteArray,
+        releaseAttestationNorito: ByteArray,
+        benchmarkEvidence: ByteArray,
+        cryptographicReview: ByteArray,
+    ) {
+        internal val trustedPolicyNorito = requireBoundedBytes(
+            trustedPolicyNorito,
+            "trustedPolicyNorito",
+            MAX_TRUSTED_RELEASE_POLICY_BYTES,
+        )
+        internal val releaseAttestationNorito = requireBoundedBytes(
+            releaseAttestationNorito,
+            "releaseAttestationNorito",
+            MAX_RELEASE_ATTESTATION_BYTES,
+        )
+        internal val benchmarkEvidence = requireBoundedBytes(
+            benchmarkEvidence,
+            "benchmarkEvidence",
+            MAX_RELEASE_EVIDENCE_BYTES,
+        )
+        internal val cryptographicReview = requireBoundedBytes(
+            cryptographicReview,
+            "cryptographicReview",
+            MAX_RELEASE_EVIDENCE_BYTES,
+        )
+    }
+
+    /** Coordinates one authenticated, atomic ten-artifact generation install. */
     class ArtifactInstallSession internal constructor(
         manifest: ByteArray,
         manifestDigest: ByteArray,
+        releaseAuthentication: ReleaseAuthentication,
     ) : AutoCloseable {
         private val manifestNorito = manifest.copyOf()
         private val manifestSha256 = manifestDigest.copyOf()
-        private val artifacts = linkedMapOf<String, ArtifactIngest>()
+        private val trustedPolicyNorito = releaseAuthentication.trustedPolicyNorito.copyOf()
+        private val releaseAttestationNorito =
+            releaseAuthentication.releaseAttestationNorito.copyOf()
+        private val benchmarkEvidence = releaseAuthentication.benchmarkEvidence.copyOf()
+        private val cryptographicReview = releaseAuthentication.cryptographicReview.copyOf()
+        private val artifacts = linkedMapOf<ArtifactRoleV4, ArtifactIngest>()
+        private val artifactDigests = mutableListOf<String>()
         private var installed = false
         private var closed = false
 
         @Synchronized
-        fun beginArtifact(expectedArtifactSha256: ByteArray): ArtifactIngest {
+        fun beginArtifact(
+            role: ArtifactRoleV4,
+            expectedArtifactSha256: ByteArray,
+        ): ArtifactIngest {
             requirePending()
-            check(artifacts.size < ARTIFACT_COUNT) { "artifact set already has six streams" }
+            check(artifacts.size < ARTIFACT_COUNT) { "artifact set already has eight streams" }
+            require(role == ArtifactRoleV4.entries[artifacts.size]) {
+                "artifact role is not in canonical V4 order"
+            }
             val digest = requireDigest(expectedArtifactSha256, "expectedArtifactSha256")
             val key = hex(digest)
-            require(!artifacts.containsKey(key)) { "expectedArtifactSha256 is duplicated" }
+            require(!artifactDigests.contains(key)) { "expectedArtifactSha256 is duplicated" }
             return beginArtifactIngest(manifestNorito, manifestSha256, digest)
-                .also { artifacts[key] = it }
+                .also {
+                    artifacts[role] = it
+                    artifactDigests += key
+                }
         }
 
         @Synchronized
         fun install() {
             requirePending()
             check(artifacts.size == ARTIFACT_COUNT) {
-                "artifact set must contain exactly six streams"
+                "artifact set must contain exactly ten streams"
             }
+            requireCanonicalV4ArtifactRoleInventory(artifacts.keys.toList())
             val ordered = artifacts.values.toList()
             val handles = LongArray(ARTIFACT_COUNT)
             var claimed = 0
@@ -2139,7 +2430,15 @@ class KagemushaRecursiveSpendProver private constructor() {
                     handles[claimed] = ordered[claimed].claimFinalizedHandle()
                     claimed += 1
                 }
-                nativeArtifactSetInstallV3(manifestNorito, manifestSha256, handles)
+                nativeArtifactSetInstallV4(
+                    manifestNorito,
+                    manifestSha256,
+                    trustedPolicyNorito,
+                    releaseAttestationNorito,
+                    benchmarkEvidence,
+                    cryptographicReview,
+                    handles,
+                )
             } catch (failure: Throwable) {
                 repeat(claimed) { index ->
                     ordered[index].releaseInstallClaim(handles[index])
@@ -2150,23 +2449,24 @@ class KagemushaRecursiveSpendProver private constructor() {
                 ingest.relinquishInstalledHandle(handles[index])
             }
             artifacts.clear()
+            artifactDigests.clear()
             installed = true
         }
 
         @Synchronized
         fun isInstalled(): Boolean =
-            !closed && nativeArtifactSetIsInstalledV3(manifestNorito, manifestSha256)
+            !closed && nativeArtifactSetIsInstalledV4(manifestNorito, manifestSha256)
 
         @Synchronized
         fun artifactBinding(): ArtifactBinding {
             check(installed && !closed && isInstalled()) { "artifact set is not installed" }
-            return ArtifactBinding(nativeArtifactBindingV3(manifestNorito, manifestSha256))
+            error("ABI20 V4 artifact binding projection is unavailable until the V4 registry is linked")
         }
 
         @Synchronized
         fun uninstall() {
             if (!installed || closed) return
-            nativeArtifactSetUninstallV3(manifestSha256)
+            nativeArtifactSetUninstallV4(manifestSha256)
             installed = false
             closed = true
         }
@@ -2183,6 +2483,7 @@ class KagemushaRecursiveSpendProver private constructor() {
                 }
             }
             artifacts.clear()
+            artifactDigests.clear()
             closed = true
             firstFailure?.let { throw it }
         }

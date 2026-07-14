@@ -163,7 +163,7 @@ PLIST
   cat >"$root/dist/NoritoBridge.artifacts.json" <<JSON
 {
   "version": "1.0.0",
-  "native_bridge_abi_version": 19,
+  "native_bridge_abi_version": 20,
   "privacy_production_enabled": false,
   "source_commit": "0000000000000000000000000000000000000000",
   "source_tree_dirty": false,
@@ -174,25 +174,25 @@ PLIST
     "connect_norito_detached_transaction_scaffold_inspect_v1",
     "connect_norito_detached_transaction_scaffold_finalize_ed25519_v1",
     "connect_norito_canonical_json_blake3_v1",
-    "connect_norito_kagemusha_recursive_spend_capabilities_v1",
+    "connect_norito_kagemusha_recursive_spend_capabilities_v4",
     "connect_norito_kagemusha_topup_finality_verify_v2",
     "connect_norito_kagemusha_topup_shield_build_unsigned_v2",
-    "connect_norito_kagemusha_recursive_spend_artifact_begin_v3",
-    "connect_norito_kagemusha_recursive_spend_artifact_write_v3",
-    "connect_norito_kagemusha_recursive_spend_artifact_finalize_v3",
-    "connect_norito_kagemusha_recursive_spend_artifact_cancel_v3",
-    "connect_norito_kagemusha_recursive_spend_artifact_set_install_v3",
-    "connect_norito_kagemusha_recursive_spend_artifact_set_is_installed_v3",
-    "connect_norito_kagemusha_recursive_spend_artifact_set_uninstall_v3",
-    "connect_norito_kagemusha_recursive_spend_init_v2",
+    "connect_norito_kagemusha_recursive_spend_artifact_begin_v4",
+    "connect_norito_kagemusha_recursive_spend_artifact_write_v4",
+    "connect_norito_kagemusha_recursive_spend_artifact_finalize_v4",
+    "connect_norito_kagemusha_recursive_spend_artifact_cancel_v4",
+    "connect_norito_kagemusha_recursive_spend_artifact_set_install_v4",
+    "connect_norito_kagemusha_recursive_spend_artifact_set_is_installed_v4",
+    "connect_norito_kagemusha_recursive_spend_artifact_set_uninstall_v4",
+    "connect_norito_kagemusha_recursive_spend_init_v4",
     "connect_norito_kagemusha_recursive_spend_topup_unsigned_payload_digest_v2",
     "connect_norito_kagemusha_recursive_spend_topup_finalize_request_v2",
     "connect_norito_kagemusha_recursive_spend_topup_v2",
-    "connect_norito_kagemusha_recursive_spend_append_v2",
-    "connect_norito_kagemusha_recursive_spend_verify_v2",
+    "connect_norito_kagemusha_recursive_spend_append_v4",
+    "connect_norito_kagemusha_recursive_spend_verify_v4",
     "connect_norito_kagemusha_recursive_spend_redeem_unsigned_payload_digest_v2",
     "connect_norito_kagemusha_recursive_spend_redeem_finalize_request_v2",
-    "connect_norito_kagemusha_recursive_spend_redeem_v2",
+    "connect_norito_kagemusha_recursive_spend_redeem_v4",
     "connect_norito_kagemusha_receiver_key_reference_v2",
     "connect_norito_kagemusha_recipient_output_derive_v2",
     "connect_norito_kagemusha_recipient_payment_request_signing_bytes_v2",
@@ -311,10 +311,10 @@ run_expect_pass "$fixture"
 
 wrong_bridge_abi="$TMP_DIR/wrong-bridge-abi"
 make_fixture "$wrong_bridge_abi"
-sed -i.bak 's/"native_bridge_abi_version": 19/"native_bridge_abi_version": 18/' \
+sed -i.bak 's/"native_bridge_abi_version": 20/"native_bridge_abi_version": 19/' \
   "$wrong_bridge_abi/dist/NoritoBridge.artifacts.json"
 rm -f "$wrong_bridge_abi/dist/NoritoBridge.artifacts.json.bak"
-run_expect_fail "$wrong_bridge_abi" "exact first-release NoritoBridge ABI 19"
+run_expect_fail "$wrong_bridge_abi" "exact first-release NoritoBridge ABI 20"
 
 enabled_privacy="$TMP_DIR/enabled-privacy"
 make_fixture "$enabled_privacy"
@@ -422,7 +422,7 @@ run_expect_fail "$symbol_inventory_mismatch" "required symbol inventory is missi
 
 extra_manifest_symbol="$TMP_DIR/extra-manifest-symbol"
 make_fixture "$extra_manifest_symbol"
-sed -i.bak '/"connect_norito_kagemusha_recursive_spend_init_v2",/i\
+sed -i.bak '/"connect_norito_kagemusha_recursive_spend_init_v4",/i\
     "connect_norito_kagemusha_unexpected_v2",' \
   "$extra_manifest_symbol/dist/NoritoBridge.artifacts.json"
 rm -f "$extra_manifest_symbol/dist/NoritoBridge.artifacts.json.bak"

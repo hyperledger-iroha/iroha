@@ -49,16 +49,25 @@ the same deterministic framing.
   unexpired active session from WSV after a Torii restart, and
   `/v1/vpn/receipts` rebuilds settlement context from WSV by lease id or relay
   receipt quote id within the on-chain grace window.
-- **Helper tickets:** Helper tickets are fixed 256-byte v1 frames. The MAC now
-  covers the session, quote, account hash, relay id, payment hash, authorized
-  Ed25519 metering public key, full deterministic tariff, and expiry. Relays
-  reject old-length tickets and reject vouchers signed by any key other than
-  the ticket metering key.
+- **Helper tickets:** Helper tickets are fixed 664-byte v1 frames. Each tariff
+  component occupies a fixed slot containing a canonical exact `Quantity`
+  frame, so no implicit integer nano-XOR unit crosses the helper boundary. The
+  MAC covers the session, quote, account hash, relay id, payment hash,
+  authorized Ed25519 metering public key, full deterministic tariff, and
+  expiry. The client helper may structurally decode those fields to construct
+  usage vouchers because it does not possess the relay MAC secret, but that
+  path grants no authority. Relays always verify the MAC and expiry, reject
+  old-length tickets, and reject vouchers signed by any key other than the
+  ticket metering key.
 - **SDK quote helpers:** JavaScript, C#, Swift, Python, Kotlin/JVM, and Java
   Android Torii clients expose quote-first VPN helpers plus typed
   `OpenVpnLeaseEscrow` / `SettleVpnLease` instruction DTOs. Callers should
   submit the returned native instructions as normal signed transactions; direct
-  prepaid session creation is no longer the supported flow.
+  prepaid session creation is no longer the supported flow. Profile, quote, and
+  session responses expose `lease_fee`, while receipts expose `lease_fee`,
+  `earned_fee`, and `refunded_fee`; every fee is a canonical exact `Quantity`
+  decimal string. JSON numbers and the retired integer `*_nanos` aliases are
+  rejected rather than rounded or reinterpreted.
 - **Receipt/billing:** Exit gateways produce `VpnSessionReceiptV1` values
   and accept client-signed cumulative `VpnUsageVoucherV1` control cells. The
   relay verifies voucher/session/quote/relay binding, limits unvouched forwarding
@@ -70,7 +79,8 @@ the same deterministic framing.
   custody instead of trusting relay-supplied prepaid claims. Runtime
   operators can set `vpn.receipt_spool_dir` on the relay to persist the exact
   `/v1/vpn/receipts` request body (`relay_receipt_hex`, `client_voucher_hex`,
-  and `lease_id_hex`) whenever a helper-authenticated session closes with an
+  and `lease_id_hex`) plus the audited top-level `earned_fee` as a canonical
+  decimal string whenever a helper-authenticated session closes with an
   accepted voucher; sessions without a voucher intentionally do not produce a
   settlement artifact. `soranet-vpn-settlement` signs that artifact with
   runtime-only operator seed material and prints deterministic Torii headers/body

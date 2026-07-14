@@ -8,12 +8,14 @@ use iroha_data_model::{
     domain::DomainId,
     offline::{
         KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2, KagemushaRecursiveSpendArtifactBindingV3,
-        KagemushaRecursiveSpendBranchClaimV2, KagemushaRecursiveSpendBranchV2,
-        KagemushaRecursiveSpendInputBranchV2, KagemushaRecursiveSpendRedemptionIntentV2,
-        KagemushaRecursiveSpendSplitIntentV2, KagemushaRecursiveSpendStateBoundaryV1,
-        KagemushaRecursiveSpendTopUpAnchorRefV2, KagemushaScaledAmountV2,
-        KagemushaSpendableNoteDescriptorV2, KagemushaUnshieldPublicInputsBindingV2,
-        KagemushaValidationError, kagemusha_confidential_amount_encoding_v2,
+        KagemushaRecursiveSpendArtifactBindingV4, KagemushaRecursiveSpendBranchClaimV2,
+        KagemushaRecursiveSpendBranchV2, KagemushaRecursiveSpendInputBranchV2,
+        KagemushaRecursiveSpendRedemptionIntentV2, KagemushaRecursiveSpendRedemptionIntentV4,
+        KagemushaRecursiveSpendSplitIntentV2, KagemushaRecursiveSpendSplitIntentV4,
+        KagemushaRecursiveSpendStateBoundaryV1, KagemushaRecursiveSpendTopUpAnchorRefV2,
+        KagemushaScaledAmountV2, KagemushaSpendableNoteDescriptorV2,
+        KagemushaUnshieldPublicInputsBindingV2, KagemushaValidationError,
+        kagemusha_confidential_amount_encoding_v2,
     },
     prelude::{Numeric, Quantity},
 };
@@ -88,6 +90,13 @@ fn artifact_binding() -> KagemushaRecursiveSpendArtifactBindingV3 {
     }
 }
 
+fn artifact_binding_v4() -> KagemushaRecursiveSpendArtifactBindingV4 {
+    KagemushaRecursiveSpendArtifactBindingV4 {
+        generation: "kagemusha-release-v4-1".to_owned(),
+        manifest_sha256: [0x14; 32],
+    }
+}
+
 fn split_intent() -> KagemushaRecursiveSpendSplitIntentV2 {
     let chain_id = ChainId::from("kagemusha-value-contract");
     let asset = asset();
@@ -116,6 +125,35 @@ fn split_intent() -> KagemushaRecursiveSpendSplitIntentV2 {
         [0x36; 32],
     )
     .expect("valid exact split")
+}
+
+fn split_intent_v4() -> KagemushaRecursiveSpendSplitIntentV4 {
+    let chain_id = ChainId::from("kagemusha-value-contract");
+    let asset = asset();
+    let anchor = anchor_ref();
+    KagemushaRecursiveSpendSplitIntentV4 {
+        chain_id: chain_id.clone(),
+        asset: asset.clone(),
+        inputs: vec![KagemushaRecursiveSpendInputBranchV2 {
+            bundle_digest: [0x21; 32],
+            input_note: note(&chain_id, &asset, TOTAL, 0x22, 0x23),
+            branch_claims: vec![
+                KagemushaRecursiveSpendBranchClaimV2::root(anchor.anchor_digest)
+                    .expect("root claim"),
+            ],
+            input_root: [0x24; 32],
+            proof_step_count: 1,
+            peer_hop_count: 0,
+        }],
+        topup_anchor_refs: vec![anchor],
+        asset_scale: SCALE,
+        output_artifact_binding: artifact_binding_v4(),
+        transfer_amount: KagemushaScaledAmountV2::new(TRANSFER, SCALE).expect("transfer amount"),
+        recipient_output: note(&chain_id, &asset, TRANSFER, 0x31, 0x32),
+        change_output: Some(note(&chain_id, &asset, CHANGE, 0x33, 0x34)),
+        recipient_request_digest: [0x35; 32],
+        operation_id: [0x36; 32],
+    }
 }
 
 fn redemption_intent(
@@ -163,6 +201,50 @@ fn redemption_intent(
         public_amount,
         change_artifact_binding: change_output.as_ref().map(|_| artifact_binding()),
         change_output,
+        unshield_public_inputs,
+        unshield_public_inputs_digest,
+        operation_id: [0x49; 32],
+    }
+}
+
+fn redemption_intent_v4() -> KagemushaRecursiveSpendRedemptionIntentV4 {
+    let chain_id = ChainId::from("kagemusha-value-contract");
+    let asset = asset();
+    let input_note = note(&chain_id, &asset, TOTAL, 0x41, 0x42);
+    let input_root = [0x43; 32];
+    let public_amount = KagemushaScaledAmountV2::new(TRANSFER, SCALE).expect("public amount");
+    let change_output = note(&chain_id, &asset, CHANGE, 0x44, 0x45);
+    let unshield_public_inputs = KagemushaUnshieldPublicInputsBindingV2 {
+        input_commitment_0: input_note.note_commitment,
+        input_commitment_1: [0; 32],
+        nullifier_0: input_note.spend_nullifier,
+        nullifier_1: [0; 32],
+        change_output_commitment: change_output.note_commitment,
+        root: input_root,
+        public_amount: kagemusha_confidential_amount_encoding_v2(TRANSFER),
+        asset_tag: [0x46; 32],
+        chain_tag: [0x47; 32],
+    };
+    let unshield_public_inputs_digest = unshield_public_inputs
+        .digest()
+        .expect("unshield public-input digest");
+    KagemushaRecursiveSpendRedemptionIntentV4 {
+        chain_id,
+        asset,
+        input_note,
+        parent_branch_claims: vec![
+            KagemushaRecursiveSpendBranchClaimV2::root(anchor_ref().anchor_digest)
+                .expect("root claim"),
+        ],
+        parent_topup_anchor_refs: vec![anchor_ref()],
+        parent_proof_step_count: 1,
+        parent_peer_hop_count: 0,
+        parent_bundle_digest: [0x48; 32],
+        input_root,
+        recipient: recipient(),
+        public_amount,
+        change_output: Some(change_output),
+        change_artifact_binding: Some(artifact_binding_v4()),
         unshield_public_inputs,
         unshield_public_inputs_digest,
         operation_id: [0x49; 32],
@@ -242,6 +324,64 @@ fn split_conserves_fractional_value_and_produces_disjoint_siblings() {
             .path
             .conflicts_with(change_claims[0].path)
     );
+}
+
+#[test]
+fn abi20_split_uses_v4_digest_and_rejects_nonconservation() {
+    let split = split_intent_v4();
+    split.validate_public_binding().expect("valid ABI-20 split");
+    assert_eq!(
+        split.input_amount().expect("validated V4 input total"),
+        KagemushaScaledAmountV2::new(TOTAL, SCALE).expect("total amount")
+    );
+    assert_ne!(
+        split.binding_digest().expect("V4 split digest"),
+        split_intent().binding_digest().expect("V2 split digest")
+    );
+
+    let recipient_claims = split
+        .output_branch_claims(KagemushaRecursiveSpendBranchV2::Recipient)
+        .expect("V4 recipient claims");
+    let change_claims = split
+        .output_branch_claims(KagemushaRecursiveSpendBranchV2::Change)
+        .expect("V4 change claims");
+    assert!(
+        !recipient_claims[0]
+            .path
+            .conflicts_with(change_claims[0].path)
+    );
+
+    let mut nonconserving = split;
+    nonconserving.change_output.as_mut().expect("change").amount =
+        KagemushaScaledAmountV2::new(CHANGE + 1, SCALE).expect("wrong change amount");
+    assert!(matches!(
+        nonconserving.validate_public_binding(),
+        Err(KagemushaValidationError::InvalidRecursiveSpendNote {
+            field: "split.v4.conservation"
+        })
+    ));
+}
+
+#[test]
+fn abi20_redemption_binds_change_claims_and_rejects_artifact_omission() {
+    let intent = redemption_intent_v4();
+    intent
+        .validate_public_binding()
+        .expect("valid ABI-20 partial redemption");
+    let claims = intent
+        .change_branch_claims()
+        .expect("proof-bound V4 change claims");
+    assert_eq!(claims.len(), 1);
+    assert_eq!(claims[0].path.depth, 1);
+
+    let mut missing_binding = intent;
+    missing_binding.change_artifact_binding = None;
+    assert!(matches!(
+        missing_binding.validate_public_binding(),
+        Err(KagemushaValidationError::InvalidRecursiveSpendNote {
+            field: "redemption.v4.change_output"
+        })
+    ));
 }
 
 #[test]

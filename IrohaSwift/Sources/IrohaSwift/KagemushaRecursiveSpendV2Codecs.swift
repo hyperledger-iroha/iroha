@@ -60,6 +60,66 @@ public enum KagemushaRecursiveSpendCodecs {
         return value
     }
 
+    public static func decodeNativeCapabilitiesV4(
+        _ archive: Data
+    ) throws -> KagemushaRecursiveSpendNativeCapabilitiesV4 {
+        var reader = KagemushaV2Reader(try payload(
+            archive,
+            schema: KagemushaRecursiveSpend.nativeCapabilitiesWireNameV4,
+            field: "nativeCapabilitiesV4"
+        ))
+        let value = try KagemushaRecursiveSpendNativeCapabilitiesV4(
+            bridgeABIVersion: scalarUInt32(
+                reader.field(),
+                field: "nativeCapabilitiesV4.bridgeABIVersion"
+            ),
+            artifactManifestSchema: decodeString(
+                reader.field(),
+                field: "nativeCapabilitiesV4.artifactManifestSchema"
+            ),
+            proofBackend: decodeString(
+                reader.field(),
+                field: "nativeCapabilitiesV4.proofBackend"
+            ),
+            transcriptProfile: decodeString(
+                reader.field(),
+                field: "nativeCapabilitiesV4.transcriptProfile"
+            ),
+            proofEnvelopeVersion: scalarUInt16(
+                reader.field(),
+                field: "nativeCapabilitiesV4.proofEnvelopeVersion"
+            ),
+            stepEqCircuitID: decodeString(
+                reader.field(),
+                field: "nativeCapabilitiesV4.stepEqCircuitID"
+            ),
+            stepEpCircuitID: decodeString(
+                reader.field(),
+                field: "nativeCapabilitiesV4.stepEpCircuitID"
+            ),
+            artifactRoles: decodeStringVector(
+                reader.field(),
+                field: "nativeCapabilitiesV4.artifactRoles",
+                maximumCount: UInt64(KagemushaRecursiveSpend.artifactRolesV4.count)
+            ),
+            maxProofBytes: scalarUInt32(
+                reader.field(),
+                field: "nativeCapabilitiesV4.maxProofBytes"
+            ),
+            proofBackendAvailable: decodeBool(
+                reader.field(),
+                field: "nativeCapabilitiesV4.proofBackendAvailable"
+            ),
+            missingGates: decodeStringVector(
+                reader.field(),
+                field: "nativeCapabilitiesV4.missingGates",
+                maximumCount: 64
+            )
+        )
+        try reader.finish("nativeCapabilitiesV4")
+        return value
+    }
+
     /// Decode the authenticated manifest prefix needed to bind the public
     /// generation label before any potentially large artifact stream begins.
     /// Native remains authoritative for validating the complete manifest.
@@ -93,11 +153,11 @@ public enum KagemushaRecursiveSpendCodecs {
             reader.field(),
             field: "artifactManifest.generation"
         )
-        guard schema == KagemushaRecursiveSpend.artifactManifestSchema,
-              version == KagemushaRecursiveSpend.artifactManifestVersion,
+        guard schema == KagemushaRecursiveSpend.artifactManifestSchemaV4,
+              version == KagemushaRecursiveSpend.artifactManifestVersionV4,
               bridgeABI == KagemushaRecursiveSpend.requiredNativeBridgeAbiVersion,
-              proofBackend == KagemushaRecursiveSpend.pastaCycleBackend,
-              transcript == KagemushaRecursiveSpend.pastaCycleTranscript else {
+              proofBackend == KagemushaRecursiveSpend.pastaCycleBackendV4,
+              transcript == KagemushaRecursiveSpend.pastaCycleTranscriptV4 else {
             throw KagemushaRecursiveSpendError.invalidField("artifactManifest.contract")
         }
         try KagemushaRecursiveSpend.requirePortableArtifactIdentifier(
@@ -380,6 +440,29 @@ public enum KagemushaRecursiveSpendCodecs {
         ))
         writer.writeField(artifactBinding(request.artifactBinding))
         return frame(KagemushaRecursiveSpend.initRequestWireName, payload: writer.data)
+    }
+
+    /// Encode the frozen native-only ABI-19/V3 initialization witness.
+    public static func encodeInitLocalRequest(
+        _ local: KagemushaRecursiveSpendInitLocalRequest
+    ) throws -> Data {
+        var writer = CompactNoritoWriter()
+        writer.writeField(uint16(KagemushaRecursiveSpend.localWitnessVersionV3))
+        writer.writeField(try nestedPayload(
+            encodeInitRequest(local.request),
+            schema: KagemushaRecursiveSpend.initRequestWireName,
+            field: "initLocalRequest.request"
+        ))
+        writer.writeField(try nestedPayload(
+            encodeNoteOpening(local.opening),
+            schema: KagemushaRecursiveSpend.noteOpeningWireName,
+            field: "initLocalRequest.opening"
+        ))
+        writer.writeField(try outputMembershipPaths(local.outputMembershipPaths))
+        return frame(
+            KagemushaRecursiveSpend.initLocalRequestWireName,
+            payload: writer.data
+        )
     }
 
     public static func decodeInitRequest(
@@ -706,9 +789,14 @@ public enum KagemushaRecursiveSpendCodecs {
         writer.writeField(request.transferVerifier.commitment)
         writer.writeField(request.operationID)
         writer.writeField(uint64(request.blockHeight))
+        let requestPayload = writer.data
+        var complete = CompactNoritoWriter()
+        complete.writeField(uint16(KagemushaRecursiveSpend.localWitnessVersionV3))
+        complete.writeField(requestPayload)
+        complete.writeField(try outputMembershipPaths(request.outputMembershipPaths))
         return frame(
             KagemushaRecursiveSpend.appendLocalRequestWireName,
-            payload: writer.data
+            payload: complete.data
         )
     }
 
@@ -731,6 +819,19 @@ public enum KagemushaRecursiveSpendCodecs {
         writer.writeField(uint64(request.blockHeight))
         writer.writeField(uint64(request.verifiedAtMilliseconds))
         return frame(KagemushaRecursiveSpend.verifyRequestWireName, payload: writer.data)
+    }
+
+    public static func encodeVerifyLocalRequest(
+        _ request: KagemushaRecursiveSpendVerifyRequest
+    ) throws -> Data {
+        var writer = CompactNoritoWriter()
+        writer.writeField(uint16(KagemushaRecursiveSpend.localWitnessVersionV3))
+        writer.writeField(try nestedPayload(
+            encodeVerifyRequest(request),
+            schema: KagemushaRecursiveSpend.verifyRequestWireName,
+            field: "verifyLocalRequest.request"
+        ))
+        return frame(KagemushaRecursiveSpend.verifyLocalRequestWireName, payload: writer.data)
     }
 
     public static func encodeRedeemRequest(
@@ -917,9 +1018,16 @@ public enum KagemushaRecursiveSpendCodecs {
         writer.writeField(request.unshieldVerifier.commitment)
         writer.writeField(uint64(request.blockHeight))
         writer.writeField(request.operationID)
+        let requestPayload = writer.data
+        var complete = CompactNoritoWriter()
+        complete.writeField(uint16(KagemushaRecursiveSpend.localWitnessVersionV3))
+        complete.writeField(requestPayload)
+        complete.writeField(option(try request.changeOutputMembershipPaths.map {
+            try outputMembershipPaths($0)
+        }))
         return frame(
             KagemushaRecursiveSpend.redeemLocalRequestWireName,
-            payload: writer.data
+            payload: complete.data
         )
     }
 
@@ -2398,6 +2506,33 @@ public enum KagemushaRecursiveSpendCodecs {
         writer.writeField(try sequence(path.siblings.map(constVec)))
         writer.writeField(bytes(path.directions))
         writer.writeField(path.root)
+        return writer.data
+    }
+
+    private static func outputMembershipLeafPaths(
+        _ leaf: KagemushaOutputMembershipLeafPaths
+    ) throws -> Data {
+        var writer = CompactNoritoWriter()
+        writer.writeField(uint32(leaf.leafIndex))
+        writer.writeField(try membershipPath(leaf.updatePath))
+        writer.writeField(try membershipPath(leaf.membershipPath))
+        return writer.data
+    }
+
+    private static func outputMembershipPaths(
+        _ paths: KagemushaOutputMembershipPaths
+    ) throws -> Data {
+        var writer = CompactNoritoWriter()
+        writer.writeField(paths.initialRoot)
+        writer.writeField(paths.finalRoot)
+        writer.writeField(option(try paths.recipient.map {
+            try outputMembershipLeafPaths($0)
+        }))
+        writer.writeField(option(try paths.change.map {
+            try outputMembershipLeafPaths($0)
+        }))
+        writer.writeField(uint32(paths.dummyLeafIndex))
+        writer.writeField(try membershipPath(paths.dummyPath))
         return writer.data
     }
 

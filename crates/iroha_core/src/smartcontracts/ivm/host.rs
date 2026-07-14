@@ -25823,7 +25823,7 @@ seiyaku DurableOwner {
             commitment,
             [0x42; 32],
             "halo2/ipa",
-            "kagemusha-recursive-spend-step-ep-two-parent-exact-state-v1",
+            "kagemusha-recursive-spend-step-ep-two-parent-operation-protocol-v2",
             "core",
             Vec::new(),
         );
@@ -25833,7 +25833,7 @@ seiyaku DurableOwner {
         map.insert(
             VerifyingKeyId::new(
                 "halo2/ipa",
-                "kagemusha-recursive-spend-step-ep-two-parent-exact-state-v1",
+                "kagemusha-recursive-spend-step-ep-two-parent-operation-protocol-v2",
             ),
             rec,
         );
@@ -25851,7 +25851,7 @@ seiyaku DurableOwner {
             commitment,
             [0x42; 32],
             "halo2/ipa",
-            "kagemusha-recursive-spend-step-eq-two-parent-exact-state-v1",
+            "kagemusha-recursive-spend-step-eq-two-parent-operation-protocol-v2",
             "core",
             Vec::new(),
         );
@@ -25861,7 +25861,7 @@ seiyaku DurableOwner {
         map.insert(
             VerifyingKeyId::new(
                 "halo2/ipa",
-                "kagemusha-recursive-spend-step-eq-two-parent-exact-state-v1",
+                "kagemusha-recursive-spend-step-eq-two-parent-operation-protocol-v2",
             ),
             rec,
         );

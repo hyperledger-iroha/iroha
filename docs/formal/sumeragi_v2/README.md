@@ -56,12 +56,12 @@ prefix and cannot be advanced by another node's receipt.
 
 The asynchronous model includes pre-GST loss, duplication, reordering, crash,
 and replay. After GST it models bounded authenticated per-source transport,
-normal/progress/completion ingress reserves, absolute timeout priority,
-periodic retransmission, FIFO debt, stale-completion rejection, manifest and
-chunk recovery, validation, and independent application. The scheduler choice
-matches the source-linked production kernel:
+normal/progress/completion ingress reserves, view-indexed absolute timeout
+priority, periodic retransmission, FIFO debt, stale-completion rejection,
+manifest and chunk recovery, validation, and independent application. The
+scheduler choice matches the source-linked production kernel:
 
-1. absolute timeout;
+1. the current view's absolute timeout;
 2. an owed FIFO command;
 3. one periodic retransmission;
 4. the oldest FIFO command; or
@@ -69,6 +69,11 @@ matches the source-linked production kernel:
 
 Textual TLA+ disjunction order is never treated as priority; the selected-work
 operator makes the branches mutually exclusive.
+
+Shared-config projection version 2 binds this pacemaker rule into the handshake
+fingerprint. A retired fixed-timeout binary therefore cannot silently
+participate in the same height and supply premature timeout votes against the
+view-growing liveness argument.
 
 ## Theorem scope and FLP boundary
 
@@ -83,12 +88,16 @@ Liveness is necessarily conditional. FLP rules out unconditional deterministic
 consensus termination in a fully asynchronous network. The post-GST theorem
 therefore has explicit premises: a non-crashing honest set independently meets
 both quorum thresholds; authenticated retransmissions and serialized service
-have declared finite bounds; the monotonic clock and run loop continue; and
-admitted fsync, signature, reconstruction, deterministic validation, and local
-application work terminates within the configured successful-round bound.
-Under those premises, failed views form and install TCs, rotation reaches a
-responsive honest leader, a safe round decides, every responsive validator
-eventually applies the certified body, and each local chain advances.
+have declared finite representable bounds; the monotonic clock and run loop
+continue; and admitted fsync, signature, reconstruction, deterministic
+validation, and local application work terminate. The immutable view-zero
+deadline grows linearly as `base * (view + 1)`, while retransmission retains its
+fixed base interval. Consequently some post-GST view exceeds the complete
+bounded service rank without assuming in advance that one configured fixed
+deadline is already adequate. Under those premises, failed views form and
+install TCs, rotation reaches a responsive honest leader, a safe round decides,
+every responsive validator eventually applies the certified body, and each
+local chain advances.
 
 The theorem is consensus-height progress, not transaction fairness. A valid
 empty heartbeat can satisfy progress. Transaction inclusion, mempool fairness,

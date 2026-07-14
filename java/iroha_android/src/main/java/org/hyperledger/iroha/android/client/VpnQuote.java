@@ -17,7 +17,7 @@ public final class VpnQuote {
   private final String feeAssetId;
   private final String escrowAccountId;
   private final String operatorAccountId;
-  private final long leaseFeeNanos;
+  private final String leaseFee;
   private final List<String> routePushes;
   private final List<String> excludedRoutes;
   private final List<String> dnsServers;
@@ -44,7 +44,7 @@ public final class VpnQuote {
       final String feeAssetId,
       final String escrowAccountId,
       final String operatorAccountId,
-      final long leaseFeeNanos,
+      final String leaseFee,
       final List<String> routePushes,
       final List<String> excludedRoutes,
       final List<String> dnsServers,
@@ -69,7 +69,7 @@ public final class VpnQuote {
     this.feeAssetId = Objects.requireNonNull(feeAssetId, "feeAssetId");
     this.escrowAccountId = Objects.requireNonNull(escrowAccountId, "escrowAccountId");
     this.operatorAccountId = Objects.requireNonNull(operatorAccountId, "operatorAccountId");
-    this.leaseFeeNanos = leaseFeeNanos;
+    this.leaseFee = Objects.requireNonNull(leaseFee, "leaseFee");
     this.routePushes = VpnProfile.immutableList(routePushes);
     this.excludedRoutes = VpnProfile.immutableList(excludedRoutes);
     this.dnsServers = VpnProfile.immutableList(dnsServers);
@@ -96,7 +96,7 @@ public final class VpnQuote {
   public String feeAssetId() { return feeAssetId; }
   public String escrowAccountId() { return escrowAccountId; }
   public String operatorAccountId() { return operatorAccountId; }
-  public long leaseFeeNanos() { return leaseFeeNanos; }
+  public String leaseFee() { return leaseFee; }
   public List<String> routePushes() { return routePushes; }
   public List<String> excludedRoutes() { return excludedRoutes; }
   public List<String> dnsServers() { return dnsServers; }

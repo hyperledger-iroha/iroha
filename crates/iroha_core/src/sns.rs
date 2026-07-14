@@ -308,7 +308,7 @@ fn bootstrap_steward_for_world(world: &impl WorldReadOnly) -> AccountId {
 /// Ensures an active SNS name lease exists for the given account alias.
 pub fn ensure_account_alias_lease(
     state_transaction: &mut StateTransaction<'_, '_>,
-    _owner: &AccountId,
+    owner: &AccountId,
     label: &AccountAlias,
 ) -> Result<(), SnsError> {
     let selector = selector_for_account_alias(label, &state_transaction.nexus.dataspace_catalog)
@@ -335,6 +335,12 @@ pub fn ensure_account_alias_lease(
     if !matches!(effective_status(&record, now_ms), NameStatus::Active) {
         return Err(SnsError::Conflict(format!(
             "active SNS lease required for account alias `{}`",
+            selector.normalized_label()
+        )));
+    }
+    if record.owner != *owner {
+        return Err(SnsError::Conflict(format!(
+            "active SNS lease for account alias `{}` is owned by another account",
             selector.normalized_label()
         )));
     }

@@ -14,7 +14,7 @@ use iroha_data_model::{
         KAGEMUSHA_RECURSIVE_SPEND_RELEASE_AUTH_VERSION_V1,
         KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_EVIDENCE_BYTES_V1, KagemushaAuthenticatedReleaseV3,
         KagemushaPastaCycleArtifactKindV3, KagemushaPastaCycleArtifactV3,
-        KagemushaPastaCycleParityV1, KagemushaPastaCycleProofEnvelopeV1,
+        KagemushaPastaCycleParityV1, KagemushaPastaCycleProofEnvelopeV3,
         KagemushaRecursiveSpendArtifactBindingV3, KagemushaRecursiveSpendArtifactManifestV3,
         KagemushaRecursiveSpendReleaseAttestationV1, KagemushaRecursiveSpendReleasePolicyV1,
     },
@@ -23,7 +23,7 @@ use iroha_data_model::{
 use norito::codec::{Decode, Encode};
 
 use crate::zk::{
-    kagemusha_recursion_adapter::KagemushaPastaCycleProofPairV1,
+    kagemusha_recursion_adapter::KagemushaPastaCycleProofPairV3,
     kagemusha_v2::{
         KagemushaPastaCycleVerifierArtifactsV3, read_kagemusha_pasta_cycle_artifact_v3,
     },
@@ -58,6 +58,7 @@ pub(crate) struct KagemushaTerminalReleaseRegistryRecordV1 {
 }
 
 /// Fully authenticated release and exact four-role verifier material.
+#[derive(Debug)]
 pub(crate) struct ResolvedKagemushaTerminalVerifierV3 {
     release: KagemushaAuthenticatedReleaseV3,
     artifacts: KagemushaPastaCycleVerifierArtifactsV3,
@@ -238,12 +239,12 @@ pub(crate) fn decode_proof_pair(
     envelope_bytes: &[u8],
 ) -> Result<
     (
-        KagemushaPastaCycleProofEnvelopeV1,
-        KagemushaPastaCycleProofPairV1,
+        KagemushaPastaCycleProofEnvelopeV3,
+        KagemushaPastaCycleProofPairV3,
     ),
     String,
 > {
-    let envelope: KagemushaPastaCycleProofEnvelopeV1 = norito::decode_from_bytes(envelope_bytes)
+    let envelope: KagemushaPastaCycleProofEnvelopeV3 = norito::decode_from_bytes(envelope_bytes)
         .map_err(|_| "Kagemusha terminal proof envelope is malformed".to_owned())?;
     if norito::to_bytes(&envelope)
         .map_err(|error| format!("failed to encode Kagemusha terminal proof envelope: {error}"))?
@@ -254,7 +255,7 @@ pub(crate) fn decode_proof_pair(
     envelope
         .validate()
         .map_err(|error| format!("Kagemusha terminal proof envelope is invalid: {error}"))?;
-    let pair: KagemushaPastaCycleProofPairV1 = norito::decode_from_bytes(&envelope.proof.bytes)
+    let pair: KagemushaPastaCycleProofPairV3 = norito::decode_from_bytes(&envelope.proof.bytes)
         .map_err(|_| "Kagemusha terminal Eq/Ep proof pair is malformed".to_owned())?;
     if norito::to_bytes(&pair)
         .map_err(|error| format!("failed to encode Kagemusha terminal proof pair: {error}"))?
@@ -388,4 +389,589 @@ fn ensure_record_release_window(
         ));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use iroha_crypto::{Algorithm, KeyPair, SignatureOf};
+    use iroha_data_model::{
+        ChainId,
+        asset::AssetDefinitionId,
+        confidential::ConfidentialStatus,
+        domain::DomainId,
+        offline::{
+            KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V3,
+            KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_VERSION_V3,
+            KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3,
+            KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1,
+            KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_IPA_K_V1,
+            KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V1,
+            KAGEMUSHA_RECURSIVE_SPEND_RELEASE_ATTESTATION_SCHEMA_V1,
+            KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROOF_BYTES_V3,
+            KAGEMUSHA_RECURSIVE_SPEND_RELEASE_POLICY_SCHEMA_V1,
+            KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V3,
+            KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PARAMETERS_FILE_NAME_V3,
+            KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PROVING_KEY_FILE_NAME_V3,
+            KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_VERIFIER_CURVE_V3,
+            KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_VERIFYING_KEY_FILE_NAME_V3,
+            KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V3,
+            KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PARAMETERS_FILE_NAME_V3,
+            KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PROVING_KEY_FILE_NAME_V3,
+            KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_VERIFIER_CURVE_V3,
+            KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_VERIFYING_KEY_FILE_NAME_V3,
+            KAGEMUSHA_TOPUP_FINALITY_CIRCUIT_ID_V2,
+            KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_PURPOSE_V2,
+            KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_TYPE_V2,
+            KAGEMUSHA_TOPUP_FINALITY_ROSTER_FILE_NAME_V2, KAGEMUSHA_VERIFIER_NAMESPACE,
+            KagemushaPastaCycleProofProfileV1, KagemushaRecursiveSpendReleaseApprovalRoleV1,
+            KagemushaRecursiveSpendReleaseApprovalV1, KagemushaRecursiveSpendReleaseRolePolicyV1,
+            KagemushaTopUpFinalityRosterArtifactReferenceV2,
+            kagemusha_recursive_spend_release_sha256,
+            kagemusha_recursive_spend_step_ep_public_inputs_schema_hash_v3,
+            kagemusha_recursive_spend_step_eq_public_inputs_schema_hash_v3,
+        },
+        proof::VerifyingKeyBox,
+        zk::BackendTag,
+    };
+
+    use super::*;
+    use crate::zk::kagemusha_v2::{
+        KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_ARTIFACT_MAGIC_V3,
+        KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_ARTIFACT_VERSION_V3,
+        KagemushaRecursiveSpendPastaCycleArtifactsV3,
+    };
+
+    struct Fixture {
+        binding: KagemushaRecursiveSpendArtifactBindingV3,
+        policy_bytes: Vec<u8>,
+        state: BTreeMap<Name, Vec<u8>>,
+        release_key: Name,
+        eq_parameters_key: Name,
+        eq_verifier_key: Name,
+        ep_verifier_key: Name,
+        eq_record: VerifyingKeyRecord,
+        ep_record: VerifyingKeyRecord,
+        ep_parameters_frame: Vec<u8>,
+        ep_verifier_frame: Vec<u8>,
+        ep_verifier_payload: Vec<u8>,
+    }
+
+    fn fixture() -> Fixture {
+        let generation = "terminal-registry-test-release";
+        let parameter_generation = "terminal-registry-test-params";
+        let benchmark_evidence = b"signed physical-device benchmark evidence".to_vec();
+        let cryptographic_review = b"independent cryptographic review evidence".to_vec();
+        let roles = [
+            (
+                KagemushaPastaCycleParityV1::StepEq,
+                KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V3,
+                [
+                    (
+                        KagemushaPastaCycleArtifactKindV3::Parameters,
+                        KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PARAMETERS_FILE_NAME_V3,
+                    ),
+                    (
+                        KagemushaPastaCycleArtifactKindV3::ProvingKey,
+                        KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PROVING_KEY_FILE_NAME_V3,
+                    ),
+                    (
+                        KagemushaPastaCycleArtifactKindV3::VerifyingKey,
+                        KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_VERIFYING_KEY_FILE_NAME_V3,
+                    ),
+                ],
+            ),
+            (
+                KagemushaPastaCycleParityV1::StepEp,
+                KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V3,
+                [
+                    (
+                        KagemushaPastaCycleArtifactKindV3::Parameters,
+                        KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PARAMETERS_FILE_NAME_V3,
+                    ),
+                    (
+                        KagemushaPastaCycleArtifactKindV3::ProvingKey,
+                        KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PROVING_KEY_FILE_NAME_V3,
+                    ),
+                    (
+                        KagemushaPastaCycleArtifactKindV3::VerifyingKey,
+                        KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_VERIFYING_KEY_FILE_NAME_V3,
+                    ),
+                ],
+            ),
+        ];
+
+        let mut inventory = Vec::with_capacity(6);
+        let mut profiles = Vec::with_capacity(2);
+        for (parity_index, (parity, circuit_id, role_specs)) in roles.into_iter().enumerate() {
+            let mut artifacts = Vec::with_capacity(3);
+            for (role_index, (kind, file_name)) in role_specs.into_iter().enumerate() {
+                let seed = u8::try_from(1 + parity_index * 3 + role_index).expect("fixture seed");
+                let payload = vec![seed; 48 + role_index];
+                let payload_sha256 = kagemusha_recursive_spend_release_sha256(&payload);
+                let header = KagemushaRecursiveSpendPastaCycleArtifactsV3 {
+                    version: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_ARTIFACT_VERSION_V3,
+                    manifest_schema: KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V3
+                        .to_owned(),
+                    bridge_abi_version: KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3,
+                    proof_backend: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1.to_owned(),
+                    transcript_profile: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V1
+                        .to_owned(),
+                    generation: generation.to_owned(),
+                    parity,
+                    circuit_id: circuit_id.to_owned(),
+                    parameter_generation: parameter_generation.to_owned(),
+                    ipa_k: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_IPA_K_V1,
+                    kind,
+                    payload_size_bytes: u64::try_from(payload.len()).expect("payload length"),
+                    payload_sha256,
+                };
+                let header_bytes = norito::to_bytes(&header).expect("artifact header");
+                let mut frame = Vec::new();
+                frame.extend_from_slice(KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_ARTIFACT_MAGIC_V3);
+                frame.extend_from_slice(
+                    &u32::try_from(header_bytes.len())
+                        .expect("header length")
+                        .to_le_bytes(),
+                );
+                frame.extend_from_slice(&header_bytes);
+                frame.extend_from_slice(&payload);
+                let descriptor = KagemushaPastaCycleArtifactV3 {
+                    kind,
+                    file_name: file_name.to_owned(),
+                    size_bytes: u64::try_from(frame.len()).expect("frame length"),
+                    sha256: kagemusha_recursive_spend_release_sha256(&frame),
+                    payload_size_bytes: u64::try_from(payload.len()).expect("payload length"),
+                    payload_sha256,
+                };
+                artifacts.push(descriptor.clone());
+                inventory.push((parity, kind, descriptor, frame, payload));
+            }
+            profiles.push(KagemushaPastaCycleProofProfileV1 {
+                parity,
+                circuit_id: circuit_id.to_owned(),
+                parameter_generation: parameter_generation.to_owned(),
+                ipa_k: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_IPA_K_V1,
+                artifacts,
+            });
+        }
+
+        let mut manifest = KagemushaRecursiveSpendArtifactManifestV3 {
+            schema: KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V3.to_owned(),
+            version: KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_VERSION_V3,
+            bridge_abi_version: KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3,
+            proof_backend: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1.to_owned(),
+            transcript_profile: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V1.to_owned(),
+            generation: generation.to_owned(),
+            source_commit: "1234567890abcdef1234567890abcdef12345678".to_owned(),
+            source_tree_sha256: [0x51; 32],
+            source_repo_dirty: true,
+            chain_id: ChainId::from("terminal-registry-test-chain"),
+            asset: AssetDefinitionId::new(
+                DomainId::try_new("wonderland", "universal").expect("asset domain"),
+                "rose".parse().expect("asset name"),
+            ),
+            asset_scale: 9,
+            activation_height: 7,
+            withdrawal_height: 100,
+            max_proof_bytes: KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROOF_BYTES_V3,
+            profiles,
+            topup_finality_roster_artifact: KagemushaTopUpFinalityRosterArtifactReferenceV2 {
+                file_name: KAGEMUSHA_TOPUP_FINALITY_ROSTER_FILE_NAME_V2.to_owned(),
+                size_bytes: 128,
+                sha256: kagemusha_recursive_spend_release_sha256(b"terminal-test-roster"),
+                artifact_generation: generation.to_owned(),
+                circuit_id: KAGEMUSHA_TOPUP_FINALITY_CIRCUIT_ID_V2.to_owned(),
+                purpose: KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_PURPOSE_V2.to_owned(),
+                artifact_type: KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_TYPE_V2.to_owned(),
+                required_bridge_abi_version: KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3,
+            },
+            benchmark_evidence_sha256: kagemusha_recursive_spend_release_sha256(
+                &benchmark_evidence,
+            ),
+            cryptographic_review_sha256: kagemusha_recursive_spend_release_sha256(
+                &cryptographic_review,
+            ),
+            release_attestation_sha256: [0xA5; 32],
+        };
+
+        let key_pairs = [
+            KeyPair::from_seed(vec![11; 32], Algorithm::Ed25519),
+            KeyPair::from_seed(vec![12; 32], Algorithm::Ed25519),
+            KeyPair::from_seed(vec![13; 32], Algorithm::Ed25519),
+        ];
+        let approval_roles = [
+            KagemushaRecursiveSpendReleaseApprovalRoleV1::Release,
+            KagemushaRecursiveSpendReleaseApprovalRoleV1::CryptographicReview,
+            KagemushaRecursiveSpendReleaseApprovalRoleV1::PhysicalDeviceBenchmark,
+        ];
+        let policy = KagemushaRecursiveSpendReleasePolicyV1 {
+            schema: KAGEMUSHA_RECURSIVE_SPEND_RELEASE_POLICY_SCHEMA_V1.to_owned(),
+            version: KAGEMUSHA_RECURSIVE_SPEND_RELEASE_AUTH_VERSION_V1,
+            policy_id: "terminal-registry-test-policy".to_owned(),
+            roles: approval_roles
+                .iter()
+                .zip(&key_pairs)
+                .map(
+                    |(&role, key_pair)| KagemushaRecursiveSpendReleaseRolePolicyV1 {
+                        role,
+                        threshold: 1,
+                        authorized_signers: vec![key_pair.public_key().clone()],
+                    },
+                )
+                .collect(),
+        };
+        let subject = manifest
+            .release_attestation_subject()
+            .expect("release subject");
+        let attestation = KagemushaRecursiveSpendReleaseAttestationV1 {
+            schema: KAGEMUSHA_RECURSIVE_SPEND_RELEASE_ATTESTATION_SCHEMA_V1.to_owned(),
+            version: KAGEMUSHA_RECURSIVE_SPEND_RELEASE_AUTH_VERSION_V1,
+            subject: subject.clone(),
+            approvals: approval_roles
+                .iter()
+                .zip(&key_pairs)
+                .map(
+                    |(&role, key_pair)| KagemushaRecursiveSpendReleaseApprovalV1 {
+                        role,
+                        public_key: key_pair.public_key().clone(),
+                        signature: SignatureOf::try_new(
+                            key_pair.private_key(),
+                            &subject.approval_payload(role),
+                        )
+                        .expect("release signature"),
+                    },
+                )
+                .collect(),
+        };
+        manifest.release_attestation_sha256 = kagemusha_recursive_spend_release_sha256(
+            &norito::to_bytes(&attestation).expect("release attestation"),
+        );
+        manifest.validate().expect("release manifest");
+
+        let binding = KagemushaRecursiveSpendArtifactBindingV3 {
+            generation: generation.to_owned(),
+            manifest_sha256: kagemusha_recursive_spend_release_sha256(
+                &norito::to_bytes(&manifest).expect("manifest bytes"),
+            ),
+        };
+        let release_key = release_state_key(&binding).expect("release state key");
+        let record = KagemushaTerminalReleaseRegistryRecordV1 {
+            schema: TERMINAL_RELEASE_REGISTRY_SCHEMA_V1.to_owned(),
+            version: KAGEMUSHA_RECURSIVE_SPEND_RELEASE_AUTH_VERSION_V1,
+            manifest: manifest.clone(),
+            release_attestation: attestation,
+            benchmark_evidence,
+            cryptographic_review,
+        };
+        let mut state = BTreeMap::new();
+        state.insert(
+            release_key.clone(),
+            encode_release_record(&record).expect("release record"),
+        );
+
+        let mut eq_parameters_key = None;
+        let mut eq_verifier_key = None;
+        let mut ep_verifier_key = None;
+        let mut eq_verifier_payload = None;
+        let mut ep_verifier_payload = None;
+        let mut ep_parameters_frame = None;
+        let mut ep_verifier_frame = None;
+        for (parity, kind, descriptor, frame, payload) in inventory {
+            if kind == KagemushaPastaCycleArtifactKindV3::ProvingKey {
+                continue;
+            }
+            let key = artifact_state_key(&descriptor).expect("artifact key");
+            if kind == KagemushaPastaCycleArtifactKindV3::Parameters {
+                match parity {
+                    KagemushaPastaCycleParityV1::StepEq => {
+                        eq_parameters_key = Some(key.clone());
+                    }
+                    KagemushaPastaCycleParityV1::StepEp => {
+                        ep_parameters_frame = Some(frame.clone());
+                    }
+                }
+            } else if kind == KagemushaPastaCycleArtifactKindV3::VerifyingKey {
+                match parity {
+                    KagemushaPastaCycleParityV1::StepEq => {
+                        eq_verifier_key = Some(key.clone());
+                        eq_verifier_payload = Some(payload);
+                    }
+                    KagemushaPastaCycleParityV1::StepEp => {
+                        ep_verifier_key = Some(key.clone());
+                        ep_verifier_payload = Some(payload);
+                        ep_verifier_frame = Some(frame.clone());
+                    }
+                }
+            }
+            state.insert(key, frame);
+        }
+        let eq_verifier_payload = eq_verifier_payload.expect("Eq verifier payload");
+        let ep_verifier_payload = ep_verifier_payload.expect("Ep verifier payload");
+        let eq_record = verifier_record(
+            &manifest,
+            KagemushaPastaCycleParityV1::StepEq,
+            eq_verifier_payload,
+        );
+        let ep_record = verifier_record(
+            &manifest,
+            KagemushaPastaCycleParityV1::StepEp,
+            ep_verifier_payload.clone(),
+        );
+
+        Fixture {
+            binding,
+            policy_bytes: norito::to_bytes(&policy).expect("policy bytes"),
+            state,
+            release_key,
+            eq_parameters_key: eq_parameters_key.expect("Eq parameters key"),
+            eq_verifier_key: eq_verifier_key.expect("Eq verifier key"),
+            ep_verifier_key: ep_verifier_key.expect("Ep verifier key"),
+            eq_record,
+            ep_record,
+            ep_parameters_frame: ep_parameters_frame.expect("Ep parameters frame"),
+            ep_verifier_frame: ep_verifier_frame.expect("Ep verifier frame"),
+            ep_verifier_payload,
+        }
+    }
+
+    fn verifier_record(
+        manifest: &KagemushaRecursiveSpendArtifactManifestV3,
+        parity: KagemushaPastaCycleParityV1,
+        bytes: Vec<u8>,
+    ) -> VerifyingKeyRecord {
+        let (circuit, curve, schema_hash) = match parity {
+            KagemushaPastaCycleParityV1::StepEq => (
+                KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V3,
+                KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_VERIFIER_CURVE_V3,
+                kagemusha_recursive_spend_step_eq_public_inputs_schema_hash_v3(),
+            ),
+            KagemushaPastaCycleParityV1::StepEp => (
+                KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V3,
+                KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_VERIFIER_CURVE_V3,
+                kagemusha_recursive_spend_step_ep_public_inputs_schema_hash_v3(),
+            ),
+        };
+        let key = VerifyingKeyBox::new(
+            KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1
+                .parse()
+                .expect("key backend"),
+            bytes,
+        );
+        let mut record = VerifyingKeyRecord::new_with_owner(
+            1,
+            circuit,
+            None,
+            KAGEMUSHA_VERIFIER_NAMESPACE,
+            BackendTag::Halo2IpaPasta,
+            curve,
+            schema_hash,
+            crate::zk::hash_vk(&key),
+        );
+        record.vk_len = u32::try_from(key.bytes.len()).expect("VK length");
+        record.max_proof_bytes = manifest.max_proof_bytes;
+        record.activation_height = Some(manifest.activation_height);
+        record.withdraw_height = Some(manifest.withdrawal_height);
+        record.key = Some(key);
+        record.status = ConfidentialStatus::Active;
+        record
+    }
+
+    fn resolve(fixture: &Fixture) -> Result<ResolvedKagemushaTerminalVerifierV3, String> {
+        resolve_with_trusted_policy(
+            &fixture.binding,
+            &fixture.eq_record,
+            &fixture.ep_record,
+            &fixture.policy_bytes,
+            |key| fixture.state.get(key).map(Vec::as_slice),
+        )
+    }
+
+    #[test]
+    fn exact_manifest_roles_and_state_keys_resolve() {
+        let fixture = fixture();
+        let resolved = resolve(&fixture).expect("authenticated terminal verifier material");
+        assert_eq!(
+            resolved.release().manifest_sha256(),
+            fixture.binding.manifest_sha256
+        );
+        assert_eq!(
+            resolved.artifacts().manifest_sha256(),
+            fixture.binding.manifest_sha256
+        );
+        assert_ne!(fixture.eq_verifier_key, fixture.ep_verifier_key);
+    }
+
+    #[test]
+    fn framed_eq_ep_role_substitution_is_rejected() {
+        let mut parameter_fixture = fixture();
+        parameter_fixture.state.insert(
+            parameter_fixture.eq_parameters_key.clone(),
+            parameter_fixture.ep_parameters_frame.clone(),
+        );
+        assert!(
+            resolve(&parameter_fixture).is_err(),
+            "Ep parameters under the Eq digest key must reject"
+        );
+
+        let mut verifier_fixture = fixture();
+        verifier_fixture.state.insert(
+            verifier_fixture.eq_verifier_key.clone(),
+            verifier_fixture.ep_verifier_frame.clone(),
+        );
+        let error =
+            resolve(&verifier_fixture).expect_err("Ep frame under Eq digest key must reject");
+        assert!(
+            error.contains("length") || error.contains("digest") || error.contains("mismatch"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn active_state_vk_substitution_is_rejected() {
+        let mut fixture = fixture();
+        let substituted = fixture.ep_verifier_payload.clone();
+        fixture.eq_record.vk_len = u32::try_from(substituted.len()).expect("VK length");
+        fixture.eq_record.key.as_mut().expect("inline Eq key").bytes = substituted;
+        let error = resolve(&fixture).expect_err("state VK substitution must reject");
+        assert!(error.contains("does not equal the authenticated release payload"));
+    }
+
+    #[test]
+    fn canonical_but_substituted_release_evidence_is_rejected() {
+        let mut fixture = fixture();
+        let mut record: KagemushaTerminalReleaseRegistryRecordV1 = norito::decode_from_bytes(
+            fixture
+                .state
+                .get(&fixture.release_key)
+                .expect("release record"),
+        )
+        .expect("decode release record");
+        record.cryptographic_review = b"substituted review evidence".to_vec();
+        fixture.state.insert(
+            fixture.release_key.clone(),
+            encode_release_record(&record).expect("modified record"),
+        );
+        let error = resolve(&fixture).expect_err("evidence substitution must reject");
+        assert!(error.contains("authentication failed"));
+    }
+
+    #[test]
+    fn manifest_binding_substitution_is_rejected_even_when_record_is_copied() {
+        let mut fixture = fixture();
+        let original_record = fixture
+            .state
+            .get(&fixture.release_key)
+            .expect("release record")
+            .clone();
+        fixture.binding.manifest_sha256[0] ^= 1;
+        let substituted_key = release_state_key(&fixture.binding).expect("substituted key");
+        fixture.state.insert(substituted_key, original_record);
+        let error = resolve(&fixture).expect_err("manifest substitution must reject");
+        assert!(error.contains("binding mismatch"));
+    }
+
+    #[test]
+    fn noncanonical_release_record_and_artifact_trailing_bytes_are_rejected() {
+        let mut release_fixture = fixture();
+        release_fixture
+            .state
+            .get_mut(&release_fixture.release_key)
+            .expect("release record")
+            .push(0);
+        assert!(resolve(&release_fixture).is_err());
+
+        let mut artifact_fixture = fixture();
+        artifact_fixture
+            .state
+            .get_mut(&artifact_fixture.ep_verifier_key)
+            .expect("Ep verifier frame")
+            .push(0);
+        assert!(resolve(&artifact_fixture).is_err());
+    }
+
+    #[test]
+    fn noncanonical_trusted_policy_is_rejected_before_state_selection() {
+        let mut fixture = fixture();
+        fixture.policy_bytes.push(0);
+        let error = resolve(&fixture).expect_err("trailing trusted-policy bytes must reject");
+        assert!(error.contains("policy"));
+    }
+
+    #[test]
+    fn canonical_but_different_trusted_policy_is_rejected() {
+        let mut fixture = fixture();
+        let mut substituted_policy: KagemushaRecursiveSpendReleasePolicyV1 =
+            norito::decode_from_bytes(&fixture.policy_bytes).expect("decode trusted policy");
+        for (index, role) in substituted_policy.roles.iter_mut().enumerate() {
+            let replacement = KeyPair::from_seed(
+                vec![u8::try_from(0x40 + index).expect("replacement seed"); 32],
+                Algorithm::Ed25519,
+            );
+            role.authorized_signers = vec![replacement.public_key().clone()];
+        }
+        substituted_policy
+            .validate()
+            .expect("canonical substituted policy");
+        fixture.policy_bytes =
+            norito::to_bytes(&substituted_policy).expect("substituted policy bytes");
+
+        let error = resolve(&fixture).expect_err("different trusted signers must reject release");
+        assert!(error.contains("authentication failed"));
+    }
+
+    #[test]
+    fn eq_ep_activation_metadata_substitution_is_rejected() {
+        for mutation in [
+            "eq_activation",
+            "eq_withdrawal",
+            "ep_activation",
+            "ep_withdrawal",
+        ] {
+            let mut fixture = fixture();
+            let field = match mutation {
+                "eq_activation" => &mut fixture.eq_record.activation_height,
+                "eq_withdrawal" => &mut fixture.eq_record.withdraw_height,
+                "ep_activation" => &mut fixture.ep_record.activation_height,
+                "ep_withdrawal" => &mut fixture.ep_record.withdraw_height,
+                _ => unreachable!(),
+            };
+            *field = field.and_then(|height| height.checked_add(1));
+            let error = resolve(&fixture)
+                .expect_err("substituted verifier activation metadata must reject");
+            assert!(
+                error.contains("activation window"),
+                "unexpected {mutation} error: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn verifier_window_is_activation_inclusive_and_withdrawal_exclusive() {
+        let fixture = fixture();
+        for record in [&fixture.eq_record, &fixture.ep_record] {
+            let activation = record.activation_height.expect("activation height");
+            let withdrawal = record.withdraw_height.expect("withdrawal height");
+            assert!(!record.is_active_at(activation - 1));
+            assert!(record.is_active_at(activation));
+            assert!(record.is_active_at(withdrawal - 1));
+            assert!(!record.is_active_at(withdrawal));
+        }
+    }
+
+    #[test]
+    fn missing_release_or_artifact_state_key_is_rejected() {
+        let mut release_fixture = fixture();
+        release_fixture.state.remove(&release_fixture.release_key);
+        let error = resolve(&release_fixture).expect_err("missing release record must reject");
+        assert!(error.contains("release is not installed"));
+
+        let mut artifact_fixture = fixture();
+        artifact_fixture
+            .state
+            .remove(&artifact_fixture.eq_parameters_key);
+        let error = resolve(&artifact_fixture).expect_err("missing Eq parameters must reject");
+        assert!(error.contains("artifact") && error.contains("not installed"));
+    }
 }

@@ -44,8 +44,9 @@ use iroha_primitives::numeric::Quantity;
 use iroha_telemetry::metrics;
 use norito::codec::{Decode, Encode};
 
+#[cfg(test)]
+use crate::commit_roster_journal::CommitRosterSnapshot;
 use crate::{
-    commit_roster_journal::CommitRosterSnapshot,
     governance::manifest::{GovernanceRules, LaneManifestStatus, RuntimeUpgradeHook},
     queue::{BackpressureState, QueuePressureSnapshot},
 };
@@ -114,17 +115,16 @@ fn fail_closed_after_consensus_transition_poison() -> ! {
     panic!("consensus transition gate poisoned; refusing canonical mutation");
 }
 
-/// Opaque view of one authenticated legacy commit-roster snapshot.
+/// Opaque test-only view of one authenticated legacy commit-roster snapshot.
 ///
 /// Sumeragi v2 carries finality in its exact Kura-owned v2 artifact and does
-/// not mint this capability. The type survives only for recovery metadata
-/// consumers that must inspect a capability authenticated by an external
-/// compatibility path without accepting raw journal fields independently.
+/// not mint this capability. Unit tests use the type to prove that exact
+/// recovery-metadata fixtures cannot promote raw journal fields independently.
 #[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
+#[cfg(test)]
 pub(crate) struct AuthenticatedCommitRoster(CommitRosterSnapshot);
 
-#[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
+#[cfg(test)]
 impl AuthenticatedCommitRoster {
     /// Return the authenticated commit certificate.
     #[must_use]
@@ -152,7 +152,6 @@ impl AuthenticatedCommitRoster {
     ///
     /// This seam is deliberately test-only: production v2 code must never
     /// promote decoded legacy journal metadata into finality authority.
-    #[cfg(test)]
     pub(crate) fn from_snapshot_for_tests(snapshot: CommitRosterSnapshot) -> Option<Self> {
         let qc = &snapshot.commit_qc;
         let checkpoint = &snapshot.validator_checkpoint;
@@ -187,10 +186,9 @@ mod archival_status_tests {
     };
 
     use crate::commit_roster_journal::CommitRosterSnapshot;
-    use crate::sumeragi::{
-        AuthenticatedCommitRoster,
-        consensus::{PERMISSIONED_TAG, Phase},
-    };
+    use crate::sumeragi::consensus::{PERMISSIONED_TAG, Phase};
+
+    use super::AuthenticatedCommitRoster;
 
     fn fixture() -> CommitRosterSnapshot {
         let key_pair = KeyPair::try_from_seed(

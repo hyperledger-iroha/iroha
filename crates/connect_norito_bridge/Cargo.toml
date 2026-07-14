@@ -43,6 +43,7 @@ tempfile = { workspace = true }
 
 [dev-dependencies]
 iroha_core = { workspace = true, features = ["iroha-core-tests", "zk-halo2-ipa"] }
+p256 = { version = "0.13.2", default-features = false, features = ["std", "ecdsa"] }
 sorafs_chunker = { workspace = true }
 
 [build-dependencies]

@@ -16,7 +16,9 @@ use std::{
 };
 
 use super::v2_core::{EventTag, Generation};
-use iroha_config::parameters::actual::{NodeRole, SumeragiV2Config, sumeragi_v2_timing_ms};
+use iroha_config::parameters::actual::{
+    NodeRole, SUMERAGI_V2_CONFIG_FORMAT_VERSION, SumeragiV2Config, sumeragi_v2_timing_ms,
+};
 use iroha_crypto::{Hash, HashOf, KeyPair};
 use iroha_data_model::{
     Encode as _,
@@ -439,9 +441,15 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             dispatch_lane_work_effects(&mut lane_work, &services, control_queue_capacity)?;
         }
         // Startup recovery and durable constructor work must not consume the
-        // live height cadence. These additions are infallible after the early
-        // representability probes above.
+        // live height cadence. Interrupted-tip replay remains permanently
+        // unarmed because the already-decided runtime is consumed as soon as
+        // its local Apply finishes; the fresh successor is armed normally.
+        // These additions are infallible after the early representability
+        // probes above.
         let height_started_at = Instant::now();
+        if !recovering_interrupted_tip {
+            executor.arm_live_clocks(height_started_at)?;
+        }
         let mut next_block_sync_attempt = deadline_after(height_started_at, round_timeout);
         let mut next_lane_retransmit = deadline_after(height_started_at, retransmit_interval);
         if recovering_interrupted_tip {
@@ -1637,6 +1645,9 @@ pub(super) enum V2RunnerError {
     /// Runtime configuration failed.
     #[error("invalid Sumeragi v2 runtime configuration: {0}")]
     RuntimeConfig(#[from] super::v2_runtime::RuntimeConfigError),
+    /// Live pacemaker clocks were activated outside the one-shot startup boundary.
+    #[error(transparent)]
+    RuntimeClock(#[from] super::v2_runtime::RuntimeClockError),
     /// Canonical shared consensus configuration was invalid.
     #[error(transparent)]
     SharedConfig(#[from] iroha_config::parameters::actual::SumeragiV2ConfigError),
@@ -1859,7 +1870,7 @@ mod tests {
     #[test]
     fn runtime_queue_reserves_progress_and_completions() {
         let config = SumeragiV2Config {
-            format_version: 1,
+            format_version: SUMERAGI_V2_CONFIG_FORMAT_VERSION,
             protocol_version: wire::PROTOCOL_VERSION,
             mode: wire::ConsensusMode::Permissioned,
             block_cadence_ms: 1_000,

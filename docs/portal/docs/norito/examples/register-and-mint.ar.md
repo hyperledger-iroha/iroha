@@ -50,9 +50,7 @@ seiyaku RegisterAndMint {
             mintable: mintable,
         );
         // Mint 250 ROSE to Alice
-        let to = AccountId::parse(
-            "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
-        );
+        let to = AccountId::parse("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV", );
         ledger::asset::mint(account: to, asset_definition: asset, amount: 250);
     }
 }

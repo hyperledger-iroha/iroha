@@ -22,6 +22,7 @@ use iroha_data_model::soranet::{
         VpnUsageVoucherEnvelopeV1, VpnUsageVoucherV1,
     },
 };
+use iroha_primitives::numeric::Quantity;
 use thiserror::Error;
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
@@ -718,7 +719,7 @@ impl VpnSession {
             ended_at_ms: unix_now_ms(),
             exit_class,
             meter_hash,
-            earned_fee_nanos: 0,
+            earned_fee: Quantity::zero(),
             highest_voucher_sequence: 0,
             client_voucher_hash: [0u8; 32],
         }
@@ -765,7 +766,7 @@ pub struct VpnSettlementArtifact {
     /// Highest client-signed voucher accepted by the relay for this session.
     pub voucher: VpnUsageVoucherV1,
     /// Earned fee carried by the accepted voucher envelope.
-    pub earned_fee_nanos: u64,
+    pub earned_fee: Quantity,
 }
 
 impl VpnSessionHandle {
@@ -839,7 +840,7 @@ impl VpnSessionHandle {
         receipt.relay_id = self.relay_id;
         receipt.payment_tx_hash = self.payment_tx_hash;
         if let Some(envelope) = voucher {
-            receipt.earned_fee_nanos = envelope.earned_fee_nanos;
+            receipt.earned_fee = envelope.earned_fee.clone();
             receipt.highest_voucher_sequence = envelope.voucher.body.sequence;
             receipt.client_voucher_hash = envelope.voucher.hash();
         }
@@ -866,7 +867,7 @@ impl VpnSessionHandle {
         Some(VpnSettlementArtifact {
             receipt: self.finalize_receipt(Some(&voucher)),
             voucher: voucher.voucher,
-            earned_fee_nanos: voucher.earned_fee_nanos,
+            earned_fee: voucher.earned_fee,
         })
     }
 }

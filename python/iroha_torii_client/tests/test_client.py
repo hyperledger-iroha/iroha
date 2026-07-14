@@ -968,10 +968,11 @@ VPN_ACCOUNT = "vpn-user@paynet"
 VPN_OPERATOR = "vpn-operator@paynet"
 VPN_ESCROW = "vpn-escrow@paynet"
 VPN_QUOTE_ID = "11" * 32
+VPN_QUOTE_SESSION_ID = "44" * 16
 VPN_PAYMENT_HASH = "22" * 32
 VPN_METERING_KEY = "33" * 32
 VPN_LEASE_ID = VPN_QUOTE_ID
-VPN_HELPER_TICKET_HEX = "5356504e48543100" + "00" * 248
+VPN_HELPER_TICKET_HEX = "5356504e48543100" + "00" * 656
 
 
 def _vpn_instruction(wire_id: str = "OpenVpnLeaseEscrow") -> Dict[str, str]:
@@ -982,7 +983,7 @@ def _vpn_profile_payload() -> Dict[str, Any]:
     return {
         "available": True,
         "relay_endpoint": "/dns4/relay.example/tcp/443",
-        "supported_exit_classes": ["standard", "low-latency"],
+        "supported_exit_classes": ["standard", "low-latency", "high-security"],
         "default_exit_class": "standard",
         "lease_secs": 3600,
         "dns_push_interval_secs": 60,
@@ -992,13 +993,13 @@ def _vpn_profile_payload() -> Dict[str, Any]:
         "dns_servers": ["1.1.1.1"],
         "tunnel_addresses": ["10.208.0.2/32"],
         "mtu_bytes": 1280,
-        "display_billing_label": "standard - soranet.vpn.v1 - 100 nano-XOR",
+        "display_billing_label": "standard - soranet.vpn.v1 - 100.25 XOR",
         "fee_asset_id": "xor#universal",
         "escrow_account_id": VPN_ESCROW,
         "operator_account_id": VPN_OPERATOR,
-        "lease_fee_nanos": 100,
+        "lease_fee": "100.25",
         "settlement_grace_secs": 300,
-        "flow_label_bits": 20,
+        "flow_label_bits": 24,
         "padding_budget_ms": 250,
         "relay_tls_spki_sha256_hex": "44" * 32,
     }
@@ -1009,7 +1010,7 @@ def _vpn_quote_payload() -> Dict[str, Any]:
     return {
         "quote_id": VPN_QUOTE_ID,
         "lease_id_hex": VPN_LEASE_ID,
-        "session_id_hex": VPN_QUOTE_ID,
+        "session_id_hex": VPN_QUOTE_SESSION_ID,
         "payment_reference": VPN_QUOTE_ID,
         "account_id": VPN_ACCOUNT,
         "exit_class": "standard",
@@ -1019,7 +1020,7 @@ def _vpn_quote_payload() -> Dict[str, Any]:
         "fee_asset_id": payload["fee_asset_id"],
         "escrow_account_id": VPN_ESCROW,
         "operator_account_id": VPN_OPERATOR,
-        "lease_fee_nanos": payload["lease_fee_nanos"],
+        "lease_fee": payload["lease_fee"],
         "route_pushes": payload["route_pushes"],
         "excluded_routes": payload["excluded_routes"],
         "dns_servers": payload["dns_servers"],
@@ -1052,7 +1053,7 @@ def _vpn_session_payload() -> Dict[str, Any]:
         "fee_asset_id": quote_payload["fee_asset_id"],
         "escrow_account_id": VPN_ESCROW,
         "operator_account_id": VPN_OPERATOR,
-        "lease_fee_nanos": quote_payload["lease_fee_nanos"],
+        "lease_fee": quote_payload["lease_fee"],
         "flow_label_bits": quote_payload["flow_label_bits"],
         "padding_budget_ms": quote_payload["padding_budget_ms"],
         "relay_tls_spki_sha256_hex": quote_payload["relay_tls_spki_sha256_hex"],
@@ -1064,7 +1065,7 @@ def _vpn_session_payload() -> Dict[str, Any]:
         "helper_ticket_hex": VPN_HELPER_TICKET_HEX,
         "bytes_in": 0,
         "bytes_out": 0,
-        "status": "connected",
+        "status": "active",
     }
 
 
@@ -1088,9 +1089,9 @@ def _vpn_receipt_payload(status: str = "settled") -> Dict[str, Any]:
         "fee_asset_id": session_payload["fee_asset_id"],
         "escrow_account_id": VPN_ESCROW,
         "operator_account_id": VPN_OPERATOR,
-        "lease_fee_nanos": session_payload["lease_fee_nanos"],
-        "earned_fee_nanos": 25,
-        "refunded_fee_nanos": 75,
+        "lease_fee": session_payload["lease_fee"],
+        "earned_fee": "25.125",
+        "refunded_fee": "75.125",
         "lease_id_hex": VPN_LEASE_ID,
         "settle_lease_instruction": _vpn_instruction("SettleVpnLease"),
         "tx_instructions": [_vpn_instruction("SettleVpnLease")],
@@ -1118,12 +1119,193 @@ def test_vpn_profile_deserializes_native_lease_fields() -> None:
     profile = client.get_vpn_profile()
 
     assert profile.fee_asset_id == "xor#universal"
-    assert profile.lease_fee_nanos == 100
+    assert profile.lease_fee == "100.25"
     assert profile.escrow_account_id == VPN_ESCROW
     assert profile.operator_account_id == VPN_OPERATOR
     assert profile.route_pushes == ["0.0.0.0/0"]
     assert session.calls[0]["url"] == "http://node.test/v1/vpn/profile"
     assert session.calls[0]["headers"] == {"Accept": "application/json"}
+
+
+@pytest.mark.parametrize("invalid_fee", [100, "01", "-1", "1.0"])
+def test_vpn_profile_rejects_noncanonical_quantity_fee(invalid_fee: Any) -> None:
+    payload = _vpn_profile_payload()
+    payload["lease_fee"] = invalid_fee
+    session = RecordingSession()
+    session.queue(StubResponse(payload=payload))
+    client = ToriiClient("http://node.test", session=session)
+
+    with pytest.raises(RuntimeError, match="lease_fee"):
+        client.get_vpn_profile()
+
+
+@pytest.mark.parametrize("dns_push_interval_secs", [None, 0, 29], ids=["missing", "zero", "below-minimum"])
+def test_vpn_profile_requires_dns_push_interval_of_at_least_30(
+    dns_push_interval_secs: Optional[int],
+) -> None:
+    payload = _vpn_profile_payload()
+    if dns_push_interval_secs is None:
+        payload.pop("dns_push_interval_secs")
+    else:
+        payload["dns_push_interval_secs"] = dns_push_interval_secs
+
+    with pytest.raises(RuntimeError, match="dns_push_interval_secs"):
+        ToriiClient._parse_vpn_profile(payload, context="vpn profile")
+
+
+def test_signed_vpn_methods_require_canonical_auth_before_dispatch() -> None:
+    session = RecordingSession()
+    client = ToriiClient("http://node.test", session=session)
+    omitted_auth_calls = [
+        lambda: client.create_vpn_quote(
+            VpnQuoteCreateRequest(metering_public_key_hex=VPN_METERING_KEY)
+        ),
+        lambda: client.create_vpn_session(
+            VpnSessionCreateRequest(
+                quote_id=VPN_QUOTE_ID,
+                payment_tx_hash=VPN_PAYMENT_HASH,
+                metering_public_key_hex=VPN_METERING_KEY,
+            )
+        ),
+        lambda: client.get_vpn_session(VPN_QUOTE_ID),
+        lambda: client.delete_vpn_session(VPN_QUOTE_ID),
+        lambda: client.submit_vpn_receipt(
+            VpnReceiptSubmitRequest(
+                relay_receipt_hex="abcd",
+                client_voucher_hex="beef",
+            )
+        ),
+        client.list_vpn_receipts,
+    ]
+
+    for invoke in omitted_auth_calls:
+        with pytest.raises(TypeError, match=r"canonical_auth"):
+            invoke()
+
+    explicit_none_calls = [
+        lambda: client.create_vpn_quote(
+            VpnQuoteCreateRequest(metering_public_key_hex=VPN_METERING_KEY),
+            canonical_auth=None,  # type: ignore[arg-type]
+        ),
+        lambda: client.create_vpn_session(
+            VpnSessionCreateRequest(
+                quote_id=VPN_QUOTE_ID,
+                payment_tx_hash=VPN_PAYMENT_HASH,
+                metering_public_key_hex=VPN_METERING_KEY,
+            ),
+            canonical_auth=None,  # type: ignore[arg-type]
+        ),
+        lambda: client.get_vpn_session(
+            VPN_QUOTE_ID,
+            canonical_auth=None,  # type: ignore[arg-type]
+        ),
+        lambda: client.delete_vpn_session(
+            VPN_QUOTE_ID,
+            canonical_auth=None,  # type: ignore[arg-type]
+        ),
+        lambda: client.submit_vpn_receipt(
+            VpnReceiptSubmitRequest(
+                relay_receipt_hex="abcd",
+                client_voucher_hex="beef",
+            ),
+            canonical_auth=None,  # type: ignore[arg-type]
+        ),
+        lambda: client.list_vpn_receipts(
+            canonical_auth=None,  # type: ignore[arg-type]
+        ),
+    ]
+    for invoke in explicit_none_calls:
+        with pytest.raises(ValueError, match=r"canonical_auth is required"):
+            invoke()
+    assert session.calls == []
+
+
+def test_vpn_request_mappings_reject_unknown_fields_before_dispatch() -> None:
+    session = RecordingSession()
+    client = ToriiClient("http://node.test", session=session)
+    auth = _vpn_auth([])
+    calls = [
+        lambda: client.create_vpn_quote(
+            {"metering_public_key_hex": VPN_METERING_KEY, "unexpected": True},
+            canonical_auth=auth,
+        ),
+        lambda: client.create_vpn_session(
+            {
+                "quote_id": VPN_QUOTE_ID,
+                "payment_tx_hash": VPN_PAYMENT_HASH,
+                "metering_public_key_hex": VPN_METERING_KEY,
+                "unexpected": True,
+            },
+            canonical_auth=auth,
+        ),
+        lambda: client.submit_vpn_receipt(
+            {
+                "relay_receipt_hex": "abcd",
+                "client_voucher_hex": "beef",
+                "unexpected": True,
+            },
+            canonical_auth=auth,
+        ),
+    ]
+
+    for invoke in calls:
+        with pytest.raises(RuntimeError, match=r"unsupported fields: unexpected"):
+            invoke()
+    assert session.calls == []
+
+
+def test_vpn_requests_keep_openapi_allowed_prefixed_mixed_case_hex() -> None:
+    metering_key = "ab" * 32
+    payment_hash = "cd" * 32
+    lease_id = "ef" * 32
+    assert ToriiClient._normalize_vpn_quote_request(
+        {"metering_public_key_hex": "0X" + ("aB" * 32)}
+    )["metering_public_key_hex"] == metering_key
+    session_payload = ToriiClient._normalize_vpn_session_request(
+        {
+            "quote_id": VPN_QUOTE_ID,
+            "payment_tx_hash": "0x" + ("cD" * 32),
+            "metering_public_key_hex": "0X" + ("aB" * 32),
+        }
+    )
+    assert session_payload["payment_tx_hash"] == payment_hash
+    assert session_payload["metering_public_key_hex"] == metering_key
+    receipt_payload = ToriiClient._normalize_vpn_receipt_request(
+        {
+            "relay_receipt_hex": "0XABCD",
+            "client_voucher_hex": "0xBEEF",
+            "lease_id_hex": "0X" + ("eF" * 32),
+        }
+    )
+    assert receipt_payload == {
+        "relay_receipt_hex": "abcd",
+        "client_voucher_hex": "beef",
+        "lease_id_hex": lease_id,
+    }
+    with pytest.raises(RuntimeError, match=r"quote_id must be an exact lowercase"):
+        ToriiClient._normalize_vpn_session_request(
+            {
+                "quote_id": "0X" + VPN_QUOTE_ID,
+                "payment_tx_hash": payment_hash,
+                "metering_public_key_hex": metering_key,
+            }
+        )
+    with pytest.raises(RuntimeError, match=r"exit_class must be one of"):
+        ToriiClient._normalize_vpn_quote_request(
+            {
+                "exit_class": "fastest",
+                "metering_public_key_hex": metering_key,
+            }
+        )
+    with pytest.raises(RuntimeError, match=r"exit_class must be one of"):
+        ToriiClient._normalize_vpn_session_request(
+            {
+                "exit_class": "fastest",
+                "quote_id": VPN_QUOTE_ID,
+                "payment_tx_hash": payment_hash,
+                "metering_public_key_hex": metering_key,
+            }
+        )
 
 
 def test_create_vpn_quote_signs_body_and_parses_open_lease_instruction() -> None:
@@ -1411,6 +1593,420 @@ def test_identifier_resolution_receipt_matches_shared_vectors() -> None:
             ), negative["name"]
 
 
+def test_vpn_session_accepts_exact_lowercase_664_byte_helper_ticket() -> None:
+    parsed = ToriiClient._parse_vpn_session(
+        _vpn_session_payload(),
+        context="vpn session response",
+    )
+
+    assert parsed.helper_ticket_hex == VPN_HELPER_TICKET_HEX
+    assert len(parsed.helper_ticket_hex) == 1328
+
+
+@pytest.mark.parametrize(
+    "helper_ticket_hex",
+    [
+        "0x" + VPN_HELPER_TICKET_HEX,
+        VPN_HELPER_TICKET_HEX.upper(),
+        VPN_HELPER_TICKET_HEX[:-1],
+        VPN_HELPER_TICKET_HEX[:-2],
+    ],
+    ids=["prefix", "uppercase", "odd-length", "wrong-even-length"],
+)
+def test_vpn_session_rejects_noncanonical_helper_ticket(helper_ticket_hex: str) -> None:
+    payload = _vpn_session_payload()
+    payload["helper_ticket_hex"] = helper_ticket_hex
+
+    with pytest.raises(
+        RuntimeError,
+        match=r"helper_ticket_hex must contain exactly 1328 lowercase hexadecimal characters",
+    ):
+        ToriiClient._parse_vpn_session(payload, context="vpn session response")
+
+
+def test_vpn_response_parsers_reject_unknown_fields() -> None:
+    cases = [
+        (ToriiClient._parse_vpn_profile, _vpn_profile_payload(), "vpn profile"),
+        (ToriiClient._parse_vpn_quote, _vpn_quote_payload(), "vpn quote"),
+        (ToriiClient._parse_vpn_session, _vpn_session_payload(), "vpn session"),
+        (ToriiClient._parse_vpn_receipt, _vpn_receipt_payload(), "vpn receipt"),
+        (
+            ToriiClient._parse_vpn_receipt_list,
+            {"items": [_vpn_receipt_payload()], "total": 1},
+            "vpn receipts",
+        ),
+    ]
+    for parser, payload, context in cases:
+        payload["unexpected"] = True
+        with pytest.raises(RuntimeError, match=r"unsupported fields: unexpected"):
+            parser(payload, context=context)
+
+    nested = _vpn_quote_payload()
+    nested["open_lease_instruction"]["unexpected"] = True
+    with pytest.raises(RuntimeError, match=r"unsupported fields: unexpected"):
+        ToriiClient._parse_vpn_quote(nested, context="vpn quote")
+
+
+def test_vpn_response_parsers_require_all_openapi_fields() -> None:
+    cases = [
+        (
+            ToriiClient._parse_vpn_profile,
+            _vpn_profile_payload,
+            "relay_tls_spki_sha256_hex",
+            "vpn profile",
+        ),
+        (
+            ToriiClient._parse_vpn_quote,
+            _vpn_quote_payload,
+            "open_lease_instruction",
+            "vpn quote",
+        ),
+        (
+            ToriiClient._parse_vpn_session,
+            _vpn_session_payload,
+            "route_pushes",
+            "vpn session",
+        ),
+        (
+            ToriiClient._parse_vpn_receipt,
+            _vpn_receipt_payload,
+            "settle_lease_instruction",
+            "vpn receipt",
+        ),
+        (
+            ToriiClient._parse_vpn_receipt_list,
+            lambda: {"items": [_vpn_receipt_payload()], "total": 1},
+            "total",
+            "vpn receipts",
+        ),
+    ]
+    for parser, payload_factory, missing_field, context in cases:
+        payload = payload_factory()
+        payload.pop(missing_field)
+        with pytest.raises(RuntimeError, match=rf"missing required fields: {missing_field}"):
+            parser(payload, context=context)
+
+    nested = _vpn_quote_payload()
+    nested["open_lease_instruction"].pop("payload_hex")
+    with pytest.raises(RuntimeError, match=r"missing required fields: payload_hex"):
+        ToriiClient._parse_vpn_quote(nested, context="vpn quote")
+
+    session = _vpn_session_payload()
+    session["route_pushes"] = None
+    with pytest.raises(RuntimeError, match=r"route_pushes must be a list"):
+        ToriiClient._parse_vpn_session(session, context="vpn session")
+
+
+def test_vpn_response_parsers_reject_empty_min_length_strings() -> None:
+    cases = [
+        (
+            ToriiClient._parse_vpn_profile,
+            _vpn_profile_payload,
+            "vpn profile",
+            (
+                "relay_endpoint",
+                "meter_family",
+                "display_billing_label",
+                "fee_asset_id",
+                "escrow_account_id",
+                "operator_account_id",
+            ),
+        ),
+        (
+            ToriiClient._parse_vpn_quote,
+            _vpn_quote_payload,
+            "vpn quote",
+            (
+                "payment_reference",
+                "account_id",
+                "relay_endpoint",
+                "fee_asset_id",
+                "escrow_account_id",
+                "operator_account_id",
+                "meter_family",
+            ),
+        ),
+        (
+            ToriiClient._parse_vpn_session,
+            _vpn_session_payload,
+            "vpn session",
+            (
+                "account_id",
+                "relay_endpoint",
+                "meter_family",
+                "payment_reference",
+                "fee_asset_id",
+                "escrow_account_id",
+                "operator_account_id",
+            ),
+        ),
+        (
+            ToriiClient._parse_vpn_receipt,
+            _vpn_receipt_payload,
+            "vpn receipt",
+            (
+                "account_id",
+                "relay_endpoint",
+                "meter_family",
+                "fee_asset_id",
+                "escrow_account_id",
+                "operator_account_id",
+            ),
+        ),
+    ]
+    for parser, payload_factory, context, fields in cases:
+        for field in fields:
+            payload = payload_factory()
+            payload[field] = ""
+            with pytest.raises(RuntimeError, match=field):
+                parser(payload, context=context)
+
+    instruction = _vpn_quote_payload()
+    instruction["open_lease_instruction"]["wire_id"] = ""
+    with pytest.raises(RuntimeError, match=r"wire_id"):
+        ToriiClient._parse_vpn_quote(instruction, context="vpn quote")
+
+
+def test_vpn_response_parsers_enforce_openapi_enums_and_bounds() -> None:
+    cases = [
+        (
+            "profile exit set",
+            ToriiClient._parse_vpn_profile,
+            _vpn_profile_payload(),
+            lambda payload: payload.__setitem__(
+                "supported_exit_classes",
+                ["standard", "standard", "high-security"],
+            ),
+            "supported_exit_classes",
+            "vpn profile",
+        ),
+        (
+            "profile lease lower bound",
+            ToriiClient._parse_vpn_profile,
+            _vpn_profile_payload(),
+            lambda payload: payload.__setitem__("lease_secs", 0),
+            "lease_secs",
+            "vpn profile",
+        ),
+        (
+            "profile settlement lower bound",
+            ToriiClient._parse_vpn_profile,
+            _vpn_profile_payload(),
+            lambda payload: payload.__setitem__("settlement_grace_secs", 0),
+            "settlement_grace_secs",
+            "vpn profile",
+        ),
+        (
+            "quote instruction count",
+            ToriiClient._parse_vpn_quote,
+            _vpn_quote_payload(),
+            lambda payload: payload.__setitem__("tx_instructions", []),
+            "tx_instructions",
+            "vpn quote",
+        ),
+        (
+            "quote exit enum",
+            ToriiClient._parse_vpn_quote,
+            _vpn_quote_payload(),
+            lambda payload: payload.__setitem__("exit_class", "fastest"),
+            "exit_class",
+            "vpn quote",
+        ),
+        (
+            "session mtu constant",
+            ToriiClient._parse_vpn_session,
+            _vpn_session_payload(),
+            lambda payload: payload.__setitem__("mtu_bytes", 1500),
+            "mtu_bytes",
+            "vpn session",
+        ),
+        (
+            "session flow label constant",
+            ToriiClient._parse_vpn_session,
+            _vpn_session_payload(),
+            lambda payload: payload.__setitem__("flow_label_bits", 20),
+            "flow_label_bits",
+            "vpn session",
+        ),
+        (
+            "session padding lower bound",
+            ToriiClient._parse_vpn_session,
+            _vpn_session_payload(),
+            lambda payload: payload.__setitem__("padding_budget_ms", 0),
+            "padding_budget_ms",
+            "vpn session",
+        ),
+        (
+            "session status constant",
+            ToriiClient._parse_vpn_session,
+            _vpn_session_payload(),
+            lambda payload: payload.__setitem__("status", "connected"),
+            "status",
+            "vpn session",
+        ),
+        (
+            "receipt status enum",
+            ToriiClient._parse_vpn_receipt,
+            _vpn_receipt_payload(),
+            lambda payload: payload.__setitem__("status", "active"),
+            "status",
+            "vpn receipt",
+        ),
+        (
+            "receipt source enum",
+            ToriiClient._parse_vpn_receipt,
+            _vpn_receipt_payload(),
+            lambda payload: payload.__setitem__("receipt_source", "client"),
+            "receipt_source",
+            "vpn receipt",
+        ),
+        (
+            "receipt instruction count",
+            ToriiClient._parse_vpn_receipt,
+            _vpn_receipt_payload(),
+            lambda payload: payload.__setitem__(
+                "tx_instructions",
+                [_vpn_instruction(), _vpn_instruction()],
+            ),
+            "tx_instructions",
+            "vpn receipt",
+        ),
+        (
+            "receipt list item count",
+            ToriiClient._parse_vpn_receipt_list,
+            {"items": [_vpn_receipt_payload()] * 25, "total": 24},
+            lambda payload: None,
+            "items",
+            "vpn receipts",
+        ),
+        (
+            "receipt list total",
+            ToriiClient._parse_vpn_receipt_list,
+            {"items": [], "total": 25},
+            lambda payload: None,
+            "total",
+            "vpn receipts",
+        ),
+    ]
+    for case_name, parser, payload, mutate, expected_field, context in cases:
+        mutate(payload)
+        with pytest.raises(RuntimeError, match=expected_field):
+            parser(payload, context=context)
+
+
+def test_vpn_response_parsers_require_json_uint64_integers() -> None:
+    cases = [
+        (
+            ToriiClient._parse_vpn_profile,
+            _vpn_profile_payload(),
+            "dns_push_interval_secs",
+            "30",
+            "vpn profile",
+        ),
+        (
+            ToriiClient._parse_vpn_quote,
+            _vpn_quote_payload(),
+            "quote_expires_at_ms",
+            True,
+            "vpn quote",
+        ),
+        (
+            ToriiClient._parse_vpn_session,
+            _vpn_session_payload(),
+            "bytes_in",
+            -1,
+            "vpn session",
+        ),
+        (
+            ToriiClient._parse_vpn_receipt,
+            _vpn_receipt_payload(),
+            "duration_ms",
+            1 << 64,
+            "vpn receipt",
+        ),
+    ]
+    for parser, payload, field, invalid_value, context in cases:
+        payload[field] = invalid_value
+        with pytest.raises(RuntimeError, match=field):
+            parser(payload, context=context)
+
+
+@pytest.mark.parametrize(
+    ("parser", "payload", "field", "value", "context"),
+    [
+        (
+            ToriiClient._parse_vpn_profile,
+            _vpn_profile_payload(),
+            "relay_tls_spki_sha256_hex",
+            "AC" * 32,
+            "vpn profile",
+        ),
+        (
+            ToriiClient._parse_vpn_quote,
+            _vpn_quote_payload(),
+            "quote_id",
+            "AB" * 32,
+            "vpn quote",
+        ),
+        (
+            ToriiClient._parse_vpn_quote,
+            _vpn_quote_payload(),
+            "session_id_hex",
+            "0x" + VPN_QUOTE_SESSION_ID,
+            "vpn quote",
+        ),
+        (
+            ToriiClient._parse_vpn_quote,
+            _vpn_quote_payload(),
+            "metering_public_key_hex",
+            "CD" * 32,
+            "vpn quote",
+        ),
+        (
+            ToriiClient._parse_vpn_session,
+            _vpn_session_payload(),
+            "session_id",
+            "0X" + VPN_QUOTE_ID,
+            "vpn session",
+        ),
+        (
+            ToriiClient._parse_vpn_session,
+            _vpn_session_payload(),
+            "payment_tx_hash",
+            "EF" * 32,
+            "vpn session",
+        ),
+        (
+            ToriiClient._parse_vpn_receipt,
+            _vpn_receipt_payload(),
+            "lease_id_hex",
+            "0x" + VPN_LEASE_ID,
+            "vpn receipt",
+        ),
+    ],
+    ids=[
+        "profile-uppercase-spki",
+        "quote-uppercase-id",
+        "quote-prefixed-session-id",
+        "quote-uppercase-metering-key",
+        "session-prefixed-id",
+        "session-uppercase-payment-hash",
+        "receipt-prefixed-lease-id",
+    ],
+)
+def test_vpn_response_parsers_reject_noncanonical_ids_and_hashes(
+    parser: Callable[..., Any],
+    payload: Dict[str, Any],
+    field: str,
+    value: str,
+    context: str,
+) -> None:
+    payload[field] = value
+
+    with pytest.raises(RuntimeError, match=r"exact lowercase"):
+        parser(payload, context=context)
+
+
 def test_vpn_session_delete_and_receipt_listing_use_native_receipts() -> None:
     session = RecordingSession()
     session.queue(StubResponse(status_code=201, payload=_vpn_session_payload()))
@@ -1448,7 +2044,7 @@ def test_vpn_session_delete_and_receipt_listing_use_native_receipts() -> None:
     assert deleted.settle_lease_instruction is not None
     assert deleted.tx_instructions[0].wire_id == "SettleVpnLease"
     assert receipts.total == 1
-    assert receipts.items[0].refunded_fee_nanos == 75
+    assert receipts.items[0].refunded_fee == "75.125"
     assert missing is None
     assert [call["method"] for call in session.calls] == ["POST", "GET", "DELETE", "GET", "GET"]
 
@@ -1475,8 +2071,8 @@ def test_submit_vpn_receipt_parses_settlement_instruction() -> None:
         "relay_receipt_hex": "aa" * 12,
     }
     assert receipt.status == "settled"
-    assert receipt.earned_fee_nanos == 25
-    assert receipt.refunded_fee_nanos == 75
+    assert receipt.earned_fee == "25.125"
+    assert receipt.refunded_fee == "75.125"
     assert receipt.settle_lease_instruction is not None
     assert receipt.settle_lease_instruction.wire_id == "SettleVpnLease"
 
@@ -5012,7 +5608,7 @@ def _offline_active_recursive_step_eq_verifier(**overrides: Any) -> Dict[str, An
             "backend": "halo2/ipa",
             "name": "kagemusha_recursive_step_eq_v3_verifier_record",
         },
-        circuit_id="kagemusha-recursive-spend-step-eq-two-parent-exact-state-v1",
+        circuit_id="kagemusha-recursive-spend-step-eq-two-parent-operation-protocol-v2",
         commitment="99" * 32,
         public_inputs_schema_hash="9a" * 32,
     )
@@ -5026,7 +5622,7 @@ def _offline_active_recursive_step_ep_verifier(**overrides: Any) -> Dict[str, An
             "backend": "halo2/ipa",
             "name": "kagemusha_recursive_step_ep_v3_verifier_record",
         },
-        circuit_id="kagemusha-recursive-spend-step-ep-two-parent-exact-state-v1",
+        circuit_id="kagemusha-recursive-spend-step-ep-two-parent-operation-protocol-v2",
         commitment="aa" * 32,
         public_inputs_schema_hash="ab" * 32,
     )
@@ -5372,7 +5968,7 @@ def test_get_kagemusha_readiness_rejects_adversarial_snapshots() -> None:
         _offline_readiness_payload(recursive_lineage_supported=False),
         _offline_readiness_payload(
             active_unshield_verifier=_offline_active_unshield_verifier(
-                circuit_id="kagemusha-recursive-spend-step-ep-two-parent-exact-state-v1"
+                circuit_id="kagemusha-recursive-spend-step-ep-two-parent-operation-protocol-v2"
             )
         ),
         _offline_readiness_payload(

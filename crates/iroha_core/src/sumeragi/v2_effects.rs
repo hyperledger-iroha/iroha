@@ -23,7 +23,11 @@
 //!    returned [`V2BodyStore`] to the storage/validation service thread. If
 //!    recovery reported an interrupted canonical Kura tip, call
 //!    [`V2EffectExecutor::verify_pending_kura_apply_replay`] before dispatching
-//!    startup effects or opening ingress.
+//!    startup effects or opening ingress. Drain that local replay only through
+//!    [`V2EffectExecutor::step_pending_tip_recovery`] while live clocks remain
+//!    unarmed; the finalized runtime is then consumed. For a normal height,
+//!    call [`V2EffectExecutor::arm_live_clocks`] exactly once after every
+//!    constructor and startup effect and immediately before opening ingress.
 //! 2. Route control envelopes through [`V2EffectExecutor::enqueue_network`]
 //!    and payload traffic through the authenticated chunk/certified-response
 //!    methods in this module.
@@ -77,7 +81,9 @@ use super::{
         V2BodyStore, ValidatedBodyReceipt,
     },
     v2_recovery::PendingKuraApply,
-    v2_runtime::{EnqueueError, NetworkIngressError, RuntimeStep, SerializedV2Runtime},
+    v2_runtime::{
+        EnqueueError, NetworkIngressError, RuntimeClockError, RuntimeStep, SerializedV2Runtime,
+    },
     v2_transport::{
         AuthenticatedCertifiedBodyRequest, AuthenticatedPayloadChunk,
         OutstandingCertifiedBodyRequests, V2TransportError, authenticate_certified_body_request,
@@ -435,7 +441,6 @@ impl ApplyTask {
     }
 
     /// Original reducer incarnation tag.
-    #[cfg(test)]
     pub(crate) const fn tag(&self) -> EventTag {
         self.tag
     }
@@ -476,6 +481,11 @@ impl DurableApplyCompletion {
             receipt,
             artifact,
         }
+    }
+
+    /// Work identifier whose queue ownership ends when this completion is consumed.
+    pub(crate) const fn work_id(&self) -> EffectWorkId {
+        self.work_id
     }
 }
 
@@ -550,6 +560,8 @@ pub(crate) trait V2EffectServices {
     fn cancel_body_store(&mut self, work_id: EffectWorkId) -> Result<(), Self::Error>;
     /// Queue or retransmit deterministic validation of one exact durable body.
     fn enqueue_body_validation(&mut self, task: BodyValidationTask) -> Result<(), Self::Error>;
+    /// Cancel deterministic-validation work made stale by a certified view transition.
+    fn cancel_body_validation(&mut self, work_id: EffectWorkId) -> Result<(), Self::Error>;
     /// Retain a bounded request for the exact certified merge sidecar which
     /// must be authenticated before validation or decided application retries.
     fn work_deferred_for_merge_sidecar(
@@ -870,6 +882,10 @@ struct FinalityCompletion {
 
 pub(crate) trait EffectRuntime {
     fn step_effects(&mut self, now: Instant) -> Result<RuntimeStep<AdapterEffect>, String>;
+    fn step_recovery_effects(
+        &mut self,
+        now: Instant,
+    ) -> Result<RuntimeStep<AdapterEffect>, String>;
     fn enqueue_body_available(
         &mut self,
         tag: EventTag,
@@ -919,6 +935,13 @@ pub(crate) trait EffectRuntime {
 impl EffectRuntime for SerializedV2Runtime {
     fn step_effects(&mut self, now: Instant) -> Result<RuntimeStep<AdapterEffect>, String> {
         self.step(now).map_err(|error| error.to_string())
+    }
+
+    fn step_recovery_effects(
+        &mut self,
+        now: Instant,
+    ) -> Result<RuntimeStep<AdapterEffect>, String> {
+        self.step_recovery(now).map_err(|error| error.to_string())
     }
 
     fn enqueue_body_available(
@@ -1074,6 +1097,11 @@ impl V2EffectExecutor<SerializedV2Runtime> {
         executor.validated_bodies = recovered_validations;
         construction.complete();
         Ok((executor, body_store))
+    }
+
+    /// Arm the runtime pacemaker after all height startup work has completed.
+    pub(crate) fn arm_live_clocks(&mut self, now: Instant) -> Result<(), RuntimeClockError> {
+        self.runtime.arm_live_clocks(now)
     }
 
     /// Bind an interrupted Kura tip to the exact reducer Decision and durable
@@ -1382,7 +1410,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                     "process restart is required after a fatal consensus failure".to_owned(),
                 )
             })?;
-        let step = match self.runtime.step_effects(now) {
+        let step = match self.runtime.step_recovery_effects(now) {
             Ok(step) => step,
             Err(reason) => {
                 drop(wal_step);
@@ -3108,6 +3136,9 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             })
             .collect::<Vec<_>>();
         for id in stale {
+            services
+                .cancel_body_validation(id)
+                .map_err(service_error)?;
             self.deferred_merge_work.remove(&id);
             self.pending_validations.remove(&id);
         }
@@ -3536,6 +3567,13 @@ mod tests {
             self.steps.pop_front().unwrap_or(Ok(RuntimeStep::Idle))
         }
 
+        fn step_recovery_effects(
+            &mut self,
+            now: Instant,
+        ) -> Result<RuntimeStep<AdapterEffect>, String> {
+            self.step_effects(now)
+        }
+
         fn enqueue_body_available(
             &mut self,
             tag: EventTag,
@@ -3636,6 +3674,7 @@ mod tests {
         store_tasks: Vec<BodyStoreTask>,
         cancelled_stores: Vec<EffectWorkId>,
         validation_tasks: Vec<BodyValidationTask>,
+        cancelled_validations: Vec<EffectWorkId>,
         deferred_merge_sidecars: Vec<(
             EffectWorkId,
             wire::ConsensusRound,
@@ -3779,6 +3818,12 @@ mod tests {
         fn enqueue_body_validation(&mut self, task: BodyValidationTask) -> Result<(), Self::Error> {
             self.check("validation")?;
             self.validation_tasks.push(task);
+            Ok(())
+        }
+
+        fn cancel_body_validation(&mut self, work_id: EffectWorkId) -> Result<(), Self::Error> {
+            self.check("cancel-validation")?;
+            self.cancelled_validations.push(work_id);
             Ok(())
         }
 
@@ -4739,6 +4784,7 @@ mod tests {
             )
             .expect("durable body starts validation");
         assert_eq!(executor.pending_validations.len(), 1);
+        let validation_id = services.validation_tasks[0].id();
         executor
             .consume_effects(
                 vec![AdapterEffect::EnterView {
@@ -4758,6 +4804,7 @@ mod tests {
                 .contains_key(&(fixture.manifest.round, fixture.manifest.subject))
         );
         assert_eq!(services.cancelled_stores, vec![store_id]);
+        assert_eq!(services.cancelled_validations, vec![validation_id]);
     }
 
     #[test]

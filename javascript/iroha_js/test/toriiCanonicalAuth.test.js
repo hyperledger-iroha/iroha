@@ -11,7 +11,7 @@ import {
 } from "../src/index.js";
 import { AccountAddress } from "../src/address.js";
 
-const SAMPLE_VPN_HELPER_TICKET_HEX = `5356504e48543100${"00".repeat(248)}`;
+const SAMPLE_VPN_HELPER_TICKET_HEX = `5356504e48543100${"00".repeat(656)}`;
 
 test("ToriiClient attaches canonical signing headers for app endpoints", async () => {
   const captured = [];
@@ -64,6 +64,7 @@ test("ToriiClient canonical auth uses raw Node transport for UTF-8 account heade
   const { privateKey, publicKey } = generateKeyPair({ seed: Buffer.alloc(32, 10) });
   const accountId = AccountAddress.fromAccount({ publicKey }).toI105(369);
   const quoteId = "12".repeat(32);
+  const sessionId = "90".repeat(32);
   const paymentTxHash = "34".repeat(32);
   const meteringPublicKeyHex = "56".repeat(32);
   const requests = [];
@@ -90,7 +91,7 @@ test("ToriiClient canonical auth uses raw Node transport for UTF-8 account heade
       requests.push(request.subarray(0, totalLength));
       const responseBody = Buffer.from(
         JSON.stringify({
-          session_id: "sess_utf8",
+          session_id: sessionId,
           account_id: accountId,
           exit_class: "standard",
           relay_endpoint: "/dns/torii.exit.example/udp/9443/quic",
@@ -104,8 +105,8 @@ test("ToriiClient canonical auth uses raw Node transport for UTF-8 account heade
           fee_asset_id: "xor#universal.universal",
           escrow_account_id: "vpn_escrow",
           operator_account_id: accountId,
-          lease_fee_nanos: "1000000",
-          flow_label_bits: 20,
+          lease_fee: "1000000.25",
+          flow_label_bits: 24,
           padding_budget_ms: 80,
           relay_tls_spki_sha256_hex: "78".repeat(32),
           route_pushes: [],
@@ -192,7 +193,7 @@ test("ToriiClient canonical auth uses raw Node transport for UTF-8 account heade
       metering_public_key_hex: meteringPublicKeyHex,
     },
   );
-  assert.equal(session.sessionId, "sess_utf8");
+  assert.equal(session.sessionId, sessionId);
   assert.equal(session.accountId, accountId);
 });
 

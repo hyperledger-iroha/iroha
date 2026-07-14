@@ -591,8 +591,6 @@ pub(crate) mod safety_wal;
 pub(crate) mod smt;
 pub(crate) mod stake_snapshot;
 pub mod status;
-#[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
-pub(crate) use status::AuthenticatedCommitRoster;
 pub(crate) mod v2;
 pub(crate) mod v2_apply;
 pub(crate) mod v2_block_sync;

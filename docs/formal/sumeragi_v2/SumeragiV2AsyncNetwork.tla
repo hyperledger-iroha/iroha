@@ -14,6 +14,15 @@ RetransmitElapsed are local scheduler inputs.  If the reducer is busy they are
 coalesced in the adapter's trusted deferred-completion set until the busy fence
 clears.
 
+Queued stale I/O is deliberately not cancelled in this model.  The finite
+service bound instead relies on lossless backpressure: a full worker FIFO
+leaves its causal producer head pending until weakly fair head service creates
+capacity.  This is a production-refinement premise, not a license to drop new-
+view Store/Validate/Sign work when the concrete worker queue is full.  Likewise
+all validators in one instance use the same view-indexed pacemaker rule; mixed
+fixed/adaptive binaries require a version or configuration-fingerprint gate
+before the temporal theorem applies to a deployment.
+
 The hidden transport carries actual Core network envelopes into a distinct
 model of `FairV2Ingress`.  Every recipient has one lane for each frozen-roster
 validator plus one aggregate untrusted lane.  Admission is bounded by one
@@ -45,6 +54,8 @@ CONSTANTS
   AsyncDeliveryBound,
   AsyncRetransmitPeriod,
   AsyncRoundTimeout,
+  AsyncMaximumRoundTimeout,
+  AsyncMaximumView,
   AsyncChunkCount
 
 AsyncCompletionTags == {"TimeoutElapsed", "RetransmitElapsed"}
@@ -137,6 +148,22 @@ AsyncWorstCaseServiceBudget ==
     + 4 * AsyncRetransmitPeriod
     + AsyncProgressReserve + AsyncCompletionReserve
 
+\* Production uses a linearly growing timeout.  The arithmetic is saturated
+\* only where the implementation's duration representation saturates; the
+\* liveness configuration below requires the complete post-GST service budget
+\* to remain strictly below that representational ceiling.
+AsyncLinearViewTimeout(roundView) ==
+  AsyncRoundTimeout * (roundView + 1)
+
+AsyncViewTimeout(roundView) ==
+  IF AsyncLinearViewTimeout(roundView) <= AsyncMaximumRoundTimeout
+  THEN AsyncLinearViewTimeout(roundView)
+  ELSE AsyncMaximumRoundTimeout
+
+AsyncServiceBoundRepresentable ==
+  /\ AsyncWorstCaseServiceBudget < AsyncMaximumRoundTimeout
+  /\ AsyncWorstCaseServiceBudget <= AsyncMaximumView
+
 AsyncConfiguration ==
   /\ AsyncQueueCapacity \in Nat \ {0}
   /\ AsyncProgressReserve \in Nat \ {0}
@@ -153,8 +180,13 @@ AsyncConfiguration ==
   /\ AsyncDeliveryBound \in Nat \ {0}
   /\ AsyncRetransmitPeriod \in Nat \ {0}
   /\ AsyncRoundTimeout \in Nat \ {0}
+  /\ AsyncRoundTimeout >= 5
+  /\ AsyncRetransmitPeriod = AsyncRoundTimeout \div 5
+  /\ AsyncMaximumRoundTimeout \in Nat \ {0}
+  /\ AsyncRoundTimeout <= AsyncMaximumRoundTimeout
+  /\ AsyncMaximumView \in Nat
   /\ AsyncChunkCount \in Nat \ {0}
-  /\ AsyncRoundTimeout > AsyncWorstCaseServiceBudget
+  /\ AsyncServiceBoundRepresentable
 
 AsyncBodyEnvelope(recipient, blockHeight, roundView, subject, chunk, nonce) ==
   [recipient |-> recipient, height |-> blockHeight, view |-> roundView,
@@ -672,12 +704,17 @@ CommitCertificateServeCanRespond(request) ==
        /\ application.qc.context = context
        /\ application.qc.phase = "Commit"
 
+CommitCertificateServiceApplication(request) ==
+  CHOOSE application \in applied:
+    /\ application.node = request.envelope.recipient
+    /\ application.qc.context = context
+    /\ application.qc.phase = "Commit"
+
 CommitCertificateResponseItems(request) ==
-  {CommitCertificateResponseItem(request, application.qc):
-     application \in {entry \in applied:
-       /\ entry.node = request.envelope.recipient
-       /\ entry.qc.context = context
-       /\ entry.qc.phase = "Commit"}}
+  IF CommitCertificateServeCanRespond(request)
+  THEN {CommitCertificateResponseItem(
+          request, CommitCertificateServiceApplication(request).qc)}
+  ELSE {}
 
 ChunkOutbox(node, source, roundView, subject) ==
   {AsyncNetworkItem(
@@ -1031,7 +1068,9 @@ ExecutePersistInstall(command) ==
             request.node, TcOutbox(request.node, request.tc),
             request.rebroadcast)
   /\ asyncNodeDeadlines' =
-       [asyncNodeDeadlines EXCEPT ![command.node] = asyncNow + AsyncRoundTimeout]
+       [asyncNodeDeadlines EXCEPT
+          ![command.node] =
+            asyncNow + AsyncViewTimeout(command.view + 1)]
   /\ asyncRetransmitDeadlines' =
        [asyncRetransmitDeadlines EXCEPT
           ![command.node] = asyncNow + AsyncRetransmitPeriod]
@@ -2464,7 +2503,7 @@ AsyncDeferredInit ==
 AsyncTransportInit ==
   /\ asyncOutstandingTags = [node \in ValidatorIds |-> {}]
   /\ asyncNodeDeadlines =
-       [node \in ValidatorIds |-> AsyncRoundTimeout]
+       [node \in ValidatorIds |-> AsyncViewTimeout(nodeView[node])]
   /\ asyncRetransmitDeadlines =
        [node \in ValidatorIds |-> AsyncRetransmitPeriod]
   /\ asyncNodeServiceDeadlines =

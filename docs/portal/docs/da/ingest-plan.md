@@ -137,8 +137,8 @@ hashing, chunking, and verifying optional manifests.
 
 1. Verify request Norito header matches `DaIngestRequest`.
 2. Fail if `total_size` differs from the canonical (decompressed) payload length or exceeds the configured max.
-3. Enforce `chunk_size` alignment (power-of-two, <= 2 MiB).
-4. Ensure `data_shards + parity_shards` <= global maximum and parity >= 2.
+3. Enforce `chunk_size` alignment (power-of-two, at most 2 MiB).
+4. Ensure `data_shards + parity_shards` does not exceed the global maximum and parity is at least 2.
 5. `retention_policy.required_replica_count` must respect governance baseline.
 6. Signature verification against canonical hash (excluding signature field).
 7. Reject duplicate `client_blob_id` unless payload hash + metadata identical.

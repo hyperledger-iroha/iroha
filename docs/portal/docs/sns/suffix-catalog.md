@@ -39,7 +39,7 @@ tooling can load the same parameters without scraping status docs.
 | Suffix | ID (`hex`) | Steward | Fund splitter | Status | Payment asset | Referral cap (bps) | Term (min – max years) | Grace / Redemption (days) | Pricing tiers (regex → base price / auction) | Reserved labels | Fee split (T/S/R/E bps) | Policy version |
 |--------|------------|---------|---------------|--------|---------------|--------------------|--------------------------|---------------------------|----------------------------------------------|-----------------|-------------------------|----------------|
 | `.sora` | `0x0001` | `<i105-account-id>` | `<i105-account-id>` | Active | `<asset-holding-id>` | 500 | 1 – 5 | 30 / 60 | `T0: ^[a-z0-9]{3,}$ → 120 XOR (Vickrey)` | `treasury → <i105-account-id>` | `7000 / 3000 / 1000 / 0` | 1 |
-| `.nexus` | `0x0002` | `<i105-account-id>` | `<i105-account-id>` | Paused | `<asset-holding-id>` | 300 | 1 – 3 | 15 / 30 | `T0: ^[a-z0-9]{4,}$ → 480 XOR (Vickrey)`<br>`T1: ^[a-z]{2}$ → 4000 XOR (Dutch floor 500)` | `treasury → <i105-account-id>`, `guardian → <i105-account-id>` | `6500 / 2500 / 800 / 200` | 2 |
+| `.nexus` | `0x0002` | `<i105-account-id>` | `<i105-account-id>` | Paused | `<asset-holding-id>` | 300 | 1 – 3 | 15 / 30 | `T0: ^[a-z0-9]{4,}$ → 480 XOR (Vickrey)`<br />`T1: ^[a-z]{2}$ → 4000 XOR (Dutch floor 500)` | `treasury → <i105-account-id>`, `guardian → <i105-account-id>` | `6500 / 2500 / 800 / 200` | 2 |
 | `.dao` | `0x0003` | `<i105-account-id>` | `<i105-account-id>` | Revoked | `<asset-holding-id>` | 0 | 1 – 2 | 30 / 30 | `T0: ^[a-z0-9]{3,}$ → 60 XOR (Vickrey)` | `dao (held for future release)` | `9000 / 1000 / 0 / 0` | 0 |
 
 ## JSON excerpt

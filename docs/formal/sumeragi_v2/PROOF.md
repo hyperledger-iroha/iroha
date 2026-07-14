@@ -174,8 +174,11 @@ Assume after GST that the responsive correct voters independently meet both
 strict count and power thresholds; per-source authenticated transport is
 serviced within its declared bound; the monotonic clock and serialized run loop
 continue; fsync, signature, body transfer, deterministic validation, proposal
-construction, and application terminate within their declared bounds; and the
-complete successful-round rank is smaller than the absolute round timeout.
+construction, and application terminate within finite declared bounds; and the
+complete successful-round rank is representable below the maximum runtime
+duration. The immutable view-zero timeout is positive and view `v` receives
+`base * (v + 1)` (saturating only at that representation limit), so the model
+derives rather than assumes a later view whose timeout exceeds the rank.
 
 **Lemma 7 (bounded scheduler and transport service).** A Byzantine flood cannot
 starve an authenticated responsive source or an admitted progress/completion
@@ -186,11 +189,12 @@ lane in roster order. Its exact remaining rank is the number of source slots
 left in the current recipient plus one full source roster for each remaining
 recipient; alternating ingress and transport contributes a factor of two. The
 runtime queue reserves separate normal, progress, and completion capacity.
-The absolute timeout has first priority. A periodic retransmission may precede
-an already-admitted FIFO command once, after which FIFO debt gives that command
-the next non-timeout slot. Thus the service rank strictly decreases unless the
-absolute timeout makes the work stale, in which case the certified next view
-restarts it under a fresh tag.
+The current view's absolute timeout has first priority. A periodic
+retransmission may precede an already-admitted FIFO command once, after which
+FIFO debt gives that command the next non-timeout slot. Thus the service rank
+strictly decreases unless that view's timeout makes the work stale, in which
+case the certified next view restarts it under a fresh tag and a strictly larger
+deadline.
 
 **Lemma 8 (view progress).** If a height does not decide in view `v`, correct
 validators eventually form and install a TC for `v` and enter `v + 1`.
@@ -214,8 +218,11 @@ validators converge on one safe proposal subject.
 **Theorem 4 (liveness).** Consensus eventually decides and applies the next
 block after GST.
 
-By Lemmas 7 and 8, non-deciding views continue to advance. Deterministic roster
-rotation selects a responsive correct leader within one complete rotation.
+By Lemmas 7 and 8, non-deciding views continue to advance. Because the deadline
+grows without wraparound throughout the representable proof domain, some view
+exceeds the complete finite post-GST service rank. Every later view is at least
+as long, and deterministic roster rotation selects a responsive correct leader
+within one complete rotation.
 If an omitted lock prevents that first candidate round, Lemma 9 makes it known
 during the round's timeout, after which the next responsive correct leader
 proposes the selected safe subject. The responsive quorum obtains, stores, and
@@ -226,17 +233,22 @@ chunks if needed, reconstructs and validates the exact body, applies it, and
 advances its own height. None of these local transitions waits for every other
 correct node.
 
-For the four-validator Taira profile, the conservative recovery envelope is
-four complete 10-second view deadlines plus one successful round: 50 seconds.
-The first timed-out round also disseminates any previously omitted full
-PrepareQC, so lock convergence does not add another complete rotation.
+For the four-validator Taira regression, the outage begins in a freshly opened
+view zero. Its unavailable leader consumes the 10-second base deadline; the
+next leader is responsive because the other three validators constitute the
+entire live quorum, and view one receives 20 seconds. The 50-second test bound
+therefore includes the 30-second protocol envelope plus startup, polling, and
+host-scheduling margin. The first timed-out round also disseminates any
+previously omitted full PrepareQC, so lock convergence does not add another
+complete rotation.
 
 This is necessarily a conditional temporal result: FLP rules out unconditional
 termination without post-GST bounds. Without bounded delivery and service, a
-responsive dual quorum, terminating validation/fsync/application, and a timeout
-exceeding the successful-round rank, deterministic consensus cannot guarantee
-progress. The result proves height progress, including a valid empty heartbeat;
-it does not prove transaction inclusion or censorship fairness.
+responsive dual quorum, terminating validation/fsync/application, and a
+representable service bound that some view-indexed timeout can exceed,
+deterministic consensus cannot guarantee progress. The result proves height
+progress, including a valid empty heartbeat; it does not prove transaction
+inclusion or censorship fairness.
 
 ## Mechanization ledger
 

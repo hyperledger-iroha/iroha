@@ -383,8 +383,8 @@ if [[ -z "$BRIDGE_ABI_VERSION" ]]; then
   echo "[-] Unable to determine native bridge ABI version" >&2
   exit 1
 fi
-if [[ "$BRIDGE_ABI_VERSION" != "19" ]]; then
-  echo "[-] First-release NoritoBridge artifacts require exact native bridge ABI 19 (found $BRIDGE_ABI_VERSION)" >&2
+if [[ "$BRIDGE_ABI_VERSION" != "20" ]]; then
+  echo "[-] First-release NoritoBridge artifacts require exact native bridge ABI 20 (found $BRIDGE_ABI_VERSION)" >&2
   exit 1
 fi
 SOURCE_COMMIT="$SOURCE_COMMIT_START"
@@ -412,25 +412,25 @@ cat > "$OUT_DIR/NoritoBridge.artifacts.json" <<EOF
     "connect_norito_detached_transaction_scaffold_inspect_v1",
     "connect_norito_detached_transaction_scaffold_finalize_ed25519_v1",
     "connect_norito_canonical_json_blake3_v1",
-    "connect_norito_kagemusha_recursive_spend_capabilities_v1",
+    "connect_norito_kagemusha_recursive_spend_capabilities_v4",
     "connect_norito_kagemusha_topup_finality_verify_v2",
     "connect_norito_kagemusha_topup_shield_build_unsigned_v2",
-    "connect_norito_kagemusha_recursive_spend_artifact_begin_v3",
-    "connect_norito_kagemusha_recursive_spend_artifact_write_v3",
-    "connect_norito_kagemusha_recursive_spend_artifact_finalize_v3",
-    "connect_norito_kagemusha_recursive_spend_artifact_cancel_v3",
-    "connect_norito_kagemusha_recursive_spend_artifact_set_install_v3",
-    "connect_norito_kagemusha_recursive_spend_artifact_set_is_installed_v3",
-    "connect_norito_kagemusha_recursive_spend_artifact_set_uninstall_v3",
-    "connect_norito_kagemusha_recursive_spend_init_v2",
+    "connect_norito_kagemusha_recursive_spend_artifact_begin_v4",
+    "connect_norito_kagemusha_recursive_spend_artifact_write_v4",
+    "connect_norito_kagemusha_recursive_spend_artifact_finalize_v4",
+    "connect_norito_kagemusha_recursive_spend_artifact_cancel_v4",
+    "connect_norito_kagemusha_recursive_spend_artifact_set_install_v4",
+    "connect_norito_kagemusha_recursive_spend_artifact_set_is_installed_v4",
+    "connect_norito_kagemusha_recursive_spend_artifact_set_uninstall_v4",
+    "connect_norito_kagemusha_recursive_spend_init_v4",
     "connect_norito_kagemusha_recursive_spend_topup_unsigned_payload_digest_v2",
     "connect_norito_kagemusha_recursive_spend_topup_finalize_request_v2",
     "connect_norito_kagemusha_recursive_spend_topup_v2",
-    "connect_norito_kagemusha_recursive_spend_append_v2",
-    "connect_norito_kagemusha_recursive_spend_verify_v2",
+    "connect_norito_kagemusha_recursive_spend_append_v4",
+    "connect_norito_kagemusha_recursive_spend_verify_v4",
     "connect_norito_kagemusha_recursive_spend_redeem_unsigned_payload_digest_v2",
     "connect_norito_kagemusha_recursive_spend_redeem_finalize_request_v2",
-    "connect_norito_kagemusha_recursive_spend_redeem_v2",
+    "connect_norito_kagemusha_recursive_spend_redeem_v4",
     "connect_norito_kagemusha_receiver_key_reference_v2",
     "connect_norito_kagemusha_recipient_output_derive_v2",
     "connect_norito_kagemusha_recipient_payment_request_signing_bytes_v2",
@@ -498,54 +498,100 @@ cat > "$OUT_DIR/NoritoBridge.artifacts.json" <<EOF
     {
       "role": "step_eq_parameters",
       "purpose": "step_eq_parameters",
-      "circuit_id": "kagemusha-recursive-spend-step-eq-two-parent-exact-state-v1",
+      "file_name": "step-eq.parameters.krv4",
+      "circuit_id": "kagemusha-recursive-spend-step-eq-authenticated-layout-v4",
       "abi": $BRIDGE_ABI_VERSION,
-      "artifact_type": "KagemushaRecursiveSpendPastaCycleArtifactsV3",
+      "artifact_type": "KagemushaRecursiveSpendPastaCycleArtifactsV4",
       "delivery": "content_addressed_external",
-      "required_by": ["topup", "peer_send", "redemption"]
+      "required_by": ["topup", "peer_send", "peer_receive", "redemption"]
+    },
+    {
+      "role": "step_eq_circuit_params",
+      "purpose": "step_eq_circuit_params",
+      "file_name": "step-eq.circuit-params.krv4",
+      "circuit_id": "kagemusha-recursive-spend-step-eq-authenticated-layout-v4",
+      "abi": $BRIDGE_ABI_VERSION,
+      "artifact_type": "KagemushaRecursiveSpendPastaCycleArtifactsV4",
+      "delivery": "content_addressed_external",
+      "required_by": ["topup", "peer_send", "peer_receive", "redemption"]
     },
     {
       "role": "step_eq_proving_key",
       "purpose": "step_eq_proving_key",
-      "circuit_id": "kagemusha-recursive-spend-step-eq-two-parent-exact-state-v1",
+      "file_name": "step-eq.proving-key.krv4",
+      "circuit_id": "kagemusha-recursive-spend-step-eq-authenticated-layout-v4",
       "abi": $BRIDGE_ABI_VERSION,
-      "artifact_type": "KagemushaRecursiveSpendPastaCycleArtifactsV3",
+      "artifact_type": "KagemushaRecursiveSpendPastaCycleArtifactsV4",
       "delivery": "content_addressed_external",
       "required_by": ["topup", "peer_send", "redemption"]
     },
     {
       "role": "step_eq_verifying_key",
       "purpose": "step_eq_verifying_key",
-      "circuit_id": "kagemusha-recursive-spend-step-eq-two-parent-exact-state-v1",
+      "file_name": "step-eq.verifying-key.krv4",
+      "circuit_id": "kagemusha-recursive-spend-step-eq-authenticated-layout-v4",
       "abi": $BRIDGE_ABI_VERSION,
-      "artifact_type": "KagemushaRecursiveSpendPastaCycleArtifactsV3",
+      "artifact_type": "KagemushaRecursiveSpendPastaCycleArtifactsV4",
+      "delivery": "content_addressed_external",
+      "required_by": ["topup", "peer_send", "peer_receive", "redemption"]
+    },
+    {
+      "role": "step_eq_bootstrap_witness",
+      "purpose": "step_eq_bootstrap_witness",
+      "file_name": "step-eq.bootstrap-witness.krv4",
+      "circuit_id": "kagemusha-recursive-spend-step-eq-authenticated-layout-v4",
+      "abi": $BRIDGE_ABI_VERSION,
+      "artifact_type": "KagemushaRecursiveSpendPastaCycleArtifactsV4",
       "delivery": "content_addressed_external",
       "required_by": ["topup", "peer_send", "peer_receive", "redemption"]
     },
     {
       "role": "step_ep_parameters",
       "purpose": "step_ep_parameters",
-      "circuit_id": "kagemusha-recursive-spend-step-ep-two-parent-exact-state-v1",
+      "file_name": "step-ep.parameters.krv4",
+      "circuit_id": "kagemusha-recursive-spend-step-ep-authenticated-layout-v4",
       "abi": $BRIDGE_ABI_VERSION,
-      "artifact_type": "KagemushaRecursiveSpendPastaCycleArtifactsV3",
+      "artifact_type": "KagemushaRecursiveSpendPastaCycleArtifactsV4",
       "delivery": "content_addressed_external",
-      "required_by": ["topup", "peer_send", "redemption"]
+      "required_by": ["topup", "peer_send", "peer_receive", "redemption"]
+    },
+    {
+      "role": "step_ep_circuit_params",
+      "purpose": "step_ep_circuit_params",
+      "file_name": "step-ep.circuit-params.krv4",
+      "circuit_id": "kagemusha-recursive-spend-step-ep-authenticated-layout-v4",
+      "abi": $BRIDGE_ABI_VERSION,
+      "artifact_type": "KagemushaRecursiveSpendPastaCycleArtifactsV4",
+      "delivery": "content_addressed_external",
+      "required_by": ["topup", "peer_send", "peer_receive", "redemption"]
     },
     {
       "role": "step_ep_proving_key",
       "purpose": "step_ep_proving_key",
-      "circuit_id": "kagemusha-recursive-spend-step-ep-two-parent-exact-state-v1",
+      "file_name": "step-ep.proving-key.krv4",
+      "circuit_id": "kagemusha-recursive-spend-step-ep-authenticated-layout-v4",
       "abi": $BRIDGE_ABI_VERSION,
-      "artifact_type": "KagemushaRecursiveSpendPastaCycleArtifactsV3",
+      "artifact_type": "KagemushaRecursiveSpendPastaCycleArtifactsV4",
       "delivery": "content_addressed_external",
       "required_by": ["topup", "peer_send", "redemption"]
     },
     {
       "role": "step_ep_verifying_key",
       "purpose": "step_ep_verifying_key",
-      "circuit_id": "kagemusha-recursive-spend-step-ep-two-parent-exact-state-v1",
+      "file_name": "step-ep.verifying-key.krv4",
+      "circuit_id": "kagemusha-recursive-spend-step-ep-authenticated-layout-v4",
       "abi": $BRIDGE_ABI_VERSION,
-      "artifact_type": "KagemushaRecursiveSpendPastaCycleArtifactsV3",
+      "artifact_type": "KagemushaRecursiveSpendPastaCycleArtifactsV4",
+      "delivery": "content_addressed_external",
+      "required_by": ["topup", "peer_send", "peer_receive", "redemption"]
+    },
+    {
+      "role": "step_ep_bootstrap_witness",
+      "purpose": "step_ep_bootstrap_witness",
+      "file_name": "step-ep.bootstrap-witness.krv4",
+      "circuit_id": "kagemusha-recursive-spend-step-ep-authenticated-layout-v4",
+      "abi": $BRIDGE_ABI_VERSION,
+      "artifact_type": "KagemushaRecursiveSpendPastaCycleArtifactsV4",
       "delivery": "content_addressed_external",
       "required_by": ["topup", "peer_send", "peer_receive", "redemption"]
     },

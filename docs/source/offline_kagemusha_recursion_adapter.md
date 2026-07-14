@@ -217,9 +217,9 @@ is not yet available. Native capabilities report bridge ABI `19`, manifest schem
 `kagemusha-pasta-cycle-poseidon-v1`. They carry no mode field. The two fixed
 circuit roles are:
 
-- `kagemusha-recursive-spend-step-eq-two-parent-exact-state-v1`, an EqAffine/Vesta transition
+- `kagemusha-recursive-spend-step-eq-two-parent-operation-protocol-v2`, an EqAffine/Vesta transition
   proof; and
-- `kagemusha-recursive-spend-step-ep-two-parent-exact-state-v1`, an EpAffine/Pallas
+- `kagemusha-recursive-spend-step-ep-two-parent-operation-protocol-v2`, an EpAffine/Pallas
   transition proof.
 
 `KagemushaRecursiveSpendStateBoundaryV1` crosses the field boundary as a
@@ -229,7 +229,7 @@ ordered 889-limb parent-state slots; absent slots must be all zero and present
 slots must be in canonical order. Per-slot Eq and Ep deferred-equation SHA-256
 joins bind the reciprocal scalar and point verifier halves. The lengths and
 state-layout markers are validated exactly; no hash stands in for any carried
-state. `KagemushaPastaCycleProofEnvelopeV1` binds that boundary, both
+state. `KagemushaPastaCycleProofEnvelopeV3` binds that boundary, both
 ordered Eq/Ep circuit identifiers, artifact generation, the SHA-256 of the
 exact authenticated manifest, both `ParamsIPA` generations, both raw
 verifier-key payload SHA-256 values, and the ordered Eq/Ep proof pair. There is
@@ -239,7 +239,8 @@ each profile binds exactly one parameters, proving-key, and verifying-key file.
 Each descriptor records both the complete framed-file digest and the unframed
 payload digest/length, so a role header cannot disguise duplicated key material.
 Every file is content-addressed, is at most 256 MiB, and a release additionally
-binds its source revision, chain, asset/scale,
+binds its source revision, the SHA-256 of the exact tracked and untracked source
+tree, whether that tree was dirty, chain, asset/scale,
 activation/withdrawal heights, physical-device benchmark evidence,
 cryptographic review, signed release attestation, and the canonical top-up
 finality-roster archive. Finality verification accepts the roster only when its
@@ -253,6 +254,7 @@ cargo run -p iroha_core --bin kagemusha_recursive_spend_v3_bundle -- \
   --out-dir <new-directory> \
   --chain-id <chain> --asset-definition-id <asset> --asset-scale <u32> \
   --generation <id> --parameter-generation <id> --source-commit <40-lower-hex> \
+  --source-tree-sha256 <64-lower-hex> --source-repo-dirty <true|false> \
   --activation-height <u64> --withdrawal-height <u64> \
   --benchmark-evidence-sha256 <64-lower-hex> \
   --cryptographic-review-sha256 <64-lower-hex> \

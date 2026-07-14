@@ -5827,7 +5827,11 @@ impl Sumeragi {
     }
 }
 /// Version of the canonical Norito shared-config projection.
-pub const SUMERAGI_V2_CONFIG_FORMAT_VERSION: u16 = 1;
+///
+/// Version 2 binds the view-indexed pacemaker deadline rule. Nodes using the
+/// retired fixed deadline therefore derive a different handshake fingerprint
+/// and cannot silently join the same height.
+pub const SUMERAGI_V2_CONFIG_FORMAT_VERSION: u16 = 2;
 
 const SUMERAGI_V2_CONFIG_FINGERPRINT_DOMAIN: &[u8] =
     b"iroha:sumeragi:v2:shared-config-fingerprint\0";
@@ -5854,8 +5858,11 @@ pub struct SumeragiV2Config {
     pub key_policy: SumeragiV2KeyPolicy,
 }
 
-/// Derive the first-release absolute round deadline and retransmission interval
+/// Derive the first-release view-zero round deadline and retransmission interval
 /// from the signed block cadence.
+///
+/// The authoritative runtime applies deterministic linear backoff to the base
+/// deadline for later certified views. The retransmission interval stays fixed.
 ///
 /// # Errors
 ///
@@ -5867,7 +5874,7 @@ pub fn sumeragi_v2_timing_ms(
     if block_cadence_ms == 0 {
         return Err(SumeragiV2ConfigError::NonPositive("block cadence"));
     }
-    let round_timeout_ms = block_cadence_ms
+    let base_round_timeout_ms = block_cadence_ms
         .checked_mul(u64::from(
             defaults::sumeragi::ROUND_TIMEOUT_CADENCE_MULTIPLIER,
         ))
@@ -5875,9 +5882,9 @@ pub fn sumeragi_v2_timing_ms(
             "derived Sumeragi v2 round timeout",
         ))?;
     let retransmit_interval_ms =
-        round_timeout_ms / u64::from(defaults::sumeragi::RETRANSMIT_DIVISOR);
+        base_round_timeout_ms / u64::from(defaults::sumeragi::RETRANSMIT_DIVISOR);
     debug_assert!(retransmit_interval_ms > 0);
-    Ok((round_timeout_ms, retransmit_interval_ms))
+    Ok((base_round_timeout_ms, retransmit_interval_ms))
 }
 
 impl SumeragiV2Config {
@@ -7178,6 +7185,8 @@ pub struct ToriiKagemushaCommands {
     pub authority: AccountId,
     /// Key pair used only to submit typed Kagemusha instructions.
     pub key_pair: KeyPair,
+    /// Minimum live XOR balance required for the self-funded command authority.
+    pub minimum_xor_balance: Quantity,
     /// Maximum value accepted for one Kagemusha command.
     pub max_tx_value: Quantity,
     /// Maximum number of accepted bindings plus in-flight reservations retained in memory.
@@ -10854,6 +10863,7 @@ mod tests {
             .expect("default v2 config");
 
         assert_eq!(shared.protocol_version, consensus_v2::PROTOCOL_VERSION);
+        assert_eq!(shared.format_version, SUMERAGI_V2_CONFIG_FORMAT_VERSION);
         assert_eq!(shared.block_cadence_ms, 1_000);
         assert_eq!(
             sumeragi_v2_timing_ms(shared.block_cadence_ms),
@@ -10878,6 +10888,26 @@ mod tests {
                     consensus_v2::ConsensusMode::Permissioned,
                 )
                 .expect("same input")
+        );
+    }
+
+    #[test]
+    fn sumeragi_v2_pacemaker_format_changes_the_handshake_fingerprint() {
+        let config = default_v2_sumeragi();
+        let current = config
+            .v2_config(
+                Duration::from_secs(1),
+                consensus_v2::ConsensusMode::Permissioned,
+            )
+            .expect("current v2 config");
+        let mut retired_fixed_timeout = current.clone();
+        retired_fixed_timeout.format_version = 1;
+
+        assert_eq!(current.format_version, SUMERAGI_V2_CONFIG_FORMAT_VERSION);
+        assert_ne!(
+            current.fingerprint(),
+            retired_fixed_timeout.fingerprint(),
+            "fixed-timeout and view-backoff binaries must not share a handshake fingerprint",
         );
     }
 

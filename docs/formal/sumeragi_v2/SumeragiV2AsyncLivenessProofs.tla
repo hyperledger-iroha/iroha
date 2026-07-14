@@ -1,5 +1,5 @@
 ---- MODULE SumeragiV2AsyncLivenessProofs ----
-EXTENDS SumeragiV2LivenessProofs, SequenceTheorems
+EXTENDS SumeragiV2LivenessProofs, SequenceTheorems, FunctionTheorems
 
 (***************************************************************************
 Rank and fairness proof for the production-coupled asynchronous layer.
@@ -514,12 +514,141 @@ BY AsyncInitEstablishesDeferredTopologyType,
    AsyncInitEstablishesDeferredContentType
    DEF AsyncDeferredTypeInvariant
 
+THEOREM SaturatingLinearTimeoutIsPositiveNatural ==
+  \A base, maximum, roundView \in Nat:
+    /\ base > 0
+    /\ maximum > 0
+    => (IF base * (roundView + 1) <= maximum
+        THEN base * (roundView + 1)
+        ELSE maximum) \in Nat \ {0}
+BY SMT
+
+THEOREM AsyncViewTimeoutIsPositiveNatural ==
+  \A roundView \in Nat:
+    AsyncConfiguration => AsyncViewTimeout(roundView) \in Nat \ {0}
+BY SaturatingLinearTimeoutIsPositiveNatural, SMT
+   DEF AsyncConfiguration, AsyncViewTimeout, AsyncLinearViewTimeout
+
+THEOREM SaturatingLinearTimeoutExceedsRepresentableBound ==
+  \A base, maximum, bound \in Nat:
+    /\ base > 0
+    /\ bound < maximum
+    => (IF base * (bound + 1) <= maximum
+        THEN base * (bound + 1)
+        ELSE maximum) > bound
+BY SMT
+
+THEOREM AsyncWorstCaseServiceBudgetIsNatural ==
+  /\ ModelConfiguration
+  /\ AsyncConfiguration
+  => AsyncWorstCaseServiceBudget \in Nat
+PROOF
+  <1>1. ASSUME ModelConfiguration, AsyncConfiguration
+         PROVE AsyncWorstCaseServiceBudget \in Nat
+    <2>1. N \in Nat
+      BY <1>1, SMT DEF ModelConfiguration, QuorumConfiguration
+    <2>2. /\ AsyncQueueCapacity \in Nat
+           /\ AsyncProgressReserve \in Nat
+           /\ AsyncCompletionReserve \in Nat
+           /\ AsyncIngressCapacity \in Nat
+           /\ AsyncIoAuxCapacity \in Nat
+           /\ AsyncIoWorkCapacity \in Nat
+           /\ AsyncDeferredNormalCapacity \in Nat
+           /\ AsyncDeferredProgressCapacity \in Nat
+           /\ AsyncDeliveryBound \in Nat
+           /\ AsyncRetransmitPeriod \in Nat
+           /\ AsyncChunkCount \in Nat
+      BY <1>1, SMT DEF AsyncConfiguration
+    <2>3. /\ AsyncRuntimeCycleBudget \in Nat
+           /\ AsyncIoDrainBudget \in Nat
+           /\ AsyncDeferredDrainBudget \in Nat
+           /\ AsyncRetainedControlBudget \in Nat
+           /\ AsyncRetainedProposalChunkBudget \in Nat
+           /\ AsyncActiveCertifiedRequestBudget \in Nat
+           /\ AsyncActiveCommitRequestBudget \in Nat
+      BY <2>1, <2>2, SMT
+         DEF AsyncRuntimeCycleBudget, AsyncIoDrainBudget,
+             AsyncDeferredDrainBudget, AsyncRetainedControlBudget,
+             AsyncRetainedProposalChunkBudget,
+             AsyncActiveCertifiedRequestBudget,
+             AsyncActiveCommitRequestBudget
+    <2>4. /\ AsyncActiveRequestBudget \in Nat
+           /\ AsyncRetransmitEmissionBudget \in Nat
+      BY <2>3, SMT
+         DEF AsyncActiveRequestBudget, AsyncRetransmitEmissionBudget
+    <2>5. /\ AsyncOneWayTransportBudget \in Nat
+           /\ AsyncProposalPipelineBudget \in Nat
+      BY <2>1, <2>2, <2>3, <2>4, SMT
+         DEF AsyncOneWayTransportBudget, AsyncProposalPipelineBudget
+    <2>6. AsyncCertifiedRecoveryBudget \in Nat
+      BY <2>2, <2>3, <2>5, SMT
+         DEF AsyncCertifiedRecoveryBudget
+    <2> QED BY <2>2, <2>5, <2>6, SMT
+         DEF AsyncWorstCaseServiceBudget
+  <1> QED BY <1>1
+
+THEOREM AdequateViewTimeoutExists ==
+  /\ ModelConfiguration
+  /\ AsyncConfiguration
+  /\ ViewDomain = Nat
+  => \E roundView \in Views:
+       /\ roundView <= AsyncMaximumView
+       /\ AsyncViewTimeout(roundView) > AsyncWorstCaseServiceBudget
+PROOF
+  <1>1. ASSUME ModelConfiguration,
+                AsyncConfiguration,
+                ViewDomain = Nat
+         PROVE \E roundView \in Views:
+                 /\ roundView <= AsyncMaximumView
+                 /\ AsyncViewTimeout(roundView) >
+                      AsyncWorstCaseServiceBudget
+    <2>1. AsyncWorstCaseServiceBudget \in Nat
+      BY <1>1, AsyncWorstCaseServiceBudgetIsNatural
+    <2>2. AsyncViewTimeout(AsyncWorstCaseServiceBudget) >
+             AsyncWorstCaseServiceBudget
+      BY <1>1, <2>1,
+         SaturatingLinearTimeoutExceedsRepresentableBound
+         DEF AsyncConfiguration, AsyncServiceBoundRepresentable,
+             AsyncViewTimeout, AsyncLinearViewTimeout
+    <2>3. AsyncWorstCaseServiceBudget \in Views
+      BY <1>1, <2>1 DEF Views
+    <2>4. AsyncWorstCaseServiceBudget <= AsyncMaximumView
+      BY <1>1 DEF AsyncConfiguration, AsyncServiceBoundRepresentable
+    <2> QED BY <2>2, <2>3, <2>4
+  <1> QED BY <1>1
+
 THEOREM AsyncInitEstablishesTransportClockType ==
   \A initialContext:
     AsyncInitAt(initialContext) => AsyncTransportClockTypeInvariant
-BY SMT
-   DEF AsyncInitAt, AsyncBaseInitAt, AsyncTransportInit,
-       AsyncConfiguration, AsyncTransportClockTypeInvariant
+PROOF
+  <1>1. ASSUME NEW initialContext, AsyncInitAt(initialContext)
+         PROVE AsyncTransportClockTypeInvariant
+    <2>1. /\ AsyncConfiguration
+           /\ nodeView = [node \in ValidatorIds |-> 0]
+           /\ asyncOutstandingTags = [node \in ValidatorIds |-> {}]
+           /\ asyncNodeDeadlines =
+                [node \in ValidatorIds |-> AsyncViewTimeout(nodeView[node])]
+           /\ asyncRetransmitDeadlines =
+                [node \in ValidatorIds |-> AsyncRetransmitPeriod]
+           /\ asyncNodeServiceDeadlines =
+                [node \in ValidatorIds |-> AsyncDeliveryBound]
+           /\ asyncIoServiceDeadlines =
+                [node \in ValidatorIds |-> AsyncDeliveryBound]
+      BY <1>1
+         DEF AsyncInitAt, AsyncBaseInitAt, InitAt, AsyncTransportInit
+    <2>2. /\ AsyncViewTimeout(0) \in Nat
+           /\ AsyncRetransmitPeriod \in Nat
+           /\ AsyncDeliveryBound \in Nat
+      BY <2>1, AsyncViewTimeoutIsPositiveNatural, SMT
+         DEF AsyncConfiguration
+    <2>3. /\ asyncOutstandingTags \in [ValidatorIds -> SUBSET AsyncCompletionTags]
+           /\ asyncNodeDeadlines \in [ValidatorIds -> Nat]
+           /\ asyncRetransmitDeadlines \in [ValidatorIds -> Nat]
+           /\ asyncNodeServiceDeadlines \in [ValidatorIds -> Nat]
+           /\ asyncIoServiceDeadlines \in [ValidatorIds -> Nat]
+      BY <2>1, <2>2, Isa
+    <2> QED BY <2>3 DEF AsyncTransportClockTypeInvariant
+  <1> QED BY <1>1
 
 THEOREM EmptyRetainedClassItems ==
   \A source, controlClass:
@@ -1434,6 +1563,123 @@ PROOF
     <2> QED BY <2>1, <2>2, <2>3
   <1> QED BY <1>1
 
+THEOREM UniqueSequenceLengthImpliesInjective ==
+  \A sequence:
+    /\ sequence \in Seq(Range(sequence))
+    /\ Len(sequence) = Cardinality(SequenceSet(sequence))
+    => IsInjective(sequence)
+PROOF
+  <1>1. ASSUME NEW sequence,
+                sequence \in Seq(Range(sequence)),
+                Len(sequence) = Cardinality(SequenceSet(sequence))
+         PROVE IsInjective(sequence)
+    <2>1. /\ Len(sequence) \in Nat
+           /\ sequence \in [1..Len(sequence) -> Range(sequence)]
+      BY <1>1, LenProperties
+    <2>2. /\ IsFiniteSet(1..Len(sequence))
+           /\ Cardinality(1..Len(sequence)) = Len(sequence)
+      BY <2>1, FS_Interval, SMT
+    <2>3. SequenceSet(sequence) = Range(sequence)
+      BY <1>1, RangeEquality DEF SequenceSet
+    <2>4. sequence \in Surjection(1..Len(sequence), Range(sequence))
+      BY <2>1, Fun_RangeProperties
+    <2>5. Cardinality(1..Len(sequence)) =
+             Cardinality(Range(sequence))
+      BY <1>1, <2>2, <2>3
+    <2>6. sequence \in Injection(1..Len(sequence), Range(sequence))
+      BY <2>2, <2>4, <2>5, FS_SurjSameCardinalityImpliesInj
+    <2> QED BY <2>6 DEF Injection
+  <1> QED BY <1>1
+
+THEOREM InjectiveSequenceLengthMatchesSetCardinality ==
+  \A sequence:
+    /\ sequence \in Seq(Range(sequence))
+    /\ IsInjective(sequence)
+    => Len(sequence) = Cardinality(SequenceSet(sequence))
+PROOF
+  <1>1. ASSUME NEW sequence,
+                sequence \in Seq(Range(sequence)),
+                IsInjective(sequence)
+         PROVE Len(sequence) = Cardinality(SequenceSet(sequence))
+    <2>1. /\ Len(sequence) \in Nat
+           /\ sequence \in [1..Len(sequence) -> Range(sequence)]
+      BY <1>1, LenProperties
+    <2>2. /\ IsFiniteSet(1..Len(sequence))
+           /\ Cardinality(1..Len(sequence)) = Len(sequence)
+      BY <2>1, FS_Interval, SMT
+    <2>3. sequence \in Surjection(1..Len(sequence), Range(sequence))
+      BY <2>1, Fun_RangeProperties
+    <2>4. sequence \in Injection(1..Len(sequence), Range(sequence))
+      BY <1>1, <2>1 DEF Injection
+    <2>5. Cardinality(Range(sequence)) =
+             Cardinality(1..Len(sequence))
+      BY <2>2, <2>3, <2>4, FS_Surjection
+    <2>6. SequenceSet(sequence) = Range(sequence)
+      BY <1>1, RangeEquality DEF SequenceSet
+    <2> QED BY <2>2, <2>5, <2>6
+  <1> QED BY <1>1
+
+THEOREM UniqueCompletionTailFacts ==
+  \A sequence:
+    /\ AsyncCompletionSequenceTyped(sequence)
+    /\ Len(sequence) = Cardinality(SequenceSet(sequence))
+    /\ Len(sequence) > 0
+    => /\ AsyncCompletionSequenceTyped(Tail(sequence))
+       /\ SequenceSet(Tail(sequence)) =
+            SequenceSet(sequence) \ {Head(sequence)}
+       /\ Len(Tail(sequence)) =
+            Cardinality(SequenceSet(Tail(sequence)))
+PROOF
+  <1>1. ASSUME NEW sequence,
+                AsyncCompletionSequenceTyped(sequence),
+                Len(sequence) = Cardinality(SequenceSet(sequence)),
+                Len(sequence) > 0
+         PROVE /\ AsyncCompletionSequenceTyped(Tail(sequence))
+               /\ SequenceSet(Tail(sequence)) =
+                    SequenceSet(sequence) \ {Head(sequence)}
+               /\ Len(Tail(sequence)) =
+                    Cardinality(SequenceSet(Tail(sequence)))
+    <2>1. /\ sequence \in Seq(Range(sequence))
+           /\ sequence # <<>>
+           /\ IsInjective(sequence)
+      BY <1>1, EmptySeq, UniqueSequenceLengthImpliesInjective, SMT
+         DEF AsyncCompletionSequenceTyped
+    <2>2. /\ Tail(sequence) \in Seq(Range(sequence))
+           /\ Range(Tail(sequence)) \subseteq Range(sequence)
+      BY <2>1, HeadTailProperties
+    <2>3. /\ Tail(sequence) \in Seq(Range(Tail(sequence)))
+           /\ DOMAIN Tail(sequence) = 1..Len(Tail(sequence))
+      BY <2>2, SeqOfRange, LenProperties
+    <2>4. \A index \in 1..Len(Tail(sequence)):
+             /\ AsyncCandidateTyped(Tail(sequence)[index])
+             /\ Tail(sequence)[index].class = "Completion"
+      <3>1. ASSUME NEW index \in 1..Len(Tail(sequence))
+             PROVE /\ AsyncCandidateTyped(Tail(sequence)[index])
+                   /\ Tail(sequence)[index].class = "Completion"
+        <4>1. Tail(sequence)[index] \in Range(Tail(sequence))
+          BY <2>3, <3>1, RangeEquality
+        <4>2. Tail(sequence)[index] \in Range(sequence)
+          BY <2>2, <4>1
+        <4>3. PICK original \in 1..Len(sequence):
+                 Tail(sequence)[index] = sequence[original]
+          BY <1>1, <2>1, <4>2, RangeEquality
+        <4> QED BY <1>1, <4>3 DEF AsyncCompletionSequenceTyped
+      <3> QED BY <3>1
+    <2>5. AsyncCompletionSequenceTyped(Tail(sequence))
+      BY <2>3, <2>4 DEF AsyncCompletionSequenceTyped
+    <2>6. /\ IsInjective(Tail(sequence))
+           /\ Range(Tail(sequence)) =
+                Range(sequence) \ {Head(sequence)}
+      BY <2>1, TailInjectiveSeq
+    <2>7. SequenceSet(Tail(sequence)) =
+             SequenceSet(sequence) \ {Head(sequence)}
+      BY <2>1, <2>3, <2>6, RangeEquality DEF SequenceSet
+    <2>8. Len(Tail(sequence)) =
+             Cardinality(SequenceSet(Tail(sequence)))
+      BY <2>3, <2>6, InjectiveSequenceLengthMatchesSetCardinality
+    <2> QED BY <2>5, <2>7, <2>8
+  <1> QED BY <1>1
+
 THEOREM ConsensusIndicesAfterNonConsensusAppend ==
   \A sequence, job:
     sequence \in Seq(Range(sequence)) /\ job.class # "Consensus"
@@ -1644,8 +1890,317 @@ PROOF
            /\ CommitCertificateResponseItem(request, qc).envelope =
                   QcEnvelope(request.source, qc)
       BY DEF CommitCertificateResponseItem, AsyncNetworkItem
-    <2> QED BY <2>1, <2>2, <2>3, Isa
-         DEF AsyncItemTyped, AsyncNetworkKinds, AsyncIngressSources
+    <2>4. CommitCertificateResponseItem(request, qc).kind
+             \in AsyncNetworkKinds
+      BY <2>3, SMT DEF AsyncNetworkKinds
+    <2>5. CommitCertificateResponseItem(request, qc).source
+             \in ValidatorIds
+      BY <2>1, <2>3
+    <2>6. CommitCertificateResponseItem(request, qc).envelope.recipient
+             \in ValidatorIds
+      BY <2>1, <2>3, SMT DEF QcEnvelope
+    <2>7. /\ CommitCertificateResponseItem(request, qc).source
+                    \in AsyncIngressSources
+           /\ (CommitCertificateResponseItem(request, qc).kind # "Noise"
+                 => CommitCertificateResponseItem(request, qc).source
+                      \in ValidatorIds)
+      BY <2>5, Isa DEF AsyncIngressSources
+    <2>8. (CASE CommitCertificateResponseItem(request, qc).kind =
+                    "Proposal" ->
+                  CommitCertificateResponseItem(request, qc).envelope
+                    \in ProposalEnvelopeSet
+           [] CommitCertificateResponseItem(request, qc).kind
+                    \in {"PrepareVote", "CommitVote"} ->
+                  CommitCertificateResponseItem(request, qc).envelope
+                    \in VoteEnvelopeSet
+           [] CommitCertificateResponseItem(request, qc).kind
+                    \in {"PrepareQC", "CommitQC"} ->
+                  CommitCertificateResponseItem(request, qc).envelope
+                    \in QcEnvelopeSet
+           [] CommitCertificateResponseItem(request, qc).kind =
+                    "TimeoutVote" ->
+                  CommitCertificateResponseItem(request, qc).envelope
+                    \in TimeoutEnvelopeSet
+           [] CommitCertificateResponseItem(request, qc).kind =
+                    "TimeoutCertificate" ->
+                  CommitCertificateResponseItem(request, qc).envelope
+                    \in TcEnvelopeSet
+           [] CommitCertificateResponseItem(request, qc).kind =
+                    "CommitCertificateResponse" ->
+                  CommitCertificateResponseItem(request, qc).envelope
+                    \in QcEnvelopeSet
+           [] OTHER ->
+                  AsyncBodyEnvelopeTyped(
+                    CommitCertificateResponseItem(request, qc).envelope))
+      BY <2>2, <2>3, SMT
+    <2> QED BY <2>3, <2>4, <2>6, <2>7, <2>8
+         DEF AsyncItemTyped
+  <1> QED BY <1>1
+
+THEOREM StrongInvariantTypesAppliedCertificates ==
+  StrongInductiveInvariant
+    => \A application \in applied: application.qc \in QcRecordSet
+BY SMT
+   DEF StrongInductiveInvariant, Safety, TypeInvariant,
+       DecisionAgreement, AppliedRequiresDecision
+
+THEOREM ServiceResponseItemsAreFiniteAndTyped ==
+  \A node \in AsyncCurrentResponsiveVoters:
+    /\ AsyncTypeInvariant
+    /\ StrongInductiveInvariant
+    /\ AsyncIoQueueDepth(node) > 0
+    => /\ IsFiniteSet(
+             AsyncIoResponseItemsAfterService(asyncIoQueues[node]))
+       /\ \A item \in
+              AsyncIoResponseItemsAfterService(asyncIoQueues[node]):
+            AsyncItemTyped(item)
+PROOF
+  <1>1. ASSUME NEW node \in AsyncCurrentResponsiveVoters,
+                AsyncTypeInvariant,
+                StrongInductiveInvariant,
+                AsyncIoQueueDepth(node) > 0
+         PROVE /\ IsFiniteSet(
+                      AsyncIoResponseItemsAfterService(
+                        asyncIoQueues[node]))
+               /\ \A item \in
+                      AsyncIoResponseItemsAfterService(
+                        asyncIoQueues[node]):
+                    AsyncItemTyped(item)
+    <2>1. /\ AsyncConfiguration
+           /\ node \in ValidatorIds
+           /\ AsyncIoSequenceTyped(asyncIoQueues[node])
+           /\ AsyncIoJobTyped(Head(asyncIoQueues[node]))
+      BY <1>1, AsyncCurrentResponsiveVotersAreValidators,
+         TypedIoTailFacts
+         DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+             AsyncRuntimeTypeInvariant,
+             AsyncRuntimeScalarTypeInvariant,
+             AsyncIoTypeInvariant, AsyncIoContentTypeInvariant,
+             AsyncIoQueueContentTypeInvariant, AsyncIoQueueDepth
+    <2>2. Head(asyncIoQueues[node]).class = "Serve" =>
+             /\ AsyncItemTyped(
+                  Head(asyncIoQueues[node]).candidate.item)
+             /\ Head(asyncIoQueues[node]).candidate.item.kind
+                  \in {"CertifiedRequest", "CommitCertificateRequest"}
+      BY <2>1, SMT
+         DEF AsyncIoJobTyped, AsyncCandidateTyped,
+             NoAsyncItem, AsyncNetworkItem
+    <2>3. \A application \in applied:
+             application.qc \in QcRecordSet
+      BY <1>1, StrongInvariantTypesAppliedCertificates
+    <2>4. CASE Head(asyncIoQueues[node]).class # "Serve"
+      BY <2>4, FS_EmptySet
+         DEF AsyncIoResponseItemsAfterService
+    <2>5. CASE /\ Head(asyncIoQueues[node]).class = "Serve"
+                  /\ CertifiedServeCanRespond(
+                       Head(asyncIoQueues[node]).candidate.item)
+      <3>1. AsyncItemTyped(CertifiedResponseItem(
+                 Head(asyncIoQueues[node]).candidate.item))
+        BY <2>1, <2>2, <2>5, CertifiedResponseItemIsTyped
+           DEF CertifiedServeCanRespond
+      <3>2. AsyncIoResponseItemsAfterService(asyncIoQueues[node]) =
+               {CertifiedResponseItem(
+                  Head(asyncIoQueues[node]).candidate.item)}
+        BY <2>5 DEF AsyncIoResponseItemsAfterService
+      <3> QED BY <3>1, <3>2, FS_Singleton
+    <2>6. CASE /\ Head(asyncIoQueues[node]).class = "Serve"
+                  /\ ~CertifiedServeCanRespond(
+                       Head(asyncIoQueues[node]).candidate.item)
+                  /\ CommitCertificateServeCanRespond(
+                       Head(asyncIoQueues[node]).candidate.item)
+      <3>1. LET request == Head(asyncIoQueues[node]).candidate.item
+             IN /\ AsyncItemTyped(request)
+                /\ request.kind = "CommitCertificateRequest"
+        BY <2>2, <2>6 DEF CommitCertificateServeCanRespond
+      <3>2. LET request == Head(asyncIoQueues[node]).candidate.item
+             IN /\ CommitCertificateServiceApplication(request) \in applied
+                /\ CommitCertificateServiceApplication(request).qc
+                     \in QcRecordSet
+        BY <2>3, <2>6, Zenon
+           DEF CommitCertificateServeCanRespond,
+               CommitCertificateServiceApplication
+      <3>3. LET request == Head(asyncIoQueues[node]).candidate.item
+             IN AsyncItemTyped(CommitCertificateResponseItem(
+                  request,
+                  CommitCertificateServiceApplication(request).qc))
+        BY <3>1, <3>2, CommitCertificateResponseItemIsTyped
+      <3>4. AsyncIoResponseItemsAfterService(asyncIoQueues[node]) =
+               CommitCertificateResponseItems(
+                 Head(asyncIoQueues[node]).candidate.item)
+        BY <2>6 DEF AsyncIoResponseItemsAfterService
+      <3>5. LET request == Head(asyncIoQueues[node]).candidate.item
+             IN CommitCertificateResponseItems(request) =
+                  {CommitCertificateResponseItem(
+                    request,
+                    CommitCertificateServiceApplication(request).qc)}
+        BY <2>6 DEF CommitCertificateResponseItems
+      <3> QED BY <3>3, <3>4, <3>5, FS_Singleton
+    <2>7. CASE /\ Head(asyncIoQueues[node]).class = "Serve"
+                  /\ ~CertifiedServeCanRespond(
+                       Head(asyncIoQueues[node]).candidate.item)
+                  /\ ~CommitCertificateServeCanRespond(
+                       Head(asyncIoQueues[node]).candidate.item)
+      BY <2>7, FS_EmptySet
+         DEF AsyncIoResponseItemsAfterService
+    <2> QED BY <2>4, <2>5, <2>6, <2>7
+  <1> QED BY <1>1
+
+AsyncSentItemsType(items) ==
+  /\ IsFiniteSet(items)
+  /\ \A item \in items: AsyncItemTyped(item)
+
+AsyncRetainedControlType(retained, voters) ==
+  /\ IsFiniteSet(retained)
+  /\ \A item \in retained:
+       /\ AsyncItemTyped(item)
+       /\ item.kind \in AsyncControlKinds
+  /\ \A source \in ValidatorIds, controlClass \in AsyncControlKinds:
+       LET retainedClass ==
+             RetainedClassItems(retained, source, controlClass)
+       IN \/ retainedClass = {}
+          \/ /\ Cardinality(retainedClass) <= Cardinality(voters)
+             /\ {item.envelope.recipient: item \in retainedClass} = voters
+             /\ \A left, right \in retainedClass:
+                  ControlView(left) = ControlView(right)
+
+AsyncActiveRequestsType(active, sent) ==
+  /\ IsFiniteSet(active)
+  /\ active \subseteq sent
+  /\ \A item \in active:
+       /\ AsyncItemTyped(item)
+       /\ item.kind \in {"CertifiedRequest",
+                          "CommitCertificateRequest"}
+
+THEOREM AsyncTransportHistoryTypeDecomposition ==
+  AsyncTransportHistoryTypeInvariant
+    <=> /\ AsyncSentItemsType(asyncSentItems)
+        /\ AsyncRetainedControlType(
+             asyncRetainedControl, CurrentVoters)
+        /\ AsyncActiveRequestsType(
+             asyncActiveRequests, asyncSentItems)
+BY DEF AsyncTransportHistoryTypeInvariant, AsyncSentItemsType,
+       AsyncRetainedControlType, AsyncActiveRequestsType
+
+THEOREM PacketForTypedItemIsTyped ==
+  \A item:
+    /\ AsyncConfiguration
+    /\ asyncNow \in Nat
+    /\ AsyncItemTyped(item)
+    => AsyncPacketTyped(
+         AsyncPacket(item, asyncNow, asyncNow + AsyncDeliveryBound))
+BY SMT
+   DEF AsyncConfiguration, AsyncPacketTyped, AsyncPacket
+
+THEOREM PacketsForItemsAreFiniteAndTyped ==
+  \A items:
+    /\ AsyncConfiguration
+    /\ asyncNow \in Nat
+    /\ IsFiniteSet(items)
+    /\ \A item \in items: AsyncItemTyped(item)
+    => /\ IsFiniteSet(PacketsForItems(items))
+       /\ \A packet \in PacketsForItems(items):
+            AsyncPacketTyped(packet)
+PROOF
+  <1>1. ASSUME NEW items,
+                AsyncConfiguration,
+                asyncNow \in Nat,
+                IsFiniteSet(items),
+                \A item \in items: AsyncItemTyped(item)
+         PROVE /\ IsFiniteSet(PacketsForItems(items))
+               /\ \A packet \in PacketsForItems(items):
+                    AsyncPacketTyped(packet)
+    <2>1. IsFiniteSet(PacketsForItems(items))
+      BY <1>1, FS_Image DEF PacketsForItems
+    <2>2. \A packet \in PacketsForItems(items):
+             AsyncPacketTyped(packet)
+      <3>1. ASSUME NEW packet \in PacketsForItems(items)
+             PROVE AsyncPacketTyped(packet)
+        <4>1. PICK item \in items:
+                 packet = AsyncPacket(
+                   item, asyncNow, asyncNow + AsyncDeliveryBound)
+          BY <3>1 DEF PacketsForItems
+        <4>2. AsyncItemTyped(item)
+          BY <1>1, <4>1
+        <4> QED BY <1>1, <4>1, <4>2,
+                     PacketForTypedItemIsTyped
+      <3> QED BY <3>1
+    <2> QED BY <2>1, <2>2
+  <1> QED BY <1>1
+
+THEOREM PublishEphemeralItemsPreservesTransportContentType ==
+  \A items:
+    /\ AsyncRuntimeScalarTypeInvariant
+    /\ AsyncTransportContentTypeInvariant
+    /\ IsFiniteSet(items)
+    /\ \A item \in items: AsyncItemTyped(item)
+    /\ PublishEphemeralItems(items)
+    /\ UNCHANGED <<context, asyncHeldChunks>>
+    => AsyncTransportContentTypeInvariant'
+PROOF
+  <1>1. ASSUME NEW items,
+                AsyncRuntimeScalarTypeInvariant,
+                AsyncTransportContentTypeInvariant,
+                IsFiniteSet(items),
+                \A item \in items: AsyncItemTyped(item),
+                PublishEphemeralItems(items),
+                UNCHANGED <<context, asyncHeldChunks>>
+         PROVE AsyncTransportContentTypeInvariant'
+    <2>1. /\ AsyncSentItemsType(asyncSentItems)
+           /\ AsyncRetainedControlType(
+                asyncRetainedControl, CurrentVoters)
+           /\ AsyncActiveRequestsType(
+                asyncActiveRequests, asyncSentItems)
+           /\ AsyncPacketContentTypeInvariant
+           /\ AsyncHeldChunksTypeInvariant
+      BY <1>1, AsyncTransportHistoryTypeDecomposition
+         DEF AsyncTransportContentTypeInvariant
+    <2>2. /\ asyncSentItems' = asyncSentItems \cup items
+           /\ asyncRetainedControl' = asyncRetainedControl
+           /\ asyncActiveRequests' = asyncActiveRequests
+           /\ asyncTransport' =
+                asyncTransport \cup PacketsForItems(items)
+           /\ context' = context
+           /\ asyncHeldChunks' = asyncHeldChunks
+      BY <1>1 DEF PublishEphemeralItems
+    <2>3. AsyncSentItemsType(asyncSentItems')
+      <3>1. IsFiniteSet(asyncSentItems')
+        BY <1>1, <2>1, <2>2, FS_Union
+           DEF AsyncSentItemsType
+      <3>2. \A item \in asyncSentItems': AsyncItemTyped(item)
+        BY <1>1, <2>1, <2>2
+           DEF AsyncSentItemsType
+      <3> QED BY <3>1, <3>2 DEF AsyncSentItemsType
+    <2>4. CurrentVoters' = CurrentVoters
+      BY <2>2, Isa DEF CurrentVoters, CurrentEpoch
+    <2>5. AsyncRetainedControlType(
+             asyncRetainedControl', CurrentVoters')
+      BY <2>1, <2>2, <2>4
+    <2>6. AsyncActiveRequestsType(
+             asyncActiveRequests', asyncSentItems')
+      BY <2>1, <2>2, Isa DEF AsyncActiveRequestsType
+    <2>7. AsyncTransportHistoryTypeInvariant'
+      BY <2>3, <2>5, <2>6
+         DEF AsyncTransportHistoryTypeInvariant,
+             AsyncSentItemsType, AsyncRetainedControlType,
+             AsyncActiveRequestsType
+    <2>8. /\ IsFiniteSet(PacketsForItems(items))
+           /\ \A packet \in PacketsForItems(items):
+                AsyncPacketTyped(packet)
+      BY <1>1, PacketsForItemsAreFiniteAndTyped
+         DEF AsyncRuntimeScalarTypeInvariant
+    <2>9. AsyncPacketContentTypeInvariant'
+      <3>1. IsFiniteSet(asyncTransport')
+        BY <2>1, <2>2, <2>8, FS_Union
+           DEF AsyncPacketContentTypeInvariant
+      <3>2. \A packet \in asyncTransport':
+               AsyncPacketTyped(packet)
+        BY <2>1, <2>2, <2>8
+           DEF AsyncPacketContentTypeInvariant
+      <3> QED BY <3>1, <3>2 DEF AsyncPacketContentTypeInvariant
+    <2>10. AsyncHeldChunksTypeInvariant'
+      BY <2>1, <2>2 DEF AsyncHeldChunksTypeInvariant
+    <2> QED BY <2>7, <2>9, <2>10
+         DEF AsyncTransportContentTypeInvariant
   <1> QED BY <1>1
 
 THEOREM ServiceHeadPreservesConsensusQueueOwnership ==
@@ -2480,6 +3035,1273 @@ PROOF
     <2> QED BY <2>1, <2>4, <2>5
          DEF AsyncIoCapacityTypeInvariant
   <1> QED BY <1>1
+
+THEOREM ServiceIoWorkerPreservesNonIoType ==
+  \A node \in AsyncCurrentResponsiveVoters:
+    /\ AsyncTypeInvariant
+    /\ StrongInductiveInvariant
+    /\ ServiceIoWorker(node)
+    => /\ AsyncRuntimeTypeInvariant'
+       /\ AsyncDeferredTypeInvariant'
+       /\ AsyncTransportTypeInvariant'
+       /\ AsyncIngressTypeInvariant'
+PROOF
+  <1>1. ASSUME NEW node \in AsyncCurrentResponsiveVoters,
+                AsyncTypeInvariant,
+                StrongInductiveInvariant,
+                ServiceIoWorker(node)
+         PROVE /\ AsyncRuntimeTypeInvariant'
+               /\ AsyncDeferredTypeInvariant'
+               /\ AsyncTransportTypeInvariant'
+               /\ AsyncIngressTypeInvariant'
+    <2>1. /\ AsyncRuntimeScalarTypeInvariant
+           /\ AsyncCausalTypeInvariant
+           /\ AsyncDeferredTopologyTypeInvariant
+           /\ AsyncDeferredContentTypeInvariant
+           /\ AsyncTransportClockTypeInvariant
+           /\ AsyncTransportContentTypeInvariant
+           /\ AsyncIngressTopologyTypeInvariant
+           /\ AsyncIngressCapacityTypeInvariant
+           /\ AsyncIngressContentTypeInvariant
+      BY <1>1
+         DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+             AsyncRuntimeTypeInvariant, AsyncDeferredTypeInvariant,
+             AsyncTransportTypeInvariant, AsyncIngressTypeInvariant
+    <2>2. node \in ValidatorIds
+      BY <1>1, AsyncCurrentResponsiveVotersAreValidators
+         DEF AsyncTypeInvariant
+    <2>3. /\ UNCHANGED AsyncRuntimeScalarTypeVars
+           /\ UNCHANGED asyncCausalQueues
+           /\ UNCHANGED AsyncDeferredTopologyTypeVars
+           /\ UNCHANGED <<asyncDeferredCompletionQueues,
+                          asyncDeferredProgressQueues,
+                          asyncDeferredNormalQueues>>
+           /\ UNCHANGED AsyncIngressTopologyTypeVars
+           /\ UNCHANGED asyncIngressLanes
+      BY <1>1, Isa
+         DEF ServiceIoWorker, AsyncRuntimeScalarTypeVars,
+             AsyncDeferredVars, AsyncDeferredTopologyTypeVars,
+             AsyncIngressTopologyTypeVars, LeaveCausalQueues, vars
+    <2>4. /\ AsyncRuntimeScalarTypeInvariant'
+           /\ AsyncCausalTypeInvariant'
+           /\ AsyncDeferredTopologyTypeInvariant'
+           /\ AsyncDeferredContentTypeInvariant'
+           /\ AsyncIngressTopologyTypeInvariant'
+           /\ AsyncIngressCapacityTypeInvariant'
+           /\ AsyncIngressContentTypeInvariant'
+      BY <2>1, <2>3, AsyncRuntimeScalarTypeStutter,
+         AsyncCausalTypeStutter, AsyncDeferredTopologyTypeStutter,
+         AsyncDeferredContentTypeStutter,
+         AsyncIngressTopologyTypeStutter,
+         AsyncIngressCapacityTypeStutter, AsyncIngressContentTypeStutter
+    <2>5. /\ AsyncConfiguration
+           /\ asyncNow \in Nat
+           /\ AsyncDeliveryBound \in Nat
+      BY <2>1, SMT
+         DEF AsyncRuntimeScalarTypeInvariant, AsyncConfiguration
+    <2>6. asyncNow + AsyncDeliveryBound \in Nat
+      BY <2>5, SMT
+    <2>7. asyncIoServiceDeadlines'
+               \in [ValidatorIds -> Nat]
+      BY <1>1, <2>1, <2>2, <2>6,
+         FunctionalUpdatePreservesType, Isa
+         DEF ServiceIoWorker, AsyncTransportClockTypeInvariant
+    <2>8. /\ asyncOutstandingTags' = asyncOutstandingTags
+           /\ asyncNodeDeadlines' = asyncNodeDeadlines
+           /\ asyncRetransmitDeadlines' = asyncRetransmitDeadlines
+           /\ asyncNodeServiceDeadlines' = asyncNodeServiceDeadlines
+      BY <1>1, Isa DEF ServiceIoWorker, vars
+    <2>9. AsyncTransportClockTypeInvariant'
+      BY <2>1, <2>7, <2>8
+         DEF AsyncTransportClockTypeInvariant
+    <2>10. /\ IsFiniteSet(
+                    AsyncIoResponseItemsAfterService(asyncIoQueues[node]))
+            /\ \A item \in
+                   AsyncIoResponseItemsAfterService(asyncIoQueues[node]):
+                 AsyncItemTyped(item)
+      BY <1>1, ServiceResponseItemsAreFiniteAndTyped
+         DEF ServiceIoWorker
+    <2>11. /\ PublishEphemeralItems(
+                    AsyncIoResponseItemsAfterService(asyncIoQueues[node]))
+            /\ UNCHANGED <<context, asyncHeldChunks>>
+      BY <1>1
+         DEF ServiceIoWorker, AsyncIoResponseItemsAfterService, vars
+    <2>12. AsyncTransportContentTypeInvariant'
+      BY <2>1, <2>10, <2>11,
+         PublishEphemeralItemsPreservesTransportContentType
+    <2> QED BY <2>4, <2>9, <2>12
+         DEF AsyncRuntimeTypeInvariant, AsyncDeferredTypeInvariant,
+             AsyncTransportTypeInvariant, AsyncIngressTypeInvariant
+  <1> QED BY <1>1
+
+THEOREM ServiceIoWorkerPreservesSchedulerType ==
+  \A node \in AsyncCurrentResponsiveVoters:
+    /\ AsyncTypeInvariant
+    /\ StrongInductiveInvariant
+    /\ ServiceIoWorker(node)
+    => AsyncSchedulerTypeInvariant'
+BY ServiceIoWorkerPreservesTopologyType,
+   ServiceIoWorkerPreservesContentType,
+   ServiceIoWorkerPreservesCapacityType,
+   ServiceIoWorkerPreservesNonIoType, Isa
+   DEF AsyncSchedulerTypeInvariant, AsyncIoTypeInvariant
+
+THEOREM FinitePacketSetHasOldestSentAt ==
+  \A packets:
+    /\ IsFiniteSet(packets)
+    /\ packets # {}
+    /\ \A packet \in packets: packet.sentAt \in Nat
+    => \E packet \in packets:
+         \A other \in packets: packet.sentAt <= other.sentAt
+PROOF
+  <1>1. ASSUME NEW packets,
+                IsFiniteSet(packets),
+                packets # {},
+                \A packet \in packets: packet.sentAt \in Nat
+         PROVE \E packet \in packets:
+                 \A other \in packets: packet.sentAt <= other.sentAt
+    <2>1. PICK witness \in packets: TRUE
+      BY <1>1, FS_EmptySet, Zenon
+    <2>2. witness.sentAt \in Nat
+      BY <1>1, <2>1
+    <2> DEFINE HasTimestamp(timestamp) ==
+           \E packet \in packets: packet.sentAt = timestamp
+    <2>3. HasTimestamp(witness.sentAt)
+      BY <2>1 DEF HasTimestamp
+    <2>4. \E least \in Nat:
+             /\ HasTimestamp(least)
+             /\ \A prior \in 0..(least - 1): ~HasTimestamp(prior)
+      BY <2>2, <2>3, SmallestNatural
+    <2>5. PICK least \in Nat:
+             /\ HasTimestamp(least)
+             /\ \A prior \in 0..(least - 1): ~HasTimestamp(prior)
+      BY <2>4
+    <2>6. PICK oldest \in packets: oldest.sentAt = least
+      BY <2>5 DEF HasTimestamp
+    <2>7. \A other \in packets: oldest.sentAt <= other.sentAt
+      <3>1. ASSUME NEW other \in packets
+             PROVE oldest.sentAt <= other.sentAt
+        <4>1. other.sentAt \in Nat
+          BY <1>1, <3>1
+        <4>2. HasTimestamp(other.sentAt)
+          BY <3>1 DEF HasTimestamp
+        <4>3. CASE least <= other.sentAt
+          BY <2>6, <4>3
+        <4>4. CASE least > other.sentAt
+          <5>1. other.sentAt \in 0..(least - 1)
+            BY <2>5, <4>1, <4>4, SMT
+          <5>2. ~HasTimestamp(other.sentAt)
+            BY <2>5, <5>1
+          <5> QED BY <4>2, <5>2
+        <4> QED BY <4>3, <4>4
+      <3> QED BY <3>1
+    <2> QED BY <2>6, <2>7
+  <1> QED BY <1>1
+
+THEOREM OldestDueSourcePacketFacts ==
+  \A recipient \in ValidatorIds, source \in AsyncIngressSources:
+    /\ AsyncPacketContentTypeInvariant
+    /\ DueSourcePackets(recipient, source) # {}
+    => LET packet == OldestDueSourcePacket(recipient, source)
+       IN /\ packet \in DueSourcePackets(recipient, source)
+          /\ AsyncPacketTyped(packet)
+          /\ packet.item.envelope.recipient = recipient
+          /\ packet.item.source = source
+PROOF
+  <1>1. ASSUME NEW recipient \in ValidatorIds,
+                NEW source \in AsyncIngressSources,
+                AsyncPacketContentTypeInvariant,
+                DueSourcePackets(recipient, source) # {}
+         PROVE LET packet == OldestDueSourcePacket(recipient, source)
+               IN /\ packet \in DueSourcePackets(recipient, source)
+                  /\ AsyncPacketTyped(packet)
+                  /\ packet.item.envelope.recipient = recipient
+                  /\ packet.item.source = source
+    <2>1. DueSourcePackets(recipient, source) \subseteq asyncTransport
+      BY Isa DEF DueSourcePackets
+    <2>2. IsFiniteSet(asyncTransport)
+      BY <1>1 DEF AsyncPacketContentTypeInvariant
+    <2>3. IsFiniteSet(DueSourcePackets(recipient, source))
+      BY <2>1, <2>2, FS_Subset
+    <2>4. \A packet \in DueSourcePackets(recipient, source):
+             /\ AsyncPacketTyped(packet)
+             /\ packet.sentAt \in Nat
+             /\ packet.item.envelope.recipient = recipient
+             /\ packet.item.source = source
+      BY <1>1, <2>1, SMT
+         DEF AsyncPacketContentTypeInvariant, AsyncPacketTyped,
+             DueSourcePackets
+    <2>5. \E packet \in DueSourcePackets(recipient, source):
+             \A other \in DueSourcePackets(recipient, source):
+               packet.sentAt <= other.sentAt
+      BY <1>1, <2>3, <2>4, FinitePacketSetHasOldestSentAt
+    <2>6. OldestDueSourcePacket(recipient, source)
+             \in DueSourcePackets(recipient, source)
+      BY <2>5, Zenon DEF OldestDueSourcePacket
+    <2> QED BY <2>4, <2>6
+  <1> QED BY <1>1
+
+THEOREM TypedIngressAppendPreservesSequence ==
+  \A sequence, item:
+    /\ sequence \in Seq(Range(sequence))
+    /\ DOMAIN sequence = 1..Len(sequence)
+    /\ \A index \in 1..Len(sequence): AsyncItemTyped(sequence[index])
+    /\ AsyncItemTyped(item)
+    => /\ Append(sequence, item)
+                \in Seq(Range(Append(sequence, item)))
+       /\ DOMAIN Append(sequence, item) = 1..Len(Append(sequence, item))
+       /\ \A index \in 1..Len(Append(sequence, item)):
+            AsyncItemTyped(Append(sequence, item)[index])
+PROOF
+  <1>1. ASSUME NEW sequence, NEW item,
+                sequence \in Seq(Range(sequence)),
+                DOMAIN sequence = 1..Len(sequence),
+                \A index \in 1..Len(sequence):
+                  AsyncItemTyped(sequence[index]),
+                AsyncItemTyped(item)
+         PROVE /\ Append(sequence, item)
+                       \in Seq(Range(Append(sequence, item)))
+               /\ DOMAIN Append(sequence, item) =
+                    1..Len(Append(sequence, item))
+               /\ \A index \in 1..Len(Append(sequence, item)):
+                    AsyncItemTyped(Append(sequence, item)[index])
+    <2>1. /\ Append(sequence, item)
+                    \in Seq(Range(sequence) \cup {item})
+           /\ DOMAIN Append(sequence, item) = 1..(Len(sequence) + 1)
+           /\ Len(Append(sequence, item)) = Len(sequence) + 1
+           /\ (\A index \in 1..Len(sequence):
+                 Append(sequence, item)[index] = sequence[index])
+           /\ Append(sequence, item)[Len(sequence) + 1] = item
+           /\ Range(Append(sequence, item)) =
+                Range(sequence) \cup {item}
+      BY <1>1, AppendSequenceFacts
+    <2>2. Append(sequence, item)
+             \in Seq(Range(Append(sequence, item)))
+      BY <2>1, Isa
+    <2>3. DOMAIN Append(sequence, item) =
+             1..Len(Append(sequence, item))
+      BY <2>1, Isa
+    <2>4. Len(sequence) \in Nat
+      BY <1>1, LenProperties
+    <2>5. \A index \in 1..Len(Append(sequence, item)):
+             AsyncItemTyped(Append(sequence, item)[index])
+      <3>1. ASSUME NEW index \in 1..Len(Append(sequence, item))
+             PROVE AsyncItemTyped(Append(sequence, item)[index])
+        <4>1. CASE index \in 1..Len(sequence)
+          BY <1>1, <2>1, <4>1
+        <4>2. CASE index \notin 1..Len(sequence)
+          <5>1. index = Len(sequence) + 1
+            BY <2>1, <2>4, <3>1, <4>2, SMT
+          <5> QED BY <1>1, <2>1, <5>1
+        <4> QED BY <4>1, <4>2
+      <3> QED BY <3>1
+    <2> QED BY <2>2, <2>3, <2>5
+  <1> QED BY <1>1
+
+THEOREM AdmitHiddenPacketPreservesNonIngressType ==
+  \A recipient \in ValidatorIds, source \in AsyncIngressSources:
+    AsyncTypeInvariant /\ AdmitHiddenPacket(recipient, source)
+      => /\ AsyncRuntimeTypeInvariant'
+         /\ AsyncIoTypeInvariant'
+         /\ AsyncDeferredTypeInvariant'
+         /\ AsyncTransportTypeInvariant'
+PROOF
+  <1>1. ASSUME NEW recipient \in ValidatorIds,
+                NEW source \in AsyncIngressSources,
+                AsyncTypeInvariant,
+                AdmitHiddenPacket(recipient, source)
+         PROVE /\ AsyncRuntimeTypeInvariant'
+               /\ AsyncIoTypeInvariant'
+               /\ AsyncDeferredTypeInvariant'
+               /\ AsyncTransportTypeInvariant'
+    <2>1. /\ AsyncRuntimeScalarTypeInvariant
+           /\ AsyncCausalTypeInvariant
+           /\ AsyncIoTopologyTypeInvariant
+           /\ AsyncIoContentTypeInvariant
+           /\ AsyncIoCapacityTypeInvariant
+           /\ AsyncDeferredTopologyTypeInvariant
+           /\ AsyncDeferredContentTypeInvariant
+           /\ AsyncTransportClockTypeInvariant
+           /\ AsyncTransportHistoryTypeInvariant
+           /\ AsyncPacketContentTypeInvariant
+           /\ AsyncHeldChunksTypeInvariant
+      BY <1>1
+         DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+             AsyncRuntimeTypeInvariant, AsyncIoTypeInvariant,
+             AsyncDeferredTypeInvariant, AsyncTransportTypeInvariant,
+             AsyncTransportContentTypeInvariant
+    <2>2. /\ UNCHANGED AsyncRuntimeScalarTypeVars
+           /\ UNCHANGED asyncCausalQueues
+           /\ UNCHANGED AsyncIoTopologyTypeVars
+           /\ UNCHANGED AsyncIoContentTypeVars
+           /\ UNCHANGED AsyncIoCapacityTypeVars
+           /\ UNCHANGED AsyncDeferredTopologyTypeVars
+           /\ UNCHANGED <<asyncDeferredCompletionQueues,
+                          asyncDeferredProgressQueues,
+                          asyncDeferredNormalQueues>>
+           /\ UNCHANGED AsyncTransportClockTypeVars
+           /\ UNCHANGED AsyncTransportHistoryTypeVars
+           /\ UNCHANGED asyncHeldChunks
+      BY <1>1, Isa
+         DEF AdmitHiddenPacket, AsyncRuntimeScalarTypeVars,
+             AsyncIoTopologyTypeVars, AsyncIoContentTypeVars,
+             AsyncIoCapacityTypeVars, AsyncDeferredVars,
+             AsyncDeferredTopologyTypeVars, AsyncTransportClockTypeVars,
+             AsyncTransportHistoryTypeVars, LeaveCausalQueues,
+             AsyncSchedulerVars, vars
+    <2>3. /\ AsyncRuntimeScalarTypeInvariant'
+           /\ AsyncCausalTypeInvariant'
+           /\ AsyncIoTopologyTypeInvariant'
+           /\ AsyncIoContentTypeInvariant'
+           /\ AsyncIoCapacityTypeInvariant'
+           /\ AsyncDeferredTopologyTypeInvariant'
+           /\ AsyncDeferredContentTypeInvariant'
+           /\ AsyncTransportClockTypeInvariant'
+           /\ AsyncTransportHistoryTypeInvariant'
+           /\ AsyncHeldChunksTypeInvariant'
+      BY <2>1, <2>2, AsyncRuntimeScalarTypeStutter,
+         AsyncCausalTypeStutter, AsyncIoTopologyTypeStutter,
+         AsyncIoContentTypeStutter, AsyncIoCapacityTypeStutter,
+         AsyncDeferredTopologyTypeStutter,
+         AsyncDeferredContentTypeStutter,
+         AsyncTransportClockTypeStutter,
+         AsyncTransportHistoryTypeStutter, AsyncHeldChunksTypeStutter
+    <2>4. asyncTransport' \subseteq asyncTransport
+      BY <1>1, Isa DEF AdmitHiddenPacket
+    <2>5. /\ IsFiniteSet(asyncTransport')
+           /\ \A packet \in asyncTransport': AsyncPacketTyped(packet)
+      BY <2>1, <2>4, FS_Subset, SMT
+         DEF AsyncPacketContentTypeInvariant
+    <2>6. AsyncPacketContentTypeInvariant'
+      BY <2>5 DEF AsyncPacketContentTypeInvariant
+    <2> QED BY <2>3, <2>6
+         DEF AsyncRuntimeTypeInvariant, AsyncIoTypeInvariant,
+             AsyncDeferredTypeInvariant, AsyncTransportTypeInvariant,
+             AsyncTransportContentTypeInvariant
+  <1> QED BY <1>1
+
+THEOREM AdmitHiddenPacketPreservesIngressContentType ==
+  \A recipient \in ValidatorIds, source \in AsyncIngressSources:
+    AsyncTypeInvariant /\ AdmitHiddenPacket(recipient, source)
+      => AsyncIngressContentTypeInvariant'
+PROOF
+  <1>1. ASSUME NEW recipient \in ValidatorIds,
+                NEW source \in AsyncIngressSources,
+                AsyncTypeInvariant,
+                AdmitHiddenPacket(recipient, source)
+         PROVE AsyncIngressContentTypeInvariant'
+    <2>1. /\ AsyncPacketContentTypeInvariant
+           /\ AsyncIngressTopologyTypeInvariant
+           /\ AsyncIngressContentTypeInvariant
+           /\ DueSourcePackets(recipient, source) # {}
+      BY <1>1
+         DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+             AsyncTransportTypeInvariant, AsyncTransportContentTypeInvariant,
+             AsyncIngressTypeInvariant, AdmitHiddenPacket
+    <2>2. /\ AsyncPacketTyped(
+                    OldestDueSourcePacket(recipient, source))
+           /\ AsyncItemTyped(
+                OldestDueSourcePacket(recipient, source).item)
+      BY <1>1, <2>1, OldestDueSourcePacketFacts
+         DEF AsyncPacketTyped
+    <2>3. ASSUME NEW otherRecipient \in ValidatorIds
+           PROVE \A otherSource \in AsyncIngressSources:
+                   /\ asyncIngressLanes'[otherRecipient][otherSource]
+                        \in Seq(Range(
+                             asyncIngressLanes'[otherRecipient][otherSource]))
+                   /\ DOMAIN asyncIngressLanes'[otherRecipient][otherSource] =
+                        1..Len(asyncIngressLanes'[otherRecipient][otherSource])
+                   /\ \A index \in
+                          1..Len(
+                            asyncIngressLanes'[otherRecipient][otherSource]):
+                        AsyncItemTyped(
+                          asyncIngressLanes'[otherRecipient][otherSource][index])
+      <3>1. ASSUME NEW otherSource \in AsyncIngressSources
+             PROVE /\ asyncIngressLanes'[otherRecipient][otherSource]
+                          \in Seq(Range(
+                               asyncIngressLanes'[otherRecipient][otherSource]))
+                   /\ DOMAIN asyncIngressLanes'[otherRecipient][otherSource] =
+                          1..Len(
+                            asyncIngressLanes'[otherRecipient][otherSource])
+                   /\ \A index \in
+                            1..Len(
+                              asyncIngressLanes'[otherRecipient][otherSource]):
+                          AsyncItemTyped(
+                            asyncIngressLanes'[otherRecipient][otherSource][index])
+        <4>1. CASE otherRecipient = recipient /\ otherSource = source
+          <5>1. asyncIngressLanes'[otherRecipient][otherSource] =
+                   Append(IngressLane(otherRecipient, otherSource),
+                          OldestDueSourcePacket(recipient, source).item)
+            BY <1>1, <2>1, <3>1, <4>1, Isa
+               DEF AdmitHiddenPacket, IngressLane
+          <5>2. /\ IngressLane(otherRecipient, otherSource)
+                         \in Seq(Range(
+                              IngressLane(otherRecipient, otherSource)))
+                 /\ DOMAIN IngressLane(otherRecipient, otherSource) =
+                      1..Len(IngressLane(otherRecipient, otherSource))
+                 /\ \A index \in
+                        1..Len(IngressLane(otherRecipient, otherSource)):
+                      AsyncItemTyped(
+                        IngressLane(otherRecipient, otherSource)[index])
+            BY <2>1, <3>1
+               DEF AsyncIngressContentTypeInvariant, IngressLaneDepth
+          <5>3. AsyncItemTyped(
+                   OldestDueSourcePacket(recipient, source).item)
+            BY <2>2
+          <5>4. /\ Append(IngressLane(otherRecipient, otherSource),
+                              OldestDueSourcePacket(recipient, source).item)
+                           \in Seq(Range(
+                                Append(IngressLane(otherRecipient, otherSource),
+                                  OldestDueSourcePacket(recipient, source).item)))
+                 /\ DOMAIN Append(IngressLane(otherRecipient, otherSource),
+                                   OldestDueSourcePacket(recipient, source).item)
+                        = 1..Len(
+                            Append(IngressLane(otherRecipient, otherSource),
+                              OldestDueSourcePacket(recipient, source).item))
+                 /\ \A index \in
+                        1..Len(Append(
+                          IngressLane(otherRecipient, otherSource),
+                          OldestDueSourcePacket(recipient, source).item)):
+                      AsyncItemTyped(
+                        Append(IngressLane(otherRecipient, otherSource),
+                          OldestDueSourcePacket(recipient, source).item)[index])
+            BY <5>2, <5>3, TypedIngressAppendPreservesSequence
+          <5> QED BY <5>1, <5>4 DEF IngressLaneDepth
+        <4>2. CASE ~(otherRecipient = recipient /\ otherSource = source)
+          <5>1. asyncIngressLanes'[otherRecipient][otherSource] =
+                   IngressLane(otherRecipient, otherSource)
+            BY <1>1, <2>1, <3>1, <4>2, Isa
+               DEF AdmitHiddenPacket, IngressLane
+          <5> QED BY <2>1, <3>1, <5>1
+               DEF AsyncIngressContentTypeInvariant, IngressLaneDepth
+        <4> QED BY <4>1, <4>2
+      <3> QED BY <3>1
+    <2> QED BY <2>3
+         DEF AsyncIngressContentTypeInvariant,
+             IngressLaneDepth, IngressLane
+  <1> QED BY <1>1
+
+AsyncIngressPairIndicesFor(lanes, recipient) ==
+  {pair \in AsyncIngressSources \X (1..AsyncIngressCapacity):
+     pair[2] <= Len(lanes[recipient][pair[1]])}
+
+AsyncIngressDepthFor(lanes, recipient) ==
+  Cardinality(AsyncIngressPairIndicesFor(lanes, recipient))
+
+AsyncIngressZeroSourcesFor(lanes, recipient) ==
+  {source \in AsyncIngressSources:
+     Len(lanes[recipient][source]) = 0}
+
+AsyncIngressNonemptySourcesFor(lanes, recipient) ==
+  {source \in AsyncIngressSources:
+     Len(lanes[recipient][source]) > 0}
+
+THEOREM NestedIngressAppendLaneFacts ==
+  \A lanes, item:
+   \A recipient \in ValidatorIds, source \in AsyncIngressSources:
+    /\ DOMAIN lanes = ValidatorIds
+    /\ \A otherRecipient \in ValidatorIds:
+         /\ DOMAIN lanes[otherRecipient] = AsyncIngressSources
+         /\ \A otherSource \in AsyncIngressSources:
+              lanes[otherRecipient][otherSource]
+                \in Seq(Range(lanes[otherRecipient][otherSource]))
+    => LET next ==
+             [lanes EXCEPT ![recipient][source] = Append(@, item)]
+       IN /\ DOMAIN next = ValidatorIds
+          /\ \A otherRecipient \in ValidatorIds:
+               /\ DOMAIN next[otherRecipient] = AsyncIngressSources
+               /\ \A otherSource \in AsyncIngressSources:
+                    /\ IF otherRecipient = recipient
+                           /\ otherSource = source
+                       THEN next[otherRecipient][otherSource] =
+                              Append(lanes[otherRecipient][otherSource], item)
+                       ELSE next[otherRecipient][otherSource] =
+                              lanes[otherRecipient][otherSource]
+                    /\ Len(next[otherRecipient][otherSource]) =
+                         IF otherRecipient = recipient
+                              /\ otherSource = source
+                         THEN Len(lanes[otherRecipient][otherSource]) + 1
+                         ELSE Len(lanes[otherRecipient][otherSource])
+PROOF
+  <1>1. ASSUME NEW lanes,
+                NEW recipient \in ValidatorIds,
+                NEW source \in AsyncIngressSources,
+                NEW item,
+                DOMAIN lanes = ValidatorIds,
+                \A otherRecipient \in ValidatorIds:
+                  /\ DOMAIN lanes[otherRecipient] = AsyncIngressSources
+                  /\ \A otherSource \in AsyncIngressSources:
+                       lanes[otherRecipient][otherSource]
+                         \in Seq(Range(lanes[otherRecipient][otherSource]))
+         PROVE LET next ==
+                       [lanes EXCEPT
+                          ![recipient][source] = Append(@, item)]
+               IN /\ DOMAIN next = ValidatorIds
+                  /\ \A otherRecipient \in ValidatorIds:
+                       /\ DOMAIN next[otherRecipient] = AsyncIngressSources
+                       /\ \A otherSource \in AsyncIngressSources:
+                            /\ IF otherRecipient = recipient
+                                   /\ otherSource = source
+                               THEN next[otherRecipient][otherSource] =
+                                      Append(
+                                        lanes[otherRecipient][otherSource],
+                                        item)
+                               ELSE next[otherRecipient][otherSource] =
+                                      lanes[otherRecipient][otherSource]
+                            /\ Len(next[otherRecipient][otherSource]) =
+                                 IF otherRecipient = recipient
+                                      /\ otherSource = source
+                                 THEN Len(
+                                        lanes[otherRecipient][otherSource]) + 1
+                                 ELSE Len(
+                                        lanes[otherRecipient][otherSource])
+    <2> DEFINE next ==
+           [lanes EXCEPT ![recipient][source] = Append(@, item)]
+    <2>1. \A otherRecipient \in ValidatorIds,
+                otherSource \in AsyncIngressSources:
+             Len(lanes[otherRecipient][otherSource]) \in Nat
+      BY <1>1, LenProperties
+    <2>2. \A otherRecipient \in ValidatorIds,
+                otherSource \in AsyncIngressSources:
+             Len(Append(lanes[otherRecipient][otherSource], item)) =
+               Len(lanes[otherRecipient][otherSource]) + 1
+      BY <1>1, AppendSequenceFacts
+    <2>3. DOMAIN next = ValidatorIds
+      BY <1>1, Isa DEF next
+    <2>4. \A otherRecipient \in ValidatorIds:
+             DOMAIN next[otherRecipient] = AsyncIngressSources
+      <3>1. ASSUME NEW otherRecipient \in ValidatorIds
+             PROVE DOMAIN next[otherRecipient] = AsyncIngressSources
+        <4>1. CASE otherRecipient = recipient
+          <5>1. next[otherRecipient] =
+                   [lanes[otherRecipient] EXCEPT
+                      ![source] = Append(@, item)]
+            BY <1>1, <3>1, <4>1, Isa DEF next
+          <5> QED BY <1>1, <3>1, <5>1, Isa
+        <4>2. CASE otherRecipient # recipient
+          <5>1. next[otherRecipient] = lanes[otherRecipient]
+            BY <1>1, <3>1, <4>2, Isa DEF next
+          <5> QED BY <1>1, <3>1, <5>1
+        <4> QED BY <4>1, <4>2
+      <3> QED BY <3>1
+    <2>5. \A otherRecipient \in ValidatorIds,
+                otherSource \in AsyncIngressSources:
+             IF otherRecipient = recipient /\ otherSource = source
+             THEN next[otherRecipient][otherSource] =
+                    Append(lanes[otherRecipient][otherSource], item)
+             ELSE next[otherRecipient][otherSource] =
+                    lanes[otherRecipient][otherSource]
+      <3>1. ASSUME NEW otherRecipient \in ValidatorIds,
+                     NEW otherSource \in AsyncIngressSources
+             PROVE IF otherRecipient = recipient /\ otherSource = source
+                   THEN next[otherRecipient][otherSource] =
+                          Append(lanes[otherRecipient][otherSource], item)
+                   ELSE next[otherRecipient][otherSource] =
+                          lanes[otherRecipient][otherSource]
+        <4>1. CASE otherRecipient = recipient /\ otherSource = source
+          BY <1>1, <3>1, <4>1, Isa DEF next
+        <4>2. CASE ~(otherRecipient = recipient /\ otherSource = source)
+          <5>1. CASE otherRecipient # recipient
+            BY <1>1, <3>1, <5>1, Isa DEF next
+          <5>2. CASE otherRecipient = recipient /\ otherSource # source
+            BY <1>1, <3>1, <5>2, Isa DEF next
+          <5> QED BY <4>2, <5>1, <5>2
+        <4> QED BY <4>1, <4>2
+      <3> QED BY <3>1
+    <2>6. \A otherRecipient \in ValidatorIds,
+                otherSource \in AsyncIngressSources:
+             Len(next[otherRecipient][otherSource]) =
+               IF otherRecipient = recipient /\ otherSource = source
+               THEN Len(lanes[otherRecipient][otherSource]) + 1
+               ELSE Len(lanes[otherRecipient][otherSource])
+      <3>1. ASSUME NEW otherRecipient \in ValidatorIds,
+                     NEW otherSource \in AsyncIngressSources
+             PROVE Len(next[otherRecipient][otherSource]) =
+                     IF otherRecipient = recipient /\ otherSource = source
+                     THEN Len(lanes[otherRecipient][otherSource]) + 1
+                     ELSE Len(lanes[otherRecipient][otherSource])
+        <4>1. CASE otherRecipient = recipient /\ otherSource = source
+          BY <2>2, <2>5, <3>1, <4>1
+        <4>2. CASE ~(otherRecipient = recipient /\ otherSource = source)
+          BY <2>5, <3>1, <4>2
+        <4> QED BY <4>1, <4>2
+      <3> QED BY <3>1
+    <2> QED BY <2>3, <2>4, <2>5, <2>6 DEF next
+  <1> QED BY <1>1
+
+THEOREM NestedIngressAppendSourceSetFacts ==
+  \A lanes, item:
+   \A recipient \in ValidatorIds, source \in AsyncIngressSources:
+    /\ DOMAIN lanes = ValidatorIds
+    /\ \A otherRecipient \in ValidatorIds:
+         /\ DOMAIN lanes[otherRecipient] = AsyncIngressSources
+         /\ \A otherSource \in AsyncIngressSources:
+              lanes[otherRecipient][otherSource]
+                \in Seq(Range(lanes[otherRecipient][otherSource]))
+    => LET next ==
+             [lanes EXCEPT ![recipient][source] = Append(@, item)]
+       IN /\ AsyncIngressNonemptySourcesFor(next, recipient) =
+                AsyncIngressNonemptySourcesFor(lanes, recipient)
+                  \cup {source}
+          /\ AsyncIngressZeroSourcesFor(next, recipient) =
+               {other \in AsyncIngressSources \ {source}:
+                  Len(lanes[recipient][other]) = 0}
+          /\ \A otherRecipient \in ValidatorIds \ {recipient}:
+               /\ AsyncIngressNonemptySourcesFor(next, otherRecipient) =
+                    AsyncIngressNonemptySourcesFor(lanes, otherRecipient)
+               /\ AsyncIngressZeroSourcesFor(next, otherRecipient) =
+                    AsyncIngressZeroSourcesFor(lanes, otherRecipient)
+PROOF
+  <1>1. ASSUME NEW lanes,
+                NEW recipient \in ValidatorIds,
+                NEW source \in AsyncIngressSources,
+                NEW item,
+                DOMAIN lanes = ValidatorIds,
+                \A otherRecipient \in ValidatorIds:
+                  /\ DOMAIN lanes[otherRecipient] = AsyncIngressSources
+                  /\ \A otherSource \in AsyncIngressSources:
+                       lanes[otherRecipient][otherSource]
+                         \in Seq(Range(lanes[otherRecipient][otherSource]))
+         PROVE LET next ==
+                       [lanes EXCEPT
+                          ![recipient][source] = Append(@, item)]
+               IN /\ AsyncIngressNonemptySourcesFor(next, recipient) =
+                        AsyncIngressNonemptySourcesFor(lanes, recipient)
+                          \cup {source}
+                  /\ AsyncIngressZeroSourcesFor(next, recipient) =
+                       {other \in AsyncIngressSources \ {source}:
+                          Len(lanes[recipient][other]) = 0}
+                  /\ \A otherRecipient \in
+                           ValidatorIds \ {recipient}:
+                       /\ AsyncIngressNonemptySourcesFor(
+                            next, otherRecipient) =
+                            AsyncIngressNonemptySourcesFor(
+                              lanes, otherRecipient)
+                       /\ AsyncIngressZeroSourcesFor(next, otherRecipient) =
+                            AsyncIngressZeroSourcesFor(
+                              lanes, otherRecipient)
+    <2>1. LET next ==
+                   [lanes EXCEPT
+                      ![recipient][source] = Append(@, item)]
+           IN /\ \A otherSource \in AsyncIngressSources:
+                    /\ Len(next[recipient][otherSource]) =
+                         IF otherSource = source
+                         THEN Len(lanes[recipient][otherSource]) + 1
+                         ELSE Len(lanes[recipient][otherSource])
+                 /\ \A otherRecipient \in ValidatorIds \ {recipient},
+                       otherSource \in AsyncIngressSources:
+                      Len(next[otherRecipient][otherSource]) =
+                        Len(lanes[otherRecipient][otherSource])
+      BY <1>1, NestedIngressAppendLaneFacts, SMT
+    <2>2. \A otherSource \in AsyncIngressSources:
+             Len(lanes[recipient][otherSource]) \in Nat
+      BY <1>1, LenProperties
+    <2> QED BY <1>1, <2>1, <2>2, SMT
+         DEF AsyncIngressNonemptySourcesFor,
+             AsyncIngressZeroSourcesFor
+  <1> QED BY <1>1
+
+THEOREM NestedIngressAppendPairSetFacts ==
+  \A lanes, item:
+   \A recipient \in ValidatorIds, source \in AsyncIngressSources:
+    /\ AsyncIngressCapacity \in Nat
+    /\ DOMAIN lanes = ValidatorIds
+    /\ \A otherRecipient \in ValidatorIds:
+         /\ DOMAIN lanes[otherRecipient] = AsyncIngressSources
+         /\ \A otherSource \in AsyncIngressSources:
+              lanes[otherRecipient][otherSource]
+                \in Seq(Range(lanes[otherRecipient][otherSource]))
+    => LET next ==
+             [lanes EXCEPT ![recipient][source] = Append(@, item)]
+           nextIndex == <<source, Len(lanes[recipient][source]) + 1>>
+       IN /\ AsyncIngressPairIndicesFor(next, recipient) =
+                IF Len(lanes[recipient][source]) < AsyncIngressCapacity
+                THEN AsyncIngressPairIndicesFor(lanes, recipient)
+                       \cup {nextIndex}
+                ELSE AsyncIngressPairIndicesFor(lanes, recipient)
+          /\ \A otherRecipient \in ValidatorIds \ {recipient}:
+               AsyncIngressPairIndicesFor(next, otherRecipient) =
+                 AsyncIngressPairIndicesFor(lanes, otherRecipient)
+PROOF
+  <1>1. ASSUME NEW lanes,
+                NEW recipient \in ValidatorIds,
+                NEW source \in AsyncIngressSources,
+                NEW item,
+                AsyncIngressCapacity \in Nat,
+                DOMAIN lanes = ValidatorIds,
+                \A otherRecipient \in ValidatorIds:
+                  /\ DOMAIN lanes[otherRecipient] = AsyncIngressSources
+                  /\ \A otherSource \in AsyncIngressSources:
+                       lanes[otherRecipient][otherSource]
+                         \in Seq(Range(lanes[otherRecipient][otherSource]))
+         PROVE LET next ==
+                       [lanes EXCEPT
+                          ![recipient][source] = Append(@, item)]
+                     nextIndex ==
+                       <<source, Len(lanes[recipient][source]) + 1>>
+               IN /\ AsyncIngressPairIndicesFor(next, recipient) =
+                        IF Len(lanes[recipient][source]) <
+                             AsyncIngressCapacity
+                        THEN AsyncIngressPairIndicesFor(lanes, recipient)
+                               \cup {nextIndex}
+                        ELSE AsyncIngressPairIndicesFor(lanes, recipient)
+                  /\ \A otherRecipient \in
+                           ValidatorIds \ {recipient}:
+                       AsyncIngressPairIndicesFor(next, otherRecipient) =
+                         AsyncIngressPairIndicesFor(lanes, otherRecipient)
+    <2>1. LET next ==
+                   [lanes EXCEPT
+                      ![recipient][source] = Append(@, item)]
+           IN /\ \A otherSource \in AsyncIngressSources:
+                    /\ Len(next[recipient][otherSource]) =
+                         IF otherSource = source
+                         THEN Len(lanes[recipient][otherSource]) + 1
+                         ELSE Len(lanes[recipient][otherSource])
+                 /\ \A otherRecipient \in ValidatorIds \ {recipient},
+                       otherSource \in AsyncIngressSources:
+                      Len(next[otherRecipient][otherSource]) =
+                        Len(lanes[otherRecipient][otherSource])
+      BY <1>1, NestedIngressAppendLaneFacts, SMT
+    <2>2. \A otherSource \in AsyncIngressSources:
+             Len(lanes[recipient][otherSource]) \in Nat
+      BY <1>1, LenProperties
+    <2> QED BY <1>1, <2>1, <2>2, SMT
+         DEF AsyncIngressPairIndicesFor
+  <1> QED BY <1>1
+
+THEOREM AdmitHiddenPacketPreservesIngressTopologyType ==
+  \A recipient \in ValidatorIds, source \in AsyncIngressSources:
+    AsyncTypeInvariant /\ AdmitHiddenPacket(recipient, source)
+      => AsyncIngressTopologyTypeInvariant'
+PROOF
+  <1>1. ASSUME NEW recipient \in ValidatorIds,
+                NEW source \in AsyncIngressSources,
+                AsyncTypeInvariant,
+                AdmitHiddenPacket(recipient, source)
+         PROVE AsyncIngressTopologyTypeInvariant'
+    <2>1. /\ AsyncConfiguration
+           /\ ModelConfiguration
+           /\ AsyncIngressTopologyTypeInvariant
+           /\ AsyncIngressContentTypeInvariant
+      BY <1>1
+         DEF AsyncTypeInvariant, TypeInvariant,
+             AsyncSchedulerTypeInvariant, AsyncRuntimeTypeInvariant,
+             AsyncRuntimeScalarTypeInvariant, AsyncIngressTypeInvariant
+    <2>2. /\ DOMAIN asyncIngressLanes' = ValidatorIds
+           /\ \A otherRecipient \in ValidatorIds:
+                DOMAIN asyncIngressLanes'[otherRecipient] =
+                  AsyncIngressSources
+      BY <1>1, <2>1, NestedIngressAppendLaneFacts
+         DEF AdmitHiddenPacket, AsyncIngressTopologyTypeInvariant,
+             AsyncIngressContentTypeInvariant, IngressLane
+    <2>3. /\ AsyncIngressNonemptySourcesFor(
+                    asyncIngressLanes', recipient) =
+                  AsyncIngressNonemptySourcesFor(
+                    asyncIngressLanes, recipient) \cup {source}
+           /\ \A otherRecipient \in ValidatorIds \ {recipient}:
+                AsyncIngressNonemptySourcesFor(
+                  asyncIngressLanes', otherRecipient) =
+                AsyncIngressNonemptySourcesFor(
+                  asyncIngressLanes, otherRecipient)
+      BY <1>1, <2>1, NestedIngressAppendSourceSetFacts
+         DEF AdmitHiddenPacket, AsyncIngressTopologyTypeInvariant,
+             AsyncIngressContentTypeInvariant, IngressLane
+    <2>4. DOMAIN asyncIngressReady' = ValidatorIds
+      BY <1>1, <2>1, Isa
+         DEF AdmitHiddenPacket, AsyncIngressTopologyTypeInvariant
+    <2>5. IsFiniteSet(AsyncIngressSources)
+      BY <2>1, AsyncIngressSourcesAreFinite
+    <2>6. ASSUME NEW otherRecipient \in ValidatorIds
+           PROVE /\ DOMAIN asyncIngressReady'[otherRecipient] =
+                        1..Len(asyncIngressReady'[otherRecipient])
+                 /\ asyncIngressReady'[otherRecipient]
+                      \in Seq(Range(asyncIngressReady'[otherRecipient]))
+                 /\ SequenceSet(asyncIngressReady'[otherRecipient])
+                      \subseteq AsyncIngressSources
+                 /\ Len(asyncIngressReady'[otherRecipient]) =
+                      Cardinality(
+                        SequenceSet(asyncIngressReady'[otherRecipient]))
+                 /\ SequenceSet(asyncIngressReady'[otherRecipient]) =
+                      AsyncIngressNonemptySourcesFor(
+                        asyncIngressLanes', otherRecipient)
+      <3>1. /\ DOMAIN asyncIngressReady[otherRecipient] =
+                       1..Len(asyncIngressReady[otherRecipient])
+              /\ asyncIngressReady[otherRecipient]
+                   \in Seq(Range(asyncIngressReady[otherRecipient]))
+              /\ SequenceSet(asyncIngressReady[otherRecipient])
+                   \subseteq AsyncIngressSources
+              /\ Len(asyncIngressReady[otherRecipient]) =
+                   Cardinality(
+                     SequenceSet(asyncIngressReady[otherRecipient]))
+              /\ SequenceSet(asyncIngressReady[otherRecipient]) =
+                   AsyncIngressNonemptySourcesFor(
+                     asyncIngressLanes, otherRecipient)
+        BY <2>1, <2>6
+           DEF AsyncIngressTopologyTypeInvariant,
+               AsyncIngressNonemptySourcesFor,
+               IngressLaneDepth, IngressLane
+      <3>2. CASE otherRecipient = recipient
+        <4>1. CASE Len(IngressLane(recipient, source)) = 0
+          <5>1. asyncIngressReady'[otherRecipient] =
+                   Append(asyncIngressReady[otherRecipient], source)
+            BY <1>1, <2>6, <3>2, <4>1
+               DEF AdmitHiddenPacket
+          <5>2. /\ DOMAIN Append(asyncIngressReady[otherRecipient], source) =
+                         1..(Len(asyncIngressReady[otherRecipient]) + 1)
+                 /\ Len(Append(asyncIngressReady[otherRecipient], source)) =
+                         Len(asyncIngressReady[otherRecipient]) + 1
+                 /\ Append(asyncIngressReady[otherRecipient], source)
+                         \in Seq(Range(asyncIngressReady[otherRecipient])
+                                  \cup {source})
+            BY <3>1, AppendSequenceFacts
+          <5>3. /\ Append(asyncIngressReady[otherRecipient], source)
+                           \in Seq(Range(
+                                Append(asyncIngressReady[otherRecipient],
+                                       source)))
+                 /\ DOMAIN Append(asyncIngressReady[otherRecipient], source) =
+                           1..Len(Append(
+                                asyncIngressReady[otherRecipient], source))
+                 /\ SequenceSet(
+                        Append(asyncIngressReady[otherRecipient], source)) =
+                           SequenceSet(asyncIngressReady[otherRecipient])
+                             \cup {source}
+            BY <3>1, <5>2, SequenceSetAfterAppend,
+               SeqOfRange, LenProperties, Isa
+          <5>4. source \notin
+                   SequenceSet(asyncIngressReady[otherRecipient])
+            BY <3>1, <3>2, <4>1, SMT
+               DEF AsyncIngressNonemptySourcesFor, IngressLane
+          <5>5. IsFiniteSet(
+                   SequenceSet(asyncIngressReady[otherRecipient]))
+            BY <2>5, <3>1, FS_Subset
+          <5>6. Cardinality(
+                   SequenceSet(asyncIngressReady[otherRecipient])
+                     \cup {source}) =
+                   Cardinality(
+                     SequenceSet(asyncIngressReady[otherRecipient])) + 1
+            BY <5>4, <5>5, FS_AddElement
+          <5>7. Len(Append(asyncIngressReady[otherRecipient], source)) =
+                   Cardinality(SequenceSet(
+                     Append(asyncIngressReady[otherRecipient], source)))
+            BY <3>1, <5>2, <5>3, <5>6, SMT
+          <5>8. SequenceSet(
+                   Append(asyncIngressReady[otherRecipient], source)) =
+                 AsyncIngressNonemptySourcesFor(
+                   asyncIngressLanes', otherRecipient)
+            BY <2>3, <2>6, <3>1, <3>2, <5>3
+          <5>9. SequenceSet(
+                   Append(asyncIngressReady[otherRecipient], source))
+                     \subseteq AsyncIngressSources
+            BY <1>1, <3>1, <5>3, Isa
+          <5> QED BY <5>1, <5>2, <5>3, <5>7, <5>8, <5>9
+        <4>2. CASE Len(IngressLane(recipient, source)) # 0
+          <5>1. Len(IngressLane(recipient, source)) \in Nat
+            BY <2>1, <1>1, LenProperties
+               DEF AsyncIngressContentTypeInvariant, IngressLane
+          <5>2. source \in
+                   AsyncIngressNonemptySourcesFor(
+                     asyncIngressLanes, otherRecipient)
+            BY <2>6, <3>2, <4>2, <5>1, SMT
+               DEF AsyncIngressNonemptySourcesFor, IngressLane
+          <5>3. AsyncIngressNonemptySourcesFor(
+                    asyncIngressLanes, otherRecipient) \cup {source} =
+                  AsyncIngressNonemptySourcesFor(
+                    asyncIngressLanes, otherRecipient)
+            BY <5>2, Isa
+          <5>4. /\ asyncIngressReady'[otherRecipient] =
+                        asyncIngressReady[otherRecipient]
+                 /\ AsyncIngressNonemptySourcesFor(
+                       asyncIngressLanes', otherRecipient) =
+                        AsyncIngressNonemptySourcesFor(
+                          asyncIngressLanes, otherRecipient)
+            BY <1>1, <2>3, <2>6, <3>2, <4>2, <5>3
+               DEF AdmitHiddenPacket
+          <5> QED BY <3>1, <5>4
+        <4> QED BY <4>1, <4>2
+      <3>3. CASE otherRecipient # recipient
+        <4>1. /\ asyncIngressReady'[otherRecipient] =
+                        asyncIngressReady[otherRecipient]
+               /\ AsyncIngressNonemptySourcesFor(
+                     asyncIngressLanes', otherRecipient) =
+                        AsyncIngressNonemptySourcesFor(
+                          asyncIngressLanes, otherRecipient)
+          BY <1>1, <2>3, <2>6, <3>3, Isa
+             DEF AdmitHiddenPacket,
+                 AsyncIngressTopologyTypeInvariant
+        <4> QED BY <3>1, <4>1
+      <3> QED BY <3>2, <3>3
+    <2> QED BY <2>2, <2>4, <2>6
+         DEF AsyncIngressTopologyTypeInvariant,
+             AsyncIngressNonemptySourcesFor,
+             IngressLaneDepth, IngressLane
+  <1> QED BY <1>1
+
+THEOREM NaturalReservedCapacityStep ==
+  \A used \in Nat, reserved \in Nat, capacity \in Nat:
+    used < capacity - reserved
+      => used + 1 + reserved <= capacity
+BY SMT
+
+THEOREM NaturalSumBoundProjectsLeft ==
+  \A left \in Nat, right \in Nat, capacity \in Nat:
+    left + right <= capacity => left <= capacity
+BY SMT
+
+THEOREM IfElseWhenFalse ==
+  \A condition, thenValue, elseValue:
+    ~condition => (IF condition THEN thenValue ELSE elseValue) = elseValue
+BY SMT
+
+THEOREM NaturalGreaterOrEqualIsNotLess ==
+  \A left \in Nat, right \in Nat:
+    left >= right => ~(left < right)
+BY SMT
+
+THEOREM NextIngressIndexIsFresh ==
+  \A lanes, recipient, source:
+    lanes[recipient][source]
+      \in Seq(Range(lanes[recipient][source]))
+      => <<source, Len(lanes[recipient][source]) + 1>>
+           \notin AsyncIngressPairIndicesFor(lanes, recipient)
+PROOF
+  <1>1. ASSUME NEW lanes, NEW recipient, NEW source,
+                lanes[recipient][source]
+                  \in Seq(Range(lanes[recipient][source]))
+         PROVE <<source, Len(lanes[recipient][source]) + 1>>
+                 \notin AsyncIngressPairIndicesFor(lanes, recipient)
+    <2>1. Len(lanes[recipient][source]) \in Nat
+      BY <1>1, LenProperties
+    <2> QED BY <2>1, SMT DEF AsyncIngressPairIndicesFor
+  <1> QED BY <1>1
+
+THEOREM AdmitHiddenPacketPreservesIngressCapacityType ==
+  \A recipient \in ValidatorIds, source \in AsyncIngressSources:
+    AsyncTypeInvariant /\ AdmitHiddenPacket(recipient, source)
+      => AsyncIngressCapacityTypeInvariant'
+PROOF
+  <1>1. ASSUME NEW recipient \in ValidatorIds,
+                NEW source \in AsyncIngressSources,
+                AsyncTypeInvariant,
+                AdmitHiddenPacket(recipient, source)
+         PROVE AsyncIngressCapacityTypeInvariant'
+    <2>1. /\ AsyncConfiguration
+           /\ ModelConfiguration
+           /\ AsyncIngressTopologyTypeInvariant
+           /\ AsyncIngressCapacityTypeInvariant
+           /\ AsyncIngressContentTypeInvariant
+           /\ AsyncPacketContentTypeInvariant
+           /\ DueSourcePackets(recipient, source) # {}
+      BY <1>1
+         DEF AsyncTypeInvariant, TypeInvariant,
+             AsyncSchedulerTypeInvariant, AsyncRuntimeTypeInvariant,
+             AsyncRuntimeScalarTypeInvariant,
+             AsyncTransportTypeInvariant, AsyncTransportContentTypeInvariant,
+             AsyncIngressTypeInvariant, AdmitHiddenPacket
+    <2>2. LET packet == OldestDueSourcePacket(recipient, source)
+           IN /\ packet.item.envelope.recipient = recipient
+              /\ packet.item.source = source
+      BY <1>1, <2>1, OldestDueSourcePacketFacts
+    <2>3. IngressDepth(recipient) <
+             IngressUsableCapacity(recipient, source)
+      BY <1>1, <2>2 DEF AdmitHiddenPacket, CanAdmitIngressItem
+    <2>4. /\ AsyncIngressZeroSourcesFor(
+                    asyncIngressLanes', recipient) =
+                  EmptyOtherIngressLanes(recipient, source)
+           /\ \A otherRecipient \in ValidatorIds \ {recipient}:
+                AsyncIngressZeroSourcesFor(
+                  asyncIngressLanes', otherRecipient) =
+                AsyncIngressZeroSourcesFor(
+                  asyncIngressLanes, otherRecipient)
+      BY <1>1, <2>1, NestedIngressAppendSourceSetFacts
+         DEF AdmitHiddenPacket, AsyncIngressTopologyTypeInvariant,
+             AsyncIngressContentTypeInvariant,
+             AsyncIngressZeroSourcesFor, EmptyOtherIngressLanes,
+             IngressLaneDepth, IngressLane
+    <2>5. LET nextIndex ==
+                  <<source, IngressLaneDepth(recipient, source) + 1>>
+           IN /\ AsyncIngressPairIndicesFor(
+                       asyncIngressLanes', recipient) =
+                    IF IngressLaneDepth(recipient, source) <
+                         AsyncIngressCapacity
+                    THEN AsyncIngressPairIndicesFor(
+                           asyncIngressLanes, recipient) \cup {nextIndex}
+                    ELSE AsyncIngressPairIndicesFor(
+                           asyncIngressLanes, recipient)
+              /\ \A otherRecipient \in ValidatorIds \ {recipient}:
+                   AsyncIngressPairIndicesFor(
+                     asyncIngressLanes', otherRecipient) =
+                   AsyncIngressPairIndicesFor(
+                     asyncIngressLanes, otherRecipient)
+      BY <1>1, <2>1, NestedIngressAppendPairSetFacts
+         DEF AdmitHiddenPacket, AsyncConfiguration,
+             AsyncIngressTopologyTypeInvariant,
+             AsyncIngressContentTypeInvariant,
+             IngressLaneDepth, IngressLane
+    <2>6. /\ IsFiniteSet(AsyncIngressSources)
+           /\ AsyncIngressCapacity \in Nat \ {0}
+      BY <2>1, AsyncIngressSourcesAreFinite
+         DEF AsyncConfiguration
+    <2>7. /\ IsFiniteSet(1..AsyncIngressCapacity)
+           /\ IsFiniteSet(
+                AsyncIngressSources \X (1..AsyncIngressCapacity))
+      BY <2>6, FS_Interval, FS_Product, SMT
+    <2>8. IsFiniteSet(
+             AsyncIngressPairIndicesFor(asyncIngressLanes, recipient))
+      BY <2>7, FS_Subset DEF AsyncIngressPairIndicesFor
+    <2>9. /\ IsFiniteSet(EmptyOtherIngressLanes(recipient, source))
+           /\ Cardinality(
+                EmptyOtherIngressLanes(recipient, source)) \in Nat
+           /\ Cardinality(
+                AsyncIngressPairIndicesFor(
+                  asyncIngressLanes, recipient)) \in Nat
+      BY <2>6, <2>8, FS_Subset, FS_CardinalityType
+         DEF EmptyOtherIngressLanes
+    <2>10. ASSUME NEW otherRecipient \in ValidatorIds
+            PROVE /\ AsyncIngressDepthFor(
+                         asyncIngressLanes', otherRecipient) <=
+                         AsyncIngressCapacity
+                  /\ AsyncIngressDepthFor(
+                       asyncIngressLanes', otherRecipient)
+                       + Cardinality(
+                           {otherSource \in AsyncIngressSources:
+                              Len(asyncIngressLanes'
+                                    [otherRecipient][otherSource]) = 0})
+                       <= AsyncIngressCapacity
+      <3>1. CASE otherRecipient = recipient
+        <4>1. CASE IngressLaneDepth(recipient, source) <
+                     AsyncIngressCapacity
+          <5>1. LET nextIndex ==
+                        <<source,
+                          IngressLaneDepth(recipient, source) + 1>>
+                 IN /\ nextIndex \notin
+                          AsyncIngressPairIndicesFor(
+                            asyncIngressLanes, recipient)
+                    /\ AsyncIngressPairIndicesFor(
+                         asyncIngressLanes', recipient) =
+                         AsyncIngressPairIndicesFor(
+                           asyncIngressLanes, recipient) \cup {nextIndex}
+            <6>1. <<source,
+                     IngressLaneDepth(recipient, source) + 1>>
+                    \notin AsyncIngressPairIndicesFor(
+                              asyncIngressLanes, recipient)
+              BY <2>1, NextIngressIndexIsFresh
+                 DEF AsyncIngressContentTypeInvariant,
+                     IngressLaneDepth, IngressLane
+            <6>2. AsyncIngressPairIndicesFor(
+                       asyncIngressLanes', recipient) =
+                     AsyncIngressPairIndicesFor(
+                       asyncIngressLanes, recipient)
+                       \cup {<<source,
+                                IngressLaneDepth(recipient, source) + 1>>}
+              BY <2>5, <4>1
+            <6> QED BY <6>1, <6>2
+          <5>2. Cardinality(
+                   AsyncIngressPairIndicesFor(
+                     asyncIngressLanes', recipient)) =
+                 Cardinality(
+                   AsyncIngressPairIndicesFor(
+                     asyncIngressLanes, recipient)) + 1
+            BY <2>8, <5>1, FS_AddElement
+          <5>3. IngressDepth(recipient) =
+                   Cardinality(
+                     AsyncIngressPairIndicesFor(
+                       asyncIngressLanes, recipient))
+                 /\ AsyncIngressDepthFor(
+                      asyncIngressLanes', recipient) =
+                   Cardinality(
+                     AsyncIngressPairIndicesFor(
+                       asyncIngressLanes', recipient))
+            BY DEF IngressDepth, AsyncIngressDepthFor,
+                   AsyncIngressPairIndicesFor,
+                   IngressLaneDepth, IngressLane
+          <5>4. Cardinality(
+                   {otherSource \in AsyncIngressSources:
+                      Len(asyncIngressLanes'
+                            [recipient][otherSource]) = 0}) =
+                 Cardinality(
+                   EmptyOtherIngressLanes(recipient, source))
+            BY <2>4, <3>1
+               DEF AsyncIngressZeroSourcesFor,
+                   IngressLaneDepth, IngressLane
+          <5>5. IngressDepth(recipient) <
+                   AsyncIngressCapacity -
+                     Cardinality(
+                       EmptyOtherIngressLanes(recipient, source))
+            BY <2>3 DEF IngressUsableCapacity
+          <5>6. AsyncIngressDepthFor(asyncIngressLanes', recipient)
+                   + Cardinality(
+                       {otherSource \in AsyncIngressSources:
+                          Len(asyncIngressLanes'
+                                [recipient][otherSource]) = 0})
+                   <= AsyncIngressCapacity
+            <6>1. IngressDepth(recipient) \in Nat
+              BY <2>9, <5>3
+            <6>2. IngressDepth(recipient) + 1
+                     + Cardinality(
+                         EmptyOtherIngressLanes(recipient, source))
+                     <= AsyncIngressCapacity
+              BY <2>6, <2>9, <5>5, <6>1,
+                 NaturalReservedCapacityStep
+            <6>3. AsyncIngressDepthFor(
+                       asyncIngressLanes', recipient) =
+                     IngressDepth(recipient) + 1
+              BY <5>2, <5>3
+            <6> QED BY <5>4, <6>2, <6>3
+          <5>7. AsyncIngressDepthFor(asyncIngressLanes', recipient) <=
+                   AsyncIngressCapacity
+            <6>1. Cardinality(
+                     {otherSource \in AsyncIngressSources:
+                        Len(asyncIngressLanes'
+                              [recipient][otherSource]) = 0}) \in Nat
+              BY <2>9, <5>4
+            <6>2. AsyncIngressDepthFor(
+                       asyncIngressLanes', recipient) \in Nat
+              BY <2>9, <5>2, <5>3, SMT
+            <6> QED BY <2>6, <5>6, <6>1, <6>2,
+                 NaturalSumBoundProjectsLeft
+          <5> QED BY <3>1, <5>6, <5>7
+        <4>2. CASE IngressLaneDepth(recipient, source) >=
+                     AsyncIngressCapacity
+          <5>1. /\ IngressLaneDepth(recipient, source) \in Nat
+                 /\ IngressLaneDepth(recipient, source) > 0
+            BY <2>1, <2>6, <4>2, LenProperties, SMT
+               DEF AsyncIngressContentTypeInvariant, IngressLaneDepth
+          <5>2. AsyncIngressZeroSourcesFor(
+                    asyncIngressLanes, recipient) =
+                  EmptyOtherIngressLanes(recipient, source)
+            BY <5>1, Isa
+               DEF AsyncIngressZeroSourcesFor,
+                   EmptyOtherIngressLanes, IngressLaneDepth, IngressLane
+          <5>3. /\ AsyncIngressPairIndicesFor(
+                         asyncIngressLanes', recipient) =
+                       AsyncIngressPairIndicesFor(
+                         asyncIngressLanes, recipient)
+                 /\ AsyncIngressZeroSourcesFor(
+                         asyncIngressLanes', recipient) =
+                       AsyncIngressZeroSourcesFor(
+                         asyncIngressLanes, recipient)
+            <6>1. AsyncIngressPairIndicesFor(
+                       asyncIngressLanes', recipient) =
+                     IF IngressLaneDepth(recipient, source) <
+                          AsyncIngressCapacity
+                     THEN AsyncIngressPairIndicesFor(
+                            asyncIngressLanes, recipient)
+                            \cup {<<source,
+                                     IngressLaneDepth(recipient, source) + 1>>}
+                     ELSE AsyncIngressPairIndicesFor(
+                            asyncIngressLanes, recipient)
+              BY <2>5
+            <6>2. ~(IngressLaneDepth(recipient, source) <
+                       AsyncIngressCapacity)
+              BY <2>6, <4>2, <5>1,
+                 NaturalGreaterOrEqualIsNotLess
+            <6>3. (IF IngressLaneDepth(recipient, source) <
+                           AsyncIngressCapacity
+                     THEN AsyncIngressPairIndicesFor(
+                            asyncIngressLanes, recipient)
+                            \cup {<<source,
+                                     IngressLaneDepth(recipient, source) + 1>>}
+                     ELSE AsyncIngressPairIndicesFor(
+                            asyncIngressLanes, recipient)) =
+                   AsyncIngressPairIndicesFor(
+                     asyncIngressLanes, recipient)
+              BY <6>2, IfElseWhenFalse
+            <6>4. AsyncIngressPairIndicesFor(
+                       asyncIngressLanes', recipient) =
+                     AsyncIngressPairIndicesFor(
+                       asyncIngressLanes, recipient)
+              BY <6>1, <6>3
+            <6>5. AsyncIngressZeroSourcesFor(
+                       asyncIngressLanes', recipient) =
+                     AsyncIngressZeroSourcesFor(
+                       asyncIngressLanes, recipient)
+              BY <2>4, <5>2
+            <6> QED BY <6>4, <6>5
+          <5>4. /\ AsyncIngressDepthFor(
+                         asyncIngressLanes', recipient) =
+                       IngressDepth(recipient)
+                 /\ Cardinality(
+                      {otherSource \in AsyncIngressSources:
+                         Len(asyncIngressLanes'
+                               [recipient][otherSource]) = 0}) =
+                      Cardinality(
+                        {otherSource \in AsyncIngressSources:
+                           IngressLaneDepth(recipient, otherSource) = 0})
+            BY <5>3
+               DEF IngressDepth, AsyncIngressDepthFor,
+                   AsyncIngressPairIndicesFor,
+                   AsyncIngressZeroSourcesFor,
+                   IngressLaneDepth, IngressLane
+          <5> QED BY <2>1, <3>1, <5>4
+               DEF AsyncIngressCapacityTypeInvariant
+        <4>3. /\ IngressLaneDepth(recipient, source) \in Nat
+               /\ AsyncIngressCapacity \in Nat
+          BY <2>1, LenProperties
+             DEF AsyncConfiguration,
+                 AsyncIngressContentTypeInvariant,
+                 IngressLaneDepth, IngressLane
+        <4> QED BY <4>1, <4>2, <4>3, SMT
+      <3>2. CASE otherRecipient # recipient
+        <4>1. /\ AsyncIngressPairIndicesFor(
+                       asyncIngressLanes', otherRecipient) =
+                     AsyncIngressPairIndicesFor(
+                       asyncIngressLanes, otherRecipient)
+               /\ AsyncIngressZeroSourcesFor(
+                       asyncIngressLanes', otherRecipient) =
+                     AsyncIngressZeroSourcesFor(
+                       asyncIngressLanes, otherRecipient)
+          <5>1. AsyncIngressPairIndicesFor(
+                     asyncIngressLanes', otherRecipient) =
+                   AsyncIngressPairIndicesFor(
+                     asyncIngressLanes, otherRecipient)
+            BY <2>5, <2>10, <3>2, Isa
+          <5>2. AsyncIngressZeroSourcesFor(
+                     asyncIngressLanes', otherRecipient) =
+                   AsyncIngressZeroSourcesFor(
+                     asyncIngressLanes, otherRecipient)
+            BY <2>4, <2>10, <3>2, Isa
+          <5> QED BY <5>1, <5>2
+        <4>2. /\ AsyncIngressDepthFor(
+                       asyncIngressLanes', otherRecipient) =
+                       IngressDepth(otherRecipient)
+               /\ Cardinality(
+                    {otherSource \in AsyncIngressSources:
+                       Len(asyncIngressLanes'
+                             [otherRecipient][otherSource]) = 0}) =
+                    Cardinality(
+                      {otherSource \in AsyncIngressSources:
+                         IngressLaneDepth(otherRecipient, otherSource) = 0})
+          BY <4>1
+             DEF IngressDepth, AsyncIngressDepthFor,
+                 AsyncIngressPairIndicesFor,
+                 AsyncIngressZeroSourcesFor,
+                 IngressLaneDepth, IngressLane
+        <4> QED BY <2>1, <2>10, <4>2
+             DEF AsyncIngressCapacityTypeInvariant
+      <3> QED BY <3>1, <3>2
+    <2> QED BY <2>10
+         DEF AsyncIngressCapacityTypeInvariant,
+             IngressDepth, AsyncIngressDepthFor,
+             AsyncIngressPairIndicesFor,
+             AsyncIngressZeroSourcesFor,
+             IngressLaneDepth, IngressLane
+  <1> QED BY <1>1
+
+THEOREM AdmitHiddenPacketPreservesSchedulerType ==
+  \A recipient \in ValidatorIds, source \in AsyncIngressSources:
+    AsyncTypeInvariant /\ AdmitHiddenPacket(recipient, source)
+      => AsyncSchedulerTypeInvariant'
+BY AdmitHiddenPacketPreservesNonIngressType,
+   AdmitHiddenPacketPreservesIngressTopologyType,
+   AdmitHiddenPacketPreservesIngressCapacityType,
+   AdmitHiddenPacketPreservesIngressContentType
+   DEF AsyncSchedulerTypeInvariant, AsyncIngressTypeInvariant
+
+THEOREM AsyncNetworkStepPreservesSchedulerType ==
+  AsyncTypeInvariant /\ AsyncNetworkStep
+    => AsyncSchedulerTypeInvariant'
+BY AdmitHiddenPacketPreservesSchedulerType
+   DEF AsyncNetworkStep
 
 THEOREM AsyncStepRefinementObligation ==
   AsyncNext => [Next]_vars

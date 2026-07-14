@@ -1,6 +1,7 @@
 [package]
 name = "iroha_core"
 autotests = false
+autobins = false
 build = "build.rs"
 
 edition.workspace = true
@@ -15,6 +16,19 @@ documentation.workspace = true
 license.workspace = true
 keywords.workspace = true
 categories.workspace = true
+
+[[bin]]
+name = "fastpq_fixture_capture"
+path = "src/bin/fastpq_fixture_capture.rs"
+
+[[bin]]
+name = "kagemusha_recursive_spend_v3_bundle"
+path = "src/bin/kagemusha_recursive_spend_v3_bundle.rs"
+
+[[bin]]
+name = "kagemusha_recursive_spend_v4_bundle"
+path = "src/bin/kagemusha_recursive_spend_v4_bundle.rs"
+required-features = ["zk-halo2-ipa"]
 
 [lints]
 workspace = true

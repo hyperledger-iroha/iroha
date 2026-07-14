@@ -37,11 +37,11 @@ use iroha_data_model::{
         KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_IPA_K_V1,
         KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V1,
         KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROOF_BYTES_V3,
-        KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V1,
+        KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V3,
         KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PARAMETERS_FILE_NAME_V3,
         KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PROVING_KEY_FILE_NAME_V3,
         KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_VERIFYING_KEY_FILE_NAME_V3,
-        KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V1,
+        KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V3,
         KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PARAMETERS_FILE_NAME_V3,
         KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PROVING_KEY_FILE_NAME_V3,
         KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_VERIFYING_KEY_FILE_NAME_V3,
@@ -65,6 +65,7 @@ Usage:
     --out-dir <new-directory> \\
     --chain-id <chain> --asset-definition-id <asset> --asset-scale <u32> \\
     --generation <id> --parameter-generation <id> --source-commit <40-lower-hex> \\
+    --source-tree-sha256 <64-lower-hex> --source-repo-dirty <true|false> \\
     --activation-height <u64> --withdrawal-height <u64> \\
     --benchmark-evidence-sha256 <64-lower-hex> \\
     --cryptographic-review-sha256 <64-lower-hex> \\
@@ -93,6 +94,8 @@ const REQUIRED_OPTIONS: &[&str] = &[
     "generation",
     "parameter-generation",
     "source-commit",
+    "source-tree-sha256",
+    "source-repo-dirty",
     "activation-height",
     "withdrawal-height",
     "benchmark-evidence-sha256",
@@ -236,6 +239,8 @@ struct BundleMetadata {
     generation: String,
     parameter_generation: String,
     source_commit: String,
+    source_tree_sha256: [u8; 32],
+    source_repo_dirty: bool,
     activation_height: u64,
     withdrawal_height: u64,
     benchmark_evidence_sha256: [u8; 32],
@@ -326,6 +331,14 @@ fn parse_u64(options: &BTreeMap<String, String>, name: &str) -> Result<u64, Box<
     value
         .parse::<u64>()
         .map_err(|error| format!("--{name} must fit u64: {error}").into())
+}
+
+fn parse_bool(options: &BTreeMap<String, String>, name: &str) -> Result<bool, Box<dyn Error>> {
+    match required(options, name) {
+        "true" => Ok(true),
+        "false" => Ok(false),
+        _ => Err(format!("--{name} must be exactly true or false").into()),
+    }
 }
 
 fn parse_digest(
@@ -527,6 +540,8 @@ fn prepare_bundle_metadata(
         generation,
         parameter_generation,
         source_commit,
+        source_tree_sha256: parse_digest(options, "source-tree-sha256")?,
+        source_repo_dirty: parse_bool(options, "source-repo-dirty")?,
         activation_height,
         withdrawal_height,
         benchmark_evidence_sha256: parse_digest(options, "benchmark-evidence-sha256")?,
@@ -572,6 +587,8 @@ fn write_bundle(
         transcript_profile: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V1.to_owned(),
         generation: metadata.generation,
         source_commit: metadata.source_commit,
+        source_tree_sha256: metadata.source_tree_sha256,
+        source_repo_dirty: metadata.source_repo_dirty,
         chain_id: metadata.chain_id,
         asset: metadata.asset,
         asset_scale: metadata.asset_scale,
@@ -581,14 +598,14 @@ fn write_bundle(
         profiles: vec![
             KagemushaPastaCycleProofProfileV1 {
                 parity: KagemushaPastaCycleParityV1::StepEq,
-                circuit_id: KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V1.to_owned(),
+                circuit_id: KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V3.to_owned(),
                 parameter_generation: metadata.parameter_generation.clone(),
                 ipa_k: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_IPA_K_V1,
                 artifacts: transition_artifacts,
             },
             KagemushaPastaCycleProofProfileV1 {
                 parity: KagemushaPastaCycleParityV1::StepEp,
-                circuit_id: KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V1.to_owned(),
+                circuit_id: KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V3.to_owned(),
                 parameter_generation: metadata.parameter_generation,
                 ipa_k: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_IPA_K_V1,
                 artifacts: state_artifacts,
@@ -738,8 +755,8 @@ fn prepare_key_input(
     parameter_generation: &str,
 ) -> Result<PreparedKeyInput, Box<dyn Error>> {
     let circuit_id = match spec.parity {
-        KagemushaPastaCycleParityV1::StepEq => KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V1,
-        KagemushaPastaCycleParityV1::StepEp => KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V1,
+        KagemushaPastaCycleParityV1::StepEq => KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V3,
+        KagemushaPastaCycleParityV1::StepEp => KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V3,
     };
     let header = KagemushaRecursiveSpendPastaCycleArtifactsV3 {
         version: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_ARTIFACT_VERSION_V3,
@@ -1398,10 +1415,10 @@ mod tests {
         block::consensus_v2::{ConsensusMode, ValidatorPower},
         domain::DomainId,
         offline::{
-            KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_PROOF_ENVELOPE_VERSION_V1,
+            KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_PROOF_ENVELOPE_VERSION_V3,
             KAGEMUSHA_RECURSIVE_SPEND_STATE_BOUNDARY_VERSION_V1,
             KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_VERSION_V2,
-            KagemushaPastaCycleProofEnvelopeV1, KagemushaRecursiveSpendStateBoundaryV1,
+            KagemushaPastaCycleProofEnvelopeV3, KagemushaRecursiveSpendStateBoundaryV1,
             KagemushaTopUpFinalityRosterWindowV2,
         },
         peer::PeerId,
@@ -1430,6 +1447,8 @@ mod tests {
                 "source-commit".to_owned(),
                 "0123456789abcdef0123456789abcdef01234567".to_owned(),
             ),
+            ("source-tree-sha256".to_owned(), "44".repeat(32)),
+            ("source-repo-dirty".to_owned(), "true".to_owned()),
             ("activation-height".to_owned(), "100".to_owned()),
             ("withdrawal-height".to_owned(), "1000".to_owned()),
             ("benchmark-evidence-sha256".to_owned(), "11".repeat(32)),
@@ -1574,6 +1593,8 @@ mod tests {
         let manifest: KagemushaRecursiveSpendArtifactManifestV3 =
             norito::json::from_str(&manifest_text).expect("decode generated manifest");
         manifest.validate().expect("validate generated manifest");
+        assert_eq!(manifest.source_tree_sha256, [0x44; 32]);
+        assert!(manifest.source_repo_dirty);
         let manifest_norito =
             fs::read(out_dir.join(MANIFEST_NORITO_FILE_NAME)).expect("read Norito manifest");
         let manifest_from_norito: KagemushaRecursiveSpendArtifactManifestV3 =
@@ -1678,8 +1699,8 @@ mod tests {
         let [step_eq, step_ep] = manifest.profiles.as_slice() else {
             panic!("manifest must contain the exact Eq/Ep profile pair");
         };
-        let envelope = KagemushaPastaCycleProofEnvelopeV1 {
-            version: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_PROOF_ENVELOPE_VERSION_V1,
+        let envelope = KagemushaPastaCycleProofEnvelopeV3 {
+            version: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_PROOF_ENVELOPE_VERSION_V3,
             proof_backend: manifest.proof_backend.clone(),
             transcript_profile: manifest.transcript_profile.clone(),
             step_eq_circuit_id: step_eq.circuit_id.clone(),
@@ -1884,6 +1905,8 @@ mod tests {
             ("generation", "../release"),
             ("parameter-generation", "NUL"),
             ("source-commit", "0000000000000000000000000000000000000000"),
+            ("source-tree-sha256", "00"),
+            ("source-repo-dirty", "yes"),
             ("activation-height", "0"),
             ("withdrawal-height", "100"),
         ] {

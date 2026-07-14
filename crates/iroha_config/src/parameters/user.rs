@@ -15153,6 +15153,11 @@ pub struct ToriiKagemushaCommands {
     /// Private key for the account submitting typed Kagemusha instructions.
     #[config(env = "TORII_KAGEMUSHA_COMMANDS_PRIVATE_KEY")]
     pub private_key: Option<ExposedPrivateKey>,
+    /// Minimum live XOR balance required for the self-funded command authority.
+    ///
+    /// This has no default: enabling the command service requires an explicit,
+    /// positive operational funding floor.
+    pub minimum_xor_balance: Quantity,
     /// Maximum value accepted for one Kagemusha command.
     #[config(default = "defaults::torii::kagemusha_commands::max_tx_value()")]
     pub max_tx_value: Quantity,
@@ -15195,6 +15200,9 @@ impl ToriiKagemushaCommands {
         if !matches!(algorithm, Algorithm::Ed25519 | Algorithm::Secp256k1) {
             panic!("torii.kagemusha_commands.private_key must use ed25519 or secp256k1");
         }
+        if self.minimum_xor_balance.is_zero() {
+            panic!("torii.kagemusha_commands.minimum_xor_balance must be greater than zero");
+        }
         if self.max_tx_value.is_zero() {
             panic!("torii.kagemusha_commands.max_tx_value must be greater than zero");
         }
@@ -15221,6 +15229,7 @@ impl ToriiKagemushaCommands {
         Some(actual::ToriiKagemushaCommands {
             authority: AccountId::new(key_pair.public_key().clone()),
             key_pair,
+            minimum_xor_balance: self.minimum_xor_balance,
             max_tx_value: self.max_tx_value,
             operation_registry_max_entries,
             operation_registry_max_bytes,
@@ -15237,6 +15246,7 @@ mod torii_kagemusha_commands_tests {
         ToriiKagemushaCommands {
             enabled: true,
             private_key: Some(ExposedPrivateKey(key_pair.private_key().clone())),
+            minimum_xor_balance: Quantity::from(25_u32),
             max_tx_value: defaults::torii::kagemusha_commands::max_tx_value(),
             operation_registry_max_entries:
                 defaults::torii::kagemusha_commands::OPERATION_REGISTRY_MAX_ENTRIES,
@@ -15252,7 +15262,15 @@ mod torii_kagemusha_commands_tests {
             parsed.operation_registry_max_entries.get(),
             defaults::torii::kagemusha_commands::OPERATION_REGISTRY_MAX_ENTRIES
         );
+        assert_eq!(parsed.minimum_xor_balance, Quantity::from(25_u32));
         assert!(!parsed.max_tx_value.is_zero());
+    }
+
+    #[test]
+    fn rejects_zero_minimum_xor_balance() {
+        let mut config = sample();
+        config.minimum_xor_balance = Quantity::zero();
+        assert!(std::panic::catch_unwind(|| config.parse()).is_err());
     }
 
     #[test]

@@ -7,6 +7,8 @@ use std::time::Instant;
 #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
 use iroha_crypto::PrivateKey;
 use iroha_crypto::{Algorithm, Hash, HashOf, PublicKey, Signature};
+#[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
+use iroha_data_model::merge::MergeSignerProof;
 use iroha_data_model::{
     block::consensus::{
         CertPhase, LaneBlockProposalPayloadHintV1, LaneBlockProposalV1, LaneBlockQcV1,
@@ -16,7 +18,7 @@ use iroha_data_model::{
     consensus::VALIDATOR_SET_HASH_VERSION_V1,
     merge::{
         LaneDrainCertificateBodyV1, LaneDrainCertificateV1, LaneDrainIntentV1,
-        MAX_MERGE_EXECUTION_ENTRYPOINTS, MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES, MergeSignerProof,
+        MAX_MERGE_EXECUTION_ENTRYPOINTS, MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES,
     },
     nexus::{DataSpaceId, LaneId},
     peer::PeerId,

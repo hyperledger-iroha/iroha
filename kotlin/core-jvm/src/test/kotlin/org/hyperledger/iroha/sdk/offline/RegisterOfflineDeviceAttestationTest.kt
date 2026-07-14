@@ -16,7 +16,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 
-/** Exact Rust/Kotlin parity and adversarial coverage for the sole ABI-19 registration path. */
+/** Exact Rust/Kotlin parity and adversarial coverage for the sole ABI-20 registration path. */
 class RegisterOfflineDeviceAttestationTest {
 
     @Test
@@ -25,7 +25,7 @@ class RegisterOfflineDeviceAttestationTest {
         assertEquals(5, rust.size)
         val registration = registration(rust[3])
 
-        assertEquals(19, DeviceAttestationRegistration.REQUIRED_NATIVE_BRIDGE_ABI_VERSION)
+        assertEquals(20, DeviceAttestationRegistration.REQUIRED_NATIVE_BRIDGE_ABI_VERSION)
         assertContentEquals(hexToBytes(rust[0]), registration.noritoEncoded())
         assertContentEquals(hexToBytes(rust[2]), registration.challengeHash)
 

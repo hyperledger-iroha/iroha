@@ -10,7 +10,7 @@ use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     path::{Path, PathBuf},
     sync::{
-        Arc,
+        Arc, Condvar, Mutex,
         atomic::{AtomicBool, AtomicUsize, Ordering as AtomicOrdering},
         mpsc,
     },
@@ -21,7 +21,7 @@ use std::{
 #[cfg(test)]
 use super::v2_core::Generation;
 use super::v2_core::{EquivocationKind, EventTag};
-use iroha_crypto::{HashOf, KeyPair, Signature};
+use iroha_crypto::{Hash, HashOf, KeyPair, Signature};
 use iroha_data_model::{
     block::{CertifiedMergeLedgerReference, consensus_v2 as wire, decode_framed_signed_block},
     merge::MergeCommitteeSignature,
@@ -33,7 +33,9 @@ use super::{
     message::{BlockMessage, BlockMessageWire},
     output_guard::{ConsensusOutputGuard, ConsensusOutputPermit},
     v2_apply::V2ApplyService,
-    v2_body_store::{BodyStoreCompletion, BodyValidationCompletion, V2BodyStore},
+    v2_body_store::{
+        BodyStoreCompletion, BodyValidationCompletion, V2BodyStore, ValidatedBodyReceipt,
+    },
     v2_chunks::{EncodedV2Payload, V2ChunkSession, encode_payload},
     v2_effects::{
         ApplyTask, BodyFetchTask, BodyStoreTask, BodyValidationTask, ConsensusSignTask,
@@ -84,6 +86,118 @@ impl V2IoCommand {
             Self::LoadCandidate { .. } | Self::Retire(_) | Self::Shutdown => {
                 V2IoAdmissionClass::Control
             }
+        }
+    }
+
+    const fn work_id(&self) -> Option<EffectWorkId> {
+        match self {
+            Self::Sign { task, .. } => Some(task.id()),
+            Self::Store(task) => Some(task.id()),
+            Self::Validate(task) => Some(task.id()),
+            Self::Apply(task) => Some(task.id()),
+            Self::Serve(_) | Self::LoadCandidate { .. } | Self::Retire(_) | Self::Shutdown => None,
+        }
+    }
+
+    const fn cancellable_kind(&self) -> Option<V2IoCancellableKind> {
+        match self {
+            Self::Sign { .. } => Some(V2IoCancellableKind::Sign),
+            Self::Store(_) => Some(V2IoCancellableKind::Store),
+            Self::Validate(_) => Some(V2IoCancellableKind::Validate),
+            Self::Apply(_)
+            | Self::Serve(_)
+            | Self::LoadCandidate { .. }
+            | Self::Retire(_)
+            | Self::Shutdown => None,
+        }
+    }
+
+    fn work_descriptor(&self) -> Option<(EffectWorkId, V2IoWorkDescriptor)> {
+        match self {
+            Self::Sign {
+                task,
+                restore_outbound_payload,
+            } => Some((
+                task.id(),
+                V2IoWorkDescriptor::Sign {
+                    tag: task.tag(),
+                    request: task.request().clone(),
+                    restore_outbound_payload: *restore_outbound_payload,
+                },
+            )),
+            Self::Store(task) => Some((
+                task.id(),
+                V2IoWorkDescriptor::Store {
+                    tag: task.tag(),
+                    manifest_hash: HashOf::new(task.manifest()),
+                    canonical_wire_len: task.canonical_wire().len(),
+                    canonical_wire_hash: Hash::new(task.canonical_wire()),
+                },
+            )),
+            Self::Validate(task) => Some((
+                task.id(),
+                V2IoWorkDescriptor::Validate {
+                    tag: task.tag(),
+                    round: task.round(),
+                    subject: task.subject(),
+                    durable_receipt: task.durable_receipt().clone(),
+                },
+            )),
+            Self::Apply(task) => Some((
+                task.id(),
+                V2IoWorkDescriptor::Apply {
+                    tag: task.tag(),
+                    subject: task.subject(),
+                    certificate: task.certificate().clone(),
+                    validated_receipt: task.validated_receipt().clone(),
+                },
+            )),
+            Self::Serve(_) | Self::LoadCandidate { .. } | Self::Retire(_) | Self::Shutdown => None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum V2IoWorkDescriptor {
+    Sign {
+        tag: EventTag,
+        request: super::v2::SignRequest,
+        restore_outbound_payload: bool,
+    },
+    Store {
+        tag: EventTag,
+        manifest_hash: HashOf<wire::PayloadManifest>,
+        canonical_wire_len: usize,
+        canonical_wire_hash: Hash,
+    },
+    Validate {
+        tag: EventTag,
+        round: wire::ConsensusRound,
+        subject: wire::BlockSubject,
+        durable_receipt: super::v2_body_store::DurableBodyReceipt,
+    },
+    Apply {
+        tag: EventTag,
+        subject: wire::BlockSubject,
+        certificate: wire::QuorumCertificate,
+        validated_receipt: ValidatedBodyReceipt,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum V2IoCancellableKind {
+    Sign,
+    Store,
+    Validate,
+}
+
+impl V2IoWorkDescriptor {
+    const fn cancellable_kind(&self) -> Option<V2IoCancellableKind> {
+        match self {
+            Self::Sign { .. } => Some(V2IoCancellableKind::Sign),
+            Self::Store { .. } => Some(V2IoCancellableKind::Store),
+            Self::Validate { .. } => Some(V2IoCancellableKind::Validate),
+            Self::Apply { .. } => None,
         }
     }
 }
@@ -161,6 +275,341 @@ impl V2IoAdmission {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum V2IoWorkState {
+    Queued,
+    Active,
+    CompletionPending,
+}
+
+#[derive(Debug)]
+struct V2IoTrackedWork {
+    descriptor: V2IoWorkDescriptor,
+    state: V2IoWorkState,
+}
+
+struct V2IoCommandQueueState {
+    commands: VecDeque<V2IoCommand>,
+    work: BTreeMap<EffectWorkId, V2IoTrackedWork>,
+    sender_open: bool,
+    receiver_open: bool,
+}
+
+/// Bounded cancellable FIFO shared by the serialized reducer and I/O worker.
+///
+/// Work ownership outlives physical queue admission: it remains indexed while
+/// active and while its completion waits for serialized delivery. This makes
+/// exact retransmission idempotent across every asynchronous race without
+/// charging completed work against the hierarchical queue reservations.
+struct V2IoCommandQueue {
+    capacity: usize,
+    admission: Arc<V2IoAdmission>,
+    state: Mutex<V2IoCommandQueueState>,
+    ready: Condvar,
+}
+
+struct V2IoCommandSender {
+    queue: Arc<V2IoCommandQueue>,
+}
+
+struct V2IoCommandReceiver {
+    queue: Arc<V2IoCommandQueue>,
+}
+
+enum V2IoTrySendError {
+    Full(V2IoCommand),
+    Disconnected,
+    ConflictingWorkId { work_id: EffectWorkId },
+}
+
+impl std::fmt::Debug for V2IoTrySendError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Full(_) => formatter.write_str("Full(..)"),
+            Self::Disconnected => formatter.write_str("Disconnected"),
+            Self::ConflictingWorkId { work_id } => formatter
+                .debug_struct("ConflictingWorkId")
+                .field("work_id", work_id)
+                .finish(),
+        }
+    }
+}
+
+fn v2_io_command_channel(
+    capacity: usize,
+    admission: Arc<V2IoAdmission>,
+) -> (V2IoCommandSender, V2IoCommandReceiver) {
+    let queue = Arc::new(V2IoCommandQueue {
+        capacity,
+        admission,
+        state: Mutex::new(V2IoCommandQueueState {
+            commands: VecDeque::with_capacity(capacity.min(1_024)),
+            work: BTreeMap::new(),
+            sender_open: true,
+            receiver_open: true,
+        }),
+        ready: Condvar::new(),
+    });
+    (
+        V2IoCommandSender {
+            queue: Arc::clone(&queue),
+        },
+        V2IoCommandReceiver { queue },
+    )
+}
+
+impl V2IoCommandQueue {
+    fn lock(&self) -> std::sync::MutexGuard<'_, V2IoCommandQueueState> {
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn try_send_as(
+        &self,
+        class: V2IoAdmissionClass,
+        command: V2IoCommand,
+    ) -> Result<(), V2IoTrySendError> {
+        let descriptor = command.work_descriptor();
+        let mut state = self.lock();
+        if !state.receiver_open {
+            return Err(V2IoTrySendError::Disconnected);
+        }
+        if let Some((work_id, descriptor)) = &descriptor
+            && let Some(existing) = state.work.get(work_id)
+        {
+            if existing.descriptor == *descriptor {
+                return Ok(());
+            }
+            return Err(V2IoTrySendError::ConflictingWorkId { work_id: *work_id });
+        }
+        if state.commands.len() >= self.capacity || !self.admission.try_reserve(class) {
+            return Err(V2IoTrySendError::Full(command));
+        }
+        if let Some((work_id, descriptor)) = descriptor {
+            let replaced = state.work.insert(
+                work_id,
+                V2IoTrackedWork {
+                    descriptor,
+                    state: V2IoWorkState::Queued,
+                },
+            );
+            debug_assert!(replaced.is_none());
+        }
+        state.commands.push_back(command);
+        drop(state);
+        self.ready.notify_one();
+        Ok(())
+    }
+
+    fn cancel(
+        &self,
+        work_id: EffectWorkId,
+        expected_kind: V2IoCancellableKind,
+    ) -> Result<bool, String> {
+        let mut state = self.lock();
+        let Some(tracked) = state.work.get(&work_id) else {
+            return Ok(false);
+        };
+        if tracked.descriptor.cancellable_kind() != Some(expected_kind) {
+            return Err(format!(
+                "Sumeragi v2 I/O work {} was reused by a conflicting command",
+                work_id.get()
+            ));
+        }
+        if matches!(
+            tracked.state,
+            V2IoWorkState::Active | V2IoWorkState::CompletionPending
+        ) {
+            return Ok(false);
+        }
+        let index = state
+            .commands
+            .iter()
+            .position(|command| command.work_id() == Some(work_id))
+            .expect("queued Sumeragi v2 work must have a FIFO owner");
+        let removed = state
+            .commands
+            .remove(index)
+            .expect("located Sumeragi v2 work must remain queued");
+        debug_assert_eq!(removed.work_id(), Some(work_id));
+        debug_assert_eq!(removed.cancellable_kind(), Some(expected_kind));
+        state
+            .work
+            .remove(&work_id)
+            .expect("removed Sumeragi v2 work must have an ownership record");
+        self.admission.release();
+        Ok(true)
+    }
+
+    fn recv(&self) -> Result<V2IoCommand, ()> {
+        let mut state = self.lock();
+        loop {
+            if let Some(command) = state.commands.pop_front() {
+                self.admission.release();
+                if let Some(work_id) = command.work_id() {
+                    let tracked = state
+                        .work
+                        .get_mut(&work_id)
+                        .expect("queued Sumeragi v2 command must have an ownership record");
+                    assert_eq!(tracked.state, V2IoWorkState::Queued);
+                    tracked.state = V2IoWorkState::Active;
+                }
+                return Ok(command);
+            }
+            if !state.sender_open {
+                return Err(());
+            }
+            state = self
+                .ready
+                .wait(state)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+        }
+    }
+
+    #[cfg(test)]
+    fn try_recv(&self) -> Result<V2IoCommand, mpsc::TryRecvError> {
+        let mut state = self.lock();
+        let Some(command) = state.commands.pop_front() else {
+            return if state.sender_open {
+                Err(mpsc::TryRecvError::Empty)
+            } else {
+                Err(mpsc::TryRecvError::Disconnected)
+            };
+        };
+        self.admission.release();
+        if let Some(work_id) = command.work_id() {
+            let tracked = state
+                .work
+                .get_mut(&work_id)
+                .expect("queued Sumeragi v2 command must have an ownership record");
+            assert_eq!(tracked.state, V2IoWorkState::Queued);
+            tracked.state = V2IoWorkState::Active;
+        }
+        Ok(command)
+    }
+
+    fn complete_work(&self, work_id: EffectWorkId) {
+        let mut state = self.lock();
+        let tracked = state
+            .work
+            .get_mut(&work_id)
+            .expect("completed Sumeragi v2 work must have an ownership record");
+        assert_eq!(tracked.state, V2IoWorkState::Active);
+        tracked.state = V2IoWorkState::CompletionPending;
+    }
+
+    fn acknowledge_completion(&self, work_id: EffectWorkId) {
+        let mut state = self.lock();
+        let tracked = state
+            .work
+            .remove(&work_id)
+            .expect("delivered Sumeragi v2 completion must have an ownership record");
+        assert_eq!(tracked.state, V2IoWorkState::CompletionPending);
+    }
+
+    fn close_sender(&self) {
+        let mut state = self.lock();
+        state.sender_open = false;
+        drop(state);
+        self.ready.notify_all();
+    }
+
+    fn close_receiver(&self) {
+        let mut state = self.lock();
+        if !state.receiver_open {
+            return;
+        }
+        state.receiver_open = false;
+        let queued = state.commands.len();
+        state.commands.clear();
+        // A normal Shutdown/Retire exit can close the command receiver while
+        // already-sent completions remain buffered. Keep those ownership
+        // records until the serialized handle drains and acknowledges them.
+        state
+            .work
+            .retain(|_, tracked| tracked.state == V2IoWorkState::CompletionPending);
+        for _ in 0..queued {
+            self.admission.release();
+        }
+        drop(state);
+        self.ready.notify_all();
+    }
+}
+
+impl V2IoCommandSender {
+    #[cfg(test)]
+    fn try_send(&self, command: V2IoCommand) -> Result<(), V2IoTrySendError> {
+        self.queue.try_send_as(command.admission_class(), command)
+    }
+
+    fn try_send_as(
+        &self,
+        class: V2IoAdmissionClass,
+        command: V2IoCommand,
+    ) -> Result<(), V2IoTrySendError> {
+        self.queue.try_send_as(class, command)
+    }
+
+    fn cancel(
+        &self,
+        work_id: EffectWorkId,
+        expected_kind: V2IoCancellableKind,
+    ) -> Result<bool, String> {
+        self.queue.cancel(work_id, expected_kind)
+    }
+
+    fn acknowledge_completion(&self, work_id: EffectWorkId) {
+        self.queue.acknowledge_completion(work_id);
+    }
+}
+
+impl Drop for V2IoCommandSender {
+    fn drop(&mut self) {
+        self.queue.close_sender();
+    }
+}
+
+impl V2IoCommandReceiver {
+    fn recv(&self) -> Result<V2IoCommand, ()> {
+        self.queue.recv()
+    }
+
+    #[cfg(test)]
+    fn try_recv(&self) -> Result<V2IoCommand, mpsc::TryRecvError> {
+        self.queue.try_recv()
+    }
+
+    #[cfg(test)]
+    fn try_iter(&self) -> V2IoCommandTryIter<'_> {
+        V2IoCommandTryIter { receiver: self }
+    }
+
+    fn complete_work(&self, work_id: EffectWorkId) {
+        self.queue.complete_work(work_id);
+    }
+}
+
+impl Drop for V2IoCommandReceiver {
+    fn drop(&mut self) {
+        self.queue.close_receiver();
+    }
+}
+
+#[cfg(test)]
+struct V2IoCommandTryIter<'a> {
+    receiver: &'a V2IoCommandReceiver,
+}
+
+#[cfg(test)]
+impl Iterator for V2IoCommandTryIter<'_> {
+    type Item = V2IoCommand;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.receiver.try_recv().ok()
+    }
+}
+
 enum V2IoCompletion {
     Signature {
         work_id: EffectWorkId,
@@ -186,8 +635,26 @@ enum V2IoCompletion {
     Failed(String),
 }
 
+impl V2IoCompletion {
+    fn work_id(&self) -> Option<EffectWorkId> {
+        match self {
+            Self::Signature { work_id, .. } | Self::ApplyDeferred { work_id, .. } => Some(*work_id),
+            Self::Stored(completion) => Some(completion.work_id()),
+            Self::Validated(completion) => Some(completion.work_id()),
+            Self::Applied(completion) => Some(completion.work_id()),
+            Self::CertifiedResponse { .. }
+            | Self::CertifiedRequestIgnored
+            | Self::CandidateLoaded(_)
+            | Self::Retired
+            | Self::RetirementFailed(_)
+            | Self::RecoveryRequired(_)
+            | Self::Failed(_) => None,
+        }
+    }
+}
+
 struct V2IoHandle {
-    command_tx: mpsc::SyncSender<V2IoCommand>,
+    command_tx: V2IoCommandSender,
     completion_rx: mpsc::Receiver<V2IoCompletion>,
     join: Option<thread::JoinHandle<()>>,
     allow_finalized_disconnect: Arc<AtomicBool>,
@@ -328,11 +795,10 @@ impl V2IoHandle {
             consensus_queue_capacity,
         )?);
         let capacity = admission.capacity();
-        let (command_tx, command_rx) = mpsc::sync_channel(capacity);
+        let (command_tx, command_rx) = v2_io_command_channel(capacity, Arc::clone(&admission));
         let (completion_tx, completion_rx) = mpsc::sync_channel(capacity);
         let allow_finalized_disconnect = Arc::new(AtomicBool::new(false));
         let worker_allow_finalized_disconnect = Arc::clone(&allow_finalized_disconnect);
-        let worker_admission = Arc::clone(&admission);
         let join = super::sumeragi_thread_builder("sumeragi-v2-io")
             .spawn(move || {
                 // A local guard drops before the closure environment releases
@@ -343,7 +809,7 @@ impl V2IoHandle {
                     worker_allow_finalized_disconnect,
                 );
                 while let Ok(command) = command_rx.recv() {
-                    worker_admission.release();
+                    let work_id = command.work_id();
                     match command {
                         V2IoCommand::Retire(receipt) => {
                             let Some(completion) = execute_retire_io_command(&output_guard, || {
@@ -419,15 +885,25 @@ impl V2IoHandle {
                                     }
                                 }
                             });
-                            match completion {
+                            let failed = match completion {
                                 Err(reason) => {
+                                    if let Some(work_id) = work_id {
+                                        command_rx.complete_work(work_id);
+                                    }
                                     let _ = completion_tx
                                         .try_send(V2IoCompletion::RecoveryRequired(reason));
-                                    break;
+                                    true
                                 }
                                 Ok(completion) => {
+                                    if let Some(work_id) = work_id {
+                                        command_rx.complete_work(work_id);
+                                    }
                                     send_completion(&completion_tx, Ok(completion));
+                                    false
                                 }
+                            };
+                            if failed {
+                                break;
                             }
                         }
                     }
@@ -445,14 +921,16 @@ impl V2IoHandle {
 
     fn enqueue(&self, command: V2IoCommand) -> Result<(), String> {
         self.try_enqueue(command).map_err(|error| match error {
-            mpsc::TrySendError::Full(_) => "Sumeragi v2 I/O queue is full".to_owned(),
-            mpsc::TrySendError::Disconnected(_) => {
-                "Sumeragi v2 I/O worker is disconnected".to_owned()
-            }
+            V2IoTrySendError::Full(_) => "Sumeragi v2 I/O queue is full".to_owned(),
+            V2IoTrySendError::Disconnected => "Sumeragi v2 I/O worker is disconnected".to_owned(),
+            V2IoTrySendError::ConflictingWorkId { work_id } => format!(
+                "Sumeragi v2 I/O work {} was reused by a conflicting command",
+                work_id.get()
+            ),
         })
     }
 
-    fn try_enqueue(&self, command: V2IoCommand) -> Result<(), mpsc::TrySendError<V2IoCommand>> {
+    fn try_enqueue(&self, command: V2IoCommand) -> Result<(), V2IoTrySendError> {
         let class = command.admission_class();
         self.try_enqueue_as(class, command)
     }
@@ -461,21 +939,47 @@ impl V2IoHandle {
         &self,
         class: V2IoAdmissionClass,
         command: V2IoCommand,
-    ) -> Result<(), mpsc::TrySendError<V2IoCommand>> {
-        if !self.admission.try_reserve(class) {
-            return Err(mpsc::TrySendError::Full(command));
-        }
-        match self.command_tx.try_send(command) {
-            Ok(()) => Ok(()),
-            Err(error) => {
-                self.admission.release();
-                Err(error)
-            }
-        }
+    ) -> Result<(), V2IoTrySendError> {
+        self.command_tx.try_send_as(class, command)
     }
 
     fn can_enqueue_as(&self, class: V2IoAdmissionClass) -> bool {
         self.admission.has_capacity(class)
+    }
+
+    fn cancel(
+        &self,
+        work_id: EffectWorkId,
+        expected_kind: V2IoCancellableKind,
+    ) -> Result<bool, String> {
+        self.command_tx.cancel(work_id, expected_kind)
+    }
+
+    fn acknowledge_completion(&self, completion: &V2IoCompletion) {
+        if let Some(work_id) = completion.work_id() {
+            self.command_tx.acknowledge_completion(work_id);
+        }
+    }
+
+    fn try_recv_completion(&self) -> Result<V2IoCompletion, mpsc::TryRecvError> {
+        let completion = self.completion_rx.try_recv()?;
+        self.acknowledge_completion(&completion);
+        Ok(completion)
+    }
+
+    fn recv_completion(&self) -> Result<V2IoCompletion, mpsc::RecvError> {
+        let completion = self.completion_rx.recv()?;
+        self.acknowledge_completion(&completion);
+        Ok(completion)
+    }
+
+    fn recv_completion_timeout(
+        &self,
+        timeout: Duration,
+    ) -> Result<V2IoCompletion, mpsc::RecvTimeoutError> {
+        let completion = self.completion_rx.recv_timeout(timeout)?;
+        self.acknowledge_completion(&completion);
+        Ok(completion)
     }
 
     fn shutdown(mut self) -> Result<(), String> {
@@ -483,18 +987,21 @@ impl V2IoHandle {
         loop {
             match self.try_enqueue(command) {
                 Ok(()) => break,
-                Err(mpsc::TrySendError::Full(returned)) => {
+                Err(V2IoTrySendError::Full(returned)) => {
                     command = returned;
-                    if self.completion_rx.recv().is_err() {
+                    if self.recv_completion().is_err() {
                         break;
                     }
                 }
-                Err(mpsc::TrySendError::Disconnected(_)) => break,
+                Err(V2IoTrySendError::Disconnected) => break,
+                Err(V2IoTrySendError::ConflictingWorkId { .. }) => {
+                    unreachable!("shutdown commands do not carry work identifiers");
+                }
             }
         }
         // The worker can have commands ahead of Shutdown. Drain their bounded
         // completions so it can reach Shutdown without a cyclic channel wait.
-        while self.completion_rx.recv().is_ok() {}
+        while self.recv_completion().is_ok() {}
         if let Some(join) = self.join.take() {
             join.join()
                 .map_err(|_| "Sumeragi v2 I/O worker panicked".to_owned())?;
@@ -558,15 +1065,14 @@ enum CleanupCompletionWaitError {
 }
 
 fn recv_cleanup_completion(
-    receiver: &mpsc::Receiver<V2IoCompletion>,
+    io: &V2IoHandle,
     deadline: Instant,
 ) -> Result<V2IoCompletion, CleanupCompletionWaitError> {
     let remaining = deadline
         .checked_duration_since(Instant::now())
         .filter(|remaining| !remaining.is_zero())
         .ok_or(CleanupCompletionWaitError::DeadlineElapsed)?;
-    receiver
-        .recv_timeout(remaining)
+    io.recv_completion_timeout(remaining)
         .map_err(|error| match error {
             mpsc::RecvTimeoutError::Timeout => CleanupCompletionWaitError::DeadlineElapsed,
             mpsc::RecvTimeoutError::Disconnected => CleanupCompletionWaitError::Disconnected,
@@ -1254,11 +1760,18 @@ impl ProductionV2Services {
                 operation.complete();
                 return Ok(());
             }
+            // The conflicting claim was rejected before any state or output
+            // changed. Let the caller classify the service error without
+            // falsely turning this local validation into ambiguous output.
+            operation.complete();
             return Err(
                 "Sumeragi v2 work ID claimed conflicting merge-sidecar deferrals".to_owned(),
             );
         }
         if self.merge_sidecar_deferrals.len() >= self.max_merge_sidecar_deferrals {
+            // Capacity backpressure leaves the retained FIFO unchanged and is
+            // explicitly retryable by the runner.
+            operation.complete();
             return Err("Sumeragi v2 merge-sidecar deferral queue is full".to_owned());
         }
         self.merge_sidecar_deferrals.push_back(deferred);
@@ -1390,7 +1903,7 @@ impl ProductionV2Services {
     fn take_io_completion(&self) -> Option<PendingServiceCompletion> {
         self.io
             .as_ref()
-            .and_then(|io| io.completion_rx.try_recv().ok())
+            .and_then(|io| io.try_recv_completion().ok())
             .map(PendingServiceCompletion::Io)
     }
 
@@ -1551,9 +2064,9 @@ impl ProductionV2Services {
                 drop(retirement_enqueue_permit);
                 match enqueue {
                     Ok(()) => break true,
-                    Err(mpsc::TrySendError::Full(returned)) => {
+                    Err(V2IoTrySendError::Full(returned)) => {
                         command = returned;
-                        match recv_cleanup_completion(&io.completion_rx, deadline) {
+                        match recv_cleanup_completion(&io, deadline) {
                             Ok(V2IoCompletion::Failed(reason)) => outcome.record(
                                 PostFinalityCleanupTarget::CleanupWorker,
                                 format!(
@@ -1601,18 +2114,21 @@ impl ProductionV2Services {
                             }
                         }
                     }
-                    Err(mpsc::TrySendError::Disconnected(_)) => {
+                    Err(V2IoTrySendError::Disconnected) => {
                         outcome.record(
                             PostFinalityCleanupTarget::CleanupWorker,
                             "Sumeragi v2 I/O worker disconnected before body retirement",
                         );
                         break false;
                     }
+                    Err(V2IoTrySendError::ConflictingWorkId { .. }) => {
+                        unreachable!("retirement commands do not carry work identifiers")
+                    }
                 }
             };
             if retirement_requested {
                 loop {
-                    match recv_cleanup_completion(&io.completion_rx, deadline) {
+                    match recv_cleanup_completion(&io, deadline) {
                         Ok(V2IoCompletion::Retired) => break,
                         Ok(V2IoCompletion::RetirementFailed(reason)) => {
                             outcome.record(
@@ -1950,9 +2466,8 @@ impl V2EffectServices for ProductionV2Services {
         Ok(())
     }
 
-    fn cancel_consensus_sign(&mut self, _work_id: EffectWorkId) -> Result<(), Self::Error> {
-        // The ordered worker may already be signing. Its tagged completion is
-        // harmless and will be classified stale by the executor.
+    fn cancel_consensus_sign(&mut self, work_id: EffectWorkId) -> Result<(), Self::Error> {
+        self.io()?.cancel(work_id, V2IoCancellableKind::Sign)?;
         Ok(())
     }
 
@@ -2226,12 +2741,18 @@ impl V2EffectServices for ProductionV2Services {
         self.enqueue_fail_stop_io(V2IoCommand::Store(task))
     }
 
-    fn cancel_body_store(&mut self, _work_id: EffectWorkId) -> Result<(), Self::Error> {
+    fn cancel_body_store(&mut self, work_id: EffectWorkId) -> Result<(), Self::Error> {
+        self.io()?.cancel(work_id, V2IoCancellableKind::Store)?;
         Ok(())
     }
 
     fn enqueue_body_validation(&mut self, task: BodyValidationTask) -> Result<(), Self::Error> {
         self.enqueue_fail_stop_io(V2IoCommand::Validate(task))
+    }
+
+    fn cancel_body_validation(&mut self, work_id: EffectWorkId) -> Result<(), Self::Error> {
+        self.io()?.cancel(work_id, V2IoCancellableKind::Validate)?;
+        Ok(())
     }
 
     fn work_deferred_for_merge_sidecar(
@@ -2348,7 +2869,15 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
-    use crate::sumeragi::v2_chunks::encode_payload;
+    use crate::sumeragi::{v2_body_store::DurableBodyReceipt, v2_chunks::encode_payload};
+
+    fn test_io_command_channel(
+        capacity: usize,
+    ) -> (V2IoCommandSender, V2IoCommandReceiver, Arc<V2IoAdmission>) {
+        let admission = V2IoAdmission::unbounded_for_tests();
+        let (sender, receiver) = v2_io_command_channel(capacity, Arc::clone(&admission));
+        (sender, receiver, admission)
+    }
 
     fn fixture() -> (ProductionV2Services, Vec<KeyPair>) {
         let mut keys = (1_u8..=4)
@@ -2595,14 +3124,14 @@ mod tests {
     fn proposal_signing_restores_chunks_only_when_outbound_payload_is_absent() {
         let (mut service, keys) = fixture();
         allow_fixture_block_payload(&mut service.context);
-        let (command_tx, command_rx) = mpsc::sync_channel(2);
+        let (command_tx, command_rx, admission) = test_io_command_channel(2);
         let (_completion_tx, completion_rx) = mpsc::sync_channel(2);
         service.io = Some(V2IoHandle {
             command_tx,
             completion_rx,
             join: None,
             allow_finalized_disconnect: Arc::new(AtomicBool::new(false)),
-            admission: V2IoAdmission::unbounded_for_tests(),
+            admission,
         });
         let (_, payload, proposal) = proposal_body_and_payload(&service.context, &keys);
         let tag = EventTag::new(
@@ -2652,14 +3181,14 @@ mod tests {
     #[test]
     fn completion_sources_alternate_under_simultaneous_bursts() {
         let (mut service, _) = fixture();
-        let (command_tx, _command_rx) = mpsc::sync_channel(2);
+        let (command_tx, _command_rx, admission) = test_io_command_channel(2);
         let (completion_tx, completion_rx) = mpsc::sync_channel(2);
         service.io = Some(V2IoHandle {
             command_tx,
             completion_rx,
             join: None,
             allow_finalized_disconnect: Arc::new(AtomicBool::new(false)),
-            admission: V2IoAdmission::unbounded_for_tests(),
+            admission,
         });
         completion_tx
             .try_send(V2IoCompletion::CertifiedRequestIgnored)
@@ -3216,10 +3745,175 @@ mod tests {
     }
 
     #[test]
+    fn io_queue_cancellation_frees_capacity_without_reordering_retained_work() {
+        let (mut service, keys) = fixture();
+        allow_fixture_block_payload(&mut service.context);
+        let (_, _, proposal) = proposal_body_and_payload(&service.context, &keys);
+        let tag = EventTag::new(
+            service.context.height,
+            proposal.round.view,
+            Generation::new(service.context.height),
+        );
+        let sign = |id| V2IoCommand::Sign {
+            task: ConsensusSignTask::for_test(
+                id,
+                tag,
+                super::super::v2::SignRequest::Proposal(proposal.clone()),
+            ),
+            restore_outbound_payload: false,
+        };
+        let (command_tx, command_rx, admission) = test_io_command_channel(2);
+
+        command_tx
+            .try_send(sign(1))
+            .expect("queue first signing task");
+        command_tx
+            .try_send(sign(2))
+            .expect("queue retained signing task");
+        assert!(matches!(
+            command_tx.try_send(sign(3)),
+            Err(V2IoTrySendError::Full(_))
+        ));
+        assert!(
+            command_tx
+                .cancel(EffectWorkId::for_test(1), V2IoCancellableKind::Sign)
+                .expect("cancel queued signing task")
+        );
+        assert_eq!(admission.queued.load(AtomicOrdering::Acquire), 1);
+        command_tx
+            .try_send(sign(3))
+            .expect("reclaimed slot accepts current-view work");
+
+        for expected in [2, 3] {
+            let command = command_rx.try_recv().expect("retained queued command");
+            let work_id = command.work_id().expect("signing work identifier");
+            assert_eq!(work_id, EffectWorkId::for_test(expected));
+            command_rx.complete_work(work_id);
+            command_tx.acknowledge_completion(work_id);
+        }
+        assert!(matches!(
+            command_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        assert_eq!(admission.queued.load(AtomicOrdering::Acquire), 0);
+
+        let durable = DurableBodyReceipt::for_test(
+            service.context.id(),
+            proposal.round,
+            proposal.subject,
+            HashOf::new(&proposal.manifest),
+        );
+        let validation = BodyValidationTask::for_test(4, tag, durable);
+        let validation_id = validation.id();
+        let (command_tx, command_rx, admission) = test_io_command_channel(1);
+        let (_completion_tx, completion_rx) = mpsc::sync_channel(1);
+        service.io = Some(V2IoHandle {
+            command_tx,
+            completion_rx,
+            join: None,
+            allow_finalized_disconnect: Arc::new(AtomicBool::new(false)),
+            admission: Arc::clone(&admission),
+        });
+        service
+            .io()
+            .expect("synthetic validation queue")
+            .enqueue(V2IoCommand::Validate(validation))
+            .expect("queue stale validation");
+        service
+            .cancel_body_validation(validation_id)
+            .expect("production callback cancels queued validation");
+        assert!(matches!(
+            command_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        assert_eq!(admission.queued.load(AtomicOrdering::Acquire), 0);
+        drop(service.io.take());
+    }
+
+    #[test]
+    fn io_queue_duplicate_apply_coalesces_and_conflicting_work_id_fails_closed() {
+        let (mut service, keys) = fixture();
+        allow_fixture_block_payload(&mut service.context);
+        let (_, _, proposal) = proposal_body_and_payload(&service.context, &keys);
+        let durable = DurableBodyReceipt::for_test(
+            service.context.id(),
+            proposal.round,
+            proposal.subject,
+            HashOf::new(&proposal.manifest),
+        );
+        let validated = ValidatedBodyReceipt::for_test(durable);
+        let certificate = wire::QuorumCertificate {
+            round: proposal.round,
+            phase: wire::GlobalPhase::Commit,
+            subject: proposal.subject,
+            execution_commitment: validated.execution_commitment(),
+            signers: vec![0, 1, 2],
+            aggregate_signature: vec![1],
+        };
+        let tag = EventTag::new(
+            service.context.height,
+            proposal.round.view,
+            Generation::new(service.context.height),
+        );
+        let task = ApplyTask::for_test(
+            7,
+            tag,
+            proposal.subject,
+            certificate.clone(),
+            validated.clone(),
+        );
+        let conflicting = ApplyTask::for_test(
+            7,
+            EventTag::new(
+                service.context.height,
+                proposal.round.view + 1,
+                Generation::new(service.context.height),
+            ),
+            proposal.subject,
+            certificate,
+            validated,
+        );
+        let (command_tx, command_rx, admission) = test_io_command_channel(1);
+
+        command_tx
+            .try_send(V2IoCommand::Apply(task.clone()))
+            .expect("queue exact apply");
+        command_tx
+            .try_send(V2IoCommand::Apply(task.clone()))
+            .expect("coalesce queued exact apply retransmission");
+        assert_eq!(admission.queued.load(AtomicOrdering::Acquire), 1);
+        assert!(matches!(
+            command_tx.try_send(V2IoCommand::Apply(conflicting)),
+            Err(V2IoTrySendError::ConflictingWorkId { work_id })
+                if work_id == EffectWorkId::for_test(7)
+        ));
+
+        let command = command_rx.try_recv().expect("single coalesced apply");
+        let work_id = command.work_id().expect("apply work identifier");
+        assert_eq!(work_id, EffectWorkId::for_test(7));
+        assert!(matches!(command, V2IoCommand::Apply(_)));
+        command_tx
+            .try_send(V2IoCommand::Apply(task.clone()))
+            .expect("coalesce exact retransmission while apply is active");
+        command_rx.complete_work(work_id);
+        command_tx
+            .try_send(V2IoCommand::Apply(task.clone()))
+            .expect("coalesce exact retransmission while completion is pending");
+        assert!(matches!(
+            command_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        drop(command_rx);
+        command_tx.acknowledge_completion(work_id);
+        assert!(command_tx.queue.lock().work.is_empty());
+    }
+
+    #[test]
     fn remote_auxiliary_flood_cannot_consume_consensus_or_control_reservations() {
         let admission = Arc::new(V2IoAdmission::new(1, 2).expect("bounded I/O admission"));
         assert_eq!(admission.capacity(), 4);
-        let (command_tx, command_rx) = mpsc::sync_channel(admission.capacity());
+        let (command_tx, command_rx) =
+            v2_io_command_channel(admission.capacity(), Arc::clone(&admission));
         let (_completion_tx, completion_rx) = mpsc::sync_channel(admission.capacity());
         let io = V2IoHandle {
             command_tx,
@@ -3249,7 +3943,7 @@ mod tests {
         assert!(io.can_enqueue_as(V2IoAdmissionClass::Control));
         assert!(matches!(
             io.try_enqueue_as(V2IoAdmissionClass::Auxiliary, command(99)),
-            Err(mpsc::TrySendError::Full(_))
+            Err(V2IoTrySendError::Full(_))
         ));
         io.try_enqueue_as(V2IoAdmissionClass::Consensus, command(1))
             .expect("first reserved consensus command");
@@ -3257,7 +3951,7 @@ mod tests {
             .expect("second reserved consensus command");
         assert!(matches!(
             io.try_enqueue_as(V2IoAdmissionClass::Consensus, command(98)),
-            Err(mpsc::TrySendError::Full(_))
+            Err(V2IoTrySendError::Full(_))
         ));
         io.try_enqueue_as(V2IoAdmissionClass::Control, command(3))
             .expect("trusted local control reserve");
@@ -3265,10 +3959,7 @@ mod tests {
         let views = command_rx
             .try_iter()
             .map(|command| match command {
-                V2IoCommand::LoadCandidate { tag, .. } => {
-                    io.admission.release();
-                    tag.view()
-                }
+                V2IoCommand::LoadCandidate { tag, .. } => tag.view(),
                 _ => panic!("unexpected command in admission test"),
             })
             .collect::<Vec<_>>();
@@ -3281,7 +3972,6 @@ mod tests {
             command_rx.try_recv(),
             Ok(V2IoCommand::LoadCandidate { tag, .. }) if tag.view() == 4
         ));
-        io.admission.release();
     }
 
     #[test]
@@ -3303,7 +3993,7 @@ mod tests {
         permit_ready_rx
             .recv_timeout(Duration::from_secs(1))
             .expect("earlier output must be admitted before abnormal teardown");
-        let (command_tx, command_rx) = mpsc::sync_channel(1);
+        let (command_tx, command_rx, admission) = test_io_command_channel(1);
         let (completion_tx, completion_rx) = mpsc::sync_channel(1);
         let (shutdown_seen_tx, shutdown_seen_rx) = mpsc::sync_channel(1);
         let worker = thread::spawn(move || {
@@ -3319,7 +4009,7 @@ mod tests {
             completion_rx,
             join: Some(worker),
             allow_finalized_disconnect: Arc::new(AtomicBool::new(false)),
-            admission: V2IoAdmission::unbounded_for_tests(),
+            admission,
         });
 
         drop(service);
@@ -3354,33 +4044,23 @@ mod tests {
             }
         });
 
-        assert!(
-            completion_rx
-                .recv_timeout(Duration::from_millis(25))
-                .is_err(),
-            "recovery activation must wait for an already-admitted output"
-        );
-        let activation_deadline = Instant::now() + Duration::from_secs(1);
-        while !gate.restart_required() && Instant::now() < activation_deadline {
-            thread::yield_now();
-        }
+        let completion = completion_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("fatal completion must follow recovery admission closure");
+        assert!(matches!(
+            completion,
+            V2IoCompletion::RecoveryRequired(reason)
+                if reason == "committed marker requires restart"
+        ));
         assert!(
             gate.restart_required(),
-            "the guard must close before the fatal output permit is released"
+            "the guard must close before publishing the fatal completion"
         );
         assert!(
             gate.acquire().is_none(),
             "a second output must not enter while fatal recovery activation drains"
         );
         drop(admitted_output);
-        let completion = completion_rx
-            .recv_timeout(Duration::from_secs(1))
-            .expect("fatal completion must follow recovery activation");
-        assert!(matches!(
-            completion,
-            V2IoCompletion::RecoveryRequired(reason)
-                if reason == "committed marker requires restart"
-        ));
         worker.join().expect("join recovery worker");
         assert!(gate.restart_required());
         assert!(gate.acquire().is_none());
@@ -3576,14 +4256,14 @@ mod tests {
     #[test]
     fn recovery_gate_rejects_service_outputs_and_candidate_delivery() {
         let (mut service, _) = fixture();
-        let (command_tx, command_rx) = mpsc::sync_channel(1);
+        let (command_tx, command_rx, admission) = test_io_command_channel(1);
         let (completion_tx, completion_rx) = mpsc::sync_channel(1);
         service.io = Some(V2IoHandle {
             command_tx,
             completion_rx,
             join: None,
             allow_finalized_disconnect: Arc::new(AtomicBool::new(false)),
-            admission: V2IoAdmission::unbounded_for_tests(),
+            admission,
         });
         let encoded = encode_payload(
             &service.context,
@@ -3736,7 +4416,7 @@ mod tests {
         let receipt = durable_receipt(&service, &keys);
         let directory = TempDir::new().expect("cleanup test directory");
         service.chunk_root = directory.path().join("already-absent-chunks");
-        let (command_tx, command_rx) = mpsc::sync_channel(1);
+        let (command_tx, command_rx, admission) = test_io_command_channel(1);
         drop(command_rx);
         let (_completion_tx, completion_rx) = mpsc::sync_channel(1);
         service.io = Some(V2IoHandle {
@@ -3744,7 +4424,7 @@ mod tests {
             completion_rx,
             join: None,
             allow_finalized_disconnect: Arc::new(AtomicBool::new(false)),
-            admission: V2IoAdmission::unbounded_for_tests(),
+            admission,
         });
 
         let mut supervisor = V2CleanupSupervisor::default();
@@ -3767,14 +4447,14 @@ mod tests {
         std::fs::create_dir_all(&chunk_root).expect("seed retained chunk root");
         std::fs::write(chunk_root.join("chunk"), b"retained").expect("seed retained chunk");
         service.chunk_root = chunk_root.clone();
-        let (command_tx, command_rx) = mpsc::sync_channel(1);
+        let (command_tx, command_rx, admission) = test_io_command_channel(1);
         let (_completion_tx, completion_rx) = mpsc::sync_channel(1);
         service.io = Some(V2IoHandle {
             command_tx,
             completion_rx,
             join: None,
             allow_finalized_disconnect: Arc::new(AtomicBool::new(false)),
-            admission: V2IoAdmission::unbounded_for_tests(),
+            admission,
         });
         service.output_guard.activate_restart_required();
 
@@ -3798,7 +4478,7 @@ mod tests {
         let receipt = durable_receipt(&service, &keys);
         let directory = TempDir::new().expect("cleanup test directory");
         service.chunk_root = directory.path().join("already-absent-chunks");
-        let (command_tx, command_rx) = mpsc::sync_channel(1);
+        let (command_tx, command_rx, admission) = test_io_command_channel(1);
         let (completion_tx, completion_rx) = mpsc::sync_channel(2);
         let join = thread::spawn(move || {
             assert!(matches!(command_rx.recv(), Ok(V2IoCommand::Retire(_))));
@@ -3816,7 +4496,7 @@ mod tests {
             completion_rx,
             join: Some(join),
             allow_finalized_disconnect: Arc::new(AtomicBool::new(false)),
-            admission: V2IoAdmission::unbounded_for_tests(),
+            admission,
         });
 
         let mut supervisor = V2CleanupSupervisor::default();
@@ -3840,7 +4520,7 @@ mod tests {
         let receipt = durable_receipt(&service, &keys);
         let directory = TempDir::new().expect("cleanup test directory");
         service.chunk_root = directory.path().join("already-absent-chunks");
-        let (command_tx, command_rx) = mpsc::sync_channel(1);
+        let (command_tx, command_rx, admission) = test_io_command_channel(1);
         let (completion_tx, completion_rx) = mpsc::sync_channel(1);
         let (accepted_tx, accepted_rx) = mpsc::sync_channel(1);
         let join = thread::spawn(move || {
@@ -3858,7 +4538,7 @@ mod tests {
             completion_rx,
             join: Some(join),
             allow_finalized_disconnect: Arc::new(AtomicBool::new(false)),
-            admission: V2IoAdmission::unbounded_for_tests(),
+            admission,
         });
         let mut supervisor = V2CleanupSupervisor::default();
         let started = Instant::now();
@@ -3900,7 +4580,7 @@ mod tests {
         let output_guard = Arc::clone(&service.output_guard);
         let allow_finalized_disconnect = Arc::new(AtomicBool::new(false));
         let worker_allow_finalized_disconnect = Arc::clone(&allow_finalized_disconnect);
-        let (command_tx, command_rx) = mpsc::sync_channel(1);
+        let (command_tx, command_rx, admission) = test_io_command_channel(1);
         let queued_subject = wire::BlockSubject {
             parent_block_hash: None,
             block_hash: HashOf::from_untyped_unchecked(Hash::new(b"queued cleanup block")),
@@ -3940,7 +4620,7 @@ mod tests {
             completion_rx,
             join: Some(join),
             allow_finalized_disconnect: Arc::clone(&allow_finalized_disconnect),
-            admission: V2IoAdmission::unbounded_for_tests(),
+            admission,
         });
         let mut supervisor = V2CleanupSupervisor::default();
 
@@ -3972,7 +4652,7 @@ mod tests {
         let chunk_root = directory.path().join("chunk-root-is-a-file");
         std::fs::write(&chunk_root, b"not a directory").expect("create adversarial chunk root");
         service.chunk_root = chunk_root;
-        let (command_tx, command_rx) = mpsc::sync_channel(1);
+        let (command_tx, command_rx, admission) = test_io_command_channel(1);
         let (completion_tx, completion_rx) = mpsc::sync_channel(1);
         let join = thread::spawn(move || {
             assert!(matches!(command_rx.recv(), Ok(V2IoCommand::Retire(_))));
@@ -3987,7 +4667,7 @@ mod tests {
             completion_rx,
             join: Some(join),
             allow_finalized_disconnect: Arc::new(AtomicBool::new(false)),
-            admission: V2IoAdmission::unbounded_for_tests(),
+            admission,
         });
         let mut supervisor = V2CleanupSupervisor::default();
 
@@ -4297,14 +4977,14 @@ mod tests {
     #[test]
     fn pipeline_release_tracks_only_successfully_queued_durable_prepare_intent() {
         let (mut service, _) = fixture();
-        let (command_tx, command_rx) = mpsc::sync_channel(1);
+        let (command_tx, command_rx, admission) = test_io_command_channel(1);
         let (_completion_tx, completion_rx) = mpsc::sync_channel(1);
         service.io = Some(V2IoHandle {
             command_tx,
             completion_rx,
             join: None,
             allow_finalized_disconnect: Arc::new(AtomicBool::new(false)),
-            admission: V2IoAdmission::unbounded_for_tests(),
+            admission,
         });
         let tag = EventTag::new(
             service.context.height,

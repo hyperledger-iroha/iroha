@@ -21,6 +21,10 @@ pub(crate) mod test_override {
         static PERMISSIONS: RefCell<Vec<crate::data_model::permission::Permission>> = const {
             RefCell::new(Vec::new())
         };
+        static ACCOUNT_DOMAIN_BINDINGS: RefCell<Option<Vec<(
+            crate::data_model::account::AccountId,
+            crate::data_model::domain::DomainId,
+        )>>> = const { RefCell::new(None) };
     }
 
     pub fn permissions() -> Vec<crate::data_model::permission::Permission> {
@@ -33,6 +37,38 @@ pub(crate) mod test_override {
         PERMISSIONS.with(|current| {
             let mut current = current.borrow_mut();
             core::mem::replace(&mut *current, permissions)
+        })
+    }
+
+    pub fn account_domain_binding(
+        account: &crate::data_model::account::AccountId,
+        domain: &crate::data_model::domain::DomainId,
+    ) -> Option<bool> {
+        ACCOUNT_DOMAIN_BINDINGS.with(|bindings| {
+            bindings.borrow().as_ref().map(|bindings| {
+                bindings
+                    .iter()
+                    .any(|binding| binding == &(account.clone(), domain.clone()))
+            })
+        })
+    }
+
+    pub fn replace_account_domain_bindings(
+        bindings: Option<
+            Vec<(
+                crate::data_model::account::AccountId,
+                crate::data_model::domain::DomainId,
+            )>,
+        >,
+    ) -> Option<
+        Vec<(
+            crate::data_model::account::AccountId,
+            crate::data_model::domain::DomainId,
+        )>,
+    > {
+        ACCOUNT_DOMAIN_BINDINGS.with(|current| {
+            let mut current = current.borrow_mut();
+            core::mem::replace(&mut *current, bindings)
         })
     }
 }
@@ -196,7 +232,11 @@ declare_permissions! {
     iroha_executor_data_model::permission::oracle::{CanResolveOracleDispute},
     iroha_executor_data_model::permission::oracle::{CanManageTwitterBindings},
     iroha_executor_data_model::permission::nexus::{CanPublishSpaceDirectoryManifest},
+    iroha_executor_data_model::permission::nexus::{CanPublishSpaceDirectoryManifestForAccountDomain},
+    iroha_executor_data_model::permission::nexus::{CanPublishSpaceDirectoryManifestForUaid},
+    iroha_executor_data_model::permission::nexus::{CanEnrollFeeSponsorPolicyForAccountDomain},
     iroha_executor_data_model::permission::nexus::{CanUseFeeSponsor},
+    iroha_executor_data_model::permission::nexus::{CanUseFeeSponsorForAccount},
 }
 
 /// Trait that enables using permissions on the blockchain
@@ -461,47 +501,12 @@ mod settlement {
 
 mod nexus {
     use iroha_executor_data_model::permission::nexus::{
-        CanPublishSpaceDirectoryManifest, CanUseFeeSponsor,
+        CanEnrollFeeSponsorPolicyForAccountDomain, CanPublishSpaceDirectoryManifest,
+        CanPublishSpaceDirectoryManifestForAccountDomain, CanPublishSpaceDirectoryManifestForUaid,
+        CanUseFeeSponsor, CanUseFeeSponsorForAccount,
     };
 
     use super::*;
-
-    const SPACE_DIRECTORY_MANIFEST_PERMISSION: &str = "CanPublishSpaceDirectoryManifest";
-
-    fn is_legacy_space_directory_manifest_wildcard(permission: &PermissionObject) -> bool {
-        permission.name() == SPACE_DIRECTORY_MANIFEST_PERMISSION
-            && permission.payload().as_ref().trim() == "null"
-    }
-
-    fn has_legacy_space_directory_manifest_wildcard(authority: &AccountId, host: &Iroha) -> bool {
-        let account_permissions: Vec<_> = host
-            .query(FindPermissionsByAccountId::new(authority.clone()))
-            .execute()
-            .expect("INTERNAL BUG: `FindPermissionsByAccountId` must never fail")
-            .map(|res| res.dbg_expect("Failed to get permission from cursor"))
-            .collect();
-        if account_permissions
-            .iter()
-            .any(is_legacy_space_directory_manifest_wildcard)
-        {
-            return true;
-        }
-
-        let role_ids: Vec<RoleId> = host
-            .query(FindRolesByAccountId::new(authority.clone()))
-            .execute()
-            .expect("INTERNAL BUG: `FindRolesByAccountId` must never fail")
-            .map(|role_id| role_id.dbg_expect("Failed to get role from cursor"))
-            .collect();
-        if role_ids.is_empty() {
-            return false;
-        }
-
-        let role_filter: BTreeSet<_> = role_ids.iter().cloned().collect();
-        roles_permissions(host)
-            .filter(|(role_id, _)| role_filter.contains(role_id))
-            .any(|(_, permission)| is_legacy_space_directory_manifest_wildcard(&permission))
-    }
 
     fn ensure_publish_manifest_grant_authority(
         permission: CanPublishSpaceDirectoryManifest,
@@ -512,11 +517,7 @@ mod nexus {
         {
             let override_permissions = test_override::permissions();
             if !override_permissions.is_empty() {
-                if has_permission_in_account(&override_permissions, &permission)
-                    || override_permissions
-                        .iter()
-                        .any(is_legacy_space_directory_manifest_wildcard)
-                {
+                if has_permission_in_account(&override_permissions, &permission) {
                     return Ok(());
                 }
                 return Err(ValidationFail::NotPermitted(
@@ -526,9 +527,7 @@ mod nexus {
             }
         }
 
-        if permission.is_owned_by(authority, host)
-            || has_legacy_space_directory_manifest_wildcard(authority, host)
-        {
+        if permission.is_owned_by(authority, host) {
             Ok(())
         } else {
             Err(ValidationFail::NotPermitted(
@@ -558,6 +557,124 @@ mod nexus {
             }
 
             ensure_publish_manifest_grant_authority(*self, authority, host)
+        }
+    }
+
+    fn ensure_uaid_manifest_grant_authority(
+        permission: CanPublishSpaceDirectoryManifestForUaid,
+        authority: &AccountId,
+        host: &Iroha,
+    ) -> Result {
+        if permission.is_owned_by(authority, host)
+            || (CanPublishSpaceDirectoryManifest {
+                dataspace: permission.dataspace,
+            })
+            .is_owned_by(authority, host)
+        {
+            return Ok(());
+        }
+
+        Err(ValidationFail::NotPermitted(
+            "Current authority must hold either the exact UAID-scoped permission or the dataspace-wide CanPublishSpaceDirectoryManifest permission to grant or revoke it"
+                .to_owned(),
+        ))
+    }
+
+    impl ValidateGrantRevoke for CanPublishSpaceDirectoryManifestForUaid {
+        fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
+            if context.curr_block.is_genesis() {
+                return Ok(());
+            }
+
+            ensure_uaid_manifest_grant_authority(*self, authority, host)
+        }
+
+        fn validate_revoke(
+            &self,
+            authority: &AccountId,
+            context: &Context,
+            host: &Iroha,
+        ) -> Result {
+            if context.curr_block.is_genesis() {
+                return Ok(());
+            }
+
+            ensure_uaid_manifest_grant_authority(*self, authority, host)
+        }
+    }
+
+    fn ensure_account_domain_manifest_grant_authority(
+        permission: &CanPublishSpaceDirectoryManifestForAccountDomain,
+        authority: &AccountId,
+        host: &Iroha,
+    ) -> Result {
+        #[cfg(test)]
+        {
+            let override_permissions = test_override::permissions();
+            if !override_permissions.is_empty() {
+                if has_permission_in_account(&override_permissions, permission)
+                    || has_permission_in_account(
+                        &override_permissions,
+                        &CanPublishSpaceDirectoryManifest {
+                            dataspace: permission.dataspace,
+                        },
+                    )
+                {
+                    return Ok(());
+                }
+                return Err(ValidationFail::NotPermitted(
+                    "Test authority does not hold the exact account-domain or dataspace-wide manifest permission"
+                        .to_owned(),
+                ));
+            }
+        }
+
+        if permission.is_owned_by(authority, host)
+            || (CanPublishSpaceDirectoryManifest {
+                dataspace: permission.dataspace,
+            })
+            .is_owned_by(authority, host)
+        {
+            return Ok(());
+        }
+
+        let domain = host
+            .query_single(FindDomainById::new(permission.domain.clone()))
+            .map_err(|_| {
+                ValidationFail::NotPermitted(
+                    "Account-domain manifest permission references an unknown domain".to_owned(),
+                )
+            })?;
+        if domain.owned_by() == authority {
+            return Ok(());
+        }
+
+        Err(ValidationFail::NotPermitted(
+            "Only the exact account-domain owner, an existing exact holder, or a dataspace-wide manifest authority may grant or revoke this permission"
+                .to_owned(),
+        ))
+    }
+
+    impl ValidateGrantRevoke for CanPublishSpaceDirectoryManifestForAccountDomain {
+        fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
+            if context.curr_block.is_genesis() {
+                return Ok(());
+            }
+
+            ensure_account_domain_manifest_grant_authority(self, authority, host)
+        }
+
+        fn validate_revoke(
+            &self,
+            authority: &AccountId,
+            context: &Context,
+            host: &Iroha,
+        ) -> Result {
+            if context.curr_block.is_genesis() {
+                return Ok(());
+            }
+
+            ensure_account_domain_manifest_grant_authority(self, authority, host)
         }
     }
 
@@ -597,6 +714,111 @@ mod nexus {
             host: &Iroha,
         ) -> Result {
             SponsorAccount::from(self).validate(authority, host, context)
+        }
+    }
+
+    impl<'a> From<&'a CanEnrollFeeSponsorPolicyForAccountDomain> for SponsorAccount<'a> {
+        fn from(value: &'a CanEnrollFeeSponsorPolicyForAccountDomain) -> Self {
+            Self {
+                sponsor: &value.sponsor,
+            }
+        }
+    }
+
+    impl ValidateGrantRevoke for CanEnrollFeeSponsorPolicyForAccountDomain {
+        fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
+            if context.curr_block.is_genesis() {
+                return Ok(());
+            }
+            SponsorAccount::from(self).validate(authority, host, context)
+        }
+
+        fn validate_revoke(
+            &self,
+            authority: &AccountId,
+            context: &Context,
+            host: &Iroha,
+        ) -> Result {
+            if context.curr_block.is_genesis() {
+                return Ok(());
+            }
+            SponsorAccount::from(self).validate(authority, host, context)
+        }
+    }
+
+    fn beneficiary_is_bound_to_account_domain(
+        beneficiary: &AccountId,
+        domain: &DomainId,
+        host: &Iroha,
+    ) -> bool {
+        #[cfg(test)]
+        if let Some(is_bound) = test_override::account_domain_binding(beneficiary, domain) {
+            return is_bound;
+        }
+
+        host.query_single(FindAliasesByAccountId::new(
+            beneficiary.clone(),
+            Some(domain.dataspace().to_string()),
+            Some(domain.name().to_string()),
+        ))
+        .is_ok_and(|aliases| !aliases.is_empty())
+    }
+
+    fn ensure_fee_sponsor_account_grant_authority(
+        permission: &CanUseFeeSponsorForAccount,
+        authority: &AccountId,
+        host: &Iroha,
+        require_current_domain_binding: bool,
+    ) -> Result {
+        if authority == &permission.sponsor {
+            return Ok(());
+        }
+        let enrollment = CanEnrollFeeSponsorPolicyForAccountDomain {
+            sponsor: permission.sponsor.clone(),
+            policy: permission.policy.clone(),
+            domain: permission.domain.clone(),
+        };
+        if !enrollment.is_owned_by(authority, host) {
+            return Err(ValidationFail::NotPermitted(
+                "Current authority does not hold the exact account-domain sponsor enrollment permission"
+                    .to_owned(),
+            ));
+        }
+        if require_current_domain_binding
+            && !beneficiary_is_bound_to_account_domain(
+                &permission.beneficiary,
+                &permission.domain,
+                host,
+            )
+        {
+            return Err(ValidationFail::NotPermitted(
+                "Fee sponsor beneficiary is not bound to the delegated account domain".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+
+    impl ValidateGrantRevoke for CanUseFeeSponsorForAccount {
+        fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
+            if context.curr_block.is_genesis() {
+                return Ok(());
+            }
+            ensure_fee_sponsor_account_grant_authority(self, authority, host, true)
+        }
+
+        fn validate_revoke(
+            &self,
+            authority: &AccountId,
+            context: &Context,
+            host: &Iroha,
+        ) -> Result {
+            if context.curr_block.is_genesis() {
+                return Ok(());
+            }
+            // A registrar must remain able to revoke a previously enrolled account after
+            // its alias is unbound. Requiring a live binding here would strand a usable
+            // account-scoped token precisely when offboarding needs to invalidate it.
+            ensure_fee_sponsor_account_grant_authority(self, authority, host, false)
         }
     }
 }
@@ -1892,10 +2114,16 @@ pub(crate) fn revoke_permissions<V: Execute + ?Sized>(
 mod tests {
     use std::{num::NonZeroU64, vec::Vec};
 
-    use iroha_crypto::PublicKey;
+    use iroha_crypto::{Hash, PublicKey};
     use iroha_executor_data_model::permission::{
-        asset::CanMintAssetWithDefinition, domain::CanRegisterDomain,
-        nexus::CanPublishSpaceDirectoryManifest, peer::CanManagePeers,
+        asset::CanMintAssetWithDefinition,
+        domain::CanRegisterDomain,
+        nexus::{
+            CanEnrollFeeSponsorPolicyForAccountDomain, CanPublishSpaceDirectoryManifest,
+            CanPublishSpaceDirectoryManifestForAccountDomain,
+            CanPublishSpaceDirectoryManifestForUaid, CanUseFeeSponsorForAccount,
+        },
+        peer::CanManagePeers,
     };
 
     use super::{
@@ -1910,9 +2138,9 @@ mod tests {
             Iroha,
             data_model::{
                 block::BlockHeader,
-                nexus::DataSpaceId,
+                nexus::{DataSpaceId, UniversalAccountId},
                 permission::Permission as PermissionObject,
-                prelude::{AccountId, AssetDefinitionId, Json, RoleId},
+                prelude::{AccountId, AssetDefinitionId, DomainId, Json, Name, RoleId},
             },
         },
     };
@@ -1935,6 +2163,22 @@ mod tests {
     fn make_account_id() -> AccountId {
         let public_key: PublicKey =
             "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
+                .parse()
+                .unwrap();
+        AccountId::new(public_key)
+    }
+
+    fn make_other_account_id() -> AccountId {
+        let public_key: PublicKey =
+            "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245"
+                .parse()
+                .unwrap();
+        AccountId::new(public_key)
+    }
+
+    fn make_third_account_id() -> AccountId {
+        let public_key: PublicKey =
+            "ed012004FF5B81046DDCCF19E2E451C45DFB6F53759D4EB30FA2EFA807284D1CC33016"
                 .parse()
                 .unwrap();
         AccountId::new(public_key)
@@ -2075,7 +2319,7 @@ mod tests {
     }
 
     #[test]
-    fn can_publish_space_directory_manifest_grant_allows_legacy_wildcard_holder_after_genesis() {
+    fn can_publish_space_directory_manifest_grant_rejects_unscoped_null_payload_after_genesis() {
         let authority = make_account_id();
         let context = make_context(&authority, 2);
         let token = CanPublishSpaceDirectoryManifest {
@@ -2091,7 +2335,7 @@ mod tests {
         let result = token.validate_grant(&authority, &context, &Iroha);
 
         test_override::replace_permissions(previous);
-        assert!(result.is_ok());
+        assert!(matches!(result, Err(ValidationFail::NotPermitted(_))));
     }
 
     #[test]
@@ -2110,5 +2354,331 @@ mod tests {
 
         test_override::replace_permissions(previous);
         assert!(matches!(err, ValidationFail::NotPermitted(_)));
+    }
+
+    #[test]
+    fn dataspace_manifest_holder_can_delegate_one_exact_uaid_after_genesis() {
+        let authority = make_account_id();
+        let context = make_context(&authority, 2);
+        let dataspace = DataSpaceId::new(10);
+        let scoped = CanPublishSpaceDirectoryManifestForUaid {
+            dataspace,
+            uaid: UniversalAccountId::from_hash(Hash::new(b"uaid::delegated-customer")),
+        };
+        let previous = test_override::replace_permissions(vec![PermissionObject::from(
+            CanPublishSpaceDirectoryManifest { dataspace },
+        )]);
+
+        let result = scoped.validate_grant(&authority, &context, &Iroha);
+
+        test_override::replace_permissions(previous);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn uaid_manifest_holder_cannot_delegate_a_different_uaid_after_genesis() {
+        let authority = make_account_id();
+        let context = make_context(&authority, 2);
+        let dataspace = DataSpaceId::new(10);
+        let held = CanPublishSpaceDirectoryManifestForUaid {
+            dataspace,
+            uaid: UniversalAccountId::from_hash(Hash::new(b"uaid::hbl-customer")),
+        };
+        let requested = CanPublishSpaceDirectoryManifestForUaid {
+            dataspace,
+            uaid: UniversalAccountId::from_hash(Hash::new(b"uaid::ubl-customer")),
+        };
+        let previous = test_override::replace_permissions(vec![PermissionObject::from(held)]);
+
+        let result = requested.validate_grant(&authority, &context, &Iroha);
+
+        test_override::replace_permissions(previous);
+        assert!(matches!(result, Err(ValidationFail::NotPermitted(_))));
+    }
+
+    #[test]
+    fn account_domain_manifest_delegation_is_exact_across_hbl_and_ubl() {
+        let authority = make_account_id();
+        let context = make_context(&authority, 2);
+        let dataspace = DataSpaceId::new(10);
+        let hbl = CanPublishSpaceDirectoryManifestForAccountDomain {
+            dataspace,
+            domain: DomainId::try_new("hbl", "sbp").expect("HBL domain"),
+        };
+        let ubl = CanPublishSpaceDirectoryManifestForAccountDomain {
+            dataspace,
+            domain: DomainId::try_new("ubl", "sbp").expect("UBL domain"),
+        };
+        let previous =
+            test_override::replace_permissions(vec![PermissionObject::from(hbl.clone())]);
+
+        let own_result = hbl.validate_grant(&authority, &context, &Iroha);
+        let cross_fi_result = ubl.validate_grant(&authority, &context, &Iroha);
+
+        test_override::replace_permissions(previous);
+        assert!(own_result.is_ok());
+        assert!(matches!(
+            cross_fi_result,
+            Err(ValidationFail::NotPermitted(_))
+        ));
+    }
+
+    #[test]
+    fn dataspace_manifest_holder_can_delegate_account_domain_scope() {
+        let authority = make_account_id();
+        let context = make_context(&authority, 2);
+        let dataspace = DataSpaceId::new(10);
+        let hbl = CanPublishSpaceDirectoryManifestForAccountDomain {
+            dataspace,
+            domain: DomainId::try_new("hbl", "sbp").expect("HBL domain"),
+        };
+        let previous = test_override::replace_permissions(vec![PermissionObject::from(
+            CanPublishSpaceDirectoryManifest { dataspace },
+        )]);
+
+        let result = hbl.validate_grant(&authority, &context, &Iroha);
+
+        test_override::replace_permissions(previous);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn sponsor_enrollment_holder_can_revoke_exact_token_after_alias_unbinding() {
+        let sponsor = make_account_id();
+        let registrar = make_other_account_id();
+        let beneficiary = make_third_account_id();
+        let context = make_context(&registrar, 2);
+        let domain = DomainId::try_new("hbl", "sbp").expect("HBL account domain");
+        let policy: Name = "retail".parse().expect("retail policy");
+        let enrollment = CanEnrollFeeSponsorPolicyForAccountDomain {
+            sponsor: sponsor.clone(),
+            policy: policy.clone(),
+            domain: domain.clone(),
+        };
+        let exact = CanUseFeeSponsorForAccount {
+            sponsor,
+            policy,
+            beneficiary,
+            domain,
+        };
+        let previous = test_override::replace_permissions(vec![PermissionObject::from(enrollment)]);
+
+        let result = exact.validate_revoke(&registrar, &context, &Iroha);
+
+        test_override::replace_permissions(previous);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn sponsor_can_directly_grant_and_revoke_exact_account_token() {
+        let sponsor = make_account_id();
+        let beneficiary = make_third_account_id();
+        let context = make_context(&sponsor, 2);
+        let exact = CanUseFeeSponsorForAccount {
+            sponsor: sponsor.clone(),
+            policy: "retail".parse().expect("retail policy"),
+            beneficiary,
+            domain: DomainId::try_new("hbl", "sbp").expect("HBL account domain"),
+        };
+
+        assert!(exact.validate_grant(&sponsor, &context, &Iroha).is_ok());
+        assert!(exact.validate_revoke(&sponsor, &context, &Iroha).is_ok());
+    }
+
+    #[test]
+    fn sponsor_enrollment_holder_cannot_grant_without_current_domain_binding() {
+        let sponsor = make_account_id();
+        let registrar = make_other_account_id();
+        let beneficiary = make_third_account_id();
+        let context = make_context(&registrar, 2);
+        let domain = DomainId::try_new("hbl", "sbp").expect("HBL account domain");
+        let policy: Name = "retail".parse().expect("retail policy");
+        let enrollment = CanEnrollFeeSponsorPolicyForAccountDomain {
+            sponsor: sponsor.clone(),
+            policy: policy.clone(),
+            domain: domain.clone(),
+        };
+        let exact = CanUseFeeSponsorForAccount {
+            sponsor,
+            policy,
+            beneficiary,
+            domain,
+        };
+        let previous = test_override::replace_permissions(vec![PermissionObject::from(enrollment)]);
+        let previous_bindings = test_override::replace_account_domain_bindings(Some(Vec::new()));
+
+        let result = exact.validate_grant(&registrar, &context, &Iroha);
+
+        test_override::replace_account_domain_bindings(previous_bindings);
+        test_override::replace_permissions(previous);
+        assert!(matches!(result, Err(ValidationFail::NotPermitted(_))));
+    }
+
+    #[test]
+    fn enrollment_permission_bootstraps_at_genesis_but_is_sponsor_only_afterwards() {
+        let sponsor = make_account_id();
+        let registrar = make_other_account_id();
+        let enrollment = CanEnrollFeeSponsorPolicyForAccountDomain {
+            sponsor: sponsor.clone(),
+            policy: "retail".parse().expect("retail policy"),
+            domain: DomainId::try_new("hbl", "sbp").expect("HBL account domain"),
+        };
+        let genesis = make_context(&registrar, 1);
+        let post_genesis = make_context(&registrar, 2);
+
+        assert!(
+            enrollment
+                .validate_grant(&registrar, &genesis, &Iroha)
+                .is_ok(),
+            "genesis must be able to bootstrap the HBL/UBL enrollment delegation"
+        );
+        assert!(
+            enrollment
+                .validate_revoke(&registrar, &genesis, &Iroha)
+                .is_ok(),
+            "genesis cleanup must use the same bootstrap semantics"
+        );
+        assert!(matches!(
+            enrollment.validate_grant(&registrar, &post_genesis, &Iroha),
+            Err(ValidationFail::NotPermitted(_))
+        ));
+        assert!(matches!(
+            enrollment.validate_revoke(&registrar, &post_genesis, &Iroha),
+            Err(ValidationFail::NotPermitted(_))
+        ));
+        assert!(
+            enrollment
+                .validate_grant(&sponsor, &make_context(&sponsor, 2), &Iroha)
+                .is_ok(),
+            "the sponsor retains post-genesis enrollment delegation authority"
+        );
+    }
+
+    #[test]
+    fn hbl_registrar_cannot_enroll_ubl_other_policy_or_unbound_beneficiary() {
+        let sponsor = make_account_id();
+        let registrar = make_other_account_id();
+        let beneficiary = make_third_account_id();
+        let other_beneficiary = sponsor.clone();
+        let context = make_context(&registrar, 2);
+        let hbl_domain = DomainId::try_new("hbl", "sbp").expect("HBL account domain");
+        let ubl_domain = DomainId::try_new("ubl", "sbp").expect("UBL account domain");
+        let retail: Name = "retail".parse().expect("retail policy");
+        let held = CanEnrollFeeSponsorPolicyForAccountDomain {
+            sponsor: sponsor.clone(),
+            policy: retail.clone(),
+            domain: hbl_domain.clone(),
+        };
+        let valid = CanUseFeeSponsorForAccount {
+            sponsor: sponsor.clone(),
+            policy: retail.clone(),
+            beneficiary: beneficiary.clone(),
+            domain: hbl_domain.clone(),
+        };
+        let cross_fi = CanUseFeeSponsorForAccount {
+            domain: ubl_domain,
+            ..valid.clone()
+        };
+        let cross_policy = CanUseFeeSponsorForAccount {
+            policy: "wholesale".parse().expect("wholesale policy"),
+            ..valid.clone()
+        };
+        let unbound_beneficiary = CanUseFeeSponsorForAccount {
+            beneficiary: other_beneficiary,
+            ..valid.clone()
+        };
+        let previous = test_override::replace_permissions(vec![PermissionObject::from(held)]);
+        let previous_bindings =
+            test_override::replace_account_domain_bindings(Some(vec![(beneficiary, hbl_domain)]));
+
+        let valid_result = valid.validate_grant(&registrar, &context, &Iroha);
+        let cross_fi_result = cross_fi.validate_grant(&registrar, &context, &Iroha);
+        let cross_policy_result = cross_policy.validate_grant(&registrar, &context, &Iroha);
+        let unbound_result = unbound_beneficiary.validate_grant(&registrar, &context, &Iroha);
+
+        test_override::replace_account_domain_bindings(previous_bindings);
+        test_override::replace_permissions(previous);
+        assert!(valid_result.is_ok());
+        for result in [cross_fi_result, cross_policy_result, unbound_result] {
+            assert!(matches!(result, Err(ValidationFail::NotPermitted(_))));
+        }
+    }
+
+    #[test]
+    fn sponsor_enrollment_scope_is_exact_across_policy_and_domain() {
+        let sponsor = make_account_id();
+        let registrar = make_other_account_id();
+        let beneficiary = make_third_account_id();
+        let context = make_context(&registrar, 2);
+        let held = CanEnrollFeeSponsorPolicyForAccountDomain {
+            sponsor: sponsor.clone(),
+            policy: "retail".parse().expect("retail policy"),
+            domain: DomainId::try_new("hbl", "sbp").expect("HBL account domain"),
+        };
+        let cross_fi = CanUseFeeSponsorForAccount {
+            sponsor: sponsor.clone(),
+            policy: "retail".parse().expect("retail policy"),
+            beneficiary: beneficiary.clone(),
+            domain: DomainId::try_new("ubl", "sbp").expect("UBL account domain"),
+        };
+        let cross_policy = CanUseFeeSponsorForAccount {
+            sponsor,
+            policy: "wholesale".parse().expect("wholesale policy"),
+            beneficiary,
+            domain: DomainId::try_new("hbl", "sbp").expect("HBL account domain"),
+        };
+        let previous = test_override::replace_permissions(vec![PermissionObject::from(held)]);
+
+        let cross_fi_result = cross_fi.validate_revoke(&registrar, &context, &Iroha);
+        let cross_policy_result = cross_policy.validate_revoke(&registrar, &context, &Iroha);
+
+        test_override::replace_permissions(previous);
+        assert!(matches!(
+            cross_fi_result,
+            Err(ValidationFail::NotPermitted(_))
+        ));
+        assert!(matches!(
+            cross_policy_result,
+            Err(ValidationFail::NotPermitted(_))
+        ));
+    }
+
+    #[test]
+    fn account_domain_manifest_permission_json_uses_dot_fqn() {
+        let token = CanPublishSpaceDirectoryManifestForAccountDomain {
+            dataspace: DataSpaceId::new(10),
+            domain: DomainId::try_new("hbl", "sbp").expect("HBL domain"),
+        };
+
+        let payload = norito::json::to_json(&token).expect("serialize publisher permission");
+
+        assert_eq!(payload, r#"{"dataspace":10,"domain":"hbl.sbp"}"#);
+        assert_eq!(
+            norito::json::from_str::<CanPublishSpaceDirectoryManifestForAccountDomain>(&payload)
+                .expect("deserialize publisher permission"),
+            token,
+        );
+    }
+
+    #[test]
+    fn sponsor_enrollment_permission_json_uses_canonical_account_and_dot_fqn() {
+        let sponsor = make_account_id();
+        let token = CanEnrollFeeSponsorPolicyForAccountDomain {
+            sponsor: sponsor.clone(),
+            policy: "retail".parse().expect("retail policy"),
+            domain: DomainId::try_new("hbl", "sbp").expect("HBL domain"),
+        };
+
+        let payload = norito::json::to_json(&token).expect("serialize enrollment permission");
+
+        assert_eq!(
+            payload,
+            format!(r#"{{"sponsor":"{sponsor}","policy":"retail","domain":"hbl.sbp"}}"#),
+        );
+        assert_eq!(
+            norito::json::from_str::<CanEnrollFeeSponsorPolicyForAccountDomain>(&payload)
+                .expect("deserialize enrollment permission"),
+            token,
+        );
     }
 }

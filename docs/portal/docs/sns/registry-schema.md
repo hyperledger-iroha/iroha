@@ -131,7 +131,7 @@ Enum AuctionKind {
 | `grace_period_days` | `u16` | Default 30. |
 | `redemption_period_days` | `u16` | Default 60. |
 | `max_term_years` | `u8` | Maximum upfront renewal length. |
-| `referral_cap_bps` | `u16` | <=1000 (10%) per charter. |
+| `referral_cap_bps` | `u16` | At most 1000 (10%) per charter. |
 | `reserved_labels` | `Vec<ReservedNameV1>` | Governance supplied list with assignment instructions. |
 | `fee_split` | `SuffixFeeSplitV1` | Treasury / steward / referral shares (basis points). |
 | `fund_splitter_account` | `AccountId` | Account that holds escrow + distributes funds. |

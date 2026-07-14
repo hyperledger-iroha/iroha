@@ -27,7 +27,7 @@ import org.hyperledger.iroha.norito.NoritoEncoder;
 import org.hyperledger.iroha.norito.TypeAdapter;
 import org.junit.Test;
 
-/** Exact Rust/Java parity and adversarial coverage for the sole ABI-19 registration path. */
+/** Exact Rust/Java parity and adversarial coverage for the sole ABI-20 registration path. */
 public final class RegisterOfflineDeviceAttestationTests {
 
   private static final String P256_GENERATOR =
@@ -41,7 +41,7 @@ public final class RegisterOfflineDeviceAttestationTests {
     assertEquals(5, rust.size());
     final DeviceAttestationRegistration registration = registration(rust.get(3));
 
-    assertEquals(19, DeviceAttestationRegistration.REQUIRED_NATIVE_BRIDGE_ABI_VERSION);
+    assertEquals(20, DeviceAttestationRegistration.REQUIRED_NATIVE_BRIDGE_ABI_VERSION);
     assertArrayEquals(hexToBytes(rust.get(0)), registration.noritoEncoded());
     assertArrayEquals(hexToBytes(rust.get(2)), registration.challengeHash());
 

@@ -338,7 +338,7 @@ class HttpClientTransport(
     fun verifyRamLfeReceipt(receipt: Map<String, Any>, outputHex: String?): CompletableFuture<RamLfeReceiptVerifyResponse> = verifyRamLfeReceipt(RamLfeReceiptVerifyRequest(receipt, outputHex))
 
     fun getVpnProfile(): CompletableFuture<VpnProfile> =
-        fetchJson(buildJsonGetRequest("/v1/vpn/profile", emptyMap()), VpnJsonParser::parseProfile, "vpn profile")
+        fetchJson(buildJsonGetRequest("/v1/vpn/profile", emptyMap()), VpnJsonParser::parseProfile, "vpn profile", 200)
 
     fun registerPushDevice(requestBody: PushDeviceRequest, canonicalAuth: ToriiCanonicalRequestAuth): CompletableFuture<ClientResponse> {
         val body = encodeJsonBody(buildPushDevicePayload(requestBody.accountId, requestBody.platform, requestBody.token, requestBody.topics))
@@ -352,12 +352,12 @@ class HttpClientTransport(
 
     fun createVpnQuote(requestBody: VpnQuoteCreateRequest, canonicalAuth: ToriiCanonicalRequestAuth): CompletableFuture<VpnQuote> {
         val body = encodeJsonBody(buildVpnQuoteCreatePayload(requestBody.exitClass, requestBody.meteringPublicKeyHex))
-        return fetchJson(buildVpnRequest("POST", "/v1/vpn/quotes", body, canonicalAuth), VpnJsonParser::parseQuote, "vpn quote create")
+        return fetchJson(buildVpnRequest("POST", "/v1/vpn/quotes", body, canonicalAuth), VpnJsonParser::parseQuote, "vpn quote create", 201)
     }
 
     fun createVpnSession(requestBody: VpnSessionCreateRequest, canonicalAuth: ToriiCanonicalRequestAuth): CompletableFuture<VpnSession> {
         val body = encodeJsonBody(buildVpnSessionCreatePayload(requestBody.exitClass, requestBody.quoteId, requestBody.paymentTxHash, requestBody.meteringPublicKeyHex))
-        return fetchJson(buildVpnRequest("POST", "/v1/vpn/sessions", body, canonicalAuth), VpnJsonParser::parseSession, "vpn session create")
+        return fetchJson(buildVpnRequest("POST", "/v1/vpn/sessions", body, canonicalAuth), VpnJsonParser::parseSession, "vpn session create", 201)
     }
 
     fun getVpnSession(sessionId: String, canonicalAuth: ToriiCanonicalRequestAuth): CompletableFuture<Optional<VpnSession>> {
@@ -366,6 +366,7 @@ class HttpClientTransport(
             buildVpnRequest("GET", "/v1/vpn/sessions/${encodePathSegment(normalizedSessionId)}", null, canonicalAuth),
             VpnJsonParser::parseSession,
             "vpn session lookup",
+            200,
         )
     }
 
@@ -375,16 +376,17 @@ class HttpClientTransport(
             buildVpnRequest("DELETE", "/v1/vpn/sessions/${encodePathSegment(normalizedSessionId)}", null, canonicalAuth),
             VpnJsonParser::parseReceipt,
             "vpn session delete",
+            200,
         )
     }
 
     fun submitVpnReceipt(requestBody: VpnReceiptSubmitRequest, canonicalAuth: ToriiCanonicalRequestAuth): CompletableFuture<VpnReceipt> {
         val body = encodeJsonBody(buildVpnReceiptSubmitPayload(requestBody.relayReceiptHex, requestBody.clientVoucherHex, requestBody.leaseIdHex))
-        return fetchJson(buildVpnRequest("POST", "/v1/vpn/receipts", body, canonicalAuth), VpnJsonParser::parseReceipt, "vpn receipt submit")
+        return fetchJson(buildVpnRequest("POST", "/v1/vpn/receipts", body, canonicalAuth), VpnJsonParser::parseReceipt, "vpn receipt submit", 201)
     }
 
     fun listVpnReceipts(canonicalAuth: ToriiCanonicalRequestAuth): CompletableFuture<VpnReceiptListResponse> =
-        fetchJson(buildVpnRequest("GET", "/v1/vpn/receipts", null, canonicalAuth), VpnJsonParser::parseReceiptList, "vpn receipt list")
+        fetchJson(buildVpnRequest("GET", "/v1/vpn/receipts", null, canonicalAuth), VpnJsonParser::parseReceiptList, "vpn receipt list", 200)
 
     fun registerVerifyingKey(requestBody: VerifyingKeyRegisterRequest): CompletableFuture<ClientResponse> {
         val body = encodeJsonBody(buildVerifyingKeyRegisterPayload(requestBody))
@@ -709,12 +711,19 @@ class HttpClientTransport(
         return URI.create(if (base.endsWith("/")) base + normalized else "$base/$normalized")
     }
 
-    private fun <T> fetchJson(request: TransportRequest, parser: Function<ByteArray, T>, errorContext: String): CompletableFuture<T> {
+    private fun <T> fetchJson(
+        request: TransportRequest,
+        parser: Function<ByteArray, T>,
+        errorContext: String,
+        acceptedStatus: Int? = null,
+    ): CompletableFuture<T> {
         notifyRequest(request); val future = CompletableFuture<T>()
         executor.execute(request).whenComplete { response, throwable ->
             if (throwable != null) { val cause = if (throwable is CompletionException) throwable.cause else throwable; notifyFailure(request, cause!!); future.completeExceptionally(RuntimeException("$errorContext request failed", cause)); return@whenComplete }
             val clientResponse = ClientResponse(response.statusCode, response.body, response.message, null, extractRejectCode(response))
-            if (response.statusCode < 200 || response.statusCode >= 300) { val error = RuntimeException("$errorContext request failed with status ${response.statusCode}"); notifyFailure(request, error); future.completeExceptionally(error); return@whenComplete }
+            val statusAccepted = acceptedStatus?.let { response.statusCode == it }
+                ?: (response.statusCode in 200..299)
+            if (!statusAccepted) { val error = RuntimeException("$errorContext request failed with status ${response.statusCode}"); notifyFailure(request, error); future.completeExceptionally(error); return@whenComplete }
             try { val parsed = parser.apply(response.body); notifyResponse(request, clientResponse); future.complete(parsed) }
             catch (ex: RuntimeException) { notifyFailure(request, ex); future.completeExceptionally(ex) }
         }; return future
@@ -828,13 +837,20 @@ class HttpClientTransport(
         }
     }
 
-    private fun <T : Any> fetchJsonAllowingNotFound(request: TransportRequest, parser: Function<ByteArray, T>, errorContext: String): CompletableFuture<Optional<T>> {
+    private fun <T : Any> fetchJsonAllowingNotFound(
+        request: TransportRequest,
+        parser: Function<ByteArray, T>,
+        errorContext: String,
+        acceptedStatus: Int? = null,
+    ): CompletableFuture<Optional<T>> {
         notifyRequest(request); val future = CompletableFuture<Optional<T>>()
         executor.execute(request).whenComplete { response, throwable ->
             if (throwable != null) { val cause = if (throwable is CompletionException) throwable.cause else throwable; notifyFailure(request, cause!!); future.completeExceptionally(RuntimeException("$errorContext request failed", cause)); return@whenComplete }
             val clientResponse = ClientResponse(response.statusCode, response.body, response.message, null, extractRejectCode(response))
             if (response.statusCode == 404) { notifyResponse(request, clientResponse); future.complete(Optional.empty<T>()); return@whenComplete }
-            if (response.statusCode < 200 || response.statusCode >= 300) { val error = RuntimeException("$errorContext request failed with status ${response.statusCode}"); notifyFailure(request, error); future.completeExceptionally(error); return@whenComplete }
+            val statusAccepted = acceptedStatus?.let { response.statusCode == it }
+                ?: (response.statusCode in 200..299)
+            if (!statusAccepted) { val error = RuntimeException("$errorContext request failed with status ${response.statusCode}"); notifyFailure(request, error); future.completeExceptionally(error); return@whenComplete }
             try { val parsed = parser.apply(response.body); notifyResponse(request, clientResponse); future.complete(Optional.of<T>(parsed)) }
             catch (ex: RuntimeException) { notifyFailure(request, ex); future.completeExceptionally(ex) }
         }; return future

@@ -62,6 +62,7 @@ public sealed class ToriiClientTests
     private static readonly string VpnPaymentTransactionHashHex = new('2', 64);
     private static readonly string VpnMeteringPublicKeyHex = new('3', 64);
     private static readonly string VpnSpkiSha256Hex = new('7', 64);
+    private static readonly string VpnHelperTicketHex = "5356504e48543100" + new string('0', (664 - 8) * 2);
     private static readonly string SoraFsManifestDigestHex = new('d', 64);
     private static readonly string SoraFsManifestIdHex = new('e', 64);
     private static readonly string ExplorerBlockHashHex = new('8', 64);
@@ -6536,9 +6537,9 @@ public sealed class ToriiClientTests
                   "fee_asset_id": "xor#universal.universal",
                   "escrow_account_id": "{{VpnEscrowAccountId}}",
                   "operator_account_id": "{{VpnOperatorAccountId}}",
-                  "lease_fee_nanos": 1000000,
+                  "lease_fee": "1000000.25",
                   "settlement_grace_secs": 120,
-                  "flow_label_bits": 20,
+                  "flow_label_bits": 24,
                   "padding_budget_ms": 80,
                   "relay_tls_spki_sha256_hex": "1111111111111111111111111111111111111111111111111111111111111111"
                 }
@@ -6556,9 +6557,81 @@ public sealed class ToriiClientTests
         Assert.Equal("xor#universal.universal", profile.FeeAssetId);
         Assert.Equal(VpnEscrowAccountId, profile.EscrowAccountId);
         Assert.Equal(VpnOperatorAccountId, profile.OperatorAccountId);
-        Assert.Equal((ulong)1000000, profile.LeaseFeeNanos);
+        Assert.Equal("1000000.25", profile.LeaseFee);
         Assert.Equal((ushort)80, profile.PaddingBudgetMilliseconds);
         Assert.Equal("/v1/vpn/profile", handler.LastRequest!.RequestUri!.AbsolutePath);
+    }
+
+    [Theory]
+    [InlineData("quote")]
+    [InlineData("session-create")]
+    [InlineData("session-get")]
+    [InlineData("receipt-submit")]
+    [InlineData("receipt-list")]
+    [InlineData("receipt-delete")]
+    public async Task SignedVpnRoutesRequireCanonicalCredentialsBeforeDispatch(string operation)
+    {
+        using var handler = new RecordingHandler(_ =>
+            throw new InvalidOperationException("unsigned VPN request reached HTTP dispatch"));
+        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            InvokeVpnResponseOperationAsync(client, operation));
+
+        Assert.Contains(nameof(ToriiClientOptions.CanonicalRequestCredentials), error.Message);
+        Assert.Null(handler.LastRequest);
+    }
+
+    [Theory]
+    [InlineData("profile", 201)]
+    [InlineData("quote", 200)]
+    [InlineData("session-create", 200)]
+    [InlineData("session-get", 201)]
+    [InlineData("receipt-submit", 200)]
+    [InlineData("receipt-list", 201)]
+    [InlineData("receipt-delete", 204)]
+    public async Task VpnRoutesRejectUndocumentedSuccessStatuses(
+        string operation,
+        int unexpectedStatusCode)
+    {
+        var statusCode = (HttpStatusCode)unexpectedStatusCode;
+        using var handler = new RecordingHandler(_ => new HttpResponseMessage(statusCode)
+        {
+            Content = new StringContent("{}"),
+        });
+        using var client = operation == "profile"
+            ? new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler))
+            : CreateSignedVpnClient(handler);
+
+        var error = await Assert.ThrowsAsync<ToriiApiException>(() =>
+            InvokeVpnResponseOperationAsync(client, operation));
+
+        Assert.Equal(statusCode, error.StatusCode);
+        Assert.NotNull(handler.LastRequest);
+    }
+
+    [Fact]
+    public void VpnRequestDtosRejectUnknownJsonProperties()
+    {
+        (Type Type, string Json)[] payloads =
+        [
+            (
+                typeof(ToriiVpnQuoteCreateRequest),
+                $$"""{"metering_public_key_hex":"{{VpnMeteringPublicKeyHex}}","unexpected":true}"""),
+            (
+                typeof(ToriiVpnSessionCreateRequest),
+                $$"""{"quote_id":"{{VpnQuoteIdHex}}","payment_tx_hash":"{{VpnPaymentTransactionHashHex}}","metering_public_key_hex":"{{VpnMeteringPublicKeyHex}}","unexpected":true}"""),
+            (
+                typeof(ToriiVpnReceiptSubmitRequest),
+                """{"relay_receipt_hex":"abcd","client_voucher_hex":"beef","unexpected":true}"""),
+        ];
+
+        foreach (var (type, json) in payloads)
+        {
+            var error = Assert.Throws<JsonException>(() => JsonSerializer.Deserialize(json, type));
+
+            Assert.Contains("unexpected", error.Message);
+        }
     }
 
     [Fact]
@@ -6743,14 +6816,14 @@ public sealed class ToriiClientTests
                       "fee_asset_id": "xor#universal.universal",
                       "escrow_account_id": "{{VpnEscrowAccountId}}",
                       "operator_account_id": "{{VpnOperatorAccountId}}",
-                      "lease_fee_nanos": 1000000,
+                      "lease_fee": "1000000.25",
                       "route_pushes": ["10.0.0.0/8"],
                       "excluded_routes": ["127.0.0.0/8"],
                       "dns_servers": ["1.1.1.1"],
                       "tunnel_addresses": ["10.208.0.2/32"],
                       "mtu_bytes": 1280,
                       "meter_family": "vpn-standard",
-                      "flow_label_bits": 20,
+                      "flow_label_bits": 24,
                       "padding_budget_ms": 80,
                       "relay_tls_spki_sha256_hex": "7878787878787878787878787878787878787878787878787878787878787878",
                       "metering_public_key_hex": "{{meteringPublicKeyHex}}",
@@ -6769,11 +6842,11 @@ public sealed class ToriiClientTests
             };
         });
 
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = CreateSignedVpnClient(handler);
         var quote = await client.CreateVpnQuoteAsync(new ToriiVpnQuoteCreateRequest
         {
             ExitClass = "low-latency",
-            MeteringPublicKeyHex = meteringPublicKeyHex.ToUpperInvariant(),
+            MeteringPublicKeyHex = "0X" + meteringPublicKeyHex.ToUpperInvariant(),
         }, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(quoteId, quote.QuoteId);
@@ -6806,7 +6879,6 @@ public sealed class ToriiClientTests
         yield return new object[] { valid with { MeteringPublicKeyHex = new string('a', 63) }, "MeteringPublicKeyHex", "32-byte hex string" };
         yield return new object[] { valid with { MeteringPublicKeyHex = new string('a', 65) }, "MeteringPublicKeyHex", "32-byte hex string" };
         yield return new object[] { valid with { MeteringPublicKeyHex = new string('g', 64) }, "MeteringPublicKeyHex", "32-byte hex string" };
-        yield return new object[] { valid with { MeteringPublicKeyHex = "0x" + new string('a', 64) }, "MeteringPublicKeyHex", "32-byte hex string" };
         yield return new object[] { valid with { MeteringPublicKeyHex = new string('a', 63) + "\u0001" }, "MeteringPublicKeyHex", "control characters" };
     }
 
@@ -6819,7 +6891,7 @@ public sealed class ToriiClientTests
     {
         using var handler = new RecordingHandler(_ =>
             throw new InvalidOperationException("malformed VPN quote request reached HTTP dispatch"));
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = CreateSignedVpnClient(handler);
 
         var error = await Assert.ThrowsAnyAsync<ArgumentException>(() =>
             client.CreateVpnQuoteAsync(request, cancellationToken: TestContext.Current.CancellationToken));
@@ -6864,8 +6936,8 @@ public sealed class ToriiClientTests
                       "fee_asset_id": "xor#universal.universal",
                       "escrow_account_id": "{{VpnEscrowAccountId}}",
                       "operator_account_id": "{{VpnOperatorAccountId}}",
-                      "lease_fee_nanos": 1000000,
-                      "flow_label_bits": 20,
+                      "lease_fee": "1000000.25",
+                      "flow_label_bits": 24,
                       "padding_budget_ms": 80,
                       "relay_tls_spki_sha256_hex": "7878787878787878787878787878787878787878787878787878787878787878",
                       "route_pushes": ["10.0.0.0/8"],
@@ -6873,7 +6945,7 @@ public sealed class ToriiClientTests
                       "dns_servers": ["1.1.1.1"],
                       "tunnel_addresses": ["10.208.0.2/32"],
                       "mtu_bytes": 1280,
-                      "helper_ticket_hex": "deadbeef",
+                      "helper_ticket_hex": "{{VpnHelperTicketHex}}",
                       "bytes_in": 123,
                       "bytes_out": 456,
                       "status": "active"
@@ -6882,13 +6954,13 @@ public sealed class ToriiClientTests
             };
         });
 
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = CreateSignedVpnClient(handler);
         var session = await client.CreateVpnSessionAsync(new ToriiVpnSessionCreateRequest
         {
             ExitClass = "low-latency",
             QuoteId = quoteId.ToUpperInvariant(),
-            PaymentTransactionHash = paymentTxHash.ToUpperInvariant(),
-            MeteringPublicKeyHex = meteringPublicKeyHex.ToUpperInvariant(),
+            PaymentTransactionHash = "0X" + paymentTxHash.ToUpperInvariant(),
+            MeteringPublicKeyHex = "0x" + meteringPublicKeyHex.ToUpperInvariant(),
         }, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(sessionId, session.SessionId);
@@ -6900,7 +6972,9 @@ public sealed class ToriiClientTests
         Assert.Equal((ulong)1700000000000, session.ExpiresAtMilliseconds);
         Assert.Equal(quoteId, session.QuoteId);
         Assert.Equal(paymentTxHash, session.PaymentTransactionHash);
-        Assert.Equal((ulong)1000000, session.LeaseFeeNanos);
+        Assert.Equal("1000000.25", session.LeaseFee);
+        Assert.Equal(VpnHelperTicketHex, session.HelperTicketHex);
+        Assert.Equal(1328, session.HelperTicketHex.Length);
     }
 
     public static IEnumerable<object[]> InvalidVpnSessionCreateRequests()
@@ -6940,7 +7014,7 @@ public sealed class ToriiClientTests
     {
         using var handler = new RecordingHandler(_ =>
             throw new InvalidOperationException("malformed VPN session request reached HTTP dispatch"));
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = CreateSignedVpnClient(handler);
 
         var error = await Assert.ThrowsAnyAsync<ArgumentException>(() =>
             client.CreateVpnSessionAsync(request, cancellationToken: TestContext.Current.CancellationToken));
@@ -6986,8 +7060,8 @@ public sealed class ToriiClientTests
                       "fee_asset_id": "xor#universal.universal",
                       "escrow_account_id": "{{VpnEscrowAccountId}}",
                       "operator_account_id": "{{VpnOperatorAccountId}}",
-                      "lease_fee_nanos": 1000000,
-                      "flow_label_bits": 20,
+                      "lease_fee": "1000000.25",
+                      "flow_label_bits": 24,
                       "padding_budget_ms": 80,
                       "relay_tls_spki_sha256_hex": null,
                       "route_pushes": [],
@@ -6995,7 +7069,7 @@ public sealed class ToriiClientTests
                       "dns_servers": [],
                       "tunnel_addresses": [],
                       "mtu_bytes": 1280,
-                      "helper_ticket_hex": "deadbeef",
+                      "helper_ticket_hex": "{{VpnHelperTicketHex}}",
                       "bytes_in": 0,
                       "bytes_out": 0,
                       "status": "active"
@@ -7004,7 +7078,7 @@ public sealed class ToriiClientTests
             };
         });
 
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = CreateSignedVpnClient(handler);
         var missing = await client.GetVpnSessionAsync(missingSessionId, cancellationToken: TestContext.Current.CancellationToken);
         var active = await client.GetVpnSessionAsync(sessionId, cancellationToken: TestContext.Current.CancellationToken);
 
@@ -7051,9 +7125,9 @@ public sealed class ToriiClientTests
                       "fee_asset_id": "xor#universal.universal",
                       "escrow_account_id": "{{VpnEscrowAccountId}}",
                       "operator_account_id": "{{VpnOperatorAccountId}}",
-                      "lease_fee_nanos": 1000000,
-                      "earned_fee_nanos": 500000,
-                      "refunded_fee_nanos": 500000,
+                      "lease_fee": "1000000.25",
+                      "earned_fee": "500000.125",
+                      "refunded_fee": "500000.125",
                       "lease_id_hex": "{{quoteId}}",
                       "settle_lease_instruction": {
                         "wire_id": "SettleVpnLease",
@@ -7070,12 +7144,12 @@ public sealed class ToriiClientTests
             };
         });
 
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = CreateSignedVpnClient(handler);
         var receipt = await client.SubmitVpnReceiptAsync(new ToriiVpnReceiptSubmitRequest
         {
-            RelayReceiptHex = "ABCD",
-            ClientVoucherHex = "BEEF",
-            LeaseIdHex = quoteId.ToUpperInvariant(),
+            RelayReceiptHex = "0XABCD",
+            ClientVoucherHex = "0xbeef",
+            LeaseIdHex = "0X" + quoteId.ToUpperInvariant(),
         }, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(sessionId, receipt.SessionId);
@@ -7088,7 +7162,7 @@ public sealed class ToriiClientTests
         Assert.Single(receiptInstructions);
         receiptInstructions[0] = new ToriiVpnTxInstruction { WireId = "Mutated", PayloadHex = "ff" };
         Assert.Equal("SettleVpnLease", receipt.TxInstructions[0].WireId);
-        Assert.Equal((ulong)500000, receipt.EarnedFeeNanos);
+        Assert.Equal("500000.125", receipt.EarnedFee);
     }
 
     public static IEnumerable<object[]> InvalidVpnReceiptSubmitRequests()
@@ -7116,7 +7190,6 @@ public sealed class ToriiClientTests
         yield return new object[] { valid with { LeaseIdHex = " " + new string('d', 64) }, "LeaseIdHex", "whitespace" };
         yield return new object[] { valid with { LeaseIdHex = new string('d', 63) }, "LeaseIdHex", "32-byte hex string" };
         yield return new object[] { valid with { LeaseIdHex = new string('j', 64) }, "LeaseIdHex", "32-byte hex string" };
-        yield return new object[] { valid with { LeaseIdHex = "0x" + new string('d', 64) }, "LeaseIdHex", "32-byte hex string" };
     }
 
     [Theory]
@@ -7128,7 +7201,7 @@ public sealed class ToriiClientTests
     {
         using var handler = new RecordingHandler(_ =>
             throw new InvalidOperationException("malformed VPN receipt request reached HTTP dispatch"));
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = CreateSignedVpnClient(handler);
 
         var error = await Assert.ThrowsAnyAsync<ArgumentException>(() =>
             client.SubmitVpnReceiptAsync(request, cancellationToken: TestContext.Current.CancellationToken));
@@ -7171,9 +7244,9 @@ public sealed class ToriiClientTests
                           "fee_asset_id": "xor#universal.universal",
                           "escrow_account_id": "{{VpnEscrowAccountId}}",
                           "operator_account_id": "{{VpnOperatorAccountId}}",
-                          "lease_fee_nanos": 1000000,
-                          "earned_fee_nanos": 500000,
-                          "refunded_fee_nanos": 500000,
+                          "lease_fee": "1000000.25",
+                          "earned_fee": "500000.125",
+                          "refunded_fee": "500000.125",
                           "lease_id_hex": "{{quoteId}}",
                           "settle_lease_instruction": {
                             "wire_id": "SettleVpnLease",
@@ -7193,7 +7266,7 @@ public sealed class ToriiClientTests
             };
         });
 
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = CreateSignedVpnClient(handler);
         var receipts = await client.ListVpnReceiptsAsync(cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal((ulong)1, receipts.Total);
@@ -7222,7 +7295,7 @@ public sealed class ToriiClientTests
             return new HttpResponseMessage(HttpStatusCode.NotFound);
         });
 
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = CreateSignedVpnClient(handler);
         var response = await client.DeleteVpnSessionAsync(missingSessionId, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Null(response);
@@ -7257,9 +7330,9 @@ public sealed class ToriiClientTests
                   "fee_asset_id": "xor#universal.universal",
                   "escrow_account_id": "{{VpnEscrowAccountId}}",
                   "operator_account_id": "{{VpnOperatorAccountId}}",
-                  "lease_fee_nanos": 1000000,
-                  "earned_fee_nanos": 0,
-                  "refunded_fee_nanos": 1000000,
+                  "lease_fee": "1000000.25",
+                  "earned_fee": "0",
+                  "refunded_fee": "1000000.25",
                   "lease_id_hex": "{{quoteId}}",
                   "settle_lease_instruction": null,
                   "tx_instructions": []
@@ -7272,14 +7345,14 @@ public sealed class ToriiClientTests
                 .Replace("{{VpnOperatorAccountId}}", VpnOperatorAccountId));
         });
 
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = CreateSignedVpnClient(handler);
         var response = await client.DeleteVpnSessionAsync(sessionId, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.NotNull(response);
         Assert.Equal(sessionId, response.SessionId);
         Assert.Equal(VpnAccountId, response.AccountId);
         Assert.Equal("disconnected", response.Status);
-        Assert.Equal((ulong)1000000, response.RefundedFeeNanos);
+        Assert.Equal("1000000.25", response.RefundedFee);
     }
 
     public static IEnumerable<object[]> InvalidVpnResponses()
@@ -7287,16 +7360,25 @@ public sealed class ToriiClientTests
         yield return new object[] { "profile", "relay_tls_spki_sha256_hex", " " + VpnSpkiSha256Hex, "surrounding whitespace" };
         yield return new object[] { "profile", "relay_tls_spki_sha256_hex", new string('A', 64), "lowercase" };
         yield return new object[] { "quote", "quote_id", new string('1', 63), "32-byte hex string" };
-        yield return new object[] { "quote", "session_id_hex", "abc", "even-length hex string" };
+        yield return new object[] { "quote", "session_id_hex", "abc", "16-byte hex string" };
+        yield return new object[] { "quote", "quote_id", new string('A', 64), "lowercase" };
+        yield return new object[] { "quote", "session_id_hex", new string('A', 32), "lowercase" };
         yield return new object[] { "quote", "metering_public_key_hex", new string('g', 64), "32-byte hex string" };
         yield return new object[] { "quote", "open_lease_instruction.payload_hex", "0xcafe", "even-length hex string" };
         yield return new object[] { "quote", "open_lease_instruction.payload_hex", "CAFE", "lowercase" };
         yield return new object[] { "session-create", "session_id", "session-1", "32-byte hex string" };
-        yield return new object[] { "session-create", "helper_ticket_hex", string.Empty, "non-empty even-length hex string" };
+        yield return new object[] { "session-create", "helper_ticket_hex", string.Empty, "non-empty string" };
+        yield return new object[] { "session-create", "helper_ticket_hex", "0x" + VpnHelperTicketHex, "664-byte hex string" };
+        yield return new object[] { "session-create", "helper_ticket_hex", VpnHelperTicketHex.ToUpperInvariant(), "lowercase 664-byte hex string" };
+        yield return new object[] { "session-create", "helper_ticket_hex", VpnHelperTicketHex[..^1], "664-byte hex string" };
+        yield return new object[] { "session-create", "helper_ticket_hex", VpnHelperTicketHex[..^2], "664-byte hex string" };
         yield return new object[] { "session-get", "payment_tx_hash", VpnPaymentTransactionHashHex[..32] + " " + VpnPaymentTransactionHashHex[32..], "whitespace" };
+        yield return new object[] { "session-get", "payment_tx_hash", new string('A', 64), "lowercase" };
         yield return new object[] { "session-get", "relay_tls_spki_sha256_hex", "0x" + VpnSpkiSha256Hex, "32-byte hex string" };
         yield return new object[] { "receipt-submit", "lease_id_hex", new string('1', 63), "32-byte hex string" };
+        yield return new object[] { "receipt-submit", "lease_id_hex", new string('A', 64), "lowercase" };
         yield return new object[] { "receipt-list", "items[0].payment_tx_hash", new string('z', 64), "32-byte hex string" };
+        yield return new object[] { "receipt-list", "items[0].payment_tx_hash", new string('A', 64), "lowercase" };
         yield return new object[] { "receipt-list", "tx_instructions[0].payload_hex", "ca fe", "whitespace" };
         yield return new object[] { "receipt-delete", "settle_lease_instruction.payload_hex", "caf", "even-length hex string" };
     }
@@ -7309,12 +7391,12 @@ public sealed class ToriiClientTests
         string value,
         string expectedMessage)
     {
-        using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        using var handler = new RecordingHandler(_ => new HttpResponseMessage(VpnSuccessStatusCode(operation))
         {
             Content = new StringContent(VpnResponseJson(operation, field, value)),
         });
 
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = CreateSignedVpnClient(handler);
 
         var error = await Assert.ThrowsAsync<JsonException>(() =>
             InvokeVpnResponseOperationAsync(client, operation));
@@ -7330,20 +7412,21 @@ public sealed class ToriiClientTests
         yield return new object[] { "profile", "lease_secs", RemoveTopLevelJsonField(VpnProfileRawResponseJson("lease_secs", 3600), "lease_secs"), "must not be null" };
         yield return new object[] { "profile", "lease_secs", VpnProfileRawResponseJson("lease_secs", 0), "positive" };
         yield return new object[] { "profile", "dns_push_interval_secs", RemoveTopLevelJsonField(VpnProfileRawResponseJson("dns_push_interval_secs", 30), "dns_push_interval_secs"), "must not be null" };
-        yield return new object[] { "profile", "dns_push_interval_secs", VpnProfileRawResponseJson("dns_push_interval_secs", 0), "positive" };
+        yield return new object[] { "profile", "dns_push_interval_secs", VpnProfileRawResponseJson("dns_push_interval_secs", 29), "at least 30" };
         yield return new object[] { "profile", "mtu_bytes", RemoveTopLevelJsonField(VpnProfileRawResponseJson("mtu_bytes", 1280), "mtu_bytes"), "must not be null" };
         yield return new object[] { "profile", "mtu_bytes", VpnProfileRawResponseJson("mtu_bytes", 0), "positive" };
-        yield return new object[] { "profile", "lease_fee_nanos", RemoveTopLevelJsonField(VpnProfileRawResponseJson("lease_fee_nanos", 1000000), "lease_fee_nanos"), "must not be null" };
+        yield return new object[] { "profile", "lease_fee", RemoveTopLevelJsonField(VpnProfileRawResponseJson("lease_fee", "1000000.25"), "lease_fee"), "must not be null" };
+        yield return new object[] { "profile", "lease_fee", VpnProfileRawResponseJson("lease_fee", 1000000), "string" };
         yield return new object[] { "profile", "settlement_grace_secs", RemoveTopLevelJsonField(VpnProfileRawResponseJson("settlement_grace_secs", 120), "settlement_grace_secs"), "must not be null" };
-        yield return new object[] { "profile", "flow_label_bits", RemoveTopLevelJsonField(VpnProfileRawResponseJson("flow_label_bits", 20), "flow_label_bits"), "must not be null" };
+        yield return new object[] { "profile", "flow_label_bits", RemoveTopLevelJsonField(VpnProfileRawResponseJson("flow_label_bits", 24), "flow_label_bits"), "must not be null" };
         yield return new object[] { "profile", "padding_budget_ms", RemoveTopLevelJsonField(VpnProfileRawResponseJson("padding_budget_ms", 50), "padding_budget_ms"), "must not be null" };
         yield return new object[] { "quote", "lease_secs", RemoveTopLevelJsonField(VpnQuoteRawResponseJson("lease_secs", 3600), "lease_secs"), "must not be null" };
         yield return new object[] { "quote", "lease_secs", VpnQuoteRawResponseJson("lease_secs", 0), "positive" };
         yield return new object[] { "quote", "quote_expires_at_ms", RemoveTopLevelJsonField(VpnQuoteRawResponseJson("quote_expires_at_ms", 1700000000000), "quote_expires_at_ms"), "must not be null" };
-        yield return new object[] { "quote", "lease_fee_nanos", RemoveTopLevelJsonField(VpnQuoteRawResponseJson("lease_fee_nanos", 1000000), "lease_fee_nanos"), "must not be null" };
+        yield return new object[] { "quote", "lease_fee", RemoveTopLevelJsonField(VpnQuoteRawResponseJson("lease_fee", "1000000.25"), "lease_fee"), "must not be null" };
         yield return new object[] { "quote", "mtu_bytes", RemoveTopLevelJsonField(VpnQuoteRawResponseJson("mtu_bytes", 1280), "mtu_bytes"), "must not be null" };
         yield return new object[] { "quote", "mtu_bytes", VpnQuoteRawResponseJson("mtu_bytes", 0), "positive" };
-        yield return new object[] { "quote", "flow_label_bits", RemoveTopLevelJsonField(VpnQuoteRawResponseJson("flow_label_bits", 20), "flow_label_bits"), "must not be null" };
+        yield return new object[] { "quote", "flow_label_bits", RemoveTopLevelJsonField(VpnQuoteRawResponseJson("flow_label_bits", 24), "flow_label_bits"), "must not be null" };
         yield return new object[] { "quote", "padding_budget_ms", RemoveTopLevelJsonField(VpnQuoteRawResponseJson("padding_budget_ms", 50), "padding_budget_ms"), "must not be null" };
         yield return new object[] { "session-get", "lease_secs", RemoveTopLevelJsonField(VpnSessionRawResponseJson("lease_secs", 3600), "lease_secs"), "must not be null" };
         yield return new object[] { "session-get", "lease_secs", VpnSessionRawResponseJson("lease_secs", 0), "positive" };
@@ -7351,17 +7434,17 @@ public sealed class ToriiClientTests
         yield return new object[] { "session-get", "connected_at_ms", RemoveTopLevelJsonField(VpnSessionRawResponseJson("connected_at_ms", 1699999400000), "connected_at_ms"), "must not be null" };
         yield return new object[] { "session-get", "mtu_bytes", RemoveTopLevelJsonField(VpnSessionRawResponseJson("mtu_bytes", 1280), "mtu_bytes"), "must not be null" };
         yield return new object[] { "session-get", "mtu_bytes", VpnSessionRawResponseJson("mtu_bytes", 0), "positive" };
-        yield return new object[] { "session-get", "flow_label_bits", RemoveTopLevelJsonField(VpnSessionRawResponseJson("flow_label_bits", 20), "flow_label_bits"), "must not be null" };
+        yield return new object[] { "session-get", "flow_label_bits", RemoveTopLevelJsonField(VpnSessionRawResponseJson("flow_label_bits", 24), "flow_label_bits"), "must not be null" };
         yield return new object[] { "session-get", "padding_budget_ms", RemoveTopLevelJsonField(VpnSessionRawResponseJson("padding_budget_ms", 50), "padding_budget_ms"), "must not be null" };
         yield return new object[] { "session-get", "bytes_in", RemoveTopLevelJsonField(VpnSessionRawResponseJson("bytes_in", 123), "bytes_in"), "must not be null" };
         yield return new object[] { "session-get", "bytes_out", RemoveTopLevelJsonField(VpnSessionRawResponseJson("bytes_out", 456), "bytes_out"), "must not be null" };
         yield return new object[] { "receipt-submit", "connected_at_ms", RemoveTopLevelJsonField(VpnReceiptRawResponseJson("connected_at_ms", 1699999400000), "connected_at_ms"), "must not be null" };
         yield return new object[] { "receipt-submit", "disconnected_at_ms", RemoveTopLevelJsonField(VpnReceiptRawResponseJson("disconnected_at_ms", 1700000000000), "disconnected_at_ms"), "must not be null" };
         yield return new object[] { "receipt-submit", "duration_ms", RemoveTopLevelJsonField(VpnReceiptRawResponseJson("duration_ms", 600000), "duration_ms"), "must not be null" };
-        yield return new object[] { "receipt-submit", "earned_fee_nanos", RemoveTopLevelJsonField(VpnReceiptRawResponseJson("earned_fee_nanos", 500000), "earned_fee_nanos"), "must not be null" };
+        yield return new object[] { "receipt-submit", "earned_fee", RemoveTopLevelJsonField(VpnReceiptRawResponseJson("earned_fee", "500000.125"), "earned_fee"), "must not be null" };
         yield return new object[] { "receipt-list", "items[0].connected_at_ms", RemoveFirstArrayItemObjectJsonField(VpnReceiptListRawResponseJson("total", 1), "items", "connected_at_ms"), "must not be null" };
         yield return new object[] { "receipt-list", "items[0].disconnected_at_ms", RemoveFirstArrayItemObjectJsonField(VpnReceiptListRawResponseJson("total", 1), "items", "disconnected_at_ms"), "must not be null" };
-        yield return new object[] { "receipt-list", "items[0].refunded_fee_nanos", RemoveFirstArrayItemObjectJsonField(VpnReceiptListRawResponseJson("total", 1), "items", "refunded_fee_nanos"), "must not be null" };
+        yield return new object[] { "receipt-list", "items[0].refunded_fee", RemoveFirstArrayItemObjectJsonField(VpnReceiptListRawResponseJson("total", 1), "items", "refunded_fee"), "must not be null" };
     }
 
     public static IEnumerable<object[]> InvalidVpnRequiredCollectionResponses()
@@ -7392,11 +7475,62 @@ public sealed class ToriiClientTests
         yield return new object[] { "quote", "quote_id", RemoveTopLevelJsonField(VpnQuoteRawResponseJson("quote_id", VpnQuoteIdHex), "quote_id"), "must not be null" };
         yield return new object[] { "quote", "metering_public_key_hex", VpnQuoteRawResponseJson("metering_public_key_hex", null), "must not be null" };
         yield return new object[] { "session-get", "session_id", VpnSessionRawResponseJson("session_id", null), "must not be null" };
-        yield return new object[] { "session-get", "helper_ticket_hex", RemoveTopLevelJsonField(VpnSessionRawResponseJson("helper_ticket_hex", "deadbeef"), "helper_ticket_hex"), "must not be null" };
+        yield return new object[] { "session-get", "helper_ticket_hex", RemoveTopLevelJsonField(VpnSessionRawResponseJson("helper_ticket_hex", VpnHelperTicketHex), "helper_ticket_hex"), "must not be null" };
         yield return new object[] { "receipt-submit", "status", VpnReceiptRawResponseJson("status", null), "must not be null" };
         yield return new object[] { "receipt-submit", "receipt_source", RemoveTopLevelJsonField(VpnReceiptRawResponseJson("receipt_source", "relay"), "receipt_source"), "must not be null" };
         yield return new object[] { "receipt-list", "items[0].session_id", VpnReceiptListRawNestedReceiptJson("session_id", null), "must not be null" };
         yield return new object[] { "receipt-list", "items[0].payment_tx_hash", RemoveFirstArrayItemObjectJsonField(VpnReceiptListRawResponseJson("total", 1), "items", "payment_tx_hash"), "must not be null" };
+    }
+
+    public static IEnumerable<object[]> InvalidVpnMinLengthResponseStrings()
+    {
+        yield return new object[]
+        {
+            "tx-instruction",
+            "wire_id",
+            VpnTxInstructionJson(string.Empty, "abcd").ToJsonString(),
+        };
+
+        foreach (var field in new[]
+        {
+            "relay_endpoint",
+            "meter_family",
+            "display_billing_label",
+            "fee_asset_id",
+            "escrow_account_id",
+            "operator_account_id",
+        })
+        {
+            yield return new object[] { "profile", field, VpnProfileRawResponseJson(field, string.Empty) };
+        }
+
+        foreach (var field in new[]
+        {
+            "payment_reference",
+            "account_id",
+            "relay_endpoint",
+            "fee_asset_id",
+            "escrow_account_id",
+            "operator_account_id",
+            "meter_family",
+        })
+        {
+            yield return new object[] { "quote", field, VpnQuoteRawResponseJson(field, string.Empty) };
+            yield return new object[] { "session", field, VpnSessionRawResponseJson(field, string.Empty) };
+        }
+
+        foreach (var field in new[]
+        {
+            "account_id",
+            "relay_endpoint",
+            "meter_family",
+            "fee_asset_id",
+            "escrow_account_id",
+            "operator_account_id",
+        })
+        {
+            yield return new object[] { "receipt", field, VpnReceiptRawResponseJson(field, string.Empty) };
+        }
     }
 
     public static IEnumerable<object[]> InvalidVpnCanonicalAccountResponses()
@@ -7433,12 +7567,12 @@ public sealed class ToriiClientTests
         string json,
         string expectedMessage)
     {
-        using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        using var handler = new RecordingHandler(_ => new HttpResponseMessage(VpnSuccessStatusCode(operation))
         {
             Content = new StringContent(json),
         });
 
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = CreateSignedVpnClient(handler);
 
         var error = await Assert.ThrowsAsync<JsonException>(() =>
             InvokeVpnResponseOperationAsync(client, operation));
@@ -7456,12 +7590,12 @@ public sealed class ToriiClientTests
         string json,
         string expectedMessage)
     {
-        using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        using var handler = new RecordingHandler(_ => new HttpResponseMessage(VpnSuccessStatusCode(operation))
         {
             Content = new StringContent(json),
         });
 
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = CreateSignedVpnClient(handler);
 
         var error = await Assert.ThrowsAsync<JsonException>(() =>
             InvokeVpnResponseOperationAsync(client, operation));
@@ -7479,12 +7613,12 @@ public sealed class ToriiClientTests
         string json,
         string expectedMessage)
     {
-        using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        using var handler = new RecordingHandler(_ => new HttpResponseMessage(VpnSuccessStatusCode(operation))
         {
             Content = new StringContent(json),
         });
 
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = CreateSignedVpnClient(handler);
 
         var error = await Assert.ThrowsAsync<JsonException>(() =>
             InvokeVpnResponseOperationAsync(client, operation));
@@ -7495,6 +7629,29 @@ public sealed class ToriiClientTests
     }
 
     [Theory]
+    [MemberData(nameof(InvalidVpnMinLengthResponseStrings))]
+    public void VpnResponsesRejectEmptyMinLengthStrings(
+        string operation,
+        string expectedField,
+        string json)
+    {
+        var error = Assert.Throws<JsonException>(() =>
+        {
+            if (operation == "tx-instruction")
+            {
+                _ = JsonSerializer.Deserialize<ToriiVpnTxInstruction>(json);
+            }
+            else
+            {
+                _ = DeserializeRawVpnResponse(operation, json);
+            }
+        });
+
+        Assert.Contains(expectedField, error.Message);
+        Assert.Contains("non-empty", error.Message);
+    }
+
+    [Theory]
     [MemberData(nameof(InvalidVpnCanonicalAccountResponses))]
     public async Task VpnEndpointsRejectNoncanonicalAccountResponses(
         string operation,
@@ -7502,12 +7659,12 @@ public sealed class ToriiClientTests
         string json,
         string expectedMessage)
     {
-        using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        using var handler = new RecordingHandler(_ => new HttpResponseMessage(VpnSuccessStatusCode(operation))
         {
             Content = new StringContent(json),
         });
 
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = CreateSignedVpnClient(handler);
 
         var error = await Assert.ThrowsAsync<JsonException>(() =>
             InvokeVpnResponseOperationAsync(client, operation));
@@ -7522,7 +7679,7 @@ public sealed class ToriiClientTests
         yield return new object[] { "profile", "vpn profile", "null", "must not be null" };
         yield return new object[] { "profile", "vpn profile", "[]", "object" };
         yield return new object[] { "profile", "available", VpnProfileDuplicatePropertyJson("available"), "must not appear more than once" };
-        yield return new object[] { "profile", "vpn profile.audit.nonce", VpnProfileUnknownExtensionDuplicateJson(), "must not appear more than once" };
+        yield return new object[] { "profile", "vpn profile.audit", VpnProfileUnknownExtensionDuplicateJson(), "not allowed" };
         yield return new object[] { "profile", "available", RemoveTopLevelJsonField(VpnProfileRawResponseJson("available", true), "available"), "must not be null" };
         yield return new object[] { "profile", "available", VpnProfileRawResponseJson("available", "true"), "boolean" };
         yield return new object[] { "profile", "relay_endpoint", RemoveTopLevelJsonField(VpnProfileRawResponseJson("relay_endpoint", "/dns4/vpn.sora.org/tcp/443/wss"), "relay_endpoint"), "must not be null" };
@@ -7531,8 +7688,11 @@ public sealed class ToriiClientTests
         yield return new object[] { "profile", "supported_exit_classes", RemoveTopLevelJsonField(VpnProfileRawResponseJson("available", true), "supported_exit_classes"), "required" };
         yield return new object[] { "profile", "supported_exit_classes[0]", VpnProfileRawResponseJson("supported_exit_classes[0]", null), "must not be null" };
         yield return new object[] { "profile", "supported_exit_classes[0]", VpnProfileRawResponseJson("supported_exit_classes[0]", "low latency"), "whitespace" };
+        yield return new object[] { "profile", "supported_exit_classes", VpnProfileSupportedExitClassesJson("standard", "low-latency"), "exactly 3" };
+        yield return new object[] { "profile", "supported_exit_classes[1]", VpnProfileSupportedExitClassesJson("standard", "standard", "high-security"), "unique" };
         yield return new object[] { "profile", "default_exit_class", RemoveTopLevelJsonField(VpnProfileRawResponseJson("default_exit_class", "standard"), "default_exit_class"), "must not be null" };
         yield return new object[] { "profile", "default_exit_class", VpnProfileRawResponseJson("default_exit_class", null), "must not be null" };
+        yield return new object[] { "profile", "default_exit_class", VpnProfileRawResponseJson("default_exit_class", "premium"), "must be one of" };
         yield return new object[] { "profile", "route_pushes", RemoveTopLevelJsonField(VpnProfileRawResponseJson("available", true), "route_pushes"), "required" };
         yield return new object[] { "profile", "excluded_routes", RemoveTopLevelJsonField(VpnProfileRawResponseJson("available", true), "excluded_routes"), "required" };
         yield return new object[] { "profile", "dns_servers", RemoveTopLevelJsonField(VpnProfileRawResponseJson("available", true), "dns_servers"), "required" };
@@ -7545,16 +7705,21 @@ public sealed class ToriiClientTests
         yield return new object[] { "profile", "lease_secs", VpnProfileRawResponseJson("lease_secs", "3600"), "unsigned integer" };
         yield return new object[] { "profile", "lease_secs", RemoveTopLevelJsonField(VpnProfileRawResponseJson("lease_secs", 3600), "lease_secs"), "must not be null" };
         yield return new object[] { "profile", "lease_secs", VpnProfileRawResponseJson("lease_secs", 0), "positive" };
+        yield return new object[] { "profile", "lease_secs", VpnProfileRawResponseJson("lease_secs", (ulong)uint.MaxValue + 1), "between 1" };
         yield return new object[] { "profile", "dns_push_interval_secs", RemoveTopLevelJsonField(VpnProfileRawResponseJson("dns_push_interval_secs", 30), "dns_push_interval_secs"), "must not be null" };
-        yield return new object[] { "profile", "dns_push_interval_secs", VpnProfileRawResponseJson("dns_push_interval_secs", 0), "positive" };
+        yield return new object[] { "profile", "dns_push_interval_secs", VpnProfileRawResponseJson("dns_push_interval_secs", 29), "at least 30" };
         yield return new object[] { "profile", "mtu_bytes", RemoveTopLevelJsonField(VpnProfileRawResponseJson("mtu_bytes", 1280), "mtu_bytes"), "must not be null" };
         yield return new object[] { "profile", "mtu_bytes", VpnProfileRawResponseJson("mtu_bytes", 0), "positive" };
-        yield return new object[] { "profile", "lease_fee_nanos", RemoveTopLevelJsonField(VpnProfileRawResponseJson("lease_fee_nanos", 1000000), "lease_fee_nanos"), "must not be null" };
+        yield return new object[] { "profile", "lease_fee", RemoveTopLevelJsonField(VpnProfileRawResponseJson("lease_fee", "1000000.25"), "lease_fee"), "must not be null" };
         yield return new object[] { "profile", "settlement_grace_secs", RemoveTopLevelJsonField(VpnProfileRawResponseJson("settlement_grace_secs", 120), "settlement_grace_secs"), "must not be null" };
-        yield return new object[] { "profile", "flow_label_bits", RemoveTopLevelJsonField(VpnProfileRawResponseJson("flow_label_bits", 20), "flow_label_bits"), "must not be null" };
+        yield return new object[] { "profile", "settlement_grace_secs", VpnProfileRawResponseJson("settlement_grace_secs", 0), "positive" };
+        yield return new object[] { "profile", "flow_label_bits", RemoveTopLevelJsonField(VpnProfileRawResponseJson("flow_label_bits", 24), "flow_label_bits"), "must not be null" };
+        yield return new object[] { "profile", "flow_label_bits", VpnProfileRawResponseJson("flow_label_bits", 23), "equal 24" };
         yield return new object[] { "profile", "flow_label_bits", VpnProfileRawResponseJson("flow_label_bits", 256), "unsigned 8-bit" };
         yield return new object[] { "profile", "padding_budget_ms", RemoveTopLevelJsonField(VpnProfileRawResponseJson("padding_budget_ms", 50), "padding_budget_ms"), "must not be null" };
+        yield return new object[] { "profile", "padding_budget_ms", VpnProfileRawResponseJson("padding_budget_ms", 0), "between 1" };
         yield return new object[] { "profile", "padding_budget_ms", VpnProfileRawResponseJson("padding_budget_ms", 65536), "unsigned 16-bit" };
+        yield return new object[] { "profile", "relay_tls_spki_sha256_hex", RemoveTopLevelJsonField(VpnProfileRawResponseJson("relay_tls_spki_sha256_hex", null), "relay_tls_spki_sha256_hex"), "required" };
         yield return new object[] { "profile", "relay_tls_spki_sha256_hex", VpnProfileRawResponseJson("relay_tls_spki_sha256_hex", "0x" + VpnSpkiSha256Hex), "32-byte hex string" };
         foreach (var invalidAccountId in new[]
         {
@@ -7578,8 +7743,8 @@ public sealed class ToriiClientTests
             yield return new object[] { "receipt-list", "items[0].escrow_account_id", VpnReceiptListRawNestedReceiptJson("escrow_account_id", invalidAccountId), "canonical I105" };
             yield return new object[] { "receipt-list", "items[0].operator_account_id", VpnReceiptListRawNestedReceiptJson("operator_account_id", invalidAccountId), "canonical I105" };
         }
-        yield return new object[] { "quote", "vpn quote.audit.nonce", VpnQuoteUnknownExtensionDuplicateJson(), "must not appear more than once" };
-        yield return new object[] { "quote", "vpn quote.open_lease_instruction.audit.nonce", VpnQuoteOpenLeaseInstructionUnknownExtensionDuplicateJson(), "must not appear more than once" };
+        yield return new object[] { "quote", "vpn quote.audit", VpnQuoteUnknownExtensionDuplicateJson(), "not allowed" };
+        yield return new object[] { "quote", "vpn quote.open_lease_instruction.audit", VpnQuoteOpenLeaseInstructionUnknownExtensionDuplicateJson(), "not allowed" };
         yield return new object[] { "quote", "quote_id", RemoveTopLevelJsonField(VpnQuoteRawResponseJson("quote_id", VpnQuoteIdHex), "quote_id"), "must not be null" };
         yield return new object[] { "quote", "quote_id", VpnQuoteRawResponseJson("quote_id", null), "must not be null" };
         yield return new object[] { "quote", "lease_id_hex", VpnQuoteRawResponseJson("lease_id_hex", null), "must not be null" };
@@ -7595,10 +7760,11 @@ public sealed class ToriiClientTests
         yield return new object[] { "quote", "lease_secs", VpnQuoteRawResponseJson("lease_secs", 0), "positive" };
         yield return new object[] { "quote", "quote_expires_at_ms", RemoveTopLevelJsonField(VpnQuoteRawResponseJson("quote_expires_at_ms", 1700000000000), "quote_expires_at_ms"), "must not be null" };
         yield return new object[] { "quote", "quote_expires_at_ms", VpnQuoteRawResponseJson("quote_expires_at_ms", 0), "positive" };
-        yield return new object[] { "quote", "lease_fee_nanos", RemoveTopLevelJsonField(VpnQuoteRawResponseJson("lease_fee_nanos", 1000000), "lease_fee_nanos"), "must not be null" };
+        yield return new object[] { "quote", "lease_fee", RemoveTopLevelJsonField(VpnQuoteRawResponseJson("lease_fee", "1000000.25"), "lease_fee"), "must not be null" };
+        yield return new object[] { "quote", "lease_fee", VpnQuoteRawResponseJson("lease_fee", "01"), "canonical" };
         yield return new object[] { "quote", "mtu_bytes", RemoveTopLevelJsonField(VpnQuoteRawResponseJson("mtu_bytes", 1280), "mtu_bytes"), "must not be null" };
         yield return new object[] { "quote", "mtu_bytes", VpnQuoteRawResponseJson("mtu_bytes", 0), "positive" };
-        yield return new object[] { "quote", "flow_label_bits", RemoveTopLevelJsonField(VpnQuoteRawResponseJson("flow_label_bits", 20), "flow_label_bits"), "must not be null" };
+        yield return new object[] { "quote", "flow_label_bits", RemoveTopLevelJsonField(VpnQuoteRawResponseJson("flow_label_bits", 24), "flow_label_bits"), "must not be null" };
         yield return new object[] { "quote", "padding_budget_ms", RemoveTopLevelJsonField(VpnQuoteRawResponseJson("padding_budget_ms", 50), "padding_budget_ms"), "must not be null" };
         yield return new object[] { "quote", "route_pushes", RemoveTopLevelJsonField(VpnQuoteRawResponseJson("lease_secs", 3600), "route_pushes"), "required" };
         yield return new object[] { "quote", "route_pushes[0]", VpnQuoteRawResponseJson("route_pushes[0]", null), "must not be null" };
@@ -7613,7 +7779,7 @@ public sealed class ToriiClientTests
         yield return new object[] { "quote", "tx_instructions", RemoveTopLevelJsonField(VpnQuoteRawResponseJson("lease_secs", 3600), "tx_instructions"), "required" };
         yield return new object[] { "quote", "tx_instructions[0]", VpnQuoteRawResponseJson("tx_instructions[0]", null), "must not be null" };
         yield return new object[] { "session", "session_id", VpnSessionDuplicatePropertyJson("session_id"), "must not appear more than once" };
-        yield return new object[] { "session", "vpn session.audit.nonce", VpnSessionUnknownExtensionDuplicateJson(), "must not appear more than once" };
+        yield return new object[] { "session", "vpn session.audit", VpnSessionUnknownExtensionDuplicateJson(), "not allowed" };
         yield return new object[] { "session", "session_id", RemoveTopLevelJsonField(VpnSessionRawResponseJson("session_id", VpnSessionIdHex), "session_id"), "must not be null" };
         yield return new object[] { "session", "session_id", VpnSessionRawResponseJson("session_id", null), "must not be null" };
         yield return new object[] { "session", "account_id", VpnSessionRawResponseJson("account_id", null), "must not be null" };
@@ -7635,8 +7801,9 @@ public sealed class ToriiClientTests
         yield return new object[] { "session", "operator_account_id", VpnSessionRawResponseJson("operator_account_id", null), "must not be null" };
         yield return new object[] { "session", "mtu_bytes", RemoveTopLevelJsonField(VpnSessionRawResponseJson("mtu_bytes", 1280), "mtu_bytes"), "must not be null" };
         yield return new object[] { "session", "mtu_bytes", VpnSessionRawResponseJson("mtu_bytes", 0), "positive" };
-        yield return new object[] { "session", "lease_fee_nanos", RemoveTopLevelJsonField(VpnSessionRawResponseJson("lease_fee_nanos", 1000000), "lease_fee_nanos"), "must not be null" };
-        yield return new object[] { "session", "flow_label_bits", RemoveTopLevelJsonField(VpnSessionRawResponseJson("flow_label_bits", 20), "flow_label_bits"), "must not be null" };
+        yield return new object[] { "session", "lease_fee", RemoveTopLevelJsonField(VpnSessionRawResponseJson("lease_fee", "1000000.25"), "lease_fee"), "must not be null" };
+        yield return new object[] { "session", "lease_fee", VpnSessionRawResponseJson("lease_fee", "1.0"), "canonical" };
+        yield return new object[] { "session", "flow_label_bits", RemoveTopLevelJsonField(VpnSessionRawResponseJson("flow_label_bits", 24), "flow_label_bits"), "must not be null" };
         yield return new object[] { "session", "padding_budget_ms", RemoveTopLevelJsonField(VpnSessionRawResponseJson("padding_budget_ms", 50), "padding_budget_ms"), "must not be null" };
         yield return new object[] { "session", "route_pushes", RemoveTopLevelJsonField(VpnSessionRawResponseJson("lease_secs", 3600), "route_pushes"), "required" };
         yield return new object[] { "session", "excluded_routes", RemoveTopLevelJsonField(VpnSessionRawResponseJson("lease_secs", 3600), "excluded_routes"), "required" };
@@ -7645,12 +7812,15 @@ public sealed class ToriiClientTests
         yield return new object[] { "session", "bytes_in", RemoveTopLevelJsonField(VpnSessionRawResponseJson("bytes_in", 123), "bytes_in"), "must not be null" };
         yield return new object[] { "session", "bytes_in", VpnSessionRawResponseJson("bytes_in", "123"), "unsigned integer" };
         yield return new object[] { "session", "bytes_out", RemoveTopLevelJsonField(VpnSessionRawResponseJson("bytes_out", 456), "bytes_out"), "must not be null" };
-        yield return new object[] { "session", "helper_ticket_hex", RemoveTopLevelJsonField(VpnSessionRawResponseJson("helper_ticket_hex", "deadbeef"), "helper_ticket_hex"), "must not be null" };
+        yield return new object[] { "session", "helper_ticket_hex", RemoveTopLevelJsonField(VpnSessionRawResponseJson("helper_ticket_hex", VpnHelperTicketHex), "helper_ticket_hex"), "must not be null" };
         yield return new object[] { "session", "helper_ticket_hex", VpnSessionRawResponseJson("helper_ticket_hex", null), "must not be null" };
-        yield return new object[] { "session", "helper_ticket_hex", VpnSessionRawResponseJson("helper_ticket_hex", "0xdeadbeef"), "even-length hex string" };
+        yield return new object[] { "session", "helper_ticket_hex", VpnSessionRawResponseJson("helper_ticket_hex", "0x" + VpnHelperTicketHex), "664-byte hex string" };
+        yield return new object[] { "session", "helper_ticket_hex", VpnSessionRawResponseJson("helper_ticket_hex", VpnHelperTicketHex.ToUpperInvariant()), "lowercase 664-byte hex string" };
+        yield return new object[] { "session", "helper_ticket_hex", VpnSessionRawResponseJson("helper_ticket_hex", VpnHelperTicketHex[..^1]), "664-byte hex string" };
+        yield return new object[] { "session", "helper_ticket_hex", VpnSessionRawResponseJson("helper_ticket_hex", VpnHelperTicketHex[..^2]), "664-byte hex string" };
         yield return new object[] { "session", "status", VpnSessionRawResponseJson("status", null), "must not be null" };
-        yield return new object[] { "receipt", "vpn receipt.audit.nonce", VpnReceiptUnknownExtensionDuplicateJson(), "must not appear more than once" };
-        yield return new object[] { "receipt", "vpn receipt.settle_lease_instruction.audit.nonce", VpnReceiptSettleInstructionUnknownExtensionDuplicateJson(), "must not appear more than once" };
+        yield return new object[] { "receipt", "vpn receipt.audit", VpnReceiptUnknownExtensionDuplicateJson(), "not allowed" };
+        yield return new object[] { "receipt", "vpn receipt.settle_lease_instruction.audit", VpnReceiptSettleInstructionUnknownExtensionDuplicateJson(), "not allowed" };
         yield return new object[] { "receipt", "session_id", RemoveTopLevelJsonField(VpnReceiptRawResponseJson("session_id", VpnSessionIdHex), "session_id"), "must not be null" };
         yield return new object[] { "receipt", "session_id", VpnReceiptRawResponseJson("session_id", null), "must not be null" };
         yield return new object[] { "receipt", "account_id", VpnReceiptRawResponseJson("account_id", null), "must not be null" };
@@ -7673,14 +7843,18 @@ public sealed class ToriiClientTests
         yield return new object[] { "receipt", "fee_asset_id", VpnReceiptRawResponseJson("fee_asset_id", null), "must not be null" };
         yield return new object[] { "receipt", "escrow_account_id", VpnReceiptRawResponseJson("escrow_account_id", null), "must not be null" };
         yield return new object[] { "receipt", "operator_account_id", VpnReceiptRawResponseJson("operator_account_id", null), "must not be null" };
-        yield return new object[] { "receipt", "lease_fee_nanos", RemoveTopLevelJsonField(VpnReceiptRawResponseJson("lease_fee_nanos", 1000000), "lease_fee_nanos"), "must not be null" };
-        yield return new object[] { "receipt", "earned_fee_nanos", RemoveTopLevelJsonField(VpnReceiptRawResponseJson("earned_fee_nanos", 500000), "earned_fee_nanos"), "must not be null" };
-        yield return new object[] { "receipt", "refunded_fee_nanos", RemoveTopLevelJsonField(VpnReceiptRawResponseJson("refunded_fee_nanos", 500000), "refunded_fee_nanos"), "must not be null" };
+        yield return new object[] { "receipt", "lease_fee", RemoveTopLevelJsonField(VpnReceiptRawResponseJson("lease_fee", "1000000.25"), "lease_fee"), "must not be null" };
+        yield return new object[] { "receipt", "earned_fee", RemoveTopLevelJsonField(VpnReceiptRawResponseJson("earned_fee", "500000.125"), "earned_fee"), "must not be null" };
+        yield return new object[] { "receipt", "refunded_fee", RemoveTopLevelJsonField(VpnReceiptRawResponseJson("refunded_fee", "500000.125"), "refunded_fee"), "must not be null" };
+        yield return new object[] { "receipt", "earned_fee", VpnReceiptRawResponseJson("earned_fee", "-1"), "canonical" };
+        yield return new object[] { "receipt", "lease_id_hex", RemoveTopLevelJsonField(VpnReceiptRawResponseJson("lease_id_hex", VpnQuoteIdHex), "lease_id_hex"), "must not be null" };
+        yield return new object[] { "receipt", "lease_id_hex", VpnReceiptRawResponseJson("lease_id_hex", null), "must not be null" };
+        yield return new object[] { "receipt", "lease_id_hex", VpnReceiptRawResponseJson("lease_id_hex", new string('A', 64)), "lowercase" };
         yield return new object[] { "receipt", "lease_id_hex", VpnReceiptRawResponseJson("lease_id_hex", "0x" + VpnQuoteIdHex), "32-byte hex string" };
         yield return new object[] { "receipt", "tx_instructions", VpnReceiptRawResponseJson("tx_instructions", null), "required" };
         yield return new object[] { "receipt", "tx_instructions", RemoveTopLevelJsonField(VpnReceiptRawResponseJson("connected_at_ms", 1699999400000), "tx_instructions"), "required" };
-        yield return new object[] { "receipt-list", "vpn receipt list response.audit.nonce", VpnReceiptListUnknownExtensionDuplicateJson(), "must not appear more than once" };
-        yield return new object[] { "receipt-list", "vpn receipt list response.items[0].audit.nonce", VpnReceiptListReceiptUnknownExtensionDuplicateJson(), "must not appear more than once" };
+        yield return new object[] { "receipt-list", "vpn receipt list response.audit", VpnReceiptListUnknownExtensionDuplicateJson(), "not allowed" };
+        yield return new object[] { "receipt-list", "vpn receipt list response.items[0].audit", VpnReceiptListReceiptUnknownExtensionDuplicateJson(), "not allowed" };
         yield return new object[] { "receipt-list", "items", RemoveTopLevelJsonField(VpnReceiptListRawResponseJson("total", 1), "items"), "required" };
         yield return new object[] { "receipt-list", "items", VpnReceiptListRawResponseJson("items", null), "required" };
         yield return new object[] { "receipt-list", "items[0].session_id", RemoveFirstArrayItemObjectJsonField(VpnReceiptListRawResponseJson("total", 1), "items", "session_id"), "must not be null" };
@@ -7691,13 +7865,36 @@ public sealed class ToriiClientTests
         yield return new object[] { "receipt-list", "items[0].duration_ms", RemoveFirstArrayItemObjectJsonField(VpnReceiptListRawResponseJson("total", 1), "items", "duration_ms"), "must not be null" };
         yield return new object[] { "receipt-list", "items[0].bytes_in", RemoveFirstArrayItemObjectJsonField(VpnReceiptListRawResponseJson("total", 1), "items", "bytes_in"), "must not be null" };
         yield return new object[] { "receipt-list", "items[0].bytes_out", RemoveFirstArrayItemObjectJsonField(VpnReceiptListRawResponseJson("total", 1), "items", "bytes_out"), "must not be null" };
-        yield return new object[] { "receipt-list", "items[0].lease_fee_nanos", RemoveFirstArrayItemObjectJsonField(VpnReceiptListRawResponseJson("total", 1), "items", "lease_fee_nanos"), "must not be null" };
-        yield return new object[] { "receipt-list", "items[0].earned_fee_nanos", RemoveFirstArrayItemObjectJsonField(VpnReceiptListRawResponseJson("total", 1), "items", "earned_fee_nanos"), "must not be null" };
-        yield return new object[] { "receipt-list", "items[0].refunded_fee_nanos", RemoveFirstArrayItemObjectJsonField(VpnReceiptListRawResponseJson("total", 1), "items", "refunded_fee_nanos"), "must not be null" };
+        yield return new object[] { "receipt-list", "items[0].lease_fee", RemoveFirstArrayItemObjectJsonField(VpnReceiptListRawResponseJson("total", 1), "items", "lease_fee"), "must not be null" };
+        yield return new object[] { "receipt-list", "items[0].earned_fee", RemoveFirstArrayItemObjectJsonField(VpnReceiptListRawResponseJson("total", 1), "items", "earned_fee"), "must not be null" };
+        yield return new object[] { "receipt-list", "items[0].refunded_fee", RemoveFirstArrayItemObjectJsonField(VpnReceiptListRawResponseJson("total", 1), "items", "refunded_fee"), "must not be null" };
         yield return new object[] { "receipt-list", "items[0].tx_instructions", RemoveFirstArrayItemObjectJsonField(VpnReceiptListRawResponseJson("total", 1), "items", "tx_instructions"), "required" };
         yield return new object[] { "receipt-list", "items[0].payment_tx_hash", VpnReceiptListRawNestedReceiptJson("payment_tx_hash", new string('z', 64)), "32-byte hex string" };
         yield return new object[] { "receipt-list", "total", RemoveTopLevelJsonField(VpnReceiptListRawResponseJson("total", 1), "total"), "must not be null" };
         yield return new object[] { "receipt-list", "total", VpnReceiptListRawResponseJson("total", 0), "item count" };
+        yield return new object[] { "quote", "exit_class", VpnQuoteRawResponseJson("exit_class", "premium"), "must be one of" };
+        yield return new object[] { "quote", "lease_secs", VpnQuoteRawResponseJson("lease_secs", (ulong)uint.MaxValue + 1), "between 1" };
+        yield return new object[] { "quote", "mtu_bytes", VpnQuoteRawResponseJson("mtu_bytes", 1279), "equal 1280" };
+        yield return new object[] { "quote", "flow_label_bits", VpnQuoteRawResponseJson("flow_label_bits", 23), "equal 24" };
+        yield return new object[] { "quote", "padding_budget_ms", VpnQuoteRawResponseJson("padding_budget_ms", 0), "between 1" };
+        yield return new object[] { "quote", "relay_tls_spki_sha256_hex", RemoveTopLevelJsonField(VpnQuoteRawResponseJson("relay_tls_spki_sha256_hex", null), "relay_tls_spki_sha256_hex"), "required" };
+        yield return new object[] { "quote", "open_lease_instruction", RemoveTopLevelJsonField(VpnQuoteRawResponseJson("open_lease_instruction", null), "open_lease_instruction"), "required" };
+        yield return new object[] { "quote", "tx_instructions", VpnQuoteInstructionCountJson(0), "exactly 1" };
+        yield return new object[] { "quote", "tx_instructions", VpnQuoteInstructionCountJson(2), "exactly 1" };
+        yield return new object[] { "session", "exit_class", VpnSessionRawResponseJson("exit_class", "premium"), "must be one of" };
+        yield return new object[] { "session", "lease_secs", VpnSessionRawResponseJson("lease_secs", (ulong)uint.MaxValue + 1), "between 1" };
+        yield return new object[] { "session", "mtu_bytes", VpnSessionRawResponseJson("mtu_bytes", 1279), "equal 1280" };
+        yield return new object[] { "session", "flow_label_bits", VpnSessionRawResponseJson("flow_label_bits", 23), "equal 24" };
+        yield return new object[] { "session", "padding_budget_ms", VpnSessionRawResponseJson("padding_budget_ms", 0), "between 1" };
+        yield return new object[] { "session", "relay_tls_spki_sha256_hex", RemoveTopLevelJsonField(VpnSessionRawResponseJson("relay_tls_spki_sha256_hex", null), "relay_tls_spki_sha256_hex"), "required" };
+        yield return new object[] { "session", "status", VpnSessionRawResponseJson("status", "connected"), "equal active" };
+        yield return new object[] { "receipt", "exit_class", VpnReceiptRawResponseJson("exit_class", "premium"), "must be one of" };
+        yield return new object[] { "receipt", "status", VpnReceiptRawResponseJson("status", "active"), "must be one of" };
+        yield return new object[] { "receipt", "receipt_source", VpnReceiptRawResponseJson("receipt_source", "peer"), "must be one of" };
+        yield return new object[] { "receipt", "settle_lease_instruction", RemoveTopLevelJsonField(VpnReceiptRawResponseJson("settle_lease_instruction", null), "settle_lease_instruction"), "required" };
+        yield return new object[] { "receipt", "tx_instructions", VpnReceiptInstructionCountJson(2), "between 0 and 1" };
+        yield return new object[] { "receipt-list", "items", VpnReceiptListCountJson(25, 25), "at most 24" };
+        yield return new object[] { "receipt-list", "total", VpnReceiptListCountJson(1, 25), "at most 24" };
     }
 
     [Theory]
@@ -7729,19 +7926,24 @@ public sealed class ToriiClientTests
     [Fact]
     public void RawVpnProfileWriteRejectsNonPositiveOperationalParameters()
     {
-        foreach (var (fieldName, field) in new[]
+        foreach (var (fieldName, field, expectedMessage) in new[]
         {
-            ("leaseSeconds", "lease_secs"),
-            ("dnsPushIntervalSeconds", "dns_push_interval_secs"),
-            ("mtuBytes", "mtu_bytes"),
+            ("leaseSeconds", "lease_secs", "between 1"),
+            ("mtuBytes", "mtu_bytes", "equal 1280"),
         })
         {
             var error = Assert.Throws<JsonException>(() =>
                 SerializeWithPrivateField(ValidVpnProfile(), fieldName, 0UL));
 
             Assert.Contains(field, error.Message);
-            Assert.Contains("positive", error.Message);
+            Assert.Contains(expectedMessage, error.Message);
         }
+
+        var dnsError = Assert.Throws<JsonException>(() =>
+            SerializeWithPrivateField(ValidVpnProfile(), "dnsPushIntervalSeconds", 29UL));
+
+        Assert.Contains("dns_push_interval_secs", dnsError.Message);
+        Assert.Contains("at least 30", dnsError.Message);
     }
 
     [Fact]
@@ -7759,17 +7961,17 @@ public sealed class ToriiClientTests
     [Fact]
     public void RawVpnQuoteWriteRejectsNonPositiveOperationalParameters()
     {
-        foreach (var (fieldName, field) in new[]
+        foreach (var (fieldName, field, expectedMessage) in new[]
         {
-            ("leaseSeconds", "lease_secs"),
-            ("mtuBytes", "mtu_bytes"),
+            ("leaseSeconds", "lease_secs", "between 1"),
+            ("mtuBytes", "mtu_bytes", "equal 1280"),
         })
         {
             var error = Assert.Throws<JsonException>(() =>
                 SerializeWithPrivateField(ValidVpnQuote(), fieldName, 0UL));
 
             Assert.Contains(field, error.Message);
-            Assert.Contains("positive", error.Message);
+            Assert.Contains(expectedMessage, error.Message);
         }
     }
 
@@ -7792,17 +7994,17 @@ public sealed class ToriiClientTests
     [Fact]
     public void RawVpnSessionWriteRejectsNonPositiveOperationalParameters()
     {
-        foreach (var (fieldName, field) in new[]
+        foreach (var (fieldName, field, expectedMessage) in new[]
         {
-            ("leaseSeconds", "lease_secs"),
-            ("mtuBytes", "mtu_bytes"),
+            ("leaseSeconds", "lease_secs", "between 1"),
+            ("mtuBytes", "mtu_bytes", "equal 1280"),
         })
         {
             var error = Assert.Throws<JsonException>(() =>
                 SerializeWithPrivateField(ValidVpnSession(), fieldName, 0UL));
 
             Assert.Contains(field, error.Message);
-            Assert.Contains("positive", error.Message);
+            Assert.Contains(expectedMessage, error.Message);
         }
     }
 
@@ -7893,6 +8095,7 @@ public sealed class ToriiClientTests
     {
         yield return new object?[] { "profile", "SupportedExitClasses[0]", "low latency" };
         yield return new object?[] { "profile", "LeaseSeconds", 0UL };
+        yield return new object?[] { "profile", "DnsPushIntervalSeconds", 29UL };
         yield return new object?[] { "profile", "EscrowAccountId", "merchant@sora" };
         yield return new object?[] { "profile", "RelayTlsSpkiSha256Hex", "0x" + VpnSpkiSha256Hex };
         yield return new object?[] { "tx-instruction", "WireId", " OpenVpnLeaseEscrow" };
@@ -7905,8 +8108,12 @@ public sealed class ToriiClientTests
         yield return new object?[] { "session", "SessionId", "session-1" };
         yield return new object?[] { "session", "ConnectedAtMilliseconds", 0UL };
         yield return new object?[] { "session", "RoutePushes[0]", "10.0.0.0 /8" };
-        yield return new object?[] { "session", "HelperTicketHex", "CAFE" };
+        yield return new object?[] { "session", "HelperTicketHex", "0x" + VpnHelperTicketHex };
+        yield return new object?[] { "session", "HelperTicketHex", VpnHelperTicketHex.ToUpperInvariant() };
+        yield return new object?[] { "session", "HelperTicketHex", VpnHelperTicketHex[..^1] };
+        yield return new object?[] { "session", "HelperTicketHex", VpnHelperTicketHex[..^2] };
         yield return new object?[] { "receipt", "DisconnectedAtMilliseconds", 0UL };
+        yield return new object?[] { "receipt", "LeaseIdHex", string.Empty };
         yield return new object?[] { "receipt", "LeaseIdHex", "0x" + VpnQuoteIdHex };
         yield return new object?[] { "receipt", "SettleLeaseInstruction.PayloadHex", "CAFE" };
         yield return new object?[] { "receipt-list", "Items[0].PaymentTransactionHash", new string('z', 64) };
@@ -7935,7 +8142,7 @@ public sealed class ToriiClientTests
             "{\"wire_id\":\"OpenVpnLeaseEscrow\",\"wire_id\":\"OpenVpnLeaseEscrow\",\"payload_hex\":\"abcd\"}",
             "must not appear more than once",
         };
-        yield return new object[] { "vpn tx instruction.audit.nonce", VpnTxInstructionUnknownExtensionDuplicateJson(), "must not appear more than once" };
+        yield return new object[] { "vpn tx instruction.audit", VpnTxInstructionUnknownExtensionDuplicateJson(), "not allowed" };
         yield return new object[] { "wire_id", VpnTxInstructionJson(" OpenVpnLeaseEscrow", "abcd").ToJsonString(), "surrounding whitespace" };
         yield return new object[] { "wire_id", VpnTxInstructionJson("OpenVpnLeaseEscrow\u0001", "abcd").ToJsonString(), "control characters" };
         yield return new object[] { "wire_id", "{\"wire_id\":1,\"payload_hex\":\"abcd\"}", "string" };
@@ -10396,7 +10603,7 @@ public sealed class ToriiClientTests
     {
         using var handler = new RecordingHandler(_ =>
             throw new InvalidOperationException("malformed VPN/SoraFS route identifier reached HTTP dispatch"));
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = CreateSignedVpnClient(handler);
 
         var error = await Assert.ThrowsAnyAsync<ArgumentException>(() =>
             InvokeVpnAndSoraFsRouteReadOperationAsync(client, operation, value));
@@ -23453,6 +23660,29 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         };
     }
 
+    private static HttpStatusCode VpnSuccessStatusCode(string operation)
+    {
+        return operation switch
+        {
+            "quote" or "session-create" or "receipt-submit" => HttpStatusCode.Created,
+            "profile" or "session-get" or "receipt-list" or "receipt-delete" => HttpStatusCode.OK,
+            _ => throw new ArgumentOutOfRangeException(nameof(operation), operation, "Unknown VPN response operation."),
+        };
+    }
+
+    private static ToriiClient CreateSignedVpnClient(RecordingHandler handler)
+    {
+        return new ToriiClient(
+            new Uri("https://torii.example"),
+            new HttpClient(handler),
+            new ToriiClientOptions
+            {
+                CanonicalRequestCredentials = new CanonicalRequestCredentials(
+                    CanonicalAccountId,
+                    CanonicalPrivateKeySeed),
+            });
+    }
+
     private static object? DeserializeRawVpnResponse(string operation, string json)
     {
         return operation switch
@@ -23477,6 +23707,10 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             ("profile", "LeaseSeconds") => ValidVpnProfile() with
             {
                 LeaseSeconds = RequiredUInt64Value(value),
+            },
+            ("profile", "DnsPushIntervalSeconds") => ValidVpnProfile() with
+            {
+                DnsPushIntervalSeconds = RequiredUInt64Value(value),
             },
             ("profile", "EscrowAccountId") => ValidVpnProfile() with
             {
@@ -30713,6 +30947,60 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         return JsonWithIgnoredAuditDuplicate(VpnProfileRawResponseJson("available", true));
     }
 
+    private static string VpnProfileSupportedExitClassesJson(params string[] exitClasses)
+    {
+        var response = (JsonObject)JsonNode.Parse(VpnProfileRawResponseJson("available", true))!;
+        var items = new JsonArray();
+        foreach (var exitClass in exitClasses)
+        {
+            items.Add(JsonValue.Create(exitClass));
+        }
+
+        response["supported_exit_classes"] = items;
+        return response.ToJsonString();
+    }
+
+    private static string VpnQuoteInstructionCountJson(int count)
+    {
+        var response = (JsonObject)JsonNode.Parse(VpnQuoteRawResponseJson("quote_id", VpnQuoteIdHex))!;
+        var items = new JsonArray();
+        for (var index = 0; index < count; index++)
+        {
+            items.Add(VpnTxInstructionJson("OpenVpnLeaseEscrow", "abcd"));
+        }
+
+        response["tx_instructions"] = items;
+        return response.ToJsonString();
+    }
+
+    private static string VpnReceiptInstructionCountJson(int count)
+    {
+        var response = (JsonObject)JsonNode.Parse(VpnReceiptRawResponseJson("status", "settled"))!;
+        var items = new JsonArray();
+        for (var index = 0; index < count; index++)
+        {
+            items.Add(VpnTxInstructionJson("SettleVpnLease", "cafe"));
+        }
+
+        response["tx_instructions"] = items;
+        return response.ToJsonString();
+    }
+
+    private static string VpnReceiptListCountJson(int itemCount, ulong total)
+    {
+        var items = new JsonArray();
+        for (var index = 0; index < itemCount; index++)
+        {
+            items.Add(JsonNode.Parse(VpnReceiptRawResponseJson("status", "settled")));
+        }
+
+        return new JsonObject
+        {
+            ["items"] = items,
+            ["total"] = total,
+        }.ToJsonString();
+    }
+
     private static string VpnQuoteRawResponseJson(string field, object? value)
     {
         var response = (JsonObject)JsonNode.Parse(VpnResponseJson("quote", "quote_id", VpnQuoteIdHex))!;
@@ -30754,7 +31042,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             VpnQuoteIdHex,
             VpnPaymentTransactionHashHex,
             VpnSpkiSha256Hex,
-            "deadbeef");
+            VpnHelperTicketHex);
         response[field] = JsonValueForVpnResponse(value);
         return response.ToJsonString();
     }
@@ -30766,7 +31054,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             VpnQuoteIdHex,
             VpnPaymentTransactionHashHex,
             VpnSpkiSha256Hex,
-            "deadbeef");
+            VpnHelperTicketHex);
         return propertyName switch
         {
             "session_id" => json.Replace(
@@ -30886,7 +31174,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         var quoteTxPayloadHex = "abcd";
         var sessionId = VpnSessionIdHex;
         var paymentTxHash = VpnPaymentTransactionHashHex;
-        var helperTicketHex = "deadbeef";
+        var helperTicketHex = VpnHelperTicketHex;
         var receiptLeaseIdHex = VpnQuoteIdHex;
         var settleLeasePayloadHex = "cafe";
         var receiptTxPayloadHex = "cafe";
@@ -30973,14 +31261,14 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                 ["fee_asset_id"] = "xor#universal.universal",
                 ["escrow_account_id"] = VpnEscrowAccountId,
                 ["operator_account_id"] = VpnOperatorAccountId,
-                ["lease_fee_nanos"] = 1000000,
+                ["lease_fee"] = "1000000.25",
                 ["route_pushes"] = new JsonArray("10.0.0.0/8"),
                 ["excluded_routes"] = new JsonArray("127.0.0.0/8"),
                 ["dns_servers"] = new JsonArray("1.1.1.1"),
                 ["tunnel_addresses"] = new JsonArray("10.208.0.2/32"),
                 ["mtu_bytes"] = 1280,
                 ["meter_family"] = "vpn-standard",
-                ["flow_label_bits"] = 20,
+                ["flow_label_bits"] = 24,
                 ["padding_budget_ms"] = 80,
                 ["relay_tls_spki_sha256_hex"] = relayTlsSpkiSha256Hex,
                 ["metering_public_key_hex"] = meteringPublicKeyHex,
@@ -31036,7 +31324,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         {
             ["available"] = true,
             ["relay_endpoint"] = "/dns4/vpn.sora.org/tcp/443/wss",
-            ["supported_exit_classes"] = new JsonArray("standard"),
+            ["supported_exit_classes"] = new JsonArray("standard", "low-latency", "high-security"),
             ["default_exit_class"] = "standard",
             ["lease_secs"] = 3600,
             ["dns_push_interval_secs"] = 30,
@@ -31050,9 +31338,9 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             ["fee_asset_id"] = "xor#universal.universal",
             ["escrow_account_id"] = VpnEscrowAccountId,
             ["operator_account_id"] = VpnOperatorAccountId,
-            ["lease_fee_nanos"] = 1000000,
+            ["lease_fee"] = "1000000.25",
             ["settlement_grace_secs"] = 120,
-            ["flow_label_bits"] = 20,
+            ["flow_label_bits"] = 24,
             ["padding_budget_ms"] = 80,
             ["relay_tls_spki_sha256_hex"] = relayTlsSpkiSha256Hex,
         };
@@ -31081,8 +31369,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             ["fee_asset_id"] = "xor#universal.universal",
             ["escrow_account_id"] = VpnEscrowAccountId,
             ["operator_account_id"] = VpnOperatorAccountId,
-            ["lease_fee_nanos"] = 1000000,
-            ["flow_label_bits"] = 20,
+            ["lease_fee"] = "1000000.25",
+            ["flow_label_bits"] = 24,
             ["padding_budget_ms"] = 80,
             ["relay_tls_spki_sha256_hex"] = relayTlsSpkiSha256Hex,
             ["route_pushes"] = new JsonArray("10.0.0.0/8"),
@@ -31141,9 +31429,9 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             ["fee_asset_id"] = "xor#universal.universal",
             ["escrow_account_id"] = VpnEscrowAccountId,
             ["operator_account_id"] = VpnOperatorAccountId,
-            ["lease_fee_nanos"] = 1000000,
-            ["earned_fee_nanos"] = 500000,
-            ["refunded_fee_nanos"] = 500000,
+            ["lease_fee"] = "1000000.25",
+            ["earned_fee"] = "500000.125",
+            ["refunded_fee"] = "500000.125",
             ["lease_id_hex"] = leaseIdHex,
             ["settle_lease_instruction"] = VpnTxInstructionJson("SettleVpnLease", settleLeasePayloadHex),
             ["tx_instructions"] = new JsonArray(VpnTxInstructionJson("SettleVpnLease", receiptTxPayloadHex)),
@@ -31189,8 +31477,8 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             FeeAssetId = "xor#universal.universal",
             EscrowAccountId = VpnEscrowAccountId,
             OperatorAccountId = VpnOperatorAccountId,
-            LeaseFeeNanos = 1000000,
-            FlowLabelBits = 20,
+            LeaseFee = "1000000.25",
+            FlowLabelBits = 24,
             PaddingBudgetMilliseconds = 80,
             RelayTlsSpkiSha256Hex = VpnSpkiSha256Hex,
             RoutePushes = new[] { "10.0.0.0/8" },
@@ -31198,7 +31486,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             DnsServers = new[] { "1.1.1.1" },
             TunnelAddresses = new[] { "10.208.0.2/32" },
             MtuBytes = 1280,
-            HelperTicketHex = "deadbeef",
+            HelperTicketHex = VpnHelperTicketHex,
             BytesIn = 123,
             BytesOut = 456,
             Status = "active",
@@ -31226,9 +31514,9 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             FeeAssetId = "xor#universal.universal",
             EscrowAccountId = VpnEscrowAccountId,
             OperatorAccountId = VpnOperatorAccountId,
-            LeaseFeeNanos = 1000000,
-            EarnedFeeNanos = 500000,
-            RefundedFeeNanos = 500000,
+            LeaseFee = "1000000.25",
+            EarnedFee = "500000.125",
+            RefundedFee = "500000.125",
             LeaseIdHex = VpnQuoteIdHex,
             SettleLeaseInstruction = new ToriiVpnTxInstruction
             {

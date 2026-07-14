@@ -64,7 +64,11 @@ use iroha_executor_data_model::permission::{
         CanModifyAssetMetadataWithDefinition, CanTransferAssetWithDefinition,
     },
     asset_definition::{CanModifyAssetDefinitionMetadata, CanUnregisterAssetDefinition},
-    nexus::{CanPublishSpaceDirectoryManifest, CanUseFeeSponsor},
+    nexus::{
+        CanEnrollFeeSponsorPolicyForAccountDomain, CanPublishSpaceDirectoryManifest,
+        CanPublishSpaceDirectoryManifestForAccountDomain, CanPublishSpaceDirectoryManifestForUaid,
+        CanUseFeeSponsor, CanUseFeeSponsorForAccount,
+    },
 };
 use mv::storage::StorageReadOnly;
 use norito::codec::{Decode, Encode};
@@ -1961,6 +1965,27 @@ fn collect_asset_balance_native_amx_participants<I>(
     }
 }
 
+fn collect_settlement_pair_native_amx_participants<W: WorldReadOnly>(
+    dataspaces: &mut std::collections::BTreeSet<DataSpaceId>,
+    first_asset_definition: &AssetDefinitionId,
+    second_asset_definition: &AssetDefinitionId,
+    dataspace_catalog: &DataSpaceCatalog,
+    world: &W,
+    ledger_time_ms: Option<u64>,
+) {
+    for asset_definition in [first_asset_definition, second_asset_definition] {
+        insert_native_amx_participant(
+            dataspaces,
+            asset_balance_definition_dataspace_target_with_world(
+                asset_definition,
+                Some(dataspace_catalog),
+                world,
+                ledger_time_ms,
+            ),
+        );
+    }
+}
+
 fn collect_instruction_native_amx_participants<W: WorldReadOnly>(
     instruction: &dyn Instruction,
     dataspace_catalog: &DataSpaceCatalog,
@@ -1992,6 +2017,43 @@ fn collect_instruction_native_amx_participants<W: WorldReadOnly>(
         let policy = fx_corridor_policy_with_world(world, &fx.policy_id)?;
         insert_native_amx_participant(dataspaces, Some(policy.source_dataspace));
         insert_native_amx_participant(dataspaces, Some(policy.destination_dataspace));
+        return Ok(());
+    }
+
+    let settlement_pair = if let Some(dvp) = any.downcast_ref::<DvpIsi>() {
+        Some((
+            dvp.delivery_leg().asset_definition_id(),
+            dvp.payment_leg().asset_definition_id(),
+        ))
+    } else if let Some(pvp) = any.downcast_ref::<PvpIsi>() {
+        Some((
+            pvp.primary_leg().asset_definition_id(),
+            pvp.counter_leg().asset_definition_id(),
+        ))
+    } else {
+        any.downcast_ref::<SettlementInstructionBox>()
+            .and_then(|settlement| match settlement {
+                SettlementInstructionBox::Dvp(dvp) => Some((
+                    dvp.delivery_leg().asset_definition_id(),
+                    dvp.payment_leg().asset_definition_id(),
+                )),
+                SettlementInstructionBox::Pvp(pvp) => Some((
+                    pvp.primary_leg().asset_definition_id(),
+                    pvp.counter_leg().asset_definition_id(),
+                )),
+                SettlementInstructionBox::SetFxCorridorPolicy(_)
+                | SettlementInstructionBox::SettleFxCorridor(_) => None,
+            })
+    };
+    if let Some((first_asset_definition, second_asset_definition)) = settlement_pair {
+        collect_settlement_pair_native_amx_participants(
+            dataspaces,
+            first_asset_definition,
+            second_asset_definition,
+            dataspace_catalog,
+            world,
+            ledger_time_ms,
+        );
         return Ok(());
     }
 
@@ -2259,7 +2321,10 @@ fn instruction_transaction_dataspace_target(
                         )
                     })
             }
-            GrantBox::Role(_) | GrantBox::RolePermission(_) => None,
+            GrantBox::RolePermission(grant) => {
+                dataspace_scoped_permission_target(&grant.object, dataspace_catalog, state_view)
+            }
+            GrantBox::Role(_) => None,
         };
     }
 
@@ -2274,7 +2339,10 @@ fn instruction_transaction_dataspace_target(
                         )
                     })
             }
-            RevokeBox::Role(_) | RevokeBox::RolePermission(_) => None,
+            RevokeBox::RolePermission(revoke) => {
+                dataspace_scoped_permission_target(&revoke.object, dataspace_catalog, state_view)
+            }
+            RevokeBox::Role(_) => None,
         };
     }
 
@@ -2676,7 +2744,13 @@ fn instruction_transaction_dataspace_target_with_world<W: WorldReadOnly>(
                 ledger_time_ms,
             )
             .or_else(|| account_dataspace_target(Some(world), &grant.destination)),
-            GrantBox::Role(_) | GrantBox::RolePermission(_) => None,
+            GrantBox::RolePermission(grant) => dataspace_scoped_permission_target_with_world(
+                &grant.object,
+                dataspace_catalog,
+                world,
+                ledger_time_ms,
+            ),
+            GrantBox::Role(_) => None,
         };
     }
 
@@ -2689,7 +2763,13 @@ fn instruction_transaction_dataspace_target_with_world<W: WorldReadOnly>(
                 ledger_time_ms,
             )
             .or_else(|| account_dataspace_target(Some(world), &revoke.destination)),
-            RevokeBox::Role(_) | RevokeBox::RolePermission(_) => None,
+            RevokeBox::RolePermission(revoke) => dataspace_scoped_permission_target_with_world(
+                &revoke.object,
+                dataspace_catalog,
+                world,
+                ledger_time_ms,
+            ),
+            RevokeBox::Role(_) => None,
         };
     }
 
@@ -3882,7 +3962,10 @@ fn instruction_transaction_dataspace_target_needs_state(instruction: &dyn Instru
             GrantBox::Permission(grant) => {
                 dataspace_scoped_permission_target_needs_state(&grant.object)
             }
-            GrantBox::Role(_) | GrantBox::RolePermission(_) => false,
+            GrantBox::RolePermission(grant) => {
+                dataspace_scoped_permission_target_needs_state(&grant.object)
+            }
+            GrantBox::Role(_) => false,
         };
     }
 
@@ -3891,7 +3974,10 @@ fn instruction_transaction_dataspace_target_needs_state(instruction: &dyn Instru
             RevokeBox::Permission(revoke) => {
                 dataspace_scoped_permission_target_needs_state(&revoke.object)
             }
-            RevokeBox::Role(_) | RevokeBox::RolePermission(_) => false,
+            RevokeBox::RolePermission(revoke) => {
+                dataspace_scoped_permission_target_needs_state(&revoke.object)
+            }
+            RevokeBox::Role(_) => false,
         };
     }
 
@@ -4025,7 +4111,10 @@ fn instruction_dataspace_scoped_permission_target(
             GrantBox::Permission(grant) => {
                 dataspace_scoped_permission_target(&grant.object, dataspace_catalog, state_view)
             }
-            GrantBox::Role(_) | GrantBox::RolePermission(_) => None,
+            GrantBox::RolePermission(grant) => {
+                dataspace_scoped_permission_target(&grant.object, dataspace_catalog, state_view)
+            }
+            GrantBox::Role(_) => None,
         };
     }
 
@@ -4034,7 +4123,10 @@ fn instruction_dataspace_scoped_permission_target(
             RevokeBox::Permission(revoke) => {
                 dataspace_scoped_permission_target(&revoke.object, dataspace_catalog, state_view)
             }
-            RevokeBox::Role(_) | RevokeBox::RolePermission(_) => None,
+            RevokeBox::RolePermission(revoke) => {
+                dataspace_scoped_permission_target(&revoke.object, dataspace_catalog, state_view)
+            }
+            RevokeBox::Role(_) => None,
         };
     }
 
@@ -4057,7 +4149,13 @@ fn instruction_dataspace_scoped_permission_target_with_world<W: WorldReadOnly>(
                 world,
                 ledger_time_ms,
             ),
-            GrantBox::Role(_) | GrantBox::RolePermission(_) => None,
+            GrantBox::RolePermission(grant) => dataspace_scoped_permission_target_with_world(
+                &grant.object,
+                dataspace_catalog,
+                world,
+                ledger_time_ms,
+            ),
+            GrantBox::Role(_) => None,
         };
     }
 
@@ -4069,7 +4167,13 @@ fn instruction_dataspace_scoped_permission_target_with_world<W: WorldReadOnly>(
                 world,
                 ledger_time_ms,
             ),
-            RevokeBox::Role(_) | RevokeBox::RolePermission(_) => None,
+            RevokeBox::RolePermission(revoke) => dataspace_scoped_permission_target_with_world(
+                &revoke.object,
+                dataspace_catalog,
+                world,
+                ledger_time_ms,
+            ),
+            RevokeBox::Role(_) => None,
         };
     }
 
@@ -4358,7 +4462,10 @@ fn dataspace_scoped_permission_target(
     dataspace_catalog: Option<&DataSpaceCatalog>,
     state_view: Option<&StateView<'_>>,
 ) -> Option<DataSpaceId> {
-    if permission.name() != "CanPublishSpaceDirectoryManifest" {
+    if permission.name() != "CanPublishSpaceDirectoryManifest"
+        && permission.name() != "CanPublishSpaceDirectoryManifestForUaid"
+        && permission.name() != "CanPublishSpaceDirectoryManifestForAccountDomain"
+    {
         return match permission.name() {
             "CanMintAssetWithDefinition" => permission
                 .payload()
@@ -4467,15 +4574,42 @@ fn dataspace_scoped_permission_target(
                 .and_then(|token| {
                     account_dataspace_target(state_view.map(StateView::world), &token.sponsor)
                 }),
+            "CanUseFeeSponsorForAccount" => permission
+                .payload()
+                .try_into_any_norito::<CanUseFeeSponsorForAccount>()
+                .ok()
+                .and_then(|token| {
+                    domain_dataspace_target_with_state(&token.domain, dataspace_catalog, state_view)
+                }),
+            "CanEnrollFeeSponsorPolicyForAccountDomain" => permission
+                .payload()
+                .try_into_any_norito::<CanEnrollFeeSponsorPolicyForAccountDomain>()
+                .ok()
+                .and_then(|token| {
+                    domain_dataspace_target_with_state(&token.domain, dataspace_catalog, state_view)
+                }),
             _ => None,
         };
     }
 
-    permission
-        .payload()
-        .try_into_any_norito::<CanPublishSpaceDirectoryManifest>()
-        .ok()
-        .map(|token| token.dataspace)
+    match permission.name() {
+        "CanPublishSpaceDirectoryManifest" => permission
+            .payload()
+            .try_into_any_norito::<CanPublishSpaceDirectoryManifest>()
+            .ok()
+            .map(|token| token.dataspace),
+        "CanPublishSpaceDirectoryManifestForUaid" => permission
+            .payload()
+            .try_into_any_norito::<CanPublishSpaceDirectoryManifestForUaid>()
+            .ok()
+            .map(|token| token.dataspace),
+        "CanPublishSpaceDirectoryManifestForAccountDomain" => permission
+            .payload()
+            .try_into_any_norito::<CanPublishSpaceDirectoryManifestForAccountDomain>()
+            .ok()
+            .map(|token| token.dataspace),
+        _ => None,
+    }
 }
 
 fn dataspace_scoped_permission_target_with_world<W: WorldReadOnly>(
@@ -4484,7 +4618,10 @@ fn dataspace_scoped_permission_target_with_world<W: WorldReadOnly>(
     world: &W,
     ledger_time_ms: Option<u64>,
 ) -> Option<DataSpaceId> {
-    if permission.name() != "CanPublishSpaceDirectoryManifest" {
+    if permission.name() != "CanPublishSpaceDirectoryManifest"
+        && permission.name() != "CanPublishSpaceDirectoryManifestForUaid"
+        && permission.name() != "CanPublishSpaceDirectoryManifestForAccountDomain"
+    {
         return match permission.name() {
             "CanMintAssetWithDefinition" => permission
                 .payload()
@@ -4599,15 +4736,52 @@ fn dataspace_scoped_permission_target_with_world<W: WorldReadOnly>(
                 .try_into_any_norito::<CanUseFeeSponsor>()
                 .ok()
                 .and_then(|token| account_dataspace_target(Some(world), &token.sponsor)),
+            "CanUseFeeSponsorForAccount" => permission
+                .payload()
+                .try_into_any_norito::<CanUseFeeSponsorForAccount>()
+                .ok()
+                .and_then(|token| {
+                    domain_dataspace_target_with_world(
+                        &token.domain,
+                        dataspace_catalog,
+                        world,
+                        ledger_time_ms,
+                    )
+                }),
+            "CanEnrollFeeSponsorPolicyForAccountDomain" => permission
+                .payload()
+                .try_into_any_norito::<CanEnrollFeeSponsorPolicyForAccountDomain>()
+                .ok()
+                .and_then(|token| {
+                    domain_dataspace_target_with_world(
+                        &token.domain,
+                        dataspace_catalog,
+                        world,
+                        ledger_time_ms,
+                    )
+                }),
             _ => None,
         };
     }
 
-    permission
-        .payload()
-        .try_into_any_norito::<CanPublishSpaceDirectoryManifest>()
-        .ok()
-        .map(|token| token.dataspace)
+    match permission.name() {
+        "CanPublishSpaceDirectoryManifest" => permission
+            .payload()
+            .try_into_any_norito::<CanPublishSpaceDirectoryManifest>()
+            .ok()
+            .map(|token| token.dataspace),
+        "CanPublishSpaceDirectoryManifestForUaid" => permission
+            .payload()
+            .try_into_any_norito::<CanPublishSpaceDirectoryManifestForUaid>()
+            .ok()
+            .map(|token| token.dataspace),
+        "CanPublishSpaceDirectoryManifestForAccountDomain" => permission
+            .payload()
+            .try_into_any_norito::<CanPublishSpaceDirectoryManifestForAccountDomain>()
+            .ok()
+            .map(|token| token.dataspace),
+        _ => None,
+    }
 }
 
 fn instruction_dataspace_scoped_permission_target_needs_state(
@@ -4620,7 +4794,10 @@ fn instruction_dataspace_scoped_permission_target_needs_state(
             GrantBox::Permission(grant) => {
                 dataspace_scoped_permission_target_needs_state(&grant.object)
             }
-            GrantBox::Role(_) | GrantBox::RolePermission(_) => false,
+            GrantBox::RolePermission(grant) => {
+                dataspace_scoped_permission_target_needs_state(&grant.object)
+            }
+            GrantBox::Role(_) => false,
         };
     }
 
@@ -4629,7 +4806,10 @@ fn instruction_dataspace_scoped_permission_target_needs_state(
             RevokeBox::Permission(revoke) => {
                 dataspace_scoped_permission_target_needs_state(&revoke.object)
             }
-            RevokeBox::Role(_) | RevokeBox::RolePermission(_) => false,
+            RevokeBox::RolePermission(revoke) => {
+                dataspace_scoped_permission_target_needs_state(&revoke.object)
+            }
+            RevokeBox::Role(_) => false,
         };
     }
 
@@ -6604,7 +6784,11 @@ mod tests {
     };
     use iroha_executor_data_model::permission::{
         account::{AccountAliasPermissionScope, CanManageAccountAlias, CanResolveAccountAlias},
-        nexus::{CanPublishSpaceDirectoryManifest, CanUseFeeSponsor},
+        nexus::{
+            CanEnrollFeeSponsorPolicyForAccountDomain, CanPublishSpaceDirectoryManifest,
+            CanPublishSpaceDirectoryManifestForAccountDomain,
+            CanPublishSpaceDirectoryManifestForUaid, CanUseFeeSponsor, CanUseFeeSponsorForAccount,
+        },
         trigger::CanRegisterTrigger,
     };
     use iroha_primitives::numeric::NumericSpec;
@@ -13606,14 +13790,20 @@ mod tests {
         let (destination_reserve, _) = gen_account_in("wonderland");
         let (recipient, _) = gen_account_in("wonderland");
         let source_dataspace = DataSpaceId::new(10);
+        let auxiliary_dataspace = DataSpaceId::new(11);
         let destination_dataspace = DataSpaceId::new(12);
         let source_lane = LaneId::new(3);
+        let auxiliary_lane = LaneId::new(5);
         let destination_lane = LaneId::new(4);
-        let dataspace_catalog =
-            dataspace_catalog(&[(source_dataspace, "cbuae"), (destination_dataspace, "sbp")]);
+        let dataspace_catalog = dataspace_catalog(&[
+            (source_dataspace, "cbuae"),
+            (auxiliary_dataspace, "sepa"),
+            (destination_dataspace, "sbp"),
+        ]);
         let lane_catalog = catalog_with_lane_dataspaces(&[
             (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
             (source_lane, source_dataspace),
+            (auxiliary_lane, auxiliary_dataspace),
             (destination_lane, destination_dataspace),
         ]);
         let routing_policy = LaneRoutingPolicy {
@@ -13640,7 +13830,7 @@ mod tests {
             source_dataspace,
             source: FxCorridorSource::TransactionAuthority,
             source_asset_definition_id: source_asset_definition_id.clone(),
-            source_sink,
+            source_sink: source_sink.clone(),
             destination_dataspace,
             destination_reserve,
             destination_asset_definition_id: destination_asset_definition_id.clone(),
@@ -13663,6 +13853,28 @@ mod tests {
         };
         let settlement_instruction =
             InstructionBox::from(SettlementInstructionBox::SettleFxCorridor(settlement));
+        let bilateral_settlement = InstructionBox::from(DvpIsi::new(
+            "mobile_dvp_1".parse().expect("DVP settlement id"),
+            SettlementLeg::new(
+                AssetDefinitionId::new(
+                    DomainId::try_new("cash", "cbuae").expect("source DVP asset domain"),
+                    "aed".parse().expect("source DVP asset name"),
+                ),
+                1_u32,
+                authority.clone(),
+                source_sink.clone(),
+            ),
+            SettlementLeg::new(
+                AssetDefinitionId::new(
+                    DomainId::try_new("securities", "sepa").expect("auxiliary DVP asset domain"),
+                    "bond".parse().expect("auxiliary DVP asset name"),
+                ),
+                1_u32,
+                source_sink,
+                authority.clone(),
+            ),
+            SettlementPlan::default(),
+        ));
         let scoped_permission: Permission = CanPublishSpaceDirectoryManifest {
             dataspace: source_dataspace,
         }
@@ -13675,6 +13887,7 @@ mod tests {
                     scoped_permission,
                     authority.clone(),
                 )),
+                bilateral_settlement,
                 settlement_instruction.clone(),
             ],
         );
@@ -13696,6 +13909,10 @@ mod tests {
             vec![
                 RouteLeg::new(
                     RoutingDecision::new(source_lane, source_dataspace),
+                    RouteLegRole::Participant,
+                ),
+                RouteLeg::new(
+                    RoutingDecision::new(auxiliary_lane, auxiliary_dataspace),
                     RouteLegRole::Participant,
                 ),
                 RouteLeg::new(
@@ -15908,6 +16125,161 @@ mod tests {
             .expect("dataspace-scoped permission should resolve");
 
         assert_eq!(decision, RoutingDecision::new(lane, dataspace));
+
+        let uaid_scoped_tx = sample_transaction(
+            &alice_id,
+            alice_keypair.private_key(),
+            vec![InstructionBox::from(Grant::account_permission(
+                CanPublishSpaceDirectoryManifestForUaid {
+                    dataspace,
+                    uaid: UniversalAccountId::from_hash(Hash::new(
+                        b"uaid::dataspace-scoped-permission-route",
+                    )),
+                },
+                alice_id.clone(),
+            ))],
+        );
+        assert_eq!(
+            router
+                .try_route(&uaid_scoped_tx)
+                .expect("UAID-scoped permission should resolve"),
+            RoutingDecision::new(lane, dataspace),
+        );
+
+        let domain_scoped_tx = sample_transaction(
+            &alice_id,
+            alice_keypair.private_key(),
+            vec![InstructionBox::from(Grant::account_permission(
+                CanPublishSpaceDirectoryManifestForAccountDomain {
+                    dataspace,
+                    domain: DomainId::try_new("hbl", "manifest").expect("HBL manifest domain"),
+                },
+                alice_id.clone(),
+            ))],
+        );
+        assert_eq!(
+            router
+                .try_route(&domain_scoped_tx)
+                .expect("account-domain-scoped permission should resolve"),
+            RoutingDecision::new(lane, dataspace),
+        );
+
+        let role_id: RoleId = "hbl_manifest_publishers".parse().expect("role id");
+        let role_scoped_tx = sample_transaction(
+            &alice_id,
+            alice_keypair.private_key(),
+            vec![InstructionBox::from(Grant::role_permission(
+                CanPublishSpaceDirectoryManifestForAccountDomain {
+                    dataspace,
+                    domain: DomainId::try_new("hbl", "manifest").expect("HBL manifest domain"),
+                },
+                role_id,
+            ))],
+        );
+        assert_eq!(
+            router
+                .try_route_without_state(&role_scoped_tx)
+                .expect("role permission routing should resolve from its dataspace payload"),
+            Some(RoutingDecision::new(lane, dataspace)),
+        );
+    }
+
+    #[test]
+    fn exact_fee_sponsor_permissions_route_by_embedded_domain_without_state() {
+        let (registrar_id, registrar_keypair) = gen_account_in("registrar");
+        let (beneficiary_id, _) = gen_account_in("retail-beneficiary");
+        let (sponsor_id, _) = gen_account_in("sponsor");
+        let dataspace = DataSpaceId::new(10);
+        let lane = LaneId::new(3);
+        let domain = DomainId::try_new("hbl", "sbp").expect("HBL retail domain");
+        let policy_name: Name = "retail".parse().expect("retail sponsor policy");
+        let dataspace_catalog = dataspace_catalog(&[(dataspace, "sbp")]);
+        let lane_catalog = catalog_with_lane_dataspaces(&[
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            (lane, dataspace),
+        ]);
+        let router = ConfigLaneRouter::new(
+            LaneRoutingPolicy::default(),
+            dataspace_catalog,
+            lane_catalog,
+        );
+        let expected = RoutingDecision::new(lane, dataspace);
+
+        let exact_use = CanUseFeeSponsorForAccount {
+            sponsor: sponsor_id.clone(),
+            policy: policy_name.clone(),
+            beneficiary: beneficiary_id.clone(),
+            domain: domain.clone(),
+        };
+        let exact_use_grant = sample_transaction(
+            &registrar_id,
+            registrar_keypair.private_key(),
+            vec![InstructionBox::from(Grant::account_permission(
+                exact_use.clone(),
+                beneficiary_id.clone(),
+            ))],
+        );
+        assert_eq!(
+            router
+                .try_route_without_state(&exact_use_grant)
+                .expect("exact sponsor-use grant routing should resolve from catalog"),
+            Some(expected),
+        );
+
+        let exact_use_revoke = sample_transaction(
+            &registrar_id,
+            registrar_keypair.private_key(),
+            vec![InstructionBox::from(Revoke::account_permission(
+                exact_use,
+                beneficiary_id,
+            ))],
+        );
+        assert_eq!(
+            router
+                .try_route_without_state(&exact_use_revoke)
+                .expect("exact sponsor-use revoke routing should resolve from catalog"),
+            Some(expected),
+        );
+
+        let enrollment = CanEnrollFeeSponsorPolicyForAccountDomain {
+            sponsor: sponsor_id.clone(),
+            policy: policy_name.clone(),
+            domain: domain.clone(),
+        };
+        let enrollment_grant = sample_transaction(
+            &registrar_id,
+            registrar_keypair.private_key(),
+            vec![InstructionBox::from(Grant::account_permission(
+                enrollment,
+                registrar_id.clone(),
+            ))],
+        );
+        assert_eq!(
+            router
+                .try_route_without_state(&enrollment_grant)
+                .expect("domain enrollment grant routing should resolve from catalog"),
+            Some(expected),
+        );
+
+        let enrollment_role: RoleId = "hbl_sponsor_enrollers".parse().expect("role id");
+        let enrollment_role_grant = sample_transaction(
+            &registrar_id,
+            registrar_keypair.private_key(),
+            vec![InstructionBox::from(Grant::role_permission(
+                CanEnrollFeeSponsorPolicyForAccountDomain {
+                    sponsor: sponsor_id,
+                    policy: policy_name,
+                    domain,
+                },
+                enrollment_role,
+            ))],
+        );
+        assert_eq!(
+            router
+                .try_route_without_state(&enrollment_role_grant)
+                .expect("role enrollment permission should route from its exact domain"),
+            Some(expected),
+        );
     }
 
     #[test]

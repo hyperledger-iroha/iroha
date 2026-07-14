@@ -12,7 +12,7 @@ import org.hyperledger.iroha.sdk.crypto.Signer
 import org.hyperledger.iroha.sdk.tx.SignedTransaction
 import org.hyperledger.iroha.sdk.tx.TransactionBuilder
 
-/** Canonical one-instruction transaction for the ABI-19 device-attestation path. */
+/** Canonical one-instruction transaction for the ABI-20 device-attestation path. */
 class RegisterOfflineDeviceAttestation(
     val chainId: String,
     val authority: String,

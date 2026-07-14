@@ -317,7 +317,7 @@ check_xcframework() {
       fi
     done
 
-    require_regex "$manifest" '"native_bridge_abi_version"[[:space:]]*:[[:space:]]*19([[:space:]]*[,}])' "exact first-release NoritoBridge ABI 19"
+    require_regex "$manifest" '"native_bridge_abi_version"[[:space:]]*:[[:space:]]*20([[:space:]]*[,}])' "exact first-release NoritoBridge ABI 20"
     require_regex "$manifest" '"source_commit"[[:space:]]*:[[:space:]]*"[[:xdigit:]]{40}"' "NoritoBridge source commit"
     require_regex "$manifest" '"source_tree_dirty"[[:space:]]*:[[:space:]]*(true|false)' "NoritoBridge source dirty state"
     require_regex "$manifest" '"source_fingerprint_sha256"[[:space:]]*:[[:space:]]*"[[:xdigit:]]{64}"' "NoritoBridge source fingerprint"
@@ -328,25 +328,25 @@ check_xcframework() {
       fail "NoritoBridge release artifact must be built from a clean source tree"
     fi
     local required_kagemusha_symbols=(
-      connect_norito_kagemusha_recursive_spend_capabilities_v1
+      connect_norito_kagemusha_recursive_spend_capabilities_v4
       connect_norito_kagemusha_topup_finality_verify_v2
       connect_norito_kagemusha_topup_shield_build_unsigned_v2
-      connect_norito_kagemusha_recursive_spend_artifact_begin_v3
-      connect_norito_kagemusha_recursive_spend_artifact_write_v3
-      connect_norito_kagemusha_recursive_spend_artifact_finalize_v3
-      connect_norito_kagemusha_recursive_spend_artifact_cancel_v3
-      connect_norito_kagemusha_recursive_spend_artifact_set_install_v3
-      connect_norito_kagemusha_recursive_spend_artifact_set_is_installed_v3
-      connect_norito_kagemusha_recursive_spend_artifact_set_uninstall_v3
-      connect_norito_kagemusha_recursive_spend_init_v2
+      connect_norito_kagemusha_recursive_spend_artifact_begin_v4
+      connect_norito_kagemusha_recursive_spend_artifact_write_v4
+      connect_norito_kagemusha_recursive_spend_artifact_finalize_v4
+      connect_norito_kagemusha_recursive_spend_artifact_cancel_v4
+      connect_norito_kagemusha_recursive_spend_artifact_set_install_v4
+      connect_norito_kagemusha_recursive_spend_artifact_set_is_installed_v4
+      connect_norito_kagemusha_recursive_spend_artifact_set_uninstall_v4
+      connect_norito_kagemusha_recursive_spend_init_v4
       connect_norito_kagemusha_recursive_spend_topup_unsigned_payload_digest_v2
       connect_norito_kagemusha_recursive_spend_topup_finalize_request_v2
       connect_norito_kagemusha_recursive_spend_topup_v2
-      connect_norito_kagemusha_recursive_spend_append_v2
-      connect_norito_kagemusha_recursive_spend_verify_v2
+      connect_norito_kagemusha_recursive_spend_append_v4
+      connect_norito_kagemusha_recursive_spend_verify_v4
       connect_norito_kagemusha_recursive_spend_redeem_unsigned_payload_digest_v2
       connect_norito_kagemusha_recursive_spend_redeem_finalize_request_v2
-      connect_norito_kagemusha_recursive_spend_redeem_v2
+      connect_norito_kagemusha_recursive_spend_redeem_v4
       connect_norito_kagemusha_receiver_key_reference_v2
       connect_norito_kagemusha_recipient_output_derive_v2
       connect_norito_kagemusha_recipient_payment_request_signing_bytes_v2
@@ -405,8 +405,8 @@ PY
       local source_abi manifest_abi source_commit manifest_commit source_dirty source_fingerprint manifest_fingerprint
       source_abi="$(sed -nE 's/.*CONNECT_NORITO_BRIDGE_ABI_VERSION:[[:space:]]*u32[[:space:]]*=[[:space:]]*([0-9]+).*/\1/p' "$bridge_source" | head -n1)"
       manifest_abi="$(manifest_json_value "$manifest" native_bridge_abi_version 2>/dev/null || true)"
-      if [[ "$source_abi" != "19" || "$manifest_abi" != "19" ]]; then
-        fail "NoritoBridge artifact and bridge source must both use exact first-release ABI 19"
+      if [[ "$source_abi" != "20" || "$manifest_abi" != "20" ]]; then
+        fail "NoritoBridge artifact and bridge source must both use exact first-release ABI 20"
       fi
       source_commit="$(git -C "$ROOT_DIR" rev-parse HEAD)"
       manifest_commit="$(manifest_json_value "$manifest" source_commit 2>/dev/null || true)"

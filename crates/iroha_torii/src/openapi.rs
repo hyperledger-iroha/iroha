@@ -289,7 +289,10 @@ fn tags_section() -> Value {
     vpn.insert("name".into(), Value::String("VPN".to_owned()));
     vpn.insert(
         "description".into(),
-        Value::String("Sora VPN profile, session, and receipt endpoints.".to_owned()),
+        Value::String(
+            "Sora VPN profile, quote, session, and receipt endpoints. XOR-denominated fee fields use canonical exact decimal Quantity strings."
+                .to_owned(),
+        ),
     );
 
     let mut mcp = Map::new();
@@ -2618,6 +2621,11 @@ fn connect_paths() -> Map {
 }
 
 fn vpn_paths() -> Map {
+    fn signed_parameters(mut parameters: Vec<Value>) -> Vec<Value> {
+        parameters.extend(canonical_request_auth_header_parameters());
+        parameters
+    }
+
     let mut paths = Map::new();
     paths.insert(
         "/v1/vpn/profile".to_owned(),
@@ -2625,30 +2633,32 @@ fn vpn_paths() -> Map {
             "VPN",
             "Fetch the public VPN profile.",
             "Return the wallet-facing Sora VPN profile advertised by this node.",
-            "#/components/schemas/JsonValue",
+            "#/components/schemas/VpnProfileResponse",
             Vec::new(),
         )),
     );
     paths.insert(
         "/v1/vpn/quotes".to_owned(),
-        Value::Object(json_post_operation(
+        Value::Object(json_post_operation_with_success_status(
             "VPN",
             "Create a VPN quote.",
             "Create a signed XOR escrow quote for a Sora VPN lease. The request must include `metering_public_key_hex`; successful responses include `tx_instructions` with a native `OpenVpnLeaseEscrow` skeleton for client signing/submission.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
+            "#/components/schemas/VpnQuoteCreateRequest",
+            "#/components/schemas/VpnQuoteResponse",
+            signed_parameters(Vec::new()),
+            "201",
         )),
     );
     paths.insert(
         "/v1/vpn/sessions".to_owned(),
-        Value::Object(json_post_operation(
+        Value::Object(json_post_operation_with_success_status(
             "VPN",
             "Create a VPN session.",
             "Create a signed Sora VPN session from a quote and committed native `OpenVpnLeaseEscrow` XOR payment transaction.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
+            "#/components/schemas/VpnSessionCreateRequest",
+            "#/components/schemas/VpnSessionResponse",
+            signed_parameters(Vec::new()),
+            "201",
         )),
     );
     paths.insert(
@@ -2658,15 +2668,23 @@ fn vpn_paths() -> Map {
                 "VPN",
                 "Fetch a VPN session.",
                 "Return the current status of a signed Sora VPN session.",
-                "#/components/schemas/JsonValue",
-                vec![string_path_param("session_id", "VPN session identifier.")],
+                "#/components/schemas/VpnSessionResponse",
+                signed_parameters(vec![patterned_string_path_param(
+                    "session_id",
+                    "VPN session identifier.",
+                    "^[0-9a-f]{64}$",
+                )]),
             );
             let delete_op = json_delete_operation(
                 "VPN",
                 "Delete a VPN session.",
                 "Tear down a signed Sora VPN session and return the canonical receipt.",
-                "#/components/schemas/JsonValue",
-                vec![string_path_param("session_id", "VPN session identifier.")],
+                "#/components/schemas/VpnReceiptResponse",
+                signed_parameters(vec![patterned_string_path_param(
+                    "session_id",
+                    "VPN session identifier.",
+                    "^[0-9a-f]{64}$",
+                )]),
             );
             let mut methods = Map::new();
             if let Some(get_value) = get_op.get("get") {
@@ -2685,16 +2703,17 @@ fn vpn_paths() -> Map {
                 "VPN",
                 "List VPN receipts.",
                 "List canonical Sora VPN receipts for the active wallet account.",
-                "#/components/schemas/JsonValue",
-                Vec::new(),
+                "#/components/schemas/VpnReceiptListResponse",
+                signed_parameters(Vec::new()),
             );
-            let post_op = json_post_operation(
+            let post_op = json_post_operation_with_success_status(
                 "VPN",
                 "Submit a VPN receipt.",
                 "Settle an active VPN lease from relay and client usage evidence. Successful responses include `tx_instructions` with a native `SettleVpnLease` skeleton for operator signing/submission.",
-                "#/components/schemas/JsonValue",
-                "#/components/schemas/JsonValue",
-                Vec::new(),
+                "#/components/schemas/VpnReceiptSubmitRequest",
+                "#/components/schemas/VpnReceiptResponse",
+                signed_parameters(Vec::new()),
+                "201",
             );
             let mut methods = Map::new();
             if let Some(get_value) = get_op.get("get") {
@@ -8294,9 +8313,13 @@ fn query_param(name: &str, param_type: &str, description: &str) -> Value {
 }
 
 fn single_json_response(schema_ref: &str) -> Map {
+    single_json_response_with_status("200", schema_ref)
+}
+
+fn single_json_response_with_status(status: &str, schema_ref: &str) -> Map {
     let mut responses = Map::new();
     responses.insert(
-        "200".into(),
+        status.to_owned(),
         norito::json!({
             "description": "Successful response",
             "content": {
@@ -8499,6 +8522,26 @@ fn json_post_operation(
     response_schema_ref: &str,
     params: Vec<Value>,
 ) -> Map {
+    json_post_operation_with_success_status(
+        tag,
+        summary,
+        description,
+        request_schema_ref,
+        response_schema_ref,
+        params,
+        "200",
+    )
+}
+
+fn json_post_operation_with_success_status(
+    tag: &str,
+    summary: &str,
+    description: &str,
+    request_schema_ref: &str,
+    response_schema_ref: &str,
+    params: Vec<Value>,
+    success_status: &str,
+) -> Map {
     let mut operation = Map::new();
     operation.insert(
         "tags".into(),
@@ -8515,7 +8558,10 @@ fn json_post_operation(
     );
     operation.insert(
         "responses".into(),
-        Value::Object(single_json_response(response_schema_ref)),
+        Value::Object(single_json_response_with_status(
+            success_status,
+            response_schema_ref,
+        )),
     );
     let mut methods = Map::new();
     methods.insert("post".to_owned(), Value::Object(operation));
@@ -14024,6 +14070,323 @@ fn bridge_finality_schemas(schemas: &mut Map) {
     );
 }
 
+fn insert_vpn_schemas(schemas: &mut Map) {
+    schemas.insert(
+        "VpnExitClass".to_owned(),
+        norito::json!({
+            "type": "string",
+            "enum": ["standard", "low-latency", "high-security"]
+        }),
+    );
+    schemas.insert(
+        "VpnTxInstruction".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["wire_id", "payload_hex"],
+            "additionalProperties": false,
+            "properties": {
+                "wire_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Canonical native instruction registry wire identifier."
+                },
+                "payload_hex": {
+                    "type": "string",
+                    "pattern": "^(?:[0-9a-f]{2})+$",
+                    "description": "Lowercase hexadecimal canonical framed Norito instruction payload."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "VpnProfileResponse".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "available", "relay_endpoint", "supported_exit_classes", "default_exit_class",
+                "lease_secs", "dns_push_interval_secs", "meter_family", "route_pushes",
+                "excluded_routes", "dns_servers", "tunnel_addresses", "mtu_bytes",
+                "display_billing_label", "fee_asset_id", "escrow_account_id",
+                "operator_account_id", "lease_fee", "settlement_grace_secs", "flow_label_bits",
+                "padding_budget_ms", "relay_tls_spki_sha256_hex"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "available": { "type": "boolean" },
+                "relay_endpoint": { "type": "string", "minLength": 1 },
+                "supported_exit_classes": {
+                    "type": "array",
+                    "minItems": 3,
+                    "maxItems": 3,
+                    "uniqueItems": true,
+                    "items": { "$ref": "#/components/schemas/VpnExitClass" }
+                },
+                "default_exit_class": { "$ref": "#/components/schemas/VpnExitClass" },
+                "lease_secs": { "type": "integer", "format": "uint64", "minimum": 1, "maximum": 4294967295_u64 },
+                "dns_push_interval_secs": { "type": "integer", "format": "uint64", "minimum": 30 },
+                "meter_family": { "type": "string", "minLength": 1 },
+                "route_pushes": { "type": "array", "items": { "type": "string" } },
+                "excluded_routes": { "type": "array", "items": { "type": "string" } },
+                "dns_servers": { "type": "array", "items": { "type": "string" } },
+                "tunnel_addresses": { "type": "array", "items": { "type": "string" } },
+                "mtu_bytes": { "type": "integer", "format": "uint64", "const": 1280 },
+                "display_billing_label": { "type": "string", "minLength": 1 },
+                "fee_asset_id": { "type": "string", "minLength": 1 },
+                "escrow_account_id": { "type": "string", "minLength": 1 },
+                "operator_account_id": { "type": "string", "minLength": 1 },
+                "lease_fee": { "$ref": "#/components/schemas/Quantity" },
+                "settlement_grace_secs": { "type": "integer", "format": "uint64", "minimum": 1 },
+                "flow_label_bits": { "type": "integer", "format": "uint8", "const": 24 },
+                "padding_budget_ms": { "type": "integer", "format": "uint16", "minimum": 1, "maximum": 65535 },
+                "relay_tls_spki_sha256_hex": {
+                    "anyOf": [
+                        { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+                        { "type": "null" }
+                    ]
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "VpnQuoteCreateRequest".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["metering_public_key_hex"],
+            "additionalProperties": false,
+            "properties": {
+                "exit_class": {
+                    "anyOf": [
+                        { "$ref": "#/components/schemas/VpnExitClass" },
+                        { "const": "" }
+                    ],
+                    "default": "",
+                    "description": "Requested exit class; an omitted or empty value selects the configured default."
+                },
+                "metering_public_key_hex": {
+                    "type": "string",
+                    "pattern": "^(?:0[xX])?[0-9A-Fa-f]{64}$",
+                    "description": "Ed25519 metering public-key payload as hexadecimal bytes."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "VpnQuoteResponse".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "quote_id", "lease_id_hex", "session_id_hex", "payment_reference", "account_id",
+                "exit_class", "relay_endpoint", "lease_secs", "quote_expires_at_ms",
+                "fee_asset_id", "escrow_account_id", "operator_account_id", "lease_fee",
+                "route_pushes", "excluded_routes", "dns_servers", "tunnel_addresses", "mtu_bytes",
+                "meter_family", "flow_label_bits", "padding_budget_ms", "relay_tls_spki_sha256_hex",
+                "metering_public_key_hex", "open_lease_instruction", "tx_instructions"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "quote_id": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+                "lease_id_hex": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+                "session_id_hex": { "type": "string", "pattern": "^[0-9a-f]{32}$" },
+                "payment_reference": { "type": "string", "minLength": 1 },
+                "account_id": { "type": "string", "minLength": 1 },
+                "exit_class": { "$ref": "#/components/schemas/VpnExitClass" },
+                "relay_endpoint": { "type": "string", "minLength": 1 },
+                "lease_secs": { "type": "integer", "format": "uint64", "minimum": 1, "maximum": 4294967295_u64 },
+                "quote_expires_at_ms": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "fee_asset_id": { "type": "string", "minLength": 1 },
+                "escrow_account_id": { "type": "string", "minLength": 1 },
+                "operator_account_id": { "type": "string", "minLength": 1 },
+                "lease_fee": { "$ref": "#/components/schemas/Quantity" },
+                "route_pushes": { "type": "array", "items": { "type": "string" } },
+                "excluded_routes": { "type": "array", "items": { "type": "string" } },
+                "dns_servers": { "type": "array", "items": { "type": "string" } },
+                "tunnel_addresses": { "type": "array", "items": { "type": "string" } },
+                "mtu_bytes": { "type": "integer", "format": "uint64", "const": 1280 },
+                "meter_family": { "type": "string", "minLength": 1 },
+                "flow_label_bits": { "type": "integer", "format": "uint8", "const": 24 },
+                "padding_budget_ms": { "type": "integer", "format": "uint16", "minimum": 1, "maximum": 65535 },
+                "relay_tls_spki_sha256_hex": {
+                    "anyOf": [
+                        { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+                        { "type": "null" }
+                    ]
+                },
+                "metering_public_key_hex": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+                "open_lease_instruction": {
+                    "anyOf": [
+                        { "$ref": "#/components/schemas/VpnTxInstruction" },
+                        { "type": "null" }
+                    ]
+                },
+                "tx_instructions": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 1,
+                    "items": { "$ref": "#/components/schemas/VpnTxInstruction" }
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "VpnSessionCreateRequest".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["quote_id", "payment_tx_hash", "metering_public_key_hex"],
+            "additionalProperties": false,
+            "properties": {
+                "exit_class": {
+                    "anyOf": [
+                        { "$ref": "#/components/schemas/VpnExitClass" },
+                        { "const": "" }
+                    ],
+                    "default": "",
+                    "description": "Requested exit class; an omitted or empty value selects the configured default."
+                },
+                "quote_id": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+                "payment_tx_hash": { "type": "string", "pattern": "^(?:0[xX])?[0-9A-Fa-f]{64}$" },
+                "metering_public_key_hex": { "type": "string", "pattern": "^(?:0[xX])?[0-9A-Fa-f]{64}$" }
+            }
+        }),
+    );
+    schemas.insert(
+        "VpnSessionResponse".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "session_id", "account_id", "exit_class", "relay_endpoint", "lease_secs",
+                "expires_at_ms", "connected_at_ms", "meter_family", "quote_id",
+                "payment_reference", "payment_tx_hash", "fee_asset_id", "escrow_account_id",
+                "operator_account_id", "lease_fee", "flow_label_bits", "padding_budget_ms",
+                "relay_tls_spki_sha256_hex", "route_pushes", "excluded_routes", "dns_servers",
+                "tunnel_addresses", "mtu_bytes", "helper_ticket_hex", "bytes_in", "bytes_out", "status"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "session_id": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+                "account_id": { "type": "string", "minLength": 1 },
+                "exit_class": { "$ref": "#/components/schemas/VpnExitClass" },
+                "relay_endpoint": { "type": "string", "minLength": 1 },
+                "lease_secs": { "type": "integer", "format": "uint64", "minimum": 1, "maximum": 4294967295_u64 },
+                "expires_at_ms": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "connected_at_ms": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "meter_family": { "type": "string", "minLength": 1 },
+                "quote_id": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+                "payment_reference": { "type": "string", "minLength": 1 },
+                "payment_tx_hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+                "fee_asset_id": { "type": "string", "minLength": 1 },
+                "escrow_account_id": { "type": "string", "minLength": 1 },
+                "operator_account_id": { "type": "string", "minLength": 1 },
+                "lease_fee": { "$ref": "#/components/schemas/Quantity" },
+                "flow_label_bits": { "type": "integer", "format": "uint8", "const": 24 },
+                "padding_budget_ms": { "type": "integer", "format": "uint16", "minimum": 1, "maximum": 65535 },
+                "relay_tls_spki_sha256_hex": {
+                    "anyOf": [
+                        { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+                        { "type": "null" }
+                    ]
+                },
+                "route_pushes": { "type": "array", "items": { "type": "string" } },
+                "excluded_routes": { "type": "array", "items": { "type": "string" } },
+                "dns_servers": { "type": "array", "items": { "type": "string" } },
+                "tunnel_addresses": { "type": "array", "items": { "type": "string" } },
+                "mtu_bytes": { "type": "integer", "format": "uint64", "const": 1280 },
+                "helper_ticket_hex": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{1328}$",
+                    "minLength": 1328,
+                    "maxLength": 1328,
+                    "description": "Lowercase hexadecimal canonical 664-byte VpnHelperTicketV1 payload."
+                },
+                "bytes_in": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "bytes_out": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "status": { "type": "string", "const": "active" }
+            }
+        }),
+    );
+    schemas.insert(
+        "VpnReceiptSubmitRequest".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["relay_receipt_hex", "client_voucher_hex"],
+            "additionalProperties": false,
+            "properties": {
+                "relay_receipt_hex": { "type": "string", "pattern": "^(?:0[xX])?(?:[0-9A-Fa-f]{2})+$" },
+                "client_voucher_hex": { "type": "string", "pattern": "^(?:0[xX])?(?:[0-9A-Fa-f]{2})+$" },
+                "lease_id_hex": {
+                    "type": "string",
+                    "pattern": "^(?:$|(?:0[xX])?[0-9A-Fa-f]{64})$",
+                    "default": "",
+                    "description": "Optional lease id; an omitted or empty value uses the quote id bound into the relay receipt."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "VpnReceiptResponse".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "session_id", "account_id", "exit_class", "relay_endpoint", "meter_family",
+                "connected_at_ms", "disconnected_at_ms", "duration_ms", "bytes_in", "bytes_out",
+                "status", "receipt_source", "quote_id", "payment_tx_hash", "fee_asset_id",
+                "escrow_account_id", "operator_account_id", "lease_fee", "earned_fee",
+                "refunded_fee", "lease_id_hex", "settle_lease_instruction", "tx_instructions"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "session_id": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+                "account_id": { "type": "string", "minLength": 1 },
+                "exit_class": { "$ref": "#/components/schemas/VpnExitClass" },
+                "relay_endpoint": { "type": "string", "minLength": 1 },
+                "meter_family": { "type": "string", "minLength": 1 },
+                "connected_at_ms": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "disconnected_at_ms": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "duration_ms": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "bytes_in": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "bytes_out": { "type": "integer", "format": "uint64", "minimum": 0 },
+                "status": { "type": "string", "enum": ["disconnected", "expired", "replaced", "settled"] },
+                "receipt_source": { "type": "string", "enum": ["torii", "relay", "wsv"] },
+                "quote_id": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+                "payment_tx_hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+                "fee_asset_id": { "type": "string", "minLength": 1 },
+                "escrow_account_id": { "type": "string", "minLength": 1 },
+                "operator_account_id": { "type": "string", "minLength": 1 },
+                "lease_fee": { "$ref": "#/components/schemas/Quantity" },
+                "earned_fee": { "$ref": "#/components/schemas/Quantity" },
+                "refunded_fee": { "$ref": "#/components/schemas/Quantity" },
+                "lease_id_hex": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+                "settle_lease_instruction": {
+                    "anyOf": [
+                        { "$ref": "#/components/schemas/VpnTxInstruction" },
+                        { "type": "null" }
+                    ]
+                },
+                "tx_instructions": {
+                    "type": "array",
+                    "maxItems": 1,
+                    "items": { "$ref": "#/components/schemas/VpnTxInstruction" }
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "VpnReceiptListResponse".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["items", "total"],
+            "additionalProperties": false,
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "maxItems": 24,
+                    "items": { "$ref": "#/components/schemas/VpnReceiptResponse" }
+                },
+                "total": { "type": "integer", "format": "uint64", "minimum": 0, "maximum": 24 }
+            }
+        }),
+    );
+}
+
 fn openapi_schemas() -> Map {
     let mut schemas = Map::new();
     schemas.extend(sccp_schemas());
@@ -14046,6 +14409,7 @@ fn openapi_schemas() -> Map {
             "description": "Canonical non-negative exact XOR amount with at most nine fractional digits. The mantissa is bounded by the positive range of a signed 512-bit integer; JSON numbers, fixed-unit aliases, leading zeros, and trailing fractional zeros are rejected."
         }),
     );
+    insert_vpn_schemas(&mut schemas);
     schemas.insert(
         "PositiveXorQuantity".to_owned(),
         norito::json!({
@@ -20842,6 +21206,112 @@ mod tests {
             .and_then(|components| components.get("schemas"))
             .and_then(Value::as_object)
             .expect("component schemas")
+    }
+
+    fn openapi_operation<'a>(document: &'a Value, path: &str, method: &str) -> &'a Map {
+        document
+            .get("paths")
+            .and_then(Value::as_object)
+            .and_then(|paths| paths.get(path))
+            .and_then(Value::as_object)
+            .and_then(|path_item| path_item.get(method))
+            .and_then(Value::as_object)
+            .unwrap_or_else(|| panic!("{method} {path} operation"))
+    }
+
+    fn operation_request_schema_ref<'a>(operation: &'a Map, path: &str) -> &'a str {
+        operation
+            .get("requestBody")
+            .and_then(Value::as_object)
+            .and_then(|body| body.get("content"))
+            .and_then(Value::as_object)
+            .and_then(|content| content.get("application/json"))
+            .and_then(Value::as_object)
+            .and_then(|media| media.get("schema"))
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("$ref"))
+            .and_then(Value::as_str)
+            .unwrap_or_else(|| panic!("request schema for {path}"))
+    }
+
+    fn operation_response_schema_ref<'a>(operation: &'a Map, status: &str, path: &str) -> &'a str {
+        operation
+            .get("responses")
+            .and_then(Value::as_object)
+            .and_then(|responses| responses.get(status))
+            .and_then(Value::as_object)
+            .and_then(|response| response.get("content"))
+            .and_then(Value::as_object)
+            .and_then(|content| content.get("application/json"))
+            .and_then(Value::as_object)
+            .and_then(|media| media.get("schema"))
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("$ref"))
+            .and_then(Value::as_str)
+            .unwrap_or_else(|| panic!("HTTP {status} response schema for {path}"))
+    }
+
+    fn assert_strict_object_schema(
+        schemas: &Map,
+        name: &str,
+        required_fields: &[&str],
+        optional_fields: &[&str],
+    ) {
+        let schema = schemas
+            .get(name)
+            .and_then(Value::as_object)
+            .unwrap_or_else(|| panic!("{name} schema"));
+        assert_eq!(
+            schema.get("additionalProperties"),
+            Some(&Value::Bool(false)),
+            "{name} must reject unknown fields"
+        );
+        let actual_required = schema
+            .get("required")
+            .and_then(Value::as_array)
+            .unwrap_or_else(|| panic!("{name} required fields"))
+            .iter()
+            .map(|field| field.as_str().expect("required field name"))
+            .collect::<BTreeSet<_>>();
+        let expected_required = required_fields.iter().copied().collect::<BTreeSet<_>>();
+        assert_eq!(actual_required, expected_required, "{name} required fields");
+
+        let actual_properties = schema
+            .get("properties")
+            .and_then(Value::as_object)
+            .unwrap_or_else(|| panic!("{name} properties"))
+            .keys()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>();
+        let expected_properties = required_fields
+            .iter()
+            .chain(optional_fields)
+            .copied()
+            .collect::<BTreeSet<_>>();
+        assert_eq!(actual_properties, expected_properties, "{name} properties");
+    }
+
+    fn assert_no_retired_vpn_fee_fields(value: &Value, location: &str) {
+        match value {
+            Value::Array(values) => {
+                for (index, value) in values.iter().enumerate() {
+                    assert_no_retired_vpn_fee_fields(value, &format!("{location}[{index}]"));
+                }
+            }
+            Value::Object(object) => {
+                for (key, value) in object {
+                    assert!(
+                        !matches!(
+                            key.as_str(),
+                            "lease_fee_nanos" | "earned_fee_nanos" | "refunded_fee_nanos"
+                        ),
+                        "retired VPN fee field {key} at {location}"
+                    );
+                    assert_no_retired_vpn_fee_fields(value, &format!("{location}.{key}"));
+                }
+            }
+            _ => {}
+        }
     }
 
     fn assert_component_schema_refs_resolve(
@@ -28483,6 +28953,505 @@ mod tests {
                 repo_request_properties.contains_key(field),
                 "repo query request should document {field}"
             );
+        }
+    }
+
+    #[test]
+    fn vpn_openapi_paths_are_typed_signed_and_use_runtime_success_statuses() {
+        let document = generate_spec();
+        let cases = [
+            (
+                "/v1/vpn/profile",
+                "get",
+                None,
+                "200",
+                "#/components/schemas/VpnProfileResponse",
+                false,
+            ),
+            (
+                "/v1/vpn/quotes",
+                "post",
+                Some("#/components/schemas/VpnQuoteCreateRequest"),
+                "201",
+                "#/components/schemas/VpnQuoteResponse",
+                true,
+            ),
+            (
+                "/v1/vpn/sessions",
+                "post",
+                Some("#/components/schemas/VpnSessionCreateRequest"),
+                "201",
+                "#/components/schemas/VpnSessionResponse",
+                true,
+            ),
+            (
+                "/v1/vpn/sessions/{session_id}",
+                "get",
+                None,
+                "200",
+                "#/components/schemas/VpnSessionResponse",
+                true,
+            ),
+            (
+                "/v1/vpn/sessions/{session_id}",
+                "delete",
+                None,
+                "200",
+                "#/components/schemas/VpnReceiptResponse",
+                true,
+            ),
+            (
+                "/v1/vpn/receipts",
+                "get",
+                None,
+                "200",
+                "#/components/schemas/VpnReceiptListResponse",
+                true,
+            ),
+            (
+                "/v1/vpn/receipts",
+                "post",
+                Some("#/components/schemas/VpnReceiptSubmitRequest"),
+                "201",
+                "#/components/schemas/VpnReceiptResponse",
+                true,
+            ),
+        ];
+        let expected_auth_headers = [
+            "X-Iroha-Account",
+            "X-Iroha-Signature",
+            "X-Iroha-Timestamp-Ms",
+            "X-Iroha-Nonce",
+            "X-Iroha-Witness",
+        ]
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+
+        for (path, method, request_ref, success_status, response_ref, signed) in cases {
+            let operation = openapi_operation(&document, path, method);
+            match request_ref {
+                Some(expected) => {
+                    assert_eq!(operation_request_schema_ref(operation, path), expected);
+                    assert_eq!(
+                        operation
+                            .get("requestBody")
+                            .and_then(Value::as_object)
+                            .and_then(|body| body.get("required")),
+                        Some(&Value::Bool(true)),
+                        "{method} {path} request body"
+                    );
+                }
+                None => assert!(
+                    operation.get("requestBody").is_none(),
+                    "{method} {path} must not advertise a request body"
+                ),
+            }
+            assert_eq!(
+                operation_response_schema_ref(operation, success_status, path),
+                response_ref,
+                "{method} {path} response"
+            );
+            let responses = operation
+                .get("responses")
+                .and_then(Value::as_object)
+                .expect("operation responses");
+            assert!(
+                responses.contains_key(success_status),
+                "{method} {path} must advertise HTTP {success_status}"
+            );
+            if method == "post" {
+                assert!(
+                    !responses.contains_key("200"),
+                    "{method} {path} must not advertise the retired creation status"
+                );
+            }
+
+            let auth_headers = operation
+                .get("parameters")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter(|parameter| parameter.get("in").and_then(Value::as_str) == Some("header"))
+                .map(|parameter| {
+                    parameter
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .expect("header parameter name")
+                })
+                .collect::<BTreeSet<_>>();
+            if signed {
+                assert_eq!(auth_headers, expected_auth_headers, "{method} {path} auth");
+            } else {
+                assert!(
+                    auth_headers.is_empty(),
+                    "{method} {path} must remain a public route"
+                );
+            }
+        }
+
+        for method in ["get", "delete"] {
+            let operation = openapi_operation(&document, "/v1/vpn/sessions/{session_id}", method);
+            let session_id = operation
+                .get("parameters")
+                .and_then(Value::as_array)
+                .and_then(|parameters| {
+                    parameters.iter().find(|parameter| {
+                        parameter.get("name").and_then(Value::as_str) == Some("session_id")
+                            && parameter.get("in").and_then(Value::as_str) == Some("path")
+                    })
+                })
+                .expect("session_id path parameter");
+            assert_eq!(
+                session_id
+                    .get("schema")
+                    .and_then(Value::as_object)
+                    .and_then(|schema| schema.get("pattern"))
+                    .and_then(Value::as_str),
+                Some("^[0-9a-f]{64}$"),
+                "{method} session id must use the canonical lowercase 32-byte hex form"
+            );
+        }
+    }
+
+    #[test]
+    fn vpn_openapi_schemas_are_strict_and_use_canonical_quantities() {
+        let document = generate_spec();
+        let schemas = component_schemas(&document);
+
+        assert_strict_object_schema(
+            schemas,
+            "VpnTxInstruction",
+            &["wire_id", "payload_hex"],
+            &[],
+        );
+        assert_strict_object_schema(
+            schemas,
+            "VpnQuoteCreateRequest",
+            &["metering_public_key_hex"],
+            &["exit_class"],
+        );
+        assert_strict_object_schema(
+            schemas,
+            "VpnSessionCreateRequest",
+            &["quote_id", "payment_tx_hash", "metering_public_key_hex"],
+            &["exit_class"],
+        );
+        assert_strict_object_schema(
+            schemas,
+            "VpnReceiptSubmitRequest",
+            &["relay_receipt_hex", "client_voucher_hex"],
+            &["lease_id_hex"],
+        );
+
+        let profile_fields = [
+            "available",
+            "relay_endpoint",
+            "supported_exit_classes",
+            "default_exit_class",
+            "lease_secs",
+            "dns_push_interval_secs",
+            "meter_family",
+            "route_pushes",
+            "excluded_routes",
+            "dns_servers",
+            "tunnel_addresses",
+            "mtu_bytes",
+            "display_billing_label",
+            "fee_asset_id",
+            "escrow_account_id",
+            "operator_account_id",
+            "lease_fee",
+            "settlement_grace_secs",
+            "flow_label_bits",
+            "padding_budget_ms",
+            "relay_tls_spki_sha256_hex",
+        ];
+        assert_strict_object_schema(schemas, "VpnProfileResponse", &profile_fields, &[]);
+
+        let quote_fields = [
+            "quote_id",
+            "lease_id_hex",
+            "session_id_hex",
+            "payment_reference",
+            "account_id",
+            "exit_class",
+            "relay_endpoint",
+            "lease_secs",
+            "quote_expires_at_ms",
+            "fee_asset_id",
+            "escrow_account_id",
+            "operator_account_id",
+            "lease_fee",
+            "route_pushes",
+            "excluded_routes",
+            "dns_servers",
+            "tunnel_addresses",
+            "mtu_bytes",
+            "meter_family",
+            "flow_label_bits",
+            "padding_budget_ms",
+            "relay_tls_spki_sha256_hex",
+            "metering_public_key_hex",
+            "open_lease_instruction",
+            "tx_instructions",
+        ];
+        assert_strict_object_schema(schemas, "VpnQuoteResponse", &quote_fields, &[]);
+
+        let session_fields = [
+            "session_id",
+            "account_id",
+            "exit_class",
+            "relay_endpoint",
+            "lease_secs",
+            "expires_at_ms",
+            "connected_at_ms",
+            "meter_family",
+            "quote_id",
+            "payment_reference",
+            "payment_tx_hash",
+            "fee_asset_id",
+            "escrow_account_id",
+            "operator_account_id",
+            "lease_fee",
+            "flow_label_bits",
+            "padding_budget_ms",
+            "relay_tls_spki_sha256_hex",
+            "route_pushes",
+            "excluded_routes",
+            "dns_servers",
+            "tunnel_addresses",
+            "mtu_bytes",
+            "helper_ticket_hex",
+            "bytes_in",
+            "bytes_out",
+            "status",
+        ];
+        assert_strict_object_schema(schemas, "VpnSessionResponse", &session_fields, &[]);
+        for (schema_name, field) in [
+            ("VpnSessionResponse", "payment_tx_hash"),
+            ("VpnReceiptResponse", "payment_tx_hash"),
+            ("VpnReceiptResponse", "lease_id_hex"),
+        ] {
+            let pattern = schemas
+                .get(schema_name)
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("properties"))
+                .and_then(Value::as_object)
+                .and_then(|properties| properties.get(field))
+                .and_then(Value::as_object)
+                .and_then(|property| property.get("pattern"))
+                .and_then(Value::as_str);
+            assert_eq!(
+                pattern,
+                Some("^[0-9a-f]{64}$"),
+                "{schema_name}.{field} must advertise canonical lowercase hex"
+            );
+        }
+        for (schema_name, field, pattern) in [
+            (
+                "VpnSessionCreateRequest",
+                "payment_tx_hash",
+                "^(?:0[xX])?[0-9A-Fa-f]{64}$",
+            ),
+            (
+                "VpnReceiptSubmitRequest",
+                "lease_id_hex",
+                "^(?:$|(?:0[xX])?[0-9A-Fa-f]{64})$",
+            ),
+        ] {
+            let actual = schemas
+                .get(schema_name)
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("properties"))
+                .and_then(Value::as_object)
+                .and_then(|properties| properties.get(field))
+                .and_then(Value::as_object)
+                .and_then(|property| property.get("pattern"))
+                .and_then(Value::as_str);
+            assert_eq!(
+                actual,
+                Some(pattern),
+                "{schema_name}.{field} must continue accepting mixed-case prefixed input"
+            );
+        }
+        let helper_ticket = schemas
+            .get("VpnSessionResponse")
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("properties"))
+            .and_then(Value::as_object)
+            .and_then(|properties| properties.get("helper_ticket_hex"))
+            .and_then(Value::as_object)
+            .expect("VPN helper ticket schema");
+        assert_eq!(
+            helper_ticket.get("pattern").and_then(Value::as_str),
+            Some("^[0-9a-f]{1328}$")
+        );
+        assert_eq!(
+            helper_ticket.get("minLength").and_then(Value::as_u64),
+            Some(1328)
+        );
+        assert_eq!(
+            helper_ticket.get("maxLength").and_then(Value::as_u64),
+            Some(1328)
+        );
+
+        let receipt_fields = [
+            "session_id",
+            "account_id",
+            "exit_class",
+            "relay_endpoint",
+            "meter_family",
+            "connected_at_ms",
+            "disconnected_at_ms",
+            "duration_ms",
+            "bytes_in",
+            "bytes_out",
+            "status",
+            "receipt_source",
+            "quote_id",
+            "payment_tx_hash",
+            "fee_asset_id",
+            "escrow_account_id",
+            "operator_account_id",
+            "lease_fee",
+            "earned_fee",
+            "refunded_fee",
+            "lease_id_hex",
+            "settle_lease_instruction",
+            "tx_instructions",
+        ];
+        assert_strict_object_schema(schemas, "VpnReceiptResponse", &receipt_fields, &[]);
+        assert_strict_object_schema(schemas, "VpnReceiptListResponse", &["items", "total"], &[]);
+
+        for (schema_name, field) in [
+            ("VpnTxInstruction", "wire_id"),
+            ("VpnProfileResponse", "relay_endpoint"),
+            ("VpnProfileResponse", "meter_family"),
+            ("VpnProfileResponse", "display_billing_label"),
+            ("VpnProfileResponse", "fee_asset_id"),
+            ("VpnProfileResponse", "escrow_account_id"),
+            ("VpnProfileResponse", "operator_account_id"),
+            ("VpnQuoteResponse", "payment_reference"),
+            ("VpnQuoteResponse", "account_id"),
+            ("VpnQuoteResponse", "relay_endpoint"),
+            ("VpnQuoteResponse", "fee_asset_id"),
+            ("VpnQuoteResponse", "escrow_account_id"),
+            ("VpnQuoteResponse", "operator_account_id"),
+            ("VpnQuoteResponse", "meter_family"),
+            ("VpnSessionResponse", "account_id"),
+            ("VpnSessionResponse", "relay_endpoint"),
+            ("VpnSessionResponse", "meter_family"),
+            ("VpnSessionResponse", "payment_reference"),
+            ("VpnSessionResponse", "fee_asset_id"),
+            ("VpnSessionResponse", "escrow_account_id"),
+            ("VpnSessionResponse", "operator_account_id"),
+            ("VpnReceiptResponse", "account_id"),
+            ("VpnReceiptResponse", "relay_endpoint"),
+            ("VpnReceiptResponse", "meter_family"),
+            ("VpnReceiptResponse", "fee_asset_id"),
+            ("VpnReceiptResponse", "escrow_account_id"),
+            ("VpnReceiptResponse", "operator_account_id"),
+        ] {
+            assert_eq!(
+                schemas
+                    .get(schema_name)
+                    .and_then(Value::as_object)
+                    .and_then(|schema| schema.get("properties"))
+                    .and_then(Value::as_object)
+                    .and_then(|properties| properties.get(field))
+                    .and_then(Value::as_object)
+                    .and_then(|property| property.get("minLength"))
+                    .and_then(Value::as_u64),
+                Some(1),
+                "{schema_name}.{field} must reject empty runtime identifiers"
+            );
+        }
+
+        for (schema_name, field) in [
+            ("VpnQuoteResponse", "quote_expires_at_ms"),
+            ("VpnSessionResponse", "expires_at_ms"),
+            ("VpnSessionResponse", "connected_at_ms"),
+            ("VpnSessionResponse", "bytes_in"),
+            ("VpnSessionResponse", "bytes_out"),
+            ("VpnReceiptResponse", "connected_at_ms"),
+            ("VpnReceiptResponse", "disconnected_at_ms"),
+            ("VpnReceiptResponse", "duration_ms"),
+            ("VpnReceiptResponse", "bytes_in"),
+            ("VpnReceiptResponse", "bytes_out"),
+            ("VpnReceiptListResponse", "total"),
+        ] {
+            assert_eq!(
+                schemas
+                    .get(schema_name)
+                    .and_then(Value::as_object)
+                    .and_then(|schema| schema.get("properties"))
+                    .and_then(Value::as_object)
+                    .and_then(|properties| properties.get(field))
+                    .and_then(Value::as_object)
+                    .and_then(|property| property.get("minimum"))
+                    .and_then(Value::as_u64),
+                Some(0),
+                "{schema_name}.{field} must advertise its unsigned lower bound"
+            );
+        }
+
+        let quantity = schemas
+            .get("Quantity")
+            .and_then(Value::as_object)
+            .expect("Quantity schema");
+        assert_eq!(quantity.get("type").and_then(Value::as_str), Some("string"));
+        for (schema_name, fee_fields) in [
+            ("VpnProfileResponse", &["lease_fee"][..]),
+            ("VpnQuoteResponse", &["lease_fee"][..]),
+            ("VpnSessionResponse", &["lease_fee"][..]),
+            (
+                "VpnReceiptResponse",
+                &["lease_fee", "earned_fee", "refunded_fee"][..],
+            ),
+        ] {
+            let properties = schemas
+                .get(schema_name)
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("properties"))
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("{schema_name} properties"));
+            for field in fee_fields {
+                assert_eq!(
+                    properties
+                        .get(*field)
+                        .and_then(Value::as_object)
+                        .and_then(|property| property.get("$ref"))
+                        .and_then(Value::as_str),
+                    Some("#/components/schemas/Quantity"),
+                    "{schema_name}.{field}"
+                );
+            }
+        }
+
+        for name in [
+            "VpnProfileResponse",
+            "VpnQuoteCreateRequest",
+            "VpnQuoteResponse",
+            "VpnSessionCreateRequest",
+            "VpnSessionResponse",
+            "VpnReceiptSubmitRequest",
+            "VpnReceiptResponse",
+            "VpnReceiptListResponse",
+            "VpnTxInstruction",
+        ] {
+            assert_no_retired_vpn_fee_fields(
+                schemas.get(name).unwrap_or_else(|| panic!("{name} schema")),
+                name,
+            );
+        }
+        let vpn_paths = document
+            .get("paths")
+            .and_then(Value::as_object)
+            .expect("paths");
+        for (path, path_item) in vpn_paths {
+            if path.starts_with("/v1/vpn/") {
+                assert_no_retired_vpn_fee_fields(path_item, path);
+            }
         }
     }
 

@@ -40,7 +40,7 @@ evidence without leaving the portal preview build.
 
 | Metric | Purpose |
 | --- | --- |
-| `taikai_ingest_segment_latency_ms` | CMAF ingest latency histogram per cluster/stream (target: p95 < 750 ms, p99 < 900 ms). |
+| `taikai_ingest_segment_latency_ms` | CMAF ingest latency histogram per cluster/stream (target: p95 below 750 ms, p99 below 900 ms). |
 | `taikai_ingest_live_edge_drift_ms` | Live-edge drift between encoder and anchor workers (pages at p99 > 1.5 s for 10 min). |
 | `taikai_ingest_segment_errors_total{reason}` | Error counters by reason (`decode`, `manifest_mismatch`, `lineage_replay`, …). Any increase triggers `TaikaiIngestFailure`. |
 | `taikai_trm_alias_rotations_total{alias_namespace,alias_name}` | Increments whenever `/v1/da/ingest` accepts a new TRM for an alias; use `rate()` to validate rotation cadence. |

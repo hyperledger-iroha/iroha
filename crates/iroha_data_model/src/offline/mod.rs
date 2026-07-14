@@ -122,6 +122,18 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_MAX_BRANCH_CLAIMS_V2: usize = 2;
 /// their base64url representation (at most 43,691 unpadded bytes, plus their
 /// transport discriminator) before allocation or decoding.
 pub const KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_ARCHIVE_BYTES_V2: usize = 32_768;
+/// Maximum canonical receiver-verification request including two complete
+/// finality proofs, two full anchors, and one authenticated roster artifact.
+///
+/// The additional fixed allowance covers the compact peer bundle, recipient
+/// request, Norito collection framing, and receiver policy fields.
+pub const KAGEMUSHA_RECURSIVE_SPEND_VERIFY_REQUEST_MAX_BYTES_V2: usize =
+    KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_ARCHIVE_BYTES_V2
+        + KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_MAX_BYTES_V2 as usize
+        + KAGEMUSHA_RECURSIVE_SPEND_MAX_INPUTS_V2
+            * (KAGEMUSHA_TOPUP_FINALITY_PROOF_MAX_BYTES_V2 as usize
+                + KAGEMUSHA_TOPUP_FINALITY_ANCHOR_MAX_BYTES_V2 as usize)
+        + 64 * 1024;
 /// Exact byte length of the sole canonical uncompressed SEC1 P-256 device key.
 pub const KAGEMUSHA_DEVICE_PUBLIC_KEY_SEC1_BYTES_V2: usize = 65;
 /// Exact byte length of the canonical raw low-S P-256 signature (`r || s`).
@@ -196,9 +208,18 @@ pub const KAGEMUSHA_UNSHIELD_PUBLIC_INPUTS_DIGEST_DOMAIN_V2: &str =
     "iroha:kagemusha:v2:unshield-public-inputs";
 /// Native bridge ABI that first advertises the fail-closed Pasta-cycle V3 contract.
 pub const KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3: u32 = 19;
+/// Native bridge ABI for the degree-parameterized recursive-spend V4 contract.
+///
+/// V4 is deliberately not an alias for ABI 19: its public accumulator layout,
+/// fold transcripts, key parsing parameters, and artifact framing all depend
+/// on an authenticated IPA degree.
+pub const KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4: u32 = 20;
 /// Exact schema identifier for the production recursive-spend artifact manifest.
 pub const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V3: &str =
     "kagemusha.offline.recursive_spend.artifact_manifest.v3";
+/// Exact schema identifier for the degree-parameterized artifact manifest.
+pub const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V4: &str =
+    "kagemusha.offline.recursive_spend.artifact_manifest.v4";
 /// Proof-system profile selected by the V3 recursive-spend release contract.
 pub const KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1: &str = "halo2/ipa-pasta-cycle-v1";
 /// V3 release-metadata spelling for the exact V1 Pasta-cycle backend.
@@ -207,32 +228,56 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1: &str = "halo2/ipa-pa
 /// backend profile remain the first exact-state wire contract.
 pub const KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V3: &str =
     KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1;
+/// Degree-parameterized Pasta-cycle backend selected only by ABI 20 releases.
+pub const KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4: &str = "halo2/ipa-pasta-cycle-v4";
 /// Poseidon transcript profile shared by both proofs in a Pasta-cycle pair.
 pub const KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V1: &str =
     "kagemusha-pasta-cycle-poseidon-v1";
 /// V3 release-metadata spelling for the exact V1 transcript profile.
 pub const KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V3: &str =
     KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V1;
+/// Transcript contract for V4 proofs and degree-sized BGH19 folds.
+pub const KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V4: &str =
+    "kagemusha-pasta-cycle-poseidon-v4";
 /// Circuit id for the EqAffine/Vesta half of every recursive step.
 pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V1: &str =
     "kagemusha-recursive-spend-step-eq-two-parent-exact-state-v1";
-/// V3 release-metadata spelling for the exact-state Eq circuit identifier.
+/// Circuit id for the Eq half with public operation and compiled-protocol identity.
+pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V2: &str =
+    "kagemusha-recursive-spend-step-eq-two-parent-operation-protocol-v2";
+/// V3 release-metadata spelling for the current Eq circuit identifier.
 pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V3: &str =
-    KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V1;
+    KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V2;
+/// Eq/Fp recursive-step circuit with authenticated dynamic IPA layout.
+pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4: &str =
+    "kagemusha-recursive-spend-step-eq-authenticated-layout-v4";
 /// Circuit id for the EpAffine/Pallas half of every recursive step.
 pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V1: &str =
     "kagemusha-recursive-spend-step-ep-two-parent-exact-state-v1";
-/// V3 release-metadata spelling for the exact-state Ep circuit identifier.
+/// Circuit id for the Ep half with public operation and compiled-protocol identity.
+pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V2: &str =
+    "kagemusha-recursive-spend-step-ep-two-parent-operation-protocol-v2";
+/// V3 release-metadata spelling for the current Ep circuit identifier.
 pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V3: &str =
-    KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V1;
+    KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V2;
+/// Ep/Fq recursive-step circuit with authenticated dynamic IPA layout.
+pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V4: &str =
+    "kagemusha-recursive-spend-step-ep-authenticated-layout-v4";
 /// Verifying-key curve for the EqAffine recursive-step half.
 pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_VERIFIER_CURVE_V3: &str = "vesta";
 /// Verifying-key curve for the EpAffine recursive-step half.
 pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_VERIFIER_CURVE_V3: &str = "pallas";
+/// Number of canonical Pasta field elements exposed by one Step operation.
+pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_OPERATION_FIELD_ELEMENTS_V3: usize = 135;
+/// Exact `u32` limbs used by the eight-limb encoding of every operation element.
+pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_OPERATION_LIMBS_V3: usize =
+    KAGEMUSHA_RECURSIVE_SPEND_STEP_OPERATION_FIELD_ELEMENTS_V3 * 8;
+/// Exact number of `u32` values in the current single-column Step ABI.
+pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_PUBLIC_INPUT_LIMBS_V3: usize = 4_024;
 /// Canonical field-neutral public inputs enforced by the EqAffine/Vesta step circuit.
-pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PUBLIC_INPUTS_SCHEMA_V3: &[u8] = br#"{"schema":"kagemusha_recursive_spend_step_eq_two_parent_exact_state_v1","layout":"single_column_u32","state_vector":{"layout_version":1,"limbs":889,"parent_slots":2},"public_inputs":["public_statement_digest_u32[8]","parent_count_u32","parent_states_u32[2][889]","result_state_u32[889]","manifest_sha256_u32[8]","parent_eq_deferred_sha256_u32[2][8]","parent_ep_deferred_sha256_u32[2][8]"]}"#;
+pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PUBLIC_INPUTS_SCHEMA_V3: &[u8] = br#"{"schema":"kagemusha_recursive_spend_step_eq_two_parent_operation_protocol_v2","layout":"single_column_u32","limbs":4024,"state_vector":{"layout_version":1,"limbs":889,"parent_slots":2},"operation":{"field_elements":135,"limbs_per_element":8,"limbs":1080,"encoding":"canonical_pasta_scalar_le_u32"},"compiled_protocol_identity":{"wire_version":1,"hash":"sha256","limbs":8},"ipa_accumulator":{"wire_version":1,"rounds":12,"limbs":106},"public_inputs":["public_statement_digest_u32[8]","operation_u32[1080]","parent_count_u32","parent_states_u32[2][889]","result_state_u32[889]","manifest_sha256_u32[8]","step_eq_compiled_protocol_sha256_u32[8]","step_ep_compiled_protocol_sha256_u32[8]","parent_eq_lineage_accumulator_u32[106]","parent_ep_lineage_accumulator_u32[106]","parent_eq_deferred_sha256_u32[2][8]","parent_ep_deferred_sha256_u32[2][8]"]}"#;
 /// Canonical field-neutral public inputs enforced by the EpAffine/Pallas step circuit.
-pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PUBLIC_INPUTS_SCHEMA_V3: &[u8] = br#"{"schema":"kagemusha_recursive_spend_step_ep_two_parent_exact_state_v1","layout":"single_column_u32","state_vector":{"layout_version":1,"limbs":889,"parent_slots":2},"public_inputs":["public_statement_digest_u32[8]","parent_count_u32","parent_states_u32[2][889]","result_state_u32[889]","manifest_sha256_u32[8]","parent_eq_deferred_sha256_u32[2][8]","parent_ep_deferred_sha256_u32[2][8]"]}"#;
+pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PUBLIC_INPUTS_SCHEMA_V3: &[u8] = br#"{"schema":"kagemusha_recursive_spend_step_ep_two_parent_operation_protocol_v2","layout":"single_column_u32","limbs":4024,"state_vector":{"layout_version":1,"limbs":889,"parent_slots":2},"operation":{"field_elements":135,"limbs_per_element":8,"limbs":1080,"encoding":"canonical_pasta_scalar_le_u32"},"compiled_protocol_identity":{"wire_version":1,"hash":"sha256","limbs":8},"ipa_accumulator":{"wire_version":1,"rounds":12,"limbs":106},"public_inputs":["public_statement_digest_u32[8]","operation_u32[1080]","parent_count_u32","parent_states_u32[2][889]","result_state_u32[889]","manifest_sha256_u32[8]","step_eq_compiled_protocol_sha256_u32[8]","step_ep_compiled_protocol_sha256_u32[8]","parent_eq_lineage_accumulator_u32[106]","parent_ep_lineage_accumulator_u32[106]","parent_eq_deferred_sha256_u32[2][8]","parent_ep_deferred_sha256_u32[2][8]"]}"#;
 /// Version of the canonical cross-field state boundary.
 pub const KAGEMUSHA_RECURSIVE_SPEND_STATE_BOUNDARY_VERSION_V1: u16 = 1;
 /// Version stored in limb zero of the exact cross-field recursive state.
@@ -241,22 +286,42 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V1: u32 = 1;
 pub const KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V1: usize = 889;
 /// Version of the canonical Pasta-cycle proof envelope.
 pub const KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_PROOF_ENVELOPE_VERSION_V1: u16 = 1;
+/// Envelope version for the operation/protocol-identity Step ABI.
+pub const KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_PROOF_ENVELOPE_VERSION_V2: u16 = 2;
+/// V3 release spelling for the current proof-envelope wire version.
+pub const KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_PROOF_ENVELOPE_VERSION_V3: u16 =
+    KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_PROOF_ENVELOPE_VERSION_V2;
+/// Proof-envelope version for the authenticated dynamic-layout V4 wire.
+pub const KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_PROOF_ENVELOPE_VERSION_V4: u16 = 4;
 /// Version of the production recursive-spend artifact manifest.
 pub const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_VERSION_V3: u16 = 3;
+/// Version of the degree-parameterized recursive-spend artifact manifest.
+pub const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_VERSION_V4: u16 = 4;
 /// Schema identifier for a trusted Kagemusha V3 release-signing policy.
 pub const KAGEMUSHA_RECURSIVE_SPEND_RELEASE_POLICY_SCHEMA_V1: &str =
     "kagemusha.offline.recursive_spend.release_policy.v1";
 /// Schema identifier for the signed Kagemusha V3 release envelope.
 pub const KAGEMUSHA_RECURSIVE_SPEND_RELEASE_ATTESTATION_SCHEMA_V1: &str =
     "kagemusha.offline.recursive_spend.release_attestation.v1";
+/// Schema identifier for a signed V4 recursive-spend release envelope.
+pub const KAGEMUSHA_RECURSIVE_SPEND_RELEASE_ATTESTATION_SCHEMA_V4: &str =
+    "kagemusha.offline.recursive_spend.release_attestation.v4";
 /// Schema identifier for the machine-readable promotion record emitted after verification.
 pub const KAGEMUSHA_RECURSIVE_SPEND_PROMOTED_RELEASE_SCHEMA_V3: &str =
     "kagemusha.offline.recursive_spend.promoted_release.v3";
+/// Schema identifier for an authenticated ABI-20/V4 promotion record.
+pub const KAGEMUSHA_RECURSIVE_SPEND_PROMOTED_RELEASE_SCHEMA_V4: &str =
+    "kagemusha.offline.recursive_spend.promoted_release.v4";
 /// Domain separator for role-specific V3 release approvals.
 pub const KAGEMUSHA_RECURSIVE_SPEND_RELEASE_APPROVAL_DOMAIN_V1: &str =
     "iroha:kagemusha:recursive-spend-release-approval:v1";
+/// Domain separator for role-specific V4 release approvals.
+pub const KAGEMUSHA_RECURSIVE_SPEND_RELEASE_APPROVAL_DOMAIN_V4: &str =
+    "iroha:kagemusha:recursive-spend-release-approval:v4";
 /// Current release policy, attestation, and promotion-record version.
 pub const KAGEMUSHA_RECURSIVE_SPEND_RELEASE_AUTH_VERSION_V1: u16 = 1;
+/// Signed-envelope version for explicitly degree-parameterized V4 releases.
+pub const KAGEMUSHA_RECURSIVE_SPEND_RELEASE_AUTH_VERSION_V4: u16 = 4;
 /// Defensive upper bound for authorized signers or supplied approvals.
 pub const KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_APPROVALS_V1: usize = 64;
 /// Maximum signed review or physical-device evidence file accepted by promotion tooling.
@@ -264,6 +329,9 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_EVIDENCE_BYTES_V1: usize = 16 * 
 /// Canonical Norito file containing the signed V3 release envelope.
 pub const KAGEMUSHA_RECURSIVE_SPEND_RELEASE_ATTESTATION_FILE_NAME_V1: &str =
     "release-attestation.norito";
+/// Canonical Norito file containing the signed V4 release envelope.
+pub const KAGEMUSHA_RECURSIVE_SPEND_RELEASE_ATTESTATION_FILE_NAME_V4: &str =
+    "release-attestation-v4.norito";
 /// Canonical opaque file containing signed physical-device benchmark evidence.
 pub const KAGEMUSHA_RECURSIVE_SPEND_BENCHMARK_EVIDENCE_FILE_NAME_V1: &str =
     "physical-device-benchmark.evidence";
@@ -277,10 +345,54 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_IPA_K_V1: u32 = 12;
 /// V3 release-metadata spelling for the exact V1 IPA domain exponent.
 pub const KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_IPA_K_V3: u32 =
     KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_IPA_K_V1;
+/// Version of the canonical authenticated V4 circuit configuration.
+pub const KAGEMUSHA_STEP_CIRCUIT_PARAMS_VERSION_V4: u16 = 4;
+/// Lowest degree admitted for the complete fixed-shape V4 Step circuit.
+///
+/// This is a rejection floor, not a claim that every calibrated circuit fits
+/// degree 20.
+pub const KAGEMUSHA_STEP_CIRCUIT_MINIMUM_K_V4: u32 = 20;
+/// Highest degree whose serialized Pasta parameters fit the release artifact
+/// corridor with a conservative margin.
+pub const KAGEMUSHA_STEP_CIRCUIT_MAXIMUM_K_V4: u32 = 21;
+/// Minimum unusable-row reservation required by the Halo2 base circuit.
+pub const KAGEMUSHA_STEP_CIRCUIT_MINIMUM_UNUSABLE_ROWS_V4: u32 = 9;
+/// Maximum supported challenge-phase vector length.
+pub const KAGEMUSHA_STEP_CIRCUIT_MAX_PHASES_V4: usize = 3;
+/// Maximum configured columns of any one class in a phase.
+pub const KAGEMUSHA_STEP_CIRCUIT_MAX_COLUMNS_V4: u32 = 256;
+/// Domain separator for canonical V4 circuit-parameter identities.
+pub const KAGEMUSHA_STEP_CIRCUIT_PARAMS_SHA256_DOMAIN_V4: &[u8] =
+    b"iroha:kagemusha:step-circuit-params:v4";
+/// Version of the degree-parameterized accumulated-opening wire.
+pub const KAGEMUSHA_IPA_ACCUMULATION_WIRE_VERSION_V4: u16 = 4;
+/// Version of the V4 Eq/Ep proof-pair wire.
+pub const KAGEMUSHA_PASTA_PROOF_PAIR_VERSION_V4: u16 = 4;
+/// Version of one authenticated selector-zero bootstrap witness payload.
+pub const KAGEMUSHA_PASTA_BOOTSTRAP_WITNESS_VERSION_V4: u16 = 4;
+/// Domain separator for canonical V4 bootstrap witness identities.
+pub const KAGEMUSHA_PASTA_BOOTSTRAP_WITNESS_SHA256_DOMAIN_V4: &[u8] =
+    b"iroha:kagemusha:pasta-bootstrap-witness:v4";
+/// Public selector used only by the manifest-independent bootstrap circuit.
+pub const KAGEMUSHA_PASTA_PUBLIC_BOOTSTRAP_SELECTOR_V4: u32 = 0;
+/// Public selector required by every ordinary live V4 Step proof.
+pub const KAGEMUSHA_PASTA_PUBLIC_LIVE_SELECTOR_V4: u32 = 1;
+/// Absolute defensive ceiling for one measured V4 Step proof transcript.
+pub const KAGEMUSHA_STEP_PROOF_ABSOLUTE_MAX_BYTES_V4: u32 = 1024 * 1024;
+/// Absolute defensive ceiling for one canonical V4 Eq/Ep proof-pair payload.
+pub const KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4: u32 = 16 * 1024 * 1024;
 /// Maximum size of any one content-addressed V3 artifact file.
 pub const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_FILE_BYTES_V3: u64 = 256 * 1024 * 1024;
 /// Framing magic for a streamed V3 recursive-spend key artifact.
 pub const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_KEY_MAGIC_V3: &[u8; 8] = b"KRV3KEY\0";
+/// Framing magic for a streamed V4 recursive-spend key artifact.
+pub const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_KEY_MAGIC_V4: &[u8; 8] = b"KRV4KEY\0";
+/// Exact public-header layout version used by every `KRV4KEY` file.
+pub const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_HEADER_VERSION_V4: u16 = 4;
+/// Defensive upper bound for the canonical Norito header preceding a V4 payload.
+pub const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_HEADER_MAX_BYTES_V4: u32 = 64 * 1024;
+/// Maximum size of any one V4 content-addressed artifact file.
+pub const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_FILE_BYTES_V4: u64 = 256 * 1024 * 1024;
 /// Canonical EqAffine/Vesta step parameter package file name.
 pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PARAMETERS_FILE_NAME_V3: &str =
     "step-eq.parameters.krv3";
@@ -299,6 +411,52 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PROVING_KEY_FILE_NAME_V3: &str =
 /// Canonical EpAffine/Pallas step verifying-key package file name.
 pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_VERIFYING_KEY_FILE_NAME_V3: &str =
     "step-ep.verifying-key.krv3";
+/// Canonical Eq parameter package file name for V4 releases.
+pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PARAMETERS_FILE_NAME_V4: &str =
+    "step-eq.parameters.krv4";
+/// Canonical Eq raw Norito circuit-parameter package for V4 releases.
+pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_PARAMS_FILE_NAME_V4: &str =
+    "step-eq.circuit-params.krv4";
+/// Canonical Eq processed proving-key package file name for V4 releases.
+pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PROVING_KEY_FILE_NAME_V4: &str =
+    "step-eq.proving-key.krv4";
+/// Canonical Eq processed verifier-key package file name for V4 releases.
+pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_VERIFYING_KEY_FILE_NAME_V4: &str =
+    "step-eq.verifying-key.krv4";
+/// Canonical Eq final-key selector-zero bootstrap-witness package for V4 runtime.
+pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_BOOTSTRAP_FILE_NAME_V4: &str =
+    "step-eq.bootstrap-witness.krv4";
+/// Canonical Ep parameter package file name for V4 releases.
+pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PARAMETERS_FILE_NAME_V4: &str =
+    "step-ep.parameters.krv4";
+/// Canonical Ep raw Norito circuit-parameter package for V4 releases.
+pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_PARAMS_FILE_NAME_V4: &str =
+    "step-ep.circuit-params.krv4";
+/// Canonical Ep processed proving-key package file name for V4 releases.
+pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PROVING_KEY_FILE_NAME_V4: &str =
+    "step-ep.proving-key.krv4";
+/// Canonical Ep processed verifier-key package file name for V4 releases.
+pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_VERIFYING_KEY_FILE_NAME_V4: &str =
+    "step-ep.verifying-key.krv4";
+/// Canonical Ep final-key selector-zero bootstrap-witness package for V4 runtime.
+pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_BOOTSTRAP_FILE_NAME_V4: &str =
+    "step-ep.bootstrap-witness.krv4";
+/// Exact ordered cryptographic artifact roles required by an ABI-20 release.
+///
+/// The order is part of the capability contract and follows the canonical
+/// Eq-then-Ep profile order and the five-artifact order within each profile.
+pub const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_ROLES_V4: [&str; 10] = [
+    "step_eq_parameters",
+    "step_eq_circuit_params",
+    "step_eq_proving_key",
+    "step_eq_verifying_key",
+    "step_eq_bootstrap_witness",
+    "step_ep_parameters",
+    "step_ep_circuit_params",
+    "step_ep_proving_key",
+    "step_ep_verifying_key",
+    "step_ep_bootstrap_witness",
+];
 /// Circuit/verifier role used by the compact Commit-QC plus anchor-path verifier.
 pub const KAGEMUSHA_TOPUP_FINALITY_CIRCUIT_ID_V2: &str = "kagemusha-topup-finality-qc-merkle-v2";
 /// Canonical release-manifest purpose of the trusted validator-roster artifact.
@@ -308,6 +466,8 @@ pub const KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_TYPE_V2: &str =
     "iroha_data_model::offline::model::KagemushaTopUpFinalityRosterArtifactV2";
 /// Canonical release file name for the top-up finality roster.
 pub const KAGEMUSHA_TOPUP_FINALITY_ROSTER_FILE_NAME_V2: &str = "topup-finality-roster.norito";
+/// Canonical V4 release name for the unchanged typed finality roster payload.
+pub const KAGEMUSHA_TOPUP_FINALITY_ROSTER_FILE_NAME_V4: &str = "topup-finality-roster-v4.norito";
 /// Maximum canonical roster artifact size; one full 4,096-validator window is
 /// pinned below this bound by an exact maximum wire-shape test.
 pub const KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_MAX_BYTES_V2: u64 = 2 * 1024 * 1024;
@@ -412,11 +572,11 @@ impl From<norito::Error> for KagemushaValidationError {
     }
 }
 
-/// Stable failure returned while authenticating or promoting a V3 artifact release.
+/// Stable failure returned while authenticating or promoting a V3 or V4 artifact release.
 #[allow(variant_size_differences)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KagemushaReleaseVerificationError {
-    /// The release manifest fails the V3 structural contract.
+    /// The release manifest fails its versioned structural contract.
     InvalidManifest,
     /// The locally trusted role policy is malformed.
     InvalidPolicy,
@@ -473,10 +633,10 @@ impl KagemushaReleaseVerificationError {
 impl core::fmt::Display for KagemushaReleaseVerificationError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Self::InvalidManifest => f.write_str("invalid Kagemusha V3 artifact manifest"),
-            Self::InvalidPolicy => f.write_str("invalid Kagemusha V3 release policy"),
+            Self::InvalidManifest => f.write_str("invalid Kagemusha artifact manifest"),
+            Self::InvalidPolicy => f.write_str("invalid Kagemusha release policy"),
             Self::InvalidAttestation => {
-                f.write_str("invalid or mismatched Kagemusha V3 release attestation")
+                f.write_str("invalid or mismatched Kagemusha release attestation")
             }
             Self::EvidenceMismatch { role } => {
                 write!(f, "Kagemusha release evidence mismatch for {role:?}")
@@ -499,7 +659,7 @@ impl core::fmt::Display for KagemushaReleaseVerificationError {
                 "Kagemusha release threshold for {role:?} is {collected}, requires {required}"
             ),
             Self::InvalidPromotionRecord => {
-                f.write_str("invalid Kagemusha V3 promoted-release record")
+                f.write_str("invalid Kagemusha promoted-release record")
             }
         }
     }
@@ -514,6 +674,19 @@ impl std::error::Error for KagemushaReleaseVerificationError {}
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KagemushaAuthenticatedReleaseV3 {
     manifest: KagemushaRecursiveSpendArtifactManifestV3,
+    manifest_sha256: [u8; 32],
+    release_attestation_sha256: [u8; 32],
+    release_policy_sha256: [u8; 32],
+    approved_signers: Vec<KagemushaRecursiveSpendApprovedSignerV1>,
+}
+
+/// Runtime proof that a V4 manifest, evidence set, and role thresholds were authenticated.
+///
+/// This is a separate type from [`KagemushaAuthenticatedReleaseV3`], so no
+/// caller can pass degree-parameterized material to a historical ABI-19 loader.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KagemushaAuthenticatedReleaseV4 {
+    manifest: KagemushaRecursiveSpendArtifactManifestV4,
     manifest_sha256: [u8; 32],
     release_attestation_sha256: [u8; 32],
     release_policy_sha256: [u8; 32],
@@ -1659,6 +1832,51 @@ mod model {
         pub proof: ProofBox,
     }
 
+    /// Operation/protocol-identity proof envelope used by the current release.
+    ///
+    /// Its field order intentionally matches V1 so framing stays simple, but
+    /// its version and circuit identifiers form a distinct, non-interchangeable
+    /// wire generation.
+    #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct KagemushaPastaCycleProofEnvelopeV2 {
+        /// Proof-envelope format version.
+        pub version: u16,
+        /// Exact paired-proof Pasta backend profile.
+        pub proof_backend: String,
+        /// Exact circuit-native transcript profile.
+        pub transcript_profile: String,
+        /// Exact Eq/Fp recursive-step circuit.
+        pub step_eq_circuit_id: String,
+        /// Exact Ep/Fq recursive-step circuit.
+        pub step_ep_circuit_id: String,
+        /// Human-readable release generation; `manifest_sha256` is the trust binding.
+        pub artifact_generation: String,
+        /// SHA-256 of the exact authenticated release manifest.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub manifest_sha256: [u8; 32],
+        /// Canonical Eq `ParamsIPA` generation identifier.
+        pub step_eq_parameter_generation: String,
+        /// Canonical Ep `ParamsIPA` generation identifier.
+        pub step_ep_parameter_generation: String,
+        /// SHA-256 of the exact Eq verifier key selected by the envelope.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub step_eq_verifier_key_sha256: [u8; 32],
+        /// SHA-256 of the exact Ep verifier key selected by the envelope.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub step_ep_verifier_key_sha256: [u8; 32],
+        /// Canonical cross-field state boundary exposed by the proof.
+        pub state_boundary: KagemushaRecursiveSpendStateBoundaryV1,
+        /// Backend-native proof bytes.
+        pub proof: ProofBox,
+    }
+
+    /// Production V3 spelling for the current proof-envelope wire.
+    pub type KagemushaPastaCycleProofEnvelopeV3 = KagemushaPastaCycleProofEnvelopeV2;
+
     /// Kind of content-addressed material bound to one Pasta proof profile.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
@@ -1772,6 +1990,11 @@ mod model {
         pub generation: String,
         /// Lowercase 40-hex source revision.
         pub source_commit: String,
+        /// SHA-256 of the exact tracked and untracked source-tree bytes used for the build.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub source_tree_sha256: [u8; 32],
+        /// Whether the exact source tree differed from `source_commit` when captured.
+        pub source_repo_dirty: bool,
         /// Chain for which the release was built.
         pub chain_id: ChainId,
         /// Asset definition for which the release was built.
@@ -1796,6 +2019,279 @@ mod model {
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
         pub cryptographic_review_sha256: [u8; 32],
         /// Digest of the signed release attestation.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub release_attestation_sha256: [u8; 32],
+    }
+
+    /// Exact dynamic offsets for one authenticated V4 public instance column.
+    #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct KagemushaPastaPublicLayoutV4 {
+        /// Authenticated IPA degree and accumulator round count.
+        pub ipa_round_count: u32,
+        /// Field-neutral limbs occupied by either carried IPA accumulator.
+        pub accumulator_limbs: u32,
+        /// First Eq carried-accumulator limb.
+        pub parent_eq_accumulator_offset: u32,
+        /// First Ep carried-accumulator limb.
+        pub parent_ep_accumulator_offset: u32,
+        /// First Eq deferred-audit word.
+        pub parent_eq_deferred_offset: u32,
+        /// First Ep deferred-audit word.
+        pub parent_ep_deferred_offset: u32,
+        /// Final public limb selecting bootstrap (`0`) or a live Step (`1`).
+        pub live_selector_offset: u32,
+        /// Exact length of the single public instance column.
+        pub instance_column_limbs: u32,
+    }
+
+    /// Canonical Halo2 base-circuit configuration authenticated by a V4 profile.
+    ///
+    /// `Default` is intentionally an invalid sentinel. Key readers and runtime
+    /// constructors must receive this value from an authenticated V4 manifest;
+    /// no FFI or local configuration value may substitute for it.
+    #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct KagemushaStepCircuitParamsV4 {
+        /// Exact parameter-layout version.
+        pub version: u16,
+        /// Halo2 domain exponent and IPA round count.
+        pub k: u32,
+        /// Advice-column count in each challenge phase.
+        pub num_advice_per_phase: Vec<u32>,
+        /// Lookup-advice-column count in each challenge phase.
+        pub num_lookup_advice_per_phase: Vec<u32>,
+        /// Fixed-column count.
+        pub num_fixed: u32,
+        /// Range-table lookup width.
+        pub lookup_bits: u32,
+        /// Exact number of public instance columns.
+        pub num_instance_columns: u32,
+        /// Exact dynamic length of the single public instance column.
+        pub public_input_limbs: u32,
+        /// Row reservation used during deterministic layout calibration.
+        pub minimum_unusable_rows: u32,
+        /// Exact release cap for one ordinary parent proof transcript.
+        pub max_parent_proof_bytes: u32,
+    }
+
+    impl Default for KagemushaStepCircuitParamsV4 {
+        fn default() -> Self {
+            Self {
+                version: 0,
+                k: 0,
+                num_advice_per_phase: Vec::new(),
+                num_lookup_advice_per_phase: Vec::new(),
+                num_fixed: 0,
+                lookup_bits: 0,
+                num_instance_columns: 0,
+                public_input_limbs: 0,
+                minimum_unusable_rows: 0,
+                max_parent_proof_bytes: 0,
+            }
+        }
+    }
+
+    /// Kind of content-addressed material bound to one V4 Pasta profile.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    #[norito(tag = "kind", content = "value", rename_all = "snake_case")]
+    pub enum KagemushaPastaCycleArtifactKindV4 {
+        /// Canonical `ParamsIPA` generator material.
+        Parameters,
+        /// Raw canonical Norito encoding of the complete circuit parameters.
+        CircuitParams,
+        /// Halo2 processed proving key.
+        ProvingKey,
+        /// Halo2 processed verifying key.
+        VerifyingKey,
+        /// Genuine selector-zero proof and terminally verified folds for absent slots.
+        BootstrapWitness,
+    }
+
+    /// One immutable file in a V4 recursive-spend artifact manifest.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct KagemushaPastaCycleArtifactV4 {
+        /// Material kind within the parity profile.
+        pub kind: KagemushaPastaCycleArtifactKindV4,
+        /// Safe single-component V4 file name.
+        pub file_name: String,
+        /// Exact framed byte length.
+        pub size_bytes: u64,
+        /// SHA-256 of the exact framed file bytes.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub sha256: [u8; 32],
+        /// Exact byte length of the unframed cryptographic payload.
+        pub payload_size_bytes: u64,
+        /// SHA-256 of the unframed cryptographic payload.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub payload_sha256: [u8; 32],
+    }
+
+    /// Canonical public header preceding one streamed `KRV4KEY` payload.
+    ///
+    /// The header intentionally contains no release-sized byte vector. A
+    /// streaming loader validates these small role bindings first, then hashes
+    /// exactly `payload_size_bytes` trailing bytes before exposing the payload.
+    #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct KagemushaPastaCycleFramedArtifactHeaderV4 {
+        /// Exact `KRV4KEY` public-header layout version.
+        pub version: u16,
+        /// Manifest schema which authorizes this file.
+        pub manifest_schema: String,
+        /// Native bridge ABI required by this file.
+        pub bridge_abi_version: u32,
+        /// Exact paired-proof backend profile.
+        pub proof_backend: String,
+        /// Exact transcript profile.
+        pub transcript_profile: String,
+        /// Release generation selected by the manifest.
+        pub generation: String,
+        /// Curve/parity selected by this artifact.
+        pub parity: KagemushaPastaCycleParityV1,
+        /// Exact V4 circuit identifier for `parity`.
+        pub circuit_id: String,
+        /// `ParamsIPA` generation selected by the profile.
+        pub parameter_generation: String,
+        /// Authenticated IPA degree.
+        pub ipa_k: u32,
+        /// Domain-separated identity of the embedded canonical circuit parameters.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub circuit_params_sha256: [u8; 32],
+        /// Value-free compiled protocol structure selected by this profile.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub compiled_protocol_structure_sha256: [u8; 32],
+        /// Measured ordinary Step proof bytes selected by this profile.
+        pub step_proof_size_bytes: u32,
+        /// Role of the following payload.
+        pub kind: KagemushaPastaCycleArtifactKindV4,
+        /// Exact byte length of the following unframed payload.
+        pub payload_size_bytes: u64,
+        /// Raw SHA-256 of the following unframed payload.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub payload_sha256: [u8; 32],
+    }
+
+    /// V4 reference to the unchanged canonical top-up finality roster type.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct KagemushaTopUpFinalityRosterArtifactReferenceV4 {
+        /// Safe single-component V4 file name.
+        pub file_name: String,
+        /// Exact canonical Norito byte length.
+        pub size_bytes: u64,
+        /// SHA-256 of the exact canonical roster bytes.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub sha256: [u8; 32],
+        /// Exact generation declared by the roster archive.
+        pub artifact_generation: String,
+        /// Native finality verifier/circuit role.
+        pub circuit_id: String,
+        /// Stable product purpose.
+        pub purpose: String,
+        /// Exact Norito type name contained by the file.
+        pub artifact_type: String,
+        /// Required V4 bridge ABI.
+        pub required_bridge_abi_version: u32,
+    }
+
+    /// Authenticated fixed configuration and key material for one V4 parity.
+    #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct KagemushaPastaCycleProofProfileV4 {
+        /// Curve/parity implemented by this profile.
+        pub parity: KagemushaPastaCycleParityV1,
+        /// Exact V4 circuit identifier.
+        pub circuit_id: String,
+        /// Canonical `ParamsIPA` generation identifier.
+        pub parameter_generation: String,
+        /// Redundant, fail-closed IPA degree; must equal `circuit_params.k`.
+        pub ipa_k: u32,
+        /// Complete authenticated Halo2 base-circuit configuration.
+        pub circuit_params: KagemushaStepCircuitParamsV4,
+        /// Value-free structure identity shared by bootstrap and final protocol.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub compiled_protocol_structure_sha256: [u8; 32],
+        /// Measured augmented proof bytes for this exact key and layout.
+        pub step_proof_size_bytes: u32,
+        /// Exactly one `ParamsIPA`, processed proving key, processed verifying
+        /// key, and final-key selector-zero bootstrap-witness package, in that
+        /// order. `circuit_params` is authenticated inline, never as a file.
+        pub artifacts: Vec<KagemushaPastaCycleArtifactV4>,
+    }
+
+    /// Production release manifest for degree-parameterized paired Pasta proofs.
+    #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct KagemushaRecursiveSpendArtifactManifestV4 {
+        /// Exact V4 manifest schema identifier.
+        pub schema: String,
+        /// Manifest layout version.
+        pub version: u16,
+        /// Required native bridge ABI.
+        pub bridge_abi_version: u32,
+        /// Exact V4 paired-proof backend profile.
+        pub proof_backend: String,
+        /// Exact V4 transcript profile.
+        pub transcript_profile: String,
+        /// Human-readable release generation.
+        pub generation: String,
+        /// Lowercase 40-hex source revision.
+        pub source_commit: String,
+        /// SHA-256 of the exact tracked and untracked build source tree.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub source_tree_sha256: [u8; 32],
+        /// Whether the exact build tree differed from `source_commit`.
+        pub source_repo_dirty: bool,
+        /// Chain for which the release was built.
+        pub chain_id: ChainId,
+        /// Asset definition for which the release was built.
+        pub asset: AssetDefinitionId,
+        /// Authoritative fixed asset scale.
+        pub asset_scale: u32,
+        /// First block at which this release may issue notes.
+        pub activation_height: u64,
+        /// First block at which new issuance must stop.
+        pub withdrawal_height: u64,
+        /// Exact measured upper bound for one canonical V4 proof-pair payload.
+        pub max_proof_bytes: u32,
+        /// Eq then Ep V4 recursive-step profiles.
+        pub profiles: Vec<KagemushaPastaCycleProofProfileV4>,
+        /// Release-bound validator roster reference.
+        pub topup_finality_roster_artifact: KagemushaTopUpFinalityRosterArtifactReferenceV4,
+        /// Digest of signed physical-device benchmark evidence.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub benchmark_evidence_sha256: [u8; 32],
+        /// Digest of independent cryptographic review evidence.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub cryptographic_review_sha256: [u8; 32],
+        /// Digest of the V4 signed release attestation.
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
         pub release_attestation_sha256: [u8; 32],
     }
@@ -1830,6 +2326,11 @@ mod model {
         pub generation: String,
         /// Exact source revision copied from the manifest.
         pub source_commit: String,
+        /// Exact source-tree identity copied from the manifest.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub source_tree_sha256: [u8; 32],
+        /// Exact dirty-tree state copied from the manifest.
+        pub source_repo_dirty: bool,
         /// Digest of the signed physical-device evidence file.
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
         pub benchmark_evidence_sha256: [u8; 32],
@@ -1883,6 +2384,80 @@ mod model {
         pub subject: KagemushaRecursiveSpendReleaseAttestationSubjectV1,
         /// Strictly ordered, unique role/signer approvals.
         pub approvals: Vec<KagemushaRecursiveSpendReleaseApprovalV1>,
+    }
+
+    /// Immutable subject shared by every role-specific V4 release approval.
+    #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct KagemushaRecursiveSpendReleaseAttestationSubjectV4 {
+        /// SHA-256 of the canonical V4 manifest with its attestation slot zeroed.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub manifest_subject_sha256: [u8; 32],
+        /// Exact release generation copied from the V4 manifest.
+        pub generation: String,
+        /// Exact source revision copied from the V4 manifest.
+        pub source_commit: String,
+        /// Exact source-tree identity copied from the V4 manifest.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub source_tree_sha256: [u8; 32],
+        /// Exact dirty-tree state copied from the V4 manifest.
+        pub source_repo_dirty: bool,
+        /// Digest of the signed physical-device evidence file.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub benchmark_evidence_sha256: [u8; 32],
+        /// Digest of the independent cryptographic review file.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub cryptographic_review_sha256: [u8; 32],
+    }
+
+    /// Domain-separated value signed for one independent V4 approval role.
+    #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct KagemushaRecursiveSpendReleaseApprovalPayloadV4 {
+        /// Cross-protocol replay separator.
+        pub domain: String,
+        /// Authority role for which this signature is valid.
+        pub role: KagemushaRecursiveSpendReleaseApprovalRoleV1,
+        /// Complete V4 release subject approved by the signer.
+        pub subject: KagemushaRecursiveSpendReleaseAttestationSubjectV4,
+    }
+
+    /// One role-bound signature inside a V4 release attestation.
+    #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct KagemushaRecursiveSpendReleaseApprovalV4 {
+        /// Independent authority role represented by this signature.
+        pub role: KagemushaRecursiveSpendReleaseApprovalRoleV1,
+        /// Exact signer key selected by the trusted release policy.
+        pub public_key: PublicKey,
+        /// Signature over the V4 domain, role, and complete subject.
+        pub signature: SignatureOf<KagemushaRecursiveSpendReleaseApprovalPayloadV4>,
+    }
+
+    /// Authenticated release envelope whose digest occupies the V4 manifest slot.
+    #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct KagemushaRecursiveSpendReleaseAttestationV4 {
+        /// Exact V4 attestation schema.
+        pub schema: String,
+        /// Attestation layout version.
+        pub version: u16,
+        /// Immutable V4 subject approved by all roles.
+        pub subject: KagemushaRecursiveSpendReleaseAttestationSubjectV4,
+        /// Strictly ordered, unique role/signer approvals.
+        pub approvals: Vec<KagemushaRecursiveSpendReleaseApprovalV4>,
     }
 
     /// Trusted signer threshold for one independent release-approval role.
@@ -1962,6 +2537,40 @@ mod model {
         pub missing_gates: Vec<String>,
     }
 
+    /// Deterministic ABI-20 deployment marker written only after V4 release verification.
+    #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct KagemushaRecursiveSpendPromotedReleaseV4 {
+        /// Exact V4 promotion-record schema.
+        pub schema: String,
+        /// Promotion-record layout version.
+        pub version: u16,
+        /// Authenticated V4 release generation.
+        pub generation: String,
+        /// SHA-256 of the complete canonical V4 manifest.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub manifest_sha256: [u8; 32],
+        /// SHA-256 of the canonical signed V4 release attestation.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub release_attestation_sha256: [u8; 32],
+        /// SHA-256 of the locally trusted release policy.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub release_policy_sha256: [u8; 32],
+        /// Canonically ordered role/signer identities whose signatures were verified.
+        pub approved_signers: Vec<KagemushaRecursiveSpendApprovedSignerV1>,
+        /// Whether every content-addressed V4 artifact was verified before publication.
+        pub artifact_inventory_verified: bool,
+        /// Native bridge ABI required to consume this promoted release.
+        pub bridge_abi_version: u32,
+        /// Exact Eq-then-Ep ten-role artifact inventory selected by ABI-20.
+        pub artifact_roles: Vec<String>,
+        /// Authenticated release-specific proof-pair byte ceiling.
+        pub max_proof_bytes: u32,
+    }
+
     /// Installed authenticated artifact release selected by a recursive operation.
     ///
     /// Callers bind the complete manifest, never an individual proving-key
@@ -1976,6 +2585,24 @@ mod model {
         /// Human-readable authenticated release generation.
         pub generation: String,
         /// SHA-256 of the exact signed manifest bytes.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub manifest_sha256: [u8; 32],
+    }
+
+    /// Installed authenticated V4 release selected by a degree-parameterized operation.
+    ///
+    /// This is intentionally distinct from the V3 binding even though both
+    /// carry a generation and manifest digest. Their referenced manifest
+    /// schemas, bridge ABIs, and proof wires are not interchangeable.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct KagemushaRecursiveSpendArtifactBindingV4 {
+        /// Human-readable authenticated V4 release generation.
+        pub generation: String,
+        /// SHA-256 of the exact signed V4 manifest bytes.
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
         pub manifest_sha256: [u8; 32],
     }
@@ -2086,8 +2713,27 @@ mod model {
         pub recipient_membership_witness: KagemushaNoteMembershipWitnessV2,
     }
 
+    /// One complete, independently verifiable finalized origin carried to a
+    /// receiver outside the compact recursive bundle.
+    ///
+    /// The recursive state carries only the compact anchor reference.  The
+    /// receiver needs these full bytes to recompute that reference and verify
+    /// the Commit QC plus block-local inclusion proof without consulting the
+    /// chain.
+    #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct KagemushaRecursiveSpendTopUpFinalityEvidenceV2 {
+        /// Complete finalized receipt whose digest is carried by the Step state.
+        pub topup_anchor: KagemushaRecursiveSpendTopUpAnchorV2,
+        /// Consensus proof for the exact compact reference of `topup_anchor`.
+        pub topup_finality_proof: KagemushaTopUpFinalityProofV2,
+    }
+
     /// Versioned receiver verification request.
-    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -2097,6 +2743,14 @@ mod model {
         pub bundle: KagemushaRecursiveSpendBundleV2,
         /// Receiver request that the final branch must match exactly.
         pub recipient_request: KagemushaRecipientPaymentRequestV2,
+        /// Exact manifest-bound validator roster used for every origin proof.
+        ///
+        /// A release admits one immutable roster window, so all one-or-two
+        /// origins in this request must verify against this single artifact.
+        pub topup_finality_roster_artifact: KagemushaTopUpFinalityRosterArtifactV2,
+        /// Canonically ordered complete evidence, exactly one entry for every
+        /// compact top-up anchor reference carried by the recursive state.
+        pub topup_finality_evidence: Vec<KagemushaRecursiveSpendTopUpFinalityEvidenceV2>,
         /// Maximum hop count accepted by the receiver for this artifact set.
         pub maximum_hops: u32,
         /// Expected authenticated artifact release.
@@ -2319,6 +2973,596 @@ mod model {
         pub operation_id: [u8; 32],
         /// Self-contained recipient/device authorization.
         pub authorization: KagemushaRequestAuthorizationV2,
+    }
+
+    /// Native capability record for the explicitly versioned ABI-20 backend.
+    #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct KagemushaRecursiveSpendNativeCapabilitiesV4 {
+        /// Native bridge ABI reported by the loaded library.
+        pub bridge_abi_version: u32,
+        /// Required V4 artifact manifest schema.
+        pub artifact_manifest_schema: String,
+        /// Required V4 proof backend.
+        pub proof_backend: String,
+        /// Required V4 transcript profile.
+        pub transcript_profile: String,
+        /// Proof-envelope format version.
+        pub proof_envelope_version: u16,
+        /// Eq recursive-step circuit id.
+        pub step_eq_circuit_id: String,
+        /// Ep recursive-step circuit id.
+        pub step_ep_circuit_id: String,
+        /// Exact ordered eight-role cryptographic inventory.
+        pub artifact_roles: Vec<String>,
+        /// Maximum proof-pair payload accepted by the installed V4 release.
+        pub max_proof_bytes: u32,
+        /// Whether all proof, audit, release, and performance gates passed.
+        pub proof_backend_available: bool,
+        /// Stable remaining backend gates.
+        pub missing_gates: Vec<String>,
+    }
+
+    /// Degree-parameterized Pasta-cycle envelope carried by a V4 proof wrapper.
+    ///
+    /// The backend-native Eq/Ep pair remains canonical opaque bytes inside
+    /// `proof`; wallets and bridge carriers do not reinterpret its internal
+    /// accumulators or fold transcripts.
+    #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct KagemushaPastaCycleProofEnvelopeV4 {
+        /// Exact V4 proof-envelope version.
+        pub version: u16,
+        /// Exact V4 paired-proof backend.
+        pub proof_backend: String,
+        /// Exact V4 transcript profile.
+        pub transcript_profile: String,
+        /// Exact Eq recursive-step circuit id.
+        pub step_eq_circuit_id: String,
+        /// Exact Ep recursive-step circuit id.
+        pub step_ep_circuit_id: String,
+        /// Authenticated artifact generation.
+        pub artifact_generation: String,
+        /// SHA-256 of the exact authenticated V4 manifest.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub manifest_sha256: [u8; 32],
+        /// Eq parameter generation identifier.
+        pub step_eq_parameter_generation: String,
+        /// Ep parameter generation identifier.
+        pub step_ep_parameter_generation: String,
+        /// Domain-separated identity of the Eq circuit configuration.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub step_eq_circuit_params_sha256: [u8; 32],
+        /// Domain-separated identity of the Ep circuit configuration.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub step_ep_circuit_params_sha256: [u8; 32],
+        /// SHA-256 of the exact Eq processed verifier-key payload.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub step_eq_verifier_key_sha256: [u8; 32],
+        /// SHA-256 of the exact Ep processed verifier-key payload.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub step_ep_verifier_key_sha256: [u8; 32],
+        /// Canonical cross-field state boundary exposed by the proof.
+        pub state_boundary: KagemushaRecursiveSpendStateBoundaryV1,
+        /// Canonical adapter-owned V4 Eq/Ep proof-pair bytes.
+        pub proof: ProofBox,
+    }
+
+    /// Canonical public statement bound by an ABI-20 recursive proof.
+    #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct KagemushaRecursiveSpendPublicStatementV4 {
+        /// Chain that scopes this cash state.
+        pub chain_id: ChainId,
+        /// Asset committed by every note in the transition.
+        pub asset: AssetDefinitionId,
+        /// Authoritative asset scale.
+        pub asset_scale: u32,
+        /// Root after the current transition.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub final_root: [u8; 32],
+        /// One or two canonical finalized top-up references funding this state.
+        pub topup_anchor_refs: Vec<KagemushaRecursiveSpendTopUpAnchorRefV2>,
+        /// Total recursive proof transitions.
+        pub proof_step_count: u32,
+        /// Number of peer-to-peer spends after top-up.
+        pub peer_hop_count: u32,
+        /// Current independently spendable note.
+        pub current_note: KagemushaSpendableNoteDescriptorV2,
+        /// Transition-bound conflict claims.
+        pub branch_claims: Vec<KagemushaRecursiveSpendBranchClaimV2>,
+        /// Binding-only semantic transition; this V2-named leaf contains no artifact binding.
+        pub transition: Option<KagemushaRecursiveSpendTransitionV2>,
+        /// Authenticated V4 proving-artifact release.
+        pub artifact_binding: KagemushaRecursiveSpendArtifactBindingV4,
+        /// Recursive verifier selected by the proof.
+        pub verifier_key_id: VerifyingKeyId,
+    }
+
+    /// V4 recursive proof whose public instance includes the statement digest.
+    #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct KagemushaRecursiveSpendProofV4 {
+        /// Verifier selected by the statement.
+        pub verifier_key_id: VerifyingKeyId,
+        /// Circuit-exposed digest of the complete V4 public statement.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub public_statement_digest: [u8; 32],
+        /// Explicitly versioned envelope containing the opaque native pair.
+        pub proof_envelope: KagemushaPastaCycleProofEnvelopeV4,
+    }
+
+    /// Independently spendable ABI-20 recursive state.
+    #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct KagemushaRecursiveSpendBundleV4 {
+        /// Exact public statement bound by the proof.
+        pub statement: KagemushaRecursiveSpendPublicStatementV4,
+        /// Degree-parameterized recursive proof.
+        pub recursive_proof: KagemushaRecursiveSpendProofV4,
+    }
+
+    /// Finalized top-up anchor selecting a V4 recursive release.
+    #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct KagemushaRecursiveSpendTopUpAnchorV4 {
+        /// Anchor schema version.
+        pub version: u16,
+        /// Chain that finalized the top-up.
+        pub chain_id: ChainId,
+        /// Payer whose online balance funded the anchor.
+        pub payer: AccountId,
+        /// Exact payer asset, including its balance scope.
+        pub asset: AssetId,
+        /// Authoritative fixed scale.
+        pub asset_scale: u32,
+        /// Exact positive amount reserved into escrow.
+        pub amount: KagemushaScaledAmountV2,
+        /// Confidential root before the finalized transfer.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub initial_root: [u8; 32],
+        /// Confidential root finalized by the transfer.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub finalized_root: [u8; 32],
+        /// Confidential tree position consumed by the top-up note.
+        pub shield_leaf_index: u32,
+        /// Exact first spendable note.
+        pub current_note: KagemushaSpendableNoteDescriptorV2,
+        /// Stable top-up operation identifier.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub topup_operation_id: [u8; 32],
+        /// Active shield verifier selected at finalization.
+        pub shield_verifier_id: VerifyingKeyId,
+        /// Registered shield verifier commitment.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub shield_verifier_commitment: [u8; 32],
+        /// Authenticated V4 recursive artifact release.
+        pub artifact_binding: KagemushaRecursiveSpendArtifactBindingV4,
+        /// Finalization block height.
+        pub finalized_height: u64,
+        /// Canonical transaction hash that created the anchor.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub finalized_tx_hash: [u8; 32],
+        /// Canonical digest of every preceding receipt field.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub anchor_digest: [u8; 32],
+    }
+
+    /// Public V4 split transition with an ABI-20 output binding.
+    #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct KagemushaRecursiveSpendSplitIntentV4 {
+        /// Chain inherited from the parent state and receiver request.
+        pub chain_id: ChainId,
+        /// Asset inherited from the parent state and receiver request.
+        pub asset: AssetDefinitionId,
+        /// One or two canonical previous branches.
+        pub inputs: Vec<KagemushaRecursiveSpendInputBranchV2>,
+        /// Canonical finalized top-up references contributing value.
+        pub topup_anchor_refs: Vec<KagemushaRecursiveSpendTopUpAnchorRefV2>,
+        /// Authoritative asset-definition scale.
+        pub asset_scale: u32,
+        /// Authenticated V4 release selected for the output proof.
+        pub output_artifact_binding: KagemushaRecursiveSpendArtifactBindingV4,
+        /// Exact amount assigned to the recipient output.
+        pub transfer_amount: KagemushaScaledAmountV2,
+        /// Recipient-owned output note.
+        pub recipient_output: KagemushaSpendableNoteDescriptorV2,
+        /// Sender-owned remainder, if any.
+        pub change_output: Option<KagemushaSpendableNoteDescriptorV2>,
+        /// Digest of the receiver's nonce-bound payment request.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub recipient_request_digest: [u8; 32],
+        /// Stable idempotency/replay identifier.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub operation_id: [u8; 32],
+    }
+
+    /// Public V4 redemption transition with an optional ABI-20 change binding.
+    #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct KagemushaRecursiveSpendRedemptionIntentV4 {
+        /// Chain inherited from the input bundle.
+        pub chain_id: ChainId,
+        /// Asset inherited from the input bundle.
+        pub asset: AssetDefinitionId,
+        /// Exact note consumed by unshield-v3.
+        pub input_note: KagemushaSpendableNoteDescriptorV2,
+        /// Canonical live conflict claims consumed by this redemption.
+        pub parent_branch_claims: Vec<KagemushaRecursiveSpendBranchClaimV2>,
+        /// Canonical finalized top-up references carried by the parent.
+        pub parent_topup_anchor_refs: Vec<KagemushaRecursiveSpendTopUpAnchorRefV2>,
+        /// Recursive proof-step count of the parent bundle.
+        pub parent_proof_step_count: u32,
+        /// Peer-hop count of the parent bundle.
+        pub parent_peer_hop_count: u32,
+        /// Canonical digest of the complete input bundle.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub parent_bundle_digest: [u8; 32],
+        /// Input confidential root exposed by unshield-v3.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub input_root: [u8; 32],
+        /// Online account receiving the public credit.
+        pub recipient: AccountId,
+        /// Exact credited amount at the authoritative scale.
+        pub public_amount: KagemushaScaledAmountV2,
+        /// Proof-bound change descriptor.
+        pub change_output: Option<KagemushaSpendableNoteDescriptorV2>,
+        /// Authenticated V4 output release, present exactly with change.
+        pub change_artifact_binding: Option<KagemushaRecursiveSpendArtifactBindingV4>,
+        /// Canonical unshield-v3 public words.
+        pub unshield_public_inputs: KagemushaUnshieldPublicInputsBindingV2,
+        /// Digest of the unshield words exposed by the V4 transition circuit.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub unshield_public_inputs_digest: [u8; 32],
+        /// Stable authorization/idempotency operation id.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub operation_id: [u8; 32],
+    }
+
+    /// ABI-20 local initialization request.
+    #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct KagemushaRecursiveSpendInitRequestV4 {
+        /// Finalized chain receipt consumed by the initial proof.
+        pub topup_anchor: KagemushaRecursiveSpendTopUpAnchorV4,
+        /// Offline-verifiable finality proof for the compact anchor reference.
+        pub topup_finality_proof: KagemushaTopUpFinalityProofV2,
+        /// Exact content-addressed validator roster.
+        pub topup_finality_roster_artifact: KagemushaTopUpFinalityRosterArtifactV2,
+        /// Authenticated V4 artifact release.
+        pub artifact_binding: KagemushaRecursiveSpendArtifactBindingV4,
+    }
+
+    /// ABI-20 initialization result.
+    #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct KagemushaRecursiveSpendInitResultV4 {
+        /// Independently spendable state created from the finalized top-up.
+        pub bundle: KagemushaRecursiveSpendBundleV4,
+        /// Circuit-exposed digest of the complete public statement.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub public_statement_digest: [u8; 32],
+    }
+
+    /// One V4 previous-proof package consumed by append.
+    #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct KagemushaRecursiveSpendAppendInputV4 {
+        /// Previous spendable ABI-20 recursive state.
+        pub previous_bundle: KagemushaRecursiveSpendBundleV4,
+    }
+
+    /// ABI-20 recursive append request.
+    #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct KagemushaRecursiveSpendAppendRequestV4 {
+        /// One or two previous-proof packages in canonical order.
+        pub previous_inputs: Vec<KagemushaRecursiveSpendAppendInputV4>,
+        /// Confidential-transfer proof containing both output commitments.
+        pub confidential_transfer_proof: ProofAttachment,
+        /// Scale, outputs, replay id, and V4 output release.
+        pub split: KagemushaRecursiveSpendSplitIntentV4,
+        /// Authoritative verifier activation height.
+        pub block_height: u64,
+    }
+
+    /// Result of one ABI-20 recursive split append.
+    #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct KagemushaRecursiveSpendSplitResultV4 {
+        /// Exact value-conserving transition shared by both branches.
+        pub split: KagemushaRecursiveSpendSplitIntentV4,
+        /// Circuit-exposed binding to the split and parent accumulator.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub split_binding_digest: [u8; 32],
+        /// Receiver-owned independently spendable output.
+        pub recipient_bundle: KagemushaRecursiveSpendBundleV4,
+        /// Proof-bound membership state for the recipient output.
+        pub recipient_membership_witness: KagemushaNoteMembershipWitnessV2,
+        /// Sender-owned remainder, present only for a partial transfer.
+        pub change_bundle: Option<KagemushaRecursiveSpendBundleV4>,
+        /// Proof-bound membership state for sender change.
+        pub change_membership_witness: Option<KagemushaNoteMembershipWitnessV2>,
+    }
+
+    /// Complete finalized V4 origin carried to an offline receiver.
+    #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct KagemushaRecursiveSpendTopUpFinalityEvidenceV4 {
+        /// Complete finalized ABI-20 top-up receipt.
+        pub topup_anchor: KagemushaRecursiveSpendTopUpAnchorV4,
+        /// Consensus proof for the compact anchor reference.
+        pub topup_finality_proof: KagemushaTopUpFinalityProofV2,
+    }
+
+    /// ABI-20 receiver-verification request.
+    #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct KagemushaRecursiveSpendVerifyRequestV4 {
+        /// Scale- and split-bound ABI-20 recursive bundle.
+        pub bundle: KagemushaRecursiveSpendBundleV4,
+        /// Receiver request that the final branch must match.
+        pub recipient_request: KagemushaRecipientPaymentRequestV2,
+        /// Exact manifest-bound validator roster.
+        pub topup_finality_roster_artifact: KagemushaTopUpFinalityRosterArtifactV2,
+        /// Complete evidence for every compact top-up reference.
+        pub topup_finality_evidence: Vec<KagemushaRecursiveSpendTopUpFinalityEvidenceV4>,
+        /// Maximum hop count accepted by the receiver.
+        pub maximum_hops: u32,
+        /// Expected authenticated V4 artifact release.
+        pub artifact_binding: KagemushaRecursiveSpendArtifactBindingV4,
+        /// Authoritative verifier activation height.
+        pub block_height: u64,
+        /// Authoritative current Unix time in milliseconds.
+        pub verified_at_ms: u64,
+    }
+
+    /// Opaque-safe summary decoded from an ABI-20 bundle.
+    #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct KagemushaRecursiveSpendBundleSummaryV4 {
+        /// Asset definition bound by the proof.
+        pub asset: AssetDefinitionId,
+        /// Exact current spendable amount.
+        pub amount: KagemushaScaledAmountV2,
+        /// Current note commitment.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub note_commitment: [u8; 32],
+        /// Current note nullifier.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub spend_nullifier: [u8; 32],
+        /// Current peer-hop count.
+        pub hop_count: u32,
+        /// Current recursive transition count.
+        pub proof_step_count: u32,
+        /// Canonical transition-bound conflict claims.
+        pub branch_claims: Vec<KagemushaRecursiveSpendBranchClaimV2>,
+        /// Authenticated V4 artifact release.
+        pub artifact_binding: KagemushaRecursiveSpendArtifactBindingV4,
+        /// Recursive verifier selected by the proof.
+        pub verifier_key_id: VerifyingKeyId,
+        /// Canonical identity digest of the complete opaque bundle.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub bundle_digest: [u8; 32],
+    }
+
+    /// Typed ABI-20 receiver-verification result.
+    #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct KagemushaRecursiveSpendVerifyResultV4 {
+        /// Cryptographic proof and all public bindings verified.
+        pub valid: bool,
+        /// Bundle satisfies current chain admission rules.
+        pub chain_admissible: bool,
+        /// Persisted lineage material can be redeemed.
+        pub lineage_redeemable: bool,
+        /// Chain supports redemption without a record-backed witness.
+        pub witnessless_redemption_supported: bool,
+        /// Verified ABI-20 bundle summary.
+        pub summary: KagemushaRecursiveSpendBundleSummaryV4,
+        /// Canonical receiver request digest.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub recipient_request_digest: [u8; 32],
+        /// Digest binding request, output, and bundle.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub request_output_binding_digest: [u8; 32],
+        /// Active recursive verifier record identifier.
+        pub verifier_key_id: VerifyingKeyId,
+        /// Active V4 recursive circuit id.
+        pub verifier_circuit_id: String,
+        /// Inclusive verifier activation height.
+        pub verifier_activation_height: Option<u64>,
+        /// Exclusive verifier withdrawal height.
+        pub verifier_withdraw_height: Option<u64>,
+        /// Height used for activation-window verification.
+        pub verified_at_block_height: u64,
+        /// Authoritative Unix time used for acceptance.
+        pub verified_at_ms: u64,
+    }
+
+    /// Proof-bound V4 offline change child created by partial redemption.
+    #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct KagemushaRecursiveSpendRedeemChangeBranchV4 {
+        /// Exact change descriptor exposed by unshield-v3.
+        pub output: KagemushaSpendableNoteDescriptorV2,
+        /// Deterministic transition-bound change claims.
+        pub branch_claims: Vec<KagemushaRecursiveSpendBranchClaimV2>,
+        /// Recursive proof making the child independently spendable.
+        pub bundle: KagemushaRecursiveSpendBundleV4,
+    }
+
+    /// ABI-20 native redemption builder input.
+    #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct KagemushaRecursiveSpendRedeemBuildRequestV4 {
+        /// Spendable recursive state being redeemed.
+        pub bundle: KagemushaRecursiveSpendBundleV4,
+        /// Online account credited by redemption.
+        pub recipient: AccountId,
+        /// Exact public amount and authoritative asset scale.
+        pub public_amount: KagemushaScaledAmountV2,
+        /// Unshield-v3 proof for credit and optional change.
+        pub unshield_proof: ProofAttachment,
+        /// Exact public V4 redemption transition.
+        pub redemption: KagemushaRecursiveSpendRedemptionIntentV4,
+        /// Height used for verifier activation-window checks.
+        pub block_height: u64,
+        /// Stable idempotency identifier.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub operation_id: [u8; 32],
+    }
+
+    /// Canonical unsigned ABI-20 chain redemption fields.
+    #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct KagemushaRecursiveSpendRedeemUnsignedV4 {
+        /// Scale-carrying recursive state being redeemed.
+        pub bundle: KagemushaRecursiveSpendBundleV4,
+        /// Online account credited by redemption.
+        pub recipient: AccountId,
+        /// Exact public amount and authoritative asset scale.
+        pub amount: KagemushaScaledAmountV2,
+        /// Unshield-v3 proof bound to the current note and optional change.
+        pub redeem_proof: ProofAttachment,
+        /// Canonical public V4 redemption intent.
+        pub redemption: KagemushaRecursiveSpendRedemptionIntentV4,
+        /// All-or-none proof-bound V4 change child.
+        pub offline_change: Option<KagemushaRecursiveSpendRedeemChangeBranchV4>,
+        /// Height used for verifier activation-window checks.
+        pub block_height: u64,
+        /// Stable idempotency identifier.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub operation_id: [u8; 32],
+    }
+
+    /// Prepared unsigned ABI-20 redemption result.
+    #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct KagemushaRecursiveSpendRedeemBuildResultV4 {
+        /// Complete unsigned V4 chain-request fields.
+        pub unsigned: KagemushaRecursiveSpendRedeemUnsignedV4,
+        /// Exact digest that device authorization must sign.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub authorization_digest: [u8; 32],
+        /// Independently spendable proof-bound change.
+        pub offline_change_bundle: Option<KagemushaRecursiveSpendBundleV4>,
+        /// Membership state for proof-bound change.
+        pub offline_change_membership_witness: Option<KagemushaNoteMembershipWitnessV2>,
+        /// Stable operation identifier.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub operation_id: [u8; 32],
+    }
+
+    /// Versioned ABI-20 offline-to-online request.
+    #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    #[norito(deny_unknown_fields)]
+    pub struct KagemushaRecursiveSpendRedeemRequestV4 {
+        /// Scale-carrying recursive state being redeemed.
+        pub bundle: KagemushaRecursiveSpendBundleV4,
+        /// Online account credited by redemption.
+        pub recipient: AccountId,
+        /// Exact public amount and authoritative asset scale.
+        pub amount: KagemushaScaledAmountV2,
+        /// Unshield-v3 proof bound to the current note and optional change.
+        pub redeem_proof: ProofAttachment,
+        /// Canonical public V4 redemption intent.
+        pub redemption: KagemushaRecursiveSpendRedemptionIntentV4,
+        /// All-or-none proof-bound V4 change child.
+        pub offline_change: Option<KagemushaRecursiveSpendRedeemChangeBranchV4>,
+        /// Height used for verifier activation-window checks.
+        pub block_height: u64,
+        /// Globally unique idempotency identifier.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub operation_id: [u8; 32],
+        /// Self-contained recipient/device authorization.
+        pub authorization: KagemushaRequestAuthorizationV2,
+    }
+
+    /// Typed native ABI-20 redemption output.
+    #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct KagemushaRecursiveSpendRedeemResultV4 {
+        /// Canonical `KagemushaRecursiveSpendRedeemRequestV4` archive.
+        pub redeem_request_archive: Vec<u8>,
+        /// Proof-bound offline change branch.
+        pub offline_change_bundle: Option<KagemushaRecursiveSpendBundleV4>,
+        /// Membership state for proof-bound change.
+        pub offline_change_membership_witness: Option<KagemushaNoteMembershipWitnessV2>,
+        /// Stable operation identifier.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub operation_id: [u8; 32],
     }
 }
 
@@ -3920,6 +5164,116 @@ impl KagemushaPastaCycleProofEnvelopeV1 {
     }
 }
 
+impl KagemushaPastaCycleProofEnvelopeV2 {
+    /// Validate the current operation/protocol-identity proof-envelope shape.
+    pub fn validate(&self) -> Result<(), KagemushaValidationError> {
+        if self.version != KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_PROOF_ENVELOPE_VERSION_V3
+            || self.proof_backend != KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V3
+            || self.transcript_profile != KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V3
+            || !is_kagemusha_v3_portable_identifier(&self.artifact_generation)
+            || !is_kagemusha_v3_portable_identifier(&self.step_eq_parameter_generation)
+            || !is_kagemusha_v3_portable_identifier(&self.step_ep_parameter_generation)
+            || self.manifest_sha256 == [0; 32]
+            || self.step_eq_verifier_key_sha256 == [0; 32]
+            || self.step_ep_verifier_key_sha256 == [0; 32]
+            || self.step_eq_verifier_key_sha256 == self.step_ep_verifier_key_sha256
+            || self.proof.backend.as_str() != "halo2/ipa"
+            || self.proof.bytes.is_empty()
+            || self.proof.bytes.len()
+                > KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROOF_BYTES_V3 as usize
+        {
+            return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "pasta_cycle.proof_envelope",
+            });
+        }
+        if self.step_eq_circuit_id != KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V3
+            || self.step_ep_circuit_id != KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V3
+            || self.step_eq_circuit_id == self.step_ep_circuit_id
+        {
+            return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "pasta_cycle.proof_envelope.circuit_pair",
+            });
+        }
+        self.state_boundary.validate()
+    }
+
+    /// Bind this envelope to the exact authenticated artifact manifest.
+    pub fn validate_against_manifest(
+        &self,
+        manifest: &KagemushaRecursiveSpendArtifactManifestV3,
+    ) -> Result<(), KagemushaValidationError> {
+        manifest.validate()?;
+        self.validate()?;
+
+        if self.artifact_generation != manifest.generation {
+            return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "pasta_cycle.proof_envelope.artifact_generation",
+            });
+        }
+        let manifest_sha256: [u8; 32] = Sha256::digest(to_bytes(manifest).map_err(|_| {
+            KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "pasta_cycle.proof_envelope.manifest_sha256",
+            }
+        })?)
+        .into();
+        if self.manifest_sha256 != manifest_sha256 {
+            return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "pasta_cycle.proof_envelope.manifest_sha256",
+            });
+        }
+        let [step_eq, step_ep] = manifest.profiles.as_slice() else {
+            return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "pasta_cycle.proof_envelope.profile_pair",
+            });
+        };
+        if self.step_eq_circuit_id != step_eq.circuit_id
+            || self.step_ep_circuit_id != step_ep.circuit_id
+        {
+            return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "pasta_cycle.proof_envelope.circuit_pair",
+            });
+        }
+        if self.step_eq_parameter_generation != step_eq.parameter_generation
+            || self.step_ep_parameter_generation != step_ep.parameter_generation
+        {
+            return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "pasta_cycle.proof_envelope.parameter_generation_pair",
+            });
+        }
+        if self.step_eq_verifier_key_sha256 != step_eq.artifacts[2].payload_sha256
+            || self.step_ep_verifier_key_sha256 != step_ep.artifacts[2].payload_sha256
+        {
+            return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "pasta_cycle.proof_envelope.verifier_key_sha256_pair",
+            });
+        }
+        Ok(())
+    }
+
+    /// Validate this envelope for an exact chain/asset release context and block height.
+    pub fn validate_against_manifest_for_context(
+        &self,
+        manifest: &KagemushaRecursiveSpendArtifactManifestV3,
+        expected_chain_id: &ChainId,
+        expected_asset: &AssetDefinitionId,
+        expected_asset_scale: u32,
+        block_height: u64,
+    ) -> Result<(), KagemushaValidationError> {
+        self.validate_against_manifest(manifest)?;
+        if &manifest.chain_id != expected_chain_id
+            || &manifest.asset != expected_asset
+            || manifest.asset_scale != expected_asset_scale
+            || block_height < manifest.activation_height
+            || block_height >= manifest.withdrawal_height
+        {
+            return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "pasta_cycle.proof_envelope.release_context",
+            });
+        }
+        Ok(())
+    }
+}
+
 impl KagemushaPastaCycleArtifactV3 {
     /// Validate one immutable V3 artifact file descriptor.
     pub fn validate(&self) -> Result<(), KagemushaValidationError> {
@@ -3968,7 +5322,7 @@ impl KagemushaPastaCycleProofProfileV1 {
     pub fn validate(&self) -> Result<(), KagemushaValidationError> {
         let (expected_circuit, expected_file_names) = match self.parity {
             KagemushaPastaCycleParityV1::StepEq => (
-                KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V1,
+                KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V3,
                 [
                     KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PARAMETERS_FILE_NAME_V3,
                     KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PROVING_KEY_FILE_NAME_V3,
@@ -3976,7 +5330,7 @@ impl KagemushaPastaCycleProofProfileV1 {
                 ],
             ),
             KagemushaPastaCycleParityV1::StepEp => (
-                KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V1,
+                KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V3,
                 [
                     KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PARAMETERS_FILE_NAME_V3,
                     KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PROVING_KEY_FILE_NAME_V3,
@@ -4028,6 +5382,7 @@ impl KagemushaRecursiveSpendArtifactManifestV3 {
             || self.transcript_profile != KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V1
             || !is_kagemusha_v3_portable_identifier(&self.generation)
             || !is_kagemusha_v3_source_commit(&self.source_commit)
+            || self.source_tree_sha256 == [0; 32]
             || !is_kagemusha_v3_chain_id(&self.chain_id)
             || self.asset_scale > KAGEMUSHA_SCALED_AMOUNT_MAX_SCALE_V2
             || self.activation_height == 0
@@ -4104,6 +5459,496 @@ impl KagemushaRecursiveSpendArtifactManifestV3 {
             manifest_subject_sha256: Sha256::digest(subject_bytes).into(),
             generation: self.generation.clone(),
             source_commit: self.source_commit.clone(),
+            source_tree_sha256: self.source_tree_sha256,
+            source_repo_dirty: self.source_repo_dirty,
+            benchmark_evidence_sha256: self.benchmark_evidence_sha256,
+            cryptographic_review_sha256: self.cryptographic_review_sha256,
+        })
+    }
+}
+
+impl KagemushaPastaPublicLayoutV4 {
+    /// Derive every dynamic offset from the authenticated IPA round count.
+    pub fn for_ipa_round_count(ipa_round_count: u32) -> Result<Self, KagemushaValidationError> {
+        let accumulator_limbs = ipa_round_count
+            .checked_add(1)
+            .and_then(|value| value.checked_mul(8))
+            .and_then(|value| value.checked_add(2))
+            .ok_or(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "pasta_cycle.v4.public_layout.accumulator_limbs",
+            })?;
+        let semantic_prefix = u32::try_from(
+            8 + KAGEMUSHA_RECURSIVE_SPEND_STEP_OPERATION_LIMBS_V3
+                + 1
+                + 3 * KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V1
+                + 8
+                + 16,
+        )
+        .map_err(|_| KagemushaValidationError::InvalidRecursiveSpendProof {
+            field: "pasta_cycle.v4.public_layout.semantic_prefix",
+        })?;
+        let parent_eq_accumulator_offset = semantic_prefix;
+        let parent_ep_accumulator_offset = parent_eq_accumulator_offset
+            .checked_add(accumulator_limbs)
+            .ok_or(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "pasta_cycle.v4.public_layout.ep_accumulator_offset",
+            })?;
+        let parent_eq_deferred_offset = parent_ep_accumulator_offset
+            .checked_add(accumulator_limbs)
+            .ok_or(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "pasta_cycle.v4.public_layout.eq_deferred_offset",
+            })?;
+        let parent_ep_deferred_offset = parent_eq_deferred_offset.checked_add(16).ok_or(
+            KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "pasta_cycle.v4.public_layout.ep_deferred_offset",
+            },
+        )?;
+        let live_selector_offset = parent_ep_deferred_offset.checked_add(16).ok_or(
+            KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "pasta_cycle.v4.public_layout.live_selector_offset",
+            },
+        )?;
+        let instance_column_limbs = live_selector_offset.checked_add(1).ok_or(
+            KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "pasta_cycle.v4.public_layout.instance_column_limbs",
+            },
+        )?;
+        Ok(Self {
+            ipa_round_count,
+            accumulator_limbs,
+            parent_eq_accumulator_offset,
+            parent_ep_accumulator_offset,
+            parent_eq_deferred_offset,
+            parent_ep_deferred_offset,
+            live_selector_offset,
+            instance_column_limbs,
+        })
+    }
+}
+
+impl KagemushaStepCircuitParamsV4 {
+    /// Validate the complete authenticated layout and return its public ABI.
+    pub fn validate(&self) -> Result<KagemushaPastaPublicLayoutV4, KagemushaValidationError> {
+        let layout = KagemushaPastaPublicLayoutV4::for_ipa_round_count(self.k)?;
+        let domain_rows = 1_u64.checked_shl(self.k).ok_or(
+            KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "pasta_cycle.v4.circuit_params.domain_rows",
+            },
+        )?;
+        let phase_count = self.num_advice_per_phase.len();
+        if self.version != KAGEMUSHA_STEP_CIRCUIT_PARAMS_VERSION_V4
+            || !(KAGEMUSHA_STEP_CIRCUIT_MINIMUM_K_V4..=KAGEMUSHA_STEP_CIRCUIT_MAXIMUM_K_V4)
+                .contains(&self.k)
+            || phase_count == 0
+            || phase_count > KAGEMUSHA_STEP_CIRCUIT_MAX_PHASES_V4
+            || phase_count != self.num_lookup_advice_per_phase.len()
+            || self
+                .num_advice_per_phase
+                .iter()
+                .any(|count| *count == 0 || *count > KAGEMUSHA_STEP_CIRCUIT_MAX_COLUMNS_V4)
+            || self
+                .num_lookup_advice_per_phase
+                .iter()
+                .any(|count| *count > KAGEMUSHA_STEP_CIRCUIT_MAX_COLUMNS_V4)
+            || self
+                .num_lookup_advice_per_phase
+                .iter()
+                .all(|count| *count == 0)
+            || self.num_fixed == 0
+            || self.num_fixed > KAGEMUSHA_STEP_CIRCUIT_MAX_COLUMNS_V4
+            || self.lookup_bits == 0
+            || self.lookup_bits >= self.k
+            || self.num_instance_columns != 1
+            || self.public_input_limbs != layout.instance_column_limbs
+            || self.minimum_unusable_rows < KAGEMUSHA_STEP_CIRCUIT_MINIMUM_UNUSABLE_ROWS_V4
+            || self.max_parent_proof_bytes == 0
+            || self.max_parent_proof_bytes > KAGEMUSHA_STEP_PROOF_ABSOLUTE_MAX_BYTES_V4
+            || u64::from(self.public_input_limbs)
+                .checked_add(u64::from(self.minimum_unusable_rows))
+                .is_none_or(|minimum_rows| minimum_rows >= domain_rows)
+        {
+            return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "pasta_cycle.v4.circuit_params",
+            });
+        }
+        Ok(layout)
+    }
+
+    /// Domain-separated identity of the canonical authenticated parameters.
+    pub fn sha256(&self) -> Result<[u8; 32], KagemushaValidationError> {
+        self.validate()?;
+        let encoded =
+            to_bytes(self).map_err(|_| KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "pasta_cycle.v4.circuit_params.encoding",
+            })?;
+        let mut hasher = Sha256::new();
+        hasher.update(KAGEMUSHA_STEP_CIRCUIT_PARAMS_SHA256_DOMAIN_V4);
+        hasher.update([0]);
+        hasher.update(encoded);
+        Ok(hasher.finalize().into())
+    }
+}
+
+impl KagemushaPastaCycleArtifactV4 {
+    /// Validate one immutable V4 artifact descriptor.
+    pub fn validate(&self) -> Result<(), KagemushaValidationError> {
+        if !is_kagemusha_v3_portable_file_name(&self.file_name)
+            || self.size_bytes == 0
+            || self.size_bytes > KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_FILE_BYTES_V4
+            || self.sha256 == [0; 32]
+            || self.payload_size_bytes == 0
+            || self.payload_size_bytes >= self.size_bytes
+            || self.payload_size_bytes > KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_FILE_BYTES_V4
+            || self.payload_sha256 == [0; 32]
+            || self.payload_sha256 == self.sha256
+        {
+            return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "pasta_cycle.v4.artifact",
+            });
+        }
+        Ok(())
+    }
+}
+
+impl KagemushaPastaCycleFramedArtifactHeaderV4 {
+    /// Validate the bounded public KRV4 header without allocating its payload.
+    pub fn validate(&self) -> Result<(), KagemushaValidationError> {
+        let expected_circuit_id = match self.parity {
+            KagemushaPastaCycleParityV1::StepEq => KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4,
+            KagemushaPastaCycleParityV1::StepEp => KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V4,
+        };
+        if self.version != KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_HEADER_VERSION_V4
+            || self.manifest_schema != KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V4
+            || self.bridge_abi_version != KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4
+            || self.proof_backend != KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4
+            || self.transcript_profile != KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V4
+            || !is_kagemusha_v3_portable_identifier(&self.generation)
+            || self.circuit_id != expected_circuit_id
+            || !is_kagemusha_v3_portable_identifier(&self.parameter_generation)
+            || self.ipa_k < KAGEMUSHA_STEP_CIRCUIT_MINIMUM_K_V4
+            || self.ipa_k > KAGEMUSHA_STEP_CIRCUIT_MAXIMUM_K_V4
+            || self.circuit_params_sha256 == [0; 32]
+            || self.compiled_protocol_structure_sha256 == [0; 32]
+            || self.step_proof_size_bytes == 0
+            || self.step_proof_size_bytes > KAGEMUSHA_STEP_PROOF_ABSOLUTE_MAX_BYTES_V4
+            || self.payload_size_bytes == 0
+            || self.payload_size_bytes > KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_FILE_BYTES_V4
+            || self.payload_sha256 == [0; 32]
+        {
+            return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "pasta_cycle.v4.artifact_header",
+            });
+        }
+        Ok(())
+    }
+
+    /// Bind this header to one exact descriptor in a validated V4 manifest.
+    pub fn validate_against_manifest(
+        &self,
+        manifest: &KagemushaRecursiveSpendArtifactManifestV4,
+        descriptor: &KagemushaPastaCycleArtifactV4,
+    ) -> Result<(), KagemushaValidationError> {
+        manifest.validate()?;
+        descriptor.validate()?;
+        self.validate()?;
+        let profile = manifest
+            .profiles
+            .iter()
+            .find(|profile| profile.parity == self.parity)
+            .ok_or(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "pasta_cycle.v4.artifact_header.profile",
+            })?;
+        if !profile
+            .artifacts
+            .iter()
+            .any(|artifact| artifact == descriptor)
+            || self.generation != manifest.generation
+            || self.circuit_id != profile.circuit_id
+            || self.parameter_generation != profile.parameter_generation
+            || self.ipa_k != profile.ipa_k
+            || self.circuit_params_sha256 != profile.circuit_params_sha256()?
+            || self.compiled_protocol_structure_sha256 != profile.compiled_protocol_structure_sha256
+            || self.step_proof_size_bytes != profile.step_proof_size_bytes
+            || self.kind != descriptor.kind
+            || self.payload_size_bytes != descriptor.payload_size_bytes
+            || self.payload_sha256 != descriptor.payload_sha256
+        {
+            return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "pasta_cycle.v4.artifact_header.manifest_binding",
+            });
+        }
+        Ok(())
+    }
+}
+
+impl KagemushaTopUpFinalityRosterArtifactReferenceV4 {
+    /// Validate the V4 role-bound reference to a canonical roster archive.
+    pub fn validate(&self) -> Result<(), KagemushaValidationError> {
+        if !is_kagemusha_v3_portable_file_name(&self.file_name)
+            || self.file_name != KAGEMUSHA_TOPUP_FINALITY_ROSTER_FILE_NAME_V4
+            || self.size_bytes == 0
+            || self.size_bytes > KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_MAX_BYTES_V2
+            || self.sha256 == [0; 32]
+            || !is_kagemusha_v3_portable_identifier(&self.artifact_generation)
+            || self.circuit_id != KAGEMUSHA_TOPUP_FINALITY_CIRCUIT_ID_V2
+            || self.purpose != KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_PURPOSE_V2
+            || self.artifact_type != KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_TYPE_V2
+            || self.required_bridge_abi_version != KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4
+        {
+            return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "topup_finality.v4.roster_artifact_reference",
+            });
+        }
+        Ok(())
+    }
+}
+
+impl KagemushaPastaCycleProofProfileV4 {
+    /// Validate one V4 parity profile and its exact five-file inventory.
+    pub fn validate(&self) -> Result<(), KagemushaValidationError> {
+        let (expected_circuit, expected_file_names) = match self.parity {
+            KagemushaPastaCycleParityV1::StepEq => (
+                KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4,
+                [
+                    KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PARAMETERS_FILE_NAME_V4,
+                    KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_PARAMS_FILE_NAME_V4,
+                    KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PROVING_KEY_FILE_NAME_V4,
+                    KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_VERIFYING_KEY_FILE_NAME_V4,
+                    KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_BOOTSTRAP_FILE_NAME_V4,
+                ],
+            ),
+            KagemushaPastaCycleParityV1::StepEp => (
+                KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V4,
+                [
+                    KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PARAMETERS_FILE_NAME_V4,
+                    KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_PARAMS_FILE_NAME_V4,
+                    KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PROVING_KEY_FILE_NAME_V4,
+                    KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_VERIFYING_KEY_FILE_NAME_V4,
+                    KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_BOOTSTRAP_FILE_NAME_V4,
+                ],
+            ),
+        };
+        self.circuit_params.validate()?;
+        let canonical_circuit_params = to_bytes(&self.circuit_params).map_err(|_| {
+            KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "pasta_cycle.v4.profile.circuit_params_encoding",
+            }
+        })?;
+        let canonical_circuit_params_size =
+            u64::try_from(canonical_circuit_params.len()).map_err(|_| {
+                KagemushaValidationError::InvalidRecursiveSpendProof {
+                    field: "pasta_cycle.v4.profile.circuit_params_encoding",
+                }
+            })?;
+        let canonical_circuit_params_sha256: [u8; 32] =
+            Sha256::digest(&canonical_circuit_params).into();
+        if self.circuit_id != expected_circuit
+            || !is_kagemusha_v3_portable_identifier(&self.parameter_generation)
+            || self.ipa_k != self.circuit_params.k
+            || self.compiled_protocol_structure_sha256 == [0; 32]
+            || self.step_proof_size_bytes == 0
+            || self.step_proof_size_bytes != self.circuit_params.max_parent_proof_bytes
+            || self.artifacts.len() != 5
+            || self.artifacts[0].kind != KagemushaPastaCycleArtifactKindV4::Parameters
+            || self.artifacts[1].kind != KagemushaPastaCycleArtifactKindV4::CircuitParams
+            || self.artifacts[2].kind != KagemushaPastaCycleArtifactKindV4::ProvingKey
+            || self.artifacts[3].kind != KagemushaPastaCycleArtifactKindV4::VerifyingKey
+            || self.artifacts[4].kind != KagemushaPastaCycleArtifactKindV4::BootstrapWitness
+            || self.artifacts[1].payload_size_bytes != canonical_circuit_params_size
+            || self.artifacts[1].payload_sha256 != canonical_circuit_params_sha256
+            || self
+                .artifacts
+                .iter()
+                .zip(expected_file_names)
+                .any(|(artifact, expected)| artifact.file_name != expected)
+        {
+            return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "pasta_cycle.v4.profile",
+            });
+        }
+        let mut names = std::collections::BTreeSet::new();
+        for artifact in &self.artifacts {
+            artifact.validate()?;
+            if !names.insert(artifact.file_name.as_str()) {
+                return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                    field: "pasta_cycle.v4.profile.artifact_name",
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// Return the exact raw canonical circuit-parameter descriptor.
+    #[must_use]
+    pub fn circuit_params_artifact(&self) -> Option<&KagemushaPastaCycleArtifactV4> {
+        self.artifacts
+            .get(1)
+            .filter(|artifact| artifact.kind == KagemushaPastaCycleArtifactKindV4::CircuitParams)
+    }
+
+    /// Return the exact descriptor for the canonical bootstrap payload.
+    #[must_use]
+    pub fn bootstrap_artifact(&self) -> Option<&KagemushaPastaCycleArtifactV4> {
+        self.artifacts
+            .get(4)
+            .filter(|artifact| artifact.kind == KagemushaPastaCycleArtifactKindV4::BootstrapWitness)
+    }
+
+    /// Return the exact authenticated circuit-parameter identity.
+    pub fn circuit_params_sha256(&self) -> Result<[u8; 32], KagemushaValidationError> {
+        self.validate()?;
+        self.circuit_params.sha256()
+    }
+}
+
+impl KagemushaRecursiveSpendArtifactManifestV4 {
+    /// Validate the complete, explicitly versioned V4 release shape.
+    ///
+    /// This validates content binding only. A V4 release attestation must be
+    /// authenticated separately before any artifact is used.
+    pub fn validate(&self) -> Result<(), KagemushaValidationError> {
+        self.validate_with_attestation_state(true)
+    }
+
+    /// Validate an immutable V4 release candidate before its attestation exists.
+    ///
+    /// Candidate manifests commit every release field except the necessarily
+    /// circular attestation digest. They are not valid release manifests and
+    /// must never be accepted by production artifact readers.
+    pub fn validate_unsigned_candidate(&self) -> Result<(), KagemushaValidationError> {
+        self.validate_with_attestation_state(false)
+    }
+
+    fn validate_with_attestation_state(
+        &self,
+        finalized: bool,
+    ) -> Result<(), KagemushaValidationError> {
+        let measured_step_bytes = self.profiles.iter().try_fold(0_u32, |sum, profile| {
+            sum.checked_add(profile.step_proof_size_bytes)
+        });
+        if self.schema != KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V4
+            || self.version != KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_VERSION_V4
+            || self.bridge_abi_version != KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4
+            || self.proof_backend != KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4
+            || self.transcript_profile != KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V4
+            || !is_kagemusha_v3_portable_identifier(&self.generation)
+            || !is_kagemusha_v3_source_commit(&self.source_commit)
+            || self.source_tree_sha256 == [0; 32]
+            || !is_kagemusha_v3_chain_id(&self.chain_id)
+            || self.asset_scale > KAGEMUSHA_SCALED_AMOUNT_MAX_SCALE_V2
+            || self.activation_height == 0
+            || self.withdrawal_height <= self.activation_height
+            || self.max_proof_bytes == 0
+            || self.max_proof_bytes > KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4
+            || measured_step_bytes.is_none_or(|minimum| self.max_proof_bytes <= minimum)
+            || self.profiles.len() != 2
+            || self.profiles[0].parity != KagemushaPastaCycleParityV1::StepEq
+            || self.profiles[1].parity != KagemushaPastaCycleParityV1::StepEp
+            || self.topup_finality_roster_artifact.artifact_generation != self.generation
+            || self.benchmark_evidence_sha256 == [0; 32]
+            || self.cryptographic_review_sha256 == [0; 32]
+            || (finalized && self.release_attestation_sha256 == [0; 32])
+            || (!finalized && self.release_attestation_sha256 != [0; 32])
+        {
+            return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "pasta_cycle.v4.artifact_manifest",
+            });
+        }
+        self.topup_finality_roster_artifact.validate()?;
+        let mut names = std::collections::BTreeSet::new();
+        let mut digests = std::collections::BTreeSet::new();
+        names.insert(
+            self.topup_finality_roster_artifact
+                .file_name
+                .to_ascii_lowercase(),
+        );
+        digests.insert(self.topup_finality_roster_artifact.sha256);
+        let mut circuit_params_payload_digests = std::collections::BTreeSet::new();
+        let mut structure_digests = std::collections::BTreeSet::new();
+        for profile in &self.profiles {
+            profile.validate()?;
+            let _ = profile.circuit_params_sha256()?;
+            if !structure_digests.insert(profile.compiled_protocol_structure_sha256) {
+                return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                    field: "pasta_cycle.v4.artifact_manifest.profile_identity",
+                });
+            }
+            for artifact in &profile.artifacts {
+                let name_is_new = names.insert(artifact.file_name.to_ascii_lowercase());
+                let framed_digest_is_new = digests.insert(artifact.sha256);
+                let payload_digest_is_new = digests.insert(artifact.payload_sha256);
+                let repeated_circuit_params_payload = artifact.kind
+                    == KagemushaPastaCycleArtifactKindV4::CircuitParams
+                    && circuit_params_payload_digests.contains(&artifact.payload_sha256);
+                if artifact.kind == KagemushaPastaCycleArtifactKindV4::CircuitParams {
+                    circuit_params_payload_digests.insert(artifact.payload_sha256);
+                }
+                if !name_is_new
+                    || !framed_digest_is_new
+                    || (!payload_digest_is_new && !repeated_circuit_params_payload)
+                {
+                    return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                        field: "pasta_cycle.v4.artifact_manifest.artifact_identity",
+                    });
+                }
+            }
+        }
+        for evidence_digest in [
+            self.benchmark_evidence_sha256,
+            self.cryptographic_review_sha256,
+        ] {
+            if !digests.insert(evidence_digest) {
+                return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                    field: "pasta_cycle.v4.artifact_manifest.evidence_sha256",
+                });
+            }
+        }
+        if finalized && !digests.insert(self.release_attestation_sha256) {
+            return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "pasta_cycle.v4.artifact_manifest.evidence_sha256",
+            });
+        }
+        Ok(())
+    }
+
+    /// Build the non-circular V4 subject signed by every release authority.
+    pub fn release_attestation_subject(
+        &self,
+    ) -> Result<KagemushaRecursiveSpendReleaseAttestationSubjectV4, KagemushaReleaseVerificationError>
+    {
+        self.validate()
+            .map_err(|_| KagemushaReleaseVerificationError::InvalidManifest)?;
+        self.release_attestation_subject_from_validated_manifest()
+    }
+
+    /// Build the signing subject for a validated unsigned V4 candidate.
+    ///
+    /// The returned subject is byte-for-byte identical to the subject derived
+    /// from the corresponding finalized manifest after its attestation digest
+    /// is populated.
+    pub fn release_attestation_candidate_subject(
+        &self,
+    ) -> Result<KagemushaRecursiveSpendReleaseAttestationSubjectV4, KagemushaReleaseVerificationError>
+    {
+        self.validate_unsigned_candidate()
+            .map_err(|_| KagemushaReleaseVerificationError::InvalidManifest)?;
+        self.release_attestation_subject_from_validated_manifest()
+    }
+
+    fn release_attestation_subject_from_validated_manifest(
+        &self,
+    ) -> Result<KagemushaRecursiveSpendReleaseAttestationSubjectV4, KagemushaReleaseVerificationError>
+    {
+        let mut subject_manifest = self.clone();
+        subject_manifest.release_attestation_sha256 = [0; 32];
+        let subject_bytes = to_bytes(&subject_manifest)
+            .map_err(|_| KagemushaReleaseVerificationError::InvalidManifest)?;
+        Ok(KagemushaRecursiveSpendReleaseAttestationSubjectV4 {
+            manifest_subject_sha256: Sha256::digest(subject_bytes).into(),
+            generation: self.generation.clone(),
+            source_commit: self.source_commit.clone(),
+            source_tree_sha256: self.source_tree_sha256,
+            source_repo_dirty: self.source_repo_dirty,
             benchmark_evidence_sha256: self.benchmark_evidence_sha256,
             cryptographic_review_sha256: self.cryptographic_review_sha256,
         })
@@ -4129,6 +5974,21 @@ impl KagemushaRecursiveSpendReleaseAttestationSubjectV1 {
     ) -> KagemushaRecursiveSpendReleaseApprovalPayloadV1 {
         KagemushaRecursiveSpendReleaseApprovalPayloadV1 {
             domain: KAGEMUSHA_RECURSIVE_SPEND_RELEASE_APPROVAL_DOMAIN_V1.to_owned(),
+            role,
+            subject: self.clone(),
+        }
+    }
+}
+
+impl KagemushaRecursiveSpendReleaseAttestationSubjectV4 {
+    /// Return the exact V4 domain- and role-separated approval payload.
+    #[must_use]
+    pub fn approval_payload(
+        &self,
+        role: KagemushaRecursiveSpendReleaseApprovalRoleV1,
+    ) -> KagemushaRecursiveSpendReleaseApprovalPayloadV4 {
+        KagemushaRecursiveSpendReleaseApprovalPayloadV4 {
+            domain: KAGEMUSHA_RECURSIVE_SPEND_RELEASE_APPROVAL_DOMAIN_V4.to_owned(),
             role,
             subject: self.clone(),
         }
@@ -4340,6 +6200,222 @@ impl KagemushaAuthenticatedReleaseV3 {
     }
 }
 
+impl KagemushaAuthenticatedReleaseV4 {
+    fn verify_attestation(
+        manifest: &KagemushaRecursiveSpendArtifactManifestV4,
+        policy: &KagemushaRecursiveSpendReleasePolicyV1,
+        attestation: &KagemushaRecursiveSpendReleaseAttestationV4,
+    ) -> Result<Self, KagemushaReleaseVerificationError> {
+        manifest
+            .validate()
+            .map_err(|_| KagemushaReleaseVerificationError::InvalidManifest)?;
+        policy.validate()?;
+
+        let expected_subject = manifest.release_attestation_subject()?;
+        if attestation.schema != KAGEMUSHA_RECURSIVE_SPEND_RELEASE_ATTESTATION_SCHEMA_V4
+            || attestation.version != KAGEMUSHA_RECURSIVE_SPEND_RELEASE_AUTH_VERSION_V4
+            || attestation.subject != expected_subject
+            || attestation.approvals.is_empty()
+            || attestation.approvals.len() > KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_APPROVALS_V1
+        {
+            return Err(KagemushaReleaseVerificationError::InvalidAttestation);
+        }
+
+        let attestation_bytes = to_bytes(attestation)
+            .map_err(|_| KagemushaReleaseVerificationError::InvalidAttestation)?;
+        let attestation_sha256: [u8; 32] = Sha256::digest(attestation_bytes).into();
+        if attestation_sha256 != manifest.release_attestation_sha256 {
+            return Err(KagemushaReleaseVerificationError::InvalidAttestation);
+        }
+
+        let mut counts = [0_u16; 3];
+        let mut approved_signers = Vec::with_capacity(attestation.approvals.len());
+        let mut previous: Option<(KagemushaRecursiveSpendReleaseApprovalRoleV1, &PublicKey)> = None;
+        for approval in &attestation.approvals {
+            let identity = (approval.role, &approval.public_key);
+            if previous.is_some_and(|previous| previous >= identity) {
+                return Err(KagemushaReleaseVerificationError::DuplicateOrUnorderedSigner);
+            }
+            previous = Some(identity);
+            let role_policy = policy.role_policy(approval.role).ok_or(
+                KagemushaReleaseVerificationError::UnknownSigner {
+                    role: approval.role,
+                },
+            )?;
+            if role_policy
+                .authorized_signers
+                .binary_search(&approval.public_key)
+                .is_err()
+            {
+                return Err(KagemushaReleaseVerificationError::UnknownSigner {
+                    role: approval.role,
+                });
+            }
+            let payload = expected_subject.approval_payload(approval.role);
+            approval
+                .signature
+                .verify(&approval.public_key, &payload)
+                .map_err(|_| KagemushaReleaseVerificationError::InvalidSignature {
+                    role: approval.role,
+                })?;
+            counts[approval.role.index()] = counts[approval.role.index()].saturating_add(1);
+            approved_signers.push(KagemushaRecursiveSpendApprovedSignerV1 {
+                role: approval.role,
+                public_key: approval.public_key.clone(),
+            });
+        }
+        for role_policy in &policy.roles {
+            let collected = counts[role_policy.role.index()];
+            if collected < role_policy.threshold {
+                return Err(KagemushaReleaseVerificationError::InsufficientThreshold {
+                    role: role_policy.role,
+                    collected,
+                    required: role_policy.threshold,
+                });
+            }
+        }
+
+        let manifest_sha256 = Sha256::digest(
+            to_bytes(manifest).map_err(|_| KagemushaReleaseVerificationError::InvalidManifest)?,
+        )
+        .into();
+        let release_policy_sha256 = Sha256::digest(
+            to_bytes(policy).map_err(|_| KagemushaReleaseVerificationError::InvalidPolicy)?,
+        )
+        .into();
+        Ok(Self {
+            manifest: manifest.clone(),
+            manifest_sha256,
+            release_attestation_sha256: attestation_sha256,
+            release_policy_sha256,
+            approved_signers,
+        })
+    }
+
+    /// Authenticate a V4 release and hash-check its exact evidence files.
+    pub fn verify(
+        manifest: &KagemushaRecursiveSpendArtifactManifestV4,
+        policy: &KagemushaRecursiveSpendReleasePolicyV1,
+        attestation: &KagemushaRecursiveSpendReleaseAttestationV4,
+        benchmark_evidence: &[u8],
+        cryptographic_review: &[u8],
+    ) -> Result<Self, KagemushaReleaseVerificationError> {
+        for (role, bytes, expected_digest) in [
+            (
+                KagemushaRecursiveSpendReleaseApprovalRoleV1::PhysicalDeviceBenchmark,
+                benchmark_evidence,
+                manifest.benchmark_evidence_sha256,
+            ),
+            (
+                KagemushaRecursiveSpendReleaseApprovalRoleV1::CryptographicReview,
+                cryptographic_review,
+                manifest.cryptographic_review_sha256,
+            ),
+        ] {
+            if bytes.is_empty()
+                || bytes.len() > KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_EVIDENCE_BYTES_V1
+                || <[u8; 32]>::from(Sha256::digest(bytes)) != expected_digest
+            {
+                return Err(KagemushaReleaseVerificationError::EvidenceMismatch { role });
+            }
+        }
+        Self::verify_attestation(manifest, policy, attestation)
+    }
+
+    /// Authenticated V4 manifest selected by this runtime proof.
+    #[must_use]
+    pub fn manifest(&self) -> &KagemushaRecursiveSpendArtifactManifestV4 {
+        &self.manifest
+    }
+
+    /// SHA-256 of the exact canonical V4 manifest.
+    #[must_use]
+    pub const fn manifest_sha256(&self) -> [u8; 32] {
+        self.manifest_sha256
+    }
+
+    /// SHA-256 of the exact signed V4 release envelope.
+    #[must_use]
+    pub const fn release_attestation_sha256(&self) -> [u8; 32] {
+        self.release_attestation_sha256
+    }
+
+    /// SHA-256 of the exact locally trusted release policy.
+    #[must_use]
+    pub const fn release_policy_sha256(&self) -> [u8; 32] {
+        self.release_policy_sha256
+    }
+
+    /// Canonically ordered role/signer identities whose V4 approvals verified.
+    #[must_use]
+    pub fn approved_signers(&self) -> &[KagemushaRecursiveSpendApprovedSignerV1] {
+        &self.approved_signers
+    }
+}
+
+impl KagemushaRecursiveSpendPromotedReleaseV4 {
+    /// Validate the standalone ABI-20 promotion marker.
+    pub fn validate(&self) -> Result<(), KagemushaReleaseVerificationError> {
+        let digests = [
+            self.manifest_sha256,
+            self.release_attestation_sha256,
+            self.release_policy_sha256,
+        ];
+        let digests_are_distinct_and_nonzero = digests.iter().all(|digest| *digest != [0; 32])
+            && digests[0] != digests[1]
+            && digests[0] != digests[2]
+            && digests[1] != digests[2];
+        let signers_are_canonical = !self.approved_signers.is_empty()
+            && self.approved_signers.len() <= KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_APPROVALS_V1
+            && self
+                .approved_signers
+                .windows(2)
+                .all(|pair| pair[0] < pair[1]);
+        let mut represented_roles = [false; 3];
+        for signer in &self.approved_signers {
+            represented_roles[signer.role.index()] = true;
+        }
+        let expected_artifact_roles =
+            KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_ROLES_V4.map(str::to_owned);
+
+        if self.schema != KAGEMUSHA_RECURSIVE_SPEND_PROMOTED_RELEASE_SCHEMA_V4
+            || self.version != KAGEMUSHA_RECURSIVE_SPEND_RELEASE_AUTH_VERSION_V4
+            || !is_kagemusha_v3_portable_identifier(&self.generation)
+            || !digests_are_distinct_and_nonzero
+            || !signers_are_canonical
+            || represented_roles
+                .into_iter()
+                .any(|represented| !represented)
+            || !self.artifact_inventory_verified
+            || self.bridge_abi_version != KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4
+            || self.artifact_roles != expected_artifact_roles
+            || self.max_proof_bytes == 0
+            || self.max_proof_bytes > KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4
+        {
+            return Err(KagemushaReleaseVerificationError::InvalidPromotionRecord);
+        }
+        Ok(())
+    }
+
+    /// Require this marker to identify one exact authenticated V4 release.
+    pub fn validate_against_authenticated_release(
+        &self,
+        release: &KagemushaAuthenticatedReleaseV4,
+    ) -> Result<(), KagemushaReleaseVerificationError> {
+        self.validate()?;
+        if self.generation != release.manifest().generation
+            || self.manifest_sha256 != release.manifest_sha256()
+            || self.release_attestation_sha256 != release.release_attestation_sha256()
+            || self.release_policy_sha256 != release.release_policy_sha256()
+            || self.approved_signers != release.approved_signers()
+            || self.max_proof_bytes != release.manifest().max_proof_bytes
+        {
+            return Err(KagemushaReleaseVerificationError::InvalidPromotionRecord);
+        }
+        Ok(())
+    }
+}
+
 impl KagemushaRecursiveSpendArtifactBindingV3 {
     /// Validate a complete authenticated manifest identity.
     pub fn validate(&self) -> Result<(), KagemushaValidationError> {
@@ -4374,6 +6450,165 @@ impl KagemushaRecursiveSpendArtifactBindingV3 {
     }
 }
 
+impl KagemushaRecursiveSpendArtifactBindingV4 {
+    /// Validate a complete authenticated V4 manifest identity.
+    pub fn validate(&self) -> Result<(), KagemushaValidationError> {
+        if !is_kagemusha_v3_portable_identifier(&self.generation) || self.manifest_sha256 == [0; 32]
+        {
+            return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "artifact_binding.v4",
+            });
+        }
+        Ok(())
+    }
+
+    /// Require this binding to identify supplied canonical V4 manifest bytes.
+    pub fn validate_manifest(
+        &self,
+        manifest: &KagemushaRecursiveSpendArtifactManifestV4,
+        canonical_manifest_bytes: &[u8],
+    ) -> Result<(), KagemushaValidationError> {
+        self.validate()?;
+        manifest.validate()?;
+        let digest: [u8; 32] = Sha256::digest(canonical_manifest_bytes).into();
+        if self.generation != manifest.generation || self.manifest_sha256 != digest {
+            return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "artifact_binding.v4.manifest",
+            });
+        }
+        Ok(())
+    }
+}
+
+impl KagemushaRecursiveSpendNativeCapabilitiesV4 {
+    /// Validate an installed ABI-20 backend capability record.
+    ///
+    /// `max_proof_bytes` is deliberately release-specific: it must come from
+    /// the authenticated V4 manifest selected by the installed artifact
+    /// handle, rather than from a compile-time default.
+    pub fn validate(&self) -> Result<(), KagemushaValidationError> {
+        let expected_roles = KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_ROLES_V4.map(str::to_owned);
+        let missing_gates_are_canonical = !self.missing_gates.is_empty()
+            && self.missing_gates.len() <= KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_APPROVALS_V1
+            && self
+                .missing_gates
+                .iter()
+                .all(|gate| is_kagemusha_v3_portable_identifier(gate))
+            && self.missing_gates.windows(2).all(|pair| pair[0] < pair[1]);
+        if self.bridge_abi_version != KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4
+            || self.artifact_manifest_schema
+                != KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V4
+            || self.proof_backend != KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4
+            || self.transcript_profile != KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V4
+            || self.proof_envelope_version
+                != KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_PROOF_ENVELOPE_VERSION_V4
+            || self.step_eq_circuit_id != KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4
+            || self.step_ep_circuit_id != KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V4
+            || self.artifact_roles != expected_roles
+            || self.max_proof_bytes == 0
+            || self.max_proof_bytes > KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4
+            || (self.proof_backend_available && !self.missing_gates.is_empty())
+            || (!self.proof_backend_available && !missing_gates_are_canonical)
+        {
+            return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "pasta_cycle.v4.capabilities",
+            });
+        }
+        Ok(())
+    }
+}
+
+impl KagemushaPastaCycleProofEnvelopeV4 {
+    /// Validate the fixed ABI-20 envelope shape before release lookup.
+    pub fn validate(&self) -> Result<(), KagemushaValidationError> {
+        if self.version != KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_PROOF_ENVELOPE_VERSION_V4
+            || self.proof_backend != KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4
+            || self.transcript_profile != KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V4
+            || self.step_eq_circuit_id != KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4
+            || self.step_ep_circuit_id != KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V4
+            || self.step_eq_circuit_id == self.step_ep_circuit_id
+            || !is_kagemusha_v3_portable_identifier(&self.artifact_generation)
+            || !is_kagemusha_v3_portable_identifier(&self.step_eq_parameter_generation)
+            || !is_kagemusha_v3_portable_identifier(&self.step_ep_parameter_generation)
+            || self.manifest_sha256 == [0; 32]
+            || self.step_eq_circuit_params_sha256 == [0; 32]
+            || self.step_ep_circuit_params_sha256 == [0; 32]
+            || self.step_eq_verifier_key_sha256 == [0; 32]
+            || self.step_ep_verifier_key_sha256 == [0; 32]
+            || self.step_eq_verifier_key_sha256 == self.step_ep_verifier_key_sha256
+            || self.proof.backend.as_str() != KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4
+            || self.proof.bytes.is_empty()
+            || self.proof.bytes.len()
+                > KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4 as usize
+        {
+            return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "pasta_cycle.v4.proof_envelope",
+            });
+        }
+        self.state_boundary.validate()
+    }
+
+    /// Bind every release-selected envelope identity to a validated V4 manifest.
+    pub fn validate_against_manifest(
+        &self,
+        manifest: &KagemushaRecursiveSpendArtifactManifestV4,
+    ) -> Result<(), KagemushaValidationError> {
+        manifest.validate()?;
+        self.validate()?;
+        let [step_eq, step_ep] = manifest.profiles.as_slice() else {
+            return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "pasta_cycle.v4.proof_envelope.profile_pair",
+            });
+        };
+        let manifest_sha256: [u8; 32] = Sha256::digest(to_bytes(manifest).map_err(|_| {
+            KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "pasta_cycle.v4.proof_envelope.manifest_sha256",
+            }
+        })?)
+        .into();
+        if self.artifact_generation != manifest.generation
+            || self.manifest_sha256 != manifest_sha256
+            || self.step_eq_circuit_id != step_eq.circuit_id
+            || self.step_ep_circuit_id != step_ep.circuit_id
+            || self.step_eq_parameter_generation != step_eq.parameter_generation
+            || self.step_ep_parameter_generation != step_ep.parameter_generation
+            || self.step_eq_circuit_params_sha256 != step_eq.circuit_params_sha256()?
+            || self.step_ep_circuit_params_sha256 != step_ep.circuit_params_sha256()?
+            || self.step_eq_verifier_key_sha256 != step_eq.artifacts[3].payload_sha256
+            || self.step_ep_verifier_key_sha256 != step_ep.artifacts[3].payload_sha256
+            || self.proof.bytes.len() > manifest.max_proof_bytes as usize
+        {
+            return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "pasta_cycle.v4.proof_envelope.manifest_binding",
+            });
+        }
+        Ok(())
+    }
+
+    /// Validate the envelope in an exact chain, asset, scale, and height context.
+    pub fn validate_against_manifest_for_context(
+        &self,
+        manifest: &KagemushaRecursiveSpendArtifactManifestV4,
+        expected_chain_id: &ChainId,
+        expected_asset: &AssetDefinitionId,
+        expected_asset_scale: u32,
+        block_height: u64,
+    ) -> Result<(), KagemushaValidationError> {
+        self.validate_against_manifest(manifest)?;
+        if &manifest.chain_id != expected_chain_id
+            || &manifest.asset != expected_asset
+            || manifest.asset_scale != expected_asset_scale
+            || block_height < manifest.activation_height
+            || block_height >= manifest.withdrawal_height
+        {
+            return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "pasta_cycle.v4.proof_envelope.release_context",
+            });
+        }
+        Ok(())
+    }
+}
+
 impl KagemushaRecursiveSpendNativeCapabilitiesV1 {
     /// Validate that a capability record exactly describes this bridge contract.
     pub fn validate(&self) -> Result<(), KagemushaValidationError> {
@@ -4383,10 +6618,10 @@ impl KagemushaRecursiveSpendNativeCapabilitiesV1 {
             || self.proof_backend != KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1
             || self.transcript_profile != KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V1
             || self.proof_envelope_version
-                != KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_PROOF_ENVELOPE_VERSION_V1
+                != KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_PROOF_ENVELOPE_VERSION_V3
             || self.state_boundary_version != KAGEMUSHA_RECURSIVE_SPEND_STATE_BOUNDARY_VERSION_V1
-            || self.step_eq_circuit_id != KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V1
-            || self.step_ep_circuit_id != KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V1
+            || self.step_eq_circuit_id != KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V3
+            || self.step_ep_circuit_id != KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V3
             || self.max_proof_bytes != KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROOF_BYTES_V3
             || self.proof_backend_available != KAGEMUSHA_RECURSIVE_SPEND_PROOF_BACKEND_AVAILABLE
             || (self.proof_backend_available && !self.missing_gates.is_empty())
@@ -4409,10 +6644,10 @@ pub fn kagemusha_recursive_spend_native_capabilities_v1()
         artifact_manifest_schema: KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V3.to_owned(),
         proof_backend: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1.to_owned(),
         transcript_profile: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V1.to_owned(),
-        proof_envelope_version: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_PROOF_ENVELOPE_VERSION_V1,
+        proof_envelope_version: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_PROOF_ENVELOPE_VERSION_V3,
         state_boundary_version: KAGEMUSHA_RECURSIVE_SPEND_STATE_BOUNDARY_VERSION_V1,
-        step_eq_circuit_id: KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V1.to_owned(),
-        step_ep_circuit_id: KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V1.to_owned(),
+        step_eq_circuit_id: KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V3.to_owned(),
+        step_ep_circuit_id: KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V3.to_owned(),
         max_proof_bytes: KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROOF_BYTES_V3,
         proof_backend_available: KAGEMUSHA_RECURSIVE_SPEND_PROOF_BACKEND_AVAILABLE,
         missing_gates: if KAGEMUSHA_RECURSIVE_SPEND_PROOF_BACKEND_AVAILABLE {
@@ -5471,6 +7706,678 @@ impl KagemushaRecursiveSpendSplitResultV2 {
 }
 
 #[cfg(test)]
+mod kagemusha_v4_artifact_contract_tests {
+    use crate::domain::DomainId;
+
+    use super::*;
+
+    fn digest(label: &[u8]) -> [u8; 32] {
+        Sha256::digest(label).into()
+    }
+
+    fn circuit_params() -> KagemushaStepCircuitParamsV4 {
+        let k = KAGEMUSHA_STEP_CIRCUIT_MINIMUM_K_V4;
+        let layout =
+            KagemushaPastaPublicLayoutV4::for_ipa_round_count(k).expect("test V4 public layout");
+        KagemushaStepCircuitParamsV4 {
+            version: KAGEMUSHA_STEP_CIRCUIT_PARAMS_VERSION_V4,
+            k,
+            num_advice_per_phase: vec![8, 1, 1],
+            num_lookup_advice_per_phase: vec![1, 0, 0],
+            num_fixed: 1,
+            lookup_bits: k - 1,
+            num_instance_columns: 1,
+            public_input_limbs: layout.instance_column_limbs,
+            minimum_unusable_rows: KAGEMUSHA_STEP_CIRCUIT_MINIMUM_UNUSABLE_ROWS_V4,
+            max_parent_proof_bytes: 4_096,
+        }
+    }
+
+    fn artifact(
+        kind: KagemushaPastaCycleArtifactKindV4,
+        file_name: &str,
+        seed: u8,
+        payload_size_bytes: u64,
+        payload_sha256: [u8; 32],
+    ) -> KagemushaPastaCycleArtifactV4 {
+        KagemushaPastaCycleArtifactV4 {
+            kind,
+            file_name: file_name.to_owned(),
+            size_bytes: payload_size_bytes + 256,
+            sha256: digest(&[b'f', seed]),
+            payload_size_bytes,
+            payload_sha256,
+        }
+    }
+
+    fn rebind_circuit_params_artifact(profile: &mut KagemushaPastaCycleProofProfileV4) {
+        let canonical = to_bytes(&profile.circuit_params).expect("canonical circuit params");
+        let descriptor = profile
+            .artifacts
+            .get_mut(1)
+            .expect("circuit params descriptor");
+        descriptor.payload_size_bytes =
+            u64::try_from(canonical.len()).expect("small circuit params payload");
+        descriptor.payload_sha256 = Sha256::digest(&canonical).into();
+        descriptor.size_bytes = descriptor.payload_size_bytes + 256;
+        let parity_tag = match profile.parity {
+            KagemushaPastaCycleParityV1::StepEq => b'e',
+            KagemushaPastaCycleParityV1::StepEp => b'p',
+        };
+        let mut framed_preimage = Vec::with_capacity(canonical.len() + 48);
+        framed_preimage.extend_from_slice(b"iroha:kagemusha:v4:test-circuit-params-frame");
+        framed_preimage.push(parity_tag);
+        framed_preimage.extend_from_slice(&canonical);
+        descriptor.sha256 = digest(&framed_preimage);
+    }
+
+    fn profile(
+        parity: KagemushaPastaCycleParityV1,
+        params: KagemushaStepCircuitParamsV4,
+        seed: u8,
+    ) -> KagemushaPastaCycleProofProfileV4 {
+        let (circuit_id, names) = match parity {
+            KagemushaPastaCycleParityV1::StepEq => (
+                KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4,
+                [
+                    KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PARAMETERS_FILE_NAME_V4,
+                    KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_PARAMS_FILE_NAME_V4,
+                    KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PROVING_KEY_FILE_NAME_V4,
+                    KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_VERIFYING_KEY_FILE_NAME_V4,
+                    KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_BOOTSTRAP_FILE_NAME_V4,
+                ],
+            ),
+            KagemushaPastaCycleParityV1::StepEp => (
+                KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V4,
+                [
+                    KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PARAMETERS_FILE_NAME_V4,
+                    KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_PARAMS_FILE_NAME_V4,
+                    KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PROVING_KEY_FILE_NAME_V4,
+                    KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_VERIFYING_KEY_FILE_NAME_V4,
+                    KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_BOOTSTRAP_FILE_NAME_V4,
+                ],
+            ),
+        };
+        let kinds = [
+            KagemushaPastaCycleArtifactKindV4::Parameters,
+            KagemushaPastaCycleArtifactKindV4::CircuitParams,
+            KagemushaPastaCycleArtifactKindV4::ProvingKey,
+            KagemushaPastaCycleArtifactKindV4::VerifyingKey,
+            KagemushaPastaCycleArtifactKindV4::BootstrapWitness,
+        ];
+        let canonical_circuit_params =
+            to_bytes(&params).expect("canonical test circuit parameters");
+        let artifacts = kinds
+            .into_iter()
+            .zip(names)
+            .enumerate()
+            .map(|(index, (kind, name))| {
+                let index = u8::try_from(index).expect("small role index");
+                if kind == KagemushaPastaCycleArtifactKindV4::CircuitParams {
+                    artifact(
+                        kind,
+                        name,
+                        seed + index,
+                        u64::try_from(canonical_circuit_params.len())
+                            .expect("small circuit params payload"),
+                        Sha256::digest(&canonical_circuit_params).into(),
+                    )
+                } else {
+                    artifact(kind, name, seed + index, 32, digest(&[b'p', seed + index]))
+                }
+            })
+            .collect();
+        KagemushaPastaCycleProofProfileV4 {
+            parity,
+            circuit_id: circuit_id.to_owned(),
+            parameter_generation: "v4-artifact-test-params".to_owned(),
+            ipa_k: params.k,
+            circuit_params: params.clone(),
+            compiled_protocol_structure_sha256: digest(&[b's', seed]),
+            step_proof_size_bytes: params.max_parent_proof_bytes,
+            artifacts,
+        }
+    }
+
+    fn manifest() -> KagemushaRecursiveSpendArtifactManifestV4 {
+        let params = circuit_params();
+        KagemushaRecursiveSpendArtifactManifestV4 {
+            schema: KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V4.to_owned(),
+            version: KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_VERSION_V4,
+            bridge_abi_version: KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4,
+            proof_backend: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4.to_owned(),
+            transcript_profile: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V4.to_owned(),
+            generation: "v4-artifact-test-release".to_owned(),
+            source_commit: "1234567890abcdef1234567890abcdef12345678".to_owned(),
+            source_tree_sha256: digest(b"v4 artifact test source tree"),
+            source_repo_dirty: true,
+            chain_id: ChainId::from("v4-artifact-test-chain"),
+            asset: AssetDefinitionId::new(
+                DomainId::try_new("wonderland", "universal").expect("test domain"),
+                "rose".parse().expect("test asset name"),
+            ),
+            asset_scale: 9,
+            activation_height: 1,
+            withdrawal_height: 100,
+            max_proof_bytes: 9_000,
+            profiles: vec![
+                profile(KagemushaPastaCycleParityV1::StepEq, params.clone(), 1),
+                profile(KagemushaPastaCycleParityV1::StepEp, params, 11),
+            ],
+            topup_finality_roster_artifact: KagemushaTopUpFinalityRosterArtifactReferenceV4 {
+                file_name: KAGEMUSHA_TOPUP_FINALITY_ROSTER_FILE_NAME_V4.to_owned(),
+                size_bytes: 128,
+                sha256: digest(b"v4 artifact test roster"),
+                artifact_generation: "v4-artifact-test-release".to_owned(),
+                circuit_id: KAGEMUSHA_TOPUP_FINALITY_CIRCUIT_ID_V2.to_owned(),
+                purpose: KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_PURPOSE_V2.to_owned(),
+                artifact_type: KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_TYPE_V2.to_owned(),
+                required_bridge_abi_version: KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4,
+            },
+            benchmark_evidence_sha256: digest(b"v4 artifact test benchmark"),
+            cryptographic_review_sha256: digest(b"v4 artifact test review"),
+            release_attestation_sha256: digest(b"v4 artifact test attestation"),
+        }
+    }
+
+    fn promoted_release() -> KagemushaRecursiveSpendPromotedReleaseV4 {
+        let approved_signers = [
+            KagemushaRecursiveSpendReleaseApprovalRoleV1::Release,
+            KagemushaRecursiveSpendReleaseApprovalRoleV1::CryptographicReview,
+            KagemushaRecursiveSpendReleaseApprovalRoleV1::PhysicalDeviceBenchmark,
+        ]
+        .into_iter()
+        .zip([31_u8, 32, 33])
+        .map(|(role, seed)| KagemushaRecursiveSpendApprovedSignerV1 {
+            role,
+            public_key: KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519)
+                .public_key()
+                .clone(),
+        })
+        .collect();
+        KagemushaRecursiveSpendPromotedReleaseV4 {
+            schema: KAGEMUSHA_RECURSIVE_SPEND_PROMOTED_RELEASE_SCHEMA_V4.to_owned(),
+            version: KAGEMUSHA_RECURSIVE_SPEND_RELEASE_AUTH_VERSION_V4,
+            generation: "v4-artifact-test-release".to_owned(),
+            manifest_sha256: digest(b"v4 promotion manifest"),
+            release_attestation_sha256: digest(b"v4 promotion attestation"),
+            release_policy_sha256: digest(b"v4 promotion policy"),
+            approved_signers,
+            artifact_inventory_verified: true,
+            bridge_abi_version: KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4,
+            artifact_roles: KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_ROLES_V4
+                .map(str::to_owned)
+                .to_vec(),
+            max_proof_bytes: 9_000,
+        }
+    }
+
+    #[test]
+    fn v4_promotion_record_is_distinct_and_fail_closed() {
+        let record = promoted_release();
+        record.validate().expect("valid V4 promotion record");
+
+        let mut tampered = record.clone();
+        tampered.schema = KAGEMUSHA_RECURSIVE_SPEND_PROMOTED_RELEASE_SCHEMA_V3.to_owned();
+        assert_eq!(
+            tampered.validate(),
+            Err(KagemushaReleaseVerificationError::InvalidPromotionRecord)
+        );
+
+        let mut tampered = record.clone();
+        tampered.version = KAGEMUSHA_RECURSIVE_SPEND_RELEASE_AUTH_VERSION_V1;
+        assert_eq!(
+            tampered.validate(),
+            Err(KagemushaReleaseVerificationError::InvalidPromotionRecord)
+        );
+
+        let mut tampered = record.clone();
+        tampered.generation = "not portable/".to_owned();
+        assert_eq!(
+            tampered.validate(),
+            Err(KagemushaReleaseVerificationError::InvalidPromotionRecord)
+        );
+
+        let mut tampered = record.clone();
+        tampered.manifest_sha256 = [0; 32];
+        assert_eq!(
+            tampered.validate(),
+            Err(KagemushaReleaseVerificationError::InvalidPromotionRecord)
+        );
+
+        let mut tampered = record.clone();
+        tampered.release_policy_sha256 = tampered.release_attestation_sha256;
+        assert_eq!(
+            tampered.validate(),
+            Err(KagemushaReleaseVerificationError::InvalidPromotionRecord)
+        );
+
+        let mut tampered = record.clone();
+        tampered.approved_signers.swap(0, 1);
+        assert_eq!(
+            tampered.validate(),
+            Err(KagemushaReleaseVerificationError::InvalidPromotionRecord)
+        );
+
+        let mut tampered = record.clone();
+        tampered.approved_signers.pop();
+        assert_eq!(
+            tampered.validate(),
+            Err(KagemushaReleaseVerificationError::InvalidPromotionRecord)
+        );
+
+        let mut tampered = record.clone();
+        let duplicate_signer = tampered.approved_signers[0].clone();
+        tampered.approved_signers.insert(1, duplicate_signer);
+        assert_eq!(
+            tampered.validate(),
+            Err(KagemushaReleaseVerificationError::InvalidPromotionRecord)
+        );
+
+        let mut tampered = record.clone();
+        tampered.artifact_inventory_verified = false;
+        assert_eq!(
+            tampered.validate(),
+            Err(KagemushaReleaseVerificationError::InvalidPromotionRecord)
+        );
+
+        let mut tampered = record.clone();
+        tampered.bridge_abi_version = KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3;
+        assert_eq!(
+            tampered.validate(),
+            Err(KagemushaReleaseVerificationError::InvalidPromotionRecord)
+        );
+
+        let mut tampered = record.clone();
+        tampered.artifact_roles.swap(0, 1);
+        assert_eq!(
+            tampered.validate(),
+            Err(KagemushaReleaseVerificationError::InvalidPromotionRecord)
+        );
+
+        let mut tampered = record.clone();
+        tampered.max_proof_bytes = 0;
+        assert_eq!(
+            tampered.validate(),
+            Err(KagemushaReleaseVerificationError::InvalidPromotionRecord)
+        );
+
+        let mut tampered = record;
+        tampered.max_proof_bytes = KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4 + 1;
+        assert_eq!(
+            tampered.validate(),
+            Err(KagemushaReleaseVerificationError::InvalidPromotionRecord)
+        );
+    }
+
+    #[test]
+    fn v4_profiles_bind_exact_five_role_inventory_and_raw_params() {
+        let manifest = manifest();
+        manifest.validate().expect("valid five-role V4 manifest");
+        assert_eq!(KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_ROLES_V4.len(), 10);
+        for profile in &manifest.profiles {
+            assert_eq!(profile.artifacts.len(), 5);
+            profile
+                .circuit_params
+                .validate()
+                .expect("valid inline circuit parameters");
+            assert_eq!(
+                profile
+                    .artifacts
+                    .iter()
+                    .map(|artifact| artifact.kind)
+                    .collect::<Vec<_>>(),
+                vec![
+                    KagemushaPastaCycleArtifactKindV4::Parameters,
+                    KagemushaPastaCycleArtifactKindV4::CircuitParams,
+                    KagemushaPastaCycleArtifactKindV4::ProvingKey,
+                    KagemushaPastaCycleArtifactKindV4::VerifyingKey,
+                    KagemushaPastaCycleArtifactKindV4::BootstrapWitness,
+                ]
+            );
+            assert_eq!(
+                profile
+                    .circuit_params_artifact()
+                    .expect("circuit params descriptor")
+                    .payload_sha256,
+                <[u8; 32]>::from(Sha256::digest(
+                    to_bytes(&profile.circuit_params).expect("canonical circuit parameters")
+                ))
+            );
+            assert_eq!(
+                profile
+                    .bootstrap_artifact()
+                    .expect("bootstrap descriptor")
+                    .kind,
+                KagemushaPastaCycleArtifactKindV4::BootstrapWitness
+            );
+        }
+
+        let mut tampered = manifest.clone();
+        tampered.profiles[0].circuit_params.num_fixed = 0;
+        assert!(tampered.validate().is_err());
+
+        let mut reordered = manifest;
+        reordered.profiles[0].artifacts.swap(1, 2);
+        assert!(reordered.validate().is_err());
+    }
+
+    #[test]
+    fn v4_artifact_contract_source_guard_is_exhaustive() {
+        fn canonical_index(kind: KagemushaPastaCycleArtifactKindV4) -> usize {
+            match kind {
+                KagemushaPastaCycleArtifactKindV4::Parameters => 0,
+                KagemushaPastaCycleArtifactKindV4::CircuitParams => 1,
+                KagemushaPastaCycleArtifactKindV4::ProvingKey => 2,
+                KagemushaPastaCycleArtifactKindV4::VerifyingKey => 3,
+                KagemushaPastaCycleArtifactKindV4::BootstrapWitness => 4,
+            }
+        }
+
+        let kinds = [
+            KagemushaPastaCycleArtifactKindV4::Parameters,
+            KagemushaPastaCycleArtifactKindV4::CircuitParams,
+            KagemushaPastaCycleArtifactKindV4::ProvingKey,
+            KagemushaPastaCycleArtifactKindV4::VerifyingKey,
+            KagemushaPastaCycleArtifactKindV4::BootstrapWitness,
+        ];
+        assert_eq!(kinds.map(canonical_index), [0, 1, 2, 3, 4]);
+        assert_eq!(KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_ROLES_V4.len(), 10);
+        assert!(
+            manifest()
+                .profiles
+                .iter()
+                .all(|profile| profile.artifacts.len() == 5)
+        );
+
+        let source = include_str!("mod.rs");
+        assert!(source.contains("KagemushaPastaCycleFramedArtifactHeaderV4"));
+        assert!(source.contains("CircuitParams,"));
+        assert!(source.contains("CIRCUIT_PARAMS_FILE_NAME_V4"));
+        assert!(source.contains("circuit-params.krv4"));
+    }
+
+    #[test]
+    fn v4_envelope_uses_verifying_key_role_at_canonical_index() {
+        let manifest = manifest();
+        manifest.validate().expect("valid V4 manifest");
+        let [step_eq, step_ep] = manifest.profiles.as_slice() else {
+            panic!("test manifest must have Eq/Ep profiles");
+        };
+        let mut state_limbs = vec![0; KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V1];
+        state_limbs[0] = KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V1;
+        let mut envelope = KagemushaPastaCycleProofEnvelopeV4 {
+            version: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_PROOF_ENVELOPE_VERSION_V4,
+            proof_backend: manifest.proof_backend.clone(),
+            transcript_profile: manifest.transcript_profile.clone(),
+            step_eq_circuit_id: step_eq.circuit_id.clone(),
+            step_ep_circuit_id: step_ep.circuit_id.clone(),
+            artifact_generation: manifest.generation.clone(),
+            manifest_sha256: digest(&to_bytes(&manifest).expect("canonical manifest")),
+            step_eq_parameter_generation: step_eq.parameter_generation.clone(),
+            step_ep_parameter_generation: step_ep.parameter_generation.clone(),
+            step_eq_circuit_params_sha256: step_eq
+                .circuit_params
+                .sha256()
+                .expect("Eq params identity"),
+            step_ep_circuit_params_sha256: step_ep
+                .circuit_params
+                .sha256()
+                .expect("Ep params identity"),
+            step_eq_verifier_key_sha256: step_eq.artifacts[3].payload_sha256,
+            step_ep_verifier_key_sha256: step_ep.artifacts[3].payload_sha256,
+            state_boundary: KagemushaRecursiveSpendStateBoundaryV1 {
+                layout_version: KAGEMUSHA_RECURSIVE_SPEND_STATE_BOUNDARY_VERSION_V1,
+                state_limbs,
+            },
+            proof: ProofBox::new(manifest.proof_backend.clone().into(), vec![0xA5]),
+        };
+        envelope
+            .validate_against_manifest(&manifest)
+            .expect("V4 envelope binds verifying-key role at index three");
+
+        envelope.step_eq_verifier_key_sha256 = step_eq.artifacts[2].payload_sha256;
+        assert!(envelope.validate_against_manifest(&manifest).is_err());
+    }
+
+    #[test]
+    fn v4_attestation_subject_breaks_only_the_attestation_digest_cycle() {
+        let benchmark = b"signed V4 physical-device benchmark evidence".to_vec();
+        let review = b"independent V4 cryptographic review evidence".to_vec();
+        let mut manifest = manifest();
+        manifest.benchmark_evidence_sha256 = digest(&benchmark);
+        manifest.cryptographic_review_sha256 = digest(&review);
+        manifest.release_attestation_sha256 = digest(b"first nonzero staging digest");
+
+        let first_subject = manifest
+            .release_attestation_subject()
+            .expect("first V4 attestation subject");
+        manifest.release_attestation_sha256 = digest(b"second nonzero staging digest");
+        let second_subject = manifest
+            .release_attestation_subject()
+            .expect("second V4 attestation subject");
+        assert_eq!(first_subject, second_subject);
+
+        let mut params_tamper = manifest.clone();
+        params_tamper.profiles[0].circuit_params.num_fixed += 1;
+        rebind_circuit_params_artifact(&mut params_tamper.profiles[0]);
+        assert_ne!(
+            second_subject,
+            params_tamper
+                .release_attestation_subject()
+                .expect("valid modified inline params subject")
+        );
+        let mut bootstrap_tamper = manifest.clone();
+        bootstrap_tamper.profiles[0].artifacts[4].payload_sha256[0] ^= 1;
+        assert_ne!(
+            second_subject,
+            bootstrap_tamper
+                .release_attestation_subject()
+                .expect("valid modified bootstrap subject")
+        );
+
+        let roles = [
+            KagemushaRecursiveSpendReleaseApprovalRoleV1::Release,
+            KagemushaRecursiveSpendReleaseApprovalRoleV1::CryptographicReview,
+            KagemushaRecursiveSpendReleaseApprovalRoleV1::PhysicalDeviceBenchmark,
+        ];
+        let key_pairs = [
+            KeyPair::from_seed(vec![21; 32], Algorithm::Ed25519),
+            KeyPair::from_seed(vec![22; 32], Algorithm::Ed25519),
+            KeyPair::from_seed(vec![23; 32], Algorithm::Ed25519),
+        ];
+        let policy = KagemushaRecursiveSpendReleasePolicyV1 {
+            schema: KAGEMUSHA_RECURSIVE_SPEND_RELEASE_POLICY_SCHEMA_V1.to_owned(),
+            version: KAGEMUSHA_RECURSIVE_SPEND_RELEASE_AUTH_VERSION_V1,
+            policy_id: "v4-artifact-test-policy".to_owned(),
+            roles: roles
+                .iter()
+                .zip(&key_pairs)
+                .map(
+                    |(&role, key_pair)| KagemushaRecursiveSpendReleaseRolePolicyV1 {
+                        role,
+                        threshold: 1,
+                        authorized_signers: vec![key_pair.public_key().clone()],
+                    },
+                )
+                .collect(),
+        };
+        let subject = manifest
+            .release_attestation_subject()
+            .expect("signed V4 subject");
+        let attestation = KagemushaRecursiveSpendReleaseAttestationV4 {
+            schema: KAGEMUSHA_RECURSIVE_SPEND_RELEASE_ATTESTATION_SCHEMA_V4.to_owned(),
+            version: KAGEMUSHA_RECURSIVE_SPEND_RELEASE_AUTH_VERSION_V4,
+            subject: subject.clone(),
+            approvals: roles
+                .iter()
+                .zip(&key_pairs)
+                .map(
+                    |(&role, key_pair)| KagemushaRecursiveSpendReleaseApprovalV4 {
+                        role,
+                        public_key: key_pair.public_key().clone(),
+                        signature: SignatureOf::try_new(
+                            key_pair.private_key(),
+                            &subject.approval_payload(role),
+                        )
+                        .expect("test V4 release signature"),
+                    },
+                )
+                .collect(),
+        };
+        manifest.release_attestation_sha256 =
+            digest(&to_bytes(&attestation).expect("canonical V4 attestation"));
+        let authenticated = KagemushaAuthenticatedReleaseV4::verify(
+            &manifest,
+            &policy,
+            &attestation,
+            &benchmark,
+            &review,
+        )
+        .expect("fully authenticated V4 release");
+        assert_eq!(authenticated.manifest(), &manifest);
+        assert_eq!(authenticated.approved_signers().len(), roles.len());
+
+        let mut signed_params_tamper = manifest.clone();
+        signed_params_tamper.profiles[0].circuit_params.num_fixed += 1;
+        rebind_circuit_params_artifact(&mut signed_params_tamper.profiles[0]);
+        assert_eq!(
+            KagemushaAuthenticatedReleaseV4::verify(
+                &signed_params_tamper,
+                &policy,
+                &attestation,
+                &benchmark,
+                &review,
+            ),
+            Err(KagemushaReleaseVerificationError::InvalidAttestation)
+        );
+        let mut signed_bootstrap_tamper = manifest;
+        signed_bootstrap_tamper.profiles[0].artifacts[4].payload_sha256[0] ^= 1;
+        assert_eq!(
+            KagemushaAuthenticatedReleaseV4::verify(
+                &signed_bootstrap_tamper,
+                &policy,
+                &attestation,
+                &benchmark,
+                &review,
+            ),
+            Err(KagemushaReleaseVerificationError::InvalidAttestation)
+        );
+    }
+
+    #[test]
+    fn v4_unsigned_candidate_subject_matches_finalized_manifest_subject() {
+        let finalized = manifest();
+        finalized.validate().expect("valid finalized V4 manifest");
+        assert!(
+            finalized.validate_unsigned_candidate().is_err(),
+            "a finalized manifest must not be accepted as an unsigned candidate"
+        );
+
+        let mut candidate = finalized.clone();
+        candidate.release_attestation_sha256 = [0; 32];
+        assert!(
+            candidate.validate().is_err(),
+            "production manifest validation must reject an unsigned candidate"
+        );
+        candidate
+            .validate_unsigned_candidate()
+            .expect("valid unsigned V4 candidate");
+        assert_eq!(
+            candidate
+                .release_attestation_candidate_subject()
+                .expect("candidate signing subject"),
+            finalized
+                .release_attestation_subject()
+                .expect("finalized signing subject")
+        );
+    }
+
+    #[test]
+    fn v4_capabilities_require_exact_ten_roles_and_release_cap() {
+        let mut capabilities = KagemushaRecursiveSpendNativeCapabilitiesV4 {
+            bridge_abi_version: KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4,
+            artifact_manifest_schema: KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V4
+                .to_owned(),
+            proof_backend: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4.to_owned(),
+            transcript_profile: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V4.to_owned(),
+            proof_envelope_version: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_PROOF_ENVELOPE_VERSION_V4,
+            step_eq_circuit_id: KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4.to_owned(),
+            step_ep_circuit_id: KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V4.to_owned(),
+            artifact_roles: KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_ROLES_V4
+                .map(str::to_owned)
+                .to_vec(),
+            max_proof_bytes: manifest().max_proof_bytes,
+            proof_backend_available: true,
+            missing_gates: Vec::new(),
+        };
+        capabilities.validate().expect("valid V4 capabilities");
+
+        capabilities.artifact_roles.swap(0, 1);
+        assert!(capabilities.validate().is_err());
+        capabilities.artifact_roles = KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_ROLES_V4
+            .map(str::to_owned)
+            .to_vec();
+        capabilities.proof_backend_available = false;
+        capabilities.missing_gates = vec![
+            "artifact_install".to_owned(),
+            "physical_benchmark".to_owned(),
+        ];
+        capabilities
+            .validate()
+            .expect("canonical unavailable V4 capabilities");
+        capabilities.missing_gates.reverse();
+        assert!(capabilities.validate().is_err());
+    }
+
+    fn assert_v4_schema_excludes_v3_binding<T: iroha_schema::IntoSchema>() {
+        let schema = T::schema();
+        assert!(
+            !schema.contains_key::<KagemushaRecursiveSpendArtifactBindingV3>(),
+            "{} unexpectedly reaches the historical V3 artifact binding",
+            core::any::type_name::<T>()
+        );
+    }
+
+    #[test]
+    fn all_v4_lifecycle_schemas_exclude_v3_artifact_bindings() {
+        assert_v4_schema_excludes_v3_binding::<KagemushaRecursiveSpendNativeCapabilitiesV4>();
+        assert_v4_schema_excludes_v3_binding::<KagemushaPastaCycleProofEnvelopeV4>();
+        assert_v4_schema_excludes_v3_binding::<KagemushaRecursiveSpendPublicStatementV4>();
+        assert_v4_schema_excludes_v3_binding::<KagemushaRecursiveSpendProofV4>();
+        assert_v4_schema_excludes_v3_binding::<KagemushaRecursiveSpendBundleV4>();
+        assert_v4_schema_excludes_v3_binding::<KagemushaRecursiveSpendTopUpAnchorV4>();
+        assert_v4_schema_excludes_v3_binding::<KagemushaRecursiveSpendSplitIntentV4>();
+        assert_v4_schema_excludes_v3_binding::<KagemushaRecursiveSpendRedemptionIntentV4>();
+        assert_v4_schema_excludes_v3_binding::<KagemushaRecursiveSpendInitRequestV4>();
+        assert_v4_schema_excludes_v3_binding::<KagemushaRecursiveSpendInitResultV4>();
+        assert_v4_schema_excludes_v3_binding::<KagemushaRecursiveSpendAppendInputV4>();
+        assert_v4_schema_excludes_v3_binding::<KagemushaRecursiveSpendAppendRequestV4>();
+        assert_v4_schema_excludes_v3_binding::<KagemushaRecursiveSpendSplitResultV4>();
+        assert_v4_schema_excludes_v3_binding::<KagemushaRecursiveSpendTopUpFinalityEvidenceV4>();
+        assert_v4_schema_excludes_v3_binding::<KagemushaRecursiveSpendVerifyRequestV4>();
+        assert_v4_schema_excludes_v3_binding::<KagemushaRecursiveSpendBundleSummaryV4>();
+        assert_v4_schema_excludes_v3_binding::<KagemushaRecursiveSpendVerifyResultV4>();
+        assert_v4_schema_excludes_v3_binding::<KagemushaRecursiveSpendRedeemChangeBranchV4>();
+        assert_v4_schema_excludes_v3_binding::<KagemushaRecursiveSpendRedeemBuildRequestV4>();
+        assert_v4_schema_excludes_v3_binding::<KagemushaRecursiveSpendRedeemUnsignedV4>();
+        assert_v4_schema_excludes_v3_binding::<KagemushaRecursiveSpendRedeemBuildResultV4>();
+        assert_v4_schema_excludes_v3_binding::<KagemushaRecursiveSpendRedeemRequestV4>();
+        assert_v4_schema_excludes_v3_binding::<KagemushaRecursiveSpendRedeemResultV4>();
+
+        for schema in [
+            KagemushaRecursiveSpendBundleV4::schema(),
+            KagemushaRecursiveSpendInitRequestV4::schema(),
+            KagemushaRecursiveSpendAppendRequestV4::schema(),
+            KagemushaRecursiveSpendVerifyRequestV4::schema(),
+            KagemushaRecursiveSpendRedeemRequestV4::schema(),
+        ] {
+            assert!(schema.contains_key::<KagemushaRecursiveSpendArtifactBindingV4>());
+        }
+    }
+}
+
+#[cfg(test)]
 mod kagemusha_release_auth_tests {
     use crate::domain::DomainId;
 
@@ -5546,6 +8453,8 @@ mod kagemusha_release_auth_tests {
             transcript_profile: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V1.to_owned(),
             generation: generation.to_owned(),
             source_commit: "1234567890abcdef1234567890abcdef12345678".to_owned(),
+            source_tree_sha256: [0x5A; 32],
+            source_repo_dirty: true,
             chain_id: ChainId::from("release-auth-test-chain"),
             asset: AssetDefinitionId::new(
                 DomainId::try_new("wonderland", "universal").expect("test domain"),
@@ -5558,7 +8467,7 @@ mod kagemusha_release_auth_tests {
             profiles: vec![
                 profile(
                     KagemushaPastaCycleParityV1::StepEq,
-                    KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V1,
+                    KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V3,
                     [
                         KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PARAMETERS_FILE_NAME_V3,
                         KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PROVING_KEY_FILE_NAME_V3,
@@ -5568,7 +8477,7 @@ mod kagemusha_release_auth_tests {
                 ),
                 profile(
                     KagemushaPastaCycleParityV1::StepEp,
-                    KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V1,
+                    KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V3,
                     [
                         KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PARAMETERS_FILE_NAME_V3,
                         KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PROVING_KEY_FILE_NAME_V3,
@@ -5714,6 +8623,23 @@ mod kagemusha_release_auth_tests {
     fn manifest_tampering_after_approval_is_rejected() {
         let (mut manifest, policy, attestation, _, _) = fixture();
         manifest.source_commit = "abcdefabcdefabcdefabcdefabcdefabcdefabcd".to_owned();
+        assert_eq!(
+            KagemushaAuthenticatedReleaseV3::verify_attestation(&manifest, &policy, &attestation,),
+            Err(KagemushaReleaseVerificationError::InvalidAttestation)
+        );
+    }
+
+    #[test]
+    fn source_tree_tampering_after_approval_is_rejected() {
+        let (mut manifest, policy, attestation, _, _) = fixture();
+        manifest.source_tree_sha256[0] ^= 1;
+        assert_eq!(
+            KagemushaAuthenticatedReleaseV3::verify_attestation(&manifest, &policy, &attestation,),
+            Err(KagemushaReleaseVerificationError::InvalidAttestation)
+        );
+
+        let (mut manifest, policy, attestation, _, _) = fixture();
+        manifest.source_repo_dirty = false;
         assert_eq!(
             KagemushaAuthenticatedReleaseV3::verify_attestation(&manifest, &policy, &attestation,),
             Err(KagemushaReleaseVerificationError::InvalidAttestation)
@@ -6223,7 +9149,7 @@ impl KagemushaRecursiveSpendRedeemChangeBranchV2 {
             || change.proof_step_count != input.proof_step_count.saturating_add(1)
             || change.peer_hop_count != input.peer_hop_count
             || redemption.change_artifact_binding.as_ref() != Some(&change.artifact_binding)
-            || change.verifier_key_id.name != KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V1
+            || change.verifier_key_id.name != KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V3
         {
             return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
                 field: "offline_change.parent_binding",
@@ -6720,7 +9646,7 @@ impl KagemushaRecursiveSpendPublicStatementV2 {
             || self.proof_step_count > KAGEMUSHA_RECURSIVE_SPEND_MAX_PROOF_STEPS_V2
             || self.peer_hop_count > KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2
             || claim_roots != lineage_roots
-            || self.verifier_key_id.name != KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V1
+            || self.verifier_key_id.name != KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V3
             || self.verifier_key_id.backend.as_str()
                 != KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1
         {
@@ -6826,29 +9752,130 @@ impl KagemushaRecursiveSpendBundleV2 {
     }
 }
 
+impl KagemushaRecursiveSpendTopUpFinalityEvidenceV2 {
+    /// Validate the bounded full anchor and the proof's exact compact binding.
+    ///
+    /// This is intentionally structural. The native receiver verifier must
+    /// still authenticate the roster and execute the QC/Merkle cryptography.
+    pub fn validate_public_binding(&self) -> Result<(), KagemushaValidationError> {
+        self.topup_anchor.validate_public_binding()?;
+        self.topup_finality_proof.validate_structure()?;
+        let anchor_ref = self.topup_anchor.compact_ref()?;
+        let anchor_len = to_bytes(&self.topup_anchor)?.len();
+        let proof_len = to_bytes(&self.topup_finality_proof)?.len();
+        if anchor_len == 0
+            || anchor_len > KAGEMUSHA_TOPUP_FINALITY_ANCHOR_MAX_BYTES_V2 as usize
+            || proof_len == 0
+            || proof_len > KAGEMUSHA_TOPUP_FINALITY_PROOF_MAX_BYTES_V2 as usize
+            || self.topup_finality_proof.anchor != anchor_ref
+            || self.topup_finality_proof.commit_qc.height_context.height
+                != self.topup_anchor.finalized_height
+        {
+            return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "verify_request.topup_finality_evidence",
+            });
+        }
+        Ok(())
+    }
+
+    /// Validate the exact canonical evidence inventory carried for a Step state.
+    pub fn validate_ordered_set(
+        evidence: &[Self],
+        expected_refs: &[KagemushaRecursiveSpendTopUpAnchorRefV2],
+    ) -> Result<(), KagemushaValidationError> {
+        if evidence.is_empty()
+            || evidence.len() != expected_refs.len()
+            || evidence.len() > KAGEMUSHA_RECURSIVE_SPEND_MAX_INPUTS_V2
+        {
+            return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "verify_request.topup_finality_evidence_count",
+            });
+        }
+        let mut seen = std::collections::BTreeSet::new();
+        for (evidence, expected_ref) in evidence.iter().zip(expected_refs) {
+            evidence.validate_public_binding()?;
+            let actual_ref = evidence.topup_anchor.compact_ref()?;
+            if actual_ref != *expected_ref || !seen.insert(actual_ref) {
+                return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                    field: "verify_request.topup_finality_evidence_order",
+                });
+            }
+        }
+        Ok(())
+    }
+}
+
 impl KagemushaRecursiveSpendVerifyRequestV2 {
     /// Validate receiver request, artifact, hop, and exact recipient output.
     pub fn validate_public_binding(&self) -> Result<(), KagemushaValidationError> {
         self.bundle.validate_public_binding()?;
         self.artifact_binding.validate()?;
         self.recipient_request.validate_at(self.verified_at_ms)?;
+        self.topup_finality_roster_artifact.validate_structure()?;
+        let roster_len = to_bytes(&self.topup_finality_roster_artifact)?.len();
+        let statement = &self.bundle.statement;
         if self.verified_at_ms == 0
             || self.block_height == 0
             || self.maximum_hops == 0
             || self.maximum_hops > KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2
-            || self.bundle.statement.peer_hop_count > self.maximum_hops
-            || self.artifact_binding != self.bundle.statement.artifact_binding
-            || self.recipient_request.chain_id != self.bundle.statement.chain_id
-            || self.recipient_request.asset != self.bundle.statement.asset
-            || self.recipient_request.amount.scale != self.bundle.statement.asset_scale
-            || self.bundle.statement.current_note != self.recipient_request.recipient_output
+            || statement.peer_hop_count > self.maximum_hops
+            || self.artifact_binding != statement.artifact_binding
+            || self.recipient_request.chain_id != statement.chain_id
+            || self.recipient_request.asset != statement.asset
+            || self.recipient_request.amount.scale != statement.asset_scale
+            || statement.current_note != self.recipient_request.recipient_output
+            || roster_len == 0
+            || roster_len > KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_MAX_BYTES_V2 as usize
+            || self.topup_finality_roster_artifact.chain_id != statement.chain_id
+            || self.topup_finality_roster_artifact.artifact_generation
+                != self.artifact_binding.generation
         {
             return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
                 field: "verify_request",
             });
         }
+        KagemushaRecursiveSpendTopUpFinalityEvidenceV2::validate_ordered_set(
+            &self.topup_finality_evidence,
+            &statement.topup_anchor_refs,
+        )?;
+
+        let mut anchored_total = 0_u128;
+        for evidence in &self.topup_finality_evidence {
+            let anchor = &evidence.topup_anchor;
+            if anchor.chain_id != statement.chain_id
+                || anchor.asset.definition() != &statement.asset
+                || anchor.asset_scale != statement.asset_scale
+                || anchor.artifact_binding != self.artifact_binding
+                || anchor.finalized_height > self.block_height
+                || evidence
+                    .topup_finality_proof
+                    .commit_qc
+                    .height_context
+                    .chain_id
+                    != statement.chain_id
+                || self
+                    .topup_finality_roster_artifact
+                    .window_at(anchor.finalized_height)
+                    .is_err()
+            {
+                return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                    field: "verify_request.topup_finality_evidence_binding",
+                });
+            }
+            anchored_total = anchored_total
+                .checked_add(anchor.amount.atomic_units)
+                .ok_or(KagemushaValidationError::InvalidRecursiveSpendProof {
+                    field: "verify_request.topup_finality_amount",
+                })?;
+        }
+        if anchored_total < statement.current_note.amount.atomic_units {
+            return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "verify_request.topup_finality_amount",
+            });
+        }
+
         let Some(KagemushaRecursiveSpendTransitionV2::PeerSplit(transition)) =
-            self.bundle.statement.transition.as_ref()
+            statement.transition.as_ref()
         else {
             return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
                 field: "verify_request.transition",
@@ -6859,6 +9886,13 @@ impl KagemushaRecursiveSpendVerifyRequestV2 {
         {
             return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
                 field: "verify_request.recipient_binding",
+            });
+        }
+        let encoded_len = to_bytes(self)?.len();
+        if encoded_len > KAGEMUSHA_RECURSIVE_SPEND_VERIFY_REQUEST_MAX_BYTES_V2 {
+            return Err(KagemushaValidationError::EncodedSizeExceeded {
+                actual: encoded_len,
+                max: KAGEMUSHA_RECURSIVE_SPEND_VERIFY_REQUEST_MAX_BYTES_V2,
             });
         }
         Ok(())
@@ -6880,7 +9914,7 @@ impl KagemushaRecursiveSpendVerifyResultV2 {
             || !self.witnessless_redemption_supported
             || self.recipient_request_digest == [0; 32]
             || self.request_output_binding_digest == [0; 32]
-            || self.verifier_circuit_id != KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V1
+            || self.verifier_circuit_id != KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V3
             || self.verified_at_block_height == 0
             || self.verified_at_ms == 0
             || self.summary.verifier_key_id != self.verifier_key_id
@@ -7034,5 +10068,1412 @@ impl KagemushaRecursiveSpendRedeemRequestV2 {
     pub fn ensure_proof_backend_available(&self) -> Result<(), KagemushaValidationError> {
         self.validate_public_binding()?;
         Err(KagemushaValidationError::RecursiveSpendV2ProofBackendUnavailable)
+    }
+}
+
+/// Domain separator for ABI-20 finalized top-up anchor receipts.
+pub const KAGEMUSHA_TOPUP_ANCHOR_DIGEST_DOMAIN_V4: &str = "iroha:kagemusha:v4:topup-anchor";
+/// Domain separator for an ABI-20 split transition binding.
+pub const KAGEMUSHA_RECURSIVE_SPEND_SPLIT_BINDING_DIGEST_DOMAIN_V4: &str =
+    "iroha:kagemusha:v4:split-binding";
+/// Domain separator for an ABI-20 redemption transition binding.
+pub const KAGEMUSHA_REDEMPTION_TRANSITION_DIGEST_DOMAIN_V4: &str =
+    "iroha:kagemusha:v4:redemption-transition";
+/// Domain separator for an ABI-20 recursive public statement.
+pub const KAGEMUSHA_RECURSIVE_SPEND_PUBLIC_STATEMENT_DIGEST_DOMAIN_V4: &str =
+    "iroha:kagemusha:v4:public-statement";
+/// Exact finalized-anchor schema carried by an ABI-20 init request.
+pub const KAGEMUSHA_RECURSIVE_SPEND_TOPUP_ANCHOR_VERSION_V4: u16 = 4;
+
+#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
+struct KagemushaTopUpAnchorDigestPreimageV4 {
+    domain: String,
+    version: u16,
+    chain_id: ChainId,
+    payer: AccountId,
+    asset: AssetId,
+    asset_scale: u32,
+    amount: KagemushaScaledAmountV2,
+    initial_root: [u8; 32],
+    finalized_root: [u8; 32],
+    shield_leaf_index: u32,
+    current_note: KagemushaSpendableNoteDescriptorV2,
+    topup_operation_id: [u8; 32],
+    shield_verifier_id: VerifyingKeyId,
+    shield_verifier_commitment: [u8; 32],
+    artifact_binding: KagemushaRecursiveSpendArtifactBindingV4,
+    finalized_height: u64,
+    finalized_tx_hash: [u8; 32],
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
+struct KagemushaRecursiveSpendSplitBindingDigestPreimageV4 {
+    domain: String,
+    split: KagemushaRecursiveSpendSplitIntentV4,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
+struct KagemushaRedemptionTransitionDigestPreimageV4 {
+    domain: String,
+    intent: KagemushaRecursiveSpendRedemptionIntentV4,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
+struct KagemushaRecursiveSpendPublicStatementDigestPreimageV4 {
+    domain: String,
+    statement: KagemushaRecursiveSpendPublicStatementV4,
+}
+
+impl KagemushaRecursiveSpendTopUpAnchorV4 {
+    /// Populate and validate the canonical ABI-20 receipt digest.
+    pub fn finalize_digest(mut self) -> Result<Self, KagemushaValidationError> {
+        self.anchor_digest = self.compute_anchor_digest()?;
+        self.validate_public_binding()?;
+        Ok(self)
+    }
+
+    /// Compute the V4-domain digest of every immutable receipt field.
+    pub fn compute_anchor_digest(&self) -> Result<[u8; 32], KagemushaValidationError> {
+        kagemusha_poseidon_preimage(&KagemushaTopUpAnchorDigestPreimageV4 {
+            domain: KAGEMUSHA_TOPUP_ANCHOR_DIGEST_DOMAIN_V4.to_owned(),
+            version: self.version,
+            chain_id: self.chain_id.clone(),
+            payer: self.payer.clone(),
+            asset: self.asset.clone(),
+            asset_scale: self.asset_scale,
+            amount: self.amount,
+            initial_root: self.initial_root,
+            finalized_root: self.finalized_root,
+            shield_leaf_index: self.shield_leaf_index,
+            current_note: self.current_note.clone(),
+            topup_operation_id: self.topup_operation_id,
+            shield_verifier_id: self.shield_verifier_id.clone(),
+            shield_verifier_commitment: self.shield_verifier_commitment,
+            artifact_binding: self.artifact_binding.clone(),
+            finalized_height: self.finalized_height,
+            finalized_tx_hash: self.finalized_tx_hash,
+        })
+    }
+
+    /// Validate the complete finalized receipt and authenticated V4 release.
+    pub fn validate_public_binding(&self) -> Result<(), KagemushaValidationError> {
+        self.amount.validate()?;
+        self.current_note.validate_public_binding()?;
+        self.artifact_binding.validate()?;
+        if self.version != KAGEMUSHA_RECURSIVE_SPEND_TOPUP_ANCHOR_VERSION_V4
+            || self.asset_scale != self.amount.scale
+            || self.current_note.amount != self.amount
+            || self.asset.account() != &self.payer
+            || self.current_note.chain_id != self.chain_id
+            || self.current_note.asset != *self.asset.definition()
+            || self.initial_root == [0; 32]
+            || self.finalized_root == [0; 32]
+            || self.initial_root == self.finalized_root
+            || self.shield_leaf_index >= KAGEMUSHA_TOPUP_SHIELD_TREE_CAPACITY_V2
+            || self.topup_operation_id == [0; 32]
+            || self.shield_verifier_id.backend.is_empty()
+            || self.shield_verifier_id.name.is_empty()
+            || self.shield_verifier_commitment == [0; 32]
+            || self.finalized_height == 0
+            || self.finalized_tx_hash == [0; 32]
+            || self.anchor_digest != self.compute_anchor_digest()?
+        {
+            return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "topup_anchor.v4",
+            });
+        }
+        Ok(())
+    }
+
+    /// Return the stable compact identity retained by ABI-20 descendants.
+    pub fn compact_ref(
+        &self,
+    ) -> Result<KagemushaRecursiveSpendTopUpAnchorRefV2, KagemushaValidationError> {
+        self.validate_public_binding()?;
+        Ok(KagemushaRecursiveSpendTopUpAnchorRefV2 {
+            topup_operation_id: self.topup_operation_id,
+            anchor_digest: self.anchor_digest,
+        })
+    }
+}
+
+impl KagemushaRecursiveSpendInitRequestV4 {
+    /// Validate finalized provenance and its exact authenticated ABI-20 release.
+    pub fn validate_public_binding(&self) -> Result<(), KagemushaValidationError> {
+        self.topup_anchor.validate_public_binding()?;
+        self.topup_finality_proof.validate_structure()?;
+        self.topup_finality_roster_artifact.validate_structure()?;
+        self.artifact_binding.validate()?;
+        if self.artifact_binding != self.topup_anchor.artifact_binding
+            || self.topup_finality_proof.anchor != self.topup_anchor.compact_ref()?
+            || self.topup_finality_proof.commit_qc.height_context.height
+                != self.topup_anchor.finalized_height
+            || self.topup_finality_roster_artifact.chain_id != self.topup_anchor.chain_id
+            || self.topup_finality_roster_artifact.artifact_generation
+                != self.artifact_binding.generation
+        {
+            return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "init_request.v4",
+            });
+        }
+        Ok(())
+    }
+}
+
+impl KagemushaRecursiveSpendSplitIntentV4 {
+    /// Validate exact conservation, canonical parents, and disjoint V4 outputs.
+    pub fn validate_public_binding(&self) -> Result<(), KagemushaValidationError> {
+        self.output_artifact_binding.validate()?;
+        self.transfer_amount.validate()?;
+        self.recipient_output.validate_public_binding()?;
+        let lineage_roots =
+            validate_kagemusha_recursive_spend_topup_anchor_refs_v2(&self.topup_anchor_refs)?;
+        if self.inputs.is_empty()
+            || self.inputs.len() > KAGEMUSHA_RECURSIVE_SPEND_MAX_INPUTS_V2
+            || self.asset_scale != self.transfer_amount.scale
+            || self.recipient_request_digest == [0; 32]
+            || self.operation_id == [0; 32]
+            || self.recipient_output.chain_id != self.chain_id
+            || self.recipient_output.asset != self.asset
+            || self.recipient_output.amount != self.transfer_amount
+        {
+            return Err(KagemushaValidationError::InvalidRecursiveSpendProof { field: "split.v4" });
+        }
+        let mut input_total = 0_u128;
+        let mut previous_digest = None;
+        let mut actual_roots = Vec::new();
+        let mut consumed_material = std::collections::BTreeSet::new();
+        for input in &self.inputs {
+            input.input_note.validate_public_binding()?;
+            validate_kagemusha_recursive_spend_branch_claims_v2(&input.branch_claims)?;
+            if input.bundle_digest == [0; 32]
+                || previous_digest.is_some_and(|previous| previous >= input.bundle_digest)
+                || input.input_note.chain_id != self.chain_id
+                || input.input_note.asset != self.asset
+                || input.input_note.amount.scale != self.asset_scale
+                || input.input_root == [0; 32]
+                || input.proof_step_count == 0
+                || input.proof_step_count >= KAGEMUSHA_RECURSIVE_SPEND_MAX_PROOF_STEPS_V2
+                || input.peer_hop_count >= KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2
+                || !consumed_material.insert(input.input_note.note_commitment)
+                || !consumed_material.insert(input.input_note.spend_nullifier)
+            {
+                return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                    field: "split.v4.inputs",
+                });
+            }
+            previous_digest = Some(input.bundle_digest);
+            input_total = input_total
+                .checked_add(input.input_note.amount.atomic_units)
+                .ok_or(KagemushaValidationError::InvalidRecursiveSpendNote {
+                    field: "split.v4.input_amount",
+                })?;
+            actual_roots.extend(
+                input
+                    .branch_claims
+                    .iter()
+                    .map(|claim| claim.path.lineage_root),
+            );
+        }
+        actual_roots.sort_unstable();
+        actual_roots.dedup();
+        if actual_roots != lineage_roots {
+            return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "split.v4.topup_anchor_refs",
+            });
+        }
+        let output_total = self
+            .change_output
+            .as_ref()
+            .map_or(Some(self.transfer_amount.atomic_units), |change| {
+                change.validate_public_binding().ok()?;
+                if change.chain_id != self.chain_id
+                    || change.asset != self.asset
+                    || change.amount.scale != self.asset_scale
+                {
+                    return None;
+                }
+                self.transfer_amount
+                    .atomic_units
+                    .checked_add(change.amount.atomic_units)
+            })
+            .ok_or(KagemushaValidationError::InvalidRecursiveSpendNote {
+                field: "split.v4.change_output",
+            })?;
+        if output_total != input_total {
+            return Err(KagemushaValidationError::InvalidRecursiveSpendNote {
+                field: "split.v4.conservation",
+            });
+        }
+        let mut output_material = vec![
+            self.recipient_output.note_commitment,
+            self.recipient_output.spend_nullifier,
+        ];
+        if let Some(change) = &self.change_output {
+            output_material.extend([change.note_commitment, change.spend_nullifier]);
+        }
+        if output_material
+            .iter()
+            .any(|value| *value == [0; 32] || consumed_material.contains(value))
+            || output_material
+                .iter()
+                .copied()
+                .collect::<std::collections::BTreeSet<_>>()
+                .len()
+                != output_material.len()
+        {
+            return Err(KagemushaValidationError::InvalidRecursiveSpendNote {
+                field: "split.v4.output_material",
+            });
+        }
+        Ok(())
+    }
+
+    /// Return the exact validated input total.
+    pub fn input_amount(&self) -> Result<KagemushaScaledAmountV2, KagemushaValidationError> {
+        self.validate_public_binding()?;
+        let atomic_units = self.inputs.iter().try_fold(0_u128, |sum, input| {
+            sum.checked_add(input.input_note.amount.atomic_units)
+        });
+        KagemushaScaledAmountV2::new(
+            atomic_units.ok_or(KagemushaValidationError::InvalidRecursiveSpendNote {
+                field: "split.v4.input_amount",
+            })?,
+            self.asset_scale,
+        )
+    }
+
+    /// Return the V4-domain transition binding consumed by ABI-20 Step.
+    pub fn binding_digest(&self) -> Result<[u8; 32], KagemushaValidationError> {
+        self.validate_public_binding()?;
+        kagemusha_poseidon_preimage(&KagemushaRecursiveSpendSplitBindingDigestPreimageV4 {
+            domain: KAGEMUSHA_RECURSIVE_SPEND_SPLIT_BINDING_DIGEST_DOMAIN_V4.to_owned(),
+            split: self.clone(),
+        })
+    }
+
+    /// Derive the deterministic conflict claims for one ABI-20 child.
+    pub fn output_branch_claims(
+        &self,
+        branch: KagemushaRecursiveSpendBranchV2,
+    ) -> Result<Vec<KagemushaRecursiveSpendBranchClaimV2>, KagemushaValidationError> {
+        self.validate_public_binding()?;
+        if matches!(branch, KagemushaRecursiveSpendBranchV2::Change) && self.change_output.is_none()
+        {
+            return Err(KagemushaValidationError::InvalidRecursiveSpendNote {
+                field: "split.v4.change_output",
+            });
+        }
+        let binding = self.binding_digest()?;
+        let mut claims = self
+            .inputs
+            .iter()
+            .flat_map(|input| &input.branch_claims)
+            .map(|claim| claim.child(branch, binding))
+            .collect::<Result<Vec<_>, _>>()?;
+        claims.sort_unstable_by_key(|claim| claim.path);
+        validate_kagemusha_recursive_spend_branch_claims_v2(&claims)?;
+        Ok(claims)
+    }
+}
+
+impl KagemushaRecursiveSpendRedemptionIntentV4 {
+    /// Validate exact full/partial conservation and canonical unshield words.
+    pub fn validate_public_binding(&self) -> Result<(), KagemushaValidationError> {
+        self.input_note.validate_public_binding()?;
+        validate_kagemusha_recursive_spend_branch_claims_v2(&self.parent_branch_claims)?;
+        self.public_amount.validate()?;
+        if self.input_note.chain_id != self.chain_id {
+            return Err(KagemushaValidationError::RecursiveSpendChainMismatch);
+        }
+        if self.input_note.asset != self.asset {
+            return Err(KagemushaValidationError::RecursiveSpendAssetMismatch);
+        }
+        let expected_lineage_roots = validate_kagemusha_recursive_spend_topup_anchor_refs_v2(
+            &self.parent_topup_anchor_refs,
+        )?;
+        let mut actual_lineage_roots = self
+            .parent_branch_claims
+            .iter()
+            .map(|claim| claim.path.lineage_root)
+            .collect::<Vec<_>>();
+        actual_lineage_roots.sort_unstable();
+        actual_lineage_roots.dedup();
+        if self.parent_bundle_digest == [0; 32]
+            || self.input_root == [0; 32]
+            || self.operation_id == [0; 32]
+            || actual_lineage_roots != expected_lineage_roots
+            || self.parent_proof_step_count == 0
+            || self.parent_proof_step_count > KAGEMUSHA_RECURSIVE_SPEND_MAX_PROOF_STEPS_V2
+            || self.parent_peer_hop_count > KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2
+            || self.public_amount.scale != self.input_note.amount.scale
+            || self.unshield_public_inputs_digest == [0; 32]
+            || self.unshield_public_inputs_digest != self.unshield_public_inputs.digest()?
+        {
+            return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "redemption.v4",
+            });
+        }
+        let zero = [0_u8; 32];
+        if self.unshield_public_inputs.input_commitment_0 != self.input_note.note_commitment
+            || self.unshield_public_inputs.input_commitment_1 != zero
+            || self.unshield_public_inputs.nullifier_0 != self.input_note.spend_nullifier
+            || self.unshield_public_inputs.nullifier_1 != zero
+            || self.unshield_public_inputs.root != self.input_root
+            || self.unshield_public_inputs.public_amount
+                != kagemusha_confidential_amount_encoding_v2(self.public_amount.atomic_units)
+            || self.unshield_public_inputs.asset_tag == zero
+            || self.unshield_public_inputs.chain_tag == zero
+        {
+            return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "redemption.v4.unshield_public_inputs",
+            });
+        }
+        let input_amount = self.input_note.amount.atomic_units;
+        match (&self.change_output, &self.change_artifact_binding) {
+            (None, None)
+                if self.public_amount.atomic_units == input_amount
+                    && self.unshield_public_inputs.change_output_commitment == zero => {}
+            (Some(change), Some(binding)) if self.public_amount.atomic_units < input_amount => {
+                change.validate_public_binding()?;
+                binding.validate()?;
+                if change.chain_id != self.chain_id {
+                    return Err(KagemushaValidationError::RecursiveSpendChainMismatch);
+                }
+                if change.asset != self.asset {
+                    return Err(KagemushaValidationError::RecursiveSpendAssetMismatch);
+                }
+                if change.amount.scale != self.public_amount.scale
+                    || self
+                        .public_amount
+                        .atomic_units
+                        .checked_add(change.amount.atomic_units)
+                        != Some(input_amount)
+                    || self.unshield_public_inputs.change_output_commitment
+                        != change.note_commitment
+                    || [change.note_commitment, change.spend_nullifier]
+                        .iter()
+                        .any(|value| {
+                            *value == self.input_note.note_commitment
+                                || *value == self.input_note.spend_nullifier
+                        })
+                {
+                    return Err(KagemushaValidationError::InvalidRecursiveSpendNote {
+                        field: "redemption.v4.change_output",
+                    });
+                }
+            }
+            _ => {
+                return Err(KagemushaValidationError::InvalidRecursiveSpendNote {
+                    field: "redemption.v4.change_output",
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// Return the V4-domain circuit binding for this redemption.
+    pub fn binding_digest(&self) -> Result<[u8; 32], KagemushaValidationError> {
+        self.validate_public_binding()?;
+        kagemusha_poseidon_preimage(&KagemushaRedemptionTransitionDigestPreimageV4 {
+            domain: KAGEMUSHA_REDEMPTION_TRANSITION_DIGEST_DOMAIN_V4.to_owned(),
+            intent: self.clone(),
+        })
+    }
+
+    /// Derive the exact continuing change claims for a partial redemption.
+    pub fn change_branch_claims(
+        &self,
+    ) -> Result<Vec<KagemushaRecursiveSpendBranchClaimV2>, KagemushaValidationError> {
+        self.validate_public_binding()?;
+        if self.change_output.is_none() || self.change_artifact_binding.is_none() {
+            return Err(KagemushaValidationError::InvalidRecursiveSpendNote {
+                field: "redemption.v4.change_output",
+            });
+        }
+        let binding = self.binding_digest()?;
+        let mut claims = self
+            .parent_branch_claims
+            .iter()
+            .map(|claim| claim.child(KagemushaRecursiveSpendBranchV2::Change, binding))
+            .collect::<Result<Vec<_>, _>>()?;
+        claims.sort_unstable_by_key(|claim| claim.path);
+        validate_kagemusha_recursive_spend_branch_claims_v2(&claims)?;
+        Ok(claims)
+    }
+}
+
+impl KagemushaRecursiveSpendPublicStatementV4 {
+    /// Validate the canonical ABI-20 recursive-state statement.
+    pub fn validate_public_binding(&self) -> Result<(), KagemushaValidationError> {
+        self.current_note.validate_public_binding()?;
+        self.artifact_binding.validate()?;
+        validate_kagemusha_root("final_root.v4", self.final_root)?;
+        let lineage_roots =
+            validate_kagemusha_recursive_spend_topup_anchor_refs_v2(&self.topup_anchor_refs)?;
+        validate_kagemusha_recursive_spend_branch_claims_v2(&self.branch_claims)?;
+        let mut claim_roots = self
+            .branch_claims
+            .iter()
+            .map(|claim| claim.path.lineage_root)
+            .collect::<Vec<_>>();
+        claim_roots.sort_unstable();
+        claim_roots.dedup();
+        if self.current_note.chain_id != self.chain_id
+            || self.current_note.asset != self.asset
+            || self.current_note.amount.scale != self.asset_scale
+            || self.proof_step_count == 0
+            || self.proof_step_count > KAGEMUSHA_RECURSIVE_SPEND_MAX_PROOF_STEPS_V2
+            || self.peer_hop_count > KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2
+            || claim_roots != lineage_roots
+            || self.verifier_key_id.name != KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4
+            || self.verifier_key_id.backend.as_str()
+                != KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4
+        {
+            return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "public_statement.v4",
+            });
+        }
+        match &self.transition {
+            None if self.proof_step_count == 1 && self.peer_hop_count == 0 => {}
+            Some(KagemushaRecursiveSpendTransitionV2::PeerSplit(transition))
+                if transition.binding_digest != [0; 32]
+                    && transition.recipient_request_digest != [0; 32]
+                    && transition.operation_id != [0; 32]
+                    && transition.parent_max_proof_step_count > 0
+                    && transition.parent_max_proof_step_count.checked_add(1)
+                        == Some(self.proof_step_count)
+                    && transition.parent_max_peer_hop_count.checked_add(1)
+                        == Some(self.peer_hop_count) => {}
+            Some(KagemushaRecursiveSpendTransitionV2::RedemptionChange(transition))
+                if transition.binding_digest != [0; 32]
+                    && transition.parent_bundle_digest != [0; 32]
+                    && transition.operation_id != [0; 32]
+                    && transition.parent_proof_step_count > 0
+                    && transition.parent_proof_step_count.checked_add(1)
+                        == Some(self.proof_step_count)
+                    && self.peer_hop_count == transition.parent_peer_hop_count => {}
+            _ => {
+                return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                    field: "public_statement.v4.transition",
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// Return the V4-domain digest exposed by the ABI-20 Step instance.
+    pub fn digest(&self) -> Result<[u8; 32], KagemushaValidationError> {
+        self.validate_public_binding()?;
+        kagemusha_poseidon_preimage(&KagemushaRecursiveSpendPublicStatementDigestPreimageV4 {
+            domain: KAGEMUSHA_RECURSIVE_SPEND_PUBLIC_STATEMENT_DIGEST_DOMAIN_V4.to_owned(),
+            statement: self.clone(),
+        })
+    }
+}
+
+#[cfg(test)]
+mod kagemusha_v4_lifecycle_domain_tests {
+    use super::*;
+
+    #[test]
+    fn abi20_lifecycle_digest_domains_are_distinct_from_v2() {
+        let v4 = [
+            KAGEMUSHA_TOPUP_ANCHOR_DIGEST_DOMAIN_V4,
+            KAGEMUSHA_RECURSIVE_SPEND_SPLIT_BINDING_DIGEST_DOMAIN_V4,
+            KAGEMUSHA_REDEMPTION_TRANSITION_DIGEST_DOMAIN_V4,
+            KAGEMUSHA_RECURSIVE_SPEND_PUBLIC_STATEMENT_DIGEST_DOMAIN_V4,
+        ];
+        assert_eq!(
+            v4.into_iter()
+                .collect::<std::collections::BTreeSet<_>>()
+                .len(),
+            v4.len()
+        );
+        assert_ne!(
+            KAGEMUSHA_TOPUP_ANCHOR_DIGEST_DOMAIN_V4,
+            KAGEMUSHA_TOPUP_ANCHOR_DIGEST_DOMAIN_V2
+        );
+        assert_ne!(
+            KAGEMUSHA_RECURSIVE_SPEND_SPLIT_BINDING_DIGEST_DOMAIN_V4,
+            KAGEMUSHA_RECURSIVE_SPEND_SPLIT_BINDING_DIGEST_DOMAIN_V2
+        );
+        assert_ne!(
+            KAGEMUSHA_REDEMPTION_TRANSITION_DIGEST_DOMAIN_V4,
+            KAGEMUSHA_REDEMPTION_TRANSITION_DIGEST_DOMAIN_V2
+        );
+        assert_ne!(
+            KAGEMUSHA_RECURSIVE_SPEND_PUBLIC_STATEMENT_DIGEST_DOMAIN_V4,
+            KAGEMUSHA_RECURSIVE_SPEND_PUBLIC_STATEMENT_DIGEST_DOMAIN_V2
+        );
+    }
+}
+/// Domain separator for ABI-20 recursive bundle identity digests.
+pub const KAGEMUSHA_RECURSIVE_SPEND_BUNDLE_DIGEST_DOMAIN_V4: &str =
+    "iroha:kagemusha:v4:recursive-spend-bundle";
+/// Domain separator for ABI-20 unsigned redemption authorization payloads.
+pub const KAGEMUSHA_REDEEM_PAYLOAD_DIGEST_DOMAIN_V4: &str = "iroha:kagemusha:v4:redeem-payload";
+/// Domain separator binding an accepted receiver request to its exact output bundle.
+pub const KAGEMUSHA_REQUEST_OUTPUT_BINDING_DIGEST_DOMAIN_V4: &str =
+    "iroha:kagemusha:v4:request-output-binding";
+/// Maximum canonical archive size of one ABI-20 proof-bearing bundle.
+pub const KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_ARCHIVE_BYTES_V4: usize = 20 * 1024 * 1024;
+/// Maximum canonical ABI-20 receiver-verification request size.
+pub const KAGEMUSHA_RECURSIVE_SPEND_VERIFY_REQUEST_MAX_BYTES_V4: usize = 64 * 1024 * 1024;
+/// Maximum canonical ABI-20 redemption request archive size.
+pub const KAGEMUSHA_RECURSIVE_SPEND_REDEEM_REQUEST_MAX_BYTES_V4: usize = 48 * 1024 * 1024;
+
+#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
+struct KagemushaRecursiveSpendBundleDigestPreimageV4 {
+    domain: String,
+    bundle: KagemushaRecursiveSpendBundleV4,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
+struct KagemushaRedeemUnsignedPayloadDigestPreimageV4 {
+    domain: String,
+    bundle: KagemushaRecursiveSpendBundleV4,
+    recipient: AccountId,
+    amount: KagemushaScaledAmountV2,
+    redeem_proof: ProofAttachment,
+    redemption: KagemushaRecursiveSpendRedemptionIntentV4,
+    offline_change: Option<KagemushaRecursiveSpendRedeemChangeBranchV4>,
+    block_height: u64,
+    operation_id: [u8; 32],
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
+struct KagemushaRequestOutputBindingDigestPreimageV4 {
+    domain: String,
+    recipient_request_digest: [u8; 32],
+    recipient_output: KagemushaSpendableNoteDescriptorV2,
+    bundle_digest: [u8; 32],
+}
+
+impl KagemushaRecursiveSpendBundleV4 {
+    /// Validate the exact V4 statement/proof/release identity while keeping proof bytes opaque.
+    pub fn validate_public_binding(&self) -> Result<(), KagemushaValidationError> {
+        self.statement.validate_public_binding()?;
+        self.recursive_proof.proof_envelope.validate()?;
+        let envelope = &self.recursive_proof.proof_envelope;
+        if self.recursive_proof.verifier_key_id != self.statement.verifier_key_id
+            || self.recursive_proof.public_statement_digest == [0; 32]
+            || self.recursive_proof.public_statement_digest != self.statement.digest()?
+            || envelope.artifact_generation != self.statement.artifact_binding.generation
+            || envelope.manifest_sha256 != self.statement.artifact_binding.manifest_sha256
+        {
+            return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "recursive_proof.v4",
+            });
+        }
+        let encoded_len = to_bytes(self)?.len();
+        if encoded_len > KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_ARCHIVE_BYTES_V4 {
+            return Err(KagemushaValidationError::EncodedSizeExceeded {
+                actual: encoded_len,
+                max: KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_ARCHIVE_BYTES_V4,
+            });
+        }
+        Ok(())
+    }
+
+    /// Return the V4-domain identity of the complete opaque bundle.
+    pub fn digest(&self) -> Result<[u8; 32], KagemushaValidationError> {
+        self.validate_public_binding()?;
+        kagemusha_poseidon_preimage(&KagemushaRecursiveSpendBundleDigestPreimageV4 {
+            domain: KAGEMUSHA_RECURSIVE_SPEND_BUNDLE_DIGEST_DOMAIN_V4.to_owned(),
+            bundle: self.clone(),
+        })
+    }
+
+    /// Decode only wallet-visible V4 state while preserving the opaque proof payload.
+    pub fn summary(
+        &self,
+    ) -> Result<KagemushaRecursiveSpendBundleSummaryV4, KagemushaValidationError> {
+        self.validate_public_binding()?;
+        Ok(KagemushaRecursiveSpendBundleSummaryV4 {
+            asset: self.statement.asset.clone(),
+            amount: self.statement.current_note.amount,
+            note_commitment: self.statement.current_note.note_commitment,
+            spend_nullifier: self.statement.current_note.spend_nullifier,
+            hop_count: self.statement.peer_hop_count,
+            proof_step_count: self.statement.proof_step_count,
+            branch_claims: self.statement.branch_claims.clone(),
+            artifact_binding: self.statement.artifact_binding.clone(),
+            verifier_key_id: self.statement.verifier_key_id.clone(),
+            bundle_digest: self.digest()?,
+        })
+    }
+}
+
+impl KagemushaRecursiveSpendInitResultV4 {
+    /// Validate that initialization created exactly the finalized top-up state.
+    pub fn validate_for_request(
+        &self,
+        request: &KagemushaRecursiveSpendInitRequestV4,
+    ) -> Result<(), KagemushaValidationError> {
+        request.validate_public_binding()?;
+        self.bundle.validate_public_binding()?;
+        let anchor = &request.topup_anchor;
+        let expected_claim = KagemushaRecursiveSpendBranchClaimV2::root(anchor.anchor_digest)?;
+        if self.public_statement_digest == [0; 32]
+            || self.public_statement_digest != self.bundle.statement.digest()?
+            || self.public_statement_digest != self.bundle.recursive_proof.public_statement_digest
+            || self.bundle.statement.chain_id != anchor.chain_id
+            || self.bundle.statement.asset != anchor.asset.definition().clone()
+            || self.bundle.statement.asset_scale != anchor.asset_scale
+            || self.bundle.statement.final_root != anchor.finalized_root
+            || self.bundle.statement.topup_anchor_refs != vec![anchor.compact_ref()?]
+            || self.bundle.statement.proof_step_count != 1
+            || self.bundle.statement.peer_hop_count != 0
+            || self.bundle.statement.current_note != anchor.current_note
+            || self.bundle.statement.branch_claims != vec![expected_claim]
+            || self.bundle.statement.transition.is_some()
+            || self.bundle.statement.artifact_binding != request.artifact_binding
+        {
+            return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "init_result.v4",
+            });
+        }
+        Ok(())
+    }
+}
+
+impl KagemushaRecursiveSpendAppendRequestV4 {
+    /// Validate canonical parents, the confidential proof envelope, and the exact split inputs.
+    pub fn validate_public_binding(&self) -> Result<(), KagemushaValidationError> {
+        self.split.validate_public_binding()?;
+        if self.block_height == 0
+            || self.previous_inputs.is_empty()
+            || self.previous_inputs.len() > KAGEMUSHA_RECURSIVE_SPEND_MAX_INPUTS_V2
+            || self.previous_inputs.len() != self.split.inputs.len()
+            || self
+                .confidential_transfer_proof
+                .structural_error()
+                .is_some()
+            || self.confidential_transfer_proof.backend.as_str()
+                != KAGEMUSHA_CONFIDENTIAL_PROOF_BACKEND
+            || self.confidential_transfer_proof.proof.backend.as_str()
+                != KAGEMUSHA_CONFIDENTIAL_PROOF_BACKEND
+            || self.confidential_transfer_proof.vk_ref.backend.as_str()
+                != KAGEMUSHA_CONFIDENTIAL_PROOF_BACKEND
+            || self.confidential_transfer_proof.vk_ref.name.is_empty()
+            || self.confidential_transfer_proof.proof.bytes.is_empty()
+            || self
+                .confidential_transfer_proof
+                .vk_commitment
+                .is_none_or(|commitment| commitment == [0; 32])
+            || self.confidential_transfer_proof.lane_privacy.is_some()
+        {
+            return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "append_request.v4",
+            });
+        }
+        for (typed, expected) in self.previous_inputs.iter().zip(&self.split.inputs) {
+            typed.previous_bundle.validate_public_binding()?;
+            let statement = &typed.previous_bundle.statement;
+            if typed.previous_bundle.digest()? != expected.bundle_digest
+                || statement.current_note != expected.input_note
+                || statement.branch_claims != expected.branch_claims
+                || statement.final_root != expected.input_root
+                || statement.proof_step_count != expected.proof_step_count
+                || statement.peer_hop_count != expected.peer_hop_count
+                || statement.chain_id != self.split.chain_id
+                || statement.asset != self.split.asset
+                || statement.asset_scale != self.split.asset_scale
+                || statement.artifact_binding != self.split.output_artifact_binding
+            {
+                return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                    field: "append_request.v4.previous_inputs",
+                });
+            }
+        }
+        Ok(())
+    }
+}
+
+impl KagemushaRecursiveSpendSplitIntentV4 {
+    /// Validate one independently spendable V4 child against this exact split.
+    pub fn validate_output_bundle(
+        &self,
+        bundle: &KagemushaRecursiveSpendBundleV4,
+        branch: KagemushaRecursiveSpendBranchV2,
+    ) -> Result<(), KagemushaValidationError> {
+        self.validate_public_binding()?;
+        bundle.validate_public_binding()?;
+        let expected_note = match branch {
+            KagemushaRecursiveSpendBranchV2::Recipient => &self.recipient_output,
+            KagemushaRecursiveSpendBranchV2::Change => self.change_output.as_ref().ok_or(
+                KagemushaValidationError::InvalidRecursiveSpendNote {
+                    field: "split.v4.change_output",
+                },
+            )?,
+        };
+        let parent_max_proof_step_count = self
+            .inputs
+            .iter()
+            .map(|input| input.proof_step_count)
+            .max()
+            .ok_or(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "split.v4.inputs",
+            })?;
+        let parent_max_peer_hop_count = self
+            .inputs
+            .iter()
+            .map(|input| input.peer_hop_count)
+            .max()
+            .ok_or(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "split.v4.inputs",
+            })?;
+        let expected_transition = KagemushaRecursiveSpendTransitionV2::PeerSplit(
+            KagemushaRecursiveSpendPeerSplitTransitionV2 {
+                binding_digest: self.binding_digest()?,
+                branch,
+                recipient_request_digest: self.recipient_request_digest,
+                operation_id: self.operation_id,
+                parent_max_proof_step_count,
+                parent_max_peer_hop_count,
+            },
+        );
+        let statement = &bundle.statement;
+        if statement.chain_id != self.chain_id
+            || statement.asset != self.asset
+            || statement.asset_scale != self.asset_scale
+            || statement.current_note != *expected_note
+            || statement.branch_claims != self.output_branch_claims(branch)?
+            || statement.topup_anchor_refs != self.topup_anchor_refs
+            || statement.artifact_binding != self.output_artifact_binding
+            || statement.transition.as_ref() != Some(&expected_transition)
+        {
+            return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "split.v4.output_bundle",
+            });
+        }
+        Ok(())
+    }
+}
+
+impl KagemushaRecursiveSpendSplitResultV4 {
+    /// Validate conservation and both independently spendable V4 branches.
+    pub fn validate_public_binding(&self) -> Result<(), KagemushaValidationError> {
+        self.split.validate_public_binding()?;
+        if self.split_binding_digest != self.split.binding_digest()? {
+            return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "split_binding_digest.v4",
+            });
+        }
+        self.split.validate_output_bundle(
+            &self.recipient_bundle,
+            KagemushaRecursiveSpendBranchV2::Recipient,
+        )?;
+        self.recipient_membership_witness
+            .validate_for_root(self.recipient_bundle.statement.final_root)?;
+        match (
+            &self.split.change_output,
+            &self.change_bundle,
+            &self.change_membership_witness,
+        ) {
+            (None, None, None) => Ok(()),
+            (Some(_), Some(change_bundle), Some(change_witness)) => {
+                self.split.validate_output_bundle(
+                    change_bundle,
+                    KagemushaRecursiveSpendBranchV2::Change,
+                )?;
+                change_witness.validate_for_root(change_bundle.statement.final_root)?;
+                let recipient = &self.recipient_bundle.statement;
+                let change = &change_bundle.statement;
+                if recipient.final_root != change.final_root
+                    || recipient.topup_anchor_refs != change.topup_anchor_refs
+                    || recipient.proof_step_count != change.proof_step_count
+                    || recipient.peer_hop_count != change.peer_hop_count
+                    || recipient.artifact_binding != change.artifact_binding
+                    || recipient.verifier_key_id != change.verifier_key_id
+                    || self.recipient_membership_witness.leaf_index == change_witness.leaf_index
+                    || self.recipient_membership_witness.dummy_input_path
+                        != change_witness.dummy_input_path
+                    || self.recipient_bundle == *change_bundle
+                    || recipient.branch_claims.iter().any(|recipient_claim| {
+                        change.branch_claims.iter().any(|change_claim| {
+                            recipient_claim.path.conflicts_with(change_claim.path)
+                        })
+                    })
+                {
+                    return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                        field: "split_result.v4.branch_lineage",
+                    });
+                }
+                Ok(())
+            }
+            _ => Err(KagemushaValidationError::InvalidRecursiveSpendNote {
+                field: "split_result.v4.change_bundle",
+            }),
+        }
+    }
+}
+
+impl KagemushaRecursiveSpendTopUpFinalityEvidenceV4 {
+    /// Validate one bounded finalized V4 origin and its exact compact reference.
+    pub fn validate_public_binding(&self) -> Result<(), KagemushaValidationError> {
+        self.topup_anchor.validate_public_binding()?;
+        self.topup_finality_proof.validate_structure()?;
+        let anchor_ref = self.topup_anchor.compact_ref()?;
+        let anchor_len = to_bytes(&self.topup_anchor)?.len();
+        let proof_len = to_bytes(&self.topup_finality_proof)?.len();
+        if anchor_len == 0
+            || anchor_len > KAGEMUSHA_TOPUP_FINALITY_ANCHOR_MAX_BYTES_V2 as usize
+            || proof_len == 0
+            || proof_len > KAGEMUSHA_TOPUP_FINALITY_PROOF_MAX_BYTES_V2 as usize
+            || self.topup_finality_proof.anchor != anchor_ref
+            || self.topup_finality_proof.commit_qc.height_context.height
+                != self.topup_anchor.finalized_height
+        {
+            return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "verify_request.v4.topup_finality_evidence",
+            });
+        }
+        Ok(())
+    }
+
+    /// Validate the exact canonical origin inventory carried by a V4 state.
+    pub fn validate_ordered_set(
+        evidence: &[Self],
+        expected_refs: &[KagemushaRecursiveSpendTopUpAnchorRefV2],
+    ) -> Result<(), KagemushaValidationError> {
+        if evidence.is_empty()
+            || evidence.len() != expected_refs.len()
+            || evidence.len() > KAGEMUSHA_RECURSIVE_SPEND_MAX_INPUTS_V2
+        {
+            return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "verify_request.v4.topup_finality_evidence_count",
+            });
+        }
+        let mut seen = std::collections::BTreeSet::new();
+        for (evidence, expected_ref) in evidence.iter().zip(expected_refs) {
+            evidence.validate_public_binding()?;
+            let actual_ref = evidence.topup_anchor.compact_ref()?;
+            if actual_ref != *expected_ref || !seen.insert(actual_ref) {
+                return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                    field: "verify_request.v4.topup_finality_evidence_order",
+                });
+            }
+        }
+        Ok(())
+    }
+}
+
+impl KagemushaRecursiveSpendVerifyRequestV4 {
+    /// Validate the terminal receiver request and every V4 proof/provenance binding.
+    pub fn validate_public_binding(&self) -> Result<(), KagemushaValidationError> {
+        self.bundle.validate_public_binding()?;
+        self.artifact_binding.validate()?;
+        self.recipient_request.validate_at(self.verified_at_ms)?;
+        self.topup_finality_roster_artifact.validate_structure()?;
+        let roster_len = to_bytes(&self.topup_finality_roster_artifact)?.len();
+        let statement = &self.bundle.statement;
+        if self.verified_at_ms == 0
+            || self.block_height == 0
+            || self.maximum_hops == 0
+            || self.maximum_hops > KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2
+            || statement.peer_hop_count > self.maximum_hops
+            || self.artifact_binding != statement.artifact_binding
+            || self.recipient_request.chain_id != statement.chain_id
+            || self.recipient_request.asset != statement.asset
+            || self.recipient_request.amount.scale != statement.asset_scale
+            || statement.current_note != self.recipient_request.recipient_output
+            || roster_len == 0
+            || roster_len > KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_MAX_BYTES_V2 as usize
+            || self.topup_finality_roster_artifact.chain_id != statement.chain_id
+            || self.topup_finality_roster_artifact.artifact_generation
+                != self.artifact_binding.generation
+        {
+            return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "verify_request.v4",
+            });
+        }
+        KagemushaRecursiveSpendTopUpFinalityEvidenceV4::validate_ordered_set(
+            &self.topup_finality_evidence,
+            &statement.topup_anchor_refs,
+        )?;
+        let mut anchored_total = 0_u128;
+        for evidence in &self.topup_finality_evidence {
+            let anchor = &evidence.topup_anchor;
+            if anchor.chain_id != statement.chain_id
+                || anchor.asset.definition() != &statement.asset
+                || anchor.asset_scale != statement.asset_scale
+                || anchor.artifact_binding != self.artifact_binding
+                || anchor.finalized_height > self.block_height
+                || evidence
+                    .topup_finality_proof
+                    .commit_qc
+                    .height_context
+                    .chain_id
+                    != statement.chain_id
+                || self
+                    .topup_finality_roster_artifact
+                    .window_at(anchor.finalized_height)
+                    .is_err()
+            {
+                return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                    field: "verify_request.v4.topup_finality_evidence_binding",
+                });
+            }
+            anchored_total = anchored_total
+                .checked_add(anchor.amount.atomic_units)
+                .ok_or(KagemushaValidationError::InvalidRecursiveSpendProof {
+                    field: "verify_request.v4.topup_finality_amount",
+                })?;
+        }
+        if anchored_total < statement.current_note.amount.atomic_units {
+            return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "verify_request.v4.topup_finality_amount",
+            });
+        }
+        let Some(KagemushaRecursiveSpendTransitionV2::PeerSplit(transition)) =
+            statement.transition.as_ref()
+        else {
+            return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "verify_request.v4.transition",
+            });
+        };
+        if transition.branch != KagemushaRecursiveSpendBranchV2::Recipient
+            || transition.recipient_request_digest != self.recipient_request.digest()?
+        {
+            return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "verify_request.v4.recipient_binding",
+            });
+        }
+        let encoded_len = to_bytes(self)?.len();
+        if encoded_len > KAGEMUSHA_RECURSIVE_SPEND_VERIFY_REQUEST_MAX_BYTES_V4 {
+            return Err(KagemushaValidationError::EncodedSizeExceeded {
+                actual: encoded_len,
+                max: KAGEMUSHA_RECURSIVE_SPEND_VERIFY_REQUEST_MAX_BYTES_V4,
+            });
+        }
+        Ok(())
+    }
+
+    /// Return the V4-domain binding of request, exact output note, and opaque bundle.
+    pub fn request_output_binding_digest(&self) -> Result<[u8; 32], KagemushaValidationError> {
+        self.validate_public_binding()?;
+        kagemusha_poseidon_preimage(&KagemushaRequestOutputBindingDigestPreimageV4 {
+            domain: KAGEMUSHA_REQUEST_OUTPUT_BINDING_DIGEST_DOMAIN_V4.to_owned(),
+            recipient_request_digest: self.recipient_request.digest()?,
+            recipient_output: self.bundle.statement.current_note.clone(),
+            bundle_digest: self.bundle.digest()?,
+        })
+    }
+}
+
+impl KagemushaRecursiveSpendVerifyResultV4 {
+    /// Enforce the single successful ABI-20 receiver-acceptance contract.
+    pub fn validate_public_binding(&self) -> Result<(), KagemushaValidationError> {
+        self.summary.amount.validate()?;
+        self.summary.artifact_binding.validate()?;
+        validate_kagemusha_recursive_spend_branch_claims_v2(&self.summary.branch_claims)?;
+        let activation_window_valid = matches!(
+            (self.verifier_activation_height, self.verifier_withdraw_height),
+            (Some(activation), Some(withdrawal))
+                if activation > 0
+                    && activation < withdrawal
+                    && self.verified_at_block_height >= activation
+                    && self.verified_at_block_height < withdrawal
+        );
+        if !self.valid
+            || !self.chain_admissible
+            || !self.lineage_redeemable
+            || !self.witnessless_redemption_supported
+            || self.recipient_request_digest == [0; 32]
+            || self.request_output_binding_digest == [0; 32]
+            || self.summary.bundle_digest == [0; 32]
+            || self.verifier_circuit_id != KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4
+            || self.verified_at_block_height == 0
+            || self.verified_at_ms == 0
+            || !activation_window_valid
+            || self.summary.verifier_key_id != self.verifier_key_id
+            || self.verifier_key_id.name != self.verifier_circuit_id
+            || self.verifier_key_id.backend.as_str()
+                != KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4
+        {
+            return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "verify_result.v4",
+            });
+        }
+        Ok(())
+    }
+}
+
+impl KagemushaRecursiveSpendRedeemBuildRequestV4 {
+    /// Validate the common full/partial ABI-20 redemption-builder input.
+    pub fn validate_public_binding(&self) -> Result<(), KagemushaValidationError> {
+        self.bundle.validate_public_binding()?;
+        self.redemption.validate_public_binding()?;
+        self.public_amount.validate()?;
+        validate_kagemusha_redeem_proof_attachment_v2(&self.unshield_proof)?;
+        let statement = &self.bundle.statement;
+        if self.block_height == 0
+            || self.operation_id == [0; 32]
+            || self.operation_id != self.redemption.operation_id
+            || self.recipient != self.redemption.recipient
+            || self.public_amount != self.redemption.public_amount
+            || self.redemption.chain_id != statement.chain_id
+            || self.redemption.asset != statement.asset
+            || self.redemption.parent_bundle_digest != self.bundle.digest()?
+            || self.redemption.input_note != statement.current_note
+            || self.redemption.input_root != statement.final_root
+            || self.redemption.parent_branch_claims != statement.branch_claims
+            || self.redemption.parent_topup_anchor_refs != statement.topup_anchor_refs
+            || self.redemption.parent_proof_step_count != statement.proof_step_count
+            || self.redemption.parent_peer_hop_count != statement.peer_hop_count
+        {
+            return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "redeem_build_request.v4",
+            });
+        }
+        match (
+            &self.redemption.change_output,
+            &self.redemption.change_artifact_binding,
+        ) {
+            (None, None) => Ok(()),
+            (Some(_), Some(binding)) if binding == &statement.artifact_binding => Ok(()),
+            _ => Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "redeem_build_request.v4.change",
+            }),
+        }
+    }
+}
+
+impl KagemushaRecursiveSpendRedeemChangeBranchV4 {
+    /// Validate the sole continuing child of a partial redemption.
+    pub fn validate_for_redemption(
+        &self,
+        input_bundle: &KagemushaRecursiveSpendBundleV4,
+        redemption: &KagemushaRecursiveSpendRedemptionIntentV4,
+    ) -> Result<(), KagemushaValidationError> {
+        input_bundle.validate_public_binding()?;
+        redemption.validate_public_binding()?;
+        self.output.validate_public_binding()?;
+        self.bundle.validate_public_binding()?;
+        let expected_output = redemption.change_output.as_ref().ok_or(
+            KagemushaValidationError::InvalidRecursiveSpendNote {
+                field: "offline_change.v4",
+            },
+        )?;
+        let expected_binding = redemption.change_artifact_binding.as_ref().ok_or(
+            KagemushaValidationError::InvalidRecursiveSpendNote {
+                field: "offline_change.v4",
+            },
+        )?;
+        let expected_claims = redemption.change_branch_claims()?;
+        if &self.output != expected_output
+            || self.branch_claims != expected_claims
+            || self.bundle.statement.current_note != self.output
+            || self.bundle.statement.branch_claims != self.branch_claims
+        {
+            return Err(KagemushaValidationError::InvalidRecursiveSpendNote {
+                field: "offline_change.v4.branch",
+            });
+        }
+        let Some(KagemushaRecursiveSpendTransitionV2::RedemptionChange(transition)) =
+            self.bundle.statement.transition.as_ref()
+        else {
+            return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "offline_change.v4.transition",
+            });
+        };
+        if transition.binding_digest != redemption.binding_digest()?
+            || transition.parent_bundle_digest != redemption.parent_bundle_digest
+            || transition.operation_id != redemption.operation_id
+            || transition.parent_proof_step_count != redemption.parent_proof_step_count
+            || transition.parent_peer_hop_count != redemption.parent_peer_hop_count
+        {
+            return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "offline_change.v4.transition",
+            });
+        }
+        let input = &input_bundle.statement;
+        let change = &self.bundle.statement;
+        if redemption.parent_bundle_digest != input_bundle.digest()?
+            || redemption.input_note != input.current_note
+            || redemption.parent_branch_claims != input.branch_claims
+            || redemption.parent_topup_anchor_refs != input.topup_anchor_refs
+            || redemption.parent_proof_step_count != input.proof_step_count
+            || redemption.parent_peer_hop_count != input.peer_hop_count
+            || redemption.input_root != input.final_root
+            || change.chain_id != input.chain_id
+            || change.asset != input.asset
+            || change.asset_scale != input.asset_scale
+            || change.final_root == input.final_root
+            || change.topup_anchor_refs != input.topup_anchor_refs
+            || input.proof_step_count == 0
+            || input.proof_step_count.checked_add(1) != Some(change.proof_step_count)
+            || change.peer_hop_count != input.peer_hop_count
+            || &change.artifact_binding != expected_binding
+            || change.verifier_key_id.name != KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4
+            || change.verifier_key_id.backend.as_str()
+                != KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4
+        {
+            return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "offline_change.v4.parent_binding",
+            });
+        }
+        Ok(())
+    }
+}
+
+impl KagemushaRecursiveSpendRedeemUnsignedV4 {
+    /// Validate exact full-terminal or partial-with-one-change redemption semantics.
+    pub fn validate_public_binding(&self) -> Result<(), KagemushaValidationError> {
+        self.bundle.validate_public_binding()?;
+        self.redemption.validate_public_binding()?;
+        self.amount.validate()?;
+        validate_kagemusha_redeem_proof_attachment_v2(&self.redeem_proof)?;
+        let statement = &self.bundle.statement;
+        if self.block_height == 0
+            || self.operation_id == [0; 32]
+            || self.operation_id != self.redemption.operation_id
+            || self.recipient != self.redemption.recipient
+            || self.amount != self.redemption.public_amount
+            || self.redemption.chain_id != statement.chain_id
+            || self.redemption.asset != statement.asset
+            || self.redemption.parent_bundle_digest != self.bundle.digest()?
+            || self.redemption.input_note != statement.current_note
+            || self.redemption.input_root != statement.final_root
+            || self.redemption.parent_branch_claims != statement.branch_claims
+            || self.redemption.parent_topup_anchor_refs != statement.topup_anchor_refs
+            || self.redemption.parent_proof_step_count != statement.proof_step_count
+            || self.redemption.parent_peer_hop_count != statement.peer_hop_count
+        {
+            return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "redeem_request.v4",
+            });
+        }
+        match (&self.redemption.change_output, &self.offline_change) {
+            (None, None) => Ok(()),
+            (Some(_), Some(change)) => {
+                change.validate_for_redemption(&self.bundle, &self.redemption)
+            }
+            _ => Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "redeem_request.v4.offline_change",
+            }),
+        }
+    }
+
+    /// Return the exact V4 authorization payload digest.
+    pub fn digest(&self) -> Result<[u8; 32], KagemushaValidationError> {
+        self.validate_public_binding()?;
+        kagemusha_poseidon_preimage(&KagemushaRedeemUnsignedPayloadDigestPreimageV4 {
+            domain: KAGEMUSHA_REDEEM_PAYLOAD_DIGEST_DOMAIN_V4.to_owned(),
+            bundle: self.bundle.clone(),
+            recipient: self.recipient.clone(),
+            amount: self.amount,
+            redeem_proof: self.redeem_proof.clone(),
+            redemption: self.redemption.clone(),
+            offline_change: self.offline_change.clone(),
+            block_height: self.block_height,
+            operation_id: self.operation_id,
+        })
+    }
+
+    /// Attach the matching recipient authorization without altering any signed field.
+    pub fn into_request(
+        self,
+        authorization: KagemushaRequestAuthorizationV2,
+    ) -> Result<KagemushaRecursiveSpendRedeemRequestV4, KagemushaValidationError> {
+        let request = KagemushaRecursiveSpendRedeemRequestV4 {
+            bundle: self.bundle,
+            recipient: self.recipient,
+            amount: self.amount,
+            redeem_proof: self.redeem_proof,
+            redemption: self.redemption,
+            offline_change: self.offline_change,
+            block_height: self.block_height,
+            operation_id: self.operation_id,
+            authorization,
+        };
+        request.validate_public_binding()?;
+        Ok(request)
+    }
+}
+
+impl KagemushaRecursiveSpendRedeemBuildResultV4 {
+    /// Validate the atomic unsigned request plus its optional change/witness package.
+    pub fn validate_public_binding(&self) -> Result<(), KagemushaValidationError> {
+        self.unsigned.validate_public_binding()?;
+        if self.operation_id == [0; 32]
+            || self.operation_id != self.unsigned.operation_id
+            || self.authorization_digest != self.unsigned.digest()?
+        {
+            return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "redeem_build_result.v4",
+            });
+        }
+        match (
+            &self.unsigned.offline_change,
+            &self.offline_change_bundle,
+            &self.offline_change_membership_witness,
+        ) {
+            (None, None, None) => Ok(()),
+            (Some(branch), Some(bundle), Some(witness)) if &branch.bundle == bundle => {
+                branch.validate_for_redemption(&self.unsigned.bundle, &self.unsigned.redemption)?;
+                witness.validate_for_root(bundle.statement.final_root)
+            }
+            _ => Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "redeem_build_result.v4.offline_change",
+            }),
+        }
+    }
+
+    /// Validate this prepared result against the exact builder input.
+    pub fn validate_for_request(
+        &self,
+        request: &KagemushaRecursiveSpendRedeemBuildRequestV4,
+    ) -> Result<(), KagemushaValidationError> {
+        request.validate_public_binding()?;
+        self.validate_public_binding()?;
+        if self.operation_id != request.operation_id
+            || self.unsigned.bundle != request.bundle
+            || self.unsigned.recipient != request.recipient
+            || self.unsigned.amount != request.public_amount
+            || self.unsigned.redeem_proof != request.unshield_proof
+            || self.unsigned.redemption != request.redemption
+            || self.unsigned.block_height != request.block_height
+            || self.offline_change_bundle.is_some() != request.redemption.change_output.is_some()
+        {
+            return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "redeem_build_result.v4.request",
+            });
+        }
+        Ok(())
+    }
+
+    /// Attach authorization and retain local change membership state.
+    pub fn into_redeem_result(
+        self,
+        authorization: KagemushaRequestAuthorizationV2,
+    ) -> Result<KagemushaRecursiveSpendRedeemResultV4, KagemushaValidationError> {
+        self.validate_public_binding()?;
+        let operation_id = self.operation_id;
+        let offline_change_bundle = self.offline_change_bundle;
+        let offline_change_membership_witness = self.offline_change_membership_witness;
+        let request = self.unsigned.into_request(authorization)?;
+        let result = KagemushaRecursiveSpendRedeemResultV4 {
+            redeem_request_archive: to_bytes(&request)?,
+            offline_change_bundle,
+            offline_change_membership_witness,
+            operation_id,
+        };
+        result.validate_public_binding()?;
+        Ok(result)
+    }
+}
+
+impl KagemushaRecursiveSpendRedeemRequestV4 {
+    /// Reconstruct the exact canonical V4 fields covered by authorization.
+    #[must_use]
+    pub fn unsigned_payload(&self) -> KagemushaRecursiveSpendRedeemUnsignedV4 {
+        KagemushaRecursiveSpendRedeemUnsignedV4 {
+            bundle: self.bundle.clone(),
+            recipient: self.recipient.clone(),
+            amount: self.amount,
+            redeem_proof: self.redeem_proof.clone(),
+            redemption: self.redemption.clone(),
+            offline_change: self.offline_change.clone(),
+            block_height: self.block_height,
+            operation_id: self.operation_id,
+        }
+    }
+
+    /// Validate exact conservation and the self-contained recipient authorization.
+    pub fn validate_public_binding(&self) -> Result<(), KagemushaValidationError> {
+        let unsigned = self.unsigned_payload();
+        unsigned.validate_public_binding()?;
+        if self.authorization.operation_id != self.operation_id
+            || self.authorization.authority != self.recipient
+        {
+            return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "authorization.v4",
+            });
+        }
+        self.authorization.validate_for_payload(unsigned.digest()?)
+    }
+
+    /// Return the digest of every unsigned V4 redemption field.
+    pub fn unsigned_payload_digest(&self) -> Result<[u8; 32], KagemushaValidationError> {
+        self.unsigned_payload().digest()
+    }
+
+    /// Verify recipient authorization at authoritative Torii time.
+    pub fn validate_authorization_at(&self, now_ms: u64) -> Result<(), KagemushaValidationError> {
+        self.validate_public_binding()?;
+        self.authorization
+            .validate_for_payload_at(self.unsigned_payload_digest()?, now_ms)
+    }
+}
+
+impl KagemushaRecursiveSpendRedeemResultV4 {
+    /// Validate the canonical request archive and terminal/change result shape.
+    pub fn validate_public_binding(&self) -> Result<(), KagemushaValidationError> {
+        if self.operation_id == [0; 32]
+            || self.redeem_request_archive.is_empty()
+            || self.redeem_request_archive.len()
+                > KAGEMUSHA_RECURSIVE_SPEND_REDEEM_REQUEST_MAX_BYTES_V4
+        {
+            return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "redeem_result.v4",
+            });
+        }
+        let request: KagemushaRecursiveSpendRedeemRequestV4 =
+            norito::decode_from_bytes(&self.redeem_request_archive).map_err(|_| {
+                KagemushaValidationError::InvalidRecursiveSpendProof {
+                    field: "redeem_result.v4.request_archive",
+                }
+            })?;
+        request.validate_public_binding()?;
+        if request.operation_id != self.operation_id {
+            return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "redeem_result.v4.operation_id",
+            });
+        }
+        match (
+            &request.offline_change,
+            &self.offline_change_bundle,
+            &self.offline_change_membership_witness,
+        ) {
+            (None, None, None) => Ok(()),
+            (Some(branch), Some(bundle), Some(witness)) if &branch.bundle == bundle => {
+                branch.validate_for_redemption(&request.bundle, &request.redemption)?;
+                witness.validate_for_root(bundle.statement.final_root)
+            }
+            _ => Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "redeem_result.v4.offline_change",
+            }),
+        }
+    }
+}
+
+#[cfg(test)]
+mod kagemusha_v4_lifecycle_additional_domain_tests {
+    use super::*;
+
+    #[test]
+    fn abi20_bundle_request_and_redemption_domains_are_unique() {
+        let v4 = [
+            KAGEMUSHA_RECURSIVE_SPEND_BUNDLE_DIGEST_DOMAIN_V4,
+            KAGEMUSHA_REDEEM_PAYLOAD_DIGEST_DOMAIN_V4,
+            KAGEMUSHA_REQUEST_OUTPUT_BINDING_DIGEST_DOMAIN_V4,
+        ];
+        assert_eq!(
+            v4.into_iter()
+                .collect::<std::collections::BTreeSet<_>>()
+                .len(),
+            v4.len()
+        );
+        assert_ne!(
+            KAGEMUSHA_RECURSIVE_SPEND_BUNDLE_DIGEST_DOMAIN_V4,
+            KAGEMUSHA_RECURSIVE_SPEND_BUNDLE_DIGEST_DOMAIN_V2
+        );
+        assert_ne!(
+            KAGEMUSHA_REDEEM_PAYLOAD_DIGEST_DOMAIN_V4,
+            KAGEMUSHA_REDEEM_PAYLOAD_DIGEST_DOMAIN_V2
+        );
     }
 }

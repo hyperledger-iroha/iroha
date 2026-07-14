@@ -14,6 +14,12 @@ cleanup() {
 }
 trap cleanup EXIT
 
+run_xtask() {
+  CARGO_TARGET_DIR="${XTASK_TARGET_DIR}" \
+    NORITO_SKIP_BINDINGS_SYNC=1 \
+    cargo run -p xtask --bin xtask -- "$@"
+}
+
 HOST_SUMMARY_TMP="$(mktemp -t soradns-host-summary.XXXXXX.json)"
 GAR_TEMPLATE_TMP="$(mktemp -t soradns-gar-template.XXXXXX.json)"
 tmp_files+=("${HOST_SUMMARY_TMP}" "${GAR_TEMPLATE_TMP}")
@@ -21,7 +27,7 @@ tmp_files+=("${HOST_SUMMARY_TMP}" "${GAR_TEMPLATE_TMP}")
 echo "[docs-portal] verifying SoraDNS host patterns for docs.sora"
 (
   cd "${REPO_ROOT}"
-  CARGO_TARGET_DIR="${XTASK_TARGET_DIR}" cargo xtask soradns-hosts \
+  run_xtask soradns-hosts \
     --name docs.sora \
     --json-out "${HOST_SUMMARY_TMP}" \
     --verify-host-patterns "${REPO_ROOT}/docs/examples/soradns_host_patterns_docs_sora.json"
@@ -30,7 +36,7 @@ echo "[docs-portal] verifying SoraDNS host patterns for docs.sora"
 echo "[docs-portal] verifying GAR template matches checked-in reference"
 (
   cd "${REPO_ROOT}"
-  CARGO_TARGET_DIR="${XTASK_TARGET_DIR}" cargo xtask soradns-gar-template \
+  run_xtask soradns-gar-template \
     --name docs.sora \
     --manifest-cid bafybeigdyrzt2vx7demoexamplecid \
     --manifest-digest 8a2a332d5e52edc13ed088b79b6b2940af0b31c7f7fbb9324a88acdf1a0af07d \
@@ -63,11 +69,7 @@ node scripts/check-openapi-signatures.mjs \
   --allow-unsigned=current
 
 if command -v npm >/dev/null 2>&1; then
-  if [[ -n "${CI:-}" ]]; then
-    npm ci
-  else
-    npm install
-  fi
+  npm ci
 else
   echo "error: npm is required to build the developer portal" >&2
   exit 1

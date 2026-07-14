@@ -133,6 +133,15 @@ pub struct FeeSponsorContractSelector {
 pub struct FeeSponsorRule {
     /// Allow or deny effect.
     pub effect: FeeSponsorRuleEffect,
+    /// Optional maximum total transaction fee for this allow rule.
+    ///
+    /// This lets one policy safely cover operations with materially different
+    /// fee envelopes (for example, one native retail transfer versus a bounded
+    /// contract call). It is ignored for deny rules; deny selectors always
+    /// override matching allow rules.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(default)]
+    pub max_fee: Option<Quantity>,
     /// Optional data-space selector. Empty means all data spaces.
     #[norito(default)]
     pub dataspaces: BTreeSet<DataSpaceId>,
@@ -153,6 +162,7 @@ impl FeeSponsorRule {
     pub fn new(effect: FeeSponsorRuleEffect) -> Self {
         Self {
             effect,
+            max_fee: None,
             dataspaces: BTreeSet::new(),
             executable_kinds: BTreeSet::new(),
             instruction_wire_ids: BTreeSet::new(),
@@ -210,6 +220,16 @@ mod tests {
         rules: Vec<FeeSponsorRule>,
     }
 
+    #[derive(Encode)]
+    struct ForgedFeeSponsorRule {
+        effect: FeeSponsorRuleEffect,
+        max_fee: Option<Numeric>,
+        dataspaces: BTreeSet<DataSpaceId>,
+        executable_kinds: BTreeSet<FeeSponsorExecutableKind>,
+        instruction_wire_ids: BTreeSet<String>,
+        contract_selectors: Vec<FeeSponsorContractSelector>,
+    }
+
     fn sponsor_account() -> AccountId {
         let keypair = KeyPair::try_from_seed(vec![0x53; 32], Algorithm::Ed25519)
             .expect("fixture seed derives Ed25519 keypair");
@@ -263,6 +283,7 @@ mod tests {
     fn constructors_default_to_locked_down_policy_shapes() {
         let rule = FeeSponsorRule::new(FeeSponsorRuleEffect::Deny);
         assert_eq!(rule.effect, FeeSponsorRuleEffect::Deny);
+        assert_eq!(rule.max_fee, None);
         assert!(rule.dataspaces.is_empty());
         assert!(rule.executable_kinds.is_empty());
         assert!(rule.instruction_wire_ids.is_empty());
@@ -295,6 +316,53 @@ mod tests {
         assert!(
             FeeSponsorPolicy::decode(&mut encoded.as_slice()).is_err(),
             "a negative signed payload must not decode as a sponsor fee cap"
+        );
+    }
+
+    #[test]
+    fn negative_numeric_payload_cannot_decode_as_rule_fee_cap() {
+        let forged = ForgedFeeSponsorRule {
+            effect: FeeSponsorRuleEffect::Allow,
+            max_fee: Some(Numeric::new(-1_i32, 2)),
+            dataspaces: BTreeSet::new(),
+            executable_kinds: BTreeSet::new(),
+            instruction_wire_ids: BTreeSet::new(),
+            contract_selectors: Vec::new(),
+        };
+        let encoded = forged.encode();
+
+        assert!(
+            FeeSponsorRule::decode(&mut encoded.as_slice()).is_err(),
+            "a negative signed payload must not decode as a rule-level sponsor fee cap"
+        );
+    }
+
+    #[test]
+    fn rule_fee_cap_json_roundtrips_and_rejects_negative_or_unknown_fields() {
+        let mut rule = FeeSponsorRule::new(FeeSponsorRuleEffect::Allow);
+        rule.max_fee = Some("0.01".parse().expect("valid rule fee cap"));
+        rule.dataspaces.insert(DataSpaceId::new(10));
+        rule.executable_kinds
+            .insert(FeeSponsorExecutableKind::Instructions);
+        rule.instruction_wire_ids
+            .insert("iroha.transfer".to_owned());
+
+        let json = norito::json::to_json(&rule).expect("serialize rule fee cap");
+        let decoded: FeeSponsorRule =
+            norito::json::from_str(&json).expect("deserialize rule fee cap");
+        assert_eq!(decoded, rule);
+        assert!(json.contains("\"max_fee\":\"0.01\""));
+
+        let negative = json.replacen("\"0.01\"", "\"-0.01\"", 1);
+        assert!(
+            norito::json::from_str::<FeeSponsorRule>(&negative).is_err(),
+            "negative JSON rule fee caps must fail closed"
+        );
+
+        let unknown = json.replacen('{', "{\"unknown_cap\":\"5\",", 1);
+        assert!(
+            norito::json::from_str::<FeeSponsorRule>(&unknown).is_err(),
+            "unknown rule fields must fail closed"
         );
     }
 }

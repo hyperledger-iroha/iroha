@@ -60,26 +60,42 @@ KAGEMUSHA_EXPORTS = {
     "connect_norito_kagemusha_recipient_payment_request_signing_bytes_v2",
     "connect_norito_kagemusha_recipient_payment_request_verify_v2",
     "connect_norito_kagemusha_recursive_spend_append_v2",
+    "connect_norito_kagemusha_recursive_spend_append_v3",
+    "connect_norito_kagemusha_recursive_spend_append_v4",
     "connect_norito_kagemusha_recursive_spend_artifact_begin_v3",
+    "connect_norito_kagemusha_recursive_spend_artifact_begin_v4",
     "connect_norito_kagemusha_recursive_spend_artifact_cancel_v3",
+    "connect_norito_kagemusha_recursive_spend_artifact_cancel_v4",
     "connect_norito_kagemusha_recursive_spend_artifact_finalize_v3",
+    "connect_norito_kagemusha_recursive_spend_artifact_finalize_v4",
     "connect_norito_kagemusha_recursive_spend_artifact_set_install_v3",
+    "connect_norito_kagemusha_recursive_spend_artifact_set_install_v4",
     "connect_norito_kagemusha_recursive_spend_artifact_set_is_installed_v3",
+    "connect_norito_kagemusha_recursive_spend_artifact_set_is_installed_v4",
     "connect_norito_kagemusha_recursive_spend_artifact_set_uninstall_v3",
+    "connect_norito_kagemusha_recursive_spend_artifact_set_uninstall_v4",
     "connect_norito_kagemusha_recursive_spend_artifact_write_v3",
+    "connect_norito_kagemusha_recursive_spend_artifact_write_v4",
     "connect_norito_kagemusha_recursive_spend_build_split_intent_v2",
     "connect_norito_kagemusha_recursive_spend_bundle_summary_v2",
     "connect_norito_kagemusha_recursive_spend_capabilities_v1",
+    "connect_norito_kagemusha_recursive_spend_capabilities_v4",
     "connect_norito_kagemusha_recursive_spend_init_v2",
+    "connect_norito_kagemusha_recursive_spend_init_v3",
+    "connect_norito_kagemusha_recursive_spend_init_v4",
     "connect_norito_kagemusha_recursive_spend_peer_payment_from_split_v2",
     "connect_norito_kagemusha_recursive_spend_peer_payment_validate_v2",
     "connect_norito_kagemusha_recursive_spend_redeem_finalize_request_v2",
     "connect_norito_kagemusha_recursive_spend_redeem_unsigned_payload_digest_v2",
     "connect_norito_kagemusha_recursive_spend_redeem_v2",
+    "connect_norito_kagemusha_recursive_spend_redeem_v3",
+    "connect_norito_kagemusha_recursive_spend_redeem_v4",
     "connect_norito_kagemusha_recursive_spend_topup_finalize_request_v2",
     "connect_norito_kagemusha_recursive_spend_topup_unsigned_payload_digest_v2",
     "connect_norito_kagemusha_recursive_spend_topup_v2",
     "connect_norito_kagemusha_recursive_spend_verify_v2",
+    "connect_norito_kagemusha_recursive_spend_verify_v3",
+    "connect_norito_kagemusha_recursive_spend_verify_v4",
     "connect_norito_kagemusha_request_authorization_create_v2",
     "connect_norito_kagemusha_request_authorization_signing_bytes_v2",
     "connect_norito_kagemusha_topup_finality_verify_v2",
@@ -258,8 +274,8 @@ require_signature_parity(
 )
 
 abi = re.search(r"CONNECT_NORITO_BRIDGE_ABI_VERSION\s*:\s*u32\s*=\s*([0-9]+)\s*;", rust)
-if abi is None or abi.group(1) != "19":
-    raise SystemExit("connect_norito bridge ABI must be exactly 19")
+if abi is None or abi.group(1) != "20":
+    raise SystemExit("connect_norito bridge ABI must be exactly 20")
 if re.search(r'pub\s+unsafe\s+extern\s+"C"\s+fn\s+connect_norito_bridge_abi_version\s*\(', rust) is None:
     raise SystemExit("Rust bridge ABI export is missing")
 if re.search(r"uint32_t\s+connect_norito_bridge_abi_version\s*\(\s*void\s*\)\s*;", header) is None:
@@ -283,14 +299,32 @@ swift_protocol_exports = swift_array("requiredProtocolSymbols")
 if swift_proof_exports & swift_protocol_exports:
     raise SystemExit("Swift proof and protocol symbol inventories must be disjoint")
 if len(swift_proof_exports) != 4 or len(swift_protocol_exports) != 30:
-    raise SystemExit("Swift ABI-19 inventory must contain 4 proof and 30 protocol symbols")
+    raise SystemExit("Swift ABI-20 inventory must contain 4 proof and 30 protocol symbols")
 swift_exports = swift_proof_exports | swift_protocol_exports
-exact("Swift Kagemusha", KAGEMUSHA_EXPORTS, swift_exports)
+swift_compatibility_exports = {
+    "connect_norito_kagemusha_recursive_spend_capabilities_v1",
+    "connect_norito_kagemusha_recursive_spend_init_v2",
+    "connect_norito_kagemusha_recursive_spend_append_v2",
+    "connect_norito_kagemusha_recursive_spend_verify_v2",
+    "connect_norito_kagemusha_recursive_spend_redeem_v2",
+    "connect_norito_kagemusha_recursive_spend_artifact_begin_v3",
+    "connect_norito_kagemusha_recursive_spend_artifact_write_v3",
+    "connect_norito_kagemusha_recursive_spend_artifact_finalize_v3",
+    "connect_norito_kagemusha_recursive_spend_artifact_cancel_v3",
+    "connect_norito_kagemusha_recursive_spend_artifact_set_install_v3",
+    "connect_norito_kagemusha_recursive_spend_artifact_set_is_installed_v3",
+    "connect_norito_kagemusha_recursive_spend_artifact_set_uninstall_v3",
+    "connect_norito_kagemusha_recursive_spend_init_v3",
+    "connect_norito_kagemusha_recursive_spend_append_v3",
+    "connect_norito_kagemusha_recursive_spend_verify_v3",
+    "connect_norito_kagemusha_recursive_spend_redeem_v3",
+}
+exact("Swift Kagemusha", KAGEMUSHA_EXPORTS - swift_compatibility_exports, swift_exports)
 if re.search(r"requiredNativeSymbols\s*=\s*requiredProofSymbols\s*\+\s*requiredProtocolSymbols", swift) is None:
     raise SystemExit("Swift requiredNativeSymbols must combine the exact proof and protocol inventories")
 
 print(
-    "bridge header contract passed: ABI 19, "
+    "bridge header contract passed: ABI 20, "
     f"{len(KAGEMUSHA_EXPORTS)} Kagemusha exports, "
     f"{len(PRIVACY_EXPORTS)} privacy exports, "
     f"{len(SORAFS_REFERENCE_EXPORTS)} SoraFS exports, and "
@@ -384,8 +418,8 @@ if [[ "${MODE}" == --self-test-* ]]; then
   case "${MODE}" in
     --self-test-bad-abi)
       replace_once "${tmp_rust}" \
-        "const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 19;" \
-        "const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 18;"
+        "const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 20;" \
+        "const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 19;"
       ;;
     --self-test-missing-header-symbol)
       replace_once "${tmp_header}" \
@@ -425,8 +459,8 @@ if [[ "${MODE}" == --self-test-* ]]; then
       ;;
     --self-test-bad-receiver-key-signature)
       replace_regex_once "${tmp_header}" \
-        '(connect_norito_kagemusha_receiver_key_reference_v2\s*\(\s*)uint8_t algorithm' \
-        '\g<1>uint32_t algorithm'
+        '(connect_norito_kagemusha_receiver_key_reference_v2\s*\([^;]*?)unsigned long public_key_len' \
+        '\g<1>uint32_t public_key_len'
       ;;
     --self-test-bad-verification-time-signature)
       replace_regex_once "${tmp_header}" \

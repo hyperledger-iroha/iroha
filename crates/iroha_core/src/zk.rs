@@ -47,16 +47,22 @@ pub mod confidential_v2;
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 mod halo2_backend;
 /// Constant-depth Pasta IPA accumulation and terminal decisions for Kagemusha.
-#[cfg(all(feature = "zk-halo2-ipa", any(test, feature = "bench")))]
+#[cfg(feature = "zk-halo2-ipa")]
 pub(crate) mod kagemusha_accumulation;
+/// Authenticated KRV4 framing and role-safe ABI-20 artifact carriers.
+#[cfg(feature = "zk-halo2-ipa")]
+pub mod kagemusha_artifact_v4;
 /// Fixed opposite-field Pasta instructions used by both Kagemusha step parities.
-#[cfg(all(feature = "zk-halo2-ipa", any(test, feature = "bench")))]
+#[cfg(feature = "zk-halo2-ipa")]
 pub(crate) mod kagemusha_cycle_loader;
 /// Offline-verifiable consensus finality for Kagemusha top-up anchors.
 pub mod kagemusha_finality;
 /// Fail-closed boundary for a future circuit-authenticated Axiom IPA recursive verifier.
 #[cfg(feature = "zk-halo2-ipa")]
 pub(crate) mod kagemusha_recursion_adapter;
+/// Exact field-neutral operation ABI and assigned two-parent Step transition.
+#[cfg(feature = "zk-halo2-ipa")]
+pub(crate) mod kagemusha_step_transition;
 /// Branch-safe fractional Kagemusha recursive-spend V2 circuits and artifacts.
 #[cfg(feature = "zk-halo2-ipa")]
 pub mod kagemusha_v2;
@@ -813,8 +819,8 @@ fn is_native_halo2_pasta_circuit_id(circuit_id: &str) -> bool {
             | "halo2/pasta/anon-transfer-2x2-merkle2"
             | "halo2/pasta/anon-transfer-2x2-merkle8"
             | "halo2/pasta/anon-transfer-2x2-merkle16"
-    ) || circuit_id == iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V1
-        || circuit_id == iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V1
+    ) || circuit_id == iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V3
+        || circuit_id == iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V3
         || {
             #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
             {
