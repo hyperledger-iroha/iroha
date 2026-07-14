@@ -1548,7 +1548,10 @@ pub fn soracloud_build_hf_deploy_request_json(
 
     let storage_class = parse_soracloud_storage_class(&storage_class)?;
     let lease_term_ms = parse_positive_u64_literal(&lease_term_ms, "lease_term_ms")?;
-    let base_fee_nanos = parse_positive_u128_literal(&base_fee_nanos, "base_fee_nanos")?;
+    let base_fee_nanos = Quantity::from(parse_positive_u128_literal(
+        &base_fee_nanos,
+        "base_fee_nanos",
+    )?);
     let lease_asset_definition_id = lease_asset_definition_id
         .trim()
         .parse::<AssetDefinitionId>()
@@ -1569,7 +1572,7 @@ pub fn soracloud_build_hf_deploy_request_json(
         storage_class,
         lease_term_ms,
         &lease_asset_definition_id,
-        base_fee_nanos,
+        &base_fee_nanos,
     )
     .map_err(norito_to_napi)?;
     let provenance = sign_soracloud_payload(&keypair, &deploy_payload)?;
@@ -5692,6 +5695,13 @@ fn multi_source_js_error(error: MultiSourceError) -> napi::Error {
 
     let message = format!("{error}");
     let payload = match error {
+        InvalidPlan(reason) => norito_json!({
+            "kind": "multi_source",
+            "code": "invalid_plan",
+            "message": message,
+            "details": reason.to_string(),
+            "retryable": false,
+        }),
         NoProviders => norito_json!({
             "kind": "multi_source",
             "code": "no_providers",
@@ -8446,7 +8456,7 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                 let ballot = CastPlainBallot {
                     referendum_id,
                     owner,
-                    amount,
+                    amount: amount.into(),
                     duration_blocks,
                     direction,
                 };
@@ -8460,7 +8470,10 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                     required_value(&mut fields, "amount", "RegisterCitizen")?,
                     "RegisterCitizen.amount",
                 )?;
-                let instruction = RegisterCitizen { owner, amount };
+                let instruction = RegisterCitizen {
+                    owner,
+                    amount: amount.into(),
+                };
                 return Ok(Box::new(instruction).into_instruction_box());
             }
 
@@ -14466,6 +14479,22 @@ mod tests {
             source_name: None,
             zk: false,
         }
+    }
+
+    #[test]
+    fn multi_source_invalid_plan_is_a_structured_non_retryable_error() {
+        let error = multi_source_js_error(MultiSourceError::InvalidPlan(
+            sorafs_car::CarPlanError::EmptyInput,
+        ));
+        assert_eq!(error.status, napi::Status::GenericFailure);
+        let payload: Value = json::from_str(&error.reason).expect("structured error JSON");
+        assert_eq!(payload["kind"], Value::String("multi_source".to_owned()));
+        assert_eq!(payload["code"], Value::String("invalid_plan".to_owned()));
+        assert_eq!(payload["retryable"], Value::Bool(false));
+        assert_eq!(
+            payload["details"],
+            Value::String("input payload is empty".to_owned())
+        );
     }
 
     #[test]

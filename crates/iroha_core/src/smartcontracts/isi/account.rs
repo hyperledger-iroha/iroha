@@ -1834,28 +1834,16 @@ pub mod query {
         #[metrics(+"find_account_by_alias")]
         fn execute(&self, state_ro: &impl StateReadOnly) -> Result<Account, Error> {
             let world = state_ro.world();
-            let account_id = if let Some(record) = world.account_rekey_records().get(self.alias()) {
-                record.active_account_id.clone()
-            } else if let Some(account_id) = world.account_aliases().get(self.alias()) {
-                account_id.clone()
-            } else {
-                let mut matched_account_id: Option<AccountId> = None;
-                for (account_id, value) in world.accounts().iter() {
-                    if value.as_ref().label() != Some(self.alias()) {
-                        continue;
-                    }
-                    if let Some(existing) = matched_account_id.as_ref()
-                        && existing != account_id
-                    {
-                        return Err(Error::Conversion(format!(
-                            "account alias `{:?}` is bound to multiple accounts: {existing} and {account_id}",
-                            self.alias()
-                        )));
-                    }
-                    matched_account_id = Some(account_id.clone());
-                }
-                matched_account_id.ok_or(Error::NotFound)?
-            };
+            let now_ms = state_ro.latest_block().map_or(0, |block| {
+                u64::try_from(block.header().creation_time().as_millis()).unwrap_or(u64::MAX)
+            });
+            let account_id = crate::sns::resolve_active_account_alias(
+                world,
+                &state_ro.nexus().dataspace_catalog,
+                self.alias(),
+                now_ms,
+            )
+            .ok_or(Error::NotFound)?;
 
             let (account_id, account_value) = world
                 .accounts()

@@ -13338,6 +13338,7 @@ pub mod tests {
                 &fixture.sponsor_id,
                 &stx.nexus,
                 None,
+                stx.block_unix_timestamp_ms(),
             ),
             "read-only sponsor check should honor granted permission"
         );

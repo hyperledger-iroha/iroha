@@ -1180,6 +1180,7 @@ pub(crate) fn parse_permission_account_field(
     dataspace_catalog: &iroha_data_model::nexus::DataSpaceCatalog,
     payload: &iroha_primitives::json::Json,
     field: &str,
+    now_ms: u64,
 ) -> Option<iroha_data_model::account::AccountId> {
     let value = norito::json::parse_value(payload.get()).ok()?;
     let map = match value {
@@ -1191,7 +1192,7 @@ pub(crate) fn parse_permission_account_field(
         norito::json::Value::String(value) => value.as_str(),
         _ => return None,
     };
-    crate::block::parse_account_literal_with_world(world, dataspace_catalog, literal)
+    crate::block::parse_account_literal_with_world(world, dataspace_catalog, literal, now_ms)
         .map(Into::into)
 }
 
@@ -1217,9 +1218,11 @@ fn account_has_alias_in_domain(
     dataspace_catalog: &iroha_data_model::nexus::DataSpaceCatalog,
     account: &AccountId,
     domain: &DomainId,
+    now_ms: u64,
 ) -> bool {
     world.bound_account_aliases(account).iter().any(|alias| {
-        world.account_aliases().get(alias) == Some(account)
+        crate::sns::resolve_active_account_alias(world, dataspace_catalog, alias, now_ms).as_ref()
+            == Some(account)
             && alias
                 .domain_id(dataspace_catalog)
                 .is_ok_and(|alias_domain| alias_domain.as_ref() == Some(domain))
@@ -1231,6 +1234,7 @@ pub(crate) fn fee_sponsor_policy_from_permission(
     dataspace_catalog: &iroha_data_model::nexus::DataSpaceCatalog,
     permission_owner: &AccountId,
     permission: &Permission,
+    now_ms: u64,
 ) -> Option<FeeSponsorPolicyId> {
     match permission.name() {
         "CanUseFeeSponsor" => {
@@ -1239,6 +1243,7 @@ pub(crate) fn fee_sponsor_policy_from_permission(
                 dataspace_catalog,
                 permission.payload(),
                 "sponsor",
+                now_ms,
             )?;
             let name = parse_permission_name_field(permission.payload(), "policy")?;
             Some(FeeSponsorPolicyId::new(sponsor, name))
@@ -1256,6 +1261,7 @@ pub(crate) fn fee_sponsor_policy_from_permission(
                         dataspace_catalog,
                         permission_owner,
                         &token.domain,
+                        now_ms,
                     )
             })
             .map(|token| FeeSponsorPolicyId::new(token.sponsor, token.policy)),
@@ -1268,12 +1274,13 @@ pub(crate) fn dataspace_fee_sponsor_from_config(
     dataspace_catalog: &iroha_data_model::nexus::DataSpaceCatalog,
     dataspace_fee_sponsors: &BTreeMap<DataSpaceId, String>,
     dataspace: DataSpaceId,
+    now_ms: u64,
 ) -> Result<Option<AccountId>, iroha_data_model::ValidationFail> {
     let Some(literal) = dataspace_fee_sponsors.get(&dataspace) else {
         return Ok(None);
     };
 
-    crate::block::parse_account_literal_with_world(world, dataspace_catalog, literal)
+    crate::block::parse_account_literal_with_world(world, dataspace_catalog, literal, now_ms)
         .map(Some)
         .ok_or_else(|| {
             iroha_data_model::ValidationFail::InternalError(format!(
@@ -1289,11 +1296,18 @@ pub(crate) fn dataspace_fee_sponsor_matches(
     dataspace_fee_sponsors: &BTreeMap<DataSpaceId, String>,
     dataspace: DataSpaceId,
     account_id: &AccountId,
+    now_ms: u64,
 ) -> bool {
-    dataspace_fee_sponsor_from_config(world, dataspace_catalog, dataspace_fee_sponsors, dataspace)
-        .ok()
-        .flatten()
-        .is_some_and(|sponsor| sponsor.subject_id() == account_id.subject_id())
+    dataspace_fee_sponsor_from_config(
+        world,
+        dataspace_catalog,
+        dataspace_fee_sponsors,
+        dataspace,
+        now_ms,
+    )
+    .ok()
+    .flatten()
+    .is_some_and(|sponsor| sponsor.subject_id() == account_id.subject_id())
 }
 
 pub(crate) fn dataspace_fee_sponsor_policy_from_config(
@@ -1302,12 +1316,14 @@ pub(crate) fn dataspace_fee_sponsor_policy_from_config(
     dataspace_fee_sponsors: &BTreeMap<DataSpaceId, String>,
     dataspace_fee_sponsor_policies: &BTreeMap<DataSpaceId, Name>,
     dataspace: DataSpaceId,
+    now_ms: u64,
 ) -> Result<Option<FeeSponsorPolicyId>, iroha_data_model::ValidationFail> {
     let Some(sponsor) = dataspace_fee_sponsor_from_config(
         world,
         dataspace_catalog,
         dataspace_fee_sponsors,
         dataspace,
+        now_ms,
     )?
     else {
         return Ok(None);
@@ -1336,6 +1352,7 @@ impl AccountPermissionSummary {
         dataspace_catalog: &iroha_data_model::nexus::DataSpaceCatalog,
         permission_owner: &AccountId,
         permission: &Permission,
+        now_ms: u64,
     ) {
         match permission.name() {
             "CanRegisterTrigger" => {
@@ -1344,6 +1361,7 @@ impl AccountPermissionSummary {
                     dataspace_catalog,
                     permission.payload(),
                     "authority",
+                    now_ms,
                 ) {
                     self.reg_trigger_authorities.insert(authority);
                 }
@@ -1362,6 +1380,7 @@ impl AccountPermissionSummary {
                     dataspace_catalog,
                     permission_owner,
                     permission,
+                    now_ms,
                 ) {
                     self.fee_sponsor_policies.insert(policy_id);
                 }
@@ -54931,14 +54950,16 @@ mod permission_cache_tests {
             &stx.nexus.dataspace_catalog,
             &stx.nexus.dataspace_fee_sponsors,
             DataSpaceId::UNIVERSAL,
-            &sponsor
+            &sponsor,
+            stx.block_unix_timestamp_ms(),
         ));
         assert!(!super::dataspace_fee_sponsor_matches(
             &stx.world,
             &stx.nexus.dataspace_catalog,
             &stx.nexus.dataspace_fee_sponsors,
             DataSpaceId::UNIVERSAL,
-            &caller
+            &caller,
+            stx.block_unix_timestamp_ms(),
         ));
     }
 
@@ -55355,12 +55376,14 @@ mod permission_cache_tests {
                 &stx.nexus.dataspace_catalog,
                 &registrar,
                 &Permission::from(permission_register.clone()),
+                stx.block_unix_timestamp_ms(),
             );
             summary.apply_grant(
                 &stx.world,
                 &stx.nexus.dataspace_catalog,
                 &registrar,
                 &Permission::from(permission_execute.clone()),
+                stx.block_unix_timestamp_ms(),
             );
             stx.perm_cache.insert_summary(registrar.clone(), summary);
             assert!(
@@ -57965,9 +57988,10 @@ impl StateTransaction<'_, '_> {
     fn build_permission_summary(&mut self, account: &AccountId) -> AccountPermissionSummary {
         let world = &self.world;
         let dataspace_catalog = &self.nexus.dataspace_catalog;
+        let now_ms = self.block_unix_timestamp_ms();
         let mut summary = AccountPermissionSummary::default();
         let mut merge_permission = |permission: &Permission| {
-            summary.apply_grant(world, dataspace_catalog, account, permission);
+            summary.apply_grant(world, dataspace_catalog, account, permission, now_ms);
         };
         if let Some(perms) = world.account_permissions.get(account) {
             for permission in perms {
@@ -58044,6 +58068,7 @@ impl StateTransaction<'_, '_> {
                 &self.nexus.dataspace_catalog,
                 caller,
                 &permission.domain,
+                self.block_unix_timestamp_ms(),
             ) {
                 policies.insert(FeeSponsorPolicyId::new(
                     permission.sponsor,
@@ -58059,6 +58084,7 @@ impl StateTransaction<'_, '_> {
                 &self.nexus.dataspace_fee_sponsors,
                 &self.nexus.dataspace_fee_sponsor_policies,
                 dataspace_id,
+                self.block_unix_timestamp_ms(),
             )
             && default_policy.sponsor.subject_id() == sponsor.subject_id()
         {
@@ -65251,6 +65277,7 @@ mod tests {
             &Permission::from(CanRegisterTrigger {
                 authority: account_id.clone(),
             }),
+            0,
         );
         summary.apply_grant(
             &world_view,
@@ -65260,6 +65287,7 @@ mod tests {
                 sponsor: account_id.clone(),
                 policy: "default".parse().expect("default fee sponsor policy"),
             }),
+            0,
         );
         let exact_policy: Name = "retail".parse().expect("exact fee sponsor policy");
         let exact_permission = Permission::from(CanUseFeeSponsorForAccount {
@@ -65273,6 +65301,7 @@ mod tests {
             &dataspace_catalog,
             &account_id,
             &exact_permission,
+            0,
         );
 
         let (other_account, _other_keypair) = gen_account_in("elsewhere");
@@ -65282,6 +65311,7 @@ mod tests {
             &dataspace_catalog,
             &other_account,
             &exact_permission,
+            0,
         );
         let wrong_domain_permission = Permission::from(CanUseFeeSponsorForAccount {
             sponsor: account_id.clone(),
@@ -65316,6 +65346,7 @@ mod tests {
                 &dataspace_catalog,
                 &account_id,
                 &exact_permission,
+                0,
             ),
             Some(FeeSponsorPolicyId::new(account_id.clone(), exact_policy,)),
             "the live exact-domain check must accept the bound beneficiary"
@@ -65326,6 +65357,7 @@ mod tests {
                 &dataspace_catalog,
                 &account_id,
                 &wrong_domain_permission,
+                0,
             ),
             None,
             "an exact sponsor token must be inert unless the beneficiary currently has an alias in its delegated FI domain"

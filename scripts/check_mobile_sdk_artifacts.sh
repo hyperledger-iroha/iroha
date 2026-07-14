@@ -91,6 +91,100 @@ fi
 ROOT_DIR="$(cd "$ROOT_ARG" && pwd)"
 FAILURES=0
 
+# The first mobile release is one exact ABI-20/V4 contract. Keep the complete
+# Kagemusha C export allow-list here so Apple archives, Android shared objects,
+# checked-out Rust, and the checked-in header are all compared against the same
+# surface. V2 suffixes below are supporting request/finality primitives used by
+# the V4 lifecycle; V1/V2/V3 lifecycle and V3 artifact entrypoints are retired.
+KAGEMUSHA_C_SYMBOLS=(
+  connect_norito_kagemusha_recursive_spend_capabilities_v4
+  connect_norito_kagemusha_topup_finality_verify_v2
+  connect_norito_kagemusha_topup_shield_build_unsigned_v2
+  connect_norito_kagemusha_recursive_spend_artifact_begin_v4
+  connect_norito_kagemusha_recursive_spend_artifact_write_v4
+  connect_norito_kagemusha_recursive_spend_artifact_finalize_v4
+  connect_norito_kagemusha_recursive_spend_artifact_cancel_v4
+  connect_norito_kagemusha_recursive_spend_artifact_set_install_v4
+  connect_norito_kagemusha_recursive_spend_artifact_set_is_installed_v4
+  connect_norito_kagemusha_recursive_spend_artifact_set_uninstall_v4
+  connect_norito_kagemusha_recursive_spend_init_v4
+  connect_norito_kagemusha_recursive_spend_topup_unsigned_payload_digest_v2
+  connect_norito_kagemusha_recursive_spend_topup_finalize_request_v2
+  connect_norito_kagemusha_recursive_spend_topup_v2
+  connect_norito_kagemusha_recursive_spend_append_v4
+  connect_norito_kagemusha_recursive_spend_verify_v4
+  connect_norito_kagemusha_recursive_spend_redeem_unsigned_payload_digest_v2
+  connect_norito_kagemusha_recursive_spend_redeem_finalize_request_v2
+  connect_norito_kagemusha_recursive_spend_redeem_v4
+  connect_norito_kagemusha_receiver_key_reference_v2
+  connect_norito_kagemusha_recipient_output_derive_v2
+  connect_norito_kagemusha_recipient_payment_request_signing_bytes_v2
+  connect_norito_kagemusha_recipient_payment_request_create_v2
+  connect_norito_kagemusha_recipient_payment_request_verify_v2
+  connect_norito_kagemusha_request_authorization_signing_bytes_v2
+  connect_norito_kagemusha_request_authorization_create_v2
+  connect_norito_kagemusha_receiver_acknowledgement_payload_v2
+  connect_norito_kagemusha_receiver_acknowledgement_signing_bytes_v2
+  connect_norito_kagemusha_receiver_acknowledgement_create_v2
+  connect_norito_kagemusha_receiver_acknowledgement_verify_v2
+  connect_norito_kagemusha_recursive_spend_peer_payment_from_split_v2
+  connect_norito_kagemusha_recursive_spend_peer_payment_validate_v2
+  connect_norito_kagemusha_recursive_spend_bundle_summary_v2
+  connect_norito_kagemusha_recursive_spend_build_split_intent_v2
+)
+
+REQUIRED_BRIDGE_SYMBOLS=(
+  connect_norito_bridge_abi_version
+  connect_norito_detached_transaction_scaffold_inspect_v1
+  connect_norito_detached_transaction_scaffold_finalize_ed25519_v1
+  connect_norito_canonical_json_blake3_v1
+  "${KAGEMUSHA_C_SYMBOLS[@]}"
+)
+
+# Exact JNI allow-list for each supported Java namespace. As with the C list,
+# V2 names retained here are non-lifecycle support primitives consumed by V4.
+KAGEMUSHA_JNI_METHODS=(
+  nativeAppendSpendV4
+  nativeArtifactBeginV4
+  nativeArtifactCancelV4
+  nativeArtifactFinalizeV4
+  nativeArtifactSetInstallV4
+  nativeArtifactSetIsInstalledV4
+  nativeArtifactSetUninstallV4
+  nativeArtifactWriteV4
+  nativeBranchClaimsConflictV2
+  nativeBridgeAbiVersion
+  nativeBuildAppendRequestV4
+  nativeBuildInitRequestV4
+  nativeBuildOutputMembershipPathsV4
+  nativeBuildRedeemRequestV4
+  nativeBuildRedeemV4
+  nativeBuildVerifyRequestV4
+  nativeCreateAcknowledgementV2
+  nativeCreateAuthorizationV2
+  nativeCreateRecipientRequestV2
+  nativeFinalizeRedeemV2
+  nativeFinalizeTopUpV2
+  nativeInitSpendV4
+  nativePastaCycleV4BackendAvailable
+  nativePrepareAcknowledgementV2
+  nativePrepareAuthorizationV2
+  nativePrepareNoteOpeningV2
+  nativePrepareRecipientRequestV2
+  nativePrepareTopUpV2
+  nativeProjectActiveVerifierV2
+  nativeProjectOperationStatusV2
+  nativeProjectPeerPaymentV2
+  nativeProjectReadinessV2
+  nativeProjectRecipientRequestV2
+  nativeProjectRedeemBuildResultV2
+  nativeProjectSplitResultV2
+  nativeProjectVerifyResultV2
+  nativeVerifyAcknowledgementV2
+  nativeVerifyRecipientRequestV2
+  nativeVerifySpendV4
+)
+
 relpath() {
   local path="$1"
   case "$path" in
@@ -205,6 +299,16 @@ hash_file() {
   fi
 }
 
+hash_zip_entry() {
+  local archive="$1"
+  local entry="$2"
+  if command -v shasum >/dev/null 2>&1; then
+    unzip -p "$archive" "$entry" | shasum -a 256 | awk '{print $1}'
+  else
+    unzip -p "$archive" "$entry" | sha256sum | awk '{print $1}'
+  fi
+}
+
 manifest_json_value() {
   local manifest="$1"
   local key="$2"
@@ -226,6 +330,243 @@ PY
 bridge_source_fingerprint() {
   python3 "$ROOT_DIR/scripts/norito_bridge_source_seal.py" \
     fingerprint --root "$ROOT_DIR"
+}
+
+check_bridge_source_contract() {
+  local bridge_source="$ROOT_DIR/crates/connect_norito_bridge/src/lib.rs"
+  local bridge_header="$ROOT_DIR/crates/connect_norito_bridge/include/connect_norito_bridge.h"
+
+  # Packaged artifacts can be checked outside a source checkout. When source is
+  # present, however, refuse to certify a build whose callable Kagemusha ABI is
+  # broader or narrower than the exact first-release allow-list.
+  if [[ -f "$bridge_source" ]]; then
+    if ! python3 - "$bridge_source" "${KAGEMUSHA_C_SYMBOLS[@]}" <<'PY'
+import re
+import sys
+
+path = sys.argv[1]
+expected = set(sys.argv[2:])
+text = open(path, "r", encoding="utf-8").read()
+abi = re.search(
+    r"CONNECT_NORITO_BRIDGE_ABI_VERSION\s*:\s*u32\s*=\s*(\d+)\s*;",
+    text,
+)
+actual = set(re.findall(
+    r'pub\s+(?:unsafe\s+)?extern\s+"C"\s+fn\s+'
+    r'(connect_norito_kagemusha_[A-Za-z0-9_]+)\s*\(',
+    text,
+))
+errors = []
+if abi is None or abi.group(1) != "20":
+    errors.append("bridge source does not declare exact ABI 20")
+missing = sorted(expected - actual)
+retired_or_extra = sorted(actual - expected)
+if missing:
+    errors.append("missing Kagemusha C exports: " + ", ".join(missing))
+if retired_or_extra:
+    errors.append("retired or unexpected Kagemusha C exports: " + ", ".join(retired_or_extra))
+for error in errors:
+    print(f"[mobile-sdk-artifacts] ERROR: {error}", file=sys.stderr)
+raise SystemExit(1 if errors else 0)
+PY
+    then
+      FAILURES=1
+    fi
+  fi
+
+  if [[ -f "$bridge_header" ]]; then
+    if ! python3 - "$bridge_header" "${KAGEMUSHA_C_SYMBOLS[@]}" <<'PY'
+import re
+import sys
+
+path = sys.argv[1]
+expected = set(sys.argv[2:])
+text = open(path, "r", encoding="utf-8").read()
+actual = set(re.findall(
+    r'\b(connect_norito_kagemusha_[A-Za-z0-9_]+)\s*\(',
+    text,
+))
+missing = sorted(expected - actual)
+retired_or_extra = sorted(actual - expected)
+if missing:
+    print(
+        "[mobile-sdk-artifacts] ERROR: bridge header is missing Kagemusha declarations: "
+        + ", ".join(missing),
+        file=sys.stderr,
+    )
+if retired_or_extra:
+    print(
+        "[mobile-sdk-artifacts] ERROR: bridge header exposes retired or unexpected "
+        "Kagemusha declarations: " + ", ".join(retired_or_extra),
+        file=sys.stderr,
+    )
+raise SystemExit(1 if missing or retired_or_extra else 0)
+PY
+    then
+      FAILURES=1
+    fi
+  fi
+}
+
+check_swift_kagemusha_source_contract() {
+  local source_dir="$ROOT_DIR/IrohaSwift/Sources/IrohaSwift"
+  [[ -d "$source_dir" ]] || return
+
+  if ! python3 - "$source_dir" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+root = Path(sys.argv[1])
+files = sorted(root.glob("*.swift"))
+text = "\n".join(path.read_text(encoding="utf-8") for path in files)
+required = (
+    "nativeCapabilitiesV4",
+    "initSpendV4(",
+    "appendSpendV4(",
+    "verifySpendV4(",
+    "buildRedeemV4(",
+    "connect_norito_kagemusha_recursive_spend_capabilities_v4",
+    "connect_norito_kagemusha_recursive_spend_init_v4",
+    "connect_norito_kagemusha_recursive_spend_append_v4",
+    "connect_norito_kagemusha_recursive_spend_verify_v4",
+    "connect_norito_kagemusha_recursive_spend_redeem_v4",
+)
+missing = [marker for marker in required if marker not in text]
+retired_patterns = (
+    r"\b(?:public\s+)?(?:static\s+)?func\s+[A-Za-z0-9_]*V3\s*\(",
+    r"\bpublic\s+(?:struct|enum|class|typealias|protocol)\s+[A-Za-z0-9_]*V3\b",
+    r"\bpublic\s+static\s+func\s+(?:initSpend|appendSpend|verifySpend|buildRedeem)\s*\(",
+    r"connect_norito_kagemusha_recursive_spend_capabilities_v1\b",
+    r"connect_norito_kagemusha_recursive_spend_(?:artifact_[a-z_]+|init|append|verify|redeem)_v[123]\b",
+    r"kagemushaRecursiveSpend(?:Init|Append|Verify|Redeem)V[23]\s*\(",
+)
+retired = []
+for pattern in retired_patterns:
+    match = re.search(pattern, text)
+    if match:
+        retired.append(match.group(0))
+if missing:
+    print(
+        "[mobile-sdk-artifacts] ERROR: Swift SDK is missing exact V4 lifecycle markers: "
+        + ", ".join(missing),
+        file=sys.stderr,
+    )
+if retired:
+    print(
+        "[mobile-sdk-artifacts] ERROR: Swift SDK retains callable retired Kagemusha "
+        "surfaces: " + ", ".join(retired),
+        file=sys.stderr,
+    )
+raise SystemExit(1 if missing or retired else 0)
+PY
+  then
+    FAILURES=1
+  fi
+}
+
+check_android_kagemusha_source_contract() {
+  local rust_source="$ROOT_DIR/crates/connect_norito_bridge/src/lib.rs"
+  local kotlin_source="$ROOT_DIR/kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt"
+  local java_source="$ROOT_DIR/java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProver.java"
+  local namespace
+  local expected_jni=()
+
+  if [[ -f "$rust_source" ]]; then
+    for namespace in org_hyperledger_iroha_sdk_offline org_hyperledger_iroha_android_offline; do
+      local method
+      for method in "${KAGEMUSHA_JNI_METHODS[@]}"; do
+        expected_jni+=("Java_${namespace}_KagemushaRecursiveSpendProver_${method}")
+      done
+    done
+    if ! python3 - "$rust_source" "${expected_jni[@]}" <<'PY'
+import re
+import sys
+
+path = sys.argv[1]
+expected = set(sys.argv[2:])
+text = open(path, "r", encoding="utf-8").read()
+actual = set(re.findall(
+    r'fn\s+(Java_org_hyperledger_iroha_(?:sdk|android)_offline_'
+    r'KagemushaRecursiveSpendProver_[A-Za-z0-9_]+)\s*\(',
+    text,
+))
+missing = sorted(expected - actual)
+retired_or_extra = sorted(actual - expected)
+if missing:
+    print(
+        "[mobile-sdk-artifacts] ERROR: Rust bridge is missing Kagemusha JNI exports: "
+        + ", ".join(missing),
+        file=sys.stderr,
+    )
+if retired_or_extra:
+    print(
+        "[mobile-sdk-artifacts] ERROR: Rust bridge exposes retired or unexpected "
+        "Kagemusha JNI exports: " + ", ".join(retired_or_extra),
+        file=sys.stderr,
+    )
+raise SystemExit(1 if missing or retired_or_extra else 0)
+PY
+    then
+      FAILURES=1
+    fi
+  fi
+
+  if [[ -f "$kotlin_source" || -f "$java_source" ]]; then
+    if ! python3 - "$kotlin_source" "$java_source" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+paths = [Path(raw) for raw in sys.argv[1:] if Path(raw).is_file()]
+required = (
+    "initSpendV4(",
+    "appendSpendV4(",
+    "verifySpendV4(",
+    "buildRedeemV4(",
+    "nativeInitSpendV4(",
+    "nativeAppendSpendV4(",
+    "nativeVerifySpendV4(",
+    "nativeBuildRedeemV4(",
+)
+retired_names = (
+    "nativePastaCycleV3BackendAvailable",
+    "nativeArtifactBindingV3",
+    "nativeArtifactBeginV3",
+    "nativeArtifactWriteV3",
+    "nativeArtifactFinalizeV3",
+    "nativeArtifactCancelV3",
+    "nativeArtifactSetInstallV3",
+    "nativeArtifactSetIsInstalledV3",
+    "nativeArtifactSetUninstallV3",
+    "nativeBuildInitRequestV2",
+    "nativeBuildAppendRequestV2",
+    "nativeBuildVerifyRequestV2",
+    "nativeBuildRedeemRequestV2",
+    "nativeInitSpendV2",
+    "nativeAppendSpendV2",
+    "nativeVerifySpendV2",
+    "nativeBuildRedeemV2",
+)
+errors = []
+for path in paths:
+    text = path.read_text(encoding="utf-8")
+    missing = [marker for marker in required if marker not in text]
+    retired = [name for name in retired_names if name in text]
+    if re.search(r"\b(?:data\s+class|class|interface|record|enum)\s+[A-Za-z0-9_]*V3\b", text):
+        retired.append("public V3 schema carrier")
+    if missing:
+        errors.append(f"{path}: missing " + ", ".join(missing))
+    if retired:
+        errors.append(f"{path}: retired " + ", ".join(retired))
+for error in errors:
+    print(f"[mobile-sdk-artifacts] ERROR: {error}", file=sys.stderr)
+raise SystemExit(1 if errors else 0)
+PY
+    then
+      FAILURES=1
+    fi
+  fi
 }
 
 require_plist_slice() {
@@ -327,50 +668,7 @@ check_xcframework() {
     if [[ "$manifest_dirty" != "false" && "$ALLOW_DIRTY_SOURCE" != "1" ]]; then
       fail "NoritoBridge release artifact must be built from a clean source tree"
     fi
-    local required_kagemusha_symbols=(
-      connect_norito_kagemusha_recursive_spend_capabilities_v4
-      connect_norito_kagemusha_topup_finality_verify_v2
-      connect_norito_kagemusha_topup_shield_build_unsigned_v2
-      connect_norito_kagemusha_recursive_spend_artifact_begin_v4
-      connect_norito_kagemusha_recursive_spend_artifact_write_v4
-      connect_norito_kagemusha_recursive_spend_artifact_finalize_v4
-      connect_norito_kagemusha_recursive_spend_artifact_cancel_v4
-      connect_norito_kagemusha_recursive_spend_artifact_set_install_v4
-      connect_norito_kagemusha_recursive_spend_artifact_set_is_installed_v4
-      connect_norito_kagemusha_recursive_spend_artifact_set_uninstall_v4
-      connect_norito_kagemusha_recursive_spend_init_v4
-      connect_norito_kagemusha_recursive_spend_topup_unsigned_payload_digest_v2
-      connect_norito_kagemusha_recursive_spend_topup_finalize_request_v2
-      connect_norito_kagemusha_recursive_spend_topup_v2
-      connect_norito_kagemusha_recursive_spend_append_v4
-      connect_norito_kagemusha_recursive_spend_verify_v4
-      connect_norito_kagemusha_recursive_spend_redeem_unsigned_payload_digest_v2
-      connect_norito_kagemusha_recursive_spend_redeem_finalize_request_v2
-      connect_norito_kagemusha_recursive_spend_redeem_v4
-      connect_norito_kagemusha_receiver_key_reference_v2
-      connect_norito_kagemusha_recipient_output_derive_v2
-      connect_norito_kagemusha_recipient_payment_request_signing_bytes_v2
-      connect_norito_kagemusha_recipient_payment_request_create_v2
-      connect_norito_kagemusha_recipient_payment_request_verify_v2
-      connect_norito_kagemusha_request_authorization_signing_bytes_v2
-      connect_norito_kagemusha_request_authorization_create_v2
-      connect_norito_kagemusha_receiver_acknowledgement_payload_v2
-      connect_norito_kagemusha_receiver_acknowledgement_signing_bytes_v2
-      connect_norito_kagemusha_receiver_acknowledgement_create_v2
-      connect_norito_kagemusha_receiver_acknowledgement_verify_v2
-      connect_norito_kagemusha_recursive_spend_peer_payment_from_split_v2
-      connect_norito_kagemusha_recursive_spend_peer_payment_validate_v2
-      connect_norito_kagemusha_recursive_spend_bundle_summary_v2
-      connect_norito_kagemusha_recursive_spend_build_split_intent_v2
-    )
-    local required_symbols=(
-      connect_norito_bridge_abi_version
-      connect_norito_detached_transaction_scaffold_inspect_v1
-      connect_norito_detached_transaction_scaffold_finalize_ed25519_v1
-      connect_norito_canonical_json_blake3_v1
-      "${required_kagemusha_symbols[@]}"
-    )
-    if ! python3 - "$manifest" "${required_symbols[@]}" <<'PY'
+    if ! python3 - "$manifest" "${REQUIRED_BRIDGE_SYMBOLS[@]}" <<'PY'
 import json
 import sys
 
@@ -462,12 +760,12 @@ PY
         fi
         local symbols
         symbols="$(nm -gj "$binary" 2>/dev/null || true)"
-        for symbol in "${required_symbols[@]}"; do
+        for symbol in "${REQUIRED_BRIDGE_SYMBOLS[@]}"; do
           if ! grep -Eq "^_?${symbol}$" <<<"$symbols"; then
             fail "NoritoBridge $slice is missing required symbol $symbol"
           fi
         done
-        if ! python3 - "$binary" "${required_kagemusha_symbols[@]}" <<'PY'
+        if ! python3 - "$binary" "${KAGEMUSHA_C_SYMBOLS[@]}" <<'PY'
 import subprocess
 import sys
 
@@ -508,6 +806,120 @@ check_gradle_publication() {
   require_regex "$build_file" "artifactId[[:space:]]*=[[:space:]]*\"$artifact_id\"" "$module artifact id"
 }
 
+find_android_nm() {
+  local candidate
+  local ndk_root
+
+  if [[ -n "${MOBILE_SDK_ANDROID_NM:-}" ]]; then
+    if [[ -x "$MOBILE_SDK_ANDROID_NM" ]]; then
+      printf '%s' "$MOBILE_SDK_ANDROID_NM"
+      return 0
+    fi
+    if command -v "$MOBILE_SDK_ANDROID_NM" >/dev/null 2>&1; then
+      command -v "$MOBILE_SDK_ANDROID_NM"
+      return 0
+    fi
+    return 1
+  fi
+  if command -v llvm-nm >/dev/null 2>&1; then
+    command -v llvm-nm
+    return 0
+  fi
+  for ndk_root in "${ANDROID_NDK_HOME:-}" "${ANDROID_NDK_ROOT:-}"; do
+    [[ -n "$ndk_root" ]] || continue
+    while IFS= read -r candidate; do
+      if [[ -x "$candidate" ]]; then
+        printf '%s' "$candidate"
+        return 0
+      fi
+    done < <(compgen -G "$ndk_root/toolchains/llvm/prebuilt/*/bin/llvm-nm" || true)
+  done
+  if [[ -n "${ANDROID_HOME:-}" ]]; then
+    while IFS= read -r candidate; do
+      if [[ -x "$candidate" ]]; then
+        printf '%s' "$candidate"
+        return 0
+      fi
+    done < <(compgen -G "$ANDROID_HOME/ndk/*/toolchains/llvm/prebuilt/*/bin/llvm-nm" || true)
+  fi
+  if command -v nm >/dev/null 2>&1; then
+    command -v nm
+    return 0
+  fi
+  return 1
+}
+
+check_android_native_symbols() {
+  local binary="$1"
+  local abi="$2"
+  local nm_tool
+  local symbols
+  local namespace
+  local expected_jni=()
+
+  if ! nm_tool="$(find_android_nm)"; then
+    fail "llvm-nm (or MOBILE_SDK_ANDROID_NM) is required to inspect client-android $abi native bridge"
+    return
+  fi
+  if ! symbols="$("$nm_tool" -g --defined-only "$binary" 2>/dev/null)"; then
+    if ! symbols="$("$nm_tool" -D -g --defined-only "$binary" 2>/dev/null)"; then
+      if ! symbols="$("$nm_tool" -gj "$binary" 2>/dev/null)"; then
+        fail "unable to inspect client-android $abi native bridge with $nm_tool"
+        return
+      fi
+    fi
+  fi
+  for namespace in org_hyperledger_iroha_sdk_offline org_hyperledger_iroha_android_offline; do
+    local method
+    for method in "${KAGEMUSHA_JNI_METHODS[@]}"; do
+      expected_jni+=("Java_${namespace}_KagemushaRecursiveSpendProver_${method}")
+    done
+  done
+  if ! python3 - "$abi" "${KAGEMUSHA_C_SYMBOLS[@]}" -- "${expected_jni[@]}" 3<<<"$symbols" <<'PY'
+import os
+import sys
+
+abi = sys.argv[1]
+separator = sys.argv.index("--")
+expected_c = set(sys.argv[2:separator])
+expected_jni = set(sys.argv[separator + 1:])
+expected = expected_c | expected_jni | {"connect_norito_bridge_abi_version"}
+actual = set()
+for raw in os.fdopen(3):
+    fields = raw.strip().split()
+    if not fields:
+        continue
+    symbol = fields[-1].removeprefix("_")
+    if (
+        symbol == "connect_norito_bridge_abi_version"
+        or symbol.startswith("connect_norito_kagemusha_")
+        or (
+            symbol.startswith("Java_org_hyperledger_iroha_")
+            and "_KagemushaRecursiveSpendProver_" in symbol
+        )
+    ):
+        actual.add(symbol)
+missing = sorted(expected - actual)
+retired_or_extra = sorted(actual - expected)
+if missing:
+    print(
+        f"[mobile-sdk-artifacts] ERROR: client-android {abi} bridge is missing "
+        "ABI20/V4 symbols: " + ", ".join(missing),
+        file=sys.stderr,
+    )
+if retired_or_extra:
+    print(
+        f"[mobile-sdk-artifacts] ERROR: client-android {abi} bridge exposes retired "
+        "or unexpected Kagemusha symbols: " + ", ".join(retired_or_extra),
+        file=sys.stderr,
+    )
+raise SystemExit(1 if missing or retired_or_extra else 0)
+PY
+  then
+    FAILURES=1
+  fi
+}
+
 check_android_package() {
   local settings="$ROOT_DIR/kotlin/settings.gradle.kts"
 
@@ -531,18 +943,33 @@ check_android_package() {
     require_zip_entry "$client_aar" "classes.jar" "client-android release aar"
 
     for abi in arm64-v8a x86_64; do
-      require_file "$ROOT_DIR/kotlin/client-android/src/main/jniLibs/$abi/libconnect_norito_bridge.so" "client-android $abi native bridge library"
+      local source_native="$ROOT_DIR/kotlin/client-android/src/main/jniLibs/$abi/libconnect_norito_bridge.so"
+      local aar_entry="jni/$abi/libconnect_norito_bridge.so"
+      require_file "$source_native" "client-android $abi native bridge library"
       require_zip_entry "$client_aar" "jni/$abi/libconnect_norito_bridge.so" "client-android release aar"
+      if [[ -f "$source_native" && -f "$client_aar" ]] \
+          && unzip -Z1 "$client_aar" 2>/dev/null | grep -Fxq -- "$aar_entry"; then
+        if [[ "$(hash_file "$source_native")" != "$(hash_zip_entry "$client_aar" "$aar_entry")" ]]; then
+          fail "client-android $abi native bridge differs between jniLibs and release aar"
+        fi
+        if [[ "${MOBILE_SDK_SKIP_BINARY_INSPECTION:-0}" != "1" ]]; then
+          check_android_native_symbols "$source_native" "$abi"
+        fi
+      fi
     done
   fi
 }
 
+check_bridge_source_contract
+
 if [[ "$CHECK_APPLE" == "1" ]]; then
+  check_swift_kagemusha_source_contract
   check_swift_package
   check_xcframework
 fi
 
 if [[ "$CHECK_ANDROID" == "1" ]]; then
+  check_android_kagemusha_source_contract
   check_android_package
 fi
 

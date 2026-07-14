@@ -111,6 +111,23 @@ make_fixture() {
   local slice
 
   mkdir -p "$root/IrohaSwift/Sources/IrohaSwift"
+  cat >"$root/IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendV4.swift" <<'SWIFT'
+enum KagemushaRecursiveSpendV4Fixture {
+    static func nativeCapabilitiesV4() {}
+    static func initSpendV4() {}
+    static func appendSpendV4() {}
+    static func verifySpendV4() {}
+    static func buildRedeemV4() {}
+
+    static let symbols = [
+        "connect_norito_kagemusha_recursive_spend_capabilities_v4",
+        "connect_norito_kagemusha_recursive_spend_init_v4",
+        "connect_norito_kagemusha_recursive_spend_append_v4",
+        "connect_norito_kagemusha_recursive_spend_verify_v4",
+        "connect_norito_kagemusha_recursive_spend_redeem_v4",
+    ]
+}
+SWIFT
   cat >"$root/IrohaSwift/Package.swift" <<'SWIFT'
 // swift-tools-version:5.9
 import PackageDescription
@@ -286,6 +303,44 @@ SH
   chmod +x "$tools/lipo" "$tools/nm"
 }
 
+make_android_inspection_tools() {
+  local tools="$1"
+  mkdir -p "$tools"
+  cat >"$tools/llvm-nm" <<'SH'
+#!/usr/bin/env bash
+python3 - "${MOBILE_SDK_TEST_CHECK_SCRIPT:?}" <<'PY'
+import os
+import re
+import sys
+
+text = open(sys.argv[1], "r", encoding="utf-8").read()
+
+def shell_array(name):
+    match = re.search(rf"^{name}=\(\n(.*?)^\)$", text, re.MULTILINE | re.DOTALL)
+    if match is None:
+        raise SystemExit(f"missing fixture array {name}")
+    return [
+        line.strip()
+        for line in match.group(1).splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+
+print("connect_norito_bridge_abi_version")
+for symbol in shell_array("KAGEMUSHA_C_SYMBOLS"):
+    print(symbol)
+for namespace in (
+    "org_hyperledger_iroha_sdk_offline",
+    "org_hyperledger_iroha_android_offline",
+):
+    for method in shell_array("KAGEMUSHA_JNI_METHODS"):
+        print(f"Java_{namespace}_KagemushaRecursiveSpendProver_{method}")
+if os.environ.get("MOBILE_SDK_TEST_EXTRA_ANDROID_KAGEMUSHA") == "1":
+    print("connect_norito_kagemusha_recursive_spend_init_v3")
+PY
+SH
+  chmod +x "$tools/llvm-nm"
+}
+
 run_expect_binary_fail() {
   local root="$1"
   local expected="$2"
@@ -305,9 +360,66 @@ run_expect_binary_fail() {
   esac
 }
 
+run_expect_android_binary_pass() {
+  local root="$1"
+  local tools="$2"
+  local output
+  if ! output="$(PATH="$tools:$PATH" \
+      MOBILE_SDK_ANDROID_NM="$tools/llvm-nm" \
+      MOBILE_SDK_SKIP_BINARY_INSPECTION=0 \
+      MOBILE_SDK_TEST_CHECK_SCRIPT="$CHECK_SCRIPT" \
+      bash "$CHECK_SCRIPT" "$root" --android-only --require-built-android 2>&1)"; then
+    printf '%s\n' "$output" >&2
+    fail "expected strict Android binary validation to pass for $root"
+  fi
+}
+
+run_expect_android_binary_fail() {
+  local root="$1"
+  local expected="$2"
+  local tools="$3"
+  local output
+  if output="$(PATH="$tools:$PATH" \
+      MOBILE_SDK_ANDROID_NM="$tools/llvm-nm" \
+      MOBILE_SDK_SKIP_BINARY_INSPECTION=0 \
+      MOBILE_SDK_TEST_CHECK_SCRIPT="$CHECK_SCRIPT" \
+      MOBILE_SDK_TEST_EXTRA_ANDROID_KAGEMUSHA=1 \
+      bash "$CHECK_SCRIPT" "$root" --android-only --require-built-android 2>&1)"; then
+    printf '%s\n' "$output" >&2
+    fail "expected strict Android binary validation to fail for $root"
+  fi
+  case "$output" in
+    *"$expected"*) ;;
+    *)
+      printf '%s\n' "$output" >&2
+      fail "expected strict Android binary failure containing: $expected"
+      ;;
+  esac
+}
+
 fixture="$TMP_DIR/valid"
 make_fixture "$fixture"
 run_expect_pass "$fixture"
+
+retired_swift_surface="$TMP_DIR/retired-swift-surface"
+make_fixture "$retired_swift_surface"
+cat >>"$retired_swift_surface/IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendV4.swift" <<'SWIFT'
+public enum RetiredKagemushaRecursiveSpend {
+    public static func initSpend() {}
+}
+SWIFT
+run_expect_fail "$retired_swift_surface" "Swift SDK retains callable retired Kagemusha surfaces"
+
+retired_bridge_source="$TMP_DIR/retired-bridge-source"
+make_fixture "$retired_bridge_source"
+mkdir -p "$retired_bridge_source/crates/connect_norito_bridge/src"
+cat >"$retired_bridge_source/crates/connect_norito_bridge/src/lib.rs" <<'RUST'
+const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 20;
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_init_v3() {}
+RUST
+run_expect_fail "$retired_bridge_source" "retired or unexpected Kagemusha C exports"
 
 wrong_bridge_abi="$TMP_DIR/wrong-bridge-abi"
 make_fixture "$wrong_bridge_abi"
@@ -488,8 +600,8 @@ mkdir -p \
   "$with_android_outputs/kotlin/client-android/src/main/jniLibs/arm64-v8a" \
   "$with_android_outputs/kotlin/client-android/src/main/jniLibs/x86_64"
 printf 'jar\n' >"$with_android_outputs/kotlin/core-jvm/build/libs/core-jvm-0.1-SNAPSHOT.jar"
-printf 'so\n' >"$with_android_outputs/kotlin/client-android/src/main/jniLibs/arm64-v8a/libconnect_norito_bridge.so"
-printf 'so\n' >"$with_android_outputs/kotlin/client-android/src/main/jniLibs/x86_64/libconnect_norito_bridge.so"
+printf 'fixture\n' >"$with_android_outputs/kotlin/client-android/src/main/jniLibs/arm64-v8a/libconnect_norito_bridge.so"
+printf 'fixture\n' >"$with_android_outputs/kotlin/client-android/src/main/jniLibs/x86_64/libconnect_norito_bridge.so"
 make_aar \
   "$with_android_outputs/kotlin/client-android/build/outputs/aar/client-android-release.aar" \
   "AndroidManifest.xml" \
@@ -497,6 +609,13 @@ make_aar \
   "jni/arm64-v8a/libconnect_norito_bridge.so" \
   "jni/x86_64/libconnect_norito_bridge.so"
 run_expect_pass "$with_android_outputs" --require-built-android
+android_inspection_tools="$TMP_DIR/android-inspection-tools"
+make_android_inspection_tools "$android_inspection_tools"
+run_expect_android_binary_pass "$with_android_outputs" "$android_inspection_tools"
+run_expect_android_binary_fail \
+  "$with_android_outputs" \
+  "exposes retired or unexpected Kagemusha symbols" \
+  "$android_inspection_tools"
 rm -rf "$with_android_outputs/IrohaSwift" "$with_android_outputs/dist"
 run_expect_pass "$with_android_outputs" --android-only --require-built-android
 

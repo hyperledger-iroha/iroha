@@ -1,7 +1,6 @@
 //! SNS-backed ownership query and lease instruction handlers.
 
 use iroha_data_model::{
-    account::AccountAddress,
     asset::AssetBalancePolicy,
     isi::{
         account_alias_lease::{AcquireAccountAliasLease, RenewAccountAliasLease},
@@ -10,7 +9,10 @@ use iroha_data_model::{
     metadata::Metadata,
     nexus::DataSpaceId,
     query::{error::QueryExecutionFail as QueryError, sns::prelude::*},
-    sns::{NameControllerV1, RegisterNameRequestV1, RenewNameRequestV1, SuffixId},
+    sns::{
+        GovernanceHookV1, NameControllerV1, RegisterNameRequestV1, RenewNameRequestV1, SuffixId,
+        TransferNameRequestV1,
+    },
 };
 use iroha_telemetry::metrics;
 use norito::codec::Decode;
@@ -62,6 +64,35 @@ fn namespace_from_suffix_id(
     suffix_id: SuffixId,
 ) -> Result<crate::sns::SnsNamespace, InstructionExecutionError> {
     crate::sns::SnsNamespace::from_suffix_id(suffix_id).map_err(sns_mutation_instruction_error)
+}
+
+fn ensure_configured_policy_payment_asset(
+    state_transaction: &StateTransaction<'_, '_>,
+    namespace: crate::sns::SnsNamespace,
+) -> Result<(), InstructionExecutionError> {
+    crate::sns::ensure_namespace_policy_payment_asset_matches_configured(
+        state_transaction.world(),
+        namespace,
+        &state_transaction.nexus.fees.fee_asset_id,
+    )
+    .map_err(sns_mutation_instruction_error)
+}
+
+fn reject_generic_account_alias_mutation(
+    namespace: crate::sns::SnsNamespace,
+    instruction: &str,
+) -> Result<(), InstructionExecutionError> {
+    if namespace != crate::sns::SnsNamespace::AccountAlias {
+        return Ok(());
+    }
+    Err(InstructionExecutionError::InvalidParameter(
+        InvalidParameterError::SmartContract(
+            format!(
+                "{instruction} is unavailable for the account-alias namespace; use the dedicated account-alias lease/binding/rekey instructions"
+            )
+            .into(),
+        ),
+    ))
 }
 
 #[cfg(any(test, feature = "telemetry"))]
@@ -258,6 +289,7 @@ fn account_alias_lease_payer_matches_dataspace_sponsor(
         &state_transaction.nexus.dataspace_fee_sponsors,
         route_dataspace,
         payer,
+        state_transaction.block_unix_timestamp_ms(),
     ))
 }
 
@@ -307,8 +339,13 @@ impl Execute for AcquireAccountAliasLease {
                 "transaction authority must own the alias or hold CanManageAccountAlias".into(),
             ));
         }
+        // Derive and validate the canonical owner controller before policy lookup or charging.
+        let controllers = vec![account_controller_for(&owner)?];
 
-        crate::sns::sync_default_namespace_policy_payment_asset_in_transaction(state_transaction);
+        ensure_configured_policy_payment_asset(
+            state_transaction,
+            crate::sns::SnsNamespace::AccountAlias,
+        )?;
         let now_ms = state_transaction.block_unix_timestamp_ms();
         let quote = crate::sns::quote_account_alias_registration(
             state_transaction.world(),
@@ -328,7 +365,6 @@ impl Execute for AcquireAccountAliasLease {
             state_transaction,
         )?;
         let payment = charge_sns_quote(&quote, payer, authority, state_transaction)?;
-        let controllers = vec![account_controller_for(&owner)?];
         crate::sns::register_name(
             state_transaction,
             RegisterNameRequestV1 {
@@ -391,7 +427,10 @@ impl Execute for RenewAccountAliasLease {
             ));
         }
 
-        crate::sns::sync_default_namespace_policy_payment_asset_in_transaction(state_transaction);
+        ensure_configured_policy_payment_asset(
+            state_transaction,
+            crate::sns::SnsNamespace::AccountAlias,
+        )?;
         let quote = crate::sns::quote_account_alias_renewal(
             state_transaction.world(),
             &state_transaction.nexus.dataspace_catalog,
@@ -451,9 +490,12 @@ impl Execute for iroha_data_model::isi::sns::RegisterSnsName {
                 authority,
                 "RegisterSnsName",
             )?;
-            crate::sns::sync_default_namespace_policy_payment_asset_in_transaction(
-                state_transaction,
-            );
+            let namespace = crate::sns::SnsNamespace::from_suffix_id(request.selector.suffix_id)
+                .map_err(sns_mutation_instruction_error)?;
+            reject_generic_account_alias_mutation(namespace, "RegisterSnsName")?;
+            crate::sns::validate_name_controllers(&request.controllers)
+                .map_err(sns_mutation_instruction_error)?;
+            ensure_configured_policy_payment_asset(state_transaction, namespace)?;
             let quote = crate::sns::quote_name_registration(
                 state_transaction.world(),
                 &state_transaction.nexus.dataspace_catalog,
@@ -491,9 +533,8 @@ impl Execute for iroha_data_model::isi::sns::RenewSnsName {
         let result = (|| {
             ensure_payment_payer_is_authority(&request.payment.payer, authority, "RenewSnsName")?;
             let namespace = namespace_from_suffix_id(suffix_id)?;
-            crate::sns::sync_default_namespace_policy_payment_asset_in_transaction(
-                state_transaction,
-            );
+            reject_generic_account_alias_mutation(namespace, "RenewSnsName")?;
+            ensure_configured_policy_payment_asset(state_transaction, namespace)?;
             let quote = crate::sns::quote_name_renewal(
                 state_transaction.world(),
                 &state_transaction.nexus.dataspace_catalog,
@@ -522,14 +563,15 @@ impl Execute for iroha_data_model::isi::sns::TransferSnsName {
     #[metrics(+"transfer_sns_name")]
     fn execute(
         self,
-        authority: &AccountId,
+        _authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
         let suffix_id = self.suffix_id;
         let result = (|| {
             let namespace = namespace_from_suffix_id(suffix_id)?;
-            let request = decode_sns_payload(&self.request, "TransferSnsName")?;
-            ensure_name_owner_authority(state_transaction, authority, namespace, &self.literal)?;
+            let request: TransferNameRequestV1 =
+                decode_sns_payload(&self.request, "TransferSnsName")?;
+            reject_generic_account_alias_mutation(namespace, "TransferSnsName")?;
             crate::sns::transfer_name(state_transaction, namespace, &self.literal, request)
                 .map(|_| ())
                 .map_err(sns_mutation_instruction_error)
@@ -549,7 +591,11 @@ impl Execute for iroha_data_model::isi::sns::UpdateSnsNameControllers {
         let suffix_id = self.suffix_id;
         let result = (|| {
             let namespace = namespace_from_suffix_id(suffix_id)?;
-            let request = decode_sns_payload(&self.request, "UpdateSnsNameControllers")?;
+            reject_generic_account_alias_mutation(namespace, "UpdateSnsNameControllers")?;
+            let request: iroha_data_model::sns::UpdateControllersRequestV1 =
+                decode_sns_payload(&self.request, "UpdateSnsNameControllers")?;
+            crate::sns::validate_name_controllers(&request.controllers)
+                .map_err(sns_mutation_instruction_error)?;
             ensure_name_owner_authority(state_transaction, authority, namespace, &self.literal)?;
             crate::sns::update_name_controllers(
                 state_transaction,
@@ -575,6 +621,7 @@ impl Execute for iroha_data_model::isi::sns::FreezeSnsName {
         let suffix_id = self.suffix_id;
         let result = (|| {
             let namespace = namespace_from_suffix_id(suffix_id)?;
+            reject_generic_account_alias_mutation(namespace, "FreezeSnsName")?;
             let request = decode_sns_payload(&self.request, "FreezeSnsName")?;
             ensure_name_owner_authority(state_transaction, authority, namespace, &self.literal)?;
             crate::sns::freeze_name(state_transaction, namespace, &self.literal, request)
@@ -590,14 +637,15 @@ impl Execute for iroha_data_model::isi::sns::UnfreezeSnsName {
     #[metrics(+"unfreeze_sns_name")]
     fn execute(
         self,
-        authority: &AccountId,
+        _authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
         let suffix_id = self.suffix_id;
         let result = (|| {
             let namespace = namespace_from_suffix_id(suffix_id)?;
-            let governance = decode_sns_payload(&self.governance, "UnfreezeSnsName")?;
-            ensure_name_owner_authority(state_transaction, authority, namespace, &self.literal)?;
+            let governance: GovernanceHookV1 =
+                decode_sns_payload(&self.governance, "UnfreezeSnsName")?;
+            reject_generic_account_alias_mutation(namespace, "UnfreezeSnsName")?;
             crate::sns::unfreeze_name(state_transaction, namespace, &self.literal, governance)
                 .map(|_| ())
                 .map_err(sns_mutation_instruction_error)
@@ -611,8 +659,9 @@ impl Execute for iroha_data_model::isi::sns::UnfreezeSnsName {
 mod tests {
     use std::num::NonZeroU64;
 
-    use iroha_crypto::Hash;
+    use iroha_crypto::{Algorithm, Hash, KeyPair};
     use iroha_data_model::{
+        Registrable,
         account::{
             Account, AccountAddress,
             rekey::{AccountAlias, AccountAliasDomain},
@@ -627,7 +676,7 @@ mod tests {
         query::sns::prelude::FindDataspaceNameOwnerById,
         sns::{
             NameControllerV1, NameRecordV1, PaymentProofV1, RegisterNameRequestV1,
-            RenewNameRequestV1,
+            RenewNameRequestV1, UpdateControllersRequestV1,
         },
     };
     use iroha_executor_data_model::permission::account::{
@@ -671,11 +720,227 @@ mod tests {
         assert_eq!(metric_namespace_from_suffix_id(65_535), "65535");
     }
 
+    #[test]
+    fn generic_account_alias_lifecycle_mutations_are_all_rejected() {
+        let owner = owner();
+        let other = another_owner();
+        let owner_account = Account::new(owner.clone()).build(&owner);
+        let other_account = Account::new(other.clone()).build(&owner);
+        let mut world = World::with([], [owner_account, other_account], []);
+        let alias =
+            AccountAlias::domainless("canonical".parse().expect("label"), DataSpaceId::UNIVERSAL);
+        let selector = crate::sns::selector_for_account_alias(&alias, &DataSpaceCatalog::default())
+            .expect("selector");
+        let owner_address = AccountAddress::from_account_id(&owner).expect("owner address");
+        let record = NameRecordV1::new(
+            selector.clone(),
+            owner.clone(),
+            vec![NameControllerV1::account(&owner_address)],
+            0,
+            0,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            Metadata::default(),
+        );
+        world.smart_contract_state_mut_for_testing().insert(
+            crate::sns::record_storage_key(&selector),
+            norito::codec::Encode::encode(&record),
+        );
+        let state = State::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let literal = "canonical@universal";
+        let mut block = state.block(next_header(&state));
+        let mut stx = block.transaction();
+        stx.world
+            .insert_account_alias_binding(alias.clone(), owner.clone());
+
+        let payment_asset_definition_id: AssetDefinitionId =
+            "61CtjvNd9T3THAR65GsMVHr82Bjc".parse().expect("asset id");
+        let register_err =
+            iroha_data_model::isi::sns::RegisterSnsName::new(RegisterNameRequestV1 {
+                selector: selector.clone(),
+                owner: owner.clone(),
+                controllers: vec![NameControllerV1::account(&owner_address)],
+                term_years: 1,
+                pricing_class_hint: None,
+                payment: sns_payment(&owner, &payment_asset_definition_id),
+                governance: None,
+                metadata: Metadata::default(),
+            })
+            .execute(&owner, &mut stx)
+            .expect_err("generic registration must not mutate account-alias leases");
+        let renew_err = iroha_data_model::isi::sns::RenewSnsName::new(
+            ACCOUNT_ALIAS_SUFFIX_ID,
+            literal,
+            RenewNameRequestV1 {
+                term_years: 1,
+                payment: sns_payment(&owner, &payment_asset_definition_id),
+            },
+        )
+        .execute(&owner, &mut stx)
+        .expect_err("generic renewal must not mutate account-alias leases");
+        let transfer_err = iroha_data_model::isi::sns::TransferSnsName::new(
+            ACCOUNT_ALIAS_SUFFIX_ID,
+            literal,
+            iroha_data_model::sns::TransferNameRequestV1 {
+                new_owner: other.clone(),
+                governance: iroha_data_model::sns::GovernanceHookV1 {
+                    proposal_id: "must-not-split-alias-state".to_owned(),
+                    council_vote_hash: iroha_primitives::json::Json::from("council"),
+                    dao_vote_hash: iroha_primitives::json::Json::from("dao"),
+                    steward_ack: iroha_primitives::json::Json::from("steward"),
+                    guardian_clearance: None,
+                },
+            },
+        )
+        .execute(&owner, &mut stx)
+        .expect_err("account-alias lease ownership cannot move independently");
+        let other_address = AccountAddress::from_account_id(&other).expect("other address");
+        let update_err = iroha_data_model::isi::sns::UpdateSnsNameControllers::new(
+            ACCOUNT_ALIAS_SUFFIX_ID,
+            literal,
+            UpdateControllersRequestV1 {
+                controllers: vec![NameControllerV1::account(&other_address)],
+            },
+        )
+        .execute(&owner, &mut stx)
+        .expect_err("generic controller update must not mutate account-alias leases");
+        let freeze_err = iroha_data_model::isi::sns::FreezeSnsName::new(
+            ACCOUNT_ALIAS_SUFFIX_ID,
+            literal,
+            iroha_data_model::sns::FreezeNameRequestV1 {
+                reason: "fabricated hold".to_owned(),
+                until_ms: u64::MAX,
+                guardian_ticket: iroha_primitives::json::Json::from("fabricated"),
+            },
+        )
+        .execute(&owner, &mut stx)
+        .expect_err("generic freeze must not mutate account-alias leases");
+        let unfreeze_err = iroha_data_model::isi::sns::UnfreezeSnsName::new(
+            ACCOUNT_ALIAS_SUFFIX_ID,
+            literal,
+            iroha_data_model::sns::GovernanceHookV1 {
+                proposal_id: "fabricated-unfreeze".to_owned(),
+                council_vote_hash: iroha_primitives::json::Json::from("council"),
+                dao_vote_hash: iroha_primitives::json::Json::from("dao"),
+                steward_ack: iroha_primitives::json::Json::from("steward"),
+                guardian_clearance: None,
+            },
+        )
+        .execute(&owner, &mut stx)
+        .expect_err("generic unfreeze must not mutate account-alias leases");
+
+        for err in [
+            register_err,
+            renew_err,
+            transfer_err,
+            update_err,
+            freeze_err,
+            unfreeze_err,
+        ] {
+            assert!(
+                err.to_string().contains("dedicated account-alias"),
+                "unexpected error: {err}"
+            );
+        }
+
+        let unchanged = crate::sns::get_name_record(
+            stx.world(),
+            &stx.nexus.dataspace_catalog,
+            SnsNamespace::AccountAlias,
+            literal,
+            0,
+        )
+        .expect("unchanged account alias record");
+        assert_eq!(unchanged.owner, owner);
+        assert_eq!(
+            unchanged.controllers,
+            vec![NameControllerV1::account(&owner_address)]
+        );
+        assert_eq!(stx.world.account_aliases.get(&alias), Some(&owner));
+    }
+
+    #[test]
+    fn fabricated_governance_cannot_transfer_or_unfreeze_names() {
+        let owner = owner();
+        let other = another_owner();
+        let owner_account = Account::new(owner.clone()).build(&owner);
+        let mut world = World::with([], [owner_account], []);
+        let selector = crate::sns::selector_for_namespace_literal(
+            SnsNamespace::Domain,
+            "governed.universal",
+            &DataSpaceCatalog::default(),
+        )
+        .expect("selector");
+        let owner_address = AccountAddress::from_account_id(&owner).expect("owner address");
+        let record = NameRecordV1::new(
+            selector.clone(),
+            owner.clone(),
+            vec![NameControllerV1::account(&owner_address)],
+            0,
+            0,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            Metadata::default(),
+        );
+        world.smart_contract_state_mut_for_testing().insert(
+            crate::sns::record_storage_key(&selector),
+            norito::codec::Encode::encode(&record),
+        );
+        let state = State::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let governance = iroha_data_model::sns::GovernanceHookV1 {
+            proposal_id: "fabricated".to_owned(),
+            council_vote_hash: iroha_primitives::json::Json::from("council"),
+            dao_vote_hash: iroha_primitives::json::Json::from("dao"),
+            steward_ack: iroha_primitives::json::Json::from("steward"),
+            guardian_clearance: Some(iroha_primitives::json::Json::from("guardian")),
+        };
+        let mut block = state.block(next_header(&state));
+        let mut stx = block.transaction();
+
+        let transfer_err = iroha_data_model::isi::sns::TransferSnsName::new(
+            iroha_data_model::sns::DOMAIN_NAME_SUFFIX_ID,
+            "governed.universal",
+            iroha_data_model::sns::TransferNameRequestV1 {
+                new_owner: other,
+                governance: governance.clone(),
+            },
+        )
+        .execute(&owner, &mut stx)
+        .expect_err("unverified transfer evidence must fail closed");
+        let unfreeze_err = iroha_data_model::isi::sns::UnfreezeSnsName::new(
+            iroha_data_model::sns::DOMAIN_NAME_SUFFIX_ID,
+            "governed.universal",
+            governance,
+        )
+        .execute(&owner, &mut stx)
+        .expect_err("unverified unfreeze evidence must fail closed");
+        for err in [transfer_err, unfreeze_err] {
+            assert!(
+                err.to_string().contains("governance evidence verification"),
+                "unexpected error: {err}"
+            );
+        }
+        assert_eq!(
+            crate::sns::record_by_selector(stx.world(), &selector),
+            Some(record),
+            "governance rejection must not change the record"
+        );
+    }
+
     fn another_owner() -> AccountId {
-        let public_key = "ed0120C70416DC2D60D9AB2F0C6CED829837F1006DDED2DE794E9D5091A60663FA8C11"
-            .parse()
-            .expect("public key");
-        AccountId::new(public_key)
+        let keypair = KeyPair::try_from_seed(vec![0x42; 32], Algorithm::Ed25519)
+            .expect("fixture seed must derive a valid keypair");
+        AccountId::new(keypair.public_key().clone())
     }
 
     fn next_header(state: &State) -> BlockHeader {
@@ -753,17 +1018,111 @@ mod tests {
             .unwrap_or_else(|_| Quantity::zero())
     }
 
-    fn register_paid_alias(
+    #[test]
+    fn generic_registration_guards_do_not_charge_or_persist() {
+        let (state, payer, collector, payment_asset_definition_id) = sns_payment_payer_state();
+        {
+            let mut block = state.block(next_header(&state));
+            let mut stx = block.transaction();
+            Mint::asset_quantity(
+                2_u64,
+                AssetId::of(payment_asset_definition_id.clone(), payer.clone()),
+            )
+            .execute(&collector, &mut stx)
+            .expect("mint payment balance");
+            stx.apply();
+            block.commit().expect("mint block commits");
+        }
+
+        let alias =
+            AccountAlias::domainless("guarded".parse().expect("label"), DataSpaceId::UNIVERSAL);
+        let (alias_selector, domain_selector) = {
+            let view = state.view();
+            (
+                crate::sns::selector_for_account_alias(&alias, &view.nexus.dataspace_catalog)
+                    .expect("alias selector"),
+                crate::sns::selector_for_namespace_literal(
+                    SnsNamespace::Domain,
+                    "empty.universal",
+                    &view.nexus.dataspace_catalog,
+                )
+                .expect("domain selector"),
+            )
+        };
+        let payer_asset = AssetId::of(payment_asset_definition_id.clone(), payer.clone());
+        let mut block = state.block(next_header(&state));
+        let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx, 0xD1);
+        let balance_before = stx
+            .world
+            .asset(&payer_asset)
+            .expect("payer asset")
+            .value()
+            .clone();
+
+        let alias_err = iroha_data_model::isi::sns::RegisterSnsName::new(RegisterNameRequestV1 {
+            selector: alias_selector.clone(),
+            owner: payer.clone(),
+            controllers: vec![account_controller_for(&payer).expect("controller")],
+            term_years: 1,
+            pricing_class_hint: None,
+            payment: sns_payment(&payer, &payment_asset_definition_id),
+            governance: None,
+            metadata: Metadata::default(),
+        })
+        .execute(&payer, &mut stx)
+        .expect_err("generic account-alias registration is unavailable");
+        assert!(alias_err.to_string().contains("dedicated account-alias"));
+
+        let controller_err =
+            iroha_data_model::isi::sns::RegisterSnsName::new(RegisterNameRequestV1 {
+                selector: domain_selector.clone(),
+                owner: payer.clone(),
+                controllers: Vec::new(),
+                term_years: 1,
+                pricing_class_hint: None,
+                payment: sns_payment(&payer, &payment_asset_definition_id),
+                governance: None,
+                metadata: Metadata::default(),
+            })
+            .execute(&payer, &mut stx)
+            .expect_err("empty controllers must fail before charging");
+        assert!(
+            controller_err
+                .to_string()
+                .contains("at least one controller")
+        );
+
+        assert_eq!(
+            stx.world.asset(&payer_asset).expect("payer asset").value(),
+            &balance_before,
+            "rejected registration must not debit the payer"
+        );
+        assert!(
+            crate::sns::record_by_selector(stx.world(), &alias_selector).is_none(),
+            "generic account-alias rejection must not create a record"
+        );
+        assert!(
+            crate::sns::record_by_selector(stx.world(), &domain_selector).is_none(),
+            "controller validation failure must not create a record"
+        );
+    }
+
+    fn register_paid_domain_name(
         state: &State,
         payer: &AccountId,
         payment_asset_definition_id: &AssetDefinitionId,
         label: &str,
     ) -> u64 {
-        let alias = AccountAlias::domainless(label.parse().expect("label"), DataSpaceId::UNIVERSAL);
+        let literal = format!("{label}.universal");
         let selector = {
             let view = state.view();
-            crate::sns::selector_for_account_alias(&alias, &view.nexus.dataspace_catalog)
-                .expect("selector")
+            crate::sns::selector_for_namespace_literal(
+                SnsNamespace::Domain,
+                &literal,
+                &view.nexus.dataspace_catalog,
+            )
+            .expect("selector")
         };
         let request = RegisterNameRequestV1 {
             selector,
@@ -781,19 +1140,16 @@ mod tests {
             seed_test_call_hash(&mut stx, 0xC1);
             iroha_data_model::isi::sns::RegisterSnsName::new(request)
                 .execute(payer, &mut stx)
-                .expect("register SNS alias");
+                .expect("register SNS domain name");
             stx.apply();
             block.commit().expect("register block commits");
         }
 
-        let literal = alias
-            .to_literal(&state.nexus_snapshot().dataspace_catalog)
-            .expect("literal");
         let view = state.view();
         get_name_record(
             view.world(),
             &view.nexus.dataspace_catalog,
-            SnsNamespace::AccountAlias,
+            SnsNamespace::Domain,
             &literal,
             0,
         )
@@ -1178,7 +1534,7 @@ mod tests {
         }
 
         let initial_expiry =
-            register_paid_alias(&state, &payer, &payment_asset_definition_id, "paid");
+            register_paid_domain_name(&state, &payer, &payment_asset_definition_id, "paid");
 
         assert!(initial_expiry > 0);
         assert_eq!(
@@ -1209,15 +1565,15 @@ mod tests {
             block.commit().expect("mint block commits");
         }
         let initial_expiry =
-            register_paid_alias(&state, &payer, &payment_asset_definition_id, "renewed");
+            register_paid_domain_name(&state, &payer, &payment_asset_definition_id, "renewed");
 
         {
             let mut block = state.block(next_header(&state));
             let mut stx = block.transaction();
             seed_test_call_hash(&mut stx, 0xC4);
             iroha_data_model::isi::sns::RenewSnsName::new(
-                ACCOUNT_ALIAS_SUFFIX_ID,
-                "renewed@universal",
+                iroha_data_model::sns::DOMAIN_NAME_SUFFIX_ID,
+                "renewed.universal",
                 RenewNameRequestV1 {
                     term_years: 1,
                     payment: sns_payment(&payer, &payment_asset_definition_id),
@@ -1233,8 +1589,8 @@ mod tests {
         let renewed = get_name_record(
             view.world(),
             &view.nexus.dataspace_catalog,
-            SnsNamespace::AccountAlias,
-            "renewed@universal",
+            SnsNamespace::Domain,
+            "renewed.universal",
             0,
         )
         .expect("renewed alias");
@@ -1255,12 +1611,14 @@ mod tests {
     #[test]
     fn register_sns_name_without_balance_does_not_persist_record() {
         let (state, payer, _collector, payment_asset_definition_id) = sns_payment_payer_state();
-        let alias =
-            AccountAlias::domainless("free".parse().expect("label"), DataSpaceId::UNIVERSAL);
         let selector = {
             let view = state.view();
-            crate::sns::selector_for_account_alias(&alias, &view.nexus.dataspace_catalog)
-                .expect("selector")
+            crate::sns::selector_for_namespace_literal(
+                SnsNamespace::Domain,
+                "free.universal",
+                &view.nexus.dataspace_catalog,
+            )
+            .expect("selector")
         };
         let request = RegisterNameRequestV1 {
             selector,
@@ -1287,8 +1645,8 @@ mod tests {
             get_name_record(
                 view.world(),
                 &view.nexus.dataspace_catalog,
-                SnsNamespace::AccountAlias,
-                "free@universal",
+                SnsNamespace::Domain,
+                "free.universal",
                 0,
             )
             .is_err(),
@@ -1297,7 +1655,7 @@ mod tests {
     }
 
     #[test]
-    fn acquire_account_alias_lease_syncs_stale_default_payment_asset() {
+    fn acquire_account_alias_lease_rejects_stale_policy_without_mutating_it() {
         let authority = owner();
         let payment_asset_definition_id: AssetDefinitionId = "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
             .parse()
@@ -1333,32 +1691,38 @@ mod tests {
 
         let alias =
             AccountAlias::domainless("retail".parse().expect("label"), DataSpaceId::UNIVERSAL);
-        {
-            let mut block = state.block(next_header(&state));
-            let mut stx = block.transaction();
-            seed_test_call_hash(&mut stx, 0xC6);
+        let mut block = state.block(next_header(&state));
+        let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx, 0xC6);
+        let err =
             AcquireAccountAliasLease::new(alias, authority.clone(), authority.clone(), 1, None)
                 .execute(&authority, &mut stx)
-                .expect("acquire lease with deployment payment asset");
-            stx.apply();
-            block.commit().expect("acquire block commits");
-        }
+                .expect_err("lease mutation must reject a stale SNS payment policy");
+        assert!(
+            err.to_string()
+                .contains("does not match configured Nexus fee asset"),
+            "unexpected error: {err}"
+        );
+        drop(stx);
+        drop(block);
 
         let view = state.view();
         let policy = policy_by_id(view.world(), ACCOUNT_ALIAS_SUFFIX_ID).expect("policy");
         assert_eq!(
-            policy.payment_asset_id,
-            payment_asset_definition_id.to_string()
+            policy.payment_asset_id, "61CtjvNd9T3THAR65GsMVHr82Bjc",
+            "rejected mutation must not silently converge policy state"
         );
-        let acquired = get_name_record(
-            view.world(),
-            &view.nexus.dataspace_catalog,
-            SnsNamespace::AccountAlias,
-            "retail@universal",
-            0,
-        )
-        .expect("acquired alias lease");
-        assert_eq!(acquired.owner, authority);
+        assert!(
+            get_name_record(
+                view.world(),
+                &view.nexus.dataspace_catalog,
+                SnsNamespace::AccountAlias,
+                "retail@universal",
+                0,
+            )
+            .is_err(),
+            "rejected mutation must not persist an alias lease"
+        );
     }
 
     #[test]
@@ -1383,6 +1747,10 @@ mod tests {
             vec![payment_definition],
         );
         seed_default_namespace_policies(&mut world);
+        assert!(crate::sns::sync_default_namespace_policy_payment_asset(
+            &mut world,
+            &payment_asset_definition_id.to_string(),
+        ));
         let state = State::new_for_testing(
             world,
             Kura::blank_kura_for_testing(),

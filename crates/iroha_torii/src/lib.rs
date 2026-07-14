@@ -1008,42 +1008,14 @@ fn resolve_alias_label_on_chain(
     alias_label: &iroha_data_model::account::rekey::AccountAlias,
 ) -> Result<Option<(String, AccountId, &'static str)>, Error> {
     let state_view = app.state.view();
-    if let Some(record) = state_view.world().account_rekey_records().get(alias_label) {
-        return Ok(Some((
-            canonical,
-            record.active_account_id.clone(),
-            "rekey_record",
-        )));
-    }
-    if let Some(account_id) = state_view
-        .world()
-        .account_aliases()
-        .get(alias_label)
-        .cloned()
-    {
-        return Ok(Some((canonical, account_id, "account_alias")));
-    }
-
-    let mut matched_account_id: Option<AccountId> = None;
-    for (account_id, value) in state_view.world().accounts().iter() {
-        if value.as_ref().label() != Some(alias_label) {
-            continue;
-        }
-        if let Some(existing) = matched_account_id.as_ref() {
-            if existing != account_id {
-                return Err(Error::AppConflict {
-                    code: "account_alias_conflict",
-                    message: format!(
-                        "account alias `{canonical}` is bound to multiple accounts: {existing} and {account_id}"
-                    ),
-                });
-            }
-        } else {
-            matched_account_id = Some(account_id.clone());
-        }
-    }
-
-    Ok(matched_account_id.map(|account_id| (canonical, account_id, "account_label")))
+    let now_ms = routing::asset_alias_observation_time_ms(&app.state);
+    Ok(iroha_core::sns::resolve_active_account_alias(
+        state_view.world(),
+        &state_view.nexus().dataspace_catalog,
+        alias_label,
+        now_ms,
+    )
+    .map(|account_id| (canonical, account_id, "active_sns")))
 }
 
 fn resolve_alias_on_route(
@@ -1072,21 +1044,31 @@ fn resolve_alias_index_on_chain(
             ),
         ))
     })?;
-    let nexus = app.state.nexus_snapshot();
     let state_view = app.state.view();
+    let now_ms = routing::asset_alias_observation_time_ms(&app.state);
+    let catalog = &state_view.nexus().dataspace_catalog;
     state_view
         .world()
         .account_aliases()
         .iter()
+        .filter_map(|(label, indexed_account_id)| {
+            let active_account_id = iroha_core::sns::resolve_active_account_alias(
+                state_view.world(),
+                catalog,
+                label,
+                now_ms,
+            )?;
+            (&active_account_id == indexed_account_id).then_some((label, active_account_id))
+        })
         .nth(idx)
         .map(
             |(label, account_id)| -> Result<(String, AccountId), Error> {
-                let alias = label.to_literal(&nexus.dataspace_catalog).map_err(|err| {
+                let alias = label.to_literal(catalog).map_err(|err| {
                     Error::Query(iroha_data_model::ValidationFail::InternalError(
                         err.to_string(),
                     ))
                 })?;
-                Ok((alias, account_id.clone()))
+                Ok((alias, account_id))
             },
         )
         .transpose()
@@ -1104,22 +1086,32 @@ fn resolve_alias_index_on_route(
             ),
         ))
     })?;
-    let nexus = app.state.nexus_snapshot();
     let state_view = app.state.view();
+    let now_ms = routing::asset_alias_observation_time_ms(&app.state);
+    let catalog = &state_view.nexus().dataspace_catalog;
     state_view
         .world()
         .account_aliases()
         .iter()
         .filter(|(label, _)| label.dataspace == routing_decision.dataspace_id)
+        .filter_map(|(label, indexed_account_id)| {
+            let active_account_id = iroha_core::sns::resolve_active_account_alias(
+                state_view.world(),
+                catalog,
+                label,
+                now_ms,
+            )?;
+            (&active_account_id == indexed_account_id).then_some((label, active_account_id))
+        })
         .nth(idx)
         .map(
             |(label, account_id)| -> Result<(String, AccountId), Error> {
-                let alias = label.to_literal(&nexus.dataspace_catalog).map_err(|err| {
+                let alias = label.to_literal(catalog).map_err(|err| {
                     Error::Query(iroha_data_model::ValidationFail::InternalError(
                         err.to_string(),
                     ))
                 })?;
-                Ok((alias, account_id.clone()))
+                Ok((alias, account_id))
             },
         )
         .transpose()
@@ -1204,7 +1196,7 @@ fn lookup_aliases_by_account_on_chain(
     let (account_id, canonical_account_id) = parse_exact_account_id_literal(&request.account_id)?;
     validate_exact_alias_lookup_filters(app, request)?;
     let query = iroha_data_model::query::account::prelude::FindAliasesByAccountId::new(
-        account_id,
+        account_id.clone(),
         request
             .dataspace
             .as_deref()
@@ -1218,7 +1210,8 @@ fn lookup_aliases_by_account_on_chain(
             .filter(|value| !value.is_empty())
             .map(str::to_owned),
     );
-    let items = match query.execute(&app.state.view()) {
+    let state_view = app.state.view();
+    let items = match query.execute(&state_view) {
         Ok(items) => items,
         Err(iroha_data_model::query::error::QueryExecutionFail::NotFound) => return Ok(None),
         Err(err) => {
@@ -1227,17 +1220,32 @@ fn lookup_aliases_by_account_on_chain(
             )));
         }
     };
+    let now_ms = routing::asset_alias_observation_time_ms(&app.state);
+    let catalog = &state_view.nexus().dataspace_catalog;
+    let items = items
+        .into_iter()
+        .filter(|item| {
+            AccountAlias::from_literal(&item.alias, catalog).is_ok_and(|alias| {
+                iroha_core::sns::resolve_active_account_alias(
+                    state_view.world(),
+                    catalog,
+                    &alias,
+                    now_ms,
+                )
+                .as_ref()
+                    == Some(&account_id)
+            })
+        })
+        .map(|item| routing::AliasLookupByAccountItemDto {
+            alias: item.alias,
+            dataspace: item.dataspace,
+            domain: item.domain,
+            is_primary: item.is_primary,
+        })
+        .collect();
     Ok(Some((
         canonical_account_id,
-        items
-            .into_iter()
-            .map(|item| routing::AliasLookupByAccountItemDto {
-                alias: item.alias,
-                dataspace: item.dataspace,
-                domain: item.domain,
-                is_primary: item.is_primary,
-            })
-            .collect(),
+        items,
     )))
 }
 
@@ -19962,32 +19970,11 @@ fn torii_partition_alias_lookup_routes(
     visibility: &ToriiAccountReadVisibility,
     request: &routing::AliasLookupByAccountRequestDto,
 ) -> (Vec<ToriiAliasLookupRouteAccess>, usize) {
-    if matches!(visibility, ToriiAccountReadVisibility::PublicExact) {
-        return (
-            routes
-                .into_iter()
-                .map(|route| ToriiAliasLookupRouteAccess {
-                    route,
-                    filter_by_permission: false,
-                })
-                .collect(),
-            0,
-        );
-    }
-    let visible_dataspaces = torii_visible_account_read_routes(app.as_ref(), visibility.caller())
-        .into_iter()
-        .map(|route| route.dataspace_id)
-        .collect::<BTreeSet<_>>();
     let mut allowed_routes = Vec::new();
     let mut denied_routes = 0usize;
 
     for route in routes {
-        if visible_dataspaces.contains(&route.dataspace_id) {
-            allowed_routes.push(ToriiAliasLookupRouteAccess {
-                route,
-                filter_by_permission: false,
-            });
-        } else if torii_alias_lookup_route_allowed_by_permission(
+        if torii_alias_lookup_route_allowed_by_permission(
             app.as_ref(),
             route,
             visibility.caller(),
@@ -19995,8 +19982,64 @@ fn torii_partition_alias_lookup_routes(
         ) {
             allowed_routes.push(ToriiAliasLookupRouteAccess {
                 route,
+                // A dataspace grant only opens the route. Each returned domain-qualified alias
+                // still needs its exact domain grant before it may be disclosed.
                 filter_by_permission: true,
             });
+        } else {
+            denied_routes = denied_routes.saturating_add(1);
+        }
+    }
+
+    (allowed_routes, denied_routes)
+}
+
+#[cfg(feature = "app_api")]
+fn torii_partition_alias_index_routes_by_permission(
+    app: &SharedAppState,
+    routes: Vec<RoutingDecision>,
+    caller: &AccountId,
+    index: u64,
+) -> (Vec<RoutingDecision>, usize) {
+    let catalog = app.state.nexus_snapshot().dataspace_catalog;
+    let mut allowed_routes = Vec::new();
+    let mut denied_routes = 0usize;
+
+    for route in routes {
+        let allowed = match resolve_alias_index_on_route(app, route, index) {
+            Ok(Some((alias_literal, _))) => AccountAlias::from_literal(&alias_literal, &catalog)
+                .is_ok_and(|alias| {
+                    torii_authority_can_resolve_account_alias(
+                        app.state.view().world(),
+                        caller,
+                        &alias,
+                    )
+                }),
+            Ok(None) => {
+                let probe = AccountAlias::new(
+                    "lookup".parse().expect("static alias label"),
+                    None,
+                    route.dataspace_id,
+                );
+                torii_authority_can_resolve_account_alias(
+                    app.state.view().world(),
+                    caller,
+                    &probe,
+                )
+            }
+            Err(error) => {
+                iroha_logger::warn!(
+                    caller = %caller,
+                    index,
+                    dataspace = route.dataspace_id.as_u64(),
+                    ?error,
+                    "Torii alias-index permission preflight rejected an invalid route-local binding"
+                );
+                false
+            }
+        };
+        if allowed {
+            allowed_routes.push(route);
         } else {
             denied_routes = denied_routes.saturating_add(1);
         }
@@ -42976,22 +43019,26 @@ async fn handler_alias_resolve_index(
     headers: axum::http::HeaderMap,
     body: axum::body::Bytes,
 ) -> Result<AxResponse, Error> {
-    let _request: routing::AliasResolveIndexRequestDto = norito::json::from_slice(body.as_ref())
+    let request: routing::AliasResolveIndexRequestDto = norito::json::from_slice(body.as_ref())
         .map_err(|err| {
             Error::Query(iroha_data_model::ValidationFail::QueryFailed(
                 iroha_data_model::query::error::QueryExecutionFail::Conversion(err.to_string()),
             ))
         })?;
-    let visibility = ToriiAccountReadVisibility::Signed(require_signed_alias_request(
+    let caller = require_signed_alias_request(
         &app,
         &headers,
         &method,
         &uri,
         body.as_ref(),
-    )?);
+    )?;
     let candidate_routes = torii_all_dataspace_routes(app.as_ref());
-    let (allowed_routes, denied_routes) =
-        torii_partition_routes_by_visibility(&app, candidate_routes, &visibility);
+    let (allowed_routes, denied_routes) = torii_partition_alias_index_routes_by_permission(
+        &app,
+        candidate_routes,
+        &caller,
+        request.index,
+    );
 
     if allowed_routes.len() == 1 && denied_routes == 0 {
         return Ok(execute_torii_single_route_read(
@@ -43052,17 +43099,16 @@ async fn handler_alias_lookup_by_account(
                 iroha_data_model::query::error::QueryExecutionFail::Conversion(err.to_string()),
             ))
         })?;
-    let _ = torii_visibility_account_from_headers(
+    let caller = require_signed_alias_request(
         &app,
         &headers,
         &method,
         &uri,
         body.as_ref(),
-        "v1/aliases/by-account",
     )?;
     let (target_account, _) = parse_exact_account_id_literal(&request.account_id)?;
     validate_exact_alias_lookup_filters(&app, &request)?;
-    let visibility = ToriiAccountReadVisibility::PublicExact;
+    let visibility = ToriiAccountReadVisibility::Signed(caller);
     let candidate_routes = match torii_target_account_routes(app.as_ref(), &target_account) {
         Ok(routes) => routes,
         Err(response) => return Ok(response),
@@ -43281,8 +43327,10 @@ fn recipient_route_for_account(
     requested_account_id: String,
     policy: &FxCorridorPolicy,
 ) -> Result<routing::RetailRecipientRouteResponseDto, AxResponse> {
-    let nexus = app.state.nexus_snapshot();
-    let world = app.state.world_view();
+    let state_view = app.state.view();
+    let nexus = state_view.nexus();
+    let world = state_view.world();
+    let now_ms = routing::asset_alias_observation_time_ms(&app.state);
     let account = world.account(account_id).map_err(|_| {
         torii_proxy_error_response(
             StatusCode::NOT_FOUND,
@@ -43297,6 +43345,17 @@ fn recipient_route_for_account(
         .unwrap_or_default();
     let mut eligible = BTreeMap::<AccountAlias, (DomainId, String, String)>::new();
     for alias in aliases {
+        if iroha_core::sns::resolve_active_account_alias(
+            world,
+            &nexus.dataspace_catalog,
+            &alias,
+            now_ms,
+        )
+        .as_ref()
+            != Some(account_id)
+        {
+            continue;
+        }
         if !recipient_lookup_alias_allowed_by_policy(&alias, policy, &nexus.dataspace_catalog) {
             continue;
         }

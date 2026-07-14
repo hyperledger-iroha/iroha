@@ -1378,6 +1378,7 @@ fn parse_lane_settlement_buffer_config(
     world: &impl WorldReadOnly,
     dataspace_catalog: &DataSpaceCatalog,
     lane: &LaneConfig,
+    now_ms: u64,
 ) -> Result<Option<LaneSettlementBufferConfig>, String> {
     let account_raw = lane.metadata.get("settlement.buffer_account");
     let asset_raw = lane.metadata.get("settlement.buffer_asset");
@@ -1394,8 +1395,9 @@ fn parse_lane_settlement_buffer_config(
         }
     };
 
-    let account_id = parse_account_literal_with_world(world, dataspace_catalog, account_raw)
-        .ok_or_else(|| format!("invalid settlement buffer account `{account_raw}`"))?;
+    let account_id =
+        parse_account_literal_with_world(world, dataspace_catalog, account_raw, now_ms)
+            .ok_or_else(|| format!("invalid settlement buffer account `{account_raw}`"))?;
     let asset_definition_id = AssetDefinitionId::parse_address_literal(asset_raw)
         .map_err(|error| format!("invalid settlement buffer asset `{asset_raw}`: {error}"))?;
     let capacity = capacity_raw.parse::<XorQuantity>().map_err(|error| {
@@ -1427,6 +1429,7 @@ fn compute_settlement_buffer_snapshot(
         &state_block.world,
         &state_block.nexus.dataspace_catalog,
         lane,
+        u64::try_from(state_block._curr_block.creation_time().as_millis()).unwrap_or(u64::MAX),
     )?;
     let Some(config) = config else {
         return Ok(None);
@@ -1826,6 +1829,7 @@ pub(crate) fn parse_account_literal_with_world(
     world: &impl WorldReadOnly,
     dataspace_catalog: &DataSpaceCatalog,
     input: &str,
+    now_ms: u64,
 ) -> Option<AccountId> {
     let literal = input.trim();
     if literal.is_empty() {
@@ -1837,33 +1841,17 @@ pub(crate) fn parse_account_literal_with_world(
         .map(iroha_data_model::account::ParsedAccountId::into_account_id)
         .or_else(|| {
             let alias = AccountAlias::from_literal(literal, dataspace_catalog).ok()?;
-            resolve_account_alias_in_world(world, &alias)
+            resolve_account_alias_in_world(world, dataspace_catalog, &alias, now_ms)
         })
 }
 
 pub(crate) fn resolve_account_alias_in_world(
     world: &impl WorldReadOnly,
+    dataspace_catalog: &DataSpaceCatalog,
     alias: &AccountAlias,
+    now_ms: u64,
 ) -> Option<AccountId> {
-    if let Some(account_id) = world.account_aliases().get(alias).cloned() {
-        return Some(account_id);
-    }
-
-    let mut matched_account_id: Option<AccountId> = None;
-    for (account_id, value) in world.accounts().iter() {
-        if value.as_ref().label() != Some(alias) {
-            continue;
-        }
-        if let Some(existing) = matched_account_id.as_ref() {
-            if existing != account_id {
-                return None;
-            }
-        } else {
-            matched_account_id = Some(account_id.clone());
-        }
-    }
-
-    matched_account_id
+    crate::sns::resolve_active_account_alias(world, dataspace_catalog, alias, now_ms)
 }
 
 pub(crate) fn parse_asset_definition_literal_with_world(
@@ -1889,12 +1877,13 @@ fn parse_account_from_access_key(
     world: &impl WorldReadOnly,
     dataspace_catalog: &DataSpaceCatalog,
     key: &str,
+    now_ms: u64,
 ) -> Option<AccountId> {
     if let Some(rest) = key.strip_prefix("account:") {
-        parse_account_literal_with_world(world, dataspace_catalog, rest)
+        parse_account_literal_with_world(world, dataspace_catalog, rest, now_ms)
     } else if let Some(rest) = key.strip_prefix("account.detail:") {
         let (account_raw, _) = rest.split_once(':')?;
-        parse_account_literal_with_world(world, dataspace_catalog, account_raw)
+        parse_account_literal_with_world(world, dataspace_catalog, account_raw, now_ms)
     } else {
         None
     }
@@ -1991,12 +1980,18 @@ mod prefetch_tests {
             parse_account_from_access_key(
                 &world_view,
                 &DataSpaceCatalog::default(),
-                &format!("account:{alice}")
+                &format!("account:{alice}"),
+                0,
             ),
             Some(expected.clone())
         );
         assert_eq!(
-            parse_account_from_access_key(&world_view, &DataSpaceCatalog::default(), &detail_key),
+            parse_account_from_access_key(
+                &world_view,
+                &DataSpaceCatalog::default(),
+                &detail_key,
+                0,
+            ),
             Some(expected.clone())
         );
         assert_eq!(expected.subject_id(), alice.subject_id());
@@ -2005,6 +2000,7 @@ mod prefetch_tests {
                 &world_view,
                 &DataSpaceCatalog::default(),
                 "asset:coin#wonderland",
+                0,
             )
             .is_none()
         );
@@ -2023,7 +2019,12 @@ mod prefetch_tests {
         let i105 = alice.canonical_i105().expect("i105 encoding");
         let literal = format!("{i105}@{wonderland}");
         assert_eq!(
-            parse_account_literal_with_world(&world_view, &DataSpaceCatalog::default(), &literal),
+            parse_account_literal_with_world(
+                &world_view,
+                &DataSpaceCatalog::default(),
+                &literal,
+                0,
+            ),
             None
         );
     }
@@ -2042,7 +2043,7 @@ mod prefetch_tests {
 
         let i105 = alice.canonical_i105().expect("i105 encoding");
         assert_eq!(
-            parse_account_literal_with_world(&world_view, &DataSpaceCatalog::default(), &i105),
+            parse_account_literal_with_world(&world_view, &DataSpaceCatalog::default(), &i105, 0,),
             Some(alice)
         );
     }
@@ -2062,7 +2063,12 @@ mod prefetch_tests {
             .canonical_i105()
             .expect("canonical I105 account literal");
         assert_eq!(
-            parse_account_literal_with_world(&world_view, &DataSpaceCatalog::default(), &encoded),
+            parse_account_literal_with_world(
+                &world_view,
+                &DataSpaceCatalog::default(),
+                &encoded,
+                0,
+            ),
             Some(account),
             "canonical I105 account ids must remain valid without domain-linked account materialization"
         );
@@ -2077,12 +2083,38 @@ mod prefetch_tests {
             Some(AccountAliasDomain::new(domain_id.name().clone())),
             DataSpaceId::UNIVERSAL,
         );
-        let world = World::with(
+        let mut world = World::with(
             [Domain::new(domain_id.clone()).build(&account_id)],
             [Account::new(account_id.clone())
-                .with_label(Some(alias))
+                .with_label(Some(alias.clone()))
                 .build(&account_id)],
             [],
+        );
+        let selector = crate::sns::selector_for_account_alias(&alias, &DataSpaceCatalog::default())
+            .expect("SNS selector");
+        let address = iroha_data_model::account::AccountAddress::from_account_id(&account_id)
+            .expect("account address");
+        let lease = iroha_data_model::sns::NameRecordV1::new(
+            selector.clone(),
+            account_id.clone(),
+            vec![iroha_data_model::sns::NameControllerV1::account(&address)],
+            0,
+            0,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            iroha_data_model::metadata::Metadata::default(),
+        );
+        world.smart_contract_state_mut_for_testing().insert(
+            crate::sns::record_storage_key(&selector),
+            norito::codec::Encode::encode(&lease),
+        );
+        world
+            .account_aliases
+            .insert(alias.clone(), account_id.clone());
+        world.account_rekey_records.insert(
+            alias.clone(),
+            iroha_data_model::account::rekey::AccountRekeyRecord::new(alias, account_id.clone()),
         );
         let world_view = world.view();
 
@@ -2091,6 +2123,7 @@ mod prefetch_tests {
                 &world_view,
                 &DataSpaceCatalog::default(),
                 "gas@ivm.universal",
+                0,
             ),
             Some(account_id),
             "account selectors must resolve active on-chain aliases to canonical account ids"
@@ -2104,17 +2137,7 @@ mod prefetch_tests {
             Name::from_str("treasury").expect("alias name"),
             DataSpaceId::new(7),
         );
-        let world = World::with(
-            [],
-            [Account::new(account_id.clone())
-                .with_label(Some(alias))
-                .build(&account_id)],
-            [],
-        );
-        let kura = Kura::blank_kura_for_testing();
-        let query = LiveQueryStore::start_test();
-        let state = State::new_for_testing(world, kura, query);
-        state.nexus.write().dataspace_catalog = DataSpaceCatalog::new(vec![
+        let catalog = DataSpaceCatalog::new(vec![
             DataSpaceMetadata::default(),
             DataSpaceMetadata {
                 id: DataSpaceId::new(7),
@@ -2124,6 +2147,43 @@ mod prefetch_tests {
             },
         ])
         .expect("dataspace catalog");
+        let mut world = World::with(
+            [],
+            [Account::new(account_id.clone())
+                .with_label(Some(alias.clone()))
+                .build(&account_id)],
+            [],
+        );
+        let selector =
+            crate::sns::selector_for_account_alias(&alias, &catalog).expect("SNS selector");
+        let address = iroha_data_model::account::AccountAddress::from_account_id(&account_id)
+            .expect("account address");
+        let lease = iroha_data_model::sns::NameRecordV1::new(
+            selector.clone(),
+            account_id.clone(),
+            vec![iroha_data_model::sns::NameControllerV1::account(&address)],
+            0,
+            0,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            iroha_data_model::metadata::Metadata::default(),
+        );
+        world.smart_contract_state_mut_for_testing().insert(
+            crate::sns::record_storage_key(&selector),
+            norito::codec::Encode::encode(&lease),
+        );
+        world
+            .account_aliases
+            .insert(alias.clone(), account_id.clone());
+        world.account_rekey_records.insert(
+            alias.clone(),
+            iroha_data_model::account::rekey::AccountRekeyRecord::new(alias, account_id.clone()),
+        );
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(world, kura, query);
+        state.nexus.write().dataspace_catalog = catalog;
         let state_view = state.view();
         let world_view = state_view.world();
 
@@ -2132,6 +2192,7 @@ mod prefetch_tests {
                 world_view,
                 &state_view.nexus.dataspace_catalog,
                 "treasury@retail",
+                0,
             ),
             Some(account_id.clone()),
             "account selectors must resolve aliases in non-default dataspaces"
@@ -2162,10 +2223,14 @@ mod prefetch_tests {
         lane.metadata
             .insert("settlement.buffer_capacity".to_owned(), "1000".to_owned());
 
-        let parsed =
-            parse_lane_settlement_buffer_config(&world_view, &DataSpaceCatalog::default(), &lane)
-                .expect("valid config")
-                .expect("config present");
+        let parsed = parse_lane_settlement_buffer_config(
+            &world_view,
+            &DataSpaceCatalog::default(),
+            &lane,
+            0,
+        )
+        .expect("valid config")
+        .expect("config present");
         let expected = alice.clone();
         assert_eq!(parsed.account_id, expected);
         assert_eq!(parsed.account_id.subject_id(), alice.subject_id());
@@ -2179,9 +2244,13 @@ mod prefetch_tests {
             "settlement.buffer_capacity_micro".to_owned(),
             "1000000000".to_owned(),
         );
-        let retired =
-            parse_lane_settlement_buffer_config(&world_view, &DataSpaceCatalog::default(), &lane)
-                .expect_err("retired fixed-unit key must not be accepted");
+        let retired = parse_lane_settlement_buffer_config(
+            &world_view,
+            &DataSpaceCatalog::default(),
+            &lane,
+            0,
+        )
+        .expect_err("retired fixed-unit key must not be accepted");
         assert!(retired.contains("must define"));
 
         lane.metadata
@@ -2199,6 +2268,7 @@ mod prefetch_tests {
                 &world_view,
                 &DataSpaceCatalog::default(),
                 &lane,
+                0,
             )
             .expect_err("invalid capacity must fail closed");
             assert!(
@@ -12226,6 +12296,9 @@ pub(crate) mod valid {
                     // Deterministically prefetch authority/account state and warm the first
                     // instruction chunk for each overlay to reduce merge stalls.
                     let mut accounts_to_prefetch: BTreeSet<AccountId> = BTreeSet::new();
+                    let alias_resolution_time_ms =
+                        u64::try_from(state_block._curr_block.creation_time().as_millis())
+                            .unwrap_or(u64::MAX);
                     for entry in &prepared {
                         accounts_to_prefetch.insert(entry.authority.clone());
                         if let Some(access_set) = access.get(entry.idx) {
@@ -12234,6 +12307,7 @@ pub(crate) mod valid {
                                     &state_block.world,
                                     &state_block.nexus.dataspace_catalog,
                                     key,
+                                    alias_resolution_time_ms,
                                 ) {
                                     accounts_to_prefetch.insert(account);
                                 }
@@ -12243,6 +12317,7 @@ pub(crate) mod valid {
                                     &state_block.world,
                                     &state_block.nexus.dataspace_catalog,
                                     key,
+                                    alias_resolution_time_ms,
                                 ) {
                                     accounts_to_prefetch.insert(account);
                                 }

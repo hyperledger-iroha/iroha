@@ -1057,6 +1057,7 @@ impl Execute for ClaimPublicLaneRewards {
             &state_transaction.world,
             &state_transaction.nexus.dataspace_catalog,
             &state_transaction.nexus.fees.fee_sink_account_id,
+            state_transaction.block_unix_timestamp_ms(),
         )
         .ok_or_else(|| {
             Error::InvariantViolation(
@@ -1375,6 +1376,7 @@ fn validate_reward_sink(
         &state_transaction.world,
         &state_transaction.nexus.dataspace_catalog,
         &state_transaction.nexus.fees.fee_sink_account_id,
+        state_transaction.block_unix_timestamp_ms(),
     )
     .ok_or_else(|| {
         Error::InvariantViolation(
@@ -1830,6 +1832,7 @@ fn stake_context(
         dataspace_catalog,
         &staking_cfg.stake_escrow_account_id,
         "stake_escrow_account_id",
+        now_ms,
     )?;
     let slash_sink_account: AccountId = if let Some(account) = slash_sink_override {
         account.clone()
@@ -1839,6 +1842,7 @@ fn stake_context(
             dataspace_catalog,
             &staking_cfg.slash_sink_account_id,
             "slash_sink_account_id",
+            now_ms,
         )?
     };
 
@@ -1855,9 +1859,10 @@ fn parse_staking_account_literal(
     dataspace_catalog: &iroha_data_model::nexus::DataSpaceCatalog,
     literal: &str,
     field: &'static str,
+    now_ms: u64,
 ) -> Result<AccountId, Error> {
     if let Some(account) =
-        crate::block::parse_account_literal_with_world(world, dataspace_catalog, literal)
+        crate::block::parse_account_literal_with_world(world, dataspace_catalog, literal, now_ms)
     {
         return Ok(account);
     }

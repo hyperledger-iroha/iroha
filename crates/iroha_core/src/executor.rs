@@ -580,6 +580,7 @@ fn parse_fee_sponsor(
     world: &impl WorldReadOnly,
     dataspace_catalog: &iroha_data_model::nexus::DataSpaceCatalog,
     metadata: &Metadata,
+    now_ms: u64,
 ) -> Result<Option<AccountId>, ValidationFail> {
     let Some(raw) = metadata.get("fee_sponsor") else {
         return Ok(None);
@@ -592,6 +593,7 @@ fn parse_fee_sponsor(
                     world,
                     dataspace_catalog,
                     &literal,
+                    now_ms,
                 )
             {
                 return Ok(Some(sponsor));
@@ -637,8 +639,9 @@ fn resolve_effective_fee_sponsor(
     dataspace_fee_sponsors: &BTreeMap<DataSpaceId, String>,
     metadata: &Metadata,
     route_dataspace_id: Option<DataSpaceId>,
+    now_ms: u64,
 ) -> Result<Option<AccountId>, ValidationFail> {
-    if let Some(explicit_sponsor) = parse_fee_sponsor(world, dataspace_catalog, metadata)? {
+    if let Some(explicit_sponsor) = parse_fee_sponsor(world, dataspace_catalog, metadata, now_ms)? {
         return Ok(Some(explicit_sponsor));
     }
 
@@ -650,6 +653,7 @@ fn resolve_effective_fee_sponsor(
         dataspace_catalog,
         dataspace_fee_sponsors,
         dataspace_id,
+        now_ms,
     )
 }
 
@@ -682,6 +686,7 @@ fn account_literal_matches(
     dataspace_catalog: &iroha_data_model::nexus::DataSpaceCatalog,
     literal: &str,
     expected: &AccountId,
+    now_ms: u64,
 ) -> bool {
     if let Ok(canonical) = AccountId::canonicalize(literal)
         && expected
@@ -693,7 +698,7 @@ fn account_literal_matches(
         return true;
     }
 
-    crate::block::parse_account_literal_with_world(world, dataspace_catalog, literal)
+    crate::block::parse_account_literal_with_world(world, dataspace_catalog, literal, now_ms)
         .as_ref()
         .is_some_and(|account| account == expected)
 }
@@ -702,6 +707,7 @@ fn successful_claim_fee_authority_allowed(
     world: &impl WorldReadOnly,
     nexus: &iroha_config::parameters::actual::Nexus,
     authority: &AccountId,
+    now_ms: u64,
 ) -> bool {
     nexus
         .fees
@@ -711,7 +717,7 @@ fn successful_claim_fee_authority_allowed(
         .map(str::trim)
         .filter(|literal| !literal.is_empty())
         .any(|literal| {
-            account_literal_matches(world, world.dataspace_catalog(), literal, authority)
+            account_literal_matches(world, world.dataspace_catalog(), literal, authority, now_ms)
         })
 }
 
@@ -723,7 +729,7 @@ fn successful_claim_fee_exempt_instructions(
     instructions: &[InstructionBox],
     observation_time_ms: u64,
 ) -> bool {
-    if !successful_claim_fee_authority_allowed(world, nexus, authority) {
+    if !successful_claim_fee_authority_allowed(world, nexus, authority, observation_time_ms) {
         return false;
     }
 
@@ -735,7 +741,14 @@ fn successful_claim_fee_exempt_instructions(
     }
 
     let Some(recipient) = metadata_string(metadata, SORA_NEXUS_CLAIM_RECIPIENT_METADATA_KEY)
-        .and_then(|literal| parse_account_id_literal(world, world.dataspace_catalog(), &literal))
+        .and_then(|literal| {
+            parse_account_id_literal(
+                world,
+                world.dataspace_catalog(),
+                &literal,
+                observation_time_ms,
+            )
+        })
     else {
         return false;
     };
@@ -1158,8 +1171,9 @@ fn parse_account_id_literal(
     world: &impl WorldReadOnly,
     dataspace_catalog: &iroha_data_model::nexus::DataSpaceCatalog,
     literal: &str,
+    now_ms: u64,
 ) -> Option<AccountId> {
-    crate::block::parse_account_literal_with_world(world, dataspace_catalog, literal)
+    crate::block::parse_account_literal_with_world(world, dataspace_catalog, literal, now_ms)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1327,6 +1341,7 @@ fn check_lane_relay_burn_canonical_sponsor(
     world: &impl WorldReadOnly,
     cfg: &iroha_config::parameters::actual::NexusFees,
     payer: &AccountId,
+    now_ms: u64,
 ) -> Result<(), NexusFeeAdmissionError> {
     let raw = cfg.canonical_sponsor_account_id.as_deref().ok_or_else(|| {
         NexusFeeAdmissionError::ConfigInvalid(
@@ -1334,7 +1349,7 @@ fn check_lane_relay_burn_canonical_sponsor(
                 .to_owned(),
         )
     })?;
-    let canonical = parse_account_id_literal(world, world.dataspace_catalog(), raw).ok_or_else(
+    let canonical = parse_account_id_literal(world, world.dataspace_catalog(), raw, now_ms).ok_or_else(
         || {
             NexusFeeAdmissionError::ConfigInvalid(
                 "invalid nexus.fees.canonical_sponsor_account_id; expected canonical I105 account id or on-chain alias"
@@ -1371,8 +1386,10 @@ pub(crate) fn can_use_fee_sponsor_read_only(
     sponsor: &AccountId,
     nexus: &iroha_config::parameters::actual::Nexus,
     route_dataspace_id: Option<DataSpaceId>,
+    now_ms: u64,
 ) -> bool {
-    !fee_sponsor_policy_ids_read_only(world, caller, sponsor, nexus, route_dataspace_id).is_empty()
+    !fee_sponsor_policy_ids_read_only(world, caller, sponsor, nexus, route_dataspace_id, now_ms)
+        .is_empty()
 }
 
 pub(crate) fn fee_sponsor_policy_ids_read_only(
@@ -1381,6 +1398,7 @@ pub(crate) fn fee_sponsor_policy_ids_read_only(
     sponsor: &AccountId,
     nexus: &iroha_config::parameters::actual::Nexus,
     route_dataspace_id: Option<DataSpaceId>,
+    now_ms: u64,
 ) -> BTreeSet<FeeSponsorPolicyId> {
     let dataspace_catalog = world.dataspace_catalog();
     let mut policy_ids = BTreeSet::new();
@@ -1390,6 +1408,7 @@ pub(crate) fn fee_sponsor_policy_ids_read_only(
             dataspace_catalog,
             caller,
             permission,
+            now_ms,
         ) && policy_id.sponsor.subject_id() == sponsor.subject_id()
         {
             policy_ids.insert(policy_id);
@@ -1418,6 +1437,7 @@ pub(crate) fn fee_sponsor_policy_ids_read_only(
             &nexus.dataspace_fee_sponsors,
             &nexus.dataspace_fee_sponsor_policies,
             dataspace_id,
+            now_ms,
         )
         && default_policy.sponsor.subject_id() == sponsor.subject_id()
     {
@@ -2980,6 +3000,7 @@ pub(crate) fn check_external_nexus_fee_admission(
         &nexus.dataspace_fee_sponsors,
         metadata,
         route_dataspace_id,
+        observation_time_ms,
     )
     .map_err(validation_fail_to_nexus_fee_admission_error)?;
     let has_fee_sponsor = fee_sponsor.is_some();
@@ -3010,6 +3031,7 @@ pub(crate) fn check_external_nexus_fee_admission(
             &sponsor,
             nexus,
             route_dataspace_id,
+            observation_time_ms,
         );
         authorize_fee_sponsor_policy_from_ids(
             world,
@@ -3042,7 +3064,7 @@ pub(crate) fn check_external_nexus_fee_admission(
         .fees
         .lane_relay_burn_receipts_active_at(next_block_height)
     {
-        check_lane_relay_burn_canonical_sponsor(world, &nexus.fees, &payer)?;
+        check_lane_relay_burn_canonical_sponsor(world, &nexus.fees, &payer, observation_time_ms)?;
         return check_lane_relay_burn_fee_budget(
             world,
             &nexus.fees,
@@ -3155,6 +3177,7 @@ pub(crate) fn charge_fees_for_applied_overlay_with_encoded_len(
         &state_transaction.nexus.dataspace_fee_sponsors,
         md,
         state_transaction.current_dataspace_id,
+        state_transaction.block_unix_timestamp_ms(),
     )?;
     let skip_nexus_fee = nexus_fee_exempt_transaction(transaction)
         || successful_claim_fee_exempt_instructions(
@@ -3461,6 +3484,7 @@ impl Executor {
             &state_transaction.world,
             &state_transaction.nexus.dataspace_catalog,
             &state_transaction.pipeline.gas.tech_account_id,
+            state_transaction.block_unix_timestamp_ms(),
         )
         .ok_or_else(|| {
             ValidationFail::InternalError(
@@ -3684,13 +3708,18 @@ impl Executor {
                     }
                 })?;
             } else {
-                check_lane_relay_burn_canonical_sponsor(&state_transaction.world, &cfg, &payer)
-                    .map_err(|err| match err {
-                        NexusFeeAdmissionError::Rejected(reason)
-                        | NexusFeeAdmissionError::ConfigInvalid(reason) => {
-                            ValidationFail::NotPermitted(reason)
-                        }
-                    })?;
+                check_lane_relay_burn_canonical_sponsor(
+                    &state_transaction.world,
+                    &cfg,
+                    &payer,
+                    state_transaction.block_unix_timestamp_ms(),
+                )
+                .map_err(|err| match err {
+                    NexusFeeAdmissionError::Rejected(reason)
+                    | NexusFeeAdmissionError::ConfigInvalid(reason) => {
+                        ValidationFail::NotPermitted(reason)
+                    }
+                })?;
                 check_lane_relay_burn_fee_budget(
                     &state_transaction.world,
                     &cfg,
@@ -4249,6 +4278,7 @@ impl Executor {
             &state_transaction.nexus.dataspace_fee_sponsors,
             transaction.metadata(),
             state_transaction.current_dataspace_id,
+            state_transaction.block_unix_timestamp_ms(),
         )?;
         let skip_nexus_fee = nexus_fee_exempt_transaction(&transaction)
             || successful_claim_fee_exempt_transaction(

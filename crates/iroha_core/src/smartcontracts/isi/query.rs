@@ -850,13 +850,17 @@ fn preflight_singular_source_materialization(
             }
         }
         SingularQueryBox::FindAccountByAlias(query) => {
-            let account_id = world
-                .account_rekey_records()
-                .get(query.alias())
-                .map(|record| &record.active_account_id)
-                .or_else(|| world.account_aliases().get(query.alias()))
-                .ok_or_else(|| reject_unbounded("FindAccountByAlias without indexed binding"))?;
-            if let Ok(account) = world.account(account_id) {
+            let now_ms = state.latest_block().map_or(0, |block| {
+                u64::try_from(block.header().creation_time().as_millis()).unwrap_or(u64::MAX)
+            });
+            let account_id = crate::sns::resolve_active_account_alias(
+                world,
+                &state.nexus().dataspace_catalog,
+                query.alias(),
+                now_ms,
+            )
+            .ok_or_else(|| reject_unbounded("FindAccountByAlias without indexed binding"))?;
+            if let Ok(account) = world.account(&account_id) {
                 charge(account.value().as_ref(), &mut remaining)?;
             }
         }

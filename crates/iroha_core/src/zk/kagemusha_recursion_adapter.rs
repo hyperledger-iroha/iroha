@@ -10630,7 +10630,8 @@ mod tests {
             semantic[live_offset] = Fp::ONE;
             let mut builder = BaseCircuitBuilder::<Fp>::new(false)
                 .use_k(17)
-                .use_lookup_bits(8);
+                .use_lookup_bits(8)
+                .use_instance_columns(1);
             assign_kagemusha_public_mode_v4(&mut builder, semantic.clone(), &layout, mode)
                 .expect("assign test V4 public mode");
             let params = builder.calculate_params(Some(8));

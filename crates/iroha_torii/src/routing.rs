@@ -61,8 +61,8 @@ use iroha_core::{
     queue::{Queue, RoutingDecision, RoutingPlan},
     sns::{
         LeaseQuote, SnsNamespace, get_name_record,
-        quote_account_alias_registration_with_fee_asset_fallback,
-        quote_account_alias_renewal_with_fee_asset_fallback,
+        quote_account_alias_registration_with_configured_fee_asset,
+        quote_account_alias_renewal_with_configured_fee_asset, resolve_active_account_alias,
     },
     state::{
         AssetDefinitionAliasBindingRecord, AssetDefinitionAliasLeaseStatus,
@@ -20707,13 +20707,17 @@ fn resolve_multisig_account_selector(
             }
             let nexus = state.nexus_snapshot();
             let label = parse_multisig_account_alias(alias, &nexus.dataspace_catalog)?;
-            let world = state.world_view();
-            world
-                .account_rekey_records()
-                .get(&label)
-                .map(|record| record.active_account_id.clone())
-                .or_else(|| world.account_aliases().get(&label).cloned())
-                .ok_or_else(|| {
+            let state_view = state.view();
+            let now_ms = state_view.latest_block().map_or(0, |block| {
+                u64::try_from(block.header().creation_time().as_millis()).unwrap_or(u64::MAX)
+            });
+            resolve_active_account_alias(
+                state_view.world(),
+                &nexus.dataspace_catalog,
+                &label,
+                now_ms,
+            )
+            .ok_or_else(|| {
                     let alias_literal = label
                         .to_literal(&nexus.dataspace_catalog)
                         .unwrap_or_else(|_| alias.to_owned());
@@ -20840,13 +20844,12 @@ fn resolve_multisig_account_and_spec(
         let world = state.world_view();
         let allowed_via_alias_permission =
             authority_can_resolve_account_alias(&world, authority, &label);
-        let allowed_via_live_spec = spec.signatories.contains_key(authority);
-        if !allowed_via_alias_permission && !allowed_via_live_spec {
+        if !allowed_via_alias_permission {
             iroha_logger::warn!(
                 alias = %alias_literal,
                 resolved_multisig_account_id = %multisig_account_id,
                 signer_account_id = %authority,
-                "multisig selector rejected: signer lacks alias-resolve permission and is not present in the resolved live spec"
+                "multisig selector rejected: signer lacks exact account-alias resolve permission"
             );
             return Err(multisig_selector_forbidden_error(
                 "multisig_alias_resolve_forbidden",
@@ -46507,9 +46510,7 @@ pub(crate) fn parse_account_literal_with_state(
     telemetry: &MaybeTelemetry,
     context: &'static str,
 ) -> Result<(iroha_data_model::account::AccountId, String), iroha_data_model::error::ParseError> {
-    let trimmed = literal.trim();
-    let world = state.world_view();
-    match AccountId::parse_encoded(trimmed) {
+    match AccountId::parse_encoded(literal) {
         Ok(parsed) => {
             let parsed_id = parsed.into_account_id();
             let resolved =
@@ -46518,34 +46519,9 @@ pub(crate) fn parse_account_literal_with_state(
             Ok((resolved.clone(), resolved.to_string()))
         }
         Err(base_err) => {
-            let nexus = state.nexus_snapshot();
-            if let Ok(alias) =
-                account::rekey::AccountAlias::from_literal(trimmed, &nexus.dataspace_catalog)
-            {
-                if let Some(resolved) = world.account_aliases().get(&alias).cloned() {
-                    record_account_literal_accept(telemetry, context, &resolved);
-                    return Ok((resolved.clone(), resolved.to_string()));
-                }
-
-                let mut matched_account_id: Option<iroha_data_model::account::AccountId> = None;
-                for (account_id, value) in world.accounts().iter() {
-                    if value.as_ref().label() != Some(&alias) {
-                        continue;
-                    }
-                    if let Some(existing) = matched_account_id.as_ref() {
-                        if existing != account_id {
-                            matched_account_id = None;
-                            break;
-                        }
-                    } else {
-                        matched_account_id = Some(account_id.clone());
-                    }
-                }
-                if let Some(resolved) = matched_account_id {
-                    record_account_literal_accept(telemetry, context, &resolved);
-                    return Ok((resolved.clone(), resolved.to_string()));
-                }
-            }
+            // This generic parser deliberately accepts account IDs only. Alias resolution is a
+            // permissioned operation and must use a caller-aware path that verifies the exact
+            // dataspace/domain `CanResolveAccountAlias` grants before consulting active SNS state.
             record_account_literal_reject(telemetry, context, literal, base_err.reason());
             Err(base_err)
         }
@@ -70663,7 +70639,7 @@ pub async fn handle_v1_accounts_onboard(
     }
 
     let lease_term_years = signer.alias_lease_term_years.max(1);
-    let lease_quote = quote_account_alias_registration_with_fee_asset_fallback(
+    let lease_quote = quote_account_alias_registration_with_configured_fee_asset(
         &app.state.world_view(),
         &nexus.dataspace_catalog,
         &alias_label,
@@ -71134,7 +71110,7 @@ pub async fn handle_v1_accounts_onboard_multisig(
     let transaction_ttl_ms = NonZeroU64::new(transaction_ttl_ms.unwrap_or(86_400_000).max(1))
         .ok_or_else(|| onboarding_invalid_request("transaction_ttl_ms must be positive"))?;
     let lease_term_years = signer.alias_lease_term_years.max(1);
-    let lease_quote = quote_account_alias_registration_with_fee_asset_fallback(
+    let lease_quote = quote_account_alias_registration_with_configured_fee_asset(
         &app.state.world_view(),
         &nexus.dataspace_catalog,
         &alias_label,
@@ -71510,7 +71486,7 @@ pub async fn handle_post_v1_account_alias_auto_renew(
             .as_ref()
             .map_or(1, |signer| signer.alias_lease_term_years.max(1))
     });
-    let quote = quote_account_alias_renewal_with_fee_asset_fallback(
+    let quote = quote_account_alias_renewal_with_configured_fee_asset(
         &app.state.world_view(),
         &nexus.dataspace_catalog,
         &alias,

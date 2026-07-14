@@ -8885,6 +8885,7 @@ fn resolve_fee_sink_account(
         &state_transaction.world,
         &state_transaction.nexus.dataspace_catalog,
         &state_transaction.nexus.fees.fee_sink_account_id,
+        state_transaction.block_unix_timestamp_ms(),
     )
     .ok_or_else(|| {
         InstructionExecutionError::InvariantViolation(

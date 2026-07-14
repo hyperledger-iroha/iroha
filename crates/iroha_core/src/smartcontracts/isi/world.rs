@@ -16790,6 +16790,7 @@ pub mod isi {
                 &state_transaction.nexus.dataspace_catalog,
                 permission.payload(),
                 "sponsor",
+                state_transaction.block_unix_timestamp_ms(),
             )
             .is_some_and(|allowed| allowed.subject_id() == sponsor.subject_id())
     }

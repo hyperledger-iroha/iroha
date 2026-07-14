@@ -9970,7 +9970,15 @@ impl<QS> CoreHostImpl<QS> {
         ) {
             return Err(ivm::VMError::PermissionDenied);
         }
-        if let Some(account_id) = state.world().account_aliases().get(&alias_label).cloned() {
+        let now_ms = state.latest_block().map_or(0, |block| {
+            u64::try_from(block.header().creation_time().as_millis()).unwrap_or(u64::MAX)
+        });
+        if let Some(account_id) = crate::sns::resolve_active_account_alias(
+            state.world(),
+            &state.nexus().dataspace_catalog,
+            &alias_label,
+            now_ms,
+        ) {
             return Ok(account_id);
         }
         Err(ivm::VMError::DecodeError)

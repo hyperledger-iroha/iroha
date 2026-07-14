@@ -298,38 +298,6 @@ pub mod isi {
         Ok(())
     }
 
-    fn refresh_account_alias_lease_if_requested(
-        state_transaction: &mut StateTransaction<'_, '_>,
-        label: &AccountAlias,
-        lease_expiry_ms: Option<u64>,
-    ) -> Result<(), InstructionExecutionError> {
-        let Some(lease_expiry_ms) = lease_expiry_ms else {
-            return Ok(());
-        };
-        let literal = label
-            .to_literal(&state_transaction.nexus.dataspace_catalog)
-            .map_err(|err| {
-                InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
-                    err.to_string().into(),
-                ))
-            })?;
-        crate::sns::set_name_lease_expiry(
-            state_transaction,
-            crate::sns::SnsNamespace::AccountAlias,
-            &literal,
-            lease_expiry_ms,
-        )
-        .map(|_| ())
-        .map_err(|err| match err {
-            crate::sns::SnsError::BadRequest(message) => {
-                InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
-                    message.into(),
-                ))
-            }
-            other => InstructionExecutionError::InvariantViolation(other.to_string().into()),
-        })
-    }
-
     fn ensure_account_alias_lease(
         state_transaction: &mut StateTransaction<'_, '_>,
         owner: &AccountId,
@@ -1050,8 +1018,9 @@ pub mod isi {
         dataspace_catalog: &iroha_data_model::nexus::DataSpaceCatalog,
         raw: &str,
         field_path: &'static str,
+        now_ms: u64,
     ) -> Result<AccountId, Error> {
-        crate::block::parse_account_literal_with_world(world, dataspace_catalog, raw)
+        crate::block::parse_account_literal_with_world(world, dataspace_catalog, raw, now_ms)
             .ok_or_else(|| {
                 InstructionExecutionError::InvariantViolation(
                     format!(
@@ -1069,8 +1038,10 @@ pub mod isi {
         raw: &str,
         account_id: &AccountId,
         field_path: &'static str,
+        now_ms: u64,
     ) -> Result<bool, Error> {
-        let configured = resolve_config_account_literal(world, dataspace_catalog, raw, field_path)?;
+        let configured =
+            resolve_config_account_literal(world, dataspace_catalog, raw, field_path, now_ms)?;
         Ok(configured == *account_id)
     }
 
@@ -1388,6 +1359,7 @@ pub mod isi {
                 &state_transaction.nexus.fees.fee_sink_account_id,
                 &account_id,
                 "nexus.fees.fee_sink_account_id",
+                state_transaction.block_unix_timestamp_ms(),
             )?;
             let nexus_stake_escrow_matches = config_account_matches(
                 &state_transaction.world,
@@ -1395,6 +1367,7 @@ pub mod isi {
                 &state_transaction.nexus.staking.stake_escrow_account_id,
                 &account_id,
                 "nexus.staking.stake_escrow_account_id",
+                state_transaction.block_unix_timestamp_ms(),
             )?;
             let nexus_slash_sink_matches = config_account_matches(
                 &state_transaction.world,
@@ -1402,6 +1375,7 @@ pub mod isi {
                 &state_transaction.nexus.staking.slash_sink_account_id,
                 &account_id,
                 "nexus.staking.slash_sink_account_id",
+                state_transaction.block_unix_timestamp_ms(),
             )?;
 
             if nexus_fee_sink_matches {
@@ -3053,16 +3027,16 @@ pub mod isi {
                 alias,
                 lease_expiry_ms,
             } = self;
+            if lease_expiry_ms.is_some() {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "account alias leases must be renewed with RenewAccountAliasLease".into(),
+                    ),
+                )
+                .into());
+            }
             let existing_label = state_transaction.world.account(&account)?.label().cloned();
             let Some(alias) = alias else {
-                if lease_expiry_ms.is_some() {
-                    return Err(InstructionExecutionError::InvalidParameter(
-                        InvalidParameterError::SmartContract(
-                            "lease_expiry_ms requires alias binding".into(),
-                        ),
-                    )
-                    .into());
-                }
                 let existing_aliases = state_transaction
                     .world
                     .account_aliases_by_account
@@ -3129,7 +3103,6 @@ pub mod isi {
                 .into());
             }
             ensure_single_sbp_retail_fi_home(state_transaction, &account, &alias)?;
-            refresh_account_alias_lease_if_requested(state_transaction, &alias, lease_expiry_ms)?;
             ensure_account_alias_lease(state_transaction, &account, &alias)?;
             ensure_contract_alias_namespace_available(state_transaction, &alias)?;
 
@@ -3192,16 +3165,16 @@ pub mod isi {
                 alias,
                 lease_expiry_ms,
             } = self;
+            if lease_expiry_ms.is_some() {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "account alias leases must be renewed with RenewAccountAliasLease".into(),
+                    ),
+                )
+                .into());
+            }
             let existing_label = state_transaction.world.account(&account)?.label().cloned();
             let Some(alias) = alias else {
-                if lease_expiry_ms.is_some() {
-                    return Err(InstructionExecutionError::InvalidParameter(
-                        InvalidParameterError::SmartContract(
-                            "lease_expiry_ms requires alias binding".into(),
-                        ),
-                    )
-                    .into());
-                }
                 if let Some(previous_label) = existing_label.as_ref() {
                     if !authority_can_manage_account_alias(
                         &state_transaction.world,
@@ -3280,7 +3253,6 @@ pub mod isi {
                 &replaced_aliases,
                 Some(&alias),
             )?;
-            refresh_account_alias_lease_if_requested(state_transaction, &alias, lease_expiry_ms)?;
             ensure_account_alias_lease(state_transaction, &account, &alias)?;
             ensure_contract_alias_namespace_available(state_transaction, &alias)?;
 
@@ -4361,6 +4333,31 @@ mod tests {
         );
     }
 
+    fn seed_expired_account_alias_lease_record(
+        tx: &mut StateTransaction<'_, '_>,
+        owner: &AccountId,
+        alias: &AccountAlias,
+    ) {
+        let selector = crate::sns::selector_for_account_alias(alias, &tx.nexus.dataspace_catalog)
+            .expect("selector");
+        let address = AccountAddress::from_account_id(owner).expect("account address");
+        let record = NameRecordV1::new(
+            selector.clone(),
+            owner.clone(),
+            vec![NameControllerV1::account(&address)],
+            0,
+            0,
+            1,
+            2,
+            3,
+            Metadata::default(),
+        );
+        tx.world.smart_contract_state.insert(
+            crate::sns::record_storage_key(&selector),
+            norito::codec::Encode::encode(&record),
+        );
+    }
+
     fn seed_dataspace_alias_lease(
         tx: &mut StateTransaction<'_, '_>,
         owner: &AccountId,
@@ -4849,6 +4846,7 @@ mod tests {
         let authority = (*ALICE_ID).clone();
         let lease_owner = (*BOB_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
+        seed_account(&mut state, &authority, &domain_id);
 
         let alias = alias_in_domain(&domain_id, "banking".parse::<Name>().unwrap());
         let account_id = AccountId::new(checked_keypair().public_key().clone());
@@ -4890,6 +4888,138 @@ mod tests {
                 .label()
                 .is_none()
         );
+    }
+
+    #[test]
+    fn account_alias_mutations_reject_expired_leases_even_during_replay() {
+        let mut state = test_state();
+        let domain_id: DomainId = DomainId::try_new("label", "universal").expect("domain id");
+        let authority = (*ALICE_ID).clone();
+        seed_domain(&mut state, &domain_id, &authority);
+        seed_account(&mut state, &authority, &domain_id);
+
+        let existing_id = AccountId::new(checked_keypair().public_key().clone());
+        let registration_id = AccountId::new(checked_keypair().public_key().clone());
+        let registration_alias =
+            alias_in_domain(&domain_id, "register_expired".parse::<Name>().unwrap());
+        let binding_alias = alias_in_domain(&domain_id, "binding_expired".parse::<Name>().unwrap());
+        let primary_alias = alias_in_domain(&domain_id, "primary_expired".parse::<Name>().unwrap());
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        tx.replay_compatibility = true;
+        seed_domainful_alias_manage_permissions(&mut tx, &authority, &domain_id);
+        Register::account(Account::new(existing_id.clone()))
+            .execute(&authority, &mut tx)
+            .expect("register existing account");
+        seed_expired_account_alias_lease_record(&mut tx, &registration_id, &registration_alias);
+        seed_expired_account_alias_lease_record(&mut tx, &existing_id, &binding_alias);
+        seed_expired_account_alias_lease_record(&mut tx, &existing_id, &primary_alias);
+
+        let errors = [
+            Register::account(
+                Account::new(registration_id.clone()).with_label(Some(registration_alias.clone())),
+            )
+            .execute(&authority, &mut tx)
+            .expect_err("replay must not bypass an expired registration lease"),
+            SetAccountAliasBinding::bind(existing_id.clone(), binding_alias.clone(), None)
+                .execute(&authority, &mut tx)
+                .expect_err("replay must not bypass an expired binding lease"),
+            SetPrimaryAccountAlias::bind(existing_id.clone(), primary_alias.clone(), None)
+                .execute(&authority, &mut tx)
+                .expect_err("replay must not bypass an expired primary-alias lease"),
+        ];
+        for err in errors {
+            assert!(
+                err.to_string().contains("active SNS lease"),
+                "unexpected error: {err}"
+            );
+        }
+        assert!(tx.world.account(&registration_id).is_err());
+        assert!(tx.world.account_aliases.get(&registration_alias).is_none());
+        assert!(tx.world.account_aliases.get(&binding_alias).is_none());
+        assert!(tx.world.account_aliases.get(&primary_alias).is_none());
+        assert!(
+            tx.world
+                .account(&existing_id)
+                .expect("existing account")
+                .label()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn account_alias_binding_instructions_cannot_bypass_paid_sns_renewal() {
+        let mut state = test_state();
+        let domain_id: DomainId = DomainId::try_new("label", "universal").expect("domain id");
+        let authority = (*ALICE_ID).clone();
+        seed_domain(&mut state, &domain_id, &authority);
+        seed_account(&mut state, &authority, &domain_id);
+        let account_id = AccountId::new(checked_keypair().public_key().clone());
+        let alias = alias_in_domain(&domain_id, "renewal".parse::<Name>().unwrap());
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        seed_domainful_alias_manage_permissions(&mut tx, &authority, &domain_id);
+        Register::account(Account::new(account_id.clone()))
+            .execute(&authority, &mut tx)
+            .expect("register account");
+        seed_account_alias_lease_record(&mut tx, &account_id, &alias);
+
+        for err in [
+            SetAccountAliasBinding::bind(account_id.clone(), alias.clone(), Some(20))
+                .execute(&authority, &mut tx)
+                .expect_err("binding must not renew an SNS lease"),
+            SetPrimaryAccountAlias::bind(account_id.clone(), alias.clone(), Some(20))
+                .execute(&authority, &mut tx)
+                .expect_err("primary binding must not renew an SNS lease"),
+            SetAccountAliasBinding {
+                account: account_id.clone(),
+                alias: None,
+                lease_expiry_ms: Some(20),
+            }
+            .execute(&authority, &mut tx)
+            .expect_err("clear plus lease expiry must be rejected"),
+            SetPrimaryAccountAlias {
+                account: account_id.clone(),
+                alias: None,
+                lease_expiry_ms: Some(20),
+            }
+            .execute(&authority, &mut tx)
+            .expect_err("primary clear plus lease expiry must be rejected"),
+        ] {
+            let InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                message,
+            )) = err
+            else {
+                panic!("unexpected error: {err:?}");
+            };
+            assert!(
+                message.contains("RenewAccountAliasLease")
+                    || message.contains("requires alias binding"),
+                "unexpected error: {message}"
+            );
+        }
+        assert!(tx.world.account_aliases.get(&alias).is_none());
+        assert!(
+            tx.world
+                .account(&account_id)
+                .expect("account")
+                .label()
+                .is_none()
+        );
+        let selector = crate::sns::selector_for_account_alias(&alias, &tx.nexus.dataspace_catalog)
+            .expect("selector");
+        let bytes = tx
+            .world
+            .smart_contract_state
+            .get(&crate::sns::record_storage_key(&selector))
+            .expect("lease record");
+        let mut slice = bytes.as_slice();
+        let record = NameRecordV1::decode(&mut slice).expect("decode lease record");
+        assert_eq!(record.expires_at_ms, u64::MAX);
     }
 
     #[test]
@@ -5027,7 +5157,7 @@ mod tests {
             .execute(&authority, &mut tx)
             .expect("register alias target");
         for alias in [&hbl_alias, &ubl_alias, &domainless_alias] {
-            seed_account_alias_lease_record(&mut tx, &authority, alias);
+            seed_account_alias_lease_record(&mut tx, &target, alias);
         }
 
         let hbl_permission: Permission = CanManageAccountAlias {
@@ -5170,13 +5300,10 @@ mod tests {
                 .execute(&authority, &mut tx)
                 .expect("register retail account");
         }
-        for alias in [
-            &hbl_home_alias,
-            &hbl_secondary_alias,
-            &hbl_foreign_target_alias,
-        ] {
-            seed_account_alias_lease_record(&mut tx, &authority, alias);
+        for alias in [&hbl_home_alias, &hbl_secondary_alias] {
+            seed_account_alias_lease_record(&mut tx, &hbl_account, alias);
         }
+        seed_account_alias_lease_record(&mut tx, &ubl_account, &hbl_foreign_target_alias);
         tx.world.add_account_permission(
             &authority,
             Permission::from(CanManageAccountAlias {
@@ -5320,7 +5447,7 @@ mod tests {
                 scope: AccountAliasPermissionScope::Domain(hbl),
             }),
         );
-        seed_account_alias_lease_record(&mut tx, &hbl_manager, &hbl_alias);
+        seed_account_alias_lease_record(&mut tx, &customer, &hbl_alias);
 
         let clear_err = SetPrimaryAccountAlias::clear(customer.clone())
             .execute(&ubl_manager, &mut tx)
@@ -5386,7 +5513,7 @@ mod tests {
             old_alias.clone(),
             AccountRekeyRecord::new(old_alias.clone(), customer.clone()),
         );
-        seed_account_alias_lease_record(&mut tx, &authority, &new_alias);
+        seed_account_alias_lease_record(&mut tx, &customer, &new_alias);
         tx.world.add_account_permission(
             &authority,
             Permission::from(CanManageAccountAlias {
@@ -5453,7 +5580,7 @@ mod tests {
             ubl_alias.clone(),
             AccountRekeyRecord::new(ubl_alias.clone(), target.clone()),
         );
-        seed_account_alias_lease_record(&mut tx, &authority, &hbl_alias);
+        seed_account_alias_lease_record(&mut tx, &target, &hbl_alias);
         tx.world.add_account_permission(
             &authority,
             Permission::from(CanManageAccountAlias {
