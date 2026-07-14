@@ -914,14 +914,14 @@ mod tests {
         isi::SetParameter,
         merge::{
             MergeExecutionBatch, MergeLaneExecution, MergeLedgerEntry, MergeQuorumCertificate,
-            TransactionResult,
         },
         nexus::{DataSpaceId, LaneId},
         parameter::{Parameter, system::SumeragiParameter},
         peer::PeerId,
         transaction::{
-            TransactionBuilder, TransactionEntrypoint, error::TransactionRejectionReason,
-            signed::TransactionResultInner,
+            TransactionBuilder, TransactionEntrypoint,
+            error::TransactionRejectionReason,
+            signed::{TransactionResult, TransactionResultInner},
         },
         trigger::DataTriggerSequence,
     };

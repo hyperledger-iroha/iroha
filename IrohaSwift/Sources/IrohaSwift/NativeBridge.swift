@@ -96,7 +96,7 @@ enum NoritoBridgeLoader {
     }
 
     static func expectedBridgeAbiVersion(for identifier: String) -> UInt32 {
-        return 19
+        return 20
     }
 
     static func isSupportedBridgeAbiVersion(_ actual: UInt32?, for identifier: String = currentIdentifier()) -> Bool {
@@ -570,6 +570,8 @@ enum NativeBridgeError: Error, Equatable {
     case kagemushaProve
     case kagemushaRecursiveSpendV2Unavailable
     case kagemushaRecursiveSpendV2Artifact
+    case kagemushaRecursiveSpendV4Unavailable
+    case kagemushaRecursiveSpendV4Artifact
     case invalidKagemushaVerifierOutput
     case unsupportedAlgorithm
     case metadataTarget
@@ -633,6 +635,8 @@ enum NativeBridgeError: Error, Equatable {
         case -311: return .kagemushaProve
         case -314: return .kagemushaRecursiveSpendV2Unavailable
         case -315: return .kagemushaRecursiveSpendV2Artifact
+        case -316: return .kagemushaRecursiveSpendV4Unavailable
+        case -317: return .kagemushaRecursiveSpendV4Artifact
         case -402: return .multisigSpec
         case -406: return .identifierReceipt
         case -403: return .verifyingKeyId
@@ -3485,7 +3489,8 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         #endif
     }
 
-    /// Whether ABI 19 exposes the complete first-release Kagemusha surface.
+    /// Whether ABI 20 exposes the complete V4 Kagemusha surface, including
+    /// the retained explicitly suffixed V3 compatibility symbols.
     public var isKagemushaRecursiveSpendBridgeAvailable: Bool {
         #if canImport(Darwin)
         guard bridgeEnabledForRuntime else { return false }

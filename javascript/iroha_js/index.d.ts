@@ -3964,7 +3964,7 @@ export interface ToriiVpnProfile {
   feeAssetId: string;
   escrowAccountId: string;
   operatorAccountId: string;
-  leaseFeeNanos: number;
+  leaseFee: string;
   settlementGraceSecs: number;
   flowLabelBits: number;
   paddingBudgetMs: number;
@@ -3989,7 +3989,7 @@ export interface ToriiVpnQuote {
   feeAssetId: string;
   escrowAccountId: string;
   operatorAccountId: string;
-  leaseFeeNanos: number;
+  leaseFee: string;
   routePushes: ReadonlyArray<string>;
   excludedRoutes: ReadonlyArray<string>;
   dnsServers: ReadonlyArray<string>;
@@ -4019,7 +4019,7 @@ export interface ToriiVpnSession {
   feeAssetId: string;
   escrowAccountId: string;
   operatorAccountId: string;
-  leaseFeeNanos: number;
+  leaseFee: string;
   flowLabelBits: number;
   paddingBudgetMs: number;
   relayTlsSpkiSha256Hex: string | null;
@@ -4052,12 +4052,17 @@ export interface ToriiVpnReceipt {
   feeAssetId: string;
   escrowAccountId: string;
   operatorAccountId: string;
-  leaseFeeNanos: number;
-  earnedFeeNanos: number;
-  refundedFeeNanos: number;
+  leaseFee: string;
+  earnedFee: string;
+  refundedFee: string;
   leaseIdHex: string;
   settleLeaseInstruction: ToriiVpnTxInstruction | null;
   txInstructions: ReadonlyArray<ToriiVpnTxInstruction>;
+}
+
+export interface ToriiVpnReceiptListResponse {
+  items: ReadonlyArray<ToriiVpnReceipt>;
+  total: number;
 }
 
 export type SnsNameStatus =
@@ -11975,7 +11980,7 @@ export declare class ToriiClient {
   ): Promise<ToriiVpnSession | null>;
   deleteVpnSession(
     sessionId: string,
-    options?: {
+    options: {
       signal?: AbortSignal;
       canonicalAuth: CanonicalRequestAuth;
     },
@@ -11994,7 +11999,7 @@ export declare class ToriiClient {
   listVpnReceipts(options: {
     signal?: AbortSignal;
     canonicalAuth: CanonicalRequestAuth;
-  }): Promise<ReadonlyArray<ToriiVpnReceipt>>;
+  }): Promise<ToriiVpnReceiptListResponse>;
   getSnsPolicy(
     suffixId: number,
     options?: { signal?: AbortSignal },

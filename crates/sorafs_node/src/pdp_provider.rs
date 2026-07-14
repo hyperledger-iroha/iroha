@@ -1986,7 +1986,11 @@ fn governance_archive_digest(
 }
 
 fn proof_decode_limits(max_bytes: usize) -> norito::DecodeLimits {
-    let allocation = max_bytes.saturating_mul(2);
+    // A canonical proof's nested owned vectors require slightly more than
+    // twice the wire length after decoding. Keep the allocation budget a hard
+    // multiple of the already-enforced payload ceiling so structurally valid
+    // proofs can reach authentication.
+    let allocation = max_bytes.saturating_mul(4);
     norito::DecodeLimits::new(max_bytes.max(1), max_bytes, max_bytes, allocation, 64)
 }
 

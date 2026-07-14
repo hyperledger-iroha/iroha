@@ -1185,6 +1185,22 @@ impl VpnHelperTicketV1 {
         bytes.len() == VPN_HELPER_TICKET_LEN && bytes.starts_with(VPN_HELPER_TICKET_MAGIC)
     }
 
+    /// Decode the client-visible ticket metadata without authenticating its MAC.
+    ///
+    /// This is only for the local client helper, which needs the metering key and
+    /// tariff in order to sign usage vouchers but does not possess the relay's
+    /// MAC secret. It must never be used to authorize service; relays must call
+    /// [`Self::parse`] so the MAC and expiry are verified before trusting any
+    /// decoded field.
+    ///
+    /// # Errors
+    /// Returns an error when the frame length, magic prefix, metering key, or a
+    /// canonical tariff quantity is invalid.
+    pub fn decode_unverified(bytes: &[u8]) -> Result<Self, VpnHelperTicketError> {
+        validate_helper_ticket_frame(bytes)?;
+        decode_helper_ticket_fields(bytes)
+    }
+
     /// Parse and verify a helper-authenticated ticket.
     ///
     /// # Errors
@@ -1194,70 +1210,20 @@ impl VpnHelperTicketV1 {
         secret: &[u8; 32],
         now_ms: u64,
     ) -> Result<Self, VpnHelperTicketError> {
-        if bytes.len() != VPN_HELPER_TICKET_LEN {
-            return Err(VpnHelperTicketError::InvalidLength {
-                expected: VPN_HELPER_TICKET_LEN,
-                actual: bytes.len(),
-            });
-        }
-        if !bytes.starts_with(VPN_HELPER_TICKET_MAGIC) {
-            return Err(VpnHelperTicketError::InvalidMagic);
-        }
+        validate_helper_ticket_frame(bytes)?;
         let mac_offset = VPN_HELPER_TICKET_LEN - blake3::OUT_LEN;
         let expected_mac = helper_ticket_mac(secret, &bytes[..mac_offset]);
         if expected_mac.as_bytes() != &bytes[mac_offset..] {
             return Err(VpnHelperTicketError::InvalidMac);
         }
-        let mut cursor = VPN_HELPER_TICKET_MAGIC.len();
-        let mut session_id = [0u8; 16];
-        session_id.copy_from_slice(&bytes[cursor..cursor + 16]);
-        cursor += 16;
-        let mut quote_id = [0u8; 32];
-        quote_id.copy_from_slice(&bytes[cursor..cursor + 32]);
-        cursor += 32;
-        let mut account_hash = [0u8; 32];
-        account_hash.copy_from_slice(&bytes[cursor..cursor + 32]);
-        cursor += 32;
-        let mut relay_id = [0u8; 32];
-        relay_id.copy_from_slice(&bytes[cursor..cursor + 32]);
-        cursor += 32;
-        let mut payment_tx_hash = [0u8; 32];
-        payment_tx_hash.copy_from_slice(&bytes[cursor..cursor + 32]);
-        cursor += 32;
-        let metering_public_key =
-            PublicKey::from_bytes(Algorithm::Ed25519, &bytes[cursor..cursor + 32])
-                .map_err(|_| VpnHelperTicketError::InvalidMeteringPublicKey)?;
-        cursor += 32;
-        let lease_fee = decode_helper_ticket_quantity(bytes, &mut cursor)?;
-        let active_fee_per_minute = decode_helper_ticket_quantity(bytes, &mut cursor)?;
-        let ingress_fee_per_mib = decode_helper_ticket_quantity(bytes, &mut cursor)?;
-        let egress_fee_per_mib = decode_helper_ticket_quantity(bytes, &mut cursor)?;
-        let mut expires = [0u8; 8];
-        expires.copy_from_slice(&bytes[cursor..cursor + 8]);
-        cursor += 8;
-        debug_assert_eq!(cursor, mac_offset);
-        let expires_at_ms = u64::from_be_bytes(expires);
-        if expires_at_ms <= now_ms {
+        let ticket = decode_helper_ticket_fields(bytes)?;
+        if ticket.expires_at_ms <= now_ms {
             return Err(VpnHelperTicketError::Expired {
-                expires_at_ms,
+                expires_at_ms: ticket.expires_at_ms,
                 now_ms,
             });
         }
-        Ok(Self {
-            session_id,
-            quote_id,
-            account_hash,
-            relay_id,
-            payment_tx_hash,
-            metering_public_key,
-            tariff: VpnTariffV1 {
-                lease_fee,
-                active_fee_per_minute,
-                ingress_fee_per_mib,
-                egress_fee_per_mib,
-            },
-            expires_at_ms,
-        })
+        Ok(ticket)
     }
 
     /// Parse and verify a helper-authenticated ticket encoded as hex.
@@ -1272,6 +1238,66 @@ impl VpnHelperTicketV1 {
         let decoded = hex::decode(hex_ticket).map_err(VpnHelperTicketError::Hex)?;
         Self::parse(&decoded, secret, now_ms)
     }
+}
+
+fn validate_helper_ticket_frame(bytes: &[u8]) -> Result<(), VpnHelperTicketError> {
+    if bytes.len() != VPN_HELPER_TICKET_LEN {
+        return Err(VpnHelperTicketError::InvalidLength {
+            expected: VPN_HELPER_TICKET_LEN,
+            actual: bytes.len(),
+        });
+    }
+    if !bytes.starts_with(VPN_HELPER_TICKET_MAGIC) {
+        return Err(VpnHelperTicketError::InvalidMagic);
+    }
+    Ok(())
+}
+
+fn decode_helper_ticket_fields(bytes: &[u8]) -> Result<VpnHelperTicketV1, VpnHelperTicketError> {
+    debug_assert_eq!(bytes.len(), VPN_HELPER_TICKET_LEN);
+    let mut cursor = VPN_HELPER_TICKET_MAGIC.len();
+    let mut session_id = [0u8; 16];
+    session_id.copy_from_slice(&bytes[cursor..cursor + 16]);
+    cursor += 16;
+    let mut quote_id = [0u8; 32];
+    quote_id.copy_from_slice(&bytes[cursor..cursor + 32]);
+    cursor += 32;
+    let mut account_hash = [0u8; 32];
+    account_hash.copy_from_slice(&bytes[cursor..cursor + 32]);
+    cursor += 32;
+    let mut relay_id = [0u8; 32];
+    relay_id.copy_from_slice(&bytes[cursor..cursor + 32]);
+    cursor += 32;
+    let mut payment_tx_hash = [0u8; 32];
+    payment_tx_hash.copy_from_slice(&bytes[cursor..cursor + 32]);
+    cursor += 32;
+    let metering_public_key =
+        PublicKey::from_bytes(Algorithm::Ed25519, &bytes[cursor..cursor + 32])
+            .map_err(|_| VpnHelperTicketError::InvalidMeteringPublicKey)?;
+    cursor += 32;
+    let lease_fee = decode_helper_ticket_quantity(bytes, &mut cursor)?;
+    let active_fee_per_minute = decode_helper_ticket_quantity(bytes, &mut cursor)?;
+    let ingress_fee_per_mib = decode_helper_ticket_quantity(bytes, &mut cursor)?;
+    let egress_fee_per_mib = decode_helper_ticket_quantity(bytes, &mut cursor)?;
+    let mut expires = [0u8; 8];
+    expires.copy_from_slice(&bytes[cursor..cursor + 8]);
+    cursor += 8;
+    debug_assert_eq!(cursor, VPN_HELPER_TICKET_LEN - blake3::OUT_LEN);
+    Ok(VpnHelperTicketV1 {
+        session_id,
+        quote_id,
+        account_hash,
+        relay_id,
+        payment_tx_hash,
+        metering_public_key,
+        tariff: VpnTariffV1 {
+            lease_fee,
+            active_fee_per_minute,
+            ingress_fee_per_mib,
+            egress_fee_per_mib,
+        },
+        expires_at_ms: u64::from_be_bytes(expires),
+    })
 }
 
 const VPN_HELPER_TICKET_QUANTITY_SLOT_LEN: usize = 1 + MAX_QUANTITY_FRAME_BYTES_V1;
@@ -1719,6 +1745,31 @@ mod tests {
     }
 
     #[test]
+    fn helper_ticket_unverified_decode_is_structural_only() {
+        let secret = [0x42; 32];
+        let ticket = sample_helper_ticket(1_700_000_000_000);
+        let mut bytes = ticket.to_bytes(&secret);
+        let mac_offset = VPN_HELPER_TICKET_LEN - blake3::OUT_LEN;
+        bytes[mac_offset] ^= 0x01;
+
+        let decoded = VpnHelperTicketV1::decode_unverified(&bytes)
+            .expect("client metadata decoder deliberately ignores the MAC");
+        assert_eq!(decoded, ticket);
+        assert_eq!(
+            VpnHelperTicketV1::parse(&bytes, &secret, 1_699_999_999_000),
+            Err(VpnHelperTicketError::InvalidMac)
+        );
+
+        let tariff_offset = VPN_HELPER_TICKET_MAGIC.len() + 16 + 32 + 32 + 32 + 32 + 32;
+        bytes = ticket.to_bytes(&secret);
+        bytes[tariff_offset] = 0;
+        assert_eq!(
+            VpnHelperTicketV1::decode_unverified(&bytes),
+            Err(VpnHelperTicketError::InvalidTariffQuantity)
+        );
+    }
+
+    #[test]
     fn helper_ticket_try_to_bytes_rejects_non_ed25519_metering_key() {
         let secret = [0x42; 32];
         let mut ticket = sample_helper_ticket(1_700_000_000_000);
@@ -1783,9 +1834,12 @@ mod tests {
             bytes[HELPER_TICKET_METERING_PUBLIC_KEY_OFFSET
                 ..HELPER_TICKET_METERING_PUBLIC_KEY_OFFSET + 32]
                 .copy_from_slice(&public_key);
+            let mac_offset = VPN_HELPER_TICKET_LEN - blake3::OUT_LEN;
+            let mac = helper_ticket_mac(&secret, &bytes[..mac_offset]);
+            bytes[mac_offset..].copy_from_slice(mac.as_bytes());
 
             let err = VpnHelperTicketV1::parse(&bytes, &secret, 1)
-                .expect_err("inert metering key must fail before MAC acceptance");
+                .expect_err("authenticated inert metering key must fail admission");
             assert_eq!(
                 VpnHelperTicketError::InvalidMeteringPublicKey,
                 err,
@@ -1887,7 +1941,7 @@ mod tests {
             + 32
             + 32
             + 32
-            + (4 * std::mem::size_of::<u64>());
+            + (4 * VPN_HELPER_TICKET_QUANTITY_SLOT_LEN);
         bytes[expiry_offset + 7] ^= 0x01;
 
         let err =

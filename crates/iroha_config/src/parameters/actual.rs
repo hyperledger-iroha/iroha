@@ -7173,6 +7173,8 @@ pub struct ToriiKagemushaCommands {
     pub authority: AccountId,
     /// Key pair used only to submit typed Kagemusha instructions.
     pub key_pair: KeyPair,
+    /// Minimum live XOR balance required for the self-funded command authority.
+    pub minimum_xor_balance: Quantity,
     /// Maximum value accepted for one Kagemusha command.
     pub max_tx_value: Quantity,
     /// Maximum number of accepted bindings plus in-flight reservations retained in memory.

@@ -61,6 +61,8 @@ MANIFEST_FIELDS = {
     "transcript_profile",
     "generation",
     "source_commit",
+    "source_tree_sha256",
+    "source_repo_dirty",
     "chain_id",
     "asset",
     "asset_scale",

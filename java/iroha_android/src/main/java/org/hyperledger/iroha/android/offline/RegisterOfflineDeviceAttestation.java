@@ -18,7 +18,7 @@ import org.hyperledger.iroha.android.norito.NoritoException;
 import org.hyperledger.iroha.android.tx.SignedTransaction;
 import org.hyperledger.iroha.android.tx.TransactionBuilder;
 
-/** Canonical one-instruction transaction for the ABI-19 device-attestation path. */
+/** Canonical one-instruction transaction for the ABI-20 device-attestation path. */
 public final class RegisterOfflineDeviceAttestation {
 
   private final String chainId;

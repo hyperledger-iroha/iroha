@@ -2704,19 +2704,42 @@ pub mod isi {
         hash.as_ref().iter().all(|byte| *byte == 0)
     }
 
+    /// Canonical unit-valued permission required to manage offline escrow.
+    pub fn offline_escrow_manager_permission() -> Permission {
+        Permission::new(
+            CAN_MANAGE_OFFLINE_ESCROW_PERMISSION.into(),
+            iroha_primitives::json::Json::new(()),
+        )
+    }
+
+    /// Return whether an account holds the exact offline escrow permission,
+    /// either directly or through an assigned role.
+    pub fn world_has_offline_escrow_manager_permission(
+        world: &impl WorldReadOnly,
+        authority: &AccountId,
+    ) -> bool {
+        let required = offline_escrow_manager_permission();
+        if world
+            .account_permissions()
+            .get(authority)
+            .is_some_and(|permissions| permissions.contains(&required))
+        {
+            return true;
+        }
+
+        world.account_roles_iter(authority).any(|role_id| {
+            world
+                .roles()
+                .get(role_id)
+                .is_some_and(|role| role.permissions().any(|permission| permission == &required))
+        })
+    }
+
     fn is_offline_escrow_manager(
         authority: &AccountId,
         state_transaction: &StateTransaction<'_, '_>,
     ) -> bool {
-        state_transaction
-            .world
-            .account_permissions
-            .get(authority)
-            .is_some_and(|perms| {
-                perms
-                    .iter()
-                    .any(|permission| permission.name() == CAN_MANAGE_OFFLINE_ESCROW_PERMISSION)
-            })
+        world_has_offline_escrow_manager_permission(&state_transaction.world, authority)
     }
 
     fn ensure_can_submit_kagemusha_for_account(
@@ -4227,16 +4250,7 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            if !state_transaction
-                .world
-                .account_permissions
-                .get(authority)
-                .is_some_and(|perms| {
-                    perms.iter().any(|permission| {
-                        permission.name() == CAN_MANAGE_OFFLINE_DEVICE_ATTESTATION_POLICY_PERMISSION
-                    })
-                })
-            {
+            if !can_manage_offline_device_attestation_policy(state_transaction, authority) {
                 return Err(labeled_invariant(
                     "unauthorized_controller",
                     "only an Offline device attestation policy manager may update verifier policy",
@@ -4261,6 +4275,34 @@ pub mod isi {
             );
             Ok(())
         }
+    }
+
+    fn offline_device_attestation_policy_manager_permission() -> Permission {
+        Permission::new(
+            CAN_MANAGE_OFFLINE_DEVICE_ATTESTATION_POLICY_PERMISSION.into(),
+            iroha_primitives::json::Json::new(()),
+        )
+    }
+
+    fn can_manage_offline_device_attestation_policy(
+        state_transaction: &StateTransaction<'_, '_>,
+        authority: &AccountId,
+    ) -> bool {
+        let required = offline_device_attestation_policy_manager_permission();
+        if state_transaction
+            .world
+            .account_permissions
+            .get(authority)
+            .is_some_and(|permissions| permissions.contains(&required))
+        {
+            return true;
+        }
+
+        state_transaction
+            .world
+            .account_roles_iter(authority)
+            .filter_map(|role_id| state_transaction.world.roles.get(role_id))
+            .any(|role| role.permissions().any(|permission| permission == &required))
     }
 
     fn ensure_kagemusha_v2_topup_shield_public_inputs(
@@ -4410,7 +4452,7 @@ pub mod isi {
                 )
             })?;
         let step_ep_circuit_key = (
-            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V1.to_owned(),
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V3.to_owned(),
             step_eq_record.version,
         );
         let step_ep_id = state_transaction
@@ -4485,12 +4527,12 @@ pub mod isi {
     ) -> Result<(), Error> {
         let (expected_circuit_id, expected_curve, expected_schema_hash) = match parity {
             iroha_data_model::offline::KagemushaPastaCycleParityV1::StepEq => (
-                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V1,
+                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V3,
                 iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_VERIFIER_CURVE_V3,
                 iroha_data_model::offline::kagemusha_recursive_spend_step_eq_public_inputs_schema_hash_v3(),
             ),
             iroha_data_model::offline::KagemushaPastaCycleParityV1::StepEp => (
-                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V1,
+                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V3,
                 iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_VERIFIER_CURVE_V3,
                 iroha_data_model::offline::kagemusha_recursive_spend_step_ep_public_inputs_schema_hash_v3(),
             ),
@@ -4561,7 +4603,7 @@ pub mod isi {
         bundle: &iroha_data_model::offline::KagemushaRecursiveSpendBundleV2,
         step_eq_record: &VerifyingKeyRecord,
         step_ep_record: &VerifyingKeyRecord,
-        _state_transaction: &StateTransaction<'_, '_>,
+        state_transaction: &StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
         crate::zk::kagemusha_v2::ensure_kagemusha_recursive_spend_v2_proof_envelope_binding(
             bundle,
@@ -4569,15 +4611,48 @@ pub mod isi {
             step_ep_record,
         )
         .map_err(|err| labeled_invariant("invalid_recursive_bundle", err))?;
-        // ABI V1 keeps this path unavailable: the generic backend accepts one
-        // key and therefore cannot decide the ordered Eq/Ep proof pair. A
-        // future executable proof ABI must load authenticated four-artifact
-        // terminal-verifier material from consensus state and invoke
-        // `terminal_verify_proof_pair` directly before its availability flag
-        // can become true.
+
+        let trusted_policy = super::kagemusha_terminal_registry::embedded_release_policy_bytes()
+            .map_err(|err| labeled_invariant("recursive_backend_unavailable", err))?;
+        let resolved = super::kagemusha_terminal_registry::resolve_with_trusted_policy(
+            &bundle.statement.artifact_binding,
+            step_eq_record,
+            step_ep_record,
+            &trusted_policy,
+            |key| {
+                state_transaction
+                    .world
+                    .smart_contract_state
+                    .get(key)
+                    .map(Vec::as_slice)
+            },
+        )
+        .map_err(|err| labeled_invariant("verifier_key_invalid", err))?;
+        let (envelope, _proof_pair) = super::kagemusha_terminal_registry::decode_proof_pair(
+            &bundle.recursive_proof.proof.bytes,
+        )
+        .map_err(|err| labeled_invariant("invalid_recursive_bundle", err))?;
+        envelope
+            .validate_against_manifest_for_context(
+                resolved.release().manifest(),
+                &bundle.statement.chain_id,
+                &bundle.statement.asset,
+                bundle.statement.asset_scale,
+                state_transaction.block_height(),
+            )
+            .map_err(|err| labeled_invariant("invalid_recursive_bundle", err.to_string()))?;
+        debug_assert_eq!(
+            resolved.artifacts().manifest_sha256(),
+            resolved.release().manifest_sha256()
+        );
+
+        // Material selection is now exact and authenticated.  Keep terminal
+        // admission closed until the production Eq/Fp and Ep/Fq exact-state
+        // Step circuit types exist; binding either transition-only circuit
+        // here would parse a processed VK against the wrong circuit shape.
         Err(labeled_invariant(
             "recursive_backend_unavailable",
-            "Kagemusha paired terminal verifier material is not installed",
+            "Kagemusha paired terminal verifier material is authenticated, but the exact-state Step circuit verifier is not installed",
         )
         .into())
     }
@@ -5274,6 +5349,144 @@ pub mod isi {
                 .into());
             }
             commit_plan.commit(state_transaction)
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use core::num::NonZeroU64;
+
+        use iroha_crypto::{Algorithm, KeyPair};
+        use iroha_data_model::{
+            Registrable as _,
+            block::BlockHeader,
+            permission::Permission,
+            role::{Role, RoleId},
+        };
+
+        use super::*;
+        use crate::{
+            kura::Kura, prelude::World, query::store::LiveQueryStore, role::RoleIdWithOwner,
+            state::State,
+        };
+
+        #[test]
+        fn offline_escrow_manager_permission_is_exact_directly_and_through_roles() {
+            let key_pair = KeyPair::try_from_seed(vec![0x52; 32], Algorithm::Ed25519)
+                .expect("derive offline escrow manager fixture keypair");
+            let authority = AccountId::new(key_pair.public_key().clone());
+            let role_id: RoleId = "OFFLINE_ESCROW_MANAGER".parse().expect("role id");
+            let wrong_direct = Permission::new(
+                CAN_MANAGE_OFFLINE_ESCROW_PERMISSION.into(),
+                iroha_primitives::json::Json::new("wildcard"),
+            );
+            let wrong_role = Role::new(role_id.clone(), authority.clone())
+                .add_permission(wrong_direct.clone())
+                .build(&authority);
+            let mut world = World::default();
+            world.account_permissions.insert(
+                authority.clone(),
+                [wrong_direct.clone()].into_iter().collect(),
+            );
+            world.roles.insert(role_id.clone(), wrong_role);
+            world
+                .account_roles
+                .insert(RoleIdWithOwner::new(authority.clone(), role_id.clone()), ());
+            let state = State::new(
+                world,
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let header = BlockHeader::new(
+                NonZeroU64::new(1).expect("non-zero height"),
+                None,
+                None,
+                None,
+                0,
+                0,
+            );
+            let mut block = state.block(header);
+            let mut state_transaction = block.transaction();
+
+            assert!(
+                !is_offline_escrow_manager(&authority, &state_transaction),
+                "matching names with non-canonical payloads must not authorize escrow control"
+            );
+
+            state_transaction.world.account_permissions.insert(
+                authority.clone(),
+                [offline_escrow_manager_permission()].into_iter().collect(),
+            );
+            assert!(
+                is_offline_escrow_manager(&authority, &state_transaction),
+                "the exact manager permission granted directly must authorize escrow control"
+            );
+
+            state_transaction
+                .world
+                .account_permissions
+                .insert(authority.clone(), [wrong_direct].into_iter().collect());
+            let exact_role = Role::new(role_id.clone(), authority.clone())
+                .add_permission(offline_escrow_manager_permission())
+                .build(&authority);
+            state_transaction.world.roles.insert(role_id, exact_role);
+            assert!(
+                is_offline_escrow_manager(&authority, &state_transaction),
+                "the exact manager permission inherited through a role must authorize escrow control"
+            );
+        }
+
+        #[test]
+        fn attestation_policy_manager_permission_is_exact_and_inherited_from_role() {
+            let key_pair = KeyPair::try_from_seed(vec![0x51; 32], Algorithm::Ed25519)
+                .expect("derive offline policy manager fixture keypair");
+            let authority = AccountId::new(key_pair.public_key().clone());
+            let role_id: RoleId = "OFFLINE_ATTESTATION_POLICY_MANAGER"
+                .parse()
+                .expect("role id");
+            let wrong_payload = Permission::new(
+                CAN_MANAGE_OFFLINE_DEVICE_ATTESTATION_POLICY_PERMISSION.into(),
+                iroha_primitives::json::Json::new("wildcard"),
+            );
+            let role = Role::new(role_id.clone(), authority.clone())
+                .add_permission(wrong_payload)
+                .build(&authority);
+            let mut world = World::default();
+            world.roles.insert(role_id.clone(), role);
+            world
+                .account_roles
+                .insert(RoleIdWithOwner::new(authority.clone(), role_id.clone()), ());
+            let state = State::new(
+                world,
+                Kura::blank_kura_for_testing(),
+                LiveQueryStore::start_test(),
+            );
+            let header = BlockHeader::new(
+                NonZeroU64::new(1).expect("non-zero height"),
+                None,
+                None,
+                None,
+                0,
+                0,
+            );
+            let mut block = state.block(header);
+            let mut state_transaction = block.transaction();
+
+            assert!(
+                !can_manage_offline_device_attestation_policy(&state_transaction, &authority),
+                "a matching name with a non-canonical payload must not authorize policy changes"
+            );
+
+            let exact = offline_device_attestation_policy_manager_permission();
+            let role = Role::new(role_id.clone(), authority.clone())
+                .add_permission(exact)
+                .build(&authority);
+            state_transaction.world.roles.insert(role_id, role);
+
+            assert!(
+                can_manage_offline_device_attestation_policy(&state_transaction, &authority),
+                "the exact manager permission inherited through a role must authorize policy changes"
+            );
         }
     }
 }

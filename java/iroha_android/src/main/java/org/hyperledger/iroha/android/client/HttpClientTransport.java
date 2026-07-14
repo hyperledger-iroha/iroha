@@ -626,7 +626,7 @@ public final class HttpClientTransport implements IrohaClient {
   public CompletableFuture<VpnProfile> getVpnProfile() {
     final TransportRequest request =
         buildJsonGetRequest("/v1/vpn/profile", Collections.emptyMap());
-    return fetchJson(request, VpnJsonParser::parseProfile, "vpn profile");
+    return fetchJson(request, VpnJsonParser::parseProfile, "vpn profile", 200);
   }
 
   /** Creates a signed quote for a native XOR VPN lease escrow. */
@@ -640,7 +640,7 @@ public final class HttpClientTransport implements IrohaClient {
                 requestBody.exitClass(), requestBody.meteringPublicKeyHex()));
     final TransportRequest request =
         buildVpnRequest("POST", "/v1/vpn/quotes", body, canonicalAuth);
-    return fetchJson(request, VpnJsonParser::parseQuote, "vpn quote create");
+    return fetchJson(request, VpnJsonParser::parseQuote, "vpn quote create", 201);
   }
 
   /** Opens a VPN session after the exact quote-bound native lease transaction commits. */
@@ -657,7 +657,7 @@ public final class HttpClientTransport implements IrohaClient {
                 requestBody.meteringPublicKeyHex()));
     final TransportRequest request =
         buildVpnRequest("POST", "/v1/vpn/sessions", body, canonicalAuth);
-    return fetchJson(request, VpnJsonParser::parseSession, "vpn session create");
+    return fetchJson(request, VpnJsonParser::parseSession, "vpn session create", 201);
   }
 
   /** Fetches an active VPN session owned by the signed account. */
@@ -671,7 +671,8 @@ public final class HttpClientTransport implements IrohaClient {
             "/v1/vpn/sessions/" + encodePathSegment(normalizedSessionId),
             null,
             canonicalAuth);
-    return fetchJsonAllowingNotFound(request, VpnJsonParser::parseSession, "vpn session lookup");
+    return fetchJsonAllowingNotFound(
+        request, VpnJsonParser::parseSession, "vpn session lookup", 200);
   }
 
   /** Deletes an active VPN session and returns Torii's disconnect receipt when present. */
@@ -685,7 +686,8 @@ public final class HttpClientTransport implements IrohaClient {
             "/v1/vpn/sessions/" + encodePathSegment(normalizedSessionId),
             null,
             canonicalAuth);
-    return fetchJsonAllowingNotFound(request, VpnJsonParser::parseReceipt, "vpn session delete");
+    return fetchJsonAllowingNotFound(
+        request, VpnJsonParser::parseReceipt, "vpn session delete", 200);
   }
 
   /** Submits an operator receipt and returns the native lease settlement instruction. */
@@ -701,14 +703,14 @@ public final class HttpClientTransport implements IrohaClient {
                 requestBody.leaseIdHex()));
     final TransportRequest request =
         buildVpnRequest("POST", "/v1/vpn/receipts", body, canonicalAuth);
-    return fetchJson(request, VpnJsonParser::parseReceipt, "vpn receipt submit");
+    return fetchJson(request, VpnJsonParser::parseReceipt, "vpn receipt submit", 201);
   }
 
   /** Lists VPN receipts for the signed account. */
   public CompletableFuture<VpnReceiptListResponse> listVpnReceipts(
       final ToriiCanonicalRequestAuth canonicalAuth) {
     final TransportRequest request = buildVpnRequest("GET", "/v1/vpn/receipts", null, canonicalAuth);
-    return fetchJson(request, VpnJsonParser::parseReceiptList, "vpn receipt list");
+    return fetchJson(request, VpnJsonParser::parseReceiptList, "vpn receipt list", 200);
   }
 
   /** Registers verifier metadata via {@code POST /v1/zk/vk/register}. */
@@ -1679,6 +1681,14 @@ public final class HttpClientTransport implements IrohaClient {
       final TransportRequest request,
       final Function<byte[], T> parser,
       final String errorContext) {
+    return fetchJson(request, parser, errorContext, null);
+  }
+
+  private <T> CompletableFuture<T> fetchJson(
+      final TransportRequest request,
+      final Function<byte[], T> parser,
+      final String errorContext,
+      final Integer acceptedStatus) {
     notifyRequest(request);
     final CompletableFuture<T> future = new CompletableFuture<>();
     executor
@@ -1701,7 +1711,11 @@ public final class HttpClientTransport implements IrohaClient {
                       response.message(),
                       null,
                       extractRejectCode(response));
-              if (response.statusCode() < 200 || response.statusCode() >= 300) {
+              final boolean statusAccepted =
+                  acceptedStatus == null
+                      ? response.statusCode() >= 200 && response.statusCode() < 300
+                      : response.statusCode() == acceptedStatus;
+              if (!statusAccepted) {
                 final RuntimeException error =
                     new RuntimeException(
                         errorContext + " request failed with status " + response.statusCode());
@@ -1783,6 +1797,14 @@ public final class HttpClientTransport implements IrohaClient {
       final TransportRequest request,
       final Function<byte[], T> parser,
       final String errorContext) {
+    return fetchJsonAllowingNotFound(request, parser, errorContext, null);
+  }
+
+  private <T> CompletableFuture<Optional<T>> fetchJsonAllowingNotFound(
+      final TransportRequest request,
+      final Function<byte[], T> parser,
+      final String errorContext,
+      final Integer acceptedStatus) {
     notifyRequest(request);
     final CompletableFuture<Optional<T>> future = new CompletableFuture<>();
     executor
@@ -1810,7 +1832,11 @@ public final class HttpClientTransport implements IrohaClient {
                 future.complete(Optional.empty());
                 return;
               }
-              if (response.statusCode() < 200 || response.statusCode() >= 300) {
+              final boolean statusAccepted =
+                  acceptedStatus == null
+                      ? response.statusCode() >= 200 && response.statusCode() < 300
+                      : response.statusCode() == acceptedStatus;
+              if (!statusAccepted) {
                 final RuntimeException error =
                     new RuntimeException(
                         errorContext + " request failed with status " + response.statusCode());

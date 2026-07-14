@@ -11,6 +11,7 @@ const {
   buildSecurityHeaders,
   buildSecurityHeadTags,
 } = await import('../../config/security-helpers.js');
+const {default: portalConfig} = await import('../../docusaurus.config.js');
 process.env.DOCS_OAUTH_ALLOW_INSECURE = previousBypass;
 process.env.DOCS_SECURITY_ALLOW_INSECURE = previousSecurityBypass;
 
@@ -27,6 +28,16 @@ function baseOauthConfig(overrides = {}) {
     ...overrides,
   };
 }
+
+test('Docusaurus excludes locale-suffixed mirrors from English source docs', () => {
+  const docsOptions = portalConfig.presets[0][1].docs;
+  assert.ok(Array.isArray(docsOptions.exclude));
+  for (const locale of ['am', 'ja', 'ur', 'zh-hans', 'zh-hant']) {
+    assert.ok(docsOptions.exclude.includes(`**/*.${locale}.md`));
+    assert.ok(docsOptions.exclude.includes(`**/*.${locale}.mdx`));
+  }
+  assert.ok(!docsOptions.exclude.includes('**/*.en.md'));
+});
 
 test('enforceOAuthConfig rejects missing configuration', () => {
   assert.throws(

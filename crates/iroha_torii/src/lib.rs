@@ -11233,11 +11233,11 @@ fn ensure_offline_readiness_verifier_roles_are_distinct(
 #[cfg(feature = "app_api")]
 fn offline_readiness_blocker(
     code: &'static str,
-    message: &'static str,
+    message: impl Into<String>,
 ) -> iroha_torii_shared::offline_api::OfflineReadinessBlocker {
     iroha_torii_shared::offline_api::OfflineReadinessBlocker {
         code: code.to_owned(),
-        message: message.to_owned(),
+        message: message.into(),
     }
 }
 
@@ -11278,6 +11278,10 @@ async fn handler_offline_readiness(
     crate::NoritoStringQuery(query): crate::NoritoStringQuery<OfflineKagemushaReadinessQuery>,
 ) -> Result<AxResponse, Error> {
     check_access(&app, &headers, Some(remote.ip()), "v1/offline/readiness").await?;
+    let offline_command_readiness = app
+        .offline_commands
+        .as_deref()
+        .map(|issuer| offline_commands::ensure_offline_command_authority_ready(&app, issuer));
     let state_view = app.state.view();
     let world = state_view.world();
     let alias_observation_time_ms = state_view.latest_block().map_or(0, |block| {
@@ -11325,24 +11329,13 @@ async fn handler_offline_readiness(
         .into(),
         iroha_core::zk::confidential_v2::CONFIDENTIAL_V2_MAX_PROOF_BYTES,
     )?;
-    let recursive_step_eq = offline_kagemusha_readiness_verifier_record(
-        world,
-        block_height,
-        iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V3,
-        iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_STEP_EQ_V3,
-        iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_VERIFIER_CURVE_V3,
-        iroha_data_model::offline::kagemusha_recursive_spend_step_eq_public_inputs_schema_hash_v3(),
-        iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROOF_BYTES_V3,
-    )?;
-    let recursive_step_ep = offline_kagemusha_readiness_verifier_record(
-        world,
-        block_height,
-        iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V3,
-        iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_STEP_EP_V3,
-        iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_VERIFIER_CURVE_V3,
-        iroha_data_model::offline::kagemusha_recursive_spend_step_ep_public_inputs_schema_hash_v3(),
-        iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROOF_BYTES_V3,
-    )?;
+    // ABI-20 V4 uses a different authenticated layout and has no authoritative
+    // on-chain verifier registry records yet. Never reinterpret the retired V3
+    // registry entries as V4 readiness metadata.
+    let recursive_step_eq: Option<iroha_torii_shared::offline_api::OfflineActiveTransferVerifier> =
+        None;
+    let recursive_step_ep: Option<iroha_torii_shared::offline_api::OfflineActiveTransferVerifier> =
+        None;
     ensure_offline_readiness_verifier_roles_are_distinct([
         ("transfer", transfer.as_ref()),
         ("topup_shield", topup_shield.as_ref()),
@@ -11355,11 +11348,16 @@ async fn handler_offline_readiness(
     let recursive_lineage_supported =
         proof_backend_available && recursive_step_eq.is_some() && recursive_step_ep.is_some();
     let mut blockers = Vec::new();
-    if app.offline_commands.is_none() {
-        blockers.push(offline_readiness_blocker(
+    match offline_command_readiness {
+        None => blockers.push(offline_readiness_blocker(
             "issuer_unavailable",
             "The offline command issuer is not configured on this node.",
-        ));
+        )),
+        Some(Ok(())) => {}
+        Some(Err(Error::AppServiceUnavailable { code, message })) => {
+            blockers.push(offline_readiness_blocker(code, message));
+        }
+        Some(Err(error)) => return Err(error),
     }
     if !app.state.settlement.offline.kagemusha_enabled {
         blockers.push(offline_readiness_blocker(
@@ -11396,21 +11394,15 @@ async fn handler_offline_readiness(
             "unshield_verifier_unavailable",
             "The unshield verifier is not active at the evaluated block.",
         ),
-        (
-            recursive_step_eq.is_some(),
-            "recursive_step_eq_verifier_unavailable",
-            "The V3 recursive StepEq verifier is not active at the evaluated block.",
-        ),
-        (
-            recursive_step_ep.is_some(),
-            "recursive_step_ep_verifier_unavailable",
-            "The V3 recursive StepEp verifier is not active at the evaluated block.",
-        ),
     ] {
         if !available {
             blockers.push(offline_readiness_blocker(code, message));
         }
     }
+    blockers.push(offline_readiness_blocker(
+        "recursive_v4_registry_unavailable",
+        "The authoritative ABI-20 V4 recursive verifier registry is unavailable.",
+    ));
     if !proof_backend_available {
         blockers.push(offline_readiness_blocker(
             "proof_backend_unavailable",
@@ -11425,7 +11417,7 @@ async fn handler_offline_readiness(
     }
     let payload = iroha_torii_shared::offline_api::OfflineReadiness {
         required_bridge_abi_version:
-            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3,
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4,
         max_hops: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2,
         asset_definition_id: asset_definition_id.to_string(),
         asset_scale,
@@ -11665,7 +11657,7 @@ mod offline_kagemusha_readiness_tests {
     #[test]
     fn readiness_etag_hashes_the_exact_selected_representation() {
         let payload = iroha_torii_shared::offline_api::OfflineReadiness {
-            required_bridge_abi_version: 19,
+            required_bridge_abi_version: 20,
             max_hops: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2,
             asset_definition_id: "xor#wonderland".to_owned(),
             asset_scale: Some(9),
@@ -74231,6 +74223,7 @@ mod tests {
             max_fee: Some("0.01".parse().expect("canonical fee cap")),
             rules: vec![iroha_data_model::nexus::FeeSponsorRule {
                 effect: iroha_data_model::nexus::FeeSponsorRuleEffect::Allow,
+                max_fee: None,
                 dataspaces: BTreeSet::from([DataSpaceId::UNIVERSAL]),
                 executable_kinds: BTreeSet::from([
                     iroha_data_model::nexus::FeeSponsorExecutableKind::Instructions,

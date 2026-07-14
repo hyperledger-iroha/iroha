@@ -2315,6 +2315,15 @@ pub mod domain {
             AnyPermission::CanUnregisterNft(permission) => permission.nft.domain() == domain_id,
             AnyPermission::CanTransferNft(permission) => permission.nft.domain() == domain_id,
             AnyPermission::CanModifyNftMetadata(permission) => permission.nft.domain() == domain_id,
+            AnyPermission::CanPublishSpaceDirectoryManifestForAccountDomain(permission) => {
+                &permission.domain == domain_id
+            }
+            AnyPermission::CanEnrollFeeSponsorPolicyForAccountDomain(permission) => {
+                &permission.domain == domain_id
+            }
+            AnyPermission::CanUseFeeSponsorForAccount(permission) => {
+                &permission.domain == domain_id
+            }
             AnyPermission::CanUseFeeSponsor(_)
             | AnyPermission::CanUnregisterAccount(_)
             | AnyPermission::CanModifyAccountMetadata(_)
@@ -2360,7 +2369,8 @@ pub mod domain {
             | AnyPermission::CanRollbackOracleChange(_)
             | AnyPermission::CanResolveOracleDispute(_)
             | AnyPermission::CanManageTwitterBindings(_)
-            | AnyPermission::CanPublishSpaceDirectoryManifest(_) => false,
+            | AnyPermission::CanPublishSpaceDirectoryManifest(_)
+            | AnyPermission::CanPublishSpaceDirectoryManifestForUaid(_) => false,
         }
     }
 }
@@ -2602,6 +2612,12 @@ pub mod account {
                 permission.account == *account_id
             }
             AnyPermission::CanUseFeeSponsor(permission) => permission.sponsor == *account_id,
+            AnyPermission::CanUseFeeSponsorForAccount(permission) => {
+                permission.sponsor == *account_id || permission.beneficiary == *account_id
+            }
+            AnyPermission::CanEnrollFeeSponsorPolicyForAccountDomain(permission) => {
+                permission.sponsor == *account_id
+            }
             AnyPermission::CanInvokeContractEntrypoint(permission) => {
                 permission.contract.subject_id() == *account_id
             }
@@ -2662,7 +2678,9 @@ pub mod account {
             | AnyPermission::CanRollbackOracleChange(_)
             | AnyPermission::CanResolveOracleDispute(_)
             | AnyPermission::CanManageTwitterBindings(_)
-            | AnyPermission::CanPublishSpaceDirectoryManifest(_) => false,
+            | AnyPermission::CanPublishSpaceDirectoryManifest(_)
+            | AnyPermission::CanPublishSpaceDirectoryManifestForUaid(_)
+            | AnyPermission::CanPublishSpaceDirectoryManifestForAccountDomain(_) => false,
         }
     }
 }
@@ -2915,7 +2933,11 @@ pub mod asset_definition {
             | AnyPermission::CanResolveOracleDispute(_)
             | AnyPermission::CanManageTwitterBindings(_)
             | AnyPermission::CanPublishSpaceDirectoryManifest(_)
-            | AnyPermission::CanUseFeeSponsor(_) => false,
+            | AnyPermission::CanPublishSpaceDirectoryManifestForUaid(_)
+            | AnyPermission::CanPublishSpaceDirectoryManifestForAccountDomain(_)
+            | AnyPermission::CanUseFeeSponsor(_)
+            | AnyPermission::CanUseFeeSponsorForAccount(_)
+            | AnyPermission::CanEnrollFeeSponsorPolicyForAccountDomain(_) => false,
         }
     }
 }
@@ -3837,6 +3859,15 @@ pub mod role {
             let permission = $isi.object();
 
             if let Ok(any_permission) = AnyPermission::try_from(permission) {
+                if matches!(
+                    &any_permission,
+                    AnyPermission::CanUseFeeSponsorForAccount(_)
+                ) {
+                    deny!(
+                        $executor,
+                        "CanUseFeeSponsorForAccount is exact to one beneficiary and cannot be attached to a role"
+                    );
+                }
                 if !$executor.context().curr_block.is_genesis() {
                     if !find_account_roles($executor.context().authority.clone(), $executor.host())
                         .any(|authority_role_id| authority_role_id == role_id)
@@ -3926,6 +3957,15 @@ pub mod role {
                     ValidationFail::NotPermitted(format!("{permission:?}: Unknown permission"))
                 );
             };
+            if matches!(
+                &any_permission,
+                AnyPermission::CanUseFeeSponsorForAccount(_)
+            ) {
+                deny!(
+                    executor,
+                    "CanUseFeeSponsorForAccount is exact to one beneficiary and cannot be attached to a role"
+                );
+            }
             if !executor.context().curr_block.is_genesis()
                 && let Err(error) = crate::permission::ValidateGrantRevoke::validate_grant(
                     &any_permission,
@@ -4287,7 +4327,11 @@ pub mod trigger {
             | AnyPermission::CanResolveOracleDispute(_)
             | AnyPermission::CanManageTwitterBindings(_)
             | AnyPermission::CanPublishSpaceDirectoryManifest(_)
-            | AnyPermission::CanUseFeeSponsor(_) => false,
+            | AnyPermission::CanPublishSpaceDirectoryManifestForUaid(_)
+            | AnyPermission::CanPublishSpaceDirectoryManifestForAccountDomain(_)
+            | AnyPermission::CanUseFeeSponsor(_)
+            | AnyPermission::CanUseFeeSponsorForAccount(_)
+            | AnyPermission::CanEnrollFeeSponsorPolicyForAccountDomain(_) => false,
         }
     }
 
@@ -4299,7 +4343,11 @@ pub mod trigger {
         use iroha_executor_data_model::permission::{
             account::{AccountAliasPermissionScope, CanManageAccountAlias, CanResolveAccountAlias},
             asset::{CanModifyAssetMetadata, CanModifyAssetMetadataWithDefinition},
-            nexus::CanUseFeeSponsor,
+            nexus::{
+                CanEnrollFeeSponsorPolicyForAccountDomain,
+                CanPublishSpaceDirectoryManifestForAccountDomain, CanUseFeeSponsor,
+                CanUseFeeSponsorForAccount,
+            },
             sccp::CanManageSccpGovernance,
             sorafs::{
                 CanApproveSorafsPin, CanBindSorafsAlias, CanCompleteSorafsReplicationOrder,
@@ -4318,6 +4366,7 @@ pub mod trigger {
             account::AccountId,
             asset::{AssetDefinitionId, AssetId},
             domain::DomainId,
+            name::Name,
         };
 
         fn fixture_key_pair(seed: u8) -> KeyPair {
@@ -4485,6 +4534,81 @@ pub mod trigger {
                 !is_permission_trigger_associated(&permission, &trigger_id),
                 "fee sponsor permission should not bind to triggers"
             );
+        }
+
+        #[test]
+        fn scoped_cbdc_permission_associations_are_exact() {
+            let hbl_domain = DomainId::try_new("hbl", "sbp").expect("HBL domain must be valid");
+            let ubl_domain = DomainId::try_new("ubl", "sbp").expect("UBL domain must be valid");
+            let sponsor = sample_account_id(0x31, &hbl_domain);
+            let beneficiary = sample_account_id(0x32, &hbl_domain);
+            let unrelated = sample_account_id(0x33, &ubl_domain);
+            let policy: Name = "retail".parse().expect("retail sponsor policy");
+
+            let publisher = Permission::from(
+                AnyPermission::CanPublishSpaceDirectoryManifestForAccountDomain(
+                    CanPublishSpaceDirectoryManifestForAccountDomain {
+                        dataspace: DataSpaceId::new(10),
+                        domain: hbl_domain.clone(),
+                    },
+                ),
+            );
+            assert!(domain::is_permission_domain_associated(
+                &publisher,
+                &hbl_domain
+            ));
+            assert!(!domain::is_permission_domain_associated(
+                &publisher,
+                &ubl_domain
+            ));
+
+            let enrollment =
+                Permission::from(AnyPermission::CanEnrollFeeSponsorPolicyForAccountDomain(
+                    CanEnrollFeeSponsorPolicyForAccountDomain {
+                        sponsor: sponsor.clone(),
+                        policy: policy.clone(),
+                        domain: hbl_domain.clone(),
+                    },
+                ));
+            assert!(domain::is_permission_domain_associated(
+                &enrollment,
+                &hbl_domain
+            ));
+            assert!(account::is_permission_account_associated(
+                &enrollment,
+                &sponsor
+            ));
+            assert!(!account::is_permission_account_associated(
+                &enrollment,
+                &beneficiary
+            ));
+
+            let exact_use = Permission::from(AnyPermission::CanUseFeeSponsorForAccount(
+                CanUseFeeSponsorForAccount {
+                    sponsor: sponsor.clone(),
+                    policy,
+                    beneficiary: beneficiary.clone(),
+                    domain: hbl_domain.clone(),
+                },
+            ));
+            assert!(domain::is_permission_domain_associated(
+                &exact_use,
+                &hbl_domain
+            ));
+            assert!(!domain::is_permission_domain_associated(
+                &exact_use,
+                &ubl_domain
+            ));
+            assert!(account::is_permission_account_associated(
+                &exact_use, &sponsor
+            ));
+            assert!(account::is_permission_account_associated(
+                &exact_use,
+                &beneficiary
+            ));
+            assert!(!account::is_permission_account_associated(
+                &exact_use, &unrelated
+            ));
         }
 
         #[test]
@@ -5350,6 +5474,14 @@ pub mod permission {
             let permission = $isi.object();
 
             if let Ok(any_permission) = AnyPermission::try_from(permission) {
+                if let AnyPermission::CanUseFeeSponsorForAccount(token) = &any_permission
+                    && token.beneficiary != account_id
+                {
+                    deny!(
+                        $executor,
+                        "CanUseFeeSponsorForAccount may only be granted to or revoked from its exact beneficiary"
+                    );
+                }
                 if !$executor.context().curr_block.is_genesis() {
                     if let Err(error) = crate::permission::ValidateGrantRevoke::$method(
                         &any_permission,

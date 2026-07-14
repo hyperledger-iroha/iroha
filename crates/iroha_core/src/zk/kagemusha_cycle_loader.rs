@@ -34,6 +34,17 @@ use snark_verifier::{
     system::halo2::transcript::halo2::NativeEncoding,
 };
 
+use super::kagemusha_accumulation::{
+    KAGEMUSHA_IPA_ACCUMULATION_WIRE_VERSION_V1, KAGEMUSHA_IPA_ACCUMULATION_WIRE_VERSION_V4,
+    KAGEMUSHA_IPA_ACCUMULATOR_INSTANCE_LIMBS_V1, KAGEMUSHA_IPA_ACCUMULATOR_ROUNDS_V1,
+    kagemusha_ipa_accumulator_instance_limbs_v4,
+};
+
+/// Domain separator for the fixed-shape selector-bound deferred audit.
+pub(super) const KAGEMUSHA_DEFERRED_AUDIT_DOMAIN_V3: &[u8] = b"iroha:kagemusha:deferred-audit:v3";
+/// Version encoded in every selector-bound deferred-audit preimage.
+pub(super) const KAGEMUSHA_DEFERRED_AUDIT_VERSION_V3: u32 = 3;
+
 /// Limb width chosen so products of three-limb Pasta integers retain
 /// ample native-field headroom in either parity.
 pub(super) const LIMB_BITS: usize = 86;
@@ -74,6 +85,24 @@ pub(super) fn proper_uint_le_bytes<F: BigPrimeField>(
             gate.pow_of_two()[..8].iter().copied().map(Constant),
         )
     })
+}
+
+/// Constrain the canonical Pasta compressed encoding `x || parity(y)` from
+/// already canonical affine coordinates.
+pub(super) fn compressed_point_bytes<F: BigPrimeField>(
+    ctx: &mut halo2_base::Context<F>,
+    range: &halo2_base::gates::RangeChip<F>,
+    x: &ProperCrtUint<F>,
+    y: &ProperCrtUint<F>,
+) -> [AssignedValue<F>; 32] {
+    let mut encoded = proper_uint_le_bytes(ctx, range, x);
+    let y_bytes = proper_uint_le_bytes(ctx, range, y);
+    let y_low_bits = range.gate().num_to_bits(ctx, y_bytes[0], 8);
+    let sign = range
+        .gate()
+        .mul(ctx, Existing(y_low_bits[0]), Constant(F::from(1_u64 << 7)));
+    encoded[31] = range.gate().add(ctx, Existing(encoded[31]), Existing(sign));
+    encoded
 }
 
 /// One exact curve source consumed by the deferred point half.
@@ -288,6 +317,11 @@ where
         }
     }
 
+    /// Shared native-scalar range chip used by transcript and identity gadgets.
+    pub(super) fn range(&self) -> &halo2_base::gates::RangeChip<Inner<C>> {
+        self.scalar_integer.range
+    }
+
     /// Constrain the canonical byte preimage joined to the reciprocal point
     /// half. Callers prepend the authenticated manifest/VK/schema identities
     /// and append the exact loaded transcript scalars before hashing.
@@ -352,6 +386,325 @@ where
             }
         }
         output
+    }
+
+    /// Constrain the V3 selector-bound deferred-audit preimage.
+    ///
+    /// `gate_tags` and `selectors` have one entry per equation in audit order.
+    /// Gate tags describe the statically compiled stage while every selector is
+    /// a Boolean derived from the current Step's public parent count.  Encoding
+    /// both prevents the reciprocal half from accepting the same equation
+    /// vector under a different enable schedule.
+    pub(super) fn assigned_equation_bytes_v3(
+        &self,
+        ctx: &mut ScalarContext<C>,
+        gate_tags: &[u32],
+        selectors: &[AssignedValue<Inner<C>>],
+    ) -> Result<Vec<AssignedValue<Inner<C>>>, Error> {
+        fn push_constant_bytes<F: BigPrimeField>(
+            ctx: &mut halo2_base::Context<F>,
+            output: &mut Vec<AssignedValue<F>>,
+            bytes: &[u8],
+        ) {
+            output.extend(
+                bytes
+                    .iter()
+                    .map(|byte| ctx.load_constant(F::from(u64::from(*byte)))),
+            );
+        }
+
+        fn push_u32<F: BigPrimeField>(
+            ctx: &mut halo2_base::Context<F>,
+            output: &mut Vec<AssignedValue<F>>,
+            value: u32,
+        ) {
+            push_constant_bytes(ctx, output, &value.to_le_bytes());
+        }
+
+        let audit = self.audit();
+        if gate_tags.len() != audit.equations.len() || selectors.len() != audit.equations.len() {
+            return Err(Error::InvalidInstances);
+        }
+        let ctx = ctx.main();
+        let mut output = Vec::new();
+        push_constant_bytes(ctx, &mut output, KAGEMUSHA_DEFERRED_AUDIT_DOMAIN_V3);
+        push_constant_bytes(ctx, &mut output, &[0]);
+        push_u32(ctx, &mut output, KAGEMUSHA_DEFERRED_AUDIT_VERSION_V3);
+        push_u32(
+            ctx,
+            &mut output,
+            u32::try_from(audit.sources.len()).expect("fixed source count fits u32"),
+        );
+        push_u32(
+            ctx,
+            &mut output,
+            u32::try_from(audit.equations.len()).expect("fixed equation count fits u32"),
+        );
+        for source in &audit.sources {
+            output.extend(proper_uint_le_bytes(ctx, self.coordinate.range, &source.x));
+            output.extend(proper_uint_le_bytes(ctx, self.coordinate.range, &source.y));
+        }
+        for ((equation, gate_tag), selector) in audit
+            .equations
+            .iter()
+            .zip(gate_tags)
+            .zip(selectors.iter().copied())
+        {
+            self.scalar.assert_bit(ctx, selector);
+            push_u32(ctx, &mut output, *gate_tag);
+            output.push(selector);
+            push_u32(
+                ctx,
+                &mut output,
+                u32::try_from(equation.terms.len()).expect("fixed term count fits u32"),
+            );
+            for term in &equation.terms {
+                push_u32(
+                    ctx,
+                    &mut output,
+                    u32::try_from(term.source_index).expect("fixed source index fits u32"),
+                );
+                let scalar: AssignedCoordinate<C> = self
+                    .scalar_integer
+                    .load_private(ctx, *term.coefficient.value());
+                let scalar: AssignedCoordinate<C> =
+                    self.scalar_integer.enforce_less_than(ctx, scalar).into();
+                ctx.constrain_equal(scalar.native(), &term.coefficient);
+                output.extend(proper_uint_le_bytes(
+                    ctx,
+                    self.scalar_integer.range,
+                    &scalar,
+                ));
+            }
+        }
+        Ok(output)
+    }
+
+    /// Constrain the exact canonical bytes of one native scalar cell.
+    pub(super) fn assigned_scalar_bytes(
+        &self,
+        ctx: &mut ScalarContext<C>,
+        scalar: AssignedValue<Inner<C>>,
+    ) -> [AssignedValue<Inner<C>>; 32] {
+        let scalar_integer: AssignedCoordinate<C> = self
+            .scalar_integer
+            .load_private(ctx.main(), *scalar.value());
+        let scalar_integer: AssignedCoordinate<C> = self
+            .scalar_integer
+            .enforce_less_than(ctx.main(), scalar_integer)
+            .into();
+        ctx.main().constrain_equal(scalar_integer.native(), &scalar);
+        proper_uint_le_bytes(ctx.main(), self.scalar_integer.range, &scalar_integer)
+    }
+
+    /// Constrain the exact canonical compressed bytes of one symbolic point.
+    ///
+    /// A derived point first emits an equation tying a fresh canonical source
+    /// to its complete symbolic expression, so serialization cannot detach an
+    /// accumulated output from the equations that produced it.
+    pub(super) fn assigned_point_bytes(
+        &self,
+        ctx: &mut ScalarContext<C>,
+        point: &DeferredScalarPoint<C>,
+    ) -> Result<[AssignedValue<Inner<C>>; 32], Error> {
+        if bool::from(point.value.is_identity()) {
+            return Err(Error::Transcript(
+                std::io::ErrorKind::InvalidData,
+                "identity point cannot be a Kagemusha accumulated output".to_owned(),
+            ));
+        }
+        let source_index = if let Some(source_index) = point.source_index {
+            source_index
+        } else {
+            let source_index = self.assign_source(ctx, point.value, false);
+            let mut relation = self.one_term(ctx, source_index);
+            relation.extend(point.terms.iter().cloned().map(|mut term| {
+                term.coefficient = <GateChip<Inner<C>> as GateInstructions<Inner<C>>>::neg(
+                    &self.scalar,
+                    ctx.main(),
+                    Existing(term.coefficient),
+                );
+                term
+            }));
+            self.record_equation(ctx, relation);
+            source_index
+        };
+        let state = self.state.borrow();
+        let source = &state.sources[source_index];
+        Ok(compressed_point_bytes(
+            ctx.main(),
+            self.coordinate.range,
+            &source.x,
+            &source.y,
+        ))
+    }
+
+    /// Constrain the fixed field-neutral public-instance representation of one
+    /// loaded IPA accumulator.
+    ///
+    /// The returned cells use the exact release layout
+    /// `version || round_count || xi[0..k] || compressed(U)`, where every
+    /// 32-byte value is packed into eight little-endian `u32` limbs.  Scalar
+    /// canonicality and the accumulated-point equation are constrained before
+    /// packing, so equality with public cells cannot authorize a substituted
+    /// host accumulator.
+    pub(super) fn assigned_accumulator_instance_limbs(
+        &self,
+        ctx: &mut ScalarContext<C>,
+        round_challenges: &[AssignedValue<Inner<C>>],
+        folded_generator: &DeferredScalarPoint<C>,
+    ) -> Result<Vec<AssignedValue<Inner<C>>>, Error> {
+        if round_challenges.len() != KAGEMUSHA_IPA_ACCUMULATOR_ROUNDS_V1 {
+            return Err(Error::InvalidInstances);
+        }
+
+        let mut bytes = Vec::with_capacity((round_challenges.len() + 1) * 32);
+        for challenge in round_challenges {
+            bytes.extend(self.assigned_scalar_bytes(ctx, *challenge));
+        }
+        bytes.extend(self.assigned_point_bytes(ctx, folded_generator)?);
+
+        let gate = self.scalar.clone();
+        let mut limbs = Vec::with_capacity(KAGEMUSHA_IPA_ACCUMULATOR_INSTANCE_LIMBS_V1);
+        limbs.push(ctx.main().load_constant(Inner::<C>::from(u64::from(
+            KAGEMUSHA_IPA_ACCUMULATION_WIRE_VERSION_V1,
+        ))));
+        limbs.push(
+            ctx.main().load_constant(Inner::<C>::from(
+                u64::try_from(KAGEMUSHA_IPA_ACCUMULATOR_ROUNDS_V1)
+                    .expect("fixed Kagemusha IPA round count fits u64"),
+            )),
+        );
+        limbs.extend(bytes.chunks_exact(4).map(|chunk| {
+            gate.inner_product(
+                ctx.main(),
+                chunk.iter().copied().map(Existing),
+                [1_u64, 1 << 8, 1 << 16, 1 << 24]
+                    .into_iter()
+                    .map(|value| Constant(Inner::<C>::from(value))),
+            )
+        }));
+        debug_assert_eq!(limbs.len(), KAGEMUSHA_IPA_ACCUMULATOR_INSTANCE_LIMBS_V1);
+        Ok(limbs)
+    }
+
+    /// Equality-bind a loaded accumulator to already-assigned public limbs.
+    pub(super) fn constrain_accumulator_instance_limbs(
+        &self,
+        ctx: &mut ScalarContext<C>,
+        round_challenges: &[AssignedValue<Inner<C>>],
+        folded_generator: &DeferredScalarPoint<C>,
+        expected: &[AssignedValue<Inner<C>>],
+    ) -> Result<(), Error> {
+        if expected.len() != KAGEMUSHA_IPA_ACCUMULATOR_INSTANCE_LIMBS_V1 {
+            return Err(Error::InvalidInstances);
+        }
+        let assigned =
+            self.assigned_accumulator_instance_limbs(ctx, round_challenges, folded_generator)?;
+        for (assigned, expected) in assigned.iter().zip(expected) {
+            ctx.main().constrain_equal(assigned, expected);
+        }
+        Ok(())
+    }
+
+    /// Constrain the degree-parameterized V4 accumulator representation.
+    ///
+    /// The round count comes from the authenticated circuit parameters.  It is
+    /// never inferred from the supplied challenge vector or public slice.
+    pub(super) fn assigned_accumulator_instance_limbs_v4(
+        &self,
+        ctx: &mut ScalarContext<C>,
+        authenticated_round_count: u32,
+        round_challenges: &[AssignedValue<Inner<C>>],
+        folded_generator: &DeferredScalarPoint<C>,
+    ) -> Result<Vec<AssignedValue<Inner<C>>>, Error> {
+        let expected_len = kagemusha_ipa_accumulator_instance_limbs_v4(authenticated_round_count)
+            .map_err(Error::AssertionFailure)?;
+        if usize::try_from(authenticated_round_count).ok() != Some(round_challenges.len()) {
+            return Err(Error::InvalidInstances);
+        }
+
+        let mut bytes = Vec::with_capacity((round_challenges.len() + 1) * 32);
+        for challenge in round_challenges {
+            bytes.extend(self.assigned_scalar_bytes(ctx, *challenge));
+        }
+        bytes.extend(self.assigned_point_bytes(ctx, folded_generator)?);
+
+        let gate = self.scalar.clone();
+        let mut limbs = Vec::with_capacity(expected_len);
+        limbs.push(ctx.main().load_constant(Inner::<C>::from(u64::from(
+            KAGEMUSHA_IPA_ACCUMULATION_WIRE_VERSION_V4,
+        ))));
+        limbs.push(
+            ctx.main()
+                .load_constant(Inner::<C>::from(u64::from(authenticated_round_count))),
+        );
+        limbs.extend(bytes.chunks_exact(4).map(|chunk| {
+            gate.inner_product(
+                ctx.main(),
+                chunk.iter().copied().map(Existing),
+                [1_u64, 1 << 8, 1 << 16, 1 << 24]
+                    .into_iter()
+                    .map(|value| Constant(Inner::<C>::from(value))),
+            )
+        }));
+        if limbs.len() != expected_len {
+            return Err(Error::InvalidInstances);
+        }
+        Ok(limbs)
+    }
+
+    /// Select between two non-identity symbolic points using an assigned
+    /// Boolean scalar.
+    ///
+    /// The selected host value is used only as a coordinate witness. Its fresh
+    /// canonical source is tied to
+    /// `selector * when_true + (1 - selector) * when_false` by a deferred
+    /// equation, so changing either the selector or the coordinate witness is
+    /// caught by the reciprocal point half.
+    pub(super) fn select_point(
+        &self,
+        ctx: &mut ScalarContext<C>,
+        when_true: &DeferredScalarPoint<C>,
+        when_false: &DeferredScalarPoint<C>,
+        selector: AssignedValue<Inner<C>>,
+    ) -> DeferredScalarPoint<C> {
+        assert!(
+            !bool::from(when_true.value.is_identity())
+                && !bool::from(when_false.value.is_identity()),
+            "identity cannot enter Kagemusha accumulated-point selection"
+        );
+        self.scalar.assert_bit(ctx.main(), selector);
+        let not_selector = self.scalar.not(ctx.main(), selector);
+
+        let mut selected_terms = self.scale_terms(ctx, &when_true.terms, selector);
+        selected_terms.extend(self.scale_terms(ctx, &when_false.terms, not_selector));
+        let selected_terms = self.normalize_terms(ctx, selected_terms);
+
+        // Arithmetic selection computes only the witness value; the deferred
+        // equation below is the authority. This avoids a host Boolean branch.
+        let difference = when_true.value.to_curve() - when_false.value.to_curve();
+        let value = (when_false.value.to_curve() + difference * *selector.value()).to_affine();
+
+        // Both candidates are non-identity and the selector is Boolean, so the
+        // selected value is always a valid source without witness-dependent
+        // circuit shape.
+        let source_index = self.assign_source(ctx, value, false);
+        let mut relation = self.one_term(ctx, source_index);
+        relation.extend(selected_terms.into_iter().map(|mut term| {
+            term.coefficient = <GateChip<Inner<C>> as GateInstructions<Inner<C>>>::neg(
+                &self.scalar,
+                ctx.main(),
+                Existing(term.coefficient),
+            );
+            term
+        }));
+        self.record_equation(ctx, relation);
+        DeferredScalarPoint {
+            value,
+            source_index: Some(source_index),
+            terms: self.one_term(ctx, source_index),
+        }
     }
 
     fn coordinate_to_native_scalar(
@@ -547,8 +900,11 @@ where
         let source_index = self.assign_source(ctx, point.value, false);
         let mut relation = self.one_term(ctx, source_index);
         relation.extend(point.terms.iter().cloned().map(|mut term| {
-            term.coefficient =
-                GateInstructions::neg(&self.scalar, ctx.main(), Existing(term.coefficient));
+            term.coefficient = <GateChip<Inner<C>> as GateInstructions<Inner<C>>>::neg(
+                &self.scalar,
+                ctx.main(),
+                Existing(term.coefficient),
+            );
             term
         }));
         self.record_equation(ctx, relation);
@@ -681,8 +1037,11 @@ where
     ) {
         let mut terms = lhs.terms.clone();
         terms.extend(rhs.terms.iter().cloned().map(|mut term| {
-            term.coefficient =
-                GateInstructions::neg(&self.scalar, ctx.main(), Existing(term.coefficient));
+            term.coefficient = <GateChip<Inner<C>> as GateInstructions<Inner<C>>>::neg(
+                &self.scalar,
+                ctx.main(),
+                Existing(term.coefficient),
+            );
             term
         }));
         self.record_equation(ctx, terms);
@@ -938,8 +1297,30 @@ where
         ctx: &mut SinglePhaseCoreManager<Outer<C>>,
         witness: &DeferredEquationWitness<C>,
     ) -> Result<AssignedDeferredPointAudit<C>, String> {
+        let selectors = (0..witness.equations.len())
+            .map(|_| ctx.main().load_constant(Outer::<C>::ONE))
+            .collect::<Vec<_>>();
+        self.constrain_deferred_equations_with_selectors(ctx, witness, &selectors)
+    }
+
+    /// Assign and canonicalize every source and coefficient, evaluate every
+    /// deferred MSM, and selector-gate only its final identity constraint.
+    ///
+    /// There must be exactly one already-assigned Boolean selector per
+    /// equation. No selector value is inspected on the host: equations with a
+    /// zero selector still incur the complete source assignment,
+    /// canonicalization, and curve arithmetic, while a one selector enforces
+    /// the residual point to be the identity. The returned audit always
+    /// contains every equation, independent of selector values.
+    pub(super) fn constrain_deferred_equations_with_selectors(
+        &mut self,
+        ctx: &mut SinglePhaseCoreManager<Outer<C>>,
+        witness: &DeferredEquationWitness<C>,
+        selectors: &[AssignedValue<Outer<C>>],
+    ) -> Result<AssignedDeferredPointAudit<C>, String> {
         if witness.sources.is_empty()
             || witness.equations.is_empty()
+            || selectors.len() != witness.equations.len()
             || witness
                 .sources
                 .iter()
@@ -959,7 +1340,8 @@ where
             })
             .collect::<Vec<_>>();
         let mut equations = Vec::with_capacity(witness.equations.len());
-        for equation in &witness.equations {
+        for (equation, selector) in witness.equations.iter().zip(selectors.iter().copied()) {
+            self.base.gate().assert_bit(ctx.main(), selector);
             let mut assigned = Vec::with_capacity(equation.len());
             let mut previous = None;
             for (source_index, coefficient) in equation {
@@ -988,7 +1370,25 @@ where
             let identity = self
                 .curve()
                 .assign_constant_point(ctx.main(), C::identity());
-            self.curve().assert_equal(ctx.main(), result, identity);
+            for (result_coordinate, identity_coordinate) in
+                [(&result.x, &identity.x), (&result.y, &identity.y)]
+            {
+                let difference = <GateChip<Outer<C>> as GateInstructions<Outer<C>>>::sub(
+                    self.base.gate(),
+                    ctx.main(),
+                    Existing(*result_coordinate.native()),
+                    Existing(*identity_coordinate.native()),
+                );
+                let selected = <GateChip<Outer<C>> as GateInstructions<Outer<C>>>::mul(
+                    self.base.gate(),
+                    ctx.main(),
+                    Existing(selector),
+                    Existing(difference),
+                );
+                self.base
+                    .gate()
+                    .assert_is_const(ctx.main(), &selected, &Outer::<C>::ZERO);
+            }
             equations.push(assigned);
         }
         Ok(AssignedDeferredPointAudit { sources, equations })
@@ -1050,6 +1450,110 @@ where
             }
         }
         output
+    }
+
+    /// Constrain the reciprocal V3 selector-bound audit preimage.
+    ///
+    /// This is byte-for-byte identical to
+    /// [`DeferredScalarEccChip::assigned_equation_bytes_v3`].  Selectors are
+    /// independently derived from this circuit's public parent-count cell;
+    /// they are not copied from the scalar-half witness.
+    pub(super) fn assigned_equation_bytes_v3(
+        &self,
+        ctx: &mut SinglePhaseCoreManager<Outer<C>>,
+        audit: &AssignedDeferredPointAudit<C>,
+        gate_tags: &[u32],
+        selectors: &[AssignedValue<Outer<C>>],
+    ) -> Result<Vec<AssignedValue<Outer<C>>>, String> {
+        fn push_constant_bytes<F: BigPrimeField>(
+            ctx: &mut halo2_base::Context<F>,
+            output: &mut Vec<AssignedValue<F>>,
+            bytes: &[u8],
+        ) {
+            output.extend(
+                bytes
+                    .iter()
+                    .map(|byte| ctx.load_constant(F::from(u64::from(*byte)))),
+            );
+        }
+
+        fn push_u32<F: BigPrimeField>(
+            ctx: &mut halo2_base::Context<F>,
+            output: &mut Vec<AssignedValue<F>>,
+            value: u32,
+        ) {
+            push_constant_bytes(ctx, output, &value.to_le_bytes());
+        }
+
+        if gate_tags.len() != audit.equations.len() || selectors.len() != audit.equations.len() {
+            return Err("Kagemusha V3 deferred-audit selector shape mismatch".to_owned());
+        }
+        let ctx = ctx.main();
+        let mut output = Vec::new();
+        push_constant_bytes(ctx, &mut output, KAGEMUSHA_DEFERRED_AUDIT_DOMAIN_V3);
+        push_constant_bytes(ctx, &mut output, &[0]);
+        push_u32(ctx, &mut output, KAGEMUSHA_DEFERRED_AUDIT_VERSION_V3);
+        push_u32(
+            ctx,
+            &mut output,
+            u32::try_from(audit.sources.len()).expect("fixed source count fits u32"),
+        );
+        push_u32(
+            ctx,
+            &mut output,
+            u32::try_from(audit.equations.len()).expect("fixed equation count fits u32"),
+        );
+        for source in &audit.sources {
+            output.extend(proper_uint_le_bytes(ctx, self.base.range, &source.x));
+            output.extend(proper_uint_le_bytes(ctx, self.base.range, &source.y));
+        }
+        for ((equation, gate_tag), selector) in audit
+            .equations
+            .iter()
+            .zip(gate_tags)
+            .zip(selectors.iter().copied())
+        {
+            self.base.gate().assert_bit(ctx, selector);
+            push_u32(ctx, &mut output, *gate_tag);
+            output.push(selector);
+            push_u32(
+                ctx,
+                &mut output,
+                u32::try_from(equation.len()).expect("fixed term count fits u32"),
+            );
+            for (source_index, coefficient) in equation {
+                push_u32(
+                    ctx,
+                    &mut output,
+                    u32::try_from(*source_index).expect("fixed source index fits u32"),
+                );
+                output.extend(proper_uint_le_bytes(
+                    ctx,
+                    self.scalar.field.range,
+                    coefficient,
+                ));
+            }
+        }
+        Ok(output)
+    }
+
+    /// Constrain the canonical bytes of a reciprocal non-native scalar.
+    pub(super) fn assigned_scalar_bytes(
+        &self,
+        ctx: &mut SinglePhaseCoreManager<Outer<C>>,
+        scalar: &Integer<C>,
+    ) -> [AssignedValue<Outer<C>>; 32] {
+        proper_uint_le_bytes(ctx.main(), self.scalar.field.range, scalar)
+    }
+
+    /// Constrain the canonical compressed bytes of an assigned on-curve point.
+    pub(super) fn assigned_point_bytes(
+        &self,
+        ctx: &mut SinglePhaseCoreManager<Outer<C>>,
+        point: &Point<C>,
+    ) -> [AssignedValue<Outer<C>>; 32] {
+        let point = self.canonical_point(ctx, point.clone());
+        compressed_point_bytes(ctx.main(), self.base.range, &point.x, &point.y)
     }
 
     /// Convert a canonical base-field coordinate to the exact residue
@@ -1248,5 +1752,249 @@ where
             self.coordinate_to_scalar(ctx, point.x),
             self.coordinate_to_scalar(ctx, point.y),
         ])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::mem;
+
+    use halo2_base::gates::circuit::builder::BaseCircuitBuilder;
+    use halo2_ecc::fields::fp::FpChip;
+    use halo2_proofs::{
+        arithmetic::Field as _,
+        dev::MockProver,
+        halo2curves::{
+            group::{Curve as _, Group as _},
+            pasta::{EqAffine, Fp, Fq},
+        },
+    };
+    use snark_verifier::{loader::halo2::EccInstructions, util::arithmetic::PrimeCurveAffine as _};
+
+    use super::*;
+
+    const TEST_K: usize = 17;
+
+    fn reciprocal_builder(
+        witness: &DeferredEquationWitness<EqAffine>,
+        selectors: &[u64],
+    ) -> BaseCircuitBuilder<Fq> {
+        let mut builder = BaseCircuitBuilder::<Fq>::new(false)
+            .use_k(TEST_K)
+            .use_lookup_bits(TEST_K - 1);
+        let range = builder.range_chip();
+        let base = FpChip::<Fq, Fq>::new(&range, LIMB_BITS, LIMBS);
+        let scalar = FpChip::<Fq, Fp>::new(&range, LIMB_BITS, LIMBS);
+        let mut chip = PastaCycleEccChip::<EqAffine>::new(&base, &scalar);
+        let mut ctx = mem::take(builder.pool(0));
+        let selectors = selectors
+            .iter()
+            .copied()
+            .map(|selector| ctx.main().load_witness(Fq::from(selector)))
+            .collect::<Vec<_>>();
+        chip.constrain_deferred_equations_with_selectors(&mut ctx, witness, &selectors)
+            .expect("fixed reciprocal witness shape");
+        *builder.pool(0) = ctx;
+        builder.calculate_params(Some(9));
+        builder
+    }
+
+    fn assigned_preimage_bytes<F: BigPrimeField>(cells: &[AssignedValue<F>]) -> Vec<u8> {
+        cells
+            .iter()
+            .map(|cell| {
+                u8::try_from(cell.value().get_lower_64())
+                    .expect("deferred-audit preimages contain exact bytes")
+            })
+            .collect()
+    }
+
+    #[test]
+    fn selector_bound_v3_preimage_is_identical_in_both_halves_and_has_one_domain() {
+        let generator = EqAffine::generator();
+        let doubled = (generator.to_curve() + generator.to_curve()).to_affine();
+        let gate_tags = [0x0102_0304];
+
+        let mut scalar_builder = BaseCircuitBuilder::<Fp>::new(false)
+            .use_k(TEST_K)
+            .use_lookup_bits(TEST_K - 1);
+        let scalar_range = scalar_builder.range_chip();
+        let coordinate = FpChip::<Fp, Fq>::new(&scalar_range, LIMB_BITS, LIMBS);
+        let scalar_integer = FpChip::<Fp, Fp>::new(&scalar_range, LIMB_BITS, LIMBS);
+        let scalar_chip = DeferredScalarEccChip::<EqAffine>::new(&coordinate, &scalar_integer);
+        let mut scalar_ctx = mem::take(scalar_builder.pool(0));
+        let when_true = scalar_chip.assign_point(&mut scalar_ctx, generator);
+        let when_false = scalar_chip.assign_point(&mut scalar_ctx, doubled);
+        let scalar_selector = scalar_ctx.main().load_witness(Fp::ONE);
+        let _selected =
+            scalar_chip.select_point(&mut scalar_ctx, &when_true, &when_false, scalar_selector);
+        let witness = scalar_chip.audit().witness();
+        assert_eq!(witness.equations.len(), 1);
+        let scalar_preimage = scalar_chip
+            .assigned_equation_bytes_v3(&mut scalar_ctx, &gate_tags, &[scalar_selector])
+            .expect("canonical scalar-half V3 preimage");
+        let scalar_preimage = assigned_preimage_bytes(&scalar_preimage);
+
+        let mut point_builder = BaseCircuitBuilder::<Fq>::new(false)
+            .use_k(TEST_K)
+            .use_lookup_bits(TEST_K - 1);
+        let point_range = point_builder.range_chip();
+        let base = FpChip::<Fq, Fq>::new(&point_range, LIMB_BITS, LIMBS);
+        let scalar = FpChip::<Fq, Fp>::new(&point_range, LIMB_BITS, LIMBS);
+        let mut point_chip = PastaCycleEccChip::<EqAffine>::new(&base, &scalar);
+        let mut point_ctx = mem::take(point_builder.pool(0));
+        let point_selector = point_ctx.main().load_witness(Fq::ONE);
+        let point_audit = point_chip
+            .constrain_deferred_equations_with_selectors(
+                &mut point_ctx,
+                &witness,
+                &[point_selector],
+            )
+            .expect("canonical reciprocal V3 audit");
+        let point_preimage = point_chip
+            .assigned_equation_bytes_v3(&mut point_ctx, &point_audit, &gate_tags, &[point_selector])
+            .expect("canonical reciprocal V3 preimage");
+        let point_preimage = assigned_preimage_bytes(&point_preimage);
+
+        assert_eq!(scalar_preimage, point_preimage);
+        let mut expected_prefix = KAGEMUSHA_DEFERRED_AUDIT_DOMAIN_V3.to_vec();
+        expected_prefix.push(0);
+        expected_prefix.extend_from_slice(&KAGEMUSHA_DEFERRED_AUDIT_VERSION_V3.to_le_bytes());
+        assert_eq!(
+            &scalar_preimage[..expected_prefix.len()],
+            expected_prefix.as_slice(),
+            "V3 preimage must contain exactly domain, NUL, and version once"
+        );
+        let mut duplicated_prefix = KAGEMUSHA_DEFERRED_AUDIT_DOMAIN_V3.to_vec();
+        duplicated_prefix.extend_from_slice(KAGEMUSHA_DEFERRED_AUDIT_DOMAIN_V3);
+        assert!(!scalar_preimage.starts_with(&duplicated_prefix));
+    }
+
+    #[test]
+    fn reciprocal_residual_is_gated_only_by_the_assigned_selector() {
+        let generator = EqAffine::generator();
+        let valid = DeferredEquationWitness {
+            sources: vec![generator],
+            equations: vec![vec![(0, Fp::ZERO)]],
+        };
+        let invalid = DeferredEquationWitness {
+            sources: vec![generator],
+            equations: vec![vec![(0, Fp::ONE)]],
+        };
+
+        for selector in [0, 1] {
+            let builder = reciprocal_builder(&valid, &[selector]);
+            MockProver::run(builder.config_params.k as u32, &builder, vec![])
+                .expect("valid selector-gated residual prover")
+                .assert_satisfied();
+        }
+
+        let disabled = reciprocal_builder(&invalid, &[0]);
+        MockProver::run(disabled.config_params.k as u32, &disabled, vec![])
+            .expect("disabled invalid residual prover")
+            .assert_satisfied();
+
+        let enabled = reciprocal_builder(&invalid, &[1]);
+        assert!(
+            MockProver::run(enabled.config_params.k as u32, &enabled, vec![])
+                .expect("enabled invalid residual prover")
+                .verify()
+                .is_err(),
+            "selector one must reject a non-identity deferred residual"
+        );
+    }
+
+    #[test]
+    fn reciprocal_equation_selectors_are_independent() {
+        let generator = EqAffine::generator();
+        let invalid_then_valid = DeferredEquationWitness {
+            sources: vec![generator],
+            equations: vec![vec![(0, Fp::ONE)], vec![(0, Fp::ZERO)]],
+        };
+
+        let disabled_invalid = reciprocal_builder(&invalid_then_valid, &[0, 1]);
+        MockProver::run(
+            disabled_invalid.config_params.k as u32,
+            &disabled_invalid,
+            vec![],
+        )
+        .expect("independently disabled residual prover")
+        .assert_satisfied();
+
+        let enabled_invalid = reciprocal_builder(&invalid_then_valid, &[1, 1]);
+        assert!(
+            MockProver::run(
+                enabled_invalid.config_params.k as u32,
+                &enabled_invalid,
+                vec![],
+            )
+            .expect("independently enabled invalid residual prover")
+            .verify()
+            .is_err()
+        );
+
+        let invalid_then_invalid = DeferredEquationWitness {
+            sources: vec![generator],
+            equations: vec![vec![(0, Fp::ONE)], vec![(0, Fp::ONE)]],
+        };
+        let adjacent_enabled = reciprocal_builder(&invalid_then_invalid, &[0, 1]);
+        assert!(
+            MockProver::run(
+                adjacent_enabled.config_params.k as u32,
+                &adjacent_enabled,
+                vec![],
+            )
+            .expect("adjacent enabled invalid residual prover")
+            .verify()
+            .is_err(),
+            "disabling one equation must not disable its enabled neighbor"
+        );
+    }
+
+    #[test]
+    fn symbolic_point_selection_records_a_selector_bound_source_equation() {
+        let generator = EqAffine::generator();
+        let doubled = (generator.to_curve() + generator.to_curve()).to_affine();
+
+        for selector_value in [0, 1] {
+            let mut builder = BaseCircuitBuilder::<Fp>::new(false)
+                .use_k(TEST_K)
+                .use_lookup_bits(TEST_K - 1);
+            let range = builder.range_chip();
+            let coordinate = FpChip::<Fp, Fq>::new(&range, LIMB_BITS, LIMBS);
+            let scalar_integer = FpChip::<Fp, Fp>::new(&range, LIMB_BITS, LIMBS);
+            let chip = DeferredScalarEccChip::<EqAffine>::new(&coordinate, &scalar_integer);
+            let mut ctx = mem::take(builder.pool(0));
+            let when_true = chip.assign_point(&mut ctx, generator);
+            let when_false = chip.assign_point(&mut ctx, doubled);
+            let selector = ctx.main().load_witness(Fp::from(selector_value));
+            let selected = chip.select_point(&mut ctx, &when_true, &when_false, selector);
+            assert_eq!(
+                selected.value,
+                if selector_value == 1 {
+                    generator
+                } else {
+                    doubled
+                }
+            );
+
+            let witness = chip.audit().witness();
+            assert_eq!(witness.equations.len(), 1);
+            for equation in &witness.equations {
+                let residual = equation.iter().fold(
+                    EqAffine::identity().to_curve(),
+                    |residual, (source, coefficient)| {
+                        residual + witness.sources[*source].to_curve() * *coefficient
+                    },
+                );
+                assert!(bool::from(residual.is_identity()));
+            }
+
+            *builder.pool(0) = ctx;
+            builder.calculate_params(Some(9));
+            MockProver::run(builder.config_params.k as u32, &builder, vec![])
+                .expect("symbolic selector mock prover")
+                .assert_satisfied();
+        }
     }
 }

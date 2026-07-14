@@ -481,6 +481,7 @@ public sealed record class ToriiVpnProfile
     private string feeAssetId = string.Empty;
     private string escrowAccountId = string.Empty;
     private string operatorAccountId = string.Empty;
+    private string leaseFee = string.Empty;
     private string? relayTlsSpkiSha256Hex;
 
     [JsonPropertyName("available")]
@@ -520,8 +521,9 @@ public sealed record class ToriiVpnProfile
     public ulong DnsPushIntervalSeconds
     {
         get => dnsPushIntervalSeconds;
-        init => dnsPushIntervalSeconds = ToriiVpnDirectMetadata.RequirePositive(
+        init => dnsPushIntervalSeconds = ToriiVpnDirectMetadata.RequireAtLeast(
             value,
+            30,
             nameof(DnsPushIntervalSeconds));
     }
 
@@ -597,8 +599,12 @@ public sealed record class ToriiVpnProfile
         init => operatorAccountId = ToriiVpnDirectMetadata.RequireCanonicalAccountId(value, nameof(OperatorAccountId));
     }
 
-    [JsonPropertyName("lease_fee_nanos")]
-    public ulong LeaseFeeNanos { get; init; }
+    [JsonPropertyName("lease_fee")]
+    public string LeaseFee
+    {
+        get => leaseFee;
+        init => leaseFee = ToriiQuantityJson.RequireCanonicalQuantity(value, nameof(LeaseFee));
+    }
 
     [JsonPropertyName("settlement_grace_secs")]
     public ulong SettlementGraceSeconds { get; init; }
@@ -641,6 +647,7 @@ public sealed record class ToriiVpnTxInstruction
     }
 }
 
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record class ToriiVpnQuoteCreateRequest
 {
     [JsonPropertyName("exit_class")]
@@ -665,6 +672,7 @@ public sealed record class ToriiVpnQuote
     private string feeAssetId = string.Empty;
     private string escrowAccountId = string.Empty;
     private string operatorAccountId = string.Empty;
+    private string leaseFee = string.Empty;
     private string[]? routePushes = Array.Empty<string>();
     private string[]? excludedRoutes = Array.Empty<string>();
     private string[]? dnsServers = Array.Empty<string>();
@@ -694,7 +702,7 @@ public sealed record class ToriiVpnQuote
     public string SessionIdHex
     {
         get => sessionIdHex;
-        init => sessionIdHex = ToriiVpnDirectMetadata.RequireExactEvenLengthHex(value, nameof(SessionIdHex));
+        init => sessionIdHex = ToriiVpnDirectMetadata.RequireExactSizedHex(value, nameof(SessionIdHex), 16);
     }
 
     [JsonPropertyName("payment_reference")]
@@ -762,8 +770,12 @@ public sealed record class ToriiVpnQuote
         init => operatorAccountId = ToriiVpnDirectMetadata.RequireCanonicalAccountId(value, nameof(OperatorAccountId));
     }
 
-    [JsonPropertyName("lease_fee_nanos")]
-    public ulong LeaseFeeNanos { get; init; }
+    [JsonPropertyName("lease_fee")]
+    public string LeaseFee
+    {
+        get => leaseFee;
+        init => leaseFee = ToriiQuantityJson.RequireCanonicalQuantity(value, nameof(LeaseFee));
+    }
 
     [JsonPropertyName("route_pushes")]
     public IReadOnlyList<string>? RoutePushes
@@ -850,6 +862,7 @@ public sealed record class ToriiVpnQuote
     }
 }
 
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record class ToriiVpnSessionCreateRequest
 {
     [JsonPropertyName("exit_class")]
@@ -882,6 +895,7 @@ public sealed record class ToriiVpnSession
     private string feeAssetId = string.Empty;
     private string escrowAccountId = string.Empty;
     private string operatorAccountId = string.Empty;
+    private string leaseFee = string.Empty;
     private string? relayTlsSpkiSha256Hex;
     private string[]? routePushes = Array.Empty<string>();
     private string[]? excludedRoutes = Array.Empty<string>();
@@ -994,8 +1008,12 @@ public sealed record class ToriiVpnSession
         init => operatorAccountId = ToriiVpnDirectMetadata.RequireCanonicalAccountId(value, nameof(OperatorAccountId));
     }
 
-    [JsonPropertyName("lease_fee_nanos")]
-    public ulong LeaseFeeNanos { get; init; }
+    [JsonPropertyName("lease_fee")]
+    public string LeaseFee
+    {
+        get => leaseFee;
+        init => leaseFee = ToriiQuantityJson.RequireCanonicalQuantity(value, nameof(LeaseFee));
+    }
 
     [JsonPropertyName("flow_label_bits")]
     public byte FlowLabelBits { get; init; }
@@ -1052,7 +1070,10 @@ public sealed record class ToriiVpnSession
     public string HelperTicketHex
     {
         get => helperTicketHex;
-        init => helperTicketHex = ToriiVpnDirectMetadata.RequireExactEvenLengthHex(value, nameof(HelperTicketHex));
+        init => helperTicketHex = ToriiVpnDirectMetadata.RequireExactSizedHex(
+            value,
+            nameof(HelperTicketHex),
+            ToriiVpnDirectMetadata.HelperTicketByteLength);
     }
 
     [JsonPropertyName("bytes_in")]
@@ -1069,6 +1090,7 @@ public sealed record class ToriiVpnSession
     }
 }
 
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record class ToriiVpnReceiptSubmitRequest
 {
     [JsonPropertyName("relay_receipt_hex")]
@@ -1098,6 +1120,9 @@ public sealed record class ToriiVpnReceipt
     private string feeAssetId = string.Empty;
     private string escrowAccountId = string.Empty;
     private string operatorAccountId = string.Empty;
+    private string leaseFee = string.Empty;
+    private string earnedFee = string.Empty;
+    private string refundedFee = string.Empty;
     private string leaseIdHex = string.Empty;
     private ToriiVpnTxInstruction? settleLeaseInstruction;
     private ToriiVpnTxInstruction[] txInstructions = Array.Empty<ToriiVpnTxInstruction>();
@@ -1216,23 +1241,32 @@ public sealed record class ToriiVpnReceipt
         init => operatorAccountId = ToriiVpnDirectMetadata.RequireCanonicalAccountId(value, nameof(OperatorAccountId));
     }
 
-    [JsonPropertyName("lease_fee_nanos")]
-    public ulong LeaseFeeNanos { get; init; }
+    [JsonPropertyName("lease_fee")]
+    public string LeaseFee
+    {
+        get => leaseFee;
+        init => leaseFee = ToriiQuantityJson.RequireCanonicalQuantity(value, nameof(LeaseFee));
+    }
 
-    [JsonPropertyName("earned_fee_nanos")]
-    public ulong EarnedFeeNanos { get; init; }
+    [JsonPropertyName("earned_fee")]
+    public string EarnedFee
+    {
+        get => earnedFee;
+        init => earnedFee = ToriiQuantityJson.RequireCanonicalQuantity(value, nameof(EarnedFee));
+    }
 
-    [JsonPropertyName("refunded_fee_nanos")]
-    public ulong RefundedFeeNanos { get; init; }
+    [JsonPropertyName("refunded_fee")]
+    public string RefundedFee
+    {
+        get => refundedFee;
+        init => refundedFee = ToriiQuantityJson.RequireCanonicalQuantity(value, nameof(RefundedFee));
+    }
 
     [JsonPropertyName("lease_id_hex")]
     public string LeaseIdHex
     {
         get => leaseIdHex;
-        init => leaseIdHex = ToriiVpnDirectMetadata.RequireOptionalExactSizedHexOrEmpty(
-            value,
-            nameof(LeaseIdHex),
-            32);
+        init => leaseIdHex = ToriiVpnDirectMetadata.RequireExactSizedHex(value, nameof(LeaseIdHex), 32);
     }
 
     [JsonPropertyName("settle_lease_instruction")]
@@ -1270,9 +1304,24 @@ public sealed record class ToriiVpnReceiptListResponse
 
 internal static class ToriiVpnDirectMetadata
 {
+    internal const int HelperTicketByteLength = 664;
+
     internal static ulong RequirePositive(ulong value, string paramName)
     {
         return ToriiExplorerDirectMetadata.RequirePositive(value, paramName);
+    }
+
+    internal static ulong RequireAtLeast(ulong value, ulong minimum, string paramName)
+    {
+        if (value < minimum)
+        {
+            throw new ArgumentOutOfRangeException(
+                paramName,
+                value,
+                $"Value must be at least {minimum}.");
+        }
+
+        return value;
     }
 
     internal static string RequireCanonicalAccountId(string? value, string paramName)
@@ -1298,19 +1347,6 @@ internal static class ToriiVpnDirectMetadata
     internal static string? RequireOptionalExactSizedHex(string? value, string paramName, int expectedBytes)
     {
         return ToriiExplorerDirectMetadata.RequireOptionalExactSizedHex(value, paramName, expectedBytes);
-    }
-
-    internal static string RequireOptionalExactSizedHexOrEmpty(
-        string? value,
-        string paramName,
-        int expectedBytes)
-    {
-        if (string.IsNullOrEmpty(value))
-        {
-            return string.Empty;
-        }
-
-        return RequireExactSizedHex(value, paramName, expectedBytes);
     }
 
     internal static string RequireExactEvenLengthHex(string? value, string paramName)
@@ -1446,7 +1482,7 @@ internal static class ToriiVpnDirectMetadata
         RequireExactTokenText(value.FeeAssetId, $"{paramName}.{nameof(ToriiVpnReceipt.FeeAssetId)}");
         RequireCanonicalAccountId(value.EscrowAccountId, $"{paramName}.{nameof(ToriiVpnReceipt.EscrowAccountId)}");
         RequireCanonicalAccountId(value.OperatorAccountId, $"{paramName}.{nameof(ToriiVpnReceipt.OperatorAccountId)}");
-        RequireOptionalExactSizedHexOrEmpty(value.LeaseIdHex, $"{paramName}.{nameof(ToriiVpnReceipt.LeaseIdHex)}", 32);
+        RequireExactSizedHex(value.LeaseIdHex, $"{paramName}.{nameof(ToriiVpnReceipt.LeaseIdHex)}", 32);
         RequireOptionalVpnTxInstruction(value.SettleLeaseInstruction, $"{paramName}.{nameof(ToriiVpnReceipt.SettleLeaseInstruction)}");
         CopyRequiredVpnTxInstructions(value.TxInstructions, $"{paramName}.{nameof(ToriiVpnReceipt.TxInstructions)}");
         return value;

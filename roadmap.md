@@ -1,30 +1,56 @@
 # Roadmap
 
-Last updated: 2026-07-13
+Last updated: 2026-07-14
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 Completed history lives in [`status.md`](./status.md).
 
 Kagemusha transport and proof admission are fail-closed for the first release.
-It is the only offline-spend protocol, with exact bridge ABI 19 and the governed
-`kagemusha.offline.recursive_spend.artifact_manifest.v3` manifest using the V3
-atomic artifact lifecycle. Typed V2/V3 names are internal wire versions, not
-runtime product selectors. Runtime, wallet, readiness, and artifact-manifest
-surfaces are selector-free.
+It is the only offline-spend protocol. Bridge ABI 19 and the governed
+`kagemusha.offline.recursive_spend.artifact_manifest.v3` manifest remain the
+current production-admission contract. ABI 20/V4 is a separately versioned,
+fail-closed candidate artifact and circuit foundation; it is not an active
+runtime product selector. Runtime, wallet, and readiness surfaces remain
+selector-free.
 `KAGEMUSHA_RECURSIVE_SPEND_PROOF_BACKEND_AVAILABLE = false` is the
 authoritative release state: Core top-up execution and every proof-gated
 init/append/verify/redeem path remain unavailable. Branch paths retain depth 64,
 while peer spends permit at most eight hops and each transition consumes at most
 two recursive inputs. Redemption-change extends proof lineage without adding a
 peer hop. These are protocol bounds, not availability signals.
-The remaining release work is the ABI-19 two-layer Pasta IPA/Poseidon backend:
-an EqAffine/Vesta transition proof and EpAffine/Pallas state wrapper must
+The remaining release work is the two-layer Pasta IPA/Poseidon backend: an
+EqAffine/Vesta transition proof and EpAffine/Pallas state wrapper must
 authenticate the previous recursive proof and current transition proof under
 fixed verifier keys, bind their exact public instances to the Kagemusha
 amount/nullifier/commitment state transition, decide both canonical IPA
 openings, and pass proof/key/parameter/parity/instance/transition substitution
 tests. The checked-in KZG experiment is rejected by payload, latency, and
 memory measurements and must not be used in production.
+Each parity must retain one fixed circuit shape across initialization and
+one-/two-parent transitions. The V4 candidate authenticates its degree-20/21
+base-circuit configuration and dynamic public layout, two mandatory
+real-or-bootstrap parent slots, canonical bootstrap-witness artifacts,
+in-circuit presence selectors, fixed post-proof and branch folds, and fixed
+deferred-equation stage plans. Circuit parameters stay inside the signed
+manifest profiles; the external inventory is exactly eight artifacts:
+ParamsIPA, proving key, verifying key, and bootstrap witness for each Eq/Ep
+parity. Concrete StepEq/StepEp circuit, proving, and terminal-verification
+primitives exist in the recursion adapter, and native bridge/JNI ingestion can
+atomically install the exact external artifact set, but no bridge
+proof-lifecycle call, Core executor or admission path, or production
+artifact-resolution call site invokes those primitives. Terminal admission
+therefore remains deliberately closed. Release work must connect,
+independently review, and prove fixed-shape parity before generated V4 material
+can be accepted by production.
+The ABI-19/V3 path retains its 1,600-byte per-step limit and 21,764-byte proof
+payload cap. Its degree-18 prototype produced 7,296-byte ordinary and
+7,328-byte augmented proofs even before full confidential/output-membership
+composition. V4 does not alter those V3 limits: its authenticated profile pins
+the measured per-parity proof bound and its manifest pins the pair bound, with
+defensive ceilings of 1 MiB per step and 16 MiB per pair. Those ceilings are
+not shipping limits or availability signals; promotion must pin measured
+values, pass review and device evidence, and explicitly admit the separately
+versioned ABI-20 release.
 The canonical V2 transport/data model is now the only release target; no work
 is planned for decoding or migrating the retired nested-init, full-anchor peer,
 padded tag-history, duplicated peer-identity, or linear lineage-witness shapes.

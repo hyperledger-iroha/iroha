@@ -47772,11 +47772,34 @@ mod tests {
         recreated_proposal.descriptor.descriptor_hash =
             recreated_proposal.descriptor.computed_descriptor_hash();
         recreated_proposal.proposal_hash = recreated_proposal.computed_proposal_hash();
-        let recreated = LaneExecutablePayloadV1::new_signed(
+        let accepted =
+            AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(entrypoint.clone()));
+        let routing_plan = RoutingPlan::single(crate::queue::RoutingDecision::new(
+            recreated_proposal.descriptor.lane_id,
+            recreated_proposal.descriptor.dataspace_id,
+        ));
+        let reservation = LaneQueueReservationKeyV1 {
+            signed_transaction_hash: accepted.hash(),
+            entrypoint_hash: entrypoint.hash(),
+            routing_plan_digest: routing_plan.digest(),
+            coordinator_leg: routing_plan.coordinator_leg(),
+            lane_id: recreated_proposal.descriptor.lane_id,
+            dataspace_id: recreated_proposal.descriptor.dataspace_id,
+            lane_incarnation: recreated_proposal.descriptor.lane_incarnation,
+            proposal_height: recreated_proposal.descriptor.proposal_height,
+            lane_block_height: recreated_proposal.descriptor.lane_block_height,
+            lane_block_view: recreated_proposal.descriptor.lane_block_view,
+            reservation_owner_hash: Hash::new(b"kura-autonomous-recreated-reservation-owner"),
+            proposal_identity_hash: recreated_proposal.proposal_hash,
+        };
+        let recreated = LaneExecutablePayloadV1::new_signed_with_reservations(
             chain_id_hash,
             epoch,
             recreated_proposal,
             vec![entrypoint],
+            vec![reservation],
+            vec![routing_plan],
+            vec![None],
             PeerId::new(signer.public_key().clone()),
             signer.private_key(),
         )

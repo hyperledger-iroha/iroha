@@ -26,8 +26,9 @@ use iroha_data_model::{
     },
     offline::{
         KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_MAX_BYTES_V2,
-        KagemushaRecursiveSpendArtifactManifestV3, KagemushaRecursiveSpendTopUpAnchorRefV2,
-        KagemushaRecursiveSpendTopUpAnchorV2, KagemushaTopUpFinalityProofV2,
+        KagemushaRecursiveSpendArtifactManifestV3, KagemushaRecursiveSpendArtifactManifestV4,
+        KagemushaRecursiveSpendTopUpAnchorRefV2, KagemushaRecursiveSpendTopUpAnchorV2,
+        KagemushaRecursiveSpendTopUpAnchorV4, KagemushaTopUpFinalityProofV2,
         KagemushaTopUpFinalityRosterArtifactV2, KagemushaTopUpFinalityRosterWindowV2,
     },
 };
@@ -291,6 +292,119 @@ impl KagemushaTopUpFinalityVerifier {
         })
     }
 
+    /// Verify one proof against a complete ABI-20 anchor and its exact
+    /// authenticated V4 release. The V4 receipt and manifest are validated in
+    /// place; this path never projects either value into a V2/V3 carrier.
+    pub fn verify_v4(
+        &self,
+        proof: &KagemushaTopUpFinalityProofV2,
+        roster_artifact: &KagemushaTopUpFinalityRosterArtifactV2,
+        expected_anchor: &KagemushaRecursiveSpendTopUpAnchorV4,
+        manifest: &KagemushaRecursiveSpendArtifactManifestV4,
+        expected_manifest_sha256: [u8; 32],
+    ) -> Result<VerifiedKagemushaTopUpFinalityV2, KagemushaTopUpFinalityVerifyError> {
+        proof
+            .validate_structure()
+            .map_err(|_| KagemushaTopUpFinalityVerifyError::InvalidStructure)?;
+        expected_anchor
+            .validate_public_binding()
+            .map_err(|_| KagemushaTopUpFinalityVerifyError::InvalidStructure)?;
+        manifest
+            .validate()
+            .map_err(|_| KagemushaTopUpFinalityVerifyError::ManifestDigestMismatch)?;
+        if expected_manifest_sha256 == [0; 32]
+            || canonical_sha256(manifest)? != expected_manifest_sha256
+        {
+            return Err(KagemushaTopUpFinalityVerifyError::ManifestDigestMismatch);
+        }
+
+        let expected_anchor_ref = expected_anchor
+            .compact_ref()
+            .map_err(|_| KagemushaTopUpFinalityVerifyError::InvalidStructure)?;
+        if proof.anchor != expected_anchor_ref {
+            return Err(KagemushaTopUpFinalityVerifyError::AnchorMismatch);
+        }
+
+        let context = &proof.commit_qc.height_context;
+        let certificate = &proof.commit_qc.certificate;
+        if expected_anchor.chain_id != manifest.chain_id
+            || context.chain_id != manifest.chain_id
+            || roster_artifact.chain_id != manifest.chain_id
+        {
+            return Err(KagemushaTopUpFinalityVerifyError::ChainMismatch);
+        }
+        if expected_anchor.asset.definition() != &manifest.asset {
+            return Err(KagemushaTopUpFinalityVerifyError::AssetMismatch);
+        }
+        if expected_anchor.asset_scale != manifest.asset_scale {
+            return Err(KagemushaTopUpFinalityVerifyError::ScaleMismatch);
+        }
+        if expected_anchor.artifact_binding.generation != manifest.generation
+            || roster_artifact.artifact_generation != manifest.generation
+        {
+            return Err(KagemushaTopUpFinalityVerifyError::ArtifactGenerationMismatch);
+        }
+        if expected_anchor.artifact_binding.manifest_sha256 != expected_manifest_sha256 {
+            return Err(KagemushaTopUpFinalityVerifyError::ManifestDigestMismatch);
+        }
+        if expected_anchor.finalized_height != context.height
+            || context.height != certificate.round.height
+        {
+            return Err(KagemushaTopUpFinalityVerifyError::HeightMismatch);
+        }
+        if context.height < manifest.activation_height
+            || context.height >= manifest.withdrawal_height
+        {
+            return Err(KagemushaTopUpFinalityVerifyError::ReleaseWindowMismatch);
+        }
+
+        let roster_reference = &manifest.topup_finality_roster_artifact;
+        let roster_bytes = norito::to_bytes(roster_artifact)
+            .map_err(|_| KagemushaTopUpFinalityVerifyError::InvalidStructure)?;
+        let roster_size = u64::try_from(roster_bytes.len())
+            .map_err(|_| KagemushaTopUpFinalityVerifyError::ArtifactDigestMismatch)?;
+        if roster_size == 0
+            || roster_size > KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_MAX_BYTES_V2
+            || roster_size != roster_reference.size_bytes
+            || <[u8; 32]>::from(Sha256::digest(&roster_bytes)) != roster_reference.sha256
+        {
+            return Err(KagemushaTopUpFinalityVerifyError::ArtifactDigestMismatch);
+        }
+        roster_artifact
+            .validate_structure()
+            .map_err(|_| KagemushaTopUpFinalityVerifyError::InvalidStructure)?;
+        let window = roster_artifact
+            .window_at(context.height)
+            .map_err(|_| KagemushaTopUpFinalityVerifyError::RosterContextMismatch)?;
+        let complete_context = context
+            .reconstruct_for_roster_window(window)
+            .map_err(|_| KagemushaTopUpFinalityVerifyError::RosterContextMismatch)?;
+        proof
+            .commit_qc
+            .validate_for_roster_window(window)
+            .map_err(|_| KagemushaTopUpFinalityVerifyError::RosterContextMismatch)?;
+        if complete_context.chain_id != expected_anchor.chain_id {
+            return Err(KagemushaTopUpFinalityVerifyError::ChainMismatch);
+        }
+        verify_anchor_inclusion(proof)?;
+
+        self.validate_roster_cryptography(roster_artifact, roster_reference.sha256)?;
+        verify_commit_aggregate(proof, window)?;
+        if let Some(snapshot) = &complete_context.next_epoch_snapshot {
+            verify_validator_power_roster_pops(&snapshot.roster, &snapshot.validator_set_pops)
+                .map_err(|_| KagemushaTopUpFinalityVerifyError::InvalidNextEpochCryptography)?;
+        }
+
+        Ok(VerifiedKagemushaTopUpFinalityV2 {
+            anchor: expected_anchor_ref,
+            height: context.height,
+            block_hash: certificate.subject.block_hash,
+            context_id: complete_context.id(),
+            manifest_sha256: expected_manifest_sha256,
+            roster_sha256: roster_reference.sha256,
+        })
+    }
+
     fn validate_roster_cryptography(
         &self,
         roster_artifact: &KagemushaTopUpFinalityRosterArtifactV2,
@@ -358,6 +472,27 @@ pub fn verify_kagemusha_topup_finality_v2(
     VERIFIER
         .get_or_init(KagemushaTopUpFinalityVerifier::new)
         .verify(
+            proof,
+            roster_artifact,
+            expected_anchor,
+            manifest,
+            expected_manifest_sha256,
+        )
+}
+
+/// Verify one ABI-20 top-up proof using a process-wide bounded exact-roster
+/// cache and the complete V4 anchor/manifest types.
+pub fn verify_kagemusha_topup_finality_v4(
+    proof: &KagemushaTopUpFinalityProofV2,
+    roster_artifact: &KagemushaTopUpFinalityRosterArtifactV2,
+    expected_anchor: &KagemushaRecursiveSpendTopUpAnchorV4,
+    manifest: &KagemushaRecursiveSpendArtifactManifestV4,
+    expected_manifest_sha256: [u8; 32],
+) -> Result<VerifiedKagemushaTopUpFinalityV2, KagemushaTopUpFinalityVerifyError> {
+    static VERIFIER: OnceLock<KagemushaTopUpFinalityVerifier> = OnceLock::new();
+    VERIFIER
+        .get_or_init(KagemushaTopUpFinalityVerifier::new)
+        .verify_v4(
             proof,
             roster_artifact,
             expected_anchor,
@@ -491,19 +626,27 @@ mod tests {
             KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_PURPOSE_V2,
             KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_TYPE_V2,
             KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_VERSION_V2,
-            KAGEMUSHA_TOPUP_FINALITY_ROSTER_FILE_NAME_V2, KagemushaPastaCycleArtifactKindV3,
+            KAGEMUSHA_TOPUP_FINALITY_ROSTER_FILE_NAME_V2, KagemushaDevicePublicKeyV2,
+            KagemushaDeviceSignatureV2, KagemushaPastaCycleArtifactKindV3,
             KagemushaPastaCycleArtifactV3, KagemushaPastaCycleParityV3,
-            KagemushaPastaCycleProofProfileV3, KagemushaRecursiveSpendArtifactBindingV3,
-            KagemushaRecursiveSpendArtifactManifestV3, KagemushaRecursiveSpendTopUpAnchorV2,
-            KagemushaScaledAmountV2, KagemushaSpendableNoteDescriptorV2,
-            KagemushaTopUpAnchorMerkleProofV2, KagemushaTopUpFinalityCompactQcV2,
-            KagemushaTopUpFinalityHeightContextV2, KagemushaTopUpFinalityProofV2,
-            KagemushaTopUpFinalityRosterArtifactReferenceV2,
+            KagemushaPastaCycleProofProfileV3, KagemushaRecipientPaymentRequestSigningPayloadV2,
+            KagemushaRecipientPaymentRequestV2, KagemushaRecursiveSpendArtifactBindingV3,
+            KagemushaRecursiveSpendArtifactManifestV3, KagemushaRecursiveSpendBranchClaimV2,
+            KagemushaRecursiveSpendBranchV2, KagemushaRecursiveSpendBundleV2,
+            KagemushaRecursiveSpendPeerSplitTransitionV2, KagemushaRecursiveSpendProofV2,
+            KagemushaRecursiveSpendPublicStatementV2, KagemushaRecursiveSpendTopUpAnchorV2,
+            KagemushaRecursiveSpendTopUpFinalityEvidenceV2, KagemushaRecursiveSpendTransitionV2,
+            KagemushaRecursiveSpendVerifyRequestV2, KagemushaScaledAmountV2,
+            KagemushaSpendableNoteDescriptorV2, KagemushaTopUpAnchorMerkleProofV2,
+            KagemushaTopUpFinalityCompactQcV2, KagemushaTopUpFinalityHeightContextV2,
+            KagemushaTopUpFinalityProofV2, KagemushaTopUpFinalityRosterArtifactReferenceV2,
             KagemushaTopUpFinalityRosterArtifactV2, KagemushaTopUpFinalityRosterWindowV2,
+            kagemusha_receiver_key_reference_v2, kagemusha_recursive_spend_lineage_root_v2,
         },
         peer::PeerId,
-        proof::VerifyingKeyId,
+        proof::{ProofBox, VerifyingKeyId},
     };
+    use p256::ecdsa::{Signature as P256Signature, SigningKey, signature::Signer as _};
 
     use super::*;
     use crate::sumeragi::smt::{KvPair, build_kagemusha_topup_block_commitment};
@@ -617,6 +760,8 @@ mod tests {
             transcript_profile: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V3.to_owned(),
             generation: "release-generation-1".to_owned(),
             source_commit: "0123456789abcdef0123456789abcdef01234567".to_owned(),
+            source_tree_sha256: [0x52; 32],
+            source_repo_dirty: true,
             chain_id: chain_id.clone(),
             asset: asset.clone(),
             asset_scale: 2,
@@ -861,6 +1006,320 @@ mod tests {
             &fixture.manifest,
             fixture.manifest_digest,
         )
+    }
+
+    fn receiver_verify_request(fixture: &Fixture) -> KagemushaRecursiveSpendVerifyRequestV2 {
+        let device_key =
+            SigningKey::from_bytes((&[0x33; 32]).into()).expect("non-zero P-256 fixture key");
+        let receiver_public_key = KagemushaDevicePublicKeyV2::from_sec1_bytes(
+            device_key
+                .verifying_key()
+                .to_encoded_point(false)
+                .as_bytes(),
+        )
+        .expect("canonical receiver key");
+        let recipient_key_reference = kagemusha_receiver_key_reference_v2(&receiver_public_key)
+            .expect("receiver key reference");
+        let payload = KagemushaRecipientPaymentRequestSigningPayloadV2 {
+            chain_id: fixture.anchor.chain_id.clone(),
+            asset: fixture.anchor.asset.definition().clone(),
+            amount: fixture.anchor.amount,
+            recipient: fixture.anchor.payer.clone(),
+            recipient_key_reference,
+            receiver_device_id: "receiver-finality-test-device".to_owned(),
+            receiver_public_key,
+            request_id: [0x91; 32],
+            issued_at_ms: 1_000,
+            expires_at_ms: 2_000,
+            recipient_output: fixture.anchor.current_note.clone(),
+            sender_output_prover_material: vec![0x92; 64],
+        };
+        let signature: P256Signature = device_key.sign(
+            &payload
+                .signing_bytes()
+                .expect("canonical receiver request signing bytes"),
+        );
+        let signature = signature.normalize_s().unwrap_or(signature);
+        let recipient_request = KagemushaRecipientPaymentRequestV2::from_signed_payload(
+            payload,
+            KagemushaDeviceSignatureV2::from_raw_bytes(signature.to_bytes().as_slice())
+                .expect("canonical low-S receiver signature"),
+        )
+        .expect("signed receiver request");
+
+        let anchor_ref = fixture.anchor.compact_ref().expect("compact anchor");
+        let branch_claim = KagemushaRecursiveSpendBranchClaimV2::root(
+            kagemusha_recursive_spend_lineage_root_v2(anchor_ref.anchor_digest)
+                .expect("anchor lineage root"),
+        )
+        .expect("root branch claim");
+        let transition = KagemushaRecursiveSpendPeerSplitTransitionV2 {
+            binding_digest: [0x93; 32],
+            branch: KagemushaRecursiveSpendBranchV2::Recipient,
+            recipient_request_digest: recipient_request
+                .digest()
+                .expect("recipient request digest"),
+            operation_id: [0x94; 32],
+            parent_max_proof_step_count: 1,
+            parent_max_peer_hop_count: 0,
+        };
+        let verifier_key_id = VerifyingKeyId::new(
+            KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V3,
+            KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V3,
+        );
+        let statement = KagemushaRecursiveSpendPublicStatementV2 {
+            chain_id: fixture.anchor.chain_id.clone(),
+            asset: fixture.anchor.asset.definition().clone(),
+            asset_scale: fixture.anchor.asset_scale,
+            final_root: fixture.anchor.finalized_root,
+            topup_anchor_refs: vec![anchor_ref],
+            proof_step_count: 2,
+            peer_hop_count: 1,
+            current_note: fixture.anchor.current_note.clone(),
+            branch_claims: vec![branch_claim],
+            transition: Some(KagemushaRecursiveSpendTransitionV2::PeerSplit(transition)),
+            artifact_binding: fixture.anchor.artifact_binding.clone(),
+            verifier_key_id: verifier_key_id.clone(),
+        };
+        let public_statement_digest = statement.digest().expect("receiver statement digest");
+        let request = KagemushaRecursiveSpendVerifyRequestV2 {
+            bundle: KagemushaRecursiveSpendBundleV2 {
+                statement,
+                recursive_proof: KagemushaRecursiveSpendProofV2 {
+                    verifier_key_id,
+                    public_statement_digest,
+                    proof: ProofBox::new(
+                        KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V3
+                            .parse()
+                            .expect("recursive backend"),
+                        vec![0x95; 128],
+                    ),
+                },
+            },
+            recipient_request,
+            topup_finality_roster_artifact: fixture.roster.clone(),
+            topup_finality_evidence: vec![KagemushaRecursiveSpendTopUpFinalityEvidenceV2 {
+                topup_anchor: fixture.anchor.clone(),
+                topup_finality_proof: fixture.proof.clone(),
+            }],
+            maximum_hops: 4,
+            artifact_binding: fixture.anchor.artifact_binding.clone(),
+            block_height: 50,
+            verified_at_ms: 1_500,
+        };
+        request
+            .validate_public_binding()
+            .expect("valid receiver finality request fixture");
+        request
+    }
+
+    fn rebind_receiver_statement(request: &mut KagemushaRecursiveSpendVerifyRequestV2) {
+        request.bundle.recursive_proof.public_statement_digest = request
+            .bundle
+            .statement
+            .digest()
+            .expect("mutated receiver statement remains canonical");
+    }
+
+    fn substituted_receiver_evidence(
+        evidence: &KagemushaRecursiveSpendTopUpFinalityEvidenceV2,
+    ) -> KagemushaRecursiveSpendTopUpFinalityEvidenceV2 {
+        let mut substituted = evidence.clone();
+        substituted.topup_anchor.topup_operation_id = [0xC7; 32];
+        substituted.topup_anchor.anchor_digest = [0; 32];
+        substituted.topup_anchor = substituted
+            .topup_anchor
+            .finalize_digest()
+            .expect("substituted full anchor");
+        substituted.topup_finality_proof.anchor = substituted
+            .topup_anchor
+            .compact_ref()
+            .expect("substituted anchor ref");
+        substituted
+    }
+
+    #[test]
+    fn receiver_evidence_binds_the_exact_full_anchor_and_finality_height() {
+        let fixture = fixture();
+        let evidence = KagemushaRecursiveSpendTopUpFinalityEvidenceV2 {
+            topup_anchor: fixture.anchor.clone(),
+            topup_finality_proof: fixture.proof.clone(),
+        };
+        evidence
+            .validate_public_binding()
+            .expect("exact bounded receiver evidence");
+        let anchor_ref = evidence.topup_anchor.compact_ref().expect("anchor ref");
+        KagemushaRecursiveSpendTopUpFinalityEvidenceV2::validate_ordered_set(
+            std::slice::from_ref(&evidence),
+            std::slice::from_ref(&anchor_ref),
+        )
+        .expect("exact one-entry evidence inventory");
+        assert!(
+            KagemushaRecursiveSpendTopUpFinalityEvidenceV2::validate_ordered_set(
+                &[],
+                std::slice::from_ref(&anchor_ref),
+            )
+            .is_err()
+        );
+        assert!(
+            KagemushaRecursiveSpendTopUpFinalityEvidenceV2::validate_ordered_set(
+                &[evidence.clone(), evidence.clone()],
+                &[anchor_ref, anchor_ref],
+            )
+            .is_err()
+        );
+
+        let mut second = evidence.clone();
+        second.topup_anchor.topup_operation_id = [0xC7; 32];
+        second.topup_anchor.anchor_digest = [0; 32];
+        second.topup_anchor = second
+            .topup_anchor
+            .finalize_digest()
+            .expect("second full anchor");
+        second.topup_finality_proof.anchor = second
+            .topup_anchor
+            .compact_ref()
+            .expect("second anchor ref");
+        let second_ref = second.topup_finality_proof.anchor;
+        assert!(
+            KagemushaRecursiveSpendTopUpFinalityEvidenceV2::validate_ordered_set(
+                &[second.clone(), evidence.clone()],
+                &[anchor_ref, second_ref],
+            )
+            .is_err()
+        );
+        KagemushaRecursiveSpendTopUpFinalityEvidenceV2::validate_ordered_set(
+            &[evidence.clone(), second],
+            &[anchor_ref, second_ref],
+        )
+        .expect("canonical two-entry evidence inventory");
+
+        let mut substituted_ref = evidence.clone();
+        substituted_ref
+            .topup_finality_proof
+            .anchor
+            .topup_operation_id = [0xC7; 32];
+        assert!(substituted_ref.validate_public_binding().is_err());
+
+        let mut substituted_anchor = evidence.clone();
+        substituted_anchor.topup_anchor.finalized_tx_hash[0] ^= 0x80;
+        assert!(substituted_anchor.validate_public_binding().is_err());
+
+        let mut substituted_height = evidence;
+        substituted_height
+            .topup_finality_proof
+            .commit_qc
+            .height_context
+            .height += 1;
+        assert!(substituted_height.validate_public_binding().is_err());
+    }
+
+    #[test]
+    fn receiver_request_rejects_missing_extra_reordered_and_substituted_evidence() {
+        let fixture = fixture();
+        let request = receiver_verify_request(&fixture);
+        let second = substituted_receiver_evidence(&request.topup_finality_evidence[0]);
+
+        let mut missing = request.clone();
+        missing.topup_finality_evidence.clear();
+        assert!(missing.validate_public_binding().is_err());
+
+        let mut extra = request.clone();
+        extra.topup_finality_evidence.push(second.clone());
+        assert!(extra.validate_public_binding().is_err());
+
+        let mut substituted = request.clone();
+        substituted.topup_finality_evidence[0] = second.clone();
+        assert!(substituted.validate_public_binding().is_err());
+
+        let mut two_origins = request;
+        let mut keyed_evidence = vec![two_origins.topup_finality_evidence[0].clone(), second]
+            .into_iter()
+            .map(|evidence| {
+                (
+                    evidence.topup_anchor.compact_ref().expect("anchor ref"),
+                    evidence,
+                )
+            })
+            .collect::<Vec<_>>();
+        keyed_evidence.sort_unstable_by_key(|(anchor_ref, _)| *anchor_ref);
+        two_origins.bundle.statement.topup_anchor_refs = keyed_evidence
+            .iter()
+            .map(|(anchor_ref, _)| *anchor_ref)
+            .collect();
+        two_origins.bundle.statement.branch_claims = two_origins
+            .bundle
+            .statement
+            .topup_anchor_refs
+            .iter()
+            .map(|anchor_ref| {
+                KagemushaRecursiveSpendBranchClaimV2::root(anchor_ref.anchor_digest)
+                    .expect("two-origin root claim")
+            })
+            .collect();
+        two_origins
+            .bundle
+            .statement
+            .branch_claims
+            .sort_unstable_by_key(|claim| claim.path);
+        two_origins.topup_finality_evidence = keyed_evidence
+            .into_iter()
+            .map(|(_, evidence)| evidence)
+            .collect();
+        rebind_receiver_statement(&mut two_origins);
+        two_origins
+            .validate_public_binding()
+            .expect("canonical two-origin receiver request");
+
+        two_origins.topup_finality_evidence.reverse();
+        assert!(two_origins.validate_public_binding().is_err());
+    }
+
+    #[test]
+    fn receiver_request_rejects_roster_context_and_insufficient_origin_value() {
+        let fixture = fixture();
+        let request = receiver_verify_request(&fixture);
+
+        let mut wrong_generation = request.clone();
+        wrong_generation
+            .topup_finality_roster_artifact
+            .artifact_generation = "substituted-release".to_owned();
+        assert!(wrong_generation.validate_public_binding().is_err());
+
+        let mut wrong_chain = request.clone();
+        wrong_chain.topup_finality_roster_artifact.chain_id =
+            ChainId::from("substituted-finality-chain");
+        assert!(wrong_chain.validate_public_binding().is_err());
+
+        let mut wrong_window = request.clone();
+        wrong_window.topup_finality_roster_artifact.windows[0].activates_at_height =
+            fixture.anchor.finalized_height + 1;
+        assert!(wrong_window.validate_public_binding().is_err());
+
+        let mut insufficient = request;
+        let evidence = &mut insufficient.topup_finality_evidence[0];
+        evidence.topup_anchor.amount.atomic_units -= 1;
+        evidence.topup_anchor.current_note.amount.atomic_units -= 1;
+        evidence.topup_anchor.anchor_digest = [0; 32];
+        evidence.topup_anchor = evidence
+            .topup_anchor
+            .clone()
+            .finalize_digest()
+            .expect("smaller substituted anchor");
+        evidence.topup_finality_proof.anchor = evidence
+            .topup_anchor
+            .compact_ref()
+            .expect("smaller substituted anchor ref");
+        insufficient.bundle.statement.topup_anchor_refs =
+            vec![evidence.topup_finality_proof.anchor];
+        insufficient.bundle.statement.branch_claims = vec![
+            KagemushaRecursiveSpendBranchClaimV2::root(
+                evidence.topup_finality_proof.anchor.anchor_digest,
+            )
+            .expect("smaller substituted lineage"),
+        ];
+        rebind_receiver_statement(&mut insufficient);
+        assert!(insufficient.validate_public_binding().is_err());
     }
 
     fn epoch_boundary_proof(

@@ -203,8 +203,9 @@ The catalogue above captures every handler that extracts or emits `NoritoJson`/`
   `docs/source/norito_streaming_transport_design.md`, and
   `docs/source/soranet/spec.md`.
 - OpenAPI and Norito fixture automation is available through
-  `cargo xtask openapi`, `cargo xtask norito-rpc-fixtures`, and
-  `cargo xtask norito-rpc-verify`. The canonical payloads and schema hashes
+  `cargo run -p xtask --bin xtask -- openapi`,
+  `cargo run -p xtask --bin xtask -- norito-rpc-fixtures`, and
+  `cargo run -p xtask --bin xtask -- norito-rpc-verify`. The canonical payloads and schema hashes
   live under `fixtures/norito_rpc/`, and
   `scripts/run_norito_rpc_fixtures.sh` records SDK cadence evidence under
   `artifacts/norito_rpc/`.

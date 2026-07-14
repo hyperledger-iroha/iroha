@@ -1,12 +1,13 @@
 import CryptoKit
 import Foundation
 
-/// One one-shot source for a complete, published ABI-19 `KRV3KEY` artifact.
+/// One one-shot source for a complete, published ABI-20 `KRV4KEY` artifact.
 ///
 /// The source must invoke `stream` synchronously, in file order, and must not
 /// retain its consumer. The coordinator independently verifies offsets, byte
 /// count, and SHA-256 before allowing native finalization.
 public struct KagemushaRecursiveSpendArtifactStream: Sendable {
+    public let role: KagemushaRecursiveSpendArtifactRoleV4
     public let expectedSHA256: Data
     public let byteCount: UInt64
 
@@ -15,6 +16,7 @@ public struct KagemushaRecursiveSpendArtifactStream: Sendable {
     ) throws -> Void
 
     public init(
+        role: KagemushaRecursiveSpendArtifactRoleV4,
         expectedSHA256: Data,
         byteCount: UInt64,
         stream: @escaping @Sendable (
@@ -29,6 +31,7 @@ public struct KagemushaRecursiveSpendArtifactStream: Sendable {
               byteCount <= UInt64(KagemushaRecursiveSpend.artifactMaximumFileBytes) else {
             throw KagemushaRecursiveSpendError.invalidField("artifact.byteCount")
         }
+        self.role = role
         self.expectedSHA256 = Data(expectedSHA256)
         self.byteCount = byteCount
         self.streamBody = stream
@@ -48,9 +51,9 @@ public struct KagemushaRecursiveSpendArtifactStream: Sendable {
 /// uninstall. Keep every proof operation inside `withInstalledArtifactSet` so
 /// another thread cannot rotate the process-wide native generation midway.
 public final class KagemushaRecursiveSpendInstalledArtifactLease: @unchecked Sendable {
-    public let binding: KagemushaRecursiveSpendArtifactBinding
+    public let binding: KagemushaRecursiveSpendArtifactBindingV4
     public let manifestSHA256: Data
-    /// The six authenticated artifact digests, in lexicographic byte order.
+    /// The ten authenticated artifact digests, in canonical V4 role order.
     public let artifactSHA256s: [Data]
 
     private let token: UUID
@@ -58,7 +61,7 @@ public final class KagemushaRecursiveSpendInstalledArtifactLease: @unchecked Sen
 
     fileprivate init(
         token: UUID,
-        binding: KagemushaRecursiveSpendArtifactBinding,
+        binding: KagemushaRecursiveSpendArtifactBindingV4,
         artifactSHA256s: [Data],
         coordinator: KagemushaRecursiveSpendArtifactCoordinator
     ) {
@@ -74,41 +77,58 @@ public final class KagemushaRecursiveSpendInstalledArtifactLease: @unchecked Sen
     /// Do not call coordinator lifecycle methods recursively from `body`.
     @discardableResult
     public func withInstalledArtifactSet<T>(
-        _ body: (KagemushaRecursiveSpendInstalledArtifactSet) throws -> T
+        _ body: (KagemushaRecursiveSpendInstalledArtifactSetV4) throws -> T
     ) throws -> T {
         try coordinator.withInstalledArtifactSet(token: token, body)
     }
 }
 
-/// Process-wide owner for the single mode-free ABI-19 Kagemusha artifact set.
+/// Process-wide owner for the single mode-free ABI-20 Kagemusha artifact set.
 ///
 /// Candidate artifacts are completely streamed and authenticated before the
 /// native atomic install. A failed candidate is cancelled without changing the
 /// coordinator's prior generation. Reacquiring an older release performs an
 /// explicit rollback and invalidates leases for the release it replaces.
 public final class KagemushaRecursiveSpendArtifactCoordinator: @unchecked Sendable {
-    public static let requiredArtifactCount = 6
+    public static let requiredArtifactCount =
+        KagemushaRecursiveSpendArtifactRoleV4.allCases.count
     public static let shared = KagemushaRecursiveSpendArtifactCoordinator(
-        sessionFactory: { manifest, binding in
-            try KagemushaRecursiveSpendNativeArtifactInstallSessionDriver(
-                manifest: manifest,
-                binding: binding
+        sessionFactory: { _, _ in
+            throw KagemushaRecursiveSpendError.invalidField(
+                "release.authentication"
             )
         }
     )
 
+    /// Create the process-wide installation owner from deployment-provisioned
+    /// trust material. The unauthenticated `shared` sentinel cannot install.
+    public static func authenticated(
+        _ authentication: KagemushaRecursiveSpendReleaseAuthenticationV4
+    ) -> KagemushaRecursiveSpendArtifactCoordinator {
+        KagemushaRecursiveSpendArtifactCoordinator(
+            sessionFactory: { manifest, binding in
+                try KagemushaRecursiveSpendNativeArtifactInstallSessionDriver(
+                    manifest: manifest,
+                    binding: binding,
+                    authentication: authentication
+                )
+            }
+        )
+    }
+
     private struct ArtifactIdentity: Equatable {
+        let role: KagemushaRecursiveSpendArtifactRoleV4
         let sha256: Data
         let byteCount: UInt64
     }
 
     private struct ActiveGeneration {
         let token: UUID
-        let binding: KagemushaRecursiveSpendArtifactBinding
+        let binding: KagemushaRecursiveSpendArtifactBindingV4
         let manifestSHA256: Data
         let artifacts: [ArtifactIdentity]
         let session: any KagemushaRecursiveSpendArtifactInstallSessionDriver
-        let installedSet: KagemushaRecursiveSpendInstalledArtifactSet
+        let installedSet: KagemushaRecursiveSpendInstalledArtifactSetV4
     }
 
     // Recursive only so a lifecycle call made from one of the public callback
@@ -124,14 +144,14 @@ public final class KagemushaRecursiveSpendArtifactCoordinator: @unchecked Sendab
         self.sessionFactory = sessionFactory
     }
 
-    /// Acquire the exact authenticated six-file generation, reusing an
+    /// Acquire the exact authenticated ten-file generation, reusing an
     /// identical active generation without consuming the supplied streams.
     ///
     /// Installation and reuse checks are serialized process-wide by `shared`.
     /// Applications should not create independent native installation owners.
     public func acquire(
         manifest: KagemushaRecursiveSpendArtifactManifestArchive,
-        binding: KagemushaRecursiveSpendArtifactBinding,
+        binding: KagemushaRecursiveSpendArtifactBindingV4,
         artifacts: [KagemushaRecursiveSpendArtifactStream]
     ) throws -> KagemushaRecursiveSpendInstalledArtifactLease {
         lock.lock()
@@ -157,12 +177,16 @@ public final class KagemushaRecursiveSpendArtifactCoordinator: @unchecked Sendab
                 == Self.requiredArtifactCount else {
             throw KagemushaRecursiveSpendError.invalidField("artifactSet.duplicate")
         }
-
-        let ordered = artifacts.sorted {
-            $0.expectedSHA256.lexicographicallyPrecedes($1.expectedSHA256)
+        guard artifacts.map(\.role)
+                == KagemushaRecursiveSpendArtifactRoleV4.allCases else {
+            throw KagemushaRecursiveSpendError.invalidField("artifactSet.roleOrder")
         }
-        let identity = ordered.map {
-            ArtifactIdentity(sha256: $0.expectedSHA256, byteCount: $0.byteCount)
+        let identity = artifacts.map {
+            ArtifactIdentity(
+                role: $0.role,
+                sha256: $0.expectedSHA256,
+                byteCount: $0.byteCount
+            )
         }
 
         if let active,
@@ -182,7 +206,7 @@ public final class KagemushaRecursiveSpendArtifactCoordinator: @unchecked Sendab
         return try installCandidate(
             manifest: manifest,
             binding: binding,
-            artifacts: ordered,
+            artifacts: artifacts,
             identity: identity
         )
     }
@@ -203,7 +227,7 @@ public final class KagemushaRecursiveSpendArtifactCoordinator: @unchecked Sendab
 
     fileprivate func withInstalledArtifactSet<T>(
         token: UUID,
-        _ body: (KagemushaRecursiveSpendInstalledArtifactSet) throws -> T
+        _ body: (KagemushaRecursiveSpendInstalledArtifactSetV4) throws -> T
     ) throws -> T {
         lock.lock()
         defer { lock.unlock() }
@@ -222,7 +246,7 @@ public final class KagemushaRecursiveSpendArtifactCoordinator: @unchecked Sendab
 
     private func installCandidate(
         manifest: KagemushaRecursiveSpendArtifactManifestArchive,
-        binding: KagemushaRecursiveSpendArtifactBinding,
+        binding: KagemushaRecursiveSpendArtifactBindingV4,
         artifacts: [KagemushaRecursiveSpendArtifactStream],
         identity: [ArtifactIdentity]
     ) throws -> KagemushaRecursiveSpendInstalledArtifactLease {
@@ -235,6 +259,7 @@ public final class KagemushaRecursiveSpendArtifactCoordinator: @unchecked Sendab
         do {
             for artifact in artifacts {
                 let ingestion = try candidate.beginArtifact(
+                    role: artifact.role,
                     expectedArtifactSHA256: artifact.expectedSHA256
                 )
                 var expectedOffset: UInt64 = 0
@@ -380,11 +405,14 @@ protocol KagemushaRecursiveSpendArtifactIngestDriver: AnyObject {
 
 protocol KagemushaRecursiveSpendArtifactInstallSessionDriver: AnyObject {
     var manifest: KagemushaRecursiveSpendArtifactManifestArchive { get }
-    var binding: KagemushaRecursiveSpendArtifactBinding { get }
+    var binding: KagemushaRecursiveSpendArtifactBindingV4 { get }
 
-    func beginArtifact(expectedArtifactSHA256: Data) throws
+    func beginArtifact(
+        role: KagemushaRecursiveSpendArtifactRoleV4,
+        expectedArtifactSHA256: Data
+    ) throws
         -> any KagemushaRecursiveSpendArtifactIngestDriver
-    func install() throws -> KagemushaRecursiveSpendInstalledArtifactSet
+    func install() throws -> KagemushaRecursiveSpendInstalledArtifactSetV4
     func isInstalled() throws -> Bool
     func uninstall() throws
     func cancel() throws
@@ -392,7 +420,7 @@ protocol KagemushaRecursiveSpendArtifactInstallSessionDriver: AnyObject {
 
 typealias KagemushaRecursiveSpendArtifactSessionFactory = (
     _ manifest: KagemushaRecursiveSpendArtifactManifestArchive,
-    _ binding: KagemushaRecursiveSpendArtifactBinding
+    _ binding: KagemushaRecursiveSpendArtifactBindingV4
 ) throws -> any KagemushaRecursiveSpendArtifactInstallSessionDriver
 
 private final class KagemushaRecursiveSpendNativeArtifactIngestDriver:
@@ -411,29 +439,37 @@ private final class KagemushaRecursiveSpendNativeArtifactIngestDriver:
 private final class KagemushaRecursiveSpendNativeArtifactInstallSessionDriver:
     KagemushaRecursiveSpendArtifactInstallSessionDriver {
     let manifest: KagemushaRecursiveSpendArtifactManifestArchive
-    let binding: KagemushaRecursiveSpendArtifactBinding
-    private let native: KagemushaRecursiveSpendArtifactInstallSessionV3
+    let binding: KagemushaRecursiveSpendArtifactBindingV4
+    private let native: KagemushaRecursiveSpendArtifactInstallSessionV4
 
     init(
         manifest: KagemushaRecursiveSpendArtifactManifestArchive,
-        binding: KagemushaRecursiveSpendArtifactBinding
+        binding: KagemushaRecursiveSpendArtifactBindingV4,
+        authentication: KagemushaRecursiveSpendReleaseAuthenticationV4
     ) throws {
         self.manifest = manifest
         self.binding = binding
-        self.native = try KagemushaRecursiveSpendArtifactInstallSessionV3(
+        self.native = try KagemushaRecursiveSpendArtifactInstallSessionV4(
             manifest: manifest,
-            binding: binding
+            binding: binding,
+            authentication: authentication
         )
     }
 
-    func beginArtifact(expectedArtifactSHA256: Data) throws
+    func beginArtifact(
+        role: KagemushaRecursiveSpendArtifactRoleV4,
+        expectedArtifactSHA256: Data
+    ) throws
         -> any KagemushaRecursiveSpendArtifactIngestDriver {
         KagemushaRecursiveSpendNativeArtifactIngestDriver(
-            try native.beginArtifact(expectedArtifactSHA256: expectedArtifactSHA256)
+            try native.beginArtifact(
+                role: role,
+                expectedArtifactSHA256: expectedArtifactSHA256
+            )
         )
     }
 
-    func install() throws -> KagemushaRecursiveSpendInstalledArtifactSet {
+    func install() throws -> KagemushaRecursiveSpendInstalledArtifactSetV4 {
         try native.install()
     }
 

@@ -192,11 +192,13 @@ directory (for example `/var/spool/soranet/vpn-receipts`). When a helper-ticket
 session closes after accepting a client usage voucher, the relay writes a JSON
 settlement artifact containing the exact `relay_receipt_hex`,
 `client_voucher_hex`, and `lease_id_hex` request body for
-`POST /v1/vpn/receipts`. Submit that request with the configured operator
+`POST /v1/vpn/receipts`. Its top-level `earned_fee` audit field is the canonical
+exact XOR decimal string mirrored into the encoded relay receipt; it is never an
+implicit nano-XOR integer. Submit that request with the configured operator
 account, then sign the returned `SettleVpnLease` transaction instruction so the
 earned XOR and refund are split from native custody. If no client voucher was
-accepted, no settlement artifact is written; the relay logs this so the operator
-does not accidentally settle an unverifiable prepaid claim.
+accepted, no settlement artifact is written; the relay logs this so the
+operator does not accidentally settle an unverifiable prepaid claim.
 
 To prepare the signed Torii request without storing operator signing material in
 the repo, run the helper with runtime-only seed material and either submit the

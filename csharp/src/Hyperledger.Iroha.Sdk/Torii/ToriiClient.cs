@@ -676,22 +676,37 @@ public sealed partial class ToriiClient : IDisposable
 
     public async Task<ToriiVpnProfile> GetVpnProfileAsync(CancellationToken cancellationToken = default)
     {
-        var response = await GetAsync<ToriiVpnProfile>("/v1/vpn/profile", cancellationToken: cancellationToken);
-        ValidateVpnProfile(response, "vpn profile response");
-        return response;
+        using var response = await SendExpectingStatusAsync(
+            HttpMethod.Get,
+            "/v1/vpn/profile",
+            query: null,
+            content: null,
+            HttpStatusCode.OK,
+            allowedStatusCode: null,
+            cancellationToken);
+        var profile = await DeserializeAsync<ToriiVpnProfile>(response, cancellationToken);
+        ValidateVpnProfile(profile, "vpn profile response");
+        return profile;
     }
 
     public async Task<ToriiVpnQuote> CreateVpnQuoteAsync(
         ToriiVpnQuoteCreateRequest request,
         CancellationToken cancellationToken = default)
     {
+        RequireVpnCanonicalRequestCredentials("/v1/vpn/quotes");
         ArgumentNullException.ThrowIfNull(request);
         var normalizedRequest = NormalizeVpnQuoteCreateRequest(request);
 
-        var response = await PostAsync<ToriiVpnQuoteCreateRequest, ToriiVpnQuote>(
+        using var content = CreateJsonContent(normalizedRequest);
+        using var httpResponse = await SendExpectingStatusAsync(
+            HttpMethod.Post,
             "/v1/vpn/quotes",
-            normalizedRequest,
-            cancellationToken: cancellationToken);
+            query: null,
+            content,
+            HttpStatusCode.Created,
+            allowedStatusCode: null,
+            cancellationToken);
+        var response = await DeserializeAsync<ToriiVpnQuote>(httpResponse, cancellationToken);
         ValidateVpnQuote(response, "vpn quote response");
         return response;
     }
@@ -700,13 +715,20 @@ public sealed partial class ToriiClient : IDisposable
         ToriiVpnSessionCreateRequest request,
         CancellationToken cancellationToken = default)
     {
+        RequireVpnCanonicalRequestCredentials("/v1/vpn/sessions");
         ArgumentNullException.ThrowIfNull(request);
         var normalizedRequest = NormalizeVpnSessionCreateRequest(request);
 
-        var response = await PostAsync<ToriiVpnSessionCreateRequest, ToriiVpnSession>(
+        using var content = CreateJsonContent(normalizedRequest);
+        using var httpResponse = await SendExpectingStatusAsync(
+            HttpMethod.Post,
             "/v1/vpn/sessions",
-            normalizedRequest,
-            cancellationToken: cancellationToken);
+            query: null,
+            content,
+            HttpStatusCode.Created,
+            allowedStatusCode: null,
+            cancellationToken);
+        var response = await DeserializeAsync<ToriiVpnSession>(httpResponse, cancellationToken);
         ValidateVpnSession(response, "vpn session response");
         return response;
     }
@@ -715,12 +737,14 @@ public sealed partial class ToriiClient : IDisposable
         string sessionId,
         CancellationToken cancellationToken = default)
     {
+        RequireVpnCanonicalRequestCredentials("/v1/vpn/sessions/{session_id}");
         var encodedSessionId = EncodeVpnSessionPathSegment(sessionId, nameof(sessionId));
-        using var response = await SendAllowingStatusAsync(
+        using var response = await SendExpectingStatusAsync(
             HttpMethod.Get,
             $"/v1/vpn/sessions/{encodedSessionId}",
             query: null,
             content: null,
+            HttpStatusCode.OK,
             HttpStatusCode.NotFound,
             cancellationToken);
 
@@ -738,12 +762,14 @@ public sealed partial class ToriiClient : IDisposable
         string sessionId,
         CancellationToken cancellationToken = default)
     {
+        RequireVpnCanonicalRequestCredentials("/v1/vpn/sessions/{session_id}");
         var encodedSessionId = EncodeVpnSessionPathSegment(sessionId, nameof(sessionId));
-        using var response = await SendAllowingStatusAsync(
+        using var response = await SendExpectingStatusAsync(
             HttpMethod.Delete,
             $"/v1/vpn/sessions/{encodedSessionId}",
             query: null,
             content: null,
+            HttpStatusCode.OK,
             HttpStatusCode.NotFound,
             cancellationToken);
 
@@ -761,22 +787,36 @@ public sealed partial class ToriiClient : IDisposable
         ToriiVpnReceiptSubmitRequest request,
         CancellationToken cancellationToken = default)
     {
+        RequireVpnCanonicalRequestCredentials("/v1/vpn/receipts");
         ArgumentNullException.ThrowIfNull(request);
         var normalizedRequest = NormalizeVpnReceiptSubmitRequest(request);
 
-        var response = await PostAsync<ToriiVpnReceiptSubmitRequest, ToriiVpnReceipt>(
+        using var content = CreateJsonContent(normalizedRequest);
+        using var httpResponse = await SendExpectingStatusAsync(
+            HttpMethod.Post,
             "/v1/vpn/receipts",
-            normalizedRequest,
-            cancellationToken: cancellationToken);
+            query: null,
+            content,
+            HttpStatusCode.Created,
+            allowedStatusCode: null,
+            cancellationToken);
+        var response = await DeserializeAsync<ToriiVpnReceipt>(httpResponse, cancellationToken);
         ValidateVpnReceipt(response, "vpn receipt response");
         return response;
     }
 
     public async Task<ToriiVpnReceiptListResponse> ListVpnReceiptsAsync(CancellationToken cancellationToken = default)
     {
-        var response = await GetAsync<ToriiVpnReceiptListResponse>(
+        RequireVpnCanonicalRequestCredentials("/v1/vpn/receipts");
+        using var httpResponse = await SendExpectingStatusAsync(
+            HttpMethod.Get,
             "/v1/vpn/receipts",
-            cancellationToken: cancellationToken);
+            query: null,
+            content: null,
+            HttpStatusCode.OK,
+            allowedStatusCode: null,
+            cancellationToken);
+        var response = await DeserializeAsync<ToriiVpnReceiptListResponse>(httpResponse, cancellationToken);
         ValidateVpnReceiptListResponse(response, "vpn receipt list response");
         return response;
     }
@@ -1617,6 +1657,44 @@ public sealed partial class ToriiClient : IDisposable
         var exception = await CreateApiExceptionAsync(response, cancellationToken);
         response.Dispose();
         throw exception;
+    }
+
+    private async Task<HttpResponseMessage> SendExpectingStatusAsync(
+        HttpMethod method,
+        string path,
+        string? query,
+        HttpContent? content,
+        HttpStatusCode expectedStatusCode,
+        HttpStatusCode? allowedStatusCode,
+        CancellationToken cancellationToken)
+    {
+        var request = await CreateRequestAsync(
+            method,
+            path,
+            query,
+            content,
+            accept: null,
+            configureRequest: null,
+            cancellationToken);
+        var response = await HttpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+        if (response.StatusCode == expectedStatusCode
+            || (allowedStatusCode.HasValue && response.StatusCode == allowedStatusCode.Value))
+        {
+            return response;
+        }
+
+        var exception = await CreateApiExceptionAsync(response, cancellationToken);
+        response.Dispose();
+        throw exception;
+    }
+
+    private void RequireVpnCanonicalRequestCredentials(string route)
+    {
+        if (Options.CanonicalRequestCredentials is null)
+        {
+            throw new InvalidOperationException(
+                $"VPN route `{route}` requires ToriiClientOptions.CanonicalRequestCredentials.");
+        }
     }
 
     private async Task<HttpRequestMessage> CreateRequestAsync(
@@ -5428,7 +5506,7 @@ public sealed partial class ToriiClient : IDisposable
         return request with
         {
             ExitClass = NormalizeOptionalVpnExitClass(request.ExitClass, nameof(request.ExitClass)),
-            MeteringPublicKeyHex = NormalizeExactSizedHex(
+            MeteringPublicKeyHex = NormalizeVpnExactSizedHex(
                 request.MeteringPublicKeyHex,
                 nameof(request.MeteringPublicKeyHex),
                 32),
@@ -5442,11 +5520,11 @@ public sealed partial class ToriiClient : IDisposable
         {
             ExitClass = NormalizeOptionalVpnExitClass(request.ExitClass, nameof(request.ExitClass)),
             QuoteId = NormalizeExactSizedHex(request.QuoteId, nameof(request.QuoteId), 32),
-            PaymentTransactionHash = NormalizeExactSizedHex(
+            PaymentTransactionHash = NormalizeVpnExactSizedHex(
                 request.PaymentTransactionHash,
                 nameof(request.PaymentTransactionHash),
                 32),
-            MeteringPublicKeyHex = NormalizeExactSizedHex(
+            MeteringPublicKeyHex = NormalizeVpnExactSizedHex(
                 request.MeteringPublicKeyHex,
                 nameof(request.MeteringPublicKeyHex),
                 32),
@@ -5458,9 +5536,9 @@ public sealed partial class ToriiClient : IDisposable
     {
         return request with
         {
-            RelayReceiptHex = NormalizeExactHex(request.RelayReceiptHex, nameof(request.RelayReceiptHex)),
-            ClientVoucherHex = NormalizeExactHex(request.ClientVoucherHex, nameof(request.ClientVoucherHex)),
-            LeaseIdHex = NormalizeOptionalExactSizedHexOrEmpty(
+            RelayReceiptHex = NormalizeVpnExactHex(request.RelayReceiptHex, nameof(request.RelayReceiptHex)),
+            ClientVoucherHex = NormalizeVpnExactHex(request.ClientVoucherHex, nameof(request.ClientVoucherHex)),
+            LeaseIdHex = NormalizeOptionalVpnExactSizedHexOrEmpty(
                 request.LeaseIdHex,
                 nameof(request.LeaseIdHex),
                 32),
@@ -6827,7 +6905,24 @@ public sealed partial class ToriiClient : IDisposable
             ?? throw new ArgumentException("Value cannot be null or whitespace.", paramName);
     }
 
-    private static string NormalizeOptionalExactSizedHexOrEmpty(
+    private static string NormalizeVpnExactSizedHex(
+        string? value,
+        string paramName,
+        int expectedBytes)
+    {
+        var exact = NormalizeExactValue(value, paramName);
+        var payload = RemoveOptionalHexPrefix(exact);
+        if (payload.Length != expectedBytes * 2 || !payload.All(Uri.IsHexDigit))
+        {
+            throw new ArgumentException(
+                $"Value must be a {expectedBytes}-byte hex string with an optional 0x prefix.",
+                paramName);
+        }
+
+        return payload.ToLowerInvariant();
+    }
+
+    private static string NormalizeOptionalVpnExactSizedHexOrEmpty(
         string? value,
         string paramName,
         int expectedBytes)
@@ -6837,20 +6932,26 @@ public sealed partial class ToriiClient : IDisposable
             return string.Empty;
         }
 
-        return NormalizeExactSizedHex(value, paramName, expectedBytes);
+        return NormalizeVpnExactSizedHex(value, paramName, expectedBytes);
     }
 
-    private static string NormalizeExactHex(string? value, string paramName)
+    private static string NormalizeVpnExactHex(string? value, string paramName)
     {
         var exact = NormalizeExactValue(value, paramName);
-        if (exact.Length % 2 != 0 || !IsHex(exact))
+        var payload = RemoveOptionalHexPrefix(exact);
+        if (payload.Length == 0 || payload.Length % 2 != 0 || !IsHex(payload))
         {
             throw new ArgumentException(
-                "Value must contain an even number of hexadecimal characters.",
+                "Value must contain a non-empty even number of hexadecimal characters with an optional 0x prefix.",
                 paramName);
         }
 
-        return exact.ToLowerInvariant();
+        return payload.ToLowerInvariant();
+    }
+
+    private static string RemoveOptionalHexPrefix(string value)
+    {
+        return value.StartsWith("0x", StringComparison.OrdinalIgnoreCase) ? value[2..] : value;
     }
 
     private static string NormalizeOptionalVpnExitClass(string? value, string paramName)

@@ -128,6 +128,174 @@ _SORAFS_ORDERBOOK_EVENT_KIND_VALUES = {
     "settlement_receipt_accepted",
 }
 _SORAFS_XOR_QUANTITY_MAX_TEXT_LENGTH = 155
+_QUANTITY_MAX_TEXT_LENGTH = 155
+_QUANTITY_MAX_MANTISSA = (1 << 511) - 1
+_VPN_HELPER_TICKET_BYTES = 664
+_VPN_HELPER_TICKET_HEX_LENGTH = _VPN_HELPER_TICKET_BYTES * 2
+_VPN_EXIT_CLASSES = frozenset({"standard", "low-latency", "high-security"})
+_VPN_SESSION_STATUSES = frozenset({"active"})
+_VPN_RECEIPT_STATUSES = frozenset({"disconnected", "expired", "replaced", "settled"})
+_VPN_RECEIPT_SOURCES = frozenset({"torii", "relay", "wsv"})
+_VPN_LEASE_SECONDS_MAX = (1 << 32) - 1
+_VPN_UINT64_MAX = (1 << 64) - 1
+_VPN_QUOTE_REQUEST_FIELDS = frozenset(
+    {"exit_class", "exitClass", "metering_public_key_hex", "meteringPublicKeyHex"}
+)
+_VPN_SESSION_REQUEST_FIELDS = frozenset(
+    {
+        "exit_class",
+        "exitClass",
+        "quote_id",
+        "quoteId",
+        "payment_tx_hash",
+        "paymentTxHash",
+        "metering_public_key_hex",
+        "meteringPublicKeyHex",
+    }
+)
+_VPN_RECEIPT_REQUEST_FIELDS = frozenset(
+    {
+        "relay_receipt_hex",
+        "relayReceiptHex",
+        "client_voucher_hex",
+        "clientVoucherHex",
+        "lease_id_hex",
+        "leaseIdHex",
+    }
+)
+_VPN_TX_INSTRUCTION_FIELDS = frozenset({"wire_id", "payload_hex"})
+_VPN_PROFILE_RESPONSE_FIELDS = frozenset(
+    {
+        "available",
+        "relay_endpoint",
+        "supported_exit_classes",
+        "default_exit_class",
+        "lease_secs",
+        "dns_push_interval_secs",
+        "meter_family",
+        "route_pushes",
+        "excluded_routes",
+        "dns_servers",
+        "tunnel_addresses",
+        "mtu_bytes",
+        "display_billing_label",
+        "fee_asset_id",
+        "escrow_account_id",
+        "operator_account_id",
+        "lease_fee",
+        "settlement_grace_secs",
+        "flow_label_bits",
+        "padding_budget_ms",
+        "relay_tls_spki_sha256_hex",
+    }
+)
+_VPN_QUOTE_RESPONSE_FIELDS = frozenset(
+    {
+        "quote_id",
+        "lease_id_hex",
+        "session_id_hex",
+        "payment_reference",
+        "account_id",
+        "exit_class",
+        "relay_endpoint",
+        "lease_secs",
+        "quote_expires_at_ms",
+        "fee_asset_id",
+        "escrow_account_id",
+        "operator_account_id",
+        "lease_fee",
+        "route_pushes",
+        "excluded_routes",
+        "dns_servers",
+        "tunnel_addresses",
+        "mtu_bytes",
+        "meter_family",
+        "flow_label_bits",
+        "padding_budget_ms",
+        "relay_tls_spki_sha256_hex",
+        "metering_public_key_hex",
+        "open_lease_instruction",
+        "tx_instructions",
+    }
+)
+_VPN_SESSION_RESPONSE_FIELDS = frozenset(
+    {
+        "session_id",
+        "account_id",
+        "exit_class",
+        "relay_endpoint",
+        "lease_secs",
+        "expires_at_ms",
+        "connected_at_ms",
+        "meter_family",
+        "quote_id",
+        "payment_reference",
+        "payment_tx_hash",
+        "fee_asset_id",
+        "escrow_account_id",
+        "operator_account_id",
+        "lease_fee",
+        "flow_label_bits",
+        "padding_budget_ms",
+        "relay_tls_spki_sha256_hex",
+        "route_pushes",
+        "excluded_routes",
+        "dns_servers",
+        "tunnel_addresses",
+        "mtu_bytes",
+        "helper_ticket_hex",
+        "bytes_in",
+        "bytes_out",
+        "status",
+    }
+)
+_VPN_RECEIPT_RESPONSE_FIELDS = frozenset(
+    {
+        "session_id",
+        "account_id",
+        "exit_class",
+        "relay_endpoint",
+        "meter_family",
+        "connected_at_ms",
+        "disconnected_at_ms",
+        "duration_ms",
+        "bytes_in",
+        "bytes_out",
+        "status",
+        "receipt_source",
+        "quote_id",
+        "payment_tx_hash",
+        "fee_asset_id",
+        "escrow_account_id",
+        "operator_account_id",
+        "lease_fee",
+        "earned_fee",
+        "refunded_fee",
+        "lease_id_hex",
+        "settle_lease_instruction",
+        "tx_instructions",
+    }
+)
+_VPN_RECEIPT_LIST_RESPONSE_FIELDS = frozenset({"items", "total"})
+
+
+def _canonical_quantity(value: Any, context: str) -> str:
+    """Decode one canonical bounded non-negative Quantity JSON string."""
+
+    if not isinstance(value, str):
+        raise RuntimeError(f"{context} must be a quantity string")
+    if len(value) > _QUANTITY_MAX_TEXT_LENGTH:
+        raise RuntimeError(f"{context} exceeds the quantity text length bound")
+    matched = re.fullmatch(r"(0|[1-9][0-9]*)(?:\.([0-9]{0,27}[1-9]))?", value)
+    if matched is None:
+        raise RuntimeError(f"{context} must be a canonical non-negative quantity")
+    fraction = matched.group(2) or ""
+    mantissa = int(matched.group(1) + fraction)
+    if mantissa > _QUANTITY_MAX_MANTISSA:
+        raise RuntimeError(f"{context} exceeds the signed 512-bit domain")
+    return value
+
+
 _SORAFS_ORDERBOOK_ORDER_FIELDS = frozenset(
     {
         "version",
@@ -2880,9 +3048,9 @@ _KAGEMUSHA_VERIFIER_CIRCUITS = {
     "active_unshield_verifier":
         "halo2/pasta/ipa/confidential-unshield-change-merkle16-axiom-poseidon-v4",
     "active_recursive_step_eq_verifier":
-        "kagemusha-recursive-spend-step-eq-two-parent-exact-state-v1",
+        "kagemusha-recursive-spend-step-eq-two-parent-operation-protocol-v2",
     "active_recursive_step_ep_verifier":
-        "kagemusha-recursive-spend-step-ep-two-parent-exact-state-v1",
+        "kagemusha-recursive-spend-step-ep-two-parent-operation-protocol-v2",
 }
 
 
@@ -5531,7 +5699,11 @@ class VpnQuoteCreateRequest:
     def to_payload(self) -> Dict[str, Any]:
         exit_class = "" if self.exit_class is None else self.exit_class
         return {
-            "exit_class": ToriiClient._require_string(exit_class, "vpn quote exit_class")
+            "exit_class": ToriiClient._require_vpn_enum(
+                exit_class,
+                _VPN_EXIT_CLASSES,
+                "vpn quote exit_class",
+            )
             if exit_class
             else "",
             "metering_public_key_hex": ToriiClient._normalize_hex_string(
@@ -5554,10 +5726,14 @@ class VpnSessionCreateRequest:
     def to_payload(self) -> Dict[str, Any]:
         exit_class = "" if self.exit_class is None else self.exit_class
         return {
-            "exit_class": ToriiClient._require_string(exit_class, "vpn session exit_class")
+            "exit_class": ToriiClient._require_vpn_enum(
+                exit_class,
+                _VPN_EXIT_CLASSES,
+                "vpn session exit_class",
+            )
             if exit_class
             else "",
-            "quote_id": ToriiClient._normalize_hex_string(
+            "quote_id": ToriiClient._normalize_vpn_canonical_hex_input(
                 self.quote_id,
                 context="vpn session quote_id",
                 expected_length=64,
@@ -5624,7 +5800,7 @@ class VpnProfile:
     fee_asset_id: str
     escrow_account_id: str
     operator_account_id: str
-    lease_fee_nanos: int
+    lease_fee: str
     settlement_grace_secs: int
     flow_label_bits: int
     padding_budget_ms: int
@@ -5647,7 +5823,7 @@ class VpnQuote:
     fee_asset_id: str
     escrow_account_id: str
     operator_account_id: str
-    lease_fee_nanos: int
+    lease_fee: str
     route_pushes: List[str]
     excluded_routes: List[str]
     dns_servers: List[str]
@@ -5680,7 +5856,7 @@ class VpnSession:
     fee_asset_id: str
     escrow_account_id: str
     operator_account_id: str
-    lease_fee_nanos: int
+    lease_fee: str
     flow_label_bits: int
     padding_budget_ms: int
     relay_tls_spki_sha256_hex: Optional[str]
@@ -5716,9 +5892,9 @@ class VpnReceipt:
     fee_asset_id: str
     escrow_account_id: str
     operator_account_id: str
-    lease_fee_nanos: int
-    earned_fee_nanos: int
-    refunded_fee_nanos: int
+    lease_fee: str
+    earned_fee: str
+    refunded_fee: str
     lease_id_hex: str
     settle_lease_instruction: Optional[TransactionInstruction]
     tx_instructions: List[TransactionInstruction]
@@ -6622,8 +6798,6 @@ class _SumeragiV2StatusParser:
     MAX_NATIVE_AMX_PARTICIPANT_SETTLEMENT_RECEIPTS = 4096
     MAX_U32 = (1 << 32) - 1
     MAX_U64 = (1 << 64) - 1
-    MAX_QUANTITY_TEXT_LENGTH = 155
-    MAX_QUANTITY_MANTISSA = (1 << 511) - 1
 
     @classmethod
     def parse(cls, payload: Any) -> SumeragiV2Status:
@@ -6923,24 +7097,7 @@ class _SumeragiV2StatusParser:
 
     @classmethod
     def _quantity(cls, value: Any, context: str) -> str:
-        """Decode one canonical bounded non-negative Quantity string."""
-
-        if not isinstance(value, str):
-            raise RuntimeError(f"{context} must be a quantity string")
-        if len(value) > cls.MAX_QUANTITY_TEXT_LENGTH:
-            raise RuntimeError(f"{context} exceeds the quantity text length bound")
-        matched = re.fullmatch(
-            r"(0|[1-9][0-9]*)(?:\.([0-9]{0,27}[1-9]))?", value
-        )
-        if matched is None:
-            raise RuntimeError(
-                f"{context} must be a canonical non-negative quantity"
-            )
-        fraction = matched.group(2) or ""
-        mantissa = int(matched.group(1) + fraction)
-        if mantissa > cls.MAX_QUANTITY_MANTISSA:
-            raise RuntimeError(f"{context} exceeds the signed 512-bit domain")
-        return value
+        return _canonical_quantity(value, context)
 
     @staticmethod
     def _numeric(value: Any, context: str) -> str:
@@ -9502,11 +9659,12 @@ class ToriiClient:
         self,
         request: Union[VpnQuoteCreateRequest, Mapping[str, Any]],
         *,
-        canonical_auth: Optional[ToriiCanonicalRequestAuth] = None,
+        canonical_auth: ToriiCanonicalRequestAuth,
         headers: Optional[Mapping[str, str]] = None,
     ) -> VpnQuote:
         """Create a VPN quote carrying the native `OpenVpnLeaseEscrow` instruction."""
 
+        canonical_auth = self._require_vpn_canonical_auth(canonical_auth, "vpn quote")
         payload = self._normalize_vpn_quote_request(request)
         response = self._vpn_json_request(
             "POST",
@@ -9523,11 +9681,12 @@ class ToriiClient:
         self,
         request: Union[VpnSessionCreateRequest, Mapping[str, Any]],
         *,
-        canonical_auth: Optional[ToriiCanonicalRequestAuth] = None,
+        canonical_auth: ToriiCanonicalRequestAuth,
         headers: Optional[Mapping[str, str]] = None,
     ) -> VpnSession:
         """Open a VPN session from a paid quote and matching metering key."""
 
+        canonical_auth = self._require_vpn_canonical_auth(canonical_auth, "vpn session")
         payload = self._normalize_vpn_session_request(request)
         response = self._vpn_json_request(
             "POST",
@@ -9544,11 +9703,12 @@ class ToriiClient:
         self,
         session_id: Union[str, bytes, bytearray, memoryview],
         *,
-        canonical_auth: Optional[ToriiCanonicalRequestAuth] = None,
+        canonical_auth: ToriiCanonicalRequestAuth,
         headers: Optional[Mapping[str, str]] = None,
     ) -> Optional[VpnSession]:
         """Fetch an active VPN session, returning `None` when absent."""
 
+        canonical_auth = self._require_vpn_canonical_auth(canonical_auth, "vpn session")
         normalized = self._normalize_hex_string(
             session_id,
             context="vpn session_id",
@@ -9571,11 +9731,12 @@ class ToriiClient:
         self,
         session_id: Union[str, bytes, bytearray, memoryview],
         *,
-        canonical_auth: Optional[ToriiCanonicalRequestAuth] = None,
+        canonical_auth: ToriiCanonicalRequestAuth,
         headers: Optional[Mapping[str, str]] = None,
     ) -> Optional[VpnReceipt]:
         """Disconnect a VPN session, returning the canonical lease receipt when present."""
 
+        canonical_auth = self._require_vpn_canonical_auth(canonical_auth, "vpn receipt")
         normalized = self._normalize_hex_string(
             session_id,
             context="vpn session_id",
@@ -9598,11 +9759,12 @@ class ToriiClient:
         self,
         request: Union[VpnReceiptSubmitRequest, Mapping[str, Any]],
         *,
-        canonical_auth: Optional[ToriiCanonicalRequestAuth] = None,
+        canonical_auth: ToriiCanonicalRequestAuth,
         headers: Optional[Mapping[str, str]] = None,
     ) -> VpnReceipt:
         """Submit a relay receipt and receive the native `SettleVpnLease` instruction."""
 
+        canonical_auth = self._require_vpn_canonical_auth(canonical_auth, "vpn receipt")
         payload = self._normalize_vpn_receipt_request(request)
         response = self._vpn_json_request(
             "POST",
@@ -9618,11 +9780,12 @@ class ToriiClient:
     def list_vpn_receipts(
         self,
         *,
-        canonical_auth: Optional[ToriiCanonicalRequestAuth] = None,
+        canonical_auth: ToriiCanonicalRequestAuth,
         headers: Optional[Mapping[str, str]] = None,
     ) -> VpnReceiptListResponse:
         """List recent disconnected or settled VPN lease receipts for the signed account."""
 
+        canonical_auth = self._require_vpn_canonical_auth(canonical_auth, "vpn receipts")
         response = self._vpn_json_request(
             "GET",
             "/v1/vpn/receipts",
@@ -11447,6 +11610,15 @@ class ToriiClient:
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+    @staticmethod
+    def _require_vpn_canonical_auth(
+        canonical_auth: Optional[ToriiCanonicalRequestAuth],
+        context: str,
+    ) -> ToriiCanonicalRequestAuth:
+        if canonical_auth is None:
+            raise ValueError(f"{context}.canonical_auth is required")
+        return canonical_auth
+
     def _vpn_json_request(
         self,
         method: str,
@@ -11524,11 +11696,16 @@ class ToriiClient:
         request: Union[VpnQuoteCreateRequest, Mapping[str, Any]],
     ) -> Dict[str, Any]:
         record = cls._to_payload_mapping(request, context="vpn quote request")
+        cls._reject_unknown_fields(record, _VPN_QUOTE_REQUEST_FIELDS, "vpn quote request")
         exit_class = record.get("exit_class", record.get("exitClass", ""))
         if exit_class is None:
             exit_class = ""
         return {
-            "exit_class": cls._require_string(exit_class, "vpn quote exit_class")
+            "exit_class": cls._require_vpn_enum(
+                exit_class,
+                _VPN_EXIT_CLASSES,
+                "vpn quote exit_class",
+            )
             if exit_class
             else "",
             "metering_public_key_hex": cls._normalize_hex_string(
@@ -11544,14 +11721,19 @@ class ToriiClient:
         request: Union[VpnSessionCreateRequest, Mapping[str, Any]],
     ) -> Dict[str, Any]:
         record = cls._to_payload_mapping(request, context="vpn session request")
+        cls._reject_unknown_fields(record, _VPN_SESSION_REQUEST_FIELDS, "vpn session request")
         exit_class = record.get("exit_class", record.get("exitClass", ""))
         if exit_class is None:
             exit_class = ""
         return {
-            "exit_class": cls._require_string(exit_class, "vpn session exit_class")
+            "exit_class": cls._require_vpn_enum(
+                exit_class,
+                _VPN_EXIT_CLASSES,
+                "vpn session exit_class",
+            )
             if exit_class
             else "",
-            "quote_id": cls._normalize_hex_string(
+            "quote_id": cls._normalize_vpn_canonical_hex_input(
                 record.get("quote_id", record.get("quoteId")),
                 context="vpn session quote_id",
                 expected_length=64,
@@ -11574,6 +11756,7 @@ class ToriiClient:
         request: Union[VpnReceiptSubmitRequest, Mapping[str, Any]],
     ) -> Dict[str, Any]:
         record = cls._to_payload_mapping(request, context="vpn receipt request")
+        cls._reject_unknown_fields(record, _VPN_RECEIPT_REQUEST_FIELDS, "vpn receipt request")
         lease_id = record.get("lease_id_hex", record.get("leaseIdHex"))
         return {
             "relay_receipt_hex": cls._normalize_hex_string(
@@ -11596,8 +11779,9 @@ class ToriiClient:
     @staticmethod
     def _parse_vpn_tx_instruction(value: Any, *, context: str) -> TransactionInstruction:
         record = ToriiClient._ensure_mapping(value, context)
+        ToriiClient._validate_exact_fields(record, _VPN_TX_INSTRUCTION_FIELDS, context)
         wire_id = ToriiClient._require_string(record.get("wire_id"), f"{context}.wire_id")
-        payload_hex = ToriiClient._normalize_hex_string(
+        payload_hex = ToriiClient._require_exact_lower_even_hex_string(
             record.get("payload_hex"),
             context=f"{context}.payload_hex",
         )
@@ -11620,50 +11804,100 @@ class ToriiClient:
         value: Any,
         *,
         context: str,
+        minimum: int = 0,
+        maximum: Optional[int] = None,
     ) -> List[TransactionInstruction]:
-        if value is None:
-            return []
         if not isinstance(value, list):
             raise RuntimeError(f"{context} must be a list")
+        if len(value) < minimum:
+            raise RuntimeError(f"{context} must contain at least {minimum} instruction")
+        if maximum is not None and len(value) > maximum:
+            raise RuntimeError(f"{context} must contain at most {maximum} instruction")
         return [
             cls._parse_vpn_tx_instruction(entry, context=f"{context}[{index}]")
             for index, entry in enumerate(value)
         ]
 
+    @staticmethod
+    def _parse_vpn_string_list(value: Any, *, context: str) -> List[str]:
+        if not isinstance(value, list):
+            raise RuntimeError(f"{context} must be a list of strings")
+        result: List[str] = []
+        for index, entry in enumerate(value):
+            if not isinstance(entry, str):
+                raise RuntimeError(f"{context}[{index}] must be a string")
+            result.append(entry)
+        return result
+
     @classmethod
     def _parse_vpn_profile(cls, payload: Mapping[str, Any], *, context: str) -> VpnProfile:
         record = cls._ensure_mapping(payload, context)
+        cls._validate_exact_fields(record, _VPN_PROFILE_RESPONSE_FIELDS, context)
         available = record.get("available")
         if not isinstance(available, bool):
             raise RuntimeError(f"{context}.available must be a boolean")
+        if "dns_push_interval_secs" not in record:
+            raise RuntimeError(f"{context}.dns_push_interval_secs is required")
+        dns_push_interval_secs = cls._require_vpn_uint64(
+            record["dns_push_interval_secs"],
+            f"{context}.dns_push_interval_secs",
+        )
+        if dns_push_interval_secs < 30:
+            raise RuntimeError(f"{context}.dns_push_interval_secs must be at least 30")
+        supported_exit_classes = cls._require_vpn_profile_exit_classes(
+            record.get("supported_exit_classes"),
+            f"{context}.supported_exit_classes",
+        )
+        lease_secs = cls._require_vpn_unsigned_range(
+            record.get("lease_secs"),
+            f"{context}.lease_secs",
+            minimum=1,
+            maximum=_VPN_LEASE_SECONDS_MAX,
+        )
+        mtu_bytes = cls._require_vpn_unsigned_constant(
+            record.get("mtu_bytes"),
+            f"{context}.mtu_bytes",
+            1280,
+        )
+        settlement_grace_secs = cls._require_vpn_unsigned_range(
+            record.get("settlement_grace_secs"),
+            f"{context}.settlement_grace_secs",
+            minimum=1,
+        )
+        flow_label_bits = cls._require_vpn_unsigned_constant(
+            record.get("flow_label_bits"),
+            f"{context}.flow_label_bits",
+            24,
+        )
+        padding_budget_ms = cls._require_vpn_unsigned_range(
+            record.get("padding_budget_ms"),
+            f"{context}.padding_budget_ms",
+            minimum=1,
+            maximum=65535,
+        )
         return VpnProfile(
             available=available,
             relay_endpoint=cls._require_string(record.get("relay_endpoint"), f"{context}.relay_endpoint"),
-            supported_exit_classes=cls._parse_string_list(
-                record.get("supported_exit_classes"),
-                context=f"{context}.supported_exit_classes",
-            ),
-            default_exit_class=cls._require_string(
+            supported_exit_classes=supported_exit_classes,
+            default_exit_class=cls._require_vpn_enum(
                 record.get("default_exit_class"),
+                _VPN_EXIT_CLASSES,
                 f"{context}.default_exit_class",
             ),
-            lease_secs=cls._coerce_unsigned(record.get("lease_secs"), f"{context}.lease_secs"),
-            dns_push_interval_secs=cls._coerce_unsigned(
-                record.get("dns_push_interval_secs"),
-                f"{context}.dns_push_interval_secs",
-            ),
+            lease_secs=lease_secs,
+            dns_push_interval_secs=dns_push_interval_secs,
             meter_family=cls._require_string(record.get("meter_family"), f"{context}.meter_family"),
-            route_pushes=cls._parse_string_list(record.get("route_pushes"), context=f"{context}.route_pushes"),
-            excluded_routes=cls._parse_string_list(
+            route_pushes=cls._parse_vpn_string_list(record.get("route_pushes"), context=f"{context}.route_pushes"),
+            excluded_routes=cls._parse_vpn_string_list(
                 record.get("excluded_routes"),
                 context=f"{context}.excluded_routes",
             ),
-            dns_servers=cls._parse_string_list(record.get("dns_servers"), context=f"{context}.dns_servers"),
-            tunnel_addresses=cls._parse_string_list(
+            dns_servers=cls._parse_vpn_string_list(record.get("dns_servers"), context=f"{context}.dns_servers"),
+            tunnel_addresses=cls._parse_vpn_string_list(
                 record.get("tunnel_addresses"),
                 context=f"{context}.tunnel_addresses",
             ),
-            mtu_bytes=cls._coerce_unsigned(record.get("mtu_bytes"), f"{context}.mtu_bytes"),
+            mtu_bytes=mtu_bytes,
             display_billing_label=cls._require_string(
                 record.get("display_billing_label"),
                 f"{context}.display_billing_label",
@@ -11677,49 +11911,78 @@ class ToriiClient:
                 record.get("operator_account_id"),
                 f"{context}.operator_account_id",
             ),
-            lease_fee_nanos=cls._coerce_unsigned(
-                record.get("lease_fee_nanos"),
-                f"{context}.lease_fee_nanos",
-            ),
-            settlement_grace_secs=cls._coerce_unsigned(
-                record.get("settlement_grace_secs"),
-                f"{context}.settlement_grace_secs",
-            ),
-            flow_label_bits=cls._coerce_unsigned(record.get("flow_label_bits"), f"{context}.flow_label_bits"),
-            padding_budget_ms=cls._coerce_unsigned(
-                record.get("padding_budget_ms"),
-                f"{context}.padding_budget_ms",
-            ),
-            relay_tls_spki_sha256_hex=cls._coerce_optional_string(
+            lease_fee=cls._quantity(record.get("lease_fee"), f"{context}.lease_fee"),
+            settlement_grace_secs=settlement_grace_secs,
+            flow_label_bits=flow_label_bits,
+            padding_budget_ms=padding_budget_ms,
+            relay_tls_spki_sha256_hex=cls._require_optional_exact_lower_hex_string(
                 record.get("relay_tls_spki_sha256_hex"),
                 context=f"{context}.relay_tls_spki_sha256_hex",
+                expected_length=64,
             ),
         )
 
     @classmethod
     def _parse_vpn_quote(cls, payload: Mapping[str, Any], *, context: str) -> VpnQuote:
         record = cls._ensure_mapping(payload, context)
+        cls._validate_exact_fields(record, _VPN_QUOTE_RESPONSE_FIELDS, context)
+        lease_secs = cls._require_vpn_unsigned_range(
+            record.get("lease_secs"),
+            f"{context}.lease_secs",
+            minimum=1,
+            maximum=_VPN_LEASE_SECONDS_MAX,
+        )
+        mtu_bytes = cls._require_vpn_unsigned_constant(
+            record.get("mtu_bytes"),
+            f"{context}.mtu_bytes",
+            1280,
+        )
+        flow_label_bits = cls._require_vpn_unsigned_constant(
+            record.get("flow_label_bits"),
+            f"{context}.flow_label_bits",
+            24,
+        )
+        padding_budget_ms = cls._require_vpn_unsigned_range(
+            record.get("padding_budget_ms"),
+            f"{context}.padding_budget_ms",
+            minimum=1,
+            maximum=65535,
+        )
+        tx_instructions = cls._parse_vpn_tx_instructions(
+            record.get("tx_instructions"),
+            context=f"{context}.tx_instructions",
+            minimum=1,
+            maximum=1,
+        )
         return VpnQuote(
-            quote_id=cls._normalize_hex_string(record.get("quote_id"), context=f"{context}.quote_id", expected_length=64),
-            lease_id_hex=cls._normalize_hex_string(
+            quote_id=cls._require_exact_lower_hex_string(
+                record.get("quote_id"),
+                context=f"{context}.quote_id",
+                expected_length=64,
+            ),
+            lease_id_hex=cls._require_exact_lower_hex_string(
                 record.get("lease_id_hex"),
                 context=f"{context}.lease_id_hex",
                 expected_length=64,
             ),
-            session_id_hex=cls._normalize_hex_string(
+            session_id_hex=cls._require_exact_lower_hex_string(
                 record.get("session_id_hex"),
                 context=f"{context}.session_id_hex",
-                expected_length=64,
+                expected_length=32,
             ),
             payment_reference=cls._require_string(
                 record.get("payment_reference"),
                 f"{context}.payment_reference",
             ),
             account_id=cls._require_string(record.get("account_id"), f"{context}.account_id"),
-            exit_class=cls._require_string(record.get("exit_class"), f"{context}.exit_class"),
+            exit_class=cls._require_vpn_enum(
+                record.get("exit_class"),
+                _VPN_EXIT_CLASSES,
+                f"{context}.exit_class",
+            ),
             relay_endpoint=cls._require_string(record.get("relay_endpoint"), f"{context}.relay_endpoint"),
-            lease_secs=cls._coerce_unsigned(record.get("lease_secs"), f"{context}.lease_secs"),
-            quote_expires_at_ms=cls._coerce_unsigned(
+            lease_secs=lease_secs,
+            quote_expires_at_ms=cls._require_vpn_uint64(
                 record.get("quote_expires_at_ms"),
                 f"{context}.quote_expires_at_ms",
             ),
@@ -11732,32 +11995,27 @@ class ToriiClient:
                 record.get("operator_account_id"),
                 f"{context}.operator_account_id",
             ),
-            lease_fee_nanos=cls._coerce_unsigned(
-                record.get("lease_fee_nanos"),
-                f"{context}.lease_fee_nanos",
-            ),
-            route_pushes=cls._parse_string_list(record.get("route_pushes"), context=f"{context}.route_pushes"),
-            excluded_routes=cls._parse_string_list(
+            lease_fee=cls._quantity(record.get("lease_fee"), f"{context}.lease_fee"),
+            route_pushes=cls._parse_vpn_string_list(record.get("route_pushes"), context=f"{context}.route_pushes"),
+            excluded_routes=cls._parse_vpn_string_list(
                 record.get("excluded_routes"),
                 context=f"{context}.excluded_routes",
             ),
-            dns_servers=cls._parse_string_list(record.get("dns_servers"), context=f"{context}.dns_servers"),
-            tunnel_addresses=cls._parse_string_list(
+            dns_servers=cls._parse_vpn_string_list(record.get("dns_servers"), context=f"{context}.dns_servers"),
+            tunnel_addresses=cls._parse_vpn_string_list(
                 record.get("tunnel_addresses"),
                 context=f"{context}.tunnel_addresses",
             ),
-            mtu_bytes=cls._coerce_unsigned(record.get("mtu_bytes"), f"{context}.mtu_bytes"),
+            mtu_bytes=mtu_bytes,
             meter_family=cls._require_string(record.get("meter_family"), f"{context}.meter_family"),
-            flow_label_bits=cls._coerce_unsigned(record.get("flow_label_bits"), f"{context}.flow_label_bits"),
-            padding_budget_ms=cls._coerce_unsigned(
-                record.get("padding_budget_ms"),
-                f"{context}.padding_budget_ms",
-            ),
-            relay_tls_spki_sha256_hex=cls._coerce_optional_string(
+            flow_label_bits=flow_label_bits,
+            padding_budget_ms=padding_budget_ms,
+            relay_tls_spki_sha256_hex=cls._require_optional_exact_lower_hex_string(
                 record.get("relay_tls_spki_sha256_hex"),
                 context=f"{context}.relay_tls_spki_sha256_hex",
+                expected_length=64,
             ),
-            metering_public_key_hex=cls._normalize_hex_string(
+            metering_public_key_hex=cls._require_exact_lower_hex_string(
                 record.get("metering_public_key_hex"),
                 context=f"{context}.metering_public_key_hex",
                 expected_length=64,
@@ -11766,33 +12024,65 @@ class ToriiClient:
                 record.get("open_lease_instruction"),
                 context=f"{context}.open_lease_instruction",
             ),
-            tx_instructions=cls._parse_vpn_tx_instructions(
-                record.get("tx_instructions"),
-                context=f"{context}.tx_instructions",
-            ),
+            tx_instructions=tx_instructions,
         )
 
     @classmethod
     def _parse_vpn_session(cls, payload: Mapping[str, Any], *, context: str) -> VpnSession:
         record = cls._ensure_mapping(payload, context)
+        cls._validate_exact_fields(record, _VPN_SESSION_RESPONSE_FIELDS, context)
+        lease_secs = cls._require_vpn_unsigned_range(
+            record.get("lease_secs"),
+            f"{context}.lease_secs",
+            minimum=1,
+            maximum=_VPN_LEASE_SECONDS_MAX,
+        )
+        flow_label_bits = cls._require_vpn_unsigned_constant(
+            record.get("flow_label_bits"),
+            f"{context}.flow_label_bits",
+            24,
+        )
+        padding_budget_ms = cls._require_vpn_unsigned_range(
+            record.get("padding_budget_ms"),
+            f"{context}.padding_budget_ms",
+            minimum=1,
+            maximum=65535,
+        )
+        mtu_bytes = cls._require_vpn_unsigned_constant(
+            record.get("mtu_bytes"),
+            f"{context}.mtu_bytes",
+            1280,
+        )
         return VpnSession(
-            session_id=cls._normalize_hex_string(record.get("session_id"), context=f"{context}.session_id", expected_length=64),
+            session_id=cls._require_exact_lower_hex_string(
+                record.get("session_id"),
+                context=f"{context}.session_id",
+                expected_length=64,
+            ),
             account_id=cls._require_string(record.get("account_id"), f"{context}.account_id"),
-            exit_class=cls._require_string(record.get("exit_class"), f"{context}.exit_class"),
+            exit_class=cls._require_vpn_enum(
+                record.get("exit_class"),
+                _VPN_EXIT_CLASSES,
+                f"{context}.exit_class",
+            ),
             relay_endpoint=cls._require_string(record.get("relay_endpoint"), f"{context}.relay_endpoint"),
-            lease_secs=cls._coerce_unsigned(record.get("lease_secs"), f"{context}.lease_secs"),
-            expires_at_ms=cls._coerce_unsigned(record.get("expires_at_ms"), f"{context}.expires_at_ms"),
-            connected_at_ms=cls._coerce_unsigned(
+            lease_secs=lease_secs,
+            expires_at_ms=cls._require_vpn_uint64(record.get("expires_at_ms"), f"{context}.expires_at_ms"),
+            connected_at_ms=cls._require_vpn_uint64(
                 record.get("connected_at_ms"),
                 f"{context}.connected_at_ms",
             ),
             meter_family=cls._require_string(record.get("meter_family"), f"{context}.meter_family"),
-            quote_id=cls._normalize_hex_string(record.get("quote_id"), context=f"{context}.quote_id", expected_length=64),
+            quote_id=cls._require_exact_lower_hex_string(
+                record.get("quote_id"),
+                context=f"{context}.quote_id",
+                expected_length=64,
+            ),
             payment_reference=cls._require_string(
                 record.get("payment_reference"),
                 f"{context}.payment_reference",
             ),
-            payment_tx_hash=cls._normalize_hex_string(
+            payment_tx_hash=cls._require_exact_lower_hex_string(
                 record.get("payment_tx_hash"),
                 context=f"{context}.payment_tx_hash",
                 expected_length=64,
@@ -11806,66 +12096,88 @@ class ToriiClient:
                 record.get("operator_account_id"),
                 f"{context}.operator_account_id",
             ),
-            lease_fee_nanos=cls._coerce_unsigned(
-                record.get("lease_fee_nanos"),
-                f"{context}.lease_fee_nanos",
-            ),
-            flow_label_bits=cls._coerce_unsigned(record.get("flow_label_bits"), f"{context}.flow_label_bits"),
-            padding_budget_ms=cls._coerce_unsigned(
-                record.get("padding_budget_ms"),
-                f"{context}.padding_budget_ms",
-            ),
-            relay_tls_spki_sha256_hex=cls._coerce_optional_string(
+            lease_fee=cls._quantity(record.get("lease_fee"), f"{context}.lease_fee"),
+            flow_label_bits=flow_label_bits,
+            padding_budget_ms=padding_budget_ms,
+            relay_tls_spki_sha256_hex=cls._require_optional_exact_lower_hex_string(
                 record.get("relay_tls_spki_sha256_hex"),
                 context=f"{context}.relay_tls_spki_sha256_hex",
+                expected_length=64,
             ),
-            route_pushes=cls._parse_string_list(record.get("route_pushes"), context=f"{context}.route_pushes"),
-            excluded_routes=cls._parse_string_list(
+            route_pushes=cls._parse_vpn_string_list(record.get("route_pushes"), context=f"{context}.route_pushes"),
+            excluded_routes=cls._parse_vpn_string_list(
                 record.get("excluded_routes"),
                 context=f"{context}.excluded_routes",
             ),
-            dns_servers=cls._parse_string_list(record.get("dns_servers"), context=f"{context}.dns_servers"),
-            tunnel_addresses=cls._parse_string_list(
+            dns_servers=cls._parse_vpn_string_list(record.get("dns_servers"), context=f"{context}.dns_servers"),
+            tunnel_addresses=cls._parse_vpn_string_list(
                 record.get("tunnel_addresses"),
                 context=f"{context}.tunnel_addresses",
             ),
-            mtu_bytes=cls._coerce_unsigned(record.get("mtu_bytes"), f"{context}.mtu_bytes"),
-            helper_ticket_hex=cls._normalize_hex_string(
+            mtu_bytes=mtu_bytes,
+            helper_ticket_hex=cls._require_vpn_helper_ticket_hex(
                 record.get("helper_ticket_hex"),
                 context=f"{context}.helper_ticket_hex",
             ),
-            bytes_in=cls._coerce_unsigned(record.get("bytes_in"), f"{context}.bytes_in"),
-            bytes_out=cls._coerce_unsigned(record.get("bytes_out"), f"{context}.bytes_out"),
-            status=cls._require_string(record.get("status"), f"{context}.status"),
+            bytes_in=cls._require_vpn_uint64(record.get("bytes_in"), f"{context}.bytes_in"),
+            bytes_out=cls._require_vpn_uint64(record.get("bytes_out"), f"{context}.bytes_out"),
+            status=cls._require_vpn_enum(
+                record.get("status"),
+                _VPN_SESSION_STATUSES,
+                f"{context}.status",
+            ),
         )
 
     @classmethod
     def _parse_vpn_receipt(cls, payload: Mapping[str, Any], *, context: str) -> VpnReceipt:
         record = cls._ensure_mapping(payload, context)
+        cls._validate_exact_fields(record, _VPN_RECEIPT_RESPONSE_FIELDS, context)
+        tx_instructions = cls._parse_vpn_tx_instructions(
+            record.get("tx_instructions"),
+            context=f"{context}.tx_instructions",
+            maximum=1,
+        )
         return VpnReceipt(
-            session_id=cls._normalize_hex_string(record.get("session_id"), context=f"{context}.session_id", expected_length=64),
+            session_id=cls._require_exact_lower_hex_string(
+                record.get("session_id"),
+                context=f"{context}.session_id",
+                expected_length=64,
+            ),
             account_id=cls._require_string(record.get("account_id"), f"{context}.account_id"),
-            exit_class=cls._require_string(record.get("exit_class"), f"{context}.exit_class"),
+            exit_class=cls._require_vpn_enum(
+                record.get("exit_class"),
+                _VPN_EXIT_CLASSES,
+                f"{context}.exit_class",
+            ),
             relay_endpoint=cls._require_string(record.get("relay_endpoint"), f"{context}.relay_endpoint"),
             meter_family=cls._require_string(record.get("meter_family"), f"{context}.meter_family"),
-            connected_at_ms=cls._coerce_unsigned(
+            connected_at_ms=cls._require_vpn_uint64(
                 record.get("connected_at_ms"),
                 f"{context}.connected_at_ms",
             ),
-            disconnected_at_ms=cls._coerce_unsigned(
+            disconnected_at_ms=cls._require_vpn_uint64(
                 record.get("disconnected_at_ms"),
                 f"{context}.disconnected_at_ms",
             ),
-            duration_ms=cls._coerce_unsigned(record.get("duration_ms"), f"{context}.duration_ms"),
-            bytes_in=cls._coerce_unsigned(record.get("bytes_in"), f"{context}.bytes_in"),
-            bytes_out=cls._coerce_unsigned(record.get("bytes_out"), f"{context}.bytes_out"),
-            status=cls._require_string(record.get("status"), f"{context}.status"),
-            receipt_source=cls._require_string(
+            duration_ms=cls._require_vpn_uint64(record.get("duration_ms"), f"{context}.duration_ms"),
+            bytes_in=cls._require_vpn_uint64(record.get("bytes_in"), f"{context}.bytes_in"),
+            bytes_out=cls._require_vpn_uint64(record.get("bytes_out"), f"{context}.bytes_out"),
+            status=cls._require_vpn_enum(
+                record.get("status"),
+                _VPN_RECEIPT_STATUSES,
+                f"{context}.status",
+            ),
+            receipt_source=cls._require_vpn_enum(
                 record.get("receipt_source"),
+                _VPN_RECEIPT_SOURCES,
                 f"{context}.receipt_source",
             ),
-            quote_id=cls._normalize_hex_string(record.get("quote_id"), context=f"{context}.quote_id", expected_length=64),
-            payment_tx_hash=cls._normalize_hex_string(
+            quote_id=cls._require_exact_lower_hex_string(
+                record.get("quote_id"),
+                context=f"{context}.quote_id",
+                expected_length=64,
+            ),
+            payment_tx_hash=cls._require_exact_lower_hex_string(
                 record.get("payment_tx_hash"),
                 context=f"{context}.payment_tx_hash",
                 expected_length=64,
@@ -11879,19 +12191,13 @@ class ToriiClient:
                 record.get("operator_account_id"),
                 f"{context}.operator_account_id",
             ),
-            lease_fee_nanos=cls._coerce_unsigned(
-                record.get("lease_fee_nanos"),
-                f"{context}.lease_fee_nanos",
+            lease_fee=cls._quantity(record.get("lease_fee"), f"{context}.lease_fee"),
+            earned_fee=cls._quantity(record.get("earned_fee"), f"{context}.earned_fee"),
+            refunded_fee=cls._quantity(
+                record.get("refunded_fee"),
+                f"{context}.refunded_fee",
             ),
-            earned_fee_nanos=cls._coerce_unsigned(
-                record.get("earned_fee_nanos"),
-                f"{context}.earned_fee_nanos",
-            ),
-            refunded_fee_nanos=cls._coerce_unsigned(
-                record.get("refunded_fee_nanos"),
-                f"{context}.refunded_fee_nanos",
-            ),
-            lease_id_hex=cls._normalize_hex_string(
+            lease_id_hex=cls._require_exact_lower_hex_string(
                 record.get("lease_id_hex"),
                 context=f"{context}.lease_id_hex",
                 expected_length=64,
@@ -11900,10 +12206,7 @@ class ToriiClient:
                 record.get("settle_lease_instruction"),
                 context=f"{context}.settle_lease_instruction",
             ),
-            tx_instructions=cls._parse_vpn_tx_instructions(
-                record.get("tx_instructions"),
-                context=f"{context}.tx_instructions",
-            ),
+            tx_instructions=tx_instructions,
         )
 
     @classmethod
@@ -11914,17 +12217,24 @@ class ToriiClient:
         context: str,
     ) -> VpnReceiptListResponse:
         record = cls._ensure_mapping(payload, context)
-        items_payload = record.get("items", [])
-        if items_payload is None:
-            items_payload = []
+        cls._validate_exact_fields(record, _VPN_RECEIPT_LIST_RESPONSE_FIELDS, context)
+        items_payload = record.get("items")
         if not isinstance(items_payload, list):
             raise RuntimeError(f"{context}.items must be a list")
+        if len(items_payload) > 24:
+            raise RuntimeError(f"{context}.items must contain at most 24 receipts")
+        total = cls._require_vpn_unsigned_range(
+            record.get("total"),
+            f"{context}.total",
+            minimum=0,
+            maximum=24,
+        )
         return VpnReceiptListResponse(
             items=[
                 cls._parse_vpn_receipt(entry, context=f"{context}.items[{index}]")
                 for index, entry in enumerate(items_payload)
             ],
-            total=cls._coerce_unsigned(record.get("total"), f"{context}.total"),
+            total=total,
         )
 
     def _request(
@@ -12948,6 +13258,86 @@ class ToriiClient:
         if isinstance(payload, Mapping):
             return payload
         raise RuntimeError(f"{context} response must be a JSON object")
+
+    @staticmethod
+    def _reject_unknown_fields(
+        record: Mapping[str, Any],
+        allowed_fields: Iterable[str],
+        context: str,
+    ) -> None:
+        allowed = frozenset(allowed_fields)
+        extras = [str(key) for key in record if key not in allowed]
+        if extras:
+            raise RuntimeError(
+                f"{context} contains unsupported fields: {', '.join(sorted(extras))}"
+            )
+
+    @classmethod
+    def _validate_exact_fields(
+        cls,
+        record: Mapping[str, Any],
+        required_fields: Iterable[str],
+        context: str,
+    ) -> None:
+        required = frozenset(required_fields)
+        cls._reject_unknown_fields(record, required, context)
+        missing = [field for field in required if field not in record]
+        if missing:
+            raise RuntimeError(
+                f"{context} is missing required fields: {', '.join(sorted(missing))}"
+            )
+
+    @staticmethod
+    def _require_vpn_enum(value: Any, allowed: Iterable[str], context: str) -> str:
+        allowed_values = frozenset(allowed)
+        if not isinstance(value, str) or value not in allowed_values:
+            raise RuntimeError(
+                f"{context} must be one of: {', '.join(sorted(allowed_values))}"
+            )
+        return value
+
+    @classmethod
+    def _require_vpn_profile_exit_classes(cls, value: Any, context: str) -> List[str]:
+        if not isinstance(value, list):
+            raise RuntimeError(f"{context} must be a list")
+        exits = [
+            cls._require_vpn_enum(entry, _VPN_EXIT_CLASSES, f"{context}[{index}]")
+            for index, entry in enumerate(value)
+        ]
+        if len(exits) != 3 or len(set(exits)) != 3:
+            raise RuntimeError(f"{context} must contain exactly three unique exit classes")
+        return exits
+
+    @classmethod
+    def _require_vpn_unsigned_range(
+        cls,
+        value: Any,
+        context: str,
+        *,
+        minimum: int = 0,
+        maximum: Optional[int] = None,
+    ) -> int:
+        result = cls._require_vpn_uint64(value, context)
+        if result < minimum:
+            raise RuntimeError(f"{context} must be at least {minimum}")
+        if maximum is not None and result > maximum:
+            raise RuntimeError(f"{context} must be at most {maximum}")
+        return result
+
+    @classmethod
+    def _require_vpn_unsigned_constant(cls, value: Any, context: str, expected: int) -> int:
+        result = cls._require_vpn_uint64(value, context)
+        if result != expected:
+            raise RuntimeError(f"{context} must equal {expected}")
+        return result
+
+    @staticmethod
+    def _require_vpn_uint64(value: Any, context: str) -> int:
+        if type(value) is not int:
+            raise RuntimeError(f"{context} must be a JSON uint64 integer")
+        if value < 0 or value > _VPN_UINT64_MAX:
+            raise RuntimeError(f"{context} must be between 0 and {_VPN_UINT64_MAX}")
+        return value
 
     @staticmethod
     def _ensure_list(payload: Any, context: str) -> List[Any]:
@@ -14799,6 +15189,10 @@ class ToriiClient:
         return result
 
     @staticmethod
+    def _quantity(value: Any, context: str) -> str:
+        return _canonical_quantity(value, context)
+
+    @staticmethod
     def _require_hex_string(value: Any, context: str) -> str:
         if not isinstance(value, str) or not value:
             raise RuntimeError(f"{context} must be a non-empty hex string")
@@ -14834,6 +15228,85 @@ class ToriiClient:
         except ValueError as exc:
             raise RuntimeError(f"{context} must contain valid hexadecimal characters") from exc
         return normalized
+
+    @staticmethod
+    def _require_exact_lower_hex_string(
+        value: Any,
+        *,
+        context: str,
+        expected_length: int,
+    ) -> str:
+        if (
+            not isinstance(value, str)
+            or len(value) != expected_length
+            or re.fullmatch(r"[0-9a-f]+", value) is None
+        ):
+            raise RuntimeError(
+                f"{context} must be an exact lowercase {expected_length // 2}-byte hex string"
+            )
+        return value
+
+    @classmethod
+    def _normalize_vpn_canonical_hex_input(
+        cls,
+        value: Union[str, bytes, bytearray, memoryview],
+        *,
+        context: str,
+        expected_length: int,
+    ) -> str:
+        if isinstance(value, (bytes, bytearray, memoryview)):
+            return cls._normalize_hex_string(
+                value,
+                context=context,
+                expected_length=expected_length,
+            )
+        return cls._require_exact_lower_hex_string(
+            value,
+            context=context,
+            expected_length=expected_length,
+        )
+
+    @classmethod
+    def _require_optional_exact_lower_hex_string(
+        cls,
+        value: Any,
+        *,
+        context: str,
+        expected_length: int,
+    ) -> Optional[str]:
+        if value is None:
+            return None
+        return cls._require_exact_lower_hex_string(
+            value,
+            context=context,
+            expected_length=expected_length,
+        )
+
+    @staticmethod
+    def _require_exact_lower_even_hex_string(value: Any, *, context: str) -> str:
+        if (
+            not isinstance(value, str)
+            or not value
+            or len(value) % 2 != 0
+            or re.fullmatch(r"[0-9a-f]+", value) is None
+        ):
+            raise RuntimeError(
+                f"{context} must be an exact lowercase even-length hex string"
+            )
+        return value
+
+    @staticmethod
+    def _require_vpn_helper_ticket_hex(value: Any, *, context: str) -> str:
+        if (
+            not isinstance(value, str)
+            or len(value) != _VPN_HELPER_TICKET_HEX_LENGTH
+            or re.fullmatch(r"[0-9a-f]+", value) is None
+        ):
+            raise RuntimeError(
+                f"{context} must contain exactly {_VPN_HELPER_TICKET_HEX_LENGTH} lowercase "
+                f"hexadecimal characters ({_VPN_HELPER_TICKET_BYTES} bytes)"
+            )
+        return value
 
     @staticmethod
     def _require_exact_inline_hex_string(value: Any, *, context: str) -> None:

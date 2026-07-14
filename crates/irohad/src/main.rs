@@ -122,6 +122,9 @@ use tokio::{
 };
 
 const NODE_RUNTIME_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
+/// Build-time source identity embedded for release artifact validation.
+const BUILD_SOURCE_ID: Option<&str> = option_env!("IROHA_GIT_COMMIT_HASH");
+
 fn startup_trace_enabled() -> bool {
     env::var_os("IROHA_STARTUP_TRACE").is_some()
 }
@@ -8966,6 +8969,7 @@ fn resolve_build_line_from_env(env_value: Option<String>, bin_name: &str) -> Bui
 }
 
 fn main() {
+    let _ = std::hint::black_box(BUILD_SOURCE_ID);
     let build_line = resolve_build_line();
     if let Err(report) = run_main(build_line) {
         eprintln!("{report:?}");

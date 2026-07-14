@@ -1045,15 +1045,15 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
         }
     }
 
-    func testABI19InventoryRequiresExplicitFailClosedCapabilities() {
+    func testABI20InventoryRequiresExplicitFailClosedV4Capabilities() {
         let expectedProofSymbols = [
-            "connect_norito_kagemusha_recursive_spend_init_v2",
-            "connect_norito_kagemusha_recursive_spend_append_v2",
-            "connect_norito_kagemusha_recursive_spend_verify_v2",
-            "connect_norito_kagemusha_recursive_spend_redeem_v2",
+            "connect_norito_kagemusha_recursive_spend_init_v4",
+            "connect_norito_kagemusha_recursive_spend_append_v4",
+            "connect_norito_kagemusha_recursive_spend_verify_v4",
+            "connect_norito_kagemusha_recursive_spend_redeem_v4",
         ]
         let expectedProtocolSymbols = [
-            "connect_norito_kagemusha_recursive_spend_capabilities_v1",
+            "connect_norito_kagemusha_recursive_spend_capabilities_v4",
             "connect_norito_kagemusha_topup_finality_verify_v2",
             "connect_norito_kagemusha_topup_shield_build_unsigned_v2",
             "connect_norito_kagemusha_recursive_spend_topup_v2",
@@ -1076,19 +1076,20 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
             "connect_norito_kagemusha_recursive_spend_peer_payment_validate_v2",
             "connect_norito_kagemusha_recursive_spend_bundle_summary_v2",
             "connect_norito_kagemusha_recursive_spend_build_split_intent_v2",
-            "connect_norito_kagemusha_recursive_spend_artifact_begin_v3",
-            "connect_norito_kagemusha_recursive_spend_artifact_write_v3",
-            "connect_norito_kagemusha_recursive_spend_artifact_finalize_v3",
-            "connect_norito_kagemusha_recursive_spend_artifact_cancel_v3",
-            "connect_norito_kagemusha_recursive_spend_artifact_set_install_v3",
-            "connect_norito_kagemusha_recursive_spend_artifact_set_is_installed_v3",
-            "connect_norito_kagemusha_recursive_spend_artifact_set_uninstall_v3",
+            "connect_norito_kagemusha_recursive_spend_artifact_begin_v4",
+            "connect_norito_kagemusha_recursive_spend_artifact_write_v4",
+            "connect_norito_kagemusha_recursive_spend_artifact_finalize_v4",
+            "connect_norito_kagemusha_recursive_spend_artifact_cancel_v4",
+            "connect_norito_kagemusha_recursive_spend_artifact_set_install_v4",
+            "connect_norito_kagemusha_recursive_spend_artifact_set_is_installed_v4",
+            "connect_norito_kagemusha_recursive_spend_artifact_set_uninstall_v4",
         ]
 
-        XCTAssertEqual(KagemushaRecursiveSpend.requiredNativeBridgeAbiVersion, 19)
+        XCTAssertEqual(KagemushaRecursiveSpend.legacyNativeBridgeAbiVersionV3, 19)
+        XCTAssertEqual(KagemushaRecursiveSpend.requiredNativeBridgeAbiVersion, 20)
         XCTAssertEqual(
             KagemushaRecursiveSpendError.nativeBridgeUnavailable.errorDescription,
-            "The ABI-19 Kagemusha recursive spend bridge is unavailable."
+            "The ABI-20 Kagemusha recursive spend bridge is unavailable."
         )
         XCTAssertEqual(
             KagemushaRecursiveSpendError.finalityTrustUnavailable.errorDescription,
@@ -1097,6 +1098,10 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
         XCTAssertEqual(
             KagemushaRecursiveSpend.artifactManifestSchema,
             "kagemusha.offline.recursive_spend.artifact_manifest.v3"
+        )
+        XCTAssertEqual(
+            KagemushaRecursiveSpend.artifactManifestSchemaV4,
+            "kagemusha.offline.recursive_spend.artifact_manifest.v4"
         )
         XCTAssertFalse(KagemushaRecursiveSpend.isProductionAvailable)
         XCTAssertEqual(
@@ -1108,6 +1113,28 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
             "kagemusha-pasta-cycle-poseidon-v1"
         )
         XCTAssertEqual(KagemushaRecursiveSpend.pastaCycleProofEnvelopeVersion, 1)
+        XCTAssertEqual(KagemushaRecursiveSpend.pastaCycleProofEnvelopeVersionV4, 4)
+        XCTAssertEqual(KagemushaRecursiveSpend.localWitnessVersionV4, 4)
+        XCTAssertEqual(KagemushaRecursiveSpend.artifactRolesV4.count, 10)
+        XCTAssertEqual(
+            KagemushaRecursiveSpend.artifactRolesV4,
+            [
+                "step_eq_parameters",
+                "step_eq_circuit_params",
+                "step_eq_proving_key",
+                "step_eq_verifying_key",
+                "step_eq_bootstrap_witness",
+                "step_ep_parameters",
+                "step_ep_circuit_params",
+                "step_ep_proving_key",
+                "step_ep_verifying_key",
+                "step_ep_bootstrap_witness",
+            ]
+        )
+        XCTAssertEqual(
+            KagemushaRecursiveSpendArtifactRoleV4.allCases.map(\.fileName),
+            KagemushaRecursiveSpend.artifactFileNamesV4
+        )
         XCTAssertEqual(KagemushaRecursiveSpend.stateBoundaryVersion, 1)
         XCTAssertEqual(KagemushaRecursiveSpend.releaseMaximumProofBytes, 21_764)
         XCTAssertEqual(
@@ -1134,6 +1161,14 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
         XCTAssertEqual(
             NativeBridgeError.fromStatus(-314),
             .kagemushaRecursiveSpendV2Unavailable
+        )
+        XCTAssertEqual(
+            NativeBridgeError.fromStatus(-316),
+            .kagemushaRecursiveSpendV4Unavailable
+        )
+        XCTAssertEqual(
+            NativeBridgeError.fromStatus(-317),
+            .kagemushaRecursiveSpendV4Artifact
         )
         XCTAssertEqual(
             KagemushaRecursiveSpend.splitIntentWireName,
@@ -1313,6 +1348,85 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
         ))
     }
 
+    func testNativeCapabilitiesV4RequireExactABI20TenRoleContract() throws {
+        let gates = [
+            "authenticated-v4-artifact-installation",
+            "independent-cryptographic-review",
+            "physical-device-benchmark",
+            "production-recursive-prover-linkage",
+        ]
+        let maximumProofBytes: UInt32 = 4 * 1_024 * 1_024
+        let archive = KagemushaRecursiveSpend.frameArchive(
+            schema: KagemushaRecursiveSpend.nativeCapabilitiesWireNameV4,
+            payload: fields([
+                uint32(KagemushaRecursiveSpend.requiredNativeBridgeAbiVersion),
+                CompactNorito.encodeString(KagemushaRecursiveSpend.artifactManifestSchemaV4),
+                CompactNorito.encodeString(KagemushaRecursiveSpend.pastaCycleBackendV4),
+                CompactNorito.encodeString(KagemushaRecursiveSpend.pastaCycleTranscriptV4),
+                uint16(KagemushaRecursiveSpend.pastaCycleProofEnvelopeVersionV4),
+                CompactNorito.encodeString(KagemushaRecursiveSpend.stepEqCircuitIDV4),
+                CompactNorito.encodeString(KagemushaRecursiveSpend.stepEpCircuitIDV4),
+                sequence(KagemushaRecursiveSpend.artifactRolesV4.map(
+                    CompactNorito.encodeString
+                )),
+                uint32(maximumProofBytes),
+                Data([0]),
+                sequence(gates.map(CompactNorito.encodeString)),
+            ])
+        )
+        let capabilities = try KagemushaRecursiveSpendCodecs
+            .decodeNativeCapabilitiesV4(archive)
+        XCTAssertEqual(capabilities.bridgeABIVersion, 20)
+        XCTAssertEqual(capabilities.artifactRoles, KagemushaRecursiveSpend.artifactRolesV4)
+        XCTAssertEqual(capabilities.maxProofBytes, maximumProofBytes)
+        XCTAssertEqual(capabilities.missingGates, gates)
+        XCTAssertFalse(capabilities.proofBackendAvailable)
+
+        XCTAssertThrowsError(try KagemushaRecursiveSpendNativeCapabilitiesV4(
+            bridgeABIVersion: 19,
+            artifactManifestSchema: KagemushaRecursiveSpend.artifactManifestSchemaV4,
+            proofBackend: KagemushaRecursiveSpend.pastaCycleBackendV4,
+            transcriptProfile: KagemushaRecursiveSpend.pastaCycleTranscriptV4,
+            proofEnvelopeVersion: KagemushaRecursiveSpend.pastaCycleProofEnvelopeVersionV4,
+            stepEqCircuitID: KagemushaRecursiveSpend.stepEqCircuitIDV4,
+            stepEpCircuitID: KagemushaRecursiveSpend.stepEpCircuitIDV4,
+            artifactRoles: KagemushaRecursiveSpend.artifactRolesV4,
+            maxProofBytes: maximumProofBytes,
+            proofBackendAvailable: false,
+            missingGates: gates
+        ))
+
+        var missingRole = KagemushaRecursiveSpend.artifactRolesV4
+        missingRole.removeLast()
+        XCTAssertThrowsError(try KagemushaRecursiveSpendNativeCapabilitiesV4(
+            bridgeABIVersion: 20,
+            artifactManifestSchema: KagemushaRecursiveSpend.artifactManifestSchemaV4,
+            proofBackend: KagemushaRecursiveSpend.pastaCycleBackendV4,
+            transcriptProfile: KagemushaRecursiveSpend.pastaCycleTranscriptV4,
+            proofEnvelopeVersion: KagemushaRecursiveSpend.pastaCycleProofEnvelopeVersionV4,
+            stepEqCircuitID: KagemushaRecursiveSpend.stepEqCircuitIDV4,
+            stepEpCircuitID: KagemushaRecursiveSpend.stepEpCircuitIDV4,
+            artifactRoles: missingRole,
+            maxProofBytes: maximumProofBytes,
+            proofBackendAvailable: false,
+            missingGates: gates
+        ))
+
+        XCTAssertThrowsError(try KagemushaRecursiveSpendNativeCapabilitiesV4(
+            bridgeABIVersion: 20,
+            artifactManifestSchema: KagemushaRecursiveSpend.artifactManifestSchemaV4,
+            proofBackend: KagemushaRecursiveSpend.pastaCycleBackendV4,
+            transcriptProfile: KagemushaRecursiveSpend.pastaCycleTranscriptV4,
+            proofEnvelopeVersion: KagemushaRecursiveSpend.pastaCycleProofEnvelopeVersionV4,
+            stepEqCircuitID: KagemushaRecursiveSpend.stepEqCircuitIDV4,
+            stepEpCircuitID: KagemushaRecursiveSpend.stepEpCircuitIDV4,
+            artifactRoles: KagemushaRecursiveSpend.artifactRolesV4,
+            maxProofBytes: maximumProofBytes,
+            proofBackendAvailable: false,
+            missingGates: Array(gates.reversed())
+        ))
+    }
+
     func testTopUpFinalityOpaqueTypesPinExactNoritoSchemasAndCopyBytes() throws {
         let proofArchive = framedArchive(
             typeName: KagemushaRecursiveSpend.topUpFinalityProofWireName
@@ -1377,7 +1491,7 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
         ))
     }
 
-    func testV3ArtifactManifestArchivePinsSchemaAndDigest() throws {
+    func testV4ArtifactManifestArchivePinsSchemaAndDigest() throws {
         let manifestArchive = framedArchive(
             typeName: KagemushaRecursiveSpend.artifactManifestWireName
         )
@@ -1393,7 +1507,7 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
         XCTAssertEqual(manifest.sha256, manifestSHA256)
         XCTAssertEqual(
             KagemushaRecursiveSpend.artifactManifestWireName,
-            "iroha_data_model::offline::model::KagemushaRecursiveSpendArtifactManifestV3"
+            "iroha_data_model::offline::model::KagemushaRecursiveSpendArtifactManifestV4"
         )
         XCTAssertThrowsError(try KagemushaRecursiveSpendArtifactManifestArchive(
             noritoArchive: nonManifestArchive,
@@ -1405,7 +1519,7 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
         ))
     }
 
-    func testV3ArtifactInstallSessionValidatesLocallyAndCannotReopenAfterCancel() throws {
+    func testV4ArtifactInstallSessionValidatesLocallyAndCannotReopenAfterCancel() throws {
         let manifestArchive = framedArchive(
             typeName: KagemushaRecursiveSpend.artifactManifestWireName
         )
@@ -1413,13 +1527,23 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
             noritoArchive: manifestArchive,
             expectedSHA256: Data(SHA256.hash(data: manifestArchive))
         )
-        let session = try KagemushaRecursiveSpendArtifactInstallSessionV3(
+        let session = try KagemushaRecursiveSpendArtifactInstallSessionV4(
             manifest: manifest,
-            binding: artifactBinding(manifestSHA256: manifest.sha256)
+            binding: KagemushaRecursiveSpendArtifactBindingV4(
+                generation: "generation-v4-test",
+                manifestSHA256: manifest.sha256
+            ),
+            authentication: try KagemushaRecursiveSpendReleaseAuthenticationV4(
+                trustedPolicyNorito: Data([0x01]),
+                releaseAttestationNorito: Data([0x02]),
+                benchmarkEvidence: Data([0x03]),
+                cryptographicReview: Data([0x04])
+            )
         )
         XCTAssertEqual(session.manifest, manifest)
 
         XCTAssertThrowsError(try session.beginArtifact(
+            role: .stepEqParameters,
             expectedArtifactSHA256: Data(repeating: 0, count: 32)
         )) { error in
             XCTAssertEqual(
@@ -1431,6 +1555,7 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
         // An empty pending session cancels without resolving native symbols.
         try session.cancel()
         XCTAssertThrowsError(try session.beginArtifact(
+            role: .stepEqParameters,
             expectedArtifactSHA256: fixed32(0xA5)
         )) { error in
             XCTAssertEqual(
@@ -1438,6 +1563,52 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
                 .invalidField("artifactSet.state")
             )
         }
+    }
+
+    func testV3ArtifactManifestCarrierRejectsV4Archive() throws {
+        let v3Archive = framedArchive(
+            typeName: KagemushaRecursiveSpend.artifactManifestWireNameV3
+        )
+        let v4Archive = framedArchive(
+            typeName: KagemushaRecursiveSpend.artifactManifestWireName
+        )
+        XCTAssertNoThrow(try KagemushaRecursiveSpendArtifactManifestArchiveV3(
+            noritoArchive: v3Archive,
+            expectedSHA256: Data(SHA256.hash(data: v3Archive))
+        ))
+        XCTAssertThrowsError(try KagemushaRecursiveSpendArtifactManifestArchiveV3(
+            noritoArchive: v4Archive,
+            expectedSHA256: Data(SHA256.hash(data: v4Archive))
+        ))
+        XCTAssertThrowsError(try KagemushaRecursiveSpendArtifactManifestArchive(
+            noritoArchive: v3Archive,
+            expectedSHA256: Data(SHA256.hash(data: v3Archive))
+        ))
+    }
+
+    func testV4ReleaseAuthenticationIsMandatoryAndBounded() throws {
+        XCTAssertNoThrow(try KagemushaRecursiveSpendReleaseAuthenticationV4(
+            trustedPolicyNorito: Data([0x01]),
+            releaseAttestationNorito: Data([0x02]),
+            benchmarkEvidence: Data([0x03]),
+            cryptographicReview: Data([0x04])
+        ))
+        for field in 0..<4 {
+            var values = [Data([0x01]), Data([0x02]), Data([0x03]), Data([0x04])]
+            values[field] = Data()
+            XCTAssertThrowsError(try KagemushaRecursiveSpendReleaseAuthenticationV4(
+                trustedPolicyNorito: values[0],
+                releaseAttestationNorito: values[1],
+                benchmarkEvidence: values[2],
+                cryptographicReview: values[3]
+            ))
+        }
+        XCTAssertThrowsError(try KagemushaRecursiveSpendReleaseAuthenticationV4(
+            trustedPolicyNorito: Data(repeating: 0x01, count: 64 * 1_024 + 1),
+            releaseAttestationNorito: Data([0x02]),
+            benchmarkEvidence: Data([0x03]),
+            cryptographicReview: Data([0x04])
+        ))
     }
 
     func testTopUpAnchorRejectsCrossContextAndNonCanonicalBindings() throws {
@@ -1528,6 +1699,164 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
         XCTAssertEqual(request.topUpFinalityRosterArtifact, finalityRoster)
 
         XCTAssertEqual(request.artifactBinding, anchor.artifactBinding)
+    }
+
+    func testInitLocalCarriersUseDistinctV3AndV4Schemas() throws {
+        let currentNote = try note(seed: 0xD0, amount: "1")
+        let shield = try shieldFixture()
+        let anchor = try canonicalTopUpAnchor(
+            currentNote: currentNote,
+            shield: shield
+        )
+        let publicRequest = try KagemushaRecursiveSpendInitRequest(
+            topUpAnchor: anchor,
+            topUpFinalityProof: KagemushaTopUpFinalityProofArchive(
+                noritoArchive: framedArchive(
+                    typeName: KagemushaRecursiveSpend.topUpFinalityProofWireName
+                )
+            ),
+            topUpFinalityRosterArtifact: KagemushaTopUpFinalityRosterArtifactArchive(
+                noritoArchive: framedArchive(
+                    typeName: KagemushaRecursiveSpend.topUpFinalityRosterArtifactWireName
+                )
+            )
+        )
+        let local = try KagemushaRecursiveSpendInitLocalRequest(
+            request: publicRequest,
+            opening: KagemushaNoteOpening(
+                spendKey: fixed32(0x91),
+                rho: fixed32(0x92),
+                diversifier: fixed32(0x93)
+            ),
+            outputMembershipPaths: outputMembershipPaths(
+                initialRoot: anchor.initialRoot,
+                finalRoot: anchor.finalizedRoot,
+                recipientLeafIndex: anchor.shieldLeafIndex
+            )
+        )
+
+        let v3 = try local.noritoEncoded()
+        let oldMembership = local.outputMembershipPaths
+        let oldRecipient = try XCTUnwrap(oldMembership.recipient)
+        let membershipV4 = try KagemushaOutputMembershipPathsV4(
+            initialRoot: oldMembership.initialRoot,
+            finalRoot: oldMembership.finalRoot,
+            recipient: KagemushaOutputMembershipLeafPathsV4(
+                leafIndex: oldRecipient.leafIndex,
+                updatePath: oldRecipient.updatePath,
+                membershipPath: oldRecipient.membershipPath
+            ),
+            change: nil,
+            dummyLeafIndex: oldMembership.dummyLeafIndex,
+            dummyPath: oldMembership.dummyPath
+        )
+        let requestV4 = KagemushaRecursiveSpendInitRequestV4(
+            topUpAnchor: try KagemushaRecursiveSpendTopUpAnchorV4(
+                noritoArchive: framedArchive(
+                    typeName: KagemushaRecursiveSpend.topUpAnchorWireNameV4
+                )
+            ),
+            topUpFinalityProof: publicRequest.topUpFinalityProof,
+            topUpFinalityRosterArtifact: publicRequest.topUpFinalityRosterArtifact,
+            artifactBinding: try KagemushaRecursiveSpendArtifactBindingV4(
+                generation: "swift-v4-test",
+                manifestSHA256: fixed32(0xA8)
+            )
+        )
+        let localV4 = try KagemushaRecursiveSpendInitLocalRequestV4(
+            request: requestV4,
+            opening: local.opening,
+            outputMembershipPaths: membershipV4
+        )
+        let v4 = try localV4.noritoEncoded()
+        let v4Frame = try XCTUnwrap(noritoDecodeFrame(v4))
+        let v3Frame = try XCTUnwrap(noritoDecodeFrame(v3))
+        XCTAssertEqual(
+            v4Frame.header.schema,
+            noritoSchemaHash(forTypeName: KagemushaRecursiveSpend.initLocalRequestWireNameV4)
+        )
+        XCTAssertEqual(
+            v3Frame.header.schema,
+            noritoSchemaHash(forTypeName: KagemushaRecursiveSpend.initLocalRequestWireName)
+        )
+        XCTAssertNotEqual(v4Frame.header.schema, v3Frame.header.schema)
+
+        var v4Reader = CanonicalNoritoReader(data: v4Frame.payload)
+        var v4Version = CanonicalNoritoReader(data: try v4Reader.readCompactField())
+        XCTAssertEqual(try v4Version.readUInt16LE(), 4)
+        XCTAssertEqual(v4Version.remaining(), 0)
+        XCTAssertEqual(
+            try v4Reader.readCompactField(),
+            try XCTUnwrap(noritoDecodeFrame(requestV4.noritoEncoded())).payload
+        )
+
+        var v3Reader = CanonicalNoritoReader(data: v3Frame.payload)
+        var v3Version = CanonicalNoritoReader(data: try v3Reader.readCompactField())
+        XCTAssertEqual(try v3Version.readUInt16LE(), 3)
+        XCTAssertEqual(v3Version.remaining(), 0)
+        XCTAssertThrowsError(try KagemushaRecursiveSpend.requireArchive(
+            v3,
+            schema: KagemushaRecursiveSpend.initLocalRequestWireNameV4,
+            field: "initLocalRequestV4"
+        ))
+    }
+
+    func testV4OpaqueCarriersRejectFrozenSchemas() throws {
+        XCTAssertNoThrow(try KagemushaRecursiveSpendBundleV4(
+            noritoArchive: framedArchive(
+                typeName: KagemushaRecursiveSpend.bundleWireNameV4
+            )
+        ))
+        XCTAssertThrowsError(try KagemushaRecursiveSpendBundleV4(
+            noritoArchive: framedArchive(
+                typeName: KagemushaRecursiveSpend.bundleWireName
+            )
+        ))
+
+        for (v4Schema, frozenSchema, construct) in [
+            (
+                KagemushaRecursiveSpend.initResultWireNameV4,
+                KagemushaRecursiveSpend.initResultWireName,
+                { _ = try KagemushaRecursiveSpendInitResultV4(noritoArchive: $0) }
+            ),
+            (
+                KagemushaRecursiveSpend.splitResultWireNameV4,
+                KagemushaRecursiveSpend.splitResultWireName,
+                { _ = try KagemushaRecursiveSpendSplitResultV4(noritoArchive: $0) }
+            ),
+            (
+                KagemushaRecursiveSpend.verifyResultWireNameV4,
+                KagemushaRecursiveSpend.verifyResultWireName,
+                { _ = try KagemushaRecursiveSpendVerifyResultV4(noritoArchive: $0) }
+            ),
+            (
+                KagemushaRecursiveSpend.redeemBuildResultWireNameV4,
+                KagemushaRecursiveSpend.redeemBuildResultWireName,
+                { _ = try KagemushaRecursiveSpendRedeemBuildResultV4(noritoArchive: $0) }
+            ),
+        ] {
+            XCTAssertNoThrow(try construct(framedArchive(typeName: v4Schema)))
+            XCTAssertThrowsError(try construct(framedArchive(typeName: frozenSchema)))
+        }
+
+        let bindingV4 = try KagemushaRecursiveSpendArtifactBindingV4(
+            generation: "swift-v4-binding",
+            manifestSHA256: fixed32(0xB8)
+        )
+        let bindingV3 = try artifactBinding(generation: "swift-v3-binding")
+        let v4Frame = try XCTUnwrap(noritoDecodeFrame(bindingV4.noritoEncoded()))
+        let v3Frame = try XCTUnwrap(noritoDecodeFrame(
+            KagemushaRecursiveSpendCodecs.encodeArtifactBinding(bindingV3)
+        ))
+        XCTAssertEqual(
+            v4Frame.header.schema,
+            noritoSchemaHash(forTypeName: KagemushaRecursiveSpend.artifactBindingWireNameV4)
+        )
+        XCTAssertEqual(
+            v3Frame.header.schema,
+            noritoSchemaHash(forTypeName: KagemushaRecursiveSpend.artifactBindingWireName)
+        )
+        XCTAssertNotEqual(v4Frame.header.schema, v3Frame.header.schema)
     }
 
     func testArtifactBindingRejectsMalformedAndGenerationSubstitution() throws {
@@ -2228,6 +2557,52 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
                 siblings: (0..<16).map { fixed32(UInt8($0 + 33)) },
                 directions: dummyDirections,
                 root: root
+            )
+        )
+    }
+
+    private func outputMembershipPaths(
+        initialRoot: Data,
+        finalRoot: Data,
+        recipientLeafIndex: UInt32
+    ) throws -> KagemushaOutputMembershipPaths {
+        func path(
+            leafIndex: UInt32,
+            root: Data,
+            siblingSeed: UInt8
+        ) throws -> PrivacyConfidentialMerklePathWitnessV2 {
+            try PrivacyConfidentialMerklePathWitnessV2(
+                siblings: (0..<16).map { fixed32(siblingSeed &+ UInt8($0)) },
+                directions: Data((0..<16).map {
+                    UInt8((UInt64(leafIndex) >> UInt64($0)) & 1)
+                }),
+                root: root
+            )
+        }
+        let dummyLeafIndex: UInt32 = recipientLeafIndex == 0 ? 1 : 0
+        let recipient = try KagemushaOutputMembershipLeafPaths(
+            leafIndex: recipientLeafIndex,
+            updatePath: try path(
+                leafIndex: recipientLeafIndex,
+                root: initialRoot,
+                siblingSeed: 0x31
+            ),
+            membershipPath: try path(
+                leafIndex: recipientLeafIndex,
+                root: finalRoot,
+                siblingSeed: 0x51
+            )
+        )
+        return try KagemushaOutputMembershipPaths(
+            initialRoot: initialRoot,
+            finalRoot: finalRoot,
+            recipient: recipient,
+            change: nil,
+            dummyLeafIndex: dummyLeafIndex,
+            dummyPath: try path(
+                leafIndex: dummyLeafIndex,
+                root: finalRoot,
+                siblingSeed: 0x71
             )
         )
     }

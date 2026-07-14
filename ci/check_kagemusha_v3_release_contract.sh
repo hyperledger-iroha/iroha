@@ -23,6 +23,11 @@ def require(relative: str, text: str, *needles: str) -> None:
         if needle not in text:
             errors.append(f"{relative}: missing {needle!r}")
 
+def forbid(relative: str, text: str, *needles: str) -> None:
+    for needle in needles:
+        if needle in text:
+            errors.append(f"{relative}: retired or unauthenticated surface remains: {needle!r}")
+
 model_path = "crates/iroha_data_model/src/offline/mod.rs"
 packager_path = "crates/iroha_core/src/bin/kagemusha_recursive_spend_v3_bundle.rs"
 bridge_path = "crates/connect_norito_bridge/src/lib.rs"
@@ -40,6 +45,8 @@ require(
     "KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3: u32 = 19",
     'KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V3: &str =\n    "kagemusha.offline.recursive_spend.artifact_manifest.v3"',
     'KAGEMUSHA_TOPUP_FINALITY_ROSTER_FILE_NAME_V2: &str = "topup-finality-roster.norito"',
+    "pub source_tree_sha256: [u8; 32]",
+    "pub source_repo_dirty: bool",
 )
 
 artifact_constants = {
@@ -80,6 +87,8 @@ require(
     packager_path,
     packager,
     'required(options, "topup-finality-roster")',
+    'parse_digest(options, "source-tree-sha256")',
+    'parse_bool(options, "source-repo-dirty")',
     "KAGEMUSHA_TOPUP_FINALITY_ROSTER_FILE_NAME_V2",
     "KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_PURPOSE_V2",
 )
@@ -99,6 +108,34 @@ release_symbols = (
 for symbol in release_symbols:
     require(bridge_path, bridge, symbol)
     require(header_path, header, symbol)
+
+require(
+    bridge_path,
+    bridge,
+    "trusted_policy_norito_ptr: *const c_uchar",
+    "release_attestation_norito_ptr: *const c_uchar",
+    "benchmark_evidence_ptr: *const c_uchar",
+    "cryptographic_review_ptr: *const c_uchar",
+    "authenticated_artifact_install_rejects_release_material_substitution_atomically",
+)
+require(
+    header_path,
+    header,
+    "const uint8_t* trusted_policy_norito_ptr",
+    "const uint8_t* release_attestation_norito_ptr",
+    "const uint8_t* benchmark_evidence_ptr",
+    "const uint8_t* cryptographic_review_ptr",
+)
+forbid(
+    bridge_path,
+    bridge,
+    "connect_norito_kagemusha_recursive_spend_artifact_set_install_authenticated_v3",
+)
+forbid(
+    header_path,
+    header,
+    "connect_norito_kagemusha_recursive_spend_artifact_set_install_authenticated_v3",
+)
 
 require(
     build_path,
@@ -127,6 +164,42 @@ for relative in (
     )
     for file_name in artifact_constants.values():
         require(relative, text, file_name)
+
+swift_path = "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendV2.swift"
+swift_native_path = "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendV2Native.swift"
+swift = read(swift_path)
+swift_native = read(swift_native_path)
+require(
+    swift_path,
+    swift,
+    "KagemushaRecursiveSpendReleaseAuthenticationV3",
+    "authentication: KagemushaRecursiveSpendReleaseAuthenticationV3",
+    "trustedPolicyArchive: authentication.trustedPolicyNorito",
+    "cryptographicReview: authentication.cryptographicReview",
+)
+require(
+    swift_native_path,
+    swift_native,
+    "trustedPolicyArchive: Data",
+    "releaseAttestationArchive: Data",
+    "benchmarkEvidence: Data",
+    "cryptographicReview: Data",
+)
+
+for relative in (
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProver.java",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt",
+):
+    text = read(relative)
+    require(
+        relative,
+        text,
+        "ReleaseAuthentication",
+        "trustedPolicyNorito",
+        "releaseAttestationNorito",
+        "benchmarkEvidence",
+        "cryptographicReview",
+    )
 
 if errors:
     print("Kagemusha V3 release contract failed:", file=sys.stderr)

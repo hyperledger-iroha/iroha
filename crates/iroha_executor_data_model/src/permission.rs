@@ -571,12 +571,59 @@ pub mod nexus {
     }
 
     permission! {
+        /// Permission to publish, replace, revoke, or expire one exact UAID manifest.
+        #[derive(Copy)]
+        pub struct CanPublishSpaceDirectoryManifestForUaid {
+            /// Dataspace identifier governed by the manifest.
+            pub dataspace: DataSpaceId,
+            /// Exact universal account identifier governed by this permission.
+            pub uaid: iroha_data_model::nexus::UniversalAccountId,
+        }
+    }
+
+    permission! {
+        /// Permission to manage manifests for accounts bound to one exact account-alias domain.
+        pub struct CanPublishSpaceDirectoryManifestForAccountDomain {
+            /// Dataspace identifier governed by the manifest.
+            pub dataspace: DataSpaceId,
+            /// Exact account-alias domain whose bound accounts may be managed.
+            pub domain: DomainId,
+        }
+    }
+
+    permission! {
         /// Permission to charge Nexus fees to a named policy owned by the sponsor account.
         pub struct CanUseFeeSponsor {
             /// Sponsor account that may be debited for fees.
             pub sponsor: AccountId,
             /// Sponsor-local policy name that must allow the transaction.
             pub policy: Name,
+        }
+    }
+
+    permission! {
+        /// Permission for one exact account to charge a sponsor policy.
+        pub struct CanUseFeeSponsorForAccount {
+            /// Sponsor account that may be debited for fees.
+            pub sponsor: AccountId,
+            /// Sponsor-local policy name that must allow the transaction.
+            pub policy: Name,
+            /// Exact beneficiary account that may hold and exercise this permission.
+            pub beneficiary: AccountId,
+            /// Exact account-alias domain used to authorize enrollment.
+            pub domain: DomainId,
+        }
+    }
+
+    permission! {
+        /// Permission for a domain registrar to enroll its accounts in one sponsor policy.
+        pub struct CanEnrollFeeSponsorPolicyForAccountDomain {
+            /// Sponsor account that may be debited for fees.
+            pub sponsor: AccountId,
+            /// Sponsor-local policy name whose enrollment may be delegated.
+            pub policy: Name,
+            /// Exact account-alias domain whose accounts may be enrolled.
+            pub domain: DomainId,
         }
     }
 

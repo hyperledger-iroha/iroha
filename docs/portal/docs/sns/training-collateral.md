@@ -74,7 +74,7 @@ description: Curriculum, localization workflow, and annex evidence capture requi
 |-------|--------|---------|-------|
 | 2026‑03 | Post KPI review | Attendance %, annex digest logged | `.sora` + `.nexus` cohorts |
 | 2026‑06 | Pre `.dao` GA | Finance readiness ≥90 % | Include policy refresh |
-| 2026‑09 | Expansion | Dispute drill <20 min, annex SLA ≤2 days | Align with SN-7 incentives |
+| 2026‑09 | Expansion | Dispute drill under 20 min, annex SLA ≤2 days | Align with SN-7 incentives |
 
 Capture anonymous feedback in `docs/source/sns/reports/sns_training_feedback.md`
 so subsequent cohorts can improve localization and labs.

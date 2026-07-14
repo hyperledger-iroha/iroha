@@ -330,37 +330,96 @@ pub mod isi {
         })
     }
 
-    fn account_alias_is_open_retail_namespace(
-        label: &AccountAlias,
-        catalog: &DataSpaceCatalog,
-    ) -> bool {
-        let Some(dataspace_alias) = catalog
-            .by_id(label.dataspace)
-            .map(|entry| entry.alias.as_str())
-        else {
-            return false;
-        };
-        let domain_alias = label.domain.as_ref().map(|domain| domain.name().as_ref());
-        matches!(
-            (dataspace_alias, domain_alias),
-            ("paynet", None) | ("paynet", Some("hbl" | "ubl")) | ("cbuae", None)
-        )
-    }
-
-    fn ensure_account_alias_lease_unless_open_retail_namespace(
+    fn ensure_account_alias_lease(
         state_transaction: &mut StateTransaction<'_, '_>,
-        authority: &AccountId,
+        owner: &AccountId,
         label: &AccountAlias,
     ) -> Result<(), InstructionExecutionError> {
-        if state_transaction.replay_compatibility {
-            return Ok(());
-        }
-        if account_alias_is_open_retail_namespace(label, &state_transaction.nexus.dataspace_catalog)
-        {
-            return Ok(());
-        }
-        crate::sns::ensure_account_alias_lease(state_transaction, authority, label)
+        crate::sns::ensure_account_alias_lease(state_transaction, owner, label)
             .map_err(|e| InstructionExecutionError::InvariantViolation(e.to_string().into()))
+    }
+
+    fn sbp_retail_fi_home_domain(
+        alias: &AccountAlias,
+        catalog: &DataSpaceCatalog,
+    ) -> Option<DomainId> {
+        let domain = alias.domain_id(catalog).ok().flatten()?;
+        if domain.dataspace().as_ref() == "sbp" && matches!(domain.name().as_ref(), "hbl" | "ubl") {
+            Some(domain)
+        } else {
+            None
+        }
+    }
+
+    fn ensure_single_sbp_retail_fi_home(
+        state_transaction: &StateTransaction<'_, '_>,
+        account: &AccountId,
+        requested_alias: &AccountAlias,
+    ) -> Result<(), InstructionExecutionError> {
+        let Some(requested_home) =
+            sbp_retail_fi_home_domain(requested_alias, &state_transaction.nexus.dataspace_catalog)
+        else {
+            return Ok(());
+        };
+
+        for existing_alias in state_transaction.world.bound_account_aliases(account) {
+            if existing_alias == *requested_alias
+                || state_transaction.world.account_aliases.get(&existing_alias) != Some(account)
+            {
+                continue;
+            }
+            let Some(existing_home) = sbp_retail_fi_home_domain(
+                &existing_alias,
+                &state_transaction.nexus.dataspace_catalog,
+            ) else {
+                continue;
+            };
+            if existing_home != requested_home {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "account already belongs to retail FI home domain `{existing_home}`; cross-FI alias binding to `{requested_home}` requires an explicit jointly-authorized migration"
+                    )
+                    .into(),
+                ));
+            }
+        }
+
+        Ok(())
+    }
+
+    fn ensure_sbp_retail_fi_home_is_preserved(
+        state_transaction: &StateTransaction<'_, '_>,
+        account: &AccountId,
+        removed_aliases: &BTreeSet<AccountAlias>,
+        added_alias: Option<&AccountAlias>,
+    ) -> Result<(), InstructionExecutionError> {
+        let mut had_retail_home = false;
+        let mut retains_retail_home = added_alias.is_some_and(|alias| {
+            sbp_retail_fi_home_domain(alias, &state_transaction.nexus.dataspace_catalog).is_some()
+        });
+
+        for existing_alias in state_transaction.world.bound_account_aliases(account) {
+            if state_transaction.world.account_aliases.get(&existing_alias) != Some(account)
+                || sbp_retail_fi_home_domain(
+                    &existing_alias,
+                    &state_transaction.nexus.dataspace_catalog,
+                )
+                .is_none()
+            {
+                continue;
+            }
+            had_retail_home = true;
+            retains_retail_home |= !removed_aliases.contains(&existing_alias);
+        }
+
+        if had_retail_home && !retains_retail_home {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "cannot clear or repoint the last SBP retail FI home alias; cross-FI migration requires an explicit jointly-authorized instruction"
+                    .into(),
+            ));
+        }
+
+        Ok(())
     }
 
     fn contract_alias_matches_account_label(
@@ -1078,11 +1137,7 @@ pub mod isi {
                             .into(),
                     ));
                 }
-                ensure_account_alias_lease_unless_open_retail_namespace(
-                    state_transaction,
-                    authority,
-                    label,
-                )?;
+                ensure_account_alias_lease(state_transaction, &account_id, label)?;
                 purge_stale_account_label_state(state_transaction, label);
                 if state_transaction.world.account_aliases.get(label).is_some()
                     || state_transaction
@@ -3014,6 +3069,34 @@ pub mod isi {
                     .get(&account)
                     .cloned()
                     .unwrap_or_default();
+                for existing_alias in &existing_aliases {
+                    if existing_label.as_ref() == Some(existing_alias) {
+                        continue;
+                    }
+                    if !authority_can_manage_account_alias(
+                        &state_transaction.world,
+                        authority,
+                        existing_alias,
+                    ) {
+                        return Err(InstructionExecutionError::InvariantViolation(
+                            "authority is not permitted to clear this account alias"
+                                .to_owned()
+                                .into(),
+                        )
+                        .into());
+                    }
+                }
+                let removed_aliases = existing_aliases
+                    .iter()
+                    .filter(|alias| existing_label.as_ref() != Some(*alias))
+                    .cloned()
+                    .collect();
+                ensure_sbp_retail_fi_home_is_preserved(
+                    state_transaction,
+                    &account,
+                    &removed_aliases,
+                    None,
+                )?;
                 for existing_alias in existing_aliases {
                     if existing_label.as_ref() == Some(&existing_alias) {
                         continue;
@@ -3045,12 +3128,9 @@ pub mod isi {
                 )
                 .into());
             }
+            ensure_single_sbp_retail_fi_home(state_transaction, &account, &alias)?;
             refresh_account_alias_lease_if_requested(state_transaction, &alias, lease_expiry_ms)?;
-            ensure_account_alias_lease_unless_open_retail_namespace(
-                state_transaction,
-                authority,
-                &alias,
-            )?;
+            ensure_account_alias_lease(state_transaction, &account, &alias)?;
             ensure_contract_alias_namespace_available(state_transaction, &alias)?;
 
             purge_stale_account_label_state(state_transaction, &alias);
@@ -3058,6 +3138,12 @@ pub mod isi {
                 state_transaction.world.account_aliases.get(&alias).cloned();
             if let Some(existing_owner) = existing_alias_binding.as_ref() {
                 if existing_owner != &account {
+                    ensure_sbp_retail_fi_home_is_preserved(
+                        state_transaction,
+                        existing_owner,
+                        &BTreeSet::from([alias.clone()]),
+                        None,
+                    )?;
                     let displaced_label = state_transaction
                         .world
                         .account(existing_owner)?
@@ -3117,6 +3203,24 @@ pub mod isi {
                     .into());
                 }
                 if let Some(previous_label) = existing_label.as_ref() {
+                    if !authority_can_manage_account_alias(
+                        &state_transaction.world,
+                        authority,
+                        previous_label,
+                    ) {
+                        return Err(InstructionExecutionError::InvariantViolation(
+                            "authority is not permitted to clear this primary account alias"
+                                .to_owned()
+                                .into(),
+                        )
+                        .into());
+                    }
+                    ensure_sbp_retail_fi_home_is_preserved(
+                        state_transaction,
+                        &account,
+                        &BTreeSet::from([previous_label.clone()]),
+                        None,
+                    )?;
                     ensure_alias_can_change_recovery_binding(state_transaction, previous_label)?;
                     state_transaction
                         .world
@@ -3149,18 +3253,47 @@ pub mod isi {
                 )
                 .into());
             }
-            refresh_account_alias_lease_if_requested(state_transaction, &alias, lease_expiry_ms)?;
-            ensure_account_alias_lease_unless_open_retail_namespace(
+            if let Some(previous_label) = existing_label.as_ref()
+                && previous_label != &alias
+                && !authority_can_manage_account_alias(
+                    &state_transaction.world,
+                    authority,
+                    previous_label,
+                )
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "authority is not permitted to replace the existing primary account alias"
+                        .to_owned()
+                        .into(),
+                )
+                .into());
+            }
+            ensure_single_sbp_retail_fi_home(state_transaction, &account, &alias)?;
+            let replaced_aliases = existing_label
+                .iter()
+                .filter(|previous_label| *previous_label != &alias)
+                .cloned()
+                .collect();
+            ensure_sbp_retail_fi_home_is_preserved(
                 state_transaction,
-                authority,
-                &alias,
+                &account,
+                &replaced_aliases,
+                Some(&alias),
             )?;
+            refresh_account_alias_lease_if_requested(state_transaction, &alias, lease_expiry_ms)?;
+            ensure_account_alias_lease(state_transaction, &account, &alias)?;
             ensure_contract_alias_namespace_available(state_transaction, &alias)?;
 
             purge_stale_account_label_state(state_transaction, &alias);
             let existing_alias_owner = state_transaction.world.account_aliases.get(&alias).cloned();
             if let Some(existing_owner) = existing_alias_owner.as_ref() {
                 if existing_owner != &account {
+                    ensure_sbp_retail_fi_home_is_preserved(
+                        state_transaction,
+                        existing_owner,
+                        &BTreeSet::from([alias.clone()]),
+                        None,
+                    )?;
                     let displaced_label = state_transaction
                         .world
                         .account(existing_owner)?
@@ -4156,7 +4289,7 @@ mod tests {
         );
     }
 
-    fn open_retail_account_aliases(paynet: DataSpaceId, cbuae: DataSpaceId) -> Vec<AccountAlias> {
+    fn retail_account_aliases(paynet: DataSpaceId, cbuae: DataSpaceId) -> Vec<AccountAlias> {
         let hbl = DomainId::try_new("hbl", "paynet").expect("hbl domain");
         let ubl = DomainId::try_new("ubl", "paynet").expect("ubl domain");
         vec![
@@ -4172,24 +4305,7 @@ mod tests {
         owner: &AccountId,
         alias: &AccountAlias,
     ) {
-        let selector = crate::sns::selector_for_account_alias(alias, &tx.nexus.dataspace_catalog)
-            .expect("selector");
-        let address = AccountAddress::from_account_id(owner).expect("account address");
-        let record = NameRecordV1::new(
-            selector.clone(),
-            owner.clone(),
-            vec![NameControllerV1::account(&address)],
-            0,
-            0,
-            u64::MAX,
-            u64::MAX,
-            u64::MAX,
-            Metadata::default(),
-        );
-        tx.world.smart_contract_state.insert(
-            crate::sns::record_storage_key(&selector),
-            norito::codec::Encode::encode(&record),
-        );
+        seed_account_alias_lease_record(tx, owner, alias);
         if tx.world.account(owner).is_err() {
             let account = Account {
                 id: owner.clone(),
@@ -4218,6 +4334,31 @@ mod tests {
                 }),
             );
         }
+    }
+
+    fn seed_account_alias_lease_record(
+        tx: &mut StateTransaction<'_, '_>,
+        owner: &AccountId,
+        alias: &AccountAlias,
+    ) {
+        let selector = crate::sns::selector_for_account_alias(alias, &tx.nexus.dataspace_catalog)
+            .expect("selector");
+        let address = AccountAddress::from_account_id(owner).expect("account address");
+        let record = NameRecordV1::new(
+            selector.clone(),
+            owner.clone(),
+            vec![NameControllerV1::account(&address)],
+            0,
+            0,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            Metadata::default(),
+        );
+        tx.world.smart_contract_state.insert(
+            crate::sns::record_storage_key(&selector),
+            norito::codec::Encode::encode(&record),
+        );
     }
 
     fn seed_dataspace_alias_lease(
@@ -4307,7 +4448,7 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-        seed_account_alias_lease(&mut tx, &authority, &account_label);
+        seed_account_alias_lease(&mut tx, &account_id, &account_label);
         Register::account(new_account)
             .execute(&authority, &mut tx)
             .expect("register account with label");
@@ -4359,7 +4500,7 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-        seed_account_alias_lease(&mut tx, &authority, &account_label);
+        seed_account_alias_lease(&mut tx, &account_id, &account_label);
         Register::account(Account::new(account_id.clone()).with_label(Some(account_label.clone())))
             .execute(&authority, &mut tx)
             .expect("register domainless account");
@@ -4423,7 +4564,7 @@ mod tests {
         let mut block = state.block(header);
         let mut tx = block.transaction();
         seed_domainful_alias_manage_permissions(&mut tx, &authority, &domain_id);
-        seed_account_alias_lease(&mut tx, &authority, &account_label);
+        seed_account_alias_lease(&mut tx, &account_id, &account_label);
         Register::account(Account::new(account_id.clone()).with_label(Some(account_label)))
             .execute(&authority, &mut tx)
             .expect("register account with label");
@@ -4471,7 +4612,37 @@ mod tests {
     }
 
     #[test]
-    fn register_account_with_open_retail_aliases_does_not_require_sns_lease() {
+    fn register_account_with_label_rejects_lease_owned_by_another_account() {
+        let mut state = test_state();
+        let domain_id: DomainId = DomainId::try_new("label", "universal").expect("domain id");
+        let authority = (*ALICE_ID).clone();
+        let lease_owner = (*BOB_ID).clone();
+        seed_domain(&mut state, &domain_id, &authority);
+        seed_account(&mut state, &authority, &domain_id);
+
+        let label = alias_in_domain(&domain_id, "primary".parse::<Name>().unwrap());
+        let account_id = AccountId::new(checked_keypair().public_key().clone());
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        seed_domainful_alias_manage_permissions(&mut tx, &authority, &domain_id);
+        seed_account_alias_lease(&mut tx, &lease_owner, &label);
+
+        let err =
+            Register::account(Account::new(account_id.clone()).with_label(Some(label.clone())))
+                .execute(&authority, &mut tx)
+                .expect_err("another account's lease must not authorize registration");
+
+        assert!(
+            err.to_string().contains("owned by another account"),
+            "unexpected error: {err}"
+        );
+        assert!(tx.world.account(&account_id).is_err());
+        assert!(tx.world.account_aliases.get(&label).is_none());
+    }
+
+    #[test]
+    fn register_account_with_retail_aliases_requires_active_sns_lease() {
         let authority = (*ALICE_ID).clone();
         let state = test_state_with_authority(&authority);
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -4479,14 +4650,19 @@ mod tests {
         let mut tx = block.transaction();
         let (paynet, cbuae) = install_retail_dataspace_catalog(&mut tx);
 
-        for alias in open_retail_account_aliases(paynet, cbuae) {
+        for alias in retail_account_aliases(paynet, cbuae) {
             let account_id = AccountId::new(checked_keypair().public_key().clone());
             seed_account_alias_manage_permissions(&mut tx, &authority, &alias);
 
-            Register::account(Account::new(account_id.clone()).with_label(Some(alias.clone())))
-                .execute(&authority, &mut tx)
-                .expect("open retail alias should not require an SNS lease");
-            assert_eq!(tx.world.account_aliases.get(&alias), Some(&account_id));
+            let err =
+                Register::account(Account::new(account_id.clone()).with_label(Some(alias.clone())))
+                    .execute(&authority, &mut tx)
+                    .expect_err("retail aliases must require an SNS lease");
+            assert!(
+                err.to_string().contains("active SNS lease"),
+                "unexpected error for {alias:?}: {err}"
+            );
+            assert!(tx.world.account_aliases.get(&alias).is_none());
         }
     }
 
@@ -4506,8 +4682,8 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-        seed_account_alias_lease(&mut tx, &authority, &old_label);
-        seed_account_alias_lease(&mut tx, &authority, &new_label);
+        seed_account_alias_lease(&mut tx, &account_id, &old_label);
+        seed_account_alias_lease(&mut tx, &account_id, &new_label);
         Register::account(new_account)
             .execute(&authority, &mut tx)
             .expect("register account with initial label");
@@ -4563,7 +4739,7 @@ mod tests {
         Register::account(Account::new(account_id.clone()))
             .execute(&authority, &mut tx)
             .expect("register domainless account");
-        seed_account_alias_lease(&mut tx, &authority, &label);
+        seed_account_alias_lease(&mut tx, &account_id, &label);
 
         SetPrimaryAccountAlias {
             account: account_id.clone(),
@@ -4607,7 +4783,7 @@ mod tests {
         Register::account(Account::new(account_id.clone()))
             .execute(&authority, &mut tx)
             .expect("register account");
-        seed_account_alias_lease(&mut tx, &authority, &label);
+        seed_account_alias_lease(&mut tx, &account_id, &label);
 
         SetPrimaryAccountAlias {
             account: account_id.clone(),
@@ -4667,38 +4843,57 @@ mod tests {
     }
 
     #[test]
-    fn replay_allows_legacy_account_alias_binding_without_active_sns_lease() {
+    fn alias_binding_and_primary_alias_reject_lease_owned_by_another_account() {
         let mut state = test_state();
         let domain_id: DomainId = DomainId::try_new("label", "universal").expect("domain id");
         let authority = (*ALICE_ID).clone();
+        let lease_owner = (*BOB_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
-        seed_account(&mut state, &authority, &domain_id);
 
         let alias = alias_in_domain(&domain_id, "banking".parse::<Name>().unwrap());
         let account_id = AccountId::new(checked_keypair().public_key().clone());
-
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-        tx.replay_compatibility = true;
         seed_domainful_alias_manage_permissions(&mut tx, &authority, &domain_id);
         Register::account(Account::new(account_id.clone()))
             .execute(&authority, &mut tx)
             .expect("register account");
+        seed_account_alias_lease(&mut tx, &lease_owner, &alias);
 
-        SetAccountAliasBinding {
-            account: account_id.clone(),
-            alias: Some(alias.clone()),
-            lease_expiry_ms: None,
+        for err in [
+            SetAccountAliasBinding {
+                account: account_id.clone(),
+                alias: Some(alias.clone()),
+                lease_expiry_ms: None,
+            }
+            .execute(&authority, &mut tx)
+            .expect_err("another account's lease must not authorize an alias binding"),
+            SetPrimaryAccountAlias {
+                account: account_id.clone(),
+                alias: Some(alias.clone()),
+                lease_expiry_ms: None,
+            }
+            .execute(&authority, &mut tx)
+            .expect_err("another account's lease must not authorize a primary alias"),
+        ] {
+            assert!(
+                err.to_string().contains("owned by another account"),
+                "unexpected error: {err}"
+            );
         }
-        .execute(&authority, &mut tx)
-        .expect("replay must preserve legacy alias binding");
-
-        assert_eq!(tx.world.account_aliases.get(&alias), Some(&account_id));
+        assert!(tx.world.account_aliases.get(&alias).is_none());
+        assert!(
+            tx.world
+                .account(&account_id)
+                .expect("account")
+                .label()
+                .is_none()
+        );
     }
 
     #[test]
-    fn bind_account_alias_with_open_retail_namespace_does_not_require_sns_lease() {
+    fn bind_account_alias_in_retail_namespace_requires_active_sns_lease() {
         let authority = (*ALICE_ID).clone();
         let state = test_state_with_authority(&authority);
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -4713,18 +4908,22 @@ mod tests {
             .expect("register account");
         seed_account_alias_manage_permissions(&mut tx, &authority, &alias);
 
-        SetAccountAliasBinding {
+        let err = SetAccountAliasBinding {
             account: account_id.clone(),
             alias: Some(alias.clone()),
             lease_expiry_ms: None,
         }
         .execute(&authority, &mut tx)
-        .expect("open retail alias binding should not require an SNS lease");
-        assert_eq!(tx.world.account_aliases.get(&alias), Some(&account_id));
+        .expect_err("retail alias binding must require an SNS lease");
+        assert!(
+            err.to_string().contains("active SNS lease"),
+            "unexpected error: {err}"
+        );
+        assert!(tx.world.account_aliases.get(&alias).is_none());
     }
 
     #[test]
-    fn open_retail_alias_owner_can_repoint_binding_without_explicit_manage_permission() {
+    fn retail_alias_owner_requires_exact_domain_manage_permission() {
         let state = test_state();
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
@@ -4753,13 +4952,37 @@ mod tests {
             AccountRekeyRecord::new(alias.clone(), current_account_id.clone()),
         );
 
+        let err = SetAccountAliasBinding {
+            account: replacement_account_id.clone(),
+            alias: Some(alias.clone()),
+            lease_expiry_ms: None,
+        }
+        .execute(&current_account_id, &mut tx)
+        .expect_err("alias ownership must not bypass exact domain permission");
+        assert!(
+            err.to_string().contains("not permitted"),
+            "unexpected error: {err}"
+        );
+        assert_eq!(
+            tx.world.account_aliases.get(&alias),
+            Some(&current_account_id),
+            "rejected mutation must preserve the original alias binding"
+        );
+
+        tx.world.add_account_permission(
+            &current_account_id,
+            Permission::from(CanManageAccountAlias {
+                scope: AccountAliasPermissionScope::Domain(hbl),
+            }),
+        );
+        seed_account_alias_lease(&mut tx, &replacement_account_id, &alias);
         SetAccountAliasBinding {
             account: replacement_account_id.clone(),
             alias: Some(alias.clone()),
             lease_expiry_ms: None,
         }
         .execute(&current_account_id, &mut tx)
-        .expect("current open retail alias owner should be allowed to repoint its alias");
+        .expect("exact domain permission should authorize the alias mutation");
 
         assert_eq!(
             tx.world.account_aliases.get(&alias),
@@ -4776,7 +4999,533 @@ mod tests {
     }
 
     #[test]
-    fn set_primary_account_alias_with_open_retail_namespace_does_not_require_sns_lease() {
+    fn cbdc_fi_account_alias_management_isolated_by_exact_domain() {
+        let authority = (*ALICE_ID).clone();
+        let state = test_state_with_authority(&authority);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+
+        let retail = DataSpaceId::new(10);
+        install_dataspace_catalog_with_lane(&mut tx, retail, "sbp", LaneVisibility::Public);
+        let hbl = DomainId::try_new("hbl", "sbp").expect("HBL alias domain");
+        let ubl = DomainId::try_new("ubl", "sbp").expect("UBL alias domain");
+        let hbl_alias = alias_in_dataspace_domain(
+            &hbl,
+            retail,
+            "customerhbl".parse::<Name>().expect("HBL alias label"),
+        );
+        let ubl_alias = alias_in_dataspace_domain(
+            &ubl,
+            retail,
+            "customerubl".parse::<Name>().expect("UBL alias label"),
+        );
+        let domainless_alias =
+            AccountAlias::domainless("retailroot".parse::<Name>().expect("root alias"), retail);
+        let target = AccountId::new(checked_keypair().public_key().clone());
+        Register::account(Account::new(target.clone()))
+            .execute(&authority, &mut tx)
+            .expect("register alias target");
+        for alias in [&hbl_alias, &ubl_alias, &domainless_alias] {
+            seed_account_alias_lease_record(&mut tx, &authority, alias);
+        }
+
+        let hbl_permission: Permission = CanManageAccountAlias {
+            scope: AccountAliasPermissionScope::Domain(hbl.clone()),
+        }
+        .into();
+        tx.world
+            .add_account_permission(&authority, hbl_permission.clone());
+
+        SetAccountAliasBinding {
+            account: target.clone(),
+            alias: Some(hbl_alias.clone()),
+            lease_expiry_ms: None,
+        }
+        .execute(&authority, &mut tx)
+        .expect("exact HBL domain permission must authorize an HBL alias");
+
+        for forbidden_alias in [&ubl_alias, &domainless_alias] {
+            let err = SetAccountAliasBinding {
+                account: target.clone(),
+                alias: Some(forbidden_alias.clone()),
+                lease_expiry_ms: None,
+            }
+            .execute(&authority, &mut tx)
+            .expect_err("HBL domain permission must not authorize another alias scope");
+            assert!(
+                err.to_string().contains("not permitted"),
+                "unexpected cross-scope error: {err}"
+            );
+            assert!(
+                tx.world.account_aliases.get(forbidden_alias).is_none(),
+                "rejected cross-scope alias must remain unbound"
+            );
+        }
+
+        tx.world
+            .insert_account_alias_binding(ubl_alias.clone(), target.clone());
+        tx.world.account_rekey_records.insert(
+            ubl_alias.clone(),
+            AccountRekeyRecord::new(ubl_alias.clone(), target.clone()),
+        );
+        let err = SetAccountAliasBinding::clear(target.clone())
+            .execute(&authority, &mut tx)
+            .expect_err("HBL authority must not clear a UBL secondary alias");
+        assert!(
+            err.to_string().contains("not permitted"),
+            "unexpected secondary-clear error: {err}"
+        );
+        assert_eq!(
+            tx.world.account_aliases.get(&hbl_alias),
+            Some(&target),
+            "secondary clear must preflight every alias before mutating"
+        );
+        assert_eq!(tx.world.account_aliases.get(&ubl_alias), Some(&target));
+        tx.world.remove_account_alias_binding(&ubl_alias);
+        tx.world.account_rekey_records.remove(ubl_alias.clone());
+
+        assert!(
+            tx.world
+                .remove_account_permission(&authority, &hbl_permission),
+            "HBL permission fixture should be removable"
+        );
+        tx.world.add_account_permission(
+            &authority,
+            Permission::from(CanManageAccountAlias {
+                scope: AccountAliasPermissionScope::Dataspace(retail),
+            }),
+        );
+
+        for forbidden_alias in [&hbl_alias, &ubl_alias] {
+            let err = SetAccountAliasBinding {
+                account: target.clone(),
+                alias: Some(forbidden_alias.clone()),
+                lease_expiry_ms: None,
+            }
+            .execute(&authority, &mut tx)
+            .expect_err("dataspace permission must not authorize a domainful FI alias");
+            assert!(
+                err.to_string().contains("not permitted"),
+                "unexpected domainful-alias error: {err}"
+            );
+        }
+
+        SetAccountAliasBinding {
+            account: target.clone(),
+            alias: Some(domainless_alias.clone()),
+            lease_expiry_ms: None,
+        }
+        .execute(&authority, &mut tx)
+        .expect("dataspace permission must authorize a domainless alias");
+        assert_eq!(
+            tx.world.account_aliases.get(&domainless_alias),
+            Some(&target)
+        );
+        assert_eq!(tx.world.account_aliases.get(&hbl_alias), Some(&target));
+        assert!(tx.world.account_aliases.get(&ubl_alias).is_none());
+    }
+
+    #[test]
+    fn cbdc_retail_account_rejects_cross_fi_secondary_alias_and_repoint() {
+        let authority = (*ALICE_ID).clone();
+        let state = test_state_with_authority(&authority);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+
+        let retail = DataSpaceId::new(10);
+        install_dataspace_catalog_with_lane(&mut tx, retail, "sbp", LaneVisibility::Public);
+        let hbl = DomainId::try_new("hbl", "sbp").expect("HBL alias domain");
+        let ubl = DomainId::try_new("ubl", "sbp").expect("UBL alias domain");
+        let hbl_home_alias = alias_in_dataspace_domain(
+            &hbl,
+            retail,
+            "homehbl".parse::<Name>().expect("HBL home alias label"),
+        );
+        let hbl_secondary_alias = alias_in_dataspace_domain(
+            &hbl,
+            retail,
+            "secondaryhbl"
+                .parse::<Name>()
+                .expect("HBL secondary alias label"),
+        );
+        let hbl_foreign_target_alias = alias_in_dataspace_domain(
+            &hbl,
+            retail,
+            "foreignhbl"
+                .parse::<Name>()
+                .expect("HBL foreign-target alias label"),
+        );
+        let ubl_home_alias = alias_in_dataspace_domain(
+            &ubl,
+            retail,
+            "homeubl".parse::<Name>().expect("UBL home alias label"),
+        );
+        let hbl_account = AccountId::new(checked_keypair().public_key().clone());
+        let ubl_account = AccountId::new(checked_keypair().public_key().clone());
+        let unhomed_account = AccountId::new(checked_keypair().public_key().clone());
+        for account in [&hbl_account, &ubl_account, &unhomed_account] {
+            Register::account(Account::new(account.clone()))
+                .execute(&authority, &mut tx)
+                .expect("register retail account");
+        }
+        for alias in [
+            &hbl_home_alias,
+            &hbl_secondary_alias,
+            &hbl_foreign_target_alias,
+        ] {
+            seed_account_alias_lease_record(&mut tx, &authority, alias);
+        }
+        tx.world.add_account_permission(
+            &authority,
+            Permission::from(CanManageAccountAlias {
+                scope: AccountAliasPermissionScope::Domain(hbl),
+            }),
+        );
+
+        SetAccountAliasBinding {
+            account: hbl_account.clone(),
+            alias: Some(hbl_home_alias.clone()),
+            lease_expiry_ms: None,
+        }
+        .execute(&authority, &mut tx)
+        .expect("bind HBL home alias");
+        SetAccountAliasBinding {
+            account: hbl_account.clone(),
+            alias: Some(hbl_secondary_alias.clone()),
+            lease_expiry_ms: None,
+        }
+        .execute(&authority, &mut tx)
+        .expect("same-FI secondary aliases remain supported");
+
+        tx.world
+            .insert_account_alias_binding(ubl_home_alias.clone(), ubl_account.clone());
+        tx.world.account_rekey_records.insert(
+            ubl_home_alias.clone(),
+            AccountRekeyRecord::new(ubl_home_alias.clone(), ubl_account.clone()),
+        );
+
+        let err = SetAccountAliasBinding {
+            account: ubl_account.clone(),
+            alias: Some(hbl_foreign_target_alias.clone()),
+            lease_expiry_ms: None,
+        }
+        .execute(&authority, &mut tx)
+        .expect_err("HBL must not add a secondary alias to a UBL-home account");
+        assert!(
+            err.to_string().contains("jointly-authorized migration"),
+            "unexpected cross-FI secondary-binding error: {err}"
+        );
+        assert!(
+            tx.world
+                .account_aliases
+                .get(&hbl_foreign_target_alias)
+                .is_none(),
+            "rejected foreign-home secondary alias must remain unbound"
+        );
+
+        let err = SetAccountAliasBinding {
+            account: ubl_account.clone(),
+            alias: Some(hbl_home_alias.clone()),
+            lease_expiry_ms: None,
+        }
+        .execute(&authority, &mut tx)
+        .expect_err("HBL must not repoint an existing alias to a UBL-home account");
+        assert!(
+            err.to_string().contains("jointly-authorized migration"),
+            "unexpected cross-FI repoint error: {err}"
+        );
+        assert_eq!(
+            tx.world.account_aliases.get(&hbl_home_alias),
+            Some(&hbl_account),
+            "rejected cross-FI repoint must preserve the HBL binding"
+        );
+        assert_eq!(
+            tx.world.account_aliases.get(&ubl_home_alias),
+            Some(&ubl_account),
+            "rejected cross-FI repoint must preserve the UBL home"
+        );
+
+        tx.world.remove_account_alias_binding(&hbl_secondary_alias);
+        tx.world
+            .account_rekey_records
+            .remove(hbl_secondary_alias.clone());
+        let err = SetAccountAliasBinding {
+            account: unhomed_account,
+            alias: Some(hbl_home_alias.clone()),
+            lease_expiry_ms: None,
+        }
+        .execute(&authority, &mut tx)
+        .expect_err("repointing must not strand the previous account without an FI home");
+        assert!(
+            err.to_string().contains("last SBP retail FI home"),
+            "unexpected last-home repoint error: {err}"
+        );
+        assert_eq!(
+            tx.world.account_aliases.get(&hbl_home_alias),
+            Some(&hbl_account),
+            "rejected last-home repoint must preserve its source binding"
+        );
+    }
+
+    #[test]
+    fn cbdc_retail_home_cannot_be_cleared_then_rebound_by_separate_managers() {
+        let state = test_state();
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+
+        let retail = DataSpaceId::new(10);
+        install_dataspace_catalog_with_lane(&mut tx, retail, "sbp", LaneVisibility::Public);
+        let hbl = DomainId::try_new("hbl", "sbp").expect("HBL alias domain");
+        let ubl = DomainId::try_new("ubl", "sbp").expect("UBL alias domain");
+        let hbl_manager = AccountId::new(checked_keypair().public_key().clone());
+        let ubl_manager = AccountId::new(checked_keypair().public_key().clone());
+        let customer = AccountId::new(checked_keypair().public_key().clone());
+        for account in [&hbl_manager, &ubl_manager, &customer] {
+            Register::account(Account::new(account.clone()))
+                .execute(&hbl_manager, &mut tx)
+                .expect("register CBDC alias fixture account");
+        }
+        let hbl_alias = alias_in_dataspace_domain(
+            &hbl,
+            retail,
+            "switchhbl".parse::<Name>().expect("HBL alias label"),
+        );
+        let ubl_alias = alias_in_dataspace_domain(
+            &ubl,
+            retail,
+            "homeubl".parse::<Name>().expect("UBL alias label"),
+        );
+        tx.world
+            .account_mut(&customer)
+            .expect("customer account")
+            .set_label(Some(ubl_alias.clone()));
+        tx.world
+            .insert_account_alias_binding(ubl_alias.clone(), customer.clone());
+        tx.world.account_rekey_records.insert(
+            ubl_alias.clone(),
+            AccountRekeyRecord::new(ubl_alias.clone(), customer.clone()),
+        );
+        tx.world.add_account_permission(
+            &ubl_manager,
+            Permission::from(CanManageAccountAlias {
+                scope: AccountAliasPermissionScope::Domain(ubl),
+            }),
+        );
+        tx.world.add_account_permission(
+            &hbl_manager,
+            Permission::from(CanManageAccountAlias {
+                scope: AccountAliasPermissionScope::Domain(hbl),
+            }),
+        );
+        seed_account_alias_lease_record(&mut tx, &hbl_manager, &hbl_alias);
+
+        let clear_err = SetPrimaryAccountAlias::clear(customer.clone())
+            .execute(&ubl_manager, &mut tx)
+            .expect_err("UBL manager must not clear the customer's last FI home");
+        assert!(
+            clear_err.to_string().contains("last SBP retail FI home"),
+            "unexpected last-home clear error: {clear_err}"
+        );
+        assert_eq!(
+            tx.world.account(&customer).expect("customer").label(),
+            Some(&ubl_alias)
+        );
+
+        let bind_err = SetAccountAliasBinding {
+            account: customer.clone(),
+            alias: Some(hbl_alias.clone()),
+            lease_expiry_ms: None,
+        }
+        .execute(&hbl_manager, &mut tx)
+        .expect_err("HBL manager must not bind after the rejected UBL clear");
+        assert!(
+            bind_err
+                .to_string()
+                .contains("jointly-authorized migration"),
+            "unexpected cross-FI bind error: {bind_err}"
+        );
+        assert!(tx.world.account_aliases.get(&hbl_alias).is_none());
+        assert_eq!(tx.world.account_aliases.get(&ubl_alias), Some(&customer));
+    }
+
+    #[test]
+    fn cbdc_retail_same_fi_primary_rotation_remains_supported() {
+        let authority = (*ALICE_ID).clone();
+        let state = test_state_with_authority(&authority);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+
+        let retail = DataSpaceId::new(10);
+        install_dataspace_catalog_with_lane(&mut tx, retail, "sbp", LaneVisibility::Public);
+        let ubl = DomainId::try_new("ubl", "sbp").expect("UBL alias domain");
+        let old_alias = alias_in_dataspace_domain(
+            &ubl,
+            retail,
+            "oldubl".parse::<Name>().expect("old UBL alias label"),
+        );
+        let new_alias = alias_in_dataspace_domain(
+            &ubl,
+            retail,
+            "newubl".parse::<Name>().expect("new UBL alias label"),
+        );
+        let customer = AccountId::new(checked_keypair().public_key().clone());
+        Register::account(Account::new(customer.clone()))
+            .execute(&authority, &mut tx)
+            .expect("register UBL customer");
+        tx.world
+            .account_mut(&customer)
+            .expect("customer account")
+            .set_label(Some(old_alias.clone()));
+        tx.world
+            .insert_account_alias_binding(old_alias.clone(), customer.clone());
+        tx.world.account_rekey_records.insert(
+            old_alias.clone(),
+            AccountRekeyRecord::new(old_alias.clone(), customer.clone()),
+        );
+        seed_account_alias_lease_record(&mut tx, &authority, &new_alias);
+        tx.world.add_account_permission(
+            &authority,
+            Permission::from(CanManageAccountAlias {
+                scope: AccountAliasPermissionScope::Domain(ubl),
+            }),
+        );
+
+        SetAccountAliasBinding {
+            account: customer.clone(),
+            alias: Some(new_alias.clone()),
+            lease_expiry_ms: None,
+        }
+        .execute(&authority, &mut tx)
+        .expect("add a same-FI secondary alias before rotation");
+        SetPrimaryAccountAlias {
+            account: customer.clone(),
+            alias: Some(new_alias.clone()),
+            lease_expiry_ms: None,
+        }
+        .execute(&authority, &mut tx)
+        .expect("atomically rotate the primary alias within UBL");
+
+        assert_eq!(
+            tx.world.account(&customer).expect("customer").label(),
+            Some(&new_alias)
+        );
+        assert!(tx.world.account_aliases.get(&old_alias).is_none());
+        assert_eq!(tx.world.account_aliases.get(&new_alias), Some(&customer));
+    }
+
+    #[test]
+    fn cbdc_retail_home_cannot_be_cleared_or_replaced_by_dual_scope_manager() {
+        let authority = (*ALICE_ID).clone();
+        let state = test_state_with_authority(&authority);
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+
+        let retail = DataSpaceId::new(10);
+        install_dataspace_catalog_with_lane(&mut tx, retail, "sbp", LaneVisibility::Public);
+        let hbl = DomainId::try_new("hbl", "sbp").expect("HBL alias domain");
+        let ubl = DomainId::try_new("ubl", "sbp").expect("UBL alias domain");
+        let hbl_alias = alias_in_dataspace_domain(
+            &hbl,
+            retail,
+            "replacementhbl".parse::<Name>().expect("HBL alias label"),
+        );
+        let ubl_alias = alias_in_dataspace_domain(
+            &ubl,
+            retail,
+            "primaryubl".parse::<Name>().expect("UBL alias label"),
+        );
+        let target = AccountId::new(checked_keypair().public_key().clone());
+        Register::account(Account::new(target.clone()))
+            .execute(&authority, &mut tx)
+            .expect("register alias target");
+        tx.world
+            .account_mut(&target)
+            .expect("alias target")
+            .set_label(Some(ubl_alias.clone()));
+        tx.world
+            .insert_account_alias_binding(ubl_alias.clone(), target.clone());
+        tx.world.account_rekey_records.insert(
+            ubl_alias.clone(),
+            AccountRekeyRecord::new(ubl_alias.clone(), target.clone()),
+        );
+        seed_account_alias_lease_record(&mut tx, &authority, &hbl_alias);
+        tx.world.add_account_permission(
+            &authority,
+            Permission::from(CanManageAccountAlias {
+                scope: AccountAliasPermissionScope::Domain(hbl),
+            }),
+        );
+
+        let err = SetPrimaryAccountAlias {
+            account: target.clone(),
+            alias: Some(hbl_alias.clone()),
+            lease_expiry_ms: None,
+        }
+        .execute(&authority, &mut tx)
+        .expect_err("HBL permission must not remove an existing UBL primary alias");
+        assert!(
+            err.to_string().contains("replace the existing primary"),
+            "unexpected primary-replacement error: {err}"
+        );
+        assert_eq!(
+            tx.world.account(&target).expect("alias target").label(),
+            Some(&ubl_alias)
+        );
+        assert_eq!(tx.world.account_aliases.get(&ubl_alias), Some(&target));
+        assert!(tx.world.account_aliases.get(&hbl_alias).is_none());
+
+        let err = SetPrimaryAccountAlias {
+            account: target.clone(),
+            alias: None,
+            lease_expiry_ms: None,
+        }
+        .execute(&authority, &mut tx)
+        .expect_err("HBL permission must not clear an existing UBL primary alias");
+        assert!(
+            err.to_string().contains("clear this primary"),
+            "unexpected primary-clear error: {err}"
+        );
+        assert_eq!(tx.world.account_aliases.get(&ubl_alias), Some(&target));
+
+        tx.world.add_account_permission(
+            &authority,
+            Permission::from(CanManageAccountAlias {
+                scope: AccountAliasPermissionScope::Domain(ubl),
+            }),
+        );
+        let clear_err = SetPrimaryAccountAlias::clear(target.clone())
+            .execute(&authority, &mut tx)
+            .expect_err("even a dual-scope manager must not clear the last FI home");
+        assert!(
+            clear_err.to_string().contains("last SBP retail FI home"),
+            "unexpected dual-scope clear error: {clear_err}"
+        );
+        let err = SetPrimaryAccountAlias {
+            account: target.clone(),
+            alias: Some(hbl_alias.clone()),
+            lease_expiry_ms: None,
+        }
+        .execute(&authority, &mut tx)
+        .expect_err("cross-FI primary migration requires an explicit joint instruction");
+        assert!(
+            err.to_string().contains("jointly-authorized migration"),
+            "unexpected cross-FI primary migration error: {err}"
+        );
+        assert_eq!(
+            tx.world.account(&target).expect("alias target").label(),
+            Some(&ubl_alias)
+        );
+        assert!(tx.world.account_aliases.get(&hbl_alias).is_none());
+        assert_eq!(tx.world.account_aliases.get(&ubl_alias), Some(&target));
+    }
+
+    #[test]
+    fn set_primary_account_alias_in_retail_namespace_requires_active_sns_lease() {
         let authority = (*ALICE_ID).clone();
         let state = test_state_with_authority(&authority);
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -4792,14 +5541,18 @@ mod tests {
             .expect("register account");
         seed_account_alias_manage_permissions(&mut tx, &authority, &alias);
 
-        SetPrimaryAccountAlias {
+        let err = SetPrimaryAccountAlias {
             account: account_id.clone(),
             alias: Some(alias.clone()),
             lease_expiry_ms: None,
         }
         .execute(&authority, &mut tx)
-        .expect("open retail primary alias should not require an SNS lease");
-        assert_eq!(tx.world.account_aliases.get(&alias), Some(&account_id));
+        .expect_err("retail primary alias must require an SNS lease");
+        assert!(
+            err.to_string().contains("active SNS lease"),
+            "unexpected error: {err}"
+        );
+        assert!(tx.world.account_aliases.get(&alias).is_none());
     }
 
     #[test]
@@ -4825,7 +5578,7 @@ mod tests {
         Register::account(Account::new(account_id.clone()))
             .execute(&authority, &mut tx)
             .expect("register unlabeled multisig account");
-        seed_account_alias_lease(&mut tx, &authority, &account_label);
+        seed_account_alias_lease(&mut tx, &account_id, &account_label);
 
         SetPrimaryAccountAlias {
             account: account_id.clone(),
@@ -4895,7 +5648,7 @@ mod tests {
         Register::account(Account::new(second_id.clone()))
             .execute(&domain_owner, &mut tx)
             .expect("register second account");
-        seed_account_alias_lease(&mut tx, &domain_owner, &alias);
+        seed_account_alias_lease(&mut tx, &first_id, &alias);
 
         SetPrimaryAccountAlias {
             account: first_id.clone(),
@@ -4905,6 +5658,7 @@ mod tests {
         .execute(&domain_owner, &mut tx)
         .expect("seed alias on first account");
 
+        seed_account_alias_lease(&mut tx, &second_id, &alias);
         SetPrimaryAccountAlias {
             account: second_id.clone(),
             alias: Some(alias.clone()),
@@ -4987,7 +5741,7 @@ mod tests {
         Register::account(Account::new(second_id.clone()))
             .execute(&domain_owner, &mut tx)
             .expect("register second account");
-        seed_account_alias_lease(&mut tx, &domain_owner, &alias);
+        seed_account_alias_lease(&mut tx, &first_id, &alias);
 
         SetPrimaryAccountAlias {
             account: first_id.clone(),
@@ -4997,6 +5751,7 @@ mod tests {
         .execute(&domain_owner, &mut tx)
         .expect("seed alias on first account");
 
+        seed_account_alias_lease(&mut tx, &second_id, &alias);
         SetPrimaryAccountAlias {
             account: second_id.clone(),
             alias: Some(alias.clone()),
@@ -5052,8 +5807,8 @@ mod tests {
         Register::account(Account::new(account_id.clone()))
             .execute(&authority, &mut tx)
             .expect("register unlabeled multisig account");
-        seed_account_alias_lease(&mut tx, &authority, &banking_label);
-        seed_account_alias_lease(&mut tx, &authority, &issuance_label);
+        seed_account_alias_lease(&mut tx, &account_id, &banking_label);
+        seed_account_alias_lease(&mut tx, &account_id, &issuance_label);
 
         SetAccountAliasBinding {
             account: account_id.clone(),
@@ -5134,8 +5889,8 @@ mod tests {
         let mut block = state.block(header);
         let mut tx = block.transaction();
         seed_domainful_alias_manage_permissions(&mut tx, &authority, &domain_id);
-        seed_account_alias_lease(&mut tx, &authority, &primary_label);
-        seed_account_alias_lease(&mut tx, &authority, &bound_label);
+        seed_account_alias_lease(&mut tx, &account_id, &primary_label);
+        seed_account_alias_lease(&mut tx, &account_id, &bound_label);
         Register::account(Account::new(account_id.clone()).with_label(Some(primary_label.clone())))
             .execute(&authority, &mut tx)
             .expect("register account with primary label");
@@ -5183,9 +5938,9 @@ mod tests {
         let mut block = state.block(header);
         let mut tx = block.transaction();
         seed_domainful_alias_manage_permissions(&mut tx, &authority, &domain_id);
-        seed_account_alias_lease(&mut tx, &authority, &primary_label);
-        seed_account_alias_lease(&mut tx, &authority, &root_alias);
-        seed_account_alias_lease(&mut tx, &authority, &domain_alias);
+        seed_account_alias_lease(&mut tx, &account_id, &primary_label);
+        seed_account_alias_lease(&mut tx, &account_id, &root_alias);
+        seed_account_alias_lease(&mut tx, &account_id, &domain_alias);
         Register::account(Account::new(account_id.clone()).with_label(Some(primary_label.clone())))
             .execute(&authority, &mut tx)
             .expect("register account with primary label");
@@ -5265,7 +6020,7 @@ mod tests {
         Register::account(Account::new(account_id.clone()))
             .execute(&authority, &mut tx)
             .expect("register account");
-        seed_account_alias_lease(&mut tx, &authority, &alias);
+        seed_account_alias_lease(&mut tx, &account_id, &alias);
 
         SetAccountAliasBinding {
             account: account_id.clone(),
@@ -5318,7 +6073,7 @@ mod tests {
         Register::account(Account::new(account_id.clone()))
             .execute(&domain_owner, &mut tx)
             .expect("register account");
-        seed_account_alias_lease(&mut tx, &domain_owner, &alias);
+        seed_account_alias_lease(&mut tx, &account_id, &alias);
 
         SetAccountAliasBinding {
             account: account_id.clone(),
@@ -5362,7 +6117,7 @@ mod tests {
         Register::account(Account::new(account_id.clone()))
             .execute(&domain_owner, &mut tx)
             .expect("register account");
-        seed_account_alias_lease(&mut tx, &domain_owner, &alias);
+        seed_account_alias_lease(&mut tx, &account_id, &alias);
 
         SetAccountAliasBinding {
             account: account_id.clone(),
@@ -5403,7 +6158,7 @@ mod tests {
         Register::account(Account::new(second_id.clone()))
             .execute(&domain_owner, &mut tx)
             .expect("register second account");
-        seed_account_alias_lease(&mut tx, &domain_owner, &alias);
+        seed_account_alias_lease(&mut tx, &first_id, &alias);
 
         SetAccountAliasBinding {
             account: first_id.clone(),
@@ -5464,7 +6219,7 @@ mod tests {
         Register::account(Account::new(second_id.clone()))
             .execute(&domain_owner, &mut tx)
             .expect("register second account");
-        seed_account_alias_lease(&mut tx, &domain_owner, &alias);
+        seed_account_alias_lease(&mut tx, &first_id, &alias);
 
         SetAccountAliasBinding {
             account: first_id.clone(),
@@ -5474,6 +6229,7 @@ mod tests {
         .execute(&domain_owner, &mut tx)
         .expect("seed alias on first account");
 
+        seed_account_alias_lease(&mut tx, &second_id, &alias);
         SetAccountAliasBinding {
             account: second_id.clone(),
             alias: Some(alias.clone()),
@@ -5529,7 +6285,7 @@ mod tests {
         Register::account(Account::new(second_id.clone()))
             .execute(&domain_owner, &mut tx)
             .expect("register second account");
-        seed_account_alias_lease(&mut tx, &domain_owner, &alias);
+        seed_account_alias_lease(&mut tx, &first_id, &alias);
 
         SetAccountAliasBinding {
             account: first_id.clone(),
@@ -5539,6 +6295,7 @@ mod tests {
         .execute(&domain_owner, &mut tx)
         .expect("seed alias on first account");
 
+        seed_account_alias_lease(&mut tx, &second_id, &alias);
         SetAccountAliasBinding {
             account: second_id.clone(),
             alias: Some(alias.clone()),

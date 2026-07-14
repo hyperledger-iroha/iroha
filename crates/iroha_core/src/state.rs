@@ -1171,6 +1171,8 @@ struct AccountPermissionSummary {
     reg_trigger_authorities: std::collections::BTreeSet<iroha_data_model::account::AccountId>,
     exec_trigger_ids: std::collections::BTreeSet<iroha_data_model::trigger::TriggerId>,
     fee_sponsor_policies: std::collections::BTreeSet<FeeSponsorPolicyId>,
+    exact_fee_sponsor_permissions:
+        Vec<iroha_executor_data_model::permission::nexus::CanUseFeeSponsorForAccount>,
 }
 
 pub(crate) fn parse_permission_account_field(
@@ -1210,13 +1212,28 @@ pub(crate) fn parse_permission_name_field(
     Name::from_str(literal).ok()
 }
 
+fn account_has_alias_in_domain(
+    world: &impl WorldReadOnly,
+    dataspace_catalog: &iroha_data_model::nexus::DataSpaceCatalog,
+    account: &AccountId,
+    domain: &DomainId,
+) -> bool {
+    world.bound_account_aliases(account).iter().any(|alias| {
+        world.account_aliases().get(alias) == Some(account)
+            && alias
+                .domain_id(dataspace_catalog)
+                .is_ok_and(|alias_domain| alias_domain.as_ref() == Some(domain))
+    })
+}
+
 pub(crate) fn fee_sponsor_policy_from_permission(
     world: &impl WorldReadOnly,
     dataspace_catalog: &iroha_data_model::nexus::DataSpaceCatalog,
+    permission_owner: &AccountId,
     permission: &Permission,
 ) -> Option<FeeSponsorPolicyId> {
-    (permission.name() == "CanUseFeeSponsor")
-        .then(|| {
+    match permission.name() {
+        "CanUseFeeSponsor" => {
             let sponsor = parse_permission_account_field(
                 world,
                 dataspace_catalog,
@@ -1225,8 +1242,25 @@ pub(crate) fn fee_sponsor_policy_from_permission(
             )?;
             let name = parse_permission_name_field(permission.payload(), "policy")?;
             Some(FeeSponsorPolicyId::new(sponsor, name))
-        })
-        .flatten()
+        }
+        "CanUseFeeSponsorForAccount" => permission
+            .payload()
+            .try_into_any_norito::<
+                iroha_executor_data_model::permission::nexus::CanUseFeeSponsorForAccount,
+            >()
+            .ok()
+            .filter(|token| {
+                token.beneficiary == *permission_owner
+                    && account_has_alias_in_domain(
+                        world,
+                        dataspace_catalog,
+                        permission_owner,
+                        &token.domain,
+                    )
+            })
+            .map(|token| FeeSponsorPolicyId::new(token.sponsor, token.policy)),
+        _ => None,
+    }
 }
 
 pub(crate) fn dataspace_fee_sponsor_from_config(
@@ -1293,12 +1327,14 @@ impl AccountPermissionSummary {
         self.reg_trigger_authorities.clear();
         self.exec_trigger_ids.clear();
         self.fee_sponsor_policies.clear();
+        self.exact_fee_sponsor_permissions.clear();
     }
 
     fn apply_grant(
         &mut self,
         world: &impl WorldReadOnly,
         dataspace_catalog: &iroha_data_model::nexus::DataSpaceCatalog,
+        permission_owner: &AccountId,
         permission: &Permission,
     ) {
         match permission.name() {
@@ -1321,10 +1357,21 @@ impl AccountPermissionSummary {
                 }
             }
             "CanUseFeeSponsor" => {
-                if let Some(policy_id) =
-                    fee_sponsor_policy_from_permission(world, dataspace_catalog, permission)
-                {
+                if let Some(policy_id) = fee_sponsor_policy_from_permission(
+                    world,
+                    dataspace_catalog,
+                    permission_owner,
+                    permission,
+                ) {
                     self.fee_sponsor_policies.insert(policy_id);
+                }
+            }
+            "CanUseFeeSponsorForAccount" => {
+                if let Ok(permission) = permission.payload().try_into_any_norito::<
+                    iroha_executor_data_model::permission::nexus::CanUseFeeSponsorForAccount,
+                >() && permission.beneficiary == *permission_owner
+                {
+                    self.exact_fee_sponsor_permissions.push(permission);
                 }
             }
             _ => {}
@@ -35563,6 +35610,18 @@ impl State {
             .iter()
             .map(|entry| entry.id)
             .collect();
+        let dataspace_aliases: BTreeSet<_> = nexus
+            .dataspace_catalog
+            .entries()
+            .iter()
+            .map(|entry| entry.alias.clone())
+            .collect();
+        let dataspace_ids_by_alias: BTreeMap<_, _> = nexus
+            .dataspace_catalog
+            .entries()
+            .iter()
+            .map(|entry| (entry.alias.clone(), entry.id))
+            .collect();
         let active_lane_ids: BTreeSet<_> = nexus
             .lane_catalog
             .lanes()
@@ -36073,6 +36132,31 @@ impl State {
                 )
             {
                 return !dataspace_ids.contains(&permission.dataspace);
+            }
+            if let Ok(permission) = iroha_executor_data_model::permission::nexus::CanPublishSpaceDirectoryManifestForUaid::try_from(
+                permission,
+            ) {
+                return !dataspace_ids.contains(&permission.dataspace);
+            }
+            if let Ok(permission) = iroha_executor_data_model::permission::nexus::CanPublishSpaceDirectoryManifestForAccountDomain::try_from(
+                permission,
+            ) {
+                return !dataspace_ids.contains(&permission.dataspace)
+                    || dataspace_ids_by_alias
+                        .get(permission.domain.dataspace().as_ref())
+                        .is_none_or(|dataspace| *dataspace != permission.dataspace);
+            }
+            if let Ok(permission) =
+                iroha_executor_data_model::permission::nexus::CanUseFeeSponsorForAccount::try_from(
+                    permission,
+                )
+            {
+                return !dataspace_aliases.contains(permission.domain.dataspace().as_ref());
+            }
+            if let Ok(permission) = iroha_executor_data_model::permission::nexus::CanEnrollFeeSponsorPolicyForAccountDomain::try_from(
+                permission,
+            ) {
+                return !dataspace_aliases.contains(permission.domain.dataspace().as_ref());
             }
 
             false
@@ -54737,6 +54821,61 @@ mod permission_cache_tests {
     }
 
     #[test]
+    fn exact_fee_sponsor_cache_rechecks_live_alias_binding() {
+        use iroha_executor_data_model::permission::nexus::CanUseFeeSponsorForAccount;
+
+        let (sponsor, _) = gen_account_in("wonderland");
+        let (caller, _) = gen_account_in("wonderland");
+        let domain_id = wonderland_domain_id();
+        let domain: Domain = Domain::new(domain_id.clone()).build(&sponsor);
+        let sponsor_account = new_wonderland_account(&sponsor).build(&sponsor);
+        let caller_account = new_wonderland_account(&caller).build(&sponsor);
+        let world = World::with([domain], [sponsor_account, caller_account], []);
+        let kura = Kura::blank_kura_for_testing();
+        let query = crate::query::store::LiveQueryStore::start_test();
+        let state = State::new(world, kura, query);
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut stx = block.transaction();
+        let alias = AccountAlias::from_literal(
+            "customer@wonderland.universal",
+            &stx.nexus.dataspace_catalog,
+        )
+        .expect("customer alias");
+        stx.world
+            .insert_account_alias_binding(alias.clone(), caller.clone());
+        let permission = CanUseFeeSponsorForAccount {
+            sponsor: sponsor.clone(),
+            policy: "retail".parse().expect("retail fee sponsor policy"),
+            beneficiary: caller.clone(),
+            domain: domain_id,
+        };
+        Grant::account_permission(permission, caller.clone())
+            .execute(&sponsor, &mut stx)
+            .expect("grant exact fee sponsor permission");
+
+        assert!(stx.can_use_fee_sponsor(&caller, &sponsor));
+        assert!(
+            stx.can_use_fee_sponsor(&caller, &sponsor),
+            "repeat check hydrates the permission cache"
+        );
+
+        stx.world.remove_account_alias_binding(&alias);
+        assert!(
+            !stx.can_use_fee_sponsor(&caller, &sponsor),
+            "removing the exact FI alias must make an already-cached sponsor token inert"
+        );
+
+        stx.world
+            .insert_account_alias_binding(alias, caller.clone());
+        assert!(
+            stx.can_use_fee_sponsor(&caller, &sponsor),
+            "restoring the exact FI alias reactivates the exact beneficiary token"
+        );
+    }
+
+    #[test]
     fn fee_sponsor_permission_accepts_dataspace_default_sponsor() {
         let (sponsor, _) = gen_account_in("wonderland");
         let (caller, _) = gen_account_in("wonderland");
@@ -55214,11 +55353,13 @@ mod permission_cache_tests {
             summary.apply_grant(
                 &stx.world,
                 &stx.nexus.dataspace_catalog,
+                &registrar,
                 &Permission::from(permission_register.clone()),
             );
             summary.apply_grant(
                 &stx.world,
                 &stx.nexus.dataspace_catalog,
+                &registrar,
                 &Permission::from(permission_execute.clone()),
             );
             stx.perm_cache.insert_summary(registrar.clone(), summary);
@@ -57826,7 +57967,7 @@ impl StateTransaction<'_, '_> {
         let dataspace_catalog = &self.nexus.dataspace_catalog;
         let mut summary = AccountPermissionSummary::default();
         let mut merge_permission = |permission: &Permission| {
-            summary.apply_grant(world, dataspace_catalog, permission);
+            summary.apply_grant(world, dataspace_catalog, account, permission);
         };
         if let Some(perms) = world.account_permissions.get(account) {
             for permission in perms {
@@ -57869,14 +58010,6 @@ impl StateTransaction<'_, '_> {
             .any(|authority| authority.subject_id() == owner.subject_id())
     }
 
-    /// Build or fetch cached set of sponsor policy IDs this account can charge fees to.
-    fn cached_fee_sponsor_policies(
-        &mut self,
-        account: &AccountId,
-    ) -> &std::collections::BTreeSet<FeeSponsorPolicyId> {
-        &self.ensure_permission_summary(account).fee_sponsor_policies
-    }
-
     /// Fast check: does `caller` have `CanExecuteTrigger{trigger_id}` for `id`?
     pub fn can_execute_trigger_for(&mut self, caller: &AccountId, id: &TriggerId) -> bool {
         let set = self.cached_exec_trigger_ids(caller);
@@ -57889,13 +58022,35 @@ impl StateTransaction<'_, '_> {
         caller: &AccountId,
         sponsor: &AccountId,
     ) -> BTreeSet<FeeSponsorPolicyId> {
-        let mut policies = {
-            let set = self.cached_fee_sponsor_policies(caller);
-            set.iter()
+        let (mut policies, exact_permissions) = {
+            let summary = self.ensure_permission_summary(caller);
+            let policies = summary
+                .fee_sponsor_policies
+                .iter()
                 .filter(|allowed| allowed.sponsor.subject_id() == sponsor.subject_id())
                 .cloned()
-                .collect::<BTreeSet<_>>()
+                .collect::<BTreeSet<_>>();
+            let exact_permissions = summary
+                .exact_fee_sponsor_permissions
+                .iter()
+                .filter(|permission| permission.sponsor.subject_id() == sponsor.subject_id())
+                .cloned()
+                .collect::<Vec<_>>();
+            (policies, exact_permissions)
         };
+        for permission in exact_permissions {
+            if account_has_alias_in_domain(
+                &self.world,
+                &self.nexus.dataspace_catalog,
+                caller,
+                &permission.domain,
+            ) {
+                policies.insert(FeeSponsorPolicyId::new(
+                    permission.sponsor,
+                    permission.policy,
+                ));
+            }
+        }
 
         if let Some(dataspace_id) = self.current_dataspace_id
             && let Ok(Some(default_policy)) = dataspace_fee_sponsor_policy_from_config(
@@ -65065,43 +65220,115 @@ mod tests {
     fn permission_summary_resolves_accounts_from_payload() {
         use iroha_data_model::permission::Permission;
         use iroha_executor_data_model::permission::{
-            nexus::CanUseFeeSponsor, trigger::CanRegisterTrigger,
+            nexus::{CanUseFeeSponsor, CanUseFeeSponsorForAccount},
+            trigger::CanRegisterTrigger,
         };
 
         let (account_id, _keypair) = gen_account_in("wonderland");
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
-        let world = World::with(
+        let mut world = World::with(
             [Domain::new(domain_id.clone()).build(&account_id)],
             [new_account_in_domain(&account_id, &domain_id).build(&account_id)],
             [],
         );
+        let dataspace_catalog = iroha_data_model::nexus::DataSpaceCatalog::default();
+        let account_alias =
+            AccountAlias::from_literal("customer@wonderland.universal", &dataspace_catalog)
+                .expect("beneficiary alias in exact sponsor domain");
+        world
+            .account_aliases
+            .insert(account_alias.clone(), account_id.clone());
+        world
+            .account_aliases_by_account
+            .insert(account_id.clone(), BTreeSet::from([account_alias]));
         let world_view = world.view();
 
         let mut summary = AccountPermissionSummary::default();
         summary.apply_grant(
             &world_view,
-            &iroha_data_model::nexus::DataSpaceCatalog::default(),
+            &dataspace_catalog,
+            &account_id,
             &Permission::from(CanRegisterTrigger {
                 authority: account_id.clone(),
             }),
         );
         summary.apply_grant(
             &world_view,
-            &iroha_data_model::nexus::DataSpaceCatalog::default(),
+            &dataspace_catalog,
+            &account_id,
             &Permission::from(CanUseFeeSponsor {
                 sponsor: account_id.clone(),
                 policy: "default".parse().expect("default fee sponsor policy"),
             }),
         );
+        let exact_policy: Name = "retail".parse().expect("exact fee sponsor policy");
+        let exact_permission = Permission::from(CanUseFeeSponsorForAccount {
+            sponsor: account_id.clone(),
+            policy: exact_policy.clone(),
+            beneficiary: account_id.clone(),
+            domain: domain_id.clone(),
+        });
+        summary.apply_grant(
+            &world_view,
+            &dataspace_catalog,
+            &account_id,
+            &exact_permission,
+        );
 
+        let (other_account, _other_keypair) = gen_account_in("elsewhere");
+        let mut other_summary = AccountPermissionSummary::default();
+        other_summary.apply_grant(
+            &world_view,
+            &dataspace_catalog,
+            &other_account,
+            &exact_permission,
+        );
+        let wrong_domain_permission = Permission::from(CanUseFeeSponsorForAccount {
+            sponsor: account_id.clone(),
+            policy: "retail".parse().expect("exact fee sponsor policy"),
+            beneficiary: account_id.clone(),
+            domain: DomainId::try_new("ubl", "universal").expect("different FI domain"),
+        });
         assert!(summary.reg_trigger_authorities.contains(&account_id));
         assert!(
             summary
                 .fee_sponsor_policies
                 .contains(&FeeSponsorPolicyId::new(
-                    account_id,
+                    account_id.clone(),
                     "default".parse().expect("default fee sponsor policy"),
                 ))
+        );
+        assert!(
+            summary
+                .exact_fee_sponsor_permissions
+                .iter()
+                .any(|permission| permission.beneficiary == account_id
+                    && permission.policy == exact_policy),
+            "the cache must retain the exact beneficiary token for live-domain evaluation"
+        );
+        assert!(
+            other_summary.exact_fee_sponsor_permissions.is_empty(),
+            "an exact sponsor token attached to any account other than its beneficiary must be inert"
+        );
+        assert_eq!(
+            fee_sponsor_policy_from_permission(
+                &world_view,
+                &dataspace_catalog,
+                &account_id,
+                &exact_permission,
+            ),
+            Some(FeeSponsorPolicyId::new(account_id.clone(), exact_policy,)),
+            "the live exact-domain check must accept the bound beneficiary"
+        );
+        assert_eq!(
+            fee_sponsor_policy_from_permission(
+                &world_view,
+                &dataspace_catalog,
+                &account_id,
+                &wrong_domain_permission,
+            ),
+            None,
+            "an exact sponsor token must be inert unless the beneficiary currently has an alias in its delegated FI domain"
         );
     }
 
@@ -86563,6 +86790,7 @@ mod tests {
 
         let retained = DataSpaceId::UNIVERSAL;
         let removed = DataSpaceId::new(7);
+        let other_retained = DataSpaceId::new(8);
 
         let initial_nexus = iroha_config::parameters::actual::Nexus {
             enabled: true,
@@ -86576,6 +86804,12 @@ mod tests {
                 DataSpaceMetadata {
                     id: removed,
                     alias: "historical".to_string(),
+                    description: None,
+                    fault_tolerance: 1,
+                },
+                DataSpaceMetadata {
+                    id: other_retained,
+                    alias: "other".to_string(),
                     description: None,
                     fault_tolerance: 1,
                 },
@@ -86597,13 +86831,86 @@ mod tests {
                 dataspace: retained,
             }
             .into();
+        let scoped_uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::permission-cleanup"));
+        let stale_scoped_permission: Permission =
+            iroha_executor_data_model::permission::nexus::CanPublishSpaceDirectoryManifestForUaid {
+                dataspace: removed,
+                uaid: scoped_uaid,
+            }
+            .into();
+        let retained_scoped_permission: Permission =
+            iroha_executor_data_model::permission::nexus::CanPublishSpaceDirectoryManifestForUaid {
+                dataspace: retained,
+                uaid: scoped_uaid,
+            }
+            .into();
+        let stale_domain_permission: Permission = iroha_executor_data_model::permission::nexus::CanPublishSpaceDirectoryManifestForAccountDomain {
+            dataspace: removed,
+            domain: DomainId::try_new("historical", "historical").expect("stale domain id"),
+        }
+        .into();
+        let retained_domain_permission: Permission = iroha_executor_data_model::permission::nexus::CanPublishSpaceDirectoryManifestForAccountDomain {
+            dataspace: retained,
+            domain: DomainId::try_new("retained", "universal").expect("retained domain id"),
+        }
+        .into();
+        let mismatched_domain_permission: Permission = iroha_executor_data_model::permission::nexus::CanPublishSpaceDirectoryManifestForAccountDomain {
+            dataspace: retained,
+            domain: DomainId::try_new("retained", "other").expect("mismatched domain id"),
+        }
+        .into();
         let holder = ALICE_ID.clone();
+        let sponsor = AccountId::new(checked_keypair().public_key().clone());
+        let beneficiary = AccountId::new(checked_keypair().public_key().clone());
+        let sponsor_policy: Name = "retail".parse().expect("sponsor policy name");
+        let stale_sponsor_permission: Permission =
+            iroha_executor_data_model::permission::nexus::CanUseFeeSponsorForAccount {
+                sponsor: sponsor.clone(),
+                policy: sponsor_policy.clone(),
+                beneficiary: beneficiary.clone(),
+                domain: DomainId::try_new("hbl", "historical").expect("stale sponsor domain"),
+            }
+            .into();
+        let retained_sponsor_permission: Permission =
+            iroha_executor_data_model::permission::nexus::CanUseFeeSponsorForAccount {
+                sponsor: sponsor.clone(),
+                policy: sponsor_policy.clone(),
+                beneficiary,
+                domain: DomainId::try_new("hbl", "universal").expect("retained sponsor domain"),
+            }
+            .into();
+        let stale_enrollment_permission: Permission = iroha_executor_data_model::permission::nexus::CanEnrollFeeSponsorPolicyForAccountDomain {
+            sponsor: sponsor.clone(),
+            policy: sponsor_policy.clone(),
+            domain: DomainId::try_new("hbl", "historical")
+                .expect("stale enrollment domain"),
+        }
+        .into();
+        let retained_enrollment_permission: Permission = iroha_executor_data_model::permission::nexus::CanEnrollFeeSponsorPolicyForAccountDomain {
+            sponsor,
+            policy: sponsor_policy,
+            domain: DomainId::try_new("hbl", "universal")
+                .expect("retained enrollment domain"),
+        }
+        .into();
         let role_id: RoleId = "dataspace_manifest_cleanup".parse().expect("role id");
 
         let mut wb = state.world.block();
         wb.account_permissions.insert(
             holder.clone(),
-            BTreeSet::from([stale_permission.clone(), retained_permission.clone()]),
+            BTreeSet::from([
+                stale_permission.clone(),
+                retained_permission.clone(),
+                stale_scoped_permission.clone(),
+                retained_scoped_permission.clone(),
+                stale_domain_permission.clone(),
+                retained_domain_permission.clone(),
+                mismatched_domain_permission.clone(),
+                stale_sponsor_permission.clone(),
+                retained_sponsor_permission.clone(),
+                stale_enrollment_permission.clone(),
+                retained_enrollment_permission.clone(),
+            ]),
         );
         wb.roles.insert(
             role_id.clone(),
@@ -86612,10 +86919,28 @@ mod tests {
                 permissions: BTreeSet::from([
                     stale_permission.clone(),
                     retained_permission.clone(),
+                    stale_scoped_permission.clone(),
+                    retained_scoped_permission.clone(),
+                    stale_domain_permission.clone(),
+                    retained_domain_permission.clone(),
+                    mismatched_domain_permission.clone(),
+                    stale_sponsor_permission.clone(),
+                    retained_sponsor_permission.clone(),
+                    stale_enrollment_permission.clone(),
+                    retained_enrollment_permission.clone(),
                 ]),
                 permission_epochs: BTreeMap::from([
                     (stale_permission.clone(), 1),
                     (retained_permission.clone(), 1),
+                    (stale_scoped_permission.clone(), 1),
+                    (retained_scoped_permission.clone(), 1),
+                    (stale_domain_permission.clone(), 1),
+                    (retained_domain_permission.clone(), 1),
+                    (mismatched_domain_permission.clone(), 1),
+                    (stale_sponsor_permission.clone(), 1),
+                    (retained_sponsor_permission.clone(), 1),
+                    (stale_enrollment_permission.clone(), 1),
+                    (retained_enrollment_permission.clone(), 1),
                 ]),
             },
         );
@@ -86623,12 +86948,20 @@ mod tests {
 
         let updated_nexus = iroha_config::parameters::actual::Nexus {
             enabled: true,
-            dataspace_catalog: DataSpaceCatalog::new(vec![DataSpaceMetadata {
-                id: retained,
-                alias: "universal".to_string(),
-                description: None,
-                fault_tolerance: 1,
-            }])
+            dataspace_catalog: DataSpaceCatalog::new(vec![
+                DataSpaceMetadata {
+                    id: retained,
+                    alias: "universal".to_string(),
+                    description: None,
+                    fault_tolerance: 1,
+                },
+                DataSpaceMetadata {
+                    id: other_retained,
+                    alias: "other".to_string(),
+                    description: None,
+                    fault_tolerance: 1,
+                },
+            ])
             .expect("dataspace catalog"),
             ..iroha_config::parameters::actual::Nexus::default()
         };
@@ -86648,6 +86981,42 @@ mod tests {
             !account_permissions.contains(&stale_permission),
             "removed dataspace permission must be pruned from account"
         );
+        assert!(
+            account_permissions.contains(&retained_scoped_permission),
+            "retained UAID-scoped dataspace permission should remain on account"
+        );
+        assert!(
+            !account_permissions.contains(&stale_scoped_permission),
+            "removed UAID-scoped dataspace permission must be pruned from account"
+        );
+        assert!(
+            account_permissions.contains(&retained_domain_permission),
+            "retained account-domain manifest permission should remain on account"
+        );
+        assert!(
+            !account_permissions.contains(&stale_domain_permission),
+            "removed account-domain manifest permission must be pruned from account"
+        );
+        assert!(
+            !account_permissions.contains(&mismatched_domain_permission),
+            "account-domain permission whose domain alias maps to another dataspace must be pruned"
+        );
+        assert!(
+            account_permissions.contains(&retained_sponsor_permission),
+            "sponsor-use permission in a retained domain must remain on account"
+        );
+        assert!(
+            !account_permissions.contains(&stale_sponsor_permission),
+            "sponsor-use permission in a removed dataspace alias must be pruned from account"
+        );
+        assert!(
+            account_permissions.contains(&retained_enrollment_permission),
+            "sponsor enrollment permission in a retained domain must remain on account"
+        );
+        assert!(
+            !account_permissions.contains(&stale_enrollment_permission),
+            "sponsor enrollment permission in a removed dataspace alias must be pruned from account"
+        );
 
         let roles_view = state.world.roles.view();
         let role = roles_view.get(&role_id).expect("role should remain");
@@ -86663,6 +87032,56 @@ mod tests {
             "removed dataspace permission must be pruned from role"
         );
         assert!(
+            role.permissions()
+                .any(|permission| permission == &retained_scoped_permission),
+            "retained UAID-scoped dataspace permission should remain on role"
+        );
+        assert!(
+            !role
+                .permissions()
+                .any(|permission| permission == &stale_scoped_permission),
+            "removed UAID-scoped dataspace permission must be pruned from role"
+        );
+        assert!(
+            role.permissions()
+                .any(|permission| permission == &retained_domain_permission),
+            "retained account-domain manifest permission should remain on role"
+        );
+        assert!(
+            !role
+                .permissions()
+                .any(|permission| permission == &stale_domain_permission),
+            "removed account-domain manifest permission must be pruned from role"
+        );
+        assert!(
+            !role
+                .permissions()
+                .any(|permission| permission == &mismatched_domain_permission),
+            "domain/dataspace-mismatched manifest permission must be pruned from role"
+        );
+        assert!(
+            role.permissions()
+                .any(|permission| permission == &retained_sponsor_permission),
+            "retained sponsor-use permission should remain on role"
+        );
+        assert!(
+            !role
+                .permissions()
+                .any(|permission| permission == &stale_sponsor_permission),
+            "stale sponsor-use permission must be pruned from role"
+        );
+        assert!(
+            role.permissions()
+                .any(|permission| permission == &retained_enrollment_permission),
+            "retained sponsor enrollment permission should remain on role"
+        );
+        assert!(
+            !role
+                .permissions()
+                .any(|permission| permission == &stale_enrollment_permission),
+            "stale sponsor enrollment permission must be pruned from role"
+        );
+        assert!(
             role.permission_epochs().contains_key(&retained_permission),
             "retained permission epoch should remain"
         );
@@ -86670,6 +87089,47 @@ mod tests {
             !role.permission_epochs().contains_key(&stale_permission),
             "stale permission epoch should be pruned"
         );
+        assert!(
+            role.permission_epochs()
+                .contains_key(&retained_scoped_permission),
+            "retained UAID-scoped permission epoch should remain"
+        );
+        assert!(
+            !role
+                .permission_epochs()
+                .contains_key(&stale_scoped_permission),
+            "stale UAID-scoped permission epoch should be pruned"
+        );
+        assert!(
+            role.permission_epochs()
+                .contains_key(&retained_domain_permission),
+            "retained account-domain permission epoch should remain"
+        );
+        assert!(
+            !role
+                .permission_epochs()
+                .contains_key(&stale_domain_permission),
+            "stale account-domain permission epoch should be pruned"
+        );
+        for stale in [
+            &mismatched_domain_permission,
+            &stale_sponsor_permission,
+            &stale_enrollment_permission,
+        ] {
+            assert!(
+                !role.permission_epochs().contains_key(stale),
+                "stale scoped permission epoch should be pruned: {stale:?}"
+            );
+        }
+        for retained_permission in [
+            &retained_sponsor_permission,
+            &retained_enrollment_permission,
+        ] {
+            assert!(
+                role.permission_epochs().contains_key(retained_permission),
+                "retained scoped permission epoch should remain: {retained_permission:?}"
+            );
+        }
     }
 
     #[test]

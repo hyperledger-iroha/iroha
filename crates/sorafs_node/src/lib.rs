@@ -261,6 +261,7 @@ const GC_STORAGE_MANIFEST_IDENTITY_DOMAIN_V1: &[u8] =
 const GC_STORAGE_MANIFEST_SET_DOMAIN_V1: &[u8] = b"sorafs.node.gc.manifest_set.identity.v1";
 const GC_STORAGE_CHUNK_REFCOUNTS_DOMAIN_V1: &[u8] = b"sorafs.node.gc.chunk_refcounts.identity.v1";
 const LOCAL_RUNTIME_SNAPSHOT_TMP_EXT: &str = "tmp";
+static LOCAL_CHECKPOINT_WRITE_LOCK: Mutex<()> = Mutex::new(());
 const EVIDENCE_VIEWER_AUDIT_CYCLE_ID_DOMAIN_V1: &[u8] =
     b"sorafs.node.moderation.evidence_viewer_audit.cycle_id.v1";
 const PRIVACY_AGGREGATE_ENTRY_ID_DOMAIN_V1: &[u8] =
@@ -922,6 +923,11 @@ fn write_local_checkpoint_atomic_with_mode_and_parent_sync(
     _private: bool,
     parent_sync: fn(&Path) -> io::Result<()>,
 ) -> Result<(), LocalCheckpointWriteError> {
+    let _writer_guard = LOCAL_CHECKPOINT_WRITE_LOCK.lock().map_err(|_| {
+        LocalCheckpointWriteError::precommit(io::Error::other(
+            "local checkpoint writer lock is poisoned",
+        ))
+    })?;
     let path = absolute_local_checkpoint_path(path)?;
     let path = path.as_path();
     reject_unsafe_checkpoint_ancestors(path)?;

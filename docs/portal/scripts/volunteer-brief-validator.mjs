@@ -67,7 +67,12 @@ async function collectVolunteerInputs() {
 async function runCargoValidator(inputs) {
   await mkdir(path.dirname(cliReportPath), {recursive: true});
   const xtaskArgs = [
+    'run',
+    '-p',
     'xtask',
+    '--bin',
+    'xtask',
+    '--',
     'ministry-transparency',
     'volunteer-validate',
     '--json-output',
@@ -86,27 +91,10 @@ async function runCargoValidator(inputs) {
       child.on('exit', (code) => resolve(code ?? 1));
     });
 
-  const primaryCode = await runCargo(xtaskArgs);
-  if (primaryCode === 0) {
-    return;
-  }
-
-  console.warn(
-    `[volunteer-brief-validator] cargo xtask exited with code ${primaryCode}; falling back to 'cargo run -p xtask --bin xtask -- ministry-transparency volunteer-validate ...'`
-  );
-
-  const fallbackCode = await runCargo([
-    'run',
-    '-p',
-    'xtask',
-    '--bin',
-    'xtask',
-    '--',
-    ...xtaskArgs.slice(1)
-  ]);
-  if (fallbackCode !== 0) {
+  const code = await runCargo(xtaskArgs);
+  if (code !== 0) {
     throw new Error(
-      `[volunteer-brief-validator] cargo exited with status ${fallbackCode}`
+      `[volunteer-brief-validator] cargo exited with status ${code}`
     );
   }
 }

@@ -1385,9 +1385,12 @@ pub(crate) fn fee_sponsor_policy_ids_read_only(
     let dataspace_catalog = world.dataspace_catalog();
     let mut policy_ids = BTreeSet::new();
     let mut collect_policy = |permission: &Permission| {
-        if let Some(policy_id) =
-            crate::state::fee_sponsor_policy_from_permission(world, dataspace_catalog, permission)
-            && policy_id.sponsor.subject_id() == sponsor.subject_id()
+        if let Some(policy_id) = crate::state::fee_sponsor_policy_from_permission(
+            world,
+            dataspace_catalog,
+            caller,
+            permission,
+        ) && policy_id.sponsor.subject_id() == sponsor.subject_id()
         {
             policy_ids.insert(policy_id);
         }
@@ -1565,10 +1568,17 @@ fn fee_sponsor_rule_matches_operation(
     true
 }
 
+fn fee_sponsor_allow_rule_covers_fee(rule: &FeeSponsorRule, fee: &Numeric) -> bool {
+    rule.max_fee
+        .as_ref()
+        .is_none_or(|max_fee| fee <= max_fee.as_numeric())
+}
+
 fn fee_sponsor_policy_allows_transaction(
     world: &impl WorldReadOnly,
     policy: &FeeSponsorPolicy,
     transaction: &SignedTransaction,
+    fee: &Numeric,
     route_dataspace_id: Option<DataSpaceId>,
 ) -> Result<bool, NexusFeeAdmissionError> {
     if !policy.enabled {
@@ -1590,6 +1600,7 @@ fn fee_sponsor_policy_allows_transaction(
         let allowed = policy.rules.iter().any(|rule| {
             rule.effect == FeeSponsorRuleEffect::Allow
                 && fee_sponsor_rule_matches_operation(world, rule, dataspace_id, operation)
+                && fee_sponsor_allow_rule_covers_fee(rule, fee)
         });
         if !allowed {
             return Ok(false);
@@ -1634,7 +1645,13 @@ fn authorize_fee_sponsor_policy_from_ids(
         {
             continue;
         }
-        if fee_sponsor_policy_allows_transaction(world, policy, transaction, route_dataspace_id)? {
+        if fee_sponsor_policy_allows_transaction(
+            world,
+            policy,
+            transaction,
+            fee,
+            route_dataspace_id,
+        )? {
             return Ok(policy_id);
         }
     }
@@ -7569,7 +7586,11 @@ const INITIAL_EXECUTOR_PERMISSION_NAMES: &[&str] = &[
     "CanUpgradeExecutor",
     "CanRegisterSmartContractCode",
     "CanPublishSpaceDirectoryManifest",
+    "CanPublishSpaceDirectoryManifestForUaid",
+    "CanPublishSpaceDirectoryManifestForAccountDomain",
     "CanUseFeeSponsor",
+    "CanUseFeeSponsorForAccount",
+    "CanEnrollFeeSponsorPolicyForAccountDomain",
     "CanProposeContractDeployment",
     "CanSubmitGovernanceBallot",
     "CanEnactGovernance",
@@ -9428,20 +9449,48 @@ mod tests {
         fees.per_gas_unit_fee = "0.00005".parse().expect("valid gas fee");
         fees.sponsor_max_fee = "0.01".parse().expect("valid sponsor cap");
 
-        let offline_policy: InstructionBox =
-            iroha_data_model::isi::offline::SetOfflineDeviceAttestationPolicy::new(
-                iroha_data_model::offline::OfflineDeviceAttestationPolicy {
+        let public_key = iroha_data_model::offline::KagemushaDevicePublicKeyV2::from_sec1_bytes(&[
+            0x04, 0x6b, 0x17, 0xd1, 0xf2, 0xe1, 0x2c, 0x42, 0x47, 0xf8, 0xbc, 0xe6, 0xe5, 0x63,
+            0xa4, 0x40, 0xf2, 0x77, 0x03, 0x7d, 0x81, 0x2d, 0xeb, 0x33, 0xa0, 0xf4, 0xa1, 0x39,
+            0x45, 0xd8, 0x98, 0xc2, 0x96, 0x4f, 0xe3, 0x42, 0xe2, 0xfe, 0x1a, 0x7f, 0x9b, 0x8e,
+            0xe7, 0xeb, 0x4a, 0x7c, 0x0f, 0x9e, 0x16, 0x2b, 0xce, 0x33, 0x57, 0x6b, 0x31, 0x5e,
+            0xce, 0xcb, 0xb6, 0x40, 0x68, 0x37, 0xbf, 0x51, 0xf5,
+        ])
+        .expect("canonical uncompressed P-256 generator point");
+        let attestation_report = b"fee-test-offline-attestation-report".to_vec();
+        let evidence = b"fee-test-offline-attestation-evidence".to_vec();
+        let offline_attestation: InstructionBox =
+            iroha_data_model::isi::offline::RegisterOfflineDeviceAttestation::new(
+                iroha_data_model::offline::OfflineDeviceAttestationRegistration {
                     version: 1,
-                    trusted_roots: Vec::new(),
-                    revoked_certificate_sha256: Vec::new(),
-                    ios_apps: Vec::new(),
-                    android_apps: Vec::new(),
-                    require_ios_app_policy: false,
-                    require_android_app_policy: false,
+                    platform: "android-keymint".to_owned(),
+                    key_id: "fee-test-offline-key".to_owned(),
+                    device_id: "fee-test-offline-device".to_owned(),
+                    account_id: alice(),
+                    asset_definition_id: None,
+                    ios_team_id: None,
+                    ios_bundle_id: None,
+                    ios_environment: None,
+                    android_package_name: Some("org.hyperledger.iroha.fee-test".to_owned()),
+                    android_signing_certificate_sha256: Some(vec![0x51; 32]),
+                    public_key,
+                    assertion_scheme: "android-keymint".to_owned(),
+                    assertion_key_algorithm: "ecdsa-p256-sha256".to_owned(),
+                    assertion_public_key: vec![0x52; 65],
+                    assertion_usage_count_limit: Some(1),
+                    one_use: true,
+                    challenge_hash: Hash::new(b"fee-test-offline-attestation-challenge"),
+                    attestation_report_hash: Hash::new(&attestation_report),
+                    attestation_report,
+                    evidence_hash: Hash::new(&evidence),
+                    evidence,
+                    recent_block_height: 42,
+                    recent_block_hash: Hash::new(b"fee-test-offline-attestation-block"),
+                    expires_at_ms: 2_000_000_000_000,
                 },
             )
             .into();
-        let offline_attestation_gas = crate::gas::meter_instruction(&offline_policy);
+        let offline_attestation_gas = crate::gas::meter_instruction(&offline_attestation);
         assert_eq!(offline_attestation_gas, 128);
 
         let offline_attestation_fee =
@@ -11713,7 +11762,7 @@ mod tests {
     ) -> iroha_data_model::isi::offline::RedeemKagemushaRecursiveV2 {
         use iroha_data_model::{
             offline::{
-                KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V1,
+                KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V3,
                 KagemushaRecursiveSpendArtifactBindingV3, KagemushaRecursiveSpendBranchClaimV2,
                 KagemushaRecursiveSpendBundleV2, KagemushaRecursiveSpendProofV2,
                 KagemushaRecursiveSpendPublicStatementV2, KagemushaRecursiveSpendRedeemRequestV2,
@@ -11775,7 +11824,7 @@ mod tests {
         let branch_claim = KagemushaRecursiveSpendBranchClaimV2::root(lineage_root)
             .expect("canonical fee-policy V2 root claim");
         let verifier_key_id =
-            VerifyingKeyId::new("halo2/ipa", KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V1);
+            VerifyingKeyId::new("halo2/ipa", KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V3);
         let statement = KagemushaRecursiveSpendPublicStatementV2 {
             chain_id: chain_id.clone(),
             asset: asset.clone(),
@@ -12302,6 +12351,93 @@ mod tests {
             err,
             NexusFeeAdmissionError::Rejected(message)
                 if message.contains("fee sponsor policy is not authorized")
+        ));
+    }
+
+    #[test]
+    fn nexus_fee_sponsor_rule_cap_rejects_native_transfer_batch_above_single_transfer_fee() {
+        let mut fixture = sponsored_fee_admission_fixture(true);
+        {
+            let nexus = fixture.state.nexus.get_mut();
+            nexus.fees.base_fee = Quantity::zero();
+            nexus.fees.per_byte_fee = Quantity::zero();
+            nexus.fees.per_instruction_fee = "0.001".parse().expect("instruction fee");
+            nexus.fees.per_gas_unit_fee = "0.00005".parse().expect("gas fee");
+            nexus.fees.sponsor_max_fee = "5".parse().expect("global sponsor cap");
+        }
+
+        let mut native_retail = FeeSponsorRule::new(FeeSponsorRuleEffect::Allow);
+        native_retail.max_fee = Some("0.01".parse().expect("single-transfer fee cap"));
+        native_retail.dataspaces.insert(DataSpaceId::new(10));
+        native_retail
+            .executable_kinds
+            .insert(FeeSponsorExecutableKind::Instructions);
+        native_retail
+            .instruction_wire_ids
+            .insert(iroha_data_model::isi::transfer::TransferBox::WIRE_ID.to_owned());
+        let policy = FeeSponsorPolicy {
+            id: FeeSponsorPolicyId::new(
+                fixture.sponsor_id.clone(),
+                "default".parse().expect("fixture policy name"),
+            ),
+            enabled: true,
+            max_fee: Some("5".parse().expect("BISP-compatible policy cap")),
+            rules: vec![native_retail],
+        };
+        fixture
+            .state
+            .world
+            .fee_sponsor_policies
+            .insert(policy.id.clone(), policy);
+
+        let recipient = gen_account_in("wonderland").0;
+        let pkr = AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").expect("fixture domain"),
+            "pkr".parse().expect("fixture asset name"),
+        );
+        let transfer = || {
+            InstructionBox::from(Transfer::asset_quantity(
+                AssetId::new(pkr.clone(), fixture.authority_id.clone()),
+                1_u32,
+                recipient.clone(),
+            ))
+        };
+        let one = sign_sponsored_fixture_transaction(
+            &fixture,
+            Executable::Instructions(vec![transfer()].into()),
+            sponsored_fee_metadata(&fixture),
+        );
+        let view = fixture.state.view();
+        check_external_nexus_fee_admission(
+            &view.world,
+            &view.nexus,
+            &one,
+            0,
+            1,
+            Some(DataSpaceId::new(10)),
+        )
+        .expect("one ordinary retail transfer costs exactly 0.01 and remains sponsored");
+        drop(view);
+
+        let two = sign_sponsored_fixture_transaction(
+            &fixture,
+            Executable::Instructions(vec![transfer(), transfer()].into()),
+            sponsored_fee_metadata(&fixture),
+        );
+        let view = fixture.state.view();
+        let err = check_external_nexus_fee_admission(
+            &view.world,
+            &view.nexus,
+            &two,
+            0,
+            1,
+            Some(DataSpaceId::new(10)),
+        )
+        .expect_err("a native batch costing 0.02 must not consume the BISP-sized policy cap");
+        assert!(matches!(
+            err,
+            NexusFeeAdmissionError::Rejected(message)
+                if message == "fee sponsor policy is not authorized"
         ));
     }
 

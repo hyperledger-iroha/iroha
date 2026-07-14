@@ -27,8 +27,10 @@ import {
 import {
   buildMultisigContractCallProposeRequest,
   buildMultisigProposeRequest,
+  canonicalRequestSignatureMessage,
   noritoEncodeMultisigContractCallProposeRequest,
   normalizeAccountId,
+  signEd25519,
   ValidationError,
   ValidationErrorCode,
 } from "../src/index.js";
@@ -308,7 +310,164 @@ function sampleAccountForms() {
 
 const SAMPLE_ACCOUNT_FORMS = sampleAccountForms();
 const SAMPLE_ACCOUNT_ID = SAMPLE_ACCOUNT_FORMS.canonical;
-const SAMPLE_VPN_HELPER_TICKET_HEX = `5356504e48543100${"00".repeat(248)}`;
+const SAMPLE_VPN_HELPER_TICKET_HEX = `5356504e48543100${"00".repeat(656)}`;
+
+function sampleVpnProfilePayload() {
+  return {
+    available: true,
+    relay_endpoint: "/dns/torii.exit.example/udp/9443/quic",
+    supported_exit_classes: ["standard", "low-latency", "high-security"],
+    default_exit_class: "standard",
+    lease_secs: 600,
+    dns_push_interval_secs: 90,
+    meter_family: "soranet.vpn.standard",
+    route_pushes: [],
+    excluded_routes: [],
+    dns_servers: ["1.1.1.1"],
+    tunnel_addresses: ["10.208.0.2/32"],
+    mtu_bytes: 1280,
+    display_billing_label: "standard",
+    fee_asset_id: "xor#universal.universal",
+    escrow_account_id: SAMPLE_ACCOUNT_ID,
+    operator_account_id: SAMPLE_ACCOUNT_ID,
+    lease_fee: "1000000.25",
+    settlement_grace_secs: 120,
+    flow_label_bits: 24,
+    padding_budget_ms: 80,
+    relay_tls_spki_sha256_hex: "ac".repeat(32),
+  };
+}
+
+function sampleVpnSessionPayload(helperTicketHex = SAMPLE_VPN_HELPER_TICKET_HEX) {
+  const sessionId = "ab".repeat(32);
+  const quoteId = "cd".repeat(32);
+  return {
+    session_id: sessionId,
+    account_id: SAMPLE_ACCOUNT_ID,
+    exit_class: "standard",
+    relay_endpoint: "/dns/torii.exit.example/udp/9443/quic",
+    lease_secs: 600,
+    expires_at_ms: 1_700_000_000_000,
+    connected_at_ms: 1_699_999_400_000,
+    meter_family: "soranet.vpn.standard",
+    quote_id: quoteId,
+    payment_reference: quoteId,
+    payment_tx_hash: "ef".repeat(32),
+    fee_asset_id: "xor#universal.universal",
+    escrow_account_id: SAMPLE_ACCOUNT_ID,
+    operator_account_id: SAMPLE_ACCOUNT_ID,
+    lease_fee: "1000000.25",
+    flow_label_bits: 24,
+    padding_budget_ms: 80,
+    relay_tls_spki_sha256_hex: "ac".repeat(32),
+    route_pushes: [],
+    excluded_routes: [],
+    dns_servers: ["1.1.1.1"],
+    tunnel_addresses: ["10.208.0.2/32"],
+    mtu_bytes: 1280,
+    helper_ticket_hex: helperTicketHex,
+    bytes_in: 0,
+    bytes_out: 0,
+    status: "active",
+  };
+}
+
+function sampleVpnQuotePayload() {
+  const profile = sampleVpnProfilePayload();
+  const instruction = {
+    wire_id: "OpenVpnLeaseEscrow",
+    payload_hex: "abcd",
+  };
+  return {
+    quote_id: "cd".repeat(32),
+    lease_id_hex: "ab".repeat(32),
+    session_id_hex: "ef".repeat(16),
+    payment_reference: "vpn-payment-reference",
+    account_id: SAMPLE_ACCOUNT_ID,
+    exit_class: "standard",
+    relay_endpoint: profile.relay_endpoint,
+    lease_secs: profile.lease_secs,
+    quote_expires_at_ms: 1_700_000_000_000,
+    fee_asset_id: profile.fee_asset_id,
+    escrow_account_id: profile.escrow_account_id,
+    operator_account_id: profile.operator_account_id,
+    lease_fee: profile.lease_fee,
+    route_pushes: profile.route_pushes,
+    excluded_routes: profile.excluded_routes,
+    dns_servers: profile.dns_servers,
+    tunnel_addresses: profile.tunnel_addresses,
+    mtu_bytes: profile.mtu_bytes,
+    meter_family: profile.meter_family,
+    flow_label_bits: profile.flow_label_bits,
+    padding_budget_ms: profile.padding_budget_ms,
+    relay_tls_spki_sha256_hex: profile.relay_tls_spki_sha256_hex,
+    metering_public_key_hex: "12".repeat(32),
+    open_lease_instruction: instruction,
+    tx_instructions: [instruction],
+  };
+}
+
+function sampleVpnReceiptPayload() {
+  const session = sampleVpnSessionPayload();
+  return {
+    session_id: session.session_id,
+    account_id: session.account_id,
+    exit_class: session.exit_class,
+    relay_endpoint: session.relay_endpoint,
+    meter_family: session.meter_family,
+    connected_at_ms: session.connected_at_ms,
+    disconnected_at_ms: session.connected_at_ms + 60_000,
+    duration_ms: 60_000,
+    bytes_in: 1024,
+    bytes_out: 2048,
+    status: "disconnected",
+    receipt_source: "torii",
+    quote_id: session.quote_id,
+    payment_tx_hash: session.payment_tx_hash,
+    fee_asset_id: session.fee_asset_id,
+    escrow_account_id: session.escrow_account_id,
+    operator_account_id: session.operator_account_id,
+    lease_fee: session.lease_fee,
+    earned_fee: "0",
+    refunded_fee: session.lease_fee,
+    lease_id_hex: session.quote_id,
+    settle_lease_instruction: null,
+    tx_instructions: [],
+  };
+}
+
+async function parseVpnTestResponse(kind, payload) {
+  const status = kind === "quote" || kind === "session-create" ? 201 : 200;
+  const fetchImpl = async () =>
+    createResponse({
+      status,
+      jsonData: payload,
+      headers: { "content-type": "application/json" },
+    });
+  markFetchSupportsRawUtf8Headers(fetchImpl);
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const canonicalAuth = {
+    accountId: SAMPLE_ACCOUNT_ID,
+    privateKey: Buffer.alloc(32, 12),
+  };
+  switch (kind) {
+    case "profile":
+      return client.getVpnProfile();
+    case "quote":
+      return client.createVpnQuote(
+        { meteringPublicKeyHex: "12".repeat(32) },
+        { canonicalAuth },
+      );
+    case "session":
+      return client.getVpnSession("ab".repeat(32), { canonicalAuth });
+    case "receipt":
+      return client.deleteVpnSession("ab".repeat(32), { canonicalAuth });
+    case "list":
+      return client.listVpnReceipts({ canonicalAuth });
+    default:
+      throw new Error(`unsupported VPN test response kind: ${kind}`);
+  }
+}
 const SAMPLE_RWA_ID =
   "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef$commodities";
 const SAMPLE_RWA_ID_UPPER =
@@ -24151,13 +24310,13 @@ test("getVpnProfile normalizes payloads and tolerates missing control plane", as
           dns_servers: ["1.1.1.1", "2606:4700:4700::1111"],
           tunnel_addresses: ["10.208.0.2/32", "fd53:7261:6574::2/128"],
           mtu_bytes: 1280,
-          display_billing_label: "standard · soranet.vpn.standard · 1000000 nano-XOR",
+          display_billing_label: "standard · soranet.vpn.standard · 1000000.25 XOR",
           fee_asset_id: "xor#universal.universal",
           escrow_account_id: "vpn_escrow",
           operator_account_id: SAMPLE_ACCOUNT_ID,
-          lease_fee_nanos: "1000000",
+          lease_fee: "1000000.25",
           settlement_grace_secs: 120,
-          flow_label_bits: 20,
+          flow_label_bits: 24,
           padding_budget_ms: 80,
           relay_tls_spki_sha256_hex: "11".repeat(32),
         },
@@ -24186,18 +24345,407 @@ test("getVpnProfile normalizes payloads and tolerates missing control plane", as
     dnsServers: ["1.1.1.1", "2606:4700:4700::1111"],
     tunnelAddresses: ["10.208.0.2/32", "fd53:7261:6574::2/128"],
     mtuBytes: 1280,
-    displayBillingLabel: "standard · soranet.vpn.standard · 1000000 nano-XOR",
+    displayBillingLabel: "standard · soranet.vpn.standard · 1000000.25 XOR",
     feeAssetId: "xor#universal.universal",
     escrowAccountId: "vpn_escrow",
     operatorAccountId: SAMPLE_ACCOUNT_ID,
-    leaseFeeNanos: 1000000,
+    leaseFee: "1000000.25",
     settlementGraceSecs: 120,
-    flowLabelBits: 20,
+    flowLabelBits: 24,
     paddingBudgetMs: 80,
     relayTlsSpkiSha256Hex: "11".repeat(32),
   });
   const missing = await client.getVpnProfile();
   assert.equal(missing, null);
+});
+
+test("getVpnProfile rejects noncanonical exact fee quantities", async () => {
+  for (const leaseFee of [1000000, "01", "1.0", "-1"]) {
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () =>
+        createResponse({
+          status: 200,
+          jsonData: {
+            available: true,
+            relay_endpoint: "/dns/torii.exit.example/udp/9443/quic",
+            supported_exit_classes: ["standard", "low-latency", "high-security"],
+            default_exit_class: "standard",
+            lease_secs: 600,
+            dns_push_interval_secs: 90,
+            meter_family: "soranet.vpn.standard",
+            route_pushes: [],
+            excluded_routes: [],
+            dns_servers: ["1.1.1.1"],
+            tunnel_addresses: ["10.208.0.2/32"],
+            mtu_bytes: 1280,
+            display_billing_label: "standard",
+            fee_asset_id: "xor#universal.universal",
+            escrow_account_id: "vpn_escrow",
+            operator_account_id: SAMPLE_ACCOUNT_ID,
+            lease_fee: leaseFee,
+            settlement_grace_secs: 120,
+            flow_label_bits: 24,
+            padding_budget_ms: 80,
+            relay_tls_spki_sha256_hex: null,
+          },
+          headers: { "content-type": "application/json" },
+        }),
+    });
+
+    await assert.rejects(() => client.getVpnProfile(), /lease_fee/);
+  }
+});
+
+test("getVpnProfile requires dns_push_interval_secs of at least 30", async () => {
+  const invalidProfiles = [
+    ["missing", (payload) => delete payload.dns_push_interval_secs],
+    ["below minimum", (payload) => { payload.dns_push_interval_secs = 29; }],
+  ];
+  for (const [caseName, mutate] of invalidProfiles) {
+    const payload = sampleVpnProfilePayload();
+    mutate(payload);
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () =>
+        createResponse({
+          status: 200,
+          jsonData: payload,
+          headers: { "content-type": "application/json" },
+        }),
+    });
+
+    await assert.rejects(
+      () => client.getVpnProfile(),
+      /dns_push_interval_secs/u,
+      caseName,
+    );
+  }
+});
+
+test("VPN requests reject unknown fields before dispatch", async () => {
+  const canonicalAuth = {
+    accountId: SAMPLE_ACCOUNT_ID,
+    privateKey: Buffer.alloc(32, 3),
+  };
+  let dispatched = false;
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      dispatched = true;
+      throw new Error("request with unknown fields reached dispatch");
+    },
+  });
+  const cases = [
+    () =>
+      client.createVpnQuote(
+        { meteringPublicKeyHex: "ab".repeat(32), unexpected: true },
+        { canonicalAuth },
+      ),
+    () =>
+      client.createVpnSession(
+        {
+          quoteId: "cd".repeat(32),
+          paymentTxHash: "ef".repeat(32),
+          meteringPublicKeyHex: "ab".repeat(32),
+          unexpected: true,
+        },
+        { canonicalAuth },
+      ),
+    () =>
+      client.submitVpnReceipt(
+        { relayReceiptHex: "abcd", clientVoucherHex: "beef", unexpected: true },
+        { canonicalAuth },
+      ),
+  ];
+
+  for (const invoke of cases) {
+    await assert.rejects(invoke, /contains unsupported fields: unexpected/u);
+  }
+  await assert.rejects(
+    () =>
+      client.createVpnSession(
+        {
+          quoteId: `0x${"cd".repeat(32)}`,
+          paymentTxHash: "ef".repeat(32),
+          meteringPublicKeyHex: "ab".repeat(32),
+        },
+        { canonicalAuth },
+      ),
+    /quoteId must be an exact lowercase 32-byte hex string/u,
+  );
+  await assert.rejects(
+    () =>
+      client.createVpnQuote(
+        { exitClass: "fastest", meteringPublicKeyHex: "ab".repeat(32) },
+        { canonicalAuth },
+      ),
+    /exitClass must be one of/u,
+  );
+  await assert.rejects(
+    () =>
+      client.createVpnSession(
+        {
+          exitClass: "fastest",
+          quoteId: "cd".repeat(32),
+          paymentTxHash: "ef".repeat(32),
+          meteringPublicKeyHex: "ab".repeat(32),
+        },
+        { canonicalAuth },
+      ),
+    /exitClass must be one of/u,
+  );
+  assert.equal(dispatched, false);
+});
+
+test("VPN session paths normalize hex before signing and reject malformed IDs", async () => {
+  const normalizedSessionId = "ab".repeat(32);
+  const inputSessionId = `0X${normalizedSessionId.toUpperCase()}`;
+  const privateKey = Buffer.alloc(32, 10);
+  const captured = [];
+  const fetchImpl = async (url, init = {}) => {
+    captured.push({ url, init });
+    return createResponse({
+      status: 404,
+      jsonData: {},
+      headers: { "content-type": "application/json" },
+    });
+  };
+  markFetchSupportsRawUtf8Headers(fetchImpl);
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const canonicalAuth = { accountId: SAMPLE_ACCOUNT_ID, privateKey };
+
+  assert.equal(
+    await client.getVpnSession(inputSessionId, { canonicalAuth }),
+    null,
+  );
+  assert.equal(
+    await client.deleteVpnSession(inputSessionId, { canonicalAuth }),
+    null,
+  );
+  assert.equal(captured.length, 2);
+  for (const { url, init } of captured) {
+    const parsed = new URL(url);
+    assert.equal(parsed.pathname, `/v1/vpn/sessions/${normalizedSessionId}`);
+    const message = canonicalRequestSignatureMessage({
+      method: init.method,
+      path: parsed.pathname,
+      query: "",
+      body: "",
+      timestampMs: Number(init.headers["X-Iroha-Timestamp-Ms"]),
+      nonce: init.headers["X-Iroha-Nonce"],
+    });
+    assert.deepEqual(
+      Buffer.from(init.headers["X-Iroha-Signature"], "base64"),
+      signEd25519(message, privateKey),
+    );
+  }
+
+  await assert.rejects(
+    () => client.getVpnSession("not-hex", { canonicalAuth }),
+    /sessionId must be a 32-byte hex string/u,
+  );
+  await assert.rejects(
+    () => client.deleteVpnSession("ab", { canonicalAuth }),
+    /sessionId must be a 32-byte hex string/u,
+  );
+  assert.equal(captured.length, 2);
+});
+
+test("VPN session responses reject unknown fields and noncanonical IDs or hashes", async () => {
+  const canonicalAuth = {
+    accountId: SAMPLE_ACCOUNT_ID,
+    privateKey: Buffer.alloc(32, 4),
+  };
+  const requestSession = async (mutate) => {
+    const payload = sampleVpnSessionPayload();
+    mutate(payload);
+    const fetchImpl = async () =>
+      createResponse({
+        status: 200,
+        jsonData: payload,
+        headers: { "content-type": "application/json" },
+      });
+    markFetchSupportsRawUtf8Headers(fetchImpl);
+    const client = new ToriiClient(BASE_URL, { fetchImpl });
+    return client.getVpnSession("ab".repeat(32), { canonicalAuth });
+  };
+  const invalidResponses = [
+    ["unknown field", (payload) => { payload.unexpected = true; }],
+    ["prefixed session id", (payload) => { payload.session_id = `0x${payload.session_id}`; }],
+    ["uppercase quote id", (payload) => { payload.quote_id = payload.quote_id.toUpperCase(); }],
+    ["prefixed payment hash", (payload) => { payload.payment_tx_hash = `0X${payload.payment_tx_hash}`; }],
+    ["uppercase SPKI hash", (payload) => {
+      payload.relay_tls_spki_sha256_hex = payload.relay_tls_spki_sha256_hex.toUpperCase();
+    }],
+  ];
+
+  for (const [caseName, mutate] of invalidResponses) {
+    await assert.rejects(
+      () => requestSession(mutate),
+      /contains unsupported fields|exact lowercase 32-byte hex string/u,
+      caseName,
+    );
+  }
+});
+
+test("VPN response parsers require every OpenAPI field", async () => {
+  const cases = [
+    ["profile", sampleVpnProfilePayload(), "relay_tls_spki_sha256_hex"],
+    ["quote", sampleVpnQuotePayload(), "open_lease_instruction"],
+    ["session", sampleVpnSessionPayload(), "route_pushes"],
+    ["receipt", sampleVpnReceiptPayload(), "settle_lease_instruction"],
+    ["list", { items: [sampleVpnReceiptPayload()], total: 1 }, "total"],
+  ];
+  for (const [kind, payload, missingField] of cases) {
+    delete payload[missingField];
+    await assert.rejects(
+      () => parseVpnTestResponse(kind, payload),
+      new RegExp(`missing required fields: ${missingField}`, "u"),
+      `${kind}.${missingField}`,
+    );
+  }
+
+  const nested = sampleVpnQuotePayload();
+  delete nested.open_lease_instruction.payload_hex;
+  await assert.rejects(
+    () => parseVpnTestResponse("quote", nested),
+    /missing required fields: payload_hex/u,
+  );
+
+  const nullArray = sampleVpnSessionPayload();
+  nullArray.route_pushes = null;
+  await assert.rejects(
+    () => parseVpnTestResponse("session", nullArray),
+    /route_pushes must be an array/u,
+  );
+});
+
+test("VPN response parsers reject empty minLength strings", async () => {
+  const cases = [
+    [
+      "profile",
+      sampleVpnProfilePayload,
+      [
+        "relay_endpoint",
+        "meter_family",
+        "display_billing_label",
+        "fee_asset_id",
+        "escrow_account_id",
+        "operator_account_id",
+      ],
+    ],
+    [
+      "quote",
+      sampleVpnQuotePayload,
+      [
+        "payment_reference",
+        "account_id",
+        "relay_endpoint",
+        "fee_asset_id",
+        "escrow_account_id",
+        "operator_account_id",
+        "meter_family",
+      ],
+    ],
+    [
+      "session",
+      sampleVpnSessionPayload,
+      [
+        "account_id",
+        "relay_endpoint",
+        "meter_family",
+        "payment_reference",
+        "fee_asset_id",
+        "escrow_account_id",
+        "operator_account_id",
+      ],
+    ],
+    [
+      "receipt",
+      sampleVpnReceiptPayload,
+      [
+        "account_id",
+        "relay_endpoint",
+        "meter_family",
+        "fee_asset_id",
+        "escrow_account_id",
+        "operator_account_id",
+      ],
+    ],
+  ];
+  for (const [kind, payloadFactory, fields] of cases) {
+    for (const field of fields) {
+      const payload = payloadFactory();
+      payload[field] = "";
+      await assert.rejects(
+        () => parseVpnTestResponse(kind, payload),
+        new RegExp(field, "u"),
+        `${kind}.${field}`,
+      );
+    }
+  }
+
+  const instruction = sampleVpnQuotePayload();
+  instruction.open_lease_instruction.wire_id = "";
+  await assert.rejects(
+    () => parseVpnTestResponse("quote", instruction),
+    /wire_id/u,
+  );
+});
+
+test("VPN response parsers enforce OpenAPI enums and bounds", async () => {
+  const cases = [
+    ["profile exits", "profile", sampleVpnProfilePayload(), (payload) => {
+      payload.supported_exit_classes = ["standard", "standard", "high-security"];
+    }, "supported_exit_classes"],
+    ["profile lease", "profile", sampleVpnProfilePayload(), (payload) => {
+      payload.lease_secs = 0;
+    }, "lease_secs"],
+    ["profile settlement", "profile", sampleVpnProfilePayload(), (payload) => {
+      payload.settlement_grace_secs = 0;
+    }, "settlement_grace_secs"],
+    ["quote instruction count", "quote", sampleVpnQuotePayload(), (payload) => {
+      payload.tx_instructions = [];
+    }, "tx_instructions"],
+    ["quote exit", "quote", sampleVpnQuotePayload(), (payload) => {
+      payload.exit_class = "fastest";
+    }, "exit_class"],
+    ["session mtu", "session", sampleVpnSessionPayload(), (payload) => {
+      payload.mtu_bytes = 1500;
+    }, "mtu_bytes"],
+    ["session flow", "session", sampleVpnSessionPayload(), (payload) => {
+      payload.flow_label_bits = 20;
+    }, "flow_label_bits"],
+    ["session padding", "session", sampleVpnSessionPayload(), (payload) => {
+      payload.padding_budget_ms = 0;
+    }, "padding_budget_ms"],
+    ["session status", "session", sampleVpnSessionPayload(), (payload) => {
+      payload.status = "connected";
+    }, "status"],
+    ["receipt status", "receipt", sampleVpnReceiptPayload(), (payload) => {
+      payload.status = "active";
+    }, "status"],
+    ["receipt source", "receipt", sampleVpnReceiptPayload(), (payload) => {
+      payload.receipt_source = "client";
+    }, "receipt_source"],
+    ["receipt instruction count", "receipt", sampleVpnReceiptPayload(), (payload) => {
+      payload.tx_instructions = [
+        { wire_id: "SettleVpnLease", payload_hex: "abcd" },
+        { wire_id: "SettleVpnLease", payload_hex: "abcd" },
+      ];
+    }, "tx_instructions"],
+    ["receipt list item count", "list", {
+      items: Array.from({ length: 25 }, () => sampleVpnReceiptPayload()),
+      total: 24,
+    }, () => {}, "items"],
+    ["receipt list total", "list", { items: [], total: 25 }, () => {}, "total"],
+  ];
+  for (const [caseName, kind, payload, mutate, field] of cases) {
+    mutate(payload);
+    await assert.rejects(
+      () => parseVpnTestResponse(kind, payload),
+      new RegExp(field, "u"),
+      caseName,
+    );
+  }
 });
 
 test("createVpnQuote returns the native lease-open instruction", async () => {
@@ -24207,10 +24755,10 @@ test("createVpnQuote returns the native lease-open instruction", async () => {
   };
   const quoteId = "22".repeat(32);
   const sessionIdHex = "33".repeat(16);
-  const meteringPublicKeyHex = "44".repeat(32);
+  const meteringPublicKeyHex = "a4".repeat(32);
   const openInstruction = {
     wire_id: "OpenVpnLeaseEscrow",
-    payload_hex: "0xABCD",
+    payload_hex: "abcd",
   };
   const fetchImpl = async (url, init = {}) => {
     assert.equal(url, `${BASE_URL}/v1/vpn/quotes`);
@@ -24238,14 +24786,14 @@ test("createVpnQuote returns the native lease-open instruction", async () => {
         fee_asset_id: "xor#universal.universal",
         escrow_account_id: "vpn_escrow",
         operator_account_id: SAMPLE_ACCOUNT_ID,
-        lease_fee_nanos: "1000000",
+        lease_fee: "1000000.25",
         route_pushes: ["0.0.0.0/0"],
         excluded_routes: ["127.0.0.0/8"],
         dns_servers: ["1.1.1.1"],
         tunnel_addresses: ["10.208.0.2/32"],
         mtu_bytes: 1280,
         meter_family: "soranet.vpn.low-latency",
-        flow_label_bits: 20,
+        flow_label_bits: 24,
         padding_budget_ms: 80,
         relay_tls_spki_sha256_hex: "55".repeat(32),
         metering_public_key_hex: meteringPublicKeyHex,
@@ -24259,7 +24807,10 @@ test("createVpnQuote returns the native lease-open instruction", async () => {
   const client = new ToriiClient(BASE_URL, { fetchImpl });
 
   const quote = await client.createVpnQuote(
-    { exitClass: "low-latency", meteringPublicKeyHex },
+    {
+      exitClass: "low-latency",
+      meteringPublicKeyHex: `0X${meteringPublicKeyHex.toUpperCase()}`,
+    },
     { canonicalAuth },
   );
 
@@ -24276,14 +24827,14 @@ test("createVpnQuote returns the native lease-open instruction", async () => {
     feeAssetId: "xor#universal.universal",
     escrowAccountId: "vpn_escrow",
     operatorAccountId: SAMPLE_ACCOUNT_ID,
-    leaseFeeNanos: 1000000,
+    leaseFee: "1000000.25",
     routePushes: ["0.0.0.0/0"],
     excludedRoutes: ["127.0.0.0/8"],
     dnsServers: ["1.1.1.1"],
     tunnelAddresses: ["10.208.0.2/32"],
     mtuBytes: 1280,
     meterFamily: "soranet.vpn.low-latency",
-    flowLabelBits: 20,
+    flowLabelBits: 24,
     paddingBudgetMs: 80,
     relayTlsSpkiSha256Hex: "55".repeat(32),
     meteringPublicKeyHex,
@@ -24298,8 +24849,9 @@ test("createVpnSession signs the request and normalizes the response", async () 
     privateKey: Buffer.alloc(32, 7),
   };
   const quoteId = "66".repeat(32);
-  const paymentTxHash = "77".repeat(32);
-  const meteringPublicKeyHex = "88".repeat(32);
+  const sessionId = "55".repeat(32);
+  const paymentTxHash = "b7".repeat(32);
+  const meteringPublicKeyHex = "a8".repeat(32);
   const fetchImpl = async (url, init = {}) => {
     assert.equal(url, `${BASE_URL}/v1/vpn/sessions`);
     assert.equal(init.method, "POST");
@@ -24316,7 +24868,7 @@ test("createVpnSession signs the request and normalizes the response", async () 
     return createResponse({
       status: 201,
       jsonData: {
-        session_id: "sess_123",
+        session_id: sessionId,
         account_id: SAMPLE_ACCOUNT_ID,
         exit_class: "low-latency",
         relay_endpoint: "/dns/torii.exit.example/udp/9443/quic",
@@ -24330,8 +24882,8 @@ test("createVpnSession signs the request and normalizes the response", async () 
         fee_asset_id: "xor#universal.universal",
         escrow_account_id: "vpn_escrow",
         operator_account_id: SAMPLE_ACCOUNT_ID,
-        lease_fee_nanos: "1000000",
-        flow_label_bits: 20,
+        lease_fee: "1000000.25",
+        flow_label_bits: 24,
         padding_budget_ms: 80,
         relay_tls_spki_sha256_hex: "99".repeat(32),
         route_pushes: [],
@@ -24351,12 +24903,17 @@ test("createVpnSession signs the request and normalizes the response", async () 
   const client = new ToriiClient(BASE_URL, { fetchImpl });
 
   const session = await client.createVpnSession(
-    { exitClass: "low-latency", quoteId, paymentTxHash, meteringPublicKeyHex },
+    {
+      exitClass: "low-latency",
+      quoteId,
+      paymentTxHash: `0x${paymentTxHash.toUpperCase()}`,
+      meteringPublicKeyHex: `0X${meteringPublicKeyHex.toUpperCase()}`,
+    },
     { canonicalAuth },
   );
 
   assert.deepEqual(session, {
-    sessionId: "sess_123",
+    sessionId,
     accountId: SAMPLE_ACCOUNT_ID,
     exitClass: "low-latency",
     relayEndpoint: "/dns/torii.exit.example/udp/9443/quic",
@@ -24370,8 +24927,8 @@ test("createVpnSession signs the request and normalizes the response", async () 
     feeAssetId: "xor#universal.universal",
     escrowAccountId: "vpn_escrow",
     operatorAccountId: SAMPLE_ACCOUNT_ID,
-    leaseFeeNanos: 1000000,
-    flowLabelBits: 20,
+    leaseFee: "1000000.25",
+    flowLabelBits: 24,
     paddingBudgetMs: 80,
     relayTlsSpkiSha256Hex: "99".repeat(32),
     routePushes: [],
@@ -24384,6 +24941,42 @@ test("createVpnSession signs the request and normalizes the response", async () 
     bytesOut: 456,
     status: "active",
   });
+});
+
+test("VPN session responses require an exact lowercase 664-byte helper ticket", async () => {
+  const canonicalAuth = {
+    accountId: SAMPLE_ACCOUNT_ID,
+    privateKey: Buffer.alloc(32, 7),
+  };
+  const requestSession = async (helperTicketHex) => {
+    const fetchImpl = async () =>
+      createResponse({
+        status: 200,
+        jsonData: sampleVpnSessionPayload(helperTicketHex),
+        headers: { "content-type": "application/json" },
+      });
+    markFetchSupportsRawUtf8Headers(fetchImpl);
+    const client = new ToriiClient(BASE_URL, { fetchImpl });
+    return client.getVpnSession("55".repeat(32), { canonicalAuth });
+  };
+
+  const session = await requestSession(SAMPLE_VPN_HELPER_TICKET_HEX);
+  assert.equal(session.helperTicketHex, SAMPLE_VPN_HELPER_TICKET_HEX);
+  assert.equal(session.helperTicketHex.length, 1328);
+
+  const invalidTickets = [
+    ["prefix", `0x${SAMPLE_VPN_HELPER_TICKET_HEX}`],
+    ["uppercase", SAMPLE_VPN_HELPER_TICKET_HEX.toUpperCase()],
+    ["odd length", SAMPLE_VPN_HELPER_TICKET_HEX.slice(0, -1)],
+    ["wrong even length", SAMPLE_VPN_HELPER_TICKET_HEX.slice(0, -2)],
+  ];
+  for (const [caseName, helperTicketHex] of invalidTickets) {
+    await assert.rejects(
+      () => requestSession(helperTicketHex),
+      /helper_ticket_hex must contain exactly 1328 lowercase hexadecimal characters/u,
+      caseName,
+    );
+  }
 });
 
 test("createVpnSession requires canonical auth options", async () => {
@@ -24399,19 +24992,20 @@ test("createVpnSession requires canonical auth options", async () => {
 });
 
 test("deleteVpnSession returns null when the session is already missing", async () => {
+  const requestedSessionId = "13".repeat(32);
   const canonicalAuth = {
     accountId: SAMPLE_ACCOUNT_ID,
     privateKey: Buffer.alloc(32, 9),
   };
   const fetchImpl = async (url, init = {}) => {
-    assert.equal(url, `${BASE_URL}/v1/vpn/sessions/sess_123`);
+    assert.equal(url, `${BASE_URL}/v1/vpn/sessions/${requestedSessionId}`);
     assert.equal(init.method, "DELETE");
     assert.equal(init.headers.Accept, "application/json");
     assert.equal(init.headers["X-Iroha-Account"], SAMPLE_ACCOUNT_ID);
     return createResponse({
       status: 404,
       jsonData: {
-        session_id: "sess_123",
+        session_id: requestedSessionId,
         status: "not_found",
         disconnected_at_ms: 1_700_000_000_000,
       },
@@ -24420,7 +25014,7 @@ test("deleteVpnSession returns null when the session is already missing", async 
   };
   markFetchSupportsRawUtf8Headers(fetchImpl);
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const result = await client.deleteVpnSession("sess_123", { canonicalAuth });
+  const result = await client.deleteVpnSession(requestedSessionId, { canonicalAuth });
   assert.equal(result, null);
 });
 
@@ -24430,6 +25024,8 @@ test("getVpnSession and listVpnReceipts normalize authenticated responses", asyn
     privateKey: Buffer.alloc(32, 5),
   };
   const quoteId = "aa".repeat(32);
+  const sessionId = "cc".repeat(32);
+  const requestedSessionId = "de".repeat(32);
   const paymentTxHash = "bb".repeat(32);
   let callCount = 0;
   const fetchImpl = async (url, init = {}) => {
@@ -24437,12 +25033,12 @@ test("getVpnSession and listVpnReceipts normalize authenticated responses", asyn
     assert.equal(init.headers.Accept, "application/json");
     assert.equal(init.headers["X-Iroha-Account"], SAMPLE_ACCOUNT_ID);
     if (callCount === 1) {
-      assert.equal(url, `${BASE_URL}/v1/vpn/sessions/sess_live`);
+      assert.equal(url, `${BASE_URL}/v1/vpn/sessions/${requestedSessionId}`);
       assert.equal(init.method, "GET");
       return createResponse({
         status: 200,
         jsonData: {
-          session_id: "sess_live",
+          session_id: sessionId,
           account_id: SAMPLE_ACCOUNT_ID,
           exit_class: "standard",
           relay_endpoint: "/dns/torii.exit.example/udp/9443/quic",
@@ -24456,8 +25052,8 @@ test("getVpnSession and listVpnReceipts normalize authenticated responses", asyn
           fee_asset_id: "xor#universal.universal",
           escrow_account_id: "vpn_escrow",
           operator_account_id: SAMPLE_ACCOUNT_ID,
-          lease_fee_nanos: "1000000",
-          flow_label_bits: 20,
+          lease_fee: "1000000.25",
+          flow_label_bits: 24,
           padding_budget_ms: 80,
           relay_tls_spki_sha256_hex: "cc".repeat(32),
           route_pushes: ["0.0.0.0/0"],
@@ -24480,7 +25076,7 @@ test("getVpnSession and listVpnReceipts normalize authenticated responses", asyn
       jsonData: {
         items: [
           {
-            session_id: "sess_live",
+            session_id: sessionId,
             account_id: SAMPLE_ACCOUNT_ID,
             exit_class: "standard",
             relay_endpoint: "/dns/torii.exit.example/udp/9443/quic",
@@ -24497,9 +25093,9 @@ test("getVpnSession and listVpnReceipts normalize authenticated responses", asyn
             fee_asset_id: "xor#universal.universal",
             escrow_account_id: "vpn_escrow",
             operator_account_id: SAMPLE_ACCOUNT_ID,
-            lease_fee_nanos: "1000000",
-            earned_fee_nanos: 0,
-            refunded_fee_nanos: "1000000",
+            lease_fee: "1000000.25",
+            earned_fee: "0",
+            refunded_fee: "1000000.25",
             lease_id_hex: quoteId,
             settle_lease_instruction: null,
             tx_instructions: [],
@@ -24513,9 +25109,9 @@ test("getVpnSession and listVpnReceipts normalize authenticated responses", asyn
   markFetchSupportsRawUtf8Headers(fetchImpl);
   const client = new ToriiClient(BASE_URL, { fetchImpl });
 
-  const session = await client.getVpnSession("sess_live", { canonicalAuth });
+  const session = await client.getVpnSession(requestedSessionId, { canonicalAuth });
   assert.deepEqual(session, {
-    sessionId: "sess_live",
+    sessionId,
     accountId: SAMPLE_ACCOUNT_ID,
     exitClass: "standard",
     relayEndpoint: "/dns/torii.exit.example/udp/9443/quic",
@@ -24529,8 +25125,8 @@ test("getVpnSession and listVpnReceipts normalize authenticated responses", asyn
     feeAssetId: "xor#universal.universal",
     escrowAccountId: "vpn_escrow",
     operatorAccountId: SAMPLE_ACCOUNT_ID,
-    leaseFeeNanos: 1000000,
-    flowLabelBits: 20,
+    leaseFee: "1000000.25",
+    flowLabelBits: 24,
     paddingBudgetMs: 80,
     relayTlsSpkiSha256Hex: "cc".repeat(32),
     routePushes: ["0.0.0.0/0"],
@@ -24545,9 +25141,9 @@ test("getVpnSession and listVpnReceipts normalize authenticated responses", asyn
   });
 
   const receipts = await client.listVpnReceipts({ canonicalAuth });
-  assert.deepEqual(receipts, [
-    {
-      sessionId: "sess_live",
+  assert.deepEqual(receipts, {
+    items: [{
+      sessionId,
       accountId: SAMPLE_ACCOUNT_ID,
       exitClass: "standard",
       relayEndpoint: "/dns/torii.exit.example/udp/9443/quic",
@@ -24564,30 +25160,33 @@ test("getVpnSession and listVpnReceipts normalize authenticated responses", asyn
       feeAssetId: "xor#universal.universal",
       escrowAccountId: "vpn_escrow",
       operatorAccountId: SAMPLE_ACCOUNT_ID,
-      leaseFeeNanos: 1000000,
-      earnedFeeNanos: 0,
-      refundedFeeNanos: 1000000,
+      leaseFee: "1000000.25",
+      earnedFee: "0",
+      refundedFee: "1000000.25",
       leaseIdHex: quoteId,
       settleLeaseInstruction: null,
       txInstructions: [],
-    },
-  ]);
+    }],
+    total: 1,
+  });
 });
 
 test("deleteVpnSession normalizes canonical receipts", async () => {
+  const requestedSessionId = "79".repeat(32);
   const canonicalAuth = {
     accountId: SAMPLE_ACCOUNT_ID,
     privateKey: Buffer.alloc(32, 6),
   };
   const quoteId = "dd".repeat(32);
+  const sessionId = "ff".repeat(32);
   const paymentTxHash = "ee".repeat(32);
   const fetchImpl = async (url, init = {}) => {
-    assert.equal(url, `${BASE_URL}/v1/vpn/sessions/sess_789`);
+    assert.equal(url, `${BASE_URL}/v1/vpn/sessions/${requestedSessionId}`);
     assert.equal(init.method, "DELETE");
     return createResponse({
       status: 200,
       jsonData: {
-        session_id: "sess_789",
+        session_id: sessionId,
         account_id: SAMPLE_ACCOUNT_ID,
         exit_class: "high-security",
         relay_endpoint: "/dns/torii.exit.example/udp/9443/quic",
@@ -24604,9 +25203,9 @@ test("deleteVpnSession normalizes canonical receipts", async () => {
         fee_asset_id: "xor#universal.universal",
         escrow_account_id: "vpn_escrow",
         operator_account_id: SAMPLE_ACCOUNT_ID,
-        lease_fee_nanos: "1000000",
-        earned_fee_nanos: 0,
-        refunded_fee_nanos: "1000000",
+        lease_fee: "1000000.25",
+        earned_fee: "0",
+        refunded_fee: "1000000.25",
         lease_id_hex: quoteId,
         settle_lease_instruction: null,
         tx_instructions: [],
@@ -24616,9 +25215,9 @@ test("deleteVpnSession normalizes canonical receipts", async () => {
   };
   markFetchSupportsRawUtf8Headers(fetchImpl);
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const receipt = await client.deleteVpnSession("sess_789", { canonicalAuth });
+  const receipt = await client.deleteVpnSession(requestedSessionId, { canonicalAuth });
   assert.deepEqual(receipt, {
-    sessionId: "sess_789",
+    sessionId,
     accountId: SAMPLE_ACCOUNT_ID,
     exitClass: "high-security",
     relayEndpoint: "/dns/torii.exit.example/udp/9443/quic",
@@ -24635,9 +25234,9 @@ test("deleteVpnSession normalizes canonical receipts", async () => {
     feeAssetId: "xor#universal.universal",
     escrowAccountId: "vpn_escrow",
     operatorAccountId: SAMPLE_ACCOUNT_ID,
-    leaseFeeNanos: 1000000,
-    earnedFeeNanos: 0,
-    refundedFeeNanos: 1000000,
+    leaseFee: "1000000.25",
+    earnedFee: "0",
+    refundedFee: "1000000.25",
     leaseIdHex: quoteId,
     settleLeaseInstruction: null,
     txInstructions: [],
@@ -24650,10 +25249,11 @@ test("submitVpnReceipt posts metering evidence and exposes settlement instructio
     privateKey: Buffer.alloc(32, 4),
   };
   const quoteId = "12".repeat(32);
+  const sessionId = "56".repeat(32);
   const paymentTxHash = "34".repeat(32);
   const settleInstruction = {
     wire_id: "SettleVpnLease",
-    payload_hex: "0xCAFE",
+    payload_hex: "cafe",
   };
   const fetchImpl = async (url, init = {}) => {
     assert.equal(url, `${BASE_URL}/v1/vpn/receipts`);
@@ -24670,7 +25270,7 @@ test("submitVpnReceipt posts metering evidence and exposes settlement instructio
     return createResponse({
       status: 201,
       jsonData: {
-        session_id: "sess_settled",
+        session_id: sessionId,
         account_id: SAMPLE_ACCOUNT_ID,
         exit_class: "standard",
         relay_endpoint: "/dns/torii.exit.example/udp/9443/quic",
@@ -24687,9 +25287,9 @@ test("submitVpnReceipt posts metering evidence and exposes settlement instructio
         fee_asset_id: "xor#universal.universal",
         escrow_account_id: "vpn_escrow",
         operator_account_id: SAMPLE_ACCOUNT_ID,
-        lease_fee_nanos: "1000000",
-        earned_fee_nanos: 500000,
-        refunded_fee_nanos: 500000,
+        lease_fee: "1000000.25",
+        earned_fee: "500000.125",
+        refunded_fee: "500000.125",
         lease_id_hex: quoteId,
         settle_lease_instruction: settleInstruction,
         tx_instructions: [settleInstruction],
@@ -24710,7 +25310,7 @@ test("submitVpnReceipt posts metering evidence and exposes settlement instructio
   );
 
   assert.deepEqual(receipt, {
-    sessionId: "sess_settled",
+    sessionId,
     accountId: SAMPLE_ACCOUNT_ID,
     exitClass: "standard",
     relayEndpoint: "/dns/torii.exit.example/udp/9443/quic",
@@ -24727,9 +25327,9 @@ test("submitVpnReceipt posts metering evidence and exposes settlement instructio
     feeAssetId: "xor#universal.universal",
     escrowAccountId: "vpn_escrow",
     operatorAccountId: SAMPLE_ACCOUNT_ID,
-    leaseFeeNanos: 1000000,
-    earnedFeeNanos: 500000,
-    refundedFeeNanos: 500000,
+    leaseFee: "1000000.25",
+    earnedFee: "500000.125",
+    refundedFee: "500000.125",
     leaseIdHex: quoteId,
     settleLeaseInstruction: { wireId: "SettleVpnLease", payloadHex: "cafe" },
     txInstructions: [{ wireId: "SettleVpnLease", payloadHex: "cafe" }],

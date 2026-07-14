@@ -7,7 +7,7 @@ description: How DOCS-SORA records invite waves, telemetry events, and feedback 
 
 import previewFeedbackSummary from '@site/src/data/previewFeedbackSummary.json';
 
-function FeedbackSummaryTable() {
+export function FeedbackSummaryTable() {
   const waves = previewFeedbackSummary?.waves ?? [];
   if (waves.length === 0) {
     return (
