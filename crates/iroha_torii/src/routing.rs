@@ -2470,6 +2470,7 @@ fn collect_kaigi_domain_counters(
     crate::json_macros::JsonDeserialize,
     norito::derive::NoritoDeserialize,
 )]
+#[norito(deny_unknown_fields)]
 pub struct AliasResolveIndexRequestDto {
     pub index: u64,
 }
@@ -2578,6 +2579,7 @@ pub struct RetailRecipientLookupResponseDto {
     crate::json_macros::JsonDeserialize,
     norito::derive::NoritoDeserialize,
 )]
+#[norito(deny_unknown_fields)]
 pub struct AliasResolveResponseDto {
     pub alias: String,
     pub account_id: String,
@@ -2593,6 +2595,7 @@ pub struct AliasResolveResponseDto {
     crate::json_macros::JsonDeserialize,
     norito::derive::NoritoDeserialize,
 )]
+#[norito(deny_unknown_fields)]
 pub struct AliasResolveIndexResponseDto {
     pub index: u64,
     pub alias: String,
@@ -2607,6 +2610,7 @@ pub struct AliasResolveIndexResponseDto {
     crate::json_macros::JsonDeserialize,
     norito::derive::NoritoDeserialize,
 )]
+#[norito(deny_unknown_fields)]
 pub struct AliasLookupByAccountItemDto {
     pub alias: String,
     pub dataspace: String,
@@ -2621,6 +2625,7 @@ pub struct AliasLookupByAccountItemDto {
     crate::json_macros::JsonDeserialize,
     norito::derive::NoritoDeserialize,
 )]
+#[norito(deny_unknown_fields)]
 pub struct AliasLookupByAccountResponseDto {
     pub account_id: String,
     pub total: u64,
@@ -20657,6 +20662,17 @@ fn selected_multisig_alias_literal(selector: &MultisigAccountSelectorDto) -> Opt
 }
 
 #[cfg(feature = "app_api")]
+fn reject_unverified_multisig_alias_selector(selector: &MultisigAccountSelectorDto) -> Result<()> {
+    if selector.multisig_account_alias.is_some() {
+        return Err(multisig_selector_forbidden_error(
+            "multisig_alias_signature_required",
+            "alias selectors are not accepted on unsigned scaffold endpoints; use a canonical multisig account id",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(feature = "app_api")]
 fn parse_multisig_account_alias(
     alias_input: &str,
     catalog: &DataSpaceCatalog,
@@ -20699,6 +20715,12 @@ fn resolve_multisig_account_selector(
         )),
         (Some(account_id), None) => Ok(account_id.clone()),
         (None, Some(alias)) => {
+            let authority = resolve_authority.ok_or_else(|| {
+                multisig_selector_forbidden_error(
+                    "multisig_alias_signature_required",
+                    "canonical signed account headers are required for a multisig alias selector",
+                )
+            })?;
             if alias.is_empty() || alias.trim() != alias {
                 return Err(multisig_selector_validation_error(
                     "multisig_account_alias must use an exact non-empty canonical literal"
@@ -20708,6 +20730,12 @@ fn resolve_multisig_account_selector(
             let nexus = state.nexus_snapshot();
             let label = parse_multisig_account_alias(alias, &nexus.dataspace_catalog)?;
             let state_view = state.view();
+            if !authority_can_resolve_account_alias(state_view.world(), authority, &label) {
+                return Err(multisig_selector_forbidden_error(
+                    "multisig_alias_resolve_forbidden",
+                    format!("missing account-alias resolve permission for `{alias}`"),
+                ));
+            }
             let now_ms = state_view.latest_block().map_or(0, |block| {
                 u64::try_from(block.header().creation_time().as_millis()).unwrap_or(u64::MAX)
             });
@@ -20718,19 +20746,19 @@ fn resolve_multisig_account_selector(
                 now_ms,
             )
             .ok_or_else(|| {
-                    let alias_literal = label
-                        .to_literal(&nexus.dataspace_catalog)
-                        .unwrap_or_else(|_| alias.to_owned());
-                    iroha_logger::warn!(
-                        alias = %alias_literal,
-                        authority = ?resolve_authority,
-                        "multisig selector rejected: authority alias not found"
-                    );
-                    multisig_selector_not_found_error(
-                        "multisig_authority_alias_not_found",
-                        format!("multisig authority alias not found: `{alias_literal}`"),
-                    )
-                })
+                let alias_literal = label
+                    .to_literal(&nexus.dataspace_catalog)
+                    .unwrap_or_else(|_| alias.to_owned());
+                iroha_logger::warn!(
+                    alias = %alias_literal,
+                    authority = ?resolve_authority,
+                    "multisig selector rejected: authority alias not found"
+                );
+                multisig_selector_not_found_error(
+                    "multisig_authority_alias_not_found",
+                    format!("multisig authority alias not found: `{alias_literal}`"),
+                )
+            })
         }
     }
 }
@@ -27232,6 +27260,7 @@ pub async fn handle_post_contract_call_multisig_propose(
         normalize_contract_call_gas_asset_id(state.as_ref(), gas_asset_id.as_deref())?;
     let fee_sponsor = normalize_fee_sponsor_literal(fee_sponsor)?;
     let selector_alias_literal = selected_multisig_alias_literal(&selector);
+    reject_unverified_multisig_alias_selector(&selector)?;
     let (multisig_account_id, spec) =
         resolve_multisig_account_and_spec(&state, &selector, Some(&signer_account_id))?;
     if !spec.signatories.contains_key(&signer_account_id) {
@@ -27474,6 +27503,7 @@ pub async fn handle_post_contract_call_multisig_approve(
         instructions_hash,
     } = req;
     let fee_sponsor = normalize_fee_sponsor_literal(fee_sponsor)?;
+    reject_unverified_multisig_alias_selector(&selector)?;
     let (multisig_account_id, _spec) =
         resolve_multisig_account_and_spec(&state, &selector, Some(&signer_account_id))?;
     let (hash_literal, instructions_hash) =
@@ -27614,6 +27644,7 @@ pub async fn handle_post_multisig_cancel(
         instructions_hash,
     } = req;
     let fee_sponsor = normalize_fee_sponsor_literal(fee_sponsor)?;
+    reject_unverified_multisig_alias_selector(&selector)?;
     let (multisig_account_id, spec) =
         resolve_multisig_account_and_spec(&state, &selector, Some(&signer_account_id))?;
     let (target_hash_literal, target_instructions_hash) =
@@ -27826,6 +27857,7 @@ pub async fn handle_post_multisig_propose(
         validation_fee_instruction_index,
         validation_fee_transfer_entry_index,
     )?;
+    reject_unverified_multisig_alias_selector(&selector)?;
     let (multisig_account_id, spec) =
         resolve_multisig_account_and_spec(&state, &selector, Some(&signer_account_id))?;
 
@@ -28022,6 +28054,7 @@ pub async fn handle_post_multisig_approve(
         instructions_hash,
     } = req;
     let fee_sponsor = normalize_fee_sponsor_literal(fee_sponsor)?;
+    reject_unverified_multisig_alias_selector(&selector)?;
     let (multisig_account_id, _spec) =
         resolve_multisig_account_and_spec(&state, &selector, Some(&signer_account_id))?;
     let (hash_literal, instructions_hash) =
@@ -28339,6 +28372,15 @@ pub async fn handle_post_multisig_proposals_lookup(
     request: NoritoJson<MultisigProposalLookupRequestDto>,
 ) -> Result<JsonBody<MultisigProposalLookupResponseDto>> {
     handle_post_multisig_proposals_resolve(state, request).await
+}
+
+#[cfg(feature = "app_api")]
+pub(crate) async fn handle_post_multisig_proposals_lookup_for_authority(
+    state: Arc<CoreState>,
+    req: MultisigProposalLookupRequestDto,
+    resolve_authority: AccountId,
+) -> Result<JsonBody<MultisigProposalLookupResponseDto>> {
+    handle_post_multisig_proposals_resolve_for_authority(state, req, resolve_authority).await
 }
 
 /// POST /v1/multisig/approvals/query — list signer-visible multisig approvals.
@@ -46485,38 +46527,24 @@ pub fn parse_account_path_segment(
         })
 }
 
-fn resolve_parsed_account_against_world(
-    state: &CoreState,
-    parsed: &AccountId,
-) -> Option<iroha_data_model::account::AccountId> {
-    let world = state.world_view();
-    if world.account(parsed).is_ok() {
-        return Some(parsed.clone());
-    }
-
-    let mut matches = world.accounts_iter().filter_map(|entry| {
-        (entry.id().controller() == parsed.controller()).then(|| entry.id().clone())
-    });
-    let first = matches.next()?;
-    if matches.next().is_some() {
-        return None;
-    }
-    Some(first)
-}
-
 pub(crate) fn parse_account_literal_with_state(
-    state: &CoreState,
+    _state: &CoreState,
     literal: &str,
     telemetry: &MaybeTelemetry,
     context: &'static str,
 ) -> Result<(iroha_data_model::account::AccountId, String), iroha_data_model::error::ParseError> {
     match AccountId::parse_encoded(literal) {
         Ok(parsed) => {
-            let parsed_id = parsed.into_account_id();
-            let resolved =
-                resolve_parsed_account_against_world(state, &parsed_id).unwrap_or(parsed_id);
-            record_account_literal_accept(telemetry, context, &resolved);
-            Ok((resolved.clone(), resolved.to_string()))
+            let (account_id, canonical, _) = parsed.into_parts();
+            if literal != canonical {
+                let err = iroha_data_model::error::ParseError::new(
+                    "account id must use its exact canonical I105 literal",
+                );
+                record_account_literal_reject(telemetry, context, literal, err.reason());
+                return Err(err);
+            }
+            record_account_literal_accept(telemetry, context, &account_id);
+            Ok((account_id, canonical))
         }
         Err(base_err) => {
             // This generic parser deliberately accepts account IDs only. Alias resolution is a
@@ -67099,17 +67127,10 @@ fn primary_alias_projection_from_binding_record(
 
 #[cfg(feature = "app_api")]
 pub(crate) fn primary_alias_projection_for_account_id(
-    state: &CoreState,
-    account_id: &AccountId,
+    _state: &CoreState,
+    _account_id: &AccountId,
 ) -> PrimaryAliasProjection {
-    let state_view = state.view();
-    let now_ms = asset_alias_observation_time_ms(state);
-    primary_alias_projection_for_account_id_in_world(
-        state_view.world(),
-        &state_view.nexus().dataspace_catalog,
-        account_id,
-        now_ms,
-    )
+    PrimaryAliasProjection::default()
 }
 
 #[cfg(feature = "app_api")]
@@ -67147,61 +67168,26 @@ fn primary_alias_projection_for_account_id_in_world(
 
 #[cfg(feature = "app_api")]
 fn primary_alias_projection_batch_for_account_ids(
-    world: &impl WorldReadOnly,
-    catalog: &DataSpaceCatalog,
-    now_ms: u64,
+    _world: &impl WorldReadOnly,
+    _catalog: &DataSpaceCatalog,
+    _now_ms: u64,
     account_ids: impl IntoIterator<Item = AccountId>,
 ) -> BTreeMap<AccountId, PrimaryAliasProjection> {
     account_ids
         .into_iter()
-        .map(|account_id| {
-            (
-                account_id.clone(),
-                primary_alias_projection_for_account_id_in_world(
-                    world,
-                    catalog,
-                    &account_id,
-                    now_ms,
-                ),
-            )
-        })
+        .map(|account_id| (account_id, PrimaryAliasProjection::default()))
         .collect()
 }
 
 #[cfg(feature = "app_api")]
-fn insert_primary_alias_fields(map: &mut norito::json::Map, alias: &PrimaryAliasProjection) {
-    map.insert(
-        "primary_alias".into(),
-        alias
-            .literal
-            .as_ref()
-            .map_or(norito::json::Value::Null, |value| value.clone().into()),
-    );
-    map.insert(
-        "primary_alias_name".into(),
-        alias
-            .name
-            .as_ref()
-            .map_or(norito::json::Value::Null, |value| value.clone().into()),
-    );
-    map.insert(
-        "primary_alias_dataspace".into(),
-        alias
-            .dataspace
-            .as_ref()
-            .map_or(norito::json::Value::Null, |value| value.clone().into()),
-    );
-    map.insert(
-        "primary_alias_domain".into(),
-        alias
-            .domain
-            .as_ref()
-            .map_or(norito::json::Value::Null, |value| value.clone().into()),
-    );
-    map.insert(
-        "has_primary_alias".into(),
-        norito::json::Value::from(alias.has_primary_alias),
-    );
+fn insert_primary_alias_fields(map: &mut norito::json::Map, _alias: &PrimaryAliasProjection) {
+    // Generic account and asset projections do not carry a canonical signed caller or an exact
+    // alias-resolution grant. Preserve the response shape without exposing directory data.
+    map.insert("primary_alias".into(), norito::json::Value::Null);
+    map.insert("primary_alias_name".into(), norito::json::Value::Null);
+    map.insert("primary_alias_dataspace".into(), norito::json::Value::Null);
+    map.insert("primary_alias_domain".into(), norito::json::Value::Null);
+    map.insert("has_primary_alias".into(), norito::json::Value::from(false));
 }
 
 #[cfg(feature = "app_api")]
@@ -69081,7 +69067,7 @@ fn account_from_key_value(
     iroha_data_model::account::Account {
         id: id.clone(),
         metadata: details.metadata,
-        label: details.label,
+        label: None,
         uaid: details.uaid,
         opaque_ids: details.opaque_ids,
     }
@@ -69094,7 +69080,7 @@ fn account_read_response_from_world_entry(
     let details = entry.value().clone().into_inner();
     iroha_torii_shared::AccountReadResponse {
         account_id: entry.id().clone(),
-        label: details.label,
+        label: None,
         uaid: details.uaid,
         opaque_ids: details.opaque_ids,
     }
@@ -70696,6 +70682,32 @@ pub async fn handle_v1_accounts_onboard(
     );
 
     let mut permission_instructions = Vec::new();
+    for dataspace in &signer.alias_resolve_dataspaces {
+        let permission = iroha_data_model::permission::Permission::from(
+            iroha_executor_data_model::permission::account::CanResolveAccountAlias {
+                scope: iroha_executor_data_model::permission::account::AccountAliasPermissionScope::Dataspace(
+                    *dataspace,
+                ),
+            },
+        );
+        permission_instructions.push(InstructionBox::from(Grant::account_permission(
+            permission,
+            account_id.clone(),
+        )));
+    }
+    for domain in &signer.alias_resolve_domains {
+        let permission = iroha_data_model::permission::Permission::from(
+            iroha_executor_data_model::permission::account::CanResolveAccountAlias {
+                scope: iroha_executor_data_model::permission::account::AccountAliasPermissionScope::Domain(
+                    domain.clone(),
+                ),
+            },
+        );
+        permission_instructions.push(InstructionBox::from(Grant::account_permission(
+            permission,
+            account_id.clone(),
+        )));
+    }
     let mut requested_permissions = std::collections::BTreeSet::new();
     for permission_name in permissions {
         let normalized = permission_name.trim().to_owned();
@@ -70705,6 +70717,14 @@ pub async fn handle_v1_accounts_onboard(
         if !signer.allowed_permissions.contains(&normalized) {
             return Err(onboarding_invalid_request(
                 "requested permission is not allowed",
+            ));
+        }
+        if matches!(
+            normalized.as_str(),
+            "CanResolveAccountAlias" | "CanManageAccountAlias"
+        ) {
+            return Err(onboarding_invalid_request(
+                "account-alias permissions must use the configured typed scopes",
             ));
         }
         let permission = iroha_data_model::permission::Permission::new(
@@ -71248,6 +71268,7 @@ pub async fn handle_v1_accounts_onboard_multisig(
 pub async fn handle_v1_account_aliases(
     app: crate::SharedAppState,
     axum::extract::Path(account_id_literal): axum::extract::Path<String>,
+    caller: AccountId,
 ) -> Result<impl IntoResponse> {
     let telemetry = MaybeTelemetry::disabled();
     let (account_id, canonical_account_id) = parse_account_path_segment_with_state(
@@ -71265,11 +71286,18 @@ pub async fn handle_v1_account_aliases(
     .map_err(|err| Error::Query(iroha_data_model::ValidationFail::QueryFailed(err)))?;
     let now_ms = asset_alias_observation_time_ms(app.state.as_ref());
     let world = app.state.world_view();
+    let catalog = app.state.nexus_snapshot().dataspace_catalog;
+    let had_bindings = !bindings.is_empty();
     let mut items = Vec::with_capacity(bindings.len());
     for binding in bindings {
+        let alias = account::rekey::AccountAlias::from_literal(&binding.alias, &catalog)
+            .map_err(|err| conversion_error(format!("invalid account alias binding: {err}")))?;
+        if !authority_can_resolve_account_alias(&world, &caller, &alias) {
+            continue;
+        }
         let record = get_name_record(
             &world,
-            &app.state.nexus_snapshot().dataspace_catalog,
+            &catalog,
             SnsNamespace::AccountAlias,
             &binding.alias,
             now_ms,
@@ -71289,6 +71317,13 @@ pub async fn handle_v1_account_aliases(
                 .as_ref()
                 .and_then(|(_, _, invoice, _)| invoice.as_ref()),
             auto_renew.as_ref().map(|(_, _, _, settings)| settings),
+        ));
+    }
+    if had_bindings && items.is_empty() {
+        return Err(Error::Query(
+            iroha_data_model::ValidationFail::NotPermitted(
+                "exact account-alias resolve permission is required".to_owned(),
+            ),
         ));
     }
     let payload = AccountAliasLeaseListResponseDto {
@@ -82148,6 +82183,8 @@ mod subscription_api_tests {
                 authority: provider.clone(),
                 private_key: ExposedPrivateKey(ALICE_KEYPAIR.private_key().clone()),
                 allowed_permissions: std::collections::BTreeSet::new(),
+                alias_resolve_dataspaces: std::collections::BTreeSet::new(),
+                alias_resolve_domains: std::collections::BTreeSet::new(),
                 fee_sponsor_account: None,
                 alias_lease_term_years: 1,
                 alias_auto_renew_enabled: true,

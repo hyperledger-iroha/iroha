@@ -15672,12 +15672,24 @@ impl DetachedStateTransactionDelta {
         world: &impl WorldReadOnly,
         authority: &AccountId,
         account_id: &AccountId,
+        now_ms: u64,
     ) -> Result<bool, ValidationFail> {
         if authority == account_id {
             return Ok(true);
         }
 
         for alias in world.bound_account_aliases(account_id) {
+            if crate::sns::resolve_active_account_alias(
+                world,
+                world.dataspace_catalog(),
+                &alias,
+                now_ms,
+            )
+            .as_ref()
+                != Some(account_id)
+            {
+                continue;
+            }
             let Some(domain_id) = alias.domain_id(world.dataspace_catalog()).map_err(|err| {
                 ValidationFail::InstructionFailed(Error::InvariantViolation(err.to_string().into()))
             })?
@@ -15765,12 +15777,24 @@ impl DetachedStateTransactionDelta {
             iroha_data_model::domain::DomainId,
             iroha_data_model::account::Account,
         >,
+        now_ms: u64,
     ) -> Result<bool, ValidationFail> {
         if transfer.source() == authority {
             return Ok(true);
         }
 
         for alias in world.bound_account_aliases(transfer.source()) {
+            if crate::sns::resolve_active_account_alias(
+                world,
+                world.dataspace_catalog(),
+                &alias,
+                now_ms,
+            )
+            .as_ref()
+                != Some(transfer.source())
+            {
+                continue;
+            }
             let Some(domain_id) = alias.domain_id(world.dataspace_catalog()).map_err(|err| {
                 ValidationFail::InstructionFailed(Error::InvariantViolation(err.to_string().into()))
             })?
@@ -17639,19 +17663,16 @@ impl World {
                     "Account alias {label:?} looks like raw PII; use UAID/opaque identifiers"
                 ));
             }
-            if let Some(existing) = index.get(label) {
-                if existing != account_id {
-                    return Err(format!(
-                        "Account alias {label:?} already bound to account {existing}"
-                    ));
-                }
-                continue;
+            let Some(existing) = index.get(label) else {
+                return Err(format!(
+                    "Account primary label {label:?} is missing its authoritative alias binding"
+                ));
+            };
+            if existing != account_id {
+                return Err(format!(
+                    "Account primary label {label:?} is bound to account {existing}, not {account_id}"
+                ));
             }
-            reverse
-                .entry(account_id.clone())
-                .or_default()
-                .insert(label.clone());
-            index.insert(label.clone(), account_id.clone());
         }
         self.account_aliases = index.into_iter().collect();
         self.account_aliases_by_account = reverse.into_iter().collect();
@@ -17736,12 +17757,17 @@ impl World {
                     "Account rekey record {label:?} references missing account {account_id}"
                 ));
             }
-            let record = match records.remove(&label) {
-                Some(record) if record.active_account_id == account_id => record,
-                Some(record) => record.repoint_to_account(account_id.clone()),
-                None => AccountRekeyRecord::new(label.clone(), account_id.clone()),
+            let Some(record) = records.get(&label) else {
+                return Err(format!(
+                    "Account alias binding {label:?} is missing its continuity record"
+                ));
             };
-            records.insert(label, record);
+            if record.active_account_id != account_id {
+                return Err(format!(
+                    "Account alias binding {label:?} points to {account_id}, but its continuity record points to {}",
+                    record.active_account_id
+                ));
+            }
         }
 
         for (label, record) in &records {
@@ -57114,10 +57140,21 @@ impl StateTransaction<'_, '_> {
             let asset_id = changed.asset();
             let amount_str = changed.amount().to_string();
             let asset_definition_id = asset_id.definition().to_string();
+            let alias_observation_time_ms = self.block_unix_timestamp_ms();
             let alias_domains: Vec<String> = self
                 .world
                 .bound_account_aliases(asset_id.account())
                 .into_iter()
+                .filter(|alias| {
+                    crate::sns::resolve_active_account_alias(
+                        &self.world,
+                        &self.nexus.dataspace_catalog,
+                        alias,
+                        alias_observation_time_ms,
+                    )
+                    .as_ref()
+                        == Some(asset_id.account())
+                })
                 .filter_map(|alias| {
                     alias
                         .domain_id(&self.nexus.dataspace_catalog)
@@ -57132,6 +57169,17 @@ impl StateTransaction<'_, '_> {
                 .get(asset_id.account())
                 .and_then(|value| {
                     value.as_ref().label().and_then(|label| {
+                        if crate::sns::resolve_active_account_alias(
+                            &self.world,
+                            &self.nexus.dataspace_catalog,
+                            label,
+                            alias_observation_time_ms,
+                        )
+                        .as_ref()
+                            != Some(asset_id.account())
+                        {
+                            return None;
+                        }
                         label
                             .domain_id(&self.nexus.dataspace_catalog)
                             .ok()
@@ -108105,7 +108153,7 @@ mod tests {
 
         assert!(
             delta
-                .can_modify_account_metadata(&view, &ALICE_ID, &BOB_ID)
+                .can_modify_account_metadata(&view, &ALICE_ID, &BOB_ID, 0)
                 .expect("permission check"),
             "domain owner must be allowed to modify account metadata"
         );
@@ -108144,7 +108192,7 @@ mod tests {
 
         assert!(
             !delta
-                .can_transfer_domain(&view, &ALICE_ID, &transfer)
+                .can_transfer_domain(&view, &ALICE_ID, &transfer, 0)
                 .expect("permission check"),
             "authority that owns neither source account/domain nor transferred domain must be denied"
         );
@@ -108190,7 +108238,7 @@ mod tests {
 
         assert!(
             !delta
-                .can_transfer_domain(&view, &ALICE_ID, &transfer)
+                .can_transfer_domain(&view, &ALICE_ID, &transfer, 0)
                 .expect("permission check"),
             "baseline should deny authority before pending owner updates"
         );
@@ -108198,7 +108246,7 @@ mod tests {
         delta.transfer_domain(users_domain_id.clone(), user1.clone(), ALICE_ID.clone());
         assert!(
             delta
-                .can_transfer_domain(&view, &ALICE_ID, &transfer)
+                .can_transfer_domain(&view, &ALICE_ID, &transfer, 0)
                 .expect("permission check"),
             "pending source-domain transfer should authorize subsequent transfer"
         );
@@ -108207,7 +108255,7 @@ mod tests {
         delta.transfer_domain(transferred_domain_id.clone(), user1, ALICE_ID.clone());
         assert!(
             delta
-                .can_transfer_domain(&view, &ALICE_ID, &transfer)
+                .can_transfer_domain(&view, &ALICE_ID, &transfer, 0)
                 .expect("permission check"),
             "pending transferred-domain ownership should authorize subsequent transfer"
         );
@@ -108418,7 +108466,7 @@ mod tests {
         let mut delta = DetachedStateTransactionDelta::default();
         assert!(
             !delta
-                .can_modify_account_metadata(&view, &ALICE_ID, &BOB_ID)
+                .can_modify_account_metadata(&view, &ALICE_ID, &BOB_ID, 0)
                 .expect("permission check"),
             "role without permissions should deny account metadata edits"
         );
@@ -108426,7 +108474,7 @@ mod tests {
         delta.grant_role_permission(role_id.clone(), perm.clone());
         assert!(
             delta
-                .can_modify_account_metadata(&view, &ALICE_ID, &BOB_ID)
+                .can_modify_account_metadata(&view, &ALICE_ID, &BOB_ID, 0)
                 .expect("permission check"),
             "role permission grant should allow account metadata edits"
         );
@@ -108434,7 +108482,7 @@ mod tests {
         delta.revoke_role_permission(role_id.clone(), perm.clone());
         assert!(
             !delta
-                .can_modify_account_metadata(&view, &ALICE_ID, &BOB_ID)
+                .can_modify_account_metadata(&view, &ALICE_ID, &BOB_ID, 0)
                 .expect("permission check"),
             "role permission revoke should remove account metadata permission"
         );
@@ -108442,7 +108490,7 @@ mod tests {
         delta.grant_role_permission(role_id, perm);
         assert!(
             delta
-                .can_modify_account_metadata(&view, &ALICE_ID, &BOB_ID)
+                .can_modify_account_metadata(&view, &ALICE_ID, &BOB_ID, 0)
                 .expect("permission check"),
             "last role permission grant should win over earlier revoke"
         );

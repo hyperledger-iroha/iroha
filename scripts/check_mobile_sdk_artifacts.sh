@@ -412,53 +412,78 @@ check_swift_kagemusha_source_contract() {
   local source_dir="$ROOT_DIR/IrohaSwift/Sources/IrohaSwift"
   [[ -d "$source_dir" ]] || return
 
-  if ! python3 - "$source_dir" <<'PY'
+  if ! python3 - "$source_dir" "${KAGEMUSHA_C_SYMBOLS[@]}" <<'PY'
 from pathlib import Path
 import re
 import sys
 
 root = Path(sys.argv[1])
+expected_symbols = set(sys.argv[2:])
 files = sorted(root.glob("*.swift"))
 text = "\n".join(path.read_text(encoding="utf-8") for path in files)
-required = (
-    "nativeCapabilitiesV4",
-    "initSpendV4(",
-    "appendSpendV4(",
-    "verifySpendV4(",
-    "buildRedeemV4(",
-    "connect_norito_kagemusha_recursive_spend_capabilities_v4",
-    "connect_norito_kagemusha_recursive_spend_init_v4",
-    "connect_norito_kagemusha_recursive_spend_append_v4",
-    "connect_norito_kagemusha_recursive_spend_verify_v4",
-    "connect_norito_kagemusha_recursive_spend_redeem_v4",
+expected_wrappers = {
+    "appendSpendV4",
+    "buildRedeemV4",
+    "ensureProofBackendAvailableV4",
+    "initSpendV4",
+    "verifySpendV4",
+}
+expected_native_lifecycle = {
+    "kagemushaRecursiveSpendAppendV4",
+    "kagemushaRecursiveSpendArtifactBeginV4",
+    "kagemushaRecursiveSpendArtifactCancelV4",
+    "kagemushaRecursiveSpendArtifactFinalizeV4",
+    "kagemushaRecursiveSpendArtifactSetInstallV4",
+    "kagemushaRecursiveSpendArtifactSetIsInstalledV4",
+    "kagemushaRecursiveSpendArtifactSetUninstallV4",
+    "kagemushaRecursiveSpendArtifactWriteV4",
+    "kagemushaRecursiveSpendCapabilitiesV4",
+    "kagemushaRecursiveSpendInitV4",
+    "kagemushaRecursiveSpendRedeemV4",
+    "kagemushaRecursiveSpendVerifyV4",
+}
+actual_symbols = set(re.findall(
+    r'"(connect_norito_kagemusha_[a-z0-9_]+)"',
+    text,
+))
+actual_wrappers = set(re.findall(
+    r"\bfunc\s+((?:ensureProofBackendAvailable|initSpend|appendSpend|verifySpend|"
+    r"buildRedeem)V[0-9]+)\s*\(",
+    text,
+))
+actual_native_lifecycle = set(re.findall(
+    r"\bfunc\s+(kagemushaRecursiveSpend(?:Capabilities|Init|Append|Verify|Redeem|"
+    r"Artifact(?:Begin|Write|Finalize|Cancel|SetInstall|SetIsInstalled|SetUninstall))"
+    r"V[0-9]+)\s*\(",
+    text,
+))
+inventories = (
+    ("native symbol", actual_symbols, expected_symbols),
+    ("lifecycle wrapper", actual_wrappers, expected_wrappers),
+    ("native lifecycle binding", actual_native_lifecycle, expected_native_lifecycle),
 )
-missing = [marker for marker in required if marker not in text]
-retired_patterns = (
-    r"\b(?:public\s+)?(?:static\s+)?func\s+[A-Za-z0-9_]*V3\s*\(",
-    r"\bpublic\s+(?:struct|enum|class|typealias|protocol)\s+[A-Za-z0-9_]*V3\b",
+errors = []
+for label, actual, expected in inventories:
+    missing = sorted(expected - actual)
+    retired_or_extra = sorted(actual - expected)
+    if missing or retired_or_extra:
+        errors.append(
+            f"Swift Kagemusha {label} inventory is not exact ABI-20/V4 "
+            f"(missing={missing}, retired_or_unexpected={retired_or_extra})"
+        )
+if re.search(r"\bpublic\s+(?:struct|enum|class|typealias|protocol)\s+[A-Za-z0-9_]*V3\b", text):
+    errors.append("Swift SDK retains a public retired V3 schema carrier")
+if re.search(
     r"\bpublic\s+static\s+func\s+(?:initSpend|appendSpend|verifySpend|buildRedeem)\s*\(",
-    r"connect_norito_kagemusha_recursive_spend_capabilities_v1\b",
-    r"connect_norito_kagemusha_recursive_spend_(?:artifact_[a-z_]+|init|append|verify|redeem)_v[123]\b",
-    r"kagemushaRecursiveSpend(?:Init|Append|Verify|Redeem)V[23]\s*\(",
-)
-retired = []
-for pattern in retired_patterns:
-    match = re.search(pattern, text)
-    if match:
-        retired.append(match.group(0))
-if missing:
+    text,
+):
+    errors.append("Swift SDK retains an unversioned retired lifecycle wrapper")
+for error in errors:
     print(
-        "[mobile-sdk-artifacts] ERROR: Swift SDK is missing exact V4 lifecycle markers: "
-        + ", ".join(missing),
+        "[mobile-sdk-artifacts] ERROR: " + error,
         file=sys.stderr,
     )
-if retired:
-    print(
-        "[mobile-sdk-artifacts] ERROR: Swift SDK retains callable retired Kagemusha "
-        "surfaces: " + ", ".join(retired),
-        file=sys.stderr,
-    )
-raise SystemExit(1 if missing or retired else 0)
+raise SystemExit(1 if errors else 0)
 PY
   then
     FAILURES=1
@@ -513,52 +538,51 @@ PY
   fi
 
   if [[ -f "$kotlin_source" || -f "$java_source" ]]; then
-    if ! python3 - "$kotlin_source" "$java_source" <<'PY'
+    if ! python3 - "$kotlin_source" "$java_source" -- "${KAGEMUSHA_JNI_METHODS[@]}" <<'PY'
 from pathlib import Path
 import re
 import sys
 
-paths = [Path(raw) for raw in sys.argv[1:] if Path(raw).is_file()]
-required = (
-    "initSpendV4(",
-    "appendSpendV4(",
-    "verifySpendV4(",
-    "buildRedeemV4(",
-    "nativeInitSpendV4(",
-    "nativeAppendSpendV4(",
-    "nativeVerifySpendV4(",
-    "nativeBuildRedeemV4(",
-)
-retired_names = (
-    "nativePastaCycleV3BackendAvailable",
-    "nativeArtifactBindingV3",
-    "nativeArtifactBeginV3",
-    "nativeArtifactWriteV3",
-    "nativeArtifactFinalizeV3",
-    "nativeArtifactCancelV3",
-    "nativeArtifactSetInstallV3",
-    "nativeArtifactSetIsInstalledV3",
-    "nativeArtifactSetUninstallV3",
-    "nativeBuildInitRequestV2",
-    "nativeBuildAppendRequestV2",
-    "nativeBuildVerifyRequestV2",
-    "nativeBuildRedeemRequestV2",
-    "nativeInitSpendV2",
-    "nativeAppendSpendV2",
-    "nativeVerifySpendV2",
-    "nativeBuildRedeemV2",
-)
+separator = sys.argv.index("--")
+paths = [Path(raw) for raw in sys.argv[1:separator] if Path(raw).is_file()]
+expected_native = set(sys.argv[separator + 1:])
+expected_wrappers = {"initSpendV4", "appendSpendV4", "verifySpendV4", "buildRedeemV4"}
 errors = []
 for path in paths:
     text = path.read_text(encoding="utf-8")
-    missing = [marker for marker in required if marker not in text]
-    retired = [name for name in retired_names if name in text]
+    if path.suffix == ".kt":
+        actual_native = set(re.findall(
+            r"\bprivate\s+external\s+fun\s+(native[A-Za-z0-9_]+)\s*\(",
+            text,
+        ))
+        actual_wrappers = set(re.findall(
+            r"\bfun\s+((?:initSpend|appendSpend|verifySpend|buildRedeem)V[0-9]+)\s*\(",
+            text,
+        ))
+    else:
+        actual_native = set(re.findall(
+            r"\bprivate\s+static\s+native\s+[A-Za-z0-9_<>?,\[\].]+\s+"
+            r"(native[A-Za-z0-9_]+)\s*\(",
+            text,
+        ))
+        actual_wrappers = set(re.findall(
+            r"\b(?:public\s+)?(?:static\s+)?[A-Za-z0-9_<>?,\[\].]+\s+"
+            r"((?:initSpend|appendSpend|verifySpend|buildRedeem)V[0-9]+)\s*\(",
+            text,
+        ))
+    for label, actual, expected in (
+        ("native method", actual_native, expected_native),
+        ("lifecycle wrapper", actual_wrappers, expected_wrappers),
+    ):
+        missing = sorted(expected - actual)
+        retired_or_extra = sorted(actual - expected)
+        if missing or retired_or_extra:
+            errors.append(
+                f"{path}: {label} inventory is not exact ABI-20/V4 "
+                f"(missing={missing}, retired_or_unexpected={retired_or_extra})"
+            )
     if re.search(r"\b(?:data\s+class|class|interface|record|enum)\s+[A-Za-z0-9_]*V3\b", text):
-        retired.append("public V3 schema carrier")
-    if missing:
-        errors.append(f"{path}: missing " + ", ".join(missing))
-    if retired:
-        errors.append(f"{path}: retired " + ", ".join(retired))
+        errors.append(f"{path}: public retired V3 schema carrier")
 for error in errors:
     print(f"[mobile-sdk-artifacts] ERROR: {error}", file=sys.stderr)
 raise SystemExit(1 if errors else 0)

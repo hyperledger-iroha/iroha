@@ -1601,7 +1601,7 @@ fn persist_record(state_transaction: &mut StateTransaction<'_, '_>, record: &Nam
 ///
 /// Returns [`SnsError`] when the selector is invalid, the policy is missing or
 /// inactive, or a record already exists for the same canonical selector.
-pub fn register_name(
+pub(crate) fn register_name(
     state_transaction: &mut StateTransaction<'_, '_>,
     request: RegisterNameRequestV1,
 ) -> Result<NameRecordV1, SnsError> {
@@ -1657,7 +1657,7 @@ pub fn register_name(
 ///
 /// Returns [`SnsError`] when the name or policy is missing, the record is not
 /// mutable, or the payment/term fails policy validation.
-pub fn renew_name(
+pub(crate) fn renew_name(
     state_transaction: &mut StateTransaction<'_, '_>,
     namespace: SnsNamespace,
     literal: &str,

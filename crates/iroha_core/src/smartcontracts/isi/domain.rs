@@ -332,7 +332,14 @@ pub mod isi {
 
         for existing_alias in state_transaction.world.bound_account_aliases(account) {
             if existing_alias == *requested_alias
-                || state_transaction.world.account_aliases.get(&existing_alias) != Some(account)
+                || crate::sns::resolve_active_account_alias(
+                    &state_transaction.world,
+                    &state_transaction.nexus.dataspace_catalog,
+                    &existing_alias,
+                    state_transaction.block_unix_timestamp_ms(),
+                )
+                .as_ref()
+                    != Some(account)
             {
                 continue;
             }
@@ -367,7 +374,14 @@ pub mod isi {
         });
 
         for existing_alias in state_transaction.world.bound_account_aliases(account) {
-            if state_transaction.world.account_aliases.get(&existing_alias) != Some(account)
+            if crate::sns::resolve_active_account_alias(
+                &state_transaction.world,
+                &state_transaction.nexus.dataspace_catalog,
+                &existing_alias,
+                state_transaction.block_unix_timestamp_ms(),
+            )
+            .as_ref()
+                != Some(account)
                 || sbp_retail_fi_home_domain(
                     &existing_alias,
                     &state_transaction.nexus.dataspace_catalog,
@@ -590,6 +604,16 @@ pub mod isi {
             .world
             .bound_account_aliases(account_id)
             .into_iter()
+            .filter(|alias| {
+                crate::sns::resolve_active_account_alias(
+                    &state_transaction.world,
+                    &state_transaction.nexus.dataspace_catalog,
+                    alias,
+                    state_transaction.block_unix_timestamp_ms(),
+                )
+                .as_ref()
+                    == Some(account_id)
+            })
             .find_map(|alias| {
                 alias
                     .domain_id(&state_transaction.nexus.dataspace_catalog)

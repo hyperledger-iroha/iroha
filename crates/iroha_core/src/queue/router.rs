@@ -386,7 +386,11 @@ fn fail_closed_policy_route_with_view(
 ) -> RoutingDecision {
     let nexus = state_view.nexus();
     let target_dataspace = if let Some(account_id) = account_permission_holder_routing_target(tx) {
-        account_dataspace_target(Some(state_view.world()), account_id)
+        account_dataspace_target(
+            Some(state_view.world()),
+            account_id,
+            Some(state_view_ledger_time_ms(state_view)),
+        )
     } else {
         let mut target = transaction_dataspace_routing_target_info(
             tx,
@@ -622,7 +626,7 @@ fn evaluate_policy_with_catalog_and_world_at_opt<W: WorldReadOnly>(
         .find(|rule| rule_matches_with_world(rule, tx, dataspace_catalog, world, ledger_time_ms));
     apply_authority_dataspace_target(
         &mut target,
-        authority_dataspace_target_with_world(Some(world), tx),
+        authority_dataspace_target_with_world(Some(world), tx, ledger_time_ms),
         matched_rule.is_some_and(|rule| rule.matcher.account.is_some()),
     );
     resolve_policy_routing_decision(
@@ -782,7 +786,7 @@ fn evaluate_policy_plan_with_catalog_and_world_at_opt<W: WorldReadOnly>(
     )?;
     apply_authority_dataspace_target(
         &mut target,
-        authority_dataspace_target_with_world(Some(world), tx),
+        authority_dataspace_target_with_world(Some(world), tx, ledger_time_ms),
         matched_rule.is_some_and(|rule| rule.matcher.account.is_some()),
     );
     resolve_policy_routing_plan(
@@ -2069,8 +2073,8 @@ fn collect_instruction_native_amx_participants<W: WorldReadOnly>(
                 ),
                 asset_id_explicit_dataspace_target(&transfer.source),
                 [
-                    account_dataspace_target(Some(world), &transfer.source.account),
-                    account_dataspace_target(Some(world), &transfer.destination),
+                    account_dataspace_target(Some(world), &transfer.source.account, ledger_time_ms),
+                    account_dataspace_target(Some(world), &transfer.destination, ledger_time_ms),
                 ],
             );
             return Ok(());
@@ -2091,6 +2095,7 @@ fn collect_instruction_native_amx_participants<W: WorldReadOnly>(
                 [account_dataspace_target(
                     Some(world),
                     &mint.destination.account,
+                    ledger_time_ms,
                 )],
             );
             return Ok(());
@@ -2111,6 +2116,7 @@ fn collect_instruction_native_amx_participants<W: WorldReadOnly>(
                 [account_dataspace_target(
                     Some(world),
                     &burn.destination.account,
+                    ledger_time_ms,
                 )],
             );
             return Ok(());
@@ -2127,7 +2133,11 @@ fn collect_instruction_native_amx_participants<W: WorldReadOnly>(
                 ledger_time_ms,
             ),
             None,
-            [account_dataspace_target(Some(world), &shield.from)],
+            [account_dataspace_target(
+                Some(world),
+                &shield.from,
+                ledger_time_ms,
+            )],
         );
         return Ok(());
     }
@@ -2142,7 +2152,11 @@ fn collect_instruction_native_amx_participants<W: WorldReadOnly>(
                 ledger_time_ms,
             ),
             None,
-            [account_dataspace_target(Some(world), &unshield.to)],
+            [account_dataspace_target(
+                Some(world),
+                &unshield.to,
+                ledger_time_ms,
+            )],
         );
         return Ok(());
     }
@@ -2158,8 +2172,8 @@ fn collect_instruction_native_amx_participants<W: WorldReadOnly>(
             ),
             None,
             [
-                account_dataspace_target(Some(world), &transfer.from),
-                account_dataspace_target(Some(world), &transfer.to),
+                account_dataspace_target(Some(world), &transfer.from, ledger_time_ms),
+                account_dataspace_target(Some(world), &transfer.to, ledger_time_ms),
             ],
         );
         return Ok(());
@@ -2318,6 +2332,7 @@ fn instruction_transaction_dataspace_target(
                         account_dataspace_target(
                             state_view.map(StateView::world),
                             &grant.destination,
+                            state_view.map(state_view_ledger_time_ms),
                         )
                     })
             }
@@ -2336,6 +2351,7 @@ fn instruction_transaction_dataspace_target(
                         account_dataspace_target(
                             state_view.map(StateView::world),
                             &revoke.destination,
+                            state_view.map(state_view_ledger_time_ms),
                         )
                     })
             }
@@ -2397,9 +2413,11 @@ fn instruction_transaction_dataspace_target(
             SetKeyValueBox::Domain(set) => {
                 domain_dataspace_target_with_state(&set.object, dataspace_catalog, state_view)
             }
-            SetKeyValueBox::Account(set) => {
-                account_dataspace_target(state_view.map(StateView::world), &set.object)
-            }
+            SetKeyValueBox::Account(set) => account_dataspace_target(
+                state_view.map(StateView::world),
+                &set.object,
+                state_view.map(state_view_ledger_time_ms),
+            ),
             SetKeyValueBox::AssetDefinition(set) => asset_definition_dataspace_target(
                 &set.object,
                 None,
@@ -2416,9 +2434,11 @@ fn instruction_transaction_dataspace_target(
             RemoveKeyValueBox::Domain(remove) => {
                 domain_dataspace_target_with_state(&remove.object, dataspace_catalog, state_view)
             }
-            RemoveKeyValueBox::Account(remove) => {
-                account_dataspace_target(state_view.map(StateView::world), &remove.object)
-            }
+            RemoveKeyValueBox::Account(remove) => account_dataspace_target(
+                state_view.map(StateView::world),
+                &remove.object,
+                state_view.map(state_view_ledger_time_ms),
+            ),
             RemoveKeyValueBox::AssetDefinition(remove) => asset_definition_dataspace_target(
                 &remove.object,
                 None,
@@ -2453,10 +2473,12 @@ fn instruction_transaction_dataspace_target(
                     account_dataspace_target(
                         state_view.map(StateView::world),
                         &transfer.source.account,
+                        state_view.map(state_view_ledger_time_ms),
                     ),
                     account_dataspace_target(
                         state_view.map(StateView::world),
                         &transfer.destination,
+                        state_view.map(state_view_ledger_time_ms),
                     ),
                 ],
             ),
@@ -2476,6 +2498,7 @@ fn instruction_transaction_dataspace_target(
                 [account_dataspace_target(
                     state_view.map(StateView::world),
                     &mint.destination.account,
+                    state_view.map(state_view_ledger_time_ms),
                 )],
             ),
             MintBox::TriggerRepetitions(_) => None,
@@ -2494,6 +2517,7 @@ fn instruction_transaction_dataspace_target(
                 [account_dataspace_target(
                     state_view.map(StateView::world),
                     &burn.destination.account,
+                    state_view.map(state_view_ledger_time_ms),
                 )],
             ),
             BurnBox::TriggerRepetitions(_) => None,
@@ -2570,8 +2594,16 @@ fn instruction_transaction_dataspace_target(
         return zk_asset_operation_dataspace_target(
             &transfer.asset,
             [
-                account_dataspace_target(state_view.map(StateView::world), &transfer.from),
-                account_dataspace_target(state_view.map(StateView::world), &transfer.to),
+                account_dataspace_target(
+                    state_view.map(StateView::world),
+                    &transfer.from,
+                    state_view.map(state_view_ledger_time_ms),
+                ),
+                account_dataspace_target(
+                    state_view.map(StateView::world),
+                    &transfer.to,
+                    state_view.map(state_view_ledger_time_ms),
+                ),
             ],
             dataspace_catalog,
             state_view,
@@ -2584,6 +2616,7 @@ fn instruction_transaction_dataspace_target(
             [account_dataspace_target(
                 state_view.map(StateView::world),
                 &shield.from,
+                state_view.map(state_view_ledger_time_ms),
             )],
             dataspace_catalog,
             state_view,
@@ -2612,6 +2645,7 @@ fn instruction_transaction_dataspace_target(
             [account_dataspace_target(
                 state_view.map(StateView::world),
                 &unshield.to,
+                state_view.map(state_view_ledger_time_ms),
             )],
             dataspace_catalog,
             state_view,
@@ -2743,7 +2777,7 @@ fn instruction_transaction_dataspace_target_with_world<W: WorldReadOnly>(
                 world,
                 ledger_time_ms,
             )
-            .or_else(|| account_dataspace_target(Some(world), &grant.destination)),
+            .or_else(|| account_dataspace_target(Some(world), &grant.destination, ledger_time_ms)),
             GrantBox::RolePermission(grant) => dataspace_scoped_permission_target_with_world(
                 &grant.object,
                 dataspace_catalog,
@@ -2762,7 +2796,7 @@ fn instruction_transaction_dataspace_target_with_world<W: WorldReadOnly>(
                 world,
                 ledger_time_ms,
             )
-            .or_else(|| account_dataspace_target(Some(world), &revoke.destination)),
+            .or_else(|| account_dataspace_target(Some(world), &revoke.destination, ledger_time_ms)),
             RevokeBox::RolePermission(revoke) => dataspace_scoped_permission_target_with_world(
                 &revoke.object,
                 dataspace_catalog,
@@ -2833,7 +2867,9 @@ fn instruction_transaction_dataspace_target_with_world<W: WorldReadOnly>(
                 world,
                 ledger_time_ms,
             ),
-            SetKeyValueBox::Account(set) => account_dataspace_target(Some(world), &set.object),
+            SetKeyValueBox::Account(set) => {
+                account_dataspace_target(Some(world), &set.object, ledger_time_ms)
+            }
             SetKeyValueBox::AssetDefinition(set) => asset_definition_dataspace_target_with_world(
                 &set.object,
                 None,
@@ -2855,7 +2891,7 @@ fn instruction_transaction_dataspace_target_with_world<W: WorldReadOnly>(
                 ledger_time_ms,
             ),
             RemoveKeyValueBox::Account(remove) => {
-                account_dataspace_target(Some(world), &remove.object)
+                account_dataspace_target(Some(world), &remove.object, ledger_time_ms)
             }
             RemoveKeyValueBox::AssetDefinition(remove) => {
                 asset_definition_dataspace_target_with_world(
@@ -2896,8 +2932,8 @@ fn instruction_transaction_dataspace_target_with_world<W: WorldReadOnly>(
                 ),
                 asset_id_explicit_dataspace_target(&transfer.source),
                 [
-                    account_dataspace_target(Some(world), &transfer.source.account),
-                    account_dataspace_target(Some(world), &transfer.destination),
+                    account_dataspace_target(Some(world), &transfer.source.account, ledger_time_ms),
+                    account_dataspace_target(Some(world), &transfer.destination, ledger_time_ms),
                 ],
             ),
             TransferBox::Nft(_) => None,
@@ -2917,6 +2953,7 @@ fn instruction_transaction_dataspace_target_with_world<W: WorldReadOnly>(
                 [account_dataspace_target(
                     Some(world),
                     &mint.destination.account,
+                    ledger_time_ms,
                 )],
             ),
             MintBox::TriggerRepetitions(_) => None,
@@ -2936,6 +2973,7 @@ fn instruction_transaction_dataspace_target_with_world<W: WorldReadOnly>(
                 [account_dataspace_target(
                     Some(world),
                     &burn.destination.account,
+                    ledger_time_ms,
                 )],
             ),
             BurnBox::TriggerRepetitions(_) => None,
@@ -3020,8 +3058,8 @@ fn instruction_transaction_dataspace_target_with_world<W: WorldReadOnly>(
         return zk_asset_operation_dataspace_target_with_world(
             &transfer.asset,
             [
-                account_dataspace_target(Some(world), &transfer.from),
-                account_dataspace_target(Some(world), &transfer.to),
+                account_dataspace_target(Some(world), &transfer.from, ledger_time_ms),
+                account_dataspace_target(Some(world), &transfer.to, ledger_time_ms),
             ],
             dataspace_catalog,
             world,
@@ -3032,7 +3070,11 @@ fn instruction_transaction_dataspace_target_with_world<W: WorldReadOnly>(
     if let Some(shield) = any.downcast_ref::<Shield>() {
         return zk_asset_operation_dataspace_target_with_world(
             &shield.asset,
-            [account_dataspace_target(Some(world), &shield.from)],
+            [account_dataspace_target(
+                Some(world),
+                &shield.from,
+                ledger_time_ms,
+            )],
             dataspace_catalog,
             world,
             ledger_time_ms,
@@ -3060,7 +3102,11 @@ fn instruction_transaction_dataspace_target_with_world<W: WorldReadOnly>(
     if let Some(unshield) = any.downcast_ref::<Unshield>() {
         return zk_asset_operation_dataspace_target_with_world(
             &unshield.asset,
-            [account_dataspace_target(Some(world), &unshield.to)],
+            [account_dataspace_target(
+                Some(world),
+                &unshield.to,
+                ledger_time_ms,
+            )],
             dataspace_catalog,
             world,
             ledger_time_ms,
@@ -3300,7 +3346,13 @@ fn multisig_propose_transaction_dataspace_target(
     merge_instruction_dataspace_targets(propose.instructions.iter().map(|instruction| {
         instruction_transaction_dataspace_target(&**instruction, dataspace_catalog, state_view)
     }))
-    .or_else(|| account_dataspace_target(state_view.map(StateView::world), &propose.account))
+    .or_else(|| {
+        account_dataspace_target(
+            state_view.map(StateView::world),
+            &propose.account,
+            state_view.map(state_view_ledger_time_ms),
+        )
+    })
 }
 
 fn multisig_approve_transaction_dataspace_target(
@@ -3321,7 +3373,13 @@ fn multisig_approve_transaction_dataspace_target(
                 },
             ))
         })
-        .or_else(|| account_dataspace_target(Some(world), &approve.account))
+        .or_else(|| {
+            account_dataspace_target(
+                Some(world),
+                &approve.account,
+                state_view.map(state_view_ledger_time_ms),
+            )
+        })
 }
 
 fn multisig_approve_transaction_dataspace_target_with_world<W: WorldReadOnly>(
@@ -3343,7 +3401,7 @@ fn multisig_approve_transaction_dataspace_target_with_world<W: WorldReadOnly>(
                 },
             ))
         })
-        .or_else(|| account_dataspace_target(Some(world), &approve.account))
+        .or_else(|| account_dataspace_target(Some(world), &approve.account, ledger_time_ms))
 }
 
 fn multisig_propose_transaction_dataspace_target_with_world<W: WorldReadOnly>(
@@ -3360,7 +3418,7 @@ fn multisig_propose_transaction_dataspace_target_with_world<W: WorldReadOnly>(
             ledger_time_ms,
         )
     }))
-    .or_else(|| account_dataspace_target(Some(world), &propose.account))
+    .or_else(|| account_dataspace_target(Some(world), &propose.account, ledger_time_ms))
 }
 
 fn confidential_asset_definition_target(any: &dyn std::any::Any) -> Option<&AssetDefinitionId> {
@@ -3732,13 +3790,57 @@ fn instruction_transaction_target_requires_universal_coordinator_with_world<W: W
 fn account_dataspace_target<W: WorldReadOnly>(
     world: Option<&W>,
     account_id: &AccountId,
+    ledger_time_ms: Option<u64>,
 ) -> Option<DataSpaceId> {
     let world = world?;
-    let hierarchy = world.account_scope_hierarchy(account_id).ok()?;
-    if hierarchy.len() > 1 {
+    let account = world.accounts().get(account_id)?;
+    let mut dataspaces = BTreeSet::new();
+    let mut primary_dataspace = None;
+
+    if let Some(now_ms) = ledger_time_ms {
+        if let Some(label) = account.as_ref().label()
+            && crate::sns::resolve_active_account_alias(
+                world,
+                world.dataspace_catalog(),
+                label,
+                now_ms,
+            )
+            .as_ref()
+                == Some(account_id)
+        {
+            primary_dataspace = Some(label.dataspace);
+            dataspaces.insert(label.dataspace);
+        }
+        for alias in world.bound_account_aliases(account_id) {
+            if crate::sns::resolve_active_account_alias(
+                world,
+                world.dataspace_catalog(),
+                &alias,
+                now_ms,
+            )
+            .as_ref()
+                == Some(account_id)
+            {
+                dataspaces.insert(alias.dataspace);
+            }
+        }
+    }
+
+    if let Some(uaid) = account.as_ref().uaid().copied()
+        && let Some(bindings) = world.uaid_dataspaces().get(&uaid)
+    {
+        dataspaces.extend(bindings.iter().filter_map(|(dataspace, accounts)| {
+            accounts.contains(account_id).then_some(*dataspace)
+        }));
+    }
+
+    if primary_dataspace.is_none_or(|dataspace| dataspace == DataSpaceId::UNIVERSAL) {
+        dataspaces.insert(DataSpaceId::UNIVERSAL);
+    }
+    if dataspaces.len() > 1 {
         return Some(DataSpaceId::UNIVERSAL);
     }
-    let dataspace_id = *hierarchy.keys().next().expect("single dataspace");
+    let dataspace_id = *dataspaces.iter().next()?;
     (dataspace_id != DataSpaceId::UNIVERSAL).then_some(dataspace_id)
 }
 
@@ -3746,16 +3848,22 @@ fn authority_dataspace_target(
     state_view: Option<&StateView<'_>>,
     tx: &AcceptedTransaction<'_>,
 ) -> Option<DataSpaceId> {
-    tx.authority_opt()
-        .and_then(|authority| account_dataspace_target(state_view.map(StateView::world), authority))
+    tx.authority_opt().and_then(|authority| {
+        account_dataspace_target(
+            state_view.map(StateView::world),
+            authority,
+            state_view.map(state_view_ledger_time_ms),
+        )
+    })
 }
 
 fn authority_dataspace_target_with_world<W: WorldReadOnly>(
     world: Option<&W>,
     tx: &AcceptedTransaction<'_>,
+    ledger_time_ms: Option<u64>,
 ) -> Option<DataSpaceId> {
     tx.authority_opt()
-        .and_then(|authority| account_dataspace_target(world, authority))
+        .and_then(|authority| account_dataspace_target(world, authority, ledger_time_ms))
 }
 
 fn domain_dataspace_target_with_state(
@@ -4572,7 +4680,11 @@ fn dataspace_scoped_permission_target(
                 .try_into_any_norito::<CanUseFeeSponsor>()
                 .ok()
                 .and_then(|token| {
-                    account_dataspace_target(state_view.map(StateView::world), &token.sponsor)
+                    account_dataspace_target(
+                        state_view.map(StateView::world),
+                        &token.sponsor,
+                        state_view.map(state_view_ledger_time_ms),
+                    )
                 }),
             "CanUseFeeSponsorForAccount" => permission
                 .payload()
@@ -4735,7 +4847,9 @@ fn dataspace_scoped_permission_target_with_world<W: WorldReadOnly>(
                 .payload()
                 .try_into_any_norito::<CanUseFeeSponsor>()
                 .ok()
-                .and_then(|token| account_dataspace_target(Some(world), &token.sponsor)),
+                .and_then(|token| {
+                    account_dataspace_target(Some(world), &token.sponsor, ledger_time_ms)
+                }),
             "CanUseFeeSponsorForAccount" => permission
                 .payload()
                 .try_into_any_norito::<CanUseFeeSponsorForAccount>()
@@ -5310,7 +5424,11 @@ pub fn resolve_query_routing_decision(
             .rules
             .iter()
             .find(|rule| query_rule_matches(rule, authority, Some(state_view)));
-        let target_dataspace = account_dataspace_target(Some(state_view.world()), authority);
+        let target_dataspace = account_dataspace_target(
+            Some(state_view.world()),
+            authority,
+            Some(state_view_ledger_time_ms(state_view)),
+        );
         return resolve_policy_routing_decision(
             policy,
             matched_rule,
@@ -5350,19 +5468,10 @@ fn resolve_query_routing_decision_with_world<W: WorldReadOnly>(
     ledger_time_ms: Option<u64>,
     autoscale_range: Option<AutoscaleElasticRange>,
 ) -> Result<RoutingDecision, RoutingResolveError> {
-    let matched_rule = policy
-        .rules
-        .iter()
-        .find(|rule| {
-            query_rule_matches_with_world(
-                rule,
-                authority,
-                dataspace_catalog,
-                world,
-                ledger_time_ms,
-            )
-        });
-    let target_dataspace = account_dataspace_target(Some(world), authority);
+    let matched_rule = policy.rules.iter().find(|rule| {
+        query_rule_matches_with_world(rule, authority, dataspace_catalog, world, ledger_time_ms)
+    });
+    let target_dataspace = account_dataspace_target(Some(world), authority, ledger_time_ms);
     resolve_policy_routing_decision(
         policy,
         matched_rule,
@@ -5484,26 +5593,14 @@ fn rule_matches_with_world<W: WorldReadOnly>(
 
     if let Some(account) = matcher.account.as_deref()
         && !tx.authority_opt().is_some_and(|authority| {
-            account_matches_with_world(
-                account,
-                authority,
-                dataspace_catalog,
-                world,
-                ledger_time_ms,
-            )
+            account_matches_with_world(account, authority, dataspace_catalog, world, ledger_time_ms)
         })
     {
         return false;
     }
 
     if let Some(instruction) = matcher.instruction.as_deref()
-        && !instructions_match_with_world(
-            instruction,
-            tx,
-            dataspace_catalog,
-            world,
-            ledger_time_ms,
-        )
+        && !instructions_match_with_world(instruction, tx, dataspace_catalog, world, ledger_time_ms)
     {
         return false;
     }
@@ -5537,13 +5634,7 @@ fn query_rule_matches_with_world<W: WorldReadOnly>(
     }
 
     rule.matcher.account.as_deref().map_or(true, |account| {
-        account_matches_with_world(
-            account,
-            authority,
-            dataspace_catalog,
-            world,
-            ledger_time_ms,
-        )
+        account_matches_with_world(account, authority, dataspace_catalog, world, ledger_time_ms)
     })
 }
 
@@ -5613,13 +5704,8 @@ fn account_matches_with_world<W: WorldReadOnly>(
         .ok()
         .is_some_and(|alias| {
             ledger_time_ms.is_some_and(|now_ms| {
-                crate::sns::resolve_active_account_alias(
-                    world,
-                    dataspace_catalog,
-                    &alias,
-                    now_ms,
-                )
-                .as_ref()
+                crate::sns::resolve_active_account_alias(world, dataspace_catalog, &alias, now_ms)
+                    .as_ref()
                     == Some(authority)
             })
         })
@@ -5658,13 +5744,8 @@ fn account_matches_alias_scope_with_world<W: WorldReadOnly>(
         .bound_account_aliases(account_id)
         .into_iter()
         .any(|alias| {
-            if crate::sns::resolve_active_account_alias(
-                world,
-                dataspace_catalog,
-                &alias,
-                now_ms,
-            )
-            .as_ref()
+            if crate::sns::resolve_active_account_alias(world, dataspace_catalog, &alias, now_ms)
+                .as_ref()
                 != Some(account_id)
             {
                 return false;

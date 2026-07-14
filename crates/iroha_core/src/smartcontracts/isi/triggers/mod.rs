@@ -265,9 +265,19 @@ pub mod isi {
             let is_owner = authority == &owner;
             let mut is_domain_owner = false;
             for alias in state_transaction.world.bound_account_aliases(&owner) {
-                let Some(domain_id) = alias
-                    .domain_id(&state_transaction.nexus.dataspace_catalog)
-                    .expect("bound account alias dataspace must exist in catalog")
+                if crate::sns::resolve_active_account_alias(
+                    &state_transaction.world,
+                    &state_transaction.nexus.dataspace_catalog,
+                    &alias,
+                    state_transaction.block_unix_timestamp_ms(),
+                )
+                .as_ref()
+                    != Some(&owner)
+                {
+                    continue;
+                }
+                let Ok(Some(domain_id)) =
+                    alias.domain_id(&state_transaction.nexus.dataspace_catalog)
                 else {
                     continue;
                 };

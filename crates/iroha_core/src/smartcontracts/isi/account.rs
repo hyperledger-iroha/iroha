@@ -102,7 +102,7 @@ pub mod isi {
         state_transaction: &StateTransaction<'_, '_>,
         account_id: &AccountId,
     ) -> Result<AccountAlias, Error> {
-        state_transaction
+        let alias = state_transaction
             .world
             .account(account_id)
             .map_err(Error::from)?
@@ -112,7 +112,19 @@ pub mod isi {
                 invalid_account_recovery(format!(
                     "account `{account_id}` must have a stable alias to use social recovery"
                 ))
-            })
+            })?;
+        let resolved = crate::sns::resolve_active_account_alias(
+            &state_transaction.world,
+            &state_transaction.nexus.dataspace_catalog,
+            &alias,
+            state_transaction.block_unix_timestamp_ms(),
+        );
+        if resolved.as_ref() != Some(account_id) {
+            return Err(invalid_account_recovery(format!(
+                "account `{account_id}` does not have a strictly active alias binding"
+            )));
+        }
+        Ok(alias)
     }
 
     fn validate_recovery_policy(policy: &AccountRecoveryPolicy) -> Result<(), Error> {
@@ -125,16 +137,17 @@ pub mod isi {
         state_transaction: &StateTransaction<'_, '_>,
         alias: &AccountAlias,
     ) -> Result<AccountId, Error> {
-        state_transaction
-            .world
-            .account_aliases
-            .get(alias)
-            .cloned()
-            .ok_or_else(|| {
-                invalid_account_recovery(format!(
-                    "account alias `{alias:?}` does not resolve to an active account"
-                ))
-            })
+        crate::sns::resolve_active_account_alias(
+            &state_transaction.world,
+            &state_transaction.nexus.dataspace_catalog,
+            alias,
+            state_transaction.block_unix_timestamp_ms(),
+        )
+        .ok_or_else(|| {
+            invalid_account_recovery(format!(
+                "account alias `{alias:?}` does not resolve to a strictly active account"
+            ))
+        })
     }
 
     fn current_account_is_recovery_guardian(
@@ -558,7 +571,8 @@ pub mod isi {
             let request = state_transaction
                 .world
                 .account_recovery_requests
-                .get_mut(&alias)
+                .get(&alias)
+                .cloned()
                 .ok_or_else(|| {
                     invalid_account_recovery(format!(
                         "account recovery request for `{alias:?}` does not exist"
@@ -569,6 +583,16 @@ pub mod isi {
                     "account recovery request for `{alias:?}` is not pending"
                 )));
             }
+            ensure_recovery_request_targets_current_lineage(
+                state_transaction,
+                &request,
+                &current_account,
+            )?;
+            let request = state_transaction
+                .world
+                .account_recovery_requests
+                .get_mut(&alias)
+                .expect("recovery request was verified immediately before mutation");
             request.approve(authority);
             let updated_request = request.clone();
             state_transaction
@@ -608,7 +632,8 @@ pub mod isi {
             let request = state_transaction
                 .world
                 .account_recovery_requests
-                .get_mut(&alias)
+                .get(&alias)
+                .cloned()
                 .ok_or_else(|| {
                     invalid_account_recovery(format!(
                         "account recovery request for `{alias:?}` does not exist"
@@ -619,6 +644,11 @@ pub mod isi {
                     "account recovery request for `{alias:?}` is not pending"
                 )));
             }
+            ensure_recovery_request_targets_current_lineage(
+                state_transaction,
+                &request,
+                &current_account,
+            )?;
 
             let owner_can_cancel = authority == &current_account;
             let guardian_quorum_can_cancel =
@@ -630,6 +660,11 @@ pub mod isi {
                 )));
             }
 
+            let request = state_transaction
+                .world
+                .account_recovery_requests
+                .get_mut(&alias)
+                .expect("recovery request was verified immediately before mutation");
             request.cancel();
             let cancelled = request.clone();
             state_transaction
@@ -1076,10 +1111,46 @@ pub mod query {
         Account {
             id: account_id.clone(),
             metadata: details.metadata.clone(),
-            label: details.label.clone(),
+            // Generic account queries do not carry an alias-resolution grant into this
+            // projection. Keep aliases behind the dedicated, permission-checked queries.
+            label: None,
             uaid: details.uaid,
             opaque_ids: details.opaque_ids.clone(),
         }
+    }
+
+    fn latest_ledger_time_ms(state_ro: &impl StateReadOnly) -> u64 {
+        state_ro.latest_block().map_or(0, |block| {
+            u64::try_from(block.header().creation_time().as_millis()).unwrap_or(u64::MAX)
+        })
+    }
+
+    fn strict_recovery_account(
+        state_ro: &impl StateReadOnly,
+        alias: &AccountAlias,
+    ) -> Result<AccountId, Error> {
+        crate::sns::resolve_active_account_alias(
+            state_ro.world(),
+            &state_ro.nexus().dataspace_catalog,
+            alias,
+            latest_ledger_time_ms(state_ro),
+        )
+        .ok_or(Error::NotFound)
+    }
+
+    fn recovery_request_matches_current_lineage(
+        state_ro: &impl StateReadOnly,
+        request: &AccountRecoveryRequest,
+        current_account: &AccountId,
+    ) -> bool {
+        let Some(record) = state_ro.world().account_rekey_records().get(&request.alias) else {
+            return false;
+        };
+        &record.active_account_id == current_account
+            && (record.active_account_id == request.active_account_id_at_proposal
+                || record
+                    .previous_account_ids
+                    .contains(&request.active_account_id_at_proposal))
     }
 
     #[cfg(test)]
@@ -1223,25 +1294,12 @@ pub mod query {
         matches!(field, "id" | "account" | "account_id")
     }
 
-    fn account_field_is_domain(field: &str) -> bool {
-        matches!(field, "domain" | "id.domain" | "account.domain")
-    }
-
     fn parse_account_id_value(value: &Value) -> Option<AccountId> {
         match value {
             Value::String(raw) => AccountId::parse_encoded(raw)
                 .ok()
                 .map(|parsed| parsed.into_account_id())
                 .or_else(|| raw.parse::<PublicKey>().ok().map(AccountId::new)),
-            _ => None,
-        }
-    }
-
-    fn parse_account_domain_value(value: &Value) -> Option<DomainId> {
-        match value {
-            Value::String(raw) => DomainId::parse_fully_qualified(raw)
-                .ok()
-                .or_else(|| DomainId::try_new(raw, "universal").ok()),
             _ => None,
         }
     }
@@ -1284,39 +1342,6 @@ pub mod query {
                 .values
                 .iter()
                 .filter_map(parse_account_id_value)
-                .collect::<BTreeSet<_>>();
-            intersect_account_id_candidates(&mut candidates, next);
-        }
-
-        candidates.map(Arc::new)
-    }
-
-    fn account_predicate_candidate_domain_ids(
-        world: &impl WorldReadOnly,
-        predicate: &PredicateJson,
-    ) -> Option<Arc<BTreeSet<AccountId>>> {
-        let mut candidates: Option<BTreeSet<AccountId>> = None;
-
-        for cond in &predicate.equals {
-            if !account_field_is_domain(&cond.field) {
-                continue;
-            }
-            let next = parse_account_domain_value(&cond.value)
-                .into_iter()
-                .flat_map(|domain| world.account_subjects_in_domain(&domain))
-                .collect::<BTreeSet<_>>();
-            intersect_account_id_candidates(&mut candidates, next);
-        }
-
-        for cond in &predicate.r#in {
-            if !account_field_is_domain(&cond.field) {
-                continue;
-            }
-            let next = cond
-                .values
-                .iter()
-                .filter_map(parse_account_domain_value)
-                .flat_map(|domain| world.account_subjects_in_domain(&domain))
                 .collect::<BTreeSet<_>>();
             intersect_account_id_candidates(&mut candidates, next);
         }
@@ -1415,7 +1440,7 @@ pub mod query {
     /// Fields consumed here are stripped from the JSON fallback so synthetic account-domain
     /// aliases are not re-evaluated against the plain `Account` JSON shape.
     fn predicate_matches_account_aliases(
-        world: &impl WorldReadOnly,
+        _world: &impl WorldReadOnly,
         predicate: &PredicateJson,
         account_id: &AccountId,
         account_value: &AccountValue,
@@ -1430,14 +1455,6 @@ pub mod query {
                     }
                 }
                 Some(None) => return AccountPredicateMatch::Mismatched,
-                None if account_field_is_domain(&cond.field) => {
-                    let Some(domain) = parse_account_domain_value(&cond.value) else {
-                        return AccountPredicateMatch::Mismatched;
-                    };
-                    if !world.account_has_alias_domain(account_id, &domain) {
-                        return AccountPredicateMatch::Mismatched;
-                    }
-                }
                 None => remaining.equals.push(cond.clone()),
             }
         }
@@ -1450,16 +1467,6 @@ pub mod query {
                     }
                 }
                 Some(None) => return AccountPredicateMatch::Mismatched,
-                None if account_field_is_domain(&cond.field) => {
-                    if !cond
-                        .values
-                        .iter()
-                        .filter_map(parse_account_domain_value)
-                        .any(|domain| world.account_has_alias_domain(account_id, &domain))
-                    {
-                        return AccountPredicateMatch::Mismatched;
-                    }
-                }
                 None => remaining.r#in.push(cond.clone()),
             }
         }
@@ -1468,14 +1475,6 @@ pub mod query {
             match account_alias_value(account_id, account_value, field) {
                 Some(Some(_)) => {}
                 Some(None) => return AccountPredicateMatch::Mismatched,
-                None if account_field_is_domain(field) => {
-                    let Ok(domains) = world.account_domains(account_id) else {
-                        return AccountPredicateMatch::Mismatched;
-                    };
-                    if domains.is_empty() {
-                        return AccountPredicateMatch::Mismatched;
-                    }
-                }
                 None => remaining.exists.push(field.clone()),
             }
         }
@@ -1600,9 +1599,7 @@ pub mod query {
                 predicate_json
                     .as_ref()
                     .and_then(account_predicate_candidate_ids),
-                predicate_json
-                    .as_ref()
-                    .and_then(|predicate| account_predicate_candidate_domain_ids(world, predicate)),
+                None,
             );
             let id_only_predicate = predicate_json.as_ref().is_some_and(predicate_is_id_only);
 
@@ -1778,9 +1775,7 @@ pub mod query {
                 predicate_json
                     .as_ref()
                     .and_then(account_predicate_candidate_ids),
-                predicate_json
-                    .as_ref()
-                    .and_then(|predicate| account_predicate_candidate_domain_ids(world, predicate)),
+                None,
             );
             let id_only_predicate = predicate_json.as_ref().is_some_and(predicate_is_id_only);
 
@@ -1964,6 +1959,7 @@ pub mod query {
     impl ValidSingularQuery for FindAccountRecoveryPolicyByAlias {
         #[metrics(+"find_account_recovery_policy_by_alias")]
         fn execute(&self, state_ro: &impl StateReadOnly) -> Result<AccountRecoveryPolicy, Error> {
+            strict_recovery_account(state_ro, self.alias())?;
             state_ro
                 .world()
                 .account_recovery_policies()
@@ -1976,12 +1972,17 @@ pub mod query {
     impl ValidSingularQuery for FindAccountRecoveryRequestByAlias {
         #[metrics(+"find_account_recovery_request_by_alias")]
         fn execute(&self, state_ro: &impl StateReadOnly) -> Result<AccountRecoveryRequest, Error> {
-            state_ro
+            let current_account = strict_recovery_account(state_ro, self.alias())?;
+            let request = state_ro
                 .world()
                 .account_recovery_requests()
                 .get(self.alias())
                 .cloned()
-                .ok_or(Error::NotFound)
+                .ok_or(Error::NotFound)?;
+            if !recovery_request_matches_current_lineage(state_ro, &request, &current_account) {
+                return Err(Error::NotFound);
+            }
+            Ok(request)
         }
     }
 

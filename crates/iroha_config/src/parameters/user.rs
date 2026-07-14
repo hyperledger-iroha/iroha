@@ -14981,6 +14981,16 @@ pub struct ToriiOnboarding {
     #[config(default)]
     #[norito(default = "default_torii_onboarding_allowed_permissions")]
     pub allowed_permissions: Vec<String>,
+    /// Exact dataspace ids for read-only account-alias resolution grants applied to every
+    /// newly onboarded account.
+    #[config(default)]
+    #[norito(default)]
+    pub alias_resolve_dataspaces: Vec<u64>,
+    /// Exact fully-qualified domains for read-only account-alias resolution grants applied to
+    /// every newly onboarded account.
+    #[config(default)]
+    #[norito(default)]
+    pub alias_resolve_domains: Vec<String>,
     /// Optional sponsor account granted via `CanUseFeeSponsor`.
     pub fee_sponsor_account: Option<String>,
     /// Default alias lease term applied during onboarding.
@@ -15025,6 +15035,30 @@ impl ToriiOnboarding {
             .map(|permission| permission.trim().to_owned())
             .filter(|permission| !permission.is_empty())
             .collect();
+        let alias_resolve_dataspaces = self
+            .alias_resolve_dataspaces
+            .into_iter()
+            .map(DataSpaceId::new)
+            .collect();
+        let alias_resolve_domains = self
+            .alias_resolve_domains
+            .into_iter()
+            .map(|domain| {
+                let canonical = domain.trim();
+                let parsed = DomainId::parse_fully_qualified(canonical).unwrap_or_else(|err| {
+                    panic!(
+                        "invalid torii.onboarding.alias_resolve_domains entry `{domain}`: {}",
+                        err.reason()
+                    )
+                });
+                if canonical != parsed.to_string() {
+                    panic!(
+                        "torii.onboarding.alias_resolve_domains entry `{domain}` must use canonical `{parsed}`"
+                    );
+                }
+                parsed
+            })
+            .collect();
         let fee_sponsor_account = self.fee_sponsor_account.map(|account| {
             AccountId::parse_encoded(&account).map_or_else(
                 |err| panic!("invalid torii.onboarding.fee_sponsor_account `{account}`: {err}"),
@@ -15044,6 +15078,8 @@ impl ToriiOnboarding {
             authority,
             private_key: self.private_key,
             allowed_permissions,
+            alias_resolve_dataspaces,
+            alias_resolve_domains,
             fee_sponsor_account,
             alias_lease_term_years: self.alias_lease_term_years,
             alias_auto_renew_enabled: self.alias_auto_renew_enabled,

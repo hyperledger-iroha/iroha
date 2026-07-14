@@ -1243,10 +1243,7 @@ fn lookup_aliases_by_account_on_chain(
             is_primary: item.is_primary,
         })
         .collect();
-    Ok(Some((
-        canonical_account_id,
-        items,
-    )))
+    Ok(Some((canonical_account_id, items)))
 }
 
 fn lookup_aliases_by_account_on_route(
@@ -1323,7 +1320,7 @@ fn execute_alias_resolve_index_local_read(
         resolve_alias_index_on_route(app, routing_decision, request.index)?
     {
         let account_id_string = account_id.to_string();
-        return alias_resolve_index_ok(request.index, &alias, &account_id_string, "on_chain");
+        return alias_resolve_index_ok(request.index, &alias, &account_id_string, "active_sns");
     }
 
     Ok(StatusCode::NOT_FOUND.into_response())
@@ -1523,7 +1520,10 @@ fn canonical_tx_history_subject_alias(
 }
 
 #[cfg(feature = "app_api")]
-fn parse_tx_history_mandatory_aliases(path: &Path) -> HashMap<String, HashSet<String>> {
+fn parse_tx_history_mandatory_aliases(
+    path: &Path,
+    catalog: &iroha_data_model::nexus::DataSpaceCatalog,
+) -> HashMap<String, HashSet<String>> {
     let raw = fs::read_to_string(path).unwrap_or_else(|err| {
         panic!(
             "failed to read tx history alias policy `{}`: {err}",
@@ -1551,6 +1551,18 @@ fn parse_tx_history_mandatory_aliases(path: &Path) -> HashMap<String, HashSet<St
             )
         });
         let normalized_dataspace = dataspace.trim().to_ascii_lowercase();
+        if dataspace != &normalized_dataspace {
+            panic!(
+                "tx history alias policy `{}` dataspace key `{dataspace}` must be canonical `{normalized_dataspace}`",
+                path.display()
+            );
+        }
+        let dataspace_entry = catalog.by_alias(&normalized_dataspace).unwrap_or_else(|| {
+            panic!(
+                "tx history alias policy `{}` references unknown dataspace `{dataspace}`",
+                path.display()
+            )
+        });
         let mut normalized_aliases = HashSet::new();
         for alias in aliases {
             let alias_literal = alias.as_str().unwrap_or_else(|| {
@@ -1559,9 +1571,39 @@ fn parse_tx_history_mandatory_aliases(path: &Path) -> HashMap<String, HashSet<St
                     path.display()
                 )
             });
-            let canonical = normalize_tx_history_alias(alias_literal);
-            if !canonical.is_empty() {
-                normalized_aliases.insert(canonical);
+            let alias_label = iroha_data_model::account::rekey::AccountAlias::from_literal(
+                alias_literal,
+                catalog,
+            )
+            .unwrap_or_else(|error| {
+                panic!(
+                    "tx history alias policy `{}` contains invalid alias `{alias_literal}`: {error}",
+                    path.display()
+                )
+            });
+            let canonical = alias_label.to_literal(catalog).unwrap_or_else(|error| {
+                panic!(
+                    "tx history alias policy `{}` cannot canonicalize alias `{alias_literal}`: {error}",
+                    path.display()
+                )
+            });
+            if canonical != alias_literal {
+                panic!(
+                    "tx history alias policy `{}` alias `{alias_literal}` must be canonical `{canonical}`",
+                    path.display()
+                );
+            }
+            if alias_label.dataspace != dataspace_entry.id {
+                panic!(
+                    "tx history alias policy `{}` alias `{alias_literal}` is outside dataspace key `{dataspace}`",
+                    path.display()
+                );
+            }
+            if !normalized_aliases.insert(canonical) {
+                panic!(
+                    "tx history alias policy `{}` contains duplicate alias `{alias_literal}`",
+                    path.display()
+                );
             }
         }
         out.insert(normalized_dataspace, normalized_aliases);
@@ -1572,6 +1614,7 @@ fn parse_tx_history_mandatory_aliases(path: &Path) -> HashMap<String, HashSet<St
 #[cfg(feature = "app_api")]
 fn load_tx_history_access_policy(
     config: Option<&iroha_config::parameters::actual::ToriiTxHistory>,
+    catalog: &iroha_data_model::nexus::DataSpaceCatalog,
 ) -> TxHistoryAccessPolicy {
     let Some(config) = config else {
         return TxHistoryAccessPolicy::default();
@@ -1579,7 +1622,7 @@ fn load_tx_history_access_policy(
     let mandatory_aliases = config
         .mandatory_aliases_path
         .as_deref()
-        .map(parse_tx_history_mandatory_aliases)
+        .map(|path| parse_tx_history_mandatory_aliases(path, catalog))
         .unwrap_or_default();
     let jwt = config.jwt.as_ref().map(|jwt| {
         let algorithm = parse_tx_history_jwt_algorithm(&jwt.algorithm).unwrap_or_else(|| {
@@ -10325,14 +10368,14 @@ async fn handler_accounts_onboard_multisig(
 #[axum::debug_handler]
 async fn handler_account_aliases(
     State(app): State<SharedAppState>,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     path: AxPath<String>,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
-    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
-        return routing::handle_v1_account_aliases(app.clone(), path).await;
-    }
+    let caller = require_signed_alias_request(&app, &headers, &method, &uri, &[])?;
 
     let enforce =
         app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
@@ -10345,7 +10388,7 @@ async fn handler_account_aliases(
     )
     .await?;
 
-    routing::handle_v1_account_aliases(app.clone(), path).await
+    routing::handle_v1_account_aliases(app.clone(), path, caller).await
 }
 
 #[cfg(feature = "app_api")]
@@ -20021,11 +20064,7 @@ fn torii_partition_alias_index_routes_by_permission(
                     None,
                     route.dataspace_id,
                 );
-                torii_authority_can_resolve_account_alias(
-                    app.state.view().world(),
-                    caller,
-                    &probe,
-                )
+                torii_authority_can_resolve_account_alias(app.state.view().world(), caller, &probe)
             }
             Err(error) => {
                 iroha_logger::warn!(
@@ -23044,6 +23083,32 @@ fn decode_alias_resolve_index_payload(
             "failed to decode merged alias resolve-index payload: {error}"
         ))
     })
+}
+
+#[cfg(feature = "app_api")]
+fn authorize_alias_resolve_index_payloads(
+    app: &SharedAppState,
+    caller: &AccountId,
+    payloads: Vec<Value>,
+) -> Result<Vec<Value>, Response> {
+    let catalog = app.state.nexus_snapshot().dataspace_catalog;
+    for payload in &payloads {
+        let dto = decode_alias_resolve_index_payload(payload.clone())?;
+        let (_, alias) = parse_exact_account_alias_label_with_catalog(&dto.alias, &catalog)
+            .map_err(|_| {
+                torii_proxy_error_response(
+                    StatusCode::CONFLICT,
+                    "route_conflict",
+                    "a routed alias-index response contained a non-canonical alias",
+                )
+            })?;
+        if !torii_authority_can_resolve_account_alias(app.state.view().world(), caller, &alias) {
+            return Err(torii_alias_permission_denied_response(
+                "exact account-alias resolve permission is required for the returned alias-index binding",
+            ));
+        }
+    }
+    Ok(payloads)
 }
 
 #[cfg(feature = "app_api")]
@@ -28389,10 +28454,15 @@ async fn execute_torii_read_for_route(
     routing_decision: RoutingDecision,
     request: ToriiReadProxyRequestV1,
 ) -> Response {
-    if let Some(upstream_url) = app
-        .public_dataspace_upstreams
-        .get(&routing_decision.dataspace_id)
-        .cloned()
+    let protected_alias_directory_read = matches!(
+        request.endpoint,
+        ToriiReadEndpointV1::AliasResolveIndex | ToriiReadEndpointV1::AliasLookupByAccount
+    );
+    if !protected_alias_directory_read
+        && let Some(upstream_url) = app
+            .public_dataspace_upstreams
+            .get(&routing_decision.dataspace_id)
+            .cloned()
     {
         return execute_torii_read_via_public_dataspace_upstream(
             upstream_url,
@@ -29621,12 +29691,178 @@ async fn execute_torii_single_route_read(
     query_string: Option<String>,
     body: Vec<u8>,
 ) -> Response {
-    execute_torii_read_for_route(
+    let request_body = body.clone();
+    let response = execute_torii_read_for_route(
         app,
         route,
         torii_read_request(endpoint, route, path_args, query_string, body),
     )
-    .await
+    .await;
+    sanitize_exact_alias_route_response(app, route, endpoint, &request_body, response).await
+}
+
+#[cfg(feature = "app_api")]
+async fn sanitize_exact_alias_route_response(
+    app: &SharedAppState,
+    route: RoutingDecision,
+    endpoint: ToriiReadEndpointV1,
+    request_body: &[u8],
+    response: Response,
+) -> Response {
+    if !response.status().is_success()
+        || !matches!(
+            endpoint,
+            ToriiReadEndpointV1::AliasResolve | ToriiReadEndpointV1::AliasResolveIndex
+        )
+    {
+        return response;
+    }
+
+    let (mut parts, body) = response.into_parts();
+    let body = match axum::body::to_bytes(body, EXACT_ALIAS_READ_MAX_BODY_BYTES).await {
+        Ok(body) => body,
+        Err(error) => {
+            let mut response = torii_proxy_error_response(
+                StatusCode::BAD_GATEWAY,
+                "invalid_proxy_response",
+                format!("routed alias response is invalid or too large: {error}"),
+            );
+            insert_routing_headers(&mut response, route, "validated");
+            return response;
+        }
+    };
+
+    let invalid = |message: String| {
+        let mut response =
+            torii_proxy_error_response(StatusCode::BAD_GATEWAY, "invalid_proxy_response", message);
+        insert_routing_headers(&mut response, route, "validated");
+        response
+    };
+
+    let sanitized = match endpoint {
+        ToriiReadEndpointV1::AliasResolve => {
+            let request: routing::AliasResolveRequestDto =
+                match norito::json::from_slice(request_body) {
+                    Ok(request) => request,
+                    Err(error) => {
+                        return invalid(format!("invalid routed alias request: {error}"));
+                    }
+                };
+            let dto: routing::AliasResolveResponseDto = match norito::json::from_slice(&body) {
+                Ok(dto) => dto,
+                Err(error) => {
+                    return invalid(format!("invalid routed alias response schema: {error}"));
+                }
+            };
+            let expected = match resolve_alias_on_route(app, route, &request.alias) {
+                Ok(Some(expected)) => expected,
+                Ok(None) => {
+                    return invalid(
+                        "routed alias response has no matching strictly active local binding"
+                            .to_owned(),
+                    );
+                }
+                Err(error) => return invalid(format!("failed to verify routed alias: {error}")),
+            };
+            let (canonical_account, canonical_account_literal) =
+                match parse_exact_account_id_literal(&dto.account_id) {
+                    Ok(parsed) => parsed,
+                    Err(error) => {
+                        return invalid(format!(
+                            "routed alias response contains a non-canonical account id: {error}"
+                        ));
+                    }
+                };
+            if dto.alias != expected.0
+                || canonical_account != expected.1
+                || canonical_account_literal != dto.account_id
+                || dto.index.is_some()
+                || dto.source.as_deref() != Some("active_sns")
+            {
+                return invalid(
+                    "routed alias response disagrees with the authoritative active binding"
+                        .to_owned(),
+                );
+            }
+            norito::json::to_vec(&routing::AliasResolveResponseDto {
+                alias: expected.0,
+                account_id: expected.1.to_string(),
+                index: None,
+                source: Some("active_sns".to_owned()),
+            })
+        }
+        ToriiReadEndpointV1::AliasResolveIndex => {
+            let request: routing::AliasResolveIndexRequestDto =
+                match norito::json::from_slice(request_body) {
+                    Ok(request) => request,
+                    Err(error) => {
+                        return invalid(format!("invalid routed alias-index request: {error}"));
+                    }
+                };
+            let dto: routing::AliasResolveIndexResponseDto = match norito::json::from_slice(&body) {
+                Ok(dto) => dto,
+                Err(error) => {
+                    return invalid(format!(
+                        "invalid routed alias-index response schema: {error}"
+                    ));
+                }
+            };
+            let expected = match resolve_alias_index_on_route(app, route, request.index) {
+                Ok(Some(expected)) => expected,
+                Ok(None) => {
+                    return invalid(
+                        "routed alias-index response has no matching strictly active local binding"
+                            .to_owned(),
+                    );
+                }
+                Err(error) => {
+                    return invalid(format!("failed to verify routed alias index: {error}"));
+                }
+            };
+            let (canonical_account, canonical_account_literal) =
+                match parse_exact_account_id_literal(&dto.account_id) {
+                    Ok(parsed) => parsed,
+                    Err(error) => {
+                        return invalid(format!(
+                            "routed alias-index response contains a non-canonical account id: {error}"
+                        ));
+                    }
+                };
+            if dto.index != request.index
+                || dto.alias != expected.0
+                || canonical_account != expected.1
+                || canonical_account_literal != dto.account_id
+                || dto.source.as_deref() != Some("active_sns")
+            {
+                return invalid(
+                    "routed alias-index response disagrees with the authoritative active binding"
+                        .to_owned(),
+                );
+            }
+            norito::json::to_vec(&routing::AliasResolveIndexResponseDto {
+                index: request.index,
+                alias: expected.0,
+                account_id: expected.1.to_string(),
+                source: Some("active_sns".to_owned()),
+            })
+        }
+        _ => unreachable!("non-alias endpoints returned before body collection"),
+    };
+
+    let sanitized = match sanitized {
+        Ok(sanitized) => sanitized,
+        Err(error) => {
+            return invalid(format!(
+                "failed to encode sanitized alias response: {error}"
+            ));
+        }
+    };
+    parts.headers.remove(axum::http::header::CONTENT_LENGTH);
+    parts.headers.insert(
+        axum::http::header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json"),
+    );
+    Response::from_parts(parts, Body::from(sanitized))
 }
 
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
@@ -36074,9 +36310,11 @@ async fn handler_post_contract_call_multisig_approve(
 #[cfg(feature = "app_api")]
 async fn handler_post_multisig_spec(
     State(app): State<SharedAppState>,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    request: NoritoJson<crate::routing::MultisigSpecRequestDto>,
+    request: NoritoJsonWithBytes<crate::routing::MultisigSpecRequestDto>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
     if let Err(error) = validate_api_token(app.as_ref(), &headers) {
@@ -36093,7 +36331,25 @@ async fn handler_post_multisig_spec(
         app.api_token_enforced(),
     )
     .await?;
-    let response = crate::routing::handle_post_multisig_spec(app.state.clone(), request).await;
+    let resolve_authority = multisig_alias_resolve_authority(
+        &app,
+        &headers,
+        &method,
+        &uri,
+        request.raw.as_ref(),
+        &request.value.selector,
+    )?;
+    let response = if let Some(authority) = resolve_authority {
+        crate::routing::handle_post_multisig_spec_for_authority(
+            app.state.clone(),
+            request.value,
+            authority,
+        )
+        .await
+    } else {
+        crate::routing::handle_post_multisig_spec(app.state.clone(), NoritoJson(request.value))
+            .await
+    };
     match response {
         Ok(resp) => Ok(resp.into_response()),
         Err(err) => {
@@ -36272,9 +36528,11 @@ async fn handler_post_multisig_cancel(
 #[cfg(feature = "app_api")]
 async fn handler_post_multisig_proposals_query(
     State(app): State<SharedAppState>,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    request: NoritoJson<crate::routing::MultisigProposalsQueryRequestDto>,
+    request: NoritoJsonWithBytes<crate::routing::MultisigProposalsQueryRequestDto>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
     if let Err(error) = validate_api_token(app.as_ref(), &headers) {
@@ -36291,8 +36549,28 @@ async fn handler_post_multisig_proposals_query(
         app.api_token_enforced(),
     )
     .await?;
-    let response =
-        crate::routing::handle_post_multisig_proposals_query(app.state.clone(), request).await;
+    let resolve_authority = multisig_alias_resolve_authority(
+        &app,
+        &headers,
+        &method,
+        &uri,
+        request.raw.as_ref(),
+        &request.value.selector,
+    )?;
+    let response = if let Some(authority) = resolve_authority {
+        crate::routing::handle_post_multisig_proposals_query_for_authority(
+            app.state.clone(),
+            request.value,
+            authority,
+        )
+        .await
+    } else {
+        crate::routing::handle_post_multisig_proposals_query(
+            app.state.clone(),
+            NoritoJson(request.value),
+        )
+        .await
+    };
     match response {
         Ok(resp) => Ok(resp.into_response()),
         Err(err) => {
@@ -36306,9 +36584,11 @@ async fn handler_post_multisig_proposals_query(
 #[cfg(feature = "app_api")]
 async fn handler_post_multisig_proposals_lookup(
     State(app): State<SharedAppState>,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    request: NoritoJson<crate::routing::MultisigProposalLookupRequestDto>,
+    request: NoritoJsonWithBytes<crate::routing::MultisigProposalLookupRequestDto>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
     if let Err(error) = validate_api_token(app.as_ref(), &headers) {
@@ -36325,8 +36605,28 @@ async fn handler_post_multisig_proposals_lookup(
         app.api_token_enforced(),
     )
     .await?;
-    let response =
-        crate::routing::handle_post_multisig_proposals_lookup(app.state.clone(), request).await;
+    let resolve_authority = multisig_alias_resolve_authority(
+        &app,
+        &headers,
+        &method,
+        &uri,
+        request.raw.as_ref(),
+        &request.value.selector,
+    )?;
+    let response = if let Some(authority) = resolve_authority {
+        crate::routing::handle_post_multisig_proposals_lookup_for_authority(
+            app.state.clone(),
+            request.value,
+            authority,
+        )
+        .await
+    } else {
+        crate::routing::handle_post_multisig_proposals_lookup(
+            app.state.clone(),
+            NoritoJson(request.value),
+        )
+        .await
+    };
     match response {
         Ok(resp) => Ok(resp.into_response()),
         Err(err) => {
@@ -36340,9 +36640,11 @@ async fn handler_post_multisig_proposals_lookup(
 #[cfg(feature = "app_api")]
 async fn handler_post_multisig_proposals_resolve(
     State(app): State<SharedAppState>,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    request: NoritoJson<crate::routing::MultisigProposalsResolveRequestDto>,
+    request: NoritoJsonWithBytes<crate::routing::MultisigProposalsResolveRequestDto>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
     if let Err(error) = validate_api_token(app.as_ref(), &headers) {
@@ -36359,8 +36661,28 @@ async fn handler_post_multisig_proposals_resolve(
         app.api_token_enforced(),
     )
     .await?;
-    let response =
-        crate::routing::handle_post_multisig_proposals_resolve(app.state.clone(), request).await;
+    let resolve_authority = multisig_alias_resolve_authority(
+        &app,
+        &headers,
+        &method,
+        &uri,
+        request.raw.as_ref(),
+        &request.value.selector,
+    )?;
+    let response = if let Some(authority) = resolve_authority {
+        crate::routing::handle_post_multisig_proposals_resolve_for_authority(
+            app.state.clone(),
+            request.value,
+            authority,
+        )
+        .await
+    } else {
+        crate::routing::handle_post_multisig_proposals_resolve(
+            app.state.clone(),
+            NoritoJson(request.value),
+        )
+        .await
+    };
     match response {
         Ok(resp) => Ok(resp.into_response()),
         Err(err) => {
@@ -42911,6 +43233,21 @@ fn require_signed_alias_request(
 }
 
 #[cfg(feature = "app_api")]
+fn multisig_alias_resolve_authority(
+    app: &SharedAppState,
+    headers: &axum::http::HeaderMap,
+    method: &axum::http::Method,
+    uri: &axum::http::Uri,
+    body: &[u8],
+    selector: &routing::MultisigAccountSelectorDto,
+) -> Result<Option<AccountId>, Error> {
+    if selector.multisig_account_alias.is_none() {
+        return Ok(None);
+    }
+    require_signed_alias_request(app, headers, method, uri, body).map(Some)
+}
+
+#[cfg(feature = "app_api")]
 async fn handler_public_alias_resolve(
     State(app): State<SharedAppState>,
     method: axum::http::Method,
@@ -43025,13 +43362,7 @@ async fn handler_alias_resolve_index(
                 iroha_data_model::query::error::QueryExecutionFail::Conversion(err.to_string()),
             ))
         })?;
-    let caller = require_signed_alias_request(
-        &app,
-        &headers,
-        &method,
-        &uri,
-        body.as_ref(),
-    )?;
+    let caller = require_signed_alias_request(&app, &headers, &method, &uri, body.as_ref())?;
     let candidate_routes = torii_all_dataspace_routes(app.as_ref());
     let (allowed_routes, denied_routes) = torii_partition_alias_index_routes_by_permission(
         &app,
@@ -43057,16 +43388,13 @@ async fn handler_alias_resolve_index(
         denied_routes,
         "one or more dataspace routes denied the alias-index lookup and no allowed route resolved it",
         |route| {
-            execute_torii_read_for_route(
+            execute_torii_single_route_read(
                 &app,
                 route,
-                torii_read_request(
-                    ToriiReadEndpointV1::AliasResolveIndex,
-                    route,
-                    Vec::new(),
-                    None,
-                    body.to_vec(),
-                ),
+                ToriiReadEndpointV1::AliasResolveIndex,
+                Vec::new(),
+                None,
+                body.to_vec(),
             )
         },
     )
@@ -43076,9 +43404,13 @@ async fn handler_alias_resolve_index(
         Err(response) => return Ok(response),
     };
     let diagnostics = collected.diagnostics;
+    let payloads = match authorize_alias_resolve_index_payloads(&app, &caller, collected.payloads) {
+        Ok(payloads) => payloads,
+        Err(response) => return Ok(with_torii_fanout_headers(response, diagnostics)),
+    };
     Ok(merge_with_torii_fanout_headers(diagnostics, || {
         merged_alias_resolve_index_response(
-            collected.payloads,
+            payloads,
             routed_by_for_routes(&app, &allowed_routes),
             "fanout",
         )
@@ -43099,13 +43431,7 @@ async fn handler_alias_lookup_by_account(
                 iroha_data_model::query::error::QueryExecutionFail::Conversion(err.to_string()),
             ))
         })?;
-    let caller = require_signed_alias_request(
-        &app,
-        &headers,
-        &method,
-        &uri,
-        body.as_ref(),
-    )?;
+    let caller = require_signed_alias_request(&app, &headers, &method, &uri, body.as_ref())?;
     let (target_account, _) = parse_exact_account_id_literal(&request.account_id)?;
     validate_exact_alias_lookup_filters(&app, &request)?;
     let visibility = ToriiAccountReadVisibility::Signed(caller);
@@ -44609,8 +44935,9 @@ fn tx_history_viewer_from_headers(
         match resolve_tx_history_alias_account_id(app, alias) {
             Ok(Some(account_id)) => {
                 let catalog = app.state.nexus_snapshot().dataspace_catalog;
-                let (_, alias_label) = parse_exact_account_alias_label_with_catalog(alias, &catalog)
-                    .map_err(tx_history_alias_resolution_reject)?;
+                let (_, alias_label) =
+                    parse_exact_account_alias_label_with_catalog(alias, &catalog)
+                        .map_err(tx_history_alias_resolution_reject)?;
                 if !torii_authority_can_resolve_account_alias(
                     app.state.view().world(),
                     &account_id,
@@ -45086,12 +45413,66 @@ struct AccountOnboardingSigner {
     authority: AccountId,
     private_key: ExposedPrivateKey,
     allowed_permissions: std::collections::BTreeSet<String>,
+    alias_resolve_dataspaces: std::collections::BTreeSet<DataSpaceId>,
+    alias_resolve_domains: std::collections::BTreeSet<DomainId>,
     fee_sponsor_account: Option<AccountId>,
     alias_lease_term_years: u8,
     alias_auto_renew_enabled: bool,
     alias_auto_renew_retry_backoff_ms: u64,
     alias_auto_renew_max_failures: u32,
     alias_auto_renew_subscription_domain: Option<DomainId>,
+}
+
+#[cfg(feature = "app_api")]
+fn validate_onboarding_alias_resolve_grants(state: &CoreState, signer: &AccountOnboardingSigner) {
+    let world = state.world_view();
+    let catalog = state.nexus_snapshot().dataspace_catalog;
+    for dataspace in &signer.alias_resolve_dataspaces {
+        if !iroha_core::alias::authority_can_manage_account_alias_scope(
+            &world,
+            &signer.authority,
+            *dataspace,
+            None,
+        ) {
+            panic!(
+                "torii.onboarding authority `{}` lacks CanManageAccountAlias for configured dataspace {}",
+                signer.authority,
+                dataspace.as_u64()
+            );
+        }
+    }
+    for domain in &signer.alias_resolve_domains {
+        let dataspace = catalog
+            .by_alias(domain.dataspace().as_ref())
+            .unwrap_or_else(|| {
+                panic!(
+                    "torii.onboarding.alias_resolve_domains contains `{domain}` with an unknown dataspace"
+                )
+            })
+            .id;
+        if !signer.alias_resolve_dataspaces.contains(&dataspace) {
+            panic!(
+                "torii.onboarding alias resolve domain `{domain}` requires dataspace {} in alias_resolve_dataspaces",
+                dataspace.as_u64()
+            );
+        }
+        let owns_domain = world
+            .domain(domain)
+            .is_ok_and(|entry| entry.owned_by() == &signer.authority);
+        if !owns_domain
+            && !iroha_core::alias::authority_can_manage_account_alias_scope(
+                &world,
+                &signer.authority,
+                dataspace,
+                Some(domain),
+            )
+        {
+            panic!(
+                "torii.onboarding authority `{}` neither owns `{domain}` nor holds its exact CanManageAccountAlias permission",
+                signer.authority
+            );
+        }
+    }
 }
 
 #[cfg(feature = "app_api")]
@@ -48696,13 +49077,13 @@ impl Torii {
         #[cfg(feature = "app_api")]
         let gc_runtime = build_gc_runtime(&sorafs_node);
         #[cfg(feature = "app_api")]
-        let uaid_onboarding = config
-            .onboarding
-            .as_ref()
-            .map(|cfg| AccountOnboardingSigner {
+        let uaid_onboarding = config.onboarding.as_ref().map(|cfg| {
+            let signer = AccountOnboardingSigner {
                 authority: cfg.authority.clone(),
                 private_key: cfg.private_key.clone(),
                 allowed_permissions: cfg.allowed_permissions.iter().cloned().collect(),
+                alias_resolve_dataspaces: cfg.alias_resolve_dataspaces.iter().copied().collect(),
+                alias_resolve_domains: cfg.alias_resolve_domains.iter().cloned().collect(),
                 fee_sponsor_account: cfg.fee_sponsor_account.clone(),
                 alias_lease_term_years: cfg.alias_lease_term_years,
                 alias_auto_renew_enabled: cfg.alias_auto_renew_enabled,
@@ -48711,7 +49092,10 @@ impl Torii {
                 alias_auto_renew_subscription_domain: cfg
                     .alias_auto_renew_subscription_domain
                     .clone(),
-            });
+            };
+            validate_onboarding_alias_resolve_grants(state.as_ref(), &signer);
+            signer
+        });
         #[cfg(feature = "app_api")]
         let account_faucet = config.faucet.clone();
         #[cfg(feature = "app_api")]
@@ -48748,8 +49132,10 @@ impl Torii {
             Some(service)
         });
         #[cfg(feature = "app_api")]
-        let tx_history_access_policy =
-            Arc::new(load_tx_history_access_policy(config.tx_history.as_ref()));
+        let tx_history_access_policy = Arc::new(load_tx_history_access_policy(
+            config.tx_history.as_ref(),
+            &state.nexus_snapshot().dataspace_catalog,
+        ));
         #[cfg(feature = "app_api")]
         let public_dataspace_upstreams = Arc::new(load_public_dataspace_upstreams(state.as_ref()));
         #[cfg(feature = "app_api")]

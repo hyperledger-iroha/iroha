@@ -24302,7 +24302,7 @@ test("getVpnProfile normalizes payloads and tolerates missing control plane", as
           relay_endpoint: "/dns/torii.exit.example/udp/9443/quic",
           supported_exit_classes: ["standard", "low-latency", "high-security"],
           default_exit_class: "standard",
-          lease_secs: "600",
+          lease_secs: 600,
           dns_push_interval_secs: 90,
           meter_family: "soranet.vpn.standard",
           route_pushes: ["0.0.0.0/0", "::/0"],
