@@ -882,10 +882,8 @@ struct FinalityCompletion {
 
 pub(crate) trait EffectRuntime {
     fn step_effects(&mut self, now: Instant) -> Result<RuntimeStep<AdapterEffect>, String>;
-    fn step_recovery_effects(
-        &mut self,
-        now: Instant,
-    ) -> Result<RuntimeStep<AdapterEffect>, String>;
+    fn step_recovery_effects(&mut self, now: Instant)
+    -> Result<RuntimeStep<AdapterEffect>, String>;
     fn enqueue_body_available(
         &mut self,
         tag: EventTag,
@@ -3136,9 +3134,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             })
             .collect::<Vec<_>>();
         for id in stale {
-            services
-                .cancel_body_validation(id)
-                .map_err(service_error)?;
+            services.cancel_body_validation(id).map_err(service_error)?;
             self.deferred_merge_work.remove(&id);
             self.pending_validations.remove(&id);
         }

@@ -1769,8 +1769,8 @@ impl ProductionV2Services {
             );
         }
         if self.merge_sidecar_deferrals.len() >= self.max_merge_sidecar_deferrals {
-            // Capacity backpressure leaves the retained FIFO unchanged and is
-            // explicitly retryable by the runner.
+            // Capacity backpressure leaves the retained FIFO unchanged and
+            // creates no ambiguous output at this service boundary.
             operation.complete();
             return Err("Sumeragi v2 merge-sidecar deferral queue is full".to_owned());
         }

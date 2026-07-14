@@ -14,12 +14,13 @@ RetransmitElapsed are local scheduler inputs.  If the reducer is busy they are
 coalesced in the adapter's trusted deferred-completion set until the busy fence
 clears.
 
-Queued stale I/O is deliberately not cancelled in this model.  The finite
-service bound instead relies on lossless backpressure: a full worker FIFO
+Queued stale I/O is deliberately retained in this model as a conservative
+service burden.  Production cancels queued certified-stale Sign/Store/Validate
+work by exact identity and coalesces exact retries until the completion is
+acknowledged; non-stale admission remains lossless.  Thus a full model FIFO
 leaves its causal producer head pending until weakly fair head service creates
-capacity.  This is a production-refinement premise, not a license to drop new-
-view Store/Validate/Sign work when the concrete worker queue is full.  Likewise
-all validators in one instance use the same view-indexed pacemaker rule; mixed
+capacity, over-approximating rather than hiding stale work.  Likewise all
+validators in one instance use the same view-indexed pacemaker rule; mixed
 fixed/adaptive binaries require a version or configuration-fingerprint gate
 before the temporal theorem applies to a deployment.
 

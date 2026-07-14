@@ -3146,6 +3146,220 @@ BY ServiceIoWorkerPreservesTopologyType,
    ServiceIoWorkerPreservesNonIoType, Isa
    DEF AsyncSchedulerTypeInvariant, AsyncIoTypeInvariant
 
+ProducerSelectedReadyQueue(node) ==
+  IF SelectedCompletionSource(node) = "Io"
+  THEN asyncIoReadyCompletions[node]
+  ELSE asyncLocalReadyCompletions[node]
+
+ProducerOtherReadyQueue(node) ==
+  IF SelectedCompletionSource(node) = "Io"
+  THEN asyncLocalReadyCompletions[node]
+  ELSE asyncIoReadyCompletions[node]
+
+THEOREM ProducerSelectedCompletionFacts ==
+  \A node \in ValidatorIds:
+    /\ AsyncIoTopologyTypeInvariant
+    /\ AsyncIoWorkContentTypeInvariant
+    /\ ProducerCompletionCanAdmit(node)
+    => LET source == SelectedCompletionSource(node)
+           queue == ProducerSelectedReadyQueue(node)
+           otherQueue == ProducerOtherReadyQueue(node)
+           candidate == SelectedCompletionCandidate(node)
+       IN /\ source \in {"Io", "Local"}
+          /\ AsyncCompletionSequenceTyped(queue)
+          /\ Len(queue) = Cardinality(SequenceSet(queue))
+          /\ Len(queue) > 0
+          /\ candidate = Head(queue)
+          /\ candidate \in SequenceSet(queue)
+          /\ candidate \in asyncOutstandingWork[node]
+          /\ AsyncCandidateTyped(candidate)
+          /\ candidate.class = "Completion"
+          /\ candidate.node = node
+          /\ candidate \notin SequenceSet(otherQueue)
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds,
+                AsyncIoTopologyTypeInvariant,
+                AsyncIoWorkContentTypeInvariant,
+                ProducerCompletionCanAdmit(node)
+         PROVE LET source == SelectedCompletionSource(node)
+                   queue == ProducerSelectedReadyQueue(node)
+                   otherQueue == ProducerOtherReadyQueue(node)
+                   candidate == SelectedCompletionCandidate(node)
+               IN /\ source \in {"Io", "Local"}
+                  /\ AsyncCompletionSequenceTyped(queue)
+                  /\ Len(queue) = Cardinality(SequenceSet(queue))
+                  /\ Len(queue) > 0
+                  /\ candidate = Head(queue)
+                  /\ candidate \in SequenceSet(queue)
+                  /\ candidate \in asyncOutstandingWork[node]
+                  /\ AsyncCandidateTyped(candidate)
+                  /\ candidate.class = "Completion"
+                  /\ candidate.node = node
+                  /\ candidate \notin SequenceSet(otherQueue)
+    <2>1. SelectedCompletionSource(node) \in {"Io", "Local"}
+      BY <1>1, SMT
+         DEF AsyncIoTopologyTypeInvariant, SelectedCompletionSource
+    <2>2. CASE SelectedCompletionSource(node) = "Io"
+      <3>1. /\ ProducerSelectedReadyQueue(node) =
+                       asyncIoReadyCompletions[node]
+             /\ ProducerOtherReadyQueue(node) =
+                       asyncLocalReadyCompletions[node]
+             /\ SelectedCompletionCandidate(node) =
+                       Head(asyncIoReadyCompletions[node])
+             /\ Len(asyncIoReadyCompletions[node]) > 0
+        BY <1>1, <2>2
+           DEF ProducerSelectedReadyQueue, ProducerOtherReadyQueue,
+               ProducerCompletionCanAdmit,
+               SelectedCompletionQueueNonempty,
+               SelectedCompletionCandidate
+      <3>2. /\ AsyncCompletionSequenceTyped(
+                       asyncIoReadyCompletions[node])
+             /\ Len(asyncIoReadyCompletions[node]) =
+                  Cardinality(SequenceSet(
+                    asyncIoReadyCompletions[node]))
+             /\ SequenceSet(asyncIoReadyCompletions[node]) \subseteq
+                  asyncOutstandingWork[node]
+             /\ SequenceSet(asyncIoReadyCompletions[node]) \cap
+                  SequenceSet(asyncLocalReadyCompletions[node]) = {}
+             /\ \A candidate \in asyncOutstandingWork[node]:
+                    /\ AsyncCandidateTyped(candidate)
+                    /\ candidate.class = "Completion"
+                    /\ candidate.node = node
+        BY <1>1 DEF AsyncIoWorkContentTypeInvariant
+      <3>3. Head(asyncIoReadyCompletions[node]) \in
+                 SequenceSet(asyncIoReadyCompletions[node])
+        BY <3>1, <3>2, HeadTailProperties, RangeEquality
+           DEF AsyncCompletionSequenceTyped, SequenceSet
+      <3> QED BY <2>1, <2>2, <3>1, <3>2, <3>3, SMT
+    <2>3. CASE SelectedCompletionSource(node) = "Local"
+      <3>1. /\ ProducerSelectedReadyQueue(node) =
+                       asyncLocalReadyCompletions[node]
+             /\ ProducerOtherReadyQueue(node) =
+                       asyncIoReadyCompletions[node]
+             /\ SelectedCompletionCandidate(node) =
+                       Head(asyncLocalReadyCompletions[node])
+             /\ Len(asyncLocalReadyCompletions[node]) > 0
+        BY <1>1, <2>3
+           DEF ProducerSelectedReadyQueue, ProducerOtherReadyQueue,
+               ProducerCompletionCanAdmit,
+               SelectedCompletionQueueNonempty,
+               SelectedCompletionCandidate
+      <3>2. /\ AsyncCompletionSequenceTyped(
+                       asyncLocalReadyCompletions[node])
+             /\ Len(asyncLocalReadyCompletions[node]) =
+                  Cardinality(SequenceSet(
+                    asyncLocalReadyCompletions[node]))
+             /\ SequenceSet(asyncLocalReadyCompletions[node]) \subseteq
+                  asyncOutstandingWork[node]
+             /\ SequenceSet(asyncIoReadyCompletions[node]) \cap
+                  SequenceSet(asyncLocalReadyCompletions[node]) = {}
+             /\ \A candidate \in asyncOutstandingWork[node]:
+                    /\ AsyncCandidateTyped(candidate)
+                    /\ candidate.class = "Completion"
+                    /\ candidate.node = node
+        BY <1>1 DEF AsyncIoWorkContentTypeInvariant
+      <3>3. Head(asyncLocalReadyCompletions[node]) \in
+                 SequenceSet(asyncLocalReadyCompletions[node])
+        BY <3>1, <3>2, HeadTailProperties, RangeEquality
+           DEF AsyncCompletionSequenceTyped, SequenceSet
+      <3> QED BY <2>1, <2>3, <3>1, <3>2, <3>3, SMT
+    <2> QED BY <2>1, <2>2, <2>3
+  <1> QED BY <1>1
+
+THEOREM TypedCandidateAppendPreservesQueueType ==
+  \A queue, candidate:
+    /\ AsyncQueueTyped(queue)
+    /\ AsyncCandidateTyped(candidate)
+    => AsyncQueueTyped(Append(queue, candidate))
+PROOF
+  <1>1. ASSUME NEW queue, NEW candidate,
+                AsyncQueueTyped(queue),
+                AsyncCandidateTyped(candidate)
+         PROVE AsyncQueueTyped(Append(queue, candidate))
+    <2>1. queue \in Seq(Range(queue))
+      BY <1>1 DEF AsyncQueueTyped
+    <2>2. /\ Append(queue, candidate)
+                  \in Seq(Range(Append(queue, candidate)))
+           /\ DOMAIN Append(queue, candidate) =
+                1..Len(Append(queue, candidate))
+           /\ Len(Append(queue, candidate)) = Len(queue) + 1
+           /\ \A index \in 1..Len(queue):
+                  Append(queue, candidate)[index] = queue[index]
+           /\ Append(queue, candidate)[Len(queue) + 1] = candidate
+      BY <2>1, AppendSequenceFacts, Isa
+    <2>3. Len(queue) \in Nat
+      BY <2>1, LenProperties
+    <2>4. \A index \in 1..Len(Append(queue, candidate)):
+             AsyncCandidateTyped(Append(queue, candidate)[index])
+      <3>1. ASSUME NEW index \in 1..Len(Append(queue, candidate))
+             PROVE AsyncCandidateTyped(
+                      Append(queue, candidate)[index])
+        <4>1. CASE index \in 1..Len(queue)
+          BY <1>1, <2>2, <4>1 DEF AsyncQueueTyped
+        <4>2. CASE index \notin 1..Len(queue)
+          <5>1. index = Len(queue) + 1
+            BY <2>2, <2>3, <3>1, <4>2, SMT
+          <5> QED BY <1>1, <2>2, <5>1
+        <4> QED BY <4>1, <4>2
+      <3> QED BY <3>1
+    <2> QED BY <2>2, <2>4 DEF AsyncQueueTyped
+  <1> QED BY <1>1
+
+AsyncCompletionIndices(queue) ==
+  {index \in 1..Len(queue): queue[index].class = "Completion"}
+
+THEOREM CompletionIndicesAfterCompletionAppend ==
+  \A queue, candidate:
+    /\ AsyncQueueTyped(queue)
+    /\ candidate.class = "Completion"
+    => AsyncCompletionIndices(Append(queue, candidate)) =
+         AsyncCompletionIndices(queue) \cup {Len(queue) + 1}
+PROOF
+  <1>1. ASSUME NEW queue, NEW candidate,
+                AsyncQueueTyped(queue),
+                candidate.class = "Completion"
+         PROVE AsyncCompletionIndices(Append(queue, candidate)) =
+                 AsyncCompletionIndices(queue) \cup {Len(queue) + 1}
+    <2>1. queue \in Seq(Range(queue))
+      BY <1>1 DEF AsyncQueueTyped
+    <2>2. /\ Len(queue) \in Nat
+           /\ Len(Append(queue, candidate)) = Len(queue) + 1
+           /\ \A index \in 1..Len(queue):
+                  Append(queue, candidate)[index] = queue[index]
+           /\ Append(queue, candidate)[Len(queue) + 1] = candidate
+      BY <2>1, AppendSequenceFacts, LenProperties
+    <2> QED BY <1>1, <2>2, SMT DEF AsyncCompletionIndices
+  <1> QED BY <1>1
+
+THEOREM CompletionAppendCountIncreasesByOne ==
+  \A queue, candidate:
+    /\ AsyncQueueTyped(queue)
+    /\ candidate.class = "Completion"
+    => Cardinality(AsyncCompletionIndices(Append(queue, candidate))) =
+         Cardinality(AsyncCompletionIndices(queue)) + 1
+PROOF
+  <1>1. ASSUME NEW queue, NEW candidate,
+                AsyncQueueTyped(queue),
+                candidate.class = "Completion"
+         PROVE Cardinality(
+                   AsyncCompletionIndices(Append(queue, candidate))) =
+                 Cardinality(AsyncCompletionIndices(queue)) + 1
+    <2>1. queue \in Seq(Range(queue))
+      BY <1>1 DEF AsyncQueueTyped
+    <2>2. /\ Len(queue) \in Nat
+           /\ IsFiniteSet(1..Len(queue))
+      BY <2>1, LenProperties, FS_Interval, SMT
+    <2>3. /\ AsyncCompletionIndices(queue) \subseteq 1..Len(queue)
+           /\ IsFiniteSet(AsyncCompletionIndices(queue))
+      BY <2>2, FS_Subset DEF AsyncCompletionIndices
+    <2>4. Len(queue) + 1 \notin AsyncCompletionIndices(queue)
+      BY <2>2, SMT DEF AsyncCompletionIndices
+    <2>5. AsyncCompletionIndices(Append(queue, candidate)) =
+             AsyncCompletionIndices(queue) \cup {Len(queue) + 1}
+      BY <1>1, CompletionIndicesAfterCompletionAppend
+    <2> QED BY <2>3, <2>4, <2>5, FS_AddElement
+  <1> QED BY <1>1
+
 THEOREM FinitePacketSetHasOldestSentAt ==
   \A packets:
     /\ IsFiniteSet(packets)
@@ -4254,7 +4468,9 @@ PROOF
                      asyncIngressLanes', otherRecipient) =
                    AsyncIngressPairIndicesFor(
                      asyncIngressLanes, otherRecipient)
-            BY <2>5, <2>10, <3>2, Isa
+            <6>1. otherRecipient \in ValidatorIds \ {recipient}
+              BY <2>10, <3>2, Isa
+            <6> QED BY <2>5, <6>1
           <5>2. AsyncIngressZeroSourcesFor(
                      asyncIngressLanes', otherRecipient) =
                    AsyncIngressZeroSourcesFor(
