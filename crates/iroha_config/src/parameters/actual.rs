@@ -7128,6 +7128,10 @@ pub struct ToriiOnboarding {
     pub private_key: ExposedPrivateKey,
     /// Permission names that onboarding may grant to newly registered accounts.
     pub allowed_permissions: Vec<String>,
+    /// Exact account-alias dataspaces automatically granted for read-only resolution.
+    pub alias_resolve_dataspaces: Vec<DataSpaceId>,
+    /// Exact account-alias domains automatically granted for read-only resolution.
+    pub alias_resolve_domains: Vec<DomainId>,
     /// Optional sponsor account granted via `CanUseFeeSponsor`.
     pub fee_sponsor_account: Option<AccountId>,
     /// Default alias lease term applied during onboarding.

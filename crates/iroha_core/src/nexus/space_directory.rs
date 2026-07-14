@@ -110,9 +110,21 @@ pub fn extract_lane_identity_metadata(
 pub fn extract_authority_domains(
     world: &impl WorldReadOnly,
     authority: &AccountId,
+    now_ms: u64,
 ) -> Result<Vec<DomainId>, ParseError> {
     let mut domains = BTreeSet::new();
     for alias in world.bound_account_aliases(authority) {
+        if crate::sns::resolve_active_account_alias(
+            world,
+            world.dataspace_catalog(),
+            &alias,
+            now_ms,
+        )
+        .as_ref()
+            != Some(authority)
+        {
+            continue;
+        }
         if let Some(domain_id) = alias.domain_id(world.dataspace_catalog())? {
             domains.insert(domain_id);
         }

@@ -1004,10 +1004,21 @@ fn relay_domain(
     state_transaction: &StateTransaction<'_, '_>,
     relay_id: &AccountId,
 ) -> Result<DomainId, Error> {
+    let relay_subject = relay_id.subject_id();
     let alias_domains = state_transaction
         .world
-        .bound_account_aliases(&relay_id.subject_id())
+        .bound_account_aliases(&relay_subject)
         .into_iter()
+        .filter(|alias| {
+            crate::sns::resolve_active_account_alias(
+                &state_transaction.world,
+                &state_transaction.nexus.dataspace_catalog,
+                alias,
+                state_transaction.block_unix_timestamp_ms(),
+            )
+            .as_ref()
+                == Some(&relay_subject)
+        })
         .filter_map(|alias| {
             alias
                 .domain_id(&state_transaction.nexus.dataspace_catalog)

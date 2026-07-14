@@ -4716,8 +4716,9 @@ fn extract_lane_authority_domains(
     world: &impl WorldReadOnly,
     authority: &AccountId,
     lane_alias: &str,
+    now_ms: u64,
 ) -> Result<Vec<iroha_data_model::domain::DomainId>, TransactionRejectionReason> {
-    extract_directory_authority_domains(world, authority).map_err(|err| {
+    extract_directory_authority_domains(world, authority, now_ms).map_err(|err| {
         reject_lane_policy(
             lane_alias,
             format!("authority alias domain resolution failed: {err}"),
@@ -4868,8 +4869,12 @@ fn enforce_lane_policies(
         && let Some(engine) = state_transaction.lane_compliance.as_ref()
     {
         let (uaid_value, capability_tags) = lane_identity;
-        let authority_domains =
-            extract_lane_authority_domains(&state_transaction.world, tx.authority(), &lane_alias)?;
+        let authority_domains = extract_lane_authority_domains(
+            &state_transaction.world,
+            tx.authority(),
+            &lane_alias,
+            state_transaction.block_unix_timestamp_ms(),
+        )?;
         let ctx = LaneComplianceContext {
             lane_id,
             dataspace_id,

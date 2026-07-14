@@ -12611,6 +12611,7 @@ pub(crate) mod valid {
                                             &state_block.world,
                                             &p.authority,
                                             &account_id,
+                                            alias_resolution_time_ms,
                                         ) {
                                             Ok(true) => {}
                                             Ok(false) => {
@@ -12637,6 +12638,7 @@ pub(crate) mod valid {
                                             &state_block.world,
                                             &p.authority,
                                             &transfer,
+                                            alias_resolution_time_ms,
                                         ) {
                                             Ok(true) => {}
                                             Ok(false) => {

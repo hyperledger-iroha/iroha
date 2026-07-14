@@ -118,9 +118,7 @@ fn validate_builtin_account_alias_query_permission(
     match query {
         SingularQueryBox::FindAccountByAlias(query) => require_alias(query.alias()),
         SingularQueryBox::FindAccountRecoveryPolicyByAlias(query) => require_alias(query.alias()),
-        SingularQueryBox::FindAccountRecoveryRequestByAlias(query) => {
-            require_alias(query.alias())
-        }
+        SingularQueryBox::FindAccountRecoveryRequestByAlias(query) => require_alias(query.alias()),
         SingularQueryBox::FindAliasesByAccountId(query) => {
             let catalog = world.dataspace_catalog();
             let dataspace_filter = query
@@ -170,13 +168,8 @@ fn validate_builtin_account_alias_query_permission(
                     || domain_filter
                         .as_ref()
                         .is_some_and(|domain| alias.domain.as_ref() != Some(domain))
-                    || crate::sns::resolve_active_account_alias(
-                        world,
-                        catalog,
-                        &alias,
-                        now_ms,
-                    )
-                    .as_ref()
+                    || crate::sns::resolve_active_account_alias(world, catalog, &alias, now_ms)
+                        .as_ref()
                         != Some(query.account_id())
                 {
                     continue;
@@ -5821,8 +5814,12 @@ impl Executor {
             // Allow in genesis, or if tx authority owns any domain linked to trigger owner,
             // or if tx authority has explicit CanRegisterTrigger { authority: <owner> }.
             let trg_owner = reg_trg.object().action().authority().clone();
-            let is_domain_owner =
-                authority_owns_any_alias_domain(&state_transaction.world, authority, &trg_owner)?;
+            let is_domain_owner = authority_owns_any_alias_domain(
+                &state_transaction.world,
+                authority,
+                &trg_owner,
+                state_transaction.block_unix_timestamp_ms(),
+            )?;
 
             // Prefer cached permission check; parse once per tx/account.
             let has_permission =
@@ -5939,7 +5936,12 @@ impl Executor {
         }
 
         if let Some(transfer_domain) = extract_transfer_domain(instruction)
-            && !can_transfer_domain(&state_transaction.world, authority, &transfer_domain)?
+            && !can_transfer_domain(
+                &state_transaction.world,
+                authority,
+                &transfer_domain,
+                state_transaction.block_unix_timestamp_ms(),
+            )?
         {
             return Err(ValidationFail::NotPermitted(
                 "Can't transfer domain of another account".to_owned(),
@@ -5971,6 +5973,7 @@ impl Executor {
                 authority,
                 contract_runtime_context,
                 &transfer_asset,
+                state_transaction.block_unix_timestamp_ms(),
             )?
         {
             return Err(ValidationFail::NotPermitted(
@@ -7542,8 +7545,20 @@ fn authority_owns_any_alias_domain(
     world: &impl WorldReadOnly,
     authority: &AccountId,
     subject: &AccountId,
+    now_ms: u64,
 ) -> Result<bool, ValidationFail> {
     for alias in world.bound_account_aliases(subject) {
+        if crate::sns::resolve_active_account_alias(
+            world,
+            world.dataspace_catalog(),
+            &alias,
+            now_ms,
+        )
+        .as_ref()
+            != Some(subject)
+        {
+            continue;
+        }
         let Some(domain_id) = alias.domain_id(world.dataspace_catalog()).map_err(|err| {
             ValidationFail::InstructionFailed(InstructionExecutionError::InvariantViolation(
                 err.to_string().into(),
@@ -7563,12 +7578,13 @@ fn can_transfer_domain(
     world: &impl WorldReadOnly,
     authority: &AccountId,
     transfer: &Transfer<Account, DomainId, Account>,
+    now_ms: u64,
 ) -> Result<bool, ValidationFail> {
     if transfer.source() == authority {
         return Ok(true);
     }
 
-    if authority_owns_any_alias_domain(world, authority, transfer.source())? {
+    if authority_owns_any_alias_domain(world, authority, transfer.source(), now_ms)? {
         return Ok(true);
     }
 
@@ -7616,6 +7632,7 @@ fn can_transfer_asset(
     authority: &AccountId,
     contract_runtime_context: Option<&ContractRuntimeExecutionContext>,
     transfer: &Transfer<Asset, Quantity, Account>,
+    now_ms: u64,
 ) -> Result<bool, ValidationFail> {
     if transfer.source().account() == authority {
         return Ok(true);
@@ -7633,7 +7650,7 @@ fn can_transfer_asset(
         return Ok(true);
     }
 
-    if authority_owns_any_alias_domain(world, authority, transfer.source().account())? {
+    if authority_owns_any_alias_domain(world, authority, transfer.source().account(), now_ms)? {
         return Ok(true);
     }
 
@@ -10704,7 +10721,7 @@ mod tests {
                 .owned_by(),
             &user1
         );
-        let allowed = can_transfer_domain(&stx.world, &alice_id, &transfer)
+        let allowed = can_transfer_domain(&stx.world, &alice_id, &transfer, 0)
             .expect("domain transfer permission check");
         assert!(
             !allowed,
@@ -10766,7 +10783,7 @@ mod tests {
             .expect("expected to extract asset transfer from instruction");
 
         let stx = block.transaction();
-        let allowed = can_transfer_asset(&stx.world, &alice_id, None, &transfer)
+        let allowed = can_transfer_asset(&stx.world, &alice_id, None, &transfer, 0)
             .expect("asset transfer permission check");
         assert!(
             allowed,
@@ -10820,7 +10837,7 @@ mod tests {
             .expect("expected to extract asset transfer from instruction");
 
         let mut stx = block.transaction();
-        let allowed = can_transfer_asset(&stx.world, &alice_id, None, &transfer)
+        let allowed = can_transfer_asset(&stx.world, &alice_id, None, &transfer, 0)
             .expect("asset transfer permission check");
         assert!(
             !allowed,

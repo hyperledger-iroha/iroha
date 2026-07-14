@@ -416,6 +416,23 @@ pub mod isi {
                 .into(),
             )
         })?;
+        if crate::sns::resolve_active_account_alias(
+            &state_transaction.world,
+            &state_transaction.nexus.dataspace_catalog,
+            account_label,
+            state_transaction.block_unix_timestamp_ms(),
+        )
+        .as_ref()
+            != Some(account_id)
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "transfer-control target account {account_id} has no strictly active alias binding"
+                )
+                .into(),
+            )
+            .into());
+        }
         let account_domain = account_label.domain.as_ref().cloned().ok_or_else(|| {
             InstructionExecutionError::InvariantViolation(
                 format!(
@@ -692,6 +709,16 @@ pub mod isi {
             .world
             .bound_account_aliases(subject)
             .into_iter()
+            .filter(|alias| {
+                crate::sns::resolve_active_account_alias(
+                    &state_transaction.world,
+                    &state_transaction.nexus.dataspace_catalog,
+                    alias,
+                    state_transaction.block_unix_timestamp_ms(),
+                )
+                .as_ref()
+                    == Some(subject)
+            })
             .filter_map(|alias| {
                 alias
                     .domain_id(&state_transaction.nexus.dataspace_catalog)
@@ -914,18 +941,22 @@ pub mod isi {
         state_transaction: &StateTransaction<'_, '_>,
         account_id: &AccountId,
     ) -> Result<Option<DataSpaceId>, Error> {
-        let hierarchy = state_transaction
+        state_transaction.world.account(account_id)?;
+        let mut linked_dataspaces: BTreeSet<_> = state_transaction
             .world
-            .account_scope_hierarchy(account_id)
-            .map_err(|err| {
-                InstructionExecutionError::InvariantViolation(
-                    format!("account {account_id} dataspace scope could not be resolved: {err}")
-                        .into(),
+            .bound_account_aliases(account_id)
+            .into_iter()
+            .filter(|alias| {
+                crate::sns::resolve_active_account_alias(
+                    &state_transaction.world,
+                    &state_transaction.nexus.dataspace_catalog,
+                    alias,
+                    state_transaction.block_unix_timestamp_ms(),
                 )
-            })?;
-        let mut linked_dataspaces: BTreeSet<_> = hierarchy
-            .keys()
-            .copied()
+                .as_ref()
+                    == Some(account_id)
+            })
+            .map(|alias| alias.dataspace)
             .filter(|dataspace| *dataspace != DataSpaceId::UNIVERSAL)
             .collect();
         if let Ok(account) = state_transaction.world.account(account_id)

@@ -745,6 +745,16 @@ fn validate_fx_settlement_preconditions(
         .world
         .bound_account_aliases(&instruction.recipient)
         .into_iter()
+        .filter(|alias| {
+            crate::sns::resolve_active_account_alias(
+                &stx.world,
+                &stx.nexus.dataspace_catalog,
+                alias,
+                stx.block_unix_timestamp_ms(),
+            )
+            .as_ref()
+                == Some(&instruction.recipient)
+        })
         .filter(|alias| alias.dataspace == policy.destination_dataspace)
         .map(|alias| alias.domain_id(&stx.nexus.dataspace_catalog))
         .collect::<Result<Vec<_>, _>>()

@@ -27,12 +27,10 @@ use iroha_data_model::offline::{
     KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4,
     KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V4,
     KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_BOOTSTRAP_FILE_NAME_V4,
-    KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_PARAMS_FILE_NAME_V4,
     KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PARAMETERS_FILE_NAME_V4,
     KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PROVING_KEY_FILE_NAME_V4,
     KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_VERIFYING_KEY_FILE_NAME_V4,
     KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_BOOTSTRAP_FILE_NAME_V4,
-    KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_PARAMS_FILE_NAME_V4,
     KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PARAMETERS_FILE_NAME_V4,
     KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PROVING_KEY_FILE_NAME_V4,
     KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_VERIFYING_KEY_FILE_NAME_V4, KagemushaAuthenticatedReleaseV4,
@@ -56,7 +54,7 @@ pub type KagemushaRecursiveSpendPastaCycleArtifactHeaderV4 =
 
 static NEXT_EXPORT_TEMP_ID_V4: AtomicU64 = AtomicU64::new(0);
 
-/// Return the canonical file name for one of the ten V4 artifact roles.
+/// Return the canonical file name for one of the eight V4 artifact roles.
 #[must_use]
 pub const fn kagemusha_artifact_file_name_v4(
     parity: KagemushaPastaCycleParityV1,
@@ -65,9 +63,6 @@ pub const fn kagemusha_artifact_file_name_v4(
     match (parity, kind) {
         (KagemushaPastaCycleParityV1::StepEq, KagemushaPastaCycleArtifactKindV4::Parameters) => {
             KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PARAMETERS_FILE_NAME_V4
-        }
-        (KagemushaPastaCycleParityV1::StepEq, KagemushaPastaCycleArtifactKindV4::CircuitParams) => {
-            KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_PARAMS_FILE_NAME_V4
         }
         (KagemushaPastaCycleParityV1::StepEq, KagemushaPastaCycleArtifactKindV4::ProvingKey) => {
             KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PROVING_KEY_FILE_NAME_V4
@@ -81,9 +76,6 @@ pub const fn kagemusha_artifact_file_name_v4(
         ) => KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_BOOTSTRAP_FILE_NAME_V4,
         (KagemushaPastaCycleParityV1::StepEp, KagemushaPastaCycleArtifactKindV4::Parameters) => {
             KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PARAMETERS_FILE_NAME_V4
-        }
-        (KagemushaPastaCycleParityV1::StepEp, KagemushaPastaCycleArtifactKindV4::CircuitParams) => {
-            KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_PARAMS_FILE_NAME_V4
         }
         (KagemushaPastaCycleParityV1::StepEp, KagemushaPastaCycleArtifactKindV4::ProvingKey) => {
             KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PROVING_KEY_FILE_NAME_V4
@@ -133,13 +125,6 @@ fn export_header_v4(
             .is_none_or(|len| len > KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_FILE_BYTES_V4)
     {
         return Err("Kagemusha V4 export profile or payload is invalid".to_owned());
-    }
-    if kind == KagemushaPastaCycleArtifactKindV4::CircuitParams
-        && norito::to_bytes(&profile.circuit_params)
-            .map_err(|error| format!("failed to encode Kagemusha V4 circuit params: {error}"))?
-            != payload
-    {
-        return Err("Kagemusha V4 circuit-parameter payload is not canonical".to_owned());
     }
     let header = KagemushaRecursiveSpendPastaCycleArtifactHeaderV4 {
         version: KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_HEADER_VERSION_V4,
@@ -539,36 +524,7 @@ fn validate_role(
     validate_header_against_manifest_v4(&artifact.header, release.manifest(), descriptor)
 }
 
-fn validate_circuit_params_payload(
-    release: &KagemushaAuthenticatedReleaseV4,
-    artifact: &KagemushaValidatedArtifactPayloadV4,
-    parity: KagemushaPastaCycleParityV1,
-) -> Result<(), String> {
-    validate_role(
-        release,
-        artifact,
-        parity,
-        KagemushaPastaCycleArtifactKindV4::CircuitParams,
-    )?;
-    let profile = release
-        .manifest()
-        .profiles
-        .iter()
-        .find(|profile| profile.parity == parity)
-        .ok_or_else(|| "Kagemusha V4 circuit-parameter profile is absent".to_owned())?;
-    let decoded: KagemushaStepCircuitParamsV4 = norito::decode_from_bytes(artifact.payload())
-        .map_err(|error| format!("Kagemusha V4 circuit-parameter payload is malformed: {error}"))?;
-    if decoded != profile.circuit_params
-        || norito::to_bytes(&decoded)
-            .map_err(|error| format!("failed to re-encode Kagemusha V4 circuit params: {error}"))?
-            != artifact.payload()
-    {
-        return Err("Kagemusha V4 circuit-parameter payload is not canonical".to_owned());
-    }
-    Ok(())
-}
-
-/// Exact eight-role verifier material bound to one authenticated V4 release.
+/// Exact six-role verifier material bound to one authenticated V4 release.
 ///
 /// Bootstrap witnesses remain opaque here; the recursion adapter is the sole
 /// owner of their canonical typed representation and validation.
@@ -576,26 +532,21 @@ fn validate_circuit_params_payload(
 pub struct KagemushaPastaCycleVerifierArtifactsV4 {
     release: KagemushaAuthenticatedReleaseV4,
     step_eq_parameters: KagemushaValidatedArtifactPayloadV4,
-    step_eq_circuit_params: KagemushaValidatedArtifactPayloadV4,
     step_eq_verifying_key: KagemushaValidatedArtifactPayloadV4,
     step_eq_bootstrap_witness: KagemushaValidatedArtifactPayloadV4,
     step_ep_parameters: KagemushaValidatedArtifactPayloadV4,
-    step_ep_circuit_params: KagemushaValidatedArtifactPayloadV4,
     step_ep_verifying_key: KagemushaValidatedArtifactPayloadV4,
     step_ep_bootstrap_witness: KagemushaValidatedArtifactPayloadV4,
 }
 
 impl KagemushaPastaCycleVerifierArtifactsV4 {
-    /// Bind all eight verifier roles to one authenticated release.
-    #[allow(clippy::too_many_arguments)]
+    /// Bind all six verifier roles to one authenticated release.
     pub fn new(
         release: &KagemushaAuthenticatedReleaseV4,
         step_eq_parameters: KagemushaValidatedArtifactPayloadV4,
-        step_eq_circuit_params: KagemushaValidatedArtifactPayloadV4,
         step_eq_verifying_key: KagemushaValidatedArtifactPayloadV4,
         step_eq_bootstrap_witness: KagemushaValidatedArtifactPayloadV4,
         step_ep_parameters: KagemushaValidatedArtifactPayloadV4,
-        step_ep_circuit_params: KagemushaValidatedArtifactPayloadV4,
         step_ep_verifying_key: KagemushaValidatedArtifactPayloadV4,
         step_ep_bootstrap_witness: KagemushaValidatedArtifactPayloadV4,
     ) -> Result<Self, String> {
@@ -604,11 +555,6 @@ impl KagemushaPastaCycleVerifierArtifactsV4 {
                 &step_eq_parameters,
                 KagemushaPastaCycleParityV1::StepEq,
                 KagemushaPastaCycleArtifactKindV4::Parameters,
-            ),
-            (
-                &step_eq_circuit_params,
-                KagemushaPastaCycleParityV1::StepEq,
-                KagemushaPastaCycleArtifactKindV4::CircuitParams,
             ),
             (
                 &step_eq_verifying_key,
@@ -626,11 +572,6 @@ impl KagemushaPastaCycleVerifierArtifactsV4 {
                 KagemushaPastaCycleArtifactKindV4::Parameters,
             ),
             (
-                &step_ep_circuit_params,
-                KagemushaPastaCycleParityV1::StepEp,
-                KagemushaPastaCycleArtifactKindV4::CircuitParams,
-            ),
-            (
                 &step_ep_verifying_key,
                 KagemushaPastaCycleParityV1::StepEp,
                 KagemushaPastaCycleArtifactKindV4::VerifyingKey,
@@ -642,36 +583,18 @@ impl KagemushaPastaCycleVerifierArtifactsV4 {
             ),
         ];
         let mut digests = BTreeSet::new();
-        let eq_circuit_params_sha256 = step_eq_circuit_params.header.payload_sha256;
         for (artifact, parity, kind) in artifacts {
             validate_role(release, artifact, parity, kind)?;
-            let inserted = digests.insert(artifact.header.payload_sha256);
-            let allowed_params_alias = !inserted
-                && parity == KagemushaPastaCycleParityV1::StepEp
-                && kind == KagemushaPastaCycleArtifactKindV4::CircuitParams
-                && artifact.header.payload_sha256 == eq_circuit_params_sha256;
-            if !inserted && !allowed_params_alias {
+            if !digests.insert(artifact.header.payload_sha256) {
                 return Err("Kagemusha V4 verifier payloads are not distinct".to_owned());
             }
         }
-        validate_circuit_params_payload(
-            release,
-            &step_eq_circuit_params,
-            KagemushaPastaCycleParityV1::StepEq,
-        )?;
-        validate_circuit_params_payload(
-            release,
-            &step_ep_circuit_params,
-            KagemushaPastaCycleParityV1::StepEp,
-        )?;
         Ok(Self {
             release: release.clone(),
             step_eq_parameters,
-            step_eq_circuit_params,
             step_eq_verifying_key,
             step_eq_bootstrap_witness,
             step_ep_parameters,
-            step_ep_circuit_params,
             step_ep_verifying_key,
             step_ep_bootstrap_witness,
         })
@@ -743,21 +666,19 @@ impl KagemushaPastaCycleVerifierArtifactsV4 {
         self.step_ep_bootstrap_witness.payload()
     }
 
-    fn payload_digests(&self) -> [[u8; 32]; 8] {
+    fn payload_digests(&self) -> [[u8; 32]; 6] {
         [
             self.step_eq_parameters.header.payload_sha256,
-            self.step_eq_circuit_params.header.payload_sha256,
             self.step_eq_verifying_key.header.payload_sha256,
             self.step_eq_bootstrap_witness.header.payload_sha256,
             self.step_ep_parameters.header.payload_sha256,
-            self.step_ep_circuit_params.header.payload_sha256,
             self.step_ep_verifying_key.header.payload_sha256,
             self.step_ep_bootstrap_witness.header.payload_sha256,
         ]
     }
 }
 
-/// Exact ten-role prover material bound to one authenticated V4 release.
+/// Exact eight-role prover material bound to one authenticated V4 release.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KagemushaPastaCycleProverArtifactsV4 {
     verifier: KagemushaPastaCycleVerifierArtifactsV4,
@@ -766,17 +687,15 @@ pub struct KagemushaPastaCycleProverArtifactsV4 {
 }
 
 impl KagemushaPastaCycleProverArtifactsV4 {
-    /// Bind the complete ten-artifact inventory to one authenticated release.
+    /// Bind the complete eight-artifact inventory to one authenticated release.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         release: &KagemushaAuthenticatedReleaseV4,
         step_eq_parameters: KagemushaValidatedArtifactPayloadV4,
-        step_eq_circuit_params: KagemushaValidatedArtifactPayloadV4,
         step_eq_proving_key: KagemushaValidatedArtifactPayloadV4,
         step_eq_verifying_key: KagemushaValidatedArtifactPayloadV4,
         step_eq_bootstrap_witness: KagemushaValidatedArtifactPayloadV4,
         step_ep_parameters: KagemushaValidatedArtifactPayloadV4,
-        step_ep_circuit_params: KagemushaValidatedArtifactPayloadV4,
         step_ep_proving_key: KagemushaValidatedArtifactPayloadV4,
         step_ep_verifying_key: KagemushaValidatedArtifactPayloadV4,
         step_ep_bootstrap_witness: KagemushaValidatedArtifactPayloadV4,
@@ -796,11 +715,9 @@ impl KagemushaPastaCycleProverArtifactsV4 {
         let verifier = KagemushaPastaCycleVerifierArtifactsV4::new(
             release,
             step_eq_parameters,
-            step_eq_circuit_params,
             step_eq_verifying_key,
             step_eq_bootstrap_witness,
             step_ep_parameters,
-            step_ep_circuit_params,
             step_ep_verifying_key,
             step_ep_bootstrap_witness,
         )?;
@@ -817,7 +734,7 @@ impl KagemushaPastaCycleProverArtifactsV4 {
         })
     }
 
-    /// SHA-256 of the exact authenticated manifest selecting all ten roles.
+    /// SHA-256 of the exact authenticated manifest selecting all eight roles.
     #[must_use]
     pub const fn manifest_sha256(&self) -> [u8; 32] {
         self.verifier.manifest_sha256()

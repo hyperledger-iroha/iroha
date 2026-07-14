@@ -414,9 +414,6 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_VERIFYING_KEY_FILE_NAME_V3: &str =
 /// Canonical Eq parameter package file name for V4 releases.
 pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PARAMETERS_FILE_NAME_V4: &str =
     "step-eq.parameters.krv4";
-/// Canonical Eq raw Norito circuit-parameter package for V4 releases.
-pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_PARAMS_FILE_NAME_V4: &str =
-    "step-eq.circuit-params.krv4";
 /// Canonical Eq processed proving-key package file name for V4 releases.
 pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PROVING_KEY_FILE_NAME_V4: &str =
     "step-eq.proving-key.krv4";
@@ -429,9 +426,6 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_BOOTSTRAP_FILE_NAME_V4: &str =
 /// Canonical Ep parameter package file name for V4 releases.
 pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PARAMETERS_FILE_NAME_V4: &str =
     "step-ep.parameters.krv4";
-/// Canonical Ep raw Norito circuit-parameter package for V4 releases.
-pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_PARAMS_FILE_NAME_V4: &str =
-    "step-ep.circuit-params.krv4";
 /// Canonical Ep processed proving-key package file name for V4 releases.
 pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PROVING_KEY_FILE_NAME_V4: &str =
     "step-ep.proving-key.krv4";
@@ -444,15 +438,13 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_BOOTSTRAP_FILE_NAME_V4: &str =
 /// Exact ordered cryptographic artifact roles required by an ABI-20 release.
 ///
 /// The order is part of the capability contract and follows the canonical
-/// Eq-then-Ep profile order and the five-artifact order within each profile.
-pub const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_ROLES_V4: [&str; 10] = [
+/// Eq-then-Ep profile order and the four-artifact order within each profile.
+pub const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_ROLES_V4: [&str; 8] = [
     "step_eq_parameters",
-    "step_eq_circuit_params",
     "step_eq_proving_key",
     "step_eq_verifying_key",
     "step_eq_bootstrap_witness",
     "step_ep_parameters",
-    "step_ep_circuit_params",
     "step_ep_proving_key",
     "step_ep_verifying_key",
     "step_ep_bootstrap_witness",
@@ -2108,8 +2100,6 @@ mod model {
     pub enum KagemushaPastaCycleArtifactKindV4 {
         /// Canonical `ParamsIPA` generator material.
         Parameters,
-        /// Raw canonical Norito encoding of the complete circuit parameters.
-        CircuitParams,
         /// Halo2 processed proving key.
         ProvingKey,
         /// Halo2 processed verifying key.
@@ -2565,7 +2555,7 @@ mod model {
         pub artifact_inventory_verified: bool,
         /// Native bridge ABI required to consume this promoted release.
         pub bridge_abi_version: u32,
-        /// Exact Eq-then-Ep ten-role artifact inventory selected by ABI-20.
+        /// Exact Eq-then-Ep eight-role artifact inventory selected by ABI-20.
         pub artifact_roles: Vec<String>,
         /// Authenticated release-specific proof-pair byte ceiling.
         pub max_proof_bytes: u32,
@@ -5704,14 +5694,13 @@ impl KagemushaTopUpFinalityRosterArtifactReferenceV4 {
 }
 
 impl KagemushaPastaCycleProofProfileV4 {
-    /// Validate one V4 parity profile and its exact five-file inventory.
+    /// Validate one V4 parity profile and its exact four-file inventory.
     pub fn validate(&self) -> Result<(), KagemushaValidationError> {
         let (expected_circuit, expected_file_names) = match self.parity {
             KagemushaPastaCycleParityV1::StepEq => (
                 KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4,
                 [
                     KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PARAMETERS_FILE_NAME_V4,
-                    KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_PARAMS_FILE_NAME_V4,
                     KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PROVING_KEY_FILE_NAME_V4,
                     KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_VERIFYING_KEY_FILE_NAME_V4,
                     KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_BOOTSTRAP_FILE_NAME_V4,
@@ -5721,7 +5710,6 @@ impl KagemushaPastaCycleProofProfileV4 {
                 KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V4,
                 [
                     KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PARAMETERS_FILE_NAME_V4,
-                    KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_PARAMS_FILE_NAME_V4,
                     KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PROVING_KEY_FILE_NAME_V4,
                     KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_VERIFYING_KEY_FILE_NAME_V4,
                     KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_BOOTSTRAP_FILE_NAME_V4,
@@ -5729,33 +5717,17 @@ impl KagemushaPastaCycleProofProfileV4 {
             ),
         };
         self.circuit_params.validate()?;
-        let canonical_circuit_params = to_bytes(&self.circuit_params).map_err(|_| {
-            KagemushaValidationError::InvalidRecursiveSpendProof {
-                field: "pasta_cycle.v4.profile.circuit_params_encoding",
-            }
-        })?;
-        let canonical_circuit_params_size =
-            u64::try_from(canonical_circuit_params.len()).map_err(|_| {
-                KagemushaValidationError::InvalidRecursiveSpendProof {
-                    field: "pasta_cycle.v4.profile.circuit_params_encoding",
-                }
-            })?;
-        let canonical_circuit_params_sha256: [u8; 32] =
-            Sha256::digest(&canonical_circuit_params).into();
         if self.circuit_id != expected_circuit
             || !is_kagemusha_v3_portable_identifier(&self.parameter_generation)
             || self.ipa_k != self.circuit_params.k
             || self.compiled_protocol_structure_sha256 == [0; 32]
             || self.step_proof_size_bytes == 0
             || self.step_proof_size_bytes != self.circuit_params.max_parent_proof_bytes
-            || self.artifacts.len() != 5
+            || self.artifacts.len() != 4
             || self.artifacts[0].kind != KagemushaPastaCycleArtifactKindV4::Parameters
-            || self.artifacts[1].kind != KagemushaPastaCycleArtifactKindV4::CircuitParams
-            || self.artifacts[2].kind != KagemushaPastaCycleArtifactKindV4::ProvingKey
-            || self.artifacts[3].kind != KagemushaPastaCycleArtifactKindV4::VerifyingKey
-            || self.artifacts[4].kind != KagemushaPastaCycleArtifactKindV4::BootstrapWitness
-            || self.artifacts[1].payload_size_bytes != canonical_circuit_params_size
-            || self.artifacts[1].payload_sha256 != canonical_circuit_params_sha256
+            || self.artifacts[1].kind != KagemushaPastaCycleArtifactKindV4::ProvingKey
+            || self.artifacts[2].kind != KagemushaPastaCycleArtifactKindV4::VerifyingKey
+            || self.artifacts[3].kind != KagemushaPastaCycleArtifactKindV4::BootstrapWitness
             || self
                 .artifacts
                 .iter()
@@ -5778,19 +5750,11 @@ impl KagemushaPastaCycleProofProfileV4 {
         Ok(())
     }
 
-    /// Return the exact raw canonical circuit-parameter descriptor.
-    #[must_use]
-    pub fn circuit_params_artifact(&self) -> Option<&KagemushaPastaCycleArtifactV4> {
-        self.artifacts
-            .get(1)
-            .filter(|artifact| artifact.kind == KagemushaPastaCycleArtifactKindV4::CircuitParams)
-    }
-
     /// Return the exact descriptor for the canonical bootstrap payload.
     #[must_use]
     pub fn bootstrap_artifact(&self) -> Option<&KagemushaPastaCycleArtifactV4> {
         self.artifacts
-            .get(4)
+            .get(3)
             .filter(|artifact| artifact.kind == KagemushaPastaCycleArtifactKindV4::BootstrapWitness)
     }
 
@@ -5863,7 +5827,6 @@ impl KagemushaRecursiveSpendArtifactManifestV4 {
                 .to_ascii_lowercase(),
         );
         digests.insert(self.topup_finality_roster_artifact.sha256);
-        let mut circuit_params_payload_digests = std::collections::BTreeSet::new();
         let mut structure_digests = std::collections::BTreeSet::new();
         for profile in &self.profiles {
             profile.validate()?;
@@ -5877,16 +5840,7 @@ impl KagemushaRecursiveSpendArtifactManifestV4 {
                 let name_is_new = names.insert(artifact.file_name.to_ascii_lowercase());
                 let framed_digest_is_new = digests.insert(artifact.sha256);
                 let payload_digest_is_new = digests.insert(artifact.payload_sha256);
-                let repeated_circuit_params_payload = artifact.kind
-                    == KagemushaPastaCycleArtifactKindV4::CircuitParams
-                    && circuit_params_payload_digests.contains(&artifact.payload_sha256);
-                if artifact.kind == KagemushaPastaCycleArtifactKindV4::CircuitParams {
-                    circuit_params_payload_digests.insert(artifact.payload_sha256);
-                }
-                if !name_is_new
-                    || !framed_digest_is_new
-                    || (!payload_digest_is_new && !repeated_circuit_params_payload)
-                {
+                if !name_is_new || !framed_digest_is_new || !payload_digest_is_new {
                     return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
                         field: "pasta_cycle.v4.artifact_manifest.artifact_identity",
                     });
@@ -6574,8 +6528,8 @@ impl KagemushaPastaCycleProofEnvelopeV4 {
             || self.step_ep_parameter_generation != step_ep.parameter_generation
             || self.step_eq_circuit_params_sha256 != step_eq.circuit_params_sha256()?
             || self.step_ep_circuit_params_sha256 != step_ep.circuit_params_sha256()?
-            || self.step_eq_verifier_key_sha256 != step_eq.artifacts[3].payload_sha256
-            || self.step_ep_verifier_key_sha256 != step_ep.artifacts[3].payload_sha256
+            || self.step_eq_verifier_key_sha256 != step_eq.artifacts[2].payload_sha256
+            || self.step_ep_verifier_key_sha256 != step_ep.artifacts[2].payload_sha256
             || self.proof.bytes.len() > manifest.max_proof_bytes as usize
         {
             return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
@@ -7750,27 +7704,6 @@ mod kagemusha_v4_artifact_contract_tests {
         }
     }
 
-    fn rebind_circuit_params_artifact(profile: &mut KagemushaPastaCycleProofProfileV4) {
-        let canonical = to_bytes(&profile.circuit_params).expect("canonical circuit params");
-        let descriptor = profile
-            .artifacts
-            .get_mut(1)
-            .expect("circuit params descriptor");
-        descriptor.payload_size_bytes =
-            u64::try_from(canonical.len()).expect("small circuit params payload");
-        descriptor.payload_sha256 = Sha256::digest(&canonical).into();
-        descriptor.size_bytes = descriptor.payload_size_bytes + 256;
-        let parity_tag = match profile.parity {
-            KagemushaPastaCycleParityV1::StepEq => b'e',
-            KagemushaPastaCycleParityV1::StepEp => b'p',
-        };
-        let mut framed_preimage = Vec::with_capacity(canonical.len() + 48);
-        framed_preimage.extend_from_slice(b"iroha:kagemusha:v4:test-circuit-params-frame");
-        framed_preimage.push(parity_tag);
-        framed_preimage.extend_from_slice(&canonical);
-        descriptor.sha256 = digest(&framed_preimage);
-    }
-
     fn profile(
         parity: KagemushaPastaCycleParityV1,
         params: KagemushaStepCircuitParamsV4,
@@ -7781,7 +7714,6 @@ mod kagemusha_v4_artifact_contract_tests {
                 KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4,
                 [
                     KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PARAMETERS_FILE_NAME_V4,
-                    KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_PARAMS_FILE_NAME_V4,
                     KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PROVING_KEY_FILE_NAME_V4,
                     KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_VERIFYING_KEY_FILE_NAME_V4,
                     KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_BOOTSTRAP_FILE_NAME_V4,
@@ -7791,7 +7723,6 @@ mod kagemusha_v4_artifact_contract_tests {
                 KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V4,
                 [
                     KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PARAMETERS_FILE_NAME_V4,
-                    KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_PARAMS_FILE_NAME_V4,
                     KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PROVING_KEY_FILE_NAME_V4,
                     KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_VERIFYING_KEY_FILE_NAME_V4,
                     KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_BOOTSTRAP_FILE_NAME_V4,
@@ -7800,31 +7731,17 @@ mod kagemusha_v4_artifact_contract_tests {
         };
         let kinds = [
             KagemushaPastaCycleArtifactKindV4::Parameters,
-            KagemushaPastaCycleArtifactKindV4::CircuitParams,
             KagemushaPastaCycleArtifactKindV4::ProvingKey,
             KagemushaPastaCycleArtifactKindV4::VerifyingKey,
             KagemushaPastaCycleArtifactKindV4::BootstrapWitness,
         ];
-        let canonical_circuit_params =
-            to_bytes(&params).expect("canonical test circuit parameters");
         let artifacts = kinds
             .into_iter()
             .zip(names)
             .enumerate()
             .map(|(index, (kind, name))| {
                 let index = u8::try_from(index).expect("small role index");
-                if kind == KagemushaPastaCycleArtifactKindV4::CircuitParams {
-                    artifact(
-                        kind,
-                        name,
-                        seed + index,
-                        u64::try_from(canonical_circuit_params.len())
-                            .expect("small circuit params payload"),
-                        Sha256::digest(&canonical_circuit_params).into(),
-                    )
-                } else {
-                    artifact(kind, name, seed + index, 32, digest(&[b'p', seed + index]))
-                }
+                artifact(kind, name, seed + index, 32, digest(&[b'p', seed + index]))
             })
             .collect();
         KagemushaPastaCycleProofProfileV4 {
@@ -8011,12 +7928,12 @@ mod kagemusha_v4_artifact_contract_tests {
     }
 
     #[test]
-    fn v4_profiles_bind_exact_five_role_inventory_and_raw_params() {
+    fn v4_profiles_bind_exact_four_role_inventory_and_inline_params() {
         let manifest = manifest();
-        manifest.validate().expect("valid five-role V4 manifest");
-        assert_eq!(KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_ROLES_V4.len(), 10);
+        manifest.validate().expect("valid four-role V4 manifest");
+        assert_eq!(KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_ROLES_V4.len(), 8);
         for profile in &manifest.profiles {
-            assert_eq!(profile.artifacts.len(), 5);
+            assert_eq!(profile.artifacts.len(), 4);
             profile
                 .circuit_params
                 .validate()
@@ -8029,20 +7946,10 @@ mod kagemusha_v4_artifact_contract_tests {
                     .collect::<Vec<_>>(),
                 vec![
                     KagemushaPastaCycleArtifactKindV4::Parameters,
-                    KagemushaPastaCycleArtifactKindV4::CircuitParams,
                     KagemushaPastaCycleArtifactKindV4::ProvingKey,
                     KagemushaPastaCycleArtifactKindV4::VerifyingKey,
                     KagemushaPastaCycleArtifactKindV4::BootstrapWitness,
                 ]
-            );
-            assert_eq!(
-                profile
-                    .circuit_params_artifact()
-                    .expect("circuit params descriptor")
-                    .payload_sha256,
-                <[u8; 32]>::from(Sha256::digest(
-                    to_bytes(&profile.circuit_params).expect("canonical circuit parameters")
-                ))
             );
             assert_eq!(
                 profile
@@ -8057,6 +7964,19 @@ mod kagemusha_v4_artifact_contract_tests {
         tampered.profiles[0].circuit_params.num_fixed = 0;
         assert!(tampered.validate().is_err());
 
+        let mut separate_params_file = manifest.clone();
+        let mut rejected_artifact = separate_params_file.profiles[0].artifacts[0].clone();
+        rejected_artifact.file_name = ["step-eq.circuit-", "params.krv4"].concat();
+        rejected_artifact.sha256 = digest(b"rejected separate circuit parameters frame");
+        rejected_artifact.payload_sha256 = digest(b"rejected separate circuit parameters");
+        separate_params_file.profiles[0]
+            .artifacts
+            .insert(1, rejected_artifact);
+        assert!(
+            separate_params_file.validate().is_err(),
+            "a separate circuit-parameter file must not extend the exact inventory"
+        );
+
         let mut reordered = manifest;
         reordered.profiles[0].artifacts.swap(1, 2);
         assert!(reordered.validate().is_err());
@@ -8067,34 +7987,39 @@ mod kagemusha_v4_artifact_contract_tests {
         fn canonical_index(kind: KagemushaPastaCycleArtifactKindV4) -> usize {
             match kind {
                 KagemushaPastaCycleArtifactKindV4::Parameters => 0,
-                KagemushaPastaCycleArtifactKindV4::CircuitParams => 1,
-                KagemushaPastaCycleArtifactKindV4::ProvingKey => 2,
-                KagemushaPastaCycleArtifactKindV4::VerifyingKey => 3,
-                KagemushaPastaCycleArtifactKindV4::BootstrapWitness => 4,
+                KagemushaPastaCycleArtifactKindV4::ProvingKey => 1,
+                KagemushaPastaCycleArtifactKindV4::VerifyingKey => 2,
+                KagemushaPastaCycleArtifactKindV4::BootstrapWitness => 3,
             }
         }
 
         let kinds = [
             KagemushaPastaCycleArtifactKindV4::Parameters,
-            KagemushaPastaCycleArtifactKindV4::CircuitParams,
             KagemushaPastaCycleArtifactKindV4::ProvingKey,
             KagemushaPastaCycleArtifactKindV4::VerifyingKey,
             KagemushaPastaCycleArtifactKindV4::BootstrapWitness,
         ];
-        assert_eq!(kinds.map(canonical_index), [0, 1, 2, 3, 4]);
-        assert_eq!(KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_ROLES_V4.len(), 10);
+        assert_eq!(kinds.map(canonical_index), [0, 1, 2, 3]);
+        assert_eq!(KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_ROLES_V4.len(), 8);
         assert!(
             manifest()
                 .profiles
                 .iter()
-                .all(|profile| profile.artifacts.len() == 5)
+                .all(|profile| profile.artifacts.len() == 4)
         );
 
         let source = include_str!("mod.rs");
         assert!(source.contains("KagemushaPastaCycleFramedArtifactHeaderV4"));
-        assert!(source.contains("CircuitParams,"));
-        assert!(source.contains("CIRCUIT_PARAMS_FILE_NAME_V4"));
-        assert!(source.contains("circuit-params.krv4"));
+        for forbidden in [
+            concat!("Circuit", "Params,"),
+            concat!("CIRCUIT_", "PARAMS_FILE_NAME_V4"),
+            concat!("circuit-", "params.krv4"),
+        ] {
+            assert!(
+                !source.contains(forbidden),
+                "rejected V4 artifact contract marker is present: {forbidden}"
+            );
+        }
     }
 
     #[test]
@@ -8124,8 +8049,8 @@ mod kagemusha_v4_artifact_contract_tests {
                 .circuit_params
                 .sha256()
                 .expect("Ep params identity"),
-            step_eq_verifier_key_sha256: step_eq.artifacts[3].payload_sha256,
-            step_ep_verifier_key_sha256: step_ep.artifacts[3].payload_sha256,
+            step_eq_verifier_key_sha256: step_eq.artifacts[2].payload_sha256,
+            step_ep_verifier_key_sha256: step_ep.artifacts[2].payload_sha256,
             state_boundary: KagemushaRecursiveSpendStateBoundaryV1 {
                 layout_version: KAGEMUSHA_RECURSIVE_SPEND_STATE_BOUNDARY_VERSION_V1,
                 state_limbs,
@@ -8134,9 +8059,9 @@ mod kagemusha_v4_artifact_contract_tests {
         };
         envelope
             .validate_against_manifest(&manifest)
-            .expect("V4 envelope binds verifying-key role at index three");
+            .expect("V4 envelope binds verifying-key role at index two");
 
-        envelope.step_eq_verifier_key_sha256 = step_eq.artifacts[2].payload_sha256;
+        envelope.step_eq_verifier_key_sha256 = step_eq.artifacts[1].payload_sha256;
         assert!(envelope.validate_against_manifest(&manifest).is_err());
     }
 
@@ -8160,7 +8085,6 @@ mod kagemusha_v4_artifact_contract_tests {
 
         let mut params_tamper = manifest.clone();
         params_tamper.profiles[0].circuit_params.num_fixed += 1;
-        rebind_circuit_params_artifact(&mut params_tamper.profiles[0]);
         assert_ne!(
             second_subject,
             params_tamper
@@ -8168,7 +8092,7 @@ mod kagemusha_v4_artifact_contract_tests {
                 .expect("valid modified inline params subject")
         );
         let mut bootstrap_tamper = manifest.clone();
-        bootstrap_tamper.profiles[0].artifacts[4].payload_sha256[0] ^= 1;
+        bootstrap_tamper.profiles[0].artifacts[3].payload_sha256[0] ^= 1;
         assert_ne!(
             second_subject,
             bootstrap_tamper
@@ -8240,7 +8164,6 @@ mod kagemusha_v4_artifact_contract_tests {
 
         let mut signed_params_tamper = manifest.clone();
         signed_params_tamper.profiles[0].circuit_params.num_fixed += 1;
-        rebind_circuit_params_artifact(&mut signed_params_tamper.profiles[0]);
         assert_eq!(
             KagemushaAuthenticatedReleaseV4::verify(
                 &signed_params_tamper,
@@ -8252,7 +8175,7 @@ mod kagemusha_v4_artifact_contract_tests {
             Err(KagemushaReleaseVerificationError::InvalidAttestation)
         );
         let mut signed_bootstrap_tamper = manifest;
-        signed_bootstrap_tamper.profiles[0].artifacts[4].payload_sha256[0] ^= 1;
+        signed_bootstrap_tamper.profiles[0].artifacts[3].payload_sha256[0] ^= 1;
         assert_eq!(
             KagemushaAuthenticatedReleaseV4::verify(
                 &signed_bootstrap_tamper,
@@ -8294,7 +8217,7 @@ mod kagemusha_v4_artifact_contract_tests {
     }
 
     #[test]
-    fn v4_capabilities_require_exact_ten_roles_and_release_cap() {
+    fn v4_capabilities_require_exact_eight_roles_and_release_cap() {
         let mut capabilities = KagemushaRecursiveSpendNativeCapabilitiesV4 {
             bridge_abi_version: KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4,
             artifact_manifest_schema: KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V4

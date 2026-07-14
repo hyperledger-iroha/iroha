@@ -1327,6 +1327,7 @@ struct EagerAdmissionStateAccess<'view, W: WorldReadOnly> {
     world: &'view W,
     nexus: &'view Nexus,
     next_block_height: u64,
+    ledger_time_ms: u64,
 }
 
 fn transaction_rejection_detail(reason: &TransactionRejectionReason) -> String {
@@ -1343,11 +1344,13 @@ impl<W: WorldReadOnly> EagerAdmissionStateAccess<'_, W> {
         world: &'view W,
         nexus: &'view Nexus,
         next_block_height: u64,
+        ledger_time_ms: u64,
     ) -> EagerAdmissionStateAccess<'view, W> {
         EagerAdmissionStateAccess {
             world,
             nexus,
             next_block_height,
+            ledger_time_ms,
         }
     }
 }
@@ -1382,7 +1385,12 @@ impl<W: WorldReadOnly> QueueAdmissionStateAccess for EagerAdmissionStateAccess<'
         authority: &AccountId,
         lane_alias: &str,
     ) -> Result<Vec<iroha_data_model::domain::DomainId>, Error> {
-        Queue::extract_lane_authority_domains(self.world, authority, lane_alias)
+        Queue::extract_lane_authority_domains(
+            self.world,
+            authority,
+            lane_alias,
+            self.ledger_time_ms,
+        )
     }
 
     fn validate_confidential_policy_admission(
@@ -1472,6 +1480,9 @@ impl QueueAdmissionStateAccess for LazyAdmissionStateAccess<'_> {
             self.world.as_ref().expect("world initialized above"),
             authority,
             lane_alias,
+            self.state.latest_block_header_fast().map_or(0, |header| {
+                u64::try_from(header.creation_time().as_millis()).unwrap_or(u64::MAX)
+            }),
         )
     }
 
@@ -2553,8 +2564,9 @@ impl Queue {
         world: &impl WorldReadOnly,
         authority: &AccountId,
         lane_alias: &str,
+        now_ms: u64,
     ) -> Result<Vec<iroha_data_model::domain::DomainId>, Error> {
-        extract_directory_authority_domains(world, authority).map_err(|err| {
+        extract_directory_authority_domains(world, authority, now_ms).map_err(|err| {
             Error::LaneComplianceDenied {
                 alias: lane_alias.to_string(),
                 reason: format!("authority alias domain resolution failed: {err}"),
@@ -3956,6 +3968,9 @@ impl Queue {
             state_view.world(),
             &state_view.nexus,
             next_block_height,
+            state_view.latest_block().map_or(0, |block| {
+                u64::try_from(block.header().creation_time().as_millis()).unwrap_or(u64::MAX)
+            }),
         );
         self.push_checked_with_lane_context(
             checked,

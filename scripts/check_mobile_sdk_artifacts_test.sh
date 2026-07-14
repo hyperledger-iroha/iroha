@@ -113,7 +113,7 @@ make_fixture() {
   mkdir -p "$root/IrohaSwift/Sources/IrohaSwift"
   cat >"$root/IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendV4.swift" <<'SWIFT'
 enum KagemushaRecursiveSpendV4Fixture {
-    static func nativeCapabilitiesV4() {}
+    static func ensureProofBackendAvailableV4() {}
     static func initSpendV4() {}
     static func appendSpendV4() {}
     static func verifySpendV4() {}
@@ -128,6 +128,108 @@ enum KagemushaRecursiveSpendV4Fixture {
     ]
 }
 SWIFT
+  python3 - "$CHECK_SCRIPT" "$root" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+check_script = Path(sys.argv[1]).read_text(encoding="utf-8")
+root = Path(sys.argv[2])
+
+def shell_array(name: str) -> list[str]:
+    match = re.search(rf"^{name}=\(\n(.*?)^\)$", check_script, re.MULTILINE | re.DOTALL)
+    if match is None:
+        raise SystemExit(f"missing fixture array {name}")
+    return [
+        line.strip()
+        for line in match.group(1).splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+
+c_symbols = shell_array("KAGEMUSHA_C_SYMBOLS")
+jni_methods = shell_array("KAGEMUSHA_JNI_METHODS")
+native_lifecycle = (
+    "kagemushaRecursiveSpendAppendV4",
+    "kagemushaRecursiveSpendArtifactBeginV4",
+    "kagemushaRecursiveSpendArtifactCancelV4",
+    "kagemushaRecursiveSpendArtifactFinalizeV4",
+    "kagemushaRecursiveSpendArtifactSetInstallV4",
+    "kagemushaRecursiveSpendArtifactSetIsInstalledV4",
+    "kagemushaRecursiveSpendArtifactSetUninstallV4",
+    "kagemushaRecursiveSpendArtifactWriteV4",
+    "kagemushaRecursiveSpendCapabilitiesV4",
+    "kagemushaRecursiveSpendInitV4",
+    "kagemushaRecursiveSpendRedeemV4",
+    "kagemushaRecursiveSpendVerifyV4",
+)
+swift = root / "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendV2.swift"
+swift.write_text(
+    "\n".join(
+        [
+            *(f'let symbol_{index} = "{symbol}"' for index, symbol in enumerate(c_symbols)),
+            *(f"func {method}() {{}}" for method in native_lifecycle),
+        ]
+    )
+    + "\n",
+    encoding="utf-8",
+)
+
+bridge_dir = root / "crates/connect_norito_bridge"
+(bridge_dir / "src").mkdir(parents=True, exist_ok=True)
+(bridge_dir / "include").mkdir(parents=True, exist_ok=True)
+(bridge_dir / "include/connect_norito_bridge.h").write_text(
+    "\n".join(f"int {symbol}(void);" for symbol in c_symbols) + "\n",
+    encoding="utf-8",
+)
+rust_lines = [
+    "const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 20;",
+    *(f'pub unsafe extern "C" fn {symbol}() {{}}' for symbol in c_symbols),
+]
+for namespace in (
+    "org_hyperledger_iroha_sdk_offline",
+    "org_hyperledger_iroha_android_offline",
+):
+    rust_lines.extend(
+        f"fn Java_{namespace}_KagemushaRecursiveSpendProver_{method}() {{}}"
+        for method in jni_methods
+    )
+(bridge_dir / "src/lib.rs").write_text("\n".join(rust_lines) + "\n", encoding="utf-8")
+
+kotlin = root / (
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/"
+    "KagemushaRecursiveSpendProver.kt"
+)
+kotlin.parent.mkdir(parents=True, exist_ok=True)
+kotlin.write_text(
+    "\n".join(
+        [
+            *(f"fun {method}() {{}}" for method in (
+                "initSpendV4", "appendSpendV4", "verifySpendV4", "buildRedeemV4"
+            )),
+            *(f"private external fun {method}()" for method in jni_methods),
+        ]
+    )
+    + "\n",
+    encoding="utf-8",
+)
+java = root / (
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/"
+    "KagemushaRecursiveSpendProver.java"
+)
+java.parent.mkdir(parents=True, exist_ok=True)
+java.write_text(
+    "\n".join(
+        [
+            *(f"public static void {method}() {{}}" for method in (
+                "initSpendV4", "appendSpendV4", "verifySpendV4", "buildRedeemV4"
+            )),
+            *(f"private static native void {method}();" for method in jni_methods),
+        ]
+    )
+    + "\n",
+    encoding="utf-8",
+)
+PY
   cat >"$root/IrohaSwift/Package.swift" <<'SWIFT'
 // swift-tools-version:5.9
 import PackageDescription
@@ -401,6 +503,26 @@ fixture="$TMP_DIR/valid"
 make_fixture "$fixture"
 run_expect_pass "$fixture"
 
+sentinel_only_source="$TMP_DIR/sentinel-only-source"
+make_fixture "$sentinel_only_source"
+cat >>"$sentinel_only_source/crates/connect_norito_bridge/src/lib.rs" <<'RUST'
+const RETIRED_INPUT_SENTINEL: &str = "reject-kagemusha-v3";
+const TOPUP_SHIELD_CIRCUIT_ID: &str = "topup-shield-v3";
+RUST
+run_expect_pass "$sentinel_only_source"
+
+retired_header_surface="$TMP_DIR/retired-header-surface"
+make_fixture "$retired_header_surface"
+printf '%s\n' 'int connect_norito_kagemusha_recursive_spend_init_v3(void);' \
+  >>"$retired_header_surface/crates/connect_norito_bridge/include/connect_norito_bridge.h"
+run_expect_fail "$retired_header_surface" "bridge header exposes retired or unexpected Kagemusha declarations"
+
+retired_swift_binding="$TMP_DIR/retired-swift-binding"
+make_fixture "$retired_swift_binding"
+printf '%s\n' 'let retired = "connect_norito_kagemusha_recursive_spend_init_v3"' \
+  >>"$retired_swift_binding/IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendV2.swift"
+run_expect_fail "$retired_swift_binding" "Swift Kagemusha native symbol inventory is not exact ABI-20/V4"
+
 retired_swift_surface="$TMP_DIR/retired-swift-surface"
 make_fixture "$retired_swift_surface"
 cat >>"$retired_swift_surface/IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendV4.swift" <<'SWIFT'
@@ -408,7 +530,7 @@ public enum RetiredKagemushaRecursiveSpend {
     public static func initSpend() {}
 }
 SWIFT
-run_expect_fail "$retired_swift_surface" "Swift SDK retains callable retired Kagemusha surfaces"
+run_expect_fail "$retired_swift_surface" "Swift SDK retains an unversioned retired lifecycle wrapper"
 
 retired_bridge_source="$TMP_DIR/retired-bridge-source"
 make_fixture "$retired_bridge_source"
@@ -420,6 +542,25 @@ const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 20;
 pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_init_v3() {}
 RUST
 run_expect_fail "$retired_bridge_source" "retired or unexpected Kagemusha C exports"
+
+retired_kotlin_native="$TMP_DIR/retired-kotlin-native"
+make_fixture "$retired_kotlin_native"
+printf '%s\n' 'private external fun nativeArtifactBindingV3()' \
+  >>"$retired_kotlin_native/kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt"
+run_expect_fail "$retired_kotlin_native" "native method inventory is not exact ABI-20/V4" --android-only
+
+retired_java_native="$TMP_DIR/retired-java-native"
+make_fixture "$retired_java_native"
+printf '%s\n' 'private static native void nativeArtifactBindingV3();' \
+  >>"$retired_java_native/java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProver.java"
+run_expect_fail "$retired_java_native" "native method inventory is not exact ABI-20/V4" --android-only
+
+retired_rust_jni="$TMP_DIR/retired-rust-jni"
+make_fixture "$retired_rust_jni"
+printf '%s\n' \
+  'fn Java_org_hyperledger_iroha_sdk_offline_KagemushaRecursiveSpendProver_nativeArtifactBindingV3() {}' \
+  >>"$retired_rust_jni/crates/connect_norito_bridge/src/lib.rs"
+run_expect_fail "$retired_rust_jni" "Rust bridge exposes retired or unexpected Kagemusha JNI exports" --android-only
 
 wrong_bridge_abi="$TMP_DIR/wrong-bridge-abi"
 make_fixture "$wrong_bridge_abi"
