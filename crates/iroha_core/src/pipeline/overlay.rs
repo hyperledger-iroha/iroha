@@ -756,6 +756,54 @@ fn require_tx_gas_limit(tx: &SignedTransaction) -> Result<u64, OverlayBuildError
     })
 }
 
+pub(crate) fn sccp_ivm_proved_execution_binding<R>(
+    state_ro: &R,
+    tx: &SignedTransaction,
+    proved: &iroha_data_model::transaction::IvmProved,
+    gas_used: u64,
+) -> Result<crate::state::SccpIvmProvedExecutionBindingV1, OverlayBuildError>
+where
+    R: StateReadOnly,
+{
+    let gas_limit = require_tx_gas_limit(tx)?;
+    if gas_used > gas_limit {
+        return Err(OverlayBuildError::GasLimit(format!(
+            "proved IVM replay used {gas_used} gas above transaction limit {gas_limit}"
+        )));
+    }
+    let attachments = tx
+        .attachments()
+        .ok_or_else(|| OverlayBuildError::ZkProof("missing proof attachments".to_owned()))?;
+    let [attachment] = attachments.0.as_slice() else {
+        return Err(OverlayBuildError::ZkProof(
+            "Executable::IvmProved expects exactly one proof attachment".to_owned(),
+        ));
+    };
+    if attachment.backend != attachment.vk_ref.backend {
+        return Err(OverlayBuildError::ZkProof(
+            "proof attachment verifier-key backend mismatch".to_owned(),
+        ));
+    }
+    let vk_record = state_ro
+        .world()
+        .verifying_keys()
+        .get(&attachment.vk_ref)
+        .ok_or_else(|| {
+            OverlayBuildError::ZkProof(
+                "verified proof attachment key disappeared before SCCP execution binding"
+                    .to_owned(),
+            )
+        })?;
+    Ok(crate::state::SccpIvmProvedExecutionBindingV1 {
+        contract_artifact_sha256: Sha256::digest(proved.bytecode.as_ref()).into(),
+        vk_ref: attachment.vk_ref.clone(),
+        vk_version: vk_record.version,
+        vk_commitment: vk_record.commitment,
+        gas_limit,
+        gas_used,
+    })
+}
+
 #[cfg(test)]
 const TEST_GAS_LIMIT: u64 = 50_000_000;
 
@@ -1172,6 +1220,7 @@ pub struct TxOverlay {
     durable_state_overlay: BTreeMap<Name, Option<Vec<u8>>>,
     durable_state_authorizations: BTreeMap<Name, Option<ContractEntrypointAuthorizationSnapshot>>,
     source: TxOverlaySource,
+    sccp_ivm_proved_execution_binding: Option<crate::state::SccpIvmProvedExecutionBindingV1>,
     byte_size: OnceLock<usize>,
 }
 
@@ -1437,6 +1486,7 @@ impl TxOverlay {
             durable_state_overlay: BTreeMap::new(),
             durable_state_authorizations: BTreeMap::new(),
             source: TxOverlaySource::Instructions,
+            sccp_ivm_proved_execution_binding: None,
             byte_size: OnceLock::new(),
         }
     }
@@ -1466,6 +1516,7 @@ impl TxOverlay {
             durable_state_overlay: BTreeMap::new(),
             durable_state_authorizations: BTreeMap::new(),
             source: TxOverlaySource::IvmProved,
+            sccp_ivm_proved_execution_binding: None,
             byte_size: OnceLock::new(),
         }
     }
@@ -1482,6 +1533,7 @@ impl TxOverlay {
             durable_state_overlay: BTreeMap::new(),
             durable_state_authorizations: BTreeMap::new(),
             source: TxOverlaySource::Ivm,
+            sccp_ivm_proved_execution_binding: None,
             byte_size: OnceLock::new(),
         }
     }
@@ -1507,6 +1559,7 @@ impl TxOverlay {
             durable_state_overlay,
             durable_state_authorizations,
             source: TxOverlaySource::Ivm,
+            sccp_ivm_proved_execution_binding: None,
             byte_size: OnceLock::new(),
         }
     }
@@ -1533,6 +1586,7 @@ impl TxOverlay {
             durable_state_overlay,
             durable_state_authorizations,
             source: TxOverlaySource::ContractCall,
+            sccp_ivm_proved_execution_binding: None,
             byte_size: OnceLock::new(),
         }
     }
@@ -1568,8 +1622,18 @@ impl TxOverlay {
             durable_state_overlay,
             durable_state_authorizations,
             source,
+            sccp_ivm_proved_execution_binding: None,
             byte_size: OnceLock::new(),
         }
+    }
+
+    fn with_sccp_ivm_proved_execution_binding(
+        mut self,
+        binding: crate::state::SccpIvmProvedExecutionBindingV1,
+    ) -> Self {
+        debug_assert_eq!(self.source, TxOverlaySource::IvmProved);
+        self.sccp_ivm_proved_execution_binding = Some(binding);
+        self
     }
 
     fn from_ivm_proved_execution(
@@ -1786,8 +1850,9 @@ impl TxOverlay {
             }
             authorization.validate_instruction_sequence(authority, &self.instructions)?;
         }
-        let prior_sccp_recording_proof_verified = state_tx.sccp_recording_proof_verified;
-        state_tx.sccp_recording_proof_verified = self.source == TxOverlaySource::IvmProved;
+        let prior_sccp_ivm_proved_execution_binding =
+            state_tx.sccp_ivm_proved_execution_binding.clone();
+        state_tx.sccp_ivm_proved_execution_binding = self.sccp_ivm_proved_execution_binding.clone();
         let result = (|| -> Result<(), ValidationFail> {
             if self.source == TxOverlaySource::IvmProved {
                 crate::validation_fee::enforce_ivm_proved_completed_axt_admission(
@@ -1978,7 +2043,7 @@ impl TxOverlay {
             }
             Ok(())
         })();
-        state_tx.sccp_recording_proof_verified = prior_sccp_recording_proof_verified;
+        state_tx.sccp_ivm_proved_execution_binding = prior_sccp_ivm_proved_execution_binding;
         result
     }
 
@@ -2653,8 +2718,11 @@ where
             enforce_manifest_is_pre_registered(state_ro, tx, summary.code_hash)?;
 
             let replay = verify_ivm_proved_execution(state_ro, tx, proved, &summary)?;
+            let execution_binding =
+                sccp_ivm_proved_execution_binding(state_ro, tx, proved, replay.gas_used)?;
             let _ = gas_limit; // still required for admission (fees), even when skipping VM.
             Ok(tx_overlay_from_ivm_proved_replay(state_ro, replay)
+                .with_sccp_ivm_proved_execution_binding(execution_binding)
                 .with_entrypoint_authorization(Some(entrypoint_authorization)))
         }
     }
@@ -3225,9 +3293,12 @@ where
 
             enforce_manifest_is_pre_registered(state_ro, tx, summary.code_hash)?;
             let replay = verify_ivm_proved_execution(state_ro, tx, proved, &summary)?;
+            let execution_binding =
+                sccp_ivm_proved_execution_binding(state_ro, tx, proved, replay.gas_used)?;
             let access_log = replay.access_log.clone();
             Ok(PreparedTxOverlay::new(
                 tx_overlay_from_ivm_proved_replay(state_ro, replay)
+                    .with_sccp_ivm_proved_execution_binding(execution_binding)
                     .with_entrypoint_authorization(Some(entrypoint_authorization)),
                 access_log,
                 access_fence,
@@ -3724,7 +3795,7 @@ mod tests_overlay_manifest {
                     iroha_data_model::isi::error::InstructionExecutionError::InvariantViolation(
                         message,
                     ),
-                ) if message.contains("requires verified IVM proof")
+                ) if message.contains("structured verified IVM execution binding")
             ),
             "unexpected SCCP proof-authority error: {error:?}"
         );
@@ -3746,7 +3817,7 @@ mod tests_overlay_manifest {
             .apply(&mut state_tx, &authority)
             .expect_err("plain overlays must not record SCCP messages");
         assert_sccp_proof_gate(error);
-        assert!(!state_tx.sccp_recording_proof_verified);
+        assert!(state_tx.sccp_ivm_proved_execution_binding.is_none());
     }
 
     #[test]
@@ -3764,6 +3835,15 @@ mod tests_overlay_manifest {
         state_tx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
         let mut proved = TxOverlay::from_instructions(vec![malformed_sccp_record_instruction()]);
         proved.source = TxOverlaySource::IvmProved;
+        proved.sccp_ivm_proved_execution_binding =
+            Some(crate::state::SccpIvmProvedExecutionBindingV1 {
+                contract_artifact_sha256: [0xb1; 32],
+                vk_ref: VerifyingKeyId::new("stark/fri/v1", "ivm-execution-v1"),
+                vk_version: 1,
+                vk_commitment: [0xb2; 32],
+                gas_limit: 50_000_000,
+                gas_used: 1,
+            });
 
         let proved_error = proved
             .apply(&mut state_tx, &authority)
@@ -3780,7 +3860,7 @@ mod tests_overlay_manifest {
             "proved overlay did not receive scoped SCCP proof authority: {proved_error:?}"
         );
         assert!(
-            !state_tx.sccp_recording_proof_verified,
+            state_tx.sccp_ivm_proved_execution_binding.is_none(),
             "failed proved overlay must restore SCCP proof authority"
         );
 

@@ -67,6 +67,7 @@ import {
   normalizeSccpProofRequest,
   normalizeSccpRecentMessages,
   normalizeSccpRegistry,
+  normalizeSccpSoraOutboundMaterial,
   normalizeSccpRouteGovernanceAction,
   parseSccpJsonObject,
   parseSccpBridgeSubmitResponseJson,
@@ -5927,6 +5928,38 @@ export class ToriiClient {
       response,
       normalizeSccpRegistry,
       "SCCP registry",
+      SCCP_JSON_RESPONSE_MAX_BYTES,
+    );
+  }
+
+  /**
+   * Fetch the governance-derived SORA-side IVM material for one exact enabled
+   * route. The response is cryptographically bound to its artifact SHA-256 and
+   * to the requested route key; callers cannot select bytecode, VK, or gas.
+   * @param {{sourceProfile: string, routeId: string, assetKey: string, revision: number}} route
+   * @param {{signal?: AbortSignal}} [options]
+   * @returns {Promise<object>}
+   */
+  async getSccpSoraOutboundMaterial(route, options = {}) {
+    const exactRoute = normalizeSccpSoraOutboundMaterialRoute(
+      route,
+      "getSccpSoraOutboundMaterial.route",
+    );
+    const { signal } = normalizeSignalOnlyOption(options, "getSccpSoraOutboundMaterial");
+    const response = await this._request(
+      "GET",
+      `/v1/sccp/routes/${encodeURIComponent(exactRoute.sourceProfile)}/${encodeURIComponent(exactRoute.routeId)}/${encodeURIComponent(exactRoute.assetKey)}/${exactRoute.revision}/sora-outbound-material`,
+      { headers: JSON_ACCEPT_HEADERS, signal },
+    );
+    await this._expectStatus(response, [200], {
+      maximumBodyBytes: SCCP_JSON_RESPONSE_MAX_BYTES,
+      responseLabel: "SCCP SORA outbound material",
+      signal,
+    });
+    return readSccpJsonResponse(
+      response,
+      (payload) => normalizeSccpSoraOutboundMaterial(payload, exactRoute),
+      "SCCP SORA outbound material",
       SCCP_JSON_RESPONSE_MAX_BYTES,
     );
   }
@@ -15317,6 +15350,7 @@ function parseSumeragiStatusPayload(payload) {
     "last_committed_subject",
     "height_context",
     "last_commit_qc",
+    "liveness",
     "safety_halt",
     "lane_settlement_commitments",
     "lane_relay_envelopes",
@@ -15340,6 +15374,10 @@ function parseSumeragiStatusPayload(payload) {
   }
   const height = parseSumeragiUnsigned(record.height, "sumeragi.height");
   const view = parseSumeragiUnsigned(record.view, "sumeragi.view");
+  const heightContextId = parseSumeragiContextId(
+    record.height_context_id,
+    "sumeragi.height_context_id",
+  );
   const leader = parseSumeragiUnsigned(record.leader, "sumeragi.leader", {
     max: 0xffffffff,
   });
@@ -15357,6 +15395,12 @@ function parseSumeragiStatusPayload(payload) {
   if (leader >= heightContext.validator_count) {
     throw new RangeError("sumeragi.leader must index the frozen validator roster");
   }
+  const liveness = parseSumeragiLivenessStatus(record.liveness, "sumeragi.liveness", {
+    height,
+    view,
+    contextId: heightContextId,
+    heightContext,
+  });
 
   const lastCommittedHeight = parseSumeragiUnsigned(
     record.last_committed_height,
@@ -15424,10 +15468,7 @@ function parseSumeragiStatusPayload(payload) {
       "sumeragi.config_fingerprint",
     ),
     restart_required: restartRequired,
-    height_context_id: parseSumeragiContextId(
-      record.height_context_id,
-      "sumeragi.height_context_id",
-    ),
+    height_context_id: heightContextId,
     height,
     view,
     phase: parseSumeragiTaggedUnit(
@@ -15482,6 +15523,7 @@ function parseSumeragiStatusPayload(payload) {
     last_committed_subject: lastCommittedSubject,
     height_context: heightContext,
     last_commit_qc: lastCommitQc,
+    liveness,
     safety_halt: safetyHalt,
     lane_settlement_commitments: laneSettlementCommitments,
     lane_relay_envelopes: laneRelayEnvelopes,
@@ -15493,6 +15535,416 @@ function parseSumeragiStatusPayload(payload) {
       "sumeragi.local_peer_removed",
     ),
     operator,
+  });
+}
+
+function parseSumeragiLivenessStatus(value, context, active) {
+  const record = ensureRecord(value, context);
+  const fields = new Set([
+    "generation",
+    "prepare_quorums",
+    "commit_quorums",
+    "timeout_quorums",
+    "outbound_intents",
+    "work",
+    "queues",
+    "last_progress",
+    "no_progress_age_ms",
+    "blocker",
+    "ignore_counts",
+  ]);
+  const unknown = Object.keys(record).find((field) => !fields.has(field));
+  if (unknown !== undefined) {
+    throw new TypeError(`${context} contains unknown field ${unknown}`);
+  }
+  for (const field of fields) {
+    if (field !== "last_progress" && field !== "blocker" &&
+        !Object.prototype.hasOwnProperty.call(record, field)) {
+      throw new TypeError(`${context} is missing required field ${field}`);
+    }
+  }
+
+  const generation = parseSumeragiUnsigned(record.generation, `${context}.generation`);
+  const checkedRound = (raw, roundContext) => {
+    const round = parseSumeragiRound(raw, roundContext);
+    if (
+      round.context_id[0] !== active.contextId[0] ||
+      round.height !== active.height
+    ) {
+      throw new TypeError(`${roundContext} must match the active height context`);
+    }
+    if (round.view > active.view) {
+      throw new RangeError(`${roundContext}.view must not exceed the active view`);
+    }
+    return round;
+  };
+  const checkedPartialQuorum = (raw, itemContext, { timeout = false } = {}) => {
+    const expectedFields = timeout
+      ? [
+          "round",
+          "signer_count",
+          "signed_power",
+          "min_signers",
+          "total_power",
+          "certificate_formed",
+        ]
+      : [
+          "round",
+          "subject",
+          "execution_commitment",
+          "signer_count",
+          "signed_power",
+          "min_signers",
+          "total_power",
+        ];
+    const item = assertExactSumeragiRecord(raw, expectedFields, itemContext);
+    const signerCount = parseSumeragiUnsigned(
+      item.signer_count,
+      `${itemContext}.signer_count`,
+      { max: active.heightContext.validator_count },
+    );
+    const signedPower = parseSumeragiUnsigned(
+      item.signed_power,
+      `${itemContext}.signed_power`,
+    );
+    const minSigners = parseSumeragiUnsigned(
+      item.min_signers,
+      `${itemContext}.min_signers`,
+    );
+    const totalPower = parseSumeragiUnsigned(
+      item.total_power,
+      `${itemContext}.total_power`,
+      { positive: true },
+    );
+    if (
+      minSigners !== active.heightContext.quorum.min_signers ||
+      totalPower !== active.heightContext.quorum.total_power ||
+      signedPower < signerCount ||
+      signedPower > totalPower ||
+      (active.heightContext.mode.mode === "permissioned" && signedPower !== signerCount)
+    ) {
+      throw new RangeError(`${itemContext} disagrees with the frozen dual quorum`);
+    }
+    const round = checkedRound(item.round, `${itemContext}.round`);
+    if (timeout) {
+      const certificateFormed = parseSumeragiBoolean(
+        item.certificate_formed,
+        `${itemContext}.certificate_formed`,
+      );
+      if (
+        certificateFormed &&
+        (signerCount < minSigners || BigInt(signedPower) * 3n <= BigInt(totalPower) * 2n)
+      ) {
+        throw new RangeError(`${itemContext} does not form its advertised dual quorum`);
+      }
+      return Object.freeze({
+        round,
+        signer_count: signerCount,
+        signed_power: signedPower,
+        min_signers: minSigners,
+        total_power: totalPower,
+        certificate_formed: certificateFormed,
+      });
+    }
+    return Object.freeze({
+      round,
+      subject: parseSumeragiBlockSubject(item.subject, `${itemContext}.subject`),
+      execution_commitment: parseSumeragiExecutionCommitment(
+        item.execution_commitment,
+        `${itemContext}.execution_commitment`,
+      ),
+      signer_count: signerCount,
+      signed_power: signedPower,
+      min_signers: minSigners,
+      total_power: totalPower,
+    });
+  };
+  const voteQuorums = (field) => Object.freeze(
+    assertSumeragiArrayBound(record[field], 128, `${context}.${field}`).map(
+      (item, index) => checkedPartialQuorum(item, `${context}.${field}[${index}]`),
+    ),
+  );
+  const timeoutQuorums = Object.freeze(
+    assertSumeragiArrayBound(
+      record.timeout_quorums,
+      128,
+      `${context}.timeout_quorums`,
+    ).map((item, index) => checkedPartialQuorum(
+      item,
+      `${context}.timeout_quorums[${index}]`,
+      { timeout: true },
+    )),
+  );
+
+  const subjectKinds = new Set([
+    "proposal",
+    "prepare_vote",
+    "commit_vote",
+    "prepare_qc",
+    "commit_qc",
+  ]);
+  const outboundIntents = Object.freeze(
+    assertSumeragiArrayBound(
+      record.outbound_intents,
+      7,
+      `${context}.outbound_intents`,
+    ).map((raw, index) => {
+      const itemContext = `${context}.outbound_intents[${index}]`;
+      const item = ensureRecord(raw, itemContext);
+      const allowedFields = new Set([
+        "kind",
+        "round",
+        "subject",
+        "execution_commitment",
+        "stage",
+      ]);
+      const unknownField = Object.keys(item).find((field) => !allowedFields.has(field));
+      if (unknownField !== undefined) {
+        throw new TypeError(`${itemContext} contains unknown field ${unknownField}`);
+      }
+      for (const field of ["kind", "round", "stage"]) {
+        if (!Object.prototype.hasOwnProperty.call(item, field)) {
+          throw new TypeError(`${itemContext} is missing required field ${field}`);
+        }
+      }
+      const kind = parseSumeragiTaggedUnit(
+        item.kind,
+        "kind",
+        [
+          "proposal",
+          "prepare_vote",
+          "commit_vote",
+          "timeout_vote",
+          "prepare_qc",
+          "commit_qc",
+          "timeout_certificate",
+        ],
+        `${itemContext}.kind`,
+      );
+      const stage = parseSumeragiTaggedUnit(
+        item.stage,
+        "stage",
+        ["pending_persistence", "pending_signature", "queued", "sent"],
+        `${itemContext}.stage`,
+      );
+      const subject = item.subject == null
+        ? null
+        : parseSumeragiBlockSubject(item.subject, `${itemContext}.subject`);
+      const executionCommitment = item.execution_commitment == null
+        ? null
+        : parseSumeragiExecutionCommitment(
+            item.execution_commitment,
+            `${itemContext}.execution_commitment`,
+          );
+      const shapeIsValid =
+        (kind.kind === "proposal" && subject !== null && executionCommitment === null) ||
+        (subjectKinds.has(kind.kind) && kind.kind !== "proposal" &&
+          subject !== null && executionCommitment !== null) ||
+        (!subjectKinds.has(kind.kind) && subject === null && executionCommitment === null);
+      if (!shapeIsValid) {
+        throw new TypeError(`${itemContext} has inconsistent proposal fields`);
+      }
+      return Object.freeze({
+        kind,
+        round: checkedRound(item.round, `${itemContext}.round`),
+        subject,
+        execution_commitment: executionCommitment,
+        stage,
+      });
+    }),
+  );
+
+  const workRecord = assertExactSumeragiRecord(
+    record.work,
+    ["candidate", "body_recovery", "body_store", "validation", "application", "successor_height"],
+    `${context}.work`,
+  );
+  const work = Object.freeze(Object.fromEntries(
+    Object.keys(workRecord).map((field) => [
+      field,
+      parseSumeragiTaggedUnit(
+        workRecord[field],
+        "stage",
+        ["idle", "queued", "running", "complete"],
+        `${context}.work.${field}`,
+      ),
+    ]),
+  ));
+
+  const queueNames = new Set();
+  const queues = Object.freeze(
+    assertSumeragiArrayBound(record.queues, 9, `${context}.queues`).map((raw, index) => {
+      const itemContext = `${context}.queues[${index}]`;
+      const item = ensureRecord(raw, itemContext);
+      const allowedFields = new Set([
+        "queue",
+        "depth",
+        "capacity",
+        "oldest_age_ms",
+        "service_debt",
+      ]);
+      const unknownField = Object.keys(item).find((field) => !allowedFields.has(field));
+      if (unknownField !== undefined) {
+        throw new TypeError(`${itemContext} contains unknown field ${unknownField}`);
+      }
+      for (const field of ["queue", "depth", "capacity", "service_debt"]) {
+        if (!Object.prototype.hasOwnProperty.call(item, field)) {
+          throw new TypeError(`${itemContext} is missing required field ${field}`);
+        }
+      }
+      const queue = parseSumeragiTaggedUnit(
+        item.queue,
+        "queue",
+        [
+          "ingress",
+          "deferred_normal",
+          "deferred_progress",
+          "deferred_completion",
+          "runtime_normal",
+          "runtime_progress",
+          "runtime_completion",
+          "effect_completion",
+          "network_ingress",
+        ],
+        `${itemContext}.queue`,
+      );
+      if (queueNames.has(queue.queue)) {
+        throw new TypeError(`${itemContext}.queue is duplicated`);
+      }
+      queueNames.add(queue.queue);
+      const depth = parseSumeragiUnsigned(item.depth, `${itemContext}.depth`);
+      const capacity = parseSumeragiUnsigned(item.capacity, `${itemContext}.capacity`, {
+        positive: true,
+      });
+      const oldestAge = item.oldest_age_ms == null
+        ? null
+        : parseSumeragiUnsigned(item.oldest_age_ms, `${itemContext}.oldest_age_ms`);
+      if (depth > capacity || ((depth === 0) !== (oldestAge === null))) {
+        throw new RangeError(`${itemContext} has inconsistent occupancy and age`);
+      }
+      return Object.freeze({
+        queue,
+        depth,
+        capacity,
+        oldest_age_ms: oldestAge,
+        service_debt: parseSumeragiUnsigned(
+          item.service_debt,
+          `${itemContext}.service_debt`,
+        ),
+      });
+    }),
+  );
+
+  let lastProgress = null;
+  if (record.last_progress != null) {
+    const progress = assertExactSumeragiRecord(
+      record.last_progress,
+      ["generation", "round", "transition", "age_ms"],
+      `${context}.last_progress`,
+    );
+    const progressGeneration = parseSumeragiUnsigned(
+      progress.generation,
+      `${context}.last_progress.generation`,
+    );
+    if (progressGeneration > generation) {
+      throw new RangeError(`${context}.last_progress.generation is from the future`);
+    }
+    lastProgress = Object.freeze({
+      generation: progressGeneration,
+      round: checkedRound(progress.round, `${context}.last_progress.round`),
+      transition: parseSumeragiTaggedUnit(
+        progress.transition,
+        "transition",
+        [
+          "proposal_admitted",
+          "body_available",
+          "body_stored",
+          "body_validated",
+          "prepare_vote_admitted",
+          "commit_vote_admitted",
+          "timeout_vote_admitted",
+          "prepare_quorum",
+          "lock_installed",
+          "commit_quorum",
+          "timeout_certificate_installed",
+          "decision_persisted",
+          "applied",
+          "successor_height_activated",
+          "recovery_replayed",
+        ],
+        `${context}.last_progress.transition`,
+      ),
+      age_ms: parseSumeragiUnsigned(progress.age_ms, `${context}.last_progress.age_ms`),
+    });
+  }
+  const blocker = record.blocker == null
+    ? null
+    : parseSumeragiTaggedUnit(
+        record.blocker,
+        "blocker",
+        [
+          "missing_proposal",
+          "body_unavailable",
+          "prepare_quorum_missing",
+          "commit_quorum_missing",
+          "timeout_certificate_missing",
+          "scheduler_starvation",
+          "application_pending",
+        ],
+        `${context}.blocker`,
+      );
+
+  const ignoreReasons = new Set();
+  const ignoreCounts = Object.freeze(
+    assertSumeragiArrayBound(record.ignore_counts, 11, `${context}.ignore_counts`).map(
+      (raw, index) => {
+        const itemContext = `${context}.ignore_counts[${index}]`;
+        const item = assertExactSumeragiRecord(raw, ["reason", "count"], itemContext);
+        const reason = parseSumeragiTaggedUnit(
+          item.reason,
+          "reason",
+          [
+            "wrong_height",
+            "wrong_view",
+            "stale_generation",
+            "busy",
+            "duplicate",
+            "no_matching_work",
+            "observer",
+            "view_closed",
+            "already_decided",
+            "recovery_pending",
+            "irrelevant_view",
+          ],
+          `${itemContext}.reason`,
+        );
+        if (ignoreReasons.has(reason.reason)) {
+          throw new TypeError(`${itemContext}.reason is duplicated`);
+        }
+        ignoreReasons.add(reason.reason);
+        return Object.freeze({
+          reason,
+          count: parseSumeragiUnsigned(item.count, `${itemContext}.count`),
+        });
+      },
+    ),
+  );
+
+  return Object.freeze({
+    generation,
+    prepare_quorums: voteQuorums("prepare_quorums"),
+    commit_quorums: voteQuorums("commit_quorums"),
+    timeout_quorums: timeoutQuorums,
+    outbound_intents: outboundIntents,
+    work,
+    queues,
+    last_progress: lastProgress,
+    no_progress_age_ms: parseSumeragiUnsigned(
+      record.no_progress_age_ms,
+      `${context}.no_progress_age_ms`,
+    ),
+    blocker,
+    ignore_counts: ignoreCounts,
   });
 }
 
@@ -30850,6 +31302,55 @@ function normalizeSccpMessageIdPath(value, context) {
     throw new TypeError(`${context} must be canonical lowercase nonzero 32-byte hex`);
   }
   return value;
+}
+
+const SCCP_EXTERNAL_ROUTE_PROFILES = new Set([
+  "ethereum-mainnet",
+  "ethereum-sepolia",
+  "bsc-mainnet",
+  "bsc-testnet",
+  "solana-testnet",
+  "tron-mainnet",
+  "tron-nile",
+  "tron-shasta",
+]);
+const SCCP_ROUTE_KEY_SEGMENT = /^[a-z0-9](?:[a-z0-9_-]{0,62}[a-z0-9])?$/u;
+
+function normalizeSccpSoraOutboundMaterialRoute(value, context) {
+  const record = requirePlainObjectOption(value, context, {
+    message: "must be a plain object",
+  });
+  const expectedFields = ["sourceProfile", "routeId", "assetKey", "revision"];
+  const unknown = Object.keys(record).find((field) => !expectedFields.includes(field));
+  if (unknown !== undefined) {
+    throw new TypeError(`${context} contains unknown field \`${unknown}\``);
+  }
+  for (const field of expectedFields) {
+    if (!Object.prototype.hasOwnProperty.call(record, field)) {
+      throw new TypeError(`${context} is missing required field \`${field}\``);
+    }
+  }
+  if (!SCCP_EXTERNAL_ROUTE_PROFILES.has(record.sourceProfile)) {
+    throw new TypeError(`${context}.sourceProfile is not one exact external SCCP profile`);
+  }
+  for (const field of ["routeId", "assetKey"]) {
+    if (typeof record[field] !== "string" || !SCCP_ROUTE_KEY_SEGMENT.test(record[field])) {
+      throw new TypeError(`${context}.${field} must be canonical lowercase route text`);
+    }
+  }
+  if (
+    !Number.isSafeInteger(record.revision) ||
+    record.revision < 1 ||
+    record.revision > 0xffff_ffff
+  ) {
+    throw new TypeError(`${context}.revision must be a nonzero uint32`);
+  }
+  return Object.freeze({
+    sourceProfile: record.sourceProfile,
+    routeId: record.routeId,
+    assetKey: record.assetKey,
+    revision: record.revision,
+  });
 }
 
 function normalizeSccpTypedReadOptions(options, context) {

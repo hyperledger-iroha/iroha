@@ -2310,6 +2310,11 @@ pub mod sumeragi {
     /// Read the authoritative SCCP route registry.
     pub const SCCP_REGISTRY: RouteDescriptor =
         public_sccp_get("sccp.registry.read", "/v1/sccp/registry");
+    /// Read the exact registered SORA-side IVM material for one enabled route.
+    pub const SCCP_SORA_OUTBOUND_MATERIAL: RouteDescriptor = public_sccp_get(
+        "sccp.sora_outbound_material.read",
+        "/v1/sccp/routes/{source_profile}/{route_id}/{asset_key}/{revision}/sora-outbound-material",
+    );
     /// Read one epoch's VRF penalty state.
     pub const VRF_PENALTIES: RouteDescriptor = public_get(
         "sumeragi.vrf.penalty.read",
@@ -2403,6 +2408,7 @@ pub mod sumeragi {
         SCCP_MESSAGES_RECENT,
         SCCP_CAPABILITIES,
         SCCP_REGISTRY,
+        SCCP_SORA_OUTBOUND_MATERIAL,
         VRF_PENALTIES,
         VRF_EPOCH,
         STATUS,
@@ -3740,6 +3746,10 @@ pub mod contracts_and_verification_keys {
         .with_cors_options(true)
     }
 
+    const fn app_signed_get(id: &'static str, path: &'static str) -> RouteDescriptor {
+        app_get(id, path).with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
+    }
+
     const fn app_post(id: &'static str, path: &'static str) -> RouteDescriptor {
         RouteDescriptor::new(
             id,
@@ -3812,7 +3822,7 @@ pub mod contracts_and_verification_keys {
     }
 
     declare_routes! {
-        CONTRACTS_CODE_BYTES_BY_CODE_HASH_GET => app_get("contracts.contracts_code_bytes_by_code_hash_get", "/v1/contracts/code-bytes/{code_hash}");
+        CONTRACTS_CODE_BYTES_BY_CODE_HASH_GET => app_signed_get("contracts.contracts_code_bytes_by_code_hash_get", "/v1/contracts/code-bytes/{code_hash}");
         CONTRACTS_ALIASES_POST => app_post("contracts.contracts_aliases_post", "/v1/contracts/aliases");
         CONTRACTS_ALIASES_RESOLVE_POST => app_signed_post("contracts.contracts_aliases_resolve_post", "/v1/contracts/aliases/resolve");
         ASSETS_TRANSFER_POST => app_post("assets.assets_transfer_post", "/v1/assets/transfer");
@@ -3830,9 +3840,9 @@ pub mod contracts_and_verification_keys {
         MULTISIG_PROPOSE_POST => app_post("contracts.multisig_propose_post", "/v1/multisig/propose");
         MULTISIG_APPROVE_POST => app_post("contracts.multisig_approve_post", "/v1/multisig/approve");
         MULTISIG_CANCEL_POST => app_post("contracts.multisig_cancel_post", "/v1/multisig/cancel");
-        MULTISIG_SPEC_POST => app_post("contracts.multisig_spec_post", "/v1/multisig/spec");
-        MULTISIG_PROPOSALS_QUERY_POST => app_post("contracts.multisig_proposals_query_post", "/v1/multisig/proposals/query");
-        MULTISIG_PROPOSALS_RESOLVE_POST => app_post("contracts.multisig_proposals_resolve_post", "/v1/multisig/proposals/resolve");
+        MULTISIG_SPEC_POST => app_signed_post("contracts.multisig_spec_post", "/v1/multisig/spec");
+        MULTISIG_PROPOSALS_QUERY_POST => app_signed_post("contracts.multisig_proposals_query_post", "/v1/multisig/proposals/query");
+        MULTISIG_PROPOSALS_RESOLVE_POST => app_signed_post("contracts.multisig_proposals_resolve_post", "/v1/multisig/proposals/resolve");
         CONTROLS_ASSET_TRANSFER_QUERY_POST => app_post("contracts.controls_asset_transfer_query_post", "/v1/controls/asset-transfer/query");
         ZK_VK_REGISTER_POST => app_sdk_post("contracts.zk_vk_register_post", "/v1/zk/vk/register");
         ZK_VK_UPDATE_POST => app_sdk_post("contracts.zk_vk_update_post", "/v1/zk/vk/update");
@@ -4171,6 +4181,7 @@ pub const CATALOGED_ROUTES: &[RouteDescriptor] = &[
     sumeragi::SCCP_MESSAGES_RECENT,
     sumeragi::SCCP_CAPABILITIES,
     sumeragi::SCCP_REGISTRY,
+    sumeragi::SCCP_SORA_OUTBOUND_MATERIAL,
     sumeragi::VRF_PENALTIES,
     sumeragi::VRF_EPOCH,
     sumeragi::STATUS,
@@ -5108,6 +5119,7 @@ mod tests {
             EnabledFeatures::new(&["app_api"]),
         );
         for unsupported_path in [
+            "/v1/multisig/proposals/lookup",
             "/v1/multisig/proposals/list",
             "/v1/multisig/proposals/get",
             "/v1/multisig/proposals/search",
@@ -5115,6 +5127,10 @@ mod tests {
             "/v1/multisig/approvals/get",
             "/v1/multisig/approvals/list_for_authority",
             "/v1/multisig/approvals/get_for_authority",
+            "/v1/multisig/approvals/query",
+            "/v1/multisig/approvals/lookup",
+            "/v1/multisig/approvals/query-for-authority",
+            "/v1/multisig/approvals/lookup-for-authority",
             "/v1/controls/asset-transfer/get",
             "/v1/nexus/public_lanes/{lane_id}/validators",
             "/v1/sorafs/capacity/por-challenge",
@@ -5138,12 +5154,7 @@ mod tests {
         for canonical_path in [
             "/v1/assets/transfer",
             "/v1/multisig/proposals/query",
-            "/v1/multisig/proposals/lookup",
             "/v1/multisig/proposals/resolve",
-            "/v1/multisig/approvals/query",
-            "/v1/multisig/approvals/lookup",
-            "/v1/multisig/approvals/query-for-authority",
-            "/v1/multisig/approvals/lookup-for-authority",
             "/v1/controls/asset-transfer/query",
             "/v1/nexus/public-lanes/{lane_id}/validators",
         ] {
@@ -5156,6 +5167,20 @@ mod tests {
 
     #[test]
     fn contract_and_application_route_policies_are_projection_safe() {
+        for route in [
+            contracts_and_verification_keys::CONTRACTS_CODE_BYTES_BY_CODE_HASH_GET,
+            contracts_and_verification_keys::MULTISIG_SPEC_POST,
+            contracts_and_verification_keys::MULTISIG_PROPOSALS_QUERY_POST,
+            contracts_and_verification_keys::MULTISIG_PROPOSALS_RESOLVE_POST,
+        ] {
+            assert_eq!(
+                route.authentication(),
+                AuthenticationPolicy::CanonicalAccountSignature,
+                "{}",
+                route.stable_route_id()
+            );
+        }
+
         for route in [
             contracts_and_verification_keys::SORAFS_CAPACITY_POR_PROOF_POST,
             contracts_and_verification_keys::SORAFS_CAPACITY_POR_VERDICT_POST,

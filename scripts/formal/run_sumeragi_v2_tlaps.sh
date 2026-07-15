@@ -18,6 +18,7 @@ readonly DEFAULT_TLAPM="${REPO_ROOT}/target/tlapm/toolchains/${TLAPM_COMMIT}/${d
 readonly TLAPM_BIN="${TLAPM_BIN:-$DEFAULT_TLAPM}"
 readonly LOG_DIR="${EVIDENCE_DIR}/tlaps"
 readonly TLAPM_THREADS="${SUMERAGI_TLAPS_THREADS:-4}"
+readonly TLAPM_COMPLETION_PATTERN='^\[INFO\]: All [1-9][0-9]* obligation(s)? proved\.$'
 
 [[ -x "$TLAPM_BIN" ]] || {
   echo "pinned TLAPM ${TLAPM_COMMIT} is required at ${TLAPM_BIN}" >&2
@@ -49,6 +50,12 @@ for module in "${proof_modules[@]}"; do
     cd "$FORMAL_DIR"
     "$TLAPM_BIN" "${args[@]}" "${module}.tla"
   ) 2>&1 | tee "${LOG_DIR}/${module}.log"
+  completion_count="$(grep -Ec "$TLAPM_COMPLETION_PATTERN" "${LOG_DIR}/${module}.log" || true)"
+  if [[ "$completion_count" != 1 ]] \
+    || ! tail -n 1 "${LOG_DIR}/${module}.log" | grep -Eq "$TLAPM_COMPLETION_PATTERN"; then
+    echo "TLAPM did not report exact strict completion for ${module}" >&2
+    exit 1
+  fi
   current_source_manifest_sha256="$(
     python3 "$CHECKER" --print-source-manifest-sha256
   )"

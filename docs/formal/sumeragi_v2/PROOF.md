@@ -23,8 +23,10 @@ durable rules enforced by the reducer and WAL:
    and signing Prepare;
 3. they atomically persist a PrepareQC lock and Commit intent before signing
    Commit;
-4. a durable timeout intent prevents later Proposal, Prepare, or Commit signing
-   in that view;
+4. a durable timeout intent prevents later Proposal or Prepare signing and
+   prevents creation of a new Commit intent in that view; an already-durable
+   Commit may be re-signed or retransmitted only when its round and subject are
+   still the validator's exact active Prepare lock;
 5. a TC is durable before view entry, and a decision is durable before apply;
 6. a lock is retained for the same subject and can change subject only through
    a strictly higher PrepareQC; and
@@ -155,7 +157,10 @@ after acknowledgement replays the intent, lock, TC, or decision before ingress
 opens. Earlier corruption, a broken hash chain, or a chain/protocol/key mismatch
 fails closed. Generation tags reject completions from the crashed incarnation.
 The replay transition checks the same uniqueness and monotonicity predicates as
-the live transition.
+the live transition. Prepare replay remains current-view and timeout-fenced.
+Commit replay may cross that timeout or a later installed TC only for the exact
+durable vote at the active lock's round and subject; it cannot authorize an
+unlocked historical Commit intent.
 
 **Theorem 3 (epoch-boundary safety).** Certificates from one epoch cannot vote
 in another, and a roster/power change cannot invalidate an earlier decision.
@@ -180,23 +185,51 @@ duration. The immutable view-zero timeout is positive and view `v` receives
 `base * (v + 1)` (saturating only at that representation limit), so the model
 derives rather than assumes a later view whose timeout exceeds the rank.
 
-**Lemma 7 (bounded scheduler and transport service).** A Byzantine flood cannot
+The claim is conditional and per height: after GST, with a responsive dual
+quorum and terminating local work, every height eventually decides and every
+responsive validator eventually applies it. No claim covers an unbounded
+partition, loss of either quorum threshold, or local work that never returns.
+
+**Lemma 7 (generation-scoped locked-vote delivery).** Clearing a volatile vote
+pool cannot orphan the exact durable locked Commit intent.
+
+Authenticated vote history is immutable and distinct from the volatile receipt
+pool. An exact vote already present in that pool is suppressed. Persisting a TC
+clears only the installing node's pool and advances its reducer generation
+(until the finite model's generation bound), while retaining signed Commit
+control. A retransmitted historical Commit vote is admissible only when its
+round and subject equal the active durable Prepare lock; it is then classified
+as protected progress and consumes the new pool epoch exactly once. Prepare
+votes and unrelated old Commit votes remain inadmissible. If a crash happened
+after the Commit intent became durable but before its signature or broadcast,
+`ResumeVote` reconstructs that same exact locked Commit even after the timeout
+or TC; it never reconstructs a new Commit intent.
+
+**Lemma 8 (bounded scheduler and transport service).** A Byzantine flood cannot
 starve an authenticated responsive source or an admitted progress/completion
 command.
 
-Each recipient/source lane is bounded and the transport cursor visits every
-lane in roster order. Its exact remaining rank is the number of source slots
-left in the current recipient plus one full source roster for each remaining
-recipient; alternating ingress and transport contributes a factor of two. The
-runtime queue reserves separate normal, progress, and completion capacity.
+Each recipient/source lane is bounded and the ready queue rotates every
+non-empty source. Within the selected source, ingress removes the oldest
+currently admissible entry; an auxiliary request waiting for I/O capacity
+therefore cannot hide later consensus or certified-body progress, and every
+earlier blocked entry remains in its original order. Exact authenticated
+envelopes coalesce while an equal occurrence already owns a runtime slot, so
+servicing the owner cannot leave an equal replacement at the same logical
+rank. Scheduler-owned candidates use a well-founded stage/position rank only
+across deferred, runtime, ready-completion, I/O, outstanding-work, and causal
+ownership. Transport packets and ingress entries retain occurrence-specific
+service arguments instead of being folded vacuously into that candidate rank.
+The runtime queue reserves separate normal, progress, and completion capacity.
 The current view's absolute timeout has first priority. A periodic
-retransmission may precede an already-admitted FIFO command once, after which
-FIFO debt gives that command the next non-timeout slot. Thus the service rank
+retransmission may precede already-admitted command work once, after which
+command debt gives the class-aware ingress the next non-timeout slot. Thus the
+service rank
 strictly decreases unless that view's timeout makes the work stale, in which
 case the certified next view restarts it under a fresh tag and a strictly larger
 deadline.
 
-**Lemma 8 (view progress).** If a height does not decide in view `v`, correct
+**Lemma 9 (view progress).** If a height does not decide in view `v`, correct
 validators eventually form and install a TC for `v` and enter `v + 1`.
 
 Each responsive correct validator's absolute timer eventually expires and its
@@ -205,7 +238,7 @@ alone satisfy both quorum thresholds, so their votes form a TC without a
 distinguished collector. Persistence precedes `EnterView`, and retransmission
 eventually delivers that TC to every responsive validator.
 
-**Lemma 9 (lock convergence).** After GST, a retained lock omitted from one TC
+**Lemma 10 (lock convergence).** After GST, a retained lock omitted from one TC
 cannot block every later successful round.
 
 The locked validator's timeout vote carries the full PrepareQC while signing
@@ -218,12 +251,12 @@ validators converge on one safe proposal subject.
 **Theorem 4 (liveness).** Consensus eventually decides and applies the next
 block after GST.
 
-By Lemmas 7 and 8, non-deciding views continue to advance. Because the deadline
+By Lemmas 8 and 9, non-deciding views continue to advance. Because the deadline
 grows without wraparound throughout the representable proof domain, some view
 exceeds the complete finite post-GST service rank. Every later view is at least
 as long, and deterministic roster rotation selects a responsive correct leader
 within one complete rotation.
-If an omitted lock prevents that first candidate round, Lemma 9 makes it known
+If an omitted lock prevents that first candidate round, Lemma 10 makes it known
 during the round's timeout, after which the next responsive correct leader
 proposes the selected safe subject. The responsive quorum obtains, stores, and
 validates the exact body before Prepare; forms and disseminates PrepareQC;
@@ -261,14 +294,26 @@ proofs change.
 
 The module set covers quorum algebra, availability, crash recovery,
 reconfiguration, compositional safety, agreement, full action induction,
-receipt-backed selected-height chain/epoch refinement, and the explicit
-asynchronous scheduler/transport model. The one-height asynchronous type
-closure and three stable-suffix liveness theorems are exact universally
+receipt-backed selected-height and indexed chain/epoch refinement, and the
+explicit asynchronous scheduler/transport model. The one-height asynchronous
+type-closure wrapper and generation-scoped delivery theorem now have checked
+proof bodies. Runner preservation, durable witness, deadlock, rank-decrease,
+starvation, and the three stable-suffix liveness theorems are exact universally
 quantified declarations recorded as `specified_unproved`; the argument above
-does not upgrade that status. Indexed multi-height progress remains the missing
-`SumeragiV2ChainEpochRefinement!HeightLivenessObligation`, pending composition
-of successive `AsyncSpecAt` instances. No global asynchronous shadow state,
-alternate transition relation, or favourable-network protocol relation may
+does not upgrade that status. The concrete genesis chain product's
+first-successor handoff is separately ledgered `specified_unproved`. The chain
+refinement now contains the authoritative indexed successor-instance product
+and its exact `SumeragiV2ChainEpochRefinement!HeightLivenessObligation`; the
+instance-activation/fairness suffix, historical catch-up fairness transfer for
+validators absent from an old roster, and finite-height temporal induction
+remain `specified_unproved`. Historical catch-up is receipt-refining rather
+than a second consensus relation: an authenticated certified signer serves an
+already canonical exact CommitQC/body, after which the ordinary reducer records
+the lagging node's decision and application before joining its successor. Its
+dormant `InitAt` parent receipts remain private to their one-height instances,
+while the global projection contains exact current-context and explicit
+catch-up receipt deltas. No global asynchronous shadow state, alternate
+consensus transition relation, or favourable-network protocol relation may
 stand in for that proof.
 
 No top-level assumption, axiom, or unledgered omitted proof can satisfy the

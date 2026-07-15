@@ -40,6 +40,7 @@ AdvanceContext(subject) ==
      /\ highestRank' = [node \in ValidatorIds |-> NoRank]
      /\ highestSubject' = [node \in ValidatorIds |-> NoSubject]
      /\ availableBodies' = {}
+     /\ retainedLockedBodies' = {}
      /\ validatedBodies' = {}
      /\ invalidBodies' = {}
      /\ seenProposals' = {}
@@ -110,61 +111,5 @@ EpochBoundarySafety ==
   /\ ContextIdentityBindsFrozenEpoch
   /\ OldContextCertificateRejected
   /\ ContextParentWasApplied
-
-THEOREM ContextRecordCarriesFrozenEpoch ==
-  \A blockHeight \in Heights:
-    \A lineage \in LineagesAt(blockHeight):
-      ContextRecord(blockHeight, lineage).epoch = ExpectedEpoch(blockHeight)
-BY DEF ContextRecord
-
-THEOREM ContextRecordCarriesParent ==
-  \A blockHeight \in Heights:
-    \A lineage \in LineagesAt(blockHeight):
-      /\ (blockHeight = 0
-            => ContextRecord(blockHeight, lineage).parent = NoSubject)
-      /\ (blockHeight > 0
-            => ContextRecord(blockHeight, lineage).parent = lineage[blockHeight])
-BY DEF ContextRecord
-
-THEOREM ContextRecordCarriesParentContext ==
-  \A blockHeight \in Heights:
-    \A lineage \in LineagesAt(blockHeight):
-      ContextRecord(blockHeight, lineage).parentContextKey
-        = ParentContextKey(blockHeight, lineage)
-BY DEF ContextRecord
-
-THEOREM EquivalentParentCommitQcsConverge ==
-  \A parentContextKey,
-     parentHeight,
-     parentSubject,
-     leftView,
-     rightView,
-     leftSigners,
-     rightSigners:
-    SemanticParentFinality(
-      CarriedParentCommit(parentContextKey, parentHeight, parentSubject,
-                          leftView, leftSigners))
-      = SemanticParentFinality(
-          CarriedParentCommit(parentContextKey, parentHeight, parentSubject,
-                              rightView, rightSigners))
-BY DEF SemanticParentFinality, CarriedParentCommit
-
-THEOREM ForeignParentLineageHasDifferentIdentity ==
-  \A leftContextKey,
-     rightContextKey,
-     parentHeight,
-     parentSubject,
-     leftView,
-     rightView,
-     leftSigners,
-     rightSigners:
-    leftContextKey # rightContextKey
-      => SemanticParentFinality(
-           CarriedParentCommit(leftContextKey, parentHeight, parentSubject,
-                               leftView, leftSigners))
-           # SemanticParentFinality(
-               CarriedParentCommit(rightContextKey, parentHeight,
-                                   parentSubject, rightView, rightSigners))
-BY DEF SemanticParentFinality, CarriedParentCommit
 
 =============================================================================

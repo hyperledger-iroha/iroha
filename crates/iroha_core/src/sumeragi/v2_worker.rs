@@ -36,12 +36,12 @@ use super::{
     v2_body_store::{
         BodyStoreCompletion, BodyValidationCompletion, V2BodyStore, ValidatedBodyReceipt,
     },
-    v2_chunks::{EncodedV2Payload, V2ChunkSession, encode_payload},
+    v2_chunks::{EncodedV2Payload, V2ChunkError, V2ChunkSession, encode_payload},
     v2_effects::{
-        ApplyTask, BodyFetchTask, BodyStoreTask, BodyValidationTask, ConsensusSignTask,
-        DurableApplyCompletion, EffectExecutorError, EffectExecutorStatus, EffectTransportError,
-        EffectWorkId, PostFinalityCleanupOutcome, PostFinalityCleanupTarget, V2EffectExecutor,
-        V2EffectServices,
+        ApplyTask, AuthenticatedChunkDisposition, BodyFetchTask, BodyStoreTask, BodyValidationTask,
+        CompletionDisposition, ConsensusSignTask, DurableApplyCompletion, EffectExecutorError,
+        EffectExecutorStatus, EffectTransportError, EffectWorkId, PostFinalityCleanupOutcome,
+        PostFinalityCleanupTarget, V2EffectExecutor, V2EffectServices,
     },
     v2_transport::{AuthenticatedCertifiedBodyRequest, AuthenticatedPayloadChunk},
 };
@@ -403,7 +403,10 @@ impl V2IoCommandQueue {
     ) -> Result<bool, String> {
         let mut state = self.lock();
         let Some(tracked) = state.work.get(&work_id) else {
-            return Ok(false);
+            return Err(format!(
+                "Sumeragi v2 I/O work {} has no tracked owner",
+                work_id.get()
+            ));
         };
         if tracked.descriptor.cancellable_kind() != Some(expected_kind) {
             return Err(format!(
@@ -881,6 +884,10 @@ impl V2IoHandle {
                             });
                             let failed = match completion {
                                 Err(reason) => {
+                                    iroha_logger::error!(
+                                        reason,
+                                        "Sumeragi v2 I/O command failed closed"
+                                    );
                                     if let Some(work_id) = work_id {
                                         command_rx.complete_work(work_id);
                                     }
@@ -1697,6 +1704,13 @@ impl ProductionV2Services {
             operation.complete();
             return Ok(());
         }
+        iroha_logger::debug!(
+            height = tag.height(),
+            view = tag.view(),
+            generation = tag.generation().get(),
+            ?subject,
+            "queued exact locked-body load for Sumeragi v2 re-proposal"
+        );
         if let Err(error) = self
             .io()?
             .enqueue(V2IoCommand::LoadCandidate { tag, subject })
@@ -1935,6 +1949,27 @@ impl ProductionV2Services {
             return Err(executor
                 .external_service_failed("Sumeragi v2 consensus requires process restart", self));
         }
+        if executor.remaining_completion_capacity() == 0 {
+            let status = executor.status();
+            if status.pending_signatures != 0
+                || status.pending_fetches != 0
+                || status.pending_stores != 0
+                || status.pending_validations != 0
+                || status.pending_applications != 0
+                || !self.local_completions.is_empty()
+            {
+                iroha_logger::debug!(
+                    queued_runtime_commands = status.queued_runtime_completions,
+                    pending_signatures = status.pending_signatures,
+                    pending_fetches = status.pending_fetches,
+                    pending_stores = status.pending_stores,
+                    pending_validations = status.pending_validations,
+                    pending_applications = status.pending_applications,
+                    local_completions = self.local_completions.len(),
+                    "deferred Sumeragi v2 service completion behind a full runtime FIFO"
+                );
+            }
+        }
         let mut count = 0usize;
         while executor.remaining_completion_capacity() != 0 {
             let Some(completion) = self.take_next_completion() else {
@@ -1981,6 +2016,13 @@ impl ProductionV2Services {
                 ),
                 PendingServiceCompletion::Io(V2IoCompletion::CertifiedRequestIgnored) => {}
                 PendingServiceCompletion::Io(V2IoCompletion::CandidateLoaded(candidate)) => {
+                    iroha_logger::debug!(
+                        height = candidate.tag().height(),
+                        view = candidate.tag().view(),
+                        generation = candidate.tag().generation().get(),
+                        subject = ?candidate.subject(),
+                        "loaded exact locked body for Sumeragi v2 re-proposal"
+                    );
                     self.pending_candidate_loads.remove(&candidate.tag());
                     self.loaded_candidates.push_back(candidate);
                 }
@@ -2011,13 +2053,18 @@ impl ProductionV2Services {
                     task,
                     manifest,
                     body,
-                }) => {
-                    if let Err(error) =
-                        executor.complete_body_reconstruction(&task, manifest, body, self)
-                    {
+                }) => match executor.complete_body_reconstruction(&task, manifest, body, self) {
+                    Ok(CompletionDisposition::Rejected) => {
+                        iroha_logger::debug!(
+                            work_id = task.id().get(),
+                            "rejected noncanonical reconstructed Sumeragi v2 body"
+                        );
+                    }
+                    Ok(_) => {}
+                    Err(error) => {
                         return Err(executor.external_service_failed(error, self));
                     }
-                }
+                },
             }
         }
         Ok(count)
@@ -2671,7 +2718,7 @@ impl V2EffectServices for ProductionV2Services {
         &mut self,
         task: &BodyFetchTask,
         chunk: AuthenticatedPayloadChunk,
-    ) -> Result<(), Self::Error> {
+    ) -> Result<AuthenticatedChunkDisposition, Self::Error> {
         let output_guard = Arc::clone(&self.output_guard);
         let operation = output_guard
             .begin_fail_stop_operation()
@@ -2679,28 +2726,52 @@ impl V2EffectServices for ProductionV2Services {
         if self.body_fetch_service_owner(task.id())? != BodyFetchServiceOwner::Live {
             return Err("Sumeragi v2 chunk fetch has no exact live owner".to_owned());
         }
-        let fetch = self
-            .fetches
-            .get_mut(&task.id())
-            .expect("live body-fetch owner was classified above");
-        if fetch.task != *task {
-            return Err(format!(
-                "Sumeragi v2 chunk task {} differs from service ownership",
-                task.id().get()
-            ));
-        }
-        let session = fetch
-            .chunks
-            .as_mut()
-            .ok_or_else(|| "manifest-less certified body fetch cannot accept chunks".to_owned())?;
-        session
-            .admit(chunk.chunk())
-            .map_err(|error| error.to_string())?;
-        let Some(body) = session.reconstruct().map_err(|error| error.to_string())? else {
-            operation.complete();
-            return Ok(());
+        let reconstruction = {
+            let fetch = self
+                .fetches
+                .get_mut(&task.id())
+                .expect("live body-fetch owner was classified above");
+            if fetch.task != *task {
+                return Err(format!(
+                    "Sumeragi v2 chunk task {} differs from service ownership",
+                    task.id().get()
+                ));
+            }
+            let session = fetch.chunks.as_mut().ok_or_else(|| {
+                "manifest-less certified body fetch cannot accept chunks".to_owned()
+            })?;
+            session
+                .admit(chunk.chunk())
+                .map_err(|error| error.to_string())?;
+            session.reconstruct()
         };
-        let manifest = session.manifest().clone();
+        let body = match reconstruction {
+            Ok(Some(body)) => body,
+            Ok(None) => {
+                operation.complete();
+                return Ok(AuthenticatedChunkDisposition::Accepted);
+            }
+            Err(V2ChunkError::PayloadMismatch | V2ChunkError::ReconstructionFailed) => {
+                self.remove_exact_body_fetch_owner(task)?;
+                operation.complete();
+                return Ok(AuthenticatedChunkDisposition::Rejected);
+            }
+            Err(error) => return Err(error.to_string()),
+        };
+        let manifest = task
+            .manifest()
+            .expect("chunk reconstruction requires proposal manifest authority")
+            .clone();
+        let canonical_manifest =
+            encode_payload(&self.context, manifest.round, manifest.subject, &body)
+                .map_err(|error| error.to_string())?
+                .manifest()
+                .clone();
+        if canonical_manifest != manifest {
+            self.remove_exact_body_fetch_owner(task)?;
+            operation.complete();
+            return Ok(AuthenticatedChunkDisposition::Rejected);
+        }
         if self.body_fetch_service_owner(task.id())? != BodyFetchServiceOwner::Live {
             return Err("Sumeragi v2 reconstructed fetch lost its exact live owner".to_owned());
         }
@@ -2728,16 +2799,15 @@ impl V2EffectServices for ProductionV2Services {
                 body,
             });
         operation.complete();
-        Ok(())
+        Ok(AuthenticatedChunkDisposition::Accepted)
     }
 
     fn enqueue_body_store(&mut self, task: BodyStoreTask) -> Result<(), Self::Error> {
         self.enqueue_fail_stop_io(V2IoCommand::Store(task))
     }
 
-    fn cancel_body_store(&mut self, work_id: EffectWorkId) -> Result<(), Self::Error> {
-        self.io()?.cancel(work_id, V2IoCancellableKind::Store)?;
-        Ok(())
+    fn cancel_body_store(&mut self, work_id: EffectWorkId) -> Result<bool, Self::Error> {
+        self.io()?.cancel(work_id, V2IoCancellableKind::Store)
     }
 
     fn enqueue_body_validation(&mut self, task: BodyValidationTask) -> Result<(), Self::Error> {
@@ -2778,6 +2848,12 @@ impl V2EffectServices for ProductionV2Services {
             .acquire()
             .ok_or_else(|| "Sumeragi v2 consensus requires process restart".to_owned())?;
         self.entered_view = Some(tag);
+        iroha_logger::debug!(
+            height = tag.height(),
+            view = tag.view(),
+            generation = tag.generation().get(),
+            "installed certified Sumeragi v2 view"
+        );
         Ok(())
     }
 
@@ -2837,6 +2913,7 @@ impl V2EffectServices for ProductionV2Services {
             .acquire()
             .ok_or_else(|| "Sumeragi v2 consensus requires process restart".to_owned())?;
         self.last_status = Some(status.clone());
+        super::status::set_v2_effect_status(status.clone());
         Ok(())
     }
 
@@ -2863,7 +2940,10 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
-    use crate::sumeragi::{v2_body_store::DurableBodyReceipt, v2_chunks::encode_payload};
+    use crate::sumeragi::{
+        v2_body_store::DurableBodyReceipt, v2_chunks::encode_payload,
+        v2_transport::authenticate_payload_chunk,
+    };
 
     fn test_io_command_channel(
         capacity: usize,
@@ -3367,6 +3447,64 @@ mod tests {
     }
 
     #[test]
+    fn invalid_reconstruction_retires_remote_fetch_without_restart() {
+        let (mut service, keys) = fixture();
+        let _chunk_root = install_temporary_chunk_root(&mut service);
+        allow_fixture_block_payload(&mut service.context);
+        let (body, payload, proposal) = proposal_body_and_payload(&service.context, &keys);
+        let mut invalid_body = body.clone();
+        invalid_body[0] ^= 1;
+        let invalid_manifest = wire::PayloadManifest::derive(
+            &service.context,
+            proposal.round,
+            proposal.subject,
+            u64::try_from(body.len()).expect("body length"),
+            std::slice::from_ref(&invalid_body),
+        )
+        .expect("structurally valid invalid manifest");
+        assert_ne!(invalid_manifest, *payload.manifest());
+        let tag = EventTag::new(
+            service.context.height,
+            proposal.round.view,
+            Generation::new(service.context.height),
+        );
+        let task = BodyFetchTask::ordinary_for_test(61, tag, invalid_manifest.clone());
+        service
+            .enqueue_body_fetch(task.clone())
+            .expect("open invalid remote reconstruction session");
+        let mut chunk = wire::PayloadChunk {
+            manifest_hash: HashOf::new(&invalid_manifest),
+            index: 0,
+            bytes: invalid_body,
+            sender: 0,
+            signature: Vec::new(),
+        };
+        chunk.signature = Signature::new(
+            keys[0].private_key(),
+            &chunk
+                .signature_preimage(&service.context, &invalid_manifest)
+                .expect("chunk preimage"),
+        )
+        .payload()
+        .to_vec();
+        let sender = service.context.roster[0].validator.clone();
+        let authenticated =
+            authenticate_payload_chunk(&service.context, &invalid_manifest, chunk, &sender)
+                .expect("authenticate chunk committed by invalid manifest");
+
+        assert_eq!(
+            service
+                .accept_authenticated_chunk(&task, authenticated)
+                .expect("invalid remote reconstruction is not a local service failure"),
+            AuthenticatedChunkDisposition::Rejected
+        );
+        assert!(service.fetches.is_empty());
+        assert!(service.fetch_by_manifest.is_empty());
+        assert!(service.local_completions.is_empty());
+        assert!(!service.output_guard.restart_required());
+    }
+
+    #[test]
     fn cancelling_unowned_fetch_fails_closed() {
         let (mut service, keys) = fixture();
         allow_fixture_block_payload(&mut service.context);
@@ -3822,6 +3960,63 @@ mod tests {
         ));
         assert_eq!(admission.queued.load(AtomicOrdering::Acquire), 0);
         drop(service.io.take());
+    }
+
+    #[test]
+    fn io_queue_reports_active_store_cancellation_as_retained() {
+        let (mut service, keys) = fixture();
+        allow_fixture_block_payload(&mut service.context);
+        let (body, payload, proposal) = proposal_body_and_payload(&service.context, &keys);
+        let tag = EventTag::new(
+            service.context.height,
+            proposal.round.view,
+            Generation::new(service.context.height),
+        );
+        let task = BodyStoreTask::for_test(5, tag, payload.manifest().clone(), body);
+        let work_id = task.id();
+        let (command_tx, command_rx, admission) = test_io_command_channel(1);
+
+        command_tx
+            .try_send(V2IoCommand::Store(task))
+            .expect("queue body store");
+        let active = command_rx.try_recv().expect("activate body store");
+        assert_eq!(active.work_id(), Some(work_id));
+        assert!(
+            !command_tx
+                .cancel(work_id, V2IoCancellableKind::Store)
+                .expect("active body store remains owned")
+        );
+        assert_eq!(
+            command_tx.queue.lock().work[&work_id].state,
+            V2IoWorkState::Active
+        );
+
+        command_rx.complete_work(work_id);
+        assert!(
+            !command_tx
+                .cancel(work_id, V2IoCancellableKind::Store)
+                .expect("completion-pending body store remains owned")
+        );
+        assert_eq!(
+            command_tx.queue.lock().work[&work_id].state,
+            V2IoWorkState::CompletionPending
+        );
+        command_tx.acknowledge_completion(work_id);
+        assert!(command_tx.queue.lock().work.is_empty());
+        assert_eq!(admission.queued.load(AtomicOrdering::Acquire), 0);
+    }
+
+    #[test]
+    fn io_queue_rejects_cancellation_without_tracked_ownership() {
+        let (command_tx, _command_rx, _admission) = test_io_command_channel(1);
+        let missing = EffectWorkId::for_test(6);
+
+        let error = command_tx
+            .cancel(missing, V2IoCancellableKind::Store)
+            .expect_err("missing work ownership must not look active");
+
+        assert!(error.contains("has no tracked owner"));
+        assert!(command_tx.queue.lock().work.is_empty());
     }
 
     #[test]

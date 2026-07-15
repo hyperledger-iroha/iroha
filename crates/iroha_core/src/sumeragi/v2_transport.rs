@@ -399,9 +399,10 @@ pub(crate) fn authenticate_commit_certificate_request_identity(
 
 /// Bounded set of exact certified-body requests awaiting a response.
 ///
-/// A successful response atomically consumes its request. Every rejected
-/// response leaves the request outstanding so a Byzantine or corrupt sender
-/// cannot suppress a later valid answer.
+/// Authentication never consumes a request. The serialized executor retires
+/// it only after the authenticated body has passed canonical manifest
+/// reconstruction and entered the reducer queue, so a Byzantine or corrupt
+/// sender cannot suppress a later valid answer.
 pub(crate) struct OutstandingCertifiedBodyRequests {
     capacity: usize,
     requests: BTreeMap<HashOf<wire::CertifiedBodyRequest>, AuthenticatedCertifiedBodyRequest>,
@@ -482,6 +483,16 @@ impl OutstandingCertifiedBodyRequests {
     /// consuming the bounded request capacity while late responses remain
     /// correctly classified as unsolicited.
     pub(crate) fn cancel(&mut self, request_hash: HashOf<wire::CertifiedBodyRequest>) -> bool {
+        self.retire(request_hash)
+    }
+
+    /// Complete one exact request after its authenticated body entered the
+    /// reducer queue.
+    pub(crate) fn complete(&mut self, request_hash: HashOf<wire::CertifiedBodyRequest>) -> bool {
+        self.retire(request_hash)
+    }
+
+    fn retire(&mut self, request_hash: HashOf<wire::CertifiedBodyRequest>) -> bool {
         let Some(authenticated) = self.requests.remove(&request_hash) else {
             return false;
         };
@@ -491,61 +502,55 @@ impl OutstandingCertifiedBodyRequests {
         true
     }
 
-    /// Authenticate and consume a response for an outstanding exact request.
+    /// Authenticate a response for an outstanding exact request without
+    /// consuming the request.
     ///
     /// # Errors
     ///
     /// Returns an error for unsolicited/replayed responses, malformed bodies
     /// or manifests, uncertified/spoofed responders, and invalid signatures.
-    /// The outstanding request is retained on every error.
+    /// The outstanding request is retained on both success and error until the
+    /// serialized executor explicitly completes or cancels it.
     pub(crate) fn authenticate_response(
-        &mut self,
+        &self,
         context: &wire::HeightContext,
         response: wire::CertifiedBodyResponse,
         authenticated_responder: &PeerId,
     ) -> Result<AuthenticatedCertifiedBodyResponse, V2TransportError> {
         let request_hash = response.request_hash;
-        let identity = {
-            let authenticated_request = self
-                .requests
-                .get(&request_hash)
-                .ok_or(V2TransportError::UnsolicitedResponse(request_hash))?;
-            let request = authenticated_request.request();
-            let claimed_responder = roster_peer(context, response.responder)?;
-            bind_outer_identity(
-                TransportIdentityKind::Responder,
-                claimed_responder,
-                authenticated_responder,
-            )?;
-            if request
-                .certificate
-                .signers
-                .binary_search(&response.responder)
-                .is_err()
-            {
-                return Err(wire::ValidationError::ResponderNotCertified.into());
-            }
-            response.validate_against(context, request, authenticated_responder)?;
-            verify_signature(
-                TransportSignatureKind::CertifiedBodyResponse,
-                claimed_responder,
-                &response.signature,
-                &response.signature_preimage(),
-            )?;
-            let proposal = decode_framed_signed_block(&response.body)
-                .map_err(|error| V2TransportError::InvalidProposalBody(error.to_string()))?;
-            if !proposal.is_resultless_proposal() {
-                return Err(V2TransportError::InvalidProposalBody(
-                    "execution results or result root are present".to_owned(),
-                ));
-            }
-            RequestIdentity::from(request)
-        };
-
-        let removed = self.requests.remove(&request_hash);
-        debug_assert!(removed.is_some(), "validated request remains registered");
-        let removed_identity = self.identities.remove(&identity);
-        debug_assert_eq!(removed_identity, Some(request_hash));
+        let authenticated_request = self
+            .requests
+            .get(&request_hash)
+            .ok_or(V2TransportError::UnsolicitedResponse(request_hash))?;
+        let request = authenticated_request.request();
+        let claimed_responder = roster_peer(context, response.responder)?;
+        bind_outer_identity(
+            TransportIdentityKind::Responder,
+            claimed_responder,
+            authenticated_responder,
+        )?;
+        if request
+            .certificate
+            .signers
+            .binary_search(&response.responder)
+            .is_err()
+        {
+            return Err(wire::ValidationError::ResponderNotCertified.into());
+        }
+        response.validate_against(context, request, authenticated_responder)?;
+        verify_signature(
+            TransportSignatureKind::CertifiedBodyResponse,
+            claimed_responder,
+            &response.signature,
+            &response.signature_preimage(),
+        )?;
+        let proposal = decode_framed_signed_block(&response.body)
+            .map_err(|error| V2TransportError::InvalidProposalBody(error.to_string()))?;
+        if !proposal.is_resultless_proposal() {
+            return Err(V2TransportError::InvalidProposalBody(
+                "execution results or result root are present".to_owned(),
+            ));
+        }
         Ok(AuthenticatedCertifiedBodyResponse { response })
     }
 }
@@ -765,6 +770,8 @@ mod tests {
     use iroha_crypto::{Algorithm, Hash, KeyPair, SignatureOf};
     use iroha_data_model::block::{BlockHeader, BlockSignature, SignedBlock};
 
+    use crate::sumeragi::v2_chunks::encode_payload;
+
     use super::*;
 
     struct Fixture {
@@ -773,6 +780,7 @@ mod tests {
         observer: KeyPair,
         body: Vec<u8>,
         manifest: wire::PayloadManifest,
+        chunks: Vec<Vec<u8>>,
     }
 
     impl Fixture {
@@ -839,14 +847,9 @@ mod tests {
                 block_hash: block.hash(),
                 payload_hash: Hash::new(&body),
             };
-            let manifest = wire::PayloadManifest::derive(
-                &context,
-                round,
-                subject,
-                u64::try_from(body.len()).expect("small body"),
-                std::slice::from_ref(&body),
-            )
-            .expect("canonical fixture manifest");
+            let (manifest, chunks) = encode_payload(&context, round, subject, &body)
+                .expect("encode canonical fixture payload")
+                .into_parts();
             let observer = KeyPair::try_from_seed(vec![90; 32], Algorithm::Ed25519)
                 .expect("deterministic observer key");
             Self {
@@ -855,6 +858,7 @@ mod tests {
                 observer,
                 body,
                 manifest,
+                chunks,
             }
         }
 
@@ -866,7 +870,7 @@ mod tests {
             let mut chunk = wire::PayloadChunk {
                 manifest_hash: HashOf::new(&self.manifest),
                 index: 0,
-                bytes: self.body.clone(),
+                bytes: self.chunks[0].clone(),
                 sender,
                 signature: Vec::new(),
             };
@@ -1065,7 +1069,7 @@ mod tests {
     }
 
     #[test]
-    fn invalid_responses_never_consume_the_outstanding_request() {
+    fn response_authentication_never_consumes_before_explicit_completion() {
         let fixture = Fixture::new();
         let request = fixture.signed_request();
         let request_hash = HashOf::new(&request);
@@ -1148,7 +1152,14 @@ mod tests {
             .authenticate_response(&fixture.context, valid.clone(), &valid_sender)
             .expect("valid certified response");
         assert_eq!(admitted.response(), &valid);
+        assert!(tracker.contains(request_hash));
+        let _ = tracker
+            .authenticate_response(&fixture.context, valid.clone(), &valid_sender)
+            .expect("authentication remains retryable before executor completion");
+
+        assert!(tracker.complete(request_hash));
         assert!(tracker.is_empty());
+        assert!(!tracker.complete(request_hash));
         assert_eq!(
             tracker.authenticate_response(&fixture.context, valid, &valid_sender),
             Err(V2TransportError::UnsolicitedResponse(request_hash))
@@ -1161,7 +1172,7 @@ mod tests {
         let request = fixture.signed_request();
         let response = fixture.signed_response(&request, 0);
         let sender = Fixture::peer(&fixture.validators[0]);
-        let mut tracker = OutstandingCertifiedBodyRequests::new(1).expect("positive capacity");
+        let tracker = OutstandingCertifiedBodyRequests::new(1).expect("positive capacity");
         assert_eq!(
             tracker.authenticate_response(&fixture.context, response, &sender),
             Err(V2TransportError::UnsolicitedResponse(HashOf::new(&request)))

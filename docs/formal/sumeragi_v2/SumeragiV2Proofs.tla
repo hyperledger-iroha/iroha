@@ -14,7 +14,7 @@ proof_coverage.json remains the authoritative record of backend evidence.
 THEOREM QcValidityCarriesDualQuorum ==
   \A qc \in QcRecordSet:
     QcValid(qc) => DualQuorum(CurrentEpoch, qc.signers)
-BY DEF QcValid
+BY DEF QcValid, QcWireValid
 
 THEOREM TcValidityCarriesDisjointDualQuorum ==
   \A tc \in TcRecordSet:
@@ -137,30 +137,242 @@ LockMonotonicityAction ==
          /\ lockSubject'[node] # lockSubject[node]
          => lockRank'[node] > lockRank[node])
 
+THEOREM LockFunctionalUpdateAtKey ==
+  \A domain, codomain, mapping, key, value:
+    mapping \in [domain -> codomain] /\ key \in domain
+      => [mapping EXCEPT ![key] = value][key] = value
+BY Isa
+
+THEOREM LockFunctionalUpdateAwayFromKey ==
+  \A domain, codomain, mapping, key, value, other:
+    mapping \in [domain -> codomain]
+      /\ key \in domain
+      /\ other \in domain
+      /\ other # key
+      => [mapping EXCEPT ![key] = value][other] = mapping[other]
+BY Isa
+
+THEOREM WellTypedTimeoutSelectorRankIsInteger ==
+  \A tc:
+    ModelConfiguration /\ TcWellTyped(tc) => TcHighRank(tc) \in Int
+PROOF
+  <1>1. ASSUME NEW tc, ModelConfiguration, TcWellTyped(tc)
+         PROVE TcHighRank(tc) \in Int
+    <2>1. Ranks \subseteq Int
+      BY <1>1, ModelRanksAreIntegers
+    <2>2. CASE MaximalTimeoutVotes(tc.votes) = {}
+      <3>1. TcHighRank(tc) = NoRank
+        BY <2>2 DEF TcHighRank, HighestTimeoutVote, EmptyTimeoutHigh
+      <3> QED BY <3>1, SMT DEF NoRank
+    <2>3. CASE MaximalTimeoutVotes(tc.votes) # {}
+      <3>1. HighestTimeoutVote(tc.votes)
+               \in MaximalTimeoutVotes(tc.votes)
+        BY <2>3, Zenon DEF HighestTimeoutVote
+      <3>2. HighestTimeoutVote(tc.votes) \in tc.votes
+        BY <3>1 DEF MaximalTimeoutVotes
+      <3>3. HighestTimeoutVote(tc.votes) \in TimeoutVoteRecordSet
+        BY <1>1, <3>2, Isa DEF TcWellTyped
+      <3>4. HighestTimeoutVote(tc.votes).highRank \in Ranks
+        BY <3>3, Isa DEF TimeoutVoteRecordSet
+      <3> QED BY <2>1, <3>4 DEF TcHighRank
+    <2>4. MaximalTimeoutVotes(tc.votes) = {}
+             \/ MaximalTimeoutVotes(tc.votes) # {}
+      BY Isa
+    <2> QED BY <2>2, <2>3, <2>4
+  <1> QED BY <1>1
+
 THEOREM PersistLockCommitIsLockMonotone ==
   \A request:
     TypeInvariant /\ PendingVoteWritesAuthorized
       /\ PersistLockCommit(request)
       => LockMonotonicityAction
-BY SMT
-   DEF TypeInvariant, PendingVoteWritesAuthorized, PersistLockCommit,
-       LockMonotonicityAction, LockCommitWalSet, QcRecordSet, Views, Ranks
+PROOF
+  <1>1. ASSUME NEW request,
+                TypeInvariant,
+                PendingVoteWritesAuthorized,
+                PersistLockCommit(request)
+         PROVE LockMonotonicityAction
+    <2>1. request \in pendingLockCommit
+      BY <1>1 DEF PersistLockCommit
+    <2>2. /\ pendingLockCommit \subseteq LockCommitWalSet
+          /\ lockRank \in [ValidatorIds -> Ranks]
+          /\ lockSubject \in [ValidatorIds -> SubjectOrNone]
+      BY <1>1 DEF TypeInvariant
+    <2>3. /\ request.node \in ValidatorIds
+          /\ request.qc \in QcRecordSet
+      BY <2>1, <2>2, Isa DEF LockCommitWalSet
+    <2>4. request.qc.view \in Views
+      BY <2>3 DEF QcRecordSet
+    <2>5. request.qc.view \in Ranks
+      BY <2>4, ViewsAreRanks
+    <2>6. lockRank[request.node] \in Ranks
+      BY <2>2, <2>3, FunctionValueHasCodomain
+    <2>7. /\ request.qc.view >= lockRank[request.node]
+          /\ (request.qc.view = lockRank[request.node]
+                => request.qc.subject = lockSubject[request.node])
+      BY <1>1, <2>1 DEF PendingVoteWritesAuthorized
+    <2>8. CommitLockAllowed(
+             LockValue(lockRank[request.node],
+                       lockSubject[request.node]),
+             request.qc)
+      BY <2>7 DEF CommitLockAllowed, LockValue
+    <2>9. /\ request.qc.view \in Int
+          /\ lockRank[request.node] \in Int
+      BY <1>1, <2>5, <2>6, ModelRanksAreIntegers, Isa
+         DEF TypeInvariant
+    <2>10. LockMonotone(
+             LockValue(lockRank[request.node],
+                       lockSubject[request.node]),
+             CommitLockResult(request.qc))
+      BY <2>8, <2>9, CommitPersistenceAdvancesLockMonotonically
+         DEF LockValue
+    <2>11. ASSUME NEW node \in ValidatorIds
+           PROVE /\ context' = context
+                       => lockRank'[node] >= lockRank[node]
+                 /\ (context' = context
+                      /\ lockSubject'[node] # lockSubject[node]
+                       => lockRank'[node] > lockRank[node])
+      <3>1. /\ context' = context
+            /\ lockRank' =
+                 [lockRank EXCEPT ![request.node] = request.qc.view]
+            /\ lockSubject' =
+                 [lockSubject EXCEPT
+                    ![request.node] = request.qc.subject]
+        BY <1>1 DEF PersistLockCommit
+      <3>2. CASE node = request.node
+        <4>1. /\ lockRank'[node] = request.qc.view
+              /\ lockSubject'[node] = request.qc.subject
+          BY <2>2, <2>3, <3>1, <3>2,
+             LockFunctionalUpdateAtKey
+        <4> QED BY <2>10, <3>1, <3>2, <4>1, Isa
+           DEF LockMonotone, CommitLockResult, LockValue
+      <3>3. CASE node # request.node
+        <4>1. /\ lockRank'[node] = lockRank[node]
+              /\ lockSubject'[node] = lockSubject[node]
+          BY <2>2, <2>3, <2>11, <3>1, <3>3,
+             LockFunctionalUpdateAwayFromKey
+        <4>2. lockRank[node] \in Int
+          BY <1>1, <2>11, ModelRanksAreIntegers, Isa
+             DEF TypeInvariant
+        <4> QED BY <3>1, <3>3, <4>1, <4>2, SMT
+      <3> QED BY <3>2, <3>3
+    <2> QED BY <2>11 DEF LockMonotonicityAction
+  <1> QED BY <1>1
 
 THEOREM PersistInstallTCIsLockMonotone ==
   \A request:
     TypeInvariant /\ PersistInstallTC(request)
       => LockMonotonicityAction
-BY SMT
-   DEF TypeInvariant, PersistInstallTC, LockMonotonicityAction, Ranks
+PROOF
+  <1>1. ASSUME NEW request, TypeInvariant, PersistInstallTC(request)
+         PROVE LockMonotonicityAction
+    <2>1. request \in pendingInstallTC
+      BY <1>1 DEF PersistInstallTC
+    <2>2. /\ lockRank \in [ValidatorIds -> Ranks]
+          /\ lockSubject \in [ValidatorIds -> SubjectOrNone]
+          /\ ModelConfiguration
+      BY <1>1 DEF TypeInvariant
+    <2>3. request \in InstallTcWalSet
+      BY <1>1, <2>1, Isa DEF TypeInvariant
+    <2>4. /\ request.node \in ValidatorIds
+          /\ request.tc \in TcRecordSet
+      BY <2>3, Isa DEF InstallTcWalSet
+    <2>5. TcWellTyped(request.tc)
+      BY <2>4, Isa DEF TcWellTyped, TcRecordSet
+    <2>6. TcHighRank(request.tc) \in Int
+      BY <2>2, <2>5, WellTypedTimeoutSelectorRankIsInteger
+    <2>7. lockRank[request.node] \in Int
+      BY <1>1, <2>4, ModelRanksAreIntegers, Isa DEF TypeInvariant
+    <2>8. LockMonotone(
+             LockValue(lockRank[request.node],
+                       lockSubject[request.node]),
+             InstallHighLock(
+               LockValue(lockRank[request.node],
+                         lockSubject[request.node]),
+               TcHighRank(request.tc),
+               TcHighSubject(request.tc)))
+      BY <2>6, <2>7, TimeoutInstallationAdvancesLockMonotonically
+         DEF LockValue
+    <2>9. ASSUME NEW node \in ValidatorIds
+           PROVE /\ context' = context
+                       => lockRank'[node] >= lockRank[node]
+                 /\ (context' = context
+                      /\ lockSubject'[node] # lockSubject[node]
+                       => lockRank'[node] > lockRank[node])
+      <3>1. /\ context' = context
+            /\ lockRank' =
+                 [lockRank EXCEPT ![request.node] =
+                    IF TcHighRank(request.tc) > lockRank[request.node]
+                    THEN TcHighRank(request.tc) ELSE @]
+            /\ lockSubject' =
+                 [lockSubject EXCEPT ![request.node] =
+                    IF TcHighRank(request.tc) > lockRank[request.node]
+                    THEN TcHighSubject(request.tc) ELSE @]
+        BY <1>1 DEF PersistInstallTC
+      <3>2. CASE node = request.node
+        <4>1. /\ lockRank'[node] =
+                     IF TcHighRank(request.tc) > lockRank[request.node]
+                     THEN TcHighRank(request.tc)
+                     ELSE lockRank[request.node]
+              /\ lockSubject'[node] =
+                     IF TcHighRank(request.tc) > lockRank[request.node]
+                     THEN TcHighSubject(request.tc)
+                     ELSE lockSubject[request.node]
+          BY <2>2, <2>4, <3>1, <3>2,
+             LockFunctionalUpdateAtKey
+        <4>2. LockValue(lockRank'[node], lockSubject'[node]) =
+                 InstallHighLock(
+                   LockValue(lockRank[request.node],
+                             lockSubject[request.node]),
+                   TcHighRank(request.tc),
+                   TcHighSubject(request.tc))
+          BY <4>1 DEF InstallHighLock, LockValue
+        <4>3. LockMonotone(
+                 LockValue(lockRank[node], lockSubject[node]),
+                 LockValue(lockRank'[node], lockSubject'[node]))
+          BY <2>8, <3>2, <4>2, Isa
+        <4>4. lockRank'[node] >= lockRank[node]
+          BY <4>3 DEF LockMonotone, LockValue
+        <4>5. lockSubject'[node] # lockSubject[node]
+                   => lockRank'[node] > lockRank[node]
+          BY <4>3 DEF LockMonotone, LockValue
+        <4> QED BY <3>1, <4>4, <4>5
+      <3>3. CASE node # request.node
+        <4>1. /\ lockRank'[node] = lockRank[node]
+              /\ lockSubject'[node] = lockSubject[node]
+          BY <2>2, <2>4, <2>9, <3>1, <3>3,
+             LockFunctionalUpdateAwayFromKey
+        <4>2. lockRank[node] \in Int
+          BY <1>1, <2>9, ModelRanksAreIntegers, Isa DEF TypeInvariant
+        <4> QED BY <3>1, <3>3, <4>1, <4>2, SMT
+      <3> QED BY <3>2, <3>3
+    <2> QED BY <2>9 DEF LockMonotonicityAction
+  <1> QED BY <1>1
 
 UnchangedContextAndLocks ==
   UNCHANGED <<context, lockRank, lockSubject>>
 
 THEOREM UnchangedContextAndLocksIsLockMonotone ==
   TypeInvariant /\ UnchangedContextAndLocks => LockMonotonicityAction
-BY SMT
-   DEF TypeInvariant, UnchangedContextAndLocks,
-       LockMonotonicityAction, Ranks
+PROOF
+  <1>1. ASSUME TypeInvariant, UnchangedContextAndLocks
+         PROVE LockMonotonicityAction
+    <2>1. /\ context' = context
+          /\ lockRank' = lockRank
+          /\ lockSubject' = lockSubject
+      BY <1>1, Isa DEF UnchangedContextAndLocks
+    <2>2. ASSUME NEW node \in ValidatorIds
+           PROVE /\ context' = context
+                       => lockRank'[node] >= lockRank[node]
+                 /\ (context' = context
+                      /\ lockSubject'[node] # lockSubject[node]
+                       => lockRank'[node] > lockRank[node])
+      <3>1. lockRank[node] \in Int
+        BY <1>1, <2>2, ModelRanksAreIntegers, Isa
+           DEF TypeInvariant
+      <3> QED BY <2>1, <3>1, SMT
+    <2> QED BY <2>2 DEF LockMonotonicityAction
+  <1> QED BY <1>1
 
 (***************************************************************************
 Every reducer action other than the two durable lock writes leaves the
@@ -184,9 +396,12 @@ LockStableNext ==
   \/ \E envelope \in proposalNetwork: DeliverProposal(envelope)
   \/ \E node \in ValidatorIds, proposal \in SeenProposalValues:
        FetchBody(node, proposal)
-  \/ \E node \in ValidatorIds, subject \in Subjects: StoreBody(node, subject)
+  \/ \E node \in ValidatorIds, roundView \in Views, subject \in Subjects:
+       StoreBody(node, roundView, subject)
   \/ \E node \in ValidatorIds, proposal \in SeenProposalValues:
        ValidateBody(node, proposal) \/ RejectBody(node, proposal)
+  \/ \E node \in ValidatorIds, qc \in DecisionQcValues:
+       ValidateDecidedBody(node, qc)
   \/ \E node \in ValidatorIds, proposal \in SeenProposalValues:
        BeginPrepare(node, proposal)
   \/ \E request \in pendingPrepare: PersistPrepare(request)
@@ -248,7 +463,8 @@ BY IsaM("blast")
        SetGST, AssembleLocalBody, BeginLocalProposal, PersistProposal,
        CompleteProposalSignature, ByzantineBroadcastProposal,
        DeliverProposal, FetchBody, StoreBody,
-       ValidateBody, RejectBody, BeginPrepare, PersistPrepare,
+       ValidateBody, ValidateDecidedBody, RejectBody,
+       BeginPrepare, PersistPrepare,
        CompleteVoteSignature, ByzantineBroadcastVote, DeliverVote,
        FormPrepareQC, DeliverQC, BeginObservePrepare,
        PersistObservePrepare, BeginLockCommit, FormCommitQC,
@@ -257,6 +473,32 @@ BY IsaM("blast")
        DeliverTimeout, FormTC, DeliverTC, BeginInstallTC,
        FetchCertifiedBody, ApplyDecision, Crash, Restart, ResumeProposal,
        ResumeVote, ResumeTimeout, DropProposal
+
+(***************************************************************************
+Only the two durable receipt consumers can change `decisions` or `applied`.
+Keeping this classification at the Core proof boundary lets parameterized
+chain instances reason about receipt handoff without expanding the complete
+asynchronous command executor.
+***************************************************************************)
+THEOREM NextDurableReceiptActionClassification ==
+  Next
+    => \/ UNCHANGED <<decisions, applied>>
+       \/ (\E request \in pendingDecision: PersistDecision(request))
+       \/ (\E node \in ValidatorIds, qc \in DecisionQcValues:
+             ApplyDecision(node, qc))
+BY IsaM("blast")
+   DEF Next, SetGST, AssembleLocalBody, BeginLocalProposal, PersistProposal,
+       CompleteProposalSignature, ByzantineBroadcastProposal,
+       DeliverProposal, FetchBody, StoreBody, ValidateBody,
+       ValidateDecidedBody, RejectBody, BeginPrepare, PersistPrepare,
+       CompleteVoteSignature, ByzantineBroadcastVote, DeliverVote,
+       FormPrepareQC, DeliverQC, BeginObservePrepare,
+       PersistObservePrepare, BeginLockCommit, PersistLockCommit,
+       FormCommitQC, BeginDecision, BeginTimeout, PersistTimeout,
+       CompleteTimeoutSignature, ByzantineBroadcastTimeout,
+       DeliverTimeout, FormTC, DeliverTC, BeginInstallTC, PersistInstallTC,
+       FetchCertifiedBody, Crash, Restart, ResumeProposal, ResumeVote,
+       ResumeTimeout, DropProposal
 
 THEOREM AdvanceContextEndsCurrentLockOrder ==
   \A subject \in Subjects:
@@ -338,12 +580,12 @@ PROOF
 PrepareCertificateAvailability ==
   \A qc \in prepareQCs:
     \E signer \in qc.signers \cap Honest:
-      BodyHeldBy(durableBodies, signer, qc.context, qc.subject)
+      BodyHeldBy(durableBodies, signer, qc.context, qc.view, qc.subject)
 
 CommitCertificateAvailability ==
   \A qc \in commitQCs:
     \E signer \in qc.signers \cap Honest:
-      BodyHeldBy(durableBodies, signer, qc.context, qc.subject)
+      BodyHeldBy(durableBodies, signer, qc.context, qc.view, qc.subject)
 
 CertificateValidityAndAvailabilityInvariant ==
   /\ \A qc \in prepareQCs:
@@ -585,8 +827,9 @@ PROOF
       <3>2. /\ protectedView \in Int
              /\ HighestTimeoutVote(tc.votes).highRank \in Int
              /\ \A vote \in tc.votes: vote.highRank \in Int
-        BY <1>1, <2>1, <3>1, SMT
-           DEF FormedTimeoutCertificatesSound, Ranks, Views
+        BY <1>1, <2>1, <3>1, ModelRanksAreIntegers, Isa
+           DEF StrongInductiveInvariant, Safety, TypeInvariant,
+               FormedTimeoutCertificatesSound, Views
       <3> QED BY <3>2 DEF TimeoutRanksTyped, TcHighRank
     <2> QED BY <1>1, <2>1, <2>2, <2>3, Isa
        DEF TimeoutProtectionKernel, PotentialCommitSigners,
@@ -734,17 +977,18 @@ PROOF
         BY <2>1, RestartIncrementsSelectedGeneration
            DEF StrongInductiveInvariant, Safety
       <3>2. generation[node] \in Int
-        BY <2>1 DEF TypeInvariant
+        BY <2>1 DEF TypeInvariant, Generations
       <3> QED BY <3>1, <3>2, SMT
     <2> QED BY <2>1 DEF StaleGenerationRejected
   <1> QED BY <1>1, <1>2, <1>3, <1>4
 
 CrashRecoveryProperty(specification) ==
   /\ (specification => []CrashRecoveryStateInvariant)
-  /\ CrashPreservesDurableProjection
-  /\ RestartPreservesDurableProjection
-  /\ PendingWritesAreUnacknowledged
-  /\ (TypeInvariant => StaleGenerationRejected)
+  /\ (specification => [][CrashPreservesDurableProjection]_vars)
+  /\ (specification => [][RestartPreservesDurableProjection]_vars)
+  /\ (specification => [][PendingWritesAreUnacknowledged]_vars)
+  /\ (specification =>
+        [][TypeInvariant => StaleGenerationRejected]_vars)
 
 THEOREM CrashRecoveryObligation ==
   \A initialContext:
@@ -759,7 +1003,13 @@ PROOF
              CrashRecoveryStateInvariant
     <2>3. CoreSpecAt(initialContext) => []CrashRecoveryStateInvariant
       BY <2>1, <2>2, PTL
-    <2> QED BY <2>3, CrashAndRestartPreserveDurableSafety
+    <2>4. CoreSpecAt(initialContext)
+            => /\ [][CrashPreservesDurableProjection]_vars
+               /\ [][RestartPreservesDurableProjection]_vars
+               /\ [][PendingWritesAreUnacknowledged]_vars
+               /\ [][TypeInvariant => StaleGenerationRejected]_vars
+      BY CrashAndRestartPreserveDurableSafety, PTL
+    <2> QED BY <2>3, <2>4
        DEF CrashRecoveryProperty
   <1> QED BY <1>1
 

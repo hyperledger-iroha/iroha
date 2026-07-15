@@ -30,7 +30,8 @@ use iroha_data_model::{
 use thiserror::Error;
 
 use super::{
-    FairV2Ingress, GenesisWithPubKey, InboundBlockMessage, SumeragiWorker,
+    FairV2Ingress, FairV2IngressCapacityError, GenesisWithPubKey, InboundBlockMessage,
+    SumeragiWorker,
     message::BlockMessage,
     output_guard::{ConsensusOutputGuard, ConsensusOutputPermit},
     v2::{
@@ -69,6 +70,7 @@ pub(super) fn run(worker: SumeragiWorker) {
     let _status_clear = V2StatusClearGuard::new();
     let ingress_ready = Arc::clone(&worker.ingress_ready);
     let block_ingress = Arc::clone(&worker.block_rx);
+    super::status::set_v2_network_ingress(&block_ingress);
     let output_guard = Arc::clone(&worker.output_guard);
     let _ingress_clear = V2IngressClearGuard::new(Arc::clone(&ingress_ready), block_ingress);
     // Declared after ingress cleanup so reverse-order unwinding closes the
@@ -160,6 +162,20 @@ impl Drop for V2StatusClearGuard {
 fn close_ingress_for_rollover(ingress_ready: &AtomicBool, block_ingress: &FairV2Ingress) {
     ingress_ready.store(false, Ordering::Release);
     block_ingress.close();
+}
+
+fn ingress_capacity_error(error: FairV2IngressCapacityError) -> V2RunnerError {
+    if error.is_bytes() {
+        V2RunnerError::IngressByteCapacity {
+            configured: error.configured(),
+            required: error.required(),
+        }
+    } else {
+        V2RunnerError::IngressCapacity {
+            configured: error.configured(),
+            required: error.required(),
+        }
+    }
 }
 
 fn validate_deadline_duration(duration: Duration) -> Result<(), V2RunnerError> {
@@ -289,10 +305,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                     .iter()
                     .map(|validator| validator.validator.clone()),
             )
-            .map_err(|error| V2RunnerError::IngressCapacity {
-                configured: error.configured(),
-                required: error.required(),
-            })?;
+            .map_err(ingress_capacity_error)?;
         let validator_set_pops = verified_context.proofs_of_possession().to_vec();
         let shared_config = config.v2_config(block_cadence, context.mode)?;
         let fingerprints = adapter_fingerprints(&local_peer, &shared_config);
@@ -463,12 +476,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             let Some(ingress_permit) = output_guard.acquire() else {
                 return Err(V2RunnerError::RestartRequired);
             };
-            block_rx
-                .open()
-                .map_err(|error| V2RunnerError::IngressCapacity {
-                    configured: error.configured(),
-                    required: error.required(),
-                })?;
+            block_rx.open().map_err(ingress_capacity_error)?;
             ingress_ready.store(true, Ordering::Release);
             drop(ingress_permit);
         }
@@ -757,8 +765,18 @@ fn schedule_local_proposal(
     while let Some(loaded) = services.take_loaded_candidate() {
         let current = executor.local_proposal_directive()?;
         if loaded.tag() != current.tag() || current.locked_subject() != Some(loaded.subject()) {
+            iroha_logger::debug!(
+                loaded_height = loaded.tag().height(),
+                loaded_view = loaded.tag().view(),
+                current_height = current.tag().height(),
+                current_view = current.tag().view(),
+                loaded_subject = ?loaded.subject(),
+                current_locked_subject = ?current.locked_subject(),
+                "discarded stale locked-body load before Sumeragi v2 re-proposal"
+            );
             continue;
         }
+        let loaded_subject = loaded.subject();
         let canonical_wire = loaded.into_canonical_wire();
         let block = iroha_data_model::block::decode_framed_signed_block(&canonical_wire)
             .map_err(|error| V2RunnerError::Candidate(error.to_string()))?;
@@ -769,8 +787,28 @@ fn schedule_local_proposal(
             return Err(V2RunnerError::LaneCandidateBinding);
         }
         if current.leader() != local_validator {
+            executor.retain_locked_body_for_reproposal(
+                current.tag(),
+                loaded_subject,
+                canonical_wire,
+                services,
+            )?;
+            iroha_logger::debug!(
+                height = current.tag().height(),
+                view = current.tag().view(),
+                leader = current.leader(),
+                local_validator,
+                "staged locked body for current-view round binding and validation-witness promotion"
+            );
             continue;
         }
+        iroha_logger::debug!(
+            height = current.tag().height(),
+            view = current.tag().view(),
+            leader = current.leader(),
+            subject = ?current.locked_subject(),
+            "submitting exact locked body for Sumeragi v2 re-proposal"
+        );
         submit_exact_body(
             context,
             current,
@@ -1043,7 +1081,15 @@ fn drain_v2_ingress(
     block_sync_request: &mut Option<HashOf<wire::CommitCertificateRequest>>,
     limit: usize,
 ) -> Result<(), V2RunnerError> {
-    for _ in 0..limit.max(1) {
+    for turn in outer_ingress_turns(limit) {
+        if turn == OuterIngressTurn::Runtime {
+            // A whole authenticated ingress batch can be expensive. Give the
+            // serialized runtime one service turn before every outer
+            // occurrence so trusted completions and timers cannot remain
+            // hidden behind that batch.
+            advance_executor(executor, services, 1)?;
+            continue;
+        }
         let Some(inbound) =
             receiver.try_recv_if(|inbound| v2_ingress_head_can_drain(inbound, executor, services))
         else {
@@ -1202,29 +1248,26 @@ fn drain_v2_ingress(
                         continue;
                     }
                 };
-                match block_sync.enqueue_and_complete(discovered, |message| {
+                let admission = block_sync.enqueue_and_complete(discovered, |message| {
                     executor.enqueue_network(message).map(|_| ())
-                }) {
-                    Ok(()) => *block_sync_request = None,
-                    Err(CommitCertificateAdmissionError::Enqueue(
-                        NetworkIngressError::FailClosed,
-                    )) => return Err(V2RunnerError::RuntimeFailClosed),
-                    Err(CommitCertificateAdmissionError::Enqueue(
-                        NetworkIngressError::Backpressure(error),
-                    )) => {
-                        return Err(V2RunnerError::RuntimeAdmissionInvariant(error.to_string()));
-                    }
-                    Err(CommitCertificateAdmissionError::Enqueue(error)) => {
-                        iroha_logger::debug!(%error, "deferred authenticated CommitQC response");
-                    }
-                    Err(CommitCertificateAdmissionError::RequestDisappeared) => {
-                        return Err(V2RunnerError::BlockSyncRequestDisappeared);
-                    }
+                });
+                if commit_certificate_admission_completed(admission)? {
+                    *block_sync_request = None;
                 }
             }
         }
     }
     Ok(())
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum OuterIngressTurn {
+    Runtime,
+    Ingress,
+}
+
+fn outer_ingress_turns(limit: usize) -> impl Iterator<Item = OuterIngressTurn> {
+    (0..limit.max(1)).flat_map(|_| [OuterIngressTurn::Runtime, OuterIngressTurn::Ingress])
 }
 
 fn v2_ingress_head_can_drain(
@@ -1238,7 +1281,7 @@ fn v2_ingress_head_can_drain(
     if message.validate_version().is_err() {
         return true;
     }
-    if !executor.can_admit_network_payload(&message.payload) {
+    if !executor.can_admit_network_message(message) {
         return false;
     }
     match &message.payload {
@@ -1311,6 +1354,32 @@ fn enqueue_control(
             Err(V2RunnerError::RuntimeAdmissionInvariant(
                 "transport payload reached reducer-control admission".to_owned(),
             ))
+        }
+    }
+}
+
+fn commit_certificate_admission_completed(
+    admission: Result<(), CommitCertificateAdmissionError<NetworkIngressError>>,
+) -> Result<bool, V2RunnerError> {
+    match admission {
+        Ok(()) => Ok(true),
+        Err(CommitCertificateAdmissionError::Enqueue(NetworkIngressError::FailClosed)) => {
+            Err(V2RunnerError::RuntimeFailClosed)
+        }
+        Err(CommitCertificateAdmissionError::Enqueue(NetworkIngressError::Backpressure(error))) => {
+            // The dequeue predicate couples the outer occurrence to this exact
+            // Progress admission. Treat a defensive mismatch as retryable: the
+            // discovery request remains outstanding and retransmission can
+            // supply another occurrence after capacity changes.
+            iroha_logger::debug!(%error, "deferred authenticated CommitQC response after runtime backpressure");
+            Ok(false)
+        }
+        Err(CommitCertificateAdmissionError::Enqueue(error)) => {
+            iroha_logger::debug!(%error, "deferred authenticated CommitQC response");
+            Ok(false)
+        }
+        Err(CommitCertificateAdmissionError::RequestDisappeared) => {
+            Err(V2RunnerError::BlockSyncRequestDisappeared)
         }
     }
 }
@@ -1714,14 +1783,24 @@ pub(super) enum V2RunnerError {
     /// A configured limit is zero.
     #[error("Sumeragi v2 configured limits must be positive")]
     InvalidLimits,
-    /// The fixed v2 ingress cannot reserve one slot per active source lane.
+    /// The fixed v2 ingress cannot reserve first-message and progress slots for the roster.
     #[error(
-        "Sumeragi v2 body ingress capacity {configured} is smaller than the {required} slots required by the frozen roster plus the untrusted lane"
+        "Sumeragi v2 body ingress capacity {configured} is smaller than the {required} first-message, progress, and untrusted slots required by the frozen roster"
     )]
     IngressCapacity {
         /// Configured fixed queue capacity.
         configured: usize,
         /// Required validator-lane plus untrusted-lane capacity.
+        required: usize,
+    },
+    /// The fixed v2 ingress cannot isolate one wire-byte quota per active source lane.
+    #[error(
+        "Sumeragi v2 body ingress byte capacity {configured} is smaller than the {required} bytes required to isolate the frozen roster plus the untrusted lane"
+    )]
+    IngressByteCapacity {
+        /// Configured aggregate canonical-wire byte capacity.
+        configured: usize,
+        /// Required per-source byte reservations for validators and untrusted traffic.
         required: usize,
     },
     /// Outstanding asynchronous work could overflow trusted completion admission.
@@ -1883,6 +1962,8 @@ mod tests {
                 runtime_progress_reserve: 2,
                 runtime_completion_reserve: 2,
                 body_queue_capacity: 16,
+                body_bytes: 160 * 1024 * 1024,
+                body_source_bytes: 32 * 1024 * 1024,
                 chunk_queue_capacity: 64,
                 effect_work_capacity: 2,
                 ready_body_capacity: 8,
@@ -1909,6 +1990,23 @@ mod tests {
                 pending: 3,
                 reserve: 2,
             })
+        ));
+    }
+
+    #[test]
+    fn commit_certificate_runtime_backpressure_remains_retryable() {
+        let admission = Err(CommitCertificateAdmissionError::Enqueue(
+            NetworkIngressError::Backpressure(
+                crate::sumeragi::v2_runtime::EnqueueError::ReservedCapacity,
+            ),
+        ));
+        assert!(matches!(
+            commit_certificate_admission_completed(admission),
+            Ok(false)
+        ));
+        assert!(matches!(
+            commit_certificate_admission_completed(Ok(())),
+            Ok(true)
         ));
     }
 
@@ -2028,9 +2126,29 @@ mod tests {
     }
 
     #[test]
+    fn outer_ingress_batch_gives_runtime_every_preceding_turn() {
+        assert_eq!(
+            outer_ingress_turns(3).collect::<Vec<_>>(),
+            vec![
+                OuterIngressTurn::Runtime,
+                OuterIngressTurn::Ingress,
+                OuterIngressTurn::Runtime,
+                OuterIngressTurn::Ingress,
+                OuterIngressTurn::Runtime,
+                OuterIngressTurn::Ingress,
+            ]
+        );
+        assert_eq!(
+            outer_ingress_turns(0).collect::<Vec<_>>(),
+            vec![OuterIngressTurn::Runtime, OuterIngressTurn::Ingress],
+            "a zero-sized batch still owes one runtime service opportunity"
+        );
+    }
+
+    #[test]
     fn finalized_rollover_closes_ingress_before_successor_replay() {
         let ready = AtomicBool::new(true);
-        let ingress = FairV2Ingress::new(1);
+        let ingress = FairV2Ingress::new(1, 1024 * 1024, 1024 * 1024, 0);
         ingress
             .configure_roster(std::iter::empty())
             .expect("configure untrusted test lane");
@@ -2048,9 +2166,42 @@ mod tests {
     }
 
     #[test]
+    fn ingress_capacity_error_preserves_message_and_byte_units() {
+        let (context, _) = context();
+        let validators = context
+            .roster
+            .iter()
+            .take(2)
+            .map(|validator| validator.validator.clone())
+            .collect::<Vec<_>>();
+
+        let count_error = FairV2Ingress::new(4, 3 * 1024, 1024, 0)
+            .configure_roster(validators.clone())
+            .expect_err("two validators require five protected message slots");
+        assert!(matches!(
+            ingress_capacity_error(count_error),
+            V2RunnerError::IngressCapacity {
+                configured: 4,
+                required: 5,
+            }
+        ));
+
+        let byte_error = FairV2Ingress::new(5, 2 * 1024, 1024, 0)
+            .configure_roster(validators)
+            .expect_err("two validators and untrusted traffic require three byte partitions");
+        assert!(matches!(
+            ingress_capacity_error(byte_error),
+            V2RunnerError::IngressByteCapacity {
+                configured: 2048,
+                required: 3072,
+            }
+        ));
+    }
+
+    #[test]
     fn ingress_guard_fails_closed_during_unwind() {
         let ready = Arc::new(AtomicBool::new(true));
-        let ingress = Arc::new(FairV2Ingress::new(1));
+        let ingress = Arc::new(FairV2Ingress::new(1, 1024 * 1024, 1024 * 1024, 0));
         ingress
             .configure_roster(std::iter::empty())
             .expect("configure untrusted test lane");

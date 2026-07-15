@@ -659,6 +659,14 @@ __all__ = [
     "SumeragiV2TimeoutReference",
     "SumeragiV2HeightContextStatus",
     "SumeragiV2CommitQcStatus",
+    "SumeragiV2VoteQuorumStatus",
+    "SumeragiV2TimeoutQuorumStatus",
+    "SumeragiV2OutboundIntentStatus",
+    "SumeragiV2WorkStatus",
+    "SumeragiV2QueueLivenessStatus",
+    "SumeragiV2ProgressTransitionStatus",
+    "SumeragiV2IgnoreCount",
+    "SumeragiV2LivenessStatus",
     "SumeragiV2AdapterQueueStatus",
     "SumeragiV2TxQueueStatus",
     "SumeragiV2OperatorStatus",
@@ -6810,6 +6818,100 @@ class SumeragiV2CommitQcStatus:
 
 
 @dataclass(frozen=True)
+class SumeragiV2VoteQuorumStatus:
+    """Partial dual quorum for one exact round and proposal."""
+
+    round: SumeragiV2Round
+    subject: SumeragiV2BlockSubject
+    execution_commitment: SumeragiV2ExecutionCommitment
+    signer_count: int
+    signed_power: int
+    min_signers: int
+    total_power: int
+
+
+@dataclass(frozen=True)
+class SumeragiV2TimeoutQuorumStatus:
+    """Partial timeout quorum for one exact round."""
+
+    round: SumeragiV2Round
+    signer_count: int
+    signed_power: int
+    min_signers: int
+    total_power: int
+    certificate_formed: bool
+
+
+@dataclass(frozen=True)
+class SumeragiV2OutboundIntentStatus:
+    """Durable outbound protocol intent and its delivery stage."""
+
+    kind: str
+    round: SumeragiV2Round
+    subject: Optional[SumeragiV2BlockSubject]
+    execution_commitment: Optional[SumeragiV2ExecutionCommitment]
+    stage: str
+
+
+@dataclass(frozen=True)
+class SumeragiV2WorkStatus:
+    """Local terminating-work stages for the active height."""
+
+    candidate: str
+    body_recovery: str
+    body_store: str
+    validation: str
+    application: str
+    successor_height: str
+
+
+@dataclass(frozen=True)
+class SumeragiV2QueueLivenessStatus:
+    """Occupancy and accumulated oldest-item service debt for one bounded queue."""
+
+    queue: str
+    depth: int
+    capacity: int
+    oldest_age_ms: Optional[int]
+    service_debt: int
+
+
+@dataclass(frozen=True)
+class SumeragiV2ProgressTransitionStatus:
+    """Last tracked reducer transition and its local age."""
+
+    generation: int
+    round: SumeragiV2Round
+    transition: str
+    age_ms: int
+
+
+@dataclass(frozen=True)
+class SumeragiV2IgnoreCount:
+    """Per-height count for one closed reducer ignore reason."""
+
+    reason: str
+    count: int
+
+
+@dataclass(frozen=True)
+class SumeragiV2LivenessStatus:
+    """Authoritative progress diagnostics for the active height."""
+
+    generation: int
+    prepare_quorums: List[SumeragiV2VoteQuorumStatus]
+    commit_quorums: List[SumeragiV2VoteQuorumStatus]
+    timeout_quorums: List[SumeragiV2TimeoutQuorumStatus]
+    outbound_intents: List[SumeragiV2OutboundIntentStatus]
+    work: SumeragiV2WorkStatus
+    queues: List[SumeragiV2QueueLivenessStatus]
+    last_progress: Optional[SumeragiV2ProgressTransitionStatus]
+    no_progress_age_ms: int
+    blocker: Optional[str]
+    ignore_counts: List[SumeragiV2IgnoreCount]
+
+
+@dataclass(frozen=True)
 class SumeragiV2AdapterQueueStatus:
     """Bounded v2 reducer-adapter queue occupancy."""
 
@@ -6886,6 +6988,7 @@ class SumeragiV2Status:
     last_committed_subject: Optional[SumeragiV2BlockSubject]
     height_context: SumeragiV2HeightContextStatus
     last_commit_qc: Optional[SumeragiV2CommitQcStatus]
+    liveness: SumeragiV2LivenessStatus
     safety_halt: SumeragiSafetyHaltStatus
     lane_settlement_commitments: List[Dict[str, Any]]
     lane_relay_envelopes: List[Dict[str, Any]]
@@ -7032,6 +7135,7 @@ class _SumeragiV2StatusParser:
             "last_committed_subject",
             "height_context",
             "last_commit_qc",
+            "liveness",
             "safety_halt",
             "lane_settlement_commitments",
             "lane_relay_envelopes",
@@ -7055,6 +7159,9 @@ class _SumeragiV2StatusParser:
 
         height = cls._unsigned(record.get("height"), "sumeragi.height")
         view = cls._unsigned(record.get("view"), "sumeragi.view")
+        height_context_id = cls._context_id(
+            record.get("height_context_id"), "sumeragi.height_context_id"
+        )
         leader = cls._unsigned(
             record.get("leader"), "sumeragi.leader", maximum=cls.MAX_U32
         )
@@ -7118,6 +7225,15 @@ class _SumeragiV2StatusParser:
                     "sumeragi.last_commit_qc does not certify the committed subject"
                 )
 
+        liveness = cls._liveness(
+            record.get("liveness"),
+            context="sumeragi.liveness",
+            height=height,
+            view=view,
+            context_id=height_context_id,
+            height_context=height_context,
+        )
+
         return SumeragiV2Status(
             protocol_version=protocol_version,
             node_fingerprint=cls._hash(
@@ -7130,9 +7246,7 @@ class _SumeragiV2StatusParser:
                 record.get("config_fingerprint"), "sumeragi.config_fingerprint"
             ),
             restart_required=restart_required,
-            height_context_id=cls._context_id(
-                record.get("height_context_id"), "sumeragi.height_context_id"
-            ),
+            height_context_id=height_context_id,
             height=height,
             view=view,
             phase=cls._tagged(
@@ -7182,6 +7296,7 @@ class _SumeragiV2StatusParser:
             last_committed_subject=last_subject,
             height_context=height_context,
             last_commit_qc=last_commit,
+            liveness=liveness,
             safety_halt=cls._safety_halt(
                 record.get("safety_halt"), context="sumeragi.safety_halt"
             ),
@@ -7200,6 +7315,451 @@ class _SumeragiV2StatusParser:
                 record.get("local_peer_removed"), "sumeragi.local_peer_removed"
             ),
             operator=cls._operator(record.get("operator"), context="sumeragi.operator"),
+        )
+
+    @classmethod
+    def _liveness(
+        cls,
+        value: Any,
+        *,
+        context: str,
+        height: int,
+        view: int,
+        context_id: Tuple[str],
+        height_context: SumeragiV2HeightContextStatus,
+    ) -> SumeragiV2LivenessStatus:
+        record = cls._mapping(value, context)
+        liveness_fields = {
+            "generation",
+            "prepare_quorums",
+            "commit_quorums",
+            "timeout_quorums",
+            "outbound_intents",
+            "work",
+            "queues",
+            "last_progress",
+            "no_progress_age_ms",
+            "blocker",
+            "ignore_counts",
+        }
+        unknown_liveness_fields = set(record) - liveness_fields
+        if unknown_liveness_fields:
+            raise RuntimeError(
+                f"{context} contains unknown field {sorted(unknown_liveness_fields)[0]}"
+            )
+        missing_liveness_fields = (
+            liveness_fields - {"last_progress", "blocker"} - set(record)
+        )
+        if missing_liveness_fields:
+            raise RuntimeError(
+                f"{context} is missing required field {sorted(missing_liveness_fields)[0]}"
+            )
+        generation = cls._unsigned(record.get("generation"), f"{context}.generation")
+
+        def checked_round(raw: Any, round_context: str) -> SumeragiV2Round:
+            parsed = cls._round(raw, context=round_context)
+            if parsed.context_id != context_id or parsed.height != height:
+                raise RuntimeError(f"{round_context} must match the active height context")
+            if parsed.view > view:
+                raise RuntimeError(f"{round_context}.view must not exceed the active view")
+            return parsed
+
+        def vote_quorum(raw: Any, quorum_context: str) -> SumeragiV2VoteQuorumStatus:
+            quorum = cls._exact_mapping(
+                raw,
+                quorum_context,
+                {
+                    "round",
+                    "subject",
+                    "execution_commitment",
+                    "signer_count",
+                    "signed_power",
+                    "min_signers",
+                    "total_power",
+                },
+            )
+            signer_count = cls._unsigned(
+                quorum.get("signer_count"),
+                f"{quorum_context}.signer_count",
+                maximum=height_context.validator_count,
+            )
+            min_signers = cls._unsigned(
+                quorum.get("min_signers"),
+                f"{quorum_context}.min_signers",
+                maximum=cls.MAX_U32,
+            )
+            signed_power = cls._unsigned(
+                quorum.get("signed_power"), f"{quorum_context}.signed_power"
+            )
+            total_power = cls._unsigned(
+                quorum.get("total_power"), f"{quorum_context}.total_power"
+            )
+            if (
+                min_signers != height_context.min_signers
+                or total_power != height_context.total_power
+                or signed_power < signer_count
+                or signed_power > total_power
+                or (height_context.mode == "permissioned" and signed_power != signer_count)
+            ):
+                raise RuntimeError(f"{quorum_context} disagrees with the frozen dual quorum")
+            return SumeragiV2VoteQuorumStatus(
+                round=checked_round(quorum.get("round"), f"{quorum_context}.round"),
+                subject=cls._subject(
+                    quorum.get("subject"), context=f"{quorum_context}.subject"
+                ),
+                execution_commitment=cls._execution_commitment(
+                    quorum.get("execution_commitment"),
+                    context=f"{quorum_context}.execution_commitment",
+                ),
+                signer_count=signer_count,
+                signed_power=signed_power,
+                min_signers=min_signers,
+                total_power=total_power,
+            )
+
+        def vote_quorums(field: str) -> List[SumeragiV2VoteQuorumStatus]:
+            raw_values = cls._array(
+                record.get(field), f"{context}.{field}", maximum=cls.MAX_VALIDATORS
+            )
+            return [
+                vote_quorum(item, f"{context}.{field}[{index}]")
+                for index, item in enumerate(raw_values)
+            ]
+
+        raw_timeouts = cls._array(
+            record.get("timeout_quorums"),
+            f"{context}.timeout_quorums",
+            maximum=cls.MAX_VALIDATORS,
+        )
+        timeout_quorums: List[SumeragiV2TimeoutQuorumStatus] = []
+        for index, raw in enumerate(raw_timeouts):
+            item_context = f"{context}.timeout_quorums[{index}]"
+            item = cls._exact_mapping(
+                raw,
+                item_context,
+                {
+                    "round",
+                    "signer_count",
+                    "signed_power",
+                    "min_signers",
+                    "total_power",
+                    "certificate_formed",
+                },
+            )
+            signer_count = cls._unsigned(
+                item.get("signer_count"),
+                f"{item_context}.signer_count",
+                maximum=height_context.validator_count,
+            )
+            signed_power = cls._unsigned(
+                item.get("signed_power"), f"{item_context}.signed_power"
+            )
+            min_signers = cls._unsigned(
+                item.get("min_signers"), f"{item_context}.min_signers"
+            )
+            total_power = cls._unsigned(
+                item.get("total_power"), f"{item_context}.total_power"
+            )
+            formed = cls._boolean(
+                item.get("certificate_formed"), f"{item_context}.certificate_formed"
+            )
+            if (
+                min_signers != height_context.min_signers
+                or total_power != height_context.total_power
+                or signed_power < signer_count
+                or signed_power > total_power
+                or (height_context.mode == "permissioned" and signed_power != signer_count)
+                or (
+                    formed
+                    and (
+                        signer_count < min_signers
+                        or signed_power * 3 <= total_power * 2
+                    )
+                )
+            ):
+                raise RuntimeError(f"{item_context} is not a valid partial timeout quorum")
+            timeout_quorums.append(
+                SumeragiV2TimeoutQuorumStatus(
+                    round=checked_round(item.get("round"), f"{item_context}.round"),
+                    signer_count=signer_count,
+                    signed_power=signed_power,
+                    min_signers=min_signers,
+                    total_power=total_power,
+                    certificate_formed=formed,
+                )
+            )
+
+        raw_outbound = cls._array(
+            record.get("outbound_intents"), f"{context}.outbound_intents", maximum=7
+        )
+        outbound_intents: List[SumeragiV2OutboundIntentStatus] = []
+        proposal_kinds = {
+            "proposal",
+            "prepare_vote",
+            "commit_vote",
+            "prepare_qc",
+            "commit_qc",
+        }
+        for index, raw in enumerate(raw_outbound):
+            item_context = f"{context}.outbound_intents[{index}]"
+            item = cls._mapping(raw, item_context)
+            outbound_fields = {
+                "kind",
+                "round",
+                "subject",
+                "execution_commitment",
+                "stage",
+            }
+            if set(item) - outbound_fields:
+                raise RuntimeError(f"{item_context} contains an unknown field")
+            if {"kind", "round", "stage"} - set(item):
+                raise RuntimeError(f"{item_context} is missing a required field")
+            kind = cls._tagged(
+                item.get("kind"),
+                tag="kind",
+                allowed=proposal_kinds | {"timeout_vote", "timeout_certificate"},
+                context=f"{item_context}.kind",
+            )
+            stage = cls._tagged(
+                item.get("stage"),
+                tag="stage",
+                allowed={"pending_persistence", "pending_signature", "queued", "sent"},
+                context=f"{item_context}.stage",
+            )
+            raw_subject = item.get("subject")
+            raw_execution = item.get("execution_commitment")
+            shape_is_valid = (
+                (kind == "proposal" and raw_subject is not None and raw_execution is None)
+                or (
+                    kind in proposal_kinds - {"proposal"}
+                    and raw_subject is not None
+                    and raw_execution is not None
+                )
+                or (
+                    kind not in proposal_kinds
+                    and raw_subject is None
+                    and raw_execution is None
+                )
+            )
+            if not shape_is_valid:
+                raise RuntimeError(f"{item_context} has inconsistent proposal fields")
+            outbound_intents.append(
+                SumeragiV2OutboundIntentStatus(
+                    kind=kind,
+                    round=checked_round(item.get("round"), f"{item_context}.round"),
+                    subject=(
+                        None
+                        if raw_subject is None
+                        else cls._subject(raw_subject, context=f"{item_context}.subject")
+                    ),
+                    execution_commitment=(
+                        None
+                        if raw_execution is None
+                        else cls._execution_commitment(
+                            raw_execution,
+                            context=f"{item_context}.execution_commitment",
+                        )
+                    ),
+                    stage=stage,
+                )
+            )
+
+        raw_work = cls._exact_mapping(
+            record.get("work"),
+            f"{context}.work",
+            {
+                "candidate",
+                "body_recovery",
+                "body_store",
+                "validation",
+                "application",
+                "successor_height",
+            },
+        )
+        work_stage_names = {"idle", "queued", "running", "complete"}
+        parsed_work = {
+            field: cls._tagged(
+                raw_work.get(field),
+                tag="stage",
+                allowed=work_stage_names,
+                context=f"{context}.work.{field}",
+            )
+            for field in raw_work
+        }
+        work = SumeragiV2WorkStatus(**parsed_work)
+
+        raw_queues = cls._array(record.get("queues"), f"{context}.queues", maximum=9)
+        queues: List[SumeragiV2QueueLivenessStatus] = []
+        queue_names: set[str] = set()
+        for index, raw in enumerate(raw_queues):
+            item_context = f"{context}.queues[{index}]"
+            item = cls._mapping(raw, item_context)
+            queue_fields = {"queue", "depth", "capacity", "oldest_age_ms", "service_debt"}
+            if set(item) - queue_fields:
+                raise RuntimeError(f"{item_context} contains an unknown field")
+            if {"queue", "depth", "capacity", "service_debt"} - set(item):
+                raise RuntimeError(f"{item_context} is missing a required field")
+            queue = cls._tagged(
+                item.get("queue"),
+                tag="queue",
+                allowed={
+                    "ingress",
+                    "deferred_normal",
+                    "deferred_progress",
+                    "deferred_completion",
+                    "runtime_normal",
+                    "runtime_progress",
+                    "runtime_completion",
+                    "effect_completion",
+                    "network_ingress",
+                },
+                context=f"{item_context}.queue",
+            )
+            if queue in queue_names:
+                raise RuntimeError(f"{item_context}.queue is duplicated")
+            queue_names.add(queue)
+            depth = cls._unsigned(
+                item.get("depth"), f"{item_context}.depth", maximum=cls.MAX_U32
+            )
+            capacity = cls._unsigned(
+                item.get("capacity"),
+                f"{item_context}.capacity",
+                positive=True,
+                maximum=cls.MAX_U32,
+            )
+            oldest_age = cls._optional_unsigned(
+                item.get("oldest_age_ms"), f"{item_context}.oldest_age_ms"
+            )
+            if depth > capacity or (depth == 0) != (oldest_age is None):
+                raise RuntimeError(f"{item_context} has inconsistent occupancy and age")
+            queues.append(
+                SumeragiV2QueueLivenessStatus(
+                    queue=queue,
+                    depth=depth,
+                    capacity=capacity,
+                    oldest_age_ms=oldest_age,
+                    service_debt=cls._unsigned(
+                        item.get("service_debt"), f"{item_context}.service_debt"
+                    ),
+                )
+            )
+
+        raw_progress = record.get("last_progress")
+        last_progress: Optional[SumeragiV2ProgressTransitionStatus] = None
+        if raw_progress is not None:
+            progress = cls._exact_mapping(
+                raw_progress,
+                f"{context}.last_progress",
+                {"generation", "round", "transition", "age_ms"},
+            )
+            progress_generation = cls._unsigned(
+                progress.get("generation"), f"{context}.last_progress.generation"
+            )
+            if progress_generation > generation:
+                raise RuntimeError(f"{context}.last_progress.generation is from the future")
+            last_progress = SumeragiV2ProgressTransitionStatus(
+                generation=progress_generation,
+                round=checked_round(
+                    progress.get("round"), f"{context}.last_progress.round"
+                ),
+                transition=cls._tagged(
+                    progress.get("transition"),
+                    tag="transition",
+                    allowed={
+                        "proposal_admitted",
+                        "body_available",
+                        "body_stored",
+                        "body_validated",
+                        "prepare_vote_admitted",
+                        "commit_vote_admitted",
+                        "timeout_vote_admitted",
+                        "prepare_quorum",
+                        "lock_installed",
+                        "commit_quorum",
+                        "timeout_certificate_installed",
+                        "decision_persisted",
+                        "applied",
+                        "successor_height_activated",
+                        "recovery_replayed",
+                    },
+                    context=f"{context}.last_progress.transition",
+                ),
+                age_ms=cls._unsigned(
+                    progress.get("age_ms"), f"{context}.last_progress.age_ms"
+                ),
+            )
+
+        raw_blocker = record.get("blocker")
+        blocker = (
+            None
+            if raw_blocker is None
+            else cls._tagged(
+                raw_blocker,
+                tag="blocker",
+                allowed={
+                    "missing_proposal",
+                    "body_unavailable",
+                    "prepare_quorum_missing",
+                    "commit_quorum_missing",
+                    "timeout_certificate_missing",
+                    "scheduler_starvation",
+                    "application_pending",
+                },
+                context=f"{context}.blocker",
+            )
+        )
+
+        raw_ignore = cls._array(
+            record.get("ignore_counts"), f"{context}.ignore_counts", maximum=11
+        )
+        ignore_counts: List[SumeragiV2IgnoreCount] = []
+        ignore_reasons: set[str] = set()
+        allowed_ignore_reasons = {
+            "wrong_height",
+            "wrong_view",
+            "stale_generation",
+            "busy",
+            "duplicate",
+            "no_matching_work",
+            "observer",
+            "view_closed",
+            "already_decided",
+            "recovery_pending",
+            "irrelevant_view",
+        }
+        for index, raw in enumerate(raw_ignore):
+            item_context = f"{context}.ignore_counts[{index}]"
+            item = cls._exact_mapping(raw, item_context, {"reason", "count"})
+            reason = cls._tagged(
+                item.get("reason"),
+                tag="reason",
+                allowed=allowed_ignore_reasons,
+                context=f"{item_context}.reason",
+            )
+            if reason in ignore_reasons:
+                raise RuntimeError(f"{item_context}.reason is duplicated")
+            ignore_reasons.add(reason)
+            ignore_counts.append(
+                SumeragiV2IgnoreCount(
+                    reason=reason,
+                    count=cls._unsigned(item.get("count"), f"{item_context}.count"),
+                )
+            )
+
+        return SumeragiV2LivenessStatus(
+            generation=generation,
+            prepare_quorums=vote_quorums("prepare_quorums"),
+            commit_quorums=vote_quorums("commit_quorums"),
+            timeout_quorums=timeout_quorums,
+            outbound_intents=outbound_intents,
+            work=work,
+            queues=queues,
+            last_progress=last_progress,
+            no_progress_age_ms=cls._unsigned(
+                record.get("no_progress_age_ms"), f"{context}.no_progress_age_ms"
+            ),
+            blocker=blocker,
+            ignore_counts=ignore_counts,
         )
 
     @staticmethod

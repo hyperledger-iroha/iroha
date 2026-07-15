@@ -1517,6 +1517,8 @@ fn minimal_config_snapshot() {
                 queues: SumeragiQueues {
                     commands: 1024,
                     bodies: 256,
+                    body_bytes: 167772160,
+                    body_source_bytes: 33554432,
                     chunks: 2048,
                     ready_bodies: 128,
                 },
@@ -4378,6 +4380,25 @@ fn taira_config_enables_untrusted_cid_hosting() {
         "Taira profile should keep enough scan budget for cheap txs"
     );
 
+    let queues = doc
+        .get("sumeragi")
+        .and_then(TomlValue::as_table)
+        .and_then(|sumeragi| sumeragi.get("queues"))
+        .and_then(TomlValue::as_table)
+        .expect("sumeragi.queues should be configured");
+    assert_eq!(
+        queues.get("body_bytes").and_then(TomlValue::as_integer),
+        Some(160 * 1024 * 1024),
+        "Taira aggregate canonical wire-byte budget should isolate its five ingress source lanes"
+    );
+    assert_eq!(
+        queues
+            .get("body_source_bytes")
+            .and_then(TomlValue::as_integer),
+        Some(32 * 1024 * 1024),
+        "Taira should retain one canonical outer-ingress wire-byte quota per authenticated source"
+    );
+
     let untrusted = doc
         .get("sorafs")
         .and_then(TomlValue::as_table)
@@ -4567,6 +4588,11 @@ fn sumeragi_v2_explicit_schema_parses() {
     assert_eq!(cfg.sumeragi.block.proposal_queue_scan_multiplier.get(), 3);
     assert_eq!(cfg.sumeragi.queues.commands.get(), 512);
     assert_eq!(cfg.sumeragi.queues.bodies.get(), 96);
+    assert_eq!(cfg.sumeragi.queues.body_bytes.get(), 64 * 1024 * 1024);
+    assert_eq!(
+        cfg.sumeragi.queues.body_source_bytes.get(),
+        16 * 1024 * 1024
+    );
     assert_eq!(cfg.sumeragi.queues.chunks.get(), 768);
     assert_eq!(cfg.sumeragi.queues.ready_bodies.get(), 48);
     assert_eq!(cfg.sumeragi.keys.activation_lead_blocks, 2);
@@ -4591,6 +4617,14 @@ fn sumeragi_v2_rejects_queue_and_key_policy_errors() {
         (
             "bad.sumeragi_command_queue_too_small.toml",
             "sumeragi.queues.commands must be at least 8",
+        ),
+        (
+            "bad.sumeragi_body_source_bytes_too_small.toml",
+            "sumeragi.queues.body_source_bytes must be at least sumeragi.block.max_payload_bytes + 65536 bytes of envelope headroom + 65536 reserved timeout-vote bytes (minimum 16908288, configured 16777216)",
+        ),
+        (
+            "bad.sumeragi_body_bytes_too_small.toml",
+            "sumeragi.queues.body_bytes must be at least 2 * sumeragi.queues.body_source_bytes (minimum 67108864, configured 67108863)",
         ),
         (
             "bad.sumeragi_empty_hsm_provider.toml",
@@ -4763,6 +4797,16 @@ fn sumeragi_v2_defaults_match_fresh_network_profile() {
     );
     assert_eq!(defaults::sumeragi::QUEUE_COMMAND_CAPACITY.get(), 1_024);
     assert_eq!(defaults::sumeragi::QUEUE_BODY_CAPACITY.get(), 256);
+    assert_eq!(
+        defaults::sumeragi::QUEUE_BODY_BYTES.get(),
+        160 * 1024 * 1024
+    );
+    assert_eq!(
+        defaults::sumeragi::QUEUE_BODY_SOURCE_BYTES.get(),
+        32 * 1024 * 1024
+    );
+    assert_eq!(defaults::sumeragi::BODY_ENVELOPE_HEADROOM_BYTES, 64 * 1024);
+    assert_eq!(defaults::sumeragi::TIMEOUT_VOTE_RESERVE_BYTES, 64 * 1024);
     assert_eq!(defaults::sumeragi::QUEUE_CHUNK_CAPACITY.get(), 2_048);
     assert_eq!(defaults::sumeragi::QUEUE_READY_BODY_CAPACITY.get(), 128);
     assert_eq!(npos::EPOCH_LENGTH_BLOCKS, 3_600);
@@ -4778,6 +4822,11 @@ fn sumeragi_v2_defaults_match_fresh_network_profile() {
     assert_eq!(cfg.sumeragi.block.max_payload_bytes.get(), 16 * 1024 * 1024);
     assert_eq!(cfg.sumeragi.queues.commands.get(), 1_024);
     assert_eq!(cfg.sumeragi.queues.bodies.get(), 256);
+    assert_eq!(cfg.sumeragi.queues.body_bytes.get(), 160 * 1024 * 1024);
+    assert_eq!(
+        cfg.sumeragi.queues.body_source_bytes.get(),
+        32 * 1024 * 1024
+    );
     assert_eq!(cfg.sumeragi.queues.chunks.get(), 2_048);
     assert_eq!(cfg.sumeragi.queues.ready_bodies.get(), 128);
     cfg.sumeragi

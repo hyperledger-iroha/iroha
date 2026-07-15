@@ -2366,6 +2366,10 @@ mod run {
     // batch multiple logical messages into fewer encrypted frames.
     const OUTBOUND_DRAIN_HI_MAX: usize = 8;
     const OUTBOUND_DRAIN_LO_MAX: usize = 32;
+    // A biased direct-receive arm may win only this many consecutive turns before reliable
+    // stream I/O is polled without a post-channel competitor. This is especially important for
+    // best-effort datagram posts, which do not consume `MessageSender` capacity.
+    const DIRECT_POST_BURST_MAX: u8 = 8;
     const INBOUND_SEND_WARN_MS: u64 = 250;
     const PEER_TERMINATION_NOTIFY_TIMEOUT: Duration = Duration::from_secs(1);
     // Decrypt/auth failures remain fatal. A malformed inner payload frame, however,
@@ -2552,17 +2556,21 @@ mod run {
         consensus_burst: &mut u8,
         payload_burst: &mut u8,
         availability_burst: &mut u8,
+        safety_pool_open: bool,
+        high_pool_open: bool,
         hi_consensus_safety_rx: &mut post_channel::Receiver<T>,
         hi_control_rx: &mut post_channel::Receiver<T>,
         hi_consensus_rx: &mut post_channel::Receiver<T>,
         hi_consensus_payload_rx: &mut post_channel::Receiver<T>,
         hi_consensus_chunk_rx: &mut post_channel::Receiver<T>,
     ) -> Option<(HighTopic, T)> {
-        let non_safety_pending = !hi_control_rx.is_empty()
-            || !hi_consensus_rx.is_empty()
-            || !hi_consensus_payload_rx.is_empty()
-            || !hi_consensus_chunk_rx.is_empty();
-        if (*safety_burst < HI_SAFETY_BURST_MAX || !non_safety_pending)
+        let non_safety_pending = high_pool_open
+            && (!hi_control_rx.is_empty()
+                || !hi_consensus_rx.is_empty()
+                || !hi_consensus_payload_rx.is_empty()
+                || !hi_consensus_chunk_rx.is_empty());
+        if safety_pool_open
+            && (*safety_burst < HI_SAFETY_BURST_MAX || !non_safety_pending)
             && let Some(message) = hi_consensus_safety_rx.try_recv_now()
         {
             note_high_topic_served(
@@ -2575,9 +2583,9 @@ mod run {
             );
             return Some((HighTopic::ConsensusSafety, message));
         }
-        let consensus_pending = !hi_consensus_rx.is_empty();
-        let availability_pending =
-            !hi_consensus_payload_rx.is_empty() || !hi_consensus_chunk_rx.is_empty();
+        let consensus_pending = high_pool_open && !hi_consensus_rx.is_empty();
+        let availability_pending = high_pool_open
+            && (!hi_consensus_payload_rx.is_empty() || !hi_consensus_chunk_rx.is_empty());
         let availability_burst_active =
             *availability_burst > 0 && *availability_burst < HI_AVAILABILITY_BURST_MAX;
         let availability_preferred = availability_pending
@@ -2585,7 +2593,7 @@ mod run {
                 || *consensus_burst >= HI_CONSENSUS_BURST_MAX
                 || availability_burst_active);
 
-        if *control_burst >= HI_CONTROL_BURST_MAX {
+        if high_pool_open && *control_burst >= HI_CONTROL_BURST_MAX {
             if availability_preferred
                 && let Some((topic, msg)) = try_recv_high_data_fair(
                     *payload_burst,
@@ -2630,7 +2638,7 @@ mod run {
                 return Some((topic, msg));
             }
         }
-        if let Some(m) = hi_control_rx.try_recv_now() {
+        if high_pool_open && let Some(m) = hi_control_rx.try_recv_now() {
             note_high_topic_served(
                 safety_burst,
                 control_burst,
@@ -2641,7 +2649,8 @@ mod run {
             );
             return Some((HighTopic::Control, m));
         }
-        if (availability_preferred || *consensus_burst >= HI_CONSENSUS_BURST_MAX)
+        if high_pool_open
+            && (availability_preferred || *consensus_burst >= HI_CONSENSUS_BURST_MAX)
             && let Some((topic, msg)) = try_recv_high_data_fair(
                 *payload_burst,
                 hi_consensus_payload_rx,
@@ -2658,7 +2667,7 @@ mod run {
             );
             return Some((topic, msg));
         }
-        if let Some(m) = hi_consensus_rx.try_recv_now() {
+        if high_pool_open && let Some(m) = hi_consensus_rx.try_recv_now() {
             note_high_topic_served(
                 safety_burst,
                 control_burst,
@@ -2669,11 +2678,13 @@ mod run {
             );
             return Some((HighTopic::Consensus, m));
         }
-        if let Some(next) = try_recv_high_data_fair(
-            *payload_burst,
-            hi_consensus_payload_rx,
-            hi_consensus_chunk_rx,
-        ) {
+        if high_pool_open
+            && let Some(next) = try_recv_high_data_fair(
+                *payload_burst,
+                hi_consensus_payload_rx,
+                hi_consensus_chunk_rx,
+            )
+        {
             note_high_topic_served(
                 safety_burst,
                 control_burst,
@@ -2683,6 +2694,9 @@ mod run {
                 next.0,
             );
             return Some(next);
+        }
+        if !safety_pool_open {
+            return None;
         }
         let message = hi_consensus_safety_rx.try_recv_now()?;
         note_high_topic_served(
@@ -3101,6 +3115,10 @@ mod run {
             let mut hi_consensus_burst: u8 = 0;
             let mut hi_payload_burst: u8 = 0;
             let mut hi_availability_burst: u8 = 0;
+            let mut prefer_low_send = false;
+            let mut prefer_low_read = false;
+            let mut prefer_inbound_io = true;
+            let mut direct_post_budget = DIRECT_POST_BURST_MAX;
             let mut malformed_payload_streak_hi: u32 = 0;
             let mut malformed_payload_streak_low: u32 = 0;
 
@@ -3112,7 +3130,13 @@ mod run {
                     &lo_health_rx,
                     &lo_other_rx,
                 );
-                if let Some((topic, msg)) = maybe_take_low_after_hi(
+                let low_pool_open = message_sender_low.as_ref().map_or_else(
+                    || message_sender_hi.can_prepare(Priority::Low, None),
+                    |sender| sender.can_prepare(Priority::Low, None),
+                );
+                if direct_post_budget > 0
+                    && low_pool_open
+                    && let Some((topic, msg)) = maybe_take_low_after_hi(
                     &mut hi_budget,
                     &mut low_rr,
                     &mut lo_block_sync_rx,
@@ -3120,7 +3144,9 @@ mod run {
                     &mut lo_peer_gossip_rx,
                     &mut lo_health_rx,
                     &mut lo_other_rx,
-                ) {
+                    )
+                {
+                    direct_post_budget = direct_post_budget.saturating_sub(1);
                     iroha_logger::trace!("Post message ({})", low_topic_label(topic));
                     #[cfg(feature = "quic")]
                     let sent_datagram = {
@@ -3153,9 +3179,10 @@ mod run {
                     let sent_datagram = false;
                     if !sent_datagram {
                         let prepared = if let Some(sender) = message_sender_low.as_mut() {
-                            sender.prepare_message(&Message::Data(msg), Priority::Low)
+                            sender.prepare_or_defer(&Message::Data(msg), Priority::Low)
                         } else {
-                            message_sender_hi.prepare_message(&Message::Data(msg), Priority::Low)
+                            message_sender_hi
+                                .prepare_or_defer(&Message::Data(msg), Priority::Low)
                         };
                         if let Err(error) = prepared {
                             iroha_logger::error!(%error, "Failed to encrypt message.");
@@ -3170,7 +3197,8 @@ mod run {
                 // `message_sender.send()` step. This reduces per-connection frame rate and tokio
                 // I/O driver churn under load.
                 let mut drained_hi = 0usize;
-                if hi_budget > 0
+                if direct_post_budget > 0
+                    && hi_budget > 0
                     && high_outbound_pending(
                         &hi_consensus_safety_rx,
                         &hi_control_rx,
@@ -3179,13 +3207,24 @@ mod run {
                         &hi_consensus_chunk_rx,
                     )
                 {
-                    while drained_hi < OUTBOUND_DRAIN_HI_MAX && hi_budget > 0 {
+                    while drained_hi < OUTBOUND_DRAIN_HI_MAX
+                        && direct_post_budget > 0
+                        && hi_budget > 0
+                    {
+                        let safety_pool_open = message_sender_hi.can_prepare(
+                            Priority::High,
+                            Some(HighBatchClass::ConsensusSafety),
+                        );
+                        let high_pool_open = message_sender_hi
+                            .can_prepare(Priority::High, Some(HighBatchClass::Consensus));
                         let Some((topic, msg)) = try_recv_high_fair(
                             &mut hi_safety_burst,
                             &mut hi_control_burst,
                             &mut hi_consensus_burst,
                             &mut hi_payload_burst,
                             &mut hi_availability_burst,
+                            safety_pool_open,
+                            high_pool_open,
                             &mut hi_consensus_safety_rx,
                             &mut hi_control_rx,
                             &mut hi_consensus_rx,
@@ -3196,19 +3235,28 @@ mod run {
                         };
                         iroha_logger::trace!("Post message ({}/drain)", high_topic_label(topic));
                         if let Err(error) =
-                            message_sender_hi.prepare_message(&Message::Data(msg), Priority::High)
+                            message_sender_hi
+                                .prepare_or_defer(&Message::Data(msg), Priority::High)
                         {
                             iroha_logger::error!(%error, "Failed to encrypt message.");
                             break;
                         }
+                        direct_post_budget = direct_post_budget.saturating_sub(1);
                         hi_budget = hi_budget.saturating_sub(1);
                         drained_hi = drained_hi.saturating_add(1);
                     }
                 }
 
                 let mut drained_lo = 0usize;
-                if low_pending {
-                    while drained_lo < OUTBOUND_DRAIN_LO_MAX {
+                if direct_post_budget > 0 && low_pending {
+                    while drained_lo < OUTBOUND_DRAIN_LO_MAX && direct_post_budget > 0 {
+                        let low_pool_open = message_sender_low.as_ref().map_or_else(
+                            || message_sender_hi.can_prepare(Priority::Low, None),
+                            |sender| sender.can_prepare(Priority::Low, None),
+                        );
+                        if !low_pool_open {
+                            break;
+                        }
                         let Some((topic, m)) = try_recv_low_rr(
                             &mut low_rr,
                             &mut lo_block_sync_rx,
@@ -3251,15 +3299,17 @@ mod run {
                         let sent_datagram = false;
                         if !sent_datagram {
                             let prepared = if let Some(sender) = message_sender_low.as_mut() {
-                                sender.prepare_message(&Message::Data(m), Priority::Low)
+                                sender.prepare_or_defer(&Message::Data(m), Priority::Low)
                             } else {
-                                message_sender_hi.prepare_message(&Message::Data(m), Priority::Low)
+                                message_sender_hi
+                                    .prepare_or_defer(&Message::Data(m), Priority::Low)
                             };
                             if let Err(error) = prepared {
                                 iroha_logger::error!(%error, "Failed to encrypt message.");
                                 break;
                             }
                         }
+                        direct_post_budget = direct_post_budget.saturating_sub(1);
                         hi_budget = HI_BUDGET_RESET;
                         drained_lo = drained_lo.saturating_add(1);
                     }
@@ -3280,12 +3330,25 @@ mod run {
                     &lo_health_rx,
                     &lo_other_rx,
                 ]);
+                let safety_pool_open = message_sender_hi.can_prepare(
+                    Priority::High,
+                    Some(HighBatchClass::ConsensusSafety),
+                );
+                let high_pool_open = message_sender_hi
+                    .can_prepare(Priority::High, Some(HighBatchClass::Consensus));
+                let low_pool_open = message_sender_low.as_ref().map_or_else(
+                    || message_sender_hi.can_prepare(Priority::Low, None),
+                    |sender| sender.can_prepare(Priority::Low, None),
+                );
+                let outbound_ready = message_sender_hi.ready()
+                    || message_sender_low.as_ref().is_some_and(MessageSender::ready);
                 if !(hi_consensus_safety_can_yield
                     || hi_control_can_yield
                     || hi_consensus_can_yield
                     || hi_consensus_payload_can_yield
                     || hi_consensus_chunk_can_yield
-                    || low_outbound_can_yield)
+                    || low_outbound_can_yield
+                    || outbound_ready)
                 {
                     iroha_logger::trace!(
                         "Peer handle dropped and all per-topic outbound queues drained"
@@ -3293,26 +3356,29 @@ mod run {
                     break;
                 }
 
-                let consensus_direct_pending = !hi_consensus_rx.is_empty();
-                let non_safety_direct_pending = !hi_control_rx.is_empty()
-                    || consensus_direct_pending
-                    || !hi_consensus_payload_rx.is_empty()
-                    || !hi_consensus_chunk_rx.is_empty();
+                let consensus_direct_pending = high_pool_open && !hi_consensus_rx.is_empty();
+                let non_safety_direct_pending = high_pool_open
+                    && (!hi_control_rx.is_empty()
+                        || consensus_direct_pending
+                        || !hi_consensus_payload_rx.is_empty()
+                        || !hi_consensus_chunk_rx.is_empty());
                 let availability_direct_allowed = !consensus_direct_pending
                     || hi_consensus_burst >= HI_CONSENSUS_BURST_MAX
                     || (hi_availability_burst > 0
                         && hi_availability_burst < HI_AVAILABILITY_BURST_MAX);
+                let prefer_low_send_now = prefer_low_send;
 
                 tokio::select! {
                     biased;
                     // High-priority topics first (budgeted to avoid starvation).
-                    _ = ping_interval.tick() => {
+                    _ = ping_interval.tick(), if high_pool_open => {
                         iroha_logger::trace!(
                             ping_period=?ping_interval.period(),
                             "The connection has been idle, pinging to check if it's alive"
                         );
                         if let Err(error) =
-                            message_sender_hi.prepare_message(&Message::<T>::Ping, Priority::High)
+                            message_sender_hi
+                                .prepare_or_defer(&Message::<T>::Ping, Priority::High)
                         {
                             iroha_logger::error!(%error, "Failed to encrypt message.");
                             break;
@@ -3325,10 +3391,13 @@ mod run {
                         );
                         break;
                     }
-                    msg = hi_consensus_safety_rx.recv(), if hi_budget > 0
+                    msg = hi_consensus_safety_rx.recv(), if direct_post_budget > 0
+                        && hi_budget > 0
                         && hi_consensus_safety_can_yield
+                        && safety_pool_open
                         && (hi_safety_burst < HI_SAFETY_BURST_MAX || !non_safety_direct_pending) => {
                         if let Some(m) = msg {
+                            direct_post_budget = direct_post_budget.saturating_sub(1);
                             note_high_topic_served(
                                 &mut hi_safety_burst,
                                 &mut hi_control_burst,
@@ -3338,15 +3407,18 @@ mod run {
                                 HighTopic::ConsensusSafety,
                             );
                             iroha_logger::trace!("Post message ({})", high_topic_label(HighTopic::ConsensusSafety));
-                            if let Err(error) = message_sender_hi.prepare_message(&Message::Data(m), Priority::High) {
+                            if let Err(error) = message_sender_hi.prepare_or_defer(&Message::Data(m), Priority::High) {
                                 iroha_logger::error!(%error, "Failed to encrypt message.");
                                 break;
                             }
                             hi_budget = hi_budget.saturating_sub(1);
                         }
                     }
-                    msg = hi_control_rx.recv(), if hi_budget > 0 && hi_control_can_yield => {
+                    msg = hi_control_rx.recv(), if direct_post_budget > 0
+                        && hi_budget > 0 && hi_control_can_yield
+                        && high_pool_open => {
                         if let Some(m) = msg {
+                            direct_post_budget = direct_post_budget.saturating_sub(1);
                             note_high_topic_served(
                                 &mut hi_safety_burst,
                                 &mut hi_control_burst,
@@ -3356,15 +3428,18 @@ mod run {
                                 HighTopic::Control,
                             );
                             iroha_logger::trace!("Post message ({})", high_topic_label(HighTopic::Control));
-                            if let Err(error) = message_sender_hi.prepare_message(&Message::Data(m), Priority::High) {
+                            if let Err(error) = message_sender_hi.prepare_or_defer(&Message::Data(m), Priority::High) {
                                 iroha_logger::error!(%error, "Failed to encrypt message.");
                                 break;
                             }
                             hi_budget = hi_budget.saturating_sub(1);
                         }
                     }
-                    msg = hi_consensus_rx.recv(), if hi_budget > 0 && hi_consensus_can_yield => {
+                    msg = hi_consensus_rx.recv(), if direct_post_budget > 0
+                        && hi_budget > 0 && hi_consensus_can_yield
+                        && high_pool_open => {
                         if let Some(m) = msg {
+                            direct_post_budget = direct_post_budget.saturating_sub(1);
                             note_high_topic_served(
                                 &mut hi_safety_burst,
                                 &mut hi_control_burst,
@@ -3374,16 +3449,19 @@ mod run {
                                 HighTopic::Consensus,
                             );
                             iroha_logger::trace!("Post message ({})", high_topic_label(HighTopic::Consensus));
-                            if let Err(error) = message_sender_hi.prepare_message(&Message::Data(m), Priority::High) {
+                            if let Err(error) = message_sender_hi.prepare_or_defer(&Message::Data(m), Priority::High) {
                                 iroha_logger::error!(%error, "Failed to encrypt message.");
                                 break;
                             }
                             hi_budget = hi_budget.saturating_sub(1);
                         }
                     }
-                    msg = hi_consensus_payload_rx.recv(), if hi_budget > 0
-                        && hi_consensus_payload_can_yield && availability_direct_allowed => {
+                    msg = hi_consensus_payload_rx.recv(), if direct_post_budget > 0
+                        && hi_budget > 0
+                        && hi_consensus_payload_can_yield && high_pool_open
+                        && availability_direct_allowed => {
                         if let Some(m) = msg {
+                            direct_post_budget = direct_post_budget.saturating_sub(1);
                             note_high_topic_served(
                                 &mut hi_safety_burst,
                                 &mut hi_control_burst,
@@ -3393,16 +3471,19 @@ mod run {
                                 HighTopic::ConsensusPayload,
                             );
                             iroha_logger::trace!("Post message ({})", high_topic_label(HighTopic::ConsensusPayload));
-                            if let Err(error) = message_sender_hi.prepare_message(&Message::Data(m), Priority::High) {
+                            if let Err(error) = message_sender_hi.prepare_or_defer(&Message::Data(m), Priority::High) {
                                 iroha_logger::error!(%error, "Failed to encrypt message.");
                                 break;
                             }
                             hi_budget = hi_budget.saturating_sub(1);
                         }
                     }
-                    msg = hi_consensus_chunk_rx.recv(), if hi_budget > 0
-                        && hi_consensus_chunk_can_yield && availability_direct_allowed => {
+                    msg = hi_consensus_chunk_rx.recv(), if direct_post_budget > 0
+                        && hi_budget > 0
+                        && hi_consensus_chunk_can_yield && high_pool_open
+                        && availability_direct_allowed => {
                         if let Some(m) = msg {
+                            direct_post_budget = direct_post_budget.saturating_sub(1);
                             note_high_topic_served(
                                 &mut hi_safety_burst,
                                 &mut hi_control_burst,
@@ -3412,7 +3493,7 @@ mod run {
                                 HighTopic::ConsensusChunk,
                             );
                             iroha_logger::trace!("Post message ({})", high_topic_label(HighTopic::ConsensusChunk));
-                            if let Err(error) = message_sender_hi.prepare_message(&Message::Data(m), Priority::High) {
+                            if let Err(error) = message_sender_hi.prepare_or_defer(&Message::Data(m), Priority::High) {
                                 iroha_logger::error!(%error, "Failed to encrypt message.");
                                 break;
                             }
@@ -3427,8 +3508,10 @@ mod run {
                         &mut lo_peer_gossip_rx,
                         &mut lo_health_rx,
                         &mut lo_other_rx,
-	                    ), if low_outbound_can_yield => {
+	                    ), if direct_post_budget > 0
+                            && low_outbound_can_yield && low_pool_open => {
 	                        if let Some((topic, msg)) = low {
+                                direct_post_budget = direct_post_budget.saturating_sub(1);
 	                            iroha_logger::trace!("Post message ({})", low_topic_label(topic));
 	                            #[cfg(feature = "quic")]
 	                            let sent_datagram = {
@@ -3461,10 +3544,10 @@ mod run {
 	                            let sent_datagram = false;
 	                            if !sent_datagram {
 	                                let prepared = if let Some(sender) = message_sender_low.as_mut() {
-	                                    sender.prepare_message(&Message::Data(msg), Priority::Low)
+	                                    sender.prepare_or_defer(&Message::Data(msg), Priority::Low)
 	                                } else {
-                                    message_sender_hi.prepare_message(&Message::Data(msg), Priority::Low)
-                                };
+	                                    message_sender_hi.prepare_or_defer(&Message::Data(msg), Priority::Low)
+	                                };
                                 if let Err(error) = prepared {
                                     iroha_logger::error!(%error, "Failed to encrypt message.");
                                     break;
@@ -3473,55 +3556,21 @@ mod run {
                             hi_budget = HI_BUDGET_RESET;
                         }
                     }
-                    datagram = recv_best_effort_datagram::<E, T>(&mut datagram_receiver), if datagram_receiver.is_some() => {
-                        match datagram {
-                            Ok((payload, encoded_len)) => {
-                                let topic = payload.topic();
-                                if !topic.is_best_effort() {
-                                    iroha_logger::debug!(
-                                        conn_id,
-                                        ?topic,
-                                        "Dropping non-best-effort payload received via QUIC datagram"
-                                    );
-                                    continue;
-                                }
-                                let peer_message = PeerMessage {
-                                    peer: peer_id.clone(),
-                                    payload,
-                                    payload_bytes: encoded_len,
-                                };
-                                match peer_message_senders.low.try_send(peer_message) {
-                                    Ok(()) | Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
-                                        // Best-effort delivery: drop when the network can't keep up.
-                                    }
-                                    Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
-                                        iroha_logger::error!(
-                                            "Network dropped peer message channel (datagram)."
-                                        );
-                                        break;
-                                    }
-                                }
-                                idle_interval.reset();
-                                ping_interval.reset();
-                            }
-                            Err(Error::Io(_)) => {
-                                iroha_logger::debug!(
-                                    conn_id,
-                                    "QUIC datagram receive failed; disabling datagram receiver"
-                                );
-                                datagram_receiver = None;
-                            }
-                            Err(error) => {
-                                iroha_logger::debug!(
-                                    conn_id,
-                                    %error,
-                                    "Dropping malformed QUIC datagram payload"
-                                );
-                            }
-                        }
-                    }
-                    msg = message_reader.read_message() => {
-                        let (message, encoded_len): (Message<T>, usize) = match msg {
+                    stream_io = next_peer_stream_io(
+                        &mut message_reader,
+                        message_reader_low.as_mut(),
+                        &mut message_sender_hi,
+                        message_sender_low.as_mut(),
+                        prefer_inbound_io,
+                        prefer_low_read,
+                        prefer_low_send_now,
+                    ) => {
+                        direct_post_budget = DIRECT_POST_BURST_MAX;
+                        match stream_io {
+                            PeerStreamIo::Read(PeerStreamRead::High(msg)) => {
+                                prefer_inbound_io = false;
+                                prefer_low_read = true;
+                                let (message, encoded_len): (Message<T>, usize) = match msg {
                             Ok(Some((msg, encoded_len))) => {
                                 malformed_payload_streak_hi = 0;
                                 (msg, encoded_len)
@@ -3590,11 +3639,21 @@ mod run {
                         match message {
                             Message::Ping => {
                                 iroha_logger::trace!("Received peer ping");
-                                if let Err(error) =
-                                    message_sender_hi.prepare_message(&Message::<T>::Pong, Priority::High)
-                                {
-                                    iroha_logger::error!(%error, "Failed to encrypt message.");
-                                    break;
+                                if message_sender_hi.can_prepare(
+                                    Priority::High,
+                                    Some(HighBatchClass::Other),
+                                ) {
+                                    if let Err(error) = message_sender_hi.prepare_or_defer(
+                                        &Message::<T>::Pong,
+                                        Priority::High,
+                                    ) {
+                                        iroha_logger::error!(%error, "Failed to encrypt message.");
+                                        break;
+                                    }
+                                } else {
+                                    iroha_logger::trace!(
+                                        "Skipping peer pong while its outbound pool is backpressured"
+                                    );
                                 }
                             },
                             Message::Pong => {
@@ -3679,12 +3738,11 @@ mod run {
                         // Reset idle and ping timeout as peer received message from another peer
                         idle_interval.reset();
                         ping_interval.reset();
-                    }
-                    msg = async {
-                        let reader = message_reader_low.as_mut().expect("guarded by is_some");
-                        reader.read_message().await
-                    }, if message_reader_low.is_some() => {
-                        let (message, encoded_len): (Message<T>, usize) = match msg {
+                            }
+                            PeerStreamIo::Read(PeerStreamRead::Low(msg)) => {
+                                prefer_inbound_io = false;
+                                prefer_low_read = false;
+                                let (message, encoded_len): (Message<T>, usize) = match msg {
                             Ok(Some((msg, encoded_len))) => {
                                 malformed_payload_streak_low = 0;
                                 (msg, encoded_len)
@@ -3757,11 +3815,21 @@ mod run {
                         match message {
                             Message::Ping => {
                                 iroha_logger::trace!("Received peer ping (low stream)");
-                                if let Err(error) =
-                                    message_sender_hi.prepare_message(&Message::<T>::Pong, Priority::High)
-                                {
-                                    iroha_logger::error!(%error, "Failed to encrypt message.");
-                                    break;
+                                if message_sender_hi.can_prepare(
+                                    Priority::High,
+                                    Some(HighBatchClass::Other),
+                                ) {
+                                    if let Err(error) = message_sender_hi.prepare_or_defer(
+                                        &Message::<T>::Pong,
+                                        Priority::High,
+                                    ) {
+                                        iroha_logger::error!(%error, "Failed to encrypt message.");
+                                        break;
+                                    }
+                                } else {
+                                    iroha_logger::trace!(
+                                        "Skipping peer pong while its outbound pool is backpressured"
+                                    );
                                 }
                             },
                             Message::Pong => {
@@ -3846,29 +3914,86 @@ mod run {
                         // Reset idle and ping timeout as peer received message from another peer
                         idle_interval.reset();
                         ping_interval.reset();
-                    }
-                    // `send()` is safe to be cancelled: it won't advance the queue or write
-                    // anything if another branch completes first.
-                    result = message_sender_hi.send(), if message_sender_hi.ready() => {
-                        if let Err(error) = result {
-                            iroha_logger::error!(%error, "Failed to send message to peer (hi stream).");
-                            break;
+                            }
+                            PeerStreamIo::Outbound { sent_low, result } => {
+                                if let Err(error) = result {
+                                    if sent_low {
+                                        iroha_logger::error!(%error, "Failed to send message to peer (low stream); reconnecting rather than discarding accepted outbound work.");
+                                    } else {
+                                        iroha_logger::error!(%error, "Failed to send message to peer (hi stream).");
+                                    }
+                                    break;
+                                }
+                                // Alternate ready streams so sustained consensus traffic cannot
+                                // indefinitely strand an admitted low-stream frame, then prefer
+                                // inbound service without disabling a pending write fallback.
+                                prefer_low_send = !sent_low;
+                                prefer_inbound_io = true;
+                            }
                         }
                     }
-                    result = async {
-                        let sender = message_sender_low.as_mut().expect("ready implies sender present");
-                        sender.send().await
-                    }, if message_sender_low.as_ref().is_some_and(MessageSender::ready) => {
-                        if let Err(error) = result {
-                            iroha_logger::warn!(%error, "Failed to send message to peer (low stream); falling back to hi stream");
-                            message_sender_low = None;
+                    // Once direct post intake spends its finite burst, poll reliable stream I/O
+                    // first. If every stream operation is pending, yield once and reopen intake;
+                    // this prevents both best-effort datagram starvation and an idle deadlock.
+                    () = std::future::ready(()), if direct_post_budget == 0 => {
+                        direct_post_budget = DIRECT_POST_BURST_MAX;
+                        tokio::task::yield_now().await;
+                    }
+                    // QUIC datagrams are explicitly best-effort, so reliable stream I/O gets
+                    // first refusal. The branch still runs whenever all stream futures are
+                    // pending and therefore cannot block the actor.
+                    datagram = recv_best_effort_datagram::<E, T>(&mut datagram_receiver), if datagram_receiver.is_some() => {
+                        match datagram {
+                            Ok((payload, encoded_len)) => {
+                                let topic = payload.topic();
+                                if !topic.is_best_effort() {
+                                    iroha_logger::debug!(
+                                        conn_id,
+                                        ?topic,
+                                        "Dropping non-best-effort payload received via QUIC datagram"
+                                    );
+                                    continue;
+                                }
+                                let peer_message = PeerMessage {
+                                    peer: peer_id.clone(),
+                                    payload,
+                                    payload_bytes: encoded_len,
+                                };
+                                match peer_message_senders.low.try_send(peer_message) {
+                                    Ok(()) | Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                                        // Best-effort delivery: drop when the network can't keep up.
+                                    }
+                                    Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                                        iroha_logger::error!(
+                                            "Network dropped peer message channel (datagram)."
+                                        );
+                                        break;
+                                    }
+                                }
+                                idle_interval.reset();
+                                ping_interval.reset();
+                            }
+                            Err(Error::Io(_)) => {
+                                iroha_logger::debug!(
+                                    conn_id,
+                                    "QUIC datagram receive failed; disabling datagram receiver"
+                                );
+                                datagram_receiver = None;
+                            }
+                            Err(error) => {
+                                iroha_logger::debug!(
+                                    conn_id,
+                                    %error,
+                                    "Dropping malformed QUIC datagram payload"
+                                );
+                            }
                         }
                     }
                     else => break,
                 }
 
                 // Opportunistically allow a low-priority message through after bursts of high-priority posts.
-                if hi_budget == 0 && low_pending {
+                if hi_budget == 0 && low_pending && low_pool_open {
                     if let Some((topic, m)) = try_recv_low_rr(
                         &mut low_rr,
                         &mut lo_block_sync_rx,
@@ -3908,9 +4033,10 @@ mod run {
                         let sent_datagram = false;
                         if !sent_datagram {
                             let prepared = if let Some(sender) = message_sender_low.as_mut() {
-                                sender.prepare_message(&Message::Data(m), Priority::Low)
+                                sender.prepare_or_defer(&Message::Data(m), Priority::Low)
                             } else {
-                                message_sender_hi.prepare_message(&Message::Data(m), Priority::Low)
+                                message_sender_hi
+                                    .prepare_or_defer(&Message::Data(m), Priority::Low)
                             };
                             if let Err(error) = prepared {
                                 iroha_logger::error!(%error, "Failed to encrypt message.");
@@ -4335,6 +4461,15 @@ mod run {
         /// Accumulated plaintext bytes for the next low-priority encrypted frame.
         plain_low: Vec<u8>,
         plain_low_msgs: usize,
+        /// One accepted plaintext message per independently bounded frame pool.
+        ///
+        /// A message moves here only after its topic channel has yielded ownership and the
+        /// corresponding encrypted-frame queue is temporarily full. Keeping the plaintext in
+        /// the sender lets socket service free capacity without dropping the message or tearing
+        /// down the connection. Each slot is bounded by `max_frame_bytes`.
+        deferred_safety: Option<DeferredPlaintext>,
+        deferred_high: Option<DeferredPlaintext>,
+        deferred_low: Option<DeferredPlaintext>,
         /// Reusable buffer for encrypted payloads (nonce || ciphertext || tag).
         encrypted: Vec<u8>,
         /// Reusable buffers for framing outbound messages.
@@ -4382,6 +4517,20 @@ mod run {
         ConsensusPayload,
         ConsensusChunk,
         Other,
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum DeferredPool {
+        ConsensusSafety,
+        High,
+        Low,
+    }
+
+    #[derive(Debug)]
+    struct DeferredPlaintext {
+        bytes: Vec<u8>,
+        priority: Priority,
+        high_class: Option<HighBatchClass>,
     }
 
     impl HighBatchClass {
@@ -4455,6 +4604,9 @@ mod run {
                 plain_high_class: None,
                 plain_low: Vec::with_capacity(capacity),
                 plain_low_msgs: 0,
+                deferred_safety: None,
+                deferred_high: None,
+                deferred_low: None,
                 encrypted: Vec::with_capacity(capacity),
                 frame_pool: Vec::new(),
                 queue_high_consensus_safety: VecDeque::new(),
@@ -4519,7 +4671,9 @@ mod run {
         /// Prepare message for the delivery and put it into the queue to be sent later
         ///
         /// # Errors
-        /// - If encryption fail.
+        /// - If encoding or encryption fails.
+        /// - If the message exceeds the frame limit or its encrypted frame cannot enter the
+        ///   configured queue.
         fn prepare_message<T>(&mut self, msg: &T, priority: Priority) -> Result<(), Error>
         where
             T: Pload + ClassifyTopic,
@@ -4527,6 +4681,15 @@ mod run {
             encode_wire_message(msg, &mut self.buffer)?;
 
             let topic = msg.topic();
+            let high_class = matches!(priority, Priority::High).then(|| classify_high_batch(topic));
+            self.prepare_encoded_buffer(priority, high_class)
+        }
+
+        fn prepare_encoded_buffer(
+            &mut self,
+            priority: Priority,
+            high_class: Option<HighBatchClass>,
+        ) -> Result<(), Error> {
             let max_plaintext = crate::frame_plaintext_cap(self.max_frame_bytes);
             let msg_len = self.buffer.len();
             if msg_len > max_plaintext {
@@ -4537,13 +4700,12 @@ mod run {
 
             match priority {
                 Priority::High => {
-                    let class = classify_high_batch(topic);
+                    let class = high_class.unwrap_or(HighBatchClass::Other);
                     // Control and consensus traffic should not be batched with neighbouring
                     // high-priority messages. If one encrypted frame is lost or malformed under
                     // load, this keeps the blast radius to one vote/QC/RBC/control message and
                     // lets Sumeragi repair fanout make progress.
                     if class.should_isolate_plaintext() {
-                        self.flush_plain_high()?;
                         self.enqueue_current_buffer(Priority::High, Some(class))?;
                         return Ok(());
                     }
@@ -4595,17 +4757,113 @@ mod run {
             Ok(())
         }
 
+        fn deferred_pool(priority: Priority, high_class: Option<HighBatchClass>) -> DeferredPool {
+            match (priority, high_class) {
+                (Priority::High, Some(HighBatchClass::ConsensusSafety)) => {
+                    DeferredPool::ConsensusSafety
+                }
+                (Priority::High, _) => DeferredPool::High,
+                (Priority::Low, _) => DeferredPool::Low,
+            }
+        }
+
+        fn deferred(&self, pool: DeferredPool) -> Option<&DeferredPlaintext> {
+            match pool {
+                DeferredPool::ConsensusSafety => self.deferred_safety.as_ref(),
+                DeferredPool::High => self.deferred_high.as_ref(),
+                DeferredPool::Low => self.deferred_low.as_ref(),
+            }
+        }
+
+        fn deferred_mut(&mut self, pool: DeferredPool) -> &mut Option<DeferredPlaintext> {
+            match pool {
+                DeferredPool::ConsensusSafety => &mut self.deferred_safety,
+                DeferredPool::High => &mut self.deferred_high,
+                DeferredPool::Low => &mut self.deferred_low,
+            }
+        }
+
+        fn can_prepare(&self, priority: Priority, high_class: Option<HighBatchClass>) -> bool {
+            self.deferred(Self::deferred_pool(priority, high_class))
+                .is_none()
+        }
+
+        /// Accept a channel-owned message or retain exactly one plaintext retry in its bounded
+        /// scheduling pool when encrypted-frame capacity is temporarily exhausted.
+        ///
+        /// Returning `Ok` transfers ownership to the sender even when the message is deferred.
+        /// Callers must stop yielding the same pool while [`Self::can_prepare`] is false.
+        fn prepare_or_defer<T>(&mut self, msg: &T, priority: Priority) -> Result<(), Error>
+        where
+            T: Pload + ClassifyTopic,
+        {
+            let high_class =
+                matches!(priority, Priority::High).then(|| classify_high_batch(msg.topic()));
+            let pool = Self::deferred_pool(priority, high_class);
+            if !self.can_prepare(priority, high_class) {
+                let (priority, queued_bytes, max_bytes, queued_frames, max_frames) =
+                    self.queue_stats(priority, high_class);
+                return Err(Error::OutboundFrameQueueFull {
+                    priority,
+                    queued_bytes,
+                    max_bytes,
+                    queued_frames,
+                    max_frames,
+                });
+            }
+
+            match self.prepare_message(msg, priority) {
+                Ok(()) => Ok(()),
+                Err(Error::OutboundFrameQueueFull {
+                    queued_bytes,
+                    queued_frames,
+                    ..
+                }) if queued_bytes > 0 || queued_frames > 0 => {
+                    let bytes = core::mem::take(&mut self.buffer);
+                    debug_assert!(
+                        !bytes.is_empty(),
+                        "a queue-full prepare must retain the current encoded message"
+                    );
+                    *self.deferred_mut(pool) = Some(DeferredPlaintext {
+                        bytes,
+                        priority,
+                        high_class,
+                    });
+                    iroha_logger::trace!(
+                        ?pool,
+                        "Deferred outbound plaintext until encrypted-frame capacity is serviced"
+                    );
+                    Ok(())
+                }
+                Err(error) => Err(error),
+            }
+        }
+
         /// Send bytes of byte-encoded messages piled up in the message queue so far.
         /// On the other side peer will collect bytes and recreate original messages from them.
         ///
         /// # Errors
-        /// - If write to `stream` fail.
+        /// - If retained plaintext cannot fit an empty configured frame pool.
+        /// - If encryption or writing to the stream fails.
         async fn send(&mut self) -> Result<(), Error> {
-            // Ensure pending plaintext batches are flushed into encrypted frames.
-            self.flush_plain_high()?;
-            self.flush_plain_low()?;
+            // `send()` is cancellation-safe at the flush boundary. A competing ready stream may
+            // win after this sender wrote the complete batch but before its flush completed. Keep
+            // the non-empty batch as the durable pending-flush witness, resume that flush before
+            // staging later work or refilling, and never write the same bytes twice.
+            if !self.batch.is_empty() && self.batch_offset >= self.batch.len() {
+                self.write.flush().await?;
+                self.batch.clear();
+                self.batch_offset = 0;
+                self.shrink_idle_buffers();
+            }
 
-            if self.batch_offset >= self.batch.len() {
+            // Queue-full is flow control, not a connection failure. Try to stage retained
+            // plaintext, then service already encrypted frames even when staging still lacks
+            // capacity. This gives every deferred message a decreasing service rank: each write
+            // removes bytes from the exact bounded pool that prevented its admission.
+            self.stage_retained_plaintext()?;
+
+            if self.batch.is_empty() {
                 self.fill_batch();
             }
             if self.batch_offset >= self.batch.len() {
@@ -4636,7 +4894,7 @@ mod run {
 
         /// Check if message sender has data ready to be sent.
         fn ready(&self) -> bool {
-            self.batch_offset < self.batch.len()
+            !self.batch.is_empty()
                 || !self.plain_high.is_empty()
                 || !self.plain_low.is_empty()
                 || !self.queue_high_consensus_safety.is_empty()
@@ -4646,6 +4904,86 @@ mod run {
                 || !self.queue_high_consensus_chunk.is_empty()
                 || !self.queue_high_other.is_empty()
                 || !self.queue_low.is_empty()
+                || self.deferred_safety.is_some()
+                || self.deferred_high.is_some()
+                || self.deferred_low.is_some()
+        }
+
+        fn queue_full_has_backlog(error: &Error) -> bool {
+            matches!(
+                error,
+                Error::OutboundFrameQueueFull {
+                    queued_bytes,
+                    queued_frames,
+                    ..
+                } if *queued_bytes > 0 || *queued_frames > 0
+            )
+        }
+
+        fn flush_plain_high_if_capacity(&mut self) -> Result<bool, Error> {
+            match self.flush_plain_high() {
+                Ok(()) => Ok(true),
+                Err(error) if Self::queue_full_has_backlog(&error) => Ok(false),
+                Err(error) => Err(error),
+            }
+        }
+
+        fn flush_plain_low_if_capacity(&mut self) -> Result<bool, Error> {
+            match self.flush_plain_low() {
+                Ok(()) => Ok(true),
+                Err(error) if Self::queue_full_has_backlog(&error) => Ok(false),
+                Err(error) => Err(error),
+            }
+        }
+
+        fn retry_deferred(&mut self, pool: DeferredPool) -> Result<(), Error> {
+            let Some(pending) = self.deferred_mut(pool).take() else {
+                return Ok(());
+            };
+            let DeferredPlaintext {
+                bytes,
+                priority,
+                high_class,
+            } = pending;
+            let scratch = core::mem::replace(&mut self.buffer, bytes);
+            match self.prepare_encoded_buffer(priority, high_class) {
+                Ok(()) => {
+                    self.buffer.clear();
+                    self.shrink_idle_buffers();
+                    drop(scratch);
+                    Ok(())
+                }
+                Err(error) => {
+                    let bytes = core::mem::replace(&mut self.buffer, scratch);
+                    *self.deferred_mut(pool) = Some(DeferredPlaintext {
+                        bytes,
+                        priority,
+                        high_class,
+                    });
+                    if Self::queue_full_has_backlog(&error) {
+                        Ok(())
+                    } else {
+                        Err(error)
+                    }
+                }
+            }
+        }
+
+        fn stage_retained_plaintext(&mut self) -> Result<(), Error> {
+            // Safety uses independent accounting and must remain admissible while ordinary high
+            // traffic is saturated.
+            self.retry_deferred(DeferredPool::ConsensusSafety)?;
+
+            let high_capacity = self.flush_plain_high_if_capacity()?;
+            if high_capacity {
+                self.retry_deferred(DeferredPool::High)?;
+            }
+
+            let low_capacity = self.flush_plain_low_if_capacity()?;
+            if low_capacity {
+                self.retry_deferred(DeferredPool::Low)?;
+            }
+            Ok(())
         }
 
         fn flush_plain_high(&mut self) -> Result<(), Error> {
@@ -4818,19 +5156,24 @@ mod run {
             priority: Priority,
             high_class: Option<HighBatchClass>,
         ) -> Result<(), Error> {
+            // AEAD framing has a fixed nonce and tag expansion for `E`. Check the exact queue
+            // charge before generating a nonce or encrypting, so retrying a deferred large frame
+            // is O(1) until enough bytes have actually left its bounded pool.
+            let encrypted_size = plaintext
+                .len()
+                .saturating_add(core::mem::size_of::<aead::Nonce<E>>())
+                .saturating_add(core::mem::size_of::<aead::Tag<E>>());
+            if encrypted_size > self.max_frame_bytes {
+                return Err(Error::FrameTooLarge);
+            }
+            let needed = encrypted_size.saturating_add(Self::U32_SIZE);
+            self.check_queue_limit(priority, high_class, needed)?;
+
             self.cryptographer
                 .encrypt_into(plaintext, &mut self.encrypted)?;
 
             let size = self.encrypted.len();
-            if size > self.max_frame_bytes {
-                self.clear_encrypted_buffer();
-                return Err(Error::FrameTooLarge);
-            }
-            let needed = size.saturating_add(Self::U32_SIZE);
-            if let Err(error) = self.check_queue_limit(priority, high_class, needed) {
-                self.clear_encrypted_buffer();
-                return Err(error);
-            }
+            debug_assert_eq!(size, encrypted_size, "AEAD envelope expansion changed");
             let mut frame = self.frame_pool.pop().unwrap_or_default();
             frame.clear();
             if frame.capacity() < needed {
@@ -5096,6 +5439,131 @@ mod run {
         }
     }
 
+    /// Poll every currently ready outbound stream and use `prefer_low` only as
+    /// the tie-breaker when both can make progress immediately.
+    ///
+    /// Selecting one stream before awaiting its write can strand admitted
+    /// consensus-safety frames indefinitely behind flow control on the other
+    /// stream. The inner selection keeps both write futures live; alternating
+    /// the biased first branch still provides deterministic local fairness
+    /// when both writers are continuously ready.
+    async fn send_one_ready_stream<E: Enc>(
+        high: &mut MessageSender<E>,
+        low: Option<&mut MessageSender<E>>,
+        prefer_low: bool,
+    ) -> Option<(bool, Result<(), Error>)> {
+        let high_ready = high.ready();
+        let low_ready = low.as_ref().is_some_and(|sender| sender.ready());
+        match (high_ready, low_ready) {
+            (true, true) => {
+                let low = low.expect("ready low sender must be present");
+                if prefer_low {
+                    tokio::select! {
+                        biased;
+                        result = low.send() => Some((true, result)),
+                        result = high.send() => Some((false, result)),
+                    }
+                } else {
+                    tokio::select! {
+                        biased;
+                        result = high.send() => Some((false, result)),
+                        result = low.send() => Some((true, result)),
+                    }
+                }
+            }
+            (true, false) => Some((false, high.send().await)),
+            (false, true) => {
+                let low = low.expect("ready low sender must be present");
+                Some((true, low.send().await))
+            }
+            (false, false) => None,
+        }
+    }
+
+    type PeerStreamReadResult<T> = Result<Option<(Message<T>, usize)>, Error>;
+
+    enum PeerStreamRead<T> {
+        High(PeerStreamReadResult<T>),
+        Low(PeerStreamReadResult<T>),
+    }
+
+    enum PeerStreamIo<T> {
+        Read(PeerStreamRead<T>),
+        Outbound {
+            sent_low: bool,
+            result: Result<(), Error>,
+        },
+    }
+
+    /// Poll both reliable inbound streams, using `prefer_low` only to resolve a
+    /// simultaneous-ready tie.
+    async fn read_one_ready_stream<E: Enc, T: Pload + ClassifyTopic>(
+        high: &mut MessageReader<E, Message<T>>,
+        low: Option<&mut MessageReader<E, Message<T>>>,
+        prefer_low: bool,
+    ) -> PeerStreamRead<T> {
+        let Some(low) = low else {
+            return PeerStreamRead::High(high.read_message().await);
+        };
+        if prefer_low {
+            tokio::select! {
+                biased;
+                result = low.read_message() => PeerStreamRead::Low(result),
+                result = high.read_message() => PeerStreamRead::High(result),
+            }
+        } else {
+            tokio::select! {
+                biased;
+                result = high.read_message() => PeerStreamRead::High(result),
+                result = low.read_message() => PeerStreamRead::Low(result),
+            }
+        }
+    }
+
+    /// Poll read and write directions together so preference never becomes a
+    /// guard that can deadlock a full-duplex connection.
+    async fn next_peer_stream_io<E: Enc, T: Pload + ClassifyTopic>(
+        high_reader: &mut MessageReader<E, Message<T>>,
+        low_reader: Option<&mut MessageReader<E, Message<T>>>,
+        high_sender: &mut MessageSender<E>,
+        low_sender: Option<&mut MessageSender<E>>,
+        prefer_inbound: bool,
+        prefer_low_read: bool,
+        prefer_low_send: bool,
+    ) -> PeerStreamIo<T> {
+        let outbound_ready =
+            high_sender.ready() || low_sender.as_ref().is_some_and(|sender| sender.ready());
+        if !outbound_ready {
+            return PeerStreamIo::Read(
+                read_one_ready_stream(high_reader, low_reader, prefer_low_read).await,
+            );
+        }
+
+        let read = read_one_ready_stream(high_reader, low_reader, prefer_low_read);
+        let send = send_one_ready_stream(high_sender, low_sender, prefer_low_send);
+        if prefer_inbound {
+            tokio::select! {
+                biased;
+                result = read => PeerStreamIo::Read(result),
+                result = send => {
+                    let (sent_low, result) = result
+                        .expect("ready outbound sender must remain ready until polled");
+                    PeerStreamIo::Outbound { sent_low, result }
+                }
+            }
+        } else {
+            tokio::select! {
+                biased;
+                result = send => {
+                    let (sent_low, result) = result
+                        .expect("ready outbound sender must remain ready until polled");
+                    PeerStreamIo::Outbound { sent_low, result }
+                },
+                result = read => PeerStreamIo::Read(result),
+            }
+        }
+    }
+
     /// Either message or ping
     #[derive(Encode, Decode, Clone, Debug)]
     enum Message<T> {
@@ -5272,6 +5740,7 @@ mod run {
             pin::Pin,
             sync::{Arc, Mutex},
             task::{Context, Poll},
+            time::Duration,
         };
 
         use bytes::Bytes;
@@ -5533,6 +6002,25 @@ mod run {
 
         struct ZeroWrite;
 
+        struct PendingWrite;
+
+        struct PendingRead;
+
+        struct PendingFirstFlushWrite {
+            buffer: Arc<Mutex<Vec<u8>>>,
+            flushes: Arc<Mutex<usize>>,
+        }
+
+        impl AsyncRead for PendingRead {
+            fn poll_read(
+                self: Pin<&mut Self>,
+                _cx: &mut Context<'_>,
+                _buf: &mut tokio::io::ReadBuf<'_>,
+            ) -> Poll<std::io::Result<()>> {
+                Poll::Pending
+            }
+        }
+
         impl AsyncWrite for TrackingWrite {
             fn poll_write(
                 self: Pin<&mut Self>,
@@ -5601,6 +6089,64 @@ mod run {
                 _cx: &mut Context<'_>,
             ) -> Poll<std::io::Result<()>> {
                 Poll::Ready(Ok(()))
+            }
+
+            fn poll_shutdown(
+                self: Pin<&mut Self>,
+                _cx: &mut Context<'_>,
+            ) -> Poll<std::io::Result<()>> {
+                Poll::Ready(Ok(()))
+            }
+        }
+
+        impl AsyncWrite for PendingWrite {
+            fn poll_write(
+                self: Pin<&mut Self>,
+                _cx: &mut Context<'_>,
+                _buf: &[u8],
+            ) -> Poll<std::io::Result<usize>> {
+                Poll::Pending
+            }
+
+            fn poll_flush(
+                self: Pin<&mut Self>,
+                _cx: &mut Context<'_>,
+            ) -> Poll<std::io::Result<()>> {
+                Poll::Pending
+            }
+
+            fn poll_shutdown(
+                self: Pin<&mut Self>,
+                _cx: &mut Context<'_>,
+            ) -> Poll<std::io::Result<()>> {
+                Poll::Ready(Ok(()))
+            }
+        }
+
+        impl AsyncWrite for PendingFirstFlushWrite {
+            fn poll_write(
+                self: Pin<&mut Self>,
+                _cx: &mut Context<'_>,
+                buf: &[u8],
+            ) -> Poll<std::io::Result<usize>> {
+                self.buffer
+                    .lock()
+                    .expect("buffer lock")
+                    .extend_from_slice(buf);
+                Poll::Ready(Ok(buf.len()))
+            }
+
+            fn poll_flush(
+                self: Pin<&mut Self>,
+                _cx: &mut Context<'_>,
+            ) -> Poll<std::io::Result<()>> {
+                let mut flushes = self.flushes.lock().expect("flush count lock");
+                *flushes = flushes.saturating_add(1);
+                if *flushes == 1 {
+                    Poll::Pending
+                } else {
+                    Poll::Ready(Ok(()))
+                }
             }
 
             fn poll_shutdown(
@@ -5749,6 +6295,570 @@ mod run {
             ));
             assert_eq!(sender.queued_high_frames, 1);
             assert!(sender.queued_high_bytes > 0);
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn outbound_backpressure_defers_full_consensus_pool_without_loss() {
+            let buffer = Arc::new(Mutex::new(Vec::new()));
+            let writer = CollectingWrite {
+                buffer: Arc::clone(&buffer),
+            };
+            let cryptographer =
+                Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[41u8; 32])
+                    .expect("valid key length");
+            let reader_cryptographer = cryptographer.clone();
+            let limits = OutboundFrameQueueLimits::new(1_048_576, 1_048_576, 1, 16);
+            let mut sender =
+                MessageSender::with_limits(Box::new(writer), cryptographer, 1024, limits);
+
+            sender
+                .prepare_or_defer(&Message::Data(RoutedMsg::Consensus(1)), Priority::High)
+                .expect("first consensus frame fits");
+            sender
+                .prepare_or_defer(&Message::Data(RoutedMsg::Consensus(2)), Priority::High)
+                .expect("second consensus frame transfers to bounded deferred ownership");
+
+            assert!(sender.deferred_high.is_some());
+            assert!(!sender.can_prepare(Priority::High, Some(HighBatchClass::Consensus)));
+            while sender.ready() {
+                sender.send().await.expect("service bounded backlog");
+            }
+
+            let data = {
+                let buffer = buffer.lock().expect("buffer lock");
+                Bytes::from(buffer.clone())
+            };
+            let read: Box<dyn AsyncRead + Send + Unpin> = Box::new(FakeRead { data, pos: 0 });
+            let mut reader: MessageReader<ChaCha20Poly1305, Message<RoutedMsg>> =
+                MessageReader::new(read, reader_cryptographer, 1024);
+            let mut delivered = Vec::new();
+            while let Some((message, _)) = reader.read_message().await.expect("decode message") {
+                match message {
+                    Message::Data(RoutedMsg::Consensus(id)) => delivered.push(id),
+                    other => panic!("expected consensus message, got {other:?}"),
+                }
+            }
+            assert_eq!(delivered, vec![1, 2]);
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn outbound_backpressure_preserves_consensus_safety_isolation() {
+            let buffer = Arc::new(Mutex::new(Vec::new()));
+            let writer = CollectingWrite {
+                buffer: Arc::clone(&buffer),
+            };
+            let cryptographer =
+                Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[42u8; 32])
+                    .expect("valid key length");
+            let reader_cryptographer = cryptographer.clone();
+            let limits = OutboundFrameQueueLimits::new(1_048_576, 1_048_576, 1, 16);
+            let mut sender =
+                MessageSender::with_limits(Box::new(writer), cryptographer, 1024, limits);
+
+            sender
+                .prepare_or_defer(&Message::Data(RoutedMsg::Consensus(1)), Priority::High)
+                .expect("first ordinary consensus frame fills its pool");
+            sender
+                .prepare_or_defer(&Message::Data(RoutedMsg::TxGossip(7)), Priority::High)
+                .expect("retain a non-isolated ordinary plaintext batch");
+            sender
+                .prepare_or_defer(&Message::Data(RoutedMsg::Consensus(2)), Priority::High)
+                .expect("second ordinary consensus frame is deferred");
+            assert!(sender.deferred_high.is_some());
+            assert!(sender.can_prepare(Priority::High, Some(HighBatchClass::ConsensusSafety)));
+            sender
+                .prepare_or_defer(
+                    &Message::Data(RoutedMsg::ConsensusSafety(9)),
+                    Priority::High,
+                )
+                .expect("independent safety pool remains admissible");
+            assert_eq!(sender.queue_high_consensus_safety.len(), 1);
+            assert!(sender.deferred_safety.is_none());
+
+            while sender.ready() {
+                sender.send().await.expect("service bounded backlog");
+            }
+
+            let data = {
+                let buffer = buffer.lock().expect("buffer lock");
+                Bytes::from(buffer.clone())
+            };
+            let read: Box<dyn AsyncRead + Send + Unpin> = Box::new(FakeRead { data, pos: 0 });
+            let mut reader: MessageReader<ChaCha20Poly1305, Message<RoutedMsg>> =
+                MessageReader::new(read, reader_cryptographer, 1024);
+            let mut delivered = Vec::new();
+            while let Some((message, _)) = reader.read_message().await.expect("decode message") {
+                match message {
+                    Message::Data(message) => delivered.push(message),
+                    other => panic!("expected data message, got {other:?}"),
+                }
+            }
+            assert_eq!(
+                delivered,
+                vec![
+                    RoutedMsg::ConsensusSafety(9),
+                    RoutedMsg::Consensus(1),
+                    RoutedMsg::TxGossip(7),
+                    RoutedMsg::Consensus(2),
+                ]
+            );
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn outbound_backpressure_drains_encrypted_before_plaintext_retry() {
+            let buffer = Arc::new(Mutex::new(Vec::new()));
+            let writer = CollectingWrite {
+                buffer: Arc::clone(&buffer),
+            };
+            let cryptographer =
+                Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[43u8; 32])
+                    .expect("valid key length");
+            let reader_cryptographer = cryptographer.clone();
+            let limits = OutboundFrameQueueLimits::new(1_048_576, 1_048_576, 1, 16);
+            let mut sender =
+                MessageSender::with_limits(Box::new(writer), cryptographer, 1024, limits);
+
+            sender
+                .prepare_message(&Message::Data(RoutedMsg::Consensus(1)), Priority::High)
+                .expect("fill encrypted high pool");
+            sender
+                .prepare_message(&Message::Data(RoutedMsg::TxGossip(2)), Priority::High)
+                .expect("retain a later plaintext batch");
+
+            while sender.ready() {
+                sender
+                    .send()
+                    .await
+                    .expect("queue pressure must drive writes, not disconnects");
+            }
+
+            let data = {
+                let buffer = buffer.lock().expect("buffer lock");
+                Bytes::from(buffer.clone())
+            };
+            let read: Box<dyn AsyncRead + Send + Unpin> = Box::new(FakeRead { data, pos: 0 });
+            let mut reader: MessageReader<ChaCha20Poly1305, Message<RoutedMsg>> =
+                MessageReader::new(read, reader_cryptographer, 1024);
+            let mut delivered = Vec::new();
+            while let Some((message, _)) = reader.read_message().await.expect("decode message") {
+                match message {
+                    Message::Data(message) => delivered.push(message),
+                    other => panic!("expected data message, got {other:?}"),
+                }
+            }
+            assert_eq!(
+                delivered,
+                vec![RoutedMsg::Consensus(1), RoutedMsg::TxGossip(2)]
+            );
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn outbound_backpressure_polls_hi_while_preferred_low_writer_is_stalled() {
+            let high_buffer = Arc::new(Mutex::new(Vec::new()));
+            let cryptographer =
+                Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[45u8; 32])
+                    .expect("valid key length");
+            let mut high = MessageSender::new(
+                Box::new(CollectingWrite {
+                    buffer: Arc::clone(&high_buffer),
+                }),
+                cryptographer.clone(),
+                1024,
+            );
+            let mut low = MessageSender::new(Box::new(PendingWrite), cryptographer, 1024);
+            high.prepare_message(
+                &Message::Data(RoutedMsg::ConsensusSafety(1)),
+                Priority::High,
+            )
+            .expect("queue high safety frame");
+            low.prepare_message(&Message::Data(RoutedMsg::TxGossip(2)), Priority::Low)
+                .expect("queue low frame");
+
+            let (sent_low, result) = tokio::time::timeout(
+                Duration::from_millis(100),
+                send_one_ready_stream(&mut high, Some(&mut low), true),
+            )
+            .await
+            .expect("ready high writer must not wait behind stalled low writer")
+            .expect("at least one sender is ready");
+            result.expect("high write succeeds");
+
+            assert!(!sent_low, "the writable high stream must win");
+            assert!(
+                !high_buffer.lock().expect("buffer lock").is_empty(),
+                "the admitted safety frame must reach the high writer"
+            );
+            assert!(low.ready(), "the cancelled low send must retain its batch");
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn outbound_backpressure_io_arbiter_reads_when_preferred_write_is_stalled() {
+            let inbound_buffer = Arc::new(Mutex::new(Vec::new()));
+            let cryptographer =
+                Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[47u8; 32])
+                    .expect("valid key length");
+            let mut remote_sender = MessageSender::new(
+                Box::new(CollectingWrite {
+                    buffer: Arc::clone(&inbound_buffer),
+                }),
+                cryptographer.clone(),
+                1024,
+            );
+            remote_sender
+                .prepare_message(
+                    &Message::Data(RoutedMsg::ConsensusSafety(9)),
+                    Priority::High,
+                )
+                .expect("queue remote safety frame");
+            while remote_sender.ready() {
+                remote_sender.send().await.expect("write remote frame");
+            }
+            let data = Bytes::from(inbound_buffer.lock().expect("buffer lock").clone());
+            let read: Box<dyn AsyncRead + Send + Unpin> = Box::new(FakeRead { data, pos: 0 });
+            let mut high_reader: MessageReader<ChaCha20Poly1305, Message<RoutedMsg>> =
+                MessageReader::new(read, cryptographer.clone(), 1024);
+
+            let mut stalled_sender =
+                MessageSender::new(Box::new(PendingWrite), cryptographer, 1024);
+            stalled_sender
+                .prepare_message(&Message::Data(RoutedMsg::Consensus(1)), Priority::High)
+                .expect("queue locally stalled frame");
+
+            let selected = tokio::time::timeout(
+                Duration::from_millis(100),
+                next_peer_stream_io(
+                    &mut high_reader,
+                    None,
+                    &mut stalled_sender,
+                    None,
+                    false,
+                    false,
+                    false,
+                ),
+            )
+            .await
+            .expect("pending preferred write must continue polling inbound I/O");
+            match selected {
+                PeerStreamIo::Read(PeerStreamRead::High(Ok(Some((
+                    Message::Data(RoutedMsg::ConsensusSafety(9)),
+                    _,
+                ))))) => {}
+                _ => panic!("expected the ready inbound safety frame"),
+            }
+            assert!(
+                stalled_sender.ready(),
+                "cancelling the pending write must retain its batch"
+            );
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn outbound_backpressure_direct_post_burst_cannot_starve_stream_io() {
+            let inbound_buffer = Arc::new(Mutex::new(Vec::new()));
+            let cryptographer =
+                Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[49u8; 32])
+                    .expect("valid key length");
+            let mut remote_sender = MessageSender::new(
+                Box::new(CollectingWrite {
+                    buffer: Arc::clone(&inbound_buffer),
+                }),
+                cryptographer.clone(),
+                1024,
+            );
+            remote_sender
+                .prepare_message(
+                    &Message::Data(RoutedMsg::ConsensusSafety(11)),
+                    Priority::High,
+                )
+                .expect("queue remote safety frame");
+            while remote_sender.ready() {
+                remote_sender.send().await.expect("write remote frame");
+            }
+
+            let data = Bytes::from(inbound_buffer.lock().expect("buffer lock").clone());
+            let read: Box<dyn AsyncRead + Send + Unpin> = Box::new(FakeRead { data, pos: 0 });
+            let mut high_reader: MessageReader<ChaCha20Poly1305, Message<RoutedMsg>> =
+                MessageReader::new(read, cryptographer.clone(), 1024);
+            let mut idle_sender = MessageSender::new(
+                Box::new(CollectingWrite {
+                    buffer: Arc::new(Mutex::new(Vec::new())),
+                }),
+                cryptographer,
+                1024,
+            );
+
+            let mut direct_post_budget = DIRECT_POST_BURST_MAX;
+            let mut direct_posts = 0u8;
+            let selected = loop {
+                enum Turn<T> {
+                    DirectPost,
+                    Stream(PeerStreamIo<T>),
+                    Reopen,
+                }
+
+                let turn = tokio::select! {
+                    biased;
+                    () = std::future::ready(()), if direct_post_budget > 0 => {
+                        direct_post_budget = direct_post_budget.saturating_sub(1);
+                        Turn::DirectPost
+                    }
+                    stream_io = next_peer_stream_io(
+                        &mut high_reader,
+                        None,
+                        &mut idle_sender,
+                        None,
+                        true,
+                        false,
+                        false,
+                    ) => {
+                        direct_post_budget = DIRECT_POST_BURST_MAX;
+                        Turn::Stream(stream_io)
+                    }
+                    () = std::future::ready(()), if direct_post_budget == 0 => {
+                        direct_post_budget = DIRECT_POST_BURST_MAX;
+                        tokio::task::yield_now().await;
+                        Turn::Reopen
+                    }
+                };
+                match turn {
+                    Turn::DirectPost => direct_posts = direct_posts.saturating_add(1),
+                    Turn::Stream(stream_io) => break stream_io,
+                    Turn::Reopen => panic!("ready reliable stream I/O must win before reopening"),
+                }
+            };
+
+            assert_eq!(
+                direct_posts, DIRECT_POST_BURST_MAX,
+                "continuously ready direct posts must receive only one finite burst"
+            );
+            assert!(matches!(
+                selected,
+                PeerStreamIo::Read(PeerStreamRead::High(Ok(Some((
+                    Message::Data(RoutedMsg::ConsensusSafety(11)),
+                    _
+                )))))
+            ));
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn outbound_backpressure_exhausted_budget_reopens_before_ready_datagram() {
+            let cryptographer =
+                Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[50u8; 32])
+                    .expect("valid key length");
+            let read: Box<dyn AsyncRead + Send + Unpin> = Box::new(PendingRead);
+            let mut high_reader: MessageReader<ChaCha20Poly1305, Message<RoutedMsg>> =
+                MessageReader::new(read, cryptographer.clone(), 1024);
+            let mut idle_sender = MessageSender::new(
+                Box::new(CollectingWrite {
+                    buffer: Arc::new(Mutex::new(Vec::new())),
+                }),
+                cryptographer,
+                1024,
+            );
+
+            let mut direct_post_budget = 0u8;
+            let mut safety_queued = true;
+            let mut datagram_wins = 0u8;
+            let mut turns = Vec::new();
+            loop {
+                let turn = tokio::select! {
+                    biased;
+                    () = std::future::ready(()), if direct_post_budget > 0 && safety_queued => {
+                        direct_post_budget = direct_post_budget.saturating_sub(1);
+                        safety_queued = false;
+                        "safety"
+                    }
+                    _stream_io = next_peer_stream_io(
+                        &mut high_reader,
+                        None,
+                        &mut idle_sender,
+                        None,
+                        true,
+                        false,
+                        false,
+                    ) => "stream",
+                    () = std::future::ready(()), if direct_post_budget == 0 => {
+                        direct_post_budget = DIRECT_POST_BURST_MAX;
+                        tokio::task::yield_now().await;
+                        "reopen"
+                    }
+                    () = std::future::ready(()) => {
+                        datagram_wins = datagram_wins.saturating_add(1);
+                        "datagram"
+                    }
+                };
+                turns.push(turn);
+                match turn {
+                    "reopen" => continue,
+                    "safety" => break,
+                    "stream" => panic!("all reliable stream operations must remain pending"),
+                    "datagram" => panic!("ready datagrams must not cancel the budget checkpoint"),
+                    _ => unreachable!("test turn is exhaustive"),
+                }
+            }
+
+            assert_eq!(turns, vec!["reopen", "safety"]);
+            assert_eq!(datagram_wins, 0);
+            assert!(!safety_queued, "the queued safety post must be admitted");
+            assert_eq!(direct_post_budget, DIRECT_POST_BURST_MAX - 1);
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn outbound_backpressure_io_arbiter_alternates_ready_read_streams() {
+            let high_buffer = Arc::new(Mutex::new(Vec::new()));
+            let low_buffer = Arc::new(Mutex::new(Vec::new()));
+            let cryptographer =
+                Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[48u8; 32])
+                    .expect("valid key length");
+            let mut high_remote = MessageSender::new(
+                Box::new(CollectingWrite {
+                    buffer: Arc::clone(&high_buffer),
+                }),
+                cryptographer.clone(),
+                1024,
+            );
+            let mut low_remote = MessageSender::new(
+                Box::new(CollectingWrite {
+                    buffer: Arc::clone(&low_buffer),
+                }),
+                cryptographer.clone(),
+                1024,
+            );
+            high_remote
+                .prepare_message(
+                    &Message::Data(RoutedMsg::ConsensusSafety(1)),
+                    Priority::High,
+                )
+                .expect("queue high inbound frame");
+            low_remote
+                .prepare_message(&Message::Data(RoutedMsg::TxGossip(2)), Priority::Low)
+                .expect("queue low inbound frame");
+            while high_remote.ready() {
+                high_remote.send().await.expect("write high frame");
+            }
+            while low_remote.ready() {
+                low_remote.send().await.expect("write low frame");
+            }
+
+            let high_read: Box<dyn AsyncRead + Send + Unpin> = Box::new(FakeRead {
+                data: Bytes::from(high_buffer.lock().expect("buffer lock").clone()),
+                pos: 0,
+            });
+            let low_read: Box<dyn AsyncRead + Send + Unpin> = Box::new(FakeRead {
+                data: Bytes::from(low_buffer.lock().expect("buffer lock").clone()),
+                pos: 0,
+            });
+            let mut high_reader: MessageReader<ChaCha20Poly1305, Message<RoutedMsg>> =
+                MessageReader::new(high_read, cryptographer.clone(), 1024);
+            let mut low_reader: MessageReader<ChaCha20Poly1305, Message<RoutedMsg>> =
+                MessageReader::new(low_read, cryptographer.clone(), 1024);
+            let mut idle_sender = MessageSender::new(
+                Box::new(CollectingWrite {
+                    buffer: Arc::new(Mutex::new(Vec::new())),
+                }),
+                cryptographer,
+                1024,
+            );
+
+            let first = next_peer_stream_io(
+                &mut high_reader,
+                Some(&mut low_reader),
+                &mut idle_sender,
+                None,
+                true,
+                true,
+                false,
+            )
+            .await;
+            assert!(matches!(
+                first,
+                PeerStreamIo::Read(PeerStreamRead::Low(Ok(Some((
+                    Message::Data(RoutedMsg::TxGossip(2)),
+                    _
+                )))))
+            ));
+
+            let second = next_peer_stream_io(
+                &mut high_reader,
+                Some(&mut low_reader),
+                &mut idle_sender,
+                None,
+                true,
+                false,
+                false,
+            )
+            .await;
+            assert!(matches!(
+                second,
+                PeerStreamIo::Read(PeerStreamRead::High(Ok(Some((
+                    Message::Data(RoutedMsg::ConsensusSafety(1)),
+                    _
+                )))))
+            ));
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn outbound_backpressure_flush_cancellation_retains_batch_without_rewrite() {
+            let buffer = Arc::new(Mutex::new(Vec::new()));
+            let flushes = Arc::new(Mutex::new(0usize));
+            let cryptographer =
+                Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[46u8; 32])
+                    .expect("valid key length");
+            let mut sender = MessageSender::new(
+                Box::new(PendingFirstFlushWrite {
+                    buffer: Arc::clone(&buffer),
+                    flushes: Arc::clone(&flushes),
+                }),
+                cryptographer,
+                1024,
+            );
+            sender
+                .prepare_message(&Message::Data(RoutedMsg::Consensus(1)), Priority::High)
+                .expect("queue consensus frame");
+
+            tokio::select! {
+                biased;
+                result = sender.send() => panic!("first flush must remain pending: {result:?}"),
+                () = std::future::ready(()) => {}
+            }
+            let written_once = buffer.lock().expect("buffer lock").clone();
+            assert!(!written_once.is_empty(), "the batch must have been written");
+            assert!(sender.ready(), "a pending flush remains serviceable work");
+
+            sender.send().await.expect("resume pending flush");
+            assert_eq!(
+                *buffer.lock().expect("buffer lock"),
+                written_once,
+                "resuming a cancelled flush must not write the batch twice"
+            );
+            assert_eq!(*flushes.lock().expect("flush count lock"), 2);
+            assert!(!sender.ready(), "the completed flush drains the sender");
+        }
+
+        #[test]
+        fn outbound_backpressure_rejects_frame_that_cannot_fit_empty_pool() {
+            let stats = Arc::new(Mutex::new(WriteStats::default()));
+            let writer = TrackingWrite { stats };
+            let cryptographer =
+                Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[44u8; 32])
+                    .expect("valid key length");
+            let limits = OutboundFrameQueueLimits::new(1, 1, 1, 1);
+            let mut sender =
+                MessageSender::with_limits(Box::new(writer), cryptographer, 1024, limits);
+
+            let error = sender
+                .prepare_or_defer(&Message::Data(RoutedMsg::Consensus(1)), Priority::High)
+                .expect_err("an impossible configured byte cap must remain fatal");
+
+            assert!(matches!(
+                error,
+                Error::OutboundFrameQueueFull {
+                    priority: "high",
+                    queued_bytes: 0,
+                    max_bytes: 1,
+                    ..
+                }
+            ));
+            assert!(sender.deferred_high.is_none());
         }
 
         #[test]
@@ -6870,6 +7980,8 @@ mod run {
                         &mut consensus_burst,
                         &mut payload_burst,
                         &mut availability_burst,
+                        true,
+                        true,
                         &mut safety_rx,
                         &mut control_rx,
                         &mut consensus_rx,
@@ -6921,6 +8033,8 @@ mod run {
                 &mut consensus_burst,
                 &mut payload_burst,
                 &mut availability_burst,
+                true,
+                true,
                 &mut safety_rx,
                 &mut control_rx,
                 &mut consensus_rx,
@@ -6934,6 +8048,8 @@ mod run {
                 &mut consensus_burst,
                 &mut payload_burst,
                 &mut availability_burst,
+                true,
+                true,
                 &mut safety_rx,
                 &mut control_rx,
                 &mut consensus_rx,
@@ -6947,6 +8063,8 @@ mod run {
                 &mut consensus_burst,
                 &mut payload_burst,
                 &mut availability_burst,
+                true,
+                true,
                 &mut safety_rx,
                 &mut control_rx,
                 &mut consensus_rx,
@@ -6996,6 +8114,8 @@ mod run {
                 &mut consensus_burst,
                 &mut payload_burst,
                 &mut availability_burst,
+                true,
+                true,
                 &mut safety_rx,
                 &mut control_rx,
                 &mut consensus_rx,
@@ -7054,6 +8174,8 @@ mod run {
                 &mut consensus_burst,
                 &mut payload_burst,
                 &mut availability_burst,
+                true,
+                true,
                 &mut safety_rx,
                 &mut control_rx,
                 &mut consensus_rx,
@@ -7108,6 +8230,8 @@ mod run {
                 &mut consensus_burst,
                 &mut payload_burst,
                 &mut availability_burst,
+                true,
+                true,
                 &mut safety_rx,
                 &mut control_rx,
                 &mut consensus_rx,
@@ -7149,6 +8273,8 @@ mod run {
                 &mut consensus_burst,
                 &mut payload_burst,
                 &mut availability_burst,
+                true,
+                true,
                 &mut safety_rx,
                 &mut control_rx,
                 &mut consensus_rx,
@@ -7162,6 +8288,52 @@ mod run {
                 (HighTopic::ConsensusSafety, String::from("valid-vote"))
             );
             assert_eq!(control_rx.len(), 16, "control flood must remain untouched");
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn outbound_backpressure_scheduler_preserves_safety_lane() {
+            let (safety_tx, mut safety_rx) = post_channel::channel::<String>(2);
+            let (control_tx, mut control_rx) = post_channel::channel::<String>(2);
+            let (consensus_tx, mut consensus_rx) = post_channel::channel::<String>(2);
+            let (_payload_tx, mut payload_rx) = post_channel::channel::<String>(1);
+            let (_chunk_tx, mut chunk_rx) = post_channel::channel::<String>(1);
+            safety_tx
+                .send(String::from("safety"))
+                .await
+                .expect("queue safety");
+            control_tx
+                .send(String::from("control"))
+                .await
+                .expect("queue control");
+            consensus_tx
+                .send(String::from("consensus"))
+                .await
+                .expect("queue consensus");
+
+            let mut safety_burst = 0;
+            let mut control_burst = 0;
+            let mut consensus_burst = 0;
+            let mut payload_burst = 0;
+            let mut availability_burst = 0;
+            let first = try_recv_high_fair(
+                &mut safety_burst,
+                &mut control_burst,
+                &mut consensus_burst,
+                &mut payload_burst,
+                &mut availability_burst,
+                true,
+                false,
+                &mut safety_rx,
+                &mut control_rx,
+                &mut consensus_rx,
+                &mut payload_rx,
+                &mut chunk_rx,
+            )
+            .expect("open safety pool must remain serviceable");
+
+            assert_eq!(first, (HighTopic::ConsensusSafety, String::from("safety")));
+            assert_eq!(control_rx.try_recv_now(), Some(String::from("control")));
+            assert_eq!(consensus_rx.try_recv_now(), Some(String::from("consensus")));
         }
 
         #[test]

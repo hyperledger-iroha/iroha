@@ -1,7 +1,8 @@
 //! Serialized runtime shell for the authoritative Sumeragi v2 adapter.
 //!
 //! This module owns scheduling and backpressure, not consensus state. Every
-//! admitted command is delivered to [`SumeragiV2Adapter`] on one FIFO, and all
+//! admitted command is delivered to [`SumeragiV2Adapter`] by one serialized
+//! class-aware arbiter, and all
 //! returned [`AdapterEffect`] values are handed to callers unchanged. The only
 //! effect inspected here is `EnterView`, because installing a certified view is
 //! the sole event allowed to restart the round and retransmission clocks. The
@@ -9,8 +10,10 @@
 //! retains its fixed base interval. This deterministic backoff eventually gives
 //! a post-GST view enough time for bounded transport and durable body service.
 //! A small deterministic arbiter gives the timeout priority while ensuring that
-//! periodic retransmission cannot indefinitely exclude an already-admitted FIFO
-//! command.
+//! periodic retransmission cannot indefinitely exclude already-admitted work.
+//! Completion, progress, and normal commands share one bounded allocation but
+//! receive cyclic service, so a saturated normal prefix cannot starve a locked
+//! Commit vote or a trusted local completion.
 
 use std::{
     collections::VecDeque,
@@ -47,13 +50,13 @@ fn round_timeout_for_view(base_timeout: Duration, view: u64) -> Duration {
     Duration::new(seconds, nanoseconds)
 }
 
-/// Capacity allocation for the single serialized command FIFO.
+/// Capacity allocation for the single serialized command ingress.
 ///
 /// Normal network traffic may use only the non-reserved prefix. Progress
 /// messages (PrepareQCs, CommitQCs, and TCs) may additionally use the progress
 /// reserve, and trusted asynchronous completions may use the whole queue. This
 /// prevents an unbounded proposal/vote stream from excluding a CommitQC or a
-/// completion while preserving FIFO order among all admitted commands.
+/// completion while preserving FIFO order within each service class.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct RuntimeQueueConfig {
     capacity: usize,
@@ -62,7 +65,7 @@ pub(crate) struct RuntimeQueueConfig {
 }
 
 impl RuntimeQueueConfig {
-    /// Construct a bounded FIFO allocation.
+    /// Construct a bounded class-aware ingress allocation.
     pub(crate) const fn new(
         capacity: usize,
         progress_reserve: usize,
@@ -148,13 +151,13 @@ impl fmt::Display for RuntimeClockError {
 
 impl std::error::Error for RuntimeClockError {}
 
-/// Backpressure result from the bounded command FIFO.
+/// Backpressure result from the bounded command ingress.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum EnqueueError {
     /// Lower-priority traffic reached the boundary of capacity reserved for
     /// protocol progress or trusted completions.
     ReservedCapacity,
-    /// The entire command FIFO is full.
+    /// The entire command ingress is full.
     Full,
     /// The runtime stopped accepting work after an adapter failure.
     FailClosed,
@@ -166,7 +169,7 @@ impl fmt::Display for EnqueueError {
             Self::ReservedCapacity => {
                 formatter.write_str("Sumeragi v2 runtime reserved ingress capacity")
             }
-            Self::Full => formatter.write_str("Sumeragi v2 runtime command FIFO is full"),
+            Self::Full => formatter.write_str("Sumeragi v2 runtime command ingress is full"),
             Self::FailClosed => formatter.write_str("Sumeragi v2 runtime is fail-closed"),
         }
     }
@@ -177,11 +180,11 @@ impl std::error::Error for EnqueueError {}
 /// Rejection while authenticating or admitting a network message.
 #[derive(Debug)]
 pub(crate) enum NetworkIngressError {
-    /// Signature, structure, version, or context authentication failed.
+    /// Signature, structure, version, context, or canonical-manifest admission failed.
     Authentication(AdapterError),
     /// Payload belongs to the body/chunk transport rather than the reducer.
     TransportPayload,
-    /// Authenticated input encountered bounded FIFO backpressure.
+    /// Authenticated input encountered bounded ingress backpressure.
     Backpressure(EnqueueError),
     /// The serialized runtime has already failed closed.
     FailClosed,
@@ -257,15 +260,28 @@ enum CommandClass {
     Completion,
 }
 
+impl CommandClass {
+    const fn next(self) -> Self {
+        match self {
+            Self::Completion => Self::Progress,
+            Self::Progress => Self::Normal,
+            Self::Normal => Self::Completion,
+        }
+    }
+}
+
 pub(crate) struct TaggedCommand<C> {
     tag: EventTag,
     class: CommandClass,
     command: C,
+    admitted_at: Instant,
+    eligible_skips: u64,
 }
 
 struct BoundedIngress<C> {
     config: RuntimeQueueConfig,
     commands: VecDeque<TaggedCommand<C>>,
+    next_class: CommandClass,
 }
 
 impl<C> BoundedIngress<C> {
@@ -273,6 +289,7 @@ impl<C> BoundedIngress<C> {
         Self {
             config,
             commands: VecDeque::with_capacity(config.capacity),
+            next_class: CommandClass::Completion,
         }
     }
 
@@ -298,8 +315,36 @@ impl<C> BoundedIngress<C> {
         Ok(())
     }
 
-    fn pop_front(&mut self) -> Option<TaggedCommand<C>> {
-        self.commands.pop_front()
+    fn pop_next(&mut self) -> Option<TaggedCommand<C>> {
+        for _ in 0..3 {
+            let class = self.next_class;
+            self.next_class = self.next_class.next();
+            let Some(index) = self
+                .commands
+                .iter()
+                .position(|queued| queued.class == class)
+            else {
+                continue;
+            };
+            for skipped_class in [
+                CommandClass::Completion,
+                CommandClass::Progress,
+                CommandClass::Normal,
+            ] {
+                if skipped_class == class {
+                    continue;
+                }
+                if let Some(oldest) = self
+                    .commands
+                    .iter_mut()
+                    .find(|queued| queued.class == skipped_class)
+                {
+                    oldest.eligible_skips = oldest.eligible_skips.saturating_add(1);
+                }
+            }
+            return self.commands.remove(index);
+        }
+        None
     }
 
     fn len(&self) -> usize {
@@ -309,6 +354,53 @@ impl<C> BoundedIngress<C> {
     fn remaining_capacity(&self) -> usize {
         self.config.capacity - self.commands.len()
     }
+
+    fn lane_snapshot(&self, class: CommandClass, now: Instant) -> RuntimeQueueLaneSnapshot {
+        let mut depth = 0usize;
+        let mut oldest_age = None;
+        let mut max_service_debt = 0u64;
+        for queued in self.commands.iter().filter(|queued| queued.class == class) {
+            depth = depth.saturating_add(1);
+            let age = now.saturating_duration_since(queued.admitted_at);
+            oldest_age = Some(oldest_age.map_or(age, |oldest: Duration| oldest.max(age)));
+            max_service_debt = max_service_debt.max(queued.eligible_skips);
+        }
+        let capacity = match class {
+            CommandClass::Normal => self.config.normal_limit(),
+            CommandClass::Progress => self.config.progress_limit(),
+            CommandClass::Completion => self.config.capacity,
+        };
+        RuntimeQueueLaneSnapshot {
+            depth,
+            capacity,
+            oldest_age,
+            max_service_debt,
+        }
+    }
+}
+
+/// Local operational snapshot for one serialized runtime lane.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct RuntimeQueueLaneSnapshot {
+    /// Commands currently owned by the lane.
+    pub(crate) depth: usize,
+    /// Maximum total occupancy at which this class may still be admitted.
+    pub(crate) capacity: usize,
+    /// Age of the oldest command in this class.
+    pub(crate) oldest_age: Option<Duration>,
+    /// Eligible dispatches observed by the most-delayed queued command.
+    pub(crate) max_service_debt: u64,
+}
+
+/// Local operational snapshot for all serialized runtime lanes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct RuntimeQueueSnapshot {
+    /// Ordinary proposal, vote, and timeout-vote work.
+    pub(crate) normal: RuntimeQueueLaneSnapshot,
+    /// Certified and exact-lock progress work.
+    pub(crate) progress: RuntimeQueueLaneSnapshot,
+    /// Trusted local I/O and application completions.
+    pub(crate) completion: RuntimeQueueLaneSnapshot,
 }
 
 pub(crate) enum AdapterCommand {
@@ -339,6 +431,173 @@ pub(crate) enum AdapterCommand {
     ApplicationCompleted(wire::BlockSubject),
 }
 
+fn manifests_conflict_for_same_body(
+    left: &wire::PayloadManifest,
+    right: &wire::PayloadManifest,
+) -> bool {
+    left.round == right.round && left.subject == right.subject && left != right
+}
+
+impl AdapterCommand {
+    fn is_same_authenticated_envelope(
+        &self,
+        authenticated: &AuthenticatedConsensusMessage,
+    ) -> bool {
+        matches!(
+            self,
+            Self::Authenticated(queued)
+                if queued.same_wire_envelope(authenticated)
+        )
+    }
+
+    fn matches_wire_envelope(&self, message: &wire::ConsensusMessageV2) -> bool {
+        matches!(
+            self,
+            Self::Authenticated(queued) if queued.matches_wire_envelope(message)
+        )
+    }
+
+    fn matches_quorum_certificate(&self, certificate: &wire::QuorumCertificate) -> bool {
+        matches!(
+            self,
+            Self::Authenticated(queued)
+                if matches!(
+                    queued.payload(),
+                    wire::ConsensusMessageV2Payload::QuorumCertificate(queued)
+                        if queued == certificate
+                )
+        )
+    }
+
+    fn is_authenticated_proposal_conflicting_with(
+        &self,
+        canonical: &wire::PayloadManifest,
+    ) -> bool {
+        let Self::Authenticated(message) = self else {
+            return false;
+        };
+        let wire::ConsensusMessageV2Payload::Proposal(proposal) = message.payload() else {
+            return false;
+        };
+        manifests_conflict_for_same_body(&proposal.manifest, canonical)
+    }
+}
+
+impl BoundedIngress<AdapterCommand> {
+    fn authenticated_wire_tag(&self, message: &wire::ConsensusMessageV2) -> Option<EventTag> {
+        self.commands.iter().find_map(|queued| {
+            queued
+                .command
+                .matches_wire_envelope(message)
+                .then_some(queued.tag)
+        })
+    }
+
+    /// Check whether an independently authenticated form of `message` can
+    /// either claim a new slot or coalesce with an exact queued owner.
+    ///
+    /// Raw equality is only a permission to spend authentication work while a
+    /// prefix is saturated.  [`Self::enqueue_authenticated`] repeats equality
+    /// on the resulting authenticated token before it coalesces anything.
+    fn check_authenticated_wire_capacity(
+        &self,
+        message: &wire::ConsensusMessageV2,
+        default_class: CommandClass,
+        may_use_progress: bool,
+    ) -> Result<(), EnqueueError> {
+        if self.authenticated_wire_tag(message).is_some() {
+            return Ok(());
+        }
+        match self.check_capacity(default_class) {
+            Ok(()) => Ok(()),
+            Err(_) if may_use_progress => self.check_capacity(CommandClass::Progress),
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Check the reducer handoff performed after authenticating one block-sync
+    /// response. The transport wrapper itself bypasses this ingress, but its
+    /// embedded CommitQC must either claim Progress capacity or exactly
+    /// coalesce with an authenticated QC already owned by the queue.
+    fn check_embedded_quorum_certificate_capacity(
+        &self,
+        certificate: &wire::QuorumCertificate,
+    ) -> Result<(), EnqueueError> {
+        if self
+            .commands
+            .iter()
+            .any(|queued| queued.command.matches_quorum_certificate(certificate))
+        {
+            return Ok(());
+        }
+        self.check_capacity(CommandClass::Progress)
+    }
+
+    /// Enqueue one independently authenticated envelope unless its exact wire
+    /// value is already owned by this serialized queue.
+    ///
+    /// This is deliberately queue-scoped rather than height-long semantic
+    /// suppression. Once the queued occurrence leaves, a later retransmission
+    /// may be admitted and checked against the adapter's generation-aware
+    /// delivery records in the usual way.
+    fn enqueue_authenticated(
+        &mut self,
+        tag: EventTag,
+        class: CommandClass,
+        authenticated: AuthenticatedConsensusMessage,
+    ) -> Result<EventTag, EnqueueError> {
+        if let Some(queued) = self.commands.iter().find(|queued| {
+            queued
+                .command
+                .is_same_authenticated_envelope(&authenticated)
+        }) {
+            return Ok(queued.tag);
+        }
+        self.enqueue(TaggedCommand {
+            tag,
+            class,
+            command: AdapterCommand::Authenticated(authenticated),
+            admitted_at: Instant::now(),
+            eligible_skips: 0,
+        })?;
+        Ok(tag)
+    }
+
+    fn enqueue_canonical_body_available(
+        &mut self,
+        tag: EventTag,
+        manifest: wire::PayloadManifest,
+    ) -> Result<(), EnqueueError> {
+        self.commands.retain(|queued| {
+            !queued
+                .command
+                .is_authenticated_proposal_conflicting_with(&manifest)
+        });
+        self.enqueue(TaggedCommand {
+            tag,
+            class: CommandClass::Completion,
+            command: AdapterCommand::BodyAvailable { manifest },
+            admitted_at: Instant::now(),
+            eligible_skips: 0,
+        })
+    }
+
+    fn conflicts_with_pending_body_available(
+        &self,
+        authenticated: &AuthenticatedConsensusMessage,
+    ) -> bool {
+        let wire::ConsensusMessageV2Payload::Proposal(proposal) = authenticated.payload() else {
+            return false;
+        };
+        self.commands.iter().any(|queued| {
+            let AdapterCommand::BodyAvailable { manifest } = &queued.command else {
+                return false;
+            };
+            manifests_conflict_for_same_body(&proposal.manifest, manifest)
+        })
+    }
+}
+
 /// Minimal scheduling seam around the sole production adapter.
 ///
 /// The generic parameter exists so clock and queue behavior can be tested
@@ -354,7 +613,7 @@ pub(crate) trait RuntimeDriver {
 
     /// Current authoritative reducer tag.
     fn current_tag(&self) -> EventTag;
-    /// Deliver one admitted FIFO command with its original tag.
+    /// Deliver one admitted command with its original tag.
     fn dispatch(
         &mut self,
         command: TaggedCommand<Self::Command>,
@@ -365,6 +624,11 @@ pub(crate) trait RuntimeDriver {
     fn retransmit_elapsed(&mut self, tag: EventTag) -> Result<Vec<Self::Effect>, Self::Error>;
     /// Identify only the effect which authorizes timer restart.
     fn enter_view_tag(effect: &Self::Effect) -> Option<EventTag>;
+    /// Return whether the unauthenticated wire shape could match a protected
+    /// active-lock item after authentication.
+    fn wire_ingress_may_use_progress(&self, _payload: &wire::ConsensusMessageV2Payload) -> bool {
+        false
+    }
 }
 
 impl RuntimeDriver for SumeragiV2Adapter {
@@ -438,6 +702,10 @@ impl RuntimeDriver for SumeragiV2Adapter {
             | AdapterEffect::ReportInvalidCertifiedBody { .. } => None,
         }
     }
+
+    fn wire_ingress_may_use_progress(&self, payload: &wire::ConsensusMessageV2Payload) -> bool {
+        SumeragiV2Adapter::wire_ingress_may_use_progress(self, payload)
+    }
 }
 
 /// Result of one serialized scheduling step.
@@ -446,13 +714,13 @@ impl RuntimeDriver for SumeragiV2Adapter {
 /// fails, no effects from a preceding invocation can be hidden by the error.
 #[derive(Debug)]
 pub(crate) enum RuntimeStep<E> {
-    /// No timer was due and the command FIFO was empty.
+    /// No timer was due and the command ingress was empty.
     Idle,
     /// One timer or command was delivered; effects remain in adapter order.
     Advanced(Vec<E>),
 }
 
-/// One-owner, one-FIFO scheduling shell for Sumeragi v2.
+/// One-owner, class-aware scheduling shell for Sumeragi v2.
 pub(crate) struct SerializedV2Runtime<D: RuntimeDriver = SumeragiV2Adapter> {
     driver: D,
     ingress: BoundedIngress<D::Command>,
@@ -511,15 +779,17 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             tag,
             class,
             command,
+            admitted_at: Instant::now(),
+            eligible_skips: 0,
         })
     }
 
-    /// Run at most one timer or FIFO command.
+    /// Run at most one timer or admitted command.
     ///
     /// Timeout wins when both clocks are due, and is emitted at most once for
     /// the installed view. A non-timeout timer may precede queued work once;
-    /// the pure scheduler then owes the FIFO the next slot. Retransmission runs
-    /// at most once per call and advances from the actual service time,
+    /// the pure scheduler then owes admitted work the next slot. Retransmission
+    /// runs at most once per call and advances from the actual service time,
     /// avoiding an unbounded catch-up burst after a paused process. Neither
     /// clock is changed by an arbitrary message or by any effect other than
     /// `EnterView`.
@@ -562,8 +832,8 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
             ScheduledWork::Fifo => {
                 let command = self
                     .ingress
-                    .pop_front()
-                    .expect("scheduler selected a non-empty FIFO");
+                    .pop_next()
+                    .expect("scheduler selected non-empty serialized ingress");
                 match self.driver.dispatch(command) {
                     Ok(effects) => effects,
                     Err(error) => return Err(self.close(error)),
@@ -593,7 +863,7 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         if self.clocks_armed {
             return Err(RuntimeError::RecoveryAfterClocksArmed);
         }
-        let Some(command) = self.ingress.pop_front() else {
+        let Some(command) = self.ingress.pop_next() else {
             return Ok(RuntimeStep::Idle);
         };
         let effects = match self.driver.dispatch(command) {
@@ -609,11 +879,33 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
         self.ingress.len()
     }
 
+    /// Per-class queue ownership, age, and service debt for diagnostics.
+    pub(crate) fn queue_snapshot(&self, now: Instant) -> RuntimeQueueSnapshot {
+        RuntimeQueueSnapshot {
+            normal: self.ingress.lane_snapshot(CommandClass::Normal, now),
+            progress: self.ingress.lane_snapshot(CommandClass::Progress, now),
+            completion: self.ingress.lane_snapshot(CommandClass::Completion, now),
+        }
+    }
+
+    /// View-aware diagnostic deadline for declaring a no-progress interval.
+    ///
+    /// The watchdog allows the complete current-view round deadline plus one
+    /// fixed retransmission interval. Both values come from the configured
+    /// pacemaker; saturation preserves a conservative diagnostic at the
+    /// platform duration limit.
+    pub(crate) fn watchdog_threshold(&self) -> Duration {
+        round_timeout_for_view(self.base_round_timeout, self.round_tag.view())
+            .checked_add(self.retransmit_interval)
+            .unwrap_or(Duration::MAX)
+    }
+
     /// Slots into which trusted asynchronous completions can be admitted now.
     ///
     /// Completion producers must consult this bound before removing work from
     /// their own bounded queues. Unlike normal and progress traffic,
-    /// completions may use the entire FIFO, so this is the exact free capacity.
+    /// completions may use the entire ingress, so this is the exact free
+    /// capacity.
     pub(crate) fn remaining_completion_capacity(&self) -> usize {
         self.ingress.remaining_capacity()
     }
@@ -622,14 +914,20 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
     /// runtime admission.
     ///
     /// Reducer-directed traffic is checked against its exact Normal or
-    /// Progress prefix in the single total-length FIFO. Transport payloads do
-    /// not enter this FIFO and therefore impose no runtime admission condition.
+    /// Progress prefix in the single total-length ingress. Transport payloads
+    /// do not enter this queue and therefore impose no runtime admission
+    /// condition.
+    #[cfg(test)]
     pub(crate) fn can_admit_network_payload(
         &self,
         payload: &wire::ConsensusMessageV2Payload,
     ) -> bool {
-        network_admission_class(payload)
-            .is_none_or(|class| self.ingress.check_capacity(class).is_ok())
+        let class = if self.driver.wire_ingress_may_use_progress(payload) {
+            Some(CommandClass::Progress)
+        } else {
+            network_admission_class(payload)
+        };
+        class.is_none_or(|class| self.ingress.check_capacity(class).is_ok())
     }
 
     /// Tag of the view which owns the absolute clocks.
@@ -738,20 +1036,25 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
 
     /// Authenticate and enqueue one reducer-directed network message.
     ///
-    /// Invalid unauthenticated traffic is rejected before admission and does
-    /// not poison the runtime. Once admitted, any adapter transition failure is
-    /// fatal when the serialized command is executed.
+    /// Traffic which passes the bounded capacity check, or exactly matches an
+    /// already-owned authenticated envelope, is cryptographically
+    /// authenticated and then checked against canonical manifest authority.
+    /// Rejections do not poison the runtime. Once admitted, any adapter
+    /// transition failure is fatal when the serialized command is executed.
     pub(crate) fn enqueue_network(
         &mut self,
         message: wire::ConsensusMessageV2,
     ) -> Result<EventTag, NetworkIngressError> {
-        if self.fail_closed {
-            return Err(NetworkIngressError::FailClosed);
-        }
-        let class =
-            network_command_class(&message.payload).ok_or(NetworkIngressError::TransportPayload)?;
+        let default_class = classify_reducer_network_ingress(self.fail_closed, &message.payload)?;
+        // An exact queued retransmission may always spend authentication work
+        // so it can release its ingress occurrence. Otherwise, only the
+        // adapter's exact active-lock match may proceed after the normal prefix
+        // fills. The authenticated predicate below remains the authority for
+        // assigning the Progress class and for queue coalescing.
+        let may_be_exact_locked_commit =
+            self.driver.wire_ingress_may_use_progress(&message.payload);
         self.ingress
-            .check_capacity(class)
+            .check_authenticated_wire_capacity(&message, default_class, may_be_exact_locked_commit)
             .map_err(NetworkIngressError::Backpressure)?;
         let authenticated = match self.driver.authenticate(message) {
             Ok(authenticated) => authenticated,
@@ -761,10 +1064,53 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
             }
             Err(error) => return Err(NetworkIngressError::Authentication(error)),
         };
+        let class = if self
+            .driver
+            .authenticated_ingress_is_progress(&authenticated)
+        {
+            CommandClass::Progress
+        } else {
+            default_class
+        };
+        if self
+            .ingress
+            .conflicts_with_pending_body_available(&authenticated)
+        {
+            return Err(NetworkIngressError::Authentication(
+                AdapterError::ConflictingManifest,
+            ));
+        }
         let tag = self.driver.current_tag();
-        self.enqueue(tag, class, AdapterCommand::Authenticated(authenticated))
-            .map_err(NetworkIngressError::Backpressure)?;
-        Ok(tag)
+        self.ingress
+            .enqueue_authenticated(tag, class, authenticated)
+            .map_err(NetworkIngressError::Backpressure)
+    }
+
+    /// Return whether the fair-ingress head can reach authentication and then
+    /// either claim its exact runtime prefix or coalesce with an exact queued
+    /// authenticated owner.
+    pub(crate) fn can_admit_network_message(&self, message: &wire::ConsensusMessageV2) -> bool {
+        if let wire::ConsensusMessageV2Payload::CommitCertificateResponse(response) =
+            &message.payload
+        {
+            return !self.fail_closed
+                && self
+                    .ingress
+                    .check_embedded_quorum_certificate_capacity(&response.certificate)
+                    .is_ok();
+        }
+        let Some(default_class) = network_command_class(&message.payload) else {
+            // Body/chunk transport does not enter the reducer FIFO.
+            return true;
+        };
+        if self.fail_closed {
+            return false;
+        }
+        let may_be_exact_locked_commit =
+            self.driver.wire_ingress_may_use_progress(&message.payload);
+        self.ingress
+            .check_authenticated_wire_capacity(message, default_class, may_be_exact_locked_commit)
+            .is_ok()
     }
 
     /// Enqueue a completed local proposal build with its original reducer tag.
@@ -786,17 +1132,21 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         )
     }
 
-    /// Enqueue successful reconstruction with the exact fetch tag.
+    /// Enqueue successful canonical reconstruction with the exact fetch tag.
+    ///
+    /// Authenticated proposals already waiting in the FIFO are discarded only
+    /// when they advertise a different manifest for this exact round and
+    /// subject. Every retained command keeps its original relative order, and
+    /// the completion is appended normally.
     pub(crate) fn enqueue_body_available(
         &mut self,
         tag: EventTag,
         manifest: wire::PayloadManifest,
     ) -> Result<(), EnqueueError> {
-        self.enqueue(
-            tag,
-            CommandClass::Completion,
-            AdapterCommand::BodyAvailable { manifest },
-        )
+        if self.fail_closed {
+            return Err(EnqueueError::FailClosed);
+        }
+        self.ingress.enqueue_canonical_body_available(tag, manifest)
     }
 
     /// Enqueue the durable body-store acknowledgement with its exact tag.
@@ -896,6 +1246,17 @@ fn network_command_class(payload: &wire::ConsensusMessageV2Payload) -> Option<Co
     }
 }
 
+fn classify_reducer_network_ingress(
+    fail_closed: bool,
+    payload: &wire::ConsensusMessageV2Payload,
+) -> Result<CommandClass, NetworkIngressError> {
+    if fail_closed {
+        return Err(NetworkIngressError::FailClosed);
+    }
+    network_command_class(payload).ok_or(NetworkIngressError::TransportPayload)
+}
+
+#[cfg(test)]
 fn network_admission_class(payload: &wire::ConsensusMessageV2Payload) -> Option<CommandClass> {
     match payload {
         // The transport wrapper is authenticated against an outstanding
@@ -913,10 +1274,12 @@ mod tests {
     use std::collections::VecDeque;
 
     use crate::sumeragi::v2_core::Generation;
-    use iroha_crypto::{Hash, HashOf, KeyPair};
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
     use iroha_data_model::peer::PeerId;
+    use tempfile::TempDir;
 
     use super::*;
+    use crate::sumeragi::v2::{AdapterFingerprints, VerifiedHeightContext};
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     struct FakeCommand {
@@ -985,6 +1348,11 @@ mod tests {
         timeouts: Vec<EventTag>,
         retransmits: Vec<EventTag>,
         timer_effects: VecDeque<Vec<FakeEffect>>,
+        protected_commit: Option<(
+            wire::ConsensusRound,
+            wire::BlockSubject,
+            wire::ExecutionCommitment,
+        )>,
     }
 
     impl FakeDriver {
@@ -995,6 +1363,7 @@ mod tests {
                 timeouts: Vec::new(),
                 retransmits: Vec::new(),
                 timer_effects: VecDeque::new(),
+                protected_commit: None,
             }
         }
     }
@@ -1037,10 +1406,169 @@ mod tests {
         fn enter_view_tag(effect: &Self::Effect) -> Option<EventTag> {
             effect.enter_view
         }
+
+        fn wire_ingress_may_use_progress(&self, payload: &wire::ConsensusMessageV2Payload) -> bool {
+            matches!(
+                (payload, self.protected_commit),
+                (
+                    wire::ConsensusMessageV2Payload::Vote(vote),
+                    Some((round, subject, execution_commitment))
+                ) if vote.phase == wire::GlobalPhase::Commit
+                    && vote.round == round
+                    && vote.subject == subject
+                    && vote.execution_commitment == execution_commitment
+            )
+        }
     }
 
     fn tag(view: u64) -> EventTag {
         EventTag::new(7, view, Generation::new(view + 11))
+    }
+
+    fn authenticated_proposal_for_test(
+        manifest: wire::PayloadManifest,
+    ) -> AuthenticatedConsensusMessage {
+        AuthenticatedConsensusMessage::for_test(wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::Proposal(wire::Proposal {
+                round: manifest.round,
+                proposer: 0,
+                subject: manifest.subject,
+                manifest,
+                justification: wire::ProposalJustification::ParentCommit(
+                    wire::ParentCommitJustification { certificate: None },
+                ),
+                signature: vec![1],
+            }),
+        ))
+    }
+
+    fn authenticated_runtime_context() -> (wire::HeightContext, Vec<KeyPair>) {
+        let mut keys = (1_u8..=4)
+            .map(|seed| {
+                KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                    .expect("deterministic runtime ingress key")
+            })
+            .collect::<Vec<_>>();
+        keys.sort_by(|left, right| left.public_key().cmp(right.public_key()));
+        let roster = keys
+            .iter()
+            .map(|key| wire::ValidatorPower {
+                validator: PeerId::new(key.public_key().clone()),
+                power: 1,
+            })
+            .collect::<Vec<_>>();
+        let context = wire::HeightContext {
+            chain_id: "sumeragi-v2-runtime-ingress-test".into(),
+            protocol_version: wire::PROTOCOL_VERSION,
+            height: 1,
+            epoch: 1,
+            epoch_end_height: 100,
+            next_epoch_snapshot: None,
+            mode: wire::ConsensusMode::Permissioned,
+            parent_commit_qc: None,
+            snapshot_bootstrap: None,
+            quorum: wire::DualQuorum::from_roster(&roster).expect("runtime fixture quorum"),
+            roster,
+            nexus_amx_context_hash: Hash::new(b"runtime ingress nexus context"),
+            da_layout: wire::DataAvailabilityLayout {
+                encoding: wire::PayloadEncoding::Plain,
+                chunk_size_bytes: 1024,
+                data_shards: 0,
+                parity_shards: 0,
+                max_payload_size_bytes: 1024 * 1024,
+                max_chunk_count: 1024,
+            },
+            leader_seed: [0x5A; 32],
+        };
+        (context, keys)
+    }
+
+    fn signed_runtime_proposal(
+        context: &wire::HeightContext,
+        keys: &[KeyPair],
+        marker: u8,
+    ) -> wire::ConsensusMessageV2 {
+        let round = wire::ConsensusRound {
+            context_id: context.id(),
+            height: context.height,
+            view: 0,
+        };
+        let subject = wire::BlockSubject {
+            parent_block_hash: None,
+            block_hash: HashOf::from_untyped_unchecked(Hash::new([marker, 1])),
+            payload_hash: Hash::new([marker, 2]),
+        };
+        let body = vec![marker; 4];
+        let manifest = wire::PayloadManifest::derive(
+            context,
+            round,
+            subject,
+            u64::try_from(body.len()).expect("small runtime fixture body"),
+            &[body],
+        )
+        .expect("valid runtime fixture manifest");
+        let proposer = context.leader(round.view);
+        let mut proposal = wire::Proposal {
+            round,
+            proposer,
+            subject,
+            manifest,
+            justification: wire::ProposalJustification::ParentCommit(
+                wire::ParentCommitJustification { certificate: None },
+            ),
+            signature: Vec::new(),
+        };
+        proposal.signature = Signature::new(
+            keys[usize::try_from(proposer).expect("small proposer index")].private_key(),
+            &proposal.signature_preimage(),
+        )
+        .payload()
+        .to_vec();
+        wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Proposal(proposal))
+    }
+
+    fn authenticated_network_runtime(
+        directory: &TempDir,
+        queue: RuntimeQueueConfig,
+    ) -> (
+        SerializedV2Runtime<SumeragiV2Adapter>,
+        wire::HeightContext,
+        Vec<KeyPair>,
+    ) {
+        let (context, keys) = authenticated_runtime_context();
+        let proofs = keys
+            .iter()
+            .map(|key| {
+                iroha_crypto::bls_normal_pop_prove(key.private_key())
+                    .expect("runtime fixture proof of possession")
+            })
+            .collect();
+        let verified =
+            VerifiedHeightContext::genesis(context.clone(), proofs).expect("verified fixture");
+        let (adapter, startup) = SumeragiV2Adapter::open(
+            directory.path().join("runtime-ingress-safety.wal"),
+            verified,
+            None,
+            Generation::new(1),
+            [0x31; 32],
+            AdapterFingerprints {
+                node: Hash::new(b"runtime ingress node"),
+                build: Hash::new(b"runtime ingress build"),
+                config: Hash::new(b"runtime ingress config"),
+            },
+        )
+        .expect("open authenticated network runtime adapter");
+        assert!(startup.is_empty());
+        let runtime = SerializedV2Runtime::new(
+            adapter,
+            startup,
+            Instant::now(),
+            Duration::from_secs(10),
+            queue,
+        )
+        .expect("valid authenticated network runtime")
+        .0;
+        (runtime, context, keys)
     }
 
     fn runtime(
@@ -1084,6 +1612,7 @@ mod tests {
         assert_eq!(runtime.remaining_completion_capacity(), 8);
         assert_eq!(runtime.round_timeout(), Duration::from_secs(10));
         assert_eq!(runtime.retransmit_interval(), Duration::from_secs(2));
+        assert_eq!(runtime.watchdog_threshold(), Duration::from_secs(12));
 
         enqueue_fake(
             &mut runtime,
@@ -1163,7 +1692,7 @@ mod tests {
     }
 
     #[test]
-    fn one_fifo_is_bounded_and_reserves_progress_and_completion_slots() {
+    fn class_aware_ingress_is_bounded_and_reserves_progress_and_completion_slots() {
         let start = Instant::now();
         let initial = tag(0);
         let mut runtime = runtime(
@@ -1230,7 +1759,599 @@ mod tests {
         }
         assert_eq!(
             runtime.driver.delivered,
-            vec![(initial, 1), (initial, 2), (initial, 3), (initial, 4)]
+            vec![(initial, 4), (initial, 3), (initial, 1), (initial, 2)]
+        );
+    }
+
+    #[test]
+    fn class_cursor_advances_from_the_served_class_after_empty_classes() {
+        let admitted_at = Instant::now();
+        let initial = tag(0);
+        let queued = |class, value| TaggedCommand {
+            tag: initial,
+            class,
+            command: FakeCommand::record(value),
+            admitted_at,
+            eligible_skips: 0,
+        };
+        let mut ingress = BoundedIngress::new(RuntimeQueueConfig::new(6, 2, 1));
+
+        ingress
+            .enqueue(queued(CommandClass::Normal, 1))
+            .expect("normal command fits the bounded ingress");
+        let first = ingress.pop_next().expect("normal class is reachable");
+        assert_eq!(first.command.record, Some(1));
+        assert_eq!(ingress.next_class, CommandClass::Completion);
+
+        ingress
+            .enqueue(queued(CommandClass::Normal, 2))
+            .expect("second normal command fits the bounded ingress");
+        ingress
+            .enqueue(queued(CommandClass::Completion, 3))
+            .expect("completion reserve remains available");
+        let second = ingress.pop_next().expect("completion class is selected");
+        assert_eq!(second.command.record, Some(3));
+        assert_eq!(ingress.next_class, CommandClass::Progress);
+
+        let third = ingress
+            .pop_next()
+            .expect("empty progress class is skipped to normal");
+        assert_eq!(third.command.record, Some(2));
+        assert_eq!(ingress.next_class, CommandClass::Completion);
+    }
+
+    #[test]
+    fn healthy_same_class_fifo_depth_does_not_accrue_service_debt() {
+        let start = Instant::now();
+        let initial = tag(0);
+        let mut runtime = runtime(
+            FakeDriver::new(initial),
+            start,
+            RuntimeQueueConfig::new(8, 2, 2),
+        );
+        for id in 0..4 {
+            enqueue_fake(
+                &mut runtime,
+                initial,
+                CommandClass::Normal,
+                FakeCommand::record(id),
+            )
+            .expect("enqueue same-class work");
+        }
+
+        let _ = runtime.step(start);
+        let queue = runtime.queue_snapshot(start);
+        assert_eq!(queue.normal.depth, 3);
+        assert_eq!(queue.normal.max_service_debt, 0);
+    }
+
+    #[test]
+    fn canonical_body_completion_prunes_only_conflicting_queued_proposals() {
+        let round = wire::ConsensusRound {
+            context_id: wire::HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
+                b"queued-body-context",
+            ))),
+            height: 7,
+            view: 2,
+        };
+        let subject = wire::BlockSubject {
+            parent_block_hash: None,
+            block_hash: HashOf::from_untyped_unchecked(Hash::new(b"queued-body-block")),
+            payload_hash: Hash::new(b"queued-body-payload"),
+        };
+        let layout = wire::DataAvailabilityLayout {
+            encoding: wire::PayloadEncoding::Plain,
+            chunk_size_bytes: 1,
+            data_shards: 0,
+            parity_shards: 0,
+            max_payload_size_bytes: 1,
+            max_chunk_count: 1,
+        };
+        let canonical = wire::PayloadManifest {
+            round,
+            subject,
+            payload_size_bytes: 1,
+            layout,
+            chunk_hashes: vec![Hash::new(b"canonical chunk")],
+            chunk_root: Hash::new(b"canonical root"),
+        };
+        let conflicting = wire::PayloadManifest {
+            chunk_hashes: vec![Hash::new(b"conflicting chunk")],
+            chunk_root: Hash::new(b"conflicting root"),
+            ..canonical.clone()
+        };
+        let other_subject = wire::BlockSubject {
+            block_hash: HashOf::from_untyped_unchecked(Hash::new(b"other queued block")),
+            payload_hash: Hash::new(b"other queued payload"),
+            ..subject
+        };
+        let other = wire::PayloadManifest {
+            subject: other_subject,
+            ..conflicting.clone()
+        };
+
+        let mut ingress = BoundedIngress::new(RuntimeQueueConfig::new(8, 1, 1));
+        for (command_tag, manifest) in [
+            (tag(0), conflicting.clone()),
+            (tag(1), canonical.clone()),
+            (tag(2), other.clone()),
+        ] {
+            ingress
+                .enqueue(TaggedCommand {
+                    tag: command_tag,
+                    class: CommandClass::Normal,
+                    command: AdapterCommand::Authenticated(authenticated_proposal_for_test(
+                        manifest,
+                    )),
+                    admitted_at: Instant::now(),
+                    eligible_skips: 0,
+                })
+                .expect("queue authenticated proposal");
+        }
+
+        ingress
+            .enqueue_canonical_body_available(tag(3), canonical.clone())
+            .expect("trusted completion prunes its conflicting proposal and appends in FIFO order");
+        assert_eq!(ingress.len(), 3);
+        assert!(
+            ingress.conflicts_with_pending_body_available(&authenticated_proposal_for_test(
+                conflicting
+            ))
+        );
+        assert!(
+            !ingress
+                .conflicts_with_pending_body_available(&authenticated_proposal_for_test(canonical))
+        );
+        assert!(
+            !ingress.conflicts_with_pending_body_available(&authenticated_proposal_for_test(other))
+        );
+
+        let retained_tags = ingress
+            .commands
+            .iter()
+            .map(|queued| queued.tag)
+            .collect::<Vec<_>>();
+        assert_eq!(retained_tags, vec![tag(1), tag(2), tag(3)]);
+        assert!(matches!(
+            ingress.commands.back().map(|queued| &queued.command),
+            Some(AdapterCommand::BodyAvailable { manifest }) if manifest.subject == subject
+        ));
+    }
+
+    #[test]
+    fn exact_authenticated_progress_retransmission_is_queue_coalesced() {
+        let round = wire::ConsensusRound {
+            context_id: wire::HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
+                b"coalesced-progress-context",
+            ))),
+            height: 7,
+            view: 3,
+        };
+        let subject = wire::BlockSubject {
+            parent_block_hash: None,
+            block_hash: HashOf::from_untyped_unchecked(Hash::new(b"coalesced-progress-block")),
+            payload_hash: Hash::new(b"coalesced-progress-payload"),
+        };
+        let execution_commitment = wire::ExecutionCommitment::without_topups(
+            Hash::new(b"coalesced parent state"),
+            Hash::new(b"coalesced post state"),
+            Hash::new(b"coalesced ordinary writes"),
+            Hash::new(b"coalesced executed block wire"),
+        );
+        let payload = wire::ConsensusMessageV2Payload::QuorumCertificate(wire::QuorumCertificate {
+            round,
+            phase: wire::GlobalPhase::Commit,
+            subject,
+            execution_commitment,
+            signers: vec![0, 1, 2],
+            aggregate_signature: vec![1],
+        });
+        let authenticated = || {
+            AuthenticatedConsensusMessage::for_test(wire::ConsensusMessageV2::new(payload.clone()))
+        };
+        let mut ingress = BoundedIngress::new(RuntimeQueueConfig::new(4, 1, 1));
+
+        assert_eq!(
+            ingress
+                .enqueue_authenticated(tag(0), CommandClass::Progress, authenticated())
+                .expect("first authenticated CommitQC owns one queue slot"),
+            tag(0)
+        );
+        assert_eq!(
+            ingress
+                .enqueue_authenticated(tag(1), CommandClass::Progress, authenticated())
+                .expect("equal authenticated retransmission is coalesced"),
+            tag(0),
+            "a coalesced retransmission returns the original queue owner's tag"
+        );
+        assert_eq!(ingress.len(), 1);
+
+        let dispatched = ingress
+            .pop_next()
+            .expect("the sole queued CommitQC is dispatchable");
+        assert_eq!(dispatched.class, CommandClass::Progress);
+        assert!(matches!(
+            dispatched.command,
+            AdapterCommand::Authenticated(_)
+        ));
+        assert_eq!(ingress.len(), 0);
+
+        assert_eq!(
+            ingress
+                .enqueue_authenticated(tag(2), CommandClass::Progress, authenticated())
+                .expect("a later retransmission starts a new ownership interval"),
+            tag(2)
+        );
+        assert_eq!(ingress.len(), 1);
+    }
+
+    #[test]
+    fn exact_authenticated_retransmission_preserves_capacity_fifo_and_cursor() {
+        let round = wire::ConsensusRound {
+            context_id: wire::HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
+                b"coalesced-capacity-context",
+            ))),
+            height: 9,
+            view: 4,
+        };
+        let subject = wire::BlockSubject {
+            parent_block_hash: None,
+            block_hash: HashOf::from_untyped_unchecked(Hash::new(b"coalesced-capacity-block")),
+            payload_hash: Hash::new(b"coalesced-capacity-payload"),
+        };
+        let payload = |signature| {
+            wire::ConsensusMessageV2Payload::QuorumCertificate(wire::QuorumCertificate {
+                round,
+                phase: wire::GlobalPhase::Commit,
+                subject,
+                execution_commitment: wire::ExecutionCommitment::without_topups(
+                    Hash::new(b"capacity parent state"),
+                    Hash::new(b"capacity post state"),
+                    Hash::new(b"capacity ordinary writes"),
+                    Hash::new(b"capacity executed block wire"),
+                ),
+                signers: vec![0, 1, 2],
+                aggregate_signature: vec![signature],
+            })
+        };
+        let authenticated = |signature| {
+            AuthenticatedConsensusMessage::for_test(wire::ConsensusMessageV2::new(payload(
+                signature,
+            )))
+        };
+        let queued_wire = wire::ConsensusMessageV2::new(payload(1));
+        let transport = wire::ConsensusMessageV2Payload::PayloadManifest(wire::PayloadManifest {
+            round,
+            subject,
+            payload_size_bytes: 1,
+            layout: wire::DataAvailabilityLayout {
+                encoding: wire::PayloadEncoding::Plain,
+                chunk_size_bytes: 1,
+                data_shards: 0,
+                parity_shards: 0,
+                max_payload_size_bytes: 1,
+                max_chunk_count: 1,
+            },
+            chunk_hashes: vec![Hash::new(b"coalesced capacity chunk")],
+            chunk_root: Hash::new(b"coalesced capacity root"),
+        });
+        assert!(matches!(
+            classify_reducer_network_ingress(false, &queued_wire.payload),
+            Ok(CommandClass::Progress)
+        ));
+        assert!(matches!(
+            classify_reducer_network_ingress(false, &transport),
+            Err(NetworkIngressError::TransportPayload)
+        ));
+        assert!(matches!(
+            classify_reducer_network_ingress(true, &queued_wire.payload),
+            Err(NetworkIngressError::FailClosed)
+        ));
+        assert!(matches!(
+            classify_reducer_network_ingress(true, &transport),
+            Err(NetworkIngressError::FailClosed)
+        ));
+        let mut ingress = BoundedIngress::new(RuntimeQueueConfig::new(4, 1, 1));
+
+        assert_eq!(
+            ingress
+                .enqueue_authenticated(tag(0), CommandClass::Normal, authenticated(1))
+                .expect("first wire value enters below the normal boundary"),
+            tag(0)
+        );
+        assert_eq!(
+            ingress
+                .enqueue_authenticated(tag(1), CommandClass::Normal, authenticated(2))
+                .expect("a non-identical wire value uses ordinary capacity"),
+            tag(1)
+        );
+        assert_eq!(
+            ingress.check_capacity(CommandClass::Normal),
+            Err(EnqueueError::ReservedCapacity)
+        );
+
+        let cursor_before = ingress.next_class;
+        let tags_before = ingress
+            .commands
+            .iter()
+            .map(|queued| queued.tag)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            ingress
+                .enqueue_authenticated(tag(8), CommandClass::Normal, authenticated(1))
+                .expect("an exact duplicate coalesces at reserved capacity"),
+            tag(0),
+            "coalescing deterministically returns the original admission tag"
+        );
+        assert_eq!(ingress.next_class, cursor_before);
+        assert_eq!(
+            ingress
+                .commands
+                .iter()
+                .map(|queued| queued.tag)
+                .collect::<Vec<_>>(),
+            tags_before,
+            "coalescing changes neither FIFO ownership nor its tags"
+        );
+        assert_eq!(
+            ingress.enqueue_authenticated(tag(9), CommandClass::Normal, authenticated(3)),
+            Err(EnqueueError::ReservedCapacity),
+            "a non-identical envelope still obeys the normal boundary"
+        );
+
+        ingress
+            .enqueue_authenticated(tag(2), CommandClass::Progress, authenticated(3))
+            .expect("progress reserve remains independent");
+        ingress
+            .enqueue_authenticated(tag(3), CommandClass::Completion, authenticated(4))
+            .expect("completion reserve fills the final slot");
+        assert_eq!(ingress.len(), 4);
+        assert_eq!(
+            ingress.check_capacity(CommandClass::Completion),
+            Err(EnqueueError::Full)
+        );
+        assert_eq!(ingress.authenticated_wire_tag(&queued_wire), Some(tag(0)));
+        assert!(
+            ingress
+                .check_authenticated_wire_capacity(&queued_wire, CommandClass::Normal, false,)
+                .is_ok(),
+            "raw equality only opens the authentication attempt at full capacity"
+        );
+        assert_eq!(
+            ingress.check_authenticated_wire_capacity(
+                &wire::ConsensusMessageV2::new(payload(5)),
+                CommandClass::Normal,
+                false,
+            ),
+            Err(EnqueueError::Full)
+        );
+
+        let full_tags = ingress
+            .commands
+            .iter()
+            .map(|queued| queued.tag)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            ingress
+                .enqueue_authenticated(tag(10), CommandClass::Normal, authenticated(1))
+                .expect("the exact envelope coalesces even when every slot is owned"),
+            tag(0)
+        );
+        assert_eq!(ingress.next_class, cursor_before);
+        assert_eq!(
+            ingress
+                .commands
+                .iter()
+                .map(|queued| queued.tag)
+                .collect::<Vec<_>>(),
+            full_tags
+        );
+        assert!(
+            ingress
+                .commands
+                .iter()
+                .all(|queued| queued.eligible_skips == 0)
+        );
+        assert_eq!(
+            ingress.enqueue_authenticated(tag(11), CommandClass::Progress, authenticated(5)),
+            Err(EnqueueError::Full),
+            "wire inequality cannot inherit the duplicate's full-queue exception"
+        );
+    }
+
+    #[test]
+    fn exact_authenticated_network_retransmission_obeys_runtime_boundaries() {
+        let directory = TempDir::new().expect("temporary runtime ingress directory");
+        let (mut runtime, context, keys) =
+            authenticated_network_runtime(&directory, RuntimeQueueConfig::new(4, 1, 1));
+        let original = signed_runtime_proposal(&context, &keys, 1);
+        let second = signed_runtime_proposal(&context, &keys, 2);
+        let third = signed_runtime_proposal(&context, &keys, 3);
+        let transport = match &original.payload {
+            wire::ConsensusMessageV2Payload::Proposal(proposal) => wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::PayloadManifest(proposal.manifest.clone()),
+            ),
+            _ => unreachable!("fixture is a proposal"),
+        };
+
+        let owner_tag = runtime
+            .enqueue_network(original.clone())
+            .expect("first authenticated proposal owns one normal slot");
+        assert_eq!(runtime.queued_commands(), 1);
+        assert_eq!(
+            runtime
+                .enqueue_network(original.clone())
+                .expect("exact duplicate coalesces below the normal boundary"),
+            owner_tag
+        );
+        assert_eq!(runtime.queued_commands(), 1);
+
+        let mut invalid = third.clone();
+        let wire::ConsensusMessageV2Payload::Proposal(proposal) = &mut invalid.payload else {
+            unreachable!("fixture is a proposal")
+        };
+        proposal.signature[0] ^= 0x80;
+        assert!(matches!(
+            runtime.enqueue_network(invalid),
+            Err(NetworkIngressError::Authentication(_))
+        ));
+        assert_eq!(runtime.queued_commands(), 1);
+
+        runtime
+            .enqueue_network(second.clone())
+            .expect("non-identical authenticated proposal uses ordinary capacity");
+        assert_eq!(runtime.queued_commands(), 2);
+        assert_eq!(
+            runtime
+                .enqueue_network(original.clone())
+                .expect("exact duplicate coalesces at reserved capacity"),
+            owner_tag
+        );
+        assert!(matches!(
+            runtime.enqueue_network(third.clone()),
+            Err(NetworkIngressError::Backpressure(
+                EnqueueError::ReservedCapacity
+            ))
+        ));
+
+        let cursor_before = runtime.ingress.next_class;
+        let tags_before = runtime
+            .ingress
+            .commands
+            .iter()
+            .map(|queued| queued.tag)
+            .collect::<Vec<_>>();
+        runtime
+            .enqueue_signature(owner_tag, vec![4])
+            .expect("completion reserve admits the third slot");
+        runtime
+            .enqueue_signature(owner_tag, vec![5])
+            .expect("completion traffic may fill the fourth slot");
+        assert_eq!(runtime.queued_commands(), 4);
+        assert!(runtime.can_admit_network_message(&original));
+        assert!(!runtime.can_admit_network_message(&third));
+        assert_eq!(
+            runtime
+                .enqueue_network(original.clone())
+                .expect("exact authenticated duplicate coalesces at full capacity"),
+            owner_tag
+        );
+        assert_eq!(runtime.queued_commands(), 4);
+        assert_eq!(runtime.ingress.next_class, cursor_before);
+        assert_eq!(
+            runtime
+                .ingress
+                .commands
+                .iter()
+                .take(tags_before.len())
+                .map(|queued| queued.tag)
+                .collect::<Vec<_>>(),
+            tags_before
+        );
+        assert!(matches!(
+            runtime.enqueue_network(third),
+            Err(NetworkIngressError::Backpressure(EnqueueError::Full))
+        ));
+
+        runtime.fail_closed = true;
+        assert!(matches!(
+            runtime.enqueue_network(original.clone()),
+            Err(NetworkIngressError::FailClosed)
+        ));
+        assert!(matches!(
+            runtime.enqueue_network(transport.clone()),
+            Err(NetworkIngressError::FailClosed)
+        ));
+        runtime.fail_closed = false;
+        assert!(matches!(
+            runtime.enqueue_network(transport),
+            Err(NetworkIngressError::TransportPayload)
+        ));
+    }
+
+    #[test]
+    fn commit_certificate_response_waits_for_embedded_qc_progress_capacity() {
+        let directory = TempDir::new().expect("temporary runtime ingress directory");
+        let (mut runtime, context, keys) =
+            authenticated_network_runtime(&directory, RuntimeQueueConfig::new(4, 1, 1));
+        let round = wire::ConsensusRound {
+            context_id: context.id(),
+            height: context.height,
+            view: 0,
+        };
+        let subject = wire::BlockSubject {
+            parent_block_hash: None,
+            block_hash: HashOf::from_untyped_unchecked(Hash::new(b"response-capacity-block")),
+            payload_hash: Hash::new(b"response-capacity-payload"),
+        };
+        let certificate = wire::QuorumCertificate {
+            round,
+            phase: wire::GlobalPhase::Commit,
+            subject,
+            execution_commitment: wire::ExecutionCommitment::without_topups(
+                Hash::new(b"response capacity parent state"),
+                Hash::new(b"response capacity post state"),
+                Hash::new(b"response capacity ordinary writes"),
+                Hash::new(b"response capacity executed block wire"),
+            ),
+            signers: vec![0, 1, 2],
+            aggregate_signature: vec![1],
+        };
+        let response = |certificate| {
+            wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::CommitCertificateResponse(
+                    wire::CommitCertificateResponse {
+                        request_hash: HashOf::from_untyped_unchecked(Hash::new(
+                            b"response capacity request",
+                        )),
+                        certificate,
+                        responder: PeerId::new(keys[0].public_key().clone()),
+                        signature: vec![1],
+                    },
+                ),
+            )
+        };
+        let exact_response = response(certificate.clone());
+        let mut distinct_certificate = certificate.clone();
+        distinct_certificate.aggregate_signature = vec![2];
+        let distinct_response = response(distinct_certificate);
+        let owner_tag = runtime.round_tag();
+
+        runtime
+            .enqueue_signature(owner_tag, vec![3])
+            .expect("first completion occupies shared capacity");
+        runtime
+            .enqueue_signature(owner_tag, vec![4])
+            .expect("second completion occupies shared capacity");
+        runtime
+            .ingress
+            .enqueue_authenticated(
+                owner_tag,
+                CommandClass::Progress,
+                AuthenticatedConsensusMessage::for_test(wire::ConsensusMessageV2::new(
+                    wire::ConsensusMessageV2Payload::QuorumCertificate(certificate),
+                )),
+            )
+            .expect("authenticated CommitQC fills the Progress prefix");
+        assert_eq!(runtime.queued_commands(), 3);
+
+        assert!(
+            !runtime.can_admit_network_message(&distinct_response),
+            "a distinct response remains in outer ingress while inner Progress is full"
+        );
+        assert!(
+            runtime.can_admit_network_message(&exact_response),
+            "an exact embedded CommitQC can coalesce with its queued owner"
+        );
+
+        let released = runtime
+            .ingress
+            .pop_next()
+            .expect("release one shared-capacity owner");
+        assert_eq!(released.class, CommandClass::Completion);
+        assert!(
+            runtime.can_admit_network_message(&distinct_response),
+            "the retained response can drain after Progress capacity returns"
         );
     }
 
@@ -1271,14 +2392,18 @@ mod tests {
         )
         .expect("CommitQC/progress reserve remains available");
 
-        for _ in 0..4 {
-            let _ = runtime.step(start);
-        }
-        assert_eq!(runtime.driver.delivered.last(), Some(&(initial, 200)));
+        let _ = runtime.step(start);
+        assert_eq!(runtime.driver.delivered, vec![(initial, 200)]);
+        let queue = runtime.queue_snapshot(start);
+        assert_eq!(queue.normal.depth, 3);
+        assert_eq!(queue.normal.capacity, 3);
+        assert_eq!(queue.normal.max_service_debt, 1);
+        assert_eq!(queue.progress.depth, 0);
+        assert_eq!(queue.completion.depth, 0);
     }
 
     #[test]
-    fn periodic_retransmit_cannot_starve_fifo_when_every_step_arrives_late() {
+    fn periodic_retransmit_cannot_starve_admitted_work_when_every_step_arrives_late() {
         let start = Instant::now();
         let initial = tag(0);
         let mut runtime = runtime(
@@ -1305,7 +2430,7 @@ mod tests {
     }
 
     #[test]
-    fn absolute_timeout_preempts_fifo_owed_by_periodic_timer() {
+    fn absolute_timeout_preempts_admitted_work_owed_by_periodic_timer() {
         let start = Instant::now();
         let initial = tag(0);
         let mut runtime = runtime(
@@ -1365,6 +2490,23 @@ mod tests {
             signer: 0,
             signature: vec![1],
         });
+        let locked_commit_vote = match &vote {
+            wire::ConsensusMessageV2Payload::Vote(vote) => {
+                let mut vote = vote.clone();
+                vote.phase = wire::GlobalPhase::Commit;
+                wire::ConsensusMessageV2Payload::Vote(vote)
+            }
+            _ => unreachable!("fixture is a vote"),
+        };
+        runtime.driver.protected_commit = Some((round, subject, execution_commitment));
+        let mismatched_commit_vote = match &locked_commit_vote {
+            wire::ConsensusMessageV2Payload::Vote(vote) => {
+                let mut vote = vote.clone();
+                vote.subject.payload_hash = Hash::new(b"mismatched runtime commit vote");
+                wire::ConsensusMessageV2Payload::Vote(vote)
+            }
+            _ => unreachable!("fixture is a vote"),
+        };
         let certificate = wire::QuorumCertificate {
             round,
             phase: wire::GlobalPhase::Commit,
@@ -1407,6 +2549,14 @@ mod tests {
         }
         assert!(!runtime.can_admit_network_payload(&vote));
         assert!(
+            !runtime.can_admit_network_payload(&mismatched_commit_vote),
+            "a merely Commit-shaped vote must stop at pre-authentication backpressure"
+        );
+        assert!(
+            runtime.can_admit_network_payload(&locked_commit_vote),
+            "the exact locked Commit vote can reach authentication through the progress reserve"
+        );
+        assert!(
             runtime.can_admit_network_payload(&commit_qc),
             "CommitQC can use the reserved progress slot"
         );
@@ -1420,6 +2570,8 @@ mod tests {
         )
         .expect("fill the progress prefix");
         assert!(!runtime.can_admit_network_payload(&vote));
+        assert!(!runtime.can_admit_network_payload(&mismatched_commit_vote));
+        assert!(!runtime.can_admit_network_payload(&locked_commit_vote));
         assert!(!runtime.can_admit_network_payload(&commit_qc));
         assert!(!runtime.can_admit_network_payload(&commit_response));
 
@@ -1502,6 +2654,7 @@ mod tests {
         let _ = runtime.step(start + Duration::from_secs(9));
         assert_eq!(runtime.round_tag(), next);
         assert_eq!(runtime.round_timeout(), Duration::from_secs(20));
+        assert_eq!(runtime.watchdog_threshold(), Duration::from_secs(22));
 
         assert!(matches!(
             runtime.step(start + Duration::from_secs(10)),
@@ -1555,7 +2708,7 @@ mod tests {
     }
 
     #[test]
-    fn interrupted_tip_recovery_drains_fifo_without_arming_live_timers() {
+    fn interrupted_tip_recovery_drains_ingress_without_arming_live_timers() {
         let start = Instant::now();
         let initial = tag(0);
         let (mut runtime, _) = SerializedV2Runtime::with_driver(

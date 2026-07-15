@@ -41,6 +41,17 @@ def _subject(seed: int = 0x31) -> dict[str, str]:
     }
 
 
+def _execution_commitment(seed: int = 0x51) -> dict[str, object]:
+    return {
+        "parent_state_root": _canonical_hash(seed),
+        "post_state_root": _canonical_hash(seed + 1),
+        "ordinary_writes_root": _canonical_hash(seed + 2),
+        "topup_anchor_root": None,
+        "topup_anchor_count": 0,
+        "executed_block_wire_hash": _canonical_hash(seed + 3),
+    }
+
+
 def _prepare_qc(view: int = 3) -> dict[str, object]:
     return {
         "round": {
@@ -50,6 +61,7 @@ def _prepare_qc(view: int = 3) -> dict[str, object]:
         },
         "phase": {"phase": "prepare", "details": None},
         "subject": _subject(),
+        "execution_commitment": _execution_commitment(),
     }
 
 
@@ -99,12 +111,33 @@ def _healthy_status() -> dict[str, object]:
                 },
                 "phase": {"phase": "commit", "details": None},
                 "subject": copy.deepcopy(committed_subject),
+                "execution_commitment": _execution_commitment(0x61),
             },
             "validator_count": 4,
             "signer_count": 3,
             "min_signers": 3,
             "signed_power": 3,
             "total_power": 4,
+        },
+        "liveness": {
+            "generation": 4,
+            "prepare_quorums": [],
+            "commit_quorums": [],
+            "timeout_quorums": [],
+            "outbound_intents": [],
+            "work": {
+                "candidate": {"stage": "idle", "details": None},
+                "body_recovery": {"stage": "idle", "details": None},
+                "body_store": {"stage": "idle", "details": None},
+                "validation": {"stage": "complete", "details": None},
+                "application": {"stage": "idle", "details": None},
+                "successor_height": {"stage": "idle", "details": None},
+            },
+            "queues": [],
+            "last_progress": None,
+            "no_progress_age_ms": 0,
+            "blocker": None,
+            "ignore_counts": [],
         },
         "safety_halt": {
             "active": False,

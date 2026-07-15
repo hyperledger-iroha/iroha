@@ -5619,13 +5619,19 @@ impl Default for SumeragiBlock {
     }
 }
 
-/// Bounded asynchronous adapter queues around the serialized reducer.
+/// Bounded asynchronous adapter queues and outer-ingress byte budgets around
+/// the serialized reducer.
 #[derive(Debug, Clone, Copy)]
 pub struct SumeragiQueues {
     /// Serialized reducer command FIFO capacity.
     pub commands: NonZeroUsize,
     /// Certified-body and block-sync ingress capacity.
     pub bodies: NonZeroUsize,
+    /// Aggregate canonical outer-ingress wire bytes retained across all sources.
+    pub body_bytes: NonZeroUsize,
+    /// Per-authenticated-source canonical outer-ingress wire bytes, including
+    /// envelope overhead and the isolated timeout-vote reserve.
+    pub body_source_bytes: NonZeroUsize,
     /// Payload-chunk ingress and orphan-buffer capacity.
     pub chunks: NonZeroUsize,
     /// Reconstructed bodies waiting for reducer delivery.
@@ -5637,6 +5643,8 @@ impl Default for SumeragiQueues {
         Self {
             commands: defaults::sumeragi::QUEUE_COMMAND_CAPACITY,
             bodies: defaults::sumeragi::QUEUE_BODY_CAPACITY,
+            body_bytes: defaults::sumeragi::QUEUE_BODY_BYTES,
+            body_source_bytes: defaults::sumeragi::QUEUE_BODY_SOURCE_BYTES,
             chunks: defaults::sumeragi::QUEUE_CHUNK_CAPACITY,
             ready_bodies: defaults::sumeragi::QUEUE_READY_BODY_CAPACITY,
         }
@@ -5759,6 +5767,44 @@ impl Sumeragi {
 
         let body_queue_capacity =
             canonical_size("sumeragi.queues.bodies", self.queues.bodies.get())?;
+        let body_bytes =
+            canonical_size("sumeragi.queues.body_bytes", self.queues.body_bytes.get())?;
+        let body_source_bytes = canonical_size(
+            "sumeragi.queues.body_source_bytes",
+            self.queues.body_source_bytes.get(),
+        )?;
+        let envelope_headroom = u64::try_from(defaults::sumeragi::BODY_ENVELOPE_HEADROOM_BYTES)
+            .expect("static body-envelope headroom fits u64");
+        let timeout_vote_reserve = u64::try_from(defaults::sumeragi::TIMEOUT_VOTE_RESERVE_BYTES)
+            .expect("static timeout-vote reserve fits u64");
+        let minimum_body_source_bytes = max_payload_bytes
+            .checked_add(envelope_headroom)
+            .and_then(|minimum| minimum.checked_add(timeout_vote_reserve))
+            .ok_or(SumeragiV2ConfigError::LimitOverflow(
+                "Sumeragi v2 per-source canonical outer-ingress wire-byte minimum",
+            ))?;
+        if body_source_bytes < minimum_body_source_bytes {
+            return Err(SumeragiV2ConfigError::BodySourceBytesTooSmall {
+                actual: body_source_bytes,
+                minimum: minimum_body_source_bytes,
+                max_payload_bytes,
+                envelope_headroom,
+                timeout_vote_reserve,
+            });
+        }
+        let minimum_body_bytes =
+            body_source_bytes
+                .checked_mul(2)
+                .ok_or(SumeragiV2ConfigError::LimitOverflow(
+                    "Sumeragi v2 aggregate canonical outer-ingress wire-byte minimum",
+                ))?;
+        if body_bytes < minimum_body_bytes {
+            return Err(SumeragiV2ConfigError::BodyBytesTooSmall {
+                actual: body_bytes,
+                minimum: minimum_body_bytes,
+                body_source_bytes,
+            });
+        }
         let chunk_queue_capacity =
             canonical_size("sumeragi.queues.chunks", self.queues.chunks.get())?;
         let ready_body_capacity = canonical_size(
@@ -5805,6 +5851,8 @@ impl Sumeragi {
                 runtime_progress_reserve,
                 runtime_completion_reserve,
                 body_queue_capacity,
+                body_bytes,
+                body_source_bytes,
                 chunk_queue_capacity,
                 // Every outstanding asynchronous effect can mint at most one
                 // trusted runtime completion. Keep the producer bound within
@@ -5919,6 +5967,11 @@ pub struct SumeragiV2Limits {
     pub runtime_completion_reserve: u64,
     /// Capacity for certified bodies and block-sync ingress.
     pub body_queue_capacity: u64,
+    /// Aggregate canonical outer-ingress wire bytes retained across all sources.
+    pub body_bytes: u64,
+    /// Per-authenticated-source canonical outer-ingress wire bytes, including
+    /// envelope overhead and the isolated timeout-vote reserve.
+    pub body_source_bytes: u64,
     /// Capacity for payload chunk ingress and orphan buffering.
     pub chunk_queue_capacity: u64,
     /// Maximum outstanding asynchronous reducer effects; never greater than
@@ -5972,6 +6025,34 @@ pub enum SumeragiV2ConfigError {
     /// Reserved reducer FIFO capacity consumed the whole queue.
     #[error("Sumeragi v2 reducer queue reserves leave no normal-ingress capacity")]
     InvalidQueueAllocation,
+    /// The per-source canonical wire-byte budget cannot hold one maximum body envelope.
+    #[error(
+        "Sumeragi v2 per-source canonical outer-ingress wire-byte capacity {actual} is below minimum {minimum} for max payload {max_payload_bytes}, {envelope_headroom} bytes of envelope headroom, and {timeout_vote_reserve} reserved timeout-vote bytes"
+    )]
+    BodySourceBytesTooSmall {
+        /// Configured per-source capacity.
+        actual: u64,
+        /// Required per-source capacity.
+        minimum: u64,
+        /// Configured maximum canonical body size.
+        max_payload_bytes: u64,
+        /// Fixed wire-envelope headroom.
+        envelope_headroom: u64,
+        /// Fixed bytes isolated from ordinary traffic for a timeout vote.
+        timeout_vote_reserve: u64,
+    },
+    /// The aggregate canonical wire-byte budget cannot isolate two source quotas.
+    #[error(
+        "Sumeragi v2 aggregate canonical outer-ingress wire-byte capacity {actual} is below minimum {minimum} required for two per-source budgets of {body_source_bytes} bytes"
+    )]
+    BodyBytesTooSmall {
+        /// Configured aggregate capacity.
+        actual: u64,
+        /// Required aggregate capacity.
+        minimum: u64,
+        /// Configured per-source capacity.
+        body_source_bytes: u64,
+    },
     /// The signing policy did not admit BLS-Normal.
     #[error("Sumeragi v2 consensus key policy must include BlsNormal")]
     MissingBlsNormal,
@@ -10880,6 +10961,8 @@ mod tests {
         assert_eq!(shared.limits.max_transactions, 512);
         assert_eq!(shared.limits.max_payload_bytes, 16 * 1024 * 1024);
         assert_eq!(shared.limits.max_queue_scan, 2_048);
+        assert_eq!(shared.limits.body_bytes, 160 * 1024 * 1024);
+        assert_eq!(shared.limits.body_source_bytes, 32 * 1024 * 1024);
         assert_eq!(
             shared.limits.effect_work_capacity, shared.limits.runtime_completion_reserve,
             "outstanding effect work must fit the trusted completion reserve",
@@ -10954,6 +11037,14 @@ mod tests {
         assert_config_change!("body queue", |config: &mut Sumeragi| {
             config.queues.bodies =
                 NonZeroUsize::new(config.queues.bodies.get() + 1).expect("non-zero");
+        });
+        assert_config_change!("aggregate body bytes", |config: &mut Sumeragi| {
+            config.queues.body_bytes =
+                NonZeroUsize::new(config.queues.body_bytes.get() + 1).expect("non-zero");
+        });
+        assert_config_change!("per-source body bytes", |config: &mut Sumeragi| {
+            config.queues.body_source_bytes =
+                NonZeroUsize::new(config.queues.body_source_bytes.get() + 1).expect("non-zero");
         });
         assert_config_change!("chunk queue", |config: &mut Sumeragi| {
             config.queues.chunks =
@@ -11033,6 +11124,30 @@ mod tests {
             SumeragiV2ConfigError::CommandQueueTooSmall {
                 actual: 4,
                 minimum: 8,
+            },
+        );
+
+        let mut config = default_v2_sumeragi();
+        config.queues.body_source_bytes = NonZeroUsize::new(16 * 1024 * 1024).expect("non-zero");
+        assert_error(
+            &config,
+            SumeragiV2ConfigError::BodySourceBytesTooSmall {
+                actual: 16 * 1024 * 1024,
+                minimum: 16 * 1024 * 1024 + 2 * 64 * 1024,
+                max_payload_bytes: 16 * 1024 * 1024,
+                envelope_headroom: 64 * 1024,
+                timeout_vote_reserve: 64 * 1024,
+            },
+        );
+
+        let mut config = default_v2_sumeragi();
+        config.queues.body_bytes = NonZeroUsize::new(64 * 1024 * 1024 - 1).expect("non-zero");
+        assert_error(
+            &config,
+            SumeragiV2ConfigError::BodyBytesTooSmall {
+                actual: 64 * 1024 * 1024 - 1,
+                minimum: 64 * 1024 * 1024,
+                body_source_bytes: 32 * 1024 * 1024,
             },
         );
 

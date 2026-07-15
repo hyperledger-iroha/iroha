@@ -1,6 +1,6 @@
 # Roadmap
 
-Last updated: 2026-07-14
+Last updated: 2026-07-15
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 Completed history lives in [`status.md`](./status.md).
@@ -25160,23 +25160,62 @@ height-context identity. Mixed-version operation, rolling protocol upgrades,
 global RBC, collectors, adaptive pacing, missing-QC shortcuts, and runtime
 mode flips are not first-release architecture and must not return.
 
+The production boundary now preserves a durable locked Commit intent across
+TC-driven volatile resets through generation-scoped exact-vote delivery,
+executable reducer/WAL progress witnesses, retained locked-body recovery, and
+protected service across per-source count/byte ingress quotas and bounded peer
+send pools. Timeout/safety capacity remains isolated; cancellation-safe flush,
+unified reliable read/write arbitration, and finite direct-post bursts prevent
+accepted consensus work from being lost or starved at transport boundaries.
+The canonical status payload exposes exact partial dual quorums, outbound
+intent/work ownership, queue age/debt, transition age, ignore counts, and a
+view-aware blocker.
+
+The focused P2P, fair-ingress, locked-Commit, WAL, and leader-crash corridors
+are green. On 2026-07-15, a freshly built, digest-pinned `iroha3d` also passed
+one exact no-retry four-validator genesis attempt on every validator in 59.09
+seconds. The formal checker passes all 59 tests and SANY is clean, but the proof
+ledger still reports `machine_checked_completion: false`. Four-/32-seed
+real-network, 100,000-height chaos, and 24-hour Taira release runners are in
+tree; their unexecuted long evidence is not complete merely because the gates
+exist.
+
 Outstanding release work:
 
-- discharge the source-bound, one-height `AsyncSpecAt` type-invariant,
-  timeout-view, rotating-leader, and application-liveness obligations currently
-  ledgered `specified_unproved`;
-- model and prove the indexed multi-height
-  `SumeragiV2ChainEpochRefinement!HeightLivenessObligation` by composing
-  successive `AsyncSpecAt` instances, without global asynchronous shadow state,
-  an alternate transition relation, or a favourable-network corridor;
+- discharge the eleven end-to-end safety/chain wrappers for durable-vote
+  uniqueness, lock monotonicity, external validity, certified-body
+  availability, certificate uniqueness, timeout protection, agreement,
+  conflicting-CommitQC exclusion, chain prefix, crash recovery, and epoch
+  boundaries which remain ledgered `specified_unproved` above their proved
+  kernels;
+- discharge the eight concrete asynchronous obligations for runner scheduler
+  preservation, progress-witness preservation, post-GST deadlock freedom,
+  protected service-rank decrease, post-GST starvation freedom, timeout-view
+  progress, responsive-leader rotation, and application liveness. The
+  one-height `AsyncTypeInvariantObligation` and generation-scoped delivery
+  obligation are already `tlaps_proved`;
+- discharge the concrete genesis chain product's exact first-successor handoff,
+  ledgered as `GenesisHeightSuccessorHandoffObligation`;
+- prove the indexed multi-height
+  `SumeragiV2ChainEpochRefinement!HeightLivenessObligation` over the explicit
+  successor-instance product by discharging its activation/fairness suffix,
+  authenticated historical catch-up fairness transfer for validators absent
+  from an old roster, and finite-height temporal induction, without global
+  asynchronous shadow state, an alternate consensus transition relation, or a
+  favourable-network corridor;
 - keep the production scheduler/WAL/reducer Verus corridor and exact TLC
   replay gate green against the same sources;
-- pass the three real four-validator restart, timeout-rotation, and divergent
-  PrepareQC convergence regressions, including the 50-second Taira bound;
-- keep the 100,000-height permissioned/NPoS chain-prefix chaos gate green;
-  and
-- complete and archive the separate 24-hour Taira-profile soak before public
-  release.
+- execute and archive a clean 32-seed release matrix for four-validator
+  genesis, restart, timeout rotation, and divergent PrepareQC convergence,
+  including the 50-second Taira bound;
+- execute and archive a clean 100,000-height permissioned/NPoS chain-prefix
+  chaos gate; and
+- complete and archive the fully pinned 24-hour Taira-profile soak, including
+  its recorded seed, load, impairment, anchored churn schedule, wall-clock
+  throughput, and acceptance bounds, with zero unclassified no-progress
+  intervals. Archive the fixed source-bound evidence JSON only after its
+  checker has re-hashed the checkout manifest, Git revision, daemon, Kagami,
+  test binary, generated configuration, and initial/final status quorums.
 
 Transaction inclusion and censorship fairness are outside the consensus
 height-progress theorem. The proof permits a valid empty heartbeat while

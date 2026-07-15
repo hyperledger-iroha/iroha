@@ -15,35 +15,40 @@ pub mod sccp;
 mod sccp_registry;
 pub use sccp::{
     SCCP_OUTBOUND_MESSAGE_MAX_PAYLOAD_BYTES_V1, SCCP_OUTBOUND_MESSAGES_MAX_PER_BLOCK_V1,
-    SCCP_V1_JSON_SAFE_INTEGER_MAX, SccpEvmSourceEmitterV1, SccpInboundAnchorHighWaterKeyV1,
-    SccpInboundMessageKeyV1, SccpInboundMessageRecordV1, SccpLaneIdV1, SccpNetworkV1,
-    SccpOutboundMessageContextV1, SccpOutboundMessageDescriptorV1, SccpOutboundMessageIndexKeyV1,
-    SccpOutboundMessageKeyV1, SccpOutboundPendingMessageRecordV1, SccpOutboundPendingUsageV1,
-    SccpOutboundProofRecordV1, SccpSourceEmitterV1, SccpSourceIdentityV1, SccpTronSourceEmitterV1,
+    SCCP_SOLANA_TESTNET_GENESIS_HASH_V1, SCCP_V1_JSON_SAFE_INTEGER_MAX, SccpEvmSourceEmitterV1,
+    SccpInboundAnchorHighWaterKeyV1, SccpInboundMessageKeyV1, SccpInboundMessageRecordV1,
+    SccpLaneIdV1, SccpNetworkV1, SccpOutboundMessageContextV1, SccpOutboundMessageDescriptorV1,
+    SccpOutboundMessageIndexKeyV1, SccpOutboundMessageKeyV1, SccpOutboundPendingMessageRecordV1,
+    SccpOutboundPendingUsageV1, SccpOutboundProofRecordV1, SccpSolanaSourceEmitterV1,
+    SccpSourceEmitterV1, SccpSourceIdentityV1, SccpTronSourceEmitterV1,
 };
 pub use sccp_registry::{
     SCCP_V1_MAX_GOVERNED_LANES, SCCP_V1_MAX_KEY_BYTES, SCCP_V1_MAX_LIVE_GOVERNED_ROUTES,
     SCCP_V1_MAX_LIVE_ROUTES_PER_LANE, SCCP_V1_MAX_PAYLOAD_AMOUNT_SCALE,
     SCCP_V1_MAX_RETAINED_NATIVE_TRUST_ANCHORS_PER_LANE, SCCP_V1_MAX_RETAINED_ROUTES_PER_LANE,
-    SCCP_V1_TAIRA_TO_TOKEN_MULTIPLIER, SCCP_V1_TAIRA_XOR_ASSET_DEFINITION_ID,
-    SCCP_V1_XOR_PAYLOAD_AMOUNT_SCALE, SccpBn254G1PointV1, SccpBn254G2PointV1,
-    SccpDestinationDeploymentV1, SccpEvmDestinationDeploymentV1, SccpGovernedLaneV1,
-    SccpGovernedRouteV1, SccpGroth16Bn254IcV1, SccpGroth16Bn254SemanticCircuitV1,
-    SccpGroth16Bn254VerifyingKeyV1, SccpInboundFinalityCutoffV1, SccpOutboundProofPolicyV1,
-    SccpRegistryV1, SccpRouteActivationV1, SccpRouteKeyV1, SccpRouteValidationError,
-    SccpSemanticProofProfileV1, SccpSoraFinalityAnchorV1, SccpSoraSettlementV1,
-    SccpTronDestinationDeploymentV1, canonical_sccp_groth16_bn254_public_signal_schema_bytes_v1,
+    SCCP_V1_MAX_SORA_OUTBOUND_GAS_LIMIT, SCCP_V1_SORA_OUTBOUND_EXECUTION_SEMANTICS,
+    SCCP_V1_TAIRA_TO_SOLANA_TOKEN_MULTIPLIER, SCCP_V1_TAIRA_TO_TOKEN_MULTIPLIER,
+    SCCP_V1_TAIRA_XOR_ASSET_DEFINITION_ID, SCCP_V1_XOR_PAYLOAD_AMOUNT_SCALE, SccpBn254G1PointV1,
+    SccpBn254G2PointV1, SccpDestinationDeploymentV1, SccpEvmDestinationDeploymentV1,
+    SccpGovernedLaneV1, SccpGovernedRouteV1, SccpGroth16Bn254IcV1,
+    SccpGroth16Bn254SemanticCircuitV1, SccpGroth16Bn254VerifyingKeyV1, SccpInboundFinalityCutoffV1,
+    SccpOutboundProofPolicyV1, SccpPortableVerifyingKeyRefV1, SccpRegistryV1,
+    SccpRouteActivationV1, SccpRouteKeyV1, SccpRouteValidationError, SccpSemanticProofProfileV1,
+    SccpSolanaDestinationDeploymentV1, SccpSoraFinalityAnchorV1, SccpSoraOutboundExecutionPolicyV1,
+    SccpSoraSettlementV1, SccpTronDestinationDeploymentV1,
+    canonical_sccp_groth16_bn254_public_signal_schema_bytes_v1,
     canonical_sccp_groth16_bn254_verifying_key_bytes_v1, canonical_sccp_lane_id_bytes_v1,
     canonical_sccp_network_bytes_v1, canonical_sccp_semantic_proof_profile_bytes_v1,
     canonical_sccp_sora_finality_anchor_bytes_v1, canonical_sccp_source_emitter_bytes_v1,
     canonical_sccp_source_identity_bytes_v1, sccp_evm_destination_binding_hash_v1,
-    sccp_exact_evm_xor_route_config_hash_v1, sccp_exact_tron_xor_route_config_hash_v1,
-    sccp_groth16_bn254_public_signal_schema_hash_v1, sccp_groth16_bn254_verifying_key_hash_v1,
-    sccp_lane_id_hash_v1, sccp_network_identity_hash_v1, sccp_network_tag_v1,
-    sccp_semantic_proof_profile_hash_v1, sccp_sora_finality_anchor_hash_v1,
-    sccp_sora_taira_chain_id_hash_v1, sccp_source_emitter_identity_hash_v1,
-    sccp_source_identity_hash_v1, sccp_tron_destination_binding_hash_v1,
-    sccp_v1_taira_xor_asset_definition_id,
+    sccp_exact_evm_xor_route_config_hash_v1, sccp_exact_solana_xor_route_config_hash_v1,
+    sccp_exact_tron_xor_route_config_hash_v1, sccp_groth16_bn254_public_signal_schema_hash_v1,
+    sccp_groth16_bn254_verifying_key_hash_v1, sccp_lane_id_hash_v1, sccp_network_identity_hash_v1,
+    sccp_network_tag_v1, sccp_semantic_proof_profile_hash_v1,
+    sccp_solana_destination_binding_hash_v1, sccp_solana_native_verifier_config_hash_v1,
+    sccp_sora_finality_anchor_hash_v1, sccp_sora_taira_chain_id_hash_v1,
+    sccp_source_emitter_identity_hash_v1, sccp_source_identity_hash_v1,
+    sccp_tron_destination_binding_hash_v1, sccp_v1_taira_xor_asset_definition_id,
 };
 
 /// Definition metadata for a wrapped asset originating from another chain.
@@ -210,6 +215,10 @@ pub enum BridgeNativeProofBackendV1 {
     #[codec(index = 2)]
     #[norito(rename = "tron_dpos_v1")]
     TronDpos,
+    /// Solana proof using the governed Agave finalized-state verifier.
+    #[codec(index = 3)]
+    #[norito(rename = "solana_agave_v1")]
+    SolanaAgave,
 }
 
 impl BridgeNativeProofBackendV1 {
@@ -220,6 +229,7 @@ impl BridgeNativeProofBackendV1 {
             Self::EthereumBeacon => "bridge/sccp/native/ethereum-beacon-v1",
             Self::BscParlia => "bridge/sccp/native/bsc-parlia-v1",
             Self::TronDpos => "bridge/sccp/native/tron-dpos-v1",
+            Self::SolanaAgave => "bridge/sccp/native/solana-agave-v1",
         }
     }
 
@@ -240,7 +250,7 @@ impl BridgeNativeProofBackendV1 {
             ) | (
                 Self::TronDpos,
                 SccpNetworkV1::TronMainnet | SccpNetworkV1::TronNile | SccpNetworkV1::TronShasta
-            )
+            ) | (Self::SolanaAgave, SccpNetworkV1::SolanaTestnet)
         )
     }
 }
@@ -264,9 +274,10 @@ pub struct SccpNativeTrustAnchorV1 {
     pub anchor_hash: [u8; 32],
     /// Backend-specific consensus-progress coordinate committed by `anchor_hash`.
     ///
-    /// Ethereum lanes use a finalized beacon slot. BSC and TRON lanes use a
-    /// finalized block height. This is intentionally distinct from an
-    /// Ethereum execution-block height carried by an admitted event proof.
+    /// Ethereum lanes use a finalized beacon slot, Solana lanes use a rooted
+    /// Agave slot, and BSC/TRON lanes use a finalized block height. This is
+    /// intentionally distinct from an Ethereum execution-block height carried
+    /// by an admitted event proof.
     pub checkpoint_height: u64,
 }
 
@@ -281,9 +292,10 @@ impl SccpNativeTrustAnchorV1 {
     /// to this anchor's governance interval.
     ///
     /// The next retained checkpoint is an inclusive upper boundary. The
-    /// one-height overlap lets BSC/TRON prove the boundary block while the
-    /// successor checkpoint itself becomes usable. Without a successor the
-    /// current checkpoint remains open-ended.
+    /// one-coordinate overlap lets BSC/TRON prove the boundary block and
+    /// Solana prove the boundary rooted slot while the successor checkpoint
+    /// itself becomes usable. Without a successor the current checkpoint
+    /// remains open-ended.
     #[must_use]
     pub fn admits_anchor_interval_height(
         self,
@@ -351,6 +363,10 @@ pub enum BridgeSccpDestinationProofBackendV1 {
     #[codec(index = 1)]
     #[norito(rename = "tron_groth16_bn254_v1")]
     TronGroth16Bn254,
+    /// Solana native-program Groth16 verifier over BN254.
+    #[codec(index = 2)]
+    #[norito(rename = "solana_groth16_bn254_v1")]
+    SolanaGroth16Bn254,
 }
 
 impl BridgeSccpDestinationProofBackendV1 {
@@ -360,7 +376,27 @@ impl BridgeSccpDestinationProofBackendV1 {
         match self {
             Self::EvmGroth16Bn254 => "evm-groth16-bn254-v1",
             Self::TronGroth16Bn254 => "tron-groth16-bn254-v1",
+            Self::SolanaGroth16Bn254 => "solana-groth16-bn254-v1",
         }
+    }
+
+    /// Return whether this closed verifier backend belongs to an exact
+    /// external destination profile.
+    #[must_use]
+    pub const fn supports_destination_network(self, target: SccpNetworkV1) -> bool {
+        matches!(
+            (self, target),
+            (
+                Self::EvmGroth16Bn254,
+                SccpNetworkV1::EthereumMainnet
+                    | SccpNetworkV1::EthereumSepolia
+                    | SccpNetworkV1::BscMainnet
+                    | SccpNetworkV1::BscTestnet
+            ) | (
+                Self::TronGroth16Bn254,
+                SccpNetworkV1::TronMainnet | SccpNetworkV1::TronNile | SccpNetworkV1::TronShasta
+            ) | (Self::SolanaGroth16Bn254, SccpNetworkV1::SolanaTestnet)
+        )
     }
 }
 
@@ -895,9 +931,9 @@ pub enum BridgeFinalityVerifyError {
     /// Block header predecessor differs from the finalized subject predecessor.
     #[error("block header predecessor does not match the finalized subject")]
     BlockHeaderParentMismatch,
-    /// Block header view-change index differs from the `CommitQC` round view.
+    /// `CommitQC` round view precedes the block header's immutable origin view.
     #[error(
-        "block header view {header_view} does not match finality certificate view {certificate_view}"
+        "finality certificate view {certificate_view} precedes block header origin view {header_view}"
     )]
     BlockHeaderViewMismatch {
         /// View-change index recomputed from the block header.
@@ -1143,7 +1179,7 @@ fn validate_bridge_finality_proof_structure(
         return Err(BridgeFinalityVerifyError::BlockHeaderParentMismatch);
     }
     let header_view = proof.block_header.view_change_index();
-    if header_view != artifact.commit_qc.round.view {
+    if artifact.commit_qc.round.view < header_view {
         return Err(BridgeFinalityVerifyError::BlockHeaderViewMismatch {
             header_view,
             certificate_view: artifact.commit_qc.round.view,
@@ -1820,6 +1856,10 @@ mod tests {
                 BridgeNativeProofBackendV1::TronDpos,
                 "bridge/sccp/native/tron-dpos-v1",
             ),
+            (
+                BridgeNativeProofBackendV1::SolanaAgave,
+                "bridge/sccp/native/solana-agave-v1",
+            ),
         ];
         for &(backend, expected_label) in &backends {
             assert_eq!(backend.backend_label(), expected_label);
@@ -1836,6 +1876,7 @@ mod tests {
             SccpNetworkV1::TronMainnet,
             SccpNetworkV1::TronNile,
             SccpNetworkV1::TronShasta,
+            SccpNetworkV1::SolanaTestnet,
         ];
         for &(backend, _) in &backends {
             for source in external_profiles {
@@ -1852,13 +1893,22 @@ mod tests {
                         SccpNetworkV1::TronMainnet
                             | SccpNetworkV1::TronNile
                             | SccpNetworkV1::TronShasta
+                    ) | (
+                        BridgeNativeProofBackendV1::SolanaAgave,
+                        SccpNetworkV1::SolanaTestnet
                     )
                 );
                 assert_eq!(backend.supports_source_network(source), expected);
             }
             assert!(!backend.supports_source_network(SccpNetworkV1::SoraTaira));
         }
-        assert!(BridgeNativeProofBackendV1::decode_all(&mut &[0xff][..]).is_err());
+        for unknown_tag in [4_u32, u32::MAX] {
+            let encoded = unknown_tag.encode();
+            assert!(
+                BridgeNativeProofBackendV1::decode_all(&mut encoded.as_slice()).is_err(),
+                "unknown native backend tag {unknown_tag} unexpectedly decoded"
+            );
+        }
 
         let proof = BridgeProof {
             range: BridgeProofRange {
@@ -1925,6 +1975,71 @@ mod tests {
 
     #[test]
     fn sccp_destination_container_separates_all_commitment_roles() {
+        for (backend, label) in [
+            (
+                BridgeSccpDestinationProofBackendV1::EvmGroth16Bn254,
+                "evm-groth16-bn254-v1",
+            ),
+            (
+                BridgeSccpDestinationProofBackendV1::TronGroth16Bn254,
+                "tron-groth16-bn254-v1",
+            ),
+            (
+                BridgeSccpDestinationProofBackendV1::SolanaGroth16Bn254,
+                "solana-groth16-bn254-v1",
+            ),
+        ] {
+            assert_eq!(backend.backend_label(), label);
+            let encoded = backend.encode();
+            assert_eq!(
+                BridgeSccpDestinationProofBackendV1::decode_all(&mut encoded.as_slice())
+                    .expect("closed destination backend decodes"),
+                backend
+            );
+        }
+        for backend in [
+            BridgeSccpDestinationProofBackendV1::EvmGroth16Bn254,
+            BridgeSccpDestinationProofBackendV1::TronGroth16Bn254,
+            BridgeSccpDestinationProofBackendV1::SolanaGroth16Bn254,
+        ] {
+            for network in [
+                SccpNetworkV1::SoraTaira,
+                SccpNetworkV1::EthereumMainnet,
+                SccpNetworkV1::EthereumSepolia,
+                SccpNetworkV1::BscMainnet,
+                SccpNetworkV1::BscTestnet,
+                SccpNetworkV1::TronMainnet,
+                SccpNetworkV1::TronNile,
+                SccpNetworkV1::TronShasta,
+                SccpNetworkV1::SolanaTestnet,
+            ] {
+                let expected = matches!(
+                    (backend, network),
+                    (
+                        BridgeSccpDestinationProofBackendV1::EvmGroth16Bn254,
+                        SccpNetworkV1::EthereumMainnet
+                            | SccpNetworkV1::EthereumSepolia
+                            | SccpNetworkV1::BscMainnet
+                            | SccpNetworkV1::BscTestnet
+                    ) | (
+                        BridgeSccpDestinationProofBackendV1::TronGroth16Bn254,
+                        SccpNetworkV1::TronMainnet
+                            | SccpNetworkV1::TronNile
+                            | SccpNetworkV1::TronShasta
+                    ) | (
+                        BridgeSccpDestinationProofBackendV1::SolanaGroth16Bn254,
+                        SccpNetworkV1::SolanaTestnet
+                    )
+                );
+                assert_eq!(backend.supports_destination_network(network), expected);
+            }
+        }
+        let unknown_backend = 3_u32.encode();
+        assert!(
+            BridgeSccpDestinationProofBackendV1::decode_all(&mut unknown_backend.as_slice())
+                .is_err()
+        );
+
         let proof = BridgeSccpDestinationProofV1 {
             backend: BridgeSccpDestinationProofBackendV1::EvmGroth16Bn254,
             route_configuration_hash: [0x71; 32],
@@ -2776,6 +2891,31 @@ mod tests {
                 certificate_view: 0,
             })
         );
+    }
+
+    #[test]
+    fn verifier_accepts_locked_block_certified_after_its_origin_view() {
+        let mut delayed = make_v2_fixture("chain-a");
+        delayed.proof.finality_artifact.commit_qc.round.view = 5;
+        resign_v2_proof(&mut delayed.proof, &delayed.keys);
+
+        delayed
+            .proof
+            .finality_artifact
+            .validate_for_header(&delayed.proof.block_header)
+            .expect("a later-view certificate is valid for the exact locked block");
+        let mut verifier = BridgeFinalityVerifier::with_context(
+            delayed
+                .proof
+                .finality_artifact
+                .height_context
+                .chain_id
+                .clone(),
+            delayed.proof.finality_artifact.context_id(),
+        );
+        verifier
+            .verify(&delayed.proof)
+            .expect("bridge verification accepts a later-view certificate");
     }
 
     #[test]

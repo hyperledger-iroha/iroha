@@ -339,6 +339,9 @@ pub(crate) const GENESIS_SEED: &[u8; 7] = b"genesis";
 const LOCALNET_SUMERAGI_QUEUE_COMMANDS: usize = 8_192;
 /// Certified-body and block-sync ingress capacity for generated localnets.
 const LOCALNET_SUMERAGI_QUEUE_BODIES: usize = 512;
+/// Per-authenticated-source canonical outer-ingress wire bytes for generated localnets.
+const LOCALNET_SUMERAGI_QUEUE_BODY_SOURCE_BYTES: usize =
+    iroha_config::parameters::defaults::sumeragi::QUEUE_BODY_SOURCE_BYTES.get();
 /// Payload-chunk ingress and orphan-buffer capacity for generated localnets.
 const LOCALNET_SUMERAGI_QUEUE_CHUNKS: usize = 4_096;
 /// Reconstructed bodies waiting for reducer delivery in generated localnets.
@@ -363,6 +366,16 @@ const LOCALNET_CONSENSUS_INGRESS_CRITICAL_BURST: u32 = 600;
 const LOCALNET_CONSENSUS_INGRESS_CRITICAL_BYTES_PER_SEC: u32 = 268_435_456; // 256 MiB
 /// Default critical consensus ingress bytes burst cap for localnet.
 const LOCALNET_CONSENSUS_INGRESS_CRITICAL_BYTES_BURST: u32 = 536_870_912; // 512 MiB
+
+fn localnet_sumeragi_body_bytes(validator_count: usize) -> Result<usize> {
+    let source_count = validator_count
+        .checked_add(1)
+        .ok_or_else(|| eyre!("localnet Sumeragi outer-ingress source count overflow"))?;
+    let isolated_bytes = source_count
+        .checked_mul(LOCALNET_SUMERAGI_QUEUE_BODY_SOURCE_BYTES)
+        .ok_or_else(|| eyre!("localnet Sumeragi outer-ingress wire-byte capacity overflow"))?;
+    Ok(isolated_bytes.max(iroha_config::parameters::defaults::sumeragi::QUEUE_BODY_BYTES.get()))
+}
 /// Transaction gossip cadence for 1s localnet pipelines (ms).
 const LOCALNET_TX_GOSSIP_PERIOD_FAST_MS: u64 = 100;
 /// Transaction gossip resend ticks for 1s localnet pipelines.
@@ -976,6 +989,7 @@ fn generate_localnet_with_line<T: Write>(
     )
     .wrap_err("failed to generate localnet peer keys")?;
     let client_identity = localnet_client_identity(seed_bytes, redact_seed_metadata)?;
+    let sumeragi_body_bytes = localnet_sumeragi_body_bytes(peers.len())?;
 
     tui::status("Generating genesis manifest");
     let npos_bootstrap = localnet_uses_npos(opts.consensus_mode);
@@ -1110,6 +1124,7 @@ fn generate_localnet_with_line<T: Write>(
         signature_batch_max_ed25519,
         runtime_block_max_transactions,
         queue_capacity,
+        sumeragi_body_bytes,
     );
     let config = parse_localnet_peer_config(&bootstrap_config)?;
     let da_proof_policies = Some(resolve_localnet_da_proof_policies(&config));
@@ -1195,6 +1210,7 @@ fn generate_localnet_with_line<T: Write>(
             signature_batch_max_ed25519,
             runtime_block_max_transactions,
             queue_capacity,
+            sumeragi_body_bytes,
         );
         let path = out_dir.join(format!("peer{idx}.toml"));
         fs::write(&path, rendered)
@@ -1652,6 +1668,7 @@ fn render_peer_config(
     signature_batch_max_ed25519: Option<usize>,
     runtime_block_max_transactions: Option<usize>,
     queue_capacity: usize,
+    sumeragi_body_bytes: usize,
 ) -> String {
     use toml::{Table, Value};
 
@@ -1755,6 +1772,20 @@ fn render_peer_config(
         "bodies".into(),
         Value::Integer(
             i64::try_from(LOCALNET_SUMERAGI_QUEUE_BODIES).expect("localnet body queue fits i64"),
+        ),
+    );
+    queues.insert(
+        "body_bytes".into(),
+        Value::Integer(
+            i64::try_from(sumeragi_body_bytes)
+                .expect("localnet aggregate outer-ingress wire-byte budget fits i64"),
+        ),
+    );
+    queues.insert(
+        "body_source_bytes".into(),
+        Value::Integer(
+            i64::try_from(LOCALNET_SUMERAGI_QUEUE_BODY_SOURCE_BYTES)
+                .expect("localnet per-source outer-ingress wire-byte budget fits i64"),
         ),
     );
     queues.insert(
@@ -4642,6 +4673,19 @@ mod tests {
             Some(i64::try_from(LOCALNET_SUMERAGI_QUEUE_BODIES).expect("queue fits i64"))
         );
         assert_eq!(
+            queues.get("body_bytes").and_then(toml::Value::as_integer),
+            Some(160 * 1024 * 1024)
+        );
+        assert_eq!(
+            queues
+                .get("body_source_bytes")
+                .and_then(toml::Value::as_integer),
+            Some(
+                i64::try_from(LOCALNET_SUMERAGI_QUEUE_BODY_SOURCE_BYTES)
+                    .expect("source budget fits i64")
+            )
+        );
+        assert_eq!(
             queues.get("chunks").and_then(toml::Value::as_integer),
             Some(i64::try_from(LOCALNET_SUMERAGI_QUEUE_CHUNKS).expect("queue fits i64"))
         );
@@ -5198,6 +5242,32 @@ mod tests {
 
         generate_localnet(&opts, &mut BufWriter::new(Vec::new())).expect("generate localnet files");
 
+        let peer_cfg: toml::Value = toml::from_str(
+            &fs::read_to_string(temp.path().join("peer0.toml"))
+                .expect("read seven-validator peer config"),
+        )
+        .expect("parse seven-validator peer config");
+        let queues = peer_cfg
+            .get("sumeragi")
+            .and_then(toml::Value::as_table)
+            .and_then(|sumeragi| sumeragi.get("queues"))
+            .and_then(toml::Value::as_table)
+            .expect("seven-validator Sumeragi queues");
+        assert_eq!(
+            queues
+                .get("body_source_bytes")
+                .and_then(toml::Value::as_integer),
+            Some(
+                i64::try_from(LOCALNET_SUMERAGI_QUEUE_BODY_SOURCE_BYTES)
+                    .expect("source budget fits i64")
+            )
+        );
+        assert_eq!(
+            queues.get("body_bytes").and_then(toml::Value::as_integer),
+            Some(256 * 1024 * 1024),
+            "seven validators plus the untrusted lane each need one isolated body quota"
+        );
+
         let manifest = localnet_genesis_for_opts(&opts);
         let validators: Vec<_> = manifest
             .instructions()
@@ -5231,6 +5301,11 @@ mod tests {
         assert_eq!(actual, expected, "validator roster should match peers");
 
         assert_localnet_dataspace_catalog_quorum(temp.path(), peer_count);
+    }
+
+    #[test]
+    fn localnet_body_ingress_budget_rejects_source_count_overflow() {
+        assert!(localnet_sumeragi_body_bytes(usize::MAX).is_err());
     }
 
     #[test]

@@ -1419,6 +1419,7 @@ mod tests {
             |header| {
                 header.set_height(NonZeroU64::new(1).expect("non-zero height"));
                 header.set_prev_block_hash(None);
+                header.set_view_change_index(4);
                 header.merkle_root = None;
             },
         )
@@ -1544,9 +1545,13 @@ mod tests {
         outstanding
             .register(authenticated_request)
             .expect("register request");
+        let request_hash = HashOf::new(&request);
         let _ = outstanding
             .authenticate_response(&context, response, &peer(&fixture.old_validators[0]))
             .expect("lagging peer accepts exact certified Kura body");
+        assert!(outstanding.contains(request_hash));
+        assert!(outstanding.complete(request_hash));
+        assert!(outstanding.is_empty());
 
         assert!(
             server

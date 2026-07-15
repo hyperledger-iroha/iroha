@@ -63,6 +63,32 @@ case "$1" in
       echo "--unit accepts no additional arguments" >&2
       exit 2
     fi
+    unit_test_list="$(
+      cargo test --locked --offline -p iroha_sumeragi_core \
+        --lib -- --list
+    )"
+    listed_unit_tests=()
+    while IFS= read -r test_name; do
+      [[ -n "$test_name" ]] && listed_unit_tests+=("$test_name")
+    done < <(sed -n 's/: test$//p' <<<"$unit_test_list")
+    if ((${#listed_unit_tests[@]} != 66)); then
+      printf '%s\n' "${listed_unit_tests[@]}" >&2
+      echo "expected exactly 66 Sumeragi v2 reducer unit tests" >&2
+      exit 1
+    fi
+    unit_ignored_test_list="$(
+      cargo test --locked --offline -p iroha_sumeragi_core \
+        --lib -- --list --ignored
+    )"
+    listed_ignored_unit_tests=()
+    while IFS= read -r test_name; do
+      [[ -n "$test_name" ]] && listed_ignored_unit_tests+=("$test_name")
+    done < <(sed -n 's/: test$//p' <<<"$unit_ignored_test_list")
+    if ((${#listed_ignored_unit_tests[@]} != 0)); then
+      printf '%s\n' "${listed_ignored_unit_tests[@]}" >&2
+      echo "reducer unit gate requires all 66 tests to be runnable" >&2
+      exit 1
+    fi
     cargo test --locked --offline -p iroha_sumeragi_core \
       --lib -- --test-threads=1
     ;;
@@ -74,7 +100,9 @@ case "$1" in
     required_tests=(
       lossy_offline_leader_simulations_commit_for_4_7_and_10_validators
       two_by_two_partition_cannot_advance_but_healing_retransmits_tc_and_commits
+      asymmetric_partition_stalls_without_dual_quorum_then_heals_and_applies
       leader_crash_after_proposal_broadcast_does_not_block_the_remaining_quorum
+      leader_crash_with_a_locked_body_rotates_and_rebuilds_the_old_commit_quorum
       corrupted_chunks_and_withheld_commit_evidence_recover_by_bounded_retransmission
       crash_after_proposal_wal_before_signature_replays_exact_intent
       taira_divergent_views_converge_and_commit_within_one_rotation
@@ -91,7 +119,7 @@ case "$1" in
     done < <(sed -n 's/: test$//p' <<<"$network_test_list")
     if ((${#listed_tests[@]} != ${#required_tests[@]} + 1)); then
       printf '%s\n' "${listed_tests[@]}" >&2
-      echo "expected exactly seven fast and one ignored Sumeragi v2 simulations" >&2
+      echo "expected exactly nine fast and one ignored Sumeragi v2 simulations" >&2
       exit 1
     fi
     for test_name in "${listed_tests[@]}"; do
@@ -133,6 +161,15 @@ case "$1" in
       exit 2
     fi
     readonly ignored_test="accelerated_100_000_block_chaos_preserves_chain_prefix"
+    ignored_test_list="$(
+      cargo test --locked --offline -p iroha_sumeragi_core \
+        --test network_simulation -- --list --ignored
+    )"
+    ignored_count="$(grep -Fxc "${ignored_test}: test" <<<"${ignored_test_list}" || true)"
+    if [[ "${ignored_count}" != 1 ]]; then
+      echo "expected exactly one ignored chaos test named ${ignored_test}; found ${ignored_count}" >&2
+      exit 1
+    fi
     cargo test --locked --offline -p iroha_sumeragi_core \
       --test network_simulation \
       "$ignored_test" \
@@ -142,6 +179,54 @@ case "$1" in
     if (($# != 1)); then
       echo "--model-replay accepts no additional arguments" >&2
       exit 2
+    fi
+    required_replay_tests=(
+      tlc_liveness_witness_replays_against_the_production_reducer
+      malformed_and_unsafe_normalized_traces_fail_closed
+      crash_replay_rejects_stale_completion_and_resumes_exact_intent
+      unsafe_certificate_and_vote_equivocation_do_not_decide
+      invalid_body_never_authorizes_prepare_or_decision
+      overlapping_timeout_groups_are_rejected_transactionally
+      timeout_equivocation_with_different_full_high_qcs_is_reported
+    )
+    model_replay_test_list="$(
+      cargo test --locked --offline -p iroha_sumeragi_core \
+        --test model_trace_replay -- --list
+    )"
+    listed_replay_tests=()
+    while IFS= read -r test_name; do
+      [[ -n "$test_name" ]] && listed_replay_tests+=("$test_name")
+    done < <(sed -n 's/: test$//p' <<<"$model_replay_test_list")
+    if ((${#listed_replay_tests[@]} != ${#required_replay_tests[@]})); then
+      printf '%s\n' "${listed_replay_tests[@]}" >&2
+      echo "expected exactly seven Sumeragi v2 model-replay tests" >&2
+      exit 1
+    fi
+    for test_name in "${listed_replay_tests[@]}"; do
+      found=false
+      for required_test in "${required_replay_tests[@]}"; do
+        if [[ "$test_name" == "$required_test" ]]; then
+          found=true
+          break
+        fi
+      done
+      if [[ "$found" != true ]]; then
+        echo "unexpected Sumeragi v2 model-replay test in inventory: ${test_name}" >&2
+        exit 1
+      fi
+    done
+    replay_ignored_test_list="$(
+      cargo test --locked --offline -p iroha_sumeragi_core \
+        --test model_trace_replay -- --list --ignored
+    )"
+    listed_ignored_replay_tests=()
+    while IFS= read -r test_name; do
+      [[ -n "$test_name" ]] && listed_ignored_replay_tests+=("$test_name")
+    done < <(sed -n 's/: test$//p' <<<"$replay_ignored_test_list")
+    if ((${#listed_ignored_replay_tests[@]} != 0)); then
+      printf '%s\n' "${listed_ignored_replay_tests[@]}" >&2
+      echo "model-replay gate requires all seven tests to be runnable" >&2
+      exit 1
     fi
     cargo test --locked --offline -p iroha_sumeragi_core \
       --test model_trace_replay -- --test-threads=1

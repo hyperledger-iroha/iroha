@@ -3144,6 +3144,18 @@ pub mod sumeragi {
     pub const QUEUE_COMMAND_CAPACITY: NonZeroUsize = nonzero!(1024_usize);
     /// Certified-body and block-sync ingress capacity.
     pub const QUEUE_BODY_CAPACITY: NonZeroUsize = nonzero!(256_usize);
+    /// Aggregate canonical outer-ingress wire bytes retained across all sources.
+    ///
+    /// Five default per-source quotas cover a four-validator roster plus the
+    /// shared untrusted-source lane.
+    pub const QUEUE_BODY_BYTES: NonZeroUsize = nonzero!(160_usize * 1024 * 1024);
+    /// Per-authenticated-source canonical outer-ingress wire bytes, including
+    /// envelope overhead and the isolated timeout-vote reserve.
+    pub const QUEUE_BODY_SOURCE_BYTES: NonZeroUsize = nonzero!(32_usize * 1024 * 1024);
+    /// Wire-envelope headroom required above the maximum canonical block body.
+    pub const BODY_ENVELOPE_HEADROOM_BYTES: usize = 64 * 1024;
+    /// Per-validator source bytes isolated from ordinary traffic for a timeout vote.
+    pub const TIMEOUT_VOTE_RESERVE_BYTES: usize = 64 * 1024;
     /// Payload-chunk ingress and orphan-buffer capacity.
     pub const QUEUE_CHUNK_CAPACITY: NonZeroUsize = nonzero!(2048_usize);
     /// Reconstructed bodies waiting for reducer delivery.

@@ -9,7 +9,7 @@ use super::{
     OpaqueSignature, PayloadManifest, PersistenceId, Phase, Proposal, ProposalJustification,
     Quorum, QuorumCertificate, QuorumError, ReplayError, Round, SignatureShare, SignedProposal,
     SignedTimeoutVote, SignedVote, Subject, TimeoutCertificate, TimeoutSignatureGroup, TimeoutVote,
-    ValidatorId, Vote, WalEntry, WalRecord,
+    ValidatorId, Vote, VotingPower, WalEntry, WalRecord,
     refinement::{
         self, BoundaryCapabilityKey, CONTINUATION_DECIDE, CONTINUATION_INSTALL_TIMEOUT,
         CONTINUATION_NONE, CONTINUATION_SIGN, EFFECT_APPLY, EFFECT_BROADCAST, EFFECT_ENTER_VIEW,
@@ -470,7 +470,7 @@ impl Event {
 }
 
 /// Reason an input was safely ignored without changing state.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum IgnoreReason {
     /// Input belongs to another height.
     WrongHeight,
@@ -583,6 +583,34 @@ enum OutboundControlClass {
     CommitQc,
     TimeoutVote,
     TimeoutCertificate,
+}
+
+/// Exact partial vote quorum retained by the reducer.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct VotePoolSnapshot {
+    /// Voting round.
+    pub(crate) round: Round,
+    /// Voting phase.
+    pub(crate) phase: Phase,
+    /// Exact voted subject.
+    pub(crate) subject: Subject,
+    /// Canonically ordered distinct signers for this subject.
+    pub(crate) signers: Vec<ValidatorId>,
+    /// Voting power represented by `signers`.
+    pub(crate) signed_power: VotingPower,
+}
+
+/// Exact partial timeout quorum retained by the reducer.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct TimeoutPoolSnapshot {
+    /// Timed-out round.
+    pub(crate) round: Round,
+    /// Canonically ordered distinct timeout signers.
+    pub(crate) signers: Vec<ValidatorId>,
+    /// Voting power represented by `signers`.
+    pub(crate) signed_power: VotingPower,
+    /// Whether this pool already formed a timeout certificate.
+    pub(crate) certificate_formed: bool,
 }
 
 /// The sole executable Sumeragi v2 consensus state machine.
@@ -765,6 +793,84 @@ impl Reducer {
         )
     }
 
+    /// Return the local generation owning volatile consumer state.
+    #[must_use]
+    pub(crate) const fn generation(&self) -> Generation {
+        self.generation
+    }
+
+    /// Return exact subject-grouped partial Prepare and Commit pools.
+    #[must_use]
+    pub(crate) fn vote_pool_snapshots(&self) -> Vec<VotePoolSnapshot> {
+        let mut grouped = BTreeMap::<(Round, Phase, Subject), Vec<ValidatorId>>::new();
+        for ((round, phase), votes) in &self.votes {
+            for vote in votes.values() {
+                grouped
+                    .entry((*round, *phase, vote.vote().subject()))
+                    .or_default()
+                    .push(vote.vote().signer());
+            }
+        }
+        grouped
+            .into_iter()
+            .map(|((round, phase, subject), signers)| {
+                let quorum = Quorum::calculate(&self.context, &signers)
+                    .expect("reducer vote pools contain canonical roster signers");
+                VotePoolSnapshot {
+                    round,
+                    phase,
+                    subject,
+                    signers,
+                    signed_power: quorum.voting_power(),
+                }
+            })
+            .collect()
+    }
+
+    /// Return exact partial timeout pools and their formed-certificate state.
+    #[must_use]
+    pub(crate) fn timeout_pool_snapshots(&self) -> Vec<TimeoutPoolSnapshot> {
+        self.timeout_votes
+            .iter()
+            .map(|(round, votes)| {
+                let signers = votes.keys().copied().collect::<Vec<_>>();
+                let quorum = Quorum::calculate(&self.context, &signers)
+                    .expect("reducer timeout pools contain canonical roster signers");
+                TimeoutPoolSnapshot {
+                    round: *round,
+                    signers,
+                    signed_power: quorum.voting_power(),
+                    certificate_formed: self.formed_timeouts.contains(round),
+                }
+            })
+            .collect()
+    }
+
+    /// Iterate over signed or certified control intents retained for
+    /// retransmission.
+    pub(crate) fn outbound_messages(&self) -> impl Iterator<Item = &ConsensusMessageV2> {
+        self.outbound_control.values()
+    }
+
+    /// Return the durable record currently fenced behind a WAL append.
+    #[must_use]
+    pub(crate) fn pending_persistence_record(&self) -> Option<&WalRecord> {
+        self.pending_persistence
+            .as_ref()
+            .map(|pending| pending.entry.record())
+    }
+
+    /// Return the signable currently owned by the signer boundary.
+    #[must_use]
+    pub(crate) const fn awaiting_signature(&self) -> Option<&SignableMessage> {
+        self.awaiting_signature.as_ref()
+    }
+
+    /// Iterate over durable signables waiting behind the active signer work.
+    pub(crate) fn queued_signatures(&self) -> impl Iterator<Item = &SignableMessage> {
+        self.signature_queue.iter()
+    }
+
     /// Returns the body state for a round and subject.
     #[must_use]
     pub fn body_state(&self, round: Round, subject: Subject) -> BodyState {
@@ -825,10 +931,18 @@ impl Reducer {
             self.signature_queue
                 .push_back(SignableMessage::Proposal(proposal.clone()));
         }
-        for vote in self.durable.prepare_intents() {
+        if let Some(vote) = self
+            .durable
+            .prepare_intents()
+            .find(|vote| Self::durable_vote_is_active(&self.durable, *vote))
+        {
             self.signature_queue.push_back(SignableMessage::Vote(vote));
         }
-        for vote in self.durable.commit_intents() {
+        if let Some(vote) = self
+            .durable
+            .commit_intents()
+            .find(|vote| Self::durable_vote_is_active(&self.durable, *vote))
+        {
             self.signature_queue.push_back(SignableMessage::Vote(vote));
         }
         StepOutcome::applied(self.drive_signature())
@@ -853,6 +967,9 @@ impl Reducer {
                 if !self.transition_refines(&audit_event, &next, outcome.effects()) {
                     return Err(ReducerError::RefinementViolation);
                 }
+                if let Some(violation) = next.progress_witness_violation() {
+                    return Err(ReducerError::ProgressWitnessViolation(violation));
+                }
                 *self = next;
                 Ok(outcome)
             }
@@ -860,9 +977,64 @@ impl Reducer {
                 if !self.transition_refines(&audit_event, self, &[]) {
                     return Err(ReducerError::RefinementViolation);
                 }
+                if let Some(violation) = self.progress_witness_violation() {
+                    return Err(ReducerError::ProgressWitnessViolation(violation));
+                }
                 Err(error)
             }
         }
+    }
+
+    /// Return the first missing reconstruction witness for durable progress.
+    ///
+    /// This check deliberately covers only reducer-owned state. Adapter queue
+    /// ownership and asynchronous worker service are checked at their own
+    /// admission boundaries; the reducer must retain enough state to recreate
+    /// either operation on retransmission or recovery.
+    pub(crate) fn progress_witness_violation(&self) -> Option<ProgressWitnessViolation> {
+        if let Some(locked) = self.durable.locked()
+            && self.durable.decision().is_none()
+            && let Some(intent) = self.durable.commit_intent(locked.round())
+            && intent.subject() == locked.subject()
+        {
+            let signature_pending = self.awaiting_signature.as_ref().is_some_and(
+                |message| matches!(message, SignableMessage::Vote(vote) if *vote == intent),
+            ) || self
+                .signature_queue
+                .iter()
+                .any(|message| matches!(message, SignableMessage::Vote(vote) if *vote == intent));
+            let outbound = self
+                .outbound_control
+                .get(&OutboundControlClass::CommitVote)
+                .is_some_and(|message| {
+                    matches!(message, ConsensusMessageV2::Vote(vote) if vote.vote() == intent)
+                });
+            let pooled = self
+                .votes
+                .get(&(intent.round(), Phase::Commit))
+                .and_then(|pool| pool.get(&intent.signer()))
+                .is_some_and(|vote| vote.vote() == intent);
+            if self.replay_resumed && !signature_pending && !outbound && !pooled {
+                return Some(ProgressWitnessViolation::LockedCommitOrphaned);
+            }
+        }
+
+        if let Some(decision) = self.durable.decision()
+            && self.applied_subject != Some(decision.subject())
+            && self.replay_resumed
+        {
+            let state = self.body_state(decision.round(), decision.subject());
+            if state == BodyState::Invalid {
+                return Some(ProgressWitnessViolation::DecidedBodyInvalid);
+            }
+            if !self
+                .body_work
+                .contains_key(&(decision.round(), decision.subject()))
+            {
+                return Some(ProgressWitnessViolation::DecisionApplicationOrphaned);
+            }
+        }
+        None
     }
 
     fn step_in_place(&mut self, event: Event) -> Result<StepOutcome, ReducerError> {
@@ -1096,17 +1268,25 @@ impl Reducer {
             SignableMessage::Proposal(proposal) => {
                 self.durable.proposal_intent(proposal.round()) == Some(proposal)
             }
-            SignableMessage::Vote(vote) => match vote.phase() {
-                Phase::Prepare => self.durable.prepare_intent(vote.round()) == Some(*vote),
-                Phase::Commit => {
-                    self.durable.commit_intent(vote.round()) == Some(*vote)
-                        && self.durable.locked().is_some_and(|locked| {
-                            locked.round() == vote.round() && locked.subject() == vote.subject()
-                        })
-                }
-            },
+            SignableMessage::Vote(vote) => Self::durable_vote_is_active(&self.durable, *vote),
             SignableMessage::TimeoutVote(vote) => {
                 self.durable.timeout_intent(vote.round()) == Some(vote.clone())
+            }
+        }
+    }
+
+    fn durable_vote_is_active(durable: &DurableState, vote: Vote) -> bool {
+        match vote.phase() {
+            Phase::Prepare => {
+                vote.round() == Round::new(durable.height(), durable.current_view())
+                    && durable.timeout_intent(vote.round()).is_none()
+                    && durable.prepare_intent(vote.round()) == Some(vote)
+            }
+            Phase::Commit => {
+                durable.commit_intent(vote.round()) == Some(vote)
+                    && durable.locked().is_some_and(|locked| {
+                        locked.round() == vote.round() && locked.subject() == vote.subject()
+                    })
             }
         }
     }
@@ -1568,10 +1748,18 @@ impl Reducer {
         if self.durable.proposal_intent(round).is_some() {
             return REPLAY_EFFECT_PROPOSAL;
         }
-        if self.durable.prepare_intents().next().is_some() {
+        if self
+            .durable
+            .prepare_intents()
+            .any(|vote| Self::durable_vote_is_active(&self.durable, vote))
+        {
             return REPLAY_EFFECT_PREPARE;
         }
-        if self.durable.commit_intents().next().is_some() {
+        if self
+            .durable
+            .commit_intents()
+            .any(|vote| Self::durable_vote_is_active(&self.durable, vote))
+        {
             return REPLAY_EFFECT_COMMIT;
         }
         REPLAY_EFFECT_NONE
@@ -2036,14 +2224,8 @@ impl Reducer {
                     }),
                 ConsensusMessageV2::Vote(signed) => {
                     let vote = signed.vote();
-                    let durable_vote = match vote.phase() {
-                        Phase::Prepare => after.durable.prepare_intent(vote.round()),
-                        Phase::Commit => after.durable.commit_intent(vote.round()).filter(|vote| {
-                            after.durable.locked().is_some_and(|locked| {
-                                locked.round() == vote.round() && locked.subject() == vote.subject()
-                            })
-                        }),
-                    };
+                    let durable_vote =
+                        Self::durable_vote_is_active(&after.durable, vote).then_some(vote);
                     durable_vote.map(|vote| {
                         let mut key = EffectCapabilityKey {
                             kind: EFFECT_BROADCAST,
@@ -2565,7 +2747,17 @@ impl Reducer {
         }
         let vote = signed.vote();
         self.validate_vote(vote)?;
-        if vote.round().view() != self.durable.current_view() {
+        let current_view = self.durable.current_view();
+        // A timeout clears volatile vote pools, but locally durable Commit
+        // intents are retransmitted across views. Re-admit only the exact
+        // historical Commit round matching the node's durable lock; pools
+        // remain round-keyed, so old and current quorums cannot mix.
+        let historical_locked_commit = vote.round().view() < current_view
+            && vote.phase() == Phase::Commit
+            && self.durable.locked().is_some_and(|locked| {
+                locked.round() == vote.round() && locked.subject() == vote.subject()
+            });
+        if vote.round().view() != current_view && !historical_locked_commit {
             return Ok(StepOutcome::ignored(IgnoreReason::IrrelevantView));
         }
         let pool = self.votes.entry((vote.round(), vote.phase())).or_default();
@@ -3065,12 +3257,17 @@ impl Reducer {
                     self.known_prepare
                         .insert(locked.reference(), locked.clone());
                 }
-                self.outbound_control.retain(|class, _| {
+                let durable = &self.durable;
+                self.outbound_control.retain(|class, message| {
                     matches!(
                         class,
-                        OutboundControlClass::CommitVote
-                            | OutboundControlClass::CommitQc
-                            | OutboundControlClass::TimeoutCertificate
+                        OutboundControlClass::CommitQc | OutboundControlClass::TimeoutCertificate
+                    ) || matches!(
+                        (class, message),
+                        (
+                            OutboundControlClass::CommitVote,
+                            ConsensusMessageV2::Vote(vote),
+                        ) if Self::durable_vote_is_active(durable, vote.vote())
                     )
                 });
                 install_effects.push(Effect::EnterView {
@@ -3119,14 +3316,19 @@ impl Reducer {
         if self.awaiting_signature.is_some() || self.pending_persistence.is_some() {
             return Vec::new();
         }
-        let Some(message) = self.signature_queue.pop_front() else {
-            return Vec::new();
-        };
-        self.awaiting_signature = Some(message.clone());
-        vec![Effect::Sign {
-            tag: self.current_tag(),
-            message,
-        }]
+        while let Some(message) = self.signature_queue.pop_front() {
+            // A TC may supersede queued Prepare work or promote the lock past
+            // an older durable Commit intent. Such records remain immutable
+            // WAL history, but no longer authorize a fresh signature.
+            if self.signable_is_durably_authorized(&message) {
+                self.awaiting_signature = Some(message.clone());
+                return vec![Effect::Sign {
+                    tag: self.current_tag(),
+                    message,
+                }];
+            }
+        }
+        Vec::new()
     }
 
     fn on_signed(&mut self, signature: OpaqueSignature) -> Result<StepOutcome, ReducerError> {
@@ -3214,12 +3416,26 @@ impl Reducer {
     }
 }
 
+/// Missing reducer-owned evidence that durable work can be reconstructed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProgressWitnessViolation {
+    /// The active durable Commit intent has no signing, retransmission, pool,
+    /// decision, or recovery witness.
+    LockedCommitOrphaned,
+    /// A durable decision has no retained body/application pipeline state.
+    DecisionApplicationOrphaned,
+    /// Deterministic validation marked the body of a durable decision invalid.
+    DecidedBodyInvalid,
+}
+
 /// Failure caused by malformed authenticated input or an impossible local state.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ReducerError {
     /// The executable transition failed the mechanically verified refinement
     /// gate and was discarded before becoming caller-visible.
     RefinementViolation,
+    /// A durable progress source lost every reducer-owned reconstruction path.
+    ProgressWitnessViolation(ProgressWitnessViolation),
     /// The configured local validator is absent from the frozen roster.
     LocalValidatorNotInRoster,
     /// An observer attempted to create a voting intent.
@@ -3283,6 +3499,10 @@ impl fmt::Display for ReducerError {
             Self::RefinementViolation => {
                 formatter.write_str("reducer transition violated the verified refinement gate")
             }
+            Self::ProgressWitnessViolation(violation) => write!(
+                formatter,
+                "reducer transition violated progress witness: {violation:?}"
+            ),
             Self::LocalValidatorNotInRoster => {
                 formatter.write_str("local validator is absent from the roster")
             }

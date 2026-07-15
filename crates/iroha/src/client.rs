@@ -752,6 +752,9 @@ fn sccp_recent_projection_value_is_canonical(
         iroha_sccp::SccpNormalizedCodecValueV1::TronAddress21 { bytes } => {
             (iroha_sccp::SCCP_CODEC_TRON_ADDRESS21, bytes)
         }
+        iroha_sccp::SccpNormalizedCodecValueV1::SolanaPubkey32 { bytes } => {
+            (iroha_sccp::SCCP_CODEC_SOLANA_PUBKEY32, bytes)
+        }
     };
     iroha_sccp::decode_sccp_normalized_codec_value(codec, bytes).as_ref() == Some(value)
 }
@@ -776,6 +779,10 @@ fn validate_sccp_recent_projection(
             | iroha_data_model::bridge::SccpNetworkV1::TronNile
             | iroha_data_model::bridge::SccpNetworkV1::TronShasta,
             iroha_sccp::SccpNormalizedCodecValueV1::TronAddress21 { .. },
+        )
+        | (
+            iroha_data_model::bridge::SccpNetworkV1::SolanaTestnet,
+            iroha_sccp::SccpNormalizedCodecValueV1::SolanaPubkey32 { .. },
         ) => true,
         _ => false,
     };
@@ -21891,6 +21898,7 @@ mod tests {
                 },
             },
             last_commit_qc: None,
+            liveness: Default::default(),
         }
     }
 
@@ -29500,6 +29508,29 @@ mod tests {
     fn sccp_recent_messages_reject_bounds_duplicates_aliases_and_malformed_items() {
         let valid = sample_sccp_recent_messages();
         validate_sccp_recent_messages(&valid).expect("valid recent response");
+
+        let mut solana = valid.clone();
+        solana.items[0].target_profile = iroha_data_model::bridge::SccpNetworkV1::SolanaTestnet
+            .profile_key()
+            .to_owned();
+        solana.items[0].target_domain = iroha_sccp::SCCP_DOMAIN_SOLANA;
+        solana.items[0].route_id = Some(iroha_sccp::SCCP_TAIRA_SOL_XOR_ROUTE_ID_V1.to_owned());
+        let iroha_sccp::SccpPayloadProjectionV1::Transfer(transfer) =
+            &mut solana.items[0].payload_projection;
+        transfer.dest_domain = iroha_sccp::SCCP_DOMAIN_SOLANA;
+        transfer.recipient =
+            iroha_sccp::SccpNormalizedCodecValueV1::SolanaPubkey32 { bytes: [0x93; 32] };
+        transfer.route_id = iroha_sccp::SccpNormalizedCodecValueV1::CanonicalText {
+            value: iroha_sccp::SCCP_TAIRA_SOL_XOR_ROUTE_ID_V1.to_owned(),
+        };
+        validate_sccp_recent_messages(&solana).expect("valid Solana recent response");
+
+        let mut zero_solana_recipient = solana.clone();
+        let iroha_sccp::SccpPayloadProjectionV1::Transfer(transfer) =
+            &mut zero_solana_recipient.items[0].payload_projection;
+        transfer.recipient =
+            iroha_sccp::SccpNormalizedCodecValueV1::SolanaPubkey32 { bytes: [0; 32] };
+        assert!(validate_sccp_recent_messages(&zero_solana_recipient).is_err());
 
         let mut duplicate = valid.clone();
         duplicate.items.push(duplicate.items[0].clone());

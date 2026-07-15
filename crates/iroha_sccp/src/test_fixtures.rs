@@ -21,12 +21,13 @@ use iroha_data_model::{
     block::{BlockHeader, BlockSignature, SignedBlock},
     bridge::{
         BRIDGE_FINALITY_PROOF_VERSION_V1, BridgeSccpDestinationProofV1,
-        SCCP_V1_TAIRA_TO_TOKEN_MULTIPLIER, SCCP_V1_XOR_PAYLOAD_AMOUNT_SCALE, SccpBn254G1PointV1,
-        SccpBn254G2PointV1, SccpDestinationDeploymentV1, SccpEvmDestinationDeploymentV1,
-        SccpEvmSourceEmitterV1, SccpGovernedRouteV1, SccpGroth16Bn254IcV1,
-        SccpGroth16Bn254SemanticCircuitV1, SccpGroth16Bn254VerifyingKeyV1, SccpLaneIdV1,
-        SccpNetworkV1, SccpOutboundMessageContextV1, SccpOutboundProofPolicyV1,
-        SccpRouteActivationV1, SccpSemanticProofProfileV1, SccpSoraFinalityAnchorV1,
+        SCCP_V1_SORA_OUTBOUND_EXECUTION_SEMANTICS, SCCP_V1_TAIRA_TO_TOKEN_MULTIPLIER,
+        SCCP_V1_XOR_PAYLOAD_AMOUNT_SCALE, SccpBn254G1PointV1, SccpBn254G2PointV1,
+        SccpDestinationDeploymentV1, SccpEvmDestinationDeploymentV1, SccpEvmSourceEmitterV1,
+        SccpGovernedRouteV1, SccpGroth16Bn254IcV1, SccpGroth16Bn254SemanticCircuitV1,
+        SccpGroth16Bn254VerifyingKeyV1, SccpLaneIdV1, SccpNetworkV1, SccpOutboundMessageContextV1,
+        SccpOutboundProofPolicyV1, SccpPortableVerifyingKeyRefV1, SccpRouteActivationV1,
+        SccpSemanticProofProfileV1, SccpSoraFinalityAnchorV1, SccpSoraOutboundExecutionPolicyV1,
         SccpSoraSettlementV1, SccpSourceEmitterV1, SccpSourceIdentityV1,
         sccp_groth16_bn254_public_signal_schema_hash_v1, sccp_sora_taira_chain_id_hash_v1,
         sccp_v1_taira_xor_asset_definition_id,
@@ -253,6 +254,23 @@ fn outbound_policy() -> SccpOutboundProofPolicyV1 {
     }
 }
 
+/// Build the deterministic proved burn-and-record policy used by SCCP tests.
+#[must_use]
+pub fn sccp_sora_outbound_execution_policy_test_fixture_v1() -> SccpSoraOutboundExecutionPolicyV1 {
+    SccpSoraOutboundExecutionPolicyV1 {
+        version: 1,
+        semantics: SCCP_V1_SORA_OUTBOUND_EXECUTION_SEMANTICS.to_owned(),
+        contract_artifact_sha256: [0xb1; 32],
+        vk_ref: SccpPortableVerifyingKeyRefV1 {
+            backend: "stark/fri/v1".to_owned(),
+            name: "ivm-execution-v1".to_owned(),
+            version: 1,
+            commitment: [0xb2; 32],
+        },
+        gas_limit: 50_000_000,
+    }
+}
+
 /// Build one complete exact EVM-family governed route for downstream tests.
 ///
 /// # Panics
@@ -319,6 +337,7 @@ pub fn sccp_exact_evm_governed_route_test_fixture_v1(
             }),
         },
         destination,
+        sora_outbound_execution_policy: sccp_sora_outbound_execution_policy_test_fixture_v1(),
         settlement: SccpSoraSettlementV1 {
             asset_definition_id: sccp_v1_taira_xor_asset_definition_id(),
             custody_account_id: AccountId::new(custody),

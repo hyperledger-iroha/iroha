@@ -595,6 +595,7 @@ fn rng_sumeragi_v2_status(rng: &mut DeterministicRng) -> SumeragiV2Status {
             },
         },
         last_commit_qc: None,
+        liveness: Default::default(),
     }
 }
 

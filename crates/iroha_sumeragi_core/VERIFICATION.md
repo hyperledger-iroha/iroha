@@ -12,7 +12,7 @@ Verus or vstd version, verifies the official macOS arm64 or Linux x86_64 binary
 checksums (other platforms must supply the two pinned checksum variables), and
 rejects the wrong bundled Rust toolchain or proof escape hatches in the
 production reducer and formal proof module. It also rejects any external
-`#[path]` from the production module, then runs exactly seven deterministic
+`#[path]` from the production module, then runs exactly nine deterministic
 adversarial network simulations before invoking Verus.
 The script enables the crate's `verus` feature explicitly; normal production
 builds do not compile or link `vstd`. Verifier output is streamed to the caller
@@ -22,9 +22,10 @@ and retained at `target/formal/sumeragi_v2/verus.log` for CI to archive; shell
 The dependency-free reducer sources are authoritative under
 `crates/iroha_core/src/sumeragi/v2_core/`; this excluded crate is a formal
 harness over those same package-local files. The script copies both into a
-disposable workspace, generates that workspace's lockfile, and runs the seven
-loss/duplication/reordering, partition, crash, corrupt-body, withheld-evidence,
-divergent-view, and accelerated chain-prefix simulations with `--locked
+disposable workspace, generates that workspace's lockfile, and runs the nine
+loss/duplication/reordering, symmetric/asymmetric partition, proposal/locked-body
+crash, corrupt-body, withheld-evidence, divergent-view, and accelerated
+chain-prefix simulations with `--locked
 --offline` and one test thread.
 The repository `Cargo.lock` is never read for resolution or modified.
 

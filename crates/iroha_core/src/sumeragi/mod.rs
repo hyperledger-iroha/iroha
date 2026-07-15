@@ -10,13 +10,16 @@ use std::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
         mpsc,
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use eyre::Result;
 use iroha_config::parameters::{
     actual::{Common as CommonConfig, Sumeragi as SumeragiConfig},
-    defaults::{concurrency as concurrency_defaults, sumeragi::npos::EPOCH_LENGTH_BLOCKS},
+    defaults::{
+        concurrency as concurrency_defaults,
+        sumeragi::{TIMEOUT_VOTE_RESERVE_BYTES, npos::EPOCH_LENGTH_BLOCKS},
+    },
 };
 use iroha_crypto::{Algorithm, Hash as CryptoHash, PublicKey};
 use iroha_data_model::{
@@ -26,6 +29,7 @@ use iroha_data_model::{
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal, try_spawn_os_thread_as_future};
 use iroha_genesis::GenesisBlock;
 use mv::storage::StorageReadOnly;
+use norito::codec::Encode as _;
 use parking_lot::Mutex;
 
 use crate::{
@@ -35,6 +39,12 @@ use crate::{
 
 static CONFIGURED_SUMERAGI_STACK_SIZE_BYTES: AtomicUsize = AtomicUsize::new(0);
 const WORKER_WAKE_CHANNEL_CAP: usize = 1;
+// The valid v2 timeout-vote envelope is bounded by a 128-entry signer vector
+// and two individually bounded BLS signatures. Keep this conservative wire
+// ceiling aligned with the formal ingress refinement and the maximal fixture
+// below; the production byte reserve is intentionally much larger.
+const MAX_VALID_TIMEOUT_VOTE_WIRE_BYTES: usize = 4 * 1024;
+const _: () = assert!(TIMEOUT_VOTE_RESERVE_BYTES >= MAX_VALID_TIMEOUT_VOTE_WIRE_BYTES);
 
 type SumeragiThreadWork = Box<dyn FnOnce() + Send + 'static>;
 type SumeragiThreadCompletion = Pin<Box<dyn Future<Output = ()> + Send + 'static>>;
@@ -722,29 +732,157 @@ enum FairV2IngressSource {
 
 struct FairV2IngressState {
     roster: BTreeSet<PeerId>,
-    lanes: BTreeMap<FairV2IngressSource, VecDeque<InboundBlockMessage>>,
+    lanes: BTreeMap<FairV2IngressSource, FairV2IngressLane>,
     ready: VecDeque<FairV2IngressSource>,
     len: usize,
+    bytes: usize,
     open: bool,
 }
 
-/// Invalid fixed capacity for the active roster's fair v2 ingress lanes.
+#[derive(Default)]
+struct FairV2IngressLane {
+    entries: VecDeque<FairV2IngressEntry>,
+    pending_wire: BTreeSet<FairV2IngressWireKey>,
+    progress_len: usize,
+    timeout_vote_len: usize,
+    bytes: usize,
+}
+
+struct FairV2IngressEntry {
+    inbound: InboundBlockMessage,
+    enqueued_at: Instant,
+    class: FairV2IngressClass,
+    wire_key: Option<FairV2IngressWireKey>,
+    encoded_len: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct FairV2IngressWireKey {
+    sender: Option<PeerId>,
+    hash: CryptoHash,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FairV2IngressClass {
+    Auxiliary,
+    Progress,
+}
+
+impl FairV2IngressClass {
+    fn classify(inbound: &InboundBlockMessage) -> Self {
+        let BlockMessage::V2(message) = inbound.message() else {
+            return Self::Auxiliary;
+        };
+        use iroha_data_model::block::consensus_v2::ConsensusMessageV2Payload;
+
+        match &message.payload {
+            ConsensusMessageV2Payload::Vote(vote)
+                if vote.phase == iroha_data_model::block::consensus_v2::GlobalPhase::Commit =>
+            {
+                Self::Progress
+            }
+            ConsensusMessageV2Payload::QuorumCertificate(_)
+            | ConsensusMessageV2Payload::TimeoutCertificate(_)
+            | ConsensusMessageV2Payload::PayloadChunk(_)
+            | ConsensusMessageV2Payload::CertifiedBodyResponse(_)
+            | ConsensusMessageV2Payload::CommitCertificateResponse(_) => Self::Progress,
+            ConsensusMessageV2Payload::Proposal(_)
+            | ConsensusMessageV2Payload::Vote(_)
+            | ConsensusMessageV2Payload::TimeoutVote(_)
+            | ConsensusMessageV2Payload::PayloadManifest(_)
+            | ConsensusMessageV2Payload::CertifiedBodyRequest(_)
+            | ConsensusMessageV2Payload::CommitCertificateRequest(_) => Self::Auxiliary,
+        }
+    }
+}
+
+fn fair_v2_ingress_is_timeout_vote(inbound: &InboundBlockMessage) -> bool {
+    matches!(
+        inbound.message(),
+        BlockMessage::V2(message)
+            if matches!(
+                &message.payload,
+                iroha_data_model::block::consensus_v2::ConsensusMessageV2Payload::TimeoutVote(_)
+            )
+    )
+}
+
+/// Point-in-time occupancy of the bounded transport-to-runner v2 ingress.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct FairV2IngressSnapshot {
+    /// Number of messages currently owned by all fair source lanes.
+    pub(crate) depth: usize,
+    /// Fixed total capacity shared by the fair source lanes.
+    pub(crate) capacity: usize,
+    /// Local monotonic age of the oldest queued message.
+    pub(crate) oldest_age: Option<Duration>,
+}
+
+/// Invalid message or byte capacity for the active roster's fair v2 ingress lanes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct FairV2IngressCapacityError {
     configured: usize,
     required: usize,
+    kind: FairV2IngressCapacityKind,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FairV2IngressCapacityKind {
+    Messages,
+    Bytes,
+    TimeoutVoteBytes,
 }
 
 impl FairV2IngressCapacityError {
-    /// Configured total message capacity.
+    /// Configured capacity in the rejected unit.
     pub(crate) const fn configured(self) -> usize {
         self.configured
     }
 
-    /// Minimum capacity needed for one protected slot per active lane.
+    /// Minimum capacity needed for the active roster in the rejected unit.
     pub(crate) const fn required(self) -> usize {
         self.required
     }
+
+    /// Whether the rejected reservation is measured in canonical wire bytes.
+    pub(crate) const fn is_bytes(self) -> bool {
+        matches!(
+            self.kind,
+            FairV2IngressCapacityKind::Bytes | FairV2IngressCapacityKind::TimeoutVoteBytes
+        )
+    }
+}
+
+fn fair_v2_ingress_required_capacity(roster_len: usize) -> usize {
+    roster_len
+        .checked_mul(2)
+        .and_then(|required| required.checked_add(1))
+        .unwrap_or(usize::MAX)
+}
+
+const fn fair_v2_ingress_lane_protected_slots(
+    is_validator: bool,
+    depth: usize,
+    has_progress: bool,
+) -> usize {
+    let first_or_progress = if depth == 0 || (is_validator && !has_progress) {
+        1
+    } else {
+        0
+    };
+    let continuation = if is_validator && (depth == 0 || (depth == 1 && has_progress)) {
+        1
+    } else {
+        0
+    };
+    first_or_progress + continuation
+}
+
+fn fair_v2_ingress_required_byte_capacity(roster_len: usize, source_byte_capacity: usize) -> usize {
+    roster_len
+        .checked_add(1)
+        .and_then(|source_count| source_count.checked_mul(source_byte_capacity))
+        .unwrap_or(usize::MAX)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -753,31 +891,162 @@ enum FairV2IngressPushError {
     Full,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FairV2IngressPushDisposition {
+    Enqueued,
+    Coalesced,
+}
+
 /// Fixed-capacity, roster-aware v2 ingress with per-source admission and service fairness.
 ///
-/// Every active validator owns one protected slot. Anonymous and non-roster
-/// traffic shares one untrusted lane, so creating transport identities cannot
-/// consume another validator's reservation. Non-empty lanes are serviced in
-/// round-robin order; a source may use otherwise idle capacity, but cannot
-/// starve an honest validator's retransmission.
+/// Every active validator owns one protected source slot and, while its lane
+/// contains only auxiliary work, one additional progress slot. Anonymous and
+/// non-roster traffic shares one untrusted lane, so creating transport
+/// identities cannot consume a validator's reservation. Exact wire
+/// retransmissions coalesce only while the same source still owns an identical
+/// queued envelope; after service, a later retransmission is admitted normally.
+/// Non-empty lanes are serviced in round-robin order, so a source may use
+/// otherwise idle capacity but cannot starve an honest validator's progress.
+/// Canonical envelope hashes are computed before taking the shared queue lock,
+/// so duplicate detection never compares whole bodies while holding that lock.
+/// Canonical wire bytes are also charged to fixed aggregate and per-source
+/// budgets. Roster installation succeeds only when every validator and the
+/// shared untrusted lane own an isolated byte partition. Non-timeout traffic
+/// in a validator lane cannot consume its fixed timeout-vote byte reserve, so
+/// auxiliary byte pressure cannot contradict the formal view-change admission
+/// guarantee. Each validator lane owns at most one distinct queued TimeoutVote
+/// at a time; exact retransmissions coalesce and a newer vote retries after fair
+/// service releases that critical byte owner.
 pub(crate) struct FairV2Ingress {
     capacity: usize,
+    byte_capacity: usize,
+    source_byte_capacity: usize,
+    timeout_vote_byte_reserve: usize,
     state: Mutex<FairV2IngressState>,
 }
 
 impl FairV2Ingress {
-    fn new(capacity: usize) -> Self {
+    fn new(
+        capacity: usize,
+        byte_capacity: usize,
+        source_byte_capacity: usize,
+        timeout_vote_byte_reserve: usize,
+    ) -> Self {
         let mut lanes = BTreeMap::new();
-        lanes.insert(FairV2IngressSource::Untrusted, VecDeque::new());
+        lanes.insert(FairV2IngressSource::Untrusted, FairV2IngressLane::default());
         Self {
             capacity,
+            byte_capacity,
+            source_byte_capacity,
+            timeout_vote_byte_reserve,
             state: Mutex::new(FairV2IngressState {
                 roster: BTreeSet::new(),
                 lanes,
                 ready: VecDeque::new(),
                 len: 0,
+                bytes: 0,
                 open: false,
             }),
+        }
+    }
+
+    fn debug_assert_consistent(&self, state: &FairV2IngressState) {
+        #[cfg(debug_assertions)]
+        {
+            let actual_len = state
+                .lanes
+                .values()
+                .map(|lane| lane.entries.len())
+                .sum::<usize>();
+            let actual_bytes = state.lanes.values().map(|lane| lane.bytes).sum::<usize>();
+            debug_assert_eq!(state.len, actual_len);
+            debug_assert_eq!(state.bytes, actual_bytes);
+            debug_assert!(state.bytes <= self.byte_capacity);
+
+            let ready = state.ready.iter().cloned().collect::<BTreeSet<_>>();
+            debug_assert_eq!(ready.len(), state.ready.len());
+            let nonempty = state
+                .lanes
+                .iter()
+                .filter(|(_, lane)| !lane.entries.is_empty())
+                .map(|(source, _)| source.clone())
+                .collect::<BTreeSet<_>>();
+            debug_assert_eq!(ready, nonempty);
+
+            for (source, lane) in &state.lanes {
+                debug_assert!(lane.bytes <= self.source_byte_capacity);
+                debug_assert_eq!(
+                    lane.progress_len,
+                    lane.entries
+                        .iter()
+                        .filter(|entry| entry.class == FairV2IngressClass::Progress)
+                        .count()
+                );
+                debug_assert_eq!(
+                    lane.timeout_vote_len,
+                    lane.entries
+                        .iter()
+                        .filter(|entry| fair_v2_ingress_is_timeout_vote(&entry.inbound))
+                        .count()
+                );
+                let indexed = lane
+                    .entries
+                    .iter()
+                    .filter_map(|entry| entry.wire_key.clone())
+                    .collect::<BTreeSet<_>>();
+                debug_assert_eq!(lane.pending_wire, indexed);
+                debug_assert_eq!(
+                    lane.bytes,
+                    lane.entries
+                        .iter()
+                        .map(|entry| entry.encoded_len)
+                        .sum::<usize>()
+                );
+                if matches!(source, FairV2IngressSource::Validator(_)) {
+                    let timeout_vote_bytes = lane
+                        .entries
+                        .iter()
+                        .filter(|entry| fair_v2_ingress_is_timeout_vote(&entry.inbound))
+                        .map(|entry| {
+                            debug_assert!(entry.encoded_len <= self.timeout_vote_byte_reserve);
+                            entry.encoded_len
+                        })
+                        .sum::<usize>();
+                    debug_assert!(lane.timeout_vote_len <= 1);
+                    debug_assert!(timeout_vote_bytes <= self.timeout_vote_byte_reserve);
+                    debug_assert!(lane.bytes.checked_sub(timeout_vote_bytes).is_some_and(
+                        |non_timeout_bytes| {
+                            non_timeout_bytes
+                                <= self
+                                    .source_byte_capacity
+                                    .saturating_sub(self.timeout_vote_byte_reserve)
+                        }
+                    ));
+                }
+            }
+
+            if state.open {
+                debug_assert!(self.timeout_vote_byte_reserve <= self.source_byte_capacity);
+                let protected = state
+                    .lanes
+                    .iter()
+                    .map(|(source, lane)| {
+                        let is_validator = matches!(source, FairV2IngressSource::Validator(_));
+                        let has_progress = lane.progress_len != 0;
+                        fair_v2_ingress_lane_protected_slots(
+                            is_validator,
+                            lane.entries.len(),
+                            has_progress,
+                        )
+                    })
+                    .sum::<usize>();
+                debug_assert!(
+                    state
+                        .len
+                        .checked_add(protected)
+                        .is_some_and(|owned| owned <= self.capacity)
+                );
+            }
         }
     }
 
@@ -791,41 +1060,78 @@ impl FairV2Ingress {
         roster: impl IntoIterator<Item = PeerId>,
     ) -> Result<(), FairV2IngressCapacityError> {
         let roster = roster.into_iter().collect::<BTreeSet<_>>();
-        let required = roster.len().checked_add(1).unwrap_or(usize::MAX);
+        let required = fair_v2_ingress_required_capacity(roster.len());
         let mut lanes = BTreeMap::new();
         for peer in &roster {
             lanes.insert(
                 FairV2IngressSource::Validator(peer.clone()),
-                VecDeque::new(),
+                FairV2IngressLane::default(),
             );
         }
-        lanes.insert(FairV2IngressSource::Untrusted, VecDeque::new());
+        lanes.insert(FairV2IngressSource::Untrusted, FairV2IngressLane::default());
         let mut state = self.state.lock();
         state.open = false;
         state.roster = roster;
         state.lanes = lanes;
         state.ready.clear();
         state.len = 0;
+        state.bytes = 0;
         if required > self.capacity {
             return Err(FairV2IngressCapacityError {
                 configured: self.capacity,
                 required,
+                kind: FairV2IngressCapacityKind::Messages,
             });
         }
+        if self.timeout_vote_byte_reserve > self.source_byte_capacity {
+            return Err(FairV2IngressCapacityError {
+                configured: self.source_byte_capacity,
+                required: self.timeout_vote_byte_reserve,
+                kind: FairV2IngressCapacityKind::TimeoutVoteBytes,
+            });
+        }
+        let required_bytes =
+            fair_v2_ingress_required_byte_capacity(state.roster.len(), self.source_byte_capacity);
+        if required_bytes > self.byte_capacity {
+            return Err(FairV2IngressCapacityError {
+                configured: self.byte_capacity,
+                required: required_bytes,
+                kind: FairV2IngressCapacityKind::Bytes,
+            });
+        }
+        self.debug_assert_consistent(&state);
         Ok(())
     }
 
     /// Open admission for the already-configured immutable height.
     pub(crate) fn open(&self) -> Result<(), FairV2IngressCapacityError> {
         let mut state = self.state.lock();
-        let required = state.lanes.len();
+        let required = fair_v2_ingress_required_capacity(state.roster.len());
         if required > self.capacity {
             return Err(FairV2IngressCapacityError {
                 configured: self.capacity,
                 required,
+                kind: FairV2IngressCapacityKind::Messages,
+            });
+        }
+        if self.timeout_vote_byte_reserve > self.source_byte_capacity {
+            return Err(FairV2IngressCapacityError {
+                configured: self.source_byte_capacity,
+                required: self.timeout_vote_byte_reserve,
+                kind: FairV2IngressCapacityKind::TimeoutVoteBytes,
+            });
+        }
+        let required_bytes =
+            fair_v2_ingress_required_byte_capacity(state.roster.len(), self.source_byte_capacity);
+        if required_bytes > self.byte_capacity {
+            return Err(FairV2IngressCapacityError {
+                configured: self.byte_capacity,
+                required: required_bytes,
+                kind: FairV2IngressCapacityKind::Bytes,
             });
         }
         state.open = true;
+        self.debug_assert_consistent(&state);
         Ok(())
     }
 
@@ -834,7 +1140,32 @@ impl FairV2Ingress {
         self.state.lock().open = false;
     }
 
-    fn try_push(&self, inbound: InboundBlockMessage) -> Result<(), FairV2IngressPushError> {
+    fn try_push(
+        &self,
+        inbound: InboundBlockMessage,
+    ) -> Result<FairV2IngressPushDisposition, FairV2IngressPushError> {
+        self.try_push_at(inbound, Instant::now())
+    }
+
+    fn try_push_at(
+        &self,
+        inbound: InboundBlockMessage,
+        enqueued_at: Instant,
+    ) -> Result<FairV2IngressPushDisposition, FairV2IngressPushError> {
+        let class = FairV2IngressClass::classify(&inbound);
+        let is_timeout_vote = fair_v2_ingress_is_timeout_vote(&inbound);
+        let (wire_hash, encoded_len) = match inbound.message() {
+            BlockMessage::V2(message) => {
+                let encoded = message.encode();
+                let encoded_len = encoded.len();
+                (Some(CryptoHash::new(encoded)), encoded_len)
+            }
+            _ => (None, 0),
+        };
+        let wire_key = wire_hash.map(|hash| FairV2IngressWireKey {
+            sender: inbound.sender.clone(),
+            hash,
+        });
         let mut state = self.state.lock();
         if !state.open {
             return Err(FairV2IngressPushError::Closed);
@@ -848,12 +1179,61 @@ impl FairV2Ingress {
                 FairV2IngressSource::Untrusted,
                 FairV2IngressSource::Validator,
             );
-        let empty_other_lanes = state
+        let lane = state
+            .lanes
+            .get(&source)
+            .expect("configured fair ingress always contains the classified source lane");
+        if wire_key
+            .as_ref()
+            .is_some_and(|key| lane.pending_wire.contains(key))
+        {
+            return Ok(FairV2IngressPushDisposition::Coalesced);
+        }
+        let is_validator_source = matches!(source, FairV2IngressSource::Validator(_));
+        // A validator lane has one critical TimeoutVote byte owner. Exact
+        // retransmissions were coalesced above; a distinct later-view vote is
+        // retried by retained control after fair service releases the owner.
+        // This keeps the runtime byte abstraction equal to the formal gate
+        // instead of allowing several votes to consume one logical reserve.
+        if is_validator_source && is_timeout_vote && lane.timeout_vote_len != 0 {
+            return Err(FairV2IngressPushError::Full);
+        }
+        if is_validator_source && is_timeout_vote && encoded_len > self.timeout_vote_byte_reserve {
+            return Err(FairV2IngressPushError::Full);
+        }
+        let source_byte_limit = if is_validator_source && !is_timeout_vote {
+            self.source_byte_capacity
+                .saturating_sub(self.timeout_vote_byte_reserve)
+        } else {
+            self.source_byte_capacity
+        };
+        if encoded_len > source_byte_limit.saturating_sub(lane.bytes)
+            || encoded_len > self.byte_capacity.saturating_sub(state.bytes)
+        {
+            return Err(FairV2IngressPushError::Full);
+        }
+
+        // Project the reservation potential after this admission. Every empty
+        // source needs a first-message slot. A validator without queued
+        // progress also needs a progress slot. Finally, a validator whose sole
+        // entry is progress keeps one continuation slot so servicing that
+        // entry cannot destroy the two reservations of the resulting empty
+        // lane. The incoming item is part of the projection.
+        let protected_slots_after_admission = state
             .lanes
             .iter()
-            .filter(|(lane, messages)| **lane != source && messages.is_empty())
-            .count();
-        let usable_capacity = self.capacity.saturating_sub(empty_other_lanes);
+            .map(|(lane_source, lane)| {
+                let is_target = *lane_source == source;
+                let projected_len = lane.entries.len() + usize::from(is_target);
+                let is_validator = matches!(lane_source, FairV2IngressSource::Validator(_));
+                let has_progress =
+                    lane.progress_len != 0 || (is_target && class == FairV2IngressClass::Progress);
+                fair_v2_ingress_lane_protected_slots(is_validator, projected_len, has_progress)
+            })
+            .sum::<usize>();
+        let usable_capacity = self
+            .capacity
+            .saturating_sub(protected_slots_after_admission);
         if state.len >= usable_capacity {
             return Err(FairV2IngressPushError::Full);
         }
@@ -861,24 +1241,53 @@ impl FairV2Ingress {
             .lanes
             .get_mut(&source)
             .expect("configured fair ingress always contains the classified source lane");
-        let was_empty = lane.is_empty();
-        lane.push_back(inbound);
+        let was_empty = lane.entries.is_empty();
+        if class == FairV2IngressClass::Progress {
+            lane.progress_len += 1;
+        }
+        if is_timeout_vote {
+            lane.timeout_vote_len += 1;
+        }
+        lane.bytes = lane
+            .bytes
+            .checked_add(encoded_len)
+            .expect("configured per-source byte limit prevents overflow");
+        if let Some(key) = &wire_key {
+            assert!(
+                lane.pending_wire.insert(key.clone()),
+                "coalescing key was checked absent while holding the ingress lock"
+            );
+        }
+        lane.entries.push_back(FairV2IngressEntry {
+            inbound,
+            enqueued_at,
+            class,
+            wire_key,
+            encoded_len,
+        });
         state.len += 1;
+        state.bytes = state
+            .bytes
+            .checked_add(encoded_len)
+            .expect("configured aggregate byte limit prevents overflow");
         if was_empty {
             state.ready.push_back(source);
         }
-        Ok(())
+        self.debug_assert_consistent(&state);
+        Ok(FairV2IngressPushDisposition::Enqueued)
     }
 
     /// Pop one conditionally admitted message while rotating its source.
     ///
-    /// The predicate executes while the ingress state is locked. The method
-    /// examines at most one head from every ready source, rotating a rejected
-    /// source without removing its message. This lets an admissible Progress
-    /// message bypass a Normal head whose downstream prefix is full, while the
-    /// blocked message remains in its original lane for a later fair round.
-    /// When every head is rejected, one complete rotation restores the
-    /// original source order and total length.
+    /// The predicate executes while the ingress state is locked. For every
+    /// ready source, the method selects its oldest currently admissible entry.
+    /// Earlier blocked entries remain in place, and the source still consumes
+    /// only one round-robin turn. This lets a proposal, certificate, body
+    /// response, or payload chunk bypass an auxiliary request waiting for I/O
+    /// capacity without dropping or duplicating that request. Once the blocked
+    /// entry becomes admissible, the head-first search selects it before later
+    /// entries. When every entry is rejected, one complete source rotation
+    /// restores the original source order and total length.
     pub(crate) fn try_recv_if(
         &self,
         mut predicate: impl FnMut(&InboundBlockMessage) -> bool,
@@ -890,30 +1299,73 @@ impl FairV2Ingress {
                 .ready
                 .pop_front()
                 .expect("snapshotted ready source must remain queued");
-            let admitted = state
-                .lanes
-                .get(&source)
-                .and_then(|lane| lane.front())
-                .is_some_and(&mut predicate);
-            if !admitted {
+            let admitted_index = state.lanes.get(&source).and_then(|lane| {
+                lane.entries
+                    .iter()
+                    .position(|entry| predicate(&entry.inbound))
+            });
+            let Some(admitted_index) = admitted_index else {
                 state.ready.push_back(source);
                 continue;
-            }
+            };
             let lane = state
                 .lanes
                 .get_mut(&source)
                 .expect("ready fair-ingress source must own a configured lane");
-            let inbound = lane
-                .pop_front()
-                .expect("ready fair-ingress source must have a queued message");
-            let remains_ready = !lane.is_empty();
+            let entry = lane
+                .entries
+                .remove(admitted_index)
+                .expect("selected fair-ingress entry must remain in its source lane");
+            if entry.class == FairV2IngressClass::Progress {
+                lane.progress_len = lane
+                    .progress_len
+                    .checked_sub(1)
+                    .expect("Progress count includes every Progress entry");
+            }
+            if fair_v2_ingress_is_timeout_vote(&entry.inbound) {
+                lane.timeout_vote_len = lane
+                    .timeout_vote_len
+                    .checked_sub(1)
+                    .expect("TimeoutVote count includes every TimeoutVote entry");
+            }
+            lane.bytes = lane
+                .bytes
+                .checked_sub(entry.encoded_len)
+                .expect("lane byte ownership includes every queued entry");
+            if let Some(key) = &entry.wire_key {
+                assert!(
+                    lane.pending_wire.remove(key),
+                    "queued wire key must remain indexed until service"
+                );
+            }
+            let remains_ready = !lane.entries.is_empty();
             state.len -= 1;
+            state.bytes = state
+                .bytes
+                .checked_sub(entry.encoded_len)
+                .expect("aggregate byte ownership includes every queued entry");
             if remains_ready {
                 state.ready.push_back(source);
             }
-            return Some(inbound);
+            self.debug_assert_consistent(&state);
+            return Some(entry.inbound);
         }
         None
+    }
+
+    /// Snapshot live bounded ingress ownership at one local monotonic instant.
+    pub(crate) fn snapshot_at(&self, now: Instant) -> FairV2IngressSnapshot {
+        let state = self.state.lock();
+        let oldest_enqueued_at = state
+            .lanes
+            .values()
+            .flat_map(|lane| lane.entries.iter().map(|entry| entry.enqueued_at))
+            .min();
+        FairV2IngressSnapshot {
+            depth: state.len,
+            capacity: self.capacity,
+            oldest_age: oldest_enqueued_at.map(|at| now.saturating_duration_since(at)),
+        }
     }
 
     /// Pop one message while rotating its source behind every other ready source.
@@ -990,11 +1442,12 @@ impl SumeragiHandle {
                 .block
                 .try_push(InboundBlockMessage::new(message, sender))
             {
-                Ok(()) => {
+                Ok(FairV2IngressPushDisposition::Enqueued) => {
                     status::record_worker_queue_enqueue(queue);
                     self.wake();
                     true
                 }
+                Ok(FairV2IngressPushDisposition::Coalesced) => true,
                 Err(FairV2IngressPushError::Full) => {
                     status::record_worker_queue_drop(queue);
                     iroha_logger::debug!(
@@ -1176,7 +1629,14 @@ fn test_sumeragi_handle(
     Arc<FairV2Ingress>,
     mpsc::Receiver<LaneRelayMessage>,
 ) {
-    let block = Arc::new(FairV2Ingress::new(block_capacity));
+    const TEST_SOURCE_BYTE_CAPACITY: usize = 32 * 1024 * 1024;
+    const TEST_AGGREGATE_BYTE_CAPACITY: usize = 1024 * 1024 * 1024;
+    let block = Arc::new(FairV2Ingress::new(
+        block_capacity,
+        TEST_AGGREGATE_BYTE_CAPACITY,
+        TEST_SOURCE_BYTE_CAPACITY,
+        TIMEOUT_VOTE_RESERVE_BYTES,
+    ));
     block
         .configure_roster(std::iter::empty())
         .expect("test untrusted lane fits configured capacity");
@@ -1294,9 +1754,16 @@ impl SumeragiStartArgs {
         let vote_channel_cap = config.queues.commands.get();
         let block_payload_channel_cap = config.queues.chunks.get();
         let block_channel_cap = config.queues.bodies.get();
+        let block_byte_cap = config.queues.body_bytes.get();
+        let block_source_byte_cap = config.queues.body_source_bytes.get();
         let lane_relay_channel_cap = config.queues.ready_bodies.get();
         let (block_payload_tx, block_payload_rx) = mpsc::sync_channel(block_payload_channel_cap);
-        let block = Arc::new(FairV2Ingress::new(block_channel_cap));
+        let block = Arc::new(FairV2Ingress::new(
+            block_channel_cap,
+            block_byte_cap,
+            block_source_byte_cap,
+            TIMEOUT_VOTE_RESERVE_BYTES,
+        ));
         let (vote_tx, vote_rx) = mpsc::sync_channel(vote_channel_cap);
         let (lane_relay_tx, lane_relay_rx) = mpsc::sync_channel(lane_relay_channel_cap);
         let (wake_tx, wake_rx) = mpsc::sync_channel(WORKER_WAKE_CHANNEL_CAP);
@@ -1401,29 +1868,187 @@ struct SumeragiWorker {
 
 #[cfg(test)]
 mod authoritative_runtime_gate_tests {
-    use std::sync::atomic::Ordering;
+    use std::{
+        sync::atomic::Ordering,
+        time::{Duration, Instant},
+    };
 
     use iroha_crypto::{Hash, HashOf, KeyPair};
     use iroha_data_model::{
+        ChainId,
         block::consensus_v2 as wire,
         consensus::VALIDATOR_SET_HASH_VERSION_V1,
         merge::{LaneDrainCertificateBodyV1, LaneDrainIntentV1},
         nexus::{DataSpaceId, LaneId},
         peer::PeerId,
     };
+    use norito::codec::Encode as _;
 
-    use super::{BlockMessage, test_sumeragi_handle};
+    use super::{BlockMessage, FairV2IngressClass, InboundBlockMessage, test_sumeragi_handle};
 
-    fn v2_message() -> BlockMessage {
+    fn v2_message_with_bytes(index: u32, byte_len: usize) -> BlockMessage {
         BlockMessage::V2(wire::ConsensusMessageV2::new(
             wire::ConsensusMessageV2Payload::PayloadChunk(wire::PayloadChunk {
                 manifest_hash: HashOf::from_untyped_unchecked(Hash::new(b"v2-ingress-test")),
-                index: 0,
-                bytes: vec![0xA5],
+                index,
+                bytes: vec![0xA5; byte_len],
                 sender: 0,
                 signature: vec![0x5A],
             }),
         ))
+    }
+
+    fn v2_message_with_index(index: u32) -> BlockMessage {
+        v2_message_with_bytes(index, 1)
+    }
+
+    fn v2_message() -> BlockMessage {
+        v2_message_with_index(0)
+    }
+
+    fn v2_auxiliary_request(index: u64, requester: &PeerId) -> BlockMessage {
+        BlockMessage::V2(wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::CommitCertificateRequest(
+                wire::CommitCertificateRequest {
+                    protocol_version: wire::PROTOCOL_VERSION,
+                    chain_id: ChainId::from("fair-v2-ingress-test"),
+                    context_id: wire::HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
+                        b"fair-v2-ingress-context",
+                    ))),
+                    height: index.saturating_add(1),
+                    requester: requester.clone(),
+                    signature: vec![u8::try_from(index).unwrap_or(u8::MAX)],
+                },
+            ),
+        ))
+    }
+
+    fn v2_vote(phase: wire::GlobalPhase) -> BlockMessage {
+        BlockMessage::V2(wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::Vote(wire::Vote {
+                round: wire::ConsensusRound {
+                    context_id: wire::HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
+                        b"fair-v2-ingress-vote-context",
+                    ))),
+                    height: 1,
+                    view: 0,
+                },
+                phase,
+                subject: wire::BlockSubject {
+                    parent_block_hash: None,
+                    block_hash: HashOf::from_untyped_unchecked(Hash::new(
+                        b"fair-v2-ingress-vote-block",
+                    )),
+                    payload_hash: Hash::new(b"fair-v2-ingress-vote-payload"),
+                },
+                execution_commitment: wire::ExecutionCommitment::without_topups(
+                    Hash::new(b"fair-v2-ingress-parent-state"),
+                    Hash::new(b"fair-v2-ingress-post-state"),
+                    Hash::new(b"fair-v2-ingress-writes"),
+                    Hash::new(b"fair-v2-ingress-executed-wire"),
+                ),
+                signer: 0,
+                signature: vec![0x5A],
+            }),
+        ))
+    }
+
+    fn v2_timeout_vote() -> BlockMessage {
+        BlockMessage::V2(wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::TimeoutVote(wire::TimeoutVote {
+                round: wire::ConsensusRound {
+                    context_id: wire::HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
+                        b"fair-v2-ingress-timeout-context",
+                    ))),
+                    height: 1,
+                    view: 0,
+                },
+                highest_prepare_qc: None,
+                signer: 0,
+                signature: vec![0x5A],
+            }),
+        ))
+    }
+
+    fn v2_maximum_valid_timeout_vote_wire() -> BlockMessage {
+        let round = wire::ConsensusRound {
+            context_id: wire::HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
+                b"fair-v2-ingress-max-timeout-context",
+            ))),
+            height: u64::MAX,
+            view: u64::MAX,
+        };
+        let subject = wire::BlockSubject {
+            parent_block_hash: Some(HashOf::from_untyped_unchecked(Hash::new(
+                b"fair-v2-ingress-max-timeout-parent",
+            ))),
+            block_hash: HashOf::from_untyped_unchecked(Hash::new(
+                b"fair-v2-ingress-max-timeout-block",
+            )),
+            payload_hash: Hash::new(b"fair-v2-ingress-max-timeout-payload"),
+        };
+        let ordinary_writes_root = Hash::new(b"fair-v2-ingress-max-writes");
+        let topup_anchor_root = Hash::new(b"fair-v2-ingress-max-topup-root");
+        let topup_anchor_count = wire::MAX_KAGEMUSHA_TOPUP_ANCHORS_PER_BLOCK;
+        let post_state_root = wire::ExecutionCommitment::topup_post_state_root(
+            topup_anchor_count,
+            ordinary_writes_root,
+            topup_anchor_root,
+        );
+        let highest_prepare_qc = wire::QuorumCertificate {
+            round,
+            phase: wire::GlobalPhase::Prepare,
+            subject,
+            execution_commitment: wire::ExecutionCommitment::new(
+                Hash::new(b"fair-v2-ingress-max-parent-state"),
+                post_state_root,
+                ordinary_writes_root,
+                Some(topup_anchor_root),
+                topup_anchor_count,
+                Hash::new(b"fair-v2-ingress-max-executed-wire"),
+            )
+            .expect("maximum top-up projection is canonical"),
+            signers: (0..wire::MAX_VALIDATORS_PER_HEIGHT)
+                .map(|index| u32::try_from(index).expect("validator bound fits u32"))
+                .collect(),
+            aggregate_signature: vec![0xA5; wire::MAX_CONSENSUS_SIGNATURE_BYTES],
+        };
+        BlockMessage::V2(wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::TimeoutVote(wire::TimeoutVote {
+                round,
+                highest_prepare_qc: Some(highest_prepare_qc),
+                signer: u32::try_from(wire::MAX_VALIDATORS_PER_HEIGHT - 1)
+                    .expect("validator bound fits u32"),
+                signature: vec![0x5A; wire::MAX_CONSENSUS_SIGNATURE_BYTES],
+            }),
+        ))
+    }
+
+    fn vote_phase(inbound: &InboundBlockMessage) -> Option<wire::GlobalPhase> {
+        let BlockMessage::V2(message) = inbound.message() else {
+            return None;
+        };
+        let wire::ConsensusMessageV2Payload::Vote(vote) = &message.payload else {
+            return None;
+        };
+        Some(vote.phase)
+    }
+
+    fn payload_chunk_index(inbound: &InboundBlockMessage) -> Option<u32> {
+        let BlockMessage::V2(message) = inbound.message() else {
+            return None;
+        };
+        let wire::ConsensusMessageV2Payload::PayloadChunk(chunk) = &message.payload else {
+            return None;
+        };
+        Some(chunk.index)
+    }
+
+    fn encoded_v2_len(message: &BlockMessage) -> usize {
+        let BlockMessage::V2(message) = message else {
+            panic!("test fixture must be a v2 envelope");
+        };
+        message.encode().len()
     }
 
     #[test]
@@ -1513,8 +2138,8 @@ mod authoritative_runtime_gate_tests {
 
         assert!(handle.incoming_block_message(v2_message()));
         assert!(
-            !handle.incoming_block_message(v2_message()),
-            "a saturated v2 queue must reject promptly and rely on retransmission"
+            !handle.incoming_block_message(v2_message_with_index(1)),
+            "a distinct message at saturated capacity must reject promptly and rely on retransmission"
         );
         let _ = receiver.try_recv().expect("drain the bounded v2 queue");
         assert!(handle.incoming_block_message(v2_message()));
@@ -1551,28 +2176,33 @@ mod authoritative_runtime_gate_tests {
 
     #[test]
     fn byzantine_v2_source_cannot_consume_honest_ingress_reservations_or_service_turns() {
-        let (handle, ingress, _relay_receiver) = test_sumeragi_handle(8);
+        let (handle, ingress, _relay_receiver) = test_sumeragi_handle(9);
         let validators = validator_peers(4);
         let attacker = validators[0].clone();
         let outsider = validator_peers(5).pop().expect("outsider fixture");
         ingress.close();
         ingress
             .configure_roster(validators.clone())
-            .expect("four validators plus untrusted lane fit");
+            .expect("four validators, their progress slots, and the untrusted lane fit");
         ingress.open().expect("open configured roster");
 
-        for _ in 0..4 {
-            assert!(handle.try_incoming_block_message_from(attacker.clone(), v2_message()));
+        for index in 0..5 {
+            assert!(
+                handle.try_incoming_block_message_from(
+                    attacker.clone(),
+                    v2_message_with_index(index),
+                )
+            );
         }
         assert!(
-            !handle.try_incoming_block_message_from(attacker.clone(), v2_message()),
+            !handle.try_incoming_block_message_from(attacker.clone(), v2_message_with_index(5),),
             "attacker cannot consume slots reserved for empty validator and untrusted lanes"
         );
         for honest in validators.iter().skip(1) {
             assert!(handle.try_incoming_block_message_from(honest.clone(), v2_message()));
         }
         assert!(handle.try_incoming_block_message_from(outsider.clone(), v2_message()));
-        assert_eq!(ingress.len(), 8);
+        assert_eq!(ingress.len(), 9);
 
         let first_cycle = (0..5)
             .map(|_| {
@@ -1597,14 +2227,14 @@ mod authoritative_runtime_gate_tests {
 
     #[test]
     fn fair_v2_ingress_retains_ready_head_until_downstream_admission() {
-        let (handle, ingress, _relay_receiver) = test_sumeragi_handle(3);
+        let (handle, ingress, _relay_receiver) = test_sumeragi_handle(5);
         let validators = validator_peers(2);
         let attacker = validators[0].clone();
         let honest = validators[1].clone();
         ingress.close();
         ingress
             .configure_roster(validators)
-            .expect("two validators plus untrusted lane fit");
+            .expect("two validators, their progress slots, and the untrusted lane fit");
         ingress.open().expect("open configured roster");
 
         assert!(handle.try_incoming_block_message_from(attacker.clone(), v2_message()));
@@ -1635,14 +2265,14 @@ mod authoritative_runtime_gate_tests {
 
     #[test]
     fn fair_v2_ingress_rotates_blocked_head_to_admissible_source() {
-        let (handle, ingress, _relay_receiver) = test_sumeragi_handle(3);
+        let (handle, ingress, _relay_receiver) = test_sumeragi_handle(5);
         let validators = validator_peers(2);
         let blocked = validators[0].clone();
         let admissible = validators[1].clone();
         ingress.close();
         ingress
             .configure_roster(validators)
-            .expect("two validators plus untrusted lane fit");
+            .expect("two validators, their progress slots, and the untrusted lane fit");
         ingress.open().expect("open configured roster");
 
         assert!(handle.try_incoming_block_message_from(blocked.clone(), v2_message()));
@@ -1662,10 +2292,592 @@ mod authoritative_runtime_gate_tests {
     }
 
     #[test]
-    fn anonymous_and_non_roster_v2_sources_share_one_bounded_lane() {
+    fn fair_v2_ingress_bypasses_a_blocked_entry_within_the_same_source() {
+        let (handle, ingress, _relay_receiver) = test_sumeragi_handle(4);
+        let validator = validator_peers(1).pop().expect("validator fixture");
+        ingress.close();
+        ingress
+            .configure_roster([validator.clone()])
+            .expect("validator plus untrusted lane fit");
+        ingress.open().expect("open configured roster");
+
+        assert!(
+            handle.try_incoming_block_message_from(validator.clone(), v2_message_with_index(0),)
+        );
+        assert!(
+            handle.try_incoming_block_message_from(validator.clone(), v2_message_with_index(1),)
+        );
+        assert!(handle.try_incoming_block_message_from(validator, v2_message_with_index(2),));
+
+        let selected = ingress
+            .try_recv_if(|inbound| payload_chunk_index(inbound) == Some(2))
+            .expect("admissible body progress bypasses a blocked auxiliary head");
+        assert_eq!(payload_chunk_index(&selected), Some(2));
+        assert_eq!(ingress.len(), 2);
+
+        let first_retained = ingress
+            .try_recv_if(|_| true)
+            .expect("oldest blocked entry remains owned for a later fair turn");
+        assert_eq!(payload_chunk_index(&first_retained), Some(0));
+        let second_retained = ingress
+            .try_recv_if(|_| true)
+            .expect("later blocked entry retains its relative order");
+        assert_eq!(payload_chunk_index(&second_retained), Some(1));
+        assert_eq!(ingress.len(), 0);
+    }
+
+    #[test]
+    fn fair_v2_ingress_coalesces_only_a_pending_exact_source_retransmission() {
+        let (handle, ingress, _relay_receiver) = test_sumeragi_handle(3);
+        let validator = validator_peers(1).pop().expect("validator fixture");
+        ingress.close();
+        ingress
+            .configure_roster([validator.clone()])
+            .expect("validator plus untrusted lane fit");
+        ingress.open().expect("open configured roster");
+        let request = v2_auxiliary_request(0, &validator);
+
+        assert!(handle.try_incoming_block_message_from(validator.clone(), request.clone()));
+        assert!(
+            handle.try_incoming_block_message_from(validator.clone(), request.clone()),
+            "a retransmitter keeps ownership through the queued exact occurrence"
+        );
+        assert_eq!(ingress.len(), 1, "the exact pending wire value coalesces");
+        assert!(
+            !handle.try_incoming_block_message_from(
+                validator.clone(),
+                v2_auxiliary_request(1, &validator),
+            ),
+            "a different auxiliary request cannot consume the progress reservation"
+        );
+
+        let delivered = ingress.try_recv().expect("deliver the queued occurrence");
+        assert_eq!(delivered.sender(), Some(&validator));
+        assert_eq!(ingress.len(), 0);
+        assert!(handle.try_incoming_block_message_from(validator, request));
+        assert_eq!(
+            ingress.len(),
+            1,
+            "coalescing is queue-scoped and ends when the consumer takes ownership"
+        );
+    }
+
+    #[test]
+    fn fair_v2_ingress_wire_index_keeps_untrusted_senders_distinct() {
+        let ingress = super::FairV2Ingress::new(3, 3 * 1024 * 1024, 1024 * 1024, 0);
+        ingress
+            .configure_roster(std::iter::empty())
+            .expect("untrusted lane byte quota fits");
+        ingress.open().expect("open configured roster");
+        let outsiders = validator_peers(2);
+        let message = v2_message();
+
+        assert!(matches!(
+            ingress.try_push(InboundBlockMessage::new(
+                message.clone(),
+                Some(outsiders[0].clone()),
+            )),
+            Ok(super::FairV2IngressPushDisposition::Enqueued)
+        ));
+        assert!(matches!(
+            ingress.try_push(InboundBlockMessage::new(
+                message,
+                Some(outsiders[1].clone()),
+            )),
+            Ok(super::FairV2IngressPushDisposition::Enqueued)
+        ));
+        assert_eq!(
+            ingress.len(),
+            2,
+            "the shared untrusted lane coalesces only an exact transport source"
+        );
+    }
+
+    #[test]
+    fn fair_v2_ingress_byte_quota_isolates_validator_sources() {
+        let validators = validator_peers(2);
+        let first = v2_message_with_bytes(0, 64);
+        let second = v2_message_with_bytes(1, 64);
+        let encoded_len = encoded_v2_len(&first);
+        assert_eq!(encoded_v2_len(&second), encoded_len);
+        let ingress = super::FairV2Ingress::new(7, encoded_len * 3, encoded_len, 0);
+        ingress
+            .configure_roster(validators.clone())
+            .expect("two validator and one untrusted byte partition fit exactly");
+        ingress.open().expect("open configured roster");
+
+        assert!(matches!(
+            ingress.try_push(InboundBlockMessage::new(first, Some(validators[0].clone()),)),
+            Ok(super::FairV2IngressPushDisposition::Enqueued)
+        ));
+        assert!(matches!(
+            ingress.try_push(InboundBlockMessage::new(
+                second,
+                Some(validators[0].clone()),
+            )),
+            Err(super::FairV2IngressPushError::Full)
+        ));
+        assert!(matches!(
+            ingress.try_push(InboundBlockMessage::new(
+                v2_message_with_bytes(2, 64),
+                Some(validators[1].clone()),
+            )),
+            Ok(super::FairV2IngressPushDisposition::Enqueued)
+        ));
+        assert_eq!(
+            ingress.len(),
+            2,
+            "one validator's byte pressure cannot consume another validator's quota"
+        );
+    }
+
+    #[test]
+    fn fair_v2_ingress_rejects_insufficient_roster_byte_partition() {
+        let validators = validator_peers(2);
+        let ingress = super::FairV2Ingress::new(5, 2 * 1024, 1024, 0);
+        let error = ingress
+            .configure_roster(validators)
+            .expect_err("two validators plus untrusted require three byte partitions");
+        assert!(error.is_bytes());
+        assert_eq!(error.configured(), 2 * 1024);
+        assert_eq!(error.required(), 3 * 1024);
+    }
+
+    #[test]
+    fn fair_v2_ingress_reserves_timeout_vote_bytes_behind_auxiliary_pressure() {
+        let validator = validator_peers(1).pop().expect("validator fixture");
+        let auxiliary = v2_auxiliary_request(0, &validator);
+        let timeout_vote = v2_maximum_valid_timeout_vote_wire();
+        let auxiliary_len = encoded_v2_len(&auxiliary);
+        let timeout_vote_len = encoded_v2_len(&timeout_vote);
+        let source_capacity = auxiliary_len + timeout_vote_len;
+        let ingress =
+            super::FairV2Ingress::new(5, 2 * source_capacity, source_capacity, timeout_vote_len);
+        ingress
+            .configure_roster([validator.clone()])
+            .expect("validator and untrusted byte partitions fit");
+        ingress.open().expect("open configured roster");
+
+        assert!(matches!(
+            ingress.try_push(InboundBlockMessage::new(auxiliary, Some(validator.clone()),)),
+            Ok(super::FairV2IngressPushDisposition::Enqueued)
+        ));
+        assert!(matches!(
+            ingress.try_push(InboundBlockMessage::new(
+                v2_auxiliary_request(1, &validator),
+                Some(validator.clone()),
+            )),
+            Err(super::FairV2IngressPushError::Full)
+        ));
+        assert!(matches!(
+            ingress.try_push(InboundBlockMessage::new(
+                timeout_vote,
+                Some(validator.clone()),
+            )),
+            Ok(super::FairV2IngressPushDisposition::Enqueued)
+        ));
+
+        let delivered = ingress
+            .try_recv_if(super::fair_v2_ingress_is_timeout_vote)
+            .expect("reserved timeout vote bypasses the byte-saturated auxiliary prefix");
+        assert_eq!(delivered.sender(), Some(&validator));
+        assert!(super::fair_v2_ingress_is_timeout_vote(&delivered));
+    }
+
+    #[test]
+    fn fair_v2_ingress_serializes_distinct_timeout_vote_byte_owners() {
+        let validator = validator_peers(1).pop().expect("validator fixture");
+        let first = v2_timeout_vote();
+        let second = v2_maximum_valid_timeout_vote_wire();
+        let reserve = encoded_v2_len(&first)
+            .checked_add(encoded_v2_len(&second))
+            .and_then(|bytes| bytes.checked_add(1))
+            .expect("fixture byte sum fits usize");
+        let ingress = super::FairV2Ingress::new(5, 2 * reserve, reserve, reserve);
+        ingress
+            .configure_roster([validator.clone()])
+            .expect("validator and untrusted byte partitions fit");
+        ingress.open().expect("open configured roster");
+
+        assert!(matches!(
+            ingress.try_push(InboundBlockMessage::new(first, Some(validator.clone()))),
+            Ok(super::FairV2IngressPushDisposition::Enqueued)
+        ));
+        assert!(matches!(
+            ingress.try_push(InboundBlockMessage::new(
+                second.clone(),
+                Some(validator.clone()),
+            )),
+            Err(super::FairV2IngressPushError::Full)
+        ));
+
+        let delivered = ingress
+            .try_recv_if(super::fair_v2_ingress_is_timeout_vote)
+            .expect("fair service releases the first TimeoutVote byte owner");
+        assert!(super::fair_v2_ingress_is_timeout_vote(&delivered));
+        assert!(matches!(
+            ingress.try_push(InboundBlockMessage::new(second, Some(validator))),
+            Ok(super::FairV2IngressPushDisposition::Enqueued)
+        ));
+    }
+
+    #[test]
+    fn fair_v2_ingress_maximum_valid_timeout_vote_fits_production_byte_reserve() {
+        let encoded_len = encoded_v2_len(&v2_maximum_valid_timeout_vote_wire());
+        assert!(encoded_len <= super::MAX_VALID_TIMEOUT_VOTE_WIRE_BYTES);
+        assert!(encoded_len <= super::TIMEOUT_VOTE_RESERVE_BYTES);
+    }
+
+    #[test]
+    fn fair_v2_ingress_rejects_timeout_vote_larger_than_its_byte_reserve() {
+        let validator = validator_peers(1).pop().expect("validator fixture");
+        let timeout_vote = v2_timeout_vote();
+        let timeout_vote_len = encoded_v2_len(&timeout_vote);
+        let reserve = timeout_vote_len.checked_sub(1).expect("non-empty envelope");
+        let source_capacity = timeout_vote_len * 2;
+        let ingress = super::FairV2Ingress::new(3, 2 * source_capacity, source_capacity, reserve);
+        ingress
+            .configure_roster([validator.clone()])
+            .expect("the deliberately short reserve still fits its source partition");
+        ingress.open().expect("open configured roster");
+
+        assert!(matches!(
+            ingress.try_push(InboundBlockMessage::new(timeout_vote, Some(validator))),
+            Err(super::FairV2IngressPushError::Full)
+        ));
+    }
+
+    #[test]
+    fn fair_v2_ingress_rejects_timeout_vote_reserve_larger_than_source_partition() {
+        let validator = validator_peers(1).pop().expect("validator fixture");
+        let ingress = super::FairV2Ingress::new(3, 2 * 1024, 1024, 1025);
+        let error = ingress
+            .configure_roster([validator])
+            .expect_err("timeout-vote reserve must fit each validator source partition");
+        assert!(error.is_bytes());
+        assert_eq!(error.configured(), 1024);
+        assert_eq!(error.required(), 1025);
+    }
+
+    #[test]
+    fn fair_v2_ingress_reserves_same_source_progress_behind_auxiliary_pressure() {
         let (handle, ingress, _relay_receiver) = test_sumeragi_handle(5);
+        let validator = validator_peers(1).pop().expect("validator fixture");
+        ingress.close();
+        ingress
+            .configure_roster([validator.clone()])
+            .expect("validator plus untrusted lane fit");
+        ingress.open().expect("open configured roster");
+
+        for index in 0..3 {
+            assert!(handle.try_incoming_block_message_from(
+                validator.clone(),
+                v2_auxiliary_request(index, &validator),
+            ));
+        }
+        assert!(
+            !handle.try_incoming_block_message_from(
+                validator.clone(),
+                v2_auxiliary_request(3, &validator),
+            ),
+            "auxiliary pressure leaves the validator's progress slot unconsumed"
+        );
+        assert!(
+            handle.try_incoming_block_message_from(validator.clone(), v2_message_with_index(99),)
+        );
+        assert_eq!(ingress.len(), 4);
+
+        let progress = ingress
+            .try_recv_if(|inbound| payload_chunk_index(inbound) == Some(99))
+            .expect("same-source progress bypasses the saturated auxiliary prefix");
+        assert_eq!(progress.sender(), Some(&validator));
+        assert_eq!(payload_chunk_index(&progress), Some(99));
+        assert!(handle.try_incoming_block_message_from(validator, v2_message_with_index(100),));
+        assert_eq!(
+            ingress.len(),
+            4,
+            "service restores the exact per-validator progress reservation"
+        );
+    }
+
+    #[test]
+    fn fair_v2_ingress_prepare_vote_cannot_consume_commit_progress_reservation() {
+        let (handle, ingress, _relay_receiver) = test_sumeragi_handle(5);
+        let validator = validator_peers(1).pop().expect("validator fixture");
+        ingress.close();
+        ingress
+            .configure_roster([validator.clone()])
+            .expect("validator plus untrusted lane fit");
+        ingress.open().expect("open configured roster");
+
+        let prepare =
+            InboundBlockMessage::new(v2_vote(wire::GlobalPhase::Prepare), Some(validator.clone()));
+        let commit =
+            InboundBlockMessage::new(v2_vote(wire::GlobalPhase::Commit), Some(validator.clone()));
+        assert_eq!(
+            FairV2IngressClass::classify(&prepare),
+            FairV2IngressClass::Auxiliary
+        );
+        assert_eq!(
+            FairV2IngressClass::classify(&commit),
+            FairV2IngressClass::Progress
+        );
+
+        assert!(handle.try_incoming_block_message_from(
+            validator.clone(),
+            v2_vote(wire::GlobalPhase::Prepare),
+        ));
+        for index in 0..2 {
+            assert!(handle.try_incoming_block_message_from(
+                validator.clone(),
+                v2_auxiliary_request(index, &validator),
+            ));
+        }
+        assert!(
+            !handle.try_incoming_block_message_from(
+                validator.clone(),
+                v2_auxiliary_request(2, &validator),
+            ),
+            "Prepare and auxiliary work must leave one same-source Commit slot"
+        );
+        assert!(handle.try_incoming_block_message_from(
+            validator.clone(),
+            v2_vote(wire::GlobalPhase::Commit),
+        ));
+
+        let delivered = ingress
+            .try_recv_if(|inbound| vote_phase(inbound) == Some(wire::GlobalPhase::Commit))
+            .expect("Commit vote bypasses the saturated auxiliary prefix");
+        assert_eq!(delivered.sender(), Some(&validator));
+        assert_eq!(vote_phase(&delivered), Some(wire::GlobalPhase::Commit));
+    }
+
+    #[test]
+    fn fair_v2_ingress_minimum_capacity_admits_timeout_votes() {
+        let (handle, ingress, _relay_receiver) = test_sumeragi_handle(3);
+        let validator = validator_peers(1).pop().expect("validator fixture");
+        ingress.close();
+        ingress
+            .configure_roster([validator.clone()])
+            .expect("one validator, its progress slot, and the untrusted lane fit");
+        ingress.open().expect("open configured roster");
+
+        let timeout = InboundBlockMessage::new(v2_timeout_vote(), Some(validator.clone()));
+        assert_eq!(
+            FairV2IngressClass::classify(&timeout),
+            FairV2IngressClass::Auxiliary
+        );
+        assert!(handle.try_incoming_block_message_from(validator.clone(), v2_timeout_vote()));
+        let delivered = ingress
+            .try_recv()
+            .expect("minimum valid capacity must admit an honest timeout vote");
+        assert_eq!(delivered.sender(), Some(&validator));
+        assert!(matches!(
+            delivered.message(),
+            BlockMessage::V2(wire::ConsensusMessageV2 {
+                payload: wire::ConsensusMessageV2Payload::TimeoutVote(_),
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn fair_v2_ingress_reservation_potential_does_not_increase_on_service() {
+        assert_eq!(super::fair_v2_ingress_required_capacity(0), 1);
+        assert_eq!(super::fair_v2_ingress_required_capacity(1), 3);
+        assert_eq!(super::fair_v2_ingress_required_capacity(4), 9);
+
+        for is_validator in [false, true] {
+            for depth in 1..=8 {
+                for progress_count in 0..=depth {
+                    for removed_progress in [false, true] {
+                        if removed_progress && progress_count == 0 {
+                            continue;
+                        }
+                        if !removed_progress && progress_count == depth {
+                            continue;
+                        }
+                        let next_progress_count = progress_count - usize::from(removed_progress);
+                        let before = depth
+                            + super::fair_v2_ingress_lane_protected_slots(
+                                is_validator,
+                                depth,
+                                progress_count != 0,
+                            );
+                        let after = depth - 1
+                            + super::fair_v2_ingress_lane_protected_slots(
+                                is_validator,
+                                depth - 1,
+                                next_progress_count != 0,
+                            );
+                        assert!(
+                            after <= before,
+                            "service increased potential: validator={is_validator}, depth={depth}, progress={progress_count}, removed_progress={removed_progress}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn fair_v2_ingress_saturated_peer_cannot_block_an_empty_validator_timeout() {
+        let (handle, ingress, _relay_receiver) = test_sumeragi_handle(5);
+        let validators = validator_peers(2);
+        let saturated = validators[0].clone();
+        let honest = validators[1].clone();
+        ingress.close();
+        ingress
+            .configure_roster(validators)
+            .expect("two validators, their progress slots, and the untrusted lane fit");
+        ingress.open().expect("open configured roster");
+
+        assert!(handle.try_incoming_block_message_from(
+            saturated.clone(),
+            v2_auxiliary_request(0, &saturated),
+        ));
+        assert!(
+            handle.try_incoming_block_message_from(saturated.clone(), v2_message_with_index(1),)
+        );
+        assert!(
+            !handle.try_incoming_block_message_from(
+                saturated.clone(),
+                v2_auxiliary_request(2, &saturated),
+            ),
+            "borrowed capacity must preserve both slots needed by an empty validator lane"
+        );
+        assert!(
+            handle.try_incoming_block_message_from(honest.clone(), v2_timeout_vote()),
+            "the saturated peer must not consume the honest validator's timeout slot"
+        );
+
+        let delivered = ingress
+            .try_recv_if(|inbound| inbound.sender() == Some(&honest))
+            .expect("honest timeout remains serviceable despite peer saturation");
+        assert!(matches!(
+            delivered.message(),
+            BlockMessage::V2(wire::ConsensusMessageV2 {
+                payload: wire::ConsensusMessageV2Payload::TimeoutVote(_),
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn fair_v2_ingress_non_head_service_consumes_one_source_turn() {
+        let (handle, ingress, _relay_receiver) = test_sumeragi_handle(5);
+        let validators = validator_peers(2);
+        let first_source = validators[0].clone();
+        let second_source = validators[1].clone();
+        ingress.close();
+        ingress
+            .configure_roster(validators)
+            .expect("two validators, their progress slots, and the untrusted lane fit");
+        ingress.open().expect("open configured roster");
+
+        assert!(
+            handle.try_incoming_block_message_from(first_source.clone(), v2_message_with_index(0),)
+        );
+        assert!(
+            handle.try_incoming_block_message_from(first_source.clone(), v2_message_with_index(2),)
+        );
+        assert!(
+            handle
+                .try_incoming_block_message_from(second_source.clone(), v2_message_with_index(1),)
+        );
+
+        let bypass = ingress
+            .try_recv_if(|inbound| payload_chunk_index(inbound) != Some(0))
+            .expect("the first source's later admissible entry is selected");
+        assert_eq!(bypass.sender(), Some(&first_source));
+        assert_eq!(payload_chunk_index(&bypass), Some(2));
+
+        let next = ingress
+            .try_recv_if(|_| true)
+            .expect("the other ready source owns the next turn");
+        assert_eq!(next.sender(), Some(&second_source));
+        assert_eq!(payload_chunk_index(&next), Some(1));
+
+        let retained = ingress
+            .try_recv_if(|_| true)
+            .expect("the bypassed entry remains in its original source lane");
+        assert_eq!(retained.sender(), Some(&first_source));
+        assert_eq!(payload_chunk_index(&retained), Some(0));
+        assert_eq!(ingress.len(), 0);
+    }
+
+    #[test]
+    fn fair_v2_ingress_snapshot_tracks_live_depth_and_oldest_age() {
+        let (_handle, ingress, _relay_receiver) = test_sumeragi_handle(5);
+        let validators = validator_peers(2);
+        ingress.close();
+        ingress
+            .configure_roster(validators.clone())
+            .expect("two validators, their progress slots, and the untrusted lane fit");
+        ingress.open().expect("open configured roster");
+
+        let captured_at = Instant::now();
+        ingress
+            .try_push_at(
+                InboundBlockMessage::new(v2_message(), Some(validators[0].clone())),
+                captured_at - Duration::from_secs(5),
+            )
+            .expect("enqueue oldest validator message");
+        ingress
+            .try_push_at(
+                InboundBlockMessage::new(v2_message(), Some(validators[1].clone())),
+                captured_at - Duration::from_secs(2),
+            )
+            .expect("enqueue newer validator message");
+        ingress
+            .try_push_at(
+                InboundBlockMessage::new(v2_message_with_index(1), Some(validators[0].clone())),
+                captured_at - Duration::from_secs(7),
+            )
+            .expect("enqueue timestamp-inverted message behind the source head");
+
+        assert_eq!(
+            ingress.snapshot_at(captured_at),
+            super::FairV2IngressSnapshot {
+                depth: 3,
+                capacity: 5,
+                oldest_age: Some(Duration::from_secs(7)),
+            }
+        );
+        let _ = ingress.try_recv().expect("drain first fair source head");
+        assert_eq!(
+            ingress.snapshot_at(captured_at),
+            super::FairV2IngressSnapshot {
+                depth: 2,
+                capacity: 5,
+                oldest_age: Some(Duration::from_secs(7)),
+            }
+        );
+        let _ = ingress.try_recv().expect("drain second fair source head");
+        assert_eq!(
+            ingress.snapshot_at(captured_at),
+            super::FairV2IngressSnapshot {
+                depth: 1,
+                capacity: 5,
+                oldest_age: Some(Duration::from_secs(7)),
+            }
+        );
+        let _ = ingress.try_recv().expect("drain remaining fair source");
+        assert_eq!(
+            ingress.snapshot_at(captured_at),
+            super::FairV2IngressSnapshot {
+                depth: 0,
+                capacity: 5,
+                oldest_age: None,
+            }
+        );
+    }
+
+    #[test]
+    fn anonymous_and_non_roster_v2_sources_share_one_bounded_lane() {
+        let (handle, ingress, _relay_receiver) = test_sumeragi_handle(9);
         let validators = validator_peers(4);
-        let outsider = validator_peers(5).pop().expect("outsider fixture");
+        let outsiders = validator_peers(9).split_off(4);
         ingress.close();
         ingress
             .configure_roster(validators.clone())
@@ -1673,25 +2885,31 @@ mod authoritative_runtime_gate_tests {
         ingress.open().expect("open configured roster");
 
         assert!(handle.try_incoming_block_message(v2_message()));
+        for (index, outsider) in outsiders.iter().enumerate().take(4) {
+            assert!(handle.try_incoming_block_message_from(
+                outsider.clone(),
+                v2_message_with_index(u32::try_from(index + 1).expect("small index")),
+            ));
+        }
         assert!(
-            !handle.try_incoming_block_message_from(outsider, v2_message()),
-            "all untrusted identities share the same protected lane"
+            !handle
+                .try_incoming_block_message_from(outsiders[4].clone(), v2_message_with_index(5),)
         );
         for validator in validators {
             assert!(handle.try_incoming_block_message_from(validator, v2_message()));
         }
-        assert_eq!(ingress.len(), 5);
+        assert_eq!(ingress.len(), 9);
     }
 
     #[test]
-    fn v2_ingress_rejects_capacity_smaller_than_roster_plus_untrusted_lane() {
-        let (_handle, ingress, _relay_receiver) = test_sumeragi_handle(4);
+    fn v2_ingress_rejects_capacity_without_per_validator_progress_reservations() {
+        let (_handle, ingress, _relay_receiver) = test_sumeragi_handle(8);
         ingress.close();
         let error = ingress
             .configure_roster(validator_peers(4))
-            .expect_err("four validators require a fifth untrusted lane slot");
-        assert_eq!(error.configured(), 4);
-        assert_eq!(error.required(), 5);
+            .expect_err("four validators require four progress slots and one untrusted slot");
+        assert_eq!(error.configured(), 8);
+        assert_eq!(error.required(), 9);
         assert_eq!(ingress.open(), Err(error));
     }
 }

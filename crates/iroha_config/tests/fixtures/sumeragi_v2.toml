@@ -14,6 +14,8 @@ proposal_queue_scan_multiplier = 3
 [sumeragi.queues]
 commands = 512
 bodies = 96
+body_bytes = 67108864
+body_source_bytes = 16777216
 chunks = 768
 ready_bodies = 48
 

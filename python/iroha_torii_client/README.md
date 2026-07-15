@@ -25,7 +25,9 @@ for block in status.committed_lane_blocks:
 `GET /v1/sumeragi/status`. It rejects non-v2 protocol values, malformed frozen
 height contexts, out-of-range leaders, inconsistent or under-quorum CommitQCs,
 malformed safety-halt state, impossible bounded queue occupancy, and
-absent/malformed canonical lane arrays.
+absent/malformed canonical lane arrays. Its typed `liveness` section exposes
+exact partial quorums, durable outbound intents, local-work stages, queue
+service debt, the last tracked reducer transition, and any classified delay.
 The endpoint's binary Norito representation instead nests the same reducer
 snapshot under `authoritative` in `SumeragiV2StatusResponse`.
 

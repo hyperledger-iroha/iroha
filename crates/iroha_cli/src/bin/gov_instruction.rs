@@ -420,6 +420,24 @@ fn parse_sccp_codec_argument(name: &str, codec: u8, value: &str) -> Result<Vec<u
             }
             Ok(bytes)
         }
+        iroha_sccp::SCCP_CODEC_SOLANA_PUBKEY32 => {
+            if value.len() != 64
+                || !value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+            {
+                return Err(eyre!(
+                    "{name} using solana_pubkey32 must be exactly 64 unprefixed lowercase hexadecimal characters"
+                ));
+            }
+            let bytes = hex::decode(value).wrap_err_with(|| format!("failed to decode {name}"))?;
+            if bytes.iter().all(|byte| *byte == 0) {
+                return Err(eyre!(
+                    "{name} using solana_pubkey32 must be a nonzero 32-byte public key"
+                ));
+            }
+            Ok(bytes)
+        }
         _ => Err(eyre!("{name} uses unsupported SCCP codec {codec}")),
     }
 }
@@ -455,7 +473,7 @@ fn record_sccp_transfer_payload_bytes(
     })?;
     if source != SccpNetworkV1::SoraTaira || !target.is_external() {
         return Err(eyre!(
-            "SCCP record context must select the exact sora-taira to Ethereum, BSC, or TRON lane"
+            "SCCP record context must select the exact sora-taira to Ethereum, BSC, Solana testnet, or TRON lane"
         ));
     }
     let (expected_route_id, expected_recipient_codec) = match target {
@@ -470,6 +488,10 @@ fn record_sccp_transfer_payload_bytes(
         SccpNetworkV1::TronMainnet | SccpNetworkV1::TronNile | SccpNetworkV1::TronShasta => (
             iroha_sccp::SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1,
             iroha_sccp::SCCP_CODEC_TRON_ADDRESS21,
+        ),
+        SccpNetworkV1::SolanaTestnet => (
+            iroha_sccp::SCCP_TAIRA_SOL_XOR_ROUTE_ID_V1,
+            iroha_sccp::SCCP_CODEC_SOLANA_PUBKEY32,
         ),
         SccpNetworkV1::SoraTaira => {
             unreachable!("SORA target rejected above")
@@ -831,6 +853,38 @@ mod tests {
     }
 
     #[test]
+    fn solana_pubkey_codec_rejects_aliases_and_malformed_values() {
+        let valid = "ab".repeat(32);
+        assert_eq!(
+            parse_sccp_codec_argument(
+                "--recipient",
+                iroha_sccp::SCCP_CODEC_SOLANA_PUBKEY32,
+                &valid,
+            )
+            .expect("canonical Solana public key"),
+            vec![0xab; 32]
+        );
+        for value in [
+            format!("0x{valid}"),
+            valid.to_uppercase(),
+            "12".repeat(31),
+            "12".repeat(33),
+            "00".repeat(32),
+            "4uhcVJyU9pJkvQyS88uRDiswHXSCkY3zQawwpjk2NsNY".to_owned(),
+        ] {
+            assert!(
+                parse_sccp_codec_argument(
+                    "--recipient",
+                    iroha_sccp::SCCP_CODEC_SOLANA_PUBKEY32,
+                    &value,
+                )
+                .is_err(),
+                "noncanonical Solana public-key alias `{value}` must reject"
+            );
+        }
+    }
+
+    #[test]
     fn record_sccp_transfer_rejects_zero_revision_and_aliased_context_commitments() {
         let build = |binding: String, configuration: String, revision| {
             record_sccp_transfer_payload_bytes(
@@ -909,6 +963,34 @@ mod tests {
         assert_eq!(message_id.len(), 64);
         assert_eq!(context.lane.source, SccpNetworkV1::SoraTaira);
         assert_eq!(context.lane.target, SccpNetworkV1::TronMainnet);
+        assert!(!payload_bytes.is_empty());
+    }
+
+    #[test]
+    fn record_sccp_transfer_payload_accepts_canonical_solana_recipient() {
+        let (message_id, context, payload_bytes) = record_sccp_transfer_payload_bytes(
+            "sora-taira",
+            "solana-testnet",
+            &"22".repeat(32),
+            &"23".repeat(32),
+            7,
+            1,
+            iroha_sccp::SCCP_DOMAIN_SORA,
+            iroha_sccp::SCCP_CODEC_CANONICAL_TEXT,
+            iroha_sccp::SCCP_TAIRA_XOR_ASSET_KEY_V1,
+            42,
+            iroha_sccp::SCCP_CODEC_CANONICAL_TEXT,
+            "sora:bridge",
+            iroha_sccp::SCCP_CODEC_SOLANA_PUBKEY32,
+            &"12".repeat(32),
+            iroha_sccp::SCCP_CODEC_CANONICAL_TEXT,
+            iroha_sccp::SCCP_TAIRA_SOL_XOR_ROUTE_ID_V1,
+        )
+        .expect("canonical Solana recipient should be accepted");
+
+        assert_eq!(message_id.len(), 64);
+        assert_eq!(context.lane.source, SccpNetworkV1::SoraTaira);
+        assert_eq!(context.lane.target, SccpNetworkV1::SolanaTestnet);
         assert!(!payload_bytes.is_empty());
     }
 

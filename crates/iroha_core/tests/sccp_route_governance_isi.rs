@@ -56,6 +56,79 @@ fn staged_route() -> SccpGovernedRouteV1 {
     )
 }
 
+fn staged_solana_route() -> SccpGovernedRouteV1 {
+    let mut route = staged_route();
+    let iroha_data_model::bridge::SccpDestinationDeploymentV1::Evm(evm_deployment) =
+        route.destination
+    else {
+        unreachable!("exact EVM fixture uses an EVM destination")
+    };
+    let lane = iroha_data_model::bridge::SccpLaneIdV1 {
+        source: SccpNetworkV1::SolanaTestnet,
+        target: SccpNetworkV1::SoraTaira,
+    };
+    let route_id = iroha_sccp::SCCP_TAIRA_SOL_XOR_ROUTE_ID_V1;
+    let mut deployment = iroha_data_model::bridge::SccpSolanaDestinationDeploymentV1 {
+        token_mint_address: [0x11; 32],
+        route_program_id: [0x12; 32],
+        route_program_data_address: [0x13; 32],
+        route_program_data_slot: 17,
+        route_state_account: [0x14; 32],
+        route_program_code_hash: [0x15; 32],
+        native_verifier_program_id: [0x16; 32],
+        native_verifier_program_data_address: [0x17; 32],
+        native_verifier_program_data_slot: 18,
+        native_verifier_material_account: [0x18; 32],
+        native_verifier_program_code_hash: [0x19; 32],
+        native_verifier_config_hash: [0x1a; 32],
+        verifying_key: evm_deployment.verifying_key,
+        verifier_key_hash: evm_deployment.verifier_key_hash,
+        outbound_proof_policy: evm_deployment.outbound_proof_policy,
+        taira_to_token_multiplier:
+            iroha_data_model::bridge::SCCP_V1_TAIRA_TO_SOLANA_TOKEN_MULTIPLIER,
+    };
+    deployment.native_verifier_config_hash =
+        iroha_data_model::bridge::sccp_solana_native_verifier_config_hash_v1(
+            lane,
+            route_id,
+            &route.asset_key,
+            route.revision,
+            [0x31; 32],
+            &deployment,
+        )
+        .expect("derive exact Solana native-verifier config");
+    let destination = iroha_data_model::bridge::SccpDestinationDeploymentV1::Solana(deployment);
+    let route_configuration_hash = destination
+        .route_configuration_hash(
+            lane,
+            route_id,
+            &route.asset_key,
+            route.revision,
+            route.settlement.payload_amount_scale,
+        )
+        .expect("derive exact Solana route configuration");
+    route.lane_id = lane;
+    route.route_id = route_id.to_owned();
+    route.source_identity = iroha_data_model::bridge::SccpSourceIdentityV1 {
+        lane,
+        emitter: iroha_data_model::bridge::SccpSourceEmitterV1::Solana(
+            iroha_data_model::bridge::SccpSolanaSourceEmitterV1 {
+                program_id: [0x31; 32],
+                program_data_address: [0x32; 32],
+                program_data_slot: 19,
+                state_account: [0x33; 32],
+                program_code_hash: [0x34; 32],
+                route_config_hash: route_configuration_hash,
+            },
+        ),
+    };
+    route.destination = destination;
+    route
+        .validate_registration()
+        .expect("Solana fixture must remain an exact staged governed route");
+    route
+}
+
 fn native_anchor() -> SccpNativeTrustAnchorV1 {
     SccpNativeTrustAnchorV1 {
         backend: BridgeNativeProofBackendV1::EthereumBeacon,
@@ -144,6 +217,9 @@ fn successor_route(mut route: SccpGovernedRouteV1) -> SccpGovernedRouteV1 {
         iroha_data_model::bridge::SccpDestinationDeploymentV1::Tron(_) => {
             unreachable!("Ethereum fixture uses an EVM destination")
         }
+        iroha_data_model::bridge::SccpDestinationDeploymentV1::Solana(_) => {
+            unreachable!("Ethereum fixture uses an EVM destination")
+        }
     };
     let route_config_hash = route
         .destination
@@ -220,6 +296,29 @@ fn route_registration_requires_permission_and_complete_resources() {
             .activation,
         SccpRouteActivationV1::Staged
     );
+}
+
+#[test]
+fn solana_route_registration_validates_destination_key_and_commits() {
+    let state = test_state();
+    let mut block = state.block(test_header());
+    let mut stx = block.transaction();
+    configure_taira(&mut stx);
+    grant_governance_permission(&mut stx);
+    let route = staged_solana_route();
+    let key = route.key();
+    register_route_resources(&mut stx, &route);
+
+    execute_governance(&mut stx, register_action(route, None))
+        .expect("complete Solana route registration must validate its governed key");
+
+    assert!(matches!(
+        stx.sccp_registry
+            .route(&key)
+            .expect("registered Solana route")
+            .destination,
+        iroha_data_model::bridge::SccpDestinationDeploymentV1::Solana(_)
+    ));
 }
 
 #[test]

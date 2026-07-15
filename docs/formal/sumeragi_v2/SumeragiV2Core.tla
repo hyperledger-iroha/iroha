@@ -129,6 +129,23 @@ ContextRecords ==
             lineage \in LineagesAt(blockHeight)}:
            blockHeight \in Heights}
 
+BodyRecordSet ==
+  [node: ValidatorIds, context: ContextRecords, view: Views,
+   subject: Subjects]
+
+RetainedLockedBodyRecordSet ==
+  [node: ValidatorIds, context: ContextRecords, subject: Subjects]
+
+ValidationRecordSet ==
+  [node: ValidatorIds, context: ContextRecords, view: Views,
+   generation: Generations, subject: Subjects]
+
+RetainedLockedBodiesSound(retainedLockedBodies, durableBodies) ==
+  \A retained \in retainedLockedBodies:
+    \E sourceView \in Views:
+      BodyHeldBy(durableBodies, retained.node, retained.context,
+                 sourceView, retained.subject)
+
 Leader(context, roundView) ==
   LET roster == context.roster
       offset == (context.leaderStart + roundView) % Len(roster)
@@ -174,6 +191,8 @@ TcRecordSet ==
    votes: SUBSET TimeoutVoteRecordSet]
 
 TcWellTyped(tc) ==
+  /\ tc \in TcRecordSet
+  /\ DOMAIN tc = {"context", "height", "view", "votes"}
   /\ tc.context \in ContextRecords
   /\ tc.height \in Heights
   /\ tc.view \in Views
@@ -251,6 +270,7 @@ VARIABLES
   gst,
   availableBodies,
   durableBodies,
+  retainedLockedBodies,
   validatedBodies,
   invalidBodies,
   seenProposals,
@@ -290,7 +310,8 @@ VARIABLES
 
 vars ==
   <<height, context, contextHistory, nodeView, generation, up, gst,
-    availableBodies, durableBodies, validatedBodies, invalidBodies,
+    availableBodies, durableBodies, retainedLockedBodies,
+    validatedBodies, invalidBodies,
     seenProposals, receivedVotes, receivedQCs, receivedTimeoutVotes,
     receivedTCs, proposalIntents, prepareIntents, commitIntents,
     timeoutIntents, prepareQCs, commitQCs, formedTCs, installedTCs,
@@ -442,6 +463,8 @@ HighestTimeoutVote(votes) ==
      ELSE CHOOSE candidate \in maxima: TRUE
 
 TCValid(tc) ==
+  /\ tc \in TcRecordSet
+  /\ DOMAIN tc = {"context", "height", "view", "votes"}
   /\ tc.context = context
   /\ tc.height = height
   /\ tc.view \in Views
@@ -505,6 +528,35 @@ VoteSignersAt(node, roundView, phase, subject) ==
       /\ entry.vote.view = roundView
       /\ entry.vote.phase = phase
       /\ entry.vote.subject = subject}}
+
+(***************************************************************************
+Vote admission across a view installation.
+
+The volatile receipt pool is cleared for the node that installs a TC.  A
+retransmitted vote from an older view is admitted only when it is a Commit
+vote for the exact durable lock, backed by the authenticated PrepareQC ghost
+fact that established that lock.  Prepare votes and unrelated historical
+Commit votes remain current-view only.  This is the formal counterpart of
+retaining signed CommitVote control while rebuilding volatile pools.
+***************************************************************************)
+
+LockedPrepareRound(node, roundView, subject) ==
+  /\ lockRank[node] = roundView
+  /\ lockSubject[node] = subject
+  /\ \E qc \in prepareQCs:
+       /\ qc.context = context
+       /\ qc.view = roundView
+       /\ qc.phase = "Prepare"
+       /\ qc.subject = subject
+
+VoteRoundAdmissible(node, vote) ==
+  \/ vote.view = nodeView[node]
+  \/ /\ vote.phase = "Commit"
+     /\ LockedPrepareRound(node, vote.view, vote.subject)
+
+CommitRoundAdmissible(node, roundView, subject) ==
+  \/ roundView = nodeView[node]
+  \/ LockedPrepareRound(node, roundView, subject)
 
 TimeoutVotesAt(node, roundView) ==
   {received.vote:
@@ -603,7 +655,7 @@ BootstrapParentDecision(initialContext) ==
 
 BootstrapParentBodies(initialContext) ==
   {BodyRecord(signer, BootstrapParentContext(initialContext),
-              initialContext.parent):
+              0, initialContext.parent):
      signer \in BootstrapParentSigners(initialContext) \cap Honest}
 
 FrozenContextAdmissible(initialContext) ==
@@ -633,6 +685,7 @@ InitAt(initialContext) ==
   /\ durableBodies =
        IF initialContext.height = 0
        THEN {} ELSE BootstrapParentBodies(initialContext)
+  /\ retainedLockedBodies = {}
   /\ validatedBodies = {}
   /\ invalidBodies = {}
   /\ seenProposals = {}
@@ -689,7 +742,8 @@ SetGST ==
   /\ Responsive \subseteq up
   /\ gst' = TRUE
   /\ UNCHANGED <<height, context, contextHistory, nodeView, generation, up,
-                 availableBodies, durableBodies, validatedBodies,
+                 availableBodies, durableBodies, retainedLockedBodies,
+                 validatedBodies,
                  invalidBodies, seenProposals, receivedVotes, receivedQCs,
                  receivedTimeoutVotes, receivedTCs, proposalIntents,
                  prepareIntents, commitIntents, timeoutIntents, prepareQCs,
@@ -702,17 +756,21 @@ SetGST ==
                  decisions, applied>>
 
 AssembleLocalBody(node, subject) ==
-  LET body == BodyRecord(node, context, subject)
-      validation == ValidationRecord(node, context, nodeView[node],
+  LET roundView == nodeView[node]
+      body == BodyRecord(node, context, roundView, subject)
+      validation == ValidationRecord(node, context, roundView,
                                       generation[node], subject)
   IN /\ node \in Honest \cap up \cap CurrentVoters
      /\ node = Leader(context, nodeView[node])
      /\ subject \in ValidSubjects
-     /\ ~BodyHeldBy(durableBodies, node, context, subject)
+     /\ body \in BodyRecordSet
+     /\ validation \in ValidationRecordSet
+     /\ ~BodyHeldBy(durableBodies, node, context, roundView, subject)
      /\ durableBodies' = durableBodies \cup {body}
      /\ validatedBodies' = validatedBodies \cup {validation}
      /\ UNCHANGED <<height, context, contextHistory, nodeView, generation,
-                    up, gst, availableBodies, invalidBodies, seenProposals,
+                    up, gst, availableBodies, retainedLockedBodies,
+                    invalidBodies, seenProposals,
                     receivedVotes, receivedQCs, receivedTimeoutVotes,
                     receivedTCs, proposalIntents, prepareIntents,
                     commitIntents, timeoutIntents, prepareQCs, commitQCs,
@@ -747,7 +805,7 @@ BeginLocalProposal(node, subject) ==
      /\ node = Leader(context, roundView)
      /\ NodeIdle(node)
      /\ (roundView = 0 \/ NodeInstalledTC(node, roundView - 1))
-     /\ BodyHeldBy(durableBodies, node, context, subject)
+     /\ BodyHeldBy(durableBodies, node, context, roundView, subject)
      /\ BodyValidatedBy(validatedBodies, node, context, roundView,
                         generation[node], subject)
      /\ ProposalWireValidFor(node, proposal)
@@ -760,7 +818,8 @@ BeginLocalProposal(node, subject) ==
      /\ request \notin pendingProposal
      /\ pendingProposal' = pendingProposal \cup {request}
      /\ UNCHANGED <<height, context, contextHistory, nodeView, generation,
-                    up, gst, availableBodies, durableBodies, validatedBodies,
+                    up, gst, availableBodies, durableBodies,
+                    retainedLockedBodies, validatedBodies,
                     invalidBodies, seenProposals, receivedVotes, receivedQCs,
                     receivedTimeoutVotes, receivedTCs, proposalIntents,
                     prepareIntents, commitIntents, timeoutIntents, prepareQCs,
@@ -779,7 +838,7 @@ PersistProposal(request) ==
      /\ pendingProposal' = pendingProposal \ {request}
      /\ signProposals' = signProposals \cup {signRequest}
      /\ UNCHANGED <<height, context, contextHistory, nodeView, generation,
-                    up, gst, availableBodies, durableBodies, validatedBodies,
+                    up, gst, availableBodies, durableBodies, retainedLockedBodies, validatedBodies,
                     invalidBodies, seenProposals, receivedVotes, receivedQCs,
                     receivedTimeoutVotes, receivedTCs, prepareIntents,
                     commitIntents, timeoutIntents, prepareQCs, commitQCs,
@@ -798,7 +857,7 @@ CompleteProposalSignature(request) ==
   /\ proposalNetwork' =
        proposalNetwork \cup BroadcastProposals(request.proposal)
   /\ UNCHANGED <<height, context, contextHistory, nodeView, generation,
-                 up, gst, availableBodies, durableBodies, validatedBodies,
+                 up, gst, availableBodies, durableBodies, retainedLockedBodies, validatedBodies,
                  invalidBodies, seenProposals, receivedVotes, receivedQCs,
                  receivedTimeoutVotes, receivedTCs, proposalIntents,
                  prepareIntents, commitIntents, timeoutIntents, prepareQCs,
@@ -821,7 +880,7 @@ ByzantineBroadcastProposal(signer, roundView, subject,
      /\ justifySubject \in SubjectOrNone
      /\ proposalNetwork' = proposalNetwork \cup BroadcastProposals(proposal)
      /\ UNCHANGED <<height, context, contextHistory, nodeView, generation,
-                    up, gst, availableBodies, durableBodies, validatedBodies,
+                    up, gst, availableBodies, durableBodies, retainedLockedBodies, validatedBodies,
                     invalidBodies, seenProposals, receivedVotes, receivedQCs,
                     receivedTimeoutVotes, receivedTCs, proposalIntents,
                     prepareIntents, commitIntents, timeoutIntents, prepareQCs,
@@ -840,7 +899,7 @@ DeliverProposal(envelope) ==
      /\ proposalNetwork' = proposalNetwork \ {envelope}
      /\ seenProposals' = seenProposals \cup {seen}
      /\ UNCHANGED <<height, context, contextHistory, nodeView, generation,
-                    up, gst, availableBodies, durableBodies, validatedBodies,
+                    up, gst, availableBodies, durableBodies, retainedLockedBodies, validatedBodies,
                     invalidBodies, receivedVotes, receivedQCs,
                     receivedTimeoutVotes, receivedTCs, proposalIntents,
                     prepareIntents, commitIntents, timeoutIntents, prepareQCs,
@@ -852,12 +911,17 @@ DeliverProposal(envelope) ==
                     qcNetwork, timeoutNetwork, tcNetwork, decisions, applied>>
 
 FetchBody(node, proposal) ==
-  LET body == BodyRecord(node, context, proposal.subject)
+  LET body == BodyRecord(node, context, proposal.view, proposal.subject)
   IN /\ ProposalAt(node, proposal) \in seenProposals
-     /\ body \notin availableBodies \cup durableBodies
+     \* `availableBodies` is the current-round adapter staging boundary.
+     \* Ordinary fetch stages only the proposal's exact view.  Cross-view
+     \* locked-byte reuse is authorized exclusively by RebindRetainedBody.
+     /\ body \notin availableBodies
+     /\ body \in BodyRecordSet
      /\ availableBodies' = availableBodies \cup {body}
      /\ UNCHANGED <<height, context, contextHistory, nodeView, generation,
-                    up, gst, durableBodies, validatedBodies, invalidBodies,
+                    up, gst, durableBodies, retainedLockedBodies,
+                    validatedBodies, invalidBodies,
                     seenProposals, receivedVotes, receivedQCs,
                     receivedTimeoutVotes, receivedTCs, proposalIntents,
                     prepareIntents, commitIntents, timeoutIntents, prepareQCs,
@@ -869,13 +933,38 @@ FetchBody(node, proposal) ==
                     voteNetwork, qcNetwork, timeoutNetwork, tcNetwork,
                     decisions, applied>>
 
-StoreBody(node, subject) ==
-  LET body == BodyRecord(node, context, subject)
+RebindRetainedBody(node, proposal) ==
+  LET body == BodyRecord(node, context, proposal.view, proposal.subject)
+  IN /\ ProposalAt(node, proposal) \in seenProposals
+     /\ lockRank[node] # NoRank
+     /\ lockSubject[node] = proposal.subject
+     /\ RetainedLockedBodyHeldBy(retainedLockedBodies, node, context,
+                                  proposal.subject)
+     /\ body \notin availableBodies
+     /\ body \in BodyRecordSet
+     /\ availableBodies' = availableBodies \cup {body}
+     /\ UNCHANGED <<height, context, contextHistory, nodeView, generation,
+                    up, gst, durableBodies, retainedLockedBodies,
+                    validatedBodies, invalidBodies, seenProposals,
+                    receivedVotes, receivedQCs, receivedTimeoutVotes,
+                    receivedTCs, proposalIntents, prepareIntents,
+                    commitIntents, timeoutIntents, prepareQCs, commitQCs,
+                    formedTCs, installedTCs, lockRank, lockSubject,
+                    highestRank, highestSubject, pendingProposal,
+                    pendingPrepare, pendingObservePrepare, pendingLockCommit,
+                    pendingTimeout, pendingInstallTC, pendingDecision,
+                    signProposals, signVotes, signTimeouts, proposalNetwork,
+                    voteNetwork, qcNetwork, timeoutNetwork, tcNetwork,
+                    decisions, applied>>
+
+StoreBody(node, roundView, subject) ==
+  LET body == BodyRecord(node, context, roundView, subject)
   IN /\ body \in availableBodies
      /\ availableBodies' = availableBodies \ {body}
      /\ durableBodies' = durableBodies \cup {body}
      /\ UNCHANGED <<height, context, contextHistory, nodeView, generation,
-                    up, gst, validatedBodies, invalidBodies, seenProposals,
+                    up, gst, retainedLockedBodies, validatedBodies,
+                    invalidBodies, seenProposals,
                     receivedVotes, receivedQCs, receivedTimeoutVotes,
                     receivedTCs, proposalIntents, prepareIntents,
                     commitIntents, timeoutIntents, prepareQCs, commitQCs,
@@ -891,12 +980,50 @@ ValidateBody(node, proposal) ==
   LET validation == ValidationRecord(node, context, proposal.view,
                                       generation[node], proposal.subject)
   IN /\ ProposalAt(node, proposal) \in seenProposals
-     /\ BodyHeldBy(durableBodies, node, context, proposal.subject)
+     /\ BodyHeldBy(durableBodies, node, context, proposal.view,
+                    proposal.subject)
      /\ proposal.subject \in ValidSubjects
      /\ validation \notin validatedBodies
+     /\ validation \in ValidationRecordSet
      /\ validatedBodies' = validatedBodies \cup {validation}
      /\ UNCHANGED <<height, context, contextHistory, nodeView, generation,
-                    up, gst, availableBodies, durableBodies, invalidBodies,
+                    up, gst, availableBodies, durableBodies,
+                    retainedLockedBodies, invalidBodies,
+                    seenProposals, receivedVotes, receivedQCs,
+                    receivedTimeoutVotes, receivedTCs, proposalIntents,
+                    prepareIntents, commitIntents, timeoutIntents, prepareQCs,
+                    commitQCs, formedTCs, installedTCs, lockRank, lockSubject,
+                    highestRank, highestSubject, pendingProposal,
+                    pendingPrepare, pendingObservePrepare, pendingLockCommit,
+                    pendingTimeout, pendingInstallTC, pendingDecision,
+                    signProposals, signVotes, signTimeouts, proposalNetwork,
+                    voteNetwork, qcNetwork, timeoutNetwork, tcNetwork,
+                    decisions, applied>>
+
+(***************************************************************************
+Certificate-first recovery deliberately has no leader proposal authority.
+The authenticated CommitQC identifies the decided round and subject, while
+the certified response supplies bytes from which the production adapter
+rederives the canonical manifest before durable storage.  Deterministic body
+validation therefore needs the exact durable decision, not a fabricated
+`seenProposals` entry.  This action records only local validation evidence;
+proposal-gated Prepare voting remains guarded by `BeginPrepare`.
+***************************************************************************)
+ValidateDecidedBody(node, qc) ==
+  LET validation == ValidationRecord(node, context, qc.view,
+                                      generation[node], qc.subject)
+      decision == [node |-> node, qc |-> qc]
+  IN /\ decision \in decisions
+     /\ qc.phase = "Commit"
+     /\ qc.context = context
+     /\ BodyHeldBy(durableBodies, node, context, qc.view, qc.subject)
+     /\ qc.subject \in ValidSubjects
+     /\ validation \notin validatedBodies
+     /\ validation \in ValidationRecordSet
+     /\ validatedBodies' = validatedBodies \cup {validation}
+     /\ UNCHANGED <<height, context, contextHistory, nodeView, generation,
+                    up, gst, availableBodies, durableBodies,
+                    retainedLockedBodies, invalidBodies,
                     seenProposals, receivedVotes, receivedQCs,
                     receivedTimeoutVotes, receivedTCs, proposalIntents,
                     prepareIntents, commitIntents, timeoutIntents, prepareQCs,
@@ -909,13 +1036,16 @@ ValidateBody(node, proposal) ==
                     decisions, applied>>
 
 RejectBody(node, proposal) ==
-  LET body == BodyRecord(node, context, proposal.subject)
+  LET body == BodyRecord(node, context, proposal.view, proposal.subject)
   IN /\ ProposalAt(node, proposal) \in seenProposals
-     /\ BodyHeldBy(durableBodies, node, context, proposal.subject)
+     /\ BodyHeldBy(durableBodies, node, context, proposal.view,
+                    proposal.subject)
      /\ proposal.subject \notin ValidSubjects
+     /\ body \in BodyRecordSet
      /\ invalidBodies' = invalidBodies \cup {body}
      /\ UNCHANGED <<height, context, contextHistory, nodeView, generation,
-                    up, gst, availableBodies, durableBodies, validatedBodies,
+                    up, gst, availableBodies, durableBodies,
+                    retainedLockedBodies, validatedBodies,
                     seenProposals, receivedVotes, receivedQCs,
                     receivedTimeoutVotes, receivedTCs, proposalIntents,
                     prepareIntents, commitIntents, timeoutIntents, prepareQCs,
@@ -952,7 +1082,7 @@ BeginPrepare(node, proposal) ==
      /\ request \in PrepareWalSet
      /\ pendingPrepare' = pendingPrepare \cup {request}
      /\ UNCHANGED <<height, context, contextHistory, nodeView, generation,
-                    up, gst, availableBodies, durableBodies, validatedBodies,
+                    up, gst, availableBodies, durableBodies, retainedLockedBodies, validatedBodies,
                     invalidBodies, seenProposals, receivedVotes, receivedQCs,
                     receivedTimeoutVotes, receivedTCs, proposalIntents,
                     prepareIntents, commitIntents, timeoutIntents, prepareQCs,
@@ -971,7 +1101,7 @@ PersistPrepare(request) ==
      /\ pendingPrepare' = pendingPrepare \ {request}
      /\ signVotes' = signVotes \cup {signRequest}
      /\ UNCHANGED <<height, context, contextHistory, nodeView, generation,
-                    up, gst, availableBodies, durableBodies, validatedBodies,
+                    up, gst, availableBodies, durableBodies, retainedLockedBodies, validatedBodies,
                     invalidBodies, seenProposals, receivedVotes, receivedQCs,
                     receivedTimeoutVotes, receivedTCs, proposalIntents,
                     commitIntents, timeoutIntents, prepareQCs, commitQCs,
@@ -989,7 +1119,7 @@ CompleteVoteSignature(request) ==
   /\ signVotes' = signVotes \ {request}
   /\ voteNetwork' = voteNetwork \cup BroadcastVotes(request.vote)
   /\ UNCHANGED <<height, context, contextHistory, nodeView, generation,
-                 up, gst, availableBodies, durableBodies, validatedBodies,
+                 up, gst, availableBodies, durableBodies, retainedLockedBodies, validatedBodies,
                  invalidBodies, seenProposals, receivedVotes, receivedQCs,
                  receivedTimeoutVotes, receivedTCs, proposalIntents,
                  prepareIntents, commitIntents, timeoutIntents, prepareQCs,
@@ -1008,7 +1138,7 @@ ByzantineBroadcastVote(signer, roundView, phase, subject) ==
      /\ subject \in Subjects
      /\ voteNetwork' = voteNetwork \cup BroadcastVotes(vote)
      /\ UNCHANGED <<height, context, contextHistory, nodeView, generation,
-                    up, gst, availableBodies, durableBodies, validatedBodies,
+                    up, gst, availableBodies, durableBodies, retainedLockedBodies, validatedBodies,
                     invalidBodies, seenProposals, receivedVotes, receivedQCs,
                     receivedTimeoutVotes, receivedTCs, proposalIntents,
                     prepareIntents, commitIntents, timeoutIntents, prepareQCs,
@@ -1025,10 +1155,15 @@ DeliverVote(envelope) ==
      /\ envelope.recipient \in up
      /\ envelope.vote.context = context
      /\ envelope.vote.signer \in CurrentVoters
-     /\ voteNetwork' = voteNetwork \ {envelope}
+     /\ VoteRoundAdmissible(envelope.recipient, envelope.vote)
+     \* `voteNetwork` is immutable authenticated delivery history.  The
+     \* asynchronous transport owns packet loss and retransmission; consuming
+     \* this fact here made a retained CommitVote impossible to redeliver
+     \* after PersistInstallTC cleared the volatile receipt pool.
+     /\ received \notin receivedVotes
      /\ receivedVotes' = receivedVotes \cup {received}
      /\ UNCHANGED <<height, context, contextHistory, nodeView, generation,
-                    up, gst, availableBodies, durableBodies, validatedBodies,
+                    up, gst, availableBodies, durableBodies, retainedLockedBodies, validatedBodies,
                     invalidBodies, seenProposals, receivedQCs,
                     receivedTimeoutVotes, receivedTCs, proposalIntents,
                     prepareIntents, commitIntents, timeoutIntents, prepareQCs,
@@ -1037,18 +1172,20 @@ DeliverVote(envelope) ==
                     pendingPrepare, pendingObservePrepare, pendingLockCommit,
                     pendingTimeout, pendingInstallTC, pendingDecision,
                     signProposals, signVotes, signTimeouts, proposalNetwork,
-                    qcNetwork, timeoutNetwork, tcNetwork, decisions, applied>>
+                    voteNetwork, qcNetwork, timeoutNetwork, tcNetwork,
+                    decisions, applied>>
 
 FormPrepareQC(node, roundView, subject) ==
   LET signers == VoteSignersAt(node, roundView, "Prepare", subject)
       qc == QC(context, roundView, "Prepare", subject, signers)
   IN /\ node \in up
+     /\ roundView = nodeView[node]
      /\ QcWireValid(qc)
      /\ qc \in QcRecordSet
      /\ prepareQCs' = prepareQCs \cup {qc}
      /\ qcNetwork' = qcNetwork \cup BroadcastQCs(qc)
      /\ UNCHANGED <<height, context, contextHistory, nodeView, generation,
-                    up, gst, availableBodies, durableBodies, validatedBodies,
+                    up, gst, availableBodies, durableBodies, retainedLockedBodies, validatedBodies,
                     invalidBodies, seenProposals, receivedVotes, receivedQCs,
                     receivedTimeoutVotes, receivedTCs, proposalIntents,
                     prepareIntents, commitIntents, timeoutIntents, commitQCs,
@@ -1067,7 +1204,7 @@ DeliverQC(envelope) ==
      /\ qcNetwork' = qcNetwork \ {envelope}
      /\ receivedQCs' = receivedQCs \cup {received}
      /\ UNCHANGED <<height, context, contextHistory, nodeView, generation,
-                    up, gst, availableBodies, durableBodies, validatedBodies,
+                    up, gst, availableBodies, durableBodies, retainedLockedBodies, validatedBodies,
                     invalidBodies, seenProposals, receivedVotes,
                     receivedTimeoutVotes, receivedTCs, proposalIntents,
                     prepareIntents, commitIntents, timeoutIntents, prepareQCs,
@@ -1088,7 +1225,7 @@ BeginObservePrepare(node, qc) ==
      /\ NodeIdle(node)
      /\ pendingObservePrepare' = pendingObservePrepare \cup {request}
      /\ UNCHANGED <<height, context, contextHistory, nodeView, generation,
-                    up, gst, availableBodies, durableBodies, validatedBodies,
+                    up, gst, availableBodies, durableBodies, retainedLockedBodies, validatedBodies,
                     invalidBodies, seenProposals, receivedVotes, receivedQCs,
                     receivedTimeoutVotes, receivedTCs, proposalIntents,
                     prepareIntents, commitIntents, timeoutIntents, prepareQCs,
@@ -1106,7 +1243,7 @@ PersistObservePrepare(request) ==
        [highestSubject EXCEPT ![request.node] = request.qc.subject]
   /\ pendingObservePrepare' = pendingObservePrepare \ {request}
   /\ UNCHANGED <<height, context, contextHistory, nodeView, generation,
-                 up, gst, availableBodies, durableBodies, validatedBodies,
+                 up, gst, availableBodies, durableBodies, retainedLockedBodies, validatedBodies,
                  invalidBodies, seenProposals, receivedVotes, receivedQCs,
                  receivedTimeoutVotes, receivedTCs, proposalIntents,
                  prepareIntents, commitIntents, timeoutIntents, prepareQCs,
@@ -1126,7 +1263,7 @@ BeginLockCommit(node, qc) ==
      /\ qc.phase = "Prepare"
      /\ qc.view = nodeView[node]
      /\ ~NodeTimedOut(node, qc.view)
-     /\ BodyHeldBy(durableBodies, node, context, qc.subject)
+     /\ BodyHeldBy(durableBodies, node, context, qc.view, qc.subject)
      /\ BodyValidatedBy(validatedBodies, node, context, qc.view,
                         generation[node], qc.subject)
      /\ NodeIdle(node)
@@ -1135,7 +1272,7 @@ BeginLockCommit(node, qc) ==
      /\ vote \notin commitIntents
      /\ pendingLockCommit' = pendingLockCommit \cup {request}
      /\ UNCHANGED <<height, context, contextHistory, nodeView, generation,
-                    up, gst, availableBodies, durableBodies, validatedBodies,
+                    up, gst, availableBodies, durableBodies, retainedLockedBodies, validatedBodies,
                     invalidBodies, seenProposals, receivedVotes, receivedQCs,
                     receivedTimeoutVotes, receivedTCs, proposalIntents,
                     prepareIntents, commitIntents, timeoutIntents, prepareQCs,
@@ -1148,9 +1285,15 @@ BeginLockCommit(node, qc) ==
 
 PersistLockCommit(request) ==
   LET signRequest == VoteSign(request.node, request.vote)
+      retained == RetainedLockedBodyRecord(
+                    request.node, request.qc.context, request.qc.subject)
   IN /\ request \in pendingLockCommit
      /\ request.vote \notin commitIntents
+     /\ BodyHeldBy(durableBodies, request.node, request.qc.context,
+                    request.qc.view, request.qc.subject)
+     /\ retained \in RetainedLockedBodyRecordSet
      /\ commitIntents' = commitIntents \cup {request.vote}
+     /\ retainedLockedBodies' = retainedLockedBodies \cup {retained}
      /\ lockRank' = [lockRank EXCEPT ![request.node] = request.qc.view]
      /\ lockSubject' =
           [lockSubject EXCEPT ![request.node] = request.qc.subject]
@@ -1179,6 +1322,7 @@ FormCommitQC(node, roundView, subject) ==
       qc == QC(context, roundView, "Commit", subject, signers)
       request == DecisionWal(node, qc, TRUE)
   IN /\ node \in up
+     /\ CommitRoundAdmissible(node, roundView, subject)
      /\ QcWireValid(qc)
      /\ qc \in QcRecordSet
      /\ NodeIdle(node)
@@ -1188,7 +1332,7 @@ FormCommitQC(node, roundView, subject) ==
      /\ commitQCs' = commitQCs \cup {qc}
      /\ pendingDecision' = pendingDecision \cup {request}
      /\ UNCHANGED <<height, context, contextHistory, nodeView, generation,
-                    up, gst, availableBodies, durableBodies, validatedBodies,
+                    up, gst, availableBodies, durableBodies, retainedLockedBodies, validatedBodies,
                     invalidBodies, seenProposals, receivedVotes, receivedQCs,
                     receivedTimeoutVotes, receivedTCs, proposalIntents,
                     prepareIntents, commitIntents, timeoutIntents, prepareQCs,
@@ -1211,7 +1355,7 @@ BeginDecision(node, qc) ==
            /\ decision.qc.context = context
      /\ pendingDecision' = pendingDecision \cup {request}
      /\ UNCHANGED <<height, context, contextHistory, nodeView, generation,
-                    up, gst, availableBodies, durableBodies, validatedBodies,
+                    up, gst, availableBodies, durableBodies, retainedLockedBodies, validatedBodies,
                     invalidBodies, seenProposals, receivedVotes, receivedQCs,
                     receivedTimeoutVotes, receivedTCs, proposalIntents,
                     prepareIntents, commitIntents, timeoutIntents, prepareQCs,
@@ -1232,7 +1376,7 @@ PersistDecision(request) ==
           THEN qcNetwork \cup BroadcastQCs(request.qc)
           ELSE qcNetwork
      /\ UNCHANGED <<height, context, contextHistory, nodeView, generation,
-                    up, gst, availableBodies, durableBodies, validatedBodies,
+                    up, gst, availableBodies, durableBodies, retainedLockedBodies, validatedBodies,
                     invalidBodies, seenProposals, receivedVotes, receivedQCs,
                     receivedTimeoutVotes, receivedTCs, proposalIntents,
                     prepareIntents, commitIntents, timeoutIntents, prepareQCs,
@@ -1259,7 +1403,7 @@ BeginTimeout(node) ==
      /\ request \in TimeoutWalSet
      /\ pendingTimeout' = pendingTimeout \cup {request}
      /\ UNCHANGED <<height, context, contextHistory, nodeView, generation,
-                    up, gst, availableBodies, durableBodies, validatedBodies,
+                    up, gst, availableBodies, durableBodies, retainedLockedBodies, validatedBodies,
                     invalidBodies, seenProposals, receivedVotes, receivedQCs,
                     receivedTimeoutVotes, receivedTCs, proposalIntents,
                     prepareIntents, commitIntents, timeoutIntents, prepareQCs,
@@ -1278,7 +1422,7 @@ PersistTimeout(request) ==
      /\ pendingTimeout' = pendingTimeout \ {request}
      /\ signTimeouts' = signTimeouts \cup {signRequest}
      /\ UNCHANGED <<height, context, contextHistory, nodeView, generation,
-                    up, gst, availableBodies, durableBodies, validatedBodies,
+                    up, gst, availableBodies, durableBodies, retainedLockedBodies, validatedBodies,
                     invalidBodies, seenProposals, receivedVotes, receivedQCs,
                     receivedTimeoutVotes, receivedTCs, proposalIntents,
                     prepareIntents, commitIntents, prepareQCs, commitQCs,
@@ -1297,7 +1441,7 @@ CompleteTimeoutSignature(request) ==
   /\ timeoutNetwork' =
        timeoutNetwork \cup BroadcastTimeouts(request.vote)
   /\ UNCHANGED <<height, context, contextHistory, nodeView, generation,
-                 up, gst, availableBodies, durableBodies, validatedBodies,
+                 up, gst, availableBodies, durableBodies, retainedLockedBodies, validatedBodies,
                  invalidBodies, seenProposals, receivedVotes, receivedQCs,
                  receivedTimeoutVotes, receivedTCs, proposalIntents,
                  prepareIntents, commitIntents, timeoutIntents, prepareQCs,
@@ -1316,7 +1460,7 @@ ByzantineBroadcastTimeout(signer, roundView, highRank, highSubject) ==
      /\ highRank <= roundView
      /\ timeoutNetwork' = timeoutNetwork \cup BroadcastTimeouts(vote)
      /\ UNCHANGED <<height, context, contextHistory, nodeView, generation,
-                    up, gst, availableBodies, durableBodies, validatedBodies,
+                    up, gst, availableBodies, durableBodies, retainedLockedBodies, validatedBodies,
                     invalidBodies, seenProposals, receivedVotes, receivedQCs,
                     receivedTimeoutVotes, receivedTCs, proposalIntents,
                     prepareIntents, commitIntents, timeoutIntents, prepareQCs,
@@ -1343,7 +1487,7 @@ DeliverTimeout(envelope) ==
           THEN receivedTimeoutVotes
           ELSE receivedTimeoutVotes \cup {received}
      /\ UNCHANGED <<height, context, contextHistory, nodeView, generation,
-                    up, gst, availableBodies, durableBodies, validatedBodies,
+                    up, gst, availableBodies, durableBodies, retainedLockedBodies, validatedBodies,
                     invalidBodies, seenProposals, receivedVotes, receivedQCs,
                     receivedTCs, proposalIntents, prepareIntents,
                     commitIntents, timeoutIntents, prepareQCs, commitQCs,
@@ -1366,7 +1510,7 @@ FormTC(node, roundView) ==
      /\ formedTCs' = formedTCs \cup {tc}
      /\ pendingInstallTC' = pendingInstallTC \cup {request}
      /\ UNCHANGED <<height, context, contextHistory, nodeView, generation,
-                    up, gst, availableBodies, durableBodies, validatedBodies,
+                    up, gst, availableBodies, durableBodies, retainedLockedBodies, validatedBodies,
                     invalidBodies, seenProposals, receivedVotes, receivedQCs,
                     receivedTimeoutVotes, receivedTCs, proposalIntents,
                     prepareIntents, commitIntents, timeoutIntents, prepareQCs,
@@ -1385,7 +1529,7 @@ DeliverTC(envelope) ==
      /\ tcNetwork' = tcNetwork \ {envelope}
      /\ receivedTCs' = receivedTCs \cup {received}
      /\ UNCHANGED <<height, context, contextHistory, nodeView, generation,
-                    up, gst, availableBodies, durableBodies, validatedBodies,
+                    up, gst, availableBodies, durableBodies, retainedLockedBodies, validatedBodies,
                     invalidBodies, seenProposals, receivedVotes, receivedQCs,
                     receivedTimeoutVotes, proposalIntents, prepareIntents,
                     commitIntents, timeoutIntents, prepareQCs, commitQCs,
@@ -1404,7 +1548,7 @@ BeginInstallTC(node, tc) ==
      /\ NodeIdle(node)
      /\ pendingInstallTC' = pendingInstallTC \cup {request}
      /\ UNCHANGED <<height, context, contextHistory, nodeView, generation,
-                    up, gst, availableBodies, durableBodies, validatedBodies,
+                    up, gst, availableBodies, durableBodies, retainedLockedBodies, validatedBodies,
                     invalidBodies, seenProposals, receivedVotes, receivedQCs,
                     receivedTimeoutVotes, receivedTCs, proposalIntents,
                     prepareIntents, commitIntents, timeoutIntents, prepareQCs,
@@ -1440,13 +1584,15 @@ PersistInstallTC(request) ==
              IF advancesLock THEN selectedSubject ELSE @]
      /\ installedTCs' = installedTCs \cup {installed}
      /\ pendingInstallTC' = pendingInstallTC \ {request}
+     /\ receivedVotes' =
+          {received \in receivedVotes: received.node # node}
      /\ tcNetwork' =
           IF request.rebroadcast
           THEN tcNetwork \cup BroadcastTCs(tc)
           ELSE tcNetwork
      /\ UNCHANGED <<height, context, contextHistory, up, gst,
-                    availableBodies, durableBodies, validatedBodies,
-                    invalidBodies, seenProposals, receivedVotes, receivedQCs,
+                    availableBodies, durableBodies, retainedLockedBodies, validatedBodies,
+                    invalidBodies, seenProposals, receivedQCs,
                     receivedTimeoutVotes, receivedTCs, proposalIntents,
                     prepareIntents, commitIntents, timeoutIntents, prepareQCs,
                     commitQCs, formedTCs, pendingProposal, pendingPrepare,
@@ -1456,16 +1602,18 @@ PersistInstallTC(request) ==
                     decisions, applied>>
 
 FetchCertifiedBody(node, qc) ==
-  LET body == BodyRecord(node, context, qc.subject)
+  LET body == BodyRecord(node, context, qc.view, qc.subject)
   IN /\ \E decision \in decisions:
            /\ decision.node = node
            /\ decision.qc = qc
      /\ qc.phase = "Commit"
      /\ qc.context = context
-     /\ ~BodyHeldBy(durableBodies, node, context, qc.subject)
+     /\ ~BodyHeldBy(durableBodies, node, context, qc.view, qc.subject)
+     /\ body \in BodyRecordSet
      /\ availableBodies' = availableBodies \cup {body}
      /\ UNCHANGED <<height, context, contextHistory, nodeView, generation,
-                    up, gst, durableBodies, validatedBodies, invalidBodies,
+                    up, gst, durableBodies, retainedLockedBodies,
+                    validatedBodies, invalidBodies,
                     seenProposals, receivedVotes, receivedQCs,
                     receivedTimeoutVotes, receivedTCs, proposalIntents,
                     prepareIntents, commitIntents, timeoutIntents, prepareQCs,
@@ -1480,15 +1628,17 @@ FetchCertifiedBody(node, qc) ==
 ApplyDecision(node, qc) ==
   LET application == [node |-> node, qc |-> qc]
   IN /\ [node |-> node, qc |-> qc] \in decisions
-     /\ BodyHeldBy(durableBodies, node, context, qc.subject)
+     /\ BodyHeldBy(durableBodies, node, context, qc.view, qc.subject)
      /\ \E validation \in validatedBodies:
            /\ validation.node = node
            /\ validation.context = context
+           /\ validation.view = qc.view
            /\ validation.subject = qc.subject
      /\ application \notin applied
      /\ applied' = applied \cup {application}
      /\ UNCHANGED <<height, context, contextHistory, nodeView, generation,
-                    up, gst, availableBodies, durableBodies, validatedBodies,
+                    up, gst, availableBodies, durableBodies,
+                    retainedLockedBodies, validatedBodies,
                     invalidBodies, seenProposals, receivedVotes, receivedQCs,
                     receivedTimeoutVotes, receivedTCs, proposalIntents,
                     prepareIntents, commitIntents, timeoutIntents, prepareQCs,
@@ -1519,7 +1669,7 @@ Crash(node) ==
   /\ signVotes' = {request \in signVotes: request.node # node}
   /\ signTimeouts' = {request \in signTimeouts: request.node # node}
   /\ UNCHANGED <<height, context, contextHistory, nodeView, generation, gst,
-                 availableBodies, durableBodies, invalidBodies, seenProposals,
+                 availableBodies, durableBodies, retainedLockedBodies, invalidBodies, seenProposals,
                  receivedVotes, receivedQCs, receivedTimeoutVotes, receivedTCs,
                  proposalIntents, prepareIntents, commitIntents,
                  timeoutIntents, prepareQCs, commitQCs, formedTCs,
@@ -1533,7 +1683,7 @@ Restart(node) ==
   /\ up' = up \cup {node}
   /\ generation' = [generation EXCEPT ![node] = @ + 1]
   /\ UNCHANGED <<height, context, contextHistory, nodeView, gst,
-                 availableBodies, durableBodies, validatedBodies,
+                 availableBodies, durableBodies, retainedLockedBodies, validatedBodies,
                  invalidBodies, seenProposals, receivedVotes, receivedQCs,
                  receivedTimeoutVotes, receivedTCs, proposalIntents,
                  prepareIntents, commitIntents, timeoutIntents, prepareQCs,
@@ -1556,7 +1706,7 @@ ResumeProposal(node, proposal) ==
      /\ ~NodeTimedOut(node, proposal.view)
      /\ signProposals' = signProposals \cup {request}
      /\ UNCHANGED <<height, context, contextHistory, nodeView, generation,
-                    up, gst, availableBodies, durableBodies, validatedBodies,
+                    up, gst, availableBodies, durableBodies, retainedLockedBodies, validatedBodies,
                     invalidBodies, seenProposals, receivedVotes, receivedQCs,
                     receivedTimeoutVotes, receivedTCs, proposalIntents,
                     prepareIntents, commitIntents, timeoutIntents, prepareQCs,
@@ -1567,18 +1717,32 @@ ResumeProposal(node, proposal) ==
                     signVotes, signTimeouts, proposalNetwork, voteNetwork,
                     qcNetwork, timeoutNetwork, tcNetwork, decisions, applied>>
 
+(***************************************************************************
+Replay may reconstruct an exact Commit intent after the node timed out or
+installed a later TC.  That durable vote remains signable only while it is the
+active Prepare lock's exact round and subject.  Prepare replay stays confined
+to the open current view; neither branch can create a new durable intent.
+***************************************************************************)
+VoteResumeAuthorized(node, vote) ==
+  \/ /\ vote.phase = "Prepare"
+     /\ vote \in prepareIntents
+     /\ vote.view = nodeView[node]
+     /\ ~NodeTimedOut(node, vote.view)
+  \/ /\ vote.phase = "Commit"
+     /\ vote \in commitIntents
+     /\ vote.view <= nodeView[node]
+     /\ LockedPrepareRound(node, vote.view, vote.subject)
+
 ResumeVote(node, vote) ==
   LET request == VoteSign(node, vote)
   IN /\ node \in up \cap Honest
      /\ NodeIdle(node)
      /\ vote.signer = node
      /\ vote.context = context
-     /\ vote.view = nodeView[node]
-     /\ ~NodeTimedOut(node, vote.view)
-     /\ (vote \in prepareIntents \/ vote \in commitIntents)
+     /\ VoteResumeAuthorized(node, vote)
      /\ signVotes' = signVotes \cup {request}
      /\ UNCHANGED <<height, context, contextHistory, nodeView, generation,
-                    up, gst, availableBodies, durableBodies, validatedBodies,
+                    up, gst, availableBodies, durableBodies, retainedLockedBodies, validatedBodies,
                     invalidBodies, seenProposals, receivedVotes, receivedQCs,
                     receivedTimeoutVotes, receivedTCs, proposalIntents,
                     prepareIntents, commitIntents, timeoutIntents, prepareQCs,
@@ -1599,7 +1763,7 @@ ResumeTimeout(node, vote) ==
      /\ vote.view = nodeView[node]
      /\ signTimeouts' = signTimeouts \cup {request}
      /\ UNCHANGED <<height, context, contextHistory, nodeView, generation,
-                    up, gst, availableBodies, durableBodies, validatedBodies,
+                    up, gst, availableBodies, durableBodies, retainedLockedBodies, validatedBodies,
                     invalidBodies, seenProposals, receivedVotes, receivedQCs,
                     receivedTimeoutVotes, receivedTCs, proposalIntents,
                     prepareIntents, commitIntents, timeoutIntents, prepareQCs,
@@ -1615,7 +1779,7 @@ DropProposal(envelope) ==
   /\ ~gst
   /\ proposalNetwork' = proposalNetwork \ {envelope}
   /\ UNCHANGED <<height, context, contextHistory, nodeView, generation, up,
-                 gst, availableBodies, durableBodies, validatedBodies,
+                 gst, availableBodies, durableBodies, retainedLockedBodies, validatedBodies,
                  invalidBodies, seenProposals, receivedVotes, receivedQCs,
                  receivedTimeoutVotes, receivedTCs, proposalIntents,
                  prepareIntents, commitIntents, timeoutIntents, prepareQCs,
@@ -1641,10 +1805,13 @@ Next ==
                                   justifyRank, justifySubject)
   \/ \E envelope \in proposalNetwork: DeliverProposal(envelope)
   \/ \E node \in ValidatorIds, proposal \in SeenProposalValues:
-       FetchBody(node, proposal)
-  \/ \E node \in ValidatorIds, subject \in Subjects: StoreBody(node, subject)
+       FetchBody(node, proposal) \/ RebindRetainedBody(node, proposal)
+  \/ \E node \in ValidatorIds, roundView \in Views, subject \in Subjects:
+       StoreBody(node, roundView, subject)
   \/ \E node \in ValidatorIds, proposal \in SeenProposalValues:
        ValidateBody(node, proposal) \/ RejectBody(node, proposal)
+  \/ \E node \in ValidatorIds, qc \in DecisionQcValues:
+       ValidateDecidedBody(node, qc)
   \/ \E node \in ValidatorIds, proposal \in SeenProposalValues:
        BeginPrepare(node, proposal)
   \/ \E request \in pendingPrepare: PersistPrepare(request)
@@ -1703,7 +1870,13 @@ TypeInvariant ==
   /\ generation \in [ValidatorIds -> Generations]
   /\ up \subseteq ValidatorIds
   /\ gst \in BOOLEAN
+  /\ availableBodies \subseteq BodyRecordSet
+  /\ durableBodies \subseteq BodyRecordSet
+  /\ retainedLockedBodies \subseteq RetainedLockedBodyRecordSet
+  /\ validatedBodies \subseteq ValidationRecordSet
+  /\ invalidBodies \subseteq BodyRecordSet
   /\ ValidatedBodiesSound(validatedBodies, ValidSubjects)
+  /\ RetainedLockedBodiesSound(retainedLockedBodies, durableBodies)
   /\ proposalIntents \subseteq ProposalRecordSet
   /\ prepareIntents \subseteq VoteRecordSet
   /\ commitIntents \subseteq VoteRecordSet
@@ -1726,11 +1899,7 @@ TypeInvariant ==
   /\ pendingObservePrepare \subseteq ObservePrepareWalSet
   /\ pendingLockCommit \subseteq LockCommitWalSet
   /\ pendingTimeout \subseteq TimeoutWalSet
-  /\ \A request \in pendingInstallTC:
-       /\ request.node \in ValidatorIds
-       /\ request.kind = "InstallTC"
-       /\ TcWellTyped(request.tc)
-       /\ request.rebroadcast \in BOOLEAN
+  /\ pendingInstallTC \subseteq InstallTcWalSet
   /\ pendingDecision \subseteq DecisionWalSet
   /\ signProposals \subseteq ProposalSignSet
   /\ signVotes \subseteq VoteSignSet

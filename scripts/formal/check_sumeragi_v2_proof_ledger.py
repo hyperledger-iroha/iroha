@@ -32,16 +32,16 @@ STATUS_VALUES = (
 # absent: a finite counterexample search can never satisfy a proof obligation.
 RELEASE_PROOF_MODULES = (
     "SumeragiV2QuorumProofs",
-    "SumeragiV2Availability",
-    "SumeragiV2CrashRecovery",
-    "SumeragiV2Reconfiguration",
+    "SumeragiV2VocabularyProofs",
     "SumeragiV2SafetyLemmas",
     "SumeragiV2AgreementLemmas",
     "SumeragiV2ChainEpochProofs",
     "SumeragiV2InductiveProofs",
     "SumeragiV2Proofs",
     "SumeragiV2ChainEpochRefinement",
+    "SumeragiV2TemporalLemmas",
     "SumeragiV2LivenessProofs",
+    "SumeragiV2ServiceRankLemmas",
     "SumeragiV2AsyncLivenessProofs",
 )
 
@@ -51,8 +51,10 @@ REQUIRED_MODEL_MODULES = (
     "SumeragiV2QuorumProofs",
     "SumeragiV2Availability",
     "SumeragiV2Core",
+    "SumeragiV2ResumeVoteWitness",
     "SumeragiV2CrashRecovery",
     "SumeragiV2Reconfiguration",
+    "SumeragiV2VocabularyProofs",
     "SumeragiV2SafetyDefinitions",
     "SumeragiV2SafetyLemmas",
     "SumeragiV2AgreementLemmas",
@@ -62,7 +64,9 @@ REQUIRED_MODEL_MODULES = (
     "SumeragiV2ChainEpoch",
     "SumeragiV2ChainEpochProofs",
     "SumeragiV2ChainEpochRefinement",
+    "SumeragiV2TemporalLemmas",
     "SumeragiV2LivenessProofs",
+    "SumeragiV2ServiceRankLemmas",
     "SumeragiV2AsyncNetwork",
     "SumeragiV2AsyncLivenessProofs",
 )
@@ -74,6 +78,7 @@ REQUIRED_TLC_CONFIGS = (
     "safety_stake.cfg",
     "chain_epoch.cfg",
     "liveness.cfg",
+    "resume_locked_commit_witness.cfg",
 )
 
 REQUIRED_TLC_CONFIG_HEADERS = {
@@ -83,6 +88,7 @@ REQUIRED_TLC_CONFIG_HEADERS = {
     "safety_stake.cfg": "INIT Init\nNEXT Next",
     "chain_epoch.cfg": "SPECIFICATION ChainEpochSpec",
     "liveness.cfg": "SPECIFICATION AsyncFiniteSpec",
+    "resume_locked_commit_witness.cfg": "SPECIFICATION CoreSpec",
 }
 
 RETIRED_PATHS = (
@@ -146,11 +152,21 @@ ARBITRARY_CONTEXT_SAFETY_PROPERTY_WRAPPERS = {
 # These are properties of the concrete asynchronous scheduler and transport,
 # not wrappers that may be stated in an upstream safety module.
 ASYNC_LIVENESS_OBLIGATIONS = {
+    "generation-scoped-vote-delivery": "GenerationScopedVoteDeliveryObligation",
+    "progress-witness-preservation": "ProgressWitnessObligation",
+    "post-gst-deadlock-freedom": "DeadlockFreedomObligation",
+    "protected-service-rank": "ProtectedServiceRankProgressObligation",
+    "post-gst-starvation-freedom": "StarvationFreedomObligation",
     "timeout-view-liveness": "TimeoutViewProgressObligation",
     "rotating-leader-liveness": "RotatingLeaderProgressObligation",
     "application-liveness": "ApplicationLivenessObligation",
 }
 ASYNC_LIVENESS_PROPERTY_WRAPPERS = {
+    "generation-scoped-vote-delivery": "GenerationScopedVoteDeliveryProperty",
+    "progress-witness-preservation": "ProgressWitnessProperty",
+    "post-gst-deadlock-freedom": "DeadlockFreedomProperty",
+    "protected-service-rank": "ProtectedServiceRankProgressProperty",
+    "post-gst-starvation-freedom": "StarvationFreedomProperty",
     "timeout-view-liveness": "TimeoutViewProgressProperty",
     "rotating-leader-liveness": "RotatingLeaderProgressProperty",
     "application-liveness": "ApplicationLivenessProperty",
@@ -158,12 +174,17 @@ ASYNC_LIVENESS_PROPERTY_WRAPPERS = {
 
 # These obligations are release-architecture seams, not declarations that may
 # drift between proof modules.  Type closure belongs to the concrete async
-# proof, while successor-height progress belongs to the receipt-driven chain
-# product once it grows an indexed family of one-height async instances.
+# proof, the genesis handoff belongs to the current receipt-driven chain
+# product, and multi-height progress belongs there only after it grows an
+# indexed family of one-height async instances.
 FIXED_PROOF_OBLIGATION_TARGETS = {
     "async-type-invariant": (
         "SumeragiV2AsyncLivenessProofs",
         "AsyncTypeInvariantObligation",
+    ),
+    "genesis-height-successor-handoff": (
+        "SumeragiV2ChainEpochRefinement",
+        "GenesisHeightSuccessorHandoffObligation",
     ),
     "height-liveness": (
         "SumeragiV2ChainEpochRefinement",
@@ -183,11 +204,11 @@ CHAIN_SAFETY_OBLIGATIONS = {
 MODULE_HEADER_RE = re.compile(r"(?m)^---- MODULE ([A-Za-z_][A-Za-z0-9_]*) ----$")
 DECLARATION_TEMPLATE = r"(?m)^{symbol}\s*(?:\([^)=\n]*\))?\s*=="
 THEOREM_DECLARATION_TEMPLATE = (
-    r"(?m)^(?:THEOREM|LEMMA|COROLLARY|PROPOSITION)\s+"
+    r"(?m)^[ \t]*(?:THEOREM|LEMMA|COROLLARY|PROPOSITION)[ \t]+"
     r"{symbol}\s*(?:\([^)=\n]*\))?\s*=="
 )
 ANY_THEOREM_DECLARATION_RE = re.compile(
-    r"(?m)^(?:THEOREM|LEMMA|COROLLARY|PROPOSITION)\s+"
+    r"(?m)^[ \t]*(?:THEOREM|LEMMA|COROLLARY|PROPOSITION)[ \t]+"
     r"[A-Za-z_][A-Za-z0-9_]*\s*(?:\([^)=\n]*\))?\s*=="
 )
 TOP_LEVEL_TRUST_RE = re.compile(
@@ -497,6 +518,85 @@ def _module_sources(formal_dir: Path) -> tuple[dict[str, str], list[str]]:
     return sources, errors
 
 
+def _resume_vote_witness_errors(formal_dir: Path) -> list[str]:
+    """Pin the bounded historical locked-Commit counterexample witness."""
+
+    errors: list[str] = []
+    module_path = formal_dir / "SumeragiV2ResumeVoteWitness.tla"
+    cfg_path = formal_dir / "resume_locked_commit_witness.cfg"
+    if not module_path.is_file() or not cfg_path.is_file():
+        return errors
+
+    module_source = module_path.read_text(encoding="utf-8")
+    recovered = _top_level_operator_body(
+        module_source,
+        "RecoveredHistoricalLockedCommitSigning",
+        preserve_string_contents=True,
+    )
+    if recovered is None:
+        errors.append(
+            f"{module_path}: missing historical locked-Commit recovery predicate"
+        )
+    else:
+        body, line = recovered
+        normalized = " ".join(body.split())
+        required = (
+            "request \\in signVotes",
+            "request.vote.signer = request.node",
+            "request.vote.context = context",
+            'request.vote.phase = "Commit"',
+            "request.vote \\in commitIntents",
+            "NodeTimedOut(request.node, request.vote.view)",
+            "request.vote.view < nodeView[request.node]",
+            "LockedPrepareRound(request.node, request.vote.view, request.vote.subject)",
+            "generation[request.node] = MaxGeneration",
+        )
+        missing = [token for token in required if token not in normalized]
+        if missing:
+            errors.append(
+                f"{module_path}:{line}: recovery predicate does not require the "
+                f"exact timed-out historical locked Commit after restart; missing {missing}"
+            )
+
+    negated = _top_level_operator_body(
+        module_source, "NoRecoveredHistoricalLockedCommitSigning"
+    )
+    if negated is None:
+        errors.append(f"{module_path}: missing deliberately negated witness predicate")
+    else:
+        body, line = negated
+        if " ".join(body.split()) != "~RecoveredHistoricalLockedCommitSigning":
+            errors.append(
+                f"{module_path}:{line}: witness invariant must be exactly the "
+                "negation of RecoveredHistoricalLockedCommitSigning"
+            )
+
+    cfg_source = cfg_path.read_text(encoding="utf-8")
+    required_cfg_lines = (
+        "CHECK_DEADLOCK FALSE",
+        "INVARIANT TypeInvariant",
+        "INVARIANT NoRecoveredHistoricalLockedCommitSigning",
+        "  N = 1",
+        "  Honest = {0}",
+        "  Responsive = {0}",
+        "  MaxHeight = 0",
+        "  MaxView = 1",
+        "  MaxGeneration = 2",
+    )
+    missing_cfg_lines = [
+        line
+        for line in required_cfg_lines
+        if cfg_source.splitlines().count(line) != 1
+    ]
+    if missing_cfg_lines:
+        errors.append(
+            f"{cfg_path}: recovery witness configuration must pin one timed-out "
+            "view advance and one restart; missing or duplicated "
+            f"{missing_cfg_lines}"
+        )
+    return errors
+
+
 def _retired_liveness_errors(formal_dir: Path) -> list[str]:
     """Reject the old favourable-network liveness shortcut by exact symbol."""
 
@@ -548,6 +648,7 @@ def _top_level_operator_body(
     body_start = declaration.end()
     next_declaration = re.compile(
         r"(?m)^(?:[A-Za-z_][A-Za-z0-9_]*\s*(?:\([^)=\n]*\))?\s*==|"
+        r"[ \t]*(?:LOCAL[ \t]+)?"
         r"(?:THEOREM|LEMMA|COROLLARY|PROPOSITION)\b|={4,}\s*$)"
     ).search(stripped, body_start)
     body_end = next_declaration.start() if next_declaration is not None else len(stripped)
@@ -559,7 +660,8 @@ def _top_level_theorem_body(source: str, symbol: str) -> tuple[str, int] | None:
 
     stripped = strip_tla_comments(source)
     declaration = re.compile(
-        rf"(?m)^(?:THEOREM|LEMMA|COROLLARY|PROPOSITION)\s+"
+        rf"(?m)^[ \t]*(?:LOCAL[ \t]+)?"
+        rf"(?:THEOREM|LEMMA|COROLLARY|PROPOSITION)[ \t]+"
         rf"{re.escape(symbol)}\s*(?:\([^)=\n]*\))?\s*=="
     ).search(stripped)
     if declaration is None:
@@ -567,6 +669,7 @@ def _top_level_theorem_body(source: str, symbol: str) -> tuple[str, int] | None:
     body_start = declaration.end()
     next_declaration = re.compile(
         r"(?m)^(?:[A-Za-z_][A-Za-z0-9_]*\s*(?:\([^)=\n]*\))?\s*==|"
+        r"[ \t]*(?:LOCAL[ \t]+)?"
         r"(?:THEOREM|LEMMA|COROLLARY|PROPOSITION)\b|={4,}\s*$)"
     ).search(stripped, body_start)
     body_end = next_declaration.start() if next_declaration is not None else len(stripped)
@@ -580,10 +683,11 @@ def _proofless_release_theorem_errors(
 
     errors: list[str] = []
     declaration = re.compile(
-        r"(?m)^(?:THEOREM|LEMMA|COROLLARY|PROPOSITION)\s+"
+        r"(?m)^[ \t]*(?:LOCAL[ \t]+)?"
+        r"(?:THEOREM|LEMMA|COROLLARY|PROPOSITION)[ \t]+"
         r"([A-Za-z_][A-Za-z0-9_]*)\s*(?:\([^)=\n]*\))?\s*=="
     )
-    proof = re.compile(r"(?m)^(?:BY|PROOF)\b")
+    proof = re.compile(r"(?m)^[ \t]*(?:BY|PROOF|OBVIOUS)\b")
     for module, source in module_sources.items():
         if module not in RELEASE_PROOF_MODULES:
             continue
@@ -662,7 +766,7 @@ def _proof_obligation_architecture_errors(
         if source is None:
             return
         declaration = re.compile(
-            rf"(?m)^(?:THEOREM|LEMMA|COROLLARY|PROPOSITION)\s+"
+            rf"(?m)^[ \t]*(?:THEOREM|LEMMA|COROLLARY|PROPOSITION)[ \t]+"
             rf"{re.escape(symbol)}\s*=="
         )
         if declaration.search(strip_tla_comments(source)) is None:
@@ -673,7 +777,9 @@ def _proof_obligation_architecture_errors(
         if extracted is None:
             return
         body, line = extracted
-        statement = re.split(r"(?m)^(?:BY|PROOF)\b", body, maxsplit=1)[0]
+        statement = re.split(
+            r"(?m)^[ \t]*(?:BY|PROOF|OBVIOUS)\b", body, maxsplit=1
+        )[0]
         normalized_statement = " ".join(statement.split())
         if exact_statement is not None and normalized_statement != exact_statement:
             errors.append(
@@ -715,7 +821,7 @@ def _proof_obligation_architecture_errors(
         if source is None:
             return
         declaration = re.compile(
-            rf"(?m)^(?:THEOREM|LEMMA|COROLLARY|PROPOSITION)\s+"
+            rf"(?m)^[ \t]*(?:THEOREM|LEMMA|COROLLARY|PROPOSITION)[ \t]+"
             rf"{re.escape(symbol)}\s*=="
         )
         if declaration.search(strip_tla_comments(source)) is None:
@@ -724,7 +830,9 @@ def _proof_obligation_architecture_errors(
         if extracted is None:
             return
         body, line = extracted
-        statement = re.split(r"(?m)^(?:BY|PROOF)\b", body, maxsplit=1)[0]
+        statement = re.split(
+            r"(?m)^[ \t]*(?:BY|PROOF|OBVIOUS)\b", body, maxsplit=1
+        )[0]
         normalized_statement = " ".join(statement.split())
         if normalized_statement != exact_statement:
             errors.append(
@@ -881,7 +989,9 @@ def _async_proof_architecture_errors(formal_dir: Path) -> list[str]:
             errors.append(f"{path}: missing release theorem {symbol}")
             continue
         body, line = extracted
-        statement = re.split(r"(?m)^(?:BY|PROOF)\b", body, maxsplit=1)[0]
+        statement = re.split(
+            r"(?m)^[ \t]*(?:BY|PROOF|OBVIOUS)\b", body, maxsplit=1
+        )[0]
         normalized = " ".join(statement.split())
         if normalized != exact_statement:
             errors.append(
@@ -889,7 +999,7 @@ def _async_proof_architecture_errors(formal_dir: Path) -> list[str]:
                 f"{exact_statement!r}; found {normalized!r}"
             )
     universally_quantified = re.compile(
-        r"(?m)^(?:THEOREM|LEMMA|COROLLARY|PROPOSITION)\s+"
+        r"(?m)^[ \t]*(?:THEOREM|LEMMA|COROLLARY|PROPOSITION)[ \t]+"
         r"AsyncTypeInvariantObligation\s*==\s*\\A\s+initialContext\s*:"
     )
     if universally_quantified.search(stripped) is None:
@@ -922,6 +1032,66 @@ def _async_proof_architecture_errors(formal_dir: Path) -> list[str]:
                 r"ResponsiveNodesApply"
             ),
         }
+        if (formal_dir / "proof_coverage.json").is_file():
+            property_contracts.update({
+              "GenerationScopedVoteDeliveryProperty": (
+                r"specification => [][VoteDeliveryEpochAction]_AsyncAllVars"
+              ),
+              "ProgressWitnessProperty": (
+                r"specification => []ProgressWitnessInvariant"
+              ),
+              "DeadlockFreedomProperty": (
+                r"specification => [](gst /\ ~ResponsiveNodesDecide "
+                r"=> PostGstProgressActionEnabled)"
+              ),
+              "ResponsiveProtectedCandidateOwned": (
+                r"/\ candidate.node \in AsyncCurrentResponsiveVoters "
+                r"/\ ProtectedCandidateOwned(candidate)"
+              ),
+              "ProtectedServiceRankProgressProperty": (
+                r"specification => \A candidate \in AsyncCandidateSet, "
+                r"stage \in 2..6, position \in Nat: (gst /\ "
+                r"ResponsiveProtectedCandidateOwned(candidate) /\ "
+                r"CandidateServiceRank(candidate) = <<stage, position>>) "
+                r"~> (~ResponsiveProtectedCandidateOwned(candidate) \/ "
+                r"ServiceRankLess(CandidateServiceRank(candidate), "
+                r"<<stage, position>>))"
+              ),
+              "StarvationFreedomProperty": (
+                r"specification => \A candidate \in AsyncCandidateSet: "
+                r"(gst /\ ResponsiveProtectedCandidateOwned(candidate)) ~> "
+                r"~ResponsiveProtectedCandidateOwned(candidate)"
+              ),
+            })
+        theorem_contracts: dict[str, str] = {}
+        if (formal_dir / "proof_coverage.json").is_file():
+            theorem_contracts.update({
+                "RuntimeReachRankIsNatural": (
+                    r"AsyncTypeInvariant => \A node \in ValidatorIds: "
+                    r"RuntimeReachRank(node) \in Nat"
+                ),
+                "RetransmissionBudgetCoversEveryClass": (
+                    r"ModelConfiguration /\ AsyncConfiguration => "
+                    r"/\ AsyncRetainedControlBudget \in Nat "
+                    r"/\ AsyncRetainedProposalChunkBudget \in Nat "
+                    r"/\ AsyncActiveCertifiedRequestBudget \in Nat "
+                    r"/\ AsyncActiveCommitRequestBudget \in Nat "
+                    r"/\ AsyncActiveRequestBudget = "
+                    r"AsyncActiveCertifiedRequestBudget + "
+                    r"AsyncActiveCommitRequestBudget "
+                    r"/\ AsyncRetransmitEmissionBudget = "
+                    r"AsyncRetainedControlBudget + "
+                    r"AsyncRetainedProposalChunkBudget + AsyncActiveRequestBudget"
+                ),
+                "CanonicalSuccessorPreservesAdmissibility": (
+                    r"ModelConfiguration => \A initialContext \in ContextRecords, "
+                    r"subject \in ValidSubjects: "
+                    r"(FrozenContextAdmissible(initialContext) /\ "
+                    r"initialContext.height < MaxHeight) => "
+                    r"FrozenContextAdmissible( "
+                    r"CanonicalSuccessorContext(initialContext, subject))"
+                ),
+            })
         for symbol, exact_body in property_contracts.items():
             extracted = _top_level_operator_body(vocabulary_source, symbol)
             if extracted is None:
@@ -936,6 +1106,50 @@ def _async_proof_architecture_errors(formal_dir: Path) -> list[str]:
                     f"{vocabulary_path}:{line}: {symbol} must equal only "
                     f"{exact_body!r}; found {normalized!r}"
                 )
+        for symbol, exact_statement in theorem_contracts.items():
+            extracted = _top_level_theorem_body(vocabulary_source, symbol)
+            if extracted is None:
+                errors.append(
+                    f"{vocabulary_path}: missing release theorem {symbol}"
+                )
+                continue
+            body, line = extracted
+            statement = re.split(
+                r"(?m)^[ \t]*(?:BY|PROOF|OBVIOUS)\b", body, maxsplit=1
+            )[0]
+            normalized = " ".join(statement.split())
+            if normalized != exact_statement:
+                errors.append(
+                    f"{vocabulary_path}:{line}: {symbol} must state only "
+                    f"{exact_statement!r}; found {normalized!r}"
+                )
+
+        if (formal_dir / "proof_coverage.json").is_file():
+            candidate_rank = _top_level_operator_body(
+                vocabulary_source, "CandidateServiceRank"
+            )
+            if candidate_rank is None:
+                errors.append(
+                    f"{vocabulary_path}: missing scheduler-owned "
+                    "CandidateServiceRank"
+                )
+            else:
+                rank_body, rank_line = candidate_rank
+                forbidden_rank_tokens = (
+                    "CandidateInIngress",
+                    "CandidateInTransport",
+                    "<<7,",
+                    "<<8,",
+                )
+                present = [
+                    token for token in forbidden_rank_tokens if token in rank_body
+                ]
+                if present:
+                    errors.append(
+                        f"{vocabulary_path}:{rank_line}: CandidateServiceRank must "
+                        "be scheduler-owned stages 2..6; transport and ingress "
+                        f"require occurrence-specific proofs, found {present}"
+                    )
 
         safety_path = formal_dir / "SumeragiV2Proofs.tla"
         if safety_path.is_file():
@@ -1041,10 +1255,11 @@ def _safety_property_source_fidelity_errors(formal_dir: Path) -> list[str]:
         ),
         "CrashRecoveryProperty": (
             "/\\ (specification => []CrashRecoveryStateInvariant) "
-            "/\\ CrashPreservesDurableProjection "
-            "/\\ RestartPreservesDurableProjection "
-            "/\\ PendingWritesAreUnacknowledged "
-            "/\\ (TypeInvariant => StaleGenerationRejected)"
+            "/\\ (specification => [][CrashPreservesDurableProjection]_vars) "
+            "/\\ (specification => [][RestartPreservesDurableProjection]_vars) "
+            "/\\ (specification => [][PendingWritesAreUnacknowledged]_vars) "
+            "/\\ (specification => "
+            "[][TypeInvariant => StaleGenerationRejected]_vars)"
         ),
     }
     errors: list[str] = []
@@ -1086,15 +1301,127 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             )
 
     exact = {
+        "AsyncChunkReceiptSet": (
+            "[node: ValidatorIds, view: Views, subject: Subjects, "
+            "chunk: AsyncChunks]"
+        ),
+        "AsyncBodyEnvelopeSet": (
+            "[recipient: ValidatorIds, height: Heights, view: Views, "
+            "subject: Subjects, chunk: 0..AsyncChunkCount, "
+            "nonce: 0..(AsyncIngressCapacity - 1)]"
+        ),
         "AsyncSetGST": "/\\ ~gst /\\ SetGST /\\ UNCHANGED AsyncSchedulerVars",
         "RetainedControlEmissionItems": (
             "SendableItems(node) \\cup RetainedProposalChunks(node)"
         ),
         "AsyncBaseInit": "AsyncBaseInitAt(ContextRecord(0, <<>>))",
         "AsyncStepRefinesCore": "AsyncNext => [Next]_vars",
+        "NextCommandClass": (
+            'CASE commandClass = "Completion" -> "Progress" '
+            '[] commandClass = "Progress" -> "Normal" '
+            '[] OTHER -> "Completion"'
+        ),
+        "SelectedCommandClass": (
+            "LET first == asyncNextCommandClass[node] "
+            "second == NextCommandClass(first) "
+            "third == NextCommandClass(second) "
+            "IN IF CommandClassIndices(node, first) # {} "
+            "THEN first ELSE IF CommandClassIndices(node, second) # {} "
+            "THEN second ELSE third"
+        ),
+        "NextNodeCommandIndex": (
+            "FirstCommandClassIndex(node, SelectedCommandClass(node))"
+        ),
+        "RemoveNextNodeCommand": (
+            "/\\ asyncCommandQueues' = [asyncCommandQueues EXCEPT "
+            "![node] = SequenceWithoutIndex(@, NextNodeCommandIndex(node))] "
+            "/\\ asyncNextCommandClass' = [asyncNextCommandClass EXCEPT "
+            "![node] = NextCommandClass(SelectedCommandClass(node))]"
+        ),
+        "SchedulerClassPrefixIndices": (
+            "{index \\in 1..Len(asyncCommandQueues[node]): "
+            "/\\ asyncCommandQueues[node][index].class = command.class "
+            "/\\ \\E matching \\in SchedulerCandidateIndices(node, command): "
+            "index <= matching}"
+        ),
+        "SchedulerServiceRank": (
+            "3 * Cardinality(SchedulerClassPrefixIndices(node, command)) "
+            "+ CommandClassDistance(asyncNextCommandClass[node], command.class)"
+        ),
+        "CommandExecutionEnabled": (
+            "\\E selectedCommand \\in {command}: "
+            "\\/ ENABLED ExecuteRegularCommand(selectedCommand) "
+            "\\/ ENABLED ExecuteSignProposal(selectedCommand) "
+            "\\/ ENABLED ExecuteSignVote(selectedCommand) "
+            "\\/ ENABLED ExecuteFormPrepareQC(selectedCommand) "
+            "\\/ ENABLED ExecuteSignTimeout(selectedCommand) "
+            "\\/ ENABLED ExecutePersistInstall(selectedCommand) "
+            "\\/ ENABLED ExecutePersistDecision(selectedCommand) "
+            "\\/ ENABLED ExecuteRequestCertifiedBody(selectedCommand) "
+            "\\/ ENABLED ExecuteApply(selectedCommand) "
+            "\\/ ENABLED ExecuteCoreDelivery(selectedCommand) "
+            "\\/ ENABLED ExecuteChunkDelivery(selectedCommand) "
+            "\\/ ENABLED ExecuteRejectAuthenticatedJunk(selectedCommand)"
+        ),
+        "CommandDispatchable": (
+            "/\\ AsyncCandidateTyped(command) "
+            "/\\ CommandExecutionEnabled(command) "
+            "/\\ (NodeIdle(command.node) "
+            "\\/ command.class = \"Completion\")"
+        ),
     }
+    if (formal_dir / "proof_coverage.json").is_file():
+        exact.update({
+            "IngressContinuationProtectedSourcesFor": (
+                "{source \\in ValidatorIds: "
+                "\\/ Len(lanes[recipient][source]) = 0 "
+                "\\/ /\\ Len(lanes[recipient][source]) = 1 "
+                "/\\ IngressLaneHasProgressIn(lanes, recipient, source)}"
+            ),
+            "IngressProtectedSlotCountFor": (
+                "Cardinality(IngressProtectedSourcesFor(lanes, recipient)) + "
+                "Cardinality(IngressContinuationProtectedSourcesFor(lanes, recipient))"
+            ),
+            "IngressProtectedSlotCountAfterAdmission": (
+                "IngressProtectedSlotCountFor(IngressLanesAfterAdmission(item), "
+                "item.envelope.recipient)"
+            ),
+            "AsyncIngressCapacityTypeInvariant": (
+                "\\A recipient \\in ValidatorIds: "
+                "/\\ \\A source \\in AsyncIngressSources: "
+                "IngressLaneDepth(recipient, source) <= AsyncIngressCapacity "
+                "/\\ IngressDepth(recipient) <= AsyncIngressCapacity "
+                "/\\ IngressDepth(recipient) + "
+                "IngressProtectedSlotCountFor( asyncIngressLanes, recipient) "
+                "<= AsyncIngressCapacity"
+            ),
+            "IngressUsableCapacityAfterAdmission": (
+                "AsyncIngressCapacity - IngressProtectedSlotCountAfterAdmission(item)"
+            ),
+            "AsyncValidTimeoutVoteWireByteBound": "4 * 1024",
+            "AsyncTimeoutVoteByteReserve": "64 * 1024",
+            "AsyncTimeoutVoteByteGateAllows": (
+                '\\/ item.kind # "TimeoutVote" '
+                "\\/ item.source \\notin ValidatorIds "
+                "\\/ /\\ AsyncValidTimeoutVoteWireByteBound <= "
+                "AsyncTimeoutVoteByteReserve "
+                "/\\ ~IngressLaneHasTimeoutVoteIn(asyncIngressLanes, "
+                "item.envelope.recipient, item.source)"
+            ),
+            "IngressLaneHasTimeoutVoteIn": (
+                "\\E queued \\in SequenceSet(lanes[recipient][source]): "
+                'queued.kind = "TimeoutVote"'
+            ),
+            "CanAdmitIngressItem": (
+                "/\\ IngressDepth(item.envelope.recipient) < "
+                "IngressUsableCapacityAfterAdmission(item) "
+                "/\\ AsyncTimeoutVoteByteGateAllows(item)"
+            ),
+        })
     for symbol, expected in exact.items():
-        extracted = _top_level_operator_body(source, symbol)
+        extracted = _top_level_operator_body(
+            source, symbol, preserve_string_contents=True
+        )
         if extracted is None:
             errors.append(f"{path}: missing source-fidelity operator {symbol}")
             continue
@@ -1126,14 +1453,68 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             "AsyncFaultStep",
         ),
         "AsyncNext": ("AsyncNonCrashStep", "PreGstCrash(node)"),
+        "AsyncSchedulerVars": ("asyncNextCommandClass",),
+        "AsyncRuntimeInit": (
+            "asyncNextCommandClass =",
+            '[node \\in ValidatorIds |-> "Completion"]',
+        ),
+        "AsyncRuntimeScalarTypeInvariant": (
+            "asyncNextCommandClass \\in [ValidatorIds -> AsyncCommandClasses]",
+        ),
+        "AsyncBodyEnvelopeTyped": ("envelope.subject \\in Subjects",),
+        "FifoRuntimeStep": (
+            "NextNodeCommand(node)",
+            "RemoveNextNodeCommand(node)",
+        ),
+        "RegularCoreCommand": (
+            'command.kind = "ValidateBody"',
+            "ValidateBody(command.node, proposal)",
+            "DecisionQcValues",
+            "ValidateDecidedBody(command.node, qc)",
+        ),
         "RunNode": ("~NodeHasApplication(node)",),
         "RunHistoricalServer": (
             "NodeHasApplication(node)",
             "DrainHistoricalIngressSelected(node)",
         ),
-        "HistoricalIngressSourceCanDrain": (
+        "HistoricalIngressItemCanDrain": (
             'item.kind = "CertifiedRequest"',
             'item.kind = "CommitCertificateRequest"',
+        ),
+        "HistoricalDrainableIngressLaneIndices": (
+            "HistoricalIngressItemCanDrain(",
+            "IngressLane(node, source)[index]",
+        ),
+        "HistoricalIngressSourceCanDrain": (
+            "HistoricalDrainableIngressLaneIndices(node, source)",
+            "# {}",
+        ),
+        "HistoricalSelectedIngressLaneIndex": (
+            "FirstHistoricalDrainableIngressLaneIndex(",
+            "asyncIngressReady[node][index]",
+        ),
+        "HistoricalSelectedIngressItemAt": (
+            "HistoricalSelectedIngressLaneIndex(node, index)",
+        ),
+        "IngressItemCanDrain": (
+            "candidate \\in QueuedCandidates",
+            "CanEnqueueClass(node, candidate.class)",
+        ),
+        "DrainableIngressLaneIndices": (
+            "IngressItemCanDrain(node, IngressLane(node, source)[index])",
+        ),
+        "IngressSourceCanDrain": (
+            "DrainableIngressLaneIndices(node, source)",
+            "# {}",
+        ),
+        "SelectedIngressLaneIndex": (
+            "FirstDrainableIngressLaneIndex(",
+            "asyncIngressReady[node][index]",
+        ),
+        "SelectedIngressItemAt": ("SelectedIngressLaneIndex(node, index)",),
+        "PopSelectedIngress": (
+            "SequenceWithoutIndex(@, laneIndex)",
+            "ReadyAfterSelectedDrain(node, index)",
         ),
         "DirectCommitCertificateDiscoveryStep": (
             "CommitCertificateDiscoveryDue(node)",
@@ -1145,10 +1526,19 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             "MatchingCommitCertificateRequests(item)",
         ),
         "DrainFairIngressSelected": (
+            "SelectedIngressLaneIndex(node, index)",
+            "SelectedIngressItemAt(node, index)",
+            "PopSelectedIngress(node, index, laneIndex)",
             "CommitCertificateResponseAuthorized(item)",
             "CommitCertificateResponseCandidate(item)",
             "EnqueueCandidate(discoveredCandidate)",
             "MatchingCommitCertificateRequests(item)",
+            "candidate \\in QueuedCandidates",
+        ),
+        "DrainHistoricalIngressSelected": (
+            "HistoricalSelectedIngressLaneIndex(node, index)",
+            "HistoricalSelectedIngressItemAt(node, index)",
+            "PopSelectedIngress(node, index, laneIndex)",
         ),
         "AsyncFairnessAt": (
             "PostGstRunNode(node)",
@@ -1157,6 +1547,23 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             "PostGstAdmitHiddenPacket(recipient, source)",
         ),
     }
+    if (formal_dir / "proof_coverage.json").is_file():
+        required_body_tokens.update({
+            "DeliveryClass": (
+                "HistoricalLockedCommitItem(item)",
+                'THEN "Progress"',
+            ),
+            "DeferredProgressAfter": (
+                "SameProtectedProgressSlotIndices(node, command)",
+                "DominatedProtectedProgressIndices(node, command)",
+                "ReplaceableUnprotectedProgressIndices(node)",
+            ),
+            "AsyncConfiguration": (
+                "AsyncDeferredProgressCapacity >= N + 3",
+                "AsyncIngressCapacity >= Cardinality(AsyncIngressSources) + Cardinality(ValidatorIds)",
+                "AsyncValidTimeoutVoteWireByteBound <= AsyncTimeoutVoteByteReserve",
+            ),
+        })
     for symbol, tokens in required_body_tokens.items():
         extracted = _top_level_operator_body(
             source, symbol, preserve_string_contents=True
@@ -1172,9 +1579,71 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
                 f"{path}:{line}: {symbol} omits required production behavior {missing}"
             )
 
+    regular = _top_level_operator_body(
+        source, "RegularCoreCommand", preserve_string_contents=True
+    )
+    if regular is not None:
+        body, line = regular
+        validation_branch = re.search(
+            r'\\/ /\\ command\.kind = "ValidateBody"(?P<body>.*?)'
+            r'(?=\n  \\/ /\\ command\.kind = "BeginPrepare")',
+            body,
+            re.DOTALL,
+        )
+        required_validation_tokens = (
+            "ValidateBody(command.node, proposal)",
+            "RejectBody(command.node, proposal)",
+            "DecisionQcValues",
+            "ValidateDecidedBody(command.node, qc)",
+        )
+        if validation_branch is None:
+            errors.append(
+                f"{path}:{line}: RegularCoreCommand is missing its exact "
+                "ValidateBody branch"
+            )
+        else:
+            normalized = " ".join(validation_branch.group("body").split())
+            missing = [
+                token for token in required_validation_tokens if token not in normalized
+            ]
+            if missing:
+                errors.append(
+                    f"{path}:{line}: RegularCoreCommand ValidateBody branch omits "
+                    f"required production validation behavior {missing}"
+                )
+            if 'command.item.kind = "CertifiedResponse"' in normalized:
+                errors.append(
+                    f"{path}:{line}: local ValidateBody dispatch must rely on the "
+                    "exact durable decision and body, not retain a transport response"
+                )
+
     core_path = formal_dir / "SumeragiV2Core.tla"
     if core_path.is_file():
         core_source = core_path.read_text(encoding="utf-8")
+        extracted = _top_level_operator_body(core_source, "DeliverVote")
+        if extracted is None:
+            errors.append(f"{core_path}: missing source-fidelity operator DeliverVote")
+        else:
+            body, line = extracted
+            normalized = " ".join(body.split())
+            required_vote_tokens = (
+                "received \\notin receivedVotes",
+                "receivedVotes' = receivedVotes \\cup {received}",
+                "voteNetwork",
+            )
+            missing = [
+                token for token in required_vote_tokens if token not in normalized
+            ]
+            if missing:
+                errors.append(
+                    f"{core_path}:{line}: DeliverVote must retain authenticated "
+                    f"history and consume one receipt-pool epoch; missing {missing}"
+                )
+            if re.search(r"\bvoteNetwork'\s*=", body):
+                errors.append(
+                    f"{core_path}:{line}: DeliverVote must not consume or rewrite "
+                    "immutable authenticated vote history"
+                )
         extracted = _top_level_operator_body(core_source, "DeliverTimeout")
         if extracted is None:
             errors.append(
@@ -1196,6 +1665,52 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
                 errors.append(
                     f"{core_path}:{line}: DeliverTimeout omits first-vote-per-signer "
                     f"pool behavior {missing}"
+                )
+
+        extracted = _top_level_operator_body(
+            core_source, "ValidateDecidedBody", preserve_string_contents=True
+        )
+        if extracted is None:
+            errors.append(
+                f"{core_path}: missing certificate-first validation operator "
+                "ValidateDecidedBody"
+            )
+        else:
+            body, line = extracted
+            normalized = " ".join(body.split())
+            required_decided_validation_tokens = (
+                "ValidationRecord(node, context, qc.view, generation[node], qc.subject)",
+                "decision == [node |-> node, qc |-> qc]",
+                "decision \\in decisions",
+                'qc.phase = "Commit"',
+                "qc.context = context",
+                "BodyHeldBy(durableBodies, node, context, qc.view, qc.subject)",
+                "qc.subject \\in ValidSubjects",
+                "validatedBodies' = validatedBodies \\cup {validation}",
+            )
+            missing = [
+                token
+                for token in required_decided_validation_tokens
+                if token not in normalized
+            ]
+            if missing:
+                errors.append(
+                    f"{core_path}:{line}: ValidateDecidedBody omits exact durable "
+                    f"decision validation authority {missing}"
+                )
+            if "ProposalAt(" in body:
+                errors.append(
+                    f"{core_path}:{line}: certificate-first validation must not "
+                    "fabricate or require leader proposal authority"
+                )
+
+        extracted = _top_level_operator_body(core_source, "Next")
+        if extracted is not None:
+            body, line = extracted
+            if "ValidateDecidedBody(node, qc)" not in " ".join(body.split()):
+                errors.append(
+                    f"{core_path}:{line}: Core Next must expose certificate-first "
+                    "decision body validation"
                 )
 
     liveness_cfg = formal_dir / "liveness.cfg"
@@ -1293,7 +1808,8 @@ def _chain_source_fidelity_errors(formal_dir: Path) -> list[str]:
                 )
 
     if refinement_path.is_file():
-        source = strip_tla_comments(refinement_path.read_text(encoding="utf-8"))
+        raw_source = refinement_path.read_text(encoding="utf-8")
+        source = strip_tla_comments(raw_source)
         retired_shadows = (
             "asyncCertifiedHeight",
             "asyncDecidedAt",
@@ -1317,6 +1833,200 @@ def _chain_source_fidelity_errors(formal_dir: Path) -> list[str]:
                 errors.append(
                     f"{refinement_path}:{line}: chain refinement may not depend on "
                     f"global-barrier operator {forbidden}"
+                )
+
+        indexed_async = _top_level_operator_body(raw_source, "IndexedAsync")
+        indexed_async_normalized: str | None = None
+        if indexed_async is None:
+            errors.append(
+                f"{refinement_path}: missing indexed production-network instance"
+            )
+        else:
+            body, line = indexed_async
+            normalized = " ".join(body.split())
+            indexed_async_normalized = normalized
+            if "INSTANCE SumeragiV2AsyncNetwork WITH" not in normalized:
+                errors.append(
+                    f"{refinement_path}:{line}: IndexedAsync must directly "
+                    "instantiate the authoritative SumeragiV2AsyncNetwork"
+                )
+            core_fields = (
+                "height",
+                "context",
+                "contextHistory",
+                "nodeView",
+                "generation",
+                "up",
+                "gst",
+                "availableBodies",
+                "durableBodies",
+                "retainedLockedBodies",
+                "validatedBodies",
+                "invalidBodies",
+                "seenProposals",
+                "receivedVotes",
+                "receivedQCs",
+                "receivedTimeoutVotes",
+                "receivedTCs",
+                "proposalIntents",
+                "prepareIntents",
+                "commitIntents",
+                "timeoutIntents",
+                "prepareQCs",
+                "commitQCs",
+                "formedTCs",
+                "installedTCs",
+                "lockRank",
+                "lockSubject",
+                "highestRank",
+                "highestSubject",
+                "pendingProposal",
+                "pendingPrepare",
+                "pendingObservePrepare",
+                "pendingLockCommit",
+                "pendingTimeout",
+                "pendingInstallTC",
+                "pendingDecision",
+                "signProposals",
+                "signVotes",
+                "signTimeouts",
+                "proposalNetwork",
+                "voteNetwork",
+                "qcNetwork",
+                "timeoutNetwork",
+                "tcNetwork",
+                "decisions",
+                "applied",
+            )
+            expected_core_mappings = tuple(
+                f"{field} <- IndexedCore(initialContext, {index})"
+                for index, field in enumerate(core_fields, start=1)
+            )
+            missing_core = [
+                mapping
+                for mapping in expected_core_mappings
+                if mapping not in normalized
+            ]
+            if missing_core:
+                errors.append(
+                    f"{refinement_path}:{line}: IndexedAsync Core tuple mapping "
+                    f"does not match vars; missing {missing_core}"
+                )
+            scheduler_fields = (
+                "asyncNow",
+                "asyncCommandQueues",
+                "asyncNextCommandClass",
+                "asyncFifoOwed",
+                "asyncTimeoutEmitted",
+                "asyncRunnerPhase",
+                "asyncRunnerBudget",
+                "asyncIoQueues",
+                "asyncOutstandingWork",
+                "asyncIoReadyCompletions",
+                "asyncLocalReadyCompletions",
+                "asyncNextCompletionSource",
+                "asyncIoControlAvailable",
+                "asyncDeferredCompletionQueues",
+                "asyncDeferredProgressQueues",
+                "asyncDeferredNormalQueues",
+                "asyncDeferredDrainOwed",
+                "asyncCausalQueues",
+                "asyncOutstandingTags",
+                "asyncNodeDeadlines",
+                "asyncRetransmitDeadlines",
+                "asyncNodeServiceDeadlines",
+                "asyncIoServiceDeadlines",
+                "asyncSentItems",
+                "asyncRetainedControl",
+                "asyncActiveRequests",
+                "asyncTransport",
+                "asyncIngressLanes",
+                "asyncIngressReady",
+                "asyncHeldChunks",
+            )
+            expected_mappings = tuple(
+                f"{field} <- IndexedScheduler(initialContext, {index})"
+                for index, field in enumerate(scheduler_fields, start=1)
+            )
+            missing = [
+                mapping for mapping in expected_mappings if mapping not in normalized
+            ]
+            if missing:
+                errors.append(
+                    f"{refinement_path}:{line}: IndexedAsync scheduler tuple mapping "
+                    f"does not match AsyncSchedulerVars; missing {missing}"
+                )
+
+        liveness_target_async_proof = _top_level_operator_body(
+            raw_source, "LivenessTargetAsyncProof"
+        )
+        if liveness_target_async_proof is None:
+            errors.append(
+                f"{refinement_path}: missing proof-only liveness-target instance"
+            )
+        else:
+            proof_body, proof_line = liveness_target_async_proof
+            proof_normalized = " ".join(proof_body.split())
+            proof_prefix = "INSTANCE SumeragiV2AsyncLivenessProofs WITH"
+            network_prefix = "INSTANCE SumeragiV2AsyncNetwork WITH"
+            if proof_prefix not in proof_normalized:
+                errors.append(
+                    f"{refinement_path}:{proof_line}: LivenessTargetAsyncProof "
+                    "must directly instantiate SumeragiV2AsyncLivenessProofs"
+                )
+            elif indexed_async_normalized is not None:
+                expected_proof_mapping = indexed_async_normalized.replace(
+                    network_prefix, proof_prefix, 1
+                )
+                expected_proof_mapping = expected_proof_mapping.replace(
+                    "IndexedCore(initialContext,",
+                    "IndexedCore(LivenessTargetContext,",
+                ).replace(
+                    "IndexedScheduler(initialContext,",
+                    "IndexedScheduler(LivenessTargetContext,",
+                )
+                if proof_normalized != expected_proof_mapping:
+                    errors.append(
+                        f"{refinement_path}:{proof_line}: "
+                        "LivenessTargetAsyncProof must use the exact IndexedAsync "
+                        "Core/scheduler tuple substitution at "
+                        "LivenessTargetContext"
+                    )
+
+        indexed_shape = _top_level_operator_body(
+            raw_source, "IndexedAsyncStateShape"
+        )
+        if indexed_shape is None:
+            errors.append(f"{refinement_path}: missing IndexedAsyncStateShape")
+        else:
+            body, line = indexed_shape
+            normalized = " ".join(body.split())
+            required = (
+                "Len(indexedAsyncState[initialContext][1]) = 46",
+                "Len(indexedAsyncState[initialContext][2]) = 30",
+            )
+            missing = [token for token in required if token not in normalized]
+            if missing:
+                errors.append(
+                    f"{refinement_path}:{line}: IndexedAsyncStateShape has stale "
+                    f"Core/scheduler tuple arity {missing}"
+                )
+
+        joined_non_runner = _top_level_operator_body(
+            raw_source, "IndexedJoinedNonRunnerStep"
+        )
+        if joined_non_runner is None:
+            errors.append(
+                f"{refinement_path}: missing IndexedJoinedNonRunnerStep"
+            )
+        else:
+            body, line = joined_non_runner
+            if "UNCHANGED IndexedScheduler(initialContext, 22)" not in " ".join(
+                body.split()
+            ):
+                errors.append(
+                    f"{refinement_path}:{line}: indexed non-runner frame must "
+                    "preserve scheduler slot 22 (asyncNodeServiceDeadlines)"
                 )
     return errors
 
@@ -1507,6 +2217,7 @@ def validate_ledger(
 
     module_sources, module_errors = _module_sources(formal_dir)
     errors.extend(module_errors)
+    errors.extend(_resume_vote_witness_errors(formal_dir))
     errors.extend(_retired_liveness_errors(formal_dir))
     errors.extend(_bounded_view_dependency_errors(formal_dir))
     errors.extend(_reachable_oracle_guard_errors(formal_dir))
@@ -1526,6 +2237,11 @@ def validate_ledger(
         if not source.startswith(expected_header + "\n"):
             errors.append(
                 f"{cfg}: TLC configuration must start with {expected_header!r}"
+            )
+        if '  ValidSubjects = {"A"}\n' not in source:
+            errors.append(
+                f"{cfg}: TLC configuration must keep B externally invalid so "
+                "bounded searches exercise validation rejection"
             )
 
     obligations = ledger.get("obligations")

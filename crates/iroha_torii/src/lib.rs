@@ -6413,6 +6413,7 @@ mod strict_request_target_tests {
         let router = catalog_cutover_test_router(Arc::clone(&counter));
 
         for retired_path in [
+            "/v1/multisig/proposals/lookup",
             "/v1/multisig/proposals/list",
             "/v1/multisig/proposals/get",
             "/v1/multisig/proposals/search",
@@ -6420,6 +6421,10 @@ mod strict_request_target_tests {
             "/v1/multisig/approvals/get",
             "/v1/multisig/approvals/list_for_authority",
             "/v1/multisig/approvals/get_for_authority",
+            "/v1/multisig/approvals/query",
+            "/v1/multisig/approvals/lookup",
+            "/v1/multisig/approvals/query-for-authority",
+            "/v1/multisig/approvals/lookup-for-authority",
             "/v1/controls/asset-transfer/get",
         ] {
             let response = router
@@ -6439,12 +6444,7 @@ mod strict_request_target_tests {
 
         for canonical_path in [
             "/v1/multisig/proposals/query",
-            "/v1/multisig/proposals/lookup",
             "/v1/multisig/proposals/resolve",
-            "/v1/multisig/approvals/query",
-            "/v1/multisig/approvals/lookup",
-            "/v1/multisig/approvals/query-for-authority",
-            "/v1/multisig/approvals/lookup-for-authority",
             "/v1/controls/asset-transfer/query",
         ] {
             let response = router
@@ -6464,7 +6464,7 @@ mod strict_request_target_tests {
                 "{canonical_path}"
             );
         }
-        assert_eq!(counter.load(Ordering::SeqCst), 8);
+        assert_eq!(counter.load(Ordering::SeqCst), 3);
 
         for adversarial_path in [
             "/v1/multisig/proposals//query",
@@ -6493,7 +6493,7 @@ mod strict_request_target_tests {
                 "{adversarial_path}"
             );
         }
-        assert_eq!(counter.load(Ordering::SeqCst), 7);
+        assert_eq!(counter.load(Ordering::SeqCst), 3);
     }
 }
 
@@ -34786,7 +34786,15 @@ async fn handler_get_contract_code_bytes(
     axum::extract::Path(code_hash): axum::extract::Path<String>,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
-    require_signed_alias_request(&app, &headers, &method, &uri, &[])?;
+    require_signed_account_request(
+        &app,
+        &headers,
+        &method,
+        &uri,
+        &[],
+        "contract_code_auth_required",
+        "signed account headers are required to read contract artifacts",
+    )?;
     let key = rate_limit_key(
         &headers,
         Some(remote_ip),
@@ -36455,6 +36463,67 @@ async fn handler_sccp_registry(
     Ok(routing::handle_v1_sccp_registry(app.state.as_ref(), accept)
         .await?
         .into_response())
+}
+
+async fn handler_sccp_sora_outbound_material(
+    State(app): State<SharedAppState>,
+    axum::extract::Path((source_profile, route_id, asset_key, revision)): axum::extract::Path<(
+        String,
+        String,
+        String,
+        u32,
+    )>,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
+    validate_api_token(app.as_ref(), &headers)?;
+    routing::reject_sccp_query(raw_query.as_deref())?;
+    let _token_hdr = headers
+        .get("x-api-token")
+        .and_then(|value| value.to_str().ok())
+        .map(ToString::to_string);
+    let format = match negotiate_heavy_query_response_format(&headers) {
+        Ok(format) => format,
+        Err(response) => return Ok(response),
+    };
+    let key = rate_limit_key(
+        &headers,
+        Some(remote_ip),
+        "/v1/sccp/routes/{source_profile}/{route_id}/{asset_key}/{revision}/sora-outbound-material",
+        app.api_token_enforced(),
+    );
+    rate_limit_requests_with_cost(&app, &key, FINALITY_HEAVY_QUERY_RATE_COST).await?;
+    let query_permit = acquire_query_admission(app.as_ref(), true).await?;
+    #[cfg(feature = "telemetry")]
+    if let Some(api_token) = _token_hdr {
+        crate::telemetry::report_torii_api_hit(
+            &app.telemetry,
+            &api_token,
+            "v1/sccp/sora-outbound-material",
+        );
+    }
+    let response = routing::handle_v1_sccp_sora_outbound_material(
+        Arc::clone(&app.state),
+        source_profile,
+        route_id,
+        asset_key,
+        revision,
+        format,
+        query_permit,
+    )
+    .await?
+    .into_response();
+    proof_response_with_exact_egress(
+        app.as_ref(),
+        &headers,
+        Some(remote_ip),
+        "v1/sccp/sora-outbound-material",
+        response,
+        true,
+    )
+    .await
 }
 
 async fn handler_sccp_proof_request(
@@ -47033,6 +47102,10 @@ impl Torii {
         mount_get!(SCCP_MESSAGES_RECENT, handler_sccp_messages_recent);
         mount_get!(SCCP_CAPABILITIES, handler_sccp_capabilities);
         mount_get!(SCCP_REGISTRY, handler_sccp_registry);
+        mount_get!(
+            SCCP_SORA_OUTBOUND_MATERIAL,
+            handler_sccp_sora_outbound_material
+        );
         mount_get!(VRF_PENALTIES, handler_sumeragi_vrf_penalties);
         mount_get!(VRF_EPOCH, handler_sumeragi_vrf_epoch);
         mount_get!(BRIDGE_FINALITY, handler_bridge_finality_proof);
@@ -47517,7 +47590,9 @@ impl Torii {
         };
         builder.route(
             &route_catalog::contracts_and_verification_keys::CONTRACTS_CODE_BYTES_BY_CODE_HASH_GET,
-            catalog_get(handler_get_contract_code_bytes).layer(contracts_body_limit.clone()),
+            catalog_get(handler_get_contract_code_bytes)
+                .layer(contracts_body_limit.clone())
+                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
         );
         builder.route(
             &route_catalog::contracts_and_verification_keys::CONTRACTS_ALIASES_POST,
@@ -47605,17 +47680,20 @@ impl Torii {
         builder.route(
             &route_catalog::contracts_and_verification_keys::MULTISIG_SPEC_POST,
             catalog_post(handler_post_multisig_spec)
-                .layer(DefaultBodyLimit::max(MULTISIG_READ_MAX_BODY_BYTES)),
+                .layer(DefaultBodyLimit::max(MULTISIG_READ_MAX_BODY_BYTES))
+                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
         );
         builder.route(
             &route_catalog::contracts_and_verification_keys::MULTISIG_PROPOSALS_QUERY_POST,
             catalog_post(handler_post_multisig_proposals_query)
-                .layer(DefaultBodyLimit::max(MULTISIG_READ_MAX_BODY_BYTES)),
+                .layer(DefaultBodyLimit::max(MULTISIG_READ_MAX_BODY_BYTES))
+                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
         );
         builder.route(
             &route_catalog::contracts_and_verification_keys::MULTISIG_PROPOSALS_RESOLVE_POST,
             catalog_post(handler_post_multisig_proposals_resolve)
-                .layer(DefaultBodyLimit::max(MULTISIG_READ_MAX_BODY_BYTES)),
+                .layer(DefaultBodyLimit::max(MULTISIG_READ_MAX_BODY_BYTES))
+                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
         );
         builder.route(
             &route_catalog::contracts_and_verification_keys::CONTROLS_ASSET_TRANSFER_QUERY_POST,
@@ -63473,6 +63551,7 @@ pub(crate) mod tests_runtime_handlers {
             "/v1/sccp/proofs/message/{message_id}",
             "/v1/sccp/proof-requests/{message_id}",
             "/v1/sccp/messages/recent",
+            "/v1/sccp/routes/{source_profile}/{route_id}/{asset_key}/{revision}/sora-outbound-material",
         ] {
             assert!(source.contains(required), "missing SCCP route: {required}");
         }
@@ -82890,11 +82969,11 @@ mod tests {
         }
     }
 
-    fn unsigned_multisig_request<T>(value: T) -> NoritoJsonWithBytes<T>
+    fn multisig_read_payload<T>(value: T) -> NoritoJsonWithBytes<T>
     where
         T: norito::json::JsonSerialize,
     {
-        let raw = norito::json::to_vec(&value).expect("encode multisig request");
+        let raw = norito::json::to_vec(&value).expect("encode multisig read request");
         NoritoJsonWithBytes {
             value,
             raw: axum::body::Bytes::from(raw),
@@ -82906,7 +82985,7 @@ mod tests {
         let uri: axum::http::Uri = format!("/v1/contracts/code-bytes/{}", "a".repeat(64))
             .parse()
             .expect("contract code URI");
-        let error = handler_get_contract_code_bytes(
+        let error = match handler_get_contract_code_bytes(
             State(mk_app_state_for_tests()),
             Method::GET,
             uri,
@@ -82915,7 +82994,10 @@ mod tests {
             axum::extract::Path("a".repeat(64)),
         )
         .await
-        .expect_err("unsigned contract artifact read must fail closed");
+        {
+            Ok(_) => panic!("unsigned contract artifact read must fail closed"),
+            Err(error) => error,
+        };
 
         assert!(matches!(
             error,
@@ -82934,19 +83016,26 @@ mod tests {
                 multisig_account_alias: Some("banking@centralbank.universal".to_owned()),
             },
         };
-        let response = handler_post_multisig_spec(
+        let error = handler_post_multisig_spec(
             State(mk_app_state_for_tests()),
             Method::POST,
-            "/v1/multisig/spec".parse().expect("multisig spec uri"),
+            routing::ENDPOINT_MULTISIG_SPEC
+                .parse()
+                .expect("multisig spec uri"),
             HeaderMap::new(),
             crate::loopback_connect_info(),
-            unsigned_multisig_request(request),
+            multisig_read_payload(request),
         )
         .await
-        .expect_err("unsigned alias selectors must fail closed")
-        .into_response();
+        .expect_err("unsigned alias selectors must fail closed");
 
-        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert!(matches!(
+            error,
+            Error::AppUnauthorized {
+                code: "multisig_read_auth_required",
+                ..
+            }
+        ));
     }
 
     #[tokio::test]
@@ -82960,21 +83049,26 @@ mod tests {
             cursor: None,
             limit: None,
         };
-        let response = handler_post_multisig_proposals_query(
+        let error = handler_post_multisig_proposals_query(
             State(mk_app_state_for_tests()),
             Method::POST,
-            "/v1/multisig/proposals/query"
+            routing::ENDPOINT_MULTISIG_PROPOSALS_QUERY
                 .parse()
-                .expect("multisig query uri"),
+                .expect("multisig proposals query uri"),
             HeaderMap::new(),
             crate::loopback_connect_info(),
-            unsigned_multisig_request(request),
+            multisig_read_payload(request),
         )
         .await
-        .expect_err("unsigned alias selectors must fail closed")
-        .into_response();
+        .expect_err("unsigned alias selectors must fail closed");
 
-        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert!(matches!(
+            error,
+            Error::AppUnauthorized {
+                code: "multisig_read_auth_required",
+                ..
+            }
+        ));
     }
 
     #[tokio::test]
@@ -82987,21 +83081,26 @@ mod tests {
             proposal_id: Some("deadbeef".to_owned()),
             instructions_hash: None,
         };
-        let response = handler_post_multisig_proposals_resolve(
+        let error = handler_post_multisig_proposals_resolve(
             State(mk_app_state_for_tests()),
             Method::POST,
-            "/v1/multisig/proposals/resolve"
+            routing::ENDPOINT_MULTISIG_PROPOSALS_RESOLVE
                 .parse()
-                .expect("multisig resolve uri"),
+                .expect("multisig proposals resolve uri"),
             HeaderMap::new(),
             crate::loopback_connect_info(),
-            unsigned_multisig_request(request),
+            multisig_read_payload(request),
         )
         .await
-        .expect_err("unsigned alias selectors must fail closed")
-        .into_response();
+        .expect_err("unsigned alias selectors must fail closed");
 
-        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert!(matches!(
+            error,
+            Error::AppUnauthorized {
+                code: "multisig_read_auth_required",
+                ..
+            }
+        ));
     }
 
     #[tokio::test]
@@ -83014,10 +83113,12 @@ mod tests {
         let spec = handler_post_multisig_spec(
             State(mk_app_state_for_tests()),
             Method::POST,
-            "/v1/multisig/spec".parse().expect("multisig spec uri"),
+            routing::ENDPOINT_MULTISIG_SPEC
+                .parse()
+                .expect("multisig spec uri"),
             HeaderMap::new(),
             crate::loopback_connect_info(),
-            unsigned_multisig_request(routing::MultisigSpecRequestDto {
+            multisig_read_payload(routing::MultisigSpecRequestDto {
                 selector: selector(),
             }),
         )
@@ -83029,12 +83130,12 @@ mod tests {
         let query = handler_post_multisig_proposals_query(
             State(mk_app_state_for_tests()),
             Method::POST,
-            "/v1/multisig/proposals/query"
+            routing::ENDPOINT_MULTISIG_PROPOSALS_QUERY
                 .parse()
-                .expect("multisig query uri"),
+                .expect("multisig proposals query uri"),
             HeaderMap::new(),
             crate::loopback_connect_info(),
-            unsigned_multisig_request(routing::MultisigProposalsQueryRequestDto {
+            multisig_read_payload(routing::MultisigProposalsQueryRequestDto {
                 selector: selector(),
                 status: Vec::new(),
                 cursor: None,
@@ -83049,12 +83150,12 @@ mod tests {
         let resolve = handler_post_multisig_proposals_resolve(
             State(mk_app_state_for_tests()),
             Method::POST,
-            "/v1/multisig/proposals/resolve"
+            routing::ENDPOINT_MULTISIG_PROPOSALS_RESOLVE
                 .parse()
-                .expect("multisig resolve uri"),
+                .expect("multisig proposals resolve uri"),
             HeaderMap::new(),
             crate::loopback_connect_info(),
-            unsigned_multisig_request(routing::MultisigProposalsResolveRequestDto {
+            multisig_read_payload(routing::MultisigProposalsResolveRequestDto {
                 selector: selector(),
                 proposal_id: Some("a".repeat(64)),
                 instructions_hash: None,
@@ -83130,7 +83231,6 @@ mod tests {
         for path in [
             "/v1/multisig/spec",
             "/v1/multisig/proposals/query",
-            "/v1/multisig/proposals/lookup",
             "/v1/multisig/proposals/resolve",
         ] {
             let method_response = router
@@ -83149,6 +83249,7 @@ mod tests {
             );
         }
         for retired in [
+            "/v1/multisig/proposals/lookup",
             "/v1/multisig/proposals/list",
             "/v1/multisig/proposals/get",
             "/v1/multisig/proposals/search",
@@ -83173,10 +83274,6 @@ mod tests {
             (
                 "/v1/multisig/proposals/query",
                 r#"{"multisig_account_alias":"banking@centralbank.universal","status":[],"extra":true}"#,
-            ),
-            (
-                "/v1/multisig/proposals/lookup",
-                r#"{"multisig_account_alias":"banking@centralbank.universal","proposal_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","extra":true}"#,
             ),
             (
                 "/v1/multisig/proposals/resolve",
@@ -83242,14 +83339,24 @@ mod tests {
         state.require_api_token = true;
         state.api_tokens_set = Arc::new(HashSet::from(["valid-token".to_owned()]));
         let router = multisig_read_contract_test_router(app);
-        let body = r#"{"multisig_account_alias":"banking@centralbank.universal"}"#;
+        let canonical_account_id = checked_torii_test_account_id(
+            0x0c,
+            "derive multisig API-token policy account fixture key",
+        );
+        let body = norito::json::to_vec(&routing::MultisigSpecRequestDto {
+            selector: routing::MultisigAccountSelectorDto {
+                multisig_account_id: Some(canonical_account_id),
+                multisig_account_alias: None,
+            },
+        })
+        .expect("encode canonical multisig selector");
 
         let missing = router
             .clone()
             .oneshot(multisig_read_contract_request(
                 HttpMethod::POST,
                 "/v1/multisig/spec",
-                body,
+                body.clone(),
             ))
             .await
             .expect("missing-token response");
@@ -83312,10 +83419,12 @@ mod tests {
         let spec_response = handler_post_multisig_spec(
             State(app.clone()),
             Method::POST,
-            "/v1/multisig/spec".parse().expect("multisig spec uri"),
+            routing::ENDPOINT_MULTISIG_SPEC
+                .parse()
+                .expect("multisig spec uri"),
             headers.clone(),
             crate::loopback_connect_info(),
-            unsigned_multisig_request(spec_request),
+            multisig_read_payload(spec_request),
         )
         .await
         .expect_err("unsigned alias selectors must fail closed")
@@ -83331,12 +83440,12 @@ mod tests {
         let query_response = handler_post_multisig_proposals_query(
             State(app.clone()),
             Method::POST,
-            "/v1/multisig/proposals/query"
+            routing::ENDPOINT_MULTISIG_PROPOSALS_QUERY
                 .parse()
-                .expect("multisig query uri"),
+                .expect("multisig proposals query uri"),
             headers.clone(),
             crate::loopback_connect_info(),
-            unsigned_multisig_request(query_request),
+            multisig_read_payload(query_request),
         )
         .await
         .expect_err("unsigned alias selectors must fail closed")
@@ -83351,12 +83460,12 @@ mod tests {
         let resolve_response = handler_post_multisig_proposals_resolve(
             State(app),
             Method::POST,
-            "/v1/multisig/proposals/resolve"
+            routing::ENDPOINT_MULTISIG_PROPOSALS_RESOLVE
                 .parse()
-                .expect("multisig resolve uri"),
+                .expect("multisig proposals resolve uri"),
             headers,
             crate::loopback_connect_info(),
-            unsigned_multisig_request(resolve_request),
+            multisig_read_payload(resolve_request),
         )
         .await
         .expect_err("unsigned alias selectors must fail closed")
@@ -83394,10 +83503,12 @@ mod tests {
         let spec_response = handler_post_multisig_spec(
             State(app.clone()),
             Method::POST,
-            "/v1/multisig/spec".parse().expect("multisig spec uri"),
+            routing::ENDPOINT_MULTISIG_SPEC
+                .parse()
+                .expect("multisig spec uri"),
             headers.clone(),
             crate::loopback_connect_info(),
-            unsigned_multisig_request(spec_request),
+            multisig_read_payload(spec_request),
         )
         .await
         .expect_err("unsigned alias selectors must fail closed")
@@ -83413,12 +83524,12 @@ mod tests {
         let query_response = handler_post_multisig_proposals_query(
             State(app),
             Method::POST,
-            "/v1/multisig/proposals/query"
+            routing::ENDPOINT_MULTISIG_PROPOSALS_QUERY
                 .parse()
-                .expect("multisig query uri"),
+                .expect("multisig proposals query uri"),
             headers,
             crate::loopback_connect_info(),
-            unsigned_multisig_request(query_request),
+            multisig_read_payload(query_request),
         )
         .await
         .expect_err("unsigned alias selectors must fail closed")

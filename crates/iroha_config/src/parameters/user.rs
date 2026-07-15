@@ -5709,7 +5709,8 @@ pub struct SumeragiBlock {
     pub proposal_queue_scan_multiplier: NonZeroUsize,
 }
 
-/// User-level bounded queues around the serialized reducer.
+/// User-level bounded queues and outer-ingress byte budgets around the
+/// serialized reducer.
 #[derive(Debug, Clone, Copy, ReadConfig)]
 pub struct SumeragiQueues {
     /// Serialized reducer command FIFO capacity.
@@ -5718,6 +5719,13 @@ pub struct SumeragiQueues {
     /// Certified-body and block-sync ingress capacity.
     #[config(default = "defaults::sumeragi::QUEUE_BODY_CAPACITY")]
     pub bodies: NonZeroUsize,
+    /// Aggregate canonical outer-ingress wire bytes retained across all sources.
+    #[config(default = "defaults::sumeragi::QUEUE_BODY_BYTES")]
+    pub body_bytes: NonZeroUsize,
+    /// Per-authenticated-source canonical outer-ingress wire bytes, including
+    /// envelope overhead and the isolated timeout-vote reserve.
+    #[config(default = "defaults::sumeragi::QUEUE_BODY_SOURCE_BYTES")]
+    pub body_source_bytes: NonZeroUsize,
     /// Payload-chunk ingress and orphan-buffer capacity.
     #[config(default = "defaults::sumeragi::QUEUE_CHUNK_CAPACITY")]
     pub chunks: NonZeroUsize,
@@ -5893,6 +5901,55 @@ impl Sumeragi {
             valid = false;
         }
 
+        let envelope_headroom = defaults::sumeragi::BODY_ENVELOPE_HEADROOM_BYTES;
+        let timeout_vote_reserve = defaults::sumeragi::TIMEOUT_VOTE_RESERVE_BYTES;
+        match block
+            .max_payload_bytes
+            .get()
+            .checked_add(envelope_headroom)
+            .and_then(|minimum| minimum.checked_add(timeout_vote_reserve))
+        {
+            Some(minimum) if queues.body_source_bytes.get() < minimum => {
+                emitter.emit(
+                    Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
+                        "sumeragi.queues.body_source_bytes must be at least sumeragi.block.max_payload_bytes + {envelope_headroom} bytes of envelope headroom + {timeout_vote_reserve} reserved timeout-vote bytes (minimum {minimum}, configured {})",
+                        queues.body_source_bytes,
+                    )),
+                );
+                valid = false;
+            }
+            Some(_) => {}
+            None => {
+                emitter.emit(
+                    Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
+                        "sumeragi.block.max_payload_bytes + {envelope_headroom} bytes of envelope headroom + {timeout_vote_reserve} reserved timeout-vote bytes exceeds the platform size representation"
+                    )),
+                );
+                valid = false;
+            }
+        }
+
+        match queues.body_source_bytes.get().checked_mul(2) {
+            Some(minimum) if queues.body_bytes.get() < minimum => {
+                emitter.emit(
+                    Report::new(ParseError::InvalidSumeragiConfig).attach(format!(
+                        "sumeragi.queues.body_bytes must be at least 2 * sumeragi.queues.body_source_bytes (minimum {minimum}, configured {})",
+                        queues.body_bytes,
+                    )),
+                );
+                valid = false;
+            }
+            Some(_) => {}
+            None => {
+                emitter.emit(
+                    Report::new(ParseError::InvalidSumeragiConfig).attach(
+                        "2 * sumeragi.queues.body_source_bytes exceeds the platform size representation",
+                    ),
+                );
+                valid = false;
+            }
+        }
+
         let key_algorithms: BTreeSet<Algorithm> = keys.allowed_algorithms.iter().copied().collect();
         if !key_algorithms.contains(&Algorithm::BlsNormal) {
             emitter.emit(
@@ -5939,6 +5996,8 @@ impl Sumeragi {
             queues: actual::SumeragiQueues {
                 commands: queues.commands,
                 bodies: queues.bodies,
+                body_bytes: queues.body_bytes,
+                body_source_bytes: queues.body_source_bytes,
                 chunks: queues.chunks,
                 ready_bodies: queues.ready_bodies,
             },

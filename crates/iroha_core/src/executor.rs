@@ -4052,7 +4052,7 @@ impl Executor {
         tx_hash: iroha_crypto::HashOf<SignedTransaction>,
         gas_limit_md: Option<u64>,
         require_gas_limit: bool,
-        sccp_recording_proof_verified: bool,
+        sccp_ivm_proved_execution_binding: Option<crate::state::SccpIvmProvedExecutionBindingV1>,
         gas_asset_opt: Option<String>,
         fee_sponsor: Option<AccountId>,
         skip_nexus_fee: bool,
@@ -4170,8 +4170,9 @@ impl Executor {
             .sum::<u64>();
 
         // 3) Execute ISIs in order.
-        let prior_sccp_recording_proof_verified = state_transaction.sccp_recording_proof_verified;
-        state_transaction.sccp_recording_proof_verified = sccp_recording_proof_verified;
+        let prior_sccp_ivm_proved_execution_binding =
+            state_transaction.sccp_ivm_proved_execution_binding.clone();
+        state_transaction.sccp_ivm_proved_execution_binding = sccp_ivm_proved_execution_binding;
         let execution_result = (|| -> Result<(), ValidationFail> {
             if let Some(replay) = ivm_proved_replay {
                 for queued in replay.queued {
@@ -4322,7 +4323,8 @@ impl Executor {
             }
             Ok(())
         })();
-        state_transaction.sccp_recording_proof_verified = prior_sccp_recording_proof_verified;
+        state_transaction.sccp_ivm_proved_execution_binding =
+            prior_sccp_ivm_proved_execution_binding;
         execution_result?;
 
         // Track confidential gas after successful execution.
@@ -4777,6 +4779,7 @@ impl Executor {
 
         let mut proved_contract_runtime_context = None;
         let mut proved_entrypoint_authorization = None;
+        let mut sccp_ivm_proved_execution_binding = None;
 
         // Full verification for proof-carrying IVM executables must run before we move the
         // transaction payload out of `SignedTransaction`.
@@ -4866,6 +4869,15 @@ impl Executor {
                 &summary,
             )
             .map_err(overlay_build_error_to_validation_fail)?;
+            sccp_ivm_proved_execution_binding = Some(
+                crate::pipeline::overlay::sccp_ivm_proved_execution_binding(
+                    state_transaction,
+                    &transaction,
+                    proved,
+                    replay.gas_used,
+                )
+                .map_err(overlay_build_error_to_validation_fail)?,
+            );
             Some(replay)
         } else {
             None
@@ -4892,7 +4904,7 @@ impl Executor {
                     tx_hash,
                     gas_limit_md,
                     false,
-                    false,
+                    None,
                     gas_asset_opt,
                     fee_sponsor,
                     skip_nexus_fee,
@@ -4919,7 +4931,7 @@ impl Executor {
                     tx_hash,
                     gas_limit_md,
                     true,
-                    true,
+                    sccp_ivm_proved_execution_binding,
                     gas_asset_opt,
                     fee_sponsor,
                     false,
@@ -9453,7 +9465,7 @@ mod tests {
                 tx_hash,
                 Some(50_000),
                 true,
-                true,
+                None,
                 None,
                 None,
                 true,
@@ -9553,7 +9565,7 @@ mod tests {
                 tx_hash,
                 Some(50_000),
                 true,
-                true,
+                None,
                 None,
                 None,
                 true,
@@ -9594,7 +9606,7 @@ mod tests {
                 tx_hash,
                 Some(50_000),
                 true,
-                true,
+                None,
                 None,
                 None,
                 true,
@@ -9651,7 +9663,7 @@ mod tests {
                 tx_hash,
                 Some(50_000),
                 true,
-                true,
+                None,
                 None,
                 None,
                 true,
@@ -9715,7 +9727,7 @@ mod tests {
                 tx_hash,
                 Some(50_000),
                 true,
-                true,
+                None,
                 None,
                 None,
                 true,

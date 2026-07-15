@@ -149,6 +149,7 @@ impl Default for MockToriiData {
                 },
             },
             last_commit_qc: None,
+            liveness: Default::default(),
         };
         let sumeragi_diagnostics = SumeragiDiagnosticsStatus {
             pipeline_execution: Default::default(),

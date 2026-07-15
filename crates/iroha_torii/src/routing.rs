@@ -6610,6 +6610,13 @@ pub struct SccpCapabilitiesDto {
     pub proof_request_path: String,
     /// Newest-first indexed outbound-message endpoint.
     pub recent_messages_path: String,
+    /// Route-scoped SORA outbound contract-material endpoint template.
+    ///
+    /// The route registry commits only the artifact digest, verifier-key
+    /// reference, semantics, and gas policy.  Contract bytes are read back
+    /// separately from the governance-registered contract-code store through
+    /// this exact path.
+    pub sora_outbound_material_path: String,
     /// Fixed SCCP V1 route-registry capacity limits.
     pub registry_limits: SccpRegistryLimitsDto,
     /// Consensus-critical proof and deterministic verifier-work limits.
@@ -6622,6 +6629,37 @@ pub struct SccpCapabilitiesDto {
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub native_message_submit_path: Option<String>,
+}
+
+#[derive(Clone, Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
+#[norito(deny_unknown_fields)]
+/// Route-scoped, state-derived SORA outbound IVM material.
+///
+/// This response never accepts or reflects caller-selected bytecode.  Torii
+/// resolves the exact enabled typed route, locates the already registered
+/// contract artifact by the route's SHA-256 policy commitment, and verifies
+/// that the referenced proof key is currently active before returning bytes.
+pub struct SccpSoraOutboundMaterialDto {
+    /// Response schema version. First release is exactly `1`.
+    pub version: u8,
+    /// Hex-encoded digest of the registry snapshot used for this resolution.
+    pub registry_revision: String,
+    /// Exact immutable governed route key.
+    pub route_key: iroha_data_model::bridge::SccpRouteKeyV1,
+    /// Exact immutable destination route-configuration commitment.
+    pub route_configuration_hash: String,
+    /// Exact destination deployment binding committed by outbound messages.
+    pub destination_binding_hash: String,
+    /// Canonical SORA settlement asset bound to this route.
+    pub settlement_asset_definition_id: iroha_data_model::asset::AssetDefinitionId,
+    /// Governed proved-execution policy that the returned material satisfies.
+    pub policy: iroha_data_model::bridge::SccpSoraOutboundExecutionPolicyV1,
+    /// Canonical padded base64 of the complete registered IVM contract artifact.
+    pub contract_artifact_b64: String,
+    /// Hex-encoded native contract-code registry key for readback diagnostics.
+    pub contract_code_hash: String,
+    /// Active governance version of the referenced proof verification key.
+    pub verifying_key_version: u32,
 }
 
 #[derive(Clone, Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
@@ -6850,6 +6888,9 @@ fn sccp_capabilities_snapshot(state: &CoreState) -> SccpCapabilitiesDto {
         message_bundle_path: "/v1/sccp/proofs/message/{message_id}".to_owned(),
         proof_request_path: "/v1/sccp/proof-requests/{message_id}".to_owned(),
         recent_messages_path: "/v1/sccp/messages/recent".to_owned(),
+        sora_outbound_material_path:
+            "/v1/sccp/routes/{source_profile}/{route_id}/{asset_key}/{revision}/sora-outbound-material"
+                .to_owned(),
         registry_limits: SccpRegistryLimitsDto::v1(),
         resource_limits: state.zk_snapshot().sccp.into(),
         #[cfg(feature = "app_api")]
@@ -6861,6 +6902,124 @@ fn sccp_capabilities_snapshot(state: &CoreState) -> SccpCapabilitiesDto {
         #[cfg(not(feature = "app_api"))]
         native_message_submit_path: None,
     }
+}
+
+fn sccp_sora_outbound_material_for_route(
+    state: &CoreState,
+    source_profile: &str,
+    route_id: &str,
+    asset_key: &str,
+    revision: u32,
+) -> Result<Option<SccpSoraOutboundMaterialDto>> {
+    let source = iroha_data_model::bridge::SccpNetworkV1::from_profile_key(source_profile)
+        .filter(|network| network.is_external())
+        .ok_or_else(|| {
+            sccp_bad_request(
+                "SCCP outbound material source_profile must be one exact external profile",
+            )
+        })?;
+    let route_key = iroha_data_model::bridge::SccpRouteKeyV1::new(
+        iroha_data_model::bridge::SccpLaneIdV1 {
+            source,
+            target: iroha_data_model::bridge::SccpNetworkV1::SoraTaira,
+        },
+        route_id.to_owned(),
+        asset_key.to_owned(),
+        revision,
+    )
+    .map_err(|error| sccp_bad_request(format!("invalid SCCP outbound material route: {error}")))?;
+
+    let registry = state.sccp_registry_snapshot();
+    let Some(route) = registry
+        .route(&route_key)
+        .filter(|route| route.activation.allows_outbound())
+    else {
+        return Ok(None);
+    };
+    let route_configuration_hash = route.route_configuration_hash().map_err(|error| {
+        sccp_internal_error(format!(
+            "enabled SCCP outbound material route has an invalid configuration: {error}"
+        ))
+    })?;
+    let destination_binding_hash = route.destination_binding_hash().map_err(|error| {
+        sccp_internal_error(format!(
+            "enabled SCCP outbound material route has an invalid destination binding: {error}"
+        ))
+    })?;
+    let policy = route.sora_outbound_execution_policy.clone();
+    policy.validate().map_err(|error| {
+        sccp_internal_error(format!(
+            "enabled SCCP outbound material route has an invalid proved-execution policy: {error}"
+        ))
+    })?;
+    let vk_id = VerifyingKeyId::new(policy.vk_ref.backend.clone(), policy.vk_ref.name.clone());
+    let height = u64::try_from(state.view().height())
+        .map_err(|_| sccp_internal_error("current SCCP material height exceeds u64"))?;
+    let world = state.world_view();
+    let Some(vk_record) = world.verifying_keys().get(&vk_id) else {
+        return Ok(None);
+    };
+    if !vk_record.is_active_at(height)
+        || !policy
+            .vk_ref
+            .matches(&vk_id, vk_record.version, vk_record.commitment)
+        || world
+            .verifying_keys_by_circuit()
+            .get(&(vk_record.circuit_id.clone(), vk_record.version))
+            != Some(&vk_id)
+    {
+        return Ok(None);
+    }
+    let Some(vk_box) = vk_record.key.as_ref() else {
+        return Ok(None);
+    };
+    if vk_box.backend != vk_id.backend
+        || iroha_core::zk::hash_vk(vk_box) != policy.vk_ref.commitment
+    {
+        return Err(sccp_internal_error(
+            "governed SCCP outbound verification key bytes disagree with the pinned commitment",
+        ));
+    }
+
+    let mut selected: Option<(&Hash, &Vec<u8>)> = None;
+    for (code_hash, code_bytes) in world.contract_code().iter() {
+        let artifact_sha256: [u8; 32] = Sha256::digest(code_bytes.as_slice()).into();
+        if artifact_sha256 != policy.contract_artifact_sha256 {
+            continue;
+        }
+        if selected.is_some() {
+            return Err(sccp_internal_error(
+                "governed SCCP outbound artifact SHA-256 resolves to more than one contract-code entry",
+            ));
+        }
+        selected = Some((code_hash, code_bytes));
+    }
+    let Some((code_hash, code_bytes)) = selected else {
+        return Ok(None);
+    };
+    let verified = ivm::verify_contract_artifact(code_bytes.as_slice()).map_err(|error| {
+        sccp_internal_error(format!(
+            "governed SCCP outbound contract artifact is not a valid IVM artifact: {error}"
+        ))
+    })?;
+    if &verified.code_hash != code_hash {
+        return Err(sccp_internal_error(
+            "governed SCCP outbound contract artifact disagrees with its contract-code registry key",
+        ));
+    }
+
+    Ok(Some(SccpSoraOutboundMaterialDto {
+        version: 1,
+        registry_revision: format!("0x{}", hex::encode(registry.revision())),
+        route_key,
+        route_configuration_hash: format!("0x{}", hex::encode(route_configuration_hash)),
+        destination_binding_hash: format!("0x{}", hex::encode(destination_binding_hash)),
+        settlement_asset_definition_id: route.settlement.asset_definition_id.clone(),
+        policy,
+        contract_artifact_b64: base64::engine::general_purpose::STANDARD.encode(code_bytes),
+        contract_code_hash: format!("0x{}", hex::encode(code_hash.as_ref())),
+        verifying_key_version: vk_record.version,
+    }))
 }
 
 #[cfg(test)]
@@ -7589,7 +7748,7 @@ mod sccp_first_release_api_tests {
     }
 
     #[test]
-    fn recent_projection_rejects_text_recipients_for_evm_and_tron() {
+    fn recent_projection_rejects_text_recipients_for_binary_destination_families() {
         let context_for = |target| {
             iroha_data_model::bridge::SccpOutboundMessageContextV1::new(
                 iroha_data_model::bridge::SccpLaneIdV1 {
@@ -7610,6 +7769,9 @@ mod sccp_first_release_api_tests {
                     let mut bytes = [0x92; 21];
                     bytes[0] = 0x41;
                     SccpNormalizedCodecValueV1::TronAddress21 { bytes }
+                }
+                iroha_data_model::bridge::SccpNetworkV1::SolanaTestnet => {
+                    SccpNormalizedCodecValueV1::SolanaPubkey32 { bytes: [0x93; 32] }
                 }
                 _ => panic!("unsupported fixture target"),
             };
@@ -7637,6 +7799,7 @@ mod sccp_first_release_api_tests {
         for target in [
             iroha_data_model::bridge::SccpNetworkV1::EthereumSepolia,
             iroha_data_model::bridge::SccpNetworkV1::TronNile,
+            iroha_data_model::bridge::SccpNetworkV1::SolanaTestnet,
         ] {
             let context = context_for(target);
             let projection = projection_for(target);
@@ -7680,6 +7843,26 @@ mod sccp_first_release_api_tests {
         assert_eq!(
             capabilities.proof_request_path,
             "/v1/sccp/proof-requests/{message_id}"
+        );
+        assert_eq!(
+            capabilities.sora_outbound_material_path,
+            "/v1/sccp/routes/{source_profile}/{route_id}/{asset_key}/{revision}/sora-outbound-material"
+        );
+        assert!(
+            sccp_sora_outbound_material_for_route(
+                &state,
+                "solana-testnet",
+                "taira_sol_xor",
+                "xor",
+                1,
+            )
+            .expect("missing exact route is not material")
+            .is_none()
+        );
+        assert!(
+            sccp_sora_outbound_material_for_route(&state, "sora-taira", "taira_sol_xor", "xor", 1,)
+                .is_err(),
+            "a SORA source profile must fail before route lookup"
         );
         assert_eq!(capabilities.registry_limits.max_governed_lanes, 16);
         assert_eq!(
@@ -7745,6 +7928,96 @@ mod sccp_first_release_api_tests {
                 "retired surface leaked through capabilities: {retired}"
             );
         }
+    }
+
+    #[test]
+    fn sora_outbound_material_json_is_exact_and_contains_no_private_signing_material() {
+        fn assert_no_private_fields(value: &norito::json::Value) {
+            match value {
+                norito::json::Value::Object(object) => {
+                    for (key, child) in object {
+                        let normalized = key.to_ascii_lowercase();
+                        assert!(
+                            !["private", "secret", "signer", "mnemonic", "seed_phrase"]
+                                .iter()
+                                .any(|forbidden| normalized.contains(forbidden)),
+                            "route-scoped outbound material exposed forbidden field `{key}`"
+                        );
+                        assert_no_private_fields(child);
+                    }
+                }
+                norito::json::Value::Array(items) => {
+                    for item in items {
+                        assert_no_private_fields(item);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let route = iroha_sccp::sccp_exact_evm_governed_route_test_fixture_v1(
+            iroha_data_model::bridge::SccpNetworkV1::EthereumMainnet,
+            iroha_data_model::bridge::SccpRouteActivationV1::Bidirectional,
+        );
+        let policy = route.sora_outbound_execution_policy.clone();
+        let mut zero_version_policy = policy.clone();
+        zero_version_policy.vk_ref.version = 0;
+        assert!(
+            zero_version_policy.validate().is_err(),
+            "Torii must not serve material pinned to the unversioned key sentinel"
+        );
+        let dto = SccpSoraOutboundMaterialDto {
+            version: 1,
+            registry_revision: format!("0x{}", hex::encode([0x10; 32])),
+            route_key: route.key(),
+            route_configuration_hash: format!(
+                "0x{}",
+                hex::encode(route.route_configuration_hash().expect("route hash"))
+            ),
+            destination_binding_hash: format!(
+                "0x{}",
+                hex::encode(route.destination_binding_hash().expect("binding hash"))
+            ),
+            settlement_asset_definition_id: route.settlement.asset_definition_id,
+            verifying_key_version: policy.vk_ref.version,
+            policy,
+            contract_artifact_b64: base64::engine::general_purpose::STANDARD
+                .encode(b"public-governed-contract-artifact"),
+            contract_code_hash: format!("0x{}", hex::encode([0x22; 32])),
+        };
+        let value = norito::json::to_value(&dto).expect("serialize outbound material DTO");
+        let norito::json::Value::Object(object) = &value else {
+            panic!("outbound material DTO must serialize as an object")
+        };
+        let mut keys = object.keys().map(String::as_str).collect::<Vec<_>>();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            [
+                "contract_artifact_b64",
+                "contract_code_hash",
+                "destination_binding_hash",
+                "policy",
+                "registry_revision",
+                "route_configuration_hash",
+                "route_key",
+                "settlement_asset_definition_id",
+                "verifying_key_version",
+                "version",
+            ]
+        );
+        let policy = object.get("policy").expect("serialized policy");
+        let norito::json::Value::Object(policy) = policy else {
+            panic!("serialized policy must be an object")
+        };
+        let vk_ref = policy.get("vk_ref").expect("serialized key reference");
+        let norito::json::Value::Object(vk_ref) = vk_ref else {
+            panic!("serialized key reference must be an object")
+        };
+        let mut vk_fields = vk_ref.keys().map(String::as_str).collect::<Vec<_>>();
+        vk_fields.sort_unstable();
+        assert_eq!(vk_fields, ["backend", "commitment", "name", "version"]);
+        assert_no_private_fields(&value);
     }
 
     #[test]
@@ -8502,6 +8775,10 @@ fn validate_recent_message_projection(
             | iroha_data_model::bridge::SccpNetworkV1::TronNile
             | iroha_data_model::bridge::SccpNetworkV1::TronShasta,
             SccpNormalizedCodecValueV1::TronAddress21 { .. },
+        )
+        | (
+            iroha_data_model::bridge::SccpNetworkV1::SolanaTestnet,
+            SccpNormalizedCodecValueV1::SolanaPubkey32 { .. },
         ) => true,
         _ => false,
     };
@@ -8779,6 +9056,36 @@ pub async fn handle_v1_sccp_registry(
 ) -> Result<Response> {
     let registry = state.sccp_registry_snapshot().registry().clone();
     sccp_bundle_response(&registry, accept.as_ref())
+}
+
+/// GET /v1/sccp/routes/{source_profile}/{route_id}/{asset_key}/{revision}/sora-outbound-material
+/// — exact enabled route's registered SORA-side IVM bytes and governed policy.
+#[iroha_futures::telemetry_future]
+pub(crate) async fn handle_v1_sccp_sora_outbound_material(
+    state: Arc<CoreState>,
+    source_profile: String,
+    route_id: String,
+    asset_key: String,
+    revision: u32,
+    format: crate::utils::ResponseFormat,
+    admission: crate::QueryAdmissionPermit,
+) -> Result<Response> {
+    run_admitted_blocking(
+        admission,
+        "SCCP SORA outbound material worker failed",
+        move || {
+            let material = sccp_sora_outbound_material_for_route(
+                state.as_ref(),
+                &source_profile,
+                &route_id,
+                &asset_key,
+                revision,
+            )?
+            .ok_or_else(sccp_not_found)?;
+            sccp_bundle_response_with_format(&material, format)
+        },
+    )
+    .await
 }
 
 /// GET /v1/sccp/proof-requests/{message_id} — exact state-derived Groth16 request.
@@ -83477,6 +83784,7 @@ mod tests {
                 },
             },
             last_commit_qc: None,
+            liveness: Default::default(),
         };
         status::set_v2_status(expected.clone());
         let state = std::sync::Arc::new(CoreState::new_for_testing(
@@ -83611,6 +83919,7 @@ mod tests {
                 },
             },
             last_commit_qc: None,
+            liveness: Default::default(),
         };
         let zero_seed = iroha_data_model::parameter::system::SumeragiNposParameters {
             epoch_seed: [0; 32],

@@ -6333,6 +6333,7 @@ mod tests {
                 },
             },
             last_commit_qc: None,
+            liveness: Default::default(),
         }
     }
 

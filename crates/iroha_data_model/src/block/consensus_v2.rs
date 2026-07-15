@@ -33,6 +33,11 @@ pub const PROTOCOL_VERSION: u16 = 3;
 /// must stay aligned with the production reducer and the formal Sumeragi v2
 /// model so every admitted wire value has a representable verified state.
 pub const MAX_VALIDATORS_PER_HEIGHT: usize = 128;
+/// Maximum exact Commit vote groups exposed by one active-height liveness snapshot.
+///
+/// A reducer may retain one historical exact-lock group while the current
+/// round contains at most one distinct subject group per validator.
+pub const MAX_COMMIT_QUORUM_GROUPS_PER_HEIGHT: usize = MAX_VALIDATORS_PER_HEIGHT + 1;
 /// Tight allocation bound for one consensus signature or aggregate.
 pub const MAX_CONSENSUS_SIGNATURE_BYTES: usize = 256;
 const HEIGHT_CONTEXT_IDENTITY_VERSION: u16 = 3;
@@ -2191,6 +2196,426 @@ pub struct SumeragiV2CommitQcStatus {
     pub total_power: u64,
 }
 
+/// Reducer generation owning volatile Sumeragi v2 consumer state.
+///
+/// The generation advances whenever a transition, such as timeout-certificate
+/// installation, replaces vote pools or asynchronous completion ownership.
+pub type SumeragiV2Generation = u64;
+
+/// Partial dual-quorum state for one exact voting round and proposal.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[norito(deny_unknown_fields)]
+pub struct SumeragiV2VoteQuorumStatus {
+    /// Exact height-context round whose vote pool is summarized.
+    pub round: ConsensusRound,
+    /// Exact proposal subject accepted into the pool.
+    pub subject: BlockSubject,
+    /// Deterministic execution result authenticated by the votes.
+    pub execution_commitment: ExecutionCommitment,
+    /// Number of distinct authenticated voting validators in the pool.
+    pub signer_count: u32,
+    /// Voting power represented by those validators.
+    pub signed_power: u64,
+    /// Required number of distinct voting validators.
+    pub min_signers: u32,
+    /// Total voting power in the frozen height roster.
+    pub total_power: u64,
+}
+
+/// Partial timeout quorum state for one exact round.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[norito(deny_unknown_fields)]
+pub struct SumeragiV2TimeoutQuorumStatus {
+    /// Exact round whose timeout votes are summarized.
+    pub round: ConsensusRound,
+    /// Number of distinct authenticated voting validators in the pool.
+    pub signer_count: u32,
+    /// Voting power represented by those validators.
+    pub signed_power: u64,
+    /// Required number of distinct voting validators.
+    pub min_signers: u32,
+    /// Total voting power in the frozen height roster.
+    pub total_power: u64,
+    /// Whether the partial pool has produced a verified timeout certificate.
+    pub certificate_formed: bool,
+}
+
+/// Durable protocol intent retained for fair outbound service.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[norito(
+    tag = "kind",
+    content = "details",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
+pub enum SumeragiV2OutboundIntentKind {
+    /// Leader proposal intent.
+    Proposal,
+    /// Prepare vote intent.
+    PrepareVote,
+    /// Commit vote intent.
+    CommitVote,
+    /// Formed PrepareQC intent.
+    PrepareQc,
+    /// Formed CommitQC intent.
+    CommitQc,
+    /// Timeout vote intent.
+    TimeoutVote,
+    /// Formed timeout-certificate intent.
+    TimeoutCertificate,
+}
+
+/// Current lifecycle stage of a durable outbound intent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[norito(
+    tag = "stage",
+    content = "details",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
+pub enum SumeragiV2OutboundIntentStage {
+    /// The intent is fenced behind a safety-WAL append.
+    PendingPersistence,
+    /// Durable state is waiting for a local signature.
+    PendingSignature,
+    /// A signed intent is owned by a reserved outbound queue.
+    Queued,
+    /// The intent has been broadcast and remains eligible for retransmission.
+    Sent,
+}
+
+/// Exact durable outbound intent visible to liveness diagnostics.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[norito(deny_unknown_fields)]
+pub struct SumeragiV2OutboundIntentStatus {
+    /// Protocol role of the retained intent.
+    pub kind: SumeragiV2OutboundIntentKind,
+    /// Exact round to which the intent belongs.
+    pub round: ConsensusRound,
+    /// Proposal subject, when the intent authenticates one.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub subject: Option<BlockSubject>,
+    /// Execution result, when the intent authenticates one.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub execution_commitment: Option<ExecutionCommitment>,
+    /// Current durable-delivery stage.
+    pub stage: SumeragiV2OutboundIntentStage,
+}
+
+/// State of one terminating local-work stage.
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema,
+)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[norito(
+    tag = "stage",
+    content = "details",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
+pub enum SumeragiV2LocalWorkStage {
+    /// No work is required for the active height.
+    #[default]
+    Idle,
+    /// Work is durably scheduled but has not begun local execution.
+    Queued,
+    /// The local operation is executing.
+    Running,
+    /// The stage completed for the active proposal or decision.
+    Complete,
+}
+
+/// Local body, validation, application, and handoff pipeline.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[norito(deny_unknown_fields)]
+pub struct SumeragiV2WorkStatus {
+    /// Local candidate construction or proposal-admission work.
+    pub candidate: SumeragiV2LocalWorkStage,
+    /// Certified-body fetch or reconstruction work.
+    pub body_recovery: SumeragiV2LocalWorkStage,
+    /// Durable body-store work.
+    pub body_store: SumeragiV2LocalWorkStage,
+    /// Deterministic candidate-validation work.
+    pub validation: SumeragiV2LocalWorkStage,
+    /// Durable decision application work.
+    pub application: SumeragiV2LocalWorkStage,
+    /// Activation of the successor height after application.
+    pub successor_height: SumeragiV2LocalWorkStage,
+}
+
+/// Bounded queue contributing to Sumeragi v2 progress.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[norito(
+    tag = "queue",
+    content = "details",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
+pub enum SumeragiV2QueueKind {
+    /// Authenticated semantic-admission/equivocation table.
+    Ingress,
+    /// Adapter lane for ordinary protocol traffic.
+    DeferredNormal,
+    /// Adapter lane reserved for progress-relevant protocol traffic.
+    DeferredProgress,
+    /// Adapter lane reserved for asynchronous completions.
+    DeferredCompletion,
+    /// Serialized runtime lane for ordinary protocol traffic.
+    RuntimeNormal,
+    /// Serialized runtime lane reserved for progress-relevant traffic.
+    RuntimeProgress,
+    /// Serialized runtime lane reserved for asynchronous completions.
+    RuntimeCompletion,
+    /// Effect-executor completion queue.
+    EffectCompletion,
+    /// Bounded transport-to-runner network ingress.
+    NetworkIngress,
+}
+
+/// Occupancy and fairness state for one bounded local queue.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[norito(deny_unknown_fields)]
+pub struct SumeragiV2QueueStatus {
+    /// Queue being summarized.
+    pub queue: SumeragiV2QueueKind,
+    /// Number of currently owned items.
+    pub depth: u32,
+    /// Maximum number of owned items.
+    pub capacity: u32,
+    /// Age of the oldest owned item, in local monotonic milliseconds.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub oldest_age_ms: Option<u64>,
+    /// Saturating count of eligible dispatches skipped by the oldest item.
+    pub service_debt: u64,
+}
+
+/// Reducer transition retained for diagnostic transition age.
+///
+/// Height progress resets `no_progress_age_ms`; timeout-vote admission and
+/// timeout-certificate installation remain visible here without resetting that
+/// height-progress clock, so repeated view churn cannot mask a stall.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[norito(
+    tag = "transition",
+    content = "details",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
+pub enum SumeragiV2ProgressTransition {
+    /// A leader proposal entered the reducer.
+    ProposalAdmitted,
+    /// The exact proposal body became locally available.
+    BodyAvailable,
+    /// The exact proposal body became durable.
+    BodyStored,
+    /// Deterministic candidate validation completed.
+    BodyValidated,
+    /// An authenticated Prepare vote increased an exact partial pool.
+    PrepareVoteAdmitted,
+    /// An authenticated Commit vote increased an exact partial pool.
+    CommitVoteAdmitted,
+    /// An authenticated timeout vote increased an exact partial pool.
+    TimeoutVoteAdmitted,
+    /// A Prepare dual quorum formed or arrived.
+    PrepareQuorum,
+    /// A PrepareQC lock became durable.
+    LockInstalled,
+    /// A Commit dual quorum formed or arrived.
+    CommitQuorum,
+    /// A timeout certificate installed a successor view.
+    TimeoutCertificateInstalled,
+    /// The exact CommitQC decision became durable.
+    DecisionPersisted,
+    /// The decided block was applied locally.
+    Applied,
+    /// The successor height became active.
+    SuccessorHeightActivated,
+    /// WAL recovery reconstructed a pending progress path.
+    RecoveryReplayed,
+}
+
+/// Last tracked reducer transition and its local age.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[norito(deny_unknown_fields)]
+pub struct SumeragiV2ProgressTransitionStatus {
+    /// Reducer generation which emitted the transition.
+    pub generation: SumeragiV2Generation,
+    /// Exact round active at the transition.
+    pub round: ConsensusRound,
+    /// Semantic reducer event retained for diagnostics.
+    pub transition: SumeragiV2ProgressTransition,
+    /// Local monotonic milliseconds elapsed since the transition.
+    pub age_ms: u64,
+}
+
+/// Classified cause of an active no-progress interval.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[norito(
+    tag = "blocker",
+    content = "details",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
+pub enum SumeragiV2LivenessBlocker {
+    /// The current view has not admitted its expected proposal.
+    MissingProposal,
+    /// A certified or locked proposal body is unavailable locally.
+    BodyUnavailable,
+    /// The exact Prepare pool lacks count or voting-power quorum.
+    PrepareQuorumMissing,
+    /// The exact Commit pool lacks count or voting-power quorum.
+    CommitQuorumMissing,
+    /// Timeout votes have not produced the required timeout certificate.
+    TimeoutCertificateMissing,
+    /// Reserved local work is not reducing its service debt.
+    SchedulerStarvation,
+    /// A durable decision is waiting for terminating local application work.
+    ApplicationPending,
+}
+
+/// Closed reducer reason for safely ignoring an input.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[norito(
+    tag = "reason",
+    content = "details",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
+pub enum SumeragiV2IgnoreReason {
+    /// Input belongs to another height.
+    WrongHeight,
+    /// Input was tagged for a different current view.
+    WrongView,
+    /// Completion belongs to an old local generation.
+    StaleGeneration,
+    /// The reducer is waiting for persistence or signing.
+    Busy,
+    /// The message or completion has already been handled.
+    Duplicate,
+    /// No outstanding body operation matches the completion.
+    NoMatchingWork,
+    /// The node is an observer and cannot vote or time out.
+    Observer,
+    /// A durable timeout intent closed the view to new votes.
+    ViewClosed,
+    /// A finalized decision makes the input irrelevant.
+    AlreadyDecided,
+    /// WAL replay awaits its one authorized resumption event.
+    RecoveryPending,
+    /// The input's view cannot affect local state.
+    IrrelevantView,
+}
+
+/// Per-height counter for one closed input-ignore reason.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[norito(deny_unknown_fields)]
+pub struct SumeragiV2IgnoreCount {
+    /// Reason whose occurrences are counted.
+    pub reason: SumeragiV2IgnoreReason,
+    /// Number of occurrences at the active height.
+    pub count: u64,
+}
+
+/// Authoritative progress diagnostics for the active Sumeragi v2 height.
+///
+/// Local ages and queue measurements are observation-only: they are never
+/// inputs to protocol transitions, wire fingerprints, or deterministic state.
+/// A lagging node may report a later-view CommitQC intent or
+/// Commit-quorum/decision transition for this exact active height; all other
+/// diagnostics remain bounded by the status snapshot's current view.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[norito(deny_unknown_fields)]
+pub struct SumeragiV2LivenessStatus {
+    /// Reducer generation which owns all reported volatile state.
+    pub generation: SumeragiV2Generation,
+    /// Partial Prepare pools keyed by exact round, subject, and execution result.
+    pub prepare_quorums: Vec<SumeragiV2VoteQuorumStatus>,
+    /// Partial Commit pools keyed by exact round, subject, and execution result.
+    pub commit_quorums: Vec<SumeragiV2VoteQuorumStatus>,
+    /// Partial timeout pools keyed by exact round.
+    pub timeout_quorums: Vec<SumeragiV2TimeoutQuorumStatus>,
+    /// Durable progress-relevant intents owned by outbound service.
+    pub outbound_intents: Vec<SumeragiV2OutboundIntentStatus>,
+    /// Current local terminating-work stages.
+    pub work: SumeragiV2WorkStatus,
+    /// Bounded queue occupancy and service debt.
+    pub queues: Vec<SumeragiV2QueueStatus>,
+    /// Most recent tracked reducer transition.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub last_progress: Option<SumeragiV2ProgressTransitionStatus>,
+    /// Local monotonic milliseconds without meaningful height progress.
+    pub no_progress_age_ms: u64,
+    /// Classified delay cause after the watchdog threshold is crossed.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub blocker: Option<SumeragiV2LivenessBlocker>,
+    /// Per-height counters for every observed reducer ignore reason.
+    pub ignore_counts: Vec<SumeragiV2IgnoreCount>,
+}
+
 /// Compact Norito payload returned by the Sumeragi v2 status endpoint.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -2249,6 +2674,8 @@ pub struct SumeragiV2Status {
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub last_commit_qc: Option<SumeragiV2CommitQcStatus>,
+    /// Authoritative progress and no-progress diagnostics for the active height.
+    pub liveness: SumeragiV2LivenessStatus,
 }
 
 impl SumeragiV2Status {
@@ -2444,6 +2871,150 @@ impl SumeragiV2Status {
             }
         }
 
+        if self.liveness.prepare_quorums.len() > MAX_VALIDATORS_PER_HEIGHT
+            || self.liveness.commit_quorums.len() > MAX_COMMIT_QUORUM_GROUPS_PER_HEIGHT
+            || self.liveness.timeout_quorums.len() > MAX_VALIDATORS_PER_HEIGHT
+            || self.liveness.outbound_intents.len() > 7
+            || self.liveness.queues.len() > 9
+            || self.liveness.ignore_counts.len() > 11
+        {
+            return Err(Error::LivenessCollectionTooLarge);
+        }
+
+        let validate_round_binding = |round: ConsensusRound| {
+            if round.context_id != self.height_context_id || round.height != self.height {
+                return Err(Error::LivenessRoundMismatch);
+            }
+            Ok(())
+        };
+        let validate_nonfuture_round = |round: ConsensusRound| {
+            validate_round_binding(round)?;
+            if round.view > self.view {
+                return Err(Error::LivenessRoundFromFutureView);
+            }
+            Ok(())
+        };
+        let validate_partial_quorum =
+            |signer_count: u32, signed_power: u64, min_signers: u32, total_power: u64| {
+                if min_signers != self.height_context.quorum.min_signers
+                    || total_power != self.height_context.quorum.total_power
+                    || signer_count > self.height_context.validator_count
+                    || signed_power < u64::from(signer_count)
+                    || signed_power > total_power
+                    || (self.height_context.mode == ConsensusMode::Permissioned
+                        && signed_power != u64::from(signer_count))
+                {
+                    return Err(Error::InvalidLivenessQuorum);
+                }
+                Ok(())
+            };
+        for quorum in self
+            .liveness
+            .prepare_quorums
+            .iter()
+            .chain(&self.liveness.commit_quorums)
+        {
+            validate_nonfuture_round(quorum.round)?;
+            quorum
+                .execution_commitment
+                .validate()
+                .map_err(|_| Error::InvalidLivenessExecutionCommitment)?;
+            validate_partial_quorum(
+                quorum.signer_count,
+                quorum.signed_power,
+                quorum.min_signers,
+                quorum.total_power,
+            )?;
+        }
+        for quorum in &self.liveness.timeout_quorums {
+            validate_nonfuture_round(quorum.round)?;
+            validate_partial_quorum(
+                quorum.signer_count,
+                quorum.signed_power,
+                quorum.min_signers,
+                quorum.total_power,
+            )?;
+            if quorum.certificate_formed
+                && (quorum.signer_count < quorum.min_signers
+                    || u128::from(quorum.signed_power) * 3 <= u128::from(quorum.total_power) * 2)
+            {
+                return Err(Error::InvalidLivenessQuorum);
+            }
+        }
+        for intent in &self.liveness.outbound_intents {
+            validate_round_binding(intent.round)?;
+            if intent.kind != SumeragiV2OutboundIntentKind::CommitQc
+                && intent.round.view > self.view
+            {
+                return Err(Error::LivenessRoundFromFutureView);
+            }
+            let carries_execution = matches!(
+                intent.kind,
+                SumeragiV2OutboundIntentKind::PrepareVote
+                    | SumeragiV2OutboundIntentKind::CommitVote
+                    | SumeragiV2OutboundIntentKind::PrepareQc
+                    | SumeragiV2OutboundIntentKind::CommitQc
+            );
+            let shape_is_valid = match intent.kind {
+                SumeragiV2OutboundIntentKind::Proposal => {
+                    intent.subject.is_some() && intent.execution_commitment.is_none()
+                }
+                SumeragiV2OutboundIntentKind::TimeoutVote
+                | SumeragiV2OutboundIntentKind::TimeoutCertificate => {
+                    intent.subject.is_none() && intent.execution_commitment.is_none()
+                }
+                _ => {
+                    carries_execution
+                        && intent.subject.is_some()
+                        && intent.execution_commitment.is_some()
+                }
+            };
+            if !shape_is_valid {
+                return Err(Error::InvalidOutboundIntentShape);
+            }
+            if let Some(commitment) = intent.execution_commitment {
+                commitment
+                    .validate()
+                    .map_err(|_| Error::InvalidLivenessExecutionCommitment)?;
+            }
+        }
+
+        let mut queue_kinds = BTreeSet::new();
+        for queue in &self.liveness.queues {
+            if queue.capacity == 0
+                || queue.depth > queue.capacity
+                || (queue.depth == 0 && queue.oldest_age_ms.is_some())
+                || (queue.depth != 0 && queue.oldest_age_ms.is_none())
+                || !queue_kinds.insert(queue.queue)
+            {
+                return Err(Error::InvalidLivenessQueue);
+            }
+        }
+        let mut ignore_reasons = BTreeSet::new();
+        if self
+            .liveness
+            .ignore_counts
+            .iter()
+            .any(|entry| !ignore_reasons.insert(entry.reason))
+        {
+            return Err(Error::DuplicateLivenessIgnoreReason);
+        }
+        if let Some(progress) = self.liveness.last_progress {
+            validate_round_binding(progress.round)?;
+            if progress.round.view > self.view
+                && !matches!(
+                    progress.transition,
+                    SumeragiV2ProgressTransition::CommitQuorum
+                        | SumeragiV2ProgressTransition::DecisionPersisted
+                )
+            {
+                return Err(Error::LivenessRoundFromFutureView);
+            }
+            if progress.generation > self.liveness.generation {
+                return Err(Error::LivenessGenerationFromFuture);
+            }
+        }
+
         Ok(())
     }
 }
@@ -2508,6 +3079,24 @@ pub enum SumeragiV2StatusValidationError {
     TimeoutNotBeforeCurrentView,
     /// A timeout certificate reported a PrepareQC from above its timed-out view.
     TimeoutCarriesFuturePrepare,
+    /// A liveness status collection exceeded its fixed protocol bound.
+    LivenessCollectionTooLarge,
+    /// A liveness diagnostic was bound to another height or context.
+    LivenessRoundMismatch,
+    /// A non-finality liveness diagnostic was bound to a view above the current view.
+    LivenessRoundFromFutureView,
+    /// A partial liveness quorum disagreed with the frozen height context.
+    InvalidLivenessQuorum,
+    /// A liveness diagnostic carried a malformed execution commitment.
+    InvalidLivenessExecutionCommitment,
+    /// An outbound intent's subject fields disagreed with its protocol kind.
+    InvalidOutboundIntentShape,
+    /// A queue diagnostic declared invalid occupancy, age, or duplicate identity.
+    InvalidLivenessQueue,
+    /// An ignore reason appeared more than once in the per-height counters.
+    DuplicateLivenessIgnoreReason,
+    /// A progress record referred to a reducer generation not yet installed.
+    LivenessGenerationFromFuture,
 }
 
 impl fmt::Display for SumeragiV2StatusValidationError {
@@ -2591,6 +3180,33 @@ impl fmt::Display for SumeragiV2StatusValidationError {
             Error::TimeoutCarriesFuturePrepare => f.write_str(
                 "Sumeragi status timeout certificate carries a PrepareQC from a future view",
             ),
+            Error::LivenessCollectionTooLarge => {
+                f.write_str("Sumeragi liveness status exceeds a fixed collection bound")
+            }
+            Error::LivenessRoundMismatch => {
+                f.write_str("Sumeragi liveness status round does not match the active height")
+            }
+            Error::LivenessRoundFromFutureView => {
+                f.write_str("Sumeragi non-finality liveness round is from a future view")
+            }
+            Error::InvalidLivenessQuorum => {
+                f.write_str("Sumeragi liveness status quorum is not structurally valid")
+            }
+            Error::InvalidLivenessExecutionCommitment => {
+                f.write_str("Sumeragi liveness status contains an invalid execution commitment")
+            }
+            Error::InvalidOutboundIntentShape => {
+                f.write_str("Sumeragi liveness outbound intent has inconsistent subject fields")
+            }
+            Error::InvalidLivenessQueue => {
+                f.write_str("Sumeragi liveness queue occupancy or identity is invalid")
+            }
+            Error::DuplicateLivenessIgnoreReason => {
+                f.write_str("Sumeragi liveness status repeats an ignore reason")
+            }
+            Error::LivenessGenerationFromFuture => {
+                f.write_str("Sumeragi liveness progress record is from a future generation")
+            }
         }
     }
 }
@@ -3862,6 +4478,7 @@ mod tests {
                 quorum: context.quorum,
             },
             last_commit_qc: None,
+            liveness: SumeragiV2LivenessStatus::default(),
         };
 
         let encoded = status.encode();
@@ -4250,6 +4867,7 @@ mod tests {
                 quorum: context.quorum,
             },
             last_commit_qc: None,
+            liveness: SumeragiV2LivenessStatus::default(),
         }
     }
 
@@ -4353,6 +4971,249 @@ mod tests {
             one_sided_commit.validate(),
             Err(Error::CommitFrontierAuthenticationMismatch)
         );
+    }
+
+    #[test]
+    fn status_validation_checks_liveness_rounds_quorums_and_queue_ownership() {
+        use SumeragiV2StatusValidationError as Error;
+
+        let context = context(&[1, 1, 1, 1]);
+        let mut baseline = status(&context);
+        let active_round = round(&context, 2);
+        baseline.liveness = SumeragiV2LivenessStatus {
+            generation: 4,
+            prepare_quorums: vec![SumeragiV2VoteQuorumStatus {
+                round: active_round,
+                subject: subject(41),
+                execution_commitment: execution_commitment(42),
+                signer_count: 2,
+                signed_power: 2,
+                min_signers: 3,
+                total_power: 4,
+            }],
+            outbound_intents: vec![SumeragiV2OutboundIntentStatus {
+                kind: SumeragiV2OutboundIntentKind::Proposal,
+                round: active_round,
+                subject: Some(subject(41)),
+                execution_commitment: None,
+                stage: SumeragiV2OutboundIntentStage::Sent,
+            }],
+            queues: vec![SumeragiV2QueueStatus {
+                queue: SumeragiV2QueueKind::RuntimeProgress,
+                depth: 1,
+                capacity: 4,
+                oldest_age_ms: Some(7),
+                service_debt: 2,
+            }],
+            last_progress: Some(SumeragiV2ProgressTransitionStatus {
+                generation: 4,
+                round: active_round,
+                transition: SumeragiV2ProgressTransition::PrepareVoteAdmitted,
+                age_ms: 7,
+            }),
+            ..SumeragiV2LivenessStatus::default()
+        };
+        assert_eq!(baseline.validate(), Ok(()));
+
+        let mut future_round = baseline.clone();
+        future_round.liveness.prepare_quorums[0].round.view = future_round.view + 1;
+        assert_eq!(
+            future_round.validate(),
+            Err(Error::LivenessRoundFromFutureView)
+        );
+
+        let mut wrong_quorum = baseline.clone();
+        wrong_quorum.liveness.prepare_quorums[0].total_power = 5;
+        assert_eq!(wrong_quorum.validate(), Err(Error::InvalidLivenessQuorum));
+
+        let mut invalid_queue = baseline.clone();
+        invalid_queue.liveness.queues[0].depth = 0;
+        assert_eq!(invalid_queue.validate(), Err(Error::InvalidLivenessQueue));
+
+        let mut every_queue_kind = baseline.clone();
+        every_queue_kind.liveness.queues = [
+            SumeragiV2QueueKind::Ingress,
+            SumeragiV2QueueKind::DeferredNormal,
+            SumeragiV2QueueKind::DeferredProgress,
+            SumeragiV2QueueKind::DeferredCompletion,
+            SumeragiV2QueueKind::RuntimeNormal,
+            SumeragiV2QueueKind::RuntimeProgress,
+            SumeragiV2QueueKind::RuntimeCompletion,
+            SumeragiV2QueueKind::EffectCompletion,
+            SumeragiV2QueueKind::NetworkIngress,
+        ]
+        .into_iter()
+        .map(|queue| SumeragiV2QueueStatus {
+            queue,
+            depth: 0,
+            capacity: 1,
+            oldest_age_ms: None,
+            service_debt: 0,
+        })
+        .collect();
+        assert_eq!(every_queue_kind.validate(), Ok(()));
+
+        let mut too_many_queues = every_queue_kind;
+        too_many_queues.liveness.queues.push(SumeragiV2QueueStatus {
+            queue: SumeragiV2QueueKind::NetworkIngress,
+            depth: 0,
+            capacity: 1,
+            oldest_age_ms: None,
+            service_debt: 0,
+        });
+        assert_eq!(
+            too_many_queues.validate(),
+            Err(Error::LivenessCollectionTooLarge)
+        );
+
+        let mut invalid_intent = baseline.clone();
+        invalid_intent.liveness.outbound_intents[0].execution_commitment =
+            Some(execution_commitment(42));
+        assert_eq!(
+            invalid_intent.validate(),
+            Err(Error::InvalidOutboundIntentShape)
+        );
+
+        let mut future_generation = baseline;
+        future_generation
+            .liveness
+            .last_progress
+            .as_mut()
+            .expect("progress record")
+            .generation += 1;
+        assert_eq!(
+            future_generation.validate(),
+            Err(Error::LivenessGenerationFromFuture)
+        );
+    }
+
+    #[test]
+    fn status_validation_accepts_later_view_active_height_finality_evidence() {
+        use SumeragiV2StatusValidationError as Error;
+
+        let context = context(&[1, 1, 1, 1]);
+        let mut lagging = status(&context);
+        let later_commit = qc(
+            &context,
+            lagging.view + 1,
+            GlobalPhase::Commit,
+            vec![0, 1, 2],
+        );
+        lagging.phase = SumeragiV2StatusPhase::PendingApply;
+        lagging.body_state = SumeragiV2BodyState::PendingApply;
+        lagging.last_committed_height = lagging.height;
+        lagging.last_committed_subject = Some(later_commit.subject);
+        lagging.last_commit_qc = Some(SumeragiV2CommitQcStatus {
+            certificate: later_commit.as_ref(),
+            validator_count: 4,
+            signer_count: 3,
+            min_signers: 3,
+            signed_power: 3,
+            total_power: 4,
+        });
+        lagging.liveness = SumeragiV2LivenessStatus {
+            generation: 8,
+            outbound_intents: vec![SumeragiV2OutboundIntentStatus {
+                kind: SumeragiV2OutboundIntentKind::CommitQc,
+                round: later_commit.round,
+                subject: Some(later_commit.subject),
+                execution_commitment: Some(later_commit.execution_commitment),
+                stage: SumeragiV2OutboundIntentStage::Sent,
+            }],
+            last_progress: Some(SumeragiV2ProgressTransitionStatus {
+                generation: 8,
+                round: later_commit.round,
+                transition: SumeragiV2ProgressTransition::DecisionPersisted,
+                age_ms: 1,
+            }),
+            ..SumeragiV2LivenessStatus::default()
+        };
+
+        assert_eq!(lagging.validate(), Ok(()));
+
+        lagging
+            .liveness
+            .last_progress
+            .as_mut()
+            .expect("progress record")
+            .transition = SumeragiV2ProgressTransition::CommitQuorum;
+        assert_eq!(lagging.validate(), Ok(()));
+
+        let mut wrong_height_finality = lagging.clone();
+        wrong_height_finality.liveness.outbound_intents[0]
+            .round
+            .height += 1;
+        assert_eq!(
+            wrong_height_finality.validate(),
+            Err(Error::LivenessRoundMismatch)
+        );
+
+        for kind in [
+            SumeragiV2OutboundIntentKind::Proposal,
+            SumeragiV2OutboundIntentKind::PrepareVote,
+            SumeragiV2OutboundIntentKind::CommitVote,
+            SumeragiV2OutboundIntentKind::PrepareQc,
+            SumeragiV2OutboundIntentKind::TimeoutVote,
+            SumeragiV2OutboundIntentKind::TimeoutCertificate,
+        ] {
+            let mut future_nonfinality_intent = lagging.clone();
+            future_nonfinality_intent.liveness.outbound_intents[0].kind = kind;
+            assert_eq!(
+                future_nonfinality_intent.validate(),
+                Err(Error::LivenessRoundFromFutureView)
+            );
+        }
+
+        for transition in [
+            SumeragiV2ProgressTransition::ProposalAdmitted,
+            SumeragiV2ProgressTransition::BodyAvailable,
+            SumeragiV2ProgressTransition::BodyStored,
+            SumeragiV2ProgressTransition::BodyValidated,
+            SumeragiV2ProgressTransition::PrepareVoteAdmitted,
+            SumeragiV2ProgressTransition::CommitVoteAdmitted,
+            SumeragiV2ProgressTransition::TimeoutVoteAdmitted,
+            SumeragiV2ProgressTransition::PrepareQuorum,
+            SumeragiV2ProgressTransition::LockInstalled,
+            SumeragiV2ProgressTransition::TimeoutCertificateInstalled,
+            SumeragiV2ProgressTransition::Applied,
+            SumeragiV2ProgressTransition::SuccessorHeightActivated,
+            SumeragiV2ProgressTransition::RecoveryReplayed,
+        ] {
+            let mut future_nonfinality_progress = lagging.clone();
+            future_nonfinality_progress
+                .liveness
+                .last_progress
+                .as_mut()
+                .expect("progress record")
+                .transition = transition;
+            assert_eq!(
+                future_nonfinality_progress.validate(),
+                Err(Error::LivenessRoundFromFutureView)
+            );
+        }
+    }
+
+    #[test]
+    fn status_validation_bounds_current_commit_groups_plus_historical_lock() {
+        use SumeragiV2StatusValidationError as Error;
+
+        let powers = vec![1; MAX_VALIDATORS_PER_HEIGHT];
+        let context = context(&powers);
+        let mut snapshot = status(&context);
+        let quorum = SumeragiV2VoteQuorumStatus {
+            round: round(&context, snapshot.view),
+            subject: subject(71),
+            execution_commitment: execution_commitment(72),
+            signer_count: 1,
+            signed_power: 1,
+            min_signers: context.quorum.min_signers,
+            total_power: context.quorum.total_power,
+        };
+        snapshot.liveness.commit_quorums = vec![quorum; MAX_COMMIT_QUORUM_GROUPS_PER_HEIGHT];
+        assert_eq!(snapshot.validate(), Ok(()));
+
+        snapshot.liveness.commit_quorums.push(quorum);
+        assert_eq!(snapshot.validate(), Err(Error::LivenessCollectionTooLarge));
     }
 
     #[test]

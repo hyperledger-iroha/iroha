@@ -29,8 +29,9 @@ WitnessNext ==
   \/ \E request \in signProposals: CompleteProposalSignature(request)
   \/ \E envelope \in proposalNetwork: DeliverProposal(envelope)
   \/ \E node \in ValidatorIds, proposal \in SeenProposalValues:
-       FetchBody(node, proposal)
-  \/ \E node \in ValidatorIds, subject \in Subjects: StoreBody(node, subject)
+       FetchBody(node, proposal) \/ RebindRetainedBody(node, proposal)
+  \/ \E node \in ValidatorIds, roundView \in Views, subject \in Subjects:
+       StoreBody(node, roundView, subject)
   \/ \E node \in ValidatorIds, proposal \in SeenProposalValues:
        ValidateBody(node, proposal)
   \/ \E node \in ValidatorIds, proposal \in SeenProposalValues:

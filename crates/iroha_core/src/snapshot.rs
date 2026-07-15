@@ -5671,6 +5671,9 @@ mod tests {
             iroha_data_model::bridge::SccpDestinationDeploymentV1::Tron(_) => {
                 unreachable!("snapshot fixture is an EVM route")
             }
+            iroha_data_model::bridge::SccpDestinationDeploymentV1::Solana(_) => {
+                unreachable!("snapshot fixture is an EVM route")
+            }
         };
         // (1, 1) is a canonical BN254 field encoding but is not on
         // y^2 = x^3 + 3.  Recompute the embedded key commitment so only the
@@ -5700,6 +5703,9 @@ mod tests {
                 emitter.route_config_hash = route_configuration_hash;
             }
             iroha_data_model::bridge::SccpSourceEmitterV1::Tron(_) => {
+                unreachable!("snapshot fixture is an EVM route")
+            }
+            iroha_data_model::bridge::SccpSourceEmitterV1::Solana(_) => {
                 unreachable!("snapshot fixture is an EVM route")
             }
         }

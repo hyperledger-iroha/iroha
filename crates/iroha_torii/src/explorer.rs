@@ -42,6 +42,7 @@ use norito::{
     codec::Encode,
     json::{self, Map, Value},
 };
+use sha2::{Digest as _, Sha256};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 use crate::{
@@ -762,6 +763,7 @@ impl std::str::FromStr for ExplorerInstructionKind {
 #[derive(Clone, Debug, JsonSerialize)]
 pub(crate) struct ExplorerInstructionBoxDto {
     pub encoded: String,
+    pub framed_sha256: String,
     pub json: Value,
 }
 
@@ -941,6 +943,7 @@ fn instruction_box_dto(
 ) -> ExplorerInstructionBoxDto {
     ExplorerInstructionBoxDto {
         encoded: instruction_encoded_hex(instruction),
+        framed_sha256: instruction_framed_sha256(instruction),
         json: instruction_json_payload(instruction, kind),
     }
 }
@@ -948,6 +951,14 @@ fn instruction_box_dto(
 fn instruction_encoded_hex(instruction: &InstructionBox) -> String {
     let bytes = instruction.dyn_encode();
     format!("0x{}", hex::encode(bytes))
+}
+
+fn instruction_framed_sha256(instruction: &InstructionBox) -> String {
+    let wire_id = IsiInstruction::id(&**instruction);
+    let payload = instruction.dyn_encode();
+    let framed = iroha_data_model::isi::frame_instruction_payload(wire_id, &payload)
+        .expect("registered explorer instruction must use canonical Norito framing");
+    format!("0x{}", hex::encode(Sha256::digest(framed)))
 }
 
 fn instruction_json_payload(instruction: &InstructionBox, kind: ExplorerInstructionKind) -> Value {
@@ -972,6 +983,9 @@ fn structured_instruction_payload(
     instruction: &InstructionBox,
     kind: ExplorerInstructionKind,
 ) -> Value {
+    if let Some(payload) = propose_sccp_route_governance_payload(instruction) {
+        return payload;
+    }
     match kind {
         ExplorerInstructionKind::Register => register_payload(instruction),
         ExplorerInstructionKind::Unregister => unregister_payload(instruction),
@@ -994,6 +1008,21 @@ fn structured_instruction_payload(
         ExplorerInstructionKind::Custom => custom_payload(instruction),
     }
     .unwrap_or_else(|| fallback_structured_payload(instruction))
+}
+
+fn propose_sccp_route_governance_payload(instruction: &InstructionBox) -> Option<Value> {
+    let proposal = instruction
+        .as_any()
+        .downcast_ref::<iroha_data_model::isi::governance::ProposeSccpRouteGovernance>(
+    )?;
+    let mut value = Map::new();
+    value.insert("action".to_owned(), json::to_value(&proposal.action).ok()?);
+    value.insert("window".to_owned(), json::to_value(&proposal.window).ok()?);
+    value.insert("mode".to_owned(), json::to_value(&proposal.mode).ok()?);
+    Some(instruction_variant_value(
+        "ProposeSccpRouteGovernance",
+        Value::Object(value),
+    ))
 }
 
 fn fallback_instruction_payload(instruction: &InstructionBox) -> Value {
@@ -2794,11 +2823,20 @@ mod tests {
         let instruction: InstructionBox = register.into();
         let dto = instruction_box_dto(&instruction, ExplorerInstructionKind::Register);
         assert!(dto.encoded.starts_with("0x"));
+        let wire_id = IsiInstruction::id(&*instruction);
+        let framed =
+            iroha_data_model::isi::frame_instruction_payload(wire_id, &instruction.dyn_encode())
+                .expect("registered instruction should frame");
+        assert_eq!(
+            dto.framed_sha256,
+            format!("0x{}", hex::encode(Sha256::digest(framed)))
+        );
 
         let serialized = json::to_value(&dto).expect("instruction box dto should serialize");
         match serialized {
             Value::Object(map) => {
                 assert!(map.contains_key("encoded"));
+                assert!(map.contains_key("framed_sha256"));
                 assert!(!map.contains_key("scale"));
             }
             _ => panic!("instruction box dto should serialize into object"),
@@ -2845,6 +2883,62 @@ mod tests {
             }
             _ => panic!("custom payload should be a structured object"),
         }
+    }
+
+    #[test]
+    fn sccp_governance_instruction_payload_exposes_exact_typed_action() {
+        let action = iroha_data_model::isi::bridge::SccpRouteGovernanceActionV1::Remove(
+            iroha_data_model::bridge::SccpRouteKeyV1 {
+                lane_id: iroha_data_model::bridge::SccpLaneIdV1 {
+                    source: iroha_data_model::bridge::SccpNetworkV1::SolanaTestnet,
+                    target: iroha_data_model::bridge::SccpNetworkV1::SoraTaira,
+                },
+                route_id: "taira_sol_xor".to_owned(),
+                asset_key: "xor".to_owned(),
+                revision: 1,
+            },
+        );
+        let proposal = iroha_data_model::isi::governance::ProposeSccpRouteGovernance {
+            action,
+            window: None,
+            mode: Some(iroha_data_model::isi::governance::VotingMode::Zk),
+        };
+        let mut expected = Map::new();
+        expected.insert(
+            "action".to_owned(),
+            json::to_value(&proposal.action).expect("action should serialize"),
+        );
+        expected.insert(
+            "window".to_owned(),
+            json::to_value(&proposal.window).expect("window should serialize"),
+        );
+        expected.insert(
+            "mode".to_owned(),
+            json::to_value(&proposal.mode).expect("mode should serialize"),
+        );
+        let instruction: InstructionBox = proposal.into();
+        let dto = instruction_box_dto(&instruction, ExplorerInstructionKind::Custom);
+        let Value::Object(root) = dto.json else {
+            panic!("instruction JSON should be an object");
+        };
+        assert_eq!(root.get("kind").and_then(Value::as_str), Some("Custom"));
+        assert_eq!(
+            root.get("wire_id").and_then(Value::as_str),
+            Some("iroha_data_model::isi::governance::ProposeSccpRouteGovernance")
+        );
+        let payload = root
+            .get("payload")
+            .and_then(Value::as_object)
+            .expect("typed payload object");
+        assert_eq!(
+            payload.get("variant").and_then(Value::as_str),
+            Some("ProposeSccpRouteGovernance")
+        );
+        assert_eq!(payload.get("value"), Some(&Value::Object(expected)));
+        let serialized = json::to_json(&root).expect("explorer JSON should serialize");
+        assert!(!serialized.contains("private_key"));
+        assert!(!serialized.contains("secret"));
+        assert!(!serialized.contains("mnemonic"));
     }
 
     #[test]

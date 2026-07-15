@@ -10592,7 +10592,24 @@ impl<'state> StateBlock<'state> {
     }
 }
 
-/// Struct for single transaction's aggregated changes
+/// Verified execution identity available only while applying one proved IVM overlay.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct SccpIvmProvedExecutionBindingV1 {
+    /// SHA-256 of the complete proved contract artifact bytes.
+    pub(crate) contract_artifact_sha256: [u8; 32],
+    /// Exact registry verification key carried by the verified proof attachment.
+    pub(crate) vk_ref: iroha_data_model::proof::VerifyingKeyId,
+    /// Exact governance version of the verified registry key.
+    pub(crate) vk_version: u32,
+    /// Exact commitment of the verified registry key bytes.
+    pub(crate) vk_commitment: [u8; 32],
+    /// Exact transaction gas limit committed by the proved execution.
+    pub(crate) gas_limit: u64,
+    /// Deterministically replayed gas consumed by the proved execution.
+    pub(crate) gas_used: u64,
+}
+
+/// Aggregated state changes for one transaction.
 pub struct StateTransaction<'block, 'state> {
     /// Mutable counter shared with the parent [`StateBlock`] recording committed fragments.
     committed_fragments: &'block mut usize,
@@ -10732,8 +10749,8 @@ pub struct StateTransaction<'block, 'state> {
     pub current_dataspace_id: Option<DataSpaceId>,
     /// Gas used by the last executed transaction (IVM path). Set by executor.
     pub last_tx_gas_used: u64,
-    /// True while applying an overlay whose IVM proof was verified for this transaction.
-    pub(crate) sccp_recording_proof_verified: bool,
+    /// Structured identity of the currently applying, verified IVM execution.
+    pub(crate) sccp_ivm_proved_execution_binding: Option<SccpIvmProvedExecutionBindingV1>,
     /// Bridge proof hashes recorded by this transaction and still available for one receipt.
     pub(crate) bridge_receipt_proofs_available_in_tx: BTreeSet<[u8; 32]>,
     /// Block-level gas limit, captured at the beginning of this block.
@@ -42085,6 +42102,9 @@ impl ValidatedSccpRegistryV1 {
                 iroha_data_model::bridge::SccpDestinationDeploymentV1::Tron(deployment) => {
                     deployment.verifying_key
                 }
+                iroha_data_model::bridge::SccpDestinationDeploymentV1::Solana(deployment) => {
+                    deployment.verifying_key
+                }
             };
             if !iroha_sccp::sccp_groth16_bn254_verifying_key_is_well_formed_v1(&verifying_key) {
                 return Err(format!(
@@ -43717,7 +43737,7 @@ impl<'state> StateBlock<'state> {
             current_lane_id: None,
             current_dataspace_id: None,
             last_tx_gas_used: 0,
-            sccp_recording_proof_verified: false,
+            sccp_ivm_proved_execution_binding: None,
             bridge_receipt_proofs_available_in_tx: BTreeSet::new(),
             gas_limit_per_block: self.gas_limit_per_block,
             gas_used_in_block_so_far: self.gas_used_in_block,
@@ -61413,6 +61433,9 @@ mod tests {
                 emitter.route_config_hash = route_configuration_hash;
             }
             iroha_data_model::bridge::SccpSourceEmitterV1::Tron(_) => {
+                unreachable!("state helper constructs EVM routes")
+            }
+            iroha_data_model::bridge::SccpSourceEmitterV1::Solana(_) => {
                 unreachable!("state helper constructs EVM routes")
             }
         }

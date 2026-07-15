@@ -1,5 +1,6 @@
 //! Unit tests for the executable Sumeragi v2 reducer.
 
+use super::reducer::{TimeoutPoolSnapshot, VotePoolSnapshot};
 use super::*;
 
 fn id(byte: u8) -> ValidatorId {
@@ -862,6 +863,7 @@ fn stale_generation_completion_is_rejected_after_view_change() {
     assert!(matches!(entered.effects(), [Effect::EnterView { .. }]));
     assert_eq!(reducer.current_tag().view(), 1);
     assert_ne!(reducer.current_tag().generation(), old_tag.generation());
+    assert_eq!(reducer.generation(), reducer.current_tag().generation());
 
     let stale = reducer
         .step(Event::ValidationCompleted {
@@ -884,6 +886,13 @@ fn quorum_requires_both_validator_count_and_voting_power() {
     assert_eq!(count_only.signer_count(), 3);
     assert!(!count_only.satisfies(&context));
 
+    let power_only = Quorum::calculate(&context, &[id(1)]).unwrap();
+    assert_eq!(power_only.voting_power(), VotingPower::new(7));
+    assert!(
+        !power_only.satisfies(&context),
+        "a supermajority of power cannot replace the independent signer-count quorum"
+    );
+
     let dual = Quorum::calculate(&context, &[id(1), id(2), id(3)]).unwrap();
     assert!(dual.satisfies(&context));
     assert!(Quorum::require(&context, &[id(1), id(2), id(3)]).is_ok());
@@ -903,6 +912,10 @@ fn timeout_is_durable_before_signing_and_view_change() {
         timeout_entry.record(),
         WalRecord::TimeoutIntent(_)
     ));
+    assert!(matches!(
+        reducer.pending_persistence_record(),
+        Some(WalRecord::TimeoutIntent(_))
+    ));
     assert_eq!(reducer.current_tag().view(), 0);
     let sign = acknowledge(&mut reducer, &timeout_entry);
     assert!(matches!(
@@ -912,6 +925,11 @@ fn timeout_is_durable_before_signing_and_view_change() {
             ..
         }]
     ));
+    assert!(matches!(
+        reducer.awaiting_signature(),
+        Some(SignableMessage::TimeoutVote(_))
+    ));
+    assert_eq!(reducer.queued_signatures().count(), 0);
     assert_eq!(reducer.current_tag().view(), 0);
 
     let broadcast = reducer
@@ -939,8 +957,25 @@ fn timeout_is_durable_before_signing_and_view_change() {
             .unwrap();
         if signer == 2 {
             assert!(outcome.effects().is_empty());
+            assert!(matches!(
+                reducer.timeout_pool_snapshots().as_slice(),
+                [TimeoutPoolSnapshot {
+                    round,
+                    signers,
+                    signed_power,
+                    certificate_formed: false,
+                }] if *round == Round::new(context.height(), 0)
+                    && signers == &[id(1), id(2)]
+                    && *signed_power == VotingPower::new(2)
+            ));
         } else {
             let install = only_persist(outcome);
+            assert!(
+                reducer
+                    .timeout_pool_snapshots()
+                    .iter()
+                    .all(|pool| pool.certificate_formed)
+            );
             assert!(matches!(install.record(), WalRecord::InstallTimeout(_)));
             assert_eq!(reducer.current_tag().view(), 0);
             let entered = acknowledge(&mut reducer, &install);
@@ -1161,6 +1196,181 @@ fn persisted_timeout_prunes_old_vote_pools_and_rejects_late_individual_votes() {
 }
 
 #[test]
+fn prior_view_commit_votes_rebuild_the_exact_locked_round_quorum() {
+    let context = context();
+    let subject = Subject::repeat(0x72);
+    let round = Round::new(context.height(), 0);
+    let prepare = qc(&context, 0, Phase::Prepare, subject, &[1, 2, 3]);
+    let local_commit = Vote::new(context.id(), round, Phase::Commit, subject, id(1));
+    let lock = WalEntry::new(
+        PersistenceId::new(1),
+        WalRecord::LockAndCommit {
+            prepare: prepare.clone(),
+            vote: local_commit,
+        },
+    );
+    let install = WalEntry::new(
+        PersistenceId::new(2),
+        WalRecord::InstallTimeout(tc_with_high(&context, 0, prepare, &[1, 2, 3])),
+    );
+    let mut reducer = Reducer::recover(
+        context.clone(),
+        Some(id(1)),
+        Generation::new(43),
+        [lock, install],
+    )
+    .expect("durable lock survives the view transition");
+    assert_eq!(reducer.current_tag().view(), 1);
+    assert_eq!(
+        reducer.progress_witness_violation(),
+        None,
+        "recovery-pending state owns reconstruction of the durable Commit intent"
+    );
+
+    assert!(matches!(
+        resume_after_replay(&mut reducer).effects(),
+        [Effect::Sign {
+            message: SignableMessage::Vote(vote),
+            ..
+        }] if *vote == local_commit
+    ));
+    assert_eq!(
+        reducer.progress_witness_violation(),
+        None,
+        "the resumed signature request witnesses the durable Commit intent"
+    );
+    let signed = reducer
+        .step(Event::Signed {
+            tag: reducer.current_tag(),
+            signature: signature(1),
+        })
+        .expect("retransmitted local CommitVote re-enters its old round pool");
+    assert!(signed.effects().iter().any(|effect| matches!(
+        effect,
+        Effect::Broadcast(ConsensusMessageV2::Vote(vote)) if vote.vote() == local_commit
+    )));
+    assert_eq!(
+        reducer.progress_witness_violation(),
+        None,
+        "the signed outbound vote and rebuilt pool replace the signature witness"
+    );
+    let pools = reducer.vote_pool_snapshots();
+    assert!(matches!(
+        pools.as_slice(),
+        [VotePoolSnapshot {
+            round: pooled_round,
+            phase: Phase::Commit,
+            subject: pooled_subject,
+            signers,
+            signed_power,
+        }] if *pooled_round == round
+            && *pooled_subject == subject
+            && signers == &[id(1)]
+            && *signed_power == VotingPower::new(1)
+    ));
+    assert!(reducer.outbound_messages().any(
+        |message| matches!(message, ConsensusMessageV2::Vote(vote) if vote.vote() == local_commit)
+    ));
+
+    for signer in [2, 3] {
+        let outcome = reducer
+            .step(Event::VoteReceived {
+                tag: reducer.current_tag(),
+                vote: SignedVote::new(
+                    Vote::new(context.id(), round, Phase::Commit, subject, id(signer)),
+                    signature(signer),
+                ),
+            })
+            .expect("known locked-round CommitVote remains admissible");
+        if signer == 2 {
+            assert!(outcome.effects().is_empty());
+        } else {
+            let decision = only_persist(outcome);
+            assert!(matches!(
+                decision.record(),
+                WalRecord::Decision(certificate)
+                    if certificate.round() == round
+                        && certificate.phase() == Phase::Commit
+                        && certificate.subject() == subject
+            ));
+        }
+    }
+}
+
+#[test]
+fn prior_view_commit_vote_for_unlocked_prepare_is_rejected() {
+    let context = context();
+    let locked_subject = Subject::repeat(0x73);
+    let unlocked_subject = Subject::repeat(0x74);
+    let locked_prepare = qc(&context, 0, Phase::Prepare, locked_subject, &[1, 2, 3]);
+    let unlocked_prepare = qc(&context, 1, Phase::Prepare, unlocked_subject, &[1, 2, 3]);
+    let entries = [
+        WalEntry::new(
+            PersistenceId::new(1),
+            WalRecord::LockAndCommit {
+                prepare: locked_prepare,
+                vote: Vote::new(
+                    context.id(),
+                    Round::new(context.height(), 0),
+                    Phase::Commit,
+                    locked_subject,
+                    id(1),
+                ),
+            },
+        ),
+        WalEntry::new(
+            PersistenceId::new(2),
+            WalRecord::InstallTimeout(tc_without_high(&context, 0, &[1, 2, 3])),
+        ),
+        WalEntry::new(
+            PersistenceId::new(3),
+            WalRecord::ObservePrepare(unlocked_prepare),
+        ),
+        WalEntry::new(
+            PersistenceId::new(4),
+            WalRecord::InstallTimeout(tc_without_high(&context, 1, &[1, 2, 3])),
+        ),
+    ];
+    let mut reducer = Reducer::recover(context.clone(), Some(id(1)), Generation::new(44), entries)
+        .expect("higher observed PrepareQC does not replace the durable lock");
+    assert_eq!(reducer.current_tag().view(), 2);
+    assert!(matches!(
+        resume_after_replay(&mut reducer).effects(),
+        [Effect::Sign {
+            message: SignableMessage::Vote(vote),
+            ..
+        }] if vote.phase() == Phase::Commit && vote.subject() == locked_subject
+    ));
+    reducer
+        .step(Event::Signed {
+            tag: reducer.current_tag(),
+            signature: signature(1),
+        })
+        .expect("finish replaying the exact durable Commit intent");
+
+    let outcome = reducer
+        .step(Event::VoteReceived {
+            tag: reducer.current_tag(),
+            vote: SignedVote::new(
+                Vote::new(
+                    context.id(),
+                    Round::new(context.height(), 1),
+                    Phase::Commit,
+                    unlocked_subject,
+                    id(2),
+                ),
+                signature(2),
+            ),
+        })
+        .expect("unlocked historical CommitVote is harmless");
+    assert_eq!(
+        outcome.disposition(),
+        StepDisposition::Ignored(IgnoreReason::IrrelevantView)
+    );
+    assert!(outcome.effects().is_empty());
+}
+
+#[test]
 fn durable_timeout_fence_blocks_delayed_prepare_and_commit_votes() {
     let context = context();
     let mut reducer = Reducer::new(context.clone(), Some(id(1)), Generation::new(5)).unwrap();
@@ -1298,6 +1508,11 @@ fn replay_resigns_prepare_but_timeout_fence_suppresses_old_votes() {
             ..
         }]
     ));
+    assert_eq!(
+        closed.queued_signatures().count(),
+        0,
+        "a durable timeout fence must not leave the old Prepare queued"
+    );
 }
 
 #[test]
@@ -1480,6 +1695,74 @@ fn decision_replay_resume_emits_one_exact_certified_fetch() {
     );
     assert!(duplicate.effects().is_empty());
     assert_eq!(recovered, after_first);
+}
+
+#[test]
+fn certificate_first_decision_validates_and_applies_without_a_proposal() {
+    let context = context();
+    let subject = Subject::repeat(0x85);
+    let decision = qc(&context, 0, Phase::Commit, subject, &[1, 2, 3]);
+    let round = decision.round();
+    let mut reducer = Reducer::new(context, Some(id(4)), Generation::new(35)).unwrap();
+
+    let decision_entry = only_persist(
+        reducer
+            .step(Event::QuorumCertificateReceived {
+                tag: reducer.current_tag(),
+                certificate: decision.clone(),
+            })
+            .expect("CommitQC starts a certificate-first durable decision"),
+    );
+    let decided = acknowledge(&mut reducer, &decision_entry);
+    assert!(matches!(
+        decided.effects(),
+        [Effect::FetchBody {
+            round: fetched_round,
+            subject: fetched_subject,
+            manifest: None,
+            certificate: Some(certificate),
+            ..
+        }] if *fetched_round == round
+            && *fetched_subject == subject
+            && certificate == &decision
+    ));
+
+    let available = reducer
+        .step(Event::BodyAvailable {
+            tag: reducer.current_tag(),
+            round,
+            subject,
+        })
+        .expect("the canonical certified body enters local storage");
+    assert!(matches!(available.effects(), [Effect::StoreBody { .. }]));
+
+    let stored = reducer
+        .step(Event::BodyStored {
+            tag: reducer.current_tag(),
+            round,
+            subject,
+        })
+        .expect("the durable certified body enters deterministic validation");
+    assert!(matches!(stored.effects(), [Effect::ValidateBody { .. }]));
+
+    let validated = reducer
+        .step(Event::ValidationCompleted {
+            tag: reducer.current_tag(),
+            round,
+            subject,
+            valid: true,
+        })
+        .expect("a valid certificate-first body advances the durable decision");
+    assert!(matches!(
+        validated.effects(),
+        [Effect::Apply {
+            subject: applied_subject,
+            certificate,
+            ..
+        }] if *applied_subject == subject && certificate == &decision
+    ));
+    assert!(reducer.durable_state().prepare_intent(round).is_none());
+    assert!(reducer.durable_state().commit_intent(round).is_none());
 }
 
 #[test]
@@ -1755,6 +2038,49 @@ fn every_wal_boundary_replays_to_a_safe_resumable_state() {
                     ..
                 }
             )));
+        } else if prefix_len == 4 {
+            // Proposal and Prepare intents from the same WAL prefix may be
+            // reconstructed first. Completing that finite FIFO must expose
+            // and broadcast the exact durable Commit intent as well.
+            let mut pending_effects = effects;
+            let mut saw_commit_sign = false;
+            let mut saw_commit_broadcast = false;
+            for marker in 0_u8..3 {
+                let message = pending_effects
+                    .iter()
+                    .find_map(|effect| match effect {
+                        Effect::Sign { message, .. } => Some(message.clone()),
+                        _ => None,
+                    })
+                    .expect("each durable local intent receives a signature turn");
+                saw_commit_sign |= matches!(
+                    message,
+                    SignableMessage::Vote(vote)
+                        if vote.phase() == Phase::Commit
+                            && vote.round() == round
+                            && vote.subject() == subject
+                            && vote.signer() == local
+                );
+                let signed = recovered
+                    .step(Event::Signed {
+                        tag: recovered.current_tag(),
+                        signature: signature(0x84 + marker),
+                    })
+                    .expect("the recovered intent accepts its exact signature completion");
+                saw_commit_broadcast |= signed.effects().iter().any(|effect| {
+                    matches!(
+                        effect,
+                        Effect::Broadcast(ConsensusMessageV2::Vote(vote))
+                            if vote.vote().phase() == Phase::Commit
+                                && vote.vote().round() == round
+                                && vote.vote().subject() == subject
+                                && vote.vote().signer() == local
+                    )
+                });
+                pending_effects = signed.into_effects();
+            }
+            assert!(saw_commit_sign);
+            assert!(saw_commit_broadcast);
         } else if prefix_len == 5 {
             assert!(matches!(
                 effects.as_slice(),

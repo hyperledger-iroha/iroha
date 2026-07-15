@@ -20,6 +20,7 @@ mod quorum;
 #[macro_use]
 #[path = "../../iroha_core/src/sumeragi/v2_core/refinement.rs"]
 mod refinement;
+#[allow(dead_code)]
 #[path = "../../iroha_core/src/sumeragi/v2_core/reducer.rs"]
 mod reducer;
 #[macro_use]

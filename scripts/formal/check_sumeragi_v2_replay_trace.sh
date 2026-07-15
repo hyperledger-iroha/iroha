@@ -1,8 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-readonly TLA2TOOLS_VERSION="1.8.0"
-readonly TLA2TOOLS_SHA256="33de7da9ce1b7fffb9d1c184021178dbb051747be48504e65c584c423721a32e"
+readonly TLA2TOOLS_VERSION="1.7.4"
+readonly TLA2TOOLS_SHA256="936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88"
+readonly TLC_MAX_SET_SIZE="1000000"
+readonly TLAPM_COMMIT="763bf3c1826d77a4cf206f43d5aa16775da1da33"
+readonly TLAPM_FUNCTIONS_SHA256="b54ff63b7c76c327525c17c188d5f9f5e53d92f3fd701f5e2ba54f0f54391063"
+readonly TLAPM_FOLDS_SHA256="aa59063fd600bb640b2ae24dc85ef770277ef5bf7955092b76b8b471790086da"
 readonly SEED="19349663"
 REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 readonly REPO_ROOT
@@ -12,6 +16,16 @@ readonly EXPECTED="${FIXTURE_DIR}/tlc_replay_witness.tsv"
 readonly CONFIG="${FIXTURE_DIR}/tlc_replay_witness.cfg"
 readonly NORMALIZER="${REPO_ROOT}/scripts/normalize_sumeragi_v2_tlc_trace.py"
 readonly TLA2TOOLS_JAR="${TLA2TOOLS_JAR:-${REPO_ROOT}/target/tla2tools/${TLA2TOOLS_VERSION}/tla2tools.jar}"
+
+case "$(uname -s)-$(uname -m)" in
+  Linux-x86_64) readonly TLAPM_PLATFORM="x86_64-linux-gnu" ;;
+  Darwin-arm64) readonly TLAPM_PLATFORM="arm64-darwin" ;;
+  *)
+    echo "unsupported TLAPM host: $(uname -s)-$(uname -m)" >&2
+    exit 1
+    ;;
+esac
+readonly TLAPM_STDLIB="${TLAPM_STDLIB:-${REPO_ROOT}/target/tlapm/toolchains/${TLAPM_COMMIT}/${TLAPM_PLATFORM}/tlapm/lib/tlapm/stdlib}"
 
 hash_file() {
   if command -v sha256sum >/dev/null 2>&1; then
@@ -40,9 +54,33 @@ java -version >/dev/null 2>&1 || {
   echo "a working Java runtime is required for TLC" >&2
   exit 1
 }
+for module in Functions Folds; do
+  [[ -f "${TLAPM_STDLIB}/${module}.tla" ]] || {
+    echo "pinned TLAPM ${TLAPM_COMMIT} standard library is required at ${TLAPM_STDLIB}" >&2
+    echo "run scripts/formal/install_sumeragi_v2_tlapm.sh first" >&2
+    exit 1
+  }
+done
+for module_and_hash in \
+  "Functions:${TLAPM_FUNCTIONS_SHA256}" \
+  "Folds:${TLAPM_FOLDS_SHA256}"; do
+  module="${module_and_hash%%:*}"
+  expected_sha256="${module_and_hash#*:}"
+  actual_sha256="$(hash_file "${TLAPM_STDLIB}/${module}.tla")"
+  if [[ "$actual_sha256" != "$expected_sha256" ]]; then
+    echo "pinned TLAPM standard-library checksum mismatch for ${module}.tla" >&2
+    echo "expected: ${expected_sha256}" >&2
+    echo "actual:   ${actual_sha256}" >&2
+    exit 1
+  fi
+done
 
 run_dir="$(mktemp -d "${TMPDIR:-/tmp}/sumeragi-v2-replay.XXXXXX")"
 trap 'rm -rf -- "$run_dir"' EXIT
+tlapm_compat_dir="${run_dir}/tlapm-stdlib"
+mkdir -p "$tlapm_compat_dir"
+ln -s "${TLAPM_STDLIB}/Functions.tla" "${tlapm_compat_dir}/Functions.tla"
+ln -s "${TLAPM_STDLIB}/Folds.tla" "${tlapm_compat_dir}/Folds.tla"
 raw_trace="${run_dir}/trace.json"
 normalized_trace="${run_dir}/trace.tsv"
 tlc_log="${run_dir}/tlc.log"
@@ -50,8 +88,9 @@ tlc_log="${run_dir}/tlc.log"
 set +e
 (
   cd "$FORMAL_DIR"
-  java -cp "$TLA2TOOLS_JAR" tlc2.TLC \
-    -noGenerateSpecTE \
+  java -XX:+UseParallelGC "-DTLA-Library=${tlapm_compat_dir}" \
+    -cp "$TLA2TOOLS_JAR" tlc2.TLC \
+    -maxSetSize "$TLC_MAX_SET_SIZE" \
     -metadir "${run_dir}/states" \
     -workers 1 \
     -depth 500 \
