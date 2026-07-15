@@ -115,7 +115,7 @@ PROOF
       BY <1>1, <2>4 DEF CertificateBackedBy
     <2>6. /\ vote.subject \in validSubjects
           /\ BodyHeldBy(durable, vote.signer,
-                        vote.context, vote.subject)
+                        vote.context, vote.view, vote.subject)
       BY <1>1, <2>4, <2>5 DEF HonestIntentSound, VoteBacksCertificate
     <2> QED BY <2>4, <2>5, <2>6
        DEF CertificateValidityAndAvailability, VoteBacksCertificate

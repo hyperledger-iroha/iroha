@@ -1,5 +1,13 @@
 ---- MODULE SumeragiV2ChainEpochRefinement ----
-EXTENDS SumeragiV2AsyncNetwork, TLAPS
+EXTENDS SumeragiV2AsyncLivenessProofs, TLAPS
+
+(***************************************************************************
+`LivenessTargetContext` is an arbitrary module constant.  Proving the final
+height property for this constant is therefore the ordinary TLA+ universal
+closure over every admissible assignment, while keeping the asynchronous
+proof INSTANCE nonparameterized for TLAPS.
+***************************************************************************)
+CONSTANT LivenessTargetContext
 
 (***************************************************************************
 Selected-height synchronous product.
@@ -322,25 +330,578 @@ NeedsSuccessorAsyncInstance(node) ==
        = Chain!ContextRecord(nodeHeight[node],
                              Chain!HistoryThrough(nodeHeight[node]))
 
+GenesisApplicationAdvanceInvariant ==
+  ContextRecord(0, <<>>).height < MaxHeight
+    => \A node \in AsyncCurrentResponsiveVoters:
+         NodeHasApplication(node)
+           => /\ node \in ValidatorIds
+              /\ nodeHeight[node] > context.height
+
+GenesisApplicationHeightInvariant ==
+  /\ context = ContextRecord(0, <<>>)
+  /\ GenesisApplicationAdvanceInvariant
+
+GenesisApplicationHandoffInvariant ==
+  /\ context = ContextRecord(0, <<>>)
+  /\ (ContextRecord(0, <<>>).height < MaxHeight
+        => \A node \in AsyncCurrentResponsiveVoters:
+             NodeHasApplication(node) => NeedsSuccessorAsyncInstance(node))
+
 SuccessorInstanceSeam ==
   \E node \in Honest: NeedsSuccessorAsyncInstance(node)
 
 (***************************************************************************
-The concrete AsyncChainSpec begins at genesis and can carry each responsive
-validator across that instance's application boundary into its exact first
-successor context.  This formula records only that genesis handoff; it does
-not start the successor AsyncSpecAt instance or claim indexed height progress.
+The concrete AsyncChainSpec begins at genesis and, when a successor height
+exists, can carry each responsive validator across that instance's application
+boundary into its exact first successor context.  This formula records only
+that genesis handoff; it does not start the successor AsyncSpecAt instance or
+claim indexed height progress.  At the finite terminal horizon there is no
+successor-instance obligation.
 
-The proof ledger records this narrower theorem as specified_unproved. The
-separate HeightLivenessObligation below targets the indexed composition; this
-genesis theorem is not used as a substitute for that multi-height induction.
+The theorem below discharges this narrower genesis seam.  The separate
+HeightLivenessObligation targets the indexed composition; this genesis theorem
+is not used as a substitute for that multi-height induction.
 ***************************************************************************)
 GenesisHeightSuccessorHandoffProperty ==
-  \A node \in AsyncCurrentResponsiveVoters:
-    gst ~> NeedsSuccessorAsyncInstance(node)
+  ContextRecord(0, <<>>).height < MaxHeight
+    => \A node \in AsyncCurrentResponsiveVoters:
+         gst ~> NeedsSuccessorAsyncInstance(node)
 
+THEOREM GenesisTerminalHorizonHasNoSuccessorObligation ==
+  ContextRecord(0, <<>>).height = MaxHeight
+    => GenesisHeightSuccessorHandoffProperty
+BY SMT DEF GenesisHeightSuccessorHandoffProperty
+
+THEOREM AsyncChainInitEstablishesGenesisApplicationHeight ==
+  AsyncChainInit => GenesisApplicationHeightInvariant
+PROOF
+  <1>1. AsyncChainInit => context = ContextRecord(0, <<>>)
+    BY DEF AsyncChainInit, AsyncInit, AsyncInitAt,
+           AsyncBaseInitAt, InitAt
+  <1>2. AsyncChainInit => applied = {}
+    BY DEF AsyncChainInit, AsyncInit, AsyncInitAt,
+           AsyncBaseInitAt, InitAt, ContextRecord
+  <1> QED BY <1>1, <1>2, SMT
+       DEF GenesisApplicationHeightInvariant,
+           GenesisApplicationAdvanceInvariant, NodeHasApplication
+
+THEOREM AsyncChainStepKeepsFrozenContext ==
+  context = ContextRecord(0, <<>>)
+    /\ [AsyncChainNext]_AsyncChainVars
+    => context' = ContextRecord(0, <<>>)
+BY Isa DEF AsyncChainNext, AsyncNext, AsyncChainVars,
+           AsyncAllVars, vars
+
+THEOREM UnchangedApplicationEvidenceProjectsUnchangedApplications ==
+  TotalReceiptProjection
+    /\ TotalReceiptProjection'
+    /\ durableApplicationEvidence' = durableApplicationEvidence
+    => applied' = applied
+BY SMT DEF TotalReceiptProjection, ApplicationReceiptProjection
+
+THEOREM AppendedApplicationEvidenceProjectsAppendedApplication ==
+  \A application:
+    TotalReceiptProjection
+      /\ TotalReceiptProjection'
+      /\ durableApplicationEvidence' =
+           durableApplicationEvidence \cup {application}
+      => applied' = applied \cup {application}
+BY SMT DEF TotalReceiptProjection, ApplicationReceiptProjection
+
+THEOREM AppendedApplicationCanOnlyAddItsNode ==
+  \A application, node:
+    (/\ context' = context
+     /\ applied' = applied \cup {application}
+     /\ NodeHasApplication(node)')
+      => \/ NodeHasApplication(node)
+         \/ application.node = node
+BY Isa DEF NodeHasApplication
+
+THEOREM NewlyAppendedNodeApplicationCarriesExactContext ==
+  \A application, node:
+    (/\ context' = context
+     /\ applied' = applied \cup {application}
+     /\ NodeHasApplication(node)'
+     /\ ~NodeHasApplication(node))
+      => /\ application.node = node
+         /\ application.qc.context = context
+         /\ application.qc.phase = "Commit"
+BY Isa DEF NodeHasApplication
+
+(***************************************************************************
+The Chain instance carries the model and state typing needed by the genesis
+handoff proof.  Keeping these projections explicit prevents INSTANCE-local
+operators from being expanded differently in each application branch.
+***************************************************************************)
+THEOREM ChainInvariantProvidesGenesisModelTyping ==
+  Chain!ChainEpochInvariant
+    => /\ Responsive \subseteq Honest
+       /\ Honest \subseteq ValidatorIds
+       /\ nodeHeight \in [ValidatorIds -> Heights]
+       /\ MaxHeight \in Nat
+BY SMT DEF Chain!ChainEpochInvariant,
+           Chain!ChainEpochTypeInvariant,
+           Chain!ModelConfiguration,
+           Chain!QuorumConfiguration,
+           Chain!ValidatorIds, ValidatorIds,
+           Chain!Heights, Heights
+
+THEOREM ChainInvariantTypesGenesisResponsiveVoters ==
+  Chain!ChainEpochInvariant
+    => AsyncCurrentResponsiveVoters \subseteq ValidatorIds
+BY Isa, ChainInvariantProvidesGenesisModelTyping
+   DEF AsyncCurrentResponsiveVoters
+
+THEOREM ChainInvariantTypesGenesisResponsiveVotersAsHonest ==
+  Chain!ChainEpochInvariant
+    => AsyncCurrentResponsiveVoters \subseteq Honest
+BY Isa, ChainInvariantProvidesGenesisModelTyping
+   DEF AsyncCurrentResponsiveVoters
+
+THEOREM ChainInvariantProvidesNodeHeightDomain ==
+  Chain!ChainEpochInvariant
+    => DOMAIN nodeHeight = ValidatorIds
+BY Isa, ChainInvariantProvidesGenesisModelTyping
+
+THEOREM ChainInvariantTypesNodeHeightsAsNaturals ==
+  Chain!ChainEpochInvariant
+    => \A node \in ValidatorIds: nodeHeight[node] \in Nat
+BY SMT, ChainInvariantProvidesGenesisModelTyping DEF Heights
+
+THEOREM ChainEpochStepPreservesGenesisApplicationAdvance ==
+  GenesisApplicationAdvanceInvariant
+    /\ context = ContextRecord(0, <<>>)
+    /\ context' = context
+    /\ Chain!ChainEpochInvariant
+    /\ TotalReceiptProjection
+    /\ TotalReceiptProjection'
+    /\ [Chain!ChainEpochNext]_Chain!ChainEpochVars
+    => GenesisApplicationAdvanceInvariant'
+PROOF
+  <1>1. ASSUME GenesisApplicationAdvanceInvariant,
+              context = ContextRecord(0, <<>>),
+              context' = context,
+              Chain!ChainEpochInvariant,
+              TotalReceiptProjection,
+              TotalReceiptProjection',
+              [Chain!ChainEpochNext]_Chain!ChainEpochVars
+         PROVE GenesisApplicationAdvanceInvariant'
+    <2>1. CASE UNCHANGED Chain!ChainEpochVars
+      <3>1. /\ nodeHeight' = nodeHeight
+             /\ nodeContext' = nodeContext
+             /\ durableApplicationEvidence' =
+                  durableApplicationEvidence
+        BY <2>1, Isa DEF Chain!ChainEpochVars
+      <3>2. applied' = applied
+        BY <1>1, <3>1,
+           UnchangedApplicationEvidenceProjectsUnchangedApplications
+      <3> QED BY <1>1, <3>1, <3>2, Isa
+         DEF GenesisApplicationAdvanceInvariant,
+             NodeHasApplication, AsyncCurrentResponsiveVoters,
+             CurrentVoters, CurrentEpoch
+    <2>2. CASE \E decision \in Chain!DecisionEvidenceSet:
+                  Chain!RecordCertifiedNext(decision)
+      <3>1. /\ nodeHeight' = nodeHeight
+             /\ nodeContext' = nodeContext
+             /\ durableApplicationEvidence' =
+                  durableApplicationEvidence
+        BY <2>2, Isa DEF Chain!RecordCertifiedNext
+      <3>2. applied' = applied
+        BY <1>1, <3>1,
+           UnchangedApplicationEvidenceProjectsUnchangedApplications
+      <3> QED BY <1>1, <3>1, <3>2, Isa
+         DEF GenesisApplicationAdvanceInvariant,
+             NodeHasApplication, AsyncCurrentResponsiveVoters,
+             CurrentVoters, CurrentEpoch
+    <2>3. CASE \E decision \in Chain!DecisionEvidenceSet:
+                  Chain!RecordKnownDecision(decision)
+      <3>1. /\ nodeHeight' = nodeHeight
+             /\ nodeContext' = nodeContext
+             /\ durableApplicationEvidence' =
+                  durableApplicationEvidence
+        BY <2>3, Isa DEF Chain!RecordKnownDecision
+      <3>2. applied' = applied
+        BY <1>1, <3>1,
+           UnchangedApplicationEvidenceProjectsUnchangedApplications
+      <3> QED BY <1>1, <3>1, <3>2, Isa
+         DEF GenesisApplicationAdvanceInvariant,
+             NodeHasApplication, AsyncCurrentResponsiveVoters,
+             CurrentVoters, CurrentEpoch
+    <2>4. CASE \E application \in Chain!DecisionEvidenceSet:
+                  Chain!RecordAppliedNext(application)
+      <3>1. PICK application \in Chain!DecisionEvidenceSet:
+               Chain!RecordAppliedNext(application)
+        BY <2>4
+      <3>2. durableApplicationEvidence' =
+               durableApplicationEvidence \cup {application}
+        BY <3>1 DEF Chain!RecordAppliedNext
+      <3>3. applied' = applied \cup {application}
+        BY <1>1, <3>2,
+           AppendedApplicationEvidenceProjectsAppendedApplication
+      <3>4. CASE ~(ContextRecord(0, <<>>).height < MaxHeight)
+        BY <3>4 DEF GenesisApplicationAdvanceInvariant
+      <3>5. CASE ContextRecord(0, <<>>).height < MaxHeight
+        <4>1. AsyncCurrentResponsiveVoters' =
+                 AsyncCurrentResponsiveVoters
+          BY <1>1, Isa
+             DEF AsyncCurrentResponsiveVoters,
+                 CurrentVoters, CurrentEpoch
+        <4>2. ASSUME NEW node \in AsyncCurrentResponsiveVoters',
+                    NodeHasApplication(node)'
+               PROVE /\ node \in ValidatorIds
+                     /\ nodeHeight'[node] > context'.height
+          <5>1. node \in AsyncCurrentResponsiveVoters
+            BY <4>1, <4>2
+          <5>2. node \in ValidatorIds
+            BY <1>1, <5>1,
+               ChainInvariantTypesGenesisResponsiveVoters
+          <5>3. node \in AsyncCurrentResponsiveVoters
+            BY <4>1, <4>2
+          <5>4. CASE node = application.node
+            <6>1. nodeHeight[node] \in Nat
+              BY <1>1, <5>2,
+                 ChainInvariantTypesNodeHeightsAsNaturals
+            <6>2. node \in DOMAIN nodeHeight
+              BY <1>1, <5>2, Isa,
+                 ChainInvariantProvidesNodeHeightDomain
+            <6>3. nodeHeight' =
+                     [nodeHeight EXCEPT
+                        ![application.node] =
+                          nodeHeight[application.node] + 1]
+              BY <3>1 DEF Chain!RecordAppliedNext
+            <6>4. nodeHeight'[application.node] =
+                     nodeHeight[application.node] + 1
+              BY <5>4, <6>2, <6>3,
+                 Chain!FunctionalUpdateAtKey
+            <6>5. nodeHeight'[node] = nodeHeight[node] + 1
+              BY <5>4, <6>4
+            <6>6. context'.height = 0
+              BY <1>1 DEF ContextRecord
+            <6> QED BY <5>2, <6>1, <6>5, <6>6, SMT
+          <5>5. CASE node # application.node
+            <6>1. NodeHasApplication(node)
+              BY <1>1, <3>3, <4>2, <5>5,
+                 AppendedApplicationCanOnlyAddItsNode
+            <6>2. /\ node \in ValidatorIds
+                   /\ nodeHeight[node] > context.height
+              BY <1>1, <3>5, <5>3, <6>1
+                 DEF GenesisApplicationAdvanceInvariant
+            <6>3. node \in DOMAIN nodeHeight
+              BY <1>1, <6>2, Isa,
+                 ChainInvariantProvidesNodeHeightDomain
+            <6>4. nodeHeight' =
+                     [nodeHeight EXCEPT
+                        ![application.node] =
+                          nodeHeight[application.node] + 1]
+              BY <3>1 DEF Chain!RecordAppliedNext
+            <6>5. nodeHeight'[node] = nodeHeight[node]
+              BY <5>5, <6>3, <6>4,
+                 Chain!FunctionalUpdateAwayFromKey
+            <6> QED BY <1>1, <5>2, <6>2, <6>5, SMT
+          <5> QED BY <5>4, <5>5
+        <4> QED BY <4>2 DEF GenesisApplicationAdvanceInvariant
+      <3> QED BY <3>4, <3>5
+    <2>5. CASE \E application \in Chain!DecisionEvidenceSet:
+                  Chain!RecordKnownApplication(application)
+      <3>1. PICK application \in Chain!DecisionEvidenceSet:
+               Chain!RecordKnownApplication(application)
+        BY <2>5
+      <3>2. durableApplicationEvidence' =
+               durableApplicationEvidence \cup {application}
+        BY <3>1 DEF Chain!RecordKnownApplication
+      <3>3. applied' = applied \cup {application}
+        BY <1>1, <3>2,
+           AppendedApplicationEvidenceProjectsAppendedApplication
+      <3>4. CASE ~(ContextRecord(0, <<>>).height < MaxHeight)
+        BY <3>4 DEF GenesisApplicationAdvanceInvariant
+      <3>5. CASE ContextRecord(0, <<>>).height < MaxHeight
+        <4>1. AsyncCurrentResponsiveVoters' =
+                 AsyncCurrentResponsiveVoters
+          BY <1>1, Isa
+             DEF AsyncCurrentResponsiveVoters,
+                 CurrentVoters, CurrentEpoch
+        <4>2. ASSUME NEW node \in AsyncCurrentResponsiveVoters',
+                    NodeHasApplication(node)'
+               PROVE /\ node \in ValidatorIds
+                     /\ nodeHeight'[node] > context'.height
+          <5>1. node \in AsyncCurrentResponsiveVoters
+            BY <4>1, <4>2
+          <5>2. /\ node \in ValidatorIds
+                 /\ node \in Honest
+            BY <1>1, <5>1,
+               ChainInvariantTypesGenesisResponsiveVoters,
+               ChainInvariantTypesGenesisResponsiveVotersAsHonest
+          <5>3. node \in AsyncCurrentResponsiveVoters
+            BY <4>1, <4>2
+          <5>4. nodeHeight'[node] = nodeHeight[node]
+            BY <3>1 DEF Chain!RecordKnownApplication
+          <5>5. CASE NodeHasApplication(node)
+            <6>1. /\ node \in ValidatorIds
+                   /\ nodeHeight[node] > context.height
+              BY <1>1, <3>5, <5>3, <5>5
+                 DEF GenesisApplicationAdvanceInvariant
+            <6> QED BY <1>1, <5>2, <5>4, <6>1, SMT
+          <5>6. CASE ~NodeHasApplication(node)
+            <6>1. /\ application.node = node
+                   /\ application.qc.context = context
+                   /\ application.qc.phase = "Commit"
+              BY <1>1, <3>3, <4>2, <5>6,
+                 NewlyAppendedNodeApplicationCarriesExactContext
+            <6>2. \/ Chain!ReceiptOutsideChainHorizon(application)
+                   \/ application.node \notin Honest
+                   \/ application.qc.context.height + 1
+                        <= nodeHeight[application.node]
+              BY <3>1 DEF Chain!RecordKnownApplication
+            <6>3. MaxHeight \in Nat
+              BY <1>1, ChainInvariantProvidesGenesisModelTyping
+            <6>4. ContextRecord(0, <<>>).height = 0
+              BY DEF ContextRecord
+            <6>5. application.qc.context.height = 0
+              <7>1. application.qc.context = ContextRecord(0, <<>>)
+                BY <1>1, <6>1
+              <7> QED BY <7>1 DEF ContextRecord
+            <6>6. ~Chain!ReceiptOutsideChainHorizon(application)
+              BY <3>5, <6>3, <6>4, <6>5, SMT
+                 DEF Chain!ReceiptOutsideChainHorizon
+            <6>7. application.node \in Honest
+              BY <5>2, <6>1
+            <6>8. application.qc.context.height + 1
+                     <= nodeHeight[application.node]
+              BY <6>2, <6>6, <6>7
+            <6>9. application.qc.context.height = context.height
+              BY <6>1
+            <6>10. nodeHeight[application.node] = nodeHeight[node]
+              BY <6>1
+            <6>11. nodeHeight[node] > context.height
+              <7>1. context.height + 1 <= nodeHeight[node]
+                BY <6>8, <6>9, <6>10
+              <7>2. context.height = 0
+                BY <1>1 DEF ContextRecord
+              <7>3. nodeHeight[node] \in Nat
+                BY <1>1, <5>2,
+                   ChainInvariantTypesNodeHeightsAsNaturals
+              <7> QED BY <7>1, <7>2, <7>3, SMT
+            <6> QED BY <1>1, <5>2, <5>4, <6>11, SMT
+          <5> QED BY <5>5, <5>6
+        <4> QED BY <4>2 DEF GenesisApplicationAdvanceInvariant
+      <3> QED BY <3>4, <3>5
+    <2> QED BY <1>1, <2>1, <2>2, <2>3, <2>4, <2>5
+         DEF Chain!ChainEpochNext
+  <1> QED BY <1>1
+
+THEOREM AsyncChainStepPreservesGenesisApplicationHeight ==
+  GenesisApplicationHeightInvariant
+    /\ Chain!ChainEpochInvariant
+    /\ TotalReceiptProjection
+    /\ [AsyncChainNext]_AsyncChainVars
+    => GenesisApplicationHeightInvariant'
+PROOF
+  <1>1. ASSUME GenesisApplicationHeightInvariant,
+              Chain!ChainEpochInvariant,
+              TotalReceiptProjection,
+              [AsyncChainNext]_AsyncChainVars
+         PROVE GenesisApplicationHeightInvariant'
+    <2>1. context' = ContextRecord(0, <<>>)
+      BY <1>1, AsyncChainStepKeepsFrozenContext
+         DEF GenesisApplicationHeightInvariant
+    <2>2. TotalReceiptProjection'
+      BY <1>1, AsyncChainStepPreservesReceiptProjection
+         DEF GenesisApplicationHeightInvariant
+    <2>3. [Chain!ChainEpochNext]_Chain!ChainEpochVars
+      BY <1>1, AsyncChainStepProjectsChainEpochStep
+         DEF GenesisApplicationHeightInvariant
+    <2>4. GenesisApplicationAdvanceInvariant'
+      BY <1>1, <2>1, <2>2, <2>3,
+         ChainEpochStepPreservesGenesisApplicationAdvance
+         DEF GenesisApplicationHeightInvariant
+    <2> QED BY <2>1, <2>4
+         DEF GenesisApplicationHeightInvariant
+  <1> QED BY <1>1
+
+THEOREM GenesisApplicationHeightAndChainContextImplyHandoff ==
+  (/\ GenesisApplicationHeightInvariant
+   /\ Chain!ChainEpochInvariant)
+    => GenesisApplicationHandoffInvariant
+PROOF
+  <1>1. ASSUME GenesisApplicationHeightInvariant,
+              Chain!ChainEpochInvariant
+         PROVE GenesisApplicationHandoffInvariant
+    <2>1. /\ context = ContextRecord(0, <<>>)
+           /\ GenesisApplicationAdvanceInvariant
+      BY <1>1 DEF GenesisApplicationHeightInvariant
+    <2>2. Chain!ContextsMatchLocalHistories
+      BY <1>1 DEF Chain!ChainEpochInvariant
+    <2>3. ASSUME ContextRecord(0, <<>>).height < MaxHeight
+           PROVE \A node \in AsyncCurrentResponsiveVoters:
+                   NodeHasApplication(node)
+                     => NeedsSuccessorAsyncInstance(node)
+      <3>1. ASSUME NEW node \in AsyncCurrentResponsiveVoters,
+                    NodeHasApplication(node)
+             PROVE NeedsSuccessorAsyncInstance(node)
+        <4>1. /\ node \in ValidatorIds
+               /\ nodeHeight[node] > context.height
+          BY <2>1, <2>3, <3>1
+             DEF GenesisApplicationAdvanceInvariant
+        <4>2. node \in Chain!ValidatorIds
+          BY <4>1 DEF Chain!ValidatorIds, ValidatorIds
+        <4>3. nodeContext[node]
+                 = Chain!ContextRecord(
+                     nodeHeight[node],
+                     Chain!HistoryThrough(nodeHeight[node]))
+          BY <2>2, <4>2, Isa DEF Chain!ContextsMatchLocalHistories
+        <4> QED BY <4>1, <4>3 DEF NeedsSuccessorAsyncInstance
+      <3> QED BY <3>1
+    <2> QED BY <2>1, <2>3 DEF GenesisApplicationHandoffInvariant
+  <1> QED BY <1>1
+
+THEOREM AsyncChainAlwaysGenesisApplicationHeight ==
+  AsyncChainSpec => []GenesisApplicationHeightInvariant
+PROOF
+  <1>1. AsyncChainInit => GenesisApplicationHeightInvariant
+    BY AsyncChainInitEstablishesGenesisApplicationHeight
+  <1>2. AsyncChainSpec => []Chain!ChainEpochInvariant
+    BY AsyncChainPrefixAndEpochSafety, PTL DEF Chain!ChainEpochSafety
+  <1>3. AsyncChainSpec => []TotalReceiptProjection
+    BY TotalConcreteDurableReceiptRefinement
+  <1>4. GenesisApplicationHeightInvariant
+           /\ Chain!ChainEpochInvariant
+           /\ TotalReceiptProjection
+           /\ [AsyncChainNext]_AsyncChainVars
+           => GenesisApplicationHeightInvariant'
+    BY AsyncChainStepPreservesGenesisApplicationHeight
+  <1> QED BY <1>1, <1>2, <1>3, <1>4, PTL DEF AsyncChainSpec
+
+THEOREM AsyncChainAlwaysGenesisApplicationHandoff ==
+  AsyncChainSpec => []GenesisApplicationHandoffInvariant
+PROOF
+  <1>1. AsyncChainSpec => []GenesisApplicationHeightInvariant
+    BY AsyncChainAlwaysGenesisApplicationHeight
+  <1>2. AsyncChainSpec => []Chain!ChainEpochInvariant
+    BY AsyncChainPrefixAndEpochSafety, PTL DEF Chain!ChainEpochSafety
+  <1>3. GenesisApplicationHeightInvariant
+           /\ Chain!ChainEpochInvariant
+           => GenesisApplicationHandoffInvariant
+    BY GenesisApplicationHeightAndChainContextImplyHandoff
+  <1> QED BY <1>1, <1>2, <1>3, PTL
+
+THEOREM AlwaysAsyncAllResponsiveAppliedIncludesVoter ==
+  \A initialContext: \A node \in AsyncVotersAt(initialContext):
+    [](AsyncAllResponsiveAppliedAt(initialContext) => NodeHasApplication(node))
+PROOF
+  <1>1. ASSUME NEW initialContext, NEW node \in AsyncVotersAt(initialContext)
+         PROVE [](AsyncAllResponsiveAppliedAt(initialContext) => NodeHasApplication(node))
+    <2>1. AsyncAllResponsiveAppliedAt(initialContext) => NodeHasApplication(node)
+      BY <1>1 DEF AsyncAllResponsiveAppliedAt
+    <2> QED BY <2>1, PTL
+  <1> QED BY <1>1
+THEOREM AlwaysGenesisAllResponsiveAppliedIncludesVoter ==
+  \A node \in AsyncVotersAt(ContextRecord(0, <<>>)):
+    [](AsyncAllResponsiveAppliedAt(ContextRecord(0, <<>>)) => NodeHasApplication(node))
+PROOF
+  <1>1. ASSUME NEW node \in AsyncVotersAt(ContextRecord(0, <<>>))
+         PROVE [](AsyncAllResponsiveAppliedAt(ContextRecord(0, <<>>)) => NodeHasApplication(node))
+    <2>1. AsyncAllResponsiveAppliedAt(ContextRecord(0, <<>>)) => NodeHasApplication(node)
+      BY <1>1 DEF AsyncAllResponsiveAppliedAt
+    <2> QED BY <2>1, PTL
+  <1> QED BY <1>1
+THEOREM AlwaysGenesisContextPreservesResponsiveVoter ==
+  \A node \in Responsive \cap VotingRoster(ContextRecord(0, <<>>).epoch):
+    [](context = ContextRecord(0, <<>>) => node \in AsyncCurrentResponsiveVoters)
+PROOF
+  <1>1. ASSUME NEW node \in Responsive \cap VotingRoster(ContextRecord(0, <<>>).epoch)
+         PROVE [](context = ContextRecord(0, <<>>) => node \in AsyncCurrentResponsiveVoters)
+    <2>1. context = ContextRecord(0, <<>>) => node \in AsyncCurrentResponsiveVoters
+      BY <1>1, SMT DEF AsyncCurrentResponsiveVoters, CurrentVoters, CurrentEpoch
+    <2> QED BY <2>1, PTL
+  <1> QED BY <1>1
+THEOREM AlwaysGenesisHandoffIncludesCurrentVoter ==
+  \A node:
+    []((/\ GenesisApplicationHandoffInvariant
+         /\ ContextRecord(0, <<>>).height < MaxHeight
+         /\ node \in AsyncCurrentResponsiveVoters)
+          => (NodeHasApplication(node) => NeedsSuccessorAsyncInstance(node)))
+PROOF
+  <1>1. ASSUME NEW node
+         PROVE []((/\ GenesisApplicationHandoffInvariant
+                    /\ ContextRecord(0, <<>>).height < MaxHeight
+                    /\ node \in AsyncCurrentResponsiveVoters)
+                     => (NodeHasApplication(node) => NeedsSuccessorAsyncInstance(node)))
+    <2>1. (/\ GenesisApplicationHandoffInvariant
+           /\ ContextRecord(0, <<>>).height < MaxHeight
+           /\ node \in AsyncCurrentResponsiveVoters)
+            => (NodeHasApplication(node) => NeedsSuccessorAsyncInstance(node))
+      BY SMT DEF GenesisApplicationHandoffInvariant
+    <2> QED BY <2>1, PTL
+  <1> QED BY <1>1
+THEOREM AlwaysGenesisNonterminal ==
+  ContextRecord(0, <<>>).height < MaxHeight => [](ContextRecord(0, <<>>).height < MaxHeight)
+PROOF
+  <1>1. ASSUME ContextRecord(0, <<>>).height < MaxHeight
+         PROVE [](ContextRecord(0, <<>>).height < MaxHeight)
+    <2> QED BY <1>1, PTL
+  <1> QED BY <1>1
 THEOREM GenesisHeightSuccessorHandoffObligation ==
   AsyncChainSpec => GenesisHeightSuccessorHandoffProperty
+PROOF
+  <1>1. ASSUME AsyncChainSpec
+         PROVE GenesisHeightSuccessorHandoffProperty
+    <2>1. AsyncSpec
+      BY <1>1, AsyncChainSpecProjectsAsyncSpec
+    <2>2. AsyncSpecAt(ContextRecord(0, <<>>))
+      BY <2>1
+         DEF AsyncSpec, AsyncSpecAt, AsyncInit, AsyncFairness
+    <2>3. gst ~> AsyncAllResponsiveAppliedAt(
+                  ContextRecord(0, <<>>))
+      <3>1. OneHeightCompletionLiveness(ContextRecord(0, <<>>))
+        BY OneHeightCompletionObligation
+      <3> QED BY <2>2, <3>1 DEF OneHeightCompletionLiveness
+    <2>4. []GenesisApplicationHandoffInvariant
+      BY <1>1, AsyncChainAlwaysGenesisApplicationHandoff
+    <2>5. CurrentEpoch = ContextRecord(0, <<>>).epoch
+      BY <1>1
+         DEF AsyncChainSpec, AsyncChainInit, AsyncInit,
+             AsyncInitAt, AsyncBaseInitAt, InitAt,
+             ContextRecord, CurrentEpoch
+    <2>6. ASSUME ContextRecord(0, <<>>).height < MaxHeight,
+                  NEW node \in AsyncCurrentResponsiveVoters
+           PROVE gst ~> NeedsSuccessorAsyncInstance(node)
+      <3>1. node \in AsyncVotersAt(ContextRecord(0, <<>>))
+        BY <2>5, <2>6
+           DEF AsyncCurrentResponsiveVoters, AsyncVotersAt,
+               CurrentVoters
+      <3>2. gst ~> NodeHasApplication(node)
+        <4>1. [](AsyncAllResponsiveAppliedAt(
+                 ContextRecord(0, <<>>))
+                   => NodeHasApplication(node))
+          BY <3>1, AlwaysGenesisAllResponsiveAppliedIncludesVoter
+        <4> QED BY <2>3, <4>1, PTL
+      <3>3. node \in Responsive
+                    \cap VotingRoster(
+                         ContextRecord(0, <<>>).epoch)
+        BY <2>5, <2>6
+           DEF AsyncCurrentResponsiveVoters,
+               CurrentVoters, CurrentEpoch
+      <3>4. [](context = ContextRecord(0, <<>>))
+        BY <2>4, PTL DEF GenesisApplicationHandoffInvariant
+      <3>5. [](context = ContextRecord(0, <<>>)
+                  => node \in AsyncCurrentResponsiveVoters)
+        BY <3>3, AlwaysGenesisContextPreservesResponsiveVoter
+      <3>6. [](node \in AsyncCurrentResponsiveVoters)
+        BY <3>4, <3>5, PTL
+      <3>7. []((/\ GenesisApplicationHandoffInvariant
+                 /\ ContextRecord(0, <<>>).height < MaxHeight
+                 /\ node \in AsyncCurrentResponsiveVoters)
+                  => (NodeHasApplication(node)
+                        => NeedsSuccessorAsyncInstance(node)))
+        BY AlwaysGenesisHandoffIncludesCurrentVoter
+      <3>8. [](ContextRecord(0, <<>>).height < MaxHeight)
+        BY <2>6, AlwaysGenesisNonterminal
+      <3>9. [](NodeHasApplication(node)
+                  => NeedsSuccessorAsyncInstance(node))
+        BY <2>4, <3>6, <3>7, <3>8, PTL
+      <3> QED BY <3>2, <3>9, PTL
+    <2> QED BY <2>6 DEF GenesisHeightSuccessorHandoffProperty
+  <1> QED BY <1>1
 
 
 (***************************************************************************
@@ -348,17 +909,19 @@ Authoritative indexed successor-instance product.
 
 Every admissible frozen ContextRecord owns one pre-created, dormant copy of the
 complete AsyncAllVars tuple. IndexedAsync is an actual parameterized instance
-of the one-height asynchronous proof module; there is no shadow consensus
-relation. ContextRecords with an invalid lineage are outside this domain
-because AsyncInitAt rejects them as well.
+of the production SumeragiV2AsyncNetwork vocabulary; there is no shadow
+consensus relation. One-height proof facts are stated separately over that
+exact instance rather than cited as hidden parameterized instance theorems.
+ContextRecords with an invalid lineage are outside this domain because
+AsyncInitAt rejects them as well.
 A context becomes live when its first validator joins after an exact durable
 application receipt. Validators join independently, and RunNode is gated only
 by that validator's current nodeContext. Thus an early validator may execute
 without waiting for its peers. Joined membership is monotone, so old instances
 remain available to RunHistoricalServer after validators advance.
 
-The nested tuple layout is exactly <<vars, AsyncSchedulerVars>>: 45 Core
-components followed by 29 scheduler/transport components. Shape predicates
+The nested tuple layout is exactly <<vars, AsyncSchedulerVars>>: 46 Core
+components followed by 30 scheduler/transport components. Shape predicates
 exclude unmodelled fields and make every instance projection extensional.
 ***************************************************************************)
 IndexedCore(initialContext, component) ==
@@ -391,7 +954,7 @@ BY DEF NodeHasApplication, CatchUpNodeHasApplicationProjection
 
 IndexedProjectedNodeHasApplication(initialContext, node) ==
   CatchUpNodeHasApplicationProjection(
-    IndexedCore(initialContext, 45),
+    IndexedCore(initialContext, 46),
     IndexedCore(initialContext, 2), node)
 
 IndexedAsync(initialContext) ==
@@ -406,71 +969,158 @@ IndexedAsync(initialContext) ==
        gst <- IndexedCore(initialContext, 7),
        availableBodies <- IndexedCore(initialContext, 8),
        durableBodies <- IndexedCore(initialContext, 9),
-       validatedBodies <- IndexedCore(initialContext, 10),
-       invalidBodies <- IndexedCore(initialContext, 11),
-       seenProposals <- IndexedCore(initialContext, 12),
-       receivedVotes <- IndexedCore(initialContext, 13),
-       receivedQCs <- IndexedCore(initialContext, 14),
-       receivedTimeoutVotes <- IndexedCore(initialContext, 15),
-       receivedTCs <- IndexedCore(initialContext, 16),
-       proposalIntents <- IndexedCore(initialContext, 17),
-       prepareIntents <- IndexedCore(initialContext, 18),
-       commitIntents <- IndexedCore(initialContext, 19),
-       timeoutIntents <- IndexedCore(initialContext, 20),
-       prepareQCs <- IndexedCore(initialContext, 21),
-       commitQCs <- IndexedCore(initialContext, 22),
-       formedTCs <- IndexedCore(initialContext, 23),
-       installedTCs <- IndexedCore(initialContext, 24),
-       lockRank <- IndexedCore(initialContext, 25),
-       lockSubject <- IndexedCore(initialContext, 26),
-       highestRank <- IndexedCore(initialContext, 27),
-       highestSubject <- IndexedCore(initialContext, 28),
-       pendingProposal <- IndexedCore(initialContext, 29),
-       pendingPrepare <- IndexedCore(initialContext, 30),
-       pendingObservePrepare <- IndexedCore(initialContext, 31),
-       pendingLockCommit <- IndexedCore(initialContext, 32),
-       pendingTimeout <- IndexedCore(initialContext, 33),
-       pendingInstallTC <- IndexedCore(initialContext, 34),
-       pendingDecision <- IndexedCore(initialContext, 35),
-       signProposals <- IndexedCore(initialContext, 36),
-       signVotes <- IndexedCore(initialContext, 37),
-       signTimeouts <- IndexedCore(initialContext, 38),
-       proposalNetwork <- IndexedCore(initialContext, 39),
-       voteNetwork <- IndexedCore(initialContext, 40),
-       qcNetwork <- IndexedCore(initialContext, 41),
-       timeoutNetwork <- IndexedCore(initialContext, 42),
-       tcNetwork <- IndexedCore(initialContext, 43),
-       decisions <- IndexedCore(initialContext, 44),
-       applied <- IndexedCore(initialContext, 45),
+       retainedLockedBodies <- IndexedCore(initialContext, 10),
+       validatedBodies <- IndexedCore(initialContext, 11),
+       invalidBodies <- IndexedCore(initialContext, 12),
+       seenProposals <- IndexedCore(initialContext, 13),
+       receivedVotes <- IndexedCore(initialContext, 14),
+       receivedQCs <- IndexedCore(initialContext, 15),
+       receivedTimeoutVotes <- IndexedCore(initialContext, 16),
+       receivedTCs <- IndexedCore(initialContext, 17),
+       proposalIntents <- IndexedCore(initialContext, 18),
+       prepareIntents <- IndexedCore(initialContext, 19),
+       commitIntents <- IndexedCore(initialContext, 20),
+       timeoutIntents <- IndexedCore(initialContext, 21),
+       prepareQCs <- IndexedCore(initialContext, 22),
+       commitQCs <- IndexedCore(initialContext, 23),
+       formedTCs <- IndexedCore(initialContext, 24),
+       installedTCs <- IndexedCore(initialContext, 25),
+       lockRank <- IndexedCore(initialContext, 26),
+       lockSubject <- IndexedCore(initialContext, 27),
+       highestRank <- IndexedCore(initialContext, 28),
+       highestSubject <- IndexedCore(initialContext, 29),
+       pendingProposal <- IndexedCore(initialContext, 30),
+       pendingPrepare <- IndexedCore(initialContext, 31),
+       pendingObservePrepare <- IndexedCore(initialContext, 32),
+       pendingLockCommit <- IndexedCore(initialContext, 33),
+       pendingTimeout <- IndexedCore(initialContext, 34),
+       pendingInstallTC <- IndexedCore(initialContext, 35),
+       pendingDecision <- IndexedCore(initialContext, 36),
+       signProposals <- IndexedCore(initialContext, 37),
+       signVotes <- IndexedCore(initialContext, 38),
+       signTimeouts <- IndexedCore(initialContext, 39),
+       proposalNetwork <- IndexedCore(initialContext, 40),
+       voteNetwork <- IndexedCore(initialContext, 41),
+       qcNetwork <- IndexedCore(initialContext, 42),
+       timeoutNetwork <- IndexedCore(initialContext, 43),
+       tcNetwork <- IndexedCore(initialContext, 44),
+       decisions <- IndexedCore(initialContext, 45),
+       applied <- IndexedCore(initialContext, 46),
        asyncNow <- IndexedScheduler(initialContext, 1),
        asyncCommandQueues <- IndexedScheduler(initialContext, 2),
-       asyncFifoOwed <- IndexedScheduler(initialContext, 3),
-       asyncTimeoutEmitted <- IndexedScheduler(initialContext, 4),
-       asyncRunnerPhase <- IndexedScheduler(initialContext, 5),
-       asyncRunnerBudget <- IndexedScheduler(initialContext, 6),
-       asyncIoQueues <- IndexedScheduler(initialContext, 7),
-       asyncOutstandingWork <- IndexedScheduler(initialContext, 8),
-       asyncIoReadyCompletions <- IndexedScheduler(initialContext, 9),
-       asyncLocalReadyCompletions <- IndexedScheduler(initialContext, 10),
-       asyncNextCompletionSource <- IndexedScheduler(initialContext, 11),
-       asyncIoControlAvailable <- IndexedScheduler(initialContext, 12),
-       asyncDeferredCompletionQueues <- IndexedScheduler(initialContext, 13),
-       asyncDeferredProgressQueues <- IndexedScheduler(initialContext, 14),
-       asyncDeferredNormalQueues <- IndexedScheduler(initialContext, 15),
-       asyncDeferredDrainOwed <- IndexedScheduler(initialContext, 16),
-       asyncCausalQueues <- IndexedScheduler(initialContext, 17),
-       asyncOutstandingTags <- IndexedScheduler(initialContext, 18),
-       asyncNodeDeadlines <- IndexedScheduler(initialContext, 19),
-       asyncRetransmitDeadlines <- IndexedScheduler(initialContext, 20),
-       asyncNodeServiceDeadlines <- IndexedScheduler(initialContext, 21),
-       asyncIoServiceDeadlines <- IndexedScheduler(initialContext, 22),
-       asyncSentItems <- IndexedScheduler(initialContext, 23),
-       asyncRetainedControl <- IndexedScheduler(initialContext, 24),
-       asyncActiveRequests <- IndexedScheduler(initialContext, 25),
-       asyncTransport <- IndexedScheduler(initialContext, 26),
-       asyncIngressLanes <- IndexedScheduler(initialContext, 27),
-       asyncIngressReady <- IndexedScheduler(initialContext, 28),
-       asyncHeldChunks <- IndexedScheduler(initialContext, 29)
+       asyncNextCommandClass <- IndexedScheduler(initialContext, 3),
+       asyncFifoOwed <- IndexedScheduler(initialContext, 4),
+       asyncTimeoutEmitted <- IndexedScheduler(initialContext, 5),
+       asyncRunnerPhase <- IndexedScheduler(initialContext, 6),
+       asyncRunnerBudget <- IndexedScheduler(initialContext, 7),
+       asyncIoQueues <- IndexedScheduler(initialContext, 8),
+       asyncOutstandingWork <- IndexedScheduler(initialContext, 9),
+       asyncIoReadyCompletions <- IndexedScheduler(initialContext, 10),
+       asyncLocalReadyCompletions <- IndexedScheduler(initialContext, 11),
+       asyncNextCompletionSource <- IndexedScheduler(initialContext, 12),
+       asyncIoControlAvailable <- IndexedScheduler(initialContext, 13),
+       asyncDeferredCompletionQueues <- IndexedScheduler(initialContext, 14),
+       asyncDeferredProgressQueues <- IndexedScheduler(initialContext, 15),
+       asyncDeferredNormalQueues <- IndexedScheduler(initialContext, 16),
+       asyncDeferredDrainOwed <- IndexedScheduler(initialContext, 17),
+       asyncCausalQueues <- IndexedScheduler(initialContext, 18),
+       asyncOutstandingTags <- IndexedScheduler(initialContext, 19),
+       asyncNodeDeadlines <- IndexedScheduler(initialContext, 20),
+       asyncRetransmitDeadlines <- IndexedScheduler(initialContext, 21),
+       asyncNodeServiceDeadlines <- IndexedScheduler(initialContext, 22),
+       asyncIoServiceDeadlines <- IndexedScheduler(initialContext, 23),
+       asyncSentItems <- IndexedScheduler(initialContext, 24),
+       asyncRetainedControl <- IndexedScheduler(initialContext, 25),
+       asyncActiveRequests <- IndexedScheduler(initialContext, 26),
+       asyncTransport <- IndexedScheduler(initialContext, 27),
+       asyncIngressLanes <- IndexedScheduler(initialContext, 28),
+       asyncIngressReady <- IndexedScheduler(initialContext, 29),
+       asyncHeldChunks <- IndexedScheduler(initialContext, 30)
+
+(***************************************************************************
+Proof facts are instantiated over the identical concrete tuple separately.
+`IndexedAsync` above remains the authoritative production-network relation;
+this proof-only instance contributes theorems but no alternate state or step.
+***************************************************************************)
+LivenessTargetAsyncProof ==
+  INSTANCE SumeragiV2AsyncLivenessProofs
+    WITH
+       height <- IndexedCore(LivenessTargetContext, 1),
+       context <- IndexedCore(LivenessTargetContext, 2),
+       contextHistory <- IndexedCore(LivenessTargetContext, 3),
+       nodeView <- IndexedCore(LivenessTargetContext, 4),
+       generation <- IndexedCore(LivenessTargetContext, 5),
+       up <- IndexedCore(LivenessTargetContext, 6),
+       gst <- IndexedCore(LivenessTargetContext, 7),
+       availableBodies <- IndexedCore(LivenessTargetContext, 8),
+       durableBodies <- IndexedCore(LivenessTargetContext, 9),
+       retainedLockedBodies <- IndexedCore(LivenessTargetContext, 10),
+       validatedBodies <- IndexedCore(LivenessTargetContext, 11),
+       invalidBodies <- IndexedCore(LivenessTargetContext, 12),
+       seenProposals <- IndexedCore(LivenessTargetContext, 13),
+       receivedVotes <- IndexedCore(LivenessTargetContext, 14),
+       receivedQCs <- IndexedCore(LivenessTargetContext, 15),
+       receivedTimeoutVotes <- IndexedCore(LivenessTargetContext, 16),
+       receivedTCs <- IndexedCore(LivenessTargetContext, 17),
+       proposalIntents <- IndexedCore(LivenessTargetContext, 18),
+       prepareIntents <- IndexedCore(LivenessTargetContext, 19),
+       commitIntents <- IndexedCore(LivenessTargetContext, 20),
+       timeoutIntents <- IndexedCore(LivenessTargetContext, 21),
+       prepareQCs <- IndexedCore(LivenessTargetContext, 22),
+       commitQCs <- IndexedCore(LivenessTargetContext, 23),
+       formedTCs <- IndexedCore(LivenessTargetContext, 24),
+       installedTCs <- IndexedCore(LivenessTargetContext, 25),
+       lockRank <- IndexedCore(LivenessTargetContext, 26),
+       lockSubject <- IndexedCore(LivenessTargetContext, 27),
+       highestRank <- IndexedCore(LivenessTargetContext, 28),
+       highestSubject <- IndexedCore(LivenessTargetContext, 29),
+       pendingProposal <- IndexedCore(LivenessTargetContext, 30),
+       pendingPrepare <- IndexedCore(LivenessTargetContext, 31),
+       pendingObservePrepare <- IndexedCore(LivenessTargetContext, 32),
+       pendingLockCommit <- IndexedCore(LivenessTargetContext, 33),
+       pendingTimeout <- IndexedCore(LivenessTargetContext, 34),
+       pendingInstallTC <- IndexedCore(LivenessTargetContext, 35),
+       pendingDecision <- IndexedCore(LivenessTargetContext, 36),
+       signProposals <- IndexedCore(LivenessTargetContext, 37),
+       signVotes <- IndexedCore(LivenessTargetContext, 38),
+       signTimeouts <- IndexedCore(LivenessTargetContext, 39),
+       proposalNetwork <- IndexedCore(LivenessTargetContext, 40),
+       voteNetwork <- IndexedCore(LivenessTargetContext, 41),
+       qcNetwork <- IndexedCore(LivenessTargetContext, 42),
+       timeoutNetwork <- IndexedCore(LivenessTargetContext, 43),
+       tcNetwork <- IndexedCore(LivenessTargetContext, 44),
+       decisions <- IndexedCore(LivenessTargetContext, 45),
+       applied <- IndexedCore(LivenessTargetContext, 46),
+       asyncNow <- IndexedScheduler(LivenessTargetContext, 1),
+       asyncCommandQueues <- IndexedScheduler(LivenessTargetContext, 2),
+       asyncNextCommandClass <- IndexedScheduler(LivenessTargetContext, 3),
+       asyncFifoOwed <- IndexedScheduler(LivenessTargetContext, 4),
+       asyncTimeoutEmitted <- IndexedScheduler(LivenessTargetContext, 5),
+       asyncRunnerPhase <- IndexedScheduler(LivenessTargetContext, 6),
+       asyncRunnerBudget <- IndexedScheduler(LivenessTargetContext, 7),
+       asyncIoQueues <- IndexedScheduler(LivenessTargetContext, 8),
+       asyncOutstandingWork <- IndexedScheduler(LivenessTargetContext, 9),
+       asyncIoReadyCompletions <- IndexedScheduler(LivenessTargetContext, 10),
+       asyncLocalReadyCompletions <- IndexedScheduler(LivenessTargetContext, 11),
+       asyncNextCompletionSource <- IndexedScheduler(LivenessTargetContext, 12),
+       asyncIoControlAvailable <- IndexedScheduler(LivenessTargetContext, 13),
+       asyncDeferredCompletionQueues <- IndexedScheduler(LivenessTargetContext, 14),
+       asyncDeferredProgressQueues <- IndexedScheduler(LivenessTargetContext, 15),
+       asyncDeferredNormalQueues <- IndexedScheduler(LivenessTargetContext, 16),
+       asyncDeferredDrainOwed <- IndexedScheduler(LivenessTargetContext, 17),
+       asyncCausalQueues <- IndexedScheduler(LivenessTargetContext, 18),
+       asyncOutstandingTags <- IndexedScheduler(LivenessTargetContext, 19),
+       asyncNodeDeadlines <- IndexedScheduler(LivenessTargetContext, 20),
+       asyncRetransmitDeadlines <- IndexedScheduler(LivenessTargetContext, 21),
+       asyncNodeServiceDeadlines <- IndexedScheduler(LivenessTargetContext, 22),
+       asyncIoServiceDeadlines <- IndexedScheduler(LivenessTargetContext, 23),
+       asyncSentItems <- IndexedScheduler(LivenessTargetContext, 24),
+       asyncRetainedControl <- IndexedScheduler(LivenessTargetContext, 25),
+       asyncActiveRequests <- IndexedScheduler(LivenessTargetContext, 26),
+       asyncTransport <- IndexedScheduler(LivenessTargetContext, 27),
+       asyncIngressLanes <- IndexedScheduler(LivenessTargetContext, 28),
+       asyncIngressReady <- IndexedScheduler(LivenessTargetContext, 29),
+       asyncHeldChunks <- IndexedScheduler(LivenessTargetContext, 30)
 
 AdmissibleContextRecords ==
   {initialContext \in ContextRecords:
@@ -480,8 +1130,8 @@ IndexedAsyncStateShape ==
   /\ DOMAIN indexedAsyncState = AdmissibleContextRecords
   /\ \A initialContext \in AdmissibleContextRecords:
        /\ Len(indexedAsyncState[initialContext]) = 2
-       /\ Len(indexedAsyncState[initialContext][1]) = 45
-       /\ Len(indexedAsyncState[initialContext][2]) = 29
+       /\ Len(indexedAsyncState[initialContext][1]) = 46
+       /\ Len(indexedAsyncState[initialContext][2]) = 30
 
 JoinedByContextShape ==
   joinedByContext \in [AdmissibleContextRecords -> SUBSET ValidatorIds]
@@ -496,8 +1146,8 @@ IndexedNodeCurrentAt(initialContext, node) ==
   /\ node \in joinedByContext[initialContext]
   /\ nodeContext[node] = initialContext
 
-IndexedDecisions(initialContext) == IndexedCore(initialContext, 44)
-IndexedApplications(initialContext) == IndexedCore(initialContext, 45)
+IndexedDecisions(initialContext) == IndexedCore(initialContext, 45)
+IndexedApplications(initialContext) == IndexedCore(initialContext, 46)
 
 (***************************************************************************
 InitAt for a non-genesis context contains one synthetic parent receipt. It is
@@ -571,7 +1221,7 @@ IndexedJoinedNonRunnerStep(initialContext) ==
           /\ IndexedAsync(initialContext)!EnqueueIoLocalControl(node)
      \/ IndexedAsync(initialContext)!AsyncNetworkStep
      \/ IndexedAsync(initialContext)!AsyncFaultStep
-  /\ UNCHANGED IndexedScheduler(initialContext, 21)
+  /\ UNCHANGED IndexedScheduler(initialContext, 22)
 
 IndexedJoinedNonCrashStep(initialContext) ==
   /\ (IndexedJoinedRunnerStep(initialContext)
@@ -670,12 +1320,13 @@ recorded, then its exact body is stored, deterministically validated, applied,
 and only that node joins the successor context.
 
 The two actions below expose those two durable receipt boundaries. They do not
-change any authoritative Async instance. A target must be responsive but absent
-from the old context's voting roster, so catch-up cannot duplicate or race that
-instance's own decision/application receipt. This includes a validator newly
-entering the successor roster and also lets it traverse every intermediate
-historical context after a longer roster absence. Exact context, subject, QC,
-and signer-backed body identity are copied from already durable canonical
+change any authoritative Async instance. A target must be responsive, locally
+behind, and still missing the old context's exact application. Production v2
+block sync applies that same rule to observers, newly entering validators, and
+restarted validators that were members of the frozen old roster: requester
+authentication is identity/context based, while only the historical body
+responder must be a certified old-roster signer. Exact context, round, subject,
+QC, and signer-backed body identity are copied from already durable canonical
 decision and application evidence; no synthetic finality artifact is created.
 ***************************************************************************)
 HistoricalCatchUpRecord(node, source) ==
@@ -684,7 +1335,7 @@ HistoricalCatchUpRecord(node, source) ==
 (***************************************************************************
 These are the exact projection-native expansions of `AsyncVotersAt` and
 `NodeHasApplication` from SumeragiV2AsyncNetwork: the IndexedAsync WITH-clause
-maps `applied` to IndexedCore(initialContext, 45) (IndexedApplications) and
+maps `applied` to IndexedCore(initialContext, 46) (IndexedApplications) and
 `context` to IndexedCore(initialContext, 2).  Spelling the definitions here
 keeps the parameterized proof INSTANCE out of later ENABLED obligations; no
 roster, context, phase, or per-node application condition is weakened.
@@ -693,7 +1344,6 @@ roster, context, phase, or per-node application condition is weakened.
 HistoricalCatchUpTarget(initialContext, node) ==
   /\ initialContext.height < MaxHeight
   /\ node \in Responsive
-  /\ node \notin Responsive \cap VotingRoster(initialContext.epoch)
   /\ nodeHeight[node] = initialContext.height
   /\ nodeContext[node] = initialContext
   /\ ~IndexedProjectedNodeHasApplication(initialContext, node)
@@ -709,7 +1359,7 @@ HistoricalCatchUpSource(initialContext, server, source) ==
   /\ server \in source.qc.signers \cap Honest
   /\ server \in joinedByContext[initialContext]
   /\ BodyHeldBy(IndexedCore(initialContext, 9), server,
-                 initialContext, source.qc.subject)
+                 initialContext, source.qc.view, source.qc.subject)
 
 HistoricalCatchUpDecisionAt(initialContext, node) ==
   \E decision \in historicalCatchUpDecisions:
@@ -924,6 +1574,17 @@ JoinedContextCertificationInvariant ==
                              Chain!HistoryThrough(initialContext.height))
     /\ initialContext.height <= certifiedHeight
 
+CanonicalIndexedContext(blockHeight) ==
+  Chain!ContextRecord(blockHeight, Chain!HistoryThrough(blockHeight))
+
+IndexedJoinedThroughLocalHeight ==
+  \A node \in ValidatorIds, blockHeight \in Heights:
+    blockHeight <= nodeHeight[node]
+      => /\ CanonicalIndexedContext(blockHeight)
+               \in AdmissibleContextRecords
+         /\ node \in joinedByContext[
+                       CanonicalIndexedContext(blockHeight)]
+
 JoinedRoutingInvariant ==
   \A initialContext \in AdmissibleContextRecords:
     \A node \in joinedByContext[initialContext]:
@@ -934,8 +1595,7 @@ JoinedRoutingInvariant ==
 
 IndexedApplicationsRespectNodeHeight ==
   \A initialContext \in AdmissibleContextRecords:
-    \A node \in IndexedAsync(initialContext)!
-                  AsyncVotersAt(initialContext):
+    \A node \in Responsive:
       IndexedAsync(initialContext)!NodeHasApplication(node)
         => \/ initialContext.height = MaxHeight
            \/ nodeHeight[node] > initialContext.height
@@ -946,8 +1606,6 @@ HistoricalCatchUpReceiptSound(receipt) ==
      source \in Chain!DecisionEvidenceSet:
     /\ initialContext.height < MaxHeight
     /\ receipt.node \in Responsive
-    /\ receipt.node \notin IndexedAsync(initialContext)!
-                           AsyncVotersAt(initialContext)
     /\ HistoricalCatchUpSource(initialContext, server, source)
     /\ receipt = HistoricalCatchUpRecord(receipt.node, source)
 
@@ -1068,6 +1726,7 @@ THEOREM HistoricalCatchUpCopiesCanonicalIdentity ==
            initialContext, node, server, source))
       => /\ HistoricalCatchUpRecord(node, source).qc.context
                 = initialContext
+         /\ HistoricalCatchUpRecord(node, source).qc = source.qc
          /\ HistoricalCatchUpRecord(node, source).qc.subject
                 = source.qc.subject
          /\ Chain!CanonicalCommitForSlot(
@@ -1092,6 +1751,28 @@ THEOREM SuccessorRosterEntrantIsCatchUpEligible ==
       => HistoricalCatchUpTarget(initialContext, node)
 BY DEF HistoricalCatchUpTarget
 
+(***************************************************************************
+Regression witness for the production restart path: old-roster membership is
+not a requester exclusion.  A responsive validator that restarts at its exact
+old context and lacks that context's application is eligible for the same
+authenticated CommitQC/body recovery as an observer or successor entrant.
+***************************************************************************)
+THEOREM RestartedCurrentRosterValidatorIsCatchUpEligible ==
+  \A initialContext \in AdmissibleContextRecords,
+     node \in ValidatorIds:
+    ( /\ initialContext.height < MaxHeight
+      /\ node \in Responsive
+      /\ node \in IndexedAsync(initialContext)!
+                   AsyncVotersAt(initialContext)
+      /\ nodeHeight[node] = initialContext.height
+      /\ nodeContext[node] = initialContext
+      /\ ~IndexedAsync(initialContext)!NodeHasApplication(node))
+      => HistoricalCatchUpTarget(initialContext, node)
+BY DEF HistoricalCatchUpTarget,
+       IndexedProjectedNodeHasApplication,
+       CatchUpNodeHasApplicationProjection,
+       IndexedAsync!NodeHasApplication
+
 THEOREM JoinedMembershipIsMonotone ==
   IndexedChainNext
     => \A initialContext \in AdmissibleContextRecords:
@@ -1103,6 +1784,24 @@ BY Isa DEF IndexedChainNext, IndexedReceiptClassification,
            IndexedApplicationReceiptHandoff,
            IndexedHistoricalCatchUpDecision,
            IndexedHistoricalCatchUpApplication
+
+THEOREM IndexedNodeHeightsAreMonotone ==
+  IndexedChainNext
+    => \A node \in ValidatorIds: nodeHeight[node] <= nodeHeight'[node]
+BY Isa DEF IndexedChainNext, IndexedReceiptClassification,
+           IndexedReceiptFreeChainStutter,
+           IndexedDecisionReceiptHandoff,
+           IndexedApplicationReceiptHandoff,
+           IndexedHistoricalCatchUpDecision,
+           IndexedHistoricalCatchUpApplication,
+           Chain!RecordCertifiedNext, Chain!RecordKnownDecision,
+           Chain!RecordAppliedNext, Chain!RecordKnownApplication
+
+THEOREM IndexedBracketStepKeepsNodeHeightsMonotone ==
+  [IndexedChainNext]_IndexedChainVars
+    => \A node \in ValidatorIds: nodeHeight[node] <= nodeHeight'[node]
+BY Isa, IndexedNodeHeightsAreMonotone
+   DEF IndexedChainVars, Chain!ChainEpochVars
 
 THEOREM IndexedStepProjectsChainEpochStep ==
   IndexedChainNext => [Chain!ChainEpochNext]_Chain!ChainEpochVars
@@ -1164,9 +1863,7 @@ PROOF
     <2>2. IndexedAsync(initialContext)!InitAt(initialContext)
       BY <2>1 DEF IndexedAsync!AsyncInitAt,
                     IndexedAsync!AsyncBaseInitAt
-    <2> QED BY <2>2,
-       IndexedAsync(initialContext)!
-         InitAtEstablishesStrongInductiveInvariant
+    <2> QED BY <2>2, SMT
   <1> QED BY <1>1 DEF IndexedEveryInstanceStrongInvariant
 
 THEOREM IndexedInitEstablishesCompositionInvariant ==
@@ -1212,9 +1909,7 @@ PROOF
              IndexedAsync(initialContext)!vars)
       BY <2>2, <2>3, Isa
          DEF IndexedAsync!AsyncNext, IndexedAsync!AsyncAllVars
-    <2> QED BY <2>1, <2>4,
-       IndexedAsync(initialContext)!
-         CoreStrongInductiveActionPreservation
+    <2> QED BY <2>1, <2>4, SMT
   <1> QED BY <1>1 DEF IndexedEveryInstanceStrongInvariant
 
 THEOREM IndexedActionPreservesCompositionInvariant ==
@@ -1296,6 +1991,78 @@ PROOF
            => IndexedCompositionInvariant'
     BY IndexedStepPreservesCompositionInvariant
   <1> QED BY <1>1, <1>2, PTL DEF IndexedChainSpec
+
+THEOREM IndexedInitJoinsEveryNodeThroughGenesis ==
+  IndexedChainInit => IndexedJoinedThroughLocalHeight
+BY Isa DEF IndexedChainInit, IndexedJoinedThroughLocalHeight,
+           CanonicalIndexedContext, JoinedByContextShape,
+           AdmissibleContextRecords, FrozenContextAdmissible,
+           ContextRecords, LineagesAt, Heights,
+           Chain!ChainEpochInit, Chain!HistoryThrough,
+           Chain!ContextRecord
+
+THEOREM IndexedActionPreservesJoinedThroughLocalHeight ==
+  IndexedCompositionInvariant
+    /\ IndexedJoinedThroughLocalHeight
+    /\ IndexedChainNext
+    => IndexedJoinedThroughLocalHeight'
+BY Isa DEF IndexedJoinedThroughLocalHeight,
+           CanonicalIndexedContext, IndexedChainNext,
+           IndexedProductActionAt, IndexedReceiptClassification,
+           IndexedReceiptFreeChainStutter,
+           IndexedDecisionReceiptHandoff,
+           IndexedApplicationReceiptHandoff,
+           IndexedHistoricalCatchUpDecision,
+           IndexedHistoricalCatchUpApplication,
+           SuccessorContextFor,
+           IndexedCompositionInvariant,
+           JoinedContextCertificationInvariant,
+           JoinedRoutingInvariant,
+           JoinedContexts, IndexedNodeCurrentAt,
+           Chain!ChainEpochInvariant, Chain!ChainEpochTypeInvariant,
+           Chain!CertifiedPrefixBacked,
+           Chain!NodesDoNotOutrunCertificates,
+           Chain!ContextsMatchLocalHistories,
+           Chain!RecordCertifiedNext, Chain!RecordKnownDecision,
+           Chain!RecordAppliedNext, Chain!RecordKnownApplication,
+           Chain!CanonicalCommitForSlot, Chain!HistoryThrough,
+           Chain!ContextRecord, AdmissibleContextRecords,
+           FrozenContextAdmissible, ContextRecords, LineagesAt,
+           Heights
+
+THEOREM IndexedStepPreservesJoinedThroughLocalHeight ==
+  IndexedCompositionInvariant
+    /\ IndexedJoinedThroughLocalHeight
+    /\ [IndexedChainNext]_IndexedChainVars
+    => IndexedJoinedThroughLocalHeight'
+PROOF
+  <1>1. ASSUME IndexedCompositionInvariant,
+              IndexedJoinedThroughLocalHeight,
+              [IndexedChainNext]_IndexedChainVars
+         PROVE IndexedJoinedThroughLocalHeight'
+    <2>1. CASE IndexedChainNext
+      BY <1>1, <2>1, IndexedActionPreservesJoinedThroughLocalHeight
+    <2>2. CASE UNCHANGED IndexedChainVars
+      BY <1>1, <2>2, Isa
+         DEF IndexedJoinedThroughLocalHeight,
+             CanonicalIndexedContext, IndexedChainVars,
+             Chain!ChainEpochVars
+    <2> QED BY <1>1, <2>1, <2>2
+  <1> QED BY <1>1
+
+THEOREM IndexedChainSpecJoinsEveryNodeThroughLocalHeight ==
+  IndexedChainSpec => []IndexedJoinedThroughLocalHeight
+PROOF
+  <1>1. IndexedChainInit => IndexedJoinedThroughLocalHeight
+    BY IndexedInitJoinsEveryNodeThroughGenesis
+  <1>2. IndexedChainSpec => []IndexedCompositionInvariant
+    BY IndexedChainSpecEstablishesCompositionInvariant
+  <1>3. IndexedCompositionInvariant
+           /\ IndexedJoinedThroughLocalHeight
+           /\ [IndexedChainNext]_IndexedChainVars
+           => IndexedJoinedThroughLocalHeight'
+    BY IndexedStepPreservesJoinedThroughLocalHeight
+  <1> QED BY <1>1, <1>2, <1>3, PTL DEF IndexedChainSpec
 
 THEOREM IndexedSpecPreservesJoinedRouting ==
   IndexedChainSpec => []JoinedRoutingInvariant
@@ -1490,23 +2257,442 @@ behavior and is never blocked. IndexedFairActionsRemainEnabledInProduct proves
 that the receipt wrapper does not hide enabled exact actions. Once a joined
 node is no longer current, JoinedNonCurrentDisablesExactRunNode makes its exact
 RunNode fairness obligation vacuous while historical service stays fair.
-IndexedHistoricalCatchUpProgressObligation is the remaining fairness-transfer
-lemma for nodes absent from an old roster: exact canonical application and
-signer-held body evidence enable authenticated block sync, and its two explicit
-weak-fair actions must deliver the node's own application and successor join.
-IndexedOneHeightCompletion is exactly the one-height completion property from
-SumeragiV2LivenessProofs, imported through the parameterized asynchronous proof
-instance. The remaining proof must compose those facts over finite Heights; it
-must not assume them as a new protocol relation.
+IndexedHistoricalCatchUpProgressObligation is the fairness-transfer lemma for
+nodes absent from an old roster: exact canonical application and signer-held
+body evidence enable authenticated block sync, and its two explicit weak-fair
+actions deliver the node's own application and successor join.
+IndexedOneHeightCompletion is the exact expansion of the one-height completion
+property over the parameterized production-network instance. Its proof is
+supplied by the nonparameterized asynchronous liveness theorem without citing
+a hidden parameterized instance theorem.  The final proof composes those facts
+over finite Heights; it does not assume them as a new protocol relation.
 ***************************************************************************)
 IndexedAllResponsiveJoined(initialContext) ==
   IndexedAsync(initialContext)!AsyncVotersAt(initialContext)
     \subseteq joinedByContext[initialContext]
 
-IndexedInstanceActivationObligation(initialContext) ==
-  (/\ IndexedChainSpec
-   /\ TRUE ~> IndexedAllResponsiveJoined(initialContext))
-    => IndexedAsync(initialContext)!AsyncSpecAt(initialContext)
+THEOREM IndexedResponsiveVoterSetIsNonempty ==
+  \A initialContext \in AdmissibleContextRecords:
+    IndexedAsync(initialContext)!AsyncVotersAt(initialContext) # {}
+BY Isa DEF AdmissibleContextRecords, FrozenContextAdmissible,
+           IndexedAsync!AsyncVotersAt, ModelConfiguration,
+           DualQuorum, CountQuorum, QuorumConfiguration,
+           ContextRecords, LineagesAt, Heights
+
+THEOREM IndexedAllResponsiveJoinedMakesContextJoined ==
+  \A initialContext \in AdmissibleContextRecords:
+    IndexedAllResponsiveJoined(initialContext)
+      => initialContext \in JoinedContexts
+BY Isa, IndexedResponsiveVoterSetIsNonempty
+   DEF IndexedAllResponsiveJoined, JoinedContexts
+
+THEOREM IndexedAllResponsiveJoinedIsStable ==
+  \A initialContext \in AdmissibleContextRecords:
+    IndexedAllResponsiveJoined(initialContext)
+      /\ [IndexedChainNext]_IndexedChainVars
+      => IndexedAllResponsiveJoined(initialContext)'
+BY Isa, JoinedMembershipIsMonotone
+   DEF IndexedAllResponsiveJoined, IndexedChainVars
+
+IndexedActivationStable(initialContext) ==
+  /\ IndexedCompositionInvariant
+  /\ IndexedAllResponsiveJoined(initialContext)
+  /\ initialContext \in JoinedContexts
+
+THEOREM IndexedActivationEventuallyStabilizes ==
+  \A initialContext \in AdmissibleContextRecords:
+    (/\ IndexedChainSpec
+     /\ TRUE ~> IndexedAllResponsiveJoined(initialContext))
+      => <>[]IndexedActivationStable(initialContext)
+PROOF
+  <1>1. ASSUME NEW initialContext \in AdmissibleContextRecords
+         PROVE
+           (/\ IndexedChainSpec
+            /\ TRUE ~> IndexedAllResponsiveJoined(initialContext))
+             => <>[]IndexedActivationStable(initialContext)
+    <2>1. IndexedChainSpec => []IndexedCompositionInvariant
+      BY IndexedChainSpecEstablishesCompositionInvariant
+    <2>2. IndexedAllResponsiveJoined(initialContext)
+             /\ [IndexedChainNext]_IndexedChainVars
+             => IndexedAllResponsiveJoined(initialContext)'
+      BY <1>1, IndexedAllResponsiveJoinedIsStable
+    <2>3. IndexedAllResponsiveJoined(initialContext)
+             => initialContext \in JoinedContexts
+      BY <1>1, IndexedAllResponsiveJoinedMakesContextJoined
+    <2> QED BY <2>1, <2>2, <2>3, PTL
+         DEF IndexedChainSpec, IndexedActivationStable
+  <1> QED BY <1>1
+
+(***************************************************************************
+Every weakly fair product action is an exact nonstuttering action of the
+selected Async instance.  Conversely, after activation the product
+enabledness theorem extends every exact nonstuttering witness to the paired
+receipt/ChainEpoch transition.  These two directions are the concrete
+fairness-refinement argument; no fairness clause is added to the projection.
+***************************************************************************)
+THEOREM IndexedFairProductStepsProjectExactOccurrences ==
+  \A initialContext \in AdmissibleContextRecords:
+    /\ (IndexedSetGstStep(initialContext)
+          => <<IndexedAsync(initialContext)!AsyncSetGST>>_(
+               IndexedAsyncStateAt(initialContext)))
+    /\ (IndexedTickStep(initialContext)
+          => <<IndexedAsync(initialContext)!AsyncTick>>_(
+               IndexedAsyncStateAt(initialContext)))
+    /\ \A node \in IndexedAsync(initialContext)!
+                    AsyncVotersAt(initialContext):
+         /\ (IndexedRunNodeStep(initialContext, node)
+               => <<IndexedAsync(initialContext)!
+                       PostGstRunNode(node)>>_(
+                    IndexedAsyncStateAt(initialContext)))
+         /\ (IndexedHistoricalServerStep(initialContext, node)
+               => <<IndexedAsync(initialContext)!
+                       PostGstRunHistoricalServer(node)>>_(
+                    IndexedAsyncStateAt(initialContext)))
+         /\ (IndexedIoWorkerStep(initialContext, node)
+               => <<IndexedAsync(initialContext)!
+                       PostGstServiceIoWorker(node)>>_(
+                    IndexedAsyncStateAt(initialContext)))
+    /\ \A recipient \in IndexedAsync(initialContext)!
+                         AsyncVotersAt(initialContext),
+          source \in IndexedAsync(initialContext)!
+                    AsyncVotersAt(initialContext):
+         IndexedAdmitPacketStep(initialContext, recipient, source)
+           => <<IndexedAsync(initialContext)!
+                   PostGstAdmitHiddenPacket(recipient, source)>>_(
+                IndexedAsyncStateAt(initialContext))
+BY Isa DEF IndexedSetGstStep, IndexedTickStep,
+           IndexedRunNodeStep, IndexedHistoricalServerStep,
+           IndexedIoWorkerStep, IndexedAdmitPacketStep,
+           IndexedChainNext, IndexedProductActionAt,
+           IndexedReceiptClassification, IndexedReceiptFreeChainStutter,
+           IndexedDecisionReceiptHandoff,
+           IndexedApplicationReceiptHandoff,
+           IndexedHistoricalCatchUpDecision,
+           IndexedHistoricalCatchUpApplication,
+           IndexedChainVars, IndexedAsyncStateAt,
+           IndexedAsync!AsyncSetGST, IndexedAsync!SetGST,
+           IndexedAsync!AsyncTick,
+           IndexedAsync!PostGstRunNode, IndexedAsync!RunNode,
+           IndexedAsync!PostGstRunHistoricalServer,
+           IndexedAsync!RunHistoricalServer,
+           IndexedAsync!PostGstServiceIoWorker,
+           IndexedAsync!ServiceIoWorker,
+           IndexedAsync!PostGstAdmitHiddenPacket,
+           IndexedAsync!AdmitHiddenPacket
+
+THEOREM IndexedFairExactOccurrencesEnableProductOccurrences ==
+  \A initialContext \in AdmissibleContextRecords:
+    IndexedActivationStable(initialContext)
+      => /\ (ENABLED
+                <<IndexedAsync(initialContext)!AsyncSetGST>>_(
+                  IndexedAsyncStateAt(initialContext))
+                => ENABLED
+                     <<IndexedSetGstStep(initialContext)>>_(
+                       IndexedChainVars))
+         /\ (ENABLED
+               <<IndexedAsync(initialContext)!AsyncTick>>_(
+                 IndexedAsyncStateAt(initialContext))
+               => ENABLED
+                    <<IndexedTickStep(initialContext)>>_(
+                      IndexedChainVars))
+         /\ \A node \in IndexedAsync(initialContext)!
+                       AsyncVotersAt(initialContext):
+              /\ (ENABLED
+                    <<IndexedAsync(initialContext)!
+                        PostGstRunNode(node)>>_(
+                      IndexedAsyncStateAt(initialContext))
+                    => ENABLED
+                         <<IndexedRunNodeStep(initialContext, node)>>_(
+                           IndexedChainVars))
+              /\ (ENABLED
+                    <<IndexedAsync(initialContext)!
+                        PostGstRunHistoricalServer(node)>>_(
+                      IndexedAsyncStateAt(initialContext))
+                    => ENABLED
+                         <<IndexedHistoricalServerStep(
+                             initialContext, node)>>_(IndexedChainVars))
+              /\ (ENABLED
+                    <<IndexedAsync(initialContext)!
+                        PostGstServiceIoWorker(node)>>_(
+                      IndexedAsyncStateAt(initialContext))
+                    => ENABLED
+                         <<IndexedIoWorkerStep(initialContext, node)>>_(
+                           IndexedChainVars))
+         /\ \A recipient \in IndexedAsync(initialContext)!
+                            AsyncVotersAt(initialContext),
+               source \in IndexedAsync(initialContext)!
+                        AsyncVotersAt(initialContext):
+              ENABLED
+                <<IndexedAsync(initialContext)!
+                    PostGstAdmitHiddenPacket(recipient, source)>>_(
+                  IndexedAsyncStateAt(initialContext))
+                => ENABLED
+                     <<IndexedAdmitPacketStep(
+                         initialContext, recipient, source)>>_(
+                       IndexedChainVars)
+BY IndexedFairActionsRemainEnabledInProduct,
+   IndexedFairProductStepsProjectExactOccurrences,
+   ExpandENABLED, Isa
+   DEF IndexedActivationStable
+
+THEOREM IndexedSetGstFairnessTransfers ==
+  \A initialContext \in AdmissibleContextRecords:
+    (/\ IndexedChainSpec
+     /\ TRUE ~> IndexedAllResponsiveJoined(initialContext))
+      => WF_(IndexedAsyncStateAt(initialContext))(
+           IndexedAsync(initialContext)!AsyncSetGST)
+PROOF
+  <1>1. ASSUME NEW initialContext \in AdmissibleContextRecords
+         PROVE
+           (/\ IndexedChainSpec
+            /\ TRUE ~> IndexedAllResponsiveJoined(initialContext))
+             => WF_(IndexedAsyncStateAt(initialContext))(
+                  IndexedAsync(initialContext)!AsyncSetGST)
+    <2>1. (/\ IndexedChainSpec
+            /\ TRUE ~> IndexedAllResponsiveJoined(initialContext))
+             => <>[]IndexedActivationStable(initialContext)
+      BY <1>1, IndexedActivationEventuallyStabilizes
+    <2>2. IndexedActivationStable(initialContext)
+             => (ENABLED
+                   <<IndexedAsync(initialContext)!AsyncSetGST>>_(
+                     IndexedAsyncStateAt(initialContext))
+                   => ENABLED
+                        <<IndexedSetGstStep(initialContext)>>_(
+                          IndexedChainVars))
+      BY <1>1, IndexedFairExactOccurrencesEnableProductOccurrences
+    <2>3. IndexedSetGstStep(initialContext)
+             => <<IndexedAsync(initialContext)!AsyncSetGST>>_(
+                  IndexedAsyncStateAt(initialContext))
+      BY <1>1, IndexedFairProductStepsProjectExactOccurrences
+    <2>4. IndexedChainSpec
+             => WF_IndexedChainVars(IndexedSetGstStep(initialContext))
+      BY <1>1 DEF IndexedChainSpec, IndexedFairness
+    <2> QED BY <2>1, <2>2, <2>3, <2>4, PTL
+  <1> QED BY <1>1
+
+THEOREM IndexedTickFairnessTransfers ==
+  \A initialContext \in AdmissibleContextRecords:
+    (/\ IndexedChainSpec
+     /\ TRUE ~> IndexedAllResponsiveJoined(initialContext))
+      => WF_(IndexedAsyncStateAt(initialContext))(
+           IndexedAsync(initialContext)!AsyncTick)
+PROOF
+  <1>1. ASSUME NEW initialContext \in AdmissibleContextRecords
+         PROVE
+           (/\ IndexedChainSpec
+            /\ TRUE ~> IndexedAllResponsiveJoined(initialContext))
+             => WF_(IndexedAsyncStateAt(initialContext))(
+                  IndexedAsync(initialContext)!AsyncTick)
+    <2>1. (/\ IndexedChainSpec
+            /\ TRUE ~> IndexedAllResponsiveJoined(initialContext))
+             => <>[]IndexedActivationStable(initialContext)
+      BY <1>1, IndexedActivationEventuallyStabilizes
+    <2>2. IndexedActivationStable(initialContext)
+             => (ENABLED
+                   <<IndexedAsync(initialContext)!AsyncTick>>_(
+                     IndexedAsyncStateAt(initialContext))
+                   => ENABLED
+                        <<IndexedTickStep(initialContext)>>_(
+                          IndexedChainVars))
+      BY <1>1, IndexedFairExactOccurrencesEnableProductOccurrences
+    <2>3. IndexedTickStep(initialContext)
+             => <<IndexedAsync(initialContext)!AsyncTick>>_(
+                  IndexedAsyncStateAt(initialContext))
+      BY <1>1, IndexedFairProductStepsProjectExactOccurrences
+    <2>4. IndexedChainSpec
+             => WF_IndexedChainVars(IndexedTickStep(initialContext))
+      BY <1>1 DEF IndexedChainSpec, IndexedFairness
+    <2> QED BY <2>1, <2>2, <2>3, <2>4, PTL
+  <1> QED BY <1>1
+
+THEOREM IndexedNodeFairnessTransfers ==
+  \A initialContext \in AdmissibleContextRecords:
+    \A node \in IndexedAsync(initialContext)!AsyncVotersAt(initialContext):
+      (/\ IndexedChainSpec
+       /\ TRUE ~> IndexedAllResponsiveJoined(initialContext))
+        => /\ WF_(IndexedAsyncStateAt(initialContext))(
+                  IndexedAsync(initialContext)!PostGstRunNode(node))
+           /\ WF_(IndexedAsyncStateAt(initialContext))(
+                  IndexedAsync(initialContext)!
+                    PostGstRunHistoricalServer(node))
+           /\ WF_(IndexedAsyncStateAt(initialContext))(
+                  IndexedAsync(initialContext)!PostGstServiceIoWorker(node))
+PROOF
+  <1>1. ASSUME NEW initialContext \in AdmissibleContextRecords,
+              NEW node \in IndexedAsync(initialContext)!
+                            AsyncVotersAt(initialContext)
+         PROVE
+           (/\ IndexedChainSpec
+            /\ TRUE ~> IndexedAllResponsiveJoined(initialContext))
+             => /\ WF_(IndexedAsyncStateAt(initialContext))(
+                       IndexedAsync(initialContext)!PostGstRunNode(node))
+                /\ WF_(IndexedAsyncStateAt(initialContext))(
+                       IndexedAsync(initialContext)!
+                         PostGstRunHistoricalServer(node))
+                /\ WF_(IndexedAsyncStateAt(initialContext))(
+                       IndexedAsync(initialContext)!
+                         PostGstServiceIoWorker(node))
+    <2>1. (/\ IndexedChainSpec
+            /\ TRUE ~> IndexedAllResponsiveJoined(initialContext))
+             => <>[]IndexedActivationStable(initialContext)
+      BY <1>1, IndexedActivationEventuallyStabilizes
+    <2>2. IndexedActivationStable(initialContext)
+             => /\ (ENABLED
+                       <<IndexedAsync(initialContext)!
+                           PostGstRunNode(node)>>_(
+                         IndexedAsyncStateAt(initialContext))
+                       => ENABLED
+                            <<IndexedRunNodeStep(
+                                initialContext, node)>>_(IndexedChainVars))
+                /\ (ENABLED
+                       <<IndexedAsync(initialContext)!
+                           PostGstRunHistoricalServer(node)>>_(
+                         IndexedAsyncStateAt(initialContext))
+                       => ENABLED
+                            <<IndexedHistoricalServerStep(
+                                initialContext, node)>>_(IndexedChainVars))
+                /\ (ENABLED
+                       <<IndexedAsync(initialContext)!
+                           PostGstServiceIoWorker(node)>>_(
+                         IndexedAsyncStateAt(initialContext))
+                       => ENABLED
+                            <<IndexedIoWorkerStep(
+                                initialContext, node)>>_(IndexedChainVars))
+      BY <1>1, IndexedFairExactOccurrencesEnableProductOccurrences
+    <2>3. /\ (IndexedRunNodeStep(initialContext, node)
+                   => <<IndexedAsync(initialContext)!
+                           PostGstRunNode(node)>>_(
+                        IndexedAsyncStateAt(initialContext)))
+              /\ (IndexedHistoricalServerStep(initialContext, node)
+                   => <<IndexedAsync(initialContext)!
+                           PostGstRunHistoricalServer(node)>>_(
+                        IndexedAsyncStateAt(initialContext)))
+              /\ (IndexedIoWorkerStep(initialContext, node)
+                   => <<IndexedAsync(initialContext)!
+                           PostGstServiceIoWorker(node)>>_(
+                        IndexedAsyncStateAt(initialContext)))
+      BY <1>1, IndexedFairProductStepsProjectExactOccurrences
+    <2>4. IndexedChainSpec
+             => /\ WF_IndexedChainVars(
+                       IndexedRunNodeStep(initialContext, node))
+                /\ WF_IndexedChainVars(
+                       IndexedHistoricalServerStep(initialContext, node))
+                /\ WF_IndexedChainVars(
+                       IndexedIoWorkerStep(initialContext, node))
+      BY <1>1 DEF IndexedChainSpec, IndexedFairness
+    <2> QED BY <2>1, <2>2, <2>3, <2>4, PTL
+  <1> QED BY <1>1
+
+THEOREM IndexedPacketFairnessTransfers ==
+  \A initialContext \in AdmissibleContextRecords:
+    \A recipient \in IndexedAsync(initialContext)!
+                        AsyncVotersAt(initialContext),
+       source \in IndexedAsync(initialContext)!
+                  AsyncVotersAt(initialContext):
+      (/\ IndexedChainSpec
+       /\ TRUE ~> IndexedAllResponsiveJoined(initialContext))
+        => WF_(IndexedAsyncStateAt(initialContext))(
+             IndexedAsync(initialContext)!
+               PostGstAdmitHiddenPacket(recipient, source))
+PROOF
+  <1>1. ASSUME NEW initialContext \in AdmissibleContextRecords,
+              NEW recipient \in IndexedAsync(initialContext)!
+                                  AsyncVotersAt(initialContext),
+              NEW source \in IndexedAsync(initialContext)!
+                               AsyncVotersAt(initialContext)
+         PROVE
+           (/\ IndexedChainSpec
+            /\ TRUE ~> IndexedAllResponsiveJoined(initialContext))
+             => WF_(IndexedAsyncStateAt(initialContext))(
+                  IndexedAsync(initialContext)!
+                    PostGstAdmitHiddenPacket(recipient, source))
+    <2>1. (/\ IndexedChainSpec
+            /\ TRUE ~> IndexedAllResponsiveJoined(initialContext))
+             => <>[]IndexedActivationStable(initialContext)
+      BY <1>1, IndexedActivationEventuallyStabilizes
+    <2>2. IndexedActivationStable(initialContext)
+             => (ENABLED
+                   <<IndexedAsync(initialContext)!
+                       PostGstAdmitHiddenPacket(recipient, source)>>_(
+                     IndexedAsyncStateAt(initialContext))
+                   => ENABLED
+                        <<IndexedAdmitPacketStep(
+                            initialContext, recipient, source)>>_(
+                          IndexedChainVars))
+      BY <1>1, IndexedFairExactOccurrencesEnableProductOccurrences
+    <2>3. IndexedAdmitPacketStep(initialContext, recipient, source)
+             => <<IndexedAsync(initialContext)!
+                     PostGstAdmitHiddenPacket(recipient, source)>>_(
+                  IndexedAsyncStateAt(initialContext))
+      BY <1>1, IndexedFairProductStepsProjectExactOccurrences
+    <2>4. IndexedChainSpec
+             => WF_IndexedChainVars(
+                  IndexedAdmitPacketStep(initialContext, recipient, source))
+      BY <1>1 DEF IndexedChainSpec, IndexedFairness
+    <2> QED BY <2>1, <2>2, <2>3, <2>4, PTL
+  <1> QED BY <1>1
+
+THEOREM IndexedInstanceActivationObligation ==
+  \A initialContext \in AdmissibleContextRecords:
+    (/\ IndexedChainSpec
+     /\ TRUE ~> IndexedAllResponsiveJoined(initialContext))
+      => IndexedAsync(initialContext)!AsyncSpecAt(initialContext)
+PROOF
+  <1>1. ASSUME NEW initialContext \in AdmissibleContextRecords
+         PROVE
+           (/\ IndexedChainSpec
+            /\ TRUE ~> IndexedAllResponsiveJoined(initialContext))
+             => IndexedAsync(initialContext)!AsyncSpecAt(initialContext)
+    <2>1. IndexedChainInit
+             => IndexedAsync(initialContext)!AsyncInitAt(initialContext)
+      BY <1>1, IndexedInitProjectsEveryAsyncInit
+    <2>2. IndexedChainSpec
+             => [][IndexedAsync(initialContext)!AsyncNext]_(
+                  IndexedAsyncStateAt(initialContext))
+      BY <1>1, IndexedStepProjectsEveryAsyncStep, PTL
+         DEF IndexedChainSpec, IndexedChainVars
+    <2>3. IndexedChainSpec
+             => [](IndexedAsync(initialContext)!AsyncAllVars
+                    = IndexedAsyncStateAt(initialContext))
+      BY <1>1, IndexedChainSpecEstablishesCompositionInvariant,
+         IndexedInstanceVariablesAreExact, PTL
+         DEF IndexedCompositionInvariant
+    <2>4. (/\ IndexedChainSpec
+            /\ TRUE ~> IndexedAllResponsiveJoined(initialContext))
+             => WF_(IndexedAsyncStateAt(initialContext))(
+                  IndexedAsync(initialContext)!AsyncSetGST)
+      BY <1>1, IndexedSetGstFairnessTransfers
+    <2>5. (/\ IndexedChainSpec
+            /\ TRUE ~> IndexedAllResponsiveJoined(initialContext))
+             => WF_(IndexedAsyncStateAt(initialContext))(
+                  IndexedAsync(initialContext)!AsyncTick)
+      BY <1>1, IndexedTickFairnessTransfers
+    <2>6. (/\ IndexedChainSpec
+            /\ TRUE ~> IndexedAllResponsiveJoined(initialContext))
+             => \A node \in IndexedAsync(initialContext)!
+                               AsyncVotersAt(initialContext):
+                  /\ WF_(IndexedAsyncStateAt(initialContext))(
+                       IndexedAsync(initialContext)!PostGstRunNode(node))
+                  /\ WF_(IndexedAsyncStateAt(initialContext))(
+                       IndexedAsync(initialContext)!
+                         PostGstRunHistoricalServer(node))
+                  /\ WF_(IndexedAsyncStateAt(initialContext))(
+                       IndexedAsync(initialContext)!
+                         PostGstServiceIoWorker(node))
+      BY <1>1, IndexedNodeFairnessTransfers
+    <2>7. (/\ IndexedChainSpec
+            /\ TRUE ~> IndexedAllResponsiveJoined(initialContext))
+             => \A recipient \in IndexedAsync(initialContext)!
+                                  AsyncVotersAt(initialContext),
+                   source \in IndexedAsync(initialContext)!
+                             AsyncVotersAt(initialContext):
+                  WF_(IndexedAsyncStateAt(initialContext))(
+                    IndexedAsync(initialContext)!
+                      PostGstAdmitHiddenPacket(recipient, source))
+      BY <1>1, IndexedPacketFairnessTransfers
+    <2> QED BY <2>1, <2>2, <2>3, <2>4, <2>5, <2>6, <2>7, PTL
+         DEF IndexedAsync!AsyncSpecAt, IndexedAsync!AsyncFairnessAt
+  <1> QED BY <1>1
 
 IndexedCatchUpDecisionReady(initialContext, node) ==
   \E server \in ValidatorIds,
@@ -1874,6 +3060,641 @@ IndexedOneHeightCompletion(initialContext) ==
           ~> IndexedAsync(initialContext)!
                AsyncAllResponsiveAppliedAt(initialContext))
 
+THEOREM LivenessTargetOneHeightCompletionObligation ==
+  LivenessTargetContext \in AdmissibleContextRecords
+    => IndexedOneHeightCompletion(LivenessTargetContext)
+PROOF
+  <1>1. ASSUME LivenessTargetContext \in AdmissibleContextRecords
+         PROVE IndexedOneHeightCompletion(LivenessTargetContext)
+    <2>1. LivenessTargetAsyncProof!OneHeightCompletionObligation
+      BY LivenessTargetAsyncProof!OneHeightCompletionObligation
+    <2> QED BY <2>1
+         DEF IndexedOneHeightCompletion,
+             LivenessTargetAsyncProof!OneHeightCompletionLiveness,
+             LivenessTargetAsyncProof!AsyncSpecAt,
+             LivenessTargetAsyncProof!AsyncAllResponsiveAppliedAt,
+             IndexedAsync!AsyncSpecAt,
+             IndexedAsync!AsyncAllResponsiveAppliedAt,
+             IndexedAsyncStateAt, IndexedCore
+  <1> QED BY <1>1
+
+THEOREM IndexedAllResponsiveAppliedIsStable ==
+  \A initialContext \in AdmissibleContextRecords:
+    IndexedAsync(initialContext)!
+      AsyncAllResponsiveAppliedAt(initialContext)
+      /\ [IndexedChainNext]_IndexedChainVars
+      => (IndexedAsync(initialContext)!
+            AsyncAllResponsiveAppliedAt(initialContext))'
+BY Isa DEF IndexedChainNext, IndexedChainVars,
+           IndexedProductActionAt, IndexedReceiptClassification,
+           IndexedReceiptFreeChainStutter,
+           IndexedDecisionReceiptHandoff,
+           IndexedApplicationReceiptHandoff,
+           IndexedHistoricalCatchUpDecision,
+           IndexedHistoricalCatchUpApplication,
+           NewIndexedDecisionReceipt, NewIndexedApplicationReceipt,
+           NoNewIndexedDurableReceipt, IndexedApplications,
+           IndexedAsync!AsyncAllResponsiveAppliedAt,
+           IndexedAsync!AsyncVotersAt,
+           IndexedAsync!NodeHasApplication
+
+THEOREM LivenessTargetActivatedInstanceEventuallyApplies ==
+  /\ LivenessTargetContext \in AdmissibleContextRecords
+  /\ IndexedChainSpec
+  => IndexedAllResponsiveJoined(LivenessTargetContext)
+       ~> IndexedAsync(LivenessTargetContext)!
+            AsyncAllResponsiveAppliedAt(LivenessTargetContext)
+PROOF
+  <1>1. ASSUME LivenessTargetContext \in AdmissibleContextRecords,
+              IndexedChainSpec
+         PROVE IndexedAllResponsiveJoined(LivenessTargetContext)
+                 ~> IndexedAsync(LivenessTargetContext)!
+                       AsyncAllResponsiveAppliedAt(LivenessTargetContext)
+    <2>1. IndexedAllResponsiveJoined(LivenessTargetContext)
+             /\ [IndexedChainNext]_IndexedChainVars
+             => IndexedAllResponsiveJoined(LivenessTargetContext)'
+      BY <1>1, IndexedAllResponsiveJoinedIsStable
+    <2>2. <>IndexedAllResponsiveJoined(LivenessTargetContext)
+             => (TRUE ~> IndexedAllResponsiveJoined(LivenessTargetContext))
+      BY <2>1, PTL DEF IndexedChainSpec
+    <2>3. (/\ IndexedChainSpec
+            /\ TRUE ~> IndexedAllResponsiveJoined(LivenessTargetContext))
+             => IndexedAsync(LivenessTargetContext)!
+                  AsyncSpecAt(LivenessTargetContext)
+      BY <1>1, IndexedInstanceActivationObligation
+    <2>4. IndexedAsync(LivenessTargetContext)!
+             AsyncSpecAt(LivenessTargetContext)
+             => <>IndexedCore(LivenessTargetContext, 7)
+      BY LivenessTargetAsyncProof!AsyncGstEventually
+         DEF IndexedCore
+    <2>5. IndexedAsync(LivenessTargetContext)!
+             AsyncSpecAt(LivenessTargetContext)
+             => (IndexedCore(LivenessTargetContext, 7)
+                   ~> IndexedAsync(LivenessTargetContext)!
+                        AsyncAllResponsiveAppliedAt(
+                          LivenessTargetContext))
+      BY <1>1, LivenessTargetOneHeightCompletionObligation
+         DEF IndexedOneHeightCompletion
+    <2> QED BY <2>1, <2>2, <2>3, <2>4, <2>5, PTL
+  <1> QED BY <1>1
+
+THEOREM IndexedAppliedContextProvidesCatchUpSource ==
+  \A initialContext \in AdmissibleContextRecords:
+    (/\ IndexedCompositionInvariant
+     /\ initialContext.height < MaxHeight
+     /\ IndexedAllResponsiveJoined(initialContext)
+     /\ IndexedAsync(initialContext)!
+          AsyncAllResponsiveAppliedAt(initialContext))
+      => \E server \in ValidatorIds,
+            source \in Chain!DecisionEvidenceSet:
+           HistoricalCatchUpSource(initialContext, server, source)
+BY Isa, QuorumIntersectionObligation,
+   IndexedResponsiveVoterSetIsNonempty
+   DEF IndexedCompositionInvariant,
+       IndexedEveryInstanceStrongInvariant,
+       IndexedTotalReceiptProjection,
+       IndexedDecisionReceiptProjection,
+       IndexedApplicationReceiptProjection,
+       IndexedDecisionEvidence, IndexedApplicationEvidence,
+       IndexedCurrentDecisions, IndexedCurrentApplications,
+       IndexedAllResponsiveJoined, HistoricalCatchUpSource,
+       IndexedAsync!AsyncAllResponsiveAppliedAt,
+       IndexedAsync!AsyncVotersAt,
+       IndexedAsync!NodeHasApplication,
+       IndexedAsync!StrongInductiveInvariant,
+       IndexedAsync!Safety, IndexedAsync!TypeInvariant,
+       IndexedAsync!DecisionAgreement,
+       IndexedAsync!AppliedRequiresDecision,
+       IndexedAsync!ReducerProvenanceInvariant,
+       IndexedAsync!CertificatesBackedByIntents,
+       IndexedAsync!HistoricalQcValid,
+       IndexedAsync!HonestDurableIntentsSound,
+       IndexedAsync!HonestIntentSound,
+       IndexedAsync!CertificateBackedBy,
+       IndexedAsync!VoteBacksCertificate,
+       Chain!ChainEpochInvariant, Chain!ChainEpochTypeInvariant,
+       Chain!DurableDecisionEvidenceSound,
+       Chain!DurableApplicationEvidenceSound,
+       Chain!DecisionBacksCertifiedSlot,
+       Chain!ReceiptOutsideChainHorizon,
+       Chain!DurableCommitDecision,
+       Chain!HistoricalCommitCertificate,
+       Chain!CanonicalCommitForSlot,
+       Chain!DecisionEvidenceSet,
+       ModelConfiguration, QuorumConfiguration,
+       DualQuorumIntersectionHasHonest, DualQuorum, CountQuorum,
+       ContextRecords, Heights
+
+IndexedResponsiveLagAt(initialContext, node) ==
+  /\ initialContext.height < MaxHeight
+  /\ node \in Responsive
+  /\ nodeHeight[node] = initialContext.height
+
+THEOREM IndexedHistoricalDecisionMakesApplicationReadyOrAdvance ==
+  \A initialContext \in AdmissibleContextRecords,
+     node \in ValidatorIds:
+    (/\ IndexedCompositionInvariant
+     /\ IndexedResponsiveLagAt(initialContext, node)
+     /\ HistoricalCatchUpDecisionAt(initialContext, node))
+      => \/ IndexedCatchUpApplicationReady(initialContext, node)
+         \/ nodeHeight[node] > initialContext.height
+BY Isa DEF IndexedResponsiveLagAt,
+           IndexedCatchUpApplicationReady,
+           HistoricalCatchUpDecisionAt,
+           HistoricalCatchUpApplicationAt,
+           HistoricalCatchUpTarget, HistoricalCatchUpSource,
+           HistoricalCatchUpRecord,
+           IndexedCompositionInvariant,
+           HistoricalCatchUpEvidenceInvariant,
+           HistoricalCatchUpReceiptSound,
+           IndexedTotalReceiptProjection,
+           IndexedDecisionReceiptProjection,
+           IndexedApplicationReceiptProjection,
+           IndexedDecisionEvidence, IndexedApplicationEvidence,
+           IndexedCurrentDecisions, IndexedCurrentApplications,
+           IndexedProjectedNodeHasApplication,
+           CatchUpNodeHasApplicationProjection,
+           Chain!ChainEpochInvariant, Chain!ChainEpochTypeInvariant,
+           Chain!ContextsMatchLocalHistories,
+           IndexedAsync!AsyncVotersAt
+
+THEOREM IndexedCatchUpReadinessAdvancesResponsiveNode ==
+  IndexedChainSpec =>
+    \A initialContext \in AdmissibleContextRecords,
+       node \in Responsive:
+      (\/ IndexedCatchUpDecisionReady(initialContext, node)
+       \/ IndexedCatchUpApplicationReady(initialContext, node))
+        ~> nodeHeight[node] > initialContext.height
+PROOF
+  <1>1. ASSUME IndexedChainSpec,
+              NEW initialContext \in AdmissibleContextRecords,
+              NEW node \in Responsive
+         PROVE (\/ IndexedCatchUpDecisionReady(initialContext, node)
+                \/ IndexedCatchUpApplicationReady(initialContext, node))
+                 ~> nodeHeight[node] > initialContext.height
+    <2>1. []IndexedCompositionInvariant
+      BY <1>1, IndexedChainSpecEstablishesCompositionInvariant, PTL
+    <2>2. IndexedChainSpec
+             => /\ (IndexedCatchUpDecisionReady(initialContext, node)
+                       ~> HistoricalCatchUpDecisionAt(initialContext, node))
+                /\ (IndexedCatchUpApplicationReady(initialContext, node)
+                       ~> nodeHeight[node] > initialContext.height)
+      BY <1>1, IndexedHistoricalCatchUpProgressObligation, PTL
+    <2>3. IndexedCatchUpDecisionReady(initialContext, node)
+             => IndexedResponsiveLagAt(initialContext, node)
+      BY <1>1 DEF IndexedCatchUpDecisionReady,
+                    HistoricalCatchUpTarget,
+                    IndexedResponsiveLagAt
+    <2>4. IndexedCompositionInvariant
+             /\ IndexedResponsiveLagAt(initialContext, node)
+             /\ HistoricalCatchUpDecisionAt(initialContext, node)
+             => \/ IndexedCatchUpApplicationReady(initialContext, node)
+                \/ nodeHeight[node] > initialContext.height
+      BY <1>1, IndexedHistoricalDecisionMakesApplicationReadyOrAdvance
+    <2>5. [IndexedChainNext]_IndexedChainVars
+             => nodeHeight[node] <= nodeHeight'[node]
+      BY <1>1, IndexedBracketStepKeepsNodeHeightsMonotone,
+         Isa DEF ModelConfiguration, ValidatorIds
+    <2> QED BY <2>1, <2>2, <2>3, <2>4, <2>5, PTL
+         DEF IndexedResponsiveLagAt
+  <1> QED BY <1>1
+
+IndexedResponsiveHeightReached(blockHeight) ==
+  \A node \in Responsive: nodeHeight[node] >= blockHeight
+
+IndexedNodePastContext(initialContext, node) ==
+  nodeHeight[node] > initialContext.height
+
+IndexedResponsivePrefixPast(initialContext, limit) ==
+  \A node \in Responsive \cap (0..limit):
+    IndexedNodePastContext(initialContext, node)
+
+THEOREM IndexedNodePastContextIsStable ==
+  \A initialContext \in AdmissibleContextRecords,
+     node \in ValidatorIds:
+    IndexedNodePastContext(initialContext, node)
+      /\ [IndexedChainNext]_IndexedChainVars
+      => IndexedNodePastContext(initialContext, node)'
+BY IndexedBracketStepKeepsNodeHeightsMonotone, SMT
+   DEF IndexedNodePastContext, Heights, AdmissibleContextRecords,
+       FrozenContextAdmissible, ContextRecords
+
+THEOREM IndexedResponsivePrefixPastIsStable ==
+  \A initialContext \in AdmissibleContextRecords,
+     limit \in Nat:
+    IndexedResponsivePrefixPast(initialContext, limit)
+      /\ [IndexedChainNext]_IndexedChainVars
+      => IndexedResponsivePrefixPast(initialContext, limit)'
+BY Isa, IndexedNodePastContextIsStable
+   DEF IndexedResponsivePrefixPast
+
+IndexedAncestorContext(targetContext, blockHeight) ==
+  ContextRecord(
+    blockHeight,
+    [index \in 1..blockHeight |-> targetContext.lineage[index]])
+
+IndexedTargetJoined(targetContext) ==
+  targetContext \in JoinedContexts
+
+THEOREM IndexedAdmissibleTargetHasAdmissibleAncestors ==
+  \A targetContext \in AdmissibleContextRecords:
+    \A blockHeight \in 0..targetContext.height:
+      IndexedAncestorContext(targetContext, blockHeight)
+        \in AdmissibleContextRecords
+BY Isa DEF IndexedAncestorContext, AdmissibleContextRecords,
+           FrozenContextAdmissible, ContextRecords, LineagesAt,
+           Heights, ContextRecord
+
+THEOREM IndexedTargetJoinedIsStable ==
+  \A targetContext \in AdmissibleContextRecords:
+    IndexedTargetJoined(targetContext)
+      /\ [IndexedChainNext]_IndexedChainVars
+      => IndexedTargetJoined(targetContext)'
+BY Isa, JoinedMembershipIsMonotone
+   DEF IndexedTargetJoined, JoinedContexts, IndexedChainVars
+
+THEOREM IndexedResponsiveHeightReachedIsStable ==
+  \A blockHeight \in Heights:
+    IndexedResponsiveHeightReached(blockHeight)
+      /\ [IndexedChainNext]_IndexedChainVars
+      => IndexedResponsiveHeightReached(blockHeight)'
+BY Isa, IndexedBracketStepKeepsNodeHeightsMonotone
+   DEF IndexedResponsiveHeightReached, ModelConfiguration,
+       ValidatorIds
+
+THEOREM IndexedJoinedTargetIdentifiesEveryCanonicalAncestor ==
+  \A targetContext \in AdmissibleContextRecords:
+    \A blockHeight \in 0..targetContext.height:
+      IndexedCompositionInvariant
+        /\ IndexedTargetJoined(targetContext)
+        => /\ IndexedAncestorContext(targetContext, blockHeight)
+                 \in AdmissibleContextRecords
+           /\ IndexedAncestorContext(targetContext, blockHeight)
+                 = CanonicalIndexedContext(blockHeight)
+BY Isa DEF IndexedCompositionInvariant,
+           JoinedContextCertificationInvariant,
+           IndexedTargetJoined, JoinedContexts,
+           IndexedAncestorContext, CanonicalIndexedContext,
+           AdmissibleContextRecords, FrozenContextAdmissible,
+           ContextRecords, LineagesAt, Heights,
+           Chain!HistoryThrough, Chain!ContextRecord
+
+THEOREM IndexedReachedAncestorHasEveryResponsiveVoterJoined ==
+  \A targetContext \in AdmissibleContextRecords:
+    \A blockHeight \in 0..targetContext.height:
+      IndexedCompositionInvariant
+        /\ IndexedJoinedThroughLocalHeight
+        /\ IndexedTargetJoined(targetContext)
+        /\ IndexedResponsiveHeightReached(blockHeight)
+        => IndexedAllResponsiveJoined(
+             IndexedAncestorContext(targetContext, blockHeight))
+BY Isa, IndexedJoinedTargetIdentifiesEveryCanonicalAncestor
+   DEF IndexedJoinedThroughLocalHeight,
+       IndexedResponsiveHeightReached,
+       IndexedAllResponsiveJoined,
+       IndexedAsync!AsyncVotersAt,
+       ModelConfiguration, ValidatorIds, Heights
+
+THEOREM IndexedJoinedReachedTargetProvidesAncestorCatchUpSource ==
+  \A targetContext \in AdmissibleContextRecords:
+    \A blockHeight \in 0..targetContext.height:
+      IndexedCompositionInvariant
+        /\ IndexedJoinedThroughLocalHeight
+        /\ IndexedTargetJoined(targetContext)
+        /\ IndexedResponsiveHeightReached(blockHeight)
+        /\ blockHeight < targetContext.height
+        => \E server \in ValidatorIds,
+              source \in Chain!DecisionEvidenceSet:
+             HistoricalCatchUpSource(
+               IndexedAncestorContext(targetContext, blockHeight),
+               server, source)
+BY Isa, QuorumIntersectionObligation,
+   IndexedJoinedTargetIdentifiesEveryCanonicalAncestor,
+   IndexedReachedAncestorHasEveryResponsiveVoterJoined
+   DEF IndexedCompositionInvariant,
+       IndexedEveryInstanceStrongInvariant,
+       IndexedTotalReceiptProjection,
+       IndexedDecisionReceiptProjection,
+       IndexedApplicationReceiptProjection,
+       IndexedDecisionEvidence, IndexedApplicationEvidence,
+       IndexedCurrentDecisions, IndexedCurrentApplications,
+       IndexedJoinedThroughLocalHeight,
+       JoinedContextCertificationInvariant, JoinedRoutingInvariant,
+       IndexedTargetJoined, JoinedContexts,
+       IndexedAncestorContext, CanonicalIndexedContext,
+       IndexedResponsiveHeightReached,
+       IndexedAllResponsiveJoined,
+       HistoricalCatchUpSource, HistoricalCatchUpApplicationAt,
+       HistoricalCatchUpEvidenceInvariant,
+       HistoricalCatchUpReceiptSound, HistoricalCatchUpRecord,
+       IndexedAsync!StrongInductiveInvariant,
+       IndexedAsync!Safety, IndexedAsync!TypeInvariant,
+       IndexedAsync!DecisionAgreement,
+       IndexedAsync!AppliedRequiresDecision,
+       IndexedAsync!ReducerProvenanceInvariant,
+       IndexedAsync!CertificatesBackedByIntents,
+       IndexedAsync!HistoricalQcValid,
+       IndexedAsync!HonestDurableIntentsSound,
+       IndexedAsync!HonestIntentSound,
+       IndexedAsync!CertificateBackedBy,
+       IndexedAsync!VoteBacksCertificate,
+       IndexedAsync!AsyncVotersAt,
+       IndexedAsync!NodeHasApplication,
+       Chain!ChainEpochInvariant, Chain!ChainEpochTypeInvariant,
+       Chain!ContextsMatchLocalHistories,
+       Chain!DurableDecisionEvidenceSound,
+       Chain!DurableApplicationEvidenceSound,
+       Chain!DecisionBacksCertifiedSlot,
+       Chain!ReceiptOutsideChainHorizon,
+       Chain!DurableCommitDecision,
+       Chain!HistoricalCommitCertificate,
+       Chain!CanonicalCommitForSlot,
+       Chain!DecisionEvidenceSet,
+       ModelConfiguration, QuorumConfiguration,
+       DualQuorumIntersectionHasHonest, DualQuorum, CountQuorum,
+       AdmissibleContextRecords, FrozenContextAdmissible,
+       ContextRecords, LineagesAt, Heights
+
+IndexedTargetHeightStepPremise(targetContext, blockHeight) ==
+  /\ IndexedTargetJoined(targetContext)
+  /\ IndexedResponsiveHeightReached(blockHeight)
+
+THEOREM IndexedTargetStepEitherPassedOrCatchUpReady ==
+  \A targetContext \in AdmissibleContextRecords:
+    \A blockHeight \in 0..targetContext.height:
+      \A node \in Responsive:
+        IndexedCompositionInvariant
+          /\ IndexedJoinedThroughLocalHeight
+          /\ IndexedTargetHeightStepPremise(targetContext, blockHeight)
+          /\ blockHeight < targetContext.height
+          => \/ IndexedNodePastContext(
+                  IndexedAncestorContext(targetContext, blockHeight), node)
+             \/ IndexedCatchUpDecisionReady(
+                  IndexedAncestorContext(targetContext, blockHeight), node)
+             \/ IndexedCatchUpApplicationReady(
+                  IndexedAncestorContext(targetContext, blockHeight), node)
+BY Isa, IndexedJoinedTargetIdentifiesEveryCanonicalAncestor,
+   IndexedJoinedReachedTargetProvidesAncestorCatchUpSource
+   DEF IndexedTargetHeightStepPremise,
+       IndexedResponsiveHeightReached, IndexedNodePastContext,
+       IndexedResponsiveLagAt,
+       IndexedCatchUpDecisionReady, IndexedCatchUpApplicationReady,
+       HistoricalCatchUpTarget, HistoricalCatchUpSource,
+       HistoricalCatchUpDecisionAt, HistoricalCatchUpApplicationAt,
+       HistoricalCatchUpRecord,
+       IndexedCompositionInvariant,
+       IndexedApplicationsRespectNodeHeight,
+       HistoricalCatchUpEvidenceInvariant,
+       HistoricalCatchUpReceiptSound,
+       IndexedTotalReceiptProjection,
+       IndexedDecisionReceiptProjection,
+       IndexedApplicationReceiptProjection,
+       IndexedDecisionEvidence, IndexedApplicationEvidence,
+       IndexedCurrentDecisions, IndexedCurrentApplications,
+       IndexedProjectedNodeHasApplication,
+       CatchUpNodeHasApplicationProjection,
+       IndexedAncestorContext, CanonicalIndexedContext,
+       Chain!ChainEpochInvariant, Chain!ChainEpochTypeInvariant,
+       Chain!ContextsMatchLocalHistories,
+       IndexedAsync!NodeHasApplication
+
+THEOREM IndexedTargetStepEventuallyPassesEachResponsiveNode ==
+  IndexedChainSpec =>
+    \A targetContext \in AdmissibleContextRecords:
+      \A blockHeight \in 0..targetContext.height:
+        \A node \in Responsive:
+          blockHeight < targetContext.height
+            => IndexedTargetHeightStepPremise(targetContext, blockHeight)
+                 ~> IndexedNodePastContext(
+                      IndexedAncestorContext(targetContext, blockHeight),
+                      node)
+PROOF
+  <1>1. ASSUME IndexedChainSpec,
+              NEW targetContext \in AdmissibleContextRecords,
+              NEW blockHeight \in 0..targetContext.height,
+              NEW node \in Responsive,
+              blockHeight < targetContext.height
+         PROVE IndexedTargetHeightStepPremise(
+                   targetContext, blockHeight)
+                 ~> IndexedNodePastContext(
+                      IndexedAncestorContext(targetContext, blockHeight),
+                      node)
+    <2>1. []IndexedCompositionInvariant
+      BY <1>1, IndexedChainSpecEstablishesCompositionInvariant, PTL
+    <2>2. []IndexedJoinedThroughLocalHeight
+      BY <1>1, IndexedChainSpecJoinsEveryNodeThroughLocalHeight, PTL
+    <2>3. IndexedCompositionInvariant
+             /\ IndexedJoinedThroughLocalHeight
+             /\ IndexedTargetHeightStepPremise(
+                  targetContext, blockHeight)
+             => \/ IndexedNodePastContext(
+                     IndexedAncestorContext(targetContext, blockHeight),
+                     node)
+                \/ IndexedCatchUpDecisionReady(
+                     IndexedAncestorContext(targetContext, blockHeight),
+                     node)
+                \/ IndexedCatchUpApplicationReady(
+                     IndexedAncestorContext(targetContext, blockHeight),
+                     node)
+      BY <1>1, IndexedTargetStepEitherPassedOrCatchUpReady
+    <2>4. (\/ IndexedCatchUpDecisionReady(
+                   IndexedAncestorContext(targetContext, blockHeight), node)
+            \/ IndexedCatchUpApplicationReady(
+                   IndexedAncestorContext(targetContext, blockHeight), node))
+             ~> IndexedNodePastContext(
+                  IndexedAncestorContext(targetContext, blockHeight), node)
+      BY <1>1, IndexedAdmissibleTargetHasAdmissibleAncestors,
+         IndexedCatchUpReadinessAdvancesResponsiveNode
+         DEF IndexedNodePastContext
+    <2> QED BY <2>1, <2>2, <2>3, <2>4, PTL
+  <1> QED BY <1>1
+
+THEOREM IndexedTargetStepPassesEveryFiniteResponsivePrefix ==
+  IndexedChainSpec =>
+    \A targetContext \in AdmissibleContextRecords:
+      \A blockHeight \in 0..targetContext.height:
+        \A limit \in Nat:
+          blockHeight < targetContext.height
+            => IndexedTargetHeightStepPremise(targetContext, blockHeight)
+                 ~> IndexedResponsivePrefixPast(
+                      IndexedAncestorContext(targetContext, blockHeight),
+                      limit)
+PROOF
+  <1>1. ASSUME IndexedChainSpec,
+              NEW targetContext \in AdmissibleContextRecords,
+              NEW blockHeight \in 0..targetContext.height,
+              blockHeight < targetContext.height
+         PROVE \A limit \in Nat:
+                 IndexedTargetHeightStepPremise(targetContext, blockHeight)
+                   ~> IndexedResponsivePrefixPast(
+                        IndexedAncestorContext(targetContext, blockHeight),
+                        limit)
+    <2> DEFINE P(limit) ==
+           IndexedTargetHeightStepPremise(targetContext, blockHeight)
+             ~> IndexedResponsivePrefixPast(
+                  IndexedAncestorContext(targetContext, blockHeight),
+                  limit)
+    <2>1. P(0)
+      <3>1. CASE 0 \in Responsive
+        <4>1. IndexedTargetHeightStepPremise(targetContext, blockHeight)
+                 ~> IndexedNodePastContext(
+                      IndexedAncestorContext(targetContext, blockHeight), 0)
+          BY <1>1, <3>1,
+             IndexedTargetStepEventuallyPassesEachResponsiveNode
+        <4> QED BY <4>1, PTL DEF P, IndexedResponsivePrefixPast
+      <3>2. CASE 0 \notin Responsive
+        BY <3>2, PTL DEF P, IndexedResponsivePrefixPast
+      <3> QED BY <3>1, <3>2
+    <2>2. ASSUME NEW limit \in Nat, P(limit)
+           PROVE P(limit + 1)
+      <3>1. CASE limit + 1 \in Responsive
+        <4>1. IndexedTargetHeightStepPremise(targetContext, blockHeight)
+                 ~> IndexedNodePastContext(
+                      IndexedAncestorContext(targetContext, blockHeight),
+                      limit + 1)
+          BY <1>1, <3>1,
+             IndexedTargetStepEventuallyPassesEachResponsiveNode
+        <4>2. IndexedResponsivePrefixPast(
+                 IndexedAncestorContext(targetContext, blockHeight), limit)
+                 /\ [IndexedChainNext]_IndexedChainVars
+                 => IndexedResponsivePrefixPast(
+                      IndexedAncestorContext(targetContext, blockHeight),
+                      limit)'
+          BY <1>1, <2>2, IndexedAdmissibleTargetHasAdmissibleAncestors,
+             IndexedResponsivePrefixPastIsStable
+        <4>3. IndexedNodePastContext(
+                 IndexedAncestorContext(targetContext, blockHeight),
+                 limit + 1)
+                 /\ [IndexedChainNext]_IndexedChainVars
+                 => IndexedNodePastContext(
+                      IndexedAncestorContext(targetContext, blockHeight),
+                      limit + 1)'
+          BY <1>1, <3>1,
+             IndexedAdmissibleTargetHasAdmissibleAncestors,
+             IndexedNodePastContextIsStable,
+             Isa DEF ModelConfiguration, ValidatorIds
+        <4>4. IndexedResponsivePrefixPast(
+                 IndexedAncestorContext(targetContext, blockHeight),
+                 limit + 1)
+                 <=> /\ IndexedResponsivePrefixPast(
+                           IndexedAncestorContext(targetContext, blockHeight),
+                           limit)
+                     /\ IndexedNodePastContext(
+                           IndexedAncestorContext(targetContext, blockHeight),
+                           limit + 1)
+          BY <2>2, <3>1, Isa DEF IndexedResponsivePrefixPast
+        <4> QED BY <2>2, <4>1, <4>2, <4>3, <4>4, PTL DEF P
+      <3>2. CASE limit + 1 \notin Responsive
+        <4>1. IndexedResponsivePrefixPast(
+                 IndexedAncestorContext(targetContext, blockHeight), limit)
+                 => IndexedResponsivePrefixPast(
+                      IndexedAncestorContext(targetContext, blockHeight),
+                      limit + 1)
+          BY <2>2, <3>2, Isa DEF IndexedResponsivePrefixPast
+        <4> QED BY <2>2, <4>1, PTL DEF P
+      <3> QED BY <3>1, <3>2
+    <2>3. \A limit \in Nat: P(limit)
+      BY <2>1, <2>2, NatInduction
+    <2> QED BY <2>3 DEF P
+  <1> QED BY <1>1
+
+THEOREM IndexedJoinedTargetAdvancesOneAncestorHeight ==
+  IndexedChainSpec =>
+    \A targetContext \in AdmissibleContextRecords:
+      \A blockHeight \in 0..targetContext.height:
+        blockHeight < targetContext.height
+          => (IndexedTargetJoined(targetContext)
+                /\ IndexedResponsiveHeightReached(blockHeight))
+               ~> IndexedResponsiveHeightReached(blockHeight + 1)
+PROOF
+  <1>1. ASSUME IndexedChainSpec,
+              NEW targetContext \in AdmissibleContextRecords,
+              NEW blockHeight \in 0..targetContext.height,
+              blockHeight < targetContext.height
+         PROVE (IndexedTargetJoined(targetContext)
+                   /\ IndexedResponsiveHeightReached(blockHeight))
+                  ~> IndexedResponsiveHeightReached(blockHeight + 1)
+    <2>1. []IndexedCompositionInvariant
+      BY <1>1, IndexedChainSpecEstablishesCompositionInvariant, PTL
+    <2>2. []IndexedJoinedThroughLocalHeight
+      BY <1>1, IndexedChainSpecJoinsEveryNodeThroughLocalHeight, PTL
+    <2>3. IndexedTargetJoined(targetContext)
+             /\ [IndexedChainNext]_IndexedChainVars
+             => IndexedTargetJoined(targetContext)'
+      BY <1>1, IndexedTargetJoinedIsStable
+    <2>4. IndexedResponsiveHeightReached(blockHeight)
+             /\ [IndexedChainNext]_IndexedChainVars
+             => IndexedResponsiveHeightReached(blockHeight)'
+      BY <1>1, IndexedResponsiveHeightReachedIsStable,
+         Isa DEF Heights, AdmissibleContextRecords,
+                 FrozenContextAdmissible, ContextRecords
+    <2>5. IndexedTargetHeightStepPremise(targetContext, blockHeight)
+             ~> IndexedResponsivePrefixPast(
+                  IndexedAncestorContext(targetContext, blockHeight),
+                  N - 1)
+      BY <1>1, IndexedTargetStepPassesEveryFiniteResponsivePrefix,
+         SMT DEF ModelConfiguration
+    <2>6. IndexedResponsivePrefixPast(
+             IndexedAncestorContext(targetContext, blockHeight), N - 1)
+             => IndexedResponsiveHeightReached(blockHeight + 1)
+      BY <1>1, SMT
+         DEF IndexedResponsivePrefixPast,
+             IndexedResponsiveHeightReached,
+             IndexedNodePastContext, IndexedAncestorContext,
+             ModelConfiguration, ValidatorIds,
+             AdmissibleContextRecords, FrozenContextAdmissible,
+             ContextRecords, Heights
+    <2> QED BY <2>3, <2>4, <2>5, <2>6, PTL
+         DEF IndexedTargetHeightStepPremise
+  <1> QED BY <1>1
+
+THEOREM IndexedJoinedTargetEventuallyReachesEveryAncestorHeight ==
+  IndexedChainSpec =>
+    \A targetContext \in AdmissibleContextRecords:
+      \A blockHeight \in 0..targetContext.height:
+        IndexedTargetJoined(targetContext)
+          ~> IndexedResponsiveHeightReached(blockHeight)
+PROOF
+  <1>1. ASSUME IndexedChainSpec,
+              NEW targetContext \in AdmissibleContextRecords
+         PROVE \A blockHeight \in 0..targetContext.height:
+                 IndexedTargetJoined(targetContext)
+                   ~> IndexedResponsiveHeightReached(blockHeight)
+    <2> DEFINE P(blockHeight) ==
+           blockHeight <= targetContext.height
+             => (IndexedTargetJoined(targetContext)
+                   ~> IndexedResponsiveHeightReached(blockHeight))
+    <2>1. P(0)
+      BY SMT DEF P, IndexedResponsiveHeightReached,
+                 AdmissibleContextRecords, FrozenContextAdmissible,
+                 ContextRecords, Heights, ModelConfiguration,
+                 ValidatorIds
+    <2>2. ASSUME NEW blockHeight \in Nat,
+                  P(blockHeight)
+           PROVE P(blockHeight + 1)
+      <3>1. CASE blockHeight < targetContext.height
+        <4>1. blockHeight \in 0..targetContext.height
+          BY <1>1, <2>2, <3>1, SMT
+             DEF AdmissibleContextRecords, FrozenContextAdmissible,
+                 ContextRecords, Heights
+        <4>2. (IndexedTargetJoined(targetContext)
+                  /\ IndexedResponsiveHeightReached(blockHeight))
+                 ~> IndexedResponsiveHeightReached(blockHeight + 1)
+          BY <1>1, <3>1, <4>1,
+             IndexedJoinedTargetAdvancesOneAncestorHeight
+        <4>3. IndexedTargetJoined(targetContext)
+                 /\ [IndexedChainNext]_IndexedChainVars
+                 => IndexedTargetJoined(targetContext)'
+          BY <1>1, IndexedTargetJoinedIsStable
+        <4> QED BY <2>2, <3>1, <4>2, <4>3, PTL DEF P
+      <3>2. CASE blockHeight >= targetContext.height
+        BY <3>2, SMT DEF P
+      <3> QED BY <3>1, <3>2
+    <2>3. \A blockHeight \in Nat: P(blockHeight)
+      BY <2>1, <2>2, NatInduction
+    <2> QED BY <2>3 DEF P
+  <1> QED BY <1>1
+
 IndexedContextCompleted(initialContext) ==
   IF initialContext.height = MaxHeight
   THEN IndexedAsync(initialContext)!
@@ -1893,22 +3714,79 @@ BY Isa DEF IndexedCompositionInvariant,
            IndexedContextCompleted,
            IndexedAsync!AsyncAllResponsiveAppliedAt
 
+IndexedHeightLivenessAt(initialContext) ==
+  (/\ initialContext \in JoinedContexts
+   /\ IndexedCore(initialContext, 7))
+    ~> IndexedContextCompleted(initialContext)
+
 IndexedHeightLivenessProperty ==
-  \A initialContext \in AdmissibleContextRecords:
-    (/\ initialContext \in JoinedContexts
-     /\ IndexedCore(initialContext, 7))
-      ~> IndexedContextCompleted(initialContext)
+  LivenessTargetContext \in AdmissibleContextRecords
+    => IndexedHeightLivenessAt(LivenessTargetContext)
 
 (***************************************************************************
-This is the exact indexed multi-height release theorem. It remains proofless
-while the ledger says specified_unproved: the non-temporal product/refinement
-kernels above are explicit, and its eventual proof must use
-IndexedInstanceActivationObligation,
-IndexedHistoricalCatchUpProgressObligation, and IndexedOneHeightCompletion at
-each successive canonical context.
+Exact indexed multi-height release theorem.  `LivenessTargetContext` is an
+arbitrary module constant, so this guarded theorem is universally closed over
+every admissible target without creating a parameterized theorem INSTANCE.
+Once any validator has joined that target, its canonical predecessor history
+already exists. Authenticated production block sync catches every responsive
+laggard, including a restarted member of an old roster, through that finite
+history. The proof then transfers product fairness only to the exact target
+Async instance and applies its nonparameterized one-height theorem after every
+responsive target voter has joined.
 ***************************************************************************)
 THEOREM HeightLivenessObligation ==
   IndexedChainSpec => IndexedHeightLivenessProperty
+PROOF
+  <1>1. ASSUME IndexedChainSpec
+         PROVE IndexedHeightLivenessProperty
+    <2>1. ASSUME LivenessTargetContext \in AdmissibleContextRecords
+           PROVE IndexedHeightLivenessAt(LivenessTargetContext)
+      <3>1. []IndexedCompositionInvariant
+        BY <1>1, IndexedChainSpecEstablishesCompositionInvariant, PTL
+      <3>2. []IndexedJoinedThroughLocalHeight
+        BY <1>1, IndexedChainSpecJoinsEveryNodeThroughLocalHeight, PTL
+      <3>3. IndexedTargetJoined(LivenessTargetContext)
+               ~> IndexedResponsiveHeightReached(
+                    LivenessTargetContext.height)
+        BY <1>1, <2>1,
+           IndexedJoinedTargetEventuallyReachesEveryAncestorHeight,
+           Isa DEF AdmissibleContextRecords, FrozenContextAdmissible,
+                   ContextRecords, Heights
+      <3>4. IndexedTargetJoined(LivenessTargetContext)
+               /\ [IndexedChainNext]_IndexedChainVars
+               => IndexedTargetJoined(LivenessTargetContext)'
+        BY <2>1, IndexedTargetJoinedIsStable
+      <3>5. IndexedResponsiveHeightReached(
+               LivenessTargetContext.height)
+               /\ [IndexedChainNext]_IndexedChainVars
+               => IndexedResponsiveHeightReached(
+                    LivenessTargetContext.height)'
+        BY <2>1, IndexedResponsiveHeightReachedIsStable,
+           Isa DEF AdmissibleContextRecords, FrozenContextAdmissible,
+                   ContextRecords, Heights
+      <3>6. IndexedCompositionInvariant
+               /\ IndexedJoinedThroughLocalHeight
+               /\ IndexedTargetJoined(LivenessTargetContext)
+               /\ IndexedResponsiveHeightReached(
+                    LivenessTargetContext.height)
+               => IndexedAllResponsiveJoined(LivenessTargetContext)
+        BY <2>1, IndexedReachedAncestorHasEveryResponsiveVoterJoined,
+           Isa DEF IndexedAncestorContext
+      <3>7. IndexedAllResponsiveJoined(LivenessTargetContext)
+               ~> IndexedAsync(LivenessTargetContext)!
+                    AsyncAllResponsiveAppliedAt(LivenessTargetContext)
+        BY <1>1, <2>1,
+           LivenessTargetActivatedInstanceEventuallyApplies
+      <3>8. IndexedCompositionInvariant
+               /\ IndexedAsync(LivenessTargetContext)!
+                    AsyncAllResponsiveAppliedAt(LivenessTargetContext)
+               => IndexedContextCompleted(LivenessTargetContext)
+        BY <2>1, IndexedAllAppliedImpliesContextCompleted
+      <3> QED BY <3>1, <3>2, <3>3, <3>4,
+                   <3>5, <3>6, <3>7, <3>8, PTL
+           DEF IndexedHeightLivenessAt, IndexedTargetJoined
+    <2> QED BY <2>1 DEF IndexedHeightLivenessProperty
+  <1> QED BY <1>1
 
 
 =============================================================================

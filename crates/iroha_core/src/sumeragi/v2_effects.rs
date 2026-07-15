@@ -66,7 +66,7 @@ use std::{
     fmt,
     path::Path,
     sync::Arc,
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use super::v2_core::{EquivocationKind, EventTag};
@@ -77,6 +77,8 @@ use iroha_data_model::{
     peer::PeerId,
 };
 
+#[cfg(test)]
+use super::v2_runtime::RuntimeQueueLaneSnapshot;
 use super::{
     output_guard::ConsensusOutputGuard,
     v2::{AdapterEffect, SignRequest},
@@ -87,7 +89,8 @@ use super::{
     v2_chunks::{V2ChunkError, encode_payload},
     v2_recovery::PendingKuraApply,
     v2_runtime::{
-        EnqueueError, NetworkIngressError, RuntimeClockError, RuntimeStep, SerializedV2Runtime,
+        EnqueueError, NetworkIngressError, RuntimeClockError, RuntimeQueueSnapshot, RuntimeStep,
+        SerializedV2Runtime,
     },
     v2_transport::{
         AuthenticatedCertifiedBodyRequest, AuthenticatedPayloadChunk,
@@ -498,6 +501,8 @@ impl DurableApplyCompletion {
 /// Operational status of the effect boundary, excluding consensus state.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct EffectExecutorStatus {
+    /// Monotonic instant at which all queue ages in this snapshot were measured.
+    pub captured_at: Instant,
     /// Whether an internal boundary failure permanently stopped execution.
     pub fail_closed: bool,
     /// First fatal diagnostic, retained until process restart.
@@ -522,6 +527,10 @@ pub(crate) struct EffectExecutorStatus {
     pub pending_store_bytes: u64,
     /// Runtime completions queued for serialized reducer delivery.
     pub queued_runtime_completions: usize,
+    /// Per-class serialized runtime ownership and fairness state.
+    pub runtime_queues: RuntimeQueueSnapshot,
+    /// View-aware no-progress threshold derived from the configured pacemaker.
+    pub watchdog_threshold: Duration,
 }
 
 /// Production callbacks used to perform effects outside the reducer owner.
@@ -997,6 +1006,8 @@ pub(crate) trait EffectRuntime {
         certificate: &wire::QuorumCertificate,
     ) -> Result<(), String>;
     fn queued_commands(&self) -> usize;
+    fn queue_snapshot(&self, now: Instant) -> RuntimeQueueSnapshot;
+    fn watchdog_threshold(&self) -> Duration;
 }
 
 impl EffectRuntime for SerializedV2Runtime {
@@ -1092,6 +1103,14 @@ impl EffectRuntime for SerializedV2Runtime {
 
     fn queued_commands(&self) -> usize {
         SerializedV2Runtime::queued_commands(self)
+    }
+
+    fn queue_snapshot(&self, now: Instant) -> RuntimeQueueSnapshot {
+        SerializedV2Runtime::queue_snapshot(self, now)
+    }
+
+    fn watchdog_threshold(&self) -> Duration {
+        SerializedV2Runtime::watchdog_threshold(self)
     }
 }
 
@@ -1225,12 +1244,12 @@ impl V2EffectExecutor<SerializedV2Runtime> {
         self.runtime.remaining_completion_capacity()
     }
 
-    /// Whether the fair-ingress head can enter its exact runtime FIFO prefix.
-    pub(crate) fn can_admit_network_payload(
-        &self,
-        payload: &wire::ConsensusMessageV2Payload,
-    ) -> bool {
-        self.runtime.can_admit_network_payload(payload)
+    /// Whether the fair-ingress head can enter its exact runtime FIFO prefix
+    /// or coalesce with an exact queued authenticated envelope.
+    pub(crate) fn can_admit_network_message(&self, message: &wire::ConsensusMessageV2) -> bool {
+        self.fatal_reason.is_none()
+            && !self.output_guard.restart_required()
+            && self.runtime.can_admit_network_message(message)
     }
 
     /// Snapshot the reducer-owned leader/lock constraint for the local
@@ -1384,8 +1403,11 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
     /// therefore retains one bounded, view-independent copy and stages it under
     /// each authenticated current-round proposal. The ordinary
     /// `BodyAvailable -> StoreBody -> ValidateBody` pipeline still mints fresh
-    /// current-view evidence. If acquisition already started, the trusted local
-    /// bytes finish that exact fetch immediately and retire its network owner.
+    /// current-view evidence. Validation may promote the byte-identical body's
+    /// earlier durable execution witness under the immutable height context;
+    /// it never reuses the old round-bound marker itself. If acquisition already
+    /// started, the trusted local bytes finish that exact fetch immediately and
+    /// retire its network owner.
     pub(crate) fn retain_locked_body_for_reproposal<S: V2EffectServices>(
         &mut self,
         tag: EventTag,
@@ -2371,7 +2393,9 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
     /// Current bounded operational status.
     pub(crate) fn status(&self) -> EffectExecutorStatus {
         let restart_required = self.output_guard.restart_required();
+        let captured_at = Instant::now();
         EffectExecutorStatus {
+            captured_at,
             fail_closed: self.fatal_reason.is_some() || restart_required,
             fatal_reason: self.fatal_reason.clone().or_else(|| {
                 restart_required.then(|| {
@@ -2388,6 +2412,8 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             ready_body_bytes: self.ready_body_bytes,
             pending_store_bytes: self.pending_store_bytes,
             queued_runtime_completions: self.runtime.queued_commands(),
+            runtime_queues: self.runtime.queue_snapshot(captured_at),
+            watchdog_threshold: self.runtime.watchdog_threshold(),
         }
     }
 
@@ -4361,6 +4387,27 @@ mod tests {
 
         fn queued_commands(&self) -> usize {
             self.completions.len()
+        }
+
+        fn queue_snapshot(&self, _now: Instant) -> RuntimeQueueSnapshot {
+            let empty = RuntimeQueueLaneSnapshot {
+                depth: 0,
+                capacity: 16,
+                oldest_age: None,
+                max_service_debt: 0,
+            };
+            RuntimeQueueSnapshot {
+                normal: empty,
+                progress: empty,
+                completion: RuntimeQueueLaneSnapshot {
+                    depth: self.completions.len(),
+                    ..empty
+                },
+            }
+        }
+
+        fn watchdog_threshold(&self) -> Duration {
+            Duration::from_secs(12)
         }
     }
 

@@ -170,6 +170,11 @@ max_transactions = 96
 max_payload_bytes = 16777216
 proposal_queue_scan_multiplier = 4
 
+[sumeragi.queues]
+# Canonical wire-byte quotas cover four validators plus the shared untrusted-source lane.
+body_bytes = 167772160
+body_source_bytes = 33554432
+
 [confidential]
 enabled = true
 max_proof_size_bytes = 8388608

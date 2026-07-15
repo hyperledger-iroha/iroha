@@ -1041,9 +1041,12 @@ From `../iroha2-block-explorer-web`:
      script patches them from `configs/soranexus/taira/config.toml`, but a
      stale bundle can still bring the old default back.
    - confirm those peer configs also retain the Taira `[sumeragi.block]`
-     `max_transactions = 96`, `max_ivm_transactions = 32`,
-     `max_payload_bytes = 16777216`, and `proposal_queue_scan_multiplier = 4`
-     bounds before running public write canaries or scenario sweeps.
+     `max_transactions = 96`, `max_payload_bytes = 16777216`, and
+     `proposal_queue_scan_multiplier = 4` bounds, plus the
+     `[sumeragi.queues]` canonical outer-ingress wire-byte budgets
+     `body_bytes = 167772160` and `body_source_bytes = 33554432`, before running
+     public write canaries or scenario sweeps. The aggregate budget covers four
+     authenticated validator sources plus the shared untrusted-source lane.
      Fast-finality caps are retired in v2.
    - keep `[sorafs.quota] storage_pin_max_events = 64` in the Taira profile and
      served peer configs; otherwise a handful of failed storage-pin probes can

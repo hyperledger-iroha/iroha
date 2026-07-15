@@ -84,6 +84,7 @@ fn status_fixture() -> SumeragiV2Status {
             },
         },
         last_commit_qc: None,
+        liveness: Default::default(),
     }
 }
 
@@ -156,6 +157,10 @@ async fn json_status_is_exact_authoritative_v2_schema() {
 
     let value: norito::json::Value =
         norito::json::from_slice(&body).expect("decode status JSON object");
+    assert!(
+        value.get("liveness").is_some(),
+        "authoritative liveness snapshot is required"
+    );
     for retired in [
         "canonical",
         "rbc_status",

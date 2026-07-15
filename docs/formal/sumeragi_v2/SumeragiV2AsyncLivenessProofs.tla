@@ -1,5 +1,5 @@
 ---- MODULE SumeragiV2AsyncLivenessProofs ----
-EXTENDS SumeragiV2LivenessProofs, SequenceTheorems, FunctionTheorems
+EXTENDS SumeragiV2ServiceRankLemmas, SequenceTheorems, FunctionTheorems
 
 (***************************************************************************
 Rank and fairness proof for the production-coupled asynchronous layer.
@@ -24,6 +24,116 @@ THEOREM IngressDrainStrictlyDecreasesRuntimeReach ==
     AsyncTypeInvariant /\ IngressDrainStep(node)
       => RuntimeReachRank(node)' < RuntimeReachRank(node)
 BY SMT DEF AsyncTypeInvariant, IngressDrainStep, RuntimeReachRank
+
+THEOREM RuntimeReachRankWithinRunnerCycle ==
+  AsyncTypeInvariant
+    => \A node \in ValidatorIds:
+         /\ RuntimeReachRank(node) \in Nat
+         /\ RuntimeReachRank(node) < AsyncRunnerCycleBudget
+PROOF
+  <1>1. ASSUME AsyncTypeInvariant
+         PROVE \A node \in ValidatorIds:
+                 /\ RuntimeReachRank(node) \in Nat
+                 /\ RuntimeReachRank(node) < AsyncRunnerCycleBudget
+    <2>1. ASSUME NEW node \in ValidatorIds
+           PROVE /\ RuntimeReachRank(node) \in Nat
+                 /\ RuntimeReachRank(node) < AsyncRunnerCycleBudget
+      <3>1. /\ asyncRunnerPhase[node]
+                    \in {"Local", "Ingress", "Runtime"}
+             /\ asyncRunnerBudget[node]
+                    \in 0..(AsyncQueueCapacity + AsyncIngressCapacity)
+             /\ AsyncQueueCapacity \in Nat \ {0}
+             /\ AsyncIngressCapacity \in Nat \ {0}
+        BY <1>1, <2>1
+           DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+               AsyncRuntimeTypeInvariant, AsyncRuntimeScalarTypeInvariant,
+               AsyncConfiguration
+      <3>2. CASE asyncRunnerPhase[node] = "Local"
+        BY <3>1, <3>2, SMT
+           DEF RuntimeReachRank, AsyncRunnerCycleBudget
+      <3>3. CASE asyncRunnerPhase[node] = "Ingress"
+        BY <3>1, <3>3, SMT
+           DEF RuntimeReachRank, AsyncRunnerCycleBudget
+      <3>4. CASE asyncRunnerPhase[node] = "Runtime"
+        BY <3>1, <3>4, SMT
+           DEF RuntimeReachRank, AsyncRunnerCycleBudget
+      <3> QED BY <3>1, <3>2, <3>3, <3>4
+    <2> QED BY <2>1
+  <1> QED BY <1>1
+
+THEOREM SchedulerRankArithmeticBound ==
+  \A capacity \in Nat \ {0}:
+    \A ordinal \in 1..capacity, distance \in 0..2:
+      3 * ordinal + distance \in 3..(3 * capacity + 2)
+BY SMT
+
+THEOREM SchedulerClassPrefixRankBound ==
+  \A node \in ValidatorIds:
+    \A candidate:
+      /\ AsyncTypeInvariant
+      /\ candidate \in SequenceSet(asyncCommandQueues[node])
+      => /\ Cardinality(SchedulerClassPrefixIndices(node, candidate))
+                \in 1..AsyncQueueCapacity
+         /\ CommandClassDistance(
+              asyncNextCommandClass[node], candidate.class) \in 0..2
+         /\ SchedulerServiceRank(node, candidate)
+                \in 3..(3 * AsyncQueueCapacity + 2)
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds, NEW candidate,
+                AsyncTypeInvariant,
+                candidate \in SequenceSet(asyncCommandQueues[node])
+         PROVE /\ Cardinality(
+                      SchedulerClassPrefixIndices(node, candidate))
+                        \in 1..AsyncQueueCapacity
+               /\ CommandClassDistance(
+                    asyncNextCommandClass[node], candidate.class) \in 0..2
+               /\ SchedulerServiceRank(node, candidate)
+                    \in 3..(3 * AsyncQueueCapacity + 2)
+    <2>1. /\ AsyncQueueTyped(asyncCommandQueues[node])
+           /\ AsyncQueueDepth(node) <= AsyncQueueCapacity
+           /\ AsyncQueueCapacity \in Nat \ {0}
+           /\ asyncNextCommandClass[node] \in AsyncCommandClasses
+           /\ AsyncCandidateTyped(candidate)
+      BY <1>1, SMT
+         DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+             AsyncRuntimeTypeInvariant, AsyncRuntimeScalarTypeInvariant,
+             AsyncIoTypeInvariant, AsyncIoCapacityTypeInvariant,
+             AsyncQueueTyped, SequenceSet
+    <2>2. PICK matching \in 1..Len(asyncCommandQueues[node]):
+             asyncCommandQueues[node][matching] = candidate
+      BY <1>1 DEF SequenceSet
+    <2>3. matching \in SchedulerClassPrefixIndices(node, candidate)
+      BY <2>2 DEF SchedulerClassPrefixIndices,
+                      SchedulerCandidateIndices
+    <2>4. SchedulerClassPrefixIndices(node, candidate)
+               \subseteq 1..Len(asyncCommandQueues[node])
+      BY DEF SchedulerClassPrefixIndices
+    <2>5. /\ Len(asyncCommandQueues[node]) \in Nat
+           /\ IsFiniteSet(1..Len(asyncCommandQueues[node]))
+           /\ Cardinality(1..Len(asyncCommandQueues[node]))
+                = Len(asyncCommandQueues[node])
+      BY <2>1, LenProperties, FS_Interval, SMT DEF AsyncQueueTyped
+    <2>6. /\ IsFiniteSet(
+                  SchedulerClassPrefixIndices(node, candidate))
+           /\ Cardinality(SchedulerClassPrefixIndices(node, candidate))
+                <= Len(asyncCommandQueues[node])
+      BY <2>4, <2>5, FS_Subset
+    <2>7. Cardinality(SchedulerClassPrefixIndices(node, candidate))
+               \in Nat \ {0}
+      BY <2>3, <2>6, FS_CardinalityType, FS_EmptySet, SMT
+    <2>8. Cardinality(SchedulerClassPrefixIndices(node, candidate))
+               \in 1..AsyncQueueCapacity
+      BY <2>1, <2>6, <2>7, SMT DEF AsyncQueueDepth
+    <2>9. CommandClassDistance(
+             asyncNextCommandClass[node], candidate.class) \in 0..2
+      BY <2>1, SMTT(30)
+         DEF AsyncCandidateTyped, AsyncCommandClasses,
+             CommandClassDistance, NextCommandClass
+    <2> QED BY <1>1, <2>8, <2>9, SchedulerRankArithmeticBound
+         DEF SchedulerServiceRank, AsyncTypeInvariant,
+             AsyncSchedulerTypeInvariant, AsyncRuntimeTypeInvariant,
+             AsyncRuntimeScalarTypeInvariant, AsyncConfiguration
+  <1> QED BY <1>1
 
 THEOREM ControlWorkerRearmsExactlyAfterService ==
   \A node \in AsyncCurrentResponsiveVoters:
@@ -112,7 +222,7 @@ THEOREM AsyncInitEstablishesRuntimeScalarType ==
 BY SMTT(30)
    DEF AsyncInitAt, AsyncBaseInitAt, AsyncRuntimeInit,
        AsyncRuntimeScalarTypeInvariant, AsyncConfiguration,
-       AsyncQueueTyped
+       AsyncCommandQueueOwnership, AsyncQueueTyped, SequenceSet
 
 AsyncCausalCoreTypingFacts ==
   /\ context.height \in Heights
@@ -472,6 +582,12 @@ PROOF
                         asyncDeferredCompletionQueues[node])
                  /\ AsyncQueueTyped(asyncDeferredProgressQueues[node])
                  /\ AsyncQueueTyped(asyncDeferredNormalQueues[node])
+                 /\ AsyncCommandQueueOwnership(
+                      node, asyncDeferredCompletionQueues[node])
+                 /\ AsyncCommandQueueOwnership(
+                      node, asyncDeferredProgressQueues[node])
+                 /\ AsyncCommandQueueOwnership(
+                      node, asyncDeferredNormalQueues[node])
                  /\ \A candidate \in
                         SequenceSet(asyncDeferredProgressQueues[node]):
                       candidate.class = "Progress"
@@ -500,13 +616,21 @@ PROOF
                        SequenceSet(asyncDeferredNormalQueues[node]):
                      candidate.class = "Normal")
         BY <3>1, EmptyAsyncSequenceSet, SMT
-      <3>4. /\ Len(asyncDeferredProgressQueues[node]) <=
+      <3>4. /\ AsyncCommandQueueOwnership(
+                    node, asyncDeferredCompletionQueues[node])
+             /\ AsyncCommandQueueOwnership(
+                    node, asyncDeferredProgressQueues[node])
+             /\ AsyncCommandQueueOwnership(
+                    node, asyncDeferredNormalQueues[node])
+        BY <3>1, EmptyAsyncSequenceSet
+           DEF AsyncCommandQueueOwnership
+      <3>5. /\ Len(asyncDeferredProgressQueues[node]) <=
                   AsyncDeferredProgressCapacity
              /\ Len(asyncDeferredNormalQueues[node]) <=
                   AsyncDeferredNormalCapacity
         BY <1>1, <3>1, SMT
            DEF AsyncInitAt, AsyncBaseInitAt, AsyncConfiguration
-      <3> QED BY <3>2, <3>3, <3>4
+      <3> QED BY <3>2, <3>3, <3>4, <3>5
     <2> QED BY <2>1 DEF AsyncDeferredContentTypeInvariant
   <1> QED BY <1>1
 
@@ -563,7 +687,8 @@ PROOF
            /\ AsyncRetransmitPeriod \in Nat
            /\ AsyncChunkCount \in Nat
       BY <1>1, SMT DEF AsyncConfiguration
-    <2>3. /\ AsyncRuntimeCycleBudget \in Nat
+    <2>3. /\ AsyncRunnerCycleBudget \in Nat
+           /\ AsyncRuntimeCycleBudget \in Nat
            /\ AsyncIoDrainBudget \in Nat
            /\ AsyncDeferredDrainBudget \in Nat
            /\ AsyncRetainedControlBudget \in Nat
@@ -571,7 +696,8 @@ PROOF
            /\ AsyncActiveCertifiedRequestBudget \in Nat
            /\ AsyncActiveCommitRequestBudget \in Nat
       BY <2>1, <2>2, SMT
-         DEF AsyncRuntimeCycleBudget, AsyncIoDrainBudget,
+         DEF AsyncRunnerCycleBudget, AsyncRuntimeCycleBudget,
+             AsyncIoDrainBudget,
              AsyncDeferredDrainBudget, AsyncRetainedControlBudget,
              AsyncRetainedProposalChunkBudget,
              AsyncActiveCertifiedRequestBudget,
@@ -779,6 +905,34 @@ THEOREM AsyncIngressSourceCardinalityIsNatural ==
     => Cardinality(AsyncIngressSources) \in Nat
 BY AsyncIngressSourcesAreFinite, FS_CardinalityType
 
+THEOREM AsyncValidatorCardinalityIsNatural ==
+  (AsyncConfiguration /\ ModelConfiguration)
+    => Cardinality(ValidatorIds) \in Nat
+PROOF
+  <1>1. ASSUME AsyncConfiguration /\ ModelConfiguration
+         PROVE Cardinality(ValidatorIds) \in Nat
+    <2>1. IsFiniteSet(AsyncIngressSources)
+      BY <1>1, AsyncIngressSourcesAreFinite
+    <2>2. ValidatorIds \subseteq AsyncIngressSources
+      BY Isa DEF AsyncIngressSources
+    <2>3. IsFiniteSet(ValidatorIds)
+      BY <2>1, <2>2, FS_Subset
+    <2> QED BY <2>3, FS_CardinalityType
+  <1> QED BY <1>1
+
+THEOREM ValidValidatorTimeoutVotePassesByteGate ==
+  \A item:
+    /\ item.kind = "TimeoutVote"
+    /\ item.source \in ValidatorIds
+    /\ ~IngressLaneHasTimeoutVoteIn(
+          asyncIngressLanes, item.envelope.recipient, item.source)
+    => AsyncTimeoutVoteByteGateAllows(item)
+BY SMT
+   DEF AsyncTimeoutVoteByteGateAllows,
+       IngressLaneHasTimeoutVoteIn,
+       AsyncValidTimeoutVoteWireByteBound,
+       AsyncTimeoutVoteByteReserve
+
 THEOREM AsyncInitEstablishesIngressTopologyType ==
   \A initialContext:
     AsyncInitAt(initialContext) => AsyncIngressTopologyTypeInvariant
@@ -840,17 +994,20 @@ PROOF
                 AsyncInitAt(initialContext)
          PROVE AsyncIngressCapacityTypeInvariant
     <2>1. ASSUME NEW recipient \in ValidatorIds
-           PROVE /\ IngressDepth(recipient) <= AsyncIngressCapacity
+           PROVE /\ \A source \in AsyncIngressSources:
+                         IngressLaneDepth(recipient, source) <=
+                           AsyncIngressCapacity
+                 /\ IngressDepth(recipient) <= AsyncIngressCapacity
                  /\ IngressDepth(recipient)
-                      + Cardinality(
-                          {source \in AsyncIngressSources:
-                             IngressLaneDepth(recipient, source) = 0})
+                      + IngressProtectedSlotCountFor(
+                          asyncIngressLanes, recipient)
                       <= AsyncIngressCapacity
       <3>1. /\ asyncIngressLanes[recipient] =
                     [source \in AsyncIngressSources |-> <<>>]
              /\ AsyncIngressCapacity \in Nat
              /\ AsyncIngressCapacity >=
                   Cardinality(AsyncIngressSources)
+                    + Cardinality(ValidatorIds)
         BY <1>1, <2>1, SMT
            DEF AsyncInitAt, AsyncBaseInitAt, AsyncIngressInit,
                AsyncConfiguration
@@ -861,30 +1018,46 @@ PROOF
            DEF IngressLaneDepth, IngressLane
       <3>3. IngressDepth(recipient) = 0
         BY <3>2, FS_EmptySet, SMT DEF IngressDepth
-      <3>4. {source \in AsyncIngressSources:
-                 IngressLaneDepth(recipient, source) = 0}
-               = AsyncIngressSources
+      <3>4. IngressProtectedSourcesFor(
+                 asyncIngressLanes, recipient) = AsyncIngressSources
         BY <3>1, EmptyIngressZeroLaneSourceSet, SMT
-           DEF IngressLaneDepth, IngressLane
+           DEF IngressProtectedSourcesFor,
+               IngressLaneHasProgressIn, IngressAdmissionClass,
+               IngressProgressKinds, SequenceSet
       <3>5. AsyncConfiguration /\ ModelConfiguration
         BY <1>1 DEF AsyncInitAt, AsyncBaseInitAt, InitAt
       <3>6. Cardinality(AsyncIngressSources) \in Nat
         BY <3>5, AsyncIngressSourceCardinalityIsNatural
-      <3>7. IngressDepth(recipient) <= AsyncIngressCapacity
+      <3>7. IngressContinuationProtectedSourcesFor(
+                 asyncIngressLanes, recipient) = ValidatorIds
+        <4>1. ValidatorIds \subseteq AsyncIngressSources
+          BY Isa DEF AsyncIngressSources
+        <4>2. \A source \in ValidatorIds:
+                 Len(asyncIngressLanes[recipient][source]) = 0
+          BY <3>1, <4>1, Isa
+        <4> QED BY <4>2, Isa
+             DEF IngressContinuationProtectedSourcesFor
+      <3>8. Cardinality(ValidatorIds) \in Nat
+        BY <3>5, AsyncValidatorCardinalityIsNatural
+      <3>9. \A source \in AsyncIngressSources:
+               IngressLaneDepth(recipient, source) <=
+                 AsyncIngressCapacity
+        BY <3>1, SMT DEF IngressLaneDepth, IngressLane
+      <3>10. IngressDepth(recipient) <= AsyncIngressCapacity
         BY <3>1, <3>3, SMT
-      <3>8. IngressDepth(recipient)
-                + Cardinality(
-                    {source \in AsyncIngressSources:
-                       IngressLaneDepth(recipient, source) = 0})
+      <3>11. IngressDepth(recipient)
+                + IngressProtectedSlotCountFor(
+                    asyncIngressLanes, recipient)
               = Cardinality(AsyncIngressSources)
-        BY <3>3, <3>4, <3>6, SMT
-      <3>9. IngressDepth(recipient)
-                + Cardinality(
-                    {source \in AsyncIngressSources:
-                       IngressLaneDepth(recipient, source) = 0})
+                  + Cardinality(ValidatorIds)
+        BY <3>3, <3>4, <3>6, <3>7, <3>8, SMT
+           DEF IngressProtectedSlotCountFor
+      <3>12. IngressDepth(recipient)
+                + IngressProtectedSlotCountFor(
+                    asyncIngressLanes, recipient)
               <= AsyncIngressCapacity
-        BY <3>1, <3>8, SMT
-      <3> QED BY <3>7, <3>9
+        BY <3>1, <3>11, SMT
+      <3> QED BY <3>9, <3>10, <3>12
     <2> QED BY <2>1 DEF AsyncIngressCapacityTypeInvariant
   <1> QED BY <1>1
 
@@ -947,7 +1120,8 @@ slice changed by that action.
 ***************************************************************************)
 
 AsyncRuntimeScalarTypeVars ==
-  <<asyncNow, asyncCommandQueues, asyncFifoOwed, asyncTimeoutEmitted,
+  <<asyncNow, asyncCommandQueues, asyncNextCommandClass,
+    asyncFifoOwed, asyncTimeoutEmitted,
     asyncRunnerPhase, asyncRunnerBudget>>
 
 AsyncIoTopologyTypeVars ==
@@ -1096,7 +1270,10 @@ THEOREM AsyncIngressCapacityTypeStutter ==
     => AsyncIngressCapacityTypeInvariant'
 BY Isa
    DEF AsyncIngressCapacityTypeInvariant, IngressDepth,
-       IngressLaneDepth, IngressLane
+       IngressProtectedSourcesFor, IngressLaneHasProgressIn,
+       IngressContinuationProtectedSourcesFor,
+       IngressProtectedSlotCountFor, IngressAdmissionClass,
+       IngressProgressKinds, IngressLaneDepth, IngressLane, SequenceSet
 
 THEOREM AsyncIngressContentTypeStutter ==
   AsyncIngressContentTypeInvariant /\ UNCHANGED asyncIngressLanes
@@ -1566,6 +1743,15 @@ PROOF
       BY <2>1, RangeEquality DEF SequenceSet
     <2> QED BY <2>1, <2>2, <2>3
   <1> QED BY <1>1
+
+THEOREM AppendOwnedCandidatePreservesCommandQueueOwnership ==
+  \A node, queue, candidate:
+    /\ AsyncQueueTyped(queue)
+    /\ AsyncCommandQueueOwnership(node, queue)
+    /\ candidate.node = node
+    => AsyncCommandQueueOwnership(node, Append(queue, candidate))
+BY SequenceSetAfterAppend, SMT
+   DEF AsyncQueueTyped, AsyncCommandQueueOwnership
 
 THEOREM UniqueSequenceLengthImpliesInjective ==
   \A sequence:
@@ -4217,6 +4403,109 @@ PROOF
     <2> QED BY <2>1, SMT DEF AsyncIngressPairIndicesFor
   <1> QED BY <1>1
 
+THEOREM IngressProtectedSourcesFinite ==
+  \A lanes, recipient:
+    IsFiniteSet(AsyncIngressSources)
+      => /\ IngressProtectedSourcesFor(lanes, recipient)
+               \subseteq AsyncIngressSources
+         /\ IsFiniteSet(IngressProtectedSourcesFor(lanes, recipient))
+         /\ Cardinality(IngressProtectedSourcesFor(lanes, recipient))
+               \in Nat
+PROOF
+  <1>1. ASSUME NEW lanes, NEW recipient,
+                IsFiniteSet(AsyncIngressSources)
+         PROVE /\ IngressProtectedSourcesFor(lanes, recipient)
+                    \subseteq AsyncIngressSources
+               /\ IsFiniteSet(
+                    IngressProtectedSourcesFor(lanes, recipient))
+               /\ Cardinality(
+                    IngressProtectedSourcesFor(lanes, recipient)) \in Nat
+    <2>1. IngressProtectedSourcesFor(lanes, recipient)
+               \subseteq AsyncIngressSources
+      BY Isa DEF IngressProtectedSourcesFor
+    <2>2. IsFiniteSet(
+             IngressProtectedSourcesFor(lanes, recipient))
+      BY <1>1, <2>1, FS_Subset
+    <2>3. Cardinality(
+             IngressProtectedSourcesFor(lanes, recipient)) \in Nat
+      BY <2>2, FS_CardinalityType
+    <2> QED BY <2>1, <2>2, <2>3
+  <1> QED BY <1>1
+
+THEOREM IngressProtectedSlotCountIsNatural ==
+  \A lanes, recipient:
+    (AsyncConfiguration /\ ModelConfiguration)
+      => IngressProtectedSlotCountFor(lanes, recipient) \in Nat
+PROOF
+  <1>1. ASSUME NEW lanes, NEW recipient,
+                AsyncConfiguration /\ ModelConfiguration
+         PROVE IngressProtectedSlotCountFor(lanes, recipient) \in Nat
+    <2>1. IsFiniteSet(AsyncIngressSources)
+      BY <1>1, AsyncIngressSourcesAreFinite
+    <2>2. Cardinality(
+             IngressProtectedSourcesFor(lanes, recipient)) \in Nat
+      BY <2>1, IngressProtectedSourcesFinite
+    <2>3. IngressContinuationProtectedSourcesFor(lanes, recipient)
+               \subseteq AsyncIngressSources
+      BY Isa DEF IngressContinuationProtectedSourcesFor,
+                 AsyncIngressSources
+    <2>4. IsFiniteSet(
+             IngressContinuationProtectedSourcesFor(lanes, recipient))
+      BY <2>1, <2>3, FS_Subset
+    <2>5. Cardinality(
+             IngressContinuationProtectedSourcesFor(lanes, recipient)) \in Nat
+      BY <2>4, FS_CardinalityType
+    <2> QED BY <2>2, <2>5, SMT
+         DEF IngressProtectedSlotCountFor
+  <1> QED BY <1>1
+
+THEOREM IngressLaneAtCapacityConsumesCapacity ==
+  \A lanes, recipient, source:
+    /\ IsFiniteSet(AsyncIngressSources)
+    /\ source \in AsyncIngressSources
+    /\ AsyncIngressCapacity \in Nat
+    /\ Len(lanes[recipient][source]) \in Nat
+    /\ Len(lanes[recipient][source]) >= AsyncIngressCapacity
+    => AsyncIngressDepthFor(lanes, recipient) >= AsyncIngressCapacity
+PROOF
+  <1>1. ASSUME NEW lanes, NEW recipient, NEW source,
+                IsFiniteSet(AsyncIngressSources),
+                source \in AsyncIngressSources,
+                AsyncIngressCapacity \in Nat,
+                Len(lanes[recipient][source]) \in Nat,
+                Len(lanes[recipient][source]) >= AsyncIngressCapacity
+         PROVE AsyncIngressDepthFor(lanes, recipient)
+                 >= AsyncIngressCapacity
+    <2>1. /\ IsFiniteSet({source})
+           /\ Cardinality({source}) = 1
+           /\ IsFiniteSet(1..AsyncIngressCapacity)
+           /\ Cardinality(1..AsyncIngressCapacity) =
+                AsyncIngressCapacity
+      BY <1>1, FS_Singleton, FS_Interval, SMT
+    <2>2. /\ IsFiniteSet(
+                  {source} \X (1..AsyncIngressCapacity))
+           /\ Cardinality(
+                  {source} \X (1..AsyncIngressCapacity)) =
+                AsyncIngressCapacity
+      BY <2>1, FS_Product, SMT
+    <2>3. {source} \X (1..AsyncIngressCapacity)
+               \subseteq AsyncIngressPairIndicesFor(lanes, recipient)
+      BY <1>1, SMT DEF AsyncIngressPairIndicesFor
+    <2>4. IsFiniteSet(
+             AsyncIngressPairIndicesFor(lanes, recipient))
+      <3>1. IsFiniteSet(
+               AsyncIngressSources \X (1..AsyncIngressCapacity))
+        BY <1>1, <2>1, FS_Product
+      <3> QED BY <3>1, FS_Subset
+           DEF AsyncIngressPairIndicesFor
+    <2>5. Cardinality(
+             {source} \X (1..AsyncIngressCapacity)) <=
+           Cardinality(
+             AsyncIngressPairIndicesFor(lanes, recipient))
+      BY <2>2, <2>3, <2>4, FS_Subset
+    <2> QED BY <2>2, <2>5 DEF AsyncIngressDepthFor
+  <1> QED BY <1>1
+
 THEOREM AdmitHiddenPacketPreservesIngressCapacityType ==
   \A recipient \in ValidatorIds, source \in AsyncIngressSources:
     AsyncTypeInvariant /\ AdmitHiddenPacket(recipient, source)
@@ -4227,6 +4516,9 @@ PROOF
                 AsyncTypeInvariant,
                 AdmitHiddenPacket(recipient, source)
          PROVE AsyncIngressCapacityTypeInvariant'
+    <2> DEFINE Item ==
+           OldestDueSourcePacket(recipient, source).item
+    <2> DEFINE NextLanes == IngressLanesAfterAdmission(Item)
     <2>1. /\ AsyncConfiguration
            /\ ModelConfiguration
            /\ AsyncIngressTopologyTypeInvariant
@@ -4240,297 +4532,359 @@ PROOF
              AsyncRuntimeScalarTypeInvariant,
              AsyncTransportTypeInvariant, AsyncTransportContentTypeInvariant,
              AsyncIngressTypeInvariant, AdmitHiddenPacket
-    <2>2. LET packet == OldestDueSourcePacket(recipient, source)
-           IN /\ packet.item.envelope.recipient = recipient
-              /\ packet.item.source = source
-      BY <1>1, <2>1, OldestDueSourcePacketFacts
-    <2>3. IngressDepth(recipient) <
-             IngressUsableCapacity(recipient, source)
-      BY <1>1, <2>2 DEF AdmitHiddenPacket, CanAdmitIngressItem
-    <2>4. /\ AsyncIngressZeroSourcesFor(
-                    asyncIngressLanes', recipient) =
-                  EmptyOtherIngressLanes(recipient, source)
-           /\ \A otherRecipient \in ValidatorIds \ {recipient}:
-                AsyncIngressZeroSourcesFor(
-                  asyncIngressLanes', otherRecipient) =
-                AsyncIngressZeroSourcesFor(
-                  asyncIngressLanes, otherRecipient)
-      BY <1>1, <2>1, NestedIngressAppendSourceSetFacts
-         DEF AdmitHiddenPacket, AsyncIngressTopologyTypeInvariant,
-             AsyncIngressContentTypeInvariant,
-             AsyncIngressZeroSourcesFor, EmptyOtherIngressLanes,
-             IngressLaneDepth, IngressLane
-    <2>5. LET nextIndex ==
-                  <<source, IngressLaneDepth(recipient, source) + 1>>
-           IN /\ AsyncIngressPairIndicesFor(
-                       asyncIngressLanes', recipient) =
-                    IF IngressLaneDepth(recipient, source) <
-                         AsyncIngressCapacity
-                    THEN AsyncIngressPairIndicesFor(
-                           asyncIngressLanes, recipient) \cup {nextIndex}
-                    ELSE AsyncIngressPairIndicesFor(
-                           asyncIngressLanes, recipient)
-              /\ \A otherRecipient \in ValidatorIds \ {recipient}:
-                   AsyncIngressPairIndicesFor(
-                     asyncIngressLanes', otherRecipient) =
-                   AsyncIngressPairIndicesFor(
-                     asyncIngressLanes, otherRecipient)
-      BY <1>1, <2>1, NestedIngressAppendPairSetFacts
-         DEF AdmitHiddenPacket, AsyncConfiguration,
-             AsyncIngressTopologyTypeInvariant,
-             AsyncIngressContentTypeInvariant,
-             IngressLaneDepth, IngressLane
-    <2>6. /\ IsFiniteSet(AsyncIngressSources)
+    <2>2. /\ Item.envelope.recipient = recipient
+           /\ Item.source = source
+      BY <2>1, OldestDueSourcePacketFacts DEF Item
+    <2>3. /\ NextLanes =
+                  [asyncIngressLanes EXCEPT
+                     ![recipient][source] = Append(@, Item)]
+           /\ asyncIngressLanes' = NextLanes
+      BY <1>1, <2>2
+         DEF AdmitHiddenPacket, NextLanes,
+             IngressLanesAfterAdmission, Item
+    <2>4. IngressDepth(recipient) <
+             AsyncIngressCapacity -
+               IngressProtectedSlotCountFor(NextLanes, recipient)
+      BY <1>1, <2>2, <2>3
+         DEF AdmitHiddenPacket, CanAdmitIngressItem,
+             IngressUsableCapacityAfterAdmission,
+             IngressProtectedSlotCountAfterAdmission,
+             NextLanes, Item
+    <2>5. /\ IsFiniteSet(AsyncIngressSources)
            /\ AsyncIngressCapacity \in Nat \ {0}
       BY <2>1, AsyncIngressSourcesAreFinite
          DEF AsyncConfiguration
-    <2>7. /\ IsFiniteSet(1..AsyncIngressCapacity)
-           /\ IsFiniteSet(
-                AsyncIngressSources \X (1..AsyncIngressCapacity))
-      BY <2>6, FS_Interval, FS_Product, SMT
-    <2>8. IsFiniteSet(
+    <2>6. IngressProtectedSlotCountFor(NextLanes, recipient) \in Nat
+      BY <2>1, IngressProtectedSlotCountIsNatural
+    <2>7. IsFiniteSet(
              AsyncIngressPairIndicesFor(asyncIngressLanes, recipient))
-      BY <2>7, FS_Subset DEF AsyncIngressPairIndicesFor
-    <2>9. /\ IsFiniteSet(EmptyOtherIngressLanes(recipient, source))
-           /\ Cardinality(
-                EmptyOtherIngressLanes(recipient, source)) \in Nat
-           /\ Cardinality(
-                AsyncIngressPairIndicesFor(
-                  asyncIngressLanes, recipient)) \in Nat
-      BY <2>6, <2>8, FS_Subset, FS_CardinalityType
-         DEF EmptyOtherIngressLanes
-    <2>10. ASSUME NEW otherRecipient \in ValidatorIds
-            PROVE /\ AsyncIngressDepthFor(
-                         asyncIngressLanes', otherRecipient) <=
-                         AsyncIngressCapacity
-                  /\ AsyncIngressDepthFor(
-                       asyncIngressLanes', otherRecipient)
-                       + Cardinality(
-                           {otherSource \in AsyncIngressSources:
-                              Len(asyncIngressLanes'
-                                    [otherRecipient][otherSource]) = 0})
-                       <= AsyncIngressCapacity
-      <3>1. CASE otherRecipient = recipient
-        <4>1. CASE IngressLaneDepth(recipient, source) <
-                     AsyncIngressCapacity
-          <5>1. LET nextIndex ==
-                        <<source,
-                          IngressLaneDepth(recipient, source) + 1>>
-                 IN /\ nextIndex \notin
-                          AsyncIngressPairIndicesFor(
-                            asyncIngressLanes, recipient)
-                    /\ AsyncIngressPairIndicesFor(
-                         asyncIngressLanes', recipient) =
-                         AsyncIngressPairIndicesFor(
-                           asyncIngressLanes, recipient) \cup {nextIndex}
-            <6>1. <<source,
-                     IngressLaneDepth(recipient, source) + 1>>
-                    \notin AsyncIngressPairIndicesFor(
-                              asyncIngressLanes, recipient)
-              BY <2>1, NextIngressIndexIsFresh
-                 DEF AsyncIngressContentTypeInvariant,
-                     IngressLaneDepth, IngressLane
-            <6>2. AsyncIngressPairIndicesFor(
-                       asyncIngressLanes', recipient) =
+      <3>1. /\ IsFiniteSet(1..AsyncIngressCapacity)
+             /\ IsFiniteSet(
+                  AsyncIngressSources \X (1..AsyncIngressCapacity))
+        BY <2>5, FS_Interval, FS_Product, SMT
+      <3> QED BY <3>1, FS_Subset
+           DEF AsyncIngressPairIndicesFor
+    <2>8. IngressDepth(recipient) \in Nat
+      <3>1. Cardinality(
+               AsyncIngressPairIndicesFor(
+                 asyncIngressLanes, recipient)) \in Nat
+        BY <2>7, FS_CardinalityType
+      <3> QED BY <3>1
+           DEF IngressDepth, AsyncIngressPairIndicesFor,
+               IngressLaneDepth, IngressLane
+    <2>9. IngressDepth(recipient) < AsyncIngressCapacity
+      BY <2>4, <2>5, <2>6, <2>8, SMT
+    <2>10. Len(asyncIngressLanes[recipient][source]) \in Nat
+      BY <2>1, LenProperties
+         DEF AsyncIngressContentTypeInvariant, IngressLane
+    <2>11. Len(asyncIngressLanes[recipient][source]) <
+               AsyncIngressCapacity
+      <3>1. ASSUME Len(asyncIngressLanes[recipient][source]) >=
+                       AsyncIngressCapacity
+             PROVE FALSE
+        <4>1. AsyncIngressDepthFor(
+                 asyncIngressLanes, recipient) >=
+                   AsyncIngressCapacity
+          BY <1>1, <2>5, <2>10, <3>1,
+             IngressLaneAtCapacityConsumesCapacity
+        <4>2. AsyncIngressDepthFor(
+                 asyncIngressLanes, recipient) =
+               IngressDepth(recipient)
+          BY DEF AsyncIngressDepthFor, IngressDepth,
+                 AsyncIngressPairIndicesFor,
+                 IngressLaneDepth, IngressLane
+        <4>3. ~(IngressDepth(recipient) < AsyncIngressCapacity)
+          BY <2>5, <2>8, <4>1, <4>2,
+             NaturalGreaterOrEqualIsNotLess
+        <4> QED BY <2>9, <4>3
+      <3> QED BY <2>5, <2>10, <3>1, SMT
+    <2>12. LET nextIndex ==
+                    <<source,
+                      Len(asyncIngressLanes[recipient][source]) + 1>>
+            IN /\ nextIndex \notin
                      AsyncIngressPairIndicesFor(
                        asyncIngressLanes, recipient)
-                       \cup {<<source,
-                                IngressLaneDepth(recipient, source) + 1>>}
-              BY <2>5, <4>1
-            <6> QED BY <6>1, <6>2
-          <5>2. Cardinality(
+               /\ AsyncIngressPairIndicesFor(NextLanes, recipient) =
+                    AsyncIngressPairIndicesFor(
+                      asyncIngressLanes, recipient) \cup {nextIndex}
+      <3>1. <<source,
+               Len(asyncIngressLanes[recipient][source]) + 1>>
+                \notin AsyncIngressPairIndicesFor(
+                          asyncIngressLanes, recipient)
+        <4>1. asyncIngressLanes[recipient][source]
+                   \in Seq(Range(
+                        asyncIngressLanes[recipient][source]))
+          BY <2>1
+             DEF AsyncIngressContentTypeInvariant, IngressLane
+        <4> QED BY <4>1, NextIngressIndexIsFresh
+      <3>2. LET nextIndex ==
+                      <<source,
+                        Len(asyncIngressLanes[recipient][source]) + 1>>
+              IN AsyncIngressPairIndicesFor(NextLanes, recipient) =
                    AsyncIngressPairIndicesFor(
-                     asyncIngressLanes', recipient)) =
-                 Cardinality(
-                   AsyncIngressPairIndicesFor(
-                     asyncIngressLanes, recipient)) + 1
-            BY <2>8, <5>1, FS_AddElement
-          <5>3. IngressDepth(recipient) =
-                   Cardinality(
-                     AsyncIngressPairIndicesFor(
-                       asyncIngressLanes, recipient))
-                 /\ AsyncIngressDepthFor(
-                      asyncIngressLanes', recipient) =
-                   Cardinality(
-                     AsyncIngressPairIndicesFor(
-                       asyncIngressLanes', recipient))
-            BY DEF IngressDepth, AsyncIngressDepthFor,
-                   AsyncIngressPairIndicesFor,
-                   IngressLaneDepth, IngressLane
-          <5>4. Cardinality(
-                   {otherSource \in AsyncIngressSources:
-                      Len(asyncIngressLanes'
-                            [recipient][otherSource]) = 0}) =
-                 Cardinality(
-                   EmptyOtherIngressLanes(recipient, source))
-            BY <2>4, <3>1
-               DEF AsyncIngressZeroSourcesFor,
-                   IngressLaneDepth, IngressLane
-          <5>5. IngressDepth(recipient) <
-                   AsyncIngressCapacity -
-                     Cardinality(
-                       EmptyOtherIngressLanes(recipient, source))
-            BY <2>3 DEF IngressUsableCapacity
-          <5>6. AsyncIngressDepthFor(asyncIngressLanes', recipient)
-                   + Cardinality(
-                       {otherSource \in AsyncIngressSources:
-                          Len(asyncIngressLanes'
-                                [recipient][otherSource]) = 0})
-                   <= AsyncIngressCapacity
-            <6>1. IngressDepth(recipient) \in Nat
-              BY <2>9, <5>3
-            <6>2. IngressDepth(recipient) + 1
-                     + Cardinality(
-                         EmptyOtherIngressLanes(recipient, source))
-                     <= AsyncIngressCapacity
-              BY <2>6, <2>9, <5>5, <6>1,
-                 NaturalReservedCapacityStep
-            <6>3. AsyncIngressDepthFor(
-                       asyncIngressLanes', recipient) =
-                     IngressDepth(recipient) + 1
-              BY <5>2, <5>3
-            <6> QED BY <5>4, <6>2, <6>3
-          <5>7. AsyncIngressDepthFor(asyncIngressLanes', recipient) <=
-                   AsyncIngressCapacity
-            <6>1. Cardinality(
-                     {otherSource \in AsyncIngressSources:
-                        Len(asyncIngressLanes'
-                              [recipient][otherSource]) = 0}) \in Nat
-              BY <2>9, <5>4
-            <6>2. AsyncIngressDepthFor(
-                       asyncIngressLanes', recipient) \in Nat
-              BY <2>9, <5>2, <5>3, SMT
-            <6> QED BY <2>6, <5>6, <6>1, <6>2,
-                 NaturalSumBoundProjectsLeft
-          <5> QED BY <3>1, <5>6, <5>7
-        <4>2. CASE IngressLaneDepth(recipient, source) >=
-                     AsyncIngressCapacity
-          <5>1. /\ IngressLaneDepth(recipient, source) \in Nat
-                 /\ IngressLaneDepth(recipient, source) > 0
-            BY <2>1, <2>6, <4>2, LenProperties, SMT
-               DEF AsyncIngressContentTypeInvariant, IngressLaneDepth
-          <5>2. AsyncIngressZeroSourcesFor(
-                    asyncIngressLanes, recipient) =
-                  EmptyOtherIngressLanes(recipient, source)
-            BY <5>1, Isa
-               DEF AsyncIngressZeroSourcesFor,
-                   EmptyOtherIngressLanes, IngressLaneDepth, IngressLane
-          <5>3. /\ AsyncIngressPairIndicesFor(
-                         asyncIngressLanes', recipient) =
-                       AsyncIngressPairIndicesFor(
-                         asyncIngressLanes, recipient)
-                 /\ AsyncIngressZeroSourcesFor(
-                         asyncIngressLanes', recipient) =
-                       AsyncIngressZeroSourcesFor(
-                         asyncIngressLanes, recipient)
-            <6>1. AsyncIngressPairIndicesFor(
-                       asyncIngressLanes', recipient) =
-                     IF IngressLaneDepth(recipient, source) <
+                     asyncIngressLanes, recipient) \cup {nextIndex}
+        <4>1. AsyncIngressCapacity \in Nat
+          BY <2>5, SMT
+        <4>2. /\ DOMAIN asyncIngressLanes = ValidatorIds
+               /\ \A otherRecipient \in ValidatorIds:
+                    /\ DOMAIN asyncIngressLanes[otherRecipient] =
+                         AsyncIngressSources
+                    /\ \A otherSource \in AsyncIngressSources:
+                         asyncIngressLanes[otherRecipient][otherSource]
+                           \in Seq(Range(
+                                asyncIngressLanes[otherRecipient]
+                                  [otherSource]))
+          BY <2>1
+             DEF AsyncIngressTopologyTypeInvariant,
+                 AsyncIngressContentTypeInvariant, IngressLane
+        <4>3. LET nextIndex ==
+                        <<source,
+                          Len(asyncIngressLanes[recipient][source]) + 1>>
+                IN AsyncIngressPairIndicesFor(NextLanes, recipient) =
+                     IF Len(asyncIngressLanes[recipient][source]) <
                           AsyncIngressCapacity
                      THEN AsyncIngressPairIndicesFor(
-                            asyncIngressLanes, recipient)
-                            \cup {<<source,
-                                     IngressLaneDepth(recipient, source) + 1>>}
+                            asyncIngressLanes, recipient) \cup {nextIndex}
                      ELSE AsyncIngressPairIndicesFor(
                             asyncIngressLanes, recipient)
-              BY <2>5
-            <6>2. ~(IngressLaneDepth(recipient, source) <
-                       AsyncIngressCapacity)
-              BY <2>6, <4>2, <5>1,
-                 NaturalGreaterOrEqualIsNotLess
-            <6>3. (IF IngressLaneDepth(recipient, source) <
-                           AsyncIngressCapacity
-                     THEN AsyncIngressPairIndicesFor(
-                            asyncIngressLanes, recipient)
-                            \cup {<<source,
-                                     IngressLaneDepth(recipient, source) + 1>>}
-                     ELSE AsyncIngressPairIndicesFor(
-                            asyncIngressLanes, recipient)) =
-                   AsyncIngressPairIndicesFor(
-                     asyncIngressLanes, recipient)
-              BY <6>2, IfElseWhenFalse
-            <6>4. AsyncIngressPairIndicesFor(
-                       asyncIngressLanes', recipient) =
-                     AsyncIngressPairIndicesFor(
-                       asyncIngressLanes, recipient)
-              BY <6>1, <6>3
-            <6>5. AsyncIngressZeroSourcesFor(
-                       asyncIngressLanes', recipient) =
-                     AsyncIngressZeroSourcesFor(
-                       asyncIngressLanes, recipient)
-              BY <2>4, <5>2
-            <6> QED BY <6>4, <6>5
-          <5>4. /\ AsyncIngressDepthFor(
-                         asyncIngressLanes', recipient) =
-                       IngressDepth(recipient)
-                 /\ Cardinality(
-                      {otherSource \in AsyncIngressSources:
-                         Len(asyncIngressLanes'
-                               [recipient][otherSource]) = 0}) =
-                      Cardinality(
-                        {otherSource \in AsyncIngressSources:
-                           IngressLaneDepth(recipient, otherSource) = 0})
-            BY <5>3
-               DEF IngressDepth, AsyncIngressDepthFor,
-                   AsyncIngressPairIndicesFor,
-                   AsyncIngressZeroSourcesFor,
-                   IngressLaneDepth, IngressLane
-          <5> QED BY <2>1, <3>1, <5>4
-               DEF AsyncIngressCapacityTypeInvariant
-        <4>3. /\ IngressLaneDepth(recipient, source) \in Nat
-               /\ AsyncIngressCapacity \in Nat
-          BY <2>1, LenProperties
-             DEF AsyncConfiguration,
-                 AsyncIngressContentTypeInvariant,
+          BY <2>3, <4>1, <4>2,
+             NestedIngressAppendPairSetFacts
+        <4> QED BY <2>11, <4>3, SMT
+      <3> QED BY <3>1, <3>2
+    <2>13. AsyncIngressDepthFor(NextLanes, recipient) =
+               IngressDepth(recipient) + 1
+      <3>1. Cardinality(
+               AsyncIngressPairIndicesFor(NextLanes, recipient)) =
+             Cardinality(
+               AsyncIngressPairIndicesFor(
+                 asyncIngressLanes, recipient)) + 1
+        BY <2>7, <2>12, FS_AddElement
+      <3> QED BY <3>1
+           DEF AsyncIngressDepthFor, IngressDepth,
+               AsyncIngressPairIndicesFor,
+               IngressLaneDepth, IngressLane
+    <2>14. \A otherRecipient \in ValidatorIds \ {recipient}:
+               /\ AsyncIngressDepthFor(
+                    NextLanes, otherRecipient) =
+                    IngressDepth(otherRecipient)
+               /\ IngressProtectedSourcesFor(
+                    NextLanes, otherRecipient) =
+                    IngressProtectedSourcesFor(
+                      asyncIngressLanes, otherRecipient)
+               /\ IngressContinuationProtectedSourcesFor(
+                    NextLanes, otherRecipient) =
+                    IngressContinuationProtectedSourcesFor(
+                      asyncIngressLanes, otherRecipient)
+               /\ IngressProtectedSlotCountFor(
+                    NextLanes, otherRecipient) =
+                    IngressProtectedSlotCountFor(
+                      asyncIngressLanes, otherRecipient)
+      <3>1. ASSUME NEW otherRecipient \in
+                       ValidatorIds \ {recipient}
+             PROVE /\ AsyncIngressDepthFor(
+                          NextLanes, otherRecipient) =
+                          IngressDepth(otherRecipient)
+                   /\ IngressProtectedSourcesFor(
+                          NextLanes, otherRecipient) =
+                          IngressProtectedSourcesFor(
+                            asyncIngressLanes, otherRecipient)
+                   /\ IngressContinuationProtectedSourcesFor(
+                          NextLanes, otherRecipient) =
+                          IngressContinuationProtectedSourcesFor(
+                            asyncIngressLanes, otherRecipient)
+                   /\ IngressProtectedSlotCountFor(
+                          NextLanes, otherRecipient) =
+                          IngressProtectedSlotCountFor(
+                            asyncIngressLanes, otherRecipient)
+        <4>1. otherRecipient # recipient
+          BY <3>1, Isa
+        <4>2. DOMAIN asyncIngressLanes = ValidatorIds
+          BY <2>1 DEF AsyncIngressTopologyTypeInvariant
+        <4>3. [asyncIngressLanes EXCEPT
+                   ![recipient][source] = Append(@, Item)]
+                    [otherRecipient] =
+                 asyncIngressLanes[otherRecipient]
+          BY <3>1, <4>1, <4>2,
+             FunctionalUpdateAwayFromKey
+        <4>4. NextLanes[otherRecipient] =
+                 asyncIngressLanes[otherRecipient]
+          BY <2>3, <4>3
+        <4>5. AsyncIngressDepthFor(
+                 NextLanes, otherRecipient) =
+               IngressDepth(otherRecipient)
+          BY <4>4, Isa
+             DEF AsyncIngressDepthFor, IngressDepth,
+                 AsyncIngressPairIndicesFor,
                  IngressLaneDepth, IngressLane
-        <4> QED BY <4>1, <4>2, <4>3, SMT
+        <4>6. IngressProtectedSourcesFor(
+                 NextLanes, otherRecipient) =
+               IngressProtectedSourcesFor(
+                 asyncIngressLanes, otherRecipient)
+          BY <4>4, Isa
+             DEF IngressProtectedSourcesFor,
+                 IngressLaneHasProgressIn, SequenceSet
+        <4>7. IngressContinuationProtectedSourcesFor(
+                 NextLanes, otherRecipient) =
+               IngressContinuationProtectedSourcesFor(
+                 asyncIngressLanes, otherRecipient)
+          BY <4>4, Isa
+             DEF IngressContinuationProtectedSourcesFor,
+                 IngressLaneHasProgressIn, SequenceSet
+        <4>8. IngressProtectedSlotCountFor(
+                 NextLanes, otherRecipient) =
+               IngressProtectedSlotCountFor(
+                 asyncIngressLanes, otherRecipient)
+          BY <4>6, <4>7 DEF IngressProtectedSlotCountFor
+        <4> QED BY <4>5, <4>6, <4>7, <4>8
+      <3> QED BY <3>1
+    <2>15. AsyncIngressDepthFor(NextLanes, recipient)
+                + IngressProtectedSlotCountFor(NextLanes, recipient)
+              <= AsyncIngressCapacity
+      BY <2>4, <2>5, <2>6, <2>8, <2>13,
+         NaturalReservedCapacityStep
+    <2>16. \A otherRecipient \in ValidatorIds,
+                otherSource \in AsyncIngressSources:
+               Len(NextLanes[otherRecipient][otherSource]) <=
+                 AsyncIngressCapacity
+      <3>1. ASSUME NEW otherRecipient \in ValidatorIds,
+                     NEW otherSource \in AsyncIngressSources
+             PROVE Len(NextLanes[otherRecipient][otherSource]) <=
+                     AsyncIngressCapacity
+        <4>1. Len(asyncIngressLanes[otherRecipient][otherSource]) <=
+                 AsyncIngressCapacity
+          BY <2>1, <3>1
+             DEF AsyncIngressCapacityTypeInvariant,
+                 IngressLaneDepth, IngressLane
+        <4>2. Len(NextLanes[otherRecipient][otherSource]) =
+                 IF otherRecipient = recipient /\ otherSource = source
+                 THEN Len(
+                        asyncIngressLanes[otherRecipient][otherSource]) + 1
+                 ELSE Len(
+                        asyncIngressLanes[otherRecipient][otherSource])
+          BY <2>1, <2>3, <3>1, NestedIngressAppendLaneFacts
+             DEF AsyncIngressTopologyTypeInvariant,
+                 AsyncIngressContentTypeInvariant, IngressLane
+        <4>3. CASE otherRecipient = recipient /\ otherSource = source
+          BY <2>5, <2>10, <2>11, <3>1, <4>2, <4>3, SMT
+        <4>4. CASE ~(otherRecipient = recipient /\ otherSource = source)
+          BY <4>1, <4>2, <4>4
+        <4> QED BY <4>3, <4>4
+      <3> QED BY <3>1
+    <2>17. ASSUME NEW otherRecipient \in ValidatorIds
+             PROVE /\ AsyncIngressDepthFor(
+                          NextLanes, otherRecipient)
+                            <= AsyncIngressCapacity
+                   /\ AsyncIngressDepthFor(
+                          NextLanes, otherRecipient)
+                        + IngressProtectedSlotCountFor(
+                            NextLanes, otherRecipient)
+                            <= AsyncIngressCapacity
+      <3>1. CASE otherRecipient = recipient
+        <4>1. AsyncIngressDepthFor(NextLanes, recipient) \in Nat
+          BY <2>8, <2>13, SMT
+        <4>2. AsyncIngressDepthFor(NextLanes, recipient)
+                   <= AsyncIngressCapacity
+          BY <2>5, <2>6, <2>15, <4>1,
+             NaturalSumBoundProjectsLeft
+        <4> QED BY <2>15, <3>1, <4>2
       <3>2. CASE otherRecipient # recipient
-        <4>1. /\ AsyncIngressPairIndicesFor(
-                       asyncIngressLanes', otherRecipient) =
-                     AsyncIngressPairIndicesFor(
-                       asyncIngressLanes, otherRecipient)
-               /\ AsyncIngressZeroSourcesFor(
-                       asyncIngressLanes', otherRecipient) =
-                     AsyncIngressZeroSourcesFor(
-                       asyncIngressLanes, otherRecipient)
-          <5>1. AsyncIngressPairIndicesFor(
-                     asyncIngressLanes', otherRecipient) =
-                   AsyncIngressPairIndicesFor(
-                     asyncIngressLanes, otherRecipient)
-            <6>1. otherRecipient \in ValidatorIds \ {recipient}
-              BY <2>10, <3>2, Isa
-            <6> QED BY <2>5, <6>1
-          <5>2. AsyncIngressZeroSourcesFor(
-                     asyncIngressLanes', otherRecipient) =
-                   AsyncIngressZeroSourcesFor(
-                     asyncIngressLanes, otherRecipient)
-            BY <2>4, <2>10, <3>2, Isa
-          <5> QED BY <5>1, <5>2
-        <4>2. /\ AsyncIngressDepthFor(
-                       asyncIngressLanes', otherRecipient) =
-                       IngressDepth(otherRecipient)
-               /\ Cardinality(
-                    {otherSource \in AsyncIngressSources:
-                       Len(asyncIngressLanes'
-                             [otherRecipient][otherSource]) = 0}) =
-                    Cardinality(
-                      {otherSource \in AsyncIngressSources:
-                         IngressLaneDepth(otherRecipient, otherSource) = 0})
-          BY <4>1
+        <4>1. otherRecipient \in ValidatorIds \ {recipient}
+          BY <2>17, <3>2, Isa
+        <4>2. /\ IngressDepth(otherRecipient)
+                        <= AsyncIngressCapacity
+               /\ IngressDepth(otherRecipient)
+                    + IngressProtectedSlotCountFor(
+                        asyncIngressLanes, otherRecipient)
+                        <= AsyncIngressCapacity
+          BY <2>1, <2>17
+             DEF AsyncIngressCapacityTypeInvariant
+        <4> QED BY <2>14, <4>1, <4>2
+      <3> QED BY <3>1, <3>2
+    <2>18. \A otherRecipient \in ValidatorIds:
+               /\ \A otherSource \in AsyncIngressSources:
+                    (IngressLaneDepth(
+                       otherRecipient, otherSource))' <=
+                      AsyncIngressCapacity
+               /\ (IngressDepth(otherRecipient))' <=
+                    AsyncIngressCapacity
+               /\ (IngressDepth(otherRecipient))'
+                    + IngressProtectedSlotCountFor(
+                        asyncIngressLanes', otherRecipient)
+                      <= AsyncIngressCapacity
+      <3>1. ASSUME NEW otherRecipient \in ValidatorIds
+             PROVE /\ \A otherSource \in AsyncIngressSources:
+                          (IngressLaneDepth(
+                             otherRecipient, otherSource))' <=
+                            AsyncIngressCapacity
+                   /\ (IngressDepth(otherRecipient))' <=
+                          AsyncIngressCapacity
+                   /\ (IngressDepth(otherRecipient))'
+                        + IngressProtectedSlotCountFor(
+                            asyncIngressLanes', otherRecipient)
+                          <= AsyncIngressCapacity
+        <4>1. /\ AsyncIngressDepthFor(
+                      NextLanes, otherRecipient) <=
+                        AsyncIngressCapacity
+               /\ AsyncIngressDepthFor(
+                      NextLanes, otherRecipient)
+                    + IngressProtectedSlotCountFor(
+                        NextLanes, otherRecipient)
+                      <= AsyncIngressCapacity
+          BY <2>17, <3>1
+        <4>2. \A otherSource \in AsyncIngressSources:
+                 (IngressLaneDepth(
+                    otherRecipient, otherSource))' =
+                   Len(NextLanes[otherRecipient][otherSource])
+          BY <2>3 DEF IngressLaneDepth, IngressLane
+        <4>3. \A otherSource \in AsyncIngressSources:
+                 (IngressLaneDepth(
+                    otherRecipient, otherSource))' <=
+                   AsyncIngressCapacity
+          BY <2>16, <3>1, <4>2
+        <4>4. (IngressDepth(otherRecipient))' =
+                 AsyncIngressDepthFor(NextLanes, otherRecipient)
+          BY <2>3
              DEF IngressDepth, AsyncIngressDepthFor,
                  AsyncIngressPairIndicesFor,
-                 AsyncIngressZeroSourcesFor,
                  IngressLaneDepth, IngressLane
-        <4> QED BY <2>1, <2>10, <4>2
-             DEF AsyncIngressCapacityTypeInvariant
-      <3> QED BY <3>1, <3>2
-    <2> QED BY <2>10
-         DEF AsyncIngressCapacityTypeInvariant,
-             IngressDepth, AsyncIngressDepthFor,
-             AsyncIngressPairIndicesFor,
-             AsyncIngressZeroSourcesFor,
-             IngressLaneDepth, IngressLane
+        <4>5. IngressProtectedSlotCountFor(
+                 asyncIngressLanes', otherRecipient) =
+               IngressProtectedSlotCountFor(
+                 NextLanes, otherRecipient)
+          BY <2>3
+        <4> QED BY <4>1, <4>3, <4>4, <4>5
+      <3> QED BY <3>1
+    <2> QED BY <2>18 DEF AsyncIngressCapacityTypeInvariant
   <1> QED BY <1>1
+
+(***************************************************************************
+The two auxiliary first-message cases are named explicitly because they are
+the boundary where an empty validator lane trades one of its two reserved
+slots for the newly admitted item.  These corollaries prevent later changes
+from covering only progress-class admissions while silently regressing the
+first timeout-vote or ordinary-proposal path.
+***************************************************************************)
+THEOREM AdmitFirstTimeoutVotePreservesIngressCapacityType ==
+  \A recipient \in ValidatorIds, source \in AsyncIngressSources:
+    /\ AsyncTypeInvariant
+    /\ source \in ValidatorIds
+    /\ IngressLaneDepth(recipient, source) = 0
+    /\ DueSourcePackets(recipient, source) # {}
+    /\ OldestDueSourcePacket(recipient, source).item.kind = "TimeoutVote"
+    /\ AdmitHiddenPacket(recipient, source)
+    => AsyncIngressCapacityTypeInvariant'
+BY AdmitHiddenPacketPreservesIngressCapacityType
+
+THEOREM AdmitFirstProposalPreservesIngressCapacityType ==
+  \A recipient \in ValidatorIds, source \in AsyncIngressSources:
+    /\ AsyncTypeInvariant
+    /\ source \in ValidatorIds
+    /\ IngressLaneDepth(recipient, source) = 0
+    /\ DueSourcePackets(recipient, source) # {}
+    /\ OldestDueSourcePacket(recipient, source).item.kind = "Proposal"
+    /\ AdmitHiddenPacket(recipient, source)
+    => AsyncIngressCapacityTypeInvariant'
+BY AdmitHiddenPacketPreservesIngressCapacityType
 
 THEOREM AdmitHiddenPacketPreservesSchedulerType ==
   \A recipient \in ValidatorIds, source \in AsyncIngressSources:
@@ -4542,10 +4896,136 @@ BY AdmitHiddenPacketPreservesNonIngressType,
    AdmitHiddenPacketPreservesIngressContentType
    DEF AsyncSchedulerTypeInvariant, AsyncIngressTypeInvariant
 
+THEOREM CoalesceHiddenPacketPreservesNonIngressType ==
+  \A recipient \in ValidatorIds, source \in AsyncIngressSources:
+    AsyncTypeInvariant /\ CoalesceHiddenPacket(recipient, source)
+      => /\ AsyncRuntimeTypeInvariant'
+         /\ AsyncIoTypeInvariant'
+         /\ AsyncDeferredTypeInvariant'
+         /\ AsyncTransportTypeInvariant'
+PROOF
+  <1>1. ASSUME NEW recipient \in ValidatorIds,
+                NEW source \in AsyncIngressSources,
+                AsyncTypeInvariant,
+                CoalesceHiddenPacket(recipient, source)
+         PROVE /\ AsyncRuntimeTypeInvariant'
+               /\ AsyncIoTypeInvariant'
+               /\ AsyncDeferredTypeInvariant'
+               /\ AsyncTransportTypeInvariant'
+    <2>1. /\ AsyncRuntimeScalarTypeInvariant
+           /\ AsyncCausalTypeInvariant
+           /\ AsyncIoTopologyTypeInvariant
+           /\ AsyncIoContentTypeInvariant
+           /\ AsyncIoCapacityTypeInvariant
+           /\ AsyncDeferredTopologyTypeInvariant
+           /\ AsyncDeferredContentTypeInvariant
+           /\ AsyncTransportClockTypeInvariant
+           /\ AsyncTransportHistoryTypeInvariant
+           /\ AsyncPacketContentTypeInvariant
+           /\ AsyncHeldChunksTypeInvariant
+      BY <1>1
+         DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+             AsyncRuntimeTypeInvariant, AsyncIoTypeInvariant,
+             AsyncDeferredTypeInvariant, AsyncTransportTypeInvariant,
+             AsyncTransportContentTypeInvariant
+    <2>2. /\ UNCHANGED AsyncRuntimeScalarTypeVars
+           /\ UNCHANGED asyncCausalQueues
+           /\ UNCHANGED AsyncIoTopologyTypeVars
+           /\ UNCHANGED AsyncIoContentTypeVars
+           /\ UNCHANGED AsyncIoCapacityTypeVars
+           /\ UNCHANGED AsyncDeferredTopologyTypeVars
+           /\ UNCHANGED <<asyncDeferredCompletionQueues,
+                          asyncDeferredProgressQueues,
+                          asyncDeferredNormalQueues>>
+           /\ UNCHANGED AsyncTransportClockTypeVars
+           /\ UNCHANGED AsyncTransportHistoryTypeVars
+           /\ UNCHANGED asyncHeldChunks
+      BY <1>1, Isa
+         DEF CoalesceHiddenPacket, AsyncRuntimeScalarTypeVars,
+             AsyncIoTopologyTypeVars, AsyncIoContentTypeVars,
+             AsyncIoCapacityTypeVars, AsyncDeferredVars,
+             AsyncDeferredTopologyTypeVars, AsyncTransportClockTypeVars,
+             AsyncTransportHistoryTypeVars, LeaveCausalQueues,
+             AsyncSchedulerVars, vars
+    <2>3. /\ AsyncRuntimeScalarTypeInvariant'
+           /\ AsyncCausalTypeInvariant'
+           /\ AsyncIoTopologyTypeInvariant'
+           /\ AsyncIoContentTypeInvariant'
+           /\ AsyncIoCapacityTypeInvariant'
+           /\ AsyncDeferredTopologyTypeInvariant'
+           /\ AsyncDeferredContentTypeInvariant'
+           /\ AsyncTransportClockTypeInvariant'
+           /\ AsyncTransportHistoryTypeInvariant'
+           /\ AsyncHeldChunksTypeInvariant'
+      BY <2>1, <2>2, AsyncRuntimeScalarTypeStutter,
+         AsyncCausalTypeStutter, AsyncIoTopologyTypeStutter,
+         AsyncIoContentTypeStutter, AsyncIoCapacityTypeStutter,
+         AsyncDeferredTopologyTypeStutter,
+         AsyncDeferredContentTypeStutter,
+         AsyncTransportClockTypeStutter,
+         AsyncTransportHistoryTypeStutter, AsyncHeldChunksTypeStutter
+    <2>4. asyncTransport' \subseteq asyncTransport
+      BY <1>1, Isa DEF CoalesceHiddenPacket
+    <2>5. /\ IsFiniteSet(asyncTransport')
+           /\ \A packet \in asyncTransport': AsyncPacketTyped(packet)
+      BY <2>1, <2>4, FS_Subset, SMT
+         DEF AsyncPacketContentTypeInvariant
+    <2>6. AsyncPacketContentTypeInvariant'
+      BY <2>5 DEF AsyncPacketContentTypeInvariant
+    <2> QED BY <2>3, <2>6
+         DEF AsyncRuntimeTypeInvariant, AsyncIoTypeInvariant,
+             AsyncDeferredTypeInvariant, AsyncTransportTypeInvariant,
+             AsyncTransportContentTypeInvariant
+  <1> QED BY <1>1
+
+THEOREM CoalesceHiddenPacketPreservesIngressType ==
+  \A recipient \in ValidatorIds, source \in AsyncIngressSources:
+    AsyncTypeInvariant /\ CoalesceHiddenPacket(recipient, source)
+      => AsyncIngressTypeInvariant'
+PROOF
+  <1>1. ASSUME NEW recipient \in ValidatorIds,
+                NEW source \in AsyncIngressSources,
+                AsyncTypeInvariant,
+                CoalesceHiddenPacket(recipient, source)
+         PROVE AsyncIngressTypeInvariant'
+    <2>1. /\ AsyncIngressTopologyTypeInvariant
+           /\ AsyncIngressCapacityTypeInvariant
+           /\ AsyncIngressContentTypeInvariant
+      BY <1>1
+         DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+             AsyncIngressTypeInvariant
+    <2>2. /\ UNCHANGED AsyncIngressTopologyTypeVars
+           /\ UNCHANGED asyncIngressLanes
+      BY <1>1, Isa
+         DEF CoalesceHiddenPacket, AsyncIngressTopologyTypeVars
+    <2>3. /\ AsyncIngressTopologyTypeInvariant'
+           /\ AsyncIngressCapacityTypeInvariant'
+           /\ AsyncIngressContentTypeInvariant'
+      BY <2>1, <2>2, AsyncIngressTopologyTypeStutter,
+         AsyncIngressCapacityTypeStutter, AsyncIngressContentTypeStutter
+    <2> QED BY <2>3 DEF AsyncIngressTypeInvariant
+  <1> QED BY <1>1
+
+THEOREM CoalesceHiddenPacketPreservesSchedulerType ==
+  \A recipient \in ValidatorIds, source \in AsyncIngressSources:
+    AsyncTypeInvariant /\ CoalesceHiddenPacket(recipient, source)
+      => AsyncSchedulerTypeInvariant'
+BY CoalesceHiddenPacketPreservesNonIngressType,
+   CoalesceHiddenPacketPreservesIngressType
+   DEF AsyncSchedulerTypeInvariant
+
+THEOREM AdmitIngressPacketPreservesSchedulerType ==
+  \A recipient \in ValidatorIds, source \in AsyncIngressSources:
+    AsyncTypeInvariant /\ AdmitIngressPacket(recipient, source)
+      => AsyncSchedulerTypeInvariant'
+BY AdmitHiddenPacketPreservesSchedulerType,
+   CoalesceHiddenPacketPreservesSchedulerType
+   DEF AdmitIngressPacket
+
 THEOREM AsyncNetworkStepPreservesSchedulerType ==
   AsyncTypeInvariant /\ AsyncNetworkStep
     => AsyncSchedulerTypeInvariant'
-BY AdmitHiddenPacketPreservesSchedulerType
+BY AdmitIngressPacketPreservesSchedulerType
    DEF AsyncNetworkStep
 
 (***************************************************************************
@@ -4607,6 +5087,71 @@ PROOF
     <2> QED BY <2>2, <2>5, <2>6
   <1> QED BY <1>1
 
+THEOREM OwnedTypedQueueTailPreservesCommandQueueOwnership ==
+  \A node, queue:
+    /\ AsyncQueueTyped(queue)
+    /\ AsyncCommandQueueOwnership(node, queue)
+    /\ Len(queue) > 0
+    => AsyncCommandQueueOwnership(node, Tail(queue))
+BY TypedQueueTailFacts, SMT
+   DEF AsyncCommandQueueOwnership
+
+THEOREM IngressSequenceWithoutIndexFacts ==
+  \A sequence, index:
+    /\ sequence \in Seq(Range(sequence))
+    /\ index \in 1..Len(sequence)
+    => LET result == SequenceWithoutIndex(sequence, index)
+       IN /\ result \in Seq(Range(sequence))
+          /\ Len(result) = Len(sequence) - 1
+          /\ DOMAIN result = 1..Len(result)
+          /\ \A resultIndex \in 1..Len(result):
+               result[resultIndex] =
+                 IF resultIndex < index
+                 THEN sequence[resultIndex]
+                 ELSE sequence[resultIndex + 1]
+          /\ Range(result) \subseteq Range(sequence)
+PROOF
+  <1>1. ASSUME NEW sequence, NEW index,
+                sequence \in Seq(Range(sequence)),
+                index \in 1..Len(sequence)
+         PROVE LET result == SequenceWithoutIndex(sequence, index)
+               IN /\ result \in Seq(Range(sequence))
+                  /\ Len(result) = Len(sequence) - 1
+                  /\ DOMAIN result = 1..Len(result)
+                  /\ \A resultIndex \in 1..Len(result):
+                       result[resultIndex] =
+                         IF resultIndex < index
+                         THEN sequence[resultIndex]
+                         ELSE sequence[resultIndex + 1]
+                  /\ Range(result) \subseteq Range(sequence)
+    <2> DEFINE Prefix == SubSeq(sequence, 1, index - 1)
+    <2> DEFINE Suffix == SubSeq(sequence, index + 1, Len(sequence))
+    <2> DEFINE Result == Prefix \o Suffix
+    <2>1. /\ Prefix \in Seq(Range(sequence))
+           /\ Len(Prefix) = index - 1
+           /\ \A prefixIndex \in 1..Len(Prefix):
+                Prefix[prefixIndex] = sequence[prefixIndex]
+      BY <1>1, SubSeqProperties, SMT DEF Prefix
+    <2>2. /\ Suffix \in Seq(Range(sequence))
+           /\ Len(Suffix) = Len(sequence) - index
+           /\ \A suffixIndex \in 1..Len(Suffix):
+                Suffix[suffixIndex] = sequence[index + suffixIndex]
+      BY <1>1, SubSeqProperties, SMT DEF Suffix
+    <2>3. /\ Result \in Seq(Range(sequence))
+           /\ Len(Result) = Len(sequence) - 1
+           /\ DOMAIN Result = 1..Len(Result)
+           /\ \A resultIndex \in 1..Len(Result):
+                Result[resultIndex] =
+                  IF resultIndex < index
+                  THEN sequence[resultIndex]
+                  ELSE sequence[resultIndex + 1]
+      BY <1>1, <2>1, <2>2, ConcatProperties, SMT DEF Result
+    <2>4. Range(Result) \subseteq Range(sequence)
+      BY <2>3, RangeEquality, SMT
+    <2> QED BY <2>3, <2>4
+         DEF Result, SequenceWithoutIndex, Prefix, Suffix
+  <1> QED BY <1>1
+
 THEOREM TypedIngressTailFacts ==
   \A sequence:
     /\ sequence \in Seq(Range(sequence))
@@ -4657,6 +5202,572 @@ PROOF
     <2>5. SequenceSet(Tail(sequence)) \subseteq SequenceSet(sequence)
       BY <1>1, <2>2, <2>3, RangeEquality DEF SequenceSet
     <2> QED BY <2>2, <2>3, <2>4, <2>5
+  <1> QED BY <1>1
+
+THEOREM TypedIngressRemovalFacts ==
+  \A sequence, selected:
+    /\ sequence \in Seq(Range(sequence))
+    /\ DOMAIN sequence = 1..Len(sequence)
+    /\ \A index \in 1..Len(sequence):
+         AsyncItemTyped(sequence[index])
+    /\ selected \in 1..Len(sequence)
+    => LET result == SequenceWithoutIndex(sequence, selected)
+       IN /\ result \in Seq(Range(result))
+          /\ DOMAIN result = 1..Len(result)
+          /\ \A index \in 1..Len(result):
+               AsyncItemTyped(result[index])
+          /\ SequenceSet(result) \subseteq SequenceSet(sequence)
+          /\ Len(result) + 1 = Len(sequence)
+PROOF
+  <1>1. ASSUME NEW sequence, NEW selected,
+                sequence \in Seq(Range(sequence)),
+                DOMAIN sequence = 1..Len(sequence),
+                \A index \in 1..Len(sequence):
+                  AsyncItemTyped(sequence[index]),
+                selected \in 1..Len(sequence)
+         PROVE LET result == SequenceWithoutIndex(sequence, selected)
+               IN /\ result \in Seq(Range(result))
+                  /\ DOMAIN result = 1..Len(result)
+                  /\ \A index \in 1..Len(result):
+                       AsyncItemTyped(result[index])
+                  /\ SequenceSet(result) \subseteq SequenceSet(sequence)
+                  /\ Len(result) + 1 = Len(sequence)
+    <2> DEFINE Result == SequenceWithoutIndex(sequence, selected)
+    <2>1. /\ Result \in Seq(Range(sequence))
+           /\ Len(Result) = Len(sequence) - 1
+           /\ DOMAIN Result = 1..Len(Result)
+           /\ Range(Result) \subseteq Range(sequence)
+      BY <1>1, IngressSequenceWithoutIndexFacts DEF Result
+    <2>2. /\ Result \in Seq(Range(Result))
+           /\ SequenceSet(Result) \subseteq SequenceSet(sequence)
+      BY <1>1, <2>1, SeqOfRange, RangeEquality DEF SequenceSet
+    <2>3. \A index \in 1..Len(Result):
+             AsyncItemTyped(Result[index])
+      <3>1. ASSUME NEW index \in 1..Len(Result)
+             PROVE AsyncItemTyped(Result[index])
+        <4>1. Result[index] \in Range(sequence)
+          BY <2>1, <3>1, RangeEquality
+        <4>2. PICK original \in 1..Len(sequence):
+                 Result[index] = sequence[original]
+          BY <1>1, <4>1, RangeEquality
+        <4> QED BY <1>1, <4>2
+      <3> QED BY <3>1
+    <2>4. Len(Result) + 1 = Len(sequence)
+      BY <1>1, <2>1, SMT
+    <2> QED BY <2>1, <2>2, <2>3, <2>4 DEF Result
+  <1> QED BY <1>1
+
+(***************************************************************************
+Proof-only potential for a single ingress source.  The global reservation
+count is the sum of the two finite protected-source sets.  Splitting out one
+source lets removal reason locally: deleting one queued item decreases used
+depth by one and can add at most one reservation for that same source.
+***************************************************************************)
+IngressSequenceHasProgress(sequence) ==
+  \E queued \in SequenceSet(sequence):
+    IngressAdmissionClass(queued) = "Progress"
+
+IngressSourceProtectionPotential(source, sequence) ==
+  (IF \/ Len(sequence) = 0
+       \/ /\ source \in ValidatorIds
+             /\ ~IngressSequenceHasProgress(sequence)
+   THEN 1 ELSE 0)
+    +
+  (IF /\ source \in ValidatorIds
+       /\ (\/ Len(sequence) = 0
+           \/ /\ Len(sequence) = 1
+                 /\ IngressSequenceHasProgress(sequence))
+   THEN 1 ELSE 0)
+
+IngressProtectedSlotCountWithoutSourceFor(lanes, recipient, source) ==
+  Cardinality(
+    IngressProtectedSourcesFor(lanes, recipient) \ {source})
+    + Cardinality(
+        IngressContinuationProtectedSourcesFor(lanes, recipient) \ {source})
+
+THEOREM FourNaturalTermsRegroup ==
+  \A first, second, third, fourth \in Nat:
+    (first + second) + (third + fourth) =
+      (first + third) + (second + fourth)
+BY SMT
+
+THEOREM CommonNaturalPrefixPreservesOneIncrease ==
+  \A common, before, after \in Nat:
+    after <= before + 1
+      => common + after <= (common + before) + 1
+BY SMT
+
+THEOREM NaturalPredecessorPreservesUpperBound ==
+  \A before, after, capacity \in Nat:
+    /\ after + 1 = before
+    /\ before <= capacity
+    => after <= capacity
+BY SMT
+
+THEOREM CoupledNaturalPotentialPreservesUpperBound ==
+  \A beforeDepth, afterDepth, beforeReserve, afterReserve,
+      capacity \in Nat:
+    /\ afterDepth + 1 = beforeDepth
+    /\ afterReserve <= beforeReserve + 1
+    /\ beforeDepth + beforeReserve <= capacity
+    => afterDepth + afterReserve <= capacity
+BY SMT
+
+THEOREM AsyncIngressDepthForIsNatural ==
+  \A lanes, recipient:
+    /\ AsyncConfiguration
+    /\ ModelConfiguration
+    => AsyncIngressDepthFor(lanes, recipient) \in Nat
+PROOF
+  <1>1. ASSUME NEW lanes, NEW recipient,
+                AsyncConfiguration,
+                ModelConfiguration
+         PROVE AsyncIngressDepthFor(lanes, recipient) \in Nat
+    <2>1. /\ IsFiniteSet(AsyncIngressSources)
+           /\ AsyncIngressCapacity \in Nat
+      BY <1>1, AsyncIngressSourcesAreFinite
+         DEF AsyncConfiguration
+    <2>2. /\ IsFiniteSet(1..AsyncIngressCapacity)
+           /\ IsFiniteSet(
+                AsyncIngressSources \X (1..AsyncIngressCapacity))
+      BY <2>1, FS_Interval, FS_Product
+    <2>3. AsyncIngressPairIndicesFor(lanes, recipient)
+               \subseteq
+             AsyncIngressSources \X (1..AsyncIngressCapacity)
+      BY Isa DEF AsyncIngressPairIndicesFor
+    <2>4. IsFiniteSet(
+             AsyncIngressPairIndicesFor(lanes, recipient))
+      BY <2>2, <2>3, FS_Subset
+    <2> QED BY <2>4, FS_CardinalityType
+         DEF AsyncIngressDepthFor
+  <1> QED BY <1>1
+
+THEOREM IngressProtectedSlotCountWithoutSourceIsNatural ==
+  \A lanes, recipient, source:
+    /\ AsyncConfiguration
+    /\ ModelConfiguration
+    => IngressProtectedSlotCountWithoutSourceFor(
+         lanes, recipient, source) \in Nat
+PROOF
+  <1>1. ASSUME NEW lanes, NEW recipient, NEW source,
+                AsyncConfiguration,
+                ModelConfiguration
+         PROVE IngressProtectedSlotCountWithoutSourceFor(
+                   lanes, recipient, source) \in Nat
+    <2>1. IsFiniteSet(AsyncIngressSources)
+      BY <1>1, AsyncIngressSourcesAreFinite
+    <2>2. IsFiniteSet(
+             IngressProtectedSourcesFor(lanes, recipient))
+      BY <2>1, IngressProtectedSourcesFinite
+    <2>3. IngressContinuationProtectedSourcesFor(lanes, recipient)
+               \subseteq AsyncIngressSources
+      BY Isa
+         DEF IngressContinuationProtectedSourcesFor,
+             AsyncIngressSources
+    <2>4. IsFiniteSet(
+             IngressContinuationProtectedSourcesFor(lanes, recipient))
+      BY <2>1, <2>3, FS_Subset
+    <2>5. /\ IngressProtectedSourcesFor(lanes, recipient) \ {source}
+                  \subseteq
+                IngressProtectedSourcesFor(lanes, recipient)
+           /\ IngressContinuationProtectedSourcesFor(
+                lanes, recipient) \ {source}
+                  \subseteq
+                IngressContinuationProtectedSourcesFor(
+                  lanes, recipient)
+      BY Isa
+    <2>6. /\ IsFiniteSet(
+                  IngressProtectedSourcesFor(
+                    lanes, recipient) \ {source})
+           /\ IsFiniteSet(
+                  IngressContinuationProtectedSourcesFor(
+                    lanes, recipient) \ {source})
+      BY <2>2, <2>4, <2>5, FS_Subset
+    <2>7. /\ Cardinality(
+                  IngressProtectedSourcesFor(
+                    lanes, recipient) \ {source}) \in Nat
+           /\ Cardinality(
+                  IngressContinuationProtectedSourcesFor(
+                    lanes, recipient) \ {source}) \in Nat
+      BY <2>6, FS_CardinalityType
+    <2> QED BY <2>7, SMT
+         DEF IngressProtectedSlotCountWithoutSourceFor
+  <1> QED BY <1>1
+
+THEOREM IngressSourceProtectionPotentialIsNatural ==
+  \A source, sequence:
+    IngressSourceProtectionPotential(source, sequence) \in Nat
+BY SMT DEF IngressSourceProtectionPotential
+
+THEOREM OneRemovalIncreasesSourceProtectionByAtMostOne ==
+  \A source, before, after:
+    /\ Len(before) \in Nat
+    /\ Len(after) \in Nat
+    /\ Len(after) + 1 = Len(before)
+    => IngressSourceProtectionPotential(source, after)
+         <= IngressSourceProtectionPotential(source, before) + 1
+PROOF
+  <1>1. ASSUME NEW source, NEW before, NEW after,
+                Len(before) \in Nat,
+                Len(after) \in Nat,
+                Len(after) + 1 = Len(before)
+         PROVE IngressSourceProtectionPotential(source, after)
+                 <= IngressSourceProtectionPotential(source, before) + 1
+    <2>1. Len(before) > 0
+      BY <1>1, SMT
+    <2>2. CASE source \notin ValidatorIds
+      <3>1. CASE Len(before) = 1
+        BY <1>1, <2>2, <3>1, SMT
+           DEF IngressSourceProtectionPotential
+      <3>2. CASE Len(before) > 1
+        BY <1>1, <2>2, <3>2, SMT
+           DEF IngressSourceProtectionPotential
+      <3>3. Len(before) = 1 \/ Len(before) > 1
+        BY <1>1, <2>1, SMT
+      <3> QED BY <3>1, <3>2, <3>3
+    <2>3. CASE source \in ValidatorIds
+      <3>1. CASE Len(before) = 1
+        BY <1>1, <2>3, <3>1, SMT
+           DEF IngressSourceProtectionPotential
+      <3>2. CASE Len(before) = 2
+        BY <1>1, <2>3, <3>2, SMT
+           DEF IngressSourceProtectionPotential
+      <3>3. CASE Len(before) > 2
+        BY <1>1, <2>3, <3>3, SMT
+           DEF IngressSourceProtectionPotential
+      <3>4. \/ Len(before) = 1
+             \/ Len(before) = 2
+             \/ Len(before) > 2
+        BY <1>1, <2>1, SMT
+      <3> QED BY <3>1, <3>2, <3>3, <3>4
+    <2> QED BY <2>2, <2>3
+  <1> QED BY <1>1
+
+THEOREM IngressProtectedSlotCountDecomposesAtSource ==
+  \A lanes, recipient, source:
+    /\ AsyncConfiguration
+    /\ ModelConfiguration
+    /\ source \in AsyncIngressSources
+    => IngressProtectedSlotCountFor(lanes, recipient) =
+         IngressProtectedSlotCountWithoutSourceFor(
+           lanes, recipient, source)
+           + IngressSourceProtectionPotential(
+               source, lanes[recipient][source])
+PROOF
+  <1>1. ASSUME NEW lanes, NEW recipient, NEW source,
+                AsyncConfiguration,
+                ModelConfiguration,
+                source \in AsyncIngressSources
+         PROVE IngressProtectedSlotCountFor(lanes, recipient) =
+                 IngressProtectedSlotCountWithoutSourceFor(
+                   lanes, recipient, source)
+                   + IngressSourceProtectionPotential(
+                       source, lanes[recipient][source])
+    <2>1. /\ IsFiniteSet(AsyncIngressSources)
+           /\ IsFiniteSet(ValidatorIds)
+      <3>1. IsFiniteSet(AsyncIngressSources)
+        BY <1>1, AsyncIngressSourcesAreFinite
+      <3>2. ValidatorIds \subseteq AsyncIngressSources
+        BY Isa DEF AsyncIngressSources
+      <3>3. IsFiniteSet(ValidatorIds)
+        BY <3>1, <3>2, FS_Subset
+      <3> QED BY <3>1, <3>3
+    <2>2. /\ IsFiniteSet(
+                  IngressProtectedSourcesFor(lanes, recipient))
+           /\ Cardinality(
+                  IngressProtectedSourcesFor(lanes, recipient)) \in Nat
+      BY <2>1, IngressProtectedSourcesFinite
+    <2>3. IngressContinuationProtectedSourcesFor(lanes, recipient)
+               \subseteq ValidatorIds
+      BY Isa DEF IngressContinuationProtectedSourcesFor
+    <2>4. /\ IsFiniteSet(
+                  IngressContinuationProtectedSourcesFor(lanes, recipient))
+           /\ Cardinality(
+                  IngressContinuationProtectedSourcesFor(
+                    lanes, recipient)) \in Nat
+      BY <2>1, <2>3, FS_Subset, FS_CardinalityType
+    <2>5. Cardinality(
+             IngressProtectedSourcesFor(lanes, recipient)) =
+           Cardinality(
+             IngressProtectedSourcesFor(lanes, recipient) \ {source})
+             + IF source \in
+                    IngressProtectedSourcesFor(lanes, recipient)
+               THEN 1 ELSE 0
+      BY <2>2, FS_RemoveElement, FS_CardinalityType, SMT
+    <2>6. Cardinality(
+             IngressContinuationProtectedSourcesFor(lanes, recipient)) =
+           Cardinality(
+             IngressContinuationProtectedSourcesFor(
+               lanes, recipient) \ {source})
+             + IF source \in
+                    IngressContinuationProtectedSourcesFor(
+                      lanes, recipient)
+               THEN 1 ELSE 0
+      BY <2>4, FS_RemoveElement, FS_CardinalityType, SMT
+    <2>7. IngressSourceProtectionPotential(
+             source, lanes[recipient][source]) =
+           (IF source \in IngressProtectedSourcesFor(lanes, recipient)
+            THEN 1 ELSE 0)
+             + (IF source \in
+                      IngressContinuationProtectedSourcesFor(
+                        lanes, recipient)
+                THEN 1 ELSE 0)
+      BY <1>1, SMT
+         DEF IngressSourceProtectionPotential,
+             IngressSequenceHasProgress,
+             IngressProtectedSourcesFor,
+             IngressContinuationProtectedSourcesFor,
+             IngressLaneHasProgressIn
+    <2>8. Cardinality(
+             IngressProtectedSourcesFor(lanes, recipient))
+             + Cardinality(
+                 IngressContinuationProtectedSourcesFor(
+                   lanes, recipient)) =
+           (Cardinality(
+              IngressProtectedSourcesFor(lanes, recipient) \ {source})
+              + (IF source \in
+                       IngressProtectedSourcesFor(lanes, recipient)
+                 THEN 1 ELSE 0))
+             + (Cardinality(
+                  IngressContinuationProtectedSourcesFor(
+                    lanes, recipient) \ {source})
+                  + (IF source \in
+                           IngressContinuationProtectedSourcesFor(
+                             lanes, recipient)
+                     THEN 1 ELSE 0))
+      BY <2>5, <2>6
+    <2>9. /\ Cardinality(
+                  IngressProtectedSourcesFor(
+                    lanes, recipient) \ {source}) \in Nat
+           /\ Cardinality(
+                  IngressContinuationProtectedSourcesFor(
+                    lanes, recipient) \ {source}) \in Nat
+           /\ (IF source \in
+                    IngressProtectedSourcesFor(lanes, recipient)
+               THEN 1 ELSE 0) \in Nat
+           /\ (IF source \in
+                    IngressContinuationProtectedSourcesFor(
+                      lanes, recipient)
+               THEN 1 ELSE 0) \in Nat
+      <3>1. IngressProtectedSourcesFor(
+               lanes, recipient) \ {source} \subseteq
+             IngressProtectedSourcesFor(lanes, recipient)
+        BY Isa
+      <3>2. IngressContinuationProtectedSourcesFor(
+               lanes, recipient) \ {source} \subseteq
+             IngressContinuationProtectedSourcesFor(lanes, recipient)
+        BY Isa
+      <3>3. /\ IsFiniteSet(
+                    IngressProtectedSourcesFor(
+                      lanes, recipient) \ {source})
+             /\ IsFiniteSet(
+                    IngressContinuationProtectedSourcesFor(
+                      lanes, recipient) \ {source})
+        BY <2>2, <2>4, <3>1, <3>2, FS_Subset
+      <3> QED BY <3>3, FS_CardinalityType, SMT
+    <2>10. (Cardinality(
+               IngressProtectedSourcesFor(lanes, recipient) \ {source})
+               + (IF source \in
+                        IngressProtectedSourcesFor(lanes, recipient)
+                  THEN 1 ELSE 0))
+              + (Cardinality(
+                   IngressContinuationProtectedSourcesFor(
+                     lanes, recipient) \ {source})
+                   + (IF source \in
+                            IngressContinuationProtectedSourcesFor(
+                              lanes, recipient)
+                      THEN 1 ELSE 0)) =
+            (Cardinality(
+               IngressProtectedSourcesFor(lanes, recipient) \ {source})
+               + Cardinality(
+                   IngressContinuationProtectedSourcesFor(
+                     lanes, recipient) \ {source}))
+              + ((IF source \in
+                         IngressProtectedSourcesFor(lanes, recipient)
+                    THEN 1 ELSE 0)
+                 + (IF source \in
+                          IngressContinuationProtectedSourcesFor(
+                            lanes, recipient)
+                    THEN 1 ELSE 0))
+      BY <2>9, FourNaturalTermsRegroup
+    <2>11. (Cardinality(
+               IngressProtectedSourcesFor(lanes, recipient) \ {source})
+               + Cardinality(
+                   IngressContinuationProtectedSourcesFor(
+                     lanes, recipient) \ {source}))
+              + ((IF source \in
+                         IngressProtectedSourcesFor(lanes, recipient)
+                    THEN 1 ELSE 0)
+                 + (IF source \in
+                          IngressContinuationProtectedSourcesFor(
+                            lanes, recipient)
+                    THEN 1 ELSE 0)) =
+            IngressProtectedSlotCountWithoutSourceFor(
+              lanes, recipient, source)
+              + IngressSourceProtectionPotential(
+                  source, lanes[recipient][source])
+      BY <2>7
+         DEF IngressProtectedSlotCountWithoutSourceFor
+    <2> QED BY <2>8, <2>10, <2>11
+         DEF IngressProtectedSlotCountFor
+  <1> QED BY <1>1
+
+THEOREM IngressProtectedSlotsWithoutSourceAreLocal ==
+  \A beforeLanes, afterLanes, recipient, source:
+    (\A otherSource \in AsyncIngressSources \ {source}:
+       afterLanes[recipient][otherSource] =
+         beforeLanes[recipient][otherSource])
+    => IngressProtectedSlotCountWithoutSourceFor(
+         afterLanes, recipient, source) =
+       IngressProtectedSlotCountWithoutSourceFor(
+         beforeLanes, recipient, source)
+PROOF
+  <1>1. ASSUME NEW beforeLanes, NEW afterLanes,
+                NEW recipient, NEW source,
+                \A otherSource \in AsyncIngressSources \ {source}:
+                  afterLanes[recipient][otherSource] =
+                    beforeLanes[recipient][otherSource]
+         PROVE IngressProtectedSlotCountWithoutSourceFor(
+                   afterLanes, recipient, source) =
+                 IngressProtectedSlotCountWithoutSourceFor(
+                   beforeLanes, recipient, source)
+    <2>1. \A candidate:
+             candidate \in
+               IngressProtectedSourcesFor(
+                 afterLanes, recipient) \ {source}
+             <=> candidate \in
+               IngressProtectedSourcesFor(
+                 beforeLanes, recipient) \ {source}
+      <3>1. ASSUME NEW candidate
+             PROVE candidate \in
+                     IngressProtectedSourcesFor(
+                       afterLanes, recipient) \ {source}
+                   <=> candidate \in
+                     IngressProtectedSourcesFor(
+                       beforeLanes, recipient) \ {source}
+        <4>1. CASE candidate \in AsyncIngressSources \ {source}
+          <5>1. afterLanes[recipient][candidate] =
+                   beforeLanes[recipient][candidate]
+            BY <1>1, <4>1
+          <5> QED BY <4>1, <5>1, Isa
+               DEF IngressProtectedSourcesFor,
+                   IngressLaneHasProgressIn, SequenceSet
+        <4>2. CASE candidate \notin AsyncIngressSources \ {source}
+          BY <4>2, Isa DEF IngressProtectedSourcesFor
+        <4> QED BY <4>1, <4>2
+      <3> QED BY <3>1
+    <2>2. IngressProtectedSourcesFor(afterLanes, recipient) \ {source} =
+             IngressProtectedSourcesFor(beforeLanes, recipient) \ {source}
+      BY <2>1, Isa
+    <2>3. ValidatorIds \subseteq AsyncIngressSources
+      BY Isa DEF AsyncIngressSources
+    <2>4. \A candidate:
+             candidate \in
+               IngressContinuationProtectedSourcesFor(
+                 afterLanes, recipient) \ {source}
+             <=> candidate \in
+               IngressContinuationProtectedSourcesFor(
+                 beforeLanes, recipient) \ {source}
+      <3>1. ASSUME NEW candidate
+             PROVE candidate \in
+                     IngressContinuationProtectedSourcesFor(
+                       afterLanes, recipient) \ {source}
+                   <=> candidate \in
+                     IngressContinuationProtectedSourcesFor(
+                       beforeLanes, recipient) \ {source}
+        <4>1. CASE candidate \in AsyncIngressSources \ {source}
+          <5>1. afterLanes[recipient][candidate] =
+                   beforeLanes[recipient][candidate]
+            BY <1>1, <4>1
+          <5> QED BY <4>1, <5>1, Isa
+               DEF IngressContinuationProtectedSourcesFor,
+                   IngressLaneHasProgressIn, SequenceSet
+        <4>2. CASE candidate \notin AsyncIngressSources \ {source}
+          BY <2>3, <4>2, Isa
+             DEF IngressContinuationProtectedSourcesFor
+        <4> QED BY <4>1, <4>2
+      <3> QED BY <3>1
+    <2>5. IngressContinuationProtectedSourcesFor(
+             afterLanes, recipient) \ {source} =
+           IngressContinuationProtectedSourcesFor(
+             beforeLanes, recipient) \ {source}
+      BY <2>4, Isa
+    <2> QED BY <2>2, <2>5
+         DEF IngressProtectedSlotCountWithoutSourceFor
+  <1> QED BY <1>1
+
+THEOREM IngressPairIndicesAfterOneLaneRemoval ==
+  \A beforeLanes, afterLanes, recipient, source:
+    /\ source \in AsyncIngressSources
+    /\ AsyncIngressCapacity \in Nat
+    /\ Len(beforeLanes[recipient][source]) \in Nat
+    /\ Len(afterLanes[recipient][source]) \in Nat
+    /\ Len(afterLanes[recipient][source]) + 1 =
+         Len(beforeLanes[recipient][source])
+    /\ Len(beforeLanes[recipient][source]) <= AsyncIngressCapacity
+    /\ \A otherSource \in AsyncIngressSources \ {source}:
+         Len(afterLanes[recipient][otherSource]) =
+           Len(beforeLanes[recipient][otherSource])
+    => AsyncIngressPairIndicesFor(afterLanes, recipient) =
+         AsyncIngressPairIndicesFor(beforeLanes, recipient)
+           \ {<<source, Len(beforeLanes[recipient][source])>>}
+BY SMT
+   DEF AsyncIngressPairIndicesFor
+
+THEOREM IngressDepthDropsByOneAfterLaneRemoval ==
+  \A beforeLanes, afterLanes, recipient, source:
+    /\ IsFiniteSet(AsyncIngressSources)
+    /\ source \in AsyncIngressSources
+    /\ AsyncIngressCapacity \in Nat
+    /\ Len(beforeLanes[recipient][source]) \in Nat
+    /\ Len(afterLanes[recipient][source]) \in Nat
+    /\ Len(afterLanes[recipient][source]) + 1 =
+         Len(beforeLanes[recipient][source])
+    /\ Len(beforeLanes[recipient][source]) <= AsyncIngressCapacity
+    /\ \A otherSource \in AsyncIngressSources \ {source}:
+         Len(afterLanes[recipient][otherSource]) =
+           Len(beforeLanes[recipient][otherSource])
+    => AsyncIngressDepthFor(afterLanes, recipient) + 1 =
+         AsyncIngressDepthFor(beforeLanes, recipient)
+PROOF
+  <1>1. ASSUME NEW beforeLanes, NEW afterLanes,
+                NEW recipient, NEW source,
+                IsFiniteSet(AsyncIngressSources),
+                source \in AsyncIngressSources,
+                AsyncIngressCapacity \in Nat,
+                Len(beforeLanes[recipient][source]) \in Nat,
+                Len(afterLanes[recipient][source]) \in Nat,
+                Len(afterLanes[recipient][source]) + 1 =
+                  Len(beforeLanes[recipient][source]),
+                Len(beforeLanes[recipient][source]) <=
+                  AsyncIngressCapacity,
+                \A otherSource \in AsyncIngressSources \ {source}:
+                  Len(afterLanes[recipient][otherSource]) =
+                    Len(beforeLanes[recipient][otherSource])
+         PROVE AsyncIngressDepthFor(afterLanes, recipient) + 1 =
+                 AsyncIngressDepthFor(beforeLanes, recipient)
+    <2>1. AsyncIngressPairIndicesFor(afterLanes, recipient) =
+             AsyncIngressPairIndicesFor(beforeLanes, recipient)
+               \ {<<source, Len(beforeLanes[recipient][source])>>}
+      BY <1>1, IngressPairIndicesAfterOneLaneRemoval
+    <2>2. <<source, Len(beforeLanes[recipient][source])>>
+               \in AsyncIngressPairIndicesFor(beforeLanes, recipient)
+      BY <1>1, SMT DEF AsyncIngressPairIndicesFor
+    <2>3. IsFiniteSet(
+             AsyncIngressPairIndicesFor(beforeLanes, recipient))
+      <3>1. /\ IsFiniteSet(1..AsyncIngressCapacity)
+             /\ IsFiniteSet(
+                  AsyncIngressSources \X (1..AsyncIngressCapacity))
+        BY <1>1, FS_Interval, FS_Product
+      <3> QED BY <3>1, FS_Subset
+           DEF AsyncIngressPairIndicesFor
+    <2>4. Cardinality(
+             AsyncIngressPairIndicesFor(afterLanes, recipient)) + 1 =
+           Cardinality(
+             AsyncIngressPairIndicesFor(beforeLanes, recipient))
+      BY <2>1, <2>2, <2>3, FS_RemoveElement,
+         FS_CardinalityType, SMT
+    <2> QED BY <2>4 DEF AsyncIngressDepthFor
   <1> QED BY <1>1
 
 THEOREM SelectedSequenceRotationFacts ==
@@ -4716,8 +5827,14 @@ PROOF
     <2>4. /\ Rotated \in Seq(Range(sequence))
            /\ Len(Rotated) = Len(sequence) - 1
            /\ IsInjective(Rotated)
-      BY <1>1, <2>1, <2>2, <2>3,
-         ConcatProperties, ConcatInjectiveSeq, SMT DEF Rotated
+      <3>1. /\ Rotated \in Seq(Range(sequence))
+             /\ Len(Rotated) = Len(Suffix) + Len(Prefix)
+        BY <2>2, ConcatProperties DEF Rotated
+      <3>2. Len(Rotated) = Len(sequence) - 1
+        BY <1>1, <2>1, <2>2, <3>1, SMT
+      <3>3. IsInjective(Rotated)
+        BY <2>2, <2>3, ConcatInjectiveSeq DEF Rotated
+      <3> QED BY <3>1, <3>2, <3>3
     <2>5. Range(Rotated) =
              Range(sequence) \ {sequence[selected]}
       <3>1. Range(Rotated) = Range(Suffix) \cup Range(Prefix)
@@ -4728,8 +5845,31 @@ PROOF
            DEF IsInjective
       <3>3. Range(sequence) \ {sequence[selected]}
                \subseteq Range(Rotated)
-        BY <1>1, <2>1, <2>2, <3>1, RangeEquality, SMT
-           DEF IsInjective
+        <4>1. ASSUME NEW value \in
+                        Range(sequence) \ {sequence[selected]}
+               PROVE value \in Range(Rotated)
+          <5>1. PICK original \in 1..Len(sequence):
+                   value = sequence[original]
+            BY <1>1, <4>1, RangeEquality
+          <5>2. original # selected
+            BY <4>1, <5>1
+          <5>3. CASE original < selected
+            <6>1. /\ original \in 1..Len(Prefix)
+                   /\ Prefix[original] = sequence[original]
+              BY <1>1, <2>2, <5>1, <5>3, SMT
+            <6>2. value \in Range(Prefix)
+              BY <2>2, <5>1, <6>1, RangeEquality
+            <6> QED BY <3>1, <6>2
+          <5>4. CASE original > selected
+            <6>1. /\ original - selected \in 1..Len(Suffix)
+                   /\ Suffix[original - selected] =
+                        sequence[original]
+              BY <1>1, <2>2, <5>1, <5>4, SMT
+            <6>2. value \in Range(Suffix)
+              BY <2>2, <5>1, <6>1, RangeEquality
+            <6> QED BY <3>1, <6>2
+          <5> QED BY <2>1, <5>1, <5>2, <5>3, <5>4, SMT
+        <4> QED BY <4>1
       <3> QED BY <3>2, <3>3
     <2>6. /\ Rotated \in Seq(Range(Rotated))
            /\ SequenceSet(Rotated) =
@@ -4740,15 +5880,21 @@ PROOF
     <2>7. Len(Rotated) =
              Cardinality(SequenceSet(Rotated))
       BY <2>4, <2>6, InjectiveSequenceLengthMatchesSetCardinality
-    <2> QED BY <2>4, <2>6, <2>7 DEF Suffix, Prefix, Rotated
+    <2>8. Len(Rotated) + 1 = Len(sequence)
+      BY <1>1, <2>1, <2>4, SMT
+    <2> QED BY <2>4, <2>6, <2>7, <2>8
+         DEF Suffix, Prefix, Rotated
   <1> QED BY <1>1
 
 THEOREM PopSelectedIngressPreservesContentType ==
   \A node \in ValidatorIds:
     \A index \in 1..Len(asyncIngressReady[node]):
-      AsyncIngressTypeInvariant /\ PopSelectedIngress(node, index)
-        => AsyncIngressContentTypeInvariant'
-BY TypedIngressTailFacts, SMTT(30)
+      \A laneIndex \in
+           1..Len(IngressLane(node, asyncIngressReady[node][index])):
+        AsyncIngressTypeInvariant
+          /\ PopSelectedIngress(node, index, laneIndex)
+          => AsyncIngressContentTypeInvariant'
+BY TypedIngressRemovalFacts, SMTT(30)
    DEF AsyncIngressTypeInvariant, AsyncIngressTopologyTypeInvariant,
        AsyncIngressContentTypeInvariant, PopSelectedIngress,
        IngressLaneDepth, IngressLane, SequenceSet
@@ -4756,10 +5902,14 @@ BY TypedIngressTailFacts, SMTT(30)
 THEOREM PopSelectedIngressPreservesTopologyType ==
   \A node \in ValidatorIds:
     \A index \in 1..Len(asyncIngressReady[node]):
-      AsyncIngressTypeInvariant /\ PopSelectedIngress(node, index)
-        => AsyncIngressTopologyTypeInvariant'
+      \A laneIndex \in
+           1..Len(IngressLane(node, asyncIngressReady[node][index])):
+        AsyncIngressTypeInvariant
+          /\ PopSelectedIngress(node, index, laneIndex)
+          => AsyncIngressTopologyTypeInvariant'
 BY UniqueSequenceLengthImpliesInjective,
    InjectiveSequenceLengthMatchesSetCardinality,
+   TypedIngressRemovalFacts,
    SelectedSequenceRotationFacts,
    AppendInjectiveSeq, ConcatInjectiveSeq, SubSeqProperties,
    RangeConcatenation, AppendSequenceFacts, SMTT(60)
@@ -4771,19 +5921,280 @@ BY UniqueSequenceLengthImpliesInjective,
 THEOREM PopSelectedIngressPreservesCapacityType ==
   \A node \in ValidatorIds:
     \A index \in 1..Len(asyncIngressReady[node]):
-      AsyncIngressTypeInvariant /\ PopSelectedIngress(node, index)
+      \A laneIndex \in
+           1..Len(IngressLane(node, asyncIngressReady[node][index])):
+        /\ AsyncConfiguration
+        /\ ModelConfiguration
+        /\ AsyncIngressTypeInvariant
+        /\ PopSelectedIngress(node, index, laneIndex)
         => AsyncIngressCapacityTypeInvariant'
-BY TypedIngressTailFacts, FS_RemoveElement, FS_AddElement,
-   FS_CardinalityType, SMTT(60)
-   DEF AsyncIngressTypeInvariant, AsyncIngressTopologyTypeInvariant,
-       AsyncIngressCapacityTypeInvariant,
-       AsyncIngressContentTypeInvariant, PopSelectedIngress,
-       IngressDepth, IngressLaneDepth, IngressLane, SequenceSet
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds,
+                NEW index \in 1..Len(asyncIngressReady[node]),
+                NEW laneIndex \in
+                  1..Len(IngressLane(
+                    node, asyncIngressReady[node][index])),
+                AsyncConfiguration,
+                ModelConfiguration,
+                AsyncIngressTypeInvariant,
+                PopSelectedIngress(node, index, laneIndex)
+         PROVE AsyncIngressCapacityTypeInvariant'
+    <2> DEFINE Source == asyncIngressReady[node][index]
+    <2> DEFINE BeforeLanes == asyncIngressLanes
+    <2> DEFINE AfterLanes == asyncIngressLanes'
+    <2> DEFINE Before == BeforeLanes[node][Source]
+    <2> DEFINE After == AfterLanes[node][Source]
+    <2>1. /\ AsyncIngressCapacity \in Nat \ {0}
+           /\ IsFiniteSet(AsyncIngressSources)
+      BY <1>1, AsyncIngressSourcesAreFinite
+         DEF AsyncConfiguration
+    <2>2. Source \in AsyncIngressSources
+      <3>1. SequenceSet(asyncIngressReady[node]) \subseteq
+               AsyncIngressSources
+        BY <1>1
+           DEF AsyncIngressTypeInvariant,
+               AsyncIngressTopologyTypeInvariant
+      <3>2. Source \in SequenceSet(asyncIngressReady[node])
+        BY <1>1, Isa DEF Source, SequenceSet
+      <3> QED BY <3>1, <3>2
+    <2>3. /\ Before \in Seq(Range(Before))
+           /\ DOMAIN Before = 1..Len(Before)
+           /\ (\A queuedIndex \in 1..Len(Before):
+                 AsyncItemTyped(Before[queuedIndex]))
+           /\ laneIndex \in 1..Len(Before)
+           /\ Len(Before) \in Nat
+           /\ Len(Before) <= AsyncIngressCapacity
+           /\ (\A laneRecipient \in ValidatorIds,
+                   laneSource \in AsyncIngressSources:
+                 Len(BeforeLanes[laneRecipient][laneSource]) <=
+                   AsyncIngressCapacity)
+           /\ (\A capacityRecipient \in ValidatorIds:
+                 /\ AsyncIngressDepthFor(
+                      BeforeLanes, capacityRecipient) <=
+                      AsyncIngressCapacity
+                 /\ AsyncIngressDepthFor(
+                      BeforeLanes, capacityRecipient)
+                      + IngressProtectedSlotCountFor(
+                          BeforeLanes, capacityRecipient)
+                      <= AsyncIngressCapacity)
+      BY <1>1, <2>2, LenProperties
+         DEF Before, BeforeLanes, Source,
+             AsyncIngressTypeInvariant,
+             AsyncIngressContentTypeInvariant,
+             AsyncIngressCapacityTypeInvariant,
+             IngressLane, IngressLaneDepth, IngressDepth,
+             AsyncIngressDepthFor, AsyncIngressPairIndicesFor
+    <2>4. /\ AfterLanes =
+                  [BeforeLanes EXCEPT
+                     ![node][Source] =
+                       SequenceWithoutIndex(@, laneIndex)]
+           /\ After = SequenceWithoutIndex(Before, laneIndex)
+      <3>1. asyncIngressLanes' =
+               [asyncIngressLanes EXCEPT
+                  ![node][Source] =
+                    SequenceWithoutIndex(@, laneIndex)]
+        BY <1>1 DEF PopSelectedIngress, Source
+      <3>2. AfterLanes =
+               [BeforeLanes EXCEPT
+                  ![node][Source] =
+                    SequenceWithoutIndex(@, laneIndex)]
+        BY <3>1 DEF BeforeLanes, AfterLanes
+      <3>3. After = SequenceWithoutIndex(Before, laneIndex)
+        <4>1. AfterLanes[node][Source] =
+                 SequenceWithoutIndex(
+                   BeforeLanes[node][Source], laneIndex)
+          BY <1>1, <2>2, <3>2, Isa
+             DEF BeforeLanes,
+                 AsyncIngressTypeInvariant,
+                 AsyncIngressTopologyTypeInvariant
+        <4> QED BY <4>1 DEF Before, After
+      <3> QED BY <3>2, <3>3
+    <2>5. /\ After \in Seq(Range(After))
+           /\ DOMAIN After = 1..Len(After)
+           /\ (\A queuedIndex \in 1..Len(After):
+                 AsyncItemTyped(After[queuedIndex]))
+           /\ Len(After) \in Nat
+           /\ Len(After) + 1 = Len(Before)
+      BY <2>3, <2>4, TypedIngressRemovalFacts, LenProperties
+    <2>6. /\ (\A otherSource \in AsyncIngressSources \ {Source}:
+                 AfterLanes[node][otherSource] =
+                   BeforeLanes[node][otherSource])
+           /\ (\A otherRecipient \in ValidatorIds \ {node}:
+                 AfterLanes[otherRecipient] =
+                   BeforeLanes[otherRecipient])
+      BY <1>1, <2>2, <2>3, <2>4, Isa
+         DEF BeforeLanes, AfterLanes,
+             AsyncIngressTypeInvariant,
+             AsyncIngressTopologyTypeInvariant
+    <2>7. \A recipient \in ValidatorIds,
+                source \in AsyncIngressSources:
+             Len(AfterLanes[recipient][source]) <=
+               AsyncIngressCapacity
+      <3>1. ASSUME NEW recipient \in ValidatorIds,
+                     NEW source \in AsyncIngressSources
+             PROVE Len(AfterLanes[recipient][source]) <=
+                     AsyncIngressCapacity
+        <4>1. CASE recipient = node /\ source = Source
+          <5>1. AfterLanes[recipient][source] = After
+            BY <4>1 DEF After
+          <5>2. Len(After) <= AsyncIngressCapacity
+            BY <2>1, <2>3, <2>5,
+               NaturalPredecessorPreservesUpperBound
+          <5> QED BY <5>1, <5>2
+        <4>2. CASE recipient = node /\ source # Source
+          BY <2>3, <2>6, <3>1, <4>2
+        <4>3. CASE recipient # node
+          BY <2>3, <2>6, <3>1, <4>3
+        <4> QED BY <4>1, <4>2, <4>3
+      <3> QED BY <3>1
+    <2>8. AsyncIngressDepthFor(AfterLanes, node) + 1 =
+             AsyncIngressDepthFor(BeforeLanes, node)
+      BY <2>1, <2>2, <2>3, <2>4, <2>5, <2>6,
+         IngressDepthDropsByOneAfterLaneRemoval
+    <2>9. IngressProtectedSlotCountFor(AfterLanes, node) <=
+             IngressProtectedSlotCountFor(BeforeLanes, node) + 1
+      <3>1. IngressProtectedSlotCountFor(BeforeLanes, node) =
+               IngressProtectedSlotCountWithoutSourceFor(
+                 BeforeLanes, node, Source)
+                 + IngressSourceProtectionPotential(Source, Before)
+        BY <1>1, <2>2, IngressProtectedSlotCountDecomposesAtSource
+           DEF Before
+      <3>2. IngressProtectedSlotCountFor(AfterLanes, node) =
+               IngressProtectedSlotCountWithoutSourceFor(
+                 AfterLanes, node, Source)
+                 + IngressSourceProtectionPotential(Source, After)
+        BY <1>1, <2>2, IngressProtectedSlotCountDecomposesAtSource
+           DEF After
+      <3>3. IngressProtectedSlotCountWithoutSourceFor(
+               AfterLanes, node, Source) =
+             IngressProtectedSlotCountWithoutSourceFor(
+               BeforeLanes, node, Source)
+        BY <2>6, IngressProtectedSlotsWithoutSourceAreLocal
+      <3>4. IngressSourceProtectionPotential(Source, After) <=
+               IngressSourceProtectionPotential(Source, Before) + 1
+        BY <2>3, <2>5,
+           OneRemovalIncreasesSourceProtectionByAtMostOne
+      <3>5. /\ IngressProtectedSlotCountWithoutSourceFor(
+                    BeforeLanes, node, Source) \in Nat
+             /\ IngressSourceProtectionPotential(Source, Before) \in Nat
+             /\ IngressSourceProtectionPotential(Source, After) \in Nat
+        BY <1>1,
+           IngressProtectedSlotCountWithoutSourceIsNatural,
+           IngressSourceProtectionPotentialIsNatural
+      <3>6. IngressProtectedSlotCountWithoutSourceFor(
+               BeforeLanes, node, Source)
+               + IngressSourceProtectionPotential(Source, After) <=
+             (IngressProtectedSlotCountWithoutSourceFor(
+                BeforeLanes, node, Source)
+                + IngressSourceProtectionPotential(Source, Before)) + 1
+        BY <3>4, <3>5, CommonNaturalPrefixPreservesOneIncrease
+      <3> QED BY <3>1, <3>2, <3>3, <3>6
+    <2>10. \A otherRecipient \in ValidatorIds \ {node}:
+              /\ AsyncIngressDepthFor(AfterLanes, otherRecipient) =
+                   AsyncIngressDepthFor(BeforeLanes, otherRecipient)
+              /\ IngressProtectedSlotCountFor(
+                   AfterLanes, otherRecipient) =
+                   IngressProtectedSlotCountFor(
+                     BeforeLanes, otherRecipient)
+      <3>1. ASSUME NEW otherRecipient \in ValidatorIds \ {node}
+             PROVE /\ AsyncIngressDepthFor(
+                          AfterLanes, otherRecipient) =
+                        AsyncIngressDepthFor(
+                          BeforeLanes, otherRecipient)
+                   /\ IngressProtectedSlotCountFor(
+                        AfterLanes, otherRecipient) =
+                        IngressProtectedSlotCountFor(
+                          BeforeLanes, otherRecipient)
+        <4>1. AfterLanes[otherRecipient] =
+                 BeforeLanes[otherRecipient]
+          BY <2>6, <3>1
+        <4>2. AsyncIngressDepthFor(
+                 AfterLanes, otherRecipient) =
+               AsyncIngressDepthFor(
+                 BeforeLanes, otherRecipient)
+          BY <4>1, Isa
+             DEF AsyncIngressDepthFor,
+                 AsyncIngressPairIndicesFor
+        <4>3. IngressProtectedSlotCountFor(
+                 AfterLanes, otherRecipient) =
+               IngressProtectedSlotCountFor(
+                 BeforeLanes, otherRecipient)
+          BY <4>1, Isa
+             DEF IngressProtectedSlotCountFor,
+                 IngressProtectedSourcesFor,
+                 IngressContinuationProtectedSourcesFor,
+                 IngressLaneHasProgressIn,
+                 SequenceSet
+        <4> QED BY <4>2, <4>3
+      <3> QED BY <3>1
+    <2>11. \A recipient \in ValidatorIds:
+              /\ AsyncIngressDepthFor(AfterLanes, recipient) <=
+                   AsyncIngressCapacity
+              /\ AsyncIngressDepthFor(AfterLanes, recipient)
+                   + IngressProtectedSlotCountFor(
+                       AfterLanes, recipient)
+                   <= AsyncIngressCapacity
+      <3>1. ASSUME NEW recipient \in ValidatorIds
+             PROVE /\ AsyncIngressDepthFor(AfterLanes, recipient) <=
+                          AsyncIngressCapacity
+                   /\ AsyncIngressDepthFor(AfterLanes, recipient)
+                        + IngressProtectedSlotCountFor(
+                            AfterLanes, recipient)
+                        <= AsyncIngressCapacity
+        <4>1. CASE recipient = node
+          <5>1. /\ AsyncIngressDepthFor(BeforeLanes, recipient) \in Nat
+                 /\ AsyncIngressDepthFor(AfterLanes, recipient) \in Nat
+                 /\ IngressProtectedSlotCountFor(
+                      BeforeLanes, recipient) \in Nat
+                 /\ IngressProtectedSlotCountFor(
+                      AfterLanes, recipient) \in Nat
+            BY <1>1, AsyncIngressDepthForIsNatural,
+               IngressProtectedSlotCountIsNatural
+          <5>2. /\ AsyncIngressDepthFor(BeforeLanes, recipient) <=
+                        AsyncIngressCapacity
+                 /\ AsyncIngressDepthFor(BeforeLanes, recipient)
+                      + IngressProtectedSlotCountFor(
+                          BeforeLanes, recipient)
+                      <= AsyncIngressCapacity
+            BY <2>3, <3>1
+          <5>3. AsyncIngressDepthFor(AfterLanes, recipient) <=
+                   AsyncIngressCapacity
+            BY <2>1, <2>8, <4>1, <5>1, <5>2,
+               NaturalPredecessorPreservesUpperBound
+          <5>4. AsyncIngressDepthFor(AfterLanes, recipient)
+                   + IngressProtectedSlotCountFor(
+                       AfterLanes, recipient)
+                   <= AsyncIngressCapacity
+            BY <2>1, <2>8, <2>9, <4>1, <5>1, <5>2,
+               CoupledNaturalPotentialPreservesUpperBound
+          <5> QED BY <5>3, <5>4
+        <4>2. CASE recipient # node
+          <5>1. /\ AsyncIngressDepthFor(AfterLanes, recipient) =
+                       AsyncIngressDepthFor(BeforeLanes, recipient)
+                 /\ IngressProtectedSlotCountFor(
+                      AfterLanes, recipient) =
+                      IngressProtectedSlotCountFor(
+                        BeforeLanes, recipient)
+            BY <2>10, <3>1, <4>2
+          <5> QED BY <2>3, <3>1, <5>1
+        <4> QED BY <4>1, <4>2
+      <3> QED BY <3>1
+    <2> QED BY <2>7, <2>11
+         DEF AsyncIngressCapacityTypeInvariant,
+             IngressLaneDepth, IngressLane, IngressDepth,
+             AsyncIngressDepthFor, AsyncIngressPairIndicesFor,
+             AfterLanes
+  <1> QED BY <1>1
 
 THEOREM PopSelectedIngressPreservesIngressType ==
   \A node \in ValidatorIds:
     \A index \in 1..Len(asyncIngressReady[node]):
-      AsyncIngressTypeInvariant /\ PopSelectedIngress(node, index)
+      \A laneIndex \in
+           1..Len(IngressLane(node, asyncIngressReady[node][index])):
+        /\ AsyncConfiguration
+        /\ ModelConfiguration
+        /\ AsyncIngressTypeInvariant
+        /\ PopSelectedIngress(node, index, laneIndex)
         => AsyncIngressTypeInvariant'
 BY PopSelectedIngressPreservesContentType,
    PopSelectedIngressPreservesTopologyType,
@@ -5078,7 +6489,7 @@ PROOF
              /\ least \in HistoricalDrainableIngressIndices(node)
              /\ \A prior \in 0..(least - 1):
                   prior \notin HistoricalDrainableIngressIndices(node)
-      BY <2>1, <2>2, SmallestNatural
+      BY <2>1, <2>2, SmallestNatural, SMTT(30)
     <2>4. PICK least \in Nat:
              /\ least \in HistoricalDrainableIngressIndices(node)
              /\ \A prior \in 0..(least - 1):
@@ -5089,6 +6500,44 @@ PROOF
       BY <2>4, SMT DEF HistoricalDrainableIngressIndices
     <2> QED BY <2>4, <2>5, Zenon
          DEF FirstHistoricalDrainableIngressIndex
+  <1> QED BY <1>1
+
+THEOREM FirstHistoricalDrainableIngressLaneIndexIsDrainable ==
+  \A node, source:
+    HistoricalDrainableIngressLaneIndices(node, source) # {}
+      => FirstHistoricalDrainableIngressLaneIndex(node, source)
+           \in HistoricalDrainableIngressLaneIndices(node, source)
+PROOF
+  <1>1. ASSUME NEW node, NEW source,
+                HistoricalDrainableIngressLaneIndices(node, source) # {}
+         PROVE FirstHistoricalDrainableIngressLaneIndex(node, source)
+                 \in HistoricalDrainableIngressLaneIndices(node, source)
+    <2>1. PICK witness \in
+                    HistoricalDrainableIngressLaneIndices(node, source):
+             TRUE
+      BY <1>1, FS_EmptySet, Zenon
+    <2>2. witness \in Nat
+      BY <2>1, SMT DEF HistoricalDrainableIngressLaneIndices
+    <2>3. \E least \in Nat:
+             /\ least \in
+                  HistoricalDrainableIngressLaneIndices(node, source)
+             /\ \A prior \in 0..(least - 1):
+                  prior \notin
+                    HistoricalDrainableIngressLaneIndices(node, source)
+      BY <2>1, <2>2, SmallestNatural, SMTT(30)
+    <2>4. PICK least \in Nat:
+             /\ least \in
+                  HistoricalDrainableIngressLaneIndices(node, source)
+             /\ \A prior \in 0..(least - 1):
+                  prior \notin
+                    HistoricalDrainableIngressLaneIndices(node, source)
+      BY <2>3
+    <2>5. \A other \in
+                  HistoricalDrainableIngressLaneIndices(node, source):
+             least <= other
+      BY <2>4, SMT DEF HistoricalDrainableIngressLaneIndices
+    <2> QED BY <2>4, <2>5, Zenon
+         DEF FirstHistoricalDrainableIngressLaneIndex
   <1> QED BY <1>1
 
 THEOREM FirstDrainableIngressIndexIsDrainable ==
@@ -5109,7 +6558,7 @@ PROOF
              /\ least \in DrainableIngressIndices(node)
              /\ \A prior \in 0..(least - 1):
                   prior \notin DrainableIngressIndices(node)
-      BY <2>1, <2>2, SmallestNatural
+      BY <2>1, <2>2, SmallestNatural, SMTT(30)
     <2>4. PICK least \in Nat:
              /\ least \in DrainableIngressIndices(node)
              /\ \A prior \in 0..(least - 1):
@@ -5120,98 +6569,164 @@ PROOF
     <2> QED BY <2>4, <2>5, Zenon DEF FirstDrainableIngressIndex
   <1> QED BY <1>1
 
+THEOREM FirstDrainableIngressLaneIndexIsDrainable ==
+  \A node, source:
+    DrainableIngressLaneIndices(node, source) # {}
+      => FirstDrainableIngressLaneIndex(node, source)
+           \in DrainableIngressLaneIndices(node, source)
+PROOF
+  <1>1. ASSUME NEW node, NEW source,
+                DrainableIngressLaneIndices(node, source) # {}
+         PROVE FirstDrainableIngressLaneIndex(node, source)
+                 \in DrainableIngressLaneIndices(node, source)
+    <2>1. PICK witness \in DrainableIngressLaneIndices(node, source):
+             TRUE
+      BY <1>1, FS_EmptySet, Zenon
+    <2>2. witness \in Nat
+      BY <2>1, SMT DEF DrainableIngressLaneIndices
+    <2>3. \E least \in Nat:
+             /\ least \in DrainableIngressLaneIndices(node, source)
+             /\ \A prior \in 0..(least - 1):
+                  prior \notin DrainableIngressLaneIndices(node, source)
+      BY <2>1, <2>2, SmallestNatural, SMTT(30)
+    <2>4. PICK least \in Nat:
+             /\ least \in DrainableIngressLaneIndices(node, source)
+             /\ \A prior \in 0..(least - 1):
+                  prior \notin DrainableIngressLaneIndices(node, source)
+      BY <2>3
+    <2>5. \A other \in DrainableIngressLaneIndices(node, source):
+             least <= other
+      BY <2>4, SMT DEF DrainableIngressLaneIndices
+    <2> QED BY <2>4, <2>5, Zenon
+         DEF FirstDrainableIngressLaneIndex
+  <1> QED BY <1>1
+
+THEOREM DrainableIngressBypassesBlockedHeadWithinSource ==
+  \A node, source:
+    /\ Len(IngressLane(node, source)) >= 2
+    /\ ~IngressItemCanDrain(node, IngressLane(node, source)[1])
+    /\ \E index \in 2..Len(IngressLane(node, source)):
+         IngressItemCanDrain(node, IngressLane(node, source)[index])
+    => /\ IngressSourceCanDrain(node, source)
+       /\ FirstDrainableIngressLaneIndex(node, source) > 1
+       /\ IngressItemCanDrain(
+            node,
+            IngressLane(node, source)[
+              FirstDrainableIngressLaneIndex(node, source)])
+PROOF
+  <1>1. ASSUME NEW node, NEW source,
+                /\ Len(IngressLane(node, source)) >= 2
+                /\ ~IngressItemCanDrain(
+                     node, IngressLane(node, source)[1])
+                /\ \E index \in 2..Len(IngressLane(node, source)):
+                     IngressItemCanDrain(
+                       node, IngressLane(node, source)[index])
+         PROVE /\ IngressSourceCanDrain(node, source)
+               /\ FirstDrainableIngressLaneIndex(node, source) > 1
+               /\ IngressItemCanDrain(
+                    node,
+                    IngressLane(node, source)[
+                      FirstDrainableIngressLaneIndex(node, source)])
+    <2>1. DrainableIngressLaneIndices(node, source) # {}
+      BY <1>1, SMT DEF DrainableIngressLaneIndices
+    <2>2. FirstDrainableIngressLaneIndex(node, source)
+               \in DrainableIngressLaneIndices(node, source)
+      BY <2>1, FirstDrainableIngressLaneIndexIsDrainable
+    <2> QED BY <1>1, <2>1, <2>2, SMT
+         DEF IngressSourceCanDrain, DrainableIngressLaneIndices
+  <1> QED BY <1>1
+
 THEOREM SelectedIngressItemIsTyped ==
   \A node \in ValidatorIds:
     \A index \in 1..Len(asyncIngressReady[node]):
-      AsyncIngressTypeInvariant
-        => AsyncItemTyped(IngressItemAt(node, index))
+      \A laneIndex \in
+           1..Len(IngressLane(node, asyncIngressReady[node][index])):
+        AsyncIngressTypeInvariant
+          => AsyncItemTyped(
+               IngressLane(
+                 node, asyncIngressReady[node][index])[laneIndex])
 PROOF
   <1>1. ASSUME NEW node \in ValidatorIds,
                 NEW index \in 1..Len(asyncIngressReady[node]),
+                NEW laneIndex \in
+                  1..Len(IngressLane(
+                    node, asyncIngressReady[node][index])),
                 AsyncIngressTypeInvariant
-         PROVE AsyncItemTyped(IngressItemAt(node, index))
+         PROVE AsyncItemTyped(
+                  IngressLane(
+                    node, asyncIngressReady[node][index])[laneIndex])
     <2>1. asyncIngressReady[node][index]
                \in SequenceSet(asyncIngressReady[node])
       BY <1>1, RangeEquality
          DEF AsyncIngressTypeInvariant,
              AsyncIngressTopologyTypeInvariant, SequenceSet
-    <2>2. IngressLaneDepth(
-               node, asyncIngressReady[node][index]) > 0
-      BY <1>1, <2>1
-         DEF AsyncIngressTypeInvariant,
-             AsyncIngressTopologyTypeInvariant
-    <2>3. /\ IngressLane(
+    <2>2. /\ IngressLane(
                     node, asyncIngressReady[node][index])
                     \in Seq(Range(IngressLane(
                       node, asyncIngressReady[node][index])))
-           /\ \A laneIndex \in
+           /\ \A candidateLaneIndex \in
                   1..IngressLaneDepth(
                     node, asyncIngressReady[node][index]):
                 AsyncItemTyped(IngressLane(
-                  node, asyncIngressReady[node][index])[laneIndex])
+                  node, asyncIngressReady[node][index])[
+                    candidateLaneIndex])
       BY <1>1, <2>1
          DEF AsyncIngressTypeInvariant,
              AsyncIngressTopologyTypeInvariant,
              AsyncIngressContentTypeInvariant
-    <2>4. Head(IngressLane(
-               node, asyncIngressReady[node][index])) =
-             IngressLane(
-               node, asyncIngressReady[node][index])[1]
-      BY <2>2, <2>3, NonemptySequenceHeadIsFirst
-         DEF IngressLaneDepth
-    <2> QED BY <2>2, <2>3, <2>4
-         DEF IngressItemAt, IngressLaneDepth
+    <2> QED BY <1>1, <2>2 DEF IngressLaneDepth
   <1> QED BY <1>1
 
 THEOREM SelectedIngressItemHasLaneOwnership ==
   \A node \in ValidatorIds:
     \A index \in 1..Len(asyncIngressReady[node]):
-      AsyncIngressTypeInvariant
-        => /\ IngressItemAt(node, index).envelope.recipient = node
-           /\ IngressItemAt(node, index).source =
-                asyncIngressReady[node][index]
+      \A laneIndex \in
+           1..Len(IngressLane(node, asyncIngressReady[node][index])):
+        AsyncIngressTypeInvariant
+          => /\ IngressLane(
+                   node, asyncIngressReady[node][index])[laneIndex]
+                   .envelope.recipient = node
+             /\ IngressLane(
+                   node, asyncIngressReady[node][index])[laneIndex].source =
+                  asyncIngressReady[node][index]
 PROOF
   <1>1. ASSUME NEW node \in ValidatorIds,
                 NEW index \in 1..Len(asyncIngressReady[node]),
+                NEW laneIndex \in
+                  1..Len(IngressLane(
+                    node, asyncIngressReady[node][index])),
                 AsyncIngressTypeInvariant
-         PROVE /\ IngressItemAt(node, index).envelope.recipient = node
-               /\ IngressItemAt(node, index).source =
-                    asyncIngressReady[node][index]
+         PROVE /\ IngressLane(
+                        node, asyncIngressReady[node][index])[laneIndex]
+                        .envelope.recipient = node
+               /\ IngressLane(
+                        node, asyncIngressReady[node][index])[laneIndex]
+                        .source = asyncIngressReady[node][index]
     <2>1. asyncIngressReady[node][index]
                \in SequenceSet(asyncIngressReady[node])
       BY <1>1, RangeEquality
          DEF AsyncIngressTypeInvariant,
              AsyncIngressTopologyTypeInvariant, SequenceSet
-    <2>2. IngressLaneDepth(
-               node, asyncIngressReady[node][index]) > 0
-      BY <1>1, <2>1
-         DEF AsyncIngressTypeInvariant,
-             AsyncIngressTopologyTypeInvariant
-    <2>3. /\ IngressLane(
+    <2>2. /\ IngressLane(
                     node, asyncIngressReady[node][index])
                     \in Seq(Range(IngressLane(
                       node, asyncIngressReady[node][index])))
-           /\ \A laneIndex \in
+           /\ \A candidateLaneIndex \in
                   1..IngressLaneDepth(
                     node, asyncIngressReady[node][index]):
                 /\ IngressLane(
-                     node, asyncIngressReady[node][index])[laneIndex]
+                     node, asyncIngressReady[node][index])[
+                       candidateLaneIndex]
                      .envelope.recipient = node
                 /\ IngressLane(
-                     node, asyncIngressReady[node][index])[laneIndex]
+                     node, asyncIngressReady[node][index])[
+                       candidateLaneIndex]
                      .source = asyncIngressReady[node][index]
       BY <1>1, <2>1
          DEF AsyncIngressTypeInvariant,
              AsyncIngressTopologyTypeInvariant,
              AsyncIngressContentTypeInvariant
-    <2>4. Head(IngressLane(
-               node, asyncIngressReady[node][index])) =
-             IngressLane(
-               node, asyncIngressReady[node][index])[1]
-      BY <2>2, <2>3, NonemptySequenceHeadIsFirst
-         DEF IngressLaneDepth
-    <2> QED BY <2>2, <2>3, <2>4
-         DEF IngressItemAt, IngressLaneDepth
+    <2> QED BY <1>1, <2>2 DEF IngressLaneDepth
   <1> QED BY <1>1
 
 THEOREM RunnerServiceFramePreservesClockType ==
@@ -5339,6 +6854,102 @@ PROOF
              AsyncTransportTypeInvariant, AsyncIngressTypeInvariant
   <1> QED BY <1>1
 
+HistoricalSelectedItem(node) ==
+  HistoricalSelectedIngressItemAt(
+    node, FirstHistoricalDrainableIngressIndex(node))
+
+HistoricalSelectedRequestAuthorized(node) ==
+  \/ /\ HistoricalSelectedItem(node).kind = "CertifiedRequest"
+        /\ HistoricalSelectedItem(node) \in asyncSentItems
+        /\ CertifiedRequestAuthorized(HistoricalSelectedItem(node))
+  \/ /\ HistoricalSelectedItem(node).kind = "CommitCertificateRequest"
+        /\ HistoricalSelectedItem(node) \in asyncSentItems
+        /\ CommitCertificateRequestAuthorized(HistoricalSelectedItem(node))
+
+THEOREM HistoricalAuthorizedRequestFrame ==
+  \A node:
+    /\ DrainHistoricalIngressSelected(node)
+    /\ HistoricalSelectedRequestAuthorized(node)
+    => /\ asyncIoQueues' =
+             [asyncIoQueues EXCEPT
+                ![node] = Append(
+                  @, AsyncIoCertifiedServeJob(
+                       DeliveryCandidate(HistoricalSelectedItem(node))))]
+       /\ UNCHANGED <<asyncCommandQueues,
+                       asyncOutstandingWork,
+                       asyncIoReadyCompletions,
+                       asyncLocalReadyCompletions,
+                       asyncNextCompletionSource,
+                       asyncIoControlAvailable,
+                       asyncDeferredCompletionQueues>>
+PROOF
+  <1>1. ASSUME NEW node,
+                DrainHistoricalIngressSelected(node),
+                HistoricalSelectedRequestAuthorized(node)
+         PROVE /\ asyncIoQueues' =
+                      [asyncIoQueues EXCEPT
+                         ![node] = Append(
+                           @, AsyncIoCertifiedServeJob(
+                                DeliveryCandidate(
+                                  HistoricalSelectedItem(node))))]
+                /\ UNCHANGED <<asyncCommandQueues,
+                                asyncOutstandingWork,
+                                asyncIoReadyCompletions,
+                                asyncLocalReadyCompletions,
+                                asyncNextCompletionSource,
+                                asyncIoControlAvailable,
+                                asyncDeferredCompletionQueues>>
+    <2>1. /\ asyncIoQueues' =
+                 [asyncIoQueues EXCEPT
+                    ![node] = Append(
+                      @, AsyncIoCertifiedServeJob(
+                           DeliveryCandidate(HistoricalSelectedItem(node))))]
+           /\ UNCHANGED <<asyncOutstandingWork,
+                           asyncIoReadyCompletions,
+                           asyncLocalReadyCompletions,
+                           asyncNextCompletionSource,
+                           asyncIoControlAvailable>>
+      BY <1>1, Isa
+         DEF DrainHistoricalIngressSelected,
+             HistoricalSelectedRequestAuthorized,
+             HistoricalSelectedItem, AsyncIoVars
+    <2>2. UNCHANGED <<asyncCommandQueues,
+                      asyncDeferredCompletionQueues>>
+      BY <1>1, Isa
+         DEF DrainHistoricalIngressSelected,
+             AsyncDeferredVars
+    <2> QED BY <2>1, <2>2
+  <1> QED BY <1>1
+
+THEOREM HistoricalRejectedRequestFrame ==
+  \A node:
+    /\ DrainHistoricalIngressSelected(node)
+    /\ ~HistoricalSelectedRequestAuthorized(node)
+    => /\ UNCHANGED AsyncIoContentTypeVars
+       /\ UNCHANGED AsyncIoTopologyTypeVars
+       /\ UNCHANGED AsyncIoCapacityTypeVars
+PROOF
+  <1>1. ASSUME NEW node,
+                DrainHistoricalIngressSelected(node),
+                ~HistoricalSelectedRequestAuthorized(node)
+         PROVE /\ UNCHANGED AsyncIoContentTypeVars
+                /\ UNCHANGED AsyncIoTopologyTypeVars
+                /\ UNCHANGED AsyncIoCapacityTypeVars
+    <2>1. UNCHANGED AsyncIoVars
+      BY <1>1, Isa
+         DEF DrainHistoricalIngressSelected,
+             HistoricalSelectedRequestAuthorized,
+             HistoricalSelectedItem
+    <2>2. UNCHANGED <<asyncCommandQueues,
+                      asyncDeferredCompletionQueues>>
+      BY <1>1, Isa
+         DEF DrainHistoricalIngressSelected,
+             AsyncDeferredVars
+    <2> QED BY <2>1, <2>2
+         DEF AsyncIoContentTypeVars, AsyncIoTopologyTypeVars,
+             AsyncIoCapacityTypeVars, AsyncIoVars
+  <1> QED BY <1>1
+
 THEOREM HistoricalDrainRunnerPreservesSchedulerType ==
   \A node \in AsyncCurrentResponsiveVoters:
     /\ AsyncTypeInvariant
@@ -5353,30 +6964,54 @@ PROOF
          PROVE AsyncSchedulerTypeInvariant'
     <2> DEFINE DrainIndex == FirstHistoricalDrainableIngressIndex(node)
     <2> DEFINE DrainSource == asyncIngressReady[node][DrainIndex]
-    <2> DEFINE DrainItem == IngressItemAt(node, DrainIndex)
+    <2> DEFINE DrainLaneIndex ==
+           HistoricalSelectedIngressLaneIndex(node, DrainIndex)
+    <2> DEFINE DrainItem ==
+           HistoricalSelectedIngressItemAt(node, DrainIndex)
     <2>1. node \in ValidatorIds
       BY <1>1, AsyncCurrentResponsiveVotersAreValidators
          DEF AsyncTypeInvariant
     <2>2. /\ DrainHistoricalIngressSelected(node)
-           /\ PopSelectedIngress(node, DrainIndex)
+           /\ PopSelectedIngress(node, DrainIndex, DrainLaneIndex)
       BY <1>1
          DEF RunHistoricalServer, DrainHistoricalIngressSelected,
-             DrainIndex
+             DrainIndex, DrainLaneIndex
     <2>3. DrainIndex \in HistoricalDrainableIngressIndices(node)
       BY <1>1, FirstHistoricalDrainableIndexIsDrainable DEF DrainIndex
     <2>4. /\ DrainIndex \in 1..Len(asyncIngressReady[node])
            /\ HistoricalIngressSourceCanDrain(node, DrainSource)
-      BY <2>3
-         DEF HistoricalDrainableIngressIndices, DrainSource
-    <2>5. AsyncIngressTypeInvariant
+           /\ DrainLaneIndex \in
+                HistoricalDrainableIngressLaneIndices(node, DrainSource)
+           /\ DrainLaneIndex \in 1..Len(IngressLane(node, DrainSource))
+           /\ HistoricalIngressItemCanDrain(node, DrainItem)
+      <3>1. /\ DrainIndex \in 1..Len(asyncIngressReady[node])
+             /\ HistoricalIngressSourceCanDrain(node, DrainSource)
+        BY <2>3
+           DEF HistoricalDrainableIngressIndices, DrainSource
+      <3>2. DrainLaneIndex \in
+               HistoricalDrainableIngressLaneIndices(node, DrainSource)
+        BY <3>1, FirstHistoricalDrainableIngressLaneIndexIsDrainable
+           DEF HistoricalIngressSourceCanDrain, DrainLaneIndex,
+               HistoricalSelectedIngressLaneIndex
+      <3> QED BY <3>1, <3>2
+           DEF HistoricalDrainableIngressLaneIndices, DrainItem,
+               HistoricalSelectedIngressItemAt, DrainSource,
+               DrainLaneIndex, HistoricalSelectedIngressLaneIndex
+    <2>5. /\ AsyncConfiguration
+           /\ ModelConfiguration
+           /\ AsyncIngressTypeInvariant
       BY <1>1
          DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
-             AsyncIngressTypeInvariant
+             AsyncRuntimeTypeInvariant,
+             AsyncRuntimeScalarTypeInvariant,
+             AsyncIngressTypeInvariant, TypeInvariant
     <2>6. AsyncIngressTypeInvariant'
       BY <2>1, <2>2, <2>4, <2>5,
          PopSelectedIngressPreservesIngressType
     <2>7. AsyncItemTyped(DrainItem)
-      BY <2>1, <2>4, <2>5, SelectedIngressItemIsTyped DEF DrainItem
+      BY <2>1, <2>4, <2>5, SelectedIngressItemIsTyped
+         DEF DrainItem, HistoricalSelectedIngressItemAt,
+             DrainLaneIndex, DrainSource
     <2>8. AsyncIoTypeInvariant'
       <3>1. CASE
         \/ /\ DrainItem.kind = "CertifiedRequest"
@@ -5390,8 +7025,7 @@ PROOF
                               "CommitCertificateRequest"}
                /\ CanEnqueueIoClass(node, "Serve")
           BY <2>4, <3>1, SMT
-             DEF HistoricalIngressSourceCanDrain, DrainSource,
-                 DrainItem, IngressItemAt
+             DEF HistoricalIngressItemCanDrain, DrainItem
         <4>2. /\ asyncIoQueues' =
                     [asyncIoQueues EXCEPT
                        ![node] = Append(
@@ -5404,9 +7038,9 @@ PROOF
                                asyncNextCompletionSource,
                                asyncIoControlAvailable,
                                asyncDeferredCompletionQueues>>
-          BY <1>1, <2>2, <3>1, Isa
-             DEF RunHistoricalServer,
-                 DrainHistoricalIngressSelected, DrainItem
+          BY <2>2, <3>1, HistoricalAuthorizedRequestFrame
+             DEF HistoricalSelectedRequestAuthorized,
+                 HistoricalSelectedItem, DrainItem, DrainIndex
         <4> QED BY <1>1, <2>1, <2>7, <4>1, <4>2,
              AppendTypedServeJobPreservesIoType
       <3>2. CASE ~(
@@ -5420,19 +7054,13 @@ PROOF
           BY <1>1
              DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
                  AsyncIoTypeInvariant
-        <4>2. UNCHANGED AsyncIoContentTypeVars
-          BY <1>1, <2>2, <3>2, Isa
-             DEF RunHistoricalServer,
-                 DrainHistoricalIngressSelected,
-                 AsyncIoContentTypeVars, AsyncIoVars, DrainItem
-        <4>3. /\ UNCHANGED AsyncIoTopologyTypeVars
+        <4>2. /\ UNCHANGED AsyncIoContentTypeVars
+               /\ UNCHANGED AsyncIoTopologyTypeVars
                /\ UNCHANGED AsyncIoCapacityTypeVars
-          BY <1>1, <2>2, <3>2, Isa
-             DEF RunHistoricalServer,
-                 DrainHistoricalIngressSelected,
-                 AsyncIoTopologyTypeVars, AsyncIoCapacityTypeVars,
-                 AsyncIoVars, DrainItem
-        <4> QED BY <4>1, <4>2, <4>3,
+          BY <2>2, <3>2, HistoricalRejectedRequestFrame
+             DEF HistoricalSelectedRequestAuthorized,
+                 HistoricalSelectedItem, DrainItem, DrainIndex
+        <4> QED BY <4>1, <4>2,
              AsyncIoTopologyTypeStutter, AsyncIoContentTypeStutter,
              AsyncIoCapacityTypeStutter
              DEF AsyncIoTypeInvariant
@@ -6308,6 +7936,7 @@ PROOF
     <2>4. AsyncRuntimeScalarTypeInvariant'
       BY <1>1, <2>1, <2>2, ProducerSelectedCompletionFacts,
          TypedCandidateAppendPreservesQueueType,
+         AppendOwnedCandidatePreservesCommandQueueOwnership,
          FunctionalUpdatePreservesType, FunctionalUpdateAwayFromKey,
          SMTT(30)
          DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
@@ -7151,7 +8780,7 @@ PROOF
                QueuedCompletionIndices, DeferredCompletionCount
       <3>5. AsyncCompletionLoad(node)' =
                AsyncCompletionLoad(node) + 1
-        BY <3>4, SMT DEF AsyncCompletionLoad
+        BY <3>4, Isa DEF AsyncCompletionLoad
       <3>6. /\ AsyncQueueDepth(node) <= AsyncQueueCapacity
              /\ AsyncIoQueueDepth(node) <= AsyncIoCapacity
              /\ AsyncCompletionLoad(node) <= AsyncCompletionReserve
@@ -7187,8 +8816,12 @@ PROOF
       <3>9. /\ AsyncCompletionLoad(node)' <= AsyncIoWorkCapacity
              /\ AsyncCompletionLoad(node)' <= AsyncCompletionReserve
         <4>1. AsyncCompletionLoad(node) + 1 <= AsyncIoWorkCapacity
-          BY <1>1, <3>7, <3>8, NaturalIncrementWithinBound
-        <4> QED BY <3>5, <3>7, <4>1, SMT
+          BY <1>1, <3>7, <3>8, SMT
+        <4>2. AsyncCompletionLoad(node)' <= AsyncIoWorkCapacity
+          BY <3>5, <4>1
+        <4>3. AsyncCompletionLoad(node)' <= AsyncCompletionReserve
+          BY <3>7, <4>2, SMTT(30)
+        <4> QED BY <4>2, <4>3
       <3>10. /\ AsyncQueueDepth(node)' <= AsyncQueueCapacity
               /\ AsyncIoQueueDepth(node)' <= AsyncIoCapacity
               /\ AsyncCompletionLoad(node)' <= AsyncCompletionReserve
@@ -8452,17 +10085,24 @@ PROOF
            FunctionalUpdatePreservesType
       <3>12. /\ DOMAIN asyncCommandQueues' = ValidatorIds
               /\ \A other \in ValidatorIds:
-                   AsyncQueueTyped(asyncCommandQueues'[other])
+                   /\ AsyncQueueTyped(asyncCommandQueues'[other])
+                   /\ AsyncCommandQueueOwnership(
+                        other, asyncCommandQueues'[other])
         <4>1. DOMAIN asyncCommandQueues' = ValidatorIds
           BY <3>1, <3>2, <3>6, Isa
              DEF AsyncRuntimeScalarTypeInvariant
         <4>2. \A other \in ValidatorIds:
-                   AsyncQueueTyped(asyncCommandQueues'[other])
+                   /\ AsyncQueueTyped(asyncCommandQueues'[other])
+                   /\ AsyncCommandQueueOwnership(
+                        other, asyncCommandQueues'[other])
           <5>1. ASSUME NEW other \in ValidatorIds
-                 PROVE AsyncQueueTyped(asyncCommandQueues'[other])
+                 PROVE /\ AsyncQueueTyped(asyncCommandQueues'[other])
+                       /\ AsyncCommandQueueOwnership(
+                            other, asyncCommandQueues'[other])
             <6>1. CASE other = node
               BY <3>2, <3>5, <3>6, <6>1,
-                 TypedCandidateAppendPreservesQueueType
+                 TypedCandidateAppendPreservesQueueType,
+                 AppendOwnedCandidatePreservesCommandQueueOwnership
                  DEF AsyncRuntimeScalarTypeInvariant
             <6>2. CASE other # node
               <7>1. asyncCommandQueues'[other] =
@@ -8548,6 +10188,32 @@ PROOF
     <2> QED BY <2>1, <2>2, <2>3
   <1> QED BY <1>1
 
+THEOREM SchedulerIoStutterPreservesIoType ==
+  /\ AsyncIoTypeInvariant
+  /\ UNCHANGED <<asyncCommandQueues, AsyncIoVars,
+                  asyncDeferredCompletionQueues>>
+  => AsyncIoTypeInvariant'
+PROOF
+  <1>1. ASSUME AsyncIoTypeInvariant,
+              UNCHANGED <<asyncCommandQueues, AsyncIoVars,
+                          asyncDeferredCompletionQueues>>
+         PROVE AsyncIoTypeInvariant'
+    <2>1. /\ AsyncIoTopologyTypeInvariant
+           /\ AsyncIoContentTypeInvariant
+           /\ AsyncIoCapacityTypeInvariant
+      BY <1>1 DEF AsyncIoTypeInvariant
+    <2>2. /\ UNCHANGED AsyncIoTopologyTypeVars
+           /\ UNCHANGED AsyncIoContentTypeVars
+           /\ UNCHANGED AsyncIoCapacityTypeVars
+      BY <1>1, Isa
+         DEF AsyncIoVars, AsyncIoTopologyTypeVars,
+             AsyncIoContentTypeVars, AsyncIoCapacityTypeVars
+    <2> QED BY <2>1, <2>2,
+         AsyncIoTopologyTypeStutter, AsyncIoContentTypeStutter,
+         AsyncIoCapacityTypeStutter
+         DEF AsyncIoTypeInvariant
+  <1> QED BY <1>1
+
 THEOREM TypedIngressDeliveryCandidateFacts ==
   \A node \in ValidatorIds:
     \A item:
@@ -8574,7 +10240,8 @@ PROOF
 THEOREM TypedCertifiedResponseCandidateFacts ==
   \A node \in ValidatorIds:
     \A item:
-      (AsyncItemTyped(item)
+      (AsyncTypeInvariant
+        /\ AsyncItemTyped(item)
         /\ item.kind = "CertifiedResponse"
         /\ item.envelope.recipient = node)
       => /\ AsyncCandidateTyped(CertifiedResponseCandidate(item))
@@ -8583,21 +10250,44 @@ THEOREM TypedCertifiedResponseCandidateFacts ==
 PROOF
   <1>1. ASSUME NEW node \in ValidatorIds,
                 NEW item,
+                AsyncTypeInvariant,
                 AsyncItemTyped(item),
                 item.kind = "CertifiedResponse",
                 item.envelope.recipient = node
          PROVE /\ AsyncCandidateTyped(CertifiedResponseCandidate(item))
                /\ CertifiedResponseCandidate(item).node = node
                /\ CertifiedResponseCandidate(item).class = "Completion"
-    <2>1. /\ AsyncBodyEnvelopeTyped(item.envelope)
-           /\ item \in AsyncNetworkItems
-      BY <1>1, SMT DEF AsyncItemTyped, AsyncNetworkItems
+    <2>1. AsyncBodyEnvelopeTyped(item.envelope)
+      BY <1>1, Isa DEF AsyncItemTyped
     <2>2. /\ "Completion" \in AsyncCommandClasses
            /\ "FetchCertifiedBody" \in AsyncWorkKinds
-      BY DEF AsyncCommandClasses, AsyncWorkKinds, AsyncReducerKinds
-    <2> QED BY <1>1, <2>1, <2>2, SMT
-         DEF CertifiedResponseCandidate, AsyncCandidateTyped,
-             AsyncCandidate, AsyncBodyEnvelopeTyped, SubjectOrNone
+      BY Isa DEF AsyncCommandClasses, AsyncWorkKinds, AsyncReducerKinds
+    <2>3. /\ DOMAIN CertifiedResponseCandidate(item) =
+                    {"class", "kind", "node", "height", "view",
+                     "subject", "item"}
+           /\ CertifiedResponseCandidate(item).class = "Completion"
+           /\ CertifiedResponseCandidate(item).kind =
+                "FetchCertifiedBody"
+           /\ CertifiedResponseCandidate(item).node = node
+           /\ CertifiedResponseCandidate(item).height =
+                item.envelope.height
+           /\ CertifiedResponseCandidate(item).view = item.envelope.view
+           /\ CertifiedResponseCandidate(item).subject =
+                item.envelope.subject
+           /\ CertifiedResponseCandidate(item).item = item
+      BY <1>1 DEF CertifiedResponseCandidate, AsyncCandidate
+    <2>4. CertifiedResponseCandidate(item).height \in Heights
+      BY <2>1, <2>3 DEF AsyncBodyEnvelopeTyped
+    <2>5. CertifiedResponseCandidate(item).view \in Views
+      BY <2>1, <2>3 DEF AsyncBodyEnvelopeTyped
+    <2>6. ValidSubjects \subseteq Subjects
+      BY <1>1 DEF AsyncTypeInvariant, TypeInvariant,
+                   ModelConfiguration
+    <2>7. CertifiedResponseCandidate(item).subject \in SubjectOrNone
+      BY <2>1, <2>3, <2>6
+         DEF AsyncBodyEnvelopeTyped, SubjectOrNone
+    <2> QED BY <1>1, <2>2, <2>3, <2>4, <2>5, <2>7
+         DEF AsyncCandidateTyped
   <1> QED BY <1>1
 
 THEOREM TypedCommitCertificateResponseCandidateFacts ==
@@ -8705,6 +10395,214 @@ PROOF
          DEF AsyncTransportContentTypeInvariant
   <1> QED BY <1>1
 
+SelectedDrainItem(node) ==
+  SelectedIngressItemAt(node, FirstDrainableIngressIndex(node))
+
+SelectedDrainCandidate(node) ==
+  DeliveryCandidate(SelectedDrainItem(node))
+
+SelectedDrainCommitCandidate(node) ==
+  CommitCertificateResponseCandidate(SelectedDrainItem(node))
+
+THEOREM CommitCertificateResponseCandidateHasProgressClass ==
+  \A item:
+    CommitCertificateResponseCandidate(item).class = "Progress"
+PROOF
+  <1>1. ASSUME NEW item
+         PROVE CommitCertificateResponseCandidate(item).class = "Progress"
+    <2>1. DiscoveredCommitQcItem(item).kind = "CommitQC"
+      BY DEF DiscoveredCommitQcItem, AsyncNetworkItem
+    <2>2. DeliveryClass(DiscoveredCommitQcItem(item)) = "Progress"
+      BY <2>1 DEF DeliveryClass
+    <2> QED BY <2>2
+         DEF CommitCertificateResponseCandidate, DeliveryCandidate,
+             AsyncCandidate
+  <1> QED BY <1>1
+
+THEOREM AuthorizedCommitResponseCommandFrame ==
+  \A node:
+    /\ DrainFairIngressSelected(node)
+    /\ SelectedDrainItem(node).kind = "CommitCertificateResponse"
+    /\ SelectedDrainItem(node) \in asyncSentItems
+    /\ CommitCertificateResponseAuthorized(SelectedDrainItem(node))
+    => /\ UNCHANGED asyncNextCommandClass
+       /\ asyncCommandQueues' =
+            [asyncCommandQueues EXCEPT
+               ![SelectedDrainCommitCandidate(node).node] =
+                 Append(@, SelectedDrainCommitCandidate(node))]
+PROOF
+  <1>1. ASSUME NEW node,
+                DrainFairIngressSelected(node),
+                SelectedDrainItem(node).kind =
+                  "CommitCertificateResponse",
+                SelectedDrainItem(node) \in asyncSentItems,
+                CommitCertificateResponseAuthorized(
+                  SelectedDrainItem(node))
+         PROVE /\ UNCHANGED asyncNextCommandClass
+               /\ asyncCommandQueues' =
+                    [asyncCommandQueues EXCEPT
+                       ![SelectedDrainCommitCandidate(node).node] =
+                         Append(@, SelectedDrainCommitCandidate(node))]
+    <2>1. SelectedDrainItem(node).kind # "Noise"
+      BY <1>1
+    <2>2. SelectedDrainItem(node).kind
+             \notin {"CertifiedRequest", "CommitCertificateRequest"}
+      BY <1>1
+    <2>3. SelectedDrainItem(node).kind # "CertifiedResponse"
+      BY <1>1
+    <2> QED BY <1>1, <2>1, <2>2, <2>3, SMTT(60)
+         DEF DrainFairIngressSelected, SelectedDrainItem,
+             SelectedDrainCommitCandidate, EnqueueCandidate
+  <1> QED BY <1>1
+
+THEOREM RejectedCommitResponseCommandFrame ==
+  \A node:
+    /\ DrainFairIngressSelected(node)
+    /\ SelectedDrainItem(node).kind = "CommitCertificateResponse"
+    /\ SelectedDrainItem(node) \in asyncSentItems
+    /\ ~CommitCertificateResponseAuthorized(SelectedDrainItem(node))
+    => /\ UNCHANGED asyncNextCommandClass
+       /\ asyncCommandQueues' = asyncCommandQueues
+PROOF
+  <1>1. ASSUME NEW node,
+                DrainFairIngressSelected(node),
+                SelectedDrainItem(node).kind =
+                  "CommitCertificateResponse",
+                SelectedDrainItem(node) \in asyncSentItems,
+                ~CommitCertificateResponseAuthorized(
+                  SelectedDrainItem(node))
+         PROVE /\ UNCHANGED asyncNextCommandClass
+               /\ asyncCommandQueues' = asyncCommandQueues
+    <2>1. SelectedDrainItem(node).kind # "Noise"
+      BY <1>1
+    <2>2. SelectedDrainItem(node).kind
+             \notin {"CertifiedRequest", "CommitCertificateRequest"}
+      BY <1>1
+    <2>3. SelectedDrainItem(node).kind # "CertifiedResponse"
+      BY <1>1
+    <2> QED BY <1>1, <2>1, <2>2, <2>3, SMTT(60)
+         DEF DrainFairIngressSelected, SelectedDrainItem,
+             SelectedDrainCommitCandidate, EnqueueCandidate
+  <1> QED BY <1>1
+
+THEOREM DrainFairIngressRuntimeFrame ==
+  \A node:
+    /\ DrainFairIngressSelected(node)
+    /\ RunnerServiceFrame(node)
+    => /\ UNCHANGED asyncNextCommandClass
+       /\ UNCHANGED <<asyncNow, asyncFifoOwed,
+                      asyncTimeoutEmitted>>
+       /\ \/ asyncCommandQueues' = asyncCommandQueues
+          \/ asyncCommandQueues' =
+               [asyncCommandQueues EXCEPT
+                  ![SelectedDrainCandidate(node).node] =
+                    Append(@, SelectedDrainCandidate(node))]
+          \/ /\ SelectedDrainItem(node) \in asyncSentItems
+                /\ CommitCertificateResponseAuthorized(
+                     SelectedDrainItem(node))
+                /\ asyncCommandQueues' =
+                     [asyncCommandQueues EXCEPT
+                        ![SelectedDrainCommitCandidate(node).node] = Append(
+                          @, SelectedDrainCommitCandidate(node))]
+PROOF
+  <1>1. ASSUME NEW node,
+                DrainFairIngressSelected(node),
+                RunnerServiceFrame(node)
+         PROVE /\ UNCHANGED asyncNextCommandClass
+                /\ UNCHANGED <<asyncNow, asyncFifoOwed,
+                              asyncTimeoutEmitted>>
+                /\ \/ asyncCommandQueues' = asyncCommandQueues
+                   \/ asyncCommandQueues' =
+                        [asyncCommandQueues EXCEPT
+                           ![SelectedDrainCandidate(node).node] = Append(
+                             @, SelectedDrainCandidate(node))]
+                   \/ /\ SelectedDrainItem(node) \in asyncSentItems
+                         /\ CommitCertificateResponseAuthorized(
+                              SelectedDrainItem(node))
+                         /\ asyncCommandQueues' =
+                              [asyncCommandQueues EXCEPT
+                                 ![SelectedDrainCommitCandidate(node).node] =
+                                   Append(
+                                   @, SelectedDrainCommitCandidate(node))]
+    <2>1. /\ UNCHANGED asyncNextCommandClass
+           /\ UNCHANGED <<asyncNow, asyncFifoOwed,
+                           asyncTimeoutEmitted>>
+      BY <1>1, Isa
+         DEF DrainFairIngressSelected, SelectedDrainItem,
+             SelectedDrainCandidate, SelectedDrainCommitCandidate,
+             EnqueueCandidate, RunnerServiceFrame, vars
+    <2>2. \/ asyncCommandQueues' = asyncCommandQueues
+           \/ asyncCommandQueues' =
+                [asyncCommandQueues EXCEPT
+                   ![SelectedDrainCandidate(node).node] = Append(
+                     @, SelectedDrainCandidate(node))]
+           \/ /\ SelectedDrainItem(node) \in asyncSentItems
+                 /\ CommitCertificateResponseAuthorized(
+                      SelectedDrainItem(node))
+                 /\ asyncCommandQueues' =
+                      [asyncCommandQueues EXCEPT
+                         ![SelectedDrainCommitCandidate(node).node] = Append(
+                           @, SelectedDrainCommitCandidate(node))]
+      <3>1. CASE
+        \/ SelectedDrainItem(node).kind = "Noise"
+        \/ SelectedDrainItem(node) \notin asyncSentItems
+        BY <1>1, <3>1, Isa
+           DEF DrainFairIngressSelected, SelectedDrainItem,
+               SelectedDrainCandidate, SelectedDrainCommitCandidate,
+               EnqueueCandidate
+      <3>2. CASE
+        /\ SelectedDrainItem(node).kind # "Noise"
+        /\ SelectedDrainItem(node) \in asyncSentItems
+        /\ SelectedDrainItem(node).kind
+             \in {"CertifiedRequest", "CommitCertificateRequest"}
+        BY <1>1, <3>2, Isa
+           DEF DrainFairIngressSelected, SelectedDrainItem,
+               SelectedDrainCandidate, SelectedDrainCommitCandidate,
+               EnqueueCandidate
+      <3>3. CASE
+        /\ SelectedDrainItem(node).kind # "Noise"
+        /\ SelectedDrainItem(node) \in asyncSentItems
+        /\ SelectedDrainItem(node).kind = "CertifiedResponse"
+        BY <1>1, <3>3, Isa
+           DEF DrainFairIngressSelected, SelectedDrainItem,
+               SelectedDrainCandidate, SelectedDrainCommitCandidate,
+               EnqueueCandidate
+      <3>4. CASE
+        /\ SelectedDrainItem(node).kind # "Noise"
+        /\ SelectedDrainItem(node) \in asyncSentItems
+        /\ SelectedDrainItem(node).kind = "CommitCertificateResponse"
+        <4>1. CASE CommitCertificateResponseAuthorized(
+                      SelectedDrainItem(node))
+          BY <1>1, <3>4, <4>1,
+             AuthorizedCommitResponseCommandFrame
+        <4>2. CASE ~CommitCertificateResponseAuthorized(
+                      SelectedDrainItem(node))
+          BY <1>1, <3>4, <4>2,
+             RejectedCommitResponseCommandFrame
+        <4> QED BY <4>1, <4>2
+      <3>5. CASE
+        /\ SelectedDrainItem(node).kind # "Noise"
+        /\ SelectedDrainItem(node) \in asyncSentItems
+        /\ SelectedDrainItem(node).kind
+             \notin {"CertifiedRequest", "CommitCertificateRequest"}
+        /\ SelectedDrainItem(node).kind # "CertifiedResponse"
+        /\ SelectedDrainItem(node).kind # "CommitCertificateResponse"
+        <4>1. CASE SelectedDrainCandidate(node) \in QueuedCandidates
+          BY <1>1, <3>5, <4>1, Isa
+             DEF DrainFairIngressSelected, SelectedDrainItem,
+                 SelectedDrainCandidate, SelectedDrainCommitCandidate,
+                 EnqueueCandidate
+        <4>2. CASE SelectedDrainCandidate(node) \notin QueuedCandidates
+          BY <1>1, <3>5, <4>2, Isa
+             DEF DrainFairIngressSelected, SelectedDrainItem,
+                 SelectedDrainCandidate, SelectedDrainCommitCandidate,
+                 EnqueueCandidate
+        <4> QED BY <4>1, <4>2
+      <3> QED BY <3>1, <3>2, <3>3, <3>4, <3>5, SMT
+    <2> QED BY <2>1, <2>2
+  <1> QED BY <1>1
+
+
 THEOREM IngressSelectedPreservesRuntimeScalarType ==
   \A node \in ValidatorIds:
     /\ AsyncRuntimeScalarTypeInvariant
@@ -8712,6 +10610,7 @@ THEOREM IngressSelectedPreservesRuntimeScalarType ==
     /\ asyncRunnerPhase' = asyncRunnerPhase
     /\ asyncRunnerBudget' =
          [asyncRunnerBudget EXCEPT ![node] = @ - 1]
+    /\ UNCHANGED asyncNextCommandClass
     /\ UNCHANGED <<asyncNow, asyncFifoOwed, asyncTimeoutEmitted>>
     /\ \/ asyncCommandQueues' = asyncCommandQueues
        \/ \E candidate:
@@ -8728,6 +10627,7 @@ PROOF
                 asyncRunnerPhase' = asyncRunnerPhase,
                 asyncRunnerBudget' =
                   [asyncRunnerBudget EXCEPT ![node] = @ - 1],
+                UNCHANGED asyncNextCommandClass,
                 UNCHANGED <<asyncNow, asyncFifoOwed,
                             asyncTimeoutEmitted>>,
                 \/ asyncCommandQueues' = asyncCommandQueues
@@ -8740,21 +10640,35 @@ PROOF
          PROVE AsyncRuntimeScalarTypeInvariant'
     <2>1. /\ DOMAIN asyncCommandQueues = ValidatorIds
            /\ \A other \in ValidatorIds:
-                AsyncQueueTyped(asyncCommandQueues[other])
-           /\ asyncRunnerBudget \in
-                [ValidatorIds ->
-                  0..(AsyncQueueCapacity + AsyncIngressCapacity)]
+                /\ AsyncQueueTyped(asyncCommandQueues[other])
+                /\ AsyncCommandQueueOwnership(
+                     other, asyncCommandQueues[other])
       BY <1>1 DEF AsyncRuntimeScalarTypeInvariant
-    <2>2. asyncRunnerBudget[node] - 1
-               \in 0..(AsyncQueueCapacity + AsyncIngressCapacity)
-      BY <1>1, <2>1, SMT
-    <2>3. asyncRunnerBudget' \in
+    <2>2. asyncRunnerBudget \in
              [ValidatorIds ->
                0..(AsyncQueueCapacity + AsyncIngressCapacity)]
-      BY <1>1, <2>1, <2>2, FunctionalUpdatePreservesType
-    <2>4. /\ DOMAIN asyncCommandQueues' = ValidatorIds
+      BY <1>1 DEF AsyncRuntimeScalarTypeInvariant
+    <2>3. AsyncConfiguration
+      BY <1>1 DEF AsyncRuntimeScalarTypeInvariant
+    <2>4. AsyncQueueCapacity + AsyncIngressCapacity \in Nat
+      BY <2>3, SMT DEF AsyncConfiguration
+    <2>5. asyncRunnerBudget[node]
+               \in 0..(AsyncQueueCapacity + AsyncIngressCapacity)
+      BY <1>1, <2>2
+    <2>6. asyncRunnerBudget[node] > 0
+      BY <1>1
+    <2>7. asyncRunnerBudget[node] - 1
+               \in 0..(AsyncQueueCapacity + AsyncIngressCapacity)
+      BY <2>4, <2>5, <2>6, BoundedNaturalPredecessor
+    <2>8. asyncRunnerBudget' \in
+             [ValidatorIds ->
+               0..(AsyncQueueCapacity + AsyncIngressCapacity)]
+      BY <1>1, <2>2, <2>7, FunctionalUpdatePreservesType
+    <2>9. /\ DOMAIN asyncCommandQueues' = ValidatorIds
            /\ \A other \in ValidatorIds:
-                AsyncQueueTyped(asyncCommandQueues'[other])
+                /\ AsyncQueueTyped(asyncCommandQueues'[other])
+                /\ AsyncCommandQueueOwnership(
+                     other, asyncCommandQueues'[other])
       <3>1. CASE asyncCommandQueues' = asyncCommandQueues
         BY <2>1, <3>1
       <3>2. CASE \E candidate:
@@ -8770,13 +10684,20 @@ PROOF
                             [asyncCommandQueues EXCEPT
                                ![node] = Append(@, candidate)]
           BY <3>2
-        <4>2. AsyncQueueTyped(
-                 Append(asyncCommandQueues[node], candidate))
-          BY <2>1, <4>1, TypedCandidateAppendPreservesQueueType
+        <4>2. /\ AsyncQueueTyped(
+                       Append(asyncCommandQueues[node], candidate))
+               /\ AsyncCommandQueueOwnership(
+                    node, Append(asyncCommandQueues[node], candidate))
+          BY <2>1, <4>1, TypedCandidateAppendPreservesQueueType,
+             AppendOwnedCandidatePreservesCommandQueueOwnership
         <4>3. \A other \in ValidatorIds:
-                 AsyncQueueTyped(asyncCommandQueues'[other])
+                 /\ AsyncQueueTyped(asyncCommandQueues'[other])
+                 /\ AsyncCommandQueueOwnership(
+                      other, asyncCommandQueues'[other])
           <5>1. ASSUME NEW other \in ValidatorIds
-                 PROVE AsyncQueueTyped(asyncCommandQueues'[other])
+                 PROVE /\ AsyncQueueTyped(asyncCommandQueues'[other])
+                       /\ AsyncCommandQueueOwnership(
+                            other, asyncCommandQueues'[other])
             <6>1. CASE other = node
               BY <2>1, <4>1, <4>2, <6>1,
                  FunctionalAppendUpdateAtKey
@@ -8787,7 +10708,7 @@ PROOF
           <5> QED BY <5>1
         <4> QED BY <2>1, <4>1, <4>3, Isa
       <3> QED BY <1>1, <3>1, <3>2
-    <2> QED BY <1>1, <2>3, <2>4
+    <2> QED BY <1>1, <2>8, <2>9
          DEF AsyncRuntimeScalarTypeInvariant
   <1> QED BY <1>1
 
@@ -8847,6 +10768,4243 @@ PROOF
     <2> QED BY <1>1, <2>1, <2>2, <2>4,
                     RunnerScalarClockAndSchedulerStutterPreservesType
   <1> QED BY <1>1
+
+THEOREM IngressDrainRunnerPreservesSchedulerType ==
+  \A node \in AsyncCurrentResponsiveVoters:
+    /\ AsyncTypeInvariant
+    /\ RunNode(node)
+    /\ IngressDrainStep(node)
+    /\ asyncRunnerBudget[node] > 0
+    /\ asyncIngressReady[node] # <<>>
+    /\ DrainableIngressIndices(node) # {}
+    => AsyncSchedulerTypeInvariant'
+PROOF
+  <1>1. ASSUME NEW node \in AsyncCurrentResponsiveVoters,
+                AsyncTypeInvariant,
+                RunNode(node),
+                IngressDrainStep(node),
+                asyncRunnerBudget[node] > 0,
+                asyncIngressReady[node] # <<>>,
+                DrainableIngressIndices(node) # {}
+         PROVE AsyncSchedulerTypeInvariant'
+    <2> DEFINE DrainIndex == FirstDrainableIngressIndex(node)
+    <2> DEFINE DrainSource == asyncIngressReady[node][DrainIndex]
+    <2> DEFINE DrainLaneIndex == SelectedIngressLaneIndex(node, DrainIndex)
+    <2> DEFINE DrainItem == SelectedIngressItemAt(node, DrainIndex)
+    <2> DEFINE Candidate == DeliveryCandidate(DrainItem)
+    <2> DEFINE CertifiedCandidate == CertifiedResponseCandidate(DrainItem)
+    <2> DEFINE DiscoveredItem == DiscoveredCommitQcItem(DrainItem)
+    <2> DEFINE CommitCandidate ==
+           CommitCertificateResponseCandidate(DrainItem)
+    <2> DEFINE ServeAccepted ==
+           /\ DrainItem \in asyncSentItems
+           /\ DrainItem.kind
+                \in {"CertifiedRequest", "CommitCertificateRequest"}
+           /\ IF DrainItem.kind = "CertifiedRequest"
+              THEN CertifiedRequestAuthorized(DrainItem)
+              ELSE CommitCertificateRequestAuthorized(DrainItem)
+    <2> DEFINE CertifiedAccepted ==
+           /\ DrainItem \in asyncSentItems
+           /\ CertifiedResponseAuthorized(DrainItem)
+    <2> DEFINE CommitAccepted ==
+           /\ DrainItem \in asyncSentItems
+           /\ CommitCertificateResponseAuthorized(DrainItem)
+    <2> DEFINE OrdinaryAccepted ==
+           /\ DrainItem \in asyncSentItems
+           /\ DrainItem.kind # "Noise"
+           /\ DrainItem.kind
+                \notin {"CertifiedRequest", "CommitCertificateRequest"}
+           /\ DrainItem.kind # "CertifiedResponse"
+           /\ DrainItem.kind # "CommitCertificateResponse"
+    <2>1. node \in ValidatorIds
+      BY <1>1, AsyncCurrentResponsiveVotersAreValidators
+         DEF AsyncTypeInvariant
+    <2>2. /\ DrainFairIngressSelected(node)
+           /\ PopSelectedIngress(node, DrainIndex, DrainLaneIndex)
+           /\ RunnerServiceFrame(node)
+           /\ LeaveCausalQueues
+           /\ UNCHANGED AsyncDeferredVars
+           /\ asyncRunnerPhase' = asyncRunnerPhase
+           /\ asyncRunnerBudget' =
+                [asyncRunnerBudget EXCEPT ![node] = @ - 1]
+      <3>1. /\ DrainFairIngressSelected(node)
+             /\ LeaveCausalQueues
+             /\ UNCHANGED AsyncDeferredVars
+             /\ asyncRunnerPhase' = asyncRunnerPhase
+             /\ asyncRunnerBudget' =
+                  [asyncRunnerBudget EXCEPT ![node] = @ - 1]
+        BY <1>1, Isa DEF IngressDrainStep
+      <3>2. PopSelectedIngress(node, DrainIndex, DrainLaneIndex)
+        BY <3>1
+           DEF DrainFairIngressSelected, DrainIndex, DrainLaneIndex
+      <3>3. RunnerServiceFrame(node)
+        BY <1>1 DEF RunNode, RunnerServiceFrame
+      <3> QED BY <3>1, <3>2, <3>3
+    <2>3. DrainIndex \in DrainableIngressIndices(node)
+      BY <1>1, FirstDrainableIngressIndexIsDrainable DEF DrainIndex
+    <2>4. /\ DrainIndex \in 1..Len(asyncIngressReady[node])
+           /\ IngressSourceCanDrain(node, DrainSource)
+           /\ DrainLaneIndex \in
+                DrainableIngressLaneIndices(node, DrainSource)
+           /\ DrainLaneIndex \in 1..Len(IngressLane(node, DrainSource))
+           /\ IngressItemCanDrain(node, DrainItem)
+      <3>1. /\ DrainIndex \in 1..Len(asyncIngressReady[node])
+             /\ IngressSourceCanDrain(node, DrainSource)
+        BY <2>3 DEF DrainableIngressIndices, DrainSource
+      <3>2. DrainLaneIndex \in
+               DrainableIngressLaneIndices(node, DrainSource)
+        BY <3>1, FirstDrainableIngressLaneIndexIsDrainable
+           DEF IngressSourceCanDrain, DrainLaneIndex,
+               SelectedIngressLaneIndex
+      <3> QED BY <3>1, <3>2
+           DEF DrainableIngressLaneIndices, DrainItem,
+               SelectedIngressItemAt, DrainSource, DrainLaneIndex,
+               SelectedIngressLaneIndex
+    <2>5. /\ AsyncRuntimeScalarTypeInvariant
+           /\ AsyncCausalTypeInvariant
+           /\ AsyncIoTypeInvariant
+           /\ AsyncDeferredTopologyTypeInvariant
+           /\ AsyncDeferredContentTypeInvariant
+           /\ AsyncTransportClockTypeInvariant
+           /\ AsyncTransportContentTypeInvariant
+           /\ AsyncConfiguration
+           /\ ModelConfiguration
+           /\ AsyncIngressTypeInvariant
+      BY <1>1
+         DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+             AsyncRuntimeTypeInvariant, AsyncDeferredTypeInvariant,
+             AsyncTransportTypeInvariant,
+             AsyncRuntimeScalarTypeInvariant, TypeInvariant
+    <2>6. /\ AsyncItemTyped(DrainItem)
+           /\ DrainItem.envelope.recipient = node
+           /\ DrainItem.source = DrainSource
+      BY <2>1, <2>4, <2>5, SelectedIngressItemIsTyped,
+         SelectedIngressItemHasLaneOwnership
+         DEF DrainItem, SelectedIngressItemAt, DrainLaneIndex,
+             DrainSource
+    <2>7. /\ AsyncCandidateTyped(Candidate)
+           /\ Candidate.node = node
+           /\ Candidate.class # "Completion"
+      BY <2>1, <2>6, TypedIngressDeliveryCandidateFacts DEF Candidate
+    <2>8. CommitAccepted
+             => /\ AsyncItemTyped(DiscoveredItem)
+                /\ AsyncCandidateTyped(CommitCandidate)
+                /\ CommitCandidate.node = node
+                /\ CommitCandidate.class # "Completion"
+      BY <2>1, <2>6,
+         TypedCommitCertificateResponseCandidateFacts
+         DEF CommitAccepted, CommitCandidate, DiscoveredItem,
+             CommitCertificateResponseAuthorized
+    <2>9. AsyncRuntimeScalarTypeInvariant'
+      <3>1. /\ UNCHANGED asyncNextCommandClass
+             /\ UNCHANGED <<asyncNow, asyncFifoOwed,
+                            asyncTimeoutEmitted>>
+             /\ \/ asyncCommandQueues' = asyncCommandQueues
+                \/ asyncCommandQueues' =
+                     [asyncCommandQueues EXCEPT
+                        ![Candidate.node] = Append(@, Candidate)]
+                \/ /\ CommitAccepted
+                      /\ asyncCommandQueues' =
+                           [asyncCommandQueues EXCEPT
+                              ![CommitCandidate.node] =
+                                Append(@, CommitCandidate)]
+        BY <2>2, DrainFairIngressRuntimeFrame
+           DEF SelectedDrainItem, SelectedDrainCandidate,
+               SelectedDrainCommitCandidate, DrainIndex, DrainItem,
+               Candidate, CommitCandidate, CommitAccepted
+      <3>2. /\ UNCHANGED asyncNextCommandClass
+             /\ UNCHANGED <<asyncNow, asyncFifoOwed,
+                            asyncTimeoutEmitted>>
+             /\ \/ asyncCommandQueues' = asyncCommandQueues
+                \/ asyncCommandQueues' =
+                     [asyncCommandQueues EXCEPT
+                        ![node] = Append(@, Candidate)]
+                \/ /\ CommitAccepted
+                      /\ asyncCommandQueues' =
+                           [asyncCommandQueues EXCEPT
+                              ![node] = Append(@, CommitCandidate)]
+        BY <2>7, <2>8, <3>1, Zenon
+      <3>3. \/ asyncCommandQueues' = asyncCommandQueues
+             \/ \E admitted:
+                  /\ AsyncCandidateTyped(admitted)
+                  /\ admitted.node = node
+                  /\ asyncCommandQueues' =
+                       [asyncCommandQueues EXCEPT
+                          ![node] = Append(@, admitted)]
+        BY <2>7, <2>8, <3>2, Zenon
+      <3> QED BY <1>1, <2>1, <2>2, <2>5, <3>2, <3>3,
+           IngressSelectedPreservesRuntimeScalarType
+    <2>10. AsyncCausalTypeInvariant'
+      BY <2>2, <2>5, AsyncCausalTypeStutter DEF LeaveCausalQueues
+    <2>11. AsyncDeferredTypeInvariant'
+      <3>1. /\ UNCHANGED AsyncDeferredTopologyTypeVars
+             /\ UNCHANGED <<asyncDeferredCompletionQueues,
+                            asyncDeferredProgressQueues,
+                            asyncDeferredNormalQueues>>
+        BY <2>2, Isa
+           DEF AsyncDeferredVars, AsyncDeferredTopologyTypeVars
+      <3> QED BY <2>5, <3>1,
+           AsyncDeferredTopologyTypeStutter,
+           AsyncDeferredContentTypeStutter
+           DEF AsyncDeferredTypeInvariant
+    <2>12. AsyncIngressTypeInvariant'
+      BY <2>1, <2>2, <2>4, <2>5,
+         PopSelectedIngressPreservesIngressType
+    <2>13. AsyncIoTypeInvariant'
+      <3>1. CASE ServeAccepted
+        <4>1. /\ CanEnqueueIoClass(node, "Serve")
+               /\ asyncIoQueues' =
+                    [asyncIoQueues EXCEPT
+                       ![node] = Append(
+                         @, AsyncIoCertifiedServeJob(Candidate))]
+               /\ UNCHANGED <<asyncOutstandingWork,
+                               asyncIoReadyCompletions,
+                               asyncLocalReadyCompletions,
+                               asyncNextCompletionSource,
+                               asyncIoControlAvailable,
+                               asyncCommandQueues,
+                               asyncDeferredCompletionQueues>>
+          BY <1>1, <2>2, <2>4, <3>1, Isa
+             DEF IngressItemCanDrain, DrainItem,
+                 Candidate, ServeAccepted, DrainFairIngressSelected,
+                 AsyncDeferredVars
+        <4> QED BY <1>1, <2>1, <2>5, <2>6, <4>1,
+             AppendTypedServeJobPreservesIoType
+             DEF ServeAccepted
+      <3>2. CASE CertifiedAccepted
+        <4>1. /\ AsyncCandidateTyped(CertifiedCandidate)
+               /\ CertifiedCandidate.node = node
+               /\ CertifiedCandidate.class = "Completion"
+          BY <2>1, <2>6, TypedCertifiedResponseCandidateFacts
+             DEF CertifiedAccepted, CertifiedCandidate,
+                 CertifiedResponseAuthorized
+        <4>2. /\ ~CandidateInFlight(CertifiedCandidate)
+               /\ AsyncCompletionLoad(node) < AsyncIoWorkCapacity
+          BY <2>4, <3>2, Isa
+             DEF IngressItemCanDrain, DrainItem,
+                 CertifiedAccepted, CertifiedCandidate,
+                 CertifiedResponseAuthorized
+        <4>3. /\ asyncLocalReadyCompletions' =
+                    [asyncLocalReadyCompletions EXCEPT
+                       ![node] = Append(@, CertifiedCandidate)]
+               /\ asyncOutstandingWork' =
+                    [asyncOutstandingWork EXCEPT
+                       ![node] = @ \cup {CertifiedCandidate}]
+               /\ UNCHANGED <<asyncCommandQueues, asyncIoQueues,
+                               asyncIoReadyCompletions,
+                               asyncNextCompletionSource,
+                               asyncIoControlAvailable,
+                               asyncDeferredCompletionQueues>>
+          BY <1>1, <2>2, <3>2, Isa
+             DEF DrainFairIngressSelected, DrainIndex, DrainItem,
+                 CertifiedAccepted, CertifiedCandidate,
+                 AsyncDeferredVars
+        <4> QED BY <1>1, <2>1, <4>1, <4>2, <4>3,
+             AdmitFreshLocalCompletionPreservesIoType
+      <3>3. CASE CommitAccepted
+        <4>1. CommitCandidate.class = "Progress"
+          BY CommitCertificateResponseCandidateHasProgressClass
+             DEF CommitCandidate
+        <4>2. /\ CanEnqueueClass(node, "Progress")
+               /\ asyncCommandQueues' =
+                    [asyncCommandQueues EXCEPT
+                       ![node] = Append(@, CommitCandidate)]
+               /\ UNCHANGED <<AsyncIoVars,
+                               asyncDeferredCompletionQueues>>
+          BY <1>1, <2>2, <2>4, <3>3, Isa
+             DEF IngressItemCanDrain, DrainItem,
+                 CommitAccepted, CommitCandidate,
+                 DrainFairIngressSelected, EnqueueCandidate,
+                 AsyncDeferredVars
+        <4>3. /\ AsyncCandidateTyped(CommitCandidate)
+               /\ CommitCandidate.node = node
+               /\ CommitCandidate.class # "Completion"
+               /\ CanEnqueueClass(node, CommitCandidate.class)
+          BY <2>8, <3>3, <4>1, <4>2, SMT
+        <4> QED BY <1>1, <2>1, <4>2, <4>3,
+             EnqueueNonCompletionCandidatePreservesIoType
+      <3>4. CASE OrdinaryAccepted
+        <4>1. CASE Candidate \in QueuedCandidates
+          <5>1. UNCHANGED <<asyncCommandQueues, AsyncIoVars,
+                             asyncDeferredCompletionQueues>>
+            BY <1>1, <2>2, <3>4, <4>1, Isa
+               DEF DrainFairIngressSelected, DrainIndex, DrainItem,
+                   OrdinaryAccepted, Candidate, AsyncDeferredVars
+          <5> QED BY <2>5, <5>1,
+               SchedulerIoStutterPreservesIoType
+        <4>2. CASE Candidate \notin QueuedCandidates
+          <5>1. /\ CanEnqueueClass(node, Candidate.class)
+                 /\ asyncCommandQueues' =
+                      [asyncCommandQueues EXCEPT
+                         ![node] = Append(@, Candidate)]
+                 /\ UNCHANGED <<AsyncIoVars,
+                                 asyncDeferredCompletionQueues>>
+            BY <1>1, <2>2, <2>4, <3>4, <4>2, Isa
+               DEF IngressItemCanDrain, DrainItem,
+                   OrdinaryAccepted, Candidate,
+                   DrainFairIngressSelected, EnqueueCandidate,
+                   AsyncDeferredVars
+          <5> QED BY <1>1, <2>1, <2>7, <5>1,
+               EnqueueNonCompletionCandidatePreservesIoType
+        <4> QED BY <4>1, <4>2
+      <3>5. CASE ~(ServeAccepted \/ CertifiedAccepted \/
+                     CommitAccepted \/ OrdinaryAccepted)
+        <4>1. UNCHANGED <<asyncCommandQueues, AsyncIoVars,
+                           asyncDeferredCompletionQueues>>
+          BY <1>1, <2>2, <3>5, Isa
+             DEF DrainFairIngressSelected, DrainIndex, DrainItem,
+                 ServeAccepted, CertifiedAccepted, CommitAccepted,
+                 OrdinaryAccepted, AsyncDeferredVars
+        <4> QED BY <2>5, <4>1,
+             SchedulerIoStutterPreservesIoType
+      <3> QED BY <3>1, <3>2, <3>3, <3>4, <3>5
+    <2>14. AsyncTransportContentTypeInvariant'
+      <3>1. CASE CertifiedAccepted
+        <4>1. /\ asyncSentItems' = asyncSentItems \cup {}
+               /\ asyncActiveRequests' =
+                    asyncActiveRequests \ MatchingCertifiedRequests(DrainItem)
+               /\ asyncRetainedControl' = asyncRetainedControl
+               /\ UNCHANGED <<context, asyncTransport, asyncHeldChunks>>
+          BY <1>1, <2>2, <3>1, Isa
+             DEF DrainFairIngressSelected, DrainIndex, DrainItem,
+                 CertifiedAccepted, vars
+        <4>2. /\ IsFiniteSet({})
+               /\ \A item \in {}: AsyncItemTyped(item)
+          BY FS_EmptySet
+        <4> QED BY <2>5, <4>1, <4>2,
+             RemoveRequestsAndAddSentPreservesTransportContentType
+      <3>2. CASE CommitAccepted
+        <4>1. /\ asyncSentItems' =
+                    asyncSentItems \cup {DiscoveredItem}
+               /\ asyncActiveRequests' =
+                    asyncActiveRequests \
+                      MatchingCommitCertificateRequests(DrainItem)
+               /\ asyncRetainedControl' = asyncRetainedControl
+               /\ UNCHANGED <<context, asyncTransport, asyncHeldChunks>>
+          BY <1>1, <2>2, <3>2, Isa
+             DEF DrainFairIngressSelected, DrainIndex, DrainItem,
+                 CommitAccepted, DiscoveredItem, vars
+        <4>2. /\ IsFiniteSet({DiscoveredItem})
+               /\ \A item \in {DiscoveredItem}: AsyncItemTyped(item)
+          BY <2>8, <3>2, FS_Singleton
+        <4> QED BY <2>5, <4>1, <4>2,
+             RemoveRequestsAndAddSentPreservesTransportContentType
+      <3>3. CASE ~(CertifiedAccepted \/ CommitAccepted)
+        <4>1. UNCHANGED AsyncTransportContentTypeVars
+          BY <1>1, <2>2, <3>3, Isa
+             DEF DrainFairIngressSelected, DrainIndex, DrainItem,
+                 CertifiedAccepted, CommitAccepted,
+                 AsyncTransportContentTypeVars, vars
+        <4> QED BY <2>5, <4>1,
+             AsyncTransportContentTypeStutter
+      <3> QED BY <3>1, <3>2, <3>3
+    <2>15. /\ RunnerServiceFrame(node)
+            /\ UNCHANGED <<asyncOutstandingTags, asyncNodeDeadlines,
+                           asyncRetransmitDeadlines>>
+      BY <1>1, <2>2, Isa
+         DEF DrainFairIngressSelected, RunnerServiceFrame, vars
+    <2>16. AsyncTransportClockTypeInvariant'
+      BY <2>1, <2>5, <2>15,
+         RunnerServiceFramePreservesClockType
+    <2> QED BY <2>9, <2>10, <2>11, <2>12, <2>13, <2>14, <2>16
+         DEF AsyncSchedulerTypeInvariant, AsyncRuntimeTypeInvariant,
+             AsyncDeferredTypeInvariant, AsyncTransportTypeInvariant
+  <1> QED BY <1>1
+
+THEOREM IngressAdmissionRunnerPreservesSchedulerType ==
+  \A node \in AsyncCurrentResponsiveVoters:
+    /\ AsyncTypeInvariant
+    /\ RunNode(node)
+    /\ IngressDrainStep(node)
+    => AsyncSchedulerTypeInvariant'
+PROOF
+  <1>1. ASSUME NEW node \in AsyncCurrentResponsiveVoters,
+                AsyncTypeInvariant,
+                RunNode(node),
+                IngressDrainStep(node)
+         PROVE AsyncSchedulerTypeInvariant'
+    <2>1. CASE asyncRunnerBudget[node] > 0
+                   /\ asyncIngressReady[node] # <<>>
+                   /\ DrainableIngressIndices(node) # {}
+      BY <1>1, <2>1, IngressDrainRunnerPreservesSchedulerType
+    <2>2. CASE ~(asyncRunnerBudget[node] > 0
+                    /\ asyncIngressReady[node] # <<>>
+                    /\ DrainableIngressIndices(node) # {})
+      BY <1>1, <2>2, IngressPhaseAdvancePreservesSchedulerType
+    <2> QED BY <2>1, <2>2
+  <1> QED BY <1>1
+
+THEOREM CausalCandidateFromTypedCommand ==
+  \A command, commandClass, kind:
+    /\ AsyncTypeInvariant
+    /\ AsyncCandidateTyped(command)
+    /\ commandClass \in AsyncCommandClasses
+    /\ kind \in AsyncWorkKinds
+    => /\ AsyncCandidateTyped(
+             CausalCandidate(commandClass, kind, command))
+       /\ CausalCandidate(commandClass, kind, command).node = command.node
+PROOF
+  <1>1. ASSUME NEW command, NEW commandClass, NEW kind,
+                AsyncTypeInvariant,
+                AsyncCandidateTyped(command),
+                commandClass \in AsyncCommandClasses,
+                kind \in AsyncWorkKinds
+         PROVE /\ AsyncCandidateTyped(
+                      CausalCandidate(commandClass, kind, command))
+               /\ CausalCandidate(commandClass, kind, command).node =
+                    command.node
+    <2>1. /\ context.height \in Heights
+           /\ command.node \in ValidatorIds
+           /\ command.view \in Views
+           /\ command.subject \in SubjectOrNone
+      BY <1>1 DEF AsyncTypeInvariant, TypeInvariant,
+                   AsyncCandidateTyped
+    <2>2. /\ DOMAIN CausalCandidate(commandClass, kind, command) =
+                    {"class", "kind", "node", "height", "view",
+                     "subject", "item"}
+           /\ CausalCandidate(commandClass, kind, command).class =
+                commandClass
+           /\ CausalCandidate(commandClass, kind, command).kind = kind
+           /\ CausalCandidate(commandClass, kind, command).node =
+                command.node
+           /\ CausalCandidate(commandClass, kind, command).height =
+                context.height
+           /\ CausalCandidate(commandClass, kind, command).view =
+                command.view
+           /\ CausalCandidate(commandClass, kind, command).subject =
+                command.subject
+           /\ CausalCandidate(commandClass, kind, command).item =
+                NoAsyncItem
+      BY DEF CausalCandidate, NoItemCandidate, AsyncCandidate
+    <2> QED BY <1>1, <2>1, <2>2 DEF AsyncCandidateTyped
+  <1> QED BY <1>1
+
+THEOREM NonInstallCommandSuccessorsTypedAndOwned ==
+  \A command:
+    /\ AsyncTypeInvariant
+    /\ AsyncCandidateTyped(command)
+    /\ command.kind # "PersistInstallTC"
+    => /\ AsyncQueueTyped(CommandSuccessors(command))
+       /\ AsyncCausalQueueOwnership(
+            command.node, CommandSuccessors(command))
+BY CausalCandidateFromTypedCommand, SMTT(120)
+   DEF CommandSuccessors, RetainedBodyRebindCandidate,
+       AsyncQueueTyped, AsyncCausalQueueOwnership,
+       AsyncCommandClasses, AsyncWorkKinds, AsyncReducerKinds,
+       SequenceSet
+
+THEOREM ExecutedInstallSuccessorIsTypedAndOwned ==
+  \A command:
+    /\ StrongInductiveInvariant
+    /\ AsyncTypeInvariant
+    /\ AsyncCandidateTyped(command)
+    /\ command.kind = "PersistInstallTC"
+    /\ ExecuteCommand(command)
+    => LET successor ==
+             NoItemCandidate("Normal", "AssembleBody", command.node,
+                             command.view + 1,
+                             AsyncProposalSubject(command.node))
+       IN /\ AsyncCandidateTyped(successor)
+          /\ successor.node = command.node
+PROOF
+  <1>1. ASSUME NEW command,
+                StrongInductiveInvariant,
+                AsyncTypeInvariant,
+                AsyncCandidateTyped(command),
+                command.kind = "PersistInstallTC",
+                ExecuteCommand(command)
+         PROVE LET successor ==
+                     NoItemCandidate(
+                       "Normal", "AssembleBody", command.node,
+                       command.view + 1,
+                       AsyncProposalSubject(command.node))
+               IN /\ AsyncCandidateTyped(successor)
+                  /\ successor.node = command.node
+    <2> DEFINE Successor ==
+           NoItemCandidate("Normal", "AssembleBody", command.node,
+                           command.view + 1,
+                           AsyncProposalSubject(command.node))
+    <2>1. /\ TypeInvariant
+           /\ PendingCertificateWritesAuthorized
+           /\ context.height \in Heights
+           /\ command.node \in ValidatorIds
+      BY <1>1
+         DEF StrongInductiveInvariant, Safety,
+             ReducerProvenanceInvariant, AsyncTypeInvariant,
+             TypeInvariant, AsyncCandidateTyped
+    <2>2. \E request \in pendingInstallTC:
+             /\ command.node = request.node
+             /\ command.view = request.tc.view
+             /\ PersistInstallTC(request)
+      BY <1>1, Isa
+         DEF ExecuteCommand, ExecutePersistInstall
+    <2>3. PICK request \in pendingInstallTC:
+             /\ command.node = request.node
+             /\ command.view = request.tc.view
+             /\ PersistInstallTC(request)
+      BY <2>2
+    <2>4. command.view + 1 \in Views
+      BY <2>1, <2>3 DEF PendingCertificateWritesAuthorized
+    <2>5. AsyncProposalSubject(command.node) \in SubjectOrNone
+      <3>1. AsyncCausalCoreTypingFacts
+        BY <2>1, CoreTypeImpliesCausalTypingFacts
+      <3>2. CASE highestRank[command.node] = NoRank
+        BY <3>1 DEF AsyncCausalCoreTypingFacts, AsyncProposalSubject
+      <3>3. CASE highestRank[command.node] # NoRank
+        BY <2>1, <3>1, <3>3, SMT
+           DEF AsyncCausalCoreTypingFacts, AsyncProposalSubject
+      <3> QED BY <3>2, <3>3
+    <2>6. /\ DOMAIN Successor =
+                    {"class", "kind", "node", "height", "view",
+                     "subject", "item"}
+           /\ Successor.class \in AsyncCommandClasses
+           /\ Successor.kind \in AsyncWorkKinds
+           /\ Successor.node = command.node
+           /\ Successor.height = context.height
+           /\ Successor.view = command.view + 1
+           /\ Successor.subject = AsyncProposalSubject(command.node)
+           /\ Successor.item = NoAsyncItem
+      BY Isa
+         DEF Successor, NoItemCandidate, AsyncCandidate,
+             AsyncCommandClasses, AsyncWorkKinds, AsyncReducerKinds
+    <2> QED BY <2>1, <2>4, <2>5, <2>6
+         DEF Successor, AsyncCandidateTyped
+  <1> QED BY <1>1
+
+THEOREM ExecutedCommandSuccessorsTypedAndOwned ==
+  \A command:
+    /\ StrongInductiveInvariant
+    /\ AsyncTypeInvariant
+    /\ AsyncCandidateTyped(command)
+    /\ ExecuteCommand(command)
+    => /\ AsyncQueueTyped(CommandSuccessors(command))
+       /\ AsyncCausalQueueOwnership(
+            command.node, CommandSuccessors(command))
+PROOF
+  <1>1. ASSUME NEW command,
+                StrongInductiveInvariant,
+                AsyncTypeInvariant,
+                AsyncCandidateTyped(command),
+                ExecuteCommand(command)
+         PROVE /\ AsyncQueueTyped(CommandSuccessors(command))
+               /\ AsyncCausalQueueOwnership(
+                    command.node, CommandSuccessors(command))
+    <2>1. CASE command.kind # "PersistInstallTC"
+      BY <1>1, <2>1, NonInstallCommandSuccessorsTypedAndOwned
+    <2>2. CASE command.kind = "PersistInstallTC"
+      <3> DEFINE Successor ==
+             NoItemCandidate("Normal", "AssembleBody", command.node,
+                             command.view + 1,
+                             AsyncProposalSubject(command.node))
+      <3>1. /\ AsyncCandidateTyped(Successor)
+             /\ Successor.node = command.node
+        BY <1>1, <2>2, ExecutedInstallSuccessorIsTypedAndOwned
+           DEF Successor
+      <3>2. CommandSuccessors(command) = <<Successor>>
+        BY <2>2 DEF CommandSuccessors, Successor
+      <3>3. /\ AsyncQueueTyped(<<Successor>>)
+             /\ AsyncCausalQueueOwnership(command.node, <<Successor>>)
+        BY <3>1, TypedCandidateFormsTypedSingleton,
+           SingletonSequenceFacts, SMT
+           DEF AsyncCausalQueueOwnership, SequenceSet
+      <3> QED BY <3>2, <3>3
+    <2> QED BY <2>1, <2>2
+  <1> QED BY <1>1
+
+THEOREM TimeoutCausalSuccessorsTypedAndOwned ==
+  \A node \in ValidatorIds:
+    AsyncTypeInvariant
+      => /\ AsyncCandidateTyped(TimeoutCausalCommand(node))
+         /\ AsyncQueueTyped(
+              CommandSuccessors(TimeoutCausalCommand(node)))
+         /\ AsyncCausalQueueOwnership(
+              node, CommandSuccessors(TimeoutCausalCommand(node)))
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds,
+                AsyncTypeInvariant
+         PROVE /\ AsyncCandidateTyped(TimeoutCausalCommand(node))
+               /\ AsyncQueueTyped(
+                    CommandSuccessors(TimeoutCausalCommand(node)))
+               /\ AsyncCausalQueueOwnership(
+                    node, CommandSuccessors(TimeoutCausalCommand(node)))
+    <2>1. /\ TypeInvariant
+           /\ context.height \in Heights
+           /\ nodeView[node] \in Views
+           /\ highestSubject[node] \in SubjectOrNone
+      BY <1>1, CoreTypeImpliesCausalTypingFacts, SMT
+         DEF AsyncTypeInvariant, AsyncCausalCoreTypingFacts
+    <2>2. /\ AsyncCandidateTyped(TimeoutCausalCommand(node))
+           /\ TimeoutCausalCommand(node).node = node
+           /\ TimeoutCausalCommand(node).kind = "BeginTimeout"
+      BY <2>1, Isa
+         DEF TimeoutCausalCommand, NoItemCandidate, AsyncCandidate,
+             AsyncCandidateTyped, AsyncCommandClasses,
+             AsyncWorkKinds, AsyncReducerKinds
+    <2>3. TimeoutCausalCommand(node).kind # "PersistInstallTC"
+      BY <2>2
+    <2>4. /\ AsyncQueueTyped(
+                  CommandSuccessors(TimeoutCausalCommand(node)))
+           /\ AsyncCausalQueueOwnership(
+                TimeoutCausalCommand(node).node,
+                CommandSuccessors(TimeoutCausalCommand(node)))
+      BY <1>1, <2>2, <2>3,
+         NonInstallCommandSuccessorsTypedAndOwned
+    <2> QED BY <2>2, <2>4
+  <1> QED BY <1>1
+
+THEOREM FunctionalConcatUpdateAtKey ==
+  \A mapping, key, sequence:
+    key \in DOMAIN mapping
+      => [mapping EXCEPT ![key] = @ \o sequence][key]
+           = mapping[key] \o sequence
+BY Isa
+
+THEOREM AppendOwnedCausalSuccessorsPreservesCausalType ==
+  \A node \in ValidatorIds:
+    \A successors:
+      /\ AsyncCausalTypeInvariant
+      /\ AsyncQueueTyped(successors)
+      /\ AsyncCausalQueueOwnership(node, successors)
+      /\ asyncCausalQueues' =
+           [asyncCausalQueues EXCEPT ![node] = @ \o successors]
+      => AsyncCausalTypeInvariant'
+BY ConcatProperties, RangeConcatenation,
+   FunctionalConcatUpdateAtKey, FunctionalUpdateAwayFromKey,
+   SMTT(120)
+   DEF AsyncCausalTypeInvariant, AsyncCausalQueueOwnership,
+       AsyncQueueTyped, SequenceSet
+
+THEOREM NextCommandClassCycleFacts ==
+  \A commandClass \in AsyncCommandClasses:
+    /\ NextCommandClass(commandClass) \in AsyncCommandClasses
+    /\ NextCommandClass(NextCommandClass(commandClass))
+         \in AsyncCommandClasses
+    /\ {commandClass, NextCommandClass(commandClass),
+         NextCommandClass(NextCommandClass(commandClass))}
+         = AsyncCommandClasses
+BY SMT DEF NextCommandClass, AsyncCommandClasses
+
+THEOREM SelectedCommandClassFacts ==
+  \A node \in ValidatorIds:
+    /\ AsyncRuntimeScalarTypeInvariant
+    /\ NodeQueueNonempty(node)
+    => /\ SelectedCommandClass(node) \in AsyncCommandClasses
+       /\ CommandClassIndices(node, SelectedCommandClass(node)) # {}
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds,
+                AsyncRuntimeScalarTypeInvariant,
+                NodeQueueNonempty(node)
+         PROVE /\ SelectedCommandClass(node) \in AsyncCommandClasses
+               /\ CommandClassIndices(
+                    node, SelectedCommandClass(node)) # {}
+    <2> DEFINE First == asyncNextCommandClass[node]
+    <2> DEFINE Second == NextCommandClass(First)
+    <2> DEFINE Third == NextCommandClass(Second)
+    <2>1. /\ First \in AsyncCommandClasses
+           /\ Second \in AsyncCommandClasses
+           /\ Third \in AsyncCommandClasses
+           /\ {First, Second, Third} = AsyncCommandClasses
+      BY <1>1, NextCommandClassCycleFacts, SMT
+         DEF AsyncRuntimeScalarTypeInvariant, First, Second, Third
+    <2>2. /\ 1 \in 1..Len(asyncCommandQueues[node])
+           /\ asyncCommandQueues[node][1].class \in AsyncCommandClasses
+      BY <1>1, SMT
+         DEF AsyncRuntimeScalarTypeInvariant, NodeQueueNonempty,
+             AsyncQueueTyped, AsyncCandidateTyped
+    <2>3. \/ CommandClassIndices(node, First) # {}
+           \/ CommandClassIndices(node, Second) # {}
+           \/ CommandClassIndices(node, Third) # {}
+      BY <2>1, <2>2, SMT DEF CommandClassIndices
+    <2> QED BY <2>1, <2>3, SMT
+         DEF SelectedCommandClass, First, Second, Third
+  <1> QED BY <1>1
+
+NaturalIndexBelongs(indices, index) == index \in indices
+
+THEOREM NonemptyNaturalSetHasLeast ==
+  \A indices:
+    /\ indices # {}
+    /\ indices \subseteq Nat
+    => \E least \in indices:
+         \A other \in indices: least <= other
+PROOF
+  <1>1. ASSUME NEW indices,
+                indices # {},
+                indices \subseteq Nat
+         PROVE \E least \in indices:
+                 \A other \in indices: least <= other
+    <2>1. PICK witness \in indices: TRUE
+      BY <1>1, FS_EmptySet, Zenon
+    <2>2. witness \in Nat
+      BY <1>1, <2>1
+    <2>3. NaturalIndexBelongs(indices, witness)
+      BY <2>1 DEF NaturalIndexBelongs
+    <2>4. \E least \in Nat:
+             /\ NaturalIndexBelongs(indices, least)
+             /\ \A prior \in 0..(least - 1):
+                  ~NaturalIndexBelongs(indices, prior)
+      BY <2>2, <2>3, SmallestNatural
+    <2>5. PICK least \in Nat:
+             /\ NaturalIndexBelongs(indices, least)
+             /\ \A prior \in 0..(least - 1):
+                  ~NaturalIndexBelongs(indices, prior)
+      BY <2>4
+    <2>6. \A other \in indices: least <= other
+      BY <1>1, <2>5, SMT DEF NaturalIndexBelongs
+    <2> QED BY <2>5, <2>6 DEF NaturalIndexBelongs
+  <1> QED BY <1>1
+
+THEOREM FirstCommandClassIndexIsMember ==
+  \A node, commandClass:
+    CommandClassIndices(node, commandClass) # {}
+      => /\ FirstCommandClassIndex(node, commandClass)
+                \in CommandClassIndices(node, commandClass)
+         /\ \A other \in CommandClassIndices(node, commandClass):
+              FirstCommandClassIndex(node, commandClass) <= other
+PROOF
+  <1>1. ASSUME NEW node, NEW commandClass,
+                CommandClassIndices(node, commandClass) # {}
+         PROVE /\ FirstCommandClassIndex(node, commandClass)
+                       \in CommandClassIndices(node, commandClass)
+               /\ \A other \in CommandClassIndices(node, commandClass):
+                    FirstCommandClassIndex(node, commandClass) <= other
+    <2>1. CommandClassIndices(node, commandClass) \subseteq Nat
+      BY SMT DEF CommandClassIndices
+    <2>2. \E least \in CommandClassIndices(node, commandClass):
+             \A other \in CommandClassIndices(node, commandClass):
+               least <= other
+      BY <1>1, <2>1, NonemptyNaturalSetHasLeast
+    <2> QED BY <2>2, Zenon DEF FirstCommandClassIndex
+  <1> QED BY <1>1
+
+THEOREM NextNodeCommandIndexFacts ==
+  \A node \in ValidatorIds:
+    /\ AsyncRuntimeScalarTypeInvariant
+    /\ NodeQueueNonempty(node)
+    => LET index == NextNodeCommandIndex(node)
+       IN /\ index \in 1..Len(asyncCommandQueues[node])
+          /\ asyncCommandQueues[node][index].class
+               = SelectedCommandClass(node)
+          /\ \A other \in CommandClassIndices(
+                           node, SelectedCommandClass(node)):
+               index <= other
+          /\ NextNodeCommand(node) = asyncCommandQueues[node][index]
+          /\ AsyncCandidateTyped(NextNodeCommand(node))
+          /\ NextNodeCommand(node).node = node
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds,
+                AsyncRuntimeScalarTypeInvariant,
+                NodeQueueNonempty(node)
+         PROVE LET index == NextNodeCommandIndex(node)
+               IN /\ index \in 1..Len(asyncCommandQueues[node])
+                  /\ asyncCommandQueues[node][index].class
+                       = SelectedCommandClass(node)
+                  /\ \A other \in CommandClassIndices(
+                                   node, SelectedCommandClass(node)):
+                       index <= other
+                  /\ NextNodeCommand(node)
+                       = asyncCommandQueues[node][index]
+                  /\ AsyncCandidateTyped(NextNodeCommand(node))
+                  /\ NextNodeCommand(node).node = node
+    <2> DEFINE Class == SelectedCommandClass(node)
+    <2> DEFINE Index == NextNodeCommandIndex(node)
+    <2>1. /\ Class \in AsyncCommandClasses
+           /\ CommandClassIndices(node, Class) # {}
+      BY <1>1, SelectedCommandClassFacts DEF Class
+    <2>2. /\ Index \in CommandClassIndices(node, Class)
+           /\ \A other \in CommandClassIndices(node, Class):
+                Index <= other
+      BY <2>1, FirstCommandClassIndexIsMember
+         DEF Index, NextNodeCommandIndex
+    <2>3. /\ Index \in 1..Len(asyncCommandQueues[node])
+           /\ asyncCommandQueues[node][Index].class = Class
+      BY <2>2 DEF CommandClassIndices
+    <2>4. /\ AsyncCandidateTyped(asyncCommandQueues[node][Index])
+           /\ asyncCommandQueues[node][Index].node = node
+      BY <1>1, <2>3, SMT
+         DEF AsyncRuntimeScalarTypeInvariant, AsyncQueueTyped,
+             AsyncCommandQueueOwnership, SequenceSet
+    <2> QED BY <2>2, <2>3, <2>4
+         DEF Index, Class, NextNodeCommandIndex, NextNodeCommand
+  <1> QED BY <1>1
+
+THEOREM SequenceWithoutIndexFacts ==
+  \A sequence, index:
+    /\ sequence \in Seq(Range(sequence))
+    /\ index \in 1..Len(sequence)
+    => LET result == SequenceWithoutIndex(sequence, index)
+       IN /\ result \in Seq(Range(sequence))
+          /\ Len(result) = Len(sequence) - 1
+          /\ DOMAIN result = 1..Len(result)
+          /\ \A resultIndex \in 1..Len(result):
+               result[resultIndex] =
+                 IF resultIndex < index
+                 THEN sequence[resultIndex]
+                 ELSE sequence[resultIndex + 1]
+          /\ Range(result) \subseteq Range(sequence)
+PROOF
+  <1>1. ASSUME NEW sequence, NEW index,
+                sequence \in Seq(Range(sequence)),
+                index \in 1..Len(sequence)
+         PROVE LET result == SequenceWithoutIndex(sequence, index)
+               IN /\ result \in Seq(Range(sequence))
+                  /\ Len(result) = Len(sequence) - 1
+                  /\ DOMAIN result = 1..Len(result)
+                  /\ \A resultIndex \in 1..Len(result):
+                       result[resultIndex] =
+                         IF resultIndex < index
+                         THEN sequence[resultIndex]
+                         ELSE sequence[resultIndex + 1]
+                  /\ Range(result) \subseteq Range(sequence)
+    <2> DEFINE Prefix == SubSeq(sequence, 1, index - 1)
+    <2> DEFINE Suffix == SubSeq(sequence, index + 1, Len(sequence))
+    <2> DEFINE Result == Prefix \o Suffix
+    <2>1. /\ Prefix \in Seq(Range(sequence))
+           /\ Len(Prefix) = index - 1
+           /\ \A prefixIndex \in 1..Len(Prefix):
+                Prefix[prefixIndex] = sequence[prefixIndex]
+      BY <1>1, SubSeqProperties, SMT DEF Prefix
+    <2>2. /\ Suffix \in Seq(Range(sequence))
+           /\ Len(Suffix) = Len(sequence) - index
+           /\ \A suffixIndex \in 1..Len(Suffix):
+                Suffix[suffixIndex] = sequence[index + suffixIndex]
+      BY <1>1, SubSeqProperties, SMT DEF Suffix
+    <2>3. /\ Result \in Seq(Range(sequence))
+           /\ Len(Result) = Len(sequence) - 1
+           /\ DOMAIN Result = 1..Len(Result)
+           /\ \A resultIndex \in 1..Len(Result):
+                Result[resultIndex] =
+                  IF resultIndex < index
+                  THEN sequence[resultIndex]
+                  ELSE sequence[resultIndex + 1]
+      BY <1>1, <2>1, <2>2, ConcatProperties, SMT DEF Result
+    <2>4. Range(Result) \subseteq Range(sequence)
+      BY <2>3, RangeEquality, SMT
+    <2> QED BY <2>3, <2>4
+         DEF Result, SequenceWithoutIndex, Prefix, Suffix
+  <1> QED BY <1>1
+
+THEOREM TypedOwnedSequenceWithoutIndexFacts ==
+  \A node, sequence, index:
+    /\ AsyncQueueTyped(sequence)
+    /\ AsyncCommandQueueOwnership(node, sequence)
+    /\ index \in 1..Len(sequence)
+    => /\ AsyncQueueTyped(SequenceWithoutIndex(sequence, index))
+       /\ AsyncCommandQueueOwnership(
+            node, SequenceWithoutIndex(sequence, index))
+       /\ Len(SequenceWithoutIndex(sequence, index))
+            = Len(sequence) - 1
+PROOF
+  <1>1. ASSUME NEW node, NEW sequence, NEW index,
+                AsyncQueueTyped(sequence),
+                AsyncCommandQueueOwnership(node, sequence),
+                index \in 1..Len(sequence)
+         PROVE /\ AsyncQueueTyped(
+                      SequenceWithoutIndex(sequence, index))
+               /\ AsyncCommandQueueOwnership(
+                    node, SequenceWithoutIndex(sequence, index))
+               /\ Len(SequenceWithoutIndex(sequence, index))
+                    = Len(sequence) - 1
+    <2> DEFINE Result == SequenceWithoutIndex(sequence, index)
+    <2>1. /\ sequence \in Seq(Range(sequence))
+           /\ Result \in Seq(Range(sequence))
+           /\ Len(Result) = Len(sequence) - 1
+           /\ DOMAIN Result = 1..Len(Result)
+           /\ Range(Result) \subseteq Range(sequence)
+      BY <1>1, SequenceWithoutIndexFacts DEF AsyncQueueTyped, Result
+    <2>2. /\ SequenceSet(sequence) = Range(sequence)
+           /\ SequenceSet(Result) = Range(Result)
+      BY <2>1, RangeEquality DEF SequenceSet
+    <2>3. SequenceSet(Result) \subseteq SequenceSet(sequence)
+      BY <2>1, <2>2
+    <2>4. \A candidate \in SequenceSet(Result):
+             AsyncCandidateTyped(candidate)
+      <3>1. ASSUME NEW candidate \in SequenceSet(Result)
+             PROVE AsyncCandidateTyped(candidate)
+        <4>1. candidate \in SequenceSet(sequence)
+          BY <2>3, <3>1
+        <4> QED BY <1>1, <4>1 DEF AsyncQueueTyped
+      <3> QED BY <3>1
+    <2>5. \A candidate \in SequenceSet(Result): candidate.node = node
+      <3>1. ASSUME NEW candidate \in SequenceSet(Result)
+             PROVE candidate.node = node
+        <4>1. candidate \in SequenceSet(sequence)
+          BY <2>3, <3>1
+        <4> QED BY <1>1, <4>1 DEF AsyncCommandQueueOwnership
+      <3> QED BY <3>1
+    <2>6. Result \in Seq(Range(Result))
+      BY <2>1, SeqOfRange
+    <2> QED BY <2>1, <2>4, <2>5, <2>6
+         DEF Result, AsyncQueueTyped, AsyncCommandQueueOwnership,
+             SequenceSet
+  <1> QED BY <1>1
+
+THEOREM SerializedRuntimePreservesScalarType ==
+  \A node \in AsyncCurrentResponsiveVoters:
+    /\ AsyncTypeInvariant
+    /\ RunNode(node)
+    /\ SerializedRuntimeStep(node)
+    => AsyncRuntimeScalarTypeInvariant'
+PROOF
+  <1>1. ASSUME NEW node \in AsyncCurrentResponsiveVoters,
+                AsyncTypeInvariant,
+                RunNode(node),
+                SerializedRuntimeStep(node)
+         PROVE AsyncRuntimeScalarTypeInvariant'
+    <2>1. node \in ValidatorIds
+      BY <1>1, AsyncCurrentResponsiveVotersAreValidators
+         DEF AsyncTypeInvariant
+    <2>2. /\ AsyncRuntimeScalarTypeInvariant
+           /\ DOMAIN asyncCommandQueues = ValidatorIds
+           /\ \A other \in ValidatorIds:
+                /\ AsyncQueueTyped(asyncCommandQueues[other])
+                /\ AsyncCommandQueueOwnership(
+                     other, asyncCommandQueues[other])
+           /\ asyncNextCommandClass
+                \in [ValidatorIds -> AsyncCommandClasses]
+           /\ asyncFifoOwed \in [ValidatorIds -> BOOLEAN]
+           /\ asyncTimeoutEmitted \in [ValidatorIds -> BOOLEAN]
+           /\ asyncRunnerPhase \in
+                [ValidatorIds -> {"Local", "Ingress", "Runtime"}]
+           /\ asyncRunnerBudget \in
+                [ValidatorIds ->
+                  0..(AsyncQueueCapacity + AsyncIngressCapacity)]
+      BY <1>1
+         DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+             AsyncRuntimeTypeInvariant, AsyncRuntimeScalarTypeInvariant
+    <2>3. /\ "Local" \in {"Local", "Ingress", "Runtime"}
+           /\ AsyncQueueCapacity \in
+                0..(AsyncQueueCapacity + AsyncIngressCapacity)
+      BY <2>2, SMT DEF AsyncRuntimeScalarTypeInvariant,
+                         AsyncConfiguration
+    <2>4. /\ asyncRunnerPhase' \in
+                [ValidatorIds -> {"Local", "Ingress", "Runtime"}]
+           /\ asyncRunnerBudget' \in
+                [ValidatorIds ->
+                  0..(AsyncQueueCapacity + AsyncIngressCapacity)]
+      BY <1>1, <2>1, <2>2, <2>3,
+         FunctionalUpdatePreservesType
+         DEF SerializedRuntimeStep
+    <2>5. \/ /\ asyncCommandQueues' = asyncCommandQueues
+                 /\ asyncNextCommandClass' = asyncNextCommandClass
+           \/ /\ NodeQueueNonempty(node)
+                 /\ asyncCommandQueues' =
+                      [asyncCommandQueues EXCEPT
+                         ![node] = SequenceWithoutIndex(
+                           @, NextNodeCommandIndex(node))]
+                 /\ asyncNextCommandClass' =
+                      [asyncNextCommandClass EXCEPT
+                         ![node] = NextCommandClass(
+                           SelectedCommandClass(node))]
+      BY <1>1, Isa
+         DEF SerializedRuntimeStep, RuntimeStep,
+             DirectCommitCertificateDiscoveryStep, DeferredDrainStep,
+             DeferredTagStep, DeferredTimeoutStep,
+             DeferredRetransmitStep, DirectTimeoutStep,
+             DirectRetransmitStep, FifoRuntimeStep, IdleRuntimeStep,
+             RemoveNextNodeCommand, DeferCommand, DiscardCommand,
+             AsyncDeferredVars, vars
+    <2>6. /\ DOMAIN asyncCommandQueues' = ValidatorIds
+           /\ \A other \in ValidatorIds:
+                /\ AsyncQueueTyped(asyncCommandQueues'[other])
+                /\ AsyncCommandQueueOwnership(
+                     other, asyncCommandQueues'[other])
+      <3>1. CASE /\ asyncCommandQueues' = asyncCommandQueues
+                    /\ asyncNextCommandClass' = asyncNextCommandClass
+        BY <2>2, <3>1
+      <3>2. CASE /\ NodeQueueNonempty(node)
+                    /\ asyncCommandQueues' =
+                         [asyncCommandQueues EXCEPT
+                            ![node] = SequenceWithoutIndex(
+                              @, NextNodeCommandIndex(node))]
+                    /\ asyncNextCommandClass' =
+                         [asyncNextCommandClass EXCEPT
+                            ![node] = NextCommandClass(
+                              SelectedCommandClass(node))]
+        <4>1. /\ NextNodeCommandIndex(node)
+                     \in 1..Len(asyncCommandQueues[node])
+               /\ AsyncQueueTyped(
+                    SequenceWithoutIndex(
+                      asyncCommandQueues[node],
+                      NextNodeCommandIndex(node)))
+               /\ AsyncCommandQueueOwnership(
+                    node,
+                    SequenceWithoutIndex(
+                      asyncCommandQueues[node],
+                      NextNodeCommandIndex(node)))
+          BY <2>1, <2>2, <3>2, NextNodeCommandIndexFacts,
+             TypedOwnedSequenceWithoutIndexFacts
+        <4>2. \A other \in ValidatorIds:
+                 /\ AsyncQueueTyped(asyncCommandQueues'[other])
+                 /\ AsyncCommandQueueOwnership(
+                      other, asyncCommandQueues'[other])
+          <5>1. ASSUME NEW other \in ValidatorIds
+                 PROVE /\ AsyncQueueTyped(asyncCommandQueues'[other])
+                       /\ AsyncCommandQueueOwnership(
+                            other, asyncCommandQueues'[other])
+            <6>1. CASE other = node
+              BY <3>2, <4>1, <6>1, Isa
+            <6>2. CASE other # node
+              BY <2>2, <3>2, <5>1, <6>2,
+                 FunctionalUpdateAwayFromKey
+            <6> QED BY <6>1, <6>2
+          <5> QED BY <5>1
+        <4> QED BY <2>2, <3>2, <4>2, Isa
+      <3> QED BY <2>5, <3>1, <3>2
+    <2>7. asyncNextCommandClass'
+              \in [ValidatorIds -> AsyncCommandClasses]
+      <3>1. CASE /\ asyncCommandQueues' = asyncCommandQueues
+                    /\ asyncNextCommandClass' = asyncNextCommandClass
+        BY <2>2, <3>1
+      <3>2. CASE /\ NodeQueueNonempty(node)
+                    /\ asyncCommandQueues' =
+                         [asyncCommandQueues EXCEPT
+                            ![node] = SequenceWithoutIndex(
+                              @, NextNodeCommandIndex(node))]
+                    /\ asyncNextCommandClass' =
+                         [asyncNextCommandClass EXCEPT
+                            ![node] = NextCommandClass(
+                              SelectedCommandClass(node))]
+        <4>1. /\ SelectedCommandClass(node) \in AsyncCommandClasses
+               /\ NextCommandClass(SelectedCommandClass(node))
+                    \in AsyncCommandClasses
+          BY <2>1, <2>2, <3>2, SelectedCommandClassFacts,
+             NextCommandClassCycleFacts
+        <4> QED BY <2>2, <3>2, <4>1,
+             FunctionalUpdatePreservesType
+      <3> QED BY <2>5, <3>1, <3>2
+    <2>8. /\ asyncFifoOwed' \in [ValidatorIds -> BOOLEAN]
+           /\ asyncTimeoutEmitted' \in [ValidatorIds -> BOOLEAN]
+      BY <1>1, <2>1, <2>2,
+         FunctionalUpdatePreservesType, SMTT(120)
+         DEF SerializedRuntimeStep, RuntimeStep,
+             DirectCommitCertificateDiscoveryStep, DeferredDrainStep,
+             DeferredTagStep, DeferredTimeoutStep,
+             DeferredRetransmitStep, DirectTimeoutStep,
+             DirectRetransmitStep, FifoRuntimeStep, IdleRuntimeStep,
+             NodeQueueNonempty, AsyncDeferredVars, vars
+    <2>9. asyncNow' \in Nat
+      BY <1>1, <2>2 DEF RunNode, AsyncRuntimeScalarTypeInvariant
+    <2> QED BY <2>2, <2>4, <2>6, <2>7, <2>8, <2>9
+         DEF AsyncRuntimeScalarTypeInvariant
+  <1> QED BY <1>1
+
+THEOREM NonemptyTypedQueueHeadIsTyped ==
+  \A queue:
+    AsyncQueueTyped(queue) /\ Len(queue) > 0
+      => AsyncCandidateTyped(Head(queue))
+PROOF
+  <1>1. ASSUME NEW queue,
+                AsyncQueueTyped(queue),
+                Len(queue) > 0
+         PROVE AsyncCandidateTyped(Head(queue))
+    <2>1. /\ 1 \in 1..Len(queue)
+           /\ AsyncCandidateTyped(queue[1])
+      BY <1>1, SMT DEF AsyncQueueTyped
+    <2>2. Head(queue) = queue[1]
+      BY <1>1, NonemptySequenceHeadIsFirst DEF AsyncQueueTyped
+    <2> QED BY <2>1, <2>2
+  <1> QED BY <1>1
+
+THEOREM NonemptyOwnedTypedQueueHeadFacts ==
+  \A node, queue:
+    /\ AsyncQueueTyped(queue)
+    /\ AsyncCommandQueueOwnership(node, queue)
+    /\ Len(queue) > 0
+    => /\ AsyncCandidateTyped(Head(queue))
+       /\ Head(queue).node = node
+BY NonemptyTypedQueueHeadIsTyped, NonemptySequenceHeadIsFirst, SMT
+   DEF AsyncQueueTyped, AsyncCommandQueueOwnership, SequenceSet
+
+THEOREM RuntimeSelectedCommandsAreTyped ==
+  \A node \in ValidatorIds:
+    AsyncTypeInvariant
+      => /\ (NodeQueueNonempty(node)
+                => /\ AsyncCandidateTyped(NextNodeCommand(node))
+                   /\ NextNodeCommand(node).node = node)
+         /\ (DeferredQueueNonempty(node)
+                => /\ AsyncCandidateTyped(NextDeferredCommand(node))
+                   /\ NextDeferredCommand(node).node = node)
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds,
+                AsyncTypeInvariant
+         PROVE /\ (NodeQueueNonempty(node)
+                       => /\ AsyncCandidateTyped(NextNodeCommand(node))
+                          /\ NextNodeCommand(node).node = node)
+               /\ (DeferredQueueNonempty(node)
+                       => /\ AsyncCandidateTyped(NextDeferredCommand(node))
+                          /\ NextDeferredCommand(node).node = node)
+    <2>1. /\ AsyncRuntimeScalarTypeInvariant
+           /\ AsyncQueueTyped(asyncCommandQueues[node])
+           /\ AsyncCommandQueueOwnership(
+                node, asyncCommandQueues[node])
+      BY <1>1
+         DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+             AsyncRuntimeTypeInvariant, AsyncRuntimeScalarTypeInvariant
+    <2>2. NodeQueueNonempty(node)
+             => /\ AsyncCandidateTyped(NextNodeCommand(node))
+                /\ NextNodeCommand(node).node = node
+      BY <1>1, <2>1, NextNodeCommandIndexFacts
+    <2>3. /\ AsyncCompletionSequenceTyped(
+                    asyncDeferredCompletionQueues[node])
+           /\ AsyncQueueTyped(asyncDeferredProgressQueues[node])
+           /\ AsyncQueueTyped(asyncDeferredNormalQueues[node])
+           /\ AsyncCommandQueueOwnership(
+                node, asyncDeferredCompletionQueues[node])
+           /\ AsyncCommandQueueOwnership(
+                node, asyncDeferredProgressQueues[node])
+           /\ AsyncCommandQueueOwnership(
+                node, asyncDeferredNormalQueues[node])
+      BY <1>1
+         DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+             AsyncDeferredTypeInvariant,
+             AsyncDeferredContentTypeInvariant
+    <2>4. DeferredQueueNonempty(node)
+             => /\ AsyncCandidateTyped(NextDeferredCommand(node))
+                /\ NextDeferredCommand(node).node = node
+      <3>1. CASE Len(asyncDeferredCompletionQueues[node]) > 0
+        <4>1. AsyncQueueTyped(asyncDeferredCompletionQueues[node])
+          BY <2>3
+             DEF AsyncCompletionSequenceTyped, AsyncQueueTyped
+        <4> QED BY <2>3, <3>1, <4>1,
+             NonemptyOwnedTypedQueueHeadFacts
+             DEF NextDeferredCommand
+      <3>2. CASE Len(asyncDeferredCompletionQueues[node]) = 0
+                   /\ Len(asyncDeferredProgressQueues[node]) > 0
+        BY <2>3, <3>2, NonemptyOwnedTypedQueueHeadFacts
+           DEF NextDeferredCommand
+      <3>3. CASE Len(asyncDeferredCompletionQueues[node]) = 0
+                   /\ Len(asyncDeferredProgressQueues[node]) = 0
+                   /\ Len(asyncDeferredNormalQueues[node]) > 0
+        BY <2>3, <3>3, NonemptyOwnedTypedQueueHeadFacts
+           DEF NextDeferredCommand
+      <3> QED BY <3>1, <3>2, <3>3 DEF DeferredQueueNonempty
+    <2> QED BY <2>2, <2>4
+  <1> QED BY <1>1
+
+ProgressIndexBelongs(indices, index) == index \in indices
+
+THEOREM FirstDominatedProtectedProgressIndexIsMember ==
+  \A node, command:
+    DominatedProtectedProgressIndices(node, command) # {}
+      => FirstProgressIndex(
+           DominatedProtectedProgressIndices(node, command))
+           \in DominatedProtectedProgressIndices(node, command)
+PROOF
+  <1>1. ASSUME NEW node, NEW command,
+                DominatedProtectedProgressIndices(node, command) # {}
+         PROVE FirstProgressIndex(
+                 DominatedProtectedProgressIndices(node, command))
+                 \in DominatedProtectedProgressIndices(node, command)
+    <2>1. PICK witness \in
+                 DominatedProtectedProgressIndices(node, command): TRUE
+      BY <1>1, FS_EmptySet, Zenon
+    <2>2. witness \in Nat
+      BY <2>1, SMT
+         DEF DominatedProtectedProgressIndices,
+             SameProtectedProgressSlotIndices
+    <2>3. ProgressIndexBelongs(
+             DominatedProtectedProgressIndices(node, command), witness)
+      BY <2>1 DEF ProgressIndexBelongs
+    <2>4. \E least \in Nat:
+             /\ ProgressIndexBelongs(
+                  DominatedProtectedProgressIndices(node, command), least)
+             /\ \A prior \in 0..(least - 1):
+                  ~ProgressIndexBelongs(
+                     DominatedProtectedProgressIndices(node, command),
+                     prior)
+      BY <2>2, <2>3, SmallestNatural
+    <2>5. PICK least \in Nat:
+             /\ ProgressIndexBelongs(
+                  DominatedProtectedProgressIndices(node, command), least)
+             /\ \A prior \in 0..(least - 1):
+                  ~ProgressIndexBelongs(
+                     DominatedProtectedProgressIndices(node, command),
+                     prior)
+      BY <2>4
+    <2>6. \A other \in
+                  DominatedProtectedProgressIndices(node, command):
+             least <= other
+      BY <2>5, SMT
+         DEF ProgressIndexBelongs,
+             DominatedProtectedProgressIndices,
+             SameProtectedProgressSlotIndices
+    <2> QED BY <2>5, <2>6, Zenon
+         DEF FirstProgressIndex, ProgressIndexBelongs
+  <1> QED BY <1>1
+
+THEOREM FirstReplaceableUnprotectedProgressIndexIsMember ==
+  \A node:
+    ReplaceableUnprotectedProgressIndices(node) # {}
+      => FirstProgressIndex(ReplaceableUnprotectedProgressIndices(node))
+           \in ReplaceableUnprotectedProgressIndices(node)
+PROOF
+  <1>1. ASSUME NEW node,
+                ReplaceableUnprotectedProgressIndices(node) # {}
+         PROVE FirstProgressIndex(
+                 ReplaceableUnprotectedProgressIndices(node))
+                 \in ReplaceableUnprotectedProgressIndices(node)
+    <2>1. PICK witness \in
+                 ReplaceableUnprotectedProgressIndices(node): TRUE
+      BY <1>1, FS_EmptySet, Zenon
+    <2>2. witness \in Nat
+      BY <2>1, SMT DEF ReplaceableUnprotectedProgressIndices
+    <2>3. ProgressIndexBelongs(
+             ReplaceableUnprotectedProgressIndices(node), witness)
+      BY <2>1 DEF ProgressIndexBelongs
+    <2>4. \E least \in Nat:
+             /\ ProgressIndexBelongs(
+                  ReplaceableUnprotectedProgressIndices(node), least)
+             /\ \A prior \in 0..(least - 1):
+                  ~ProgressIndexBelongs(
+                     ReplaceableUnprotectedProgressIndices(node), prior)
+      BY <2>2, <2>3, SmallestNatural
+    <2>5. PICK least \in Nat:
+             /\ ProgressIndexBelongs(
+                  ReplaceableUnprotectedProgressIndices(node), least)
+             /\ \A prior \in 0..(least - 1):
+                  ~ProgressIndexBelongs(
+                     ReplaceableUnprotectedProgressIndices(node), prior)
+      BY <2>4
+    <2>6. \A other \in ReplaceableUnprotectedProgressIndices(node):
+             least <= other
+      BY <2>5, SMT
+         DEF ProgressIndexBelongs,
+             ReplaceableUnprotectedProgressIndices
+    <2> QED BY <2>5, <2>6, Zenon
+         DEF FirstProgressIndex, ProgressIndexBelongs
+  <1> QED BY <1>1
+
+THEOREM ReplaceOwnedTypedQueueIndexPreservesFacts ==
+  \A node, queue, commandClass, candidate:
+    \A selected \in 1..Len(queue):
+      /\ AsyncQueueTyped(queue)
+      /\ AsyncCommandQueueOwnership(node, queue)
+      /\ \A queued \in SequenceSet(queue):
+           queued.class = commandClass
+      /\ AsyncCandidateTyped(candidate)
+      /\ candidate.node = node
+      /\ candidate.class = commandClass
+      => LET updated == [queue EXCEPT ![selected] = candidate]
+         IN /\ AsyncQueueTyped(updated)
+            /\ AsyncCommandQueueOwnership(node, updated)
+            /\ \A queued \in SequenceSet(updated):
+                 queued.class = commandClass
+            /\ Len(updated) = Len(queue)
+PROOF
+  <1>1. ASSUME NEW node, NEW queue, NEW commandClass, NEW candidate,
+                NEW selected \in 1..Len(queue),
+                AsyncQueueTyped(queue),
+                AsyncCommandQueueOwnership(node, queue),
+                \A queued \in SequenceSet(queue):
+                  queued.class = commandClass,
+                AsyncCandidateTyped(candidate),
+                candidate.node = node,
+                candidate.class = commandClass
+         PROVE LET updated == [queue EXCEPT ![selected] = candidate]
+               IN /\ AsyncQueueTyped(updated)
+                  /\ AsyncCommandQueueOwnership(node, updated)
+                  /\ \A queued \in SequenceSet(updated):
+                       queued.class = commandClass
+                  /\ Len(updated) = Len(queue)
+    <2> DEFINE Updated == [queue EXCEPT ![selected] = candidate]
+    <2>1. selected \in DOMAIN queue
+      BY <1>1 DEF AsyncQueueTyped
+    <2>2. DOMAIN Updated = DOMAIN queue
+      BY <2>1, Isa DEF Updated
+    <2>3. Updated[selected] = candidate
+      BY <2>1, Isa DEF Updated
+    <2>4. \A index \in DOMAIN queue \ {selected}:
+             Updated[index] = queue[index]
+      BY <2>1, Isa DEF Updated
+    <2>5. /\ Updated \in Seq(Range(queue) \cup {candidate})
+           /\ Len(Updated) = Len(queue)
+      BY <1>1, <2>2, <2>3, <2>4, IsASeq, SMT
+         DEF AsyncQueueTyped
+    <2>6. /\ Updated \in Seq(Range(Updated))
+           /\ DOMAIN Updated = 1..Len(Updated)
+      BY <2>2, <2>5, SeqOfRange, LenProperties
+    <2>7. \A index \in 1..Len(Updated):
+             /\ AsyncCandidateTyped(Updated[index])
+             /\ Updated[index].node = node
+             /\ Updated[index].class = commandClass
+      BY <1>1, <2>2, <2>3, <2>4, <2>5, <2>6,
+         RangeEquality, SMT
+         DEF AsyncQueueTyped, AsyncCommandQueueOwnership, SequenceSet
+    <2>8. /\ AsyncQueueTyped(Updated)
+           /\ AsyncCommandQueueOwnership(node, Updated)
+           /\ \A queued \in SequenceSet(Updated):
+                queued.class = commandClass
+      BY <2>6, <2>7, RangeEquality
+         DEF AsyncQueueTyped, AsyncCommandQueueOwnership, SequenceSet
+    <2> QED BY <2>5, <2>8 DEF Updated
+  <1> QED BY <1>1
+
+THEOREM DeferredProgressAfterPreservesOwnedType ==
+  \A node \in ValidatorIds:
+    \A command:
+      /\ AsyncDeferredContentTypeInvariant
+      /\ AsyncCandidateTyped(command)
+      /\ command.node = node
+      /\ command.class = "Progress"
+      => LET updated == DeferredProgressAfter(node, command)
+         IN /\ AsyncQueueTyped(updated)
+            /\ AsyncCommandQueueOwnership(node, updated)
+            /\ \A candidate \in SequenceSet(updated):
+                 candidate.class = "Progress"
+            /\ Len(updated) <= AsyncDeferredProgressCapacity
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds,
+                NEW command,
+                AsyncDeferredContentTypeInvariant,
+                AsyncCandidateTyped(command),
+                command.node = node,
+                command.class = "Progress"
+         PROVE LET updated == DeferredProgressAfter(node, command)
+               IN /\ AsyncQueueTyped(updated)
+                  /\ AsyncCommandQueueOwnership(node, updated)
+                  /\ \A candidate \in SequenceSet(updated):
+                       candidate.class = "Progress"
+                  /\ Len(updated) <= AsyncDeferredProgressCapacity
+    <2> DEFINE Queue == asyncDeferredProgressQueues[node]
+    <2>1. /\ AsyncQueueTyped(Queue)
+           /\ AsyncCommandQueueOwnership(node, Queue)
+           /\ \A candidate \in SequenceSet(Queue):
+                candidate.class = "Progress"
+           /\ Len(Queue) <= AsyncDeferredProgressCapacity
+      BY <1>1 DEF AsyncDeferredContentTypeInvariant, Queue
+    <2>2. CASE command \in SequenceSet(Queue)
+      BY <2>1, <2>2 DEF DeferredProgressAfter, Queue
+    <2>3. CASE /\ command \notin SequenceSet(Queue)
+                 /\ SameProtectedProgressSlotIndices(node, command) = {}
+                 /\ Len(Queue) < AsyncDeferredProgressCapacity
+      <3>1. /\ AsyncQueueTyped(Append(Queue, command))
+             /\ AsyncCommandQueueOwnership(
+                  node, Append(Queue, command))
+        BY <1>1, <2>1, TypedCandidateAppendPreservesQueueType,
+           AppendOwnedCandidatePreservesCommandQueueOwnership
+      <3>2. \A candidate \in SequenceSet(Append(Queue, command)):
+               candidate.class = "Progress"
+        BY <1>1, <2>1, SequenceSetAfterAppend, SMT
+           DEF AsyncQueueTyped
+      <3>3. Len(Append(Queue, command)) <=
+               AsyncDeferredProgressCapacity
+        BY <2>1, <2>3, AppendSequenceFacts, SMT
+           DEF AsyncQueueTyped
+      <3>4. DeferredProgressAfter(node, command) = Append(Queue, command)
+        BY <2>3 DEF DeferredProgressAfter, Queue
+      <3> QED BY <3>1, <3>2, <3>3, <3>4
+    <2>4. CASE /\ command \notin SequenceSet(Queue)
+                 /\ SameProtectedProgressSlotIndices(node, command) # {}
+                 /\ DominatedProtectedProgressIndices(node, command) # {}
+      <3> DEFINE Indices ==
+             DominatedProtectedProgressIndices(node, command)
+      <3> DEFINE Selected == FirstProgressIndex(Indices)
+      <3>1. /\ Indices \subseteq Nat
+             /\ Selected \in Indices
+             /\ Selected \in 1..Len(Queue)
+        BY <2>4, FirstDominatedProtectedProgressIndexIsMember, SMT
+           DEF DominatedProtectedProgressIndices,
+               SameProtectedProgressSlotIndices, Indices, Selected, Queue
+      <3>2. LET updated == [Queue EXCEPT ![Selected] = command]
+             IN /\ AsyncQueueTyped(updated)
+                /\ AsyncCommandQueueOwnership(node, updated)
+                /\ \A candidate \in SequenceSet(updated):
+                     candidate.class = "Progress"
+                /\ Len(updated) = Len(Queue)
+        BY <1>1, <2>1, <3>1,
+           ReplaceOwnedTypedQueueIndexPreservesFacts
+      <3>3. DeferredProgressAfter(node, command) =
+               [Queue EXCEPT ![Selected] = command]
+        BY <2>4 DEF DeferredProgressAfter, Queue, Indices, Selected
+      <3> QED BY <2>1, <3>2, <3>3
+    <2>5. CASE /\ command \notin SequenceSet(Queue)
+                 /\ SameProtectedProgressSlotIndices(node, command) # {}
+                 /\ DominatedProtectedProgressIndices(node, command) = {}
+      <3>1. DeferredProgressAfter(node, command) = Queue
+        BY <2>5 DEF DeferredProgressAfter, Queue
+      <3> QED BY <2>1, <3>1
+    <2>6. CASE /\ command \notin SequenceSet(Queue)
+                 /\ SameProtectedProgressSlotIndices(node, command) = {}
+                 /\ Len(Queue) >= AsyncDeferredProgressCapacity
+                 /\ ReplaceableUnprotectedProgressIndices(node) # {}
+      <3> DEFINE Indices ==
+             ReplaceableUnprotectedProgressIndices(node)
+      <3> DEFINE Selected == FirstProgressIndex(Indices)
+      <3>1. /\ Indices \subseteq Nat
+             /\ Selected \in Indices
+             /\ Selected \in 1..Len(Queue)
+        BY <2>6, FirstReplaceableUnprotectedProgressIndexIsMember, SMT
+           DEF ReplaceableUnprotectedProgressIndices,
+               Indices, Selected, Queue
+      <3>2. LET updated == [Queue EXCEPT ![Selected] = command]
+             IN /\ AsyncQueueTyped(updated)
+                /\ AsyncCommandQueueOwnership(node, updated)
+                /\ \A candidate \in SequenceSet(updated):
+                     candidate.class = "Progress"
+                /\ Len(updated) = Len(Queue)
+        BY <1>1, <2>1, <3>1,
+           ReplaceOwnedTypedQueueIndexPreservesFacts
+      <3>3. DeferredProgressAfter(node, command) =
+               [Queue EXCEPT ![Selected] = command]
+        BY <2>6 DEF DeferredProgressAfter, Queue, Indices, Selected
+      <3> QED BY <2>1, <3>2, <3>3
+    <2>7. CASE /\ command \notin SequenceSet(Queue)
+                 /\ SameProtectedProgressSlotIndices(node, command) = {}
+                 /\ Len(Queue) >= AsyncDeferredProgressCapacity
+                 /\ ReplaceableUnprotectedProgressIndices(node) = {}
+      <3>1. DeferredProgressAfter(node, command) = Queue
+        BY <2>7 DEF DeferredProgressAfter, Queue
+      <3> QED BY <2>1, <3>1
+    <2>8. \/ command \in SequenceSet(Queue)
+           \/ /\ command \notin SequenceSet(Queue)
+                 /\ SameProtectedProgressSlotIndices(node, command) = {}
+                 /\ Len(Queue) < AsyncDeferredProgressCapacity
+           \/ /\ command \notin SequenceSet(Queue)
+                 /\ SameProtectedProgressSlotIndices(node, command) # {}
+                 /\ DominatedProtectedProgressIndices(node, command) # {}
+           \/ /\ command \notin SequenceSet(Queue)
+                 /\ SameProtectedProgressSlotIndices(node, command) # {}
+                 /\ DominatedProtectedProgressIndices(node, command) = {}
+           \/ /\ command \notin SequenceSet(Queue)
+                 /\ SameProtectedProgressSlotIndices(node, command) = {}
+                 /\ Len(Queue) >= AsyncDeferredProgressCapacity
+                 /\ ReplaceableUnprotectedProgressIndices(node) # {}
+           \/ /\ command \notin SequenceSet(Queue)
+                 /\ SameProtectedProgressSlotIndices(node, command) = {}
+                 /\ Len(Queue) >= AsyncDeferredProgressCapacity
+                 /\ ReplaceableUnprotectedProgressIndices(node) = {}
+      BY <2>1, SMT DEF AsyncQueueTyped
+    <2> QED BY <2>2, <2>3, <2>4, <2>5, <2>6, <2>7, <2>8
+  <1> QED BY <1>1
+
+THEOREM OwnedClassQueueTailPreservesFacts ==
+  \A node, queue, commandClass:
+    /\ AsyncQueueTyped(queue)
+    /\ AsyncCommandQueueOwnership(node, queue)
+    /\ \A candidate \in SequenceSet(queue):
+         candidate.class = commandClass
+    /\ Len(queue) > 0
+    => /\ AsyncQueueTyped(Tail(queue))
+       /\ AsyncCommandQueueOwnership(node, Tail(queue))
+       /\ \A candidate \in SequenceSet(Tail(queue)):
+            candidate.class = commandClass
+       /\ Len(Tail(queue)) <= Len(queue)
+BY TypedQueueTailFacts,
+   OwnedTypedQueueTailPreservesCommandQueueOwnership, SMT
+
+THEOREM DeferTypedOwnedCommandPreservesDeferredContentType ==
+  \A command:
+    /\ AsyncDeferredContentTypeInvariant
+    /\ AsyncCandidateTyped(command)
+    /\ DeferCommand(command)
+    => AsyncDeferredContentTypeInvariant'
+BY DeferredProgressAfterPreservesOwnedType,
+   TypedCandidateAppendPreservesQueueType,
+   TypedCompletionAppendPreservesSequenceType,
+   AppendOwnedCandidatePreservesCommandQueueOwnership,
+   SequenceSetAfterAppend, AppendSequenceFacts,
+   FunctionalUpdateAwayFromKey, FunctionalAppendUpdateAtKey,
+   SMTT(120)
+   DEF DeferCommand, AsyncDeferredContentTypeInvariant,
+       AsyncCompletionSequenceTyped, AsyncQueueTyped,
+       AsyncCommandQueueOwnership, SequenceSet
+
+THEOREM RemoveNextDeferredCommandPreservesDeferredContentType ==
+  \A node \in ValidatorIds:
+    /\ AsyncDeferredContentTypeInvariant
+    /\ DeferredQueueNonempty(node)
+    /\ RemoveNextDeferredCommand(node)
+    => AsyncDeferredContentTypeInvariant'
+BY OwnedClassQueueTailPreservesFacts,
+   FunctionalTailUpdateAtKey, FunctionalUpdateAwayFromKey,
+   SMTT(120)
+   DEF AsyncDeferredContentTypeInvariant,
+       AsyncCompletionSequenceTyped, AsyncQueueTyped,
+       AsyncCommandQueueOwnership, DeferredQueueNonempty,
+       RemoveNextDeferredCommand, SequenceSet
+
+THEOREM TypedQueueHeadTailIndexFacts ==
+  \A queue:
+    /\ AsyncQueueTyped(queue)
+    /\ Len(queue) > 0
+    => /\ Head(queue) = queue[1]
+       /\ Len(Tail(queue)) = Len(queue) - 1
+       /\ \A index \in 1..Len(Tail(queue)):
+            Tail(queue)[index] = queue[index + 1]
+PROOF
+  <1>1. ASSUME NEW queue,
+                AsyncQueueTyped(queue),
+                Len(queue) > 0
+         PROVE /\ Head(queue) = queue[1]
+               /\ Len(Tail(queue)) = Len(queue) - 1
+               /\ \A index \in 1..Len(Tail(queue)):
+                    Tail(queue)[index] = queue[index + 1]
+    <2>1. /\ queue \in Seq(Range(queue))
+           /\ queue # <<>>
+      BY <1>1, EmptySeq, SMT DEF AsyncQueueTyped
+    <2> QED BY <2>1, HeadTailProperties,
+                 NonemptySequenceHeadIsFirst
+  <1> QED BY <1>1
+
+TailCompletionIndexShift(queue) ==
+  [index \in AsyncCompletionIndices(queue) \ {1} |-> index - 1]
+
+THEOREM TailCompletionIndexShiftIsBijection ==
+  \A queue:
+    /\ AsyncQueueTyped(queue)
+    /\ Len(queue) > 0
+    => TailCompletionIndexShift(queue)
+         \in Bijection(
+              AsyncCompletionIndices(queue) \ {1},
+              AsyncCompletionIndices(Tail(queue)))
+PROOF
+  <1>1. ASSUME NEW queue,
+                AsyncQueueTyped(queue),
+                Len(queue) > 0
+         PROVE TailCompletionIndexShift(queue)
+                 \in Bijection(
+                      AsyncCompletionIndices(queue) \ {1},
+                      AsyncCompletionIndices(Tail(queue)))
+    <2> DEFINE Old == AsyncCompletionIndices(queue) \ {1}
+    <2> DEFINE New == AsyncCompletionIndices(Tail(queue))
+    <2>1. /\ Len(queue) \in Nat
+           /\ Len(Tail(queue)) = Len(queue) - 1
+           /\ \A index \in 1..Len(Tail(queue)):
+                Tail(queue)[index] = queue[index + 1]
+      BY <1>1, TypedQueueHeadTailIndexFacts, LenProperties
+         DEF AsyncQueueTyped
+    <2>2. /\ Old \subseteq 2..Len(queue)
+           /\ New \subseteq 1..Len(Tail(queue))
+      BY <1>1, <2>1, SMT DEF AsyncCompletionIndices, Old, New
+    <2>3. \A index \in Old: index - 1 \in New
+      BY <1>1, <2>1, <2>2, SMT
+         DEF AsyncCompletionIndices, Old, New
+    <2>4. \A index \in New: index + 1 \in Old
+      BY <1>1, <2>1, <2>2, SMT
+         DEF AsyncCompletionIndices, Old, New
+    <2>5. TailCompletionIndexShift(queue) \in [Old -> New]
+      BY <2>3, Isa DEF TailCompletionIndexShift, Old
+    <2>6. TailCompletionIndexShift(queue) \in Injection(Old, New)
+      BY <2>2, <2>5, SMT
+         DEF Injection, TailCompletionIndexShift, Old
+    <2>7. TailCompletionIndexShift(queue) \in Surjection(Old, New)
+      BY <2>4, <2>5, SMT
+         DEF Surjection, TailCompletionIndexShift, Old
+    <2> QED BY <2>6, <2>7 DEF Bijection
+  <1> QED BY <1>1
+
+THEOREM CompletionCountAfterTypedQueueTail ==
+  \A queue:
+    /\ AsyncQueueTyped(queue)
+    /\ Len(queue) > 0
+    => Cardinality(AsyncCompletionIndices(Tail(queue))) =
+         IF Head(queue).class = "Completion"
+         THEN Cardinality(AsyncCompletionIndices(queue)) - 1
+         ELSE Cardinality(AsyncCompletionIndices(queue))
+PROOF
+  <1>1. ASSUME NEW queue,
+                AsyncQueueTyped(queue),
+                Len(queue) > 0
+         PROVE Cardinality(AsyncCompletionIndices(Tail(queue))) =
+                 IF Head(queue).class = "Completion"
+                 THEN Cardinality(AsyncCompletionIndices(queue)) - 1
+                 ELSE Cardinality(AsyncCompletionIndices(queue))
+    <2> DEFINE Old == AsyncCompletionIndices(queue)
+    <2> DEFINE New == AsyncCompletionIndices(Tail(queue))
+    <2>1. /\ IsFiniteSet(Old)
+           /\ (1 \in Old <=> Head(queue).class = "Completion")
+      BY <1>1, TypedQueueHeadTailIndexFacts, FS_Interval,
+         FS_Subset, SMT
+         DEF AsyncCompletionIndices, Old
+    <2>2. /\ IsFiniteSet(Old \ {1})
+           /\ Cardinality(Old \ {1}) =
+                IF 1 \in Old
+                THEN Cardinality(Old) - 1
+                ELSE Cardinality(Old)
+      BY <2>1, FS_RemoveElement
+    <2>3. ExistsBijection(Old \ {1}, New)
+      BY <1>1, TailCompletionIndexShiftIsBijection
+         DEF ExistsBijection, Old, New
+    <2>4. Cardinality(New) = Cardinality(Old \ {1})
+      BY <2>2, <2>3, FS_Bijection
+    <2> QED BY <2>1, <2>2, <2>4 DEF Old, New
+  <1> QED BY <1>1
+
+RemovalCompletionIndexShift(queue, removed) ==
+  [oldIndex \in AsyncCompletionIndices(queue) \ {removed} |->
+     IF oldIndex < removed THEN oldIndex ELSE oldIndex - 1]
+
+THEOREM RemovalCompletionIndexShiftIsBijection ==
+  \A queue, removed:
+    /\ AsyncQueueTyped(queue)
+    /\ removed \in 1..Len(queue)
+    => RemovalCompletionIndexShift(queue, removed)
+         \in Bijection(
+              AsyncCompletionIndices(queue) \ {removed},
+              AsyncCompletionIndices(
+                SequenceWithoutIndex(queue, removed)))
+PROOF
+  <1>1. ASSUME NEW queue, NEW removed,
+                AsyncQueueTyped(queue),
+                removed \in 1..Len(queue)
+         PROVE RemovalCompletionIndexShift(queue, removed)
+                 \in Bijection(
+                      AsyncCompletionIndices(queue) \ {removed},
+                      AsyncCompletionIndices(
+                        SequenceWithoutIndex(queue, removed)))
+    <2> DEFINE Old == AsyncCompletionIndices(queue) \ {removed}
+    <2> DEFINE Result == SequenceWithoutIndex(queue, removed)
+    <2> DEFINE New == AsyncCompletionIndices(Result)
+    <2>1. /\ Result \in Seq(Range(queue))
+           /\ Len(Result) = Len(queue) - 1
+           /\ \A resultIndex \in 1..Len(Result):
+                Result[resultIndex] =
+                  IF resultIndex < removed
+                  THEN queue[resultIndex]
+                  ELSE queue[resultIndex + 1]
+      BY <1>1, SequenceWithoutIndexFacts DEF AsyncQueueTyped, Result
+    <2>2. /\ Old \subseteq 1..Len(queue)
+           /\ New \subseteq 1..Len(Result)
+      BY <1>1, <2>1, SMT DEF AsyncCompletionIndices, Old, New
+    <2>3. \A oldIndex \in Old:
+             IF oldIndex < removed
+             THEN oldIndex \in New
+             ELSE oldIndex - 1 \in New
+      BY <1>1, <2>1, <2>2, SMT
+         DEF AsyncCompletionIndices, Old, New
+    <2>4. \A newIndex \in New:
+             IF newIndex < removed
+             THEN newIndex \in Old
+             ELSE newIndex + 1 \in Old
+      BY <1>1, <2>1, <2>2, SMT
+         DEF AsyncCompletionIndices, Old, New
+    <2>5. RemovalCompletionIndexShift(queue, removed) \in [Old -> New]
+      BY <2>3, Isa DEF RemovalCompletionIndexShift, Old
+    <2>6. RemovalCompletionIndexShift(queue, removed)
+             \in Injection(Old, New)
+      BY <2>2, <2>5, SMT
+         DEF Injection, RemovalCompletionIndexShift, Old
+    <2>7. RemovalCompletionIndexShift(queue, removed)
+             \in Surjection(Old, New)
+      BY <2>4, <2>5, SMT
+         DEF Surjection, RemovalCompletionIndexShift, Old
+    <2> QED BY <2>6, <2>7 DEF Bijection
+  <1> QED BY <1>1
+
+THEOREM CompletionCountAfterTypedQueueRemoval ==
+  \A queue, removed:
+    /\ AsyncQueueTyped(queue)
+    /\ removed \in 1..Len(queue)
+    => Cardinality(
+         AsyncCompletionIndices(SequenceWithoutIndex(queue, removed))) =
+         IF queue[removed].class = "Completion"
+         THEN Cardinality(AsyncCompletionIndices(queue)) - 1
+         ELSE Cardinality(AsyncCompletionIndices(queue))
+PROOF
+  <1>1. ASSUME NEW queue, NEW removed,
+                AsyncQueueTyped(queue),
+                removed \in 1..Len(queue)
+         PROVE Cardinality(
+                 AsyncCompletionIndices(
+                   SequenceWithoutIndex(queue, removed))) =
+                 IF queue[removed].class = "Completion"
+                 THEN Cardinality(AsyncCompletionIndices(queue)) - 1
+                 ELSE Cardinality(AsyncCompletionIndices(queue))
+    <2> DEFINE All == AsyncCompletionIndices(queue)
+    <2> DEFINE Remaining == All \ {removed}
+    <2> DEFINE New == AsyncCompletionIndices(
+                         SequenceWithoutIndex(queue, removed))
+    <2>1. /\ IsFiniteSet(All)
+           /\ (removed \in All
+                 <=> queue[removed].class = "Completion")
+      BY <1>1, FS_Interval, FS_Subset, SMT
+         DEF AsyncCompletionIndices, All
+    <2>2. /\ IsFiniteSet(Remaining)
+           /\ Cardinality(Remaining) =
+                IF removed \in All
+                THEN Cardinality(All) - 1
+                ELSE Cardinality(All)
+      BY <2>1, FS_RemoveElement DEF Remaining
+    <2>3. ExistsBijection(Remaining, New)
+      BY <1>1, RemovalCompletionIndexShiftIsBijection
+         DEF ExistsBijection, Remaining, New, All
+    <2>4. Cardinality(New) = Cardinality(Remaining)
+      BY <2>2, <2>3, FS_Bijection
+    <2> QED BY <2>1, <2>2, <2>4 DEF All, Remaining, New
+  <1> QED BY <1>1
+
+THEOREM FifoRuntimePreservesIoType ==
+  \A node \in ValidatorIds:
+    /\ AsyncTypeInvariant
+    /\ SerializedRuntimeStep(node)
+    /\ FifoRuntimeStep(node)
+    => AsyncIoTypeInvariant'
+BY RuntimeSelectedCommandsAreTyped, NextNodeCommandIndexFacts,
+   CompletionCountAfterTypedQueueRemoval,
+   TypedOwnedSequenceWithoutIndexFacts, SequenceSetAfterAppend,
+   CompletionAppendCountIncreasesByOne,
+   FunctionalUpdateAwayFromKey,
+   FunctionalAppendUpdateAtKey,
+   FS_Interval, FS_Subset, FS_CardinalityType,
+   SMTT(120)
+   DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+       AsyncRuntimeTypeInvariant, AsyncRuntimeScalarTypeInvariant,
+       AsyncIoTypeInvariant, AsyncIoTopologyTypeInvariant,
+       AsyncIoContentTypeInvariant, AsyncIoQueueContentTypeInvariant,
+       AsyncIoWorkContentTypeInvariant, AsyncIoCapacityTypeInvariant,
+       SerializedRuntimeStep, FifoRuntimeStep, NodeQueueNonempty,
+       NextNodeCommand, NextNodeCommandIndex,
+       RemoveNextNodeCommand, SequenceWithoutIndex,
+       DeferCommand, DiscardCommand,
+       AsyncIoVars, AsyncQueueDepth, AsyncIoQueueDepth,
+       AsyncCompletionLoad, AsyncOutstandingWorkCount,
+       QueuedCompletionCount, QueuedCompletionIndices,
+       AsyncCompletionIndices, DeferredCompletionCount,
+       AsyncDeferredContentTypeInvariant,
+       AsyncCompletionSequenceTyped, SequenceSet, vars
+
+THEOREM DeferredDrainRuntimePreservesIoType ==
+  \A node \in ValidatorIds:
+    /\ AsyncTypeInvariant
+    /\ SerializedRuntimeStep(node)
+    /\ DeferredDrainStep(node)
+    => AsyncIoTypeInvariant'
+BY RuntimeSelectedCommandsAreTyped, TypedQueueTailFacts,
+   FunctionalTailUpdateAtKey, FunctionalUpdateAwayFromKey,
+   FS_Interval, FS_Subset, FS_CardinalityType,
+   SMTT(120)
+   DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+       AsyncRuntimeTypeInvariant, AsyncRuntimeScalarTypeInvariant,
+       AsyncIoTypeInvariant, AsyncIoTopologyTypeInvariant,
+       AsyncIoContentTypeInvariant, AsyncIoQueueContentTypeInvariant,
+       AsyncIoWorkContentTypeInvariant, AsyncIoCapacityTypeInvariant,
+       SerializedRuntimeStep, DeferredDrainStep,
+       DeferredQueueNonempty, NextDeferredCommand,
+       RemoveNextDeferredCommand, DiscardCommand,
+       AsyncIoVars, AsyncQueueDepth, AsyncIoQueueDepth,
+       AsyncCompletionLoad, AsyncOutstandingWorkCount,
+       QueuedCompletionCount, QueuedCompletionIndices,
+       DeferredCompletionCount, AsyncDeferredContentTypeInvariant,
+       AsyncCompletionSequenceTyped, SequenceSet, vars
+
+THEOREM NonQueueRuntimeBranchPreservesIoType ==
+  \A node \in ValidatorIds:
+    /\ AsyncIoTypeInvariant
+    /\ SerializedRuntimeStep(node)
+    /\ (DirectCommitCertificateDiscoveryStep(node)
+          \/ DeferredTagStep(node)
+          \/ DirectTimeoutStep(node)
+          \/ DirectRetransmitStep(node)
+          \/ IdleRuntimeStep(node))
+    => AsyncIoTypeInvariant'
+BY SchedulerIoStutterPreservesIoType, Isa
+   DEF SerializedRuntimeStep,
+       DirectCommitCertificateDiscoveryStep, DeferredTagStep,
+       DeferredTimeoutStep, DeferredRetransmitStep,
+       DirectTimeoutStep, DirectRetransmitStep, IdleRuntimeStep,
+       AsyncIoVars, AsyncDeferredVars, DeferCommand,
+       DiscardCommand, vars
+
+THEOREM SerializedRuntimePreservesIoType ==
+  \A node \in AsyncCurrentResponsiveVoters:
+    /\ AsyncTypeInvariant
+    /\ SerializedRuntimeStep(node)
+    => AsyncIoTypeInvariant'
+PROOF
+  <1>1. ASSUME NEW node \in AsyncCurrentResponsiveVoters,
+                AsyncTypeInvariant,
+                SerializedRuntimeStep(node)
+         PROVE AsyncIoTypeInvariant'
+    <2>1. node \in ValidatorIds
+      BY <1>1, AsyncCurrentResponsiveVotersAreValidators
+         DEF AsyncTypeInvariant
+    <2>2. CASE DeferredDrainStep(node)
+      BY <1>1, <2>1, <2>2, DeferredDrainRuntimePreservesIoType
+    <2>3. CASE FifoRuntimeStep(node)
+      BY <1>1, <2>1, <2>3, FifoRuntimePreservesIoType
+    <2>4. CASE DirectCommitCertificateDiscoveryStep(node)
+                   \/ DeferredTagStep(node)
+                   \/ DirectTimeoutStep(node)
+                   \/ DirectRetransmitStep(node)
+                   \/ IdleRuntimeStep(node)
+      BY <1>1, <2>1, <2>4, NonQueueRuntimeBranchPreservesIoType
+    <2> QED BY <1>1, <2>2, <2>3, <2>4 DEF SerializedRuntimeStep,
+         RuntimeStep
+  <1> QED BY <1>1
+
+THEOREM SerializedRuntimeCausalFrame ==
+  \A node \in ValidatorIds:
+    /\ AsyncTypeInvariant
+    /\ SerializedRuntimeStep(node)
+    => \/ LeaveCausalQueues
+       \/ AppendCausalSuccessors(TimeoutCausalCommand(node))
+       \/ \E command:
+            /\ AsyncCandidateTyped(command)
+            /\ ExecuteCommand(command)
+            /\ AppendCausalSuccessors(command)
+BY RuntimeSelectedCommandsAreTyped, SMTT(120)
+   DEF SerializedRuntimeStep, RuntimeStep,
+       DirectCommitCertificateDiscoveryStep, DeferredDrainStep,
+       DeferredTagStep, DeferredTimeoutStep, DeferredRetransmitStep,
+       DirectTimeoutStep, DirectRetransmitStep, FifoRuntimeStep,
+       IdleRuntimeStep, NodeQueueNonempty, DeferredQueueNonempty,
+       DeferCommand, DiscardCommand, vars
+
+THEOREM SerializedRuntimePreservesCausalType ==
+  \A node \in AsyncCurrentResponsiveVoters:
+    /\ StrongInductiveInvariant
+    /\ AsyncTypeInvariant
+    /\ SerializedRuntimeStep(node)
+    => AsyncCausalTypeInvariant'
+PROOF
+  <1>1. ASSUME NEW node \in AsyncCurrentResponsiveVoters,
+                StrongInductiveInvariant,
+                AsyncTypeInvariant,
+                SerializedRuntimeStep(node)
+         PROVE AsyncCausalTypeInvariant'
+    <2>1. /\ node \in ValidatorIds
+           /\ AsyncCausalTypeInvariant
+      BY <1>1, AsyncCurrentResponsiveVotersAreValidators
+         DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+             AsyncRuntimeTypeInvariant
+    <2>2. \/ LeaveCausalQueues
+           \/ AppendCausalSuccessors(TimeoutCausalCommand(node))
+           \/ \E command:
+                /\ AsyncCandidateTyped(command)
+                /\ ExecuteCommand(command)
+                /\ AppendCausalSuccessors(command)
+      BY <1>1, <2>1, SerializedRuntimeCausalFrame
+    <2>3. CASE LeaveCausalQueues
+      BY <2>1, <2>3, AsyncCausalTypeStutter DEF LeaveCausalQueues
+    <2>4. CASE AppendCausalSuccessors(TimeoutCausalCommand(node))
+      <3>1. /\ AsyncQueueTyped(
+                       CommandSuccessors(TimeoutCausalCommand(node)))
+             /\ AsyncCausalQueueOwnership(
+                  node, CommandSuccessors(TimeoutCausalCommand(node)))
+        BY <1>1, <2>1, TimeoutCausalSuccessorsTypedAndOwned
+      <3>2. asyncCausalQueues' =
+               [asyncCausalQueues EXCEPT
+                  ![node] = @ \o
+                    CommandSuccessors(TimeoutCausalCommand(node))]
+        BY <2>4 DEF AppendCausalSuccessors,
+                      TimeoutCausalCommand, NoItemCandidate,
+                      AsyncCandidate
+      <3> QED BY <2>1, <3>1, <3>2,
+           AppendOwnedCausalSuccessorsPreservesCausalType
+    <2>5. CASE \E command:
+                    /\ AsyncCandidateTyped(command)
+                    /\ ExecuteCommand(command)
+                    /\ AppendCausalSuccessors(command)
+      <3>1. PICK command:
+                    /\ AsyncCandidateTyped(command)
+                    /\ ExecuteCommand(command)
+                    /\ AppendCausalSuccessors(command)
+        BY <2>5
+      <3>2. /\ AsyncQueueTyped(CommandSuccessors(command))
+             /\ AsyncCausalQueueOwnership(
+                  command.node, CommandSuccessors(command))
+        BY <1>1, <3>1, ExecutedCommandSuccessorsTypedAndOwned
+      <3>3. /\ command.node \in ValidatorIds
+             /\ asyncCausalQueues' =
+                  [asyncCausalQueues EXCEPT
+                     ![command.node] = @ \o CommandSuccessors(command)]
+        BY <3>1 DEF AsyncCandidateTyped, AppendCausalSuccessors
+      <3> QED BY <2>1, <3>2, <3>3,
+           AppendOwnedCausalSuccessorsPreservesCausalType
+    <2> QED BY <2>2, <2>3, <2>4, <2>5
+  <1> QED BY <1>1
+
+THEOREM ExecuteCommandLeavesIngress ==
+  \A command:
+    ExecuteCommand(command)
+      => UNCHANGED <<asyncIngressLanes, asyncIngressReady>>
+BY Isa
+   DEF ExecuteCommand, ExecuteRegularCommand, ExecuteSignProposal,
+       ExecuteSignVote, ExecuteFormPrepareQC, ExecuteSignTimeout,
+       ExecutePersistInstall, ExecutePersistDecision,
+       ExecuteRequestCertifiedBody, ExecuteApply,
+       ExecuteCoreDelivery, ExecuteChunkDelivery,
+       ExecuteRejectAuthenticatedJunk, AsyncAuxVars, vars
+
+THEOREM SerializedRuntimeLeavesIngress ==
+  \A node \in ValidatorIds:
+    SerializedRuntimeStep(node)
+      => UNCHANGED <<asyncIngressLanes, asyncIngressReady>>
+BY ExecuteCommandLeavesIngress, Isa
+   DEF SerializedRuntimeStep, RuntimeStep,
+       DirectCommitCertificateDiscoveryStep, DeferredDrainStep,
+       DeferredTagStep, DeferredTimeoutStep, DeferredRetransmitStep,
+       DirectTimeoutStep, DirectRetransmitStep, FifoRuntimeStep,
+       IdleRuntimeStep, DeferCommand, DiscardCommand, AsyncAuxVars, vars
+
+THEOREM SerializedRuntimePreservesIngressType ==
+  \A node \in ValidatorIds:
+    /\ AsyncIngressTypeInvariant
+    /\ SerializedRuntimeStep(node)
+    => AsyncIngressTypeInvariant'
+BY SerializedRuntimeLeavesIngress,
+   AsyncIngressTopologyTypeStutter,
+   AsyncIngressCapacityTypeStutter,
+   AsyncIngressContentTypeStutter
+   DEF AsyncIngressTypeInvariant, AsyncIngressTopologyTypeVars
+
+THEOREM SerializedRuntimePreservesTransportClockType ==
+  \A node \in AsyncCurrentResponsiveVoters:
+    /\ AsyncTypeInvariant
+    /\ RunNode(node)
+    /\ SerializedRuntimeStep(node)
+    => AsyncTransportClockTypeInvariant'
+BY AsyncCurrentResponsiveVotersAreValidators,
+   FunctionalUpdatePreservesType, RunnerServiceFramePreservesClockType,
+   SMTT(120)
+   DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+       AsyncTransportTypeInvariant, AsyncTransportClockTypeInvariant,
+       RunNode, RunnerServiceFrame, SerializedRuntimeStep, RuntimeStep,
+       DirectCommitCertificateDiscoveryStep, DeferredDrainStep,
+       DeferredTagStep, DeferredTimeoutStep, DeferredRetransmitStep,
+       DirectTimeoutStep, DirectRetransmitStep, FifoRuntimeStep,
+       IdleRuntimeStep, ExecuteCommand, ExecuteRegularCommand,
+       ExecuteSignProposal, ExecuteSignVote, ExecuteFormPrepareQC,
+       ExecuteSignTimeout, ExecutePersistInstall,
+       ExecutePersistDecision, ExecuteRequestCertifiedBody,
+       ExecuteApply, ExecuteCoreDelivery, ExecuteChunkDelivery,
+       ExecuteRejectAuthenticatedJunk, DeferCommand, DiscardCommand,
+       AsyncAuxVars, AsyncDeferredVars, AsyncCompletionTags,
+       AsyncConfiguration, vars
+
+THEOREM SerializedRuntimePreservesDeferredType ==
+  \A node \in AsyncCurrentResponsiveVoters:
+    /\ AsyncTypeInvariant
+    /\ SerializedRuntimeStep(node)
+    => AsyncDeferredTypeInvariant'
+BY AsyncCurrentResponsiveVotersAreValidators,
+   RuntimeSelectedCommandsAreTyped,
+   DeferTypedOwnedCommandPreservesDeferredContentType,
+   RemoveNextDeferredCommandPreservesDeferredContentType,
+   AsyncDeferredContentTypeStutter,
+   FunctionalUpdatePreservesType, FunctionalUpdateAwayFromKey,
+   SMTT(120)
+   DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+       AsyncDeferredTypeInvariant, AsyncDeferredTopologyTypeInvariant,
+       SerializedRuntimeStep, RuntimeStep,
+       DirectCommitCertificateDiscoveryStep, DeferredDrainStep,
+       DeferredTagStep, DeferredTimeoutStep, DeferredRetransmitStep,
+       DirectTimeoutStep, DirectRetransmitStep, FifoRuntimeStep,
+       IdleRuntimeStep, NodeQueueNonempty, DeferredQueueNonempty,
+       NextNodeCommand, NextDeferredCommand, DeferCommand,
+       DiscardCommand, AsyncDeferredVars, vars
+
+RetainableControlBatch(items, voters) ==
+  /\ IsFiniteSet(items)
+  /\ \A item \in items:
+       /\ AsyncItemTyped(item)
+       /\ item.kind \in AsyncControlKinds
+  /\ IF items = {}
+     THEN TRUE
+     ELSE LET fresh == CHOOSE item \in items: TRUE
+          IN /\ \A item \in items:
+                   /\ item.source = fresh.source
+                   /\ ControlClass(item) = ControlClass(fresh)
+                   /\ ControlView(item) = ControlView(fresh)
+             /\ Cardinality(items) <= Cardinality(voters)
+             /\ {recipientItem.envelope.recipient:
+                   recipientItem \in items} = voters
+
+THEOREM ProposalControlEnvelopeIsTyped ==
+  \A envelope \in ProposalEnvelopeSet:
+    AsyncItemTyped(AsyncNetworkItem(
+      "Proposal", envelope.proposal.proposer, envelope))
+PROOF
+  <1>1. ASSUME NEW envelope \in ProposalEnvelopeSet
+         PROVE AsyncItemTyped(AsyncNetworkItem(
+                 "Proposal", envelope.proposal.proposer, envelope))
+    <2>1. /\ envelope.proposal.proposer \in ValidatorIds
+           /\ envelope.recipient \in ValidatorIds
+      BY <1>1 DEF ProposalEnvelopeSet, ProposalRecordSet
+    <2> QED BY <1>1, <2>1, SMT
+         DEF AsyncItemTyped, AsyncNetworkItem, AsyncNetworkKinds,
+             AsyncIngressSources
+  <1> QED BY <1>1
+
+THEOREM VoteControlEnvelopeIsTyped ==
+  \A envelope \in VoteEnvelopeSet:
+    AsyncItemTyped(AsyncNetworkItem(
+      IF envelope.vote.phase = "Prepare"
+      THEN "PrepareVote" ELSE "CommitVote",
+      envelope.vote.signer, envelope))
+PROOF
+  <1>1. ASSUME NEW envelope \in VoteEnvelopeSet
+         PROVE AsyncItemTyped(AsyncNetworkItem(
+                 IF envelope.vote.phase = "Prepare"
+                 THEN "PrepareVote" ELSE "CommitVote",
+                 envelope.vote.signer, envelope))
+    <2>1. /\ envelope.vote.signer \in ValidatorIds
+           /\ envelope.vote.phase \in Phases
+           /\ envelope.recipient \in ValidatorIds
+      BY <1>1 DEF VoteEnvelopeSet, VoteRecordSet
+    <2>2. CASE envelope.vote.phase = "Prepare"
+      BY <1>1, <2>1, <2>2, SMT
+         DEF AsyncItemTyped, AsyncNetworkItem, AsyncNetworkKinds,
+             AsyncIngressSources
+    <2>3. CASE envelope.vote.phase # "Prepare"
+      BY <1>1, <2>1, <2>3, SMT
+         DEF AsyncItemTyped, AsyncNetworkItem, AsyncNetworkKinds,
+             AsyncIngressSources, Phases
+    <2> QED BY <2>2, <2>3
+  <1> QED BY <1>1
+
+THEOREM QcControlEnvelopeIsTyped ==
+  \A source \in ValidatorIds, envelope \in QcEnvelopeSet:
+    AsyncItemTyped(AsyncNetworkItem(
+      IF envelope.qc.phase = "Prepare" THEN "PrepareQC" ELSE "CommitQC",
+      source, envelope))
+PROOF
+  <1>1. ASSUME NEW source \in ValidatorIds,
+                NEW envelope \in QcEnvelopeSet
+         PROVE AsyncItemTyped(AsyncNetworkItem(
+                 IF envelope.qc.phase = "Prepare"
+                 THEN "PrepareQC" ELSE "CommitQC",
+                 source, envelope))
+    <2>1. /\ envelope.qc.phase \in Phases
+           /\ envelope.recipient \in ValidatorIds
+      BY <1>1 DEF QcEnvelopeSet, QcRecordSet
+    <2>2. CASE envelope.qc.phase = "Prepare"
+      BY <1>1, <2>1, <2>2, SMT
+         DEF AsyncItemTyped, AsyncNetworkItem, AsyncNetworkKinds,
+             AsyncIngressSources
+    <2>3. CASE envelope.qc.phase # "Prepare"
+      BY <1>1, <2>1, <2>3, SMT
+         DEF AsyncItemTyped, AsyncNetworkItem, AsyncNetworkKinds,
+             AsyncIngressSources, Phases
+    <2> QED BY <2>2, <2>3
+  <1> QED BY <1>1
+
+THEOREM TimeoutControlEnvelopeIsTyped ==
+  \A envelope \in TimeoutEnvelopeSet:
+    AsyncItemTyped(AsyncNetworkItem(
+      "TimeoutVote", envelope.vote.signer, envelope))
+PROOF
+  <1>1. ASSUME NEW envelope \in TimeoutEnvelopeSet
+         PROVE AsyncItemTyped(AsyncNetworkItem(
+                 "TimeoutVote", envelope.vote.signer, envelope))
+    <2>1. /\ envelope.vote.signer \in ValidatorIds
+           /\ envelope.recipient \in ValidatorIds
+      BY <1>1 DEF TimeoutEnvelopeSet, TimeoutVoteRecordSet
+    <2> QED BY <1>1, <2>1, SMT
+         DEF AsyncItemTyped, AsyncNetworkItem, AsyncNetworkKinds,
+             AsyncIngressSources
+  <1> QED BY <1>1
+
+THEOREM TcControlEnvelopeIsTyped ==
+  \A source \in ValidatorIds, envelope \in TcEnvelopeSet:
+    AsyncItemTyped(AsyncNetworkItem(
+      "TimeoutCertificate", source, envelope))
+PROOF
+  <1>1. ASSUME NEW source \in ValidatorIds,
+                NEW envelope \in TcEnvelopeSet
+         PROVE AsyncItemTyped(AsyncNetworkItem(
+                 "TimeoutCertificate", source, envelope))
+    <2>1. envelope.recipient \in ValidatorIds
+      BY <1>1 DEF TcEnvelopeSet
+    <2> QED BY <1>1, <2>1, SMT
+         DEF AsyncItemTyped, AsyncNetworkItem, AsyncNetworkKinds,
+             AsyncIngressSources
+  <1> QED BY <1>1
+
+THEOREM RuntimeCurrentEpochIsTyped ==
+  TypeInvariant => CurrentEpoch \in Epochs
+PROOF
+  <1>1. ASSUME TypeInvariant
+         PROVE CurrentEpoch \in Epochs
+    <2>1. /\ ModelConfiguration
+           /\ context \in ContextRecords
+      BY <1>1 DEF TypeInvariant
+    <2>2. PICK blockHeight \in Heights:
+             \E lineage \in LineagesAt(blockHeight):
+               context = ContextRecord(blockHeight, lineage)
+      BY <2>1, Isa DEF ContextRecords
+    <2>3. PICK lineage \in LineagesAt(blockHeight):
+             context = ContextRecord(blockHeight, lineage)
+      BY <2>2
+    <2>4. /\ context.epoch = ExpectedEpoch(blockHeight)
+           /\ MaxEpoch >= ExpectedEpoch(MaxHeight)
+      BY <2>1, <2>3 DEF ContextRecord, ModelConfiguration
+    <2>5. /\ blockHeight \in Nat
+           /\ blockHeight <= MaxHeight
+           /\ MaxHeight \in Nat
+           /\ EpochLength \in Nat \ {0}
+           /\ MaxEpoch \in Nat
+      BY <2>1, <2>2, SMT
+         DEF Heights, ModelConfiguration, QuorumConfiguration
+    <2>6. ExpectedEpoch(blockHeight) \in 0..MaxEpoch
+      BY <2>4, <2>5, BoundedNaturalQuotient DEF ExpectedEpoch
+    <2> QED BY <2>4, <2>6 DEF CurrentEpoch, Epochs
+  <1> QED BY <1>1
+
+THEOREM RuntimeCurrentVotersAreFiniteValidators ==
+  TypeInvariant
+    => /\ IsFiniteSet(CurrentVoters)
+       /\ CurrentVoters \subseteq ValidatorIds
+PROOF
+  <1>1. ASSUME TypeInvariant
+         PROVE /\ IsFiniteSet(CurrentVoters)
+               /\ CurrentVoters \subseteq ValidatorIds
+    <2>1. /\ QuorumConfiguration
+           /\ CurrentEpoch \in Epochs
+      BY <1>1, RuntimeCurrentEpochIsTyped
+         DEF TypeInvariant, ModelConfiguration
+    <2> QED BY <2>1 DEF QuorumConfiguration, CurrentVoters,
+                             VotingRoster
+  <1> QED BY <1>1
+
+THEOREM UniformControlBatchIsRetainable ==
+  \A items, voters:
+    /\ IsFiniteSet(items)
+    /\ \A item \in items:
+         /\ AsyncItemTyped(item)
+         /\ item.kind \in AsyncControlKinds
+    /\ Cardinality(items) <= Cardinality(voters)
+    /\ {item.envelope.recipient: item \in items} = voters
+    /\ \A left, right \in items:
+         /\ left.source = right.source
+         /\ ControlClass(left) = ControlClass(right)
+         /\ ControlView(left) = ControlView(right)
+    => RetainableControlBatch(items, voters)
+PROOF
+  <1>1. ASSUME NEW items, NEW voters,
+                IsFiniteSet(items),
+                \A item \in items:
+                  /\ AsyncItemTyped(item)
+                  /\ item.kind \in AsyncControlKinds,
+                Cardinality(items) <= Cardinality(voters),
+                {item.envelope.recipient: item \in items} = voters,
+                \A left, right \in items:
+                  /\ left.source = right.source
+                  /\ ControlClass(left) = ControlClass(right)
+                  /\ ControlView(left) = ControlView(right)
+         PROVE RetainableControlBatch(items, voters)
+    <2>1. CASE items = {}
+      BY <1>1, <2>1 DEF RetainableControlBatch
+    <2>2. CASE items # {}
+      <3> DEFINE Fresh == CHOOSE item \in items: TRUE
+      <3>1. Fresh \in items
+        BY <2>2, FS_EmptySet, Zenon DEF Fresh
+      <3>2. \A item \in items:
+               /\ item.source = Fresh.source
+               /\ ControlClass(item) = ControlClass(Fresh)
+               /\ ControlView(item) = ControlView(Fresh)
+        BY <1>1, <3>1
+      <3> QED BY <1>1, <2>2, <3>1, <3>2
+           DEF RetainableControlBatch, Fresh
+    <2> QED BY <2>1, <2>2
+  <1> QED BY <1>1, Zenon
+
+THEOREM ProposalOutboxIsRetainable ==
+  \A request \in ProposalSignSet:
+    (/\ AsyncTypeInvariant
+     /\ request.proposal.proposer = request.node)
+      => RetainableControlBatch(ProposalOutbox(request), CurrentVoters)
+PROOF
+  <1>1. ASSUME NEW request \in ProposalSignSet,
+                /\ AsyncTypeInvariant
+                /\ request.proposal.proposer = request.node
+         PROVE RetainableControlBatch(
+                 ProposalOutbox(request), CurrentVoters)
+    <2> DEFINE Items == ProposalOutbox(request)
+    <2>1. /\ IsFiniteSet(CurrentVoters)
+           /\ CurrentVoters \subseteq ValidatorIds
+      BY <1>1, RuntimeCurrentVotersAreFiniteValidators
+         DEF AsyncTypeInvariant
+    <2>2. /\ IsFiniteSet(Items)
+           /\ Cardinality(Items) <= Cardinality(CurrentVoters)
+      BY <2>1, FS_Image
+         DEF Items, ProposalOutbox, AsyncNetworkItem, ProposalEnvelope
+    <2>3. \A item \in Items:
+             /\ AsyncItemTyped(item)
+             /\ item.kind \in AsyncControlKinds
+      <3>1. ASSUME NEW item \in Items
+             PROVE /\ AsyncItemTyped(item)
+                   /\ item.kind \in AsyncControlKinds
+        <4>1. PICK recipient \in CurrentVoters:
+                 item = AsyncNetworkItem(
+                   "Proposal", request.node,
+                   ProposalEnvelope(recipient, request.proposal))
+          BY <3>1 DEF Items, ProposalOutbox
+        <4>2. /\ recipient \in ValidatorIds
+               /\ request.proposal \in ProposalRecordSet
+          BY <1>1, <2>1, <4>1 DEF ProposalSignSet
+        <4>3. ProposalEnvelope(recipient, request.proposal)
+                  \in ProposalEnvelopeSet
+          BY <4>2 DEF ProposalEnvelope, ProposalEnvelopeSet
+        <4>4. item = AsyncNetworkItem(
+                 "Proposal", request.proposal.proposer,
+                 ProposalEnvelope(recipient, request.proposal))
+          BY <1>1, <4>1
+        <4>5. AsyncItemTyped(AsyncNetworkItem(
+                 "Proposal",
+                 ProposalEnvelope(recipient, request.proposal).proposal.proposer,
+                 ProposalEnvelope(recipient, request.proposal)))
+          BY <4>3, ProposalControlEnvelopeIsTyped
+        <4>6. AsyncItemTyped(AsyncNetworkItem(
+                 "Proposal", request.proposal.proposer,
+                 ProposalEnvelope(recipient, request.proposal)))
+          BY <4>5 DEF ProposalEnvelope
+        <4>7. AsyncItemTyped(item)
+          BY <4>4, <4>6
+        <4> QED BY <4>1, <4>7 DEF AsyncControlKinds, AsyncNetworkItem
+      <3> QED BY <3>1
+    <2>4. \A left, right \in Items:
+             /\ left.source = right.source
+             /\ ControlClass(left) = ControlClass(right)
+             /\ ControlView(left) = ControlView(right)
+      <3>1. ASSUME NEW left \in Items, NEW right \in Items
+             PROVE /\ left.source = right.source
+                   /\ ControlClass(left) = ControlClass(right)
+                   /\ ControlView(left) = ControlView(right)
+        <4>1. PICK leftRecipient \in CurrentVoters:
+                 left = AsyncNetworkItem(
+                   "Proposal", request.node,
+                   ProposalEnvelope(leftRecipient, request.proposal))
+          BY <3>1 DEF Items, ProposalOutbox
+        <4>2. PICK rightRecipient \in CurrentVoters:
+                 right = AsyncNetworkItem(
+                   "Proposal", request.node,
+                   ProposalEnvelope(rightRecipient, request.proposal))
+          BY <3>1 DEF Items, ProposalOutbox
+        <4> QED BY <4>1, <4>2
+             DEF AsyncNetworkItem, ProposalEnvelope,
+                 ControlClass, ControlView
+      <3> QED BY <3>1
+    <2>5. {item.envelope.recipient: item \in Items} = CurrentVoters
+      BY Isa
+         DEF Items, ProposalOutbox, AsyncNetworkItem, ProposalEnvelope
+    <2> QED BY <2>2, <2>3, <2>4, <2>5,
+                 UniformControlBatchIsRetainable
+         DEF Items
+  <1> QED BY <1>1
+
+THEOREM VoteOutboxIsRetainable ==
+  \A request \in VoteSignSet:
+    (/\ AsyncTypeInvariant
+     /\ request.vote.signer = request.node)
+      => RetainableControlBatch(VoteOutbox(request), CurrentVoters)
+PROOF
+  <1>1. ASSUME NEW request \in VoteSignSet,
+                /\ AsyncTypeInvariant
+                /\ request.vote.signer = request.node
+         PROVE RetainableControlBatch(VoteOutbox(request), CurrentVoters)
+    <2> DEFINE Items == VoteOutbox(request)
+    <2>1. /\ IsFiniteSet(CurrentVoters)
+           /\ CurrentVoters \subseteq ValidatorIds
+      BY <1>1, RuntimeCurrentVotersAreFiniteValidators
+         DEF AsyncTypeInvariant
+    <2>2. /\ IsFiniteSet(Items)
+           /\ Cardinality(Items) <= Cardinality(CurrentVoters)
+      BY <2>1, FS_Image
+         DEF Items, VoteOutbox, AsyncNetworkItem, VoteEnvelope
+    <2>3. \A item \in Items:
+             /\ AsyncItemTyped(item)
+             /\ item.kind \in AsyncControlKinds
+      <3>1. ASSUME NEW item \in Items
+             PROVE /\ AsyncItemTyped(item)
+                   /\ item.kind \in AsyncControlKinds
+        <4>1. PICK recipient \in CurrentVoters:
+                 item = AsyncNetworkItem(
+                   IF request.vote.phase = "Prepare"
+                   THEN "PrepareVote" ELSE "CommitVote",
+                   request.node, VoteEnvelope(recipient, request.vote))
+          BY <3>1 DEF Items, VoteOutbox
+        <4>2. /\ recipient \in ValidatorIds
+               /\ request.vote \in VoteRecordSet
+          BY <1>1, <2>1, <4>1 DEF VoteSignSet
+        <4>3. VoteEnvelope(recipient, request.vote) \in VoteEnvelopeSet
+          BY <4>2 DEF VoteEnvelope, VoteEnvelopeSet
+        <4>4. item = AsyncNetworkItem(
+                 IF request.vote.phase = "Prepare"
+                 THEN "PrepareVote" ELSE "CommitVote",
+                 request.vote.signer,
+                 VoteEnvelope(recipient, request.vote))
+          BY <1>1, <4>1
+        <4>5. AsyncItemTyped(AsyncNetworkItem(
+                 IF VoteEnvelope(recipient, request.vote).vote.phase = "Prepare"
+                 THEN "PrepareVote" ELSE "CommitVote",
+                 VoteEnvelope(recipient, request.vote).vote.signer,
+                 VoteEnvelope(recipient, request.vote)))
+          BY <4>3, VoteControlEnvelopeIsTyped
+        <4>6. AsyncItemTyped(AsyncNetworkItem(
+                 IF request.vote.phase = "Prepare"
+                 THEN "PrepareVote" ELSE "CommitVote",
+                 request.vote.signer,
+                 VoteEnvelope(recipient, request.vote)))
+          BY <4>5 DEF VoteEnvelope
+        <4>7. AsyncItemTyped(item)
+          BY <4>4, <4>6
+        <4> QED BY <1>1, <4>1, <4>7
+             DEF AsyncControlKinds, AsyncNetworkItem,
+                 VoteSignSet, VoteRecordSet, Phases
+      <3> QED BY <3>1
+    <2>4. \A left, right \in Items:
+             /\ left.source = right.source
+             /\ ControlClass(left) = ControlClass(right)
+             /\ ControlView(left) = ControlView(right)
+      <3>1. ASSUME NEW left \in Items, NEW right \in Items
+             PROVE /\ left.source = right.source
+                   /\ ControlClass(left) = ControlClass(right)
+                   /\ ControlView(left) = ControlView(right)
+        <4>1. PICK leftRecipient \in CurrentVoters:
+                 left = AsyncNetworkItem(
+                   IF request.vote.phase = "Prepare"
+                   THEN "PrepareVote" ELSE "CommitVote",
+                   request.node, VoteEnvelope(leftRecipient, request.vote))
+          BY <3>1 DEF Items, VoteOutbox
+        <4>2. PICK rightRecipient \in CurrentVoters:
+                 right = AsyncNetworkItem(
+                   IF request.vote.phase = "Prepare"
+                   THEN "PrepareVote" ELSE "CommitVote",
+                   request.node, VoteEnvelope(rightRecipient, request.vote))
+          BY <3>1 DEF Items, VoteOutbox
+        <4> QED BY <4>1, <4>2
+             DEF AsyncNetworkItem, VoteEnvelope, ControlClass, ControlView
+      <3> QED BY <3>1
+    <2>5. {item.envelope.recipient: item \in Items} = CurrentVoters
+      BY Isa DEF Items, VoteOutbox, AsyncNetworkItem, VoteEnvelope
+    <2> QED BY <2>2, <2>3, <2>4, <2>5,
+                 UniformControlBatchIsRetainable
+         DEF Items
+  <1> QED BY <1>1
+
+THEOREM QcOutboxIsRetainable ==
+  \A node \in ValidatorIds, qc \in QcRecordSet:
+    AsyncTypeInvariant
+      => RetainableControlBatch(QcOutbox(node, qc), CurrentVoters)
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds,
+                NEW qc \in QcRecordSet,
+                AsyncTypeInvariant
+         PROVE RetainableControlBatch(QcOutbox(node, qc), CurrentVoters)
+    <2> DEFINE Items == QcOutbox(node, qc)
+    <2>1. /\ IsFiniteSet(CurrentVoters)
+           /\ CurrentVoters \subseteq ValidatorIds
+      BY <1>1, RuntimeCurrentVotersAreFiniteValidators
+         DEF AsyncTypeInvariant
+    <2>2. /\ IsFiniteSet(Items)
+           /\ Cardinality(Items) <= Cardinality(CurrentVoters)
+      BY <2>1, FS_Image
+         DEF Items, QcOutbox, AsyncNetworkItem, QcEnvelope
+    <2>3. \A item \in Items:
+             /\ AsyncItemTyped(item)
+             /\ item.kind \in AsyncControlKinds
+      <3>1. ASSUME NEW item \in Items
+             PROVE /\ AsyncItemTyped(item)
+                   /\ item.kind \in AsyncControlKinds
+        <4>1. PICK recipient \in CurrentVoters:
+                 item = AsyncNetworkItem(
+                   IF qc.phase = "Prepare" THEN "PrepareQC" ELSE "CommitQC",
+                   node, QcEnvelope(recipient, qc))
+          BY <3>1 DEF Items, QcOutbox
+        <4>2. QcEnvelope(recipient, qc) \in QcEnvelopeSet
+          BY <1>1, <2>1, <4>1 DEF QcEnvelope, QcEnvelopeSet
+        <4>3. AsyncItemTyped(AsyncNetworkItem(
+                 IF QcEnvelope(recipient, qc).qc.phase = "Prepare"
+                 THEN "PrepareQC" ELSE "CommitQC",
+                 node, QcEnvelope(recipient, qc)))
+          BY <1>1, <4>2, QcControlEnvelopeIsTyped
+        <4>4. AsyncItemTyped(AsyncNetworkItem(
+                 IF qc.phase = "Prepare" THEN "PrepareQC" ELSE "CommitQC",
+                 node, QcEnvelope(recipient, qc)))
+          BY <4>3 DEF QcEnvelope
+        <4>5. AsyncItemTyped(item)
+          BY <4>1, <4>4
+        <4> QED BY <1>1, <4>1, <4>5
+             DEF AsyncControlKinds, AsyncNetworkItem,
+                 QcRecordSet, Phases
+      <3> QED BY <3>1
+    <2>4. \A left, right \in Items:
+             /\ left.source = right.source
+             /\ ControlClass(left) = ControlClass(right)
+             /\ ControlView(left) = ControlView(right)
+      <3>1. ASSUME NEW left \in Items, NEW right \in Items
+             PROVE /\ left.source = right.source
+                   /\ ControlClass(left) = ControlClass(right)
+                   /\ ControlView(left) = ControlView(right)
+        <4>1. PICK leftRecipient \in CurrentVoters:
+                 left = AsyncNetworkItem(
+                   IF qc.phase = "Prepare" THEN "PrepareQC" ELSE "CommitQC",
+                   node, QcEnvelope(leftRecipient, qc))
+          BY <3>1 DEF Items, QcOutbox
+        <4>2. PICK rightRecipient \in CurrentVoters:
+                 right = AsyncNetworkItem(
+                   IF qc.phase = "Prepare" THEN "PrepareQC" ELSE "CommitQC",
+                   node, QcEnvelope(rightRecipient, qc))
+          BY <3>1 DEF Items, QcOutbox
+        <4> QED BY <4>1, <4>2
+             DEF AsyncNetworkItem, QcEnvelope, ControlClass, ControlView
+      <3> QED BY <3>1
+    <2>5. {item.envelope.recipient: item \in Items} = CurrentVoters
+      BY Isa DEF Items, QcOutbox, AsyncNetworkItem, QcEnvelope
+    <2> QED BY <2>2, <2>3, <2>4, <2>5,
+                 UniformControlBatchIsRetainable
+         DEF Items
+  <1> QED BY <1>1
+
+THEOREM TimeoutOutboxIsRetainable ==
+  \A request \in TimeoutSignSet:
+    (/\ AsyncTypeInvariant
+     /\ request.vote.signer = request.node)
+      => RetainableControlBatch(TimeoutOutbox(request), CurrentVoters)
+PROOF
+  <1>1. ASSUME NEW request \in TimeoutSignSet,
+                /\ AsyncTypeInvariant
+                /\ request.vote.signer = request.node
+         PROVE RetainableControlBatch(
+                 TimeoutOutbox(request), CurrentVoters)
+    <2> DEFINE Items == TimeoutOutbox(request)
+    <2>1. /\ IsFiniteSet(CurrentVoters)
+           /\ CurrentVoters \subseteq ValidatorIds
+      BY <1>1, RuntimeCurrentVotersAreFiniteValidators
+         DEF AsyncTypeInvariant
+    <2>2. /\ IsFiniteSet(Items)
+           /\ Cardinality(Items) <= Cardinality(CurrentVoters)
+      BY <2>1, FS_Image
+         DEF Items, TimeoutOutbox, AsyncNetworkItem, TimeoutEnvelope
+    <2>3. \A item \in Items:
+             /\ AsyncItemTyped(item)
+             /\ item.kind \in AsyncControlKinds
+      <3>1. ASSUME NEW item \in Items
+             PROVE /\ AsyncItemTyped(item)
+                   /\ item.kind \in AsyncControlKinds
+        <4>1. PICK recipient \in CurrentVoters:
+                 item = AsyncNetworkItem(
+                   "TimeoutVote", request.node,
+                   TimeoutEnvelope(recipient, request.vote))
+          BY <3>1 DEF Items, TimeoutOutbox
+        <4>2. /\ recipient \in ValidatorIds
+               /\ request.vote \in TimeoutVoteRecordSet
+          BY <1>1, <2>1, <4>1 DEF TimeoutSignSet
+        <4>3. TimeoutEnvelope(recipient, request.vote)
+                  \in TimeoutEnvelopeSet
+          BY <4>2 DEF TimeoutEnvelope, TimeoutEnvelopeSet
+        <4>4. item = AsyncNetworkItem(
+                 "TimeoutVote", request.vote.signer,
+                 TimeoutEnvelope(recipient, request.vote))
+          BY <1>1, <4>1
+        <4>5. AsyncItemTyped(AsyncNetworkItem(
+                 "TimeoutVote",
+                 TimeoutEnvelope(recipient, request.vote).vote.signer,
+                 TimeoutEnvelope(recipient, request.vote)))
+          BY <4>3, TimeoutControlEnvelopeIsTyped
+        <4>6. AsyncItemTyped(AsyncNetworkItem(
+                 "TimeoutVote", request.vote.signer,
+                 TimeoutEnvelope(recipient, request.vote)))
+          BY <4>5 DEF TimeoutEnvelope
+        <4>7. AsyncItemTyped(item)
+          BY <4>4, <4>6
+        <4> QED BY <4>1, <4>7 DEF AsyncControlKinds, AsyncNetworkItem
+      <3> QED BY <3>1
+    <2>4. \A left, right \in Items:
+             /\ left.source = right.source
+             /\ ControlClass(left) = ControlClass(right)
+             /\ ControlView(left) = ControlView(right)
+      <3>1. ASSUME NEW left \in Items, NEW right \in Items
+             PROVE /\ left.source = right.source
+                   /\ ControlClass(left) = ControlClass(right)
+                   /\ ControlView(left) = ControlView(right)
+        <4>1. PICK leftRecipient \in CurrentVoters:
+                 left = AsyncNetworkItem(
+                   "TimeoutVote", request.node,
+                   TimeoutEnvelope(leftRecipient, request.vote))
+          BY <3>1 DEF Items, TimeoutOutbox
+        <4>2. PICK rightRecipient \in CurrentVoters:
+                 right = AsyncNetworkItem(
+                   "TimeoutVote", request.node,
+                   TimeoutEnvelope(rightRecipient, request.vote))
+          BY <3>1 DEF Items, TimeoutOutbox
+        <4> QED BY <4>1, <4>2
+             DEF AsyncNetworkItem, TimeoutEnvelope,
+                 ControlClass, ControlView
+      <3> QED BY <3>1
+    <2>5. {item.envelope.recipient: item \in Items} = CurrentVoters
+      BY Isa DEF Items, TimeoutOutbox, AsyncNetworkItem, TimeoutEnvelope
+    <2> QED BY <2>2, <2>3, <2>4, <2>5,
+                 UniformControlBatchIsRetainable
+         DEF Items
+  <1> QED BY <1>1
+
+THEOREM TcOutboxIsRetainable ==
+  \A node \in ValidatorIds, tc \in TcRecordSet:
+    AsyncTypeInvariant
+      => RetainableControlBatch(TcOutbox(node, tc), CurrentVoters)
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds,
+                NEW tc \in TcRecordSet,
+                AsyncTypeInvariant
+         PROVE RetainableControlBatch(TcOutbox(node, tc), CurrentVoters)
+    <2> DEFINE Items == TcOutbox(node, tc)
+    <2>1. /\ IsFiniteSet(CurrentVoters)
+           /\ CurrentVoters \subseteq ValidatorIds
+      BY <1>1, RuntimeCurrentVotersAreFiniteValidators
+         DEF AsyncTypeInvariant
+    <2>2. /\ IsFiniteSet(Items)
+           /\ Cardinality(Items) <= Cardinality(CurrentVoters)
+      BY <2>1, FS_Image
+         DEF Items, TcOutbox, AsyncNetworkItem, TcEnvelope
+    <2>3. \A item \in Items:
+             /\ AsyncItemTyped(item)
+             /\ item.kind \in AsyncControlKinds
+      <3>1. ASSUME NEW item \in Items
+             PROVE /\ AsyncItemTyped(item)
+                   /\ item.kind \in AsyncControlKinds
+        <4>1. PICK recipient \in CurrentVoters:
+                 item = AsyncNetworkItem(
+                   "TimeoutCertificate", node,
+                   TcEnvelope(recipient, tc))
+          BY <3>1 DEF Items, TcOutbox
+        <4>2. TcEnvelope(recipient, tc) \in TcEnvelopeSet
+          BY <1>1, <2>1, <4>1 DEF TcEnvelope, TcEnvelopeSet
+        <4>3. AsyncItemTyped(AsyncNetworkItem(
+                 "TimeoutCertificate", node, TcEnvelope(recipient, tc)))
+          BY <1>1, <4>2, TcControlEnvelopeIsTyped
+        <4>4. AsyncItemTyped(item)
+          BY <4>1, <4>3
+        <4> QED BY <4>1, <4>4 DEF AsyncControlKinds, AsyncNetworkItem
+      <3> QED BY <3>1
+    <2>4. \A left, right \in Items:
+             /\ left.source = right.source
+             /\ ControlClass(left) = ControlClass(right)
+             /\ ControlView(left) = ControlView(right)
+      <3>1. ASSUME NEW left \in Items, NEW right \in Items
+             PROVE /\ left.source = right.source
+                   /\ ControlClass(left) = ControlClass(right)
+                   /\ ControlView(left) = ControlView(right)
+        <4>1. PICK leftRecipient \in CurrentVoters:
+                 left = AsyncNetworkItem(
+                   "TimeoutCertificate", node,
+                   TcEnvelope(leftRecipient, tc))
+          BY <3>1 DEF Items, TcOutbox
+        <4>2. PICK rightRecipient \in CurrentVoters:
+                 right = AsyncNetworkItem(
+                   "TimeoutCertificate", node,
+                   TcEnvelope(rightRecipient, tc))
+          BY <3>1 DEF Items, TcOutbox
+        <4> QED BY <4>1, <4>2
+             DEF AsyncNetworkItem, TcEnvelope, ControlClass, ControlView
+      <3> QED BY <3>1
+    <2>5. {item.envelope.recipient: item \in Items} = CurrentVoters
+      BY Isa DEF Items, TcOutbox, AsyncNetworkItem, TcEnvelope
+    <2> QED BY <2>2, <2>3, <2>4, <2>5,
+                 UniformControlBatchIsRetainable
+         DEF Items
+  <1> QED BY <1>1
+
+THEOREM RememberedControlPreservesRetainedType ==
+  \A retained, items, voters:
+    /\ AsyncRetainedControlType(retained, voters)
+    /\ RetainableControlBatch(items, voters)
+    => AsyncRetainedControlType(
+         RememberedControl(retained, items), voters)
+PROOF
+  <1>1. ASSUME NEW retained, NEW items, NEW voters,
+                AsyncRetainedControlType(retained, voters),
+                RetainableControlBatch(items, voters)
+         PROVE AsyncRetainedControlType(
+                 RememberedControl(retained, items), voters)
+    <2>1. CASE items = {}
+      BY <1>1, <2>1 DEF RememberedControl
+    <2>2. CASE items # {}
+      <3> DEFINE Fresh == CHOOSE item \in items: TRUE
+      <3> DEFINE Existing ==
+             RetainedClassItems(
+               retained, Fresh.source, ControlClass(Fresh))
+      <3>1. /\ Fresh \in items
+             /\ \A item \in items:
+                  /\ item.source = Fresh.source
+                  /\ ControlClass(item) = ControlClass(Fresh)
+                  /\ ControlView(item) = ControlView(Fresh)
+             /\ Cardinality(items) <= Cardinality(voters)
+             /\ {recipientItem.envelope.recipient:
+                   recipientItem \in items} = voters
+        BY <1>1, <2>2, FS_EmptySet, Zenon
+           DEF RetainableControlBatch, Fresh
+      <3>2. CASE ~(Existing = {}
+                     \/ ControlView(Fresh) >
+                          ControlView(CHOOSE item \in Existing: TRUE)
+                     \/ items = Existing)
+        BY <1>1, <2>2, <3>2
+           DEF RememberedControl, Fresh, Existing
+      <3>3. CASE Existing = {}
+                    \/ ControlView(Fresh) >
+                         ControlView(CHOOSE item \in Existing: TRUE)
+                    \/ items = Existing
+        <4> DEFINE Updated == (retained \ Existing) \cup items
+        <4>1. RememberedControl(retained, items) = Updated
+          BY <2>2, <3>3 DEF RememberedControl, Fresh, Existing, Updated
+        <4>2. /\ IsFiniteSet(Updated)
+               /\ \A item \in Updated:
+                    /\ AsyncItemTyped(item)
+                    /\ item.kind \in AsyncControlKinds
+          BY <1>1, FS_Difference, FS_Union
+             DEF AsyncRetainedControlType, RetainableControlBatch,
+                 Updated
+        <4>3. \A source \in ValidatorIds,
+                      controlClass \in AsyncControlKinds:
+                 LET retainedClass ==
+                       RetainedClassItems(Updated, source, controlClass)
+                 IN \/ retainedClass = {}
+                    \/ /\ Cardinality(retainedClass) <=
+                             Cardinality(voters)
+                       /\ {item.envelope.recipient:
+                             item \in retainedClass} = voters
+                       /\ \A left, right \in retainedClass:
+                            ControlView(left) = ControlView(right)
+          <5>1. ASSUME NEW source \in ValidatorIds,
+                        NEW controlClass \in AsyncControlKinds
+                 PROVE LET retainedClass ==
+                             RetainedClassItems(
+                               Updated, source, controlClass)
+                       IN \/ retainedClass = {}
+                          \/ /\ Cardinality(retainedClass) <=
+                                   Cardinality(voters)
+                             /\ {item.envelope.recipient:
+                                   item \in retainedClass} = voters
+                             /\ \A left, right \in retainedClass:
+                                  ControlView(left) = ControlView(right)
+            <6>1. CASE /\ source = Fresh.source
+                         /\ controlClass = ControlClass(Fresh)
+              <7>1. RetainedClassItems(
+                       Updated, source, controlClass) = items
+                BY <3>1, <5>1, <6>1, Isa
+                   DEF RetainedClassItems, Existing, Updated
+              <7> QED BY <1>1, <2>2, <3>1, <7>1
+                   DEF RetainableControlBatch
+            <6>2. CASE source # Fresh.source
+                         \/ controlClass # ControlClass(Fresh)
+              <7>1. RetainedClassItems(
+                       Updated, source, controlClass) =
+                     RetainedClassItems(retained, source, controlClass)
+                BY <3>1, <5>1, <6>2, Isa
+                   DEF RetainedClassItems, Existing, Updated
+              <7> QED BY <1>1, <5>1, <7>1
+                   DEF AsyncRetainedControlType
+            <6> QED BY <6>1, <6>2
+          <5> QED BY <5>1
+        <4> QED BY <4>1, <4>2, <4>3
+             DEF AsyncRetainedControlType
+      <3> QED BY <3>2, <3>3
+    <2> QED BY <2>1, <2>2
+  <1> QED BY <1>1
+
+THEOREM InstalledControlPreservesRetainedType ==
+  \A retained, node, items, voters:
+    /\ AsyncRetainedControlType(
+         RememberedControl(retained, items), voters)
+    => AsyncRetainedControlType(
+         InstalledControl(retained, node, items), voters)
+PROOF
+  <1>1. ASSUME NEW retained, NEW node, NEW items, NEW voters,
+                AsyncRetainedControlType(
+                  RememberedControl(retained, items), voters)
+         PROVE AsyncRetainedControlType(
+                 InstalledControl(retained, node, items), voters)
+    <2> DEFINE Remembered == RememberedControl(retained, items)
+    <2> DEFINE Installed == InstalledControl(retained, node, items)
+    <2>1. Installed =
+             {item \in Remembered:
+                item.source # node
+                  \/ ControlClass(item)
+                       \in AsyncInstallRetainedControlKinds}
+      BY DEF InstalledControl, Remembered, Installed
+    <2>2. /\ Installed \subseteq Remembered
+           /\ IsFiniteSet(Installed)
+           /\ \A item \in Installed:
+                /\ AsyncItemTyped(item)
+                /\ item.kind \in AsyncControlKinds
+      BY <1>1, <2>1, FS_Subset
+         DEF AsyncRetainedControlType, Remembered
+    <2>3. \A source \in ValidatorIds,
+                  controlClass \in AsyncControlKinds:
+             LET installedClass ==
+                   RetainedClassItems(Installed, source, controlClass)
+             IN \/ installedClass = {}
+                \/ /\ Cardinality(installedClass) <=
+                         Cardinality(voters)
+                   /\ {item.envelope.recipient:
+                         item \in installedClass} = voters
+                   /\ \A left, right \in installedClass:
+                        ControlView(left) = ControlView(right)
+      <3>1. ASSUME NEW source \in ValidatorIds,
+                    NEW controlClass \in AsyncControlKinds
+             PROVE LET installedClass ==
+                         RetainedClassItems(
+                           Installed, source, controlClass)
+                   IN \/ installedClass = {}
+                      \/ /\ Cardinality(installedClass) <=
+                               Cardinality(voters)
+                         /\ {item.envelope.recipient:
+                               item \in installedClass} = voters
+                         /\ \A left, right \in installedClass:
+                              ControlView(left) = ControlView(right)
+        <4>1. CASE source = node
+                     /\ controlClass
+                          \notin AsyncInstallRetainedControlKinds
+          BY <2>1, <4>1, Isa DEF RetainedClassItems, Installed
+        <4>2. CASE source # node
+                     \/ controlClass
+                          \in AsyncInstallRetainedControlKinds
+          <5>1. RetainedClassItems(Installed, source, controlClass) =
+                   RetainedClassItems(Remembered, source, controlClass)
+            BY <2>1, <3>1, <4>2, Isa
+               DEF RetainedClassItems, Installed
+          <5> QED BY <1>1, <3>1, <5>1
+               DEF AsyncRetainedControlType, Remembered
+        <4> QED BY <4>1, <4>2
+      <3> QED BY <3>1
+    <2> QED BY <2>2, <2>3
+         DEF AsyncRetainedControlType, Installed
+  <1> QED BY <1>1
+
+THEOREM TypedRetentionOnlyPreservesTransportContentType ==
+  /\ AsyncTransportContentTypeInvariant
+  /\ AsyncRetainedControlType(asyncRetainedControl', CurrentVoters')
+  /\ UNCHANGED <<context, asyncSentItems, asyncActiveRequests,
+                  asyncTransport, asyncHeldChunks>>
+  => AsyncTransportContentTypeInvariant'
+PROOF
+  <1>1. ASSUME AsyncTransportContentTypeInvariant,
+              AsyncRetainedControlType(
+                asyncRetainedControl', CurrentVoters'),
+              UNCHANGED <<context, asyncSentItems, asyncActiveRequests,
+                          asyncTransport, asyncHeldChunks>>
+         PROVE AsyncTransportContentTypeInvariant'
+    <2>1. /\ AsyncSentItemsType(asyncSentItems)
+           /\ AsyncActiveRequestsType(
+                asyncActiveRequests, asyncSentItems)
+           /\ AsyncPacketContentTypeInvariant
+           /\ AsyncHeldChunksTypeInvariant
+      BY <1>1, AsyncTransportHistoryTypeDecomposition
+         DEF AsyncTransportContentTypeInvariant
+    <2>2. /\ AsyncSentItemsType(asyncSentItems')
+           /\ AsyncActiveRequestsType(
+                asyncActiveRequests', asyncSentItems')
+           /\ AsyncPacketContentTypeInvariant'
+           /\ AsyncHeldChunksTypeInvariant'
+      BY <1>1, <2>1
+         DEF AsyncSentItemsType, AsyncActiveRequestsType,
+             AsyncPacketContentTypeInvariant,
+             AsyncHeldChunksTypeInvariant
+    <2>3. AsyncTransportHistoryTypeInvariant'
+      BY <1>1, <2>2
+         DEF AsyncTransportHistoryTypeInvariant,
+             AsyncSentItemsType, AsyncRetainedControlType,
+             AsyncActiveRequestsType
+    <2> QED BY <2>2, <2>3
+         DEF AsyncTransportContentTypeInvariant
+  <1> QED BY <1>1
+
+THEOREM PublishTypedItemsWithTypedRetentionPreservesTransportContentType ==
+  \A items:
+    /\ AsyncRuntimeScalarTypeInvariant
+    /\ AsyncTransportContentTypeInvariant
+    /\ IsFiniteSet(items)
+    /\ \A item \in items: AsyncItemTyped(item)
+    /\ AsyncRetainedControlType(asyncRetainedControl', CurrentVoters')
+    /\ asyncSentItems' = asyncSentItems \cup items
+    /\ asyncActiveRequests' = asyncActiveRequests
+    /\ asyncTransport' = asyncTransport \cup PacketsForItems(items)
+    /\ UNCHANGED <<context, asyncHeldChunks>>
+    => AsyncTransportContentTypeInvariant'
+PROOF
+  <1>1. ASSUME NEW items,
+                AsyncRuntimeScalarTypeInvariant,
+                AsyncTransportContentTypeInvariant,
+                IsFiniteSet(items),
+                \A item \in items: AsyncItemTyped(item),
+                AsyncRetainedControlType(
+                  asyncRetainedControl', CurrentVoters'),
+                asyncSentItems' = asyncSentItems \cup items,
+                asyncActiveRequests' = asyncActiveRequests,
+                asyncTransport' =
+                  asyncTransport \cup PacketsForItems(items),
+                UNCHANGED <<context, asyncHeldChunks>>
+         PROVE AsyncTransportContentTypeInvariant'
+    <2>1. /\ AsyncSentItemsType(asyncSentItems)
+           /\ AsyncActiveRequestsType(
+                asyncActiveRequests, asyncSentItems)
+           /\ AsyncPacketContentTypeInvariant
+           /\ AsyncHeldChunksTypeInvariant
+      BY <1>1, AsyncTransportHistoryTypeDecomposition
+         DEF AsyncTransportContentTypeInvariant
+    <2>2. AsyncSentItemsType(asyncSentItems')
+      BY <1>1, <2>1, FS_Union DEF AsyncSentItemsType
+    <2>3. AsyncActiveRequestsType(
+             asyncActiveRequests', asyncSentItems')
+      BY <1>1, <2>1, Isa DEF AsyncActiveRequestsType
+    <2>4. AsyncTransportHistoryTypeInvariant'
+      BY <1>1, <2>2, <2>3
+         DEF AsyncTransportHistoryTypeInvariant,
+             AsyncSentItemsType, AsyncRetainedControlType,
+             AsyncActiveRequestsType
+    <2>5. /\ IsFiniteSet(PacketsForItems(items))
+           /\ \A packet \in PacketsForItems(items):
+                AsyncPacketTyped(packet)
+      BY <1>1, PacketsForItemsAreFiniteAndTyped
+         DEF AsyncRuntimeScalarTypeInvariant
+    <2>6. AsyncPacketContentTypeInvariant'
+      BY <1>1, <2>1, <2>5, FS_Union
+         DEF AsyncPacketContentTypeInvariant
+    <2>7. AsyncHeldChunksTypeInvariant'
+      BY <1>1, <2>1 DEF AsyncHeldChunksTypeInvariant
+    <2> QED BY <2>4, <2>6, <2>7
+         DEF AsyncTransportContentTypeInvariant
+  <1> QED BY <1>1
+
+THEOREM RememberRetainableControlPreservesTransportContentType ==
+  \A items:
+    /\ AsyncTransportContentTypeInvariant
+    /\ RetainableControlBatch(items, CurrentVoters)
+    /\ asyncRetainedControl' =
+         RememberedControl(asyncRetainedControl, items)
+    /\ UNCHANGED <<context, asyncSentItems, asyncActiveRequests,
+                    asyncTransport, asyncHeldChunks>>
+    => AsyncTransportContentTypeInvariant'
+BY RememberedControlPreservesRetainedType,
+   TypedRetentionOnlyPreservesTransportContentType
+   DEF AsyncTransportContentTypeInvariant,
+       AsyncTransportHistoryTypeInvariant,
+       AsyncRetainedControlType, CurrentVoters, CurrentEpoch
+
+THEOREM RememberRetainableControlOptionallyPublishes ==
+  \A items, broadcast:
+    /\ AsyncRuntimeScalarTypeInvariant
+    /\ AsyncTransportContentTypeInvariant
+    /\ RetainableControlBatch(items, CurrentVoters)
+    /\ broadcast \in BOOLEAN
+    /\ asyncRetainedControl' =
+         RememberedControl(asyncRetainedControl, items)
+    /\ asyncSentItems' =
+         IF broadcast THEN asyncSentItems \cup items ELSE asyncSentItems
+    /\ asyncActiveRequests' = asyncActiveRequests
+    /\ asyncTransport' =
+         IF broadcast
+         THEN asyncTransport \cup PacketsForItems(items)
+         ELSE asyncTransport
+    /\ UNCHANGED <<context, asyncHeldChunks>>
+    => AsyncTransportContentTypeInvariant'
+PROOF
+  <1>1. ASSUME NEW items, NEW broadcast,
+                AsyncRuntimeScalarTypeInvariant,
+                AsyncTransportContentTypeInvariant,
+                RetainableControlBatch(items, CurrentVoters),
+                broadcast \in BOOLEAN,
+                asyncRetainedControl' =
+                  RememberedControl(asyncRetainedControl, items),
+                asyncSentItems' =
+                  IF broadcast
+                  THEN asyncSentItems \cup items ELSE asyncSentItems,
+                asyncActiveRequests' = asyncActiveRequests,
+                asyncTransport' =
+                  IF broadcast
+                  THEN asyncTransport \cup PacketsForItems(items)
+                  ELSE asyncTransport,
+                UNCHANGED <<context, asyncHeldChunks>>
+         PROVE AsyncTransportContentTypeInvariant'
+    <2>1. AsyncRetainedControlType(
+             asyncRetainedControl', CurrentVoters')
+      BY <1>1, RememberedControlPreservesRetainedType, Isa
+         DEF AsyncTransportContentTypeInvariant,
+             AsyncTransportHistoryTypeInvariant,
+             AsyncRetainedControlType, CurrentVoters, CurrentEpoch
+    <2>2. CASE broadcast = TRUE
+      BY <1>1, <2>1, <2>2,
+         PublishTypedItemsWithTypedRetentionPreservesTransportContentType
+         DEF RetainableControlBatch
+    <2>3. CASE broadcast = FALSE
+      BY <1>1, <2>1, <2>3,
+         TypedRetentionOnlyPreservesTransportContentType
+    <2> QED BY <1>1, <2>2, <2>3
+  <1> QED BY <1>1
+
+THEOREM InstallRetainableControlOptionallyPublishes ==
+  \A node, items, broadcast:
+    /\ AsyncRuntimeScalarTypeInvariant
+    /\ AsyncTransportContentTypeInvariant
+    /\ RetainableControlBatch(items, CurrentVoters)
+    /\ broadcast \in BOOLEAN
+    /\ asyncRetainedControl' =
+         InstalledControl(asyncRetainedControl, node, items)
+    /\ asyncSentItems' =
+         IF broadcast THEN asyncSentItems \cup items ELSE asyncSentItems
+    /\ asyncActiveRequests' = asyncActiveRequests
+    /\ asyncTransport' =
+         IF broadcast
+         THEN asyncTransport \cup PacketsForItems(items)
+         ELSE asyncTransport
+    /\ UNCHANGED <<context, asyncHeldChunks>>
+    => AsyncTransportContentTypeInvariant'
+PROOF
+  <1>1. ASSUME NEW node, NEW items, NEW broadcast,
+                AsyncRuntimeScalarTypeInvariant,
+                AsyncTransportContentTypeInvariant,
+                RetainableControlBatch(items, CurrentVoters),
+                broadcast \in BOOLEAN,
+                asyncRetainedControl' =
+                  InstalledControl(asyncRetainedControl, node, items),
+                asyncSentItems' =
+                  IF broadcast
+                  THEN asyncSentItems \cup items ELSE asyncSentItems,
+                asyncActiveRequests' = asyncActiveRequests,
+                asyncTransport' =
+                  IF broadcast
+                  THEN asyncTransport \cup PacketsForItems(items)
+                  ELSE asyncTransport,
+                UNCHANGED <<context, asyncHeldChunks>>
+         PROVE AsyncTransportContentTypeInvariant'
+    <2>1. AsyncRetainedControlType(
+             RememberedControl(asyncRetainedControl, items), CurrentVoters)
+      BY <1>1, RememberedControlPreservesRetainedType
+         DEF AsyncTransportContentTypeInvariant,
+             AsyncTransportHistoryTypeInvariant,
+             AsyncRetainedControlType
+    <2>2. AsyncRetainedControlType(
+             asyncRetainedControl', CurrentVoters')
+      BY <1>1, <2>1, InstalledControlPreservesRetainedType, Isa
+         DEF CurrentVoters, CurrentEpoch
+    <2>3. CASE broadcast = TRUE
+      BY <1>1, <2>2, <2>3,
+         PublishTypedItemsWithTypedRetentionPreservesTransportContentType
+         DEF RetainableControlBatch
+    <2>4. CASE broadcast = FALSE
+      BY <1>1, <2>2, <2>4,
+         TypedRetentionOnlyPreservesTransportContentType
+    <2> QED BY <1>1, <2>3, <2>4
+  <1> QED BY <1>1
+
+THEOREM PublishRetainableControlAndEphemeralPreservesTransportContentType ==
+  \A controlItems, ephemeralItems:
+    /\ AsyncRuntimeScalarTypeInvariant
+    /\ AsyncTransportContentTypeInvariant
+    /\ RetainableControlBatch(controlItems, CurrentVoters)
+    /\ IsFiniteSet(ephemeralItems)
+    /\ \A item \in ephemeralItems: AsyncItemTyped(item)
+    /\ PublishControlAndEphemeralItems(controlItems, ephemeralItems)
+    /\ UNCHANGED <<context, asyncHeldChunks>>
+    => AsyncTransportContentTypeInvariant'
+PROOF
+  <1>1. ASSUME NEW controlItems, NEW ephemeralItems,
+                AsyncRuntimeScalarTypeInvariant,
+                AsyncTransportContentTypeInvariant,
+                RetainableControlBatch(controlItems, CurrentVoters),
+                IsFiniteSet(ephemeralItems),
+                \A item \in ephemeralItems: AsyncItemTyped(item),
+                PublishControlAndEphemeralItems(
+                  controlItems, ephemeralItems),
+                UNCHANGED <<context, asyncHeldChunks>>
+         PROVE AsyncTransportContentTypeInvariant'
+    <2> DEFINE Items == controlItems \cup ephemeralItems
+    <2>1. /\ IsFiniteSet(Items)
+           /\ \A item \in Items: AsyncItemTyped(item)
+      BY <1>1, FS_Union DEF RetainableControlBatch, Items
+    <2>2. AsyncRetainedControlType(
+             asyncRetainedControl', CurrentVoters')
+      BY <1>1, RememberedControlPreservesRetainedType, Isa
+         DEF PublishControlAndEphemeralItems,
+             AsyncTransportContentTypeInvariant,
+             AsyncTransportHistoryTypeInvariant,
+             AsyncRetainedControlType, CurrentVoters, CurrentEpoch
+    <2>3. /\ asyncSentItems' = asyncSentItems \cup Items
+           /\ asyncActiveRequests' = asyncActiveRequests
+           /\ asyncTransport' =
+                asyncTransport \cup PacketsForItems(Items)
+      BY <1>1 DEF PublishControlAndEphemeralItems, Items
+    <2> QED BY <1>1, <2>1, <2>2, <2>3,
+         PublishTypedItemsWithTypedRetentionPreservesTransportContentType
+  <1> QED BY <1>1
+
+THEOREM PublishRetainableControlPreservesTransportContentType ==
+  \A items:
+    /\ AsyncRuntimeScalarTypeInvariant
+    /\ AsyncTransportContentTypeInvariant
+    /\ RetainableControlBatch(items, CurrentVoters)
+    /\ PublishControlItems(items)
+    /\ UNCHANGED <<context, asyncHeldChunks>>
+    => AsyncTransportContentTypeInvariant'
+PROOF
+  <1>1. ASSUME NEW items,
+                AsyncRuntimeScalarTypeInvariant,
+                AsyncTransportContentTypeInvariant,
+                RetainableControlBatch(items, CurrentVoters),
+                PublishControlItems(items),
+                UNCHANGED <<context, asyncHeldChunks>>
+         PROVE AsyncTransportContentTypeInvariant'
+    <2>1. /\ AsyncSentItemsType(asyncSentItems)
+           /\ AsyncRetainedControlType(
+                asyncRetainedControl, CurrentVoters)
+           /\ AsyncActiveRequestsType(
+                asyncActiveRequests, asyncSentItems)
+           /\ AsyncPacketContentTypeInvariant
+           /\ AsyncHeldChunksTypeInvariant
+      BY <1>1, AsyncTransportHistoryTypeDecomposition
+         DEF AsyncTransportContentTypeInvariant
+    <2>2. /\ IsFiniteSet(items)
+           /\ \A item \in items: AsyncItemTyped(item)
+      BY <1>1 DEF RetainableControlBatch
+    <2>3. /\ asyncRetainedControl' =
+                RememberedControl(asyncRetainedControl, items)
+           /\ asyncSentItems' = asyncSentItems \cup items
+           /\ asyncActiveRequests' = asyncActiveRequests
+           /\ asyncTransport' =
+                asyncTransport \cup PacketsForItems(items)
+           /\ CurrentVoters' = CurrentVoters
+           /\ asyncHeldChunks' = asyncHeldChunks
+      BY <1>1, Isa
+         DEF PublishControlItems, CurrentVoters, CurrentEpoch
+    <2>4. AsyncSentItemsType(asyncSentItems')
+      BY <2>1, <2>2, <2>3, FS_Union
+         DEF AsyncSentItemsType
+    <2>5. AsyncRetainedControlType(
+             asyncRetainedControl', CurrentVoters')
+      BY <1>1, <2>1, <2>3,
+         RememberedControlPreservesRetainedType
+    <2>6. AsyncActiveRequestsType(
+             asyncActiveRequests', asyncSentItems')
+      BY <2>1, <2>3, Isa DEF AsyncActiveRequestsType
+    <2>7. AsyncTransportHistoryTypeInvariant'
+      BY <2>4, <2>5, <2>6
+         DEF AsyncTransportHistoryTypeInvariant,
+             AsyncSentItemsType, AsyncRetainedControlType,
+             AsyncActiveRequestsType
+    <2>8. /\ IsFiniteSet(PacketsForItems(items))
+           /\ \A packet \in PacketsForItems(items):
+                AsyncPacketTyped(packet)
+      BY <1>1, <2>2, PacketsForItemsAreFiniteAndTyped
+         DEF AsyncRuntimeScalarTypeInvariant
+    <2>9. AsyncPacketContentTypeInvariant'
+      BY <2>1, <2>3, <2>8, FS_Union
+         DEF AsyncPacketContentTypeInvariant
+    <2>10. AsyncHeldChunksTypeInvariant'
+      BY <2>1, <2>3 DEF AsyncHeldChunksTypeInvariant
+    <2> QED BY <2>7, <2>9, <2>10
+         DEF AsyncTransportContentTypeInvariant
+  <1> QED BY <1>1
+
+THEOREM PublishTrackedRequestsPreservesTransportContentType ==
+  \A items:
+    /\ AsyncRuntimeScalarTypeInvariant
+    /\ AsyncTransportContentTypeInvariant
+    /\ IsFiniteSet(items)
+    /\ \A item \in items:
+         /\ AsyncItemTyped(item)
+         /\ item.kind \in {"CertifiedRequest",
+                            "CommitCertificateRequest"}
+    /\ asyncActiveRequests' = asyncActiveRequests \cup items
+    /\ asyncSentItems' = asyncSentItems \cup items
+    /\ asyncTransport' = asyncTransport \cup PacketsForItems(items)
+    /\ UNCHANGED <<context, asyncRetainedControl, asyncHeldChunks>>
+    => AsyncTransportContentTypeInvariant'
+PROOF
+  <1>1. ASSUME NEW items,
+                AsyncRuntimeScalarTypeInvariant,
+                AsyncTransportContentTypeInvariant,
+                IsFiniteSet(items),
+                \A item \in items:
+                  /\ AsyncItemTyped(item)
+                  /\ item.kind \in {"CertifiedRequest",
+                                     "CommitCertificateRequest"},
+                asyncActiveRequests' = asyncActiveRequests \cup items,
+                asyncSentItems' = asyncSentItems \cup items,
+                asyncTransport' =
+                  asyncTransport \cup PacketsForItems(items),
+                UNCHANGED <<context, asyncRetainedControl,
+                            asyncHeldChunks>>
+         PROVE AsyncTransportContentTypeInvariant'
+    <2>1. /\ AsyncSentItemsType(asyncSentItems)
+           /\ AsyncRetainedControlType(
+                asyncRetainedControl, CurrentVoters)
+           /\ AsyncActiveRequestsType(
+                asyncActiveRequests, asyncSentItems)
+           /\ AsyncPacketContentTypeInvariant
+           /\ AsyncHeldChunksTypeInvariant
+      BY <1>1, AsyncTransportHistoryTypeDecomposition
+         DEF AsyncTransportContentTypeInvariant
+    <2>2. /\ CurrentVoters' = CurrentVoters
+           /\ AsyncSentItemsType(asyncSentItems')
+      BY <1>1, <2>1, FS_Union, Isa
+         DEF CurrentVoters, CurrentEpoch, AsyncSentItemsType
+    <2>3. AsyncRetainedControlType(
+             asyncRetainedControl', CurrentVoters')
+      BY <1>1, <2>1, <2>2
+    <2>4. AsyncActiveRequestsType(
+             asyncActiveRequests', asyncSentItems')
+      <3>1. IsFiniteSet(asyncActiveRequests')
+        BY <1>1, <2>1, FS_Union DEF AsyncActiveRequestsType
+      <3>2. /\ asyncActiveRequests' \subseteq asyncSentItems'
+             /\ \A item \in asyncActiveRequests':
+                  /\ AsyncItemTyped(item)
+                  /\ item.kind \in {"CertifiedRequest",
+                                      "CommitCertificateRequest"}
+        BY <1>1, <2>1 DEF AsyncActiveRequestsType
+      <3> QED BY <3>1, <3>2 DEF AsyncActiveRequestsType
+    <2>5. AsyncTransportHistoryTypeInvariant'
+      BY <2>2, <2>3, <2>4
+         DEF AsyncTransportHistoryTypeInvariant,
+             AsyncSentItemsType, AsyncRetainedControlType,
+             AsyncActiveRequestsType
+    <2>6. /\ IsFiniteSet(PacketsForItems(items))
+           /\ \A packet \in PacketsForItems(items):
+                AsyncPacketTyped(packet)
+      BY <1>1, PacketsForItemsAreFiniteAndTyped
+         DEF AsyncRuntimeScalarTypeInvariant
+    <2>7. AsyncPacketContentTypeInvariant'
+      BY <1>1, <2>1, <2>6, FS_Union
+         DEF AsyncPacketContentTypeInvariant
+    <2>8. AsyncHeldChunksTypeInvariant'
+      BY <1>1, <2>1 DEF AsyncHeldChunksTypeInvariant
+    <2> QED BY <2>5, <2>7, <2>8
+         DEF AsyncTransportContentTypeInvariant
+  <1> QED BY <1>1
+
+THEOREM RuntimeValidatorIdsAreFinite ==
+  TypeInvariant => IsFiniteSet(ValidatorIds)
+PROOF
+  <1>1. ASSUME TypeInvariant
+         PROVE IsFiniteSet(ValidatorIds)
+    <2>1. /\ 0 \in Int
+           /\ N - 1 \in Int
+      BY <1>1, SMT
+         DEF TypeInvariant, ModelConfiguration, QuorumConfiguration
+    <2> QED BY <2>1, FS_Interval DEF ValidatorIds
+  <1> QED BY <1>1
+
+THEOREM QcSignerDifferenceIsFinite ==
+  \A node, qc:
+    TypeInvariant /\ qc \in QcRecordSet
+      => IsFiniteSet(qc.signers \ {node})
+PROOF
+  <1>1. ASSUME NEW node, NEW qc,
+                TypeInvariant,
+                qc \in QcRecordSet
+         PROVE IsFiniteSet(qc.signers \ {node})
+    <2>1. IsFiniteSet(ValidatorIds)
+      BY <1>1, RuntimeValidatorIdsAreFinite
+    <2>2. qc.signers \ {node} \subseteq ValidatorIds
+      BY <1>1 DEF QcRecordSet
+    <2> QED BY <2>1, <2>2, FS_Subset
+  <1> QED BY <1>1
+
+THEOREM AsyncBodyEnvelopeConstructorTyped ==
+  \A recipient \in ValidatorIds, blockHeight \in Heights,
+     roundView \in Views, subject \in Subjects,
+     chunk \in 0..AsyncChunkCount,
+     nonce \in 0..(AsyncIngressCapacity - 1):
+    AsyncBodyEnvelopeTyped(
+      AsyncBodyEnvelope(recipient, blockHeight, roundView,
+                        subject, chunk, nonce))
+BY Isa DEF AsyncBodyEnvelopeTyped, AsyncBodyEnvelope
+
+THEOREM AsyncBodyNetworkItemConstructorTyped ==
+  \A kind \in {"Chunk", "CertifiedRequest",
+                 "CommitCertificateRequest"},
+     source \in ValidatorIds:
+    \A envelope:
+      AsyncBodyEnvelopeTyped(envelope)
+        => AsyncItemTyped(AsyncNetworkItem(kind, source, envelope))
+PROOF
+  <1>1. ASSUME NEW kind \in
+                  {"Chunk", "CertifiedRequest",
+                    "CommitCertificateRequest"},
+                NEW source \in ValidatorIds,
+                NEW envelope,
+                AsyncBodyEnvelopeTyped(envelope)
+         PROVE AsyncItemTyped(
+                 AsyncNetworkItem(kind, source, envelope))
+    <2>1. /\ DOMAIN AsyncNetworkItem(kind, source, envelope) =
+                  {"kind", "source", "envelope"}
+           /\ AsyncNetworkItem(kind, source, envelope).kind = kind
+           /\ AsyncNetworkItem(kind, source, envelope).source = source
+           /\ AsyncNetworkItem(kind, source, envelope).envelope = envelope
+      BY DEF AsyncNetworkItem
+    <2>2. kind \in AsyncNetworkKinds
+      BY <1>1, Isa DEF AsyncNetworkKinds
+    <2>3. /\ source \in AsyncIngressSources
+           /\ envelope.recipient \in ValidatorIds
+      BY <1>1, Isa
+         DEF AsyncIngressSources, AsyncBodyEnvelopeTyped
+    <2>4. CASE kind = "Chunk"
+      <3> QED BY <1>1, <2>1, <2>2, <2>3, <2>4, SMT
+           DEF AsyncItemTyped
+    <2>5. CASE kind = "CertifiedRequest"
+      <3> QED BY <1>1, <2>1, <2>2, <2>3, <2>5, SMT
+           DEF AsyncItemTyped
+    <2>6. CASE kind = "CommitCertificateRequest"
+      <3> QED BY <1>1, <2>1, <2>2, <2>3, <2>6, SMT
+           DEF AsyncItemTyped
+    <2> QED BY <1>1, <2>4, <2>5, <2>6, Isa
+  <1> QED BY <1>1
+
+THEOREM AsyncChunkReceiptConstructorTyped ==
+  \A node \in ValidatorIds, roundView \in Views,
+     subject \in Subjects, chunk \in AsyncChunks:
+    AsyncChunkReceipt(node, roundView, subject, chunk)
+      \in AsyncChunkReceiptSet
+BY Isa DEF AsyncChunkReceipt, AsyncChunkReceiptSet
+
+THEOREM ChunkOutboxIsFiniteAndTyped ==
+  \A recipient, source, roundView, subject:
+    (/\ AsyncTypeInvariant
+     /\ recipient \in ValidatorIds
+     /\ source \in ValidatorIds
+     /\ roundView \in Views
+     /\ subject \in Subjects)
+    => /\ IsFiniteSet(
+             ChunkOutbox(recipient, source, roundView, subject))
+       /\ \A item \in
+              ChunkOutbox(recipient, source, roundView, subject):
+            AsyncItemTyped(item)
+PROOF
+  <1>1. ASSUME NEW recipient, NEW source, NEW roundView, NEW subject,
+                /\ AsyncTypeInvariant
+                /\ recipient \in ValidatorIds
+                /\ source \in ValidatorIds
+                /\ roundView \in Views
+                /\ subject \in Subjects
+         PROVE /\ IsFiniteSet(
+                      ChunkOutbox(
+                        recipient, source, roundView, subject))
+               /\ \A item \in
+                      ChunkOutbox(
+                        recipient, source, roundView, subject):
+                    AsyncItemTyped(item)
+    <2>1. /\ IsFiniteSet(AsyncChunks)
+           /\ context.height \in Heights
+           /\ AsyncChunkCount \in Nat \ {0}
+           /\ AsyncIngressCapacity \in Nat \ {0}
+      BY <1>1, FS_Interval, SMT
+         DEF AsyncTypeInvariant, TypeInvariant, AsyncConfiguration,
+             AsyncSchedulerTypeInvariant, AsyncRuntimeTypeInvariant,
+             AsyncRuntimeScalarTypeInvariant, AsyncChunks
+    <2>2. IsFiniteSet(
+             ChunkOutbox(recipient, source, roundView, subject))
+      BY <2>1, FS_Image, Isa DEF ChunkOutbox
+    <2>3. \A item \in
+                    ChunkOutbox(recipient, source, roundView, subject):
+             AsyncItemTyped(item)
+      <3>1. ASSUME NEW item \in
+                         ChunkOutbox(
+                           recipient, source, roundView, subject)
+             PROVE AsyncItemTyped(item)
+        <4>1. PICK chunk \in AsyncChunks:
+                 item = AsyncNetworkItem(
+                   "Chunk", source,
+                   AsyncBodyEnvelope(recipient, context.height,
+                                     roundView, subject, chunk, 0))
+          BY <3>1 DEF ChunkOutbox
+        <4>2. /\ chunk \in 0..AsyncChunkCount
+               /\ 0 \in 0..(AsyncIngressCapacity - 1)
+          BY <2>1, <4>1, SMT DEF AsyncChunks
+        <4>3. AsyncBodyEnvelopeTyped(
+                 AsyncBodyEnvelope(recipient, context.height,
+                                   roundView, subject, chunk, 0))
+          BY <1>1, <2>1, <4>2,
+             AsyncBodyEnvelopeConstructorTyped
+        <4>4. AsyncItemTyped(
+                 AsyncNetworkItem(
+                   "Chunk", source,
+                   AsyncBodyEnvelope(recipient, context.height,
+                                     roundView, subject, chunk, 0)))
+          BY <1>1, <4>3,
+             AsyncBodyNetworkItemConstructorTyped
+        <4> QED BY <4>1, <4>4
+      <3> QED BY <3>1
+    <2> QED BY <2>2, <2>3
+  <1> QED BY <1>1
+
+THEOREM BroadcastChunkOutboxIsFiniteAndTyped ==
+  \A source, roundView, subject:
+    (/\ AsyncTypeInvariant
+     /\ source \in ValidatorIds
+     /\ roundView \in Views
+     /\ subject \in Subjects)
+    => /\ IsFiniteSet(
+             BroadcastChunkOutbox(source, roundView, subject))
+       /\ \A item \in BroadcastChunkOutbox(source, roundView, subject):
+            AsyncItemTyped(item)
+PROOF
+  <1>1. ASSUME NEW source, NEW roundView, NEW subject,
+                /\ AsyncTypeInvariant
+                /\ source \in ValidatorIds
+                /\ roundView \in Views
+                /\ subject \in Subjects
+         PROVE /\ IsFiniteSet(
+                      BroadcastChunkOutbox(source, roundView, subject))
+               /\ \A item \in
+                      BroadcastChunkOutbox(source, roundView, subject):
+                    AsyncItemTyped(item)
+    <2> DEFINE ChunkBatches ==
+          {ChunkOutbox(recipient, source, roundView, subject):
+             recipient \in CurrentVoters}
+    <2>1. /\ IsFiniteSet(CurrentVoters)
+           /\ CurrentVoters \subseteq ValidatorIds
+      BY <1>1, RuntimeCurrentVotersAreFiniteValidators
+         DEF AsyncTypeInvariant
+    <2>2. IsFiniteSet(ChunkBatches)
+      BY <2>1, FS_Image, Isa DEF ChunkBatches
+    <2>3. \A batch \in ChunkBatches: IsFiniteSet(batch)
+      <3>1. ASSUME NEW batch \in ChunkBatches
+             PROVE IsFiniteSet(batch)
+        <4>1. PICK recipient \in CurrentVoters:
+                 batch = ChunkOutbox(
+                   recipient, source, roundView, subject)
+          BY <3>1 DEF ChunkBatches
+        <4>2. recipient \in ValidatorIds
+          BY <2>1, <4>1
+        <4> QED BY <1>1, <4>1, <4>2,
+                     ChunkOutboxIsFiniteAndTyped
+      <3> QED BY <3>1
+    <2>4. IsFiniteSet(
+             BroadcastChunkOutbox(source, roundView, subject))
+      BY <2>2, <2>3, FS_UNION
+         DEF BroadcastChunkOutbox, ChunkBatches
+    <2>5. \A item \in BroadcastChunkOutbox(source, roundView, subject):
+             AsyncItemTyped(item)
+      <3>1. ASSUME NEW item \in
+                         BroadcastChunkOutbox(
+                           source, roundView, subject)
+             PROVE AsyncItemTyped(item)
+        <4>1. PICK recipient \in CurrentVoters:
+                 item \in ChunkOutbox(
+                   recipient, source, roundView, subject)
+          BY <3>1 DEF BroadcastChunkOutbox
+        <4>2. recipient \in ValidatorIds
+          BY <2>1, <4>1
+        <4> QED BY <1>1, <4>1, <4>2,
+                     ChunkOutboxIsFiniteAndTyped
+      <3> QED BY <3>1
+    <2> QED BY <2>4, <2>5
+  <1> QED BY <1>1
+
+THEOREM CertifiedRequestOutboxIsFiniteAndTyped ==
+  \A node \in ValidatorIds, qc \in QcRecordSet:
+    (/\ AsyncTypeInvariant
+     /\ qc.context = context)
+    => /\ IsFiniteSet(CertifiedRequestOutbox(node, qc))
+       /\ \A item \in CertifiedRequestOutbox(node, qc):
+            /\ AsyncItemTyped(item)
+            /\ item.kind = "CertifiedRequest"
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds,
+                NEW qc \in QcRecordSet,
+                /\ AsyncTypeInvariant
+                /\ qc.context = context
+         PROVE /\ IsFiniteSet(CertifiedRequestOutbox(node, qc))
+               /\ \A item \in CertifiedRequestOutbox(node, qc):
+                    /\ AsyncItemTyped(item)
+                    /\ item.kind = "CertifiedRequest"
+    <2>1. /\ IsFiniteSet(ValidatorIds)
+           /\ IsFiniteSet(qc.signers \ {node})
+           /\ context.height \in Heights
+           /\ AsyncChunkCount \in Nat \ {0}
+           /\ AsyncIngressCapacity \in Nat \ {0}
+      BY <1>1, RuntimeValidatorIdsAreFinite,
+         QcSignerDifferenceIsFinite, SMT
+         DEF AsyncTypeInvariant, TypeInvariant, QcRecordSet,
+             ValidatorIds, AsyncConfiguration,
+             AsyncSchedulerTypeInvariant, AsyncRuntimeTypeInvariant,
+             AsyncRuntimeScalarTypeInvariant
+    <2>2. IsFiniteSet(CertifiedRequestOutbox(node, qc))
+      BY <2>1, FS_Image, Isa DEF CertifiedRequestOutbox
+    <2>3. \A item \in CertifiedRequestOutbox(node, qc):
+             /\ AsyncItemTyped(item)
+             /\ item.kind = "CertifiedRequest"
+      <3>1. ASSUME NEW item \in CertifiedRequestOutbox(node, qc)
+             PROVE /\ AsyncItemTyped(item)
+                   /\ item.kind = "CertifiedRequest"
+        <4>1. PICK recipient \in qc.signers \ {node}:
+                 item = AsyncNetworkItem(
+                   "CertifiedRequest", node,
+                   AsyncBodyEnvelope(recipient, context.height,
+                                     qc.view, qc.subject,
+                                     NoAsyncChunk, 0))
+          BY <3>1 DEF CertifiedRequestOutbox
+        <4>2. /\ recipient \in ValidatorIds
+               /\ qc.view \in Views
+               /\ qc.subject \in Subjects
+          BY <1>1, <4>1 DEF QcRecordSet
+        <4>3. NoAsyncChunk \in 0..AsyncChunkCount
+          BY <2>1, SMT DEF NoAsyncChunk
+        <4>4. 0 \in 0..(AsyncIngressCapacity - 1)
+          BY <2>1, SMT
+        <4>5. AsyncBodyEnvelopeTyped(
+                 AsyncBodyEnvelope(recipient, context.height,
+                                   qc.view, qc.subject,
+                                   NoAsyncChunk, 0))
+          BY <1>1, <2>1, <4>2, <4>3, <4>4,
+             AsyncBodyEnvelopeConstructorTyped
+        <4>6. AsyncItemTyped(
+                 AsyncNetworkItem(
+                   "CertifiedRequest", node,
+                   AsyncBodyEnvelope(recipient, context.height,
+                                     qc.view, qc.subject,
+                                     NoAsyncChunk, 0)))
+          BY <1>1, <4>5,
+             AsyncBodyNetworkItemConstructorTyped
+        <4>7. item.kind = "CertifiedRequest"
+          BY <4>1 DEF AsyncNetworkItem
+        <4> QED BY <4>1, <4>6, <4>7
+      <3> QED BY <3>1
+    <2> QED BY <2>2, <2>3
+  <1> QED BY <1>1
+
+THEOREM CommitCertificateRequestOutboxIsFiniteAndTyped ==
+  \A node \in ValidatorIds:
+    AsyncTypeInvariant
+      => /\ IsFiniteSet(CommitCertificateRequestOutbox(node))
+         /\ \A item \in CommitCertificateRequestOutbox(node):
+              /\ AsyncItemTyped(item)
+              /\ item.kind = "CommitCertificateRequest"
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds,
+                AsyncTypeInvariant
+         PROVE /\ IsFiniteSet(CommitCertificateRequestOutbox(node))
+               /\ \A item \in CommitCertificateRequestOutbox(node):
+                    /\ AsyncItemTyped(item)
+                    /\ item.kind = "CommitCertificateRequest"
+    <2>1. /\ IsFiniteSet(CurrentVoters)
+           /\ CurrentVoters \subseteq ValidatorIds
+           /\ IsFiniteSet(CurrentVoters \ {node})
+           /\ context.height \in Heights
+           /\ nodeView[node] \in Views
+           /\ AsyncHeartbeatSubject \in Subjects
+           /\ AsyncChunkCount \in Nat \ {0}
+           /\ AsyncIngressCapacity \in Nat \ {0}
+      BY <1>1, RuntimeCurrentVotersAreFiniteValidators,
+         FS_Difference, SMT
+         DEF AsyncTypeInvariant, TypeInvariant,
+             AsyncSchedulerTypeInvariant, AsyncRuntimeTypeInvariant,
+             AsyncRuntimeScalarTypeInvariant, AsyncConfiguration,
+             ModelConfiguration, AsyncHeartbeatSubject, Subjects
+    <2>2. IsFiniteSet(CommitCertificateRequestOutbox(node))
+      BY <2>1, FS_Image, Isa DEF CommitCertificateRequestOutbox
+    <2>3. \A item \in CommitCertificateRequestOutbox(node):
+             /\ AsyncItemTyped(item)
+             /\ item.kind = "CommitCertificateRequest"
+      <3>1. ASSUME NEW item \in CommitCertificateRequestOutbox(node)
+             PROVE /\ AsyncItemTyped(item)
+                   /\ item.kind = "CommitCertificateRequest"
+        <4>1. PICK server \in CurrentVoters \ {node}:
+                 item = AsyncNetworkItem(
+                   "CommitCertificateRequest", node,
+                   AsyncBodyEnvelope(server, context.height,
+                                     nodeView[node],
+                                     AsyncHeartbeatSubject,
+                                     NoAsyncChunk, 0))
+          BY <3>1 DEF CommitCertificateRequestOutbox
+        <4>2. server \in ValidatorIds
+          BY <2>1, <4>1, Isa
+        <4>3. NoAsyncChunk \in 0..AsyncChunkCount
+          BY <2>1, SMT DEF NoAsyncChunk
+        <4>4. 0 \in 0..(AsyncIngressCapacity - 1)
+          BY <2>1, SMT
+        <4>5. AsyncBodyEnvelopeTyped(
+                 AsyncBodyEnvelope(server, context.height,
+                                   nodeView[node], AsyncHeartbeatSubject,
+                                   NoAsyncChunk, 0))
+          BY <1>1, <2>1, <4>2, <4>3, <4>4,
+             AsyncBodyEnvelopeConstructorTyped
+        <4>6. AsyncItemTyped(
+                 AsyncNetworkItem(
+                   "CommitCertificateRequest", node,
+                   AsyncBodyEnvelope(server, context.height,
+                                     nodeView[node], AsyncHeartbeatSubject,
+                                     NoAsyncChunk, 0)))
+          BY <1>1, <4>5,
+             AsyncBodyNetworkItemConstructorTyped
+        <4>7. item.kind = "CommitCertificateRequest"
+          BY <4>1 DEF AsyncNetworkItem
+        <4> QED BY <4>1, <4>6, <4>7
+      <3> QED BY <3>1
+    <2> QED BY <2>2, <2>3
+  <1> QED BY <1>1
+
+THEOREM RetainedProposalChunksAreFiniteAndTyped ==
+  \A node \in ValidatorIds:
+    AsyncTypeInvariant
+      => /\ IsFiniteSet(RetainedProposalChunks(node))
+         /\ \A item \in RetainedProposalChunks(node):
+              AsyncItemTyped(item)
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds,
+                AsyncTypeInvariant
+         PROVE /\ IsFiniteSet(RetainedProposalChunks(node))
+               /\ \A item \in RetainedProposalChunks(node):
+                    AsyncItemTyped(item)
+    <2> DEFINE Proposals ==
+          {retained \in asyncRetainedControl:
+             /\ retained.source = node
+             /\ retained.kind = "Proposal"}
+    <2> DEFINE ChunkBatches ==
+          {BroadcastChunkOutbox(
+             node, item.envelope.proposal.view,
+             item.envelope.proposal.subject): item \in Proposals}
+    <2>1. /\ IsFiniteSet(asyncRetainedControl)
+           /\ \A item \in asyncRetainedControl: AsyncItemTyped(item)
+      BY <1>1
+         DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+             AsyncTransportTypeInvariant,
+             AsyncTransportContentTypeInvariant,
+             AsyncTransportHistoryTypeInvariant
+    <2>2. /\ Proposals \subseteq asyncRetainedControl
+           /\ IsFiniteSet(Proposals)
+      BY <2>1, FS_Subset DEF Proposals
+    <2>3. \A proposalItem \in Proposals:
+             /\ proposalItem.envelope.proposal.view \in Views
+             /\ proposalItem.envelope.proposal.subject \in Subjects
+      <3>1. ASSUME NEW proposalItem \in Proposals
+             PROVE /\ proposalItem.envelope.proposal.view \in Views
+                   /\ proposalItem.envelope.proposal.subject \in Subjects
+        <4>1. /\ proposalItem \in asyncRetainedControl
+               /\ AsyncItemTyped(proposalItem)
+               /\ proposalItem.kind = "Proposal"
+          BY <2>1, <3>1 DEF Proposals
+        <4> QED BY <4>1
+             DEF AsyncItemTyped, ProposalEnvelopeSet,
+                 ProposalRecordSet
+      <3> QED BY <3>1
+    <2>4. IsFiniteSet(ChunkBatches)
+      BY <2>2, FS_Image, Isa DEF ChunkBatches
+    <2>5. \A batch \in ChunkBatches: IsFiniteSet(batch)
+      <3>1. ASSUME NEW batch \in ChunkBatches
+             PROVE IsFiniteSet(batch)
+        <4>1. PICK proposalItem \in Proposals:
+                 batch = BroadcastChunkOutbox(
+                   node, proposalItem.envelope.proposal.view,
+                   proposalItem.envelope.proposal.subject)
+          BY <3>1 DEF ChunkBatches
+        <4> QED BY <1>1, <2>3, <4>1,
+                     BroadcastChunkOutboxIsFiniteAndTyped
+      <3> QED BY <3>1
+    <2>6. IsFiniteSet(RetainedProposalChunks(node))
+      BY <2>4, <2>5, FS_UNION
+         DEF RetainedProposalChunks, Proposals, ChunkBatches
+    <2>7. \A item \in RetainedProposalChunks(node):
+             AsyncItemTyped(item)
+      <3>1. ASSUME NEW item \in RetainedProposalChunks(node)
+             PROVE AsyncItemTyped(item)
+        <4>1. PICK proposalItem \in Proposals:
+                 item \in BroadcastChunkOutbox(
+                   node, proposalItem.envelope.proposal.view,
+                   proposalItem.envelope.proposal.subject)
+          BY <3>1 DEF RetainedProposalChunks, Proposals
+        <4> QED BY <1>1, <2>3, <4>1,
+                     BroadcastChunkOutboxIsFiniteAndTyped
+      <3> QED BY <3>1
+    <2> QED BY <2>6, <2>7
+  <1> QED BY <1>1
+
+THEOREM RetryableItemsAreFiniteAndTyped ==
+  \A node \in ValidatorIds:
+    AsyncTypeInvariant
+      => /\ IsFiniteSet(RetryableItems(node))
+         /\ \A item \in RetryableItems(node): AsyncItemTyped(item)
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds,
+                AsyncTypeInvariant
+         PROVE /\ IsFiniteSet(RetryableItems(node))
+               /\ \A item \in RetryableItems(node): AsyncItemTyped(item)
+    <2>1. /\ IsFiniteSet(asyncRetainedControl)
+           /\ (\A item \in asyncRetainedControl: AsyncItemTyped(item))
+           /\ IsFiniteSet(asyncActiveRequests)
+           /\ (\A item \in asyncActiveRequests: AsyncItemTyped(item))
+      BY <1>1
+         DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+             AsyncTransportTypeInvariant,
+             AsyncTransportContentTypeInvariant,
+             AsyncTransportHistoryTypeInvariant
+    <2>2. /\ SendableItems(node) \subseteq asyncRetainedControl
+           /\ ActiveRequestItems(node) \subseteq asyncActiveRequests
+           /\ IsFiniteSet(SendableItems(node))
+           /\ IsFiniteSet(ActiveRequestItems(node))
+      BY <2>1, FS_Subset, Isa DEF SendableItems, ActiveRequestItems
+    <2>3. /\ IsFiniteSet(RetainedProposalChunks(node))
+           /\ \A item \in RetainedProposalChunks(node):
+                AsyncItemTyped(item)
+      BY <1>1, RetainedProposalChunksAreFiniteAndTyped
+    <2>4. /\ IsFiniteSet(RetainedControlEmissionItems(node))
+           /\ \A item \in RetainedControlEmissionItems(node):
+                AsyncItemTyped(item)
+      BY <2>1, <2>2, <2>3, FS_Union
+         DEF RetainedControlEmissionItems
+    <2> QED BY <2>1, <2>2, <2>4, FS_Union
+         DEF RetryableItems
+  <1> QED BY <1>1
+
+THEOREM SendNodeRetransmissionsPreservesTransportContentType ==
+  \A node \in ValidatorIds:
+    (/\ AsyncTypeInvariant
+     /\ SendNodeRetransmissions(node)
+     /\ UNCHANGED <<context, asyncHeldChunks>>)
+    => AsyncTransportContentTypeInvariant'
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds,
+                /\ AsyncTypeInvariant
+                /\ SendNodeRetransmissions(node)
+                /\ UNCHANGED <<context, asyncHeldChunks>>
+         PROVE AsyncTransportContentTypeInvariant'
+    <2>1. /\ IsFiniteSet(RetryableItems(node))
+           /\ \A item \in RetryableItems(node): AsyncItemTyped(item)
+      BY <1>1, RetryableItemsAreFiniteAndTyped
+    <2>2. PublishEphemeralItems(RetryableItems(node))
+      BY <1>1 DEF SendNodeRetransmissions, PublishEphemeralItems
+    <2>3. /\ AsyncRuntimeScalarTypeInvariant
+           /\ AsyncTransportContentTypeInvariant
+      BY <1>1
+         DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+             AsyncRuntimeTypeInvariant, AsyncTransportTypeInvariant
+    <2> QED BY <1>1, <2>1, <2>2, <2>3,
+                 PublishEphemeralItemsPreservesTransportContentType
+  <1> QED BY <1>1
+
+THEOREM AsyncTypeProvidesTransportContentInputs ==
+  AsyncTypeInvariant
+    => /\ AsyncRuntimeScalarTypeInvariant
+       /\ AsyncTransportContentTypeInvariant
+BY DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+       AsyncRuntimeTypeInvariant, AsyncTransportTypeInvariant
+
+THEOREM CoreNextLeavesContext ==
+  Next => UNCHANGED context
+PROOF
+  <1>1. ASSUME Next
+         PROVE UNCHANGED context
+    <2>1. \/ LockStableNext
+           \/ (\E request \in pendingLockCommit:
+                 PersistLockCommit(request))
+           \/ (\E request \in pendingInstallTC:
+                 PersistInstallTC(request))
+      BY <1>1, NextLockFootprintClassification
+    <2>2. CASE LockStableNext
+      <3>1. UnchangedContextAndLocks
+        BY <2>2, LockStableNextLeavesContextAndLocks
+      <3> QED BY <3>1 DEF UnchangedContextAndLocks
+    <2>3. CASE \E request \in pendingLockCommit:
+                    PersistLockCommit(request)
+      <3>1. PICK request \in pendingLockCommit:
+               PersistLockCommit(request)
+        BY <2>3
+      <3> QED BY <3>1 DEF PersistLockCommit
+    <2>4. CASE \E request \in pendingInstallTC:
+                    PersistInstallTC(request)
+      <3>1. PICK request \in pendingInstallTC:
+               PersistInstallTC(request)
+        BY <2>4
+      <3> QED BY <3>1 DEF PersistInstallTC
+    <2> QED BY <2>1, <2>2, <2>3, <2>4
+  <1> QED BY <1>1
+
+THEOREM RegularCoreCommandLeavesContext ==
+  \A command:
+    RegularCoreCommand(command) => UNCHANGED context
+BY IsaM("blast")
+   DEF RegularCoreCommand,
+       AssembleLocalBody, BeginLocalProposal, PersistProposal,
+       FetchBody, StoreBody, ValidateBody, RejectBody,
+       ValidateDecidedBody, BeginPrepare, PersistPrepare,
+       BeginObservePrepare, PersistObservePrepare,
+       BeginLockCommit, PersistLockCommit, FormCommitQC,
+       BeginDecision, PersistTimeout, FormTC, BeginInstallTC,
+       FetchCertifiedBody
+
+THEOREM ExecuteApplyLeavesContext ==
+  \A command:
+    ExecuteApply(command) => UNCHANGED context
+BY Isa DEF ExecuteApply, ApplyDecision, vars
+
+THEOREM ExecuteCoreDeliveryLeavesContext ==
+  \A command:
+    ExecuteCoreDelivery(command) => UNCHANGED context
+BY IsaM("blast")
+   DEF ExecuteCoreDelivery, DeliverProposal, DeliverVote, DeliverQC,
+       DeliverTimeout, DeliverTC
+
+THEOREM ExecuteTransportStutterCommandPreservesContent ==
+  \A command:
+    (/\ AsyncTypeInvariant
+     /\ (ExecuteRegularCommand(command)
+           \/ ExecuteApply(command)
+           \/ ExecuteRejectAuthenticatedJunk(command)))
+      => AsyncTransportContentTypeInvariant'
+BY AsyncTransportContentTypeStutter,
+   RegularCoreCommandLeavesContext, ExecuteApplyLeavesContext, Isa
+   DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+       AsyncTransportTypeInvariant, AsyncTransportContentTypeVars,
+       ExecuteRegularCommand, ExecuteApply,
+       ExecuteRejectAuthenticatedJunk, AsyncAuxVars, vars
+
+THEOREM ExecuteSignProposalPreservesTransportContentType ==
+  \A command:
+    (/\ AsyncTypeInvariant
+     /\ ExecuteSignProposal(command))
+      => AsyncTransportContentTypeInvariant'
+PROOF
+  <1>1. ASSUME NEW command,
+                /\ AsyncTypeInvariant
+                /\ ExecuteSignProposal(command)
+         PROVE AsyncTransportContentTypeInvariant'
+    <2>1. PICK request \in signProposals:
+             /\ CompleteProposalSignature(request)
+             /\ PublishControlAndEphemeralItems(
+                  ProposalOutbox(request),
+                  BroadcastChunkOutbox(
+                    request.node, request.proposal.view,
+                    request.proposal.subject))
+      BY <1>1 DEF ExecuteSignProposal
+    <2>2. /\ request \in ProposalSignSet
+           /\ request.proposal.proposer = request.node
+           /\ request.node \in ValidatorIds
+           /\ request.proposal.view \in Views
+           /\ request.proposal.subject \in Subjects
+      BY <1>1, <2>1
+         DEF AsyncTypeInvariant, TypeInvariant,
+             CompleteProposalSignature, ProposalSignSet,
+             ProposalRecordSet
+    <2>3. RetainableControlBatch(
+             ProposalOutbox(request), CurrentVoters)
+      BY <1>1, <2>2, ProposalOutboxIsRetainable
+    <2>4. /\ IsFiniteSet(
+                  BroadcastChunkOutbox(
+                    request.node, request.proposal.view,
+                    request.proposal.subject))
+           /\ \A item \in BroadcastChunkOutbox(
+                         request.node, request.proposal.view,
+                         request.proposal.subject):
+                AsyncItemTyped(item)
+      BY <1>1, <2>2, BroadcastChunkOutboxIsFiniteAndTyped
+    <2>5. UNCHANGED <<context, asyncHeldChunks>>
+      BY <1>1, <2>1, Isa
+         DEF ExecuteSignProposal, CompleteProposalSignature, vars
+    <2>6. /\ AsyncRuntimeScalarTypeInvariant
+           /\ AsyncTransportContentTypeInvariant
+      BY <1>1, AsyncTypeProvidesTransportContentInputs
+    <2> QED BY <2>1, <2>3, <2>4, <2>5, <2>6,
+         PublishRetainableControlAndEphemeralPreservesTransportContentType
+  <1> QED BY <1>1
+
+THEOREM ExecuteSignVotePreservesTransportContentType ==
+  \A command:
+    (/\ AsyncTypeInvariant
+     /\ ExecuteSignVote(command))
+      => AsyncTransportContentTypeInvariant'
+PROOF
+  <1>1. ASSUME NEW command,
+                /\ AsyncTypeInvariant
+                /\ ExecuteSignVote(command)
+         PROVE AsyncTransportContentTypeInvariant'
+    <2>1. PICK request \in signVotes:
+             /\ CompleteVoteSignature(request)
+             /\ PublishControlItems(VoteOutbox(request))
+      BY <1>1 DEF ExecuteSignVote
+    <2>2. /\ request \in VoteSignSet
+           /\ request.vote.signer = request.node
+      BY <1>1, <2>1
+         DEF AsyncTypeInvariant, TypeInvariant,
+             CompleteVoteSignature
+    <2>3. RetainableControlBatch(
+             VoteOutbox(request), CurrentVoters)
+      BY <1>1, <2>2, VoteOutboxIsRetainable
+    <2>4. UNCHANGED <<context, asyncHeldChunks>>
+      BY <1>1, <2>1, Isa
+         DEF ExecuteSignVote, CompleteVoteSignature, vars
+    <2>5. /\ AsyncRuntimeScalarTypeInvariant
+           /\ AsyncTransportContentTypeInvariant
+      BY <1>1, AsyncTypeProvidesTransportContentInputs
+    <2> QED BY <2>1, <2>3, <2>4, <2>5,
+         PublishRetainableControlPreservesTransportContentType
+  <1> QED BY <1>1
+
+THEOREM ExecuteFormPrepareQcPreservesTransportContentType ==
+  \A command:
+    (/\ AsyncTypeInvariant
+     /\ ExecuteFormPrepareQC(command))
+      => AsyncTransportContentTypeInvariant'
+PROOF
+  <1>1. ASSUME NEW command,
+                /\ AsyncTypeInvariant
+                /\ ExecuteFormPrepareQC(command)
+         PROVE AsyncTransportContentTypeInvariant'
+    <2> DEFINE Signers ==
+          VoteSignersAt(command.node, command.view, "Prepare",
+                        command.subject)
+    <2> DEFINE Certificate ==
+          QC(context, command.view, "Prepare", command.subject, Signers)
+    <2> DEFINE Items == QcOutbox(command.node, Certificate)
+    <2>1. /\ FormPrepareQC(
+                  command.node, command.view, command.subject)
+           /\ PublishControlItems(Items)
+      BY <1>1
+         DEF ExecuteFormPrepareQC, Signers, Certificate, Items
+    <2>2. /\ command.node \in ValidatorIds
+           /\ Certificate \in QcRecordSet
+           /\ UNCHANGED <<context, asyncHeldChunks>>
+      BY <1>1, <2>1, Isa
+         DEF AsyncTypeInvariant, TypeInvariant, FormPrepareQC,
+             Signers, Certificate, ExecuteFormPrepareQC, vars
+    <2>3. RetainableControlBatch(Items, CurrentVoters)
+      BY <1>1, <2>2, QcOutboxIsRetainable DEF Items
+    <2>4. /\ AsyncRuntimeScalarTypeInvariant
+           /\ AsyncTransportContentTypeInvariant
+      BY <1>1, AsyncTypeProvidesTransportContentInputs
+    <2> QED BY <2>1, <2>2, <2>3, <2>4,
+         PublishRetainableControlPreservesTransportContentType
+  <1> QED BY <1>1
+
+THEOREM ExecuteSignTimeoutPreservesTransportContentType ==
+  \A command:
+    (/\ AsyncTypeInvariant
+     /\ ExecuteSignTimeout(command))
+      => AsyncTransportContentTypeInvariant'
+PROOF
+  <1>1. ASSUME NEW command,
+                /\ AsyncTypeInvariant
+                /\ ExecuteSignTimeout(command)
+         PROVE AsyncTransportContentTypeInvariant'
+    <2>1. PICK request \in signTimeouts:
+             /\ CompleteTimeoutSignature(request)
+             /\ PublishControlItems(TimeoutOutbox(request))
+      BY <1>1 DEF ExecuteSignTimeout
+    <2>2. /\ request \in TimeoutSignSet
+           /\ request.vote.signer = request.node
+      BY <1>1, <2>1
+         DEF AsyncTypeInvariant, TypeInvariant,
+             CompleteTimeoutSignature
+    <2>3. RetainableControlBatch(
+             TimeoutOutbox(request), CurrentVoters)
+      BY <1>1, <2>2, TimeoutOutboxIsRetainable
+    <2>4. UNCHANGED <<context, asyncHeldChunks>>
+      BY <1>1, <2>1, Isa
+         DEF ExecuteSignTimeout, CompleteTimeoutSignature, vars
+    <2>5. /\ AsyncRuntimeScalarTypeInvariant
+           /\ AsyncTransportContentTypeInvariant
+      BY <1>1, AsyncTypeProvidesTransportContentInputs
+    <2> QED BY <2>1, <2>3, <2>4, <2>5,
+         PublishRetainableControlPreservesTransportContentType
+  <1> QED BY <1>1
+
+THEOREM ExecutePersistInstallPreservesTransportContentType ==
+  \A command:
+    (/\ AsyncTypeInvariant
+     /\ ExecutePersistInstall(command))
+      => AsyncTransportContentTypeInvariant'
+PROOF
+  <1>1. ASSUME NEW command,
+                /\ AsyncTypeInvariant
+                /\ ExecutePersistInstall(command)
+         PROVE AsyncTransportContentTypeInvariant'
+    <2>1. PICK request \in pendingInstallTC:
+             /\ PersistInstallTC(request)
+             /\ PersistInstalledControl(
+                  request.node, TcOutbox(request.node, request.tc),
+                  request.rebroadcast)
+      BY <1>1 DEF ExecutePersistInstall
+    <2>2. /\ request \in InstallTcWalSet
+           /\ request.node \in ValidatorIds
+           /\ request.tc \in TcRecordSet
+           /\ request.rebroadcast \in BOOLEAN
+      BY <1>1, <2>1
+         DEF AsyncTypeInvariant, TypeInvariant, InstallTcWalSet
+    <2>3. RetainableControlBatch(
+             TcOutbox(request.node, request.tc), CurrentVoters)
+      BY <1>1, <2>2, TcOutboxIsRetainable
+    <2>4. UNCHANGED <<context, asyncHeldChunks>>
+      BY <1>1, <2>1, Isa
+         DEF ExecutePersistInstall, PersistInstallTC, vars
+    <2>5. /\ AsyncRuntimeScalarTypeInvariant
+           /\ AsyncTransportContentTypeInvariant
+      BY <1>1, AsyncTypeProvidesTransportContentInputs
+    <2> QED BY <2>1, <2>2, <2>3, <2>4, <2>5,
+         InstallRetainableControlOptionallyPublishes
+         DEF PersistInstalledControl
+  <1> QED BY <1>1
+
+THEOREM ExecutePersistDecisionPreservesTransportContentType ==
+  \A command:
+    (/\ AsyncTypeInvariant
+     /\ ExecutePersistDecision(command))
+      => AsyncTransportContentTypeInvariant'
+PROOF
+  <1>1. ASSUME NEW command,
+                /\ AsyncTypeInvariant
+                /\ ExecutePersistDecision(command)
+         PROVE AsyncTransportContentTypeInvariant'
+    <2>1. PICK request \in pendingDecision:
+             /\ PersistDecision(request)
+             /\ PersistDecisionControl(
+                  QcOutbox(request.node, request.qc),
+                  request.rebroadcast)
+      BY <1>1 DEF ExecutePersistDecision
+    <2>2. /\ request \in DecisionWalSet
+           /\ request.node \in ValidatorIds
+           /\ request.qc \in QcRecordSet
+           /\ request.rebroadcast \in BOOLEAN
+      BY <1>1, <2>1
+         DEF AsyncTypeInvariant, TypeInvariant, DecisionWalSet
+    <2>3. RetainableControlBatch(
+             QcOutbox(request.node, request.qc), CurrentVoters)
+      BY <1>1, <2>2, QcOutboxIsRetainable
+    <2>4. UNCHANGED <<context, asyncHeldChunks>>
+      BY <1>1, <2>1, Isa
+         DEF ExecutePersistDecision, PersistDecision, vars
+    <2>5. /\ AsyncRuntimeScalarTypeInvariant
+           /\ AsyncTransportContentTypeInvariant
+      BY <1>1, AsyncTypeProvidesTransportContentInputs
+    <2> QED BY <2>1, <2>2, <2>3, <2>4, <2>5,
+         RememberRetainableControlOptionallyPublishes
+         DEF PersistDecisionControl
+  <1> QED BY <1>1
+
+THEOREM ExecuteRequestCertifiedBodyPreservesTransportContentType ==
+  \A command:
+    (/\ StrongInductiveInvariant
+     /\ AsyncTypeInvariant
+     /\ AsyncCandidateTyped(command)
+     /\ ExecuteRequestCertifiedBody(command))
+      => AsyncTransportContentTypeInvariant'
+PROOF
+  <1>1. ASSUME NEW command,
+                /\ StrongInductiveInvariant
+                /\ AsyncTypeInvariant
+                /\ AsyncCandidateTyped(command)
+                /\ ExecuteRequestCertifiedBody(command)
+         PROVE AsyncTransportContentTypeInvariant'
+    <2>1. PICK decision \in decisions:
+             /\ decision.node = command.node
+             /\ decision.qc.context = context
+             /\ PublishCertifiedRequests(
+                  CertifiedRequestOutbox(command.node, decision.qc))
+      BY <1>1 DEF ExecuteRequestCertifiedBody
+    <2>2. /\ command.node \in ValidatorIds
+           /\ decision.qc \in QcRecordSet
+      BY <1>1, <2>1, SMT
+         DEF AsyncCandidateTyped, StrongInductiveInvariant, Safety,
+             TypeInvariant, DecisionAgreement
+    <2>3. /\ IsFiniteSet(
+                  CertifiedRequestOutbox(command.node, decision.qc))
+           /\ \A item \in CertifiedRequestOutbox(
+                         command.node, decision.qc):
+                /\ AsyncItemTyped(item)
+                /\ item.kind = "CertifiedRequest"
+      BY <1>1, <2>1, <2>2,
+         CertifiedRequestOutboxIsFiniteAndTyped
+    <2>4. /\ UNCHANGED context
+           /\ UNCHANGED asyncRetainedControl
+           /\ UNCHANGED asyncHeldChunks
+      BY <1>1, <2>1, Isa
+         DEF ExecuteRequestCertifiedBody, PublishCertifiedRequests,
+             vars
+    <2>5. /\ AsyncRuntimeScalarTypeInvariant
+           /\ AsyncTransportContentTypeInvariant
+      BY <1>1, AsyncTypeProvidesTransportContentInputs
+    <2> QED BY <2>1, <2>3, <2>4, <2>5,
+         PublishTrackedRequestsPreservesTransportContentType
+         DEF PublishCertifiedRequests
+  <1> QED BY <1>1
+
+THEOREM ExecuteCoreDeliveryPreservesTransportContentType ==
+  \A command:
+    (/\ AsyncTypeInvariant
+     /\ AsyncCandidateTyped(command)
+     /\ ExecuteCoreDelivery(command))
+      => AsyncTransportContentTypeInvariant'
+PROOF
+  <1>1. ASSUME NEW command,
+                /\ AsyncTypeInvariant
+                /\ AsyncCandidateTyped(command)
+                /\ ExecuteCoreDelivery(command)
+         PROVE AsyncTransportContentTypeInvariant'
+    <2>1. AsyncTransportContentTypeInvariant
+      BY <1>1
+         DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+             AsyncTransportTypeInvariant
+    <2>2. AsyncTransportHistoryTypeInvariant
+      BY <2>1 DEF AsyncTransportContentTypeInvariant
+    <2>3. AsyncSentItemsType(asyncSentItems)
+      BY <2>2, AsyncTransportHistoryTypeDecomposition
+    <2>4. /\ command.item \in asyncSentItems
+           /\ AsyncItemTyped(command.item)
+           /\ command.node \in ValidatorIds
+      BY <1>1, <2>3, Isa
+         DEF AsyncSentItemsType, AsyncCandidateTyped,
+             ExecuteCoreDelivery
+    <2>5. UNCHANGED context
+      BY <1>1, ExecuteCoreDeliveryLeavesContext
+    <2>6. CASE command.item.kind = "PrepareQC"
+      <3>1. /\ command.item.envelope.qc \in QcRecordSet
+             /\ RetainableControlBatch(
+                  QcOutbox(command.node, command.item.envelope.qc),
+                  CurrentVoters)
+        BY <1>1, <2>4, <2>6, QcOutboxIsRetainable
+           DEF AsyncItemTyped, QcEnvelopeSet
+      <3>2. /\ asyncRetainedControl' =
+                    RememberedControl(
+                      asyncRetainedControl,
+                      QcOutbox(
+                        command.node, command.item.envelope.qc))
+             /\ UNCHANGED <<context, asyncSentItems,
+                              asyncActiveRequests, asyncTransport,
+                              asyncHeldChunks>>
+        BY <1>1, <2>5, <2>6, Isa
+           DEF ExecuteCoreDelivery, vars
+      <3> QED BY <2>1, <3>1, <3>2,
+           RememberRetainableControlPreservesTransportContentType
+    <2>7. CASE command.item.kind # "PrepareQC"
+      <3>1. UNCHANGED AsyncTransportContentTypeVars
+        BY <1>1, <2>5, <2>7, Isa
+           DEF ExecuteCoreDelivery,
+               AsyncTransportContentTypeVars, vars
+      <3> QED BY <2>1, <3>1, AsyncTransportContentTypeStutter
+    <2> QED BY <2>6, <2>7
+  <1> QED BY <1>1
+
+THEOREM ExecuteChunkDeliveryPreservesTransportContentType ==
+  \A command:
+    (/\ AsyncTypeInvariant
+     /\ AsyncCandidateTyped(command)
+     /\ ExecuteChunkDelivery(command))
+      => AsyncTransportContentTypeInvariant'
+PROOF
+  <1>1. ASSUME NEW command,
+                /\ AsyncTypeInvariant
+                /\ AsyncCandidateTyped(command)
+                /\ ExecuteChunkDelivery(command)
+         PROVE AsyncTransportContentTypeInvariant'
+    <2> DEFINE Receipt ==
+          AsyncChunkReceipt(
+            command.node, command.item.envelope.view,
+            command.item.envelope.subject,
+            command.item.envelope.chunk)
+    <2>1. /\ AsyncTransportHistoryTypeInvariant
+           /\ AsyncPacketContentTypeInvariant
+           /\ AsyncHeldChunksTypeInvariant
+      BY <1>1
+         DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+             AsyncTransportTypeInvariant,
+             AsyncTransportContentTypeInvariant
+    <2>2. /\ command.item \in asyncSentItems
+           /\ AsyncItemTyped(command.item)
+      BY <1>1, <2>1, Isa
+         DEF AsyncTransportHistoryTypeInvariant, AsyncSentItemsType,
+             ExecuteChunkDelivery
+    <2>3. command.node \in ValidatorIds
+      BY <1>1 DEF AsyncCandidateTyped
+    <2>4. command.item.kind = "Chunk"
+      BY <1>1 DEF ExecuteChunkDelivery
+    <2>5. AsyncBodyEnvelopeTyped(command.item.envelope)
+      BY <2>2, <2>4, SMT DEF AsyncItemTyped
+    <2>6. /\ command.item.envelope.view \in Views
+           /\ command.item.envelope.subject \in Subjects
+      BY <2>5 DEF AsyncBodyEnvelopeTyped
+    <2>7. command.item.envelope.chunk \in AsyncChunks
+      BY <1>1 DEF ExecuteChunkDelivery
+    <2>8. Receipt \in AsyncChunkReceiptSet
+      BY <2>3, <2>6, <2>7,
+         AsyncChunkReceiptConstructorTyped DEF Receipt
+    <2>9. /\ UNCHANGED AsyncTransportHistoryTypeVars
+           /\ UNCHANGED asyncTransport
+           /\ asyncHeldChunks' = asyncHeldChunks \cup {Receipt}
+      BY <1>1, Isa
+         DEF ExecuteChunkDelivery,
+             AsyncTransportHistoryTypeVars, Receipt, vars
+    <2>10. AsyncTransportHistoryTypeInvariant'
+      BY <2>1, <2>9, AsyncTransportHistoryTypeStutter
+    <2>11. AsyncPacketContentTypeInvariant'
+      BY <2>1, <2>9 DEF AsyncPacketContentTypeInvariant
+    <2>12. AsyncHeldChunksTypeInvariant'
+      BY <2>1, <2>8, <2>9, Isa
+         DEF AsyncHeldChunksTypeInvariant
+    <2> QED BY <2>10, <2>11, <2>12
+         DEF AsyncTransportContentTypeInvariant
+  <1> QED BY <1>1
+
+THEOREM ExecuteCommandPreservesTransportContentType ==
+  \A command:
+    (/\ StrongInductiveInvariant
+     /\ AsyncTypeInvariant
+     /\ AsyncCandidateTyped(command)
+     /\ ExecuteCommand(command))
+      => AsyncTransportContentTypeInvariant'
+PROOF
+  <1>1. ASSUME NEW command,
+                /\ StrongInductiveInvariant
+                /\ AsyncTypeInvariant
+                /\ AsyncCandidateTyped(command)
+                /\ ExecuteCommand(command)
+         PROVE AsyncTransportContentTypeInvariant'
+    <2>1. CASE ExecuteRegularCommand(command)
+                   \/ ExecuteApply(command)
+                   \/ ExecuteRejectAuthenticatedJunk(command)
+      BY <1>1, <2>1,
+         ExecuteTransportStutterCommandPreservesContent
+    <2>2. CASE ExecuteSignProposal(command)
+      BY <1>1, <2>2,
+         ExecuteSignProposalPreservesTransportContentType
+    <2>3. CASE ExecuteSignVote(command)
+      BY <1>1, <2>3,
+         ExecuteSignVotePreservesTransportContentType
+    <2>4. CASE ExecuteFormPrepareQC(command)
+      BY <1>1, <2>4,
+         ExecuteFormPrepareQcPreservesTransportContentType
+    <2>5. CASE ExecuteSignTimeout(command)
+      BY <1>1, <2>5,
+         ExecuteSignTimeoutPreservesTransportContentType
+    <2>6. CASE ExecutePersistInstall(command)
+      BY <1>1, <2>6,
+         ExecutePersistInstallPreservesTransportContentType
+    <2>7. CASE ExecutePersistDecision(command)
+      BY <1>1, <2>7,
+         ExecutePersistDecisionPreservesTransportContentType
+    <2>8. CASE ExecuteRequestCertifiedBody(command)
+      BY <1>1, <2>8,
+         ExecuteRequestCertifiedBodyPreservesTransportContentType
+    <2>9. CASE ExecuteCoreDelivery(command)
+      BY <1>1, <2>9,
+         ExecuteCoreDeliveryPreservesTransportContentType
+    <2>10. CASE ExecuteChunkDelivery(command)
+      BY <1>1, <2>10,
+         ExecuteChunkDeliveryPreservesTransportContentType
+    <2> QED BY <1>1, <2>1, <2>2, <2>3, <2>4, <2>5,
+                <2>6, <2>7, <2>8, <2>9, <2>10
+         DEF ExecuteCommand
+  <1> QED BY <1>1
+
+THEOREM DirectCommitDiscoveryPreservesTransportContentType ==
+  \A node \in ValidatorIds:
+    /\ AsyncTypeInvariant
+    /\ DirectCommitCertificateDiscoveryStep(node)
+    => AsyncTransportContentTypeInvariant'
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds,
+                AsyncTypeInvariant,
+                DirectCommitCertificateDiscoveryStep(node)
+         PROVE AsyncTransportContentTypeInvariant'
+    <2> DEFINE Items == CommitCertificateRequestOutbox(node)
+    <2>1. /\ IsFiniteSet(Items)
+           /\ \A item \in Items:
+                /\ AsyncItemTyped(item)
+                /\ item.kind = "CommitCertificateRequest"
+      BY <1>1, CommitCertificateRequestOutboxIsFiniteAndTyped
+         DEF Items
+    <2>2. /\ AsyncRuntimeScalarTypeInvariant
+           /\ AsyncTransportContentTypeInvariant
+           /\ asyncActiveRequests' = asyncActiveRequests \cup Items
+           /\ asyncSentItems' = asyncSentItems \cup Items
+           /\ asyncTransport' = asyncTransport \cup PacketsForItems(Items)
+           /\ UNCHANGED <<context, asyncRetainedControl,
+                          asyncHeldChunks>>
+      BY <1>1, Isa
+         DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+             AsyncRuntimeTypeInvariant, AsyncTransportTypeInvariant,
+             DirectCommitCertificateDiscoveryStep,
+             PublishCommitCertificateRequests, Items, vars,
+             AsyncDeferredVars
+    <2> QED BY <2>1, <2>2,
+                 PublishTrackedRequestsPreservesTransportContentType
+  <1> QED BY <1>1
+
+THEOREM DirectTimeoutPreservesTransportContentType ==
+  \A node \in ValidatorIds:
+    /\ AsyncTypeInvariant
+    /\ DirectTimeoutStep(node)
+    => AsyncTransportContentTypeInvariant'
+BY AsyncTransportContentTypeStutter, Isa
+   DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+       AsyncTransportTypeInvariant, DirectTimeoutStep,
+       BeginTimeoutEnabled, BeginTimeout, AppendCausalSuccessors,
+       LeaveCausalQueues, AsyncTransportContentTypeVars, vars
+
+THEOREM DeferredTimeoutPreservesTransportContentType ==
+  \A node \in ValidatorIds:
+    /\ AsyncTypeInvariant
+    /\ DeferredTimeoutStep(node)
+    => AsyncTransportContentTypeInvariant'
+BY AsyncTransportContentTypeStutter, Isa
+   DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+       AsyncTransportTypeInvariant, DeferredTimeoutStep,
+       BeginTimeoutEnabled, BeginTimeout, AppendCausalSuccessors,
+       LeaveCausalQueues, AsyncTransportContentTypeVars, vars
+
+THEOREM DirectRetransmitPreservesTransportContentType ==
+  \A node \in ValidatorIds:
+    /\ AsyncTypeInvariant
+    /\ DirectRetransmitStep(node)
+    => AsyncTransportContentTypeInvariant'
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds,
+                AsyncTypeInvariant,
+                DirectRetransmitStep(node)
+         PROVE AsyncTransportContentTypeInvariant'
+    <2>1. CASE NodeIdle(node) /\ RetryableItems(node) # {}
+      <3>1. /\ SendNodeRetransmissions(node)
+             /\ UNCHANGED <<context, asyncHeldChunks>>
+        BY <1>1, <2>1, Isa
+           DEF DirectRetransmitStep, vars
+      <3> QED BY <1>1, <3>1,
+                   SendNodeRetransmissionsPreservesTransportContentType
+    <2>2. CASE ~(NodeIdle(node) /\ RetryableItems(node) # {})
+      <3>1. UNCHANGED AsyncTransportContentTypeVars
+        BY <1>1, <2>2, Isa
+           DEF DirectRetransmitStep, NoSendItem,
+               AsyncTransportContentTypeVars, vars
+      <3> QED BY <1>1, <3>1, AsyncTransportContentTypeStutter
+           DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+               AsyncTransportTypeInvariant
+    <2> QED BY <2>1, <2>2
+  <1> QED BY <1>1
+
+THEOREM DeferredRetransmitPreservesTransportContentType ==
+  \A node \in ValidatorIds:
+    /\ AsyncTypeInvariant
+    /\ DeferredRetransmitStep(node)
+    => AsyncTransportContentTypeInvariant'
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds,
+                AsyncTypeInvariant,
+                DeferredRetransmitStep(node)
+         PROVE AsyncTransportContentTypeInvariant'
+    <2>1. CASE RetryableItems(node) # {}
+      <3>1. /\ SendNodeRetransmissions(node)
+             /\ UNCHANGED <<context, asyncHeldChunks>>
+        BY <1>1, <2>1, Isa
+           DEF DeferredRetransmitStep, vars
+      <3> QED BY <1>1, <3>1,
+                   SendNodeRetransmissionsPreservesTransportContentType
+    <2>2. CASE RetryableItems(node) = {}
+      <3>1. UNCHANGED AsyncTransportContentTypeVars
+        BY <1>1, <2>2, Isa
+           DEF DeferredRetransmitStep, NoSendItem,
+               AsyncTransportContentTypeVars, vars
+      <3> QED BY <1>1, <3>1, AsyncTransportContentTypeStutter
+           DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+               AsyncTransportTypeInvariant
+    <2> QED BY <2>1, <2>2
+  <1> QED BY <1>1
+
+THEOREM DeferredTagPreservesTransportContentType ==
+  \A node \in ValidatorIds:
+    /\ AsyncTypeInvariant
+    /\ DeferredTagStep(node)
+    => AsyncTransportContentTypeInvariant'
+BY DeferredTimeoutPreservesTransportContentType,
+   DeferredRetransmitPreservesTransportContentType, Isa
+   DEF DeferredTagStep
+
+THEOREM IdleRuntimePreservesTransportContentType ==
+  \A node \in ValidatorIds:
+    /\ AsyncTypeInvariant
+    /\ IdleRuntimeStep(node)
+    => AsyncTransportContentTypeInvariant'
+BY AsyncTransportContentTypeStutter, Isa
+   DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+       AsyncTransportTypeInvariant, IdleRuntimeStep,
+       LeaveCausalQueues, AsyncTransportContentTypeVars, vars,
+       AsyncDeferredVars
 
 THEOREM AsyncStepRefinementObligation ==
   AsyncNext => [Next]_vars
@@ -8945,6 +15103,201 @@ PROOF
             => WF_AsyncAllVars(AsyncSetGST)
       BY DEF AsyncSpecAt, AsyncFairnessAt
     <2> QED BY <2>1, <2>2, <2>3, <2>4, PTL
+  <1> QED BY <1>1
+
+THEOREM FifoRuntimePreservesTransportContentType ==
+  \A node \in ValidatorIds:
+    /\ StrongInductiveInvariant
+    /\ AsyncTypeInvariant
+    /\ FifoRuntimeStep(node)
+    => AsyncTransportContentTypeInvariant'
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds,
+                StrongInductiveInvariant,
+                AsyncTypeInvariant,
+                FifoRuntimeStep(node)
+         PROVE AsyncTransportContentTypeInvariant'
+    <2> DEFINE Command == NextNodeCommand(node)
+    <2>1. /\ NodeQueueNonempty(node)
+           /\ AsyncCandidateTyped(Command)
+      BY <1>1, RuntimeSelectedCommandsAreTyped DEF FifoRuntimeStep,
+                                                       Command
+    <2>2. CASE CommandDispatchable(Command)
+      <3>1. ExecuteCommand(Command)
+        BY <1>1, <2>2 DEF FifoRuntimeStep, Command
+      <3> QED BY <1>1, <2>1, <3>1,
+                   ExecuteCommandPreservesTransportContentType
+    <2>3. CASE ~CommandDispatchable(Command)
+      <3>1. UNCHANGED AsyncTransportContentTypeVars
+        BY <1>1, <2>3, Isa
+           DEF FifoRuntimeStep, DeferCommand, DiscardCommand,
+               Command, AsyncTransportContentTypeVars, vars
+      <3> QED BY <1>1, <3>1, AsyncTransportContentTypeStutter
+           DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+               AsyncTransportTypeInvariant
+    <2> QED BY <2>2, <2>3
+  <1> QED BY <1>1
+
+THEOREM DeferredDrainRuntimePreservesTransportContentType ==
+  \A node \in ValidatorIds:
+    /\ StrongInductiveInvariant
+    /\ AsyncTypeInvariant
+    /\ DeferredDrainStep(node)
+    => AsyncTransportContentTypeInvariant'
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds,
+                StrongInductiveInvariant,
+                AsyncTypeInvariant,
+                DeferredDrainStep(node)
+         PROVE AsyncTransportContentTypeInvariant'
+    <2>1. CASE ~DeferredQueueNonempty(node)
+      <3>1. UNCHANGED AsyncTransportContentTypeVars
+        BY <1>1, <2>1, Isa
+           DEF DeferredDrainStep, AsyncTransportContentTypeVars,
+               vars
+      <3> QED BY <1>1, <3>1, AsyncTransportContentTypeStutter
+           DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+               AsyncTransportTypeInvariant
+    <2>2. CASE DeferredQueueNonempty(node)
+      <3> DEFINE Command == NextDeferredCommand(node)
+      <3>1. AsyncCandidateTyped(Command)
+        BY <1>1, <2>2, RuntimeSelectedCommandsAreTyped DEF Command
+      <3>2. CASE CommandDispatchable(Command)
+        <4>1. ExecuteCommand(Command)
+          BY <1>1, <2>2, <3>2 DEF DeferredDrainStep, Command
+        <4> QED BY <1>1, <3>1, <4>1,
+                     ExecuteCommandPreservesTransportContentType
+      <3>3. CASE ~CommandDispatchable(Command)
+        <4>1. UNCHANGED AsyncTransportContentTypeVars
+          BY <1>1, <2>2, <3>3, Isa
+             DEF DeferredDrainStep, DiscardCommand,
+                 Command, AsyncTransportContentTypeVars, vars
+        <4> QED BY <1>1, <4>1, AsyncTransportContentTypeStutter
+             DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+                 AsyncTransportTypeInvariant
+      <3> QED BY <3>2, <3>3
+    <2> QED BY <2>1, <2>2
+  <1> QED BY <1>1
+
+THEOREM SerializedRuntimePreservesTransportContentType ==
+  \A node \in AsyncCurrentResponsiveVoters:
+    /\ StrongInductiveInvariant
+    /\ AsyncTypeInvariant
+    /\ SerializedRuntimeStep(node)
+    => AsyncTransportContentTypeInvariant'
+PROOF
+  <1>1. ASSUME NEW node \in AsyncCurrentResponsiveVoters,
+                StrongInductiveInvariant,
+                AsyncTypeInvariant,
+                SerializedRuntimeStep(node)
+         PROVE AsyncTransportContentTypeInvariant'
+    <2>1. node \in ValidatorIds
+      BY <1>1, AsyncCurrentResponsiveVotersAreValidators
+         DEF AsyncTypeInvariant
+    <2>2. CASE DirectCommitCertificateDiscoveryStep(node)
+      BY <1>1, <2>1, <2>2,
+         DirectCommitDiscoveryPreservesTransportContentType
+    <2>3. CASE DeferredDrainStep(node)
+      BY <1>1, <2>1, <2>3,
+         DeferredDrainRuntimePreservesTransportContentType
+    <2>4. CASE DeferredTagStep(node)
+      BY <1>1, <2>1, <2>4,
+         DeferredTagPreservesTransportContentType
+    <2>5. CASE DirectTimeoutStep(node)
+      BY <1>1, <2>1, <2>5,
+         DirectTimeoutPreservesTransportContentType
+    <2>6. CASE FifoRuntimeStep(node)
+      BY <1>1, <2>1, <2>6,
+         FifoRuntimePreservesTransportContentType
+    <2>7. CASE DirectRetransmitStep(node)
+      BY <1>1, <2>1, <2>7,
+         DirectRetransmitPreservesTransportContentType
+    <2>8. CASE IdleRuntimeStep(node)
+      BY <1>1, <2>1, <2>8,
+         IdleRuntimePreservesTransportContentType
+    <2> QED BY <1>1, <2>2, <2>3, <2>4, <2>5, <2>6,
+                  <2>7, <2>8
+         DEF SerializedRuntimeStep, RuntimeStep
+  <1> QED BY <1>1
+
+THEOREM SerializedRuntimePreservesSchedulerType ==
+  \A node \in AsyncCurrentResponsiveVoters:
+    /\ StrongInductiveInvariant
+    /\ AsyncTypeInvariant
+    /\ RunNode(node)
+    /\ SerializedRuntimeStep(node)
+    => AsyncSchedulerTypeInvariant'
+PROOF
+  <1>1. ASSUME NEW node \in AsyncCurrentResponsiveVoters,
+                StrongInductiveInvariant,
+                AsyncTypeInvariant,
+                RunNode(node),
+                SerializedRuntimeStep(node)
+         PROVE AsyncSchedulerTypeInvariant'
+    <2>1. node \in ValidatorIds
+      BY <1>1, AsyncCurrentResponsiveVotersAreValidators
+         DEF AsyncTypeInvariant
+    <2>2. AsyncRuntimeScalarTypeInvariant'
+      BY <1>1, SerializedRuntimePreservesScalarType
+    <2>3. AsyncCausalTypeInvariant'
+      BY <1>1, SerializedRuntimePreservesCausalType
+    <2>4. AsyncIoTypeInvariant'
+      BY <1>1, SerializedRuntimePreservesIoType
+    <2>5. AsyncDeferredTypeInvariant'
+      BY <1>1, SerializedRuntimePreservesDeferredType
+    <2>6. AsyncTransportClockTypeInvariant'
+      BY <1>1, SerializedRuntimePreservesTransportClockType
+    <2>7. AsyncTransportContentTypeInvariant'
+      BY <1>1, SerializedRuntimePreservesTransportContentType
+    <2>8. AsyncIngressTypeInvariant
+      BY <1>1
+         DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant
+    <2>9. AsyncIngressTypeInvariant'
+      BY <1>1, <2>1, <2>8,
+         SerializedRuntimePreservesIngressType
+    <2> QED BY <2>2, <2>3, <2>4, <2>5, <2>6, <2>7, <2>9
+         DEF AsyncSchedulerTypeInvariant, AsyncRuntimeTypeInvariant,
+             AsyncTransportTypeInvariant
+  <1> QED BY <1>1
+
+(***************************************************************************
+The runner theorem composes only concrete phase actions.  In particular, the
+serialized-runtime leaf above follows the exact command and transport
+updates; no abstract scheduler step is introduced at this boundary.
+***************************************************************************)
+THEOREM AsyncRunnerStepPreservesSchedulerType ==
+  /\ StrongInductiveInvariant
+  /\ AsyncTypeInvariant
+  /\ AsyncRunnerStep
+  => AsyncSchedulerTypeInvariant'
+PROOF
+  <1>1. ASSUME StrongInductiveInvariant,
+              AsyncTypeInvariant,
+              AsyncRunnerStep
+         PROVE AsyncSchedulerTypeInvariant'
+    <2>1. CASE \E node \in AsyncCurrentResponsiveVoters:
+                    RunNode(node)
+      <3>1. PICK node \in AsyncCurrentResponsiveVoters:
+               RunNode(node)
+        BY <2>1
+      <3>2. CASE LocalAdmissionStep(node)
+        BY <1>1, <3>1, <3>2,
+           LocalAdmissionRunnerPreservesSchedulerType
+      <3>3. CASE IngressDrainStep(node)
+        BY <1>1, <3>1, <3>3,
+           IngressAdmissionRunnerPreservesSchedulerType
+      <3>4. CASE SerializedRuntimeStep(node)
+        BY <1>1, <3>1, <3>4,
+           SerializedRuntimePreservesSchedulerType
+      <3> QED BY <3>1, <3>2, <3>3, <3>4 DEF RunNode
+    <2>2. CASE \E node \in AsyncCurrentResponsiveVoters:
+                    RunHistoricalServer(node)
+      <3>1. PICK node \in AsyncCurrentResponsiveVoters:
+               RunHistoricalServer(node)
+        BY <2>2
+      <3> QED BY <1>1, <3>1,
+                   RunHistoricalServerPreservesSchedulerType
+    <2> QED BY <1>1, <2>1, <2>2 DEF AsyncRunnerStep
   <1> QED BY <1>1
 
 (***************************************************************************
@@ -9066,7 +15419,7 @@ BY SMTT(30)
 
 THEOREM ExecutePersistInstallAdvancesCertifiedView ==
   \A command:
-    ExecutePersistInstall(command)
+    TypeInvariant /\ ExecutePersistInstall(command)
       => TimeoutViewGoal(command.node, command.view)'
 BY SMTT(30)
    DEF ExecutePersistInstall, PersistInstallTC, TimeoutViewGoal
@@ -9321,14 +15674,20 @@ PROOF
     <2>8. CASE \E node \in ValidatorIds,
                   proposal \in SeenProposalValues:
                   FetchBody(node, proposal)
-      BY <2>8, Isa DEF FetchBody
-    <2>9. CASE \E node \in ValidatorIds, subject \in Subjects:
-                  StoreBody(node, subject)
+                    \/ RebindRetainedBody(node, proposal)
+      BY <2>8, Isa DEF FetchBody, RebindRetainedBody
+    <2>9. CASE \E node \in ValidatorIds, roundView \in Views,
+                  subject \in Subjects:
+                  StoreBody(node, roundView, subject)
       BY <2>9, Isa DEF StoreBody
-    <2>10. CASE \E node \in ValidatorIds,
-                   proposal \in SeenProposalValues:
-                   ValidateBody(node, proposal) \/ RejectBody(node, proposal)
-      BY <2>10, Isa DEF ValidateBody, RejectBody
+    <2>10. CASE (\E node \in ValidatorIds,
+                         proposal \in SeenProposalValues:
+                         ValidateBody(node, proposal)
+                           \/ RejectBody(node, proposal))
+                    \/ (\E node \in ValidatorIds,
+                         qc \in DecisionQcValues:
+                         ValidateDecidedBody(node, qc))
+      BY <2>10, Isa DEF ValidateBody, ValidateDecidedBody, RejectBody
     <2>11. CASE \E node \in ValidatorIds,
                    proposal \in SeenProposalValues:
                    BeginPrepare(node, proposal)
@@ -9511,32 +15870,34 @@ PROOF
                                            command.subject) = AsyncChunks
                          /\ ~BodyHeldBy(
                                durableBodies, command.node, context,
-                               command.subject)
-                         /\ \E proposal \in SeenProposalValues:
+                               command.view, command.subject)
+                         /\ \E retainedProposal \in SeenProposalValues:
                               /\ CommandMatches(
-                                   command, command.node, proposal.view,
-                                   proposal.subject)
-                              /\ FetchBody(command.node, proposal)
+                                   command, command.node,
+                                   retainedProposal.view,
+                                   retainedProposal.subject)
+                              /\ FetchBody(command.node, retainedProposal)
                     \/ /\ command.kind = "RebindRetainedBody"
-                         /\ BodyHeldBy(
-                               durableBodies, command.node, context,
-                               command.subject)
                          /\ \E proposal \in SeenProposalValues:
                               /\ CommandMatches(
                                    command, command.node, proposal.view,
                                    proposal.subject)
-                              /\ FetchBody(command.node, proposal)
-      BY <2>4, Isa DEF FetchBody
+                              /\ RebindRetainedBody(command.node, proposal)
+      BY <2>4, Isa DEF FetchBody, RebindRetainedBody
     <2>5. CASE command.kind = "StoreBody"
-                /\ StoreBody(command.node, command.subject)
+                /\ StoreBody(command.node, command.view, command.subject)
       BY <2>5, Isa DEF StoreBody
     <2>6. CASE command.kind = "ValidateBody"
-                /\ \E proposal \in SeenProposalValues:
-                     /\ CommandMatches(
-                          command, command.node, proposal.view,
-                          proposal.subject)
-                     /\ ValidateBody(command.node, proposal)
-      BY <2>6, Isa DEF ValidateBody
+                /\ ((\E proposal \in SeenProposalValues:
+                       /\ CommandMatches(
+                            command, command.node, proposal.view,
+                            proposal.subject)
+                       /\ ValidateBody(command.node, proposal))
+                    \/ (\E qc \in DecisionQcValues:
+                          /\ CommandMatches(
+                               command, command.node, qc.view, qc.subject)
+                          /\ ValidateDecidedBody(command.node, qc)))
+      BY <2>6, Isa DEF ValidateBody, ValidateDecidedBody
     <2>7. CASE command.kind = "BeginPrepare"
                 /\ \E proposal \in SeenProposalValues:
                      /\ CommandMatches(
@@ -9802,7 +16163,9 @@ PROOF
                   EnqueueIoLocalControl(node)
       BY <2>4, Isa DEF EnqueueIoLocalControl, vars
     <2>5. CASE AsyncNetworkStep
-      BY <2>5, Isa DEF AsyncNetworkStep, AdmitHiddenPacket, vars
+      BY <2>5, Isa
+         DEF AsyncNetworkStep, AdmitIngressPacket,
+             AdmitHiddenPacket, CoalesceHiddenPacket, vars
     <2>6. CASE AsyncFaultStep
       BY <2>6, AsyncFaultStepKeepsTimeoutPool
     <2> QED BY <1>1, <2>1, <2>2, <2>3, <2>4, <2>5, <2>6
@@ -11462,19 +17825,24 @@ PROOF
   <1> QED BY <1>1
 
 (***************************************************************************
-Retained exact-body round rebinding.  The immutable body fact may survive a
-view change, but the production adapter does not reuse old manifest, storage,
-or validation completions.  Proposal delivery therefore emits a completion-
-class `RebindRetainedBody` candidate.  It crosses the current-round FetchBody
-boundary, then the ordinary StoreBody -> ValidateBody chain writes validation
-evidence keyed by the proposal view and the generation current at execution.
+Retained locked-body round rebinding.  View-independent retained authority may
+survive a view change, but it is usable only by `RebindRetainedBody`; it is not
+durable, validated, or applicable target-round evidence.  Proposal delivery
+therefore emits a completion-class rebind candidate that materializes an exact
+target-view Available record.  The ordinary StoreBody -> ValidateBody chain
+then writes exact-view durable and validation evidence.
 ***************************************************************************)
 
 RetainedBodyRebindReady(command) ==
   /\ command.kind = "RebindRetainedBody"
   /\ command.class = "Completion"
-  /\ BodyHeldBy(durableBodies, command.node, context, command.subject)
-  /\ BodyRecord(command.node, context, command.subject)
+  /\ lockRank[command.node] # NoRank
+  /\ lockSubject[command.node] = command.subject
+  /\ RetainedLockedBodyHeldBy(
+       retainedLockedBodies, command.node, context, command.subject)
+  /\ BodyRecord(command.node, context, command.view, command.subject)
+       \in BodyRecordSet
+  /\ BodyRecord(command.node, context, command.view, command.subject)
        \notin availableBodies
   /\ \E proposal \in SeenProposalValues:
        /\ CommandMatches(command, command.node, proposal.view,
@@ -11483,10 +17851,9 @@ RetainedBodyRebindReady(command) ==
 
 RetainedBodyRebindAction(command, proposal) ==
   /\ command.kind = "RebindRetainedBody"
-  /\ BodyHeldBy(durableBodies, command.node, context, command.subject)
   /\ CommandMatches(command, command.node, proposal.view,
                     proposal.subject)
-  /\ FetchBody(command.node, proposal)
+  /\ RebindRetainedBody(command.node, proposal)
   /\ UNCHANGED AsyncAuxVars
 
 THEOREM RetainedBodyRebindCandidateIsTypedAndOwned ==
@@ -11588,7 +17955,7 @@ PROOF
     <2>2. ENABLED RetainedBodyRebindAction(command, proposal)
       BY <1>1, <2>1, ExpandENABLED, Isa
          DEF RetainedBodyRebindReady, RetainedBodyRebindAction,
-             CommandMatches, FetchBody, AsyncAuxVars
+             CommandMatches, RebindRetainedBody, AsyncAuxVars
     <2>3. RetainedBodyRebindAction(command, proposal) \in BOOLEAN
       BY Isa DEF RetainedBodyRebindAction
     <2>4. ExecuteCommand(command) \in BOOLEAN
@@ -11626,91 +17993,142 @@ PROOF
     <2> QED BY <2>1, <2>2
   <1> QED BY <1>1 DEF CommandDispatchable
 
-THEOREM RebindCommandSelectsFetchBody ==
+THEOREM RebindCommandSelectsRetainedRebind ==
   \A command:
     (RegularCoreCommand(command) /\ command.kind = "RebindRetainedBody")
       => \E proposal \in SeenProposalValues:
            /\ CommandMatches(command, command.node, proposal.view,
                              proposal.subject)
-           /\ FetchBody(command.node, proposal)
+           /\ RebindRetainedBody(command.node, proposal)
 BY IsaT(60) DEF RegularCoreCommand
 
 THEOREM ExecuteRebindStagesCurrentRoundBody ==
   \A command:
     (RegularCoreCommand(command) /\ command.kind = "RebindRetainedBody")
-      => /\ BodyRecord(command.node, context', command.subject)
-                \in availableBodies'
-         /\ BodyHeldBy(durableBodies', command.node, context',
+      => /\ BodyRecord(command.node, context', command.view,
                        command.subject)
+                \in availableBodies'
+         /\ RetainedLockedBodyHeldBy(
+              retainedLockedBodies', command.node, context',
+              command.subject)
 PROOF
   <1>1. ASSUME NEW command,
                 RegularCoreCommand(command),
                 command.kind = "RebindRetainedBody"
-         PROVE /\ BodyRecord(command.node, context', command.subject)
+         PROVE /\ BodyRecord(command.node, context', command.view,
+                             command.subject)
                        \in availableBodies'
-                /\ BodyHeldBy(durableBodies', command.node, context',
-                              command.subject)
+                /\ RetainedLockedBodyHeldBy(
+                     retainedLockedBodies', command.node, context',
+                     command.subject)
     <2>1. \E proposal \in SeenProposalValues:
              /\ CommandMatches(command, command.node, proposal.view,
                                proposal.subject)
-             /\ FetchBody(command.node, proposal)
-      BY <1>1, RebindCommandSelectsFetchBody
+             /\ RebindRetainedBody(command.node, proposal)
+      BY <1>1, RebindCommandSelectsRetainedRebind
     <2>2. PICK proposal \in SeenProposalValues:
              /\ CommandMatches(command, command.node, proposal.view,
                                proposal.subject)
-             /\ FetchBody(command.node, proposal)
+             /\ RebindRetainedBody(command.node, proposal)
       BY <2>1
-    <2>3. /\ command.subject = proposal.subject
+    <2>3. /\ command.view = proposal.view
+           /\ command.subject = proposal.subject
            /\ context' = context
-           /\ durableBodies' = durableBodies
-           /\ BodyRecord(command.node, context, proposal.subject)
+           /\ retainedLockedBodies' = retainedLockedBodies
+           /\ BodyRecord(command.node, context, proposal.view,
+                         proposal.subject)
                 \in availableBodies'
-      BY <2>2, Isa DEF CommandMatches, FetchBody
-    <2> QED BY <1>1, <2>3 DEF RegularCoreCommand, BodyHeldBy
+           /\ RetainedLockedBodyHeldBy(
+                retainedLockedBodies, command.node, context,
+                command.subject)
+      BY <1>1, <2>2, Isa
+         DEF CommandMatches, RebindRetainedBody, RegularCoreCommand
+    <2> QED BY <2>3 DEF RetainedLockedBodyHeldBy
   <1> QED BY <1>1
 
-THEOREM ValidationCommandSelectsValidateBody ==
+THEOREM ValidationCommandSelectsValidationAction ==
   \A command:
     (RegularCoreCommand(command) /\ command.kind = "ValidateBody")
-      => \E proposal \in SeenProposalValues:
-           /\ CommandMatches(command, command.node, proposal.view,
-                             proposal.subject)
-           /\ ValidateBody(command.node, proposal)
+      => (\E proposal \in SeenProposalValues:
+            /\ CommandMatches(command, command.node, proposal.view,
+                              proposal.subject)
+            /\ ValidateBody(command.node, proposal))
+         \/ (\E proposal \in SeenProposalValues:
+               /\ CommandMatches(command, command.node, proposal.view,
+                                 proposal.subject)
+               /\ RejectBody(command.node, proposal))
+         \/ (\E qc \in DecisionQcValues:
+               /\ CommandMatches(command, command.node, qc.view, qc.subject)
+               /\ ValidateDecidedBody(command.node, qc))
 BY Isa DEF RegularCoreCommand
 
 THEOREM ExecuteValidationBindsCurrentViewAndGeneration ==
   \A command:
     (RegularCoreCommand(command) /\ command.kind = "ValidateBody")
-      => BodyValidatedBy(
-           validatedBodies', command.node, context', command.view,
-           generation'[command.node], command.subject)
+      => \/ BodyValidatedBy(
+               validatedBodies', command.node, context', command.view,
+               generation'[command.node], command.subject)
+         \/ BodyRecord(command.node, context', command.view,
+                       command.subject)
+               \in invalidBodies'
 PROOF
   <1>1. ASSUME NEW command,
                 RegularCoreCommand(command),
                 command.kind = "ValidateBody"
-         PROVE BodyValidatedBy(
-                 validatedBodies', command.node, context', command.view,
-                 generation'[command.node], command.subject)
-    <2>1. \E proposal \in SeenProposalValues:
-             /\ CommandMatches(command, command.node, proposal.view,
-                               proposal.subject)
-             /\ ValidateBody(command.node, proposal)
-      BY <1>1, ValidationCommandSelectsValidateBody
-    <2>2. PICK proposal \in SeenProposalValues:
-             /\ CommandMatches(command, command.node, proposal.view,
-                               proposal.subject)
-             /\ ValidateBody(command.node, proposal)
-      BY <2>1
-    <2>3. /\ command.view = proposal.view
-           /\ command.subject = proposal.subject
-           /\ context' = context
-           /\ generation' = generation
-           /\ ValidationRecord(
-                command.node, context, proposal.view,
-                generation[command.node], proposal.subject)
-                \in validatedBodies'
-      BY <2>2, Isa DEF CommandMatches, ValidateBody
-    <2> QED BY <2>3 DEF BodyValidatedBy
+         PROVE \/ BodyValidatedBy(
+                      validatedBodies', command.node, context', command.view,
+                      generation'[command.node], command.subject)
+                \/ BodyRecord(command.node, context', command.view,
+                              command.subject)
+                      \in invalidBodies'
+    <2>1. (\E proposal \in SeenProposalValues:
+              /\ CommandMatches(command, command.node, proposal.view,
+                                proposal.subject)
+              /\ ValidateBody(command.node, proposal))
+           \/ (\E proposal \in SeenProposalValues:
+                 /\ CommandMatches(command, command.node, proposal.view,
+                                   proposal.subject)
+                 /\ RejectBody(command.node, proposal))
+           \/ (\E qc \in DecisionQcValues:
+                 /\ CommandMatches(command, command.node, qc.view,
+                                   qc.subject)
+                 /\ ValidateDecidedBody(command.node, qc))
+      BY <1>1, ValidationCommandSelectsValidationAction
+    <2>2. CASE \E proposal \in SeenProposalValues:
+                    /\ CommandMatches(
+                         command, command.node, proposal.view,
+                         proposal.subject)
+                    /\ ValidateBody(command.node, proposal)
+      <3>1. PICK proposal \in SeenProposalValues:
+               /\ CommandMatches(command, command.node, proposal.view,
+                                 proposal.subject)
+               /\ ValidateBody(command.node, proposal)
+        BY <2>2
+      <3> QED BY <3>1, Isa
+           DEF CommandMatches, ValidateBody, BodyValidatedBy
+    <2>3. CASE \E proposal \in SeenProposalValues:
+                    /\ CommandMatches(
+                         command, command.node, proposal.view,
+                         proposal.subject)
+                    /\ RejectBody(command.node, proposal)
+      <3>1. PICK proposal \in SeenProposalValues:
+               /\ CommandMatches(command, command.node, proposal.view,
+                                 proposal.subject)
+               /\ RejectBody(command.node, proposal)
+        BY <2>3
+      <3> QED BY <3>1, Isa
+           DEF CommandMatches, RejectBody, BodyRecord
+    <2>4. CASE \E qc \in DecisionQcValues:
+                    /\ CommandMatches(
+                         command, command.node, qc.view, qc.subject)
+                    /\ ValidateDecidedBody(command.node, qc)
+      <3>1. PICK qc \in DecisionQcValues:
+               /\ CommandMatches(command, command.node, qc.view, qc.subject)
+               /\ ValidateDecidedBody(command.node, qc)
+        BY <2>4
+      <3> QED BY <3>1, Isa
+           DEF CommandMatches, ValidateDecidedBody, BodyValidatedBy
+    <2> QED BY <2>1, <2>2, <2>3, <2>4
   <1> QED BY <1>1
 
 (***************************************************************************
@@ -11735,6 +18153,32 @@ THEOREM HistoricalCommitFormationIsExactLockedRound ==
       => LockedPrepareRound(node, roundView, subject)
 BY DEF CommitRoundAdmissible
 
+THEOREM HistoricalLockedCommitUsesProgressReserve ==
+  \A item:
+    HistoricalLockedCommitItem(item)
+      => DeliveryClass(item) = "Progress"
+BY DEF DeliveryClass
+
+THEOREM VoteDeliveryConsumesCurrentPoolEpoch ==
+  \A envelope:
+    DeliverVote(envelope)
+      => /\ VoteAt(envelope.recipient, envelope.vote)
+               \notin receivedVotes
+         /\ VoteAt(envelope.recipient, envelope.vote)
+               \in receivedVotes'
+BY SMT DEF DeliverVote
+
+THEOREM VoteDeliveryRetainsAuthenticatedHistory ==
+  \A envelope:
+    DeliverVote(envelope) => voteNetwork' = voteNetwork
+BY DEF DeliverVote
+
+THEOREM ReceivedVoteSuppressesSameEpochRedelivery ==
+  \A envelope:
+    VoteAt(envelope.recipient, envelope.vote) \in receivedVotes
+      => ~DeliverVote(envelope)
+BY SMT DEF DeliverVote
+
 THEOREM InstallClearsLocalVolatileVotePool ==
   \A request:
     PersistInstallTC(request)
@@ -11750,11 +18194,40 @@ THEOREM InstallPreservesOtherNodesVotePools ==
       => received \in receivedVotes'
 BY SMT DEF PersistInstallTC
 
+THEOREM InstallOpensFreshVoteDeliveryPool ==
+  \A request:
+    PersistInstallTC(request)
+      => \A envelope \in VoteEnvelopeSet:
+           envelope.recipient = request.node
+             => VoteAt(envelope.recipient, envelope.vote)
+                  \notin receivedVotes'
+BY SMT DEF PersistInstallTC, VoteAt
+
+THEOREM InstallAdvancesDeliveryGenerationBeforeSaturation ==
+  \A request:
+    (PersistInstallTC(request)
+      /\ generation[request.node] < MaxGeneration)
+      => generation'[request.node] = generation[request.node] + 1
+BY Isa DEF PersistInstallTC
+
 THEOREM DeliveredVoteRebuildsItsRoundPool ==
   \A envelope:
     DeliverVote(envelope)
       => VoteAt(envelope.recipient, envelope.vote) \in receivedVotes'
 BY SMT DEF DeliverVote
+
+THEOREM VoteDeliveryEpochActionIsSemantic ==
+  VoteDeliveryEpochAction
+BY VoteDeliveryConsumesCurrentPoolEpoch,
+   VoteDeliveryRetainsAuthenticatedHistory,
+   InstallClearsLocalVolatileVotePool,
+   InstallAdvancesDeliveryGenerationBeforeSaturation
+   DEF VoteDeliveryEpochAction
+
+THEOREM AsyncStepHasVoteDeliveryEpochSemantics ==
+  [AsyncNext]_AsyncAllVars
+    => [VoteDeliveryEpochAction]_AsyncAllVars
+BY VoteDeliveryEpochActionIsSemantic
 
 THEOREM RetainedCommitVoteIsRetryable ==
   \A node, item:
@@ -11781,14 +18254,7780 @@ BY ExpandENABLED, Isa
        AsyncDeferredVars, vars
 
 (***************************************************************************
-The proof ledger records these exact release obligations as specified but
-unproved.  Leaving them proofless is intentional: the structural gate admits
-only explicitly ledgered debt, while the release gate continues to reject it.
+The IO worker is the smallest concrete protected-service frontier.  A
+consensus completion at the FIFO head continuously enables the exact worker
+named by `AsyncFairnessAt`; servicing that head removes a nonempty sequence
+element and appends the candidate to the ready-completion queue.  The exit
+predicate also records invariant or ownership loss, so its unless step is a
+tautology rather than an assumed scheduler frame.  `AsyncTypeInvariant` later
+rules out that auxiliary exit on every behavior of `AsyncSpecAt`.
+***************************************************************************)
+
+IoConsensusHead(node, candidate) ==
+  /\ AsyncIoQueueDepth(node) > 0
+  /\ Head(asyncIoQueues[node]) = AsyncIoConsensusJob(candidate)
+
+IoCandidateIoReady(node, candidate) ==
+  candidate \in SequenceSet(asyncIoReadyCompletions[node])
+
+THEOREM IoConsensusHeadServiceIsNonstuttering ==
+  \A node \in AsyncCurrentResponsiveVoters,
+     candidate \in AsyncCandidateSet:
+    (AsyncTypeInvariant /\ IoConsensusHead(node, candidate)
+      /\ PostGstServiceIoWorker(node))
+      => <<PostGstServiceIoWorker(node)>>_AsyncAllVars
+PROOF
+  <1>1. ASSUME NEW node \in AsyncCurrentResponsiveVoters,
+                NEW candidate \in AsyncCandidateSet,
+                AsyncTypeInvariant,
+                IoConsensusHead(node, candidate),
+                PostGstServiceIoWorker(node)
+         PROVE <<PostGstServiceIoWorker(node)>>_AsyncAllVars
+    <2>1. node \in ValidatorIds
+      BY <1>1, AsyncCurrentResponsiveVotersAreValidators
+         DEF AsyncTypeInvariant
+    <2>2. AsyncIoSequenceTyped(asyncIoQueues[node])
+      BY <1>1, <2>1
+         DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+             AsyncIoTypeInvariant, AsyncIoContentTypeInvariant,
+             AsyncIoQueueContentTypeInvariant
+    <2>3. asyncIoQueues[node] \in Seq(Range(asyncIoQueues[node]))
+      BY <2>2 DEF AsyncIoSequenceTyped
+    <2>4. Len(asyncIoQueues[node]) > 0
+      BY <1>1 DEF IoConsensusHead, AsyncIoQueueDepth
+    <2>5. asyncIoQueues[node] # <<>>
+      BY <2>3, <2>4, PositiveSequenceIsNonempty
+    <2>6. Len(Tail(asyncIoQueues[node])) =
+             Len(asyncIoQueues[node]) - 1
+      BY <2>3, <2>5, HeadTailProperties
+    <2>7. Len(asyncIoQueues[node]) \in Nat
+      BY <2>3, LenProperties
+    <2>8. Tail(asyncIoQueues[node]) # asyncIoQueues[node]
+      BY <2>4, <2>6, <2>7, SMT
+    <2>9. DOMAIN asyncIoQueues = ValidatorIds
+      BY <1>1
+         DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+             AsyncIoTypeInvariant, AsyncIoTopologyTypeInvariant
+    <2>10. asyncIoQueues'[node] = Tail(asyncIoQueues[node])
+      BY <1>1, <2>1, <2>9, Isa
+         DEF PostGstServiceIoWorker, ServiceIoWorker
+    <2>11. asyncIoQueues' # asyncIoQueues
+      BY <2>8, <2>10, Isa
+    <2> QED BY <1>1, <2>11, Isa
+       DEF AsyncAllVars, AsyncSchedulerVars
+  <1> QED BY <1>1
+
+THEOREM IoConsensusHeadEnablesFairService ==
+  \A node \in AsyncCurrentResponsiveVoters,
+     candidate \in AsyncCandidateSet:
+    (AsyncTypeInvariant /\ gst /\ IoConsensusHead(node, candidate))
+      => ENABLED <<PostGstServiceIoWorker(node)>>_AsyncAllVars
+PROOF
+  <1>1. ASSUME NEW node \in AsyncCurrentResponsiveVoters,
+                NEW candidate \in AsyncCandidateSet,
+                AsyncTypeInvariant,
+                gst,
+                IoConsensusHead(node, candidate)
+         PROVE ENABLED <<PostGstServiceIoWorker(node)>>_AsyncAllVars
+    <2>1. ENABLED PostGstServiceIoWorker(node)
+      BY <1>1, QueuedIoEnablesPostGstService
+         DEF IoConsensusHead
+    <2>2. PostGstServiceIoWorker(node) \in BOOLEAN
+      BY Isa DEF PostGstServiceIoWorker
+    <2>3. <<PostGstServiceIoWorker(node)>>_AsyncAllVars \in BOOLEAN
+      BY Isa
+    <2>4. PostGstServiceIoWorker(node)
+             => <<PostGstServiceIoWorker(node)>>_AsyncAllVars
+      BY <1>1, IoConsensusHeadServiceIsNonstuttering
+    <2>5. (ENABLED PostGstServiceIoWorker(node))
+             => ENABLED <<PostGstServiceIoWorker(node)>>_AsyncAllVars
+      BY <2>2, <2>3, <2>4, ENABLEDaxioms
+    <2> QED BY <2>1, <2>5
+  <1> QED BY <1>1
+
+THEOREM ServiceIoConsensusHeadMakesCandidateReady ==
+  \A node \in AsyncCurrentResponsiveVoters,
+     candidate \in AsyncCandidateSet:
+    (AsyncTypeInvariant
+      /\ IoConsensusHead(node, candidate)
+      /\ PostGstServiceIoWorker(node))
+      => IoCandidateIoReady(node, candidate)'
+PROOF
+  <1>1. ASSUME NEW node \in AsyncCurrentResponsiveVoters,
+                NEW candidate \in AsyncCandidateSet,
+                AsyncTypeInvariant,
+                IoConsensusHead(node, candidate),
+                PostGstServiceIoWorker(node)
+         PROVE IoCandidateIoReady(node, candidate)'
+    <2>1. node \in ValidatorIds
+      BY <1>1, AsyncCurrentResponsiveVotersAreValidators
+         DEF AsyncTypeInvariant
+    <2>2. DOMAIN asyncIoReadyCompletions = ValidatorIds
+      BY <1>1
+         DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+             AsyncIoTypeInvariant, AsyncIoTopologyTypeInvariant
+    <2>3. AsyncCompletionSequenceTyped(
+             asyncIoReadyCompletions[node])
+      BY <1>1, <2>1
+         DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+             AsyncIoTypeInvariant, AsyncIoContentTypeInvariant,
+             AsyncIoWorkContentTypeInvariant
+    <2>4. asyncIoReadyCompletions[node]
+             \in Seq(Range(asyncIoReadyCompletions[node]))
+      BY <2>3 DEF AsyncCompletionSequenceTyped
+    <2>5. /\ Head(asyncIoQueues[node]).class = "Consensus"
+           /\ Head(asyncIoQueues[node]).candidate = candidate
+      BY <1>1 DEF IoConsensusHead, AsyncIoConsensusJob, AsyncIoJob
+    <2>6. asyncIoReadyCompletions'[node] =
+             Append(asyncIoReadyCompletions[node], candidate)
+      BY <1>1, <2>1, <2>2, <2>5, Isa
+         DEF PostGstServiceIoWorker, ServiceIoWorker
+    <2>7. candidate \in
+             SequenceSet(Append(asyncIoReadyCompletions[node], candidate))
+      BY <2>4, SequenceSetAfterAppend, Isa
+    <2> QED BY <2>6, <2>7 DEF IoCandidateIoReady
+  <1> QED BY <1>1
+
+IoConsensusHeadServicePending(node, candidate) ==
+  /\ AsyncTypeInvariant
+  /\ gst
+  /\ node \in AsyncCurrentResponsiveVoters
+  /\ IoConsensusHead(node, candidate)
+
+IoConsensusHeadServiceExit(node, candidate) ==
+  ~IoConsensusHeadServicePending(node, candidate)
+    \/ IoCandidateIoReady(node, candidate)
+
+THEOREM FairIoConsensusHeadService ==
+  \A initialContext:
+    AsyncSpecAt(initialContext)
+      => \A node \in AsyncVotersAt(initialContext),
+            candidate \in AsyncCandidateSet:
+           IoConsensusHeadServicePending(node, candidate)
+             ~> IoConsensusHeadServiceExit(node, candidate)
+PROOF
+  <1>1. ASSUME NEW initialContext
+         PROVE AsyncSpecAt(initialContext)
+                 => \A node \in AsyncVotersAt(initialContext),
+                       candidate \in AsyncCandidateSet:
+                      IoConsensusHeadServicePending(node, candidate)
+                        ~> IoConsensusHeadServiceExit(node, candidate)
+    <2>1. ASSUME NEW node \in AsyncVotersAt(initialContext),
+                  NEW candidate \in AsyncCandidateSet
+           PROVE AsyncSpecAt(initialContext)
+                   => (IoConsensusHeadServicePending(node, candidate)
+                         ~> IoConsensusHeadServiceExit(node, candidate))
+      <3>1. (IoConsensusHeadServicePending(node, candidate)
+                /\ ~IoConsensusHeadServiceExit(node, candidate))
+               => ENABLED
+                    <<PostGstServiceIoWorker(node)>>_AsyncAllVars
+        BY IoConsensusHeadEnablesFairService
+           DEF IoConsensusHeadServicePending
+      <3>2. (IoConsensusHeadServicePending(node, candidate)
+                /\ ~IoConsensusHeadServiceExit(node, candidate)
+                /\ <<PostGstServiceIoWorker(node)>>_AsyncAllVars)
+               => IoConsensusHeadServiceExit(node, candidate)'
+        BY ServiceIoConsensusHeadMakesCandidateReady, Isa
+           DEF IoConsensusHeadServicePending,
+               IoConsensusHeadServiceExit
+      <3>3. IoConsensusHeadServicePending(node, candidate)
+                /\ [AsyncNext]_AsyncAllVars
+               => IoConsensusHeadServicePending(node, candidate)'
+                    \/ IoConsensusHeadServiceExit(node, candidate)'
+        BY PTL DEF IoConsensusHeadServiceExit
+      <3>4. AsyncSpecAt(initialContext)
+               => WF_AsyncAllVars(PostGstServiceIoWorker(node))
+        BY <2>1 DEF AsyncSpecAt, AsyncFairnessAt
+      <3> QED BY <3>1, <3>2, <3>3, <3>4, PTL
+           DEF AsyncSpecAt
+    <2> QED BY <2>1
+  <1> QED BY <1>1
+
+THEOREM LocalProducerAdmissionIsEnabled ==
+  \A node \in ValidatorIds:
+    /\ asyncRunnerPhase[node] = "Local"
+    /\ asyncRunnerBudget[node] > 0
+    /\ ProducerCompletionCanAdmit(node)
+    => ENABLED LocalAdmissionStep(node)
+BY ExpandENABLED, Isa
+   DEF LocalAdmissionStep, AdmitProducerCompletion, AdmitCausalHead,
+       EnqueueCandidate, LeaveCausalQueues, AsyncIoVars,
+       AsyncDeferredVars, vars
+
+THEOREM LocalDuplicateCausalAdmissionIsEnabled ==
+  \A node \in ValidatorIds:
+    /\ asyncRunnerPhase[node] = "Local"
+    /\ ~(asyncRunnerBudget[node] > 0
+          /\ ProducerCompletionCanAdmit(node))
+    /\ asyncRunnerBudget[node] > 0
+    /\ CausalHeadCanAdvance(node)
+    /\ CandidateInFlight(HeadCausalCandidate(node))
+    => ENABLED LocalAdmissionStep(node)
+BY ExpandENABLED, Isa
+   DEF LocalAdmissionStep, AdmitProducerCompletion, AdmitCausalHead,
+       EnqueueCandidate, LeaveCausalQueues, AsyncIoVars,
+       AsyncDeferredVars, vars
+
+LocalCompletionCausalStep(node) ==
+  LET candidate == HeadCausalCandidate(node)
+  IN /\ asyncCausalQueues' =
+           [asyncCausalQueues EXCEPT ![node] = Tail(@)]
+     /\ asyncIoQueues' =
+          [asyncIoQueues EXCEPT
+             ![node] = Append(@, AsyncIoConsensusJob(candidate))]
+     /\ asyncOutstandingWork' =
+          [asyncOutstandingWork EXCEPT ![node] = @ \cup {candidate}]
+     /\ UNCHANGED <<asyncCommandQueues, asyncNextCommandClass,
+                     asyncIoReadyCompletions,
+                     asyncLocalReadyCompletions,
+                     asyncNextCompletionSource,
+                     asyncIoControlAvailable>>
+     /\ UNCHANGED <<vars, asyncFifoOwed, asyncTimeoutEmitted,
+                     asyncOutstandingTags, asyncNodeDeadlines,
+                     asyncRetransmitDeadlines, asyncSentItems,
+                     asyncRetainedControl, asyncActiveRequests,
+                     asyncTransport, asyncIngressLanes,
+                     asyncIngressReady, asyncHeldChunks>>
+  /\ UNCHANGED AsyncDeferredVars
+  /\ asyncRunnerPhase' = asyncRunnerPhase
+  /\ asyncRunnerBudget' =
+       [asyncRunnerBudget EXCEPT ![node] = @ - 1]
+
+THEOREM LocalCompletionCausalAdmissionIsEnabled ==
+  \A node \in ValidatorIds:
+    /\ asyncRunnerPhase[node] = "Local"
+    /\ ~(asyncRunnerBudget[node] > 0
+          /\ ProducerCompletionCanAdmit(node))
+    /\ asyncRunnerBudget[node] > 0
+    /\ CausalHeadCanAdvance(node)
+    /\ ~CandidateInFlight(HeadCausalCandidate(node))
+    /\ HeadCausalCandidate(node).class = "Completion"
+    => ENABLED LocalAdmissionStep(node)
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds,
+                /\ asyncRunnerPhase[node] = "Local"
+                /\ ~(asyncRunnerBudget[node] > 0
+                      /\ ProducerCompletionCanAdmit(node))
+                /\ asyncRunnerBudget[node] > 0
+                /\ CausalHeadCanAdvance(node)
+                /\ ~CandidateInFlight(HeadCausalCandidate(node))
+                /\ HeadCausalCandidate(node).class = "Completion"
+         PROVE ENABLED LocalAdmissionStep(node)
+    <2>1. ENABLED LocalCompletionCausalStep(node)
+      BY <1>1, ExpandENABLED, Isa
+         DEF LocalCompletionCausalStep, AsyncDeferredVars, vars
+    <2>2. LocalCompletionCausalStep(node) \in BOOLEAN
+      BY Isa DEF LocalCompletionCausalStep
+    <2>3. LocalAdmissionStep(node) \in BOOLEAN
+      BY Isa DEF LocalAdmissionStep
+    <2>4. LocalCompletionCausalStep(node)
+             => LocalAdmissionStep(node)
+      BY <1>1, Isa
+         DEF LocalCompletionCausalStep, LocalAdmissionStep,
+             AdmitCausalHead, AdmitProducerCompletion,
+             EnqueueCandidate, LeaveCausalQueues,
+             AsyncIoVars, AsyncDeferredVars, vars
+    <2>5. ENABLED LocalCompletionCausalStep(node)
+             => ENABLED LocalAdmissionStep(node)
+      BY <2>2, <2>3, <2>4, ENABLEDaxioms
+    <2> QED BY <2>1, <2>5
+  <1> QED BY <1>1
+
+LocalCommandCausalStep(node) ==
+  LET candidate == HeadCausalCandidate(node)
+  IN /\ asyncCausalQueues' =
+           [asyncCausalQueues EXCEPT ![node] = Tail(@)]
+     /\ asyncCommandQueues' =
+          [asyncCommandQueues EXCEPT
+             ![candidate.node] = Append(@, candidate)]
+     /\ UNCHANGED asyncNextCommandClass
+     /\ UNCHANGED AsyncIoVars
+     /\ UNCHANGED <<vars, asyncFifoOwed, asyncTimeoutEmitted,
+                     asyncOutstandingTags, asyncNodeDeadlines,
+                     asyncRetransmitDeadlines, asyncSentItems,
+                     asyncRetainedControl, asyncActiveRequests,
+                     asyncTransport, asyncIngressLanes,
+                     asyncIngressReady, asyncHeldChunks>>
+     /\ UNCHANGED AsyncDeferredVars
+     /\ asyncRunnerPhase' = asyncRunnerPhase
+     /\ asyncRunnerBudget' =
+          [asyncRunnerBudget EXCEPT ![node] = @ - 1]
+
+THEOREM LocalCommandCausalAdmissionIsEnabled ==
+  \A node \in ValidatorIds:
+    /\ asyncRunnerPhase[node] = "Local"
+    /\ ~(asyncRunnerBudget[node] > 0
+          /\ ProducerCompletionCanAdmit(node))
+    /\ asyncRunnerBudget[node] > 0
+    /\ CausalHeadCanAdvance(node)
+    /\ ~CandidateInFlight(HeadCausalCandidate(node))
+    /\ HeadCausalCandidate(node).class # "Completion"
+    => ENABLED LocalAdmissionStep(node)
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds,
+                /\ asyncRunnerPhase[node] = "Local"
+                /\ ~(asyncRunnerBudget[node] > 0
+                      /\ ProducerCompletionCanAdmit(node))
+                /\ asyncRunnerBudget[node] > 0
+                /\ CausalHeadCanAdvance(node)
+                /\ ~CandidateInFlight(HeadCausalCandidate(node))
+                /\ HeadCausalCandidate(node).class # "Completion"
+         PROVE ENABLED LocalAdmissionStep(node)
+    <2>1. ENABLED LocalCommandCausalStep(node)
+      BY <1>1, ExpandENABLED, Isa
+         DEF LocalCommandCausalStep, AsyncIoVars,
+             AsyncDeferredVars, vars
+    <2>2. LocalCommandCausalStep(node) \in BOOLEAN
+      BY Isa DEF LocalCommandCausalStep
+    <2>3. LocalAdmissionStep(node) \in BOOLEAN
+      BY Isa DEF LocalAdmissionStep
+    <2>4. LocalCommandCausalStep(node)
+             => LocalAdmissionStep(node)
+      BY <1>1, Isa
+         DEF LocalCommandCausalStep, LocalAdmissionStep,
+             AdmitCausalHead, AdmitProducerCompletion,
+             EnqueueCandidate, LeaveCausalQueues,
+             AsyncIoVars, AsyncDeferredVars, vars
+    <2>5. ENABLED LocalCommandCausalStep(node)
+             => ENABLED LocalAdmissionStep(node)
+      BY <2>2, <2>3, <2>4, ENABLEDaxioms
+    <2> QED BY <2>1, <2>5
+  <1> QED BY <1>1
+
+THEOREM LocalCausalAdmissionIsEnabled ==
+  \A node \in ValidatorIds:
+    /\ asyncRunnerPhase[node] = "Local"
+    /\ ~(asyncRunnerBudget[node] > 0
+          /\ ProducerCompletionCanAdmit(node))
+    /\ asyncRunnerBudget[node] > 0
+    /\ CausalHeadCanAdvance(node)
+    => ENABLED LocalAdmissionStep(node)
+BY LocalDuplicateCausalAdmissionIsEnabled,
+   LocalCompletionCausalAdmissionIsEnabled,
+   LocalCommandCausalAdmissionIsEnabled, Isa
+
+LocalPhaseAdvanceStep(node) ==
+  /\ UNCHANGED AsyncDeferredVars
+  /\ LeaveCausalQueues
+  /\ UNCHANGED <<vars, asyncCommandQueues,
+                  asyncNextCommandClass, asyncFifoOwed,
+                  asyncTimeoutEmitted, AsyncIoVars,
+                  asyncOutstandingTags, asyncNodeDeadlines,
+                  asyncRetransmitDeadlines, asyncSentItems,
+                  asyncRetainedControl, asyncActiveRequests,
+                  asyncTransport, asyncIngressLanes,
+                  asyncIngressReady, asyncHeldChunks>>
+  /\ asyncRunnerPhase' =
+       [asyncRunnerPhase EXCEPT ![node] = "Ingress"]
+  /\ asyncRunnerBudget' =
+       [asyncRunnerBudget EXCEPT ![node] = AsyncIngressCapacity]
+
+THEOREM LocalPhaseAdvanceIsEnabled ==
+  \A node \in ValidatorIds:
+    /\ asyncRunnerPhase[node] = "Local"
+    /\ ~(asyncRunnerBudget[node] > 0
+          /\ ProducerCompletionCanAdmit(node))
+    /\ ~(asyncRunnerBudget[node] > 0
+          /\ CausalHeadCanAdvance(node))
+    => ENABLED LocalAdmissionStep(node)
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds,
+                /\ asyncRunnerPhase[node] = "Local"
+                /\ ~(asyncRunnerBudget[node] > 0
+                      /\ ProducerCompletionCanAdmit(node))
+                /\ ~(asyncRunnerBudget[node] > 0
+                      /\ CausalHeadCanAdvance(node))
+         PROVE ENABLED LocalAdmissionStep(node)
+    <2>1. ENABLED LocalPhaseAdvanceStep(node)
+      BY ExpandENABLED, Isa
+         DEF LocalPhaseAdvanceStep, LeaveCausalQueues,
+             AsyncIoVars, AsyncDeferredVars, vars
+    <2>2. LocalPhaseAdvanceStep(node) \in BOOLEAN
+      BY Isa DEF LocalPhaseAdvanceStep
+    <2>3. LocalAdmissionStep(node) \in BOOLEAN
+      BY Isa DEF LocalAdmissionStep
+    <2>4. LocalPhaseAdvanceStep(node) => LocalAdmissionStep(node)
+      BY <1>1, Isa
+         DEF LocalPhaseAdvanceStep, LocalAdmissionStep,
+             AdmitProducerCompletion, AdmitCausalHead,
+             EnqueueCandidate, LeaveCausalQueues,
+             AsyncIoVars, AsyncDeferredVars, vars
+    <2>5. ENABLED LocalPhaseAdvanceStep(node)
+             => ENABLED LocalAdmissionStep(node)
+      BY <2>2, <2>3, <2>4, ENABLEDaxioms
+    <2> QED BY <2>1, <2>5
+  <1> QED BY <1>1
+
+THEOREM LocalAdmissionStepIsEnabled ==
+  \A node \in ValidatorIds:
+    asyncRunnerPhase[node] = "Local"
+      => ENABLED LocalAdmissionStep(node)
+BY LocalProducerAdmissionIsEnabled,
+   LocalCausalAdmissionIsEnabled,
+   LocalPhaseAdvanceIsEnabled, Isa
+
+IngressSelectedDrainStep(node) ==
+  /\ DrainFairIngressSelected(node)
+  /\ UNCHANGED AsyncDeferredVars
+  /\ LeaveCausalQueues
+  /\ asyncRunnerPhase' = asyncRunnerPhase
+  /\ asyncRunnerBudget' =
+       [asyncRunnerBudget EXCEPT ![node] = @ - 1]
+
+SelectedIngressItem(node) ==
+  SelectedIngressItemAt(node, FirstDrainableIngressIndex(node))
+
+SelectedIngressDrops(node) ==
+  LET item == SelectedIngressItem(node)
+  IN item.kind = "Noise" \/ item \notin asyncSentItems
+
+SelectedIngressIsRequest(node) ==
+  SelectedIngressItem(node).kind
+    \in {"CertifiedRequest", "CommitCertificateRequest"}
+
+SelectedIngressRequestAuthorized(node) ==
+  LET item == SelectedIngressItem(node)
+  IN IF item.kind = "CertifiedRequest"
+     THEN CertifiedRequestAuthorized(item)
+     ELSE CommitCertificateRequestAuthorized(item)
+
+THEOREM IngressSelectedDrainIsEnabled ==
+  \A node \in ValidatorIds:
+    /\ asyncRunnerPhase[node] = "Ingress"
+    /\ asyncRunnerBudget[node] > 0
+    /\ asyncIngressReady[node] # <<>>
+    /\ DrainableIngressIndices(node) # {}
+    => ENABLED IngressDrainStep(node)
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds,
+                /\ asyncRunnerPhase[node] = "Ingress"
+                /\ asyncRunnerBudget[node] > 0
+                /\ asyncIngressReady[node] # <<>>
+                /\ DrainableIngressIndices(node) # {}
+         PROVE ENABLED IngressDrainStep(node)
+    <2>1. ENABLED IngressSelectedDrainStep(node)
+      <3>1. FirstDrainableIngressIndex(node)
+               \in DrainableIngressIndices(node)
+        BY <1>1, FirstDrainableIngressIndexIsDrainable
+      <3>10. FirstDrainableIngressIndex(node)
+                \in 1..Len(asyncIngressReady[node])
+        BY <3>1 DEF DrainableIngressIndices
+      <3>11. /\ SelectedIngressLaneIndex(
+                       node, FirstDrainableIngressIndex(node))
+                     \in 1..Len(IngressLane(
+                          node,
+                          asyncIngressReady[node][
+                            FirstDrainableIngressIndex(node)]))
+                /\ IngressItemCanDrain(
+                     node, SelectedIngressItem(node))
+        BY <3>1, FirstDrainableIngressLaneIndexIsDrainable
+           DEF DrainableIngressIndices, IngressSourceCanDrain,
+               DrainableIngressLaneIndices, SelectedIngressLaneIndex,
+               SelectedIngressItem, SelectedIngressItemAt
+      <3>2. CASE SelectedIngressDrops(node)
+        BY <1>1, <3>1, <3>10, <3>11, <3>2, ExpandENABLED, Isa
+           DEF SelectedIngressDrops, SelectedIngressItem,
+               IngressItemCanDrain,
+               IngressSelectedDrainStep, DrainFairIngressSelected,
+               PopSelectedIngress, EnqueueCandidate,
+               LeaveCausalQueues, AsyncIoVars, AsyncDeferredVars, vars
+      <3>3. CASE /\ ~SelectedIngressDrops(node)
+                    /\ SelectedIngressIsRequest(node)
+                    /\ SelectedIngressRequestAuthorized(node)
+        BY <1>1, <3>1, <3>10, <3>11, <3>3, ExpandENABLED, Isa
+           DEF SelectedIngressDrops, SelectedIngressIsRequest,
+               SelectedIngressRequestAuthorized, SelectedIngressItem,
+               IngressItemCanDrain,
+               IngressSelectedDrainStep, DrainFairIngressSelected,
+               PopSelectedIngress, EnqueueCandidate,
+               LeaveCausalQueues, AsyncIoVars, AsyncDeferredVars, vars
+      <3>4. CASE /\ ~SelectedIngressDrops(node)
+                    /\ SelectedIngressIsRequest(node)
+                    /\ ~SelectedIngressRequestAuthorized(node)
+        BY <1>1, <3>1, <3>10, <3>11, <3>4, ExpandENABLED, Isa
+           DEF SelectedIngressDrops, SelectedIngressIsRequest,
+               SelectedIngressRequestAuthorized, SelectedIngressItem,
+               IngressItemCanDrain,
+               IngressSelectedDrainStep, DrainFairIngressSelected,
+               PopSelectedIngress, EnqueueCandidate,
+               LeaveCausalQueues, AsyncIoVars, AsyncDeferredVars, vars
+      <3>5. CASE /\ ~SelectedIngressDrops(node)
+                    /\ ~SelectedIngressIsRequest(node)
+                    /\ SelectedIngressItem(node).kind =
+                         "CertifiedResponse"
+                    /\ CertifiedResponseAuthorized(
+                         SelectedIngressItem(node))
+        BY <1>1, <3>1, <3>10, <3>11, <3>5, ExpandENABLED, Isa
+           DEF SelectedIngressDrops, SelectedIngressIsRequest,
+               SelectedIngressItem, IngressItemCanDrain,
+               IngressSelectedDrainStep,
+               DrainFairIngressSelected, PopSelectedIngress,
+               EnqueueCandidate, LeaveCausalQueues,
+               AsyncIoVars, AsyncDeferredVars, vars
+      <3>6. CASE /\ ~SelectedIngressDrops(node)
+                    /\ ~SelectedIngressIsRequest(node)
+                    /\ SelectedIngressItem(node).kind =
+                         "CertifiedResponse"
+                    /\ ~CertifiedResponseAuthorized(
+                          SelectedIngressItem(node))
+        BY <1>1, <3>1, <3>10, <3>11, <3>6, ExpandENABLED, Isa
+           DEF SelectedIngressDrops, SelectedIngressIsRequest,
+               SelectedIngressItem, IngressItemCanDrain,
+               IngressSelectedDrainStep,
+               DrainFairIngressSelected, PopSelectedIngress,
+               EnqueueCandidate, LeaveCausalQueues,
+               AsyncIoVars, AsyncDeferredVars, vars
+      <3>7. CASE /\ ~SelectedIngressDrops(node)
+                    /\ ~SelectedIngressIsRequest(node)
+                    /\ SelectedIngressItem(node).kind #
+                         "CertifiedResponse"
+                    /\ SelectedIngressItem(node).kind =
+                         "CommitCertificateResponse"
+                    /\ CommitCertificateResponseAuthorized(
+                         SelectedIngressItem(node))
+        BY <1>1, <3>1, <3>10, <3>11, <3>7, ExpandENABLED, Isa
+           DEF SelectedIngressDrops, SelectedIngressIsRequest,
+               SelectedIngressItem, IngressItemCanDrain,
+               IngressSelectedDrainStep,
+               DrainFairIngressSelected, PopSelectedIngress,
+               EnqueueCandidate, LeaveCausalQueues,
+               AsyncIoVars, AsyncDeferredVars, vars
+      <3>8. CASE /\ ~SelectedIngressDrops(node)
+                    /\ ~SelectedIngressIsRequest(node)
+                    /\ SelectedIngressItem(node).kind #
+                         "CertifiedResponse"
+                    /\ SelectedIngressItem(node).kind =
+                         "CommitCertificateResponse"
+                    /\ ~CommitCertificateResponseAuthorized(
+                          SelectedIngressItem(node))
+        BY <1>1, <3>1, <3>10, <3>11, <3>8, ExpandENABLED, Isa
+           DEF SelectedIngressDrops, SelectedIngressIsRequest,
+               SelectedIngressItem, IngressItemCanDrain,
+               IngressSelectedDrainStep,
+               DrainFairIngressSelected, PopSelectedIngress,
+               EnqueueCandidate, LeaveCausalQueues,
+               AsyncIoVars, AsyncDeferredVars, vars
+      <3>9. CASE /\ ~SelectedIngressDrops(node)
+                    /\ ~SelectedIngressIsRequest(node)
+                    /\ SelectedIngressItem(node).kind #
+                         "CertifiedResponse"
+                    /\ SelectedIngressItem(node).kind #
+                         "CommitCertificateResponse"
+        BY <1>1, <3>1, <3>10, <3>11, <3>9, ExpandENABLED, Isa
+           DEF SelectedIngressDrops, SelectedIngressIsRequest,
+               SelectedIngressItem, IngressItemCanDrain,
+               IngressSelectedDrainStep,
+               DrainFairIngressSelected, PopSelectedIngress,
+               EnqueueCandidate, LeaveCausalQueues,
+               AsyncIoVars, AsyncDeferredVars, vars
+      <3> QED BY <3>2, <3>3, <3>4, <3>5,
+                    <3>6, <3>7, <3>8, <3>9
+    <2>2. IngressSelectedDrainStep(node) \in BOOLEAN
+      BY Isa DEF IngressSelectedDrainStep, DrainFairIngressSelected
+    <2>3. IngressDrainStep(node) \in BOOLEAN
+      BY Isa DEF IngressDrainStep
+    <2>4. IngressSelectedDrainStep(node) => IngressDrainStep(node)
+      BY <1>1, Isa
+         DEF IngressSelectedDrainStep, IngressDrainStep,
+             DrainFairIngressSelected, PopSelectedIngress,
+             EnqueueCandidate, LeaveCausalQueues,
+             AsyncIoVars, AsyncDeferredVars, vars
+    <2>5. ENABLED IngressSelectedDrainStep(node)
+             => ENABLED IngressDrainStep(node)
+      BY <2>2, <2>3, <2>4, ENABLEDaxioms
+    <2> QED BY <2>1, <2>5
+  <1> QED BY <1>1
+
+IngressPhaseAdvanceStep(node) ==
+  /\ UNCHANGED AsyncDeferredVars
+  /\ LeaveCausalQueues
+  /\ UNCHANGED <<vars, asyncCommandQueues,
+                  asyncNextCommandClass, asyncFifoOwed,
+                  asyncTimeoutEmitted, AsyncIoVars,
+                  asyncOutstandingTags, asyncNodeDeadlines,
+                  asyncRetransmitDeadlines, asyncSentItems,
+                  asyncRetainedControl, asyncActiveRequests,
+                  asyncTransport, asyncIngressLanes,
+                  asyncIngressReady, asyncHeldChunks>>
+  /\ asyncRunnerPhase' =
+       [asyncRunnerPhase EXCEPT ![node] = "Runtime"]
+  /\ asyncRunnerBudget' =
+       [asyncRunnerBudget EXCEPT ![node] = 1]
+
+THEOREM IngressPhaseAdvanceIsEnabled ==
+  \A node \in ValidatorIds:
+    /\ asyncRunnerPhase[node] = "Ingress"
+    /\ ~(asyncRunnerBudget[node] > 0
+          /\ asyncIngressReady[node] # <<>>
+          /\ DrainableIngressIndices(node) # {})
+    => ENABLED IngressDrainStep(node)
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds,
+                /\ asyncRunnerPhase[node] = "Ingress"
+                /\ ~(asyncRunnerBudget[node] > 0
+                      /\ asyncIngressReady[node] # <<>>
+                      /\ DrainableIngressIndices(node) # {})
+         PROVE ENABLED IngressDrainStep(node)
+    <2>1. ENABLED IngressPhaseAdvanceStep(node)
+      BY ExpandENABLED, Isa
+         DEF IngressPhaseAdvanceStep, LeaveCausalQueues,
+             AsyncIoVars, AsyncDeferredVars, vars
+    <2>2. IngressPhaseAdvanceStep(node) \in BOOLEAN
+      BY Isa DEF IngressPhaseAdvanceStep
+    <2>3. IngressDrainStep(node) \in BOOLEAN
+      BY Isa DEF IngressDrainStep
+    <2>4. IngressPhaseAdvanceStep(node) => IngressDrainStep(node)
+      BY <1>1, Isa
+         DEF IngressPhaseAdvanceStep, IngressDrainStep,
+             DrainFairIngressSelected, PopSelectedIngress,
+             EnqueueCandidate, LeaveCausalQueues,
+             AsyncIoVars, AsyncDeferredVars, vars
+    <2>5. ENABLED IngressPhaseAdvanceStep(node)
+             => ENABLED IngressDrainStep(node)
+      BY <2>2, <2>3, <2>4, ENABLEDaxioms
+    <2> QED BY <2>1, <2>5
+  <1> QED BY <1>1
+
+THEOREM IngressDrainStepIsEnabled ==
+  \A node \in ValidatorIds:
+    asyncRunnerPhase[node] = "Ingress"
+      => ENABLED IngressDrainStep(node)
+BY IngressSelectedDrainIsEnabled,
+   IngressPhaseAdvanceIsEnabled, Isa
+
+(***************************************************************************
+The serialized runtime relation is a priority union, but every selected arm
+still has a concrete successor.  These small lemmas keep the priority tests
+visible while constructing the exact primed-state witnesses used by RunNode.
+***************************************************************************)
+
+CommitCertificateDiscoverySerializedStep(node) ==
+  /\ DirectCommitCertificateDiscoveryStep(node)
+  /\ UNCHANGED AsyncIoVars
+  /\ asyncRunnerPhase' =
+       [asyncRunnerPhase EXCEPT ![node] = "Local"]
+  /\ asyncRunnerBudget' =
+       [asyncRunnerBudget EXCEPT ![node] = AsyncQueueCapacity]
+
+THEOREM CommitCertificateDiscoveryRuntimeIsEnabled ==
+  \A node \in ValidatorIds:
+    /\ asyncRunnerPhase[node] = "Runtime"
+    /\ CommitCertificateDiscoveryDue(node)
+    => ENABLED SerializedRuntimeStep(node)
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds,
+                /\ asyncRunnerPhase[node] = "Runtime"
+                /\ CommitCertificateDiscoveryDue(node)
+         PROVE ENABLED SerializedRuntimeStep(node)
+    <2>1. ENABLED CommitCertificateDiscoverySerializedStep(node)
+      BY <1>1, ExpandENABLED, Isa
+         DEF CommitCertificateDiscoverySerializedStep,
+             DirectCommitCertificateDiscoveryStep,
+             PublishCommitCertificateRequests, LeaveCausalQueues,
+             AsyncIoVars, AsyncDeferredVars, vars
+    <2>2. CommitCertificateDiscoverySerializedStep(node) \in BOOLEAN
+      BY Isa DEF CommitCertificateDiscoverySerializedStep,
+                 DirectCommitCertificateDiscoveryStep
+    <2>3. SerializedRuntimeStep(node) \in BOOLEAN
+      BY Isa DEF SerializedRuntimeStep, RuntimeStep
+    <2>4. CommitCertificateDiscoverySerializedStep(node)
+             => SerializedRuntimeStep(node)
+      BY <1>1, Isa
+         DEF CommitCertificateDiscoverySerializedStep,
+             SerializedRuntimeStep, RuntimeStep
+    <2>5. ENABLED CommitCertificateDiscoverySerializedStep(node)
+             => ENABLED SerializedRuntimeStep(node)
+      BY <2>2, <2>3, <2>4, ENABLEDaxioms
+    <2> QED BY <2>1, <2>5
+  <1> QED BY <1>1
+
+IdleSerializedRuntimeStep(node) ==
+  /\ IdleRuntimeStep(node)
+  /\ UNCHANGED AsyncIoVars
+  /\ asyncRunnerPhase' =
+       [asyncRunnerPhase EXCEPT ![node] = "Local"]
+  /\ asyncRunnerBudget' =
+       [asyncRunnerBudget EXCEPT ![node] = AsyncQueueCapacity]
+
+THEOREM IdleSerializedRuntimeIsEnabled ==
+  \A node \in ValidatorIds:
+    /\ asyncRunnerPhase[node] = "Runtime"
+    /\ ~CommitCertificateDiscoveryDue(node)
+    /\ ~asyncDeferredDrainOwed[node]
+    /\ ~DeferredTagExecutable(node)
+    /\ ~TimeoutDue(node)
+    /\ ~RetransmitDue(node)
+    /\ ~NodeQueueNonempty(node)
+    => ENABLED SerializedRuntimeStep(node)
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds,
+                /\ asyncRunnerPhase[node] = "Runtime"
+                /\ ~CommitCertificateDiscoveryDue(node)
+                /\ ~asyncDeferredDrainOwed[node]
+                /\ ~DeferredTagExecutable(node)
+                /\ ~TimeoutDue(node)
+                /\ ~RetransmitDue(node)
+                /\ ~NodeQueueNonempty(node)
+         PROVE ENABLED SerializedRuntimeStep(node)
+    <2>1. ENABLED IdleSerializedRuntimeStep(node)
+      BY ExpandENABLED, Isa
+         DEF IdleSerializedRuntimeStep, IdleRuntimeStep,
+             LeaveCausalQueues, AsyncIoVars, AsyncDeferredVars, vars
+    <2>2. IdleSerializedRuntimeStep(node) \in BOOLEAN
+      BY Isa DEF IdleSerializedRuntimeStep, IdleRuntimeStep
+    <2>3. SerializedRuntimeStep(node) \in BOOLEAN
+      BY Isa DEF SerializedRuntimeStep, RuntimeStep
+    <2>4. IdleSerializedRuntimeStep(node) => SerializedRuntimeStep(node)
+      BY <1>1, Isa
+         DEF IdleSerializedRuntimeStep, SerializedRuntimeStep,
+             RuntimeStep
+    <2>5. ENABLED IdleSerializedRuntimeStep(node)
+             => ENABLED SerializedRuntimeStep(node)
+      BY <2>2, <2>3, <2>4, ENABLEDaxioms
+    <2> QED BY <2>1, <2>5
+  <1> QED BY <1>1
+
+DirectRetransmitSerializedStep(node) ==
+  /\ DirectRetransmitStep(node)
+  /\ UNCHANGED AsyncIoVars
+  /\ asyncRunnerPhase' =
+       [asyncRunnerPhase EXCEPT ![node] = "Local"]
+  /\ asyncRunnerBudget' =
+       [asyncRunnerBudget EXCEPT ![node] = AsyncQueueCapacity]
+
+THEOREM DirectRetransmitRuntimeIsEnabled ==
+  \A node \in ValidatorIds:
+    /\ asyncRunnerPhase[node] = "Runtime"
+    /\ ~CommitCertificateDiscoveryDue(node)
+    /\ ~asyncDeferredDrainOwed[node]
+    /\ ~DeferredTagExecutable(node)
+    /\ ~TimeoutDue(node)
+    /\ ~(NodeQueueNonempty(node) /\ asyncFifoOwed[node])
+    /\ RetransmitDue(node)
+    => ENABLED SerializedRuntimeStep(node)
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds,
+                /\ asyncRunnerPhase[node] = "Runtime"
+                /\ ~CommitCertificateDiscoveryDue(node)
+                /\ ~asyncDeferredDrainOwed[node]
+                /\ ~DeferredTagExecutable(node)
+                /\ ~TimeoutDue(node)
+                /\ ~(NodeQueueNonempty(node) /\ asyncFifoOwed[node])
+                /\ RetransmitDue(node)
+         PROVE ENABLED SerializedRuntimeStep(node)
+    <2>1. ENABLED DirectRetransmitSerializedStep(node)
+      BY <1>1, ExpandENABLED, Isa
+         DEF DirectRetransmitSerializedStep, DirectRetransmitStep,
+             SendNodeRetransmissions, NoSendItem, LeaveCausalQueues,
+             AsyncIoVars, AsyncDeferredVars, vars
+    <2>2. DirectRetransmitSerializedStep(node) \in BOOLEAN
+      BY Isa DEF DirectRetransmitSerializedStep, DirectRetransmitStep
+    <2>3. SerializedRuntimeStep(node) \in BOOLEAN
+      BY Isa DEF SerializedRuntimeStep, RuntimeStep
+    <2>4. DirectRetransmitSerializedStep(node)
+             => SerializedRuntimeStep(node)
+      BY <1>1, Isa
+         DEF DirectRetransmitSerializedStep,
+             SerializedRuntimeStep, RuntimeStep
+    <2>5. ENABLED DirectRetransmitSerializedStep(node)
+             => ENABLED SerializedRuntimeStep(node)
+      BY <2>2, <2>3, <2>4, ENABLEDaxioms
+    <2> QED BY <2>1, <2>5
+  <1> QED BY <1>1
+
+DeferredRetransmitSerializedStep(node) ==
+  /\ DeferredRetransmitStep(node)
+  /\ UNCHANGED AsyncIoVars
+  /\ asyncRunnerPhase' =
+       [asyncRunnerPhase EXCEPT ![node] = "Local"]
+  /\ asyncRunnerBudget' =
+       [asyncRunnerBudget EXCEPT ![node] = AsyncQueueCapacity]
+
+THEOREM DeferredRetransmitRuntimeIsEnabled ==
+  \A node \in ValidatorIds:
+    /\ asyncRunnerPhase[node] = "Runtime"
+    /\ ~CommitCertificateDiscoveryDue(node)
+    /\ ~asyncDeferredDrainOwed[node]
+    /\ DeferredTagExecutable(node)
+    /\ ~DeferredTimeoutExecutable(node)
+    => ENABLED SerializedRuntimeStep(node)
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds,
+                /\ asyncRunnerPhase[node] = "Runtime"
+                /\ ~CommitCertificateDiscoveryDue(node)
+                /\ ~asyncDeferredDrainOwed[node]
+                /\ DeferredTagExecutable(node)
+                /\ ~DeferredTimeoutExecutable(node)
+         PROVE ENABLED SerializedRuntimeStep(node)
+    <2>1. ENABLED DeferredRetransmitSerializedStep(node)
+      BY <1>1, ExpandENABLED, Isa
+         DEF DeferredRetransmitSerializedStep,
+             DeferredRetransmitStep, DeferredTagExecutable,
+             SendNodeRetransmissions, NoSendItem, LeaveCausalQueues,
+             AsyncIoVars, AsyncDeferredVars, vars
+    <2>2. DeferredRetransmitSerializedStep(node) \in BOOLEAN
+      BY Isa DEF DeferredRetransmitSerializedStep,
+                 DeferredRetransmitStep
+    <2>3. SerializedRuntimeStep(node) \in BOOLEAN
+      BY Isa DEF SerializedRuntimeStep, RuntimeStep
+    <2>4. DeferredRetransmitSerializedStep(node)
+             => SerializedRuntimeStep(node)
+      BY <1>1, Isa
+         DEF DeferredRetransmitSerializedStep,
+             SerializedRuntimeStep, RuntimeStep,
+             DeferredTagStep
+    <2>5. ENABLED DeferredRetransmitSerializedStep(node)
+             => ENABLED SerializedRuntimeStep(node)
+      BY <2>2, <2>3, <2>4, ENABLEDaxioms
+    <2> QED BY <2>1, <2>5
+  <1> QED BY <1>1
+
+SerializedRunnerReset(node) ==
+  /\ UNCHANGED AsyncIoVars
+  /\ asyncRunnerPhase' =
+       [asyncRunnerPhase EXCEPT ![node] = "Local"]
+  /\ asyncRunnerBudget' =
+       [asyncRunnerBudget EXCEPT ![node] = AsyncQueueCapacity]
+
+DeferredDrainEmptySerializedStep(node) ==
+  /\ UNCHANGED <<vars, asyncCommandQueues,
+                  asyncNextCommandClass, asyncFifoOwed,
+                  asyncTimeoutEmitted, asyncDeferredCompletionQueues,
+                  asyncDeferredProgressQueues,
+                  asyncDeferredNormalQueues, asyncOutstandingTags,
+                  asyncNodeDeadlines, asyncRetransmitDeadlines,
+                  asyncSentItems, asyncRetainedControl,
+                  asyncActiveRequests, asyncTransport,
+                  asyncIngressLanes, asyncIngressReady,
+                  asyncHeldChunks>>
+  /\ LeaveCausalQueues
+  /\ asyncDeferredDrainOwed' =
+       [asyncDeferredDrainOwed EXCEPT ![node] = FALSE]
+  /\ SerializedRunnerReset(node)
+
+THEOREM DeferredDrainEmptyRuntimeIsEnabled ==
+  \A node \in ValidatorIds:
+    /\ asyncRunnerPhase[node] = "Runtime"
+    /\ ~CommitCertificateDiscoveryDue(node)
+    /\ asyncDeferredDrainOwed[node]
+    /\ ~DeferredQueueNonempty(node)
+    => ENABLED SerializedRuntimeStep(node)
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds,
+                /\ asyncRunnerPhase[node] = "Runtime"
+                /\ ~CommitCertificateDiscoveryDue(node)
+                /\ asyncDeferredDrainOwed[node]
+                /\ ~DeferredQueueNonempty(node)
+         PROVE ENABLED SerializedRuntimeStep(node)
+    <2>1. ENABLED DeferredDrainEmptySerializedStep(node)
+      BY ExpandENABLED, Isa
+         DEF DeferredDrainEmptySerializedStep, SerializedRunnerReset,
+             LeaveCausalQueues, AsyncIoVars, vars
+    <2>2. DeferredDrainEmptySerializedStep(node) \in BOOLEAN
+      BY Isa DEF DeferredDrainEmptySerializedStep,
+                 SerializedRunnerReset
+    <2>3. SerializedRuntimeStep(node) \in BOOLEAN
+      BY Isa DEF SerializedRuntimeStep, RuntimeStep
+    <2>4. DeferredDrainEmptySerializedStep(node)
+             => SerializedRuntimeStep(node)
+      BY <1>1, Isa
+         DEF DeferredDrainEmptySerializedStep,
+             SerializedRunnerReset, SerializedRuntimeStep,
+             RuntimeStep, DeferredDrainStep
+    <2>5. ENABLED DeferredDrainEmptySerializedStep(node)
+             => ENABLED SerializedRuntimeStep(node)
+      BY <2>2, <2>3, <2>4, ENABLEDaxioms
+    <2> QED BY <2>1, <2>5
+  <1> QED BY <1>1
+
+DeferredDrainBusySerializedStep(node) ==
+  /\ LeaveCausalQueues
+  /\ UNCHANGED <<vars, asyncCommandQueues,
+                  asyncNextCommandClass, asyncFifoOwed,
+                  asyncTimeoutEmitted, asyncDeferredCompletionQueues,
+                  asyncDeferredProgressQueues,
+                  asyncDeferredNormalQueues, asyncOutstandingTags,
+                  asyncNodeDeadlines, asyncRetransmitDeadlines,
+                  asyncSentItems, asyncRetainedControl,
+                  asyncActiveRequests, asyncTransport,
+                  asyncIngressLanes, asyncIngressReady,
+                  asyncHeldChunks>>
+  /\ asyncDeferredDrainOwed' =
+       [asyncDeferredDrainOwed EXCEPT ![node] = FALSE]
+  /\ SerializedRunnerReset(node)
+
+THEOREM DeferredDrainBusyRuntimeIsEnabled ==
+  \A node \in ValidatorIds:
+    /\ asyncRunnerPhase[node] = "Runtime"
+    /\ ~CommitCertificateDiscoveryDue(node)
+    /\ asyncDeferredDrainOwed[node]
+    /\ DeferredQueueNonempty(node)
+    /\ ~CommandDispatchable(NextDeferredCommand(node))
+    /\ ~NodeIdle(node)
+    => ENABLED SerializedRuntimeStep(node)
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds,
+                /\ asyncRunnerPhase[node] = "Runtime"
+                /\ ~CommitCertificateDiscoveryDue(node)
+                /\ asyncDeferredDrainOwed[node]
+                /\ DeferredQueueNonempty(node)
+                /\ ~CommandDispatchable(NextDeferredCommand(node))
+                /\ ~NodeIdle(node)
+         PROVE ENABLED SerializedRuntimeStep(node)
+    <2>1. ENABLED DeferredDrainBusySerializedStep(node)
+      BY ExpandENABLED, Isa
+         DEF DeferredDrainBusySerializedStep, SerializedRunnerReset,
+             LeaveCausalQueues, AsyncIoVars, vars
+    <2>2. DeferredDrainBusySerializedStep(node) \in BOOLEAN
+      BY Isa DEF DeferredDrainBusySerializedStep,
+                 SerializedRunnerReset
+    <2>3. SerializedRuntimeStep(node) \in BOOLEAN
+      BY Isa DEF SerializedRuntimeStep, RuntimeStep
+    <2>4. DeferredDrainBusySerializedStep(node)
+             => SerializedRuntimeStep(node)
+      BY <1>1, Isa
+         DEF DeferredDrainBusySerializedStep,
+             SerializedRunnerReset, SerializedRuntimeStep,
+             RuntimeStep, DeferredDrainStep
+    <2>5. ENABLED DeferredDrainBusySerializedStep(node)
+             => ENABLED SerializedRuntimeStep(node)
+      BY <2>2, <2>3, <2>4, ENABLEDaxioms
+    <2> QED BY <2>1, <2>5
+  <1> QED BY <1>1
+
+DeferredDrainDiscardSerializedStep(node) ==
+  /\ RemoveNextDeferredCommand(node)
+  /\ DiscardCommand(NextDeferredCommand(node))
+  /\ LeaveCausalQueues
+  /\ asyncDeferredDrainOwed' = asyncDeferredDrainOwed
+  /\ UNCHANGED <<asyncCommandQueues, asyncNextCommandClass,
+                  asyncFifoOwed, asyncTimeoutEmitted>>
+  /\ SerializedRunnerReset(node)
+
+THEOREM DeferredDrainDiscardRuntimeIsEnabled ==
+  \A node \in ValidatorIds:
+    /\ asyncRunnerPhase[node] = "Runtime"
+    /\ ~CommitCertificateDiscoveryDue(node)
+    /\ asyncDeferredDrainOwed[node]
+    /\ DeferredQueueNonempty(node)
+    /\ ~CommandDispatchable(NextDeferredCommand(node))
+    /\ NodeIdle(node)
+    => ENABLED SerializedRuntimeStep(node)
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds,
+                /\ asyncRunnerPhase[node] = "Runtime"
+                /\ ~CommitCertificateDiscoveryDue(node)
+                /\ asyncDeferredDrainOwed[node]
+                /\ DeferredQueueNonempty(node)
+                /\ ~CommandDispatchable(NextDeferredCommand(node))
+                /\ NodeIdle(node)
+         PROVE ENABLED SerializedRuntimeStep(node)
+    <2>1. ENABLED DeferredDrainDiscardSerializedStep(node)
+      BY <1>1, ExpandENABLED, Isa
+         DEF DeferredDrainDiscardSerializedStep,
+             SerializedRunnerReset, RemoveNextDeferredCommand,
+             DiscardCommand, LeaveCausalQueues,
+             AsyncIoVars, AsyncDeferredVars, vars
+    <2>2. DeferredDrainDiscardSerializedStep(node) \in BOOLEAN
+      BY Isa DEF DeferredDrainDiscardSerializedStep,
+                 SerializedRunnerReset,
+                 RemoveNextDeferredCommand, DiscardCommand
+    <2>3. SerializedRuntimeStep(node) \in BOOLEAN
+      BY Isa DEF SerializedRuntimeStep, RuntimeStep
+    <2>4. DeferredDrainDiscardSerializedStep(node)
+             => SerializedRuntimeStep(node)
+      BY <1>1, Isa
+         DEF DeferredDrainDiscardSerializedStep,
+             SerializedRunnerReset, SerializedRuntimeStep,
+             RuntimeStep, DeferredDrainStep
+    <2>5. ENABLED DeferredDrainDiscardSerializedStep(node)
+             => ENABLED SerializedRuntimeStep(node)
+      BY <2>2, <2>3, <2>4, ENABLEDaxioms
+    <2> QED BY <2>1, <2>5
+  <1> QED BY <1>1
+
+FifoRuntimeSelected(node) ==
+  /\ ~CommitCertificateDiscoveryDue(node)
+  /\ ~asyncDeferredDrainOwed[node]
+  /\ ~DeferredTagExecutable(node)
+  /\ ~TimeoutDue(node)
+  /\ NodeQueueNonempty(node)
+  /\ (asyncFifoOwed[node] \/ ~RetransmitDue(node))
+
+FifoDeferSerializedStep(node) ==
+  LET command == NextNodeCommand(node)
+  IN /\ RemoveNextNodeCommand(node)
+     /\ DeferCommand(command)
+     /\ LeaveCausalQueues
+     /\ asyncFifoOwed' =
+          [asyncFifoOwed EXCEPT ![node] = FALSE]
+     /\ asyncTimeoutEmitted' = asyncTimeoutEmitted
+     /\ SerializedRunnerReset(node)
+
+THEOREM FifoDeferRuntimeIsEnabled ==
+  \A node \in ValidatorIds:
+    /\ asyncRunnerPhase[node] = "Runtime"
+    /\ FifoRuntimeSelected(node)
+    /\ ~CommandDispatchable(NextNodeCommand(node))
+    /\ ~NodeIdle(node)
+    => ENABLED SerializedRuntimeStep(node)
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds,
+                /\ asyncRunnerPhase[node] = "Runtime"
+                /\ FifoRuntimeSelected(node)
+                /\ ~CommandDispatchable(NextNodeCommand(node))
+                /\ ~NodeIdle(node)
+         PROVE ENABLED SerializedRuntimeStep(node)
+    <2>1. ENABLED FifoDeferSerializedStep(node)
+      BY ExpandENABLED, Isa
+         DEF FifoDeferSerializedStep, SerializedRunnerReset,
+             RemoveNextNodeCommand, DeferCommand, LeaveCausalQueues,
+             AsyncIoVars, AsyncDeferredVars, vars
+    <2>2. FifoDeferSerializedStep(node) \in BOOLEAN
+      BY Isa DEF FifoDeferSerializedStep, SerializedRunnerReset,
+                 RemoveNextNodeCommand, DeferCommand
+    <2>3. SerializedRuntimeStep(node) \in BOOLEAN
+      BY Isa DEF SerializedRuntimeStep, RuntimeStep
+    <2>4. FifoDeferSerializedStep(node) => SerializedRuntimeStep(node)
+      BY <1>1, Isa
+         DEF FifoDeferSerializedStep, SerializedRunnerReset,
+             SerializedRuntimeStep, RuntimeStep, FifoRuntimeStep,
+             FifoRuntimeSelected
+    <2>5. ENABLED FifoDeferSerializedStep(node)
+             => ENABLED SerializedRuntimeStep(node)
+      BY <2>2, <2>3, <2>4, ENABLEDaxioms
+    <2> QED BY <2>1, <2>5
+  <1> QED BY <1>1
+
+FifoDiscardSerializedStep(node) ==
+  LET command == NextNodeCommand(node)
+  IN /\ RemoveNextNodeCommand(node)
+     /\ DiscardCommand(command)
+     /\ LeaveCausalQueues
+     /\ UNCHANGED <<asyncDeferredCompletionQueues,
+                     asyncDeferredProgressQueues,
+                     asyncDeferredNormalQueues>>
+     /\ asyncDeferredDrainOwed' =
+          [asyncDeferredDrainOwed EXCEPT ![node] = TRUE]
+     /\ asyncFifoOwed' =
+          [asyncFifoOwed EXCEPT ![node] = FALSE]
+     /\ asyncTimeoutEmitted' = asyncTimeoutEmitted
+     /\ SerializedRunnerReset(node)
+
+THEOREM FifoDiscardRuntimeIsEnabled ==
+  \A node \in ValidatorIds:
+    /\ asyncRunnerPhase[node] = "Runtime"
+    /\ FifoRuntimeSelected(node)
+    /\ ~CommandDispatchable(NextNodeCommand(node))
+    /\ NodeIdle(node)
+    => ENABLED SerializedRuntimeStep(node)
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds,
+                /\ asyncRunnerPhase[node] = "Runtime"
+                /\ FifoRuntimeSelected(node)
+                /\ ~CommandDispatchable(NextNodeCommand(node))
+                /\ NodeIdle(node)
+         PROVE ENABLED SerializedRuntimeStep(node)
+    <2>1. ENABLED FifoDiscardSerializedStep(node)
+      BY <1>1, ExpandENABLED, Isa
+         DEF FifoDiscardSerializedStep, SerializedRunnerReset,
+             RemoveNextNodeCommand, DiscardCommand, LeaveCausalQueues,
+             AsyncIoVars, AsyncDeferredVars, vars
+    <2>2. FifoDiscardSerializedStep(node) \in BOOLEAN
+      BY Isa DEF FifoDiscardSerializedStep, SerializedRunnerReset,
+                 RemoveNextNodeCommand, DiscardCommand
+    <2>3. SerializedRuntimeStep(node) \in BOOLEAN
+      BY Isa DEF SerializedRuntimeStep, RuntimeStep
+    <2>4. FifoDiscardSerializedStep(node)
+             => SerializedRuntimeStep(node)
+      BY <1>1, Isa
+         DEF FifoDiscardSerializedStep, SerializedRunnerReset,
+             SerializedRuntimeStep, RuntimeStep, FifoRuntimeStep,
+             FifoRuntimeSelected
+    <2>5. ENABLED FifoDiscardSerializedStep(node)
+             => ENABLED SerializedRuntimeStep(node)
+      BY <2>2, <2>3, <2>4, ENABLEDaxioms
+    <2> QED BY <2>1, <2>5
+  <1> QED BY <1>1
+
+DirectTimeoutDeferredSerializedStep(node) ==
+  /\ asyncTimeoutEmitted' =
+       [asyncTimeoutEmitted EXCEPT ![node] = TRUE]
+  /\ asyncFifoOwed' =
+       [asyncFifoOwed EXCEPT ![node] = NodeQueueNonempty(node)]
+  /\ UNCHANGED vars
+  /\ asyncOutstandingTags' =
+       [asyncOutstandingTags EXCEPT
+          ![node] = @ \cup {"TimeoutElapsed"}]
+  /\ LeaveCausalQueues
+  /\ UNCHANGED <<asyncDeferredCompletionQueues,
+                  asyncDeferredProgressQueues,
+                  asyncDeferredNormalQueues>>
+  /\ asyncDeferredDrainOwed' = asyncDeferredDrainOwed
+  /\ UNCHANGED <<asyncCommandQueues, asyncNextCommandClass,
+                  asyncNodeDeadlines, asyncRetransmitDeadlines,
+                  asyncSentItems, asyncRetainedControl,
+                  asyncActiveRequests, asyncTransport,
+                  asyncIngressLanes, asyncIngressReady,
+                  asyncHeldChunks>>
+  /\ SerializedRunnerReset(node)
+
+THEOREM DirectTimeoutDeferredRuntimeIsEnabled ==
+  \A node \in ValidatorIds:
+    /\ asyncRunnerPhase[node] = "Runtime"
+    /\ ~CommitCertificateDiscoveryDue(node)
+    /\ ~asyncDeferredDrainOwed[node]
+    /\ ~DeferredTagExecutable(node)
+    /\ TimeoutDue(node)
+    /\ ~BeginTimeoutEnabled(node)
+    => ENABLED SerializedRuntimeStep(node)
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds,
+                /\ asyncRunnerPhase[node] = "Runtime"
+                /\ ~CommitCertificateDiscoveryDue(node)
+                /\ ~asyncDeferredDrainOwed[node]
+                /\ ~DeferredTagExecutable(node)
+                /\ TimeoutDue(node)
+                /\ ~BeginTimeoutEnabled(node)
+         PROVE ENABLED SerializedRuntimeStep(node)
+    <2>1. ENABLED DirectTimeoutDeferredSerializedStep(node)
+      BY ExpandENABLED, Isa
+         DEF DirectTimeoutDeferredSerializedStep,
+             SerializedRunnerReset, LeaveCausalQueues,
+             AsyncIoVars, vars
+    <2>2. DirectTimeoutDeferredSerializedStep(node) \in BOOLEAN
+      BY Isa DEF DirectTimeoutDeferredSerializedStep,
+                 SerializedRunnerReset
+    <2>3. SerializedRuntimeStep(node) \in BOOLEAN
+      BY Isa DEF SerializedRuntimeStep, RuntimeStep
+    <2>4. DirectTimeoutDeferredSerializedStep(node)
+             => SerializedRuntimeStep(node)
+      BY <1>1, Isa
+         DEF DirectTimeoutDeferredSerializedStep,
+             SerializedRunnerReset, SerializedRuntimeStep,
+             RuntimeStep, DirectTimeoutStep
+    <2>5. ENABLED DirectTimeoutDeferredSerializedStep(node)
+             => ENABLED SerializedRuntimeStep(node)
+      BY <2>2, <2>3, <2>4, ENABLEDaxioms
+    <2> QED BY <2>1, <2>5
+  <1> QED BY <1>1
+
+DeferredTimeoutNoBeginSerializedStep(node) ==
+  /\ UNCHANGED vars
+  /\ LeaveCausalQueues
+  /\ asyncOutstandingTags' =
+       [asyncOutstandingTags EXCEPT
+          ![node] = @ \ {"TimeoutElapsed"}]
+  /\ UNCHANGED <<asyncDeferredCompletionQueues,
+                  asyncDeferredProgressQueues,
+                  asyncDeferredNormalQueues>>
+  /\ asyncDeferredDrainOwed' =
+       [asyncDeferredDrainOwed EXCEPT ![node] = TRUE]
+  /\ UNCHANGED <<asyncCommandQueues, asyncNextCommandClass,
+                  asyncFifoOwed, asyncTimeoutEmitted,
+                  asyncNodeDeadlines, asyncRetransmitDeadlines,
+                  asyncSentItems, asyncRetainedControl,
+                  asyncActiveRequests, asyncTransport,
+                  asyncIngressLanes, asyncIngressReady,
+                  asyncHeldChunks>>
+  /\ SerializedRunnerReset(node)
+
+THEOREM DeferredTimeoutNoBeginRuntimeIsEnabled ==
+  \A node \in ValidatorIds:
+    /\ asyncRunnerPhase[node] = "Runtime"
+    /\ ~CommitCertificateDiscoveryDue(node)
+    /\ ~asyncDeferredDrainOwed[node]
+    /\ DeferredTimeoutExecutable(node)
+    /\ ~BeginTimeoutEnabled(node)
+    => ENABLED SerializedRuntimeStep(node)
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds,
+                /\ asyncRunnerPhase[node] = "Runtime"
+                /\ ~CommitCertificateDiscoveryDue(node)
+                /\ ~asyncDeferredDrainOwed[node]
+                /\ DeferredTimeoutExecutable(node)
+                /\ ~BeginTimeoutEnabled(node)
+         PROVE ENABLED SerializedRuntimeStep(node)
+    <2>1. ENABLED DeferredTimeoutNoBeginSerializedStep(node)
+      BY ExpandENABLED, Isa
+         DEF DeferredTimeoutNoBeginSerializedStep,
+             SerializedRunnerReset, LeaveCausalQueues,
+             AsyncIoVars, vars
+    <2>2. DeferredTimeoutNoBeginSerializedStep(node) \in BOOLEAN
+      BY Isa DEF DeferredTimeoutNoBeginSerializedStep,
+                 SerializedRunnerReset
+    <2>3. SerializedRuntimeStep(node) \in BOOLEAN
+      BY Isa DEF SerializedRuntimeStep, RuntimeStep
+    <2>4. DeferredTimeoutNoBeginSerializedStep(node)
+             => SerializedRuntimeStep(node)
+      BY <1>1, Isa
+         DEF DeferredTimeoutNoBeginSerializedStep,
+             SerializedRunnerReset, SerializedRuntimeStep,
+             RuntimeStep, DeferredTagExecutable, DeferredTagStep,
+             DeferredTimeoutStep
+    <2>5. ENABLED DeferredTimeoutNoBeginSerializedStep(node)
+             => ENABLED SerializedRuntimeStep(node)
+      BY <2>2, <2>3, <2>4, ENABLEDaxioms
+    <2> QED BY <2>1, <2>5
+  <1> QED BY <1>1
+
+DirectTimeoutBeginSerializedStep(node) ==
+  /\ asyncTimeoutEmitted' =
+       [asyncTimeoutEmitted EXCEPT ![node] = TRUE]
+  /\ asyncFifoOwed' =
+       [asyncFifoOwed EXCEPT ![node] = NodeQueueNonempty(node)]
+  /\ BeginTimeout(node)
+  /\ UNCHANGED asyncOutstandingTags
+  /\ AppendCausalSuccessors(TimeoutCausalCommand(node))
+  /\ UNCHANGED <<asyncDeferredCompletionQueues,
+                  asyncDeferredProgressQueues,
+                  asyncDeferredNormalQueues>>
+  /\ asyncDeferredDrainOwed' =
+       [asyncDeferredDrainOwed EXCEPT ![node] = TRUE]
+  /\ UNCHANGED <<asyncCommandQueues, asyncNextCommandClass,
+                  asyncNodeDeadlines, asyncRetransmitDeadlines,
+                  asyncSentItems, asyncRetainedControl,
+                  asyncActiveRequests, asyncTransport,
+                  asyncIngressLanes, asyncIngressReady,
+                  asyncHeldChunks>>
+  /\ SerializedRunnerReset(node)
+
+THEOREM DirectTimeoutBeginRuntimeIsEnabled ==
+  \A node \in ValidatorIds:
+    /\ asyncRunnerPhase[node] = "Runtime"
+    /\ ~CommitCertificateDiscoveryDue(node)
+    /\ ~asyncDeferredDrainOwed[node]
+    /\ ~DeferredTagExecutable(node)
+    /\ TimeoutDue(node)
+    /\ BeginTimeoutEnabled(node)
+    => ENABLED SerializedRuntimeStep(node)
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds,
+                /\ asyncRunnerPhase[node] = "Runtime"
+                /\ ~CommitCertificateDiscoveryDue(node)
+                /\ ~asyncDeferredDrainOwed[node]
+                /\ ~DeferredTagExecutable(node)
+                /\ TimeoutDue(node)
+                /\ BeginTimeoutEnabled(node)
+         PROVE ENABLED SerializedRuntimeStep(node)
+    <2>1. ENABLED DirectTimeoutBeginSerializedStep(node)
+      BY <1>1, ExpandENABLED, Isa
+         DEF BeginTimeoutEnabled, DirectTimeoutBeginSerializedStep,
+             SerializedRunnerReset, BeginTimeout,
+             AppendCausalSuccessors, AsyncIoVars, vars
+    <2>2. DirectTimeoutBeginSerializedStep(node) \in BOOLEAN
+      BY Isa DEF DirectTimeoutBeginSerializedStep,
+                 SerializedRunnerReset, BeginTimeout
+    <2>3. SerializedRuntimeStep(node) \in BOOLEAN
+      BY Isa DEF SerializedRuntimeStep, RuntimeStep
+    <2>4. DirectTimeoutBeginSerializedStep(node)
+             => SerializedRuntimeStep(node)
+      BY <1>1, Isa
+         DEF DirectTimeoutBeginSerializedStep,
+             SerializedRunnerReset, SerializedRuntimeStep,
+             RuntimeStep, DirectTimeoutStep
+    <2>5. ENABLED DirectTimeoutBeginSerializedStep(node)
+             => ENABLED SerializedRuntimeStep(node)
+      BY <2>2, <2>3, <2>4, ENABLEDaxioms
+    <2> QED BY <2>1, <2>5
+  <1> QED BY <1>1
+
+DeferredTimeoutBeginSerializedStep(node) ==
+  /\ BeginTimeout(node)
+  /\ AppendCausalSuccessors(TimeoutCausalCommand(node))
+  /\ asyncOutstandingTags' =
+       [asyncOutstandingTags EXCEPT
+          ![node] = @ \ {"TimeoutElapsed"}]
+  /\ UNCHANGED <<asyncDeferredCompletionQueues,
+                  asyncDeferredProgressQueues,
+                  asyncDeferredNormalQueues>>
+  /\ asyncDeferredDrainOwed' =
+       [asyncDeferredDrainOwed EXCEPT ![node] = TRUE]
+  /\ UNCHANGED <<asyncCommandQueues, asyncNextCommandClass,
+                  asyncFifoOwed, asyncTimeoutEmitted,
+                  asyncNodeDeadlines, asyncRetransmitDeadlines,
+                  asyncSentItems, asyncRetainedControl,
+                  asyncActiveRequests, asyncTransport,
+                  asyncIngressLanes, asyncIngressReady,
+                  asyncHeldChunks>>
+  /\ SerializedRunnerReset(node)
+
+THEOREM DeferredTimeoutBeginRuntimeIsEnabled ==
+  \A node \in ValidatorIds:
+    /\ asyncRunnerPhase[node] = "Runtime"
+    /\ ~CommitCertificateDiscoveryDue(node)
+    /\ ~asyncDeferredDrainOwed[node]
+    /\ DeferredTimeoutExecutable(node)
+    /\ BeginTimeoutEnabled(node)
+    => ENABLED SerializedRuntimeStep(node)
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds,
+                /\ asyncRunnerPhase[node] = "Runtime"
+                /\ ~CommitCertificateDiscoveryDue(node)
+                /\ ~asyncDeferredDrainOwed[node]
+                /\ DeferredTimeoutExecutable(node)
+                /\ BeginTimeoutEnabled(node)
+         PROVE ENABLED SerializedRuntimeStep(node)
+    <2>1. ENABLED DeferredTimeoutBeginSerializedStep(node)
+      BY <1>1, ExpandENABLED, Isa
+         DEF BeginTimeoutEnabled, DeferredTimeoutBeginSerializedStep,
+             SerializedRunnerReset, BeginTimeout,
+             AppendCausalSuccessors, AsyncIoVars, vars
+    <2>2. DeferredTimeoutBeginSerializedStep(node) \in BOOLEAN
+      BY Isa DEF DeferredTimeoutBeginSerializedStep,
+                 SerializedRunnerReset, BeginTimeout
+    <2>3. SerializedRuntimeStep(node) \in BOOLEAN
+      BY Isa DEF SerializedRuntimeStep, RuntimeStep
+    <2>4. DeferredTimeoutBeginSerializedStep(node)
+             => SerializedRuntimeStep(node)
+      BY <1>1, Isa
+         DEF DeferredTimeoutBeginSerializedStep,
+             SerializedRunnerReset, SerializedRuntimeStep,
+             RuntimeStep, DeferredTagExecutable, DeferredTagStep,
+             DeferredTimeoutStep
+    <2>5. ENABLED DeferredTimeoutBeginSerializedStep(node)
+             => ENABLED SerializedRuntimeStep(node)
+      BY <2>2, <2>3, <2>4, ENABLEDaxioms
+    <2> QED BY <2>1, <2>5
+  <1> QED BY <1>1
+
+ExecutionRuntimeSelected(node) ==
+  /\ ~CommitCertificateDiscoveryDue(node)
+  /\ \/ /\ asyncDeferredDrainOwed[node]
+           /\ DeferredQueueNonempty(node)
+     \/ /\ ~asyncDeferredDrainOwed[node]
+           /\ FifoRuntimeSelected(node)
+
+SelectedRuntimeCommand(node) ==
+  IF asyncDeferredDrainOwed[node]
+  THEN NextDeferredCommand(node)
+  ELSE NextNodeCommand(node)
+
+SelectedExecutionSchedulerFrame(node, command) ==
+  /\ IF asyncDeferredDrainOwed[node]
+     THEN /\ RemoveNextDeferredCommand(node)
+          /\ asyncDeferredDrainOwed' = asyncDeferredDrainOwed
+          /\ UNCHANGED <<asyncCommandQueues,
+                          asyncNextCommandClass, asyncFifoOwed>>
+     ELSE /\ RemoveNextNodeCommand(node)
+          /\ UNCHANGED <<asyncDeferredCompletionQueues,
+                          asyncDeferredProgressQueues,
+                          asyncDeferredNormalQueues>>
+          /\ asyncDeferredDrainOwed' =
+               [asyncDeferredDrainOwed EXCEPT ![node] = TRUE]
+          /\ asyncFifoOwed' =
+               [asyncFifoOwed EXCEPT ![node] = FALSE]
+  /\ AppendCausalSuccessors(command)
+  /\ asyncTimeoutEmitted' =
+       IF command.kind = "PersistInstallTC"
+       THEN [asyncTimeoutEmitted EXCEPT ![node] = FALSE]
+       ELSE asyncTimeoutEmitted
+  /\ SerializedRunnerReset(node)
+
+RejectSelectedExecutionSerializedStep(node) ==
+  LET command == SelectedRuntimeCommand(node)
+  IN /\ ExecuteRejectAuthenticatedJunk(command)
+     /\ SelectedExecutionSchedulerFrame(node, command)
+
+THEOREM RejectSelectedExecutionRuntimeIsEnabled ==
+  \A node \in ValidatorIds:
+    LET command == SelectedRuntimeCommand(node)
+    IN /\ asyncRunnerPhase[node] = "Runtime"
+       /\ ExecutionRuntimeSelected(node)
+       /\ CommandDispatchable(command)
+       /\ ENABLED ExecuteRejectAuthenticatedJunk(command)
+       => ENABLED SerializedRuntimeStep(node)
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds
+         PROVE LET command == SelectedRuntimeCommand(node)
+               IN /\ asyncRunnerPhase[node] = "Runtime"
+                  /\ ExecutionRuntimeSelected(node)
+                  /\ CommandDispatchable(command)
+                  /\ ENABLED ExecuteRejectAuthenticatedJunk(command)
+                  => ENABLED SerializedRuntimeStep(node)
+    <2> DEFINE Command == SelectedRuntimeCommand(node)
+    <2>1. ASSUME /\ asyncRunnerPhase[node] = "Runtime"
+                  /\ ExecutionRuntimeSelected(node)
+                  /\ CommandDispatchable(Command)
+                  /\ ENABLED ExecuteRejectAuthenticatedJunk(Command)
+           PROVE ENABLED SerializedRuntimeStep(node)
+      <3>1. ENABLED RejectSelectedExecutionSerializedStep(node)
+        BY <2>1, ExpandENABLED, Isa
+           DEF RejectSelectedExecutionSerializedStep,
+               SelectedExecutionSchedulerFrame,
+               SelectedRuntimeCommand, SerializedRunnerReset,
+               ExecuteRejectAuthenticatedJunk,
+               RemoveNextDeferredCommand, RemoveNextNodeCommand,
+               AppendCausalSuccessors, AsyncIoVars, vars, Command
+      <3>2. RejectSelectedExecutionSerializedStep(node) \in BOOLEAN
+        BY Isa DEF RejectSelectedExecutionSerializedStep,
+                   SelectedExecutionSchedulerFrame,
+                   SerializedRunnerReset,
+                   ExecuteRejectAuthenticatedJunk
+      <3>3. SerializedRuntimeStep(node) \in BOOLEAN
+        BY Isa DEF SerializedRuntimeStep, RuntimeStep
+      <3>4. RejectSelectedExecutionSerializedStep(node)
+               => SerializedRuntimeStep(node)
+        BY <2>1, Isa
+           DEF RejectSelectedExecutionSerializedStep,
+               SelectedExecutionSchedulerFrame,
+               SelectedRuntimeCommand, SerializedRunnerReset,
+               SerializedRuntimeStep, RuntimeStep,
+               DeferredDrainStep, FifoRuntimeStep,
+               FifoRuntimeSelected, ExecutionRuntimeSelected,
+               ExecuteCommand, Command
+      <3>5. ENABLED RejectSelectedExecutionSerializedStep(node)
+               => ENABLED SerializedRuntimeStep(node)
+        BY <3>2, <3>3, <3>4, ENABLEDaxioms
+      <3> QED BY <3>1, <3>5
+    <2> QED BY <2>1
+  <1> QED BY <1>1
+
+SelectedExecutionSerializedStep(node) ==
+  LET command == SelectedRuntimeCommand(node)
+  IN /\ ExecuteCommand(command)
+     /\ SelectedExecutionSchedulerFrame(node, command)
+
+THEOREM SelectedExecutionRuntimeIsEnabled ==
+  \A node \in ValidatorIds:
+    LET command == SelectedRuntimeCommand(node)
+    IN /\ asyncRunnerPhase[node] = "Runtime"
+       /\ ExecutionRuntimeSelected(node)
+       /\ CommandDispatchable(command)
+       => ENABLED SerializedRuntimeStep(node)
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds
+         PROVE LET command == SelectedRuntimeCommand(node)
+               IN /\ asyncRunnerPhase[node] = "Runtime"
+                  /\ ExecutionRuntimeSelected(node)
+                  /\ CommandDispatchable(command)
+                  => ENABLED SerializedRuntimeStep(node)
+    <2> DEFINE Command == SelectedRuntimeCommand(node)
+    <2>1. ASSUME /\ asyncRunnerPhase[node] = "Runtime"
+                  /\ ExecutionRuntimeSelected(node)
+                  /\ CommandDispatchable(Command)
+           PROVE ENABLED SerializedRuntimeStep(node)
+      <3>1. ENABLED SelectedExecutionSerializedStep(node)
+        BY <2>1, ExpandENABLED, Isa
+           DEF SelectedExecutionSerializedStep,
+               SelectedExecutionSchedulerFrame,
+               SelectedRuntimeCommand, SerializedRunnerReset,
+               CommandDispatchable, CommandExecutionEnabled,
+               ExecuteCommand, ExecuteRegularCommand,
+               ExecuteSignProposal, ExecuteSignVote,
+               ExecuteFormPrepareQC, ExecuteSignTimeout,
+               ExecutePersistInstall, ExecutePersistDecision,
+               ExecuteRequestCertifiedBody, ExecuteApply,
+               ExecuteCoreDelivery, ExecuteChunkDelivery,
+               ExecuteRejectAuthenticatedJunk, RegularCoreCommand,
+               AssembleLocalBody, BeginLocalProposal, PersistProposal,
+               FetchBody, StoreBody, ValidateBody, RejectBody,
+               ValidateDecidedBody, BeginPrepare, PersistPrepare,
+               BeginObservePrepare, PersistObservePrepare,
+               BeginLockCommit, PersistLockCommit, FormCommitQC,
+               BeginDecision, PersistTimeout, FormTC, BeginInstallTC,
+               FetchCertifiedBody, CompleteProposalSignature,
+               CompleteVoteSignature, FormPrepareQC,
+               CompleteTimeoutSignature, PersistInstallTC,
+               PersistDecision, ApplyDecision, DeliverProposal,
+               DeliverVote, DeliverQC, DeliverTimeout, DeliverTC,
+               PublishControlAndEphemeralItems, PublishControlItems,
+               PersistInstalledControl, PersistDecisionControl,
+               PublishCertifiedRequests,
+               RemoveNextDeferredCommand, RemoveNextNodeCommand,
+               AppendCausalSuccessors, AsyncAuxVars,
+               AsyncIoVars, vars, Command
+      <3>2. SelectedExecutionSerializedStep(node) \in BOOLEAN
+        BY Isa DEF SelectedExecutionSerializedStep,
+                   SelectedExecutionSchedulerFrame,
+                   SerializedRunnerReset, ExecuteCommand
+      <3>3. SerializedRuntimeStep(node) \in BOOLEAN
+        BY Isa DEF SerializedRuntimeStep, RuntimeStep
+      <3>4. SelectedExecutionSerializedStep(node)
+               => SerializedRuntimeStep(node)
+        BY <2>1, Isa
+           DEF SelectedExecutionSerializedStep,
+               SelectedExecutionSchedulerFrame,
+               SelectedRuntimeCommand, SerializedRunnerReset,
+               SerializedRuntimeStep, RuntimeStep,
+               DeferredDrainStep, FifoRuntimeStep,
+               FifoRuntimeSelected, ExecutionRuntimeSelected,
+               CommandDispatchable, Command
+      <3>5. ENABLED SelectedExecutionSerializedStep(node)
+               => ENABLED SerializedRuntimeStep(node)
+        BY <3>2, <3>3, <3>4, ENABLEDaxioms
+      <3> QED BY <3>1, <3>5
+    <2> QED BY <2>1
+  <1> QED BY <1>1
+
+THEOREM SerializedRuntimeStepIsEnabled ==
+  \A node \in ValidatorIds:
+    asyncRunnerPhase[node] = "Runtime"
+      => ENABLED SerializedRuntimeStep(node)
+BY CommitCertificateDiscoveryRuntimeIsEnabled,
+   DeferredDrainEmptyRuntimeIsEnabled,
+   DeferredDrainBusyRuntimeIsEnabled,
+   DeferredDrainDiscardRuntimeIsEnabled,
+   DeferredRetransmitRuntimeIsEnabled,
+   DirectTimeoutDeferredRuntimeIsEnabled,
+   DeferredTimeoutNoBeginRuntimeIsEnabled,
+   DirectTimeoutBeginRuntimeIsEnabled,
+   DeferredTimeoutBeginRuntimeIsEnabled,
+   SelectedExecutionRuntimeIsEnabled,
+   FifoDeferRuntimeIsEnabled,
+   FifoDiscardRuntimeIsEnabled,
+   DirectRetransmitRuntimeIsEnabled,
+   IdleSerializedRuntimeIsEnabled, Isa
+   DEF ExecutionRuntimeSelected, FifoRuntimeSelected,
+       DeferredTagExecutable
+
+NodeServiceFrame(node) ==
+  /\ UNCHANGED asyncNow
+  /\ asyncNodeServiceDeadlines' =
+       [asyncNodeServiceDeadlines EXCEPT
+          ![node] = asyncNow + AsyncDeliveryBound]
+  /\ UNCHANGED asyncIoServiceDeadlines
+
+LocalRunNodeStep(node) ==
+  LocalAdmissionStep(node) /\ NodeServiceFrame(node)
+
+THEOREM EnabledLocalAdmissionLiftsToRunNode ==
+  \A node \in AsyncCurrentResponsiveVoters:
+    /\ ~NodeHasApplication(node)
+    /\ ENABLED LocalAdmissionStep(node)
+    => ENABLED RunNode(node)
+PROOF
+  <1>1. ASSUME NEW node \in AsyncCurrentResponsiveVoters,
+                /\ ~NodeHasApplication(node)
+                /\ ENABLED LocalAdmissionStep(node)
+         PROVE ENABLED RunNode(node)
+    <2>1. ENABLED LocalRunNodeStep(node)
+      BY <1>1, ExpandENABLED, Isa
+         DEF LocalRunNodeStep, NodeServiceFrame,
+             LocalAdmissionStep, AdmitProducerCompletion,
+             AdmitCausalHead, EnqueueCandidate, LeaveCausalQueues,
+             AsyncIoVars, AsyncDeferredVars, vars
+    <2>2. LocalRunNodeStep(node) \in BOOLEAN
+      BY Isa DEF LocalRunNodeStep, NodeServiceFrame,
+                 LocalAdmissionStep
+    <2>3. RunNode(node) \in BOOLEAN
+      BY Isa DEF RunNode
+    <2>4. LocalRunNodeStep(node) => RunNode(node)
+      BY <1>1, Isa DEF LocalRunNodeStep, NodeServiceFrame, RunNode
+    <2>5. ENABLED LocalRunNodeStep(node) => ENABLED RunNode(node)
+      BY <2>2, <2>3, <2>4, ENABLEDaxioms
+    <2> QED BY <2>1, <2>5
+  <1> QED BY <1>1
+
+IngressRunNodeStep(node) ==
+  IngressDrainStep(node) /\ NodeServiceFrame(node)
+
+THEOREM EnabledIngressDrainLiftsToRunNode ==
+  \A node \in AsyncCurrentResponsiveVoters:
+    /\ ~NodeHasApplication(node)
+    /\ ENABLED IngressDrainStep(node)
+    => ENABLED RunNode(node)
+PROOF
+  <1>1. ASSUME NEW node \in AsyncCurrentResponsiveVoters,
+                /\ ~NodeHasApplication(node)
+                /\ ENABLED IngressDrainStep(node)
+         PROVE ENABLED RunNode(node)
+    <2>1. ENABLED IngressRunNodeStep(node)
+      BY <1>1, ExpandENABLED, Isa
+         DEF IngressRunNodeStep, NodeServiceFrame,
+             IngressDrainStep, DrainFairIngressSelected,
+             PopSelectedIngress, EnqueueCandidate, LeaveCausalQueues,
+             AsyncIoVars, AsyncDeferredVars, vars
+    <2>2. IngressRunNodeStep(node) \in BOOLEAN
+      BY Isa DEF IngressRunNodeStep, NodeServiceFrame,
+                 IngressDrainStep
+    <2>3. RunNode(node) \in BOOLEAN
+      BY Isa DEF RunNode
+    <2>4. IngressRunNodeStep(node) => RunNode(node)
+      BY <1>1, Isa DEF IngressRunNodeStep, NodeServiceFrame, RunNode
+    <2>5. ENABLED IngressRunNodeStep(node) => ENABLED RunNode(node)
+      BY <2>2, <2>3, <2>4, ENABLEDaxioms
+    <2> QED BY <2>1, <2>5
+  <1> QED BY <1>1
+
+SerializedRunNodeStep(node) ==
+  SerializedRuntimeStep(node) /\ NodeServiceFrame(node)
+
+THEOREM EnabledSerializedRuntimeLiftsToRunNode ==
+  \A node \in AsyncCurrentResponsiveVoters:
+    /\ ~NodeHasApplication(node)
+    /\ ENABLED SerializedRuntimeStep(node)
+    => ENABLED RunNode(node)
+PROOF
+  <1>1. ASSUME NEW node \in AsyncCurrentResponsiveVoters,
+                /\ ~NodeHasApplication(node)
+                /\ ENABLED SerializedRuntimeStep(node)
+         PROVE ENABLED RunNode(node)
+    <2>1. ENABLED SerializedRunNodeStep(node)
+      BY <1>1, ExpandENABLED, Isa
+         DEF SerializedRunNodeStep, NodeServiceFrame,
+             SerializedRuntimeStep, RuntimeStep,
+             DirectCommitCertificateDiscoveryStep,
+             DeferredDrainStep, DeferredTagStep,
+             DeferredTimeoutStep, DeferredRetransmitStep,
+             DirectTimeoutStep, FifoRuntimeStep,
+             DirectRetransmitStep, IdleRuntimeStep,
+             BeginTimeoutEnabled, CommandDispatchable,
+             CommandExecutionEnabled, ExecuteCommand,
+             ExecuteRegularCommand, ExecuteSignProposal,
+             ExecuteSignVote, ExecuteFormPrepareQC,
+             ExecuteSignTimeout, ExecutePersistInstall,
+             ExecutePersistDecision, ExecuteRequestCertifiedBody,
+             ExecuteApply, ExecuteCoreDelivery,
+             ExecuteChunkDelivery, ExecuteRejectAuthenticatedJunk,
+             RegularCoreCommand, AssembleLocalBody,
+             BeginLocalProposal, PersistProposal, FetchBody,
+             StoreBody, ValidateBody, RejectBody,
+             ValidateDecidedBody, BeginPrepare, PersistPrepare,
+             BeginObservePrepare, PersistObservePrepare,
+             BeginLockCommit, PersistLockCommit, FormCommitQC,
+             BeginDecision, BeginTimeout, PersistTimeout, FormTC,
+             BeginInstallTC, FetchCertifiedBody,
+             CompleteProposalSignature, CompleteVoteSignature,
+             FormPrepareQC, CompleteTimeoutSignature,
+             PersistInstallTC, PersistDecision, ApplyDecision,
+             DeliverProposal, DeliverVote, DeliverQC,
+             DeliverTimeout, DeliverTC,
+             PublishCommitCertificateRequests,
+             PublishControlAndEphemeralItems, PublishControlItems,
+             PersistInstalledControl, PersistDecisionControl,
+             PublishCertifiedRequests, SendNodeRetransmissions,
+             NoSendItem, RemoveNextNodeCommand,
+             RemoveNextDeferredCommand, DeferCommand, DiscardCommand,
+             AppendCausalSuccessors, LeaveCausalQueues,
+             AsyncAuxVars, AsyncIoVars, AsyncDeferredVars, vars
+    <2>2. SerializedRunNodeStep(node) \in BOOLEAN
+      BY Isa DEF SerializedRunNodeStep, NodeServiceFrame,
+                 SerializedRuntimeStep, RuntimeStep
+    <2>3. RunNode(node) \in BOOLEAN
+      BY Isa DEF RunNode
+    <2>4. SerializedRunNodeStep(node) => RunNode(node)
+      BY <1>1, Isa
+         DEF SerializedRunNodeStep, NodeServiceFrame, RunNode
+    <2>5. ENABLED SerializedRunNodeStep(node) => ENABLED RunNode(node)
+      BY <2>2, <2>3, <2>4, ENABLEDaxioms
+    <2> QED BY <2>1, <2>5
+  <1> QED BY <1>1
+
+THEOREM ResponsiveUnappliedRunNodeIsEnabled ==
+  \A node \in AsyncCurrentResponsiveVoters:
+    /\ AsyncTypeInvariant
+    /\ ~NodeHasApplication(node)
+    => ENABLED RunNode(node)
+PROOF
+  <1>1. ASSUME NEW node \in AsyncCurrentResponsiveVoters,
+                /\ AsyncTypeInvariant
+                /\ ~NodeHasApplication(node)
+         PROVE ENABLED RunNode(node)
+    <2>1. node \in ValidatorIds
+      BY <1>1, AsyncCurrentResponsiveVotersAreValidators
+         DEF AsyncTypeInvariant
+    <2>2. asyncRunnerPhase[node]
+             \in {"Local", "Ingress", "Runtime"}
+      BY <1>1, <2>1
+         DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+             AsyncRuntimeTypeInvariant, AsyncRuntimeScalarTypeInvariant
+    <2>3. CASE asyncRunnerPhase[node] = "Local"
+      <3>1. ENABLED LocalAdmissionStep(node)
+        BY <2>1, <2>3, LocalAdmissionStepIsEnabled
+      <3> QED BY <1>1, <3>1,
+           EnabledLocalAdmissionLiftsToRunNode
+    <2>4. CASE asyncRunnerPhase[node] = "Ingress"
+      <3>1. ENABLED IngressDrainStep(node)
+        BY <2>1, <2>4, IngressDrainStepIsEnabled
+      <3> QED BY <1>1, <3>1,
+           EnabledIngressDrainLiftsToRunNode
+    <2>5. CASE asyncRunnerPhase[node] = "Runtime"
+      <3>1. ENABLED SerializedRuntimeStep(node)
+        BY <2>1, <2>5, SerializedRuntimeStepIsEnabled
+      <3> QED BY <1>1, <3>1,
+           EnabledSerializedRuntimeLiftsToRunNode
+    <2> QED BY <2>2, <2>3, <2>4, <2>5
+  <1> QED BY <1>1
+
+THEOREM AppliedNodeHasDecision ==
+  \A node \in ValidatorIds:
+    StrongInductiveInvariant /\ NodeHasApplication(node)
+      => NodeHasDecision(node)
+BY SMT
+   DEF StrongInductiveInvariant, Safety, AppliedRequiresDecision,
+       NodeHasApplication, NodeHasDecision
+
+THEOREM EnabledRunNodeLiftsPostGst ==
+  \A node \in AsyncCurrentResponsiveVoters:
+    gst /\ ENABLED RunNode(node)
+      => ENABLED PostGstRunNode(node)
+PROOF
+  <1>1. ASSUME NEW node \in AsyncCurrentResponsiveVoters,
+                gst,
+                ENABLED RunNode(node)
+         PROVE ENABLED PostGstRunNode(node)
+    <2>1. RunNode(node) \in BOOLEAN
+      BY Isa DEF RunNode
+    <2>2. PostGstRunNode(node) \in BOOLEAN
+      BY Isa DEF PostGstRunNode, RunNode
+    <2>3. RunNode(node) => PostGstRunNode(node)
+      BY <1>1 DEF PostGstRunNode
+    <2>4. ENABLED RunNode(node) => ENABLED PostGstRunNode(node)
+      BY <2>1, <2>2, <2>3, ENABLEDaxioms
+    <2> QED BY <1>1, <2>4
+  <1> QED BY <1>1
+
+THEOREM UndecidedResponsiveStateEnablesProgress ==
+  /\ AsyncStrongTypeInvariant
+  /\ gst
+  /\ ~ResponsiveNodesDecide
+  => PostGstProgressActionEnabled
+PROOF
+  <1>1. ASSUME AsyncStrongTypeInvariant,
+              gst,
+              ~ResponsiveNodesDecide
+         PROVE PostGstProgressActionEnabled
+    <2>1. PICK node \in AsyncCurrentResponsiveVoters:
+             ~NodeHasDecision(node)
+      BY <1>1, Isa DEF ResponsiveNodesDecide
+    <2>2. node \in ValidatorIds
+      BY <1>1, <2>1, AsyncCurrentResponsiveVotersAreValidators
+         DEF AsyncStrongTypeInvariant, StrongInductiveInvariant,
+             Safety
+    <2>3. ~NodeHasApplication(node)
+      BY <1>1, <2>1, <2>2, AppliedNodeHasDecision
+         DEF AsyncStrongTypeInvariant
+    <2>4. AsyncTypeInvariant
+      BY <1>1, AsyncStrongTypeProjectsAsyncType
+    <2>5. ENABLED RunNode(node)
+      BY <2>1, <2>3, <2>4,
+         ResponsiveUnappliedRunNodeIsEnabled
+    <2>6. ENABLED PostGstRunNode(node)
+      BY <1>1, <2>1, <2>5, EnabledRunNodeLiftsPostGst
+    <2> QED BY <2>1, <2>6 DEF PostGstProgressActionEnabled
+  <1> QED BY <1>1
+
+THEOREM AsyncSpecAlwaysStrongTypeInvariant ==
+  \A initialContext:
+    AsyncSpecAt(initialContext) => []AsyncStrongTypeInvariant
+PROOF
+  <1>1. ASSUME NEW initialContext
+         PROVE AsyncSpecAt(initialContext) => []AsyncStrongTypeInvariant
+    <2>1. AsyncInitAt(initialContext) => AsyncStrongTypeInvariant
+      BY AsyncInitEstablishesStrongTypeInvariant
+    <2>2. AsyncStrongTypeInvariant /\ [AsyncNext]_AsyncAllVars
+             => AsyncStrongTypeInvariant'
+      BY AsyncBracketNextPreservesStrongTypeInvariant
+    <2> QED BY <2>1, <2>2, PTL DEF AsyncSpecAt
+  <1> QED BY <1>1
+
+(***************************************************************************
+Protected deferred progress has one semantic slot per validator's exact
+locked Commit delivery, plus PrepareQC, CommitQC, and TC delivery.  Mapping
+indices to that finite carrier makes the N + 3 reservation bound a theorem
+of the duplicate exclusion rule rather than an independent queue-size guess.
+***************************************************************************)
+
+ProtectedProgressSlotUniverse ==
+  ({"Vote"} \X ValidatorIds)
+    \cup ({"PrepareQC", "CommitQC", "TimeoutCertificate"} \X {0})
+
+ProtectedProgressSlot(command) ==
+  CASE command.kind = "DeliverVote" ->
+         <<"Vote", command.item.envelope.vote.signer>>
+    [] command.kind = "DeliverQC" -> <<command.item.kind, 0>>
+    [] OTHER -> <<"TimeoutCertificate", 0>>
+
+ProtectedProgressSlotMap(node) ==
+  [index \in ProtectedDeferredProgressIndices(node) |->
+     ProtectedProgressSlot(
+       asyncDeferredProgressQueues[node][index])]
+
+THEOREM ProtectedProgressSlotUniverseSize ==
+  ModelConfiguration
+    => /\ IsFiniteSet(ProtectedProgressSlotUniverse)
+       /\ Cardinality(ProtectedProgressSlotUniverse) = N + 3
+PROOF
+  <1>1. ASSUME ModelConfiguration
+         PROVE /\ IsFiniteSet(ProtectedProgressSlotUniverse)
+               /\ Cardinality(ProtectedProgressSlotUniverse) = N + 3
+    <2> DEFINE VoteSlots == {"Vote"} \X ValidatorIds
+    <2> DEFINE CertificateKinds ==
+           {"PrepareQC", "CommitQC", "TimeoutCertificate"}
+    <2> DEFINE CertificateSlots == CertificateKinds \X {0}
+    <2>1. /\ N \in Nat \ {0}
+           /\ IsFiniteSet(ValidatorIds)
+           /\ Cardinality(ValidatorIds) = N
+      BY <1>1, FS_Interval, SMT
+         DEF ValidatorIds, ModelConfiguration, QuorumConfiguration
+    <2>2. /\ IsFiniteSet({"Vote"})
+           /\ Cardinality({"Vote"}) = 1
+      BY FS_Singleton
+    <2>3. /\ IsFiniteSet(VoteSlots)
+           /\ Cardinality(VoteSlots) = N
+      BY <2>1, <2>2, FS_Product, SMT DEF VoteSlots
+    <2>4. /\ IsFiniteSet(CertificateKinds)
+           /\ Cardinality(CertificateKinds) = 3
+      BY FS_EmptySet, FS_AddElement, SMT DEF CertificateKinds
+    <2>5. /\ IsFiniteSet({0})
+           /\ Cardinality({0}) = 1
+      BY FS_Singleton
+    <2>6. /\ IsFiniteSet(CertificateSlots)
+           /\ Cardinality(CertificateSlots) = 3
+      BY <2>4, <2>5, FS_Product, SMT DEF CertificateSlots
+    <2>7. VoteSlots \cap CertificateSlots = {}
+      BY Isa DEF VoteSlots, CertificateSlots, CertificateKinds
+    <2>8. /\ IsFiniteSet(VoteSlots \cup CertificateSlots)
+           /\ Cardinality(VoteSlots \cup CertificateSlots) = N + 3
+      BY <2>3, <2>6, <2>7, FS_Union, FS_EmptySet, SMT
+    <2> QED BY <2>8
+         DEF ProtectedProgressSlotUniverse, VoteSlots,
+             CertificateSlots, CertificateKinds
+  <1> QED BY <1>1
+
+THEOREM ProtectedProgressSlotCharacterization ==
+  \A left, right:
+    /\ AsyncCandidateTyped(left)
+    /\ AsyncCandidateTyped(right)
+    /\ ProtectedProgressCommand(left)
+    /\ ProtectedProgressCommand(right)
+    => /\ ProtectedProgressSlot(left)
+              \in ProtectedProgressSlotUniverse
+       /\ ProtectedProgressSlot(right)
+              \in ProtectedProgressSlotUniverse
+       /\ (ProtectedProgressSlot(left)
+              = ProtectedProgressSlot(right)
+             <=> SameProtectedProgressSlot(left, right))
+BY SMTT(30)
+   DEF ProtectedProgressSlot, ProtectedProgressSlotUniverse,
+       ProtectedProgressCommand, SameProtectedProgressSlot,
+       HistoricalLockedCommitItem, AsyncCandidateTyped,
+       AsyncItemTyped, VoteEnvelopeSet, VoteEnvelope, VoteRecordSet,
+       Vote, ValidatorIds
+
+THEOREM ProtectedDeferredProgressCountFollowsUniqueness ==
+  \A node \in ValidatorIds:
+    /\ ModelConfiguration
+    /\ AsyncDeferredContentTypeInvariant
+    /\ \A left, right \in ProtectedDeferredProgressIndices(node):
+         SameProtectedProgressSlot(
+           asyncDeferredProgressQueues[node][left],
+           asyncDeferredProgressQueues[node][right])
+           => left = right
+    => Cardinality(ProtectedDeferredProgressIndices(node)) <= N + 3
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds,
+                ModelConfiguration,
+                AsyncDeferredContentTypeInvariant,
+                \A left, right
+                    \in ProtectedDeferredProgressIndices(node):
+                  SameProtectedProgressSlot(
+                    asyncDeferredProgressQueues[node][left],
+                    asyncDeferredProgressQueues[node][right])
+                    => left = right
+         PROVE Cardinality(ProtectedDeferredProgressIndices(node))
+                 <= N + 3
+    <2> DEFINE Indices == ProtectedDeferredProgressIndices(node)
+    <2> DEFINE Slots == ProtectedProgressSlotUniverse
+    <2> DEFINE SlotMap == ProtectedProgressSlotMap(node)
+    <2>1. /\ IsFiniteSet(Slots)
+           /\ Cardinality(Slots) = N + 3
+      BY <1>1, ProtectedProgressSlotUniverseSize DEF Slots
+    <2>2. \A index \in Indices:
+             /\ index \in 1..Len(asyncDeferredProgressQueues[node])
+             /\ AsyncCandidateTyped(
+                  asyncDeferredProgressQueues[node][index])
+             /\ ProtectedProgressCommand(
+                  asyncDeferredProgressQueues[node][index])
+      BY <1>1, Isa
+         DEF Indices, ProtectedDeferredProgressIndices,
+             AsyncDeferredContentTypeInvariant, AsyncQueueTyped
+    <2>3. SlotMap \in [Indices -> Slots]
+      BY <2>2, ProtectedProgressSlotCharacterization, Isa
+         DEF SlotMap, ProtectedProgressSlotMap, Slots
+    <2>4. \A left, right \in Indices:
+             SlotMap[left] = SlotMap[right] => left = right
+      BY <1>1, <2>2, ProtectedProgressSlotCharacterization, Isa
+         DEF SlotMap, ProtectedProgressSlotMap
+    <2>5. SlotMap \in Injection(Indices, Slots)
+      BY <2>3, <2>4 DEF Injection, IsInjective
+    <2>6. /\ IsFiniteSet(Indices)
+           /\ Cardinality(Indices) <= Cardinality(Slots)
+      BY <2>1, <2>5, FS_Injection
+    <2> QED BY <2>1, <2>6
+  <1> QED BY <1>1
+
+(***************************************************************************
+The asynchronous type theorem closes by induction over the exact bracketed
+next relation, using the strengthened Core/scheduler/timeout-pool invariant.
+The temporal release obligations below remain explicit until their concrete
+weak-fairness frontier and well-founded service-rank chains are discharged.
 ***************************************************************************)
 
 THEOREM AsyncTypeInvariantObligation ==
   \A initialContext:
     AsyncSpecAt(initialContext) => []AsyncTypeInvariant
+PROOF
+  <1>1. ASSUME NEW initialContext
+         PROVE AsyncSpecAt(initialContext) => []AsyncTypeInvariant
+    <2>1. AsyncInitAt(initialContext) => AsyncStrongTypeInvariant
+      BY AsyncInitEstablishesStrongTypeInvariant
+    <2>2. AsyncStrongTypeInvariant /\ [AsyncNext]_AsyncAllVars
+             => AsyncStrongTypeInvariant'
+      BY AsyncBracketNextPreservesStrongTypeInvariant
+    <2>3. AsyncSpecAt(initialContext) => []AsyncStrongTypeInvariant
+      BY <2>1, <2>2, PTL DEF AsyncSpecAt
+    <2>4. AsyncStrongTypeInvariant => AsyncTypeInvariant
+      BY AsyncStrongTypeProjectsAsyncType
+    <2> QED BY <2>3, <2>4, PTL
+  <1> QED BY <1>1
+
+THEOREM GenerationScopedVoteDeliveryObligation ==
+  \A initialContext:
+    GenerationScopedVoteDeliveryProperty(AsyncSpecAt(initialContext))
+PROOF
+  <1>1. ASSUME NEW initialContext
+         PROVE GenerationScopedVoteDeliveryProperty(
+                   AsyncSpecAt(initialContext))
+    <2>1. AsyncSpecAt(initialContext)
+             => [][AsyncNext]_AsyncAllVars
+      BY DEF AsyncSpecAt
+    <2>2. [AsyncNext]_AsyncAllVars
+             => [VoteDeliveryEpochAction]_AsyncAllVars
+      BY AsyncStepHasVoteDeliveryEpochSemantics
+    <2> QED BY <2>1, <2>2, PTL
+         DEF GenerationScopedVoteDeliveryProperty
+  <1> QED BY <1>1
+
+THEOREM AsyncInitEstablishesProgressWitness ==
+  \A initialContext:
+    AsyncInitAt(initialContext) => ProgressWitnessInvariant
+PROOF
+  <1>1. ASSUME NEW initialContext,
+                AsyncInitAt(initialContext)
+         PROVE ProgressWitnessInvariant
+    <2>1. /\ ModelConfiguration
+           /\ FrozenContextAdmissible(initialContext)
+           /\ context = initialContext
+           /\ (initialContext.height = 0
+                 => /\ commitIntents = {}
+                    /\ decisions = {})
+           /\ (initialContext.height > 0
+                 => /\ commitIntents =
+                          BootstrapParentCommitIntents(initialContext)
+                    /\ decisions =
+                          {BootstrapParentDecision(initialContext)}
+                    /\ BootstrapParentContext(initialContext)
+                          # initialContext)
+      BY <1>1, BootstrapParentContextPrecedes, SMT
+         DEF AsyncInitAt, AsyncBaseInitAt, InitAt
+    <2>2. DurableCommitProgressWitness
+      <3>1. ASSUME NEW node \in AsyncCurrentResponsiveVoters,
+                    NEW vote \in commitIntents,
+                    ActiveLockedCommitIntent(node, vote)
+             PROVE CommitIntentProgressWitness(node, vote)
+        <4>1. CASE initialContext.height = 0
+          BY <2>1, <3>1, <4>1
+        <4>2. CASE initialContext.height > 0
+          <5>1. vote.context = BootstrapParentContext(initialContext)
+            BY <2>1, <3>1, <4>2, Isa
+               DEF BootstrapParentCommitIntents, Vote
+          <5>2. vote.context = initialContext
+            BY <2>1, <3>1 DEF ActiveLockedCommitIntent
+          <5> QED BY <2>1, <4>2, <5>1, <5>2
+        <4> QED BY <4>1, <4>2
+      <3> QED BY <3>1 DEF DurableCommitProgressWitness
+    <2>3. DurableDecisionProgressWitness
+      <3>1. ASSUME NEW decision \in decisions,
+                    /\ decision.node \in AsyncCurrentResponsiveVoters
+                    /\ decision.qc.context = context
+             PROVE DecisionCompletionWitness(decision.node, decision.qc)
+        <4>1. CASE initialContext.height = 0
+          BY <2>1, <3>1, <4>1
+        <4>2. CASE initialContext.height > 0
+          <5>1. decision = BootstrapParentDecision(initialContext)
+            BY <2>1, <3>1, <4>2
+          <5>2. decision.qc.context =
+                   BootstrapParentContext(initialContext)
+            BY <5>1
+               DEF BootstrapParentDecision,
+                   BootstrapParentCommitQC, QC
+          <5>3. decision.qc.context = initialContext
+            BY <2>1, <3>1
+          <5> QED BY <2>1, <4>2, <5>2, <5>3
+        <4> QED BY <4>1, <4>2
+      <3> QED BY <3>1 DEF DurableDecisionProgressWitness
+    <2>4. ProtectedDeferredProgressInvariant
+      BY <1>1, FS_EmptySet, SMT
+         DEF AsyncInitAt, AsyncBaseInitAt, AsyncDeferredInit,
+             ProtectedDeferredProgressInvariant,
+             ProtectedDeferredProgressIndices, SequenceSet,
+             AsyncConfiguration, ModelConfiguration,
+             QuorumConfiguration
+    <2> QED BY <2>2, <2>3, <2>4 DEF ProgressWitnessInvariant
+  <1> QED BY <1>1
+
+
+ProtectedProgressIndicesIn(queue) ==
+  {index \in 1..Len(queue): ProtectedProgressCommand(queue[index])}
+
+ProtectedProgressSlotsUniqueIn(queue) ==
+  \A left, right \in ProtectedProgressIndicesIn(queue):
+    SameProtectedProgressSlot(queue[left], queue[right]) => left = right
+
+ProtectedProgressSlotId(command) ==
+  CASE command.kind = "DeliverVote" ->
+         command.item.envelope.vote.signer
+    [] command.kind = "DeliverQC" ->
+         IF command.item.kind = "PrepareQC" THEN N ELSE N + 1
+    [] OTHER -> N + 2
+
+ProtectedProgressNumericSlotMap(queue) ==
+  [index \in ProtectedProgressIndicesIn(queue) |->
+     ProtectedProgressSlotId(queue[index])]
+
+THEOREM SameProtectedProgressSlotSymmetric ==
+  \A left, right:
+    SameProtectedProgressSlot(left, right)
+      => SameProtectedProgressSlot(right, left)
+BY SMT DEF SameProtectedProgressSlot, ProtectedProgressCommand,
+           HistoricalLockedCommitItem
+
+THEOREM SameProtectedProgressSlotTransitive ==
+  \A left, middle, right:
+    /\ SameProtectedProgressSlot(left, middle)
+    /\ SameProtectedProgressSlot(left, right)
+    => SameProtectedProgressSlot(middle, right)
+BY SMT DEF SameProtectedProgressSlot, ProtectedProgressCommand,
+           HistoricalLockedCommitItem
+
+THEOREM TypedProtectedProgressCommandShape ==
+  \A command:
+    /\ AsyncCandidateTyped(command)
+    /\ ProtectedProgressCommand(command)
+    => \/ /\ command.kind = "DeliverVote"
+           /\ command.item.kind = "CommitVote"
+           /\ command.item.envelope.vote.signer \in ValidatorIds
+       \/ /\ command.kind = "DeliverQC"
+           /\ command.item.kind \in {"PrepareQC", "CommitQC"}
+       \/ /\ command.kind = "DeliverTC"
+           /\ command.item.kind = "TimeoutCertificate"
+PROOF
+  <1>1. ASSUME NEW command,
+                AsyncCandidateTyped(command),
+                ProtectedProgressCommand(command)
+         PROVE \/ /\ command.kind = "DeliverVote"
+                    /\ command.item.kind = "CommitVote"
+                    /\ command.item.envelope.vote.signer \in ValidatorIds
+               \/ /\ command.kind = "DeliverQC"
+                    /\ command.item.kind \in {"PrepareQC", "CommitQC"}
+               \/ /\ command.kind = "DeliverTC"
+                    /\ command.item.kind = "TimeoutCertificate"
+    <2>1. AsyncItemTyped(command.item)
+      BY <1>1, SMT
+         DEF ProtectedProgressCommand, HistoricalLockedCommitItem,
+             AsyncCandidateTyped, NoAsyncItem, AsyncBodyEnvelope
+    <2>2. CASE command.kind = "DeliverVote"
+      <3>1. command.item.kind = "CommitVote"
+        BY <1>1, <2>2
+           DEF ProtectedProgressCommand, HistoricalLockedCommitItem
+      <3>2. command.item.envelope \in VoteEnvelopeSet
+        BY <2>1, <3>1 DEF AsyncItemTyped
+      <3>3. command.item.envelope.vote.signer \in ValidatorIds
+        BY <3>2 DEF VoteEnvelopeSet, VoteRecordSet
+      <3> QED BY <2>2, <3>1, <3>3
+    <2>3. CASE command.kind = "DeliverQC"
+      BY <1>1, <2>3 DEF ProtectedProgressCommand
+    <2>4. CASE command.kind = "DeliverTC"
+      BY <1>1, <2>4 DEF ProtectedProgressCommand
+    <2>5. CASE command.kind \notin {"DeliverVote", "DeliverQC", "DeliverTC"}
+      BY <1>1, <2>5, SMT DEF ProtectedProgressCommand
+    <2> QED BY <2>2, <2>3, <2>4, <2>5, SMT
+  <1> QED BY <1>1
+
+THEOREM ProtectedProgressSlotIdIsBounded ==
+  \A command:
+    /\ N \in Nat \ {0}
+    /\ AsyncCandidateTyped(command)
+    /\ ProtectedProgressCommand(command)
+    => ProtectedProgressSlotId(command) \in 0..(N + 2)
+BY TypedProtectedProgressCommandShape, SMT
+   DEF ProtectedProgressSlotId, ValidatorIds
+
+THEOREM EqualProtectedProgressSlotIdsIdentifySlot ==
+  \A left, right:
+    /\ N \in Nat \ {0}
+    /\ AsyncCandidateTyped(left)
+    /\ AsyncCandidateTyped(right)
+    /\ ProtectedProgressCommand(left)
+    /\ ProtectedProgressCommand(right)
+    /\ left.node = right.node
+    /\ ProtectedProgressSlotId(left) = ProtectedProgressSlotId(right)
+    => SameProtectedProgressSlot(left, right)
+BY TypedProtectedProgressCommandShape, SMTT(30)
+   DEF ProtectedProgressSlotId, SameProtectedProgressSlot,
+       ProtectedProgressCommand, ValidatorIds
+
+THEOREM UniqueOwnedProtectedSlotsGiveInjection ==
+  \A node, queue:
+    /\ N \in Nat \ {0}
+    /\ AsyncQueueTyped(queue)
+    /\ AsyncCommandQueueOwnership(node, queue)
+    /\ ProtectedProgressSlotsUniqueIn(queue)
+    => ProtectedProgressNumericSlotMap(queue)
+         \in Injection(ProtectedProgressIndicesIn(queue), 0..(N + 2))
+PROOF
+  <1>1. ASSUME NEW node, NEW queue,
+                N \in Nat \ {0},
+                AsyncQueueTyped(queue),
+                AsyncCommandQueueOwnership(node, queue),
+                ProtectedProgressSlotsUniqueIn(queue)
+         PROVE ProtectedProgressNumericSlotMap(queue)
+                 \in Injection(
+                      ProtectedProgressIndicesIn(queue), 0..(N + 2))
+    <2>1. \A index \in ProtectedProgressIndicesIn(queue):
+             /\ AsyncCandidateTyped(queue[index])
+             /\ queue[index].node = node
+             /\ ProtectedProgressSlotId(queue[index]) \in 0..(N + 2)
+      BY <1>1, ProtectedProgressSlotIdIsBounded
+         DEF ProtectedProgressIndicesIn, AsyncQueueTyped,
+             AsyncCommandQueueOwnership, SequenceSet
+    <2>2. ProtectedProgressNumericSlotMap(queue)
+             \in [ProtectedProgressIndicesIn(queue) -> 0..(N + 2)]
+      BY <2>1 DEF ProtectedProgressNumericSlotMap
+    <2>3. \A left, right \in ProtectedProgressIndicesIn(queue):
+             ProtectedProgressNumericSlotMap(queue)[left]
+               = ProtectedProgressNumericSlotMap(queue)[right]
+               => left = right
+      <3>1. ASSUME NEW left,
+                    NEW right,
+                    left \in ProtectedProgressIndicesIn(queue),
+                    right \in ProtectedProgressIndicesIn(queue),
+                    ProtectedProgressNumericSlotMap(queue)[left]
+                      = ProtectedProgressNumericSlotMap(queue)[right]
+             PROVE left = right
+        <4>1. /\ AsyncCandidateTyped(queue[left])
+               /\ AsyncCandidateTyped(queue[right])
+               /\ queue[left].node = queue[right].node
+          BY <2>1, <3>1
+        <4>2. /\ ProtectedProgressCommand(queue[left])
+               /\ ProtectedProgressCommand(queue[right])
+          BY <3>1 DEF ProtectedProgressIndicesIn
+        <4>3. ProtectedProgressSlotId(queue[left]) =
+                 ProtectedProgressSlotId(queue[right])
+          BY <3>1 DEF ProtectedProgressNumericSlotMap
+        <4>4. SameProtectedProgressSlot(queue[left], queue[right])
+          BY <1>1, <4>1, <4>2, <4>3,
+             EqualProtectedProgressSlotIdsIdentifySlot
+        <4> QED BY <1>1, <3>1, <4>4
+             DEF ProtectedProgressSlotsUniqueIn
+      <3> QED BY <3>1
+    <2>4. ASSUME NEW left,
+                  NEW right,
+                  left \in DOMAIN ProtectedProgressNumericSlotMap(queue),
+                  right \in DOMAIN ProtectedProgressNumericSlotMap(queue),
+                  ProtectedProgressNumericSlotMap(queue)[left] =
+                    ProtectedProgressNumericSlotMap(queue)[right]
+           PROVE left = right
+      BY <2>3, <2>4 DEF ProtectedProgressNumericSlotMap
+    <2>5. IsInjective(ProtectedProgressNumericSlotMap(queue))
+      BY <2>4 DEF IsInjective
+    <2> QED BY <2>2, <2>5 DEF Injection
+  <1> QED BY <1>1
+
+THEOREM UniqueTypedOwnedProtectedSlotsAreBounded ==
+  \A node, queue:
+    /\ N \in Nat \ {0}
+    /\ AsyncQueueTyped(queue)
+    /\ AsyncCommandQueueOwnership(node, queue)
+    /\ ProtectedProgressSlotsUniqueIn(queue)
+    => Cardinality(ProtectedProgressIndicesIn(queue)) <= N + 3
+PROOF
+  <1>1. ASSUME NEW node, NEW queue,
+                N \in Nat \ {0},
+                AsyncQueueTyped(queue),
+                AsyncCommandQueueOwnership(node, queue),
+                ProtectedProgressSlotsUniqueIn(queue)
+         PROVE Cardinality(ProtectedProgressIndicesIn(queue)) <= N + 3
+    <2>1. ProtectedProgressNumericSlotMap(queue)
+             \in Injection(
+                  ProtectedProgressIndicesIn(queue), 0..(N + 2))
+      BY <1>1, UniqueOwnedProtectedSlotsGiveInjection
+    <2>2. IsFiniteSet(0..(N + 2))
+      BY <1>1, FS_Interval, SMT
+    <2>3. /\ IsFiniteSet(ProtectedProgressIndicesIn(queue))
+           /\ Cardinality(ProtectedProgressIndicesIn(queue))
+                <= Cardinality(0..(N + 2))
+      BY <2>1, <2>2, FS_Injection
+    <2>4. Cardinality(0..(N + 2)) = N + 3
+      BY <1>1, FS_Interval, SMT
+    <2> QED BY <2>3, <2>4
+  <1> QED BY <1>1
+
+(***************************************************************************
+Protected-slot uniqueness is invariant under the three concrete queue edits:
+append a fresh slot, replace the existing member of the same slot, or replace
+an unprotected member with a fresh slot.  Tail removal is a pure restriction.
+***************************************************************************)
+
+THEOREM AppendFreshProtectedSlotPreservesUniqueness ==
+  \A queue, command:
+    /\ AsyncQueueTyped(queue)
+    /\ ProtectedProgressSlotsUniqueIn(queue)
+    /\ \A index \in ProtectedProgressIndicesIn(queue):
+         ~SameProtectedProgressSlot(queue[index], command)
+    => ProtectedProgressSlotsUniqueIn(Append(queue, command))
+PROOF
+  <1>1. ASSUME NEW queue, NEW command,
+                AsyncQueueTyped(queue),
+                ProtectedProgressSlotsUniqueIn(queue),
+                \A index \in ProtectedProgressIndicesIn(queue):
+                  ~SameProtectedProgressSlot(queue[index], command)
+         PROVE ProtectedProgressSlotsUniqueIn(Append(queue, command))
+    <2>1. /\ Len(queue) \in Nat
+           /\ Len(Append(queue, command)) = Len(queue) + 1
+           /\ \A index \in 1..Len(queue):
+                Append(queue, command)[index] = queue[index]
+           /\ Append(queue, command)[Len(queue) + 1] = command
+      BY <1>1, AppendSequenceFacts, LenProperties
+         DEF AsyncQueueTyped
+    <2>2. ASSUME NEW left,
+                  NEW right,
+                  left \in ProtectedProgressIndicesIn(
+                    Append(queue, command)),
+                  right \in ProtectedProgressIndicesIn(
+                    Append(queue, command)),
+                  SameProtectedProgressSlot(
+                    Append(queue, command)[left],
+                    Append(queue, command)[right])
+           PROVE left = right
+      <3>1. /\ left \in 1..(Len(queue) + 1)
+             /\ right \in 1..(Len(queue) + 1)
+        BY <1>1, <2>1, <2>2 DEF ProtectedProgressIndicesIn
+      <3>2. CASE left \in 1..Len(queue)
+                       /\ right \in 1..Len(queue)
+        BY <1>1, <2>1, <2>2, <3>2
+           DEF ProtectedProgressIndicesIn,
+               ProtectedProgressSlotsUniqueIn
+      <3>3. CASE left \notin 1..Len(queue)
+        <4>1. left = Len(queue) + 1
+          BY <2>1, <3>1, <3>3, SMT
+        <4>2. CASE right \in 1..Len(queue)
+          <5>1. /\ right \in ProtectedProgressIndicesIn(queue)
+                 /\ SameProtectedProgressSlot(queue[right], command)
+            BY <2>1, <2>2, <4>1, <4>2,
+               SameProtectedProgressSlotSymmetric
+               DEF ProtectedProgressIndicesIn
+          <5> QED BY <1>1, <5>1
+        <4>3. CASE right \notin 1..Len(queue)
+          BY <2>1, <3>1, <3>3, <4>3, SMT
+        <4> QED BY <4>2, <4>3
+      <3>4. CASE left \in 1..Len(queue)
+                       /\ right \notin 1..Len(queue)
+        <4>1. right = Len(queue) + 1
+          BY <2>1, <3>1, <3>4, SMT
+        <4>2. /\ left \in ProtectedProgressIndicesIn(queue)
+               /\ SameProtectedProgressSlot(queue[left], command)
+          BY <2>1, <2>2, <3>4, <4>1
+             DEF ProtectedProgressIndicesIn
+        <4> QED BY <1>1, <4>2
+      <3> QED BY <3>2, <3>3, <3>4
+    <2> QED BY <2>2 DEF ProtectedProgressSlotsUniqueIn
+  <1> QED BY <1>1
+
+THEOREM ReplaceSameProtectedSlotPreservesUniqueness ==
+  \A queue, command:
+    \A selected \in ProtectedProgressIndicesIn(queue):
+      /\ AsyncQueueTyped(queue)
+      /\ ProtectedProgressSlotsUniqueIn(queue)
+      /\ SameProtectedProgressSlot(queue[selected], command)
+      => ProtectedProgressSlotsUniqueIn(
+           [queue EXCEPT ![selected] = command])
+PROOF
+  <1>1. ASSUME NEW queue, NEW command,
+                NEW selected \in ProtectedProgressIndicesIn(queue),
+                AsyncQueueTyped(queue),
+                ProtectedProgressSlotsUniqueIn(queue),
+                SameProtectedProgressSlot(queue[selected], command)
+         PROVE ProtectedProgressSlotsUniqueIn(
+                 [queue EXCEPT ![selected] = command])
+    <2> DEFINE Updated == [queue EXCEPT ![selected] = command]
+    <2>1. /\ selected \in DOMAIN queue
+           /\ DOMAIN Updated = DOMAIN queue
+           /\ Len(Updated) = Len(queue)
+           /\ Updated[selected] = command
+           /\ \A index \in DOMAIN queue \ {selected}:
+                Updated[index] = queue[index]
+      BY <1>1, Isa
+         DEF AsyncQueueTyped, ProtectedProgressIndicesIn, Updated
+    <2>2. ASSUME NEW left,
+                  NEW right,
+                  left \in ProtectedProgressIndicesIn(Updated),
+                  right \in ProtectedProgressIndicesIn(Updated),
+                  SameProtectedProgressSlot(Updated[left], Updated[right])
+           PROVE left = right
+      <3>1. /\ left \in DOMAIN queue
+             /\ right \in DOMAIN queue
+        BY <1>1, <2>1, <2>2
+           DEF AsyncQueueTyped, ProtectedProgressIndicesIn
+      <3>2. CASE left # selected /\ right # selected
+        BY <1>1, <2>1, <2>2, <3>1, <3>2
+           DEF ProtectedProgressIndicesIn,
+               ProtectedProgressSlotsUniqueIn
+      <3>3. CASE left = selected /\ right = selected
+        BY <3>3
+      <3>4. CASE left = selected /\ right # selected
+        <4>1. /\ right \in ProtectedProgressIndicesIn(queue)
+               /\ SameProtectedProgressSlot(queue[selected], queue[right])
+          BY <1>1, <2>1, <2>2, <3>1, <3>4,
+             SameProtectedProgressSlotSymmetric,
+             SameProtectedProgressSlotTransitive
+             DEF ProtectedProgressIndicesIn
+        <4>2. selected = right
+          BY <1>1, <4>1 DEF ProtectedProgressSlotsUniqueIn
+        <4> QED BY <3>4, <4>2
+      <3>5. CASE left # selected /\ right = selected
+        <4>1. /\ left \in ProtectedProgressIndicesIn(queue)
+               /\ SameProtectedProgressSlot(queue[selected], queue[left])
+          BY <1>1, <2>1, <2>2, <3>1, <3>5,
+             SameProtectedProgressSlotSymmetric,
+             SameProtectedProgressSlotTransitive
+             DEF ProtectedProgressIndicesIn
+        <4>2. selected = left
+          BY <1>1, <4>1 DEF ProtectedProgressSlotsUniqueIn
+        <4> QED BY <3>5, <4>2
+      <3> QED BY <3>2, <3>3, <3>4, <3>5
+    <2> QED BY <2>2 DEF ProtectedProgressSlotsUniqueIn, Updated
+  <1> QED BY <1>1
+
+THEOREM ReplaceUnprotectedWithFreshSlotPreservesUniqueness ==
+  \A queue, command:
+    \A selected \in 1..Len(queue):
+      /\ AsyncQueueTyped(queue)
+      /\ ProtectedProgressSlotsUniqueIn(queue)
+      /\ ~ProtectedProgressCommand(queue[selected])
+      /\ \A index \in ProtectedProgressIndicesIn(queue):
+           ~SameProtectedProgressSlot(queue[index], command)
+      => ProtectedProgressSlotsUniqueIn(
+           [queue EXCEPT ![selected] = command])
+PROOF
+  <1>1. ASSUME NEW queue, NEW command,
+                NEW selected \in 1..Len(queue),
+                AsyncQueueTyped(queue),
+                ProtectedProgressSlotsUniqueIn(queue),
+                ~ProtectedProgressCommand(queue[selected]),
+                \A index \in ProtectedProgressIndicesIn(queue):
+                  ~SameProtectedProgressSlot(queue[index], command)
+         PROVE ProtectedProgressSlotsUniqueIn(
+                 [queue EXCEPT ![selected] = command])
+    <2> DEFINE Updated == [queue EXCEPT ![selected] = command]
+    <2>1. /\ selected \in DOMAIN queue
+           /\ DOMAIN Updated = DOMAIN queue
+           /\ Len(Updated) = Len(queue)
+           /\ Updated[selected] = command
+           /\ \A index \in DOMAIN queue \ {selected}:
+                Updated[index] = queue[index]
+      BY <1>1, Isa DEF AsyncQueueTyped, Updated
+    <2>2. ASSUME NEW left,
+                  NEW right,
+                  left \in ProtectedProgressIndicesIn(Updated),
+                  right \in ProtectedProgressIndicesIn(Updated),
+                  SameProtectedProgressSlot(Updated[left], Updated[right])
+           PROVE left = right
+      <3>1. /\ left \in DOMAIN queue
+             /\ right \in DOMAIN queue
+        BY <1>1, <2>1, <2>2
+           DEF AsyncQueueTyped, ProtectedProgressIndicesIn
+      <3>2. CASE left # selected /\ right # selected
+        BY <1>1, <2>1, <2>2, <3>1, <3>2
+           DEF ProtectedProgressIndicesIn,
+               ProtectedProgressSlotsUniqueIn
+      <3>3. CASE left = selected /\ right = selected
+        BY <3>3
+      <3>4. CASE left = selected /\ right # selected
+        <4>1. /\ right \in ProtectedProgressIndicesIn(queue)
+               /\ SameProtectedProgressSlot(queue[right], command)
+          BY <2>1, <2>2, <3>1, <3>4,
+             SameProtectedProgressSlotSymmetric
+             DEF ProtectedProgressIndicesIn
+        <4> QED BY <1>1, <4>1
+      <3>5. CASE left # selected /\ right = selected
+        <4>1. /\ left \in ProtectedProgressIndicesIn(queue)
+               /\ SameProtectedProgressSlot(queue[left], command)
+          BY <2>1, <2>2, <3>1, <3>5
+             DEF ProtectedProgressIndicesIn
+        <4> QED BY <1>1, <4>1
+      <3> QED BY <3>2, <3>3, <3>4, <3>5
+    <2> QED BY <2>2 DEF ProtectedProgressSlotsUniqueIn, Updated
+  <1> QED BY <1>1
+
+THEOREM TailPreservesProtectedSlotUniqueness ==
+  \A queue:
+    /\ AsyncQueueTyped(queue)
+    /\ Len(queue) > 0
+    /\ ProtectedProgressSlotsUniqueIn(queue)
+    => ProtectedProgressSlotsUniqueIn(Tail(queue))
+PROOF
+  <1>1. ASSUME NEW queue,
+                AsyncQueueTyped(queue),
+                Len(queue) > 0,
+                ProtectedProgressSlotsUniqueIn(queue)
+         PROVE ProtectedProgressSlotsUniqueIn(Tail(queue))
+    <2>1. /\ Len(Tail(queue)) = Len(queue) - 1
+           /\ \A index \in 1..Len(Tail(queue)):
+                Tail(queue)[index] = queue[index + 1]
+      BY <1>1, TypedQueueHeadTailIndexFacts
+    <2>2. ASSUME NEW left,
+                  NEW right,
+                  left \in ProtectedProgressIndicesIn(Tail(queue)),
+                  right \in ProtectedProgressIndicesIn(Tail(queue)),
+                  SameProtectedProgressSlot(
+                    Tail(queue)[left], Tail(queue)[right])
+           PROVE left = right
+      <3>1. /\ left + 1 \in ProtectedProgressIndicesIn(queue)
+             /\ right + 1 \in ProtectedProgressIndicesIn(queue)
+             /\ SameProtectedProgressSlot(
+                  queue[left + 1], queue[right + 1])
+        BY <1>1, <2>1, <2>2, SMT
+           DEF ProtectedProgressIndicesIn, AsyncQueueTyped
+      <3>2. left + 1 = right + 1
+        BY <1>1, <3>1 DEF ProtectedProgressSlotsUniqueIn
+      <3> QED BY <3>2, SMT
+    <2> QED BY <2>2 DEF ProtectedProgressSlotsUniqueIn
+  <1> QED BY <1>1
+
+THEOREM DeferredProgressAfterPreservesProtectedSlotsUnique ==
+  \A node \in ValidatorIds:
+    \A command:
+      /\ AsyncConfiguration
+      /\ AsyncDeferredContentTypeInvariant
+      /\ ProtectedProgressSlotsUniqueIn(
+           asyncDeferredProgressQueues[node])
+      => ProtectedProgressSlotsUniqueIn(
+           DeferredProgressAfter(node, command))
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds,
+                NEW command,
+                AsyncConfiguration,
+                AsyncDeferredContentTypeInvariant,
+                ProtectedProgressSlotsUniqueIn(
+                  asyncDeferredProgressQueues[node])
+         PROVE ProtectedProgressSlotsUniqueIn(
+
+                 DeferredProgressAfter(node, command))
+    <2> DEFINE Queue == asyncDeferredProgressQueues[node]
+    <2>1. /\ AsyncQueueTyped(Queue)
+           /\ ProtectedProgressSlotsUniqueIn(Queue)
+      BY <1>1 DEF AsyncDeferredContentTypeInvariant, Queue
+    <2>2. CASE command \in SequenceSet(Queue)
+      BY <2>1, <2>2 DEF DeferredProgressAfter, Queue
+    <2>3. CASE /\ command \notin SequenceSet(Queue)
+                 /\ SameProtectedProgressSlotIndices(node, command) = {}
+                 /\ Len(Queue) < AsyncDeferredProgressCapacity
+      <3>1. \A index \in ProtectedProgressIndicesIn(Queue):
+               ~SameProtectedProgressSlot(Queue[index], command)
+        BY <2>3, SMT
+           DEF SameProtectedProgressSlotIndices,
+               ProtectedProgressIndicesIn, Queue
+      <3>2. ProtectedProgressSlotsUniqueIn(Append(Queue, command))
+        BY <2>1, <3>1,
+           AppendFreshProtectedSlotPreservesUniqueness
+      <3>3. DeferredProgressAfter(node, command) = Append(Queue, command)
+        BY <2>3 DEF DeferredProgressAfter, Queue
+      <3> QED BY <3>2, <3>3
+    <2>4. CASE /\ command \notin SequenceSet(Queue)
+                 /\ SameProtectedProgressSlotIndices(node, command) # {}
+                 /\ DominatedProtectedProgressIndices(node, command) # {}
+      <3> DEFINE Indices ==
+             DominatedProtectedProgressIndices(node, command)
+      <3> DEFINE Selected == FirstProgressIndex(Indices)
+      <3>1. Selected \in Indices
+        BY <2>4, FirstDominatedProtectedProgressIndexIsMember
+           DEF Indices, Selected
+      <3>2. Selected \in
+               SameProtectedProgressSlotIndices(node, command)
+        BY <3>1 DEF DominatedProtectedProgressIndices, Indices
+      <3>3. /\ Selected \in 1..Len(Queue)
+             /\ SameProtectedProgressSlot(Queue[Selected], command)
+        BY <3>2 DEF SameProtectedProgressSlotIndices, Queue
+      <3>4. ProtectedProgressCommand(Queue[Selected])
+        BY <3>3 DEF SameProtectedProgressSlot
+      <3>5. Selected \in ProtectedProgressIndicesIn(Queue)
+        BY <3>3, <3>4 DEF ProtectedProgressIndicesIn
+      <3>6. ProtectedProgressSlotsUniqueIn(
+               [Queue EXCEPT ![Selected] = command])
+        BY <2>1, <3>3, <3>5,
+           ReplaceSameProtectedSlotPreservesUniqueness
+      <3>7. DeferredProgressAfter(node, command) =
+               [Queue EXCEPT ![Selected] = command]
+        BY <2>4 DEF DeferredProgressAfter, Queue, Indices, Selected
+      <3> QED BY <3>6, <3>7
+    <2>5. CASE /\ command \notin SequenceSet(Queue)
+                 /\ SameProtectedProgressSlotIndices(node, command) # {}
+                 /\ DominatedProtectedProgressIndices(node, command) = {}
+      BY <2>1, <2>5 DEF DeferredProgressAfter, Queue
+    <2>6. CASE /\ command \notin SequenceSet(Queue)
+                 /\ SameProtectedProgressSlotIndices(node, command) = {}
+                 /\ Len(Queue) >= AsyncDeferredProgressCapacity
+                 /\ ReplaceableUnprotectedProgressIndices(node) # {}
+      <3> DEFINE Indices ==
+             ReplaceableUnprotectedProgressIndices(node)
+      <3> DEFINE Selected == FirstProgressIndex(Indices)
+      <3>1. /\ Selected \in Indices
+             /\ Selected \in 1..Len(Queue)
+             /\ ~ProtectedProgressCommand(Queue[Selected])
+        BY <2>6, FirstReplaceableUnprotectedProgressIndexIsMember, SMT
+           DEF ReplaceableUnprotectedProgressIndices,
+               Indices, Selected, Queue
+      <3>2. \A index \in ProtectedProgressIndicesIn(Queue):
+               ~SameProtectedProgressSlot(Queue[index], command)
+        BY <2>6, SMT
+           DEF SameProtectedProgressSlotIndices,
+               ProtectedProgressIndicesIn, Queue
+      <3>3. ProtectedProgressSlotsUniqueIn(
+               [Queue EXCEPT ![Selected] = command])
+        BY <2>1, <3>1, <3>2,
+           ReplaceUnprotectedWithFreshSlotPreservesUniqueness
+      <3>4. command \notin SequenceSet(Queue)
+        BY <2>6
+      <3>5. SameProtectedProgressSlotIndices(node, command) = {}
+        BY <2>6
+      <3>5a. Len(Queue) \in Nat
+        BY <1>1, LenProperties
+           DEF AsyncDeferredContentTypeInvariant, AsyncQueueTyped, Queue
+      <3>5b. AsyncDeferredProgressCapacity \in Nat
+        BY <1>1 DEF AsyncConfiguration
+      <3>6. ~Len(Queue) < AsyncDeferredProgressCapacity
+        BY <2>6, <3>5a, <3>5b, SMT
+      <3>7. ReplaceableUnprotectedProgressIndices(node) # {}
+        BY <2>6
+      <3>8. DeferredProgressAfter(node, command) =
+               IF command \in SequenceSet(Queue)
+               THEN Queue
+               ELSE IF SameProtectedProgressSlotIndices(node, command) # {}
+                    THEN IF DominatedProtectedProgressIndices(node, command) # {}
+                         THEN [Queue EXCEPT
+                                ![FirstProgressIndex(
+                                     DominatedProtectedProgressIndices(
+                                       node, command))] = command]
+                         ELSE Queue
+                    ELSE IF Len(Queue) < AsyncDeferredProgressCapacity
+                         THEN Append(Queue, command)
+                         ELSE IF ReplaceableUnprotectedProgressIndices(node) # {}
+                              THEN [Queue EXCEPT
+                                     ![FirstProgressIndex(
+                                          ReplaceableUnprotectedProgressIndices(
+                                            node))] = command]
+                              ELSE Queue
+        BY DEF DeferredProgressAfter, Queue
+      <3>9. DeferredProgressAfter(node, command) =
+               [Queue EXCEPT ![Selected] = command]
+        BY <3>4, <3>5, <3>6, <3>7, <3>8
+           DEF Indices, Selected
+      <3> QED BY <3>3, <3>9
+    <2>7. CASE /\ command \notin SequenceSet(Queue)
+                 /\ SameProtectedProgressSlotIndices(node, command) = {}
+                 /\ Len(Queue) >= AsyncDeferredProgressCapacity
+                 /\ ReplaceableUnprotectedProgressIndices(node) = {}
+      <3>1. command \notin SequenceSet(Queue)
+        BY <2>7
+      <3>2. SameProtectedProgressSlotIndices(node, command) = {}
+        BY <2>7
+      <3>2a. Len(Queue) \in Nat
+        BY <1>1, LenProperties
+           DEF AsyncDeferredContentTypeInvariant, AsyncQueueTyped, Queue
+      <3>2b. AsyncDeferredProgressCapacity \in Nat
+        BY <1>1 DEF AsyncConfiguration
+      <3>3. ~Len(Queue) < AsyncDeferredProgressCapacity
+        BY <2>7, <3>2a, <3>2b, SMT
+      <3>4. ReplaceableUnprotectedProgressIndices(node) = {}
+        BY <2>7
+      <3>5. DeferredProgressAfter(node, command) =
+               IF command \in SequenceSet(Queue)
+               THEN Queue
+               ELSE IF SameProtectedProgressSlotIndices(node, command) # {}
+                    THEN IF DominatedProtectedProgressIndices(node, command) # {}
+                         THEN [Queue EXCEPT
+                                ![FirstProgressIndex(
+                                     DominatedProtectedProgressIndices(
+                                       node, command))] = command]
+                         ELSE Queue
+                    ELSE IF Len(Queue) < AsyncDeferredProgressCapacity
+                         THEN Append(Queue, command)
+                         ELSE IF ReplaceableUnprotectedProgressIndices(node) # {}
+                              THEN [Queue EXCEPT
+                                     ![FirstProgressIndex(
+                                          ReplaceableUnprotectedProgressIndices(
+                                            node))] = command]
+                              ELSE Queue
+        BY DEF DeferredProgressAfter, Queue
+      <3>6. DeferredProgressAfter(node, command) = Queue
+        BY <3>1, <3>2, <3>3, <3>4, <3>5
+      <3> QED BY <2>1, <3>6
+    <2>8. \/ command \in SequenceSet(Queue)
+           \/ /\ command \notin SequenceSet(Queue)
+                 /\ SameProtectedProgressSlotIndices(node, command) = {}
+                 /\ Len(Queue) < AsyncDeferredProgressCapacity
+           \/ /\ command \notin SequenceSet(Queue)
+                 /\ SameProtectedProgressSlotIndices(node, command) # {}
+                 /\ DominatedProtectedProgressIndices(node, command) # {}
+           \/ /\ command \notin SequenceSet(Queue)
+                 /\ SameProtectedProgressSlotIndices(node, command) # {}
+                 /\ DominatedProtectedProgressIndices(node, command) = {}
+           \/ /\ command \notin SequenceSet(Queue)
+                 /\ SameProtectedProgressSlotIndices(node, command) = {}
+                 /\ Len(Queue) >= AsyncDeferredProgressCapacity
+                 /\ ReplaceableUnprotectedProgressIndices(node) # {}
+           \/ /\ command \notin SequenceSet(Queue)
+                 /\ SameProtectedProgressSlotIndices(node, command) = {}
+                 /\ Len(Queue) >= AsyncDeferredProgressCapacity
+                 /\ ReplaceableUnprotectedProgressIndices(node) = {}
+      <3>1. \/ command \in SequenceSet(Queue)
+             \/ command \notin SequenceSet(Queue)
+        BY SMT
+      <3>2. SameProtectedProgressSlotIndices(node, command) = {}
+               \/ SameProtectedProgressSlotIndices(node, command) # {}
+        BY SMT
+      <3>3. DominatedProtectedProgressIndices(node, command) = {}
+               \/ DominatedProtectedProgressIndices(node, command) # {}
+        BY SMT
+      <3>4. Len(Queue) < AsyncDeferredProgressCapacity
+               \/ Len(Queue) >= AsyncDeferredProgressCapacity
+        BY <1>1, <2>1, SMT
+           DEF AsyncQueueTyped, AsyncConfiguration
+      <3>5. ReplaceableUnprotectedProgressIndices(node) = {}
+               \/ ReplaceableUnprotectedProgressIndices(node) # {}
+        BY SMT
+      <3> QED BY <3>1, <3>2, <3>3, <3>4, <3>5, SMT
+    <2> QED BY <2>2, <2>3, <2>4, <2>5, <2>6, <2>7, <2>8
+  <1> QED BY <1>1
+
+THEOREM ProtectedDeferredProgressIndicesAreQueueIndices ==
+  \A node \in ValidatorIds:
+    ProtectedDeferredProgressIndices(node) =
+      ProtectedProgressIndicesIn(asyncDeferredProgressQueues[node])
+BY DEF ProtectedDeferredProgressIndices, ProtectedProgressIndicesIn
+
+THEOREM DeferCommandPreservesProtectedDeferredProgressInvariant ==
+  \A command:
+    /\ N \in Nat \ {0}
+    /\ AsyncConfiguration
+    /\ AsyncDeferredTypeInvariant
+    /\ ProtectedDeferredProgressInvariant
+    /\ AsyncCandidateTyped(command)
+    /\ DeferCommand(command)
+    => ProtectedDeferredProgressInvariant'
+PROOF
+  <1>1. ASSUME NEW command,
+                N \in Nat \ {0},
+                AsyncConfiguration,
+                AsyncDeferredTypeInvariant,
+                ProtectedDeferredProgressInvariant,
+                AsyncCandidateTyped(command),
+                DeferCommand(command)
+         PROVE ProtectedDeferredProgressInvariant'
+    <2>1. AsyncDeferredContentTypeInvariant'
+      BY <1>1, DeferTypedOwnedCommandPreservesDeferredContentType
+         DEF AsyncDeferredTypeInvariant
+    <2>2. \A node \in ValidatorIds:
+             ProtectedProgressSlotsUniqueIn(
+               asyncDeferredProgressQueues'[node])
+      <3>1. ASSUME NEW node \in ValidatorIds
+             PROVE ProtectedProgressSlotsUniqueIn(
+                     asyncDeferredProgressQueues'[node])
+        <4>1. CASE /\ command.class = "Progress"
+                     /\ node = command.node
+          <5>1. asyncDeferredProgressQueues'[node] =
+                   DeferredProgressAfter(node, command)
+            BY <1>1, <3>1, <4>1, Isa
+               DEF DeferCommand, AsyncDeferredTypeInvariant,
+                   AsyncDeferredTopologyTypeInvariant
+          <5>2. ProtectedProgressSlotsUniqueIn(
+                   asyncDeferredProgressQueues[node])
+            BY <1>1, <3>1,
+               ProtectedDeferredProgressIndicesAreQueueIndices
+               DEF ProtectedDeferredProgressInvariant,
+                   ProtectedProgressSlotsUniqueIn
+          <5>3. ProtectedProgressSlotsUniqueIn(
+                   DeferredProgressAfter(node, command))
+            BY <1>1, <3>1, <5>2,
+               DeferredProgressAfterPreservesProtectedSlotsUnique
+               DEF AsyncDeferredTypeInvariant
+          <5> QED BY <5>1, <5>3
+        <4>2. CASE ~(command.class = "Progress" /\ node = command.node)
+          <5>1. asyncDeferredProgressQueues'[node] =
+                   asyncDeferredProgressQueues[node]
+            BY <1>1, <3>1, <4>2, FunctionalUpdateAwayFromKey, Isa
+               DEF DeferCommand, AsyncDeferredTypeInvariant,
+                   AsyncDeferredTopologyTypeInvariant
+          <5>2. ProtectedProgressSlotsUniqueIn(
+                   asyncDeferredProgressQueues[node])
+            BY <1>1, <3>1,
+               ProtectedDeferredProgressIndicesAreQueueIndices
+
+               DEF ProtectedDeferredProgressInvariant,
+                   ProtectedProgressSlotsUniqueIn
+          <5> QED BY <5>1, <5>2
+        <4> QED BY <4>1, <4>2
+      <3> QED BY <3>1
+    <2>3. \A node \in ValidatorIds:
+             Cardinality(
+               ProtectedProgressIndicesIn(
+                 asyncDeferredProgressQueues'[node])) <= N + 3
+      <3>1. ASSUME NEW node \in ValidatorIds
+             PROVE Cardinality(
+                     ProtectedProgressIndicesIn(
+                       asyncDeferredProgressQueues'[node])) <= N + 3
+        <4>1. /\ AsyncQueueTyped(
+                      asyncDeferredProgressQueues'[node])
+               /\ AsyncCommandQueueOwnership(
+                    node, asyncDeferredProgressQueues'[node])
+          BY <2>1, <3>1 DEF AsyncDeferredContentTypeInvariant
+        <4> QED BY <1>1, <2>2, <3>1, <4>1,
+             UniqueTypedOwnedProtectedSlotsAreBounded
+      <3> QED BY <3>1
+    <2>4. /\ context' = context
+           /\ nodeView' = nodeView
+           /\ lockRank' = lockRank
+           /\ lockSubject' = lockSubject
+           /\ prepareQCs' = prepareQCs
+      BY <1>1, Isa DEF DeferCommand, vars
+    <2>5. \A node \in ValidatorIds:
+             ProtectedDeferredProgressIndices(node)' =
+               ProtectedProgressIndicesIn(
+                 asyncDeferredProgressQueues'[node])
+      BY <2>4
+         DEF ProtectedDeferredProgressIndices,
+             ProtectedProgressIndicesIn, ProtectedProgressCommand,
+             HistoricalLockedCommitItem, LockedPrepareRound
+    <2>6. \A left, right:
+             SameProtectedProgressSlot(left, right)' =
+               SameProtectedProgressSlot(left, right)
+      BY <2>4
+         DEF SameProtectedProgressSlot, ProtectedProgressCommand,
+             HistoricalLockedCommitItem, LockedPrepareRound
+    <2> QED BY <2>2, <2>3, <2>5, <2>6
+         DEF ProtectedDeferredProgressInvariant,
+             ProtectedProgressSlotsUniqueIn
+  <1> QED BY <1>1
+
+THEOREM RemoveNextDeferredCommandProgressQueueEffect ==
+  \A target \in ValidatorIds:
+    \A node \in ValidatorIds:
+      /\ AsyncDeferredTypeInvariant
+      /\ DeferredQueueNonempty(target)
+      /\ RemoveNextDeferredCommand(target)
+      => asyncDeferredProgressQueues'[node] =
+           IF node = target
+                /\ Len(asyncDeferredCompletionQueues[target]) = 0
+                /\ Len(asyncDeferredProgressQueues[target]) > 0
+           THEN Tail(asyncDeferredProgressQueues[target])
+           ELSE asyncDeferredProgressQueues[node]
+PROOF
+  <1>1. ASSUME NEW target \in ValidatorIds,
+                NEW node \in ValidatorIds,
+                AsyncDeferredTypeInvariant,
+                DeferredQueueNonempty(target),
+                RemoveNextDeferredCommand(target)
+         PROVE asyncDeferredProgressQueues'[node] =
+                 IF node = target
+                      /\ Len(asyncDeferredCompletionQueues[target]) = 0
+                      /\ Len(asyncDeferredProgressQueues[target]) > 0
+                 THEN Tail(asyncDeferredProgressQueues[target])
+                 ELSE asyncDeferredProgressQueues[node]
+    <2>1. CASE Len(asyncDeferredCompletionQueues[target]) > 0
+      BY <1>1, <2>1, Isa
+         DEF RemoveNextDeferredCommand,
+             AsyncDeferredTypeInvariant,
+             AsyncDeferredTopologyTypeInvariant
+    <2>2. CASE /\ Len(asyncDeferredCompletionQueues[target]) = 0
+                 /\ Len(asyncDeferredProgressQueues[target]) > 0
+      <3>1. CASE node = target
+        BY <1>1, <2>2, <3>1, FunctionalTailUpdateAtKey
+           DEF RemoveNextDeferredCommand,
+               AsyncDeferredTypeInvariant,
+               AsyncDeferredTopologyTypeInvariant
+      <3>2. CASE node # target
+        BY <1>1, <2>2, <3>2, FunctionalTailUpdateAwayFromKey
+           DEF RemoveNextDeferredCommand,
+               AsyncDeferredTypeInvariant,
+               AsyncDeferredTopologyTypeInvariant
+      <3> QED BY <3>1, <3>2
+    <2>3. CASE /\ Len(asyncDeferredCompletionQueues[target]) = 0
+                 /\ Len(asyncDeferredProgressQueues[target]) = 0
+      BY <1>1, <2>3, Isa
+         DEF RemoveNextDeferredCommand,
+             AsyncDeferredTypeInvariant,
+             AsyncDeferredTopologyTypeInvariant
+    <2>4. \/ Len(asyncDeferredCompletionQueues[target]) > 0
+           \/ /\ Len(asyncDeferredCompletionQueues[target]) = 0
+                 /\ Len(asyncDeferredProgressQueues[target]) > 0
+           \/ /\ Len(asyncDeferredCompletionQueues[target]) = 0
+                 /\ Len(asyncDeferredProgressQueues[target]) = 0
+      <3>1. /\ Len(asyncDeferredCompletionQueues[target]) \in Nat
+             /\ Len(asyncDeferredProgressQueues[target]) \in Nat
+        BY <1>1, LenProperties
+           DEF AsyncDeferredTypeInvariant,
+               AsyncDeferredContentTypeInvariant,
+               AsyncCompletionSequenceTyped, AsyncQueueTyped
+      <3> QED BY <3>1, SMT
+    <2> QED BY <2>1, <2>2, <2>3, <2>4
+  <1> QED BY <1>1
+
+THEOREM RemoveNextDeferredCommandPreservesProtectedDeferredProgressInvariant ==
+  \A target \in ValidatorIds:
+    /\ N \in Nat \ {0}
+    /\ AsyncDeferredTypeInvariant
+    /\ ProtectedDeferredProgressInvariant
+    /\ DeferredQueueNonempty(target)
+    /\ RemoveNextDeferredCommand(target)
+    /\ UNCHANGED <<context, nodeView, lockRank, lockSubject, prepareQCs>>
+    => ProtectedDeferredProgressInvariant'
+PROOF
+  <1>1. ASSUME NEW target \in ValidatorIds,
+                N \in Nat \ {0},
+                AsyncDeferredTypeInvariant,
+                ProtectedDeferredProgressInvariant,
+                DeferredQueueNonempty(target),
+                RemoveNextDeferredCommand(target),
+                UNCHANGED <<context, nodeView, lockRank, lockSubject,
+                            prepareQCs>>
+         PROVE ProtectedDeferredProgressInvariant'
+    <2>1. AsyncDeferredContentTypeInvariant'
+      BY <1>1, RemoveNextDeferredCommandPreservesDeferredContentType
+         DEF AsyncDeferredTypeInvariant
+    <2>2. \A node \in ValidatorIds:
+             ProtectedProgressSlotsUniqueIn(
+               asyncDeferredProgressQueues'[node])
+      <3>1. ASSUME NEW node \in ValidatorIds
+             PROVE ProtectedProgressSlotsUniqueIn(
+                     asyncDeferredProgressQueues'[node])
+        <4>1. ProtectedProgressSlotsUniqueIn(
+                 asyncDeferredProgressQueues[node])
+          BY <1>1, <3>1,
+             ProtectedDeferredProgressIndicesAreQueueIndices
+             DEF ProtectedDeferredProgressInvariant,
+                 ProtectedProgressSlotsUniqueIn
+        <4>2. CASE /\ node = target
+                     /\ Len(asyncDeferredCompletionQueues[target]) = 0
+                     /\ Len(asyncDeferredProgressQueues[target]) > 0
+          <5>1. asyncDeferredProgressQueues'[node] =
+                   Tail(asyncDeferredProgressQueues[node])
+            BY <1>1, <3>1, <4>2,
+               RemoveNextDeferredCommandProgressQueueEffect
+               DEF AsyncDeferredTypeInvariant
+          <5>2. AsyncQueueTyped(asyncDeferredProgressQueues[node])
+            BY <1>1, <3>1
+               DEF AsyncDeferredTypeInvariant,
+                   AsyncDeferredContentTypeInvariant
+          <5>3. ProtectedProgressSlotsUniqueIn(
+                   Tail(asyncDeferredProgressQueues[node]))
+            BY <4>1, <4>2, <5>2,
+               TailPreservesProtectedSlotUniqueness
+          <5> QED BY <5>1, <5>3
+        <4>3. CASE ~(node = target
+                       /\ Len(asyncDeferredCompletionQueues[target]) = 0
+                       /\ Len(asyncDeferredProgressQueues[target]) > 0)
+          <5>1. asyncDeferredProgressQueues'[node] =
+                   asyncDeferredProgressQueues[node]
+            BY <1>1, <3>1, <4>3,
+               RemoveNextDeferredCommandProgressQueueEffect
+               DEF AsyncDeferredTypeInvariant
+          <5> QED BY <4>1, <5>1
+        <4> QED BY <4>2, <4>3
+      <3> QED BY <3>1
+    <2>3. \A node \in ValidatorIds:
+             Cardinality(
+               ProtectedProgressIndicesIn(
+                 asyncDeferredProgressQueues'[node])) <= N + 3
+      <3>1. ASSUME NEW node \in ValidatorIds
+             PROVE Cardinality(
+                     ProtectedProgressIndicesIn(
+                       asyncDeferredProgressQueues'[node])) <= N + 3
+        <4>1. /\ AsyncQueueTyped(
+                      asyncDeferredProgressQueues'[node])
+               /\ AsyncCommandQueueOwnership(
+                    node, asyncDeferredProgressQueues'[node])
+          BY <2>1, <3>1 DEF AsyncDeferredContentTypeInvariant
+        <4> QED BY <1>1, <2>2, <3>1, <4>1,
+             UniqueTypedOwnedProtectedSlotsAreBounded
+      <3> QED BY <3>1
+    <2>4. \A node \in ValidatorIds:
+             ProtectedDeferredProgressIndices(node)' =
+               ProtectedProgressIndicesIn(
+                 asyncDeferredProgressQueues'[node])
+      BY <1>1
+         DEF ProtectedDeferredProgressIndices,
+             ProtectedProgressIndicesIn, ProtectedProgressCommand,
+             HistoricalLockedCommitItem, LockedPrepareRound
+    <2>5. \A left, right:
+             SameProtectedProgressSlot(left, right)' =
+               SameProtectedProgressSlot(left, right)
+      BY <1>1
+         DEF SameProtectedProgressSlot, ProtectedProgressCommand,
+             HistoricalLockedCommitItem, LockedPrepareRound
+    <2> QED BY <2>2, <2>3, <2>4, <2>5
+         DEF ProtectedDeferredProgressInvariant,
+             ProtectedProgressSlotsUniqueIn
+  <1> QED BY <1>1
+
+(***************************************************************************
+A Progress-class Commit delivery entered the scheduler while it was a
+historical locked vote.  Later lock advancement can only leave that vote
+historical or move it strictly behind the lock frontier.  Recording this
+small history disjunction prevents an install from activating an arbitrary
+dormant Progress command that no concrete delivery classifier could create.
+***************************************************************************)
+ProgressCommitVoteHistory(command) ==
+  IF command.kind = "DeliverVote" /\ command.item.kind = "CommitVote"
+  THEN \/ HistoricalLockedCommitItem(command.item)
+       \/ command.item.envelope.vote.view <
+            lockRank[command.item.envelope.recipient]
+  ELSE TRUE
+
+THEOREM StrictCycleImpossible ==
+  \A low, high \in Int:
+    low < high /\ high <= low => FALSE
+BY SMT
+
+THEOREM NaturalWeakOrderTrans ==
+  \A low, middle, high \in Nat:
+    low <= middle /\ middle <= high => low <= high
+BY SMT
+
+THEOREM StrictWeakOrderTrans ==
+  \A low, middle, high \in Int:
+    low < middle /\ middle <= high => low < high
+BY SMT
+
+ProgressSlotShape(left, right) ==
+  /\ left.node = right.node
+  /\ CASE left.kind = "DeliverVote" ->
+            /\ right.kind = "DeliverVote"
+            /\ left.item.envelope.vote.signer =
+                 right.item.envelope.vote.signer
+       [] left.kind = "DeliverQC" ->
+            /\ right.kind = "DeliverQC"
+            /\ left.item.kind = right.item.kind
+       [] OTHER -> right.kind = "DeliverTC"
+
+THEOREM ProtectedProgressCommandBackwardStableUnderLockAdvance ==
+  \A command:
+    /\ AsyncCandidateTyped(command)
+    /\ TypeInvariant
+
+    /\ ProgressCommitVoteHistory(command)
+    /\ ProtectedProgressCommand(command)'
+    /\ LockMonotonicityAction
+    /\ UNCHANGED <<context, prepareQCs>>
+    => ProtectedProgressCommand(command)
+PROOF
+  <1>1. ASSUME NEW command,
+                AsyncCandidateTyped(command),
+                TypeInvariant,
+                ProgressCommitVoteHistory(command),
+                ProtectedProgressCommand(command)',
+                LockMonotonicityAction,
+                UNCHANGED <<context, prepareQCs>>
+         PROVE ProtectedProgressCommand(command)
+    <2>2. /\ context' = context
+           /\ prepareQCs' = prepareQCs
+      BY <1>1, Isa
+    <2>3. CASE command.kind = "DeliverVote"
+      <3>1. /\ command.item.kind = "CommitVote"
+             /\ HistoricalLockedCommitItem(command.item)'
+        BY <1>1, <2>3
+           DEF ProtectedProgressCommand, HistoricalLockedCommitItem
+      <3>1a. command.item # NoAsyncItem
+        BY <3>1 DEF NoAsyncItem, AsyncBodyEnvelope
+      <3>1b. AsyncItemTyped(command.item)
+        BY <1>1, <3>1a DEF AsyncCandidateTyped
+      <3>1c. command.item.envelope.recipient \in ValidatorIds
+        BY <3>1b DEF AsyncItemTyped
+      <3>2. \/ HistoricalLockedCommitItem(command.item)
+             \/ command.item.envelope.vote.view <
+                  lockRank[command.item.envelope.recipient]
+        BY <1>1, <2>3, <3>1 DEF ProgressCommitVoteHistory
+      <3>3. CASE HistoricalLockedCommitItem(command.item)
+        BY <2>3, <3>3 DEF ProtectedProgressCommand
+      <3>4. CASE command.item.envelope.vote.view <
+                     lockRank[command.item.envelope.recipient]
+        <4>0a. command.item.envelope.vote.view \in Views
+          BY <3>1, <3>1b DEF AsyncItemTyped, VoteEnvelopeSet,
+                              VoteRecordSet
+        <4>0b. /\ lockRank \in [ValidatorIds -> Ranks]
+                /\ Ranks \subseteq Int
+          BY <1>1, ModelRanksAreIntegers DEF TypeInvariant
+        <4>0. /\ command.item.envelope.vote.view \in Int
+               /\ lockRank[command.item.envelope.recipient] \in Int
+          BY <3>1c, <4>0a, <4>0b, ViewsAreRanks,
+             FunctionValueHasCodomain, Isa
+        <4>1. lockRank'[command.item.envelope.recipient] >=
+                 lockRank[command.item.envelope.recipient]
+          BY <1>1, <2>2, <3>1c DEF LockMonotonicityAction
+        <4>2. lockRank'[command.item.envelope.recipient] =
+                 command.item.envelope.vote.view
+          BY <3>1 DEF HistoricalLockedCommitItem, LockedPrepareRound
+        <4>3. FALSE
+          BY <3>4, <4>0, <4>1, <4>2, StrictCycleImpossible
+        <4> QED BY <4>3
+      <3> QED BY <3>2, <3>3, <3>4
+    <2>4. CASE command.kind = "DeliverQC"
+      BY <1>1, <2>4 DEF ProtectedProgressCommand
+    <2>5. CASE command.kind = "DeliverTC"
+      BY <1>1, <2>5 DEF ProtectedProgressCommand
+    <2>6. CASE command.kind \notin
+                   {"DeliverVote", "DeliverQC", "DeliverTC"}
+      BY <1>1, <2>6, SMT DEF ProtectedProgressCommand
+    <2> QED BY <2>3, <2>4, <2>5, <2>6, SMT
+  <1> QED BY <1>1
+
+ProgressCommitSource(command) ==
+  \/ command.class # "Progress"
+  \/ ProgressCommitVoteHistory(command)
+
+ProgressCommitSourcesIn(queue) ==
+  \A command \in SequenceSet(queue): ProgressCommitSource(command)
+
+QueuedProgressCommitHistoryInvariant ==
+  \A node \in ValidatorIds:
+    ProgressCommitSourcesIn(asyncCommandQueues[node])
+
+DeferredProgressCommitHistoryInvariant ==
+  \A node \in ValidatorIds:
+    ProgressCommitSourcesIn(asyncDeferredProgressQueues[node])
+
+CausalProgressCommitHistoryInvariant ==
+  \A node \in ValidatorIds:
+    ProgressCommitSourcesIn(asyncCausalQueues[node])
+
+THEOREM DeliveryCandidateHasProgressCommitSource ==
+  \A item: ProgressCommitSource(DeliveryCandidate(item))
+PROOF
+  <1>1. ASSUME NEW item
+         PROVE ProgressCommitSource(DeliveryCandidate(item))
+    <2>1. CASE /\ DeliveryCandidate(item).kind = "DeliverVote"
+                 /\ item.kind = "CommitVote"
+      <3>1. CASE HistoricalLockedCommitItem(item)
+        BY <2>1, <3>1
+           DEF ProgressCommitSource, ProgressCommitVoteHistory,
+               DeliveryCandidate, AsyncCandidate
+      <3>2. CASE ~HistoricalLockedCommitItem(item)
+        <4>1. DeliveryClass(item) = "Normal"
+          BY <2>1, <3>2, SMT DEF DeliveryClass
+        <4>2. DeliveryCandidate(item).class # "Progress"
+          BY <4>1 DEF DeliveryCandidate, AsyncCandidate
+        <4> QED BY <4>2 DEF ProgressCommitSource
+      <3> QED BY <3>1, <3>2
+    <2>2. CASE ~(DeliveryCandidate(item).kind = "DeliverVote"
+                  /\ item.kind = "CommitVote")
+      BY <2>2
+         DEF ProgressCommitSource, ProgressCommitVoteHistory,
+             DeliveryCandidate, AsyncCandidate
+    <2> QED BY <2>1, <2>2
+  <1> QED BY <1>1
+
+THEOREM CommitCertificateResponseCandidateHasProgressCommitSource ==
+  \A item:
+    ProgressCommitSource(CommitCertificateResponseCandidate(item))
+BY DeliveryCandidateHasProgressCommitSource
+   DEF CommitCertificateResponseCandidate
+
+THEOREM CausalCandidateHasProgressCommitSource ==
+  \A commandClass, kind, command:
+    ProgressCommitSource(CausalCandidate(commandClass, kind, command))
+BY SMT
+   DEF ProgressCommitSource, ProgressCommitVoteHistory,
+       CausalCandidate, NoItemCandidate, AsyncCandidate, NoAsyncItem
+
+THEOREM CompletionCandidateHasProgressCommitSource ==
+  \A candidate:
+    candidate.class = "Completion" => ProgressCommitSource(candidate)
+BY DEF ProgressCommitSource
+
+THEOREM AsyncInitEstablishesProgressCommitHistories ==
+  \A initialContext:
+    AsyncInitAt(initialContext)
+      => /\ QueuedProgressCommitHistoryInvariant
+         /\ DeferredProgressCommitHistoryInvariant
+         /\ CausalProgressCommitHistoryInvariant
+PROOF
+  <1>1. ASSUME NEW initialContext,
+                AsyncInitAt(initialContext)
+         PROVE /\ QueuedProgressCommitHistoryInvariant
+               /\ DeferredProgressCommitHistoryInvariant
+               /\ CausalProgressCommitHistoryInvariant
+    <2>1. /\ asyncCommandQueues =
+                  [node \in ValidatorIds |-> <<>>]
+           /\ asyncDeferredProgressQueues =
+                  [node \in ValidatorIds |-> <<>>]
+      BY <1>1 DEF AsyncInitAt, AsyncBaseInitAt,
+                    AsyncRuntimeInit, AsyncDeferredInit
+    <2>2. QueuedProgressCommitHistoryInvariant
+      BY <2>1
+         DEF QueuedProgressCommitHistoryInvariant,
+             ProgressCommitSourcesIn, SequenceSet
+    <2>3. DeferredProgressCommitHistoryInvariant
+      BY <2>1
+         DEF DeferredProgressCommitHistoryInvariant,
+             ProgressCommitSourcesIn, SequenceSet
+    <2>4. CausalProgressCommitHistoryInvariant
+      <3>1. ASSUME NEW node \in ValidatorIds
+             PROVE ProgressCommitSourcesIn(asyncCausalQueues[node])
+        <4> DEFINE Initial ==
+               NoItemCandidate("Normal", "AssembleBody", node,
+                 nodeView[node], AsyncProposalSubject(node))
+        <4>1. asyncCausalQueues[node] = <<Initial>>
+          BY <1>1, <3>1, Isa
+             DEF AsyncInitAt, AsyncBaseInitAt,
+                 AsyncRuntimeInit, Initial
+        <4>2. /\ Initial.class = "Normal"
+               /\ ProgressCommitSource(Initial)
+          BY DEF Initial, NoItemCandidate, AsyncCandidate,
+                 ProgressCommitSource
+        <4>3. SequenceSet(<<Initial>>) = {Initial}
+          BY SingletonSequenceFacts DEF SequenceSet
+        <4> QED BY <4>1, <4>2, <4>3
+             DEF ProgressCommitSourcesIn
+      <3> QED BY <3>1 DEF CausalProgressCommitHistoryInvariant
+    <2> QED BY <2>2, <2>3, <2>4
+  <1> QED BY <1>1
+
+THEOREM EmptySequenceHasProgressCommitSources ==
+  ProgressCommitSourcesIn(<<>>)
+BY Isa DEF ProgressCommitSourcesIn, SequenceSet
+
+THEOREM SingletonSequenceHasProgressCommitSources ==
+  \A command:
+    ProgressCommitSource(command)
+      => ProgressCommitSourcesIn(<<command>>)
+PROOF
+  <1>1. ASSUME NEW command,
+                ProgressCommitSource(command)
+         PROVE ProgressCommitSourcesIn(<<command>>)
+    <2>1. SequenceSet(<<command>>) = {command}
+      BY SingletonSequenceFacts, RangeEquality
+         DEF SequenceSet
+    <2> QED BY <1>1, <2>1 DEF ProgressCommitSourcesIn
+  <1> QED BY <1>1
+
+THEOREM PairSequenceHasProgressCommitSources ==
+  \A left, right:
+    /\ ProgressCommitSource(left)
+    /\ ProgressCommitSource(right)
+    => ProgressCommitSourcesIn(<<left, right>>)
+PROOF
+  <1>1. ASSUME NEW left, NEW right,
+                ProgressCommitSource(left),
+                ProgressCommitSource(right)
+         PROVE ProgressCommitSourcesIn(<<left, right>>)
+    <2>1. SequenceSet(<<left, right>>) = {left, right}
+      BY Isa DEF SequenceSet
+    <2> QED BY <1>1, <2>1 DEF ProgressCommitSourcesIn
+  <1> QED BY <1>1
+
+THEOREM TripleSequenceHasProgressCommitSources ==
+  \A first, second, third:
+    /\ ProgressCommitSource(first)
+    /\ ProgressCommitSource(second)
+    /\ ProgressCommitSource(third)
+    => ProgressCommitSourcesIn(<<first, second, third>>)
+PROOF
+  <1>1. ASSUME NEW first, NEW second, NEW third,
+                ProgressCommitSource(first),
+                ProgressCommitSource(second),
+                ProgressCommitSource(third)
+         PROVE ProgressCommitSourcesIn(<<first, second, third>>)
+    <2>1. SequenceSet(<<first, second, third>>) =
+             {first, second, third}
+      BY Isa DEF SequenceSet
+    <2> QED BY <1>1, <2>1 DEF ProgressCommitSourcesIn
+  <1> QED BY <1>1
+
+THEOREM CommandSuccessorsHaveProgressCommitSources ==
+  \A command:
+    ProgressCommitSourcesIn(CommandSuccessors(command))
+PROOF
+  <1>1. ASSUME NEW command
+         PROVE ProgressCommitSourcesIn(CommandSuccessors(command))
+    <2>1. CASE command.kind \in
+                 {"AssembleBody", "BeginProposal", "PersistProposal",
+                  "DeliverProposal", "DeliverChunk", "FetchBody",
+                  "RebindRetainedBody"}
+      <3>1. CASE command.kind = "AssembleBody"
+        BY <3>1, CausalCandidateHasProgressCommitSource,
+           SingletonSequenceHasProgressCommitSources
+           DEF CommandSuccessors
+      <3>2. CASE command.kind = "BeginProposal"
+        BY <3>2, CausalCandidateHasProgressCommitSource,
+           SingletonSequenceHasProgressCommitSources
+           DEF CommandSuccessors
+      <3>3. CASE command.kind = "PersistProposal"
+        BY <3>3, CausalCandidateHasProgressCommitSource,
+           SingletonSequenceHasProgressCommitSources
+           DEF CommandSuccessors
+
+      <3>4. CASE command.kind = "DeliverProposal"
+        BY <3>4, CausalCandidateHasProgressCommitSource,
+           PairSequenceHasProgressCommitSources
+           DEF CommandSuccessors, RetainedBodyRebindCandidate
+      <3>5. CASE command.kind = "DeliverChunk"
+        BY <3>5, CausalCandidateHasProgressCommitSource,
+           SingletonSequenceHasProgressCommitSources
+           DEF CommandSuccessors
+      <3>6. CASE command.kind = "FetchBody"
+        BY <3>6, CausalCandidateHasProgressCommitSource,
+           SingletonSequenceHasProgressCommitSources
+           DEF CommandSuccessors
+      <3>7. CASE command.kind = "RebindRetainedBody"
+        BY <3>7, CausalCandidateHasProgressCommitSource,
+           SingletonSequenceHasProgressCommitSources
+           DEF CommandSuccessors
+      <3> QED BY <2>1, <3>1, <3>2, <3>3, <3>4, <3>5, <3>6,
+                     <3>7, SMT
+    <2>2. CASE command.kind \in
+                 {"FetchCertifiedBody", "StoreBody", "ValidateBody",
+                  "BeginPrepare", "PersistPrepare", "DeliverVote",
+                  "DeliverQC"}
+      <3>1. CASE command.kind = "FetchCertifiedBody"
+        BY <3>1, CausalCandidateHasProgressCommitSource,
+           SingletonSequenceHasProgressCommitSources
+           DEF CommandSuccessors
+      <3>2. CASE command.kind = "StoreBody"
+        BY <3>2, CausalCandidateHasProgressCommitSource,
+           SingletonSequenceHasProgressCommitSources
+           DEF CommandSuccessors
+      <3>3. CASE command.kind = "ValidateBody"
+        BY <3>3, CausalCandidateHasProgressCommitSource,
+           PairSequenceHasProgressCommitSources
+           DEF CommandSuccessors
+      <3>4. CASE command.kind = "BeginPrepare"
+        BY <3>4, CausalCandidateHasProgressCommitSource,
+           SingletonSequenceHasProgressCommitSources
+           DEF CommandSuccessors
+      <3>5. CASE command.kind = "PersistPrepare"
+        BY <3>5, CausalCandidateHasProgressCommitSource,
+           SingletonSequenceHasProgressCommitSources
+           DEF CommandSuccessors
+      <3>6. CASE command.kind = "DeliverVote"
+        BY <3>6, CausalCandidateHasProgressCommitSource,
+           SingletonSequenceHasProgressCommitSources
+           DEF CommandSuccessors
+      <3>7. CASE command.kind = "DeliverQC"
+        <4>1. CASE command.item.envelope.qc.phase = "Prepare"
+          BY <3>7, <4>1, CausalCandidateHasProgressCommitSource,
+             PairSequenceHasProgressCommitSources
+             DEF CommandSuccessors
+        <4>2. CASE command.item.envelope.qc.phase # "Prepare"
+          BY <3>7, <4>2, CausalCandidateHasProgressCommitSource,
+             SingletonSequenceHasProgressCommitSources
+             DEF CommandSuccessors
+        <4> QED BY <4>1, <4>2
+      <3> QED BY <2>2, <3>1, <3>2, <3>3, <3>4, <3>5, <3>6,
+                     <3>7, SMT
+    <2>3. CASE command.kind \in
+                 {"BeginObservePrepare", "PersistObservePrepare",
+                  "BeginLockCommit", "PersistLockCommit", "FormCommitQC",
+                  "BeginDecision", "PersistDecision"}
+      <3>1. CASE command.kind = "BeginObservePrepare"
+        BY <3>1, CausalCandidateHasProgressCommitSource,
+           SingletonSequenceHasProgressCommitSources
+           DEF CommandSuccessors
+      <3>2. CASE command.kind = "PersistObservePrepare"
+        BY <3>2, CausalCandidateHasProgressCommitSource,
+           SingletonSequenceHasProgressCommitSources
+           DEF CommandSuccessors
+      <3>3. CASE command.kind = "BeginLockCommit"
+        BY <3>3, CausalCandidateHasProgressCommitSource,
+           SingletonSequenceHasProgressCommitSources
+           DEF CommandSuccessors
+      <3>4. CASE command.kind = "PersistLockCommit"
+        BY <3>4, CausalCandidateHasProgressCommitSource,
+           SingletonSequenceHasProgressCommitSources
+           DEF CommandSuccessors
+      <3>5. CASE command.kind = "FormCommitQC"
+        BY <3>5, CausalCandidateHasProgressCommitSource,
+           SingletonSequenceHasProgressCommitSources
+           DEF CommandSuccessors
+      <3>6. CASE command.kind = "BeginDecision"
+        BY <3>6, CausalCandidateHasProgressCommitSource,
+           SingletonSequenceHasProgressCommitSources
+           DEF CommandSuccessors
+      <3>7. CASE command.kind = "PersistDecision"
+        BY <3>7, CausalCandidateHasProgressCommitSource,
+           TripleSequenceHasProgressCommitSources
+           DEF CommandSuccessors
+      <3> QED BY <2>3, <3>1, <3>2, <3>3, <3>4, <3>5, <3>6,
+                     <3>7, SMT
+    <2>4. CASE command.kind \in
+                 {"BeginTimeout", "PersistTimeout", "DeliverTimeout",
+                  "FormTC", "DeliverTC", "BeginInstallTC",
+                  "PersistInstallTC"}
+      <3>1. CASE command.kind = "BeginTimeout"
+        BY <3>1, CausalCandidateHasProgressCommitSource,
+           SingletonSequenceHasProgressCommitSources
+           DEF CommandSuccessors
+      <3>2. CASE command.kind = "PersistTimeout"
+        BY <3>2, CausalCandidateHasProgressCommitSource,
+           SingletonSequenceHasProgressCommitSources
+           DEF CommandSuccessors
+      <3>3. CASE command.kind = "DeliverTimeout"
+        BY <3>3, CausalCandidateHasProgressCommitSource,
+           SingletonSequenceHasProgressCommitSources
+           DEF CommandSuccessors
+      <3>4. CASE command.kind = "FormTC"
+        BY <3>4, CausalCandidateHasProgressCommitSource,
+           SingletonSequenceHasProgressCommitSources
+           DEF CommandSuccessors
+      <3>5. CASE command.kind = "DeliverTC"
+        BY <3>5, CausalCandidateHasProgressCommitSource,
+           SingletonSequenceHasProgressCommitSources
+           DEF CommandSuccessors
+      <3>6. CASE command.kind = "BeginInstallTC"
+        BY <3>6, CausalCandidateHasProgressCommitSource,
+           SingletonSequenceHasProgressCommitSources
+           DEF CommandSuccessors
+      <3>7. CASE command.kind = "PersistInstallTC"
+        <4>1. ProgressCommitSource(
+                 NoItemCandidate("Normal", "AssembleBody", command.node,
+                   command.view + 1, AsyncProposalSubject(command.node)))
+          BY DEF ProgressCommitSource, NoItemCandidate, AsyncCandidate
+        <4> QED BY <3>7, <4>1,
+             SingletonSequenceHasProgressCommitSources
+             DEF CommandSuccessors
+      <3> QED BY <2>4, <3>1, <3>2, <3>3, <3>4, <3>5, <3>6,
+                     <3>7, SMT
+    <2>5. CASE command.kind \notin
+                 {"AssembleBody", "BeginProposal", "PersistProposal",
+                  "DeliverProposal", "DeliverChunk", "FetchBody",
+                  "RebindRetainedBody", "FetchCertifiedBody", "StoreBody",
+                  "ValidateBody", "BeginPrepare", "PersistPrepare",
+                  "DeliverVote", "DeliverQC", "BeginObservePrepare",
+                  "PersistObservePrepare", "BeginLockCommit",
+                  "PersistLockCommit", "FormCommitQC", "BeginDecision",
+                  "PersistDecision", "BeginTimeout", "PersistTimeout",
+                  "DeliverTimeout", "FormTC", "DeliverTC",
+                  "BeginInstallTC", "PersistInstallTC"}
+      BY <2>5, EmptySequenceHasProgressCommitSources
+         DEF CommandSuccessors
+    <2> QED BY <2>1, <2>2, <2>3, <2>4, <2>5, Isa
+  <1> QED BY <1>1
+
+(***************************************************************************
+The executable reducer never carries a durable Prepare lock ahead of the
+node's installed view.  This private strengthening supplies the ordering
+needed to retain an exact historical source when a TC advances nodeView but
+does not advance the lock.
+***************************************************************************)
+LockWithinNodeViewInvariant ==
+  \A node \in ValidatorIds: lockRank[node] <= nodeView[node]
+
+ProgressFrontierAction ==
+  /\ context' = context
+  /\ prepareQCs \subseteq prepareQCs'
+  /\ LockMonotonicityAction
+  /\ \A node \in ValidatorIds:
+       nodeView'[node] >= nodeView[node]
+
+THEOREM ProgressCommitVoteHistoryForwardStable ==
+  \A command:
+    /\ AsyncCandidateTyped(command)
+    /\ TypeInvariant
+    /\ TypeInvariant'
+    /\ LockWithinNodeViewInvariant
+    /\ ProgressCommitVoteHistory(command)
+    /\ ProgressFrontierAction
+    => ProgressCommitVoteHistory(command)'
+PROOF
+  <1>1. ASSUME NEW command,
+                AsyncCandidateTyped(command),
+                TypeInvariant,
+                TypeInvariant',
+                LockWithinNodeViewInvariant,
+                ProgressCommitVoteHistory(command),
+                ProgressFrontierAction
+         PROVE ProgressCommitVoteHistory(command)'
+    <2>1. CASE command.kind = "DeliverVote"
+                 /\ command.item.kind = "CommitVote"
+      <3>1. command.item # NoAsyncItem
+        BY <2>1 DEF NoAsyncItem, AsyncBodyEnvelope
+      <3>2a. command.item = NoAsyncItem
+                 \/ AsyncItemTyped(command.item)
+        BY <1>1 DEF AsyncCandidateTyped
+      <3>2b. AsyncItemTyped(command.item)
+        BY <3>1, <3>2a
+      <3>2c. command.item.envelope \in VoteEnvelopeSet
+        BY <2>1, <3>2b DEF AsyncItemTyped
+      <3>2. /\ AsyncItemTyped(command.item)
+             /\ command.item.envelope.recipient \in ValidatorIds
+             /\ command.item.envelope.vote.view \in Views
+        BY <3>2b, <3>2c DEF AsyncItemTyped, VoteEnvelopeSet,
+                             VoteRecordSet
+      <3>3a. /\ Ranks \subseteq Int
+              /\ Views \subseteq Ranks
+        BY <1>1, ModelRanksAreIntegers, ViewsAreRanks
+           DEF TypeInvariant
+      <3>3b. command.item.envelope.vote.view \in Int
+        BY <3>2, <3>3a
+      <3>3c. lockRank[command.item.envelope.recipient] \in Int
+        BY <1>1, <3>2, <3>3a, FunctionValueHasCodomain
+           DEF TypeInvariant
+      <3>3d. nodeView[command.item.envelope.recipient] \in Int
+        BY <1>1, <3>2, <3>3a, FunctionValueHasCodomain
+           DEF TypeInvariant
+      <3>3e. /\ lockRank'[command.item.envelope.recipient] \in Int
+              /\ nodeView'[command.item.envelope.recipient] \in Int
+        BY <1>1, <3>2, <3>3a, FunctionValueHasCodomain
+           DEF TypeInvariant
+      <3>3. /\ command.item.envelope.vote.view \in Int
+             /\ lockRank[command.item.envelope.recipient] \in Int
+             /\ nodeView[command.item.envelope.recipient] \in Int
+             /\ lockRank'[command.item.envelope.recipient] \in Int
+             /\ nodeView'[command.item.envelope.recipient] \in Int
+        BY <3>3b, <3>3c, <3>3d, <3>3e
+      <3>4. \/ HistoricalLockedCommitItem(command.item)
+             \/ command.item.envelope.vote.view <
+                  lockRank[command.item.envelope.recipient]
+        BY <1>1, <2>1 DEF ProgressCommitVoteHistory
+      <3>5. CASE command.item.envelope.vote.view <
+                     lockRank[command.item.envelope.recipient]
+        <4>1. lockRank'[command.item.envelope.recipient] >=
+                 lockRank[command.item.envelope.recipient]
+          BY <1>1, <3>2 DEF ProgressFrontierAction,
+                              LockMonotonicityAction
+        <4>2. command.item.envelope.vote.view <
+                 lockRank'[command.item.envelope.recipient]
+          BY <3>3, <3>5, <4>1, StrictWeakOrderTrans
+        <4> QED BY <2>1, <4>2 DEF ProgressCommitVoteHistory
+      <3>6. CASE HistoricalLockedCommitItem(command.item)
+        <4>1a. /\ nodeView[command.item.envelope.recipient] #
+                       command.item.envelope.vote.view
+                /\ LockedPrepareRound(
+                     command.item.envelope.recipient,
+                     command.item.envelope.vote.view,
+                     command.item.envelope.vote.subject)
+          BY <2>1, <3>6 DEF HistoricalLockedCommitItem
+        <4>1b. lockRank[command.item.envelope.recipient] =
+                      command.item.envelope.vote.view
+          BY <4>1a DEF LockedPrepareRound
+        <4>1. /\ lockRank[command.item.envelope.recipient] =
+                      command.item.envelope.vote.view
+               /\ nodeView[command.item.envelope.recipient] #
+                      command.item.envelope.vote.view
+               /\ LockedPrepareRound(
+                    command.item.envelope.recipient,
+                    command.item.envelope.vote.view,
+
+                    command.item.envelope.vote.subject)
+          BY <4>1a, <4>1b
+        <4>2. command.item.envelope.vote.view <
+                 nodeView[command.item.envelope.recipient]
+          BY <1>1, <3>2, <3>3, <4>1, SMT
+             DEF LockWithinNodeViewInvariant
+        <4>3. /\ lockRank'[command.item.envelope.recipient] >=
+                      lockRank[command.item.envelope.recipient]
+               /\ nodeView'[command.item.envelope.recipient] >=
+                      nodeView[command.item.envelope.recipient]
+          BY <1>1, <3>2 DEF ProgressFrontierAction,
+                              LockMonotonicityAction
+        <4>4. nodeView'[command.item.envelope.recipient] #
+                 command.item.envelope.vote.view
+          BY <3>3, <4>2, <4>3, SMT
+        <4>5. CASE lockRank'[command.item.envelope.recipient] >
+                       lockRank[command.item.envelope.recipient]
+          BY <2>1, <3>3, <4>1, <4>5, SMT
+             DEF ProgressCommitVoteHistory
+        <4>6. CASE lockRank'[command.item.envelope.recipient] =
+                       lockRank[command.item.envelope.recipient]
+          <5>1. lockSubject'[command.item.envelope.recipient] =
+                   lockSubject[command.item.envelope.recipient]
+            BY <1>1, <3>2, <4>6, SMT
+               DEF ProgressFrontierAction, LockMonotonicityAction
+          <5>2. LockedPrepareRound(
+                   command.item.envelope.recipient,
+                   command.item.envelope.vote.view,
+                   command.item.envelope.vote.subject)'
+            BY <1>1, <3>2, <4>1, <4>6, <5>1, Isa
+               DEF ProgressFrontierAction, LockedPrepareRound
+          <5>3. HistoricalLockedCommitItem(command.item)'
+            BY <2>1, <4>4, <5>2 DEF HistoricalLockedCommitItem
+          <5> QED BY <2>1, <5>3 DEF ProgressCommitVoteHistory
+        <4> QED BY <3>3, <4>3, <4>5, <4>6, SMT
+      <3> QED BY <3>4, <3>5, <3>6
+    <2>2. CASE ~(command.kind = "DeliverVote"
+                  /\ command.item.kind = "CommitVote")
+      BY <2>2 DEF ProgressCommitVoteHistory
+    <2> QED BY <2>1, <2>2
+  <1> QED BY <1>1
+
+THEOREM ProgressCommitSourceForwardStable ==
+  \A command:
+    /\ AsyncCandidateTyped(command)
+    /\ TypeInvariant
+    /\ TypeInvariant'
+    /\ LockWithinNodeViewInvariant
+    /\ ProgressCommitSource(command)
+    /\ ProgressFrontierAction
+    => ProgressCommitSource(command)'
+PROOF
+  <1>1. ASSUME NEW command,
+                AsyncCandidateTyped(command),
+                TypeInvariant,
+                TypeInvariant',
+                LockWithinNodeViewInvariant,
+                ProgressCommitSource(command),
+                ProgressFrontierAction
+         PROVE ProgressCommitSource(command)'
+    <2>1. CASE command.class # "Progress"
+      BY <2>1 DEF ProgressCommitSource
+    <2>2. CASE command.class = "Progress"
+      <3>1. ProgressCommitVoteHistory(command)
+        BY <1>1, <2>2 DEF ProgressCommitSource
+      <3>2. ProgressCommitVoteHistory(command)'
+        BY <1>1, <3>1, ProgressCommitVoteHistoryForwardStable
+      <3> QED BY <3>2 DEF ProgressCommitSource
+    <2> QED BY <2>1, <2>2
+  <1> QED BY <1>1
+
+THEOREM AppendProgressCommitSourcePreservesSources ==
+  \A queue, command:
+    /\ AsyncQueueTyped(queue)
+    /\ ProgressCommitSourcesIn(queue)
+    /\ ProgressCommitSource(command)
+    => ProgressCommitSourcesIn(Append(queue, command))
+PROOF
+  <1>1. ASSUME NEW queue, NEW command,
+                AsyncQueueTyped(queue),
+                ProgressCommitSourcesIn(queue),
+                ProgressCommitSource(command)
+         PROVE ProgressCommitSourcesIn(Append(queue, command))
+    <2>1. SequenceSet(Append(queue, command)) =
+             SequenceSet(queue) \cup {command}
+      BY <1>1, SequenceSetAfterAppend DEF AsyncQueueTyped
+    <2> QED BY <1>1, <2>1 DEF ProgressCommitSourcesIn
+  <1> QED BY <1>1
+
+THEOREM RemoveProgressCommitSourcePreservesSources ==
+  \A queue, index:
+    /\ AsyncQueueTyped(queue)
+    /\ index \in 1..Len(queue)
+    /\ ProgressCommitSourcesIn(queue)
+    => ProgressCommitSourcesIn(SequenceWithoutIndex(queue, index))
+PROOF
+  <1>1. ASSUME NEW queue, NEW index,
+                AsyncQueueTyped(queue),
+                index \in 1..Len(queue),
+                ProgressCommitSourcesIn(queue)
+         PROVE ProgressCommitSourcesIn(
+                 SequenceWithoutIndex(queue, index))
+    <2> DEFINE Result == SequenceWithoutIndex(queue, index)
+    <2>1. /\ queue \in Seq(Range(queue))
+           /\ Range(Result) \subseteq Range(queue)
+           /\ Result \in Seq(Range(queue))
+      BY <1>1, SequenceWithoutIndexFacts
+         DEF AsyncQueueTyped, Result
+    <2>2. /\ SequenceSet(queue) = Range(queue)
+           /\ SequenceSet(Result) = Range(Result)
+      BY <2>1, RangeEquality DEF SequenceSet
+    <2>3. SequenceSet(Result) \subseteq SequenceSet(queue)
+      BY <2>1, <2>2
+    <2> QED BY <1>1, <2>3 DEF ProgressCommitSourcesIn, Result
+  <1> QED BY <1>1
+
+THEOREM TailProgressCommitSourcePreservesSources ==
+  \A queue:
+    /\ AsyncQueueTyped(queue)
+    /\ Len(queue) > 0
+    /\ ProgressCommitSourcesIn(queue)
+    => ProgressCommitSourcesIn(Tail(queue))
+PROOF
+  <1>1. ASSUME NEW queue,
+                AsyncQueueTyped(queue),
+                Len(queue) > 0,
+                ProgressCommitSourcesIn(queue)
+         PROVE ProgressCommitSourcesIn(Tail(queue))
+    <2>1. /\ Tail(queue) \in Seq(Range(queue))
+           /\ Range(Tail(queue)) \subseteq Range(queue)
+      BY <1>1, HeadTailProperties DEF AsyncQueueTyped
+    <2>2. /\ SequenceSet(queue) = Range(queue)
+           /\ SequenceSet(Tail(queue)) = Range(Tail(queue))
+      BY <1>1, <2>1, RangeEquality DEF AsyncQueueTyped, SequenceSet
+    <2>3. SequenceSet(Tail(queue)) \subseteq SequenceSet(queue)
+      BY <2>1, <2>2
+    <2> QED BY <1>1, <2>3 DEF ProgressCommitSourcesIn
+  <1> QED BY <1>1
+
+THEOREM ReplaceProgressCommitSourcePreservesSources ==
+  \A queue, command:
+    \A selected \in 1..Len(queue):
+      /\ AsyncQueueTyped(queue)
+      /\ ProgressCommitSourcesIn(queue)
+      /\ ProgressCommitSource(command)
+      => ProgressCommitSourcesIn(
+           [queue EXCEPT ![selected] = command])
+PROOF
+  <1>1. ASSUME NEW queue, NEW command,
+                NEW selected \in 1..Len(queue),
+                AsyncQueueTyped(queue),
+                ProgressCommitSourcesIn(queue),
+                ProgressCommitSource(command)
+         PROVE ProgressCommitSourcesIn(
+                 [queue EXCEPT ![selected] = command])
+    <2> DEFINE Updated == [queue EXCEPT ![selected] = command]
+    <2>1. /\ selected \in DOMAIN queue
+           /\ DOMAIN Updated = DOMAIN queue
+           /\ Len(Updated) = Len(queue)
+           /\ Updated[selected] = command
+           /\ \A index \in DOMAIN queue \ {selected}:
+                Updated[index] = queue[index]
+      BY <1>1, Isa DEF AsyncQueueTyped, Updated
+    <2>2. ASSUME NEW candidate \in SequenceSet(Updated)
+           PROVE ProgressCommitSource(candidate)
+      <3>1. PICK index \in 1..Len(Updated):
+               candidate = Updated[index]
+        BY <2>2 DEF SequenceSet
+      <3>2. index \in 1..Len(queue)
+        BY <2>1, <3>1
+      <3>3. CASE index = selected
+        BY <1>1, <2>1, <3>1, <3>3
+      <3>4. CASE index # selected
+        <4>1. /\ index \in DOMAIN queue \ {selected}
+               /\ candidate = queue[index]
+               /\ candidate \in SequenceSet(queue)
+          BY <1>1, <2>1, <3>1, <3>2, <3>4
+             DEF AsyncQueueTyped, SequenceSet
+        <4> QED BY <1>1, <4>1 DEF ProgressCommitSourcesIn
+      <3> QED BY <3>3, <3>4
+    <2> QED BY <2>2 DEF ProgressCommitSourcesIn, Updated
+  <1> QED BY <1>1
+
+THEOREM DeferredProgressAfterPreservesProgressCommitSources ==
+  \A node \in ValidatorIds:
+    \A command:
+      /\ AsyncConfiguration
+      /\ AsyncDeferredContentTypeInvariant
+      /\ ProgressCommitSourcesIn(
+           asyncDeferredProgressQueues[node])
+      /\ ProgressCommitSource(command)
+      => ProgressCommitSourcesIn(
+           DeferredProgressAfter(node, command))
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds,
+                NEW command,
+                AsyncConfiguration,
+                AsyncDeferredContentTypeInvariant,
+                ProgressCommitSourcesIn(
+                  asyncDeferredProgressQueues[node]),
+                ProgressCommitSource(command)
+         PROVE ProgressCommitSourcesIn(
+                 DeferredProgressAfter(node, command))
+    <2> DEFINE Queue == asyncDeferredProgressQueues[node]
+    <2>1. /\ AsyncQueueTyped(Queue)
+           /\ ProgressCommitSourcesIn(Queue)
+      BY <1>1 DEF AsyncDeferredContentTypeInvariant, Queue
+    <2>2. CASE command \in SequenceSet(Queue)
+      BY <2>1, <2>2 DEF DeferredProgressAfter, Queue
+    <2>3. CASE /\ command \notin SequenceSet(Queue)
+                 /\ SameProtectedProgressSlotIndices(node, command) = {}
+                 /\ Len(Queue) < AsyncDeferredProgressCapacity
+      <3>1. DeferredProgressAfter(node, command) =
+               Append(Queue, command)
+        BY <2>3 DEF DeferredProgressAfter, Queue
+      <3> QED BY <1>1, <2>1, <3>1,
+           AppendProgressCommitSourcePreservesSources
+    <2>4. CASE /\ command \notin SequenceSet(Queue)
+                 /\ SameProtectedProgressSlotIndices(node, command) # {}
+                 /\ DominatedProtectedProgressIndices(node, command) # {}
+      <3> DEFINE Selected ==
+             FirstProgressIndex(
+               DominatedProtectedProgressIndices(node, command))
+      <3>1. Selected \in 1..Len(Queue)
+        BY <2>4, FirstDominatedProtectedProgressIndexIsMember
+           DEF DominatedProtectedProgressIndices,
+               SameProtectedProgressSlotIndices, Selected, Queue
+      <3>2. DeferredProgressAfter(node, command) =
+               [Queue EXCEPT ![Selected] = command]
+        BY <2>4 DEF DeferredProgressAfter, Selected, Queue
+      <3> QED BY <1>1, <2>1, <3>1, <3>2,
+           ReplaceProgressCommitSourcePreservesSources
+    <2>5. CASE /\ command \notin SequenceSet(Queue)
+                 /\ SameProtectedProgressSlotIndices(node, command) # {}
+                 /\ DominatedProtectedProgressIndices(node, command) = {}
+      BY <2>1, <2>5 DEF DeferredProgressAfter, Queue
+    <2>6. CASE /\ command \notin SequenceSet(Queue)
+                 /\ SameProtectedProgressSlotIndices(node, command) = {}
+                 /\ Len(Queue) >= AsyncDeferredProgressCapacity
+                 /\ ReplaceableUnprotectedProgressIndices(node) # {}
+      <3> DEFINE Selected ==
+             FirstProgressIndex(
+               ReplaceableUnprotectedProgressIndices(node))
+      <3>1. Selected \in 1..Len(Queue)
+        BY <2>6, FirstReplaceableUnprotectedProgressIndexIsMember
+           DEF ReplaceableUnprotectedProgressIndices, Selected, Queue
+      <3>2. /\ Len(Queue) \in Nat
+             /\ AsyncDeferredProgressCapacity \in Nat
+        BY <1>1, <2>1, LenProperties
+           DEF AsyncQueueTyped, AsyncConfiguration
+
+      <3>3. ~Len(Queue) < AsyncDeferredProgressCapacity
+        BY <2>6, <3>2, SMT
+      <3>4. DeferredProgressAfter(node, command) =
+               [Queue EXCEPT ![Selected] = command]
+        BY <2>6, <3>3 DEF DeferredProgressAfter, Selected, Queue
+      <3> QED BY <1>1, <2>1, <3>1, <3>4,
+           ReplaceProgressCommitSourcePreservesSources
+    <2>7. CASE /\ command \notin SequenceSet(Queue)
+                 /\ SameProtectedProgressSlotIndices(node, command) = {}
+                 /\ Len(Queue) >= AsyncDeferredProgressCapacity
+                 /\ ReplaceableUnprotectedProgressIndices(node) = {}
+      <3>1. /\ Len(Queue) \in Nat
+             /\ AsyncDeferredProgressCapacity \in Nat
+        BY <1>1, <2>1, LenProperties
+           DEF AsyncQueueTyped, AsyncConfiguration
+      <3>2. ~Len(Queue) < AsyncDeferredProgressCapacity
+        BY <2>7, <3>1, SMT
+      <3>3. DeferredProgressAfter(node, command) = Queue
+        BY <2>7, <3>2 DEF DeferredProgressAfter, Queue
+      <3> QED BY <2>1, <3>3
+    <2>8. \/ command \in SequenceSet(Queue)
+           \/ /\ command \notin SequenceSet(Queue)
+                 /\ SameProtectedProgressSlotIndices(node, command) = {}
+                 /\ Len(Queue) < AsyncDeferredProgressCapacity
+           \/ /\ command \notin SequenceSet(Queue)
+                 /\ SameProtectedProgressSlotIndices(node, command) # {}
+                 /\ DominatedProtectedProgressIndices(node, command) # {}
+           \/ /\ command \notin SequenceSet(Queue)
+                 /\ SameProtectedProgressSlotIndices(node, command) # {}
+                 /\ DominatedProtectedProgressIndices(node, command) = {}
+           \/ /\ command \notin SequenceSet(Queue)
+                 /\ SameProtectedProgressSlotIndices(node, command) = {}
+                 /\ Len(Queue) >= AsyncDeferredProgressCapacity
+                 /\ ReplaceableUnprotectedProgressIndices(node) # {}
+           \/ /\ command \notin SequenceSet(Queue)
+                 /\ SameProtectedProgressSlotIndices(node, command) = {}
+                 /\ Len(Queue) >= AsyncDeferredProgressCapacity
+                 /\ ReplaceableUnprotectedProgressIndices(node) = {}
+      BY <1>1, <2>1, SMT
+         DEF AsyncQueueTyped, AsyncConfiguration
+    <2> QED BY <2>2, <2>3, <2>4, <2>5, <2>6, <2>7, <2>8
+  <1> QED BY <1>1
+
+THEOREM QueueSequenceSetElementIsTyped ==
+  \A queue, command:
+    /\ AsyncQueueTyped(queue)
+    /\ command \in SequenceSet(queue)
+    => AsyncCandidateTyped(command)
+BY SMT DEF AsyncQueueTyped, SequenceSet
+
+THEOREM RestrictedQueuePreservesProgressCommitSourcesUnderFrontier ==
+  \A queue, restricted:
+    /\ AsyncQueueTyped(queue)
+    /\ SequenceSet(restricted) \subseteq SequenceSet(queue)
+    /\ ProgressCommitSourcesIn(queue)
+    /\ TypeInvariant
+    /\ TypeInvariant'
+    /\ LockWithinNodeViewInvariant
+    /\ ProgressFrontierAction
+    => ProgressCommitSourcesIn(restricted)'
+PROOF
+  <1>1. ASSUME NEW queue, NEW restricted,
+                AsyncQueueTyped(queue),
+                SequenceSet(restricted) \subseteq SequenceSet(queue),
+                ProgressCommitSourcesIn(queue),
+                TypeInvariant,
+                TypeInvariant',
+                LockWithinNodeViewInvariant,
+                ProgressFrontierAction
+         PROVE ProgressCommitSourcesIn(restricted)'
+    <2>1. ASSUME NEW command \in SequenceSet(restricted)
+           PROVE ProgressCommitSource(command)'
+      <3>1. command \in SequenceSet(queue)
+        BY <1>1, <2>1
+      <3>2a. AsyncCandidateTyped(command)
+        BY <1>1, <3>1, QueueSequenceSetElementIsTyped
+      <3>2b. ProgressCommitSource(command)
+        BY <1>1, <3>1 DEF ProgressCommitSourcesIn
+      <3>2. /\ AsyncCandidateTyped(command)
+             /\ ProgressCommitSource(command)
+        BY <3>2a, <3>2b
+      <3> QED BY <1>1, <3>2,
+           ProgressCommitSourceForwardStable
+    <2> QED BY <2>1 DEF ProgressCommitSourcesIn
+  <1> QED BY <1>1
+
+THEOREM RigidQueuePreservesProgressCommitSourcesUnderFrontier ==
+  \A queue:
+    /\ AsyncQueueTyped(queue)
+    /\ ProgressCommitSourcesIn(queue)
+    /\ TypeInvariant
+    /\ TypeInvariant'
+    /\ LockWithinNodeViewInvariant
+    /\ ProgressFrontierAction
+    => ProgressCommitSourcesIn(queue)'
+BY RestrictedQueuePreservesProgressCommitSourcesUnderFrontier
+
+THEOREM AppendedQueuePreservesProgressCommitSourcesUnderFrontier ==
+  \A queue, command:
+    /\ AsyncQueueTyped(queue)
+    /\ AsyncCandidateTyped(command)
+    /\ ProgressCommitSourcesIn(queue)
+    /\ ProgressCommitSource(command)
+    /\ TypeInvariant
+    /\ TypeInvariant'
+    /\ LockWithinNodeViewInvariant
+    /\ ProgressFrontierAction
+    => ProgressCommitSourcesIn(Append(queue, command))'
+PROOF
+  <1>1. ASSUME NEW queue, NEW command,
+                AsyncQueueTyped(queue),
+                AsyncCandidateTyped(command),
+                ProgressCommitSourcesIn(queue),
+                ProgressCommitSource(command),
+                TypeInvariant,
+                TypeInvariant',
+                LockWithinNodeViewInvariant,
+                ProgressFrontierAction
+         PROVE ProgressCommitSourcesIn(Append(queue, command))'
+    <2>1. /\ AsyncQueueTyped(Append(queue, command))
+           /\ ProgressCommitSourcesIn(Append(queue, command))
+      BY <1>1, TypedCandidateAppendPreservesQueueType,
+         AppendProgressCommitSourcePreservesSources
+    <2> QED BY <1>1, <2>1,
+         RigidQueuePreservesProgressCommitSourcesUnderFrontier
+  <1> QED BY <1>1
+
+THEOREM RemovedQueuePreservesProgressCommitSourcesUnderFrontier ==
+  \A queue, index:
+    /\ AsyncQueueTyped(queue)
+    /\ index \in 1..Len(queue)
+    /\ ProgressCommitSourcesIn(queue)
+    /\ TypeInvariant
+    /\ TypeInvariant'
+    /\ LockWithinNodeViewInvariant
+    /\ ProgressFrontierAction
+    => ProgressCommitSourcesIn(
+         SequenceWithoutIndex(queue, index))'
+PROOF
+  <1>1. ASSUME NEW queue, NEW index,
+                AsyncQueueTyped(queue),
+                index \in 1..Len(queue),
+                ProgressCommitSourcesIn(queue),
+                TypeInvariant,
+                TypeInvariant',
+                LockWithinNodeViewInvariant,
+                ProgressFrontierAction
+         PROVE ProgressCommitSourcesIn(
+                 SequenceWithoutIndex(queue, index))'
+    <2>1. SequenceSet(SequenceWithoutIndex(queue, index))
+             \subseteq SequenceSet(queue)
+      <3>1. /\ Range(SequenceWithoutIndex(queue, index))
+                     \subseteq Range(queue)
+             /\ SequenceWithoutIndex(queue, index)
+                    \in Seq(Range(queue))
+        BY <1>1, SequenceWithoutIndexFacts DEF AsyncQueueTyped
+      <3> QED BY <1>1, <3>1, RangeEquality
+           DEF AsyncQueueTyped, SequenceSet
+    <2> QED BY <1>1, <2>1,
+         RestrictedQueuePreservesProgressCommitSourcesUnderFrontier
+  <1> QED BY <1>1
+
+THEOREM UnchangedCommandQueuesPreserveProgressCommitHistory ==
+  /\ AsyncRuntimeScalarTypeInvariant
+  /\ QueuedProgressCommitHistoryInvariant
+  /\ TypeInvariant
+  /\ TypeInvariant'
+  /\ LockWithinNodeViewInvariant
+  /\ ProgressFrontierAction
+  /\ UNCHANGED asyncCommandQueues
+  => QueuedProgressCommitHistoryInvariant'
+BY RigidQueuePreservesProgressCommitSourcesUnderFrontier, Isa
+   DEF AsyncRuntimeScalarTypeInvariant,
+       QueuedProgressCommitHistoryInvariant
+
+THEOREM UnchangedDeferredProgressQueuesPreserveCommitHistory ==
+  /\ AsyncDeferredContentTypeInvariant
+  /\ DeferredProgressCommitHistoryInvariant
+  /\ TypeInvariant
+  /\ TypeInvariant'
+  /\ LockWithinNodeViewInvariant
+  /\ ProgressFrontierAction
+  /\ UNCHANGED asyncDeferredProgressQueues
+  => DeferredProgressCommitHistoryInvariant'
+BY RigidQueuePreservesProgressCommitSourcesUnderFrontier, Isa
+   DEF AsyncDeferredContentTypeInvariant,
+       DeferredProgressCommitHistoryInvariant
+
+THEOREM EnqueueCandidatePreservesQueuedProgressCommitHistory ==
+  \A candidate:
+    /\ AsyncRuntimeScalarTypeInvariant
+    /\ QueuedProgressCommitHistoryInvariant
+    /\ TypeInvariant
+    /\ TypeInvariant'
+    /\ LockWithinNodeViewInvariant
+    /\ ProgressFrontierAction
+    /\ AsyncCandidateTyped(candidate)
+    /\ ProgressCommitSource(candidate)
+    /\ EnqueueCandidate(candidate)
+    => QueuedProgressCommitHistoryInvariant'
+BY AppendedQueuePreservesProgressCommitSourcesUnderFrontier,
+   RigidQueuePreservesProgressCommitSourcesUnderFrontier,
+   SMT
+   DEF AsyncRuntimeScalarTypeInvariant,
+       QueuedProgressCommitHistoryInvariant,
+       AsyncCandidateTyped, AsyncCandidateSet, EnqueueCandidate
+
+THEOREM RemoveNextNodeCommandPreservesQueuedProgressCommitHistory ==
+  \A target \in ValidatorIds:
+    /\ AsyncRuntimeScalarTypeInvariant
+    /\ QueuedProgressCommitHistoryInvariant
+    /\ TypeInvariant
+    /\ TypeInvariant'
+    /\ LockWithinNodeViewInvariant
+    /\ ProgressFrontierAction
+    /\ NodeQueueNonempty(target)
+    /\ RemoveNextNodeCommand(target)
+    => QueuedProgressCommitHistoryInvariant'
+BY NextNodeCommandIndexFacts,
+   RemovedQueuePreservesProgressCommitSourcesUnderFrontier,
+   RigidQueuePreservesProgressCommitSourcesUnderFrontier,
+   SMT
+   DEF AsyncRuntimeScalarTypeInvariant,
+       QueuedProgressCommitHistoryInvariant,
+       RemoveNextNodeCommand
+
+THEOREM TypedQueueConcatIsTyped ==
+  \A left, right:
+    /\ AsyncQueueTyped(left)
+    /\ AsyncQueueTyped(right)
+    => AsyncQueueTyped(left \o right)
+BY ConcatProperties, RangeConcatenation, SeqOfRange,
+   LenProperties, RangeEquality, Isa
+   DEF AsyncQueueTyped
+
+THEOREM TypedQueueConcatSequenceSet ==
+  \A left, right:
+    /\ AsyncQueueTyped(left)
+    /\ AsyncQueueTyped(right)
+    => SequenceSet(left \o right) =
+         SequenceSet(left) \cup SequenceSet(right)
+BY RangeConcatenation, RangeEquality, Isa
+   DEF AsyncQueueTyped, SequenceSet
+
+THEOREM TypedQueueConcatPreservesProgressCommitSources ==
+  \A left, right:
+    /\ AsyncQueueTyped(left)
+    /\ AsyncQueueTyped(right)
+    /\ ProgressCommitSourcesIn(left)
+    /\ ProgressCommitSourcesIn(right)
+
+    => /\ AsyncQueueTyped(left \o right)
+       /\ ProgressCommitSourcesIn(left \o right)
+BY TypedQueueConcatIsTyped, TypedQueueConcatSequenceSet, SMT
+   DEF ProgressCommitSourcesIn
+
+THEOREM UnchangedCausalQueuesPreserveProgressCommitHistory ==
+  /\ AsyncCausalTypeInvariant
+  /\ CausalProgressCommitHistoryInvariant
+  /\ TypeInvariant
+  /\ TypeInvariant'
+  /\ LockWithinNodeViewInvariant
+  /\ ProgressFrontierAction
+  /\ UNCHANGED asyncCausalQueues
+  => CausalProgressCommitHistoryInvariant'
+BY RigidQueuePreservesProgressCommitSourcesUnderFrontier, SMT
+   DEF AsyncCausalTypeInvariant,
+       CausalProgressCommitHistoryInvariant
+
+THEOREM ReplaceCausalQueuePreservesProgressCommitHistory ==
+  \A target \in ValidatorIds:
+    \A replacement:
+      /\ AsyncCausalTypeInvariant
+      /\ CausalProgressCommitHistoryInvariant
+      /\ AsyncQueueTyped(replacement)
+      /\ ProgressCommitSourcesIn(replacement)
+      /\ TypeInvariant
+      /\ TypeInvariant'
+      /\ LockWithinNodeViewInvariant
+      /\ ProgressFrontierAction
+      /\ asyncCausalQueues' =
+           [asyncCausalQueues EXCEPT ![target] = replacement]
+      => CausalProgressCommitHistoryInvariant'
+BY RigidQueuePreservesProgressCommitSourcesUnderFrontier, SMT
+   DEF AsyncCausalTypeInvariant,
+       CausalProgressCommitHistoryInvariant
+
+THEOREM AppendTypedCausalSequencePreservesProgressCommitHistory ==
+  \A target \in ValidatorIds:
+    \A successors:
+      /\ AsyncCausalTypeInvariant
+      /\ CausalProgressCommitHistoryInvariant
+      /\ AsyncQueueTyped(successors)
+      /\ ProgressCommitSourcesIn(successors)
+      /\ TypeInvariant
+      /\ TypeInvariant'
+      /\ LockWithinNodeViewInvariant
+      /\ ProgressFrontierAction
+      /\ asyncCausalQueues' =
+           [asyncCausalQueues EXCEPT
+              ![target] = asyncCausalQueues[target] \o successors]
+      => CausalProgressCommitHistoryInvariant'
+PROOF
+  <1>1. ASSUME NEW target \in ValidatorIds,
+                NEW successors,
+                AsyncCausalTypeInvariant,
+                CausalProgressCommitHistoryInvariant,
+                AsyncQueueTyped(successors),
+                ProgressCommitSourcesIn(successors),
+                TypeInvariant,
+                TypeInvariant',
+                LockWithinNodeViewInvariant,
+                ProgressFrontierAction,
+                asyncCausalQueues' =
+                  [asyncCausalQueues EXCEPT
+                     ![target] =
+                       asyncCausalQueues[target] \o successors]
+         PROVE CausalProgressCommitHistoryInvariant'
+    <2>1. /\ AsyncQueueTyped(asyncCausalQueues[target])
+           /\ ProgressCommitSourcesIn(asyncCausalQueues[target])
+      BY <1>1
+         DEF AsyncCausalTypeInvariant,
+             CausalProgressCommitHistoryInvariant
+    <2>2. /\ AsyncQueueTyped(
+                    asyncCausalQueues[target] \o successors)
+           /\ ProgressCommitSourcesIn(
+                asyncCausalQueues[target] \o successors)
+      BY <1>1, <2>1,
+         TypedQueueConcatPreservesProgressCommitSources
+    <2> QED BY <1>1, <2>2,
+         ReplaceCausalQueuePreservesProgressCommitHistory
+  <1> QED BY <1>1
+
+THEOREM AppendCausalSuccessorsPreservesProgressCommitHistory ==
+  \A command:
+    /\ StrongInductiveInvariant
+    /\ AsyncTypeInvariant
+    /\ CausalProgressCommitHistoryInvariant
+    /\ TypeInvariant'
+    /\ LockWithinNodeViewInvariant
+    /\ ProgressFrontierAction
+    /\ AsyncCandidateTyped(command)
+    /\ ExecuteCommand(command)
+    /\ AppendCausalSuccessors(command)
+    => CausalProgressCommitHistoryInvariant'
+PROOF
+  <1>1. ASSUME NEW command,
+                StrongInductiveInvariant,
+                AsyncTypeInvariant,
+                CausalProgressCommitHistoryInvariant,
+                TypeInvariant',
+                LockWithinNodeViewInvariant,
+                ProgressFrontierAction,
+                AsyncCandidateTyped(command),
+                ExecuteCommand(command),
+                AppendCausalSuccessors(command)
+         PROVE CausalProgressCommitHistoryInvariant'
+    <2>1. /\ TypeInvariant
+           /\ AsyncCausalTypeInvariant
+           /\ command.node \in ValidatorIds
+           /\ AsyncQueueTyped(asyncCausalQueues[command.node])
+           /\ ProgressCommitSourcesIn(asyncCausalQueues[command.node])
+      BY <1>1
+         DEF StrongInductiveInvariant, Safety, AsyncTypeInvariant,
+             AsyncRuntimeTypeInvariant, AsyncCausalTypeInvariant,
+             AsyncCandidateTyped, CausalProgressCommitHistoryInvariant
+    <2>2. /\ AsyncQueueTyped(CommandSuccessors(command))
+           /\ ProgressCommitSourcesIn(CommandSuccessors(command))
+      BY <1>1, ExecutedCommandSuccessorsTypedAndOwned,
+         CommandSuccessorsHaveProgressCommitSources
+    <2>3. /\ AsyncQueueTyped(
+                    asyncCausalQueues[command.node]
+                      \o CommandSuccessors(command))
+           /\ ProgressCommitSourcesIn(
+                asyncCausalQueues[command.node]
+                  \o CommandSuccessors(command))
+      BY <2>1, <2>2,
+         TypedQueueConcatPreservesProgressCommitSources
+    <2>4. asyncCausalQueues' =
+             [asyncCausalQueues EXCEPT
+                ![command.node] =
+                  asyncCausalQueues[command.node]
+                    \o CommandSuccessors(command)]
+      BY <1>1 DEF AppendCausalSuccessors
+    <2> QED BY <1>1, <2>1, <2>3, <2>4,
+         ReplaceCausalQueuePreservesProgressCommitHistory
+  <1> QED BY <1>1
+
+THEOREM AppendTimeoutCausalSuccessorsPreservesProgressCommitHistory ==
+  \A node \in ValidatorIds:
+    /\ AsyncTypeInvariant
+    /\ TypeInvariant'
+    /\ LockWithinNodeViewInvariant
+    /\ CausalProgressCommitHistoryInvariant
+    /\ ProgressFrontierAction
+    /\ AppendCausalSuccessors(TimeoutCausalCommand(node))
+    => CausalProgressCommitHistoryInvariant'
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds,
+                AsyncTypeInvariant,
+                TypeInvariant',
+                LockWithinNodeViewInvariant,
+                CausalProgressCommitHistoryInvariant,
+                ProgressFrontierAction,
+                AppendCausalSuccessors(TimeoutCausalCommand(node))
+         PROVE CausalProgressCommitHistoryInvariant'
+    <2>1. /\ TypeInvariant
+           /\ AsyncCausalTypeInvariant
+           /\ AsyncQueueTyped(
+                CommandSuccessors(TimeoutCausalCommand(node)))
+           /\ ProgressCommitSourcesIn(
+                CommandSuccessors(TimeoutCausalCommand(node)))
+      BY <1>1, TimeoutCausalSuccessorsTypedAndOwned,
+         CommandSuccessorsHaveProgressCommitSources
+         DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+             AsyncRuntimeTypeInvariant
+    <2>2. asyncCausalQueues' =
+             [asyncCausalQueues EXCEPT
+                ![node] = asyncCausalQueues[node]
+                  \o CommandSuccessors(TimeoutCausalCommand(node))]
+      BY <1>1 DEF AppendCausalSuccessors
+    <2> QED BY <1>1, <2>1, <2>2,
+         AppendTypedCausalSequencePreservesProgressCommitHistory
+  <1> QED BY <1>1
+
+THEOREM CausalHeadHasProgressCommitSource ==
+  \A node \in ValidatorIds:
+    /\ AsyncCausalTypeInvariant
+    /\ CausalProgressCommitHistoryInvariant
+    /\ CausalQueueNonempty(node)
+    => /\ AsyncCandidateTyped(HeadCausalCandidate(node))
+       /\ ProgressCommitSource(HeadCausalCandidate(node))
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds,
+                AsyncCausalTypeInvariant,
+                CausalProgressCommitHistoryInvariant,
+                CausalQueueNonempty(node)
+         PROVE /\ AsyncCandidateTyped(HeadCausalCandidate(node))
+               /\ ProgressCommitSource(HeadCausalCandidate(node))
+    <2>1. /\ AsyncQueueTyped(asyncCausalQueues[node])
+           /\ Len(asyncCausalQueues[node]) > 0
+           /\ Head(asyncCausalQueues[node]) =
+                asyncCausalQueues[node][1]
+           /\ 1 \in 1..Len(asyncCausalQueues[node])
+      BY <1>1, NonemptySequenceHeadIsFirst, SMT
+         DEF AsyncCausalTypeInvariant, CausalQueueNonempty,
+             AsyncQueueTyped
+    <2>2. HeadCausalCandidate(node) \in
+             SequenceSet(asyncCausalQueues[node])
+      BY <2>1 DEF HeadCausalCandidate, SequenceSet
+    <2> QED BY <1>1, <2>1, <2>2
+         DEF AsyncCausalTypeInvariant,
+             CausalProgressCommitHistoryInvariant,
+             ProgressCommitSourcesIn, AsyncQueueTyped
+  <1> QED BY <1>1
+
+THEOREM AdmitCausalHeadPreservesCausalProgressCommitHistory ==
+  \A node \in ValidatorIds:
+    /\ AsyncCausalTypeInvariant
+    /\ CausalProgressCommitHistoryInvariant
+    /\ TypeInvariant
+    /\ TypeInvariant'
+    /\ LockWithinNodeViewInvariant
+    /\ ProgressFrontierAction
+    /\ CausalHeadCanAdvance(node)
+    /\ AdmitCausalHead(node)
+    => CausalProgressCommitHistoryInvariant'
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds,
+                AsyncCausalTypeInvariant,
+                CausalProgressCommitHistoryInvariant,
+                TypeInvariant,
+                TypeInvariant',
+                LockWithinNodeViewInvariant,
+                ProgressFrontierAction,
+                CausalHeadCanAdvance(node),
+                AdmitCausalHead(node)
+         PROVE CausalProgressCommitHistoryInvariant'
+    <2>1. /\ AsyncQueueTyped(asyncCausalQueues[node])
+           /\ Len(asyncCausalQueues[node]) > 0
+           /\ ProgressCommitSourcesIn(asyncCausalQueues[node])
+      BY <1>1
+         DEF AsyncCausalTypeInvariant, CausalHeadCanAdvance,
+             CausalQueueNonempty,
+             CausalProgressCommitHistoryInvariant
+    <2>2. /\ AsyncQueueTyped(Tail(asyncCausalQueues[node]))
+           /\ ProgressCommitSourcesIn(Tail(asyncCausalQueues[node]))
+      BY <2>1, TypedQueueTailFacts,
+         TailProgressCommitSourcePreservesSources
+    <2>3. asyncCausalQueues' =
+             [asyncCausalQueues EXCEPT
+                ![node] = Tail(asyncCausalQueues[node])]
+      BY <1>1 DEF AdmitCausalHead
+    <2> QED BY <1>1, <2>2, <2>3,
+         ReplaceCausalQueuePreservesProgressCommitHistory
+  <1> QED BY <1>1
+
+THEOREM LocalAdmissionPreservesProgressCommitHistories ==
+  \A node \in ValidatorIds:
+    /\ AsyncTypeInvariant
+    /\ TypeInvariant'
+
+    /\ LockWithinNodeViewInvariant
+    /\ QueuedProgressCommitHistoryInvariant
+    /\ DeferredProgressCommitHistoryInvariant
+    /\ CausalProgressCommitHistoryInvariant
+    /\ ProgressFrontierAction
+    /\ LocalAdmissionStep(node)
+    => /\ QueuedProgressCommitHistoryInvariant'
+       /\ DeferredProgressCommitHistoryInvariant'
+       /\ CausalProgressCommitHistoryInvariant'
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds,
+                AsyncTypeInvariant,
+                TypeInvariant',
+                LockWithinNodeViewInvariant,
+                QueuedProgressCommitHistoryInvariant,
+                DeferredProgressCommitHistoryInvariant,
+                CausalProgressCommitHistoryInvariant,
+                ProgressFrontierAction,
+                LocalAdmissionStep(node)
+         PROVE /\ QueuedProgressCommitHistoryInvariant'
+               /\ DeferredProgressCommitHistoryInvariant'
+               /\ CausalProgressCommitHistoryInvariant'
+    <2>1. /\ TypeInvariant
+           /\ AsyncRuntimeScalarTypeInvariant
+           /\ AsyncCausalTypeInvariant
+           /\ AsyncDeferredContentTypeInvariant
+           /\ AsyncIoTopologyTypeInvariant
+           /\ AsyncIoWorkContentTypeInvariant
+      BY <1>1
+         DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+             AsyncRuntimeTypeInvariant, AsyncIoTypeInvariant,
+             AsyncIoContentTypeInvariant,
+             AsyncDeferredTypeInvariant
+    <2>2. DeferredProgressCommitHistoryInvariant'
+      BY <1>1, <2>1,
+         UnchangedDeferredProgressQueuesPreserveCommitHistory
+         DEF LocalAdmissionStep, AsyncDeferredVars
+    <2>3. CASE asyncRunnerBudget[node] > 0
+                 /\ ProducerCompletionCanAdmit(node)
+      <3> DEFINE Candidate == SelectedCompletionCandidate(node)
+      <3>1. /\ AdmitProducerCompletion(node)
+             /\ LeaveCausalQueues
+        BY <1>1, <2>3 DEF LocalAdmissionStep
+      <3>2. /\ AsyncCandidateTyped(Candidate)
+             /\ Candidate.class = "Completion"
+             /\ ProgressCommitSource(Candidate)
+        BY <2>1, <3>1, ProducerSelectedCompletionFacts,
+           CompletionCandidateHasProgressCommitSource
+           DEF Candidate
+      <3>3. EnqueueCandidate(Candidate)
+        BY <3>1 DEF AdmitProducerCompletion, Candidate
+      <3>4. QueuedProgressCommitHistoryInvariant'
+        BY <1>1, <2>1, <3>2, <3>3,
+           EnqueueCandidatePreservesQueuedProgressCommitHistory
+      <3>5. CausalProgressCommitHistoryInvariant'
+        BY <1>1, <2>1, <3>1,
+           UnchangedCausalQueuesPreserveProgressCommitHistory
+           DEF LeaveCausalQueues
+      <3> QED BY <2>2, <3>4, <3>5
+    <2>4. CASE /\ ~(asyncRunnerBudget[node] > 0
+                       /\ ProducerCompletionCanAdmit(node))
+                 /\ asyncRunnerBudget[node] > 0
+                 /\ CausalHeadCanAdvance(node)
+      <3> DEFINE Candidate == HeadCausalCandidate(node)
+      <3>1. AdmitCausalHead(node)
+        BY <1>1, <2>4 DEF LocalAdmissionStep
+      <3>2. /\ CausalQueueNonempty(node)
+             /\ AsyncCandidateTyped(Candidate)
+             /\ ProgressCommitSource(Candidate)
+        BY <1>1, <2>1, <2>4,
+           CausalHeadHasProgressCommitSource
+           DEF CausalHeadCanAdvance, Candidate
+      <3>3. CausalProgressCommitHistoryInvariant'
+        BY <1>1, <2>1, <2>4, <3>1,
+           AdmitCausalHeadPreservesCausalProgressCommitHistory
+      <3>4. CASE CandidateInFlight(Candidate)
+        <4>1. UNCHANGED asyncCommandQueues
+          BY <3>1, <3>4, Isa DEF AdmitCausalHead, Candidate
+        <4> QED BY <1>1, <2>1, <4>1,
+             UnchangedCommandQueuesPreserveProgressCommitHistory
+      <3>5. CASE /\ ~CandidateInFlight(Candidate)
+                   /\ Candidate.class = "Completion"
+        <4>1. UNCHANGED asyncCommandQueues
+          BY <3>1, <3>5, Isa DEF AdmitCausalHead, Candidate
+        <4> QED BY <1>1, <2>1, <4>1,
+             UnchangedCommandQueuesPreserveProgressCommitHistory
+      <3>6. CASE /\ ~CandidateInFlight(Candidate)
+                   /\ Candidate.class # "Completion"
+        <4>1. EnqueueCandidate(Candidate)
+          BY <3>1, <3>6 DEF AdmitCausalHead, Candidate
+        <4> QED BY <1>1, <2>1, <3>2, <4>1,
+             EnqueueCandidatePreservesQueuedProgressCommitHistory
+      <3>7. QueuedProgressCommitHistoryInvariant'
+        BY <3>4, <3>5, <3>6, SMT
+      <3> QED BY <2>2, <3>3, <3>7
+    <2>5. CASE /\ ~(asyncRunnerBudget[node] > 0
+                       /\ ProducerCompletionCanAdmit(node))
+                 /\ ~(asyncRunnerBudget[node] > 0
+                       /\ CausalHeadCanAdvance(node))
+      <3>1. /\ UNCHANGED asyncCommandQueues
+             /\ LeaveCausalQueues
+        BY <1>1, <2>5, Isa DEF LocalAdmissionStep
+      <3>2. QueuedProgressCommitHistoryInvariant'
+        BY <1>1, <2>1, <3>1,
+           UnchangedCommandQueuesPreserveProgressCommitHistory
+      <3>3. CausalProgressCommitHistoryInvariant'
+        BY <1>1, <2>1, <3>1,
+           UnchangedCausalQueuesPreserveProgressCommitHistory
+           DEF LeaveCausalQueues
+      <3> QED BY <2>2, <3>2, <3>3
+    <2>6. \/ /\ asyncRunnerBudget[node] > 0
+                 /\ ProducerCompletionCanAdmit(node)
+           \/ /\ ~(asyncRunnerBudget[node] > 0
+                     /\ ProducerCompletionCanAdmit(node))
+                 /\ asyncRunnerBudget[node] > 0
+                 /\ CausalHeadCanAdvance(node)
+           \/ /\ ~(asyncRunnerBudget[node] > 0
+                     /\ ProducerCompletionCanAdmit(node))
+                 /\ ~(asyncRunnerBudget[node] > 0
+                     /\ CausalHeadCanAdvance(node))
+      BY SMT
+    <2> QED BY <2>3, <2>4, <2>5, <2>6
+  <1> QED BY <1>1
+
+THEOREM IngressDrainPreservesProgressCommitHistories ==
+  \A node \in ValidatorIds:
+    /\ AsyncTypeInvariant
+    /\ TypeInvariant'
+    /\ LockWithinNodeViewInvariant
+    /\ QueuedProgressCommitHistoryInvariant
+    /\ DeferredProgressCommitHistoryInvariant
+    /\ CausalProgressCommitHistoryInvariant
+    /\ ProgressFrontierAction
+    /\ IngressDrainStep(node)
+    => /\ QueuedProgressCommitHistoryInvariant'
+       /\ DeferredProgressCommitHistoryInvariant'
+       /\ CausalProgressCommitHistoryInvariant'
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds,
+                AsyncTypeInvariant,
+                TypeInvariant',
+                LockWithinNodeViewInvariant,
+                QueuedProgressCommitHistoryInvariant,
+                DeferredProgressCommitHistoryInvariant,
+                CausalProgressCommitHistoryInvariant,
+                ProgressFrontierAction,
+                IngressDrainStep(node)
+         PROVE /\ QueuedProgressCommitHistoryInvariant'
+               /\ DeferredProgressCommitHistoryInvariant'
+               /\ CausalProgressCommitHistoryInvariant'
+    <2>1. /\ TypeInvariant
+           /\ AsyncRuntimeScalarTypeInvariant
+           /\ AsyncCausalTypeInvariant
+           /\ AsyncDeferredContentTypeInvariant
+           /\ AsyncIngressTypeInvariant
+      BY <1>1
+         DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+             AsyncRuntimeTypeInvariant, AsyncDeferredTypeInvariant
+    <2>2. /\ DeferredProgressCommitHistoryInvariant'
+           /\ CausalProgressCommitHistoryInvariant'
+      BY <1>1, <2>1,
+         UnchangedDeferredProgressQueuesPreserveCommitHistory,
+         UnchangedCausalQueuesPreserveProgressCommitHistory
+         DEF IngressDrainStep, AsyncDeferredVars, LeaveCausalQueues
+    <2>3. CASE ~(asyncRunnerBudget[node] > 0
+                    /\ asyncIngressReady[node] # <<>>
+                    /\ DrainableIngressIndices(node) # {})
+      <3>1. UNCHANGED asyncCommandQueues
+        BY <1>1, <2>3, Isa DEF IngressDrainStep, vars
+      <3>2. QueuedProgressCommitHistoryInvariant'
+        BY <1>1, <2>1, <3>1,
+           UnchangedCommandQueuesPreserveProgressCommitHistory
+      <3> QED BY <2>2, <3>2
+    <2>4. CASE /\ asyncRunnerBudget[node] > 0
+                 /\ asyncIngressReady[node] # <<>>
+                 /\ DrainableIngressIndices(node) # {}
+      <3> DEFINE Index == FirstDrainableIngressIndex(node)
+      <3> DEFINE Item == IngressItemAt(node, Index)
+      <3> DEFINE Candidate == DeliveryCandidate(Item)
+      <3> DEFINE CommitCandidate ==
+             CommitCertificateResponseCandidate(Item)
+      <3>1. /\ DrainFairIngressSelected(node)
+             /\ Index \in DrainableIngressIndices(node)
+             /\ Index \in 1..Len(asyncIngressReady[node])
+        BY <1>1, <2>4, FirstDrainableIngressIndexIsDrainable
+           DEF IngressDrainStep, Index, DrainableIngressIndices
+      <3>2. /\ AsyncItemTyped(Item)
+             /\ Item.envelope.recipient = node
+        BY <2>1, <3>1, SelectedIngressItemIsTyped,
+           SelectedIngressItemHasLaneOwnership DEF Item, Index
+      <3>3. /\ AsyncCandidateTyped(Candidate)
+             /\ ProgressCommitSource(Candidate)
+        BY <3>2, TypedIngressDeliveryCandidateFacts,
+           DeliveryCandidateHasProgressCommitSource DEF Candidate
+      <3>4. \/ UNCHANGED asyncCommandQueues
+             \/ EnqueueCandidate(Candidate)
+             \/ /\ Item.kind = "CommitCertificateResponse"
+                   /\ EnqueueCandidate(CommitCandidate)
+        BY <3>1, Isa
+           DEF DrainFairIngressSelected, EnqueueCandidate,
+               Candidate, CommitCandidate, Item, Index
+      <3>5. CASE UNCHANGED asyncCommandQueues
+        BY <1>1, <2>1, <3>5,
+           UnchangedCommandQueuesPreserveProgressCommitHistory
+      <3>6. CASE EnqueueCandidate(Candidate)
+        BY <1>1, <2>1, <3>3, <3>6,
+           EnqueueCandidatePreservesQueuedProgressCommitHistory
+      <3>7. CASE /\ Item.kind = "CommitCertificateResponse"
+                   /\ EnqueueCandidate(CommitCandidate)
+        <4>1. /\ AsyncCandidateTyped(CommitCandidate)
+               /\ ProgressCommitSource(CommitCandidate)
+          BY <3>2, <3>7,
+             TypedCommitCertificateResponseCandidateFacts,
+             CommitCertificateResponseCandidateHasProgressCommitSource
+             DEF CommitCandidate
+        <4> QED BY <1>1, <2>1, <3>7, <4>1,
+             EnqueueCandidatePreservesQueuedProgressCommitHistory
+      <3>8. QueuedProgressCommitHistoryInvariant'
+        BY <3>4, <3>5, <3>6, <3>7
+      <3> QED BY <2>2, <3>8
+    <2>5. \/ ~(asyncRunnerBudget[node] > 0
+                   /\ asyncIngressReady[node] # <<>>
+                   /\ DrainableIngressIndices(node) # {})
+           \/ /\ asyncRunnerBudget[node] > 0
+                 /\ asyncIngressReady[node] # <<>>
+                 /\ DrainableIngressIndices(node) # {}
+      BY SMT
+    <2> QED BY <2>3, <2>4, <2>5
+  <1> QED BY <1>1
+
+THEOREM DeferCommandPreservesDeferredProgressCommitHistory ==
+  \A command:
+    /\ AsyncConfiguration
+    /\ AsyncDeferredTypeInvariant
+    /\ DeferredProgressCommitHistoryInvariant
+    /\ AsyncCandidateTyped(command)
+    /\ ProgressCommitSource(command)
+    /\ DeferCommand(command)
+    => DeferredProgressCommitHistoryInvariant'
+PROOF
+  <1>1. ASSUME NEW command,
+                AsyncConfiguration,
+                AsyncDeferredTypeInvariant,
+                DeferredProgressCommitHistoryInvariant,
+                AsyncCandidateTyped(command),
+                ProgressCommitSource(command),
+                DeferCommand(command)
+         PROVE DeferredProgressCommitHistoryInvariant'
+    <2>1. UNCHANGED <<context, nodeView, lockRank, lockSubject,
+                      prepareQCs>>
+
+      BY <1>1, Isa DEF DeferCommand, vars
+    <2>2. ASSUME NEW node \in ValidatorIds
+           PROVE ProgressCommitSourcesIn(
+                   asyncDeferredProgressQueues[node])'
+      <3>1. ProgressCommitSourcesIn(
+               asyncDeferredProgressQueues[node])
+        BY <1>1, <2>2
+           DEF DeferredProgressCommitHistoryInvariant
+      <3>2. CASE command.class = "Progress" /\ node = command.node
+        <4>1. asyncDeferredProgressQueues'[node] =
+                 DeferredProgressAfter(node, command)
+          BY <1>1, <2>2, <3>2, Isa
+             DEF DeferCommand, AsyncDeferredTypeInvariant,
+                 AsyncDeferredTopologyTypeInvariant
+        <4>2. ProgressCommitSourcesIn(
+                 DeferredProgressAfter(node, command))
+          BY <1>1, <2>2, <3>1,
+             DeferredProgressAfterPreservesProgressCommitSources
+             DEF AsyncDeferredTypeInvariant
+        <4>3. ProgressCommitSourcesIn(
+                 asyncDeferredProgressQueues'[node])
+          BY <4>1, <4>2
+        <4> QED BY <2>1, <4>3, Isa
+             DEF ProgressCommitSourcesIn, ProgressCommitSource,
+                 ProgressCommitVoteHistory,
+                 HistoricalLockedCommitItem, LockedPrepareRound
+      <3>3. CASE ~(command.class = "Progress" /\ node = command.node)
+        <4>1. asyncDeferredProgressQueues'[node] =
+                 asyncDeferredProgressQueues[node]
+          BY <1>1, <2>2, <3>3, FunctionalUpdateAwayFromKey, Isa
+             DEF DeferCommand, AsyncDeferredTypeInvariant,
+                 AsyncDeferredTopologyTypeInvariant
+        <4>2. ProgressCommitSourcesIn(
+                 asyncDeferredProgressQueues'[node])
+          BY <3>1, <4>1
+        <4> QED BY <2>1, <4>2, Isa
+             DEF ProgressCommitSourcesIn, ProgressCommitSource,
+                 ProgressCommitVoteHistory,
+                 HistoricalLockedCommitItem, LockedPrepareRound
+      <3> QED BY <3>2, <3>3
+    <2> QED BY <2>2 DEF DeferredProgressCommitHistoryInvariant
+  <1> QED BY <1>1
+
+THEOREM RemoveNextDeferredCommandPreservesProgressCommitHistory ==
+  \A target \in ValidatorIds:
+    /\ AsyncDeferredTypeInvariant
+    /\ DeferredProgressCommitHistoryInvariant
+    /\ TypeInvariant
+    /\ TypeInvariant'
+    /\ LockWithinNodeViewInvariant
+    /\ ProgressFrontierAction
+    /\ DeferredQueueNonempty(target)
+    /\ RemoveNextDeferredCommand(target)
+    => DeferredProgressCommitHistoryInvariant'
+PROOF
+  <1>1. ASSUME NEW target \in ValidatorIds,
+                AsyncDeferredTypeInvariant,
+                DeferredProgressCommitHistoryInvariant,
+                TypeInvariant,
+                TypeInvariant',
+                LockWithinNodeViewInvariant,
+                ProgressFrontierAction,
+                DeferredQueueNonempty(target),
+                RemoveNextDeferredCommand(target)
+         PROVE DeferredProgressCommitHistoryInvariant'
+    <2>1. ASSUME NEW node \in ValidatorIds
+           PROVE ProgressCommitSourcesIn(
+                   asyncDeferredProgressQueues[node])'
+      <3>1. /\ AsyncQueueTyped(
+                     asyncDeferredProgressQueues[node])
+             /\ ProgressCommitSourcesIn(
+                  asyncDeferredProgressQueues[node])
+        BY <1>1, <2>1
+           DEF AsyncDeferredTypeInvariant,
+               AsyncDeferredContentTypeInvariant,
+               DeferredProgressCommitHistoryInvariant
+      <3>2. asyncDeferredProgressQueues'[node] =
+               IF node = target
+                    /\ Len(asyncDeferredCompletionQueues[target]) = 0
+                    /\ Len(asyncDeferredProgressQueues[target]) > 0
+               THEN Tail(asyncDeferredProgressQueues[target])
+               ELSE asyncDeferredProgressQueues[node]
+        BY <1>1, <2>1,
+           RemoveNextDeferredCommandProgressQueueEffect
+           DEF AsyncDeferredTypeInvariant
+      <3>3. SequenceSet(
+               asyncDeferredProgressQueues'[node])
+               \subseteq SequenceSet(
+                 asyncDeferredProgressQueues[node])
+        <4>1. CASE /\ node = target
+                     /\ Len(asyncDeferredCompletionQueues[target]) = 0
+                     /\ Len(asyncDeferredProgressQueues[target]) > 0
+          <5>1. /\ asyncDeferredProgressQueues'[node] =
+                          Tail(asyncDeferredProgressQueues[node])
+                 /\ Range(Tail(asyncDeferredProgressQueues[node]))
+                       \subseteq
+                         Range(asyncDeferredProgressQueues[node])
+            BY <3>1, <3>2, <4>1, HeadTailProperties
+               DEF AsyncQueueTyped
+          <5>2. /\ SequenceSet(
+                         asyncDeferredProgressQueues'[node]) =
+                          Range(asyncDeferredProgressQueues'[node])
+                 /\ SequenceSet(
+                      asyncDeferredProgressQueues[node]) =
+                          Range(asyncDeferredProgressQueues[node])
+            BY <3>1, <4>1, <5>1, RangeEquality
+               DEF AsyncQueueTyped, SequenceSet
+          <5> QED BY <5>1, <5>2
+        <4>2. CASE ~(node = target
+                       /\ Len(asyncDeferredCompletionQueues[target]) = 0
+                       /\ Len(asyncDeferredProgressQueues[target]) > 0)
+          BY <3>2, <4>2
+        <4> QED BY <4>1, <4>2
+      <3> QED BY <1>1, <3>1, <3>3,
+           RestrictedQueuePreservesProgressCommitSourcesUnderFrontier
+    <2> QED BY <2>1 DEF DeferredProgressCommitHistoryInvariant
+  <1> QED BY <1>1
+
+THEOREM LockStableNextLeavesNodeView ==
+  LockStableNext => UNCHANGED nodeView
+BY IsaM("blast")
+   DEF LockStableNext, SetGST, AssembleLocalBody, BeginLocalProposal,
+       PersistProposal, CompleteProposalSignature,
+       ByzantineBroadcastProposal, DeliverProposal, FetchBody, StoreBody,
+       ValidateBody, ValidateDecidedBody, RejectBody, BeginPrepare,
+       PersistPrepare, CompleteVoteSignature, ByzantineBroadcastVote,
+       DeliverVote, FormPrepareQC, DeliverQC, BeginObservePrepare,
+       PersistObservePrepare, BeginLockCommit, FormCommitQC, BeginDecision,
+       PersistDecision, BeginTimeout, PersistTimeout,
+       CompleteTimeoutSignature, ByzantineBroadcastTimeout,
+       DeliverTimeout, FormTC, DeliverTC, BeginInstallTC,
+       FetchCertifiedBody, ApplyDecision, Crash, Restart, ResumeProposal,
+       ResumeVote, ResumeTimeout, DropProposal
+
+THEOREM PersistLockCommitLeavesNodeView ==
+  \A request: PersistLockCommit(request) => UNCHANGED nodeView
+BY DEF PersistLockCommit
+
+THEOREM ModelViewsAreNaturals ==
+  ModelConfiguration => Views \subseteq Nat
+BY DEF ModelConfiguration, Views
+
+THEOREM UnchangedNodeViewAdvances ==
+  /\ TypeInvariant
+  /\ UNCHANGED nodeView
+  => \A node \in ValidatorIds:
+       nodeView'[node] >= nodeView[node]
+PROOF
+  <1>1. ASSUME TypeInvariant,
+                UNCHANGED nodeView
+         PROVE \A node \in ValidatorIds:
+                 nodeView'[node] >= nodeView[node]
+    <2>1. /\ ModelConfiguration
+           /\ nodeView \in [ValidatorIds -> Views]
+      BY <1>1 DEF TypeInvariant
+    <2>2. Views \subseteq Nat
+      BY <2>1, ModelViewsAreNaturals
+    <2>3. ASSUME NEW node \in ValidatorIds
+           PROVE nodeView'[node] >= nodeView[node]
+      <3>1. nodeView[node] \in Views
+        BY <2>1, <2>3, FunctionValueHasCodomain
+      <3>2. nodeView[node] \in Nat
+        BY <2>2, <3>1
+      <3>3. nodeView'[node] = nodeView[node]
+        BY <1>1
+      <3> QED BY <3>2, <3>3, NaturalOrderReflexive
+    <2> QED BY <2>3
+  <1> QED BY <1>1
+
+THEOREM PersistInstallTCAdvancesNodeView ==
+  \A request:
+    TypeInvariant /\ PersistInstallTC(request)
+      => \A node \in ValidatorIds:
+           nodeView'[node] >= nodeView[node]
+PROOF
+  <1>1. ASSUME NEW request,
+                TypeInvariant,
+                PersistInstallTC(request)
+         PROVE \A node \in ValidatorIds:
+                 nodeView'[node] >= nodeView[node]
+    <2>1a. /\ request \in pendingInstallTC
+            /\ pendingInstallTC \subseteq InstallTcWalSet
+            /\ nodeView \in [ValidatorIds -> Views]
+      BY <1>1 DEF PersistInstallTC, TypeInvariant
+    <2>1b. request \in InstallTcWalSet
+      BY <2>1a
+    <2>1c. /\ request.node \in ValidatorIds
+            /\ request.tc.view \in Views
+      BY <2>1b DEF InstallTcWalSet, TcRecordSet
+    <2>1d. /\ request.tc.view >= nodeView[request.node]
+            /\ nodeView' =
+                 [nodeView EXCEPT
+                    ![request.node] = request.tc.view + 1]
+      BY <1>1 DEF PersistInstallTC
+    <2>1e. Views \subseteq Nat
+      BY <1>1, ModelViewsAreNaturals DEF TypeInvariant
+    <2>2. /\ request.node \in ValidatorIds
+           /\ request.tc.view \in Views
+           /\ request.tc.view >= nodeView[request.node]
+           /\ nodeView' =
+                [nodeView EXCEPT
+                   ![request.node] = request.tc.view + 1]
+      BY <2>1c, <2>1d
+    <2>3. ASSUME NEW node \in ValidatorIds
+           PROVE nodeView'[node] >= nodeView[node]
+      <3>1. CASE node = request.node
+        <4>1. nodeView'[node] = request.tc.view + 1
+          BY <2>1a, <2>2, <3>1, Isa
+        <4>2a. nodeView[node] \in Views
+          BY <2>1a, <2>3, FunctionValueHasCodomain
+        <4>2. /\ request.tc.view \in Nat
+               /\ nodeView[node] \in Nat
+          BY <2>2, <2>1e, <4>2a
+        <4>3a. nodeView[node] <= request.tc.view
+          BY <2>2, <3>1
+        <4>3. nodeView[node] <= request.tc.view + 1
+          BY <4>2, <4>3a, NaturalBoundBelowSuccessor
+        <4> QED BY <4>1, <4>3
+      <3>2. CASE node # request.node
+        <4>1. nodeView'[node] = nodeView[node]
+          BY <2>1a, <2>2, <2>3, <3>2, Isa
+        <4>2. nodeView[node] \in Nat
+          BY <2>1a, <2>1e, <2>3, FunctionValueHasCodomain
+        <4> QED BY <4>1, <4>2, NaturalOrderReflexive
+      <3> QED BY <3>1, <3>2
+    <2> QED BY <2>3
+  <1> QED BY <1>1
+
+THEOREM AsyncNextAdvancesNodeViews ==
+  StrongInductiveInvariant /\ AsyncNext
+    => \A node \in ValidatorIds:
+         nodeView'[node] >= nodeView[node]
+PROOF
+  <1>1. ASSUME StrongInductiveInvariant, AsyncNext
+         PROVE \A node \in ValidatorIds:
+                 nodeView'[node] >= nodeView[node]
+    <2>1. TypeInvariant
+      BY <1>1 DEF StrongInductiveInvariant, Safety
+    <2>2. [Next]_vars
+      BY <1>1 DEF AsyncNext
+    <2>3. CASE UNCHANGED vars
+      <3>1. UNCHANGED nodeView
+        BY <2>3, Isa DEF vars
+      <3> QED BY <2>1, <3>1, UnchangedNodeViewAdvances
+    <2>4. CASE Next
+      <3>1. \/ LockStableNext
+             \/ (\E request \in pendingLockCommit:
+                   PersistLockCommit(request))
+             \/ (\E request \in pendingInstallTC:
+                   PersistInstallTC(request))
+
+        BY <2>4, NextLockFootprintClassification
+      <3>2. CASE LockStableNext
+        <4>1. UNCHANGED nodeView
+          BY <3>2, LockStableNextLeavesNodeView
+        <4> QED BY <2>1, <4>1, UnchangedNodeViewAdvances
+      <3>3. CASE \E request \in pendingLockCommit:
+                     PersistLockCommit(request)
+        <4>1. UNCHANGED nodeView
+          BY <3>3, PersistLockCommitLeavesNodeView
+        <4> QED BY <2>1, <4>1, UnchangedNodeViewAdvances
+      <3>4. CASE \E request \in pendingInstallTC:
+                     PersistInstallTC(request)
+        <4>1. ASSUME NEW request \in pendingInstallTC,
+                      PersistInstallTC(request)
+               PROVE \A node \in ValidatorIds:
+                       nodeView'[node] >= nodeView[node]
+          BY <2>1, <4>1, PersistInstallTCAdvancesNodeView
+        <4> QED BY <3>4, <4>1
+      <3> QED BY <3>1, <3>2, <3>3, <3>4
+    <2> QED BY <2>2, <2>3, <2>4
+  <1> QED BY <1>1
+
+THEOREM AsyncNextEstablishesProgressFrontierAction ==
+  StrongInductiveInvariant /\ AsyncNext => ProgressFrontierAction
+PROOF
+  <1>1. ASSUME StrongInductiveInvariant, AsyncNext
+         PROVE ProgressFrontierAction
+    <2>1. /\ context' = context
+           /\ [Next]_vars
+      BY <1>1 DEF AsyncNext
+    <2>2. prepareQCs \subseteq prepareQCs'
+      <3>1. CASE Next
+        BY <2>1, <3>1, CoreNextKeepsPrepareQcsMonotone
+      <3>2. CASE UNCHANGED vars
+        BY <3>2, Isa DEF vars
+      <3> QED BY <2>1, <3>1, <3>2
+    <2>3. LockMonotonicityAction
+      BY <1>1, <2>1, StrongInvariantImpliesLockMonotonicityAction
+    <2>4. \A node \in ValidatorIds:
+             nodeView'[node] >= nodeView[node]
+      BY <1>1, AsyncNextAdvancesNodeViews
+    <2> QED BY <2>1, <2>2, <2>3, <2>4
+         DEF ProgressFrontierAction
+  <1> QED BY <1>1
+
+THEOREM AsyncInitEstablishesLockWithinNodeView ==
+  \A initialContext:
+    AsyncInitAt(initialContext) => LockWithinNodeViewInvariant
+BY SMT DEF AsyncInitAt, AsyncBaseInitAt, InitAt,
+           LockWithinNodeViewInvariant, NoRank, ValidatorIds
+
+THEOREM LockStableNextPreservesLockWithinNodeView ==
+  LockWithinNodeViewInvariant /\ LockStableNext
+    => LockWithinNodeViewInvariant'
+BY LockStableNextLeavesContextAndLocks, LockStableNextLeavesNodeView, Isa
+   DEF LockWithinNodeViewInvariant, UnchangedContextAndLocks
+
+THEOREM PersistLockCommitPreservesLockWithinNodeView ==
+  \A request:
+    /\ TypeInvariant
+    /\ PendingVoteWritesAuthorized
+    /\ LockWithinNodeViewInvariant
+    /\ PersistLockCommit(request)
+    => LockWithinNodeViewInvariant'
+PROOF
+  <1>1. ASSUME NEW request,
+                TypeInvariant,
+                PendingVoteWritesAuthorized,
+                LockWithinNodeViewInvariant,
+                PersistLockCommit(request)
+         PROVE LockWithinNodeViewInvariant'
+    <2>1a. /\ request \in pendingLockCommit
+            /\ pendingLockCommit \subseteq LockCommitWalSet
+            /\ lockRank \in [ValidatorIds -> Ranks]
+            /\ nodeView \in [ValidatorIds -> Views]
+      BY <1>1 DEF PersistLockCommit, TypeInvariant
+    <2>1b. request \in LockCommitWalSet
+      BY <2>1a
+    <2>1c. request.node \in ValidatorIds
+      BY <2>1b DEF LockCommitWalSet
+    <2>1d. request.qc.view = nodeView[request.node]
+      BY <1>1, <2>1a
+         DEF PendingVoteWritesAuthorized
+    <2>1e. /\ lockRank' =
+                 [lockRank EXCEPT
+                    ![request.node] = request.qc.view]
+            /\ nodeView' = nodeView
+      BY <1>1 DEF PersistLockCommit
+    <2>1f. Views \subseteq Nat
+      BY <1>1, ModelViewsAreNaturals DEF TypeInvariant
+    <2>2. /\ request.node \in ValidatorIds
+           /\ request.qc.view = nodeView[request.node]
+           /\ lockRank' =
+                [lockRank EXCEPT
+                   ![request.node] = request.qc.view]
+           /\ nodeView' = nodeView
+      BY <2>1c, <2>1d, <2>1e
+    <2>3. ASSUME NEW node \in ValidatorIds
+           PROVE lockRank'[node] <= nodeView'[node]
+      <3>1. CASE node = request.node
+        <4>1. /\ lockRank'[node] = request.qc.view
+               /\ nodeView'[node] = nodeView[node]
+          BY <2>1a, <2>2, <2>3, <3>1, Isa
+        <4>2. nodeView[node] \in Nat
+          BY <2>1a, <2>1f, <2>3, FunctionValueHasCodomain
+        <4>3. lockRank'[node] = nodeView'[node]
+          BY <2>2, <3>1, <4>1
+        <4>4. nodeView'[node] \in Nat
+          BY <4>1, <4>2
+        <4> QED BY <4>3, <4>4, NaturalOrderReflexive
+      <3>2. CASE node # request.node
+        <4>1. /\ lockRank'[node] = lockRank[node]
+               /\ nodeView'[node] = nodeView[node]
+          BY <2>1a, <2>2, <2>3, <3>2, Isa
+        <4> QED BY <1>1, <2>3, <4>1
+             DEF LockWithinNodeViewInvariant
+      <3> QED BY <3>1, <3>2
+    <2> QED BY <2>3 DEF LockWithinNodeViewInvariant
+  <1> QED BY <1>1
+
+THEOREM PersistInstallTCPreservesLockWithinNodeView ==
+  \A request:
+    /\ ModelConfiguration
+    /\ TypeInvariant
+    /\ PendingCertificateWritesAuthorized
+    /\ LockWithinNodeViewInvariant
+    /\ PersistInstallTC(request)
+    => LockWithinNodeViewInvariant'
+PROOF
+  <1>1. ASSUME NEW request,
+                ModelConfiguration,
+                TypeInvariant,
+                PendingCertificateWritesAuthorized,
+                LockWithinNodeViewInvariant,
+                PersistInstallTC(request)
+         PROVE LockWithinNodeViewInvariant'
+    <2> DEFINE Node == request.node
+    <2> DEFINE Certificate == request.tc
+    <2> DEFINE SelectedRank == TcHighRank(Certificate)
+    <2>1a. /\ request \in pendingInstallTC
+            /\ pendingInstallTC \subseteq InstallTcWalSet
+            /\ lockRank \in [ValidatorIds -> Ranks]
+            /\ nodeView \in [ValidatorIds -> Views]
+      BY <1>1 DEF PersistInstallTC, TypeInvariant
+    <2>1b. request \in InstallTcWalSet
+      BY <2>1a
+    <2>1c. Node \in ValidatorIds
+      BY <2>1b DEF InstallTcWalSet, Node
+    <2>2a. /\ TCValid(Certificate)
+            /\ Certificate.view >= nodeView[Node]
+      BY <1>1, <2>1a
+         DEF PendingCertificateWritesAuthorized, Node, Certificate
+    <2>2. /\ Node \in ValidatorIds
+           /\ TCValid(Certificate)
+           /\ Certificate.view >= nodeView[Node]
+      BY <2>1c, <2>2a
+    <2>3. HighestTimeoutVote(Certificate.votes) \in Certificate.votes
+      BY <1>1, <2>2, ValidTimeoutCertificateSelectsMember
+    <2>4a. /\ HighestTimeoutVote(Certificate.votes)
+                       \in TimeoutVoteRecordSet
+            /\ HighestTimeoutVote(Certificate.votes).highRank
+                       <= Certificate.view
+      BY <2>2, <2>3 DEF TCValid
+    <2>4b. SelectedRank =
+              HighestTimeoutVote(Certificate.votes).highRank
+      BY DEF SelectedRank, TcHighRank
+    <2>4c. /\ Views \subseteq Ranks
+            /\ Ranks \subseteq Int
+      BY <1>1, ViewsAreRanks, ModelRanksAreIntegers
+    <2>4d. /\ SelectedRank \in Ranks
+            /\ Certificate.view \in Views
+      BY <2>2, <2>4a, <2>4b
+         DEF TCValid, TimeoutVoteRecordSet
+    <2>4e. /\ nodeView[Node] \in Views
+            /\ lockRank[Node] \in Ranks
+      BY <2>1a, <2>2, FunctionValueHasCodomain
+    <2>4. /\ SelectedRank <= Certificate.view
+           /\ SelectedRank \in Int
+           /\ Certificate.view \in Int
+           /\ nodeView[Node] \in Int
+           /\ lockRank[Node] \in Int
+      BY <2>4a, <2>4b, <2>4c, <2>4d, <2>4e
+    <2>5. /\ nodeView' =
+                [nodeView EXCEPT
+                   ![Node] = Certificate.view + 1]
+           /\ lockRank' =
+                [lockRank EXCEPT
+                   ![Node] =
+                     IF SelectedRank > lockRank[Node]
+                     THEN SelectedRank ELSE @]
+      BY <1>1 DEF PersistInstallTC, Node, Certificate, SelectedRank
+    <2>6. ASSUME NEW node \in ValidatorIds
+           PROVE lockRank'[node] <= nodeView'[node]
+      <3>1. CASE node = Node
+        <4>1. /\ nodeView'[node] = Certificate.view + 1
+               /\ lockRank'[node] =
+                    IF SelectedRank > lockRank[node]
+                    THEN SelectedRank ELSE lockRank[node]
+          BY <2>1a, <2>2, <2>5, <3>1, Isa
+        <4>2. lockRank[node] <= nodeView[node]
+          BY <1>1, <2>2, <3>1 DEF LockWithinNodeViewInvariant
+        <4>3. /\ Certificate.view + 1 \in Int
+               /\ Certificate.view < Certificate.view + 1
+          BY <2>4, SMT
+        <4>4. CASE SelectedRank > lockRank[node]
+          <5>1. lockRank'[node] = SelectedRank
+            BY <4>1, <4>4
+          <5>2. SelectedRank < Certificate.view + 1
+            BY <2>4, <4>3, IntegerWeakStrongOrderChain
+          <5>3. SelectedRank <= Certificate.view + 1
+            BY <2>4, <4>3, <5>2, IntegerStrictImpliesWeak
+          <5> QED BY <4>1, <5>1, <5>3
+        <4>5. CASE ~(SelectedRank > lockRank[node])
+          <5>1. lockRank'[node] = lockRank[node]
+            BY <4>1, <4>5
+          <5>2. lockRank[node] <= Certificate.view
+            BY <2>2, <2>4, <3>1, <4>2,
+               IntegerWeakOrderTransitive
+          <5>3. lockRank[node] < Certificate.view + 1
+            BY <2>4, <3>1, <4>3, <5>2,
+               IntegerWeakStrongOrderChain
+          <5>4. lockRank[node] <= Certificate.view + 1
+            BY <2>4, <3>1, <4>3, <5>3,
+               IntegerStrictImpliesWeak
+          <5> QED BY <4>1, <5>1, <5>4
+        <4> QED BY <4>4, <4>5
+      <3>2. CASE node # Node
+        <4>1. /\ lockRank'[node] = lockRank[node]
+               /\ nodeView'[node] = nodeView[node]
+          BY <2>1a, <2>2, <2>5, <2>6, <3>2, Isa
+        <4> QED BY <1>1, <2>6, <4>1
+             DEF LockWithinNodeViewInvariant
+      <3> QED BY <3>1, <3>2
+    <2> QED BY <2>6 DEF LockWithinNodeViewInvariant
+  <1> QED BY <1>1
+
+THEOREM AsyncNextPreservesLockWithinNodeView ==
+  /\ StrongInductiveInvariant
+  /\ LockWithinNodeViewInvariant
+  /\ AsyncNext
+  => LockWithinNodeViewInvariant'
+PROOF
+  <1>1. ASSUME /\ StrongInductiveInvariant
+                /\ LockWithinNodeViewInvariant
+                /\ AsyncNext
+         PROVE LockWithinNodeViewInvariant'
+    <2>1a. Safety
+      BY <1>1 DEF StrongInductiveInvariant
+    <2>1b. ReducerProvenanceInvariant
+      BY <1>1 DEF StrongInductiveInvariant
+
+    <2>1c. TypeInvariant
+      BY <2>1a DEF Safety
+    <2>1d. /\ PendingVoteWritesAuthorized
+            /\ PendingCertificateWritesAuthorized
+      BY <2>1b DEF ReducerProvenanceInvariant
+    <2>1e. ModelConfiguration
+      BY <2>1c DEF TypeInvariant
+    <2>1. /\ TypeInvariant
+           /\ PendingVoteWritesAuthorized
+           /\ PendingCertificateWritesAuthorized
+           /\ ModelConfiguration
+      BY <2>1c, <2>1d, <2>1e
+    <2>2. [Next]_vars
+      BY <1>1 DEF AsyncNext
+    <2>3. CASE UNCHANGED vars
+      BY <1>1, <2>3, Isa
+         DEF LockWithinNodeViewInvariant, vars
+    <2>4. CASE Next
+      <3>1. \/ LockStableNext
+             \/ (\E request \in pendingLockCommit:
+                   PersistLockCommit(request))
+             \/ (\E request \in pendingInstallTC:
+                   PersistInstallTC(request))
+        BY <2>4, NextLockFootprintClassification
+      <3>2. CASE LockStableNext
+        BY <1>1, <3>2, LockStableNextPreservesLockWithinNodeView
+      <3>3. CASE \E request \in pendingLockCommit:
+                     PersistLockCommit(request)
+        <4>1. ASSUME NEW request \in pendingLockCommit,
+                      PersistLockCommit(request)
+               PROVE LockWithinNodeViewInvariant'
+          BY <1>1, <2>1, <4>1,
+             PersistLockCommitPreservesLockWithinNodeView
+        <4> QED BY <3>3, <4>1
+      <3>4. CASE \E request \in pendingInstallTC:
+                     PersistInstallTC(request)
+        <4>1. ASSUME NEW request \in pendingInstallTC,
+                      PersistInstallTC(request)
+               PROVE LockWithinNodeViewInvariant'
+          BY <1>1, <2>1, <4>1,
+             PersistInstallTCPreservesLockWithinNodeView
+        <4> QED BY <3>4, <4>1
+      <3> QED BY <3>1, <3>2, <3>3, <3>4
+    <2> QED BY <2>2, <2>3, <2>4
+  <1> QED BY <1>1
+
+ProtectedProgressQueueBoundedUnique(queue) ==
+  /\ Cardinality(ProtectedProgressIndicesIn(queue)) <= N + 3
+  /\ ProtectedProgressSlotsUniqueIn(queue)
+
+THEOREM LockAdvancePreservesProtectedProgressQueue ==
+  \A node \in ValidatorIds:
+    \A queue:
+      /\ N \in Nat \ {0}
+      /\ TypeInvariant
+      /\ AsyncQueueTyped(queue)
+      /\ AsyncCommandQueueOwnership(node, queue)
+      /\ \A command \in SequenceSet(queue):
+           command.class = "Progress"
+      /\ ProgressCommitSourcesIn(queue)
+      /\ ProtectedProgressSlotsUniqueIn(queue)
+      /\ LockMonotonicityAction
+      /\ UNCHANGED <<context, prepareQCs>>
+      => ProtectedProgressQueueBoundedUnique(queue)'
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds,
+                NEW queue,
+                N \in Nat \ {0},
+                TypeInvariant,
+                AsyncQueueTyped(queue),
+                AsyncCommandQueueOwnership(node, queue),
+                \A command \in SequenceSet(queue):
+                  command.class = "Progress",
+                ProgressCommitSourcesIn(queue),
+                ProtectedProgressSlotsUniqueIn(queue),
+                LockMonotonicityAction,
+                UNCHANGED <<context, prepareQCs>>
+         PROVE ProtectedProgressQueueBoundedUnique(queue)'
+    <2>1. ProtectedProgressIndicesIn(queue)'
+             \subseteq ProtectedProgressIndicesIn(queue)
+      <3>1. ASSUME NEW index \in ProtectedProgressIndicesIn(queue)'
+             PROVE index \in ProtectedProgressIndicesIn(queue)
+        <4>1. /\ index \in 1..Len(queue)
+               /\ ProtectedProgressCommand(queue[index])'
+               /\ queue[index] \in SequenceSet(queue)
+          BY <3>1 DEF ProtectedProgressIndicesIn, SequenceSet
+        <4>2. /\ AsyncCandidateTyped(queue[index])
+               /\ queue[index].class = "Progress"
+               /\ ProgressCommitSource(queue[index])
+          BY <1>1, <4>1
+             DEF AsyncQueueTyped, ProgressCommitSourcesIn
+        <4>3. ProgressCommitVoteHistory(queue[index])
+          BY <4>2 DEF ProgressCommitSource
+        <4>4. ProtectedProgressCommand(queue[index])
+          BY <1>1, <4>1, <4>2, <4>3,
+             ProtectedProgressCommandBackwardStableUnderLockAdvance
+        <4> QED BY <4>1, <4>4 DEF ProtectedProgressIndicesIn
+      <3> QED BY <3>1
+    <2>2. /\ IsFiniteSet(ProtectedProgressIndicesIn(queue))
+           /\ IsFiniteSet(ProtectedProgressIndicesIn(queue)')
+           /\ Cardinality(ProtectedProgressIndicesIn(queue)') <=
+                Cardinality(ProtectedProgressIndicesIn(queue))
+      <3>1. /\ Len(queue) \in Nat
+             /\ IsFiniteSet(1..Len(queue))
+        BY <1>1, LenProperties, FS_Interval DEF AsyncQueueTyped
+      <3>2. ProtectedProgressIndicesIn(queue) \subseteq
+               1..Len(queue)
+        BY DEF ProtectedProgressIndicesIn
+      <3>3. IsFiniteSet(ProtectedProgressIndicesIn(queue))
+        BY <3>1, <3>2, FS_Subset
+      <3> QED BY <2>1, <3>3, FS_Subset, FS_CardinalityType
+    <2>3. Cardinality(ProtectedProgressIndicesIn(queue)) <= N + 3
+      BY <1>1, UniqueTypedOwnedProtectedSlotsAreBounded
+    <2>4. Cardinality(ProtectedProgressIndicesIn(queue)') <= N + 3
+      <3>1. /\ Cardinality(ProtectedProgressIndicesIn(queue)') \in Nat
+             /\ Cardinality(ProtectedProgressIndicesIn(queue)) \in Nat
+             /\ N + 3 \in Nat
+        BY <1>1, <2>2, FS_CardinalityType, SMT
+      <3> QED BY <2>2, <2>3, <3>1, NaturalWeakOrderTrans
+    <2>5. ProtectedProgressSlotsUniqueIn(queue)'
+      <3>1. ASSUME NEW left,
+                    NEW right,
+                    left \in ProtectedProgressIndicesIn(queue)',
+                    right \in ProtectedProgressIndicesIn(queue)',
+                    SameProtectedProgressSlot(
+                      queue[left], queue[right])'
+             PROVE left = right
+        <4>1. /\ left \in ProtectedProgressIndicesIn(queue)
+               /\ right \in ProtectedProgressIndicesIn(queue)
+          BY <2>1, <3>1
+        <4>2. /\ ProtectedProgressCommand(queue[left])
+               /\ ProtectedProgressCommand(queue[right])
+          BY <4>1 DEF ProtectedProgressIndicesIn
+        <4>3. ProgressSlotShape(queue[left], queue[right])'
+          BY <3>1 DEF SameProtectedProgressSlot, ProgressSlotShape
+        <4>4. ProgressSlotShape(queue[left], queue[right])
+          BY <4>3, Isa DEF ProgressSlotShape
+        <4>5. SameProtectedProgressSlot(queue[left], queue[right])
+          BY <4>2, <4>4 DEF SameProtectedProgressSlot,
+                              ProgressSlotShape
+        <4> QED BY <1>1, <4>1, <4>5
+             DEF ProtectedProgressSlotsUniqueIn
+      <3> QED BY <3>1 DEF ProtectedProgressSlotsUniqueIn
+    <2> QED BY <2>4, <2>5 DEF ProtectedProgressQueueBoundedUnique
+  <1> QED BY <1>1
+
+THEOREM RemoveDeferredAndAdvanceLockPreservesProtectedInvariant ==
+  \A target \in ValidatorIds:
+    /\ N \in Nat \ {0}
+    /\ TypeInvariant
+    /\ AsyncDeferredTypeInvariant
+    /\ ProtectedDeferredProgressInvariant
+    /\ DeferredProgressCommitHistoryInvariant
+    /\ LockMonotonicityAction
+    /\ UNCHANGED <<context, prepareQCs>>
+    /\ DeferredQueueNonempty(target)
+    /\ RemoveNextDeferredCommand(target)
+    => ProtectedDeferredProgressInvariant'
+PROOF
+  <1>1. ASSUME NEW target \in ValidatorIds,
+                N \in Nat \ {0},
+                TypeInvariant,
+                AsyncDeferredTypeInvariant,
+                ProtectedDeferredProgressInvariant,
+                DeferredProgressCommitHistoryInvariant,
+                LockMonotonicityAction,
+                UNCHANGED <<context, prepareQCs>>,
+                DeferredQueueNonempty(target),
+                RemoveNextDeferredCommand(target)
+         PROVE ProtectedDeferredProgressInvariant'
+    <2>1. AsyncDeferredContentTypeInvariant'
+      BY <1>1, RemoveNextDeferredCommandPreservesDeferredContentType
+         DEF AsyncDeferredTypeInvariant
+    <2>2. ASSUME NEW node \in ValidatorIds
+           PROVE /\ Cardinality(
+                         ProtectedDeferredProgressIndices(node)') <= N + 3
+                 /\ \A left, right \in
+                        ProtectedDeferredProgressIndices(node)':
+                      SameProtectedProgressSlot(
+                        asyncDeferredProgressQueues[node][left],
+                        asyncDeferredProgressQueues[node][right])'
+                        => left = right
+      <3> DEFINE Old == asyncDeferredProgressQueues[node]
+      <3> DEFINE New == asyncDeferredProgressQueues'[node]
+      <3>1. /\ AsyncQueueTyped(Old)
+             /\ AsyncCommandQueueOwnership(node, Old)
+             /\ \A command \in SequenceSet(Old):
+                  command.class = "Progress"
+             /\ ProgressCommitSourcesIn(Old)
+        BY <1>1, <2>2
+           DEF AsyncDeferredTypeInvariant,
+               AsyncDeferredContentTypeInvariant,
+               DeferredProgressCommitHistoryInvariant, Old
+      <3>2. /\ AsyncQueueTyped(New)
+             /\ AsyncCommandQueueOwnership(node, New)
+             /\ \A command \in SequenceSet(New):
+                  command.class = "Progress"
+        BY <2>1, <2>2, Isa
+           DEF AsyncDeferredContentTypeInvariant, New
+      <3>3. New =
+               IF node = target
+                    /\ Len(asyncDeferredCompletionQueues[target]) = 0
+                    /\ Len(asyncDeferredProgressQueues[target]) > 0
+               THEN Tail(Old)
+               ELSE Old
+        BY <1>1, <2>2,
+           RemoveNextDeferredCommandProgressQueueEffect
+           DEF AsyncDeferredTypeInvariant, Old, New
+      <3>4. ProgressCommitSourcesIn(New)
+        <4>1. CASE /\ node = target
+                     /\ Len(asyncDeferredCompletionQueues[target]) = 0
+                     /\ Len(asyncDeferredProgressQueues[target]) > 0
+          <5>1. New = Tail(Old)
+            BY <3>3, <4>1
+          <5>2. ProgressCommitSourcesIn(Tail(Old))
+            BY <3>1, <4>1,
+               TailProgressCommitSourcePreservesSources
+          <5> QED BY <5>1, <5>2
+        <4>2. CASE ~(node = target
+                       /\ Len(asyncDeferredCompletionQueues[target]) = 0
+                       /\ Len(asyncDeferredProgressQueues[target]) > 0)
+          BY <3>1, <3>3, <4>2
+        <4> QED BY <4>1, <4>2
+      <3>5. ProtectedProgressSlotsUniqueIn(Old)
+        BY <1>1, <2>2,
+           ProtectedDeferredProgressIndicesAreQueueIndices
+           DEF ProtectedDeferredProgressInvariant,
+               ProtectedProgressSlotsUniqueIn, Old
+      <3>6. ProtectedProgressSlotsUniqueIn(New)
+        <4>1. CASE /\ node = target
+                     /\ Len(asyncDeferredCompletionQueues[target]) = 0
+                     /\ Len(asyncDeferredProgressQueues[target]) > 0
+          <5>1. New = Tail(Old)
+            BY <3>3, <4>1
+          <5>2. ProtectedProgressSlotsUniqueIn(Tail(Old))
+            BY <3>1, <3>5, <4>1,
+               TailPreservesProtectedSlotUniqueness
+          <5> QED BY <5>1, <5>2
+        <4>2. CASE ~(node = target
+                       /\ Len(asyncDeferredCompletionQueues[target]) = 0
+                       /\ Len(asyncDeferredProgressQueues[target]) > 0)
+          BY <3>3, <3>5, <4>2
+        <4> QED BY <4>1, <4>2
+      <3>7. ProtectedProgressQueueBoundedUnique(Old)'
+        BY <1>1, <2>2, <3>2, <3>4, <3>6,
+           LockAdvancePreservesProtectedProgressQueue
+      <3>8. ProtectedDeferredProgressIndices(node)' =
+               ProtectedProgressIndicesIn(Old)'
+        BY DEF ProtectedDeferredProgressIndices,
+               ProtectedProgressIndicesIn, New
+
+      <3> QED BY <3>7, <3>8
+           DEF ProtectedProgressQueueBoundedUnique,
+               ProtectedProgressSlotsUniqueIn
+    <2> QED BY <2>2 DEF ProtectedDeferredProgressInvariant
+  <1> QED BY <1>1
+
+THEOREM LockAdvancePreservesProtectedDeferredProgressInvariant ==
+  /\ N \in Nat \ {0}
+  /\ TypeInvariant
+  /\ AsyncDeferredTypeInvariant
+  /\ ProtectedDeferredProgressInvariant
+  /\ DeferredProgressCommitHistoryInvariant
+  /\ LockMonotonicityAction
+  /\ UNCHANGED <<context, prepareQCs,
+                  asyncDeferredProgressQueues>>
+  => ProtectedDeferredProgressInvariant'
+PROOF
+  <1>1. ASSUME /\ N \in Nat \ {0}
+                /\ TypeInvariant
+                /\ AsyncDeferredTypeInvariant
+                /\ ProtectedDeferredProgressInvariant
+                /\ DeferredProgressCommitHistoryInvariant
+                /\ LockMonotonicityAction
+                /\ UNCHANGED <<context, prepareQCs,
+                                asyncDeferredProgressQueues>>
+         PROVE ProtectedDeferredProgressInvariant'
+    <2>1. /\ context' = context
+           /\ prepareQCs' = prepareQCs
+           /\ asyncDeferredProgressQueues' =
+                asyncDeferredProgressQueues
+      BY <1>1, Isa
+    <2>2. \A node \in ValidatorIds:
+             ProtectedDeferredProgressIndices(node)'
+               \subseteq ProtectedDeferredProgressIndices(node)
+      <3>1. ASSUME NEW node \in ValidatorIds
+             PROVE ProtectedDeferredProgressIndices(node)'
+                     \subseteq ProtectedDeferredProgressIndices(node)
+        <4>1. ASSUME NEW index \in
+                       ProtectedDeferredProgressIndices(node)'
+               PROVE index \in
+                       ProtectedDeferredProgressIndices(node)
+          <5>1. /\ index \in
+                         1..Len(asyncDeferredProgressQueues[node])
+                 /\ ProtectedProgressCommand(
+                      asyncDeferredProgressQueues[node][index])'
+            BY <2>1, <4>1
+               DEF ProtectedDeferredProgressIndices
+          <5>2. AsyncCandidateTyped(
+                   asyncDeferredProgressQueues[node][index])
+            BY <1>1, <3>1, <5>1
+               DEF AsyncDeferredTypeInvariant,
+                   AsyncDeferredContentTypeInvariant, AsyncQueueTyped
+          <5>3. ProgressCommitVoteHistory(
+                   asyncDeferredProgressQueues[node][index])
+            <6>1. asyncDeferredProgressQueues[node][index]
+                     \in SequenceSet(
+                          asyncDeferredProgressQueues[node])
+              BY <5>1 DEF SequenceSet
+            <6>2. ProgressCommitSource(
+                   asyncDeferredProgressQueues[node][index])
+              BY <1>1, <3>1, <6>1
+                 DEF DeferredProgressCommitHistoryInvariant,
+                     ProgressCommitSourcesIn
+            <6>3. asyncDeferredProgressQueues[node][index].class =
+                     "Progress"
+              BY <1>1, <3>1, <6>1
+                 DEF AsyncDeferredTypeInvariant,
+                     AsyncDeferredContentTypeInvariant
+            <6> QED BY <6>2, <6>3 DEF ProgressCommitSource
+          <5>4. ProtectedProgressCommand(
+                   asyncDeferredProgressQueues[node][index])
+            BY <1>1, <2>1, <5>1, <5>2, <5>3,
+               ProtectedProgressCommandBackwardStableUnderLockAdvance
+          <5> QED BY <5>1, <5>4
+               DEF ProtectedDeferredProgressIndices
+        <4> QED BY <4>1
+      <3> QED BY <3>1
+    <2>3. \A node \in ValidatorIds:
+             /\ IsFiniteSet(ProtectedDeferredProgressIndices(node))
+             /\ IsFiniteSet((ProtectedDeferredProgressIndices(node))')
+             /\ Cardinality((ProtectedDeferredProgressIndices(node))')
+                  <= Cardinality(
+                       ProtectedDeferredProgressIndices(node))
+      <3>1. ASSUME NEW node \in ValidatorIds
+             PROVE /\ IsFiniteSet(
+                           ProtectedDeferredProgressIndices(node))
+                   /\ IsFiniteSet(
+                           (ProtectedDeferredProgressIndices(node))')
+                   /\ Cardinality(
+                         (ProtectedDeferredProgressIndices(node))')
+                        <= Cardinality(
+                             ProtectedDeferredProgressIndices(node))
+        <4>1. Len(asyncDeferredProgressQueues[node]) \in Nat
+          BY <1>1, <3>1, LenProperties
+             DEF AsyncDeferredTypeInvariant,
+                 AsyncDeferredContentTypeInvariant, AsyncQueueTyped
+        <4>2. IsFiniteSet(
+                 1..Len(asyncDeferredProgressQueues[node]))
+          BY <4>1, FS_Interval
+        <4>3. ProtectedDeferredProgressIndices(node)
+                 \subseteq
+                   1..Len(asyncDeferredProgressQueues[node])
+          BY DEF ProtectedDeferredProgressIndices
+        <4>4. IsFiniteSet(
+                 ProtectedDeferredProgressIndices(node))
+          BY <4>2, <4>3, FS_Subset
+        <4> QED BY <2>2, <3>1, <4>4,
+             FS_Subset, FS_CardinalityType
+      <3> QED BY <3>1
+    <2>4. \A node \in ValidatorIds:
+             Cardinality((ProtectedDeferredProgressIndices(node))')
+               <= N + 3
+      <3>1. ASSUME NEW node \in ValidatorIds
+             PROVE Cardinality(
+                     (ProtectedDeferredProgressIndices(node))')
+                     <= N + 3
+        <4>1. Cardinality(ProtectedDeferredProgressIndices(node))
+                 <= N + 3
+          BY <1>1, <3>1 DEF ProtectedDeferredProgressInvariant
+        <4>2. Cardinality(
+                 (ProtectedDeferredProgressIndices(node))')
+                 <= Cardinality(
+                      ProtectedDeferredProgressIndices(node))
+          BY <2>3, <3>1
+        <4>3. /\ Cardinality(
+                       (ProtectedDeferredProgressIndices(node))') \in Nat
+               /\ Cardinality(
+                    ProtectedDeferredProgressIndices(node)) \in Nat
+               /\ N + 3 \in Nat
+          BY <1>1, <2>3, <3>1, FS_CardinalityType, SMT
+        <4> QED BY <4>1, <4>2, <4>3, NaturalWeakOrderTrans
+      <3> QED BY <3>1
+    <2>5. \A node \in ValidatorIds:
+             \A left, right \in
+                  ProtectedDeferredProgressIndices(node)':
+               SameProtectedProgressSlot(
+                 asyncDeferredProgressQueues[node][left],
+                 asyncDeferredProgressQueues[node][right])'
+                 => left = right
+      <3>1. ASSUME NEW node \in ValidatorIds,
+                    NEW left \in
+                      ProtectedDeferredProgressIndices(node)',
+                    NEW right \in
+                      ProtectedDeferredProgressIndices(node)',
+                    SameProtectedProgressSlot(
+                      asyncDeferredProgressQueues[node][left],
+                      asyncDeferredProgressQueues[node][right])'
+             PROVE left = right
+        <4>1. /\ left \in ProtectedDeferredProgressIndices(node)
+               /\ right \in ProtectedDeferredProgressIndices(node)
+          BY <2>2, <3>1
+        <4>1a. /\ ProtectedProgressCommand(
+                       asyncDeferredProgressQueues[node][left])
+                /\ ProtectedProgressCommand(
+                       asyncDeferredProgressQueues[node][right])
+          BY <4>1 DEF ProtectedDeferredProgressIndices
+        <4>1b. ProgressSlotShape(
+                  asyncDeferredProgressQueues[node][left],
+                  asyncDeferredProgressQueues[node][right])'
+          BY <3>1 DEF SameProtectedProgressSlot, ProgressSlotShape
+        <4>1c. ProgressSlotShape(
+                  asyncDeferredProgressQueues[node][left],
+                  asyncDeferredProgressQueues[node][right])
+          BY <2>1, <4>1b, Isa DEF ProgressSlotShape
+        <4>2. SameProtectedProgressSlot(
+                 asyncDeferredProgressQueues[node][left],
+                 asyncDeferredProgressQueues[node][right])
+          BY <4>1a, <4>1c DEF SameProtectedProgressSlot,
+                            ProgressSlotShape
+        <4> QED BY <1>1, <3>1, <4>1, <4>2
+             DEF ProtectedDeferredProgressInvariant
+      <3> QED BY <3>1
+    <2> QED BY <2>4, <2>5
+         DEF ProtectedDeferredProgressInvariant
+  <1> QED BY <1>1
+
+(***************************************************************************
+Exact scheduler-action composition.  The private source histories are carried
+through every executable queue carrier and then projected back to the public
+protected deferred-slot invariant.
+***************************************************************************)
+ProgressCommitSlotInvariant ==
+  /\ LockWithinNodeViewInvariant
+  /\ QueuedProgressCommitHistoryInvariant
+  /\ DeferredProgressCommitHistoryInvariant
+  /\ CausalProgressCommitHistoryInvariant
+  /\ ProtectedDeferredProgressInvariant
+
+THEOREM UnchangedSchedulerCarriersPreserveProgressCommitSlots ==
+  /\ AsyncTypeInvariant
+  /\ TypeInvariant'
+  /\ LockWithinNodeViewInvariant
+  /\ QueuedProgressCommitHistoryInvariant
+  /\ DeferredProgressCommitHistoryInvariant
+  /\ CausalProgressCommitHistoryInvariant
+  /\ ProtectedDeferredProgressInvariant
+  /\ ProgressFrontierAction
+  /\ UNCHANGED <<asyncCommandQueues,
+                  asyncDeferredProgressQueues,
+                  asyncCausalQueues>>
+  => /\ QueuedProgressCommitHistoryInvariant'
+     /\ DeferredProgressCommitHistoryInvariant'
+     /\ CausalProgressCommitHistoryInvariant'
+     /\ ProtectedDeferredProgressInvariant'
+PROOF
+  <1>1. ASSUME /\ AsyncTypeInvariant
+                /\ TypeInvariant'
+                /\ LockWithinNodeViewInvariant
+                /\ QueuedProgressCommitHistoryInvariant
+                /\ DeferredProgressCommitHistoryInvariant
+                /\ CausalProgressCommitHistoryInvariant
+                /\ ProtectedDeferredProgressInvariant
+                /\ ProgressFrontierAction
+                /\ UNCHANGED <<asyncCommandQueues,
+                                asyncDeferredProgressQueues,
+                                asyncCausalQueues>>
+         PROVE /\ QueuedProgressCommitHistoryInvariant'
+               /\ DeferredProgressCommitHistoryInvariant'
+               /\ CausalProgressCommitHistoryInvariant'
+               /\ ProtectedDeferredProgressInvariant'
+    <2>1. /\ TypeInvariant
+           /\ N \in Nat \ {0}
+           /\ AsyncRuntimeScalarTypeInvariant
+           /\ AsyncCausalTypeInvariant
+           /\ AsyncDeferredTypeInvariant
+      BY <1>1
+         DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+             AsyncRuntimeTypeInvariant, AsyncDeferredTypeInvariant,
+             TypeInvariant, ModelConfiguration, QuorumConfiguration
+    <2>2. QueuedProgressCommitHistoryInvariant'
+      BY <1>1, <2>1,
+         UnchangedCommandQueuesPreserveProgressCommitHistory
+    <2>3. DeferredProgressCommitHistoryInvariant'
+      BY <1>1, <2>1,
+         UnchangedDeferredProgressQueuesPreserveCommitHistory
+    <2>4. CausalProgressCommitHistoryInvariant'
+      BY <1>1, <2>1,
+         UnchangedCausalQueuesPreserveProgressCommitHistory
+    <2>5. ProtectedDeferredProgressInvariant'
+      BY <1>1, <2>1,
+         LockAdvancePreservesProtectedDeferredProgressInvariant
+         DEF ProgressFrontierAction
+    <2> QED BY <2>2, <2>3, <2>4, <2>5
+  <1> QED BY <1>1
+
+THEOREM FifoRuntimePreservesProgressCommitSlotInvariantExact ==
+  \A node \in ValidatorIds:
+    /\ StrongInductiveInvariant
+    /\ AsyncTypeInvariant
+    /\ TypeInvariant'
+
+    /\ LockWithinNodeViewInvariant
+    /\ QueuedProgressCommitHistoryInvariant
+    /\ DeferredProgressCommitHistoryInvariant
+    /\ CausalProgressCommitHistoryInvariant
+    /\ ProtectedDeferredProgressInvariant
+    /\ ProgressFrontierAction
+    /\ FifoRuntimeStep(node)
+    => /\ QueuedProgressCommitHistoryInvariant'
+       /\ DeferredProgressCommitHistoryInvariant'
+       /\ CausalProgressCommitHistoryInvariant'
+       /\ ProtectedDeferredProgressInvariant'
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds,
+                StrongInductiveInvariant,
+                AsyncTypeInvariant,
+                TypeInvariant',
+                LockWithinNodeViewInvariant,
+                QueuedProgressCommitHistoryInvariant,
+                DeferredProgressCommitHistoryInvariant,
+                CausalProgressCommitHistoryInvariant,
+                ProtectedDeferredProgressInvariant,
+                ProgressFrontierAction,
+                FifoRuntimeStep(node)
+         PROVE /\ QueuedProgressCommitHistoryInvariant'
+               /\ DeferredProgressCommitHistoryInvariant'
+               /\ CausalProgressCommitHistoryInvariant'
+               /\ ProtectedDeferredProgressInvariant'
+    <2> DEFINE Command == NextNodeCommand(node)
+    <2>1. /\ TypeInvariant
+           /\ N \in Nat \ {0}
+           /\ AsyncConfiguration
+           /\ AsyncRuntimeScalarTypeInvariant
+           /\ AsyncCausalTypeInvariant
+           /\ AsyncDeferredTypeInvariant
+           /\ NodeQueueNonempty(node)
+           /\ RemoveNextNodeCommand(node)
+      BY <1>1
+         DEF StrongInductiveInvariant, Safety, TypeInvariant,
+             ModelConfiguration, QuorumConfiguration,
+             AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+             AsyncRuntimeTypeInvariant, FifoRuntimeStep
+    <2>2. /\ AsyncCandidateTyped(Command)
+           /\ Command.node = node
+           /\ ProgressCommitSource(Command)
+      <3>1. /\ NextNodeCommandIndex(node)
+                       \in 1..Len(asyncCommandQueues[node])
+             /\ NextNodeCommand(node) =
+                  asyncCommandQueues[node][NextNodeCommandIndex(node)]
+             /\ AsyncCandidateTyped(NextNodeCommand(node))
+             /\ NextNodeCommand(node).node = node
+        BY <2>1, NextNodeCommandIndexFacts
+      <3>2. NextNodeCommand(node) \in
+               SequenceSet(asyncCommandQueues[node])
+        BY <3>1 DEF SequenceSet
+      <3> QED BY <1>1, <3>1, <3>2
+           DEF QueuedProgressCommitHistoryInvariant,
+               ProgressCommitSourcesIn, Command
+    <2>3. QueuedProgressCommitHistoryInvariant'
+      BY <1>1, <2>1,
+         RemoveNextNodeCommandPreservesQueuedProgressCommitHistory
+    <2>4. CASE CommandDispatchable(Command)
+      <3>1. /\ ExecuteCommand(Command)
+             /\ AppendCausalSuccessors(Command)
+             /\ UNCHANGED asyncDeferredProgressQueues
+        BY <1>1, <2>4, Isa DEF FifoRuntimeStep, Command
+      <3>2. DeferredProgressCommitHistoryInvariant'
+        BY <1>1, <2>1, <3>1,
+           UnchangedDeferredProgressQueuesPreserveCommitHistory
+      <3>3. CausalProgressCommitHistoryInvariant'
+        BY <1>1, <2>2, <3>1,
+           AppendCausalSuccessorsPreservesProgressCommitHistory
+      <3>4. ProtectedDeferredProgressInvariant'
+        BY <1>1, <2>1, <3>1,
+           LockAdvancePreservesProtectedDeferredProgressInvariant
+           DEF ProgressFrontierAction
+      <3> QED BY <2>3, <3>2, <3>3, <3>4
+    <2>5. CASE /\ ~CommandDispatchable(Command)
+                 /\ ~NodeIdle(node)
+      <3>1. /\ DeferCommand(Command)
+             /\ LeaveCausalQueues
+        BY <1>1, <2>5, Isa DEF FifoRuntimeStep, Command
+      <3>2. DeferredProgressCommitHistoryInvariant'
+        BY <1>1, <2>1, <2>2, <3>1,
+           DeferCommandPreservesDeferredProgressCommitHistory
+      <3>3. CausalProgressCommitHistoryInvariant'
+        BY <1>1, <2>1, <3>1,
+           UnchangedCausalQueuesPreserveProgressCommitHistory
+           DEF LeaveCausalQueues
+      <3>4. ProtectedDeferredProgressInvariant'
+        BY <1>1, <2>1, <2>2, <3>1,
+           DeferCommandPreservesProtectedDeferredProgressInvariant
+      <3> QED BY <2>3, <3>2, <3>3, <3>4
+    <2>6. CASE /\ ~CommandDispatchable(Command)
+                 /\ NodeIdle(node)
+      <3>1. /\ UNCHANGED asyncDeferredProgressQueues
+             /\ LeaveCausalQueues
+        BY <1>1, <2>6, Isa DEF FifoRuntimeStep, Command
+      <3>2. DeferredProgressCommitHistoryInvariant'
+        BY <1>1, <2>1, <3>1,
+           UnchangedDeferredProgressQueuesPreserveCommitHistory
+      <3>3. CausalProgressCommitHistoryInvariant'
+        BY <1>1, <2>1, <3>1,
+           UnchangedCausalQueuesPreserveProgressCommitHistory
+           DEF LeaveCausalQueues
+      <3>4. ProtectedDeferredProgressInvariant'
+        BY <1>1, <2>1, <3>1,
+           LockAdvancePreservesProtectedDeferredProgressInvariant
+           DEF ProgressFrontierAction
+      <3> QED BY <2>3, <3>2, <3>3, <3>4
+    <2>7. \/ CommandDispatchable(Command)
+           \/ /\ ~CommandDispatchable(Command) /\ ~NodeIdle(node)
+           \/ /\ ~CommandDispatchable(Command) /\ NodeIdle(node)
+      BY SMT
+    <2> QED BY <2>4, <2>5, <2>6, <2>7
+  <1> QED BY <1>1
+
+THEOREM DeferredDrainPreservesProgressCommitSlotInvariant ==
+  \A node \in ValidatorIds:
+    /\ StrongInductiveInvariant
+    /\ AsyncTypeInvariant
+    /\ TypeInvariant'
+    /\ LockWithinNodeViewInvariant
+    /\ QueuedProgressCommitHistoryInvariant
+    /\ DeferredProgressCommitHistoryInvariant
+    /\ CausalProgressCommitHistoryInvariant
+    /\ ProtectedDeferredProgressInvariant
+    /\ ProgressFrontierAction
+    /\ DeferredDrainStep(node)
+    => /\ QueuedProgressCommitHistoryInvariant'
+       /\ DeferredProgressCommitHistoryInvariant'
+       /\ CausalProgressCommitHistoryInvariant'
+       /\ ProtectedDeferredProgressInvariant'
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds,
+                StrongInductiveInvariant,
+                AsyncTypeInvariant,
+                TypeInvariant',
+                LockWithinNodeViewInvariant,
+                QueuedProgressCommitHistoryInvariant,
+                DeferredProgressCommitHistoryInvariant,
+                CausalProgressCommitHistoryInvariant,
+                ProtectedDeferredProgressInvariant,
+                ProgressFrontierAction,
+                DeferredDrainStep(node)
+         PROVE /\ QueuedProgressCommitHistoryInvariant'
+               /\ DeferredProgressCommitHistoryInvariant'
+               /\ CausalProgressCommitHistoryInvariant'
+               /\ ProtectedDeferredProgressInvariant'
+    <2>1. /\ TypeInvariant
+           /\ N \in Nat \ {0}
+           /\ AsyncRuntimeScalarTypeInvariant
+           /\ AsyncCausalTypeInvariant
+           /\ AsyncDeferredTypeInvariant
+      BY <1>1
+         DEF StrongInductiveInvariant, Safety, TypeInvariant,
+             ModelConfiguration, QuorumConfiguration,
+             AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+             AsyncRuntimeTypeInvariant
+    <2>2. QueuedProgressCommitHistoryInvariant'
+      BY <1>1, <2>1,
+         UnchangedCommandQueuesPreserveProgressCommitHistory
+         DEF DeferredDrainStep
+    <2>3. CASE ~DeferredQueueNonempty(node)
+      <3>1. UNCHANGED <<asyncDeferredProgressQueues,
+                        asyncCausalQueues>>
+        BY <1>1, <2>3, Isa
+           DEF DeferredDrainStep, LeaveCausalQueues, vars
+      <3>2. DeferredProgressCommitHistoryInvariant'
+        BY <1>1, <2>1, <3>1,
+           UnchangedDeferredProgressQueuesPreserveCommitHistory
+      <3>3. CausalProgressCommitHistoryInvariant'
+        BY <1>1, <2>1, <3>1,
+           UnchangedCausalQueuesPreserveProgressCommitHistory
+      <3>4. ProtectedDeferredProgressInvariant'
+        BY <1>1, <2>1, <3>1,
+           LockAdvancePreservesProtectedDeferredProgressInvariant
+           DEF ProgressFrontierAction
+      <3> QED BY <2>2, <3>2, <3>3, <3>4
+    <2>4. CASE DeferredQueueNonempty(node)
+      <3> DEFINE Command == NextDeferredCommand(node)
+      <3>1. /\ AsyncCandidateTyped(Command)
+             /\ Command.node = node
+        BY <1>1, <2>1, <2>4,
+           RuntimeSelectedCommandsAreTyped DEF Command
+      <3>2. CASE CommandDispatchable(Command)
+        <4>1. /\ RemoveNextDeferredCommand(node)
+               /\ ExecuteCommand(Command)
+               /\ AppendCausalSuccessors(Command)
+          BY <1>1, <2>4, <3>2, Isa
+             DEF DeferredDrainStep, Command
+        <4>2. DeferredProgressCommitHistoryInvariant'
+          BY <1>1, <2>1, <2>4, <4>1,
+             RemoveNextDeferredCommandPreservesProgressCommitHistory
+        <4>3. CausalProgressCommitHistoryInvariant'
+          BY <1>1, <3>1, <4>1,
+             AppendCausalSuccessorsPreservesProgressCommitHistory
+        <4>4. ProtectedDeferredProgressInvariant'
+          BY <1>1, <2>1, <2>4, <4>1,
+             RemoveDeferredAndAdvanceLockPreservesProtectedInvariant
+             DEF ProgressFrontierAction
+        <4> QED BY <2>2, <4>2, <4>3, <4>4
+      <3>3. CASE /\ ~CommandDispatchable(Command)
+                   /\ ~NodeIdle(node)
+        <4>1. UNCHANGED <<asyncDeferredProgressQueues,
+                          asyncCausalQueues>>
+          BY <1>1, <2>4, <3>3, Isa
+             DEF DeferredDrainStep, Command, LeaveCausalQueues, vars
+        <4>2. DeferredProgressCommitHistoryInvariant'
+          BY <1>1, <2>1, <4>1,
+             UnchangedDeferredProgressQueuesPreserveCommitHistory
+        <4>3. CausalProgressCommitHistoryInvariant'
+          BY <1>1, <2>1, <4>1,
+             UnchangedCausalQueuesPreserveProgressCommitHistory
+        <4>4. ProtectedDeferredProgressInvariant'
+          BY <1>1, <2>1, <4>1,
+             LockAdvancePreservesProtectedDeferredProgressInvariant
+             DEF ProgressFrontierAction
+        <4> QED BY <2>2, <4>2, <4>3, <4>4
+      <3>4. CASE /\ ~CommandDispatchable(Command)
+                   /\ NodeIdle(node)
+        <4>1. /\ RemoveNextDeferredCommand(node)
+               /\ LeaveCausalQueues
+          BY <1>1, <2>4, <3>4, Isa
+             DEF DeferredDrainStep, Command
+        <4>2. DeferredProgressCommitHistoryInvariant'
+          BY <1>1, <2>1, <2>4, <4>1,
+             RemoveNextDeferredCommandPreservesProgressCommitHistory
+        <4>3. CausalProgressCommitHistoryInvariant'
+          BY <1>1, <2>1, <4>1,
+             UnchangedCausalQueuesPreserveProgressCommitHistory
+             DEF LeaveCausalQueues
+        <4>4. ProtectedDeferredProgressInvariant'
+          BY <1>1, <2>1, <2>4, <4>1,
+             RemoveDeferredAndAdvanceLockPreservesProtectedInvariant
+             DEF ProgressFrontierAction
+        <4> QED BY <2>2, <4>2, <4>3, <4>4
+      <3>5. \/ CommandDispatchable(Command)
+             \/ /\ ~CommandDispatchable(Command) /\ ~NodeIdle(node)
+             \/ /\ ~CommandDispatchable(Command) /\ NodeIdle(node)
+        BY SMT
+      <3> QED BY <3>2, <3>3, <3>4, <3>5
+    <2> QED BY <2>3, <2>4
+  <1> QED BY <1>1
+
+NonQueueRuntimeAction(node) ==
+  \/ DirectCommitCertificateDiscoveryStep(node)
+  \/ DeferredTagStep(node)
+  \/ DirectTimeoutStep(node)
+  \/ DirectRetransmitStep(node)
+  \/ IdleRuntimeStep(node)
+
+
+THEOREM NonQueueRuntimePreservesProgressCommitSlotInvariant ==
+  \A node \in ValidatorIds:
+    /\ AsyncTypeInvariant
+    /\ TypeInvariant'
+    /\ LockWithinNodeViewInvariant
+    /\ QueuedProgressCommitHistoryInvariant
+    /\ DeferredProgressCommitHistoryInvariant
+    /\ CausalProgressCommitHistoryInvariant
+    /\ ProtectedDeferredProgressInvariant
+    /\ ProgressFrontierAction
+    /\ NonQueueRuntimeAction(node)
+    => /\ QueuedProgressCommitHistoryInvariant'
+       /\ DeferredProgressCommitHistoryInvariant'
+       /\ CausalProgressCommitHistoryInvariant'
+       /\ ProtectedDeferredProgressInvariant'
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds,
+                AsyncTypeInvariant,
+                TypeInvariant',
+                LockWithinNodeViewInvariant,
+                QueuedProgressCommitHistoryInvariant,
+                DeferredProgressCommitHistoryInvariant,
+                CausalProgressCommitHistoryInvariant,
+                ProtectedDeferredProgressInvariant,
+                ProgressFrontierAction,
+                NonQueueRuntimeAction(node)
+         PROVE /\ QueuedProgressCommitHistoryInvariant'
+               /\ DeferredProgressCommitHistoryInvariant'
+               /\ CausalProgressCommitHistoryInvariant'
+               /\ ProtectedDeferredProgressInvariant'
+    <2>1. /\ TypeInvariant
+           /\ N \in Nat \ {0}
+           /\ AsyncRuntimeScalarTypeInvariant
+           /\ AsyncCausalTypeInvariant
+           /\ AsyncDeferredTypeInvariant
+      BY <1>1
+         DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+             AsyncRuntimeTypeInvariant, TypeInvariant,
+             ModelConfiguration, QuorumConfiguration
+    <2>2. UNCHANGED <<asyncCommandQueues,
+                      asyncDeferredProgressQueues>>
+      BY <1>1, Isa
+         DEF NonQueueRuntimeAction,
+             DirectCommitCertificateDiscoveryStep,
+             DeferredTagStep, DeferredTimeoutStep,
+             DeferredRetransmitStep, DirectTimeoutStep,
+             DirectRetransmitStep, IdleRuntimeStep,
+             AsyncDeferredVars, LeaveCausalQueues, vars
+    <2>3. /\ QueuedProgressCommitHistoryInvariant'
+           /\ DeferredProgressCommitHistoryInvariant'
+           /\ ProtectedDeferredProgressInvariant'
+      BY <1>1, <2>1, <2>2,
+         UnchangedCommandQueuesPreserveProgressCommitHistory,
+         UnchangedDeferredProgressQueuesPreserveCommitHistory,
+         LockAdvancePreservesProtectedDeferredProgressInvariant
+         DEF ProgressFrontierAction
+    <2>4. \/ UNCHANGED asyncCausalQueues
+           \/ AppendCausalSuccessors(TimeoutCausalCommand(node))
+      BY <1>1, Isa
+         DEF NonQueueRuntimeAction,
+             DirectCommitCertificateDiscoveryStep,
+             DeferredTagStep, DeferredTimeoutStep,
+             DeferredRetransmitStep, DirectTimeoutStep,
+             DirectRetransmitStep, IdleRuntimeStep,
+             LeaveCausalQueues
+    <2>5. CASE UNCHANGED asyncCausalQueues
+      BY <1>1, <2>1, <2>5,
+         UnchangedCausalQueuesPreserveProgressCommitHistory
+    <2>6. CASE AppendCausalSuccessors(TimeoutCausalCommand(node))
+      BY <1>1, <2>6,
+         AppendTimeoutCausalSuccessorsPreservesProgressCommitHistory
+    <2>7. CausalProgressCommitHistoryInvariant'
+      BY <2>4, <2>5, <2>6
+    <2> QED BY <2>3, <2>7
+  <1> QED BY <1>1
+
+THEOREM RuntimeStepPreservesProgressCommitSlotInvariant ==
+  \A node \in ValidatorIds:
+    /\ StrongInductiveInvariant
+    /\ AsyncTypeInvariant
+    /\ TypeInvariant'
+    /\ LockWithinNodeViewInvariant
+    /\ QueuedProgressCommitHistoryInvariant
+    /\ DeferredProgressCommitHistoryInvariant
+    /\ CausalProgressCommitHistoryInvariant
+    /\ ProtectedDeferredProgressInvariant
+    /\ ProgressFrontierAction
+    /\ RuntimeStep(node)
+    => /\ QueuedProgressCommitHistoryInvariant'
+       /\ DeferredProgressCommitHistoryInvariant'
+       /\ CausalProgressCommitHistoryInvariant'
+       /\ ProtectedDeferredProgressInvariant'
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds,
+                StrongInductiveInvariant,
+                AsyncTypeInvariant,
+                TypeInvariant',
+                LockWithinNodeViewInvariant,
+                QueuedProgressCommitHistoryInvariant,
+                DeferredProgressCommitHistoryInvariant,
+                CausalProgressCommitHistoryInvariant,
+                ProtectedDeferredProgressInvariant,
+                ProgressFrontierAction,
+                RuntimeStep(node)
+         PROVE /\ QueuedProgressCommitHistoryInvariant'
+               /\ DeferredProgressCommitHistoryInvariant'
+               /\ CausalProgressCommitHistoryInvariant'
+               /\ ProtectedDeferredProgressInvariant'
+    <2>1. \/ DeferredDrainStep(node)
+           \/ FifoRuntimeStep(node)
+           \/ NonQueueRuntimeAction(node)
+      BY <1>1 DEF RuntimeStep, NonQueueRuntimeAction
+    <2>2. CASE DeferredDrainStep(node)
+      BY <1>1, <2>2,
+         DeferredDrainPreservesProgressCommitSlotInvariant
+    <2>3. CASE FifoRuntimeStep(node)
+      BY <1>1, <2>3,
+         FifoRuntimePreservesProgressCommitSlotInvariantExact
+    <2>4. CASE NonQueueRuntimeAction(node)
+      BY <1>1, <2>4,
+         NonQueueRuntimePreservesProgressCommitSlotInvariant
+    <2> QED BY <2>1, <2>2, <2>3, <2>4
+  <1> QED BY <1>1
+
+THEOREM LocalAdmissionPreservesProgressCommitSlotInvariant ==
+  \A node \in ValidatorIds:
+    /\ AsyncTypeInvariant
+    /\ TypeInvariant'
+    /\ LockWithinNodeViewInvariant
+    /\ QueuedProgressCommitHistoryInvariant
+    /\ DeferredProgressCommitHistoryInvariant
+    /\ CausalProgressCommitHistoryInvariant
+    /\ ProtectedDeferredProgressInvariant
+    /\ ProgressFrontierAction
+    /\ LocalAdmissionStep(node)
+    => /\ QueuedProgressCommitHistoryInvariant'
+       /\ DeferredProgressCommitHistoryInvariant'
+       /\ CausalProgressCommitHistoryInvariant'
+       /\ ProtectedDeferredProgressInvariant'
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds,
+                AsyncTypeInvariant,
+                TypeInvariant',
+                LockWithinNodeViewInvariant,
+                QueuedProgressCommitHistoryInvariant,
+                DeferredProgressCommitHistoryInvariant,
+                CausalProgressCommitHistoryInvariant,
+                ProtectedDeferredProgressInvariant,
+                ProgressFrontierAction,
+                LocalAdmissionStep(node)
+         PROVE /\ QueuedProgressCommitHistoryInvariant'
+               /\ DeferredProgressCommitHistoryInvariant'
+               /\ CausalProgressCommitHistoryInvariant'
+               /\ ProtectedDeferredProgressInvariant'
+    <2>1. /\ TypeInvariant
+           /\ N \in Nat \ {0}
+           /\ AsyncDeferredTypeInvariant
+      BY <1>1 DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+                    TypeInvariant, ModelConfiguration,
+                    QuorumConfiguration
+    <2>2. /\ QueuedProgressCommitHistoryInvariant'
+           /\ DeferredProgressCommitHistoryInvariant'
+           /\ CausalProgressCommitHistoryInvariant'
+      BY <1>1, LocalAdmissionPreservesProgressCommitHistories
+    <2>3. UNCHANGED asyncDeferredProgressQueues
+      BY <1>1 DEF LocalAdmissionStep, AsyncDeferredVars
+    <2>4. ProtectedDeferredProgressInvariant'
+      BY <1>1, <2>1, <2>3,
+         LockAdvancePreservesProtectedDeferredProgressInvariant
+         DEF ProgressFrontierAction
+    <2> QED BY <2>2, <2>4
+  <1> QED BY <1>1
+
+THEOREM IngressDrainPreservesProgressCommitSlotInvariant ==
+  \A node \in ValidatorIds:
+    /\ AsyncTypeInvariant
+    /\ TypeInvariant'
+    /\ LockWithinNodeViewInvariant
+    /\ QueuedProgressCommitHistoryInvariant
+    /\ DeferredProgressCommitHistoryInvariant
+    /\ CausalProgressCommitHistoryInvariant
+    /\ ProtectedDeferredProgressInvariant
+    /\ ProgressFrontierAction
+    /\ IngressDrainStep(node)
+    => /\ QueuedProgressCommitHistoryInvariant'
+       /\ DeferredProgressCommitHistoryInvariant'
+       /\ CausalProgressCommitHistoryInvariant'
+       /\ ProtectedDeferredProgressInvariant'
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds,
+                AsyncTypeInvariant,
+                TypeInvariant',
+                LockWithinNodeViewInvariant,
+                QueuedProgressCommitHistoryInvariant,
+                DeferredProgressCommitHistoryInvariant,
+                CausalProgressCommitHistoryInvariant,
+                ProtectedDeferredProgressInvariant,
+                ProgressFrontierAction,
+                IngressDrainStep(node)
+         PROVE /\ QueuedProgressCommitHistoryInvariant'
+               /\ DeferredProgressCommitHistoryInvariant'
+               /\ CausalProgressCommitHistoryInvariant'
+               /\ ProtectedDeferredProgressInvariant'
+    <2>1. /\ TypeInvariant
+           /\ N \in Nat \ {0}
+           /\ AsyncDeferredTypeInvariant
+      BY <1>1 DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+                    TypeInvariant, ModelConfiguration,
+                    QuorumConfiguration
+    <2>2. /\ QueuedProgressCommitHistoryInvariant'
+           /\ DeferredProgressCommitHistoryInvariant'
+           /\ CausalProgressCommitHistoryInvariant'
+      BY <1>1, IngressDrainPreservesProgressCommitHistories
+    <2>3. UNCHANGED asyncDeferredProgressQueues
+      BY <1>1 DEF IngressDrainStep, AsyncDeferredVars
+    <2>4. ProtectedDeferredProgressInvariant'
+      BY <1>1, <2>1, <2>3,
+         LockAdvancePreservesProtectedDeferredProgressInvariant
+         DEF ProgressFrontierAction
+    <2> QED BY <2>2, <2>4
+  <1> QED BY <1>1
+
+THEOREM RunNodePreservesProgressCommitSlotInvariant ==
+  \A node \in AsyncCurrentResponsiveVoters:
+    /\ StrongInductiveInvariant
+    /\ AsyncTypeInvariant
+    /\ TypeInvariant'
+    /\ LockWithinNodeViewInvariant
+    /\ QueuedProgressCommitHistoryInvariant
+    /\ DeferredProgressCommitHistoryInvariant
+    /\ CausalProgressCommitHistoryInvariant
+    /\ ProtectedDeferredProgressInvariant
+    /\ ProgressFrontierAction
+    /\ RunNode(node)
+    => /\ QueuedProgressCommitHistoryInvariant'
+       /\ DeferredProgressCommitHistoryInvariant'
+       /\ CausalProgressCommitHistoryInvariant'
+       /\ ProtectedDeferredProgressInvariant'
+PROOF
+  <1>1. ASSUME NEW node \in AsyncCurrentResponsiveVoters,
+                StrongInductiveInvariant,
+                AsyncTypeInvariant,
+                TypeInvariant',
+                LockWithinNodeViewInvariant,
+                QueuedProgressCommitHistoryInvariant,
+                DeferredProgressCommitHistoryInvariant,
+                CausalProgressCommitHistoryInvariant,
+                ProtectedDeferredProgressInvariant,
+                ProgressFrontierAction,
+
+                RunNode(node)
+         PROVE /\ QueuedProgressCommitHistoryInvariant'
+               /\ DeferredProgressCommitHistoryInvariant'
+               /\ CausalProgressCommitHistoryInvariant'
+               /\ ProtectedDeferredProgressInvariant'
+    <2>1. node \in ValidatorIds
+      BY <1>1, AsyncCurrentResponsiveVotersAreValidators
+    <2>2. \/ LocalAdmissionStep(node)
+           \/ IngressDrainStep(node)
+           \/ SerializedRuntimeStep(node)
+      BY <1>1 DEF RunNode
+    <2>3. CASE LocalAdmissionStep(node)
+      BY <1>1, <2>1, <2>3,
+         LocalAdmissionPreservesProgressCommitSlotInvariant
+    <2>4. CASE IngressDrainStep(node)
+      BY <1>1, <2>1, <2>4,
+         IngressDrainPreservesProgressCommitSlotInvariant
+    <2>5. CASE SerializedRuntimeStep(node)
+      <3>1. RuntimeStep(node)
+        BY <2>5 DEF SerializedRuntimeStep
+      <3> QED BY <1>1, <2>1, <3>1,
+           RuntimeStepPreservesProgressCommitSlotInvariant
+    <2> QED BY <2>2, <2>3, <2>4, <2>5
+  <1> QED BY <1>1
+
+THEOREM RunHistoricalServerLeavesProgressCarriers ==
+  \A node:
+    RunHistoricalServer(node)
+      => UNCHANGED <<asyncCommandQueues,
+                      asyncDeferredProgressQueues,
+                      asyncCausalQueues>>
+BY IsaM("blast")
+   DEF RunHistoricalServer, DrainHistoricalIngressSelected,
+       HistoricalIdleStep, AsyncDeferredVars
+
+THEOREM AsyncFaultStepLeavesProgressCarriers ==
+  AsyncFaultStep
+    => UNCHANGED <<asyncCommandQueues,
+                    asyncDeferredProgressQueues,
+                    asyncCausalQueues>>
+BY IsaM("blast")
+   DEF AsyncFaultStep, PreGstLosePacket, PreGstCrash,
+       InjectByzantineNoise, InjectAuthenticatedJunk,
+       InjectByzantineCertifiedRequest,
+       AsyncByzantineProposal, AsyncByzantineVote,
+       AsyncByzantineTimeout, AsyncSchedulerVars,
+       AsyncDeferredVars, LeaveCausalQueues
+
+THEOREM AsyncNonRunnerStepLeavesProgressCarriers ==
+  AsyncNonRunnerStep
+    => UNCHANGED <<asyncCommandQueues,
+                    asyncDeferredProgressQueues,
+                    asyncCausalQueues>>
+BY AsyncFaultStepLeavesProgressCarriers, IsaM("blast")
+   DEF AsyncNonRunnerStep, AsyncSetGST, AsyncTick,
+       AsyncNonClockVars, ServiceIoWorker,
+       EnqueueIoLocalControl, AsyncNetworkStep,
+       AdmitIngressPacket, AdmitHiddenPacket, CoalesceHiddenPacket,
+       AsyncSchedulerVars, AsyncDeferredVars, LeaveCausalQueues
+
+THEOREM PreGstCrashLeavesProgressCarriers ==
+  \A node:
+    PreGstCrash(node)
+      => UNCHANGED <<asyncCommandQueues,
+                      asyncDeferredProgressQueues,
+                      asyncCausalQueues>>
+BY DEF PreGstCrash, AsyncSchedulerVars
+
+THEOREM RunHistoricalServerPreservesProgressCommitSlotInvariant ==
+  \A node \in AsyncCurrentResponsiveVoters:
+    /\ AsyncTypeInvariant
+    /\ TypeInvariant'
+    /\ LockWithinNodeViewInvariant
+    /\ QueuedProgressCommitHistoryInvariant
+    /\ DeferredProgressCommitHistoryInvariant
+    /\ CausalProgressCommitHistoryInvariant
+    /\ ProtectedDeferredProgressInvariant
+    /\ ProgressFrontierAction
+    /\ RunHistoricalServer(node)
+    => /\ QueuedProgressCommitHistoryInvariant'
+       /\ DeferredProgressCommitHistoryInvariant'
+       /\ CausalProgressCommitHistoryInvariant'
+       /\ ProtectedDeferredProgressInvariant'
+BY RunHistoricalServerLeavesProgressCarriers,
+   UnchangedSchedulerCarriersPreserveProgressCommitSlots
+
+THEOREM AsyncRunnerStepPreservesProgressCommitSlotInvariant ==
+  /\ StrongInductiveInvariant
+  /\ AsyncTypeInvariant
+  /\ TypeInvariant'
+  /\ LockWithinNodeViewInvariant
+  /\ QueuedProgressCommitHistoryInvariant
+  /\ DeferredProgressCommitHistoryInvariant
+  /\ CausalProgressCommitHistoryInvariant
+  /\ ProtectedDeferredProgressInvariant
+  /\ ProgressFrontierAction
+  /\ AsyncRunnerStep
+  => /\ QueuedProgressCommitHistoryInvariant'
+     /\ DeferredProgressCommitHistoryInvariant'
+     /\ CausalProgressCommitHistoryInvariant'
+     /\ ProtectedDeferredProgressInvariant'
+BY RunNodePreservesProgressCommitSlotInvariant,
+   RunHistoricalServerPreservesProgressCommitSlotInvariant
+   DEF AsyncRunnerStep
+
+THEOREM AsyncNonRunnerStepPreservesProgressCommitSlotInvariant ==
+  /\ AsyncTypeInvariant
+  /\ TypeInvariant'
+  /\ LockWithinNodeViewInvariant
+  /\ QueuedProgressCommitHistoryInvariant
+  /\ DeferredProgressCommitHistoryInvariant
+  /\ CausalProgressCommitHistoryInvariant
+  /\ ProtectedDeferredProgressInvariant
+  /\ ProgressFrontierAction
+  /\ AsyncNonRunnerStep
+  => /\ QueuedProgressCommitHistoryInvariant'
+     /\ DeferredProgressCommitHistoryInvariant'
+     /\ CausalProgressCommitHistoryInvariant'
+     /\ ProtectedDeferredProgressInvariant'
+BY AsyncNonRunnerStepLeavesProgressCarriers,
+   UnchangedSchedulerCarriersPreserveProgressCommitSlots
+
+THEOREM PreGstCrashPreservesProgressCommitSlotInvariant ==
+  \A node \in ValidatorIds:
+    /\ AsyncTypeInvariant
+    /\ TypeInvariant'
+    /\ LockWithinNodeViewInvariant
+    /\ QueuedProgressCommitHistoryInvariant
+    /\ DeferredProgressCommitHistoryInvariant
+    /\ CausalProgressCommitHistoryInvariant
+    /\ ProtectedDeferredProgressInvariant
+    /\ ProgressFrontierAction
+    /\ PreGstCrash(node)
+    => /\ QueuedProgressCommitHistoryInvariant'
+       /\ DeferredProgressCommitHistoryInvariant'
+       /\ CausalProgressCommitHistoryInvariant'
+       /\ ProtectedDeferredProgressInvariant'
+BY PreGstCrashLeavesProgressCarriers,
+   UnchangedSchedulerCarriersPreserveProgressCommitSlots
+
+THEOREM AsyncNextPreservesProgressCommitSlotInvariant ==
+  /\ AsyncStrongTypeInvariant
+  /\ ProgressCommitSlotInvariant
+  /\ AsyncNext
+  => ProgressCommitSlotInvariant'
+PROOF
+  <1>1. ASSUME /\ AsyncStrongTypeInvariant
+                /\ ProgressCommitSlotInvariant
+                /\ AsyncNext
+         PROVE ProgressCommitSlotInvariant'
+    <2>1. /\ StrongInductiveInvariant
+           /\ AsyncTypeInvariant
+           /\ LockWithinNodeViewInvariant
+           /\ QueuedProgressCommitHistoryInvariant
+           /\ DeferredProgressCommitHistoryInvariant
+           /\ CausalProgressCommitHistoryInvariant
+           /\ ProtectedDeferredProgressInvariant
+      BY <1>1, AsyncStrongTypeProjectsAsyncType
+         DEF AsyncStrongTypeInvariant, ProgressCommitSlotInvariant
+    <2>2. AsyncStrongTypeInvariant'
+      BY <1>1, AsyncNextPreservesStrongTypeInvariant
+    <2>3. TypeInvariant'
+      BY <2>2
+         DEF AsyncStrongTypeInvariant, StrongInductiveInvariant, Safety
+    <2>4. ProgressFrontierAction
+      BY <1>1, <2>1, AsyncNextEstablishesProgressFrontierAction
+    <2>5. /\ QueuedProgressCommitHistoryInvariant'
+           /\ DeferredProgressCommitHistoryInvariant'
+           /\ CausalProgressCommitHistoryInvariant'
+           /\ ProtectedDeferredProgressInvariant'
+      <3>1. CASE AsyncNonCrashStep
+        <4>1. CASE AsyncRunnerStep
+          BY <1>1, <2>1, <2>3, <2>4, <3>1, <4>1,
+             AsyncRunnerStepPreservesProgressCommitSlotInvariant
+        <4>2. CASE AsyncNonRunnerStep
+          BY <1>1, <2>1, <2>3, <2>4, <3>1, <4>2,
+             AsyncNonRunnerStepPreservesProgressCommitSlotInvariant
+        <4> QED BY <3>1, <4>1, <4>2 DEF AsyncNonCrashStep
+      <3>2. CASE \E node \in ValidatorIds: PreGstCrash(node)
+        <4>1. ASSUME NEW node \in ValidatorIds,
+                      PreGstCrash(node)
+               PROVE /\ QueuedProgressCommitHistoryInvariant'
+                     /\ DeferredProgressCommitHistoryInvariant'
+                     /\ CausalProgressCommitHistoryInvariant'
+                     /\ ProtectedDeferredProgressInvariant'
+          BY <1>1, <2>1, <2>3, <2>4, <4>1,
+             PreGstCrashPreservesProgressCommitSlotInvariant
+        <4> QED BY <3>2, <4>1
+      <3> QED BY <1>1, <3>1, <3>2 DEF AsyncNext
+    <2>6. LockWithinNodeViewInvariant'
+      BY <1>1, <2>1, AsyncNextPreservesLockWithinNodeView
+    <2> QED BY <2>5, <2>6 DEF ProgressCommitSlotInvariant
+  <1> QED BY <1>1
+
+THEOREM AsyncAllVarsStutterPreservesProgressCommitSlotInvariant ==
+  /\ ProgressCommitSlotInvariant
+  /\ UNCHANGED AsyncAllVars
+  => ProgressCommitSlotInvariant'
+BY Isa
+   DEF ProgressCommitSlotInvariant,
+       LockWithinNodeViewInvariant,
+       QueuedProgressCommitHistoryInvariant,
+       DeferredProgressCommitHistoryInvariant,
+       CausalProgressCommitHistoryInvariant,
+       ProgressCommitSourcesIn, ProgressCommitSource,
+       ProgressCommitVoteHistory, HistoricalLockedCommitItem,
+       LockedPrepareRound, ProtectedDeferredProgressInvariant,
+       ProtectedDeferredProgressIndices, ProtectedProgressCommand,
+       SameProtectedProgressSlot, AsyncAllVars,
+       AsyncSchedulerVars, vars
+
+THEOREM AsyncBracketNextPreservesProgressCommitSlotInvariant ==
+  /\ AsyncStrongTypeInvariant
+  /\ ProgressCommitSlotInvariant
+  /\ [AsyncNext]_AsyncAllVars
+  => /\ AsyncStrongTypeInvariant'
+     /\ ProgressCommitSlotInvariant'
+PROOF
+  <1>1. ASSUME /\ AsyncStrongTypeInvariant
+                /\ ProgressCommitSlotInvariant
+                /\ [AsyncNext]_AsyncAllVars
+         PROVE /\ AsyncStrongTypeInvariant'
+               /\ ProgressCommitSlotInvariant'
+    <2>1. CASE AsyncNext
+      BY <1>1, <2>1, AsyncNextPreservesStrongTypeInvariant,
+         AsyncNextPreservesProgressCommitSlotInvariant
+    <2>2. CASE UNCHANGED AsyncAllVars
+      BY <1>1, <2>2,
+         AsyncAllVarsStutterPreservesStrongTypeInvariant,
+         AsyncAllVarsStutterPreservesProgressCommitSlotInvariant
+    <2> QED BY <1>1, <2>1, <2>2
+  <1> QED BY <1>1
+
+THEOREM AsyncInitEstablishesProgressCommitSlotInvariant ==
+  \A initialContext:
+    AsyncInitAt(initialContext)
+      => /\ AsyncStrongTypeInvariant
+         /\ ProgressCommitSlotInvariant
+PROOF
+  <1>1. ASSUME NEW initialContext,
+                AsyncInitAt(initialContext)
+         PROVE /\ AsyncStrongTypeInvariant
+               /\ ProgressCommitSlotInvariant
+    <2>1. AsyncStrongTypeInvariant
+      BY <1>1, AsyncInitEstablishesStrongTypeInvariant
+    <2>2. /\ QueuedProgressCommitHistoryInvariant
+           /\ DeferredProgressCommitHistoryInvariant
+           /\ CausalProgressCommitHistoryInvariant
+      BY <1>1, AsyncInitEstablishesProgressCommitHistories
+    <2>3. LockWithinNodeViewInvariant
+
+      BY <1>1, AsyncInitEstablishesLockWithinNodeView
+    <2>4. ProtectedDeferredProgressInvariant
+      BY <1>1, AsyncInitEstablishesProgressWitness
+         DEF ProgressWitnessInvariant
+    <2> QED BY <2>1, <2>2, <2>3, <2>4
+         DEF ProgressCommitSlotInvariant
+  <1> QED BY <1>1
+
+THEOREM ProtectedDeferredProgressInvariantObligation ==
+  \A initialContext:
+    AsyncSpecAt(initialContext) => []ProtectedDeferredProgressInvariant
+PROOF
+  <1>1. ASSUME NEW initialContext
+         PROVE AsyncSpecAt(initialContext)
+                 => []ProtectedDeferredProgressInvariant
+    <2> DEFINE Inductive ==
+           /\ AsyncStrongTypeInvariant
+           /\ ProgressCommitSlotInvariant
+    <2>1. AsyncInitAt(initialContext) => Inductive
+      BY AsyncInitEstablishesProgressCommitSlotInvariant DEF Inductive
+    <2>2. Inductive /\ [AsyncNext]_AsyncAllVars => Inductive'
+      BY AsyncBracketNextPreservesProgressCommitSlotInvariant
+         DEF Inductive
+    <2>3. AsyncSpecAt(initialContext) => []Inductive
+      BY <2>1, <2>2, PTL DEF AsyncSpecAt
+    <2>4. Inductive => ProtectedDeferredProgressInvariant
+      BY DEF Inductive, ProgressCommitSlotInvariant
+    <2> QED BY <2>3, <2>4, PTL
+  <1> QED BY <1>1
+
+
+(***************************************************************************
+The current locked Commit intent has one durable source owner: either its
+signature request is pending, or the exact signed batch is retained by the
+adapter.  The two supporting invariants capture the monotone lock frontier
+and the provenance/order of responsive retained Commit controls.
+***************************************************************************)
+
+ResponsiveCommitIntentLockBound ==
+  \A vote \in commitIntents:
+    (vote.signer \in AsyncCurrentResponsiveVoters
+      /\ vote.context = context)
+      => /\ vote.view <= lockRank[vote.signer]
+         /\ (vote.view = lockRank[vote.signer]
+               => vote.subject = lockSubject[vote.signer])
+
+ResponsiveRetainedCommitControlSound ==
+  \A item \in asyncRetainedControl:
+    (item.kind = "CommitVote"
+      /\ item.source \in AsyncCurrentResponsiveVoters)
+      => /\ item.envelope.vote.signer = item.source
+         /\ item.envelope.vote.context = context
+         /\ item.envelope.vote \in commitIntents
+         /\ item.envelope.vote.view <= lockRank[item.source]
+
+ActiveCommitIntentSourceOwnership ==
+  /\ \A request \in signVotes:
+       /\ request.node \in AsyncCurrentResponsiveVoters
+       /\ request.vote.phase = "Commit"
+       => /\ request.vote.signer = request.node
+          /\ request.vote.context = context
+          /\ request.vote \in commitIntents
+          /\ request.vote.view <= lockRank[request.node]
+          /\ (request.vote.view = lockRank[request.node]
+                => request.vote.subject = lockSubject[request.node])
+  /\ \A node \in AsyncCurrentResponsiveVoters, vote \in commitIntents:
+       ActiveLockedCommitIntent(node, vote)
+         => \/ VoteSign(node, vote) \in signVotes
+            \/ RetainedCommitIntent(node, vote)
+
+CommitSourceRetentionInvariant ==
+  /\ ResponsiveCommitIntentLockBound
+  /\ ResponsiveRetainedCommitControlSound
+  /\ ActiveCommitIntentSourceOwnership
+
+CommitSourceAuxiliaryInvariant ==
+  /\ ResponsiveRetainedCommitControlSound
+  /\ ActiveCommitIntentSourceOwnership
+
+ResponsiveCommitSignRequests ==
+  {request \in signVotes:
+     /\ request.node \in AsyncCurrentResponsiveVoters
+     /\ request.vote.phase = "Commit"}
+
+ResponsiveRetainedCommitItems ==
+  {item \in asyncRetainedControl:
+     /\ item.source \in AsyncCurrentResponsiveVoters
+     /\ item.kind = "CommitVote"}
+
+CommitSourceProjection ==
+  <<context, commitIntents, lockRank, lockSubject,
+    ResponsiveCommitSignRequests, ResponsiveRetainedCommitItems>>
+
+PersistLockCommitSourceTransition(request) ==
+  /\ PersistLockCommit(request)
+  /\ UNCHANGED ResponsiveRetainedCommitItems
+
+PersistInstallCommitSourceTransition(request) ==
+  /\ PersistInstallTC(request)
+  /\ UNCHANGED <<ResponsiveCommitSignRequests,
+                 ResponsiveRetainedCommitItems>>
+
+THEOREM WeakStrictOrderTrans ==
+  \A low, middle, high:
+    low <= middle /\ middle < high => low < high
+BY SMT
+
+THEOREM WeakOrderTrans ==
+  \A low, middle, high:
+    low <= middle /\ middle <= high => low <= high
+BY SMT
+
+THEOREM SqueezedOrderEquality ==
+  \A low, middle, high:
+    /\ low <= middle
+    /\ middle <= high
+    /\ low = high
+    => /\ low = middle
+       /\ middle = high
+BY SMT
+
+THEOREM ProgressFunctionalUpdateAtKey ==
+  \A mapping, key, value:
+    key \in DOMAIN mapping
+      => [mapping EXCEPT ![key] = value][key] = value
+BY Isa
+
+THEOREM AsyncInitEstablishesCommitSourceRetention ==
+  \A initialContext:
+    AsyncInitAt(initialContext) => CommitSourceRetentionInvariant
+PROOF
+  <1>1. ASSUME NEW initialContext,
+                AsyncInitAt(initialContext)
+         PROVE CommitSourceRetentionInvariant
+    <2>1. /\ context = initialContext
+           /\ asyncRetainedControl = {}
+           /\ ModelConfiguration
+           /\ FrozenContextAdmissible(initialContext)
+           /\ initialContext.height \in Nat
+           /\ (initialContext.height = 0 => commitIntents = {})
+           /\ (initialContext.height > 0
+                 => /\ commitIntents =
+                          BootstrapParentCommitIntents(initialContext)
+                    /\ BootstrapParentContext(initialContext)
+                         # initialContext)
+      <3>1. /\ ModelConfiguration
+             /\ FrozenContextAdmissible(initialContext)
+             /\ context = initialContext
+             /\ asyncRetainedControl = {}
+             /\ (initialContext.height = 0 => commitIntents = {})
+             /\ (initialContext.height > 0
+                   => commitIntents =
+                        BootstrapParentCommitIntents(initialContext))
+        BY <1>1, Isa
+           DEF AsyncInitAt, AsyncBaseInitAt, InitAt, AsyncTransportInit
+      <3>2. initialContext.height \in Nat
+        BY <3>1, FrozenContextFieldsTyped DEF Heights
+      <3>3. initialContext.height > 0
+               => BootstrapParentContext(initialContext) # initialContext
+        BY <3>1, BootstrapParentContextPrecedes
+      <3> QED BY <3>1, <3>2, <3>3
+    <2>2. ResponsiveCommitIntentLockBound
+      <3>1. ASSUME NEW vote \in commitIntents,
+                    /\ vote.signer \in AsyncCurrentResponsiveVoters
+                       /\ vote.context = context
+             PROVE /\ vote.view <= lockRank[vote.signer]
+                   /\ (vote.view = lockRank[vote.signer]
+                         => vote.subject = lockSubject[vote.signer])
+        <4>1. CASE initialContext.height = 0
+          BY <2>1, <3>1, <4>1
+        <4>2. CASE initialContext.height > 0
+          <5>1. vote.context.height =
+                   BootstrapParentContext(initialContext).height
+            BY <2>1, <3>1, <4>2,
+               BootstrapParentIntentContextHeights
+          <5>2. BootstrapParentContext(initialContext).height #
+                   initialContext.height
+            BY <2>1, <4>2, BootstrapParentContextPrecedes
+          <5>3. vote.context.height = initialContext.height
+            BY <2>1, <3>1
+          <5> QED BY <5>1, <5>2, <5>3
+        <4> QED BY <2>1, <4>1, <4>2, SMT
+      <3> QED BY <3>1 DEF ResponsiveCommitIntentLockBound
+    <2>3. ResponsiveRetainedCommitControlSound
+      BY <2>1 DEF ResponsiveRetainedCommitControlSound
+    <2>4. ActiveCommitIntentSourceOwnership
+      <3>1. \A request \in signVotes:
+               /\ request.node \in AsyncCurrentResponsiveVoters
+               /\ request.vote.phase = "Commit"
+               => /\ request.vote.signer = request.node
+                  /\ request.vote.context = context
+                  /\ request.vote \in commitIntents
+                  /\ request.vote.view <= lockRank[request.node]
+                  /\ (request.vote.view = lockRank[request.node]
+                        => request.vote.subject = lockSubject[request.node])
+        BY <1>1 DEF AsyncInitAt, AsyncBaseInitAt, InitAt
+      <3>2. ASSUME NEW node \in AsyncCurrentResponsiveVoters,
+                    NEW vote \in commitIntents,
+                    ActiveLockedCommitIntent(node, vote)
+             PROVE \/ VoteSign(node, vote) \in signVotes
+                   \/ RetainedCommitIntent(node, vote)
+        <4>1. CASE initialContext.height = 0
+          BY <2>1, <3>2, <4>1
+        <4>2. CASE initialContext.height > 0
+          <5>1. vote.context.height =
+                   BootstrapParentContext(initialContext).height
+            BY <2>1, <3>2, <4>2,
+               BootstrapParentIntentContextHeights
+          <5>2. BootstrapParentContext(initialContext).height #
+                   initialContext.height
+            BY <2>1, <4>2, BootstrapParentContextPrecedes
+          <5>3. vote.context.height = initialContext.height
+            BY <2>1, <3>2 DEF ActiveLockedCommitIntent
+          <5> QED BY <5>1, <5>2, <5>3
+        <4> QED BY <2>1, <4>1, <4>2, SMT
+      <3> QED BY <3>1, <3>2 DEF ActiveCommitIntentSourceOwnership
+    <2> QED BY <2>2, <2>3, <2>4
+         DEF CommitSourceRetentionInvariant
+  <1> QED BY <1>1
+
+THEOREM LockStableNextLeavesCommitLockFrame ==
+  LockStableNext
+    => UNCHANGED <<context, commitIntents, lockRank, lockSubject>>
+BY IsaM("blast")
+   DEF LockStableNext,
+       SetGST, AssembleLocalBody, BeginLocalProposal, PersistProposal,
+       CompleteProposalSignature, ByzantineBroadcastProposal,
+       DeliverProposal, FetchBody, StoreBody,
+       ValidateBody, ValidateDecidedBody, RejectBody,
+       BeginPrepare, PersistPrepare,
+       CompleteVoteSignature, ByzantineBroadcastVote, DeliverVote,
+       FormPrepareQC, DeliverQC, BeginObservePrepare,
+       PersistObservePrepare, BeginLockCommit, FormCommitQC,
+       BeginDecision, PersistDecision, BeginTimeout, PersistTimeout,
+       CompleteTimeoutSignature, ByzantineBroadcastTimeout,
+       DeliverTimeout, FormTC, DeliverTC, BeginInstallTC,
+       FetchCertifiedBody, ApplyDecision, Crash, Restart, ResumeProposal,
+       ResumeVote, ResumeTimeout, DropProposal
+
+THEOREM PersistLockPreservesResponsiveCommitIntentLockBound ==
+  \A request \in pendingLockCommit:
+    /\ StrongInductiveInvariant
+    /\ ResponsiveCommitIntentLockBound
+    /\ PersistLockCommit(request)
+    => ResponsiveCommitIntentLockBound'
+PROOF
+  <1>1. ASSUME NEW request \in pendingLockCommit,
+                StrongInductiveInvariant,
+                ResponsiveCommitIntentLockBound,
+                PersistLockCommit(request)
+         PROVE ResponsiveCommitIntentLockBound'
+    <2>1. PendingVoteWritesAuthorized
+      BY <1>1
+         DEF StrongInductiveInvariant, ReducerProvenanceInvariant
+    <2>1a. /\ Honest \subseteq ValidatorIds
+            /\ DOMAIN lockRank = ValidatorIds
+            /\ DOMAIN lockSubject = ValidatorIds
+      BY <1>1, Isa
+         DEF StrongInductiveInvariant, Safety, TypeInvariant,
+             ModelConfiguration, QuorumConfiguration
+    <2>1b. /\ lockRank' =
+                   [lockRank EXCEPT ![request.node] = request.qc.view]
+            /\ lockSubject' =
+                   [lockSubject EXCEPT ![request.node] = request.qc.subject]
+      BY <1>1 DEF PersistLockCommit
+    <2>2. ASSUME NEW vote \in commitIntents',
+                  /\ vote.signer \in AsyncCurrentResponsiveVoters'
+                     /\ vote.context = context'
+           PROVE /\ vote.view <= lockRank'[vote.signer]
+                 /\ (vote.view = lockRank'[vote.signer]
+                       => vote.subject = lockSubject'[vote.signer])
+      <3>1. /\ context' = context
+             /\ AsyncCurrentResponsiveVoters' =
+                  AsyncCurrentResponsiveVoters
+             /\ commitIntents' = commitIntents \cup {request.vote}
+        BY <1>1, Isa
+           DEF PersistLockCommit, AsyncCurrentResponsiveVoters,
+               CurrentVoters, CurrentEpoch
+      <3>2. CASE vote = request.vote
+        <4>1. /\ request.node \in Honest
+               /\ request.vote.signer = request.node
+               /\ request.vote.view = request.qc.view
+               /\ request.vote.subject = request.qc.subject
+               /\ request.qc.view >= lockRank[request.node]
+               /\ (request.qc.view = lockRank[request.node]
+                     => request.qc.subject = lockSubject[request.node])
+          BY <1>1, <2>1 DEF PendingVoteWritesAuthorized
+        <4>2. /\ lockRank'[request.node] = request.qc.view
+               /\ lockSubject'[request.node] = request.qc.subject
+          BY <2>1a, <2>1b, <4>1, ProgressFunctionalUpdateAtKey
+        <4>3. /\ vote.view = lockRank'[vote.signer]
+               /\ vote.subject = lockSubject'[vote.signer]
+          BY <3>2, <4>1, <4>2
+        <4> QED BY <4>3
+      <3>3. CASE vote \in commitIntents
+        <4>1. /\ vote.view <= lockRank[vote.signer]
+               /\ (vote.view = lockRank[vote.signer]
+                     => vote.subject = lockSubject[vote.signer])
+          BY <1>1, <2>2, <3>1, <3>3
+             DEF ResponsiveCommitIntentLockBound
+        <4>2. CASE vote.signer = request.node
+          <5>1. /\ request.node \in Honest
+                 /\ request.qc.view >= lockRank[request.node]
+                 /\ (request.qc.view = lockRank[request.node]
+                       => request.qc.subject = lockSubject[request.node])
+            BY <1>1, <2>1 DEF PendingVoteWritesAuthorized
+          <5>2. /\ lockRank'[request.node] = request.qc.view
+                 /\ lockSubject'[request.node] = request.qc.subject
+            BY <2>1a, <2>1b, <5>1, ProgressFunctionalUpdateAtKey
+          <5>3a. lockRank[vote.signer] <= request.qc.view
+            BY <4>2, <5>1
+          <5>3b. vote.view <= request.qc.view
+            BY <4>1, <5>3a, WeakOrderTrans
+          <5>3. vote.view <= lockRank'[vote.signer]
+            BY <4>2, <5>2, <5>3b
+          <5>4. ASSUME vote.view = lockRank'[vote.signer]
+                 PROVE vote.subject = lockSubject'[vote.signer]
+            <6>0. vote.view = request.qc.view
+              BY <4>2, <5>2, <5>4
+            <6>1a. /\ vote.view = lockRank[vote.signer]
+                    /\ lockRank[vote.signer] = request.qc.view
+              BY <4>1, <5>3a, <6>0, SqueezedOrderEquality
+            <6>1. /\ vote.view = lockRank[vote.signer]
+                   /\ request.qc.view = lockRank[request.node]
+              BY <4>2, <5>1, <6>1a
+            <6>2. /\ vote.subject = lockSubject[vote.signer]
+                   /\ request.qc.subject = lockSubject[request.node]
+              BY <4>1, <4>2, <5>1, <6>1
+            <6> QED BY <4>2, <5>2, <6>2
+          <5> QED BY <5>3, <5>4
+        <4>3. CASE vote.signer # request.node
+          <5>0a. TypeInvariant
+            BY <1>1 DEF StrongInductiveInvariant, Safety
+          <5>0b. AsyncCurrentResponsiveVoters \subseteq ValidatorIds
+            BY <5>0a, AsyncCurrentResponsiveVotersAreValidators
+          <5>0. vote.signer \in ValidatorIds
+            BY <2>2, <3>1, <5>0b
+          <5>1. /\ lockRank'[vote.signer] = lockRank[vote.signer]
+                 /\ lockSubject'[vote.signer] = lockSubject[vote.signer]
+            BY <1>1, <2>1a, <4>3, <5>0,
+               FunctionalUpdateAwayFromKey
+               DEF PersistLockCommit
+          <5> QED BY <4>1, <5>1
+        <4> QED BY <4>2, <4>3
+      <3> QED BY <2>2, <3>1, <3>2, <3>3, SMT
+    <2> QED BY <2>2 DEF ResponsiveCommitIntentLockBound
+  <1> QED BY <1>1
+
+THEOREM PersistInstallDoesNotActivateHigherResponsiveCommitIntent ==
+  \A request \in pendingInstallTC, vote \in commitIntents:
+    /\ ResponsiveCommitIntentLockBound
+    /\ PersistInstallTC(request)
+    /\ vote.signer \in AsyncCurrentResponsiveVoters
+    /\ vote.context = context
+    /\ lockRank'[vote.signer] > lockRank[vote.signer]
+    => vote.view < lockRank'[vote.signer]
+PROOF
+  <1>1. ASSUME NEW request \in pendingInstallTC,
+                NEW vote \in commitIntents,
+                ResponsiveCommitIntentLockBound,
+                PersistInstallTC(request),
+                vote.signer \in AsyncCurrentResponsiveVoters,
+                vote.context = context,
+                lockRank'[vote.signer] > lockRank[vote.signer]
+         PROVE vote.view < lockRank'[vote.signer]
+    <2>1. vote.view <= lockRank[vote.signer]
+      BY <1>1 DEF ResponsiveCommitIntentLockBound
+    <2>2. lockRank[vote.signer] < lockRank'[vote.signer]
+      BY <1>1
+    <2> QED BY <2>1, <2>2, WeakStrictOrderTrans
+  <1> QED BY <1>1
+
+THEOREM PersistInstallPreservesResponsiveCommitIntentLockBound ==
+  \A request \in pendingInstallTC:
+    /\ StrongInductiveInvariant
+    /\ ResponsiveCommitIntentLockBound
+    /\ PersistInstallTC(request)
+    => ResponsiveCommitIntentLockBound'
+PROOF
+  <1>1. ASSUME NEW request \in pendingInstallTC,
+                StrongInductiveInvariant,
+                ResponsiveCommitIntentLockBound,
+                PersistInstallTC(request)
+         PROVE ResponsiveCommitIntentLockBound'
+    <2>1. ASSUME NEW vote \in commitIntents',
+                  /\ vote.signer \in AsyncCurrentResponsiveVoters'
+                     /\ vote.context = context'
+           PROVE /\ vote.view <= lockRank'[vote.signer]
+                 /\ (vote.view = lockRank'[vote.signer]
+                       => vote.subject = lockSubject'[vote.signer])
+      <3>1. /\ commitIntents' = commitIntents
+             /\ context' = context
+        BY <1>1, Isa DEF PersistInstallTC
+      <3>2. AsyncCurrentResponsiveVoters' =
+               AsyncCurrentResponsiveVoters
+        BY <3>1 DEF AsyncCurrentResponsiveVoters,
+                      CurrentVoters, CurrentEpoch
+      <3>2a. /\ DOMAIN lockRank = ValidatorIds
+              /\ DOMAIN lockSubject = ValidatorIds
+        BY <1>1, Isa
+           DEF StrongInductiveInvariant, Safety, TypeInvariant
+      <3>2b. AsyncCurrentResponsiveVoters \subseteq ValidatorIds
+        BY <1>1, AsyncCurrentResponsiveVotersAreValidators
+           DEF StrongInductiveInvariant, Safety
+      <3>2c. TypeInvariant
+        BY <1>1 DEF StrongInductiveInvariant, Safety
+      <3>3. lockRank'[vote.signer] >= lockRank[vote.signer]
+        <4>1. LockMonotonicityAction
+          BY <1>1, <3>2c, PersistInstallTCIsLockMonotone
+        <4>2. vote.signer \in ValidatorIds
+          BY <2>1, <3>2, <3>2b
+        <4> QED BY <3>1, <4>1, <4>2
+             DEF LockMonotonicityAction
+      <3>4. /\ vote.view <= lockRank[vote.signer]
+             /\ (vote.view = lockRank[vote.signer]
+                   => vote.subject = lockSubject[vote.signer])
+        BY <1>1, <2>1, <3>1, <3>2
+           DEF ResponsiveCommitIntentLockBound
+      <3>5. CASE lockRank'[vote.signer] = lockRank[vote.signer]
+        <4>1. lockSubject'[vote.signer] = lockSubject[vote.signer]
+          <5>1. CASE vote.signer = request.node
+            <6>1. vote.signer \in ValidatorIds
+              BY <2>1, <3>2, <3>2b
+            <6>2. ~(TcHighRank(request.tc) > lockRank[request.node])
+              BY <1>1, <3>2a, <3>5, <5>1, <6>1, Isa
+                 DEF PersistInstallTC
+            <6> QED BY <1>1, <3>2a, <5>1, <6>1, <6>2, Isa
+                 DEF PersistInstallTC
+          <5>2. CASE vote.signer # request.node
+            <6>1. vote.signer \in ValidatorIds
+              BY <2>1, <3>2, <3>2b
+            <6> QED BY <1>1, <3>2a, <5>2, <6>1,
+                 FunctionalUpdateAwayFromKey
+                 DEF PersistInstallTC
+          <5> QED BY <5>1, <5>2
+        <4> QED BY <3>4, <3>5, <4>1
+      <3>6. CASE lockRank'[vote.signer] > lockRank[vote.signer]
+        <4>1. vote.view < lockRank'[vote.signer]
+          BY <1>1, <2>1, <3>1, <3>2, <3>6,
+             PersistInstallDoesNotActivateHigherResponsiveCommitIntent
+        <4> QED BY <4>1
+      <3> QED BY <3>3, <3>5, <3>6, SMT
+    <2> QED BY <2>1 DEF ResponsiveCommitIntentLockBound
+  <1> QED BY <1>1
+
+THEOREM AsyncNextPreservesResponsiveCommitIntentLockBound ==
+  /\ StrongInductiveInvariant
+  /\ ResponsiveCommitIntentLockBound
+  /\ AsyncNext
+  => ResponsiveCommitIntentLockBound'
+PROOF
+  <1>1. ASSUME StrongInductiveInvariant,
+              ResponsiveCommitIntentLockBound,
+              AsyncNext
+         PROVE ResponsiveCommitIntentLockBound'
+    <2>1. [Next]_vars
+      BY <1>1, AsyncStepRefinementObligation
+    <2>2. CASE UNCHANGED vars
+      BY <1>1, <2>2, Isa
+         DEF ResponsiveCommitIntentLockBound, vars,
+             AsyncCurrentResponsiveVoters, CurrentVoters, CurrentEpoch
+    <2>3. CASE Next
+      <3>1. CASE LockStableNext
+        BY <1>1, <3>1, LockStableNextLeavesCommitLockFrame, Isa
+           DEF ResponsiveCommitIntentLockBound,
+               AsyncCurrentResponsiveVoters, CurrentVoters, CurrentEpoch
+      <3>2. CASE \E request \in pendingLockCommit:
+                    PersistLockCommit(request)
+        BY <1>1, <3>2,
+           PersistLockPreservesResponsiveCommitIntentLockBound
+      <3>3. CASE \E request \in pendingInstallTC:
+                    PersistInstallTC(request)
+        BY <1>1, <3>3,
+           PersistInstallPreservesResponsiveCommitIntentLockBound
+      <3> QED BY <2>3, <3>1, <3>2, <3>3,
+           NextLockFootprintClassification
+    <2> QED BY <2>1, <2>2, <2>3
+  <1> QED BY <1>1
+
+THEOREM RememberedNonCommitControlPreservesCommitItems ==
+  \A retained, items:
+    (\A item \in items: item.kind # "CommitVote")
+      => {item \in RememberedControl(retained, items):
+             item.kind = "CommitVote"}
+           = {item \in retained: item.kind = "CommitVote"}
+BY IsaM("blast")
+   DEF RememberedControl, RetainedClassItems, ControlClass
+
+THEOREM InstalledNonCommitControlPreservesCommitItems ==
+  \A retained, node, items:
+    (\A item \in items: item.kind # "CommitVote")
+      => {item \in InstalledControl(retained, node, items):
+             item.kind = "CommitVote"}
+           = {item \in retained: item.kind = "CommitVote"}
+BY RememberedNonCommitControlPreservesCommitItems, Isa
+   DEF InstalledControl, ControlClass,
+       AsyncInstallRetainedControlKinds
+
+THEOREM ExecuteRegularCommandHasCommitSourceTransition ==
+  \A command:
+    ExecuteRegularCommand(command)
+      => \/ UNCHANGED CommitSourceProjection
+         \/ \E request \in pendingLockCommit:
+              PersistLockCommitSourceTransition(request)
+BY IsaM("blast")
+   DEF ExecuteRegularCommand, RegularCoreCommand,
+       PersistLockCommitSourceTransition, CommitSourceProjection,
+       ResponsiveCommitSignRequests, ResponsiveRetainedCommitItems,
+       AsyncAuxVars, AssembleLocalBody, BeginLocalProposal,
+       PersistProposal, FetchBody, StoreBody,
+       ValidateBody, ValidateDecidedBody, RejectBody, BeginPrepare,
+       PersistPrepare, BeginObservePrepare, PersistObservePrepare,
+       BeginLockCommit, PersistLockCommit, FormCommitQC, BeginDecision,
+       PersistTimeout, FormTC, BeginInstallTC, FetchCertifiedBody, vars
+
+THEOREM ExecutePersistInstallHasCommitSourceTransition ==
+  \A command:
+    ExecutePersistInstall(command)
+      => \E request \in pendingInstallTC:
+           PersistInstallCommitSourceTransition(request)
+BY InstalledNonCommitControlPreservesCommitItems, IsaM("blast")
+   DEF ExecutePersistInstall, PersistInstalledControl,
+       PersistInstallCommitSourceTransition,
+       ResponsiveCommitSignRequests, ResponsiveRetainedCommitItems,
+       TcOutbox
+
+THEOREM ExecuteNonVoteCommandPreservesCommitSourceProjection ==
+  \A command:
+    /\ ~ExecuteRegularCommand(command)
+    /\ ~ExecuteSignVote(command)
+    /\ ~ExecutePersistInstall(command)
+    /\ ExecuteCommand(command)
+    => UNCHANGED CommitSourceProjection
+BY RememberedNonCommitControlPreservesCommitItems, IsaM("blast")
+   DEF ExecuteCommand, ExecuteSignProposal, ExecuteFormPrepareQC,
+       ExecuteSignTimeout, ExecutePersistDecision,
+       ExecuteRequestCertifiedBody, ExecuteApply, ExecuteCoreDelivery,
+       ExecuteChunkDelivery, ExecuteRejectAuthenticatedJunk,
+       CompleteProposalSignature, FormPrepareQC,
+       CompleteTimeoutSignature, PersistDecision,
+       PublishControlItems, PublishControlAndEphemeralItems,
+       PersistDecisionControl, QcOutbox, ProposalOutbox,
+       TimeoutOutbox, VoteOutbox, RememberedControl,
+       CommitSourceProjection, ResponsiveCommitSignRequests,
+       ResponsiveRetainedCommitItems, vars
+
+THEOREM ExecuteCommandHasCommitSourceTransition ==
+  \A command:
+    ExecuteCommand(command)
+      => \/ UNCHANGED CommitSourceProjection
+         \/ ExecuteSignVote(command)
+         \/ \E request \in pendingLockCommit:
+              PersistLockCommitSourceTransition(request)
+         \/ \E request \in pendingInstallTC:
+              PersistInstallCommitSourceTransition(request)
+PROOF
+  <1>1. ASSUME NEW command, ExecuteCommand(command)
+         PROVE \/ UNCHANGED CommitSourceProjection
+               \/ ExecuteSignVote(command)
+               \/ \E request \in pendingLockCommit:
+                    PersistLockCommitSourceTransition(request)
+               \/ \E request \in pendingInstallTC:
+                    PersistInstallCommitSourceTransition(request)
+    <2>1. CASE ExecuteRegularCommand(command)
+      BY <2>1, ExecuteRegularCommandHasCommitSourceTransition
+    <2>2. CASE ExecuteSignVote(command)
+      BY <2>2
+    <2>3. CASE ExecutePersistInstall(command)
+      BY <2>3, ExecutePersistInstallHasCommitSourceTransition
+    <2>4. CASE /\ ~ExecuteRegularCommand(command)
+                 /\ ~ExecuteSignVote(command)
+                 /\ ~ExecutePersistInstall(command)
+      BY <1>1, <2>4,
+         ExecuteNonVoteCommandPreservesCommitSourceProjection
+    <2> QED BY <1>1, <2>1, <2>2, <2>3, <2>4
+         DEF ExecuteCommand
+  <1> QED BY <1>1
+
+THEOREM FifoRuntimeHasCommitSourceTransition ==
+  \A node:
+    FifoRuntimeStep(node)
+      => \/ UNCHANGED CommitSourceProjection
+         \/ \E command: ExecuteSignVote(command)
+         \/ \E request \in pendingLockCommit:
+              PersistLockCommitSourceTransition(request)
+         \/ \E request \in pendingInstallTC:
+              PersistInstallCommitSourceTransition(request)
+PROOF
+  <1>1. ASSUME NEW node, FifoRuntimeStep(node)
+         PROVE \/ UNCHANGED CommitSourceProjection
+               \/ \E command: ExecuteSignVote(command)
+               \/ \E request \in pendingLockCommit:
+                    PersistLockCommitSourceTransition(request)
+               \/ \E request \in pendingInstallTC:
+                    PersistInstallCommitSourceTransition(request)
+    <2> DEFINE Command == NextNodeCommand(node)
+    <2>1. CASE CommandDispatchable(Command)
+      <3>1. ExecuteCommand(Command)
+        BY <1>1, <2>1, Isa DEF FifoRuntimeStep, Command
+      <3> QED BY <3>1, ExecuteCommandHasCommitSourceTransition
+    <2>2. CASE ~CommandDispatchable(Command)
+      BY <1>1, <2>2, Isa
+         DEF FifoRuntimeStep, DeferCommand, DiscardCommand,
+             CommitSourceProjection, ResponsiveCommitSignRequests,
+             ResponsiveRetainedCommitItems, Command, vars
+    <2> QED BY <2>1, <2>2
+  <1> QED BY <1>1
+
+THEOREM DeferredDrainHasCommitSourceTransition ==
+  \A node:
+    DeferredDrainStep(node)
+      => \/ UNCHANGED CommitSourceProjection
+         \/ \E command: ExecuteSignVote(command)
+         \/ \E request \in pendingLockCommit:
+              PersistLockCommitSourceTransition(request)
+         \/ \E request \in pendingInstallTC:
+              PersistInstallCommitSourceTransition(request)
+PROOF
+  <1>1. ASSUME NEW node, DeferredDrainStep(node)
+         PROVE \/ UNCHANGED CommitSourceProjection
+               \/ \E command: ExecuteSignVote(command)
+               \/ \E request \in pendingLockCommit:
+                    PersistLockCommitSourceTransition(request)
+               \/ \E request \in pendingInstallTC:
+                    PersistInstallCommitSourceTransition(request)
+    <2>1. CASE ~DeferredQueueNonempty(node)
+      BY <1>1, <2>1, Isa
+         DEF DeferredDrainStep, CommitSourceProjection,
+             ResponsiveCommitSignRequests,
+             ResponsiveRetainedCommitItems, vars
+    <2>2. CASE DeferredQueueNonempty(node)
+      <3> DEFINE Command == NextDeferredCommand(node)
+      <3>1. CASE CommandDispatchable(Command)
+        <4>1. ExecuteCommand(Command)
+          BY <1>1, <2>2, <3>1, Isa
+             DEF DeferredDrainStep, Command
+        <4> QED BY <4>1, ExecuteCommandHasCommitSourceTransition
+      <3>2. CASE ~CommandDispatchable(Command)
+        BY <1>1, <2>2, <3>2, Isa
+           DEF DeferredDrainStep, DiscardCommand,
+               CommitSourceProjection, ResponsiveCommitSignRequests,
+               ResponsiveRetainedCommitItems, Command, vars
+      <3> QED BY <3>1, <3>2
+    <2> QED BY <2>1, <2>2
+  <1> QED BY <1>1
+
+THEOREM RuntimeStepHasCommitSourceTransition ==
+  \A node:
+    RuntimeStep(node)
+      => \/ UNCHANGED CommitSourceProjection
+         \/ \E command: ExecuteSignVote(command)
+         \/ \E request \in pendingLockCommit:
+              PersistLockCommitSourceTransition(request)
+         \/ \E request \in pendingInstallTC:
+              PersistInstallCommitSourceTransition(request)
+PROOF
+  <1>1. ASSUME NEW node, RuntimeStep(node)
+         PROVE \/ UNCHANGED CommitSourceProjection
+               \/ \E command: ExecuteSignVote(command)
+               \/ \E request \in pendingLockCommit:
+                    PersistLockCommitSourceTransition(request)
+               \/ \E request \in pendingInstallTC:
+                    PersistInstallCommitSourceTransition(request)
+    <2>1. CASE FifoRuntimeStep(node)
+      BY <2>1, FifoRuntimeHasCommitSourceTransition
+    <2>2. CASE DeferredDrainStep(node)
+      BY <2>2, DeferredDrainHasCommitSourceTransition
+    <2>3. CASE NonQueueRuntimeAction(node)
+      BY <2>3, Isa
+         DEF NonQueueRuntimeAction,
+             DirectCommitCertificateDiscoveryStep,
+             DeferredTagStep, DeferredTimeoutStep,
+             DeferredRetransmitStep, DirectTimeoutStep,
+             DirectRetransmitStep, IdleRuntimeStep, BeginTimeout,
+             SendNodeRetransmissions, NoSendItem, PublishCommitCertificateRequests,
+             PublishEphemeralItems, LeaveCausalQueues,
+             CommitSourceProjection, ResponsiveCommitSignRequests,
+             ResponsiveRetainedCommitItems, vars
+    <2>4. \/ FifoRuntimeStep(node)
+           \/ DeferredDrainStep(node)
+           \/ NonQueueRuntimeAction(node)
+      BY <1>1 DEF RuntimeStep, NonQueueRuntimeAction
+    <2> QED BY <2>1, <2>2, <2>3, <2>4
+  <1> QED BY <1>1
+
+THEOREM RunNodeHasCommitSourceTransition ==
+  \A node:
+    RunNode(node)
+      => \/ UNCHANGED CommitSourceProjection
+         \/ \E command: ExecuteSignVote(command)
+         \/ \E request \in pendingLockCommit:
+              PersistLockCommitSourceTransition(request)
+         \/ \E request \in pendingInstallTC:
+              PersistInstallCommitSourceTransition(request)
+PROOF
+  <1>1. ASSUME NEW node, RunNode(node)
+         PROVE \/ UNCHANGED CommitSourceProjection
+               \/ \E command: ExecuteSignVote(command)
+               \/ \E request \in pendingLockCommit:
+                    PersistLockCommitSourceTransition(request)
+               \/ \E request \in pendingInstallTC:
+                    PersistInstallCommitSourceTransition(request)
+    <2>1. CASE LocalAdmissionStep(node)
+      BY <1>1, <2>1, Isa
+         DEF LocalAdmissionStep, AdmitProducerCompletion,
+             AdmitCausalHead, CommitSourceProjection,
+             ResponsiveCommitSignRequests,
+             ResponsiveRetainedCommitItems, vars
+    <2>2. CASE IngressDrainStep(node)
+      BY <1>1, <2>2, Isa
+         DEF IngressDrainStep, DrainFairIngressSelected,
+             CommitSourceProjection, ResponsiveCommitSignRequests,
+             ResponsiveRetainedCommitItems, vars
+    <2>3. CASE SerializedRuntimeStep(node)
+      <3>1. RuntimeStep(node)
+        BY <2>3 DEF SerializedRuntimeStep
+      <3> QED BY <3>1, RuntimeStepHasCommitSourceTransition
+    <2> QED BY <1>1, <2>1, <2>2, <2>3 DEF RunNode
+  <1> QED BY <1>1
+
+THEOREM AsyncNextHasCommitSourceTransition ==
+  AsyncNext
+    => \/ UNCHANGED CommitSourceProjection
+       \/ \E command: ExecuteSignVote(command)
+       \/ \E request \in pendingLockCommit:
+            PersistLockCommitSourceTransition(request)
+       \/ \E request \in pendingInstallTC:
+            PersistInstallCommitSourceTransition(request)
+PROOF
+  <1>1. ASSUME AsyncNext
+         PROVE \/ UNCHANGED CommitSourceProjection
+               \/ \E command: ExecuteSignVote(command)
+               \/ \E request \in pendingLockCommit:
+                    PersistLockCommitSourceTransition(request)
+               \/ \E request \in pendingInstallTC:
+                    PersistInstallCommitSourceTransition(request)
+    <2>1. CASE \E node \in AsyncCurrentResponsiveVoters: RunNode(node)
+      <3>1. ASSUME NEW node \in AsyncCurrentResponsiveVoters,
+                    RunNode(node)
+             PROVE \/ UNCHANGED CommitSourceProjection
+                   \/ \E command: ExecuteSignVote(command)
+                   \/ \E request \in pendingLockCommit:
+                        PersistLockCommitSourceTransition(request)
+                   \/ \E request \in pendingInstallTC:
+                        PersistInstallCommitSourceTransition(request)
+        BY <3>1, RunNodeHasCommitSourceTransition
+      <3> QED BY <2>1, <3>1
+    <2>2. CASE ~(\E node \in AsyncCurrentResponsiveVoters:
+                     RunNode(node))
+      BY <1>1, <2>2, IsaM("blast")
+         DEF AsyncNext, AsyncNonCrashStep, AsyncRunnerStep,
+             AsyncNonRunnerStep, RunHistoricalServer,
+             DrainHistoricalIngressSelected, HistoricalIdleStep,
+             AsyncSetGST, AsyncTick, ServiceIoWorker,
+             EnqueueIoLocalControl, AsyncNetworkStep,
+             AdmitIngressPacket, AdmitHiddenPacket,
+             CoalesceHiddenPacket, AsyncFaultStep, PreGstLosePacket,
+             PreGstCrash, Crash, InjectByzantineNoise,
+             InjectAuthenticatedJunk, InjectByzantineCertifiedRequest,
+             AsyncByzantineProposal, AsyncByzantineVote,
+             AsyncByzantineTimeout, PublishEphemeralItems,
+             CommitSourceProjection, ResponsiveCommitSignRequests,
+             ResponsiveRetainedCommitItems, AsyncSchedulerVars,
+             AsyncNonClockVars, vars
+    <2> QED BY <2>1, <2>2
+  <1> QED BY <1>1
+
+THEOREM CommitSourceProjectionFramePreservesAuxiliaryInvariant ==
+  /\ CommitSourceAuxiliaryInvariant
+  /\ UNCHANGED CommitSourceProjection
+  => CommitSourceAuxiliaryInvariant'
+BY Isa
+   DEF CommitSourceAuxiliaryInvariant,
+       ResponsiveRetainedCommitControlSound,
+       ActiveCommitIntentSourceOwnership,
+       ActiveLockedCommitIntent, RetainedCommitIntent,
+       CommitSourceProjection, ResponsiveCommitSignRequests,
+       ResponsiveRetainedCommitItems,
+       AsyncCurrentResponsiveVoters, CurrentVoters, CurrentEpoch
+
+THEOREM PersistLockPreservesCommitSourceAuxiliaryInvariant ==
+  \A request \in pendingLockCommit:
+    /\ AsyncStrongTypeInvariant
+    /\ CommitSourceRetentionInvariant
+    /\ PersistLockCommitSourceTransition(request)
+    => CommitSourceAuxiliaryInvariant'
+BY SMTT(90), Isa
+   DEF AsyncStrongTypeInvariant, AsyncSchedulerTypeInvariant,
+       StrongInductiveInvariant, Safety, TypeInvariant,
+       ReducerProvenanceInvariant, PendingVoteWritesAuthorized,
+       HonestVoteUnique, HonestCommitUniqueness,
+       AllPendingRequests,
+       CommitSourceRetentionInvariant, CommitSourceAuxiliaryInvariant,
+       ResponsiveCommitIntentLockBound,
+       ResponsiveRetainedCommitControlSound,
+       ActiveCommitIntentSourceOwnership,
+       ActiveLockedCommitIntent, RetainedCommitIntent,
+       PersistLockCommitSourceTransition, PersistLockCommit,
+       ResponsiveRetainedCommitItems, VoteSign,
+       AsyncCurrentResponsiveVoters, CurrentVoters, CurrentEpoch
+
+THEOREM ExecuteSignVotePreservesCommitSourceAuxiliaryInvariant ==
+  \A command:
+    /\ AsyncStrongTypeInvariant
+    /\ CommitSourceRetentionInvariant
+    /\ ExecuteSignVote(command)
+    => CommitSourceAuxiliaryInvariant'
+BY SMTT(120), Isa
+   DEF AsyncStrongTypeInvariant, AsyncSchedulerTypeInvariant,
+       AsyncTransportTypeInvariant,
+       AsyncTransportContentTypeInvariant,
+       AsyncTransportHistoryTypeInvariant,
+       StrongInductiveInvariant, Safety, TypeInvariant,
+       ReducerProvenanceInvariant, HonestVoteUnique,
+       HonestCommitUniqueness, CommitSigningRequiresIntent,
+       CommitSourceRetentionInvariant, CommitSourceAuxiliaryInvariant,
+       ResponsiveCommitIntentLockBound,
+       ResponsiveRetainedCommitControlSound,
+       ActiveCommitIntentSourceOwnership,
+       ActiveLockedCommitIntent, RetainedCommitIntent,
+       ExecuteSignVote, CompleteVoteSignature, PublishControlItems,
+       RememberedControl, RetainedClassItems, ControlClass, ControlView,
+       VoteOutbox, VoteSign, AsyncNetworkItem, VoteEnvelope,
+       AsyncCurrentResponsiveVoters, CurrentVoters, CurrentEpoch,
+       vars
+
+THEOREM PersistInstallPreservesCommitSourceAuxiliaryInvariant ==
+  \A request \in pendingInstallTC:
+    /\ AsyncStrongTypeInvariant
+    /\ CommitSourceRetentionInvariant
+    /\ PersistInstallCommitSourceTransition(request)
+    => CommitSourceAuxiliaryInvariant'
+PROOF
+  <1>1. ASSUME NEW request \in pendingInstallTC,
+                AsyncStrongTypeInvariant,
+                CommitSourceRetentionInvariant,
+                PersistInstallCommitSourceTransition(request)
+         PROVE CommitSourceAuxiliaryInvariant'
+    <2>1. /\ ResponsiveCommitIntentLockBound
+           /\ CommitSourceAuxiliaryInvariant
+      BY <1>1 DEF CommitSourceRetentionInvariant
+    <2>2. \A vote \in commitIntents:
+             /\ vote.signer \in AsyncCurrentResponsiveVoters
+             /\ vote.context = context
+             /\ lockRank'[vote.signer] > lockRank[vote.signer]
+            => vote.view < lockRank'[vote.signer]
+      BY <1>1, <2>1,
+         PersistInstallDoesNotActivateHigherResponsiveCommitIntent
+         DEF PersistInstallCommitSourceTransition
+    <2> QED BY <1>1, <2>1, <2>2, Isa
+         DEF CommitSourceAuxiliaryInvariant,
+             ResponsiveRetainedCommitControlSound,
+             ActiveCommitIntentSourceOwnership,
+             ActiveLockedCommitIntent, RetainedCommitIntent,
+             PersistInstallCommitSourceTransition, PersistInstallTC,
+             ResponsiveCommitSignRequests,
+             ResponsiveRetainedCommitItems,
+             AsyncCurrentResponsiveVoters, CurrentVoters, CurrentEpoch
+  <1> QED BY <1>1
+
+THEOREM AsyncNextPreservesCommitSourceRetention ==
+  /\ AsyncStrongTypeInvariant
+  /\ CommitSourceRetentionInvariant
+  /\ AsyncNext
+  => CommitSourceRetentionInvariant'
+PROOF
+  <1>1. ASSUME AsyncStrongTypeInvariant,
+              CommitSourceRetentionInvariant,
+              AsyncNext
+         PROVE CommitSourceRetentionInvariant'
+    <2>1. ResponsiveCommitIntentLockBound'
+      BY <1>1, AsyncNextPreservesResponsiveCommitIntentLockBound
+         DEF AsyncStrongTypeInvariant,
+             CommitSourceRetentionInvariant
+    <2>2. \/ UNCHANGED CommitSourceProjection
+           \/ \E command: ExecuteSignVote(command)
+           \/ \E lockRequest \in pendingLockCommit:
+                PersistLockCommitSourceTransition(lockRequest)
+           \/ \E installRequest \in pendingInstallTC:
+                PersistInstallCommitSourceTransition(installRequest)
+      BY <1>1, AsyncNextHasCommitSourceTransition
+    <2>3. CASE UNCHANGED CommitSourceProjection
+      BY <1>1, <2>3,
+         CommitSourceProjectionFramePreservesAuxiliaryInvariant
+         DEF CommitSourceRetentionInvariant
+    <2>4. CASE \E command: ExecuteSignVote(command)
+      <3>1. ASSUME NEW command, ExecuteSignVote(command)
+             PROVE CommitSourceAuxiliaryInvariant'
+        BY <1>1, <3>1,
+           ExecuteSignVotePreservesCommitSourceAuxiliaryInvariant
+      <3> QED BY <2>4, <3>1
+    <2>5. CASE \E request \in pendingLockCommit:
+                   PersistLockCommitSourceTransition(request)
+      <3>1. ASSUME NEW request \in pendingLockCommit,
+                    PersistLockCommitSourceTransition(request)
+             PROVE CommitSourceAuxiliaryInvariant'
+        BY <1>1, <3>1,
+           PersistLockPreservesCommitSourceAuxiliaryInvariant
+      <3> QED BY <2>5, <3>1
+    <2>6. CASE \E request \in pendingInstallTC:
+                   PersistInstallCommitSourceTransition(request)
+      <3>1. ASSUME NEW request \in pendingInstallTC,
+                    PersistInstallCommitSourceTransition(request)
+             PROVE CommitSourceAuxiliaryInvariant'
+        BY <1>1, <3>1,
+           PersistInstallPreservesCommitSourceAuxiliaryInvariant
+      <3> QED BY <2>6, <3>1
+    <2>7. CommitSourceAuxiliaryInvariant'
+      BY <2>2, <2>3, <2>4, <2>5, <2>6
+    <2> QED BY <2>1, <2>7 DEF CommitSourceRetentionInvariant,
+                                CommitSourceAuxiliaryInvariant
+  <1> QED BY <1>1
+
+THEOREM CommitSourceRetentionProvidesDurableCommitWitness ==
+  CommitSourceRetentionInvariant => DurableCommitProgressWitness
+PROOF
+  <1>1. ASSUME CommitSourceRetentionInvariant
+         PROVE DurableCommitProgressWitness
+    <2>1. ASSUME NEW node \in AsyncCurrentResponsiveVoters,
+                  NEW vote \in commitIntents,
+                  ActiveLockedCommitIntent(node, vote)
+           PROVE CommitIntentProgressWitness(node, vote)
+      <3>1. \/ VoteSign(node, vote) \in signVotes
+             \/ RetainedCommitIntent(node, vote)
+        BY <1>1, <2>1
+           DEF CommitSourceRetentionInvariant,
+               ActiveCommitIntentSourceOwnership
+      <3> QED BY <3>1 DEF CommitIntentProgressWitness
+    <2> QED BY <2>1 DEF DurableCommitProgressWitness
+  <1> QED BY <1>1
+
+THEOREM AsyncAllVarsStutterPreservesCommitSourceRetention ==
+  /\ CommitSourceRetentionInvariant
+  /\ UNCHANGED AsyncAllVars
+  => CommitSourceRetentionInvariant'
+BY Isa
+   DEF CommitSourceRetentionInvariant,
+       ResponsiveCommitIntentLockBound,
+       ResponsiveRetainedCommitControlSound,
+       ActiveCommitIntentSourceOwnership,
+       ActiveLockedCommitIntent, RetainedCommitIntent,
+       AsyncCurrentResponsiveVoters, CurrentVoters, CurrentEpoch,
+       AsyncAllVars, AsyncSchedulerVars, vars
+
+THEOREM AsyncBracketNextPreservesCommitSourceRetention ==
+  /\ AsyncStrongTypeInvariant
+  /\ CommitSourceRetentionInvariant
+  /\ [AsyncNext]_AsyncAllVars
+  => CommitSourceRetentionInvariant'
+PROOF
+  <1>1. ASSUME AsyncStrongTypeInvariant,
+              CommitSourceRetentionInvariant,
+              [AsyncNext]_AsyncAllVars
+         PROVE CommitSourceRetentionInvariant'
+    <2>1. CASE AsyncNext
+      BY <1>1, <2>1, AsyncNextPreservesCommitSourceRetention
+    <2>2. CASE UNCHANGED AsyncAllVars
+      BY <1>1, <2>2,
+         AsyncAllVarsStutterPreservesCommitSourceRetention
+    <2> QED BY <1>1, <2>1, <2>2
+  <1> QED BY <1>1
+
+THEOREM AsyncAllVarsStutterPreservesProgressWitness ==
+  /\ ProgressWitnessInvariant
+  /\ UNCHANGED AsyncAllVars
+  => ProgressWitnessInvariant'
+BY Isa
+   DEF ProgressWitnessInvariant, DurableCommitProgressWitness,
+       CommitIntentProgressWitness, ActiveLockedCommitIntent,
+       RetainedCommitIntent, DurableDecisionProgressWitness,
+       DecisionCompletionWitness, DecisionPipelineCandidate,
+       CandidateScheduled, QueuedCandidates, DeferredCandidates,
+       CausalCandidates, TrackedWorkCandidates, SequenceSet,
+       NodeHasDecision, NodeHasApplication,
+       ProtectedDeferredProgressInvariant,
+       ProtectedDeferredProgressIndices,
+       AsyncCurrentResponsiveVoters, CurrentVoters, CurrentEpoch,
+       AsyncAllVars, AsyncSchedulerVars, vars
+
+THEOREM GstCoreStepIsMonotone ==
+  gst /\ [Next]_vars => gst'
+BY IsaM("blast")
+   DEF Next, SetGST, AssembleLocalBody, BeginLocalProposal, PersistProposal,
+       CompleteProposalSignature, ByzantineBroadcastProposal,
+       DeliverProposal, FetchBody, StoreBody, ValidateBody,
+       ValidateDecidedBody, RejectBody, BeginPrepare, PersistPrepare,
+       CompleteVoteSignature, ByzantineBroadcastVote, DeliverVote,
+       FormPrepareQC, DeliverQC, BeginObservePrepare,
+       PersistObservePrepare, BeginLockCommit, PersistLockCommit,
+       FormCommitQC, BeginDecision, PersistDecision, BeginTimeout,
+       PersistTimeout, CompleteTimeoutSignature, ByzantineBroadcastTimeout,
+       DeliverTimeout, FormTC, DeliverTC, BeginInstallTC, PersistInstallTC,
+       FetchCertifiedBody, ApplyDecision, Crash, Restart, ResumeProposal,
+       ResumeVote, ResumeTimeout, DropProposal, vars
+
+THEOREM GstAsyncStepIsMonotone ==
+  gst /\ [AsyncNext]_AsyncAllVars => gst'
+PROOF
+  <1>1. ASSUME gst, [AsyncNext]_AsyncAllVars
+         PROVE gst'
+    <2>1. CASE AsyncNext
+      <3>1. [Next]_vars
+        BY <2>1, AsyncStepRefinementObligation
+      <3> QED BY <1>1, <3>1, GstCoreStepIsMonotone
+    <2>2. CASE UNCHANGED AsyncAllVars
+      BY <1>1, <2>2, Isa DEF AsyncAllVars, vars
+    <2> QED BY <1>1, <2>1, <2>2
+  <1> QED BY <1>1
+
+THEOREM AsyncSpecKeepsGstOnceSet ==
+  \A initialContext:
+    AsyncSpecAt(initialContext) => [](gst => []gst)
+PROOF
+  <1>1. ASSUME NEW initialContext
+         PROVE AsyncSpecAt(initialContext) => [](gst => []gst)
+    <2>1. gst /\ [AsyncNext]_AsyncAllVars => gst'
+      BY GstAsyncStepIsMonotone
+    <2> QED BY <2>1, PTL DEF AsyncSpecAt
+  <1> QED BY <1>1
+
+(***************************************************************************
+Well-founded composition of protected service ranks.
+
+The concrete rank property promises either ownership exit or a strict
+lexicographic decrease.  Scheduler typing keeps every still-owned candidate
+inside the `(0..8) \X Nat` carrier, so the checked LATTICE rule turns those
+local decreases into starvation freedom.  Keeping this derivation here makes
+the exported starvation theorem depend on the exact rank obligation instead
+of restating fairness as a second assumption.
+***************************************************************************)
+
+THEOREM CandidateSequenceIndexIsPosition ==
+  \A candidate, queue:
+    /\ queue \in Seq(Range(queue))
+    /\ candidate \in SequenceSet(queue)
+    => CandidateSequenceIndex(candidate, queue) \in 1..Len(queue)
+BY Isa DEF CandidateSequenceIndex, SequenceSet
+
+THEOREM CandidateIoIndexIsPosition ==
+  \A candidate, queue:
+    /\ AsyncIoSequenceTyped(queue)
+    /\ \E job \in SequenceSet(queue): job.candidate = candidate
+    => CandidateIoIndex(candidate, queue) \in 1..Len(queue)
+BY Isa
+   DEF CandidateIoIndex, SequenceSet, AsyncIoSequenceTyped
+
+THEOREM ScheduledCandidateProjectsToOwner ==
+  \A candidate:
+    /\ AsyncTypeInvariant
+    /\ CandidateScheduled(candidate)
+    => /\ candidate.node \in ValidatorIds
+       /\ (candidate \in QueuedCandidates
+             => candidate \in
+                  SequenceSet(asyncCommandQueues[candidate.node]))
+       /\ (candidate \in DeferredCandidates
+             => candidate \in
+                  SequenceSet(
+                    asyncDeferredCompletionQueues[candidate.node])
+                    \cup SequenceSet(
+                          asyncDeferredProgressQueues[candidate.node])
+                    \cup SequenceSet(
+                          asyncDeferredNormalQueues[candidate.node]))
+       /\ (candidate \in CausalCandidates
+             => candidate \in
+                  SequenceSet(asyncCausalQueues[candidate.node]))
+       /\ (candidate \in TrackedWorkCandidates
+             => candidate \in asyncOutstandingWork[candidate.node])
+BY Isa
+   DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+       AsyncRuntimeTypeInvariant, AsyncRuntimeScalarTypeInvariant,
+       AsyncCausalTypeInvariant, AsyncCausalQueueOwnership,
+       AsyncIoTypeInvariant, AsyncIoContentTypeInvariant,
+       AsyncIoWorkContentTypeInvariant, AsyncDeferredTypeInvariant,
+       AsyncDeferredContentTypeInvariant, AsyncCommandQueueOwnership,
+       CandidateScheduled, QueuedCandidates, DeferredCandidates,
+       CausalCandidates, TrackedWorkCandidates, SequenceSet
+
+THEOREM DeferredCandidatePositionIsNatural ==
+  \A candidate:
+    /\ AsyncTypeInvariant
+    /\ CandidateScheduled(candidate)
+    /\ candidate \in DeferredCandidates
+    => DeferredCandidatePosition(candidate) \in Nat
+PROOF
+  <1>1. ASSUME NEW candidate,
+                AsyncTypeInvariant,
+                CandidateScheduled(candidate),
+                candidate \in DeferredCandidates
+         PROVE DeferredCandidatePosition(candidate) \in Nat
+    <2>1. /\ candidate.node \in ValidatorIds
+           /\ candidate \in
+                SequenceSet(
+                  asyncDeferredCompletionQueues[candidate.node])
+                  \cup SequenceSet(
+                        asyncDeferredProgressQueues[candidate.node])
+                  \cup SequenceSet(
+                        asyncDeferredNormalQueues[candidate.node])
+      BY <1>1, ScheduledCandidateProjectsToOwner
+    <2>2. /\ asyncDeferredCompletionQueues[candidate.node]
+                  \in Seq(Range(
+                       asyncDeferredCompletionQueues[candidate.node]))
+           /\ asyncDeferredProgressQueues[candidate.node]
+                  \in Seq(Range(
+                       asyncDeferredProgressQueues[candidate.node]))
+           /\ asyncDeferredNormalQueues[candidate.node]
+                  \in Seq(Range(
+                       asyncDeferredNormalQueues[candidate.node]))
+      BY <1>1, <2>1
+         DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+             AsyncDeferredTypeInvariant,
+             AsyncDeferredContentTypeInvariant,
+             AsyncCompletionSequenceTyped, AsyncQueueTyped
+    <2>3. /\ Len(asyncDeferredCompletionQueues[candidate.node]) \in Nat
+           /\ Len(asyncDeferredProgressQueues[candidate.node]) \in Nat
+           /\ Len(asyncDeferredNormalQueues[candidate.node]) \in Nat
+      BY <2>2, LenProperties
+    <2>4. CASE candidate \in SequenceSet(
+                         asyncDeferredCompletionQueues[candidate.node])
+      BY <2>2, <2>3, <2>4, CandidateSequenceIndexIsPosition, SMT
+         DEF DeferredCandidatePosition
+    <2>5. CASE candidate \notin SequenceSet(
+                         asyncDeferredCompletionQueues[candidate.node])
+               /\ candidate \in SequenceSet(
+                         asyncDeferredProgressQueues[candidate.node])
+      BY <2>2, <2>3, <2>5, CandidateSequenceIndexIsPosition, SMT
+         DEF DeferredCandidatePosition
+    <2>6. CASE candidate \notin SequenceSet(
+                         asyncDeferredCompletionQueues[candidate.node])
+               /\ candidate \notin SequenceSet(
+                         asyncDeferredProgressQueues[candidate.node])
+      BY <2>1, <2>2, <2>3, <2>6,
+         CandidateSequenceIndexIsPosition, SMT
+         DEF DeferredCandidatePosition
+    <2> QED BY <2>1, <2>4, <2>5, <2>6
+  <1> QED BY <1>1
+
+THEOREM ScheduledCandidateServiceRankInCarrier ==
+  \A candidate:
+    /\ AsyncTypeInvariant
+    /\ CandidateScheduled(candidate)
+    => CandidateServiceRank(candidate) \in ServiceRankCarrier
+PROOF
+  <1>1. ASSUME NEW candidate,
+                AsyncTypeInvariant,
+                CandidateScheduled(candidate)
+         PROVE CandidateServiceRank(candidate) \in ServiceRankCarrier
+    <2>1. /\ candidate.node \in ValidatorIds
+           /\ (candidate \in QueuedCandidates
+                 => candidate \in SequenceSet(
+                      asyncCommandQueues[candidate.node]))
+           /\ (candidate \in CausalCandidates
+                 => candidate \in SequenceSet(
+                      asyncCausalQueues[candidate.node]))
+           /\ (candidate \in TrackedWorkCandidates
+                 => candidate \in
+                      asyncOutstandingWork[candidate.node])
+      BY <1>1, ScheduledCandidateProjectsToOwner
+    <2>2. AsyncCompletionLoad(candidate.node) \in Nat
+      BY <1>1, <2>1, FS_Interval, SMT
+         DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+             AsyncIoTypeInvariant, AsyncIoContentTypeInvariant,
+             AsyncIoWorkContentTypeInvariant, AsyncCompletionLoad,
+             AsyncOutstandingWorkCount, QueuedCompletionCount,
+             DeferredCompletionCount, QueuedCompletionIndices
+    <2>3. CandidateInIoQueue(candidate)
+             => CandidateIoIndex(
+                  candidate, asyncIoQueues[candidate.node]) \in Nat
+      BY <1>1, <2>1, CandidateIoIndexIsPosition, SMT
+         DEF CandidateInIoQueue, AsyncTypeInvariant,
+             AsyncSchedulerTypeInvariant, AsyncIoTypeInvariant,
+             AsyncIoContentTypeInvariant,
+             AsyncIoQueueContentTypeInvariant
+    <2>4. candidate \in CausalCandidates
+             => CandidateSequenceIndex(
+                  candidate, asyncCausalQueues[candidate.node]) \in Nat
+      BY <1>1, <2>1, CandidateSequenceIndexIsPosition, SMT
+         DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+             AsyncRuntimeTypeInvariant, AsyncCausalTypeInvariant,
+             AsyncQueueTyped
+    <2>5. CASE candidate \in DeferredCandidates
+      BY <1>1, <2>5, DeferredCandidatePositionIsNatural, SMT
+         DEF CandidateServiceRank, ServiceRankCarrier
+    <2>6. CASE candidate \notin DeferredCandidates
+               /\ candidate \in QueuedCandidates
+      BY <1>1, <2>1, <2>6, SchedulerClassPrefixRankBound, SMT
+         DEF CandidateServiceRank, ServiceRankCarrier
+    <2>7. CASE candidate \notin DeferredCandidates
+               /\ candidate \notin QueuedCandidates
+               /\ CandidateInReadyQueue(candidate)
+      BY <2>2, <2>7, SMT
+         DEF CandidateServiceRank, ServiceRankCarrier
+    <2>8. CASE candidate \notin DeferredCandidates
+               /\ candidate \notin QueuedCandidates
+               /\ ~CandidateInReadyQueue(candidate)
+               /\ CandidateInIoQueue(candidate)
+      BY <2>3, <2>8, SMT
+         DEF CandidateServiceRank, ServiceRankCarrier
+    <2>9. CASE candidate \notin DeferredCandidates
+               /\ candidate \notin QueuedCandidates
+               /\ ~CandidateInReadyQueue(candidate)
+               /\ ~CandidateInIoQueue(candidate)
+               /\ candidate \in
+                    asyncOutstandingWork[candidate.node]
+      BY <2>2, <2>9, SMT
+         DEF CandidateServiceRank, ServiceRankCarrier
+    <2>10. CASE candidate \notin DeferredCandidates
+                /\ candidate \notin QueuedCandidates
+                /\ ~CandidateInReadyQueue(candidate)
+                /\ ~CandidateInIoQueue(candidate)
+                /\ candidate \notin
+                     asyncOutstandingWork[candidate.node]
+                /\ candidate \in CausalCandidates
+      BY <2>4, <2>10, SMT
+         DEF CandidateServiceRank, ServiceRankCarrier
+    <2>11. CASE candidate \notin DeferredCandidates
+                /\ candidate \notin QueuedCandidates
+                /\ ~CandidateInReadyQueue(candidate)
+                /\ ~CandidateInIoQueue(candidate)
+                /\ candidate \notin
+                     asyncOutstandingWork[candidate.node]
+                /\ candidate \notin CausalCandidates
+      BY <1>1, <2>1, <2>11
+         DEF CandidateScheduled, TrackedWorkCandidates
+    <2> QED BY <2>5, <2>6, <2>7, <2>8, <2>9, <2>10, <2>11
+  <1> QED BY <1>1
+
+ProtectedOwnedAtServiceRank(candidate, rank) ==
+  /\ gst
+  /\ ResponsiveProtectedCandidateOwned(candidate)
+  /\ CandidateServiceRank(candidate) = rank
+
+ProtectedServiceOwnershipExit(candidate) ==
+  ~ResponsiveProtectedCandidateOwned(candidate)
+
+THEOREM ProtectedRankExitHasWellFoundedSuccessor ==
+  \A candidate, rank \in ServiceRankCarrier:
+    /\ AsyncTypeInvariant
+    /\ gst
+    /\ ~ProtectedServiceOwnershipExit(candidate)
+    /\ ServiceRankLess(CandidateServiceRank(candidate), rank)
+    => \E lower \in SetLessThan(
+                     rank, ServiceRankOrdering, ServiceRankCarrier):
+         ProtectedOwnedAtServiceRank(candidate, lower)
+PROOF
+  <1>1. ASSUME NEW candidate,
+                NEW rank \in ServiceRankCarrier,
+                AsyncTypeInvariant,
+                gst,
+                ~ProtectedServiceOwnershipExit(candidate),
+                ServiceRankLess(CandidateServiceRank(candidate), rank)
+         PROVE \E lower \in SetLessThan(
+                         rank, ServiceRankOrdering, ServiceRankCarrier):
+                 ProtectedOwnedAtServiceRank(candidate, lower)
+    <2>1. CandidateScheduled(candidate)
+      BY <1>1
+         DEF ProtectedServiceOwnershipExit,
+             ResponsiveProtectedCandidateOwned,
+             ProtectedCandidateOwned
+    <2>2. CandidateServiceRank(candidate) \in ServiceRankCarrier
+      BY <1>1, <2>1, ScheduledCandidateServiceRankInCarrier
+    <2>3. <<CandidateServiceRank(candidate), rank>>
+             \in ServiceRankOrdering
+      BY <1>1, <2>2, ServiceRankOrderingMatchesLess
+    <2>4. CandidateServiceRank(candidate)
+             \in SetLessThan(
+                  rank, ServiceRankOrdering, ServiceRankCarrier)
+      BY <2>2, <2>3 DEF SetLessThan
+    <2> QED BY <1>1, <2>4
+         DEF ProtectedOwnedAtServiceRank,
+             ProtectedServiceOwnershipExit
+  <1> QED BY <1>1
+
+THEOREM ProtectedRankProgressSuppliesWellFoundedStep ==
+  \A initialContext, candidate:
+    /\ AsyncSpecAt(initialContext)
+    /\ ProtectedServiceRankProgressProperty(
+         AsyncSpecAt(initialContext))
+    => \A rank \in ServiceRankCarrier:
+         ProtectedOwnedAtServiceRank(candidate, rank)
+           ~> (ProtectedServiceOwnershipExit(candidate)
+                \/ \E lower \in SetLessThan(
+                     rank, ServiceRankOrdering, ServiceRankCarrier):
+                     ProtectedOwnedAtServiceRank(candidate, lower))
+PROOF
+  <1>1. ASSUME NEW initialContext,
+                NEW candidate,
+                AsyncSpecAt(initialContext),
+                ProtectedServiceRankProgressProperty(
+                  AsyncSpecAt(initialContext))
+         PROVE \A rank \in ServiceRankCarrier:
+                 ProtectedOwnedAtServiceRank(candidate, rank)
+                   ~> (ProtectedServiceOwnershipExit(candidate)
+                        \/ \E lower \in SetLessThan(
+                             rank, ServiceRankOrdering,
+                             ServiceRankCarrier):
+                             ProtectedOwnedAtServiceRank(
+                               candidate, lower))
+    <2>1. ASSUME NEW rank \in ServiceRankCarrier
+           PROVE ProtectedOwnedAtServiceRank(candidate, rank)
+                   ~> (ProtectedServiceOwnershipExit(candidate)
+                        \/ \E lower \in SetLessThan(
+                             rank, ServiceRankOrdering,
+                             ServiceRankCarrier):
+                             ProtectedOwnedAtServiceRank(
+                               candidate, lower))
+      <3>1. PICK stage \in 0..8, position \in Nat:
+               rank = <<stage, position>>
+        BY <2>1 DEF ServiceRankCarrier
+      <3>2. ProtectedOwnedAtServiceRank(candidate, rank)
+               ~> (ProtectedServiceOwnershipExit(candidate)
+                    \/ ServiceRankLess(
+                         CandidateServiceRank(candidate), rank))
+        BY <1>1, <3>1
+           DEF ProtectedServiceRankProgressProperty,
+               ProtectedOwnedAtServiceRank,
+               ProtectedServiceOwnershipExit
+      <3>3. AsyncSpecAt(initialContext) => []AsyncTypeInvariant
+        BY <1>1, AsyncSpecAlwaysStrongTypeInvariant,
+           AsyncStrongTypeProjectsAsyncType, PTL
+      <3>4. AsyncSpecAt(initialContext) => [](gst => []gst)
+        BY <1>1, AsyncSpecKeepsGstOnceSet
+      <3>5. /\ AsyncTypeInvariant
+               /\ gst
+               /\ ~ProtectedServiceOwnershipExit(candidate)
+               /\ ServiceRankLess(
+                    CandidateServiceRank(candidate), rank)
+              => \E lower \in SetLessThan(
+                   rank, ServiceRankOrdering, ServiceRankCarrier):
+                   ProtectedOwnedAtServiceRank(candidate, lower)
+        BY <2>1, ProtectedRankExitHasWellFoundedSuccessor
+      <3> QED BY <1>1, <3>2, <3>3, <3>4, <3>5, PTL
+    <2> QED BY <2>1
+  <1> QED BY <1>1
+
+THEOREM ProtectedServiceRankProgressImpliesStarvation ==
+  \A initialContext:
+    /\ AsyncSpecAt(initialContext)
+    /\ ProtectedServiceRankProgressProperty(
+         AsyncSpecAt(initialContext))
+    => StarvationFreedomProperty(AsyncSpecAt(initialContext))
+PROOF
+  <1>1. ASSUME NEW initialContext,
+                AsyncSpecAt(initialContext),
+                ProtectedServiceRankProgressProperty(
+                  AsyncSpecAt(initialContext))
+         PROVE StarvationFreedomProperty(AsyncSpecAt(initialContext))
+    <2>1. ASSUME NEW candidate \in AsyncCandidateSet
+           PROVE (gst /\ ResponsiveProtectedCandidateOwned(candidate))
+                   ~> ~ResponsiveProtectedCandidateOwned(candidate)
+      <3>1. \A rank \in ServiceRankCarrier:
+               ProtectedOwnedAtServiceRank(candidate, rank)
+                 ~> (ProtectedServiceOwnershipExit(candidate)
+                      \/ \E lower \in SetLessThan(
+                           rank, ServiceRankOrdering,
+                           ServiceRankCarrier):
+                           ProtectedOwnedAtServiceRank(candidate, lower))
+        BY <1>1, ProtectedRankProgressSuppliesWellFoundedStep
+      <3>2. \A rank \in ServiceRankCarrier:
+               ProtectedOwnedAtServiceRank(candidate, rank)
+                 ~> ProtectedServiceOwnershipExit(candidate)
+        BY <3>1, ServiceRankOrderingWellFounded,
+           WellFoundedLeadsTo
+      <3>3. AsyncSpecAt(initialContext) => []AsyncTypeInvariant
+        BY <1>1, AsyncSpecAlwaysStrongTypeInvariant,
+           AsyncStrongTypeProjectsAsyncType, PTL
+      <3>4. AsyncTypeInvariant
+               /\ gst
+               /\ ResponsiveProtectedCandidateOwned(candidate)
+              => \E rank \in ServiceRankCarrier:
+                   ProtectedOwnedAtServiceRank(candidate, rank)
+        BY ScheduledCandidateServiceRankInCarrier
+           DEF ResponsiveProtectedCandidateOwned,
+               ProtectedCandidateOwned, ProtectedOwnedAtServiceRank
+      <3> QED BY <1>1, <3>2, <3>3, <3>4, PTL
+           DEF ProtectedServiceOwnershipExit
+    <2> QED BY <1>1, <2>1 DEF StarvationFreedomProperty
+  <1> QED BY <1>1
+
+(***************************************************************************
+One-height temporal composition.
+
+The one-height asynchronous instance freezes its context, GST is monotone,
+and the responsive voter projection therefore remains exactly the voter set
+of the caller-supplied context.  These facts compose the independently proved
+rotating-leader and application properties without adding a fairness or
+completion assumption.
+***************************************************************************)
+
+THEOREM FrozenContextFixesResponsiveVoters ==
+  \A initialContext:
+    AsyncFrozenContextAt(initialContext)
+      => AsyncCurrentResponsiveVoters = AsyncVotersAt(initialContext)
+BY SMT DEF AsyncFrozenContextAt, AsyncCurrentResponsiveVoters,
+           AsyncVotersAt, CurrentVoters, CurrentEpoch
+
+THEOREM ResponsiveProtectedOwnerUsesFairNode ==
+  \A initialContext, candidate:
+    /\ AsyncFrozenContextAt(initialContext)
+    /\ ResponsiveProtectedCandidateOwned(candidate)
+    => candidate.node \in AsyncVotersAt(initialContext)
+BY FrozenContextFixesResponsiveVoters
+   DEF ResponsiveProtectedCandidateOwned
+
+THEOREM AsyncSpecAlwaysUsesFixedResponsiveVoters ==
+  \A initialContext:
+    AsyncSpecAt(initialContext)
+      => [](AsyncCurrentResponsiveVoters = AsyncVotersAt(initialContext))
+PROOF
+  <1>1. ASSUME NEW initialContext
+         PROVE AsyncSpecAt(initialContext)
+                 => [](AsyncCurrentResponsiveVoters
+                         = AsyncVotersAt(initialContext))
+    <2>1. AsyncSpecAt(initialContext)
+            => []AsyncFrozenContextAt(initialContext)
+      BY AsyncSpecAlwaysKeepsFrozenContext
+    <2>2. AsyncFrozenContextAt(initialContext)
+            => AsyncCurrentResponsiveVoters
+                 = AsyncVotersAt(initialContext)
+      BY FrozenContextFixesResponsiveVoters
+    <2> QED BY <2>1, <2>2, PTL
+  <1> QED BY <1>1
+
+OneHeightFrameAt(initialContext) ==
+  /\ AsyncFrozenContextAt(initialContext)
+  /\ AsyncCurrentResponsiveVoters = AsyncVotersAt(initialContext)
+  /\ (ResponsiveNodesApply
+        <=> AsyncAllResponsiveAppliedAt(initialContext))
+
+THEOREM FrozenContextEstablishesOneHeightFrame ==
+  \A initialContext:
+    AsyncFrozenContextAt(initialContext)
+      => OneHeightFrameAt(initialContext)
+BY FrozenContextFixesResponsiveVoters, Isa
+   DEF OneHeightFrameAt, ResponsiveNodesApply,
+       AsyncAllResponsiveAppliedAt
+
+THEOREM AsyncStepPreservesOneHeightFrame ==
+  \A initialContext:
+    OneHeightFrameAt(initialContext)
+      /\ [AsyncNext]_AsyncAllVars
+      => OneHeightFrameAt(initialContext)'
+PROOF
+  <1>1. ASSUME NEW initialContext,
+                OneHeightFrameAt(initialContext),
+                [AsyncNext]_AsyncAllVars
+         PROVE OneHeightFrameAt(initialContext)'
+    <2>1. AsyncFrozenContextAt(initialContext)
+      BY <1>1 DEF OneHeightFrameAt
+    <2>2. AsyncFrozenContextAt(initialContext)'
+      BY <1>1, <2>1, AsyncNextPreservesFrozenContext
+    <2> QED BY <2>2, Isa
+         DEF OneHeightFrameAt, AsyncFrozenContextAt,
+             AsyncCurrentResponsiveVoters, AsyncVotersAt,
+             CurrentVoters, CurrentEpoch, ResponsiveNodesApply,
+             AsyncAllResponsiveAppliedAt
+  <1> QED BY <1>1
+
+THEOREM AsyncSpecAlwaysKeepsOneHeightFrame ==
+  \A initialContext:
+    AsyncSpecAt(initialContext) => []OneHeightFrameAt(initialContext)
+PROOF
+  <1>1. ASSUME NEW initialContext
+         PROVE AsyncSpecAt(initialContext)
+                 => []OneHeightFrameAt(initialContext)
+    <2>1. AsyncInitAt(initialContext)
+            => OneHeightFrameAt(initialContext)
+      BY AsyncInitEstablishesFrozenContext,
+         FrozenContextEstablishesOneHeightFrame
+    <2>2. OneHeightFrameAt(initialContext)
+            /\ [AsyncNext]_AsyncAllVars
+            => OneHeightFrameAt(initialContext)'
+      BY AsyncStepPreservesOneHeightFrame
+    <2> QED BY <2>1, <2>2, PTL DEF AsyncSpecAt
+  <1> QED BY <1>1
+
+THEOREM OneHeightCompletionFromProgressProperties ==
+  \A initialContext:
+    /\ AsyncSpecAt(initialContext)
+    /\ RotatingLeaderProgressProperty(AsyncSpecAt(initialContext))
+    /\ ApplicationLivenessProperty(AsyncSpecAt(initialContext))
+    => OneHeightCompletionLiveness(initialContext)
+PROOF
+  <1>1. ASSUME NEW initialContext,
+                /\ AsyncSpecAt(initialContext)
+                /\ RotatingLeaderProgressProperty(
+                     AsyncSpecAt(initialContext))
+                /\ ApplicationLivenessProperty(
+                     AsyncSpecAt(initialContext))
+         PROVE OneHeightCompletionLiveness(initialContext)
+    <2>1. AsyncSpecAt(initialContext) => <>gst
+      BY AsyncGstEventually
+    <2>2. AsyncSpecAt(initialContext) => [](gst => []gst)
+      BY AsyncSpecKeepsGstOnceSet
+    <2>3. []OneHeightFrameAt(initialContext)
+      BY <1>1, AsyncSpecAlwaysKeepsOneHeightFrame
+    <2>4. (gst /\ ~ResponsiveNodesDecide)
+             ~> ResponsiveNodesDecide
+      BY <1>1 DEF RotatingLeaderProgressProperty
+    <2>5. (gst /\ ResponsiveNodesDecide)
+             ~> ResponsiveNodesApply
+      BY <1>1 DEF ApplicationLivenessProperty
+    <2>6. gst ~> (gst /\ ResponsiveNodesDecide)
+      BY <1>1, <2>2, <2>4, PTL
+    <2>7. gst ~> ResponsiveNodesApply
+      BY <2>5, <2>6, PTL
+    <2>8. [](ResponsiveNodesApply
+               <=> AsyncAllResponsiveAppliedAt(initialContext))
+      BY <2>3, PTL DEF OneHeightFrameAt
+    <2> QED BY <1>1, <2>7, <2>8, PTL
+         DEF OneHeightCompletionLiveness
+  <1> QED BY <1>1
+
+THEOREM ProgressWitnessObligation ==
+  \A initialContext:
+    ProgressWitnessProperty(AsyncSpecAt(initialContext))
+
+THEOREM DeadlockFreedomObligation ==
+  \A initialContext:
+    DeadlockFreedomProperty(AsyncSpecAt(initialContext))
+PROOF
+  <1>1. ASSUME NEW initialContext
+         PROVE DeadlockFreedomProperty(AsyncSpecAt(initialContext))
+    <2>1. AsyncSpecAt(initialContext) => []AsyncStrongTypeInvariant
+      BY AsyncSpecAlwaysStrongTypeInvariant
+    <2>2. (AsyncStrongTypeInvariant
+              /\ gst /\ ~ResponsiveNodesDecide)
+             => PostGstProgressActionEnabled
+      BY UndecidedResponsiveStateEnablesProgress
+    <2> QED BY <2>1, <2>2, PTL DEF DeadlockFreedomProperty
+  <1> QED BY <1>1
+
+THEOREM ProtectedServiceRankProgressObligation ==
+  \A initialContext:
+    ProtectedServiceRankProgressProperty(AsyncSpecAt(initialContext))
+
+THEOREM StarvationFreedomObligation ==
+  \A initialContext:
+    StarvationFreedomProperty(AsyncSpecAt(initialContext))
+PROOF
+  <1>1. ASSUME NEW initialContext
+         PROVE StarvationFreedomProperty(AsyncSpecAt(initialContext))
+    <2>1. ProtectedServiceRankProgressProperty(
+             AsyncSpecAt(initialContext))
+      BY ProtectedServiceRankProgressObligation
+    <2> QED BY <2>1,
+         ProtectedServiceRankProgressImpliesStarvation, PTL
+         DEF StarvationFreedomProperty
+  <1> QED BY <1>1
 
 THEOREM TimeoutViewProgressObligation ==
   \A initialContext:
@@ -11801,5 +26040,20 @@ THEOREM RotatingLeaderProgressObligation ==
 THEOREM ApplicationLivenessObligation ==
   \A initialContext:
     ApplicationLivenessProperty(AsyncSpecAt(initialContext))
+
+THEOREM OneHeightCompletionObligation ==
+  \A initialContext:
+    OneHeightCompletionLiveness(initialContext)
+PROOF
+  <1>1. ASSUME NEW initialContext
+         PROVE OneHeightCompletionLiveness(initialContext)
+    <2>1. RotatingLeaderProgressProperty(AsyncSpecAt(initialContext))
+      BY RotatingLeaderProgressObligation
+    <2>2. ApplicationLivenessProperty(AsyncSpecAt(initialContext))
+      BY ApplicationLivenessObligation
+    <2> QED BY <2>1, <2>2,
+         OneHeightCompletionFromProgressProperties, PTL
+         DEF OneHeightCompletionLiveness
+  <1> QED BY <1>1
 
 =============================================================================

@@ -254,7 +254,7 @@ test("package dist quantity builders reject numbers and noncanonical strings", (
   assert.equal(typeof packageExports.KotodamaQuantity, "function");
   const account = packageExports.AccountAddress.fromAccount({
     publicKey: Buffer.from(
-      "B935AAF1F4E44B3DB79E5E5A9BA4569E6F3E2310C219F3DDD56D3277828D5480",
+      "5866666666666666666666666666666666666666666666666666666666666666",
       "hex",
     ),
   }).toI105();

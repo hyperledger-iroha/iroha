@@ -13,6 +13,24 @@ use tokio::runtime::{Handle, Runtime, RuntimeFlavor};
 
 use crate::sync::get_status_with_retry;
 
+const NETWORK_BASE_SEED_ENV: &str = "IROHA_TEST_NETWORK_BASE_SEED";
+
+fn scenario_seed_override() -> Option<String> {
+    env::var(NETWORK_BASE_SEED_ENV)
+        .ok()
+        .filter(|seed| !seed.is_empty())
+}
+
+fn with_scenario_seed(builder: NetworkBuilder, context: &str) -> NetworkBuilder {
+    match scenario_seed_override() {
+        Some(seed) => {
+            eprintln!("{context}: deterministic network seed = {seed}");
+            builder.with_base_seed(seed)
+        }
+        _ => builder.with_base_seed_if_unset(context),
+    }
+}
+
 /// Optional guard that limits concurrent integration tests which spin up a network.
 ///
 /// Defaults to one network at a time so plain `cargo test` stays usable on WSL and
@@ -238,10 +256,12 @@ const SERIALIZED_NETWORK_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(60);
 const MIN_NETWORK_PEERS: usize = 4; // DA-enabled consensus can stall with fewer peers.
 const DEFAULT_NETWORK_PARALLELISM: usize = 1;
 const NETWORK_START_ATTEMPTS: usize = 3;
+const NETWORK_START_ATTEMPTS_MAX: usize = 16;
 const NETWORK_START_RETRY_DELAY: Duration = Duration::from_secs(1);
 const SERIALIZE_NETWORKS_ENV: &str = "IROHA_TEST_SERIALIZE_NETWORKS";
 const NETWORK_PARALLELISM_ENV: &str = "IROHA_TEST_NETWORK_PARALLELISM";
 const NETWORK_PERMIT_WAIT_TIMEOUT_ENV: &str = "IROHA_TEST_NETWORK_PERMIT_WAIT_TIMEOUT";
+const NETWORK_START_ATTEMPTS_ENV: &str = "IROHA_TEST_NETWORK_START_ATTEMPTS";
 const NETWORK_PERMIT_WAIT_TIMEOUT_DEFAULT: Duration = Duration::from_secs(5 * 60);
 /// Test-only switch that turns a sandbox-related network skip into a test failure.
 pub const REQUIRE_NETWORK_ENV: &str = "IROHA_TEST_REQUIRE_NETWORK";
@@ -271,6 +291,33 @@ fn network_start_requirement() -> Result<NetworkStartRequirement> {
         Err(env::VarError::NotPresent) => parse_network_start_requirement(None),
         Err(env::VarError::NotUnicode(_)) => Err(Report::msg(format!(
             "{REQUIRE_NETWORK_ENV} must contain valid UTF-8"
+        ))),
+    }
+}
+
+fn parse_network_start_attempts(raw: Option<&str>) -> Result<usize> {
+    let Some(raw) = raw else {
+        return Ok(NETWORK_START_ATTEMPTS);
+    };
+    let attempts = raw.trim().parse::<usize>().map_err(|error| {
+        Report::msg(format!(
+            "{NETWORK_START_ATTEMPTS_ENV} must be an integer in 1..={NETWORK_START_ATTEMPTS_MAX}; got {raw:?}: {error}"
+        ))
+    })?;
+    if !(1..=NETWORK_START_ATTEMPTS_MAX).contains(&attempts) {
+        return Err(Report::msg(format!(
+            "{NETWORK_START_ATTEMPTS_ENV} must be in 1..={NETWORK_START_ATTEMPTS_MAX}; got {attempts}"
+        )));
+    }
+    Ok(attempts)
+}
+
+fn network_start_attempts() -> Result<usize> {
+    match env::var(NETWORK_START_ATTEMPTS_ENV) {
+        Ok(raw) => parse_network_start_attempts(Some(&raw)),
+        Err(env::VarError::NotPresent) => parse_network_start_attempts(None),
+        Err(env::VarError::NotUnicode(_)) => Err(Report::msg(format!(
+            "{NETWORK_START_ATTEMPTS_ENV} must contain valid UTF-8"
         ))),
     }
 }
@@ -517,12 +564,12 @@ pub fn start_network_blocking_or_skip(
     builder: NetworkBuilder,
     context: &str,
 ) -> Result<Option<(SerializedNetwork, Runtime)>> {
+    let network_start_attempts = network_start_attempts()?;
     let guard = serial_guard();
-    let builder = builder
-        .with_base_seed_if_unset(context)
+    let builder = with_scenario_seed(builder, context)
         .with_auto_populated_trusted_peers()
         .with_min_peers(MIN_NETWORK_PEERS);
-    for attempt in 1..=NETWORK_START_ATTEMPTS {
+    for attempt in 1..=network_start_attempts {
         let (network, runtime) = match panic::catch_unwind(AssertUnwindSafe(|| {
             builder.clone().build_blocking()
         })) {
@@ -554,12 +601,12 @@ pub fn start_network_blocking_or_skip(
             Err(err) => {
                 runtime.block_on(async { network.shutdown().await });
                 let retry =
-                    attempt < NETWORK_START_ATTEMPTS && is_retryable_network_startup_error(&err);
+                    attempt < network_start_attempts && is_retryable_network_startup_error(&err);
                 drop(network);
                 drop(runtime);
                 if retry {
                     eprintln!(
-                        "warning: {context} fresh network startup attempt {attempt}/{NETWORK_START_ATTEMPTS} failed with retryable error; rebuilding in {:?}: {err}",
+                        "warning: {context} fresh network startup attempt {attempt}/{network_start_attempts} failed with retryable error; rebuilding in {:?}: {err}",
                         NETWORK_START_RETRY_DELAY
                     );
                     std::thread::sleep(NETWORK_START_RETRY_DELAY);
@@ -581,8 +628,7 @@ pub fn build_network_blocking_or_skip(
     context: &str,
 ) -> Option<(SerializedNetwork, Runtime)> {
     let guard = serial_guard();
-    let builder = builder
-        .with_base_seed_if_unset(context)
+    let builder = with_scenario_seed(builder, context)
         .with_auto_populated_trusted_peers()
         .with_min_peers(MIN_NETWORK_PEERS);
     let (network, runtime) = match panic::catch_unwind(AssertUnwindSafe(|| {
@@ -617,12 +663,12 @@ pub async fn start_network_async_or_skip(
     builder: NetworkBuilder,
     context: &str,
 ) -> Result<Option<SerializedNetwork>> {
+    let network_start_attempts = network_start_attempts()?;
     let guard = serial_guard_async().await;
-    let builder = builder
-        .with_base_seed_if_unset(context)
+    let builder = with_scenario_seed(builder, context)
         .with_auto_populated_trusted_peers()
         .with_min_peers(MIN_NETWORK_PEERS);
-    for attempt in 1..=NETWORK_START_ATTEMPTS {
+    for attempt in 1..=network_start_attempts {
         let network = match panic::catch_unwind(AssertUnwindSafe(|| builder.clone().build())) {
             Ok(network) => network,
             Err(panic) => {
@@ -653,11 +699,11 @@ pub async fn start_network_async_or_skip(
             Err(err) => {
                 network.shutdown().await;
                 let retry =
-                    attempt < NETWORK_START_ATTEMPTS && is_retryable_network_startup_error(&err);
+                    attempt < network_start_attempts && is_retryable_network_startup_error(&err);
                 drop(network);
                 if retry {
                     eprintln!(
-                        "warning: {context} fresh network startup attempt {attempt}/{NETWORK_START_ATTEMPTS} failed with retryable error; rebuilding in {:?}: {err}",
+                        "warning: {context} fresh network startup attempt {attempt}/{network_start_attempts} failed with retryable error; rebuilding in {:?}: {err}",
                         NETWORK_START_RETRY_DELAY
                     );
                     tokio::time::sleep(NETWORK_START_RETRY_DELAY).await;
@@ -676,8 +722,7 @@ pub async fn start_network_async_or_skip(
 #[allow(dead_code)] // Shared helper: not every integration binary uses it.
 pub fn build_network_or_skip(builder: NetworkBuilder, context: &str) -> Option<SerializedNetwork> {
     let guard = serial_guard();
-    let builder = builder
-        .with_base_seed_if_unset(context)
+    let builder = with_scenario_seed(builder, context)
         .with_auto_populated_trusted_peers()
         .with_min_peers(MIN_NETWORK_PEERS);
     let network = match panic::catch_unwind(AssertUnwindSafe(|| builder.build())) {
@@ -971,6 +1016,47 @@ mod tests {
                 "malformed value {raw:?} must report the controlling switch: {err}"
             );
         }
+    }
+
+    #[test]
+    fn network_start_attempt_parser_is_bounded_and_fails_closed() {
+        assert_eq!(
+            parse_network_start_attempts(None).unwrap(),
+            NETWORK_START_ATTEMPTS
+        );
+        assert_eq!(parse_network_start_attempts(Some(" 1 ")).unwrap(), 1);
+        assert_eq!(
+            parse_network_start_attempts(Some(&NETWORK_START_ATTEMPTS_MAX.to_string())).unwrap(),
+            NETWORK_START_ATTEMPTS_MAX
+        );
+        let too_many = (NETWORK_START_ATTEMPTS_MAX + 1).to_string();
+        for raw in ["", "0", "not-a-number", too_many.as_str()] {
+            let err = parse_network_start_attempts(Some(raw)).unwrap_err();
+            assert!(
+                err.to_string().contains(NETWORK_START_ATTEMPTS_ENV),
+                "malformed value {raw:?} must report the controlling switch: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn network_start_attempts_reads_the_release_override() {
+        let _env_guard = lock_env_guard();
+        let _restore = EnvRestore::set(NETWORK_START_ATTEMPTS_ENV, "1");
+        assert_eq!(network_start_attempts().unwrap(), 1);
+    }
+
+    #[test]
+    fn scenario_seed_override_requires_a_nonempty_explicit_seed() {
+        let _env_guard = lock_env_guard();
+        let _restore = EnvRestore::remove(NETWORK_BASE_SEED_ENV);
+        assert_eq!(scenario_seed_override(), None);
+
+        set_env_var(NETWORK_BASE_SEED_ENV, "matrix:seed:03");
+        assert_eq!(scenario_seed_override().as_deref(), Some("matrix:seed:03"));
+
+        set_env_var(NETWORK_BASE_SEED_ENV, "");
+        assert_eq!(scenario_seed_override(), None);
     }
 
     #[test]

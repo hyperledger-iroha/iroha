@@ -152,6 +152,76 @@ def _sumeragi_v2_status_payload() -> Dict[str, Any]:
             "signed_power": 3,
             "total_power": 4,
         },
+        "liveness": {
+            "generation": 2,
+            "prepare_quorums": [
+                {
+                    "round": {
+                        "context_id": [_canonical_hash(0x14)],
+                        "height": 10,
+                        "view": 1,
+                    },
+                    "subject": dict(subject),
+                    "execution_commitment": dict(execution_commitment),
+                    "signer_count": 2,
+                    "signed_power": 2,
+                    "min_signers": 3,
+                    "total_power": 4,
+                }
+            ],
+            "commit_quorums": [],
+            "timeout_quorums": [],
+            "outbound_intents": [
+                {
+                    "kind": {"kind": "proposal", "details": None},
+                    "round": {
+                        "context_id": [_canonical_hash(0x14)],
+                        "height": 10,
+                        "view": 1,
+                    },
+                    "subject": dict(subject),
+                    "stage": {"stage": "sent", "details": None},
+                }
+            ],
+            "work": {
+                "candidate": {"stage": "idle", "details": None},
+                "body_recovery": {"stage": "idle", "details": None},
+                "body_store": {"stage": "idle", "details": None},
+                "validation": {"stage": "complete", "details": None},
+                "application": {"stage": "idle", "details": None},
+                "successor_height": {"stage": "idle", "details": None},
+            },
+            "queues": [
+                {
+                    "queue": {"queue": "network_ingress", "details": None},
+                    "depth": 1,
+                    "capacity": 4,
+                    "oldest_age_ms": 17,
+                    "service_debt": 2,
+                }
+            ],
+            "last_progress": {
+                "generation": 2,
+                "round": {
+                    "context_id": [_canonical_hash(0x14)],
+                    "height": 10,
+                    "view": 1,
+                },
+                "transition": {
+                    "transition": "prepare_vote_admitted",
+                    "details": None,
+                },
+                "age_ms": 19,
+            },
+            "no_progress_age_ms": 19,
+            "blocker": {"blocker": "prepare_quorum_missing", "details": None},
+            "ignore_counts": [
+                {
+                    "reason": {"reason": "duplicate", "details": None},
+                    "count": 2,
+                }
+            ],
+        },
         "safety_halt": {
             "active": False,
             "reason": None,
@@ -3284,6 +3354,7 @@ def test_mock_server_seeds_sumeragi_status_snapshot() -> None:
         assert payload["restart_required"] is False
         assert payload["leader"] == 1
         assert payload["height_context"]["validator_count"] == 4
+        assert payload["liveness"]["generation"] == 2
         assert payload["safety_halt"]["active"] is False
         assert payload["operator"]["tx_queue"]["capacity"] == 32
         assert payload["committed_lane_blocks"] == []
@@ -3305,6 +3376,13 @@ def test_get_sumeragi_status_parses_authoritative_v2_snapshot() -> None:
     assert status.last_commit_qc is not None
     assert status.last_commit_qc.certificate.round.height == 9
     assert status.last_commit_qc.signed_power == 3
+    assert status.liveness.generation == 2
+    assert status.liveness.work.validation == "complete"
+    assert status.liveness.prepare_quorums[0].signer_count == 2
+    assert status.liveness.queues[0].queue == "network_ingress"
+    assert status.liveness.last_progress is not None
+    assert status.liveness.last_progress.transition == "prepare_vote_admitted"
+    assert status.liveness.blocker == "prepare_quorum_missing"
     assert status.safety_halt.active is False
     assert status.safety_halt.height == 0
     assert status.operator.view_change_install_total == 7
@@ -3314,6 +3392,36 @@ def test_get_sumeragi_status_parses_authoritative_v2_snapshot() -> None:
     settlement = status.lane_settlement_commitments[0]
     assert settlement["total_local_amount"] == "10"
     assert settlement["swap_metadata"]["liquidity_profile"]["profile"] == "Tier1"
+
+
+def test_get_sumeragi_status_accepts_all_nine_liveness_queue_kinds() -> None:
+    payload = _sumeragi_v2_status_payload()
+    queue_template = payload["liveness"]["queues"][0]
+    queue_kinds = [
+        "ingress",
+        "deferred_normal",
+        "deferred_progress",
+        "deferred_completion",
+        "runtime_normal",
+        "runtime_progress",
+        "runtime_completion",
+        "effect_completion",
+        "network_ingress",
+    ]
+    payload["liveness"]["queues"] = [
+        {
+            **copy.deepcopy(queue_template),
+            "queue": {"queue": queue, "details": None},
+        }
+        for queue in queue_kinds
+    ]
+
+    status = _get_sumeragi_status(payload)
+    assert [queue.queue for queue in status.liveness.queues] == queue_kinds
+
+    payload["liveness"]["queues"].append(copy.deepcopy(queue_template))
+    with pytest.raises(RuntimeError, match="queues exceeds its protocol item bound"):
+        _get_sumeragi_status(payload)
 
 
 def test_get_sumeragi_status_parses_and_validates_safety_halt() -> None:

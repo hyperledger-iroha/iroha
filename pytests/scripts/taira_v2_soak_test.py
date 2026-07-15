@@ -9,67 +9,223 @@ import subprocess
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = REPO_ROOT / "scripts" / "run_taira_v2_24h_soak.sh"
+EXPECTED_TEST = (
+    "taira_public_localnet::"
+    "taira_profile_24h_packet_impairment_and_restart_soak"
+)
+PINNED_ENV = {
+    "IROHA_TEST_REQUIRE_NETWORK": "1",
+    "IROHA_TAIRA_SIM_DURATION_SECS": "86400",
+    "IROHA_TAIRA_SIM_SEED": "taira-public-sim",
+    "IROHA_TAIRA_LOAD_TPS": "5",
+    "IROHA_TAIRA_PACKET_LOSS_PERCENT": "10",
+    "IROHA_TAIRA_CHURN_INTERVAL_SECS": "300",
+    "IROHA_TAIRA_MAX_HEIGHT_SKEW": "2",
+    "IROHA_TAIRA_MAX_HEIGHT_SKEW_GRACE_SECS": "30",
+    "IROHA_TAIRA_MAX_TRANSIENT_HEIGHT_SKEW": "32",
+    "IROHA_TAIRA_STALL_TIMEOUT_SECS": "300",
+    "IROHA_TAIRA_MAX_VIEW_CHANGE_RATE": "0.2",
+    "IROHA_TAIRA_MAX_LAGGED_CYCLE_RATIO": "0.35",
+    "IROHA_TAIRA_MIN_COMMITTED_TPS_RATIO": "0.6",
+    "IROHA_TAIRA_KEEP_LOCALNET": "1",
+    "IROHA_TEST_SKIP_BUILD": "0",
+    "IROHA_TEST_ALLOW_REENTRANT_BUILD": "1",
+    "IROHA_TEST_BUILD_TIMEOUT_MS": "3600",
+}
 
 
-def _stubbed_environment(tmp_path: Path) -> tuple[dict[str, str], Path]:
+def _stubbed_environment(
+    tmp_path: Path,
+    *,
+    inventory_mode: str = "one",
+    run_mode: str = "one",
+) -> tuple[dict[str, str], Path]:
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
-    capture = tmp_path / "cargo-invocation.txt"
+    python = bin_dir / "python3"
+    python.write_text(
+        """#!/bin/sh
+case "$1" in
+  *compute_workspace_source_manifest.py) printf '%s\n' 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' ;;
+  *check_taira_v2_soak_evidence.py) exit 0 ;;
+  *) exec /usr/bin/python3 "$@" ;;
+esac
+""",
+        encoding="utf-8",
+    )
+    python.chmod(0o755)
+    capture = tmp_path / "cargo-invocations.txt"
     cargo = bin_dir / "cargo"
     cargo.write_text(
-        "#!/usr/bin/env bash\n"
-        "set -euo pipefail\n"
-        "printf '%s\\n' \"duration=$IROHA_TAIRA_SIM_DURATION_SECS\" "
-        "\"loss=$IROHA_TAIRA_PACKET_LOSS_PERCENT\" "
-        "\"churn=$IROHA_TAIRA_CHURN_INTERVAL_SECS\" "
-        "\"args=$*\" > \"$TAIRA_SOAK_CAPTURE\"\n",
+        f"""#!/usr/bin/env bash
+set -euo pipefail
+{{
+  printf 'args=%s\\n' "$*"
+  printf '%s\\n' \\
+    "IROHA_TEST_REQUIRE_NETWORK=${{IROHA_TEST_REQUIRE_NETWORK-<unset>}}" \\
+    "IROHA_TAIRA_SIM_DURATION_SECS=${{IROHA_TAIRA_SIM_DURATION_SECS-<unset>}}" \\
+    "IROHA_TAIRA_SIM_SEED=${{IROHA_TAIRA_SIM_SEED-<unset>}}" \\
+    "IROHA_TAIRA_LOAD_TPS=${{IROHA_TAIRA_LOAD_TPS-<unset>}}" \\
+    "IROHA_TAIRA_PACKET_LOSS_PERCENT=${{IROHA_TAIRA_PACKET_LOSS_PERCENT-<unset>}}" \\
+    "IROHA_TAIRA_CHURN_INTERVAL_SECS=${{IROHA_TAIRA_CHURN_INTERVAL_SECS-<unset>}}" \\
+    "IROHA_TAIRA_MAX_HEIGHT_SKEW=${{IROHA_TAIRA_MAX_HEIGHT_SKEW-<unset>}}" \\
+    "IROHA_TAIRA_MAX_HEIGHT_SKEW_GRACE_SECS=${{IROHA_TAIRA_MAX_HEIGHT_SKEW_GRACE_SECS-<unset>}}" \\
+    "IROHA_TAIRA_MAX_TRANSIENT_HEIGHT_SKEW=${{IROHA_TAIRA_MAX_TRANSIENT_HEIGHT_SKEW-<unset>}}" \\
+    "IROHA_TAIRA_STALL_TIMEOUT_SECS=${{IROHA_TAIRA_STALL_TIMEOUT_SECS-<unset>}}" \\
+    "IROHA_TAIRA_MAX_VIEW_CHANGE_RATE=${{IROHA_TAIRA_MAX_VIEW_CHANGE_RATE-<unset>}}" \\
+    "IROHA_TAIRA_MAX_LAGGED_CYCLE_RATIO=${{IROHA_TAIRA_MAX_LAGGED_CYCLE_RATIO-<unset>}}" \\
+    "IROHA_TAIRA_MIN_COMMITTED_TPS_RATIO=${{IROHA_TAIRA_MIN_COMMITTED_TPS_RATIO-<unset>}}" \\
+    "IROHA_TAIRA_KEEP_LOCALNET=${{IROHA_TAIRA_KEEP_LOCALNET-<unset>}}" \\
+    "IROHA_TEST_SKIP_BUILD=${{IROHA_TEST_SKIP_BUILD-<unset>}}" \\
+    "IROHA_TEST_ALLOW_REENTRANT_BUILD=${{IROHA_TEST_ALLOW_REENTRANT_BUILD-<unset>}}" \\
+    "IROHA_TEST_BUILD_TIMEOUT_MS=${{IROHA_TEST_BUILD_TIMEOUT_MS-<unset>}}" \\
+    "IROHA_RELEASE_SOURCE_MANIFEST_SHA256=${{IROHA_RELEASE_SOURCE_MANIFEST_SHA256-<unset>}}" \\
+    "IROHA_TAIRA_EVIDENCE_PATH=${{IROHA_TAIRA_EVIDENCE_PATH-<unset>}}" \\
+    "IROHA_TEST_TARGET_DIR=${{IROHA_TEST_TARGET_DIR-<unset>}}" \\
+    "CARGO_TARGET_DIR=${{CARGO_TARGET_DIR-<unset>}}" \\
+    "TEST_NETWORK_BIN_IROHAD=${{TEST_NETWORK_BIN_IROHAD-<unset>}}" \\
+    "KAGAMI_BIN=${{KAGAMI_BIN-<unset>}}" \\
+    "TEST_NETWORK_BIN_IROHAD_MESSAGE_CONTROL=${{TEST_NETWORK_BIN_IROHAD_MESSAGE_CONTROL-<unset>}}" \\
+    "TEST_NETWORK_BIN_IROHA=${{TEST_NETWORK_BIN_IROHA-<unset>}}" \\
+    "TEST_NETWORK_IROHAD_FEATURES=${{TEST_NETWORK_IROHAD_FEATURES-<unset>}}" \\
+    "CARGO_BIN_EXE_iroha=${{CARGO_BIN_EXE_iroha-<unset>}}"
+  printf '%s\\n' '--'
+}} >>"$TAIRA_SOAK_CAPTURE"
+
+case " $* " in
+  *" --list "*)
+    case "${{TAIRA_FAKE_INVENTORY_MODE:-one}}" in
+      one) printf '%s\\n' '{EXPECTED_TEST}: test' ;;
+      zero) ;;
+      duplicate)
+        printf '%s\\n' '{EXPECTED_TEST}: test' '{EXPECTED_TEST}: test'
+        ;;
+      *) exit 64 ;;
+    esac
+    ;;
+  *)
+    case "${{TAIRA_FAKE_RUN_MODE:-one}}" in
+      one)
+        mkdir -p "$(dirname "$IROHA_TAIRA_EVIDENCE_PATH")"
+        printf '%s\n' '{{}}' >"$IROHA_TAIRA_EVIDENCE_PATH"
+        printf '%s\\n' \\
+          'running 1 test' \\
+          'test {EXPECTED_TEST} ... ok' \\
+          '' \\
+          'test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 42 filtered out; finished in 0.01s'
+        ;;
+      zero)
+        printf '%s\\n' \\
+          'running 0 tests' \\
+          '' \\
+          'test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 43 filtered out; finished in 0.00s'
+        ;;
+      *) exit 65 ;;
+    esac
+    ;;
+esac
+""",
         encoding="utf-8",
     )
     cargo.chmod(0o755)
     env = os.environ.copy()
     env["PATH"] = f"{bin_dir}:{env['PATH']}"
     env["TAIRA_SOAK_CAPTURE"] = str(capture)
+    env["TAIRA_FAKE_INVENTORY_MODE"] = inventory_mode
+    env["TAIRA_FAKE_RUN_MODE"] = run_mode
     return env, capture
 
 
-def test_launcher_exports_profile_and_selects_ignored_soak(tmp_path: Path) -> None:
-    env, capture = _stubbed_environment(tmp_path)
-    result = subprocess.run(
-        [
-            str(SCRIPT),
-            "--duration-secs",
-            "30",
-            "--packet-loss-percent",
-            "17",
-            "--churn-interval-secs",
-            "30",
-        ],
+def _run_launcher(env: dict[str, str], *args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [str(SCRIPT), *args],
         cwd=REPO_ROOT,
         env=env,
         check=False,
         capture_output=True,
         text=True,
     )
+
+
+def test_launcher_pins_complete_profile_and_runs_exactly_one_test(
+    tmp_path: Path,
+) -> None:
+    env, capture = _stubbed_environment(tmp_path)
+    env.update({name: "inherited-malicious-override" for name in PINNED_ENV})
+    env["TEST_NETWORK_BIN_IROHAD"] = "/tmp/malicious-iroha3d"
+    env["KAGAMI_BIN"] = "/tmp/malicious-kagami"
+    env["TEST_NETWORK_BIN_IROHAD_MESSAGE_CONTROL"] = "/tmp/malicious-controlled-iroha3d"
+    env["TEST_NETWORK_BIN_IROHA"] = "/tmp/malicious-iroha"
+    env["TEST_NETWORK_IROHAD_FEATURES"] = "malicious-feature"
+    env["CARGO_BIN_EXE_iroha"] = "/tmp/malicious-cargo-iroha"
+    env["IROHA_RELEASE_SOURCE_MANIFEST_SHA256"] = "0" * 64
+    env["IROHA_TAIRA_EVIDENCE_PATH"] = "/tmp/malicious-evidence.json"
+
+    result = _run_launcher(env)
+
     assert result.returncode == 0, result.stderr
-    invocation = capture.read_text(encoding="utf-8")
-    assert "duration=30" in invocation
-    assert "loss=17" in invocation
-    assert "churn=30" in invocation
-    assert "-p integration_tests --test consensus_and_da" in invocation
-    assert "taira_profile_24h_packet_impairment_and_restart_soak" in invocation
-    assert "--ignored --nocapture" in invocation
-
-
-def test_launcher_rejects_invalid_packet_loss_before_cargo(tmp_path: Path) -> None:
-    env, capture = _stubbed_environment(tmp_path)
-    result = subprocess.run(
-        [str(SCRIPT), "--packet-loss-percent", "101"],
-        cwd=REPO_ROOT,
-        env=env,
-        check=False,
-        capture_output=True,
-        text=True,
+    captured = capture.read_text(encoding="utf-8")
+    calls = [line for line in captured.splitlines() if line.startswith("args=")]
+    assert len(calls) == 2
+    assert all(
+        "test --locked -p integration_tests --test consensus_and_da" in call
+        for call in calls
     )
+    assert "-- --list --ignored" in calls[0]
+    assert EXPECTED_TEST in calls[1]
+    assert "-- --exact --ignored --nocapture --test-threads=1" in calls[1]
+    for name, value in PINNED_ENV.items():
+        assert captured.count(f"{name}={value}\n") == 2
+        assert f"{name}=inherited-malicious-override" not in captured
+    source_root = REPO_ROOT / "target" / "sumeragi-v2-release" / ("a" * 64)
+    assert captured.count(f"IROHA_RELEASE_SOURCE_MANIFEST_SHA256={'a' * 64}\n") == 2
+    assert captured.count(f"IROHA_TEST_TARGET_DIR={source_root / 'programs'}\n") == 2
+    assert captured.count(f"CARGO_TARGET_DIR={source_root / 'test-suite'}\n") == 2
+    assert (
+        captured.count(
+            f"IROHA_TAIRA_EVIDENCE_PATH={source_root / 'evidence/taira_v2_24h_soak.json'}\n"
+        )
+        == 2
+    )
+    assert captured.count("TEST_NETWORK_BIN_IROHAD=<unset>\n") == 2
+    assert captured.count("KAGAMI_BIN=<unset>\n") == 2
+    assert captured.count("TEST_NETWORK_BIN_IROHAD_MESSAGE_CONTROL=<unset>\n") == 2
+    assert captured.count("TEST_NETWORK_BIN_IROHA=<unset>\n") == 2
+    assert captured.count("TEST_NETWORK_IROHAD_FEATURES=<unset>\n") == 2
+    assert captured.count("CARGO_BIN_EXE_iroha=<unset>\n") == 2
+    assert "passed with exactly one test" in result.stderr
+
+
+def test_launcher_rejects_zero_test_inventory(tmp_path: Path) -> None:
+    env, capture = _stubbed_environment(tmp_path, inventory_mode="zero")
+
+    result = _run_launcher(env)
+
+    assert result.returncode == 1
+    assert "expected exactly one ignored Taira soak" in result.stderr
+    captured = capture.read_text(encoding="utf-8")
+    assert captured.count("args=") == 1
+
+
+def test_launcher_rejects_zero_test_execution_output(tmp_path: Path) -> None:
+    env, capture = _stubbed_environment(tmp_path, run_mode="zero")
+
+    result = _run_launcher(env)
+
+    assert result.returncode == 1
+    assert "expected exactly one Taira soak test to run and pass" in result.stderr
+    assert "running 0 tests" in result.stdout
+    captured = capture.read_text(encoding="utf-8")
+    assert captured.count("args=") == 2
+
+
+def test_launcher_rejects_profile_override_arguments_before_cargo(
+    tmp_path: Path,
+) -> None:
+    env, capture = _stubbed_environment(tmp_path)
+
+    result = _run_launcher(env, "--duration-secs", "30")
+
     assert result.returncode == 2
-    assert "packet loss" in result.stderr
+    assert "profile overrides are not supported" in result.stderr
     assert not capture.exists()

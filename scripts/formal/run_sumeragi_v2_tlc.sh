@@ -1,12 +1,26 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-readonly TLA2TOOLS_VERSION="1.8.0"
-readonly TLA2TOOLS_SHA256="33de7da9ce1b7fffb9d1c184021178dbb051747be48504e65c584c423721a32e"
+readonly TLA2TOOLS_VERSION="1.7.4"
+readonly TLA2TOOLS_SHA256="936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88"
+readonly TLC_MAX_SET_SIZE="1000000"
+readonly TLAPM_COMMIT="763bf3c1826d77a4cf206f43d5aa16775da1da33"
+readonly TLAPM_FUNCTIONS_SHA256="b54ff63b7c76c327525c17c188d5f9f5e53d92f3fd701f5e2ba54f0f54391063"
+readonly TLAPM_FOLDS_SHA256="aa59063fd600bb640b2ae24dc85ef770277ef5bf7955092b76b8b471790086da"
 readonly REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 readonly FORMAL_DIR="${REPO_ROOT}/docs/formal/sumeragi_v2"
 readonly TLA2TOOLS_JAR="${TLA2TOOLS_JAR:-${REPO_ROOT}/target/tla2tools/${TLA2TOOLS_VERSION}/tla2tools.jar}"
 readonly PROFILE="${1:-ci}"
+
+case "$(uname -s)-$(uname -m)" in
+  Linux-x86_64) readonly TLAPM_PLATFORM="x86_64-linux-gnu" ;;
+  Darwin-arm64) readonly TLAPM_PLATFORM="arm64-darwin" ;;
+  *)
+    echo "unsupported TLAPM host: $(uname -s)-$(uname -m)" >&2
+    exit 1
+    ;;
+esac
+readonly TLAPM_STDLIB="${TLAPM_STDLIB:-${REPO_ROOT}/target/tlapm/toolchains/${TLAPM_COMMIT}/${TLAPM_PLATFORM}/tlapm/lib/tlapm/stdlib}"
 
 hash_file() {
   if command -v sha256sum >/dev/null 2>&1; then
@@ -36,6 +50,26 @@ java -version >/dev/null 2>&1 || {
   echo "a working Java runtime is required for TLC" >&2
   exit 1
 }
+for module in Functions Folds; do
+  [[ -f "${TLAPM_STDLIB}/${module}.tla" ]] || {
+    echo "pinned TLAPM ${TLAPM_COMMIT} standard library is required at ${TLAPM_STDLIB}" >&2
+    echo "run scripts/formal/install_sumeragi_v2_tlapm.sh first" >&2
+    exit 1
+  }
+done
+for module_and_hash in \
+  "Functions:${TLAPM_FUNCTIONS_SHA256}" \
+  "Folds:${TLAPM_FOLDS_SHA256}"; do
+  module="${module_and_hash%%:*}"
+  expected_sha256="${module_and_hash#*:}"
+  actual_sha256="$(hash_file "${TLAPM_STDLIB}/${module}.tla")"
+  if [[ "$actual_sha256" != "$expected_sha256" ]]; then
+    echo "pinned TLAPM standard-library checksum mismatch for ${module}.tla" >&2
+    echo "expected: ${expected_sha256}" >&2
+    echo "actual:   ${actual_sha256}" >&2
+    exit 1
+  fi
+done
 
 case "$PROFILE" in
   ci)
@@ -60,6 +94,7 @@ allowed_configs=(
   safety_stake
   chain_epoch
   liveness
+  resume_locked_commit_witness
 )
 if (($#)); then
   configs=("$@")
@@ -78,20 +113,27 @@ echo "[tlc] pinned TLA2Tools v${TLA2TOOLS_VERSION}; profile=${PROFILE}"
 
 run_dir="$(mktemp -d "${TMPDIR:-/tmp}/sumeragi-v2-tlc.XXXXXX")"
 trap 'rm -rf -- "$run_dir"' EXIT
+tlapm_compat_dir="${run_dir}/tlapm-stdlib"
+mkdir -p "$tlapm_compat_dir"
+ln -s "${TLAPM_STDLIB}/Functions.tla" "${tlapm_compat_dir}/Functions.tla"
+ln -s "${TLAPM_STDLIB}/Folds.tla" "${tlapm_compat_dir}/Folds.tla"
 seed=424242
 for config in "${configs[@]}"; do
   cfg="${config}.cfg"
   metadir="${run_dir}/${config}"
+  tlc_log="${run_dir}/${config}.log"
   mkdir -p "$metadir"
   echo "[tlc] bounded check ${cfg}"
   common=(
-    java -cp "$TLA2TOOLS_JAR" tlc2.TLC
+    java -XX:+UseParallelGC "-DTLA-Library=${tlapm_compat_dir}"
+    -cp "$TLA2TOOLS_JAR" tlc2.TLC
     -cleanup
-    -noGenerateSpecTE
+    -maxSetSize "$TLC_MAX_SET_SIZE"
     -metadir "$metadir"
     -workers 1
     -config "$cfg"
   )
+  set +e
   (
     cd "$FORMAL_DIR"
     case "$config" in
@@ -106,12 +148,37 @@ for config in "${configs[@]}"; do
         "${common[@]}" -depth "$TRACE_DEPTH" -seed "$seed" -aril 0 \
           -simulate "num=${TRACE_COUNT}" SumeragiV2AsyncNetwork.tla
         ;;
+      resume_locked_commit_witness)
+        "${common[@]}" SumeragiV2ResumeVoteWitness.tla
+        ;;
       *)
         "${common[@]}" -depth "$TRACE_DEPTH" -seed "$seed" -aril 0 \
           -simulate "num=${TRACE_COUNT}" SumeragiV2.tla
         ;;
     esac
-  )
+  ) >"$tlc_log" 2>&1
+  tlc_status=$?
+  set -e
+  cat "$tlc_log"
+
+  if [[ "$config" == "resume_locked_commit_witness" ]]; then
+    # This module negates the required recovery state solely so TLC emits the
+    # shortest bounded trace reaching it.  Exit 12 plus the exact invariant
+    # name distinguishes that witness from a type error, deadlock, or tool
+    # failure; an accidental no-counterexample result must also fail closed.
+    if [[ "$tlc_status" -ne 12 ]] ||
+      ! grep -Fq \
+        "Invariant NoRecoveredHistoricalLockedCommitSigning is violated." \
+        "$tlc_log"; then
+      echo "TLC did not emit the exact locked-Commit recovery witness (status=${tlc_status})" >&2
+      exit 1
+    fi
+    echo "[tlc] observed required historical locked-Commit ResumeVote witness"
+  elif [[ "$tlc_status" -ne 0 ]] ||
+    ! grep -Fq "Model checking completed. No error has been found." "$tlc_log"; then
+    echo "TLC bounded check ${cfg} did not report exact successful completion (status=${tlc_status})" >&2
+    exit 1
+  fi
   seed=$((seed + 7919))
 done
-echo "[tlc] bounded searches found no counterexample; no proof status was changed"
+echo "[tlc] all bounded checks had their exact expected outcomes; no proof status was changed"

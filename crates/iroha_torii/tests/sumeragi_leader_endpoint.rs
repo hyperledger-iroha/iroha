@@ -54,6 +54,7 @@ async fn sumeragi_leader_endpoint_uses_authoritative_v2_round() {
             },
         },
         last_commit_qc: None,
+        liveness: Default::default(),
     };
     published.validate().expect("valid leader status fixture");
     status::set_v2_status(published);

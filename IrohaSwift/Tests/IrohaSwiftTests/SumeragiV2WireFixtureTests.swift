@@ -165,7 +165,7 @@ final class SumeragiV2WireFixtureTests: XCTestCase {
         XCTAssertFalse(decoded.restartRequired)
         XCTAssertEqual(decoded.height, 1)
         XCTAssertEqual(decoded.view, 3)
-        XCTAssertEqual(decoded.phase, .prepare)
+        XCTAssertEqual(decoded.phase, .commit)
         XCTAssertEqual(decoded.leader, 2)
         XCTAssertEqual(decoded.bodyState, .validated)
         XCTAssertEqual(decoded.pendingPersistenceID, 17)
@@ -181,6 +181,13 @@ final class SumeragiV2WireFixtureTests: XCTestCase {
         XCTAssertEqual(decoded.heightContext.quorum.minSigners, 3)
         XCTAssertEqual(decoded.heightContext.quorum.totalPower, 4)
         XCTAssertNil(decoded.lastCommitQC)
+        XCTAssertEqual(decoded.liveness.generation, 3)
+        XCTAssertEqual(decoded.liveness.prepareQuorums.count, 1)
+        XCTAssertEqual(decoded.liveness.commitQuorums.count, 1)
+        XCTAssertEqual(decoded.liveness.timeoutQuorums.count, 1)
+        XCTAssertEqual(decoded.liveness.outboundIntents.first?.kind, .commitVote)
+        XCTAssertEqual(decoded.liveness.queues.first?.queue, .networkIngress)
+        XCTAssertEqual(decoded.liveness.blocker, .commitQuorumMissing)
 
         // The fifth struct field follows four fixed-width fields and is the
         // canonical one-byte `restart_required` boolean.

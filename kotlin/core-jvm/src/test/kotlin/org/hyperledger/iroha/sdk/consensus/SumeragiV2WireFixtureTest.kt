@@ -310,7 +310,7 @@ class SumeragiV2WireFixtureTest {
         assertEquals(false, decoded.restartRequired)
         assertEquals(1L, decoded.height)
         assertEquals(3L, decoded.view)
-        assertEquals(SumeragiV2Wire.StatusPhase.PREPARE, decoded.phase)
+        assertEquals(SumeragiV2Wire.StatusPhase.COMMIT, decoded.phase)
         assertEquals(2L, decoded.leader)
         assertEquals(SumeragiV2Wire.BodyState.VALIDATED, decoded.bodyState)
         assertEquals(17L, decoded.pendingPersistenceId)
@@ -326,6 +326,13 @@ class SumeragiV2WireFixtureTest {
         assertEquals(3L, decoded.heightContext.quorum.minSigners)
         assertEquals(4L, decoded.heightContext.quorum.totalPower)
         assertEquals(null, decoded.lastCommitQc)
+        assertEquals(3L, decoded.liveness.generation)
+        assertEquals(1, decoded.liveness.prepareQuorums.size)
+        assertEquals(1, decoded.liveness.commitQuorums.size)
+        assertEquals(1, decoded.liveness.timeoutQuorums.size)
+        assertEquals(SumeragiV2Wire.OutboundIntentKind.COMMIT_VOTE, decoded.liveness.outboundIntents.single().kind)
+        assertEquals(SumeragiV2Wire.QueueKind.NETWORK_INGRESS, decoded.liveness.queues.single().queue)
+        assertEquals(SumeragiV2Wire.LivenessBlocker.COMMIT_QUORUM_MISSING, decoded.liveness.blocker)
 
         // The fifth struct field follows four fixed-width fields and is the
         // canonical one-byte `restart_required` boolean.

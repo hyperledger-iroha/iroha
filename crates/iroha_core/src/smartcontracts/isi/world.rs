@@ -9259,6 +9259,19 @@ pub mod isi {
         })
     }
 
+    fn sccp_solana_native_verifier_work(
+        encoded_envelope_len: usize,
+    ) -> Result<crate::state::SccpVerifierWorkV1, Error> {
+        let native_header_bytes = u64::try_from(encoded_envelope_len).map_err(|_| {
+            invalid_bridge_proof("SCCP Solana native proof byte count overflows u64")
+        })?;
+        Ok(crate::state::SccpVerifierWorkV1 {
+            native_header_bytes,
+            bn254_pairing_checks: 1,
+            ..crate::state::SccpVerifierWorkV1::default()
+        })
+    }
+
     fn sccp_native_verifier_work(
         decoded: &iroha_sccp::SccpNativeInboundMessageProofV1,
         encoded_envelope_len: usize,
@@ -9324,6 +9337,9 @@ pub mod isi {
                     bls_signer_contributions,
                     ..crate::state::SccpVerifierWorkV1::default()
                 })
+            }
+            SccpNativeSourceProofV1::SolanaAgave(_) => {
+                sccp_solana_native_verifier_work(encoded_envelope_len)
             }
             SccpNativeSourceProofV1::TronDpos(proof) => {
                 let estimate = iroha_sccp::tron_native_finality_work_estimate(&proof.finality)
@@ -10344,6 +10360,9 @@ pub mod isi {
             iroha_data_model::bridge::SccpDestinationDeploymentV1::Tron(deployment) => {
                 deployment.verifying_key
             }
+            iroha_data_model::bridge::SccpDestinationDeploymentV1::Solana(deployment) => {
+                deployment.verifying_key
+            }
         };
         if !iroha_sccp::sccp_groth16_bn254_verifying_key_is_well_formed_v1(&verifying_key) {
             return Err(InstructionExecutionError::InvalidParameter(
@@ -10853,6 +10872,7 @@ pub mod isi {
         asset_key: String,
         route_configuration_hash: [u8; 32],
         destination: iroha_data_model::bridge::SccpDestinationDeploymentV1,
+        sora_outbound_execution_policy: iroha_data_model::bridge::SccpSoraOutboundExecutionPolicyV1,
         settlement_asset_definition_id: AssetDefinitionId,
         custody_account_id: AccountId,
         payload_amount_scale: u32,
@@ -10915,6 +10935,7 @@ pub mod isi {
             asset_key: route.asset_key.clone(),
             route_configuration_hash,
             destination: route.destination,
+            sora_outbound_execution_policy: route.sora_outbound_execution_policy.clone(),
             settlement_asset_definition_id: route.settlement.asset_definition_id.clone(),
             custody_account_id: route.settlement.custody_account_id.clone(),
             payload_amount_scale: route.settlement.payload_amount_scale,
@@ -11122,11 +11143,15 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            if !state_transaction.sccp_recording_proof_verified {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "SCCP message recording requires verified IVM proof".into(),
-                ));
-            }
+            let execution_binding = state_transaction
+                .sccp_ivm_proved_execution_binding
+                .clone()
+                .ok_or_else(|| {
+                    InstructionExecutionError::InvariantViolation(
+                        "SCCP message recording requires a structured verified IVM execution binding"
+                            .into(),
+                    )
+                })?;
             ensure_sccp_outbound_lane_is_active(state_transaction)?;
             let validated = match crate::bridge::validate_recorded_sccp_message_payload_bytes(
                 self.context,
@@ -11188,6 +11213,22 @@ pub mod isi {
                 transfer,
                 state_transaction,
             )?;
+            let execution_policy = &settlement.sora_outbound_execution_policy;
+            if execution_binding.contract_artifact_sha256
+                != execution_policy.contract_artifact_sha256
+                || !execution_policy.vk_ref.matches(
+                    &execution_binding.vk_ref,
+                    execution_binding.vk_version,
+                    execution_binding.vk_commitment,
+                )
+                || execution_binding.gas_limit != execution_policy.gas_limit
+                || execution_binding.gas_used > execution_binding.gas_limit
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "SCCP message recording proved execution does not match the enabled route's governed contract artifact, verification key, and gas policy"
+                        .into(),
+                ));
+            }
             let key = validated.key.clone();
             if state_transaction
                 .world
@@ -18110,6 +18151,21 @@ pub mod isi {
             hash_bridge_proof(&proof.backend_label(), &encoded)
         }
 
+        #[test]
+        fn solana_native_verifier_work_reserves_bytes_and_pairing() {
+            let encoded_envelope_len = 1_337;
+            assert_eq!(
+                sccp_solana_native_verifier_work(encoded_envelope_len)
+                    .expect("Solana verifier work must fit deterministic counters"),
+                crate::state::SccpVerifierWorkV1 {
+                    native_header_bytes: u64::try_from(encoded_envelope_len)
+                        .expect("fixture length fits u64"),
+                    bn254_pairing_checks: 1,
+                    ..crate::state::SccpVerifierWorkV1::default()
+                }
+            );
+        }
+
         fn test_active_eth_registry() -> crate::state::SccpOnChainRegistryV1 {
             let (_, source_identity, trust_anchor) =
                 iroha_sccp::sccp_native_ethereum_inbound_test_fixture_v1();
@@ -18966,7 +19022,7 @@ pub mod isi {
             let mut stx = block.transaction();
             configure_active_test_lanes(&mut stx, &[LaneId::SINGLE]);
             enable_sccp_recording_for_test(&mut stx, LaneId::SINGLE);
-            stx.sccp_recording_proof_verified = false;
+            stx.sccp_ivm_proved_execution_binding = None;
 
             let payload = sora_outbound_sccp_payload(49);
             let key = crate::bridge::test_sccp_outbound_message_key(&payload);
@@ -18978,10 +19034,114 @@ pub mod isi {
                 .execute(&ALICE_ID, &mut stx)
                 .expect_err("plain SCCP recording must require a verified IVM proof");
             assert!(
-                format!("{error:?}").contains("requires verified IVM proof"),
+                format!("{error:?}").contains("structured verified IVM execution binding"),
                 "unexpected proof-authority error: {error:?}"
             );
             assert!(stx.world.sccp_outbound_pending_messages.get(&key).is_none());
+        }
+
+        #[test]
+        fn record_sccp_message_rejects_wrong_proved_material_and_unpinned_revision() {
+            for case in [
+                "wrong_artifact",
+                "wrong_vk_id",
+                "wrong_vk_version",
+                "wrong_vk_commitment",
+                "wrong_gas_limit",
+                "missing_enabled_route",
+                "alternate_revision",
+            ] {
+                let state = State::new_for_testing(
+                    World::default(),
+                    Kura::blank_kura_for_testing(),
+                    LiveQueryStore::start_test(),
+                );
+                let header = iroha_data_model::block::BlockHeader::new(
+                    NonZeroU64::new(1).expect("nonzero height"),
+                    None,
+                    None,
+                    None,
+                    0,
+                    0,
+                );
+                let mut block = state.block(header);
+                let mut stx = block.transaction();
+                enable_sccp_recording_for_test(&mut stx, LaneId::SINGLE);
+                let mut payload = sora_outbound_sccp_payload(90);
+
+                match case {
+                    "wrong_artifact" => {
+                        stx.sccp_ivm_proved_execution_binding
+                            .as_mut()
+                            .expect("proved binding")
+                            .contract_artifact_sha256 = [0x7a; 32];
+                    }
+                    "wrong_vk_id" => {
+                        stx.sccp_ivm_proved_execution_binding
+                            .as_mut()
+                            .expect("proved binding")
+                            .vk_ref = iroha_data_model::proof::VerifyingKeyId::new(
+                            "stark/fri/v1",
+                            "rotated-key",
+                        );
+                    }
+                    "wrong_vk_version" => {
+                        stx.sccp_ivm_proved_execution_binding
+                            .as_mut()
+                            .expect("proved binding")
+                            .vk_version = 2;
+                    }
+                    "wrong_vk_commitment" => {
+                        stx.sccp_ivm_proved_execution_binding
+                            .as_mut()
+                            .expect("proved binding")
+                            .vk_commitment = [0x7b; 32];
+                    }
+                    "wrong_gas_limit" => {
+                        stx.sccp_ivm_proved_execution_binding
+                            .as_mut()
+                            .expect("proved binding")
+                            .gas_limit = 49_999_999;
+                    }
+                    "missing_enabled_route" => {
+                        stx.sccp_registry = crate::state::ValidatedSccpRegistryV1::try_from_wire(
+                            crate::state::SccpOnChainRegistryV1::default(),
+                        )
+                        .expect("empty registry");
+                    }
+                    "alternate_revision" => {
+                        let iroha_sccp::SccpPayloadV1::Transfer(transfer) = &mut payload;
+                        transfer.route_revision = 2;
+                    }
+                    _ => unreachable!("closed proof-policy test case"),
+                }
+
+                let key = crate::bridge::test_sccp_outbound_message_key(&payload);
+                let error = crate::bridge::test_record_sccp_message(
+                    canonical_test_sccp_payload_bytes(&payload),
+                )
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("hostile SCCP proved material must fail closed");
+                let message = format!("{error:?}");
+                if case.starts_with("wrong_") {
+                    assert!(
+                        message.contains(
+                            "governed contract artifact, verification key, and gas policy"
+                        ),
+                        "unexpected {case} admission error: {message}"
+                    );
+                } else {
+                    assert!(
+                        message.contains("no active exact governed reverse lane")
+                            || message.contains("no enabled exact route revision"),
+                        "unexpected {case} route admission error: {message}"
+                    );
+                }
+                assert!(
+                    stx.world.sccp_outbound_pending_messages.get(&key).is_none(),
+                    "{case} must not create an outbox record"
+                );
+            }
         }
 
         #[test]
@@ -19033,7 +19193,7 @@ pub mod isi {
             );
             let mut block = state.block(header);
             let mut stx = block.transaction();
-            stx.sccp_recording_proof_verified = true;
+            stx.sccp_ivm_proved_execution_binding = Some(test_sccp_ivm_proved_execution_binding());
             let payload = sora_outbound_sccp_payload(47);
             let key = crate::bridge::test_sccp_outbound_message_key(&payload);
             let instruction = crate::bridge::test_record_sccp_message(
@@ -19065,7 +19225,7 @@ pub mod isi {
             );
             let mut block = state.block(header);
             let mut stx = block.transaction();
-            stx.sccp_recording_proof_verified = true;
+            stx.sccp_ivm_proved_execution_binding = Some(test_sccp_ivm_proved_execution_binding());
             configure_active_test_lanes(&mut stx, &[LaneId::SINGLE]);
             stx.current_lane_id = Some(LaneId::SINGLE);
             let payload = sora_outbound_sccp_payload(53);
@@ -19099,7 +19259,7 @@ pub mod isi {
             );
             let mut block = state.block(header);
             let mut stx = block.transaction();
-            stx.sccp_recording_proof_verified = true;
+            stx.sccp_ivm_proved_execution_binding = Some(test_sccp_ivm_proved_execution_binding());
             configure_active_test_lanes(&mut stx, &[LaneId::SINGLE]);
             stx.current_lane_id = Some(LaneId::SINGLE);
             let wrong_dataspace = DataSpaceId::new(7);
@@ -19136,7 +19296,7 @@ pub mod isi {
             );
             let mut block = state.block(header);
             let mut stx = block.transaction();
-            stx.sccp_recording_proof_verified = true;
+            stx.sccp_ivm_proved_execution_binding = Some(test_sccp_ivm_proved_execution_binding());
 
             let recreated_lane = LaneId::new(4);
             let retired_dataspace = DataSpaceId::new(20);
@@ -19211,7 +19371,7 @@ pub mod isi {
             );
             let mut block = state.block(header);
             let mut stx = block.transaction();
-            stx.sccp_recording_proof_verified = true;
+            stx.sccp_ivm_proved_execution_binding = Some(test_sccp_ivm_proved_execution_binding());
             configure_active_test_lanes(&mut stx, &[LaneId::SINGLE]);
             stx.current_lane_id = Some(LaneId::SINGLE);
             stx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
@@ -22591,8 +22751,23 @@ seiyaku GovernanceLifecycle {
             stx.nexus.lane_catalog = catalog;
         }
 
+        fn test_sccp_ivm_proved_execution_binding() -> crate::state::SccpIvmProvedExecutionBindingV1
+        {
+            crate::state::SccpIvmProvedExecutionBindingV1 {
+                contract_artifact_sha256: [0xb1; 32],
+                vk_ref: iroha_data_model::proof::VerifyingKeyId::new(
+                    "stark/fri/v1",
+                    "ivm-execution-v1",
+                ),
+                vk_version: 1,
+                vk_commitment: [0xb2; 32],
+                gas_limit: 50_000_000,
+                gas_used: 1,
+            }
+        }
+
         fn enable_sccp_recording_for_test(stx: &mut StateTransaction<'_, '_>, lane_id: LaneId) {
-            stx.sccp_recording_proof_verified = true;
+            stx.sccp_ivm_proved_execution_binding = Some(test_sccp_ivm_proved_execution_binding());
             stx.nexus.enabled = true;
             stx.current_lane_id = Some(lane_id);
             stx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);

@@ -286,12 +286,24 @@ PROOF
              /\ prefixHeight \in Nat
              /\ prefixHeight < certifiedHeight + 1
       BY <2>6, SMT
-    <2>8. \A prefixHeight \in 0..certifiedHeight:
-             [index \in 1..prefixHeight |-> decidedAt'[index]]
+    <2>8. ASSUME NEW prefixHeight \in 0..certifiedHeight
+           PROVE [index \in 1..prefixHeight |-> decidedAt'[index]]
+                   = [index \in 1..prefixHeight |-> decidedAt[index]]
+      <3>1. /\ prefixHeight \in Nat
+             /\ prefixHeight < certifiedHeight + 1
+        BY <2>7, <2>8
+      <3>2. [index \in 1..prefixHeight
+                |-> [decidedAt EXCEPT
+                       ![certifiedHeight + 1] =
+                         decision.qc.subject][index]]
                = [index \in 1..prefixHeight |-> decidedAt[index]]
-      BY <1>1, <2>1, <2>2, <2>5, <2>6, <2>7,
-         UpdateAbovePrefixPreservesPrefix, SMT
-         DEF RecordCertifiedNext
+        BY <2>1, <2>2, <2>5, <2>6, <3>1,
+           UpdateAbovePrefixPreservesPrefix
+      <3>3. decidedAt' =
+               [decidedAt EXCEPT
+                  ![certifiedHeight + 1] = decision.qc.subject]
+        BY <1>1 DEF RecordCertifiedNext
+      <3> QED BY <3>2, <3>3
     <2> QED BY <2>8 DEF HistoryThrough
   <1> QED BY <1>1
 

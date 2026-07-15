@@ -170,9 +170,11 @@ PROOF
         BY <2>3, Zenon DEF HighestTimeoutVote
       <3>2. HighestTimeoutVote(tc.votes) \in tc.votes
         BY <3>1 DEF MaximalTimeoutVotes
-      <3>3. HighestTimeoutVote(tc.votes).highRank \in Ranks
-        BY <1>1, <3>2, Isa DEF TcWellTyped, TimeoutVoteRecordSet
-      <3> QED BY <2>1, <3>3 DEF TcHighRank
+      <3>3. HighestTimeoutVote(tc.votes) \in TimeoutVoteRecordSet
+        BY <1>1, <3>2, Isa DEF TcWellTyped
+      <3>4. HighestTimeoutVote(tc.votes).highRank \in Ranks
+        BY <3>3, Isa DEF TimeoutVoteRecordSet
+      <3> QED BY <2>1, <3>4 DEF TcHighRank
     <2>4. MaximalTimeoutVotes(tc.votes) = {}
              \/ MaximalTimeoutVotes(tc.votes) # {}
       BY Isa
@@ -270,14 +272,18 @@ PROOF
           /\ lockSubject \in [ValidatorIds -> SubjectOrNone]
           /\ ModelConfiguration
       BY <1>1 DEF TypeInvariant
-    <2>3. /\ request.node \in ValidatorIds
-          /\ TcWellTyped(request.tc)
-      BY <1>1, <2>1 DEF TypeInvariant
-    <2>4. TcHighRank(request.tc) \in Int
-      BY <2>2, <2>3, WellTypedTimeoutSelectorRankIsInteger
-    <2>5. lockRank[request.node] \in Int
-      BY <1>1, <2>3, ModelRanksAreIntegers, Isa DEF TypeInvariant
-    <2>6. LockMonotone(
+    <2>3. request \in InstallTcWalSet
+      BY <1>1, <2>1, Isa DEF TypeInvariant
+    <2>4. /\ request.node \in ValidatorIds
+          /\ request.tc \in TcRecordSet
+      BY <2>3, Isa DEF InstallTcWalSet
+    <2>5. TcWellTyped(request.tc)
+      BY <2>4, Isa DEF TcWellTyped, TcRecordSet
+    <2>6. TcHighRank(request.tc) \in Int
+      BY <2>2, <2>5, WellTypedTimeoutSelectorRankIsInteger
+    <2>7. lockRank[request.node] \in Int
+      BY <1>1, <2>4, ModelRanksAreIntegers, Isa DEF TypeInvariant
+    <2>8. LockMonotone(
              LockValue(lockRank[request.node],
                        lockSubject[request.node]),
              InstallHighLock(
@@ -285,9 +291,9 @@ PROOF
                          lockSubject[request.node]),
                TcHighRank(request.tc),
                TcHighSubject(request.tc)))
-      BY <2>4, <2>5, TimeoutInstallationAdvancesLockMonotonically
+      BY <2>6, <2>7, TimeoutInstallationAdvancesLockMonotonically
          DEF LockValue
-    <2>7. ASSUME NEW node \in ValidatorIds
+    <2>9. ASSUME NEW node \in ValidatorIds
            PROVE /\ context' = context
                        => lockRank'[node] >= lockRank[node]
                  /\ (context' = context
@@ -312,7 +318,7 @@ PROOF
                      IF TcHighRank(request.tc) > lockRank[request.node]
                      THEN TcHighSubject(request.tc)
                      ELSE lockSubject[request.node]
-          BY <2>2, <2>3, <3>1, <3>2,
+          BY <2>2, <2>4, <3>1, <3>2,
              LockFunctionalUpdateAtKey
         <4>2. LockValue(lockRank'[node], lockSubject'[node]) =
                  InstallHighLock(
@@ -324,7 +330,7 @@ PROOF
         <4>3. LockMonotone(
                  LockValue(lockRank[node], lockSubject[node]),
                  LockValue(lockRank'[node], lockSubject'[node]))
-          BY <2>6, <3>2, <4>2, Isa
+          BY <2>8, <3>2, <4>2, Isa
         <4>4. lockRank'[node] >= lockRank[node]
           BY <4>3 DEF LockMonotone, LockValue
         <4>5. lockSubject'[node] # lockSubject[node]
@@ -334,13 +340,13 @@ PROOF
       <3>3. CASE node # request.node
         <4>1. /\ lockRank'[node] = lockRank[node]
               /\ lockSubject'[node] = lockSubject[node]
-          BY <2>2, <2>3, <2>7, <3>1, <3>3,
+          BY <2>2, <2>4, <2>9, <3>1, <3>3,
              LockFunctionalUpdateAwayFromKey
         <4>2. lockRank[node] \in Int
-          BY <1>1, <2>7, ModelRanksAreIntegers, Isa DEF TypeInvariant
+          BY <1>1, <2>9, ModelRanksAreIntegers, Isa DEF TypeInvariant
         <4> QED BY <3>1, <3>3, <4>1, <4>2, SMT
       <3> QED BY <3>2, <3>3
-    <2> QED BY <2>7 DEF LockMonotonicityAction
+    <2> QED BY <2>9 DEF LockMonotonicityAction
   <1> QED BY <1>1
 
 UnchangedContextAndLocks ==
@@ -390,9 +396,12 @@ LockStableNext ==
   \/ \E envelope \in proposalNetwork: DeliverProposal(envelope)
   \/ \E node \in ValidatorIds, proposal \in SeenProposalValues:
        FetchBody(node, proposal)
-  \/ \E node \in ValidatorIds, subject \in Subjects: StoreBody(node, subject)
+  \/ \E node \in ValidatorIds, roundView \in Views, subject \in Subjects:
+       StoreBody(node, roundView, subject)
   \/ \E node \in ValidatorIds, proposal \in SeenProposalValues:
        ValidateBody(node, proposal) \/ RejectBody(node, proposal)
+  \/ \E node \in ValidatorIds, qc \in DecisionQcValues:
+       ValidateDecidedBody(node, qc)
   \/ \E node \in ValidatorIds, proposal \in SeenProposalValues:
        BeginPrepare(node, proposal)
   \/ \E request \in pendingPrepare: PersistPrepare(request)
@@ -454,7 +463,8 @@ BY IsaM("blast")
        SetGST, AssembleLocalBody, BeginLocalProposal, PersistProposal,
        CompleteProposalSignature, ByzantineBroadcastProposal,
        DeliverProposal, FetchBody, StoreBody,
-       ValidateBody, RejectBody, BeginPrepare, PersistPrepare,
+       ValidateBody, ValidateDecidedBody, RejectBody,
+       BeginPrepare, PersistPrepare,
        CompleteVoteSignature, ByzantineBroadcastVote, DeliverVote,
        FormPrepareQC, DeliverQC, BeginObservePrepare,
        PersistObservePrepare, BeginLockCommit, FormCommitQC,
@@ -463,6 +473,32 @@ BY IsaM("blast")
        DeliverTimeout, FormTC, DeliverTC, BeginInstallTC,
        FetchCertifiedBody, ApplyDecision, Crash, Restart, ResumeProposal,
        ResumeVote, ResumeTimeout, DropProposal
+
+(***************************************************************************
+Only the two durable receipt consumers can change `decisions` or `applied`.
+Keeping this classification at the Core proof boundary lets parameterized
+chain instances reason about receipt handoff without expanding the complete
+asynchronous command executor.
+***************************************************************************)
+THEOREM NextDurableReceiptActionClassification ==
+  Next
+    => \/ UNCHANGED <<decisions, applied>>
+       \/ (\E request \in pendingDecision: PersistDecision(request))
+       \/ (\E node \in ValidatorIds, qc \in DecisionQcValues:
+             ApplyDecision(node, qc))
+BY IsaM("blast")
+   DEF Next, SetGST, AssembleLocalBody, BeginLocalProposal, PersistProposal,
+       CompleteProposalSignature, ByzantineBroadcastProposal,
+       DeliverProposal, FetchBody, StoreBody, ValidateBody,
+       ValidateDecidedBody, RejectBody, BeginPrepare, PersistPrepare,
+       CompleteVoteSignature, ByzantineBroadcastVote, DeliverVote,
+       FormPrepareQC, DeliverQC, BeginObservePrepare,
+       PersistObservePrepare, BeginLockCommit, PersistLockCommit,
+       FormCommitQC, BeginDecision, BeginTimeout, PersistTimeout,
+       CompleteTimeoutSignature, ByzantineBroadcastTimeout,
+       DeliverTimeout, FormTC, DeliverTC, BeginInstallTC, PersistInstallTC,
+       FetchCertifiedBody, Crash, Restart, ResumeProposal, ResumeVote,
+       ResumeTimeout, DropProposal
 
 THEOREM AdvanceContextEndsCurrentLockOrder ==
   \A subject \in Subjects:
@@ -544,12 +580,12 @@ PROOF
 PrepareCertificateAvailability ==
   \A qc \in prepareQCs:
     \E signer \in qc.signers \cap Honest:
-      BodyHeldBy(durableBodies, signer, qc.context, qc.subject)
+      BodyHeldBy(durableBodies, signer, qc.context, qc.view, qc.subject)
 
 CommitCertificateAvailability ==
   \A qc \in commitQCs:
     \E signer \in qc.signers \cap Honest:
-      BodyHeldBy(durableBodies, signer, qc.context, qc.subject)
+      BodyHeldBy(durableBodies, signer, qc.context, qc.view, qc.subject)
 
 CertificateValidityAndAvailabilityInvariant ==
   /\ \A qc \in prepareQCs:

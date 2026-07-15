@@ -622,7 +622,7 @@ async fn npos_election_filters_stake_and_applies_after_margin() -> eyre::Result<
     npos.epoch_length_blocks = EPOCH_LEN;
     npos.vrf_commit_window_blocks = 2;
     npos.vrf_reveal_window_blocks = 4;
-    npos.min_self_bond = MIN_SELF_BOND;
+    npos.min_self_bond = MIN_SELF_BOND.into();
     npos.finality_margin_blocks = FINALITY_MARGIN;
 
     let builder = NetworkBuilder::new()
@@ -796,7 +796,7 @@ async fn npos_entity_correlation_limits_validator_set() -> eyre::Result<()> {
     npos.epoch_length_blocks = EPOCH_LEN;
     npos.vrf_commit_window_blocks = 2;
     npos.vrf_reveal_window_blocks = 4;
-    npos.min_self_bond = MIN_SELF_BOND;
+    npos.min_self_bond = MIN_SELF_BOND.into();
     npos.max_entity_correlation_pct = 50;
     npos.finality_margin_blocks = FINALITY_MARGIN;
 

@@ -2290,6 +2290,11 @@ pub mod sumeragi {
     /// Read the authoritative SCCP route registry.
     pub const SCCP_REGISTRY: RouteDescriptor =
         public_sccp_get("sccp.registry.read", "/v1/sccp/registry");
+    /// Read the exact registered SORA-side IVM material for one enabled route.
+    pub const SCCP_SORA_OUTBOUND_MATERIAL: RouteDescriptor = public_sccp_get(
+        "sccp.sora_outbound_material.read",
+        "/v1/sccp/routes/{source_profile}/{route_id}/{asset_key}/{revision}/sora-outbound-material",
+    );
     /// Read one epoch's VRF penalty state.
     pub const VRF_PENALTIES: RouteDescriptor = public_get(
         "sumeragi.vrf.penalty.read",
@@ -2377,6 +2382,7 @@ pub mod sumeragi {
         SCCP_MESSAGES_RECENT,
         SCCP_CAPABILITIES,
         SCCP_REGISTRY,
+        SCCP_SORA_OUTBOUND_MATERIAL,
         VRF_PENALTIES,
         VRF_EPOCH,
         STATUS,
@@ -4135,6 +4141,7 @@ pub const CATALOGED_ROUTES: &[RouteDescriptor] = &[
     sumeragi::SCCP_MESSAGES_RECENT,
     sumeragi::SCCP_CAPABILITIES,
     sumeragi::SCCP_REGISTRY,
+    sumeragi::SCCP_SORA_OUTBOUND_MATERIAL,
     sumeragi::VRF_PENALTIES,
     sumeragi::VRF_EPOCH,
     sumeragi::STATUS,

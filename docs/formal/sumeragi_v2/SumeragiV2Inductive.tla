@@ -85,7 +85,8 @@ PendingVoteWritesAuthorized ==
        /\ request.vote.view = nodeView[request.node]
        /\ request.vote.subject \in ValidSubjects
        /\ BodyHeldBy(durableBodies, request.node,
-                     request.vote.context, request.vote.subject)
+                     request.vote.context, request.vote.view,
+                     request.vote.subject)
        /\ CanAppendVote(prepareIntents, request.vote)
        /\ PrepareCarriesHigherSafeQc(request.vote)
   /\ \A request \in pendingLockCommit:
@@ -102,7 +103,8 @@ PendingVoteWritesAuthorized ==
        /\ ~NodeTimedOut(request.node, request.vote.view)
        /\ request.vote.subject \in ValidSubjects
        /\ BodyHeldBy(durableBodies, request.node,
-                     request.vote.context, request.vote.subject)
+                     request.vote.context, request.vote.view,
+                     request.vote.subject)
        /\ request.qc.view >= lockRank[request.node]
        /\ (request.qc.view = lockRank[request.node]
              => request.qc.subject = lockSubject[request.node])
@@ -300,7 +302,8 @@ StrongInductiveInvariant ==
 
 ProofRelevantVars ==
   <<height, context, contextHistory, nodeView, generation, up, gst,
-    durableBodies, receivedVotes, receivedQCs, receivedTimeoutVotes,
+    durableBodies, retainedLockedBodies,
+    receivedVotes, receivedQCs, receivedTimeoutVotes,
     receivedTCs, proposalIntents, prepareIntents, commitIntents,
     timeoutIntents, prepareQCs, commitQCs, formedTCs, installedTCs,
     lockRank, lockSubject, highestRank, highestSubject,
@@ -311,7 +314,8 @@ ProofRelevantVars ==
 
 ProofRelevantWithoutDurableVars ==
   <<height, context, contextHistory, nodeView, generation, up, gst,
-    receivedVotes, receivedQCs, receivedTimeoutVotes, receivedTCs,
+    retainedLockedBodies, receivedVotes, receivedQCs,
+    receivedTimeoutVotes, receivedTCs,
     proposalIntents, prepareIntents, commitIntents, timeoutIntents,
     prepareQCs, commitQCs, formedTCs, installedTCs,
     lockRank, lockSubject, highestRank, highestSubject,
@@ -322,7 +326,8 @@ ProofRelevantWithoutDurableVars ==
 
 ProofRelevantWithoutPendingProposalVars ==
   <<height, context, contextHistory, nodeView, generation, up, gst,
-    durableBodies, receivedVotes, receivedQCs, receivedTimeoutVotes,
+    durableBodies, retainedLockedBodies,
+    receivedVotes, receivedQCs, receivedTimeoutVotes,
     receivedTCs, proposalIntents, prepareIntents, commitIntents,
     timeoutIntents, prepareQCs, commitQCs, formedTCs, installedTCs,
     lockRank, lockSubject, highestRank, highestSubject,
@@ -337,7 +342,8 @@ LineageVars ==
     prepareQCs, commitQCs, lockRank, lockSubject>>
 
 ProvenanceVars ==
-  <<height, context, nodeView, durableBodies, receivedVotes, receivedQCs,
+  <<height, context, nodeView, durableBodies, retainedLockedBodies,
+    receivedVotes, receivedQCs,
     receivedTimeoutVotes, receivedTCs, prepareIntents, commitIntents,
     timeoutIntents, prepareQCs, commitQCs, formedTCs, installedTCs,
     lockRank, lockSubject, highestRank, highestSubject, pendingPrepare,
@@ -346,7 +352,8 @@ ProvenanceVars ==
     timeoutNetwork, tcNetwork>>
 
 ProvenanceWithoutVoteTransportVars ==
-  <<height, context, nodeView, durableBodies, receivedQCs,
+  <<height, context, nodeView, durableBodies, retainedLockedBodies,
+    receivedQCs,
     receivedTimeoutVotes,
     receivedTCs, prepareIntents, commitIntents, timeoutIntents, prepareQCs,
     commitQCs, formedTCs, installedTCs, lockRank, lockSubject, highestRank,
@@ -355,7 +362,8 @@ ProvenanceWithoutVoteTransportVars ==
     qcNetwork, timeoutNetwork, tcNetwork>>
 
 ProvenanceWithoutTimeoutTransportVars ==
-  <<height, context, nodeView, durableBodies, receivedVotes, receivedQCs,
+  <<height, context, nodeView, durableBodies, retainedLockedBodies,
+    receivedVotes, receivedQCs,
     receivedTCs, prepareIntents, commitIntents, timeoutIntents, prepareQCs,
     commitQCs, formedTCs, installedTCs, lockRank, lockSubject, highestRank,
     highestSubject, pendingPrepare, pendingObservePrepare,

@@ -35093,6 +35093,67 @@ async fn handler_sccp_registry(
         .into_response())
 }
 
+async fn handler_sccp_sora_outbound_material(
+    State(app): State<SharedAppState>,
+    axum::extract::Path((source_profile, route_id, asset_key, revision)): axum::extract::Path<(
+        String,
+        String,
+        String,
+        u32,
+    )>,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
+    validate_api_token(app.as_ref(), &headers)?;
+    routing::reject_sccp_query(raw_query.as_deref())?;
+    let _token_hdr = headers
+        .get("x-api-token")
+        .and_then(|value| value.to_str().ok())
+        .map(ToString::to_string);
+    let format = match negotiate_heavy_query_response_format(&headers) {
+        Ok(format) => format,
+        Err(response) => return Ok(response),
+    };
+    let key = rate_limit_key(
+        &headers,
+        Some(remote_ip),
+        "/v1/sccp/routes/{source_profile}/{route_id}/{asset_key}/{revision}/sora-outbound-material",
+        app.api_token_enforced(),
+    );
+    rate_limit_requests_with_cost(&app, &key, FINALITY_HEAVY_QUERY_RATE_COST).await?;
+    let query_permit = acquire_query_admission(app.as_ref(), true).await?;
+    #[cfg(feature = "telemetry")]
+    if let Some(api_token) = _token_hdr {
+        crate::telemetry::report_torii_api_hit(
+            &app.telemetry,
+            &api_token,
+            "v1/sccp/sora-outbound-material",
+        );
+    }
+    let response = routing::handle_v1_sccp_sora_outbound_material(
+        Arc::clone(&app.state),
+        source_profile,
+        route_id,
+        asset_key,
+        revision,
+        format,
+        query_permit,
+    )
+    .await?
+    .into_response();
+    proof_response_with_exact_egress(
+        app.as_ref(),
+        &headers,
+        Some(remote_ip),
+        "v1/sccp/sora-outbound-material",
+        response,
+        true,
+    )
+    .await
+}
+
 async fn handler_sccp_proof_request(
     State(app): State<SharedAppState>,
     axum::extract::Path(message_id): axum::extract::Path<String>,
@@ -45985,6 +46046,10 @@ impl Torii {
         mount_get!(SCCP_MESSAGES_RECENT, handler_sccp_messages_recent);
         mount_get!(SCCP_CAPABILITIES, handler_sccp_capabilities);
         mount_get!(SCCP_REGISTRY, handler_sccp_registry);
+        mount_get!(
+            SCCP_SORA_OUTBOUND_MATERIAL,
+            handler_sccp_sora_outbound_material
+        );
         mount_get!(VRF_PENALTIES, handler_sumeragi_vrf_penalties);
         mount_get!(VRF_EPOCH, handler_sumeragi_vrf_epoch);
         mount_get!(BRIDGE_FINALITY, handler_bridge_finality_proof);
@@ -62412,6 +62477,7 @@ pub(crate) mod tests_runtime_handlers {
             "/v1/sccp/proofs/message/{message_id}",
             "/v1/sccp/proof-requests/{message_id}",
             "/v1/sccp/messages/recent",
+            "/v1/sccp/routes/{source_profile}/{route_id}/{asset_key}/{revision}/sora-outbound-material",
         ] {
             assert!(source.contains(required), "missing SCCP route: {required}");
         }
@@ -81236,29 +81302,47 @@ mod tests {
         }
     }
 
+    fn multisig_read_payload<T>(value: T) -> NoritoJsonWithBytes<T>
+    where
+        T: norito::json::JsonSerialize,
+    {
+        let raw = norito::json::to_vec(&value).expect("encode multisig read request");
+        NoritoJsonWithBytes {
+            value,
+            raw: axum::body::Bytes::from(raw),
+        }
+    }
+
     #[tokio::test]
-    async fn multisig_spec_does_not_forbid_unsigned_request_for_alias_selector() {
+    async fn multisig_spec_rejects_unsigned_request_for_alias_selector() {
         let request = routing::MultisigSpecRequestDto {
             selector: routing::MultisigAccountSelectorDto {
                 multisig_account_id: None,
                 multisig_account_alias: Some("banking@centralbank.universal".to_owned()),
             },
         };
-        let response = handler_post_multisig_spec(
+        let error = handler_post_multisig_spec(
             State(mk_app_state_for_tests()),
+            Method::POST,
+            routing::ENDPOINT_MULTISIG_SPEC
+                .parse()
+                .expect("multisig spec uri"),
             HeaderMap::new(),
             crate::loopback_connect_info(),
-            NoritoJson(request),
+            multisig_read_payload(request),
         )
         .await
-        .expect_err("missing alias should still fail lookup")
-        .into_response();
+        .expect_err("unsigned alias selector should require signed account headers");
 
-        assert_ne!(response.status(), StatusCode::FORBIDDEN);
+        assert!(matches!(
+            error,
+            Error::Query(ValidationFail::NotPermitted(message))
+                if message == "signed account headers are required"
+        ));
     }
 
     #[tokio::test]
-    async fn multisig_proposals_query_does_not_forbid_unsigned_request_for_alias_selector() {
+    async fn multisig_proposals_query_rejects_unsigned_request_for_alias_selector() {
         let request = routing::MultisigProposalsQueryRequestDto {
             selector: routing::MultisigAccountSelectorDto {
                 multisig_account_id: None,
@@ -81268,21 +81352,28 @@ mod tests {
             cursor: None,
             limit: None,
         };
-        let response = handler_post_multisig_proposals_query(
+        let error = handler_post_multisig_proposals_query(
             State(mk_app_state_for_tests()),
+            Method::POST,
+            routing::ENDPOINT_MULTISIG_PROPOSALS_QUERY
+                .parse()
+                .expect("multisig proposals query uri"),
             HeaderMap::new(),
             crate::loopback_connect_info(),
-            NoritoJson(request),
+            multisig_read_payload(request),
         )
         .await
-        .expect_err("missing alias should still fail lookup")
-        .into_response();
+        .expect_err("unsigned alias selector should require signed account headers");
 
-        assert_ne!(response.status(), StatusCode::FORBIDDEN);
+        assert!(matches!(
+            error,
+            Error::Query(ValidationFail::NotPermitted(message))
+                if message == "signed account headers are required"
+        ));
     }
 
     #[tokio::test]
-    async fn multisig_proposals_lookup_does_not_forbid_unsigned_request_for_alias_selector() {
+    async fn multisig_proposals_lookup_rejects_unsigned_request_for_alias_selector() {
         let request = routing::MultisigProposalLookupRequestDto {
             selector: routing::MultisigAccountSelectorDto {
                 multisig_account_id: None,
@@ -81291,21 +81382,28 @@ mod tests {
             proposal_id: Some("deadbeef".to_owned()),
             instructions_hash: None,
         };
-        let response = handler_post_multisig_proposals_lookup(
+        let error = handler_post_multisig_proposals_lookup(
             State(mk_app_state_for_tests()),
+            Method::POST,
+            routing::ENDPOINT_MULTISIG_PROPOSALS_LOOKUP
+                .parse()
+                .expect("multisig proposals lookup uri"),
             HeaderMap::new(),
             crate::loopback_connect_info(),
-            NoritoJson(request),
+            multisig_read_payload(request),
         )
         .await
-        .expect_err("missing alias should still fail lookup")
-        .into_response();
+        .expect_err("unsigned alias selector should require signed account headers");
 
-        assert_ne!(response.status(), StatusCode::FORBIDDEN);
+        assert!(matches!(
+            error,
+            Error::Query(ValidationFail::NotPermitted(message))
+                if message == "signed account headers are required"
+        ));
     }
 
     #[tokio::test]
-    async fn multisig_proposals_resolve_does_not_forbid_unsigned_request_for_alias_selector() {
+    async fn multisig_proposals_resolve_rejects_unsigned_request_for_alias_selector() {
         let request = routing::MultisigProposalsResolveRequestDto {
             selector: routing::MultisigAccountSelectorDto {
                 multisig_account_id: None,
@@ -81314,17 +81412,24 @@ mod tests {
             proposal_id: Some("deadbeef".to_owned()),
             instructions_hash: None,
         };
-        let response = handler_post_multisig_proposals_resolve(
+        let error = handler_post_multisig_proposals_resolve(
             State(mk_app_state_for_tests()),
+            Method::POST,
+            routing::ENDPOINT_MULTISIG_PROPOSALS_RESOLVE
+                .parse()
+                .expect("multisig proposals resolve uri"),
             HeaderMap::new(),
             crate::loopback_connect_info(),
-            NoritoJson(request),
+            multisig_read_payload(request),
         )
         .await
-        .expect_err("missing alias should still fail lookup")
-        .into_response();
+        .expect_err("unsigned alias selector should require signed account headers");
 
-        assert_ne!(response.status(), StatusCode::FORBIDDEN);
+        assert!(matches!(
+            error,
+            Error::Query(ValidationFail::NotPermitted(message))
+                if message == "signed account headers are required"
+        ));
     }
 
     fn multisig_read_contract_test_router(app: SharedAppState) -> Router {
@@ -81375,7 +81480,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn multisig_read_http_contract_is_unsigned_post_only_closed_and_bounded() {
+    async fn multisig_read_http_contract_requires_signed_alias_post_and_is_closed_and_bounded() {
         let router = multisig_read_contract_test_router(mk_app_state_for_tests());
         let alias_body = r#"{"multisig_account_alias":"banking@centralbank.universal"}"#;
 
@@ -81390,8 +81495,8 @@ mod tests {
             .expect("unsigned spec response");
         assert_eq!(
             unsigned.status(),
-            StatusCode::NOT_FOUND,
-            "unsigned request must reach alias resolution"
+            StatusCode::FORBIDDEN,
+            "unsigned alias selector must require signed account headers"
         );
 
         for path in [
@@ -81509,14 +81614,24 @@ mod tests {
         state.require_api_token = true;
         state.api_tokens_set = Arc::new(HashSet::from(["valid-token".to_owned()]));
         let router = multisig_read_contract_test_router(app);
-        let body = r#"{"multisig_account_alias":"banking@centralbank.universal"}"#;
+        let canonical_account_id = checked_torii_test_account_id(
+            0x0c,
+            "derive multisig API-token policy account fixture key",
+        );
+        let body = norito::json::to_vec(&routing::MultisigSpecRequestDto {
+            selector: routing::MultisigAccountSelectorDto {
+                multisig_account_id: Some(canonical_account_id),
+                multisig_account_alias: None,
+            },
+        })
+        .expect("encode canonical multisig selector");
 
         let missing = router
             .clone()
             .oneshot(multisig_read_contract_request(
                 HttpMethod::POST,
                 "/v1/multisig/spec",
-                body,
+                body.clone(),
             ))
             .await
             .expect("missing-token response");
@@ -81578,12 +81693,16 @@ mod tests {
         };
         let spec_response = handler_post_multisig_spec(
             State(app.clone()),
+            Method::POST,
+            routing::ENDPOINT_MULTISIG_SPEC
+                .parse()
+                .expect("multisig spec uri"),
             headers.clone(),
             crate::loopback_connect_info(),
-            NoritoJson(spec_request),
+            multisig_read_payload(spec_request),
         )
         .await
-        .expect_err("missing alias should still fail lookup")
+        .expect_err("unsigned alias selector should fail authentication")
         .into_response();
         assert_ne!(spec_response.status(), StatusCode::TOO_MANY_REQUESTS);
 
@@ -81595,12 +81714,16 @@ mod tests {
         };
         let query_response = handler_post_multisig_proposals_query(
             State(app.clone()),
+            Method::POST,
+            routing::ENDPOINT_MULTISIG_PROPOSALS_QUERY
+                .parse()
+                .expect("multisig proposals query uri"),
             headers.clone(),
             crate::loopback_connect_info(),
-            NoritoJson(query_request),
+            multisig_read_payload(query_request),
         )
         .await
-        .expect_err("missing alias should still fail lookup")
+        .expect_err("unsigned alias selector should fail authentication")
         .into_response();
         assert_ne!(query_response.status(), StatusCode::TOO_MANY_REQUESTS);
 
@@ -81611,12 +81734,16 @@ mod tests {
         };
         let resolve_response = handler_post_multisig_proposals_resolve(
             State(app),
+            Method::POST,
+            routing::ENDPOINT_MULTISIG_PROPOSALS_RESOLVE
+                .parse()
+                .expect("multisig proposals resolve uri"),
             headers,
             crate::loopback_connect_info(),
-            NoritoJson(resolve_request),
+            multisig_read_payload(resolve_request),
         )
         .await
-        .expect_err("missing alias should still fail lookup")
+        .expect_err("unsigned alias selector should fail authentication")
         .into_response();
         assert_ne!(resolve_response.status(), StatusCode::TOO_MANY_REQUESTS);
     }
@@ -81650,12 +81777,16 @@ mod tests {
         };
         let spec_response = handler_post_multisig_spec(
             State(app.clone()),
+            Method::POST,
+            routing::ENDPOINT_MULTISIG_SPEC
+                .parse()
+                .expect("multisig spec uri"),
             headers.clone(),
             crate::loopback_connect_info(),
-            NoritoJson(spec_request),
+            multisig_read_payload(spec_request),
         )
         .await
-        .expect_err("missing alias should still fail lookup")
+        .expect_err("unsigned alias selector should fail authentication")
         .into_response();
         assert_ne!(spec_response.status(), StatusCode::TOO_MANY_REQUESTS);
 
@@ -81667,12 +81798,16 @@ mod tests {
         };
         let query_response = handler_post_multisig_proposals_query(
             State(app),
+            Method::POST,
+            routing::ENDPOINT_MULTISIG_PROPOSALS_QUERY
+                .parse()
+                .expect("multisig proposals query uri"),
             headers,
             crate::loopback_connect_info(),
-            NoritoJson(query_request),
+            multisig_read_payload(query_request),
         )
         .await
-        .expect_err("missing alias should still fail lookup")
+        .expect_err("unsigned alias selector should fail authentication")
         .into_response();
         assert_ne!(query_response.status(), StatusCode::TOO_MANY_REQUESTS);
     }

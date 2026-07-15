@@ -23,8 +23,9 @@ static KAGAMI_BIN: OnceLock<PathBuf> = OnceLock::new();
 /// Resolution order:
 /// 1. `KAGAMI_BIN`
 /// 2. `CARGO_BIN_EXE_kagami`
-/// 3. common target roots under `CARGO_TARGET_DIR`, `IROHA_TEST_TARGET_DIR`, and repo `target/`
-/// 4. `cargo build -p iroha_kagami --bin kagami` when `IROHA_TEST_SKIP_BUILD` is not enabled
+/// 3. a lockfile-constrained build in the isolated test target when
+///    `IROHA_TEST_SKIP_BUILD` is not enabled
+/// 4. common target roots under `CARGO_TARGET_DIR`, `IROHA_TEST_TARGET_DIR`, and repo `target/`
 ///
 /// # Errors
 ///
@@ -54,16 +55,14 @@ fn resolve_kagami_bin_uncached() -> Result<PathBuf> {
     let bin = bin_name("kagami");
     let candidates = kagami_candidates(&repo, &profile, &bin);
 
-    if let Some(path) = try_candidates(&candidates) {
-        return Ok(path);
-    }
-
     if skip_build_enabled() {
-        return Err(eyre!(
-            "kagami binary not found in target roots and {IROHA_TEST_SKIP_BUILD_ENV}=1"
-        ));
+        return try_candidates(&candidates).ok_or_else(|| {
+            eyre!("kagami binary not found in target roots and {IROHA_TEST_SKIP_BUILD_ENV}=1")
+        });
     }
 
+    // Existing candidates can predate the current checkout. Always let Cargo
+    // validate/rebuild the source-bound isolated target before selecting one.
     build_kagami(&repo, &profile)?;
     try_candidates(&candidates).ok_or_else(|| eyre!("kagami binary not found after build"))
 }
@@ -82,6 +81,10 @@ fn kagami_candidates(repo: &Path, profile: &str, bin: &str) -> Vec<PathBuf> {
         }
     };
 
+    // Prefer the exact root that `build_kagami` validates. In particular, the
+    // release corridor sets both target variables to keep the outer test build
+    // and re-entrant program builds on separate Cargo locks.
+    push_root(kagami_build_target_dir(repo));
     if let Ok(path) = env::var("CARGO_TARGET_DIR") {
         push_root(resolve_target_dir(repo, PathBuf::from(path)).join(IROHA_TEST_TARGET_SUBDIR));
     }
@@ -135,19 +138,8 @@ fn skip_build_enabled() -> bool {
 
 fn build_kagami(repo: &Path, profile: &str) -> Result<()> {
     let cargo = env::var("CARGO").unwrap_or_else(|_| "cargo".to_owned());
-    let mut command = Command::new(cargo);
     let target_dir = kagami_build_target_dir(repo);
-    command
-        .current_dir(repo)
-        .arg("build")
-        .arg("-p")
-        .arg("iroha_kagami")
-        .arg("--bin")
-        .arg("kagami")
-        .env("CARGO_TARGET_DIR", &target_dir);
-    if profile != "debug" {
-        command.arg("--profile").arg(profile);
-    }
+    let mut command = kagami_build_command(&cargo, repo, &target_dir, profile);
     let output =
         output_with_timeout(&mut command, build_timeout()).wrap_err("build kagami binary")?;
     ensure!(
@@ -156,6 +148,23 @@ fn build_kagami(repo: &Path, profile: &str) -> Result<()> {
         String::from_utf8_lossy(&output.stderr)
     );
     Ok(())
+}
+
+fn kagami_build_command(cargo: &str, repo: &Path, target_dir: &Path, profile: &str) -> Command {
+    let mut command = Command::new(cargo);
+    command
+        .current_dir(repo)
+        .arg("build")
+        .arg("--locked")
+        .arg("-p")
+        .arg("iroha_kagami")
+        .arg("--bin")
+        .arg("kagami")
+        .env("CARGO_TARGET_DIR", &target_dir);
+    if profile != "debug" {
+        command.arg("--profile").arg(profile);
+    }
+    command
 }
 
 fn repo_root() -> PathBuf {
@@ -180,4 +189,58 @@ fn try_candidates(candidates: &[PathBuf]) -> Option<PathBuf> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn kagami_build_command_is_locked_and_uses_isolated_target() {
+        let repo = Path::new("/workspace/iroha");
+        let target = Path::new("/workspace/target/programs");
+        let command = kagami_build_command("fake-cargo", repo, target, "release");
+        let args = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            args,
+            [
+                "build",
+                "--locked",
+                "-p",
+                "iroha_kagami",
+                "--bin",
+                "kagami",
+                "--profile",
+                "release"
+            ]
+        );
+        assert_eq!(command.get_current_dir(), Some(repo));
+        assert_eq!(
+            command
+                .get_envs()
+                .find(|(name, _)| *name == "CARGO_TARGET_DIR")
+                .and_then(|(_, value)| value),
+            Some(target.as_os_str())
+        );
+    }
+
+    #[test]
+    fn kagami_debug_build_command_uses_default_profile() {
+        let command = kagami_build_command(
+            "fake-cargo",
+            Path::new("/workspace/iroha"),
+            Path::new("/workspace/target/programs"),
+            "debug",
+        );
+        let args = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+
+        assert!(!args.iter().any(|arg| arg == "--profile"));
+    }
 }

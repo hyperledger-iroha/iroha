@@ -447,6 +447,33 @@ PROOF
     <2> QED BY <1>1, <2>1, Isa DEF QC, QcRecordSet
   <1> QED BY <1>1
 
+THEOREM BodyRecordConstructorTyped ==
+  \A node \in ValidatorIds,
+     contextValue \in ContextRecords,
+     roundView \in Views,
+     subject \in Subjects:
+    BodyRecord(node, contextValue, roundView, subject) \in BodyRecordSet
+BY Isa DEF BodyRecord, BodyRecordSet
+
+THEOREM RetainedLockedBodyRecordConstructorTyped ==
+  \A node \in ValidatorIds,
+     contextValue \in ContextRecords,
+     subject \in Subjects:
+    RetainedLockedBodyRecord(node, contextValue, subject)
+      \in RetainedLockedBodyRecordSet
+BY Isa DEF RetainedLockedBodyRecord, RetainedLockedBodyRecordSet
+
+THEOREM ValidationRecordConstructorTyped ==
+  \A node \in ValidatorIds,
+     contextValue \in ContextRecords,
+     roundView \in Views,
+     requestGeneration \in Generations,
+     subject \in Subjects:
+    ValidationRecord(node, contextValue, roundView, requestGeneration,
+                     subject)
+      \in ValidationRecordSet
+BY Isa DEF ValidationRecord, ValidationRecordSet
+
 THEOREM BootstrapParentEvidenceTyped ==
   \A initialContext:
     ModelConfiguration
@@ -456,6 +483,7 @@ THEOREM BootstrapParentEvidenceTyped ==
                  \subseteq VoteRecordSet
          /\ BootstrapParentCommitIntents(initialContext)
                  \subseteq VoteRecordSet
+         /\ BootstrapParentBodies(initialContext) \subseteq BodyRecordSet
          /\ BootstrapParentPrepareQC(initialContext) \in QcRecordSet
          /\ BootstrapParentCommitQC(initialContext) \in QcRecordSet
 PROOF
@@ -467,6 +495,8 @@ PROOF
                     \subseteq VoteRecordSet
                /\ BootstrapParentCommitIntents(initialContext)
                     \subseteq VoteRecordSet
+               /\ BootstrapParentBodies(initialContext)
+                    \subseteq BodyRecordSet
                /\ BootstrapParentPrepareQC(initialContext) \in QcRecordSet
                /\ BootstrapParentCommitQC(initialContext) \in QcRecordSet
     <2>1. /\ BootstrapParentContext(initialContext) \in ContextRecords
@@ -500,7 +530,10 @@ PROOF
       BY <2>1, <2>2, <2>3, QcConstructorTyped
          DEF BootstrapParentPrepareQC, BootstrapParentCommitQC,
              QC
-    <2> QED BY <2>5, <2>6
+    <2>7. BootstrapParentBodies(initialContext) \subseteq BodyRecordSet
+      BY <2>1, <2>2, <2>3, BodyRecordConstructorTyped, Isa
+         DEF BootstrapParentBodies
+    <2> QED BY <2>5, <2>6, <2>7
   <1> QED BY <1>1
 
 THEOREM BootstrapParentIntentSubjectsUniform ==
@@ -661,7 +694,7 @@ THEOREM ExactHonestVotesHaveBodies ==
       => HonestIntentSound(
            {Vote(contextValue, roundView, phase, subject, signer):
               signer \in signers},
-           {BodyRecord(signer, contextValue, subject):
+           {BodyRecord(signer, contextValue, roundView, subject):
               signer \in signers \cap Honest},
            validSubjects)
 BY Isa
@@ -798,20 +831,23 @@ PROOF
           /\ contextHistory \subseteq ContextRecords
       BY <1>1, <2>1, Isa DEF InitAt
     <2>5. initialContext.height = 0
-            => /\ prepareIntents \subseteq VoteRecordSet
+            => /\ durableBodies \subseteq BodyRecordSet
+               /\ prepareIntents \subseteq VoteRecordSet
                /\ commitIntents \subseteq VoteRecordSet
                /\ prepareQCs \subseteq QcRecordSet
                /\ commitQCs \subseteq QcRecordSet
       BY <1>1, Isa DEF InitAt
     <2>6. initialContext.height > 0
-            => /\ prepareIntents \subseteq VoteRecordSet
+            => /\ durableBodies \subseteq BodyRecordSet
+               /\ prepareIntents \subseteq VoteRecordSet
                /\ commitIntents \subseteq VoteRecordSet
                /\ prepareQCs \subseteq QcRecordSet
                /\ commitQCs \subseteq QcRecordSet
       BY <1>1, BootstrapParentEvidenceTyped, Isa DEF InitAt
     <2>7. initialContext.height = 0 \/ initialContext.height > 0
       BY <2>1, SMT DEF Heights
-    <2>8. /\ prepareIntents \subseteq VoteRecordSet
+    <2>8. /\ durableBodies \subseteq BodyRecordSet
+          /\ prepareIntents \subseteq VoteRecordSet
           /\ commitIntents \subseteq VoteRecordSet
           /\ prepareQCs \subseteq QcRecordSet
           /\ commitQCs \subseteq QcRecordSet
@@ -831,11 +867,7 @@ PROOF
            /\ pendingObservePrepare \subseteq ObservePrepareWalSet
            /\ pendingLockCommit \subseteq LockCommitWalSet
            /\ pendingTimeout \subseteq TimeoutWalSet
-           /\ \A request \in pendingInstallTC:
-                /\ request.node \in ValidatorIds
-                /\ request.kind = "InstallTC"
-                /\ TcWellTyped(request.tc)
-                /\ request.rebroadcast \in BOOLEAN
+           /\ pendingInstallTC \subseteq InstallTcWalSet
            /\ pendingDecision \subseteq DecisionWalSet
            /\ signProposals \subseteq ProposalSignSet
            /\ signVotes \subseteq VoteSignSet
@@ -851,8 +883,15 @@ PROOF
            /\ highestRank \in [ValidatorIds -> Ranks]
            /\ highestSubject \in [ValidatorIds -> SubjectOrNone]
       BY <1>1, <2>1, <2>3, Isa DEF InitAt
-    <2>12. ValidatedBodiesSound(validatedBodies, ValidSubjects)
-      BY <1>1, Isa DEF InitAt, ValidatedBodiesSound
+    <2>12. /\ availableBodies \subseteq BodyRecordSet
+           /\ retainedLockedBodies \subseteq RetainedLockedBodyRecordSet
+           /\ validatedBodies \subseteq ValidationRecordSet
+           /\ invalidBodies \subseteq BodyRecordSet
+           /\ ValidatedBodiesSound(validatedBodies, ValidSubjects)
+           /\ RetainedLockedBodiesSound(retainedLockedBodies,
+                                         durableBodies)
+      BY <1>1, Isa
+         DEF InitAt, ValidatedBodiesSound, RetainedLockedBodiesSound
     <2> QED BY <1>1, <2>1, <2>4, <2>8, <2>9, <2>10,
                   <2>11, <2>12
        DEF TypeInvariant, InitAt
@@ -1694,11 +1733,17 @@ PROOF
 
 THEOREM ProofRelevantStutterPreservesStrongInvariant ==
   StrongInductiveInvariant
+    /\ availableBodies' \subseteq BodyRecordSet
+    /\ validatedBodies' \subseteq ValidationRecordSet
+    /\ invalidBodies' \subseteq BodyRecordSet
     /\ ValidatedBodiesSound(validatedBodies', ValidSubjects)
     /\ UNCHANGED ProofRelevantVars
     => StrongInductiveInvariant'
 PROOF
   <1>1. ASSUME StrongInductiveInvariant,
+              availableBodies' \subseteq BodyRecordSet,
+              validatedBodies' \subseteq ValidationRecordSet,
+              invalidBodies' \subseteq BodyRecordSet,
               ValidatedBodiesSound(validatedBodies', ValidSubjects),
               UNCHANGED ProofRelevantVars
          PROVE StrongInductiveInvariant'
@@ -1706,6 +1751,7 @@ PROOF
       BY <1>1, SMT
          DEF StrongInductiveInvariant, ProofRelevantVars, Safety,
              TypeInvariant, ValidatedBodiesSound,
+             RetainedLockedBodiesSound,
              OnePendingPersistencePerNode,
              RequestsUniqueByNode, AllPendingRequests,
              ProposalSigningRequiresIntent, PrepareSigningRequiresIntent,
@@ -1755,6 +1801,16 @@ THEOREM FetchBodyPreservesStrongInvariant ==
       => StrongInductiveInvariant'
 BY ProofRelevantStutterPreservesStrongInvariant
    DEF FetchBody, ProofRelevantVars, ValidatedBodiesSound,
+       BodyRecordSet, ValidationRecordSet,
+       StrongInductiveInvariant, Safety, TypeInvariant
+
+THEOREM RebindRetainedBodyPreservesStrongInvariant ==
+  \A node, proposal:
+    StrongInductiveInvariant /\ RebindRetainedBody(node, proposal)
+      => StrongInductiveInvariant'
+BY ProofRelevantStutterPreservesStrongInvariant
+   DEF RebindRetainedBody, ProofRelevantVars, ValidatedBodiesSound,
+       BodyRecordSet, ValidationRecordSet,
        StrongInductiveInvariant, Safety, TypeInvariant
 
 THEOREM ValidateBodyPreservesStrongInvariant ==
@@ -1770,9 +1826,39 @@ PROOF
       BY <1>1, SMT
          DEF StrongInductiveInvariant, Safety, TypeInvariant,
              ValidatedBodiesSound, ValidateBody, ValidationRecord
-    <2>2. UNCHANGED ProofRelevantVars
+    <2>2. /\ availableBodies' \subseteq BodyRecordSet
+          /\ validatedBodies' \subseteq ValidationRecordSet
+          /\ invalidBodies' \subseteq BodyRecordSet
+      BY <1>1, Isa
+         DEF StrongInductiveInvariant, Safety, TypeInvariant, ValidateBody
+    <2>3. UNCHANGED ProofRelevantVars
       BY <1>1 DEF ValidateBody, ProofRelevantVars
-    <2> QED BY <1>1, <2>1, <2>2,
+    <2> QED BY <1>1, <2>1, <2>2, <2>3,
+                  ProofRelevantStutterPreservesStrongInvariant
+  <1> QED BY <1>1
+
+THEOREM ValidateDecidedBodyPreservesStrongInvariant ==
+  \A node, qc:
+    StrongInductiveInvariant /\ ValidateDecidedBody(node, qc)
+      => StrongInductiveInvariant'
+PROOF
+  <1>1. ASSUME NEW node, NEW qc,
+              StrongInductiveInvariant,
+              ValidateDecidedBody(node, qc)
+         PROVE StrongInductiveInvariant'
+    <2>1. ValidatedBodiesSound(validatedBodies', ValidSubjects)
+      BY <1>1, SMT
+         DEF StrongInductiveInvariant, Safety, TypeInvariant,
+             ValidatedBodiesSound, ValidateDecidedBody, ValidationRecord
+    <2>2. /\ availableBodies' \subseteq BodyRecordSet
+          /\ validatedBodies' \subseteq ValidationRecordSet
+          /\ invalidBodies' \subseteq BodyRecordSet
+      BY <1>1, Isa
+         DEF StrongInductiveInvariant, Safety, TypeInvariant,
+             ValidateDecidedBody
+    <2>3. UNCHANGED ProofRelevantVars
+      BY <1>1 DEF ValidateDecidedBody, ProofRelevantVars
+    <2> QED BY <1>1, <2>1, <2>2, <2>3,
                   ProofRelevantStutterPreservesStrongInvariant
   <1> QED BY <1>1
 
@@ -1808,28 +1894,45 @@ THEOREM HonestIntentSoundIsMonotoneInDurableBodies ==
 BY DEF HonestIntentSound, BodyHeldBy
 
 THEOREM BodyHeldIsMonotone ==
-  \A before, after, node, bodyContext, subject:
+  \A before, after, node, bodyContext, roundView, subject:
     before \subseteq after
-      /\ BodyHeldBy(before, node, bodyContext, subject)
-      => BodyHeldBy(after, node, bodyContext, subject)
+      /\ BodyHeldBy(before, node, bodyContext, roundView, subject)
+      => BodyHeldBy(after, node, bodyContext, roundView, subject)
 BY DEF BodyHeldBy
+
+THEOREM RetainedLockedBodiesSoundIsMonotoneInDurableBodies ==
+  \A retained, before, after:
+    RetainedLockedBodiesSound(retained, before)
+      /\ before \subseteq after
+      => RetainedLockedBodiesSound(retained, after)
+BY DEF RetainedLockedBodiesSound, BodyHeldBy
 
 THEOREM DurableGrowthPreservesStrongInvariant ==
   StrongInductiveInvariant
     /\ durableBodies \subseteq durableBodies'
+    /\ availableBodies' \subseteq BodyRecordSet
+    /\ durableBodies' \subseteq BodyRecordSet
+    /\ validatedBodies' \subseteq ValidationRecordSet
+    /\ invalidBodies' \subseteq BodyRecordSet
     /\ ValidatedBodiesSound(validatedBodies', ValidSubjects)
     /\ UNCHANGED ProofRelevantWithoutDurableVars
     => StrongInductiveInvariant'
 PROOF
   <1>1. ASSUME StrongInductiveInvariant,
               durableBodies \subseteq durableBodies',
+              availableBodies' \subseteq BodyRecordSet,
+              durableBodies' \subseteq BodyRecordSet,
+              validatedBodies' \subseteq ValidationRecordSet,
+              invalidBodies' \subseteq BodyRecordSet,
               ValidatedBodiesSound(validatedBodies', ValidSubjects),
               UNCHANGED ProofRelevantWithoutDurableVars
          PROVE StrongInductiveInvariant'
     <2>1. Safety'
-      BY <1>1, SMT
+      BY <1>1,
+         RetainedLockedBodiesSoundIsMonotoneInDurableBodies, SMT
          DEF StrongInductiveInvariant, ProofRelevantWithoutDurableVars,
              Safety, TypeInvariant, ValidatedBodiesSound,
+             RetainedLockedBodiesSound,
              OnePendingPersistencePerNode,
              RequestsUniqueByNode, AllPendingRequests,
              ProposalSigningRequiresIntent, PrepareSigningRequiresIntent,
@@ -1861,7 +1964,7 @@ PROOF
                /\ request.vote.view = nodeView'[request.node]
                /\ request.vote.subject \in ValidSubjects
                /\ BodyHeldBy(durableBodies', request.node,
-                             request.vote.context, request.vote.subject)
+                             request.vote.context, request.vote.view, request.vote.subject)
                /\ CanAppendVote(prepareIntents', request.vote)
                /\ PrepareCarriesHigherSafeQc(request.vote)'
         <4>1. ASSUME NEW request \in pendingPrepare'
@@ -1872,17 +1975,16 @@ PROOF
                      /\ request.vote.view = nodeView'[request.node]
                      /\ request.vote.subject \in ValidSubjects
                      /\ BodyHeldBy(durableBodies', request.node,
-                                   request.vote.context,
-                                   request.vote.subject)
+                                   request.vote.context, request.vote.view, request.vote.subject)
                      /\ CanAppendVote(prepareIntents', request.vote)
                      /\ PrepareCarriesHigherSafeQc(request.vote)'
           <5>1. BodyHeldBy(durableBodies, request.node,
-                          request.vote.context, request.vote.subject)
+                          request.vote.context, request.vote.view, request.vote.subject)
             BY <1>1, <3>1, <4>1
                DEF ProofRelevantWithoutDurableVars,
                    PendingVoteWritesAuthorized
           <5>2. BodyHeldBy(durableBodies', request.node,
-                          request.vote.context, request.vote.subject)
+                          request.vote.context, request.vote.view, request.vote.subject)
             BY <1>1, <5>1, BodyHeldIsMonotone
           <5> QED BY <1>1, <3>1, <4>1, <5>2, Isa
              DEF ProofRelevantWithoutDurableVars,
@@ -1903,7 +2005,7 @@ PROOF
                /\ ~NodeTimedOut(request.node, request.vote.view)'
                /\ request.vote.subject \in ValidSubjects
                /\ BodyHeldBy(durableBodies', request.node,
-                             request.vote.context, request.vote.subject)
+                             request.vote.context, request.vote.view, request.vote.subject)
                /\ request.qc.view >= lockRank'[request.node]
                /\ (request.qc.view = lockRank'[request.node]
                      => request.qc.subject = lockSubject'[request.node])
@@ -1922,19 +2024,18 @@ PROOF
                      /\ ~NodeTimedOut(request.node, request.vote.view)'
                      /\ request.vote.subject \in ValidSubjects
                      /\ BodyHeldBy(durableBodies', request.node,
-                                   request.vote.context,
-                                   request.vote.subject)
+                                   request.vote.context, request.vote.view, request.vote.subject)
                      /\ request.qc.view >= lockRank'[request.node]
                      /\ (request.qc.view = lockRank'[request.node]
                            => request.qc.subject = lockSubject'[request.node])
                      /\ CanAppendVote(commitIntents', request.vote)
           <5>1. BodyHeldBy(durableBodies, request.node,
-                          request.vote.context, request.vote.subject)
+                          request.vote.context, request.vote.view, request.vote.subject)
             BY <1>1, <3>1, <4>1
                DEF ProofRelevantWithoutDurableVars,
                    PendingVoteWritesAuthorized
           <5>2. BodyHeldBy(durableBodies', request.node,
-                          request.vote.context, request.vote.subject)
+                          request.vote.context, request.vote.view, request.vote.subject)
             BY <1>1, <5>1, BodyHeldIsMonotone
           <5>3. request \in pendingLockCommit
             BY <1>1, <4>1 DEF ProofRelevantWithoutDurableVars
@@ -2062,15 +2163,22 @@ PROOF
     <2>3. ValidatedBodiesSound(validatedBodies', ValidSubjects)
       BY <1>1, <2>2, Isa
          DEF AssembleLocalBody, ValidatedBodiesSound, ValidationRecord
-    <2>4. UNCHANGED ProofRelevantWithoutDurableVars
+    <2>4. /\ availableBodies' \subseteq BodyRecordSet
+          /\ durableBodies' \subseteq BodyRecordSet
+          /\ validatedBodies' \subseteq ValidationRecordSet
+          /\ invalidBodies' \subseteq BodyRecordSet
+      BY <1>1, Isa
+         DEF StrongInductiveInvariant, Safety, TypeInvariant,
+             AssembleLocalBody
+    <2>5. UNCHANGED ProofRelevantWithoutDurableVars
       BY <1>1 DEF AssembleLocalBody, ProofRelevantWithoutDurableVars
-    <2> QED BY <1>1, <2>1, <2>3, <2>4,
+    <2> QED BY <1>1, <2>1, <2>3, <2>4, <2>5,
                   DurableGrowthPreservesStrongInvariant
   <1> QED BY <1>1
 
 THEOREM StoreBodyPreservesStrongInvariant ==
-  \A node, subject:
-    StrongInductiveInvariant /\ StoreBody(node, subject)
+  \A node, roundView, subject:
+    StrongInductiveInvariant /\ StoreBody(node, roundView, subject)
       => StrongInductiveInvariant'
 BY DurableGrowthPreservesStrongInvariant
    DEF StoreBody, ProofRelevantWithoutDurableVars,
@@ -2731,14 +2839,16 @@ PROOF
             /\ PrepareRequestFor(node, proposal).vote.view = nodeView[node]
             /\ PrepareRequestFor(node, proposal).vote.subject
                  \in ValidSubjects
-            /\ BodyHeldBy(durableBodies, node, context, proposal.subject)
+            /\ BodyHeldBy(durableBodies, node, context, proposal.view,
+                           proposal.subject)
             /\ CanAppendVote(prepareIntents,
                              PrepareRequestFor(node, proposal).vote)
         <4>1. ProposalValidFor(node, proposal)
           BY <1>1, BeginPrepareProposalValidityIsDerived
         <4>2. /\ node \in Honest
               /\ proposal.view = nodeView[node]
-              /\ BodyHeldBy(durableBodies, node, context, proposal.subject)
+              /\ BodyHeldBy(durableBodies, node, context, proposal.view,
+                             proposal.subject)
               /\ ~(\E prior \in prepareIntents:
                        /\ prior.signer = node
                        /\ prior.context = context
@@ -2790,7 +2900,7 @@ PROOF
                /\ pending.vote.view = nodeView'[pending.node]
                /\ pending.vote.subject \in ValidSubjects
                /\ BodyHeldBy(durableBodies', pending.node,
-                             pending.vote.context, pending.vote.subject)
+                             pending.vote.context, pending.vote.view, pending.vote.subject)
                /\ CanAppendVote(prepareIntents', pending.vote)
                /\ PrepareCarriesHigherSafeQc(pending.vote)'
         <4>1. ASSUME NEW pending \in pendingPrepare'
@@ -2801,8 +2911,7 @@ PROOF
                      /\ pending.vote.view = nodeView'[pending.node]
                      /\ pending.vote.subject \in ValidSubjects
                      /\ BodyHeldBy(durableBodies', pending.node,
-                                   pending.vote.context,
-                                   pending.vote.subject)
+                                   pending.vote.context, pending.vote.view, pending.vote.subject)
                      /\ CanAppendVote(prepareIntents', pending.vote)
                      /\ PrepareCarriesHigherSafeQc(pending.vote)'
           <5>1. pending \in pendingPrepare
@@ -2848,7 +2957,7 @@ PROOF
             <6>13. pending.vote.subject \in ValidSubjects
               BY <3>3, <6>4
             <6>14. BodyHeldBy(durableBodies', pending.node,
-                             pending.vote.context, pending.vote.subject)
+                             pending.vote.context, pending.vote.view, pending.vote.subject)
               BY <3>3, <3>4, <6>5
                  DEF PrepareVoteFor, Vote
             <6>15. CanAppendVote(prepareIntents', pending.vote)
@@ -2930,7 +3039,7 @@ PROOF
                /\ ~NodeTimedOut(pending.node, pending.vote.view)'
                /\ pending.vote.subject \in ValidSubjects
                /\ BodyHeldBy(durableBodies', pending.node,
-                             pending.vote.context, pending.vote.subject)
+                             pending.vote.context, pending.vote.view, pending.vote.subject)
                /\ pending.qc.view >= lockRank'[pending.node]
                /\ (pending.qc.view = lockRank'[pending.node]
                      => pending.qc.subject = lockSubject'[pending.node])
@@ -3006,7 +3115,7 @@ THEOREM HonestIntentSoundAppend ==
       /\ (vote.signer \in Honest
             => /\ vote.subject \in validSubjects
                /\ BodyHeldBy(durable, vote.signer,
-                             vote.context, vote.subject))
+                             vote.context, vote.view, vote.subject))
       => HonestIntentSound(intents \cup {vote}, durable, validSubjects)
 BY SMT DEF HonestIntentSound
 
@@ -3059,7 +3168,7 @@ PROOF
           /\ request.node \in Honest
           /\ request.vote.subject \in ValidSubjects
           /\ BodyHeldBy(durableBodies, request.node,
-                        request.vote.context, request.vote.subject)
+                        request.vote.context, request.vote.view, request.vote.subject)
           /\ CanAppendVote(prepareIntents, request.vote)
       BY <1>1
          DEF StrongInductiveInvariant, Safety, TypeInvariant,
@@ -3147,8 +3256,7 @@ PROOF
                    /\ pending.vote.view = nodeView'[pending.node]
                    /\ pending.vote.subject \in ValidSubjects
                    /\ BodyHeldBy(durableBodies', pending.node,
-                                 pending.vote.context,
-                                 pending.vote.subject)
+                                 pending.vote.context, pending.vote.view, pending.vote.subject)
                    /\ CanAppendVote(prepareIntents', pending.vote)
                    /\ PrepareCarriesHigherSafeQc(pending.vote)'
         <4>1. /\ pending \in pendingPrepare
@@ -3187,8 +3295,7 @@ PROOF
                      /\ ~NodeTimedOut(pending.node, pending.vote.view)'
                      /\ pending.vote.subject \in ValidSubjects
                      /\ BodyHeldBy(durableBodies', pending.node,
-                                   pending.vote.context,
-                                   pending.vote.subject)
+                                   pending.vote.context, pending.vote.view, pending.vote.subject)
                      /\ pending.qc.view >= lockRank'[pending.node]
                      /\ (pending.qc.view = lockRank'[pending.node]
                            => pending.qc.subject = lockSubject'[pending.node])
@@ -3468,16 +3575,18 @@ PROOF
     <2>1. TypeInvariant'
       BY <1>1, SMT
          DEF StrongInductiveInvariant, Safety, TypeInvariant,
-             ResumeVote, VoteSign, VoteSignSet
+             ResumeVote, VoteResumeAuthorized, VoteSign, VoteSignSet
     <2>2. /\ PrepareSigningRequiresIntent'
           /\ CommitSigningRequiresIntent'
       BY <1>1, SMT
          DEF StrongInductiveInvariant, Safety, ResumeVote,
+             VoteResumeAuthorized,
              PrepareSigningRequiresIntent, CommitSigningRequiresIntent,
              VoteSign, IntentPhasesCorrect, ReducerProvenanceInvariant
     <2>3. Safety'
       BY <1>1, <2>1, <2>2, Isa
          DEF StrongInductiveInvariant, Safety, ResumeVote,
+             VoteResumeAuthorized,
              TypeInvariant, OnePendingPersistencePerNode,
              AllPendingRequests, RequestsUniqueByNode,
              ProposalSigningRequiresIntent, TimeoutSigningRequiresIntent,
@@ -3558,14 +3667,14 @@ THEOREM FetchCertifiedBodySourceAvailabilityIsDerived ==
   \A node, qc:
     StrongInductiveInvariant /\ FetchCertifiedBody(node, qc)
       => CertifiedBodyAvailable(CurrentEpoch, qc.signers, durableBodies,
-                                context, qc.subject)
+                                context, qc.view, qc.subject)
 PROOF
   <1>1. ASSUME NEW node, NEW qc,
               StrongInductiveInvariant,
               FetchCertifiedBody(node, qc)
          PROVE CertifiedBodyAvailable(
                  CurrentEpoch, qc.signers, durableBodies,
-                 context, qc.subject)
+                 context, qc.view, qc.subject)
     <2>1. PICK decision \in decisions:
              /\ decision.node = node
              /\ decision.qc = qc
@@ -4230,11 +4339,7 @@ PROOF
             /\ signTimeouts' \subseteq TimeoutSignSet
         BY <1>1, Isa
            DEF StrongInductiveInvariant, Safety, TypeInvariant, Crash
-      <3>4. \A request \in pendingInstallTC':
-               /\ request.node \in ValidatorIds
-               /\ request.kind = "InstallTC"
-               /\ TcWellTyped(request.tc)
-               /\ request.rebroadcast \in BOOLEAN
+      <3>4. pendingInstallTC' \subseteq InstallTcWalSet
         BY <1>1, Isa
            DEF StrongInductiveInvariant, Safety, TypeInvariant, Crash
       <3> QED BY <1>1, <3>1, <3>2, <3>3, <3>4, IsaT(60)
@@ -4696,7 +4801,7 @@ PROOF
                /\ pending.vote.view = nodeView'[pending.node]
                /\ pending.vote.subject \in ValidSubjects
                /\ BodyHeldBy(durableBodies', pending.node,
-                             pending.vote.context, pending.vote.subject)
+                             pending.vote.context, pending.vote.view, pending.vote.subject)
                /\ CanAppendVote(prepareIntents', pending.vote)
                /\ PrepareCarriesHigherSafeQc(pending.vote)'
         BY <3>1, <3>3, SMT DEF PendingVoteWritesAuthorized,
@@ -4715,7 +4820,7 @@ PROOF
                /\ ~NodeTimedOut(pending.node, pending.vote.view)'
                /\ pending.vote.subject \in ValidSubjects
                /\ BodyHeldBy(durableBodies', pending.node,
-                             pending.vote.context, pending.vote.subject)
+                             pending.vote.context, pending.vote.view, pending.vote.subject)
                /\ pending.qc.view >= lockRank'[pending.node]
                /\ (pending.qc.view = lockRank'[pending.node]
                      => pending.qc.subject = lockSubject'[pending.node])
@@ -4973,8 +5078,7 @@ PROOF
                      /\ pending.vote.view = nodeView'[pending.node]
                      /\ pending.vote.subject \in ValidSubjects
                      /\ BodyHeldBy(durableBodies', pending.node,
-                                   pending.vote.context,
-                                   pending.vote.subject)
+                                   pending.vote.context, pending.vote.view, pending.vote.subject)
                      /\ CanAppendVote(prepareIntents', pending.vote)
                      /\ PrepareCarriesHigherSafeQc(pending.vote)'
         BY <1>1, <3>1, SMT
@@ -4994,8 +5098,7 @@ PROOF
                      /\ ~NodeTimedOut(pending.node, pending.vote.view)'
                      /\ pending.vote.subject \in ValidSubjects
                      /\ BodyHeldBy(durableBodies', pending.node,
-                                   pending.vote.context,
-                                   pending.vote.subject)
+                                   pending.vote.context, pending.vote.view, pending.vote.subject)
                      /\ pending.qc.view >= lockRank'[pending.node]
                      /\ (pending.qc.view = lockRank'[pending.node]
                            => pending.qc.subject = lockSubject'[pending.node])
@@ -5014,8 +5117,7 @@ PROOF
                      /\ ~NodeTimedOut(pending.node, pending.vote.view)'
                      /\ pending.vote.subject \in ValidSubjects
                      /\ BodyHeldBy(durableBodies', pending.node,
-                                   pending.vote.context,
-                                   pending.vote.subject)
+                                   pending.vote.context, pending.vote.view, pending.vote.subject)
                      /\ pending.qc.view >= lockRank'[pending.node]
                      /\ (pending.qc.view = lockRank'[pending.node]
                            => pending.qc.subject = lockSubject'[pending.node])
@@ -5048,7 +5150,7 @@ PROOF
                 /\ ~NodeTimedOut(pending.node, pending.vote.view)
                 /\ pending.vote.subject \in ValidSubjects
                 /\ BodyHeldBy(durableBodies, pending.node,
-                              pending.vote.context, pending.vote.subject)
+                              pending.vote.context, pending.vote.view, pending.vote.subject)
                 /\ pending.qc.view >= lockRank[pending.node]
                 /\ (pending.qc.view = lockRank[pending.node]
                       => pending.qc.subject = lockSubject[pending.node])
@@ -5676,11 +5778,7 @@ PROOF
             /\ pendingObservePrepare' \subseteq ObservePrepareWalSet
             /\ pendingLockCommit' \subseteq LockCommitWalSet
             /\ pendingTimeout' \subseteq TimeoutWalSet
-            /\ \A pending \in pendingInstallTC':
-                 /\ pending.node \in ValidatorIds
-                 /\ pending.kind = "InstallTC"
-                 /\ TcWellTyped(pending.tc)
-                 /\ pending.rebroadcast \in BOOLEAN
+            /\ pendingInstallTC' \subseteq InstallTcWalSet
             /\ pendingDecision' \subseteq DecisionWalSet
         BY <1>1, IsaT(60)
            DEF StrongInductiveInvariant, Safety, TypeInvariant,
@@ -6091,7 +6189,7 @@ PROOF
           /\ ~NodeTimedOut(Request.node, Request.vote.view)
           /\ Request.vote.subject \in ValidSubjects
           /\ BodyHeldBy(durableBodies, Request.node,
-                        Request.vote.context, Request.vote.subject)
+                        Request.vote.context, Request.vote.view, Request.vote.subject)
           /\ Request.qc.view >= lockRank[Request.node]
           /\ (Request.qc.view = lockRank[Request.node]
                 => Request.qc.subject = lockSubject[Request.node])
@@ -6105,7 +6203,7 @@ PROOF
             /\ qc.phase = "Prepare"
             /\ qc.view = nodeView[node]
             /\ ~NodeTimedOut(node, qc.view)
-            /\ BodyHeldBy(durableBodies, node, context, qc.subject)
+            /\ BodyHeldBy(durableBodies, node, context, qc.view, qc.subject)
             /\ qc.view >= lockRank[node]
             /\ (qc.view = lockRank[node]
                   => qc.subject = lockSubject[node])
@@ -6191,7 +6289,7 @@ PROOF
                /\ ~NodeTimedOut(pending.node, pending.vote.view)'
                /\ pending.vote.subject \in ValidSubjects
                /\ BodyHeldBy(durableBodies', pending.node,
-                             pending.vote.context, pending.vote.subject)
+                             pending.vote.context, pending.vote.view, pending.vote.subject)
                /\ pending.qc.view >= lockRank'[pending.node]
                /\ (pending.qc.view = lockRank'[pending.node]
                      => pending.qc.subject = lockSubject'[pending.node])
@@ -6210,8 +6308,7 @@ PROOF
                      /\ ~NodeTimedOut(pending.node, pending.vote.view)'
                      /\ pending.vote.subject \in ValidSubjects
                      /\ BodyHeldBy(durableBodies', pending.node,
-                                   pending.vote.context,
-                                   pending.vote.subject)
+                                   pending.vote.context, pending.vote.view, pending.vote.subject)
                      /\ pending.qc.view >= lockRank'[pending.node]
                      /\ (pending.qc.view = lockRank'[pending.node]
                            => pending.qc.subject = lockSubject'[pending.node])
@@ -6232,8 +6329,7 @@ PROOF
                   /\ ~NodeTimedOut(pending.node, pending.vote.view)
                   /\ pending.vote.subject \in ValidSubjects
                   /\ BodyHeldBy(durableBodies, pending.node,
-                                pending.vote.context,
-                                pending.vote.subject)
+                                pending.vote.context, pending.vote.view, pending.vote.subject)
                   /\ pending.qc.view >= lockRank[pending.node]
                   /\ (pending.qc.view = lockRank[pending.node]
                         => pending.qc.subject = lockSubject[pending.node])
@@ -6274,8 +6370,7 @@ PROOF
                      /\ pending.vote.view = nodeView'[pending.node]
                      /\ pending.vote.subject \in ValidSubjects
                      /\ BodyHeldBy(durableBodies', pending.node,
-                                   pending.vote.context,
-                                   pending.vote.subject)
+                                   pending.vote.context, pending.vote.view, pending.vote.subject)
                      /\ CanAppendVote(prepareIntents', pending.vote)
                      /\ PrepareCarriesHigherSafeQc(pending.vote)'
             /\ \A pending \in pendingTimeout':
@@ -6389,7 +6484,7 @@ PROOF
           /\ ~NodeTimedOut(request.node, request.vote.view)
           /\ request.vote.subject \in ValidSubjects
           /\ BodyHeldBy(durableBodies, request.node,
-                        request.vote.context, request.vote.subject)
+                        request.vote.context, request.vote.view, request.vote.subject)
           /\ request.qc.view >= lockRank[request.node]
           /\ (request.qc.view = lockRank[request.node]
                 => request.qc.subject = lockSubject[request.node])
@@ -6460,11 +6555,7 @@ PROOF
             /\ pendingPrepare' \subseteq PrepareWalSet
             /\ pendingObservePrepare' \subseteq ObservePrepareWalSet
             /\ pendingTimeout' \subseteq TimeoutWalSet
-            /\ \A pending \in pendingInstallTC':
-                 /\ pending.node \in ValidatorIds
-                 /\ pending.kind = "InstallTC"
-                 /\ TcWellTyped(pending.tc)
-                 /\ pending.rebroadcast \in BOOLEAN
+            /\ pendingInstallTC' \subseteq InstallTcWalSet
             /\ pendingDecision' \subseteq DecisionWalSet
             /\ signProposals' \subseteq ProposalSignSet
             /\ signTimeouts' \subseteq TimeoutSignSet
@@ -6548,7 +6639,19 @@ PROOF
               = signVotes \cup {VoteSign(request.node, request.vote)}
           BY <1>1 DEF PersistLockCommit
         <4> QED BY <4>1, <4>2, <4>3
-      <3> QED BY <3>2, <3>3, <3>4, <3>5, <3>6
+      <3>7. /\ availableBodies' \subseteq BodyRecordSet
+            /\ durableBodies' \subseteq BodyRecordSet
+            /\ retainedLockedBodies'
+                   \subseteq RetainedLockedBodyRecordSet
+            /\ validatedBodies' \subseteq ValidationRecordSet
+            /\ invalidBodies' \subseteq BodyRecordSet
+            /\ RetainedLockedBodiesSound(retainedLockedBodies',
+                                          durableBodies')
+        BY <1>1, <2>1, Isa
+           DEF StrongInductiveInvariant, Safety, TypeInvariant,
+               PersistLockCommit, RetainedLockedBodiesSound,
+               BodyHeldBy
+      <3> QED BY <3>2, <3>3, <3>4, <3>5, <3>6, <3>7
          DEF TypeInvariant
     <2>5. LockBelowHighest'
       <3>1. ASSUME NEW node \in ValidatorIds
@@ -6677,8 +6780,7 @@ PROOF
                  /\ pending.vote.view = nodeView'[pending.node]
                  /\ pending.vote.subject \in ValidSubjects
                  /\ BodyHeldBy(durableBodies', pending.node,
-                               pending.vote.context,
-                               pending.vote.subject)
+                               pending.vote.context, pending.vote.view, pending.vote.subject)
                  /\ CanAppendVote(prepareIntents', pending.vote)
                  /\ PrepareCarriesHigherSafeQc(pending.vote)'
           <5>1. ASSUME NEW pending \in pendingPrepare'
@@ -6689,8 +6791,7 @@ PROOF
                        /\ pending.vote.view = nodeView'[pending.node]
                        /\ pending.vote.subject \in ValidSubjects
                        /\ BodyHeldBy(durableBodies', pending.node,
-                                     pending.vote.context,
-                                     pending.vote.subject)
+                                     pending.vote.context, pending.vote.view, pending.vote.subject)
                        /\ CanAppendVote(prepareIntents', pending.vote)
                        /\ PrepareCarriesHigherSafeQc(pending.vote)'
             <6>1. pending \in pendingPrepare
@@ -6716,8 +6817,7 @@ PROOF
                   /\ pending.vote.view = nodeView[pending.node]
                   /\ pending.vote.subject \in ValidSubjects
                   /\ BodyHeldBy(durableBodies, pending.node,
-                                pending.vote.context,
-                                pending.vote.subject)
+                                pending.vote.context, pending.vote.view, pending.vote.subject)
                   /\ CanAppendVote(prepareIntents, pending.vote)
                   /\ PrepareCarriesHigherSafeQc(pending.vote)
               BY <4>1, <6>1 DEF PendingVoteWritesAuthorized
@@ -6750,8 +6850,7 @@ PROOF
                  /\ ~NodeTimedOut(pending.node, pending.vote.view)'
                  /\ pending.vote.subject \in ValidSubjects
                  /\ BodyHeldBy(durableBodies', pending.node,
-                               pending.vote.context,
-                               pending.vote.subject)
+                               pending.vote.context, pending.vote.view, pending.vote.subject)
                  /\ pending.qc.view >= lockRank'[pending.node]
                  /\ (pending.qc.view = lockRank'[pending.node]
                        => pending.qc.subject =
@@ -6772,8 +6871,7 @@ PROOF
                               pending.node, pending.vote.view)'
                        /\ pending.vote.subject \in ValidSubjects
                        /\ BodyHeldBy(durableBodies', pending.node,
-                                     pending.vote.context,
-                                     pending.vote.subject)
+                                     pending.vote.context, pending.vote.view, pending.vote.subject)
                        /\ pending.qc.view >= lockRank'[pending.node]
                        /\ (pending.qc.view = lockRank'[pending.node]
                              => pending.qc.subject =
@@ -6802,8 +6900,7 @@ PROOF
                   /\ ~NodeTimedOut(pending.node, pending.vote.view)
                   /\ pending.vote.subject \in ValidSubjects
                   /\ BodyHeldBy(durableBodies, pending.node,
-                                pending.vote.context,
-                                pending.vote.subject)
+                                pending.vote.context, pending.vote.view, pending.vote.subject)
                   /\ pending.qc.view >= lockRank[pending.node]
                   /\ (pending.qc.view = lockRank[pending.node]
                         => pending.qc.subject =
@@ -8551,7 +8648,9 @@ PROOF
               height \in Heights,
               TCValid(tc)
          PROVE TcWellTyped(tc)
-    <2>1. /\ tc.context \in ContextRecords
+    <2>1. /\ tc \in TcRecordSet
+          /\ DOMAIN tc = {"context", "height", "view", "votes"}
+          /\ tc.context \in ContextRecords
           /\ tc.height \in Heights
           /\ tc.view \in Views
       BY <1>1 DEF TCValid
@@ -8565,6 +8664,27 @@ PROOF
     <2>5. tc.votes \subseteq TimeoutVoteRecordSet
       BY <2>4
     <2> QED BY <2>1, <2>5 DEF TcWellTyped
+  <1> QED BY <1>1
+
+THEOREM TimeoutCertificateRecordTyping ==
+  \A tc: TcWellTyped(tc) => tc \in TcRecordSet
+BY DEF TcWellTyped
+
+THEOREM InstallTcWalRecordTyping ==
+  \A tc:
+    \A node \in ValidatorIds, rebroadcast \in BOOLEAN:
+      TcWellTyped(tc)
+        => InstallTcWal(node, tc, rebroadcast) \in InstallTcWalSet
+PROOF
+  <1>1. ASSUME NEW tc,
+              NEW node \in ValidatorIds,
+              NEW rebroadcast \in BOOLEAN,
+              TcWellTyped(tc)
+         PROVE InstallTcWal(node, tc, rebroadcast) \in InstallTcWalSet
+    <2>1. tc \in TcRecordSet
+      BY <1>1, TimeoutCertificateRecordTyping
+    <2> QED BY <1>1, <2>1, Isa
+       DEF InstallTcWal, InstallTcWalSet
   <1> QED BY <1>1
 
 THEOREM FormTCPreservesStrongInvariant ==
@@ -8581,7 +8701,8 @@ PROOF
     <2> DEFINE Request == InstallTcWal(node, Certificate, TRUE)
     <2> DEFINE StableVars ==
           <<height, context, contextHistory, nodeView, generation, up, gst,
-            availableBodies, durableBodies, validatedBodies, invalidBodies,
+            availableBodies, durableBodies, retainedLockedBodies,
+            validatedBodies, invalidBodies,
             seenProposals, receivedVotes, receivedQCs, receivedTimeoutVotes,
             receivedTCs, proposalIntents, prepareIntents, commitIntents,
             timeoutIntents, prepareQCs, commitQCs, installedTCs, lockRank,
@@ -8614,10 +8735,7 @@ PROOF
              OnePendingPersistencePerNode, FormTC,
              AllPendingRequests, NodeIdle, Request, InstallTcWal
     <2>3. /\ TcWellTyped(Certificate)
-          /\ Request.node \in ValidatorIds
-          /\ Request.kind = "InstallTC"
-          /\ TcWellTyped(Request.tc)
-          /\ Request.rebroadcast \in BOOLEAN
+          /\ Request \in InstallTcWalSet
       <3>1. /\ ModelConfiguration
             /\ context \in ContextRecords
             /\ height \in Heights
@@ -8629,12 +8747,10 @@ PROOF
       <3>3. node \in ValidatorIds
         BY <1>1
            DEF FormTC, StrongInductiveInvariant, Safety, TypeInvariant
-      <3>4. /\ Request.node = node
-            /\ Request.kind = "InstallTC"
-            /\ Request.tc = Certificate
-            /\ Request.rebroadcast = TRUE
-        BY DEF Request, InstallTcWal
-      <3> QED BY <3>2, <3>3, <3>4, SMT
+      <3>4. Request \in InstallTcWalSet
+        BY <3>2, <3>3, InstallTcWalRecordTyping
+           DEF Request
+      <3> QED BY <3>2, <3>4
     <2>4. TypeInvariant'
       BY <1>1, <2>1, <2>3, Isa
          DEF StrongInductiveInvariant, Safety, TypeInvariant, FormTC,
@@ -8942,7 +9058,8 @@ PROOF
     <2> DEFINE Received == TcAt(envelope.recipient, envelope.tc)
     <2> DEFINE StableVars ==
           <<height, context, contextHistory, nodeView, generation, up, gst,
-            availableBodies, durableBodies, validatedBodies, invalidBodies,
+            availableBodies, durableBodies, retainedLockedBodies,
+            validatedBodies, invalidBodies,
             seenProposals, receivedVotes, receivedQCs, receivedTimeoutVotes,
             proposalIntents, prepareIntents, commitIntents, timeoutIntents,
             prepareQCs, commitQCs, formedTCs, installedTCs, lockRank,
@@ -9122,7 +9239,8 @@ PROOF
     <2> DEFINE Request == InstallTcWal(node, tc, FALSE)
     <2> DEFINE StableVars ==
           <<height, context, contextHistory, nodeView, generation, up, gst,
-            availableBodies, durableBodies, validatedBodies, invalidBodies,
+            availableBodies, durableBodies, retainedLockedBodies,
+            validatedBodies, invalidBodies,
             seenProposals, receivedVotes, receivedQCs, receivedTimeoutVotes,
             receivedTCs, proposalIntents, prepareIntents, commitIntents,
             timeoutIntents, prepareQCs, commitQCs, formedTCs, installedTCs,
@@ -9169,25 +9287,12 @@ PROOF
     <2>3. UNCHANGED StableVars
       BY <1>1 DEF BeginInstallTC, StableVars
     <2>4. /\ pendingInstallTC' = pendingInstallTC \cup {Request}
-          /\ Request.node \in ValidatorIds
-          /\ Request.kind = "InstallTC"
-          /\ TcWellTyped(Request.tc)
-          /\ Request.rebroadcast \in BOOLEAN
+          /\ Request \in InstallTcWalSet
       <3>1. pendingInstallTC' = pendingInstallTC \cup {Request}
         BY <1>1 DEF BeginInstallTC, Request
-      <3>2. /\ Request.node = node
-            /\ Request.kind = "InstallTC"
-            /\ Request.tc = tc
-            /\ Request.rebroadcast = FALSE
-        BY DEF Request, InstallTcWal
-      <3>3. Request.node \in ValidatorIds
-        BY <2>1, <3>2
-      <3>4. TcWellTyped(Request.tc)
-        BY <2>1, <3>2
-      <3>5. /\ Request.kind = "InstallTC"
-            /\ Request.rebroadcast \in BOOLEAN
-        BY <3>2, Isa
-      <3> QED BY <3>1, <3>3, <3>4, <3>5
+      <3>3. Request \in InstallTcWalSet
+        BY <2>1, InstallTcWalRecordTyping DEF Request
+      <3> QED BY <3>1, <3>3
     <2>5. TypeInvariant'
       BY <1>1, <2>3, <2>4, Isa
          DEF StrongInductiveInvariant, Safety, TypeInvariant,
@@ -9292,7 +9397,8 @@ PROOF
     <2> DEFINE SelectedSubject == TcHighSubject(Certificate)
     <2> DEFINE StableVars ==
           <<height, context, contextHistory, up, gst, availableBodies,
-            durableBodies, validatedBodies, invalidBodies, seenProposals,
+            durableBodies, retainedLockedBodies, validatedBodies,
+            invalidBodies, seenProposals,
             receivedQCs, receivedTimeoutVotes, receivedTCs,
             proposalIntents, prepareIntents, commitIntents, timeoutIntents,
             prepareQCs, commitQCs, formedTCs, pendingProposal,
@@ -9301,6 +9407,7 @@ PROOF
             signTimeouts, proposalNetwork, voteNetwork, qcNetwork,
             timeoutNetwork, decisions, applied>>
     <2>1. /\ request \in pendingInstallTC
+          /\ request \in InstallTcWalSet
           /\ Certificate \in formedTCs
           /\ TCValid(Certificate)
           /\ Certificate.votes # {}
@@ -9313,6 +9420,7 @@ PROOF
          DEF StrongInductiveInvariant, Safety, TypeInvariant,
              ReducerProvenanceInvariant,
              PendingCertificateWritesAuthorized, PersistInstallTC,
+             InstallTcWalSet, TcRecordSet, TcWellTyped,
              Certificate, Node
     <2>2. /\ SelectedRank \in Ranks
           /\ (SelectedRank = NoRank => SelectedSubject = NoSubject)
@@ -9445,11 +9553,7 @@ PROOF
         BY <2>1, <3>1, <3>7, Isa DEF TypeInvariant
       <3>9. pendingInstallTC' = pendingInstallTC \ {request}
         BY <1>1 DEF PersistInstallTC
-      <3>10. \A pending \in pendingInstallTC':
-                /\ pending.node \in ValidatorIds
-                /\ pending.kind = "InstallTC"
-                /\ TcWellTyped(pending.tc)
-                /\ pending.rebroadcast \in BOOLEAN
+      <3>10. pendingInstallTC' \subseteq InstallTcWalSet
         BY <3>1, <3>9, Isa DEF TypeInvariant
       <3> QED BY <3>1, <3>2, <3>4, <3>5, <3>6, <3>8, <3>10, Isa
          DEF TypeInvariant, StableVars
@@ -9630,10 +9734,11 @@ PROOF
               /\ (\A pending \in pendingInstallTC':
                     pending.kind = "InstallTC")
               /\ pendingDecision' \subseteq DecisionWalSet
-          BY <2>4 DEF TypeInvariant
+          BY <2>4 DEF TypeInvariant, InstallTcWalSet
         <4>2. request.kind = "InstallTC"
           BY <1>1, <2>1
-             DEF StrongInductiveInvariant, Safety, TypeInvariant
+             DEF StrongInductiveInvariant, Safety, TypeInvariant,
+                 InstallTcWalSet
         <4>3. pendingInstallTC' = pendingInstallTC \ {request}
           BY <1>1 DEF PersistInstallTC
         <4>4. request \notin ProposalWalSet \cup PrepareWalSet
@@ -9728,7 +9833,7 @@ PROOF
                /\ other.vote.view = nodeView'[other.node]
                /\ other.vote.subject \in ValidSubjects
                /\ BodyHeldBy(durableBodies', other.node,
-                             other.vote.context, other.vote.subject)
+                             other.vote.context, other.vote.view, other.vote.subject)
                /\ CanAppendVote(prepareIntents', other.vote)
                /\ PrepareCarriesHigherSafeQc(other.vote)'
         <4>1. ASSUME NEW other \in pendingPrepare'
@@ -9739,7 +9844,7 @@ PROOF
                      /\ other.vote.view = nodeView'[other.node]
                      /\ other.vote.subject \in ValidSubjects
                      /\ BodyHeldBy(durableBodies', other.node,
-                                   other.vote.context, other.vote.subject)
+                                   other.vote.context, other.vote.view, other.vote.subject)
                      /\ CanAppendVote(prepareIntents', other.vote)
                      /\ PrepareCarriesHigherSafeQc(other.vote)'
           <5>1. other \in AllPendingRequests'
@@ -9751,7 +9856,7 @@ PROOF
                 /\ other.vote.view = nodeView[other.node]
                 /\ other.vote.subject \in ValidSubjects
                 /\ BodyHeldBy(durableBodies, other.node,
-                              other.vote.context, other.vote.subject)
+                              other.vote.context, other.vote.view, other.vote.subject)
                 /\ CanAppendVote(prepareIntents, other.vote)
                 /\ PrepareCarriesHigherSafeQc(other.vote)
             BY <3>1, <3>8, <4>1
@@ -9782,7 +9887,7 @@ PROOF
                 /\ ~NodeTimedOut(other.node, other.vote.view)'
                 /\ other.vote.subject \in ValidSubjects
                 /\ BodyHeldBy(durableBodies', other.node,
-                              other.vote.context, other.vote.subject)
+                              other.vote.context, other.vote.view, other.vote.subject)
                 /\ other.qc.view >= lockRank'[other.node]
                 /\ (other.qc.view = lockRank'[other.node]
                       => other.qc.subject = lockSubject'[other.node])
@@ -9801,7 +9906,7 @@ PROOF
                      /\ ~NodeTimedOut(other.node, other.vote.view)'
                      /\ other.vote.subject \in ValidSubjects
                      /\ BodyHeldBy(durableBodies', other.node,
-                                   other.vote.context, other.vote.subject)
+                                   other.vote.context, other.vote.view, other.vote.subject)
                      /\ other.qc.view >= lockRank'[other.node]
                      /\ (other.qc.view = lockRank'[other.node]
                            => other.qc.subject = lockSubject'[other.node])
@@ -9821,7 +9926,7 @@ PROOF
                 /\ ~NodeTimedOut(other.node, other.vote.view)
                 /\ other.vote.subject \in ValidSubjects
                 /\ BodyHeldBy(durableBodies, other.node,
-                              other.vote.context, other.vote.subject)
+                              other.vote.context, other.vote.view, other.vote.subject)
                 /\ other.qc.view >= lockRank[other.node]
                 /\ (other.qc.view = lockRank[other.node]
                       => other.qc.subject = lockSubject[other.node])
@@ -10506,8 +10611,19 @@ PROOF
       <3>12. /\ up' \subseteq ValidatorIds
              /\ gst' \in BOOLEAN
         BY <1>1, <3>1, Isa DEF AdvanceContext, TypeInvariant
-      <3>13. ValidatedBodiesSound(validatedBodies', ValidSubjects)
-        BY <1>1 DEF AdvanceContext, ValidatedBodiesSound
+      <3>13. /\ availableBodies' \subseteq BodyRecordSet
+             /\ durableBodies' \subseteq BodyRecordSet
+             /\ retainedLockedBodies'
+                    \subseteq RetainedLockedBodyRecordSet
+             /\ validatedBodies' \subseteq ValidationRecordSet
+             /\ invalidBodies' \subseteq BodyRecordSet
+             /\ ValidatedBodiesSound(validatedBodies', ValidSubjects)
+             /\ RetainedLockedBodiesSound(retainedLockedBodies',
+                                           durableBodies')
+        BY <1>1, Isa
+           DEF StrongInductiveInvariant, Safety, TypeInvariant,
+               AdvanceContext, ValidatedBodiesSound,
+               RetainedLockedBodiesSound
       <3>14. /\ proposalIntents' = proposalIntents
              /\ prepareIntents' = prepareIntents
              /\ commitIntents' = commitIntents
@@ -10548,11 +10664,7 @@ PROOF
              /\ pendingObservePrepare' \subseteq ObservePrepareWalSet
              /\ pendingLockCommit' \subseteq LockCommitWalSet
              /\ pendingTimeout' \subseteq TimeoutWalSet
-             /\ \A request \in pendingInstallTC':
-                  /\ request.node \in ValidatorIds
-                  /\ request.kind = "InstallTC"
-                  /\ TcWellTyped(request.tc)
-                  /\ request.rebroadcast \in BOOLEAN
+             /\ pendingInstallTC' \subseteq InstallTcWalSet
              /\ pendingDecision' \subseteq DecisionWalSet
              /\ signProposals' \subseteq ProposalSignSet
              /\ signVotes' \subseteq VoteSignSet
@@ -10888,8 +11000,10 @@ BY SMTT(120),
    ByzantineBroadcastProposalPreservesStrongInvariant,
    DeliverProposalPreservesStrongInvariant,
    FetchBodyPreservesStrongInvariant,
+   RebindRetainedBodyPreservesStrongInvariant,
    StoreBodyPreservesStrongInvariant,
    ValidateOrRejectBodyPreservesStrongInvariant,
+   ValidateDecidedBodyPreservesStrongInvariant,
    BeginPreparePreservesStrongInvariant,
    PersistPreparePreservesStrongInvariant,
    CompleteVoteSignaturePreservesStrongInvariant,

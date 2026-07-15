@@ -9,16 +9,17 @@ use iroha::data_model::{
     asset::{AssetDefinition, AssetId},
     block::consensus_v2::PROTOCOL_VERSION,
     bridge::{
-        BridgeNativeProofBackendV1, SCCP_V1_TAIRA_TO_TOKEN_MULTIPLIER,
-        SCCP_V1_XOR_PAYLOAD_AMOUNT_SCALE, SccpBn254G1PointV1, SccpBn254G2PointV1,
-        SccpDestinationDeploymentV1, SccpEvmDestinationDeploymentV1, SccpEvmSourceEmitterV1,
-        SccpGovernedRouteV1, SccpGroth16Bn254IcV1, SccpGroth16Bn254SemanticCircuitV1,
-        SccpGroth16Bn254VerifyingKeyV1, SccpLaneIdV1, SccpNativeTrustAnchorV1, SccpNetworkV1,
-        SccpOutboundProofPolicyV1, SccpRegistryV1, SccpRouteActivationV1, SccpRouteKeyV1,
-        SccpSemanticProofProfileV1, SccpSoraFinalityAnchorV1, SccpSoraSettlementV1,
-        SccpSourceEmitterV1, SccpSourceIdentityV1, sccp_groth16_bn254_public_signal_schema_hash_v1,
-        sccp_groth16_bn254_verifying_key_hash_v1, sccp_sora_taira_chain_id_hash_v1,
-        sccp_v1_taira_xor_asset_definition_id,
+        BridgeNativeProofBackendV1, SCCP_V1_SORA_OUTBOUND_EXECUTION_SEMANTICS,
+        SCCP_V1_TAIRA_TO_TOKEN_MULTIPLIER, SCCP_V1_XOR_PAYLOAD_AMOUNT_SCALE, SccpBn254G1PointV1,
+        SccpBn254G2PointV1, SccpDestinationDeploymentV1, SccpEvmDestinationDeploymentV1,
+        SccpEvmSourceEmitterV1, SccpGovernedRouteV1, SccpGroth16Bn254IcV1,
+        SccpGroth16Bn254SemanticCircuitV1, SccpGroth16Bn254VerifyingKeyV1, SccpLaneIdV1,
+        SccpNativeTrustAnchorV1, SccpNetworkV1, SccpOutboundProofPolicyV1,
+        SccpPortableVerifyingKeyRefV1, SccpRegistryV1, SccpRouteActivationV1, SccpRouteKeyV1,
+        SccpSemanticProofProfileV1, SccpSoraFinalityAnchorV1, SccpSoraOutboundExecutionPolicyV1,
+        SccpSoraSettlementV1, SccpSourceEmitterV1, SccpSourceIdentityV1,
+        sccp_groth16_bn254_public_signal_schema_hash_v1, sccp_groth16_bn254_verifying_key_hash_v1,
+        sccp_sora_taira_chain_id_hash_v1, sccp_v1_taira_xor_asset_definition_id,
     },
     domain::Domain,
     isi::{
@@ -119,6 +120,21 @@ fn integration_outbound_policy() -> SccpOutboundProofPolicyV1 {
     }
 }
 
+fn integration_sora_outbound_execution_policy() -> SccpSoraOutboundExecutionPolicyV1 {
+    SccpSoraOutboundExecutionPolicyV1 {
+        version: 1,
+        semantics: SCCP_V1_SORA_OUTBOUND_EXECUTION_SEMANTICS.to_owned(),
+        contract_artifact_sha256: [0xb1; 32],
+        vk_ref: SccpPortableVerifyingKeyRefV1 {
+            backend: "stark/fri/v1".to_owned(),
+            name: "ivm-execution-v1".to_owned(),
+            version: 1,
+            commitment: [0xb2; 32],
+        },
+        gas_limit: 50_000_000,
+    }
+}
+
 fn integration_route() -> SccpGovernedRouteV1 {
     let lane_id = SccpLaneIdV1 {
         source: SccpNetworkV1::EthereumMainnet,
@@ -168,6 +184,7 @@ fn integration_route() -> SccpGovernedRouteV1 {
             }),
         },
         destination,
+        sora_outbound_execution_policy: integration_sora_outbound_execution_policy(),
         settlement: SccpSoraSettlementV1 {
             asset_definition_id: sccp_v1_taira_xor_asset_definition_id(),
             custody_account_id: AccountId::new(custody),
@@ -189,6 +206,9 @@ fn successor_route(mut route: SccpGovernedRouteV1) -> SccpGovernedRouteV1 {
             (destination.route_address, destination.route_code_hash)
         }
         SccpDestinationDeploymentV1::Tron(_) => {
+            unreachable!("Ethereum integration route uses an EVM destination")
+        }
+        SccpDestinationDeploymentV1::Solana(_) => {
             unreachable!("Ethereum integration route uses an EVM destination")
         }
     };

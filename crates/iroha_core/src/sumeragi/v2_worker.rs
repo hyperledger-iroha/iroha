@@ -2913,6 +2913,7 @@ impl V2EffectServices for ProductionV2Services {
             .acquire()
             .ok_or_else(|| "Sumeragi v2 consensus requires process restart".to_owned())?;
         self.last_status = Some(status.clone());
+        super::status::set_v2_effect_status(status.clone());
         Ok(())
     }
 

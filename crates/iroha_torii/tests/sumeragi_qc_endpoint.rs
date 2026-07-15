@@ -98,6 +98,7 @@ fn status_fixture() -> (SumeragiV2Status, QuorumCertificateRef) {
                 },
             },
             last_commit_qc: None,
+            liveness: Default::default(),
         },
         certificate,
     )

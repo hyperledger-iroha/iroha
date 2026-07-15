@@ -17,6 +17,13 @@
       "status": "tlaps_proved"
     },
     {
+      "id": "vocabulary-helper-facts",
+      "requirement": "Durable preparation, crash persistence, incomplete-frame rejection, and frozen parent-context identities retain their exact executable-vocabulary consequences",
+      "module": "SumeragiV2VocabularyProofs",
+      "symbol": "PrepareSignerAvailabilityIncludesDurability / CrashDoesNotErasePrepareIntents / CrashDoesNotEraseDecisions / IncompleteFrameIsNotAcknowledged / ContextRecordCarriesFrozenEpoch / ContextRecordCarriesParent / ContextRecordCarriesParentContext / EquivalentParentCommitQcsConverge / ForeignParentLineageHasDifferentIdentity",
+      "status": "tlaps_proved"
+    },
+    {
       "id": "quorum-honest-intersection",
       "requirement": "Count, power, and dual quorums intersect in an honest validator",
       "module": "SumeragiV2Proofs",
@@ -140,6 +147,48 @@
       "requirement": "The concrete asynchronous scheduler and transport preserve the full typed state invariant from every admissible frozen height context",
       "module": "SumeragiV2AsyncLivenessProofs",
       "symbol": "AsyncTypeInvariantObligation",
+      "status": "tlaps_proved"
+    },
+    {
+      "id": "async-runner-scheduler-preservation",
+      "requirement": "Every concrete responsive run-loop transition preserves the scheduler type invariant",
+      "module": "SumeragiV2AsyncLivenessProofs",
+      "symbol": "AsyncRunnerStepPreservesSchedulerType",
+      "status": "specified_unproved"
+    },
+    {
+      "id": "generation-scoped-vote-delivery",
+      "requirement": "An authenticated vote crosses a volatile receipt pool at most once, while TC installation clears that pool so the exact active locked Commit vote is eligible in the new reducer generation",
+      "module": "SumeragiV2AsyncLivenessProofs",
+      "symbol": "GenerationScopedVoteDeliveryObligation",
+      "status": "tlaps_proved"
+    },
+    {
+      "id": "progress-witness-preservation",
+      "requirement": "Every active durable locked Commit intent and durable decision retains a concrete signing, retransmission, receipt, certificate, recovery, application, or completion witness, and protected deferred slots remain unique within their validator-count-plus-three bound",
+      "module": "SumeragiV2AsyncLivenessProofs",
+      "symbol": "ProgressWitnessObligation",
+      "status": "specified_unproved"
+    },
+    {
+      "id": "post-gst-deadlock-freedom",
+      "requirement": "Every reachable undecided post-GST state enables a concrete clock, runtime, worker, or responsive-transport progress action",
+      "module": "SumeragiV2AsyncLivenessProofs",
+      "symbol": "DeadlockFreedomObligation",
+      "status": "specified_unproved"
+    },
+    {
+      "id": "protected-service-rank",
+      "requirement": "Every scheduler-owned progress or completion candidate is eventually serviced or decreases its well-founded deferred, runtime-queue, ready-completion, IO, outstanding-work, or causal rank; transport and ingress occurrences are proved separately",
+      "module": "SumeragiV2AsyncLivenessProofs",
+      "symbol": "ProtectedServiceRankProgressObligation",
+      "status": "specified_unproved"
+    },
+    {
+      "id": "post-gst-starvation-freedom",
+      "requirement": "Under the concrete post-GST weak-fairness actions, every admitted protocol progress or completion candidate eventually leaves scheduler ownership",
+      "module": "SumeragiV2AsyncLivenessProofs",
+      "symbol": "StarvationFreedomObligation",
       "status": "specified_unproved"
     },
     {
@@ -165,14 +214,14 @@
     },
     {
       "id": "genesis-height-successor-handoff",
-      "requirement": "Under the concrete genesis asynchronous chain product, every responsive validator eventually records the exact first successor context",
+      "requirement": "Under the concrete genesis asynchronous chain product, every responsive validator eventually records the exact first successor context when a successor height exists; the terminal finite horizon is vacuous",
       "module": "SumeragiV2ChainEpochRefinement",
       "symbol": "GenesisHeightSuccessorHandoffObligation",
       "status": "specified_unproved"
     },
     {
       "id": "height-liveness",
-      "requirement": "Every post-GST height eventually applies and advances",
+      "requirement": "Every joined post-GST context eventually applies at the terminal MaxHeight, or advances every responsive validator into a successor context when nonterminal",
       "module": "SumeragiV2ChainEpochRefinement",
       "symbol": "HeightLivenessObligation",
       "status": "specified_unproved"

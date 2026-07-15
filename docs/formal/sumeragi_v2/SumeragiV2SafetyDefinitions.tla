@@ -57,12 +57,12 @@ HonestIntentSound(intents, durable, validSubjects) ==
     vote.signer \in Honest
       => /\ vote.subject \in validSubjects
          /\ BodyHeldBy(durable, vote.signer,
-                       vote.context, vote.subject)
+                       vote.context, vote.view, vote.subject)
 
 CertificateValidityAndAvailability(qc, durable, validSubjects) ==
   /\ qc.subject \in validSubjects
   /\ \E signer \in qc.signers \cap Honest:
-       BodyHeldBy(durable, signer, qc.context, qc.subject)
+       BodyHeldBy(durable, signer, qc.context, qc.view, qc.subject)
 
 LockValue(rank, subject) == [rank |-> rank, subject |-> subject]
 

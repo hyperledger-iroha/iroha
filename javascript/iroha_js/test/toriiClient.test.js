@@ -792,6 +792,62 @@ function createSumeragiV2StatusPayload(overrides = {}) {
       signed_power: 3,
       total_power: 4,
     },
+    liveness: {
+      generation: 2,
+      prepare_quorums: [
+        {
+          round: { context_id: [fakeSumeragiHash(0x14)], height: 10, view: 1 },
+          subject: { ...subject },
+          execution_commitment: { ...executionCommitment },
+          signer_count: 2,
+          signed_power: 2,
+          min_signers: 3,
+          total_power: 4,
+        },
+      ],
+      commit_quorums: [],
+      timeout_quorums: [],
+      outbound_intents: [
+        {
+          kind: { kind: "proposal", details: null },
+          round: { context_id: [fakeSumeragiHash(0x14)], height: 10, view: 1 },
+          subject: { ...subject },
+          execution_commitment: null,
+          stage: { stage: "sent", details: null },
+        },
+      ],
+      work: {
+        candidate: { stage: "idle", details: null },
+        body_recovery: { stage: "idle", details: null },
+        body_store: { stage: "idle", details: null },
+        validation: { stage: "complete", details: null },
+        application: { stage: "idle", details: null },
+        successor_height: { stage: "idle", details: null },
+      },
+      queues: [
+        {
+          queue: { queue: "network_ingress", details: null },
+          depth: 1,
+          capacity: 4,
+          oldest_age_ms: 17,
+          service_debt: 2,
+        },
+      ],
+      last_progress: {
+        generation: 2,
+        round: { context_id: [fakeSumeragiHash(0x14)], height: 10, view: 1 },
+        transition: { transition: "prepare_vote_admitted", details: null },
+        age_ms: 19,
+      },
+      no_progress_age_ms: 19,
+      blocker: { blocker: "prepare_quorum_missing", details: null },
+      ignore_counts: [
+        {
+          reason: { reason: "duplicate", details: null },
+          count: 2,
+        },
+      ],
+    },
     safety_halt: {
       active: false,
       reason: null,
@@ -10854,6 +10910,15 @@ test("getSumeragiStatusTyped validates and normalizes authoritative v2 status", 
     fakeSumeragiHash(0x37),
   );
   assert.equal(status.last_commit_qc.signed_power, 3);
+  assert.equal(status.liveness.generation, 2);
+  assert.equal(status.liveness.prepare_quorums[0].signer_count, 2);
+  assert.equal(status.liveness.queues[0].queue.queue, "network_ingress");
+  assert.equal(status.liveness.queues[0].service_debt, 2);
+  assert.equal(
+    status.liveness.last_progress.transition.transition,
+    "prepare_vote_admitted",
+  );
+  assert.equal(status.liveness.blocker.blocker, "prepare_quorum_missing");
   assert.equal(status.lane_settlement_commitments[0].total_local_amount, "10.25");
   assert.equal(
     status.lane_settlement_commitments[0].swap_metadata.liquidity_profile.profile,
@@ -10923,6 +10988,69 @@ test("getSumeragiStatusTyped rejects unsupported protocol and invalid frozen con
   await assert.rejects(
     () => sumeragiClientForPayload(outOfRangeLeader).getSumeragiStatusTyped(),
     /leader must index the frozen validator roster/,
+  );
+});
+
+test("getSumeragiStatusTyped rejects malformed liveness diagnostics", async () => {
+  const futureRound = createSumeragiV2StatusPayload();
+  futureRound.liveness.prepare_quorums[0].round.view = futureRound.view + 1;
+  await assert.rejects(
+    () => sumeragiClientForPayload(futureRound).getSumeragiStatusTyped(),
+    /view must not exceed the active view/,
+  );
+
+  const invalidIntent = createSumeragiV2StatusPayload();
+  invalidIntent.liveness.outbound_intents[0].execution_commitment = {
+    ...invalidIntent.last_commit_qc.certificate.execution_commitment,
+  };
+  await assert.rejects(
+    () => sumeragiClientForPayload(invalidIntent).getSumeragiStatusTyped(),
+    /inconsistent proposal fields/,
+  );
+
+  const duplicateQueue = createSumeragiV2StatusPayload();
+  duplicateQueue.liveness.queues.push({ ...duplicateQueue.liveness.queues[0] });
+  await assert.rejects(
+    () => sumeragiClientForPayload(duplicateQueue).getSumeragiStatusTyped(),
+    /queue is duplicated/,
+  );
+
+  const everyQueueKind = createSumeragiV2StatusPayload();
+  const queueTemplate = everyQueueKind.liveness.queues[0];
+  everyQueueKind.liveness.queues = [
+    "ingress",
+    "deferred_normal",
+    "deferred_progress",
+    "deferred_completion",
+    "runtime_normal",
+    "runtime_progress",
+    "runtime_completion",
+    "effect_completion",
+    "network_ingress",
+  ].map((queue) => ({
+    ...queueTemplate,
+    queue: { queue, details: null },
+  }));
+  const everyQueueStatus = await sumeragiClientForPayload(everyQueueKind)
+    .getSumeragiStatusTyped();
+  assert.equal(everyQueueStatus.liveness.queues.length, 9);
+
+  const tooManyQueues = createSumeragiV2StatusPayload();
+  tooManyQueues.liveness.queues = [
+    ...everyQueueKind.liveness.queues,
+    { ...queueTemplate },
+  ];
+  await assert.rejects(
+    () => sumeragiClientForPayload(tooManyQueues).getSumeragiStatusTyped(),
+    /queues exceeds its protocol item bound/,
+  );
+
+  const futureGeneration = createSumeragiV2StatusPayload();
+  futureGeneration.liveness.last_progress.generation =
+    futureGeneration.liveness.generation + 1;
+  await assert.rejects(
+    () => sumeragiClientForPayload(futureGeneration).getSumeragiStatusTyped(),
+    /generation is from the future/,
   );
 });
 

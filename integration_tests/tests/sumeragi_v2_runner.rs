@@ -62,21 +62,50 @@ struct PrepareQcSnapshot {
     reference: Value,
 }
 
-#[ignore = "one-shot local diagnostic for Sumeragi v2 genesis progress"]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn diagnose_authoritative_v2_genesis_once() -> Result<()> {
+async fn authoritative_v2_genesis_commits_on_every_validator() -> Result<()> {
     init_instruction_registry();
-    let network = NetworkBuilder::new()
+    let builder = NetworkBuilder::new()
         .with_peers(VALIDATOR_COUNT)
         .with_auto_populated_trusted_peers()
         .with_base_seed(stringify!(
-            authoritative_v2_finalizes_through_validator_restart
+            authoritative_v2_genesis_commits_on_every_validator
         ))
         .with_sync_timeout(Duration::from_secs(180))
-        .with_peer_startup_timeout(Duration::from_secs(90))
-        .build();
-    let result = network.start_all().await.map(|_| ());
-    network.shutdown().await;
+        .with_peer_startup_timeout(Duration::from_secs(90));
+    let context = stringify!(authoritative_v2_genesis_commits_on_every_validator);
+    let network = sandbox::start_network_async_or_skip(builder, context).await?;
+    let Some(network) = sandbox::enforce_network_start_requirement(network, context)? else {
+        return Ok(());
+    };
+
+    let result = async {
+        ensure!(
+            network.peers().len() == VALIDATOR_COUNT
+                && network.peers().iter().all(NetworkPeer::is_running),
+            "fresh genesis must start exactly {VALIDATOR_COUNT} voting validators"
+        );
+        let peers = network.peers().to_vec();
+        let normal = normal_statuses(&peers).await?;
+        ensure!(
+            normal.iter().all(|status| status.blocks >= 1),
+            "fresh genesis must commit on every validator: {normal:?}"
+        );
+        let committed_floor = normal
+            .iter()
+            .map(|status| status.blocks)
+            .min()
+            .unwrap_or_default();
+        let v2 = wait_for_v2_statuses(&peers, committed_floor, STATUS_TIMEOUT).await?;
+        validate_v2_status_set(&v2, VALIDATOR_COUNT)?;
+        ensure!(
+            v2.iter().all(|status| status.last_committed_height >= 1),
+            "authoritative v2 status must expose the durable genesis CommitQC: {v2:?}"
+        );
+        Ok(())
+    }
+    .await;
+    network.shutdown_and_release().await;
     result
 }
 

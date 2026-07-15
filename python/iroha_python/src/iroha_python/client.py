@@ -83,6 +83,7 @@ from iroha_torii_client.client import (
     SumeragiSafetyHaltStatus as _CanonicalSumeragiSafetyHaltStatus,
     SumeragiV2CommitQcStatus as _CanonicalSumeragiV2CommitQcStatus,
     SumeragiV2HeightContextStatus as _CanonicalSumeragiV2HeightContextStatus,
+    SumeragiV2LivenessStatus,
     SumeragiV2OperatorStatus as _CanonicalSumeragiV2OperatorStatus,
     SumeragiV2Round,
     SumeragiV2Status as _CanonicalSumeragiV2Status,
@@ -9099,6 +9100,7 @@ class SumeragiStatusSnapshot:
     last_committed_subject: Optional[SumeragiV2BlockSubject]
     height_context: _CanonicalSumeragiV2HeightContextStatus
     last_commit_qc: Optional[_CanonicalSumeragiV2CommitQcStatus]
+    liveness: SumeragiV2LivenessStatus
     safety_halt: _CanonicalSumeragiSafetyHaltStatus
     lane_settlement_commitments: List[SumeragiLaneSettlementCommitment]
     lane_relay_envelopes: List[SumeragiLaneRelayEnvelope]
@@ -9189,6 +9191,7 @@ class SumeragiStatusSnapshot:
             ),
             height_context=canonical.height_context,
             last_commit_qc=canonical.last_commit_qc,
+            liveness=canonical.liveness,
             safety_halt=canonical.safety_halt,
             lane_settlement_commitments=[
                 SumeragiLaneSettlementCommitment.from_payload(entry)
@@ -11055,6 +11058,7 @@ __all__ = [
     "SumeragiRbcStoreStatus",
     "SumeragiPrfStatus",
     "SumeragiStatusSnapshot",
+    "SumeragiV2LivenessStatus",
     "SumeragiV2StatusPhase",
     "SumeragiV2BodyState",
     "SumeragiV2GlobalPhase",

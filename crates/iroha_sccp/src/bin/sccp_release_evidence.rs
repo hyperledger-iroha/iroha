@@ -3298,7 +3298,7 @@ mod tests {
         let validated = validate_sora_finality_anchor_policy(&anchor).unwrap();
         assert_eq!(
             lowercase_hex(&validated.anchor_hash),
-            "690888c1b9a1409ea47fc682be915184e86a817a2f0b3439eef82e64e08e990b"
+            "94be7710f3064ff4936d24f51355ca037bf53e653b7712abcd798ba47be20727"
         );
 
         for mutation in 0..=10 {

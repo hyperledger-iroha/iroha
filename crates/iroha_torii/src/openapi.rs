@@ -4875,8 +4875,8 @@ fn explorer_paths() -> Map {
         Value::Object(json_get_operation(
             "Explorer",
             "Fetch instruction detail (explorer).",
-            "Fetch instruction detail for explorer usage.",
-            "#/components/schemas/JsonValue",
+            "Fetch instruction detail for explorer usage. Registered SCCP governance proposals include their exact public typed action/window/mode payload; signer secrets are never returned.",
+            "#/components/schemas/ExplorerInstructionDetail",
             vec![
                 string_path_param("hash", "Transaction hash."),
                 integer_path_param("index", "Instruction index.", Some("uint64")),
@@ -7478,6 +7478,11 @@ fn sumeragi_paths() -> Map {
         Value::Object(sccp_registry_operation()),
     );
     paths.insert(
+        "/v1/sccp/routes/{source_profile}/{route_id}/{asset_key}/{revision}/sora-outbound-material"
+            .to_owned(),
+        Value::Object(sccp_sora_outbound_material_operation()),
+    );
+    paths.insert(
         "/v1/sccp/proof-requests/{message_id}".to_owned(),
         Value::Object(sccp_proof_request_operation()),
     );
@@ -7752,6 +7757,67 @@ fn sccp_registry_operation() -> Map {
         typed_dual_format_response(
             "Authoritative SCCP registry.",
             "#/components/schemas/SccpRegistryV1",
+        ),
+    );
+    responses.insert("406".into(), not_acceptable_response());
+    operation.insert("responses".into(), Value::Object(responses));
+    let mut methods = Map::new();
+    methods.insert("get".to_owned(), Value::Object(operation));
+    methods
+}
+
+fn sccp_sora_outbound_material_operation() -> Map {
+    let mut operation = Map::new();
+    operation.insert(
+        "tags".into(),
+        Value::Array(vec![Value::String("Bridge".to_owned())]),
+    );
+    operation.insert(
+        "summary".into(),
+        Value::String(
+            "Fetch one enabled route's registered SORA outbound IVM material.".to_owned(),
+        ),
+    );
+    operation.insert(
+        "description".into(),
+        Value::String(
+            "Resolves one exact enabled typed route and returns only the separately registered IVM contract artifact whose SHA-256 matches the route policy. The referenced verifier key must be active; caller-selected bytecode, verifier keys, gas limits, and query parameters are never accepted."
+                .to_owned(),
+        ),
+    );
+    operation.insert(
+        "operationId".into(),
+        Value::String("sccpSoraOutboundMaterial".to_owned()),
+    );
+    operation.insert(
+        "parameters".into(),
+        Value::Array(vec![
+            string_path_param(
+                "source_profile",
+                "Exact external SCCP source profile, for example solana-testnet.",
+            ),
+            string_path_param("route_id", "Canonical governed SCCP route identifier."),
+            string_path_param("asset_key", "Canonical governed SCCP asset key."),
+            integer_path_param(
+                "revision",
+                "Nonzero immutable governed route revision.",
+                Some("uint32"),
+            ),
+        ]),
+    );
+    let mut responses = Map::new();
+    responses.insert(
+        "200".into(),
+        typed_dual_format_response(
+            "Exact registered SORA outbound material for the enabled route.",
+            "#/components/schemas/SccpSoraOutboundMaterialV1",
+        ),
+    );
+    responses.insert(
+        "404".into(),
+        json_response(
+            "The exact route is not outbound-enabled or its governed contract/VK material is unavailable.",
+            error_schema_reference(),
         ),
     );
     responses.insert("406".into(), not_acceptable_response());
@@ -12012,7 +12078,7 @@ fn sccp_schemas() -> Map {
                     "type": "string",
                     "enum": [
                         "ethereum_mainnet", "ethereum_sepolia", "bsc_mainnet", "bsc_testnet",
-                        "tron_mainnet", "tron_nile", "tron_shasta"
+                        "solana_testnet", "tron_mainnet", "tron_nile", "tron_shasta"
                     ]
                 },
                 "profile": { "type": "null" }
@@ -12054,7 +12120,10 @@ fn sccp_schemas() -> Map {
             "properties": {
                 "backend": {
                     "type": "string",
-                    "enum": ["ethereum_beacon_v1", "bsc_parlia_v1", "tron_dpos_v1"]
+                    "enum": [
+                        "ethereum_beacon_v1", "bsc_parlia_v1", "solana_agave_v1",
+                        "tron_dpos_v1"
+                    ]
                 },
                 "protocol": { "type": "null" }
             }
@@ -12129,6 +12198,28 @@ fn sccp_schemas() -> Map {
         }),
     );
     schemas.insert(
+        "SccpSolanaSourceEmitterIdentityV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "program_id", "program_data_address", "program_data_slot", "state_account",
+                "program_code_hash", "route_config_hash"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "program_id": { "$ref": "#/components/schemas/SccpNonzeroUpperHex32" },
+                "program_data_address": { "$ref": "#/components/schemas/SccpNonzeroUpperHex32" },
+                "program_data_slot": {
+                    "type": "integer", "format": "uint64", "minimum": 1,
+                    "maximum": 18446744073709551615_u64
+                },
+                "state_account": { "$ref": "#/components/schemas/SccpNonzeroUpperHex32" },
+                "program_code_hash": { "$ref": "#/components/schemas/SccpNonzeroUpperHex32" },
+                "route_config_hash": { "$ref": "#/components/schemas/SccpNonzeroUpperHex32" }
+            }
+        }),
+    );
+    schemas.insert(
         "SccpSourceEmitterV1".to_owned(),
         norito::json!({
             "oneOf": [
@@ -12146,6 +12237,14 @@ fn sccp_schemas() -> Map {
                     "properties": {
                         "emitter": { "const": "tron" },
                         "identity": { "$ref": "#/components/schemas/SccpSourceEmitterIdentityV1" }
+                    }
+                },
+                {
+                    "type": "object", "required": ["emitter", "identity"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "emitter": { "const": "solana" },
+                        "identity": { "$ref": "#/components/schemas/SccpSolanaSourceEmitterIdentityV1" }
                     }
                 }
             ]
@@ -12304,6 +12403,49 @@ fn sccp_crypto_and_registry_schemas(schemas: &mut Map) {
         }),
     );
     schemas.insert(
+        "SccpPortableVerifyingKeyRefV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["backend", "name", "version", "commitment"],
+            "additionalProperties": false,
+            "properties": {
+                "backend": {
+                    "type": "string", "minLength": 1, "maxLength": 256,
+                    "pattern": "^[a-z0-9](?:[a-z0-9_/:.-]*[a-z0-9])?$"
+                },
+                "name": {
+                    "type": "string", "minLength": 1, "maxLength": 256,
+                    "pattern": "^[a-z0-9](?:[a-z0-9_/:.-]*[a-z0-9])?$"
+                },
+                "version": {
+                    "type": "integer", "format": "uint32", "minimum": 1,
+                    "maximum": 4294967295_u64
+                },
+                "commitment": { "$ref": "#/components/schemas/SccpNonzeroUpperHex32" }
+            }
+        }),
+    );
+    schemas.insert(
+        "SccpSoraOutboundExecutionPolicyV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "version", "semantics", "contract_artifact_sha256", "vk_ref", "gas_limit"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "version": { "type": "integer", "enum": [1] },
+                "semantics": { "const": "ivm_proved_record_sccp_message_v1" },
+                "contract_artifact_sha256": { "$ref": "#/components/schemas/SccpNonzeroUpperHex32" },
+                "vk_ref": { "$ref": "#/components/schemas/SccpPortableVerifyingKeyRefV1" },
+                "gas_limit": {
+                    "type": "integer", "format": "uint64", "minimum": 1,
+                    "maximum": 1000000000
+                }
+            }
+        }),
+    );
+    schemas.insert(
         "SccpDestinationDeploymentDetailsV1".to_owned(),
         norito::json!({
             "type": "object",
@@ -12330,6 +12472,46 @@ fn sccp_crypto_and_registry_schemas(schemas: &mut Map) {
         }),
     );
     schemas.insert(
+        "SccpSolanaDestinationDeploymentV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "token_mint_address", "route_program_id", "route_program_data_address",
+                "route_program_data_slot", "route_state_account", "route_program_code_hash",
+                "native_verifier_program_id", "native_verifier_program_data_address",
+                "native_verifier_program_data_slot", "native_verifier_material_account",
+                "native_verifier_program_code_hash", "native_verifier_config_hash",
+                "verifying_key", "verifier_key_hash", "outbound_proof_policy",
+                "taira_to_token_multiplier"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "token_mint_address": { "$ref": "#/components/schemas/SccpNonzeroUpperHex32" },
+                "route_program_id": { "$ref": "#/components/schemas/SccpNonzeroUpperHex32" },
+                "route_program_data_address": { "$ref": "#/components/schemas/SccpNonzeroUpperHex32" },
+                "route_program_data_slot": {
+                    "type": "integer", "format": "uint64", "minimum": 1,
+                    "maximum": 18446744073709551615_u64
+                },
+                "route_state_account": { "$ref": "#/components/schemas/SccpNonzeroUpperHex32" },
+                "route_program_code_hash": { "$ref": "#/components/schemas/SccpNonzeroUpperHex32" },
+                "native_verifier_program_id": { "$ref": "#/components/schemas/SccpNonzeroUpperHex32" },
+                "native_verifier_program_data_address": { "$ref": "#/components/schemas/SccpNonzeroUpperHex32" },
+                "native_verifier_program_data_slot": {
+                    "type": "integer", "format": "uint64", "minimum": 1,
+                    "maximum": 18446744073709551615_u64
+                },
+                "native_verifier_material_account": { "$ref": "#/components/schemas/SccpNonzeroUpperHex32" },
+                "native_verifier_program_code_hash": { "$ref": "#/components/schemas/SccpNonzeroUpperHex32" },
+                "native_verifier_config_hash": { "$ref": "#/components/schemas/SccpNonzeroUpperHex32" },
+                "verifying_key": { "$ref": "#/components/schemas/SccpGroth16Bn254VerifyingKeyV1" },
+                "verifier_key_hash": { "$ref": "#/components/schemas/SccpNonzeroUpperHex32" },
+                "outbound_proof_policy": { "$ref": "#/components/schemas/SccpOutboundProofPolicyV1" },
+                "taira_to_token_multiplier": { "type": "integer", "format": "uint64", "enum": [1] }
+            }
+        }),
+    );
+    schemas.insert(
         "SccpDestinationDeploymentV1".to_owned(),
         norito::json!({
             "oneOf": [
@@ -12347,6 +12529,14 @@ fn sccp_crypto_and_registry_schemas(schemas: &mut Map) {
                     "properties": {
                         "family": { "const": "tron" },
                         "deployment": { "$ref": "#/components/schemas/SccpDestinationDeploymentDetailsV1" }
+                    }
+                },
+                {
+                    "type": "object", "required": ["family", "deployment"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "family": { "const": "solana" },
+                        "deployment": { "$ref": "#/components/schemas/SccpSolanaDestinationDeploymentV1" }
                     }
                 }
             ]
@@ -12371,7 +12561,8 @@ fn sccp_crypto_and_registry_schemas(schemas: &mut Map) {
             "type": "object",
             "required": [
                 "lane_id", "route_id", "asset_key", "revision", "activation",
-                "inbound_finality_cutoff", "source_identity", "destination", "settlement"
+                "inbound_finality_cutoff", "source_identity", "destination",
+                "sora_outbound_execution_policy", "settlement"
             ],
             "additionalProperties": false,
             "properties": {
@@ -12398,6 +12589,9 @@ fn sccp_crypto_and_registry_schemas(schemas: &mut Map) {
                 },
                 "source_identity": { "$ref": "#/components/schemas/SccpSourceIdentityV1" },
                 "destination": { "$ref": "#/components/schemas/SccpDestinationDeploymentV1" },
+                "sora_outbound_execution_policy": {
+                    "$ref": "#/components/schemas/SccpSoraOutboundExecutionPolicyV1"
+                },
                 "settlement": { "$ref": "#/components/schemas/SccpSoraSettlementV1" }
             }
         }),
@@ -12446,6 +12640,36 @@ fn sccp_crypto_and_registry_schemas(schemas: &mut Map) {
                     "type": "array", "maxItems": 16,
                     "items": { "$ref": "#/components/schemas/SccpGovernedLaneV1" },
                     "description": "At most 16 unique lanes and 64 nonterminal governed routes in total; terminal history remains retained for exact message resolution."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "SccpSoraOutboundMaterialV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "version", "registry_revision", "route_key", "route_configuration_hash",
+                "destination_binding_hash", "settlement_asset_definition_id", "policy",
+                "contract_artifact_b64", "contract_code_hash", "verifying_key_version"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "version": { "type": "integer", "enum": [1] },
+                "registry_revision": { "$ref": "#/components/schemas/SccpPrefixedHex32" },
+                "route_key": { "$ref": "#/components/schemas/SccpRouteKeyV1" },
+                "route_configuration_hash": { "$ref": "#/components/schemas/SccpPrefixedHex32" },
+                "destination_binding_hash": { "$ref": "#/components/schemas/SccpPrefixedHex32" },
+                "settlement_asset_definition_id": { "const": "6TEAJqbb8oEPmLncoNiMRbLEK6tw" },
+                "policy": { "$ref": "#/components/schemas/SccpSoraOutboundExecutionPolicyV1" },
+                "contract_artifact_b64": {
+                    "allOf": [{ "$ref": "#/components/schemas/SccpCanonicalBase64" }],
+                    "maxLength": 11184812
+                },
+                "contract_code_hash": { "$ref": "#/components/schemas/SccpPrefixedHex32" },
+                "verifying_key_version": {
+                    "type": "integer", "format": "uint32", "minimum": 1,
+                    "maximum": 4294967295_u64
                 }
             }
         }),
@@ -12533,8 +12757,8 @@ fn sccp_artifact_and_recent_schemas(schemas: &mut Map) {
             "type": "object",
             "required": [
                 "version", "registry_revision", "registry_path", "message_bundle_path",
-                "proof_request_path", "recent_messages_path", "registry_limits",
-                "resource_limits"
+                "proof_request_path", "recent_messages_path", "sora_outbound_material_path",
+                "registry_limits", "resource_limits"
             ],
             "dependentRequired": {
                 "proof_submit_path": ["native_message_submit_path"],
@@ -12548,6 +12772,9 @@ fn sccp_artifact_and_recent_schemas(schemas: &mut Map) {
                 "message_bundle_path": { "const": "/v1/sccp/proofs/message/{message_id}" },
                 "proof_request_path": { "const": "/v1/sccp/proof-requests/{message_id}" },
                 "recent_messages_path": { "const": "/v1/sccp/messages/recent" },
+                "sora_outbound_material_path": {
+                    "const": "/v1/sccp/routes/{source_profile}/{route_id}/{asset_key}/{revision}/sora-outbound-material"
+                },
                 "registry_limits": { "$ref": "#/components/schemas/SccpRegistryLimitsV1" },
                 "resource_limits": { "$ref": "#/components/schemas/SccpResourceLimitsV1" },
                 "proof_submit_path": { "const": "/v1/bridge/proofs/submit" },
@@ -12597,7 +12824,10 @@ fn sccp_artifact_and_recent_schemas(schemas: &mut Map) {
                     "properties": {
                         "value": {
                             "type": "string",
-                            "enum": ["taira_eth_xor", "taira_bsc_xor", "taira_tron_xor"]
+                            "enum": [
+                                "taira_eth_xor", "taira_bsc_xor", "taira_sol_xor",
+                                "taira_tron_xor"
+                            ]
                         }
                     }
                 }
@@ -12643,11 +12873,32 @@ fn sccp_artifact_and_recent_schemas(schemas: &mut Map) {
         }),
     );
     schemas.insert(
+        "SccpSolanaPubkeyValueV1".to_owned(),
+        norito::json!({
+            "type": "object", "required": ["SolanaPubkey32"],
+            "additionalProperties": false,
+            "properties": {
+                "SolanaPubkey32": {
+                    "type": "object", "required": ["bytes"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "bytes": {
+                            "type": "string", "minLength": 66, "maxLength": 66,
+                            "pattern": "^0x[0-9a-f]{64}$",
+                            "not": { "pattern": "^0x0{64}$" }
+                        }
+                    }
+                }
+            }
+        }),
+    );
+    schemas.insert(
         "SccpNormalizedCodecValueV1".to_owned(),
         norito::json!({
             "oneOf": [
                 { "$ref": "#/components/schemas/SccpCanonicalTextValueV1" },
                 { "$ref": "#/components/schemas/SccpEvmAddressValueV1" },
+                { "$ref": "#/components/schemas/SccpSolanaPubkeyValueV1" },
                 { "$ref": "#/components/schemas/SccpTronAddressValueV1" }
             ]
         }),
@@ -12664,10 +12915,11 @@ fn sccp_artifact_and_recent_schemas(schemas: &mut Map) {
             "properties": {
                 "version": { "type": "integer", "enum": [1] },
                 "source_domain": { "type": "integer", "const": 0 },
-                "dest_domain": { "type": "integer", "enum": [1, 2, 5] },
+                "dest_domain": { "type": "integer", "enum": [1, 2, 3, 5] },
                 "nonce": {
-                    "type": "integer", "format": "uint64", "minimum": 0,
-                    "maximum": 18446744073709551615_u64
+                    "type": "string", "minLength": 1, "maxLength": 20,
+                    "pattern": "^(?:0|[1-9][0-9]*)$",
+                    "description": "Canonical unsigned 64-bit decimal string."
                 },
                 "route_revision": {
                     "type": "integer", "format": "uint32", "minimum": 1,
@@ -12676,13 +12928,15 @@ fn sccp_artifact_and_recent_schemas(schemas: &mut Map) {
                 "asset_home_domain": { "type": "integer", "const": 0 },
                 "asset_id": { "$ref": "#/components/schemas/SccpXorAssetValueV1" },
                 "amount": {
-                    "type": "integer", "minimum": 1,
-                    "description": "Positive unsigned 128-bit transfer amount."
+                    "type": "string", "minLength": 1, "maxLength": 39,
+                    "pattern": "^[1-9][0-9]*$",
+                    "description": "Canonical positive unsigned 128-bit transfer amount."
                 },
                 "sender": { "$ref": "#/components/schemas/SccpCanonicalTextValueV1" },
                 "recipient": {
                     "oneOf": [
                         { "$ref": "#/components/schemas/SccpEvmAddressValueV1" },
+                        { "$ref": "#/components/schemas/SccpSolanaPubkeyValueV1" },
                         { "$ref": "#/components/schemas/SccpTronAddressValueV1" }
                     ]
                 },
@@ -12714,6 +12968,21 @@ fn sccp_artifact_and_recent_schemas(schemas: &mut Map) {
                                 "CanonicalText": {
                                     "type": "object", "required": ["value"],
                                     "properties": { "value": { "const": "taira_bsc_xor" } }
+                                }
+                            }
+                        }
+                    }
+                },
+                {
+                    "properties": {
+                        "dest_domain": { "const": 3 },
+                        "recipient": { "$ref": "#/components/schemas/SccpSolanaPubkeyValueV1" },
+                        "route_id": {
+                            "type": "object", "required": ["CanonicalText"],
+                            "properties": {
+                                "CanonicalText": {
+                                    "type": "object", "required": ["value"],
+                                    "properties": { "value": { "const": "taira_sol_xor" } }
                                 }
                             }
                         }
@@ -12808,12 +13077,12 @@ fn sccp_artifact_and_recent_schemas(schemas: &mut Map) {
                     "type": "string",
                     "enum": [
                         "ethereum-mainnet", "ethereum-sepolia", "bsc-mainnet", "bsc-testnet",
-                        "tron-mainnet", "tron-nile", "tron-shasta"
+                        "solana-testnet", "tron-mainnet", "tron-nile", "tron-shasta"
                     ]
                 },
                 "destination_binding_hash": { "$ref": "#/components/schemas/SccpPrefixedHex32" },
                 "route_configuration_hash": { "$ref": "#/components/schemas/SccpPrefixedHex32" },
-                "target_domain": { "type": "integer", "enum": [1, 2, 5] },
+                "target_domain": { "type": "integer", "enum": [1, 2, 3, 5] },
                 "asset_id": { "type": "string", "minLength": 1, "maxLength": 4096 },
                 "route_id": { "type": "string", "minLength": 1, "maxLength": 4096 },
                 "recipient": { "type": "string", "minLength": 1, "maxLength": 4096 },
@@ -14878,6 +15147,107 @@ fn openapi_schemas() -> Map {
             "description": "Arbitrary JSON payload.",
             "type": ["object", "array", "string", "number", "boolean", "null"],
             "additionalProperties": true
+        }),
+    );
+    schemas.insert(
+        "ExplorerSccpRouteGovernanceInstructionValue".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["action", "window", "mode"],
+            "additionalProperties": false,
+            "properties": {
+                "action": { "$ref": "#/components/schemas/SccpRouteGovernanceActionV1" },
+                "window": {
+                    "oneOf": [
+                        { "$ref": "#/components/schemas/SccpAtWindowV1" },
+                        { "type": "null" }
+                    ]
+                },
+                "mode": {
+                    "oneOf": [
+                        { "type": "string", "enum": ["Zk", "Plain"] },
+                        { "type": "null" }
+                    ]
+                }
+            },
+            "description": "Exact public fields of one ProposeSccpRouteGovernance instruction; no transaction signer or signing secret is included."
+        }),
+    );
+    schemas.insert(
+        "ExplorerSccpRouteGovernanceInstructionPayload".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["variant", "value"],
+            "additionalProperties": false,
+            "properties": {
+                "variant": { "const": "ProposeSccpRouteGovernance" },
+                "value": {
+                    "$ref": "#/components/schemas/ExplorerSccpRouteGovernanceInstructionValue"
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "ExplorerInstructionPayload".to_owned(),
+        norito::json!({
+            "anyOf": [
+                {
+                    "$ref": "#/components/schemas/ExplorerSccpRouteGovernanceInstructionPayload"
+                },
+                { "$ref": "#/components/schemas/JsonValue" }
+            ],
+            "description": "Typed public explorer payload when a dedicated schema is available; otherwise the canonical public instruction projection."
+        }),
+    );
+    schemas.insert(
+        "ExplorerInstructionDetail".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "authority", "created_at", "kind", "box", "transaction_hash",
+                "transaction_status", "block", "index"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "authority": { "type": "string", "minLength": 1 },
+                "created_at": { "type": "string", "format": "date-time" },
+                "kind": { "type": "string", "minLength": 1 },
+                "box": {
+                    "type": "object",
+                    "required": ["encoded", "framed_sha256", "json"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "encoded": {
+                            "type": "string",
+                            "pattern": "^0x[0-9a-f]+$",
+                            "description": "Exact lowercase Norito instruction-box bytes."
+                        },
+                        "framed_sha256": {
+                            "type": "string",
+                            "pattern": "^0x[0-9a-f]{64}$",
+                            "description": "SHA-256 of the canonical wire-id-framed instruction bytes returned by governance draft endpoints."
+                        },
+                        "json": {
+                            "type": "object",
+                            "required": ["kind", "payload", "wire_id", "encoded"],
+                            "additionalProperties": false,
+                            "properties": {
+                                "kind": { "type": "string", "minLength": 1 },
+                                "wire_id": { "type": "string", "minLength": 1 },
+                                "encoded": { "type": "string", "pattern": "^[0-9a-f]+$" },
+                                "payload": {
+                                    "$ref": "#/components/schemas/ExplorerInstructionPayload",
+                                    "description": "Typed public instruction payload. ProposeSccpRouteGovernance is exposed as variant ProposeSccpRouteGovernance with the exact public action, window, and mode; signer secrets are never part of this payload."
+                                }
+                            }
+                        }
+                    }
+                },
+                "transaction_hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+                "transaction_status": { "type": "string", "enum": ["Committed", "Rejected"] },
+                "block": { "type": "integer", "format": "uint64", "minimum": 1 },
+                "index": { "type": "integer", "format": "uint32", "minimum": 0 }
+            }
         }),
     );
     schemas.insert(
@@ -22390,6 +22760,10 @@ mod tests {
                 "/v1/sccp/messages/recent",
                 "#/components/schemas/SccpRecentMessagesV1",
             ),
+            (
+                "/v1/sccp/routes/{source_profile}/{route_id}/{asset_key}/{revision}/sora-outbound-material",
+                "#/components/schemas/SccpSoraOutboundMaterialV1",
+            ),
         ] {
             let content = paths
                 .get(path)
@@ -22500,6 +22874,123 @@ mod tests {
     }
 
     #[test]
+    fn generated_spec_sccp_projection_uses_exact_integer_strings_and_solana_case() {
+        let doc = generate_spec();
+        let schemas = doc
+            .get("components")
+            .and_then(Value::as_object)
+            .and_then(|components| components.get("schemas"))
+            .and_then(Value::as_object)
+            .expect("OpenAPI schemas");
+        let schema = |name: &str| {
+            schemas
+                .get(name)
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("missing SCCP schema `{name}`"))
+        };
+        let projection = schema("SccpTransferProjectionV1");
+        let properties = projection
+            .get("properties")
+            .and_then(Value::as_object)
+            .expect("SCCP transfer projection properties");
+        for (field, maximum_length) in [("nonce", 20_u64), ("amount", 39_u64)] {
+            let field_schema = properties
+                .get(field)
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("missing projection field `{field}`"));
+            assert_eq!(
+                field_schema.get("type").and_then(Value::as_str),
+                Some("string")
+            );
+            assert_eq!(
+                field_schema.get("maxLength").and_then(Value::as_u64),
+                Some(maximum_length)
+            );
+        }
+        assert!(
+            properties
+                .get("dest_domain")
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("enum"))
+                .and_then(Value::as_array)
+                .is_some_and(|domains| domains.contains(&Value::from(3_u64)))
+        );
+        let recent_properties = schema("SccpRecentMessageV1")
+            .get("properties")
+            .and_then(Value::as_object)
+            .expect("SCCP recent-message properties");
+        assert!(
+            recent_properties
+                .get("target_profile")
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("enum"))
+                .and_then(Value::as_array)
+                .is_some_and(|profiles| profiles.contains(&Value::from("solana-testnet")))
+        );
+        assert!(
+            recent_properties
+                .get("target_domain")
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("enum"))
+                .and_then(Value::as_array)
+                .is_some_and(|domains| domains.contains(&Value::from(3_u64)))
+        );
+
+        let normalized_refs = schema("SccpNormalizedCodecValueV1")
+            .get("oneOf")
+            .and_then(Value::as_array)
+            .expect("normalized SCCP value union")
+            .iter()
+            .filter_map(Value::as_object)
+            .filter_map(|entry| entry.get("$ref"))
+            .filter_map(Value::as_str)
+            .collect::<Vec<_>>();
+        assert!(normalized_refs.contains(&"#/components/schemas/SccpSolanaPubkeyValueV1"));
+
+        let solana_case = projection
+            .get("oneOf")
+            .and_then(Value::as_array)
+            .expect("exact SCCP projection cases")
+            .iter()
+            .filter_map(Value::as_object)
+            .filter_map(|case| case.get("properties"))
+            .filter_map(Value::as_object)
+            .find(|properties| {
+                properties
+                    .get("dest_domain")
+                    .and_then(Value::as_object)
+                    .and_then(|domain| domain.get("const"))
+                    .and_then(Value::as_u64)
+                    == Some(3)
+            })
+            .expect("exact Solana projection case");
+        assert_eq!(
+            solana_case
+                .get("recipient")
+                .and_then(Value::as_object)
+                .and_then(|recipient| recipient.get("$ref"))
+                .and_then(Value::as_str),
+            Some("#/components/schemas/SccpSolanaPubkeyValueV1")
+        );
+        assert_eq!(
+            solana_case
+                .get("route_id")
+                .and_then(Value::as_object)
+                .and_then(|route| route.get("properties"))
+                .and_then(Value::as_object)
+                .and_then(|properties| properties.get("CanonicalText"))
+                .and_then(Value::as_object)
+                .and_then(|canonical| canonical.get("properties"))
+                .and_then(Value::as_object)
+                .and_then(|properties| properties.get("value"))
+                .and_then(Value::as_object)
+                .and_then(|value| value.get("const"))
+                .and_then(Value::as_str),
+            Some("taira_sol_xor")
+        );
+    }
+
+    #[test]
     fn generated_spec_has_exact_first_release_sccp_and_bridge_operations() {
         let document = generate_spec();
         let paths = document
@@ -22527,6 +23018,10 @@ mod tests {
             ("/v1/sccp/registry", "get"),
             ("/v1/sccp/proof-requests/{message_id}", "get"),
             ("/v1/sccp/messages/recent", "get"),
+            (
+                "/v1/sccp/routes/{source_profile}/{route_id}/{asset_key}/{revision}/sora-outbound-material",
+                "get",
+            ),
         ]);
 
         assert_eq!(actual, expected);
@@ -22600,11 +23095,12 @@ mod tests {
                 "ethereum_sepolia",
                 "bsc_mainnet",
                 "bsc_testnet",
+                "solana_testnet",
                 "tron_mainnet",
                 "tron_nile",
                 "tron_shasta",
             ],
-            "SCCP V1 must expose only the Ethereum/BSC/TRON release corridor"
+            "SCCP V1 must expose only the governed Ethereum/BSC/Solana/TRON release corridor"
         );
         assert_eq!(
             external_network_properties
@@ -22999,9 +23495,22 @@ mod tests {
         let variants = deployment
             .get("oneOf")
             .and_then(Value::as_array)
-            .expect("EVM/TRON SCCP deployment variants");
-        assert_eq!(variants.len(), 2);
-        for (variant, expected_family) in variants.iter().zip(["evm", "tron"]) {
+            .expect("EVM/TRON/Solana SCCP deployment variants");
+        assert_eq!(variants.len(), 3);
+        for (variant, (expected_family, expected_schema)) in variants.iter().zip([
+            (
+                "evm",
+                "#/components/schemas/SccpDestinationDeploymentDetailsV1",
+            ),
+            (
+                "tron",
+                "#/components/schemas/SccpDestinationDeploymentDetailsV1",
+            ),
+            (
+                "solana",
+                "#/components/schemas/SccpSolanaDestinationDeploymentV1",
+            ),
+        ]) {
             let properties = variant
                 .as_object()
                 .and_then(|variant| variant.get("properties"))
@@ -23021,10 +23530,26 @@ mod tests {
                     .and_then(Value::as_object)
                     .and_then(|details| details.get("$ref"))
                     .and_then(Value::as_str),
-                Some("#/components/schemas/SccpDestinationDeploymentDetailsV1"),
+                Some(expected_schema),
                 "{expected_family} deployments must use the policy-bearing details schema"
             );
         }
+
+        let governed_route_name = "SccpGovernedRouteV1";
+        let governed_route = schema(schemas, governed_route_name);
+        assert!(
+            required(governed_route, governed_route_name)
+                .contains(&"sora_outbound_execution_policy"),
+            "every governed route must pin its exact SORA-side proved execution policy"
+        );
+        assert_eq!(
+            properties(governed_route, governed_route_name)
+                .get("sora_outbound_execution_policy")
+                .and_then(Value::as_object)
+                .and_then(|policy| policy.get("$ref"))
+                .and_then(Value::as_str),
+            Some("#/components/schemas/SccpSoraOutboundExecutionPolicyV1")
+        );
 
         let governed_lane_name = "SccpGovernedLaneV1";
         let governed_lane = schema(schemas, governed_lane_name);
@@ -23049,6 +23574,147 @@ mod tests {
             !governed_lane_properties.contains_key("native_trust_anchor"),
             "the policy-less singular governed-lane trust-anchor shape is not a V1 alias"
         );
+    }
+
+    #[test]
+    fn generated_spec_sccp_sora_outbound_material_is_exact_public_readback() {
+        fn schema<'a>(schemas: &'a Map, name: &str) -> &'a Map {
+            schemas
+                .get(name)
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("missing SCCP schema `{name}`"))
+        }
+
+        fn required(schema: &Map) -> Vec<&str> {
+            schema
+                .get("required")
+                .and_then(Value::as_array)
+                .expect("required fields")
+                .iter()
+                .map(|field| field.as_str().expect("required field name"))
+                .collect()
+        }
+
+        let doc = generate_spec();
+        let paths = doc
+            .get("paths")
+            .and_then(Value::as_object)
+            .expect("paths section");
+        let path = "/v1/sccp/routes/{source_profile}/{route_id}/{asset_key}/{revision}/sora-outbound-material";
+        let response_ref = paths
+            .get(path)
+            .and_then(Value::as_object)
+            .and_then(|path| path.get("get"))
+            .and_then(Value::as_object)
+            .and_then(|get| get.get("responses"))
+            .and_then(Value::as_object)
+            .and_then(|responses| responses.get("200"))
+            .and_then(Value::as_object)
+            .and_then(|response| response.get("content"))
+            .and_then(Value::as_object)
+            .and_then(|content| content.get("application/json"))
+            .and_then(Value::as_object)
+            .and_then(|media| media.get("schema"))
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("$ref"))
+            .and_then(Value::as_str);
+        assert_eq!(
+            response_ref,
+            Some("#/components/schemas/SccpSoraOutboundMaterialV1")
+        );
+
+        let schemas = doc
+            .get("components")
+            .and_then(Value::as_object)
+            .and_then(|components| components.get("schemas"))
+            .and_then(Value::as_object)
+            .expect("schemas section");
+        let material = schema(schemas, "SccpSoraOutboundMaterialV1");
+        assert_eq!(
+            required(material),
+            [
+                "version",
+                "registry_revision",
+                "route_key",
+                "route_configuration_hash",
+                "destination_binding_hash",
+                "settlement_asset_definition_id",
+                "policy",
+                "contract_artifact_b64",
+                "contract_code_hash",
+                "verifying_key_version",
+            ]
+        );
+        assert_eq!(
+            material.get("additionalProperties"),
+            Some(&Value::Bool(false))
+        );
+        let material_properties = material
+            .get("properties")
+            .and_then(Value::as_object)
+            .expect("outbound material properties");
+        assert_eq!(material_properties.len(), 10);
+        assert_eq!(
+            material_properties
+                .get("verifying_key_version")
+                .and_then(Value::as_object)
+                .and_then(|version| version.get("minimum"))
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+
+        let policy = schema(schemas, "SccpSoraOutboundExecutionPolicyV1");
+        assert_eq!(
+            required(policy),
+            [
+                "version",
+                "semantics",
+                "contract_artifact_sha256",
+                "vk_ref",
+                "gas_limit",
+            ]
+        );
+        assert_eq!(
+            policy.get("additionalProperties"),
+            Some(&Value::Bool(false))
+        );
+
+        let vk_ref = schema(schemas, "SccpPortableVerifyingKeyRefV1");
+        assert_eq!(
+            required(vk_ref),
+            ["backend", "name", "version", "commitment"]
+        );
+        assert_eq!(
+            vk_ref.get("additionalProperties"),
+            Some(&Value::Bool(false))
+        );
+        let vk_properties = vk_ref
+            .get("properties")
+            .and_then(Value::as_object)
+            .expect("portable verifying-key properties");
+        assert_eq!(vk_properties.len(), 4);
+        assert_eq!(
+            vk_properties
+                .get("version")
+                .and_then(Value::as_object)
+                .and_then(|version| version.get("minimum"))
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            vk_properties
+                .get("commitment")
+                .and_then(Value::as_object)
+                .and_then(|commitment| commitment.get("$ref"))
+                .and_then(Value::as_str),
+            Some("#/components/schemas/SccpNonzeroUpperHex32")
+        );
+        for secret in ["private_key", "secret", "signer", "seed", "mnemonic"] {
+            assert!(
+                !material_properties.contains_key(secret),
+                "outbound material must not advertise `{secret}`"
+            );
+        }
     }
 
     #[test]
@@ -23800,6 +24466,9 @@ mod tests {
         assert!(paths.contains_key("/v1/sccp/registry"));
         assert!(paths.contains_key("/v1/sccp/proof-requests/{message_id}"));
         assert!(paths.contains_key("/v1/sccp/messages/recent"));
+        assert!(paths.contains_key(
+            "/v1/sccp/routes/{source_profile}/{route_id}/{asset_key}/{revision}/sora-outbound-material"
+        ));
         assert!(paths.contains_key("/v1/bridge/proofs/submit"));
         assert!(paths.contains_key("/v1/bridge/messages"));
         assert!(!paths.contains_key("/v1/sccp/manifests"));
@@ -25864,6 +26533,175 @@ mod tests {
         assert!(explorer_instructions.contains(&"transaction_status".to_owned()));
         assert!(explorer_instructions.contains(&"block".to_owned()));
         assert!(explorer_instructions.contains(&"kind".to_owned()));
+    }
+
+    #[test]
+    fn explorer_instruction_detail_documents_typed_sccp_governance_payload() {
+        let doc = generate_spec();
+        let response_schema = doc
+            .get("paths")
+            .and_then(Value::as_object)
+            .and_then(|paths| paths.get("/v1/explorer/instructions/{hash}/{index}"))
+            .and_then(Value::as_object)
+            .and_then(|path| path.get("get"))
+            .and_then(Value::as_object)
+            .and_then(|get| get.get("responses"))
+            .and_then(Value::as_object)
+            .and_then(|responses| responses.get("200"))
+            .and_then(Value::as_object)
+            .and_then(|response| response.get("content"))
+            .and_then(Value::as_object)
+            .and_then(|content| content.get("application/json"))
+            .and_then(Value::as_object)
+            .and_then(|media| media.get("schema"))
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("$ref"))
+            .and_then(Value::as_str);
+        assert_eq!(
+            response_schema,
+            Some("#/components/schemas/ExplorerInstructionDetail")
+        );
+        let schemas = doc
+            .get("components")
+            .and_then(Value::as_object)
+            .and_then(|components| components.get("schemas"))
+            .and_then(Value::as_object)
+            .expect("OpenAPI schemas");
+        let instruction_box = schemas
+            .get("ExplorerInstructionDetail")
+            .and_then(Value::as_object)
+            .and_then(|detail| detail.get("properties"))
+            .and_then(Value::as_object)
+            .and_then(|properties| properties.get("box"))
+            .and_then(Value::as_object)
+            .expect("explorer instruction box schema");
+        assert_eq!(
+            instruction_box
+                .get("required")
+                .and_then(Value::as_array)
+                .expect("explorer instruction box required fields"),
+            &vec![
+                Value::from("encoded"),
+                Value::from("framed_sha256"),
+                Value::from("json")
+            ]
+        );
+        assert_eq!(
+            instruction_box
+                .get("properties")
+                .and_then(Value::as_object)
+                .and_then(|properties| properties.get("framed_sha256"))
+                .and_then(Value::as_object)
+                .and_then(|sha256| sha256.get("pattern"))
+                .and_then(Value::as_str),
+            Some("^0x[0-9a-f]{64}$")
+        );
+        let instruction_payload = schemas
+            .get("ExplorerInstructionPayload")
+            .and_then(Value::as_object)
+            .expect("typed explorer instruction payload schema");
+        assert!(
+            instruction_payload
+                .get("anyOf")
+                .and_then(Value::as_array)
+                .is_some_and(|variants| variants.iter().any(|variant| {
+                    variant
+                        .as_object()
+                        .and_then(|variant| variant.get("$ref"))
+                        .and_then(Value::as_str)
+                        == Some(
+                            "#/components/schemas/ExplorerSccpRouteGovernanceInstructionPayload",
+                        )
+                }))
+        );
+        let governance_payload = schemas
+            .get("ExplorerSccpRouteGovernanceInstructionPayload")
+            .and_then(Value::as_object)
+            .expect("SCCP governance explorer payload schema");
+        assert_eq!(
+            governance_payload
+                .get("properties")
+                .and_then(Value::as_object)
+                .and_then(|properties| properties.get("variant"))
+                .and_then(Value::as_object)
+                .and_then(|variant| variant.get("const"))
+                .and_then(Value::as_str),
+            Some("ProposeSccpRouteGovernance")
+        );
+        let governance_value = schemas
+            .get("ExplorerSccpRouteGovernanceInstructionValue")
+            .and_then(Value::as_object)
+            .expect("SCCP governance explorer value schema");
+        assert_eq!(
+            governance_value
+                .get("required")
+                .and_then(Value::as_array)
+                .expect("exact SCCP governance explorer fields"),
+            &vec![
+                Value::from("action"),
+                Value::from("window"),
+                Value::from("mode")
+            ]
+        );
+        assert_eq!(
+            governance_value
+                .get("properties")
+                .and_then(Value::as_object)
+                .and_then(|properties| properties.get("action"))
+                .and_then(Value::as_object)
+                .and_then(|action| action.get("$ref"))
+                .and_then(Value::as_str),
+            Some("#/components/schemas/SccpRouteGovernanceActionV1")
+        );
+        let payload_description = doc
+            .get("components")
+            .and_then(Value::as_object)
+            .and_then(|components| components.get("schemas"))
+            .and_then(Value::as_object)
+            .and_then(|schemas| schemas.get("ExplorerInstructionDetail"))
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("properties"))
+            .and_then(Value::as_object)
+            .and_then(|properties| properties.get("box"))
+            .and_then(Value::as_object)
+            .and_then(|box_schema| box_schema.get("properties"))
+            .and_then(Value::as_object)
+            .and_then(|properties| properties.get("json"))
+            .and_then(Value::as_object)
+            .and_then(|json_schema| json_schema.get("properties"))
+            .and_then(Value::as_object)
+            .and_then(|properties| properties.get("payload"))
+            .and_then(Value::as_object)
+            .and_then(|payload| payload.get("description"))
+            .and_then(Value::as_str)
+            .expect("typed payload description");
+        assert!(payload_description.contains("ProposeSccpRouteGovernance"));
+        assert!(payload_description.contains("signer secrets are never"));
+        let payload_reference = doc
+            .get("components")
+            .and_then(Value::as_object)
+            .and_then(|components| components.get("schemas"))
+            .and_then(Value::as_object)
+            .and_then(|schemas| schemas.get("ExplorerInstructionDetail"))
+            .and_then(Value::as_object)
+            .and_then(|schema| schema.get("properties"))
+            .and_then(Value::as_object)
+            .and_then(|properties| properties.get("box"))
+            .and_then(Value::as_object)
+            .and_then(|box_schema| box_schema.get("properties"))
+            .and_then(Value::as_object)
+            .and_then(|properties| properties.get("json"))
+            .and_then(Value::as_object)
+            .and_then(|json_schema| json_schema.get("properties"))
+            .and_then(Value::as_object)
+            .and_then(|properties| properties.get("payload"))
+            .and_then(Value::as_object)
+            .and_then(|payload| payload.get("$ref"))
+            .and_then(Value::as_str);
+        assert_eq!(
+            payload_reference,
+            Some("#/components/schemas/ExplorerInstructionPayload")
+        );
     }
 
     #[test]
