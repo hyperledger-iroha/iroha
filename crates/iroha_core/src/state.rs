@@ -30304,6 +30304,7 @@ impl State {
             || record.manifest_root != manifest_root
             || record.fastpq_binding.source_dsid != envelope.dataspace_id.as_u64()
             || record.fastpq_binding.verified_effect_type != LANE_RELAY_FASTPQ_EFFECT_TYPE
+            || record.fastpq_binding.effect_binding.is_some()
         {
             return Err(LaneRelayError::InvalidFastpqProof);
         }
@@ -95184,6 +95185,23 @@ mod tests {
     fn merge_candidates_ignore_contract_state_record_with_effect_type_mismatch() {
         assert_corrupted_contract_state_relay_record_is_ignored(|record| {
             record.fastpq_binding.verified_effect_type = "nexus_fee_budget".to_owned();
+        });
+    }
+
+    #[test]
+    fn merge_candidates_ignore_contract_state_lane_record_with_business_effect_binding() {
+        assert_corrupted_contract_state_relay_record_is_ignored(|record| {
+            record.fastpq_binding.effect_binding =
+                Some(iroha_data_model::nexus::AxtEffectBinding {
+                    destination_domain: Some("hbl.sbp".to_owned()),
+                    destination_account_id: Some("forged-recipient".to_owned()),
+                    vault_account_id: None,
+                    issuance_account_id: None,
+                    source_asset_definition_id: Some("forged-aed".to_owned()),
+                    destination_asset_definition_id: Some("forged-pkr".to_owned()),
+                    source_amount_i64: Some(10),
+                    destination_amount_i64: Some(760),
+                });
         });
     }
 

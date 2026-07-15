@@ -41,7 +41,11 @@ iroha_data_model_derive::model_single! {
         pub envelope: LaneRelayEnvelope,
         /// FASTPQ/AXT proof blob used to verify the relay payload.
         pub proof_blob: ProofBlob,
-        /// Optional FASTPQ/AXT business-effect proof whose binding is persisted for contracts.
+        /// Reserved business-effect proof slot.
+        ///
+        /// The first-release runtime deterministically rejects `Some` until an
+        /// effect-specific statement is derived from a finalized, QC-anchored
+        /// settlement ledger entry. Callers must submit `None`.
         #[norito(skip_serializing_if = "Option::is_none")]
         #[norito(default)]
         pub effect_proof_blob: Option<ProofBlob>,

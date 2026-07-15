@@ -1307,8 +1307,8 @@ mod tests {
 
     use iroha_data_model::{
         account::{
-            Account,
-            rekey::{AccountAlias, AccountAliasDomain},
+            Account, AccountAddress,
+            rekey::{AccountAlias, AccountAliasDomain, AccountRekeyRecord},
         },
         asset::{
             Asset, AssetBalancePolicy, AssetDefinition,
@@ -1320,6 +1320,7 @@ mod tests {
         isi::error::InstructionEvaluationError,
         metadata::Metadata,
         nexus::{DataSpaceCatalog, DataSpaceMetadata},
+        sns::{NameControllerV1, NameRecordV1},
     };
     use iroha_primitives::numeric::{Numeric, NumericSpec, Quantity};
     use iroha_test_samples::{ALICE_ID, BOB_ID, CARPENTER_ID, SAMPLE_GENESIS_ACCOUNT_ID};
@@ -1445,7 +1446,7 @@ mod tests {
             .insert(recipient_alias.clone(), BOB_ID.clone());
         world
             .account_aliases_by_account
-            .insert(BOB_ID.clone(), BTreeSet::from([recipient_alias]));
+            .insert(BOB_ID.clone(), BTreeSet::from([recipient_alias.clone()]));
         let policy = FxCorridorPolicy {
             policy_id,
             revision: 1,
@@ -1464,6 +1465,29 @@ mod tests {
             rate_denominator,
             enabled,
         };
+        let catalog = fx_catalog(&policy);
+        let selector = crate::sns::selector_for_account_alias(&recipient_alias, &catalog)
+            .expect("canonical FX recipient alias selector");
+        let address = AccountAddress::from_account_id(&BOB_ID)
+            .expect("FX recipient account must encode as an address");
+        let record = NameRecordV1::new(
+            selector.clone(),
+            BOB_ID.clone(),
+            vec![NameControllerV1::account(&address)],
+            0,
+            0,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            Metadata::default(),
+        );
+        world
+            .smart_contract_state
+            .insert(crate::sns::record_storage_key(&selector), record.encode());
+        world.account_rekey_records.insert(
+            recipient_alias.clone(),
+            AccountRekeyRecord::new(recipient_alias, BOB_ID.clone()),
+        );
         let state = State::new(
             world,
             Kura::blank_kura_for_testing(),
@@ -1472,8 +1496,8 @@ mod tests {
         (state, policy)
     }
 
-    fn configure_fx_catalog(stx: &mut StateTransaction<'_, '_>, policy: &FxCorridorPolicy) {
-        stx.nexus.dataspace_catalog = DataSpaceCatalog::new(vec![
+    fn fx_catalog(policy: &FxCorridorPolicy) -> DataSpaceCatalog {
+        DataSpaceCatalog::new(vec![
             DataSpaceMetadata::default(),
             DataSpaceMetadata {
                 id: policy.source_dataspace,
@@ -1488,7 +1512,41 @@ mod tests {
                 fault_tolerance: 1,
             },
         ])
-        .expect("FX dataspace catalog");
+        .expect("FX dataspace catalog")
+    }
+
+    fn configure_fx_catalog(stx: &mut StateTransaction<'_, '_>, policy: &FxCorridorPolicy) {
+        stx.nexus.dataspace_catalog = fx_catalog(policy);
+    }
+
+    fn insert_active_fx_alias(
+        stx: &mut StateTransaction<'_, '_>,
+        alias: AccountAlias,
+        account_id: AccountId,
+    ) {
+        let selector = crate::sns::selector_for_account_alias(&alias, &stx.nexus.dataspace_catalog)
+            .expect("canonical FX alias selector");
+        let address = AccountAddress::from_account_id(&account_id)
+            .expect("FX alias owner must encode as an address");
+        let record = NameRecordV1::new(
+            selector.clone(),
+            account_id.clone(),
+            vec![NameControllerV1::account(&address)],
+            0,
+            0,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            Metadata::default(),
+        );
+        stx.world
+            .smart_contract_state
+            .insert(crate::sns::record_storage_key(&selector), record.encode());
+        stx.world.account_rekey_records.insert(
+            alias.clone(),
+            AccountRekeyRecord::new(alias.clone(), account_id.clone()),
+        );
+        stx.world.insert_account_alias_binding(alias, account_id);
     }
 
     fn fx_settlement(policy: &FxCorridorPolicy, id: &str, source_amount: u32) -> SettleFxCorridor {
@@ -1660,7 +1718,8 @@ mod tests {
         );
 
         for (label, domain) in [("hbl_recipient", "hbl"), ("ubl_recipient", "ubl")] {
-            stx.world.insert_account_alias_binding(
+            insert_active_fx_alias(
+                &mut stx,
                 AccountAlias::new(
                     label.parse().expect("alias label"),
                     Some(AccountAliasDomain::new(
@@ -1693,7 +1752,8 @@ mod tests {
         .expect("policy registration succeeds");
 
         stx.world.remove_account_alias_bindings_for_account(&BOB_ID);
-        stx.world.insert_account_alias_binding(
+        insert_active_fx_alias(
+            &mut stx,
             AccountAlias::new(
                 "other_recipient".parse().expect("alias label"),
                 Some(AccountAliasDomain::new(

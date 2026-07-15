@@ -153,7 +153,13 @@ echo $ANDROID_NDK_HOME  # must point to NDK 28+
 This Gradle task:
 1. Reads `iroha.dir` from `local.properties`
 2. Runs `cargo ndk` for `arm64-v8a` and `x86_64` targets
-3. Copies `libconnect_norito_bridge.so` into `client-android/src/main/jniLibs/`
+3. Canonically strips both libraries with the selected Android NDK's
+   `llvm-strip --strip-unneeded`
+4. Writes `libconnect_norito_bridge.so` into `client-android/src/main/jniLibs/`
+
+The release AAR preserves those exact staged bytes. The mobile artifact checker
+rejects an unstripped library or any hash difference between `jniLibs` and the
+AAR.
 
 The production-gated form passes `--features privacy-production-enabled` to
 `connect_norito_bridge`; the default form intentionally omits that feature so
@@ -163,10 +169,10 @@ First build takes ~5-10 minutes (compiles all Rust dependencies). Incremental bu
 
 **Output:**
 
-| ABI | File | Size |
-|-----|------|-----:|
-| arm64-v8a | `client-android/src/main/jniLibs/arm64-v8a/libconnect_norito_bridge.so` | ~14MB |
-| x86_64 | `client-android/src/main/jniLibs/x86_64/libconnect_norito_bridge.so` | ~18MB |
+| ABI | File |
+|-----|------|
+| arm64-v8a | `client-android/src/main/jniLibs/arm64-v8a/libconnect_norito_bridge.so` |
+| x86_64 | `client-android/src/main/jniLibs/x86_64/libconnect_norito_bridge.so` |
 
 > **Note:** `armeabi-v7a` (32-bit ARM) is not supported due to an upstream `rkyv` crate incompatibility with 32-bit targets.
 

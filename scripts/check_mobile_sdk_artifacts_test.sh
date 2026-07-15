@@ -371,6 +371,125 @@ SETTINGS
   printf '<manifest />\n' >"$root/kotlin/client-android/src/main/AndroidManifest.xml"
 }
 
+append_candidate_lab_source() {
+  local root="$1"
+  python3 - "$CHECK_SCRIPT" "$root" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+check_script = Path(sys.argv[1]).read_text(encoding="utf-8")
+root = Path(sys.argv[2])
+
+
+def shell_array(name):
+    match = re.search(
+        rf"^{name}=\(\n(.*?)^\)$", check_script, re.MULTILINE | re.DOTALL
+    )
+    if match is None:
+        raise SystemExit(f"missing fixture array {name}")
+    return [
+        line.strip()
+        for line in match.group(1).splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+
+
+feature = "kagemusha-candidate-evidence-lab"
+marker = "KAGEMUSHA_CANDIDATE_EVIDENCE_LAB_DO_NOT_SHIP_V2"
+marker_symbol = "CONNECT_NORITO_KAGEMUSHA_CANDIDATE_EVIDENCE_LAB_DO_NOT_SHIP_V2"
+symbols = shell_array("KAGEMUSHA_CANDIDATE_LAB_C_SYMBOLS")
+declarations = []
+for symbol in symbols:
+    declarations.extend(
+        [
+            f'#[cfg(feature = "{feature}")]',
+            "#[unsafe(no_mangle)]",
+            f'pub unsafe extern "C" fn {symbol}() {{}}',
+            "",
+        ]
+    )
+declarations.extend(
+    [
+        f'#[cfg(feature = "{feature}")]',
+        "pub const KAGEMUSHA_CANDIDATE_EVIDENCE_LAB_DO_NOT_SHIP_MARKER_V2: &str =",
+        f'    "{marker}";',
+        "",
+        f'#[cfg(feature = "{feature}")]',
+        "#[used]",
+        "#[unsafe(no_mangle)]",
+        f"pub static {marker_symbol}: [u8;",
+        "    KAGEMUSHA_CANDIDATE_EVIDENCE_LAB_DO_NOT_SHIP_MARKER_V2.len()] =",
+        f'    *b"{marker}";',
+        "",
+        "#[cfg(all(",
+        f'    feature = "{feature}",',
+        "    any(",
+        '        target_os = "android",',
+        '        target_os = "linux",',
+        '        target_os = "macos",',
+        '        target_os = "windows"',
+        "    )",
+        "))]",
+        "#[allow(clippy::missing_safety_doc)]",
+        "#[unsafe(no_mangle)]",
+        'pub unsafe extern "system" fn '
+        "Java_org_hyperledger_iroha_sdk_kagemusha_candidate_lab_"
+        "KagemushaCandidateLabNative_nativeBridgeAbiVersion() {}",
+        "",
+    ]
+)
+source = root / "crates/connect_norito_bridge/src/lib.rs"
+source.write_text(
+    source.read_text(encoding="utf-8") + "\n".join(declarations),
+    encoding="utf-8",
+)
+cargo = root / "crates/connect_norito_bridge/Cargo.toml"
+cargo.write_text(
+    "[features]\n"
+    f'{feature} = ["iroha_core/{feature}"]\n',
+    encoding="utf-8",
+)
+PY
+}
+
+append_candidate_lab_header() {
+  local root="$1"
+  python3 - "$CHECK_SCRIPT" "$root" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+check_script = Path(sys.argv[1]).read_text(encoding="utf-8")
+root = Path(sys.argv[2])
+match = re.search(
+    r"^KAGEMUSHA_CANDIDATE_LAB_C_SYMBOLS=\(\n(.*?)^\)$",
+    check_script,
+    re.MULTILINE | re.DOTALL,
+)
+if match is None:
+    raise SystemExit("missing candidate-lab fixture array")
+symbols = [
+    line.strip()
+    for line in match.group(1).splitlines()
+    if line.strip() and not line.lstrip().startswith("#")
+]
+block = [
+    "#ifdef CONNECT_NORITO_KAGEMUSHA_CANDIDATE_EVIDENCE_LAB",
+    "extern const uint8_t "
+    "CONNECT_NORITO_KAGEMUSHA_CANDIDATE_EVIDENCE_LAB_DO_NOT_SHIP_V2[];",
+    *(f"int32_t {symbol}(void);" for symbol in symbols),
+    "#endif",
+    "",
+]
+header = root / "crates/connect_norito_bridge/include/connect_norito_bridge.h"
+header.write_text(
+    header.read_text(encoding="utf-8") + "\n".join(block),
+    encoding="utf-8",
+)
+PY
+}
+
 run_expect_pass() {
   local root="$1"
   shift
@@ -464,7 +583,15 @@ if os.environ.get("MOBILE_SDK_TEST_EXTRA_ANDROID_KAGEMUSHA") == "1":
     print("connect_norito_kagemusha_recursive_spend_init_v3")
 PY
 SH
-  chmod +x "$tools/llvm-nm"
+  cat >"$tools/file" <<'SH'
+#!/usr/bin/env bash
+if [[ "${MOBILE_SDK_TEST_ANDROID_UNSTRIPPED:-0}" == "1" ]]; then
+  printf 'ELF 64-bit LSB shared object, dynamically linked, not stripped\n'
+else
+  printf 'ELF 64-bit LSB shared object, dynamically linked, stripped\n'
+fi
+SH
+  chmod +x "$tools/llvm-nm" "$tools/file"
 }
 
 run_expect_binary_fail() {
@@ -523,6 +650,28 @@ run_expect_android_binary_fail() {
   esac
 }
 
+run_expect_android_unstripped_fail() {
+  local root="$1"
+  local tools="$2"
+  local output
+  if output="$(PATH="$tools:$PATH" \
+      MOBILE_SDK_ANDROID_NM="$tools/llvm-nm" \
+      MOBILE_SDK_SKIP_BINARY_INSPECTION=0 \
+      MOBILE_SDK_TEST_CHECK_SCRIPT="$CHECK_SCRIPT" \
+      MOBILE_SDK_TEST_ANDROID_UNSTRIPPED=1 \
+      bash "$CHECK_SCRIPT" "$root" --android-only --require-built-android 2>&1)"; then
+    printf '%s\n' "$output" >&2
+    fail "expected strict Android binary validation to reject an unstripped bridge"
+  fi
+  case "$output" in
+    *"native bridge is not canonically stripped"*) ;;
+    *)
+      printf '%s\n' "$output" >&2
+      fail "expected strict Android unstripped-binary failure"
+      ;;
+  esac
+}
+
 fixture="$TMP_DIR/valid"
 make_fixture "$fixture"
 run_expect_pass "$fixture"
@@ -537,12 +686,268 @@ run_expect_pass "$sentinel_only_source"
 
 feature_gated_candidate_lab_source="$TMP_DIR/feature-gated-candidate-lab-source"
 make_fixture "$feature_gated_candidate_lab_source"
-cat >>"$feature_gated_candidate_lab_source/crates/connect_norito_bridge/src/lib.rs" <<'RUST'
+append_candidate_lab_source "$feature_gated_candidate_lab_source"
+run_expect_pass "$feature_gated_candidate_lab_source"
+
+candidate_lab_source_without_export="$TMP_DIR/candidate-lab-source-without-export"
+make_fixture "$candidate_lab_source_without_export"
+append_candidate_lab_source "$candidate_lab_source_without_export"
+python3 - "$candidate_lab_source_without_export" <<'PY'
+from pathlib import Path
+import sys
+
+source = Path(sys.argv[1]) / "crates/connect_norito_bridge/src/lib.rs"
+text = source.read_text(encoding="utf-8")
+name = "connect_norito_kagemusha_recursive_spend_candidate_lab_artifact_begin_v4"
+old = (
+    '#[cfg(feature = "kagemusha-candidate-evidence-lab")]\n'
+    "#[unsafe(no_mangle)]\n"
+    f'pub unsafe extern "C" fn {name}'
+)
+replacement = (
+    '#[cfg(feature = "kagemusha-candidate-evidence-lab")]\n'
+    f"unsafe fn {name}"
+)
+if text.count(old) != 1:
+    raise SystemExit("missing exact candidate-lab export fixture")
+source.write_text(text.replace(old, replacement, 1), encoding="utf-8")
+PY
+run_expect_fail \
+  "$candidate_lab_source_without_export" \
+  "candidate-lab Rust/C export inventory is not exact"
+
+unguarded_candidate_lab_source="$TMP_DIR/unguarded-candidate-lab-source"
+make_fixture "$unguarded_candidate_lab_source"
+append_candidate_lab_source "$unguarded_candidate_lab_source"
+python3 - "$unguarded_candidate_lab_source" <<'PY'
+from pathlib import Path
+import sys
+
+source = Path(sys.argv[1]) / "crates/connect_norito_bridge/src/lib.rs"
+text = source.read_text(encoding="utf-8")
+name = "connect_norito_kagemusha_recursive_spend_candidate_lab_artifact_begin_v4"
+old = (
+    '#[cfg(feature = "kagemusha-candidate-evidence-lab")]\n'
+    "#[unsafe(no_mangle)]\n"
+    f'pub unsafe extern "C" fn {name}'
+)
+replacement = "#[unsafe(no_mangle)]\n" f'pub unsafe extern "C" fn {name}'
+if text.count(old) != 1:
+    raise SystemExit("missing exact candidate-lab guard fixture")
+source.write_text(text.replace(old, replacement, 1), encoding="utf-8")
+PY
+run_expect_fail \
+  "$unguarded_candidate_lab_source" \
+  "candidate-lab Rust export is not directly guarded by its exact feature"
+
+feature_gated_candidate_lab_header="$TMP_DIR/feature-gated-candidate-lab-header"
+make_fixture "$feature_gated_candidate_lab_header"
+append_candidate_lab_header "$feature_gated_candidate_lab_header"
+run_expect_pass "$feature_gated_candidate_lab_header"
+
+escaped_candidate_lab_header="$TMP_DIR/escaped-candidate-lab-header"
+cp -R "$feature_gated_candidate_lab_header" "$escaped_candidate_lab_header"
+printf '%s\n' \
+  'int32_t connect_norito_kagemusha_recursive_spend_candidate_lab_append_v4(void);' \
+  >>"$escaped_candidate_lab_header/crates/connect_norito_bridge/include/connect_norito_bridge.h"
+run_expect_fail \
+  "$escaped_candidate_lab_header" \
+  "candidate-lab header declaration escaped its guard"
+
+enabled_candidate_lab_header="$TMP_DIR/enabled-candidate-lab-header"
+cp -R "$feature_gated_candidate_lab_header" "$enabled_candidate_lab_header"
+sed -i.bak '1i\
+#define CONNECT_NORITO_KAGEMUSHA_CANDIDATE_EVIDENCE_LAB 1
+' "$enabled_candidate_lab_header/crates/connect_norito_bridge/include/connect_norito_bridge.h"
+rm -f "$enabled_candidate_lab_header/crates/connect_norito_bridge/include/connect_norito_bridge.h.bak"
+run_expect_fail \
+  "$enabled_candidate_lab_header" \
+  "bridge header must not enable the candidate-lab macro"
+
+extra_candidate_lab_source="$TMP_DIR/extra-candidate-lab-source"
+cp -R "$feature_gated_candidate_lab_source" "$extra_candidate_lab_source"
+cat >>"$extra_candidate_lab_source/crates/connect_norito_bridge/src/lib.rs" <<'RUST'
 #[cfg(feature = "kagemusha-candidate-evidence-lab")]
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_candidate_lab_init_v4() {}
+pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_candidate_lab_rogue_v4() {}
 RUST
-run_expect_pass "$feature_gated_candidate_lab_source"
+run_expect_fail \
+  "$extra_candidate_lab_source" \
+  "candidate-lab Rust function inventory is not exact"
+
+extra_candidate_lab_header="$TMP_DIR/extra-candidate-lab-header"
+cp -R "$feature_gated_candidate_lab_header" "$extra_candidate_lab_header"
+python3 - "$extra_candidate_lab_header" <<'PY'
+from pathlib import Path
+import sys
+
+header = Path(sys.argv[1]) / "crates/connect_norito_bridge/include/connect_norito_bridge.h"
+text = header.read_text(encoding="utf-8")
+old = "\n#endif\n"
+new = (
+    "\nint32_t connect_norito_kagemusha_recursive_spend_candidate_lab_rogue_v4(void);"
+    "\n#endif\n"
+)
+if text.count(old) != 1:
+    raise SystemExit("missing exact candidate-lab header guard fixture")
+header.write_text(text.replace(old, new, 1), encoding="utf-8")
+PY
+run_expect_fail \
+  "$extra_candidate_lab_header" \
+  "candidate-lab header inventory is not exact"
+
+duplicate_candidate_lab_source="$TMP_DIR/duplicate-candidate-lab-source"
+cp -R "$feature_gated_candidate_lab_source" "$duplicate_candidate_lab_source"
+cat >>"$duplicate_candidate_lab_source/crates/connect_norito_bridge/src/lib.rs" <<'RUST'
+#[cfg(not(feature = "kagemusha-candidate-evidence-lab"))]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_candidate_lab_artifact_begin_v4() {}
+RUST
+run_expect_fail \
+  "$duplicate_candidate_lab_source" \
+  "non_single_occurrence"
+
+commented_candidate_lab_source="$TMP_DIR/commented-candidate-lab-source"
+cp -R "$candidate_lab_source_without_export" "$commented_candidate_lab_source"
+cat >>"$commented_candidate_lab_source/crates/connect_norito_bridge/src/lib.rs" <<'RUST'
+/*
+#[cfg(feature = "kagemusha-candidate-evidence-lab")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_candidate_lab_artifact_begin_v4() {}
+*/
+RUST
+run_expect_fail \
+  "$commented_candidate_lab_source" \
+  "candidate-lab Rust/C export inventory is not exact"
+
+raw_string_candidate_lab_source="$TMP_DIR/raw-string-candidate-lab-source"
+cp -R "$candidate_lab_source_without_export" "$raw_string_candidate_lab_source"
+cat >>"$raw_string_candidate_lab_source/crates/connect_norito_bridge/src/lib.rs" <<'RUST'
+const FAKE_CANDIDATE_EXPORT: &str = r#"
+#[cfg(feature = "kagemusha-candidate-evidence-lab")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_candidate_lab_artifact_begin_v4() {}
+"#;
+RUST
+run_expect_fail \
+  "$raw_string_candidate_lab_source" \
+  "candidate-lab Rust/C export inventory is not exact"
+
+commented_candidate_lab_header="$TMP_DIR/commented-candidate-lab-header"
+cp -R "$feature_gated_candidate_lab_header" "$commented_candidate_lab_header"
+python3 - "$commented_candidate_lab_header" <<'PY'
+from pathlib import Path
+import sys
+
+header = Path(sys.argv[1]) / "crates/connect_norito_bridge/include/connect_norito_bridge.h"
+text = header.read_text(encoding="utf-8")
+name = "connect_norito_kagemusha_recursive_spend_candidate_lab_artifact_begin_v4"
+declaration = f"int32_t {name}(void);"
+if text.count(declaration) != 1:
+    raise SystemExit("missing exact candidate-lab header fixture")
+text = text.replace(declaration, "", 1)
+text = text.replace("\n#endif\n", f"\n/* {declaration} */\n#endif\n", 1)
+header.write_text(text, encoding="utf-8")
+PY
+run_expect_fail \
+  "$commented_candidate_lab_header" \
+  "candidate-lab header inventory is not exact"
+
+commented_candidate_marker_header="$TMP_DIR/commented-candidate-marker-header"
+cp -R "$feature_gated_candidate_lab_header" "$commented_candidate_marker_header"
+python3 - "$commented_candidate_marker_header" <<'PY'
+from pathlib import Path
+import sys
+
+header = Path(sys.argv[1]) / "crates/connect_norito_bridge/include/connect_norito_bridge.h"
+text = header.read_text(encoding="utf-8")
+marker = (
+    "extern const uint8_t "
+    "CONNECT_NORITO_KAGEMUSHA_CANDIDATE_EVIDENCE_LAB_DO_NOT_SHIP_V2[];"
+)
+if text.count(marker) != 1:
+    raise SystemExit("missing exact candidate-lab marker fixture")
+text = text.replace(marker, marker.replace("V2", "V2_DRIFTED"), 1)
+text = text.replace("\n#endif\n", f"\n/* {marker} */\n#endif\n", 1)
+header.write_text(text, encoding="utf-8")
+PY
+run_expect_fail \
+  "$commented_candidate_marker_header" \
+  "candidate-lab header guard lacks its exact do-not-ship marker"
+
+default_candidate_lab_feature="$TMP_DIR/default-candidate-lab-feature"
+cp -R "$feature_gated_candidate_lab_source" "$default_candidate_lab_feature"
+sed -i.bak '/^\[features\]$/a\
+default = ["kagemusha-candidate-evidence-lab"]
+' "$default_candidate_lab_feature/crates/connect_norito_bridge/Cargo.toml"
+rm -f "$default_candidate_lab_feature/crates/connect_norito_bridge/Cargo.toml.bak"
+run_expect_fail \
+  "$default_candidate_lab_feature" \
+  "candidate-lab Cargo feature is enabled directly or transitively by default"
+
+transitive_default_candidate_lab_feature="$TMP_DIR/transitive-default-candidate-lab-feature"
+cp -R "$feature_gated_candidate_lab_source" "$transitive_default_candidate_lab_feature"
+sed -i.bak '/^\[features\]$/a\
+default = ["candidate-lab-alias"]\
+candidate-lab-alias = ["kagemusha-candidate-evidence-lab"]
+' "$transitive_default_candidate_lab_feature/crates/connect_norito_bridge/Cargo.toml"
+rm -f "$transitive_default_candidate_lab_feature/crates/connect_norito_bridge/Cargo.toml.bak"
+run_expect_fail \
+  "$transitive_default_candidate_lab_feature" \
+  "candidate-lab Cargo feature is enabled directly or transitively by default"
+
+drifted_candidate_lab_feature="$TMP_DIR/drifted-candidate-lab-feature"
+cp -R "$feature_gated_candidate_lab_source" "$drifted_candidate_lab_feature"
+sed -i.bak \
+  's#iroha_core/kagemusha-candidate-evidence-lab#iroha_core/unexpected-lab-feature#' \
+  "$drifted_candidate_lab_feature/crates/connect_norito_bridge/Cargo.toml"
+rm -f "$drifted_candidate_lab_feature/crates/connect_norito_bridge/Cargo.toml.bak"
+run_expect_fail \
+  "$drifted_candidate_lab_feature" \
+  "candidate-lab Cargo feature delegation is not exact"
+
+unguarded_candidate_lab_marker="$TMP_DIR/unguarded-candidate-lab-marker"
+cp -R "$feature_gated_candidate_lab_source" "$unguarded_candidate_lab_marker"
+python3 - "$unguarded_candidate_lab_marker" <<'PY'
+from pathlib import Path
+import sys
+
+source = Path(sys.argv[1]) / "crates/connect_norito_bridge/src/lib.rs"
+text = source.read_text(encoding="utf-8")
+old = '#[cfg(feature = "kagemusha-candidate-evidence-lab")]\n#[used]\n'
+if text.count(old) != 1:
+    raise SystemExit("missing exact candidate-lab link marker fixture")
+source.write_text(text.replace(old, "#[used]\n", 1), encoding="utf-8")
+PY
+run_expect_fail \
+  "$unguarded_candidate_lab_marker" \
+  "candidate-lab Rust link marker is not one exact guarded no-mangle static"
+
+unguarded_candidate_lab_jni="$TMP_DIR/unguarded-candidate-lab-jni"
+cp -R "$feature_gated_candidate_lab_source" "$unguarded_candidate_lab_jni"
+python3 - "$unguarded_candidate_lab_jni" <<'PY'
+from pathlib import Path
+import sys
+
+source = Path(sys.argv[1]) / "crates/connect_norito_bridge/src/lib.rs"
+text = source.read_text(encoding="utf-8")
+guard = '''#[cfg(all(
+    feature = "kagemusha-candidate-evidence-lab",
+    any(
+        target_os = "android",
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "windows"
+    )
+))]
+'''
+if text.count(guard) != 1:
+    raise SystemExit("missing exact candidate-lab JNI guard fixture")
+source.write_text(text.replace(guard, "", 1), encoding="utf-8")
+PY
+run_expect_fail \
+  "$unguarded_candidate_lab_jni" \
+  "candidate-lab JNI export lacks its exact conjunctive feature guard"
 
 retired_header_surface="$TMP_DIR/retired-header-surface"
 make_fixture "$retired_header_surface"
@@ -832,6 +1237,7 @@ run_expect_fail \
 android_inspection_tools="$TMP_DIR/android-inspection-tools"
 make_android_inspection_tools "$android_inspection_tools"
 run_expect_android_binary_pass "$with_android_outputs" "$android_inspection_tools"
+run_expect_android_unstripped_fail "$with_android_outputs" "$android_inspection_tools"
 run_expect_android_binary_fail \
   "$with_android_outputs" \
   "exposes retired or unexpected Kagemusha symbols" \

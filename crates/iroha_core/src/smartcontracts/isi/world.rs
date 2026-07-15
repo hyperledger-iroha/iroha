@@ -94,7 +94,7 @@ pub mod isi {
             AxtProofEnvelope, DomainCommittee, DomainEndorsement, DomainEndorsementPolicy,
             DomainEndorsementRecord, LANE_RELAY_FASTPQ_EFFECT_TYPE, LaneRelayEmergencyValidatorSet,
             LaneRelayEnvelopeRef, VerifiedLaneRelayRecord, VerifiedNexusFeeBudgetRecord,
-            lane_relay_fastpq_claim_digest, nexus_fee_budget_claim_digest, proof_matches_manifest,
+            lane_relay_fastpq_claim_digest, nexus_fee_budget_claim_digest,
         },
         parameter::Parameter,
         prelude::*,
@@ -16509,6 +16509,15 @@ pub mod isi {
                     "verified lane relay registration requires nexus.enabled=true".into(),
                 ));
             }
+            if self.effect_proof_blob.is_some() {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "verified lane relay business-effect promotion is disabled until an effect-specific statement is derived from a finalized, QC-anchored settlement ledger entry"
+                            .into(),
+                    ),
+                )
+                .into());
+            }
 
             let envelope = self.envelope().clone();
             envelope.verify().map_err(|err| {
@@ -16693,6 +16702,15 @@ pub mod isi {
                 )
                 .into());
             }
+            if binding.effect_binding.is_some() {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "verified lane relay block proof must not carry a business-effect binding"
+                            .into(),
+                    ),
+                )
+                .into());
+            }
             let expected_claim_digest =
                 lane_relay_fastpq_claim_digest(&envelope).map_err(|err| {
                     InstructionExecutionError::InvalidParameter(
@@ -16715,89 +16733,9 @@ pub mod isi {
                         format!("verified lane relay FASTPQ verification failed: {err}").into(),
                     )
                 })?;
-            let (record_statement_digest, record_proof_digest, record_binding) = match self
-                .effect_proof_blob
-                .as_ref()
-            {
-                Some(effect_proof_blob) => {
-                    if effect_proof_blob.payload.is_empty() {
-                        return Err(InstructionExecutionError::InvalidParameter(
-                            InvalidParameterError::SmartContract(
-                                "verified lane relay effect proof payload is empty".into(),
-                            ),
-                        )
-                        .into());
-                    }
-                    if let Some(expiry_slot) = effect_proof_blob.expiry_slot
-                        && verified_at_height > expiry_slot
-                    {
-                        return Err(InstructionExecutionError::InvalidParameter(
-                            InvalidParameterError::SmartContract(format!(
-                                "verified lane relay effect proof expired at slot {expiry_slot}"
-                            )),
-                        )
-                        .into());
-                    }
-                    if !proof_matches_manifest(
-                        effect_proof_blob,
-                        envelope.dataspace_id,
-                        manifest_root,
-                    ) {
-                        return Err(InstructionExecutionError::InvalidParameter(
-                                InvalidParameterError::SmartContract(
-                                    "verified lane relay effect proof does not match the declared manifest_root"
-                                        .into(),
-                                ),
-                            )
-                            .into());
-                    }
-                    let effect_envelope =
-                        norito::decode_from_bytes::<AxtProofEnvelope>(&effect_proof_blob.payload)
-                            .map_err(|err| {
-                            InstructionExecutionError::InvalidParameter(
-                                InvalidParameterError::SmartContract(format!(
-                                    "verified lane relay effect proof envelope decode failed: {err}"
-                                )),
-                            )
-                        })?;
-                    let Some(effect_binding) = effect_envelope.fastpq_binding.clone() else {
-                        return Err(InstructionExecutionError::InvalidParameter(
-                            InvalidParameterError::SmartContract(
-                                "verified lane relay effect proof is missing fastpq_binding".into(),
-                            ),
-                        )
-                        .into());
-                    };
-                    if effect_binding.verified_effect_type == LANE_RELAY_FASTPQ_EFFECT_TYPE {
-                        return Err(InstructionExecutionError::InvalidParameter(
-                            InvalidParameterError::SmartContract(
-                                "verified lane relay effect proof must not use lane_relay_block"
-                                    .into(),
-                            ),
-                        )
-                        .into());
-                    }
-                    let verified_effect_fastpq = fastpq_prover::verify_axt_proof_envelope(
-                        &effect_envelope,
-                    )
-                    .map_err(|err| {
-                        InstructionExecutionError::InvariantViolation(
-                            format!("verified lane relay effect FASTPQ verification failed: {err}")
-                                .into(),
-                        )
-                    })?;
-                    (
-                        verified_effect_fastpq.statement_digest,
-                        verified_effect_fastpq.proof_digest,
-                        effect_binding,
-                    )
-                }
-                None => (
-                    verified_fastpq.statement_digest,
-                    verified_fastpq.proof_digest,
-                    binding,
-                ),
-            };
+            let record_statement_digest = verified_fastpq.statement_digest;
+            let record_proof_digest = verified_fastpq.proof_digest;
+            let record_binding = binding;
 
             let record = VerifiedLaneRelayRecord::new(
                 envelope,
