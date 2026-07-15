@@ -122,6 +122,11 @@ const APPLICATION_JSON: &str = "application/json";
 const SCCP_CAPABILITIES_RESPONSE_MAX_BYTES: usize = 64 * 1024;
 const SCCP_RECENT_RESPONSE_MAX_BYTES: usize = 8 * 1024 * 1024;
 const SCCP_JSON_RESPONSE_MAX_BYTES: usize = 64 * 1024 * 1024;
+const CONTRACT_CODE_ARTIFACT_MAX_BYTES: usize = 16 * 1024 * 1024;
+const CONTRACT_CODE_ARTIFACT_BASE64_MAX_BYTES: usize =
+    ((CONTRACT_CODE_ARTIFACT_MAX_BYTES + 2) / 3) * 4;
+const CONTRACT_CODE_ARTIFACT_RESPONSE_MAX_BYTES: usize =
+    CONTRACT_CODE_ARTIFACT_BASE64_MAX_BYTES + 128;
 const SCCP_NATIVE_NORITO_RESPONSE_MAX_BYTES: usize =
     iroha_sccp::SCCP_TAIRA_MAX_ENCODED_PROOF_BYTES_V1;
 const SCCP_DESTINATION_NORITO_RESPONSE_MAX_BYTES: usize =
@@ -140,6 +145,21 @@ const HEADER_OPERATOR_TIMESTAMP_MS: &str = "x-iroha-operator-timestamp-ms";
 const HEADER_OPERATOR_NONCE: &str = "x-iroha-operator-nonce";
 const HEADER_OPERATOR_SIGNATURE: &str = "x-iroha-operator-signature";
 pub(crate) const APPLICATION_NORITO: &str = "application/x-norito";
+
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+#[norito(deny_unknown_fields)]
+struct ContractCodeBytesResponse {
+    code_b64: String,
+}
 
 /// Preferred response wire format for Torii endpoints that support negotiation.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -183,6 +203,46 @@ fn sorafs_pin_register_gas_asset_id() -> Option<String> {
 // Integration scenarios involving DA/RBC can legitimately spend a few seconds
 // in the mempool before proposal assembly starts; keep the queue grace period
 // generous enough to avoid spurious timeouts.
+
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+#[norito(deny_unknown_fields)]
+/// Selector-explicit request for the Torii multisig authority-spec API.
+pub struct MultisigSpecRequest {
+    /// Active concrete multisig account id.
+    #[norito(default)]
+    pub multisig_account_id: Option<iroha_data_model::account::AccountId>,
+    /// Stable multisig alias in canonical `name@domain.dataspace` or `name@dataspace` form.
+    #[norito(default)]
+    pub multisig_account_alias: Option<String>,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+#[norito(deny_unknown_fields)]
+/// Exact active multisig authority spec returned by Torii.
+pub struct MultisigSpecResponse {
+    /// Canonical multisig account id resolved by the server.
+    pub resolved_multisig_account_id: iroha_data_model::account::AccountId,
+    /// Native multisig authority policy bound to the resolved account.
+    pub spec: iroha_executor_data_model::isi::multisig::MultisigSpec,
+}
 
 #[derive(
     Clone,
@@ -1924,6 +1984,7 @@ fn decode_sccp_bridge_submit_response(
     norito::derive::NoritoSerialize,
     norito::derive::NoritoDeserialize,
 )]
+#[norito(deny_unknown_fields)]
 /// Selector-explicit request for the Torii multisig proposals query API.
 pub struct MultisigProposalsQueryRequest {
     /// Active concrete multisig account id.
@@ -1953,6 +2014,7 @@ pub struct MultisigProposalsQueryRequest {
     norito::derive::NoritoSerialize,
     norito::derive::NoritoDeserialize,
 )]
+#[norito(deny_unknown_fields)]
 /// Multisig proposal entry returned by the Torii multisig proposals API.
 pub struct MultisigProposalEntry {
     /// Stable proposal identifier.
@@ -1983,6 +2045,7 @@ pub struct MultisigProposalEntry {
     norito::derive::NoritoSerialize,
     norito::derive::NoritoDeserialize,
 )]
+#[norito(deny_unknown_fields)]
 /// Response payload returned by the Torii multisig proposals query API.
 pub struct MultisigProposalsQueryResponse {
     /// Canonical multisig account id resolved by the server.
@@ -2004,6 +2067,7 @@ pub struct MultisigProposalsQueryResponse {
     norito::derive::NoritoSerialize,
     norito::derive::NoritoDeserialize,
 )]
+#[norito(deny_unknown_fields)]
 /// Selector-explicit request for one multisig proposal.
 pub struct MultisigProposalsResolveRequest {
     /// Active concrete multisig account id.
@@ -2030,6 +2094,7 @@ pub struct MultisigProposalsResolveRequest {
     norito::derive::NoritoSerialize,
     norito::derive::NoritoDeserialize,
 )]
+#[norito(deny_unknown_fields)]
 /// Response payload returned by the Torii multisig proposal resolve API.
 pub struct MultisigProposalResolveResponse {
     /// Canonical multisig account id resolved by the server.
@@ -4465,7 +4530,7 @@ pub struct SorafsPinRegisterArgs<'a> {
     /// Exact Norito manifest bytes to forward for Torii-side validation.
     ///
     /// Leave this as `None` to submit the canonical encoding derived from `manifest`.
-    /// Set it when the manifest digest must match an already-encoded compatibility payload.
+    /// Set it when the manifest digest must match caller-retained canonical bytes.
     pub manifest_bytes: Option<&'a [u8]>,
     /// SHA3-256 digest of the manifest chunk referenced for registration.
     pub chunk_digest_sha3_256: [u8; 32],
@@ -8904,9 +8969,7 @@ mod evidence_http_tests {
             .pin_policy(sorafs_manifest::PinPolicy::default())
             .build()
             .expect("manifest build");
-        let explicit_manifest_bytes = manifest
-            .encode_legacy_norito()
-            .expect("legacy manifest encoding");
+        let explicit_manifest_bytes = manifest.encode().expect("canonical manifest encoding");
         let explicit_digest = *manifest.digest().expect("manifest digest").as_bytes();
 
         let payload = Client::build_sorafs_pin_register_payload(
@@ -9529,6 +9592,7 @@ mod evidence_http_tests {
             recorded_at_height: 42,
             recorded_at_view: 5,
             recorded_at_ms: 123_456,
+            consensus_admitted_at_height: None,
             penalty_applied: false,
             penalty_cancelled: false,
             penalty_cancelled_at_height: None,
@@ -13345,11 +13409,10 @@ impl Client {
     pub fn post_alias_resolve(&self, alias: &str) -> Result<Response<Vec<u8>>> {
         let url = join_torii_url(&self.torii_url, "v1/aliases/resolve");
         let body = norito::json::to_vec(&norito::json!({ "alias": alias }))?;
-        self.default_request(HttpMethod::POST, url)
-            .header("Content-Type", APPLICATION_JSON)
-            .body(body)
-            .build()?
-            .send()
+        self.send_builder(
+            self.account_signed_request(HttpMethod::POST, url, body)?
+                .header("Content-Type", APPLICATION_JSON),
+        )
     }
 
     /// Convenience: POST `/v1/aliases/resolve-index` with an index payload.
@@ -13359,11 +13422,10 @@ impl Client {
     pub fn post_alias_resolve_index(&self, index: u64) -> Result<Response<Vec<u8>>> {
         let url = join_torii_url(&self.torii_url, "v1/aliases/resolve-index");
         let body = norito::json::to_vec(&norito::json!({ "index": index }))?;
-        self.default_request(HttpMethod::POST, url)
-            .header("Content-Type", APPLICATION_JSON)
-            .body(body)
-            .build()?
-            .send()
+        self.send_builder(
+            self.account_signed_request(HttpMethod::POST, url, body)?
+                .header("Content-Type", APPLICATION_JSON),
+        )
     }
 
     /// Convenience: POST `/v1/aliases/by-account` with a canonical account id and optional
@@ -13383,11 +13445,10 @@ impl Client {
             "dataspace": dataspace,
             "domain": domain,
         }))?;
-        self.default_request(HttpMethod::POST, url)
-            .header("Content-Type", APPLICATION_JSON)
-            .body(body)
-            .build()?
-            .send()
+        self.send_builder(
+            self.account_signed_request(HttpMethod::POST, url, body)?
+                .header("Content-Type", APPLICATION_JSON),
+        )
     }
 
     /// Convenience: POST `/v1/assets/aliases/resolve` with an asset alias literal.
@@ -13418,7 +13479,48 @@ impl Client {
             .send()
     }
 
-    /// Convenience: selector-explicit POST `/v1/multisig/proposals/query`.
+    /// Convenience: account-signed, selector-explicit POST `/v1/multisig/spec`.
+    ///
+    /// # Errors
+    /// Returns an error if request signing, construction, JSON serialization, the HTTP call,
+    /// or closed-schema response decoding fails.
+    pub fn post_multisig_spec(
+        &self,
+        request: &MultisigSpecRequest,
+    ) -> Result<MultisigSpecResponse> {
+        validate_multisig_read_selector(
+            request.multisig_account_id.as_ref(),
+            request.multisig_account_alias.as_deref(),
+        )?;
+        let url = join_torii_url(&self.torii_url, "v1/multisig/spec");
+        let body = norito::json::to_vec(request)?;
+        let resp = self.send_builder(
+            self.account_signed_request(HttpMethod::POST, url, body)?
+                .header("Content-Type", APPLICATION_JSON)
+                .header("Accept", APPLICATION_JSON),
+        )?;
+        if resp.status() != StatusCode::OK {
+            return Err(eyre!(
+                "Failed to read multisig spec with HTTP status: {}. {}",
+                resp.status(),
+                std::str::from_utf8(resp.body()).unwrap_or("")
+            ));
+        }
+        let decoded: MultisigSpecResponse = norito::json::from_slice(resp.body())
+            .map_err(|err| eyre!("failed to decode closed multisig spec response: {err}"))?;
+        if request
+            .multisig_account_id
+            .as_ref()
+            .is_some_and(|expected| expected != &decoded.resolved_multisig_account_id)
+        {
+            return Err(eyre!(
+                "multisig spec response resolved account does not match the requested account"
+            ));
+        }
+        Ok(decoded)
+    }
+
+    /// Convenience: account-signed, selector-explicit POST `/v1/multisig/proposals/query`.
     ///
     /// # Errors
     /// Returns an error if request construction, JSON serialization, the HTTP call,
@@ -13433,13 +13535,11 @@ impl Client {
         )?;
         let url = join_torii_url(&self.torii_url, "v1/multisig/proposals/query");
         let body = norito::json::to_vec(request)?;
-        let resp = self
-            .default_request(HttpMethod::POST, url)
-            .header("Content-Type", APPLICATION_JSON)
-            .header("Accept", APPLICATION_JSON)
-            .body(body)
-            .build()?
-            .send()?;
+        let resp = self.send_builder(
+            self.account_signed_request(HttpMethod::POST, url, body)?
+                .header("Content-Type", APPLICATION_JSON)
+                .header("Accept", APPLICATION_JSON),
+        )?;
         if resp.status() != StatusCode::OK {
             return Err(eyre!(
                 "Failed to query multisig proposals with HTTP status: {}. {}",
@@ -13447,8 +13547,20 @@ impl Client {
                 std::str::from_utf8(resp.body()).unwrap_or("")
             ));
         }
-        norito::json::from_slice(resp.body())
-            .map_err(|err| eyre!("failed to decode multisig proposals query response: {err}"))
+        let decoded: MultisigProposalsQueryResponse = norito::json::from_slice(resp.body())
+            .map_err(|err| {
+                eyre!("failed to decode closed multisig proposals query response: {err}")
+            })?;
+        if request
+            .multisig_account_id
+            .as_ref()
+            .is_some_and(|expected| expected != &decoded.resolved_multisig_account_id)
+        {
+            return Err(eyre!(
+                "multisig proposals query response resolved account does not match the requested account"
+            ));
+        }
+        Ok(decoded)
     }
 
     /// Convenience: selector-explicit POST `/v1/multisig/proposals/resolve`.
@@ -13471,13 +13583,11 @@ impl Client {
         )?;
         let url = join_torii_url(&self.torii_url, "v1/multisig/proposals/resolve");
         let body = norito::json::to_vec(request)?;
-        let resp = self
-            .default_request(HttpMethod::POST, url)
-            .header("Content-Type", APPLICATION_JSON)
-            .header("Accept", APPLICATION_JSON)
-            .body(body)
-            .build()?
-            .send()?;
+        let resp = self.send_builder(
+            self.account_signed_request(HttpMethod::POST, url, body)?
+                .header("Content-Type", APPLICATION_JSON)
+                .header("Accept", APPLICATION_JSON),
+        )?;
         if resp.status() != StatusCode::OK {
             return Err(eyre!(
                 "Failed to resolve multisig proposal with HTTP status: {}. {}",
@@ -13485,8 +13595,34 @@ impl Client {
                 std::str::from_utf8(resp.body()).unwrap_or("")
             ));
         }
-        norito::json::from_slice(resp.body())
-            .map_err(|err| eyre!("failed to decode multisig proposal resolve response: {err}"))
+        let decoded: MultisigProposalResolveResponse = norito::json::from_slice(resp.body())
+            .map_err(|err| {
+                eyre!("failed to decode closed multisig proposal resolve response: {err}")
+            })?;
+        if request
+            .multisig_account_id
+            .as_ref()
+            .is_some_and(|expected| expected != &decoded.resolved_multisig_account_id)
+        {
+            return Err(eyre!(
+                "multisig proposal resolve response resolved account does not match the requested account"
+            ));
+        }
+        if request
+            .proposal_id
+            .as_ref()
+            .is_some_and(|expected| expected != &decoded.proposal_id)
+            || request
+                .instructions_hash
+                .as_ref()
+                .is_some_and(|expected| expected != &decoded.instructions_hash)
+            || decoded.proposal_id != decoded.instructions_hash
+        {
+            return Err(eyre!(
+                "multisig proposal resolve response does not match the exact requested proposal"
+            ));
+        }
+        Ok(decoded)
     }
 
     /// Convenience: POST `/v1/multisig/propose` with a typed instruction batch.
@@ -16738,9 +16874,7 @@ impl Client {
         &self,
         contract_address: &iroha_data_model::smart_contract::ContractAddress,
     ) -> Result<norito::json::Value> {
-        let path = format!("v1/gov/contracts/{contract_address}");
-        let url = join_torii_url(&self.torii_url, &path);
-        let resp = self.send_builder(self.default_request(HttpMethod::GET, url))?;
+        let resp = self.get_gov_contract_response(contract_address)?;
         if resp.status() != StatusCode::OK {
             return Err(eyre!(
                 "Failed to get governed contract: {} {}",
@@ -16751,14 +16885,49 @@ impl Client {
         Ok(norito::json::from_slice(resp.body())?)
     }
 
-    /// GET `/v1/contracts/code-bytes/{code_hash}` and decode base64 into bytes
+    /// GET `/v1/gov/contracts/{contract_address}` and retain the exact response bytes.
+    ///
+    /// This is intended for callers that enforce a closed response schema and must detect
+    /// duplicate JSON fields before decoding. The request uses canonical account signing.
     ///
     /// # Errors
-    /// Returns an error if the HTTP request fails, the response is non-OK, or the response JSON lacks `code_b64`.
+    /// Returns an error if request signing, construction, or transport fails.
+    pub fn get_gov_contract_response(
+        &self,
+        contract_address: &iroha_data_model::smart_contract::ContractAddress,
+    ) -> Result<Response<Vec<u8>>> {
+        let path = format!("v1/gov/contracts/{contract_address}");
+        let url = join_torii_url(&self.torii_url, &path);
+        self.send_builder(self.account_signed_request(HttpMethod::GET, url, Vec::new())?)
+    }
+
+    /// Account-signed GET `/v1/contracts/code-bytes/{code_hash}` and decode a bounded,
+    /// canonical base64 artifact whose digest exactly matches `code_hash`.
+    ///
+    /// # Errors
+    /// Returns an error if request signing or transport fails, the response is non-OK,
+    /// oversized or not a closed JSON object, base64 is not canonical, or the artifact
+    /// does not match the requested hash.
     pub fn get_contract_code_bytes(&self, code_hash_hex: &str) -> Result<Vec<u8>> {
+        if code_hash_hex.len() != 64
+            || !code_hash_hex
+                .as_bytes()
+                .iter()
+                .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+        {
+            return Err(eyre!(
+                "contract code hash must be exactly 32 lowercase hexadecimal bytes"
+            ));
+        }
+        let mut expected_hash = [0_u8; 32];
+        hex::decode_to_slice(code_hash_hex, &mut expected_hash)
+            .wrap_err("failed to decode exact contract code hash")?;
         let path = format!("v1/contracts/code-bytes/{code_hash_hex}");
         let url = join_torii_url(&self.torii_url, &path);
-        let resp = self.send_builder(self.default_request(HttpMethod::GET, url))?;
+        let resp = self.send_builder(
+            self.account_signed_request(HttpMethod::GET, url, Vec::new())?
+                .header("Accept", APPLICATION_JSON),
+        )?;
         if resp.status() != StatusCode::OK {
             return Err(eyre!(
                 "Failed to get code bytes: {} {}",
@@ -16766,14 +16935,29 @@ impl Client {
                 std::str::from_utf8(resp.body()).unwrap_or("")
             ));
         }
-        let v: norito::json::Value = norito::json::from_slice(resp.body())?;
-        let s = v
-            .get("code_b64")
-            .and_then(|x| x.as_str())
-            .ok_or_else(|| eyre!("missing code_b64"))?;
-        Ok(base64::engine::general_purpose::STANDARD
-            .decode(s.as_bytes())
-            .unwrap_or_default())
+        if resp.body().len() > CONTRACT_CODE_ARTIFACT_RESPONSE_MAX_BYTES {
+            return Err(eyre!(
+                "contract code response exceeds the first-release artifact limit"
+            ));
+        }
+        let response: ContractCodeBytesResponse = norito::json::from_slice(resp.body())
+            .wrap_err("failed to decode closed contract code response")?;
+        let code = decode_canonical_sccp_base64(
+            &response.code_b64,
+            "contract code response.code_b64",
+            CONTRACT_CODE_ARTIFACT_BASE64_MAX_BYTES,
+        )?;
+        if code.len() > CONTRACT_CODE_ARTIFACT_MAX_BYTES {
+            return Err(eyre!(
+                "contract code artifact exceeds the first-release artifact limit"
+            ));
+        }
+        if *iroha_crypto::Hash::new(&code).as_ref() != expected_hash {
+            return Err(eyre!(
+                "contract code artifact digest does not match the requested hash"
+            ));
+        }
+        Ok(code)
     }
 
     /// GET `/v1/contracts/code/{code_hash}` and return manifest JSON
@@ -16786,103 +16970,6 @@ impl Client {
         if resp.status() != StatusCode::OK {
             return Err(eyre!(
                 "Failed to get contract manifest: {} {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
-        Ok(norito::json::from_slice(resp.body())?)
-    }
-
-    /// POST `/v1/contracts/deploy` with JSON body
-    /// `{ authority, private_key, code_b64, contract_alias, lease_expiry_ms? }`.
-    /// # Errors
-    /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
-    pub fn post_contract_deploy_json(
-        &self,
-        authority: &iroha_data_model::account::AccountId,
-        private_key: &iroha_crypto::PrivateKey,
-        code_b64: &str,
-        contract_alias: &iroha_data_model::smart_contract::ContractAlias,
-        lease_expiry_ms: Option<u64>,
-    ) -> Result<norito::json::Value> {
-        let url = join_torii_url(&self.torii_url, "v1/contracts/deploy");
-        let mut payload = norito::json::Map::new();
-        payload.insert("authority".into(), authority.to_string().into());
-        payload.insert(
-            "private_key".into(),
-            norito::json::to_value(&iroha_data_model::prelude::ExposedPrivateKey(
-                private_key.clone(),
-            ))?,
-        );
-        payload.insert("code_b64".into(), code_b64.into());
-        payload.insert(
-            "contract_alias".into(),
-            norito::json::to_value(contract_alias)?,
-        );
-        if let Some(lease_expiry_ms) = lease_expiry_ms {
-            payload.insert("lease_expiry_ms".into(), lease_expiry_ms.into());
-        }
-        let body = norito::json::to_vec(&norito::json::Value::from(payload))?;
-        let resp = self
-            .default_request(HttpMethod::POST, url)
-            .header("Content-Type", APPLICATION_JSON)
-            .body(body)
-            .build()?
-            .send()?;
-        if resp.status() != StatusCode::OK {
-            return Err(ResponseReport::with_msg("Failed to deploy contract", &resp)
-                .unwrap_or_else(core::convert::identity)
-                .into());
-        }
-        Ok(norito::json::from_slice(resp.body())?)
-    }
-
-    /// POST `/v1/contracts/deploy-bundle` with a JSON bundle body.
-    ///
-    /// # Errors
-    /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
-    pub fn post_contract_deploy_bundle_json(
-        &self,
-        bundle: &norito::json::Value,
-        dry_run: bool,
-    ) -> Result<norito::json::Value> {
-        let path = if dry_run {
-            "v1/contracts/deploy-bundle?dry_run=true"
-        } else {
-            "v1/contracts/deploy-bundle"
-        };
-        let url = join_torii_url(&self.torii_url, path);
-        let body = norito::json::to_vec(bundle)?;
-        let resp = self
-            .default_request(HttpMethod::POST, url)
-            .header("Content-Type", APPLICATION_JSON)
-            .body(body)
-            .build()?
-            .send()?;
-        if resp.status() != StatusCode::OK {
-            return Err(
-                ResponseReport::with_msg("Failed to deploy contract bundle", &resp)
-                    .unwrap_or_else(core::convert::identity)
-                    .into(),
-            );
-        }
-        Ok(norito::json::from_slice(resp.body())?)
-    }
-
-    /// GET `/v1/contracts/deploy-bundles/{bundle_digest}`.
-    ///
-    /// # Errors
-    /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
-    pub fn get_contract_deploy_bundle_status_json(
-        &self,
-        bundle_digest: &str,
-    ) -> Result<norito::json::Value> {
-        let path = format!("v1/contracts/deploy-bundles/{bundle_digest}");
-        let url = join_torii_url(&self.torii_url, &path);
-        let resp = self.send_builder(self.default_request(HttpMethod::GET, url))?;
-        if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to get contract bundle status: {} {}",
                 resp.status(),
                 std::str::from_utf8(resp.body()).unwrap_or("")
             ));
@@ -17011,10 +17098,9 @@ impl Client {
             "contract_alias": contract_alias,
         }))?;
         self.send_builder(
-            self.default_request(HttpMethod::POST, url)
+            self.account_signed_request(HttpMethod::POST, url, payload)?
                 .header("Content-Type", APPLICATION_JSON)
-                .header("Accept", APPLICATION_JSON)
-                .body(payload),
+                .header("Accept", APPLICATION_JSON),
         )
     }
 
@@ -18994,7 +19080,7 @@ mod subscription_http_tests {
     };
 
     use http::StatusCode;
-    use iroha_primitives::numeric::{Numeric, Quantity};
+    use iroha_primitives::numeric::Quantity;
     use iroha_test_samples::gen_account_in;
     use norito::json::{JsonSerialize, Value as JsonValue};
 
@@ -21193,7 +21279,7 @@ mod tests {
         time::Duration,
     };
 
-    use iroha_crypto::{Hash, HashOf, SignatureOf};
+    use iroha_crypto::{Hash, HashOf, Signature, SignatureOf};
     use iroha_data_model::{
         account::AccountAddress,
         block::{
@@ -21310,6 +21396,51 @@ mod tests {
 
     impl rand::rand_core::TryCryptoRng for FailingClientRng {}
 
+    fn assert_canonical_account_signed_request(client: &Client, snapshot: &RequestSnapshot) {
+        let headers: HashMap<_, _> = snapshot.headers.iter().cloned().collect();
+        assert_eq!(
+            headers.get(HEADER_ACCOUNT),
+            Some(&client.account.to_string()),
+            "request signer must be the configured client account",
+        );
+        let timestamp_ms = headers
+            .get(HEADER_TIMESTAMP_MS)
+            .expect("timestamp header")
+            .parse::<u64>()
+            .expect("timestamp header should parse");
+        let nonce = headers.get(HEADER_NONCE).expect("nonce header");
+        assert!(!nonce.is_empty(), "nonce must not be empty");
+        let signature_bytes = base64::engine::general_purpose::STANDARD
+            .decode(
+                headers
+                    .get(HEADER_SIGNATURE)
+                    .expect("signature header")
+                    .as_bytes(),
+            )
+            .expect("signature header should decode");
+        let signature = Signature::try_from_bytes(&signature_bytes)
+            .expect("account signature header must pass checked admission");
+        let signed_message = Client::operator_request_message(
+            &snapshot.method,
+            &snapshot.url,
+            &snapshot.body,
+            timestamp_ms,
+            nonce,
+        );
+        signature
+            .verify(client.key_pair.public_key(), &signed_message)
+            .expect("signature must cover the exact method, path, query, and body");
+    }
+
+    fn assert_canonical_account_signed_json_request(client: &Client, snapshot: &RequestSnapshot) {
+        assert_canonical_account_signed_request(client, snapshot);
+        let headers: HashMap<_, _> = snapshot.headers.iter().cloned().collect();
+        assert_eq!(
+            headers.get("content-type"),
+            Some(&APPLICATION_JSON.to_owned()),
+        );
+    }
+
     #[test]
     fn signed_request_nonce_reports_rng_failure() {
         let mut rng = FailingClientRng;
@@ -21320,6 +21451,306 @@ mod tests {
         let message = error.to_string();
         assert!(message.contains("signed request nonce OS RNG failed"));
         assert!(message.contains("failing client RNG"));
+    }
+
+    #[test]
+    fn account_alias_resolve_sends_canonical_account_signed_request() {
+        let client = client_with_base_url(base_url());
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::OK, "{}");
+
+        with_mock_http(respond_with(&store, response), || {
+            client
+                .post_alias_resolve("bright-brook-5859@ubl.sbp")
+                .expect("signed alias resolve request");
+        });
+
+        let snapshots = store.lock().expect("snapshot store");
+        let snapshot = snapshots.first().expect("snapshot");
+        assert_eq!(snapshot.method, HttpMethod::POST);
+        assert_eq!(snapshot.url.path(), "/v1/aliases/resolve");
+        let body: JsonValue =
+            norito::json::from_slice(&snapshot.body).expect("decode alias resolve body");
+        assert_eq!(
+            body,
+            norito::json!({ "alias": "bright-brook-5859@ubl.sbp" }),
+        );
+        assert_canonical_account_signed_json_request(&client, snapshot);
+    }
+
+    #[test]
+    fn account_alias_resolve_index_sends_canonical_account_signed_request() {
+        let client = client_with_base_url(base_url());
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::OK, "{}");
+
+        with_mock_http(respond_with(&store, response), || {
+            client
+                .post_alias_resolve_index(42)
+                .expect("signed alias-index resolve request");
+        });
+
+        let snapshots = store.lock().expect("snapshot store");
+        let snapshot = snapshots.first().expect("snapshot");
+        assert_eq!(snapshot.method, HttpMethod::POST);
+        assert_eq!(snapshot.url.path(), "/v1/aliases/resolve-index");
+        let body: JsonValue =
+            norito::json::from_slice(&snapshot.body).expect("decode alias-index resolve body");
+        assert_eq!(body, norito::json!({ "index": 42_u64 }));
+        assert_canonical_account_signed_json_request(&client, snapshot);
+    }
+
+    #[test]
+    fn account_alias_by_account_sends_canonical_account_signed_request() {
+        let client = client_with_base_url(base_url());
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::OK, "{}");
+
+        with_mock_http(respond_with(&store, response), || {
+            client
+                .post_alias_lookup_by_account(TEST_WORKER_I105, Some("sbp"), Some("ubl.sbp"))
+                .expect("signed alias-by-account request");
+        });
+
+        let snapshots = store.lock().expect("snapshot store");
+        let snapshot = snapshots.first().expect("snapshot");
+        assert_eq!(snapshot.method, HttpMethod::POST);
+        assert_eq!(snapshot.url.path(), "/v1/aliases/by-account");
+        let body: JsonValue =
+            norito::json::from_slice(&snapshot.body).expect("decode alias-by-account body");
+        assert_eq!(
+            body,
+            norito::json!({
+                "account_id": TEST_WORKER_I105,
+                "dataspace": "sbp",
+                "domain": "ubl.sbp",
+            }),
+        );
+        assert_canonical_account_signed_json_request(&client, snapshot);
+    }
+
+    #[test]
+    fn contract_alias_resolve_sends_canonical_account_signed_request() {
+        let client = client_with_base_url(base_url());
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::OK, "{}");
+        let alias: iroha_data_model::smart_contract::ContractAlias =
+            "router::universal".parse().expect("contract alias");
+
+        with_mock_http(respond_with(&store, response), || {
+            client
+                .post_contract_alias_resolve(&alias)
+                .expect("signed contract alias resolve request");
+        });
+
+        let snapshots = store.lock().expect("snapshot store");
+        let snapshot = snapshots.first().expect("snapshot");
+        assert_eq!(snapshot.method, HttpMethod::POST);
+        assert_eq!(snapshot.url.path(), "/v1/contracts/aliases/resolve");
+        let body: JsonValue =
+            norito::json::from_slice(&snapshot.body).expect("decode contract alias body");
+        assert_eq!(body, norito::json!({ "contract_alias": alias }));
+        assert_canonical_account_signed_json_request(&client, snapshot);
+    }
+
+    #[test]
+    fn governed_contract_read_sends_canonical_account_signed_request() {
+        let client = client_with_base_url(base_url());
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::OK, "{}");
+        let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &client.account,
+            0,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("contract address");
+
+        with_mock_http(respond_with(&store, response), || {
+            client
+                .get_gov_contract_json(&contract_address)
+                .expect("signed governed contract read");
+        });
+
+        let snapshots = store.lock().expect("snapshot store");
+        let snapshot = snapshots.first().expect("snapshot");
+        assert_eq!(snapshot.method, HttpMethod::GET);
+        assert_eq!(
+            snapshot.url.path(),
+            format!("/v1/gov/contracts/{contract_address}")
+        );
+        assert!(snapshot.body.is_empty());
+        assert_canonical_account_signed_request(&client, snapshot);
+    }
+
+    #[test]
+    fn governed_contract_raw_read_preserves_bytes_for_strict_decoders() {
+        let client = client_with_base_url(base_url());
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let raw = br#"{"found":false,"found":true}"#;
+        let response = json_response(
+            StatusCode::OK,
+            std::str::from_utf8(raw).expect("fixture JSON"),
+        );
+        let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &client.account,
+            1,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("contract address");
+
+        let response = with_mock_http(respond_with(&store, response), || {
+            client
+                .get_gov_contract_response(&contract_address)
+                .expect("signed raw governed contract read")
+        });
+
+        assert_eq!(response.body(), raw);
+        let snapshots = store.lock().expect("snapshot store");
+        let snapshot = snapshots.first().expect("snapshot");
+        assert_canonical_account_signed_request(&client, snapshot);
+    }
+
+    #[test]
+    fn contract_code_artifact_read_is_signed_canonical_bounded_and_hash_bound() {
+        let client = client_with_base_url(base_url());
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let code = b"first-release-contract-artifact";
+        let code_hash = hex::encode(iroha_crypto::Hash::new(code).as_ref());
+        let code_b64 = base64::engine::general_purpose::STANDARD.encode(code);
+        let response = json_response(StatusCode::OK, &format!(r#"{{"code_b64":"{code_b64}"}}"#));
+
+        let decoded = with_mock_http(respond_with(&store, response), || {
+            client
+                .get_contract_code_bytes(&code_hash)
+                .expect("signed exact contract artifact read")
+        });
+
+        assert_eq!(decoded, code);
+        let snapshots = store.lock().expect("snapshot store");
+        let snapshot = snapshots.first().expect("snapshot");
+        assert_eq!(snapshot.method, HttpMethod::GET);
+        assert_eq!(
+            snapshot.url.path(),
+            format!("/v1/contracts/code-bytes/{code_hash}")
+        );
+        assert!(snapshot.body.is_empty());
+        assert_canonical_account_signed_request(&client, snapshot);
+    }
+
+    #[test]
+    fn contract_code_artifact_read_rejects_nonexact_inputs_and_hostile_responses() {
+        let client = client_with_base_url(base_url());
+        let code = b"hash-bound-contract-artifact";
+        let code_hash = hex::encode(iroha_crypto::Hash::new(code).as_ref());
+        let code_b64 = base64::engine::general_purpose::STANDARD.encode(code);
+
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        with_mock_http(
+            respond_with(&store, json_response(StatusCode::OK, "{}")),
+            || {
+                for invalid in [
+                    format!("A{}", &code_hash[1..]),
+                    format!(" {code_hash}"),
+                    code_hash[..63].to_owned(),
+                ] {
+                    let _ = client
+                        .get_contract_code_bytes(&invalid)
+                        .expect_err("non-exact code hash must fail before I/O");
+                }
+            },
+        );
+        assert!(
+            store.lock().expect("snapshot store").is_empty(),
+            "invalid hashes must not issue HTTP requests"
+        );
+
+        for hostile in [
+            r#"{}"#.to_owned(),
+            r#"{"code_b64":"AA"}"#.to_owned(),
+            format!(r#"{{"code_b64":"{code_b64}","unexpected":true}}"#),
+            format!(r#"{{"code_b64":"{code_b64}","code_b64":"{code_b64}"}}"#),
+            format!(
+                r#"{{"code_b64":"{}"}}"#,
+                base64::engine::general_purpose::STANDARD.encode(b"different artifact")
+            ),
+        ] {
+            let response = json_response(StatusCode::OK, &hostile);
+            with_mock_http(
+                move |_| Ok(response.clone()),
+                || {
+                    let _ = client
+                        .get_contract_code_bytes(&code_hash)
+                        .expect_err("hostile artifact response must fail closed");
+                },
+            );
+        }
+    }
+
+    #[test]
+    fn multisig_reads_are_account_signed_for_concrete_selectors() {
+        let client = client_with_base_url(base_url());
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let account_id = AccountId::new(checked_random_keypair().public_key().clone());
+        let response = json_response(
+            StatusCode::OK,
+            &format!(
+                r#"{{"resolved_multisig_account_id":"{account_id}","proposals":[],"next_cursor":null}}"#
+            ),
+        );
+        let request = MultisigProposalsQueryRequest {
+            multisig_account_id: Some(account_id.clone()),
+            multisig_account_alias: None,
+            status: Vec::new(),
+            cursor: None,
+            limit: Some(10),
+        };
+
+        with_mock_http(respond_with(&store, response), || {
+            client
+                .post_multisig_proposals_query(&request)
+                .expect("signed multisig read");
+        });
+
+        let snapshots = store.lock().expect("snapshot store");
+        let snapshot = snapshots.first().expect("snapshot");
+        assert_eq!(snapshot.method, HttpMethod::POST);
+        assert_eq!(snapshot.url.path(), "/v1/multisig/proposals/query");
+        assert_canonical_account_signed_json_request(&client, snapshot);
+    }
+
+    #[test]
+    fn multisig_reads_reject_response_selector_confusion_and_extensions() {
+        let client = client_with_base_url(base_url());
+        let requested = AccountId::new(checked_random_keypair().public_key().clone());
+        let substituted = AccountId::new(checked_random_keypair().public_key().clone());
+        let request = MultisigProposalsQueryRequest {
+            multisig_account_id: Some(requested.clone()),
+            multisig_account_alias: None,
+            status: Vec::new(),
+            cursor: None,
+            limit: None,
+        };
+
+        for hostile in [
+            format!(
+                r#"{{"resolved_multisig_account_id":"{substituted}","proposals":[],"next_cursor":null}}"#
+            ),
+            format!(
+                r#"{{"resolved_multisig_account_id":"{requested}","proposals":[],"next_cursor":null,"unexpected":true}}"#
+            ),
+        ] {
+            let response = json_response(StatusCode::OK, &hostile);
+            with_mock_http(
+                move |_| Ok(response.clone()),
+                || {
+                    let _ = client
+                        .post_multisig_proposals_query(&request)
+                        .expect_err("confused or extended multisig response must fail closed");
+                },
+            );
+        }
     }
 
     #[test]

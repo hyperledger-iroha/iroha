@@ -3,6 +3,84 @@ import XCTest
 @testable import IrohaSwift
 
 final class KagemushaRecursiveSpendTests: XCTestCase {
+    func testReleaseQualifiedStepEqVerifierKeyIDBindsExactManifest() throws {
+        let manifest = Data(repeating: 0x42, count: 32)
+        XCTAssertEqual(
+            try KagemushaRecursiveSpend.releaseQualifiedStepEqVerifierKeyIDV4(
+                manifestSHA256: manifest
+            ),
+            "\(KagemushaRecursiveSpend.pastaCycleBackendV4):"
+                + "\(KagemushaRecursiveSpend.stepEqCircuitIDV4)-"
+                + String(repeating: "42", count: 32)
+        )
+        XCTAssertNotEqual(
+            try KagemushaRecursiveSpend.releaseQualifiedStepEqVerifierKeyIDV4(
+                manifestSHA256: manifest
+            ),
+            try KagemushaRecursiveSpend.releaseQualifiedStepEqVerifierKeyIDV4(
+                manifestSHA256: Data(repeating: 0x43, count: 32)
+            )
+        )
+        XCTAssertThrowsError(
+            try KagemushaRecursiveSpend.releaseQualifiedStepEqVerifierKeyIDV4(
+                manifestSHA256: Data(repeating: 0, count: 32)
+            )
+        )
+    }
+
+    func testVerifyResultV4DecoderRequiresExactVerifierWindowAndManifestBinding() throws {
+        let atActivation = try KagemushaRecursiveSpendCodecs.decodeVerifyResultV4(
+            verifyResultV4Archive(blockHeight: 10)
+        )
+        XCTAssertEqual(atActivation.verifierActivationHeight, 10)
+        XCTAssertEqual(atActivation.verifierWithdrawHeight, 20)
+        XCTAssertEqual(atActivation.verifiedAtBlockHeight, 10)
+
+        let beforeWithdrawal = try KagemushaRecursiveSpendCodecs.decodeVerifyResultV4(
+            verifyResultV4Archive(blockHeight: 19)
+        )
+        XCTAssertEqual(beforeWithdrawal.verifiedAtBlockHeight, 19)
+
+        let invalidWindows: [(
+            activation: UInt64?,
+            withdrawal: UInt64?,
+            blockHeight: UInt64
+        )] = [
+            (nil, 20, 10),
+            (10, nil, 10),
+            (0, 20, 10),
+            (10, 10, 10),
+            (20, 10, 10),
+            (10, 20, 9),
+            (10, 20, 20),
+        ]
+        for window in invalidWindows {
+            XCTAssertThrowsError(try KagemushaRecursiveSpendCodecs.decodeVerifyResultV4(
+                verifyResultV4Archive(
+                    activation: window.activation,
+                    withdrawal: window.withdrawal,
+                    blockHeight: window.blockHeight
+                )
+            ))
+        }
+
+        let manifest = fixed32(0xB8)
+        let staleVerifierKeyID = try KagemushaRecursiveSpend
+            .releaseQualifiedStepEqVerifierKeyIDV4(manifestSHA256: fixed32(0xB9))
+        for verifierKeyID in [
+            "\(KagemushaRecursiveSpend.pastaCycleBackendV4):"
+                + KagemushaRecursiveSpend.stepEqCircuitIDV4,
+            staleVerifierKeyID,
+        ] {
+            XCTAssertThrowsError(try KagemushaRecursiveSpendCodecs.decodeVerifyResultV4(
+                verifyResultV4Archive(
+                    manifest: manifest,
+                    verifierKeyID: verifierKeyID
+                )
+            ))
+        }
+    }
+
     func testKagemushaDeviceAttestationIsCanonicalAndRejectsAdversarialInputs() throws {
         let registration = try kagemushaDeviceAttestation()
         XCTAssertEqual(
@@ -650,7 +728,8 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
                 trustedPolicyNorito: Data([0x01]),
                 releaseAttestationNorito: Data([0x02]),
                 benchmarkEvidence: Data([0x03]),
-                cryptographicReview: Data([0x04])
+                cryptographicReview: Data([0x04]),
+                promotionRecordNorito: Data([0x05])
             )
         )
         XCTAssertEqual(session.manifest, manifest)
@@ -683,23 +762,38 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
             trustedPolicyNorito: Data([0x01]),
             releaseAttestationNorito: Data([0x02]),
             benchmarkEvidence: Data([0x03]),
-            cryptographicReview: Data([0x04])
+            cryptographicReview: Data([0x04]),
+            promotionRecordNorito: Data([0x05])
         ))
-        for field in 0..<4 {
-            var values = [Data([0x01]), Data([0x02]), Data([0x03]), Data([0x04])]
+        for field in 0..<5 {
+            var values = [
+                Data([0x01]), Data([0x02]), Data([0x03]), Data([0x04]), Data([0x05])
+            ]
             values[field] = Data()
             XCTAssertThrowsError(try KagemushaRecursiveSpendReleaseAuthenticationV4(
                 trustedPolicyNorito: values[0],
                 releaseAttestationNorito: values[1],
                 benchmarkEvidence: values[2],
-                cryptographicReview: values[3]
+                cryptographicReview: values[3],
+                promotionRecordNorito: values[4]
             ))
         }
         XCTAssertThrowsError(try KagemushaRecursiveSpendReleaseAuthenticationV4(
             trustedPolicyNorito: Data(repeating: 0x01, count: 64 * 1_024 + 1),
             releaseAttestationNorito: Data([0x02]),
             benchmarkEvidence: Data([0x03]),
-            cryptographicReview: Data([0x04])
+            cryptographicReview: Data([0x04]),
+            promotionRecordNorito: Data([0x05])
+        ))
+        XCTAssertThrowsError(try KagemushaRecursiveSpendReleaseAuthenticationV4(
+            trustedPolicyNorito: Data([0x01]),
+            releaseAttestationNorito: Data([0x02]),
+            benchmarkEvidence: Data([0x03]),
+            cryptographicReview: Data([0x04]),
+            promotionRecordNorito: Data(
+                repeating: 0x05,
+                count: KagemushaRecursiveSpend.maximumPromotionRecordBytesV4 + 1
+            )
         ))
     }
 
@@ -937,6 +1031,86 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
         var writer = CompactNoritoWriter()
         writer.writeUInt64LE(value)
         return writer.data
+    }
+
+    private func optionalUInt64(_ value: UInt64?) -> Data {
+        var writer = CompactNoritoWriter()
+        guard let value else {
+            writer.writeUInt8(0)
+            return writer.data
+        }
+        writer.writeUInt8(1)
+        writer.writeField(uint64(value))
+        return writer.data
+    }
+
+    private func encodedVerifierKeyID(_ value: String) throws -> Data {
+        let separator = try XCTUnwrap(value.firstIndex(of: ":"))
+        return fields([
+            CompactNorito.encodeString(String(value[..<separator])),
+            CompactNorito.encodeString(String(value[value.index(after: separator)...])),
+        ])
+    }
+
+    private func verifyResultV4Archive(
+        manifest: Data? = nil,
+        verifierKeyID: String? = nil,
+        activation: UInt64? = 10,
+        withdrawal: UInt64? = 20,
+        blockHeight: UInt64 = 10
+    ) throws -> Data {
+        let manifest = manifest ?? fixed32(0xB8)
+        let resolvedVerifierKeyID: String
+        if let verifierKeyID {
+            resolvedVerifierKeyID = verifierKeyID
+        } else {
+            resolvedVerifierKeyID = try KagemushaRecursiveSpend
+                .releaseQualifiedStepEqVerifierKeyIDV4(
+                    manifestSHA256: manifest
+                )
+        }
+        let assetDefinitionBytes = try XCTUnwrap(
+            AssetDefinitionAddress.decode(assetDefinitionID())
+        )
+        var atomicUnits = Data(repeating: 0, count: 16)
+        atomicUnits[0] = 1
+        let branchClaim = try KagemushaRecursiveSpendBranchClaim.root(
+            lineageRoot: fixed32(0xD1)
+        )
+        let summary = fields([
+            constVector(assetDefinitionBytes),
+            fields([atomicUnits, uint32(0)]),
+            fixed32(0xC1),
+            fixed32(0xC2),
+            uint32(0),
+            uint32(1),
+            sequence([try KagemushaRecursiveSpendCodecs.encodeBranchClaim(branchClaim)]),
+            fields([
+                uint16(KagemushaRecursiveSpend.wireVersionV4),
+                CompactNorito.encodeString("test-release"),
+                manifest,
+            ]),
+            try encodedVerifierKeyID(resolvedVerifierKeyID),
+            fixed32(0xC3),
+        ])
+        return KagemushaRecursiveSpend.frameArchive(
+            schema: KagemushaRecursiveSpend.verifyResultWireNameV4,
+            payload: fields([
+                Data([1]),
+                Data([1]),
+                Data([1]),
+                Data([1]),
+                summary,
+                fixed32(0xC4),
+                fixed32(0xC5),
+                try encodedVerifierKeyID(resolvedVerifierKeyID),
+                CompactNorito.encodeString(KagemushaRecursiveSpend.stepEqCircuitIDV4),
+                optionalUInt64(activation),
+                optionalUInt64(withdrawal),
+                uint64(blockHeight),
+                uint64(1_000),
+            ])
+        )
     }
 
     private func kagemushaDeviceAttestation(

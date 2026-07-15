@@ -1,6 +1,103 @@
 {
   "components": {
     "schemas": {
+      "AccountAliasLease": {
+        "additionalProperties": false,
+        "properties": {
+          "alias": {
+            "description": "Canonical account alias bound by the onboarding transaction.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "auto_renew_enabled": {
+            "description": "Whether onboarding configured automatic renewal for this lease.",
+            "type": "boolean"
+          },
+          "dataspace": {
+            "description": "Canonical alias of the dataspace that owns the binding.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "domain": {
+            "description": "Optional fully qualified alias domain scope. Omitted for a dataspace-root alias.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "expires_at_ms": {
+            "description": "Lease expiry timestamp in Unix milliseconds.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "grace_expires_at_ms": {
+            "description": "Grace-period expiry timestamp in Unix milliseconds.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "is_primary": {
+            "description": "Whether this is the account's primary alias in the dataspace.",
+            "type": "boolean"
+          },
+          "last_invoice_status": {
+            "description": "Optional outcome of the most recent auto-renew invoice.",
+            "enum": [
+              "paid",
+              "failed"
+            ],
+            "type": "string"
+          },
+          "lease_status": {
+            "description": "Current account-alias lease lifecycle state.",
+            "enum": [
+              "active",
+              "grace_period",
+              "redemption",
+              "frozen",
+              "tombstoned"
+            ],
+            "type": "string"
+          },
+          "max_charge_amount": {
+            "$ref": "#/components/schemas/Quantity",
+            "description": "Optional exact cap on an automatic renewal charge."
+          },
+          "next_charge_ms": {
+            "description": "Optional next automatic charge timestamp in Unix milliseconds.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "redemption_expires_at_ms": {
+            "description": "Redemption-period expiry timestamp in Unix milliseconds.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "subscription_status": {
+            "description": "Optional auto-renew subscription state.",
+            "enum": [
+              "active",
+              "paused",
+              "past_due",
+              "canceled",
+              "suspended"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "alias",
+          "dataspace",
+          "is_primary",
+          "lease_status",
+          "expires_at_ms",
+          "grace_expires_at_ms",
+          "redemption_expires_at_ms",
+          "auto_renew_enabled"
+        ],
+        "type": "object"
+      },
       "AccountAssetListItem": {
         "additionalProperties": true,
         "properties": {
@@ -187,14 +284,19 @@
         "properties": {
           "account_id": {
             "description": "Canonical I105 account id to register. Mutually exclusive with generated `public_key_hex` onboarding material.",
+            "minLength": 1,
             "type": "string"
           },
           "alias": {
             "description": "Account alias literal such as `alice@universal` or `merchant@domain.dataspace`.",
+            "minLength": 1,
             "type": "string"
           },
           "identity_commitment_hex": {
             "description": "Optional 64-hex digest commitment to off-chain identity evidence. Raw identity metadata is not accepted.",
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9A-Fa-f]{64}$",
             "type": "string"
           },
           "permissions": {
@@ -206,16 +308,60 @@
           },
           "public_key_hex": {
             "description": "Raw 32-byte Ed25519 public key bytes as 64 hex characters; Torii derives the canonical account id from this key.",
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9A-Fa-f]{64}$",
             "type": "string"
           },
           "uaid": {
-            "description": "Explicit UAID literal (`uaid:<hex>` or raw 64-hex digest with the canonical low bit set).",
+            "description": "Explicit UAID literal. Torii trims surrounding whitespace and accepts either a case-insensitive `uaid:` prefix followed by a 64-hex digest or the raw 64-hex digest.",
             "type": "string"
           }
         },
         "required": [
           "alias",
           "uaid"
+        ],
+        "type": "object"
+      },
+      "AccountOnboardingResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "account_id": {
+            "description": "Canonical domainless I105 account identifier queued for registration.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "lease": {
+            "$ref": "#/components/schemas/AccountAliasLease",
+            "description": "Alias lease derived from the accepted onboarding quote."
+          },
+          "status": {
+            "const": "QUEUED",
+            "description": "Queue acceptance state; this is not ledger finality.",
+            "type": "string"
+          },
+          "tx_hash_hex": {
+            "description": "Canonical lowercase hash of the queued onboarding transaction.",
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "uaid": {
+            "description": "Canonical lowercase UAID literal bound to the account.",
+            "maxLength": 69,
+            "minLength": 69,
+            "pattern": "^uaid:[0-9a-f]{64}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "account_id",
+          "uaid",
+          "tx_hash_hex",
+          "status",
+          "lease"
         ],
         "type": "object"
       },
@@ -1525,6 +1671,76 @@
         ],
         "type": "object"
       },
+      "BridgeFinalityAttestationBodyV1": {
+        "additionalProperties": false,
+        "description": "Exact challenge-bound statement produced from one immutable committed StateView and authoritative reducer status.",
+        "properties": {
+          "chain_id": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "challenge": {
+            "$ref": "#/components/schemas/SumeragiV2Fixed32ByteArray"
+          },
+          "finality_proof": {
+            "$ref": "#/components/schemas/BridgeFinalityProof"
+          },
+          "genesis_block_hash": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "genesis_finality_proof": {
+            "$ref": "#/components/schemas/BridgeFinalityProof"
+          },
+          "node_fingerprint": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "node_id": {
+            "description": "Canonical PeerId of the BLS node key which signed this attestation.",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/SumeragiStatusResponse"
+          },
+          "version": {
+            "enum": [
+              1
+            ],
+            "format": "uint8",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "challenge",
+          "chain_id",
+          "node_id",
+          "node_fingerprint",
+          "genesis_block_hash",
+          "genesis_finality_proof",
+          "status",
+          "finality_proof"
+        ],
+        "type": "object"
+      },
+      "BridgeFinalityAttestationV1": {
+        "additionalProperties": false,
+        "properties": {
+          "body": {
+            "$ref": "#/components/schemas/BridgeFinalityAttestationBodyV1"
+          },
+          "signature": {
+            "description": "Canonical uppercase node signature over the domain-separated typed body hash.",
+            "minLength": 2,
+            "pattern": "^(?:[0-9A-F]{2})+$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "body",
+          "signature"
+        ],
+        "type": "object"
+      },
       "BridgeFinalityBundle": {
         "additionalProperties": false,
         "properties": {
@@ -1811,6 +2027,90 @@
         },
         "required": [
           "status"
+        ],
+        "type": "object"
+      },
+      "ContractAliasBinding": {
+        "additionalProperties": false,
+        "properties": {
+          "alias": {
+            "type": "string"
+          },
+          "bound_at_ms": {
+            "format": "uint64",
+            "type": "integer"
+          },
+          "grace_until_ms": {
+            "format": "uint64",
+            "type": "integer"
+          },
+          "lease_expiry_ms": {
+            "format": "uint64",
+            "type": "integer"
+          },
+          "status": {
+            "enum": [
+              "permanent",
+              "leased_active",
+              "leased_grace",
+              "expired_pending_cleanup"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "alias",
+          "status",
+          "bound_at_ms"
+        ],
+        "type": "object"
+      },
+      "ContractAliasResolveRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "contract_alias": {
+            "description": "Exact canonical contract alias (`name::domain.dataspace` or `name::dataspace`) without surrounding whitespace.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "contract_alias"
+        ],
+        "type": "object"
+      },
+      "ContractAliasResolveResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "contract_address": {
+            "type": "string"
+          },
+          "contract_alias": {
+            "type": "string"
+          },
+          "contract_alias_binding": {
+            "$ref": "#/components/schemas/ContractAliasBinding"
+          },
+          "contract_subject_account": {
+            "description": "Consensus-persisted, deterministic, non-signing I105 authority for this exact address.",
+            "type": "string"
+          },
+          "dataspace": {
+            "type": "string"
+          },
+          "source": {
+            "enum": [
+              "world_state"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "contract_alias",
+          "contract_address",
+          "contract_subject_account",
+          "dataspace",
+          "contract_alias_binding",
+          "source"
         ],
         "type": "object"
       },
@@ -2480,6 +2780,13 @@
             "items": {
               "additionalProperties": false,
               "properties": {
+                "asset_transfer_definition_ids": {
+                  "items": {
+                    "description": "Canonical Base58 UUIDv4-backed asset definition id.",
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
                 "contract_selectors": {
                   "items": {
                     "additionalProperties": false,
@@ -2567,6 +2874,17 @@
                     "type": "string"
                   },
                   "type": "array"
+                },
+                "max_fee": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/Quantity"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "Optional canonical non-negative rule-level Quantity fee cap."
                 }
               },
               "required": [
@@ -2574,6 +2892,7 @@
                 "dataspaces",
                 "executable_kinds",
                 "instruction_wire_ids",
+                "asset_transfer_definition_ids",
                 "contract_selectors"
               ],
               "type": "object"
@@ -2716,6 +3035,81 @@
           "bond_slashed"
         ],
         "type": "object"
+      },
+      "GovernedContractResponse": {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "abi_hash_hex": {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "code_hash_hex": {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "contract_address": {
+                "type": "string"
+              },
+              "contract_subject_account": {
+                "type": "string"
+              },
+              "dataspace": {
+                "type": "string"
+              },
+              "found": {
+                "enum": [
+                  true
+                ],
+                "type": "boolean"
+              },
+              "public_entrypoints": {
+                "description": "Lexicographically sorted Kotoage and View entrypoint names from the authenticated artifact.",
+                "items": {
+                  "pattern": "^[a-z][a-z0-9_]{0,127}$",
+                  "type": "string"
+                },
+                "minItems": 1,
+                "type": "array",
+                "uniqueItems": true
+              }
+            },
+            "required": [
+              "found",
+              "contract_address",
+              "contract_subject_account",
+              "dataspace",
+              "code_hash_hex",
+              "abi_hash_hex",
+              "public_entrypoints"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "contract_address": {
+                "type": "string"
+              },
+              "dataspace": {
+                "type": "string"
+              },
+              "found": {
+                "enum": [
+                  false
+                ],
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "found",
+              "contract_address",
+              "dataspace"
+            ],
+            "type": "object"
+          }
+        ]
       },
       "Hash": {
         "description": "Canonical Norito JSON hash literal. Consumers must also verify the CRC16 checksum and Iroha marker bit.",
@@ -3540,220 +3934,6 @@
             "type": "string"
           }
         },
-        "type": "object"
-      },
-      "MultisigApprovalEntry": {
-        "additionalProperties": false,
-        "properties": {
-          "instructions_hash": {
-            "maxLength": 64,
-            "minLength": 64,
-            "pattern": "^[0-9a-f]{64}$",
-            "type": "string"
-          },
-          "intent": {
-            "$ref": "#/components/schemas/JsonValue"
-          },
-          "multisig_account_id": {
-            "minLength": 1,
-            "type": "string"
-          },
-          "multisig_account_ref": {
-            "maxLength": 64,
-            "minLength": 64,
-            "pattern": "^[0-9a-f]{64}$",
-            "type": "string"
-          },
-          "operation_type": {
-            "maxLength": 128,
-            "minLength": 1,
-            "pattern": "^[A-Z][A-Z0-9_]*$",
-            "type": "string"
-          },
-          "proposal": {
-            "$ref": "#/components/schemas/MultisigProposalPayload"
-          },
-          "proposal_id": {
-            "maxLength": 64,
-            "minLength": 64,
-            "pattern": "^[0-9a-f]{64}$",
-            "type": "string"
-          },
-          "spec": {
-            "$ref": "#/components/schemas/MultisigSpecPayload"
-          },
-          "status": {
-            "enum": [
-              "COLLECTING_SIGNATURES",
-              "FINALIZED",
-              "CANCELED",
-              "EXPIRED"
-            ],
-            "type": "string"
-          },
-          "terminal_at_ms": {
-            "oneOf": [
-              {
-                "format": "uint64",
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          }
-        },
-        "required": [
-          "multisig_account_id",
-          "multisig_account_ref",
-          "spec",
-          "proposal_id",
-          "instructions_hash",
-          "proposal",
-          "operation_type",
-          "status"
-        ],
-        "type": "object"
-      },
-      "MultisigApprovalLookupRequest": {
-        "additionalProperties": false,
-        "oneOf": [
-          {
-            "required": [
-              "proposal_id"
-            ]
-          },
-          {
-            "required": [
-              "instructions_hash"
-            ]
-          }
-        ],
-        "properties": {
-          "instructions_hash": {
-            "maxLength": 64,
-            "minLength": 64,
-            "pattern": "^[0-9a-f]{64}$",
-            "type": "string"
-          },
-          "multisig_account_ref": {
-            "maxLength": 64,
-            "minLength": 64,
-            "pattern": "^[0-9a-f]{64}$",
-            "type": "string"
-          },
-          "proposal_id": {
-            "maxLength": 64,
-            "minLength": 64,
-            "pattern": "^[0-9a-f]{64}$",
-            "type": "string"
-          }
-        },
-        "required": [
-          "multisig_account_ref"
-        ],
-        "type": "object"
-      },
-      "MultisigApprovalLookupResponse": {
-        "additionalProperties": false,
-        "properties": {
-          "item": {
-            "$ref": "#/components/schemas/MultisigApprovalEntry"
-          }
-        },
-        "required": [
-          "item"
-        ],
-        "type": "object"
-      },
-      "MultisigApprovalsQueryRequest": {
-        "additionalProperties": false,
-        "properties": {
-          "cursor": {
-            "oneOf": [
-              {
-                "maxLength": 512,
-                "minLength": 1,
-                "pattern": "^[A-Za-z0-9_-]+$",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "limit": {
-            "oneOf": [
-              {
-                "format": "uint64",
-                "maximum": 100,
-                "minimum": 1,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "operation_type": {
-            "items": {
-              "maxLength": 128,
-              "minLength": 1,
-              "pattern": "^[A-Z][A-Z0-9_]*$",
-              "type": "string"
-            },
-            "maxItems": 32,
-            "type": "array",
-            "uniqueItems": true
-          },
-          "requires_my_signature": {
-            "default": false,
-            "type": "boolean"
-          },
-          "status": {
-            "items": {
-              "enum": [
-                "COLLECTING_SIGNATURES",
-                "FINALIZED",
-                "CANCELED",
-                "EXPIRED"
-              ],
-              "type": "string"
-            },
-            "maxItems": 4,
-            "type": "array",
-            "uniqueItems": true
-          }
-        },
-        "type": "object"
-      },
-      "MultisigApprovalsQueryResponse": {
-        "additionalProperties": false,
-        "properties": {
-          "items": {
-            "items": {
-              "$ref": "#/components/schemas/MultisigApprovalEntry"
-            },
-            "maxItems": 100,
-            "type": "array"
-          },
-          "next_cursor": {
-            "oneOf": [
-              {
-                "maxLength": 512,
-                "minLength": 1,
-                "pattern": "^[A-Za-z0-9_-]+$",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          }
-        },
-        "required": [
-          "items"
-        ],
         "type": "object"
       },
       "MultisigApproveRequest": {
@@ -5396,7 +5576,10 @@
             "type": "string"
           },
           "commitment": {
-            "description": "Lowercase 32-byte commitment of the registered verifying key.",
+            "description": "Non-zero lowercase 32-byte commitment of the registered verifying key.",
+            "not": {
+              "const": "0000000000000000000000000000000000000000000000000000000000000000"
+            },
             "pattern": "^[0-9a-f]{64}$",
             "type": "string"
           },
@@ -5410,14 +5593,17 @@
             "type": "integer"
           },
           "public_inputs_schema_hash": {
-            "description": "Lowercase 32-byte public-input schema hash.",
+            "description": "Non-zero lowercase 32-byte public-input schema hash.",
+            "not": {
+              "const": "0000000000000000000000000000000000000000000000000000000000000000"
+            },
             "pattern": "^[0-9a-f]{64}$",
             "type": "string"
           },
           "version": {
-            "description": "Governance-managed monotonic verifier-record version.",
+            "description": "Positive governance-managed monotonic verifier-record version.",
             "format": "uint32",
-            "minimum": 0,
+            "minimum": 1,
             "type": "integer"
           },
           "withdrawal_height": {
@@ -5457,11 +5643,98 @@
           },
           "manifest_sha256": {
             "$ref": "#/components/schemas/OfflineFixed32Bytes"
+          },
+          "version": {
+            "format": "uint16",
+            "maximum": 4,
+            "minimum": 4,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "generation",
+          "manifest_sha256"
+        ],
+        "type": "object"
+      },
+      "OfflineAuthenticatedArtifactSet": {
+        "additionalProperties": false,
+        "description": "Exact authenticated ABI-20 V4 release identity selected at the readiness snapshot after Core authenticates its policy, attestation, evidence, manifest, verifier records, and verifier-side artifact bytes. The three non-zero SHA-256 digests identify distinct artifacts.",
+        "properties": {
+          "activation_height": {
+            "description": "First height at which this authenticated release may issue notes.",
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "asset_scale": {
+            "description": "Authoritative fixed asset scale authenticated by this release.",
+            "format": "uint32",
+            "maximum": 28,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "generation": {
+            "description": "Canonical cross-platform generation identifier: ASCII alphanumeric, dot, underscore, or hyphen; starts and ends alphanumeric; and excludes Windows reserved basenames.",
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^(?!(?:[Cc][Oo][Nn]|[Pp][Rr][Nn]|[Aa][Uu][Xx]|[Nn][Uu][Ll]|[Cc][Oo][Mm][1-9]|[Ll][Pp][Tt][1-9])(?:\\.|$))[A-Za-z0-9](?:[A-Za-z0-9._-]{0,126}[A-Za-z0-9])?$",
+            "type": "string"
+          },
+          "manifest_sha256": {
+            "description": "Lowercase hexadecimal SHA-256 digest of the canonical ABI-20 V4 release manifest.",
+            "maxLength": 64,
+            "minLength": 64,
+            "not": {
+              "const": "0000000000000000000000000000000000000000000000000000000000000000"
+            },
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "max_proof_bytes": {
+            "description": "Authenticated upper bound for one canonical ABI-20 V4 proof-pair payload.",
+            "format": "uint32",
+            "maximum": 16777216,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "release_attestation_sha256": {
+            "description": "Lowercase hexadecimal SHA-256 digest of the canonical signed ABI-20 V4 release attestation.",
+            "maxLength": 64,
+            "minLength": 64,
+            "not": {
+              "const": "0000000000000000000000000000000000000000000000000000000000000000"
+            },
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "release_policy_sha256": {
+            "description": "Lowercase hexadecimal SHA-256 digest of the locally trusted ABI-20 V4 release policy.",
+            "maxLength": 64,
+            "minLength": 64,
+            "not": {
+              "const": "0000000000000000000000000000000000000000000000000000000000000000"
+            },
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "withdrawal_height": {
+            "description": "First height at which new issuance must stop; strictly greater than activation_height.",
+            "format": "uint64",
+            "minimum": 2,
+            "type": "integer"
           }
         },
         "required": [
           "generation",
-          "manifest_sha256"
+          "manifest_sha256",
+          "release_policy_sha256",
+          "release_attestation_sha256",
+          "activation_height",
+          "withdrawal_height",
+          "max_proof_bytes",
+          "asset_scale"
         ],
         "type": "object"
       },
@@ -5959,6 +6232,86 @@
           }
         ]
       },
+      "OfflinePastaCycleProofEnvelope": {
+        "additionalProperties": false,
+        "description": "Authenticated ABI-20/V4 Eq/Ep proof-pair envelope.",
+        "properties": {
+          "artifact_generation": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          "manifest_sha256": {
+            "$ref": "#/components/schemas/OfflineFixed32Bytes"
+          },
+          "proof": {
+            "$ref": "#/components/schemas/OfflineOpaqueProof"
+          },
+          "proof_backend": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "state_boundary": {
+            "$ref": "#/components/schemas/OfflineRecursiveStateBoundary"
+          },
+          "step_ep_circuit_id": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "step_ep_circuit_params_sha256": {
+            "$ref": "#/components/schemas/OfflineFixed32Bytes"
+          },
+          "step_ep_parameter_generation": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "step_ep_verifier_key_sha256": {
+            "$ref": "#/components/schemas/OfflineFixed32Bytes"
+          },
+          "step_eq_circuit_id": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "step_eq_circuit_params_sha256": {
+            "$ref": "#/components/schemas/OfflineFixed32Bytes"
+          },
+          "step_eq_parameter_generation": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "step_eq_verifier_key_sha256": {
+            "$ref": "#/components/schemas/OfflineFixed32Bytes"
+          },
+          "transcript_profile": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "version": {
+            "format": "uint16",
+            "maximum": 4,
+            "minimum": 4,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "proof_backend",
+          "transcript_profile",
+          "step_eq_circuit_id",
+          "step_ep_circuit_id",
+          "artifact_generation",
+          "manifest_sha256",
+          "step_eq_parameter_generation",
+          "step_ep_parameter_generation",
+          "step_eq_circuit_params_sha256",
+          "step_ep_circuit_params_sha256",
+          "step_eq_verifier_key_sha256",
+          "step_ep_verifier_key_sha256",
+          "state_boundary",
+          "proof"
+        ],
+        "type": "object"
+      },
       "OfflinePeerSplitTransition": {
         "properties": {
           "binding_digest": {
@@ -6084,7 +6437,7 @@
                 "type": "null"
               }
             ],
-            "description": "Authoritative active recursive StepEp verifier at the evaluated height."
+            "description": "Authoritative active ABI-20 V4 recursive StepEp verifier at the evaluated height, or null when the authenticated V4 release cannot be resolved."
           },
           "active_recursive_step_eq_verifier": {
             "anyOf": [
@@ -6095,7 +6448,7 @@
                 "type": "null"
               }
             ],
-            "description": "Authoritative active recursive StepEq verifier at the evaluated height."
+            "description": "Authoritative active ABI-20 V4 recursive StepEq verifier at the evaluated height, or null when the authenticated V4 release cannot be resolved."
           },
           "active_topup_shield_verifier": {
             "anyOf": [
@@ -6130,6 +6483,17 @@
             ],
             "description": "Authoritative active confidential-unshield verifier at the evaluated height."
           },
+          "artifact_set": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/OfflineAuthenticatedArtifactSet"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Exact authenticated ABI-20 V4 release identity selected atomically with the recursive verifiers, or null with an authenticated V4 registry blocker."
+          },
           "asset_definition_id": {
             "description": "Resolved canonical unprefixed Base58 asset-definition address; an alias selector is never echoed here.",
             "pattern": "^[1-9A-HJ-NP-Za-km-z]{28}$",
@@ -6149,6 +6513,7 @@
             "description": "Authoritative live asset-definition scale, including values above the Offline payment limit when asset_scale_unsupported is reported, or null with an asset_scale_unavailable blocker. A ready response always has scale at most 28."
           },
           "blockers": {
+            "description": "Empty exactly when ready is true; otherwise contains stable typed blockers for every unavailable requirement.",
             "items": {
               "$ref": "#/components/schemas/OfflineReadinessBlocker"
             },
@@ -6172,21 +6537,22 @@
             "type": "integer"
           },
           "proof_backend_available": {
-            "description": "Whether this Torii/Core build contains the sound recursive proof backend.",
+            "description": "Whether the exact authenticated ABI-20 V4 artifacts constructed the production recursive verifier backend at this snapshot.",
             "type": "boolean"
           },
           "ready": {
-            "description": "True exactly when blockers is empty. False is a successfully evaluated domain state, not a service error.",
+            "description": "True exactly when no readiness blocker remains. False is a successfully evaluated domain state, not a service error and does not erase independently reported backend or lineage capabilities.",
             "type": "boolean"
           },
           "recursive_lineage_supported": {
-            "description": "Whether recursive branches can be verified and redeemed through the production lineage proof path.",
+            "description": "Whether the exact authenticated ABI-20 V4 artifact set, distinct active Eq/Ep records, and constructed backend support chain admission, parent/change recursive verification, and redemption at this snapshot.",
             "type": "boolean"
           },
           "required_bridge_abi_version": {
+            "description": "Exact native bridge ABI required by the authenticated ABI-20 V4 recursive release.",
             "format": "uint32",
-            "maximum": 19,
-            "minimum": 19,
+            "maximum": 20,
+            "minimum": 20,
             "type": "integer"
           }
         },
@@ -6202,6 +6568,7 @@
           "active_unshield_verifier",
           "active_recursive_step_eq_verifier",
           "active_recursive_step_ep_verifier",
+          "artifact_set",
           "proof_backend_available",
           "recursive_lineage_supported",
           "ready",
@@ -6230,6 +6597,53 @@
         "required": [
           "code",
           "message"
+        ],
+        "type": "object"
+      },
+      "OfflineRecursiveOperationVector": {
+        "additionalProperties": false,
+        "description": "Exact canonical ABI-20 operation row independently carried by the bundle.",
+        "properties": {
+          "limbs": {
+            "items": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "maxItems": 1080,
+            "minItems": 1080,
+            "type": "array"
+          }
+        },
+        "required": [
+          "limbs"
+        ],
+        "type": "object"
+      },
+      "OfflineRecursiveStateBoundary": {
+        "additionalProperties": false,
+        "description": "Exact selector-free recursive state crossing the Pasta field boundary.",
+        "properties": {
+          "layout_version": {
+            "format": "uint16",
+            "maximum": 2,
+            "minimum": 2,
+            "type": "integer"
+          },
+          "state_limbs": {
+            "items": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "maxItems": 890,
+            "minItems": 890,
+            "type": "array"
+          }
+        },
+        "required": [
+          "layout_version",
+          "state_limbs"
         ],
         "type": "object"
       },
@@ -6317,9 +6731,17 @@
           },
           "redemption": {
             "$ref": "#/components/schemas/OfflineRedemptionIntent"
+          },
+          "version": {
+            "description": "Exact ABI-20/V4 chain-request wire version.",
+            "format": "uint16",
+            "maximum": 4,
+            "minimum": 4,
+            "type": "integer"
           }
         },
         "required": [
+          "version",
           "bundle",
           "recipient",
           "amount",
@@ -6599,6 +7021,9 @@
       },
       "OfflineSpendBundle": {
         "properties": {
+          "operation": {
+            "$ref": "#/components/schemas/OfflineRecursiveOperationVector"
+          },
           "recursive_proof": {
             "$ref": "#/components/schemas/OfflineSpendProof"
           },
@@ -6608,14 +7033,15 @@
         },
         "required": [
           "statement",
+          "operation",
           "recursive_proof"
         ],
         "type": "object"
       },
       "OfflineSpendProof": {
         "properties": {
-          "proof": {
-            "$ref": "#/components/schemas/OfflineOpaqueProof"
+          "proof_envelope": {
+            "$ref": "#/components/schemas/OfflinePastaCycleProofEnvelope"
           },
           "public_statement_digest": {
             "$ref": "#/components/schemas/OfflineFixed32Bytes"
@@ -6627,7 +7053,7 @@
         "required": [
           "verifier_key_id",
           "public_statement_digest",
-          "proof"
+          "proof_envelope"
         ],
         "type": "object"
       },
@@ -6660,6 +7086,12 @@
           },
           "final_root": {
             "$ref": "#/components/schemas/OfflineFixed32Bytes"
+          },
+          "next_zero_leaf_index": {
+            "format": "uint32",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
           },
           "peer_hop_count": {
             "format": "uint32",
@@ -6700,6 +7132,7 @@
           "asset",
           "asset_scale",
           "final_root",
+          "next_zero_leaf_index",
           "topup_anchor_refs",
           "proof_step_count",
           "peer_hop_count",
@@ -6839,10 +7272,9 @@
             "$ref": "#/components/schemas/OfflineOperationIdBytes"
           },
           "version": {
-            "enum": [
-              2
-            ],
             "format": "uint16",
+            "maximum": 4,
+            "minimum": 4,
             "type": "integer"
           }
         },
@@ -7070,9 +7502,17 @@
           "shield_evidence": {
             "$ref": "#/components/schemas/OfflineTopUpShieldEvidence",
             "description": "Typed public-to-confidential proof that appends exactly the first spendable note without consuming a confidential input."
+          },
+          "version": {
+            "description": "Exact ABI-20/V4 chain-request wire version.",
+            "format": "uint16",
+            "maximum": 4,
+            "minimum": 4,
+            "type": "integer"
           }
         },
         "required": [
+          "version",
           "asset",
           "amount",
           "current_note",
@@ -13759,7 +14199,7 @@
           },
           "min_signers": {
             "format": "uint32",
-            "maximum": 4096,
+            "maximum": 128,
             "minimum": 1,
             "type": "integer"
           },
@@ -13771,7 +14211,7 @@
           },
           "signer_count": {
             "format": "uint32",
-            "maximum": 4096,
+            "maximum": 128,
             "minimum": 1,
             "type": "integer"
           },
@@ -13783,7 +14223,7 @@
           },
           "validator_count": {
             "format": "uint32",
-            "maximum": 4096,
+            "maximum": 128,
             "minimum": 1,
             "type": "integer"
           }
@@ -13821,7 +14261,7 @@
               "minimum": 0,
               "type": "integer"
             },
-            "maxItems": 4096,
+            "maxItems": 128,
             "minItems": 1,
             "type": "array",
             "uniqueItems": true
@@ -13996,7 +14436,7 @@
         "properties": {
           "min_signers": {
             "format": "uint32",
-            "maximum": 4096,
+            "maximum": 128,
             "minimum": 1,
             "type": "integer"
           },
@@ -14114,7 +14554,7 @@
             "items": {
               "$ref": "#/components/schemas/SumeragiV2BlsProof"
             },
-            "maxItems": 4096,
+            "maxItems": 128,
             "minItems": 1,
             "type": "array"
           }
@@ -14160,7 +14600,7 @@
             "items": {
               "$ref": "#/components/schemas/SumeragiV2ValidatorPower"
             },
-            "maxItems": 4096,
+            "maxItems": 128,
             "minItems": 1,
             "type": "array",
             "uniqueItems": true
@@ -14170,7 +14610,7 @@
             "items": {
               "$ref": "#/components/schemas/SumeragiV2BlsProof"
             },
-            "maxItems": 4096,
+            "maxItems": 128,
             "minItems": 1,
             "type": "array"
           }
@@ -14277,7 +14717,7 @@
             "items": {
               "$ref": "#/components/schemas/SumeragiV2ValidatorPower"
             },
-            "maxItems": 4096,
+            "maxItems": 128,
             "minItems": 1,
             "type": "array",
             "uniqueItems": true
@@ -14335,7 +14775,7 @@
           },
           "validator_count": {
             "format": "uint32",
-            "maximum": 4096,
+            "maximum": 128,
             "minimum": 1,
             "type": "integer"
           }
@@ -14394,7 +14834,7 @@
               "minimum": 0,
               "type": "integer"
             },
-            "maxItems": 4096,
+            "maxItems": 128,
             "minItems": 1,
             "type": "array",
             "uniqueItems": true
@@ -14936,6 +15376,754 @@
         "required": [
           "version",
           "content"
+        ],
+        "type": "object"
+      },
+      "VpnExitClass": {
+        "enum": [
+          "standard",
+          "low-latency",
+          "high-security"
+        ],
+        "type": "string"
+      },
+      "VpnProfileResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "available": {
+            "type": "boolean"
+          },
+          "default_exit_class": {
+            "$ref": "#/components/schemas/VpnExitClass"
+          },
+          "display_billing_label": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "dns_push_interval_secs": {
+            "format": "uint64",
+            "minimum": 30,
+            "type": "integer"
+          },
+          "dns_servers": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "escrow_account_id": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "excluded_routes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "fee_asset_id": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "flow_label_bits": {
+            "const": 24,
+            "format": "uint8",
+            "type": "integer"
+          },
+          "lease_fee": {
+            "$ref": "#/components/schemas/Quantity"
+          },
+          "lease_secs": {
+            "format": "uint64",
+            "maximum": 4294967295,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "meter_family": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "mtu_bytes": {
+            "const": 1280,
+            "format": "uint64",
+            "type": "integer"
+          },
+          "operator_account_id": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "padding_budget_ms": {
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "relay_endpoint": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "relay_tls_spki_sha256_hex": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "route_pushes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "settlement_grace_secs": {
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "supported_exit_classes": {
+            "items": {
+              "$ref": "#/components/schemas/VpnExitClass"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "tunnel_addresses": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "available",
+          "relay_endpoint",
+          "supported_exit_classes",
+          "default_exit_class",
+          "lease_secs",
+          "dns_push_interval_secs",
+          "meter_family",
+          "route_pushes",
+          "excluded_routes",
+          "dns_servers",
+          "tunnel_addresses",
+          "mtu_bytes",
+          "display_billing_label",
+          "fee_asset_id",
+          "escrow_account_id",
+          "operator_account_id",
+          "lease_fee",
+          "settlement_grace_secs",
+          "flow_label_bits",
+          "padding_budget_ms",
+          "relay_tls_spki_sha256_hex"
+        ],
+        "type": "object"
+      },
+      "VpnQuoteCreateRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "exit_class": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/VpnExitClass"
+              },
+              {
+                "const": ""
+              }
+            ],
+            "default": "",
+            "description": "Requested exit class; an omitted or empty value selects the configured default."
+          },
+          "metering_public_key_hex": {
+            "description": "Ed25519 metering public-key payload as hexadecimal bytes.",
+            "pattern": "^(?:0[xX])?[0-9A-Fa-f]{64}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "metering_public_key_hex"
+        ],
+        "type": "object"
+      },
+      "VpnQuoteResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "account_id": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "dns_servers": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "escrow_account_id": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "excluded_routes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "exit_class": {
+            "$ref": "#/components/schemas/VpnExitClass"
+          },
+          "fee_asset_id": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "flow_label_bits": {
+            "const": 24,
+            "format": "uint8",
+            "type": "integer"
+          },
+          "lease_fee": {
+            "$ref": "#/components/schemas/Quantity"
+          },
+          "lease_id_hex": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "lease_secs": {
+            "format": "uint64",
+            "maximum": 4294967295,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "meter_family": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "metering_public_key_hex": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "mtu_bytes": {
+            "const": 1280,
+            "format": "uint64",
+            "type": "integer"
+          },
+          "open_lease_instruction": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/VpnTxInstruction"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "operator_account_id": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "padding_budget_ms": {
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "payment_reference": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "quote_expires_at_ms": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "quote_id": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "relay_endpoint": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "relay_tls_spki_sha256_hex": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "route_pushes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "session_id_hex": {
+            "pattern": "^[0-9a-f]{32}$",
+            "type": "string"
+          },
+          "tunnel_addresses": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "tx_instructions": {
+            "items": {
+              "$ref": "#/components/schemas/VpnTxInstruction"
+            },
+            "maxItems": 1,
+            "minItems": 1,
+            "type": "array"
+          }
+        },
+        "required": [
+          "quote_id",
+          "lease_id_hex",
+          "session_id_hex",
+          "payment_reference",
+          "account_id",
+          "exit_class",
+          "relay_endpoint",
+          "lease_secs",
+          "quote_expires_at_ms",
+          "fee_asset_id",
+          "escrow_account_id",
+          "operator_account_id",
+          "lease_fee",
+          "route_pushes",
+          "excluded_routes",
+          "dns_servers",
+          "tunnel_addresses",
+          "mtu_bytes",
+          "meter_family",
+          "flow_label_bits",
+          "padding_budget_ms",
+          "relay_tls_spki_sha256_hex",
+          "metering_public_key_hex",
+          "open_lease_instruction",
+          "tx_instructions"
+        ],
+        "type": "object"
+      },
+      "VpnReceiptListResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/VpnReceiptResponse"
+            },
+            "maxItems": 24,
+            "type": "array"
+          },
+          "total": {
+            "format": "uint64",
+            "maximum": 24,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "total"
+        ],
+        "type": "object"
+      },
+      "VpnReceiptResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "account_id": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "bytes_in": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "bytes_out": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "connected_at_ms": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "disconnected_at_ms": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "duration_ms": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "earned_fee": {
+            "$ref": "#/components/schemas/Quantity"
+          },
+          "escrow_account_id": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "exit_class": {
+            "$ref": "#/components/schemas/VpnExitClass"
+          },
+          "fee_asset_id": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "lease_fee": {
+            "$ref": "#/components/schemas/Quantity"
+          },
+          "lease_id_hex": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "meter_family": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "operator_account_id": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "payment_tx_hash": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "quote_id": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "receipt_source": {
+            "enum": [
+              "torii",
+              "relay",
+              "wsv"
+            ],
+            "type": "string"
+          },
+          "refunded_fee": {
+            "$ref": "#/components/schemas/Quantity"
+          },
+          "relay_endpoint": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "session_id": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "settle_lease_instruction": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/VpnTxInstruction"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "enum": [
+              "disconnected",
+              "expired",
+              "replaced",
+              "settled"
+            ],
+            "type": "string"
+          },
+          "tx_instructions": {
+            "items": {
+              "$ref": "#/components/schemas/VpnTxInstruction"
+            },
+            "maxItems": 1,
+            "type": "array"
+          }
+        },
+        "required": [
+          "session_id",
+          "account_id",
+          "exit_class",
+          "relay_endpoint",
+          "meter_family",
+          "connected_at_ms",
+          "disconnected_at_ms",
+          "duration_ms",
+          "bytes_in",
+          "bytes_out",
+          "status",
+          "receipt_source",
+          "quote_id",
+          "payment_tx_hash",
+          "fee_asset_id",
+          "escrow_account_id",
+          "operator_account_id",
+          "lease_fee",
+          "earned_fee",
+          "refunded_fee",
+          "lease_id_hex",
+          "settle_lease_instruction",
+          "tx_instructions"
+        ],
+        "type": "object"
+      },
+      "VpnReceiptSubmitRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "client_voucher_hex": {
+            "pattern": "^(?:0[xX])?(?:[0-9A-Fa-f]{2})+$",
+            "type": "string"
+          },
+          "lease_id_hex": {
+            "default": "",
+            "description": "Optional lease id; an omitted or empty value uses the quote id bound into the relay receipt.",
+            "pattern": "^(?:$|(?:0[xX])?[0-9A-Fa-f]{64})$",
+            "type": "string"
+          },
+          "relay_receipt_hex": {
+            "pattern": "^(?:0[xX])?(?:[0-9A-Fa-f]{2})+$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "relay_receipt_hex",
+          "client_voucher_hex"
+        ],
+        "type": "object"
+      },
+      "VpnSessionCreateRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "exit_class": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/VpnExitClass"
+              },
+              {
+                "const": ""
+              }
+            ],
+            "default": "",
+            "description": "Requested exit class; an omitted or empty value selects the configured default."
+          },
+          "metering_public_key_hex": {
+            "pattern": "^(?:0[xX])?[0-9A-Fa-f]{64}$",
+            "type": "string"
+          },
+          "payment_tx_hash": {
+            "pattern": "^(?:0[xX])?[0-9A-Fa-f]{64}$",
+            "type": "string"
+          },
+          "quote_id": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "quote_id",
+          "payment_tx_hash",
+          "metering_public_key_hex"
+        ],
+        "type": "object"
+      },
+      "VpnSessionResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "account_id": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "bytes_in": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "bytes_out": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "connected_at_ms": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "dns_servers": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "escrow_account_id": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "excluded_routes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "exit_class": {
+            "$ref": "#/components/schemas/VpnExitClass"
+          },
+          "expires_at_ms": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "fee_asset_id": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "flow_label_bits": {
+            "const": 24,
+            "format": "uint8",
+            "type": "integer"
+          },
+          "helper_ticket_hex": {
+            "description": "Lowercase hexadecimal canonical 664-byte VpnHelperTicketV1 payload.",
+            "maxLength": 1328,
+            "minLength": 1328,
+            "pattern": "^[0-9a-f]{1328}$",
+            "type": "string"
+          },
+          "lease_fee": {
+            "$ref": "#/components/schemas/Quantity"
+          },
+          "lease_secs": {
+            "format": "uint64",
+            "maximum": 4294967295,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "meter_family": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "mtu_bytes": {
+            "const": 1280,
+            "format": "uint64",
+            "type": "integer"
+          },
+          "operator_account_id": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "padding_budget_ms": {
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "payment_reference": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "payment_tx_hash": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "quote_id": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "relay_endpoint": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "relay_tls_spki_sha256_hex": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "route_pushes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "session_id": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "status": {
+            "const": "active",
+            "type": "string"
+          },
+          "tunnel_addresses": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "session_id",
+          "account_id",
+          "exit_class",
+          "relay_endpoint",
+          "lease_secs",
+          "expires_at_ms",
+          "connected_at_ms",
+          "meter_family",
+          "quote_id",
+          "payment_reference",
+          "payment_tx_hash",
+          "fee_asset_id",
+          "escrow_account_id",
+          "operator_account_id",
+          "lease_fee",
+          "flow_label_bits",
+          "padding_budget_ms",
+          "relay_tls_spki_sha256_hex",
+          "route_pushes",
+          "excluded_routes",
+          "dns_servers",
+          "tunnel_addresses",
+          "mtu_bytes",
+          "helper_ticket_hex",
+          "bytes_in",
+          "bytes_out",
+          "status"
+        ],
+        "type": "object"
+      },
+      "VpnTxInstruction": {
+        "additionalProperties": false,
+        "properties": {
+          "payload_hex": {
+            "description": "Lowercase hexadecimal canonical framed Norito instruction payload.",
+            "pattern": "^(?:[0-9a-f]{2})+$",
+            "type": "string"
+          },
+          "wire_id": {
+            "description": "Canonical native instruction registry wire identifier.",
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "wire_id",
+          "payload_hex"
         ],
         "type": "object"
       },
@@ -15772,7 +16960,30 @@
     },
     "/v1/accounts/onboard": {
       "post": {
-        "description": "Register or onboard an account with an explicit canonical UAID. The request must provide `uaid` plus either `account_id` or `public_key_hex`; raw identity metadata is rejected, and optional identity evidence must be submitted only as `identity_commitment_hex`. When the UAID is not bound to the universal dataspace, Torii publishes a default manifest to bind it (requires CanPublishSpaceDirectoryManifest{dataspace=0}).",
+        "description": "Register an account, bind its alias and explicit UAID, and queue the signer-backed onboarding transaction. Supply `uaid` plus exactly one of `account_id` or `public_key_hex`; raw identity metadata is rejected, while optional identity evidence is accepted only as `identity_commitment_hex`. The dedicated onboarding token is required even for CIDR-allowlisted callers and is independent of any global Torii API token. A 202 response means the transaction is queued, not finalized on the ledger.",
+        "parameters": [
+          {
+            "description": "Exactly one opaque raw onboarding token header value. Torii requires 32 through 256 printable non-whitespace ASCII bytes (`!` through `~`) whose BLAKE3 digest matches the dedicated configured digest. Send the secret only over protected transport; CIDR allowlisting and the global Torii API token do not replace it.",
+            "in": "header",
+            "name": "X-Iroha-Onboarding-Token",
+            "required": true,
+            "schema": {
+              "maxLength": 256,
+              "minLength": 32,
+              "pattern": "^[!-~]{32,256}$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Optional deployment-wide Torii API token; required only when the node enables global API-token enforcement. It is independent of the required onboarding token.",
+            "in": "header",
+            "name": "X-API-Token",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -15784,15 +16995,161 @@
           "required": true
         },
         "responses": {
-          "200": {
+          "202": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/AccountOnboardingResponse"
                 }
               }
             },
-            "description": "Successful response"
+            "description": "The signer-backed onboarding transaction was accepted into the queue; this does not assert ledger finality."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "description": "Canonical Norito encoding of the JSON schema's typed payload.",
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "The canonical JSON body, headers, account/UAID/alias binding, requested permissions, or onboarding transaction policy is invalid. The response is a canonical ErrorEnvelope with a stable validation code and optional details.hint."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "description": "Canonical Norito encoding of the JSON schema's typed payload.",
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Authentication failed before onboarding body processing. The ErrorEnvelope code is `api_token_required` when deployment-wide Torii authentication fails, or `onboarding_auth_required` when the dedicated token is missing, duplicated, malformed, or does not match the configured BLAKE3 digest.",
+            "headers": {
+              "Vary": {
+                "description": "The authentication error representation is negotiated from Accept.",
+                "schema": {
+                  "const": "Accept",
+                  "type": "string"
+                }
+              },
+              "WWW-Authenticate": {
+                "description": "The authentication layer which rejected the request.",
+                "schema": {
+                  "enum": [
+                    "IrohaApiToken realm=\"torii\"",
+                    "IrohaOnboardingToken"
+                  ],
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "406": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Accept does not permit the endpoint's JSON success representation (`response_not_acceptable`)."
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "description": "Canonical Norito encoding of the JSON schema's typed payload.",
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Content-Type is missing or is not canonical application/json (`request_content_type_missing` or `request_content_type_unsupported`)."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "description": "Canonical Norito encoding of the JSON schema's typed payload.",
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Bounded pre-auth admission rejected the request with a `preauth_*_capacity`, `preauth_rate_limited`, or `preauth_temporarily_banned` ErrorEnvelope code. Retry after one second.",
+            "headers": {
+              "Retry-After": {
+                "description": "Minimum retry delay applied by the typed error boundary.",
+                "schema": {
+                  "const": "1",
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "The admission error representation is negotiated from Accept.",
+                "schema": {
+                  "const": "Accept",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "description": "Canonical Norito encoding of the JSON schema's typed payload.",
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Authentication or bounded pre-auth admission is unavailable. The ErrorEnvelope code is `api_token_unavailable`, `onboarding_auth_unavailable`, or a `preauth_*_capacity` availability code. Every 503 is retryable after one second.",
+            "headers": {
+              "Retry-After": {
+                "description": "Minimum retry delay applied by the typed error boundary.",
+                "schema": {
+                  "const": "1",
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "The availability error representation is negotiated from Accept.",
+                "schema": {
+                  "const": "Accept",
+                  "type": "string"
+                }
+              }
+            }
           }
         },
         "summary": "Onboard an account.",
@@ -16315,8 +17672,55 @@
     },
     "/v1/aliases/by-account": {
       "post": {
-        "description": "Accepts one exact canonical I105 account identifier, routes the public reverse lookup through that account's Nexus routes, merges and deterministically sorts at most 64 deduplicated public alias rows, and recomputes `total`. Unsigned requests are allowed; supplied canonical-signature headers must verify. The route is independently rate limited and does not expose prefix or index search.",
+        "description": "Accepts one exact canonical I105 account identifier, routes the public reverse lookup through caller-permitted Nexus routes, merges and deterministically sorts at most 64 deduplicated alias rows, and recomputes `total`. Canonical request signing is required, and the signed caller must hold the exact alias-resolution permissions needed for returned bindings. The route is independently rate limited and does not expose prefix or index search.",
         "operationId": "aliasLookupByAccount",
+        "parameters": [
+          {
+            "description": "Authorizing canonical account. Required with the signature/timestamp/nonce proof set; optional when X-Iroha-Witness identifies the subject account.",
+            "in": "header",
+            "name": "X-Iroha-Account",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 signature over the canonical method, path, sorted query, body hash, timestamp, and nonce. Must be supplied together with X-Iroha-Account, X-Iroha-Timestamp-Ms, and X-Iroha-Nonce; mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Signature",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Unix timestamp in milliseconds bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Timestamp-Ms",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Fresh caller-chosen nonce bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Nonce",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 canonical Norito multisig witness. This is an alternative to the signature/timestamp/nonce proof set and may identify its subject when X-Iroha-Account is omitted.",
+            "in": "header",
+            "name": "X-Iroha-Witness",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -16348,6 +17752,35 @@
             },
             "description": "Malformed request (account id or filters are invalid)."
           },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Canonical request signing is required for reverse-alias enumeration.",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "Canonical request-signature authentication challenge.",
+                "schema": {
+                  "const": "Signature",
+                  "type": "string"
+                }
+              },
+              "x-iroha-reject-code": {
+                "description": "Stable code returned when canonical request authentication is required for alias resolution.",
+                "schema": {
+                  "enum": [
+                    "alias_auth_required"
+                  ],
+                  "example": "alias_auth_required",
+                  "type": "string"
+                }
+              }
+            }
+          },
           "403": {
             "content": {
               "application/json": {
@@ -16356,7 +17789,7 @@
                 }
               }
             },
-            "description": "Supplied canonical-signature headers are invalid."
+            "description": "The canonical request proof is invalid or the signed caller lacks an exact alias-resolution permission required by the lookup."
           },
           "404": {
             "content": {
@@ -16408,8 +17841,55 @@
     },
     "/v1/aliases/resolve": {
       "post": {
-        "description": "Accepts one exact canonical fully-qualified alias, routes it through the Nexus read proxy using the encoded dataspace, and returns its public account binding. Unsigned requests are allowed; when canonical-signature headers are supplied, they must verify and never downgrade to anonymous access. The route is independently rate limited.",
+        "description": "Accepts one exact canonical fully-qualified alias, routes it through the Nexus read proxy using the encoded dataspace, and returns its account binding. Canonical request signing is required, and the signer must hold exact alias-resolution permission for the alias dataspace and its qualified domain. The route is independently rate limited.",
         "operationId": "aliasResolve",
+        "parameters": [
+          {
+            "description": "Authorizing canonical account. Required with the signature/timestamp/nonce proof set; optional when X-Iroha-Witness identifies the subject account.",
+            "in": "header",
+            "name": "X-Iroha-Account",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 signature over the canonical method, path, sorted query, body hash, timestamp, and nonce. Must be supplied together with X-Iroha-Account, X-Iroha-Timestamp-Ms, and X-Iroha-Nonce; mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Signature",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Unix timestamp in milliseconds bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Timestamp-Ms",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Fresh caller-chosen nonce bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Nonce",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 canonical Norito multisig witness. This is an alternative to the signature/timestamp/nonce proof set and may identify its subject when X-Iroha-Account is omitted.",
+            "in": "header",
+            "name": "X-Iroha-Witness",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -16441,6 +17921,35 @@
             },
             "description": "Malformed request (alias missing or invalid)."
           },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Canonical request signing is required for exact account-alias resolution.",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "Canonical request-signature authentication challenge.",
+                "schema": {
+                  "const": "Signature",
+                  "type": "string"
+                }
+              },
+              "x-iroha-reject-code": {
+                "description": "Stable code returned when canonical request authentication is required for alias resolution.",
+                "schema": {
+                  "enum": [
+                    "alias_auth_required"
+                  ],
+                  "example": "alias_auth_required",
+                  "type": "string"
+                }
+              }
+            }
+          },
           "403": {
             "content": {
               "application/json": {
@@ -16449,7 +17958,7 @@
                 }
               }
             },
-            "description": "Supplied canonical-signature headers are invalid."
+            "description": "The canonical request proof is invalid or the signed caller lacks exact alias-resolution permission for the requested dataspace or domain."
           },
           "404": {
             "content": {
@@ -16503,6 +18012,53 @@
       "post": {
         "description": "Requires canonical request signing. Fans out the alias-index lookup across caller-visible Nexus dataspaces because the index alone does not encode a dataspace, dedupes identical bindings, and returns `source = fanout` when the result comes from multi-route merging.",
         "operationId": "aliasResolveIndex",
+        "parameters": [
+          {
+            "description": "Authorizing canonical account. Required with the signature/timestamp/nonce proof set; optional when X-Iroha-Witness identifies the subject account.",
+            "in": "header",
+            "name": "X-Iroha-Account",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 signature over the canonical method, path, sorted query, body hash, timestamp, and nonce. Must be supplied together with X-Iroha-Account, X-Iroha-Timestamp-Ms, and X-Iroha-Nonce; mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Signature",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Unix timestamp in milliseconds bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Timestamp-Ms",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Fresh caller-chosen nonce bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Nonce",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 canonical Norito multisig witness. This is an alternative to the signature/timestamp/nonce proof set and may identify its subject when X-Iroha-Account is omitted.",
+            "in": "header",
+            "name": "X-Iroha-Witness",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -16524,6 +18080,35 @@
             },
             "description": "Alias index successfully resolved."
           },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Canonical request signing is required for alias-index enumeration.",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "Canonical request-signature authentication challenge.",
+                "schema": {
+                  "const": "Signature",
+                  "type": "string"
+                }
+              },
+              "x-iroha-reject-code": {
+                "description": "Stable code returned when canonical request authentication is required for alias resolution.",
+                "schema": {
+                  "enum": [
+                    "alias_auth_required"
+                  ],
+                  "example": "alias_auth_required",
+                  "type": "string"
+                }
+              }
+            }
+          },
           "403": {
             "content": {
               "application/json": {
@@ -16532,7 +18117,7 @@
                 }
               }
             },
-            "description": "Canonical request signing is missing or the signed caller cannot read any matching route."
+            "description": "The canonical request proof is invalid or the signed caller cannot read any matching route."
           },
           "404": {
             "content": {
@@ -16965,6 +18550,180 @@
         "x-iroha-max-subscription-message-bytes": 262144,
         "x-iroha-tool-effect": "read",
         "x-iroha-websocket-subprotocol": "iroha-norito-v1"
+      }
+    },
+    "/v1/bridge/finality/attestation/{height}": {
+      "get": {
+        "description": "Signs the caller's exact non-zero 32-byte challenge, canonical node identity, current authoritative Sumeragi-v2 status, exact durable-tip proof, committed genesis block hash, and Kura-backed height-one genesis proof. The requested height must equal the immutable state-view tip. Responses are never cacheable.",
+        "operationId": "bridgeFinalityAttestation",
+        "parameters": [
+          {
+            "description": "Block height to inspect (1-indexed).",
+            "in": "path",
+            "name": "height",
+            "required": true,
+            "schema": {
+              "format": "uint64",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Exact non-zero 32-byte freshness challenge as 64 lowercase hexadecimal characters.",
+            "in": "header",
+            "name": "X-Iroha-Finality-Challenge",
+            "required": true,
+            "schema": {
+              "maxLength": 64,
+              "minLength": 64,
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BridgeFinalityAttestationV1"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "description": "Canonical Norito encoding of the JSON schema's typed payload.",
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Challenge-bound durable-tip finality attestation.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Finality-attestation responses must never be cached.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "The response varies by challenge and representation.",
+                "schema": {
+                  "const": "X-Iroha-Finality-Challenge, Accept",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Challenge header is missing or invalid.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Finality-attestation responses must never be cached.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "The response varies by challenge and representation.",
+                "schema": {
+                  "const": "X-Iroha-Finality-Challenge, Accept",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Requested height is not the exact durable tip or finality is unavailable.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Finality-attestation responses must never be cached.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "The response varies by challenge and representation.",
+                "schema": {
+                  "const": "X-Iroha-Finality-Challenge, Accept",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "406": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Requested content type is not acceptable; supported: application/json, application/x-norito.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Finality-attestation responses must never be cached.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "The response varies by challenge and representation.",
+                "schema": {
+                  "const": "X-Iroha-Finality-Challenge, Accept",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Authoritative Sumeragi-v2 status is unavailable or restart is required.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Finality-attestation responses must never be cached.",
+                "schema": {
+                  "const": "no-store",
+                  "type": "string"
+                }
+              },
+              "Vary": {
+                "description": "The response varies by challenge and representation.",
+                "schema": {
+                  "const": "X-Iroha-Finality-Challenge, Accept",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Return a challenge-bound node-signed attestation for the exact durable tip.",
+        "tags": [
+          "Bridge"
+        ],
+        "x-iroha-tool-effect": "read"
       }
     },
     "/v1/bridge/finality/bundle/{height}": {
@@ -17657,12 +19416,60 @@
     },
     "/v1/contracts/aliases/resolve": {
       "post": {
-        "description": "Resolve an on-chain contract alias to its canonical contract address and current lease status.",
+        "description": "Resolve one exact on-chain contract alias to its canonical address, consensus-persisted non-signing subject account, dataspace, and active lease record. Canonical account request signing is required; index-only or incomplete bindings fail closed.",
+        "operationId": "contractAliasResolve",
+        "parameters": [
+          {
+            "description": "Authorizing canonical account. Required with the signature/timestamp/nonce proof set; optional when X-Iroha-Witness identifies the subject account.",
+            "in": "header",
+            "name": "X-Iroha-Account",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 signature over the canonical method, path, sorted query, body hash, timestamp, and nonce. Must be supplied together with X-Iroha-Account, X-Iroha-Timestamp-Ms, and X-Iroha-Nonce; mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Signature",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Unix timestamp in milliseconds bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Timestamp-Ms",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Fresh caller-chosen nonce bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Nonce",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 canonical Norito multisig witness. This is an alternative to the signature/timestamp/nonce proof set and may identify its subject when X-Iroha-Account is omitted.",
+            "in": "header",
+            "name": "X-Iroha-Witness",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/JsonValue"
+                "$ref": "#/components/schemas/ContractAliasResolveRequest"
               }
             }
           },
@@ -17673,14 +19480,83 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/ContractAliasResolveResponse"
                 }
               }
             },
-            "description": "Successful response"
+            "description": "The exact active contract identity binding."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The alias literal or JSON body is not canonical."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Canonical request signing is required for contract identity resolution.",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "Canonical request-signature authentication challenge.",
+                "schema": {
+                  "const": "Signature",
+                  "type": "string"
+                }
+              },
+              "x-iroha-reject-code": {
+                "description": "Stable code returned when canonical request authentication is required for alias resolution.",
+                "schema": {
+                  "enum": [
+                    "alias_auth_required"
+                  ],
+                  "example": "alias_auth_required",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "No active exact binding exists for the alias."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Contract alias read rate exceeded."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The alias index, lease record, active instance, or contract-subject binding is internally inconsistent."
           }
         },
-        "summary": "Resolve a contract alias.",
+        "summary": "Resolve an active contract alias.",
         "tags": [
           "Contracts"
         ],
@@ -17931,38 +19807,6 @@
           "Contracts"
         ],
         "x-iroha-tool-effect": "read"
-      }
-    },
-    "/v1/contracts/deploy": {
-      "post": {
-        "description": "Deploy contract bytecode, derive a canonical contract address, activate it in the target dataspace (default `universal`), and return the canonical deploy-bundle receipt with one contract entry.",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/JsonValue"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
-                }
-              }
-            },
-            "description": "Successful response"
-          }
-        },
-        "summary": "Deploy a public contract.",
-        "tags": [
-          "Contracts"
-        ],
-        "x-iroha-tool-effect": "write"
       }
     },
     "/v1/contracts/events": {
@@ -20290,6 +22134,53 @@
       "post": {
         "description": "Signed lookup for an exact on-chain policy selected by dataspace fee-sponsor configuration. Unconfigured policies are not disclosed and enumeration is unsupported.",
         "operationId": "feeSponsorPolicyById",
+        "parameters": [
+          {
+            "description": "Authorizing canonical account. Required with the signature/timestamp/nonce proof set; optional when X-Iroha-Witness identifies the subject account.",
+            "in": "header",
+            "name": "X-Iroha-Account",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 signature over the canonical method, path, sorted query, body hash, timestamp, and nonce. Must be supplied together with X-Iroha-Account, X-Iroha-Timestamp-Ms, and X-Iroha-Nonce; mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Signature",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Unix timestamp in milliseconds bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Timestamp-Ms",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Fresh caller-chosen nonce bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Nonce",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 canonical Norito multisig witness. This is an alternative to the signature/timestamp/nonce proof set and may identify its subject when X-Iroha-Account is omitted.",
+            "in": "header",
+            "name": "X-Iroha-Witness",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -20329,7 +22220,26 @@
                 }
               }
             },
-            "description": "Canonical request signing is required."
+            "description": "Canonical request signing is required.",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "Canonical request-signature authentication challenge.",
+                "schema": {
+                  "const": "Signature",
+                  "type": "string"
+                }
+              },
+              "x-iroha-reject-code": {
+                "description": "Stable code returned when canonical request authentication is required for an exact fee-sponsor policy lookup.",
+                "schema": {
+                  "enum": [
+                    "fee_sponsor_policy_signature_required"
+                  ],
+                  "example": "fee_sponsor_policy_signature_required",
+                  "type": "string"
+                }
+              }
+            }
           },
           "404": {
             "content": {
@@ -20534,13 +22444,59 @@
     },
     "/v1/gov/contracts/{contract_address}": {
       "get": {
-        "description": "Fetch the active governance binding for a canonical contract address.",
+        "description": "Read the active address binding only after independently verifying the stored artifact, signed manifest, ABI hash, consensus-persisted subject, and sorted unique public entrypoints. Canonical account request signing is required. Incomplete or substituted active state fails closed.",
+        "operationId": "governedContractGet",
         "parameters": [
           {
             "description": "Canonical Bech32m contract address.",
             "in": "path",
             "name": "contract_address",
             "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Authorizing canonical account. Required with the signature/timestamp/nonce proof set; optional when X-Iroha-Witness identifies the subject account.",
+            "in": "header",
+            "name": "X-Iroha-Account",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 signature over the canonical method, path, sorted query, body hash, timestamp, and nonce. Must be supplied together with X-Iroha-Account, X-Iroha-Timestamp-Ms, and X-Iroha-Nonce; mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Signature",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Unix timestamp in milliseconds bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Timestamp-Ms",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Fresh caller-chosen nonce bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Nonce",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 canonical Norito multisig witness. This is an alternative to the signature/timestamp/nonce proof set and may identify its subject when X-Iroha-Account is omitted.",
+            "in": "header",
+            "name": "X-Iroha-Witness",
+            "required": false,
             "schema": {
               "type": "string"
             }
@@ -20551,14 +22507,83 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/GovernedContractResponse"
                 }
               }
             },
-            "description": "Successful response"
+            "description": "The verified active contract metadata, or a canonical inactive response."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The contract address is invalid."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Canonical request signing is required for governed contract metadata.",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "Canonical request-signature authentication challenge.",
+                "schema": {
+                  "const": "Signature",
+                  "type": "string"
+                }
+              },
+              "x-iroha-reject-code": {
+                "description": "Stable code returned when canonical request authentication is required for alias resolution.",
+                "schema": {
+                  "enum": [
+                    "alias_auth_required"
+                  ],
+                  "example": "alias_auth_required",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "The address references an unknown dataspace."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Governed contract read rate exceeded."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Active contract state, artifact metadata, manifest provenance, hashes, subject, or public entrypoints failed integrity validation."
           }
         },
-        "summary": "Fetch a governed contract binding.",
+        "summary": "Fetch an independently verified governed contract binding.",
         "tags": [
           "Governance"
         ],
@@ -22413,238 +24438,6 @@
         "x-iroha-tool-effect": "read"
       }
     },
-    "/v1/multisig/approvals/lookup": {
-      "post": {
-        "description": "Look up one signer-visible proposal by multisig account reference and proposal id or instruction hash.",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/MultisigApprovalLookupRequest"
-              }
-            },
-            "application/x-norito": {
-              "schema": {
-                "format": "binary",
-                "type": "string"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MultisigApprovalLookupResponse"
-                }
-              }
-            },
-            "description": "Successful response"
-          },
-          "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "Invalid multisig selector or payload."
-          },
-          "404": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "No matching viewer-visible multisig proposal was found."
-          }
-        },
-        "summary": "Look up a visible multisig approval.",
-        "tags": [
-          "Multisig"
-        ],
-        "x-iroha-tool-effect": "read"
-      }
-    },
-    "/v1/multisig/approvals/lookup-for-authority": {
-      "post": {
-        "description": "Look up one authority-visible proposal using canonical request-signing headers.",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/MultisigApprovalLookupRequest"
-              }
-            },
-            "application/x-norito": {
-              "schema": {
-                "format": "binary",
-                "type": "string"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MultisigApprovalLookupResponse"
-                }
-              }
-            },
-            "description": "Successful response"
-          },
-          "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "Invalid multisig selector or payload."
-          },
-          "404": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "No matching authority-visible multisig proposal was found."
-          }
-        },
-        "summary": "Look up a multisig approval for a signed authority.",
-        "tags": [
-          "Multisig"
-        ],
-        "x-iroha-tool-effect": "read"
-      }
-    },
-    "/v1/multisig/approvals/query": {
-      "post": {
-        "description": "Query lifecycle-filtered multisig proposals visible to the authenticated signer.",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/MultisigApprovalsQueryRequest"
-              }
-            },
-            "application/x-norito": {
-              "schema": {
-                "format": "binary",
-                "type": "string"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MultisigApprovalsQueryResponse"
-                }
-              }
-            },
-            "description": "Successful response"
-          },
-          "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "Invalid multisig selector or payload."
-          },
-          "404": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "No matching viewer-visible multisig account was found."
-          }
-        },
-        "summary": "Query visible multisig approvals.",
-        "tags": [
-          "Multisig"
-        ],
-        "x-iroha-tool-effect": "read"
-      }
-    },
-    "/v1/multisig/approvals/query-for-authority": {
-      "post": {
-        "description": "Query lifecycle-filtered multisig proposals visible to the authority authenticated by canonical request-signing headers.",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/MultisigApprovalsQueryRequest"
-              }
-            },
-            "application/x-norito": {
-              "schema": {
-                "format": "binary",
-                "type": "string"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MultisigApprovalsQueryResponse"
-                }
-              }
-            },
-            "description": "Successful response"
-          },
-          "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "Invalid multisig selector or payload."
-          },
-          "404": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "No matching authority-visible multisig account was found."
-          }
-        },
-        "summary": "Query multisig approvals for a signed authority.",
-        "tags": [
-          "Multisig"
-        ],
-        "x-iroha-tool-effect": "read"
-      }
-    },
     "/v1/multisig/approve": {
       "post": {
         "description": "Resolve a multisig selector, target a proposal by `proposal_id` or `instructions_hash`, and optionally submit the approval transaction.",
@@ -22761,67 +24554,56 @@
         "x-iroha-tool-effect": "write"
       }
     },
-    "/v1/multisig/proposals/lookup": {
-      "post": {
-        "description": "Resolve a multisig selector and look up a proposal by `proposal_id` or `instructions_hash`.",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/MultisigProposalsResolveRequest"
-              }
-            },
-            "application/x-norito": {
-              "schema": {
-                "format": "binary",
-                "type": "string"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/MultisigProposalResolveResponse"
-                }
-              }
-            },
-            "description": "Successful response"
-          },
-          "400": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "Invalid multisig selector or payload."
-          },
-          "404": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            },
-            "description": "Multisig alias or proposal not found."
-          }
-        },
-        "summary": "Look up a multisig proposal.",
-        "tags": [
-          "Multisig"
-        ],
-        "x-iroha-tool-effect": "read"
-      }
-    },
     "/v1/multisig/proposals/query": {
       "post": {
-        "description": "Resolve a multisig selector and query lifecycle-filtered active or terminal proposals for the active concrete multisig authority.",
+        "description": "Resolve a multisig selector and query lifecycle-filtered active or terminal proposals for the active concrete multisig authority. A canonical `multisig_account_id` selector remains available without request-signing headers. A `multisig_account_alias` selector requires canonical request signing; body fields never establish signer identity.",
+        "parameters": [
+          {
+            "description": "Authorizing canonical account. Required with the signature/timestamp/nonce proof set; optional when X-Iroha-Witness identifies the subject account.",
+            "in": "header",
+            "name": "X-Iroha-Account",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 signature over the canonical method, path, sorted query, body hash, timestamp, and nonce. Must be supplied together with X-Iroha-Account, X-Iroha-Timestamp-Ms, and X-Iroha-Nonce; mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Signature",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Unix timestamp in milliseconds bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Timestamp-Ms",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Fresh caller-chosen nonce bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Nonce",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 canonical Norito multisig witness. This is an alternative to the signature/timestamp/nonce proof set and may identify its subject when X-Iroha-Account is omitted.",
+            "in": "header",
+            "name": "X-Iroha-Witness",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -22859,6 +24641,35 @@
             },
             "description": "Invalid multisig selector or payload."
           },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Canonical request signing is required when the selector uses `multisig_account_alias`; a body-only alias selector is not authentication.",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "Canonical request-signature authentication challenge.",
+                "schema": {
+                  "const": "Signature",
+                  "type": "string"
+                }
+              },
+              "x-iroha-reject-code": {
+                "description": "Stable code returned when canonical request authentication is required for alias resolution.",
+                "schema": {
+                  "enum": [
+                    "alias_auth_required"
+                  ],
+                  "example": "alias_auth_required",
+                  "type": "string"
+                }
+              }
+            }
+          },
           "404": {
             "content": {
               "application/json": {
@@ -22879,7 +24690,54 @@
     },
     "/v1/multisig/proposals/resolve": {
       "post": {
-        "description": "Resolve a multisig selector and fetch a proposal by `proposal_id` or `instructions_hash`.",
+        "description": "Resolve a multisig selector and fetch a proposal by `proposal_id` or `instructions_hash`. A canonical `multisig_account_id` selector remains available without request-signing headers. A `multisig_account_alias` selector requires canonical request signing; body fields never establish signer identity.",
+        "parameters": [
+          {
+            "description": "Authorizing canonical account. Required with the signature/timestamp/nonce proof set; optional when X-Iroha-Witness identifies the subject account.",
+            "in": "header",
+            "name": "X-Iroha-Account",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 signature over the canonical method, path, sorted query, body hash, timestamp, and nonce. Must be supplied together with X-Iroha-Account, X-Iroha-Timestamp-Ms, and X-Iroha-Nonce; mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Signature",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Unix timestamp in milliseconds bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Timestamp-Ms",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Fresh caller-chosen nonce bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Nonce",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 canonical Norito multisig witness. This is an alternative to the signature/timestamp/nonce proof set and may identify its subject when X-Iroha-Account is omitted.",
+            "in": "header",
+            "name": "X-Iroha-Witness",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -22916,6 +24774,35 @@
               }
             },
             "description": "Invalid multisig selector or payload."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Canonical request signing is required when the selector uses `multisig_account_alias`; a body-only alias selector is not authentication.",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "Canonical request-signature authentication challenge.",
+                "schema": {
+                  "const": "Signature",
+                  "type": "string"
+                }
+              },
+              "x-iroha-reject-code": {
+                "description": "Stable code returned when canonical request authentication is required for alias resolution.",
+                "schema": {
+                  "enum": [
+                    "alias_auth_required"
+                  ],
+                  "example": "alias_auth_required",
+                  "type": "string"
+                }
+              }
+            }
           },
           "404": {
             "content": {
@@ -22995,7 +24882,54 @@
     },
     "/v1/multisig/spec": {
       "post": {
-        "description": "Resolve a multisig selector and return the current active concrete authority plus its multisig specification.",
+        "description": "Resolve a multisig selector and return the current active concrete authority plus its multisig specification. A canonical `multisig_account_id` selector remains available without request-signing headers. A `multisig_account_alias` selector requires canonical request signing; body fields never establish signer identity.",
+        "parameters": [
+          {
+            "description": "Authorizing canonical account. Required with the signature/timestamp/nonce proof set; optional when X-Iroha-Witness identifies the subject account.",
+            "in": "header",
+            "name": "X-Iroha-Account",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 signature over the canonical method, path, sorted query, body hash, timestamp, and nonce. Must be supplied together with X-Iroha-Account, X-Iroha-Timestamp-Ms, and X-Iroha-Nonce; mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Signature",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Unix timestamp in milliseconds bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Timestamp-Ms",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Fresh caller-chosen nonce bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Nonce",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 canonical Norito multisig witness. This is an alternative to the signature/timestamp/nonce proof set and may identify its subject when X-Iroha-Account is omitted.",
+            "in": "header",
+            "name": "X-Iroha-Witness",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -23032,6 +24966,35 @@
               }
             },
             "description": "Invalid multisig selector or payload."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            },
+            "description": "Canonical request signing is required when the selector uses `multisig_account_alias`; a body-only alias selector is not authentication.",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "Canonical request-signature authentication challenge.",
+                "schema": {
+                  "const": "Signature",
+                  "type": "string"
+                }
+              },
+              "x-iroha-reject-code": {
+                "description": "Stable code returned when canonical request authentication is required for alias resolution.",
+                "schema": {
+                  "enum": [
+                    "alias_auth_required"
+                  ],
+                  "example": "alias_auth_required",
+                  "type": "string"
+                }
+              }
+            }
           },
           "404": {
             "content": {
@@ -24400,7 +26363,7 @@
     },
     "/v1/offline/readiness": {
       "get": {
-        "description": "Evaluate Kagemusha readiness for one asset definition at a specific committed block. The response binds the live asset scale and active verifier records to that same height and block hash so clients can cross-check capabilities and release manifests. A successfully evaluated but unavailable capability returns 200 with ready=false and typed blockers. A 503 readiness_unavailable response means Torii could not evaluate readiness.",
+        "description": "Evaluate Kagemusha readiness for one asset definition at a specific committed block. The response binds the live asset scale, five distinct active verifier records, and exact authenticated ABI-20 V4 release identity to that same height and block hash so clients can cross-check capabilities and release artifacts atomically. proof_backend_available reports exact backend construction independently; recursive_lineage_supported additionally requires the authenticated artifact set and distinct active Eq/Ep records. ready is true exactly when no typed blocker remains, so unrelated blockers do not erase backend or lineage facts. A successfully evaluated but unavailable capability returns 200 with ready=false and typed blockers. A 503 readiness_unavailable response means Torii could not evaluate readiness.",
         "operationId": "offlineReadiness",
         "parameters": [
           {
@@ -24698,6 +26661,7 @@
               "schema": {
                 "format": "binary",
                 "type": "string",
+                "x-iroha-max-bytes": 50331648,
                 "x-iroha-norito-schema": "iroha.torii.v1.offline.redeem.request"
               }
             }
@@ -25082,6 +27046,7 @@
               "schema": {
                 "format": "binary",
                 "type": "string",
+                "x-iroha-max-bytes": 524288,
                 "x-iroha-norito-schema": "iroha.torii.v1.offline.top_up.request"
               }
             }
@@ -26736,6 +28701,53 @@
       "post": {
         "description": "Requires canonical request signing, an existing signer, an enabled configured transaction-authority FX policy, and a positive signer source-currency balance. Verifies the supplied alias against that policy before calling the configured bank Core API route for HBL or UBL.",
         "operationId": "retailRecipientLookup",
+        "parameters": [
+          {
+            "description": "Authorizing canonical account. Required with the signature/timestamp/nonce proof set; optional when X-Iroha-Witness identifies the subject account.",
+            "in": "header",
+            "name": "X-Iroha-Account",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 signature over the canonical method, path, sorted query, body hash, timestamp, and nonce. Must be supplied together with X-Iroha-Account, X-Iroha-Timestamp-Ms, and X-Iroha-Nonce; mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Signature",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Unix timestamp in milliseconds bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Timestamp-Ms",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Fresh caller-chosen nonce bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Nonce",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 canonical Norito multisig witness. This is an alternative to the signature/timestamp/nonce proof set and may identify its subject when X-Iroha-Account is omitted.",
+            "in": "header",
+            "name": "X-Iroha-Witness",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -26775,7 +28787,26 @@
                 }
               }
             },
-            "description": "Canonical request signing is required."
+            "description": "Canonical request signing is required.",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "Canonical request-signature authentication challenge.",
+                "schema": {
+                  "const": "Signature",
+                  "type": "string"
+                }
+              },
+              "x-iroha-reject-code": {
+                "description": "Stable code returned when canonical request authentication is required for retail recipient lookup or routing.",
+                "schema": {
+                  "enum": [
+                    "recipient_lookup_signature_required"
+                  ],
+                  "example": "recipient_lookup_signature_required",
+                  "type": "string"
+                }
+              }
+            }
           },
           "403": {
             "content": {
@@ -26839,6 +28870,53 @@
       "post": {
         "description": "Requires canonical signing, an enabled configured transaction-authority FX policy, and a positive signer source-currency balance. Returns exactly the requested account, deterministic primary eligible alias, and FI id; it never enumerates all bindings.",
         "operationId": "retailRecipientRoute",
+        "parameters": [
+          {
+            "description": "Authorizing canonical account. Required with the signature/timestamp/nonce proof set; optional when X-Iroha-Witness identifies the subject account.",
+            "in": "header",
+            "name": "X-Iroha-Account",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 signature over the canonical method, path, sorted query, body hash, timestamp, and nonce. Must be supplied together with X-Iroha-Account, X-Iroha-Timestamp-Ms, and X-Iroha-Nonce; mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Signature",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Unix timestamp in milliseconds bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Timestamp-Ms",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Fresh caller-chosen nonce bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Nonce",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 canonical Norito multisig witness. This is an alternative to the signature/timestamp/nonce proof set and may identify its subject when X-Iroha-Account is omitted.",
+            "in": "header",
+            "name": "X-Iroha-Witness",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -26878,7 +28956,26 @@
                 }
               }
             },
-            "description": "Canonical request signing is required."
+            "description": "Canonical request signing is required.",
+            "headers": {
+              "WWW-Authenticate": {
+                "description": "Canonical request-signature authentication challenge.",
+                "schema": {
+                  "const": "Signature",
+                  "type": "string"
+                }
+              },
+              "x-iroha-reject-code": {
+                "description": "Stable code returned when canonical request authentication is required for retail recipient lookup or routing.",
+                "schema": {
+                  "enum": [
+                    "recipient_lookup_signature_required"
+                  ],
+                  "example": "recipient_lookup_signature_required",
+                  "type": "string"
+                }
+              }
+            }
           },
           "403": {
             "content": {
@@ -35055,7 +37152,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/VpnProfileResponse"
                 }
               }
             },
@@ -35072,22 +37169,69 @@
     "/v1/vpn/quotes": {
       "post": {
         "description": "Create a signed XOR escrow quote for a Sora VPN lease. The request must include `metering_public_key_hex`; successful responses include `tx_instructions` with a native `OpenVpnLeaseEscrow` skeleton for client signing/submission.",
+        "parameters": [
+          {
+            "description": "Authorizing canonical account. Required with the signature/timestamp/nonce proof set; optional when X-Iroha-Witness identifies the subject account.",
+            "in": "header",
+            "name": "X-Iroha-Account",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 signature over the canonical method, path, sorted query, body hash, timestamp, and nonce. Must be supplied together with X-Iroha-Account, X-Iroha-Timestamp-Ms, and X-Iroha-Nonce; mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Signature",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Unix timestamp in milliseconds bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Timestamp-Ms",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Fresh caller-chosen nonce bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Nonce",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 canonical Norito multisig witness. This is an alternative to the signature/timestamp/nonce proof set and may identify its subject when X-Iroha-Account is omitted.",
+            "in": "header",
+            "name": "X-Iroha-Witness",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/JsonValue"
+                "$ref": "#/components/schemas/VpnQuoteCreateRequest"
               }
             }
           },
           "required": true
         },
         "responses": {
-          "200": {
+          "201": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/VpnQuoteResponse"
                 }
               }
             },
@@ -35104,12 +37248,59 @@
     "/v1/vpn/receipts": {
       "get": {
         "description": "List canonical Sora VPN receipts for the active wallet account.",
+        "parameters": [
+          {
+            "description": "Authorizing canonical account. Required with the signature/timestamp/nonce proof set; optional when X-Iroha-Witness identifies the subject account.",
+            "in": "header",
+            "name": "X-Iroha-Account",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 signature over the canonical method, path, sorted query, body hash, timestamp, and nonce. Must be supplied together with X-Iroha-Account, X-Iroha-Timestamp-Ms, and X-Iroha-Nonce; mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Signature",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Unix timestamp in milliseconds bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Timestamp-Ms",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Fresh caller-chosen nonce bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Nonce",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 canonical Norito multisig witness. This is an alternative to the signature/timestamp/nonce proof set and may identify its subject when X-Iroha-Account is omitted.",
+            "in": "header",
+            "name": "X-Iroha-Witness",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/VpnReceiptListResponse"
                 }
               }
             },
@@ -35124,22 +37315,69 @@
       },
       "post": {
         "description": "Settle an active VPN lease from relay and client usage evidence. Successful responses include `tx_instructions` with a native `SettleVpnLease` skeleton for operator signing/submission.",
+        "parameters": [
+          {
+            "description": "Authorizing canonical account. Required with the signature/timestamp/nonce proof set; optional when X-Iroha-Witness identifies the subject account.",
+            "in": "header",
+            "name": "X-Iroha-Account",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 signature over the canonical method, path, sorted query, body hash, timestamp, and nonce. Must be supplied together with X-Iroha-Account, X-Iroha-Timestamp-Ms, and X-Iroha-Nonce; mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Signature",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Unix timestamp in milliseconds bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Timestamp-Ms",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Fresh caller-chosen nonce bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Nonce",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 canonical Norito multisig witness. This is an alternative to the signature/timestamp/nonce proof set and may identify its subject when X-Iroha-Account is omitted.",
+            "in": "header",
+            "name": "X-Iroha-Witness",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/JsonValue"
+                "$ref": "#/components/schemas/VpnReceiptSubmitRequest"
               }
             }
           },
           "required": true
         },
         "responses": {
-          "200": {
+          "201": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/VpnReceiptResponse"
                 }
               }
             },
@@ -35156,22 +37394,69 @@
     "/v1/vpn/sessions": {
       "post": {
         "description": "Create a signed Sora VPN session from a quote and committed native `OpenVpnLeaseEscrow` XOR payment transaction.",
+        "parameters": [
+          {
+            "description": "Authorizing canonical account. Required with the signature/timestamp/nonce proof set; optional when X-Iroha-Witness identifies the subject account.",
+            "in": "header",
+            "name": "X-Iroha-Account",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 signature over the canonical method, path, sorted query, body hash, timestamp, and nonce. Must be supplied together with X-Iroha-Account, X-Iroha-Timestamp-Ms, and X-Iroha-Nonce; mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Signature",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Unix timestamp in milliseconds bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Timestamp-Ms",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Fresh caller-chosen nonce bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Nonce",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 canonical Norito multisig witness. This is an alternative to the signature/timestamp/nonce proof set and may identify its subject when X-Iroha-Account is omitted.",
+            "in": "header",
+            "name": "X-Iroha-Witness",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/JsonValue"
+                "$ref": "#/components/schemas/VpnSessionCreateRequest"
               }
             }
           },
           "required": true
         },
         "responses": {
-          "200": {
+          "201": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/VpnSessionResponse"
                 }
               }
             },
@@ -35195,6 +37480,52 @@
             "name": "session_id",
             "required": true,
             "schema": {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Authorizing canonical account. Required with the signature/timestamp/nonce proof set; optional when X-Iroha-Witness identifies the subject account.",
+            "in": "header",
+            "name": "X-Iroha-Account",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 signature over the canonical method, path, sorted query, body hash, timestamp, and nonce. Must be supplied together with X-Iroha-Account, X-Iroha-Timestamp-Ms, and X-Iroha-Nonce; mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Signature",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Unix timestamp in milliseconds bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Timestamp-Ms",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Fresh caller-chosen nonce bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Nonce",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 canonical Norito multisig witness. This is an alternative to the signature/timestamp/nonce proof set and may identify its subject when X-Iroha-Account is omitted.",
+            "in": "header",
+            "name": "X-Iroha-Witness",
+            "required": false,
+            "schema": {
               "type": "string"
             }
           }
@@ -35204,7 +37535,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/VpnReceiptResponse"
                 }
               }
             },
@@ -35226,6 +37557,52 @@
             "name": "session_id",
             "required": true,
             "schema": {
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Authorizing canonical account. Required with the signature/timestamp/nonce proof set; optional when X-Iroha-Witness identifies the subject account.",
+            "in": "header",
+            "name": "X-Iroha-Account",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 signature over the canonical method, path, sorted query, body hash, timestamp, and nonce. Must be supplied together with X-Iroha-Account, X-Iroha-Timestamp-Ms, and X-Iroha-Nonce; mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Signature",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Unix timestamp in milliseconds bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Timestamp-Ms",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Fresh caller-chosen nonce bound into X-Iroha-Signature. Required for signature authentication and mutually exclusive with X-Iroha-Witness.",
+            "in": "header",
+            "name": "X-Iroha-Nonce",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Base64 canonical Norito multisig witness. This is an alternative to the signature/timestamp/nonce proof set and may identify its subject when X-Iroha-Account is omitted.",
+            "in": "header",
+            "name": "X-Iroha-Witness",
+            "required": false,
+            "schema": {
               "type": "string"
             }
           }
@@ -35235,7 +37612,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/VpnSessionResponse"
                 }
               }
             },
@@ -36119,7 +38496,7 @@
       "name": "Connect"
     },
     {
-      "description": "Sora VPN profile, session, and receipt endpoints.",
+      "description": "Sora VPN profile, quote, session, and receipt endpoints. XOR-denominated fee fields use canonical exact decimal Quantity strings.",
       "name": "VPN"
     },
     {

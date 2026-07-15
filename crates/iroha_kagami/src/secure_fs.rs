@@ -1,22 +1,33 @@
 //! Owner-only filesystem primitives for private Kagami artifacts.
 
-#[cfg(not(unix))]
+#[cfg(any(
+    not(unix),
+    target_os = "espidf",
+    target_os = "horizon",
+    target_os = "redox"
+))]
 use std::path::Path;
 
-#[cfg(not(unix))]
+#[cfg(any(
+    not(unix),
+    target_os = "espidf",
+    target_os = "horizon",
+    target_os = "redox"
+))]
 use color_eyre::eyre::{Result, eyre};
 
-#[cfg(unix)]
+#[cfg(all(
+    unix,
+    not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+))]
 mod unix {
     use std::{
-        ffi::OsStr,
+        ffi::{OsStr, OsString},
         fs::{self, DirBuilder, File, OpenOptions},
         io::{Read, Write},
         os::unix::ffi::OsStrExt as _,
-        os::unix::fs::{
-            DirBuilderExt as _, MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _,
-        },
-        path::{Path, PathBuf},
+        os::unix::fs::{DirBuilderExt as _, MetadataExt as _, OpenOptionsExt as _},
+        path::{Component, Path, PathBuf},
     };
 
     use color_eyre::eyre::{Result, WrapErr as _, eyre};
@@ -29,12 +40,18 @@ mod unix {
     const PRIVATE_DIRECTORY_MODE: u32 = 0o700;
     const PRIVATE_FILE_MODE: u32 = 0o600;
     const MAX_PRIVATE_FILE_BYTES: u64 = 1024 * 1024;
+    const MAX_PRIVATE_ROOT_COMPONENTS: usize = 64;
     const MAX_PRIVATE_TREE_DEPTH: usize = 64;
     const MAX_PRIVATE_TREE_ENTRIES: usize = 16_384;
 
     #[cfg(test)]
     static PRIVATE_TREE_ENTRY_REPLACEMENT: std::sync::Mutex<Option<(PathBuf, PathBuf)>> =
         std::sync::Mutex::new(None);
+
+    #[cfg(test)]
+    static PRIVATE_TREE_ANCESTOR_REPLACEMENT: std::sync::Mutex<
+        Option<(PathBuf, PathBuf, PathBuf)>,
+    > = std::sync::Mutex::new(None);
 
     fn absolute(path: &Path) -> Result<PathBuf> {
         if path.is_absolute() {
@@ -115,6 +132,39 @@ mod unix {
         }
     }
 
+    struct PrivateDirectoryLink {
+        parent: File,
+        name: OsString,
+        child_identity: PrivateFileIdentity,
+    }
+
+    struct OpenPrivateTreeRoot {
+        root: File,
+        root_before: fs::Metadata,
+        ancestry: Vec<PrivateDirectoryLink>,
+    }
+
+    impl OpenPrivateTreeRoot {
+        fn verify_ancestry(&self, path: &Path) -> Result<()> {
+            for link in &self.ancestry {
+                let observed = statat(&link.parent, &link.name, AtFlags::SYMLINK_NOFOLLOW)
+                    .map_err(std::io::Error::from)
+                    .wrap_err_with(|| {
+                        format!("reinspect private path ancestry for {}", path.display())
+                    })?;
+                if RustixFileType::from_raw_mode(observed.st_mode) != RustixFileType::Directory
+                    || PrivateFileIdentity::from_stat(&observed) != link.child_identity
+                {
+                    return Err(eyre!(
+                        "private path ancestry changed during hardening: {}",
+                        path.display()
+                    ));
+                }
+            }
+            Ok(())
+        }
+    }
+
     pub(crate) fn validate_private_directory(path: &Path) -> Result<()> {
         reject_symlink_components(path)?;
         let lexical = fs::symlink_metadata(path)
@@ -166,44 +216,141 @@ mod unix {
         Ok(())
     }
 
-    fn open_private_tree_root(path: &Path) -> Result<(File, fs::Metadata)> {
-        reject_symlink_components(path)?;
-        let before = fs::symlink_metadata(path)
+    fn open_private_tree_root(path: &Path) -> Result<OpenPrivateTreeRoot> {
+        let raw_path = path.as_os_str().as_bytes();
+        if raw_path.is_empty()
+            || raw_path
+                .split(|byte| *byte == b'/')
+                .any(|component| component == b"." || component == b"..")
+        {
+            return Err(eyre!(
+                "private tree path must not be empty or contain `.`/`..`: {}",
+                path.display()
+            ));
+        }
+
+        let anchor = if path.is_absolute() {
+            Path::new("/")
+        } else {
+            Path::new(".")
+        };
+        let mut current = File::from(
+            open(
+                anchor,
+                OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                Mode::empty(),
+            )
+            .map_err(std::io::Error::from)
+            .wrap_err_with(|| format!("open private path anchor for {}", path.display()))?,
+        );
+        let mut ancestry = Vec::new();
+        for component in path.components() {
+            let name = match component {
+                Component::RootDir => continue,
+                Component::Normal(name) => name,
+                Component::CurDir | Component::ParentDir | Component::Prefix(_) => {
+                    return Err(eyre!(
+                        "private tree path contains an ambiguous component: {}",
+                        path.display()
+                    ));
+                }
+            };
+            if ancestry.len() >= MAX_PRIVATE_ROOT_COMPONENTS {
+                return Err(eyre!(
+                    "private tree path contains too many components: {}",
+                    path.display()
+                ));
+            }
+            let before = statat(&current, name, AtFlags::SYMLINK_NOFOLLOW)
+                .map_err(std::io::Error::from)
+                .wrap_err_with(|| {
+                    format!("inspect private path component for {}", path.display())
+                })?;
+            if RustixFileType::from_raw_mode(before.st_mode) != RustixFileType::Directory {
+                return Err(eyre!(
+                    "private tree path contains a symbolic link or non-directory component: {}",
+                    path.display()
+                ));
+            }
+            let child_identity = PrivateFileIdentity::from_stat(&before);
+            let child = File::from(
+                openat(
+                    &current,
+                    name,
+                    OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                    Mode::empty(),
+                )
+                .map_err(std::io::Error::from)
+                .wrap_err_with(|| format!("open private path component for {}", path.display()))?,
+            );
+            let opened = child.metadata().wrap_err_with(|| {
+                format!(
+                    "inspect opened private path component for {}",
+                    path.display()
+                )
+            })?;
+            let after = statat(&current, name, AtFlags::SYMLINK_NOFOLLOW)
+                .map_err(std::io::Error::from)
+                .wrap_err_with(|| {
+                    format!("reinspect private path component for {}", path.display())
+                })?;
+            if !opened.is_dir()
+                || PrivateFileIdentity::from_metadata(&opened) != child_identity
+                || RustixFileType::from_raw_mode(after.st_mode) != RustixFileType::Directory
+                || PrivateFileIdentity::from_stat(&after) != child_identity
+            {
+                return Err(eyre!(
+                    "private path component changed while opening: {}",
+                    path.display()
+                ));
+            }
+            ancestry.push(PrivateDirectoryLink {
+                parent: current,
+                name: name.to_os_string(),
+                child_identity,
+            });
+            current = child;
+        }
+
+        let root_before = current
+            .metadata()
             .wrap_err_with(|| format!("inspect private directory {}", path.display()))?;
-        if !before.is_dir()
-            || before.file_type().is_symlink()
-            || before.uid() != current_uid()
-            || before.mode() & 0o777 != PRIVATE_DIRECTORY_MODE
+        if !root_before.is_dir()
+            || root_before.uid() != current_uid()
+            || root_before.mode() & 0o777 != PRIVATE_DIRECTORY_MODE
         {
             return Err(eyre!(
                 "private directory must be owner-held mode 0700: {}",
                 path.display()
             ));
         }
-        let opened = File::from(
-            open(
-                path,
-                OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-                Mode::empty(),
-            )
-            .map_err(std::io::Error::from)
-            .wrap_err_with(|| format!("open private directory {}", path.display()))?,
-        );
-        let observed = opened
-            .metadata()
-            .wrap_err_with(|| format!("inspect opened directory {}", path.display()))?;
-        let after = fs::symlink_metadata(path)
-            .wrap_err_with(|| format!("reinspect private directory {}", path.display()))?;
-        if after.file_type().is_symlink()
-            || !same_file(&before, &observed)
-            || !same_file(&before, &after)
-        {
-            return Err(eyre!(
-                "private directory changed while opening: {}",
-                path.display()
-            ));
+        let opened = OpenPrivateTreeRoot {
+            root: current,
+            root_before,
+            ancestry,
+        };
+        opened.verify_ancestry(path)?;
+        Ok(opened)
+    }
+
+    #[cfg(test)]
+    fn replace_private_tree_ancestor_for_test(root_path: &Path) {
+        let replacement = {
+            let mut hook = PRIVATE_TREE_ANCESTOR_REPLACEMENT
+                .lock()
+                .expect("private tree ancestor replacement hook lock");
+            match hook.as_ref() {
+                Some((expected, _, _)) if expected == root_path => {
+                    hook.take().map(|(_, ancestor, moved)| (ancestor, moved))
+                }
+                _ => None,
+            }
+        };
+        if let Some((ancestor, moved)) = replacement {
+            fs::rename(&ancestor, &moved).expect("move private tree ancestor for replacement test");
+            std::os::unix::fs::symlink(&moved, &ancestor)
+                .expect("replace private tree ancestor with symlink for test");
         }
-        Ok((opened, before))
     }
 
     fn verify_hardened_file(metadata: &fs::Metadata, identity: PrivateFileIdentity) -> bool {
@@ -331,7 +478,7 @@ mod unix {
                             child_path.display()
                         ));
                     }
-                    fchmod(&child, Mode::from_raw_mode(PRIVATE_DIRECTORY_MODE))
+                    fchmod(&child, Mode::from_raw_mode(PRIVATE_DIRECTORY_MODE as _))
                         .map_err(std::io::Error::from)
                         .wrap_err_with(|| {
                             format!("harden private directory {}", child_path.display())
@@ -394,7 +541,7 @@ mod unix {
                             child_path.display()
                         ));
                     }
-                    fchmod(&child, Mode::from_raw_mode(PRIVATE_FILE_MODE))
+                    fchmod(&child, Mode::from_raw_mode(PRIVATE_FILE_MODE as _))
                         .map_err(std::io::Error::from)
                         .wrap_err_with(|| {
                             format!("harden private file {}", child_path.display())
@@ -441,23 +588,22 @@ mod unix {
     }
 
     pub(crate) fn harden_private_tree(path: &Path) -> Result<()> {
-        let (root, root_before) = open_private_tree_root(path)?;
+        let opened_root = open_private_tree_root(path)?;
+        #[cfg(test)]
+        replace_private_tree_ancestor_for_test(path);
         let mut entries_seen = 0;
-        harden_private_directory_contents(&root, path, 0, &mut entries_seen)?;
-        let opened_after = root
+        harden_private_directory_contents(&opened_root.root, path, 0, &mut entries_seen)?;
+        let opened_after = opened_root
+            .root
             .metadata()
             .wrap_err_with(|| format!("reinspect private directory {}", path.display()))?;
-        let path_after = fs::symlink_metadata(path)
-            .wrap_err_with(|| format!("reinspect private directory {}", path.display()))?;
-        if path_after.file_type().is_symlink()
-            || !same_file(&root_before, &opened_after)
-            || !same_file(&root_before, &path_after)
-        {
+        if !same_file(&opened_root.root_before, &opened_after) {
             return Err(eyre!(
                 "private directory changed during hardening: {}",
                 path.display()
             ));
         }
+        opened_root.verify_ancestry(path)?;
         Ok(())
     }
 
@@ -581,28 +727,29 @@ mod unix {
             fs::symlink_metadata(path).expect("read metadata").mode() & 0o777
         }
 
-        fn private_root() -> tempfile::TempDir {
-            let root = tempfile::tempdir().expect("create private root");
-            set_mode(root.path(), PRIVATE_DIRECTORY_MODE);
-            root
+        fn private_root() -> (tempfile::TempDir, PathBuf) {
+            let guard = tempfile::tempdir().expect("create private root");
+            set_mode(guard.path(), PRIVATE_DIRECTORY_MODE);
+            let root = fs::canonicalize(guard.path()).expect("canonicalize private root");
+            (guard, root)
         }
 
         #[test]
         fn harden_private_tree_normalizes_directories_and_every_regular_file_to_private_modes() {
-            let root = private_root();
-            let nested = root.path().join("nested");
+            let (_root_guard, root) = private_root();
+            let nested = root.join("nested");
             fs::create_dir(&nested).expect("create nested directory");
             set_mode(&nested, 0o755);
-            let executable = root.path().join("start.sh");
+            let executable = root.join("start.sh");
             let regular = nested.join("client.toml");
             fs::write(&executable, b"#!/usr/bin/env bash\nexit 0\n").expect("write script");
             fs::write(&regular, b"private_key = 'secret'\n").expect("write config");
             set_mode(&executable, 0o755);
             set_mode(&regular, 0o644);
 
-            harden_private_tree(root.path()).expect("harden private tree");
+            harden_private_tree(&root).expect("harden private tree");
 
-            assert_eq!(mode(root.path()), PRIVATE_DIRECTORY_MODE);
+            assert_eq!(mode(&root), PRIVATE_DIRECTORY_MODE);
             assert_eq!(mode(&nested), PRIVATE_DIRECTORY_MODE);
             assert_eq!(mode(&executable), PRIVATE_FILE_MODE);
             assert_eq!(mode(&regular), PRIVATE_FILE_MODE);
@@ -614,12 +761,12 @@ mod unix {
 
         #[test]
         fn harden_private_tree_rejects_symlinks_without_changing_their_target() {
-            let root = private_root();
+            let (_root_guard, root) = private_root();
             let outside = tempfile::NamedTempFile::new().expect("create outside file");
             set_mode(outside.path(), 0o640);
-            symlink(outside.path(), root.path().join("linked-secret")).expect("create symlink");
+            symlink(outside.path(), root.join("linked-secret")).expect("create symlink");
 
-            let error = harden_private_tree(root.path()).expect_err("symlink must fail closed");
+            let error = harden_private_tree(&root).expect_err("symlink must fail closed");
 
             assert!(error.to_string().contains("special or multi-link entry"));
             assert_eq!(mode(outside.path()), 0o640);
@@ -627,25 +774,25 @@ mod unix {
 
         #[test]
         fn harden_private_tree_rejects_special_files() {
-            let root = private_root();
-            let socket_path = root.path().join("control.sock");
+            let (_root_guard, root) = private_root();
+            let socket_path = root.join("control.sock");
             let _listener = UnixListener::bind(&socket_path).expect("bind Unix socket");
 
-            let error = harden_private_tree(root.path()).expect_err("socket must fail closed");
+            let error = harden_private_tree(&root).expect_err("socket must fail closed");
 
             assert!(error.to_string().contains("special or multi-link entry"));
         }
 
         #[test]
         fn harden_private_tree_rejects_hard_linked_regular_files() {
-            let root = private_root();
-            let first = root.path().join("first");
-            let second = root.path().join("second");
+            let (_root_guard, root) = private_root();
+            let first = root.join("first");
+            let second = root.join("second");
             fs::write(&first, b"secret").expect("write first link");
             set_mode(&first, 0o640);
             fs::hard_link(&first, &second).expect("create second hard link");
 
-            let error = harden_private_tree(root.path()).expect_err("hard links must fail closed");
+            let error = harden_private_tree(&root).expect_err("hard links must fail closed");
 
             assert!(error.to_string().contains("special or multi-link entry"));
             assert_eq!(mode(&first), 0o640);
@@ -654,8 +801,8 @@ mod unix {
 
         #[test]
         fn harden_private_tree_rejects_a_regular_file_replaced_after_inspection() {
-            let root = private_root();
-            let victim = root.path().join("victim");
+            let (_root_guard, root) = private_root();
+            let victim = root.join("victim");
             fs::write(&victim, b"original").expect("write original entry");
             set_mode(&victim, 0o755);
             let replacements = tempfile::tempdir().expect("create replacement directory");
@@ -670,50 +817,138 @@ mod unix {
                 *hook = Some((victim.clone(), replacement));
             }
 
-            let error = harden_private_tree(root.path())
+            let error = harden_private_tree(&root)
                 .expect_err("descriptor identity mismatch must fail closed");
 
             assert!(error.to_string().contains("changed while opening"));
             assert_eq!(mode(&victim), 0o640);
             assert_eq!(fs::read(&victim).expect("read replacement"), b"replacement");
         }
+
+        #[test]
+        fn harden_private_tree_rejects_an_intermediate_ancestor_replaced_with_a_symlink() {
+            let sandbox = tempfile::tempdir().expect("create ancestor replacement sandbox");
+            let sandbox_root =
+                fs::canonicalize(sandbox.path()).expect("canonicalize replacement sandbox");
+            let ancestor = sandbox_root.join("ancestor");
+            let moved = sandbox_root.join("moved-ancestor");
+            let root = ancestor.join("private");
+            fs::create_dir_all(&root).expect("create nested private root");
+            set_mode(&root, PRIVATE_DIRECTORY_MODE);
+            {
+                let mut hook = PRIVATE_TREE_ANCESTOR_REPLACEMENT
+                    .lock()
+                    .expect("private tree ancestor replacement hook lock");
+                assert!(hook.is_none(), "ancestor replacement hook must start empty");
+                *hook = Some((root.clone(), ancestor.clone(), moved.clone()));
+            }
+
+            let error = harden_private_tree(&root)
+                .expect_err("an intermediate ancestor symlink must fail closed");
+
+            assert!(error.to_string().contains("path ancestry changed"));
+            assert!(
+                fs::symlink_metadata(&ancestor)
+                    .expect("inspect replaced ancestor")
+                    .file_type()
+                    .is_symlink()
+            );
+            assert!(moved.join("private").is_dir());
+        }
+
+        #[test]
+        fn harden_private_tree_rejects_a_preexisting_intermediate_ancestor_symlink() {
+            let sandbox = tempfile::tempdir().expect("create ancestor symlink sandbox");
+            let sandbox_root =
+                fs::canonicalize(sandbox.path()).expect("canonicalize symlink sandbox");
+            let actual_ancestor = sandbox_root.join("actual-ancestor");
+            let actual_root = actual_ancestor.join("private");
+            fs::create_dir_all(&actual_root).expect("create actual private root");
+            set_mode(&actual_root, PRIVATE_DIRECTORY_MODE);
+            let alias = sandbox_root.join("ancestor-alias");
+            symlink(&actual_ancestor, &alias).expect("create intermediate ancestor symlink");
+            let spelled_root = alias.join("private");
+
+            let error = harden_private_tree(&spelled_root)
+                .expect_err("a preexisting intermediate ancestor symlink must fail closed");
+
+            assert!(
+                error
+                    .to_string()
+                    .contains("symbolic link or non-directory component")
+            );
+            assert_eq!(mode(&actual_root), PRIVATE_DIRECTORY_MODE);
+        }
     }
 }
 
-#[cfg(unix)]
+#[cfg(all(
+    unix,
+    not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+))]
 pub(crate) use unix::{
     harden_private_tree, prepare_empty_private_directory, read_private_file,
     write_private_file_atomic,
 };
 
-#[cfg(not(unix))]
+#[cfg(any(
+    not(unix),
+    target_os = "espidf",
+    target_os = "horizon",
+    target_os = "redox"
+))]
 fn unsupported() -> Result<()> {
     Err(eyre!(
-        "owner-only private artifact operations require a Unix platform"
+        "owner-only private artifact operations require a supported Unix platform"
     ))
 }
 
-#[cfg(not(unix))]
+#[cfg(any(
+    not(unix),
+    target_os = "espidf",
+    target_os = "horizon",
+    target_os = "redox"
+))]
 pub(crate) fn validate_private_directory(_path: &Path) -> Result<()> {
     unsupported()
 }
 
-#[cfg(not(unix))]
+#[cfg(any(
+    not(unix),
+    target_os = "espidf",
+    target_os = "horizon",
+    target_os = "redox"
+))]
 pub(crate) fn prepare_empty_private_directory(_path: &Path) -> Result<()> {
     unsupported()
 }
 
-#[cfg(not(unix))]
+#[cfg(any(
+    not(unix),
+    target_os = "espidf",
+    target_os = "horizon",
+    target_os = "redox"
+))]
 pub(crate) fn harden_private_tree(_path: &Path) -> Result<()> {
     unsupported()
 }
 
-#[cfg(not(unix))]
+#[cfg(any(
+    not(unix),
+    target_os = "espidf",
+    target_os = "horizon",
+    target_os = "redox"
+))]
 pub(crate) fn write_private_file_atomic(_path: &Path, _raw: &[u8]) -> Result<()> {
     unsupported()
 }
 
-#[cfg(not(unix))]
+#[cfg(any(
+    not(unix),
+    target_os = "espidf",
+    target_os = "horizon",
+    target_os = "redox"
+))]
 pub(crate) fn read_private_file(_path: &Path) -> Result<Vec<u8>> {
     unsupported()?;
     unreachable!()

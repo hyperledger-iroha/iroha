@@ -237,20 +237,28 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_OPERATION_FIELD_ELEMENTS_V4: usize = 13
 /// Exact `u32` limbs used by the eight-limb encoding of every operation element.
 pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_OPERATION_LIMBS_V4: usize =
     KAGEMUSHA_RECURSIVE_SPEND_STEP_OPERATION_FIELD_ELEMENTS_V4 * 8;
-/// Exact number of `u32` values in the ABI-20/V4 single-column Step ABI.
-pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_PUBLIC_INPUT_LIMBS_V4: usize = 4_027;
+/// Minimum number of `u32` values in the ABI-20/V4 single-column Step ABI.
+///
+/// This is the exact layout at the authenticated degree floor (`k = 20`).
+/// Higher admitted degrees derive their exact length from
+/// [`KagemushaPastaPublicLayoutV4::for_ipa_round_count`].
+pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_MIN_PUBLIC_INPUT_LIMBS_V4: usize = 4_156;
+/// Maximum number of `u32` values in the ABI-20/V4 single-column Step ABI.
+///
+/// This is the exact layout at the authenticated degree ceiling (`k = 21`).
+pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_MAX_PUBLIC_INPUT_LIMBS_V4: usize = 4_172;
 /// Canonical ABI-20/V4 field-neutral public inputs for the EqAffine/Vesta step circuit.
 ///
 /// The embedded `operation_protocol_v2` label versions the subordinate, field-neutral
 /// operation-vector layout. It is not a release or chain-wire version and cannot select
 /// a V2/V3 executor. The operation row remains V2, while the surrounding state-layout V2
 /// reset deliberately changes the V4 circuit identity and invalidates earlier candidates.
-pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PUBLIC_INPUTS_SCHEMA_V4: &[u8] = br#"{"schema":"kagemusha_recursive_spend_step_eq_two_parent_operation_protocol_v2","layout":"single_column_u32","limbs":4027,"state_vector":{"layout_version":2,"limbs":890,"parent_slots":2},"operation":{"field_elements":135,"limbs_per_element":8,"limbs":1080,"encoding":"canonical_pasta_scalar_le_u32"},"compiled_protocol_identity":{"wire_version":1,"hash":"sha256","limbs":8},"ipa_accumulator":{"wire_version":1,"rounds":12,"limbs":106},"public_inputs":["public_statement_digest_u32[8]","operation_u32[1080]","parent_count_u32","parent_states_u32[2][890]","result_state_u32[890]","manifest_sha256_u32[8]","step_eq_compiled_protocol_sha256_u32[8]","step_ep_compiled_protocol_sha256_u32[8]","parent_eq_lineage_accumulator_u32[106]","parent_ep_lineage_accumulator_u32[106]","parent_eq_deferred_sha256_u32[2][8]","parent_ep_deferred_sha256_u32[2][8]"]}"#;
+pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PUBLIC_INPUTS_SCHEMA_V4: &[u8] = br#"{"schema":"kagemusha_recursive_spend_step_eq_two_parent_operation_protocol_v2","layout":"single_column_u32","limbs":{"formula":"3836+16*ipa_round_count","minimum":4156,"maximum":4172},"ipa_round_count":{"source":"authenticated_circuit_params.k","minimum":20,"maximum":21},"state_vector":{"layout_version":2,"limbs":890,"parent_slots":2},"operation":{"field_elements":135,"limbs_per_element":8,"limbs":1080,"encoding":"canonical_pasta_scalar_le_u32"},"compiled_protocol_identity":{"wire_version":1,"hash":"sha256","limbs":8},"ipa_accumulator":{"wire_version":4,"rounds":"ipa_round_count","limbs":{"formula":"10+8*ipa_round_count","minimum":170,"maximum":178}},"live_selector":{"offset":"last","encoding":"u32_bit","bootstrap":0,"live":1},"public_inputs":["public_statement_digest_u32[8]","operation_u32[1080]","parent_count_u32","parent_states_u32[2][890]","result_state_u32[890]","manifest_sha256_u32[8]","step_eq_compiled_protocol_sha256_u32[8]","step_ep_compiled_protocol_sha256_u32[8]","parent_eq_lineage_accumulator_u32[10+8*ipa_round_count]","parent_ep_lineage_accumulator_u32[10+8*ipa_round_count]","parent_eq_deferred_sha256_u32[2][8]","parent_ep_deferred_sha256_u32[2][8]","live_selector_u32"]}"#;
 /// Canonical ABI-20/V4 field-neutral public inputs for the EpAffine/Pallas step circuit.
 ///
 /// As with the Eq schema, `operation_protocol_v2` is the subordinate operation-vector
 /// ABI version, not permission to enter a historical Kagemusha execution path.
-pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PUBLIC_INPUTS_SCHEMA_V4: &[u8] = br#"{"schema":"kagemusha_recursive_spend_step_ep_two_parent_operation_protocol_v2","layout":"single_column_u32","limbs":4027,"state_vector":{"layout_version":2,"limbs":890,"parent_slots":2},"operation":{"field_elements":135,"limbs_per_element":8,"limbs":1080,"encoding":"canonical_pasta_scalar_le_u32"},"compiled_protocol_identity":{"wire_version":1,"hash":"sha256","limbs":8},"ipa_accumulator":{"wire_version":1,"rounds":12,"limbs":106},"public_inputs":["public_statement_digest_u32[8]","operation_u32[1080]","parent_count_u32","parent_states_u32[2][890]","result_state_u32[890]","manifest_sha256_u32[8]","step_eq_compiled_protocol_sha256_u32[8]","step_ep_compiled_protocol_sha256_u32[8]","parent_eq_lineage_accumulator_u32[106]","parent_ep_lineage_accumulator_u32[106]","parent_eq_deferred_sha256_u32[2][8]","parent_ep_deferred_sha256_u32[2][8]"]}"#;
+pub const KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PUBLIC_INPUTS_SCHEMA_V4: &[u8] = br#"{"schema":"kagemusha_recursive_spend_step_ep_two_parent_operation_protocol_v2","layout":"single_column_u32","limbs":{"formula":"3836+16*ipa_round_count","minimum":4156,"maximum":4172},"ipa_round_count":{"source":"authenticated_circuit_params.k","minimum":20,"maximum":21},"state_vector":{"layout_version":2,"limbs":890,"parent_slots":2},"operation":{"field_elements":135,"limbs_per_element":8,"limbs":1080,"encoding":"canonical_pasta_scalar_le_u32"},"compiled_protocol_identity":{"wire_version":1,"hash":"sha256","limbs":8},"ipa_accumulator":{"wire_version":4,"rounds":"ipa_round_count","limbs":{"formula":"10+8*ipa_round_count","minimum":170,"maximum":178}},"live_selector":{"offset":"last","encoding":"u32_bit","bootstrap":0,"live":1},"public_inputs":["public_statement_digest_u32[8]","operation_u32[1080]","parent_count_u32","parent_states_u32[2][890]","result_state_u32[890]","manifest_sha256_u32[8]","step_eq_compiled_protocol_sha256_u32[8]","step_ep_compiled_protocol_sha256_u32[8]","parent_eq_lineage_accumulator_u32[10+8*ipa_round_count]","parent_ep_lineage_accumulator_u32[10+8*ipa_round_count]","parent_eq_deferred_sha256_u32[2][8]","parent_ep_deferred_sha256_u32[2][8]","live_selector_u32"]}"#;
 /// Version of the canonical cross-field state boundary.
 pub const KAGEMUSHA_RECURSIVE_SPEND_STATE_BOUNDARY_VERSION_V2: u16 = 2;
 /// Version stored in limb zero of the exact cross-field recursive state.
@@ -294,6 +302,8 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_RELEASE_AUTH_VERSION_V4: u16 = 4;
 pub const KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_APPROVALS_V1: usize = 64;
 /// Maximum signed review or physical-device evidence file accepted by promotion tooling.
 pub const KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_EVIDENCE_BYTES_V1: usize = 16 * 1024 * 1024;
+/// Maximum canonical ABI-20/V4 promotion record accepted by release consumers.
+pub const KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROMOTION_BYTES_V4: usize = 1024 * 1024;
 /// Historical version-one attestation file name retained by policy tooling.
 pub const KAGEMUSHA_RECURSIVE_SPEND_RELEASE_ATTESTATION_FILE_NAME_V1: &str =
     "release-attestation.norito";
@@ -3582,6 +3592,41 @@ impl KagemushaRecursiveSpendBranchClaimV2 {
         let end = start.checked_add(KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_TAG_BYTES_V2)?;
         self.transition_tags.get(start..end)?.try_into().ok()
     }
+
+    fn transition_history_conflicts_with(
+        &self,
+        other: &Self,
+    ) -> Result<bool, KagemushaValidationError> {
+        self.validate()?;
+        other.validate()?;
+        if self.path.lineage_root != other.path.lineage_root {
+            return Ok(false);
+        }
+        let shared_depth = self.path.depth.min(other.path.depth);
+        for parent_depth in 0..shared_depth {
+            if self.path.prefix(parent_depth)? == other.path.prefix(parent_depth)?
+                && self.transition_tag_at(parent_depth) != other.transition_tag_at(parent_depth)
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    /// Return whether two claims select overlapping value or incompatible
+    /// transition histories.
+    ///
+    /// In addition to equal and ancestor/descendant coordinates, sibling
+    /// outputs from different proof-bound transitions of the same parent
+    /// conflict. This prevents mixing outputs from alternative splits.
+    pub fn conflicts_with(&self, other: &Self) -> Result<bool, KagemushaValidationError> {
+        self.validate()?;
+        other.validate()?;
+        Ok(
+            self.path.conflicts_with(other.path)
+                || self.transition_history_conflicts_with(other)?,
+        )
+    }
 }
 
 fn validate_kagemusha_recursive_spend_branch_claims_v2(
@@ -3608,19 +3653,10 @@ fn validate_kagemusha_recursive_spend_branch_claims_v2(
             });
         }
         for previous in &claims[..index] {
-            if previous.path.lineage_root != claim.path.lineage_root {
-                continue;
-            }
-            let shared_depth = previous.path.depth.min(claim.path.depth);
-            for parent_depth in 0..shared_depth {
-                if previous.path.prefix(parent_depth)? == claim.path.prefix(parent_depth)?
-                    && previous.transition_tag_at(parent_depth)
-                        != claim.transition_tag_at(parent_depth)
-                {
-                    return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
-                        field: "branch_claims.transition_choice",
-                    });
-                }
+            if previous.transition_history_conflicts_with(claim)? {
+                return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                    field: "branch_claims.transition_choice",
+                });
             }
         }
     }
@@ -4284,7 +4320,31 @@ impl KagemushaPastaCycleFramedArtifactHeaderV4 {
         manifest: &KagemushaRecursiveSpendArtifactManifestV4,
         descriptor: &KagemushaPastaCycleArtifactV4,
     ) -> Result<(), KagemushaValidationError> {
-        manifest.validate()?;
+        self.validate_against_manifest_state(manifest, descriptor, true)
+    }
+
+    /// Bind this header to one exact clean pre-promotion candidate manifest.
+    /// This authenticates structure and bytes only; it does not promote or
+    /// relabel the candidate as a production release.
+    pub fn validate_against_candidate_manifest(
+        &self,
+        manifest: &KagemushaRecursiveSpendArtifactManifestV4,
+        descriptor: &KagemushaPastaCycleArtifactV4,
+    ) -> Result<(), KagemushaValidationError> {
+        self.validate_against_manifest_state(manifest, descriptor, false)
+    }
+
+    fn validate_against_manifest_state(
+        &self,
+        manifest: &KagemushaRecursiveSpendArtifactManifestV4,
+        descriptor: &KagemushaPastaCycleArtifactV4,
+        finalized_release: bool,
+    ) -> Result<(), KagemushaValidationError> {
+        if finalized_release {
+            manifest.validate()?;
+        } else {
+            manifest.validate_unsigned_candidate()?;
+        }
         descriptor.validate()?;
         self.validate()?;
         let profile = manifest
@@ -4433,6 +4493,28 @@ impl KagemushaRecursiveSpendArtifactManifestV4 {
     pub fn canonical_sha256(&self) -> Result<[u8; 32], KagemushaValidationError> {
         self.validate()?;
         Ok(Sha256::digest(to_bytes(self)?).into())
+    }
+
+    /// Reconstruct the byte-exact immutable candidate that preceded this finalized manifest.
+    ///
+    /// Finalization fills only the two evidence digests and the release-attestation
+    /// digest. Clearing exactly those fields must therefore recover a valid, clean
+    /// candidate; a dirty or otherwise invalid finalized manifest fails closed.
+    pub fn immutable_candidate(
+        &self,
+    ) -> Result<KagemushaRecursiveSpendCandidateV4, KagemushaValidationError> {
+        self.validate()?;
+        let mut manifest = self.clone();
+        manifest.benchmark_evidence_sha256 = [0; 32];
+        manifest.cryptographic_review_sha256 = [0; 32];
+        manifest.release_attestation_sha256 = [0; 32];
+        let candidate = KagemushaRecursiveSpendCandidateV4 {
+            schema: KAGEMUSHA_RECURSIVE_SPEND_CANDIDATE_SCHEMA_V4.to_owned(),
+            version: KAGEMUSHA_RECURSIVE_SPEND_CANDIDATE_VERSION_V4,
+            manifest,
+        };
+        candidate.validate()?;
+        Ok(candidate)
     }
 
     fn validate_with_attestation_state(
@@ -4851,7 +4933,13 @@ impl KagemushaRecursiveSpendPromotedReleaseV4 {
         release: &KagemushaAuthenticatedReleaseV4,
     ) -> Result<(), KagemushaReleaseVerificationError> {
         self.validate()?;
-        if self.generation != release.manifest().generation
+        let candidate_sha256 = release
+            .manifest()
+            .immutable_candidate()
+            .and_then(|candidate| candidate.sha256())
+            .map_err(|_| KagemushaReleaseVerificationError::InvalidPromotionRecord)?;
+        if self.candidate_sha256 != candidate_sha256
+            || self.generation != release.manifest().generation
             || self.manifest_sha256 != release.manifest_sha256()
             || self.release_attestation_sha256 != release.release_attestation_sha256()
             || self.release_policy_sha256 != release.release_policy_sha256()
@@ -5156,7 +5244,28 @@ impl KagemushaPastaCycleProofEnvelopeV4 {
         &self,
         manifest: &KagemushaRecursiveSpendArtifactManifestV4,
     ) -> Result<(), KagemushaValidationError> {
-        manifest.validate()?;
+        self.validate_against_manifest_state(manifest, true)
+    }
+
+    /// Bind an envelope to one exact clean pre-promotion candidate manifest.
+    /// This is a structural evidence check and confers no release authority.
+    pub fn validate_against_candidate_manifest(
+        &self,
+        manifest: &KagemushaRecursiveSpendArtifactManifestV4,
+    ) -> Result<(), KagemushaValidationError> {
+        self.validate_against_manifest_state(manifest, false)
+    }
+
+    fn validate_against_manifest_state(
+        &self,
+        manifest: &KagemushaRecursiveSpendArtifactManifestV4,
+        finalized_release: bool,
+    ) -> Result<(), KagemushaValidationError> {
+        if finalized_release {
+            manifest.validate()?;
+        } else {
+            manifest.validate_unsigned_candidate()?;
+        }
         self.validate()?;
         let [step_eq, step_ep] = manifest.profiles.as_slice() else {
             return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
@@ -5974,13 +6083,60 @@ mod kagemusha_v4_artifact_contract_tests {
     }
 
     #[test]
-    fn v4_public_input_schema_keeps_only_the_subordinate_operation_v2_label() {
+    fn v4_public_input_schema_tracks_the_authenticated_dynamic_layout() {
         assert_eq!(
             KAGEMUSHA_RECURSIVE_SPEND_STEP_OPERATION_FIELD_ELEMENTS_V4,
             135
         );
         assert_eq!(KAGEMUSHA_RECURSIVE_SPEND_STEP_OPERATION_LIMBS_V4, 1_080);
-        assert_eq!(KAGEMUSHA_RECURSIVE_SPEND_STEP_PUBLIC_INPUT_LIMBS_V4, 4_027);
+        let minimum_layout =
+            KagemushaPastaPublicLayoutV4::for_ipa_round_count(KAGEMUSHA_STEP_CIRCUIT_MINIMUM_K_V4)
+                .expect("minimum V4 public layout");
+        let maximum_layout =
+            KagemushaPastaPublicLayoutV4::for_ipa_round_count(KAGEMUSHA_STEP_CIRCUIT_MAXIMUM_K_V4)
+                .expect("maximum V4 public layout");
+        assert_eq!(minimum_layout.accumulator_limbs, 170);
+        assert_eq!(minimum_layout.live_selector_offset, 4_155);
+        assert_eq!(minimum_layout.instance_column_limbs, 4_156);
+        assert_eq!(maximum_layout.accumulator_limbs, 178);
+        assert_eq!(maximum_layout.live_selector_offset, 4_171);
+        assert_eq!(maximum_layout.instance_column_limbs, 4_172);
+        assert_eq!(
+            usize::try_from(minimum_layout.instance_column_limbs)
+                .expect("minimum V4 layout fits usize"),
+            KAGEMUSHA_RECURSIVE_SPEND_STEP_MIN_PUBLIC_INPUT_LIMBS_V4,
+        );
+        assert_eq!(
+            usize::try_from(maximum_layout.instance_column_limbs)
+                .expect("maximum V4 layout fits usize"),
+            KAGEMUSHA_RECURSIVE_SPEND_STEP_MAX_PUBLIC_INPUT_LIMBS_V4,
+        );
+        assert_eq!(KAGEMUSHA_IPA_ACCUMULATION_WIRE_VERSION_V4, 4);
+
+        let mut maximum_params = circuit_params();
+        maximum_params.k = KAGEMUSHA_STEP_CIRCUIT_MAXIMUM_K_V4;
+        maximum_params.lookup_bits = KAGEMUSHA_STEP_CIRCUIT_MAXIMUM_K_V4 - 1;
+        maximum_params.public_input_limbs = maximum_layout.instance_column_limbs;
+        assert_eq!(
+            maximum_params.validate().expect("maximum V4 parameters"),
+            maximum_layout,
+        );
+        let mut below_minimum = circuit_params();
+        below_minimum.k = KAGEMUSHA_STEP_CIRCUIT_MINIMUM_K_V4 - 1;
+        below_minimum.lookup_bits = below_minimum.k - 1;
+        below_minimum.public_input_limbs =
+            KagemushaPastaPublicLayoutV4::for_ipa_round_count(below_minimum.k)
+                .expect("below-minimum layout remains arithmetically representable")
+                .instance_column_limbs;
+        assert!(below_minimum.validate().is_err());
+        let mut above_maximum = circuit_params();
+        above_maximum.k = KAGEMUSHA_STEP_CIRCUIT_MAXIMUM_K_V4 + 1;
+        above_maximum.lookup_bits = above_maximum.k - 1;
+        above_maximum.public_input_limbs =
+            KagemushaPastaPublicLayoutV4::for_ipa_round_count(above_maximum.k)
+                .expect("above-maximum layout remains arithmetically representable")
+                .instance_column_limbs;
+        assert!(above_maximum.validate().is_err());
 
         for schema in [
             KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PUBLIC_INPUTS_SCHEMA_V4,
@@ -5988,9 +6144,23 @@ mod kagemusha_v4_artifact_contract_tests {
         ] {
             let schema = core::str::from_utf8(schema).expect("static schema is UTF-8");
             assert!(schema.contains("two_parent_operation_protocol_v2"));
-            assert!(schema.contains("\"limbs\":4027"));
+            assert!(schema.contains(
+                "\"limbs\":{\"formula\":\"3836+16*ipa_round_count\",\"minimum\":4156,\"maximum\":4172}"
+            ));
+            assert!(schema.contains(
+                "\"ipa_round_count\":{\"source\":\"authenticated_circuit_params.k\",\"minimum\":20,\"maximum\":21}"
+            ));
             assert!(schema.contains("\"state_vector\":{\"layout_version\":2,\"limbs\":890"));
             assert!(schema.contains("\"operation\":{\"field_elements\":135"));
+            assert!(schema.contains(
+                "\"ipa_accumulator\":{\"wire_version\":4,\"rounds\":\"ipa_round_count\",\"limbs\":{\"formula\":\"10+8*ipa_round_count\",\"minimum\":170,\"maximum\":178}}"
+            ));
+            assert!(schema.contains(
+                "\"live_selector\":{\"offset\":\"last\",\"encoding\":\"u32_bit\",\"bootstrap\":0,\"live\":1}"
+            ));
+            assert!(schema.contains("\"live_selector_u32\""));
+            assert!(!schema.contains("\"rounds\":12"));
+            assert!(!schema.contains("[106]"));
             assert!(!schema.contains("krv2"));
             assert!(!schema.contains("krv3"));
         }
@@ -8751,8 +8921,7 @@ impl KagemushaRecursiveSpendRedeemChangeBranchV4 {
             || change.asset != input.asset
             || change.asset_scale != input.asset_scale
             || change.final_root == input.final_root
-            || input.next_zero_leaf_index.checked_add(1)
-                != Some(change.next_zero_leaf_index)
+            || input.next_zero_leaf_index.checked_add(1) != Some(change.next_zero_leaf_index)
             || change.topup_anchor_refs != input.topup_anchor_refs
             || input.proof_step_count == 0
             || input.proof_step_count.checked_add(1) != Some(change.proof_step_count)

@@ -378,6 +378,7 @@ define_instruction_handlers! {
         iroha_data_model::isi::smart_contract_code::CancelSmartContractCodeUpload
     >,
     dispatch_instruction::<iroha_data_model::isi::smart_contract_code::ActivateContractInstance>,
+    dispatch_instruction::<iroha_data_model::isi::smart_contract_code::CommitContractDeployment>,
     dispatch_instruction::<iroha_data_model::isi::smart_contract_code::DeactivateContractInstance>,
     dispatch_instruction::<iroha_data_model::isi::smart_contract_code::RemoveSmartContractBytes>,
     dispatch_instruction::<verifying_keys::RegisterVerifyingKey>,

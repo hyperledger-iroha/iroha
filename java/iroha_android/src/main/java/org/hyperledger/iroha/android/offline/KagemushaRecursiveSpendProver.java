@@ -50,6 +50,7 @@ public final class KagemushaRecursiveSpendProver {
   public static final int MAX_TRUSTED_RELEASE_POLICY_BYTES = 64 * 1024;
   public static final int MAX_RELEASE_ATTESTATION_BYTES = 1024 * 1024;
   public static final int MAX_RELEASE_EVIDENCE_BYTES = 16 * 1024 * 1024;
+  public static final int MAX_PROMOTION_RECORD_BYTES = 1024 * 1024;
   public static final int MAX_PEER_TEXT_ENVELOPE_BYTES = 12 * 1024;
   public static final int MAX_PEER_TEXT_ARCHIVE_BYTES = 9_211;
   public static final int MAX_PEER_ARCHIVE_BYTES_V2 = 32 * 1024;
@@ -1082,13 +1083,14 @@ public final class KagemushaRecursiveSpendProver {
         requireDigest(unshieldVerifierCommitment, "unshieldVerifierCommitment");
     final byte[] operation = requireDigest(operationId, "operationId");
     final byte[] bundleArchive = input.bundle().noritoEncoded();
+    final byte[] topUpProvenanceArchive = input.topUpProvenance().noritoEncoded();
     final byte[] openingArchive = input.opening().noritoEncoded();
     final byte[] witnessArchive = input.membershipWitness().noritoEncoded();
     final byte[] recipient = utf8(recipientAccountId, "recipientAccountId");
     final byte[] atomicUnits = utf8(amount.atomicUnits(), "atomicUnits");
     try {
       return new RedeemRequestV4(nativeBuildRedeemRequestV4(
-          bundleArchive, openingArchive, witnessArchive, recipient,
+          bundleArchive, topUpProvenanceArchive, openingArchive, witnessArchive, recipient,
           atomicUnits, amount.scale(), change,
           outputMembership, verifier, operation, blockHeight), changeOpening);
     } finally {
@@ -1097,6 +1099,7 @@ public final class KagemushaRecursiveSpendProver {
       Arrays.fill(verifier, (byte) 0);
       Arrays.fill(operation, (byte) 0);
       Arrays.fill(bundleArchive, (byte) 0);
+      Arrays.fill(topUpProvenanceArchive, (byte) 0);
       Arrays.fill(openingArchive, (byte) 0);
       Arrays.fill(witnessArchive, (byte) 0);
       Arrays.fill(recipient, (byte) 0);
@@ -3445,19 +3448,22 @@ public final class KagemushaRecursiveSpendProver {
    *
    * <p>The policy must be provisioned from the deployment trust root rather than copied from the
    * downloaded release. Native code verifies the signed role thresholds and hashes both evidence
-   * files before any finalized artifact handle can be consumed.
+   * files before validating the candidate-bound promotion record and consuming any finalized
+   * artifact handle.
    */
   public static final class ReleaseAuthentication {
     private final byte[] trustedPolicyNorito;
     private final byte[] releaseAttestationNorito;
     private final byte[] benchmarkEvidence;
     private final byte[] cryptographicReview;
+    private final byte[] promotionRecordNorito;
 
     public ReleaseAuthentication(
         final byte[] trustedPolicyNorito,
         final byte[] releaseAttestationNorito,
         final byte[] benchmarkEvidence,
-        final byte[] cryptographicReview) {
+        final byte[] cryptographicReview,
+        final byte[] promotionRecordNorito) {
       this.trustedPolicyNorito = requireBoundedBytes(
           trustedPolicyNorito,
           "trustedPolicyNorito",
@@ -3474,6 +3480,10 @@ public final class KagemushaRecursiveSpendProver {
           cryptographicReview,
           "cryptographicReview",
           MAX_RELEASE_EVIDENCE_BYTES);
+      this.promotionRecordNorito = requireBoundedBytes(
+          promotionRecordNorito,
+          "promotionRecordNorito",
+          MAX_PROMOTION_RECORD_BYTES);
     }
   }
 
@@ -3485,6 +3495,7 @@ public final class KagemushaRecursiveSpendProver {
     private final byte[] releaseAttestationNorito;
     private final byte[] benchmarkEvidence;
     private final byte[] cryptographicReview;
+    private final byte[] promotionRecordNorito;
     private final Map<ArtifactRoleV4, ArtifactIngest> artifacts = new LinkedHashMap<>();
     private final List<String> artifactDigests = new ArrayList<>();
     private boolean installed;
@@ -3508,6 +3519,9 @@ public final class KagemushaRecursiveSpendProver {
       this.cryptographicReview = Arrays.copyOf(
           releaseAuthentication.cryptographicReview,
           releaseAuthentication.cryptographicReview.length);
+      this.promotionRecordNorito = Arrays.copyOf(
+          releaseAuthentication.promotionRecordNorito,
+          releaseAuthentication.promotionRecordNorito.length);
     }
 
     public synchronized ArtifactIngest beginArtifact(
@@ -3553,6 +3567,7 @@ public final class KagemushaRecursiveSpendProver {
             releaseAttestationNorito,
             benchmarkEvidence,
             cryptographicReview,
+            promotionRecordNorito,
             handles);
       } catch (final RuntimeException | UnsatisfiedLinkError failure) {
         for (int index = 0; index < claimed; index++) {
@@ -3660,6 +3675,7 @@ public final class KagemushaRecursiveSpendProver {
       byte[] releaseAttestationNorito,
       byte[] benchmarkEvidence,
       byte[] cryptographicReview,
+      byte[] promotionRecordNorito,
       long[] artifactHandles);
 
   private static native boolean nativeArtifactSetIsInstalledV4(
@@ -3714,7 +3730,8 @@ public final class KagemushaRecursiveSpendProver {
       int maximumHops, long blockHeight, long verifiedAtMilliseconds);
   private static native byte[][] nativeProjectVerifyResultV4(byte[] result);
   private static native byte[] nativeBuildRedeemRequestV4(
-      byte[] bundle, byte[] opening, byte[] membershipWitness, byte[] recipient,
+      byte[] bundle, byte[] topUpProvenance, byte[] opening, byte[] membershipWitness,
+      byte[] recipient,
       byte[] atomicUnits, int scale, byte[] changeOpening, byte[] changeOutputMembership,
       byte[] verifierCommitment, byte[] operationId, long blockHeight);
   private static native byte[][] nativeProjectRedeemBuildResultV4(byte[] result);

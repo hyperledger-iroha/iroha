@@ -2465,6 +2465,10 @@ pub mod runtime_governance {
         public_get(id, path).with_feature_gate(FeatureGate::Feature("app_api"))
     }
 
+    const fn app_signed_get(id: &'static str, path: &'static str) -> RouteDescriptor {
+        app_get(id, path).with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
+    }
+
     const fn app_post(id: &'static str, path: &'static str) -> RouteDescriptor {
         public_post(id, path).with_feature_gate(FeatureGate::Feature("app_api"))
     }
@@ -2698,7 +2702,7 @@ pub mod runtime_governance {
     pub const GOV_UNLOCK_STATS: RouteDescriptor =
         app_get("governance.unlock.stats", "/v1/gov/unlocks/stats");
     /// Read an active governance contract binding.
-    pub const GOV_CONTRACT_GET: RouteDescriptor = app_get(
+    pub const GOV_CONTRACT_GET: RouteDescriptor = app_signed_get(
         "governance.contract.read",
         "/v1/gov/contracts/{contract_address}",
     );
@@ -3749,6 +3753,10 @@ pub mod contracts_and_verification_keys {
         .with_cors_options(true)
     }
 
+    const fn app_signed_post(id: &'static str, path: &'static str) -> RouteDescriptor {
+        app_post(id, path).with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
+    }
+
     const fn app_sdk_get(id: &'static str, path: &'static str) -> RouteDescriptor {
         app_get(id, path).with_projections(RouteProjections::SDK)
     }
@@ -3805,11 +3813,8 @@ pub mod contracts_and_verification_keys {
 
     declare_routes! {
         CONTRACTS_CODE_BYTES_BY_CODE_HASH_GET => app_get("contracts.contracts_code_bytes_by_code_hash_get", "/v1/contracts/code-bytes/{code_hash}");
-        CONTRACTS_DEPLOY_POST => app_post("contracts.contracts_deploy_post", "/v1/contracts/deploy");
-        CONTRACTS_DEPLOY_BUNDLE_POST => app_sdk_post("contracts.contracts_deploy_bundle_post", "/v1/contracts/deploy-bundle");
         CONTRACTS_ALIASES_POST => app_post("contracts.contracts_aliases_post", "/v1/contracts/aliases");
-        CONTRACTS_DEPLOY_BUNDLES_BY_BUNDLE_DIGEST_GET => app_sdk_get("contracts.contracts_deploy_bundles_by_bundle_digest_get", "/v1/contracts/deploy-bundles/{bundle_digest}");
-        CONTRACTS_ALIASES_RESOLVE_POST => app_post("contracts.contracts_aliases_resolve_post", "/v1/contracts/aliases/resolve");
+        CONTRACTS_ALIASES_RESOLVE_POST => app_signed_post("contracts.contracts_aliases_resolve_post", "/v1/contracts/aliases/resolve");
         ASSETS_TRANSFER_POST => app_post("assets.assets_transfer_post", "/v1/assets/transfer");
         CONTRACTS_CALL_POST => app_post("contracts.contracts_call_post", "/v1/contracts/call");
         CONTRACTS_CALL_SIMULATE_POST => app_post("contracts.contracts_call_simulate_post", "/v1/contracts/call/simulate");
@@ -3827,12 +3832,7 @@ pub mod contracts_and_verification_keys {
         MULTISIG_CANCEL_POST => app_post("contracts.multisig_cancel_post", "/v1/multisig/cancel");
         MULTISIG_SPEC_POST => app_post("contracts.multisig_spec_post", "/v1/multisig/spec");
         MULTISIG_PROPOSALS_QUERY_POST => app_post("contracts.multisig_proposals_query_post", "/v1/multisig/proposals/query");
-        MULTISIG_PROPOSALS_LOOKUP_POST => app_post("contracts.multisig_proposals_lookup_post", "/v1/multisig/proposals/lookup");
         MULTISIG_PROPOSALS_RESOLVE_POST => app_post("contracts.multisig_proposals_resolve_post", "/v1/multisig/proposals/resolve");
-        MULTISIG_APPROVALS_QUERY_POST => app_post("contracts.multisig_approvals_query_post", "/v1/multisig/approvals/query");
-        MULTISIG_APPROVALS_LOOKUP_POST => app_post("contracts.multisig_approvals_lookup_post", "/v1/multisig/approvals/lookup");
-        MULTISIG_APPROVALS_QUERY_FOR_AUTHORITY_POST => app_post("contracts.multisig_approvals_query_for_authority_post", "/v1/multisig/approvals/query-for-authority");
-        MULTISIG_APPROVALS_LOOKUP_FOR_AUTHORITY_POST => app_post("contracts.multisig_approvals_lookup_for_authority_post", "/v1/multisig/approvals/lookup-for-authority");
         CONTROLS_ASSET_TRANSFER_QUERY_POST => app_post("contracts.controls_asset_transfer_query_post", "/v1/controls/asset-transfer/query");
         ZK_VK_REGISTER_POST => app_sdk_post("contracts.zk_vk_register_post", "/v1/zk/vk/register");
         ZK_VK_UPDATE_POST => app_sdk_post("contracts.zk_vk_update_post", "/v1/zk/vk/update");
@@ -4528,10 +4528,7 @@ pub const CATALOGED_ROUTES: &[RouteDescriptor] = &[
     application_api::WEBHOOKS_POST,
     application_api::WEBHOOKS_BY_ID_DELETE,
     contracts_and_verification_keys::CONTRACTS_CODE_BYTES_BY_CODE_HASH_GET,
-    contracts_and_verification_keys::CONTRACTS_DEPLOY_POST,
-    contracts_and_verification_keys::CONTRACTS_DEPLOY_BUNDLE_POST,
     contracts_and_verification_keys::CONTRACTS_ALIASES_POST,
-    contracts_and_verification_keys::CONTRACTS_DEPLOY_BUNDLES_BY_BUNDLE_DIGEST_GET,
     contracts_and_verification_keys::CONTRACTS_ALIASES_RESOLVE_POST,
     contracts_and_verification_keys::ASSETS_TRANSFER_POST,
     contracts_and_verification_keys::CONTRACTS_CALL_POST,
@@ -4550,12 +4547,7 @@ pub const CATALOGED_ROUTES: &[RouteDescriptor] = &[
     contracts_and_verification_keys::MULTISIG_CANCEL_POST,
     contracts_and_verification_keys::MULTISIG_SPEC_POST,
     contracts_and_verification_keys::MULTISIG_PROPOSALS_QUERY_POST,
-    contracts_and_verification_keys::MULTISIG_PROPOSALS_LOOKUP_POST,
     contracts_and_verification_keys::MULTISIG_PROPOSALS_RESOLVE_POST,
-    contracts_and_verification_keys::MULTISIG_APPROVALS_QUERY_POST,
-    contracts_and_verification_keys::MULTISIG_APPROVALS_LOOKUP_POST,
-    contracts_and_verification_keys::MULTISIG_APPROVALS_QUERY_FOR_AUTHORITY_POST,
-    contracts_and_verification_keys::MULTISIG_APPROVALS_LOOKUP_FOR_AUTHORITY_POST,
     contracts_and_verification_keys::CONTROLS_ASSET_TRANSFER_QUERY_POST,
     contracts_and_verification_keys::ZK_VK_REGISTER_POST,
     contracts_and_verification_keys::ZK_VK_UPDATE_POST,
@@ -4930,6 +4922,18 @@ mod tests {
             AuthenticationPolicy::ToriiDefault,
             "public asset aliases do not expose an account binding"
         );
+
+        for route in [
+            contracts_and_verification_keys::CONTRACTS_ALIASES_RESOLVE_POST,
+            runtime_governance::GOV_CONTRACT_GET,
+        ] {
+            assert_eq!(
+                route.authentication(),
+                AuthenticationPolicy::CanonicalAccountSignature,
+                "{} exposes contract identity and must require a canonical account signature",
+                route.stable_route_id()
+            );
+        }
     }
 
     #[test]
@@ -5186,12 +5190,7 @@ mod tests {
             contracts_and_verification_keys::BRIDGE_PROOFS_SUBMIT_POST,
             contracts_and_verification_keys::BRIDGE_MESSAGES_POST,
             contracts_and_verification_keys::MULTISIG_PROPOSALS_QUERY_POST,
-            contracts_and_verification_keys::MULTISIG_PROPOSALS_LOOKUP_POST,
             contracts_and_verification_keys::MULTISIG_PROPOSALS_RESOLVE_POST,
-            contracts_and_verification_keys::MULTISIG_APPROVALS_QUERY_POST,
-            contracts_and_verification_keys::MULTISIG_APPROVALS_LOOKUP_POST,
-            contracts_and_verification_keys::MULTISIG_APPROVALS_QUERY_FOR_AUTHORITY_POST,
-            contracts_and_verification_keys::MULTISIG_APPROVALS_LOOKUP_FOR_AUTHORITY_POST,
         ] {
             assert!(route.projections().openapi(), "{}", route.stable_route_id());
         }
@@ -5201,16 +5200,6 @@ mod tests {
         ] {
             assert!(route.projections().sdk(), "{}", route.stable_route_id());
         }
-        assert!(
-            contracts_and_verification_keys::CONTRACTS_DEPLOY_BUNDLE_POST
-                .projections()
-                .sdk()
-        );
-        assert!(
-            !contracts_and_verification_keys::CONTRACTS_DEPLOY_BUNDLE_POST
-                .projections()
-                .openapi()
-        );
         assert!(application_api::SORACLOUD_DEPLOY_POST.projections().sdk());
         assert!(
             !application_api::SORACLOUD_DEPLOY_POST

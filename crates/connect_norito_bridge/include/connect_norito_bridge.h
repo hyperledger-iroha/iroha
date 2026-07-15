@@ -179,7 +179,7 @@ int32_t connect_norito_kagemusha_topup_finality_verify_v4(
 // never accept or consume ABI19/V3 sessions. Begin/finalize authenticate one
 // framed artifact; install consumes all eight finalized handles atomically
 // after authenticating the release policy, signed attestation, device evidence,
-// and crypto review.
+// crypto review, and canonical candidate-bound promotion record.
 // Caller handle order is ignored; native retains the canonical role order.
 int32_t connect_norito_kagemusha_recursive_spend_artifact_begin_v4(
     const uint8_t* manifest_norito_ptr,
@@ -208,6 +208,8 @@ int32_t connect_norito_kagemusha_recursive_spend_artifact_set_install_v4(
     unsigned long benchmark_evidence_len,
     const uint8_t* cryptographic_review_ptr,
     unsigned long cryptographic_review_len,
+    const uint8_t* promotion_record_norito_ptr,
+    unsigned long promotion_record_norito_len,
     const uint64_t* handles_ptr,
     unsigned long handles_len);
 int32_t connect_norito_kagemusha_recursive_spend_artifact_set_is_installed_v4(
@@ -222,6 +224,71 @@ int32_t connect_norito_kagemusha_recursive_spend_installed_manifest_sha256_v4(
 int32_t connect_norito_kagemusha_recursive_spend_artifact_set_uninstall_v4(
     const uint8_t* expected_manifest_sha256_ptr,
     unsigned long expected_manifest_sha256_len);
+
+// ---------------- NON-SHIPPING Kagemusha candidate evidence lab ----------------
+// These declarations are available only to explicitly feature-selected lab
+// builds. The corresponding symbols are absent from production libraries,
+// use disjoint handles/state, and never enable the production capability gate.
+#ifdef CONNECT_NORITO_KAGEMUSHA_CANDIDATE_EVIDENCE_LAB
+extern const uint8_t CONNECT_NORITO_KAGEMUSHA_CANDIDATE_EVIDENCE_LAB_DO_NOT_SHIP_V2[];
+int32_t connect_norito_kagemusha_recursive_spend_candidate_lab_artifact_begin_v4(
+    const uint8_t* candidate_norito_ptr,
+    unsigned long candidate_norito_len,
+    const uint8_t* expected_candidate_sha256_ptr,
+    unsigned long expected_candidate_sha256_len,
+    const uint8_t* expected_artifact_sha256_ptr,
+    unsigned long expected_artifact_sha256_len,
+    uint64_t* out_handle);
+int32_t connect_norito_kagemusha_recursive_spend_candidate_lab_artifact_write_v4(
+    uint64_t handle, const uint8_t* chunk_ptr, unsigned long chunk_len);
+int32_t connect_norito_kagemusha_recursive_spend_candidate_lab_artifact_finalize_v4(
+    uint64_t handle);
+int32_t connect_norito_kagemusha_recursive_spend_candidate_lab_artifact_cancel_v4(
+    uint64_t handle);
+int32_t connect_norito_kagemusha_recursive_spend_candidate_lab_artifact_set_install_v4(
+    const uint8_t* candidate_norito_ptr,
+    unsigned long candidate_norito_len,
+    const uint8_t* expected_candidate_sha256_ptr,
+    unsigned long expected_candidate_sha256_len,
+    const uint64_t* handles_ptr,
+    unsigned long handles_len);
+int32_t connect_norito_kagemusha_recursive_spend_candidate_lab_artifact_set_is_installed_v4(
+    const uint8_t* candidate_norito_ptr,
+    unsigned long candidate_norito_len,
+    const uint8_t* expected_candidate_sha256_ptr,
+    unsigned long expected_candidate_sha256_len,
+    uint8_t* out_installed);
+// Returns canonical Norito
+// `KagemushaCandidateEvidenceLabAcceptedIdentityV2` bytes owned by the caller.
+int32_t connect_norito_kagemusha_recursive_spend_candidate_lab_accepted_identity_v4(
+    uint8_t** out_identity_ptr, unsigned long* out_identity_len);
+int32_t connect_norito_kagemusha_recursive_spend_candidate_lab_artifact_set_uninstall_v4(
+    const uint8_t* expected_candidate_sha256_ptr,
+    unsigned long expected_candidate_sha256_len);
+int32_t connect_norito_kagemusha_recursive_spend_candidate_lab_init_v4(
+    const uint8_t* request_norito_ptr,
+    unsigned long request_norito_len,
+    uint8_t** out_init_result_ptr,
+    unsigned long* out_init_result_len);
+int32_t connect_norito_kagemusha_recursive_spend_candidate_lab_append_v4(
+    const uint8_t* request_norito_ptr,
+    unsigned long request_norito_len,
+    const uint8_t* recipient_request_norito_ptr,
+    unsigned long recipient_request_norito_len,
+    uint64_t verified_at_ms,
+    uint8_t** out_split_result_ptr,
+    unsigned long* out_split_result_len);
+int32_t connect_norito_kagemusha_recursive_spend_candidate_lab_verify_v4(
+    const uint8_t* request_norito_ptr,
+    unsigned long request_norito_len,
+    uint8_t** out_result_ptr,
+    unsigned long* out_result_len);
+int32_t connect_norito_kagemusha_recursive_spend_candidate_lab_redeem_v4(
+    const uint8_t* request_norito_ptr,
+    unsigned long request_norito_len,
+    uint8_t** out_build_result_ptr,
+    unsigned long* out_build_result_len);
+#endif
 
 // ---------------- Kagemusha first-release protocol ----------------
 

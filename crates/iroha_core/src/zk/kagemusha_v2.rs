@@ -116,10 +116,7 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_COVERAGE_V2: &[(&str, &str)] = 
     ("statement.asset", "asset_tag"),
     ("statement.asset_scale", "asset_scale"),
     ("statement.final_root", "final_root"),
-    (
-        "statement.next_zero_leaf_index",
-        "next_zero_leaf_index",
-    ),
+    ("statement.next_zero_leaf_index", "next_zero_leaf_index"),
     ("statement.topup_anchor_refs", "topup_anchors"),
     ("statement.proof_step_count", "proof_step_count"),
     ("statement.peer_hop_count", "peer_hop_count"),
@@ -453,9 +450,7 @@ pub(in crate::zk) mod output_membership_v4 {
                         != leaf.leaf_index
                     || leaf.membership_path.root != witness.final_root
                 {
-                    return Err(format!(
-                        "Kagemusha output-membership {label} path mismatch"
-                    ));
+                    return Err(format!("Kagemusha output-membership {label} path mismatch"));
                 }
             }
         }
@@ -470,18 +465,14 @@ pub(in crate::zk) mod output_membership_v4 {
             (KagemushaOutputMembershipOperationV4::Split, Some(recipient), None) => {
                 (recipient, recipient)
             }
-            (
-                KagemushaOutputMembershipOperationV4::Split,
-                Some(recipient),
-                Some(change),
-            ) if recipient.leaf_index.checked_add(1) == Some(change.leaf_index) => {
+            (KagemushaOutputMembershipOperationV4::Split, Some(recipient), Some(change))
+                if recipient.leaf_index.checked_add(1) == Some(change.leaf_index) =>
+            {
                 (recipient, change)
             }
-            (
-                KagemushaOutputMembershipOperationV4::RedemptionChange,
-                None,
-                Some(change),
-            ) => (change, change),
+            (KagemushaOutputMembershipOperationV4::RedemptionChange, None, Some(change)) => {
+                (change, change)
+            }
             _ => return Err("Kagemusha output-membership operation shape mismatch".to_owned()),
         };
         if first.update_path.root != witness.initial_root
@@ -1391,6 +1382,7 @@ pub struct KagemushaPastaCycleOpaqueVerifierV4 {
     inner: super::kagemusha_recursion_adapter::KagemushaPastaCycleTerminalVerifierV4,
     manifest: KagemushaRecursiveSpendArtifactManifestV4,
     manifest_sha256: [u8; 32],
+    candidate_evidence_lab: bool,
 }
 
 fn canonical_bundle_operation_v4(
@@ -1427,6 +1419,7 @@ impl KagemushaPastaCycleOpaqueVerifierV4 {
             inner,
             manifest: artifacts.manifest().clone(),
             manifest_sha256: artifacts.manifest_sha256(),
+            candidate_evidence_lab: artifacts.is_candidate_evidence_lab(),
         })
     }
 
@@ -1453,7 +1446,11 @@ impl KagemushaPastaCycleOpaqueVerifierV4 {
         bundle: &KagemushaRecursiveSpendBundleV4,
         expected_operation: &KagemushaStepOperationVectorV4,
     ) -> Result<(), String> {
-        ensure_kagemusha_recursive_spend_v4_proof_envelope_binding(bundle, &self.manifest)?;
+        ensure_kagemusha_recursive_spend_v4_proof_envelope_binding(
+            bundle,
+            &self.manifest,
+            self.candidate_evidence_lab,
+        )?;
         self.verify_binding_v4(
             &bundle.statement,
             expected_operation,
@@ -1495,14 +1492,24 @@ impl KagemushaPastaCycleOpaqueVerifierV4 {
 pub(crate) fn ensure_kagemusha_recursive_spend_v4_proof_envelope_binding(
     bundle: &KagemushaRecursiveSpendBundleV4,
     manifest: &KagemushaRecursiveSpendArtifactManifestV4,
+    candidate_evidence_lab: bool,
 ) -> Result<(), String> {
     bundle
         .validate_public_binding()
         .map_err(|error| error.to_string())?;
     let envelope = &bundle.recursive_proof.proof_envelope;
-    envelope
-        .validate_against_manifest(manifest)
-        .map_err(|error| error.to_string())?;
+    if candidate_evidence_lab {
+        #[cfg(feature = "kagemusha-candidate-evidence-lab")]
+        envelope
+            .validate_against_candidate_manifest(manifest)
+            .map_err(|error| error.to_string())?;
+        #[cfg(not(feature = "kagemusha-candidate-evidence-lab"))]
+        return Err("Kagemusha candidate evidence lab is not compiled".to_owned());
+    } else {
+        envelope
+            .validate_against_manifest(manifest)
+            .map_err(|error| error.to_string())?;
+    }
     ensure_kagemusha_recursive_spend_v4_state_boundary_binding(bundle)
 }
 
@@ -1840,6 +1847,34 @@ mod tests {
             leaf_index,
         )
         .expect("canonical output-membership path");
+        let (siblings, directions, _witness_nodes, root) = path.into_parts();
+        iroha_data_model::offline::KagemushaConfidentialMerklePathV2 {
+            siblings,
+            directions,
+            root,
+        }
+    }
+
+    fn sparse_output_membership_path(
+        commitments: &[Option<[u8; 32]>],
+        leaf_index: usize,
+    ) -> iroha_data_model::offline::KagemushaConfidentialMerklePathV2 {
+        let path = super::super::confidential_v2::compute_confidential_sparse_fixture_path_v3(
+            commitments,
+            leaf_index,
+        )
+        .expect("canonical sparse output-membership fixture path");
+        if let Some(commitment) = commitments.get(leaf_index).copied().flatten() {
+            super::super::confidential_v2::validate_confidential_membership_path_v3(
+                commitment, leaf_index, &path,
+            )
+            .expect("valid sparse fixture membership path");
+        } else {
+            super::super::confidential_v2::validate_confidential_next_zero_path_v3(
+                leaf_index, &path,
+            )
+            .expect("valid sparse fixture empty-leaf path");
+        }
         let (siblings, directions, _witness_nodes, root) = path.into_parts();
         iroha_data_model::offline::KagemushaConfidentialMerklePathV2 {
             siblings,
@@ -2193,17 +2228,33 @@ mod tests {
         let change_commitment = scalar_bytes(702);
         let after_recipient = [initial_commitments[0], recipient_commitment];
         let final_commitments = [
-            initial_commitments[0],
-            recipient_commitment,
-            [0; 32],
-            change_commitment,
+            Some(initial_commitments[0]),
+            Some(recipient_commitment),
+            None,
+            Some(change_commitment),
         ];
         let initial_root =
             super::super::confidential_v2::compute_confidential_root_v3(&initial_commitments)
                 .expect("initial root");
-        let final_root =
-            super::super::confidential_v2::compute_confidential_root_v3(&final_commitments)
-                .expect("gapped final root");
+        let after_recipient_root =
+            super::super::confidential_v2::compute_confidential_root_v3(&after_recipient)
+                .expect("root after recipient insertion");
+        let recipient_update_path = output_membership_path(&initial_commitments, 1);
+        let recipient_membership_path = sparse_output_membership_path(&final_commitments, 1);
+        let change_update_path = output_membership_path(&after_recipient, 3);
+        let change_membership_path = sparse_output_membership_path(&final_commitments, 3);
+        let dummy_path = sparse_output_membership_path(&final_commitments, 4);
+        let final_root = dummy_path.root;
+
+        assert_eq!(recipient_update_path.root, initial_root);
+        assert_eq!(change_update_path.root, after_recipient_root);
+        assert_eq!(recipient_membership_path.root, final_root);
+        assert_eq!(change_membership_path.root, final_root);
+        assert_eq!(change_update_path.siblings, change_membership_path.siblings);
+        assert_eq!(
+            change_update_path.directions,
+            change_membership_path.directions
+        );
         let witness = KagemushaOutputMembershipWitnessV4 {
             operation: KagemushaOutputMembershipOperationV4::Split,
             initial_root,
@@ -2211,17 +2262,17 @@ mod tests {
             recipient: Some(KagemushaOutputMembershipLeafV4 {
                 commitment: recipient_commitment,
                 leaf_index: 1,
-                update_path: output_membership_path(&initial_commitments, 1),
-                membership_path: output_membership_path(&final_commitments, 1),
+                update_path: recipient_update_path,
+                membership_path: recipient_membership_path,
             }),
             change: Some(KagemushaOutputMembershipLeafV4 {
                 commitment: change_commitment,
                 leaf_index: 3,
-                update_path: output_membership_path(&after_recipient, 3),
-                membership_path: output_membership_path(&final_commitments, 3),
+                update_path: change_update_path,
+                membership_path: change_membership_path,
             }),
             dummy_leaf_index: 4,
-            dummy_path: output_membership_path(&final_commitments, 4),
+            dummy_path,
         };
         assert_output_membership_rejected(witness);
     }

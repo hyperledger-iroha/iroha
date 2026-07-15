@@ -76,8 +76,23 @@ make_aar() {
   stage="$(mktemp -d "$TMP_DIR/aar.XXXXXX")"
   for entry in "$@"; do
     mkdir -p "$stage/$(dirname "$entry")"
-    printf 'fixture\n' >"$stage/$entry"
+    if [[ "$entry" == *.jar ]]; then
+      local jar_stage
+      jar_stage="$(mktemp -d "$TMP_DIR/jar.XXXXXX")"
+      printf 'fixture\n' >"$jar_stage/fixture.txt"
+      (cd "$jar_stage" && zip -qr "$stage/$entry" .)
+    else
+      printf 'fixture\n' >"$stage/$entry"
+    fi
   done
+  (cd "$stage" && zip -qr "$archive" .)
+}
+
+make_jar() {
+  local archive="$1"
+  local stage
+  stage="$(mktemp -d "$TMP_DIR/jar.XXXXXX")"
+  printf 'fixture\n' >"$stage/fixture.txt"
   (cd "$stage" && zip -qr "$archive" .)
 }
 
@@ -290,6 +305,10 @@ PLIST
   "bridge_header_sha256": "$header_hash",
   "required_symbols": [
     "connect_norito_bridge_abi_version",
+    "connect_norito_free",
+    "connect_norito_encode_transfer_signed_transaction",
+    "connect_norito_encode_transfer_instruction_box",
+    "connect_norito_encode_validation_fee_transfer_signed_transaction",
     "connect_norito_detached_transaction_scaffold_inspect_v1",
     "connect_norito_detached_transaction_scaffold_finalize_ed25519_v1",
     "connect_norito_canonical_json_blake3_v1",
@@ -307,6 +326,8 @@ PLIST
     "connect_norito_kagemusha_output_membership_frontier_build_v4",
     "connect_norito_kagemusha_output_membership_paths_derive_v4",
     "connect_norito_kagemusha_recursive_spend_branch_validate_v4",
+    "connect_norito_kagemusha_recursive_spend_topup_provenance_build_v4",
+    "connect_norito_kagemusha_recursive_spend_topup_provenance_validate_v4",
     "connect_norito_kagemusha_recursive_spend_init_v4",
     "connect_norito_kagemusha_recursive_spend_topup_unsigned_payload_digest_v4",
     "connect_norito_kagemusha_recursive_spend_topup_finalize_request_v4",
@@ -514,6 +535,15 @@ const TOPUP_SHIELD_CIRCUIT_ID: &str = "topup-shield-v3";
 RUST
 run_expect_pass "$sentinel_only_source"
 
+feature_gated_candidate_lab_source="$TMP_DIR/feature-gated-candidate-lab-source"
+make_fixture "$feature_gated_candidate_lab_source"
+cat >>"$feature_gated_candidate_lab_source/crates/connect_norito_bridge/src/lib.rs" <<'RUST'
+#[cfg(feature = "kagemusha-candidate-evidence-lab")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_candidate_lab_init_v4() {}
+RUST
+run_expect_pass "$feature_gated_candidate_lab_source"
+
 retired_header_surface="$TMP_DIR/retired-header-surface"
 make_fixture "$retired_header_surface"
 printf '%s\n' 'int connect_norito_kagemusha_recursive_spend_init_v3(void);' \
@@ -654,6 +684,25 @@ make_fixture "$hash_mismatch"
 printf 'tampered\n' >>"$hash_mismatch/dist/NoritoBridge.xcframework/ios-arm64/libNoritoBridge.a"
 run_expect_fail "$hash_mismatch" "NoritoBridge artifact hash mismatch for ios-arm64"
 
+candidate_marker_apple="$TMP_DIR/candidate-marker-apple"
+make_fixture "$candidate_marker_apple"
+printf '%s\n' 'KAGEMUSHA_CANDIDATE_EVIDENCE_LAB_DO_NOT_SHIP_V2' \
+  >>"$candidate_marker_apple/dist/NoritoBridge.xcframework/ios-arm64/libNoritoBridge.a"
+python3 - "$candidate_marker_apple" <<'PY'
+from pathlib import Path
+import hashlib
+import json
+import sys
+
+root = Path(sys.argv[1])
+manifest_path = root / "dist/NoritoBridge.artifacts.json"
+manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+binary = root / "dist/NoritoBridge.xcframework/ios-arm64/libNoritoBridge.a"
+manifest["hashes"]["ios-arm64"] = hashlib.sha256(binary.read_bytes()).hexdigest()
+manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+PY
+run_expect_fail "$candidate_marker_apple" "contains a non-shipping Kagemusha candidate-lab marker or symbol"
+
 header_mismatch="$TMP_DIR/header-mismatch"
 make_fixture "$header_mismatch"
 printf 'void unexpected(void);\n' >>"$header_mismatch/dist/NoritoBridge.xcframework/ios-arm64_x86_64-simulator/Headers/connect_norito_bridge.h"
@@ -702,7 +751,7 @@ run_expect_fail "$missing_android_outputs" "missing core-jvm built jar" --requir
 missing_client_android_aar="$TMP_DIR/missing-client-android-aar"
 make_fixture "$missing_client_android_aar"
 mkdir -p "$missing_client_android_aar/kotlin/core-jvm/build/libs"
-printf 'jar\n' >"$missing_client_android_aar/kotlin/core-jvm/build/libs/core-jvm-0.1-SNAPSHOT.jar"
+make_jar "$missing_client_android_aar/kotlin/core-jvm/build/libs/core-jvm-0.1-SNAPSHOT.jar"
 run_expect_fail "$missing_client_android_aar" "missing client-android release aar" --require-built-android
 
 missing_client_native_source="$TMP_DIR/missing-client-native-source"
@@ -710,7 +759,7 @@ make_fixture "$missing_client_native_source"
 mkdir -p \
   "$missing_client_native_source/kotlin/core-jvm/build/libs" \
   "$missing_client_native_source/kotlin/client-android/build/outputs/aar"
-printf 'jar\n' >"$missing_client_native_source/kotlin/core-jvm/build/libs/core-jvm-0.1-SNAPSHOT.jar"
+make_jar "$missing_client_native_source/kotlin/core-jvm/build/libs/core-jvm-0.1-SNAPSHOT.jar"
 make_aar \
   "$missing_client_native_source/kotlin/client-android/build/outputs/aar/client-android-release.aar" \
   "AndroidManifest.xml" \
@@ -726,7 +775,7 @@ mkdir -p \
   "$missing_client_native_aar_entry/kotlin/client-android/build/outputs/aar" \
   "$missing_client_native_aar_entry/kotlin/client-android/src/main/jniLibs/arm64-v8a" \
   "$missing_client_native_aar_entry/kotlin/client-android/src/main/jniLibs/x86_64"
-printf 'jar\n' >"$missing_client_native_aar_entry/kotlin/core-jvm/build/libs/core-jvm-0.1-SNAPSHOT.jar"
+make_jar "$missing_client_native_aar_entry/kotlin/core-jvm/build/libs/core-jvm-0.1-SNAPSHOT.jar"
 printf 'so\n' >"$missing_client_native_aar_entry/kotlin/client-android/src/main/jniLibs/arm64-v8a/libconnect_norito_bridge.so"
 printf 'so\n' >"$missing_client_native_aar_entry/kotlin/client-android/src/main/jniLibs/x86_64/libconnect_norito_bridge.so"
 make_aar \
@@ -743,7 +792,7 @@ mkdir -p \
   "$with_android_outputs/kotlin/client-android/build/outputs/aar" \
   "$with_android_outputs/kotlin/client-android/src/main/jniLibs/arm64-v8a" \
   "$with_android_outputs/kotlin/client-android/src/main/jniLibs/x86_64"
-printf 'jar\n' >"$with_android_outputs/kotlin/core-jvm/build/libs/core-jvm-0.1-SNAPSHOT.jar"
+make_jar "$with_android_outputs/kotlin/core-jvm/build/libs/core-jvm-0.1-SNAPSHOT.jar"
 printf 'fixture\n' >"$with_android_outputs/kotlin/client-android/src/main/jniLibs/arm64-v8a/libconnect_norito_bridge.so"
 printf 'fixture\n' >"$with_android_outputs/kotlin/client-android/src/main/jniLibs/x86_64/libconnect_norito_bridge.so"
 make_aar \
@@ -753,6 +802,33 @@ make_aar \
   "jni/arm64-v8a/libconnect_norito_bridge.so" \
   "jni/x86_64/libconnect_norito_bridge.so"
 run_expect_pass "$with_android_outputs" --require-built-android
+
+candidate_marker_android="$TMP_DIR/candidate-marker-android"
+cp -R "$with_android_outputs" "$candidate_marker_android"
+printf '%s\n' 'KAGEMUSHA_CANDIDATE_EVIDENCE_LAB_DO_NOT_SHIP_V2' \
+  >>"$candidate_marker_android/kotlin/client-android/src/main/jniLibs/arm64-v8a/libconnect_norito_bridge.so"
+run_expect_fail \
+  "$candidate_marker_android" \
+  "contains a non-shipping Kagemusha candidate-lab marker or symbol" \
+  --require-built-android
+
+candidate_marker_archive="$TMP_DIR/candidate-marker-archive"
+cp -R "$with_android_outputs" "$candidate_marker_archive"
+archive_marker_stage="$TMP_DIR/candidate-marker-archive-entry"
+mkdir -p "$archive_marker_stage"
+printf '%s\n' 'kagemusha_recursive_spend_candidate_lab_init_v4' \
+  >"$archive_marker_stage/candidate-lab-marker.txt"
+(
+  cd "$archive_marker_stage"
+  zip -q \
+    "$candidate_marker_archive/kotlin/client-android/build/outputs/aar/client-android-release.aar" \
+    candidate-lab-marker.txt
+)
+run_expect_fail \
+  "$candidate_marker_archive" \
+  "contains a non-shipping Kagemusha candidate-lab marker or symbol" \
+  --require-built-android
+
 android_inspection_tools="$TMP_DIR/android-inspection-tools"
 make_android_inspection_tools "$android_inspection_tools"
 run_expect_android_binary_pass "$with_android_outputs" "$android_inspection_tools"

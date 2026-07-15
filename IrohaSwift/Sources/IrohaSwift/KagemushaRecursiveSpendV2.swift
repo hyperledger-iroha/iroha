@@ -163,6 +163,22 @@ public enum KagemushaRecursiveSpend {
         "kagemusha-recursive-spend-step-eq-authenticated-layout-v4"
     public static let stepEpCircuitIDV4 =
         "kagemusha-recursive-spend-step-ep-authenticated-layout-v4"
+
+    /// Exact public-bundle verifier identifier selected by an authenticated V4 manifest.
+    ///
+    /// StepEp is an internal recursion parity. Every public recursive-spend
+    /// statement carries the release-qualified StepEq verifier identifier.
+    public static func releaseQualifiedStepEqVerifierKeyIDV4(
+        manifestSHA256: Data
+    ) throws -> String {
+        guard manifestSHA256.count == 32,
+              manifestSHA256.contains(where: { $0 != 0 }) else {
+            throw KagemushaRecursiveSpendError.invalidField(
+                "releaseQualifiedStepEqVerifierKeyIDV4.manifestSHA256"
+            )
+        }
+        return "\(pastaCycleBackendV4):\(stepEqCircuitIDV4)-\(manifestSHA256.hexEncodedString())"
+    }
     public static let artifactRolesV4 = [
         "step_eq_params_ipa",
         "step_eq_proving_key",
@@ -373,6 +389,8 @@ public enum KagemushaRecursiveSpend {
     /// Text and individual QR/APDU frames retain smaller independent bounds.
     public static let maximumPeerArchiveBytesV4 = 32 * 1024 * 1024
     public static let maximumPeerArchiveBytes = maximumPeerArchiveBytesV4
+    /// Maximum canonical ABI-20 promoted-release marker accepted by native install.
+    public static let maximumPromotionRecordBytesV4 = 1_024 * 1_024
     /// Exact Rust `KAGEMUSHA_RECURSIVE_SPEND_TOPUP_PROVENANCE_MAX_BYTES_V4`.
     public static let maximumTopUpProvenanceArchiveBytesV4 =
         topUpFinalityRosterMaximumArchiveBytes
@@ -1828,12 +1846,14 @@ public struct KagemushaRecursiveSpendReleaseAuthenticationV4: Sendable {
     public let releaseAttestationNorito: Data
     public let benchmarkEvidence: Data
     public let cryptographicReview: Data
+    public let promotionRecordNorito: Data
 
     public init(
         trustedPolicyNorito: Data,
         releaseAttestationNorito: Data,
         benchmarkEvidence: Data,
-        cryptographicReview: Data
+        cryptographicReview: Data,
+        promotionRecordNorito: Data
     ) throws {
         guard !trustedPolicyNorito.isEmpty, trustedPolicyNorito.count <= 64 * 1_024 else {
             throw KagemushaRecursiveSpendError.invalidField("release.trustedPolicy")
@@ -1850,10 +1870,16 @@ public struct KagemushaRecursiveSpendReleaseAuthenticationV4: Sendable {
                 throw KagemushaRecursiveSpendError.invalidField(field)
             }
         }
+        guard !promotionRecordNorito.isEmpty,
+              promotionRecordNorito.count
+                <= KagemushaRecursiveSpend.maximumPromotionRecordBytesV4 else {
+            throw KagemushaRecursiveSpendError.invalidField("release.promotionRecord")
+        }
         self.trustedPolicyNorito = Data(trustedPolicyNorito)
         self.releaseAttestationNorito = Data(releaseAttestationNorito)
         self.benchmarkEvidence = Data(benchmarkEvidence)
         self.cryptographicReview = Data(cryptographicReview)
+        self.promotionRecordNorito = Data(promotionRecordNorito)
     }
 }
 
@@ -1952,6 +1978,7 @@ public final class KagemushaRecursiveSpendArtifactInstallSessionV4: @unchecked S
             releaseAttestationArchive: authentication.releaseAttestationNorito,
             benchmarkEvidence: authentication.benchmarkEvidence,
             cryptographicReview: authentication.cryptographicReview,
+            promotionRecordArchive: authentication.promotionRecordNorito,
             handles: handles
         ) else {
             throw KagemushaRecursiveSpendError.nativeBridgeUnavailable

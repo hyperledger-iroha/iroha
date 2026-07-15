@@ -253,6 +253,7 @@ const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register_slice::<smart_contract_code::RegisterSmartContractCode>,
     InstructionRegistry::register_slice::<smart_contract_code::DeactivateContractInstance>,
     InstructionRegistry::register_slice::<smart_contract_code::ActivateContractInstance>,
+    InstructionRegistry::register_slice::<smart_contract_code::CommitContractDeployment>,
     InstructionRegistry::register_slice::<smart_contract_code::RegisterSmartContractBytes>,
     InstructionRegistry::register_slice::<smart_contract_code::UploadSmartContractCodeChunk>,
     InstructionRegistry::register_slice::<smart_contract_code::FinalizeSmartContractCodeUpload>,

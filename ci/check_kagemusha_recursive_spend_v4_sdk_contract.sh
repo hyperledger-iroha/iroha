@@ -163,6 +163,8 @@ for label in ("kotlin", "java"):
     require(label, "kagemusha.offline.recursive_spend.artifact_manifest.v4")
     require(label, "requireV4ArtifactBridge")
     require(label, "requireV4ProofBackend")
+    require(label, "MAX_PROMOTION_RECORD_BYTES")
+    require(label, "promotionRecordNorito")
     for file_name in v4_files:
         require(label, file_name)
     for type_name, schema in sdk_schema_types.items():
@@ -181,6 +183,48 @@ for label in ("kotlin", "java"):
     ):
         require_regex(label, rf"\b{method}\s*\(", f"proof-bound V4 frontier method {method}")
     require(label, "connect_norito_bridge::KagemushaOutputMembershipFrontierV4")
+
+require_regex(
+    "kotlin",
+    r"class\s+ReleaseAuthentication\s*\("
+    r"[\s\S]{0,900}?cryptographicReview[^\n]*\n"
+    r"[\s\S]{0,120}?promotionRecordNorito[\s\S]{0,40}?\)\s*\{",
+    "mandatory promotion record constructor input",
+)
+require_regex(
+    "java",
+    r"public\s+ReleaseAuthentication\s*\("
+    r"[\s\S]{0,900}?cryptographicReview[^\n]*\n"
+    r"[\s\S]{0,120}?promotionRecordNorito[\s\S]{0,40}?\)\s*\{",
+    "mandatory promotion record constructor input",
+)
+for label in ("kotlin", "java"):
+    require_regex(
+        label,
+        r"nativeArtifactSetInstallV4\s*\("
+        r"[\s\S]{0,900}?cryptographicReview[^\n]*\n"
+        r"[\s\S]{0,120}?promotionRecordNorito[^\n]*\n"
+        r"[\s\S]{0,120}?artifactHandles",
+        "promotion-record-bound native install signature",
+    )
+
+require("swift", "maximumPromotionRecordBytesV4")
+require("swift", "promotionRecordNorito")
+require_regex(
+    "swift",
+    r"struct\s+KagemushaRecursiveSpendReleaseAuthenticationV4\b"
+    r"[\s\S]{0,1300}?cryptographicReview:\s*Data,"
+    r"[\s\S]{0,160}?promotionRecordNorito:\s*Data",
+    "mandatory Swift promotion record constructor input",
+)
+require_regex(
+    "swift_native",
+    r"kagemushaRecursiveSpendArtifactSetInstallV4\s*\("
+    r"[\s\S]{0,600}?cryptographicReview:\s*Data,"
+    r"[\s\S]{0,160}?promotionRecordArchive:\s*Data,"
+    r"[\s\S]{0,100}?handles:\s*\[UInt64\]",
+    "promotion-record-bound Swift native install signature",
+)
 
 swift_v4_types = (
     "KagemushaRecursiveSpendArtifactBindingV4",
@@ -608,23 +652,118 @@ for method in native_methods:
             f"Rust JNI export {package}.{method}",
         )
 
+base_bridge_symbols = (
+    "connect_norito_bridge_abi_version",
+    "connect_norito_free",
+    "connect_norito_encode_transfer_signed_transaction",
+    "connect_norito_encode_transfer_instruction_box",
+    "connect_norito_encode_validation_fee_transfer_signed_transaction",
+    "connect_norito_detached_transaction_scaffold_inspect_v1",
+    "connect_norito_detached_transaction_scaffold_finalize_ed25519_v1",
+    "connect_norito_canonical_json_blake3_v1",
+)
 c_symbols = (
     "connect_norito_kagemusha_recursive_spend_capabilities_v4",
+    "connect_norito_kagemusha_topup_finality_verify_v4",
+    "connect_norito_kagemusha_topup_shield_build_unsigned_v4",
     "connect_norito_kagemusha_recursive_spend_artifact_begin_v4",
     "connect_norito_kagemusha_recursive_spend_artifact_write_v4",
     "connect_norito_kagemusha_recursive_spend_artifact_finalize_v4",
     "connect_norito_kagemusha_recursive_spend_artifact_cancel_v4",
     "connect_norito_kagemusha_recursive_spend_artifact_set_install_v4",
     "connect_norito_kagemusha_recursive_spend_artifact_set_is_installed_v4",
+    "connect_norito_kagemusha_recursive_spend_installed_manifest_sha256_v4",
     "connect_norito_kagemusha_recursive_spend_artifact_set_uninstall_v4",
     "connect_norito_kagemusha_output_membership_frontier_build_v4",
     "connect_norito_kagemusha_output_membership_paths_derive_v4",
     "connect_norito_kagemusha_recursive_spend_branch_validate_v4",
+    "connect_norito_kagemusha_recursive_spend_topup_provenance_build_v4",
+    "connect_norito_kagemusha_recursive_spend_topup_provenance_validate_v4",
     "connect_norito_kagemusha_recursive_spend_init_v4",
+    "connect_norito_kagemusha_recursive_spend_topup_unsigned_payload_digest_v4",
+    "connect_norito_kagemusha_recursive_spend_topup_finalize_request_v4",
+    "connect_norito_kagemusha_recursive_spend_topup_v4",
     "connect_norito_kagemusha_recursive_spend_append_v4",
     "connect_norito_kagemusha_recursive_spend_verify_v4",
+    "connect_norito_kagemusha_recursive_spend_redeem_unsigned_payload_digest_v4",
+    "connect_norito_kagemusha_recursive_spend_redeem_finalize_request_v4",
     "connect_norito_kagemusha_recursive_spend_redeem_v4",
+    "connect_norito_kagemusha_receiver_key_reference_v2",
+    "connect_norito_kagemusha_recipient_output_derive_v2",
+    "connect_norito_kagemusha_recipient_payment_request_signing_bytes_v2",
+    "connect_norito_kagemusha_recipient_payment_request_create_v2",
+    "connect_norito_kagemusha_recipient_payment_request_verify_v2",
+    "connect_norito_kagemusha_request_authorization_signing_bytes_v2",
+    "connect_norito_kagemusha_request_authorization_create_v2",
+    "connect_norito_kagemusha_receiver_acknowledgement_payload_v2",
+    "connect_norito_kagemusha_receiver_acknowledgement_signing_bytes_v2",
+    "connect_norito_kagemusha_receiver_acknowledgement_create_v2",
+    "connect_norito_kagemusha_receiver_acknowledgement_verify_v2",
+    "connect_norito_kagemusha_recursive_spend_peer_payment_from_split_v4",
+    "connect_norito_kagemusha_recursive_spend_peer_payment_validate_v4",
+    "connect_norito_kagemusha_recursive_spend_bundle_summary_v4",
 )
+required_bridge_symbols = base_bridge_symbols + c_symbols
+
+
+def parse_shell_symbol_array(label: str, name: str) -> tuple[str, ...]:
+    match = re.search(
+        rf"^{re.escape(name)}=\(\s*\n(?P<body>.*?)^\)",
+        texts[label],
+        re.MULTILINE | re.DOTALL,
+    )
+    if match is None:
+        errors.append(f"{paths[label]}: missing shell array {name}")
+        return ()
+    values: list[str] = []
+    for raw_line in match.group("body").splitlines():
+        value = raw_line.strip()
+        if not value or value.startswith("#"):
+            continue
+        if value.startswith('"') and value.endswith('"'):
+            value = value[1:-1]
+        values.append(value)
+    return tuple(values)
+
+
+def parse_manifest_symbol_inventory(label: str) -> tuple[str, ...]:
+    match = re.search(
+        r'"required_symbols"\s*:\s*\[(?P<body>.*?)\]',
+        texts[label],
+        re.MULTILINE | re.DOTALL,
+    )
+    if match is None:
+        errors.append(f"{paths[label]}: missing required_symbols manifest inventory")
+        return ()
+    return tuple(re.findall(r'"(connect_norito_[A-Za-z0-9_]+)"', match.group("body")))
+
+
+actual_kagemusha_symbols = parse_shell_symbol_array("mobile_check", "KAGEMUSHA_C_SYMBOLS")
+if actual_kagemusha_symbols != c_symbols:
+    errors.append(
+        f"{paths['mobile_check']}: exact ordered 39-symbol Kagemusha C inventory mismatch "
+        f"(found {len(actual_kagemusha_symbols)})"
+    )
+
+actual_required_bridge_symbols: list[str] = []
+for value in parse_shell_symbol_array("mobile_check", "REQUIRED_BRIDGE_SYMBOLS"):
+    if value == "${KAGEMUSHA_C_SYMBOLS[@]}":
+        actual_required_bridge_symbols.extend(actual_kagemusha_symbols)
+    else:
+        actual_required_bridge_symbols.append(value)
+if tuple(actual_required_bridge_symbols) != required_bridge_symbols:
+    errors.append(
+        f"{paths['mobile_check']}: exact ordered 47-symbol required bridge inventory mismatch "
+        f"(found {len(actual_required_bridge_symbols)})"
+    )
+
+for label in ("xcframework_build", "mobile_check_test"):
+    actual_manifest_symbols = parse_manifest_symbol_inventory(label)
+    if actual_manifest_symbols != required_bridge_symbols:
+        errors.append(
+            f"{paths[label]}: exact ordered 47-symbol required bridge inventory mismatch "
+            f"(found {len(actual_manifest_symbols)})"
+        )
 
 require_regex(
     "rust",
@@ -749,6 +888,18 @@ if mode == "--self-test":
         "exact ABI20 Kotlin constant",
     )
     run_negative(
+        "promotion record cannot be removed from SDK authentication",
+        lambda fixture: replace_once(
+            fixture / paths["kotlin"],
+            "        cryptographicReview: ByteArray,\n"
+            "        promotionRecordNorito: ByteArray,\n"
+            "    ) {",
+            "        cryptographicReview: ByteArray,\n"
+            "    ) {",
+        ),
+        "mandatory promotion record constructor input",
+    )
+    run_negative(
         "exact-eight inventory rejects substitution",
         lambda fixture: replace_once(
             fixture / paths["swift"],
@@ -756,6 +907,17 @@ if mode == "--self-test":
             '"step-eq.proving-key.krv4",',
         ),
         "V4 files are not canonical",
+    )
+    run_negative(
+        "required bridge symbol order drift is rejected",
+        lambda fixture: replace_once(
+            fixture / paths["xcframework_build"],
+            '    "connect_norito_free",\n'
+            '    "connect_norito_encode_transfer_signed_transaction",',
+            '    "connect_norito_encode_transfer_signed_transaction",\n'
+            '    "connect_norito_free",',
+        ),
+        "exact ordered 47-symbol required bridge inventory mismatch",
     )
 
     def inject_v3_alias(fixture: Path) -> None:
@@ -774,7 +936,7 @@ if mode == "--self-test":
 
 print(
     "Kagemusha ABI20 SDK contract passed: exact8 DM/Kagami/bundle inventory and "
-    "distinct direct C/JNI/Swift/Kotlin/Java lifecycle parity are complete"
+    "promotion-record-bound direct C/JNI/Swift/Kotlin/Java lifecycle parity are complete"
     + ("; negative self-tests passed." if mode == "--self-test" else ".")
 )
 PY

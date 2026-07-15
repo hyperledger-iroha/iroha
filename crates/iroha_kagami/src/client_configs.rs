@@ -182,15 +182,9 @@ fn normalize_names(raw: Vec<String>) -> Result<Vec<String>> {
     Ok(names)
 }
 
-fn render_client_config(
-    base: &BaseConfig,
-    domain: &str,
-    key_pair: &KeyPair,
-) -> Zeroizing<String> {
+fn render_client_config(base: &BaseConfig, domain: &str, key_pair: &KeyPair) -> Zeroizing<String> {
     let public_key = key_pair.public_key().to_string();
-    let private_key = Zeroizing::new(
-        ExposedPrivateKey(key_pair.private_key().clone()).to_string(),
-    );
+    let private_key = Zeroizing::new(ExposedPrivateKey(key_pair.private_key().clone()).to_string());
 
     let mut rendered = Zeroizing::new(format!(
         concat!(
@@ -422,14 +416,22 @@ web_login = "demo"
         args.run(&mut writer).expect("generate fresh clients");
 
         assert_eq!(
-            fs::metadata(&out_dir).expect("out dir").permissions().mode() & 0o777,
+            fs::metadata(&out_dir)
+                .expect("out dir")
+                .permissions()
+                .mode()
+                & 0o777,
             0o700
         );
         let sender_path = out_dir.join("sender.toml");
         let sponsor_path = out_dir.join("sponsor.toml");
         for path in [&sender_path, &sponsor_path] {
             assert_eq!(
-                fs::metadata(path).expect("client config").permissions().mode() & 0o777,
+                fs::metadata(path)
+                    .expect("client config")
+                    .permissions()
+                    .mode()
+                    & 0o777,
                 0o600
             );
         }
@@ -447,16 +449,20 @@ web_login = "demo"
 
         let command_output = String::from_utf8(writer.into_inner().expect("writer bytes"))
             .expect("UTF-8 command output");
-        assert!(!command_output.contains(
-            sender_toml["account"]["private_key"]
-                .as_str()
-                .expect("sender private key")
-        ));
-        assert!(!command_output.contains(
-            sponsor_toml["account"]["private_key"]
-                .as_str()
-                .expect("sponsor private key")
-        ));
+        assert!(
+            !command_output.contains(
+                sender_toml["account"]["private_key"]
+                    .as_str()
+                    .expect("sender private key")
+            )
+        );
+        assert!(
+            !command_output.contains(
+                sponsor_toml["account"]["private_key"]
+                    .as_str()
+                    .expect("sponsor private key")
+            )
+        );
         assert!(!command_output.contains("secret"));
         assert_eq!(
             fs::read_dir(&out_dir)

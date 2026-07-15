@@ -508,56 +508,6 @@ fn command() -> TestCommand {
     cmd
 }
 
-fn write_contract_app_manifest(dir: &torii_mock_support::TempDir) -> PathBuf {
-    let contracts_dir = dir.path().join("contracts");
-    let artifacts_dir = dir.path().join("artifacts");
-    fs::create_dir_all(&contracts_dir).expect("create contracts dir");
-    fs::create_dir_all(&artifacts_dir).expect("create artifacts dir");
-
-    let contract_path = contracts_dir.join("greeter.ko");
-    fs::write(
-        &contract_path,
-        r#"
-            seiyaku Greeter {
-                hajimari(int value) {}
-                view fn status() -> int { return 7; }
-            }
-        "#,
-    )
-    .expect("write greeter contract");
-
-    let manifest_path = dir.path().join("iroha.app.toml");
-    fs::write(
-        &manifest_path,
-        r#"
-            bundle_name = "demo"
-            default_dataspace = "universal"
-
-            [[contracts]]
-            name = "demo.greeter"
-            alias = "greeter"
-            source = "contracts/greeter.ko"
-            artifact = "artifacts/greeter.to"
-
-            [[hajimari]]
-            id = "seed"
-            contract = "demo.greeter"
-            entrypoint = "hajimari"
-            gas_limit = 1000
-            payload = { value = "7" }
-
-            [[assertions]]
-            id = "status"
-            contract = "demo.greeter"
-            entrypoint = "status"
-            gas_limit = 1000
-            expected_result = "7"
-        "#,
-    )
-    .expect("write contract app manifest");
-    manifest_path
-}
-
 #[test]
 fn soracles_aggregate_output_emits_instruction_payload() {
     use torii_mock_support::{TempDir, write_client_config};
@@ -1494,230 +1444,29 @@ fn gov_protected_namespaces_flow_against_mock() {
 }
 
 #[test]
-fn contract_app_plan_against_mock_uses_dry_run_bundle_route() {
-    use torii_mock_support::{SpawnError, TempDir, ToriiMockProcess, write_client_config};
-
-    let mock = match ToriiMockProcess::spawn() {
-        Ok(proc) => proc,
-        Err(SpawnError::PythonUnavailable | SpawnError::PermissionDenied) => {
-            eprintln!(
-                "skipping contract_app_plan_against_mock_uses_dry_run_bundle_route: mock server unavailable"
-            );
-            return;
-        }
-        Err(err) => panic!("failed to start Torii mock: {err}"),
-    };
-
-    let temp_dir = TempDir::new("contract_app_plan").expect("temp dir");
-    let config_path = temp_dir.path().join("client.toml");
-    let manifest_path = write_contract_app_manifest(&temp_dir);
-    write_client_config(&config_path, mock.base_url()).expect("write config");
-
-    let output = command()
-        .arg("--config")
-        .arg(&config_path)
-        .args([
-            "contract",
-            "app",
-            "plan",
-            "--manifest",
-            manifest_path.to_str().expect("utf8 path"),
-            "--authority",
-            alice_account_literal(),
-            "--private-key",
-            ALICE_PRIVATE_KEY,
-        ])
-        .output()
-        .expect("invoke iroha contract app plan");
-    assert!(
-        output.status.success(),
-        "expected contract app plan to succeed, stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    let value: Value = norito::json::from_slice(&output.stdout).expect("parse plan JSON");
-    assert_eq!(
-        value.get("bundle_name").and_then(Value::as_str),
-        Some("demo")
-    );
-    assert_eq!(value.get("dry_run").and_then(Value::as_bool), Some(true));
-    assert_eq!(
-        value
-            .get("completed_stages")
-            .and_then(Value::as_array)
-            .and_then(|stages| stages.first())
-            .and_then(Value::as_str),
-        Some("plan")
-    );
-    assert_eq!(
-        value
-            .get("contracts")
-            .and_then(Value::as_array)
-            .and_then(|contracts| contracts.first())
-            .and_then(|contract| contract.get("status"))
-            .and_then(Value::as_str),
-        Some("planned")
-    );
-}
-
-#[test]
-fn contract_app_resume_against_mock_uses_live_bundle_route() {
-    use torii_mock_support::{
-        SpawnError, TempDir, ToriiMockProcess, configure_contracts, write_client_config,
-    };
-
-    let mock = match ToriiMockProcess::spawn() {
-        Ok(proc) => proc,
-        Err(SpawnError::PythonUnavailable | SpawnError::PermissionDenied) => {
-            eprintln!(
-                "skipping contract_app_resume_against_mock_uses_live_bundle_route: mock server unavailable"
-            );
-            return;
-        }
-        Err(err) => panic!("failed to start Torii mock: {err}"),
-    };
-
-    configure_contracts(
-        mock.base_url(),
-        &norito::json!({
-            "bundle_response": {
-                "bundle_digest": "resume-bundle-digest",
-                "completed_stages": ["plan", "deploy", "hajimari_calls", "assertions"],
-            }
-        }),
-    )
-    .expect("configure contracts");
-
-    let temp_dir = TempDir::new("contract_app_resume").expect("temp dir");
-    let config_path = temp_dir.path().join("client.toml");
-    let manifest_path = write_contract_app_manifest(&temp_dir);
-    write_client_config(&config_path, mock.base_url()).expect("write config");
-
-    let output = command()
-        .arg("--config")
-        .arg(&config_path)
-        .args([
-            "contract",
-            "app",
-            "resume",
-            "--manifest",
-            manifest_path.to_str().expect("utf8 path"),
-            "--authority",
-            alice_account_literal(),
-            "--private-key",
-            ALICE_PRIVATE_KEY,
-        ])
-        .output()
-        .expect("invoke iroha contract app resume");
-    assert!(
-        output.status.success(),
-        "expected contract app resume to succeed, stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    let value: Value = norito::json::from_slice(&output.stdout).expect("parse resume JSON");
-    assert_eq!(
-        value.get("bundle_name").and_then(Value::as_str),
-        Some("demo")
-    );
-    assert_eq!(value.get("dry_run").and_then(Value::as_bool), Some(false));
-    assert_eq!(
-        value.get("bundle_digest").and_then(Value::as_str),
-        Some("resume-bundle-digest")
-    );
-    assert_eq!(
-        value
-            .get("completed_stages")
-            .and_then(Value::as_array)
-            .map(Vec::len),
-        Some(4)
-    );
-    assert_eq!(
-        value
-            .get("contracts")
-            .and_then(Value::as_array)
-            .and_then(|contracts| contracts.first())
-            .and_then(|contract| contract.get("status"))
-            .and_then(Value::as_str),
-        Some("deployed")
-    );
-    assert!(
-        value
-            .get("contracts")
-            .and_then(Value::as_array)
-            .and_then(|contracts| contracts.first())
-            .and_then(|contract| contract.get("tx_hash_hex"))
-            .and_then(Value::as_str)
-            .is_some(),
-        "resume response should include deploy tx hash"
-    );
-}
-
-#[test]
-fn contract_app_plan_reports_protected_namespace_bundle_rejection() {
-    use torii_mock_support::{
-        SpawnError, TempDir, ToriiMockProcess, configure_contracts, write_client_config,
-    };
-
-    let mock = match ToriiMockProcess::spawn() {
-        Ok(proc) => proc,
-        Err(SpawnError::PythonUnavailable | SpawnError::PermissionDenied) => {
-            eprintln!(
-                "skipping contract_app_plan_reports_protected_namespace_bundle_rejection: mock server unavailable"
-            );
-            return;
-        }
-        Err(err) => panic!("failed to start Torii mock: {err}"),
-    };
-
-    configure_contracts(
-        mock.base_url(),
-        &norito::json!({
-            "bundle_error": {
-                "status": 400,
-                "body": {
-                    "error": "protected namespace `apps` requires governance metadata"
-                }
-            }
-        }),
-    )
-    .expect("configure contracts");
-
-    let temp_dir = TempDir::new("contract_app_plan_protected").expect("temp dir");
-    let config_path = temp_dir.path().join("client.toml");
-    let manifest_path = write_contract_app_manifest(&temp_dir);
-    write_client_config(&config_path, mock.base_url()).expect("write config");
-
-    let output = command()
-        .arg("--config")
-        .arg(&config_path)
-        .args([
-            "contract",
-            "app",
-            "plan",
-            "--manifest",
-            manifest_path.to_str().expect("utf8 path"),
-            "--authority",
-            alice_account_literal(),
-            "--private-key",
-            ALICE_PRIVATE_KEY,
-        ])
-        .output()
-        .expect("invoke iroha contract app plan");
-    assert!(
-        !output.status.success(),
-        "expected contract app plan to fail for protected namespace rejection"
-    );
-
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("Failed to deploy contract bundle"),
-        "stderr should report bundle deploy failure, got: {stderr}"
-    );
-    assert!(
-        stderr.contains("protected namespace `apps` requires governance metadata"),
-        "stderr should preserve protected namespace error body, got: {stderr}"
-    );
+fn retired_server_contract_deployment_commands_are_absent() {
+    for args in [
+        vec!["contract", "deploy"],
+        vec!["contract", "app", "plan"],
+        vec!["contract", "app", "deploy"],
+        vec!["contract", "app", "resume"],
+        vec!["contract", "dev", "deploy"],
+        vec!["contract", "dev", "resume"],
+    ] {
+        let output = command()
+            .args(&args)
+            .output()
+            .expect("invoke retired contract deployment command");
+        assert!(
+            !output.status.success(),
+            "retired contract deployment command remained available: {args:?}"
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("unrecognized subcommand"),
+            "retired command failed for an unexpected reason: {args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 }
 
 #[test]
@@ -6037,10 +5786,6 @@ private_key = \"{private_key}\"\n",
 
     pub fn configure_accounts(base_url: &str, config: &json::Value) -> io::Result<()> {
         post_mock_config(base_url, "__mock__/accounts/config", config)
-    }
-
-    pub fn configure_contracts(base_url: &str, config: &json::Value) -> io::Result<()> {
-        post_mock_config(base_url, "__mock__/contracts/config", config)
     }
 
     fn workspace_root() -> PathBuf {

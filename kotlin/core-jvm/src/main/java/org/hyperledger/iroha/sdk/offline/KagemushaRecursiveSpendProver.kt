@@ -58,6 +58,7 @@ class KagemushaRecursiveSpendProver private constructor() {
         const val MAX_TRUSTED_RELEASE_POLICY_BYTES: Int = 64 * 1024
         const val MAX_RELEASE_ATTESTATION_BYTES: Int = 1024 * 1024
         const val MAX_RELEASE_EVIDENCE_BYTES: Int = 16 * 1024 * 1024
+        const val MAX_PROMOTION_RECORD_BYTES: Int = 1024 * 1024
         const val MAX_PEER_TEXT_ENVELOPE_BYTES: Int = 12 * 1024
         const val MAX_PEER_TEXT_ARCHIVE_BYTES: Int = 9_211
         const val MAX_PEER_ARCHIVE_BYTES_V2: Int = 32 * 1024
@@ -1144,6 +1145,7 @@ class KagemushaRecursiveSpendProver private constructor() {
             )
             val operation = requireDigest(operationId, "operationId")
             val bundleArchive = input.bundle.noritoEncoded()
+            val topUpProvenanceArchive = input.topUpProvenance.noritoEncoded()
             val openingArchive = input.opening.noritoEncoded()
             val witnessArchive = input.membershipWitness.noritoEncoded()
             val recipient = utf8(recipientAccountId, "recipientAccountId")
@@ -1151,7 +1153,8 @@ class KagemushaRecursiveSpendProver private constructor() {
             return try {
                 RedeemRequestV4(
                     nativeBuildRedeemRequestV4(
-                        bundleArchive, openingArchive, witnessArchive, recipient,
+                        bundleArchive, topUpProvenanceArchive, openingArchive, witnessArchive,
+                        recipient,
                         atomicUnits, amount.scale,
                         change, outputMembership, verifier, operation, blockHeight,
                     ),
@@ -1163,6 +1166,7 @@ class KagemushaRecursiveSpendProver private constructor() {
                 verifier.fill(0)
                 operation.fill(0)
                 bundleArchive.fill(0)
+                topUpProvenanceArchive.fill(0)
                 openingArchive.fill(0)
                 witnessArchive.fill(0)
                 recipient.fill(0)
@@ -1676,6 +1680,7 @@ class KagemushaRecursiveSpendProver private constructor() {
             releaseAttestationNorito: ByteArray,
             benchmarkEvidence: ByteArray,
             cryptographicReview: ByteArray,
+            promotionRecordNorito: ByteArray,
             artifactHandles: LongArray,
         )
 
@@ -1745,7 +1750,7 @@ class KagemushaRecursiveSpendProver private constructor() {
         @JvmStatic private external fun nativeProjectSplitResultV4(result: ByteArray): Array<ByteArray>
         @JvmStatic private external fun nativeBuildVerifyRequestV4(bundle: ByteArray, recipientRequest: ByteArray, topUpProvenance: ByteArray, maximumHops: Int, blockHeight: Long, verifiedAtMilliseconds: Long): ByteArray
         @JvmStatic private external fun nativeProjectVerifyResultV4(result: ByteArray): Array<ByteArray>
-        @JvmStatic private external fun nativeBuildRedeemRequestV4(bundle: ByteArray, opening: ByteArray, membershipWitness: ByteArray, recipient: ByteArray, atomicUnits: ByteArray, scale: Int, changeOpening: ByteArray, changeOutputMembership: ByteArray, verifierCommitment: ByteArray, operationId: ByteArray, blockHeight: Long): ByteArray
+        @JvmStatic private external fun nativeBuildRedeemRequestV4(bundle: ByteArray, topUpProvenance: ByteArray, opening: ByteArray, membershipWitness: ByteArray, recipient: ByteArray, atomicUnits: ByteArray, scale: Int, changeOpening: ByteArray, changeOutputMembership: ByteArray, verifierCommitment: ByteArray, operationId: ByteArray, blockHeight: Long): ByteArray
         @JvmStatic private external fun nativeProjectRedeemBuildResultV4(result: ByteArray): Array<ByteArray>
         @JvmStatic private external fun nativePrepareAcknowledgementV2(request: ByteArray, payment: ByteArray, acceptedAtMilliseconds: Long): Array<ByteArray>
         @JvmStatic private external fun nativeCreateAcknowledgementV2(payload: ByteArray, signature: ByteArray, request: ByteArray, payment: ByteArray): ByteArray
@@ -2994,13 +2999,15 @@ class KagemushaRecursiveSpendProver private constructor() {
      *
      * The policy must be provisioned from the deployment trust root, not copied from the
      * downloaded release. Native verifies signer-role thresholds and hashes both evidence files
-     * before consuming any finalized artifact handle.
+     * before validating the candidate-bound promotion record and consuming any finalized artifact
+     * handle.
      */
     class ReleaseAuthentication(
         trustedPolicyNorito: ByteArray,
         releaseAttestationNorito: ByteArray,
         benchmarkEvidence: ByteArray,
         cryptographicReview: ByteArray,
+        promotionRecordNorito: ByteArray,
     ) {
         internal val trustedPolicyNorito = requireBoundedBytes(
             trustedPolicyNorito,
@@ -3022,6 +3029,11 @@ class KagemushaRecursiveSpendProver private constructor() {
             "cryptographicReview",
             MAX_RELEASE_EVIDENCE_BYTES,
         )
+        internal val promotionRecordNorito = requireBoundedBytes(
+            promotionRecordNorito,
+            "promotionRecordNorito",
+            MAX_PROMOTION_RECORD_BYTES,
+        )
     }
 
     /** Coordinates one authenticated, atomic eight-artifact generation install. */
@@ -3037,6 +3049,7 @@ class KagemushaRecursiveSpendProver private constructor() {
             releaseAuthentication.releaseAttestationNorito.copyOf()
         private val benchmarkEvidence = releaseAuthentication.benchmarkEvidence.copyOf()
         private val cryptographicReview = releaseAuthentication.cryptographicReview.copyOf()
+        private val promotionRecordNorito = releaseAuthentication.promotionRecordNorito.copyOf()
         private val artifacts = linkedMapOf<ArtifactRoleV4, ArtifactIngest>()
         private val artifactDigests = mutableListOf<String>()
         private var installed = false
@@ -3084,6 +3097,7 @@ class KagemushaRecursiveSpendProver private constructor() {
                     releaseAttestationNorito,
                     benchmarkEvidence,
                     cryptographicReview,
+                    promotionRecordNorito,
                     handles,
                 )
             } catch (failure: Throwable) {

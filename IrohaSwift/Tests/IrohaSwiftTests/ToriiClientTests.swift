@@ -11306,7 +11306,7 @@ final class ToriiClientTests: XCTestCase {
             ),
             (
                 { $0["ready"] = false },
-                "ready must equal the complete ABI-20 runtime conjunction"
+                "an unavailable readiness response must include a blocker"
             ),
             (
                 {
@@ -18123,74 +18123,6 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             XCTAssertEqual(manifest.abiHash?.count, 64)
             XCTAssertFalse(manifest.entrypoints?.isEmpty ?? true)
         }
-    }
-
-    func testDeployContractRejectsRemovedServerSideSigningFlow() async {
-        let req = ToriiDeployContractRequest(authority: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
-                                             codeB64: "AQ==",
-                                             contractAlias: "mint::universal")
-        await XCTAssertThrowsErrorAsync(try await makeClient().deployContract(req)) { error in
-            guard case let ToriiClientError.invalidPayload(reason) = error else {
-                return XCTFail("Expected invalidPayload, got \(error)")
-            }
-            XCTAssertTrue(reason.contains("/v1/contracts/deploy"))
-            XCTAssertTrue(reason.contains("locally signed transaction"))
-        }
-    }
-
-    func testDeployContractRejectsInvalidBase64() {
-        let request = ToriiDeployContractRequest(authority: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
-                                                 codeB64: "%%%",
-                                                 contractAlias: "mint::universal")
-        XCTAssertThrowsError(try JSONEncoder().encode(request)) { error in
-            guard case ToriiClientError.invalidPayload = error else {
-                return XCTFail("Expected invalidPayload error")
-            }
-        }
-    }
-
-    func testDeployContractEncodesAliasFirstPayload() throws {
-        let request = ToriiDeployContractRequest(authority: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
-                                                 codeB64: "AQ==",
-                                                 contractAlias: "mint::universal",
-                                                 leaseExpiryMs: 42)
-        let body = try XCTUnwrap(try JSONSerialization.jsonObject(with: JSONEncoder().encode(request)) as? [String: Any])
-        XCTAssertEqual(body["authority"] as? String, "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB")
-        XCTAssertEqual(body["code_b64"] as? String, "AQ==")
-        XCTAssertEqual(body["contract_alias"] as? String, "mint::universal")
-        XCTAssertEqual(body["lease_expiry_ms"] as? Int, 42)
-    }
-
-    func testDeployContractRejectsInvalidAlias() {
-        let request = ToriiDeployContractRequest(authority: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
-                                                 codeB64: "AQ==",
-                                                 contractAlias: "mint@universal")
-        XCTAssertThrowsError(try JSONEncoder().encode(request)) { error in
-            guard case ToriiClientError.invalidPayload = error else {
-                return XCTFail("Expected invalidPayload error")
-            }
-        }
-    }
-
-    func testDeployContractParsesKaizenResponse() throws {
-        let codeHash = String(repeating: "a", count: 64)
-        let abiHash = String(repeating: "b", count: 64)
-        let txHash = String(repeating: "c", count: 64)
-        let payload = """
-        {"ok":true,"contract_alias":"mint::universal","contract_address":"tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8","previous_contract_address":"tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq9","kaizen":true,"dataspace":"universal","deploy_nonce":7,"tx_hash_hex":"\(txHash)","pipeline_status":{"hash":"\(txHash)","status":{"kind":"Queued","block_height":null,"rejection_reason":null},"summary":"Queued","diagnostics":[],"scope":"local","resolved_from":"queue"},"code_hash_hex":"\(codeHash)","abi_hash_hex":"\(abiHash)"}
-        """.data(using: .utf8)!
-        let response = try JSONDecoder().decode(ToriiDeployContractResponse.self, from: payload)
-        XCTAssertTrue(response.ok)
-        XCTAssertEqual(response.contractAlias, "mint::universal")
-        XCTAssertEqual(response.contractAddress, "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8")
-        XCTAssertEqual(response.previousContractAddress, "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq9")
-        XCTAssertTrue(response.kaizen)
-        XCTAssertEqual(response.dataspace, "universal")
-        XCTAssertEqual(response.deployNonce, 7)
-        XCTAssertEqual(response.txHashHex, txHash)
-        XCTAssertEqual(response.pipelineStatus?.status.kind, "Queued")
-        XCTAssertEqual(response.codeHashHex, codeHash)
-        XCTAssertEqual(response.abiHashHex, abiHash)
     }
 
     func testDeployContractInstanceRejectsRemovedServerSideSigningFlow() async {

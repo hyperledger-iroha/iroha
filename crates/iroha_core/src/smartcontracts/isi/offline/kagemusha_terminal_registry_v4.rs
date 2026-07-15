@@ -7,9 +7,15 @@
 
 use std::{collections::BTreeMap, path::Path, sync::Arc};
 
-#[cfg(all(unix, not(any(target_os = "espidf", target_os = "redox"))))]
+#[cfg(all(
+    unix,
+    not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+))]
 use rustix::fs::{AtFlags, Dir, FileType as RustixFileType, Mode, OFlags, open, openat, statat};
-#[cfg(all(unix, not(any(target_os = "espidf", target_os = "redox"))))]
+#[cfg(all(
+    unix,
+    not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+))]
 use std::{
     collections::BTreeSet,
     ffi::OsStr,
@@ -29,7 +35,8 @@ use iroha_data_model::{
         KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_FILE_NAME_V1,
         KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4,
         KAGEMUSHA_RECURSIVE_SPEND_RELEASE_ATTESTATION_FILE_NAME_V4,
-        KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_EVIDENCE_BYTES_V1, KAGEMUSHA_VERIFIER_NAMESPACE,
+        KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_EVIDENCE_BYTES_V1,
+        KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROMOTION_BYTES_V4, KAGEMUSHA_VERIFIER_NAMESPACE,
         KagemushaAuthenticatedReleaseV4, KagemushaPastaCycleArtifactKindV4,
         KagemushaPastaCycleParityV1, KagemushaRecursiveSpendArtifactBindingV4,
         KagemushaRecursiveSpendArtifactManifestV4, KagemushaRecursiveSpendReleaseActivationV4,
@@ -62,14 +69,22 @@ const MANIFEST_FILE_NAME_V4: &str = "manifest.norito";
 const MANIFEST_JSON_FILE_NAME_V4: &str = "manifest.json";
 const MANIFEST_SHA256_FILE_NAME_V4: &str = "manifest.norito.sha256";
 const PROMOTION_RECORD_FILE_NAME_V4: &str = "promotion-record-v4.norito";
-const MAX_PROMOTION_RECORD_BYTES: usize = 1024 * 1024;
-#[cfg(all(unix, not(any(target_os = "espidf", target_os = "redox"))))]
+#[cfg(all(
+    unix,
+    not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+))]
 const MAX_CATALOG_DIRECTORY_ENTRIES: usize = 1024;
 /// Maximum number of historic authenticated releases retained in one runtime.
-#[cfg(all(unix, not(any(target_os = "espidf", target_os = "redox"))))]
+#[cfg(all(
+    unix,
+    not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+))]
 const MAX_CATALOG_RELEASES_V4: usize = 16;
 /// Maximum on-disk bytes described by all exact release inventories combined.
-#[cfg(all(unix, not(any(target_os = "espidf", target_os = "redox"))))]
+#[cfg(all(
+    unix,
+    not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+))]
 const MAX_CATALOG_AGGREGATE_BYTES_V4: u64 = 8 * 1024 * 1024 * 1024;
 
 /// Canonical identity committed by each V4 verifier registry record.
@@ -175,11 +190,17 @@ impl KagemushaReleaseCatalogV4 {
     /// All filesystem access, hashing, framing checks, and Halo2 verifier
     /// parsing complete before the returned immutable catalog is published.
     pub fn load(policy_path: &Path, artifact_dir: &Path) -> Result<Self, String> {
-        #[cfg(all(unix, not(any(target_os = "espidf", target_os = "redox"))))]
+        #[cfg(all(
+            unix,
+            not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+        ))]
         {
             Self::load_descriptor_relative(policy_path, artifact_dir)
         }
-        #[cfg(not(all(unix, not(any(target_os = "espidf", target_os = "redox")))))]
+        #[cfg(not(all(
+            unix,
+            not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+        )))]
         {
             let _ = (policy_path, artifact_dir);
             Err(
@@ -189,7 +210,10 @@ impl KagemushaReleaseCatalogV4 {
         }
     }
 
-    #[cfg(all(unix, not(any(target_os = "espidf", target_os = "redox"))))]
+    #[cfg(all(
+        unix,
+        not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+    ))]
     fn load_descriptor_relative(policy_path: &Path, artifact_dir: &Path) -> Result<Self, String> {
         let (policy_parent_path, policy_file_name) =
             absolute_file_parent_and_name(policy_path, "release policy")?;
@@ -494,7 +518,10 @@ fn parse_manifest_directory_name(name: &str) -> Result<[u8; 32], String> {
         .map_err(|_| "Kagemusha V4 manifest directory digest has the wrong length".to_owned())
 }
 
-#[cfg(all(unix, not(any(target_os = "espidf", target_os = "redox"))))]
+#[cfg(all(
+    unix,
+    not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+))]
 fn ensure_catalog_release_count(count: usize) -> Result<(), String> {
     if count > MAX_CATALOG_RELEASES_V4 {
         return Err(format!(
@@ -504,7 +531,10 @@ fn ensure_catalog_release_count(count: usize) -> Result<(), String> {
     Ok(())
 }
 
-#[cfg(all(unix, not(any(target_os = "espidf", target_os = "redox"))))]
+#[cfg(all(
+    unix,
+    not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+))]
 fn add_catalog_release_bytes(current: u64, release_bytes: u64) -> Result<u64, String> {
     let total = current
         .checked_add(release_bytes)
@@ -517,7 +547,10 @@ fn add_catalog_release_bytes(current: u64, release_bytes: u64) -> Result<u64, St
     Ok(total)
 }
 
-#[cfg(all(unix, not(any(target_os = "espidf", target_os = "redox"))))]
+#[cfg(all(
+    unix,
+    not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+))]
 fn validate_absolute_catalog_path(path: &Path, label: &str) -> Result<(), String> {
     let normalized = path.components().collect::<PathBuf>();
     let mut components = path.components();
@@ -537,7 +570,10 @@ fn validate_absolute_catalog_path(path: &Path, label: &str) -> Result<(), String
     Ok(())
 }
 
-#[cfg(all(unix, not(any(target_os = "espidf", target_os = "redox"))))]
+#[cfg(all(
+    unix,
+    not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+))]
 fn absolute_file_parent_and_name<'path>(
     path: &'path Path,
     label: &str,
@@ -556,14 +592,20 @@ fn absolute_file_parent_and_name<'path>(
     Ok((parent, file_name))
 }
 
-#[cfg(all(unix, not(any(target_os = "espidf", target_os = "redox"))))]
+#[cfg(all(
+    unix,
+    not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct CatalogFileIdentity {
     device: u64,
     inode: u64,
 }
 
-#[cfg(all(unix, not(any(target_os = "espidf", target_os = "redox"))))]
+#[cfg(all(
+    unix,
+    not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+))]
 impl CatalogFileIdentity {
     fn from_metadata(metadata: &fs::Metadata) -> Self {
         Self {
@@ -580,7 +622,10 @@ impl CatalogFileIdentity {
     }
 }
 
-#[cfg(all(unix, not(any(target_os = "espidf", target_os = "redox"))))]
+#[cfg(all(
+    unix,
+    not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct CatalogFileSnapshot {
     identity: CatalogFileIdentity,
@@ -593,7 +638,10 @@ struct CatalogFileSnapshot {
     changed_nanoseconds: i64,
 }
 
-#[cfg(all(unix, not(any(target_os = "espidf", target_os = "redox"))))]
+#[cfg(all(
+    unix,
+    not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+))]
 impl CatalogFileSnapshot {
     fn from_metadata(metadata: &fs::Metadata) -> Option<Self> {
         (metadata.is_file() && metadata.nlink() == 1).then(|| Self {
@@ -633,7 +681,10 @@ impl CatalogFileSnapshot {
     }
 }
 
-#[cfg(all(unix, not(any(target_os = "espidf", target_os = "redox"))))]
+#[cfg(all(
+    unix,
+    not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct CatalogDirectorySnapshot {
     identity: CatalogFileIdentity,
@@ -646,7 +697,10 @@ struct CatalogDirectorySnapshot {
     changed_nanoseconds: i64,
 }
 
-#[cfg(all(unix, not(any(target_os = "espidf", target_os = "redox"))))]
+#[cfg(all(
+    unix,
+    not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+))]
 impl CatalogDirectorySnapshot {
     fn from_metadata(metadata: &fs::Metadata) -> Option<Self> {
         metadata.is_dir().then(|| Self {
@@ -678,14 +732,20 @@ impl CatalogDirectorySnapshot {
     }
 }
 
-#[cfg(all(unix, not(any(target_os = "espidf", target_os = "redox"))))]
+#[cfg(all(
+    unix,
+    not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+))]
 struct CatalogDirectory {
     display_path: PathBuf,
     file: File,
     snapshot: CatalogDirectorySnapshot,
 }
 
-#[cfg(all(unix, not(any(target_os = "espidf", target_os = "redox"))))]
+#[cfg(all(
+    unix,
+    not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+))]
 impl CatalogDirectory {
     fn open_path(path: &Path, label: &str) -> Result<Self, String> {
         validate_absolute_catalog_path(path, label)?;
@@ -915,7 +975,10 @@ impl CatalogDirectory {
     }
 }
 
-#[cfg(all(unix, not(any(target_os = "espidf", target_os = "redox"))))]
+#[cfg(all(
+    unix,
+    not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+))]
 struct CatalogOpenedFile<'directory> {
     directory: &'directory CatalogDirectory,
     name: String,
@@ -924,7 +987,10 @@ struct CatalogOpenedFile<'directory> {
     snapshot: CatalogFileSnapshot,
 }
 
-#[cfg(all(unix, not(any(target_os = "espidf", target_os = "redox"))))]
+#[cfg(all(
+    unix,
+    not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+))]
 impl CatalogOpenedFile<'_> {
     fn verify_unchanged(&self) -> Result<(), String> {
         let metadata = self.file.metadata().map_err(|error| {
@@ -946,7 +1012,11 @@ impl CatalogOpenedFile<'_> {
     }
 }
 
-#[cfg(all(test, unix, not(any(target_os = "espidf", target_os = "redox"))))]
+#[cfg(all(
+    test,
+    unix,
+    not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+))]
 fn read_bounded_regular_file(path: &Path, maximum: usize, label: &str) -> Result<Vec<u8>, String> {
     let (parent_path, file_name) = absolute_file_parent_and_name(path, label)?;
     let parent = CatalogDirectory::open_path(parent_path, &format!("{label} parent"))?;
@@ -956,7 +1026,10 @@ fn read_bounded_regular_file(path: &Path, maximum: usize, label: &str) -> Result
     Ok(bytes)
 }
 
-#[cfg(all(unix, not(any(target_os = "espidf", target_os = "redox"))))]
+#[cfg(all(
+    unix,
+    not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+))]
 fn read_bounded_directory_file(
     directory: &CatalogDirectory,
     file_name: &str,
@@ -967,7 +1040,10 @@ fn read_bounded_directory_file(
     read_bounded_opened_file(&mut opened, maximum, label)
 }
 
-#[cfg(all(unix, not(any(target_os = "espidf", target_os = "redox"))))]
+#[cfg(all(
+    unix,
+    not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+))]
 fn read_bounded_opened_file(
     opened: &mut CatalogOpenedFile<'_>,
     maximum: usize,
@@ -1038,7 +1114,10 @@ fn decode_canonical_promotion(
     Ok(promotion)
 }
 
-#[cfg(all(unix, not(any(target_os = "espidf", target_os = "redox"))))]
+#[cfg(all(
+    unix,
+    not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+))]
 fn verify_file_descriptor(
     directory: &CatalogDirectory,
     file_name: &str,
@@ -1078,7 +1157,10 @@ fn verify_file_descriptor(
     Ok(())
 }
 
-#[cfg(all(unix, not(any(target_os = "espidf", target_os = "redox"))))]
+#[cfg(all(
+    unix,
+    not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+))]
 fn verify_exact_release_inventory_v4(
     directory: &CatalogDirectory,
     manifest: &KagemushaRecursiveSpendArtifactManifestV4,
@@ -1134,7 +1216,10 @@ fn verify_exact_release_inventory_v4(
     Ok(aggregate_bytes)
 }
 
-#[cfg(all(unix, not(any(target_os = "espidf", target_os = "redox"))))]
+#[cfg(all(
+    unix,
+    not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+))]
 fn read_release_role(
     directory: &CatalogDirectory,
     release: &KagemushaAuthenticatedReleaseV4,
@@ -1152,7 +1237,10 @@ fn read_release_role(
 }
 
 #[allow(clippy::too_many_lines)]
-#[cfg(all(unix, not(any(target_os = "espidf", target_os = "redox"))))]
+#[cfg(all(
+    unix,
+    not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+))]
 fn load_release_directory(
     directory: &CatalogDirectory,
     expected_manifest_sha256: [u8; 32],
@@ -1223,7 +1311,7 @@ fn load_release_directory(
     let promotion_bytes = read_bounded_directory_file(
         directory,
         PROMOTION_RECORD_FILE_NAME_V4,
-        MAX_PROMOTION_RECORD_BYTES,
+        KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROMOTION_BYTES_V4,
         "promotion record",
     )?;
     let promotion_record = decode_canonical_promotion(&promotion_bytes)?;
@@ -1538,17 +1626,272 @@ fn ensure_activation_record(
 
 #[cfg(test)]
 mod tests {
-    #[cfg(all(unix, not(any(target_os = "espidf", target_os = "redox"))))]
-    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_crypto::{Algorithm, KeyPair, SignatureOf};
+    use iroha_data_model::{
+        ChainId,
+        asset::AssetDefinitionId,
+        domain::DomainId,
+        offline::{
+            KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V4,
+            KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_VERSION_V4,
+            KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_ROLES_V4,
+            KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V4,
+            KAGEMUSHA_RECURSIVE_SPEND_PROMOTED_RELEASE_SCHEMA_V4,
+            KAGEMUSHA_RECURSIVE_SPEND_RELEASE_ATTESTATION_SCHEMA_V4,
+            KAGEMUSHA_RECURSIVE_SPEND_RELEASE_AUTH_VERSION_V1,
+            KAGEMUSHA_RECURSIVE_SPEND_RELEASE_AUTH_VERSION_V4,
+            KAGEMUSHA_RECURSIVE_SPEND_RELEASE_POLICY_SCHEMA_V1,
+            KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_BOOTSTRAP_FILE_NAME_V4,
+            KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V4,
+            KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PARAMS_IPA_FILE_NAME_V4,
+            KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PROVING_KEY_FILE_NAME_V4,
+            KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_VERIFYING_KEY_FILE_NAME_V4,
+            KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_BOOTSTRAP_FILE_NAME_V4,
+            KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4,
+            KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PARAMS_IPA_FILE_NAME_V4,
+            KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PROVING_KEY_FILE_NAME_V4,
+            KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_VERIFYING_KEY_FILE_NAME_V4,
+            KAGEMUSHA_STEP_CIRCUIT_MINIMUM_K_V4, KAGEMUSHA_STEP_CIRCUIT_MINIMUM_UNUSABLE_ROWS_V4,
+            KAGEMUSHA_STEP_CIRCUIT_PARAMS_VERSION_V4, KAGEMUSHA_TOPUP_FINALITY_CIRCUIT_ID_V2,
+            KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_PURPOSE_V2,
+            KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_TYPE_V2,
+            KAGEMUSHA_TOPUP_FINALITY_ROSTER_FILE_NAME_V4, KagemushaPastaCycleArtifactV4,
+            KagemushaPastaCycleProofProfileV4, KagemushaPastaPublicLayoutV4,
+            KagemushaRecursiveSpendArtifactManifestV4, KagemushaRecursiveSpendPromotedReleaseV4,
+            KagemushaRecursiveSpendReleaseApprovalRoleV1, KagemushaRecursiveSpendReleaseApprovalV4,
+            KagemushaRecursiveSpendReleaseAttestationV4,
+            KagemushaRecursiveSpendReleaseRolePolicyV1, KagemushaReleaseVerificationError,
+            KagemushaStepCircuitParamsV4, KagemushaTopUpFinalityRosterArtifactReferenceV4,
+        },
+    };
 
     use super::*;
 
-    #[cfg(all(unix, not(any(target_os = "espidf", target_os = "redox"))))]
+    fn candidate_binding_artifact(
+        kind: KagemushaPastaCycleArtifactKindV4,
+        file_name: &str,
+        tag: u8,
+    ) -> KagemushaPastaCycleArtifactV4 {
+        KagemushaPastaCycleArtifactV4 {
+            kind,
+            file_name: file_name.to_owned(),
+            size_bytes: 128,
+            sha256: [tag; 32],
+            payload_size_bytes: 64,
+            payload_sha256: [tag.wrapping_add(1); 32],
+        }
+    }
+
+    fn candidate_binding_profile(
+        parity: KagemushaPastaCycleParityV1,
+        tag: u8,
+    ) -> KagemushaPastaCycleProofProfileV4 {
+        let (circuit_id, file_names) = match parity {
+            KagemushaPastaCycleParityV1::StepEq => (
+                KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4,
+                [
+                    KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PARAMS_IPA_FILE_NAME_V4,
+                    KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PROVING_KEY_FILE_NAME_V4,
+                    KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_VERIFYING_KEY_FILE_NAME_V4,
+                    KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_BOOTSTRAP_FILE_NAME_V4,
+                ],
+            ),
+            KagemushaPastaCycleParityV1::StepEp => (
+                KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V4,
+                [
+                    KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PARAMS_IPA_FILE_NAME_V4,
+                    KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PROVING_KEY_FILE_NAME_V4,
+                    KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_VERIFYING_KEY_FILE_NAME_V4,
+                    KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_BOOTSTRAP_FILE_NAME_V4,
+                ],
+            ),
+        };
+        let k = KAGEMUSHA_STEP_CIRCUIT_MINIMUM_K_V4;
+        let layout = KagemushaPastaPublicLayoutV4::for_ipa_round_count(k)
+            .expect("candidate-binding public layout");
+        let circuit_params = KagemushaStepCircuitParamsV4 {
+            version: KAGEMUSHA_STEP_CIRCUIT_PARAMS_VERSION_V4,
+            k,
+            num_advice_per_phase: vec![8, 1, 1],
+            num_lookup_advice_per_phase: vec![1, 0, 0],
+            num_fixed: 1,
+            lookup_bits: k - 1,
+            num_instance_columns: 1,
+            public_input_limbs: layout.instance_column_limbs,
+            minimum_unusable_rows: KAGEMUSHA_STEP_CIRCUIT_MINIMUM_UNUSABLE_ROWS_V4,
+            max_parent_proof_bytes: 4_096,
+        };
+        let kinds = [
+            KagemushaPastaCycleArtifactKindV4::ParamsIpa,
+            KagemushaPastaCycleArtifactKindV4::ProvingKey,
+            KagemushaPastaCycleArtifactKindV4::VerifyingKey,
+            KagemushaPastaCycleArtifactKindV4::BootstrapWitness,
+        ];
+        let artifacts = kinds
+            .into_iter()
+            .zip(file_names)
+            .enumerate()
+            .map(|(index, (kind, file_name))| {
+                candidate_binding_artifact(
+                    kind,
+                    file_name,
+                    tag + u8::try_from(index).expect("four artifact roles fit u8") * 2,
+                )
+            })
+            .collect();
+        KagemushaPastaCycleProofProfileV4 {
+            parity,
+            circuit_id: circuit_id.to_owned(),
+            parameter_generation: "candidate-binding-params".to_owned(),
+            ipa_k: k,
+            circuit_params,
+            compiled_protocol_structure_sha256: [tag.wrapping_add(0x40); 32],
+            step_proof_size_bytes: 4_096,
+            artifacts,
+        }
+    }
+
+    fn authenticated_candidate_binding_release() -> (
+        KagemushaAuthenticatedReleaseV4,
+        KagemushaRecursiveSpendPromotedReleaseV4,
+    ) {
+        let benchmark = b"signed candidate-binding device benchmark";
+        let review = b"signed candidate-binding cryptographic review";
+        let mut manifest = KagemushaRecursiveSpendArtifactManifestV4 {
+            schema: KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V4.to_owned(),
+            version: KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_VERSION_V4,
+            bridge_abi_version:
+                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4,
+            proof_backend: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4.to_owned(),
+            transcript_profile: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V4.to_owned(),
+            generation: "candidate-binding-release".to_owned(),
+            source_commit: "0123456789abcdef0123456789abcdef01234567".to_owned(),
+            source_tree_sha256: [0x61; 32],
+            source_repo_dirty: false,
+            chain_id: ChainId::from("candidate-binding-chain"),
+            asset: AssetDefinitionId::new(
+                DomainId::try_new("candidate", "binding").expect("candidate-binding domain"),
+                "asset".parse().expect("candidate-binding asset name"),
+            ),
+            asset_scale: 2,
+            activation_height: 1,
+            withdrawal_height: 100,
+            max_proof_bytes: 9_000,
+            profiles: vec![
+                candidate_binding_profile(KagemushaPastaCycleParityV1::StepEq, 0x10),
+                candidate_binding_profile(KagemushaPastaCycleParityV1::StepEp, 0x20),
+            ],
+            topup_finality_roster_artifact: KagemushaTopUpFinalityRosterArtifactReferenceV4 {
+                file_name: KAGEMUSHA_TOPUP_FINALITY_ROSTER_FILE_NAME_V4.to_owned(),
+                size_bytes: 128,
+                sha256: [0x31; 32],
+                artifact_generation: "candidate-binding-release".to_owned(),
+                circuit_id: KAGEMUSHA_TOPUP_FINALITY_CIRCUIT_ID_V2.to_owned(),
+                purpose: KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_PURPOSE_V2.to_owned(),
+                artifact_type: KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_TYPE_V2.to_owned(),
+                required_bridge_abi_version:
+                    iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4,
+            },
+            benchmark_evidence_sha256: Sha256::digest(benchmark).into(),
+            cryptographic_review_sha256: Sha256::digest(review).into(),
+            release_attestation_sha256: [0x62; 32],
+        };
+        let roles = [
+            KagemushaRecursiveSpendReleaseApprovalRoleV1::Release,
+            KagemushaRecursiveSpendReleaseApprovalRoleV1::CryptographicReview,
+            KagemushaRecursiveSpendReleaseApprovalRoleV1::PhysicalDeviceBenchmark,
+        ];
+        let key_pairs = [
+            KeyPair::from_seed(vec![0x71; 32], Algorithm::Ed25519),
+            KeyPair::from_seed(vec![0x72; 32], Algorithm::Ed25519),
+            KeyPair::from_seed(vec![0x73; 32], Algorithm::Ed25519),
+        ];
+        let policy = KagemushaRecursiveSpendReleasePolicyV1 {
+            schema: KAGEMUSHA_RECURSIVE_SPEND_RELEASE_POLICY_SCHEMA_V1.to_owned(),
+            version: KAGEMUSHA_RECURSIVE_SPEND_RELEASE_AUTH_VERSION_V1,
+            policy_id: "candidate-binding-policy".to_owned(),
+            roles: roles
+                .iter()
+                .zip(&key_pairs)
+                .map(
+                    |(&role, key_pair)| KagemushaRecursiveSpendReleaseRolePolicyV1 {
+                        role,
+                        threshold: 1,
+                        authorized_signers: vec![key_pair.public_key().clone()],
+                    },
+                )
+                .collect(),
+        };
+        let subject = manifest
+            .release_attestation_subject()
+            .expect("candidate-binding release subject");
+        let attestation = KagemushaRecursiveSpendReleaseAttestationV4 {
+            schema: KAGEMUSHA_RECURSIVE_SPEND_RELEASE_ATTESTATION_SCHEMA_V4.to_owned(),
+            version: KAGEMUSHA_RECURSIVE_SPEND_RELEASE_AUTH_VERSION_V4,
+            subject: subject.clone(),
+            approvals: roles
+                .iter()
+                .zip(&key_pairs)
+                .map(
+                    |(&role, key_pair)| KagemushaRecursiveSpendReleaseApprovalV4 {
+                        role,
+                        public_key: key_pair.public_key().clone(),
+                        signature: SignatureOf::try_new(
+                            key_pair.private_key(),
+                            &subject.approval_payload(role),
+                        )
+                        .expect("candidate-binding release signature"),
+                    },
+                )
+                .collect(),
+        };
+        manifest.release_attestation_sha256 =
+            Sha256::digest(norito::to_bytes(&attestation).expect("candidate-binding attestation"))
+                .into();
+        let authenticated = KagemushaAuthenticatedReleaseV4::verify(
+            &manifest,
+            &policy,
+            &attestation,
+            benchmark,
+            review,
+        )
+        .expect("authenticated candidate-binding release");
+        let candidate_sha256 = manifest
+            .immutable_candidate()
+            .and_then(|candidate| candidate.sha256())
+            .expect("canonical candidate binding");
+        let promotion = KagemushaRecursiveSpendPromotedReleaseV4 {
+            schema: KAGEMUSHA_RECURSIVE_SPEND_PROMOTED_RELEASE_SCHEMA_V4.to_owned(),
+            version: KAGEMUSHA_RECURSIVE_SPEND_RELEASE_AUTH_VERSION_V4,
+            generation: manifest.generation.clone(),
+            candidate_sha256,
+            manifest_sha256: authenticated.manifest_sha256(),
+            release_attestation_sha256: authenticated.release_attestation_sha256(),
+            release_policy_sha256: authenticated.release_policy_sha256(),
+            approved_signers: authenticated.approved_signers().to_vec(),
+            artifact_inventory_verified: true,
+            bridge_abi_version:
+                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4,
+            artifact_roles: KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_ROLES_V4
+                .map(str::to_owned)
+                .to_vec(),
+            max_proof_bytes: manifest.max_proof_bytes,
+        };
+        (authenticated, promotion)
+    }
+
+    #[cfg(all(
+        unix,
+        not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+    ))]
     fn canonical_temporary_root(temporary: &tempfile::TempDir) -> PathBuf {
         std::fs::canonicalize(temporary.path()).expect("canonical temporary catalog root")
     }
 
-    #[cfg(all(unix, not(any(target_os = "espidf", target_os = "redox"))))]
+    #[cfg(all(
+        unix,
+        not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+    ))]
     fn write_test_policy(root: &Path) -> std::path::PathBuf {
         use iroha_data_model::offline::{
             KAGEMUSHA_RECURSIVE_SPEND_RELEASE_AUTH_VERSION_V1,
@@ -1644,7 +1987,28 @@ mod tests {
         );
     }
 
-    #[cfg(all(unix, not(any(target_os = "espidf", target_os = "redox"))))]
+    #[test]
+    fn runtime_promotion_validation_rejects_candidate_digest_substitution() {
+        let (authenticated, promotion) = authenticated_candidate_binding_release();
+        promotion
+            .validate_against_authenticated_release(&authenticated)
+            .expect("exact reconstructed candidate binding");
+
+        let mut substituted = promotion;
+        substituted.candidate_sha256[0] ^= 1;
+        substituted
+            .validate()
+            .expect("substituted candidate digest remains structurally valid");
+        assert_eq!(
+            substituted.validate_against_authenticated_release(&authenticated),
+            Err(KagemushaReleaseVerificationError::InvalidPromotionRecord)
+        );
+    }
+
+    #[cfg(all(
+        unix,
+        not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+    ))]
     #[test]
     fn configured_catalog_rejects_malformed_policy_before_publication() {
         let temporary = tempfile::tempdir().expect("temporary catalog root");
@@ -1659,7 +2023,10 @@ mod tests {
         assert!(error.contains("policy") || error.contains("malformed"));
     }
 
-    #[cfg(all(unix, not(any(target_os = "espidf", target_os = "redox"))))]
+    #[cfg(all(
+        unix,
+        not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+    ))]
     #[test]
     fn configured_catalog_rejects_empty_release_inventory() {
         let temporary = tempfile::tempdir().expect("temporary catalog root");
@@ -1676,7 +2043,10 @@ mod tests {
         );
     }
 
-    #[cfg(all(unix, not(any(target_os = "espidf", target_os = "redox"))))]
+    #[cfg(all(
+        unix,
+        not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+    ))]
     #[test]
     fn configured_catalog_rejects_release_count_above_retention_bound() {
         let temporary = tempfile::tempdir().expect("temporary catalog root");
@@ -1697,7 +2067,10 @@ mod tests {
         );
     }
 
-    #[cfg(all(unix, not(any(target_os = "espidf", target_os = "redox"))))]
+    #[cfg(all(
+        unix,
+        not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+    ))]
     #[test]
     fn configured_catalog_aggregate_byte_accounting_is_bounded() {
         assert_eq!(
@@ -1715,7 +2088,10 @@ mod tests {
         assert!(error.contains("overflowed"), "unexpected error: {error}");
     }
 
-    #[cfg(all(unix, not(any(target_os = "espidf", target_os = "redox"))))]
+    #[cfg(all(
+        unix,
+        not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+    ))]
     #[test]
     fn configured_catalog_rejects_manifest_directory_digest_substitution() {
         let temporary = tempfile::tempdir().expect("temporary catalog root");
@@ -1760,7 +2136,10 @@ mod tests {
         assert!(error.contains("owner namespace is invalid"));
     }
 
-    #[cfg(all(unix, not(any(target_os = "espidf", target_os = "redox"))))]
+    #[cfg(all(
+        unix,
+        not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+    ))]
     #[test]
     fn configured_catalog_rejects_symlinked_policy_and_artifact_roots() {
         use std::os::unix::fs::symlink;
@@ -1785,7 +2164,7 @@ mod tests {
         let error = KagemushaReleaseCatalogV4::load(&policy, &artifact_link)
             .err()
             .expect("a symlinked artifact root must fail closed");
-        assert!(error.contains("must be a real directory"));
+        assert!(error.contains("not a real directory"));
 
         for suffix in ["/", "/."] {
             let mut spelling = artifact_link.as_os_str().to_os_string();
@@ -1800,7 +2179,10 @@ mod tests {
         }
     }
 
-    #[cfg(all(unix, not(any(target_os = "espidf", target_os = "redox"))))]
+    #[cfg(all(
+        unix,
+        not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+    ))]
     #[test]
     fn configured_catalog_paths_reject_intermediate_symlinks() {
         use std::os::unix::fs::symlink;
@@ -1841,7 +2223,10 @@ mod tests {
         );
     }
 
-    #[cfg(all(unix, not(any(target_os = "espidf", target_os = "redox"))))]
+    #[cfg(all(
+        unix,
+        not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+    ))]
     #[test]
     fn configured_catalog_paths_must_be_absolute() {
         let error = CatalogDirectory::open_path(Path::new("relative-artifacts"), "artifact root")
@@ -1850,7 +2235,10 @@ mod tests {
         assert!(error.contains("absolute"), "unexpected error: {error}");
     }
 
-    #[cfg(all(unix, not(any(target_os = "espidf", target_os = "redox"))))]
+    #[cfg(all(
+        unix,
+        not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+    ))]
     #[test]
     fn configured_catalog_rejects_symlinked_release_directory_and_manifest_leaf() {
         use std::os::unix::fs::symlink;
@@ -1891,7 +2279,10 @@ mod tests {
         );
     }
 
-    #[cfg(all(unix, not(any(target_os = "espidf", target_os = "redox"))))]
+    #[cfg(all(
+        unix,
+        not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+    ))]
     #[test]
     fn pinned_directory_reads_original_object_and_rejects_path_replacement() {
         let temporary = tempfile::tempdir().expect("temporary catalog root");
@@ -1923,7 +2314,10 @@ mod tests {
         );
     }
 
-    #[cfg(all(unix, not(any(target_os = "espidf", target_os = "redox"))))]
+    #[cfg(all(
+        unix,
+        not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+    ))]
     #[test]
     fn retained_policy_handle_rejects_post_read_mutation() {
         let temporary = tempfile::tempdir().expect("temporary catalog root");
@@ -1947,7 +2341,10 @@ mod tests {
         assert!(error.contains("changed"), "unexpected error: {error}");
     }
 
-    #[cfg(all(unix, not(any(target_os = "espidf", target_os = "redox"))))]
+    #[cfg(all(
+        unix,
+        not(any(target_os = "espidf", target_os = "horizon", target_os = "redox"))
+    ))]
     #[test]
     fn pinned_release_reads_original_object_and_rejects_entry_replacement() {
         let temporary = tempfile::tempdir().expect("temporary catalog root");

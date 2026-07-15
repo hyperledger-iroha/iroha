@@ -19,7 +19,6 @@ use iroha_data_model::isi::{InstructionBox, offline::ActivateKagemushaRecursiveR
 use iroha_data_model::offline::{
     KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_ROLES_V4,
     KAGEMUSHA_RECURSIVE_SPEND_BENCHMARK_EVIDENCE_FILE_NAME_V1,
-    KAGEMUSHA_RECURSIVE_SPEND_CANDIDATE_SCHEMA_V4, KAGEMUSHA_RECURSIVE_SPEND_CANDIDATE_VERSION_V4,
     KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_FILE_NAME_V1,
     KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4,
     KAGEMUSHA_RECURSIVE_SPEND_PROMOTED_RELEASE_SCHEMA_V4,
@@ -224,23 +223,10 @@ struct VerifiedReleaseV4 {
 
 impl VerifiedReleaseV4 {
     fn immutable_candidate(&self) -> Result<KagemushaRecursiveSpendCandidateV4> {
-        // Finalization fills exactly these evidence slots in the immutable
-        // candidate manifest. Canonical Norito therefore reconstructs the
-        // byte-identical pre-evidence candidate without trusting a supplied
-        // digest.
-        let mut manifest = self.authenticated.manifest().clone();
-        manifest.benchmark_evidence_sha256 = [0; 32];
-        manifest.cryptographic_review_sha256 = [0; 32];
-        manifest.release_attestation_sha256 = [0; 32];
-        let candidate = KagemushaRecursiveSpendCandidateV4 {
-            schema: KAGEMUSHA_RECURSIVE_SPEND_CANDIDATE_SCHEMA_V4.to_owned(),
-            version: KAGEMUSHA_RECURSIVE_SPEND_CANDIDATE_VERSION_V4,
-            manifest,
-        };
-        candidate
-            .validate()
-            .map_err(|error| eyre!("failed to reconstruct immutable V4 candidate: {error}"))?;
-        Ok(candidate)
+        self.authenticated
+            .manifest()
+            .immutable_candidate()
+            .map_err(|error| eyre!("failed to reconstruct immutable V4 candidate: {error}"))
     }
 
     fn promotion_record(&self) -> Result<KagemushaRecursiveSpendPromotedReleaseV4> {

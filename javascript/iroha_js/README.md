@@ -1367,7 +1367,7 @@ if (resolved) {
 
 const permissioned = await torii.resolveAlias("tidal-river-4160@mibank.paynet", {
   canonicalAuth: {
-    accountId: operatorAccountId,
+    accountId: "operator-1@mibank.paynet",
     privateKey: operatorPrivateKey,
   },
 });
@@ -1379,7 +1379,12 @@ console.log(indexed?.source); // "iso_bridge"
 
 `resolveAlias*` returns `null` when the alias is missing and throws when the ISO
 bridge runtime is disabled, matching Torii’s semantics. Pass `canonicalAuth`
-when an alias namespace requires Torii request signatures.
+when an alias namespace requires Torii request signatures. Its `accountId`
+credential must be an exact canonical ASCII on-chain account alias
+(`name@dataspace` or `name@domain.dataspace`). I105 remains the canonical form
+for ordinary account fields, paths, and response models, but is intentionally
+rejected as an HTTP authentication header credential; values are never trimmed,
+case-folded, percent-decoded, base64-decoded, or sent through a raw socket.
 
 Browser wallets that keep private keys sealed can sign the same request through
 an async signer callback:
@@ -1388,7 +1393,7 @@ an async signer callback:
 import { buildCanonicalJsonRequest } from "@iroha/iroha-js/canonical-request";
 
 const request = await buildCanonicalJsonRequest({
-  accountId: operatorAccountIdOrAlias,
+  accountId: "operator-1@mibank.paynet",
   baseUrl: toriiBaseUrl,
   path: "/v1/aliases/resolve",
   body: { alias: "tidal-river-4160@mibank.paynet" },
@@ -1828,7 +1833,7 @@ for await (const event of torii.streamSorafsOrderbookEventsWebSocket({
 }
 const orderResult = await torii.submitSorafsOrderbookOrder(orderRequestNoritoBytes, {
   canonicalAuth: {
-    accountId: "<canonical_i105_account_id>",
+    accountId: "operator-1@sorafs",
     privateKey: requestEnvelopePrivateKey,
   },
 });
@@ -1836,10 +1841,10 @@ console.log("local orderbook order status", orderResult.status);
 // Cancel and receipt helpers use the same envelope auth. The Norito payload
 // bytes must already include their embedded orderbook payload signature.
 await torii.submitSorafsOrderbookCancel(orderCancelNoritoBytes, {
-  canonicalAuth: { accountId: "<canonical_i105_account_id>", privateKey: requestEnvelopePrivateKey },
+  canonicalAuth: { accountId: "operator-1@sorafs", privateKey: requestEnvelopePrivateKey },
 });
 await torii.submitSorafsOrderbookReceipt(settlementReceiptNoritoBytes, {
-  canonicalAuth: { accountId: "<canonical_i105_account_id>", privateKey: requestEnvelopePrivateKey },
+  canonicalAuth: { accountId: "operator-1@sorafs", privateKey: requestEnvelopePrivateKey },
 });
 
 for await (const manifest of torii.iterateSorafsPinManifests({ pageSize: 25 })) {

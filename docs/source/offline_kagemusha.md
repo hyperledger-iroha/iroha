@@ -153,8 +153,12 @@ in each profile and digest-bound into every artifact header; it is not a
 separate streamed file. The content-addressed top-up-finality roster remains
 release metadata outside that eight-role cryptographic inventory. Every file
 has an exact framed and payload size and SHA-256. Installation streams to
-private files, verifies every binding, and atomically activates the complete
-generation. A partial or role-substituted generation never becomes active.
+private files, verifies every binding plus the canonical candidate-bound
+`promotion-record-v4.norito`, and atomically activates the complete generation.
+Swift, Kotlin, and Java release-authentication inputs therefore require that
+promotion record alongside the trusted policy, attestation, benchmark evidence,
+and review. A partial, unpromoted, or role-substituted generation never becomes
+active.
 
 ## Validator provisioning and activation
 
@@ -222,6 +226,21 @@ the authenticated release bundle, independent cryptographic review, measured
 physical Android/iOS evidence within the signed ceilings, signed role-threshold
 approval, and the production corridor. Any proof-code change after the
 candidate commit invalidates that evidence and requires regeneration.
+
+Physical-device evidence is collected before finalization with the separate,
+off-by-default `kagemusha-candidate-evidence-lab` build. That build accepts only
+the canonical clean unsigned candidate plus its exact ordered eight KRV4
+artifacts and calls the same ABI-20 prover/verifier/recursion implementation.
+Its symbols, registry, JNI class, marker-bearing native library, and APK are
+distinct from production and are rejected by production packaging. The normal
+artifact install and proof entrypoints remain unavailable, and device evidence
+must record that production capability stayed false. Candidate-bound Android
+evidence V2 hashes the candidate, manifest, source commit/tree, lab binaries,
+each framed and payload artifact, the native-accepted inventory, and the exact
+lifecycle transcript; V1/status-only evidence cannot be promoted.
+The marker-bearing candidate-lab APK has its own path and digest in V2; it is
+never relabelled as the separately attested wallet APK used for StrongBox,
+rotation, rollback, and device-to-device transfer evidence.
 
 Run the repository corridor without external evidence while preparing a
 candidate:

@@ -311,7 +311,7 @@ use iroha_data_model::{
 };
 #[cfg(feature = "app_api")]
 use iroha_executor_data_model::permission::account::{
-    AccountAliasPermissionScope, CanResolveAccountAlias,
+    AccountAliasPermissionScope, CanDelegateAccountAliasResolution, CanResolveAccountAlias,
 };
 use iroha_executor_data_model::permission::sorafs::CanOperateSorafsRepair;
 use iroha_futures::supervisor::ShutdownSignal;
@@ -533,22 +533,17 @@ pub use routing::{
     AssetTransferResponseDto, AssetTransferSigningPayloadDto, ContractAliasResolveRequestDto,
     ContractAliasResolveResponseDto, ContractCallDto, ContractCallResponseDto,
     ContractCallSimulateDto, ContractCallSimulateResponseDto, ContractViewDto,
-    ContractViewResponseDto, DeployContractBundleDto, DeployContractBundleReceiptDto,
-    DeployContractDto, EvidenceListQuery, EvidenceSubmitRequestDto, KaigiRelayDetailDto,
+    ContractViewResponseDto, EvidenceListQuery, EvidenceSubmitRequestDto, KaigiRelayDetailDto,
     KaigiRelayDomainMetricsDto, KaigiRelayHealthSnapshotDto, KaigiRelaySummaryDto,
-    KaigiRelaySummaryListDto, MaybeTelemetry, MultisigAccountSelectorDto, MultisigApprovalEntryDto,
-    MultisigApprovalLookupRequestDto, MultisigApprovalLookupResponseDto,
-    MultisigApprovalsQueryRequestDto, MultisigApprovalsQueryResponseDto, MultisigCancelRequestDto,
-    MultisigProposalLookupRequestDto, MultisigProposalLookupResponseDto,
+    KaigiRelaySummaryListDto, MaybeTelemetry, MultisigAccountSelectorDto, MultisigCancelRequestDto,
     MultisigProposalsQueryRequestDto, MultisigProposalsResolveRequestDto, PinAliasDto,
     PinPolicyDto, PinPolicyStorageClassDto, ProofApiLimits, ProofFindByIdQueryDto, ProofListQuery,
     RegisterPinManifestDto, RegisterPinManifestResponseDto, SetContractAliasDto,
     SetContractAliasResponseDto, SpaceDirectoryManifestPublishDto, SpaceDirectoryManifestRevokeDto,
     VkListQuery, ZkVkRegisterDto, ZkVkUpdateDto, handle_count_proofs,
-    handle_get_contract_code_bytes, handle_get_contract_deploy_bundle_status, handle_get_proof,
-    handle_get_vk, handle_list_proofs, handle_list_vk, handle_post_asset_transfer,
-    handle_post_contract_alias_set, handle_post_contract_call, handle_post_contract_call_simulate,
-    handle_post_contract_deploy, handle_post_contract_deploy_bundle, handle_post_contract_view,
+    handle_get_contract_code_bytes, handle_get_proof, handle_get_vk, handle_list_proofs,
+    handle_list_vk, handle_post_asset_transfer, handle_post_contract_alias_set,
+    handle_post_contract_call, handle_post_contract_call_simulate, handle_post_contract_view,
     handle_post_sorafs_register_manifest, handle_post_space_directory_manifest_publish,
     handle_post_space_directory_manifest_revoke, handle_post_sumeragi_evidence_submit,
     handle_post_vk_register, handle_post_vk_update, handle_queries_with_opts as handle_queries,
@@ -800,16 +795,18 @@ fn asset_alias_resolve_ok(
 fn contract_alias_resolve_ok(
     contract_alias: &str,
     contract_address: &str,
+    contract_subject_account: &str,
     dataspace: &str,
-    contract_alias_binding: Option<routing::ContractAliasBindingDto>,
+    contract_alias_binding: routing::ContractAliasBindingDto,
     source: &'static str,
 ) -> Result<AxResponse, Error> {
     let payload = routing::ContractAliasResolveResponseDto {
         contract_alias: contract_alias.to_owned(),
         contract_address: contract_address.to_owned(),
+        contract_subject_account: contract_subject_account.to_owned(),
         dataspace: dataspace.to_owned(),
         contract_alias_binding,
-        source: Some(source.to_owned()),
+        source: source.to_owned(),
     };
     alias_json_response(StatusCode::OK, payload)
 }
@@ -1126,7 +1123,8 @@ fn resolve_contract_alias_on_chain(
     Option<(
         iroha_data_model::smart_contract::ContractAlias,
         iroha_data_model::smart_contract::ContractAddress,
-        Option<iroha_core::state::ContractAliasBindingRecord>,
+        AccountId,
+        iroha_core::state::ContractAliasBindingRecord,
         String,
     )>,
     Error,
@@ -1136,6 +1134,14 @@ fn resolve_contract_alias_on_chain(
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::Conversion(
                 "contract alias must not be empty".to_string(),
+            ),
+        )));
+    }
+    if trimmed != alias_input {
+        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::Conversion(
+                "contract alias must be a canonical literal without surrounding whitespace"
+                    .to_owned(),
             ),
         )));
     }
@@ -1160,14 +1166,30 @@ fn resolve_contract_alias_on_chain(
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64;
-    let world = app.state.world_view();
+    let state_view = app.state.view();
+    let world = state_view.world();
     let Some(contract_address) = world.contract_address_by_alias_at(&contract_alias, now_ms) else {
         return Ok(None);
     };
     let binding = world
         .contract_alias_bindings()
         .get(&contract_address)
-        .cloned();
+        .filter(|binding| binding.alias == contract_alias && !binding.is_grace_expired_at(now_ms))
+        .cloned()
+        .ok_or_else(|| {
+            Error::Query(iroha_data_model::ValidationFail::InternalError(
+                "contract alias index has no matching active consensus binding".to_owned(),
+            ))
+        })?;
+    let contract_subject = iroha_core::smartcontracts::code::fetch_bound_contract_subject(
+        &state_view,
+        &contract_address,
+    )
+    .ok_or_else(|| {
+        Error::Query(iroha_data_model::ValidationFail::InternalError(
+            "active contract alias has no valid consensus subject binding".to_owned(),
+        ))
+    })?;
     if contract_address.dataspace_id().ok() != Some(alias_dataspace_id) {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::Conversion(
@@ -1185,6 +1207,7 @@ fn resolve_contract_alias_on_chain(
     Ok(Some((
         contract_alias,
         contract_address,
+        contract_subject,
         binding,
         dataspace_alias,
     )))
@@ -5689,9 +5712,6 @@ async fn handler_method_not_allowed() -> Response {
 
 fn route_timeout_for_path(path: &str) -> Duration {
     match path {
-        "/v1/contracts/deploy" | "/v1/contracts/deploy-bundle" | "/v1/contracts/aliases" => {
-            CONTRACT_DEPLOY_ROUTE_TIMEOUT
-        }
         "/v1/zk/ivm/derive" | "/v1/zk/ivm/prove" => ZK_IVM_ROUTE_TIMEOUT,
         "/v1/sorafs/storage/pin" => SORAFS_STORAGE_PIN_ROUTE_TIMEOUT,
         // Keep the outer HTTP timeout at least as large as the internal
@@ -6190,32 +6210,7 @@ mod strict_request_target_tests {
                 mount(Arc::clone(&counter)),
             )
             .route(
-                route_catalog::contracts_and_verification_keys::MULTISIG_PROPOSALS_LOOKUP_POST
-                    .path(),
-                mount(Arc::clone(&counter)),
-            )
-            .route(
                 route_catalog::contracts_and_verification_keys::MULTISIG_PROPOSALS_RESOLVE_POST
-                    .path(),
-                mount(Arc::clone(&counter)),
-            )
-            .route(
-                route_catalog::contracts_and_verification_keys::MULTISIG_APPROVALS_QUERY_POST
-                    .path(),
-                mount(Arc::clone(&counter)),
-            )
-            .route(
-                route_catalog::contracts_and_verification_keys::MULTISIG_APPROVALS_LOOKUP_POST
-                    .path(),
-                mount(Arc::clone(&counter)),
-            )
-            .route(
-                route_catalog::contracts_and_verification_keys::MULTISIG_APPROVALS_QUERY_FOR_AUTHORITY_POST
-                    .path(),
-                mount(Arc::clone(&counter)),
-            )
-            .route(
-                route_catalog::contracts_and_verification_keys::MULTISIG_APPROVALS_LOOKUP_FOR_AUTHORITY_POST
                     .path(),
                 mount(Arc::clone(&counter)),
             )
@@ -9147,18 +9142,30 @@ use crate::NoritoQuery as AxQuery;
 #[cfg(feature = "app_api")]
 async fn handler_gov_contract_get(
     State(app): State<SharedAppState>,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     contract_address: AxPath<String>,
 ) -> Result<JsonBody<crate::gov::GovernedContractResponse>, Error> {
-    let remote_ip = remote.ip();
-    check_access(
+    check_public_contract_read_route_rate_limit(
         &app,
         &headers,
-        Some(remote_ip),
+        remote.ip(),
         "v1/gov/contracts/{contract_address}",
+        "governed_contract_read",
+        false,
     )
     .await?;
+    require_signed_account_request(
+        &app,
+        &headers,
+        &method,
+        &uri,
+        &[],
+        "contract_code_auth_required",
+        "signed account headers are required to read contract artifacts",
+    )?;
     crate::gov::handle_gov_contract_get(app.state.clone(), contract_address).await
 }
 
@@ -24545,9 +24552,10 @@ mod torii_routed_read_tests {
     use super::*;
     #[cfg(feature = "app_api")]
     use crate::tests_runtime_handlers::{
-        bind_account_alias_for_test, configure_multiple_dataspace_routes_for_test,
-        configure_private_ingress_routes_for_test, mk_app_state_for_tests_with_world,
-        world_with_account, world_with_account_bound_to_dataspace,
+        bind_account_alias_for_test, bind_contract_alias_for_test,
+        configure_multiple_dataspace_routes_for_test, configure_private_ingress_routes_for_test,
+        mk_app_state_for_tests_with_world, world_with_account,
+        world_with_account_bound_to_dataspace,
     };
     #[cfg(feature = "app_api")]
     use iroha_data_model::nexus::UniversalAccountId;
@@ -26116,10 +26124,77 @@ mod torii_routed_read_tests {
 
     #[cfg(feature = "app_api")]
     #[tokio::test]
-    async fn protected_alias_index_read_ignores_unsigned_public_upstream() {
+    async fn routed_contract_alias_sanitizer_rejects_forged_subject_payload() {
+        let authority = routed_read_test_account(0x98);
+        let forged_subject = routed_read_test_account(0x99);
+        let app = mk_app_state_for_tests_with_world(world_with_account(&authority));
+        let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &authority,
+            0,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("contract address");
+        bind_contract_alias_for_test(&app, &contract_address, "router::universal");
+        let route = resolve_torii_route_for_dataspace_id(app.as_ref(), DataSpaceId::UNIVERSAL)
+            .expect("universal route");
+        let request_body = norito::json::to_vec(&routing::ContractAliasResolveRequestDto {
+            contract_alias: "router::universal".to_owned(),
+        })
+        .expect("encode request");
+        let forged_body = norito::json::to_vec(&routing::ContractAliasResolveResponseDto {
+            contract_alias: "router::universal".to_owned(),
+            contract_address: contract_address.to_string(),
+            contract_subject_account: forged_subject.to_string(),
+            dataspace: "universal".to_owned(),
+            contract_alias_binding: routing::ContractAliasBindingDto {
+                alias: "router::universal".to_owned(),
+                status: "permanent".to_owned(),
+                lease_expiry_ms: None,
+                grace_until_ms: None,
+                bound_at_ms: 0,
+            },
+            source: "world_state".to_owned(),
+        })
+        .expect("encode forged response");
+        let response = Response::builder()
+            .status(StatusCode::OK)
+            .body(Body::from(forged_body))
+            .expect("forged response");
+
+        let response = sanitize_exact_alias_route_response(
+            &app,
+            route,
+            ToriiReadEndpointV1::ContractAliasResolve,
+            &request_body,
+            response,
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-reject-code")
+                .and_then(|value| value.to_str().ok()),
+            Some("invalid_proxy_response")
+        );
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn protected_alias_reads_ignore_unsigned_public_upstream() {
         let authority = routed_read_test_account(0x97);
         let mut app = mk_app_state_for_tests_with_world(world_with_account(&authority));
         bind_account_alias_for_test(&app, &authority, "merchant@universal");
+        let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &authority,
+            1,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("contract address");
+        bind_contract_alias_for_test(&app, &contract_address, "router::universal");
         Arc::get_mut(&mut app)
             .expect("unique app state")
             .public_dataspace_upstreams = Arc::new(BTreeMap::from([(
@@ -26152,6 +26227,38 @@ mod torii_routed_read_tests {
                 .and_then(|value| value.to_str().ok()),
             Some("local")
         );
+
+        for (endpoint, body) in [
+            (
+                ToriiReadEndpointV1::AliasResolve,
+                norito::json::to_vec(&routing::AliasResolveRequestDto {
+                    alias: "merchant@universal".to_owned(),
+                })
+                .expect("encode alias request"),
+            ),
+            (
+                ToriiReadEndpointV1::ContractAliasResolve,
+                norito::json::to_vec(&routing::ContractAliasResolveRequestDto {
+                    contract_alias: "router::universal".to_owned(),
+                })
+                .expect("encode contract alias request"),
+            ),
+        ] {
+            let response = execute_torii_read_for_route(
+                &app,
+                route,
+                torii_read_request(endpoint, route, Vec::new(), None, body),
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(
+                response
+                    .headers()
+                    .get("x-iroha-routed-by")
+                    .and_then(|value| value.to_str().ok()),
+                Some("local")
+            );
+        }
     }
 
     #[cfg(feature = "app_api")]
@@ -29561,7 +29668,10 @@ async fn execute_torii_read_for_route(
 ) -> Response {
     let protected_alias_directory_read = matches!(
         request.endpoint,
-        ToriiReadEndpointV1::AliasResolveIndex | ToriiReadEndpointV1::AliasLookupByAccount
+        ToriiReadEndpointV1::AliasResolve
+            | ToriiReadEndpointV1::AliasResolveIndex
+            | ToriiReadEndpointV1::AliasLookupByAccount
+            | ToriiReadEndpointV1::ContractAliasResolve
     );
     if !protected_alias_directory_read
         && let Some(upstream_url) = app
@@ -30817,7 +30927,9 @@ async fn sanitize_exact_alias_route_response(
     if !response.status().is_success()
         || !matches!(
             endpoint,
-            ToriiReadEndpointV1::AliasResolve | ToriiReadEndpointV1::AliasResolveIndex
+            ToriiReadEndpointV1::AliasResolve
+                | ToriiReadEndpointV1::AliasResolveIndex
+                | ToriiReadEndpointV1::ContractAliasResolve
         )
     {
         return response;
@@ -30949,6 +31061,66 @@ async fn sanitize_exact_alias_route_response(
                 alias: expected.0,
                 account_id: expected.1.to_string(),
                 source: Some("active_sns".to_owned()),
+            })
+        }
+        ToriiReadEndpointV1::ContractAliasResolve => {
+            let request: routing::ContractAliasResolveRequestDto =
+                match norito::json::from_slice(request_body) {
+                    Ok(request) => request,
+                    Err(error) => {
+                        return invalid(format!("invalid routed contract alias request: {error}"));
+                    }
+                };
+            let dto: routing::ContractAliasResolveResponseDto =
+                match norito::json::from_slice(&body) {
+                    Ok(dto) => dto,
+                    Err(error) => {
+                        return invalid(format!(
+                            "invalid routed contract alias response schema: {error}"
+                        ));
+                    }
+                };
+            let (contract_alias, contract_address, contract_subject, binding, dataspace) =
+                match resolve_contract_alias_on_chain(app, &request.contract_alias) {
+                    Ok(Some(expected)) => expected,
+                    Ok(None) => {
+                        return invalid(
+                            "routed contract alias response has no matching active local binding"
+                                .to_owned(),
+                        );
+                    }
+                    Err(error) => {
+                        return invalid(format!("failed to verify routed contract alias: {error}"));
+                    }
+                };
+            let now_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64;
+            let expected_binding = routing::contract_alias_binding_dto(&binding, now_ms);
+            if dto.contract_alias != contract_alias.as_ref()
+                || dto.contract_address != contract_address.as_ref()
+                || dto.contract_subject_account != contract_subject.to_string()
+                || dto.dataspace != dataspace
+                || dto.source != "world_state"
+                || dto.contract_alias_binding.alias != expected_binding.alias
+                || dto.contract_alias_binding.status != expected_binding.status
+                || dto.contract_alias_binding.lease_expiry_ms != expected_binding.lease_expiry_ms
+                || dto.contract_alias_binding.grace_until_ms != expected_binding.grace_until_ms
+                || dto.contract_alias_binding.bound_at_ms != expected_binding.bound_at_ms
+            {
+                return invalid(
+                    "routed contract alias response disagrees with the authoritative active binding"
+                        .to_owned(),
+                );
+            }
+            norito::json::to_vec(&routing::ContractAliasResolveResponseDto {
+                contract_alias: contract_alias.to_string(),
+                contract_address: contract_address.to_string(),
+                contract_subject_account: contract_subject.to_string(),
+                dataspace,
+                contract_alias_binding: expected_binding,
+                source: "world_state".to_owned(),
             })
         }
         _ => unreachable!("non-alias endpoints returned before body collection"),
@@ -34607,11 +34779,14 @@ async fn handler_sumeragi_bls_keys(
 #[cfg(feature = "app_api")]
 async fn handler_get_contract_code_bytes(
     State(app): State<SharedAppState>,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     axum::extract::Path(code_hash): axum::extract::Path<String>,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
+    require_signed_alias_request(&app, &headers, &method, &uri, &[])?;
     let key = rate_limit_key(
         &headers,
         Some(remote_ip),
@@ -36674,134 +36849,6 @@ async fn check_public_contract_read_route_rate_limit(
 }
 
 #[cfg(feature = "app_api")]
-fn deploy_bundle_dry_run_from_uri(uri: &axum::http::Uri) -> bool {
-    uri.query()
-        .and_then(|query| {
-            url::form_urlencoded::parse(query.as_bytes()).find_map(|(key, value)| {
-                (key == "dry_run").then_some(matches!(
-                    value.as_ref(),
-                    "1" | "true" | "TRUE" | "yes" | "on"
-                ))
-            })
-        })
-        .unwrap_or(false)
-}
-
-#[cfg(feature = "app_api")]
-#[axum::debug_handler]
-async fn handler_post_contract_deploy_bundle(
-    State(app): State<SharedAppState>,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    request: axum::extract::Request,
-) -> Result<AxResponse, Error> {
-    let dry_run = deploy_bundle_dry_run_from_uri(request.uri());
-    let request_headers = request.headers().clone();
-    let request_body = request.into_body();
-    check_public_contract_route_rate_limit(
-        &app,
-        &request_headers,
-        remote.ip(),
-        "v1/contracts/deploy-bundle",
-        "deploy_bundle",
-    )
-    .await?;
-    let body = axum::body::to_bytes(request_body, usize::MAX)
-        .await
-        .map_err(|err| conversion_error(format!("failed to read deploy bundle body: {err}")))?;
-    let bundle_request =
-        match norito::decode_from_bytes::<crate::routing::DeployContractBundleDto>(body.as_ref()) {
-            Ok(request) => request,
-            Err(_) => norito::json::from_slice::<crate::routing::DeployContractBundleDto>(
-                body.as_ref(),
-            )
-            .map_err(|err| conversion_error(format!("invalid deploy bundle payload: {err}")))?,
-        };
-    match crate::routing::handle_post_contract_deploy_bundle(
-        app.chain_id.clone(),
-        app.kura.clone(),
-        app.queue.clone(),
-        app.state.clone(),
-        app.telemetry.clone(),
-        dry_run,
-        NoritoJson(bundle_request),
-    )
-    .await
-    {
-        Ok(resp) => Ok(resp.into_response()),
-        Err(err) => {
-            app.telemetry
-                .with_metrics(|tel| tel.inc_torii_contract_error("deploy_bundle"));
-            Err(err)
-        }
-    }
-}
-
-#[cfg(feature = "app_api")]
-async fn handler_get_contract_deploy_bundle_status(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    path: AxPath<String>,
-) -> Result<AxResponse, Error> {
-    check_public_contract_route_rate_limit(
-        &app,
-        &headers,
-        remote.ip(),
-        "v1/contracts/deploy-bundles/{bundle_digest}",
-        "deploy_bundle_status",
-    )
-    .await?;
-    match crate::routing::handle_get_contract_deploy_bundle_status(
-        app.chain_id.clone(),
-        app.kura.clone(),
-        path,
-    )
-    .await
-    {
-        Ok(resp) => Ok(resp.into_response()),
-        Err(err) => {
-            app.telemetry
-                .with_metrics(|tel| tel.inc_torii_contract_error("deploy_bundle_status"));
-            Err(err)
-        }
-    }
-}
-
-#[cfg(feature = "app_api")]
-async fn handler_post_contract_deploy(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    request: NoritoJson<crate::routing::DeployContractDto>,
-) -> Result<AxResponse, Error> {
-    check_public_contract_route_rate_limit(
-        &app,
-        &headers,
-        remote.ip(),
-        "v1/contracts/deploy",
-        "deploy",
-    )
-    .await?;
-    match crate::routing::handle_post_contract_deploy(
-        app.chain_id.clone(),
-        app.kura.clone(),
-        app.queue.clone(),
-        app.state.clone(),
-        app.telemetry.clone(),
-        request,
-    )
-    .await
-    {
-        Ok(resp) => Ok(resp.into_response()),
-        Err(err) => {
-            app.telemetry
-                .with_metrics(|tel| tel.inc_torii_contract_error("deploy"));
-            Err(err)
-        }
-    }
-}
-
-#[cfg(feature = "app_api")]
 async fn handler_post_contract_alias_set(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -37771,62 +37818,6 @@ async fn handler_post_multisig_proposals_query(
 }
 
 #[cfg(feature = "app_api")]
-async fn handler_post_multisig_proposals_lookup(
-    State(app): State<SharedAppState>,
-    method: axum::http::Method,
-    uri: axum::http::Uri,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    request: NoritoJsonWithBytes<crate::routing::MultisigProposalLookupRequestDto>,
-) -> Result<AxResponse, Error> {
-    let remote_ip = remote.ip();
-    if let Err(error) = validate_api_token(app.as_ref(), &headers) {
-        app.telemetry
-            .with_metrics(|tel| tel.inc_torii_contract_error("multisig_proposals_lookup"));
-        return Err(error);
-    }
-    check_public_contract_read_route_rate_limit(
-        &app,
-        &headers,
-        remote_ip,
-        "v1/multisig/proposals/lookup",
-        "multisig_proposals_lookup",
-        app.api_token_enforced(),
-    )
-    .await?;
-    let resolve_authority = multisig_alias_resolve_authority(
-        &app,
-        &headers,
-        &method,
-        &uri,
-        request.raw.as_ref(),
-        &request.value.selector,
-    )?;
-    let response = if let Some(authority) = resolve_authority {
-        crate::routing::handle_post_multisig_proposals_lookup_for_authority(
-            app.state.clone(),
-            request.value,
-            authority,
-        )
-        .await
-    } else {
-        crate::routing::handle_post_multisig_proposals_lookup(
-            app.state.clone(),
-            NoritoJson(request.value),
-        )
-        .await
-    };
-    match response {
-        Ok(resp) => Ok(resp.into_response()),
-        Err(err) => {
-            app.telemetry
-                .with_metrics(|tel| tel.inc_torii_contract_error("multisig_proposals_lookup"));
-            Err(err)
-        }
-    }
-}
-
-#[cfg(feature = "app_api")]
 async fn handler_post_multisig_proposals_resolve(
     State(app): State<SharedAppState>,
     method: axum::http::Method,
@@ -37877,164 +37868,6 @@ async fn handler_post_multisig_proposals_resolve(
         Err(err) => {
             app.telemetry
                 .with_metrics(|tel| tel.inc_torii_contract_error("multisig_proposals_resolve"));
-            Err(err)
-        }
-    }
-}
-
-#[cfg(feature = "app_api")]
-async fn handler_post_multisig_approvals_query(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    NoritoJson(request): NoritoJson<crate::routing::MultisigApprovalsQueryRequestDto>,
-) -> Result<AxResponse, Error> {
-    let remote_ip = remote.ip();
-    validate_api_token(&app, &headers)?;
-    let viewer = match tx_history_viewer_from_headers(&app, &headers) {
-        Ok(viewer) => viewer,
-        Err(response) => return Ok(response),
-    };
-    check_public_contract_read_route_rate_limit(
-        &app,
-        &headers,
-        remote_ip,
-        &format!("v1/multisig/approvals/query:{}", viewer.subject),
-        "multisig_approvals_query",
-        app.api_token_enforced(),
-    )
-    .await?;
-    match crate::routing::handle_post_multisig_approvals_query(
-        app.state.clone(),
-        crate::routing::MultisigApprovalsViewerScope {
-            viewer_account_ids: viewer.account_ids,
-        },
-        NoritoJson(request),
-    )
-    .await
-    {
-        Ok(resp) => Ok(resp.into_response()),
-        Err(err) => {
-            app.telemetry
-                .with_metrics(|tel| tel.inc_torii_contract_error("multisig_approvals_query"));
-            Err(err)
-        }
-    }
-}
-
-#[cfg(feature = "app_api")]
-async fn handler_post_multisig_approvals_lookup(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    NoritoJson(request): NoritoJson<crate::routing::MultisigApprovalLookupRequestDto>,
-) -> Result<AxResponse, Error> {
-    let remote_ip = remote.ip();
-    validate_api_token(&app, &headers)?;
-    let viewer = match tx_history_viewer_from_headers(&app, &headers) {
-        Ok(viewer) => viewer,
-        Err(response) => return Ok(response),
-    };
-    check_public_contract_read_route_rate_limit(
-        &app,
-        &headers,
-        remote_ip,
-        &format!("v1/multisig/approvals/lookup:{}", viewer.subject),
-        "multisig_approvals_lookup",
-        app.api_token_enforced(),
-    )
-    .await?;
-    match crate::routing::handle_post_multisig_approvals_lookup(
-        app.state.clone(),
-        crate::routing::MultisigApprovalsViewerScope {
-            viewer_account_ids: viewer.account_ids,
-        },
-        NoritoJson(request),
-    )
-    .await
-    {
-        Ok(resp) => Ok(resp.into_response()),
-        Err(err) => {
-            app.telemetry
-                .with_metrics(|tel| tel.inc_torii_contract_error("multisig_approvals_lookup"));
-            Err(err)
-        }
-    }
-}
-
-#[cfg(feature = "app_api")]
-async fn handler_post_multisig_approvals_query_for_authority(
-    State(app): State<SharedAppState>,
-    method: axum::http::Method,
-    uri: axum::http::Uri,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    request: NoritoJsonWithBytes<crate::routing::MultisigApprovalsQueryRequestDto>,
-) -> Result<AxResponse, Error> {
-    let remote_ip = remote.ip();
-    validate_api_token(&app, &headers)?;
-    let authority =
-        require_signed_alias_request(&app, &headers, &method, &uri, request.raw.as_ref())?;
-    check_public_contract_read_route_rate_limit(
-        &app,
-        &headers,
-        remote_ip,
-        &format!("v1/multisig/approvals/query-for-authority:{authority}"),
-        "multisig_approvals_query_for_authority",
-        app.api_token_enforced(),
-    )
-    .await?;
-    match crate::routing::handle_post_multisig_approvals_query_for_authority(
-        app.state.clone(),
-        request.value,
-        authority,
-    )
-    .await
-    {
-        Ok(resp) => Ok(resp.into_response()),
-        Err(err) => {
-            app.telemetry.with_metrics(|tel| {
-                tel.inc_torii_contract_error("multisig_approvals_query_for_authority")
-            });
-            Err(err)
-        }
-    }
-}
-
-#[cfg(feature = "app_api")]
-async fn handler_post_multisig_approvals_lookup_for_authority(
-    State(app): State<SharedAppState>,
-    method: axum::http::Method,
-    uri: axum::http::Uri,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    request: NoritoJsonWithBytes<crate::routing::MultisigApprovalLookupRequestDto>,
-) -> Result<AxResponse, Error> {
-    let remote_ip = remote.ip();
-    validate_api_token(&app, &headers)?;
-    let authority =
-        require_signed_alias_request(&app, &headers, &method, &uri, request.raw.as_ref())?;
-    check_public_contract_read_route_rate_limit(
-        &app,
-        &headers,
-        remote_ip,
-        &format!("v1/multisig/approvals/lookup-for-authority:{authority}"),
-        "multisig_approvals_lookup_for_authority",
-        app.api_token_enforced(),
-    )
-    .await?;
-    match crate::routing::handle_post_multisig_approvals_lookup_for_authority(
-        app.state.clone(),
-        request.value,
-        authority,
-    )
-    .await
-    {
-        Ok(resp) => Ok(resp.into_response()),
-        Err(err) => {
-            app.telemetry.with_metrics(|tel| {
-                tel.inc_torii_contract_error("multisig_approvals_lookup_for_authority")
-            });
             Err(err)
         }
     }
@@ -44411,11 +44244,33 @@ fn require_signed_alias_request(
     uri: &axum::http::Uri,
     body: &[u8],
 ) -> Result<AccountId, Error> {
+    require_signed_account_request(
+        app,
+        headers,
+        method,
+        uri,
+        body,
+        "alias_auth_required",
+        "signed account headers are required",
+    )
+}
+
+#[cfg(feature = "app_api")]
+#[allow(clippy::too_many_arguments)]
+fn require_signed_account_request(
+    app: &SharedAppState,
+    headers: &axum::http::HeaderMap,
+    method: &axum::http::Method,
+    uri: &axum::http::Uri,
+    body: &[u8],
+    error_code: &'static str,
+    error_message: &'static str,
+) -> Result<AccountId, Error> {
     match crate::app_auth::verify_canonical_request(&app.state, headers, method, uri, body, None)? {
         Some(verified) => Ok(verified.account),
         None => Err(Error::AppUnauthorized {
-            code: "alias_auth_required",
-            message: "signed account headers are required".to_owned(),
+            code: error_code,
+            message: error_message.to_owned(),
         }),
     }
 }
@@ -44427,33 +44282,21 @@ fn multisig_alias_resolve_authority(
     method: &axum::http::Method,
     uri: &axum::http::Uri,
     body: &[u8],
-    selector: &routing::MultisigAccountSelectorDto,
+    _selector: &routing::MultisigAccountSelectorDto,
 ) -> Result<Option<AccountId>, Error> {
-    if selector.multisig_account_alias.is_none() {
-        return Ok(None);
-    }
-    require_signed_alias_request(app, headers, method, uri, body).map(Some)
-}
-
-#[cfg(feature = "app_api")]
-async fn handler_public_alias_resolve(
-    State(app): State<SharedAppState>,
-    method: axum::http::Method,
-    uri: axum::http::Uri,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    body: axum::body::Bytes,
-) -> Result<AxResponse, Error> {
-    check_public_contract_read_route_rate_limit(
-        &app,
-        &headers,
-        remote.ip(),
-        "v1/aliases/resolve",
-        "alias_resolve",
-        false,
+    // Multisig authority specs and proposals are sensitive authorization state. Require the
+    // canonical account signature for both alias and concrete-account selectors so switching
+    // selector shape can never downgrade an authenticated read to an anonymous one.
+    require_signed_account_request(
+        app,
+        headers,
+        method,
+        uri,
+        body,
+        "multisig_read_auth_required",
+        "signed account headers are required to read multisig authority state",
     )
-    .await?;
-    handler_alias_resolve(State(app), method, uri, headers, body).await
+    .map(Some)
 }
 
 #[cfg(feature = "app_api")]
@@ -44483,8 +44326,18 @@ async fn handler_alias_resolve(
     method: axum::http::Method,
     uri: axum::http::Uri,
     headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     body: axum::body::Bytes,
 ) -> Result<AxResponse, Error> {
+    check_public_contract_read_route_rate_limit(
+        &app,
+        &headers,
+        remote.ip(),
+        "v1/aliases/resolve",
+        "alias_resolve",
+        false,
+    )
+    .await?;
     let caller = require_signed_alias_request(&app, &headers, &method, &uri, body.as_ref())?;
     let request: routing::AliasResolveRequestDto = norito::json::from_slice(body.as_ref())
         .map_err(|err| {
@@ -44700,7 +44553,6 @@ fn recipient_lookup_fi_id_from_alias(alias_fqn: &str) -> Option<&'static str> {
 #[cfg(feature = "app_api")]
 #[derive(Clone)]
 struct RecipientLookupAccess {
-    caller: AccountId,
     policy: FxCorridorPolicy,
 }
 
@@ -44817,7 +44669,7 @@ async fn recipient_lookup_access_gate(
         )));
     }
 
-    Ok(Ok(RecipientLookupAccess { caller, policy }))
+    Ok(Ok(RecipientLookupAccess { policy }))
 }
 
 #[cfg(feature = "app_api")]
@@ -44835,7 +44687,6 @@ fn recipient_lookup_alias_allowed_by_policy(
 #[cfg(feature = "app_api")]
 fn recipient_route_for_account(
     app: &AppState,
-    caller: &AccountId,
     account_id: &AccountId,
     requested_account_id: String,
     policy: &FxCorridorPolicy,
@@ -44869,9 +44720,11 @@ fn recipient_route_for_account(
         {
             continue;
         }
-        if !torii_authority_can_resolve_account_alias(world, caller, &alias) {
-            continue;
-        }
+        // This request-bound corridor endpoint is intentionally narrower than the
+        // general alias APIs. Its signed, funded caller, on-chain FX policy,
+        // destination-domain allow-list, exact account binding, and rate limit are
+        // the authorization boundary; it must not require or confer general alias
+        // enumeration permission.
         if !recipient_lookup_alias_allowed_by_policy(&alias, policy, &nexus.dataspace_catalog) {
             continue;
         }
@@ -45033,7 +44886,6 @@ async fn handler_retail_recipient_route(
     }
     let response = match recipient_route_for_account(
         app.as_ref(),
-        &access.caller,
         &account_id,
         requested_account_id,
         &access.policy,
@@ -45251,16 +45103,11 @@ async fn handler_retail_recipient_lookup(
             "recipient alias is outside the configured policy destination domains",
         ));
     }
-    if !torii_authority_can_resolve_account_alias(
-        app.state.view().world(),
-        &access.caller,
-        &alias_label,
-    ) {
-        return Ok(torii_alias_permission_denied_response(
-            "recipient lookup requires exact account-alias resolve permission for the destination dataspace and domain",
-        ));
-    }
-
+    // Do not reuse the broad alias-resolution permission here. The corridor gate
+    // already binds this signed request to a funded transaction authority and an
+    // enabled on-chain FX policy, while the exact account/alias pair below must be
+    // active on-chain before any bank lookup is attempted. General alias endpoints
+    // remain protected by CanResolveAccountAlias.
     match resolve_alias_label_on_chain(&app, canonical_alias.clone(), &alias_label)? {
         Some((_, bound_account_id, _)) if bound_account_id == account_id => {}
         _ => {
@@ -45445,7 +45292,7 @@ fn execute_contract_alias_resolve_local_read(
     app: &SharedAppState,
     request: &routing::ContractAliasResolveRequestDto,
 ) -> Result<AxResponse, Error> {
-    let Some((contract_alias, contract_address, binding, dataspace_alias)) =
+    let Some((contract_alias, contract_address, contract_subject, binding, dataspace_alias)) =
         resolve_contract_alias_on_chain(app, &request.contract_alias)?
     else {
         return Ok(StatusCode::NOT_FOUND.into_response());
@@ -45458,10 +45305,9 @@ fn execute_contract_alias_resolve_local_read(
     contract_alias_resolve_ok(
         contract_alias.as_ref(),
         contract_address.as_ref(),
+        &contract_subject.to_string(),
         &dataspace_alias,
-        binding
-            .as_ref()
-            .map(|record| routing::contract_alias_binding_dto(record, now_ms)),
+        routing::contract_alias_binding_dto(&binding, now_ms),
         "world_state",
     )
 }
@@ -45469,26 +45315,41 @@ fn execute_contract_alias_resolve_local_read(
 #[cfg(feature = "app_api")]
 async fn handler_contract_alias_resolve(
     State(app): State<SharedAppState>,
-    NoritoJson(request): NoritoJson<routing::ContractAliasResolveRequestDto>,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    body: axum::body::Bytes,
 ) -> Result<AxResponse, Error> {
+    check_public_contract_read_route_rate_limit(
+        &app,
+        &headers,
+        remote.ip(),
+        "v1/contracts/aliases/resolve",
+        "contract_alias_resolve",
+        false,
+    )
+    .await?;
+    require_signed_alias_request(&app, &headers, &method, &uri, body.as_ref())?;
+    let request: routing::ContractAliasResolveRequestDto = norito::json::from_slice(body.as_ref())
+        .map_err(|err| {
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::Conversion(err.to_string()),
+            ))
+        })?;
     let alias = ContractAlias::from_str(request.contract_alias.trim()).map_err(|err| {
         Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::Conversion(err.to_string()),
         ))
     })?;
     if let Some(route) = torii_contract_target_read_route(app.as_ref(), None, Some(&alias)) {
-        let body = norito::json::to_vec(&request).map_err(|error| {
-            Error::Query(iroha_data_model::ValidationFail::InternalError(format!(
-                "failed to encode routed contract alias resolve request: {error}"
-            )))
-        })?;
         return Ok(execute_torii_single_route_read(
             &app,
             route,
             ToriiReadEndpointV1::ContractAliasResolve,
             Vec::new(),
             None,
-            body,
+            body.to_vec(),
         )
         .await
         .into_response());
@@ -46538,11 +46399,6 @@ pub mod zk_attachments;
 pub mod zk_prover;
 
 const DEFAULT_ROUTE_TIMEOUT: Duration = Duration::from_mins(1);
-// Large trigger-native bundles can legitimately spend many localnet blocks in
-// deploy/activation while pre-commit triggers are evaluated. Keep this route
-// above the CLI deploy-bundle wait budget so clients do not have to resume
-// otherwise healthy deployments every ten minutes.
-const CONTRACT_DEPLOY_ROUTE_TIMEOUT: Duration = Duration::from_mins(60);
 const SORAFS_STORAGE_PIN_ROUTE_TIMEOUT: Duration = Duration::from_mins(10);
 const ZK_IVM_ROUTE_TIMEOUT: Duration = Duration::from_mins(10);
 const HEADER_NORITO_RPC_ERROR: &str = "x-iroha-error-code";
@@ -46613,14 +46469,12 @@ fn validate_onboarding_alias_resolve_grants(state: &CoreState, signer: &AccountO
     let world = state.world_view();
     let catalog = state.nexus_snapshot().dataspace_catalog;
     for dataspace in &signer.alias_resolve_dataspaces {
-        if !iroha_core::alias::authority_can_manage_account_alias_scope(
-            &world,
-            &signer.authority,
-            *dataspace,
-            None,
-        ) {
+        let permission = Permission::from(CanDelegateAccountAliasResolution {
+            scope: AccountAliasPermissionScope::Dataspace(*dataspace),
+        });
+        if !torii_account_has_permission(&world, &signer.authority, &permission) {
             panic!(
-                "torii.onboarding authority `{}` lacks CanManageAccountAlias for configured dataspace {}",
+                "torii.onboarding authority `{}` lacks exact CanDelegateAccountAliasResolution for configured dataspace {}",
                 signer.authority,
                 dataspace.as_u64()
             );
@@ -46639,6 +46493,15 @@ fn validate_onboarding_alias_resolve_grants(state: &CoreState, signer: &AccountO
             panic!(
                 "torii.onboarding alias resolve domain `{domain}` requires dataspace {} in alias_resolve_dataspaces",
                 dataspace.as_u64()
+            );
+        }
+        let delegate_permission = Permission::from(CanDelegateAccountAliasResolution {
+            scope: AccountAliasPermissionScope::Domain(domain.clone()),
+        });
+        if !torii_account_has_permission(&world, &signer.authority, &delegate_permission) {
+            panic!(
+                "torii.onboarding authority `{}` lacks exact CanDelegateAccountAliasResolution for configured domain `{domain}`",
+                signer.authority
             );
         }
         let owns_domain = world
@@ -47306,7 +47169,7 @@ impl Torii {
         let _ = self;
         builder.route(
             &route_catalog::aliases::RESOLVE,
-            catalog_post(handler_public_alias_resolve)
+            catalog_post(handler_alias_resolve)
                 .layer(DefaultBodyLimit::max(EXACT_ALIAS_READ_MAX_BODY_BYTES))
                 .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
         );
@@ -47657,24 +47520,14 @@ impl Torii {
             catalog_get(handler_get_contract_code_bytes).layer(contracts_body_limit.clone()),
         );
         builder.route(
-            &route_catalog::contracts_and_verification_keys::CONTRACTS_DEPLOY_POST,
-            catalog_post(handler_post_contract_deploy).layer(contracts_body_limit.clone()),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::CONTRACTS_DEPLOY_BUNDLE_POST,
-            catalog_post(handler_post_contract_deploy_bundle).layer(contracts_body_limit.clone()),
-        );
-        builder.route(
             &route_catalog::contracts_and_verification_keys::CONTRACTS_ALIASES_POST,
             catalog_post(handler_post_contract_alias_set).layer(contracts_body_limit.clone()),
         );
         builder.route(
-        &route_catalog::contracts_and_verification_keys::CONTRACTS_DEPLOY_BUNDLES_BY_BUNDLE_DIGEST_GET,
-        catalog_get(handler_get_contract_deploy_bundle_status).layer(contracts_body_limit.clone()),
-    );
-        builder.route(
             &route_catalog::contracts_and_verification_keys::CONTRACTS_ALIASES_RESOLVE_POST,
-            catalog_post(handler_contract_alias_resolve).layer(contracts_body_limit.clone()),
+            catalog_post(handler_contract_alias_resolve)
+                .layer(DefaultBodyLimit::max(EXACT_ALIAS_READ_MAX_BODY_BYTES))
+                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
         );
         builder.route(
             &route_catalog::contracts_and_verification_keys::ASSETS_TRANSFER_POST,
@@ -47760,33 +47613,8 @@ impl Torii {
                 .layer(DefaultBodyLimit::max(MULTISIG_READ_MAX_BODY_BYTES)),
         );
         builder.route(
-            &route_catalog::contracts_and_verification_keys::MULTISIG_PROPOSALS_LOOKUP_POST,
-            catalog_post(handler_post_multisig_proposals_lookup)
-                .layer(DefaultBodyLimit::max(MULTISIG_READ_MAX_BODY_BYTES)),
-        );
-        builder.route(
             &route_catalog::contracts_and_verification_keys::MULTISIG_PROPOSALS_RESOLVE_POST,
             catalog_post(handler_post_multisig_proposals_resolve)
-                .layer(DefaultBodyLimit::max(MULTISIG_READ_MAX_BODY_BYTES)),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::MULTISIG_APPROVALS_QUERY_POST,
-            catalog_post(handler_post_multisig_approvals_query)
-                .layer(DefaultBodyLimit::max(MULTISIG_READ_MAX_BODY_BYTES)),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::MULTISIG_APPROVALS_LOOKUP_POST,
-            catalog_post(handler_post_multisig_approvals_lookup)
-                .layer(DefaultBodyLimit::max(MULTISIG_READ_MAX_BODY_BYTES)),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::MULTISIG_APPROVALS_QUERY_FOR_AUTHORITY_POST,
-            catalog_post(handler_post_multisig_approvals_query_for_authority)
-                .layer(DefaultBodyLimit::max(MULTISIG_READ_MAX_BODY_BYTES)),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::MULTISIG_APPROVALS_LOOKUP_FOR_AUTHORITY_POST,
-            catalog_post(handler_post_multisig_approvals_lookup_for_authority)
                 .layer(DefaultBodyLimit::max(MULTISIG_READ_MAX_BODY_BYTES)),
         );
         builder.route(
@@ -49758,7 +49586,11 @@ impl Torii {
                     .authenticated_in_handler(HandlerAuthentication::ProtocolHandshake),
             );
             mount_get!(GOV_UNLOCK_STATS, handler_gov_unlock_stats);
-            mount_get!(GOV_CONTRACT_GET, handler_gov_contract_get);
+            builder.route(
+                &routes::GOV_CONTRACT_GET,
+                catalog_get(handler_gov_contract_get)
+                    .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
+            );
             mount_post!(GOV_ENACT, handler_gov_enact);
             mount_get!(GOV_COUNCIL_CURRENT, handler_gov_council_current);
             mount_get!(GOV_CITIZENS_COUNT, handler_gov_citizen_count);
@@ -53577,7 +53409,8 @@ pub(crate) mod tests_runtime_handlers {
         trigger::{DataTriggerSequence, DataTriggerStep, TimeTriggerEntrypoint, TriggerId},
     };
     use iroha_executor_data_model::permission::account::{
-        AccountAliasPermissionScope, CanResolveAccountAlias,
+        AccountAliasPermissionScope, CanDelegateAccountAliasResolution, CanManageAccountAlias,
+        CanResolveAccountAlias,
     };
     use iroha_primitives::{const_vec::ConstVec, json::Json, numeric::Quantity};
     use iroha_test_samples::ALICE_ID;
@@ -53587,10 +53420,7 @@ pub(crate) mod tests_runtime_handlers {
     use super::*;
     #[cfg(feature = "telemetry")]
     use crate::{RecordSoranetPrivacyEventDto, RecordSoranetPrivacyShareDto};
-    use crate::{
-        routing::{DeployContractDto, handle_v1_sumeragi_commit_qcs},
-        utils::extractors::NoritoJson,
-    };
+    use crate::{routing::handle_v1_sumeragi_commit_qcs, utils::extractors::NoritoJson};
 
     fn query_conversion_message(err: &Error) -> Option<&str> {
         match err {
@@ -54751,6 +54581,11 @@ pub(crate) mod tests_runtime_handlers {
         );
         let mut block = app.state.block(header);
         let mut tx = block.transaction();
+        tx.world_mut_for_testing()
+            .bind_active_contract_subject_for_testing(
+                contract_address.clone(),
+                iroha_crypto::Hash::new(b"Torii contract alias identity fixture"),
+            );
         tx.world_mut_for_testing()
             .bind_contract_alias(contract_address, contract_alias, None, None, 0)
             .expect("bind contract alias");
@@ -57706,11 +57541,6 @@ pub(crate) mod tests_runtime_handlers {
         assert!(
             super::route_timeout_for_path("/v1/accounts/example/permissions") >= fanout_budget,
             "outer HTTP timeout must not expire before the read-fanout proxy budget"
-        );
-        assert_eq!(
-            super::route_timeout_for_path("/v1/contracts/deploy"),
-            CONTRACT_DEPLOY_ROUTE_TIMEOUT,
-            "deploy-specific timeout should keep its dedicated budget"
         );
         assert_eq!(
             super::route_timeout_for_path("/v1/sorafs/storage/pin"),
@@ -71898,53 +71728,6 @@ pub(crate) mod tests_runtime_handlers {
     }
 
     #[tokio::test]
-    async fn contract_deploy_rate_limit_throttles_after_burst() {
-        let app = mk_app_state_for_tests_with_options(None, Some((1, 1)), None, None);
-        let headers = HeaderMap::new();
-        let remote_ip = std::net::IpAddr::from([127, 0, 0, 1]);
-        let creds = crate::test_utils::random_authority();
-        let program = crate::test_utils::minimal_ivm_program(1);
-        let code_b64 = base64::engine::general_purpose::STANDARD.encode(&program);
-
-        let dto1 = DeployContractDto {
-            authority: creds.account.clone(),
-            private_key: clone_private_key(&creds.private_key),
-            code_b64: code_b64.clone(),
-            contract_alias: "rate-limit::universal".parse().expect("contract alias"),
-            lease_expiry_ms: None,
-            transaction_ttl_ms: None,
-            gas_asset_id: None,
-            fee_sponsor: None,
-            gas_limit: None,
-            gov_manifest_approvers: Vec::new(),
-        };
-        // Exhaust the exact handler key up front so this regression does not depend
-        // on how quickly the first deploy request completes on the current host.
-        let key = super::rate_limit_key(
-            &headers,
-            Some(remote_ip),
-            "v1/contracts/deploy",
-            app.api_token_enforced(),
-        );
-        assert!(app.deploy_rate_limiter.allow(&key).await);
-        assert!(!app.deploy_rate_limiter.allow(&key).await);
-
-        let second = super::handler_post_contract_deploy(
-            State(app.clone()),
-            headers,
-            crate::loopback_connect_info(),
-            NoritoJson(dto1),
-        )
-        .await;
-        assert!(matches!(
-            second,
-            Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit
-            )))
-        ));
-    }
-
-    #[tokio::test]
     async fn openapi_enforces_token_policy() {
         let mut app = mk_app_state_for_tests();
         {
@@ -73017,129 +72800,9 @@ pub(crate) mod tests_runtime_handlers {
         assert_eq!(resp.status(), axum::http::StatusCode::NOT_FOUND);
     }
 
-    #[tokio::test]
-    async fn contracts_deploy_handler_ok() {
-        // Helper to compose a minimal self-describing contract artifact with ABI v1.
-        fn minimal_ivm_program(abi_version: u8) -> Vec<u8> {
-            let meta = ivm::ProgramMetadata {
-                version_major: 1,
-                version_minor: 1,
-                mode: 0,
-                vector_length: 0,
-                max_cycles: 0,
-                abi_version,
-            };
-            let interface = ivm::EmbeddedContractInterfaceV1 {
-                seiyaku_name: "TestContract".to_owned(),
-                compiler_fingerprint: "torii-lib-tests".to_owned(),
-                abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
-                features_bitmap: 0,
-                access_set_hints: None,
-                kotoba: Vec::new(),
-                entrypoints: vec![ivm::EmbeddedEntrypointDescriptor {
-                    name: "main".to_owned(),
-                    kind: iroha_data_model::smart_contract::manifest::EntryPointKind::View,
-                    params: Vec::new(),
-                    argument_schema: None,
-                    return_type: None,
-                    return_schema: None,
-                    permission: None,
-                    read_keys: Vec::new(),
-                    write_keys: Vec::new(),
-                    access_hints_complete: Some(true),
-                    access_hints_skipped: Vec::new(),
-                    triggers: Vec::new(),
-                    entry_pc: 0,
-                }],
-                error_codes: Vec::new(),
-                states: Vec::new(),
-            };
-            let mut out = meta.encode();
-            out.extend_from_slice(&interface.encode_section());
-            out.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
-            out
-        }
-
-        let app = mk_app_state_for_tests();
-        let headers = HeaderMap::new();
-
-        let prog = minimal_ivm_program(1);
-        let code_b64 = base64::engine::general_purpose::STANDARD.encode(&prog);
-        let creds = crate::test_utils::random_authority();
-        let dto = DeployContractDto {
-            authority: creds.account,
-            private_key: clone_private_key(&creds.private_key),
-            code_b64,
-            contract_alias: "deploy-test::universal".parse().expect("contract alias"),
-            lease_expiry_ms: None,
-            transaction_ttl_ms: None,
-            gas_asset_id: None,
-            fee_sponsor: None,
-            gas_limit: None,
-            gov_manifest_approvers: Vec::new(),
-        };
-        let resp = super::handler_post_contract_deploy(
-            State(app),
-            headers,
-            crate::loopback_connect_info(),
-            NoritoJson(dto),
-        )
-        .await
-        .expect("ok")
-        .into_response();
-        assert_eq!(resp.status(), axum::http::StatusCode::OK);
-        let body = http_body_util::BodyExt::collect(resp.into_body())
-            .await
-            .unwrap()
-            .to_bytes();
-        let v: norito::json::Value = norito::json::from_slice(&body).unwrap();
-        assert_eq!(
-            v.get("ok").and_then(norito::json::Value::as_bool),
-            Some(true)
-        );
-        let contract = v
-            .get("contracts")
-            .and_then(norito::json::Value::as_array)
-            .and_then(|contracts| contracts.first())
-            .expect("single-contract receipt");
-        assert_eq!(
-            contract
-                .get("dataspace")
-                .and_then(norito::json::Value::as_str),
-            Some("universal")
-        );
-        assert_eq!(
-            contract
-                .get("deploy_nonce")
-                .and_then(norito::json::Value::as_u64),
-            Some(0)
-        );
-        assert!(
-            contract
-                .get("contract_address")
-                .and_then(norito::json::Value::as_str)
-                .is_some_and(|value| !value.is_empty()),
-            "expected canonical contract address in deploy response"
-        );
-        assert_eq!(
-            contract
-                .get("code_hash_hex")
-                .and_then(norito::json::Value::as_str)
-                .map(str::len),
-            Some(64)
-        );
-        assert_eq!(
-            contract
-                .get("abi_hash_hex")
-                .and_then(norito::json::Value::as_str)
-                .map(str::len),
-            Some(64)
-        );
-    }
-
     #[cfg(feature = "app_api")]
     #[tokio::test]
-    async fn contracts_deploy_route_is_mounted_in_api_router() {
+    async fn retired_server_contract_deploy_routes_are_absent() {
         use axum::{
             body::Body,
             extract::ConnectInfo,
@@ -73181,23 +72844,32 @@ pub(crate) mod tests_runtime_handlers {
             routing::MaybeTelemetry::disabled(),
         );
 
-        let mut request = Request::builder()
-            .method(Method::POST)
-            .uri("/v1/contracts/deploy")
-            .header(axum::http::header::CONTENT_TYPE, "application/json")
-            .body(Body::from("{"))
-            .expect("request");
-        request
-            .extensions_mut()
-            .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))));
+        for (method, path) in [
+            (Method::POST, "/v1/contracts/deploy"),
+            (Method::POST, "/v1/contracts/deploy-bundle"),
+            (
+                Method::GET,
+                "/v1/contracts/deploy-bundles/retired-bundle-digest",
+            ),
+        ] {
+            let mut request = Request::builder()
+                .method(method)
+                .uri(path)
+                .header(axum::http::header::CONTENT_TYPE, "application/json")
+                .body(Body::empty())
+                .expect("request");
+            request
+                .extensions_mut()
+                .insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 0))));
 
-        let response = torii
-            .api_router_for_tests()
-            .oneshot(request)
-            .await
-            .expect("response");
+            let response = torii
+                .api_router_for_tests()
+                .oneshot(request)
+                .await
+                .expect("response");
 
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+            assert_eq!(response.status(), StatusCode::NOT_FOUND, "path {path}");
+        }
     }
 
     #[cfg(feature = "app_api")]
@@ -74331,7 +74003,9 @@ mod tests {
         },
     };
     use iroha_executor_data_model::{
-        permission::account::{AccountAliasPermissionScope, CanResolveAccountAlias},
+        permission::account::{
+            AccountAliasPermissionScope, CanManageAccountAlias, CanResolveAccountAlias,
+        },
         permission::sorafs::CanOperateSorafsRepair,
     };
     use iroha_test_samples::ALICE_ID;
@@ -75613,6 +75287,173 @@ mod tests {
         app_state.queue.reconfigure_nexus(&nexus, &state_view, None);
     }
 
+    fn onboarding_alias_test_app(
+        authority: &AccountId,
+        domain_owner: &AccountId,
+    ) -> SharedAppState {
+        let mut accounts = vec![Account::new(authority.clone()).build(authority)];
+        if domain_owner != authority {
+            accounts.push(Account::new(domain_owner.clone()).build(domain_owner));
+        }
+        let domains = [
+            Domain::new(DomainId::try_new("hbl", "sbp").expect("HBL domain")).build(domain_owner),
+            Domain::new(DomainId::try_new("ubl", "sbp").expect("UBL domain")).build(domain_owner),
+        ];
+        let mut app = mk_app_state_for_tests_with_world(World::with(domains, accounts, []));
+        configure_recipient_lookup_sbp_dataspace_for_test(
+            &mut app,
+            iroha_data_model::nexus::LaneVisibility::Restricted,
+        );
+        app
+    }
+
+    fn grant_account_permissions_for_test(
+        app: &SharedAppState,
+        authority: &AccountId,
+        permissions: impl IntoIterator<Item = Permission>,
+    ) {
+        let height = next_block_height(app);
+        let header = BlockHeader::new(
+            NonZeroU64::new(height).expect("height>0"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        );
+        let mut block = app.state.block(header);
+        let mut stx = block.transaction();
+        for permission in permissions {
+            stx.world_mut_for_testing()
+                .add_account_permission(authority, permission);
+        }
+        stx.apply();
+        block.transactions.insert_block(
+            HashSet::new(),
+            NonZeroUsize::new(height as usize).expect("block count should be non-zero"),
+        );
+        block
+            .commit()
+            .expect("commit should persist onboarding permissions");
+    }
+
+    fn onboarding_alias_signer_for_test(
+        key_pair: &KeyPair,
+        domains: BTreeSet<DomainId>,
+    ) -> AccountOnboardingSigner {
+        AccountOnboardingSigner {
+            authority: AccountId::new(key_pair.public_key().clone()),
+            private_key: ExposedPrivateKey(key_pair.private_key().clone()),
+            api_token_hash: None,
+            allowed_permissions: BTreeSet::new(),
+            alias_resolve_dataspaces: BTreeSet::from([recipient_lookup_sbp_dataspace_for_test()]),
+            alias_resolve_domains: domains,
+            fee_sponsor_account: None,
+            alias_lease_term_years: 1,
+            alias_auto_renew_enabled: false,
+            alias_auto_renew_retry_backoff_ms: 86_400_000,
+            alias_auto_renew_max_failures: 5,
+            alias_auto_renew_subscription_domain: None,
+        }
+    }
+
+    #[test]
+    fn onboarding_alias_grants_reject_broad_manage_without_exact_delegation() {
+        let key_pair = checked_torii_test_ed25519_keypair(
+            0x90,
+            "derive onboarding alias broad-manage fixture key",
+        );
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let app = onboarding_alias_test_app(&authority, &authority);
+        grant_account_permissions_for_test(
+            &app,
+            &authority,
+            [Permission::from(CanManageAccountAlias {
+                scope: AccountAliasPermissionScope::Dataspace(
+                    recipient_lookup_sbp_dataspace_for_test(),
+                ),
+            })],
+        );
+        let signer = onboarding_alias_signer_for_test(
+            &key_pair,
+            BTreeSet::from([DomainId::try_new("hbl", "sbp").expect("HBL domain")]),
+        );
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            validate_onboarding_alias_resolve_grants(app.state.as_ref(), &signer);
+        }));
+        assert!(
+            result.is_err(),
+            "CanManageAccountAlias must not substitute for exact delegation authority",
+        );
+    }
+
+    #[test]
+    fn onboarding_alias_grants_accept_exact_delegation_for_each_configured_scope() {
+        let key_pair = checked_torii_test_ed25519_keypair(
+            0x91,
+            "derive onboarding alias exact-delegation fixture key",
+        );
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let app = onboarding_alias_test_app(&authority, &authority);
+        let sbp = recipient_lookup_sbp_dataspace_for_test();
+        let hbl = DomainId::try_new("hbl", "sbp").expect("HBL domain");
+        let ubl = DomainId::try_new("ubl", "sbp").expect("UBL domain");
+        grant_account_permissions_for_test(
+            &app,
+            &authority,
+            [
+                Permission::from(CanDelegateAccountAliasResolution {
+                    scope: AccountAliasPermissionScope::Dataspace(sbp),
+                }),
+                Permission::from(CanDelegateAccountAliasResolution {
+                    scope: AccountAliasPermissionScope::Domain(hbl.clone()),
+                }),
+                Permission::from(CanDelegateAccountAliasResolution {
+                    scope: AccountAliasPermissionScope::Domain(ubl.clone()),
+                }),
+            ],
+        );
+        let signer = onboarding_alias_signer_for_test(&key_pair, BTreeSet::from([hbl, ubl]));
+
+        validate_onboarding_alias_resolve_grants(app.state.as_ref(), &signer);
+    }
+
+    #[test]
+    fn onboarding_alias_grants_retain_exact_domain_mutation_authority() {
+        let key_pair = checked_torii_test_ed25519_keypair(
+            0x92,
+            "derive onboarding alias non-owner fixture key",
+        );
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let domain_owner =
+            checked_torii_test_account_id(0x93, "derive onboarding alias domain-owner fixture key");
+        let app = onboarding_alias_test_app(&authority, &domain_owner);
+        let sbp = recipient_lookup_sbp_dataspace_for_test();
+        let hbl = DomainId::try_new("hbl", "sbp").expect("HBL domain");
+        grant_account_permissions_for_test(
+            &app,
+            &authority,
+            [
+                Permission::from(CanDelegateAccountAliasResolution {
+                    scope: AccountAliasPermissionScope::Dataspace(sbp),
+                }),
+                Permission::from(CanDelegateAccountAliasResolution {
+                    scope: AccountAliasPermissionScope::Domain(hbl.clone()),
+                }),
+            ],
+        );
+        let signer = onboarding_alias_signer_for_test(&key_pair, BTreeSet::from([hbl]));
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            validate_onboarding_alias_resolve_grants(app.state.as_ref(), &signer);
+        }));
+        assert!(
+            result.is_err(),
+            "delegation authority must not grant alias mutation authority",
+        );
+    }
+
     fn install_recipient_lookup_policy_for_test(app: &SharedAppState) {
         let policy_id = app.recipient_lookup.policy_id.clone();
         let account = app
@@ -75831,7 +75672,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn retail_recipient_route_returns_exact_three_key_payload() {
+    async fn retail_recipient_route_is_corridor_scoped_without_granting_general_alias_access() {
         let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
         let caller_keypair = checked_torii_test_ed25519_keypair(
             0x97,
@@ -75848,6 +75689,19 @@ mod tests {
         );
         install_recipient_lookup_policy_for_test(&app);
         bind_account_alias_for_test(&app, &target, "payee@hbl.sbp");
+        let corridor_alias = AccountAlias::from_literal(
+            "payee@hbl.sbp",
+            &app.state.nexus_snapshot().dataspace_catalog,
+        )
+        .expect("corridor alias");
+        assert!(
+            !torii_authority_can_resolve_account_alias(
+                app.state.view().world(),
+                &caller,
+                &corridor_alias,
+            ),
+            "the FX caller fixture must not hold general alias-resolution permission",
+        );
 
         let body = norito::json::to_vec(&routing::RetailRecipientRouteRequestDto {
             account_id: target.to_string(),
@@ -75859,7 +75713,7 @@ mod tests {
             .expect("recipient route uri");
         let headers = signed_app_headers(&caller, &caller_keypair, &method, &uri, &body);
         let response = handler_retail_recipient_route(
-            State(app),
+            State(app.clone()),
             method,
             uri,
             headers,
@@ -75886,6 +75740,34 @@ mod tests {
             Some("payee@hbl.sbp")
         );
         assert_eq!(object.get("fi_id").and_then(Value::as_str), Some("hbl.sbp"));
+
+        let generic_body = norito::json::to_vec(&routing::AliasResolveRequestDto {
+            alias: "payee@hbl.sbp".to_owned(),
+        })
+        .expect("encode generic alias request");
+        let generic_method = axum::http::Method::POST;
+        let generic_uri: axum::http::Uri = "/v1/aliases/resolve"
+            .parse()
+            .expect("generic alias resolve uri");
+        let generic_headers = signed_app_headers(
+            &caller,
+            &caller_keypair,
+            &generic_method,
+            &generic_uri,
+            &generic_body,
+        );
+        let generic_response = handler_alias_resolve(
+            State(app),
+            generic_method,
+            generic_uri,
+            generic_headers,
+            crate::loopback_connect_info(),
+            axum::body::Bytes::from(generic_body),
+        )
+        .await
+        .expect("generic alias denial must be a typed response")
+        .into_response();
+        assert_eq!(generic_response.status(), StatusCode::FORBIDDEN);
     }
 
     #[tokio::test]
@@ -75967,6 +75849,7 @@ mod tests {
                 instruction_wire_ids: BTreeSet::from([
                     "iroha.settlement.fx_corridor.settle".to_owned()
                 ]),
+                asset_transfer_definition_ids: BTreeSet::new(),
                 contract_selectors: Vec::new(),
             }],
         };
@@ -76285,8 +76168,47 @@ mod tests {
                     Some("Signature")
                 );
             }};
+            ($handler:ident, $path:literal, with_connect_info) => {{
+                let error = $handler(
+                    State(app.clone()),
+                    method.clone(),
+                    $path.parse().expect("protected alias route uri"),
+                    HeaderMap::new(),
+                    axum::extract::ConnectInfo("127.0.0.1:19452".parse().expect("socket address")),
+                    axum::body::Bytes::from_static(b"{"),
+                )
+                .await
+                .expect_err("unsigned malformed alias request must fail authentication first");
+                assert!(matches!(
+                    &error,
+                    Error::AppUnauthorized {
+                        code: "alias_auth_required",
+                        ..
+                    }
+                ));
+                let response = error.into_response();
+                assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+                assert_eq!(
+                    response
+                        .headers()
+                        .get("x-iroha-reject-code")
+                        .and_then(|value| value.to_str().ok()),
+                    Some("alias_auth_required")
+                );
+                assert_eq!(
+                    response
+                        .headers()
+                        .get(axum::http::header::WWW_AUTHENTICATE)
+                        .and_then(|value| value.to_str().ok()),
+                    Some("Signature")
+                );
+            }};
         }
-        assert_alias_auth_first!(handler_alias_resolve, "/v1/aliases/resolve");
+        assert_alias_auth_first!(
+            handler_alias_resolve,
+            "/v1/aliases/resolve",
+            with_connect_info
+        );
         assert_alias_auth_first!(handler_alias_resolve_index, "/v1/aliases/resolve-index");
         assert_alias_auth_first!(handler_alias_lookup_by_account, "/v1/aliases/by-account");
 
@@ -76574,24 +76496,10 @@ mod tests {
             0x84,
             "derive alias resolve unsigned authority fixture key",
         );
-        let alias_label = AccountAlias::new(
-            "banking".parse().expect("label"),
-            Some(iroha_data_model::account::rekey::AccountAliasDomain::new(
-                "centralbank".parse::<Name>().expect("domain id"),
-            )),
-            DataSpaceId::UNIVERSAL,
-        );
-        let authority_account = Account::new(authority.clone()).build(&authority);
-        let domain = Domain::new(DomainId::try_new("centralbank", "universal").expect("domain id"))
-            .build(&authority);
-        let account = Account::new(authority.clone())
-            .with_label(Some(alias_label))
-            .build(&authority);
-        let app = mk_app_state_for_tests_with_world(World::with(
-            [domain],
-            [authority_account, account],
-            [],
-        ));
+        // Authentication must fail before the request body is parsed or any
+        // alias state is consulted, so the fixture deliberately contains only
+        // the prospective caller account.
+        let app = mk_app_state_for_tests_with_world(world_with_account(&authority));
         let request = routing::AliasResolveRequestDto {
             alias: "banking@centralbank.universal".to_string(),
         };
@@ -76601,14 +76509,74 @@ mod tests {
             axum::http::Method::POST,
             "/v1/aliases/resolve".parse().expect("alias resolve uri"),
             HeaderMap::new(),
+            crate::loopback_connect_info(),
             axum::body::Bytes::from(body),
         )
         .await
-        .expect_err("unsigned exact alias resolution must fail closed")
-        .into_response();
+        .expect_err("unsigned exact alias resolution must fail closed");
 
-        assert_eq!(error.status(), StatusCode::UNAUTHORIZED);
-        assert_eq!(typed_error_code(error).await, "alias_auth_required");
+        assert!(matches!(
+            &error,
+            Error::AppUnauthorized {
+                code: "alias_auth_required",
+                ..
+            }
+        ));
+        let response = error.into_response();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-reject-code")
+                .and_then(|value| value.to_str().ok()),
+            Some("alias_auth_required")
+        );
+    }
+
+    #[tokio::test]
+    async fn contract_identity_reads_reject_unsigned_requests_before_parsing() {
+        let app = mk_app_state_for_tests();
+        let method = axum::http::Method::POST;
+        let alias_uri: axum::http::Uri = "/v1/contracts/aliases/resolve"
+            .parse()
+            .expect("contract alias resolve URI");
+        let alias_error = handler_contract_alias_resolve(
+            State(app.clone()),
+            method,
+            alias_uri,
+            HeaderMap::new(),
+            crate::loopback_connect_info(),
+            axum::body::Bytes::from_static(b"{"),
+        )
+        .await
+        .expect_err("unsigned malformed contract alias request must fail authentication first");
+        assert!(matches!(
+            alias_error,
+            Error::AppUnauthorized {
+                code: "alias_auth_required",
+                ..
+            }
+        ));
+
+        let gov_error = handler_gov_contract_get(
+            State(app),
+            axum::http::Method::GET,
+            "/v1/gov/contracts/not-a-contract-address"
+                .parse()
+                .expect("governed contract URI"),
+            HeaderMap::new(),
+            crate::loopback_connect_info(),
+            AxPath("not-a-contract-address".to_owned()),
+        )
+        .await
+        .expect_err("unsigned malformed governed-contract read must fail authentication first");
+        assert!(matches!(
+            gov_error,
+            Error::AppUnauthorized {
+                code: "alias_auth_required",
+                ..
+            }
+        ));
     }
 
     #[tokio::test]
@@ -76640,6 +76608,7 @@ mod tests {
             method.clone(),
             resolve_uri,
             resolve_headers,
+            crate::loopback_connect_info(),
             axum::body::Bytes::from(resolve_body),
         )
         .await
@@ -76706,7 +76675,7 @@ mod tests {
             &resolve_body,
         );
 
-        let first = handler_public_alias_resolve(
+        let first = handler_alias_resolve(
             State(app.clone()),
             axum::http::Method::POST,
             resolve_uri.clone(),
@@ -76725,7 +76694,7 @@ mod tests {
             &resolve_uri,
             &resolve_body,
         );
-        let throttled = handler_public_alias_resolve(
+        let throttled = handler_alias_resolve(
             State(app.clone()),
             axum::http::Method::POST,
             resolve_uri,
@@ -77168,6 +77137,7 @@ mod tests {
             axum::http::Method::POST,
             "/v1/aliases/resolve".parse().expect("alias resolve uri"),
             headers,
+            crate::loopback_connect_info(),
             axum::body::Bytes::from(body),
         )
         .await
@@ -77281,6 +77251,7 @@ mod tests {
             method,
             uri,
             headers,
+            crate::loopback_connect_info(),
             axum::body::Bytes::from(body),
         )
         .await
@@ -77340,6 +77311,7 @@ mod tests {
             axum::http::Method::POST,
             "/v1/aliases/resolve".parse().expect("alias resolve uri"),
             headers,
+            crate::loopback_connect_info(),
             axum::body::Bytes::from(body),
         )
         .await
@@ -77401,6 +77373,7 @@ mod tests {
             axum::http::Method::POST,
             "/v1/aliases/resolve".parse().expect("alias resolve uri"),
             headers,
+            crate::loopback_connect_info(),
             axum::body::Bytes::from(body),
         )
         .await
@@ -77484,6 +77457,7 @@ mod tests {
             axum::http::Method::POST,
             "/v1/aliases/resolve".parse().expect("alias resolve uri"),
             headers,
+            crate::loopback_connect_info(),
             axum::body::Bytes::from(body),
         )
         .await
@@ -77539,6 +77513,7 @@ mod tests {
             method,
             uri,
             headers,
+            crate::loopback_connect_info(),
             axum::body::Bytes::from(body),
         )
         .await
@@ -77576,6 +77551,7 @@ mod tests {
             method,
             uri,
             headers,
+            crate::loopback_connect_info(),
             axum::body::Bytes::from(body),
         )
         .await
@@ -77608,6 +77584,7 @@ mod tests {
             method,
             uri,
             headers,
+            crate::loopback_connect_info(),
             axum::body::Bytes::from(body),
         )
         .await
@@ -77642,6 +77619,7 @@ mod tests {
             method,
             uri,
             headers,
+            crate::loopback_connect_info(),
             axum::body::Bytes::from(body),
         )
         .await
@@ -77676,6 +77654,7 @@ mod tests {
             method,
             uri,
             headers,
+            crate::loopback_connect_info(),
             axum::body::Bytes::from_static(body),
         )
         .await
@@ -78581,6 +78560,7 @@ mod tests {
             axum::http::Method::POST,
             "/v1/aliases/resolve".parse().expect("alias resolve uri"),
             headers,
+            crate::loopback_connect_info(),
             axum::body::Bytes::from(body),
         )
         .await
@@ -78640,6 +78620,7 @@ mod tests {
             axum::http::Method::POST,
             "/v1/aliases/resolve".parse().expect("alias resolve uri"),
             headers,
+            crate::loopback_connect_info(),
             axum::body::Bytes::from(body),
         )
         .await
@@ -78652,19 +78633,30 @@ mod tests {
     #[cfg(feature = "app_api")]
     #[tokio::test]
     async fn contract_alias_resolve_returns_not_found_for_unknown_alias() {
-        let authority = checked_torii_test_account_id(
+        let authority_keypair = checked_torii_test_ed25519_keypair(
             0xad,
             "derive contract alias missing authority fixture key",
         );
+        let authority = AccountId::new(authority_keypair.public_key().clone());
         let authority_account = Account::new(authority.clone()).build(&authority);
         let app = mk_app_state_for_tests_with_world(World::with([], [authority_account], []));
         let request = routing::ContractAliasResolveRequestDto {
             contract_alias: "router::universal".to_string(),
         };
+        let body = norito::json::to_vec(&request).expect("encode contract alias request");
+        let method = axum::http::Method::POST;
+        let uri: axum::http::Uri = "/v1/contracts/aliases/resolve"
+            .parse()
+            .expect("contract alias resolve URI");
+        let headers = signed_app_headers(&authority, &authority_keypair, &method, &uri, &body);
 
         let response = handler_contract_alias_resolve(
             State(app),
-            crate::utils::extractors::NoritoJson(request),
+            method,
+            uri,
+            headers,
+            crate::loopback_connect_info(),
+            axum::body::Bytes::from(body),
         )
         .await
         .expect("handler should succeed")
@@ -78676,10 +78668,11 @@ mod tests {
     #[cfg(feature = "app_api")]
     #[tokio::test]
     async fn contract_alias_resolve_returns_bound_contract() {
-        let authority = checked_torii_test_account_id(
+        let authority_keypair = checked_torii_test_ed25519_keypair(
             0xae,
             "derive contract alias bound authority fixture key",
         );
+        let authority = AccountId::new(authority_keypair.public_key().clone());
         let authority_account = Account::new(authority.clone()).build(&authority);
         let app = mk_app_state_for_tests_with_world(World::with([], [authority_account], []));
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
@@ -78693,10 +78686,20 @@ mod tests {
         let request = routing::ContractAliasResolveRequestDto {
             contract_alias: "router::dex.universal".to_string(),
         };
+        let body = norito::json::to_vec(&request).expect("encode contract alias request");
+        let method = axum::http::Method::POST;
+        let uri: axum::http::Uri = "/v1/contracts/aliases/resolve"
+            .parse()
+            .expect("contract alias resolve URI");
+        let headers = signed_app_headers(&authority, &authority_keypair, &method, &uri, &body);
 
         let response = handler_contract_alias_resolve(
             State(app),
-            crate::utils::extractors::NoritoJson(request),
+            method,
+            uri,
+            headers,
+            crate::loopback_connect_info(),
+            axum::body::Bytes::from(body),
         )
         .await
         .expect("handler should succeed")
@@ -78707,18 +78710,37 @@ mod tests {
             .await
             .expect("body")
             .to_bytes();
+        let value: Value = norito::json::from_slice(&body).expect("contract alias JSON value");
+        let object = value.as_object().expect("contract alias response object");
+        assert_eq!(
+            object.keys().map(String::as_str).collect::<BTreeSet<_>>(),
+            BTreeSet::from([
+                "contract_alias",
+                "contract_address",
+                "contract_subject_account",
+                "dataspace",
+                "contract_alias_binding",
+                "source",
+            ])
+        );
+        let binding = object["contract_alias_binding"]
+            .as_object()
+            .expect("contract alias binding object");
+        assert_eq!(
+            binding.keys().map(String::as_str).collect::<BTreeSet<_>>(),
+            BTreeSet::from(["alias", "bound_at_ms", "status"])
+        );
         let dto: routing::ContractAliasResolveResponseDto =
             norito::json::from_slice(&body).expect("json decode");
         assert_eq!(dto.contract_alias, "router::dex.universal");
         assert_eq!(dto.contract_address, contract_address.to_string());
-        assert_eq!(dto.dataspace, "universal");
         assert_eq!(
-            dto.contract_alias_binding
-                .as_ref()
-                .map(|binding| binding.status.as_str()),
-            Some("permanent")
+            dto.contract_subject_account,
+            contract_address.subject_id().to_string()
         );
-        assert_eq!(dto.source.as_deref(), Some("world_state"));
+        assert_eq!(dto.dataspace, "universal");
+        assert_eq!(dto.contract_alias_binding.status, "permanent");
+        assert_eq!(dto.source, "world_state");
     }
 
     #[cfg(feature = "app_api")]
@@ -82880,6 +82902,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn contract_code_artifact_read_rejects_unsigned_requests() {
+        let uri: axum::http::Uri = format!("/v1/contracts/code-bytes/{}", "a".repeat(64))
+            .parse()
+            .expect("contract code URI");
+        let error = handler_get_contract_code_bytes(
+            State(mk_app_state_for_tests()),
+            Method::GET,
+            uri,
+            HeaderMap::new(),
+            crate::loopback_connect_info(),
+            axum::extract::Path("a".repeat(64)),
+        )
+        .await
+        .expect_err("unsigned contract artifact read must fail closed");
+
+        assert!(matches!(
+            error,
+            Error::AppUnauthorized {
+                code: "contract_code_auth_required",
+                ..
+            }
+        ));
+    }
+
+    #[tokio::test]
     async fn multisig_spec_rejects_unsigned_alias_selector() {
         let request = routing::MultisigSpecRequestDto {
             selector: routing::MultisigAccountSelectorDto {
@@ -82931,33 +82978,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn multisig_proposals_lookup_rejects_unsigned_alias_selector() {
-        let request = routing::MultisigProposalLookupRequestDto {
-            selector: routing::MultisigAccountSelectorDto {
-                multisig_account_id: None,
-                multisig_account_alias: Some("banking@centralbank.universal".to_owned()),
-            },
-            proposal_id: Some("deadbeef".to_owned()),
-            instructions_hash: None,
-        };
-        let response = handler_post_multisig_proposals_lookup(
-            State(mk_app_state_for_tests()),
-            Method::POST,
-            "/v1/multisig/proposals/lookup"
-                .parse()
-                .expect("multisig lookup uri"),
-            HeaderMap::new(),
-            crate::loopback_connect_info(),
-            unsigned_multisig_request(request),
-        )
-        .await
-        .expect_err("unsigned alias selectors must fail closed")
-        .into_response();
-
-        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-    }
-
-    #[tokio::test]
     async fn multisig_proposals_resolve_rejects_unsigned_alias_selector() {
         let request = routing::MultisigProposalsResolveRequestDto {
             selector: routing::MultisigAccountSelectorDto {
@@ -82984,6 +83004,68 @@ mod tests {
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     }
 
+    #[tokio::test]
+    async fn multisig_reads_reject_unsigned_concrete_account_selectors() {
+        let selector = || routing::MultisigAccountSelectorDto {
+            multisig_account_id: Some((*ALICE_ID).clone()),
+            multisig_account_alias: None,
+        };
+
+        let spec = handler_post_multisig_spec(
+            State(mk_app_state_for_tests()),
+            Method::POST,
+            "/v1/multisig/spec".parse().expect("multisig spec uri"),
+            HeaderMap::new(),
+            crate::loopback_connect_info(),
+            unsigned_multisig_request(routing::MultisigSpecRequestDto {
+                selector: selector(),
+            }),
+        )
+        .await
+        .expect_err("unsigned concrete spec read must fail closed")
+        .into_response();
+        assert_eq!(spec.status(), StatusCode::UNAUTHORIZED);
+
+        let query = handler_post_multisig_proposals_query(
+            State(mk_app_state_for_tests()),
+            Method::POST,
+            "/v1/multisig/proposals/query"
+                .parse()
+                .expect("multisig query uri"),
+            HeaderMap::new(),
+            crate::loopback_connect_info(),
+            unsigned_multisig_request(routing::MultisigProposalsQueryRequestDto {
+                selector: selector(),
+                status: Vec::new(),
+                cursor: None,
+                limit: None,
+            }),
+        )
+        .await
+        .expect_err("unsigned concrete proposal query must fail closed")
+        .into_response();
+        assert_eq!(query.status(), StatusCode::UNAUTHORIZED);
+
+        let resolve = handler_post_multisig_proposals_resolve(
+            State(mk_app_state_for_tests()),
+            Method::POST,
+            "/v1/multisig/proposals/resolve"
+                .parse()
+                .expect("multisig resolve uri"),
+            HeaderMap::new(),
+            crate::loopback_connect_info(),
+            unsigned_multisig_request(routing::MultisigProposalsResolveRequestDto {
+                selector: selector(),
+                proposal_id: Some("a".repeat(64)),
+                instructions_hash: None,
+            }),
+        )
+        .await
+        .expect_err("unsigned concrete proposal resolve must fail closed")
+        .into_response();
+        assert_eq!(resolve.status(), StatusCode::UNAUTHORIZED);
+    }
+
     fn multisig_read_contract_test_router(app: SharedAppState) -> Router {
         Router::new()
             .route(
@@ -82995,12 +83077,6 @@ mod tests {
                 route_catalog::contracts_and_verification_keys::MULTISIG_PROPOSALS_QUERY_POST
                     .path(),
                 post(handler_post_multisig_proposals_query)
-                    .layer(DefaultBodyLimit::max(MULTISIG_READ_MAX_BODY_BYTES)),
-            )
-            .route(
-                route_catalog::contracts_and_verification_keys::MULTISIG_PROPOSALS_LOOKUP_POST
-                    .path(),
-                post(handler_post_multisig_proposals_lookup)
                     .layer(DefaultBodyLimit::max(MULTISIG_READ_MAX_BODY_BYTES)),
             )
             .route(
@@ -83032,7 +83108,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn multisig_read_http_contract_is_unsigned_post_only_closed_and_bounded() {
+    async fn multisig_read_http_contract_is_signed_post_only_closed_and_bounded() {
         let router = multisig_read_contract_test_router(mk_app_state_for_tests());
         let alias_body = r#"{"multisig_account_alias":"banking@centralbank.universal"}"#;
 
@@ -83160,7 +83236,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn multisig_read_handler_honors_explicit_api_token_policy_without_signed_viewer_auth() {
+    async fn multisig_read_handler_requires_api_token_and_signed_viewer_auth() {
         let mut app = mk_app_state_for_tests();
         let state = Arc::get_mut(&mut app).expect("unique app state");
         state.require_api_token = true;
@@ -83184,11 +83260,11 @@ mod tests {
         authenticated
             .headers_mut()
             .insert(HEADER_API_TOKEN, HeaderValue::from_static("valid-token"));
-        let reached_lookup = router
+        let still_unsigned = router
             .oneshot(authenticated)
             .await
             .expect("authenticated read response");
-        assert_eq!(reached_lookup.status(), StatusCode::NOT_FOUND);
+        assert_eq!(still_unsigned.status(), StatusCode::UNAUTHORIZED);
     }
 
     #[tokio::test]

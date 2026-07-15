@@ -175,7 +175,9 @@ impl DefaultRequest {
             .map(|(name, value)| {
                 (
                     name.to_string(),
-                    value.to_str().unwrap_or_default().to_string(),
+                    std::str::from_utf8(value.as_bytes())
+                        .unwrap_or_default()
+                        .to_owned(),
                 )
             })
             .collect();
@@ -634,6 +636,24 @@ mod tests {
             || request.send(),
         );
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn request_snapshot_preserves_utf8_header_bytes_used_by_account_ids() {
+        let account = "sorauﾛ1PﾒJrﾚbﾛzgTE";
+        let request = DefaultRequestBuilder::new(
+            crate::http::Method::GET,
+            Url::parse("http://127.0.0.1/status").expect("url"),
+        )
+        .header("x-iroha-account", &account)
+        .build()
+        .expect("build request");
+
+        let snapshot = request.snapshot();
+        assert_eq!(
+            snapshot.headers,
+            vec![("x-iroha-account".to_owned(), account.to_owned())]
+        );
     }
 
     #[test]

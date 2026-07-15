@@ -14,6 +14,7 @@ on:
       - "crates/iroha_core/src/smartcontracts/isi/offline/**"
       - "crates/iroha_core/examples/confidential_v2_vk_json.rs"
       - "crates/iroha_core/tests/swift_confidential_unshield_redeem.rs"
+      - "crates/iroha_kagami/**"
       - "crates/iroha_torii/Cargo.toml"
       - "crates/iroha_torii/src/lib.rs"
       - "crates/iroha_torii/src/openapi.rs"
@@ -399,7 +400,7 @@ on:
       - "kotlin/offline-wallet-android/src/main/java/org/hyperledger/iroha/sdk/offline/wallet/AndroidOfflineNoteSecureStore.kt"
       - "kotlin/offline-wallet-android/src/androidTest/java/org/hyperledger/iroha/sdk/offline/wallet/AndroidOfflineNoteSecureStoreInstrumentedTest.java"
       - "kotlin/offline-wallet-android/src/androidTest/java/org/hyperledger/iroha/android/offline/KagemushaDeviceLabArtifactExportTest.java"
-      - "kotlin/offline-wallet-lab-app/**"
+      - "kotlin/kagemusha-candidate-evidence-lab/**"
       - "kotlin/settings.gradle.kts"
       - "kotlin/gradle/libs.versions.toml"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/address/AccountIdLiteral.kt"
@@ -749,6 +750,12 @@ on:
       - "docs/source/offline_kagemusha*.md"
       - "docs/portal/static/openapi/torii.json"
       - "scripts/check_android_device_lab_slot.py"
+      - "scripts/check_mobile_sdk_artifacts.sh"
+      - "scripts/check_mobile_sdk_artifacts_test.sh"
+      - "scripts/build_kagemusha_candidate_android_native.sh"
+      - "scripts/run_kagemusha_candidate_android_lab.sh"
+      - "ci/check_kagemusha_candidate_android_lab.sh"
+      - "ci/check_kagemusha_candidate_android_lab_compile.sh"
       - "scripts/tests/check_android_device_lab_slot_test.py"
       - "tools/kotlin-fixture-gen/**"
   workflow_dispatch:
@@ -776,6 +783,7 @@ jobs:
       - run: ci/check_kagemusha_production_readiness.sh candidate --self-test
       - run: ci/check_kagemusha_recursive_spend_v4_sdk_contract.sh
       - run: ci/check_kagemusha_recursive_spend_v4_sdk_contract.sh --self-test
+      - run: ci/check_kagemusha_candidate_android_lab.sh
       - run: ci/check_kagemusha_recursive_spend_policy.sh
       - run: ci/check_kagemusha_recursive_spend_policy.sh --self-test
       - run: python -m unittest scripts.tests.check_android_device_lab_slot_test
@@ -799,6 +807,9 @@ jobs:
       - run: cargo test -p iroha_core v4_manifest_preserves_exact_little_endian_state_limbs --lib
       - run: cargo test -p iroha_core v4_eq_and_ep_public_columns_share_the_v2_result_frontier_limb --lib
       - run: cargo test -p iroha_core kagemusha_terminal_registry_v4 --lib
+      - run: cargo test -p iroha_kagami --bin kagami harden_private_tree
+      - run: cargo test -p iroha_kagami --bin kagami private_custody_readme_invokes_non_executable_scripts_through_bash
+      - run: cargo test -p iroha_kagami --bin kagami raw_npos_genesis_receives_the_chain_bound_localnet_epoch_seed
       - run: cargo test -p iroha_torii_shared offline_api --lib
       - run: cargo test -p iroha_torii generated_spec_documents_strict_typed_offline_request_schemas_and_states
       - run: cargo test -p iroha_torii generated_spec_offline
@@ -825,6 +836,7 @@ jobs:
           distribution: temurin
           java-version: "21"
       - uses: android-actions/setup-android@v3
+      - run: ci/check_kagemusha_candidate_android_lab_compile.sh
       - run: ./gradlew :core-jvm:test --console=plain
         working-directory: kotlin
       - run: ./gradlew test --console=plain

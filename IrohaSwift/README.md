@@ -751,8 +751,11 @@ Artifact and readiness validation requires exact bridge ABI 20 and manifest
 schema `kagemusha.offline.recursive_spend.artifact_manifest.v4`. The V4
 manifest's eight streamed artifacts are content-addressed and installed
 atomically through `KagemushaRecursiveSpendArtifactInstallSessionV4`; a partial,
-corrupt, or role-substituted generation never becomes active. Circuit parameters
-remain authenticated inline in the Eq/Ep profiles.
+corrupt, unpromoted, or role-substituted generation never becomes active.
+`KagemushaRecursiveSpendReleaseAuthenticationV4` requires the canonical
+candidate-bound promotion record in addition to policy, attestation, benchmark,
+and review bytes. Circuit parameters remain authenticated inline in the Eq/Ep
+profiles.
 
 `ToriiKagemushaReadiness.artifactSet` is required but nullable. A non-null value
 binds the authenticated generation, manifest, release-policy and

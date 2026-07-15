@@ -398,17 +398,6 @@ class HttpClientTransport(
         return executeAccepted(buildJsonPostRequest("/v1/zk/vk/update", body), "verifying key update", 202)
     }
 
-    fun deployContract(
-        authority: String,
-        privateKey: String,
-        codeB64: String,
-        contractAlias: String,
-        leaseExpiryMs: Long? = null,
-    ): CompletableFuture<Optional<ContractDeployResponse>> {
-        val body = encodeJsonBody(buildDeployContractPayload(authority, privateKey, codeB64, contractAlias, leaseExpiryMs))
-        return fetchOptionalJson(buildJsonPostRequest("/v1/contracts/deploy", body), ContractJsonParser::parseDeployResponse, "contract deploy")
-    }
-
     fun callContract(
         authority: String,
         privateKey: String,
@@ -1018,25 +1007,6 @@ class HttpClientTransport(
             payload["relay_receipt_hex"] = normalizeEvenLengthHex(relayReceiptHex, "relayReceiptHex")
             payload["client_voucher_hex"] = normalizeEvenLengthHex(clientVoucherHex, "clientVoucherHex")
             if (leaseIdHex != null) payload["lease_id_hex"] = normalizeHex32(leaseIdHex, "leaseIdHex")
-            return payload
-        }
-
-        @JvmStatic internal fun buildDeployContractPayload(
-            authority: String,
-            privateKey: String,
-            codeB64: String,
-            contractAlias: String,
-            leaseExpiryMs: Long?,
-        ): Map<String, Any> {
-            val payload = LinkedHashMap<String, Any>()
-            payload["authority"] = normalizeNonBlank(authority, "authority")
-            payload["private_key"] = normalizeNonBlank(privateKey, "privateKey")
-            payload["code_b64"] = normalizeRequiredBase64Payload(codeB64, "codeB64")
-            payload["contract_alias"] = normalizeNonBlank(contractAlias, "contractAlias")
-            if (leaseExpiryMs != null) {
-                require(leaseExpiryMs >= 0) { "leaseExpiryMs must be non-negative" }
-                payload["lease_expiry_ms"] = leaseExpiryMs
-            }
             return payload
         }
 

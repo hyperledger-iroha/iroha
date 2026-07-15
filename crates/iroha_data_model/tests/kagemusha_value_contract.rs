@@ -351,6 +351,51 @@ fn split_rejects_nonconservation_duplicate_material_and_overlapping_claims() {
 }
 
 #[test]
+fn branch_claim_conflicts_bind_paths_and_exact_transition_history() {
+    let root =
+        KagemushaRecursiveSpendBranchClaimV2::root(anchor_ref().anchor_digest).expect("root claim");
+    let recipient = root
+        .child(KagemushaRecursiveSpendBranchV2::Recipient, [0x41; 32])
+        .expect("recipient claim");
+    let same_transition_change = root
+        .child(KagemushaRecursiveSpendBranchV2::Change, [0x41; 32])
+        .expect("same-transition change claim");
+    let alternative_transition_change = root
+        .child(KagemushaRecursiveSpendBranchV2::Change, [0x42; 32])
+        .expect("alternative-transition change claim");
+
+    assert!(root.conflicts_with(&recipient).expect("root conflict"));
+    assert!(
+        recipient
+            .conflicts_with(&root)
+            .expect("root conflict symmetry")
+    );
+    assert!(
+        !recipient
+            .conflicts_with(&same_transition_change)
+            .expect("siblings from one transition")
+    );
+    assert!(
+        recipient
+            .conflicts_with(&alternative_transition_change)
+            .expect("alternative transition conflict")
+    );
+    assert!(
+        alternative_transition_change
+            .conflicts_with(&recipient)
+            .expect("alternative transition conflict symmetry")
+    );
+
+    let other_root =
+        KagemushaRecursiveSpendBranchClaimV2::root([0x77; 32]).expect("independent root");
+    assert!(
+        !recipient
+            .conflicts_with(&other_root)
+            .expect("independent lineage")
+    );
+}
+
+#[test]
 fn peer_hop_limit_is_eight_and_independent_of_branch_depth() {
     fn claim_at_depth(depth: u8) -> KagemushaRecursiveSpendBranchClaimV2 {
         let mut claim = KagemushaRecursiveSpendBranchClaimV2::root(anchor_ref().anchor_digest)

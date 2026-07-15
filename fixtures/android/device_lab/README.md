@@ -21,10 +21,13 @@ python3 scripts/check_android_device_lab_slot.py \
 ```
 
 Production slots live under `artifacts/android/device_lab/<slot-id>/` and must
-also contain the closed `slot.json` schema, ABI 19 Kagemusha recursive-spend
-probe results, StrongBox/KeyMint evidence, exact lifecycle transcripts, the
-content-bound wallet artifact, and an Ed25519-signed
-`evidence/signed-evidence.json`.
+also contain the candidate-bound V2 `slot.json` schema, ABI 20 Kagemusha
+candidate-lab results, StrongBox/KeyMint evidence, exact lifecycle transcripts,
+the clean candidate and exact ordered eight KRV4 artifacts, the lab native
+library, the distinct marker-bearing candidate-lab APK, the independently
+attested wallet APK, and an Ed25519-signed
+`evidence/signed-evidence.json`. V1 evidence is retained only for historical
+parsing and cannot satisfy the production-evidence gate.
 
 Validate a complete production matrix with:
 

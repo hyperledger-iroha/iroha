@@ -4616,6 +4616,10 @@ impl<'world> WorldBlock<'world> {
         collect_reverts!(self.account_recovery_policies, AccountRecoveryPolicy);
         collect_reverts!(self.account_recovery_requests, AccountRecoveryRequest);
         collect_reverts!(self.asset_definitions, AssetDefinition);
+        collect_reverts!(
+            self.asset_definition_alias_bindings,
+            AssetDefinitionAliasBinding
+        );
         collect_reverts!(self.assets, Asset);
         collect_reverts!(self.asset_metadata, AssetMetadata);
         collect_reverts!(self.nfts, Nft);
@@ -4648,6 +4652,7 @@ impl<'world> WorldBlock<'world> {
         collect_reverts!(self.contract_code_upload_chunks, ContractCodeUploadChunk);
         collect_reverts!(self.contract_instances, ContractInstance);
         collect_reverts!(self.contract_subject_bindings, ContractSubjectBinding);
+        collect_reverts!(self.contract_alias_bindings, ContractAliasBinding);
         collect_reverts!(self.smart_contract_state, SmartContractState);
         collect_reverts!(self.zk_assets, ZkAsset);
         collect_reverts!(self.elections, Election);
@@ -4685,6 +4690,10 @@ impl<'world> WorldBlock<'world> {
         collect_payload!(self.account_recovery_policies, AccountRecoveryPolicy);
         collect_payload!(self.account_recovery_requests, AccountRecoveryRequest);
         collect_payload!(self.asset_definitions, AssetDefinition);
+        collect_payload!(
+            self.asset_definition_alias_bindings,
+            AssetDefinitionAliasBinding
+        );
         collect_payload!(self.assets, Asset);
         collect_payload!(self.asset_metadata, AssetMetadata);
         collect_payload!(self.nfts, Nft);
@@ -4717,6 +4726,7 @@ impl<'world> WorldBlock<'world> {
         collect_payload!(self.contract_code_upload_chunks, ContractCodeUploadChunk);
         collect_payload!(self.contract_instances, ContractInstance);
         collect_payload!(self.contract_subject_bindings, ContractSubjectBinding);
+        collect_payload!(self.contract_alias_bindings, ContractAliasBinding);
         collect_payload!(self.smart_contract_state, SmartContractState);
         collect_payload!(self.zk_assets, ZkAsset);
         collect_payload!(self.elections, Election);
@@ -5546,6 +5556,30 @@ pub struct WorldTransaction<'block, 'world> {
     pub(crate) internal_event_buf: Vec<Arc<DataEvent>>,
 }
 
+fn validate_alias_lease_window(
+    lease_expiry_ms: Option<u64>,
+    grace_until_ms: Option<u64>,
+    bound_at_ms: u64,
+) -> Result<(), Error> {
+    match (lease_expiry_ms, grace_until_ms) {
+        (None, None) => Ok(()),
+        (None, Some(_)) => Err(Error::InvariantViolation(
+            "alias grace_until_ms requires lease_expiry_ms".into(),
+        )),
+        (Some(lease_expiry_ms), _) if lease_expiry_ms <= bound_at_ms => {
+            Err(Error::InvariantViolation(
+                "alias lease_expiry_ms must be greater than bound_at_ms".into(),
+            ))
+        }
+        (Some(lease_expiry_ms), Some(grace_until_ms)) if grace_until_ms < lease_expiry_ms => {
+            Err(Error::InvariantViolation(
+                "alias grace_until_ms must not precede lease_expiry_ms".into(),
+            ))
+        }
+        (Some(_), _) => Ok(()),
+    }
+}
+
 #[allow(single_use_lifetimes)]
 impl<'block, 'world> WorldTransaction<'block, 'world> {
     #[cfg(any(test, feature = "iroha-core-tests"))]
@@ -5567,6 +5601,26 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         iroha_data_model::smart_contract::manifest::ContractManifest,
     > {
         &mut self.contract_manifests
+    }
+
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    /// Install the minimal internally consistent active-address and subject
+    /// bindings needed by API identity tests. Artifact metadata is deliberately
+    /// not synthesized here; governed-contract tests must register a real
+    /// verified artifact through the production admission path.
+    pub fn bind_active_contract_subject_for_testing(
+        &mut self,
+        contract_address: iroha_data_model::smart_contract::ContractAddress,
+        code_hash: iroha_crypto::Hash,
+    ) {
+        let binding = crate::smartcontracts::code::ContractSubjectBinding::new(&contract_address);
+        let subject = binding.subject.clone();
+        self.contract_instances
+            .insert(contract_address.clone(), code_hash);
+        self.contract_subject_bindings
+            .insert(contract_address.clone(), binding);
+        self.contract_subject_addresses
+            .insert(subject, contract_address);
     }
 
     #[cfg(any(test, feature = "iroha-core-tests"))]
@@ -6358,6 +6412,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         grace_until_ms: Option<u64>,
         bound_at_ms: u64,
     ) -> Result<(), Error> {
+        validate_alias_lease_window(lease_expiry_ms, grace_until_ms, bound_at_ms)?;
         if let Some(existing_definition) = self.asset_definition_aliases.get(&alias).cloned()
             && existing_definition != *definition_id
         {
@@ -6436,6 +6491,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         grace_until_ms: Option<u64>,
         bound_at_ms: u64,
     ) -> Result<(), Error> {
+        validate_alias_lease_window(lease_expiry_ms, grace_until_ms, bound_at_ms)?;
         if let Some(existing_contract) = self.contract_aliases.get(&alias).cloned()
             && existing_contract != *contract_address
         {
@@ -8782,8 +8838,14 @@ impl AssetDefinitionAliasBindingRecord {
     /// Return `true` when the alias should be unbound at `now_ms`.
     #[must_use]
     pub fn is_grace_expired_at(&self, now_ms: u64) -> bool {
-        self.grace_until_ms
-            .is_some_and(|grace_until| now_ms > grace_until)
+        match (self.lease_expiry_ms, self.grace_until_ms) {
+            (None, None) => false,
+            (None, Some(_)) => true,
+            (Some(lease_expiry_ms), Some(grace_until_ms)) => {
+                grace_until_ms < lease_expiry_ms || now_ms > grace_until_ms
+            }
+            (Some(lease_expiry_ms), None) => now_ms >= lease_expiry_ms,
+        }
     }
 }
 
@@ -8844,8 +8906,14 @@ impl ContractAliasBindingRecord {
     /// Return `true` when the alias should be unbound at `now_ms`.
     #[must_use]
     pub fn is_grace_expired_at(&self, now_ms: u64) -> bool {
-        self.grace_until_ms
-            .is_some_and(|grace_until| now_ms > grace_until)
+        match (self.lease_expiry_ms, self.grace_until_ms) {
+            (None, None) => false,
+            (None, Some(_)) => true,
+            (Some(lease_expiry_ms), Some(grace_until_ms)) => {
+                grace_until_ms < lease_expiry_ms || now_ms > grace_until_ms
+            }
+            (Some(lease_expiry_ms), None) => now_ms >= lease_expiry_ms,
+        }
     }
 }
 
@@ -17084,6 +17152,7 @@ impl World {
         grace_until_ms: Option<u64>,
         bound_at_ms: u64,
     ) -> Result<(), Error> {
+        validate_alias_lease_window(lease_expiry_ms, grace_until_ms, bound_at_ms)?;
         if let Some(existing_contract) = self.contract_aliases.view().get(&alias).cloned()
             && existing_contract != *contract_address
         {
@@ -17802,6 +17871,17 @@ impl World {
         let definitions = self.asset_definitions.view();
 
         for (definition_id, binding) in self.asset_definition_alias_bindings.view().iter() {
+            validate_alias_lease_window(
+                binding.lease_expiry_ms,
+                binding.grace_until_ms,
+                binding.bound_at_ms,
+            )
+            .map_err(|error| {
+                format!(
+                    "Asset alias binding `{}` has an invalid lease window: {error}",
+                    binding.alias
+                )
+            })?;
             if definitions.get(definition_id).is_none() {
                 return Err(format!(
                     "Asset alias binding `{}` references missing asset definition {definition_id}",
@@ -17845,6 +17925,17 @@ impl World {
         let mut by_contract = BTreeMap::<ContractAddress, ContractAliasBindingRecord>::new();
 
         for (contract_address, binding) in self.contract_alias_bindings.view().iter() {
+            validate_alias_lease_window(
+                binding.lease_expiry_ms,
+                binding.grace_until_ms,
+                binding.bound_at_ms,
+            )
+            .map_err(|error| {
+                format!(
+                    "Contract alias binding `{}` has an invalid lease window: {error}",
+                    binding.alias
+                )
+            })?;
             if let Some(existing) = by_alias.get(&binding.alias)
                 && existing != contract_address
             {
@@ -19396,7 +19487,10 @@ pub trait WorldReadOnly {
                 Some(definition_id)
             }
             Some(_) => None,
-            None => Some(definition_id),
+            // First-release asset aliases are valid only together with their
+            // consensus-persisted lease record. Treat an index-only entry as
+            // corrupt state instead of silently reviving a legacy binding.
+            None => None,
         }
     }
 
@@ -19423,7 +19517,10 @@ pub trait WorldReadOnly {
                 Some(contract_address)
             }
             Some(_) => None,
-            None => Some(contract_address),
+            // First-release contract aliases are valid only together with their
+            // consensus-persisted lease record.  Treat an index-only entry as
+            // corrupt state instead of silently reviving a legacy binding.
+            None => None,
         }
     }
 
@@ -25431,6 +25528,14 @@ impl State {
     }
 
     pub(crate) fn rebuild_derived_state_indexes(&mut self) -> core::result::Result<(), String> {
+        self.world
+            .rebuild_asset_definition_alias_indexes()
+            .map_err(|error| {
+                format!("failed to rebuild asset definition alias indexes: {error}")
+            })?;
+        self.world
+            .rebuild_contract_alias_indexes()
+            .map_err(|error| format!("failed to rebuild contract alias indexes: {error}"))?;
         let rebuilt = self.rebuild_uaid_dataspace_bindings()?;
         iroha_logger::debug!(
             rebuilt_uaids = rebuilt,
@@ -48274,6 +48379,44 @@ mod tiered_snapshot_diff_tests {
         (key, marker)
     }
 
+    fn sample_alias_bindings() -> (
+        AssetDefinitionId,
+        AssetDefinitionAliasBindingRecord,
+        ContractAddress,
+        ContractAliasBindingRecord,
+    ) {
+        let definition_id = AssetDefinitionId::from_uuid_bytes_unchecked([
+            0x21, 0x43, 0x65, 0x87, 0xa9, 0xcb, 0x4d, 0xef, 0x80, 0x12, 0x23, 0x34, 0x45, 0x56,
+            0x67, 0x78,
+        ]);
+        let asset_binding = AssetDefinitionAliasBindingRecord {
+            alias: "tiered_asset#universal".parse().expect("asset alias"),
+            lease_expiry_ms: Some(2_000),
+            grace_until_ms: Some(2_500),
+            bound_at_ms: 1_000,
+        };
+        let authority = AccountId::new(checked_keypair().public_key().clone());
+        let contract_address = ContractAddress::derive(
+            iroha_data_model::smart_contract::CHAIN_DISCRIMINANT_MAINNET,
+            &authority,
+            77,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("contract address");
+        let contract_binding = ContractAliasBindingRecord {
+            alias: "tiered_router::universal".parse().expect("contract alias"),
+            lease_expiry_ms: Some(3_000),
+            grace_until_ms: Some(3_500),
+            bound_at_ms: 1_000,
+        };
+        (
+            definition_id,
+            asset_binding,
+            contract_address,
+            contract_binding,
+        )
+    }
+
     #[test]
     fn contract_upload_json_keys_are_stable_text_and_reject_trailing_components() {
         use mv::json::JsonKeyCodec;
@@ -48387,6 +48530,14 @@ mod tiered_snapshot_diff_tests {
     fn world_block_tiered_snapshot_diff_collects_changed_keys() {
         let world = World::default();
         let mut block = world.block();
+        let (definition_id, asset_binding, contract_address, contract_binding) =
+            sample_alias_bindings();
+        block
+            .asset_definition_alias_bindings
+            .insert(definition_id.clone(), asset_binding);
+        block
+            .contract_alias_bindings
+            .insert(contract_address.clone(), contract_binding);
         let hash = iroha_crypto::Hash::new([7_u8; 32]);
         block.contract_code.insert(hash, vec![1, 2, 3]);
         let upload_key = SmartContractCodeUploadKey::new(
@@ -48447,12 +48598,26 @@ mod tiered_snapshot_diff_tests {
         assert!(diff.entries().iter().any(|entry| {
             matches!(entry, TieredKeyHandle::SccpOutboundProof(key) if *key == proof_key)
         }));
+        assert!(diff.entries().iter().any(|entry| {
+            matches!(entry, TieredKeyHandle::AssetDefinitionAliasBinding(key) if *key == definition_id)
+        }));
+        assert!(diff.entries().iter().any(|entry| {
+            matches!(entry, TieredKeyHandle::ContractAliasBinding(key) if *key == contract_address)
+        }));
     }
 
     #[test]
     fn world_block_tiered_snapshot_payload_collects_changed_keys() {
         let world = World::default();
         let mut block = world.block();
+        let (definition_id, asset_binding, contract_address, contract_binding) =
+            sample_alias_bindings();
+        block
+            .asset_definition_alias_bindings
+            .insert(definition_id.clone(), asset_binding);
+        block
+            .contract_alias_bindings
+            .insert(contract_address.clone(), contract_binding);
         let hash = iroha_crypto::Hash::new([9_u8; 32]);
         block.contract_code.insert(hash, vec![4, 5, 6]);
         let upload_key = SmartContractCodeUploadKey::new(
@@ -48513,6 +48678,12 @@ mod tiered_snapshot_diff_tests {
         }));
         assert!(diff.entries().iter().any(|entry| {
             matches!(entry, TieredKeyHandle::SccpOutboundProof(key) if *key == proof_key)
+        }));
+        assert!(diff.entries().iter().any(|entry| {
+            matches!(entry, TieredKeyHandle::AssetDefinitionAliasBinding(key) if *key == definition_id)
+        }));
+        assert!(diff.entries().iter().any(|entry| {
+            matches!(entry, TieredKeyHandle::ContractAliasBinding(key) if *key == contract_address)
         }));
     }
 
@@ -60177,13 +60348,13 @@ pub(crate) mod deserialize {
         world
             .rebuild_asset_definition_alias_indexes()
             .map_err(|message| json::Error::InvalidField {
-                field: "asset_definition_aliases".into(),
+                field: "asset_definition_alias_bindings".into(),
                 message,
             })?;
         world
             .rebuild_contract_alias_indexes()
             .map_err(|message| json::Error::InvalidField {
-                field: "contract_aliases".into(),
+                field: "contract_alias_bindings".into(),
                 message,
             })?;
         world.rebuild_asset_definition_indexes();
@@ -61473,6 +61644,128 @@ mod tests {
             permanent_binding.status_at(10_000),
             AssetDefinitionAliasLeaseStatus::Permanent
         );
+        assert!(!permanent_binding.is_grace_expired_at(u64::MAX));
+
+        let no_grace_binding = AssetDefinitionAliasBindingRecord {
+            alias: "usd#no_grace".parse().expect("no-grace alias"),
+            lease_expiry_ms: Some(200),
+            grace_until_ms: None,
+            bound_at_ms: 100,
+        };
+        assert!(!no_grace_binding.is_grace_expired_at(199));
+        assert!(no_grace_binding.is_grace_expired_at(200));
+        assert_eq!(
+            no_grace_binding.status_at(200),
+            AssetDefinitionAliasLeaseStatus::ExpiredPendingCleanup
+        );
+
+        let malformed_binding = AssetDefinitionAliasBindingRecord {
+            alias: "usd#malformed".parse().expect("malformed alias"),
+            lease_expiry_ms: None,
+            grace_until_ms: Some(250),
+            bound_at_ms: 100,
+        };
+        assert!(
+            malformed_binding.is_grace_expired_at(0),
+            "a grace-only record must never revive a permanent alias"
+        );
+    }
+
+    #[test]
+    fn contract_alias_binding_without_grace_expires_at_lease_boundary() {
+        let binding = ContractAliasBindingRecord {
+            alias: "router::universal".parse().expect("contract alias"),
+            lease_expiry_ms: Some(200),
+            grace_until_ms: None,
+            bound_at_ms: 100,
+        };
+        assert!(!binding.is_grace_expired_at(199));
+        assert!(binding.is_grace_expired_at(200));
+        assert_eq!(
+            binding.status_at(200),
+            ContractAliasLeaseStatus::ExpiredPendingCleanup
+        );
+    }
+
+    #[test]
+    fn alias_binding_rejects_incoherent_lease_windows() {
+        let error = validate_alias_lease_window(None, Some(300), 100)
+            .expect_err("grace without a lease must fail");
+        assert!(error.to_string().contains("requires lease_expiry_ms"));
+
+        let mut world = World::new();
+
+        let contract_address = ContractAddress::derive(
+            iroha_data_model::smart_contract::CHAIN_DISCRIMINANT_MAINNET,
+            &ALICE_ID,
+            6,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("contract address");
+        let error = world
+            .bind_contract_alias(
+                &contract_address,
+                "router_invalid::universal".parse().expect("contract alias"),
+                Some(200),
+                Some(199),
+                100,
+            )
+            .expect_err("grace before expiry must fail");
+        assert!(error.to_string().contains("must not precede"));
+
+        let error = world
+            .bind_contract_alias(
+                &contract_address,
+                "router_expired::universal".parse().expect("contract alias"),
+                Some(100),
+                None,
+                100,
+            )
+            .expect_err("already-expired lease must fail");
+        assert!(error.to_string().contains("greater than bound_at_ms"));
+    }
+
+    #[test]
+    fn alias_index_rebuild_rejects_incoherent_persisted_lease_windows() {
+        let (mut world, definition_id) = asset_alias_test_world();
+        world.asset_definition_alias_bindings = std::iter::once((
+            definition_id,
+            AssetDefinitionAliasBindingRecord {
+                alias: "usd#invalid_persisted".parse().expect("asset alias"),
+                lease_expiry_ms: None,
+                grace_until_ms: Some(300),
+                bound_at_ms: 100,
+            },
+        ))
+        .collect();
+        let error = world
+            .rebuild_asset_definition_alias_indexes()
+            .expect_err("asset alias rebuild must reject grace without a lease");
+        assert!(error.contains("requires lease_expiry_ms"));
+
+        let contract_address = ContractAddress::derive(
+            iroha_data_model::smart_contract::CHAIN_DISCRIMINANT_MAINNET,
+            &ALICE_ID,
+            7,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("contract address");
+        world.contract_alias_bindings = std::iter::once((
+            contract_address,
+            ContractAliasBindingRecord {
+                alias: "router_invalid_persisted::universal"
+                    .parse()
+                    .expect("contract alias"),
+                lease_expiry_ms: Some(100),
+                grace_until_ms: None,
+                bound_at_ms: 100,
+            },
+        ))
+        .collect();
+        let error = world
+            .rebuild_contract_alias_indexes()
+            .expect_err("contract alias rebuild must reject a non-forward lease");
+        assert!(error.contains("greater than bound_at_ms"));
     }
 
     #[test]
@@ -61542,6 +61835,55 @@ mod tests {
         assert!(
             err.to_string().contains("already bound"),
             "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn contract_alias_time_lookup_rejects_index_without_binding_record() {
+        let mut world = World::new();
+        let contract_address = ContractAddress::derive(
+            iroha_data_model::smart_contract::CHAIN_DISCRIMINANT_MAINNET,
+            &ALICE_ID,
+            7,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("contract address");
+        let alias: ContractAlias = "index_only::universal".parse().expect("contract alias");
+        world
+            .contract_aliases
+            .insert(alias.clone(), contract_address.clone());
+
+        let view = world.view();
+        assert_eq!(
+            view.contract_address_by_alias(&alias),
+            Some(contract_address),
+            "the raw index remains inspectable for state repair"
+        );
+        assert_eq!(
+            view.contract_address_by_alias_at(&alias, 0),
+            None,
+            "an index-only entry must never become an effective first-release binding"
+        );
+    }
+
+    #[test]
+    fn asset_alias_time_lookup_rejects_index_without_binding_record() {
+        let (mut world, definition_id) = asset_alias_test_world();
+        let alias: AssetDefinitionAlias = "usd#index_only".parse().expect("asset alias");
+        world
+            .asset_definition_aliases
+            .insert(alias.clone(), definition_id.clone());
+
+        let view = world.view();
+        assert_eq!(
+            view.asset_definition_id_by_alias(&alias),
+            Some(definition_id),
+            "the raw index remains inspectable for state repair"
+        );
+        assert_eq!(
+            view.asset_definition_id_by_alias_at(&alias, 0),
+            None,
+            "an index-only entry must never become an effective first-release binding"
         );
     }
 
@@ -63082,6 +63424,128 @@ mod tests {
                 .as_ref(),
             Some(&alias)
         );
+    }
+
+    #[test]
+    fn contract_alias_bindings_roundtrip_through_state_json() {
+        let mut world = World::default();
+        let contract_address = ContractAddress::derive(
+            iroha_data_model::smart_contract::CHAIN_DISCRIMINANT_MAINNET,
+            &ALICE_ID,
+            41,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("contract address");
+        let alias: ContractAlias = "snapshot_router::universal"
+            .parse()
+            .expect("contract alias");
+        world
+            .bind_contract_alias(
+                &contract_address,
+                alias.clone(),
+                Some(2_000),
+                Some(2_500),
+                1_000,
+            )
+            .expect("bind contract alias");
+        let expected = world
+            .contract_alias_bindings
+            .view()
+            .get(&contract_address)
+            .expect("binding")
+            .clone();
+
+        let state = State::new(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let json_value = norito::json::to_value(&state).expect("serialize state");
+        let restored = deserialize_state_snapshot_value(json_value).expect("deserialize state");
+        let view = restored.world_view();
+
+        assert_eq!(
+            view.contract_alias_bindings()
+                .get(&contract_address)
+                .expect("binding"),
+            &expected
+        );
+        assert_eq!(view.contract_aliases().get(&alias), Some(&contract_address));
+    }
+
+    #[test]
+    fn state_snapshot_rejects_malformed_asset_alias_lease_window() {
+        let (world, definition_id) = asset_alias_test_world();
+        let state = State::new(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 100, 0);
+        let mut block = state.block(header);
+        block.world.asset_definition_alias_bindings.insert(
+            definition_id,
+            AssetDefinitionAliasBindingRecord {
+                alias: "usd#invalid_snapshot".parse().expect("asset alias"),
+                lease_expiry_ms: None,
+                grace_until_ms: Some(300),
+                bound_at_ms: 100,
+            },
+        );
+        block
+            .commit()
+            .expect("commit adversarial alias snapshot fixture");
+
+        let json_value = norito::json::to_value(&state).expect("serialize state");
+        let error = deserialize_state_snapshot_value(json_value)
+            .err()
+            .expect("grace-only asset alias binding must fail snapshot restore");
+        let message = error.to_string();
+        assert!(
+            message.contains("asset_definition_alias_bindings"),
+            "{message}"
+        );
+        assert!(message.contains("requires lease_expiry_ms"), "{message}");
+    }
+
+    #[test]
+    fn state_snapshot_rejects_malformed_contract_alias_lease_window() {
+        let state = State::new(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let contract_address = ContractAddress::derive(
+            iroha_data_model::smart_contract::CHAIN_DISCRIMINANT_MAINNET,
+            &ALICE_ID,
+            42,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("contract address");
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 100, 0);
+        let mut block = state.block(header);
+        block.world.contract_alias_bindings.insert(
+            contract_address,
+            ContractAliasBindingRecord {
+                alias: "invalid_snapshot_router::universal"
+                    .parse()
+                    .expect("contract alias"),
+                lease_expiry_ms: Some(100),
+                grace_until_ms: None,
+                bound_at_ms: 100,
+            },
+        );
+        block
+            .commit()
+            .expect("commit adversarial contract alias snapshot fixture");
+
+        let json_value = norito::json::to_value(&state).expect("serialize state");
+        let error = deserialize_state_snapshot_value(json_value)
+            .err()
+            .expect("non-forward contract alias lease must fail snapshot restore");
+        let message = error.to_string();
+        assert!(message.contains("contract_alias_bindings"), "{message}");
+        assert!(message.contains("greater than bound_at_ms"), "{message}");
     }
 
     #[test]

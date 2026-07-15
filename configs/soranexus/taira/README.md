@@ -664,7 +664,7 @@ debugging ingress or MCP. It also verifies that the same direct node serves:
 - `/v1/sumeragi/validator-sets`
 - `/v1/nexus/public-lanes/0/{validators,stake}`
 - `/v1/bridge/messages` preflight
-- `/v1/contracts/deploy`
+- no retired server-side `/v1/contracts/deploy` route (`404 route_not_found`)
 - `/v1/contracts/state`
 - canonical `/v1/pipeline/transactions/status` with a typed
   `query_validation_failed` response when the hash is omitted

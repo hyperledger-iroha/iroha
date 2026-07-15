@@ -71,6 +71,7 @@ use iroha_data_model::{
         KagemushaTopUpFinalityRosterArtifactV2,
     },
 };
+use norito::{JsonDeserialize, JsonSerialize};
 use sha2::{Digest, Sha256};
 
 const HELP: &str = "\
@@ -96,6 +97,11 @@ Usage:
     --release-attestation <canonical-norito-file> \\
     --benchmark-evidence <exact-file> \\
     --cryptographic-review <exact-file>
+
+  cargo run -p iroha_core --bin kagemusha_recursive_spend_v4_bundle -- \\
+    validate-candidate \\
+    --candidate-dir <generated-candidate> \\
+    --out-dir <new-validation-directory>
 
 Candidate generation emits four roles per parity in exact Eq-then-Ep order:
 ParamsIPA, processed proving key, processed verifying key, and the final-VK
@@ -135,6 +141,8 @@ const FINALIZE_OPTIONS: &[&str] = &[
     "cryptographic-review",
 ];
 
+const VALIDATE_CANDIDATE_OPTIONS: &[&str] = &["candidate-dir", "out-dir"];
+
 const MANIFEST_JSON_FILE_NAME: &str = "manifest.json";
 const MANIFEST_NORITO_FILE_NAME: &str = "manifest.norito";
 const MANIFEST_NORITO_SHA256_FILE_NAME: &str = "manifest.norito.sha256";
@@ -142,6 +150,10 @@ const CANDIDATE_MANIFEST_JSON_FILE_NAME: &str = "candidate-manifest.json";
 const CANDIDATE_MANIFEST_NORITO_FILE_NAME: &str = "candidate-manifest.norito";
 const CANDIDATE_MANIFEST_SHA256_FILE_NAME: &str = "candidate-manifest.norito.sha256";
 const PROMOTION_RECORD_FILE_NAME_V4: &str = "promotion-record-v4.norito";
+const CANDIDATE_VALIDATION_REPORT_FILE_NAME_V1: &str = "candidate-validation-v1.json";
+const CANDIDATE_VALIDATION_MANIFEST_FILE_NAME_V4: &str = "manifest-v4.norito";
+const CANDIDATE_VALIDATION_REPORT_SCHEMA_V1: &str =
+    "iroha.kagemusha.recursive_spend.candidate_validation.v1";
 const MAX_MANIFEST_BYTES: u64 = 1024 * 1024;
 const MAX_POLICY_BYTES: u64 = 64 * 1024;
 const MAX_ATTESTATION_BYTES: u64 = 1024 * 1024;
@@ -344,6 +356,41 @@ struct GeneratedArtifact {
     payload: Vec<u8>,
 }
 
+#[derive(Debug, JsonSerialize)]
+struct CandidateValidationArtifactV1 {
+    role: String,
+    file_name: String,
+    framed_size_bytes: u64,
+    framed_sha256: String,
+    payload_size_bytes: u64,
+    payload_sha256: String,
+}
+
+#[derive(Debug, JsonSerialize)]
+struct CandidateValidationReportV1 {
+    schema: String,
+    candidate_record_sha256: String,
+    candidate_manifest_sha256: String,
+    source_commit: String,
+    source_tree_sha256: String,
+    source_repo_dirty: bool,
+    generation: String,
+    bridge_abi_version: u32,
+    artifact_count: u32,
+    artifacts: Vec<CandidateValidationArtifactV1>,
+    topup_finality_roster_file_name: String,
+    topup_finality_roster_size_bytes: u64,
+    topup_finality_roster_sha256: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, JsonDeserialize)]
+struct FullSourceTreeIdentityV1 {
+    schema: String,
+    source_commit: String,
+    source_repo_dirty: bool,
+    source_tree_sha256: String,
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
     let mut arguments = env::args().skip(1);
     let Some(command) = arguments.next() else {
@@ -359,6 +406,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let required_options = match command.as_str() {
         "generate-candidate" => GENERATE_OPTIONS,
         "finalize-release" => FINALIZE_OPTIONS,
+        "validate-candidate" => VALIDATE_CANDIDATE_OPTIONS,
         _ => return Err(format!("unknown command `{command}`\n\n{HELP}").into()),
     };
     let options = parse_options(arguments, required_options)?;
@@ -374,6 +422,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     match command.as_str() {
         "generate-candidate" => build_candidate(&options),
         "finalize-release" => finalize_release(&options),
+        "validate-candidate" => validate_candidate(&options),
         _ => unreachable!("command was checked above"),
     }
 }
@@ -1052,6 +1101,66 @@ fn validate_clean_signed_source(source_commit: &str) -> Result<(), Box<dyn Error
     Ok(())
 }
 
+fn is_lower_hex(value: &str, expected_len: usize) -> bool {
+    value.len() == expected_len
+        && value
+            .as_bytes()
+            .iter()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(byte))
+}
+
+fn read_source_tree_identity() -> Result<FullSourceTreeIdentityV1, Box<dyn Error>> {
+    let repository_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let seal_script = repository_root.join("scripts/kagemusha_source_tree_seal.py");
+    let python = env::var_os("KAGEMUSHA_SOURCE_SEAL_PYTHON")
+        .unwrap_or_else(|| std::ffi::OsString::from("python3"));
+    let output = Command::new(python)
+        .arg("-I")
+        .arg(&seal_script)
+        .arg("identity")
+        .arg("--root")
+        .arg(&repository_root)
+        .output()
+        .map_err(|error| format!("failed to run the Kagemusha source-tree seal: {error}"))?;
+    if !output.status.success() {
+        let detail = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("Kagemusha source-tree seal rejected the checkout: {detail}").into());
+    }
+    let identity: FullSourceTreeIdentityV1 =
+        norito::json::from_slice(&output.stdout).map_err(|error| {
+            format!("Kagemusha source-tree identity is not canonical JSON: {error}")
+        })?;
+    if identity.schema != "iroha.kagemusha.full_source_tree_identity.v1"
+        || identity.source_repo_dirty
+        || !is_lower_hex(&identity.source_commit, 40)
+        || !is_lower_hex(&identity.source_tree_sha256, 64)
+    {
+        return Err("Kagemusha source-tree identity is malformed or dirty".into());
+    }
+    Ok(identity)
+}
+
+fn validate_current_source(
+    expected_commit: &str,
+    expected_tree_sha256: [u8; 32],
+) -> Result<(), Box<dyn Error>> {
+    let expected_tree_sha256 = hex::encode(expected_tree_sha256);
+    let first = read_source_tree_identity()?;
+    if first.source_commit != expected_commit || first.source_tree_sha256 != expected_tree_sha256 {
+        return Err(
+            "Kagemusha source commit/tree pair does not identify the exact clean checkout".into(),
+        );
+    }
+    validate_clean_signed_source(expected_commit)?;
+    let second = read_source_tree_identity()?;
+    if second != first {
+        return Err(
+            "Kagemusha source commit/tree pair changed during signature verification".into(),
+        );
+    }
+    Ok(())
+}
+
 fn build_candidate(options: &BTreeMap<String, String>) -> Result<(), Box<dyn Error>> {
     #[cfg(not(any(target_os = "linux", target_os = "android", target_os = "macos")))]
     return Err(
@@ -1061,7 +1170,10 @@ fn build_candidate(options: &BTreeMap<String, String>) -> Result<(), Box<dyn Err
 
     #[cfg(any(target_os = "linux", target_os = "android", target_os = "macos"))]
     {
-        validate_clean_signed_source(required(options, "source-commit"))?;
+        validate_current_source(
+            required(options, "source-commit"),
+            parse_digest(options, "source-tree-sha256")?,
+        )?;
         let out_dir = PathBuf::from(required(options, "out-dir"));
         if out_dir.exists() {
             return Err(format!("output directory already exists: {}", out_dir.display()).into());
@@ -1137,8 +1249,16 @@ fn build_candidate(options: &BTreeMap<String, String>) -> Result<(), Box<dyn Err
             )
             .into());
         }
+        validate_current_source(
+            required(options, "source-commit"),
+            parse_digest(options, "source-tree-sha256")?,
+        )?;
         publication.verify_candidate_inventory()?;
         publication.sync()?;
+        validate_current_source(
+            required(options, "source-commit"),
+            parse_digest(options, "source-tree-sha256")?,
+        )?;
         trusted_parent.publish(&staging_name)?;
         let _published = staging.keep();
         Ok(())
@@ -1159,6 +1279,256 @@ fn open_and_match_candidate_file(
     }
     tracked.push(input);
     Ok(())
+}
+
+fn validate_candidate(options: &BTreeMap<String, String>) -> Result<(), Box<dyn Error>> {
+    #[cfg(not(any(target_os = "linux", target_os = "android", target_os = "macos")))]
+    return Err("Kagemusha V4 candidate validation requires Linux, Android, or macOS".into());
+
+    #[cfg(any(target_os = "linux", target_os = "android", target_os = "macos"))]
+    {
+        let candidate =
+            PublicationDirectory::open_existing(PathBuf::from(required(options, "candidate-dir")))?;
+        candidate.verify_candidate_inventory()?;
+
+        let mut tracked_metadata = Vec::new();
+        let mut candidate_input = candidate.open_bound_input(
+            CANDIDATE_MANIFEST_NORITO_FILE_NAME,
+            MAX_MANIFEST_BYTES,
+            "V4 candidate record",
+        )?;
+        let candidate_bytes = candidate_input.read_all()?;
+        let candidate_record: KagemushaRecursiveSpendCandidateV4 =
+            decode_canonical_norito(&candidate_bytes, "V4 candidate record")?;
+        candidate_record
+            .validate()
+            .map_err(|error| format!("invalid V4 candidate record: {error}"))?;
+        let manifest = &candidate_record.manifest;
+        validate_current_source(&manifest.source_commit, manifest.source_tree_sha256)?;
+        tracked_metadata.push(candidate_input);
+
+        let candidate_sha256: [u8; 32] = Sha256::digest(&candidate_bytes).into();
+        if candidate_record
+            .sha256()
+            .map_err(|error| format!("failed to identify V4 candidate record: {error}"))?
+            != candidate_sha256
+        {
+            return Err("canonical V4 candidate identity changed while validating".into());
+        }
+        let mut candidate_json = norito::json::to_string_pretty(&candidate_record)?;
+        candidate_json.push('\n');
+        let candidate_sha256_text = format!("{}\n", hex::encode(candidate_sha256));
+        for (name, maximum, label, expected) in [
+            (
+                CANDIDATE_MANIFEST_JSON_FILE_NAME,
+                MAX_MANIFEST_BYTES,
+                "V4 candidate JSON",
+                candidate_json.as_bytes(),
+            ),
+            (
+                CANDIDATE_MANIFEST_SHA256_FILE_NAME,
+                65,
+                "V4 candidate digest",
+                candidate_sha256_text.as_bytes(),
+            ),
+        ] {
+            open_and_match_candidate_file(
+                &candidate,
+                name,
+                maximum,
+                label,
+                expected,
+                &mut tracked_metadata,
+            )?;
+        }
+
+        let manifest_bytes = canonical_norito_bytes(manifest, "unsigned V4 candidate manifest")?;
+        let manifest_sha256: [u8; 32] = Sha256::digest(&manifest_bytes).into();
+        let descriptors = manifest
+            .profiles
+            .iter()
+            .flat_map(|profile| profile.artifacts.iter())
+            .collect::<Vec<_>>();
+        if descriptors.len() != INPUTS.len() {
+            return Err("V4 candidate does not contain the exact eight-artifact inventory".into());
+        }
+
+        let mut artifact_inputs = Vec::with_capacity(INPUTS.len());
+        let mut artifact_report = Vec::with_capacity(INPUTS.len());
+        for (((role, spec), descriptor), expected_index) in
+            KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_ROLES_V4
+                .iter()
+                .zip(INPUTS.iter())
+                .zip(descriptors.iter())
+                .zip(0_usize..)
+        {
+            if descriptor.file_name != spec.file_name {
+                return Err(format!(
+                    "V4 candidate artifact {expected_index} has a non-canonical file name"
+                )
+                .into());
+            }
+            candidate.verify_candidate_framed_artifact(manifest, descriptor)?;
+            let input = candidate.open_bound_input(
+                &descriptor.file_name,
+                KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_FILE_BYTES_V4,
+                "V4 candidate artifact",
+            )?;
+            if input.size_bytes != descriptor.size_bytes || input.sha256 != descriptor.sha256 {
+                return Err(
+                    format!("V4 candidate artifact changed: {}", descriptor.file_name).into(),
+                );
+            }
+            artifact_report.push(CandidateValidationArtifactV1 {
+                role: (*role).to_owned(),
+                file_name: descriptor.file_name.clone(),
+                framed_size_bytes: descriptor.size_bytes,
+                framed_sha256: hex::encode(descriptor.sha256),
+                payload_size_bytes: descriptor.payload_size_bytes,
+                payload_sha256: hex::encode(descriptor.payload_sha256),
+            });
+            artifact_inputs.push(input);
+        }
+
+        let roster_descriptor = &manifest.topup_finality_roster_artifact;
+        let mut roster_input = candidate.open_bound_input(
+            &roster_descriptor.file_name,
+            KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_MAX_BYTES_V2,
+            "V4 candidate top-up finality roster",
+        )?;
+        if roster_input.size_bytes != roster_descriptor.size_bytes
+            || roster_input.sha256 != roster_descriptor.sha256
+        {
+            return Err("V4 candidate top-up finality roster changed".into());
+        }
+        let roster_bytes = roster_input.read_all()?;
+        let roster: KagemushaTopUpFinalityRosterArtifactV2 =
+            decode_canonical_norito(&roster_bytes, "V4 candidate top-up finality roster")?;
+        roster
+            .validate()
+            .map_err(|error| format!("invalid V4 candidate top-up finality roster: {error}"))?;
+        if roster.chain_id != manifest.chain_id
+            || roster.artifact_generation != manifest.generation
+            || roster_descriptor.file_name != KAGEMUSHA_TOPUP_FINALITY_ROSTER_FILE_NAME_V4
+        {
+            return Err("V4 candidate top-up finality roster is not manifest-bound".into());
+        }
+        let mut covered_until = manifest.activation_height;
+        for window in &roster.windows {
+            if window.withdraws_at_height <= covered_until {
+                continue;
+            }
+            if window.activates_at_height > covered_until {
+                return Err(format!(
+                    "V4 candidate top-up finality roster has a gap at height {covered_until}"
+                )
+                .into());
+            }
+            covered_until = window.withdraws_at_height;
+            if covered_until >= manifest.withdrawal_height {
+                break;
+            }
+        }
+        if covered_until < manifest.withdrawal_height {
+            return Err(
+                "V4 candidate top-up finality roster does not cover the release window".into(),
+            );
+        }
+
+        let report = CandidateValidationReportV1 {
+            schema: CANDIDATE_VALIDATION_REPORT_SCHEMA_V1.to_owned(),
+            candidate_record_sha256: hex::encode(candidate_sha256),
+            candidate_manifest_sha256: hex::encode(manifest_sha256),
+            source_commit: manifest.source_commit.clone(),
+            source_tree_sha256: hex::encode(manifest.source_tree_sha256),
+            source_repo_dirty: manifest.source_repo_dirty,
+            generation: manifest.generation.clone(),
+            bridge_abi_version: manifest.bridge_abi_version,
+            artifact_count: u32::try_from(artifact_report.len())?,
+            artifacts: artifact_report,
+            topup_finality_roster_file_name: roster_descriptor.file_name.clone(),
+            topup_finality_roster_size_bytes: roster_descriptor.size_bytes,
+            topup_finality_roster_sha256: hex::encode(roster_descriptor.sha256),
+        };
+        let mut report_json = norito::json::to_string_pretty(&report)?;
+        report_json.push('\n');
+
+        for input in &mut tracked_metadata {
+            input.rehash_and_verify()?;
+        }
+        for input in &mut artifact_inputs {
+            input.rehash_and_verify()?;
+        }
+        roster_input.rehash_and_verify()?;
+        candidate.verify_candidate_inventory()?;
+        validate_current_source(&manifest.source_commit, manifest.source_tree_sha256)?;
+
+        let out_dir = PathBuf::from(required(options, "out-dir"));
+        if out_dir.exists() {
+            return Err(format!("output directory already exists: {}", out_dir.display()).into());
+        }
+        let repository_root =
+            fs::canonicalize(Path::new(env!("CARGO_MANIFEST_DIR")).join("../.."))?;
+        let output_parent = fs::canonicalize(
+            out_dir
+                .parent()
+                .filter(|path| !path.as_os_str().is_empty())
+                .unwrap_or(Path::new(".")),
+        )?;
+        if output_parent.starts_with(&repository_root) {
+            return Err("candidate validation output must be outside the source repository".into());
+        }
+        let trusted_parent = TrustedOutputParent::open(&out_dir)?;
+        use std::os::unix::fs::PermissionsExt as _;
+        let mut staging_builder = tempfile::Builder::new();
+        staging_builder
+            .prefix(".kagemusha-v4-validation-staging-")
+            .permissions(fs::Permissions::from_mode(0o700));
+        let staging = staging_builder.tempdir_in(&trusted_parent.path)?;
+        let staging_name = staging
+            .path()
+            .file_name()
+            .ok_or("temporary validation directory has no file name")?
+            .to_owned();
+        let publication = PublicationDirectory::open_at(
+            &trusted_parent.file,
+            staging.path().to_owned(),
+            &staging_name,
+        )?;
+        publication
+            .write_exact_file(CANDIDATE_VALIDATION_MANIFEST_FILE_NAME_V4, &manifest_bytes)?;
+        publication.write_exact_file(
+            CANDIDATE_VALIDATION_REPORT_FILE_NAME_V1,
+            report_json.as_bytes(),
+        )?;
+        publication.verify_exact_file(
+            CANDIDATE_VALIDATION_MANIFEST_FILE_NAME_V4,
+            &manifest_bytes,
+            MAX_MANIFEST_BYTES,
+        )?;
+        publication.verify_exact_file(
+            CANDIDATE_VALIDATION_REPORT_FILE_NAME_V1,
+            report_json.as_bytes(),
+            MAX_MANIFEST_BYTES,
+        )?;
+        publication.verify_inventory(&BTreeSet::from([
+            CANDIDATE_VALIDATION_MANIFEST_FILE_NAME_V4.to_owned(),
+            CANDIDATE_VALIDATION_REPORT_FILE_NAME_V1.to_owned(),
+        ]))?;
+        publication.sync()?;
+        for input in &mut tracked_metadata {
+            input.rehash_and_verify()?;
+        }
+        for input in &mut artifact_inputs {
+            input.rehash_and_verify()?;
+        }
+        roster_input.rehash_and_verify()?;
+        candidate.verify_candidate_inventory()?;
+        validate_current_source(&manifest.source_commit, manifest.source_tree_sha256)?;
+        trusted_parent.publish(&staging_name)?;
+        let _published = staging.keep();
+        Ok(())
+    }
 }
 
 fn finalize_release(options: &BTreeMap<String, String>) -> Result<(), Box<dyn Error>> {
@@ -1186,7 +1556,10 @@ fn finalize_release(options: &BTreeMap<String, String>) -> Result<(), Box<dyn Er
         candidate_record
             .validate()
             .map_err(|error| format!("invalid V4 candidate record: {error}"))?;
-        validate_clean_signed_source(&candidate_record.manifest.source_commit)?;
+        validate_current_source(
+            &candidate_record.manifest.source_commit,
+            candidate_record.manifest.source_tree_sha256,
+        )?;
         let candidate_manifest = candidate_record.manifest.clone();
         tracked_metadata.push(candidate_manifest_input);
 
@@ -1546,8 +1919,31 @@ fn finalize_release(options: &BTreeMap<String, String>) -> Result<(), Box<dyn Er
             input.rehash_and_verify()?;
         }
         candidate.verify_candidate_inventory()?;
+        validate_current_source(
+            &candidate_record.manifest.source_commit,
+            candidate_record.manifest.source_tree_sha256,
+        )?;
         publication.verify_final_inventory()?;
         publication.sync()?;
+        for input in &mut tracked_metadata {
+            input.rehash_and_verify()?;
+        }
+        for (_, input) in &mut staged_inputs {
+            input.rehash_and_verify()?;
+        }
+        for input in [
+            &mut policy_input,
+            &mut attestation_input,
+            &mut benchmark_input,
+            &mut review_input,
+        ] {
+            input.rehash_and_verify()?;
+        }
+        candidate.verify_candidate_inventory()?;
+        validate_current_source(
+            &candidate_record.manifest.source_commit,
+            candidate_record.manifest.source_tree_sha256,
+        )?;
         trusted_parent.publish(&staging_name)?;
         let _published = staging.keep();
         Ok(())

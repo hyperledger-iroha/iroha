@@ -14,13 +14,12 @@ use halo2_base::{
 };
 use halo2_proofs::halo2curves::pasta::Fp;
 use iroha_data_model::offline::{
-    KAGEMUSHA_CONFIDENTIAL_TREE_DEPTH_V2,
-    KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_TAG_DOMAIN_V2, KagemushaRecursiveSpendBranchClaimV2,
-    KagemushaRecursiveSpendBranchV2, KagemushaRecursiveSpendInitRequestV4,
-    KagemushaRecursiveSpendOperationVectorV4, KagemushaRecursiveSpendPublicStatementV4,
-    KagemushaRecursiveSpendRedemptionIntentV4, KagemushaRecursiveSpendSplitIntentV4,
-    KagemushaRecursiveSpendTransitionV4, kagemusha_confidential_amount_encoding_v2,
-    kagemusha_recursive_spend_transition_tag_v2,
+    KAGEMUSHA_CONFIDENTIAL_TREE_DEPTH_V2, KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_TAG_DOMAIN_V2,
+    KagemushaRecursiveSpendBranchClaimV2, KagemushaRecursiveSpendBranchV2,
+    KagemushaRecursiveSpendInitRequestV4, KagemushaRecursiveSpendOperationVectorV4,
+    KagemushaRecursiveSpendPublicStatementV4, KagemushaRecursiveSpendRedemptionIntentV4,
+    KagemushaRecursiveSpendSplitIntentV4, KagemushaRecursiveSpendTransitionV4,
+    kagemusha_confidential_amount_encoding_v2, kagemusha_recursive_spend_transition_tag_v2,
 };
 use norito::codec::{Decode, Encode};
 
@@ -2673,6 +2672,7 @@ pub fn constrain_two_input_step_transition_v4<F: BigPrimeField>(
 
 #[cfg(test)]
 mod tests {
+    use crate::zk::kagemusha_v2::KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V2;
     use halo2_base::{
         AssignedValue, gates::circuit::builder::BaseCircuitBuilder, utils::BigPrimeField,
     };
@@ -2680,7 +2680,6 @@ mod tests {
         dev::MockProver,
         halo2curves::pasta::{Fp, Fq},
     };
-    use crate::zk::kagemusha_v2::KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V2;
 
     use super::*;
 
@@ -2733,12 +2732,10 @@ mod tests {
             asset::AssetDefinitionId,
             domain::DomainId,
             offline::{
-                KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4,
-                KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4,
-                KagemushaRecursiveSpendArtifactBindingV4, KagemushaRecursiveSpendTopUpAnchorRefV2,
-                KagemushaScaledAmountV2, KagemushaSpendableNoteDescriptorV2,
+                KagemushaPastaCycleParityV1, KagemushaRecursiveSpendArtifactBindingV4,
+                KagemushaRecursiveSpendTopUpAnchorRefV2, KagemushaScaledAmountV2,
+                KagemushaSpendableNoteDescriptorV2, kagemusha_recursive_spend_verifier_key_id_v4,
             },
-            proof::VerifyingKeyId,
         };
 
         let chain_id = ChainId::from("kagemusha-v4-terminal-operation-binding");
@@ -2750,6 +2747,15 @@ mod tests {
             topup_operation_id: [0x41; 32],
             anchor_digest: [0x42; 32],
         };
+        let artifact_binding = KagemushaRecursiveSpendArtifactBindingV4 {
+            version: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_WIRE_VERSION_V4,
+            generation: "release-generation-4".to_owned(),
+            manifest_sha256: [0x43; 32],
+        };
+        let verifier_key_id = kagemusha_recursive_spend_verifier_key_id_v4(
+            KagemushaPastaCycleParityV1::StepEq,
+            artifact_binding.manifest_sha256,
+        );
         KagemushaRecursiveSpendPublicStatementV4 {
             chain_id: chain_id.clone(),
             asset: asset.clone(),
@@ -2771,15 +2777,8 @@ mod tests {
                     .expect("root claim"),
             ],
             transition: None,
-            artifact_binding: KagemushaRecursiveSpendArtifactBindingV4 {
-                version: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_WIRE_VERSION_V4,
-                generation: "release-generation-4".to_owned(),
-                manifest_sha256: [0x43; 32],
-            },
-            verifier_key_id: VerifyingKeyId::new(
-                KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4,
-                KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4,
-            ),
+            artifact_binding,
+            verifier_key_id,
         }
     }
 

@@ -3156,6 +3156,7 @@ export interface ContractEventStreamOptions {
 }
 
 export interface CanonicalRequestAuth {
+  /** Exact canonical ASCII account alias; I105 is not valid in this HTTP header credential. */
   accountId: string;
   privateKey:
     | Buffer
@@ -3462,9 +3463,11 @@ export interface FeeSponsorContractSelector {
 
 export interface FeeSponsorRule {
   effect: FeeSponsorRuleEffect;
+  max_fee?: string | null;
   dataspaces: ReadonlyArray<number>;
   executable_kinds: ReadonlyArray<FeeSponsorExecutableKind>;
   instruction_wire_ids: ReadonlyArray<string>;
+  asset_transfer_definition_ids: ReadonlyArray<string>;
   contract_selectors: ReadonlyArray<FeeSponsorContractSelector>;
 }
 

@@ -61,7 +61,6 @@ Use the built-in wait flow instead of shell polling:
 
 ```bash
 iroha tx status --hash <SIGNED_TX_HASH> --wait
-iroha contract deploy --authority <ACCOUNT_ID> --private-key <HEX> --code-file ./contract.to --wait
 iroha contract call --contract-alias router::dex.universal --entrypoint swap --wait
 iroha contract call --contract-alias router::dex.universal --entrypoint swap --simulate
 ```

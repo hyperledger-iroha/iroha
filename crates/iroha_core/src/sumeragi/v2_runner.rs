@@ -16,9 +16,9 @@ use std::{
 };
 
 use super::v2_core::{EventTag, Generation};
-use iroha_config::parameters::actual::{
-    NodeRole, SUMERAGI_V2_CONFIG_FORMAT_VERSION, SumeragiV2Config, sumeragi_v2_timing_ms,
-};
+#[cfg(test)]
+use iroha_config::parameters::actual::SUMERAGI_V2_CONFIG_FORMAT_VERSION;
+use iroha_config::parameters::actual::{NodeRole, SumeragiV2Config, sumeragi_v2_timing_ms};
 use iroha_crypto::{Hash, HashOf, KeyPair};
 use iroha_data_model::{
     Encode as _,

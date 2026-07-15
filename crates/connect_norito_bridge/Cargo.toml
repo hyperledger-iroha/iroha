@@ -4,7 +4,12 @@ version.workspace = true
 edition = "2024"
 
 [lib]
-crate-type = ["cdylib", "staticlib"]
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[[bin]]
+name = "kagemusha_candidate_scenario_validator"
+path = "src/bin/kagemusha_candidate_scenario_validator.rs"
+required-features = ["kagemusha-candidate-evidence-lab"]
 
 [features]
 compact-len = []
@@ -13,6 +18,10 @@ schema-structural = []
 # Enable real halo2/ipa proving and verification for confidential-transfer-v2 and unshield.
 # OFF by default; flip on only when all production gates have passed.
 privacy-production-enabled = []
+# Non-shipping physical-device evidence harness. Candidate symbols, state, and
+# JNI exports are absent unless this feature is selected explicitly; enabling
+# it does not change the production Kagemusha capability gate.
+kagemusha-candidate-evidence-lab = ["iroha_core/kagemusha-candidate-evidence-lab"]
 
 [dependencies]
 norito = { path = "../norito", version = "2.0.0-rc.2.0", default-features = false, features = ["std", "derive", "json", "json-std-io", "columnar", "strict-safe"] }

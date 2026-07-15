@@ -445,7 +445,7 @@ pub mod isi {
         }
     }
 
-    pub(super) fn resolve_contract_alias_components(
+    pub(crate) fn resolve_contract_alias_components(
         state_transaction: &StateTransaction<'_, '_>,
         alias: &ContractAlias,
     ) -> Result<(Name, Option<AccountAliasDomain>, DataSpaceId), InstructionExecutionError> {
@@ -483,7 +483,7 @@ pub mod isi {
         Ok((label_name, domain, dataspace))
     }
 
-    fn ensure_authority_can_manage_contract_alias(
+    pub(crate) fn ensure_authority_can_manage_contract_alias(
         state_transaction: &StateTransaction<'_, '_>,
         authority: &AccountId,
         alias: &ContractAlias,
@@ -559,7 +559,7 @@ pub mod isi {
         })
     }
 
-    fn ensure_account_alias_namespace_available_for_contract_alias(
+    pub(crate) fn ensure_account_alias_namespace_available_for_contract_alias(
         state_transaction: &StateTransaction<'_, '_>,
         alias: &ContractAlias,
     ) -> Result<(), InstructionExecutionError> {
@@ -1273,6 +1273,25 @@ pub mod isi {
                 return Err(InstructionExecutionError::InvariantViolation(
                     format!("cannot unregister account {account_id}: it is governed SCCP custody")
                         .into(),
+                )
+                .into());
+            }
+
+            let contract_deploy_nonce_key = Name::from_str(
+                iroha_data_model::smart_contract::CONTRACT_DEPLOY_NONCE_METADATA_KEY,
+            )
+            .expect("contract deployment nonce metadata key must remain valid");
+            if state_transaction
+                .world
+                .account(&account_id)?
+                .metadata()
+                .contains(&contract_deploy_nonce_key)
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "cannot unregister account {account_id}: it has native contract deployment nonce state; retain the account to preserve deployment address monotonicity and audit history"
+                    )
+                    .into(),
                 )
                 .into());
             }
@@ -7339,6 +7358,54 @@ mod tests {
         assert!(
             tx.world.accounts.get(&account_id).is_some(),
             "account should remain after rejected unregister"
+        );
+    }
+
+    #[test]
+    fn unregister_account_rejects_when_account_has_contract_deployment_nonce_state() {
+        let mut state = test_state();
+        let domain_id: DomainId =
+            DomainId::try_new("contract_deployer", "world").expect("domain id");
+        let authority = (*ALICE_ID).clone();
+        seed_domain(&mut state, &domain_id, &authority);
+
+        let account_id = AccountId::new(checked_keypair().public_key().clone());
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        Register::account(NewAccount::new(account_id.clone()))
+            .execute(&authority, &mut tx)
+            .expect("register account");
+
+        let nonce_key: Name = iroha_data_model::smart_contract::CONTRACT_DEPLOY_NONCE_METADATA_KEY
+            .parse()
+            .expect("contract deployment nonce key");
+        tx.world
+            .account_mut(&account_id)
+            .expect("registered account")
+            .insert(nonce_key.clone(), Json::new(1_u64));
+
+        let err = Unregister::account(account_id.clone())
+            .execute(&authority, &mut tx)
+            .expect_err("contract deployer identity must retain its monotonic nonce state");
+        let err_string = err.to_string();
+        assert!(
+            err_string.contains("contract deployment nonce state")
+                && err_string.contains("address monotonicity"),
+            "error should explain the deployment replay invariant: {err_string}"
+        );
+        assert!(
+            tx.world.accounts.get(&account_id).is_some(),
+            "account and nonce must remain after rejected unregister"
+        );
+        assert_eq!(
+            tx.world
+                .account(&account_id)
+                .expect("account remains")
+                .metadata()
+                .get(&nonce_key),
+            Some(&Json::new(1_u64)),
+            "deployment nonce must remain unchanged"
         );
     }
 

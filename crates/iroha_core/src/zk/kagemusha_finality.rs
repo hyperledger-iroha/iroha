@@ -177,15 +177,64 @@ impl KagemushaTopUpFinalityVerifier {
         manifest: &KagemushaRecursiveSpendArtifactManifestV4,
         expected_manifest_sha256: [u8; 32],
     ) -> Result<VerifiedKagemushaTopUpFinalityV2, KagemushaTopUpFinalityVerifyError> {
+        self.verify_v4_with_manifest_state(
+            proof,
+            roster_artifact,
+            expected_anchor,
+            manifest,
+            expected_manifest_sha256,
+            true,
+        )
+    }
+
+    /// Verify the same live finality proof against a clean, unsigned ABI-20
+    /// candidate in an explicitly selected non-shipping evidence-lab build.
+    #[cfg(feature = "kagemusha-candidate-evidence-lab")]
+    pub fn verify_candidate_evidence_lab_v4(
+        &self,
+        proof: &KagemushaTopUpFinalityProofV2,
+        roster_artifact: &KagemushaTopUpFinalityRosterArtifactV2,
+        expected_anchor: &KagemushaRecursiveSpendTopUpAnchorV4,
+        manifest: &KagemushaRecursiveSpendArtifactManifestV4,
+        expected_manifest_sha256: [u8; 32],
+    ) -> Result<VerifiedKagemushaTopUpFinalityV2, KagemushaTopUpFinalityVerifyError> {
+        self.verify_v4_with_manifest_state(
+            proof,
+            roster_artifact,
+            expected_anchor,
+            manifest,
+            expected_manifest_sha256,
+            false,
+        )
+    }
+
+    fn verify_v4_with_manifest_state(
+        &self,
+        proof: &KagemushaTopUpFinalityProofV2,
+        roster_artifact: &KagemushaTopUpFinalityRosterArtifactV2,
+        expected_anchor: &KagemushaRecursiveSpendTopUpAnchorV4,
+        manifest: &KagemushaRecursiveSpendArtifactManifestV4,
+        expected_manifest_sha256: [u8; 32],
+        finalized_release: bool,
+    ) -> Result<VerifiedKagemushaTopUpFinalityV2, KagemushaTopUpFinalityVerifyError> {
         proof
             .validate_structure()
             .map_err(|_| KagemushaTopUpFinalityVerifyError::InvalidStructure)?;
         expected_anchor
             .validate_public_binding()
             .map_err(|_| KagemushaTopUpFinalityVerifyError::InvalidStructure)?;
-        manifest
-            .validate()
-            .map_err(|_| KagemushaTopUpFinalityVerifyError::ManifestDigestMismatch)?;
+        if finalized_release {
+            manifest
+                .validate()
+                .map_err(|_| KagemushaTopUpFinalityVerifyError::ManifestDigestMismatch)?;
+        } else {
+            #[cfg(feature = "kagemusha-candidate-evidence-lab")]
+            manifest
+                .validate_unsigned_candidate()
+                .map_err(|_| KagemushaTopUpFinalityVerifyError::ManifestDigestMismatch)?;
+            #[cfg(not(feature = "kagemusha-candidate-evidence-lab"))]
+            return Err(KagemushaTopUpFinalityVerifyError::ManifestDigestMismatch);
+        }
         if expected_manifest_sha256 == [0; 32]
             || canonical_sha256(manifest)? != expected_manifest_sha256
         {
@@ -345,6 +394,28 @@ pub fn verify_kagemusha_topup_finality_v4(
     VERIFIER
         .get_or_init(KagemushaTopUpFinalityVerifier::new)
         .verify_v4(
+            proof,
+            roster_artifact,
+            expected_anchor,
+            manifest,
+            expected_manifest_sha256,
+        )
+}
+
+/// Verify one ABI-20 top-up proof against a clean candidate using the same
+/// cryptographic verifier and bounded roster cache as production.
+#[cfg(feature = "kagemusha-candidate-evidence-lab")]
+pub fn verify_kagemusha_topup_finality_candidate_evidence_lab_v4(
+    proof: &KagemushaTopUpFinalityProofV2,
+    roster_artifact: &KagemushaTopUpFinalityRosterArtifactV2,
+    expected_anchor: &KagemushaRecursiveSpendTopUpAnchorV4,
+    manifest: &KagemushaRecursiveSpendArtifactManifestV4,
+    expected_manifest_sha256: [u8; 32],
+) -> Result<VerifiedKagemushaTopUpFinalityV2, KagemushaTopUpFinalityVerifyError> {
+    static VERIFIER: OnceLock<KagemushaTopUpFinalityVerifier> = OnceLock::new();
+    VERIFIER
+        .get_or_init(KagemushaTopUpFinalityVerifier::new)
+        .verify_candidate_evidence_lab_v4(
             proof,
             roster_artifact,
             expected_anchor,

@@ -192,8 +192,8 @@ fn manual_slash_and_restitution_move_bonds_and_record_ledger() {
         .get(referendum_id)
         .expect("locks after slash");
     let rec = locks.locks.get(&alice_id).expect("alice lock after slash");
-    assert_eq!(rec.amount, 8);
-    assert_eq!(rec.slashed, 2);
+    assert_eq!(rec.amount, Quantity::from(8_u64));
+    assert_eq!(rec.slashed, Quantity::from(2_u64));
 
     let ledger = sblock
         .world
@@ -201,8 +201,8 @@ fn manual_slash_and_restitution_move_bonds_and_record_ledger() {
         .get(referendum_id)
         .expect("slash ledger");
     let entry = ledger.slashes.get(&alice_id).expect("slash ledger entry");
-    assert_eq!(entry.total_slashed, 4);
-    assert_eq!(entry.total_restituted, 2);
+    assert_eq!(entry.total_slashed, Quantity::from(4_u64));
+    assert_eq!(entry.total_restituted, Quantity::from(2_u64));
     assert_eq!(
         entry.last_reason,
         iroha_data_model::events::data::governance::GovernanceSlashReason::Restitution

@@ -112,46 +112,13 @@ the affected effect or write.
 
 ## Torii endpoints (feature `app_api`)
 
-- `POST /v1/contracts/deploy`
-  - Request body: `DeployContractDto` (see `docs/source/torii_contracts_api.md` for field details).
-  - Torii decodes the base64 payload, verifies the embedded `CNTR` interface,
-    derives the manifest from the artifact itself, allocates a fresh immutable
-    `contract_address`, and executes the native chunk plan on behalf of the
-    caller. For multi-chunk artifacts it commits the first upload together with
-    any required domainless authority bootstrap, submits the remaining
-    pre-stage chunks in order, and waits until their committed progress is
-    visible before admitting the final transaction. That final transaction
-    uploads the last chunk, finalizes code registration, registers the
-    manifest, activates the instance, and binds the requested alias.
-  - When the signing authority does not exist at transaction start, its first
-    deployment transaction begins with the exact ordered prefix
-    `Register<Account>(self)`, `Grant<CanRegisterSmartContractCode>(self)`,
-    then either `UploadSmartContractCodeChunk` or, for matching code already
-    stored on-chain, `RegisterSmartContractCode`. The transaction execution
-    policy, mirrored by the built-in and default runtime executors, permits this
-    one atomic deployment bootstrap only for an absent transaction authority.
-    It does not permit an existing account to self-grant, a grant to another
-    account, a differently encoded permission, or a reordered prefix.
-    For a one-chunk artifact this prefix, chunk upload, finalization, manifest
-    registration, and activation all occur in the final transaction.
-  - Matching code already present under `code_hash` skips the upload stages.
-    When its manifest is absent, the final transaction registers it and
-    activates/binds the new instance; a missing authority can use that manifest
-    registration as the third bootstrap instruction. When both matching code
-    and manifest already exist, an existing authorized account skips both
-    registrations, while a missing authority is rejected because activation
-    alone cannot qualify for the narrow self-grant exception. A rejected stage
-    fails immediately. A progress timeout reports expected and observed
-    committed chunks while retaining resumable pending state.
-  - Redeploying the same `contract_alias` performs an in-place `kaizen`/`改善`:
-    Torii deploys a new address, rebinds the alias atomically, and deactivates
-    the previous address.
-  - Response: `DeployContractBundleReceiptDto` with bundle metadata plus one
-    entry in `contracts[]` for this single-contract shortcut. Every contract
-    receipt contains required `upload_stage_tx_hashes`; `tx_hash_hex` is the
-    final deployment transaction hash.
-  - Errors: invalid base64, invalid contract artifact, size cap exceeded,
-    governance gating for protected namespaces, or fee/balance failures.
+- Torii does not expose server-side deployment or deployment-receipt routes.
+  Clients verify artifacts, sign manifests, and submit native deployment
+  instructions locally through the standard transaction pipeline.
+- `CommitContractDeployment` atomically validates the expected authority nonce,
+  derived address, registered artifact, and previous alias target before
+  activation and alias rotation. The reserved nonce cannot be written through
+  generic account metadata instructions.
 - `GET /v1/contracts/code/{code_hash}`
   - Returns `{ code_hash, abi_hash, manifest: <ContractManifest> }`. The two
     top-level convenience values are raw lowercase hex; `manifest` uses the
@@ -166,15 +133,9 @@ the affected effect or write.
 - `GET /v1/contracts/code-bytes/{code_hash}`
   - Returns `{ code_b64 }` with the stored `.to` image encoded as base64.
 
-All contract lifecycle endpoints share a dedicated deploy limiter configured via
-`torii.deploy_rate_per_origin_per_sec` (tokens per second) and
-`torii.deploy_burst_per_origin` (burst tokens). Defaults are 4 req/s with a burst of
-8 for each token/key derived from `X-API-Token`, the remote IP, or the endpoint hint.
-Set either field to `null` to disable the limiter for trusted operators. When the
-limiter fires, Torii increments the
-`torii_contract_throttled_total{endpoint="deploy"}` telemetry counter and
-returns HTTP 429; any handler error increments
-`torii_contract_errors_total{endpoint=…}` for alerting.
+The artifact-read endpoints are content-addressed reads. Deployment admission,
+fees, permissions, routing, and governance are enforced on the locally signed
+native transactions rather than by a separate Torii deployment limiter.
 
 ## Governance integration & protected namespaces
 
@@ -202,8 +163,6 @@ returns HTTP 429; any handler error increments
 
 ## CLI helpers
 
-- `iroha contract deploy --authority <id> --private-key <hex> --code-file <path> --contract-alias <name::dataspace>`
-  submits the alias-first Torii deploy request (computing hashes on the fly).
 - `ivm_contract_deploy` uses the same native plan in blocking and emit modes.
   Transactions 1 through N-1 each carry one chunk; the final registration
   transaction carries chunk N plus finalization. Manifest registration and

@@ -30,6 +30,7 @@ test("canonical request signing: headers include a verifiable signature", () => 
     seed: Buffer.alloc(32, 7),
   });
   const accountId = AccountAddress.fromAccount({ publicKey }).toI105();
+  const accountAlias = "alice-1@wonderland";
   const body = Buffer.from('{"foo":1}');
   const path = `/v1/accounts/${accountId}/assets`;
   const timestampMs = 1_717_171_717_000;
@@ -43,7 +44,7 @@ test("canonical request signing: headers include a verifiable signature", () => 
     nonce,
   });
   const headers = buildCanonicalRequestHeaders({
-    accountId,
+    accountId: accountAlias,
     method: "get",
     path,
     query: "limit=10",
@@ -53,6 +54,7 @@ test("canonical request signing: headers include a verifiable signature", () => 
     nonce,
   });
   const signature = Buffer.from(headers["X-Iroha-Signature"], "base64");
+  assert.equal(headers["X-Iroha-Account"], accountAlias);
   assert.equal(headers["X-Iroha-Timestamp-Ms"], String(timestampMs));
   assert.equal(headers["X-Iroha-Nonce"], nonce);
   assert.equal(verifyEd25519(message, signature, publicKey), true);
@@ -63,6 +65,7 @@ test("canonical request signing: rejects padded auth fields", async () => {
     seed: Buffer.alloc(32, 11),
   });
   const accountId = AccountAddress.fromAccount({ publicKey }).toI105();
+  const accountAlias = "alice-1@wonderland";
   const timestampMs = 1_717_171_717_003;
 
   assert.throws(
@@ -78,19 +81,19 @@ test("canonical request signing: rejects padded auth fields", async () => {
   assert.throws(
     () =>
       buildCanonicalRequestHeaders({
-        accountId: ` ${accountId}`,
+        accountId: ` ${accountAlias}`,
         method: "get",
         path: "/v1/accounts",
         privateKey,
         timestampMs,
         nonce: "nonce",
       }),
-    /surrounding whitespace/,
+    /exact canonical ASCII account alias/,
   );
   assert.throws(
     () =>
       buildCanonicalRequestHeaders({
-        accountId,
+        accountId: accountAlias,
         method: "get",
         path: "/v1/accounts",
         privateKey,
@@ -102,19 +105,19 @@ test("canonical request signing: rejects padded auth fields", async () => {
   await assert.rejects(
     () =>
       buildCanonicalJsonRequest({
-        accountId: `${accountId} `,
+        accountId: `${accountAlias} `,
         path: "/v1/accounts",
         body: {},
         privateKey,
         timestampMs,
         nonce: "nonce",
       }),
-    /surrounding whitespace/,
+    /exact canonical ASCII account alias/,
   );
   await assert.rejects(
     () =>
       buildCanonicalJsonRequest({
-        accountId,
+        accountId: accountAlias,
         path: "/v1/accounts",
         body: {},
         privateKey,
@@ -123,13 +126,49 @@ test("canonical request signing: rejects padded auth fields", async () => {
       }),
     /surrounding whitespace/,
   );
+
+  for (const invalidAccountId of [
+    accountId,
+    "Alice-1@wonderland",
+    "alice-1@Wonderland",
+    "alíce-1@wonderland",
+    "alice-1%40wonderland",
+    Buffer.from(accountAlias, "utf8").toString("base64"),
+  ]) {
+    assert.throws(
+      () =>
+        buildCanonicalRequestHeaders({
+          accountId: invalidAccountId,
+          method: "get",
+          path: "/v1/accounts",
+          privateKey,
+          timestampMs,
+          nonce: "nonce",
+        }),
+      /exact canonical ASCII account alias/,
+      invalidAccountId,
+    );
+    await assert.rejects(
+      () =>
+        buildCanonicalJsonRequest({
+          accountId: invalidAccountId,
+          path: "/v1/accounts",
+          body: {},
+          privateKey,
+          timestampMs,
+          nonce: "nonce",
+        }),
+      /exact canonical ASCII account alias/,
+      invalidAccountId,
+    );
+  }
 });
 
 test("canonical request signing: JSON helper signs the exact request body with callback signers", async () => {
   const { privateKey, publicKey } = generateKeyPair({
     seed: Buffer.alloc(32, 8),
   });
-  const accountId = AccountAddress.fromAccount({ publicKey }).toI105();
+  const accountId = "operator-1@mibank.paynet";
   const path = "/v1/aliases/resolve?b=2&a=1";
   const timestampMs = 1_717_171_717_001;
   const nonce = "browser-keystore-nonce";
@@ -179,7 +218,7 @@ test("canonical request signing: JSON helper includes reverse-proxy base paths",
   const { privateKey, publicKey } = generateKeyPair({
     seed: Buffer.alloc(32, 9),
   });
-  const accountId = AccountAddress.fromAccount({ publicKey }).toI105();
+  const accountId = "operator-1@mibank.paynet";
   const timestampMs = 1_717_171_717_002;
   const nonce = "torii-prefix-nonce";
   let signerInput = null;

@@ -90,6 +90,8 @@ fi
 
 ROOT_DIR="$(cd "$ROOT_ARG" && pwd)"
 FAILURES=0
+CANDIDATE_LAB_MARKER="KAGEMUSHA_CANDIDATE_EVIDENCE_LAB_DO_NOT_SHIP_V2"
+CANDIDATE_LAB_SYMBOL_FRAGMENT="kagemusha_recursive_spend_candidate_lab_"
 
 # The first mobile release is one exact ABI-20/V4 contract. Keep the complete
 # Kagemusha C export allow-list here so Apple archives, Android shared objects,
@@ -111,6 +113,8 @@ KAGEMUSHA_C_SYMBOLS=(
   connect_norito_kagemusha_output_membership_frontier_build_v4
   connect_norito_kagemusha_output_membership_paths_derive_v4
   connect_norito_kagemusha_recursive_spend_branch_validate_v4
+  connect_norito_kagemusha_recursive_spend_topup_provenance_build_v4
+  connect_norito_kagemusha_recursive_spend_topup_provenance_validate_v4
   connect_norito_kagemusha_recursive_spend_init_v4
   connect_norito_kagemusha_recursive_spend_topup_unsigned_payload_digest_v4
   connect_norito_kagemusha_recursive_spend_topup_finalize_request_v4
@@ -138,6 +142,10 @@ KAGEMUSHA_C_SYMBOLS=(
 
 REQUIRED_BRIDGE_SYMBOLS=(
   connect_norito_bridge_abi_version
+  connect_norito_free
+  connect_norito_encode_transfer_signed_transaction
+  connect_norito_encode_transfer_instruction_box
+  connect_norito_encode_validation_fee_transfer_signed_transaction
   connect_norito_detached_transaction_scaffold_inspect_v1
   connect_norito_detached_transaction_scaffold_finalize_ed25519_v1
   connect_norito_canonical_json_blake3_v1
@@ -258,6 +266,94 @@ require_glob() {
   fi
 }
 
+reject_candidate_lab_content() {
+  local path="$1"
+  local label="$2"
+  [[ -f "$path" ]] || return
+  if ! python3 - "$path" "$CANDIDATE_LAB_MARKER" "$CANDIDATE_LAB_SYMBOL_FRAGMENT" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+needles = tuple(value.encode("ascii") for value in sys.argv[2:])
+overlap = max(map(len, needles)) - 1
+tail = b""
+with path.open("rb") as handle:
+    while True:
+        chunk = handle.read(1024 * 1024)
+        if not chunk:
+            break
+        window = tail + chunk
+        if any(needle in window for needle in needles):
+            raise SystemExit(1)
+        tail = window[-overlap:] if overlap else b""
+PY
+  then
+    fail "$label contains a non-shipping Kagemusha candidate-lab marker or symbol"
+  fi
+}
+
+reject_candidate_lab_archive() {
+  local path="$1"
+  local label="$2"
+  [[ -f "$path" ]] || return
+  if ! python3 - "$path" "$CANDIDATE_LAB_MARKER" "$CANDIDATE_LAB_SYMBOL_FRAGMENT" <<'PY'
+import io
+import sys
+import zipfile
+
+needles = tuple(value.encode("ascii") for value in sys.argv[2:])
+overlap = max(map(len, needles)) - 1
+archive_suffixes = (".aar", ".jar", ".zip")
+
+def scan_stream(handle):
+    tail = b""
+    chunks = []
+    total = 0
+    while True:
+        chunk = handle.read(1024 * 1024)
+        if not chunk:
+            break
+        window = tail + chunk
+        if any(needle in window for needle in needles):
+            raise SystemExit(1)
+        total += len(chunk)
+        if total <= 256 * 1024 * 1024:
+            chunks.append(chunk)
+        tail = window[-overlap:] if overlap else b""
+    return b"".join(chunks) if total <= 256 * 1024 * 1024 else None
+
+def scan_archive(archive, depth=0):
+    if depth > 3:
+        raise SystemExit(2)
+    for entry in archive.infolist():
+        if entry.is_dir() or entry.file_size > 256 * 1024 * 1024:
+            if entry.file_size > 256 * 1024 * 1024:
+                raise SystemExit(2)
+            continue
+        with archive.open(entry) as handle:
+            payload = scan_stream(handle)
+        if entry.filename.lower().endswith(archive_suffixes):
+            if payload is None:
+                raise SystemExit(2)
+            try:
+                with zipfile.ZipFile(io.BytesIO(payload)) as nested:
+                    scan_archive(nested, depth + 1)
+            except zipfile.BadZipFile:
+                raise SystemExit(2)
+
+try:
+    archive = zipfile.ZipFile(sys.argv[1])
+except (OSError, zipfile.BadZipFile):
+    raise SystemExit(2)
+with archive:
+    scan_archive(archive)
+PY
+  then
+    fail "$label is unreadable or contains a non-shipping Kagemusha candidate-lab marker or symbol"
+  fi
+}
+
 require_zip_entry() {
   local archive="$1"
   local entry="$2"
@@ -362,6 +458,10 @@ actual = set(re.findall(
     r'(connect_norito_kagemusha_[A-Za-z0-9_]+)\s*\(',
     text,
 ))
+# Candidate-evidence exports are permitted in source only behind their
+# dedicated Cargo feature. They remain forbidden in every production binary
+# below, where symbol inspection compares the complete exported inventory.
+actual = {name for name in actual if "_candidate_lab_" not in name}
 errors = []
 if abi is None or abi.group(1) != "20":
     errors.append("bridge source does not declare exact ABI 20")
@@ -637,6 +737,9 @@ check_xcframework() {
     require_dir "$slice_dir" "XCFramework slice directory"
     if [[ -d "$slice_dir" ]]; then
       require_file "$slice_dir/libNoritoBridge.a" "XCFramework slice binary"
+      reject_candidate_lab_content \
+        "$slice_dir/libNoritoBridge.a" \
+        "NoritoBridge $slice production binary"
       require_dir "$headers_dir" "XCFramework slice headers"
       if [[ -d "$headers_dir" ]]; then
         require_file "$headers_dir/NoritoBridge.h" "XCFramework slice header"
@@ -971,11 +1074,21 @@ check_android_package() {
 
     require_zip_entry "$client_aar" "AndroidManifest.xml" "client-android release aar"
     require_zip_entry "$client_aar" "classes.jar" "client-android release aar"
+    reject_candidate_lab_archive "$client_aar" "client-android release aar"
+
+    local production_archive
+    while IFS= read -r production_archive; do
+      reject_candidate_lab_archive "$production_archive" "production mobile SDK archive"
+    done < <(
+      compgen -G "$ROOT_DIR/kotlin/core-jvm/build/libs/core-jvm-*.jar" || true
+      compgen -G "$ROOT_DIR/kotlin/offline-wallet-android/build/outputs/aar/offline-wallet-android-*.aar" || true
+    )
 
     for abi in arm64-v8a x86_64; do
       local source_native="$ROOT_DIR/kotlin/client-android/src/main/jniLibs/$abi/libconnect_norito_bridge.so"
       local aar_entry="jni/$abi/libconnect_norito_bridge.so"
       require_file "$source_native" "client-android $abi native bridge library"
+      reject_candidate_lab_content "$source_native" "client-android $abi production bridge"
       require_zip_entry "$client_aar" "jni/$abi/libconnect_norito_bridge.so" "client-android release aar"
       if [[ -f "$source_native" && -f "$client_aar" ]] \
           && unzip -Z1 "$client_aar" 2>/dev/null | grep -Fxq -- "$aar_entry"; then

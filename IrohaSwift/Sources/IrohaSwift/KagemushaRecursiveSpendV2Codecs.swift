@@ -1642,15 +1642,23 @@ public enum KagemushaRecursiveSpendCodecs {
             reader.field(), field: "verifyResultV4.verifiedAtMilliseconds"
         )
         try reader.finish("verifyResultV4")
+        let expectedVerifierKeyID = try KagemushaRecursiveSpend
+            .releaseQualifiedStepEqVerifierKeyIDV4(
+                manifestSHA256: summary.artifactBinding.manifestSHA256
+            )
         guard valid, chainAdmissible, lineageRedeemable, witnessless,
               requestDigest.contains(where: { $0 != 0 }),
               outputBindingDigest.contains(where: { $0 != 0 }),
+              let activation,
+              let withdrawal,
+              activation > 0,
+              activation < withdrawal,
+              blockHeight >= activation,
+              blockHeight < withdrawal,
               summary.verifierKeyID == verifierKeyID,
+              verifierKeyID == expectedVerifierKeyID,
               verifierCircuitID == KagemushaRecursiveSpend.stepEqCircuitIDV4,
-              blockHeight > 0, verifiedAt > 0,
-              withdrawal.map({ withdraw in
-                  activation.map({ $0 < withdraw }) ?? true
-              }) ?? true else {
+              blockHeight > 0, verifiedAt > 0 else {
             throw KagemushaRecursiveSpendError.invalidArchive("verifyResultV4.binding")
         }
         return KagemushaRecursiveSpendVerifyResultV4(

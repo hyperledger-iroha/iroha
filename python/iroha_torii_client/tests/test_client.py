@@ -22,7 +22,6 @@ import iroha_torii_client as torii_module  # noqa: E402
 import iroha_torii_client.client as client_module  # noqa: E402
 from iroha_torii_client import (  # noqa: E402  (import depends on sys.path mutation)
     ContractCallResponse,
-    ContractDeployResponse,
     ContractOperationReceipt,
     ExplorerAccountQr,
     GovernanceContractResponse,
@@ -2109,156 +2108,6 @@ def test_list_peers_returns_typed_records() -> None:
     ]
 
 
-def test_deploy_contract_encodes_alias_first_payload_and_parses_response() -> None:
-    session = RecordingSession()
-    session.queue(
-        StubResponse(
-            status_code=202,
-            payload={
-                "ok": True,
-                "bundle_name": "single-contract-deploy",
-                "bundle_digest": "mock-bundle-digest",
-                "chain_fingerprint": "mock-chain@height-0",
-                "dry_run": False,
-                "completed_stages": ["plan", "deploy"],
-                "failure_point": None,
-                "contracts": [
-                    {
-                        "name": "router::universal",
-                        "contract_alias": "router::universal",
-                        "contract_address": "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
-                        "previous_contract_address": None,
-                        "kaizen": False,
-                        "dataspace": "universal",
-                        "deploy_nonce": 7,
-                        "tx_hash_hex": "11" * 32,
-                        "pipeline_status": {
-                            "hash": "11" * 32,
-                            "status": {
-                                "kind": "Queued",
-                                "block_height": None,
-                                "rejection_reason": None,
-                            },
-                            "summary": "Queued",
-                            "diagnostics": [],
-                            "scope": "local",
-                            "resolved_from": "queue",
-                        },
-                        "code_hash_hex": "22" * 32,
-                        "abi_hash_hex": "33" * 32,
-                        "status": "submitted",
-                    }
-                ],
-                "hajimari_calls": [],
-                "assertions": [],
-            },
-        )
-    )
-    client = ToriiClient("http://node.test", session=session)
-
-    result = client.deploy_contract(
-        authority=CANONICAL_OWNER,
-        private_key="00" * 32,
-        code_b64="AQID",
-        contract_alias="router::universal",
-        lease_expiry_ms=1234,
-    )
-
-    assert isinstance(result, ContractDeployResponse)
-    assert result is not None
-    assert result.bundle_digest == "mock-bundle-digest"
-    assert result.contracts[0].contract_alias == "router::universal"
-    assert result.contracts[0].deploy_nonce == 7
-    assert result.contracts[0].pipeline_status is not None
-    assert result.contracts[0].pipeline_status.status.kind == "Queued"
-    assert len(session.calls) == 1
-    assert session.calls[0]["method"] == "POST"
-    assert session.calls[0]["url"] == "http://node.test/v1/contracts/deploy"
-    payload = json.loads(session.calls[0]["data"].decode("utf-8"))
-    assert payload == {
-        "authority": CANONICAL_OWNER,
-        "private_key": "00" * 32,
-        "code_b64": "AQID",
-        "contract_alias": "router::universal",
-        "lease_expiry_ms": 1234,
-    }
-
-
-def test_deploy_contract_rejects_retired_init_calls_response_field() -> None:
-    session = RecordingSession()
-    session.queue(
-        StubResponse(
-            status_code=202,
-            payload={
-                "ok": True,
-                "bundle_name": "single-contract-deploy",
-                "bundle_digest": "mock-bundle-digest",
-                "chain_fingerprint": "mock-chain@height-0",
-                "dry_run": False,
-                "completed_stages": ["plan", "deploy"],
-                "failure_point": None,
-                "contracts": [],
-                "init_calls": [],
-                "assertions": [],
-            },
-        )
-    )
-    client = ToriiClient("http://node.test", session=session)
-
-    with pytest.raises(RuntimeError, match=r"contract deploy response\.hajimari_calls"):
-        client.deploy_contract(
-            authority=CANONICAL_OWNER,
-            private_key="00" * 32,
-            code_b64="AQID",
-            contract_alias="router::universal",
-        )
-
-
-def test_deploy_contract_posts_fee_sponsor_metadata() -> None:
-    session = RecordingSession()
-    session.queue(
-        StubResponse(
-            status_code=202,
-            payload={
-                "ok": True,
-                "bundle_name": "single-contract-deploy",
-                "bundle_digest": "mock-bundle-digest",
-                "chain_fingerprint": "mock-chain@height-0",
-                "dry_run": False,
-                "completed_stages": ["plan", "deploy"],
-                "failure_point": None,
-                "contracts": [],
-                "hajimari_calls": [],
-                "assertions": [],
-            },
-        )
-    )
-    client = ToriiClient("http://node.test", session=session)
-
-    client.deploy_contract(
-        authority=CANONICAL_OWNER,
-        private_key="00" * 32,
-        code_b64="AQID",
-        contract_alias="router::universal",
-        gas_asset_id="xor#sora",
-        fee_sponsor=CANONICAL_OWNER,
-        gas_limit=10_000_000,
-    )
-
-    payload = json.loads(session.calls[0]["data"].decode("utf-8"))
-    assert payload["gas_asset_id"] == "xor#sora"
-    assert payload["fee_sponsor"] == CANONICAL_OWNER
-    assert payload["gas_limit"] == 10_000_000
-
-    with pytest.raises(ValueError, match="deploy_contract.fee_sponsor"):
-        client.deploy_contract(
-            authority=CANONICAL_OWNER,
-            private_key="00" * 32,
-            code_b64="AQID",
-            contract_alias="router::universal",
-            fee_sponsor="bad sponsor",
-        )
-
 
 def test_call_contract_posts_selector_payload_and_parses_response() -> None:
     session = RecordingSession()
@@ -3202,32 +3051,6 @@ def test_contract_helpers_against_mock_server() -> None:
                         "code_hash_hex": "22" * 32,
                     }
                 },
-                "contract_deploy_response": {
-                    "ok": True,
-                    "bundle_name": "single-contract-deploy",
-                    "bundle_digest": "mock-single-contract-digest",
-                    "chain_fingerprint": "mock-chain@height-0",
-                    "dry_run": False,
-                    "completed_stages": ["plan", "deploy"],
-                    "failure_point": None,
-                    "contracts": [
-                        {
-                            "name": "router::universal",
-                            "contract_alias": "router::universal",
-                            "contract_address": contract_address,
-                            "previous_contract_address": None,
-                            "kaizen": False,
-                            "dataspace": "universal",
-                            "deploy_nonce": 1,
-                            "tx_hash_hex": "11" * 32,
-                            "code_hash_hex": "22" * 32,
-                            "abi_hash_hex": "33" * 32,
-                            "status": "submitted",
-                        }
-                    ],
-                    "hajimari_calls": [],
-                    "assertions": [],
-                },
                 "contract_call_response": {
                     "ok": True,
                     "submitted": True,
@@ -3251,12 +3074,6 @@ def test_contract_helpers_against_mock_server() -> None:
         response.raise_for_status()
 
         client = ToriiClient(server.base_url)
-        deploy = client.deploy_contract(
-            authority=CANONICAL_OWNER,
-            private_key="00" * 32,
-            code_b64="AQID",
-            contract_alias="router::universal",
-        )
         call = client.call_contract(
             authority=CANONICAL_OWNER,
             private_key="00" * 32,
@@ -3267,8 +3084,6 @@ def test_contract_helpers_against_mock_server() -> None:
         )
         governed = client.get_governance_contract(contract_address)
 
-        assert deploy is not None
-        assert deploy.contracts[0].contract_address == contract_address
         assert call.contract_address == contract_address
         assert governed.contract_address == contract_address
         assert governed.code_hash_hex == "22" * 32
@@ -3889,91 +3704,6 @@ def test_mock_server_rejects_retired_global_sumeragi_routes(method: str, path: s
     finally:
         server.stop()
 
-
-def test_contract_bundle_helpers_against_mock_server() -> None:
-    server = ToriiMockServer().start()
-    try:
-        response = requests.post(
-            f"{server.base_url.rstrip('/')}/__mock__/contracts/config",
-            json={
-                "bundle_response": {
-                    "bundle_digest": "mock-bundle-digest",
-                    "completed_stages": ["plan", "deploy", "hajimari_calls", "assertions"],
-                }
-            },
-            timeout=5.0,
-        )
-        response.raise_for_status()
-
-        request_payload = {
-            "bundle_name": "demo",
-            "authority": CANONICAL_OWNER,
-            "private_key": "00" * 32,
-            "contracts": [
-                {
-                    "name": "demo.greeter",
-                    "contract_alias": "greeter::universal",
-                    "code_b64": "AQID",
-                    "depends_on": [],
-                }
-            ],
-            "hajimari_calls": [
-                {
-                    "id": "seed",
-                    "contract_alias": "greeter::universal",
-                    "entrypoint": "hajimari",
-                    "gas_limit": 1000,
-                }
-            ],
-            "assertions": [
-                {
-                    "id": "status",
-                    "contract_alias": "greeter::universal",
-                    "entrypoint": "status",
-                    "gas_limit": 1000,
-                    "expected_result": 7,
-                }
-            ],
-        }
-
-        dry_run = requests.post(
-            f"{server.base_url.rstrip('/')}/v1/contracts/deploy-bundle?dry_run=true",
-            json=request_payload,
-            timeout=5.0,
-        )
-        dry_run.raise_for_status()
-        dry_run_payload = dry_run.json()
-        assert dry_run_payload["bundle_name"] == "demo"
-        assert dry_run_payload["dry_run"] is True
-        assert dry_run_payload["contracts"][0]["status"] == "planned"
-        assert dry_run_payload["hajimari_calls"][0]["status"] == "pending"
-
-        submit = requests.post(
-            f"{server.base_url.rstrip('/')}/v1/contracts/deploy-bundle",
-            json=request_payload,
-            timeout=5.0,
-        )
-        submit.raise_for_status()
-        submit_payload = submit.json()
-        assert submit_payload["dry_run"] is False
-        assert submit_payload["contracts"][0]["status"] == "deployed"
-        assert submit_payload["contracts"][0]["tx_hash_hex"] == "01" * 32
-
-        status = requests.get(
-            f"{server.base_url.rstrip('/')}/v1/contracts/deploy-bundles/mock-bundle-digest",
-            timeout=5.0,
-        )
-        status.raise_for_status()
-        status_payload = status.json()
-        assert status_payload["bundle_digest"] == "mock-bundle-digest"
-        assert status_payload["completed_stages"] == [
-            "plan",
-            "deploy",
-            "hajimari_calls",
-            "assertions",
-        ]
-    finally:
-        server.stop()
 
 
 def test_get_runtime_abi_active_parses_payload() -> None:

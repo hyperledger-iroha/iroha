@@ -1888,63 +1888,6 @@ def test_account_permission_listing_rejects_foreign_chain_discriminant() -> None
     assert session.calls == []
 
 
-def test_deploy_contract_bundle_reads_code_file_and_waits(tmp_path) -> None:
-    code_file = tmp_path / "contract.to"
-    code_file.write_bytes(b"contract-code")
-    tx_hash = "a" * 64
-    session = FakeSession(
-        [
-            response(
-                200,
-                {
-                    "ok": True,
-                    "bundle_name": "single",
-                    "bundle_digest": "digest",
-                    "chain_fingerprint": "chain",
-                    "dry_run": False,
-                    "completed_stages": [],
-                    "contracts": [
-                        {
-                            "name": "contract",
-                            "contract_alias": "contract::is",
-                            "contract_address": "addr",
-                            "kaizen": False,
-                            "tx_hash_hex": tx_hash,
-                            "code_hash_hex": "b" * 64,
-                            "abi_hash_hex": "c" * 64,
-                            "status": "submitted",
-                        }
-                    ],
-                    "hajimari_calls": [],
-                    "assertions": [],
-                },
-            ),
-            response(200, {"status": {"kind": "Applied"}, "hash": tx_hash}),
-        ]
-    )
-    client = ToriiClient("http://torii.example", session=session, max_retries=0)
-
-    result = client.deploy_contract_bundle(
-        authority="authority@is",
-        private_key="priv",
-        contract_alias="contract::is",
-        code_file=code_file,
-        wait=True,
-        timeout_ms=1000,
-        interval=0,
-        gas_asset_id="xor#sora",
-        fee_sponsor="sponsor@sora",
-        gas_limit=10_000_000,
-    )
-
-    assert result["terminal_kind"] == "Applied"
-    assert result["tx_hashes"] == [tx_hash]
-    deploy_payload = json.loads(session.calls[0]["data"].decode("utf-8"))
-    assert deploy_payload["code_b64"] == "Y29udHJhY3QtY29kZQ=="
-    assert deploy_payload["gas_asset_id"] == "xor#sora"
-    assert deploy_payload["fee_sponsor"] == "sponsor@sora"
-    assert deploy_payload["gas_limit"] == 10_000_000
-
 
 def test_call_contract_and_wait_posts_typed_request() -> None:
     tx_hash = "d" * 64

@@ -1782,14 +1782,14 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             ));
         }
         for work_id in &work_ids {
-            let Some(pending) = self.pending_validations.get(work_id) else {
+            if !self.pending_validations.contains_key(work_id) {
                 return Err(self.close(
                     EffectExecutorError::Contract(
                         "deferred merge sidecar has no pending validation task".to_owned(),
                     ),
                     services,
                 ));
-            };
+            }
             self.complete_body_validation(
                 BodyValidationCompletion::Rejected {
                     work_id: *work_id,

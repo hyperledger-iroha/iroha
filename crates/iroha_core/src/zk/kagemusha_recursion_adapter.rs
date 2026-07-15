@@ -24,9 +24,9 @@
 //! The production build retains the native terminal Eq/Vesta and Ep/Pallas
 //! decisions over authenticated parameters and verifier keys. Tests retain the
 //! fixed-key Poseidon proof wires, canonical BGH19 IPA folding, and exact
-//! bounded proof bytes. Production availability stays false until both
-//! recursive fixed-VK verifier halves constrain those same operations and pass
-//! the complete archive, review, and device gates.
+//! bounded proof bytes. Both recursive fixed-VK verifier halves constrain those
+//! same operations. Production availability remains false pending the
+//! authenticated complete archive, independent review, and physical-device gates.
 
 #[cfg(test)]
 use iroha_data_model::offline::KAGEMUSHA_PASTA_PUBLIC_BOOTSTRAP_SELECTOR_V4;
@@ -2754,7 +2754,10 @@ impl KagemushaPastaCycleProverV4 {
                 .as_ref()
                 .map(|leaf| leaf.leaf_index),
             super::kagemusha_v2::KagemushaOutputMembershipOperationV4::RedemptionChange => {
-                output_membership.change.as_ref().map(|leaf| leaf.leaf_index)
+                output_membership
+                    .change
+                    .as_ref()
+                    .map(|leaf| leaf.leaf_index)
             }
         };
         match expected_parent_frontier {
@@ -4572,18 +4575,12 @@ fn constrain_kagemusha_output_frontier_v4<F>(
     range: &halo2_base::gates::RangeChip<F>,
     bindings: &super::kagemusha_step_transition::NamedTransitionBindings<F>,
     output: &[halo2_base::AssignedValue<F>;
-        super::kagemusha_v2::KAGEMUSHA_OUTPUT_MEMBERSHIP_INSTANCE_COLUMNS_V4],
+         super::kagemusha_v2::KAGEMUSHA_OUTPUT_MEMBERSHIP_INSTANCE_COLUMNS_V4],
     topup_leaf_index: halo2_base::AssignedValue<F>,
 ) where
     F: halo2_base::utils::BigPrimeField,
 {
-    constrain_equal_if_v4(
-        ctx,
-        range,
-        bindings.is_init,
-        topup_leaf_index,
-        output[7],
-    );
+    constrain_equal_if_v4(ctx, range, bindings.is_init, topup_leaf_index, output[7]);
     constrain_equal_if_v4(
         ctx,
         range,
@@ -7252,10 +7249,8 @@ mod tests {
             profile.map(|value| ctx.load_witness(Fp::from(value)));
         let input_frontier = ctx.load_witness(Fp::from(input_frontier));
         let result_frontier = ctx.load_witness(Fp::from(result_frontier));
-        let mut output = [
-            zero;
-            crate::zk::kagemusha_v2::KAGEMUSHA_OUTPUT_MEMBERSHIP_INSTANCE_COLUMNS_V4
-        ];
+        let mut output =
+            [zero; crate::zk::kagemusha_v2::KAGEMUSHA_OUTPUT_MEMBERSHIP_INSTANCE_COLUMNS_V4];
         output[7] = ctx.load_witness(Fp::from(recipient_index));
         output[9] = ctx.load_witness(Fp::from(change_index));
         output[10] = ctx.load_witness(Fp::from(dummy_index));
@@ -7281,13 +7276,7 @@ mod tests {
             init_operation_tag_limbs: [zero; 8],
         };
         let topup_leaf_index = ctx.load_witness(Fp::from(topup_leaf_index));
-        constrain_kagemusha_output_frontier_v4(
-            ctx,
-            &range,
-            &bindings,
-            &output,
-            topup_leaf_index,
-        );
+        constrain_kagemusha_output_frontier_v4(ctx, &range, &bindings, &output, topup_leaf_index);
         builder.calculate_params(Some(9));
         builder
     }

@@ -195,7 +195,7 @@ fn double_vote_slashes_plain_lock() {
                 iroha_data_model::events::data::governance::GovernanceEvent::LockSlashed(payload)
             )) if payload.referendum_id == rid
                 && payload.reason == GovernanceSlashReason::DoubleVote
-                && payload.amount == 4
+                && payload.amount == Quantity::from(4_u64)
                 && payload.destination == slash_id
         )
     }));
@@ -213,8 +213,8 @@ fn double_vote_slashes_plain_lock() {
         .get(&rid)
         .and_then(|locks| locks.locks.get(&alice))
         .expect("lock present after slash");
-    assert_eq!(lock.amount, 16);
-    assert_eq!(lock.slashed, 4);
+    assert_eq!(lock.amount, Quantity::from(16_u64));
+    assert_eq!(lock.slashed, Quantity::from(4_u64));
     let escrow_balance = view
         .world()
         .asset(&escrow_asset_id)
@@ -290,7 +290,7 @@ fn restitution_restores_slashed_balance() {
                 ev.as_data_event(),
                 Some(iroha_data_model::events::data::DataEvent::Governance(
                     iroha_data_model::events::data::governance::GovernanceEvent::LockRestituted(payload)
-                )) if payload.amount == 30
+                )) if payload.amount == Quantity::from(30_u64)
                     && payload.reason == GovernanceSlashReason::Restitution
                     && payload.note == "appeal_upheld"
             )
@@ -306,8 +306,8 @@ fn restitution_restores_slashed_balance() {
         .get(&rid)
         .and_then(|locks| locks.locks.get(&alice))
         .expect("lock present after restitution");
-    assert_eq!(lock.amount, 90);
-    assert_eq!(lock.slashed, 10);
+    assert_eq!(lock.amount, Quantity::from(90_u64));
+    assert_eq!(lock.slashed, Quantity::from(10_u64));
 
     let escrow_balance = view
         .world()

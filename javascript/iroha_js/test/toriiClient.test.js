@@ -310,6 +310,7 @@ function sampleAccountForms() {
 
 const SAMPLE_ACCOUNT_FORMS = sampleAccountForms();
 const SAMPLE_ACCOUNT_ID = SAMPLE_ACCOUNT_FORMS.canonical;
+const CANONICAL_AUTH_ALIAS = "alice-1@wonderland";
 const SAMPLE_VPN_HELPER_TICKET_HEX = `5356504e48543100${"00".repeat(656)}`;
 
 function sampleVpnProfilePayload() {
@@ -444,10 +445,9 @@ async function parseVpnTestResponse(kind, payload) {
       jsonData: payload,
       headers: { "content-type": "application/json" },
     });
-  markFetchSupportsRawUtf8Headers(fetchImpl);
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const canonicalAuth = {
-    accountId: SAMPLE_ACCOUNT_ID,
+    accountId: CANONICAL_AUTH_ALIAS,
     privateKey: Buffer.alloc(32, 12),
   };
   switch (kind) {
@@ -4235,7 +4235,6 @@ test("SoraFS reputation helpers fetch REST and SSE endpoints", async () => {
     }
     throw new Error(`unexpected URL: ${url}`);
   };
-  fetchImpl.__irohaSupportsRawUtf8Headers = true;
   const client = new ToriiClient(BASE_URL, { fetchImpl });
 
   const latest = await client.getSorafsReputationLatest({ ifNoneMatch: '"old"' });
@@ -4528,7 +4527,6 @@ test("SoraFS orderbook read helpers fetch local mirror endpoints", async () => {
     }
     throw new Error(`unexpected URL: ${url}`);
   };
-  markFetchSupportsRawUtf8Headers(fetchImpl);
   const client = new ToriiClient(BASE_URL, { fetchImpl });
 
   const book = await client.getSorafsOrderbook({ headers: { "X-Trace": "book" } });
@@ -4583,7 +4581,7 @@ test("SoraFS orderbook read helpers fetch local mirror endpoints", async () => {
   assert.equal(calls[5]?.init?.headers?.["Last-Event-ID"], "8");
 
   const canonicalAuth = {
-    accountId: FIXTURE_ALICE_ID,
+    accountId: CANONICAL_AUTH_ALIAS,
     privateKey: Buffer.alloc(32, 1),
   };
   const orderPayload = Uint8Array.from([1, 2, 3]);
@@ -4600,7 +4598,7 @@ test("SoraFS orderbook read helpers fetch local mirror endpoints", async () => {
   assert.deepEqual(Array.from(Buffer.from(orderCall?.init?.body)), [1, 2, 3]);
   assert.equal(orderCall?.init?.headers?.["Content-Type"], "application/octet-stream");
   assert.equal(orderCall?.init?.headers?.["X-Trace"], "order-submit");
-  assert.equal(orderCall?.init?.headers?.["X-Iroha-Account"], FIXTURE_ALICE_ID);
+  assert.equal(orderCall?.init?.headers?.["X-Iroha-Account"], CANONICAL_AUTH_ALIAS);
   assert.ok(orderCall?.init?.headers?.["X-Iroha-Signature"]);
 
   const cancelSubmit = await client.submitSorafsOrderbookCancel([4, 5], {
@@ -4667,7 +4665,7 @@ test("SoraFS orderbook read helpers validate options and cache validators", asyn
   await assert.rejects(
     () =>
       client.submitSorafsOrderbookReceipt(Buffer.alloc(0), {
-        canonicalAuth: { accountId: FIXTURE_ALICE_ID, privateKey: Buffer.alloc(32, 1) },
+        canonicalAuth: { accountId: CANONICAL_AUTH_ALIAS, privateKey: Buffer.alloc(32, 1) },
       }),
     /submitSorafsOrderbookReceipt\.payload must not be empty/,
   );
@@ -20074,270 +20072,6 @@ test("registerContractCode rejects forged branded manifest declarations before f
   assert.equal(called, false);
 });
 
-test("deployContract submits base64 payload and returns response", async () => {
-  let captured;
-  const contractAddress = "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7";
-  const responsePayload = {
-    ok: true,
-    bundle_name: "single:router::universal",
-    bundle_digest: "d".repeat(64),
-    chain_fingerprint: `0@${"e".repeat(64)}`,
-    dry_run: false,
-    completed_stages: ["deploy:router::universal"],
-    failure_point: null,
-    contracts: [
-      {
-        name: "router::universal",
-        contract_alias: "router::universal",
-        contract_address: contractAddress,
-        previous_contract_address: null,
-        kaizen: false,
-        dataspace: "universal",
-        deploy_nonce: 7,
-        tx_hash_hex: "a".repeat(64),
-        code_hash_hex: "b".repeat(64),
-        abi_hash_hex: "c".repeat(64),
-        status: "submitted",
-      },
-    ],
-    hajimari_calls: [],
-    assertions: [],
-    operation_receipt: {
-      operation_kind: "contract_deploy",
-      status: "submitted",
-      transport: "torii",
-      dataspace: "universal",
-      contract_alias: "router::universal",
-      contract_address: contractAddress,
-      code_hash_hex: "b".repeat(64),
-      abi_hash_hex: "c".repeat(64),
-      tx_hash_hex: "a".repeat(64),
-      entrypoint: null,
-      entrypoint_hash_hex: null,
-      gas_limit: null,
-      gas_used: null,
-      gas_asset_id: null,
-      fee_sponsor: null,
-      payload_digest_hex: "f".repeat(64),
-    },
-  };
-  const fetchImpl = async (url, init) => {
-    captured = { url, init };
-    return createResponse({
-      status: 200,
-      jsonData: responsePayload,
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const result = await client.deployContract({
-    authority: FIXTURE_ALICE_ID,
-    privateKey: "ed25519:deadbeef",
-    contractAlias: "router::universal",
-    codeB64: Buffer.from("payload"),
-    leaseExpiryMs: 1234,
-  });
-  assert.equal(captured.url, `${BASE_URL}/v1/contracts/deploy`);
-  const body = JSON.parse(captured.init.body);
-  assert.deepEqual(body, {
-    authority: FIXTURE_ALICE_ID,
-    private_key: "ed25519:deadbeef",
-    contract_alias: "router::universal",
-    code_b64: Buffer.from("payload").toString("base64"),
-    lease_expiry_ms: 1234,
-  });
-  assert.deepEqual(result, responsePayload);
-});
-
-test("deployContract rejects the retired init_calls response field", async () => {
-  const fetchImpl = async () =>
-    createResponse({
-      status: 200,
-      jsonData: {
-        ok: true,
-        bundle_name: "single:router::universal",
-        bundle_digest: "d".repeat(64),
-        chain_fingerprint: `0@${"e".repeat(64)}`,
-        dry_run: false,
-        completed_stages: ["deploy:router::universal"],
-        failure_point: null,
-        contracts: [],
-        init_calls: [],
-        assertions: [],
-      },
-      headers: { "content-type": "application/json" },
-    });
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-
-  await assert.rejects(
-    () =>
-      client.deployContract({
-        authority: FIXTURE_ALICE_ID,
-        privateKey: "ed25519:deadbeef",
-        contractAlias: "router::universal",
-        codeB64: Buffer.from("payload"),
-      }),
-    /hajimari_calls must be an array/,
-  );
-});
-
-test("deployContract exposes optional pipeline_status diagnostics", async () => {
-  const txHash = "a".repeat(64);
-  const pipelineStatus = {
-    hash: txHash,
-    status: { kind: "Queued", block_height: null, rejection_reason: null },
-    summary: "Queued",
-    diagnostics: [],
-    scope: "local",
-    resolved_from: "queue",
-  };
-  const fetchImpl = async () =>
-    createResponse({
-      status: 200,
-      jsonData: {
-        ok: true,
-        bundle_name: "single:router::universal",
-        bundle_digest: "d".repeat(64),
-        chain_fingerprint: `0@${"e".repeat(64)}`,
-        dry_run: false,
-        completed_stages: ["deploy:router::universal"],
-        failure_point: null,
-        contracts: [
-          {
-            name: "router::universal",
-            contract_alias: "router::universal",
-            contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
-            previous_contract_address: null,
-            kaizen: false,
-            dataspace: "universal",
-            deploy_nonce: 7,
-            tx_hash_hex: txHash,
-            pipeline_status: pipelineStatus,
-            code_hash_hex: "b".repeat(64),
-            abi_hash_hex: "c".repeat(64),
-            status: "submitted",
-          },
-        ],
-        hajimari_calls: [],
-        assertions: [],
-      },
-      headers: { "content-type": "application/json" },
-    });
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const result = await client.deployContract({
-    authority: FIXTURE_ALICE_ID,
-    privateKey: "ed25519:deadbeef",
-    contractAlias: "router::universal",
-    codeB64: Buffer.from("payload"),
-  });
-  assert.equal(result.contracts[0].pipeline_status?.status?.kind, "Queued");
-  assert.equal(result.contracts[0].pipeline_status?.content?.hash, txHash);
-});
-
-test("deployContract rejects invalid base64 payloads", async () => {
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => {
-      throw new Error("should not fetch");
-    },
-  });
-  await assert.rejects(
-    () =>
-      client.deployContract({
-        authority: FIXTURE_ALICE_ID,
-        privateKey: "ed25519:deadbeef",
-        contractAlias: "router::universal",
-        codeB64: "YmFzZTY0*",
-      }),
-    (error) =>
-      error instanceof ValidationError &&
-      error.code === ValidationErrorCode.INVALID_STRING &&
-      /deployContract\.codeB64/.test(error.message),
-  );
-});
-
-test("contract registration and deployment cap exact artifact bytes before fetch", async () => {
-  const maxBase64Length = Math.ceil(IVM_ARTIFACT_MAX_BYTES / 3) * 4;
-  const attacks = [
-    ["A".repeat(maxBase64Length + 1), /4194304-byte artifact limit/],
-    [Buffer.alloc(IVM_ARTIFACT_MAX_BYTES + 1), /4194304-byte artifact limit/],
-    ["Y29kZQ==\n", /canonical standard base64/],
-  ];
-  for (const [artifact, expected] of attacks) {
-    for (const operation of ["register", "deploy"]) {
-      let fetchCalls = 0;
-      const client = new ToriiClient(BASE_URL, {
-        fetchImpl: async () => {
-          fetchCalls += 1;
-          throw new Error("fetch must not run for invalid artifact bytes");
-        },
-      });
-      const promise =
-        operation === "register"
-          ? client.registerContractCode({
-              authority: FIXTURE_ALICE_ID,
-              privateKey: "ed25519:deadbeef",
-              manifest: {},
-              codeBytes: artifact,
-            })
-          : client.deployContract({
-              authority: FIXTURE_ALICE_ID,
-              privateKey: "ed25519:deadbeef",
-              contractAlias: "router::universal",
-              codeB64: artifact,
-            });
-      await assert.rejects(promise, expected);
-      assert.equal(fetchCalls, 0, `${operation} must validate before fetch`);
-    }
-  }
-});
-
-test("deployContract rejects empty code bytes", async () => {
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => {
-      throw new Error("should not fetch");
-    },
-  });
-  await assert.rejects(
-    () =>
-      client.deployContract({
-        authority: FIXTURE_ALICE_ID,
-        privateKey: "ed25519:deadbeef",
-        contractAlias: "router::universal",
-        codeB64: Buffer.alloc(0),
-      }),
-    /deployContract\.codeB64/,
-  );
-});
-
-test("deployContract rejects manifest and dataspace shortcuts", async () => {
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => {
-      throw new Error("should not fetch");
-    },
-  });
-  await assert.rejects(
-    () =>
-      client.deployContract({
-        authority: FIXTURE_ALICE_ID,
-        privateKey: "ed25519:deadbeef",
-        contractAlias: "router::universal",
-        codeB64: Buffer.from("payload"),
-        dataspace: "universal",
-      }),
-    /deployContract\.dataspace is not accepted by \/v1\/contracts\/deploy/,
-  );
-  await assert.rejects(
-    () =>
-      client.deployContract({
-        authority: FIXTURE_ALICE_ID,
-        privateKey: "ed25519:deadbeef",
-        contractAlias: "router::universal",
-        codeB64: Buffer.from("payload"),
-        manifest: { features_bitmap: 1 },
-      }),
-    /deployContract\.manifest is not accepted by \/v1\/contracts\/deploy/,
-  );
-});
 
 test("setContractAlias posts payload and returns response", async () => {
   let captured;
@@ -24423,7 +24157,7 @@ test("getVpnProfile requires dns_push_interval_secs of at least 30", async () =>
 
 test("VPN requests reject unknown fields before dispatch", async () => {
   const canonicalAuth = {
-    accountId: SAMPLE_ACCOUNT_ID,
+    accountId: CANONICAL_AUTH_ALIAS,
     privateKey: Buffer.alloc(32, 3),
   };
   let dispatched = false;
@@ -24508,9 +24242,8 @@ test("VPN session paths normalize hex before signing and reject malformed IDs", 
       headers: { "content-type": "application/json" },
     });
   };
-  markFetchSupportsRawUtf8Headers(fetchImpl);
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const canonicalAuth = { accountId: SAMPLE_ACCOUNT_ID, privateKey };
+  const canonicalAuth = { accountId: CANONICAL_AUTH_ALIAS, privateKey };
 
   assert.equal(
     await client.getVpnSession(inputSessionId, { canonicalAuth }),
@@ -24551,7 +24284,7 @@ test("VPN session paths normalize hex before signing and reject malformed IDs", 
 
 test("VPN session responses reject unknown fields and noncanonical IDs or hashes", async () => {
   const canonicalAuth = {
-    accountId: SAMPLE_ACCOUNT_ID,
+    accountId: CANONICAL_AUTH_ALIAS,
     privateKey: Buffer.alloc(32, 4),
   };
   const requestSession = async (mutate) => {
@@ -24563,7 +24296,6 @@ test("VPN session responses reject unknown fields and noncanonical IDs or hashes
         jsonData: payload,
         headers: { "content-type": "application/json" },
       });
-    markFetchSupportsRawUtf8Headers(fetchImpl);
     const client = new ToriiClient(BASE_URL, { fetchImpl });
     return client.getVpnSession("ab".repeat(32), { canonicalAuth });
   };
@@ -24750,7 +24482,7 @@ test("VPN response parsers enforce OpenAPI enums and bounds", async () => {
 
 test("createVpnQuote returns the native lease-open instruction", async () => {
   const canonicalAuth = {
-    accountId: SAMPLE_ACCOUNT_ID,
+    accountId: CANONICAL_AUTH_ALIAS,
     privateKey: Buffer.alloc(32, 8),
   };
   const quoteId = "22".repeat(32);
@@ -24765,7 +24497,7 @@ test("createVpnQuote returns the native lease-open instruction", async () => {
     assert.equal(init.method, "POST");
     assert.equal(init.headers.Accept, "application/json");
     assert.equal(init.headers["Content-Type"], "application/json");
-    assert.equal(init.headers["X-Iroha-Account"], SAMPLE_ACCOUNT_ID);
+    assert.equal(init.headers["X-Iroha-Account"], CANONICAL_AUTH_ALIAS);
     assert.ok(typeof init.headers["X-Iroha-Signature"] === "string");
     assert.deepEqual(JSON.parse(init.body), {
       exit_class: "low-latency",
@@ -24803,7 +24535,6 @@ test("createVpnQuote returns the native lease-open instruction", async () => {
       headers: { "content-type": "application/json" },
     });
   };
-  markFetchSupportsRawUtf8Headers(fetchImpl);
   const client = new ToriiClient(BASE_URL, { fetchImpl });
 
   const quote = await client.createVpnQuote(
@@ -24845,7 +24576,7 @@ test("createVpnQuote returns the native lease-open instruction", async () => {
 
 test("createVpnSession signs the request and normalizes the response", async () => {
   const canonicalAuth = {
-    accountId: SAMPLE_ACCOUNT_ID,
+    accountId: CANONICAL_AUTH_ALIAS,
     privateKey: Buffer.alloc(32, 7),
   };
   const quoteId = "66".repeat(32);
@@ -24857,7 +24588,7 @@ test("createVpnSession signs the request and normalizes the response", async () 
     assert.equal(init.method, "POST");
     assert.equal(init.headers.Accept, "application/json");
     assert.equal(init.headers["Content-Type"], "application/json");
-    assert.equal(init.headers["X-Iroha-Account"], SAMPLE_ACCOUNT_ID);
+    assert.equal(init.headers["X-Iroha-Account"], CANONICAL_AUTH_ALIAS);
     assert.ok(typeof init.headers["X-Iroha-Signature"] === "string");
     assert.deepEqual(JSON.parse(init.body), {
       exit_class: "low-latency",
@@ -24899,7 +24630,6 @@ test("createVpnSession signs the request and normalizes the response", async () 
       headers: { "content-type": "application/json" },
     });
   };
-  markFetchSupportsRawUtf8Headers(fetchImpl);
   const client = new ToriiClient(BASE_URL, { fetchImpl });
 
   const session = await client.createVpnSession(
@@ -24945,7 +24675,7 @@ test("createVpnSession signs the request and normalizes the response", async () 
 
 test("VPN session responses require an exact lowercase 664-byte helper ticket", async () => {
   const canonicalAuth = {
-    accountId: SAMPLE_ACCOUNT_ID,
+    accountId: CANONICAL_AUTH_ALIAS,
     privateKey: Buffer.alloc(32, 7),
   };
   const requestSession = async (helperTicketHex) => {
@@ -24955,7 +24685,6 @@ test("VPN session responses require an exact lowercase 664-byte helper ticket", 
         jsonData: sampleVpnSessionPayload(helperTicketHex),
         headers: { "content-type": "application/json" },
       });
-    markFetchSupportsRawUtf8Headers(fetchImpl);
     const client = new ToriiClient(BASE_URL, { fetchImpl });
     return client.getVpnSession("55".repeat(32), { canonicalAuth });
   };
@@ -24994,14 +24723,14 @@ test("createVpnSession requires canonical auth options", async () => {
 test("deleteVpnSession returns null when the session is already missing", async () => {
   const requestedSessionId = "13".repeat(32);
   const canonicalAuth = {
-    accountId: SAMPLE_ACCOUNT_ID,
+    accountId: CANONICAL_AUTH_ALIAS,
     privateKey: Buffer.alloc(32, 9),
   };
   const fetchImpl = async (url, init = {}) => {
     assert.equal(url, `${BASE_URL}/v1/vpn/sessions/${requestedSessionId}`);
     assert.equal(init.method, "DELETE");
     assert.equal(init.headers.Accept, "application/json");
-    assert.equal(init.headers["X-Iroha-Account"], SAMPLE_ACCOUNT_ID);
+    assert.equal(init.headers["X-Iroha-Account"], CANONICAL_AUTH_ALIAS);
     return createResponse({
       status: 404,
       jsonData: {
@@ -25012,7 +24741,6 @@ test("deleteVpnSession returns null when the session is already missing", async 
       headers: { "content-type": "application/json" },
     });
   };
-  markFetchSupportsRawUtf8Headers(fetchImpl);
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const result = await client.deleteVpnSession(requestedSessionId, { canonicalAuth });
   assert.equal(result, null);
@@ -25020,7 +24748,7 @@ test("deleteVpnSession returns null when the session is already missing", async 
 
 test("getVpnSession and listVpnReceipts normalize authenticated responses", async () => {
   const canonicalAuth = {
-    accountId: SAMPLE_ACCOUNT_ID,
+    accountId: CANONICAL_AUTH_ALIAS,
     privateKey: Buffer.alloc(32, 5),
   };
   const quoteId = "aa".repeat(32);
@@ -25031,7 +24759,7 @@ test("getVpnSession and listVpnReceipts normalize authenticated responses", asyn
   const fetchImpl = async (url, init = {}) => {
     callCount += 1;
     assert.equal(init.headers.Accept, "application/json");
-    assert.equal(init.headers["X-Iroha-Account"], SAMPLE_ACCOUNT_ID);
+    assert.equal(init.headers["X-Iroha-Account"], CANONICAL_AUTH_ALIAS);
     if (callCount === 1) {
       assert.equal(url, `${BASE_URL}/v1/vpn/sessions/${requestedSessionId}`);
       assert.equal(init.method, "GET");
@@ -25106,7 +24834,6 @@ test("getVpnSession and listVpnReceipts normalize authenticated responses", asyn
       headers: { "content-type": "application/json" },
     });
   };
-  markFetchSupportsRawUtf8Headers(fetchImpl);
   const client = new ToriiClient(BASE_URL, { fetchImpl });
 
   const session = await client.getVpnSession(requestedSessionId, { canonicalAuth });
@@ -25174,7 +24901,7 @@ test("getVpnSession and listVpnReceipts normalize authenticated responses", asyn
 test("deleteVpnSession normalizes canonical receipts", async () => {
   const requestedSessionId = "79".repeat(32);
   const canonicalAuth = {
-    accountId: SAMPLE_ACCOUNT_ID,
+    accountId: CANONICAL_AUTH_ALIAS,
     privateKey: Buffer.alloc(32, 6),
   };
   const quoteId = "dd".repeat(32);
@@ -25213,7 +24940,6 @@ test("deleteVpnSession normalizes canonical receipts", async () => {
       headers: { "content-type": "application/json" },
     });
   };
-  markFetchSupportsRawUtf8Headers(fetchImpl);
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const receipt = await client.deleteVpnSession(requestedSessionId, { canonicalAuth });
   assert.deepEqual(receipt, {
@@ -25245,7 +24971,7 @@ test("deleteVpnSession normalizes canonical receipts", async () => {
 
 test("submitVpnReceipt posts metering evidence and exposes settlement instructions", async () => {
   const canonicalAuth = {
-    accountId: SAMPLE_ACCOUNT_ID,
+    accountId: CANONICAL_AUTH_ALIAS,
     privateKey: Buffer.alloc(32, 4),
   };
   const quoteId = "12".repeat(32);
@@ -25260,7 +24986,7 @@ test("submitVpnReceipt posts metering evidence and exposes settlement instructio
     assert.equal(init.method, "POST");
     assert.equal(init.headers.Accept, "application/json");
     assert.equal(init.headers["Content-Type"], "application/json");
-    assert.equal(init.headers["X-Iroha-Account"], SAMPLE_ACCOUNT_ID);
+    assert.equal(init.headers["X-Iroha-Account"], CANONICAL_AUTH_ALIAS);
     assert.ok(typeof init.headers["X-Iroha-Signature"] === "string");
     assert.deepEqual(JSON.parse(init.body), {
       relay_receipt_hex: "abcd",
@@ -25297,7 +25023,6 @@ test("submitVpnReceipt posts metering evidence and exposes settlement instructio
       headers: { "content-type": "application/json" },
     });
   };
-  markFetchSupportsRawUtf8Headers(fetchImpl);
   const client = new ToriiClient(BASE_URL, { fetchImpl });
 
   const receipt = await client.submitVpnReceipt(
@@ -26273,10 +25998,6 @@ function createStreamedJsonResponse({ status, jsonData, headers = {} }) {
   });
 }
 
-function markFetchSupportsRawUtf8Headers(fetchImpl) {
-  fetchImpl.__irohaSupportsRawUtf8Headers = true;
-  return fetchImpl;
-}
 
 test("ToriiClient._normalizeUnsignedInteger enforces integer inputs", () => {
   assert.equal(ToriiClient._normalizeUnsignedInteger("42", "value"), 42);

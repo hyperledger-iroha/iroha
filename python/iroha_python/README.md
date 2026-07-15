@@ -190,14 +190,6 @@ The same client owns the PoC-facing Torii application helpers for contract,
 SNS, and ZK bootstrap flows:
 
 ```python
-deploy = client.deploy_contract_bundle(
-    authority="adult@is",
-    private_key="<multihash-private-key>",
-    contract_alias="boi-lock::is",
-    code_file="contracts/boi_lock.to",
-    wait=True,
-)
-
 call = client.call_contract_and_wait(
     authority="adult@is",
     private_key="<multihash-private-key>",
@@ -211,6 +203,10 @@ policy = client.get_sns_policy(2)
 registration = client.get_sns_name("domain", "wonderland.is")
 vk_active = client.zk_verifying_key_active("halo2/ipa", "vk_transfer")
 ```
+
+Contract deployment is performed by locally signing the native code-upload,
+manifest-registration, and atomic `CommitContractDeployment` instructions;
+the client does not expose a server-side deployment wrapper.
 
 Verifying-key register/update helpers post the Torii app API payloads directly
 and validate production backends, required `authority` / `private_key` fields,
@@ -1890,8 +1886,8 @@ no environment variables need to be exported.
 - Offer a `wait_for_transaction_status` helper that polls pipeline status until
   success or failure with configurable intervals, terminal-state handling, and
   callbacks for UI progress indicators.
-- Contracts API wrappers (`/v1/contracts/code`, `/v1/contracts/deploy`,
-  `/v1/contracts/call`, `/v1/contracts/code-bytes/{hash}`), SNS helpers, and
+- Contracts API wrappers (`/v1/contracts/code`, `/v1/contracts/call`,
+  `/v1/contracts/code-bytes/{hash}`), SNS helpers, and
   ZK verifying-key helpers round out the Torii surface needed by PoC operators.
 - Ship optional Norito RPC helpers (`iroha_python.norito_rpc`) so callers can
   invoke Norito-encoded RPC endpoints without vendor-specific transports.

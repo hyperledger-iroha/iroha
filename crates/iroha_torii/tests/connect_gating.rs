@@ -867,7 +867,8 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
                 iroha_config::parameters::defaults::governance::citizenship_asset_id()
                 .parse()
                 .expect("valid default citizenship asset id"),
-            citizenship_bond_amount: iroha_config::parameters::defaults::governance::CITIZENSHIP_BOND_AMOUNT,
+            citizenship_bond_amount:
+                iroha_config::parameters::defaults::governance::CITIZENSHIP_BOND_AMOUNT.into(),
             citizenship_escrow_account:
                 iroha_config::parameters::defaults::governance::citizenship_escrow_account_id(),
             min_bond_amount: 150_u64.into(),

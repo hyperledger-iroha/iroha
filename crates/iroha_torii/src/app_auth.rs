@@ -1,7 +1,8 @@
 //! Canonical request signing helpers for app-facing HTTP endpoints.
 //!
 //! Clients may optionally attach:
-//! - `X-Iroha-Account`: account id that authorises the request.
+//! - `X-Iroha-Account`: exact canonical I105 account id or active canonical
+//!   ASCII account alias that authorises the request.
 //! - `X-Iroha-Signature`: base64 signature over the canonical request bytes plus
 //!   freshness metadata.
 //! - `X-Iroha-Timestamp-Ms`: unix timestamp in milliseconds included in the
@@ -43,11 +44,14 @@ use axum::http::HeaderMap;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use dashmap::{DashMap, mapref::entry::Entry};
 use iroha_config::parameters::{actual::AppApi as AppApiConfig, defaults};
-use iroha_core::state::{State as CoreState, WorldReadOnly};
+use iroha_core::{
+    sns::resolve_active_account_alias,
+    state::{State as CoreState, WorldReadOnly},
+};
 use iroha_crypto::{Algorithm, Hash, PublicKey, Signature};
 use iroha_data_model::{
     ValidationFail,
-    account::{AccountController, AccountId},
+    account::{AccountController, AccountId, rekey::AccountAlias},
     query::{
         ErasedIterQuery, Query, QueryBox, QueryOutputBatchBox, QueryRequest, QueryWithParams,
         dsl::{CompoundPredicate, HasProjection, PredicateMarker, SelectorMarker, SelectorTuple},
@@ -72,7 +76,6 @@ pub const HEADER_TIMESTAMP_MS: &str = "X-Iroha-Timestamp-Ms";
 pub const HEADER_NONCE: &str = "X-Iroha-Nonce";
 /// Header carrying the base64 Norito-encoded multisig witness.
 pub const HEADER_WITNESS: &str = "X-Iroha-Witness";
-const ACCOUNT_HEADER_CONTEXT: &str = "X-Iroha-Account";
 const ACCOUNT_BODY_CONTEXT: &str = "account_id";
 /// HTTP request types used for canonical signing.
 pub use axum::http::{Method, Uri};
@@ -430,12 +433,48 @@ fn parse_account_header_value(
     state: &Arc<CoreState>,
     account_literal: &str,
 ) -> Result<AccountId, crate::Error> {
-    parse_account_literal_value(
-        state,
-        account_literal,
-        ACCOUNT_HEADER_CONTEXT,
-        "invalid X-Iroha-Account value",
-    )
+    fn invalid_account_header() -> crate::Error {
+        crate::Error::Query(ValidationFail::NotPermitted(
+            "invalid X-Iroha-Account value".to_owned(),
+        ))
+    }
+
+    if account_literal.is_empty() || account_literal.trim() != account_literal {
+        return Err(invalid_account_header());
+    }
+
+    if let Ok(parsed) = AccountId::parse_encoded(account_literal) {
+        let (account_id, canonical, _) = parsed.into_parts();
+        if canonical != account_literal {
+            return Err(invalid_account_header());
+        }
+        return Ok(account_id);
+    }
+
+    // Browser Fetch cannot transport the Kana-bearing I105 spelling in a
+    // header. App authentication therefore has one deliberately narrower
+    // alias exception: resolve the exact active ASCII alias only to establish
+    // which controller must verify the request signature. User-directed alias
+    // lookup remains permissioned independently.
+    if !account_literal.is_ascii() {
+        return Err(invalid_account_header());
+    }
+    let nexus = state.nexus_snapshot();
+    let alias = AccountAlias::from_literal(account_literal, &nexus.dataspace_catalog)
+        .map_err(|_| invalid_account_header())?;
+    let canonical = alias
+        .to_literal(&nexus.dataspace_catalog)
+        .map_err(|_| invalid_account_header())?;
+    if canonical != account_literal {
+        return Err(invalid_account_header());
+    }
+    let now_ms = state
+        .latest_block_header_fast()
+        .map(|header| header.creation_time_ms)
+        .unwrap_or(0);
+    let world = state.world_view();
+    resolve_active_account_alias(&world, &nexus.dataspace_catalog, &alias, now_ms)
+        .ok_or_else(invalid_account_header)
 }
 
 fn parse_account_body_value(
@@ -889,15 +928,9 @@ pub fn verify_canonical_request(
                 witness.schema_version
             ))));
         }
-        let account = if let Some(account_hdr) = account_hdr {
-            let account_literal = std::str::from_utf8(account_hdr.as_bytes())
-                .map(str::trim)
-                .map_err(|_| {
-                    crate::Error::Query(ValidationFail::NotPermitted(
-                        "invalid X-Iroha-Account value".to_owned(),
-                    ))
-                })?;
-            let account = parse_account_header_value(state, account_literal)?;
+        let account = if account_hdr.is_some() {
+            let account_literal = parse_required_header_exact_text(headers, HEADER_ACCOUNT)?;
+            let account = parse_account_header_value(state, &account_literal)?;
             if account != witness.subject_account {
                 return Err(crate::Error::Query(ValidationFail::NotPermitted(
                     "X-Iroha-Account does not match X-Iroha-Witness subject_account".to_owned(),
@@ -1022,7 +1055,7 @@ pub fn verify_canonical_request(
         )));
     };
 
-    let account_literal = parse_required_header_text(headers, HEADER_ACCOUNT)?;
+    let account_literal = parse_required_header_exact_text(headers, HEADER_ACCOUNT)?;
     let account = parse_account_header_value(state, &account_literal)?;
 
     if let Some(expected) = expected_account
@@ -1098,7 +1131,7 @@ mod tests {
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
         Registrable,
-        account::{Account, MultisigMember, MultisigPolicy},
+        account::{Account, AccountAddress, MultisigMember, MultisigPolicy},
         domain::Domain,
         isi::Register,
         prelude::DomainId,
@@ -1132,11 +1165,27 @@ mod tests {
     }
 
     fn bind_account_alias_for_test(state: &Arc<State>, account_id: &AccountId, alias: &str) {
-        let label = iroha_data_model::account::rekey::AccountAlias::from_literal(
-            alias,
-            &state.nexus_snapshot().dataspace_catalog,
-        )
-        .expect("valid account alias");
+        let dataspace_catalog = state.nexus_snapshot().dataspace_catalog.clone();
+        let label =
+            iroha_data_model::account::rekey::AccountAlias::from_literal(alias, &dataspace_catalog)
+                .expect("valid account alias");
+        let selector = iroha_core::sns::selector_for_account_alias(&label, &dataspace_catalog)
+            .expect("account alias selector");
+        let account_address =
+            AccountAddress::from_account_id(account_id).expect("address from account id");
+        let record = iroha_data_model::sns::NameRecordV1::new(
+            selector.clone(),
+            account_id.clone(),
+            vec![iroha_data_model::sns::NameControllerV1::account(
+                &account_address,
+            )],
+            0,
+            0,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            iroha_data_model::metadata::Metadata::default(),
+        );
         let header =
             iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
@@ -1157,6 +1206,10 @@ mod tests {
         world.account_rekey_records_mut_for_testing().insert(
             label.clone(),
             iroha_data_model::account::rekey::AccountRekeyRecord::new(label, account_id.clone()),
+        );
+        world.smart_contract_state_mut_for_testing().insert(
+            iroha_core::sns::record_storage_key(&selector),
+            norito::codec::Encode::encode(&record),
         );
         tx.apply();
         block.commit().expect("commit account alias for test");
@@ -1484,6 +1537,30 @@ mod tests {
                 verified_signers: vec![ALICE_KEYPAIR.public_key().clone()],
             })
         );
+    }
+
+    #[test]
+    fn account_header_alias_requires_an_exact_active_ascii_binding() {
+        let account = ALICE_ID.clone();
+        let state = minimal_state_with_account(&account);
+        bind_account_alias_for_test(&state, &account, "wallet@universal");
+
+        assert_eq!(
+            parse_account_header_value(&state, "wallet@universal").expect("active alias"),
+            account
+        );
+        for invalid in [
+            " wallet@universal",
+            "wallet@universal ",
+            "Wallet@universal",
+            "wallet@UNIVERSAL",
+            "wallet",
+            "wállét@universal",
+            "missing@universal",
+        ] {
+            parse_account_header_value(&state, invalid)
+                .expect_err("noncanonical or inactive account header alias must fail closed");
+        }
     }
 
     #[test]

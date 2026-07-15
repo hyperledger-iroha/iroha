@@ -59,7 +59,9 @@ exactly eight Pasta artifacts atomically: `ParamsIPA`, processed proving key, pr
 key, and final-key selector-zero bootstrap witness for each Eq/Ep parity. Each profile's bounded
 circuit parameters are authenticated inline in the V4 manifest, not streamed as a ninth or tenth
 artifact. The top-up-finality roster is authenticated release metadata outside the exact eight-role
-cryptographic inventory.
+cryptographic inventory. `ReleaseAuthentication` also requires the canonical candidate-bound
+promotion record alongside the trusted policy, attestation, benchmark evidence, and cryptographic
+review; an authenticated-but-unpromoted release cannot be installed.
 
 Lifecycle calls fail closed until the proof backend and the exact manifest-bound artifact set are
 available. Request and result archives stay typed and canonically framed while recursive proof,

@@ -114,8 +114,8 @@ rules. The fallback lane should continue to point at the public lane that holds
 Instruction matchers are case-insensitive. For boxed ISIs you can target the
 family or a specific variant using `family::variant` (for example,
 `register::domain` or `transfer::asset_definition`). The `smartcontract::deploy`
-matcher targets smart contract code registration instructions emitted by
-`/v1/contracts/deploy`.
+matcher targets smart contract code registration instructions carried by the
+client-signed deployment transaction.
 
 ## 3. Boot a node with the policy applied
 

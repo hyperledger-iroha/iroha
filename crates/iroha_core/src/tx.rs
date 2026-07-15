@@ -35,9 +35,9 @@ use iroha_data_model::{
     isi::{
         runtime_upgrade::{ActivateRuntimeUpgrade, CancelRuntimeUpgrade, ProposeRuntimeUpgrade},
         smart_contract_code::{
-            ActivateContractInstance, DeactivateContractInstance, FinalizeSmartContractCodeUpload,
-            RegisterSmartContractBytes, RegisterSmartContractCode, RemoveSmartContractBytes,
-            UploadSmartContractCodeChunk,
+            ActivateContractInstance, CommitContractDeployment, DeactivateContractInstance,
+            FinalizeSmartContractCodeUpload, RegisterSmartContractBytes, RegisterSmartContractCode,
+            RemoveSmartContractBytes, UploadSmartContractCodeChunk,
         },
         zk,
     },
@@ -4362,6 +4362,10 @@ fn tx_touches_manifest_protected_namespace_surface(tx: &SignedTransaction) -> bo
                     .is_some()
                     || instruction
                         .as_any()
+                        .downcast_ref::<CommitContractDeployment>()
+                        .is_some()
+                    || instruction
+                        .as_any()
                         .downcast_ref::<DeactivateContractInstance>()
                         .is_some()
                 {
@@ -4462,18 +4466,29 @@ fn enforce_manifest_protected_namespaces(
 
     let mut contract_targets = BTreeSet::new();
     let mut register_code_seen = false;
+    let mut commit_deployment_count = 0_usize;
+    let mut activate_seen = false;
+    let mut deactivate_seen = false;
     match tx.instructions() {
         Executable::Instructions(instructions) => {
             for instruction in instructions {
-                if let Some(activate) = instruction
+                if let Some(commit) = instruction
+                    .as_any()
+                    .downcast_ref::<CommitContractDeployment>()
+                {
+                    commit_deployment_count += 1;
+                    contract_targets.insert(commit.contract_address().clone());
+                } else if let Some(activate) = instruction
                     .as_any()
                     .downcast_ref::<ActivateContractInstance>()
                 {
+                    activate_seen = true;
                     contract_targets.insert(activate.contract_address().clone());
                 } else if let Some(deactivate) = instruction
                     .as_any()
                     .downcast_ref::<DeactivateContractInstance>()
                 {
+                    deactivate_seen = true;
                     contract_targets.insert(deactivate.contract_address().clone());
                 } else {
                     let modifies_contract_code = {
@@ -4494,6 +4509,16 @@ fn enforce_manifest_protected_namespaces(
             contract_targets.insert(call.contract_address.clone());
         }
         Executable::Ivm(_) | Executable::IvmProved(_) => {}
+    }
+
+    if commit_deployment_count > 1
+        || (commit_deployment_count == 1 && (activate_seen || deactivate_seen))
+        || (activate_seen && deactivate_seen)
+    {
+        return Err(reject_lane_policy(
+            alias,
+            "protected contract rotations must use exactly one `CommitContractDeployment` instruction and no legacy activate/deactivate pair",
+        ));
     }
 
     if let Some(contract_address) = metadata_governance_contract_address.clone() {
@@ -11178,6 +11203,80 @@ pub mod tests {
                 assert!(
                     msg.contains("gov_contract_address"),
                     "expected gov_contract_address rejection, got {msg}"
+                );
+            }
+            other => panic!("expected NotPermitted rejection, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn manifest_protected_rotation_requires_atomic_commit_instruction() {
+        let chain: ChainId = "lane-protected-atomic-rotation".parse().unwrap();
+        let (authority, keypair) = gen_account_in("wonderland");
+        let mut rules = GovernanceRules::default();
+        rules
+            .protected_namespaces
+            .insert(Name::from_str("apps").expect("namespace"));
+
+        let old_address = iroha_data_model::smart_contract::ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &authority,
+            0,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("old contract address");
+        let new_address = iroha_data_model::smart_contract::ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &authority,
+            1,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("new contract address");
+        let code_hash = Hash::new(b"atomic protected rotation");
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            (*super::GOV_CONTRACT_ADDRESS_METADATA_KEY).clone(),
+            Json::new(new_address.to_string()),
+        );
+        let commit = CommitContractDeployment {
+            expected_deploy_nonce: 1,
+            contract_address: new_address.clone(),
+            code_hash,
+            contract_alias: "payments::universal".parse().expect("contract alias"),
+            lease_expiry_ms: None,
+            expected_previous_contract_address: Some(old_address.clone()),
+        };
+        let tx = TransactionBuilder::new(chain.clone(), authority.clone())
+            .with_instructions([commit])
+            .with_metadata(metadata.clone())
+            .sign(keypair.private_key());
+        let world = World::default();
+        let world_view = world.view();
+        super::enforce_manifest_protected_namespaces("lane-0", &rules, &tx, &world_view)
+            .expect("single atomic deployment commit should pass protected address validation");
+
+        let legacy = vec![
+            InstructionBox::from(DeactivateContractInstance {
+                contract_address: old_address,
+                reason: Some("legacy rotation".to_owned()),
+            }),
+            InstructionBox::from(ActivateContractInstance {
+                contract_address: new_address,
+                code_hash,
+            }),
+        ];
+        let tx = TransactionBuilder::new(chain, authority)
+            .with_instructions(legacy)
+            .with_metadata(metadata)
+            .sign(keypair.private_key());
+        let error =
+            super::enforce_manifest_protected_namespaces("lane-0", &rules, &tx, &world_view)
+                .expect_err("legacy multi-instruction rotation must be rejected");
+        match error {
+            TransactionRejectionReason::Validation(ValidationFail::NotPermitted(message)) => {
+                assert!(
+                    message.contains("CommitContractDeployment"),
+                    "unexpected protected rotation rejection: {message}"
                 );
             }
             other => panic!("expected NotPermitted rejection, got {other:?}"),

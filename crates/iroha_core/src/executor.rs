@@ -45,7 +45,7 @@ use iroha_data_model::{
     },
     parameter::{CustomParameter, CustomParameterId},
     permission::Permission,
-    prelude::{Account, Burn, Domain, DomainId, Register, Transfer, Trigger},
+    prelude::{Account, Burn, Domain, DomainId, Mint, Register, Transfer, Trigger},
     query::{AnyQueryBox, QueryRequest, SingularQueryBox},
     role::{Role, RoleId},
     smart_contract::payloads::{ExecutorContext, Validate as ValidatePayload},
@@ -937,6 +937,15 @@ impl ContractDeploymentSelfBootstrapAuthorization {
         if world.account(authority).is_ok() {
             return None;
         }
+        if instructions.iter().any(|instruction| {
+            instruction
+                .as_any()
+                .is::<iroha_data_model::isi::smart_contract_code::CommitContractDeployment>()
+        }) {
+            // Atomic deployment consumes a nonce owned by an account that existed before the
+            // transaction. Never extend the upload-only bootstrap exception to this instruction.
+            return None;
+        }
 
         let Some([register, grant, deployment]) = instructions.get(..3) else {
             return None;
@@ -1525,8 +1534,23 @@ pub(crate) fn fee_sponsor_policy_ids_read_only(
 struct FeeSponsorOperation {
     kind: FeeSponsorExecutableKind,
     instruction_wire_id: Option<String>,
+    asset_transfer_definition_id: Option<AssetDefinitionId>,
     contract_address: Option<iroha_data_model::smart_contract::ContractAddress>,
     contract_entrypoint: Option<String>,
+}
+
+fn fee_sponsor_asset_transfer_definition_id(
+    instruction: &InstructionBox,
+) -> Option<AssetDefinitionId> {
+    let any = instruction.as_any();
+    if let Some(transfer) = any.downcast_ref::<TransferBox>() {
+        return match transfer {
+            TransferBox::Asset(transfer) => Some(transfer.source.definition().clone()),
+            TransferBox::Domain(_) | TransferBox::AssetDefinition(_) | TransferBox::Nft(_) => None,
+        };
+    }
+    any.downcast_ref::<Transfer<Asset, Quantity, Account>>()
+        .map(|transfer| transfer.source.definition().clone())
 }
 
 fn fee_sponsor_executable_kind(executable: &Executable) -> FeeSponsorExecutableKind {
@@ -1556,6 +1580,9 @@ fn fee_sponsor_operations(
                 Ok(FeeSponsorOperation {
                     kind: FeeSponsorExecutableKind::Instructions,
                     instruction_wire_id: Some(wire_id),
+                    asset_transfer_definition_id: fee_sponsor_asset_transfer_definition_id(
+                        instruction,
+                    ),
                     contract_address: None,
                     contract_entrypoint: None,
                 })
@@ -1564,12 +1591,14 @@ fn fee_sponsor_operations(
         Executable::ContractCall(invocation) => Ok(vec![FeeSponsorOperation {
             kind: FeeSponsorExecutableKind::ContractCall,
             instruction_wire_id: None,
+            asset_transfer_definition_id: None,
             contract_address: Some(invocation.contract_address.clone()),
             contract_entrypoint: Some(invocation.entrypoint.clone()),
         }]),
         Executable::Ivm(_) => Ok(vec![FeeSponsorOperation {
             kind: FeeSponsorExecutableKind::Ivm,
             instruction_wire_id: None,
+            asset_transfer_definition_id: None,
             contract_address: None,
             contract_entrypoint: None,
         }]),
@@ -1588,6 +1617,9 @@ fn fee_sponsor_operations(
                 Ok(FeeSponsorOperation {
                     kind: FeeSponsorExecutableKind::IvmProved,
                     instruction_wire_id: Some(wire_id),
+                    asset_transfer_definition_id: fee_sponsor_asset_transfer_definition_id(
+                        instruction,
+                    ),
                     contract_address: None,
                     contract_entrypoint: None,
                 })
@@ -1648,6 +1680,17 @@ fn fee_sponsor_rule_matches_operation(
             .instruction_wire_id
             .as_ref()
             .is_some_and(|wire_id| rule.instruction_wire_ids.contains(wire_id))
+    {
+        return false;
+    }
+    if !rule.asset_transfer_definition_ids.is_empty()
+        && !operation
+            .asset_transfer_definition_id
+            .as_ref()
+            .is_some_and(|asset_definition_id| {
+                rule.asset_transfer_definition_ids
+                    .contains(asset_definition_id)
+            })
     {
         return false;
     }
@@ -2062,6 +2105,9 @@ pub(crate) fn ensure_lifecycle_hook_cannot_mutate_contract_binding(
     if instruction
         .downcast_ref::<iroha_data_model::isi::smart_contract_code::ActivateContractInstance>()
         .is_none()
+        && instruction
+            .downcast_ref::<iroha_data_model::isi::smart_contract_code::CommitContractDeployment>()
+            .is_none()
         && instruction
             .downcast_ref::<iroha_data_model::isi::smart_contract_code::DeactivateContractInstance>(
             )
@@ -5827,6 +5873,30 @@ impl Executor {
             )?;
         }
 
+        if !is_genesis
+            && let Some(mint) = extract_mint_asset(instruction)
+            && !can_mint_asset(&state_transaction.world, authority, mint.destination())?
+        {
+            return Err(ValidationFail::NotPermitted(
+                "Can't mint an asset without owning its definition or an exact mint permission"
+                    .to_owned(),
+            ));
+        }
+
+        if !is_genesis
+            && let Some(asset_definition_id) = extract_asset_definition_metadata_target(instruction)
+            && !can_modify_asset_definition_metadata(
+                &state_transaction.world,
+                authority,
+                &asset_definition_id,
+            )?
+        {
+            return Err(ValidationFail::NotPermitted(
+                "Can't modify asset-definition metadata without ownership or an exact permission"
+                    .to_owned(),
+            ));
+        }
+
         if let Some(account_id) = extract_account_metadata_target(instruction) {
             if !is_genesis
                 && !can_modify_account_metadata(&state_transaction.world, authority, &account_id)?
@@ -7074,6 +7144,67 @@ fn extract_account_metadata_target(instruction: &InstructionBox) -> Option<Accou
         })
 }
 
+fn extract_asset_definition_metadata_target(
+    instruction: &InstructionBox,
+) -> Option<AssetDefinitionId> {
+    instruction
+        .as_any()
+        .downcast_ref::<SetKeyValueBox>()
+        .and_then(|set| match set {
+            SetKeyValueBox::AssetDefinition(set) => Some(set.object.clone()),
+            _ => None,
+        })
+        .or_else(|| {
+            instruction
+                .as_any()
+                .downcast_ref::<
+                    iroha_data_model::isi::SetKeyValue<
+                        iroha_data_model::asset::AssetDefinition,
+                    >,
+                >()
+                .map(|set| set.object.clone())
+        })
+        .or_else(|| {
+            instruction
+                .as_any()
+                .downcast_ref::<RemoveKeyValueBox>()
+                .and_then(|remove| match remove {
+                    RemoveKeyValueBox::AssetDefinition(remove) => Some(remove.object.clone()),
+                    _ => None,
+                })
+        })
+        .or_else(|| {
+            instruction
+                .as_any()
+                .downcast_ref::<
+                    iroha_data_model::isi::RemoveKeyValue<
+                        iroha_data_model::asset::AssetDefinition,
+                    >,
+                >()
+                .map(|remove| remove.object.clone())
+        })
+}
+
+fn extract_mint_asset(instruction: &InstructionBox) -> Option<Mint<Quantity, Asset>> {
+    let any = instruction.as_any();
+    if let Some(mint) = any.downcast_ref::<Mint<Quantity, Asset>>() {
+        return Some(mint.clone());
+    }
+    if let Some(mint) = any.downcast_ref::<MintBox>() {
+        return match mint {
+            MintBox::Asset(mint) => Some(mint.clone()),
+            MintBox::TriggerRepetitions(_) => None,
+        };
+    }
+    if !instruction_has_concrete_type::<Mint<Quantity, Asset>>(instruction) {
+        return None;
+    }
+    let bytes = instruction.dyn_encode();
+    std::panic::catch_unwind(|| Mint::<Quantity, Asset>::decode(&mut bytes.as_slice()).ok())
+        .ok()
+        .flatten()
+}
+
 fn extract_transfer_asset(
     instruction: &InstructionBox,
 ) -> Option<Transfer<Asset, Quantity, Account>> {
@@ -7205,6 +7336,55 @@ fn authority_has_permission(
     }
 
     Ok(false)
+}
+
+fn authority_owns_asset_definition(
+    world: &impl WorldReadOnly,
+    authority: &AccountId,
+    asset_definition_id: &AssetDefinitionId,
+) -> Result<bool, ValidationFail> {
+    world
+        .asset_definition(asset_definition_id)
+        .map(|definition| definition.owned_by() == authority)
+        .map_err(|err| ValidationFail::InstructionFailed(InstructionExecutionError::Find(err)))
+}
+
+fn can_mint_asset(
+    world: &impl WorldReadOnly,
+    authority: &AccountId,
+    asset_id: &AssetId,
+) -> Result<bool, ValidationFail> {
+    if authority_owns_asset_definition(world, authority, asset_id.definition())? {
+        return Ok(true);
+    }
+    let by_definition: Permission = executor_permission::asset::CanMintAssetWithDefinition {
+        asset_definition: asset_id.definition().clone(),
+    }
+    .into();
+    if authority_has_permission(world, authority, &by_definition)? {
+        return Ok(true);
+    }
+    let exact_asset: Permission = executor_permission::asset::CanMintAsset {
+        asset: asset_id.clone(),
+    }
+    .into();
+    authority_has_permission(world, authority, &exact_asset)
+}
+
+fn can_modify_asset_definition_metadata(
+    world: &impl WorldReadOnly,
+    authority: &AccountId,
+    asset_definition_id: &AssetDefinitionId,
+) -> Result<bool, ValidationFail> {
+    if authority_owns_asset_definition(world, authority, asset_definition_id)? {
+        return Ok(true);
+    }
+    let required: Permission =
+        executor_permission::asset_definition::CanModifyAssetDefinitionMetadata {
+            asset_definition: asset_definition_id.clone(),
+        }
+        .into();
+    authority_has_permission(world, authority, &required)
 }
 
 pub(crate) fn enforce_contract_entrypoint_permission(
@@ -7802,7 +7982,9 @@ pub(crate) fn ensure_asset_definition_registration_allowed(
     }
 
     let Some(domain_id) = reg_asset_definition.object().id().try_domain() else {
-        return Ok(());
+        return Err(ValidationFail::NotPermitted(
+            "domainless asset definitions may only be registered in genesis".to_owned(),
+        ));
     };
 
     let domain_owner = state_transaction
@@ -8607,6 +8789,33 @@ mod tests {
             &sign(shifted)
         ));
 
+        let mut atomic_deployment = exact.clone();
+        atomic_deployment.push(
+            iroha_data_model::isi::smart_contract_code::CommitContractDeployment {
+                expected_deploy_nonce: 0,
+                contract_address: ContractAddress::derive(
+                    iroha_data_model::account::address::chain_discriminant(),
+                    &authority,
+                    0,
+                    DataSpaceId::UNIVERSAL,
+                )
+                .expect("atomic deployment address"),
+                code_hash,
+                contract_alias: "payments::universal".parse().expect("contract alias"),
+                lease_expiry_ms: None,
+                expected_previous_contract_address: None,
+            }
+            .into(),
+        );
+        assert!(
+            !allows_contract_deployment_self_bootstrap(
+                &world.view(),
+                &authority,
+                &sign(atomic_deployment)
+            ),
+            "atomic deployment must require an authority that existed before the transaction"
+        );
+
         let proved_transaction = TransactionBuilder::new(chain, authority.clone())
             .with_executable(Executable::IvmProved(
                 iroha_data_model::transaction::IvmProved {
@@ -9139,6 +9348,16 @@ mod tests {
                 iroha_data_model::isi::smart_contract_code::DeactivateContractInstance {
                     contract_address: contract_address.clone(),
                     reason: Some("executor lifecycle guard".to_owned()),
+                },
+            ),
+            InstructionBox::from(
+                iroha_data_model::isi::smart_contract_code::CommitContractDeployment {
+                    expected_deploy_nonce: 404,
+                    contract_address: contract_address.clone(),
+                    code_hash: Hash::new(b"executor-lifecycle-atomic-deployment"),
+                    contract_alias: "payments::universal".parse().expect("contract alias"),
+                    lease_expiry_ms: None,
+                    expected_previous_contract_address: None,
                 },
             ),
         ];
@@ -10449,7 +10668,11 @@ mod tests {
         let query_handle = query::store::LiveQueryStore::start_test();
         let state = State::new(world, kura, query_handle);
 
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        state
+            .block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0))
+            .commit()
+            .expect("commit bootstrap block");
+        let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
 
         {
@@ -10588,7 +10811,7 @@ mod tests {
     }
 
     #[test]
-    fn initial_executor_allows_registering_opaque_asset_definition_without_domain_projection() {
+    fn initial_executor_rejects_domainless_asset_definition_registration_after_genesis() {
         let alice_id = ALICE_ID.clone();
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let domain: Domain = Domain::new(domain_id.clone()).build(&alice_id);
@@ -10599,7 +10822,11 @@ mod tests {
         let query_handle = query::store::LiveQueryStore::start_test();
         let state = State::new(world, kura, query_handle);
 
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        state
+            .block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0))
+            .commit()
+            .expect("commit bootstrap block");
+        let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
 
         let executor = super::Executor::Initial;
@@ -10613,12 +10840,129 @@ mod tests {
         ));
 
         let mut stx = block.transaction();
-        executor
-            .execute_instruction(&mut stx, &alice_id, instruction)
-            .expect("opaque asset definition should not require a domain projection");
+        let result = executor.execute_instruction(&mut stx, &alice_id, instruction);
         assert!(
-            stx.world.asset_definition(&asset_definition_id).is_ok(),
-            "opaque asset definition must be inserted into world state"
+            matches!(
+                result,
+                Err(ValidationFail::NotPermitted(ref message))
+                    if message.contains("domainless asset definitions may only be registered in genesis")
+            ),
+            "post-genesis opaque asset registration must fail closed: {result:?}"
+        );
+        assert!(
+            stx.world.asset_definition(&asset_definition_id).is_err(),
+            "a rejected opaque asset definition must not enter world state"
+        );
+    }
+
+    #[test]
+    fn initial_executor_enforces_exact_pkr_mint_and_metadata_permissions() {
+        let owner = ALICE_ID.clone();
+        let retail = checked_account_id();
+        let domain_id = DomainId::try_new("wonderland", "universal").expect("domain id");
+        let pkr = AssetDefinitionId::from_uuid_bytes([
+            0x5d, 0x9f, 0x4d, 0x8d, 0x11, 0x5a, 0x49, 0xc0, 0x95, 0x3a, 0x6a, 0x9b, 0xe8, 0x22,
+            0x77, 0x01,
+        ])
+        .expect("opaque PKR definition id");
+        let world = World::with(
+            [Domain::new(domain_id).build(&owner)],
+            [
+                Account::new(owner.clone()).build(&owner),
+                Account::new(retail.clone()).build(&retail),
+            ],
+            [AssetDefinition::numeric(pkr.clone())
+                .with_name("PKR".to_owned())
+                .build(&owner)],
+        );
+        let state = State::new(
+            world,
+            Kura::blank_kura_for_testing(),
+            query::store::LiveQueryStore::start_test(),
+        );
+        state
+            .block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0))
+            .commit()
+            .expect("commit bootstrap block");
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+        let mut stx = block.transaction();
+        let executor = super::Executor::Initial;
+        let retail_pkr = AssetId::new(pkr.clone(), retail.clone());
+
+        let unprivileged_mint = executor.execute_instruction(
+            &mut stx,
+            &retail,
+            InstructionBox::from(Mint::asset_quantity(1_u32, retail_pkr.clone())),
+        );
+        assert!(matches!(
+            unprivileged_mint,
+            Err(ValidationFail::NotPermitted(ref message))
+                if message.contains("exact mint permission")
+        ));
+
+        let offline_key: Name = "offline.enabled".parse().expect("metadata key");
+        let unprivileged_metadata = executor.execute_instruction(
+            &mut stx,
+            &retail,
+            InstructionBox::from(iroha_data_model::isi::SetKeyValue::asset_definition(
+                pkr.clone(),
+                offline_key.clone(),
+                Json::new(true),
+            )),
+        );
+        assert!(matches!(
+            unprivileged_metadata,
+            Err(ValidationFail::NotPermitted(ref message))
+                if message.contains("asset-definition metadata")
+        ));
+
+        stx.world.account_permissions.insert(
+            retail.clone(),
+            BTreeSet::from([
+                Permission::from(executor_permission::asset::CanMintAssetWithDefinition {
+                    asset_definition: pkr.clone(),
+                }),
+                Permission::from(
+                    executor_permission::asset_definition::CanModifyAssetDefinitionMetadata {
+                        asset_definition: pkr.clone(),
+                    },
+                ),
+            ]),
+        );
+        executor
+            .execute_instruction(
+                &mut stx,
+                &retail,
+                InstructionBox::from(Mint::asset_quantity(1_u32, retail_pkr.clone())),
+            )
+            .expect("the exact PKR definition mint grant must authorize minting");
+        executor
+            .execute_instruction(
+                &mut stx,
+                &retail,
+                InstructionBox::from(iroha_data_model::isi::SetKeyValue::asset_definition(
+                    pkr.clone(),
+                    offline_key,
+                    Json::new(true),
+                )),
+            )
+            .expect("the exact PKR metadata grant must authorize offline metadata changes");
+
+        assert_eq!(
+            stx.world
+                .assets
+                .get(&retail_pkr)
+                .expect("minted retail PKR balance")
+                .as_ref(),
+            &Quantity::from(1_u32),
+        );
+        assert_eq!(
+            stx.world
+                .asset_definition(&pkr)
+                .expect("PKR definition")
+                .metadata()
+                .get(&"offline.enabled".parse::<Name>().expect("metadata key")),
+            Some(&Json::new(true)),
         );
     }
 
@@ -11785,6 +12129,44 @@ mod tests {
         metadata
     }
 
+    fn configure_lane_relay_sponsored_fee_budget(
+        fixture: &mut SponsoredFeeAdmissionFixture,
+        verified_balance: Quantity,
+    ) {
+        let fee_asset_id = {
+            let fees = &mut fixture.state.nexus.get_mut().fees;
+            fees.settlement_mode =
+                iroha_config::parameters::actual::NexusFeeSettlementMode::LaneRelayBurn;
+            fees.fee_receipts_activation_height = 1;
+            fees.canonical_sponsor_account_id = Some(fixture.sponsor_id.to_string());
+            fees.sponsor_verified_balance_safety_floor = Quantity::from(1_000_u32);
+            fees.fee_asset_id.clone()
+        };
+        seed_verified_nexus_fee_budget(
+            &fixture.state,
+            &fixture.sponsor_id,
+            &fee_asset_id,
+            verified_balance,
+        );
+    }
+
+    fn sponsored_native_log_transaction(
+        fixture: &SponsoredFeeAdmissionFixture,
+        message: &str,
+    ) -> SignedTransaction {
+        sign_sponsored_fixture_transaction(
+            fixture,
+            Executable::Instructions(
+                vec![InstructionBox::from(Log::new(
+                    Level::INFO,
+                    message.to_owned(),
+                ))]
+                .into(),
+            ),
+            sponsored_fee_metadata(fixture),
+        )
+    }
+
     fn insert_gas_limit(metadata: &mut Metadata, gas_limit: u64) {
         metadata.insert(
             Name::from_str("gas_limit").expect("static metadata key"),
@@ -11920,8 +12302,9 @@ mod tests {
                 KagemushaRequestAuthorizationV2, KagemushaScaledAmountV2,
                 KagemushaSpendableNoteDescriptorV2, KagemushaUnshieldPublicInputsBindingV2,
                 kagemusha_recursive_spend_lineage_root_v2,
+                kagemusha_recursive_spend_verifier_key_id_v4,
             },
-            proof::{ProofBox, VerifyingKeyId},
+            proof::ProofBox,
         };
 
         let chain_id = ChainId::from("fee-policy-chain");
@@ -11950,9 +12333,9 @@ mod tests {
                 .expect("canonical fee-policy V4 lineage root");
         let branch_claim = KagemushaRecursiveSpendBranchClaimV2::root(lineage_root)
             .expect("canonical fee-policy V4 root claim");
-        let verifier_key_id = VerifyingKeyId::new(
-            KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4,
-            KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4,
+        let verifier_key_id = kagemusha_recursive_spend_verifier_key_id_v4(
+            iroha_data_model::offline::KagemushaPastaCycleParityV1::StepEq,
+            artifact_binding.manifest_sha256,
         );
         let statement = KagemushaRecursiveSpendPublicStatementV4 {
             chain_id: chain_id.clone(),
@@ -12616,6 +12999,93 @@ mod tests {
     }
 
     #[test]
+    fn nexus_fee_sponsor_asset_transfer_selector_rejects_other_assets_and_ownership_transfers() {
+        let mut fixture = sponsored_fee_admission_fixture(true);
+        let pkr = AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").expect("fixture domain"),
+            "pkr".parse().expect("fixture asset name"),
+        );
+        let foreign_asset = AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").expect("fixture domain"),
+            "foreign".parse().expect("fixture asset name"),
+        );
+        let recipient = gen_account_in("wonderland").0;
+
+        let mut pkr_transfers = FeeSponsorRule::new(FeeSponsorRuleEffect::Allow);
+        pkr_transfers
+            .executable_kinds
+            .insert(FeeSponsorExecutableKind::Instructions);
+        pkr_transfers
+            .instruction_wire_ids
+            .insert(TransferBox::WIRE_ID.to_owned());
+        pkr_transfers
+            .asset_transfer_definition_ids
+            .insert(pkr.clone());
+        let policy = FeeSponsorPolicy {
+            id: FeeSponsorPolicyId::new(
+                fixture.sponsor_id.clone(),
+                "default".parse().expect("fixture policy name"),
+            ),
+            enabled: true,
+            max_fee: None,
+            rules: vec![pkr_transfers],
+        };
+        fixture
+            .state
+            .world
+            .fee_sponsor_policies
+            .insert(policy.id.clone(), policy);
+
+        let pkr_transfer = InstructionBox::from(Transfer::asset_quantity(
+            AssetId::new(pkr.clone(), fixture.authority_id.clone()),
+            1_u32,
+            recipient.clone(),
+        ));
+        let tx = sign_sponsored_fixture_transaction(
+            &fixture,
+            Executable::Instructions(vec![pkr_transfer].into()),
+            sponsored_fee_metadata(&fixture),
+        );
+        let view = fixture.state.view();
+        check_external_nexus_fee_admission(&view.world, &view.nexus, &tx, 0, 1, None)
+            .expect("the exact selected PKR asset transfer must remain sponsored");
+        drop(view);
+
+        let blocked = [
+            InstructionBox::from(Transfer::asset_quantity(
+                AssetId::new(foreign_asset.clone(), fixture.authority_id.clone()),
+                1_u32,
+                recipient.clone(),
+            )),
+            InstructionBox::from(Transfer::domain(
+                fixture.authority_id.clone(),
+                DomainId::try_new("owned", "universal").expect("owned domain"),
+                recipient.clone(),
+            )),
+            InstructionBox::from(Transfer::asset_definition(
+                fixture.authority_id.clone(),
+                foreign_asset,
+                recipient.clone(),
+            )),
+            InstructionBox::from(Transfer::nft(
+                fixture.authority_id.clone(),
+                "sponsor_guard$nfts.universal"
+                    .parse::<NftId>()
+                    .expect("fixture NFT id"),
+                recipient,
+            )),
+        ];
+        for instruction in blocked {
+            expect_sponsored_admission_rejection(
+                &fixture,
+                Executable::Instructions(vec![instruction].into()),
+                sponsored_fee_metadata(&fixture),
+                "fee sponsor policy is not authorized",
+            );
+        }
+    }
+
+    #[test]
     fn nexus_fee_sponsor_policy_rejects_native_batch_with_unallowed_operation() {
         let mut fixture = sponsored_fee_admission_fixture(true);
         let allowed_instruction: InstructionBox =
@@ -13061,6 +13531,105 @@ mod tests {
 
         let snap = crate::sumeragi::status::nexus_fee_snapshot();
         assert_eq!(snap.charged_total, 1);
+    }
+
+    #[test]
+    fn nexus_fee_sponsor_verified_balance_safety_floor_is_inclusive_for_explicit_sponsor() {
+        for (verified_balance, should_accept) in [(1_001_u32, true), (1_000_u32, false)] {
+            let mut fixture = sponsored_fee_admission_fixture(false);
+            configure_lane_relay_sponsored_fee_budget(
+                &mut fixture,
+                Quantity::from(verified_balance),
+            );
+            let tx = sponsored_native_log_transaction(
+                &fixture,
+                if should_accept {
+                    "sponsor floor accepted"
+                } else {
+                    "sponsor floor rejected"
+                },
+            );
+            let view = fixture.state.view();
+            let result =
+                check_external_nexus_fee_admission(&view.world, &view.nexus, &tx, 0, 1, None);
+
+            if should_accept {
+                result.expect("fee 1 must leave the exact verified sponsor floor of 1000");
+            } else {
+                let error = result.expect_err(
+                    "a verified sponsor balance equal to the floor cannot also cover fee 1",
+                );
+                assert!(matches!(
+                    error,
+                    NexusFeeAdmissionError::Rejected(reason)
+                        if reason.contains("requires 1001, available 1000")
+                ));
+            }
+        }
+    }
+
+    #[test]
+    fn nexus_fee_sponsor_verified_balance_safety_floor_reserves_in_flight_receipts() {
+        let _guard = crate::sumeragi::status::nexus_fee_test_lock()
+            .lock()
+            .expect("nexus fee test lock");
+        crate::sumeragi::status::reset_nexus_economics_for_tests();
+
+        let mut fixture = sponsored_fee_admission_fixture(false);
+        configure_lane_relay_sponsored_fee_budget(&mut fixture, Quantity::from(1_002_u32));
+        let fee_asset_id = {
+            let view = fixture.state.view();
+            view.nexus.fees.fee_asset_id.clone()
+        };
+        let first = sponsored_native_log_transaction(&fixture, "first sponsored relay receipt");
+        let second = sponsored_native_log_transaction(&fixture, "second sponsored relay receipt");
+        let third = sponsored_native_log_transaction(&fixture, "third sponsored relay receipt");
+        let block_header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+        let mut block = fixture.state.block(block_header);
+        let executor = super::Executor::Initial;
+        let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
+
+        {
+            let mut stx = block.transaction();
+            executor
+                .execute_transaction(&mut stx, &fixture.authority_id, first, &mut ivm_cache)
+                .expect("first fee must leave 1001, above the 1000 safety floor");
+            assert_eq!(
+                stx.pending_nexus_fee_amount_for(&fixture.sponsor_id, &fee_asset_id),
+                Some(Numeric::from(1_u32)),
+                "the explicit sponsor must own the in-flight relay reservation"
+            );
+            stx.apply();
+        }
+
+        {
+            let mut stx = block.transaction();
+            executor
+                .execute_transaction(&mut stx, &fixture.authority_id, second, &mut ivm_cache)
+                .expect("second fee must be accepted at the exact floor boundary");
+            assert_eq!(
+                stx.pending_nexus_fee_amount_for(&fixture.sponsor_id, &fee_asset_id),
+                Some(Numeric::from(2_u32)),
+            );
+            stx.apply();
+        }
+
+        {
+            let mut stx = block.transaction();
+            let error = executor
+                .execute_transaction(&mut stx, &fixture.authority_id, third, &mut ivm_cache)
+                .expect_err("two in-flight fees plus fee 1 must preserve the safety floor");
+            assert!(matches!(
+                error,
+                ValidationFail::NotPermitted(reason)
+                    if reason.contains("requires 1003, available 1002")
+            ));
+            assert_eq!(
+                stx.pending_nexus_fee_amount_for(&fixture.sponsor_id, &fee_asset_id),
+                Some(Numeric::from(2_u32)),
+                "a rejected fee must not create another in-flight reservation"
+            );
+        }
     }
 
     #[test]

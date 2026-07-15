@@ -774,8 +774,8 @@ fn load_genesis_key_file(
     algorithm: Algorithm,
 ) -> Result<KeyPair, color_eyre::eyre::Error> {
     let mut raw = zeroize::Zeroizing::new(crate::secure_fs::read_private_file(path)?);
-    let text = std::str::from_utf8(raw.as_slice())
-        .wrap_err("genesis private-key file is not UTF-8")?;
+    let text =
+        std::str::from_utf8(raw.as_slice()).wrap_err("genesis private-key file is not UTF-8")?;
     let canonical = text.strip_suffix('\n').ok_or_else(|| {
         eyre!("genesis private-key file must contain one canonical key and a final newline")
     })?;
@@ -2627,8 +2627,8 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
                 & 0o777,
             0o600
         );
-        let loaded = load_genesis_key_file(&path, Algorithm::Ed25519)
-            .expect("load canonical private key");
+        let loaded =
+            load_genesis_key_file(&path, Algorithm::Ed25519).expect("load canonical private key");
         assert_eq!(loaded.public_key(), key_pair.public_key());
     }
 

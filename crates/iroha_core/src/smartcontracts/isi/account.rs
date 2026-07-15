@@ -264,6 +264,15 @@ pub mod isi {
                 key,
                 value,
             } = self;
+            if key.as_ref() == iroha_data_model::smart_contract::CONTRACT_DEPLOY_NONCE_METADATA_KEY
+            {
+                return Err(Error::InvariantViolation(
+                    format!(
+                        "account metadata key `{key}` is reserved for native contract deployment state"
+                    )
+                    .into(),
+                ));
+            }
             if crate::smartcontracts::isi::multisig::is_reserved_multisig_metadata_key(&key) {
                 let ttl_only_update = validate_multisig_spec_ttl_update(
                     state_transaction,
@@ -317,6 +326,17 @@ pub mod isi {
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             let account_id = self.object().clone();
+            if self.key().as_ref()
+                == iroha_data_model::smart_contract::CONTRACT_DEPLOY_NONCE_METADATA_KEY
+            {
+                return Err(Error::InvariantViolation(
+                    format!(
+                        "account metadata key `{}` is reserved for native contract deployment state",
+                        self.key()
+                    )
+                    .into(),
+                ));
+            }
             if crate::smartcontracts::isi::multisig::is_reserved_multisig_metadata_key(self.key()) {
                 return Err(Error::InvariantViolation(
                     format!(
@@ -2075,6 +2095,54 @@ pub mod query {
                 )),
                 iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
             )
+        }
+
+        #[test]
+        fn generic_account_metadata_instructions_cannot_mutate_contract_deploy_nonce() {
+            let state = new_state_with_authority();
+            let mut block = state.block(new_block_header(1, 0));
+            let mut stx = block.transaction();
+            let key: Name = iroha_data_model::smart_contract::CONTRACT_DEPLOY_NONCE_METADATA_KEY
+                .parse()
+                .expect("reserved deployment nonce key");
+
+            let error = SetKeyValue::account(ALICE_ID.clone(), key.clone(), Json::new(7_u64))
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("generic metadata write must not forge the deployment nonce");
+            assert!(
+                error
+                    .to_string()
+                    .contains("native contract deployment state")
+            );
+            assert!(
+                stx.world
+                    .account(&ALICE_ID)
+                    .expect("authority account")
+                    .metadata()
+                    .get(&key)
+                    .is_none()
+            );
+
+            stx.world
+                .account_mut(&ALICE_ID)
+                .expect("authority account")
+                .insert(key.clone(), Json::new(7_u64));
+            let error = RemoveKeyValue::account(ALICE_ID.clone(), key.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("generic metadata removal must not reset the deployment nonce");
+            assert!(
+                error
+                    .to_string()
+                    .contains("native contract deployment state")
+            );
+            assert!(
+                stx.world
+                    .account(&ALICE_ID)
+                    .expect("authority account")
+                    .metadata()
+                    .get(&key)
+                    .is_some()
+            );
         }
 
         fn register_labeled_account(

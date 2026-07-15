@@ -87,6 +87,10 @@ bundle digest; duplicate or conflicting exact-state branches fail closed. Peer r
 acknowledgement signing expose only strict P-256 device key/signature wrappers; callers never pass
 native wire discriminants.
 
+Artifact installation requires the canonical candidate-bound promotion record through
+`ReleaseAuthentication`, in addition to the trusted policy, attestation, benchmark evidence, and
+cryptographic review. An authenticated-but-unpromoted release cannot become active.
+
 `newToriiClient(...)` exposes only `getReadiness`, `submitTopUp`, `submitRedeem`, and
 `getOperation`. Commands send the typed Norito request directly with `application/x-norito` and the
 signed lowercase operation id as `Idempotency-Key`; responses must be typed Norito as well. Top-up

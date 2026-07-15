@@ -17,6 +17,8 @@ use std::{
 #[cfg(unix)]
 use std::os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _, PermissionsExt as _};
 
+#[cfg(feature = "kagemusha-candidate-evidence-lab")]
+use iroha_data_model::offline::KagemushaRecursiveSpendCandidateV4;
 use iroha_data_model::offline::{
     KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_HEADER_MAX_BYTES_V4,
     KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_HEADER_VERSION_V4,
@@ -366,6 +368,137 @@ pub struct KagemushaValidatedArtifactPayloadV4 {
     payload: Vec<u8>,
 }
 
+/// Trust mode attached to one parsed ABI-20 inventory.
+///
+/// The candidate variant is compiled only into the explicitly requested
+/// non-shipping evidence harness. Keeping the mode in the carrier prevents a
+/// candidate payload from being relabelled as release-authenticated material
+/// while still allowing both modes to exercise the same prover and verifier.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum KagemushaArtifactManifestBindingV4 {
+    AuthenticatedRelease(KagemushaAuthenticatedReleaseV4),
+    #[cfg(feature = "kagemusha-candidate-evidence-lab")]
+    CandidateEvidence {
+        candidate: KagemushaRecursiveSpendCandidateV4,
+        candidate_sha256: [u8; 32],
+        manifest_sha256: [u8; 32],
+    },
+}
+
+impl KagemushaArtifactManifestBindingV4 {
+    fn authenticated_release(release: &KagemushaAuthenticatedReleaseV4) -> Self {
+        Self::AuthenticatedRelease(release.clone())
+    }
+
+    #[cfg(feature = "kagemusha-candidate-evidence-lab")]
+    fn candidate_evidence(
+        candidate: &KagemushaRecursiveSpendCandidateV4,
+        expected_candidate_sha256: [u8; 32],
+        expected_manifest_sha256: [u8; 32],
+    ) -> Result<Self, String> {
+        candidate.validate().map_err(|error| error.to_string())?;
+        let candidate_sha256 = candidate.sha256().map_err(|error| error.to_string())?;
+        let manifest_bytes = norito::to_bytes(&candidate.manifest).map_err(|error| {
+            format!("failed to encode Kagemusha V4 candidate manifest: {error}")
+        })?;
+        let manifest_sha256: [u8; 32] = Sha256::digest(manifest_bytes).into();
+        if candidate_sha256 == [0; 32]
+            || manifest_sha256 == [0; 32]
+            || candidate_sha256 != expected_candidate_sha256
+            || manifest_sha256 != expected_manifest_sha256
+        {
+            return Err("Kagemusha V4 candidate identity mismatch".to_owned());
+        }
+        Ok(Self::CandidateEvidence {
+            candidate: candidate.clone(),
+            candidate_sha256,
+            manifest_sha256,
+        })
+    }
+
+    fn manifest(&self) -> &KagemushaRecursiveSpendArtifactManifestV4 {
+        match self {
+            Self::AuthenticatedRelease(release) => release.manifest(),
+            #[cfg(feature = "kagemusha-candidate-evidence-lab")]
+            Self::CandidateEvidence { candidate, .. } => &candidate.manifest,
+        }
+    }
+
+    fn manifest_sha256(&self) -> [u8; 32] {
+        match self {
+            Self::AuthenticatedRelease(release) => release.manifest_sha256(),
+            #[cfg(feature = "kagemusha-candidate-evidence-lab")]
+            Self::CandidateEvidence {
+                manifest_sha256, ..
+            } => *manifest_sha256,
+        }
+    }
+
+    fn is_candidate_evidence_lab(&self) -> bool {
+        #[cfg(feature = "kagemusha-candidate-evidence-lab")]
+        if matches!(self, Self::CandidateEvidence { .. }) {
+            return true;
+        }
+        false
+    }
+
+    fn validate(&self) -> Result<(), String> {
+        match self {
+            Self::AuthenticatedRelease(release) => {
+                release
+                    .manifest()
+                    .validate()
+                    .map_err(|error| error.to_string())?;
+                if release.manifest_sha256() == [0; 32] {
+                    return Err("Kagemusha V4 authenticated release digest is zero".to_owned());
+                }
+                Ok(())
+            }
+            #[cfg(feature = "kagemusha-candidate-evidence-lab")]
+            Self::CandidateEvidence {
+                candidate,
+                candidate_sha256,
+                manifest_sha256,
+            } => {
+                candidate.validate().map_err(|error| error.to_string())?;
+                let observed_candidate_sha256 =
+                    candidate.sha256().map_err(|error| error.to_string())?;
+                let manifest_bytes = norito::to_bytes(&candidate.manifest).map_err(|error| {
+                    format!("failed to encode Kagemusha V4 candidate manifest: {error}")
+                })?;
+                let observed_manifest_sha256: [u8; 32] = Sha256::digest(manifest_bytes).into();
+                if *candidate_sha256 == [0; 32]
+                    || *manifest_sha256 == [0; 32]
+                    || observed_candidate_sha256 != *candidate_sha256
+                    || observed_manifest_sha256 != *manifest_sha256
+                {
+                    return Err("Kagemusha V4 candidate binding changed".to_owned());
+                }
+                Ok(())
+            }
+        }
+    }
+
+    fn validate_header(
+        &self,
+        header: &KagemushaRecursiveSpendPastaCycleArtifactHeaderV4,
+        descriptor: &KagemushaPastaCycleArtifactV4,
+    ) -> Result<(), String> {
+        match self {
+            Self::AuthenticatedRelease(release) => {
+                validate_header_against_manifest_v4(header, release.manifest(), descriptor)
+            }
+            #[cfg(feature = "kagemusha-candidate-evidence-lab")]
+            Self::CandidateEvidence { candidate, .. } => {
+                candidate.validate().map_err(|error| error.to_string())?;
+                header
+                    .validate_against_candidate_manifest(&candidate.manifest, descriptor)
+                    .map_err(|error| error.to_string())
+            }
+        }
+    }
+}
+
 impl KagemushaValidatedArtifactPayloadV4 {
     /// Return the authenticated role header.
     #[must_use]
@@ -422,8 +555,35 @@ pub fn read_kagemusha_pasta_cycle_artifact_v4<R: Read>(
     release: &KagemushaAuthenticatedReleaseV4,
     descriptor: &KagemushaPastaCycleArtifactV4,
 ) -> Result<KagemushaValidatedArtifactPayloadV4, String> {
-    let manifest = release.manifest();
-    manifest.validate().map_err(|error| error.to_string())?;
+    let binding = KagemushaArtifactManifestBindingV4::authenticated_release(release);
+    read_kagemusha_pasta_cycle_artifact_with_binding_v4(reader, &binding, descriptor)
+}
+
+/// Parse one exact KRV4 artifact against a clean, canonical pre-promotion
+/// candidate. This API exists only in explicitly feature-selected evidence-lab
+/// builds and does not manufacture an authenticated production release.
+#[cfg(feature = "kagemusha-candidate-evidence-lab")]
+pub fn read_kagemusha_pasta_cycle_candidate_artifact_v4<R: Read>(
+    reader: &mut R,
+    candidate: &KagemushaRecursiveSpendCandidateV4,
+    expected_candidate_sha256: [u8; 32],
+    expected_manifest_sha256: [u8; 32],
+    descriptor: &KagemushaPastaCycleArtifactV4,
+) -> Result<KagemushaValidatedArtifactPayloadV4, String> {
+    let binding = KagemushaArtifactManifestBindingV4::candidate_evidence(
+        candidate,
+        expected_candidate_sha256,
+        expected_manifest_sha256,
+    )?;
+    read_kagemusha_pasta_cycle_artifact_with_binding_v4(reader, &binding, descriptor)
+}
+
+fn read_kagemusha_pasta_cycle_artifact_with_binding_v4<R: Read>(
+    reader: &mut R,
+    binding: &KagemushaArtifactManifestBindingV4,
+    descriptor: &KagemushaPastaCycleArtifactV4,
+) -> Result<KagemushaValidatedArtifactPayloadV4, String> {
+    binding.validate()?;
     descriptor.validate().map_err(|error| error.to_string())?;
 
     let mut framed_hasher = Sha256::new();
@@ -471,7 +631,7 @@ pub fn read_kagemusha_pasta_cycle_artifact_v4<R: Read>(
     {
         return Err("Kagemusha V4 artifact header is not canonical".to_owned());
     }
-    validate_header_against_manifest_v4(&header, manifest, descriptor)?;
+    binding.validate_header(&header, descriptor)?;
     if u64::try_from(prefix_len)
         .ok()
         .and_then(|prefix| prefix.checked_add(header.payload_size_bytes))
@@ -510,17 +670,29 @@ pub fn read_kagemusha_pasta_cycle_artifact_v4<R: Read>(
 }
 
 fn validate_role(
-    release: &KagemushaAuthenticatedReleaseV4,
+    binding: &KagemushaArtifactManifestBindingV4,
     artifact: &KagemushaValidatedArtifactPayloadV4,
     parity: KagemushaPastaCycleParityV1,
     kind: KagemushaPastaCycleArtifactKindV4,
 ) -> Result<(), String> {
+    binding.validate()?;
     artifact.validate_payload()?;
     if artifact.header.parity != parity || artifact.header.kind != kind {
         return Err("Kagemusha V4 artifact carrier role mismatch".to_owned());
     }
-    let descriptor = kagemusha_artifact_descriptor_v4(release.manifest(), parity, kind)?;
-    validate_header_against_manifest_v4(&artifact.header, release.manifest(), descriptor)
+    let descriptor = binding
+        .manifest()
+        .profiles
+        .iter()
+        .find(|profile| profile.parity == parity)
+        .and_then(|profile| {
+            profile
+                .artifacts
+                .iter()
+                .find(|descriptor| descriptor.kind == kind)
+        })
+        .ok_or_else(|| "Kagemusha V4 artifact manifest role is absent".to_owned())?;
+    binding.validate_header(&artifact.header, descriptor)
 }
 
 /// Exact six-role verifier material bound to one authenticated V4 release.
@@ -529,7 +701,7 @@ fn validate_role(
 /// owner of their canonical typed representation and validation.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KagemushaPastaCycleVerifierArtifactsV4 {
-    release: KagemushaAuthenticatedReleaseV4,
+    binding: KagemushaArtifactManifestBindingV4,
     step_eq_parameters: KagemushaValidatedArtifactPayloadV4,
     step_eq_verifying_key: KagemushaValidatedArtifactPayloadV4,
     step_eq_bootstrap_witness: KagemushaValidatedArtifactPayloadV4,
@@ -549,6 +721,58 @@ impl KagemushaPastaCycleVerifierArtifactsV4 {
         step_ep_verifying_key: KagemushaValidatedArtifactPayloadV4,
         step_ep_bootstrap_witness: KagemushaValidatedArtifactPayloadV4,
     ) -> Result<Self, String> {
+        Self::new_with_binding(
+            KagemushaArtifactManifestBindingV4::authenticated_release(release),
+            step_eq_parameters,
+            step_eq_verifying_key,
+            step_eq_bootstrap_witness,
+            step_ep_parameters,
+            step_ep_verifying_key,
+            step_ep_bootstrap_witness,
+        )
+    }
+
+    /// Bind all six verifier roles to one clean candidate in a non-shipping
+    /// evidence-lab build without relabelling it as a promoted release.
+    #[cfg(feature = "kagemusha-candidate-evidence-lab")]
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_candidate_evidence_lab(
+        candidate: &KagemushaRecursiveSpendCandidateV4,
+        expected_candidate_sha256: [u8; 32],
+        expected_manifest_sha256: [u8; 32],
+        step_eq_parameters: KagemushaValidatedArtifactPayloadV4,
+        step_eq_verifying_key: KagemushaValidatedArtifactPayloadV4,
+        step_eq_bootstrap_witness: KagemushaValidatedArtifactPayloadV4,
+        step_ep_parameters: KagemushaValidatedArtifactPayloadV4,
+        step_ep_verifying_key: KagemushaValidatedArtifactPayloadV4,
+        step_ep_bootstrap_witness: KagemushaValidatedArtifactPayloadV4,
+    ) -> Result<Self, String> {
+        Self::new_with_binding(
+            KagemushaArtifactManifestBindingV4::candidate_evidence(
+                candidate,
+                expected_candidate_sha256,
+                expected_manifest_sha256,
+            )?,
+            step_eq_parameters,
+            step_eq_verifying_key,
+            step_eq_bootstrap_witness,
+            step_ep_parameters,
+            step_ep_verifying_key,
+            step_ep_bootstrap_witness,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn new_with_binding(
+        binding: KagemushaArtifactManifestBindingV4,
+        step_eq_parameters: KagemushaValidatedArtifactPayloadV4,
+        step_eq_verifying_key: KagemushaValidatedArtifactPayloadV4,
+        step_eq_bootstrap_witness: KagemushaValidatedArtifactPayloadV4,
+        step_ep_parameters: KagemushaValidatedArtifactPayloadV4,
+        step_ep_verifying_key: KagemushaValidatedArtifactPayloadV4,
+        step_ep_bootstrap_witness: KagemushaValidatedArtifactPayloadV4,
+    ) -> Result<Self, String> {
+        binding.validate()?;
         let artifacts = [
             (
                 &step_eq_parameters,
@@ -583,13 +807,13 @@ impl KagemushaPastaCycleVerifierArtifactsV4 {
         ];
         let mut digests = BTreeSet::new();
         for (artifact, parity, kind) in artifacts {
-            validate_role(release, artifact, parity, kind)?;
+            validate_role(&binding, artifact, parity, kind)?;
             if !digests.insert(artifact.header.payload_sha256) {
                 return Err("Kagemusha V4 verifier payloads are not distinct".to_owned());
             }
         }
         Ok(Self {
-            release: release.clone(),
+            binding,
             step_eq_parameters,
             step_eq_verifying_key,
             step_eq_bootstrap_witness,
@@ -601,32 +825,37 @@ impl KagemushaPastaCycleVerifierArtifactsV4 {
 
     /// SHA-256 of the exact authenticated manifest selecting every role.
     #[must_use]
-    pub const fn manifest_sha256(&self) -> [u8; 32] {
-        self.release.manifest_sha256()
+    pub fn manifest_sha256(&self) -> [u8; 32] {
+        self.binding.manifest_sha256()
     }
 
     /// Authenticated manifest selecting every verifier role.
     #[must_use]
     pub(crate) fn manifest(&self) -> &KagemushaRecursiveSpendArtifactManifestV4 {
-        self.release.manifest()
+        self.binding.manifest()
+    }
+
+    #[must_use]
+    pub(crate) fn is_candidate_evidence_lab(&self) -> bool {
+        self.binding.is_candidate_evidence_lab()
     }
 
     /// Exact release-specific proof-pair cap.
     #[must_use]
     pub fn max_proof_bytes(&self) -> u32 {
-        self.release.manifest().max_proof_bytes
+        self.binding.manifest().max_proof_bytes
     }
 
     /// Authenticated Eq profile selecting circuit parameters and measured cap.
     #[must_use]
     pub(crate) fn step_eq_profile(&self) -> &KagemushaPastaCycleProofProfileV4 {
-        &self.release.manifest().profiles[0]
+        &self.binding.manifest().profiles[0]
     }
 
     /// Authenticated Ep profile selecting circuit parameters and measured cap.
     #[must_use]
     pub(crate) fn step_ep_profile(&self) -> &KagemushaPastaCycleProofProfileV4 {
-        &self.release.manifest().profiles[1]
+        &self.binding.manifest().profiles[1]
     }
 
     pub(crate) fn step_eq_parameters(&self) -> &[u8] {
@@ -687,20 +916,80 @@ impl KagemushaPastaCycleProverArtifactsV4 {
         step_ep_verifying_key: KagemushaValidatedArtifactPayloadV4,
         step_ep_bootstrap_witness: KagemushaValidatedArtifactPayloadV4,
     ) -> Result<Self, String> {
+        Self::new_with_binding(
+            KagemushaArtifactManifestBindingV4::authenticated_release(release),
+            step_eq_parameters,
+            step_eq_proving_key,
+            step_eq_verifying_key,
+            step_eq_bootstrap_witness,
+            step_ep_parameters,
+            step_ep_proving_key,
+            step_ep_verifying_key,
+            step_ep_bootstrap_witness,
+        )
+    }
+
+    /// Bind the exact eight-role inventory to one clean candidate in an
+    /// explicitly selected, non-shipping evidence-lab build.
+    #[cfg(feature = "kagemusha-candidate-evidence-lab")]
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_candidate_evidence_lab(
+        candidate: &KagemushaRecursiveSpendCandidateV4,
+        expected_candidate_sha256: [u8; 32],
+        expected_manifest_sha256: [u8; 32],
+        step_eq_parameters: KagemushaValidatedArtifactPayloadV4,
+        step_eq_proving_key: KagemushaValidatedArtifactPayloadV4,
+        step_eq_verifying_key: KagemushaValidatedArtifactPayloadV4,
+        step_eq_bootstrap_witness: KagemushaValidatedArtifactPayloadV4,
+        step_ep_parameters: KagemushaValidatedArtifactPayloadV4,
+        step_ep_proving_key: KagemushaValidatedArtifactPayloadV4,
+        step_ep_verifying_key: KagemushaValidatedArtifactPayloadV4,
+        step_ep_bootstrap_witness: KagemushaValidatedArtifactPayloadV4,
+    ) -> Result<Self, String> {
+        Self::new_with_binding(
+            KagemushaArtifactManifestBindingV4::candidate_evidence(
+                candidate,
+                expected_candidate_sha256,
+                expected_manifest_sha256,
+            )?,
+            step_eq_parameters,
+            step_eq_proving_key,
+            step_eq_verifying_key,
+            step_eq_bootstrap_witness,
+            step_ep_parameters,
+            step_ep_proving_key,
+            step_ep_verifying_key,
+            step_ep_bootstrap_witness,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn new_with_binding(
+        binding: KagemushaArtifactManifestBindingV4,
+        step_eq_parameters: KagemushaValidatedArtifactPayloadV4,
+        step_eq_proving_key: KagemushaValidatedArtifactPayloadV4,
+        step_eq_verifying_key: KagemushaValidatedArtifactPayloadV4,
+        step_eq_bootstrap_witness: KagemushaValidatedArtifactPayloadV4,
+        step_ep_parameters: KagemushaValidatedArtifactPayloadV4,
+        step_ep_proving_key: KagemushaValidatedArtifactPayloadV4,
+        step_ep_verifying_key: KagemushaValidatedArtifactPayloadV4,
+        step_ep_bootstrap_witness: KagemushaValidatedArtifactPayloadV4,
+    ) -> Result<Self, String> {
+        binding.validate()?;
         validate_role(
-            release,
+            &binding,
             &step_eq_proving_key,
             KagemushaPastaCycleParityV1::StepEq,
             KagemushaPastaCycleArtifactKindV4::ProvingKey,
         )?;
         validate_role(
-            release,
+            &binding,
             &step_ep_proving_key,
             KagemushaPastaCycleParityV1::StepEp,
             KagemushaPastaCycleArtifactKindV4::ProvingKey,
         )?;
-        let verifier = KagemushaPastaCycleVerifierArtifactsV4::new(
-            release,
+        let verifier = KagemushaPastaCycleVerifierArtifactsV4::new_with_binding(
+            binding,
             step_eq_parameters,
             step_eq_verifying_key,
             step_eq_bootstrap_witness,
@@ -723,7 +1012,7 @@ impl KagemushaPastaCycleProverArtifactsV4 {
 
     /// SHA-256 of the exact authenticated manifest selecting all eight roles.
     #[must_use]
-    pub const fn manifest_sha256(&self) -> [u8; 32] {
+    pub fn manifest_sha256(&self) -> [u8; 32] {
         self.verifier.manifest_sha256()
     }
 

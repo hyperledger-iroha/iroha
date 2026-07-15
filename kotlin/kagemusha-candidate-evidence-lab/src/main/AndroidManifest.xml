@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Deliberately no INTERNET permission: the evidence lifecycle is offline. -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+    <application
+        android:allowBackup="false"
+        android:extractNativeLibs="true"
+        android:hasFragileUserData="false"
+        android:label="IROHA KAGEMUSHA CANDIDATE EVIDENCE LAB — NEVER SHIP"
+        android:supportsRtl="false">
+        <meta-data
+            android:name="org.hyperledger.iroha.KAGEMUSHA_CANDIDATE_EVIDENCE_LAB_DO_NOT_SHIP_V2"
+            android:value="true" />
+    </application>
+</manifest>

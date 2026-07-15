@@ -99,6 +99,10 @@ zk-preverify = []
 zk-tests = ["iroha-core-tests"]
 # Enable developer Halo2 test vectors (heavy tooling, opt-in only).
 halo2-dev-tests = []
+# Non-shipping, opt-in path for collecting physical-device evidence from a
+# clean ABI-20 candidate before release promotion. This never enables the
+# production proof-backend availability gate.
+kagemusha-candidate-evidence-lab = []
 # Compile the large private Sumeragi main-loop unit-test harness. This remains
 # opt-in so plain `cargo test` does not require a ~10 GiB rustc test-harness
 # compile on WSL and memory-constrained developer machines.

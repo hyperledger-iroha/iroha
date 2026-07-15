@@ -75,6 +75,7 @@ extension NoritoNativeBridge {
         UnsafePointer<UInt8>?, CUnsignedLong,
         UnsafePointer<UInt8>?, CUnsignedLong,
         UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafePointer<UInt8>?, CUnsignedLong,
         UnsafePointer<UInt64>?, CUnsignedLong
     ) -> Int32
     private typealias KagemushaV4ArtifactSetStatusFn = @convention(c) (
@@ -712,6 +713,7 @@ extension NoritoNativeBridge {
         releaseAttestationArchive: Data,
         benchmarkEvidence: Data,
         cryptographicReview: Data,
+        promotionRecordArchive: Data,
         handles: [UInt64]
     ) throws -> Bool {
         #if canImport(Darwin)
@@ -725,23 +727,27 @@ extension NoritoNativeBridge {
                     releaseAttestationArchive.withUnsafeBytes { attestationBuffer in
                         benchmarkEvidence.withUnsafeBytes { benchmarkBuffer in
                             cryptographicReview.withUnsafeBytes { reviewBuffer in
-                                handles.withUnsafeBufferPointer { handlesBuffer in
-                                    function(
-                                        manifestBuffer.bindMemory(to: UInt8.self).baseAddress,
-                                        CUnsignedLong(manifestBuffer.count),
-                                        digestBuffer.bindMemory(to: UInt8.self).baseAddress,
-                                        CUnsignedLong(digestBuffer.count),
-                                        policyBuffer.bindMemory(to: UInt8.self).baseAddress,
-                                        CUnsignedLong(policyBuffer.count),
-                                        attestationBuffer.bindMemory(to: UInt8.self).baseAddress,
-                                        CUnsignedLong(attestationBuffer.count),
-                                        benchmarkBuffer.bindMemory(to: UInt8.self).baseAddress,
-                                        CUnsignedLong(benchmarkBuffer.count),
-                                        reviewBuffer.bindMemory(to: UInt8.self).baseAddress,
-                                        CUnsignedLong(reviewBuffer.count),
-                                        handlesBuffer.baseAddress,
-                                        CUnsignedLong(handlesBuffer.count)
-                                    )
+                                promotionRecordArchive.withUnsafeBytes { promotionBuffer in
+                                    handles.withUnsafeBufferPointer { handlesBuffer in
+                                        function(
+                                            manifestBuffer.bindMemory(to: UInt8.self).baseAddress,
+                                            CUnsignedLong(manifestBuffer.count),
+                                            digestBuffer.bindMemory(to: UInt8.self).baseAddress,
+                                            CUnsignedLong(digestBuffer.count),
+                                            policyBuffer.bindMemory(to: UInt8.self).baseAddress,
+                                            CUnsignedLong(policyBuffer.count),
+                                            attestationBuffer.bindMemory(to: UInt8.self).baseAddress,
+                                            CUnsignedLong(attestationBuffer.count),
+                                            benchmarkBuffer.bindMemory(to: UInt8.self).baseAddress,
+                                            CUnsignedLong(benchmarkBuffer.count),
+                                            reviewBuffer.bindMemory(to: UInt8.self).baseAddress,
+                                            CUnsignedLong(reviewBuffer.count),
+                                            promotionBuffer.bindMemory(to: UInt8.self).baseAddress,
+                                            CUnsignedLong(promotionBuffer.count),
+                                            handlesBuffer.baseAddress,
+                                            CUnsignedLong(handlesBuffer.count)
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -758,6 +764,7 @@ extension NoritoNativeBridge {
         _ = releaseAttestationArchive
         _ = benchmarkEvidence
         _ = cryptographicReview
+        _ = promotionRecordArchive
         _ = handles
         return false
         #endif

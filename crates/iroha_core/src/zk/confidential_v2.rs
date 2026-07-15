@@ -1014,24 +1014,119 @@ fn poseidon_pair(lhs: Scalar, rhs: Scalar) -> Scalar {
 }
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+pub(in crate::zk) type ConfidentialPoseidonSpecV3<F> =
+    halo2_base::poseidon::hasher::spec::OptimizedPoseidonSpec<
+        F,
+        CONFIDENTIAL_POSEIDON_T_V3,
+        CONFIDENTIAL_POSEIDON_RATE_V3,
+    >;
+
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+pub(in crate::zk) type ConfidentialNativePoseidonV3<F> = snark_verifier::util::hash::Poseidon<
+    F,
+    F,
+    CONFIDENTIAL_POSEIDON_T_V3,
+    CONFIDENTIAL_POSEIDON_RATE_V3,
+>;
+
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+pub(in crate::zk) trait ConfidentialPoseidonFieldV3:
+    snark_verifier::util::arithmetic::FieldExt + Sized + 'static
+{
+    fn confidential_poseidon_spec_v3() -> &'static ConfidentialPoseidonSpecV3<Self>;
+
+    fn with_confidential_poseidon_v3<R>(
+        callback: impl FnOnce(&mut ConfidentialNativePoseidonV3<Self>) -> R,
+    ) -> R;
+}
+
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+fn confidential_poseidon_fp_spec_v3() -> &'static ConfidentialPoseidonSpecV3<Scalar> {
+    static SPEC: std::sync::OnceLock<ConfidentialPoseidonSpecV3<Scalar>> =
+        std::sync::OnceLock::new();
+    SPEC.get_or_init(|| {
+        ConfidentialPoseidonSpecV3::new::<
+            CONFIDENTIAL_POSEIDON_FULL_ROUNDS_V3,
+            CONFIDENTIAL_POSEIDON_PARTIAL_ROUNDS_V3,
+            CONFIDENTIAL_POSEIDON_SECURE_MDS_V3,
+        >()
+    })
+}
+
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+std::thread_local! {
+    static CONFIDENTIAL_POSEIDON_FP_V3: std::cell::RefCell<ConfidentialNativePoseidonV3<Scalar>> =
+        std::cell::RefCell::new(ConfidentialNativePoseidonV3::from_spec(
+            &*snark_verifier::loader::native::LOADER,
+            confidential_poseidon_fp_spec_v3().clone(),
+        ));
+}
+
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+impl ConfidentialPoseidonFieldV3 for Scalar {
+    fn confidential_poseidon_spec_v3() -> &'static ConfidentialPoseidonSpecV3<Self> {
+        confidential_poseidon_fp_spec_v3()
+    }
+
+    fn with_confidential_poseidon_v3<R>(
+        callback: impl FnOnce(&mut ConfidentialNativePoseidonV3<Self>) -> R,
+    ) -> R {
+        CONFIDENTIAL_POSEIDON_FP_V3.with(|hasher| callback(&mut hasher.borrow_mut()))
+    }
+}
+
+#[cfg(all(any(feature = "zk-halo2", feature = "zk-halo2-ipa"), test))]
+fn confidential_poseidon_fq_spec_v3()
+-> &'static ConfidentialPoseidonSpecV3<halo2_proofs::halo2curves::pasta::Fq> {
+    static SPEC: std::sync::OnceLock<
+        ConfidentialPoseidonSpecV3<halo2_proofs::halo2curves::pasta::Fq>,
+    > = std::sync::OnceLock::new();
+    SPEC.get_or_init(|| {
+        ConfidentialPoseidonSpecV3::new::<
+            CONFIDENTIAL_POSEIDON_FULL_ROUNDS_V3,
+            CONFIDENTIAL_POSEIDON_PARTIAL_ROUNDS_V3,
+            CONFIDENTIAL_POSEIDON_SECURE_MDS_V3,
+        >()
+    })
+}
+
+#[cfg(all(any(feature = "zk-halo2", feature = "zk-halo2-ipa"), test))]
+std::thread_local! {
+    static CONFIDENTIAL_POSEIDON_FQ_V3: std::cell::RefCell<
+        ConfidentialNativePoseidonV3<halo2_proofs::halo2curves::pasta::Fq>,
+    > = std::cell::RefCell::new(ConfidentialNativePoseidonV3::from_spec(
+        &*snark_verifier::loader::native::LOADER,
+        confidential_poseidon_fq_spec_v3().clone(),
+    ));
+}
+
+#[cfg(all(any(feature = "zk-halo2", feature = "zk-halo2-ipa"), test))]
+impl ConfidentialPoseidonFieldV3 for halo2_proofs::halo2curves::pasta::Fq {
+    fn confidential_poseidon_spec_v3() -> &'static ConfidentialPoseidonSpecV3<Self> {
+        confidential_poseidon_fq_spec_v3()
+    }
+
+    fn with_confidential_poseidon_v3<R>(
+        callback: impl FnOnce(&mut ConfidentialNativePoseidonV3<Self>) -> R,
+    ) -> R {
+        CONFIDENTIAL_POSEIDON_FQ_V3.with(|hasher| callback(&mut hasher.borrow_mut()))
+    }
+}
+
+#[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 fn confidential_poseidon_hash_v3<F>(domain: u64, inputs: &[F]) -> F
 where
-    F: snark_verifier::util::arithmetic::FieldExt,
+    F: ConfidentialPoseidonFieldV3,
 {
-    use snark_verifier::{loader::native::LOADER, util::hash::Poseidon};
-
     let mut preimage = Vec::with_capacity(inputs.len() + 2);
     preimage.push(F::from(domain));
     preimage.push(F::from_u128(inputs.len() as u128));
     preimage.extend_from_slice(inputs);
-    let mut hasher =
-        Poseidon::<F, F, CONFIDENTIAL_POSEIDON_T_V3, CONFIDENTIAL_POSEIDON_RATE_V3>::new::<
-            CONFIDENTIAL_POSEIDON_FULL_ROUNDS_V3,
-            CONFIDENTIAL_POSEIDON_PARTIAL_ROUNDS_V3,
-            CONFIDENTIAL_POSEIDON_SECURE_MDS_V3,
-        >(&LOADER);
-    hasher.update(&preimage);
-    hasher.squeeze()
+    F::with_confidential_poseidon_v3(|hasher| {
+        hasher.clear();
+        hasher.update(&preimage);
+        hasher.squeeze()
+    })
 }
 
 /// Shared confidential relation expressions used by standalone proofs and
@@ -1043,7 +1138,7 @@ pub(super) mod confidential_relation_gadget {
     use halo2_base::{
         AssignedValue, Context,
         gates::{RangeChip, RangeInstructions},
-        poseidon::hasher::{PoseidonHasher, spec::OptimizedPoseidonSpec},
+        poseidon::hasher::PoseidonHasher,
         utils::BigPrimeField,
     };
     #[cfg(test)]
@@ -1068,14 +1163,13 @@ pub(super) mod confidential_relation_gadget {
         >,
     }
 
-    impl<F: BigPrimeField> ConfidentialPoseidonChipV3<F> {
+    impl<F> ConfidentialPoseidonChipV3<F>
+    where
+        F: BigPrimeField + super::ConfidentialPoseidonFieldV3,
+    {
         /// Initialize the pinned Axiom specification and reusable constants.
         pub(in crate::zk) fn new(ctx: &mut Context<F>, range: &RangeChip<F>) -> Self {
-            let spec = OptimizedPoseidonSpec::new::<
-                { super::CONFIDENTIAL_POSEIDON_FULL_ROUNDS_V3 },
-                { super::CONFIDENTIAL_POSEIDON_PARTIAL_ROUNDS_V3 },
-                { super::CONFIDENTIAL_POSEIDON_SECURE_MDS_V3 },
-            >();
+            let spec = F::confidential_poseidon_spec_v3().clone();
             let mut hasher = PoseidonHasher::new(spec);
             hasher.initialize_consts(ctx, range.gate());
             Self { hasher }
@@ -3695,12 +3789,7 @@ pub fn encode_confidential_amount_v2(amount: u128) -> [u8; 32] {
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 /// Return the canonical empty root of the fixed confidential tree.
 pub fn poseidon_empty_root_v2() -> [u8; 32] {
-    let mut node =
-        confidential_poseidon_hash_v3(CONFIDENTIAL_POSEIDON_MERKLE_LEAF_DOMAIN_V3, &[Scalar::ZERO]);
-    for _ in 0..CONFIDENTIAL_TREE_DEPTH_V2 {
-        node = merkle_parent_v3(node, node);
-    }
-    scalar_to_repr_bytes(node)
+    scalar_to_repr_bytes(confidential_empty_subtree_roots_v3()[CONFIDENTIAL_TREE_DEPTH_V2])
 }
 
 #[cfg(all(any(feature = "zk-halo2", feature = "zk-halo2-ipa"), test))]
@@ -3902,13 +3991,19 @@ fn merkle_parent_v3(left: Scalar, right: Scalar) -> Scalar {
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 fn confidential_empty_subtree_roots_v3() -> [Scalar; CONFIDENTIAL_TREE_DEPTH_V2 + 1] {
-    let mut roots = [Scalar::ZERO; CONFIDENTIAL_TREE_DEPTH_V2 + 1];
-    roots[0] =
-        confidential_poseidon_hash_v3(CONFIDENTIAL_POSEIDON_MERKLE_LEAF_DOMAIN_V3, &[Scalar::ZERO]);
-    for level in 0..CONFIDENTIAL_TREE_DEPTH_V2 {
-        roots[level + 1] = merkle_parent_v3(roots[level], roots[level]);
-    }
-    roots
+    static ROOTS: std::sync::OnceLock<[Scalar; CONFIDENTIAL_TREE_DEPTH_V2 + 1]> =
+        std::sync::OnceLock::new();
+    *ROOTS.get_or_init(|| {
+        let mut roots = [Scalar::ZERO; CONFIDENTIAL_TREE_DEPTH_V2 + 1];
+        roots[0] = confidential_poseidon_hash_v3(
+            CONFIDENTIAL_POSEIDON_MERKLE_LEAF_DOMAIN_V3,
+            &[Scalar::ZERO],
+        );
+        for level in 0..CONFIDENTIAL_TREE_DEPTH_V2 {
+            roots[level + 1] = merkle_parent_v3(roots[level], roots[level]);
+        }
+        roots
+    })
 }
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
@@ -4004,6 +4099,102 @@ pub fn compute_confidential_merkle_path_v3(
     })
 }
 
+#[cfg(all(test, any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
+fn confidential_sparse_fixture_subtree_root_v3(
+    commitments: &[Option<[u8; 32]>],
+    start: usize,
+    height: usize,
+    empty_roots: &[Scalar; CONFIDENTIAL_TREE_DEPTH_V2 + 1],
+) -> Result<Scalar, String> {
+    if start >= commitments.len() {
+        return Ok(empty_roots[height]);
+    }
+    if height == 0 {
+        return commitments[start].map_or(Ok(empty_roots[0]), |commitment| {
+            confidential_commitment_leaf_v3(commitment, start)
+        });
+    }
+
+    let half_width = 1_usize << (height - 1);
+    let left =
+        confidential_sparse_fixture_subtree_root_v3(commitments, start, height - 1, empty_roots)?;
+    let right = confidential_sparse_fixture_subtree_root_v3(
+        commitments,
+        start + half_width,
+        height - 1,
+        empty_roots,
+    )?;
+    Ok(merkle_parent_v3(left, right))
+}
+
+/// Build a test-only V3 authentication path for an explicitly sparse tree.
+///
+/// Production trees are append-only dense prefixes, so their public helpers
+/// intentionally reject a zero commitment rather than interpreting it as a
+/// hole. Adversarial circuit tests still need internally valid paths for a
+/// tree that violates that append-only invariant; `None` represents such an
+/// empty position without weakening the production API.
+#[cfg(all(test, any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
+pub(in crate::zk) fn compute_confidential_sparse_fixture_path_v3(
+    commitments: &[Option<[u8; 32]>],
+    leaf_index: usize,
+) -> Result<ConfidentialMerklePathV2, String> {
+    if leaf_index >= CONFIDENTIAL_TREE_CAPACITY_V2 {
+        return Err(format!(
+            "leaf_index must be < {} for confidential V3 sparse fixtures",
+            CONFIDENTIAL_TREE_CAPACITY_V2
+        ));
+    }
+    if commitments.len() > CONFIDENTIAL_TREE_CAPACITY_V2 {
+        return Err(format!(
+            "confidential V3 sparse fixture supports at most {} leaves",
+            CONFIDENTIAL_TREE_CAPACITY_V2
+        ));
+    }
+
+    let empty_roots = confidential_empty_subtree_roots_v3();
+    let mut node = commitments
+        .get(leaf_index)
+        .copied()
+        .flatten()
+        .map_or(Ok(empty_roots[0]), |commitment| {
+            confidential_commitment_leaf_v3(commitment, leaf_index)
+        })?;
+    let mut siblings = Vec::with_capacity(CONFIDENTIAL_TREE_DEPTH_V2);
+    let mut directions = Vec::with_capacity(CONFIDENTIAL_TREE_DEPTH_V2);
+    let mut witness_nodes = Vec::with_capacity(CONFIDENTIAL_TREE_DEPTH_V2);
+    for level in 0..CONFIDENTIAL_TREE_DEPTH_V2 {
+        let subtree_width = 1_usize << level;
+        let subtree_start = (leaf_index >> level) << level;
+        let direction = u8::from(!((leaf_index >> level).is_multiple_of(2)));
+        let sibling_start = if direction == 0 {
+            subtree_start + subtree_width
+        } else {
+            subtree_start - subtree_width
+        };
+        let sibling = confidential_sparse_fixture_subtree_root_v3(
+            commitments,
+            sibling_start,
+            level,
+            &empty_roots,
+        )?;
+        node = if direction == 0 {
+            merkle_parent_v3(node, sibling)
+        } else {
+            merkle_parent_v3(sibling, node)
+        };
+        siblings.push(scalar_to_repr_bytes(sibling));
+        directions.push(direction);
+        witness_nodes.push(scalar_to_repr_bytes(node));
+    }
+    Ok(ConfidentialMerklePathV2 {
+        siblings,
+        directions,
+        witness_nodes,
+        root: scalar_to_repr_bytes(node),
+    })
+}
+
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 /// Derive the next empty-leaf path from a supplied current root and path.
 pub fn derive_confidential_next_zero_path_v2(
@@ -4027,16 +4218,8 @@ pub fn derive_confidential_next_zero_path_v2(
         root_hint,
         "previous latest confidential path",
     )?;
-    let mut zero_subtrees = Vec::with_capacity(CONFIDENTIAL_TREE_DEPTH_V2);
-    let mut zero_node =
-        confidential_poseidon_hash_v3(CONFIDENTIAL_POSEIDON_MERKLE_LEAF_DOMAIN_V3, &[Scalar::ZERO]);
-    for _ in 0..CONFIDENTIAL_TREE_DEPTH_V2 {
-        zero_subtrees.push(zero_node);
-        zero_node = merkle_parent_v3(zero_node, zero_node);
-    }
-
-    let mut node =
-        confidential_poseidon_hash_v3(CONFIDENTIAL_POSEIDON_MERKLE_LEAF_DOMAIN_V3, &[Scalar::ZERO]);
+    let zero_subtrees = confidential_empty_subtree_roots_v3();
+    let mut node = zero_subtrees[0];
     let previous_commitment = scalar_from_repr(previous_leaf_commitment)
         .filter(|value| *value != Scalar::ZERO)
         .ok_or_else(|| "previous commitment must be non-zero and canonical".to_owned())?;
@@ -6244,8 +6427,8 @@ fn kagemusha_step_padding_input_paths_v3(
         .ok_or_else(|| "Kagemusha padding commitment must be canonical and non-zero".to_owned())?;
     let input_leaf =
         confidential_poseidon_hash_v3(CONFIDENTIAL_POSEIDON_MERKLE_LEAF_DOMAIN_V3, &[commitment]);
-    let empty_leaf =
-        confidential_poseidon_hash_v3(CONFIDENTIAL_POSEIDON_MERKLE_LEAF_DOMAIN_V3, &[Scalar::ZERO]);
+    let empty_roots = confidential_empty_subtree_roots_v3();
+    let empty_leaf = empty_roots[0];
     let first_parent = merkle_parent_v3(input_leaf, empty_leaf);
 
     let mut input_siblings = vec![scalar_to_repr_bytes(empty_leaf)];
@@ -6255,8 +6438,8 @@ fn kagemusha_step_padding_input_paths_v3(
     let mut input_nodes = vec![scalar_to_repr_bytes(first_parent)];
     let mut empty_nodes = vec![scalar_to_repr_bytes(first_parent)];
     let mut current = first_parent;
-    let mut empty_subtree = merkle_parent_v3(empty_leaf, empty_leaf);
-    for _ in 1..CONFIDENTIAL_TREE_DEPTH_V2 {
+    for level in 1..CONFIDENTIAL_TREE_DEPTH_V2 {
+        let empty_subtree = empty_roots[level];
         input_siblings.push(scalar_to_repr_bytes(empty_subtree));
         empty_siblings.push(scalar_to_repr_bytes(empty_subtree));
         input_directions.push(0);
@@ -6264,7 +6447,6 @@ fn kagemusha_step_padding_input_paths_v3(
         current = merkle_parent_v3(current, empty_subtree);
         input_nodes.push(scalar_to_repr_bytes(current));
         empty_nodes.push(scalar_to_repr_bytes(current));
-        empty_subtree = merkle_parent_v3(empty_subtree, empty_subtree);
     }
     let root = scalar_to_repr_bytes(current);
     Ok((
@@ -6285,21 +6467,23 @@ fn kagemusha_step_padding_input_paths_v3(
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 fn kagemusha_step_padding_zero_path_v3() -> ConfidentialMerklePathV2 {
-    let mut empty_subtree =
-        confidential_poseidon_hash_v3(CONFIDENTIAL_POSEIDON_MERKLE_LEAF_DOMAIN_V3, &[Scalar::ZERO]);
-    let mut siblings = Vec::with_capacity(CONFIDENTIAL_TREE_DEPTH_V2);
+    let empty_roots = confidential_empty_subtree_roots_v3();
+    let siblings = empty_roots[..CONFIDENTIAL_TREE_DEPTH_V2]
+        .iter()
+        .copied()
+        .map(scalar_to_repr_bytes)
+        .collect();
     let directions = vec![0; CONFIDENTIAL_TREE_DEPTH_V2];
-    let mut witness_nodes = Vec::with_capacity(CONFIDENTIAL_TREE_DEPTH_V2);
-    for _ in 0..CONFIDENTIAL_TREE_DEPTH_V2 {
-        siblings.push(scalar_to_repr_bytes(empty_subtree));
-        empty_subtree = merkle_parent_v3(empty_subtree, empty_subtree);
-        witness_nodes.push(scalar_to_repr_bytes(empty_subtree));
-    }
+    let witness_nodes = empty_roots[1..]
+        .iter()
+        .copied()
+        .map(scalar_to_repr_bytes)
+        .collect();
     ConfidentialMerklePathV2 {
         siblings,
         directions,
         witness_nodes,
-        root: scalar_to_repr_bytes(empty_subtree),
+        root: scalar_to_repr_bytes(empty_roots[CONFIDENTIAL_TREE_DEPTH_V2]),
     }
 }
 
@@ -8858,28 +9042,34 @@ mod tests {
     }
 
     #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-    fn dense_confidential_subtree_root_v3_reference(
+    fn dense_confidential_tree_layers_v3_reference(
         commitments: &[[u8; 32]],
-        start: usize,
-        height: usize,
-    ) -> super::Scalar {
-        let empty_roots = super::confidential_empty_subtree_roots_v3();
-        let width = 1_usize << height;
-        let mut layer = (start..start + width)
-            .map(|index| {
-                commitments.get(index).map_or(empty_roots[0], |commitment| {
-                    super::confidential_commitment_leaf_v3(*commitment, index)
-                        .expect("canonical reference commitment")
+        tree_width: usize,
+        empty_leaf: super::Scalar,
+    ) -> Vec<Vec<super::Scalar>> {
+        assert!(tree_width.is_power_of_two());
+        assert!(commitments.len() <= tree_width);
+
+        let mut layers = vec![
+            (0..tree_width)
+                .map(|index| {
+                    commitments.get(index).map_or(empty_leaf, |commitment| {
+                        super::confidential_commitment_leaf_v3(*commitment, index)
+                            .expect("canonical reference commitment")
+                    })
                 })
-            })
-            .collect::<Vec<_>>();
-        while layer.len() > 1 {
-            layer = layer
+                .collect::<Vec<_>>(),
+        ];
+        while layers.last().expect("dense reference leaf layer").len() > 1 {
+            let next = layers
+                .last()
+                .expect("dense reference layer")
                 .chunks_exact(2)
                 .map(|pair| super::merkle_parent_v3(pair[0], pair[1]))
                 .collect();
+            layers.push(next);
         }
-        layer[0]
+        layers
     }
 
     #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
@@ -8890,6 +9080,11 @@ mod tests {
 
         for len in [0_usize, 1, 2, 3, 7, 16, 37, 64] {
             let commitments = &all_commitments[..len];
+            let dense_layers = dense_confidential_tree_layers_v3_reference(
+                commitments,
+                all_commitments.len(),
+                empty_roots[0],
+            );
             for height in 0..=6 {
                 let width = 1_usize << height;
                 for start in (0..64).step_by(width) {
@@ -8900,8 +9095,7 @@ mod tests {
                         &empty_roots,
                     )
                     .expect("sparse subtree root");
-                    let dense =
-                        dense_confidential_subtree_root_v3_reference(commitments, start, height);
+                    let dense = dense_layers[height][start / width];
                     assert_eq!(sparse, dense, "len={len} start={start} height={height}");
                 }
             }
@@ -9033,6 +9227,61 @@ mod tests {
 
     #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
     #[test]
+    fn cached_confidential_poseidon_matches_fresh_engine_on_both_pasta_fields() {
+        use halo2_proofs::halo2curves::pasta::{Fp, Fq};
+        use snark_verifier::{
+            loader::native::LOADER,
+            util::{arithmetic::FieldExt, hash::Poseidon},
+        };
+
+        fn check<F>()
+        where
+            F: FieldExt + super::ConfidentialPoseidonFieldV3,
+        {
+            let mut fresh = Poseidon::<
+                F,
+                F,
+                { super::CONFIDENTIAL_POSEIDON_T_V3 },
+                { super::CONFIDENTIAL_POSEIDON_RATE_V3 },
+            >::new::<
+                { super::CONFIDENTIAL_POSEIDON_FULL_ROUNDS_V3 },
+                { super::CONFIDENTIAL_POSEIDON_PARTIAL_ROUNDS_V3 },
+                { super::CONFIDENTIAL_POSEIDON_SECURE_MDS_V3 },
+            >(&*LOADER);
+            let uses = [
+                (super::CONFIDENTIAL_POSEIDON_OWNER_DOMAIN_V3, &[3, 5][..]),
+                (super::CONFIDENTIAL_POSEIDON_NOTE_DOMAIN_V3, &[3, 5, 8, 13]),
+                (
+                    super::CONFIDENTIAL_POSEIDON_NULLIFIER_DOMAIN_V3,
+                    &[3, 5, 8, 13],
+                ),
+                (super::CONFIDENTIAL_POSEIDON_MERKLE_LEAF_DOMAIN_V3, &[3]),
+                (super::CONFIDENTIAL_POSEIDON_MERKLE_NODE_DOMAIN_V3, &[3, 5]),
+                (super::CONFIDENTIAL_POSEIDON_ASSET_DOMAIN_V3, &[3]),
+                (super::CONFIDENTIAL_POSEIDON_CHAIN_DOMAIN_V3, &[3]),
+                (super::CONFIDENTIAL_POSEIDON_PAYER_DOMAIN_V3, &[3]),
+                (super::CONFIDENTIAL_POSEIDON_OPERATION_DOMAIN_V3, &[3]),
+            ];
+            for (domain, input_words) in uses {
+                let inputs = input_words.iter().copied().map(F::from).collect::<Vec<_>>();
+                let mut preimage = Vec::with_capacity(inputs.len() + 2);
+                preimage.push(F::from(domain));
+                preimage.push(F::from_u128(inputs.len() as u128));
+                preimage.extend_from_slice(&inputs);
+                fresh.clear();
+                fresh.update(&preimage);
+                let expected = fresh.squeeze();
+                let cached = super::confidential_poseidon_hash_v3(domain, &inputs);
+                assert_eq!(cached, expected, "domain={domain:#018x}");
+            }
+        }
+
+        check::<Fp>();
+        check::<Fq>();
+    }
+
+    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+    #[test]
     fn secure_confidential_poseidon_host_and_chip_match_all_domains_on_both_pasta_fields() {
         use halo2_base::{gates::circuit::builder::BaseCircuitBuilder, utils::BigPrimeField};
         use halo2_proofs::{
@@ -9043,7 +9292,7 @@ mod tests {
 
         fn check<F>()
         where
-            F: BigPrimeField + FieldExt,
+            F: BigPrimeField + FieldExt + super::ConfidentialPoseidonFieldV3,
         {
             const K: usize = 11;
             let uses = [
@@ -9075,7 +9324,8 @@ mod tests {
 
             let mut builder = BaseCircuitBuilder::new(false)
                 .use_k(K)
-                .use_lookup_bits(K - 1);
+                .use_lookup_bits(K - 1)
+                .use_instance_columns(1);
             let range = builder.range_chip();
             let outputs = {
                 let ctx = builder.main(0);
@@ -9107,14 +9357,14 @@ mod tests {
 
         fn repr<F>(domain: u64) -> [u8; 32]
         where
-            F: snark_verifier::util::arithmetic::FieldExt,
+            F: super::ConfidentialPoseidonFieldV3,
         {
             repr_inputs::<F>(domain, &[3, 5, 8, 13])
         }
 
         fn repr_inputs<F>(domain: u64, inputs: &[u64]) -> [u8; 32]
         where
-            F: snark_verifier::util::arithmetic::FieldExt,
+            F: super::ConfidentialPoseidonFieldV3,
         {
             let inputs = inputs.iter().copied().map(F::from).collect::<Vec<_>>();
             let value = super::confidential_poseidon_hash_v3(domain, &inputs);

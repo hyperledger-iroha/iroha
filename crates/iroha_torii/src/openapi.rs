@@ -2964,17 +2964,6 @@ fn contracts_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/contracts/deploy".to_owned(),
-        Value::Object(json_post_operation(
-            "Contracts",
-            "Deploy a public contract.",
-            "Deploy contract bytecode, derive a canonical contract address, activate it in the target dataspace (default `universal`), and return the canonical deploy-bundle receipt with one contract entry.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
-    );
-    paths.insert(
         "/v1/assets/transfer".to_owned(),
         Value::Object(json_post_operation(
             "Assets",
@@ -3031,14 +3020,7 @@ fn contracts_paths() -> Map {
     );
     paths.insert(
         "/v1/contracts/aliases/resolve".to_owned(),
-        Value::Object(json_post_operation(
-            "Contracts",
-            "Resolve a contract alias.",
-            "Resolve an on-chain contract alias to its canonical contract address and current lease status.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
+        Value::Object(contract_alias_resolve_operation()),
     );
     paths.insert(
         "/v1/contracts/aliases".to_owned(),
@@ -3163,93 +3145,6 @@ fn multisig_alias_read_operation(
     methods
 }
 
-fn multisig_bearer_viewer_operation(
-    summary: &str,
-    description: &str,
-    request_schema_ref: &str,
-    response_schema_ref: &str,
-    not_found_description: &str,
-) -> Map {
-    let mut methods = multisig_post_operation(
-        summary,
-        description,
-        request_schema_ref,
-        response_schema_ref,
-        not_found_description,
-    );
-    let operation = methods
-        .get_mut("post")
-        .and_then(Value::as_object_mut)
-        .expect("multisig POST operation");
-    operation.insert(
-        "description".into(),
-        Value::String(format!(
-            "{description} Viewer scope comes only from the required `Authorization: Bearer <JWT>` header; request-body selector fields never establish viewer identity."
-        )),
-    );
-    operation.insert(
-        "parameters".into(),
-        Value::Array(vec![string_header_param(
-            "Authorization",
-            "Bearer JWT whose validated subject and dataspace claims define the transaction-history viewer scope.",
-            true,
-        )]),
-    );
-    operation
-        .get_mut("responses")
-        .and_then(Value::as_object_mut)
-        .expect("multisig POST responses")
-        .insert(
-            "401".to_owned(),
-            json_response(
-                "The Bearer JWT is missing or invalid, or lacks a valid subject or dataspace claim (`tx_history_authorization_missing`, `tx_history_authorization_invalid`, `tx_history_subject_missing`, `tx_history_dataspace_missing`, or `tx_history_subject_invalid`).",
-                error_schema_reference(),
-            ),
-        );
-    methods
-}
-
-fn multisig_authority_read_operation(
-    summary: &str,
-    description: &str,
-    request_schema_ref: &str,
-    response_schema_ref: &str,
-    not_found_description: &str,
-) -> Map {
-    let mut methods = multisig_post_operation(
-        summary,
-        description,
-        request_schema_ref,
-        response_schema_ref,
-        not_found_description,
-    );
-    let operation = methods
-        .get_mut("post")
-        .and_then(Value::as_object_mut)
-        .expect("multisig POST operation");
-    operation.insert(
-        "description".into(),
-        Value::String(format!(
-            "{description} The authority comes only from canonical request-signing headers; request-body fields never establish signer identity."
-        )),
-    );
-    operation.insert(
-        "parameters".into(),
-        Value::Array(canonical_request_auth_header_parameters()),
-    );
-    operation
-        .get_mut("responses")
-        .and_then(Value::as_object_mut)
-        .expect("multisig POST responses")
-        .insert(
-            "401".to_owned(),
-            alias_auth_required_response(
-                "Canonical request signing is required to establish the authority; request-body fields are not authentication.",
-            ),
-        );
-    methods
-}
-
 fn multisig_paths() -> Map {
     let mut paths = Map::new();
     paths.insert(
@@ -3323,16 +3218,6 @@ fn multisig_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/multisig/proposals/lookup".to_owned(),
-        Value::Object(multisig_alias_read_operation(
-            "Look up a multisig proposal.",
-            "Resolve a multisig selector and look up a proposal by `proposal_id` or `instructions_hash`.",
-            "#/components/schemas/MultisigProposalsResolveRequest",
-            "#/components/schemas/MultisigProposalResolveResponse",
-            "Multisig alias or proposal not found.",
-        )),
-    );
-    paths.insert(
         "/v1/multisig/proposals/resolve".to_owned(),
         Value::Object(multisig_alias_read_operation(
             "Resolve a multisig proposal.",
@@ -3340,46 +3225,6 @@ fn multisig_paths() -> Map {
             "#/components/schemas/MultisigProposalsResolveRequest",
             "#/components/schemas/MultisigProposalResolveResponse",
             "Multisig alias or proposal not found.",
-        )),
-    );
-    paths.insert(
-        "/v1/multisig/approvals/query".to_owned(),
-        Value::Object(multisig_bearer_viewer_operation(
-            "Query visible multisig approvals.",
-            "Query lifecycle-filtered multisig proposals visible to the authenticated signer.",
-            "#/components/schemas/MultisigApprovalsQueryRequest",
-            "#/components/schemas/MultisigApprovalsQueryResponse",
-            "No matching viewer-visible multisig account was found.",
-        )),
-    );
-    paths.insert(
-        "/v1/multisig/approvals/lookup".to_owned(),
-        Value::Object(multisig_bearer_viewer_operation(
-            "Look up a visible multisig approval.",
-            "Look up one signer-visible proposal by multisig account reference and proposal id or instruction hash.",
-            "#/components/schemas/MultisigApprovalLookupRequest",
-            "#/components/schemas/MultisigApprovalLookupResponse",
-            "No matching viewer-visible multisig proposal was found.",
-        )),
-    );
-    paths.insert(
-        "/v1/multisig/approvals/query-for-authority".to_owned(),
-        Value::Object(multisig_authority_read_operation(
-            "Query multisig approvals for a signed authority.",
-            "Query lifecycle-filtered multisig proposals visible to the authority authenticated by canonical request-signing headers.",
-            "#/components/schemas/MultisigApprovalsQueryRequest",
-            "#/components/schemas/MultisigApprovalsQueryResponse",
-            "No matching authority-visible multisig account was found.",
-        )),
-    );
-    paths.insert(
-        "/v1/multisig/approvals/lookup-for-authority".to_owned(),
-        Value::Object(multisig_authority_read_operation(
-            "Look up a multisig approval for a signed authority.",
-            "Look up one authority-visible proposal using canonical request-signing headers.",
-            "#/components/schemas/MultisigApprovalLookupRequest",
-            "#/components/schemas/MultisigApprovalLookupResponse",
-            "No matching authority-visible multisig proposal was found.",
         )),
     );
     paths
@@ -3858,16 +3703,7 @@ fn governance_paths() -> Map {
     );
     paths.insert(
         "/v1/gov/contracts/{contract_address}".to_owned(),
-        Value::Object(json_get_operation(
-            "Governance",
-            "Fetch a governed contract binding.",
-            "Fetch the active governance binding for a canonical contract address.",
-            "#/components/schemas/JsonValue",
-            vec![string_path_param(
-                "contract_address",
-                "Canonical Bech32m contract address.",
-            )],
-        )),
+        Value::Object(governed_contract_get_operation()),
     );
     paths.insert(
         "/v1/gov/enact".to_owned(),
@@ -10077,12 +9913,7 @@ fn is_read_operation(method: &str, path: &str) -> bool {
                     | "/v1/domains/query"
                     | "/v1/gov/council/derive-vrf"
                     | "/v1/multisig/proposals/query"
-                    | "/v1/multisig/proposals/lookup"
                     | "/v1/multisig/proposals/resolve"
-                    | "/v1/multisig/approvals/query"
-                    | "/v1/multisig/approvals/lookup"
-                    | "/v1/multisig/approvals/query-for-authority"
-                    | "/v1/multisig/approvals/lookup-for-authority"
                     | "/v1/multisig/spec"
                     | "/v1/nfts/query"
                     | "/v1/proofs/query"
@@ -10129,6 +9960,162 @@ fn alias_resolve_operation() -> Map {
     operation.insert("responses".into(), Value::Object(alias_resolve_responses()));
     let mut methods = Map::new();
     methods.insert("post".to_owned(), Value::Object(operation));
+    methods
+}
+
+fn contract_alias_resolve_operation() -> Map {
+    let mut operation = Map::new();
+    operation.insert(
+        "tags".into(),
+        Value::Array(vec![Value::String("Contracts".to_owned())]),
+    );
+    operation.insert(
+        "summary".into(),
+        Value::String("Resolve an active contract alias.".to_owned()),
+    );
+    operation.insert(
+        "description".into(),
+        Value::String(
+            "Resolve one exact on-chain contract alias to its canonical address, consensus-persisted non-signing subject account, dataspace, and active lease record. Canonical account request signing is required; index-only or incomplete bindings fail closed."
+                .to_owned(),
+        ),
+    );
+    operation.insert(
+        "operationId".into(),
+        Value::String("contractAliasResolve".to_owned()),
+    );
+    operation.insert(
+        "parameters".into(),
+        Value::Array(canonical_request_auth_header_parameters()),
+    );
+    operation.insert(
+        "requestBody".into(),
+        norito::json!({
+            "required": true,
+            "content": {
+                "application/json": {
+                    "schema": { "$ref": "#/components/schemas/ContractAliasResolveRequest" }
+                }
+            }
+        }),
+    );
+    let mut responses = Map::new();
+    responses.insert(
+        "200".to_owned(),
+        json_response(
+            "The exact active contract identity binding.",
+            schema_ref("ContractAliasResolveResponse"),
+        ),
+    );
+    responses.insert(
+        "400".to_owned(),
+        json_response(
+            "The alias literal or JSON body is not canonical.",
+            error_schema_reference(),
+        ),
+    );
+    responses.insert(
+        "401".to_owned(),
+        alias_auth_required_response(
+            "Canonical request signing is required for contract identity resolution.",
+        ),
+    );
+    responses.insert(
+        "404".to_owned(),
+        json_response(
+            "No active exact binding exists for the alias.",
+            error_schema_reference(),
+        ),
+    );
+    responses.insert(
+        "429".to_owned(),
+        json_response(
+            "Contract alias read rate exceeded.",
+            error_schema_reference(),
+        ),
+    );
+    responses.insert(
+        "500".to_owned(),
+        json_response(
+            "The alias index, lease record, active instance, or contract-subject binding is internally inconsistent.",
+            error_schema_reference(),
+        ),
+    );
+    let mut methods = Map::new();
+    operation.insert("responses".into(), Value::Object(responses));
+    methods.insert("post".to_owned(), Value::Object(operation));
+    methods
+}
+
+fn governed_contract_get_operation() -> Map {
+    let mut operation = Map::new();
+    operation.insert(
+        "tags".into(),
+        Value::Array(vec![Value::String("Governance".to_owned())]),
+    );
+    operation.insert(
+        "summary".into(),
+        Value::String("Fetch an independently verified governed contract binding.".to_owned()),
+    );
+    operation.insert(
+        "description".into(),
+        Value::String(
+            "Read the active address binding only after independently verifying the stored artifact, signed manifest, ABI hash, consensus-persisted subject, and sorted unique public entrypoints. Canonical account request signing is required. Incomplete or substituted active state fails closed."
+                .to_owned(),
+        ),
+    );
+    operation.insert(
+        "operationId".into(),
+        Value::String("governedContractGet".to_owned()),
+    );
+    let mut parameters = vec![string_path_param(
+        "contract_address",
+        "Canonical Bech32m contract address.",
+    )];
+    parameters.extend(canonical_request_auth_header_parameters());
+    operation.insert("parameters".into(), Value::Array(parameters));
+    let mut responses = Map::new();
+    responses.insert(
+        "200".to_owned(),
+        json_response(
+            "The verified active contract metadata, or a canonical inactive response.",
+            schema_ref("GovernedContractResponse"),
+        ),
+    );
+    responses.insert(
+        "400".to_owned(),
+        json_response("The contract address is invalid.", error_schema_reference()),
+    );
+    responses.insert(
+        "401".to_owned(),
+        alias_auth_required_response(
+            "Canonical request signing is required for governed contract metadata.",
+        ),
+    );
+    responses.insert(
+        "404".to_owned(),
+        json_response(
+            "The address references an unknown dataspace.",
+            error_schema_reference(),
+        ),
+    );
+    responses.insert(
+        "429".to_owned(),
+        json_response(
+            "Governed contract read rate exceeded.",
+            error_schema_reference(),
+        ),
+    );
+    responses.insert(
+        "500".to_owned(),
+        json_response(
+            "Active contract state, artifact metadata, manifest provenance, hashes, subject, or public entrypoints failed integrity validation.",
+            error_schema_reference(),
+        ),
+    );
+    operation.insert("responses".into(), Value::Object(responses));
+    let mut methods = Map::new();
+    methods.insert("get".to_owned(), Value::Object(operation));
     methods
 }
 
@@ -14117,6 +14104,9 @@ fn sccp_governance_schemas(schemas: &mut Map) {
 fn bridge_finality_schemas(schemas: &mut Map) {
     let max_kagemusha_topups =
         u64::from(iroha_data_model::block::consensus_v2::MAX_KAGEMUSHA_TOPUP_ANCHORS_PER_BLOCK);
+    let max_sumeragi_validators =
+        u64::try_from(iroha_data_model::block::consensus_v2::MAX_VALIDATORS_PER_HEIGHT)
+            .expect("Sumeragi validator bound must fit in an OpenAPI uint64");
     schemas.insert(
         "SumeragiV2Bytes32".to_owned(),
         norito::json!({
@@ -14232,7 +14222,7 @@ fn bridge_finality_schemas(schemas: &mut Map) {
             "properties": {
                 "min_signers": {
                     "type": "integer", "format": "uint32", "minimum": 1,
-                    "maximum": 4096
+                    "maximum": max_sumeragi_validators
                 },
                 "total_power": {
                     "type": "integer", "format": "uint64", "minimum": 1,
@@ -14403,7 +14393,7 @@ fn bridge_finality_schemas(schemas: &mut Map) {
                     "$ref": "#/components/schemas/SumeragiV2ExecutionCommitment"
                 },
                 "signers": {
-                    "type": "array", "minItems": 1, "maxItems": 4096,
+                    "type": "array", "minItems": 1, "maxItems": max_sumeragi_validators,
                     "uniqueItems": true,
                     "items": {
                         "type": "integer", "format": "uint32", "minimum": 0,
@@ -14432,7 +14422,7 @@ fn bridge_finality_schemas(schemas: &mut Map) {
                     "$ref": "#/components/schemas/SumeragiV2ExecutionCommitment"
                 },
                 "signers": {
-                    "type": "array", "minItems": 1, "maxItems": 4096,
+                    "type": "array", "minItems": 1, "maxItems": max_sumeragi_validators,
                     "uniqueItems": true,
                     "items": {
                         "type": "integer", "format": "uint32", "minimum": 0,
@@ -14477,7 +14467,7 @@ fn bridge_finality_schemas(schemas: &mut Map) {
                     "$ref": "#/components/schemas/SumeragiV2CommitQuorumCertificate"
                 },
                 "roster": {
-                    "type": "array", "minItems": 1, "maxItems": 4096,
+                    "type": "array", "minItems": 1, "maxItems": max_sumeragi_validators,
                     "uniqueItems": true,
                     "items": { "$ref": "#/components/schemas/SumeragiV2ValidatorPower" },
                     "description": "Canonical ordered voting roster; observers are excluded and validator identities must be unique."
@@ -14510,12 +14500,12 @@ fn bridge_finality_schemas(schemas: &mut Map) {
                 },
                 "mode": { "$ref": "#/components/schemas/SumeragiV2ConsensusMode" },
                 "roster": {
-                    "type": "array", "minItems": 1, "maxItems": 4096,
+                    "type": "array", "minItems": 1, "maxItems": max_sumeragi_validators,
                     "uniqueItems": true,
                     "items": { "$ref": "#/components/schemas/SumeragiV2ValidatorPower" }
                 },
                 "validator_set_pops": {
-                    "type": "array", "minItems": 1, "maxItems": 4096,
+                    "type": "array", "minItems": 1, "maxItems": max_sumeragi_validators,
                     "items": { "$ref": "#/components/schemas/SumeragiV2BlsProof" },
                     "description": "Parent-authenticated BLS proofs of possession aligned one-for-one with the next roster."
                 },
@@ -14548,7 +14538,7 @@ fn bridge_finality_schemas(schemas: &mut Map) {
                     "$ref": "#/components/schemas/SumeragiV2CommitQuorumCertificate"
                 },
                 "validator_set_pops": {
-                    "type": "array", "minItems": 1, "maxItems": 4096,
+                    "type": "array", "minItems": 1, "maxItems": max_sumeragi_validators,
                     "items": { "$ref": "#/components/schemas/SumeragiV2BlsProof" },
                     "description": "Durable BLS proofs of possession aligned one-for-one with height_context.roster."
                 }
@@ -15005,6 +14995,9 @@ fn insert_vpn_schemas(schemas: &mut Map) {
 }
 
 fn openapi_schemas() -> Map {
+    let max_sumeragi_validators =
+        u64::try_from(iroha_data_model::block::consensus_v2::MAX_VALIDATORS_PER_HEIGHT)
+            .expect("Sumeragi validator bound must fit in an OpenAPI uint64");
     let mut schemas = Map::new();
     schemas.extend(sccp_schemas());
     bridge_finality_schemas(&mut schemas);
@@ -16743,7 +16736,8 @@ fn openapi_schemas() -> Map {
                     "description": "Canonical uppercase 32-byte Norito JSON hex."
                 },
                 "validator_count": {
-                    "type": "integer", "format": "uint32", "minimum": 1, "maximum": 4096
+                    "type": "integer", "format": "uint32", "minimum": 1,
+                    "maximum": max_sumeragi_validators
                 },
                 "quorum": { "$ref": "#/components/schemas/SumeragiV2DualQuorum" }
             }
@@ -16761,13 +16755,16 @@ fn openapi_schemas() -> Map {
             "properties": {
                 "certificate": { "$ref": "#/components/schemas/SumeragiV2QuorumCertificateRef" },
                 "validator_count": {
-                    "type": "integer", "format": "uint32", "minimum": 1, "maximum": 4096
+                    "type": "integer", "format": "uint32", "minimum": 1,
+                    "maximum": max_sumeragi_validators
                 },
                 "signer_count": {
-                    "type": "integer", "format": "uint32", "minimum": 1, "maximum": 4096
+                    "type": "integer", "format": "uint32", "minimum": 1,
+                    "maximum": max_sumeragi_validators
                 },
                 "min_signers": {
-                    "type": "integer", "format": "uint32", "minimum": 1, "maximum": 4096
+                    "type": "integer", "format": "uint32", "minimum": 1,
+                    "maximum": max_sumeragi_validators
                 },
                 "signed_power": {
                     "type": "integer", "format": "uint64", "minimum": 1,
@@ -18141,6 +18138,118 @@ fn openapi_schemas() -> Map {
         }),
     );
     schemas.insert(
+        "ContractAliasResolveRequest".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["contract_alias"],
+            "additionalProperties": false,
+            "properties": {
+                "contract_alias": {
+                    "type": "string",
+                    "description": "Exact canonical contract alias (`name::domain.dataspace` or `name::dataspace`) without surrounding whitespace."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "ContractAliasBinding".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["alias", "status", "bound_at_ms"],
+            "additionalProperties": false,
+            "properties": {
+                "alias": { "type": "string" },
+                "status": {
+                    "type": "string",
+                    "enum": ["permanent", "leased_active", "leased_grace", "expired_pending_cleanup"]
+                },
+                "lease_expiry_ms": { "type": "integer", "format": "uint64" },
+                "grace_until_ms": { "type": "integer", "format": "uint64" },
+                "bound_at_ms": { "type": "integer", "format": "uint64" }
+            }
+        }),
+    );
+    schemas.insert(
+        "ContractAliasResolveResponse".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "contract_alias",
+                "contract_address",
+                "contract_subject_account",
+                "dataspace",
+                "contract_alias_binding",
+                "source"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "contract_alias": { "type": "string" },
+                "contract_address": { "type": "string" },
+                "contract_subject_account": {
+                    "type": "string",
+                    "description": "Consensus-persisted, deterministic, non-signing I105 authority for this exact address."
+                },
+                "dataspace": { "type": "string" },
+                "contract_alias_binding": { "$ref": "#/components/schemas/ContractAliasBinding" },
+                "source": { "type": "string", "enum": ["world_state"] }
+            }
+        }),
+    );
+    schemas.insert(
+        "GovernedContractResponse".to_owned(),
+        norito::json!({
+            "oneOf": [
+                {
+                    "type": "object",
+                    "required": [
+                        "found",
+                        "contract_address",
+                        "contract_subject_account",
+                        "dataspace",
+                        "code_hash_hex",
+                        "abi_hash_hex",
+                        "public_entrypoints"
+                    ],
+                    "additionalProperties": false,
+                    "properties": {
+                        "found": { "type": "boolean", "enum": [true] },
+                        "contract_address": { "type": "string" },
+                        "contract_subject_account": { "type": "string" },
+                        "dataspace": { "type": "string" },
+                        "code_hash_hex": {
+                            "type": "string",
+                            "pattern": "^[0-9a-f]{64}$"
+                        },
+                        "abi_hash_hex": {
+                            "type": "string",
+                            "pattern": "^[0-9a-f]{64}$"
+                        },
+                        "public_entrypoints": {
+                            "type": "array",
+                            "minItems": 1,
+                            "uniqueItems": true,
+                            "items": {
+                                "type": "string",
+                                "pattern": "^[a-z][a-z0-9_]{0,127}$"
+                            },
+                            "description": "Lexicographically sorted Kotoage and View entrypoint names from the authenticated artifact."
+                        }
+                    }
+                },
+                {
+                    "type": "object",
+                    "required": ["found", "contract_address", "dataspace"],
+                    "additionalProperties": false,
+                    "properties": {
+                        "found": { "type": "boolean", "enum": [false] },
+                        "contract_address": { "type": "string" },
+                        "dataspace": { "type": "string" }
+                    }
+                }
+            ]
+        }),
+    );
+    schemas.insert(
         "AssetAliasResolveRequest".to_owned(),
         norito::json!({
             "type": "object",
@@ -19200,7 +19309,7 @@ fn openapi_schemas() -> Map {
                     "type": "array",
                     "items": {
                         "type": "object",
-                        "required": ["effect", "dataspaces", "executable_kinds", "instruction_wire_ids", "contract_selectors"],
+                        "required": ["effect", "dataspaces", "executable_kinds", "instruction_wire_ids", "asset_transfer_definition_ids", "contract_selectors"],
                         "additionalProperties": false,
                         "properties": {
                             "effect": {
@@ -19211,6 +19320,13 @@ fn openapi_schemas() -> Map {
                                     "effect": {"type": "string", "enum": ["allow", "deny"]},
                                     "value": {"nullable": true, "enum": [null]}
                                 }
+                            },
+                            "max_fee": {
+                                "anyOf": [
+                                    { "$ref": "#/components/schemas/Quantity" },
+                                    { "type": "null" }
+                                ],
+                                "description": "Optional canonical non-negative rule-level Quantity fee cap."
                             },
                             "dataspaces": {
                                 "type": "array",
@@ -19229,6 +19345,13 @@ fn openapi_schemas() -> Map {
                                 }
                             },
                             "instruction_wire_ids": {"type": "array", "items": {"type": "string"}},
+                            "asset_transfer_definition_ids": {
+                                "type": "array",
+                                "items": {
+                                    "type": "string",
+                                    "description": "Canonical Base58 UUIDv4-backed asset definition id."
+                                }
+                            },
                             "contract_selectors": {
                                 "type": "array",
                                 "items": {
@@ -21676,139 +21799,6 @@ fn openapi_schemas() -> Map {
                         { "type": "null" }
                     ]
                 }
-            }
-        }),
-    );
-    schemas.insert(
-        "MultisigApprovalsQueryRequest".to_owned(),
-        norito::json!({
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-                "status": {
-                    "type": "array",
-                    "maxItems": 4,
-                    "uniqueItems": true,
-                    "items": {
-                        "type": "string",
-                        "enum": ["COLLECTING_SIGNATURES", "FINALIZED", "CANCELED", "EXPIRED"]
-                    }
-                },
-                "operation_type": {
-                    "type": "array",
-                    "maxItems": 32,
-                    "uniqueItems": true,
-                    "items": {
-                        "type": "string",
-                        "minLength": 1,
-                        "maxLength": 128,
-                        "pattern": "^[A-Z][A-Z0-9_]*$"
-                    }
-                },
-                "requires_my_signature": { "type": "boolean", "default": false },
-                "cursor": {
-                    "oneOf": [
-                        { "type": "string", "minLength": 1, "maxLength": 512, "pattern": "^[A-Za-z0-9_-]+$" },
-                        { "type": "null" }
-                    ]
-                },
-                "limit": {
-                    "oneOf": [
-                        {
-                            "type": "integer",
-                            "format": "uint64",
-                            "minimum": 1,
-                            "maximum": (crate::routing::MULTISIG_PROPOSALS_MAX_PAGE_LIMIT)
-                        },
-                        { "type": "null" }
-                    ]
-                }
-            }
-        }),
-    );
-    schemas.insert(
-        "MultisigApprovalEntry".to_owned(),
-        norito::json!({
-            "type": "object",
-            "required": [
-                "multisig_account_id",
-                "multisig_account_ref",
-                "spec",
-                "proposal_id",
-                "instructions_hash",
-                "proposal",
-                "operation_type",
-                "status"
-            ],
-            "additionalProperties": false,
-            "properties": {
-                "multisig_account_id": { "type": "string", "minLength": 1 },
-                "multisig_account_ref": { "type": "string", "minLength": 64, "maxLength": 64, "pattern": "^[0-9a-f]{64}$" },
-                "spec": { "$ref": "#/components/schemas/MultisigSpecPayload" },
-                "proposal_id": { "type": "string", "minLength": 64, "maxLength": 64, "pattern": "^[0-9a-f]{64}$" },
-                "instructions_hash": { "type": "string", "minLength": 64, "maxLength": 64, "pattern": "^[0-9a-f]{64}$" },
-                "proposal": { "$ref": "#/components/schemas/MultisigProposalPayload" },
-                "operation_type": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[A-Z][A-Z0-9_]*$" },
-                "intent": { "$ref": "#/components/schemas/JsonValue" },
-                "status": {
-                    "type": "string",
-                    "enum": ["COLLECTING_SIGNATURES", "FINALIZED", "CANCELED", "EXPIRED"]
-                },
-                "terminal_at_ms": {
-                    "oneOf": [
-                        { "type": "integer", "format": "uint64" },
-                        { "type": "null" }
-                    ]
-                }
-            }
-        }),
-    );
-    schemas.insert(
-        "MultisigApprovalsQueryResponse".to_owned(),
-        norito::json!({
-            "type": "object",
-            "required": ["items"],
-            "additionalProperties": false,
-            "properties": {
-                "items": {
-                    "type": "array",
-                    "maxItems": (crate::routing::MULTISIG_PROPOSALS_MAX_PAGE_LIMIT),
-                    "items": { "$ref": "#/components/schemas/MultisigApprovalEntry" }
-                },
-                "next_cursor": {
-                    "oneOf": [
-                        { "type": "string", "minLength": 1, "maxLength": 512, "pattern": "^[A-Za-z0-9_-]+$" },
-                        { "type": "null" }
-                    ]
-                }
-            }
-        }),
-    );
-    schemas.insert(
-        "MultisigApprovalLookupRequest".to_owned(),
-        norito::json!({
-            "type": "object",
-            "required": ["multisig_account_ref"],
-            "additionalProperties": false,
-            "properties": {
-                "multisig_account_ref": { "type": "string", "minLength": 64, "maxLength": 64, "pattern": "^[0-9a-f]{64}$" },
-                "proposal_id": { "type": "string", "minLength": 64, "maxLength": 64, "pattern": "^[0-9a-f]{64}$" },
-                "instructions_hash": { "type": "string", "minLength": 64, "maxLength": 64, "pattern": "^[0-9a-f]{64}$" }
-            },
-            "oneOf": [
-                { "required": ["proposal_id"] },
-                { "required": ["instructions_hash"] }
-            ]
-        }),
-    );
-    schemas.insert(
-        "MultisigApprovalLookupResponse".to_owned(),
-        norito::json!({
-            "type": "object",
-            "required": ["item"],
-            "additionalProperties": false,
-            "properties": {
-                "item": { "$ref": "#/components/schemas/MultisigApprovalEntry" }
             }
         }),
     );
@@ -25119,12 +25109,12 @@ mod tests {
         assert!(paths.contains_key("/v1/multisig/cancel"));
         assert!(paths.contains_key("/v1/multisig/spec"));
         assert!(paths.contains_key("/v1/multisig/proposals/query"));
-        assert!(paths.contains_key("/v1/multisig/proposals/lookup"));
         assert!(paths.contains_key("/v1/multisig/proposals/resolve"));
-        assert!(paths.contains_key("/v1/multisig/approvals/query"));
-        assert!(paths.contains_key("/v1/multisig/approvals/lookup"));
-        assert!(paths.contains_key("/v1/multisig/approvals/query-for-authority"));
-        assert!(paths.contains_key("/v1/multisig/approvals/lookup-for-authority"));
+        assert!(!paths.contains_key("/v1/multisig/proposals/lookup"));
+        assert!(!paths.contains_key("/v1/multisig/approvals/query"));
+        assert!(!paths.contains_key("/v1/multisig/approvals/lookup"));
+        assert!(!paths.contains_key("/v1/multisig/approvals/query-for-authority"));
+        assert!(!paths.contains_key("/v1/multisig/approvals/lookup-for-authority"));
         assert!(!paths.contains_key("/v1/multisig/proposals/list"));
         assert!(!paths.contains_key("/v1/multisig/proposals/get"));
         assert!(!paths.contains_key("/v1/multisig/proposals/search"));
@@ -26088,11 +26078,7 @@ mod tests {
             )
         );
         assert_eq!(
-            property_integer_bounds(
-                schemas,
-                "OfflineRecursiveStateBoundary",
-                "layout_version",
-            ),
+            property_integer_bounds(schemas, "OfflineRecursiveStateBoundary", "layout_version",),
             (
                 iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STATE_BOUNDARY_VERSION_V2
                     as u64,
@@ -26878,12 +26864,7 @@ mod tests {
 
         for path in [
             "/v1/multisig/proposals/query",
-            "/v1/multisig/proposals/lookup",
             "/v1/multisig/proposals/resolve",
-            "/v1/multisig/approvals/query",
-            "/v1/multisig/approvals/lookup",
-            "/v1/multisig/approvals/query-for-authority",
-            "/v1/multisig/approvals/lookup-for-authority",
         ] {
             let operation = paths
                 .get(path)
@@ -28048,77 +28029,6 @@ mod tests {
     }
 
     #[test]
-    fn multisig_approval_schemas_are_bounded_and_selector_explicit() {
-        let doc = generate_spec();
-        let schemas = doc
-            .get("components")
-            .and_then(Value::as_object)
-            .and_then(|components| components.get("schemas"))
-            .and_then(Value::as_object)
-            .expect("components schemas");
-        for name in [
-            "MultisigApprovalsQueryRequest",
-            "MultisigApprovalEntry",
-            "MultisigApprovalsQueryResponse",
-            "MultisigApprovalLookupRequest",
-            "MultisigApprovalLookupResponse",
-        ] {
-            assert!(schemas.contains_key(name), "missing {name}");
-        }
-
-        let query = schemas
-            .get("MultisigApprovalsQueryRequest")
-            .and_then(Value::as_object)
-            .expect("approval query request");
-        assert_eq!(
-            query.get("additionalProperties").and_then(Value::as_bool),
-            Some(false)
-        );
-        let query_properties = query
-            .get("properties")
-            .and_then(Value::as_object)
-            .expect("approval query properties");
-        assert_eq!(
-            query_properties
-                .get("operation_type")
-                .and_then(Value::as_object)
-                .and_then(|schema| schema.get("maxItems"))
-                .and_then(Value::as_u64),
-            Some(32)
-        );
-
-        let entry = schemas
-            .get("MultisigApprovalEntry")
-            .and_then(Value::as_object)
-            .expect("approval entry");
-        let required = entry
-            .get("required")
-            .and_then(Value::as_array)
-            .expect("approval required fields");
-        for field in [
-            "multisig_account_id",
-            "multisig_account_ref",
-            "spec",
-            "proposal_id",
-            "instructions_hash",
-            "proposal",
-            "operation_type",
-            "status",
-        ] {
-            assert!(required.iter().any(|value| value.as_str() == Some(field)));
-        }
-
-        let lookup = schemas
-            .get("MultisigApprovalLookupRequest")
-            .and_then(Value::as_object)
-            .expect("approval lookup request");
-        assert_eq!(
-            lookup.get("oneOf").and_then(Value::as_array).map(Vec::len),
-            Some(2)
-        );
-    }
-
-    #[test]
     #[allow(clippy::similar_names)]
     fn helper_builders_emit_expected_shapes() {
         let body = binary_request_body("binary payload");
@@ -28635,6 +28545,9 @@ mod tests {
         }
 
         let schemas = openapi_schemas();
+        let max_validators =
+            u64::try_from(iroha_data_model::block::consensus_v2::MAX_VALIDATORS_PER_HEIGHT)
+                .expect("Sumeragi validator bound must fit in u64");
         assert_closed_shape(
             &schemas,
             "BridgeFinalityProof",
@@ -28866,7 +28779,10 @@ mod tests {
 
         let roster = property(&schemas, "SumeragiV2HeightContext", "roster");
         assert_eq!(roster.get("minItems").and_then(Value::as_u64), Some(1));
-        assert_eq!(roster.get("maxItems").and_then(Value::as_u64), Some(4096));
+        assert_eq!(
+            roster.get("maxItems").and_then(Value::as_u64),
+            Some(max_validators)
+        );
         assert_eq!(
             roster.get("uniqueItems").and_then(Value::as_bool),
             Some(true)
@@ -28904,7 +28820,10 @@ mod tests {
         ] {
             let pops = property(&schemas, owner, "validator_set_pops");
             assert_eq!(pops.get("minItems").and_then(Value::as_u64), Some(1));
-            assert_eq!(pops.get("maxItems").and_then(Value::as_u64), Some(4096));
+            assert_eq!(
+                pops.get("maxItems").and_then(Value::as_u64),
+                Some(max_validators)
+            );
             assert_eq!(
                 pops.get("items")
                     .and_then(Value::as_object)
@@ -28923,12 +28842,32 @@ mod tests {
         assert_eq!(bls_byte.get("minimum").and_then(Value::as_u64), Some(0));
         assert_eq!(bls_byte.get("maximum").and_then(Value::as_u64), Some(255));
 
-        let signers = property(&schemas, "SumeragiV2CommitQuorumCertificate", "signers");
-        assert_eq!(signers.get("minItems").and_then(Value::as_u64), Some(1));
-        assert_eq!(signers.get("maxItems").and_then(Value::as_u64), Some(4096));
+        for certificate in [
+            "SumeragiV2QuorumCertificate",
+            "SumeragiV2CommitQuorumCertificate",
+        ] {
+            let signers = property(&schemas, certificate, "signers");
+            assert_eq!(signers.get("minItems").and_then(Value::as_u64), Some(1));
+            assert_eq!(
+                signers.get("maxItems").and_then(Value::as_u64),
+                Some(max_validators)
+            );
+            assert_eq!(
+                signers.get("uniqueItems").and_then(Value::as_bool),
+                Some(true)
+            );
+        }
         assert_eq!(
-            signers.get("uniqueItems").and_then(Value::as_bool),
-            Some(true)
+            property(&schemas, "SumeragiV2FinalizedNextEpochSnapshot", "roster")
+                .get("maxItems")
+                .and_then(Value::as_u64),
+            Some(max_validators)
+        );
+        assert_eq!(
+            property(&schemas, "SumeragiV2DualQuorum", "min_signers")
+                .get("maximum")
+                .and_then(Value::as_u64),
+            Some(max_validators)
         );
         assert_ref(
             &schemas,
@@ -29603,6 +29542,9 @@ mod tests {
             .and_then(|components| components.get("schemas"))
             .and_then(Value::as_object)
             .expect("components schemas");
+        let max_validators =
+            u64::try_from(iroha_data_model::block::consensus_v2::MAX_VALIDATORS_PER_HEIGHT)
+                .expect("Sumeragi validator bound must fit in u64");
         let status_schema = schemas
             .get("SumeragiStatusResponse")
             .and_then(Value::as_object)
@@ -29736,21 +29678,42 @@ mod tests {
                 .and_then(Value::as_str),
             Some("#/components/schemas/SumeragiV2DualQuorum")
         );
+        assert_eq!(
+            context_properties
+                .get("validator_count")
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("maximum"))
+                .and_then(Value::as_u64),
+            Some(max_validators)
+        );
 
         let commit_schema = schemas
             .get("SumeragiV2CommitQcStatus")
             .and_then(Value::as_object)
             .expect("CommitQC status schema");
+        let commit_properties = commit_schema
+            .get("properties")
+            .and_then(Value::as_object)
+            .expect("CommitQC status properties");
         assert_eq!(
-            commit_schema
-                .get("properties")
-                .and_then(Value::as_object)
-                .and_then(|properties| properties.get("certificate"))
+            commit_properties
+                .get("certificate")
                 .and_then(Value::as_object)
                 .and_then(|schema| schema.get("$ref"))
                 .and_then(Value::as_str),
             Some("#/components/schemas/SumeragiV2QuorumCertificateRef")
         );
+        for field in ["validator_count", "signer_count", "min_signers"] {
+            assert_eq!(
+                commit_properties
+                    .get(field)
+                    .and_then(Value::as_object)
+                    .and_then(|schema| schema.get("maximum"))
+                    .and_then(Value::as_u64),
+                Some(max_validators),
+                "CommitQC status {field} must match the reducer validator bound"
+            );
+        }
 
         let diagnostics_schema_ref = paths
             .get("/v1/sumeragi/diagnostics")
@@ -30603,6 +30566,181 @@ mod tests {
     }
 
     #[test]
+    fn protected_contract_identity_openapi_is_signed_and_exact() {
+        let document = generate_spec();
+        let canonical_headers = vec![
+            ("X-Iroha-Account".to_owned(), false),
+            ("X-Iroha-Signature".to_owned(), false),
+            ("X-Iroha-Timestamp-Ms".to_owned(), false),
+            ("X-Iroha-Nonce".to_owned(), false),
+            ("X-Iroha-Witness".to_owned(), false),
+        ];
+
+        for (path, method, response_schema) in [
+            (
+                "/v1/contracts/aliases/resolve",
+                "post",
+                "#/components/schemas/ContractAliasResolveResponse",
+            ),
+            (
+                "/v1/gov/contracts/{contract_address}",
+                "get",
+                "#/components/schemas/GovernedContractResponse",
+            ),
+        ] {
+            let operation = openapi_operation(&document, path, method);
+            assert_eq!(
+                operation_header_requirements(operation),
+                canonical_headers,
+                "{method} {path} canonical authentication headers"
+            );
+            assert_alias_auth_required_response(operation, path);
+            assert_eq!(
+                operation_response_schema_ref(operation, "200", path),
+                response_schema,
+                "{method} {path} success schema"
+            );
+            let responses = operation
+                .get("responses")
+                .and_then(Value::as_object)
+                .expect("operation responses");
+            assert_eq!(
+                responses
+                    .keys()
+                    .map(String::as_str)
+                    .collect::<BTreeSet<_>>(),
+                ["200", "400", "401", "404", "429", "500"]
+                    .into_iter()
+                    .collect(),
+                "{method} {path} must document the exact fail-closed response surface"
+            );
+        }
+
+        assert_eq!(
+            operation_request_schema_ref(
+                openapi_operation(&document, "/v1/contracts/aliases/resolve", "post"),
+                "/v1/contracts/aliases/resolve",
+            ),
+            "#/components/schemas/ContractAliasResolveRequest"
+        );
+
+        let schemas = document
+            .get("components")
+            .and_then(|components| components.get("schemas"))
+            .and_then(Value::as_object)
+            .expect("schema section");
+        for (name, required_fields) in [
+            ("ContractAliasResolveRequest", vec!["contract_alias"]),
+            (
+                "ContractAliasBinding",
+                vec!["alias", "status", "bound_at_ms"],
+            ),
+            (
+                "ContractAliasResolveResponse",
+                vec![
+                    "contract_alias",
+                    "contract_address",
+                    "contract_subject_account",
+                    "dataspace",
+                    "contract_alias_binding",
+                    "source",
+                ],
+            ),
+        ] {
+            let schema = schemas
+                .get(name)
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("{name} schema"));
+            assert_eq!(
+                schema.get("additionalProperties"),
+                Some(&Value::Bool(false))
+            );
+            let required = schema
+                .get("required")
+                .and_then(Value::as_array)
+                .expect("required fields")
+                .iter()
+                .filter_map(Value::as_str)
+                .collect::<BTreeSet<_>>();
+            assert_eq!(
+                required,
+                required_fields.into_iter().collect(),
+                "{name} required fields"
+            );
+            let properties = schema
+                .get("properties")
+                .and_then(Value::as_object)
+                .expect("schema properties");
+            assert_eq!(
+                properties
+                    .keys()
+                    .map(String::as_str)
+                    .collect::<BTreeSet<_>>(),
+                required
+                    .iter()
+                    .copied()
+                    .chain(match name {
+                        "ContractAliasBinding" => {
+                            ["lease_expiry_ms", "grace_until_ms"]
+                                .as_slice()
+                                .iter()
+                                .copied()
+                        }
+                        _ => [].as_slice().iter().copied(),
+                    })
+                    .collect(),
+                "{name} must not advertise undeclared compatibility fields"
+            );
+        }
+
+        let governed = schemas
+            .get("GovernedContractResponse")
+            .and_then(Value::as_object)
+            .expect("governed contract schema");
+        let variants = governed
+            .get("oneOf")
+            .and_then(Value::as_array)
+            .expect("governed response variants");
+        assert_eq!(variants.len(), 2);
+        for (variant, expected) in variants.iter().zip([
+            [
+                "found",
+                "contract_address",
+                "contract_subject_account",
+                "dataspace",
+                "code_hash_hex",
+                "abi_hash_hex",
+                "public_entrypoints",
+            ]
+            .as_slice(),
+            ["found", "contract_address", "dataspace"].as_slice(),
+        ]) {
+            let variant = variant.as_object().expect("governed response variant");
+            assert_eq!(
+                variant.get("additionalProperties"),
+                Some(&Value::Bool(false))
+            );
+            let required = variant
+                .get("required")
+                .and_then(Value::as_array)
+                .expect("variant required fields")
+                .iter()
+                .filter_map(Value::as_str)
+                .collect::<BTreeSet<_>>();
+            let properties = variant
+                .get("properties")
+                .and_then(Value::as_object)
+                .expect("variant properties")
+                .keys()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>();
+            let expected = expected.iter().copied().collect::<BTreeSet<_>>();
+            assert_eq!(required, expected);
+            assert_eq!(properties, expected);
+        }
+    }
+
+    #[test]
     fn multisig_read_auth_contract_is_path_specific() {
         let document = generate_spec();
         let canonical_headers = vec![
@@ -30616,7 +30754,6 @@ mod tests {
         for path in [
             "/v1/multisig/spec",
             "/v1/multisig/proposals/query",
-            "/v1/multisig/proposals/lookup",
             "/v1/multisig/proposals/resolve",
         ] {
             let operation = openapi_operation(&document, path, "post");
@@ -30635,64 +30772,6 @@ mod tests {
             );
             assert!(description.contains("`multisig_account_alias` selector requires"));
             assert!(description.contains("body fields never establish signer identity"));
-        }
-
-        for path in [
-            "/v1/multisig/approvals/query",
-            "/v1/multisig/approvals/lookup",
-        ] {
-            let operation = openapi_operation(&document, path, "post");
-            assert_eq!(
-                operation_header_requirements(operation),
-                vec![("Authorization".to_owned(), true)],
-                "POST {path} Bearer viewer authentication"
-            );
-            let responses = operation
-                .get("responses")
-                .and_then(Value::as_object)
-                .unwrap_or_else(|| panic!("POST {path} responses"));
-            let unauthorized_description = responses
-                .get("401")
-                .and_then(Value::as_object)
-                .and_then(|response| response.get("description"))
-                .and_then(Value::as_str)
-                .unwrap_or_else(|| panic!("POST {path} 401 description"));
-            assert!(unauthorized_description.contains("tx_history_authorization_missing"));
-            assert!(unauthorized_description.contains("tx_history_authorization_invalid"));
-            assert!(
-                operation
-                    .get("description")
-                    .and_then(Value::as_str)
-                    .is_some_and(|description| {
-                        description.contains(
-                            "request-body selector fields never establish viewer identity",
-                        )
-                    })
-            );
-        }
-
-        for path in [
-            "/v1/multisig/approvals/query-for-authority",
-            "/v1/multisig/approvals/lookup-for-authority",
-        ] {
-            let operation = openapi_operation(&document, path, "post");
-            assert_eq!(
-                operation_header_requirements(operation),
-                canonical_headers,
-                "POST {path} canonical authority authentication"
-            );
-            assert_alias_auth_required_response(operation, path);
-            assert!(
-                operation
-                    .get("description")
-                    .and_then(Value::as_str)
-                    .is_some_and(|description| {
-                        description
-                            .contains("authority comes only from canonical request-signing headers")
-                            && description
-                                .contains("request-body fields never establish signer identity")
-                    })
-            );
         }
 
         for path in [
@@ -31484,6 +31563,25 @@ mod tests {
                 .and_then(|job_id| job_id.get("pattern"))
                 .and_then(Value::as_str);
             assert_eq!(pattern, Some("^[0-9a-f]{32}$"), "{state}");
+        }
+    }
+
+    #[test]
+    fn retired_server_contract_deployment_paths_are_absent() {
+        let document = generate_spec();
+        let paths = document
+            .get("paths")
+            .and_then(Value::as_object)
+            .expect("OpenAPI paths");
+        for retired_path in [
+            "/v1/contracts/deploy",
+            "/v1/contracts/deploy-bundle",
+            "/v1/contracts/deploy-bundles/{bundle_digest}",
+        ] {
+            assert!(
+                !paths.contains_key(retired_path),
+                "retired server-side contract deployment path leaked into OpenAPI: {retired_path}"
+            );
         }
     }
 }

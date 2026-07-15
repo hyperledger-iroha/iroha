@@ -14620,119 +14620,6 @@ public struct ToriiContractManifestRecord: Decodable, Sendable {
     }
 }
 
-public struct ToriiDeployContractRequest: Encodable, Sendable {
-    public var authority: String
-    public var codeB64: String
-    public var contractAlias: String
-    public var leaseExpiryMs: UInt64?
-
-    public init(authority: String,
-                codeB64: String,
-                contractAlias: String,
-                leaseExpiryMs: UInt64? = nil) {
-        self.authority = authority
-        self.codeB64 = codeB64
-        self.contractAlias = contractAlias
-        self.leaseExpiryMs = leaseExpiryMs
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case authority
-        case codeB64 = "code_b64"
-        case contractAlias = "contract_alias"
-        case leaseExpiryMs = "lease_expiry_ms"
-    }
-
-    public func encode(to encoder: Encoder) throws {
-        let normalizedAuthority = try normalizeToriiAccountIdQueryValue(authority, field: "authority")
-        let normalizedCodeB64 = try ToriiRequestValidation.normalizedBase64(codeB64, field: "code_b64")
-        let normalizedContractAlias = try normalizeToriiContractAliasLiteral(contractAlias,
-                                                                             field: "contract_alias")
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(normalizedAuthority, forKey: .authority)
-        try container.encode(normalizedCodeB64, forKey: .codeB64)
-        try container.encode(normalizedContractAlias, forKey: .contractAlias)
-        try container.encodeIfPresent(leaseExpiryMs, forKey: .leaseExpiryMs)
-    }
-}
-
-public struct ToriiDeployContractResponse: Decodable, Sendable {
-    public let ok: Bool
-    public let contractAlias: String
-    public let contractAddress: String
-    public let previousContractAddress: String?
-    public let kaizen: Bool
-    public let dataspace: String
-    public let deployNonce: UInt64
-    public let txHashHex: String
-    public let pipelineStatus: ToriiPipelineTransactionStatus?
-    public let codeHashHex: String
-    public let abiHashHex: String
-
-    private enum CodingKeys: String, CodingKey {
-        case ok
-        case contractAlias = "contract_alias"
-        case contractAddress = "contract_address"
-        case previousContractAddress = "previous_contract_address"
-        case kaizen
-        case dataspace
-        case deployNonce = "deploy_nonce"
-        case txHashHex = "tx_hash_hex"
-        case pipelineStatus = "pipeline_status"
-        case codeHashHex = "code_hash_hex"
-        case abiHashHex = "abi_hash_hex"
-    }
-
-    public init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        ok = try container.decode(Bool.self, forKey: .ok)
-        let contractAlias = try container.decode(String.self, forKey: .contractAlias)
-        self.contractAlias = try normalizeToriiContractAliasLiteral(
-            contractAlias,
-            field: "contract_alias"
-        )
-        let contractAddress = try container.decode(String.self, forKey: .contractAddress)
-        self.contractAddress = try normalizeToriiContractAddressLiteral(
-            contractAddress,
-            field: "contract_address"
-        )
-        if let previousContractAddress = try container.decodeIfPresent(String.self, forKey: .previousContractAddress) {
-            self.previousContractAddress = try normalizeToriiContractAddressLiteral(
-                previousContractAddress,
-                field: "previous_contract_address"
-            )
-        } else {
-            self.previousContractAddress = nil
-        }
-        kaizen = try container.decode(Bool.self, forKey: .kaizen)
-        dataspace = try ToriiValidation.normalizedNonEmpty(
-            try container.decode(String.self, forKey: .dataspace),
-            field: "dataspace",
-            codingPath: container.codingPath + [CodingKeys.dataspace]
-        )
-        deployNonce = try container.decode(UInt64.self, forKey: .deployNonce)
-        let txHashHex = try container.decode(String.self, forKey: .txHashHex)
-        self.txHashHex = try ToriiValidation.normalized32ByteHex(
-            txHashHex,
-            field: "tx_hash_hex",
-            codingPath: container.codingPath + [CodingKeys.txHashHex]
-        )
-        self.pipelineStatus = try container.decodeIfPresent(ToriiPipelineTransactionStatus.self, forKey: .pipelineStatus)
-        let codeHashHex = try container.decode(String.self, forKey: .codeHashHex)
-        self.codeHashHex = try ToriiValidation.normalized32ByteHex(
-            codeHashHex,
-            field: "code_hash_hex",
-            codingPath: container.codingPath + [CodingKeys.codeHashHex]
-        )
-        let abiHashHex = try container.decode(String.self, forKey: .abiHashHex)
-        self.abiHashHex = try ToriiValidation.normalized32ByteHex(
-            abiHashHex,
-            field: "abi_hash_hex",
-            codingPath: container.codingPath + [CodingKeys.abiHashHex]
-        )
-    }
-}
-
 public struct ToriiContractCodeBytes: Decodable, Sendable {
     public let codeB64: String
 
@@ -23747,11 +23634,6 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     }
 
     @discardableResult
-    public func deployContract(_ requestBody: ToriiDeployContractRequest, completion: @escaping (Result<ToriiDeployContractResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.deployContract(requestBody) }
-    }
-
-    @discardableResult
     public func callContract(_ requestBody: ToriiContractCallRequest,
                              completion: @escaping (Result<ToriiContractCallResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
         runTask(completion) { try await self.callContract(requestBody) }
@@ -25881,11 +25763,6 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         let request = try makeRequest(path: "/v1/contracts/code/\(encoded)")
         let data = try await data(for: request)
         return try decodeJSON(ToriiContractManifestRecord.self, from: data)
-    }
-
-    public func deployContract(_ requestBody: ToriiDeployContractRequest) async throws -> ToriiDeployContractResponse {
-        let _ = requestBody
-        throw serverSideSigningRemoved("/v1/contracts/deploy")
     }
 
     public func callContract(_ requestBody: ToriiContractCallRequest) async throws -> ToriiContractCallResponse {

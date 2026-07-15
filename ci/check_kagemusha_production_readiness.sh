@@ -211,6 +211,7 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         "KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4: u32 = 20",
         '"kagemusha.offline.recursive_spend.artifact_manifest.v4"',
         "KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_ROLES_V4: [&str; 8]",
+        "KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROMOTION_BYTES_V4",
         "ParamsIpa",
         "BootstrapWitness",
         "KagemushaRecursiveSpendReleaseActivationV4",
@@ -261,6 +262,12 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         "CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 20",
         "connect_norito_kagemusha_recursive_spend_artifact_begin_v4",
         "connect_norito_kagemusha_recursive_spend_artifact_set_install_v4",
+        "promotion_record_norito_ptr",
+        "KagemushaRecursiveSpendReleaseRecordV4",
+        ".authenticate(&trusted_policy)",
+        "self.promotion_record",
+        "validate_against_authenticated_release",
+        "require_kagemusha_recursive_spend_production_promotion_v4()?",
         "connect_norito_kagemusha_recursive_spend_artifact_set_is_installed_v4",
         "connect_norito_kagemusha_recursive_spend_installed_manifest_sha256_v4",
         "installed.validate_live_inventory()?",
@@ -279,6 +286,7 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         "CONNECT_NORITO_BRIDGE_ABI_VERSION 20",
         "connect_norito_kagemusha_recursive_spend_artifact_begin_v4",
         "connect_norito_kagemusha_recursive_spend_artifact_set_install_v4",
+        "promotion_record_norito_ptr",
     )
     forbid(
         texts[BRIDGE] + texts[HEADER],
@@ -298,6 +306,7 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         "pub fn load(policy_path: &Path, artifact_dir: &Path)",
         "exactly eight artifacts",
         "KagemushaPastaCycleVerifierArtifactsV4::new",
+        "KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROMOTION_BYTES_V4",
     )
     require_pattern(
         texts[CATALOG],
@@ -380,6 +389,9 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         "cargo test -p iroha_core v4_manifest_preserves_exact_little_endian_state_limbs --lib",
         "cargo test -p iroha_core v4_eq_and_ep_public_columns_share_the_v2_result_frontier_limb --lib",
         "cargo test -p iroha_core kagemusha_terminal_registry_v4 --lib",
+        "cargo test -p iroha_kagami --bin kagami harden_private_tree",
+        "cargo test -p iroha_kagami --bin kagami private_custody_readme_invokes_non_executable_scripts_through_bash",
+        "cargo test -p iroha_kagami --bin kagami raw_npos_genesis_receives_the_chain_bound_localnet_epoch_seed",
         "cargo test -p iroha_torii readiness_authenticates_exact_release_without_global_backend_flag",
         "cargo test -p iroha_torii v4_snapshot_admission_authenticates_exact_release_without_global_backend_flag",
         "cargo test -p connect_norito_bridge recursive_spend_v4",
@@ -401,6 +413,29 @@ def strict_json(path: Path) -> dict[str, object]:
     if not isinstance(value, dict):
         raise ValueError("manifest JSON must be an object")
     return value
+
+
+def release_verifier_command(directory: Path, policy: Path) -> list[str]:
+    """Use only the maintained in-tree verifier for promotion decisions."""
+    return [
+        "cargo",
+        "run",
+        "--locked",
+        "--quiet",
+        "-p",
+        "iroha_kagami",
+        "--",
+        "kagemusha",
+        "verify-release-v4",
+        "--bundle-dir",
+        str(directory),
+        "--release-policy",
+        str(policy),
+        "--benchmark-evidence",
+        str(directory / "physical-device-benchmark.evidence"),
+        "--cryptographic-review",
+        str(directory / "cryptographic-review.evidence"),
+    ]
 
 
 def promotion_errors() -> list[str]:
@@ -485,27 +520,9 @@ def promotion_errors() -> list[str]:
         ):
             payload = (directory / name).read_bytes()
             if len(payload) < 64 or placeholder.search(payload):
-                errors.append(f"{directory.name}/{name}: missing authentic non-placeholder evidence")
+                errors.append(f"{directory.name}/{name}: missing non-placeholder evidence bytes")
         if authenticated_verification_allowed and len(errors) == directory_error_count:
-            verifier = os.environ.get("KAGEMUSHA_V4_RELEASE_VERIFIER_BIN", "")
-            if verifier:
-                command = [verifier]
-            else:
-                command = ["cargo", "run", "--quiet", "-p", "iroha_kagami", "--"]
-            command.extend(
-                [
-                    "kagemusha",
-                    "verify-release-v4",
-                    "--bundle-dir",
-                    str(directory),
-                    "--release-policy",
-                    str(policy),
-                    "--benchmark-evidence",
-                    str(directory / "physical-device-benchmark.evidence"),
-                    "--cryptographic-review",
-                    str(directory / "cryptographic-review.evidence"),
-                ]
-            )
+            command = release_verifier_command(directory, policy)
             verified = subprocess.run(
                 command,
                 cwd=root,
@@ -579,6 +596,31 @@ if self_test:
         for error in missing_frontier_filter_errors
     ):
         errors.append("self-test failed to reject a missing frontier-test workflow filter")
+    verifier_override_name = "KAGEMUSHA_V4_RELEASE_" + "VERIFIER_BIN"
+    readiness_source = (root / "ci/check_kagemusha_production_readiness.sh").read_text(
+        encoding="utf-8"
+    )
+    if verifier_override_name in readiness_source:
+        errors.append("self-test found a production release-verifier override hook")
+    previous_verifier_override = os.environ.get(verifier_override_name)
+    os.environ[verifier_override_name] = "/usr/bin/true"
+    try:
+        verifier_command = release_verifier_command(Path("release"), Path("policy.norito"))
+    finally:
+        if previous_verifier_override is None:
+            del os.environ[verifier_override_name]
+        else:
+            os.environ[verifier_override_name] = previous_verifier_override
+    if verifier_command[:7] != [
+        "cargo",
+        "run",
+        "--locked",
+        "--quiet",
+        "-p",
+        "iroha_kagami",
+        "--",
+    ]:
+        errors.append("self-test failed to reject a substituted release verifier")
 
 if errors:
     print(f"Kagemusha ABI-20/V4 {mode} corridor failed:", file=sys.stderr)

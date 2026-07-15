@@ -1098,14 +1098,6 @@ export class ToriiBrowserClient {
     return this._json("GET", "/v1/kaigi/relays/health", { signal: signalFrom(opts) });
   }
 
-  deployContract(request, options = {}) {
-    const opts = requireObject(options, "deployContract options");
-    return this._json("POST", "/v1/contracts/deploy", {
-      body: requireObject(request, "deployContract request"),
-      signal: signalFrom(opts),
-      successStatuses: [200, 202],
-    });
-  }
 }
 
 export { ToriiBrowserClient as ToriiClient, ToriiBrowserHttpError as ToriiHttpError };

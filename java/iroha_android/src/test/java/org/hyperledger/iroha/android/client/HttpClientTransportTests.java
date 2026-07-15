@@ -141,8 +141,6 @@ public final class HttpClientTransportTests {
     vpnSessionAndReceiptRequestsUseNativeLeaseDtos();
     verifierKeyRegisterAndUpdatePostSignedPayloads();
     verifierKeyRequestsRejectMalformedInputsBeforeRequest();
-    deployContractRequestParsesResponse();
-    deployContractResponseRejectsRetiredInitCallsField();
     callContractRequestParsesResponse();
     contractCallBoundaryConsumesSharedRustArgumentRecordFixture();
     callContractRejectsInvalidEntrypointOrGas();
@@ -2902,112 +2900,6 @@ public final class HttpClientTransportTests {
         "VK register must reject u32 overflow proof limits");
   }
 
-  private static void deployContractRequestParsesResponse() {
-    final StubResponseExecutor executor =
-        new StubResponseExecutor(
-            200,
-            ("{"
-                    + "\"ok\":true,"
-                    + "\"bundle_name\":\"single-contract-deploy\","
-                    + "\"bundle_digest\":\"mock-bundle-digest\","
-                    + "\"chain_fingerprint\":\"mock-chain@height-0\","
-                    + "\"dry_run\":false,"
-                    + "\"completed_stages\":[\"plan\",\"deploy\"],"
-                    + "\"failure_point\":null,"
-                    + "\"contracts\":[{"
-                    + "\"name\":\"router::universal\","
-                    + "\"contract_alias\":\"router::universal\","
-                    + "\"contract_address\":\"tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7\","
-                    + "\"previous_contract_address\":null,"
-                    + "\"kaizen\":false,"
-                    + "\"dataspace\":\"router\","
-                    + "\"deploy_nonce\":9,"
-                    + "\"tx_hash_hex\":\""
-                    + "11".repeat(32)
-                    + "\","
-                    + "\"pipeline_status\":{"
-                    + "\"hash\":\""
-                    + "11".repeat(32)
-                    + "\",\"status\":{\"kind\":\"Queued\"},"
-                    + "\"summary\":\"Queued\",\"diagnostics\":[],"
-                    + "\"scope\":\"local\",\"resolved_from\":\"queue\"},"
-                    + "\"code_hash_hex\":\""
-                    + "22".repeat(32)
-                    + "\","
-                    + "\"abi_hash_hex\":\""
-                    + "33".repeat(32)
-                    + "\","
-                    + "\"status\":\"submitted\""
-                    + "}],"
-                    + "\"hajimari_calls\":[{"
-                    + "\"id\":\"initialize\","
-                    + "\"contract_alias\":\"router::universal\","
-                    + "\"entrypoint\":\"initialize\","
-                    + "\"tx_hash_hex\":\""
-                    + "12".repeat(32)
-                    + "\","
-                    + "\"pipeline_status\":{"
-                    + "\"hash\":\""
-                    + "12".repeat(32)
-                    + "\",\"status\":{\"kind\":\"Queued\"},"
-                    + "\"summary\":\"Queued\",\"diagnostics\":[],"
-                    + "\"scope\":\"local\",\"resolved_from\":\"queue\"},"
-                    + "\"status\":\"submitted\"}],"
-                    + "\"assertions\":[]"
-                    + "}")
-                .getBytes(StandardCharsets.UTF_8),
-            "ok");
-    final HttpClientTransport transport =
-        HttpClientTransport.withExecutor(
-            executor,
-            ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build());
-
-    final Optional<ContractDeployResponse> response =
-        transport.deployContract("alice", "privkey", "AQID", "router::universal").join();
-
-    assert response.isPresent() : "Deploy response should be present";
-    final ContractDeployResponse parsed = response.get();
-    assert parsed.ok() : "Deploy response should be successful";
-    assert "mock-bundle-digest".equals(parsed.bundleDigest()) : "Bundle digest mismatch";
-    assert "router::universal".equals(parsed.contracts().get(0).contractAlias())
-        : "Contract alias mismatch";
-    assert !parsed.contracts().get(0).kaizen() : "Kaizen status mismatch";
-    assert "router".equals(parsed.contracts().get(0).dataspace()) : "Dataspace mismatch";
-    assert Long.valueOf(9L).equals(parsed.contracts().get(0).deployNonce())
-        : "Deploy nonce mismatch";
-    assert "11".repeat(32).equals(parsed.contracts().get(0).txHashHex())
-        : "tx_hash_hex mismatch";
-    assert "local".equals(parsed.contracts().get(0).pipelineStatus().get("scope"))
-        : "deployment pipeline status mismatch";
-    assert "queue".equals(parsed.hajimariCalls().get(0).pipelineStatus().get("resolved_from"))
-        : "hajimari pipeline status mismatch";
-
-    final TransportRequest request = executor.lastRequest();
-    assert request != null : "Deploy request must be captured";
-    assert request.uri().toString().equals("https://torii.example/api/v1/contracts/deploy")
-        : "Deploy URI mismatch";
-    @SuppressWarnings("unchecked")
-    final Map<String, Object> payload =
-        (Map<String, Object>) JsonParser.parse(readBody(request));
-    assert "alice".equals(payload.get("authority")) : "Deploy authority mismatch";
-    assert "privkey".equals(payload.get("private_key")) : "Deploy private key mismatch";
-    assert "AQID".equals(payload.get("code_b64")) : "Deploy code_b64 mismatch";
-    assert "router::universal".equals(payload.get("contract_alias"))
-        : "Deploy contract_alias mismatch";
-    assert !payload.containsKey("lease_expiry_ms") : "lease_expiry_ms should be omitted by default";
-  }
-
-  private static void deployContractResponseRejectsRetiredInitCallsField() {
-    try {
-      ContractJsonParser.parseDeployResponse(
-          ("{\"contracts\":[],\"init_calls\":[],\"assertions\":[]}")
-              .getBytes(StandardCharsets.UTF_8));
-      throw new AssertionError("Retired init_calls response field must be rejected");
-    } catch (final IllegalStateException error) {
-      assert error.getMessage().contains("hajimari_calls must be an array")
-          : "Expected missing hajimari_calls diagnostic";
-    }
-  }
 
   private static void callContractRequestParsesResponse() {
     final String contractAddress =

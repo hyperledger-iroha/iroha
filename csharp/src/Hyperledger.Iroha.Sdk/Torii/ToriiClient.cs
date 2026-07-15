@@ -1032,22 +1032,6 @@ public sealed partial class ToriiClient : IDisposable
         return response;
     }
 
-    public async Task<ToriiDeployContractResponse> DeployContractAsync(
-        ToriiDeployContractRequest request,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(request);
-        var normalizedRequest = NormalizeDeployContractRequest(request);
-
-        var response = await PostAsync<ToriiDeployContractRequest, ToriiDeployContractResponse>(
-            "/v1/contracts/deploy",
-            normalizedRequest,
-            cancellationToken: cancellationToken);
-
-        ValidateDeployContractResponse(response, "contract deploy response");
-        return response;
-    }
-
     public async Task<ToriiContractCodeRecord> GetContractCodeAsync(
         string codeHash,
         CancellationToken cancellationToken = default)
@@ -1095,38 +1079,6 @@ public sealed partial class ToriiClient : IDisposable
             BuildContractInstancesQuery(query),
             cancellationToken);
         ValidateContractInstancesResponse(response, "contract instances response");
-        return response;
-    }
-
-    public async Task<ToriiDeployAndActivateContractInstanceResponse> DeployAndActivateContractInstanceAsync(
-        ToriiDeployAndActivateContractInstanceRequest request,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(request);
-        var normalizedRequest = NormalizeDeployAndActivateContractInstanceRequest(request);
-
-        var response = await PostAsync<ToriiDeployAndActivateContractInstanceRequest, ToriiDeployAndActivateContractInstanceResponse>(
-            "/v1/contracts/instance",
-            normalizedRequest,
-            cancellationToken: cancellationToken);
-
-        ValidateDeployAndActivateContractInstanceResponse(response, "contract instance deploy response");
-        return response;
-    }
-
-    public async Task<ToriiActivateContractInstanceResponse> ActivateContractInstanceAsync(
-        ToriiActivateContractInstanceRequest request,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(request);
-        var normalizedRequest = NormalizeActivateContractInstanceRequest(request);
-
-        var response = await PostAsync<ToriiActivateContractInstanceRequest, ToriiActivateContractInstanceResponse>(
-            "/v1/contracts/instance/activate",
-            normalizedRequest,
-            cancellationToken: cancellationToken);
-
-        ValidateActivateContractInstanceResponse(response, "contract instance activation response");
         return response;
     }
 
@@ -2769,25 +2721,6 @@ public sealed partial class ToriiClient : IDisposable
     private static void ValidateVpnTxInstruction(ToriiVpnTxInstruction instruction, string context)
     {
         ToriiVpnJson.ValidateVpnTxInstruction(instruction, context);
-    }
-
-    private static void ValidateDeployContractResponse(ToriiDeployContractResponse response, string context)
-    {
-        ToriiContractDeploymentJson.ValidateDeployContractResponse(response, context);
-    }
-
-    private static void ValidateDeployAndActivateContractInstanceResponse(
-        ToriiDeployAndActivateContractInstanceResponse response,
-        string context)
-    {
-        ToriiContractDeploymentJson.ValidateDeployAndActivateContractInstanceResponse(response, context);
-    }
-
-    private static void ValidateActivateContractInstanceResponse(
-        ToriiActivateContractInstanceResponse response,
-        string context)
-    {
-        ToriiContractDeploymentJson.ValidateActivateContractInstanceResponse(response, context);
     }
 
     private static void ValidateContractCodeRecord(ToriiContractCodeRecord response, string context)
@@ -5699,44 +5632,6 @@ public sealed partial class ToriiClient : IDisposable
                 request.LeaseIdHex,
                 nameof(request.LeaseIdHex),
                 32),
-        };
-    }
-
-    private static ToriiDeployContractRequest NormalizeDeployContractRequest(
-        ToriiDeployContractRequest request)
-    {
-        return request with
-        {
-            Authority = ToriiAccountFaucetPow.RequireExactAccountId(request.Authority, nameof(request.Authority)),
-            PrivateKey = NormalizeExactValue(request.PrivateKey, nameof(request.PrivateKey)),
-            CodeBase64 = NormalizeExactBase64(request.CodeBase64, nameof(request.CodeBase64)),
-            ContractAlias = NormalizeExactValue(request.ContractAlias, nameof(request.ContractAlias)),
-        };
-    }
-
-    private static ToriiDeployAndActivateContractInstanceRequest NormalizeDeployAndActivateContractInstanceRequest(
-        ToriiDeployAndActivateContractInstanceRequest request)
-    {
-        return request with
-        {
-            Authority = ToriiAccountFaucetPow.RequireExactAccountId(request.Authority, nameof(request.Authority)),
-            PrivateKey = NormalizeExactValue(request.PrivateKey, nameof(request.PrivateKey)),
-            Namespace = NormalizeExactValue(request.Namespace, nameof(request.Namespace)),
-            ContractId = NormalizeExactValue(request.ContractId, nameof(request.ContractId)),
-            CodeBase64 = NormalizeExactBase64(request.CodeBase64, nameof(request.CodeBase64)),
-        };
-    }
-
-    private static ToriiActivateContractInstanceRequest NormalizeActivateContractInstanceRequest(
-        ToriiActivateContractInstanceRequest request)
-    {
-        return request with
-        {
-            Authority = ToriiAccountFaucetPow.RequireExactAccountId(request.Authority, nameof(request.Authority)),
-            PrivateKey = NormalizeExactValue(request.PrivateKey, nameof(request.PrivateKey)),
-            Namespace = NormalizeExactValue(request.Namespace, nameof(request.Namespace)),
-            ContractId = NormalizeExactValue(request.ContractId, nameof(request.ContractId)),
-            CodeHash = NormalizeExactSizedHex(request.CodeHash, nameof(request.CodeHash), 32),
         };
     }
 

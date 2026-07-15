@@ -1,10 +1,14 @@
 # Kagemusha Android production matrix
 
 This matrix is the physical-device release gate for the single Kagemusha
-offline-cash protocol. Every accepted slot is bound to native bridge ABI 20,
-manifest V4, the authenticated exact-eight recursive artifact inventory, the
-packaged Kagemusha recursive-spend prover, the application signing certificate,
-the wallet policy, and the exact application artifact.
+offline-cash protocol. Measurements are collected from a clean, unsigned V4
+candidate before release finalization, through the opt-in
+`kagemusha-candidate-evidence-lab` build only. Every accepted V2 slot is bound
+to native bridge ABI 20, the exact candidate record and source tree, the
+ordered eight recursive artifacts, the lab native library and APK, the real
+recursive-spend lifecycle transcript, the application signing certificate,
+and the wallet policy. The ordinary production capability must remain false
+throughout the lab run.
 
 ## Required device families
 
@@ -23,18 +27,33 @@ satisfy this gate.
 
 ## Slot contract
 
-`slot.json` and `evidence/signed-evidence.json` are closed schemas. They bind:
+`slot.json`, `evidence/signed-evidence.json`, and
+`evidence/candidate-binding-v2.json` are closed V2 schemas. V1 evidence cannot
+satisfy the production-evidence gate. V2 binds:
 
 - the canonical device family, model, codename, fingerprint, OS build, and
   minimum OS;
 - the app package, signing-certificate digest, Kagemusha wallet artifact and
   policy digests;
 - the StrongBox/KeyMint certificate chain and challenge;
-- native bridge ABI 20, manifest V4, exact Eq/Ep artifact identities, and
-  successful recursive-spend FFI/JNI/prover states;
+- the clean candidate record, manifest, source commit/tree, generation, native
+  bridge ABI 20, exact Eq/Ep KRV4 framed and payload identities, and the
+  native-accepted inventory digest;
+- the marker-bearing lab native library and APK, while proving the production
+  capability stayed false;
+- exact atomic-value conservation, multi-hop verification, independent branch
+  redemption, duplicate rejection, restart recovery, and zero peer-transfer
+  network requests in `evidence/lifecycle-transcript-v2.json`;
 - one-use key rotation and rollback rejection;
 - QR, NFC HCE, and nearby-offline transfer transcripts;
 - the exact raw test commands and every referenced artifact digest.
+
+The candidate-lab APK is a separate, marker-bearing application and must be
+bound by `candidate_lab_apk_path`/`candidate_lab_apk_sha256`. It must never be
+substituted for the wallet APK bound by
+`kagemusha_wallet_apk_path`/`kagemusha_wallet_apk_sha256`; the latter remains
+the independently measured StrongBox, rotation, rollback, and D2D wallet
+artifact.
 
 The lifecycle evidence must prove exact fractional value conservation, sender
 change, recursive multihop spending, durable receiver acknowledgement,
@@ -43,9 +62,11 @@ during peer transfers. Artifact paths must remain inside the slot and every
 digest must be canonical lowercase SHA-256.
 
 The required raw commands are the canonical values exported by
-`scripts/check_android_device_lab_slot.py`. They build the current
-`core-jvm`/`client-android` SDK, run the Kagemusha recursive-spend prover test,
-run the lifecycle instrumentation test, and export its bound evidence.
+`scripts/check_android_device_lab_slot.py`. They build the current SDK plus the
+nonshipping candidate-lab APK, run the two AndroidJUnitRunner lifecycle/export
+classes on the physical device, and export only the files and measurements
+observed during that run. The candidate-lab feature, symbols, marker, APK, and
+native library are forbidden from every production AAR/XCFramework/package.
 
 ## Validation
 

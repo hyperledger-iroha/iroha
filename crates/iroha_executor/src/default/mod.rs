@@ -61,9 +61,10 @@ use iroha_smart_contract::data_model::{
         repo::{RepoInstructionBox, RepoIsi, RepoMarginCallIsi, ReverseRepoIsi},
         settlement::SettlementInstructionBox,
         smart_contract_code::{
-            ActivateContractInstance, CancelSmartContractCodeUpload, DeactivateContractInstance,
-            FinalizeSmartContractCodeUpload, RegisterSmartContractBytes, RegisterSmartContractCode,
-            RemoveSmartContractBytes, UploadSmartContractCodeChunk,
+            ActivateContractInstance, CancelSmartContractCodeUpload, CommitContractDeployment,
+            DeactivateContractInstance, FinalizeSmartContractCodeUpload,
+            RegisterSmartContractBytes, RegisterSmartContractCode, RemoveSmartContractBytes,
+            UploadSmartContractCodeChunk,
         },
     },
     prelude::*,
@@ -161,6 +162,14 @@ fn has_contract_deployment_self_bootstrap_prefix(
     authority: &AccountId,
     instructions: &[InstructionBox],
 ) -> bool {
+    if instructions
+        .iter()
+        .any(|instruction| instruction.as_any().is::<CommitContractDeployment>())
+    {
+        // Atomic deployment consumes a pre-existing authority's reserved nonce. It must never
+        // inherit the narrow upload-only account bootstrap exception.
+        return false;
+    }
     let Some([register, grant, deployment]) = instructions.get(..3) else {
         return false;
     };
@@ -455,6 +464,15 @@ mod contract_deployment_bootstrap_tests {
                 code_hash,
             }
             .into(),
+            CommitContractDeployment {
+                expected_deploy_nonce: 7,
+                contract_address: contract_address.clone(),
+                code_hash,
+                contract_alias: "payments::universal".parse().expect("contract alias"),
+                lease_expiry_ms: None,
+                expected_previous_contract_address: None,
+            }
+            .into(),
             RegisterSmartContractBytes {
                 code_hash,
                 code: vec![0x01],
@@ -593,6 +611,29 @@ mod contract_deployment_bootstrap_tests {
         shifted.insert(0, upload_instruction());
         assert!(!has_contract_deployment_self_bootstrap_prefix(
             &authority, &shifted
+        ));
+
+        let mut atomic_deployment = exact.clone();
+        atomic_deployment.push(
+            CommitContractDeployment {
+                expected_deploy_nonce: 0,
+                contract_address: ContractAddress::derive(
+                    0x1234,
+                    &authority,
+                    0,
+                    DataSpaceId::UNIVERSAL,
+                )
+                .expect("atomic deployment contract address"),
+                code_hash: Hash::new(b"executor atomic deployment bootstrap fixture"),
+                contract_alias: "payments::universal".parse().expect("contract alias"),
+                lease_expiry_ms: None,
+                expected_previous_contract_address: None,
+            }
+            .into(),
+        );
+        assert!(!has_contract_deployment_self_bootstrap_prefix(
+            &authority,
+            &atomic_deployment
         ));
 
         let mut metadata = Metadata::default();
@@ -812,6 +853,9 @@ impl InstructionDispatch for InstructionBox {
             execute!(executor, isi);
         }
         if let Some(isi) = any.downcast_ref::<ActivateContractInstance>() {
+            execute!(executor, isi);
+        }
+        if let Some(isi) = any.downcast_ref::<CommitContractDeployment>() {
             execute!(executor, isi);
         }
         if let Some(isi) = any.downcast_ref::<RegisterSmartContractBytes>() {
