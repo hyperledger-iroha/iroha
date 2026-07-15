@@ -66,7 +66,7 @@ const REPORT_ARTIFACT_PURPOSES: [&str; 6] = [
     "step_ep_verifying_key",
 ];
 const REPORT_ROSTER_PURPOSE: &str = "topup_finality_roster";
-const REPORT_ARTIFACT_PURPOSES_V4: [&str; 10] = KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_ROLES_V4;
+const REPORT_ARTIFACT_PURPOSES_V4: [&str; 8] = KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_ROLES_V4;
 
 /// Kagemusha release-management command group.
 #[derive(Debug, ClapArgs)]
@@ -388,7 +388,7 @@ fn verify_release_directory_v4(
         .flat_map(|profile| profile.artifacts.iter())
         .collect();
     if descriptors.len() != REPORT_ARTIFACT_PURPOSES_V4.len() {
-        bail!("Kagemusha V4 release does not contain the exact ten-artifact inventory");
+        bail!("Kagemusha V4 release does not contain the exact eight-artifact inventory");
     }
     let mut validated = Vec::with_capacity(descriptors.len());
     for descriptor in &descriptors {
@@ -412,16 +412,14 @@ fn verify_release_directory_v4(
     }
     let [
         step_eq_parameters,
-        step_eq_circuit_params,
         step_eq_proving_key,
         step_eq_verifying_key,
         step_eq_bootstrap_witness,
         step_ep_parameters,
-        step_ep_circuit_params,
         step_ep_proving_key,
         step_ep_verifying_key,
         step_ep_bootstrap_witness,
-    ]: [KagemushaValidatedArtifactPayloadV4; 10] = validated
+    ]: [KagemushaValidatedArtifactPayloadV4; 8] = validated
         .try_into()
         .map_err(|_| eyre!("Kagemusha V4 artifact inventory length changed"))?;
 
@@ -452,12 +450,10 @@ fn verify_release_directory_v4(
     let material = KagemushaPastaCycleProverArtifactsV4::new(
         &authenticated,
         step_eq_parameters,
-        step_eq_circuit_params,
         step_eq_proving_key,
         step_eq_verifying_key,
         step_eq_bootstrap_witness,
         step_ep_parameters,
-        step_ep_circuit_params,
         step_ep_proving_key,
         step_ep_verifying_key,
         step_ep_bootstrap_witness,
