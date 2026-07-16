@@ -27,6 +27,7 @@ pub mod gateway_fixture;
 pub mod governance;
 pub mod hedging;
 pub mod hosts;
+#[cfg(feature = "pqc")]
 pub mod hybrid_envelope;
 pub mod manifest_capabilities;
 pub mod orderbook;

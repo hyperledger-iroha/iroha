@@ -329,9 +329,11 @@ export async function runBundleSizeCheck({
   await checkExplicitBrowserExportGraphs(esbuild, pkg, log);
   await checkDistExport(pkg, "./torii", "import");
   await checkDistExport(pkg, "./transaction-codec", "browser");
+  await checkDistExport(pkg, "./smart-contract-deployment", "browser");
   await checkDistExport(pkg, "./nexus-app", "browser");
   await checkDistExport(pkg, "./canonical-request", "browser");
   await checkDistExport(pkg, "./ivm-artifact", "browser");
+  await checkDistExport(pkg, "./ivm-artifact-admission-wasm", "browser");
   await checkDistExport(pkg, "./kotodama-compiler", "browser");
   await checkDistExport(pkg, "./browser", "browser");
 }

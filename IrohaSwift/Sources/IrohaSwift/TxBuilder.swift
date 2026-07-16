@@ -293,6 +293,34 @@ public struct SetPrimaryAccountAliasRequest {
     }
 }
 
+/// Inputs for the atomic nonce- and alias-CAS guarded contract deployment instruction.
+public struct CommitContractDeploymentRequest {
+    public let chainId: String
+    public let authority: String
+    public let expectedDeployNonce: UInt64
+    public let contractAddress: String
+    public let codeHashHex: String
+    public let contractAlias: String
+    public let leaseExpiryMs: UInt64?
+    public let expectedPreviousContractAddress: String?
+    public let ttlMs: UInt64?
+
+    public init(chainId: String, authority: String, expectedDeployNonce: UInt64,
+                contractAddress: String, codeHashHex: String, contractAlias: String,
+                leaseExpiryMs: UInt64? = nil,
+                expectedPreviousContractAddress: String? = nil, ttlMs: UInt64? = nil) {
+        self.chainId = chainId
+        self.authority = authority
+        self.expectedDeployNonce = expectedDeployNonce
+        self.contractAddress = contractAddress
+        self.codeHashHex = codeHashHex
+        self.contractAlias = contractAlias
+        self.leaseExpiryMs = leaseExpiryMs
+        self.expectedPreviousContractAddress = expectedPreviousContractAddress
+        self.ttlMs = ttlMs
+    }
+}
+
 public enum VerifyingKeyIdError: Error, LocalizedError, Equatable {
     case emptyBackend
     case emptyName
@@ -1471,6 +1499,24 @@ public final class IrohaSDK: @unchecked Sendable {
             request: request,
             keypair: keypair,
             creationTimeMs: creationTimeMs
+        )
+    }
+
+    public func buildCommitContractDeployment(request: CommitContractDeploymentRequest,
+                                              keypair: Keypair) throws -> SignedTransactionEnvelope {
+        try SwiftTransactionEncoder.encodeCommitContractDeployment(
+            request: request,
+            signingKey: .ed25519(privateKey: keypair.privateKeyBytes),
+            creationTimeMs: makeCreationTimeMs()
+        )
+    }
+
+    public func buildCommitContractDeployment(request: CommitContractDeploymentRequest,
+                                              signingKey: SigningKey) throws -> SignedTransactionEnvelope {
+        try SwiftTransactionEncoder.encodeCommitContractDeployment(
+            request: request,
+            signingKey: signingKey,
+            creationTimeMs: makeCreationTimeMs()
         )
     }
 

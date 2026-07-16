@@ -27,14 +27,38 @@ export {
 } from "./ivmArtifact.js";
 
 export {
+  IVM_ARTIFACT_ADMISSION_MAX_INPUT_BYTES,
+  instantiateIvmArtifactAdmissionWasm,
+  verifyIvmContractArtifactAdmission,
+} from "./ivmArtifactAdmissionWasm.js";
+
+export {
   BrowserTransactionCodecError,
   browserSignedTransactionHashHex,
   browserTransactionCodec,
   browserTransactionPayloadHashHex,
+  buildBrowserInstructionTransactionPayload,
   buildBrowserTransferPayload,
+  finalizeBrowserInstructionTransaction,
   finalizeBrowserSignedTransaction,
+  validateBrowserInstructionTransactionSignable,
   validateBrowserTransferSignable,
 } from "./transactionCodec.js";
+
+export {
+  SMART_CONTRACT_CODE_CHUNK_BYTES,
+  deploySmartContractBrowser,
+  deriveContractAddress,
+  prepareBrowserContractArtifact,
+} from "./smartContractDeployment.js";
+
+export {
+  buildCancelSmartContractCodeUploadInstruction,
+  buildCommitContractDeploymentInstruction,
+  buildFinalizeSmartContractCodeUploadInstruction,
+  buildRegisterSmartContractCodeInstruction,
+  buildUploadSmartContractCodeChunkInstruction,
+} from "./instructionBuilders.js";
 
 export {
   noritoDecodeInstruction,

@@ -3299,7 +3299,7 @@ export interface ContractEventStreamOptions {
 }
 
 export interface CanonicalRequestAuth {
-  /** Exact canonical ASCII account alias; I105 is not valid in this HTTP header credential. */
+  /** Exact canonical I105 account or canonical ASCII account alias. */
   accountId: string;
   privateKey:
     | Buffer
@@ -11687,6 +11687,16 @@ export interface ToriiBrowserContractDeploymentStateOptions
   nonce?: string;
 }
 
+export interface ToriiBrowserCanonicalRequestOptions
+  extends ToriiBrowserRequestOptions {
+  authAccountId: string;
+  sign: (
+    input: CanonicalJsonRequestSignerInput,
+  ) => CanonicalJsonRequestSignature | Promise<CanonicalJsonRequestSignature>;
+  timestampMs?: number;
+  nonce?: string;
+}
+
 export declare class ToriiBrowserHttpError extends Error {
   readonly response: Response;
   readonly status: number;
@@ -11720,7 +11730,7 @@ export declare class ToriiBrowserClient {
   ): Promise<ToriiBrowserContractDeploymentStateResponse>;
   resolveContractAlias(
     contractAlias: string,
-    options?: ToriiBrowserRequestOptions,
+    options: ToriiBrowserCanonicalRequestOptions,
   ): Promise<unknown>;
   getAccount(
     accountId: string,
@@ -11840,15 +11850,15 @@ export declare class ToriiBrowserClient {
   ): Promise<unknown>;
   getMultisigSpec(
     selector: MultisigAccountSelector,
-    options?: Record<string, unknown>,
+    options: ToriiBrowserCanonicalRequestOptions,
   ): Promise<MultisigSpecResponse>;
   queryMultisigProposals(
     selector: MultisigProposalsQueryRequest,
-    options?: Record<string, unknown>,
+    options: ToriiBrowserCanonicalRequestOptions,
   ): Promise<MultisigProposalsQueryResponse>;
   resolveMultisigProposal(
     request: MultisigProposalsResolveRequest,
-    options?: Record<string, unknown>,
+    options: ToriiBrowserCanonicalRequestOptions,
   ): Promise<MultisigProposalResolveResponse>;
   submitMultisigPropose(
     request: Record<string, unknown>,
@@ -13005,26 +13015,26 @@ export declare class ToriiClient {
   ): Promise<MultisigContractCallResponse>;
   getMultisigSpec(
     request: MultisigAccountSelector,
-    options?: { signal?: AbortSignal },
+    options: { signal?: AbortSignal; canonicalAuth: CanonicalRequestAuth },
   ): Promise<MultisigSpecResponse>;
   queryMultisigProposals(
     request: MultisigProposalsQueryRequest,
-    options?: { signal?: AbortSignal },
+    options: { signal?: AbortSignal; canonicalAuth: CanonicalRequestAuth },
   ): Promise<MultisigProposalsQueryResponse>;
   resolveMultisigProposal(
     request: MultisigProposalsResolveRequest,
-    options?: { signal?: AbortSignal },
+    options: { signal?: AbortSignal; canonicalAuth: CanonicalRequestAuth },
   ): Promise<MultisigProposalResolveResponse>;
   getContractManifest(
     codeHashHex: string,
   ): Promise<ContractManifestRecord | null>;
   getContractCodeBytes(
     codeHashHex: string,
-    options?: { signal?: AbortSignal },
+    options: { signal?: AbortSignal; canonicalAuth: CanonicalRequestAuth },
   ): Promise<ContractCodeBytesRecord | null>;
   getGovernanceContract(
     contractAddress: string,
-    options?: { signal?: AbortSignal },
+    options: { signal?: AbortSignal; canonicalAuth: CanonicalRequestAuth },
   ): Promise<ToriiGovernanceContractResponse>;
   listTriggers(options?: TriggerListOptions): Promise<ToriiTriggerListPage>;
   iterateTriggers(
@@ -15182,3 +15192,5 @@ export const NumericV1: {
 
 export * from "./nexus-app.js";
 export * from "./transaction-codec.js";
+export * from "./ivm-artifact-admission-wasm.js";
+export * from "./smart-contract-deployment.js";

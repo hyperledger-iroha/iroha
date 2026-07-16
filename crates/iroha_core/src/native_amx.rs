@@ -1221,6 +1221,11 @@ impl NativeAmxSigningGuard {
     }
 
     #[cfg(test)]
+    pub(crate) const fn max_records_for_test(&self) -> usize {
+        self.max_records
+    }
+
+    #[cfg(test)]
     pub(crate) fn remove_one_record_for_test(&self) {
         let path = self
             .inner

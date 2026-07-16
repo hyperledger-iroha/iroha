@@ -291,6 +291,7 @@ enum SwiftTransactionEncoderError: Error, LocalizedError, Sendable {
     case nativeBridgeError(NativeBridgeError)
     case unsupportedSigningAlgorithm(SigningAlgorithm)
     case invalidClaimIdentifierReceipt(String)
+    case invalidInput(String)
     case invalidNativeSignedTransaction(String)
 
     public var errorDescription: String? {
@@ -305,6 +306,8 @@ enum SwiftTransactionEncoderError: Error, LocalizedError, Sendable {
             return "Signing algorithm \(algorithm) is not supported by this encoder."
         case let .invalidClaimIdentifierReceipt(reason):
             return "ClaimIdentifier receipt is invalid: \(reason)"
+        case let .invalidInput(reason):
+            return "Transaction input is invalid: \(reason)"
         case let .invalidNativeSignedTransaction(reason):
             return "Native signed transaction is invalid: \(reason)"
         }
@@ -442,7 +445,7 @@ private func encodeNativeClaimIdentifierReceiptJSON(
     )
 }
 
-private enum SetPrimaryAccountAliasSwiftNoritoEncoder {
+private enum SingleInstructionSwiftNoritoEncoder {
     private static let instructionWireName = "identity::SetPrimaryAccountAlias"
     private static let instructionTypeName = "iroha_data_model::isi::domain_link::SetPrimaryAccountAlias"
 
@@ -480,6 +483,36 @@ private enum SetPrimaryAccountAliasSwiftNoritoEncoder {
             signedTransaction: signedTransaction,
             payload: nil,
             transactionHash: transactionHash
+        )
+    }
+
+    static func encodeCommitContractDeployment(
+        chainId: String, authority: String, creationTimeMs: UInt64, ttlMs: UInt64?,
+        expectedDeployNonce: UInt64, contractAddress: String, codeHash: Data,
+        contractAlias: String, leaseExpiryMs: UInt64?, expectedPreviousContractAddress: String?,
+        signingKey: SigningKey
+    ) throws -> SignedTransactionEnvelope {
+        var payload = CanonicalNoritoWriter()
+        payload.writeField(CanonicalNorito.encodeUInt64(expectedDeployNonce))
+        payload.writeField(CanonicalNorito.encodeString(contractAddress))
+        payload.writeField(CanonicalNorito.encodeConstVec(codeHash))
+        payload.writeField(CanonicalNorito.encodeString(contractAlias))
+        payload.writeField(try CanonicalNorito.encodeOption(leaseExpiryMs, encode: CanonicalNorito.encodeUInt64))
+        payload.writeField(try CanonicalNorito.encodeOption(expectedPreviousContractAddress, encode: CanonicalNorito.encodeString))
+        let typeName = "iroha_data_model::isi::smart_contract_code::CommitContractDeployment"
+        let framed = noritoEncode(typeName: typeName, payload: payload.data, flags: 0)
+        var wire = CanonicalNoritoWriter()
+        wire.writeField(CanonicalNorito.encodeString(typeName))
+        wire.writeField(CanonicalNorito.encodeBytesVec(framed))
+        let transactionPayload = try encodeTransactionPayload(
+            chainId: chainId, authority: authority, creationTimeMs: creationTimeMs,
+            ttlMs: ttlMs, instructionPayload: wire.data
+        )
+        let signature = try signingKey.sign(IrohaHash.hash(transactionPayload))
+        let signed = encodeSignedTransaction(signature: signature, transactionPayload: transactionPayload)
+        return SignedTransactionEnvelope(
+            norito: encodeVersionedSignedTransaction(signed), signedTransaction: signed,
+            payload: nil, transactionHash: IrohaHash.hash(encodeTransactionEntrypoint(signed))
         )
     }
 
@@ -959,7 +992,7 @@ struct SwiftTransactionEncoder {
         let aliasDomain = try request.aliasDomain.map {
             try TransactionInputValidator.sanitizeLabel($0, field: "alias_domain")
         }
-        return try SetPrimaryAccountAliasSwiftNoritoEncoder.encode(
+        return try SingleInstructionSwiftNoritoEncoder.encode(
             chainId: ids.chainId,
             authority: ids.authorityId,
             creationTimeMs: creationTimeMs,
@@ -968,6 +1001,34 @@ struct SwiftTransactionEncoder {
             aliasDomain: aliasDomain,
             aliasDataspaceId: request.aliasDataspaceId,
             alias: alias,
+            signingKey: signingKey
+        )
+    }
+
+    static func encodeCommitContractDeployment(
+        request: CommitContractDeploymentRequest,
+        signingKey: SigningKey,
+        creationTimeMs: UInt64
+    ) throws -> SignedTransactionEnvelope {
+        let ids = try TransactionInputValidator.validate(
+            chainId: request.chainId, authorityId: request.authority
+        )
+        guard request.contractAddress == request.contractAddress.trimmingCharacters(in: .whitespacesAndNewlines),
+              !request.contractAddress.isEmpty,
+              request.contractAlias == request.contractAlias.trimmingCharacters(in: .whitespacesAndNewlines),
+              !request.contractAlias.isEmpty else {
+            throw SwiftTransactionEncoderError.invalidInput("contract address and alias must be exact non-empty strings")
+        }
+        guard request.codeHashHex.count == 64,
+              let codeHash = Data(hexString: request.codeHashHex) else {
+            throw SwiftTransactionEncoderError.invalidInput("codeHashHex must contain exactly 64 hexadecimal characters")
+        }
+        return try SingleInstructionSwiftNoritoEncoder.encodeCommitContractDeployment(
+            chainId: ids.chainId, authority: ids.authorityId, creationTimeMs: creationTimeMs,
+            ttlMs: request.ttlMs, expectedDeployNonce: request.expectedDeployNonce,
+            contractAddress: request.contractAddress, codeHash: codeHash,
+            contractAlias: request.contractAlias, leaseExpiryMs: request.leaseExpiryMs,
+            expectedPreviousContractAddress: request.expectedPreviousContractAddress,
             signingKey: signingKey
         )
     }

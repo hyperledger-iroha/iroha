@@ -765,12 +765,14 @@ public final class HttpClientTransport implements IrohaClient {
 
   /** Fetches one governance binding via `GET /v1/gov/contracts/{contract_address}`. */
   public CompletableFuture<GovernanceContractResponse> getGovernanceContract(
-      final String contractAddress) {
+      final String contractAddress, final ToriiCanonicalRequestAuth canonicalAuth) {
     final String normalizedAddress = normalizeNonBlank(contractAddress, "contractAddress");
     final TransportRequest request =
-        buildJsonGetRequest(
+        buildVpnRequest(
+            "GET",
             "/v1/gov/contracts/" + encodePathSegment(normalizedAddress),
-            Collections.emptyMap());
+            null,
+            canonicalAuth);
     return fetchJson(
         request,
         ContractJsonParser::parseGovernanceContractResponse,

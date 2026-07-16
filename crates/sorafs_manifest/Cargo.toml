@@ -7,7 +7,7 @@ description = "Norito-encoded manifest types for SoraFS artifacts."
 
 [features]
 default = ["pqc"]
-pqc = ["soranet_pq/pqc"]
+pqc = ["iroha_crypto/pqc", "soranet_pq/pqc"]
 
 [dependencies]
 blake3 = "1.8.2"

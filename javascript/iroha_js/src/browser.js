@@ -27,6 +27,12 @@ export {
 } from "./ivmArtifact.js";
 
 export {
+  IVM_ARTIFACT_ADMISSION_MAX_INPUT_BYTES,
+  instantiateIvmArtifactAdmissionWasm,
+  verifyIvmContractArtifactAdmission,
+} from "./ivmArtifactAdmissionWasm.js";
+
+export {
   BrowserTransactionCodecError,
   browserSignedTransactionHashHex,
   browserTransactionCodec,

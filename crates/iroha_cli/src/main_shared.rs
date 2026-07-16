@@ -7248,7 +7248,11 @@ mod settlement {
         #[arg(long)]
         pub destination_asset: AssetDefinitionId,
         /// Allowed destination account-alias domain (repeat for each FI domain).
-        #[arg(long = "allowed-destination-alias-domain", required = true)]
+        #[arg(
+            long = "allowed-destination-alias-domain",
+            required = true,
+            value_parser = parse_domain_id_literal
+        )]
         pub allowed_destination_alias_domains: Vec<DomainId>,
         /// Destination/source rate numerator
         #[arg(long)]
@@ -8740,6 +8744,37 @@ mod tests {
     struct QuantityParserHarness {
         #[arg(long)]
         quantity: iroha_primitives::numeric::Quantity,
+    }
+
+    #[derive(clap::Parser, Debug)]
+    struct FxCorridorDomainParserHarness {
+        #[arg(
+            long = "allowed-destination-alias-domain",
+            required = true,
+            value_parser = parse_domain_id_literal
+        )]
+        domains: Vec<DomainId>,
+    }
+
+    #[test]
+    fn fx_corridor_domain_arguments_use_the_canonical_domain_parser() {
+        let domain = DomainId::try_new("hbl.sbp", "universal").expect("canonical domain");
+        let literal = domain.to_string();
+        let parsed = FxCorridorDomainParserHarness::try_parse_from([
+            "fx-corridor-domain-parser",
+            "--allowed-destination-alias-domain",
+            literal.as_str(),
+        ])
+        .expect("canonical fully-qualified domain must parse");
+        assert_eq!(parsed.domains, vec![domain]);
+
+        let error = FxCorridorDomainParserHarness::try_parse_from([
+            "fx-corridor-domain-parser",
+            "--allowed-destination-alias-domain",
+            "hbl.sbp",
+        ])
+        .expect_err("a domain without its dataspace must fail during argument parsing");
+        assert_eq!(error.kind(), clap::error::ErrorKind::ValueValidation);
     }
 
     #[test]

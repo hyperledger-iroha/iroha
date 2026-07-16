@@ -37,7 +37,7 @@ function requireExactNonBlankString(value, field, context) {
 const CANONICAL_AUTH_ACCOUNT_ALIAS_PATTERN =
   /^[a-z0-9]+(?:[._-][a-z0-9]+)*@[a-z0-9]+(?:-[a-z0-9]+)*(?:\.[a-z0-9]+(?:-[a-z0-9]+)*)?$/u;
 
-function requireCanonicalAuthAccount(value, context) {
+export function requireCanonicalAuthAccount(value, context) {
   if (typeof value !== "string" || value.length === 0 || value.trim() !== value) {
     throw new TypeError(
       `${context} must be an exact canonical I105 account or ASCII account alias`,

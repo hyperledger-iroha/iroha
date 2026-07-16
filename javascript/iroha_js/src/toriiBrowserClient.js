@@ -908,6 +908,31 @@ export class ToriiBrowserClient {
     return text ? jsonParser(text) : null;
   }
 
+  async _canonicalJson(method, path, body, options, successStatuses = [200]) {
+    const opts = requireObject(options, `${method} ${path} canonical options`);
+    if (typeof opts.sign !== "function") {
+      throw new TypeError(`${method} ${path} options.sign is required`);
+    }
+    const signed = await buildCanonicalJsonRequest({
+      accountId: requireNonEmptyString(opts.authAccountId, `${method} ${path} options.authAccountId`),
+      method,
+      path,
+      baseUrl: this.baseUrl,
+      body,
+      headers: opts.headers,
+      sign: opts.sign,
+      timestampMs: opts.timestampMs,
+      nonce: opts.nonce,
+    });
+    return this._json(method, path, {
+      rawBody: signed.body || undefined,
+      contentType: body === undefined ? undefined : "application/json",
+      headers: signed.headers,
+      signal: signalFrom(opts),
+      successStatuses: opts.successStatuses ?? successStatuses,
+    });
+  }
+
   /** Submit exact locally signed version-1 transaction bytes to the pipeline. */
   submitTransaction(signedTransaction, options = {}) {
     const opts = requireObject(options, "submitTransaction options");
@@ -1066,19 +1091,13 @@ export class ToriiBrowserClient {
   }
 
   /** Resolve a contract alias; caller-supplied canonical signing headers are preserved. */
-  resolveContractAlias(contractAlias, options = {}) {
-    const opts = requireObject(options, "resolveContractAlias options");
-    return this._json("POST", "/v1/contracts/aliases/resolve", {
-      body: {
+  resolveContractAlias(contractAlias, options) {
+    return this._canonicalJson("POST", "/v1/contracts/aliases/resolve", {
         contract_alias: requireNonEmptyString(
           contractAlias,
           "resolveContractAlias contractAlias",
         ),
-      },
-      headers: opts.headers,
-      signal: signalFrom(opts),
-      successStatuses: opts.successStatuses ?? [200],
-    });
+      }, options);
   }
 
   /** Read the exact one-view deployment CAS state through canonical app auth. */
@@ -1497,35 +1516,27 @@ export class ToriiBrowserClient {
     });
   }
 
-  getMultisigSpec(selector, options = {}) {
-    const opts = requireObject(options, "getMultisigSpec options");
-    return this._json("POST", "/v1/multisig/spec", {
-      body: normalizeMultisigSelectorBody(selector, "getMultisigSpec selector"),
-      signal: signalFrom(opts),
-    });
+  getMultisigSpec(selector, options) {
+    return this._canonicalJson("POST", "/v1/multisig/spec",
+      normalizeMultisigSelectorBody(selector, "getMultisigSpec selector"), options);
   }
 
-  queryMultisigProposals(selector, options = {}) {
-    const opts = requireObject(options, "queryMultisigProposals options");
-    return this._json("POST", "/v1/multisig/proposals/query", {
-      body: normalizeMultisigProposalsQueryBody(
+  queryMultisigProposals(selector, options) {
+    return this._canonicalJson("POST", "/v1/multisig/proposals/query",
+      normalizeMultisigProposalsQueryBody(
         selector,
         "queryMultisigProposals selector",
-      ),
-      signal: signalFrom(opts),
-    });
+      ), options);
   }
 
-  resolveMultisigProposal(request, options = {}) {
+  resolveMultisigProposal(request, options) {
     const normalizedRequest = normalizeMultisigProposalsResolveBody(
       request,
       "resolveMultisigProposal request",
     );
-    const opts = requireObject(options, "resolveMultisigProposal options");
-    return this._json("POST", "/v1/multisig/proposals/resolve", {
-      body: normalizedRequest,
-      signal: signalFrom(opts),
-    });
+    return this._canonicalJson(
+      "POST", "/v1/multisig/proposals/resolve", normalizedRequest, options,
+    );
   }
 
   async submitMultisigPropose(request, options = {}) {

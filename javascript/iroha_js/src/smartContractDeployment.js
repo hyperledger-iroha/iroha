@@ -10,6 +10,7 @@ import {
   buildUploadSmartContractCodeChunkInstruction,
 } from "./instructionBuilders.js";
 import { computeIvmArtifactHashes } from "./ivmArtifact.js";
+import { verifyIvmContractArtifactAdmission } from "./ivmArtifactAdmissionWasm.js";
 import { verifyCompiledContractArtifact } from "./kotodamaCompiler/normalize.js";
 import { noritoEncodeContractManifestSignaturePayload } from "./norito.js";
 import {
@@ -532,6 +533,63 @@ export function prepareBrowserContractArtifact({
   });
 }
 
+function requireSharedArtifactAdmission(prepared, verifier) {
+  const admission = verifyIvmContractArtifactAdmission(
+    verifier,
+    prepared.artifactBytes,
+  );
+  if (!admission.ok) {
+    throw new Error(`shared IVM artifact admission rejected deployment: ${admission.error}`);
+  }
+  if (admission.codeHashHex !== prepared.codeHash) {
+    throw new Error(
+      "shared IVM artifact admission code hash does not match the compiled artifact",
+    );
+  }
+  if (admission.abiHashHex !== prepared.abiHash) {
+    throw new Error(
+      "shared IVM artifact admission ABI hash does not match the compiler ABI hash",
+    );
+  }
+  if (
+    admission.headerLength > admission.codeOffset ||
+    admission.codeOffset > prepared.artifactBytes.length
+  ) {
+    throw new Error("shared IVM artifact admission returned invalid artifact offsets");
+  }
+  const admittedManifest =
+    buildRegisterSmartContractCodeInstruction({ manifest: admission.manifest })
+      .RegisterSmartContractCode.manifest;
+  if (admittedManifest.provenance !== null) {
+    throw new Error("shared IVM artifact admission manifest must be unsigned");
+  }
+  if (admittedManifest.entrypoints.length !== admission.entrypointCount) {
+    throw new Error(
+      "shared IVM artifact admission entrypoint count disagrees with its manifest",
+    );
+  }
+  const suppliedPayload = noritoEncodeContractManifestSignaturePayload(
+    prepared.manifest,
+  );
+  const admittedPayload = noritoEncodeContractManifestSignaturePayload(
+    admittedManifest,
+  );
+  if (
+    !admittedPayload.equals(suppliedPayload) ||
+    JSON.stringify(admittedManifest) !== JSON.stringify(prepared.manifest)
+  ) {
+    throw new Error(
+      "shared IVM artifact admission manifest does not match the compiler manifest",
+    );
+  }
+  return Object.freeze({
+    verifierSha256Hex: verifier.verifierSha256Hex,
+    headerLength: admission.headerLength,
+    codeOffset: admission.codeOffset,
+    entrypointCount: admission.entrypointCount,
+  });
+}
+
 async function buildSignedManifestRegistrationStep({
   prepared,
   authority,
@@ -811,6 +869,11 @@ export async function deploySmartContractBrowser(options) {
   );
   const authority = authorityDetails(source.authority, chainDiscriminant);
   const contractAlias = normalizeContractAlias(source.contractAlias);
+  const prepared = prepareBrowserContractArtifact(source);
+  const artifactAdmission = requireSharedArtifactAdmission(
+    prepared,
+    source.artifactAdmissionVerifier,
+  );
   const nodeCapabilities = validateNodeCapabilities(
     await source.readNodeCapabilities(
       Object.freeze({
@@ -819,7 +882,6 @@ export async function deploySmartContractBrowser(options) {
       }),
     ),
   );
-  const prepared = prepareBrowserContractArtifact(source);
   const state = validateDeploymentState(
     await source.readDeploymentState(
       Object.freeze({
@@ -914,6 +976,7 @@ export async function deploySmartContractBrowser(options) {
     observedBlockHashHex: state.observedBlockHashHex,
     ledgerTimeMs: state.ledgerTimeMs.toString(),
     nodeCapabilities,
+    artifactAdmission,
     transactions: Object.freeze(results),
   });
 }

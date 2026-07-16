@@ -68,9 +68,10 @@ use crate::{
         decode_certified_merge_sidecar,
     },
     native_amx::{
-        NativeAmxAttestationRequestV2, NativeAmxCommitRequestV2, NativeAmxMessage,
-        NativeAmxSessionCache, NativeAmxSessionError, NativeAmxSessionKey, NativeAmxSigningGuard,
-        NativeAmxVoteV2, aggregate_votes_to_qc, validate_native_amx_qc,
+        MAX_NATIVE_AMX_SIGNING_GUARD_RECORDS_HARD, NativeAmxAttestationRequestV2,
+        NativeAmxCommitRequestV2, NativeAmxMessage, NativeAmxSessionCache, NativeAmxSessionError,
+        NativeAmxSessionKey, NativeAmxSigningGuard, NativeAmxVoteV2, aggregate_votes_to_qc,
+        validate_native_amx_qc,
     },
     queue::{RoutingDecision, RoutingPlan},
     state::State,
@@ -289,6 +290,25 @@ impl V2LaneWorkLimits {
             native_request_capacity,
         }
     }
+}
+
+fn native_amx_signing_guard_capacity(
+    limits: V2LaneWorkLimits,
+) -> Result<NonZeroUsize, V2LaneWorkError> {
+    let requested = limits
+        .session_capacity
+        .get()
+        .checked_mul(limits.body_buckets_per_session.get())
+        .ok_or_else(|| {
+            V2LaneWorkError::SigningGuard(
+                "native AMX signing-record capacity overflows usize".to_owned(),
+            )
+        })?;
+    NonZeroUsize::new(requested.min(MAX_NATIVE_AMX_SIGNING_GUARD_RECORDS_HARD)).ok_or_else(|| {
+        V2LaneWorkError::SigningGuard(
+            "native AMX signing-record capacity must be non-zero".to_owned(),
+        )
+    })
 }
 
 /// One authenticated lane-local transport action emitted by the adapter.
@@ -634,16 +654,7 @@ impl V2LaneWorkAdapter {
         let native_signing_guard = if voting_enabled
             && local_peer.public_key().try_algorithm().ok() == Some(Algorithm::BlsNormal)
         {
-            let max_records = limits
-                .session_capacity
-                .get()
-                .checked_mul(limits.body_buckets_per_session.get())
-                .and_then(NonZeroUsize::new)
-                .ok_or_else(|| {
-                    V2LaneWorkError::SigningGuard(
-                        "native AMX signing-record capacity overflows usize".to_owned(),
-                    )
-                })?;
+            let max_records = native_amx_signing_guard_capacity(limits)?;
             let chain_id = context.chain_id.clone().into_inner();
             Some(
                 NativeAmxSigningGuard::open(
@@ -4376,6 +4387,21 @@ mod tests {
         height: u64,
         persist_parent_chain: bool,
     ) -> (V2LaneWorkAdapter, Vec<KeyPair>) {
+        let nonzero = NonZeroUsize::new(8).expect("nonzero");
+        fixture_at_height_inner_with_limits(
+            mode,
+            height,
+            persist_parent_chain,
+            V2LaneWorkLimits::new(nonzero, nonzero, nonzero, nonzero, nonzero, nonzero),
+        )
+    }
+
+    fn fixture_at_height_inner_with_limits(
+        mode: wire::ConsensusMode,
+        height: u64,
+        persist_parent_chain: bool,
+        limits: V2LaneWorkLimits,
+    ) -> (V2LaneWorkAdapter, Vec<KeyPair>) {
         let chain_id: ChainId = "v2-lane-work-test".into();
         let kura = Kura::blank_kura_for_testing();
         let mut keys = (1_u8..=4)
@@ -4502,7 +4528,6 @@ mod tests {
         let local_index = usize::try_from(context.leader(0)).expect("leader index");
         let local_key = keys[local_index].clone();
         let local_peer = PeerId::new(local_key.public_key().clone());
-        let nonzero = NonZeroUsize::new(8).expect("nonzero");
         let authenticated_genesis_nexus_amx_context = (height == 1).then(|| {
             AuthenticatedGenesisNexusAmxContext::Staged(StagedGenesisNexusAmxContext::for_test(
                 context.nexus_amx_context_hash,
@@ -4515,7 +4540,7 @@ mod tests {
             true,
             state,
             kura,
-            V2LaneWorkLimits::new(nonzero, nonzero, nonzero, nonzero, nonzero, nonzero),
+            limits,
             authenticated_genesis_nexus_amx_context,
             None,
             ConsensusOutputGuard::isolated(),
@@ -4625,6 +4650,74 @@ mod tests {
         validators.dedup();
         assert_eq!(validators.len(), keys.len());
         validators
+    }
+
+    fn limits_with_native_capacity(
+        session_capacity: usize,
+        body_buckets_per_session: usize,
+    ) -> V2LaneWorkLimits {
+        let one = NonZeroUsize::new(1).expect("non-zero fixture limit");
+        V2LaneWorkLimits::new(
+            NonZeroUsize::new(session_capacity).expect("non-zero session capacity"),
+            NonZeroUsize::new(body_buckets_per_session).expect("non-zero body-bucket capacity"),
+            one,
+            one,
+            one,
+            one,
+        )
+    }
+
+    #[test]
+    fn native_amx_signing_guard_capacity_preserves_small_product() {
+        let capacity = native_amx_signing_guard_capacity(limits_with_native_capacity(8, 16))
+            .expect("small representable capacity");
+        assert_eq!(capacity.get(), 128);
+    }
+
+    #[test]
+    fn native_amx_signing_guard_capacity_preserves_exact_hard_boundary() {
+        let capacity = native_amx_signing_guard_capacity(limits_with_native_capacity(2_048, 512))
+            .expect("exact protocol boundary");
+        assert_eq!(capacity.get(), MAX_NATIVE_AMX_SIGNING_GUARD_RECORDS_HARD);
+    }
+
+    #[test]
+    fn native_amx_signing_guard_capacity_caps_deployed_localnet_oversized_product() {
+        let capacity =
+            native_amx_signing_guard_capacity(limits_with_native_capacity(20_000, 10_000))
+                .expect("representable deployed-localnet capacity");
+        assert_eq!(capacity.get(), MAX_NATIVE_AMX_SIGNING_GUARD_RECORDS_HARD);
+    }
+
+    #[test]
+    fn native_amx_signing_guard_capacity_rejects_usize_overflow() {
+        let error = native_amx_signing_guard_capacity(limits_with_native_capacity(usize::MAX, 2))
+            .expect_err("overflow must fail closed");
+        assert!(matches!(
+            error,
+            V2LaneWorkError::SigningGuard(message)
+                if message == "native AMX signing-record capacity overflows usize"
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn native_amx_adapter_opens_with_bounded_production_like_limits() {
+        let limits = limits_with_native_capacity(4_096, 512);
+        let (adapter, _) = fixture_at_height_inner_with_limits(
+            wire::ConsensusMode::Permissioned,
+            9,
+            false,
+            limits,
+        );
+        assert_eq!(
+            adapter
+                .native_signing_guard
+                .as_ref()
+                .expect("BLS validator has a durable Native AMX guard")
+                .max_records_for_test(),
+            MAX_NATIVE_AMX_SIGNING_GUARD_RECORDS_HARD,
+        );
     }
 
     fn missing_sidecar_reference(

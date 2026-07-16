@@ -17058,7 +17058,8 @@ impl Client {
         let url = join_torii_url(&self.torii_url, &path);
         let resp = self.send_builder(
             self.account_signed_request(HttpMethod::GET, url, Vec::new())?
-                .header("Accept", APPLICATION_JSON),
+                .header("Accept", APPLICATION_JSON)
+                .max_response_bytes(CONTRACT_CODE_ARTIFACT_RESPONSE_MAX_BYTES),
         )?;
         if resp.status() != StatusCode::OK {
             return Err(eyre!(
@@ -21693,6 +21694,10 @@ mod tests {
             ])
         );
         assert!(snapshot.body.is_empty());
+        assert_eq!(
+            snapshot.max_response_bytes,
+            CONTRACT_CODE_ARTIFACT_RESPONSE_MAX_BYTES
+        );
         assert_canonical_account_signed_request(&client, snapshot);
     }
 

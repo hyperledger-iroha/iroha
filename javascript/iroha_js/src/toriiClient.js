@@ -47,7 +47,10 @@ import {
   ValidationErrorCode,
   ValidationError,
 } from "./validationError.js";
-import { buildCanonicalRequestHeaders } from "./canonicalRequest.js";
+import {
+  buildCanonicalRequestHeaders,
+  requireCanonicalAuthAccount,
+} from "./canonicalRequest.js";
 import { blake2b256 } from "./blake2b.js";
 import { NumericV1, NumericV1Error } from "./numericV1.js";
 import { SM2_DEFAULT_DISTINGUISHED_ID, verifyEd25519, verifySm2 } from "./crypto.js";
@@ -2753,7 +2756,7 @@ export class ToriiClient {
 
   /**
    * List stored attachments.
-   * @param {{signal?: AbortSignal}} [options]
+   * @param {{signal?: AbortSignal, canonicalAuth: CanonicalRequestAuth}} options
    * @returns {Promise<ReadonlyArray<ToriiAttachmentMetadata>>}
    */
   async listAttachments(options = {}) {
@@ -8874,13 +8877,15 @@ export class ToriiClient {
    * @param {{signal?: AbortSignal}} [options]
    * @returns {Promise<object>}
    */
-  async getMultisigSpec(request = {}, options = {}) {
-    const { signal } = normalizeSignalOnlyOption(options, "getMultisigSpec");
+  async getMultisigSpec(request = {}, options) {
+    const { signal, canonicalAuth } = normalizeVpnSessionOptions(options, "getMultisigSpec");
     const payload = normalizeMultisigSelectorOnlyRequest(request, "getMultisigSpec request");
+    const requestBody = JSON.stringify(payload);
     const response = await this._request("POST", "/v1/multisig/spec", {
       headers: JSON_REQUEST_HEADERS,
-      body: JSON.stringify(payload),
+      body: requestBody,
       signal,
+      canonicalAuth,
     });
     await this._expectStatus(response, [200], { signal });
     const body = await this._maybeJson(response);
@@ -8893,19 +8898,21 @@ export class ToriiClient {
   /**
    * Query multisig proposals for a selector, optionally filtered by lifecycle status (`POST /v1/multisig/proposals/query`).
    * @param {object} request
-   * @param {{signal?: AbortSignal}} [options]
+   * @param {{signal?: AbortSignal, canonicalAuth: CanonicalRequestAuth}} options
    * @returns {Promise<object>}
    */
-  async queryMultisigProposals(request = {}, options = {}) {
-    const { signal } = normalizeSignalOnlyOption(options, "queryMultisigProposals");
+  async queryMultisigProposals(request = {}, options) {
+    const { signal, canonicalAuth } = normalizeVpnSessionOptions(options, "queryMultisigProposals");
     const payload = normalizeMultisigProposalsQueryRequest(
       request,
       "queryMultisigProposals request",
     );
+    const requestBody = JSON.stringify(payload);
     const response = await this._request("POST", "/v1/multisig/proposals/query", {
       headers: JSON_REQUEST_HEADERS,
-      body: JSON.stringify(payload),
+      body: requestBody,
       signal,
+      canonicalAuth,
     });
     await this._expectStatus(response, [200]);
     const body = await this._maybeJson(response);
@@ -8918,16 +8925,18 @@ export class ToriiClient {
   /**
    * Resolve one multisig proposal by proposal id or instructions hash (`POST /v1/multisig/proposals/resolve`).
    * @param {object} request
-   * @param {{signal?: AbortSignal}} [options]
+   * @param {{signal?: AbortSignal, canonicalAuth: CanonicalRequestAuth}} options
    * @returns {Promise<object>}
    */
-  async resolveMultisigProposal(request = {}, options = {}) {
-    const { signal } = normalizeSignalOnlyOption(options, "resolveMultisigProposal");
+  async resolveMultisigProposal(request = {}, options) {
+    const { signal, canonicalAuth } = normalizeVpnSessionOptions(options, "resolveMultisigProposal");
     const payload = normalizeMultisigProposalsResolveRequest(request);
+    const requestBody = JSON.stringify(payload);
     const response = await this._request("POST", "/v1/multisig/proposals/resolve", {
       headers: JSON_REQUEST_HEADERS,
-      body: JSON.stringify(payload),
+      body: requestBody,
       signal,
+      canonicalAuth,
     });
     await this._expectStatus(response, [200]);
     const body = await this._maybeJson(response);
@@ -8969,24 +8978,16 @@ export class ToriiClient {
   /**
    * Fetch stored contract code bytes (`GET /v1/contracts/code-bytes/{hash}`).
    * @param {string} codeHashHex
-   * @param {{signal?: AbortSignalLike}} [options]
+   * @param {{signal?: AbortSignalLike, canonicalAuth: CanonicalRequestAuth}} options
    * @returns {Promise<ContractCodeBytesRecord | null>}
    */
-  async getContractCodeBytes(codeHashHex, options = {}) {
-    const { signal, rest } = ToriiClient._normalizeOptionsWithSignal(
-      options,
-      "getContractCodeBytes",
-    );
-    assertSupportedOptionKeys(
-      rest,
-      new Set(),
-      "getContractCodeBytes options",
-    );
+  async getContractCodeBytes(codeHashHex, options) {
+    const { signal, canonicalAuth } = normalizeVpnSessionOptions(options, "getContractCodeBytes");
     const normalizedHash = normalizeIrohaHashHex32(codeHashHex, "codeHashHex");
     const response = await this._request(
       "GET",
       `/v1/contracts/code-bytes/${normalizedHash}`,
-      { headers: JSON_ACCEPT_HEADERS, signal },
+      { headers: JSON_ACCEPT_HEADERS, signal, canonicalAuth },
     );
     if (response.status === 404) {
       cancelResponseBodyBestEffort(
@@ -9011,18 +9012,19 @@ export class ToriiClient {
   /**
    * Read the governance binding for one contract address (`GET /v1/gov/contracts/{contract_address}`).
    * @param {string} contractAddress
-   * @param {{signal?: AbortSignal}} [options]
+   * @param {{signal?: AbortSignal, canonicalAuth: CanonicalRequestAuth}} options
    * @returns {Promise<ToriiGovernanceContractResponse>}
    */
-  async getGovernanceContract(contractAddress, options = {}) {
+  async getGovernanceContract(contractAddress, options) {
     const normalizedAddress = requireNonEmptyString(contractAddress, "contractAddress");
-    const { signal } = normalizeSignalOnlyOption(options, "getGovernanceContract");
+    const { signal, canonicalAuth } = normalizeVpnSessionOptions(options, "getGovernanceContract");
     const response = await this._request(
       "GET",
       `/v1/gov/contracts/${encodeURIComponent(normalizedAddress)}`,
       {
         headers: JSON_ACCEPT_HEADERS,
         signal: signal ?? undefined,
+        canonicalAuth,
       },
     );
     await this._expectStatus(response, [200]);
@@ -11860,18 +11862,11 @@ export class ToriiClient {
     }
     let accountId;
     try {
-      if (typeof rawAccountId !== "string") {
-        throw new TypeError("credential must be a string");
-      }
-      accountId = normalizeAccountAliasFqn(rawAccountId, `${context}.accountId`);
-      if (accountId !== rawAccountId) {
-        throw new TypeError("credential is not an exact canonical ASCII alias");
-      }
+      accountId = requireCanonicalAuthAccount(rawAccountId, `${context}.accountId`);
     } catch (error) {
       throw createValidationError(
         ValidationErrorCode.INVALID_OBJECT,
-        `${context}.accountId must be an exact canonical ASCII account alias ` +
-          "(name@dataspace or name@domain.dataspace)",
+        `${context}.accountId must be an exact canonical I105 account or ASCII account alias`,
         `${context}.accountId`,
         error,
       );

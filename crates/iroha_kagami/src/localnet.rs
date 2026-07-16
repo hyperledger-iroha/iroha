@@ -214,6 +214,10 @@ impl From<ConsensusModeArg> for SumeragiConsensusMode {
 pub enum SoraProfile {
     /// Dataspace-oriented defaults.
     Dataspace,
+    /// State Bank of Pakistan restricted dataspace defaults.
+    PrivateSbp,
+    /// Central Bank of the UAE restricted dataspace defaults.
+    PrivateCbuae,
     /// Public dataspace (Nexus) defaults.
     Nexus,
 }
@@ -221,7 +225,10 @@ pub enum SoraProfile {
 impl SoraProfile {
     fn consensus_policy(self) -> ConsensusPolicy {
         match self {
-            SoraProfile::Dataspace | SoraProfile::Nexus => ConsensusPolicy::PublicDataspace,
+            SoraProfile::Dataspace
+            | SoraProfile::PrivateSbp
+            | SoraProfile::PrivateCbuae
+            | SoraProfile::Nexus => ConsensusPolicy::PublicDataspace,
         }
     }
 }
@@ -270,12 +277,40 @@ pub(crate) enum SoraProfileArg {
     Nexus,
 }
 
+/// Canonical restricted-dataspace presets supported by the localnet generator.
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PrivateDataspaceArg {
+    /// State Bank of Pakistan dataspace (id 10, lane 3).
+    Sbp,
+    /// Central Bank of the UAE dataspace (id 12, lane 4).
+    Cbuae,
+}
+
 impl From<SoraProfileArg> for SoraProfile {
     fn from(value: SoraProfileArg) -> Self {
         match value {
             SoraProfileArg::Dataspace => SoraProfile::Dataspace,
             SoraProfileArg::Nexus => SoraProfile::Nexus,
         }
+    }
+}
+
+fn resolve_sora_profile(
+    profile: Option<SoraProfileArg>,
+    private_dataspace: Option<PrivateDataspaceArg>,
+) -> Result<Option<SoraProfile>> {
+    match (profile, private_dataspace) {
+        (None, None) => Ok(None),
+        (Some(profile), None) => Ok(Some(profile.into())),
+        (Some(SoraProfileArg::Dataspace), Some(PrivateDataspaceArg::Sbp)) => {
+            Ok(Some(SoraProfile::PrivateSbp))
+        }
+        (Some(SoraProfileArg::Dataspace), Some(PrivateDataspaceArg::Cbuae)) => {
+            Ok(Some(SoraProfile::PrivateCbuae))
+        }
+        (Some(SoraProfileArg::Nexus), Some(_)) | (None, Some(_)) => Err(eyre!(
+            "`--private-dataspace` requires `--sora-profile dataspace`"
+        )),
     }
 }
 
@@ -506,6 +541,7 @@ const RANS_SEED0_TABLE: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../codec/rans/tables/rans_seed0.toml"
 ));
+const LOCALNET_RANS_TABLE_RELATIVE_PATH: &str = "codec/rans/tables/rans_seed0.toml";
 
 fn localnet_dataspace_fault_tolerance(peers: NonZeroU16) -> u32 {
     let peers = u32::from(peers.get());
@@ -520,10 +556,112 @@ const LOCALNET_CBUAE_ALIAS_LANE_INDEX: u32 = 4;
 const LOCALNET_NEXUS_ALIAS_LANE_COUNT: i64 = 5;
 const LOCALNET_PAYNET_ALIAS_LANE_COUNT: i64 = 4;
 
+#[derive(Debug, Clone, Copy)]
+struct PrivateDataspaceRoute {
+    matcher: &'static str,
+    description: &'static str,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PrivateDataspaceSpec {
+    alias: &'static str,
+    id: u64,
+    lane_index: u32,
+    dataspace_description: &'static str,
+    lane_description: &'static str,
+    account_routes: &'static [PrivateDataspaceRoute],
+    transfer_routes: &'static [PrivateDataspaceRoute],
+}
+
+const PAYNET_ACCOUNT_ROUTES: &[PrivateDataspaceRoute] = &[
+    PrivateDataspaceRoute {
+        matcher: "*@paynet",
+        description: "Route *@paynet account traffic to paynet lane",
+    },
+    PrivateDataspaceRoute {
+        matcher: "*@mibank.paynet",
+        description: "Route *@mibank.paynet account traffic to paynet lane",
+    },
+];
+const SBP_ACCOUNT_ROUTES: &[PrivateDataspaceRoute] = &[
+    PrivateDataspaceRoute {
+        matcher: "*@sbp",
+        description: "Route SBP authority traffic to the SBP lane",
+    },
+    PrivateDataspaceRoute {
+        matcher: "*@hbl.sbp",
+        description: "Route HBL alias-scope traffic inside the SBP dataspace to the SBP lane",
+    },
+    PrivateDataspaceRoute {
+        matcher: "*@ubl.sbp",
+        description: "Route UBL alias-scope traffic inside the SBP dataspace to the SBP lane",
+    },
+];
+const SBP_TRANSFER_ROUTES: &[PrivateDataspaceRoute] = &[
+    PrivateDataspaceRoute {
+        matcher: "transfer::asset@sbp",
+        description: "Route transfer destination alias scope sbp to the SBP lane",
+    },
+    PrivateDataspaceRoute {
+        matcher: "transfer::asset@hbl.sbp",
+        description: "Route transfer destination alias scope hbl.sbp inside the SBP dataspace to the SBP lane",
+    },
+    PrivateDataspaceRoute {
+        matcher: "transfer::asset@ubl.sbp",
+        description: "Route transfer destination alias scope ubl.sbp inside the SBP dataspace to the SBP lane",
+    },
+];
+const CBUAE_ACCOUNT_ROUTES: &[PrivateDataspaceRoute] = &[PrivateDataspaceRoute {
+    matcher: "*@cbuae",
+    description: "Route CBUAE authority traffic to the CBUAE lane",
+}];
+const CBUAE_TRANSFER_ROUTES: &[PrivateDataspaceRoute] = &[PrivateDataspaceRoute {
+    matcher: "transfer::asset@cbuae",
+    description: "Route transfer destination alias scope cbuae to the CBUAE lane",
+}];
+
+fn private_dataspace_spec(sora_profile: Option<SoraProfile>) -> Option<PrivateDataspaceSpec> {
+    match sora_profile? {
+        SoraProfile::Dataspace => Some(PrivateDataspaceSpec {
+            alias: "paynet",
+            id: LOCALNET_PAYNET_ALIAS_DATASPACE_ID,
+            lane_index: LOCALNET_PAYNET_ALIAS_LANE_INDEX,
+            dataspace_description: "Private central-bank digital-currency dataspace",
+            lane_description: "Private central-bank digital-currency dataspace lane",
+            account_routes: PAYNET_ACCOUNT_ROUTES,
+            transfer_routes: &[],
+        }),
+        SoraProfile::PrivateSbp => Some(PrivateDataspaceSpec {
+            alias: "sbp",
+            id: LOCALNET_PAYNET_ALIAS_DATASPACE_ID,
+            lane_index: LOCALNET_PAYNET_ALIAS_LANE_INDEX,
+            dataspace_description: "State Bank of Pakistan dataspace",
+            lane_description: "State Bank of Pakistan private lane",
+            account_routes: SBP_ACCOUNT_ROUTES,
+            transfer_routes: SBP_TRANSFER_ROUTES,
+        }),
+        SoraProfile::PrivateCbuae => Some(PrivateDataspaceSpec {
+            alias: "cbuae",
+            id: LOCALNET_CBUAE_ALIAS_DATASPACE_ID,
+            lane_index: LOCALNET_CBUAE_ALIAS_LANE_INDEX,
+            dataspace_description: "CBUAE dataspace",
+            lane_description: "CBUAE private lane",
+            account_routes: CBUAE_ACCOUNT_ROUTES,
+            transfer_routes: CBUAE_TRANSFER_ROUTES,
+        }),
+        SoraProfile::Nexus => None,
+    }
+}
+
 fn localnet_uses_alias_multilane_catalog(sora_profile: Option<SoraProfile>) -> bool {
     matches!(
         sora_profile,
-        Some(SoraProfile::Nexus | SoraProfile::Dataspace)
+        Some(
+            SoraProfile::Nexus
+                | SoraProfile::Dataspace
+                | SoraProfile::PrivateSbp
+                | SoraProfile::PrivateCbuae
+        )
     )
 }
 
@@ -692,6 +830,9 @@ pub struct Args {
     /// Requires `--build-line iroha3` and at least 4 peers.
     #[arg(long, value_enum, value_name = "PROFILE")]
     sora_profile: Option<SoraProfileArg>,
+    /// Select an exact restricted dataspace preset for the `dataspace` Sora profile.
+    #[arg(long, value_enum, value_name = "DATASPACE", requires = "sora_profile")]
+    private_dataspace: Option<PrivateDataspaceArg>,
     /// Apply a localnet performance profile (10k TPS / 1s finality presets).
     #[arg(long, value_enum, value_name = "PROFILE")]
     perf_profile: Option<LocalnetPerfProfileArg>,
@@ -761,7 +902,7 @@ fn resolve_requested_consensus_mode(
 impl<T: Write> RunArgs<T> for Args {
     fn run(self, writer: &mut BufWriter<T>) -> Outcome {
         let build_line = BuildLine::from(self.build_line);
-        let sora_profile = self.sora_profile.map(SoraProfile::from);
+        let sora_profile = resolve_sora_profile(self.sora_profile, self.private_dataspace)?;
         let perf_profile = self.perf_profile.map(LocalnetPerfProfile::from);
         let consensus_mode = resolve_requested_consensus_mode(self.consensus_mode, perf_profile);
         let mut assets = if self.sample_asset {
@@ -977,6 +1118,8 @@ fn generate_localnet_with_line<T: Write>(
             opts.out_dir.display()
         )
     })?;
+    tui::status("Copying rANS tables");
+    let rans_tables_path = copy_rans_tables(&out_dir)?;
 
     let seed_bytes = opts.seed.as_ref().map(String::as_bytes);
     let chain_id = configured_chain_id();
@@ -988,6 +1131,8 @@ fn generate_localnet_with_line<T: Write>(
         opts.base_p2p_port,
     )
     .wrap_err("failed to generate localnet peer keys")?;
+    let lane_manifest_directory =
+        write_localnet_lane_manifests(&out_dir, opts.sora_profile, &peers, chain_discriminant)?;
     let client_identity = localnet_client_identity(seed_bytes, redact_seed_metadata)?;
     let sumeragi_body_bytes = localnet_sumeragi_body_bytes(peers.len())?;
 
@@ -1106,6 +1251,7 @@ fn generate_localnet_with_line<T: Write>(
         &bootstrap_runtime_state_dir,
         &bootstrap_tiered_state_dir,
         &bootstrap_da_store_dir,
+        &rans_tables_path,
         &chain_id,
         chain_discriminant,
         (&hosts.bind, &hosts.public),
@@ -1117,6 +1263,7 @@ fn generate_localnet_with_line<T: Write>(
             client_private_key: client_identity.private_key.as_str(),
         },
         opts.sora_profile,
+        lane_manifest_directory.as_deref(),
         dataspace_fault_tolerance,
         gas_account_id.as_deref(),
         tx_gossip_overrides,
@@ -1192,6 +1339,7 @@ fn generate_localnet_with_line<T: Write>(
             &runtime_state_dir,
             &tiered_state_dir,
             &da_store_dir,
+            &rans_tables_path,
             &chain_id,
             chain_discriminant,
             (&hosts.bind, &hosts.public),
@@ -1203,6 +1351,7 @@ fn generate_localnet_with_line<T: Write>(
                 client_private_key: client_identity.private_key.as_str(),
             },
             opts.sora_profile,
+            lane_manifest_directory.as_deref(),
             dataspace_fault_tolerance,
             gas_account_id.as_deref(),
             tx_gossip_overrides,
@@ -1228,9 +1377,6 @@ fn generate_localnet_with_line<T: Write>(
         &client_account_literal,
         &fee_asset_definition_id,
     )?;
-
-    tui::status("Copying rANS tables");
-    copy_rans_tables(&out_dir)?;
 
     tui::status("Writing client config");
     write_client_config(
@@ -1378,10 +1524,18 @@ fn localnet_dataspace_catalog(
     use toml::{Table, Value};
 
     let fault_tolerance = i64::from(fault_tolerance);
+    let governance_description = if matches!(
+        sora_profile,
+        Some(SoraProfile::PrivateSbp | SoraProfile::PrivateCbuae)
+    ) {
+        "Governance proposals and manifests"
+    } else {
+        "Governance proposals & manifests"
+    };
     let mut catalog = Vec::new();
     for (alias, id, description) in [
         ("universal", 0_i64, "Single-lane data space"),
-        ("governance", 1_i64, "Governance proposals & manifests"),
+        ("governance", 1_i64, governance_description),
         ("zk", 2_i64, "Zero-knowledge proofs and attachments"),
     ] {
         let mut entry = Table::new();
@@ -1398,7 +1552,7 @@ fn localnet_dataspace_catalog(
         catalog.push(Value::Table(entry));
     }
 
-    let extra_dataspaces = match sora_profile {
+    let mut extra_dataspaces = match sora_profile {
         Some(SoraProfile::Nexus) => vec![
             (
                 "paynet",
@@ -1413,14 +1567,16 @@ fn localnet_dataspace_catalog(
                 "Nexus service alias dataspace",
             ),
         ],
-        Some(SoraProfile::Dataspace) => vec![(
-            "paynet",
-            i64::try_from(LOCALNET_PAYNET_ALIAS_DATASPACE_ID)
-                .expect("PAYNET dataspace id fits i64"),
-            "Private central-bank digital-currency dataspace",
-        )],
-        None => Vec::new(),
+        Some(SoraProfile::Dataspace | SoraProfile::PrivateSbp | SoraProfile::PrivateCbuae)
+        | None => Vec::new(),
     };
+    if let Some(spec) = private_dataspace_spec(sora_profile) {
+        extra_dataspaces.push((
+            spec.alias,
+            i64::try_from(spec.id).expect("private dataspace id fits i64"),
+            spec.dataspace_description,
+        ));
+    }
 
     for (alias, id, description) in extra_dataspaces {
         let mut entry = Table::new();
@@ -1436,6 +1592,85 @@ fn localnet_dataspace_catalog(
     }
 
     catalog
+}
+
+#[derive(crate::json_macros::JsonSerialize)]
+struct LocalnetLaneManifestValidator {
+    validator: String,
+    peer_id: String,
+}
+
+#[derive(crate::json_macros::JsonSerialize)]
+struct LocalnetLaneManifest {
+    lane: String,
+    governance: String,
+    version: u32,
+    validators: Vec<LocalnetLaneManifestValidator>,
+    quorum: u32,
+}
+
+fn write_localnet_lane_manifests(
+    out_dir: &Path,
+    sora_profile: Option<SoraProfile>,
+    peers: &[Peer],
+    chain_discriminant: Option<u16>,
+) -> Result<Option<PathBuf>> {
+    let Some(spec) = private_dataspace_spec(sora_profile) else {
+        return Ok(None);
+    };
+
+    let manifest_directory = out_dir.join("lane-manifests");
+    fs::create_dir(&manifest_directory).wrap_err_with(|| {
+        format!(
+            "failed to create localnet lane manifest directory {}",
+            manifest_directory.display()
+        )
+    })?;
+    let validators = peers
+        .iter()
+        .map(|peer| {
+            let account_id = AccountId::new(peer.public_key.clone());
+            LocalnetLaneManifestValidator {
+                validator: account_id_runtime_literal(&account_id, chain_discriminant),
+                peer_id: PeerId::from(peer.public_key.clone()).to_string(),
+            }
+        })
+        .collect::<Vec<_>>();
+    let peer_count = u32::try_from(validators.len())
+        .map_err(|_| eyre!("localnet lane manifest validator count exceeds u32"))?;
+    let quorum = peer_count
+        .checked_mul(2)
+        .map(|value| value / 3)
+        .and_then(|value| value.checked_add(1))
+        .ok_or_else(|| eyre!("localnet lane manifest quorum overflow"))?;
+    if usize::try_from(quorum).map_or(true, |value| value > validators.len()) {
+        return Err(eyre!(
+            "localnet lane manifest quorum {quorum} exceeds {} validators",
+            validators.len()
+        ));
+    }
+    let manifest = LocalnetLaneManifest {
+        lane: spec.alias.to_owned(),
+        governance: "parliament".to_owned(),
+        version: 1,
+        validators,
+        quorum,
+    };
+    let raw = norito::json::to_json_pretty(&manifest).wrap_err_with(|| {
+        format!(
+            "serialize localnet {} lane manifest",
+            spec.alias.to_uppercase()
+        )
+    })?;
+    let manifest_path = manifest_directory.join(format!("{}.manifest.json", spec.alias));
+    fs::write(&manifest_path, raw).wrap_err_with(|| {
+        format!(
+            "failed to write localnet {} lane manifest {}",
+            spec.alias.to_uppercase(),
+            manifest_path.display()
+        )
+    })?;
+    Ok(Some(manifest_directory))
 }
 
 fn localnet_dataspace_manifest_hash(id: i64) -> String {
@@ -1457,32 +1692,58 @@ fn localnet_lane_catalog(sora_profile: Option<SoraProfile>) -> Option<(i64, Vec<
         return None;
     }
 
-    let mut lane_specs = vec![(
-        0_i64,
-        "core",
-        "Primary execution lane",
-        "universal",
-        "public",
-        None,
-    )];
-    lane_specs.extend([
-        (
-            1_i64,
-            "governance",
-            "Governance & parliament traffic",
-            "governance",
-            "restricted",
-            None,
-        ),
-        (
-            2_i64,
-            "zk",
-            "Zero-knowledge attachments",
-            "zk",
-            "restricted",
-            None,
-        ),
-    ]);
+    let private_profile = matches!(
+        sora_profile,
+        Some(SoraProfile::PrivateSbp | SoraProfile::PrivateCbuae)
+    );
+    let mut lane_specs = if private_profile {
+        vec![
+            (
+                0_i64,
+                "core",
+                "Primary public lane",
+                "universal",
+                "public",
+                None,
+            ),
+            (
+                1_i64,
+                "governance",
+                "Governance lane",
+                "governance",
+                "public",
+                None,
+            ),
+            (2_i64, "zk", "Zero-knowledge lane", "zk", "public", None),
+        ]
+    } else {
+        vec![
+            (
+                0_i64,
+                "core",
+                "Primary execution lane",
+                "universal",
+                "public",
+                None,
+            ),
+            (
+                1_i64,
+                "governance",
+                "Governance & parliament traffic",
+                "governance",
+                "restricted",
+                None,
+            ),
+            (
+                2_i64,
+                "zk",
+                "Zero-knowledge attachments",
+                "zk",
+                "restricted",
+                None,
+            ),
+        ]
+    };
     let lane_count = match sora_profile {
         Some(SoraProfile::Nexus) => {
             lane_specs.extend([
@@ -1505,16 +1766,18 @@ fn localnet_lane_catalog(sora_profile: Option<SoraProfile>) -> Option<(i64, Vec<
             ]);
             LOCALNET_NEXUS_ALIAS_LANE_COUNT
         }
-        Some(SoraProfile::Dataspace) => {
+        Some(SoraProfile::Dataspace | SoraProfile::PrivateSbp | SoraProfile::PrivateCbuae) => {
+            let spec = private_dataspace_spec(sora_profile)
+                .expect("private dataspace profile must have a typed specification");
             lane_specs.push((
-                i64::from(LOCALNET_PAYNET_ALIAS_LANE_INDEX),
-                "paynet",
-                "Private central-bank digital-currency dataspace lane",
-                "paynet",
+                i64::from(spec.lane_index),
+                spec.alias,
+                spec.lane_description,
+                spec.alias,
                 "restricted",
                 Some("parliament"),
             ));
-            LOCALNET_PAYNET_ALIAS_LANE_COUNT
+            i64::from(spec.lane_index) + 1
         }
         None => return None,
     };
@@ -1545,23 +1808,34 @@ fn localnet_routing_policy(sora_profile: Option<SoraProfile>) -> Option<toml::Ta
         return None;
     }
 
-    fn rule(lane: u32, dataspace: &str, matcher_key: &str, matcher_value: &str) -> toml::Value {
+    fn rule(
+        lane: u32,
+        dataspace: &str,
+        matcher_key: &str,
+        matcher_value: &str,
+        description: Option<&str>,
+    ) -> toml::Value {
         let mut matcher = Table::new();
         matcher.insert(
             matcher_key.to_owned(),
             Value::String(matcher_value.to_owned()),
         );
-        let description = match matcher_key {
-            "instruction" => match matcher_value {
-                "governance" => "Route governance instructions to the governance lane".to_owned(),
-                "smartcontract::deploy" => {
-                    "Route contract deployments to the zk lane for proof tracking".to_owned()
-                }
-                _ => format!("Route {matcher_value} instructions to the {dataspace} lane"),
+        let description = description.map_or_else(
+            || match matcher_key {
+                "instruction" => match matcher_value {
+                    "governance" => {
+                        "Route governance instructions to the governance lane".to_owned()
+                    }
+                    "smartcontract::deploy" => {
+                        "Route contract deployments to the zk lane for proof tracking".to_owned()
+                    }
+                    _ => format!("Route {matcher_value} instructions to the {dataspace} lane"),
+                },
+                "account" => format!("Route {matcher_value} account traffic to {dataspace} lane"),
+                _ => format!("Route {matcher_key}={matcher_value} traffic to {dataspace} lane"),
             },
-            "account" => format!("Route {matcher_value} account traffic to {dataspace} lane"),
-            _ => format!("Route {matcher_key}={matcher_value} traffic to {dataspace} lane"),
-        };
+            str::to_owned,
+        );
         matcher.insert("description".into(), Value::String(description));
 
         let mut rule = Table::new();
@@ -1571,42 +1845,92 @@ fn localnet_routing_policy(sora_profile: Option<SoraProfile>) -> Option<toml::Ta
         Value::Table(rule)
     }
 
-    let mut rules = vec![
-        rule(1, "governance", "instruction", "governance"),
-        rule(2, "zk", "instruction", "smartcontract::deploy"),
-    ];
-
-    match sora_profile {
-        Some(SoraProfile::Nexus) => {
-            rules.push(rule(
+    let rules = match sora_profile {
+        Some(SoraProfile::Nexus) => vec![
+            rule(1, "governance", "instruction", "governance", None),
+            rule(2, "zk", "instruction", "smartcontract::deploy", None),
+            rule(
                 LOCALNET_PAYNET_ALIAS_LANE_INDEX,
                 "paynet",
                 "account",
                 "*@paynet",
-            ));
-            rules.push(rule(
+                None,
+            ),
+            rule(
                 LOCALNET_PAYNET_ALIAS_LANE_INDEX,
                 "paynet",
                 "account",
                 "*@*.paynet",
-            ));
-        }
+                None,
+            ),
+        ],
         Some(SoraProfile::Dataspace) => {
-            rules.push(rule(
-                LOCALNET_PAYNET_ALIAS_LANE_INDEX,
-                "paynet",
-                "account",
-                "*@paynet",
-            ));
-            rules.push(rule(
-                LOCALNET_PAYNET_ALIAS_LANE_INDEX,
-                "paynet",
-                "account",
-                "*@mibank.paynet",
-            ));
+            let spec = private_dataspace_spec(sora_profile)
+                .expect("dataspace profile must have a typed specification");
+            let mut rules = vec![
+                rule(1, "governance", "instruction", "governance", None),
+                rule(2, "zk", "instruction", "smartcontract::deploy", None),
+            ];
+            rules.extend(spec.account_routes.iter().map(|route| {
+                rule(
+                    spec.lane_index,
+                    spec.alias,
+                    "account",
+                    route.matcher,
+                    Some(route.description),
+                )
+            }));
+            rules
         }
-        None => {}
-    }
+        Some(SoraProfile::PrivateSbp | SoraProfile::PrivateCbuae) => {
+            let spec = private_dataspace_spec(sora_profile)
+                .expect("private dataspace profile must have a typed specification");
+            let mut rules = spec
+                .account_routes
+                .iter()
+                .map(|route| {
+                    rule(
+                        spec.lane_index,
+                        spec.alias,
+                        "account",
+                        route.matcher,
+                        Some(route.description),
+                    )
+                })
+                .collect::<Vec<_>>();
+            rules.extend([
+                rule(
+                    1,
+                    "governance",
+                    "instruction",
+                    "governance",
+                    Some(
+                        "Route public governance instructions to the governance lane after private authority routes",
+                    ),
+                ),
+                rule(
+                    2,
+                    "zk",
+                    "instruction",
+                    "smartcontract::deploy",
+                    Some(
+                        "Route public smart-contract deployment to the zk lane after private authority routes",
+                    ),
+                ),
+            ]);
+            rules.extend(spec.transfer_routes.iter().map(|route| {
+                rule(
+                    spec.lane_index,
+                    spec.alias,
+                    "instruction",
+                    route.matcher,
+                    Some(route.description),
+                )
+            }));
+            rules
+        }
+        None => return None,
+    };
 
     let mut policy = Table::new();
     policy.insert("default_lane".into(), Value::Integer(0));
@@ -1620,9 +1944,16 @@ fn localnet_routing_policy(sora_profile: Option<SoraProfile>) -> Option<toml::Ta
 
 fn localnet_public_validator_lanes(sora_profile: Option<SoraProfile>) -> Vec<LaneId> {
     let mut lanes = vec![LaneId::SINGLE];
-    if matches!(sora_profile, Some(SoraProfile::Nexus)) {
-        lanes.push(LaneId::new(LOCALNET_PAYNET_ALIAS_LANE_INDEX));
-        lanes.push(LaneId::new(LOCALNET_CBUAE_ALIAS_LANE_INDEX));
+    match sora_profile {
+        Some(SoraProfile::PrivateSbp | SoraProfile::PrivateCbuae) => {
+            lanes.push(LaneId::new(1));
+            lanes.push(LaneId::new(2));
+        }
+        Some(SoraProfile::Nexus) => {
+            lanes.push(LaneId::new(LOCALNET_PAYNET_ALIAS_LANE_INDEX));
+            lanes.push(LaneId::new(LOCALNET_CBUAE_ALIAS_LANE_INDEX));
+        }
+        Some(SoraProfile::Dataspace) | None => {}
     }
     lanes
 }
@@ -1656,11 +1987,13 @@ fn render_peer_config(
     runtime_state_root: &Path,
     tiered_state_root: &Path,
     da_store_root: &Path,
+    rans_tables_path: &Path,
     chain_id: &str,
     chain_discriminant: Option<u16>,
     hosts: (&CanonicalHost, &CanonicalHost),
     features: RenderPeerFeatures<'_>,
     sora_profile: Option<SoraProfile>,
+    lane_manifest_directory: Option<&Path>,
     dataspace_fault_tolerance: Option<u32>,
     gas_account_id: Option<&str>,
     tx_gossip_overrides: Option<LocalnetTxGossipOverrides>,
@@ -1670,6 +2003,7 @@ fn render_peer_config(
     queue_capacity: usize,
     sumeragi_body_bytes: usize,
 ) -> String {
+    use iroha_config::parameters::defaults::streaming::codec as codec_defaults;
     use toml::{Table, Value};
 
     let (bind_host, public_host) = hosts;
@@ -1878,6 +2212,40 @@ fn render_peer_config(
     if let Some(policy) = localnet_routing_policy(sora_profile) {
         nexus.insert("routing_policy".into(), Value::Table(policy));
     }
+    if let Some(manifest_directory) = lane_manifest_directory {
+        assert!(
+            private_dataspace_spec(sora_profile).is_some(),
+            "lane manifests are only generated for restricted dataspace profiles"
+        );
+        let mut registry = Table::new();
+        registry.insert(
+            "manifest_directory".into(),
+            Value::String(manifest_directory.to_string_lossy().into_owned()),
+        );
+        nexus.insert("registry".into(), Value::Table(registry));
+
+        let mut parliament = Table::new();
+        parliament.insert(
+            "module_type".into(),
+            Value::String("parliament_sortition_jit".to_owned()),
+        );
+        let mut parliament_params = Table::new();
+        parliament_params.insert(
+            "selection".into(),
+            Value::String("multibody_sortition".to_owned()),
+        );
+        parliament_params.insert("approval_flow".into(), Value::String("jit".to_owned()));
+        parliament.insert("params".into(), Value::Table(parliament_params));
+        let mut modules = Table::new();
+        modules.insert("parliament".into(), Value::Table(parliament));
+        let mut governance = Table::new();
+        governance.insert(
+            "default_module".into(),
+            Value::String("parliament".to_owned()),
+        );
+        governance.insert("modules".into(), Value::Table(modules));
+        nexus.insert("governance".into(), Value::Table(governance));
+    }
     root.insert("nexus".into(), Value::Table(nexus));
 
     let mut block = Table::new();
@@ -1984,6 +2352,37 @@ fn render_peer_config(
         "identity_private_key".into(),
         Value::String(STREAM_ID_PRIVATE.to_owned()),
     );
+    let mut streaming_codec = Table::new();
+    streaming_codec.insert(
+        "cabac_mode".into(),
+        Value::String(codec_defaults::CABAC_MODE.to_owned()),
+    );
+    streaming_codec.insert(
+        "trellis_blocks".into(),
+        Value::Array(
+            codec_defaults::trellis_blocks()
+                .into_iter()
+                .map(|size| Value::Integer(i64::from(size)))
+                .collect(),
+        ),
+    );
+    streaming_codec.insert(
+        "rans_tables_path".into(),
+        Value::String(rans_tables_path.to_string_lossy().into_owned()),
+    );
+    streaming_codec.insert(
+        "entropy_mode".into(),
+        Value::String(codec_defaults::entropy_mode()),
+    );
+    streaming_codec.insert(
+        "bundle_width".into(),
+        Value::Integer(i64::from(codec_defaults::bundle_width())),
+    );
+    streaming_codec.insert(
+        "bundle_accel".into(),
+        Value::String(codec_defaults::bundle_accel()),
+    );
+    streaming.insert("codec".into(), Value::Table(streaming_codec));
     root.insert("streaming".into(), Value::Table(streaming));
 
     if let Some(chain_discriminant) = chain_discriminant {
@@ -3474,7 +3873,13 @@ fn write_stop_script(stop: &Path) -> Result<()> {
     Ok(stop_file.flush()?)
 }
 
-fn copy_rans_tables(out_dir: &Path) -> Result<()> {
+fn copy_rans_tables(out_dir: &Path) -> Result<PathBuf> {
+    let canonical_out_dir = fs::canonicalize(out_dir).wrap_err_with(|| {
+        format!(
+            "failed to canonicalize localnet output directory {}",
+            out_dir.display()
+        )
+    })?;
     let repo_root = repo_root_path();
     let src = repo_root.join("codec/rans/tables");
     let dest = out_dir.join("codec/rans/tables");
@@ -3493,11 +3898,23 @@ fn copy_rans_tables(out_dir: &Path) -> Result<()> {
             }
         }
     }
+    let seed_path = out_dir.join(LOCALNET_RANS_TABLE_RELATIVE_PATH);
     if !copied_seed {
-        let seed_path = dest.join("rans_seed0.toml");
         fs::write(&seed_path, RANS_SEED0_TABLE).wrap_err("write embedded rANS table")?;
     }
-    Ok(())
+    let canonical_seed_path = fs::canonicalize(&seed_path).wrap_err_with(|| {
+        format!(
+            "failed to canonicalize generated rANS table {}",
+            seed_path.display()
+        )
+    })?;
+    if !canonical_seed_path.starts_with(&canonical_out_dir) {
+        return Err(eyre!(
+            "generated rANS table escaped localnet output directory: {}",
+            canonical_seed_path.display()
+        ));
+    }
+    Ok(canonical_seed_path)
 }
 
 const CLIENT_ACCOUNT_DOMAIN: &str = "wonderland.universal";
@@ -5484,6 +5901,356 @@ mod tests {
     }
 
     #[test]
+    fn private_dataspace_cli_selector_is_typed_and_fail_closed() {
+        use clap::Parser as _;
+
+        #[derive(clap::Parser)]
+        struct TestArgs {
+            #[command(flatten)]
+            localnet: Args,
+        }
+
+        let parsed = TestArgs::try_parse_from([
+            "kagami-localnet-test",
+            "--out-dir",
+            "/tmp/kagami-localnet-test",
+            "--sora-profile",
+            "dataspace",
+            "--private-dataspace",
+            "sbp",
+        ])
+        .expect("parse typed SBP private dataspace selector");
+        assert_eq!(
+            resolve_sora_profile(
+                parsed.localnet.sora_profile,
+                parsed.localnet.private_dataspace,
+            )
+            .expect("resolve typed SBP private dataspace selector"),
+            Some(SoraProfile::PrivateSbp)
+        );
+
+        assert!(
+            TestArgs::try_parse_from([
+                "kagami-localnet-test",
+                "--out-dir",
+                "/tmp/kagami-localnet-test",
+                "--private-dataspace",
+                "cbuae",
+            ])
+            .is_err(),
+            "private dataspace selection must require an explicit Sora profile"
+        );
+        assert!(
+            resolve_sora_profile(
+                Some(SoraProfileArg::Nexus),
+                Some(PrivateDataspaceArg::Cbuae),
+            )
+            .is_err(),
+            "private dataspace selection must reject the public Nexus profile"
+        );
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn private_dataspace_profiles_match_the_pk_routing_contract() {
+        fn expected_dataspace(
+            alias: &str,
+            id: i64,
+            description: &str,
+            fault_tolerance: i64,
+        ) -> toml::Value {
+            let mut entry = toml::Table::new();
+            entry.insert("alias".into(), toml::Value::String(alias.to_owned()));
+            entry.insert("id".into(), toml::Value::Integer(id));
+            if id != 0 {
+                entry.insert(
+                    "manifest_hash".into(),
+                    toml::Value::String(localnet_dataspace_manifest_hash(id)),
+                );
+            }
+            entry.insert(
+                "description".into(),
+                toml::Value::String(description.to_owned()),
+            );
+            entry.insert(
+                "fault_tolerance".into(),
+                toml::Value::Integer(fault_tolerance),
+            );
+            toml::Value::Table(entry)
+        }
+
+        fn expected_lane(
+            index: i64,
+            alias: &str,
+            description: &str,
+            dataspace: &str,
+            visibility: &str,
+            governance: Option<&str>,
+        ) -> toml::Value {
+            let mut entry = toml::Table::new();
+            entry.insert("index".into(), toml::Value::Integer(index));
+            entry.insert("alias".into(), toml::Value::String(alias.to_owned()));
+            entry.insert(
+                "description".into(),
+                toml::Value::String(description.to_owned()),
+            );
+            entry.insert(
+                "dataspace".into(),
+                toml::Value::String(dataspace.to_owned()),
+            );
+            entry.insert(
+                "visibility".into(),
+                toml::Value::String(visibility.to_owned()),
+            );
+            if let Some(governance) = governance {
+                entry.insert(
+                    "governance".into(),
+                    toml::Value::String(governance.to_owned()),
+                );
+            }
+            entry.insert("metadata".into(), toml::Value::Table(toml::Table::new()));
+            toml::Value::Table(entry)
+        }
+
+        struct Case {
+            profile: SoraProfile,
+            alias: &'static str,
+            id: i64,
+            lane: i64,
+            lane_count: i64,
+            dataspace_description: &'static str,
+            lane_description: &'static str,
+            routes: &'static [(&'static str, &'static str, i64, &'static str)],
+        }
+
+        const SBP_ROUTES: &[(&str, &str, i64, &str)] = &[
+            ("account", "*@sbp", 3, "sbp"),
+            ("account", "*@hbl.sbp", 3, "sbp"),
+            ("account", "*@ubl.sbp", 3, "sbp"),
+            ("instruction", "governance", 1, "governance"),
+            ("instruction", "smartcontract::deploy", 2, "zk"),
+            ("instruction", "transfer::asset@sbp", 3, "sbp"),
+            ("instruction", "transfer::asset@hbl.sbp", 3, "sbp"),
+            ("instruction", "transfer::asset@ubl.sbp", 3, "sbp"),
+        ];
+        const CBUAE_ROUTES: &[(&str, &str, i64, &str)] = &[
+            ("account", "*@cbuae", 4, "cbuae"),
+            ("instruction", "governance", 1, "governance"),
+            ("instruction", "smartcontract::deploy", 2, "zk"),
+            ("instruction", "transfer::asset@cbuae", 4, "cbuae"),
+        ];
+        let cases = [
+            Case {
+                profile: SoraProfile::PrivateSbp,
+                alias: "sbp",
+                id: 10,
+                lane: 3,
+                lane_count: 4,
+                dataspace_description: "State Bank of Pakistan dataspace",
+                lane_description: "State Bank of Pakistan private lane",
+                routes: SBP_ROUTES,
+            },
+            Case {
+                profile: SoraProfile::PrivateCbuae,
+                alias: "cbuae",
+                id: 12,
+                lane: 4,
+                lane_count: 5,
+                dataspace_description: "CBUAE dataspace",
+                lane_description: "CBUAE private lane",
+                routes: CBUAE_ROUTES,
+            },
+        ];
+
+        for case in cases {
+            let profile = Some(case.profile);
+            let dataspace_catalog = localnet_dataspace_catalog(profile, 1);
+            assert_eq!(
+                dataspace_catalog,
+                vec![
+                    expected_dataspace("universal", 0, "Single-lane data space", 1),
+                    expected_dataspace("governance", 1, "Governance proposals and manifests", 1,),
+                    expected_dataspace("zk", 2, "Zero-knowledge proofs and attachments", 1,),
+                    expected_dataspace(case.alias, case.id, case.dataspace_description, 1,),
+                ],
+                "private dataspace catalog must exactly match the canonical PK catalog"
+            );
+
+            let (lane_count, lane_catalog) =
+                localnet_lane_catalog(profile).expect("private lane catalog");
+            assert_eq!(lane_count, case.lane_count);
+            assert_eq!(
+                lane_catalog,
+                vec![
+                    expected_lane(
+                        0,
+                        "core",
+                        "Primary public lane",
+                        "universal",
+                        "public",
+                        None,
+                    ),
+                    expected_lane(
+                        1,
+                        "governance",
+                        "Governance lane",
+                        "governance",
+                        "public",
+                        None,
+                    ),
+                    expected_lane(2, "zk", "Zero-knowledge lane", "zk", "public", None,),
+                    expected_lane(
+                        case.lane,
+                        case.alias,
+                        case.lane_description,
+                        case.alias,
+                        "restricted",
+                        Some("parliament"),
+                    ),
+                ],
+                "private lane catalog must exactly match the canonical PK catalog (CBUAE leaves lane 3 sparse)"
+            );
+
+            let routing = localnet_routing_policy(profile).expect("private routing policy");
+            let observed = routing
+                .get("rules")
+                .and_then(toml::Value::as_array)
+                .expect("private routing rules")
+                .iter()
+                .map(|rule| {
+                    let rule = rule.as_table().expect("routing rule table");
+                    let matcher = rule
+                        .get("matcher")
+                        .and_then(toml::Value::as_table)
+                        .expect("routing matcher");
+                    let (matcher_kind, matcher_value) = ["account", "instruction"]
+                        .into_iter()
+                        .find_map(|kind| {
+                            matcher
+                                .get(kind)
+                                .and_then(toml::Value::as_str)
+                                .map(|value| (kind.to_owned(), value.to_owned()))
+                        })
+                        .expect("account or instruction routing matcher");
+                    (
+                        matcher_kind,
+                        matcher_value,
+                        rule.get("lane")
+                            .and_then(toml::Value::as_integer)
+                            .expect("routing lane"),
+                        rule.get("dataspace")
+                            .and_then(toml::Value::as_str)
+                            .expect("routing dataspace")
+                            .to_owned(),
+                    )
+                })
+                .collect::<Vec<_>>();
+            let expected = case
+                .routes
+                .iter()
+                .map(|(kind, matcher, lane, dataspace)| {
+                    (
+                        (*kind).to_owned(),
+                        (*matcher).to_owned(),
+                        *lane,
+                        (*dataspace).to_owned(),
+                    )
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(
+                observed, expected,
+                "routing identity and order must be exact"
+            );
+            assert_eq!(
+                localnet_public_validator_lanes(profile),
+                vec![LaneId::SINGLE, LaneId::new(1), LaneId::new(2)],
+                "all canonical public lanes, and no restricted lane, must receive public NPoS validator bootstrap"
+            );
+        }
+    }
+
+    #[test]
+    fn private_dataspace_manifests_use_the_selected_lane_alias() {
+        use std::collections::BTreeSet;
+
+        let peers = build_peers(4, Some(b"private-dataspace-manifest"), 34_080, 34_337)
+            .expect("build deterministic manifest validators");
+        let expected_peer_ids = peers
+            .iter()
+            .map(|peer| PeerId::from(peer.public_key.clone()).to_string())
+            .collect::<BTreeSet<_>>();
+
+        for (profile, alias) in [
+            (SoraProfile::PrivateSbp, "sbp"),
+            (SoraProfile::PrivateCbuae, "cbuae"),
+        ] {
+            let temp = tempfile::tempdir().expect("tmp dir");
+            let manifest_directory =
+                write_localnet_lane_manifests(temp.path(), Some(profile), &peers, None)
+                    .expect("write private lane manifest")
+                    .expect("private lane manifest directory");
+            assert_eq!(manifest_directory, temp.path().join("lane-manifests"));
+            let manifest_files = fs::read_dir(&manifest_directory)
+                .expect("read private lane manifest directory")
+                .map(|entry| {
+                    entry
+                        .expect("private lane manifest directory entry")
+                        .file_name()
+                        .to_string_lossy()
+                        .into_owned()
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(manifest_files, vec![format!("{alias}.manifest.json")]);
+
+            let manifest: json::Value = json::from_str(
+                &fs::read_to_string(manifest_directory.join(format!("{alias}.manifest.json")))
+                    .expect("read private lane manifest"),
+            )
+            .expect("parse private lane manifest");
+            let manifest_fields = manifest
+                .as_object()
+                .expect("private lane manifest object")
+                .keys()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>();
+            assert_eq!(
+                manifest_fields,
+                BTreeSet::from(["governance", "lane", "quorum", "validators", "version"])
+            );
+            assert_eq!(
+                manifest.get("lane").and_then(json::Value::as_str),
+                Some(alias)
+            );
+            assert_eq!(
+                manifest.get("governance").and_then(json::Value::as_str),
+                Some("parliament")
+            );
+            assert_eq!(
+                manifest.get("quorum").and_then(json::Value::as_u64),
+                Some(3)
+            );
+            assert_eq!(
+                manifest.get("version").and_then(json::Value::as_u64),
+                Some(1)
+            );
+            let manifest_peer_ids = manifest
+                .get("validators")
+                .and_then(json::Value::as_array)
+                .expect("private lane manifest validators")
+                .iter()
+                .map(|validator| {
+                    validator
+                        .get("peer_id")
+                        .and_then(json::Value::as_str)
+                        .expect("private lane manifest peer id")
+                        .to_owned()
+                })
+                .collect::<BTreeSet<_>>();
+            assert_eq!(manifest_peer_ids, expected_peer_ids);
+        }
+    }
+
+    #[test]
     #[allow(clippy::too_many_lines)]
     fn dataspace_localnet_binds_paynet_restricted_lane_before_genesis_signing() {
         use std::collections::{BTreeMap, BTreeSet};
@@ -5547,12 +6314,100 @@ mod tests {
                     .and_then(toml::Value::as_str)
                     .expect("lane visibility")
                     .to_owned();
-                (alias, (dataspace, visibility))
+                let governance = entry
+                    .get("governance")
+                    .and_then(toml::Value::as_str)
+                    .map(str::to_owned);
+                (alias, (dataspace, visibility, governance))
             })
             .collect();
         assert_eq!(
             lanes_by_alias.get("paynet"),
-            Some(&("paynet".to_owned(), "restricted".to_owned()))
+            Some(&(
+                "paynet".to_owned(),
+                "restricted".to_owned(),
+                Some("parliament".to_owned()),
+            ))
+        );
+
+        let registry = nexus
+            .get("registry")
+            .and_then(toml::Value::as_table)
+            .expect("dataspace lane manifest registry");
+        let manifest_directory = registry
+            .get("manifest_directory")
+            .and_then(toml::Value::as_str)
+            .expect("dataspace lane manifest directory");
+        assert_eq!(
+            fs::canonicalize(manifest_directory).expect("canonical manifest directory"),
+            fs::canonicalize(temp.path().join("lane-manifests"))
+                .expect("canonical expected manifest directory")
+        );
+        let governance = nexus
+            .get("governance")
+            .and_then(toml::Value::as_table)
+            .expect("dataspace governance catalog");
+        assert_eq!(
+            governance
+                .get("default_module")
+                .and_then(toml::Value::as_str),
+            Some("parliament")
+        );
+        assert_eq!(
+            governance
+                .get("modules")
+                .and_then(toml::Value::as_table)
+                .and_then(|modules| modules.get("parliament"))
+                .and_then(toml::Value::as_table)
+                .and_then(|module| module.get("module_type"))
+                .and_then(toml::Value::as_str),
+            Some("parliament_sortition_jit")
+        );
+        let parliament_params = governance
+            .get("modules")
+            .and_then(toml::Value::as_table)
+            .and_then(|modules| modules.get("parliament"))
+            .and_then(toml::Value::as_table)
+            .and_then(|module| module.get("params"))
+            .and_then(toml::Value::as_table)
+            .expect("parliament governance params");
+        assert_eq!(
+            parliament_params
+                .get("selection")
+                .and_then(toml::Value::as_str),
+            Some("multibody_sortition")
+        );
+        assert_eq!(
+            parliament_params
+                .get("approval_flow")
+                .and_then(toml::Value::as_str),
+            Some("jit")
+        );
+        let paynet_manifest: json::Value = json::from_str(
+            &fs::read_to_string(temp.path().join("lane-manifests/paynet.manifest.json"))
+                .expect("read PAYNET lane manifest"),
+        )
+        .expect("parse PAYNET lane manifest");
+        assert_eq!(
+            paynet_manifest.get("lane").and_then(json::Value::as_str),
+            Some("paynet")
+        );
+        assert_eq!(
+            paynet_manifest
+                .get("governance")
+                .and_then(json::Value::as_str),
+            Some("parliament")
+        );
+        assert_eq!(
+            paynet_manifest
+                .get("validators")
+                .and_then(json::Value::as_array)
+                .map(Vec::len),
+            Some(usize::from(peer_count.get()))
+        );
+        assert_eq!(
+            paynet_manifest.get("quorum").and_then(json::Value::as_u64),
+            Some(3)
         );
 
         let dataspace_catalog = nexus
@@ -6897,6 +7752,14 @@ mod tests {
             .get("da_store_root")
             .and_then(toml::Value::as_str)
             .expect("tiered_state da_store_root");
+        let rans_tables_path = parsed
+            .get("streaming")
+            .and_then(toml::Value::as_table)
+            .and_then(|streaming| streaming.get("codec"))
+            .and_then(toml::Value::as_table)
+            .and_then(|codec| codec.get("rans_tables_path"))
+            .and_then(toml::Value::as_str)
+            .expect("streaming codec rANS tables path");
         assert!(
             Path::new(genesis_path).is_absolute(),
             "genesis path should be absolute"
@@ -6927,6 +7790,18 @@ mod tests {
         assert!(
             Path::new(da_root).is_absolute(),
             "tiered_state da_store_root should be absolute"
+        );
+        let expected_rans_tables_path =
+            fs::canonicalize(out_dir.join(LOCALNET_RANS_TABLE_RELATIVE_PATH))
+                .expect("canonical generated rANS table");
+        assert!(
+            Path::new(rans_tables_path).is_absolute(),
+            "streaming codec rANS tables path should be absolute"
+        );
+        assert_eq!(
+            Path::new(rans_tables_path),
+            expected_rans_tables_path,
+            "streaming codec must bind the rANS table emitted into its output directory"
         );
         assert!(
             Path::new(tiered_root).starts_with(&peer_state_path)
@@ -7131,15 +8006,118 @@ mod tests {
     #[test]
     fn copy_rans_tables_writes_seed_table() {
         let temp = tempfile::tempdir().expect("tmp dir");
-        copy_rans_tables(temp.path()).expect("copy rANS tables");
+        let emitted_path = copy_rans_tables(temp.path()).expect("copy rANS tables");
         let seed_path = temp
             .path()
             .join("codec")
             .join("rans")
             .join("tables")
             .join("rans_seed0.toml");
-        let bytes = fs::read(seed_path).expect("read rANS seed table");
+        assert!(emitted_path.is_absolute());
+        assert_eq!(
+            emitted_path,
+            fs::canonicalize(&seed_path).expect("canonical emitted rANS table")
+        );
+        let bytes = fs::read(&emitted_path).expect("read rANS seed table");
         assert_eq!(bytes, RANS_SEED0_TABLE);
+    }
+
+    #[test]
+    fn generated_peer_configs_isolate_absolute_rans_tables_for_every_profile() {
+        let temp = tempfile::tempdir().expect("tmp dir");
+        let profiles = [
+            ("generic", None, SumeragiConsensusMode::Permissioned),
+            (
+                "nexus",
+                Some(SoraProfile::Nexus),
+                SumeragiConsensusMode::Npos,
+            ),
+            (
+                "paynet",
+                Some(SoraProfile::Dataspace),
+                SumeragiConsensusMode::Npos,
+            ),
+            (
+                "sbp",
+                Some(SoraProfile::PrivateSbp),
+                SumeragiConsensusMode::Npos,
+            ),
+            (
+                "cbuae",
+                Some(SoraProfile::PrivateCbuae),
+                SumeragiConsensusMode::Npos,
+            ),
+        ];
+        let mut generated_paths = std::collections::BTreeSet::new();
+
+        for (label, sora_profile, consensus_mode) in profiles {
+            let out_dir = temp.path().join(label);
+            let opts = LocalnetOptions {
+                build_line: BuildLine::Iroha3,
+                sora_profile,
+                perf_profile: None,
+                peers: NonZeroU16::new(4).expect("non-zero"),
+                seed: Some(format!("rans-table-{label}")),
+                bind_host: DEFAULT_BIND_HOST.to_owned(),
+                public_host: DEFAULT_PUBLIC_HOST.to_owned(),
+                base_api_port: 19080,
+                base_p2p_port: 23337,
+                out_dir: out_dir.clone(),
+                extra_accounts: 0,
+                assets: Vec::new(),
+                block_cadence_ms: None,
+                consensus_mode,
+            };
+
+            generate_localnet(&opts, &mut BufWriter::new(Vec::new()))
+                .unwrap_or_else(|error| panic!("generate {label} localnet: {error:#}"));
+
+            let canonical_out_dir =
+                fs::canonicalize(&out_dir).expect("canonical generated output directory");
+            let expected_path =
+                fs::canonicalize(canonical_out_dir.join(LOCALNET_RANS_TABLE_RELATIVE_PATH))
+                    .expect("canonical generated rANS table");
+            assert!(
+                expected_path.starts_with(&canonical_out_dir),
+                "{label} rANS table must remain inside its generated output"
+            );
+            assert_eq!(
+                fs::read(&expected_path).expect("read generated rANS table"),
+                RANS_SEED0_TABLE
+            );
+
+            for peer_index in 0..opts.peers.get() {
+                let config_path = out_dir.join(format!("peer{peer_index}.toml"));
+                let peer_config: toml::Value = toml::from_str(
+                    &fs::read_to_string(&config_path).expect("read generated peer config"),
+                )
+                .expect("parse generated peer config");
+                let configured_path = peer_config
+                    .get("streaming")
+                    .and_then(toml::Value::as_table)
+                    .and_then(|streaming| streaming.get("codec"))
+                    .and_then(toml::Value::as_table)
+                    .and_then(|codec| codec.get("rans_tables_path"))
+                    .and_then(toml::Value::as_str)
+                    .map(PathBuf::from)
+                    .expect("generated streaming codec rANS tables path");
+                assert!(
+                    configured_path.is_absolute(),
+                    "{label} peer {peer_index} rANS table path must be absolute"
+                );
+                assert_eq!(
+                    configured_path, expected_path,
+                    "{label} peer {peer_index} must bind its own generated rANS table"
+                );
+            }
+
+            assert!(
+                generated_paths.insert(expected_path),
+                "{label} must not reuse another generated network's rANS table"
+            );
+        }
+
+        assert_eq!(generated_paths.len(), profiles.len());
     }
 
     #[test]

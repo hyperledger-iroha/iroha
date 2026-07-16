@@ -281,6 +281,28 @@ class TransactionDraft:
         for instruction in instructions:
             self.add_instruction(instruction)
 
+    def commit_contract_deployment(
+        self,
+        *,
+        expected_deploy_nonce: int,
+        contract_address: str,
+        code_hash_hex: str,
+        contract_alias: str,
+        lease_expiry_ms: Optional[int] = None,
+        expected_previous_contract_address: Optional[str] = None,
+    ) -> Instruction:
+        """Append the atomic nonce- and alias-CAS guarded deployment instruction."""
+
+        instruction = Instruction.commit_contract_deployment(
+            expected_deploy_nonce,
+            contract_address,
+            code_hash_hex,
+            contract_alias,
+            lease_expiry_ms,
+            expected_previous_contract_address,
+        )
+        return self.add_instruction(instruction)
+
     def clear_instructions(self) -> None:
         """Remove all instructions from the draft."""
 

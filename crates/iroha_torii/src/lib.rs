@@ -35824,15 +35824,6 @@ async fn handler_get_contract_code_bytes(
     axum::extract::Path(code_hash): axum::extract::Path<String>,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
-    require_signed_account_request(
-        &app,
-        &headers,
-        &method,
-        &uri,
-        &[],
-        "contract_code_auth_required",
-        "signed account headers are required to read contract artifacts",
-    )?;
     let key = rate_limit_key(
         &headers,
         Some(remote_ip),
@@ -35844,6 +35835,15 @@ async fn handler_get_contract_code_bytes(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
         )));
     }
+    require_signed_account_request(
+        &app,
+        &headers,
+        &method,
+        &uri,
+        &[],
+        "contract_code_auth_required",
+        "signed account headers are required to read contract artifacts",
+    )?;
     crate::routing::handle_get_contract_code_bytes(
         app.state.clone(),
         axum::extract::Path(code_hash),
@@ -79268,7 +79268,7 @@ mod tests {
         assert!(matches!(
             gov_error,
             Error::AppUnauthorized {
-                code: "alias_auth_required",
+                code: "contract_code_auth_required",
                 ..
             }
         ));

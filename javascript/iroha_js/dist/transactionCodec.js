@@ -4,6 +4,10 @@ import { AccountAddress } from "./address.js";
 import { blake2b256 } from "./blake2b.js";
 import { verifyEd25519 } from "./crypto.browser.js";
 import {
+  noritoEncodeInstructionBoxArchive,
+  validateNoritoFrame,
+} from "./norito.js";
+import {
   KotodamaQuantity,
   NumericV1,
   NumericV1Error,
@@ -38,6 +42,18 @@ const TRANSFER_SCHEMA_HASH = Buffer.from(
   "a4174c78d6341f8f98fc2adae8ed67b9",
   "hex",
 );
+const INSTRUCTION_BOX_SCHEMA_HASH = Buffer.from(
+  "862a7d77075d4d23ff6c1261db027811",
+  "hex",
+);
+const MAX_BROWSER_INSTRUCTIONS = 64;
+const SMART_CONTRACT_DEPLOYMENT_WIRE_IDS = new Set([
+  "iroha_data_model::isi::smart_contract_code::UploadSmartContractCodeChunk",
+  "iroha_data_model::isi::smart_contract_code::FinalizeSmartContractCodeUpload",
+  "iroha_data_model::isi::smart_contract_code::CancelSmartContractCodeUpload",
+  "iroha_data_model::isi::smart_contract_code::RegisterSmartContractCode",
+  "iroha_data_model::isi::smart_contract_code::CommitContractDeployment",
+]);
 const CRC64_MASK = UINT64_MAX;
 const CRC64_REFLECTED_POLY = 0xc96c_5795_d787_0f42n;
 const CRC64_TABLE = (() => {
@@ -61,6 +77,17 @@ const TRANSFER_INPUT_FIELDS = new Set([
   "sourceAssetId",
   "quantity",
   "destinationAccountId",
+  "metadata",
+  "creationTimeMs",
+  "ttlMs",
+  "nonce",
+  "networkPrefix",
+  "chainDiscriminant",
+]);
+const INSTRUCTION_INPUT_FIELDS = new Set([
+  "chainId",
+  "authority",
+  "instructions",
   "metadata",
   "creationTimeMs",
   "ttlMs",
@@ -953,6 +980,95 @@ function encodeTransferPayload(normalized) {
   return payload;
 }
 
+function normalizeInstructionTransactionInput(input, now) {
+  input = snapshotAllowedFields(
+    input,
+    INSTRUCTION_INPUT_FIELDS,
+    "instruction transaction input",
+  );
+  const chainId = exactString(input.chainId, "chainId", {
+    maxBytes: MAX_CHAIN_ID_BYTES,
+  });
+  const requestedDiscriminant =
+    input.networkPrefix !== undefined && input.chainDiscriminant !== undefined
+      ? fail(
+          "invalid_input",
+          "provide only one of networkPrefix or chainDiscriminant",
+        )
+      : input.networkPrefix ?? input.chainDiscriminant;
+  const authority = accountInfo(
+    input.authority,
+    "authority",
+    requestedDiscriminant === undefined
+      ? undefined
+      : normalizeNetworkPrefix(requestedDiscriminant, "networkPrefix"),
+  );
+  if (!Array.isArray(input.instructions)) {
+    fail("invalid_input", "instructions must be an array");
+  }
+  if (
+    input.instructions.length === 0 ||
+    input.instructions.length > MAX_BROWSER_INSTRUCTIONS
+  ) {
+    fail(
+      "bounds_exceeded",
+      `instructions must contain 1..=${MAX_BROWSER_INSTRUCTIONS} items`,
+    );
+  }
+  const instructions = input.instructions.map((instruction, index) => {
+    let archive;
+    try {
+      archive = noritoEncodeInstructionBoxArchive(instruction);
+    } catch (error) {
+      fail(
+        "unsupported_instruction",
+        `instructions[${index}] cannot be encoded canonically: ${error.message}`,
+      );
+    }
+    return Buffer.from(archive);
+  });
+  const metadata = normalizeMetadata(input.metadata);
+  const creationTimeMs = normalizeUnsigned(
+    input.creationTimeMs ?? now(),
+    UINT64_MAX,
+    "creationTimeMs",
+  );
+  let ttlMs = normalizeOptionalUnsigned(input.ttlMs, UINT64_MAX, "ttlMs");
+  if (ttlMs === 0n) ttlMs = 1n;
+  const nonce = normalizeOptionalUnsigned(input.nonce, UINT32_MAX, "nonce", {
+    nonZero: true,
+  });
+  return {
+    chainId,
+    authority,
+    instructions,
+    metadata,
+    creationTimeMs,
+    ttlMs,
+    nonce,
+  };
+}
+
+function encodeInstructionTransactionPayload(normalized) {
+  const executable = Buffer.concat([
+    u32(0),
+    field(vector(normalized.instructions)),
+  ]);
+  const payload = struct([
+    chainIdArchive(normalized.chainId),
+    accountArchive(normalized.authority),
+    u64(normalized.creationTimeMs),
+    executable,
+    option(normalized.ttlMs === null ? null : u64(normalized.ttlMs)),
+    option(normalized.nonce === null ? null : u32(normalized.nonce)),
+    metadataArchive(normalized.metadata),
+  ]);
+  if (payload.length === 0 || payload.length > MAX_PAYLOAD_BYTES) {
+    fail("bounds_exceeded", `transaction payload exceeds ${MAX_PAYLOAD_BYTES} bytes`);
+  }
+  return payload;
+}
+
 function bytes(value, context, { hex = false, maxBytes } = {}) {
   if (Buffer.isBuffer(value)) {
     if (maxBytes !== undefined && value.length > maxBytes) {
@@ -1248,6 +1364,63 @@ function validateTransferExecutable(payload, context) {
   return sourceOwner;
 }
 
+function validateSmartContractDeploymentExecutable(payload, context) {
+  const executable = new Reader(payload, context);
+  if (executable.readU32("variant") !== 0) {
+    fail("unsupported_executable", `${context} must use Executable::Instructions`);
+  }
+  const instructions = new Reader(
+    executable.readField("instructions"),
+    `${context}.instructions`,
+  );
+  const count = instructions.readU64("count");
+  if (count === 0n || count > BigInt(MAX_BROWSER_INSTRUCTIONS)) {
+    fail(
+      "bounds_exceeded",
+      `${context} must contain 1..=${MAX_BROWSER_INSTRUCTIONS} instructions`,
+    );
+  }
+  for (let index = 0; index < Number(count); index += 1) {
+    const instruction = new Reader(
+      instructions.readField(`item[${index}]`),
+      `${context}.instructions[${index}]`,
+    );
+    const wireId = validateStringArchive(
+      instruction.readField("wireId"),
+      `${context}.instructions[${index}].wireId`,
+      { maxBytes: 256 },
+    );
+    if (!SMART_CONTRACT_DEPLOYMENT_WIRE_IDS.has(wireId)) {
+      fail(
+        "unsupported_instruction",
+        `${context}.instructions[${index}] uses unsupported deployment instruction ${wireId}`,
+      );
+    }
+    const frameContainer = new Reader(
+      instruction.readField("frameContainer"),
+      `${context}.instructions[${index}].frameContainer`,
+      false,
+    );
+    const frame = frameContainer.readField("frame");
+    frameContainer.assertEof();
+    instruction.assertEof();
+    try {
+      validateNoritoFrame(frame, {
+        context: `${context}.instructions[${index}].frame`,
+        expectedTypeName: wireId,
+        requireNonEmptyPayload: true,
+      });
+    } catch (error) {
+      fail(
+        "malformed_instruction",
+        `${context}.instructions[${index}] has an invalid inner frame: ${error.message}`,
+      );
+    }
+  }
+  instructions.assertEof();
+  executable.assertEof();
+}
+
 function validateOption(payload, expectedLength, context, { nonZero = false } = {}) {
   const reader = new Reader(payload, context);
   const tag = reader.readU8("tag");
@@ -1381,6 +1554,55 @@ function validateTransactionPayload(payload, authorityLiteral) {
   return assertedAuthority ?? { publicKey: authorityPublicKey };
 }
 
+function validateInstructionTransactionPayload(payload, authorityLiteral) {
+  if (payload.length === 0 || payload.length > MAX_PAYLOAD_BYTES) {
+    fail("bounds_exceeded", `payloadBytes must contain 1..=${MAX_PAYLOAD_BYTES} bytes`);
+  }
+  const assertedAuthority =
+    authorityLiteral === null
+      ? null
+      : accountInfo(authorityLiteral, "signable.authority");
+  const reader = new Reader(payload, "transaction payload");
+  const chainId = validateChainIdArchive(
+    reader.readField("chain"),
+    "transaction payload.chain",
+  );
+  exactString(chainId, "transaction payload.chain", {
+    maxBytes: MAX_CHAIN_ID_BYTES,
+  });
+  const authorityArchive = reader.readField("authority");
+  const authorityPublicKey = validateAccountArchive(
+    authorityArchive,
+    "transaction payload.authority",
+  );
+  if (
+    assertedAuthority !== null &&
+    !authorityArchive.equals(accountArchive(assertedAuthority))
+  ) {
+    fail("authority_mismatch", "signable.authority does not match payloadBytes");
+  }
+  const creationTime = reader.readField("creationTimeMs");
+  if (creationTime.length !== 8) {
+    fail("malformed_payload", "transaction payload.creationTimeMs must be a u64");
+  }
+  validateSmartContractDeploymentExecutable(
+    reader.readField("executable"),
+    "transaction payload.executable",
+  );
+  validateOption(reader.readField("ttlMs"), 8, "transaction payload.ttlMs", {
+    nonZero: true,
+  });
+  validateOption(reader.readField("nonce"), 4, "transaction payload.nonce", {
+    nonZero: true,
+  });
+  validateMetadataArchive(
+    reader.readField("metadata"),
+    "transaction payload.metadata",
+  );
+  reader.assertEof();
+  return assertedAuthority ?? { publicKey: authorityPublicKey };
+}
+
 function normalizeSignature(signature) {
   if (
     Buffer.isBuffer(signature) ||
@@ -1444,6 +1666,21 @@ export function buildBrowserTransferPayload(input) {
   const normalized = normalizeTransferInput(input, Date.now);
   const payload = encodeTransferPayload(normalized);
   validateTransactionPayload(payload, normalized.authority.literal);
+  return payload;
+}
+
+/**
+ * Build a canonical browser-safe transaction payload containing only current
+ * native smart-contract deployment instructions. No private key is accepted or
+ * retained; the returned payload is intended for a local/external signer.
+ *
+ * @param {object} input
+ * @returns {Buffer}
+ */
+export function buildBrowserInstructionTransactionPayload(input) {
+  const normalized = normalizeInstructionTransactionInput(input, Date.now);
+  const payload = encodeInstructionTransactionPayload(normalized);
+  validateInstructionTransactionPayload(payload, normalized.authority.literal);
   return payload;
 }
 
@@ -1555,6 +1792,94 @@ export function validateBrowserTransferSignable(signable, constraints = {}) {
   });
 }
 
+/** Snapshot and validate a smart-contract deployment transaction signable. */
+export function validateBrowserInstructionTransactionSignable(
+  signable,
+  constraints = {},
+) {
+  signable = snapshotAllowedFields(signable, SIGNABLE_FIELDS, "signable");
+  constraints = snapshotAllowedFields(
+    constraints,
+    SIGNABLE_CONSTRAINT_FIELDS,
+    "signable constraints",
+  );
+  if (
+    signable.signatureAlgorithm !== undefined &&
+    signable.signatureAlgorithm !== "ed25519" &&
+    signable.signatureAlgorithm !== "0" &&
+    signable.signatureAlgorithm !== 0
+  ) {
+    fail("unsupported_algorithm", "signable.signatureAlgorithm must be ed25519");
+  }
+  const payload = bytes(signable.payloadBytes, "signable.payloadBytes", {
+    maxBytes: MAX_PAYLOAD_BYTES,
+  });
+  const authorityLiteral = exactString(signable.authority, "signable.authority", {
+    maxBytes: 512,
+  });
+  const authority = validateInstructionTransactionPayload(payload, authorityLiteral);
+  const payloadHashHex = irohaHash(payload).toString("hex");
+  const assertedPayloadHashHex = exactHashHex(
+    signable.payloadHashHex,
+    "signable.payloadHashHex",
+  );
+  if (assertedPayloadHashHex !== payloadHashHex) {
+    fail("payload_hash_mismatch", "signable.payloadHashHex does not match payloadBytes");
+  }
+  const signingPublicKey = bytes(
+    signable.signingPublicKey,
+    "signable.signingPublicKey",
+    { hex: true, maxBytes: 32 },
+  );
+  if (signingPublicKey.length !== 32) {
+    fail("invalid_public_key", "signable.signingPublicKey must be exactly 32 bytes");
+  }
+  if (!signingPublicKey.equals(authority.publicKey)) {
+    fail(
+      "authority_mismatch",
+      "signable.signingPublicKey does not control signable.authority",
+    );
+  }
+  if (constraints.authority !== undefined && constraints.authority !== null) {
+    const expectedAuthority = accountInfo(
+      constraints.authority,
+      "signable constraints.authority",
+    );
+    if (expectedAuthority.literal !== authorityLiteral) {
+      fail(
+        "authority_mismatch",
+        "signable.authority does not match the expected approved authority",
+      );
+    }
+  }
+  if (
+    constraints.signingPublicKey !== undefined &&
+    constraints.signingPublicKey !== null
+  ) {
+    const expectedPublicKey = bytes(
+      constraints.signingPublicKey,
+      "signable constraints.signingPublicKey",
+      { hex: true, maxBytes: 32 },
+    );
+    if (
+      expectedPublicKey.length !== 32 ||
+      !expectedPublicKey.equals(signingPublicKey)
+    ) {
+      fail(
+        "authority_mismatch",
+        "signable.signingPublicKey does not match the expected approved signing key",
+      );
+    }
+  }
+  return Object.freeze({
+    payloadBytes: payload,
+    payloadHashHex,
+    authority: authorityLiteral,
+    signingPublicKey,
+    signatureAlgorithm: "ed25519",
+  });
+}
+
 /**
  * Verify and finalize an externally signed transparent transfer.
  *
@@ -1633,6 +1958,89 @@ export function finalizeBrowserSignedTransaction(
   };
 }
 
+/** Verify and finalize an externally signed deployment-instruction transaction. */
+export function finalizeBrowserInstructionTransaction(
+  signable,
+  signature,
+  signingPublicKey,
+) {
+  signable = snapshotAllowedFields(signable, SIGNABLE_FIELDS, "signable");
+  if (
+    signable.signatureAlgorithm !== undefined &&
+    signable.signatureAlgorithm !== "ed25519" &&
+    signable.signatureAlgorithm !== 0
+  ) {
+    fail("unsupported_algorithm", "signable.signatureAlgorithm must be ed25519");
+  }
+  const payload = bytes(signable.payloadBytes, "signable.payloadBytes", {
+    maxBytes: MAX_PAYLOAD_BYTES,
+  });
+  const authority = validateInstructionTransactionPayload(
+    payload,
+    signable.authority,
+  );
+  const publicKey = bytes(signingPublicKey, "signingPublicKey", {
+    hex: true,
+    maxBytes: 32,
+  });
+  if (publicKey.length !== 32) {
+    fail("invalid_public_key", "signingPublicKey must be exactly 32 bytes");
+  }
+  if (signable.signingPublicKey != null) {
+    const assertedPublicKey = bytes(
+      signable.signingPublicKey,
+      "signable.signingPublicKey",
+      { hex: true, maxBytes: 32 },
+    );
+    if (
+      assertedPublicKey.length !== 32 ||
+      !assertedPublicKey.equals(publicKey)
+    ) {
+      fail(
+        "authority_mismatch",
+        "signable.signingPublicKey does not match signingPublicKey",
+      );
+    }
+  }
+  if (!publicKey.equals(authority.publicKey)) {
+    fail("authority_mismatch", "signingPublicKey does not control signable.authority");
+  }
+  const payloadHash = irohaHash(payload);
+  if (signable.payloadHashHex !== undefined) {
+    const asserted = exactHashHex(
+      signable.payloadHashHex,
+      "signable.payloadHashHex",
+    );
+    if (asserted !== payloadHash.toString("hex")) {
+      fail("payload_hash_mismatch", "signable.payloadHashHex does not match payloadBytes");
+    }
+  }
+  const signatureBytes = normalizeSignature(signature);
+  if (signatureBytes.length !== 64) {
+    fail("invalid_signature", "Ed25519 signature must be exactly 64 bytes");
+  }
+  let verified = false;
+  try {
+    verified = verifyEd25519(payloadHash, signatureBytes, publicKey);
+  } catch {
+    verified = false;
+  }
+  if (!verified) {
+    fail(
+      "invalid_signature",
+      "Ed25519 signature does not verify over the Iroha payload hash",
+    );
+  }
+  const bare = bareSignedTransaction(payload, signatureBytes);
+  const signedTransaction = Buffer.concat([Buffer.of(1), bare]);
+  const hash = transactionHashFromBare(bare);
+  return {
+    signedTransaction,
+    hash,
+    hashHex: hash.toString("hex"),
+  };
+}
+
 /**
  * Compute the canonical pipeline hash of exact versioned SignedTransaction bytes.
  * @param {ArrayBufferView | ArrayBuffer | Buffer} signedTransaction
@@ -1677,16 +2085,32 @@ export function browserSignedTransactionHashHex(signedTransaction) {
       "signedTransaction is not a supported single-signature external transaction",
     );
   }
-  validateTransactionPayload(payload, null);
+  let transferError;
+  try {
+    validateTransactionPayload(payload, null);
+  } catch (error) {
+    transferError = error;
+    try {
+      validateInstructionTransactionPayload(payload, null);
+    } catch (instructionError) {
+      fail(
+        "malformed_signed_transaction",
+        `signedTransaction payload is neither a supported transfer nor a supported deployment transaction (${transferError.message}; ${instructionError.message})`,
+      );
+    }
+  }
   return transactionHashFromBare(bare).toString("hex");
 }
 
 /** Browser-safe codec implementing the Nexus transaction-codec contract. */
 export const browserTransactionCodec = Object.freeze({
   buildTransferPayload: buildBrowserTransferPayload,
+  buildInstructionPayload: buildBrowserInstructionTransactionPayload,
   payloadHashHex: browserTransactionPayloadHashHex,
   finalizeSignedTransaction: finalizeBrowserSignedTransaction,
+  finalizeInstructionTransaction: finalizeBrowserInstructionTransaction,
   validateSignable: validateBrowserTransferSignable,
+  validateInstructionSignable: validateBrowserInstructionTransactionSignable,
 });
 
 export { BrowserTransactionCodecError };

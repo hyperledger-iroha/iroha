@@ -428,10 +428,10 @@ class HttpClientTransport(
         return fetchJson(buildJsonPostRequest("/v1/multisig/propose", body), ContractJsonParser::parseMultisigResponse, "multisig propose")
     }
 
-    fun getGovernanceContract(contractAddress: String): CompletableFuture<GovernanceContractResponse> {
+    fun getGovernanceContract(contractAddress: String, canonicalAuth: ToriiCanonicalRequestAuth): CompletableFuture<GovernanceContractResponse> {
         val normalizedAddress = normalizeNonBlank(contractAddress, "contractAddress")
         return fetchJson(
-            buildJsonGetRequest("/v1/gov/contracts/${encodePathSegment(normalizedAddress)}", emptyMap()),
+            buildVpnRequest("GET", "/v1/gov/contracts/${encodePathSegment(normalizedAddress)}", null, canonicalAuth),
             ContractJsonParser::parseGovernanceContractResponse,
             "governance contract"
         )

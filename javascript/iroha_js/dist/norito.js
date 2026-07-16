@@ -90,6 +90,10 @@ const EVENT_FILTER_BOX_SCHEMA_HASH = schemaHashForTypeName(
 const TRANSACTION_PAYLOAD_BATCH_SCHEMA_HASH = schemaHashForTypeName(
   "alloc::vec::Vec<alloc::vec::Vec<u8>>",
 );
+const CONTRACT_MANIFEST_SIGNATURE_PAYLOAD_SCHEMA_HASH = Buffer.from(
+  "b4bb42540d44c468ed44d5f94c59b007",
+  "hex",
+);
 const INNER_SCHEMA_HASH_BY_WIRE_ID = Object.freeze({
   "iroha.mint": Buffer.from("ec0b538ed0e5b46ed163e0aedb335e73", "hex"),
   "iroha.burn": Buffer.from("361f279124a0aad61978c80ff1c9ce0a", "hex"),
@@ -170,7 +174,7 @@ const INNER_SCHEMA_HASH_BY_WIRE_ID = Object.freeze({
     "hex",
   ),
   "iroha_data_model::isi::smart_contract_code::RegisterSmartContractCode": Buffer.from(
-    "63eec8b1a5dfcb1263eec8b1a5dfcb12",
+    "fa62c9f0a5a3f8b756eef62b689e2a32",
     "hex",
   ),
   "iroha_data_model::isi::smart_contract_code::RegisterSmartContractBytes": Buffer.from(
@@ -183,6 +187,22 @@ const INNER_SCHEMA_HASH_BY_WIRE_ID = Object.freeze({
   ),
   "iroha_data_model::isi::smart_contract_code::ActivateContractInstance": Buffer.from(
     "829e0d2a934213bf829e0d2a934213bf",
+    "hex",
+  ),
+  "iroha_data_model::isi::smart_contract_code::CommitContractDeployment": Buffer.from(
+    "2efc0e2e7080262cc3b17ad5866d6865",
+    "hex",
+  ),
+  "iroha_data_model::isi::smart_contract_code::UploadSmartContractCodeChunk": Buffer.from(
+    "41ca98d8d78d9d8113909941490f8612",
+    "hex",
+  ),
+  "iroha_data_model::isi::smart_contract_code::FinalizeSmartContractCodeUpload": Buffer.from(
+    "0406dbcf58c0c157bdc2c690d3faba54",
+    "hex",
+  ),
+  "iroha_data_model::isi::smart_contract_code::CancelSmartContractCodeUpload": Buffer.from(
+    "ea496a080ec700168bae4fae3e679d2b",
     "hex",
   ),
   "iroha_data_model::isi::smart_contract_code::RemoveSmartContractBytes": Buffer.from(
@@ -590,6 +610,29 @@ export function noritoEncodeTransactionPayloadBatch(payloads) {
   return frameNoritoPayload(
     payload,
     TRANSACTION_PAYLOAD_BATCH_SCHEMA_HASH,
+    COMPACT_LEN_FLAG,
+  );
+}
+
+/**
+ * Encode the exact current Rust `ContractManifestSignaturePayload` frame.
+ *
+ * Provenance is deliberately excluded: this is the canonical message signed
+ * by `ContractManifest::try_signed` and verified by smart-contract admission.
+ *
+ * @param {object} manifest
+ * @returns {Buffer}
+ */
+export function noritoEncodeContractManifestSignaturePayload(manifest) {
+  const payload = withNoritoCompactLengths(() =>
+    encodeContractManifestSignaturePayloadValue(
+      manifest,
+      "ContractManifestSignaturePayload",
+    ),
+  );
+  return frameNoritoPayload(
+    payload,
+    CONTRACT_MANIFEST_SIGNATURE_PAYLOAD_SCHEMA_HASH,
     COMPACT_LEN_FLAG,
   );
 }
@@ -1037,6 +1080,18 @@ function encodeEmbeddedInstructionBox(instruction, context) {
 }
 
 /**
+ * Encode one canonical `InstructionBox` archive for inclusion in a compact
+ * transaction payload. The public instruction frame is decoded and rebuilt so
+ * both its outer schema and its inner instruction schema are verified before
+ * the archive crosses the signing boundary.
+ */
+export function noritoEncodeInstructionBoxArchive(instruction) {
+  return withNoritoLengthFlags(COMPACT_LEN_FLAG, () =>
+    encodeEmbeddedInstructionBox(instruction, "instruction"),
+  );
+}
+
+/**
  * Decode canonical Norito instruction bytes back to JSON.
  *
  * When `options.parseJson !== false`, the result is the parsed JSON payload.
@@ -1356,6 +1411,10 @@ function encodePureJsInstructionPayload(instruction) {
     instruction.RegisterSmartContractBytes ||
     instruction.DeactivateContractInstance ||
     instruction.ActivateContractInstance ||
+    instruction.CommitContractDeployment ||
+    instruction.UploadSmartContractCodeChunk ||
+    instruction.FinalizeSmartContractCodeUpload ||
+    instruction.CancelSmartContractCodeUpload ||
     instruction.RemoveSmartContractBytes
   ) {
     return encodeSmartContractInstruction(instruction);
@@ -1407,6 +1466,10 @@ function decodePureJsInstructionPayload(wireId, payload, innerFlags, framedInstr
     case "iroha_data_model::isi::smart_contract_code::RegisterSmartContractBytes":
     case "iroha_data_model::isi::smart_contract_code::DeactivateContractInstance":
     case "iroha_data_model::isi::smart_contract_code::ActivateContractInstance":
+    case "iroha_data_model::isi::smart_contract_code::CommitContractDeployment":
+    case "iroha_data_model::isi::smart_contract_code::UploadSmartContractCodeChunk":
+    case "iroha_data_model::isi::smart_contract_code::FinalizeSmartContractCodeUpload":
+    case "iroha_data_model::isi::smart_contract_code::CancelSmartContractCodeUpload":
     case "iroha_data_model::isi::smart_contract_code::RemoveSmartContractBytes":
       return decodeSmartContractInstructionPayload(wireId, payload);
     case "iroha_data_model::isi::kaigi::CreateKaigi":
@@ -1936,6 +1999,115 @@ function decodeSmartContractInstructionPayload(wireId, payload) {
             "ActivateContractInstance.contract_address",
           ),
           code_hash: decodeHashValue(fields.code_hash, "ActivateContractInstance.code_hash"),
+        },
+      };
+    }
+    case "iroha_data_model::isi::smart_contract_code::CommitContractDeployment": {
+      const fields = decodeStructFields(payload, "CommitContractDeployment", [
+        "expected_deploy_nonce",
+        "contract_address",
+        "code_hash",
+        "contract_alias",
+        "lease_expiry_ms",
+        "expected_previous_contract_address",
+      ]);
+      return {
+        CommitContractDeployment: {
+          expected_deploy_nonce: decodeU64Value(
+            fields.expected_deploy_nonce,
+            "CommitContractDeployment.expected_deploy_nonce",
+          ),
+          contract_address: decodeStringValue(
+            fields.contract_address,
+            "CommitContractDeployment.contract_address",
+          ),
+          code_hash: decodeHashValue(
+            fields.code_hash,
+            "CommitContractDeployment.code_hash",
+          ),
+          contract_alias: decodeStringValue(
+            fields.contract_alias,
+            "CommitContractDeployment.contract_alias",
+          ),
+          lease_expiry_ms: decodeOptionValue(
+            fields.lease_expiry_ms,
+            decodeU64Value,
+            "CommitContractDeployment.lease_expiry_ms",
+          ),
+          expected_previous_contract_address: decodeOptionValue(
+            fields.expected_previous_contract_address,
+            decodeStringValue,
+            "CommitContractDeployment.expected_previous_contract_address",
+          ),
+        },
+      };
+    }
+    case "iroha_data_model::isi::smart_contract_code::UploadSmartContractCodeChunk": {
+      const fields = decodeStructFields(payload, "UploadSmartContractCodeChunk", [
+        "code_hash",
+        "total_size",
+        "chunk_index",
+        "chunk_count",
+        "chunk",
+      ]);
+      return {
+        UploadSmartContractCodeChunk: {
+          code_hash: decodeHashValue(
+            fields.code_hash,
+            "UploadSmartContractCodeChunk.code_hash",
+          ),
+          total_size: decodeU64Value(
+            fields.total_size,
+            "UploadSmartContractCodeChunk.total_size",
+          ),
+          chunk_index: decodeU32Value(
+            fields.chunk_index,
+            "UploadSmartContractCodeChunk.chunk_index",
+          ),
+          chunk_count: decodeU32Value(
+            fields.chunk_count,
+            "UploadSmartContractCodeChunk.chunk_count",
+          ),
+          chunk: decodeByteVecAsBase64(
+            fields.chunk,
+            "UploadSmartContractCodeChunk.chunk",
+          ),
+        },
+      };
+    }
+    case "iroha_data_model::isi::smart_contract_code::FinalizeSmartContractCodeUpload": {
+      const fields = decodeStructFields(payload, "FinalizeSmartContractCodeUpload", [
+        "code_hash",
+        "total_size",
+        "chunk_count",
+      ]);
+      return {
+        FinalizeSmartContractCodeUpload: {
+          code_hash: decodeHashValue(
+            fields.code_hash,
+            "FinalizeSmartContractCodeUpload.code_hash",
+          ),
+          total_size: decodeU64Value(
+            fields.total_size,
+            "FinalizeSmartContractCodeUpload.total_size",
+          ),
+          chunk_count: decodeU32Value(
+            fields.chunk_count,
+            "FinalizeSmartContractCodeUpload.chunk_count",
+          ),
+        },
+      };
+    }
+    case "iroha_data_model::isi::smart_contract_code::CancelSmartContractCodeUpload": {
+      const fields = decodeStructFields(payload, "CancelSmartContractCodeUpload", [
+        "code_hash",
+      ]);
+      return {
+        CancelSmartContractCodeUpload: {
+          code_hash: decodeHashValue(
+            fields.code_hash,
+            "CancelSmartContractCodeUpload.code_hash",
+          ),
         },
       };
     }
@@ -3546,6 +3718,96 @@ function encodeSmartContractInstructionCompact(instruction) {
         [encodeHashValue(
           instruction.ActivateContractInstance.code_hash,
           "ActivateContractInstance.code_hash",
+        )],
+      ]),
+    );
+  }
+  if (isPlainObject(instruction.CommitContractDeployment)) {
+    return encodeInstructionEnvelope(
+      "iroha_data_model::isi::smart_contract_code::CommitContractDeployment",
+      encodeStructValue([
+        [encodeU64Value(
+          instruction.CommitContractDeployment.expected_deploy_nonce,
+          "CommitContractDeployment.expected_deploy_nonce",
+        )],
+        [encodeNoritoStringValue(assertNonEmptyString(
+          instruction.CommitContractDeployment.contract_address,
+          "CommitContractDeployment.contract_address",
+        ))],
+        [encodeHashValue(
+          instruction.CommitContractDeployment.code_hash,
+          "CommitContractDeployment.code_hash",
+        )],
+        [encodeNoritoStringValue(assertNonEmptyString(
+          instruction.CommitContractDeployment.contract_alias,
+          "CommitContractDeployment.contract_alias",
+        ))],
+        [encodeOptionValue(
+          instruction.CommitContractDeployment.lease_expiry_ms,
+          encodeU64Value,
+          "CommitContractDeployment.lease_expiry_ms",
+        )],
+        [encodeOptionValue(
+          instruction.CommitContractDeployment.expected_previous_contract_address,
+          encodeNoritoStringValue,
+          "CommitContractDeployment.expected_previous_contract_address",
+        )],
+      ]),
+    );
+  }
+  if (isPlainObject(instruction.UploadSmartContractCodeChunk)) {
+    return encodeInstructionEnvelope(
+      "iroha_data_model::isi::smart_contract_code::UploadSmartContractCodeChunk",
+      encodeStructValue([
+        [encodeHashValue(
+          instruction.UploadSmartContractCodeChunk.code_hash,
+          "UploadSmartContractCodeChunk.code_hash",
+        )],
+        [encodeU64Value(
+          instruction.UploadSmartContractCodeChunk.total_size,
+          "UploadSmartContractCodeChunk.total_size",
+        )],
+        [encodeU32Value(
+          instruction.UploadSmartContractCodeChunk.chunk_index,
+          "UploadSmartContractCodeChunk.chunk_index",
+        )],
+        [encodeU32Value(
+          instruction.UploadSmartContractCodeChunk.chunk_count,
+          "UploadSmartContractCodeChunk.chunk_count",
+        )],
+        [encodeByteVecValue(
+          instruction.UploadSmartContractCodeChunk.chunk,
+          "UploadSmartContractCodeChunk.chunk",
+        )],
+      ]),
+    );
+  }
+  if (isPlainObject(instruction.FinalizeSmartContractCodeUpload)) {
+    return encodeInstructionEnvelope(
+      "iroha_data_model::isi::smart_contract_code::FinalizeSmartContractCodeUpload",
+      encodeStructValue([
+        [encodeHashValue(
+          instruction.FinalizeSmartContractCodeUpload.code_hash,
+          "FinalizeSmartContractCodeUpload.code_hash",
+        )],
+        [encodeU64Value(
+          instruction.FinalizeSmartContractCodeUpload.total_size,
+          "FinalizeSmartContractCodeUpload.total_size",
+        )],
+        [encodeU32Value(
+          instruction.FinalizeSmartContractCodeUpload.chunk_count,
+          "FinalizeSmartContractCodeUpload.chunk_count",
+        )],
+      ]),
+    );
+  }
+  if (isPlainObject(instruction.CancelSmartContractCodeUpload)) {
+    return encodeInstructionEnvelope(
+      "iroha_data_model::isi::smart_contract_code::CancelSmartContractCodeUpload",
+      encodeStructValue([
+        [encodeHashValue(
+          instruction.CancelSmartContractCodeUpload.code_hash,
+          "CancelSmartContractCodeUpload.code_hash",
         )],
       ]),
     );
@@ -5906,24 +6168,26 @@ function decodeConfidentialEncryptedPayloadValue(payload, context) {
   };
 }
 
-function encodeContractManifestValue(value, context) {
+const CONTRACT_MANIFEST_KEYS = Object.freeze([
+  "seiyaku_name",
+  "code_hash",
+  "abi_hash",
+  "compiler_fingerprint",
+  "features_bitmap",
+  "access_set_hints",
+  "entrypoints",
+  "states",
+  "error_codes",
+  "kotoba",
+  "provenance",
+]);
+
+function contractManifestSignatureFields(value, context) {
   if (!isPlainObject(value)) {
     throw new TypeError(`${context} must be an object`);
   }
-  assertOnlyObjectKeys(value, [
-    "seiyaku_name",
-    "code_hash",
-    "abi_hash",
-    "compiler_fingerprint",
-    "features_bitmap",
-    "access_set_hints",
-    "entrypoints",
-    "states",
-    "error_codes",
-    "kotoba",
-    "provenance",
-  ], context);
-  return encodeStructValue([
+  assertOnlyObjectKeys(value, CONTRACT_MANIFEST_KEYS, context);
+  return [
     [encodeOptionValue(value.seiyaku_name, encodeNoritoStringValue, `${context}.seiyaku_name`)],
     [encodeOptionValue(value.code_hash, encodeHashValue, `${context}.code_hash`)],
     [encodeOptionValue(value.abi_hash, encodeHashValue, `${context}.abi_hash`)],
@@ -5958,6 +6222,16 @@ function encodeContractManifestValue(value, context) {
         `${context}.kotoba`,
       ),
     ],
+  ];
+}
+
+function encodeContractManifestSignaturePayloadValue(value, context) {
+  return encodeStructValue(contractManifestSignatureFields(value, context));
+}
+
+function encodeContractManifestValue(value, context) {
+  return encodeStructValue([
+    ...contractManifestSignatureFields(value, context),
     [
       encodeOptionValue(
         value.provenance ?? null,
