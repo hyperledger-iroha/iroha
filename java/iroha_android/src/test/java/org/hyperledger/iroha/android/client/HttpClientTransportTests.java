@@ -10,6 +10,7 @@ import java.nio.file.Paths;
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
 import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.security.Signature;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -3513,7 +3514,18 @@ public final class HttpClientTransportTests {
             executor,
             ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build());
 
-    final GovernanceContractResponse response = transport.getGovernanceContract(contractAddress).join();
+    final KeyPair keyPair;
+    try {
+      keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair();
+    } catch (final NoSuchAlgorithmException error) {
+      throw new AssertionError(error);
+    }
+    final GovernanceContractResponse response =
+        transport
+            .getGovernanceContract(
+                contractAddress,
+                canonicalAuth("alice", keyPair, 1_700_000_000_100L, "governance-read"))
+            .join();
 
     assert response.found() : "Governance binding should be found";
     assert contractAddress.equals(response.contractAddress()) : "Governance contract address mismatch";

@@ -138,9 +138,8 @@ the supported-architecture parity matrix, Linux sanitizer fuzzing, and every
 platform SDK shared-fixture job. The broader IVM/Kotodama/Torii corridor still
 requires the non-skipped four-peer typed-query pagination exercise and
 controlled 5% performance gates against the canonical type-first authorized
-Kotodama grammar, separate suite/runtime artifact identities, and the
-selector-explicit multisig `spec`, proposal `query`, and proposal `resolve` read
-routes. Future ABI descriptor changes must regenerate the header documentation,
+Kotodama grammar and separate suite/runtime artifact identities. Future ABI
+descriptor changes must regenerate the header documentation,
 every mapped `.to` golden, and the compiler manifests together. No retired
 grammar, numeric type, 17-byte deployable header, CRUD route, carrier, or
 compatibility migration is planned.

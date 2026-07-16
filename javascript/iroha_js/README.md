@@ -28,8 +28,10 @@ binary, Cargo workspace, install hook, or implicit downloader. Consequently,
 `npm run build:native` is a source-checkout command, not a supported operation
 inside a clean registry installation. Registry consumers can use the portable
 browser exports (`/browser`, `/transaction-codec`, `/canonical-request`,
-`/ivm-artifact`, `/connect-browser`, and `/nexus-app`) and the Node Ed25519
-fallback without a native host. Applications that need native-only APIs must
+`/ivm-artifact`, `/ivm-artifact-admission-wasm`,
+`/smart-contract-deployment`, `/connect-browser`, and `/nexus-app`) and the
+Node Ed25519 fallback without a native host. Applications that need native-only
+APIs must
 provide a separately built and checksum-verified host through
 `IROHA_JS_NATIVE_DIR`. The registry artifact includes only two portable,
 offline examples: `recipes/iso_bridge_builder.mjs` and
@@ -337,6 +339,41 @@ not replace Rust instruction decoding or its control-flow, syscall, entrypoint,
 access-claim, and other semantic admission checks. The service must therefore be
 a trusted canonical Rust compiler endpoint; the ledger remains the final
 authority on whether an artifact is deployable.
+
+Browser deployment also runs the canonical Rust semantic admission policy
+locally through the raw `ivm_artifact_admission` WebAssembly exports. Provision
+the verifier with a SHA-256 trust anchor from signed application or release
+metadata; do not derive the expected digest from the same mutable response:
+
+```js
+import {
+  instantiateIvmArtifactAdmissionWasm,
+} from "@iroha/iroha-js/ivm-artifact-admission-wasm";
+import {
+  deploySmartContractBrowser,
+} from "@iroha/iroha-js/smart-contract-deployment";
+
+const verifier = await instantiateIvmArtifactAdmissionWasm({
+  wasmBytes: await fetch(admissionWasmUrl),
+  expectedSha256Hex: signedRelease.admissionWasmSha256Hex,
+});
+
+await deploySmartContractBrowser({
+  artifactAdmissionVerifier: verifier,
+  artifactBytes: result.output.artifactBytes,
+  manifest: result.output.manifest,
+  compilerCodeHash: result.output.codeHashHex,
+  compilerAbiHash: result.output.abiHashHex,
+  // chain, local-signing, authenticated-state, and submission callbacks...
+});
+```
+
+Deployment fails before node capability/state reads, signing, or submission if
+the authenticated module is absent, the shared verifier rejects the artifact,
+or its derived code hash, ABI hash, offsets, entrypoint count, or canonical
+manifest disagrees with the compiler output. JavaScript framing validation is
+retained as an earlier diagnostic boundary, but cannot authorize deployment by
+itself.
 The first release accepts only `provenance: null`; signed provenance remains
 disabled until its exact message and public-key algorithm can be verified.
 The native binding and service receive the same canonical JSON-shaped request,

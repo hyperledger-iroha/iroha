@@ -23642,9 +23642,10 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     @discardableResult
     public func resolveContractAlias(
         _ contractAlias: String,
+        canonicalAuth: ToriiCanonicalRequestAuth,
         completion: @escaping (Result<ToriiContractAliasResolution, Swift.Error>) -> Void
     ) -> Task<Void, Never> {
-        runTask(completion) { try await self.resolveContractAlias(contractAlias) }
+        runTask(completion) { try await self.resolveContractAlias(contractAlias, canonicalAuth: canonicalAuth) }
     }
 
     @discardableResult
@@ -23830,25 +23831,28 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
 
     @discardableResult
     public func getMultisigSpec(_ requestBody: ToriiMultisigSpecRequest,
+                                canonicalAuth: ToriiCanonicalRequestAuth,
                                 completion: @escaping (Result<ToriiMultisigSpecResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.getMultisigSpec(requestBody) }
+        runTask(completion) { try await self.getMultisigSpec(requestBody, canonicalAuth: canonicalAuth) }
     }
 
     @discardableResult
     public func queryMultisigProposals(_ requestBody: ToriiMultisigProposalsQueryRequest,
+                                      canonicalAuth: ToriiCanonicalRequestAuth,
                                       completion: @escaping (Result<ToriiMultisigProposalsQueryResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.queryMultisigProposals(requestBody) }
+        runTask(completion) { try await self.queryMultisigProposals(requestBody, canonicalAuth: canonicalAuth) }
     }
 
     @discardableResult
     public func resolveMultisigProposal(_ requestBody: ToriiMultisigProposalsResolveRequest,
+                                    canonicalAuth: ToriiCanonicalRequestAuth,
                                     completion: @escaping (Result<ToriiMultisigProposalResolveResponse, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.resolveMultisigProposal(requestBody) }
+        runTask(completion) { try await self.resolveMultisigProposal(requestBody, canonicalAuth: canonicalAuth) }
     }
 
     @discardableResult
-    public func fetchContractCodeBytes(codeHashHex: String, completion: @escaping (Result<ToriiContractCodeBytes, Swift.Error>) -> Void) -> Task<Void, Never> {
-        runTask(completion) { try await self.fetchContractCodeBytes(codeHashHex: codeHashHex) }
+    public func fetchContractCodeBytes(codeHashHex: String, canonicalAuth: ToriiCanonicalRequestAuth, completion: @escaping (Result<ToriiContractCodeBytes, Swift.Error>) -> Void) -> Task<Void, Never> {
+        runTask(completion) { try await self.fetchContractCodeBytes(codeHashHex: codeHashHex, canonicalAuth: canonicalAuth) }
     }
 
     @discardableResult
@@ -25786,7 +25790,8 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     }
 
     public func resolveContractAlias(
-        _ contractAlias: String
+        _ contractAlias: String,
+        canonicalAuth: ToriiCanonicalRequestAuth
     ) async throws -> ToriiContractAliasResolution {
         let normalizedAlias = try normalizeToriiContractAliasLiteral(
             contractAlias,
@@ -25798,14 +25803,12 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
                 case contractAlias = "contract_alias"
             }
         }
-        let request = try makeRequest(
+        let body = try JSONEncoder().encode(Request(contractAlias: normalizedAlias))
+        let request = try makeVpnRequest(
             path: "/v1/contracts/aliases/resolve",
             method: .post,
-            body: try JSONEncoder().encode(Request(contractAlias: normalizedAlias)),
-            headers: [
-                "Content-Type": "application/json",
-                "Accept": "application/json",
-            ]
+            body: body,
+            canonicalAuth: canonicalAuth
         )
         let (data, response) = try await send(request)
         try ensureStatus(response, equals: 200, responseBody: data)
@@ -26445,40 +26448,40 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         return try decodeJSON(ToriiMultisigContractCallResponse.self, from: data)
     }
 
-    public func getMultisigSpec(_ requestBody: ToriiMultisigSpecRequest) async throws -> ToriiMultisigSpecResponse {
-        let request = try makeRequest(path: "/v1/multisig/spec",
+    public func getMultisigSpec(_ requestBody: ToriiMultisigSpecRequest, canonicalAuth: ToriiCanonicalRequestAuth) async throws -> ToriiMultisigSpecResponse {
+        let body = try JSONEncoder().encode(requestBody)
+        let request = try makeVpnRequest(path: "/v1/multisig/spec",
                                       method: .post,
-                                      queryItems: nil,
-                                      body: try JSONEncoder().encode(requestBody),
-                                      headers: ["Content-Type": "application/json"])
+                                      body: body,
+                                      canonicalAuth: canonicalAuth)
         let data = try await data(for: request)
         return try decodeJSON(ToriiMultisigSpecResponse.self, from: data)
     }
 
-    public func queryMultisigProposals(_ requestBody: ToriiMultisigProposalsQueryRequest) async throws -> ToriiMultisigProposalsQueryResponse {
-        let request = try makeRequest(path: "/v1/multisig/proposals/query",
+    public func queryMultisigProposals(_ requestBody: ToriiMultisigProposalsQueryRequest, canonicalAuth: ToriiCanonicalRequestAuth) async throws -> ToriiMultisigProposalsQueryResponse {
+        let body = try JSONEncoder().encode(requestBody)
+        let request = try makeVpnRequest(path: "/v1/multisig/proposals/query",
                                       method: .post,
-                                      queryItems: nil,
-                                      body: try JSONEncoder().encode(requestBody),
-                                      headers: ["Content-Type": "application/json"])
+                                      body: body,
+                                      canonicalAuth: canonicalAuth)
         let data = try await data(for: request)
         return try decodeJSON(ToriiMultisigProposalsQueryResponse.self, from: data)
     }
 
-    public func resolveMultisigProposal(_ requestBody: ToriiMultisigProposalsResolveRequest) async throws -> ToriiMultisigProposalResolveResponse {
-        let request = try makeRequest(path: "/v1/multisig/proposals/resolve",
+    public func resolveMultisigProposal(_ requestBody: ToriiMultisigProposalsResolveRequest, canonicalAuth: ToriiCanonicalRequestAuth) async throws -> ToriiMultisigProposalResolveResponse {
+        let body = try JSONEncoder().encode(requestBody)
+        let request = try makeVpnRequest(path: "/v1/multisig/proposals/resolve",
                                       method: .post,
-                                      queryItems: nil,
-                                      body: try JSONEncoder().encode(requestBody),
-                                      headers: ["Content-Type": "application/json"])
+                                      body: body,
+                                      canonicalAuth: canonicalAuth)
         let data = try await data(for: request)
         return try decodeJSON(ToriiMultisigProposalResolveResponse.self, from: data)
     }
 
-    public func fetchContractCodeBytes(codeHashHex: String) async throws -> ToriiContractCodeBytes {
+    public func fetchContractCodeBytes(codeHashHex: String, canonicalAuth: ToriiCanonicalRequestAuth) async throws -> ToriiContractCodeBytes {
         let normalized = try ToriiRequestValidation.normalized32ByteHex(codeHashHex, field: "codeHashHex")
         let encoded = encodePathComponent(normalized)
-        let request = try makeRequest(path: "/v1/contracts/code-bytes/\(encoded)")
+        let request = try makeVpnRequest(path: "/v1/contracts/code-bytes/\(encoded)", canonicalAuth: canonicalAuth)
         let data = try await data(for: request)
         return try decodeJSON(ToriiContractCodeBytes.self, from: data)
     }

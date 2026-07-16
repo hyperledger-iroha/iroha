@@ -44,6 +44,11 @@
       "import": "./dist/ivmArtifact.js",
       "types": "./ivm-artifact.d.ts"
     },
+    "./ivm-artifact-admission-wasm": {
+      "browser": "./dist/ivmArtifactAdmissionWasm.js",
+      "import": "./dist/ivmArtifactAdmissionWasm.js",
+      "types": "./ivm-artifact-admission-wasm.d.ts"
+    },
     "./instruction-builders": {
       "import": "./dist/instructionBuilders.js",
       "types": "./index.d.ts"
@@ -117,6 +122,9 @@
       ],
       "ivm-artifact": [
         "./ivm-artifact.d.ts"
+      ],
+      "ivm-artifact-admission-wasm": [
+        "./ivm-artifact-admission-wasm.d.ts"
       ],
       "instruction-builders": [
         "./index.d.ts"
@@ -198,6 +206,7 @@
     "index.d.ts",
     "canonical-request.d.ts",
     "ivm-artifact.d.ts",
+    "ivm-artifact-admission-wasm.d.ts",
     "transaction-codec.d.ts",
     "smart-contract-deployment.d.ts",
     "connect.browser.d.ts",

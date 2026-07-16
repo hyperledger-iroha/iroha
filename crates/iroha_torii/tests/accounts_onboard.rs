@@ -438,7 +438,7 @@ async fn accounts_onboard_token_is_bound_to_one_fully_qualified_alias_domain_on_
             norito::json!({
                 "alias": "cross-domain-multisig@other.universal",
                 "required_signers": 2,
-                "member_account_ids": [member_one.to_string(), member_two.to_string()]
+                "member_account_ids": (vec![member_one.to_string(), member_two.to_string()])
             }),
         ),
         (
@@ -446,7 +446,7 @@ async fn accounts_onboard_token_is_bound_to_one_fully_qualified_alias_domain_on_
             norito::json!({
                 "alias": "domainless-multisig@universal",
                 "required_signers": 2,
-                "member_account_ids": [member_one.to_string(), member_two.to_string()]
+                "member_account_ids": (vec![member_one.to_string(), member_two.to_string()])
             }),
         ),
     ];

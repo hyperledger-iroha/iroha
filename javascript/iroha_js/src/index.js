@@ -318,6 +318,11 @@ export {
   prepareBrowserContractArtifact,
 } from "./smartContractDeployment.js";
 export {
+  IVM_ARTIFACT_ADMISSION_MAX_INPUT_BYTES,
+  instantiateIvmArtifactAdmissionWasm,
+  verifyIvmContractArtifactAdmission,
+} from "./ivmArtifactAdmissionWasm.js";
+export {
   buildBurnAssetInstruction,
   buildMintAssetInstruction,
   buildMintTriggerRepetitionsInstruction,

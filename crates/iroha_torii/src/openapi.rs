@@ -540,6 +540,22 @@ fn alias_auth_required_response(description: &str) -> Value {
     )
 }
 
+fn contract_code_auth_required_response(description: &str) -> Value {
+    canonical_request_auth_required_response(
+        description,
+        "contract_code_auth_required",
+        "Stable code returned when canonical request authentication is required for contract artifact reads.",
+    )
+}
+
+fn multisig_read_auth_required_response(description: &str) -> Value {
+    canonical_request_auth_required_response(
+        description,
+        "multisig_read_auth_required",
+        "Stable code returned when canonical request authentication is required for multisig state reads.",
+    )
+}
+
 fn onboarding_auth_required_response() -> Value {
     let mut response = typed_dual_format_response(
         "Authentication failed before onboarding body processing. The ErrorEnvelope code is `api_token_required` when deployment-wide Torii authentication fails, or `onboarding_auth_required` when the dedicated token is missing, duplicated, malformed, or does not match the configured BLAKE3 digest.",
@@ -2955,13 +2971,7 @@ fn contracts_paths() -> Map {
     );
     paths.insert(
         "/v1/contracts/code-bytes/{code_hash}".to_owned(),
-        Value::Object(json_get_operation(
-            "Contracts",
-            "Fetch contract code bytes.",
-            "Fetch contract code bytes (base64) by code hash.",
-            "#/components/schemas/JsonValue",
-            vec![string_path_param("code_hash", "Contract code hash (hex).")],
-        )),
+        Value::Object(contract_code_bytes_get_operation()),
     );
     paths.insert(
         "/v1/assets/transfer".to_owned(),
@@ -3129,7 +3139,7 @@ fn multisig_alias_read_operation(
     operation.insert(
         "description".into(),
         Value::String(format!(
-            "{description} A canonical `multisig_account_id` selector remains available without request-signing headers. A `multisig_account_alias` selector requires canonical request signing; body fields never establish signer identity."
+            "{description} Both canonical `multisig_account_id` and `multisig_account_alias` selectors require canonical request signing; body fields never establish signer identity."
         )),
     );
     operation.insert(
@@ -3142,8 +3152,8 @@ fn multisig_alias_read_operation(
         .expect("multisig POST responses")
         .insert(
             "401".to_owned(),
-            alias_auth_required_response(
-                "Canonical request signing is required when the selector uses `multisig_account_alias`; a body-only alias selector is not authentication.",
+            multisig_read_auth_required_response(
+                "Canonical request signing is required for every multisig state selector; a body selector is not authentication.",
             ),
         );
     methods
@@ -10258,7 +10268,7 @@ fn governed_contract_get_operation() -> Map {
     );
     responses.insert(
         "401".to_owned(),
-        alias_auth_required_response(
+        contract_code_auth_required_response(
             "Canonical request signing is required for governed contract metadata.",
         ),
     );
@@ -10280,6 +10290,71 @@ fn governed_contract_get_operation() -> Map {
         "500".to_owned(),
         json_response(
             "Active contract state, artifact metadata, manifest provenance, hashes, subject, or public entrypoints failed integrity validation.",
+            error_schema_reference(),
+        ),
+    );
+    operation.insert("responses".into(), Value::Object(responses));
+    let mut methods = Map::new();
+    methods.insert("get".to_owned(), Value::Object(operation));
+    methods
+}
+
+fn contract_code_bytes_get_operation() -> Map {
+    let mut operation = Map::new();
+    operation.insert(
+        "tags".into(),
+        Value::Array(vec![Value::String("Contracts".to_owned())]),
+    );
+    operation.insert(
+        "summary".into(),
+        Value::String("Fetch contract code bytes.".to_owned()),
+    );
+    operation.insert(
+        "description".into(),
+        Value::String(
+            "Fetch the canonical base64 contract artifact by code hash. Canonical account request signing is required."
+                .to_owned(),
+        ),
+    );
+    operation.insert(
+        "operationId".into(),
+        Value::String("contractCodeBytesGet".to_owned()),
+    );
+    let mut parameters = vec![string_path_param("code_hash", "Contract code hash (hex).")];
+    parameters.extend(canonical_request_auth_header_parameters());
+    operation.insert("parameters".into(), Value::Array(parameters));
+    let mut responses = Map::new();
+    responses.insert(
+        "200".to_owned(),
+        json_response(
+            "The canonical base64 contract artifact.",
+            schema_ref("JsonValue"),
+        ),
+    );
+    responses.insert(
+        "400".to_owned(),
+        json_response(
+            "The contract code hash is invalid.",
+            error_schema_reference(),
+        ),
+    );
+    responses.insert(
+        "401".to_owned(),
+        contract_code_auth_required_response(
+            "Canonical request signing is required for contract artifact bytes.",
+        ),
+    );
+    responses.insert(
+        "404".to_owned(),
+        json_response(
+            "No contract artifact exists for the code hash.",
+            error_schema_reference(),
+        ),
+    );
+    responses.insert(
+        "429".to_owned(),
+        json_response(
+            "Contract artifact read rate exceeded.",
             error_schema_reference(),
         ),
     );
@@ -31590,16 +31665,27 @@ mod tests {
             ("X-Iroha-Witness".to_owned(), false),
         ];
 
-        for (path, method, response_schema) in [
+        for (path, method, response_schema, reject_code, expected_statuses) in [
             (
                 "/v1/contracts/aliases/resolve",
                 "post",
                 "#/components/schemas/ContractAliasResolveResponse",
+                "alias_auth_required",
+                &["200", "400", "401", "404", "429", "500"][..],
             ),
             (
                 "/v1/gov/contracts/{contract_address}",
                 "get",
                 "#/components/schemas/GovernedContractResponse",
+                "contract_code_auth_required",
+                &["200", "400", "401", "404", "429", "500"][..],
+            ),
+            (
+                "/v1/contracts/code-bytes/{code_hash}",
+                "get",
+                "#/components/schemas/JsonValue",
+                "contract_code_auth_required",
+                &["200", "400", "401", "404", "429"][..],
             ),
         ] {
             let operation = openapi_operation(&document, path, method);
@@ -31608,7 +31694,7 @@ mod tests {
                 canonical_headers,
                 "{method} {path} canonical authentication headers"
             );
-            assert_alias_auth_required_response(operation, path);
+            assert_canonical_auth_required_response(operation, path, reject_code);
             assert_eq!(
                 operation_response_schema_ref(operation, "200", path),
                 response_schema,
@@ -31623,8 +31709,7 @@ mod tests {
                     .keys()
                     .map(String::as_str)
                     .collect::<BTreeSet<_>>(),
-                ["200", "400", "401", "404", "429", "500"]
-                    .into_iter()
+                expected_statuses.iter().copied()
                     .collect(),
                 "{method} {path} must document the exact fail-closed response surface"
             );
@@ -31776,15 +31861,19 @@ mod tests {
                 canonical_headers,
                 "POST {path} conditional canonical authentication headers"
             );
-            assert_alias_auth_required_response(operation, path);
+            assert_canonical_auth_required_response(
+                operation,
+                path,
+                "multisig_read_auth_required",
+            );
             let description = operation
                 .get("description")
                 .and_then(Value::as_str)
                 .unwrap_or_else(|| panic!("POST {path} description"));
             assert!(
-                description.contains("`multisig_account_id` selector remains available without")
+                description.contains("Both canonical `multisig_account_id`")
             );
-            assert!(description.contains("`multisig_account_alias` selector requires"));
+            assert!(description.contains("`multisig_account_alias` selectors require"));
             assert!(description.contains("body fields never establish signer identity"));
         }
 

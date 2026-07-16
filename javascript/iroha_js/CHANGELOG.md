@@ -4,6 +4,11 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
 
 ## [Unreleased]
 
+- Added digest-anchored browser instantiation for the raw shared
+  `ivm_artifact_admission` WebAssembly verifier. Browser contract deployment
+  now requires that authenticated verifier and cross-checks its semantic
+  admission result against the compiler identities and canonical manifest
+  before any node read, signing callback, or transaction submission.
 - Made canonical Torii request authentication browser-safe and first-release
   exact: `X-Iroha-Account` now requires a canonical lowercase ASCII account
   alias and rejects I105, padded, case-foldable, non-ASCII, percent-encoded,

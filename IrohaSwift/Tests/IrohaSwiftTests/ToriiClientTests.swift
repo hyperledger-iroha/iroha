@@ -433,6 +433,15 @@ final class ToriiContractAPITests: XCTestCase {
         )
     }
 
+    private var canonicalReadAuth: ToriiCanonicalRequestAuth {
+        ToriiCanonicalRequestAuth(
+            accountId: authority,
+            privateKey: signingSeed,
+            timestampMs: 4_102_444_801_000,
+            nonce: "canonical-read-test"
+        )
+    }
+
     private func jsonBody(_ request: URLRequest) throws -> [String: Any] {
         let data: Data
         if let body = request.httpBody {
@@ -564,7 +573,7 @@ final class ToriiContractAPITests: XCTestCase {
             ])
         }
 
-        let result = try await makeClient().resolveContractAlias(contractAlias)
+        let result = try await makeClient().resolveContractAlias(contractAlias, canonicalAuth: canonicalReadAuth)
         XCTAssertEqual(result.contractAddress, contractAddress)
         XCTAssertEqual(result.binding?.status, .permanent)
     }
@@ -584,7 +593,7 @@ final class ToriiContractAPITests: XCTestCase {
                 return (http, Data(payload.utf8))
             }
             do {
-                _ = try await makeClient().resolveContractAlias(contractAlias)
+                _ = try await makeClient().resolveContractAlias(contractAlias, canonicalAuth: canonicalReadAuth)
                 XCTFail("adversarial alias response was accepted: \(payload)")
             } catch {}
         }
@@ -18930,7 +18939,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         let request = ToriiMultisigSpecRequest(
             selector: ToriiMultisigAccountSelector(multisigAccountAlias: "cbdc@bankb")
         )
-        makeClient().getMultisigSpec(request) { result in
+        makeClient().getMultisigSpec(request, canonicalAuth: canonicalReadAuth) { result in
             switch result {
             case .success(let response):
                 XCTAssertEqual(response.resolvedMultisigAccountId, "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB")
@@ -18966,7 +18975,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         let request = ToriiMultisigSpecRequest(
             selector: ToriiMultisigAccountSelector(multisigAccountAlias: "cbdc@banka.universal")
         )
-        makeClient().getMultisigSpec(request) { result in
+        makeClient().getMultisigSpec(request, canonicalAuth: canonicalReadAuth) { result in
             switch result {
             case .success(let response):
                 XCTAssertEqual(response.resolvedMultisigAccountId, "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB")
@@ -19025,7 +19034,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             cursor: "page-1",
             limit: 25
         )
-        makeClient().queryMultisigProposals(request) { result in
+        makeClient().queryMultisigProposals(request, canonicalAuth: canonicalReadAuth) { result in
             switch result {
             case .success(let response):
                 XCTAssertEqual(response.proposals.count, 1)
@@ -19070,7 +19079,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             selector: ToriiMultisigAccountSelector(multisigAccountAlias: "cbdc@banka"),
             instructionsHash: proposalId
         )
-        makeClient().resolveMultisigProposal(request) { result in
+        makeClient().resolveMultisigProposal(request, canonicalAuth: canonicalReadAuth) { result in
             switch result {
             case .success(let response):
                 XCTAssertEqual(response.proposalId, proposalId)
@@ -19162,7 +19171,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             return (response, body)
         }
 
-        makeClient().fetchContractCodeBytes(codeHashHex: codeHash) { result in
+        makeClient().fetchContractCodeBytes(codeHashHex: codeHash, canonicalAuth: canonicalReadAuth) { result in
             switch result {
             case .success(let record):
                 XCTAssertEqual(record.codeB64, "AAAA")
@@ -19189,7 +19198,7 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             return (response, body)
         }
 
-        makeClient().fetchContractCodeBytes(codeHashHex: codeHash) { result in
+        makeClient().fetchContractCodeBytes(codeHashHex: codeHash, canonicalAuth: canonicalReadAuth) { result in
             switch result {
             case .success:
                 XCTFail("expected invalid base64 decoding failure")

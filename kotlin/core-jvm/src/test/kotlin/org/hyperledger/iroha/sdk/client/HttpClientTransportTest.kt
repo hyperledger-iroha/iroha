@@ -1405,7 +1405,9 @@ class HttpClientTransportTest {
             config = ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build(),
         )
 
-        val response = transport.getGovernanceContract(contractAddress).join()
+        val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
+        val auth = ToriiCanonicalRequestAuth("alice", keyPair.private, 1_700_000_000_100L, "governance-read")
+        val response = transport.getGovernanceContract(contractAddress, auth).join()
 
         assertTrue(response.found)
         assertEquals(contractAddress, response.contractAddress)

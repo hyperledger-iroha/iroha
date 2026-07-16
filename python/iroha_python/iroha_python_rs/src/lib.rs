@@ -62,6 +62,7 @@ use iroha_data_model::{
             DvpIsi, PvpIsi, SettlementAtomicity, SettlementExecutionOrder, SettlementId,
             SettlementLeg, SettlementPlan,
         },
+        smart_contract_code::CommitContractDeployment,
         zk::{
             AssetHiddenZkTransfer, RegisterAssetHiddenZkPool, RegisterZkAceIdentityCommitment,
             RegisterZkAsset, RevokeZkAceIdentityCommitment, RotateZkAceIdentityCommitment, Shield,
@@ -83,6 +84,7 @@ use iroha_data_model::{
     proof::{ProofAttachment, ProofAttachmentList, ProofBox, VerifyingKeyBox, VerifyingKeyId},
     repo::prelude::{RepoAgreementId, RepoCashLeg, RepoCollateralLeg, RepoGovernance},
     rwa::{NewRwa, RwaControlPolicy, RwaId, RwaParentRef},
+    smart_contract::{ContractAddress, ContractAlias},
     transaction::{
         Executable, IvmBytecode, SignedTransaction, TransactionBuilder as ModelTransactionBuilder,
         TransactionSubmissionReceipt,
@@ -13809,6 +13811,39 @@ impl Instruction {
         let instruction = json::from_str::<InstructionBox>(payload)
             .map_err(|err| PyValueError::new_err(format!("invalid instruction JSON: {err}")))?;
         Ok(Instruction::new(instruction))
+    }
+
+    /// Construct the atomic smart-contract deployment commit instruction.
+    #[classmethod]
+    #[pyo3(signature = (expected_deploy_nonce, contract_address, code_hash_hex, contract_alias, lease_expiry_ms=None, expected_previous_contract_address=None))]
+    fn commit_contract_deployment(
+        _cls: &Bound<'_, PyType>,
+        expected_deploy_nonce: u64,
+        contract_address: &str,
+        code_hash_hex: &str,
+        contract_alias: &str,
+        lease_expiry_ms: Option<u64>,
+        expected_previous_contract_address: Option<&str>,
+    ) -> PyResult<Self> {
+        let instruction = CommitContractDeployment {
+            expected_deploy_nonce,
+            contract_address: ContractAddress::from_str(contract_address).map_err(|error| {
+                PyValueError::new_err(format!("invalid contract_address `{contract_address}`: {error}"))
+            })?,
+            code_hash: Hash::from_str(code_hash_hex).map_err(|error| {
+                PyValueError::new_err(format!("invalid code_hash_hex `{code_hash_hex}`: {error}"))
+            })?,
+            contract_alias: ContractAlias::from_str(contract_alias).map_err(|error| {
+                PyValueError::new_err(format!("invalid contract_alias `{contract_alias}`: {error}"))
+            })?,
+            lease_expiry_ms,
+            expected_previous_contract_address: expected_previous_contract_address
+                .map(|value| ContractAddress::from_str(value).map_err(|error| {
+                    PyValueError::new_err(format!("invalid expected_previous_contract_address `{value}`: {error}"))
+                }))
+                .transpose()?,
+        };
+        Ok(Self::new(instruction.into()))
     }
 
     /// Construct the signed-transaction instruction for a Nexus lane lifecycle update.

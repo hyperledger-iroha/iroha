@@ -31,11 +31,18 @@ class KagemushaSourceTreeSealTests(unittest.TestCase):
         self.temporary.cleanup()
 
     def git(self, *arguments: str) -> bytes:
+        environment = os.environ.copy()
+        environment["GIT_CONFIG_GLOBAL"] = os.devnull
+        environment["GIT_CONFIG_NOSYSTEM"] = "1"
+        for name in tuple(environment):
+            if name == "GIT_CONFIG_COUNT" or name.startswith(("GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_")):
+                del environment[name]
         return subprocess.run(
             ["git", "-C", str(self.root), *arguments],
             check=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
+            env=environment,
         ).stdout
 
     def commit(self) -> None:
@@ -66,6 +73,17 @@ class KagemushaSourceTreeSealTests(unittest.TestCase):
         self.git("add", "plain.txt")
         self.git("commit", "-q", "-m", "content")
         self.assertNotEqual(first, seal.compute_fingerprint(self.root))
+
+    def test_fixture_commits_ignore_global_signing_configuration(self) -> None:
+        hostile_config = self.root / "hostile.gitconfig"
+        hostile_config.write_text(
+            "[commit]\n\tgpgsign = true\n[user]\n\tsigningkey = unavailable-test-key\n",
+            encoding="utf-8",
+        )
+        (self.root / "tracked.txt").write_text("tracked\n", encoding="utf-8")
+        with mock.patch.dict(os.environ, {"GIT_CONFIG_GLOBAL": str(hostile_config)}):
+            self.commit()
+        self.assertEqual(self.git("rev-list", "--count", "HEAD"), b"1\n")
 
     def test_rejects_untracked_and_staged_files(self) -> None:
         (self.root / "tracked.txt").write_text("tracked\n", encoding="utf-8")
