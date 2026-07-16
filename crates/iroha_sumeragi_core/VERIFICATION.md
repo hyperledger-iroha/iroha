@@ -46,14 +46,18 @@ verification results:: 1690 verified, 0 errors  # pinned vstd dependency
 verification results:: 76 verified, 0 errors    # iroha_sumeragi_core root obligations
 ```
 
-Evidence for the source-link edit itself:
+Evidence for the source-link edit itself uses the isolated harness because
+`iroha_sumeragi_core` is intentionally excluded from the root workspace:
 
 ```text
-CARGO_TARGET_DIR=/tmp/codex-wal-exact-target \
-  cargo test -p iroha_sumeragi_core -- --nocapture
-  64 unit/reducer/WAL tests, 7 model-trace replays, and 7 deterministic network simulations passed
-CARGO_TARGET_DIR=/tmp/codex-wal-exact-target \
-  cargo clippy -p iroha_sumeragi_core --lib -- -D warnings
+bash scripts/formal/run_sumeragi_v2_harness.sh --unit
+  86 unit/reducer/WAL/refinement tests passed
+bash scripts/formal/run_sumeragi_v2_harness.sh --model-replay
+  8 model-trace replay tests passed
+bash scripts/formal/run_sumeragi_v2_harness.sh --fast-network
+  9 deterministic network simulations passed
+bash scripts/formal/run_sumeragi_v2_harness.sh \
+  cargo clippy --locked --offline -p iroha_sumeragi_core --lib -- -D warnings
   passed
 PATH=<pinned-verus> CARGO_TARGET_DIR=/tmp/codex-wal-exact-verus-target \
   scripts/verify_sumeragi_v2.sh
@@ -68,39 +72,56 @@ below.
 
 ## TLC trace replay against production
 
-`tests/model_trace_replay.rs` replays a normalized 101-action TLC witness
-against this crate's exact public `Reducer::step` API. The witness comes from
-`SumeragiV2TraceWitness.tla` and the `LivenessSpec` corridor with a
-nonresponsive view-zero leader. Three timeout votes form and durably install a
-TC, all four reducers enter view one, the rotated leader proposes subject A,
-and distinct three-validator Prepare and Commit quorums produce a durable
-decision. The replay drives actual Persist, Sign, Broadcast, FetchBody,
-StoreBody, ValidateBody, EnterView, and Apply effects; it does not call a test
-reference reducer.
+`tests/model_trace_replay.rs` replays a normalized 95-action TLC witness against
+this crate's exact public `Reducer::step` API. It is freshly emitted from the
+`SumeragiV2TraceWitness.tla` behavior with a nonresponsive view-zero leader.
+Three timeout votes form and durably install a TC, all four reducers enter view
+one, the rotated leader proposes subject A, and distinct three-validator
+Prepare and Commit quorums produce a durable decision. The replay drives actual
+Persist, Sign, Broadcast, FetchBody, StoreBody, ValidateBody, EnterView, and
+Apply effects; it does not call a test reference reducer.
 
-TLC 1.8.0 is checksum pinned because earlier TLC releases cannot emit JSON
-traces. Reproduce and compare the witness with:
+The witness module selects one representative production-replay schedule; its
+selection operators are not Core behavior or proof premises. It starts at GST,
+does not refetch an exact body after durable storage, uses the view leader as
+the single projected PrepareQC aggregator, and emits one projected PrepareQC
+and CommitQC per round and subject. One designated non-preparing validator is
+kept below a local Prepare quorum and delays body validation until QC
+observation begins, which makes the finite trace cross the `ObservePrepare` WAL
+boundary. It remains a voting validator in the four-validator model. These
+selection rules apply only to Prepare scheduling and QC projection. They never
+restrict Commit vote delivery or retransmission: the same signed Commit
+envelope can be attempted before a lock and admitted after intervening lock
+persistence.
+
+TLA2Tools 1.7.4 is checksum pinned. That release does not support
+`-dumpTrace json`, so the comparator uses supported `-tool` message framing and
+extracts the trace-only scalar `witnessAction` record. Reproduce and compare the
+witness with:
 
 ```text
-TLA2TOOLS_JAR=<pinned-1.8.0-jar> \
-  scripts/formal/check_sumeragi_v2_replay_trace.sh
-TLC replay witness matches 101 checked-in production actions
+scripts/formal/check_sumeragi_v2_replay_trace.sh
+TLC replay witness matches 95 checked-in production actions
 
 CARGO_TARGET_DIR=/tmp/codex-sumeragi-model-trace-target \
   cargo test --locked -p iroha_sumeragi_core --test model_trace_replay
-7 passed; 0 failed
+8 passed; 0 failed
 ```
 
-The normalizer rejects unknown `ReliableNext` state deltas and non-contiguous
-TLC states. The Rust trace parser additionally rejects unknown actions,
-malformed fields, stale/wrong leaders, missing durable intent boundaries, and
+The normalizer rejects malformed tool-message framing, a mismatched seed or
+invariant, non-contiguous states, duplicate or non-scalar marker fields,
+unknown actions, invalid four-validator parameters, and any trace not ending
+at `PersistDecision`. The Rust trace parser additionally rejects malformed
+fields, stale/wrong leaders, missing durable intent boundaries, and
 Prepare/Commit certificate formation without three distinct delivered voters.
 Adversarial production tests recover every prefix of the witness WALs and
 confirm that the combined trace crosses all seven record classes. They also
-cover crash after acknowledged intent, exact WAL resume, stale-generation
-completion, duplicate and overlapping certificate signers, Prepare-vote and
+cover exact signed Commit-envelope redelivery across the pre-lock/post-lock
+consumer boundary, crash after acknowledged intent, exact WAL resume,
+stale-generation completion, duplicate and overlapping certificate signers, Prepare-vote and
 full-high-QC timeout equivocation, and invalid body validation withholding
-Prepare.
+Prepare. The Python normalizer suite adds 15 positive and fail-closed parser
+cases.
 
 This is executable refinement evidence, not deductive proof. The checked-in
 witness uses one four-validator permissioned/count context; unequal-stake
@@ -139,6 +160,9 @@ The 2026-07-13 macOS arm64 run completed all 100,000 heights in 57.53 seconds
 with no conflicting decision or chain-prefix failure. This is a deterministic
 long-run implementation test, not a substitute for the deductive safety or
 conditional-liveness proofs.
+A final-source rerun on 2026-07-16 completed in 52.97 seconds with both chain
+prefixes intact. This focused harness result does not replace the release
+profile's checkout-manifest-bound evidence rerun.
 
 ## Current refinement model
 
@@ -266,11 +290,15 @@ effect predicate. This keeps the solver query modular without changing the
 runtime decision or raising its resource limit.
 
 Each side of the transition also carries fixed-width cardinalities for the
-candidate/body work, pending and known PrepareQCs, current-view vote and
+candidate/body work, pending and known PrepareQCs, active vote and current-view
 timeout pools, locally formed certificates, retained outbound controls,
 signature FIFO/in-flight slot, and replay-resume flag. The gate enforces:
 
-- at most two current-view vote pools and `2 * validator_count` entries;
+- at most two active vote pools and `2 * validator_count` entries: current
+  Prepare plus either current Commit or the exact historical locked Commit.
+  Every Commit requires the exact active durable lock; acknowledging a newer
+  `LockAndCommit` applies that lock, prunes the historical pool, and only then
+  releases its current Commit signature;
 - at most one timeout pool and `validator_count` timeout entries;
 - at most two locally formed QCs, one locally formed TC, and seven retained
   outbound control classes;
@@ -285,6 +313,14 @@ Acknowledging `InstallTimeout` additionally requires the exact production
 reset: candidate/body/pending/vote/timeout/formed pools are empty, at most two
 durable PrepareQCs remain known, and at most the three permitted post-TC
 control classes remain retained.
+
+A pre-lock current Commit is a recoverable ignore rather than a third pool.
+The adapter advances its locked-Commit consumer epoch after the matching
+acknowledgement, allowing that exact authenticated vote to cross once after the
+lock exists. Retained outbound Commit control serves peers, but is not a
+sufficient local progress witness because broadcast excludes the sender. These
+source-linked reducer constraints preserve the fixed-width cardinality gate;
+they do not by themselves promote the still-incomplete TLAPS liveness ledger.
 
 ## Encoded proof obligations
 
@@ -354,7 +390,8 @@ paths all pass the gate. A rejected candidate returns
 
 The gate receives the complete effect vector as a fixed eight-slot trace. The
 bound is structural: seven retained control-message classes plus at most one
-fetch/apply effect fill eight slots; a ninth fails closed. Every active slot
+Decision body-pipeline effect (FetchBody, StoreBody, ValidateBody, or Apply)
+fill eight slots; a ninth fails closed. Every active slot
 contains its exact vector position and two fixed-width primitive capability
 keys: one requested by the concrete effect and one independently reconstructed
 from the event and candidate state. The verified kernel computes authorization
@@ -374,8 +411,11 @@ counts, and requested/granted boundary keys. The verified relation proves:
   body-pipeline advance;
 - Sign is the last effect, so decision/view/body effects precede the next
   asynchronous signing completion;
-- StoreBody and ValidateBody are single-effect transitions caused by their
-  exact predecessor completion;
+- StoreBody and ValidateBody are single-effect transitions when caused by
+  their exact predecessor completion;
+- a Decision retransmission emits retained control messages followed by at
+  most one exact FetchBody, StoreBody, ValidateBody, or Apply owner, and the
+  pipeline effect must be final;
 - an EnterView effect is possible only on acknowledgement of an
   InstallTimeout continuation; and
 - the ignored/busy, begin-persist, acknowledge-persist, and non-durable action

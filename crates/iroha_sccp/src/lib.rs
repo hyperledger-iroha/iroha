@@ -5996,8 +5996,7 @@ mod tests {
                 }),
             },
             destination,
-            sora_outbound_execution_policy:
-                sccp_sora_outbound_execution_policy_test_fixture_v1(),
+            sora_outbound_execution_policy: sccp_sora_outbound_execution_policy_test_fixture_v1(),
             settlement: SccpSoraSettlementV1 {
                 asset_definition_id: sccp_v1_taira_xor_asset_definition_id(),
                 custody_account_id: AccountId::new(custody),
@@ -6051,8 +6050,7 @@ mod tests {
                 }),
             },
             destination,
-            sora_outbound_execution_policy:
-                sccp_sora_outbound_execution_policy_test_fixture_v1(),
+            sora_outbound_execution_policy: sccp_sora_outbound_execution_policy_test_fixture_v1(),
             settlement: SccpSoraSettlementV1 {
                 asset_definition_id: sccp_v1_taira_xor_asset_definition_id(),
                 custody_account_id: AccountId::new(custody),

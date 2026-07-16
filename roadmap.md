@@ -1,6 +1,6 @@
 # Roadmap
 
-Last updated: 2026-07-15
+Last updated: 2026-07-16
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 Completed history lives in [`status.md`](./status.md).
@@ -25123,45 +25123,159 @@ The canonical status payload exposes exact partial dual quorums, outbound
 intent/work ownership, queue age/debt, transition age, ignore counts, and a
 view-aware blocker.
 
-The focused P2P, fair-ingress, locked-Commit, WAL, and leader-crash corridors
-are green. On 2026-07-15, a freshly built, digest-pinned `iroha3d` also passed
+Every Commit vote now requires the exact active durable lock, including votes
+from the current view. A pre-lock current Commit is a recoverable ignore. Once
+the matching `LockAndCommit` acknowledgement applies the lock, the adapter
+advances the locked-Commit consumer epoch so that exact vote may enter once; the
+reducer then prunes the superseded historical Commit pool before releasing the
+current Commit signature. The old pool remains intact if persistence fails.
+Outbound retransmission is a peer-delivery source, not a sufficient local
+progress witness because broadcast excludes the sender.
+
+The deferred Progress reserve is now partitioned into non-displacing
+locked-Commit, PrepareQC, CommitQC, and TC ownership classes. Durable Decision
+retransmission reconstructs store, validation, and application work from its
+recorded body stage. The height watchdog advances only on bounded semantic or
+Prepare/Commit count-and-power high-water, while candidate status reflects
+actual ownership, validation and Apply sidecar waits remain distinct, and the
+bounded worker completion handoff reports depth, capacity, age, and service
+debt. Successor construction is visible as runner-owned `Running` work and
+emits `SuccessorHeightActivated` only after verified context construction.
+
+Decision is now an explicit terminal cleanup boundary: losing proposal, body,
+candidate, outbound, lane, and retransmission ownership is retired before the
+decided-body recovery effect reserves capacity, while the exact decided
+pipeline remains protected through application. Nonzero-view proposal replay
+also joins the safety-WAL intent with the independently fsynced body-store
+validation commitment before startup signing, and a production-path regression
+continues from that restart through broadcast and the exact Prepare vote.
+
+Body-pipeline completions now have one evidence-preserving ownership domain
+across runtime ingress and the adapter's Busy-deferred queues. Exact retries
+compare the complete manifest and durable/validated receipts, including
+validation polarity; conflicting evidence and multiple owners fail closed
+before any proposal-pruning side effect. A production Busy-transfer regression
+pins the cleanup seam which the four-validator genesis reproduction exposed.
+`LocalProposalReady` now uses the Completion reservation in both domains rather
+than competing with Normal ingress. Individual signed Votes cannot establish
+execution-commitment authority; they require an exact binding from local
+validation, verified WAL replay, or quorum-authenticated QC evidence and remain
+recoverable while unbound. Commitment conflicts are rejected before serialized
+runtime ownership.
+
+Body-availability rebind now requires the installed destination tag and
+transactionally preflights source plus destination ownership. One exact source
+moves or coalesces into one exact destination; an uninstalled destination is a
+recoverable non-mutating caller rejection, while conflicts or duplicate owners
+fail closed before mutation. Pipeline and Decision retirements also preflight
+before removing any owner. Certified-body request conflicts remain nonfatal,
+and conflicting Commit-certificate responses preserve outstanding discovery
+for retry. The complete ten-module production-liveness wrapper is green:
+52/52 reducer/core, 10/10 refinement, 4/4 reducer source-link, 51/51 adapter,
+82/82 effects, 55/55 lane work, 34/34 runtime, 19/19 runner, 66/66 worker, and
+14/14 watchdog tests (387 passed, 0 failed, 0 ignored). Cargo discovery also
+confirmed all 104 required release tests are present and non-ignored. The
+final-source exact one-attempt four-validator
+genesis rerun passed on all validators in 456.76 seconds, with retained logs at
+`target/sumeragi-v2-genesis-final-hardening-20260716/irohad_test_network_7sJJmM`.
+
+Eight arbitrary-context Core safety obligations are TLAPS-proved: durable-vote
+uniqueness, lock monotonicity, external validity, certified-body availability,
+certificate uniqueness, agreement, conflicting-CommitQC exclusion, and crash
+recovery. The receipt-backed chain-prefix and epoch-boundary obligations are
+also proved. Historical TC-lock Commit authorization and the dependent full
+timeout-protection wrapper remain `specified_unproved`; only the narrower
+grouped-timeout kernel for Commit intents already present at timeout is proved.
+
+The focused P2P, fair-ingress, locked-Commit, WAL, leader-crash, Decision
+cleanup, and nonzero-view restart corridors are green. On 2026-07-15, a
+freshly built, digest-pinned `iroha3d` also passed
 one exact no-retry four-validator genesis attempt on every validator in 59.09
-seconds. The formal checker passes all 59 tests and SANY is clean, but the proof
-ledger still reports `machine_checked_completion: false`. Four-/32-seed
-real-network, 100,000-height chaos, and 24-hour Taira release runners are in
-tree; their unexecuted long evidence is not complete merely because the gates
-exist.
+seconds. The checked formal baseline and SANY analysis are recorded in
+`status.md`. The complete
+timeout-envelope DOMAIN/adapter boundary is TLAPS-proved, and the
+deferred-owner replacement mutation now pins scheduler-wide exact-envelope
+coalescing. The proof ledger still reports `machine_checked_completion: false`.
+Strict proof completion therefore remains pending, and post-GST height liveness
+remains a conditional target and paper argument rather than a machine-checked
+completion. The serial lane-work module
+is green at 55/55. The PR gate now inventories 104 production-liveness tests
+across ten Rust modules before network startup: the prior 103 plus the
+executor-batch refinement regression. Nine exact regressions cover
+completion coalescing, conflicting evidence, production Busy transfer,
+transactional cross-queue retirement/duplicate rejection, and
+installed/destination rebind.
+It also inventories the Rust
+cross-SDK fixture authority and exact JavaScript/Python status-parser tests.
+The exact-evidence four-validator reproduction passed its first attempt in
+351.76 seconds, with retained logs under
+`target/sumeragi-v2-genesis-recheck-exact-evidence-20260715/irohad_test_network_3XUobQ`.
+The complete ten-module wrapper and final exact genesis rerun are green, but
+the complete PR corridor still needs a recorded green run. A standalone
+final-source 100,000-height permissioned/NPoS chaos run also preserved both
+50,000-height chain prefixes in 52.97 seconds. The four-seed PR and 32-seed
+release real-network matrices plus the 24-hour Taira runner remain unexecuted;
+the release profile must also reproduce the chaos result under its
+checkout-manifest-bound evidence root.
 
-Outstanding release work:
+The ledger retains exactly 14 `specified_unproved` obligations. Outstanding
+release work:
 
-- discharge the eleven end-to-end safety/chain wrappers for durable-vote
-  uniqueness, lock monotonicity, external validity, certified-body
-  availability, certificate uniqueness, timeout protection, agreement,
-  conflicting-CommitQC exclusion, chain prefix, crash recovery, and epoch
-  boundaries which remain ledgered `specified_unproved` above their proved
-  kernels;
-- discharge the eight concrete asynchronous obligations for runner scheduler
-  preservation, progress-witness preservation, post-GST deadlock freedom,
-  protected service-rank decrease, post-GST starvation freedom, timeout-view
-  progress, responsive-leader rotation, and application liveness. The
-  one-height `AsyncTypeInvariantObligation` and generation-scoped delivery
-  obligation are already `tlaps_proved`;
+- discharge historical TC-lock Commit authorization and then the dependent
+  direct-or-installed-authorization timeout induction. For every potential
+  Commit quorum, the target TC must either directly protect the round and
+  subject or expose an honest non-strict timeout/Commit intersection witness
+  with durable installed-TC authorization. The exception must remain limited
+  to the exact durably installed lock after body validation, must reject a higher
+  conflicting-subject local Prepare intent or durable highest PrepareQC, and
+  must preserve persistence-before-sign. Higher same-subject reproposals do
+  not block reconstruction. The strict grouped-timeout kernel for Commit
+  intents already present at timeout remains `tlaps_proved`;
+
+- discharge the ten concrete asynchronous obligations for the
+  production effective-lock body-acquisition composition, runner scheduler
+  preservation, async type closure, progress-witness preservation, post-GST
+  deadlock freedom, protected service-rank decrease, post-GST starvation
+  freedom, timeout-view progress, responsive-leader rotation, and application
+  liveness. Rotation must reach a view in which the responsive honest scheduled
+  leader itself is active (or decide first), and application must be proved per
+  responsive validator without waiting for every peer to decide. Generation-
+  scoped delivery is already `tlaps_proved`. Async type
+  closure may be promoted only after runner preservation, deadlock freedom only
+  after async type closure, and starvation only after service-rank progress.
+  Progress witnesses additionally wait for async type and generation-scoped
+  delivery; timeout-view progress waits for progress witnesses and starvation;
+  rotating-leader progress waits for effective-lock body acquisition,
+  witnesses, starvation, and timeout-view progress; application waits for
+  witnesses and starvation;
 - discharge the concrete genesis chain product's exact first-successor handoff,
-  ledgered as `GenesisHeightSuccessorHandoffObligation`;
+  ledgered as `GenesisHeightSuccessorHandoffObligation`, only after
+  rotating-leader and application liveness are proved;
 - prove the indexed multi-height
   `SumeragiV2ChainEpochRefinement!HeightLivenessObligation` over the explicit
   successor-instance product by discharging its activation/fairness suffix,
   authenticated historical catch-up fairness transfer for validators absent
   from an old roster, and finite-height temporal induction, without global
   asynchronous shadow state, an alternate consensus transition relation, or a
-  favourable-network corridor;
+  favourable-network corridor; this promotion likewise follows the
+  rotating-leader and application-liveness proofs;
+- execute the cross-SDK fixture/status-parser legs and complete four-seed PR
+  corridor against the final source tree. The 104-test/ten-module pre-network
+  production-liveness inventory is already green, including the nine
+  completion-ownership regressions, installed destination rebind, unbound-Vote
+  authority, exact-lock/consumer-epoch admission, transactional retirement,
+  retryable certificate transport, and executor-batch refinement tests. The
+  ten-test mocked launcher
+  preflight is green and now gates the real matrix, but it is not validator
+  progress evidence;
 - keep the production scheduler/WAL/reducer Verus corridor and exact TLC
   replay gate green against the same sources;
 - execute and archive a clean 32-seed release matrix for four-validator
   genesis, restart, timeout rotation, and divergent PrepareQC convergence,
   including the 50-second Taira bound;
-- execute and archive a clean 100,000-height permissioned/NPoS chain-prefix
-  chaos gate; and
+- reproduce and archive the green 100,000-height permissioned/NPoS
+  chain-prefix chaos gate inside the source-manifest-bound release corridor;
+  the standalone final-source run completed in 52.97 seconds; and
 - complete and archive the fully pinned 24-hour Taira-profile soak, including
   its recorded seed, load, impairment, anchored churn schedule, wall-clock
   throughput, and acceptance bounds, with zero unclassified no-progress

@@ -96,11 +96,16 @@ async fn authoritative_v2_genesis_commits_on_every_validator() -> Result<()> {
             .map(|status| status.blocks)
             .min()
             .unwrap_or_default();
-        let v2 = wait_for_v2_statuses(&peers, committed_floor, STATUS_TIMEOUT).await?;
+        let v2 =
+            wait_for_common_awaiting_v2_round(&peers, committed_floor, STATUS_TIMEOUT).await?;
         validate_v2_status_set(&v2, VALIDATOR_COUNT)?;
         ensure!(
-            v2.iter().all(|status| status.last_committed_height >= 1),
-            "authoritative v2 status must expose the durable genesis CommitQC: {v2:?}"
+            v2.iter().all(|status| {
+                status.last_committed_height >= 1
+                    && status.last_committed_height.checked_add(1) == Some(status.height)
+                    && status_is_awaiting_proposal(&status.phase)
+            }),
+            "durable genesis application must activate one common awaiting-proposal successor height: {v2:?}"
         );
         Ok(())
     }
@@ -145,7 +150,8 @@ async fn authoritative_v2_finalizes_through_validator_restart() -> Result<()> {
         );
 
         let all_peers = network.peers().to_vec();
-        let initial_statuses = normal_statuses(&all_peers).await?;
+        let initial_statuses =
+            wait_for_normal_statuses(&all_peers, 1, STATUS_TIMEOUT).await?;
         ensure!(
             initial_statuses.iter().all(|status| status.blocks >= 1),
             "fresh genesis must be committed by every validator: {initial_statuses:?}"
@@ -190,7 +196,12 @@ async fn authoritative_v2_finalizes_through_validator_restart() -> Result<()> {
         )
         .await?;
 
-        let pre_restart_statuses = normal_statuses(&all_peers).await?;
+        let pre_restart_statuses = wait_for_normal_statuses(
+            &all_peers,
+            initial_committed_floor.saturating_add(1),
+            STATUS_TIMEOUT,
+        )
+        .await?;
         let pre_restart_floor = pre_restart_statuses
             .iter()
             .map(|status| status.blocks)
@@ -243,7 +254,12 @@ async fn authoritative_v2_finalizes_through_validator_restart() -> Result<()> {
         )
         .await?;
 
-        let outage_statuses = normal_statuses(&remaining_peers).await?;
+        let outage_statuses = wait_for_normal_statuses(
+            &remaining_peers,
+            pre_restart_floor.saturating_add(1),
+            STATUS_TIMEOUT,
+        )
+        .await?;
         let outage_floor = outage_statuses
             .iter()
             .map(|status| status.blocks)
@@ -275,7 +291,8 @@ async fn authoritative_v2_finalizes_through_validator_restart() -> Result<()> {
         )
         .await?;
 
-        let recovered_statuses = normal_statuses(&all_peers).await?;
+        let recovered_statuses =
+            wait_for_normal_statuses(&all_peers, outage_floor, STATUS_TIMEOUT).await?;
         let recovered_floor = recovered_statuses
             .iter()
             .map(|status| status.blocks)
@@ -311,7 +328,12 @@ async fn authoritative_v2_finalizes_through_validator_restart() -> Result<()> {
         )
         .await?;
 
-        let final_statuses = normal_statuses(&all_peers).await?;
+        let final_statuses = wait_for_normal_statuses(
+            &all_peers,
+            recovered_floor.saturating_add(1),
+            STATUS_TIMEOUT,
+        )
+        .await?;
         let final_floor = final_statuses
             .iter()
             .map(|status| status.blocks)
@@ -798,6 +820,38 @@ async fn normal_statuses(peers: &[NetworkPeer]) -> Result<Vec<iroha::client::Sta
         );
     }
     Ok(statuses)
+}
+
+async fn wait_for_normal_statuses(
+    peers: &[NetworkPeer],
+    min_blocks: u64,
+    timeout: Duration,
+) -> Result<Vec<iroha::client::Status>> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        let observation = match normal_statuses(peers).await {
+            Ok(statuses) => {
+                if statuses.iter().all(|status| status.blocks >= min_blocks) {
+                    return Ok(statuses);
+                }
+                format!(
+                    "blocks={:?}",
+                    peers
+                        .iter()
+                        .zip(&statuses)
+                        .map(|(peer, status)| (peer.mnemonic(), status.blocks))
+                        .collect::<Vec<_>>()
+                )
+            }
+            Err(error) => format!("status error: {error:#}"),
+        };
+        if Instant::now() >= deadline {
+            return Err(eyre!(
+                "normal status did not reach block height {min_blocks} on every validator within {timeout:?}: {observation}"
+            ));
+        }
+        sleep(FAST_STATUS_POLL_INTERVAL).await;
+    }
 }
 
 async fn wait_for_common_awaiting_v2_round(

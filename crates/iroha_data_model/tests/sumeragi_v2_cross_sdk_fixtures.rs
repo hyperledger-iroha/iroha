@@ -338,7 +338,7 @@ fn shared_sdk_accept_fixtures_are_exact_current_rust_encodings() {
                 age_ms: 19,
             }),
             no_progress_age_ms: 19,
-            blocker: Some(SumeragiV2LivenessBlocker::CommitQuorumMissing),
+            blocker: Some(SumeragiV2LivenessBlocker::LocalControlPending),
             ignore_counts: vec![
                 SumeragiV2IgnoreCount {
                     reason: SumeragiV2IgnoreReason::Duplicate,

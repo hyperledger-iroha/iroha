@@ -506,16 +506,6 @@ cat > "$OUT_DIR/NoritoBridge.artifacts.json" <<EOF
       "required_by": ["topup", "peer_send", "peer_receive", "redemption"]
     },
     {
-      "role": "step_eq_circuit_params",
-      "purpose": "step_eq_circuit_params",
-      "file_name": "step-eq.circuit-params.krv4",
-      "circuit_id": "kagemusha-recursive-spend-step-eq-authenticated-layout-v4",
-      "abi": $BRIDGE_ABI_VERSION,
-      "artifact_type": "KagemushaRecursiveSpendPastaCycleArtifactsV4",
-      "delivery": "content_addressed_external",
-      "required_by": ["topup", "peer_send", "peer_receive", "redemption"]
-    },
-    {
       "role": "step_eq_proving_key",
       "purpose": "step_eq_proving_key",
       "file_name": "step-eq.proving-key.krv4",
@@ -549,16 +539,6 @@ cat > "$OUT_DIR/NoritoBridge.artifacts.json" <<EOF
       "role": "step_ep_parameters",
       "purpose": "step_ep_parameters",
       "file_name": "step-ep.parameters.krv4",
-      "circuit_id": "kagemusha-recursive-spend-step-ep-authenticated-layout-v4",
-      "abi": $BRIDGE_ABI_VERSION,
-      "artifact_type": "KagemushaRecursiveSpendPastaCycleArtifactsV4",
-      "delivery": "content_addressed_external",
-      "required_by": ["topup", "peer_send", "peer_receive", "redemption"]
-    },
-    {
-      "role": "step_ep_circuit_params",
-      "purpose": "step_ep_circuit_params",
-      "file_name": "step-ep.circuit-params.krv4",
       "circuit_id": "kagemusha-recursive-spend-step-ep-authenticated-layout-v4",
       "abi": $BRIDGE_ABI_VERSION,
       "artifact_type": "KagemushaRecursiveSpendPastaCycleArtifactsV4",

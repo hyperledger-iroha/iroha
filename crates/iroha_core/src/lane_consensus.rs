@@ -10,10 +10,13 @@ use iroha_crypto::{Algorithm, Hash, HashOf, PublicKey, Signature};
 #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
 use iroha_data_model::merge::MergeSignerProof;
 use iroha_data_model::{
-    block::consensus::{
-        CertPhase, LaneBlockProposalPayloadHintV1, LaneBlockProposalV1, LaneBlockQcV1,
-        LaneBlockVoteBodyV1, LanePayloadAvailabilityBodyV1, LanePayloadAvailabilityQcV1,
-        NativeAmxReceipt, SumeragiLanePayloadOwnership,
+    block::{
+        BlockHeader,
+        consensus::{
+            CertPhase, LaneBlockProposalPayloadHintV1, LaneBlockProposalV1, LaneBlockQcV1,
+            LaneBlockVoteBodyV1, LanePayloadAvailabilityBodyV1, LanePayloadAvailabilityQcV1,
+            NativeAmxReceipt, SumeragiLanePayloadOwnership,
+        },
     },
     consensus::VALIDATOR_SET_HASH_VERSION_V1,
     merge::{
@@ -3303,6 +3306,57 @@ impl LaneBlockSessionCache {
         before.saturating_sub(self.sessions.len())
     }
 
+    /// Retire speculative sessions tied only to a superseded global carrier.
+    ///
+    /// PrepareQCs, Commit votes, and CommitQCs remain protected: a quorum-certified
+    /// conflicting lane identity must still be presented to locked-body binding so
+    /// it can fail closed. Uncertified proposal/Prepare state may be reconstructed
+    /// from the exact replacement global body and must not occupy capacity or drive
+    /// retransmission for the losing carrier.
+    pub(crate) fn retire_uncommitted_global_anchor(
+        &mut self,
+        global_block_hash: HashOf<BlockHeader>,
+    ) -> usize {
+        let before = self.sessions.len();
+        self.sessions.retain(|_, session| {
+            let tied_to_anchor = session.proposal.as_ref().is_some_and(|proposal| {
+                proposal
+                    .payload_block_hint
+                    .is_some_and(|hint| hint.proposal_block_hash == global_block_hash)
+            });
+            !tied_to_anchor
+                || session_is_eviction_protected(session)
+                || session_has_quorum_certificate(session)
+        });
+        self.rebuild_indices_after_session_retain();
+        before.saturating_sub(self.sessions.len())
+    }
+
+    /// Retire every speculative session not tied to the installed global carrier.
+    ///
+    /// PrepareQCs, Commit votes, and CommitQCs remain protected. This first-lock
+    /// sweep prevents uncertified carriers learned before any global lock from
+    /// consuming bounded cache capacity forever without hiding a certified
+    /// conflict from exact locked-body validation.
+    pub(crate) fn retire_uncommitted_global_anchors_except(
+        &mut self,
+        retained_global_block_hash: HashOf<BlockHeader>,
+    ) -> usize {
+        let before = self.sessions.len();
+        self.sessions.retain(|_, session| {
+            let losing_anchor = session.proposal.as_ref().is_some_and(|proposal| {
+                proposal
+                    .payload_block_hint
+                    .is_some_and(|hint| hint.proposal_block_hash != retained_global_block_hash)
+            });
+            !losing_anchor
+                || session_is_eviction_protected(session)
+                || session_has_quorum_certificate(session)
+        });
+        self.rebuild_indices_after_session_retain();
+        before.saturating_sub(self.sessions.len())
+    }
+
     /// Retain only exact, canonical, unfinalized evidence across a global-height rollover.
     ///
     /// `canonical_proposal` resolves the one Kura-anchored proposal for a lane-local
@@ -3721,7 +3775,6 @@ impl LaneBlockSessionCache {
         before.saturating_sub(self.sessions.len())
     }
 
-    #[cfg(test)]
     fn rebuild_indices_after_session_retain(&mut self) {
         let retained_slot_proposals = self
             .sessions
@@ -3890,7 +3943,6 @@ impl LaneBlockSessionCache {
     /// replacement semantics. A changed global-block hint is normalized even
     /// when the lane consensus identity is unchanged because hints are advisory
     /// and are not signed by lane Prepare/Commit votes.
-    #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
     pub(crate) fn insert_replanned_proposal_replacing_uncommitted_conflict(
         &mut self,
         proposal: LaneBlockProposalV1,
@@ -9429,6 +9481,61 @@ mod tests {
         assert_eq!(cache.len(), 1);
         assert!(cache.get(&key_a).is_none());
         assert!(cache.get(&key_b).is_some());
+    }
+
+    #[test]
+    fn first_global_lock_retires_all_losing_speculation_but_keeps_commit_evidence() {
+        let keys = [
+            checked_bls_keypair(1),
+            checked_bls_keypair(2),
+            checked_bls_keypair(3),
+        ];
+        let mut validator_set = keys.iter().map(peer).collect::<Vec<_>>();
+        validator_set.sort();
+        let anchor = |label: &'static [u8]| LaneBlockProposalPayloadHintV1 {
+            proposal_height: 13,
+            proposal_view: 0,
+            proposal_block_hash: HashOf::from_untyped_unchecked(Hash::new(label)),
+        };
+        let retained = lane_block_proposal_at_height(&validator_set, 13)
+            .with_payload_block_hint(anchor(b"first-lock-retained-anchor"));
+        let losing = lane_block_proposal_at_height(&validator_set, 14)
+            .with_payload_block_hint(anchor(b"first-lock-losing-anchor"));
+        let protected = lane_block_proposal_at_height(&validator_set, 15)
+            .with_payload_block_hint(anchor(b"first-lock-protected-anchor"));
+        let retained_key = LaneBlockSessionKey::from_proposal(&retained);
+        let losing_key = LaneBlockSessionKey::from_proposal(&losing);
+        let protected_key = LaneBlockSessionKey::from_proposal(&protected);
+        let mut cache = LaneBlockSessionCache::new(8);
+        cache
+            .insert_proposal(retained.clone())
+            .expect("insert retained speculative carrier");
+        cache
+            .insert_proposal(losing)
+            .expect("insert losing speculative carrier");
+        cache
+            .insert_proposal(protected.clone())
+            .expect("insert commit-protected losing carrier");
+        let commit_vote = signed_vote(&protected.vote_body(CertPhase::Commit), &keys[0]);
+        cache
+            .insert_vote(commit_vote.clone(), Some(&commit_vote.signer))
+            .expect("protect losing carrier with a Commit vote");
+
+        assert_eq!(
+            cache.retire_uncommitted_global_anchors_except(
+                retained
+                    .payload_block_hint
+                    .as_ref()
+                    .expect("retained carrier hint")
+                    .proposal_block_hash,
+            ),
+            1
+        );
+
+        assert!(cache.get(&retained_key).is_some());
+        assert!(cache.get(&losing_key).is_none());
+        assert!(cache.get(&protected_key).is_some());
+        assert!(cache.contains_vote(&commit_vote));
     }
 
     #[test]

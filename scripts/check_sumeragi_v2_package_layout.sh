@@ -50,7 +50,7 @@ for test_module in tests network_simulation; do
 done
 
 network_test_count="$(rg -c '^#\[test\]$' "$CORE_DIR/network_simulation.rs")"
-if [[ "$network_test_count" != "6" ]]; then
-  echo "expected six package-local Sumeragi v2 network simulations, found $network_test_count" >&2
+if [[ "$network_test_count" != "8" ]]; then
+  echo "expected eight package-local Sumeragi v2 network simulations, found $network_test_count" >&2
   exit 1
 fi

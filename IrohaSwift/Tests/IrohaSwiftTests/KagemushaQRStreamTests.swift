@@ -2,24 +2,41 @@ import XCTest
 @testable import IrohaSwift
 
 final class KagemushaQRStreamTests: XCTestCase {
-    func testMeasuredReleaseArchivesStayWithinTheStandardQRFrameBudget() {
-        let samples: [(String, Int, Int)] = [
-            ("request", 824, 6),
-            ("acknowledgement", 471, 4),
-            ("payment-depth-1-hop-1", 6_677, 35),
-            ("payment-depth-8-hop-8", 6_848, 35),
-            ("payment-depth-16-hop-8", 7_040, 36),
-            ("payment-depth-32-hop-8", 7_424, 38),
-            ("payment-depth-64-hop-8", 8_192, 41),
+    func testMeasuredReleaseArchivesStayWithinTheStandardQRFrameBudget() throws {
+        let fixtureURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .appendingPathComponent("../../../fixtures/kagemusha/peer_transport_measurements_v1.json")
+            .standardizedFileURL
+        let fixture = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(contentsOf: fixtureURL))
+                as? [String: Any]
+        )
+        let samples = try XCTUnwrap(fixture["records"] as? [[String: Any]])
+        let expectedFrames = [
+            "request": 5,
+            "acknowledgement": 4,
+            "payment-depth-1-hop-1": 38,
+            "payment-depth-8-hop-8": 38,
+            "payment-depth-16-hop-8": 39,
+            "payment-depth-32-hop-8": 41,
+            "payment-depth-64-hop-8": 45,
         ]
         let options = KagemushaQRStreamOptions.standard
-        for (label, archiveBytes, expectedFrames) in samples {
-            let dataFrames = (archiveBytes + options.chunkSize - 1) / options.chunkSize
+        for sample in samples {
+            let label = try XCTUnwrap(sample["label"] as? String)
+            let archiveHex = try XCTUnwrap(sample["archive_hex"] as? String)
+            let archive = try XCTUnwrap(Data(hexString: archiveHex))
+            XCTAssertEqual(sample["archive_bytes"] as? Int, archive.count, label)
+            let dataFrames = (archive.count + options.chunkSize - 1) / options.chunkSize
             let parityFrames = (dataFrames + options.parityGroup - 1)
                 / options.parityGroup
-            XCTAssertEqual(1 + dataFrames + parityFrames, expectedFrames, label)
+            XCTAssertEqual(
+                1 + dataFrames + parityFrames,
+                try XCTUnwrap(expectedFrames[label]),
+                label
+            )
             XCTAssertLessThanOrEqual(
-                archiveBytes,
+                archive.count,
                 KagemushaPeerTransportContract.maximumArchiveBytes,
                 label
             )

@@ -231,8 +231,12 @@ The global protocol has only Prepare and Commit votes.
    the body and a Prepare sign-once record are durable may it release a Prepare signature.
 3. A PrepareQC certifies validity and availability. Its honest signers have the exact body in the
    durable payload store and must serve it after restart.
-4. On a valid PrepareQC, a validator with the exact validated body atomically persists its new lock
-   and Commit sign-once record. Only the persistence acknowledgement releases the Commit signature.
+4. On a valid current-view PrepareQC, a validator with the exact validated body atomically persists
+   its new lock and Commit sign-once record. Only the persistence acknowledgement releases the
+   Commit signature. The exact TC-promoted historical-lock case described below uses the same
+   persistence-before-sign ordering after body recovery and validation. A received Commit vote,
+   including one from the current view, enters a volatile pool only when its round and subject match
+   this exact durable lock.
 5. A CommitQC decides the subject. The node persists the decision before applying or publishing it.
    A node missing the body records `PendingApply`, fetches from certified signers, validates the
    exact body, and does not vote at the next height until application completes.
@@ -247,13 +251,24 @@ public-network profile uses a ten-second deadline and retransmits critical contr
 two seconds.
 
 On expiry, a validator persists one `TimeoutVote(height, view, highest_prepare_qc)`. That durable
-record closes the view: the validator can no longer create a Prepare or Commit vote for it. The
-validator remains in the view until it receives a valid TimeoutCertificate.
+record closes the ordinary voting path for the view: the validator can no longer create a Prepare
+vote or an arbitrary Commit vote for it. The validator remains in the view until it receives a
+valid TimeoutCertificate. The sole historical-vote exception is the exact TC-promoted locked Commit
+reconstruction below; a timeout intent by itself does not authorize it.
 
 After the TC is durably installed, the reducer discards the closed view's active individual-vote
-pools. The adapter retains only semantic fingerprints and exact signed conflict pairs for one
-roster rotation, then evicts them deterministically. It does not invalidate a complete earlier-view
-CommitQC, which remains admissible and decisive.
+pools. The adapter keeps semantic fingerprints and an equivocation-reported bit in a map separate
+from delivery deduplication for one roster rotation, then evicts them deterministically. Complete
+authenticated conflict pairs are not yet persisted for penalties. This bounded history does not
+invalidate a complete earlier-view CommitQC, which remains admissible and decisive.
+
+A current-view Commit which arrives before the matching `LockAndCommit` acknowledgement is ignored
+recoverably. Once that acknowledgement applies the new lock, the adapter advances the locked-Commit
+consumer epoch and may admit the same exact authenticated vote once. The reducer then removes the
+superseded historical Commit pool before releasing its local current Commit signature; it never
+removes that old reconstruction source before successful persistence. Retained outbound Commit
+control continues to serve peers, but cannot alone reconstruct the sender's local pool because
+broadcast does not loop back to the sender.
 
 A TimeoutCertificate contains individually verifiable votes, optionally aggregated in groups that
 reported the same high QC. Groups are canonically sorted, their signer sets are disjoint, and their
@@ -261,14 +276,33 @@ union satisfies both quorums. The deterministic maximum valid PrepareQC is selec
 group. A TC is persisted before entering the next view and any validator may form and rebroadcast
 it; there is no correctness-critical collector.
 
+Installing the TC may make its selected highest PrepareQC the node's active durable lock even when
+that node never created a Commit intent for the PrepareQC's round. TC installation does not itself
+authorize a signature. The reducer first recovers, stores, and deterministically validates the exact
+locked body. Validation may then append one `LockAndCommit` for that historical round and subject;
+only the successful WAL acknowledgement releases the local Commit signature. Every other
+historical round or subject remains behind the timeout fence, and this path never creates a Prepare
+vote.
+
+WAL replay enforces the same boundary in record order. A historical `LockAndCommit` is valid only
+after an installed TC has advanced the view while the exact same PrepareQC is the active lock.
+Without that prerequisite, or when the round or subject differs, replay fails closed. An
+`InstallTimeout` without the later exact `LockAndCommit` therefore resumes body reconstruction and
+validation rather than inferring a Commit signature from the certificate alone.
+
 An earlier-view CommitQC remains decisive even when its final shares are assembled or delivered
-after a TC. The timeout fence prevents new honest votes in the closed view, while quorum
-intersection ensures that every old value which can still reach a Commit quorum is protected by the
-TC's selected high QC. The formal proof obligation `TCProtectsPotentialCommit` states that precise
-property. Installing a TC never lowers or clears a local lock: only a strictly higher PrepareQC can
-release it for another subject. Because timeout votes transport that full QC to every voter, an
-omitted lock becomes known to the honest quorum and is selected by a subsequent TC after GST without
-depending on a correctness-critical collector.
+after a TC. The timeout fence prevents arbitrary new honest votes in the closed view. Its one exact
+historical-Commit exception cannot change the installed lock. For every old value which can still
+reach a Commit quorum, quorum intersection now proves the exact disjunction the implementation
+supports: either the target TC's selected high directly protects that round and subject, or an
+honest TC/Commit intersection signer has a non-strict timeout/Commit pair whose exact Commit keeps
+durable installed-TC authorization. The target TC may have been formed before that late Commit, so
+claiming that its own high must always protect the Commit would be false. The formal operator
+`TCProtectsOrInstalledTcAuthorizesPotentialCommit` states the corrected safety property.
+Installing a TC never lowers or clears a local lock: only a strictly higher PrepareQC can release it
+for another subject. Because timeout votes transport that full QC to every voter, an omitted lock
+becomes known to the honest quorum and is selected by a subsequent TC after GST without depending
+on a correctness-critical collector.
 
 ## Payload availability
 
@@ -580,10 +614,13 @@ and consensus key. Each successful append includes `flush` and `sync_data`; only
 durability acknowledgement to the reducer. Replay happens before consensus ingress opens.
 
 The WAL records Prepare intent, observed PrepareQC/high QC, atomic lock plus Commit intent, timeout
-intent, installed TC, and decision. An incomplete final frame is an unacknowledged crash tail and is
-discarded. A checksum failure, broken hash chain, non-monotonic sequence, or identity mismatch
-before that tail fails closed. Records are pruned only after the decided block and its certificate
-are durable in Kura.
+intent, installed TC, and decision. A `LockAndCommit` for a round older than the replayed current
+view is accepted only when the preceding records leave its exact PrepareQC as the active lock after
+view installation and no higher conflicting-subject local Prepare intent or known PrepareQC exists;
+higher same-subject reproposals do not block reconstruction. The timeout fence still rejects every
+other historical vote. An incomplete final frame is an unacknowledged crash tail and is discarded. A checksum failure, broken hash chain,
+non-monotonic sequence, identity mismatch, or historical-lock mismatch before that tail fails
+closed. Records are pruned only after the decided block and its certificate are durable in Kura.
 
 Height-local I/O retirement uses one bounded control deadline covering queue drain and terminal
 acknowledgement. Cooperative workers are joined immediately; a worker still blocked in an
@@ -591,6 +628,32 @@ OS/HSM/fsync call after the deadline remains owned by the runner's cleanup super
 after it finishes. If the worker is still wedged when the runner itself shuts down, its join handle
 is detached instead of blocking shutdown. Finalized height-local files are retained for restart
 reconciliation instead of blocking successor construction or racing cleanup.
+
+Runtime-ingress and Busy-deferred body completions share one exact ownership
+domain. Deferred work retains its full manifest and durable/validated receipt,
+including validation polarity. Only byte-for-byte equal trusted evidence may
+coalesce; conflicting evidence or duplicate owners fail closed, and ownership
+is checked before body availability can prune any queued proposal.
+`LocalProposalReady` uses the reserved Completion class at both boundaries, so
+Normal ingress saturation cannot strand a locally built, durably stored,
+validated proposal. After signature verification, an individual Vote is
+admissible only when its exact round/subject execution commitment is already
+bound by a local validated receipt, verified WAL replay, or
+quorum-authenticated QC evidence. A Vote cannot create that authority merely by
+being individually signed. Unbound Votes are rejected recoverably; conflicting
+commitment-bearing evidence is rejected before serialized runtime ownership.
+
+Body-availability rebind requires the reducer's installed destination tag and
+preflights both source and destination ownership before mutation. One exact
+source moves to an empty destination or coalesces into one exact destination
+owner. An uninstalled destination tag is a recoverable caller-contract
+rejection with no mutation; conflicting or duplicate ownership fails closed
+without a partial move. Body-pipeline and Decision retirement likewise
+preflight all ingress and Busy-deferred owners transactionally before removing
+any of them.
+At the transport boundary, a locally conflicting certified-body request is a
+nonfatal remote rejection, while a conflicting Commit-certificate response
+leaves discovery outstanding and retryable through another authenticated peer.
 
 The production `SumeragiWorker` dispatches Sumeragi-v2 wire revision 3 directly
 to the serialized height runner; it never executes the legacy actor under a
@@ -610,7 +673,8 @@ acknowledgements. The safety properties are agreement, chain-prefix finality, ex
 vote uniqueness, crash/restart lock preservation, epoch isolation, and durable availability of a
 decided body.
 
-Liveness is conditional because an asynchronous network cannot guarantee termination. After GST:
+Liveness is a conditional target because an asynchronous network cannot guarantee termination. The
+paper argument assumes that, after GST:
 
 - more than two-thirds by count and power are correct and responsive;
 - authenticated per-source messages and retransmissions are serviced within the declared transport
@@ -625,12 +689,19 @@ Liveness is conditional because an asynchronous network cannot guarantee termina
 - an honest leader recurs within one roster rotation; and
 - honest Prepare signers continue serving their durable bodies.
 
-Under those assumptions, failed views lead to a TC, rotation reaches an honest leader, and a safe
-round forms PrepareQC and CommitQC. Every responsive correct node independently persists the exact
-decision, fetches and validates the certified body, applies it, and advances its local certified
-prefix; no global all-node application barrier is required. FLP is the reason these post-GST
-premises are explicit. The result proves consensus-height progress, including a valid empty
-heartbeat, not transaction-inclusion fairness or censorship resistance.
+Under those assumptions, the paper argument derives that failed views lead to a TC, rotation
+reaches an honest leader, and a safe round forms PrepareQC and CommitQC. Every responsive correct
+node independently persists the exact decision, fetches and validates the certified body, applies
+it, and advances its local certified prefix; no global all-node application barrier is required.
+FLP is the reason these post-GST premises are explicit. This targets consensus-height progress,
+including a valid empty heartbeat, not transaction-inclusion fairness or censorship resistance.
+
+Eight arbitrary-context Core wrappers are TLAPS-proved. Historical TC-lock Commit authorization
+and the dependent direct-or-installed-authorization timeout wrapper remain
+`specified_unproved`; only the narrower grouped-timeout kernel for Commit intents already present
+at timeout is proved. The
+liveness claim must therefore remain a conditional paper argument while the proof ledger reports
+`machine_checked_completion: false`.
 
 The executable reducer and persistence-effect ordering are the source-verification boundary.
 Cryptographic implementations, canonical Norito encoding, deterministic execution, OS fsync

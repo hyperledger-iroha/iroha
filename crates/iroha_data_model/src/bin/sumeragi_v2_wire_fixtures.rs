@@ -416,7 +416,7 @@ fn build_values() -> Result<FixtureValues, Box<dyn Error>> {
                 age_ms: 19,
             }),
             no_progress_age_ms: 19,
-            blocker: Some(SumeragiV2LivenessBlocker::CommitQuorumMissing),
+            blocker: Some(SumeragiV2LivenessBlocker::LocalControlPending),
             ignore_counts: vec![
                 SumeragiV2IgnoreCount {
                     reason: SumeragiV2IgnoreReason::Duplicate,

@@ -1765,7 +1765,7 @@ public final class SumeragiV2Wire {
   public enum LivenessBlocker {
     MISSING_PROPOSAL(0), BODY_UNAVAILABLE(1), PREPARE_QUORUM_MISSING(2),
     COMMIT_QUORUM_MISSING(3), TIMEOUT_CERTIFICATE_MISSING(4),
-    SCHEDULER_STARVATION(5), APPLICATION_PENDING(6);
+    SCHEDULER_STARVATION(5), APPLICATION_PENDING(6), LOCAL_CONTROL_PENDING(7);
     public final long discriminant;
     LivenessBlocker(long discriminant) { this.discriminant = discriminant; }
     byte[] encode() { return u32(discriminant); }
@@ -1780,7 +1780,7 @@ public final class SumeragiV2Wire {
   public enum IgnoreReason {
     WRONG_HEIGHT(0), WRONG_VIEW(1), STALE_GENERATION(2), BUSY(3), DUPLICATE(4),
     NO_MATCHING_WORK(5), OBSERVER(6), VIEW_CLOSED(7), ALREADY_DECIDED(8),
-    RECOVERY_PENDING(9), IRRELEVANT_VIEW(10);
+    RECOVERY_PENDING(9), IRRELEVANT_VIEW(10), UNSAFE_PROPOSAL(11);
     public final long discriminant;
     IgnoreReason(long discriminant) { this.discriminant = discriminant; }
     byte[] encode() { return u32(discriminant); }

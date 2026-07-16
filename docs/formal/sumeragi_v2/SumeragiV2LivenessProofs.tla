@@ -18,6 +18,18 @@ ResponsiveNodesDecide ==
 ResponsiveNodesApply ==
   \A node \in AsyncCurrentResponsiveVoters: NodeHasApplication(node)
 
+(***************************************************************************
+An undecided responsive honest leader has reached a usable rotating-leader
+view only when its own current view selects that same validator.  Merely
+observing a view number which names a responsive leader is insufficient: the
+leader itself must be scheduled in the matching view before proposal service
+can discharge the second liveness clause below.
+***************************************************************************)
+ResponsiveHonestLeaderViewReached ==
+  \E leader \in (AsyncCurrentResponsiveVoters \cap Honest):
+    /\ ~NodeHasDecision(leader)
+    /\ Leader(context, nodeView[leader]) = leader
+
 TimeoutViewProgressProperty(specification) ==
   specification
     => \A node \in AsyncCurrentResponsiveVoters,
@@ -27,11 +39,19 @@ TimeoutViewProgressProperty(specification) ==
 
 RotatingLeaderProgressProperty(specification) ==
   specification
-    => (gst /\ ~ResponsiveNodesDecide) ~> ResponsiveNodesDecide
+    => /\ (gst /\ ~ResponsiveNodesDecide)
+             ~> (ResponsiveHonestLeaderViewReached
+                   \/ ResponsiveNodesDecide)
+       /\ (gst /\ ResponsiveHonestLeaderViewReached
+                 /\ ~ResponsiveNodesDecide)
+             ~> ResponsiveNodesDecide
 
 ApplicationLivenessProperty(specification) ==
   specification
-    => (gst /\ ResponsiveNodesDecide) ~> ResponsiveNodesApply
+    => /\ \A node \in AsyncCurrentResponsiveVoters:
+             (gst /\ NodeHasDecision(node))
+               ~> NodeHasApplication(node)
+       /\ (gst /\ ResponsiveNodesDecide) ~> ResponsiveNodesApply
 
 (***************************************************************************
 Explicit progress obligations.
@@ -114,19 +134,42 @@ CandidateInReadyQueue(candidate) ==
     \/ candidate \in SequenceSet(
                        asyncLocalReadyCompletions[candidate.node])
 
+DeferredCandidateIndices(node, candidate) ==
+  {index \in 1..Len(DeferredClassQueue(node, candidate.class)):
+     DeferredClassQueue(node, candidate.class)[index] = candidate}
+
+DeferredClassPrefixIndices(node, candidate) ==
+  {index \in 1..Len(DeferredClassQueue(node, candidate.class)):
+     \E matching \in DeferredCandidateIndices(node, candidate):
+       index <= matching}
+
+(***************************************************************************
+The production deferred reducer queue is cyclic across Completion, Progress,
+and Normal, independently of the runtime command cursor.  As for the runtime
+queue, multiplying the duplicate-aware class ordinal by three leaves room for
+the cursor distance.  Dispatching a different class lowers that distance;
+dispatching the candidate's class lowers the ordinal and may reset distance by
+at most two.
+***************************************************************************)
 DeferredCandidatePosition(candidate) ==
-  LET node == candidate.node
-  IN IF candidate \in SequenceSet(asyncDeferredCompletionQueues[node])
-     THEN CandidateSequenceIndex(
-            candidate, asyncDeferredCompletionQueues[node])
-     ELSE IF candidate \in SequenceSet(asyncDeferredProgressQueues[node])
-          THEN Len(asyncDeferredCompletionQueues[node])
-                 + CandidateSequenceIndex(
-                     candidate, asyncDeferredProgressQueues[node])
-          ELSE Len(asyncDeferredCompletionQueues[node])
-                 + Len(asyncDeferredProgressQueues[node])
-                 + CandidateSequenceIndex(
-                     candidate, asyncDeferredNormalQueues[node])
+  3 * Cardinality(
+        DeferredClassPrefixIndices(candidate.node, candidate))
+    + CommandClassDistance(
+        asyncNextDeferredClass[candidate.node], candidate.class)
+
+(***************************************************************************
+The causal source gets one bit of local scheduler distance.  A producer turn
+while causal work waits flips this distance from one to zero by recording
+debt; removing an earlier causal head lowers the doubled FIFO position enough
+to dominate the possible zero-to-one cursor reset.
+***************************************************************************)
+LocalSourceDistance(node, source) ==
+  IF PreferredLocalSource(node) = source THEN 0 ELSE 1
+
+CausalCandidatePosition(candidate) ==
+  2 * CandidateSequenceIndex(
+        candidate, asyncCausalQueues[candidate.node])
+    + LocalSourceDistance(candidate.node, "Causal")
 
 (***************************************************************************
 This rank is intentionally scheduler-owned only. CandidateScheduled contains
@@ -151,9 +194,7 @@ CandidateServiceRank(candidate) ==
                            asyncOutstandingWork[candidate.node]
                       THEN <<5, AsyncCompletionLoad(candidate.node)>>
                       ELSE IF candidate \in CausalCandidates
-                           THEN <<6, CandidateSequenceIndex(
-                                        candidate,
-                                        asyncCausalQueues[candidate.node])>>
+                           THEN <<6, CausalCandidatePosition(candidate)>>
                            ELSE <<0, 0>>
 
 ServiceRankLess(left, right) ==
@@ -203,7 +244,7 @@ RetainedCommitIntent(node, vote) ==
 CommitIntentProgressWitness(node, vote) ==
   \/ VoteSign(node, vote) \in signVotes
   \/ RetainedCommitIntent(node, vote)
-  \/ \E received \in receivedVotes: received.vote = vote
+  \/ VoteAt(node, vote) \in receivedVotes
   \/ \E qc \in commitQCs:
        /\ qc.context = vote.context
        /\ qc.view = vote.view
@@ -215,8 +256,38 @@ DurableCommitProgressWitness ==
     ActiveLockedCommitIntent(node, vote)
       => CommitIntentProgressWitness(node, vote)
 
+HistoricalLockedCommitRecoveryWitness(node, qc) ==
+  \/ ExactLockedCommitIntents(node, qc.view, qc.subject) # {}
+  \/ \E request \in pendingLockCommit:
+       /\ request.node = node
+       /\ request.qc = qc
+  \/ \E candidate \in AsyncCandidateSet:
+       /\ candidate.node = node
+       /\ candidate.height = qc.context.height
+       /\ candidate.view = qc.view
+       /\ candidate.subject = qc.subject
+       /\ candidate.kind = "BeginLockCommit"
+       /\ CandidateScheduled(candidate)
+
+(***************************************************************************
+Once the exact TC-promoted historical lock has a current-generation durable
+validation witness, the serialized reducer must already own either its exact
+Commit intent, the WAL request that will create it, or the validation
+successor that begins that request.  The historical guard also forbids
+retroactively signing below a higher conflicting-subject local Prepare intent
+or known PrepareQC; a higher reproposal of the same subject is harmless.
+***************************************************************************)
+HistoricalLockedCommitRecoveryProgress ==
+  \A node \in AsyncCurrentResponsiveVoters, qc \in prepareQCs:
+    (/\ HistoricalTcLockedPrepareForCommit(node, qc)
+     /\ BodyHeldBy(durableBodies, node, context, qc.view, qc.subject)
+     /\ BodyValidatedBy(validatedBodies, node, context, qc.view,
+                        generation[node], qc.subject))
+      => HistoricalLockedCommitRecoveryWitness(node, qc)
+
 DecisionPipelineCandidate(node, qc, candidate) ==
   /\ candidate.node = node
+  /\ candidate.height = qc.context.height
   /\ candidate.view = qc.view
   /\ candidate.subject = qc.subject
   /\ candidate.kind \in
@@ -229,6 +300,7 @@ DecisionCompletionWitness(node, qc) ==
   \/ \E request \in asyncActiveRequests:
        /\ request.kind = "CertifiedRequest"
        /\ request.source = node
+       /\ request.envelope.height = qc.context.height
        /\ request.envelope.view = qc.view
        /\ request.envelope.subject = qc.subject
   \/ \E candidate \in AsyncCandidateSet:
@@ -256,6 +328,7 @@ ProtectedDeferredProgressInvariant ==
 
 ProgressWitnessInvariant ==
   /\ DurableCommitProgressWitness
+  /\ HistoricalLockedCommitRecoveryProgress
   /\ DurableDecisionProgressWitness
   /\ ProtectedDeferredProgressInvariant
 
@@ -263,6 +336,21 @@ ProgressWitnessProperty(specification) ==
   specification => []ProgressWitnessInvariant
 
 VoteDeliveryEpochAction ==
+  /\ \A node \in ValidatorIds, vote \in VoteRecordSet:
+       (vote.phase = "Prepare" /\ VoteRoundAdmissible(node, vote))
+         => vote.view = nodeView[node]
+  /\ \A node \in ValidatorIds, vote \in VoteRecordSet:
+       (vote.phase = "Commit" /\ VoteRoundAdmissible(node, vote))
+         => LockedPrepareRound(node, vote.view, vote.subject)
+  /\ \A node \in ValidatorIds, roundView \in Views,
+        subject \in Subjects:
+       CommitRoundAdmissible(node, roundView, subject)
+         => LockedPrepareRound(node, roundView, subject)
+  /\ \A request \in VoteSignSet:
+       CompleteVoteSignature(request)
+         => /\ VoteAt(request.node, request.vote) \in receivedVotes'
+            /\ \A envelope \in BroadcastVotes(request.vote):
+                 envelope.recipient # request.node
   /\ \A envelope \in VoteEnvelopeSet:
        DeliverVote(envelope)
          => /\ VoteAt(envelope.recipient, envelope.vote)
@@ -274,9 +362,22 @@ VoteDeliveryEpochAction ==
        PersistInstallTC(request)
          => /\ \A received \in receivedVotes':
                    received.node # request.node
+            /\ ActiveLockedCommitSignRequestsAfterInstall(
+                 request.node, request.tc) \subseteq signVotes'
             /\ (generation[request.node] < MaxGeneration
                   => generation'[request.node] =
                        generation[request.node] + 1)
+  /\ \A request \in LockCommitWalSet:
+       PersistLockCommit(request)
+         => /\ \A received \in receivedVotes':
+                   VoteReceiptSurvivesLockCommit(
+                     received, request.node, request.qc.view,
+                     request.qc.subject)
+            /\ \A received \in receivedVotes:
+                 VoteReceiptSurvivesLockCommit(
+                   received, request.node, request.qc.view,
+                   request.qc.subject)
+                   => received \in receivedVotes'
 
 GenerationScopedVoteDeliveryProperty(specification) ==
   specification => [][VoteDeliveryEpochAction]_AsyncAllVars

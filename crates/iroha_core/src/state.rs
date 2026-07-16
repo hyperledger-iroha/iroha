@@ -210,6 +210,10 @@ const MAX_MERGE_EXECUTION_SIGNER_PROOFS: usize = 4_096;
 const MAX_MERGE_EXECUTION_VALIDATORS: usize = 4_096;
 const MAX_MERGE_EXECUTION_RESERVATION_KEY_BYTES: usize = 16 * 1024;
 const MAX_MERGE_EXECUTION_ROUTING_PLAN_BYTES: usize = 256 * 1024;
+// NRT0 + major + minor + schema. Norito does not expose header parsing outside
+// the crate, so inspect the documented compression byte through checked access.
+const MERGE_INNER_NORITO_COMPRESSION_OFFSET: usize = 4 + 1 + 1 + 16;
+const MERGE_INNER_NORITO_LENGTH_OFFSET: usize = MERGE_INNER_NORITO_COMPRESSION_OFFSET + 1;
 const MAX_MERGE_EXECUTION_RESERVATION_METADATA_BYTES: usize = 8 * 1024 * 1024;
 const MAX_MERGE_QC_BYTES: usize = 4 * 1024 * 1024;
 const MERGE_QC_BLS_PROOF_BYTES: usize = 96;
@@ -1913,23 +1917,69 @@ fn merge_origin_proposal_matches_current(execution: &MergeLaneExecution) -> bool
         && left.qc_mode_tag == right.qc_mode_tag
 }
 
+fn preflight_canonical_merge_inner_frame(
+    encoded: &[u8],
+    maximum: usize,
+    kind: &'static str,
+) -> Result<(), MergeLedgerCommitError> {
+    if encoded.len() > maximum {
+        return Err(MergeLedgerCommitError::ExecutionBatchInvalid(format!(
+            "encoded {kind} exceeds the hard byte limit"
+        )));
+    }
+    if encoded.len() < norito::core::Header::SIZE
+        || encoded.get(..norito::core::MAGIC.len()) != Some(norito::core::MAGIC.as_slice())
+    {
+        return Err(MergeLedgerCommitError::ExecutionBatchInvalid(format!(
+            "encoded {kind} is not valid exact framed Norito"
+        )));
+    }
+    if encoded.get(MERGE_INNER_NORITO_COMPRESSION_OFFSET)
+        != Some(&(norito::Compression::None as u8))
+    {
+        return Err(MergeLedgerCommitError::ExecutionBatchInvalid(format!(
+            "encoded {kind} must use uncompressed exact framed Norito"
+        )));
+    }
+    let declared_length = encoded
+        .get(MERGE_INNER_NORITO_LENGTH_OFFSET..MERGE_INNER_NORITO_LENGTH_OFFSET + 8)
+        .and_then(|raw| <[u8; 8]>::try_from(raw).ok())
+        .map(u64::from_le_bytes)
+        .ok_or_else(|| {
+            MergeLedgerCommitError::ExecutionBatchInvalid(format!(
+                "encoded {kind} is not valid exact framed Norito"
+            ))
+        })?;
+    if declared_length > u64::try_from(maximum).unwrap_or(u64::MAX) {
+        return Err(MergeLedgerCommitError::ExecutionBatchInvalid(format!(
+            "encoded {kind} exceeds the hard byte limit"
+        )));
+    }
+    Ok(())
+}
+
 fn decode_canonical_merge_reservation_key(
     encoded: &[u8],
 ) -> Result<crate::queue::LaneQueueReservationKeyV1, MergeLedgerCommitError> {
-    if encoded.len() > MAX_MERGE_EXECUTION_RESERVATION_KEY_BYTES {
-        return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
-            "encoded lane reservation key exceeds the hard byte limit".to_owned(),
-        ));
-    }
+    preflight_canonical_merge_inner_frame(
+        encoded,
+        MAX_MERGE_EXECUTION_RESERVATION_KEY_BYTES,
+        "lane reservation key",
+    )?;
     let decoded = norito::decode_from_bytes::<crate::queue::LaneQueueReservationKeyV1>(encoded)
-        .map_err(|_| {
-            MergeLedgerCommitError::ExecutionBatchInvalid(
-                "encoded lane reservation key is not valid exact Norito".to_owned(),
-            )
+        .map_err(|error| {
+            MergeLedgerCommitError::ExecutionBatchInvalid(format!(
+                "encoded lane reservation key is not valid exact framed Norito: {error}"
+            ))
         })?;
-    if decoded.encode() != encoded {
+    let canonical = norito::to_bytes(&decoded).map_err(|error| {
+        MergeLedgerCommitError::ExecutionBatchInvalid(format!(
+            "canonical lane reservation key encoding failed: {error}"
+        ))
+    })?;
+    if canonical != encoded {
         return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
-            "encoded lane reservation key is not canonical Norito".to_owned(),
+            "encoded lane reservation key is not canonical framed Norito".to_owned(),
         ));
     }
     Ok(decoded)
@@ -1938,20 +1988,25 @@ fn decode_canonical_merge_reservation_key(
 fn decode_canonical_merge_routing_plan(
     encoded: &[u8],
 ) -> Result<crate::queue::RoutingPlan, MergeLedgerCommitError> {
-    if encoded.len() > MAX_MERGE_EXECUTION_ROUTING_PLAN_BYTES {
-        return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
-            "encoded routing plan exceeds the hard byte limit".to_owned(),
-        ));
-    }
+    preflight_canonical_merge_inner_frame(
+        encoded,
+        MAX_MERGE_EXECUTION_ROUTING_PLAN_BYTES,
+        "routing plan",
+    )?;
     let decoded =
-        norito::decode_from_bytes::<crate::queue::RoutingPlan>(encoded).map_err(|_| {
-            MergeLedgerCommitError::ExecutionBatchInvalid(
-                "encoded routing plan is not valid exact Norito".to_owned(),
-            )
+        norito::decode_from_bytes::<crate::queue::RoutingPlan>(encoded).map_err(|error| {
+            MergeLedgerCommitError::ExecutionBatchInvalid(format!(
+                "encoded routing plan is not valid exact framed Norito: {error}"
+            ))
         })?;
-    if decoded.encode() != encoded {
+    let canonical = norito::to_bytes(&decoded).map_err(|error| {
+        MergeLedgerCommitError::ExecutionBatchInvalid(format!(
+            "canonical routing plan encoding failed: {error}"
+        ))
+    })?;
+    if canonical != encoded {
         return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
-            "encoded routing plan is not canonical Norito".to_owned(),
+            "encoded routing plan is not canonical framed Norito".to_owned(),
         ));
     }
     Ok(decoded)
@@ -9987,6 +10042,15 @@ impl SccpVerifierWorkV1 {
     }
 }
 
+/// Finality authority governing whether State should publish the legacy commit-roster projection.
+#[derive(Clone, Copy)]
+enum CommitRosterAuthority<'a> {
+    /// Legacy finality may carry a structurally matched commit-certificate hint.
+    Legacy(Option<&'a Qc>),
+    /// Exact Sumeragi-v2 finality remains authoritative in Kura and must not be projected.
+    V2Finality,
+}
+
 /// Struct for block's aggregated changes
 pub struct StateBlock<'state> {
     state_ref: &'state State,
@@ -11447,8 +11511,8 @@ pub(crate) fn nexus_active_lane_dataspace_at_height(
 /// Resolve the lane route used by consensus at an explicit proposal height.
 ///
 /// Nexus mode applies the height-sensitive catalog and autoscale policy. In
-/// single-lane mode the canonical catalog geometry remains authoritative even
-/// though Nexus routing itself is disabled.
+/// single-lane mode only the canonical `SINGLE`/`UNIVERSAL` catalog geometry
+/// remains authoritative even though Nexus routing itself is disabled.
 pub(crate) fn consensus_lane_dataspace_at_height(
     lane_id: LaneId,
     nexus: &iroha_config::parameters::actual::Nexus,
@@ -11457,7 +11521,11 @@ pub(crate) fn consensus_lane_dataspace_at_height(
     if nexus.enabled {
         nexus_active_lane_dataspace_at_height(lane_id, nexus, block_height)
     } else {
+        if lane_id != LaneId::SINGLE {
+            return None;
+        }
         nexus_catalog_geometry_lane_dataspace(lane_id, nexus)
+            .filter(|dataspace_id| *dataspace_id == DataSpaceId::UNIVERSAL)
     }
 }
 
@@ -30634,13 +30702,23 @@ impl State {
         let encoded_reservations = executable_payload
             .reservation_keys
             .iter()
-            .map(Encode::encode)
-            .collect::<Vec<_>>();
+            .map(norito::to_bytes)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| {
+                MergeLedgerCommitError::ExecutionBatchInvalid(format!(
+                    "canonical embedded lane reservation encoding failed: {error}"
+                ))
+            })?;
         let encoded_plans = executable_payload
             .routing_plans
             .iter()
-            .map(Encode::encode)
-            .collect::<Vec<_>>();
+            .map(norito::to_bytes)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| {
+                MergeLedgerCommitError::ExecutionBatchInvalid(format!(
+                    "canonical embedded routing-plan encoding failed: {error}"
+                ))
+            })?;
         if executable_payload.chain_id_hash != execution.autonomous_chain_id_hash
             || executable_payload.epoch != execution.autonomous_epoch
             || executable_payload.payload_hash != execution.autonomous_payload_hash
@@ -30948,14 +31026,24 @@ impl State {
                     .input
                     .reservation_keys
                     .iter()
-                    .map(Encode::encode)
-                    .collect(),
+                    .map(norito::to_bytes)
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(|error| {
+                        MergeLedgerCommitError::ExecutionBatchInvalid(format!(
+                            "canonical lane reservation encoding failed: {error}"
+                        ))
+                    })?,
                 routing_plans: source
                     .input
                     .routing_plans
                     .iter()
-                    .map(Encode::encode)
-                    .collect(),
+                    .map(norito::to_bytes)
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(|error| {
+                        MergeLedgerCommitError::ExecutionBatchInvalid(format!(
+                            "canonical routing-plan encoding failed: {error}"
+                        ))
+                    })?,
                 native_amx_receipts: source.input.native_amx_receipts,
                 result_hashes,
                 results,
@@ -36516,6 +36604,23 @@ impl State {
             }
         }
         Ok(())
+    }
+
+    /// Apply an internally managed autoscale lifecycle plan in a test fixture.
+    ///
+    /// This preserves the production lifecycle semantics for unchanged lane
+    /// incarnations while allowing tests outside this module to install an
+    /// autoscale-managed lane through the authenticated geometry path.
+    ///
+    /// # Errors
+    /// Returns a [`LaneLifecycleError`] when the autoscale lifecycle plan is
+    /// invalid or cannot be applied.
+    #[cfg(test)]
+    pub(crate) fn apply_autoscale_lane_lifecycle_for_tests(
+        &self,
+        plan: &iroha_data_model::nexus::LaneLifecyclePlan,
+    ) -> core::result::Result<(), LaneLifecycleError> {
+        self.apply_lane_lifecycle_with_options(plan, false, true)
     }
 
     /// Apply a lane lifecycle plan and refresh dependent AXT policy caches.
@@ -44760,7 +44865,30 @@ impl<'state> StateBlock<'state> {
         topology: Vec<PeerId>,
         commit_qc_hint: Option<&Qc>,
     ) -> Vec<EventBox> {
-        self.apply_without_execution_with_commit_qc_inner(block, topology, commit_qc_hint, true)
+        self.apply_without_execution_with_commit_qc_inner(
+            block,
+            topology,
+            CommitRosterAuthority::Legacy(commit_qc_hint),
+            true,
+        )
+    }
+
+    /// Apply post-execution effects for a block already authenticated by exact v2 finality.
+    ///
+    /// V2 finality is persisted and replayed from Kura's exact artifact. It must not be projected
+    /// into the structurally different legacy commit-roster journal or WSV commit-QC archive.
+    #[must_use]
+    pub(crate) fn apply_without_execution_with_verified_v2_finality(
+        &mut self,
+        block: &CommittedBlock,
+        topology: Vec<PeerId>,
+    ) -> Vec<EventBox> {
+        self.apply_without_execution_with_commit_qc_inner(
+            block,
+            topology,
+            CommitRosterAuthority::V2Finality,
+            true,
+        )
     }
 
     /// Apply replayed block effects without refreshing per-block roster sidecars.
@@ -44768,6 +44896,7 @@ impl<'state> StateBlock<'state> {
     /// Kura replay already has durable commit-roster evidence in the roster journal. Rewriting
     /// retained sidecars for every historical block makes restart cost scale with the full chain
     /// and can stall a recovering peer before Torii opens.
+    #[cfg(test)]
     #[must_use]
     pub(crate) fn apply_without_execution_with_commit_qc_for_replay(
         &mut self,
@@ -44775,7 +44904,30 @@ impl<'state> StateBlock<'state> {
         topology: Vec<PeerId>,
         commit_qc_hint: Option<&Qc>,
     ) -> Vec<EventBox> {
-        self.apply_without_execution_with_commit_qc_inner(block, topology, commit_qc_hint, false)
+        self.apply_without_execution_with_commit_qc_inner(
+            block,
+            topology,
+            CommitRosterAuthority::Legacy(commit_qc_hint),
+            false,
+        )
+    }
+
+    /// Apply replayed block effects authenticated by Kura's exact v2 finality artifact.
+    ///
+    /// The verified v2 authority supersedes the legacy commit-roster projection. Replay still
+    /// advances the exact commit topology and every ordinary post-execution state transition.
+    #[must_use]
+    pub(crate) fn apply_without_execution_with_verified_v2_finality_for_replay(
+        &mut self,
+        block: &CommittedBlock,
+        topology: Vec<PeerId>,
+    ) -> Vec<EventBox> {
+        self.apply_without_execution_with_commit_qc_inner(
+            block,
+            topology,
+            CommitRosterAuthority::V2Finality,
+            false,
+        )
     }
 
     #[allow(clippy::too_many_lines)]
@@ -44789,7 +44941,7 @@ impl<'state> StateBlock<'state> {
         &mut self,
         block: &CommittedBlock,
         topology: Vec<PeerId>,
-        commit_qc_hint: Option<&Qc>,
+        commit_roster_authority: CommitRosterAuthority<'_>,
         write_commit_roster_sidecar: bool,
     ) -> Vec<EventBox> {
         let block_hash = block.as_ref().hash();
@@ -44907,6 +45059,10 @@ impl<'state> StateBlock<'state> {
         let checkpoint_topology = topology;
         let checkpoint_block_height = block.as_ref().header().height().get();
         let checkpoint_block_hash = block.as_ref().hash();
+        let commit_qc_hint = match commit_roster_authority {
+            CommitRosterAuthority::Legacy(hint) => hint,
+            CommitRosterAuthority::V2Finality => None,
+        };
         let hinted_commit_cert = commit_qc_hint
             .filter(|cert| {
                 cert.height == checkpoint_block_height
@@ -45046,7 +45202,9 @@ impl<'state> StateBlock<'state> {
         };
         self.commit_topology.mutate_vec(|vec| *vec = next_topology);
 
-        if !checkpoint_topology.is_empty() {
+        if !checkpoint_topology.is_empty()
+            && matches!(commit_roster_authority, CommitRosterAuthority::Legacy(_))
+        {
             let active_lane_ids = self
                 .nexus
                 .enabled
@@ -52692,11 +52850,8 @@ fn replay_blocks_from_kura_range_inner(
             );
         }
         let apply_without_execution_start = Instant::now();
-        let _ = state_block.apply_without_execution_with_commit_qc_for_replay(
-            &committed_block,
-            roster,
-            None,
-        );
+        let _ = state_block
+            .apply_without_execution_with_verified_v2_finality_for_replay(&committed_block, roster);
         replay_timing.apply_without_execution += apply_without_execution_start.elapsed();
         let staged_merge_entry = state_block.staged_merge_entry().cloned();
         state_block.prepare_replay_checkpoint_preview();
@@ -66327,6 +66482,84 @@ mod tests {
         assert!(matches!(
             State::decode_exact_merge_lane_frontier_marker(&key, &framed),
             Err(MergeLedgerCommitError::ExecutionMarkerConflict(_))
+        ));
+    }
+
+    #[test]
+    fn merge_routing_plan_boundary_requires_exact_framed_norito() {
+        let plan = crate::queue::RoutingPlan::single(crate::queue::RoutingDecision::new(
+            LaneId::new(7),
+            DataSpaceId::new(9),
+        ));
+        let framed = norito::to_bytes(&plan).expect("canonical framed routing plan");
+        assert_eq!(
+            decode_canonical_merge_routing_plan(&framed)
+                .expect("canonical framed routing plan must decode"),
+            plan
+        );
+
+        let assert_framed_rejected = |candidate: &[u8], context: &str| {
+            assert!(
+                matches!(
+                    decode_canonical_merge_routing_plan(candidate),
+                    Err(MergeLedgerCommitError::ExecutionBatchInvalid(message))
+                        if message.contains("framed Norito")
+                ),
+                "{context}"
+            );
+        };
+
+        let bare = plan.encode();
+        assert_ne!(framed, bare, "framed and bare Norito must remain distinct");
+        assert_framed_rejected(&bare, "bare routing plan must reject");
+
+        let (_, truncated) = framed
+            .split_last()
+            .expect("canonical routing plan frame is nonempty");
+        assert_framed_rejected(truncated, "truncated routing plan frame must reject");
+
+        let mut corrupt = framed.clone();
+        *corrupt
+            .last_mut()
+            .expect("canonical routing plan frame is nonempty") ^= 0x80;
+        assert_framed_rejected(&corrupt, "corrupt routing plan frame must reject");
+
+        let mut trailing = framed.clone();
+        trailing.push(0);
+        assert_framed_rejected(&trailing, "trailing routing plan byte must reject");
+
+        let mut compressed = framed.clone();
+        *compressed
+            .get_mut(MERGE_INNER_NORITO_COMPRESSION_OFFSET)
+            .expect("canonical frame carries the documented compression byte") =
+            norito::Compression::Zstd as u8;
+        assert!(matches!(
+            decode_canonical_merge_routing_plan(&compressed),
+            Err(MergeLedgerCommitError::ExecutionBatchInvalid(message))
+                if message.contains("uncompressed exact framed Norito")
+        ));
+
+        let mut declared_bomb = framed;
+        declared_bomb
+            .get_mut(MERGE_INNER_NORITO_LENGTH_OFFSET..MERGE_INNER_NORITO_LENGTH_OFFSET + 8)
+            .expect("canonical frame carries the documented payload length")
+            .copy_from_slice(
+                &(u64::try_from(MAX_MERGE_EXECUTION_ROUTING_PLAN_BYTES)
+                    .expect("routing-plan byte cap fits u64")
+                    + 1)
+                .to_le_bytes(),
+            );
+        assert!(matches!(
+            decode_canonical_merge_routing_plan(&declared_bomb),
+            Err(MergeLedgerCommitError::ExecutionBatchInvalid(message))
+                if message.contains("hard byte limit")
+        ));
+
+        let oversized = vec![0; MAX_MERGE_EXECUTION_ROUTING_PLAN_BYTES + 1];
+        assert!(matches!(
+            decode_canonical_merge_routing_plan(&oversized),
+            Err(MergeLedgerCommitError::ExecutionBatchInvalid(message))
+                if message.contains("hard byte limit")
         ));
     }
 
@@ -82367,6 +82600,9 @@ mod tests {
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), kura, query_handle);
         enable_nexus_autoscale_for_testing(&state);
+        let primary_incarnation_before = state
+            .lane_incarnation(LaneId::SINGLE)
+            .expect("default lane must have an incarnation before autoscale");
 
         let lane = autoscale_elastic_lane_config(LaneId::new(1), DataSpaceId::UNIVERSAL, 2);
         let plan = iroha_data_model::nexus::LaneLifecyclePlan {
@@ -82375,8 +82611,13 @@ mod tests {
         };
 
         state
-            .apply_lane_lifecycle_with_options(&plan, false, true)
+            .apply_autoscale_lane_lifecycle_for_tests(&plan)
             .expect("internal autoscale lifecycle may claim autoscale ownership");
+        assert_eq!(
+            state.lane_incarnation(LaneId::SINGLE),
+            Some(primary_incarnation_before),
+            "adding an elastic lane must preserve the unchanged primary incarnation"
+        );
         let nexus = state.nexus_snapshot();
         assert!(nexus.lane_catalog.lanes().iter().any(|lane| {
             lane.id == LaneId::new(1)
@@ -89678,7 +89919,7 @@ mod tests {
         state
             .apply_lane_lifecycle(&add_lane)
             .expect("added second lane");
-        let commit_keypairs = configure_commit_topology(&state, 1);
+        let commit_keypairs = configure_commit_topology(&state, 4);
         install_lane_manifest_registry_for_keypairs(
             &state,
             &[LaneId::SINGLE, LaneId::new(1)],
@@ -89694,7 +89935,7 @@ mod tests {
         let historical_lane_incarnation = lane1_h1.lane_incarnation;
         ensure_merge_carrier_parent_for_test(&state);
         let candidate = merge_candidate_from_relay(&state, 1, &lane1_h1);
-        let merge_qc = merge_qc_for_candidate(&state, &candidate, &commit_keypairs, &[0]);
+        let merge_qc = merge_qc_for_candidate(&state, &candidate, &commit_keypairs, &[0, 1, 2]);
         let stored = state
             .commit_merge_entry(merge_entry_from_candidate(candidate, merge_qc))
             .expect("seed lane1 merge history");
@@ -89706,15 +89947,22 @@ mod tests {
         state
             .apply_lane_lifecycle(&retire_lane)
             .expect("retired lane");
+        seed_autoscale_sample_history_for_snapshot_test(&state);
 
-        let restarted = State::new_for_testing(
-            World::default(),
-            Arc::clone(&kura),
-            LiveQueryStore::start_test(),
-        );
+        let retired_snapshot =
+            norito::json::to_value(&state).expect("serialize retired lane state for restart");
+        drop(state);
+        let restarted =
+            deserialize_state_snapshot_value_with_kura(retired_snapshot, Arc::clone(&kura))
+                .expect("restore retired lane state with exact lifecycle lineage");
         ensure_merge_carrier_parent_for_test(&restarted);
-        restarted.recover_merge_ledger_from_kura();
-        restarted.nexus.write().enabled = true;
+        restarted
+            .recover_merge_ledger_from_kura()
+            .expect("rehydrate historical merge snapshots from Kura");
+        assert!(
+            restarted.nexus_snapshot().enabled,
+            "the restored runtime snapshot must preserve enabled Nexus state"
+        );
         assert!(
             restarted
                 .merge_admission
@@ -89779,7 +90027,7 @@ mod tests {
             "rehydrated old history must not advance the recreated lane-local namespace"
         );
 
-        let commit_keypairs = configure_commit_topology(&restarted, 1);
+        let commit_keypairs = configure_commit_topology(&restarted, 4);
         install_lane_manifest_registry_for_keypairs(
             &restarted,
             &[LaneId::SINGLE, LaneId::new(1)],
@@ -89811,7 +90059,7 @@ mod tests {
             }),
             "rehydrated old merge history must not suppress recreated lane relay"
         );
-        let merge_qc = merge_qc_for_candidate(&restarted, &candidate, &commit_keypairs, &[0]);
+        let merge_qc = merge_qc_for_candidate(&restarted, &candidate, &commit_keypairs, &[0, 1, 2]);
         restarted
             .commit_merge_entry(merge_entry_from_candidate(candidate, merge_qc))
             .expect("recreated lane merge entry commits after restart");
@@ -113884,6 +114132,61 @@ seiyaku IdentitylessRawCallback {
     }
 
     #[test]
+    fn v2_authority_skips_legacy_roster_but_preserves_topology_transition() {
+        let kura = Kura::blank_kura_for_testing();
+        let state = State::new_for_testing(
+            World::default(),
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+        );
+        let keypairs = configure_commit_topology(&state, 4);
+        let base_topology = keypairs
+            .iter()
+            .map(|keypair| PeerId::new(keypair.public_key().clone()))
+            .collect::<Vec<_>>();
+        let block: SignedBlock = BlockBuilder::new(vec![dummy_accepted_transaction()])
+            .chain(0, None)
+            .sign(keypairs[0].private_key())
+            .unpack(|_| {})
+            .into();
+        let mut state_block = state.block(block.header());
+        let valid = ValidBlock::validate_unchecked(block, &mut state_block).unpack(|_| {});
+        let committed = valid.commit_unchecked().unpack(|_| {});
+        let block_hash = committed.as_ref().hash();
+
+        let _ = state_block
+            .apply_without_execution_with_verified_v2_finality(&committed, base_topology.clone());
+        state_block
+            .commit()
+            .expect("commit v2-authorized state block");
+
+        let mut expected_topology = Topology::new(base_topology.clone());
+        expected_topology.block_committed(base_topology.clone(), block_hash);
+        assert_eq!(
+            state.commit_topology_snapshot(),
+            expected_topology.as_ref().to_vec(),
+            "v2 authority must preserve the ordinary commit-topology transition"
+        );
+        assert_eq!(state.prev_commit_topology_snapshot(), base_topology);
+        assert!(
+            state.world_view().commit_qcs().get(&block_hash).is_none(),
+            "v2 authority must not populate the legacy WSV commit-QC archive"
+        );
+        assert!(
+            state
+                .commit_roster_journal
+                .read()
+                .get(1, block_hash)
+                .is_none(),
+            "v2 authority must not populate the legacy commit-roster journal"
+        );
+        assert!(
+            kura.read_roster_metadata(1).is_none(),
+            "v2 authority must not populate the legacy roster sidecar"
+        );
+    }
+
+    #[test]
     fn height_mismatch_does_not_publish_staged_commit_topology() {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
@@ -114491,16 +114794,27 @@ seiyaku IdentitylessRawCallback {
             .expect("default Nexus XOR fee asset id must be canonical");
         let asset_definition =
             AssetDefinition::numeric(asset_def_id.clone()).with_name("xor".to_string());
-        let asset_definition = asset_definition.build(&sponsor_id);
+        let mut asset_definition = asset_definition.build(&sponsor_id);
+        asset_definition.total_quantity = sponsor_balance.clone();
         let sponsor_asset = Asset::new(
             AssetId::of(asset_def_id.clone(), sponsor_id.clone()),
-            sponsor_balance,
+            sponsor_balance.clone(),
         );
         let world =
             World::with_assets([domain], [sponsor], [asset_definition], [sponsor_asset], []);
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let mut state = State::new_for_testing(world, kura, query);
+        assert_eq!(
+            state
+                .view()
+                .world()
+                .asset_definition(&asset_def_id)
+                .expect("fee asset definition exists")
+                .total_quantity(),
+            &sponsor_balance,
+            "fee fixture supply must equal its seeded sponsor balance"
+        );
         let nexus = iroha_config::parameters::actual::Nexus {
             enabled: true,
             fees: iroha_config::parameters::actual::NexusFees {
@@ -114935,12 +115249,16 @@ seiyaku IdentitylessRawCallback {
             .kura
             .append_merge_entry(&entry)
             .expect("persist merge entry without settlement");
-        let recovery = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            state.recover_merge_ledger_from_kura();
-        }));
+        let recovery = state
+            .recover_merge_ledger_from_kura()
+            .expect_err("orphan sidecar recovery must fail closed");
         assert!(
-            recovery.is_err(),
-            "orphan sidecar recovery must fail closed"
+            matches!(
+                &recovery,
+                MergeLedgerCommitError::ExecutionStatePublication(message)
+                    if message.contains("has no exact global carrier")
+            ),
+            "orphan sidecar recovery returned an unexpected error: {recovery}"
         );
         assert_eq!(
             account_numeric_asset_balance(&state, &asset_def_id, &sponsor_id),
@@ -114970,7 +115288,9 @@ seiyaku IdentitylessRawCallback {
         let entry = merge_entry_from_candidate(candidate, qc);
         let carrier = store_merge_carrier_without_state_publication_for_test(&state, &entry);
 
-        state.recover_merge_ledger_from_kura();
+        state
+            .recover_merge_ledger_from_kura()
+            .expect("authenticate future exact merge carrier during recovery");
         assert!(state.merge_ledger().snapshot().is_empty());
         assert_eq!(
             account_numeric_asset_balance(&state, &asset_def_id, &sponsor_id),
@@ -115032,7 +115352,9 @@ seiyaku IdentitylessRawCallback {
             .kura
             .store_block_with_merge_entry(Arc::new(carrier.clone()), &entry)
             .expect("persist exact merge carrier without State settlement");
-        state.recover_merge_ledger_from_kura();
+        state
+            .recover_merge_ledger_from_kura()
+            .expect("authenticate durable exact merge carrier during recovery");
         assert!(state.merge_ledger().snapshot().is_empty());
         assert_eq!(
             account_numeric_asset_balance(&state, &asset_def_id, &sponsor_id),
@@ -116181,7 +116503,9 @@ seiyaku IdentitylessRawCallback {
                 .expect("durable restored block is available");
             state.push_block_hash_for_testing(block.hash());
         }
-        state.recover_merge_ledger_from_kura();
+        state
+            .recover_merge_ledger_from_kura()
+            .expect("rehydrate merge ledger from restored Kura history");
 
         let snapshot = state.merge_ledger().snapshot();
         assert_eq!(snapshot.len(), 2, "state seeds merge cache from kura");
@@ -116227,7 +116551,9 @@ seiyaku IdentitylessRawCallback {
             "durable multi-lane carriers must remain unpublished until State history catches up"
         );
         ensure_merge_carrier_parent_for_test(&state);
-        state.recover_merge_ledger_from_kura();
+        state
+            .recover_merge_ledger_from_kura()
+            .expect("rehydrate multi-lane merge ledger from Kura history");
 
         let snapshot = state.merge_ledger().snapshot();
         assert_eq!(snapshot.len(), 2, "state seeds both multi-lane epochs");

@@ -48,7 +48,7 @@ public final class KagemushaRecursiveSpendProverTest {
 
   private static void artifactContractIsFixed() {
     assert KagemushaRecursiveSpendProver.REQUIRED_NATIVE_BRIDGE_ABI_VERSION == 20;
-    assert KagemushaRecursiveSpendProver.ARTIFACT_COUNT == 10;
+    assert KagemushaRecursiveSpendProver.ARTIFACT_COUNT == 8;
     assert KagemushaRecursiveSpendProver.MAXIMUM_INPUTS_PER_TRANSITION == 2;
     assert KagemushaRecursiveSpendProver.MAXIMUM_LOCAL_APPEND_BUILDER_INPUTS == 2;
     assert KagemushaRecursiveSpendProver.MAXIMUM_BRANCH_CLAIMS == 2;
@@ -61,12 +61,10 @@ public final class KagemushaRecursiveSpendProverTest {
     assert KagemushaRecursiveSpendProver.ARTIFACT_FILES.equals(
         Arrays.asList(
             "step-eq.parameters.krv4",
-            "step-eq.circuit-params.krv4",
             "step-eq.proving-key.krv4",
             "step-eq.verifying-key.krv4",
             "step-eq.bootstrap-witness.krv4",
             "step-ep.parameters.krv4",
-            "step-ep.circuit-params.krv4",
             "step-ep.proving-key.krv4",
             "step-ep.verifying-key.krv4",
             "step-ep.bootstrap-witness.krv4"));
@@ -124,7 +122,7 @@ public final class KagemushaRecursiveSpendProverTest {
         Arrays.asList(KagemushaRecursiveSpendProver.ArtifactRoleV4.values());
     KagemushaRecursiveSpendProver.requireCanonicalV4ArtifactRoleInventory(canonical);
 
-    for (final int count : new int[] {8, 9, 11}) {
+    for (final int count : new int[] {6, 7, 9}) {
       final List<KagemushaRecursiveSpendProver.ArtifactRoleV4> invalid =
           new ArrayList<>();
       for (int index = 0; index < count; index++) {

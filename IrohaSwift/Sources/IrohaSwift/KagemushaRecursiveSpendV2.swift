@@ -232,24 +232,20 @@ public enum KagemushaRecursiveSpend {
         "kagemusha-recursive-spend-step-ep-authenticated-layout-v4"
     public static let artifactRolesV4 = [
         "step_eq_parameters",
-        "step_eq_circuit_params",
         "step_eq_proving_key",
         "step_eq_verifying_key",
         "step_eq_bootstrap_witness",
         "step_ep_parameters",
-        "step_ep_circuit_params",
         "step_ep_proving_key",
         "step_ep_verifying_key",
         "step_ep_bootstrap_witness",
     ]
     public static let artifactFileNamesV4 = [
         "step-eq.parameters.krv4",
-        "step-eq.circuit-params.krv4",
         "step-eq.proving-key.krv4",
         "step-eq.verifying-key.krv4",
         "step-eq.bootstrap-witness.krv4",
         "step-ep.parameters.krv4",
-        "step-ep.circuit-params.krv4",
         "step-ep.proving-key.krv4",
         "step-ep.verifying-key.krv4",
         "step-ep.bootstrap-witness.krv4",
@@ -4152,12 +4148,10 @@ public final class KagemushaRecursiveSpendArtifactInstallSessionV3: @unchecked S
 /// Native finalization re-parses and authenticates the held file descriptor.
 public enum KagemushaRecursiveSpendArtifactRoleV4: Int, CaseIterable, Sendable {
     case stepEqParameters
-    case stepEqCircuitParams
     case stepEqProvingKey
     case stepEqVerifyingKey
     case stepEqBootstrapWitness
     case stepEpParameters
-    case stepEpCircuitParams
     case stepEpProvingKey
     case stepEpVerifyingKey
     case stepEpBootstrapWitness

@@ -13,7 +13,9 @@ import sys
 from typing import Any
 
 
-EXPECTED_PROFILE: dict[str, int | float | str] = {
+EXPECTED_PROFILE: dict[str, bool | int | float | str] = {
+    "build_profile": "release",
+    "cargo_net_offline": True,
     "seed": "taira-public-sim",
     "target_tps": 5,
     "packet_loss_percent": 10,
@@ -37,6 +39,8 @@ EXPECTED_SUMMARY_FIELDS = frozenset(
     {
         "git_revision",
         "workspace_source_manifest_sha256",
+        "build_profile",
+        "cargo_net_offline",
         "localnet_artifact_path",
         "daemon_binary_path",
         "daemon_binary_blake2b_256",
@@ -107,6 +111,7 @@ LIVENESS_CLASSIFICATIONS = frozenset(
         "timeout_certificate_missing",
         "scheduler_starvation",
         "application_pending",
+        "local_control_pending",
     }
 )
 STATUS_SNAPSHOT_FIELDS = frozenset({"validator_index", "status"})
@@ -126,10 +131,44 @@ LIVENESS_REQUIRED_FIELDS = frozenset(
         "ignore_counts",
     }
 )
+EXPECTED_BINARY_SUBDIRECTORIES = {
+    "daemon": Path("programs/release"),
+    "kagami": Path("programs/release"),
+    "test": Path("test-suite/release"),
+}
 
 
 class EvidenceError(RuntimeError):
     """Raised when release evidence is missing or inconsistent."""
+
+
+def _reject_duplicate_object_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    decoded: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in decoded:
+            raise EvidenceError(f"duplicate JSON object key: {key!r}")
+        decoded[key] = value
+    return decoded
+
+
+def _reject_non_finite_json_number(value: str) -> None:
+    raise EvidenceError(f"non-finite JSON number is not valid release evidence: {value}")
+
+
+def _parse_finite_json_float(value: str) -> float:
+    parsed = float(value)
+    if not math.isfinite(parsed):
+        _reject_non_finite_json_number(value)
+    return parsed
+
+
+def _decode_evidence(payload: bytes) -> Any:
+    return json.loads(
+        payload,
+        object_pairs_hook=_reject_duplicate_object_keys,
+        parse_constant=_reject_non_finite_json_number,
+        parse_float=_parse_finite_json_float,
+    )
 
 
 def _iroha_blake2b_256(payload: bytes) -> str:
@@ -215,11 +254,32 @@ def _require_close(actual: float, expected: float, name: str) -> None:
     )
 
 
-def _require_under(path: Path, root: Path, name: str) -> None:
+def _require_under(path: Path, root: Path, name: str, root_name: str) -> None:
     try:
         path.relative_to(root)
     except ValueError as error:
-        raise EvidenceError(f"{name} is outside the source-bound build root: {path}") from error
+        raise EvidenceError(f"{name} is outside {root_name}: {path}") from error
+
+
+def _current_git_revision(repo_root: Path) -> str:
+    return subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=repo_root,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+
+def _current_workspace_source_manifest(repo_root: Path) -> str:
+    helper = repo_root / "scripts" / "compute_workspace_source_manifest.py"
+    return subprocess.run(
+        [sys.executable, str(helper), "--root", str(repo_root)],
+        cwd=repo_root,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
 
 
 def _validate_status_snapshots(
@@ -312,12 +372,26 @@ def validate_evidence(
     expected_manifest = _require_digest(
         source_manifest_sha256, "expected workspace source manifest"
     )
+    repo_root = repo_root.resolve(strict=True)
+    _require(repo_root.is_dir(), "repository root is not a directory")
+    current_manifest = _require_digest(
+        _current_workspace_source_manifest(repo_root),
+        "current workspace source manifest",
+    )
+    _require(
+        current_manifest == expected_manifest,
+        "workspace source manifest drifted before evidence validation",
+    )
     _require(
         summary.get("workspace_source_manifest_sha256") == expected_manifest,
         "summary workspace source manifest does not match the release invocation",
     )
     for name, expected in EXPECTED_PROFILE.items():
-        _require(summary.get(name) == expected, f"unexpected {name}: {summary.get(name)!r}")
+        actual = summary.get(name)
+        _require(
+            type(actual) is type(expected) and actual == expected,
+            f"unexpected {name}: {actual!r}",
+        )
     duration_secs = _require_int(summary, "duration_secs")
     _require(duration_secs >= EXPECTED_DURATION_SECS, "soak did not run for at least 24 wall-clock hours")
     soak_overrun_secs = _require_number(summary, "soak_overrun_secs")
@@ -331,21 +405,28 @@ def validate_evidence(
         "duration_secs and soak_overrun_secs describe different elapsed times",
     )
 
-    current_revision = subprocess.run(
-        ["git", "rev-parse", "HEAD"],
-        cwd=repo_root,
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout.strip()
+    current_revision = _current_git_revision(repo_root)
     _require(summary.get("git_revision") == current_revision, "Git revision drifted")
 
-    build_root = build_root.resolve()
+    build_root = build_root.resolve(strict=True)
+    _require(build_root.is_dir(), "source-bound build root is not a directory")
     for prefix in ("daemon", "kagami", "test"):
         path_value = summary.get(f"{prefix}_binary_path")
         _require(isinstance(path_value, str), f"missing {prefix} binary path")
-        path = Path(path_value).resolve(strict=True)
-        _require_under(path, build_root, f"{prefix} binary")
+        raw_path = Path(path_value)
+        _require(raw_path.is_absolute(), f"{prefix} binary path is not absolute")
+        path = raw_path.resolve(strict=True)
+        _require(path.is_file(), f"{prefix} binary path is not a file")
+        _require_under(path, build_root, f"{prefix} binary", "the source-bound build root")
+        release_root = (build_root / EXPECTED_BINARY_SUBDIRECTORIES[prefix]).resolve(
+            strict=True
+        )
+        _require_under(
+            path,
+            release_root,
+            f"{prefix} binary",
+            "the pinned release-profile directory",
+        )
         recorded = _require_digest(
             summary.get(f"{prefix}_binary_blake2b_256"),
             f"{prefix} binary digest",
@@ -354,8 +435,17 @@ def validate_evidence(
 
     artifact_value = summary.get("localnet_artifact_path")
     _require(isinstance(artifact_value, str), "missing localnet artifact path")
-    artifact_root = Path(artifact_value).resolve(strict=True)
+    raw_artifact_root = Path(artifact_value)
+    _require(raw_artifact_root.is_absolute(), "localnet artifact path is not absolute")
+    artifact_root = raw_artifact_root.resolve(strict=True)
     _require(artifact_root.is_dir(), "localnet artifact path is not a directory")
+    artifact_parent = (repo_root / "target" / "taira-localnet").resolve(strict=True)
+    _require_under(
+        artifact_root,
+        artifact_parent,
+        "localnet artifact path",
+        "the workspace Taira artifact root",
+    )
     recorded_config = _require_digest(
         summary.get("generated_config_blake2b_256"), "generated config digest"
     )
@@ -507,7 +597,7 @@ def main() -> int:
     args = parser.parse_args()
     try:
         payload = args.evidence.read_bytes()
-        summary = json.loads(payload)
+        summary = _decode_evidence(payload)
         _require(isinstance(summary, dict), "summary root must be an object")
         validate_evidence(
             summary,

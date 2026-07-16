@@ -56,13 +56,15 @@ def valid_summary(module, tmp_path: Path) -> tuple[dict, Path, Path]:
     build_root.mkdir()
     binaries = {}
     for name in ("daemon", "kagami", "test"):
-        path = build_root / name
+        release_root = build_root / module.EXPECTED_BINARY_SUBDIRECTORIES[name]
+        release_root.mkdir(parents=True, exist_ok=True)
+        path = release_root / name
         path.write_bytes(f"{name}-binary".encode())
         binaries[f"{name}_binary_path"] = str(path)
         binaries[f"{name}_binary_blake2b_256"] = module._file_digest(path)
 
-    artifact_root = tmp_path / "localnet"
-    artifact_root.mkdir()
+    artifact_root = tmp_path / "target" / "taira-localnet" / "localnet"
+    artifact_root.mkdir(parents=True)
     (artifact_root / "peer0.toml").write_text("chain = 'taira'\n", encoding="utf-8")
     source_manifest = "a" * 64
     summary = {
@@ -106,14 +108,17 @@ def valid_summary(module, tmp_path: Path) -> tuple[dict, Path, Path]:
     return summary, build_root, artifact_root
 
 
+def stub_repository_identity(module, monkeypatch) -> None:
+    monkeypatch.setattr(module, "_current_git_revision", lambda _root: "revision")
+    monkeypatch.setattr(
+        module, "_current_workspace_source_manifest", lambda _root: "a" * 64
+    )
+
+
 def test_valid_evidence_is_source_and_artifact_bound(tmp_path: Path, monkeypatch) -> None:
     module = load_module()
     summary, build_root, _ = valid_summary(module, tmp_path)
-    monkeypatch.setattr(
-        module.subprocess,
-        "run",
-        lambda *args, **kwargs: type("Result", (), {"stdout": "revision\n"})(),
-    )
+    stub_repository_identity(module, monkeypatch)
     module.validate_evidence(
         summary,
         source_manifest_sha256="a" * 64,
@@ -122,8 +127,90 @@ def test_valid_evidence_is_source_and_artifact_bound(tmp_path: Path, monkeypatch
     )
 
 
-def test_classified_interval_is_bound_to_authoritative_statuses(
+def test_duplicate_json_keys_are_rejected_recursively() -> None:
+    module = load_module()
+    with pytest.raises(module.EvidenceError, match="duplicate JSON object key"):
+        module._decode_evidence(b'{"outer":{"seed":"a","seed":"b"}}')
+
+
+def test_non_finite_json_numbers_are_rejected_recursively() -> None:
+    module = load_module()
+    for payload in (
+        b'{"outer":{"rate":NaN}}',
+        b'{"outer":{"rate":1e10000}}',
+    ):
+        with pytest.raises(module.EvidenceError, match="non-finite JSON number"):
+            module._decode_evidence(payload)
+
+
+def test_checker_recomputes_the_canonical_workspace_manifest(
     tmp_path: Path, monkeypatch
+) -> None:
+    module = load_module()
+    summary, build_root, _ = valid_summary(module, tmp_path)
+    stub_repository_identity(module, monkeypatch)
+    monkeypatch.setattr(
+        module, "_current_workspace_source_manifest", lambda _root: "b" * 64
+    )
+    with pytest.raises(module.EvidenceError, match="workspace source manifest drifted"):
+        module.validate_evidence(
+            summary,
+            source_manifest_sha256="a" * 64,
+            build_root=build_root,
+            repo_root=tmp_path,
+        )
+
+
+def test_manifest_recomputation_delegates_to_the_canonical_workspace_helper(
+    monkeypatch,
+) -> None:
+    module = load_module()
+    repo_root = ROOT_DIR.resolve()
+    expected_command = [
+        module.sys.executable,
+        str(repo_root / "scripts" / "compute_workspace_source_manifest.py"),
+        "--root",
+        str(repo_root),
+    ]
+
+    def fake_run(command, **kwargs):
+        assert command == expected_command
+        assert kwargs == {
+            "cwd": repo_root,
+            "check": True,
+            "capture_output": True,
+            "text": True,
+        }
+        return type("Result", (), {"stdout": f"{'a' * 64}\n"})()
+
+    monkeypatch.setattr(module.subprocess, "run", fake_run)
+    assert module._current_workspace_source_manifest(repo_root) == "a" * 64
+
+
+def test_debug_profile_binary_is_rejected(tmp_path: Path, monkeypatch) -> None:
+    module = load_module()
+    summary, build_root, _ = valid_summary(module, tmp_path)
+    debug_binary = build_root / "programs" / "debug" / "daemon"
+    debug_binary.parent.mkdir(parents=True)
+    debug_binary.write_bytes(b"daemon-binary")
+    summary["daemon_binary_path"] = str(debug_binary)
+    summary["daemon_binary_blake2b_256"] = module._file_digest(debug_binary)
+    stub_repository_identity(module, monkeypatch)
+    with pytest.raises(module.EvidenceError, match="pinned release-profile"):
+        module.validate_evidence(
+            summary,
+            source_manifest_sha256="a" * 64,
+            build_root=build_root,
+            repo_root=tmp_path,
+        )
+
+
+@pytest.mark.parametrize(
+    "classification",
+    ["missing_proposal", "local_control_pending"],
+)
+def test_classified_interval_is_bound_to_authoritative_statuses(
+    tmp_path: Path, monkeypatch, classification: str
 ) -> None:
     module = load_module()
     summary, build_root, _ = valid_summary(module, tmp_path)
@@ -131,18 +218,14 @@ def test_classified_interval_is_bound_to_authoritative_statuses(
         {
             "start_elapsed_ms": 1_000,
             "end_elapsed_ms": 2_000,
-            "classifications": ["missing_proposal"],
+            "classifications": [classification],
             "classified": True,
             "status_snapshots": [
-                valid_status_snapshot(index, "missing_proposal") for index in range(3)
+                valid_status_snapshot(index, classification) for index in range(3)
             ],
         }
     ]
-    monkeypatch.setattr(
-        module.subprocess,
-        "run",
-        lambda *args, **kwargs: type("Result", (), {"stdout": "revision\n"})(),
-    )
+    stub_repository_identity(module, monkeypatch)
     module.validate_evidence(
         summary,
         source_manifest_sha256="a" * 64,
@@ -166,6 +249,11 @@ def test_evidence_schema_matches_rust_summary_exactly() -> None:
 @pytest.mark.parametrize(
     ("mutation", "message"),
     [
+        (lambda summary: summary.__setitem__("build_profile", "debug"), "build_profile"),
+        (
+            lambda summary: summary.__setitem__("cargo_net_offline", 1),
+            "cargo_net_offline",
+        ),
         (lambda summary: summary.__setitem__("duration_secs", 30), "24 wall-clock hours"),
         (lambda summary: summary.__setitem__("soak_overrun_secs", 901), "overrun"),
         (lambda summary: summary.__setitem__("process_churn_cycles", 1), "process churn"),
@@ -180,11 +268,7 @@ def test_weakened_evidence_is_rejected(tmp_path: Path, monkeypatch, mutation, me
     module = load_module()
     summary, build_root, _ = valid_summary(module, tmp_path)
     mutation(summary)
-    monkeypatch.setattr(
-        module.subprocess,
-        "run",
-        lambda *args, **kwargs: type("Result", (), {"stdout": "revision\n"})(),
-    )
+    stub_repository_identity(module, monkeypatch)
     with pytest.raises(module.EvidenceError, match=message):
         module.validate_evidence(
             summary,
@@ -197,11 +281,7 @@ def test_weakened_evidence_is_rejected(tmp_path: Path, monkeypatch, mutation, me
 def test_binary_or_config_tampering_is_rejected(tmp_path: Path, monkeypatch) -> None:
     module = load_module()
     summary, build_root, artifact_root = valid_summary(module, tmp_path)
-    monkeypatch.setattr(
-        module.subprocess,
-        "run",
-        lambda *args, **kwargs: type("Result", (), {"stdout": "revision\n"})(),
-    )
+    stub_repository_identity(module, monkeypatch)
     Path(summary["daemon_binary_path"]).write_bytes(b"tampered")
     with pytest.raises(module.EvidenceError, match="daemon binary digest mismatch"):
         module.validate_evidence(
@@ -265,11 +345,7 @@ def test_internally_inconsistent_evidence_is_rejected(
     module = load_module()
     summary, build_root, _ = valid_summary(module, tmp_path)
     mutation(summary)
-    monkeypatch.setattr(
-        module.subprocess,
-        "run",
-        lambda *args, **kwargs: type("Result", (), {"stdout": "revision\n"})(),
-    )
+    stub_repository_identity(module, monkeypatch)
     with pytest.raises(module.EvidenceError, match=message):
         module.validate_evidence(
             summary,
@@ -314,11 +390,7 @@ def test_status_snapshot_evidence_is_authoritative(
     module = load_module()
     summary, build_root, _ = valid_summary(module, tmp_path)
     mutation(summary)
-    monkeypatch.setattr(
-        module.subprocess,
-        "run",
-        lambda *args, **kwargs: type("Result", (), {"stdout": "revision\n"})(),
-    )
+    stub_repository_identity(module, monkeypatch)
     with pytest.raises(module.EvidenceError, match=message):
         module.validate_evidence(
             summary,
@@ -356,11 +428,7 @@ def test_no_progress_interval_cannot_forge_its_classification(
             ],
         }
     ]
-    monkeypatch.setattr(
-        module.subprocess,
-        "run",
-        lambda *args, **kwargs: type("Result", (), {"stdout": "revision\n"})(),
-    )
+    stub_repository_identity(module, monkeypatch)
     with pytest.raises(module.EvidenceError, match=message):
         module.validate_evidence(
             summary,

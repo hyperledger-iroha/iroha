@@ -21,8 +21,9 @@ use iroha_data_model::{
     peer::PeerId,
     transaction::TransactionBuilder,
 };
+use mv::storage::StorageReadOnly;
 
-use super::{QueryIndexJournal, QueryProjectionCheckpointJournal, State, World};
+use super::{QueryIndexJournal, QueryProjectionCheckpointJournal, State, World, WorldReadOnly};
 use crate::{
     governance::manifest::LaneManifestRegistry,
     kura::{CommitManifest, CommitManifestBindingState, Kura},
@@ -884,6 +885,24 @@ strict_replay_test!(production_replay_accepts_the_exact_durable_v2_tuple, {
             .commit_manifest_binding_state(&fixture.manifest)
             .expect("verify manifest binding"),
         CommitManifestBindingState::Bound
+    );
+    assert!(
+        replay_state
+            .world_view()
+            .commit_qcs()
+            .get(&fixture.block.hash())
+            .is_none(),
+        "exact v2 replay must not populate the legacy WSV commit-QC archive"
+    );
+    assert!(
+        replay_state
+            .commit_roster_snapshot_for_block(HEIGHT, fixture.block.hash())
+            .is_none(),
+        "exact v2 replay must not populate the legacy commit-roster journal"
+    );
+    assert!(
+        fixture.kura.read_roster_metadata(HEIGHT).is_none(),
+        "exact v2 replay must not require or synthesize a legacy roster sidecar"
     );
 });
 

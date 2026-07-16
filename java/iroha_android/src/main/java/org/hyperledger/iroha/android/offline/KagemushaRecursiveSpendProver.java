@@ -21,7 +21,7 @@ import org.hyperledger.iroha.norito.SchemaHash;
 /**
  * ABI-20 Kagemusha V4 artifact streaming and capability bridge.
  *
- * <p>This is the sole first-release offline-cash surface. It authenticates the opaque ten-file proof
+ * <p>This is the sole first-release offline-cash surface. It authenticates the opaque eight-file proof
  * artifact set and validates exact typed request/payment/acknowledgement and proof-bound membership
  * archives. Proof execution remains fail-closed while the native backend reports unavailable.
  * V4 lifecycle results remain opaque until dedicated ABI-20 projections are available; no V2
@@ -36,17 +36,15 @@ public final class KagemushaRecursiveSpendProver {
   public static final List<String> V4_ARTIFACT_FILES =
       Collections.unmodifiableList(Arrays.asList(
           "step-eq.parameters.krv4",
-          "step-eq.circuit-params.krv4",
           "step-eq.proving-key.krv4",
           "step-eq.verifying-key.krv4",
           "step-eq.bootstrap-witness.krv4",
           "step-ep.parameters.krv4",
-          "step-ep.circuit-params.krv4",
           "step-ep.proving-key.krv4",
           "step-ep.verifying-key.krv4",
           "step-ep.bootstrap-witness.krv4"));
   public static final List<String> ARTIFACT_FILES = V4_ARTIFACT_FILES;
-  public static final int V4_ARTIFACT_COUNT = 10;
+  public static final int V4_ARTIFACT_COUNT = 8;
   public static final int ARTIFACT_COUNT = V4_ARTIFACT_COUNT;
   public static final int MAX_MANIFEST_BYTES = 1024 * 1024;
   public static final int MAX_TRUSTED_RELEASE_POLICY_BYTES = 64 * 1024;
@@ -74,12 +72,10 @@ public final class KagemushaRecursiveSpendProver {
   /** Canonical ABI-20 artifact roles. Declaration order is part of the native contract. */
   public enum ArtifactRoleV4 {
     STEP_EQ_PARAMETERS("step-eq.parameters.krv4"),
-    STEP_EQ_CIRCUIT_PARAMS("step-eq.circuit-params.krv4"),
     STEP_EQ_PROVING_KEY("step-eq.proving-key.krv4"),
     STEP_EQ_VERIFYING_KEY("step-eq.verifying-key.krv4"),
     STEP_EQ_BOOTSTRAP_WITNESS("step-eq.bootstrap-witness.krv4"),
     STEP_EP_PARAMETERS("step-ep.parameters.krv4"),
-    STEP_EP_CIRCUIT_PARAMS("step-ep.circuit-params.krv4"),
     STEP_EP_PROVING_KEY("step-ep.proving-key.krv4"),
     STEP_EP_VERIFYING_KEY("step-ep.verifying-key.krv4"),
     STEP_EP_BOOTSTRAP_WITNESS("step-ep.bootstrap-witness.krv4");
@@ -101,7 +97,7 @@ public final class KagemushaRecursiveSpendProver {
     Objects.requireNonNull(roles, "roles");
     final ArtifactRoleV4[] canonical = ArtifactRoleV4.values();
     if (roles.size() != canonical.length) {
-      throw new IllegalArgumentException("artifact roles must contain exactly ten entries");
+      throw new IllegalArgumentException("artifact roles must contain exactly eight entries");
     }
     for (int index = 0; index < canonical.length; index++) {
       if (roles.get(index) != canonical[index]) {
@@ -2811,7 +2807,7 @@ public final class KagemushaRecursiveSpendProver {
     }
   }
 
-  /** Coordinates one authenticated, atomic ten-artifact generation install. */
+  /** Coordinates one authenticated, atomic eight-artifact generation install. */
   public static final class ArtifactInstallSession implements AutoCloseable {
     private final byte[] manifestNorito;
     private final byte[] manifestSha256;
@@ -2870,7 +2866,7 @@ public final class KagemushaRecursiveSpendProver {
     public synchronized void install() {
       requirePending();
       if (artifacts.size() != ARTIFACT_COUNT) {
-        throw new IllegalStateException("artifact set must contain exactly ten streams");
+        throw new IllegalStateException("artifact set must contain exactly eight streams");
       }
       requireCanonicalV4ArtifactRoleInventory(new ArrayList<>(artifacts.keySet()));
       final ArtifactIngest[] ordered = artifacts.values().toArray(new ArtifactIngest[0]);

@@ -1115,17 +1115,15 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
         XCTAssertEqual(KagemushaRecursiveSpend.pastaCycleProofEnvelopeVersion, 1)
         XCTAssertEqual(KagemushaRecursiveSpend.pastaCycleProofEnvelopeVersionV4, 4)
         XCTAssertEqual(KagemushaRecursiveSpend.localWitnessVersionV4, 4)
-        XCTAssertEqual(KagemushaRecursiveSpend.artifactRolesV4.count, 10)
+        XCTAssertEqual(KagemushaRecursiveSpend.artifactRolesV4.count, 8)
         XCTAssertEqual(
             KagemushaRecursiveSpend.artifactRolesV4,
             [
                 "step_eq_parameters",
-                "step_eq_circuit_params",
                 "step_eq_proving_key",
                 "step_eq_verifying_key",
                 "step_eq_bootstrap_witness",
                 "step_ep_parameters",
-                "step_ep_circuit_params",
                 "step_ep_proving_key",
                 "step_ep_verifying_key",
                 "step_ep_bootstrap_witness",
@@ -1348,7 +1346,7 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
         ))
     }
 
-    func testNativeCapabilitiesV4RequireExactABI20TenRoleContract() throws {
+    func testNativeCapabilitiesV4RequireExactABI20EightRoleContract() throws {
         let gates = [
             "authenticated-v4-artifact-installation",
             "independent-cryptographic-review",

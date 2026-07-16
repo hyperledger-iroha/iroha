@@ -5357,17 +5357,30 @@ pub mod isi {
 
         use iroha_crypto::{Algorithm, KeyPair};
         use iroha_data_model::{
-            Registrable,
+            ChainId, IntoKeyValue, Registrable,
             account::Account,
-            asset::AssetDefinitionId,
+            asset::{Asset, AssetDefinitionId},
             block::BlockHeader,
             domain::DomainId,
-            offline::KagemushaDevicePublicKeyV2,
+            offline::{
+                KAGEMUSHA_CONFIDENTIAL_PROOF_BACKEND,
+                KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1,
+                KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V3, KagemushaDevicePublicKeyV2,
+                KagemushaRecursiveSpendArtifactBindingV3, KagemushaRecursiveSpendBundleV2,
+                KagemushaRecursiveSpendProofV2, KagemushaRecursiveSpendPublicStatementV2,
+                KagemushaRecursiveSpendRedeemRequestV2, KagemushaRecursiveSpendRedeemUnsignedV2,
+                KagemushaRecursiveSpendRedemptionIntentBuildRequestV2,
+                KagemushaRecursiveSpendTopUpAnchorV2, KagemushaScaledAmountV2,
+                KagemushaSpendableNoteDescriptorV2, KagemushaUnshieldPublicInputsBindingV2,
+                kagemusha_confidential_amount_encoding_v2,
+                kagemusha_recursive_spend_lineage_root_v2,
+            },
             permission::Permission,
+            proof::{ProofBox, VerifyingKeyId},
             role::{Role, RoleId},
         };
         use iroha_primitives::json::Json;
-        use iroha_test_samples::{ALICE_ID, BOB_ID};
+        use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR};
         use p256::elliptic_curve::sec1::ToEncodedPoint as _;
 
         use super::*;
@@ -5524,6 +5537,546 @@ pub mod isi {
                     .to_string()
                     .contains("offline_reason::unauthorized_controller"),
                 "{context}: unexpected offline authorization error: {error}"
+            );
+        }
+
+        fn kagemusha_v2_test_authorization(
+            authority: &AccountId,
+            signer: &KeyPair,
+            operation_id: [u8; 32],
+            nonce: [u8; 32],
+            payload_digest: [u8; 32],
+        ) -> KagemushaRequestAuthorizationV2 {
+            let mut authorization = KagemushaRequestAuthorizationV2 {
+                authority: authority.clone(),
+                device_id: "offline-core-regression-device".to_owned(),
+                operation_id,
+                issued_at_ms: POLICY_TEST_TIME_MS - 1_000,
+                expires_at_ms: POLICY_TEST_TIME_MS + 60_000,
+                nonce,
+                payload_digest,
+                app_attest_evidence_sha256: None,
+                app_attest_evidence: None,
+                signature: iroha_crypto::Signature::try_new(
+                    signer.private_key(),
+                    b"offline-core-regression-placeholder",
+                )
+                .expect("placeholder authorization signature"),
+            };
+            let signing_bytes = authorization
+                .signing_bytes()
+                .expect("canonical authorization signing bytes");
+            authorization.signature =
+                iroha_crypto::Signature::try_new(signer.private_key(), &signing_bytes)
+                    .expect("valid authorization signature");
+            authorization
+        }
+
+        fn kagemusha_v2_test_redeem_request(
+            recipient: &AccountId,
+            signer: &KeyPair,
+            operation_id: [u8; 32],
+            nonce: [u8; 32],
+        ) -> KagemushaRecursiveSpendRedeemRequestV2 {
+            let chain_id = ChainId::from("offline-core-regression-chain");
+            let asset = offline_test_asset(recipient).definition().clone();
+            let amount = KagemushaScaledAmountV2 {
+                atomic_units: 7,
+                scale: 0,
+            };
+            let note = KagemushaSpendableNoteDescriptorV2 {
+                chain_id: chain_id.clone(),
+                asset: asset.clone(),
+                note_commitment: [0x41; 32],
+                spend_nullifier: [0x42; 32],
+                amount,
+            };
+            let artifact_binding = KagemushaRecursiveSpendArtifactBindingV3 {
+                generation: "offline-core-regression-v3".to_owned(),
+                manifest_sha256: [0x43; 32],
+            };
+            let topup_anchor = KagemushaRecursiveSpendTopUpAnchorV2 {
+                version: 2,
+                chain_id: chain_id.clone(),
+                payer: recipient.clone(),
+                asset: AssetId::new(asset.clone(), recipient.clone()),
+                asset_scale: amount.scale,
+                amount,
+                initial_root: [0x44; 32],
+                finalized_root: [0x45; 32],
+                shield_leaf_index: 0,
+                current_note: note.clone(),
+                topup_operation_id: [0x46; 32],
+                shield_verifier_id: VerifyingKeyId::new(
+                    KAGEMUSHA_CONFIDENTIAL_PROOF_BACKEND,
+                    "offline-core-regression-shield-v2",
+                ),
+                shield_verifier_commitment: [0x47; 32],
+                artifact_binding: artifact_binding.clone(),
+                finalized_height: 1,
+                finalized_tx_hash: [0x48; 32],
+                anchor_digest: [0; 32],
+            }
+            .finalize_digest()
+            .expect("canonical V2 top-up anchor fixture");
+            let topup_anchor_ref = topup_anchor
+                .compact_ref()
+                .expect("canonical V2 top-up reference fixture");
+            let lineage_root =
+                kagemusha_recursive_spend_lineage_root_v2(topup_anchor_ref.anchor_digest)
+                    .expect("canonical V2 lineage root fixture");
+            let branch_claim = KagemushaRecursiveSpendBranchClaimV2::root(lineage_root)
+                .expect("canonical V2 root branch fixture");
+            let recursive_backend = KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1
+                .parse()
+                .expect("canonical recursive backend");
+            let recursive_verifier = VerifyingKeyId::new(
+                KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1,
+                KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V3,
+            );
+            let statement = KagemushaRecursiveSpendPublicStatementV2 {
+                chain_id: chain_id.clone(),
+                asset: asset.clone(),
+                asset_scale: amount.scale,
+                final_root: topup_anchor.finalized_root,
+                topup_anchor_refs: vec![topup_anchor_ref],
+                proof_step_count: 1,
+                peer_hop_count: 0,
+                current_note: note.clone(),
+                branch_claims: vec![branch_claim],
+                transition: None,
+                artifact_binding,
+                verifier_key_id: recursive_verifier.clone(),
+            };
+            let public_statement_digest = statement
+                .digest()
+                .expect("canonical V2 public statement fixture");
+            let bundle = KagemushaRecursiveSpendBundleV2 {
+                statement,
+                recursive_proof: KagemushaRecursiveSpendProofV2 {
+                    verifier_key_id: recursive_verifier,
+                    public_statement_digest,
+                    proof: ProofBox::new(recursive_backend, vec![0x49; 32]),
+                },
+            };
+            let unshield_public_inputs = KagemushaUnshieldPublicInputsBindingV2 {
+                input_commitment_0: note.note_commitment,
+                input_commitment_1: [0; 32],
+                nullifier_0: note.spend_nullifier,
+                nullifier_1: [0; 32],
+                change_output_commitment: [0; 32],
+                root: bundle.statement.final_root,
+                public_amount: kagemusha_confidential_amount_encoding_v2(amount.atomic_units),
+                asset_tag: [0x4A; 32],
+                chain_tag: [0x4B; 32],
+            };
+            let redemption = KagemushaRecursiveSpendRedemptionIntentBuildRequestV2 {
+                previous_bundle: bundle.clone(),
+                recipient: recipient.clone(),
+                public_amount: amount,
+                change_output: None,
+                change_artifact_binding: None,
+                unshield_public_inputs,
+                unshield_public_inputs_digest: unshield_public_inputs
+                    .digest()
+                    .expect("canonical V2 unshield input digest fixture"),
+                operation_id,
+            }
+            .into_intent()
+            .expect("canonical V2 redemption intent fixture");
+            let confidential_backend: iroha_schema::Ident = KAGEMUSHA_CONFIDENTIAL_PROOF_BACKEND
+                .parse()
+                .expect("canonical confidential backend");
+            let mut redeem_proof = ProofAttachment::new_ref(
+                confidential_backend.clone(),
+                ProofBox::new(confidential_backend, vec![0x4C; 32]),
+                VerifyingKeyId::new(
+                    KAGEMUSHA_CONFIDENTIAL_PROOF_BACKEND,
+                    "offline-core-regression-unshield-v3",
+                ),
+            );
+            redeem_proof.vk_commitment = Some([0x4D; 32]);
+            let unsigned = KagemushaRecursiveSpendRedeemUnsignedV2 {
+                bundle,
+                recipient: recipient.clone(),
+                amount,
+                redeem_proof,
+                redemption,
+                offline_change: None,
+                block_height: 1,
+                operation_id,
+            };
+            let payload_digest = unsigned
+                .digest()
+                .expect("canonical V2 unsigned redemption fixture");
+            let authorization = kagemusha_v2_test_authorization(
+                recipient,
+                signer,
+                operation_id,
+                nonce,
+                payload_digest,
+            );
+            unsigned
+                .into_request(authorization)
+                .expect("signed V2 redemption fixture must validate")
+        }
+
+        #[derive(Debug, PartialEq, Eq)]
+        struct KagemushaV2MutationSnapshot {
+            replay_keys: Vec<Hash>,
+            smart_contract_state: Vec<(Name, Vec<u8>)>,
+            balances: Vec<(AssetId, Vec<u8>)>,
+            zk_assets: Vec<(AssetDefinitionId, Vec<u8>, [u8; 32])>,
+            zk_metering: (u32, u32, u64, u32, u32, u64),
+        }
+
+        fn kagemusha_v2_mutation_snapshot(
+            state_transaction: &StateTransaction<'_, '_>,
+        ) -> KagemushaV2MutationSnapshot {
+            KagemushaV2MutationSnapshot {
+                replay_keys: state_transaction
+                    .world
+                    .kagemusha_replay_keys
+                    .iter()
+                    .map(|(marker, ())| *marker)
+                    .collect(),
+                smart_contract_state: state_transaction
+                    .world
+                    .smart_contract_state
+                    .iter()
+                    .map(|(key, value)| (key.clone(), value.clone()))
+                    .collect(),
+                balances: state_transaction
+                    .world
+                    .assets
+                    .iter()
+                    .map(|(id, value)| {
+                        (
+                            id.clone(),
+                            norito::to_bytes(value).expect("asset balance snapshot must encode"),
+                        )
+                    })
+                    .collect(),
+                zk_assets: state_transaction
+                    .world
+                    .zk_assets
+                    .iter()
+                    .map(|(id, value)| {
+                        // Norito persists the commitment/root/frontier inventory while the
+                        // private Merkle tree is rebuilt from it. Probe a cloned tree as well
+                        // so a tree-only mutation cannot hide behind identical archive bytes.
+                        let mut tree_probe = value.clone();
+                        let next_root = tree_probe.push_commitment([0xFF; 32], usize::MAX);
+                        (
+                            id.clone(),
+                            norito::to_bytes(value).expect("ZK asset snapshot must encode"),
+                            next_root,
+                        )
+                    })
+                    .collect(),
+                zk_metering: (
+                    state_transaction.zk_confidential_ops_in_tx,
+                    state_transaction.zk_verify_calls_in_tx,
+                    state_transaction.zk_proof_bytes_in_tx,
+                    state_transaction.zk_nullifiers_in_tx,
+                    state_transaction.zk_commitments_in_tx,
+                    state_transaction.confidential_gas_used_in_tx,
+                ),
+            }
+        }
+
+        fn commit_kagemusha_v2_test_replay_request(
+            authorization: &KagemushaRequestAuthorizationV2,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<bool, Error> {
+            match kagemusha_v2_replay_status(authorization, state_transaction)? {
+                KagemushaV2ReplayStatus::Fresh(markers) => {
+                    commit_kagemusha_v2_replay_markers(markers, state_transaction);
+                    Ok(true)
+                }
+                KagemushaV2ReplayStatus::Committed => Ok(false),
+            }
+        }
+
+        fn seed_kagemusha_v2_mutation_sentinels(
+            operation_id: [u8; 32],
+            receipt_digest: [u8; 32],
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) {
+            let asset_id = offline_test_asset(&ALICE_ID);
+            let (asset_id, asset_value) =
+                Asset::new(asset_id, Quantity::from(19_u32)).into_key_value();
+            state_transaction
+                .world
+                .assets
+                .insert(asset_id.clone(), asset_value);
+
+            let mut zk_state = crate::state::ZkAssetState::default();
+            zk_state.allow_shield = true;
+            zk_state.allow_unshield = true;
+            zk_state.push_commitment([0x61; 32], 8);
+            zk_state.nullifiers.insert([0x62; 32]);
+            zk_state.record_frontier_checkpoint(1, 1, 8);
+            state_transaction
+                .world
+                .zk_assets
+                .insert(asset_id.definition().clone(), zk_state);
+
+            let receipt_key = kagemusha_v2_redemption_receipt_state_key(operation_id)
+                .expect("canonical redemption receipt key");
+            state_transaction
+                .world
+                .smart_contract_state
+                .insert(receipt_key, receipt_digest.to_vec());
+        }
+
+        #[test]
+        fn kagemusha_v2_operation_marker_is_global_while_other_markers_are_authority_scoped() {
+            let operation_id = [0x71; 32];
+            let nonce = [0x72; 32];
+            let payload_digest = [0x73; 32];
+            let alice = kagemusha_v2_test_authorization(
+                &ALICE_ID,
+                &ALICE_KEYPAIR,
+                operation_id,
+                nonce,
+                payload_digest,
+            );
+            let bob = kagemusha_v2_test_authorization(
+                &BOB_ID,
+                &BOB_KEYPAIR,
+                operation_id,
+                nonce,
+                payload_digest,
+            );
+            let alice_other_nonce = kagemusha_v2_test_authorization(
+                &ALICE_ID,
+                &ALICE_KEYPAIR,
+                operation_id,
+                [0x74; 32],
+                payload_digest,
+            );
+            let alice_other_payload = kagemusha_v2_test_authorization(
+                &ALICE_ID,
+                &ALICE_KEYPAIR,
+                operation_id,
+                nonce,
+                [0x75; 32],
+            );
+            let alice_other_operation = kagemusha_v2_test_authorization(
+                &ALICE_ID,
+                &ALICE_KEYPAIR,
+                [0x76; 32],
+                nonce,
+                payload_digest,
+            );
+
+            let [alice_operation, alice_nonce, alice_payload, alice_request] =
+                kagemusha_v2_authorization_markers(&alice);
+            let [bob_operation, bob_nonce, bob_payload, bob_request] =
+                kagemusha_v2_authorization_markers(&bob);
+            let [
+                other_nonce_operation,
+                other_nonce,
+                other_nonce_payload,
+                other_nonce_request,
+            ] = kagemusha_v2_authorization_markers(&alice_other_nonce);
+            let [
+                other_payload_operation,
+                other_payload_nonce,
+                other_payload,
+                other_payload_request,
+            ] = kagemusha_v2_authorization_markers(&alice_other_payload);
+            let [
+                other_operation,
+                other_operation_nonce,
+                other_operation_payload,
+                other_operation_request,
+            ] = kagemusha_v2_authorization_markers(&alice_other_operation);
+
+            assert_eq!(alice_operation, bob_operation);
+            assert_ne!(alice_nonce, bob_nonce);
+            assert_ne!(alice_payload, bob_payload);
+            assert_ne!(alice_request, bob_request);
+
+            assert_eq!(alice_operation, other_nonce_operation);
+            assert_ne!(alice_nonce, other_nonce);
+            assert_eq!(alice_payload, other_nonce_payload);
+            assert_ne!(alice_request, other_nonce_request);
+
+            assert_eq!(alice_operation, other_payload_operation);
+            assert_eq!(alice_nonce, other_payload_nonce);
+            assert_ne!(alice_payload, other_payload);
+            assert_ne!(alice_request, other_payload_request);
+
+            assert_ne!(alice_operation, other_operation);
+            assert_eq!(alice_nonce, other_operation_nonce);
+            assert_eq!(alice_payload, other_operation_payload);
+            assert_ne!(alice_request, other_operation_request);
+
+            let marker_domains = [alice_operation, alice_nonce, alice_payload, alice_request]
+                .into_iter()
+                .collect::<BTreeSet<_>>();
+            assert_eq!(
+                marker_domains.len(),
+                4,
+                "domain separation must keep all four marker classes distinct"
+            );
+        }
+
+        #[test]
+        fn kagemusha_v2_cross_authority_operation_conflict_rolls_back_all_state() {
+            let operation_id = [0x81; 32];
+            let alice_request = kagemusha_v2_test_redeem_request(
+                &ALICE_ID,
+                &ALICE_KEYPAIR,
+                operation_id,
+                [0x82; 32],
+            );
+            let bob_request =
+                kagemusha_v2_test_redeem_request(&BOB_ID, &BOB_KEYPAIR, operation_id, [0x83; 32]);
+            alice_request
+                .validate_public_binding()
+                .expect("Alice fixture must be a real signed redemption request");
+            bob_request
+                .validate_public_binding()
+                .expect("Bob fixture must be a real signed redemption request");
+
+            let state = offline_test_state();
+            let mut block = state.block(offline_test_header());
+            {
+                let mut state_transaction = block.transaction();
+                assert!(
+                    commit_kagemusha_v2_test_replay_request(
+                        &alice_request.authorization,
+                        &mut state_transaction,
+                    )
+                    .expect("first authority must have a fresh replay set"),
+                    "fresh Alice fixture unexpectedly looked committed"
+                );
+                seed_kagemusha_v2_mutation_sentinels(
+                    operation_id,
+                    alice_request
+                        .unsigned_payload_digest()
+                        .expect("Alice receipt digest"),
+                    &mut state_transaction,
+                );
+                state_transaction.apply();
+            }
+
+            let mut conflicting_transaction = block.transaction();
+            let before = kagemusha_v2_mutation_snapshot(&conflicting_transaction);
+            let alice_markers = kagemusha_v2_authorization_markers(&alice_request.authorization);
+            let bob_markers = kagemusha_v2_authorization_markers(&bob_request.authorization);
+            assert_eq!(alice_markers[0], bob_markers[0]);
+            assert!(
+                conflicting_transaction
+                    .world
+                    .kagemusha_replay_keys
+                    .get(&alice_markers[0])
+                    .is_some(),
+                "test precondition: Alice's global operation marker is committed"
+            );
+            assert!(
+                conflicting_transaction
+                    .world
+                    .kagemusha_replay_keys
+                    .get(&bob_markers[3])
+                    .is_none(),
+                "test precondition: Bob's exact request is not an idempotent retry"
+            );
+
+            // This is the same state-mutating acceptance branch used above. A regression
+            // that scopes operation markers by authority would commit Bob's markers here.
+            let error = commit_kagemusha_v2_test_replay_request(
+                &bob_request.authorization,
+                &mut conflicting_transaction,
+            )
+            .expect_err("a second authority must not claim Alice's operation id");
+            assert!(
+                error
+                    .to_string()
+                    .contains("offline_reason::authorization_replay"),
+                "unexpected cross-authority replay error: {error}"
+            );
+            let after = kagemusha_v2_mutation_snapshot(&conflicting_transaction);
+            assert_eq!(
+                after, before,
+                "cross-authority rejection changed replay, receipt, balance, ZK, tree, or metering state"
+            );
+            for marker in &bob_markers[1..] {
+                assert!(
+                    conflicting_transaction
+                        .world
+                        .kagemusha_replay_keys
+                        .get(marker)
+                        .is_none(),
+                    "rejected authority left a nonce, payload, or request marker"
+                );
+            }
+            drop(conflicting_transaction);
+            let post_rollback_transaction = block.transaction();
+            assert_eq!(
+                kagemusha_v2_mutation_snapshot(&post_rollback_transaction),
+                before,
+                "dropping the rejected transaction did not preserve its parent block state"
+            );
+        }
+
+        #[test]
+        fn kagemusha_v2_redeem_dispatch_fails_closed_without_state_mutation() {
+            assert!(
+                !iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PROOF_BACKEND_AVAILABLE,
+                "this regression covers the intentionally unavailable V2 backend"
+            );
+            let operation_id = [0x91; 32];
+            let mut request = kagemusha_v2_test_redeem_request(
+                &ALICE_ID,
+                &ALICE_KEYPAIR,
+                operation_id,
+                [0x92; 32],
+            );
+            request.authorization.payload_digest[0] ^= 0xFF;
+            assert!(
+                request.validate_public_binding().is_err(),
+                "test precondition: request must be malformed behind the backend guard"
+            );
+
+            let state = offline_test_state();
+            let mut block = state.block(offline_test_header());
+            {
+                let mut seed_transaction = block.transaction();
+                seed_kagemusha_v2_mutation_sentinels(
+                    operation_id,
+                    [0x93; 32],
+                    &mut seed_transaction,
+                );
+                seed_transaction.apply();
+            }
+
+            let mut state_transaction = block.transaction();
+            state_transaction.settlement.offline.kagemusha_enabled = true;
+            state_transaction.zk_confidential_ops_in_tx = 3;
+            state_transaction.zk_verify_calls_in_tx = 5;
+            state_transaction.zk_proof_bytes_in_tx = 7;
+            state_transaction.zk_nullifiers_in_tx = 11;
+            state_transaction.zk_commitments_in_tx = 13;
+            state_transaction.confidential_gas_used_in_tx = 17;
+            let before = kagemusha_v2_mutation_snapshot(&state_transaction);
+
+            let error = RedeemKagemushaRecursiveV2::new(request)
+                .execute(&ALICE_ID, &mut state_transaction)
+                .expect_err("unavailable recursive backend must fail closed");
+            assert!(
+                error
+                    .to_string()
+                    .contains("offline_reason::kagemusha_v2_proof_backend_unavailable"),
+                "backend guard did not run before malformed request validation: {error}"
+            );
+            let after = kagemusha_v2_mutation_snapshot(&state_transaction);
+            assert_eq!(
+                after, before,
+                "fail-closed dispatch changed replay, receipt, balance, ZK, tree, or metering state"
             );
         }
 

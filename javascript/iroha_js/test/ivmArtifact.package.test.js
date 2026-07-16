@@ -94,6 +94,28 @@ test("packed ivm-artifact subpath bundles and compiles without ambient Node type
       path.join(packagePath, "ivm-artifact.d.ts"),
       "utf8",
     );
+    assert.deepEqual(
+      [
+        ...declarations.matchAll(
+          /^export const IVM_PROGRAM_HEADER_LENGTH:\s*(\d+);$/gmu,
+        ),
+      ].map((match) => match[1]),
+      ["49"],
+      "standalone declarations must expose the exact 49-byte IVM V1 program header",
+    );
+    const mainDeclarations = fs.readFileSync(
+      path.join(packagePath, "index.d.ts"),
+      "utf8",
+    );
+    assert.deepEqual(
+      [
+        ...mainDeclarations.matchAll(
+          /^export const IVM_PROGRAM_HEADER_LENGTH:\s*(\d+);$/gmu,
+        ),
+      ].map((match) => match[1]),
+      ["49"],
+      "main declarations must expose the exact 49-byte IVM V1 program header",
+    );
     assert.doesNotMatch(
       declarations,
       /reference types=["']node|from ["'](?:node:|buffer["'])|\bBuffer\b/u,
@@ -199,13 +221,14 @@ test("packed ivm-artifact subpath bundles and compiles without ambient Node type
         '  type IvmArtifactHashes,',
         '} from "@iroha/iroha-js/ivm-artifact";',
         "const artifact = new Uint8Array(IVM_PROGRAM_HEADER_LENGTH);",
+        "const headerBytes: 49 = IVM_PROGRAM_HEADER_LENGTH;",
         "const maxBytes: 4194304 = IVM_ARTIFACT_MAX_BYTES;",
         "const hashes: IvmArtifactHashes = computeIvmArtifactHashes(artifact);",
         "const fromBuffer: IvmArtifactHashes = computeIvmArtifactHashes(artifact.buffer);",
         "const fromView: IvmArtifactHashes = computeIvmArtifactHashes(new DataView(artifact.buffer));",
         "const codeHash: string = hashes.codeHashHex;",
         "const artifactHash: string = hashes.artifactSha256Hex;",
-        "void fromBuffer; void fromView; void codeHash; void artifactHash; void maxBytes;",
+        "void fromBuffer; void fromView; void codeHash; void artifactHash; void headerBytes; void maxBytes;",
       ].join("\n"),
       "utf8",
     );

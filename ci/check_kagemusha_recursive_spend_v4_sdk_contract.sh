@@ -80,6 +80,11 @@ def require(label: str, needle: str) -> None:
         errors.append(f"{paths[label]}: missing {needle!r}")
 
 
+def forbid(label: str, needle: str) -> None:
+    if needle in texts[label]:
+        errors.append(f"{paths[label]}: forbidden stale V4 artifact marker {needle!r}")
+
+
 def require_regex(label: str, pattern: str, description: str) -> None:
     if re.search(pattern, texts[label], re.MULTILINE | re.DOTALL) is None:
         errors.append(f"{paths[label]}: missing {description}")
@@ -87,36 +92,30 @@ def require_regex(label: str, pattern: str, description: str) -> None:
 
 v4_files = (
     "step-eq.parameters.krv4",
-    "step-eq.circuit-params.krv4",
     "step-eq.proving-key.krv4",
     "step-eq.verifying-key.krv4",
     "step-eq.bootstrap-witness.krv4",
     "step-ep.parameters.krv4",
-    "step-ep.circuit-params.krv4",
     "step-ep.proving-key.krv4",
     "step-ep.verifying-key.krv4",
     "step-ep.bootstrap-witness.krv4",
 )
 v4_roles = (
     "step_eq_parameters",
-    "step_eq_circuit_params",
     "step_eq_proving_key",
     "step_eq_verifying_key",
     "step_eq_bootstrap_witness",
     "step_ep_parameters",
-    "step_ep_circuit_params",
     "step_ep_proving_key",
     "step_ep_verifying_key",
     "step_ep_bootstrap_witness",
 )
 v4_case_names = (
     "stepEqParameters",
-    "stepEqCircuitParams",
     "stepEqProvingKey",
     "stepEqVerifyingKey",
     "stepEqBootstrapWitness",
     "stepEpParameters",
-    "stepEpCircuitParams",
     "stepEpProvingKey",
     "stepEpVerifyingKey",
     "stepEpBootstrapWitness",
@@ -351,12 +350,12 @@ def quoted_inventory(label: str, pattern: str, declaration: str) -> tuple[str, .
 
 
 data_roles_match = re.search(
-    r"KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_ROLES_V4\s*:\s*\[&str;\s*10\]\s*=\s*\[(.*?)\];",
+    r"KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_ROLES_V4\s*:\s*\[&str;\s*8\]\s*=\s*\[(.*?)\];",
     texts["data_model"],
     re.MULTILINE | re.DOTALL,
 )
 if data_roles_match is None:
-    errors.append(f"{paths['data_model']}: missing exact [&str; 10] V4 role inventory")
+    errors.append(f"{paths['data_model']}: missing exact [&str; 8] V4 role inventory")
 else:
     data_roles = tuple(re.findall(r'"([^"]+)"', data_roles_match.group(1)))
     if data_roles != v4_roles:
@@ -371,44 +370,42 @@ if artifact_kind_match is None:
     errors.append(f"{paths['data_model']}: missing V4 artifact-kind enum")
 else:
     kind_cases = tuple(re.findall(r"^\s*([A-Z][A-Za-z0-9]*)\s*,", artifact_kind_match.group(1), re.MULTILINE))
-    if kind_cases != (
-        "Parameters", "CircuitParams", "ProvingKey", "VerifyingKey", "BootstrapWitness"
-    ):
+    if kind_cases != ("Parameters", "ProvingKey", "VerifyingKey", "BootstrapWitness"):
         errors.append(f"{paths['data_model']}: V4 artifact kinds are not canonical: {kind_cases!r}")
 
 require_regex(
     "rust",
-    r"KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_COUNT_V4\s*:\s*usize\s*=\s*10\s*;",
-    "exact ten-artifact bridge inventory",
+    r"KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_COUNT_V4\s*:\s*usize\s*=\s*8\s*;",
+    "exact eight-artifact bridge inventory",
 )
 require_regex(
     "bundle",
-    r"const\s+INPUTS\s*:\s*\[InputSpec;\s*10\]\s*=\s*\[(.*?)\n\s*\];",
-    "exact [InputSpec; 10] bundle inventory",
+    r"const\s+INPUTS\s*:\s*\[InputSpec;\s*8\]\s*=\s*\[(.*?)\n\s*\];",
+    "exact [InputSpec; 8] bundle inventory",
 )
 bundle_inputs_match = re.search(
-    r"const\s+INPUTS\s*:\s*\[InputSpec;\s*10\]\s*=\s*\[(.*?)\n\s*\];",
+    r"const\s+INPUTS\s*:\s*\[InputSpec;\s*8\]\s*=\s*\[(.*?)\n\s*\];",
     texts["bundle"],
     re.MULTILINE | re.DOTALL,
 )
 if bundle_inputs_match is not None:
     bundle_kinds = tuple(re.findall(r"kind:\s*KagemushaPastaCycleArtifactKindV4::([A-Za-z0-9]+)", bundle_inputs_match.group(1)))
     expected_kinds = (
-        "Parameters", "CircuitParams", "ProvingKey", "VerifyingKey", "BootstrapWitness",
-        "Parameters", "CircuitParams", "ProvingKey", "VerifyingKey", "BootstrapWitness",
+        "Parameters", "ProvingKey", "VerifyingKey", "BootstrapWitness",
+        "Parameters", "ProvingKey", "VerifyingKey", "BootstrapWitness",
     )
     if bundle_kinds != expected_kinds:
         errors.append(f"{paths['bundle']}: V4 bundle kind order is not canonical: {bundle_kinds!r}")
 
 require_regex(
     "kagami",
-    r"REPORT_ARTIFACT_PURPOSES_V4\s*:\s*\[&str;\s*10\]",
-    "exact Kagami [&str; 10] report inventory",
+    r"REPORT_ARTIFACT_PURPOSES_V4\s*:\s*\[&str;\s*8\]",
+    "exact Kagami [&str; 8] report inventory",
 )
 require_regex(
     "kagami",
-    r"\]:\s*\[KagemushaValidatedArtifactPayloadV4;\s*10\]\s*=",
-    "exact Kagami [PayloadV4; 10] validated inventory",
+    r"\]:\s*\[KagemushaValidatedArtifactPayloadV4;\s*8\]\s*=",
+    "exact Kagami [PayloadV4; 8] validated inventory",
 )
 
 swift_roles = quoted_inventory(
@@ -474,24 +471,39 @@ if release_pairs != tuple(zip(v4_roles, v4_files)):
         f"{release_pairs!r}"
     )
 
-for label in ("data_model", "rust", "kagami", "bundle", "core_artifact"):
-    for required in ("step_eq_circuit_params", "step_ep_circuit_params"):
-        require(label, required)
-
-for label in ("data_model", "swift", "kotlin", "java", "xcframework_build"):
-    for required in (
+require_regex(
+    "data_model",
+    r"pub\s+circuit_params\s*:\s*KagemushaStepCircuitParamsV4",
+    "inline authenticated V4 circuit parameters",
+)
+require_regex(
+    "bundle",
+    r"KagemushaPastaCycleProofProfileV4\s*\{[\s\S]{0,500}?circuit_params:",
+    "bundle embedding circuit parameters in each V4 profile",
+)
+for label in (
+    "data_model",
+    "rust",
+    "header",
+    "kagami",
+    "bundle",
+    "swift",
+    "kotlin",
+    "java",
+    "xcframework_build",
+):
+    for stale_file in (
         "step-eq.circuit-params.krv4",
         "step-ep.circuit-params.krv4",
     ):
-        require(label, required)
-
-for label in ("data_model", "rust", "bundle", "core_artifact"):
-    require(label, "CircuitParams")
+        forbid(label, stale_file)
+for label in ("rust", "kagami", "bundle"):
+    forbid(label, "KagemushaPastaCycleArtifactKindV4::CircuitParams")
 
 require_regex(
     "header",
-    r"exact\s+ten-artifact\s+KRV4\s+inventory",
-    "exact-ten ABI20 inventory documentation",
+    r"exact\s+eight-artifact\s+KRV4\s+inventory",
+    "exact-eight ABI20 inventory documentation",
 )
 require_regex(
     "java",
@@ -500,13 +512,13 @@ require_regex(
 )
 require_regex(
     "kotlin",
-    r"V4_ARTIFACT_COUNT\s*:\s*Int\s*=\s*10\b",
-    "exact ten-artifact Kotlin inventory",
+    r"V4_ARTIFACT_COUNT\s*:\s*Int\s*=\s*8\b",
+    "exact eight-artifact Kotlin inventory",
 )
 require_regex(
     "java",
-    r"V4_ARTIFACT_COUNT\s*=\s*10\s*;",
-    "exact ten-artifact Java inventory",
+    r"V4_ARTIFACT_COUNT\s*=\s*8\s*;",
+    "exact eight-artifact Java inventory",
 )
 
 for method in native_methods:
@@ -554,21 +566,19 @@ require_regex(
     "rust",
     r"KagemushaPastaCycleProverArtifactsV4::new\s*\(\s*&self\.authenticated_release,"
     r"[\s\S]{0,260}?Kind::Parameters\)\?,"
-    r"[\s\S]{0,180}?Kind::CircuitParams\)\?,"
     r"[\s\S]{0,260}?Kind::ProvingKey\)\?,"
     r"[\s\S]{0,260}?Kind::VerifyingKey\)\?,"
     r"[\s\S]{0,260}?Kind::BootstrapWitness\)\?,"
     r"[\s\S]{0,260}?Kind::Parameters\)\?,"
-    r"[\s\S]{0,180}?Kind::CircuitParams\)\?,"
     r"[\s\S]{0,260}?Kind::ProvingKey\)\?,"
     r"[\s\S]{0,260}?Kind::VerifyingKey\)\?,"
     r"[\s\S]{0,260}?Kind::BootstrapWitness\)\?,",
-    "authenticated-release exact-ten V4 prover construction",
+    "authenticated-release exact-eight V4 prover construction",
 )
 require_regex(
     "rust",
     r"for\s+profile\s+in\s+&manifest\.profiles[\s\S]{0,500}?authenticated_payload",
-    "sequential authentication of all ten installed artifacts",
+    "sequential authentication of all eight installed artifacts",
 )
 
 for symbol in c_symbols:
@@ -590,7 +600,7 @@ if errors:
     raise SystemExit(1)
 
 print(
-    "Kagemusha ABI20 SDK contract passed: exact10 DM/Kagami/bundle inventory and "
+    "Kagemusha ABI20 SDK contract passed: exact8 DM/Kagami/bundle inventory and "
     "distinct direct C/JNI/Swift/Kotlin/Java lifecycle parity are complete."
 )
 PY

@@ -432,7 +432,6 @@ impl OutstandingCertifiedBodyRequests {
     }
 
     /// Whether the tracker has no outstanding requests.
-    #[cfg(test)]
     pub(crate) fn is_empty(&self) -> bool {
         self.requests.is_empty()
     }

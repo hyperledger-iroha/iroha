@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - ".github/workflows/pr_kagemusha_payload_bench.yml"
+      - "Cargo.lock"
       - "ci/check_connect_norito_bridge_header.sh"
       - "ci/check_kagemusha_*.sh"
       - "crates/connect_norito_bridge/**"
@@ -728,7 +729,16 @@ on:
       - "python/iroha_torii_client/tests/sccp_test.py"
       - "python/iroha_torii_client/tests/test_client.py"
       - "docs/portal/static/openapi/manifest.json"
-      - "crates/iroha_data_model/src/offline/**"
+      - "crates/iroha_crypto/**"
+      - "crates/iroha_data_model/src/**"
+      - "crates/iroha_data_model/Cargo.toml"
+      - "crates/iroha_data_model_derive/**"
+      - "crates/iroha_primitives/**"
+      - "crates/iroha_schema/**"
+      - "crates/iroha_zkp_halo2/**"
+      - "crates/norito/**"
+      - "crates/norito_derive/**"
+      - "fixtures/kagemusha/peer_transport_measurements_v1.json"
       - "crates/iroha_torii/**"
       - "crates/iroha_torii_shared/**"
       - "IrohaSwift/**"
@@ -753,10 +763,12 @@ jobs:
     name: Exact API, bridge, SDK, and artifact inventory
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.11"
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
       - run: ci/check_connect_norito_bridge_header.sh
       - run: ci/check_connect_norito_bridge_header.sh --self-test
       - run: ci/check_kagemusha_recursive_spend_policy.sh
@@ -768,9 +780,9 @@ jobs:
     name: Typed lifecycle and Torii contract
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
       - run: cargo test -p iroha_torii_shared offline_api --lib
       - run: cargo test -p iroha_torii generated_spec_documents_direct_offline_dtos_and_operation_states
       - run: cargo test -p iroha_torii generated_spec_offline
@@ -781,5 +793,5 @@ jobs:
     name: Swift lifecycle surface
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - run: ci/check_kagemusha_recursive_spend_swift_sdk.sh

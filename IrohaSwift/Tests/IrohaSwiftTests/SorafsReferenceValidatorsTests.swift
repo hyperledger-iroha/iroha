@@ -166,7 +166,7 @@ final class SorafsReferenceValidatorsTests: XCTestCase {
         let request = SorafsSignedOrderbookOrderRequestFields(
             side: .bid,
             tier: .hot,
-            pricePerGibMicroXor: "1",
+            pricePerGib: "1",
             quantityGib: 1,
             ownerAccount: oversized,
             expiryUnix: 1,
@@ -345,7 +345,7 @@ final class SorafsReferenceValidatorsTests: XCTestCase {
             SorafsSignedOrderbookOrderRequestFields(
                 side: .bid,
                 tier: .hot,
-                pricePerGibMicroXor: "1",
+                pricePerGib: "1",
                 quantityGib: 1,
                 ownerAccount: maximumOwner,
                 expiryUnix: 1_800_000_000,

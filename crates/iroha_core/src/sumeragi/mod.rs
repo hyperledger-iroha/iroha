@@ -736,6 +736,8 @@ struct FairV2IngressState {
     ready: VecDeque<FairV2IngressSource>,
     len: usize,
     bytes: usize,
+    nonempty_since: Option<Instant>,
+    last_service_attempt_at: Option<Instant>,
     open: bool,
 }
 
@@ -816,6 +818,11 @@ pub(crate) struct FairV2IngressSnapshot {
     pub(crate) capacity: usize,
     /// Local monotonic age of the oldest queued message.
     pub(crate) oldest_age: Option<Duration>,
+    /// Local monotonic age since the runner last scanned this ownership interval.
+    ///
+    /// Before its first scan, this is the age of the non-empty interval rather
+    /// than the age of an earlier empty-queue scheduler turn.
+    pub(crate) service_idle_age: Option<Duration>,
 }
 
 /// Invalid message or byte capacity for the active roster's fair v2 ingress lanes.
@@ -945,6 +952,8 @@ impl FairV2Ingress {
                 ready: VecDeque::new(),
                 len: 0,
                 bytes: 0,
+                nonempty_since: None,
+                last_service_attempt_at: None,
                 open: false,
             }),
         }
@@ -962,6 +971,10 @@ impl FairV2Ingress {
             debug_assert_eq!(state.len, actual_len);
             debug_assert_eq!(state.bytes, actual_bytes);
             debug_assert!(state.bytes <= self.byte_capacity);
+            debug_assert_eq!(state.nonempty_since.is_some(), state.len != 0);
+            if state.len == 0 {
+                debug_assert!(state.last_service_attempt_at.is_none());
+            }
 
             let ready = state.ready.iter().cloned().collect::<BTreeSet<_>>();
             debug_assert_eq!(ready.len(), state.ready.len());
@@ -1076,6 +1089,8 @@ impl FairV2Ingress {
         state.ready.clear();
         state.len = 0;
         state.bytes = 0;
+        state.nonempty_since = None;
+        state.last_service_attempt_at = None;
         if required > self.capacity {
             return Err(FairV2IngressCapacityError {
                 configured: self.capacity,
@@ -1237,6 +1252,7 @@ impl FairV2Ingress {
         if state.len >= usable_capacity {
             return Err(FairV2IngressPushError::Full);
         }
+        let queue_was_empty = state.len == 0;
         let lane = state
             .lanes
             .get_mut(&source)
@@ -1270,6 +1286,10 @@ impl FairV2Ingress {
             .bytes
             .checked_add(encoded_len)
             .expect("configured aggregate byte limit prevents overflow");
+        if queue_was_empty {
+            state.nonempty_since = Some(enqueued_at);
+            state.last_service_attempt_at = None;
+        }
         if was_empty {
             state.ready.push_back(source);
         }
@@ -1290,9 +1310,23 @@ impl FairV2Ingress {
     /// restores the original source order and total length.
     pub(crate) fn try_recv_if(
         &self,
+        predicate: impl FnMut(&InboundBlockMessage) -> bool,
+    ) -> Option<InboundBlockMessage> {
+        self.try_recv_if_at(Instant::now(), predicate)
+    }
+
+    fn try_recv_if_at(
+        &self,
+        service_attempt_at: Instant,
         mut predicate: impl FnMut(&InboundBlockMessage) -> bool,
     ) -> Option<InboundBlockMessage> {
         let mut state = self.state.lock();
+        if state.len != 0 {
+            // A rejected scan is still proof that the outer runner scheduler
+            // reached this queue. Downstream admission owns any remaining
+            // delay; queue age alone does not establish scheduler starvation.
+            state.last_service_attempt_at = Some(service_attempt_at);
+        }
         let ready_sources = state.ready.len();
         for _ in 0..ready_sources {
             let source = state
@@ -1344,6 +1378,10 @@ impl FairV2Ingress {
                 .bytes
                 .checked_sub(entry.encoded_len)
                 .expect("aggregate byte ownership includes every queued entry");
+            if state.len == 0 {
+                state.nonempty_since = None;
+                state.last_service_attempt_at = None;
+            }
             if remains_ready {
                 state.ready.push_back(source);
             }
@@ -1361,10 +1399,12 @@ impl FairV2Ingress {
             .values()
             .flat_map(|lane| lane.entries.iter().map(|entry| entry.enqueued_at))
             .min();
+        let service_baseline = state.last_service_attempt_at.or(state.nonempty_since);
         FairV2IngressSnapshot {
             depth: state.len,
             capacity: self.capacity,
             oldest_age: oldest_enqueued_at.map(|at| now.saturating_duration_since(at)),
+            service_idle_age: service_baseline.map(|at| now.saturating_duration_since(at)),
         }
     }
 
@@ -2842,34 +2882,150 @@ mod authoritative_runtime_gate_tests {
                 depth: 3,
                 capacity: 5,
                 oldest_age: Some(Duration::from_secs(7)),
+                service_idle_age: Some(Duration::from_secs(5)),
             }
         );
-        let _ = ingress.try_recv().expect("drain first fair source head");
+        let _ = ingress
+            .try_recv_if_at(captured_at, |_| true)
+            .expect("drain first fair source head");
         assert_eq!(
             ingress.snapshot_at(captured_at),
             super::FairV2IngressSnapshot {
                 depth: 2,
                 capacity: 5,
                 oldest_age: Some(Duration::from_secs(7)),
+                service_idle_age: Some(Duration::ZERO),
             }
         );
-        let _ = ingress.try_recv().expect("drain second fair source head");
+        let _ = ingress
+            .try_recv_if_at(captured_at, |_| true)
+            .expect("drain second fair source head");
         assert_eq!(
             ingress.snapshot_at(captured_at),
             super::FairV2IngressSnapshot {
                 depth: 1,
                 capacity: 5,
                 oldest_age: Some(Duration::from_secs(7)),
+                service_idle_age: Some(Duration::ZERO),
             }
         );
-        let _ = ingress.try_recv().expect("drain remaining fair source");
+        let _ = ingress
+            .try_recv_if_at(captured_at, |_| true)
+            .expect("drain remaining fair source");
         assert_eq!(
             ingress.snapshot_at(captured_at),
             super::FairV2IngressSnapshot {
                 depth: 0,
                 capacity: 5,
                 oldest_age: None,
+                service_idle_age: None,
             }
+        );
+    }
+
+    #[test]
+    fn fair_v2_ingress_service_idle_age_tracks_scans_not_oldest_item_age() {
+        let (_handle, ingress, _relay_receiver) = test_sumeragi_handle(4);
+        let validator = validator_peers(1).pop().expect("validator fixture");
+        ingress.close();
+        ingress
+            .configure_roster([validator.clone()])
+            .expect("validator plus untrusted lane fit");
+        ingress.open().expect("open configured roster");
+
+        let captured_at = Instant::now();
+        ingress
+            .try_push_at(
+                InboundBlockMessage::new(v2_message_with_index(0), Some(validator.clone())),
+                captured_at - Duration::from_secs(5),
+            )
+            .expect("enqueue old blocked entry");
+        ingress
+            .try_push_at(
+                InboundBlockMessage::new(v2_message_with_index(1), Some(validator)),
+                captured_at - Duration::from_secs(1),
+            )
+            .expect("enqueue later admissible entry");
+
+        assert!(
+            ingress.try_recv_if_at(captured_at, |_| false).is_none(),
+            "a rejected scan must retain both entries"
+        );
+        assert_eq!(
+            ingress.snapshot_at(captured_at + Duration::from_secs(2)),
+            super::FairV2IngressSnapshot {
+                depth: 2,
+                capacity: 4,
+                oldest_age: Some(Duration::from_secs(7)),
+                service_idle_age: Some(Duration::from_secs(2)),
+            }
+        );
+
+        let selected = ingress
+            .try_recv_if_at(captured_at + Duration::from_secs(2), |inbound| {
+                payload_chunk_index(inbound) == Some(1)
+            })
+            .expect("later admissible entry bypasses the old blocked entry");
+        assert_eq!(payload_chunk_index(&selected), Some(1));
+        assert_eq!(
+            ingress.snapshot_at(captured_at + Duration::from_secs(3)),
+            super::FairV2IngressSnapshot {
+                depth: 1,
+                capacity: 4,
+                oldest_age: Some(Duration::from_secs(8)),
+                service_idle_age: Some(Duration::from_secs(1)),
+            },
+            "successful fair service refreshes the scan clock without hiding old ownership"
+        );
+    }
+
+    #[test]
+    fn fair_v2_ingress_empty_to_nonempty_resets_service_idle_baseline() {
+        let (_handle, ingress, _relay_receiver) = test_sumeragi_handle(2);
+        ingress.close();
+        ingress
+            .configure_roster(std::iter::empty())
+            .expect("untrusted ingress lane fits");
+        ingress.open().expect("open configured roster");
+
+        let captured_at = Instant::now();
+        assert!(ingress.try_recv_if_at(captured_at, |_| true).is_none());
+        ingress
+            .try_push_at(
+                InboundBlockMessage::new(BlockMessage::invalid_wire_sentinel(), None),
+                captured_at + Duration::from_secs(5),
+            )
+            .expect("enqueue after an empty-queue scan");
+        assert_eq!(
+            ingress
+                .snapshot_at(captured_at + Duration::from_secs(6))
+                .service_idle_age,
+            Some(Duration::from_secs(1)),
+            "an empty-queue scan must not make later ownership look serviced"
+        );
+
+        let _ = ingress
+            .try_recv_if_at(captured_at + Duration::from_secs(7), |_| true)
+            .expect("drain the first ownership interval");
+        assert_eq!(
+            ingress
+                .snapshot_at(captured_at + Duration::from_secs(8))
+                .service_idle_age,
+            None
+        );
+
+        ingress
+            .try_push_at(
+                InboundBlockMessage::new(BlockMessage::invalid_wire_sentinel(), None),
+                captured_at + Duration::from_secs(10),
+            )
+            .expect("enqueue a fresh ownership interval");
+        assert_eq!(
+            ingress
+                .snapshot_at(captured_at + Duration::from_secs(11))
+                .service_idle_age,
+            Some(Duration::from_secs(1)),
+            "the prior ownership interval's service time must not mask a fresh stall"
         );
     }
 

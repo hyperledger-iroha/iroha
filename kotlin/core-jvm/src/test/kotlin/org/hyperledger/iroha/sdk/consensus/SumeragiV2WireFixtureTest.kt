@@ -14,6 +14,14 @@ import kotlin.test.assertFailsWith
 
 class SumeragiV2WireFixtureTest {
     @Test
+    fun `unsafe proposal ignore reason decodes wire discriminant eleven`() {
+        assertEquals(
+            SumeragiV2Wire.IgnoreReason.UNSAFE_PROPOSAL,
+            SumeragiV2Wire.IgnoreReason.decode(byteArrayOf(11, 0, 0, 0)),
+        )
+    }
+
+    @Test
     fun `rust canonical message fixtures roundtrip`() {
         val messages = fixtureRows().filter { it.kind == "message" }
         assertEquals(EXPECTED_MESSAGE_NAMES, messages.map { it.name }.toSet())
@@ -332,7 +340,7 @@ class SumeragiV2WireFixtureTest {
         assertEquals(1, decoded.liveness.timeoutQuorums.size)
         assertEquals(SumeragiV2Wire.OutboundIntentKind.COMMIT_VOTE, decoded.liveness.outboundIntents.single().kind)
         assertEquals(SumeragiV2Wire.QueueKind.NETWORK_INGRESS, decoded.liveness.queues.single().queue)
-        assertEquals(SumeragiV2Wire.LivenessBlocker.COMMIT_QUORUM_MISSING, decoded.liveness.blocker)
+        assertEquals(SumeragiV2Wire.LivenessBlocker.LOCAL_CONTROL_PENDING, decoded.liveness.blocker)
 
         // The fifth struct field follows four fixed-width fields and is the
         // canonical one-byte `restart_required` boolean.

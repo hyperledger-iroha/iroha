@@ -885,6 +885,11 @@ pub enum WalRecord {
     /// Persist a timeout intent before signing it.
     TimeoutIntent(TimeoutVote),
     /// Persist a timeout certificate before entering its successor view.
+    ///
+    /// A carried `PrepareQC` may promote the durable lock. After the exact
+    /// locked body is validated, a later [`Self::LockAndCommit`] may record a
+    /// Commit intent for that historical round even though its timeout fence
+    /// is already durable.
     InstallTimeout(TimeoutCertificate),
     /// Persist a `CommitQC` decision before applying the block.
     Decision(QuorumCertificate),
@@ -1101,13 +1106,23 @@ impl DurableState {
             WalRecord::LockAndCommit { prepare, vote } => {
                 validate_qc(context, prepare, Phase::Prepare)?;
                 Self::validate_local_vote(context, local_validator, *vote, Phase::Commit)?;
-                if vote.round().view() != self.current_view {
+                let current_round = vote.round().view() == self.current_view;
+                let historical_locked_round = vote.round().view() < self.current_view
+                    && self
+                        .locked
+                        .as_ref()
+                        .is_some_and(|locked| locked.reference() == prepare.reference())
+                    && !self.has_higher_conflicting_prepare_evidence(vote.round(), vote.subject());
+                if !current_round && !historical_locked_round {
+                    return Err(ReplayError::InvalidLocalVote);
+                }
+                if self.decision.is_some() {
                     return Err(ReplayError::InvalidLocalVote);
                 }
                 if vote.round() != prepare.round() || vote.subject() != prepare.subject() {
                     return Err(ReplayError::CommitDoesNotMatchPrepare);
                 }
-                if self.timeout_intents.contains_key(&vote.round()) {
+                if !historical_locked_round && self.timeout_intents.contains_key(&vote.round()) {
                     return Err(ReplayError::ViewClosed(vote.round()));
                 }
                 if let Some(locked) = &self.locked
@@ -1118,7 +1133,14 @@ impl DurableState {
                     return Err(ReplayError::LockRegression);
                 }
                 insert_unique_vote(&mut self.commit_intents, *vote)?;
-                update_highest(&mut self.highest_prepare, prepare.clone())?;
+                if !historical_locked_round
+                    || self
+                        .highest_prepare
+                        .as_ref()
+                        .is_none_or(|highest| highest.round().view() <= prepare.round().view())
+                {
+                    update_highest(&mut self.highest_prepare, prepare.clone())?;
+                }
                 self.locked = Some(prepare.clone());
             }
             WalRecord::TimeoutIntent(vote) => {
@@ -1302,6 +1324,40 @@ impl DurableState {
 
     pub(crate) fn prepare_intents(&self) -> impl Iterator<Item = Vote> + '_ {
         self.prepare_intents.values().copied()
+    }
+
+    /// Return whether this validator already durably prepared a conflicting
+    /// subject in a later view.
+    ///
+    /// A TC-promoted historical Commit may cross the timeout fence only when
+    /// it does not invert the validator's durable local-vote order. A later
+    /// Prepare for the same subject is harmless and remains compatible with
+    /// locked-body reproposal.
+    pub(crate) fn has_higher_conflicting_prepare_intent(
+        &self,
+        round: Round,
+        subject: Subject,
+    ) -> bool {
+        self.prepare_intents.values().any(|vote| {
+            vote.round().height() == round.height()
+                && vote.round().view() > round.view()
+                && vote.subject() != subject
+        })
+    }
+
+    /// Return whether durable local state already ranks a conflicting Prepare
+    /// above the candidate historical Commit.
+    pub(crate) fn has_higher_conflicting_prepare_evidence(
+        &self,
+        round: Round,
+        subject: Subject,
+    ) -> bool {
+        self.has_higher_conflicting_prepare_intent(round, subject)
+            || self.highest_prepare.as_ref().is_some_and(|highest| {
+                highest.round().height() == round.height()
+                    && highest.round().view() > round.view()
+                    && highest.subject() != subject
+            })
     }
 
     pub(crate) fn commit_intents(&self) -> impl Iterator<Item = Vote> + '_ {

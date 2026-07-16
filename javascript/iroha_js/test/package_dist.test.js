@@ -3,11 +3,30 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
+import { build as buildWithEsbuild } from "esbuild";
 
 import * as packageExports from "../dist/index.js";
+import { NexusAppClient as PackageNexusAppClient } from "../dist/nexusApp.js";
+import * as packageSccpExports from "../dist/sccp.js";
+import {
+  findForbiddenBrowserInputs,
+  hasForbiddenGlobalBufferMutation,
+} from "../scripts/bundle-size-check.mjs";
+
+const packageRootUrl = new URL("../", import.meta.url);
+const packageRootPath = fileURLToPath(packageRootUrl);
 
 const packageJson = JSON.parse(
   readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+);
+
+const nexusFixture = JSON.parse(
+  readFileSync(
+    new URL("../../../fixtures/sdk/nexus_connect_transfer_v1.json", import.meta.url),
+    "utf8",
+  ),
 );
 
 const {
@@ -236,6 +255,34 @@ function captureThrown(fn) {
   assert.fail("expected function to throw");
 }
 
+function hexBytes(value) {
+  return Uint8Array.from(
+    value.match(/../gu),
+    (octet) => Number.parseInt(octet, 16),
+  );
+}
+
+function mockNexusResponse(status, body = "", headers = {}) {
+  const encoded = new TextEncoder().encode(body);
+  const normalizedHeaders = new Map(
+    Object.entries(headers).map(([key, value]) => [key.toLowerCase(), String(value)]),
+  );
+  return {
+    status,
+    headers: {
+      get(name) {
+        return normalizedHeaders.get(String(name).toLowerCase()) ?? null;
+      },
+    },
+    async arrayBuffer() {
+      return encoded.buffer.slice(
+        encoded.byteOffset,
+        encoded.byteOffset + encoded.byteLength,
+      );
+    },
+  };
+}
+
 test("package dist exposes the current general-purpose SDK entrypoint", () => {
   for (const name of [
     "AccountAddress",
@@ -292,6 +339,204 @@ test("package publishes the exact general-purpose subpath inventory", () => {
     "./torii-browser",
     "./transaction-codec",
   ]);
+});
+
+test("package SCCP exports expose the exact Solana-aware inventory", () => {
+  assert.deepEqual(
+    Object.fromEntries(
+      Object.entries(packageSccpExports)
+        .filter(([name, value]) => name.startsWith("SCCP_DOMAIN_") && Number.isInteger(value))
+        .sort(([left], [right]) => left.localeCompare(right)),
+    ),
+    {
+      SCCP_DOMAIN_BSC: 2,
+      SCCP_DOMAIN_ETH: 1,
+      SCCP_DOMAIN_SOLANA: 3,
+      SCCP_DOMAIN_SORA: 0,
+      SCCP_DOMAIN_TRON: 5,
+    },
+  );
+  assert.deepEqual(
+    Object.fromEntries(
+      Object.entries(packageSccpExports)
+        .filter(([name, value]) => name.startsWith("SCCP_CODEC_") && Number.isInteger(value))
+        .sort(([left], [right]) => left.localeCompare(right)),
+    ),
+    {
+      SCCP_CODEC_CANONICAL_TEXT: 1,
+      SCCP_CODEC_EVM_ADDRESS20: 2,
+      SCCP_CODEC_SOLANA_PUBKEY32: 6,
+      SCCP_CODEC_TRON_ADDRESS21: 5,
+    },
+  );
+  assert.deepEqual(Object.keys(packageSccpExports.SCCP_CODEC_KEYS), ["1", "2", "5", "6"]);
+  assert.deepEqual(Object.keys(packageSccpExports.SCCP_NETWORK_PROFILES), [
+    "sora-taira",
+    "ethereum-mainnet",
+    "ethereum-sepolia",
+    "bsc-mainnet",
+    "bsc-testnet",
+    "tron-mainnet",
+    "tron-nile",
+    "tron-shasta",
+    "solana-testnet",
+  ]);
+  assert.deepEqual(packageSccpExports.SCCP_NETWORK_PROFILES["solana-testnet"], {
+    profile: "solana-testnet",
+    tag: 13,
+    domain: packageSccpExports.SCCP_DOMAIN_SOLANA,
+    sora: false,
+    genesisHash: packageSccpExports.SCCP_SOLANA_TESTNET_GENESIS_HASH,
+  });
+  assert.deepEqual(packageSccpExports.SCCP_PAYLOAD_KINDS, ["transfer"]);
+  for (const name of [
+    "SCCP_DOMAIN_SOLANA",
+    "SCCP_CODEC_SOLANA_PUBKEY32",
+    "SCCP_NETWORK_PROFILES",
+  ]) {
+    assert.equal(packageExports[name], packageSccpExports[name], `${name} root/subpath parity`);
+  }
+});
+
+test("package SCCP exports reject retired TON and diagnostic helper surfaces", () => {
+  const retiredNames = [
+    "SCCP_DOMAIN_TON",
+    "SCCP_CODEC_TON_ACCOUNT36",
+    "sccpBuildTonMessageBundleSourceProofWithDeployment",
+    "sccpTonFixtureValidatorSetHash",
+    "SCCP_DOMAIN_SOL",
+    "SCCP_CODEC_SOLANA_BASE58",
+    "SCCP_CODEC_SORA_ASSET_ID",
+    "normalizeSccpProofManifests",
+    "normalizeSccpSourceAdapterEngineDeployment",
+  ];
+  for (const [surface, exports] of [
+    ["root", packageExports],
+    ["./sccp", packageSccpExports],
+  ]) {
+    for (const name of retiredNames) {
+      assert.equal(
+        Object.prototype.hasOwnProperty.call(exports, name),
+        false,
+        `${surface} must not export retired ${name}`,
+      );
+    }
+  }
+});
+
+test("package Nexus browser export has an enforced browser-only dependency graph", async () => {
+  const configured = packageJson.exports["./nexus-app"];
+  assert.deepEqual(configured, {
+    browser: "./dist/nexusApp.js",
+    import: "./dist/nexusApp.js",
+    types: "./nexus-app.d.ts",
+  });
+  const result = await buildWithEsbuild({
+    absWorkingDir: packageRootPath,
+    entryPoints: [fileURLToPath(new URL(configured.browser.slice(2), packageRootUrl))],
+    bundle: true,
+    write: false,
+    platform: "browser",
+    target: "es2020",
+    format: "esm",
+    treeShaking: true,
+    sourcemap: false,
+    minify: true,
+    metafile: true,
+  });
+  const inputs = Object.keys(result.metafile?.inputs ?? {});
+  assert.deepEqual(findForbiddenBrowserInputs(inputs), []);
+  const forbiddenProbe = [
+    "node:crypto",
+    "dist/crypto.js",
+    "dist/cryptoHash.js",
+    "dist/native.js",
+    "dist/toriiClient.js",
+  ];
+  assert.deepEqual(findForbiddenBrowserInputs(forbiddenProbe), forbiddenProbe);
+  assert.deepEqual(
+    inputs.filter((input) => input.startsWith("dist/")).sort(),
+    [
+      "dist/address.js",
+      "dist/blake2b.js",
+      "dist/connect.browser.js",
+      "dist/crypto.browser.js",
+      "dist/curveRegistry.js",
+      "dist/ed25519Strict.js",
+      "dist/nexusApp.js",
+      "dist/numericV1.js",
+      "dist/transactionCodec.js",
+    ],
+  );
+  const output = result.outputFiles?.[0];
+  assert.ok(output, "esbuild must produce the packaged Nexus browser bundle");
+  assert.equal(hasForbiddenGlobalBufferMutation(output.text), false);
+  for (const mutation of [
+    "globalThis.Buffer = value",
+    "Object.defineProperty(window, 'Buffer', { value })",
+  ]) {
+    assert.equal(hasForbiddenGlobalBufferMutation(mutation), true);
+  }
+});
+
+test("package Nexus browser source and dist must remain exact", () => {
+  assert.equal(
+    readFileSync(new URL("../dist/nexusApp.js", import.meta.url), "utf8"),
+    readFileSync(new URL("../src/nexusApp.js", import.meta.url), "utf8"),
+    "Nexus browser source and dist must remain exact",
+  );
+});
+
+test("package Nexus browser defaults build, finalize, and submit the shared canonical transfer", async () => {
+  const submissions = [];
+  const client = new PackageNexusAppClient({
+    chainId: nexusFixture.transfer_input.chain_id,
+    authority: nexusFixture.transfer_input.authority,
+    signingPublicKey: hexBytes(
+      nexusFixture.connect.approval_frame.signing_public_key_hex,
+    ),
+    toriiBaseUrl: "https://torii.example",
+    async fetchImpl(url, init) {
+      submissions.push({ url, init, body: Uint8Array.from(init.body) });
+      return mockNexusResponse(204);
+    },
+  });
+  const draft = client.buildTransferDraft({
+    sourceAssetHoldingId: nexusFixture.transfer_input.source_asset_id,
+    quantity: nexusFixture.transfer_input.quantity,
+    destinationAccountId: nexusFixture.transfer_input.destination_account_id,
+    creationTimeMs: nexusFixture.transfer_input.creation_time_ms,
+    ttlMs: nexusFixture.transfer_input.ttl_ms,
+    nonce: nexusFixture.transfer_input.nonce,
+    metadata: nexusFixture.transfer_input.metadata,
+  });
+  const receipt = await client.finalizeAndSubmit(
+    draft.signable,
+    hexBytes(nexusFixture.expected.wallet_signature_hex),
+    { wait: false },
+  );
+
+  assert.equal(
+    receipt.signedTransactionHashHex,
+    nexusFixture.expected.signed_transaction_hash_hex,
+  );
+  assert.equal(submissions.length, 1);
+  assert.equal(submissions[0].url, "https://torii.example/v1/pipeline/transactions");
+  assert.equal(submissions[0].init.method, "POST");
+  assert.equal(submissions[0].init.headers["Content-Type"], "application/x-norito");
+  assert.equal(submissions[0].init.credentials, "omit");
+  assert.equal(submissions[0].init.redirect, "error");
+  assert.equal(submissions[0].init.referrerPolicy, "no-referrer");
+  assert.deepEqual(submissions[0].body, Uint8Array.from(receipt.signedTransaction));
+  assert.equal(submissions[0].body[0], 1);
+
+  const tamperedSignature = hexBytes(nexusFixture.expected.wallet_signature_hex);
+  tamperedSignature[0] ^= 0x01;
+  await assert.rejects(
+    client.finalizeAndSubmit(draft.signable, tamperedSignature, { wait: false }),
+    (error) => error?.code === "invalid_signature",
+  );
+  assert.equal(submissions.length, 1, "invalid signatures must fail before Torii I/O");
 });
 
 test("package dist entrypoint exports privacy native archive helpers", () => {

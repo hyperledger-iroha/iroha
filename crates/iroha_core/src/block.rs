@@ -8142,7 +8142,13 @@ pub(crate) mod valid {
                         "lane payload ownership {ownership_idx} has zero lane-local height",
                     )));
                 }
-                let expected_dataspace = crate::state::nexus_active_lane_dataspace_at_height(
+                if ownership.lane_block_view != 0 {
+                    return Err(Self::execution_context_error(format!(
+                        "lane payload ownership {ownership_idx} must originate at lane-local view zero, got {}",
+                        ownership.lane_block_view
+                    )));
+                }
+                let expected_dataspace = crate::state::consensus_lane_dataspace_at_height(
                     ownership.lane_id,
                     state.nexus(),
                     proposal_height,
@@ -16594,7 +16600,7 @@ pub(crate) mod valid {
             nexus.lane_catalog = lane_catalog;
         }
 
-        fn install_live_test_elastic_lane(state: &mut State, kura: &Kura) {
+        fn install_live_test_elastic_lane(state: &State) {
             let mut elastic_lane = LaneConfig {
                 id: LaneId::new(1),
                 alias: "elastic-lane-1".to_owned(),
@@ -16607,53 +16613,21 @@ pub(crate) mod valid {
                 .metadata
                 .insert("autoscale.created_height".to_owned(), "1".to_owned());
             crate::state::attach_synthetic_autoscale_committee_for_test(&mut elastic_lane);
-            let mut nexus = state.nexus.write();
-            nexus.enabled = true;
-            nexus.autoscale.enabled = true;
-            nexus.autoscale.min_lanes = nonzero!(1_u32);
-            nexus.autoscale.max_lanes = nonzero!(8_u32);
-            nexus.lane_catalog =
-                LaneCatalog::new(nonzero!(2_u32), vec![LaneConfig::default(), elastic_lane])
-                    .expect("live elastic lane catalog");
-            nexus.lane_config =
-                iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
-            drop(nexus);
-            state.reseed_static_lane_incarnations();
-
-            let previous = iroha_config::parameters::actual::LaneConfig::default();
-            let updated = state.nexus_snapshot().lane_config;
-            let default_incarnation = state
-                .lane_incarnation_at_height(LaneId::SINGLE, 1)
-                .expect("default lane incarnation at elastic creation height");
-            let elastic_incarnation = state
-                .lane_incarnation_at_height(LaneId::new(1), 1)
-                .expect("elastic lane incarnation at creation height");
-            let previous_incarnations = BTreeMap::from([(LaneId::SINGLE, default_incarnation)]);
-            let updated_incarnations = BTreeMap::from([
-                (LaneId::SINGLE, default_incarnation),
-                (LaneId::new(1), elastic_incarnation),
-            ]);
-            let previous_activation_heights = BTreeMap::from([(LaneId::SINGLE, 0)]);
-            let updated_activation_heights =
-                BTreeMap::from([(LaneId::SINGLE, 0), (LaneId::new(1), 1)]);
-            kura.apply_lane_geometry_transition_at_height(
-                &previous,
-                &updated,
-                &previous_incarnations,
-                &updated_incarnations,
-                &previous_activation_heights,
-                &updated_activation_heights,
-                &BTreeSet::new(),
-                1,
-            )
-            .expect("apply elastic lane storage geometry at creation height");
-            kura.mark_lane_geometry_catalog_published(
-                &updated,
-                &updated_incarnations,
-                &updated_activation_heights,
-                None,
-            )
-            .expect("publish elastic lane storage geometry");
+            {
+                let mut nexus = state.nexus.write();
+                nexus.enabled = true;
+                nexus.autoscale.enabled = true;
+                nexus.autoscale.min_lanes = nonzero!(1_u32);
+                nexus.autoscale.max_lanes = nonzero!(8_u32);
+            }
+            state
+                .apply_autoscale_lane_lifecycle_for_tests(
+                    &iroha_data_model::nexus::LaneLifecyclePlan {
+                        additions: vec![elastic_lane],
+                        retire: Vec::new(),
+                    },
+                )
+                .expect("apply live elastic lane through the autoscale lifecycle");
         }
 
         #[test]
@@ -18323,6 +18297,100 @@ pub(crate) mod valid {
         }
 
         #[test]
+        fn validate_static_state_dependent_accepts_single_lane_context_when_nexus_disabled() {
+            let (state, _kura, topology, time_source, leader) = lane_payload_context_fixture();
+            {
+                let mut nexus = state.nexus.write();
+                nexus.enabled = false;
+            }
+            assert_eq!(
+                crate::state::consensus_lane_dataspace_at_height(
+                    LaneId::SINGLE,
+                    &state.nexus_snapshot(),
+                    2,
+                ),
+                Some(DataSpaceId::UNIVERSAL)
+            );
+            let signed = signed_lane_payload_context_block(
+                &state,
+                &topology,
+                &leader,
+                &time_source,
+                "single-lane-payload-context-with-nexus-disabled",
+                1,
+                None,
+            );
+
+            let view = state.query_view();
+            ValidBlock::validate_static_state_dependent(
+                &signed,
+                &topology,
+                &state.chain_id,
+                &ALICE_ID,
+                &view,
+                false,
+                &time_source,
+                false,
+                ConsensusValidationProfile::LegacyLive,
+            )
+            .expect("disabled Nexus must retain the canonical single-lane route");
+        }
+
+        #[test]
+        fn validate_static_state_dependent_rejects_nonzero_planner_origin_lane_view() {
+            let (state, topology, time_source, signed) =
+                signed_default_lane_block_with_execution_context(
+                    "lane-payload-context-nonzero-origin-view",
+                    1,
+                    |transactions, validators, lane_incarnation| {
+                        let ownership = sample_lane_payload_ownership_for_context_at_slot(
+                            2,
+                            0,
+                            LaneId::SINGLE,
+                            DataSpaceId::UNIVERSAL,
+                            lane_incarnation,
+                            1,
+                            1,
+                            vec![0],
+                            vec![Hash::from(transactions[0].hash_as_entrypoint())],
+                            validators,
+                        );
+                        ownership
+                            .validate_replay_material()
+                            .expect("nonzero lane-view fixture must carry fresh replay hashes");
+                        BlockExecutionContextBundle::new(vec![ExternalExecutionContext::new(
+                            transactions[0].hash_as_entrypoint(),
+                            LaneId::SINGLE,
+                            DataSpaceId::UNIVERSAL,
+                        )])
+                        .with_lane_payload_ownerships(vec![ownership])
+                    },
+                );
+
+            let view = state.query_view();
+            let error = ValidBlock::validate_static_state_dependent(
+                &signed,
+                &topology,
+                &state.chain_id,
+                &ALICE_ID,
+                &view,
+                false,
+                &time_source,
+                false,
+                ConsensusValidationProfile::LegacyLive,
+            )
+            .expect_err("planner-origin lane payloads must start at lane view zero");
+            assert!(
+                matches!(
+                    error,
+                    BlockValidationError::ExecutionContextInvalid(ref message)
+                        if message.contains("must originate at lane-local view zero")
+                ),
+                "unexpected nonzero lane-view rejection: {error}"
+            );
+        }
+
+        #[test]
         fn validate_static_state_dependent_rejects_reused_lane_payload_artifact_height() {
             let (state, kura, topology, time_source, leader) = lane_payload_context_fixture();
             let first = signed_lane_payload_context_block(
@@ -19338,8 +19406,8 @@ pub(crate) mod valid {
 
             let mut world = World::new();
             insert_active_consensus_keys(&mut world, &key_pairs);
-            let mut state = State::new_for_testing(world, Arc::clone(&kura), query);
-            install_live_test_elastic_lane(&mut state, &kura);
+            let state = State::new_for_testing(world, Arc::clone(&kura), query);
+            install_live_test_elastic_lane(&state);
             install_test_lane_manifests_for_keypairs(&state, &key_pairs);
             let _prev_hash = commit_block_with_applied_lane_predecessors(
                 &state,
@@ -19452,8 +19520,8 @@ pub(crate) mod valid {
 
             let mut world = World::new();
             insert_active_consensus_keys(&mut world, &key_pairs);
-            let mut state = State::new_for_testing(world, Arc::clone(&kura), query);
-            install_live_test_elastic_lane(&mut state, &kura);
+            let state = State::new_for_testing(world, Arc::clone(&kura), query);
+            install_live_test_elastic_lane(&state);
             install_test_lane_manifests_for_keypairs(&state, &key_pairs);
             let _prev_hash = commit_block_with_applied_lane_predecessors(
                 &state,
@@ -19505,17 +19573,20 @@ pub(crate) mod valid {
             time_handle.advance(Duration::from_millis(1));
 
             let coordinator = plan.coordinator_route();
+            let lane_incarnation = state
+                .lane_incarnation_at_height(coordinator.lane_id, 2)
+                .expect("elastic lane incarnation at candidate height");
+            let descriptor_validators =
+                state.authoritative_lane_peer_ids_at_height(coordinator.lane_id, 2);
             let mut ownership = sample_lane_payload_ownership_for_context(
                 2,
                 0,
                 coordinator.lane_id,
                 coordinator.dataspace_id,
-                state
-                    .lane_incarnation_at_height(coordinator.lane_id, 2)
-                    .expect("elastic lane incarnation at candidate height"),
+                lane_incarnation,
                 vec![0],
                 vec![Hash::from(tx.hash_as_entrypoint())],
-                topology.as_ref(),
+                &descriptor_validators,
             );
             bind_applied_lane_predecessor(&kura, &mut ownership);
             let execution_context = BlockExecutionContextBundle::new(vec![
@@ -19788,8 +19859,8 @@ pub(crate) mod valid {
 
             let mut world = World::new();
             insert_active_consensus_keys(&mut world, &key_pairs);
-            let mut state = State::new_for_testing(world, Arc::clone(&kura), query);
-            install_live_test_elastic_lane(&mut state, &kura);
+            let state = State::new_for_testing(world, Arc::clone(&kura), query);
+            install_live_test_elastic_lane(&state);
             install_test_lane_manifests_for_keypairs(&state, &key_pairs);
             let _prev_hash = commit_block_with_applied_lane_predecessors(
                 &state,
@@ -19838,25 +19909,37 @@ pub(crate) mod valid {
             let (tx, plan) =
                 selected.expect("fixture should find a transaction routed to elastic lane");
             let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx.clone()));
+            let coordinator = plan.coordinator_route();
+            let lane_incarnation = state
+                .lane_incarnation_at_height(coordinator.lane_id, 2)
+                .expect("elastic lane incarnation before disabling Nexus");
+            let descriptor_validators =
+                state.authoritative_lane_peer_ids_at_height(coordinator.lane_id, 2);
 
             {
                 let mut nexus = state.nexus.write();
                 nexus.enabled = false;
             }
+            assert_eq!(
+                crate::state::consensus_lane_dataspace_at_height(
+                    plan.coordinator_route().lane_id,
+                    &state.nexus_snapshot(),
+                    2,
+                ),
+                None,
+                "disabled Nexus must not retain a catalogued elastic route"
+            );
             time_handle.advance(Duration::from_millis(1));
 
-            let coordinator = plan.coordinator_route();
             let mut ownership = sample_lane_payload_ownership_for_context(
                 2,
                 0,
                 coordinator.lane_id,
                 coordinator.dataspace_id,
-                state
-                    .lane_incarnation_at_height(coordinator.lane_id, 2)
-                    .expect("elastic lane incarnation at candidate height"),
+                lane_incarnation,
                 vec![0],
                 vec![Hash::from(tx.hash_as_entrypoint())],
-                topology.as_ref(),
+                &descriptor_validators,
             );
             bind_applied_lane_predecessor(&kura, &mut ownership);
             let execution_context = BlockExecutionContextBundle::new(vec![
@@ -19913,8 +19996,8 @@ pub(crate) mod valid {
 
             let mut world = World::new();
             insert_active_consensus_keys(&mut world, &key_pairs);
-            let mut state = State::new_for_testing(world, Arc::clone(&kura), query);
-            install_live_test_elastic_lane(&mut state, &kura);
+            let state = State::new_for_testing(world, Arc::clone(&kura), query);
+            install_live_test_elastic_lane(&state);
             install_test_lane_manifests_for_keypairs(&state, &key_pairs);
             let _prev_hash = commit_block_with_applied_lane_predecessors(
                 &state,
@@ -19963,6 +20046,10 @@ pub(crate) mod valid {
             let (tx, plan) =
                 selected.expect("fixture should find a transaction routed to elastic lane");
             let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx.clone()));
+            let coordinator = plan.coordinator_route();
+            let lane_incarnation = state
+                .lane_incarnation_at_height(coordinator.lane_id, 2)
+                .expect("elastic lane incarnation before corrupting the active range");
 
             {
                 let mut nexus = state.nexus.write();
@@ -19979,15 +20066,12 @@ pub(crate) mod valid {
             }
             time_handle.advance(Duration::from_millis(1));
 
-            let coordinator = plan.coordinator_route();
             let mut ownership = sample_lane_payload_ownership_for_context(
                 2,
                 0,
                 coordinator.lane_id,
                 coordinator.dataspace_id,
-                state
-                    .lane_incarnation_at_height(coordinator.lane_id, 2)
-                    .expect("elastic lane incarnation at candidate height"),
+                lane_incarnation,
                 vec![0],
                 vec![Hash::from(tx.hash_as_entrypoint())],
                 topology.as_ref(),
@@ -20023,13 +20107,16 @@ pub(crate) mod valid {
             .expect_err(
                 "corrupted active elastic range must reject stale elastic execution context",
             );
-            assert!(matches!(
-                err,
-                BlockValidationError::ExecutionContextInvalid(ref message)
-                    if message.contains("routing mismatch")
-                        && message.contains("expected lane 0")
-                        && message.contains("got lane 1")
-            ));
+            assert!(
+                matches!(
+                    err,
+                    BlockValidationError::ExecutionContextInvalid(ref message)
+                        if message.contains("routing mismatch")
+                            && message.contains("expected lane 0")
+                            && message.contains("got lane 1")
+                ),
+                "unexpected corrupt-range rejection: {err:?}"
+            );
         }
 
         #[test]

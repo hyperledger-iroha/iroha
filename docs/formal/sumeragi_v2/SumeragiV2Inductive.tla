@@ -99,8 +99,8 @@ PendingVoteWritesAuthorized ==
        /\ request.vote.subject = request.qc.subject
        /\ request.qc.phase = "Prepare"
        /\ request.qc \in prepareQCs
-       /\ request.vote.view = nodeView[request.node]
-       /\ ~NodeTimedOut(request.node, request.vote.view)
+       /\ \/ CurrentOpenPrepareForCommit(request.node, request.qc)
+          \/ HistoricalTcLockedPrepareForCommit(request.node, request.qc)
        /\ request.vote.subject \in ValidSubjects
        /\ BodyHeldBy(durableBodies, request.node,
                      request.vote.context, request.vote.view,
@@ -218,6 +218,33 @@ TimeoutCertificateSelectorsSound ==
 
 DurableTimeoutsProtectCommits ==
   TimeoutIntentProtectsCommits(timeoutIntents, commitIntents)
+
+(***************************************************************************
+If an honest durable Commit is not strictly protected by one of that node's
+older timeout reports, the Commit must have the exact PrepareQC selected by a
+durably installed TC.  This is the retained provenance needed when a node
+learned the lock through the TC and validated its body only afterward.
+***************************************************************************)
+HistoricalTcLockedCommitAuthorizationInvariant ==
+  /\ \A request \in pendingLockCommit:
+       request.vote.view < nodeView[request.node]
+         => HistoricalTcLockedPrepareForCommit(request.node, request.qc)
+  /\ \A timeoutVote \in timeoutIntents, commitVote \in commitIntents:
+       (/\ timeoutVote.signer \in Honest
+        /\ commitVote.signer = timeoutVote.signer
+        /\ commitVote.context = timeoutVote.context
+        /\ commitVote.phase = "Commit"
+        /\ commitVote.view <= timeoutVote.view
+        /\ ~TimeoutVoteStrictlyProtectsCommit(timeoutVote, commitVote))
+         => InstalledTcAuthorizesCommitVote(commitVote)
+
+(***************************************************************************
+This authorization invariant is a derived consequence of
+PendingVoteWritesAuthorized and DurableTimeoutsProtectCommits.  It is kept as
+the named release obligation below, but is deliberately not duplicated as an
+independent reducer conjunct: doing so would add the same proof obligation to
+every action-preservation branch without strengthening the invariant.
+***************************************************************************)
 
 HighestAndLockAreCertified ==
   \A node \in ValidatorIds:

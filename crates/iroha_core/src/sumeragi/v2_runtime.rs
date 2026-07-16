@@ -25,7 +25,11 @@ use super::v2_core::{EventTag, ScheduleState, ScheduledWork};
 use iroha_data_model::block::consensus_v2 as wire;
 
 use super::{
-    v2::{AdapterEffect, AdapterError, AuthenticatedConsensusMessage, SumeragiV2Adapter},
+    v2::{
+        AdapterEffect, AdapterError, AuthenticatedConsensusMessage, BodyPipelineCompletionEvidence,
+        DecisionLocalProposalDisposition, SumeragiV2Adapter, classify_decided_local_proposal,
+        proposal_is_safe_for_lock,
+    },
     v2_body_store::{DurableBodyReceipt, ValidatedBodyReceipt},
 };
 
@@ -161,6 +165,9 @@ pub(crate) enum EnqueueError {
     Full,
     /// The runtime stopped accepting work after an adapter failure.
     FailClosed,
+    /// One logical completion stage had conflicting trusted evidence or more
+    /// than one serialized owner.
+    DuplicateCompletionOwnership,
 }
 
 impl fmt::Display for EnqueueError {
@@ -171,6 +178,9 @@ impl fmt::Display for EnqueueError {
             }
             Self::Full => formatter.write_str("Sumeragi v2 runtime command ingress is full"),
             Self::FailClosed => formatter.write_str("Sumeragi v2 runtime is fail-closed"),
+            Self::DuplicateCompletionOwnership => formatter.write_str(
+                "Sumeragi v2 body pipeline has conflicting completion evidence or duplicate serialized ownership",
+            ),
         }
     }
 }
@@ -403,6 +413,196 @@ pub(crate) struct RuntimeQueueSnapshot {
     pub(crate) completion: RuntimeQueueLaneSnapshot,
 }
 
+/// Preflight ownership counts for exact decided local-proposal completions.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct DecisionLocalProposalCounts {
+    retainable: usize,
+    recovery_only: usize,
+    conflicting: usize,
+}
+
+impl DecisionLocalProposalCounts {
+    /// Record one classified exact Decision owner.
+    pub(crate) fn record(&mut self, disposition: DecisionLocalProposalDisposition) {
+        let count = match disposition {
+            DecisionLocalProposalDisposition::Retain => &mut self.retainable,
+            DecisionLocalProposalDisposition::RetireForRecovery => &mut self.recovery_only,
+            DecisionLocalProposalDisposition::Conflict => &mut self.conflicting,
+        };
+        *count = count.saturating_add(1);
+    }
+
+    fn merge(self, other: Self) -> Self {
+        Self {
+            retainable: self.retainable.saturating_add(other.retainable),
+            recovery_only: self.recovery_only.saturating_add(other.recovery_only),
+            conflicting: self.conflicting.saturating_add(other.conflicting),
+        }
+    }
+
+    const fn total(self) -> usize {
+        self.retainable
+            .saturating_add(self.recovery_only)
+            .saturating_add(self.conflicting)
+    }
+
+    const fn retainable(self) -> usize {
+        self.retainable
+    }
+
+    const fn recovery_only(self) -> usize {
+        self.recovery_only
+    }
+
+    const fn conflicting(self) -> usize {
+        self.conflicting
+    }
+}
+
+/// Result of atomically reconciling serialized proposal work with a Decision.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct DecisionProposalRetirement {
+    retained_local_proposal: Option<EventTag>,
+    retired_for_recovery: usize,
+}
+
+impl DecisionProposalRetirement {
+    /// Construct one verified serialized retirement result.
+    pub(crate) const fn new(
+        retained_local_proposal: Option<EventTag>,
+        retired_for_recovery: usize,
+    ) -> Self {
+        Self {
+            retained_local_proposal,
+            retired_for_recovery,
+        }
+    }
+
+    /// Current-tag completion preserved for direct reducer application.
+    pub(crate) const fn retained_local_proposal(self) -> Option<EventTag> {
+        self.retained_local_proposal
+    }
+
+    /// Exact stale completion owners removed so durable reconstruction can proceed.
+    pub(crate) const fn retired_for_recovery(self) -> usize {
+        self.retired_for_recovery
+    }
+}
+
+/// Logical completion-stage slots retired when one body pipeline loses ownership.
+///
+/// Distinct stages may coexist briefly while the serialized adapter is busy.
+/// Within one tag/round/subject stage slot, however, the full trusted evidence
+/// must agree and exactly one serialized owner may exist across runtime ingress
+/// and the adapter's deferred-completion lane.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct RetiredBodyPipelineCompletions {
+    body_available: usize,
+    body_stored: usize,
+    validation: usize,
+    local_proposal: usize,
+}
+
+impl RetiredBodyPipelineCompletions {
+    /// Record one exact reconstructed-body completion owner.
+    pub(crate) fn record_body_available(&mut self) {
+        self.body_available = self.body_available.saturating_add(1);
+    }
+
+    /// Record one exact durable-store completion owner.
+    pub(crate) fn record_body_stored(&mut self) {
+        self.body_stored = self.body_stored.saturating_add(1);
+    }
+
+    /// Record one exact validation completion owner.
+    pub(crate) fn record_validation(&mut self) {
+        self.validation = self.validation.saturating_add(1);
+    }
+
+    /// Record one exact locally built proposal completion owner.
+    pub(crate) fn record_local_proposal(&mut self) {
+        self.local_proposal = self.local_proposal.saturating_add(1);
+    }
+
+    fn record_matching_command(
+        &mut self,
+        command: &AdapterCommand,
+        round: wire::ConsensusRound,
+        subject: wire::BlockSubject,
+    ) -> bool {
+        match command {
+            AdapterCommand::LocalProposalReady { manifest, .. }
+                if manifest.round == round && manifest.subject == subject =>
+            {
+                self.record_local_proposal();
+                true
+            }
+            AdapterCommand::BodyAvailable { manifest }
+                if manifest.round == round && manifest.subject == subject =>
+            {
+                self.record_body_available();
+                true
+            }
+            AdapterCommand::BodyStored {
+                round: queued_round,
+                subject: queued_subject,
+                ..
+            } if *queued_round == round && *queued_subject == subject => {
+                self.record_body_stored();
+                true
+            }
+            AdapterCommand::ValidationSucceeded {
+                round: queued_round,
+                subject: queued_subject,
+                ..
+            }
+            | AdapterCommand::ValidationFailed {
+                round: queued_round,
+                subject: queued_subject,
+            } if *queued_round == round && *queued_subject == subject => {
+                self.record_validation();
+                true
+            }
+            AdapterCommand::Authenticated(_)
+            | AdapterCommand::LocalProposalReady { .. }
+            | AdapterCommand::BodyAvailable { .. }
+            | AdapterCommand::BodyStored { .. }
+            | AdapterCommand::ValidationSucceeded { .. }
+            | AdapterCommand::ValidationFailed { .. }
+            | AdapterCommand::SignatureCompleted(_)
+            | AdapterCommand::ApplicationCompleted(_) => false,
+        }
+    }
+
+    fn merge(self, other: Self) -> Self {
+        Self {
+            body_available: self.body_available.saturating_add(other.body_available),
+            body_stored: self.body_stored.saturating_add(other.body_stored),
+            validation: self.validation.saturating_add(other.validation),
+            local_proposal: self.local_proposal.saturating_add(other.local_proposal),
+        }
+    }
+
+    fn validate_unique(self) -> Result<Self, String> {
+        if self.body_available > 1
+            || self.body_stored > 1
+            || self.validation > 1
+            || self.local_proposal > 1
+        {
+            return Err(
+                "Sumeragi v2 body pipeline has duplicate exact serialized completion stages"
+                    .to_owned(),
+            );
+        }
+        Ok(self)
+    }
+
+    /// Return whether the exact reconstructed-body acknowledgement was retired.
+    pub(crate) const fn body_available(self) -> bool {
+        self.body_available == 1
+    }
+}
+
 pub(crate) enum AdapterCommand {
     Authenticated(AuthenticatedConsensusMessage),
     LocalProposalReady {
@@ -439,6 +639,97 @@ fn manifests_conflict_for_same_body(
 }
 
 impl AdapterCommand {
+    /// Return whether this command owns the candidate's logical stage slot
+    /// and, if so, whether its full trusted evidence is exact.
+    fn body_pipeline_completion_ownership(
+        &self,
+        candidate: &BodyPipelineCompletionEvidence,
+    ) -> Option<bool> {
+        match (self, candidate) {
+            (
+                Self::LocalProposalReady {
+                    manifest,
+                    durable_receipt,
+                    validated_receipt,
+                },
+                BodyPipelineCompletionEvidence::LocalProposalReady {
+                    manifest: candidate_manifest,
+                    durable_receipt: candidate_durable,
+                    validated_receipt: candidate_validated,
+                },
+            ) if manifest.round == candidate_manifest.round
+                && manifest.subject == candidate_manifest.subject =>
+            {
+                Some(
+                    manifest == candidate_manifest
+                        && durable_receipt == candidate_durable
+                        && validated_receipt == candidate_validated,
+                )
+            }
+            (
+                Self::BodyAvailable { manifest },
+                BodyPipelineCompletionEvidence::BodyAvailable {
+                    manifest: candidate_manifest,
+                },
+            ) if manifest.round == candidate_manifest.round
+                && manifest.subject == candidate_manifest.subject =>
+            {
+                Some(manifest == candidate_manifest)
+            }
+            (
+                Self::BodyStored {
+                    round,
+                    subject,
+                    receipt,
+                },
+                BodyPipelineCompletionEvidence::BodyStored {
+                    round: candidate_round,
+                    subject: candidate_subject,
+                    receipt: candidate_receipt,
+                },
+            ) if round == candidate_round && subject == candidate_subject => {
+                Some(receipt == candidate_receipt)
+            }
+            (
+                Self::ValidationSucceeded {
+                    round,
+                    subject,
+                    receipt,
+                },
+                BodyPipelineCompletionEvidence::ValidationSucceeded {
+                    round: candidate_round,
+                    subject: candidate_subject,
+                    receipt: candidate_receipt,
+                },
+            ) if round == candidate_round && subject == candidate_subject => {
+                Some(receipt == candidate_receipt)
+            }
+            (
+                Self::ValidationFailed { round, subject },
+                BodyPipelineCompletionEvidence::ValidationFailed {
+                    round: candidate_round,
+                    subject: candidate_subject,
+                },
+            ) if round == candidate_round && subject == candidate_subject => Some(true),
+            (
+                Self::ValidationSucceeded { round, subject, .. },
+                BodyPipelineCompletionEvidence::ValidationFailed {
+                    round: candidate_round,
+                    subject: candidate_subject,
+                },
+            )
+            | (
+                Self::ValidationFailed { round, subject },
+                BodyPipelineCompletionEvidence::ValidationSucceeded {
+                    round: candidate_round,
+                    subject: candidate_subject,
+                    ..
+                },
+            ) if round == candidate_round && subject == candidate_subject => Some(false),
+            _ => None,
+        }
+    }
+
     fn is_same_authenticated_envelope(
         &self,
         authenticated: &AuthenticatedConsensusMessage,
@@ -484,6 +775,26 @@ impl AdapterCommand {
 }
 
 impl BoundedIngress<AdapterCommand> {
+    fn body_pipeline_completion_ownership(
+        &self,
+        tag: EventTag,
+        candidate: &BodyPipelineCompletionEvidence,
+    ) -> (usize, usize) {
+        self.commands
+            .iter()
+            .filter(|queued| queued.tag == tag)
+            .fold((0usize, 0usize), |(owners, exact), queued| {
+                let Some(is_exact) = queued.command.body_pipeline_completion_ownership(candidate)
+                else {
+                    return (owners, exact);
+                };
+                (
+                    owners.saturating_add(1),
+                    exact.saturating_add(usize::from(is_exact)),
+                )
+            })
+    }
+
     fn authenticated_wire_tag(&self, message: &wire::ConsensusMessageV2) -> Option<EventTag> {
         self.commands.iter().find_map(|queued| {
             queued
@@ -568,11 +879,7 @@ impl BoundedIngress<AdapterCommand> {
         tag: EventTag,
         manifest: wire::PayloadManifest,
     ) -> Result<(), EnqueueError> {
-        self.commands.retain(|queued| {
-            !queued
-                .command
-                .is_authenticated_proposal_conflicting_with(&manifest)
-        });
+        self.discard_proposals_conflicting_with(&manifest);
         self.enqueue(TaggedCommand {
             tag,
             class: CommandClass::Completion,
@@ -580,6 +887,187 @@ impl BoundedIngress<AdapterCommand> {
             admitted_at: Instant::now(),
             eligible_skips: 0,
         })
+    }
+
+    fn discard_proposals_conflicting_with(&mut self, manifest: &wire::PayloadManifest) {
+        self.commands.retain(|queued| {
+            !queued
+                .command
+                .is_authenticated_proposal_conflicting_with(manifest)
+        });
+    }
+
+    fn rebind_canonical_body_available(
+        &mut self,
+        previous: EventTag,
+        rebound: EventTag,
+        manifest: &wire::PayloadManifest,
+    ) -> usize {
+        let mut rebound_count = 0usize;
+        for queued in &mut self.commands {
+            if queued.tag == previous
+                && matches!(
+                    &queued.command,
+                    AdapterCommand::BodyAvailable { manifest: queued_manifest }
+                        if queued_manifest == manifest
+                )
+            {
+                queued.tag = rebound;
+                rebound_count = rebound_count.saturating_add(1);
+            }
+        }
+        rebound_count
+    }
+
+    fn retire_canonical_body_available(
+        &mut self,
+        tag: EventTag,
+        manifest: &wire::PayloadManifest,
+    ) -> usize {
+        let before = self.commands.len();
+        self.commands.retain(|queued| {
+            !(queued.tag == tag
+                && matches!(
+                    &queued.command,
+                    AdapterCommand::BodyAvailable { manifest: queued_manifest }
+                        if queued_manifest == manifest
+                ))
+        });
+        before.saturating_sub(self.commands.len())
+    }
+
+    fn retire_body_pipeline_completions(
+        &mut self,
+        tag: EventTag,
+        round: wire::ConsensusRound,
+        subject: wire::BlockSubject,
+    ) -> RetiredBodyPipelineCompletions {
+        let mut retired = RetiredBodyPipelineCompletions::default();
+        self.commands.retain(|queued| {
+            if queued.tag != tag {
+                return true;
+            }
+            !retired.record_matching_command(&queued.command, round, subject)
+        });
+        retired
+    }
+
+    fn body_pipeline_completion_counts(
+        &self,
+        tag: EventTag,
+        round: wire::ConsensusRound,
+        subject: wire::BlockSubject,
+    ) -> RetiredBodyPipelineCompletions {
+        let mut counts = RetiredBodyPipelineCompletions::default();
+        for queued in self.commands.iter().filter(|queued| queued.tag == tag) {
+            counts.record_matching_command(&queued.command, round, subject);
+        }
+        counts
+    }
+
+    fn decided_local_proposal_counts(
+        &self,
+        decision_tag: EventTag,
+        decision_round: wire::ConsensusRound,
+        decision_subject: wire::BlockSubject,
+        decision_commitment: wire::ExecutionCommitment,
+    ) -> DecisionLocalProposalCounts {
+        let mut counts = DecisionLocalProposalCounts::default();
+        for queued in &self.commands {
+            if let AdapterCommand::LocalProposalReady {
+                manifest,
+                durable_receipt,
+                validated_receipt,
+            } = &queued.command
+                && let Some(disposition) = classify_decided_local_proposal(
+                    queued.tag,
+                    manifest,
+                    durable_receipt,
+                    validated_receipt,
+                    decision_tag,
+                    decision_round,
+                    decision_subject,
+                    decision_commitment,
+                )
+            {
+                counts.record(disposition);
+            }
+        }
+        counts
+    }
+
+    fn retire_proposal_work_after_decision(
+        &mut self,
+        decision_tag: EventTag,
+        decision_round: wire::ConsensusRound,
+        decision_subject: wire::BlockSubject,
+        decision_commitment: wire::ExecutionCommitment,
+    ) {
+        self.commands.retain(|queued| {
+            let remove = match &queued.command {
+                AdapterCommand::Authenticated(authenticated)
+                    if matches!(
+                        authenticated.payload(),
+                        wire::ConsensusMessageV2Payload::Proposal(proposal)
+                            if proposal.round.height == decision_round.height
+                    ) =>
+                {
+                    true
+                }
+                AdapterCommand::LocalProposalReady {
+                    manifest,
+                    durable_receipt,
+                    validated_receipt,
+                } if manifest.round.height == decision_round.height => !matches!(
+                    classify_decided_local_proposal(
+                        queued.tag,
+                        manifest,
+                        durable_receipt,
+                        validated_receipt,
+                        decision_tag,
+                        decision_round,
+                        decision_subject,
+                        decision_commitment,
+                    ),
+                    Some(DecisionLocalProposalDisposition::Retain)
+                ),
+                AdapterCommand::Authenticated(_)
+                | AdapterCommand::LocalProposalReady { .. }
+                | AdapterCommand::BodyAvailable { .. }
+                | AdapterCommand::BodyStored { .. }
+                | AdapterCommand::ValidationSucceeded { .. }
+                | AdapterCommand::ValidationFailed { .. }
+                | AdapterCommand::SignatureCompleted(_)
+                | AdapterCommand::ApplicationCompleted(_) => false,
+            };
+            !remove
+        });
+    }
+
+    fn retire_unsafe_proposals_for_lock(
+        &mut self,
+        locked_round: wire::ConsensusRound,
+        locked_subject: wire::BlockSubject,
+    ) -> usize {
+        let before = self.commands.len();
+        self.commands.retain(|queued| {
+            !matches!(
+                &queued.command,
+                AdapterCommand::Authenticated(authenticated)
+                    if matches!(
+                        authenticated.payload(),
+                        wire::ConsensusMessageV2Payload::Proposal(proposal)
+                            if proposal.round.context_id == locked_round.context_id
+                                && proposal.round.height == locked_round.height
+                                && !proposal_is_safe_for_lock(
+                                    proposal,
+                                    locked_round,
+                                    locked_subject,
+                                )
+                    )
+            )
+        });
+        before.saturating_sub(self.commands.len())
     }
 
     fn conflicts_with_pending_body_available(
@@ -994,6 +1482,67 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
 }
 
 impl SerializedV2Runtime<SumeragiV2Adapter> {
+    fn body_pipeline_completion_is_owned(
+        &mut self,
+        tag: EventTag,
+        candidate: &BodyPipelineCompletionEvidence,
+    ) -> Result<bool, EnqueueError> {
+        if self.fail_closed {
+            return Err(EnqueueError::FailClosed);
+        }
+        let (ingress_owners, ingress_exact) = self
+            .ingress
+            .body_pipeline_completion_ownership(tag, candidate);
+        let (deferred_owners, deferred_exact) = self
+            .driver
+            .deferred_body_pipeline_completion_ownership(tag, candidate);
+        let owners = ingress_owners.saturating_add(deferred_owners);
+        let exact = ingress_exact.saturating_add(deferred_exact);
+        match (owners, exact) {
+            (0, 0) => Ok(false),
+            (1, 1) => Ok(true),
+            _ => {
+                self.fail_closed = true;
+                Err(EnqueueError::DuplicateCompletionOwnership)
+            }
+        }
+    }
+
+    fn enqueue_body_pipeline_completion(
+        &mut self,
+        tag: EventTag,
+        evidence: BodyPipelineCompletionEvidence,
+        command: AdapterCommand,
+    ) -> Result<(), EnqueueError> {
+        if self.body_pipeline_completion_is_owned(tag, &evidence)? {
+            return Ok(());
+        }
+        self.enqueue(tag, CommandClass::Completion, command)
+    }
+
+    fn body_available_is_uniquely_owned(
+        &mut self,
+        tag: EventTag,
+        manifest: &wire::PayloadManifest,
+    ) -> Result<bool, String> {
+        let evidence = BodyPipelineCompletionEvidence::BodyAvailable {
+            manifest: manifest.clone(),
+        };
+        match self.body_pipeline_completion_is_owned(tag, &evidence) {
+            Ok(owned) => Ok(owned),
+            Err(EnqueueError::DuplicateCompletionOwnership) => Err(
+                "Sumeragi v2 body completion has conflicting evidence or duplicate serialized owners"
+                    .to_owned(),
+            ),
+            Err(EnqueueError::FailClosed) => {
+                Err("Sumeragi v2 runtime is fail-closed".to_owned())
+            }
+            Err(error @ (EnqueueError::ReservedCapacity | EnqueueError::Full)) => {
+                Err(error.to_string())
+            }
+        }
+    }
+
     /// Take exclusive ownership of an opened adapter and preserve its recovery
     /// effects for immediate asynchronous dispatch.
     pub(crate) fn new(
@@ -1032,6 +1581,20 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         AdapterError,
     > {
         self.driver.replayed_decision_key()
+    }
+
+    /// Rebind one independently durable validation marker before replayed
+    /// startup effects are dispatched.
+    pub(crate) fn recover_validated_body(
+        &mut self,
+        manifest: &wire::PayloadManifest,
+        validated_receipt: &ValidatedBodyReceipt,
+    ) -> Result<(), AdapterError> {
+        if self.fail_closed {
+            return Err(AdapterError::FailClosed);
+        }
+        self.driver
+            .recover_validated_body(manifest, validated_receipt)
     }
 
     /// Authenticate and enqueue one reducer-directed network message.
@@ -1121,9 +1684,14 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         durable_receipt: DurableBodyReceipt,
         validated_receipt: ValidatedBodyReceipt,
     ) -> Result<(), EnqueueError> {
-        self.enqueue(
+        let evidence = BodyPipelineCompletionEvidence::LocalProposalReady {
+            manifest: manifest.clone(),
+            durable_receipt: durable_receipt.clone(),
+            validated_receipt: validated_receipt.clone(),
+        };
+        self.enqueue_body_pipeline_completion(
             tag,
-            CommandClass::Completion,
+            evidence,
             AdapterCommand::LocalProposalReady {
                 manifest,
                 durable_receipt,
@@ -1143,10 +1711,285 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         tag: EventTag,
         manifest: wire::PayloadManifest,
     ) -> Result<(), EnqueueError> {
-        if self.fail_closed {
-            return Err(EnqueueError::FailClosed);
+        let evidence = BodyPipelineCompletionEvidence::BodyAvailable {
+            manifest: manifest.clone(),
+        };
+        if self.body_pipeline_completion_is_owned(tag, &evidence)? {
+            return Ok(());
         }
         self.ingress.enqueue_canonical_body_available(tag, manifest)
+    }
+
+    /// Transfer one already admitted exact-body completion to a certified later view.
+    ///
+    /// The completion can be waiting either in runtime ingress or in the adapter's Busy-deferred
+    /// completion lane. `rebound` must be the runtime's installed incarnation,
+    /// and source and destination slots are both checked before either queue is
+    /// mutated. A single exact destination owner coalesces the transfer by
+    /// retiring the unique source; conflicting evidence or duplicate ownership
+    /// at either tag fails closed without mutation. Success leaves exactly one
+    /// full-evidence owner at `rebound`.
+    pub(crate) fn rebind_body_available(
+        &mut self,
+        previous: EventTag,
+        rebound: EventTag,
+        manifest: &wire::PayloadManifest,
+    ) -> Result<bool, String> {
+        if self.fail_closed {
+            return Err("Sumeragi v2 runtime is fail-closed".to_owned());
+        }
+        if previous.height() != rebound.height()
+            || previous.view() >= rebound.view()
+            || previous.generation() >= rebound.generation()
+        {
+            return Err(
+                "Sumeragi v2 body completion rebind did not advance its incarnation".to_owned(),
+            );
+        }
+        if rebound != self.round_tag {
+            return Err(
+                "Sumeragi v2 body completion rebind target is not the installed runtime incarnation"
+                    .to_owned(),
+            );
+        }
+        let source_owned = self.body_available_is_uniquely_owned(previous, manifest)?;
+        let destination_owned = self.body_available_is_uniquely_owned(rebound, manifest)?;
+        if !source_owned {
+            return Ok(false);
+        }
+
+        let transferred = if destination_owned {
+            let ingress = self
+                .ingress
+                .retire_canonical_body_available(previous, manifest);
+            let deferred = self
+                .driver
+                .retire_deferred_body_available(previous, manifest);
+            ingress.saturating_add(deferred)
+        } else {
+            let ingress = self
+                .ingress
+                .rebind_canonical_body_available(previous, rebound, manifest);
+            let deferred = self
+                .driver
+                .rebind_deferred_body_available(previous, rebound, manifest);
+            ingress.saturating_add(deferred)
+        };
+        if transferred != 1 {
+            self.fail_closed = true;
+            return Err(
+                "Sumeragi v2 body completion ownership changed during serialized rebind".to_owned(),
+            );
+        }
+
+        match self.body_available_is_uniquely_owned(rebound, manifest) {
+            Ok(true) => {}
+            Ok(false) => {
+                self.fail_closed = true;
+                return Err(
+                    "Sumeragi v2 body completion rebind did not leave one destination owner"
+                        .to_owned(),
+                );
+            }
+            Err(error) => return Err(error),
+        }
+        Ok(true)
+    }
+
+    /// Retire one superseded exact-body completion from its serialized owner.
+    ///
+    /// The completion may still be waiting in runtime ingress or may already
+    /// have crossed into the adapter's Busy-deferred completion lane. Exactly
+    /// one owner with the exact manifest evidence is permitted across both
+    /// queues, and ownership is checked before either queue is mutated.
+    pub(crate) fn retire_body_available(
+        &mut self,
+        tag: EventTag,
+        manifest: &wire::PayloadManifest,
+    ) -> Result<bool, String> {
+        if self.fail_closed {
+            return Err("Sumeragi v2 runtime is fail-closed".to_owned());
+        }
+        if !self.body_available_is_uniquely_owned(tag, manifest)? {
+            return Ok(false);
+        }
+        let ingress = self.ingress.retire_canonical_body_available(tag, manifest);
+        let deferred = self.driver.retire_deferred_body_available(tag, manifest);
+        let total = ingress.saturating_add(deferred);
+        if total != 1 {
+            self.fail_closed = true;
+            return Err(
+                "Sumeragi v2 body completion ownership changed during serialized retirement"
+                    .to_owned(),
+            );
+        }
+        Ok(true)
+    }
+
+    /// Retire every queued completion stage for one exact superseded body pipeline.
+    ///
+    /// The command may still be in runtime ingress or may have crossed into
+    /// the adapter's Busy-deferred completion lane. Different stage slots can
+    /// coexist, but each slot must have only one serialized owner. Both lanes
+    /// are counted before mutation, so duplicate ownership fails closed while
+    /// every occurrence remains available for diagnosis.
+    pub(crate) fn retire_body_pipeline_completions(
+        &mut self,
+        tag: EventTag,
+        round: wire::ConsensusRound,
+        subject: wire::BlockSubject,
+    ) -> Result<RetiredBodyPipelineCompletions, String> {
+        if self.fail_closed {
+            return Err("Sumeragi v2 runtime is fail-closed".to_owned());
+        }
+        let expected = self
+            .ingress
+            .body_pipeline_completion_counts(tag, round, subject)
+            .merge(
+                self.driver
+                    .deferred_body_pipeline_completion_counts(tag, round, subject),
+            );
+        let expected = match expected.validate_unique() {
+            Ok(expected) => expected,
+            Err(error) => {
+                self.fail_closed = true;
+                return Err(error);
+            }
+        };
+        let ingress = self
+            .ingress
+            .retire_body_pipeline_completions(tag, round, subject);
+        let deferred = self
+            .driver
+            .retire_deferred_body_pipeline_completions(tag, round, subject);
+        let retired = ingress.merge(deferred);
+        let remaining = self
+            .ingress
+            .body_pipeline_completion_counts(tag, round, subject)
+            .merge(
+                self.driver
+                    .deferred_body_pipeline_completion_counts(tag, round, subject),
+            );
+        if retired != expected || remaining != RetiredBodyPipelineCompletions::default() {
+            self.fail_closed = true;
+            return Err(
+                "Sumeragi v2 body pipeline ownership changed during serialized retirement"
+                    .to_owned(),
+            );
+        }
+        Ok(retired)
+    }
+
+    /// Retire proposal work made terminal by an exact durable decision.
+    ///
+    /// Every authenticated proposal and nonmatching local proposal completion
+    /// at the decided height is removed from both serialized owners. One exact
+    /// current-tag completion remains queued only when its full manifest,
+    /// durable receipt, validation receipt, and execution commitment match the
+    /// Decision. Stale exact work is removed for ordinary durable recovery.
+    /// Duplicate or conflicting exact owners fail closed before mutation.
+    pub(crate) fn retire_proposal_work_after_decision(
+        &mut self,
+        decision_round: wire::ConsensusRound,
+        decision_subject: wire::BlockSubject,
+        decision_commitment: wire::ExecutionCommitment,
+    ) -> Result<DecisionProposalRetirement, String> {
+        if self.fail_closed {
+            return Err("Sumeragi v2 runtime is fail-closed".to_owned());
+        }
+        let decision_tag = self.round_tag;
+        let expected = self
+            .ingress
+            .decided_local_proposal_counts(
+                decision_tag,
+                decision_round,
+                decision_subject,
+                decision_commitment,
+            )
+            .merge(self.driver.deferred_decided_local_proposal_counts(
+                decision_tag,
+                decision_round,
+                decision_subject,
+                decision_commitment,
+            ));
+        if expected.conflicting() != 0 {
+            self.fail_closed = true;
+            return Err(
+                "Sumeragi v2 decided local proposal evidence conflicts with the durable Decision"
+                    .to_owned(),
+            );
+        }
+        if expected.total() > 1 {
+            self.fail_closed = true;
+            return Err(
+                "Sumeragi v2 decided local proposal completion has duplicate serialized owners"
+                    .to_owned(),
+            );
+        }
+        self.ingress.retire_proposal_work_after_decision(
+            decision_tag,
+            decision_round,
+            decision_subject,
+            decision_commitment,
+        );
+        self.driver.retire_deferred_proposal_work_after_decision(
+            decision_tag,
+            decision_round,
+            decision_subject,
+            decision_commitment,
+        );
+        let remaining = self
+            .ingress
+            .decided_local_proposal_counts(
+                decision_tag,
+                decision_round,
+                decision_subject,
+                decision_commitment,
+            )
+            .merge(self.driver.deferred_decided_local_proposal_counts(
+                decision_tag,
+                decision_round,
+                decision_subject,
+                decision_commitment,
+            ));
+        if remaining.conflicting() != 0
+            || remaining.recovery_only() != 0
+            || remaining.retainable() != expected.retainable()
+            || remaining.total() != expected.retainable()
+        {
+            self.fail_closed = true;
+            return Err(
+                "Sumeragi v2 decided local proposal ownership changed during serialized retirement"
+                    .to_owned(),
+            );
+        }
+        Ok(DecisionProposalRetirement::new(
+            (expected.retainable() == 1).then_some(decision_tag),
+            expected.recovery_only(),
+        ))
+    }
+
+    /// Retire authenticated proposals which a newly installed lock makes unsafe.
+    ///
+    /// A proposal for another subject remains queued only when it carries a
+    /// strictly higher PrepareQC and therefore still satisfies the safe-value
+    /// rule. This protects normal-lane work overtaken by progress-lane lock
+    /// installation without discarding a legitimate unlock proposal.
+    pub(crate) fn retire_unsafe_proposals_for_lock(
+        &mut self,
+        locked_round: wire::ConsensusRound,
+        locked_subject: wire::BlockSubject,
+    ) -> Result<usize, String> {
+        if self.fail_closed {
+            return Err("Sumeragi v2 runtime is fail-closed".to_owned());
+        }
+        let ingress = self
+            .ingress
+            .retire_unsafe_proposals_for_lock(locked_round, locked_subject);
+        let deferred = self
+            .driver
+            .retire_deferred_unsafe_proposals_for_lock(locked_round, locked_subject);
+        Ok(ingress.saturating_add(deferred))
     }
 
     /// Enqueue the durable body-store acknowledgement with its exact tag.
@@ -1157,9 +2000,14 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         subject: wire::BlockSubject,
         receipt: DurableBodyReceipt,
     ) -> Result<(), EnqueueError> {
-        self.enqueue(
+        let evidence = BodyPipelineCompletionEvidence::BodyStored {
+            round,
+            subject,
+            receipt: receipt.clone(),
+        };
+        self.enqueue_body_pipeline_completion(
             tag,
-            CommandClass::Completion,
+            evidence,
             AdapterCommand::BodyStored {
                 round,
                 subject,
@@ -1177,9 +2025,14 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         subject: wire::BlockSubject,
         receipt: ValidatedBodyReceipt,
     ) -> Result<(), EnqueueError> {
-        self.enqueue(
+        let evidence = BodyPipelineCompletionEvidence::ValidationSucceeded {
+            round,
+            subject,
+            receipt: receipt.clone(),
+        };
+        self.enqueue_body_pipeline_completion(
             tag,
-            CommandClass::Completion,
+            evidence,
             AdapterCommand::ValidationSucceeded {
                 round,
                 subject,
@@ -1196,9 +2049,10 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         round: wire::ConsensusRound,
         subject: wire::BlockSubject,
     ) -> Result<(), EnqueueError> {
-        self.enqueue(
+        let evidence = BodyPipelineCompletionEvidence::ValidationFailed { round, subject };
+        self.enqueue_body_pipeline_completion(
             tag,
-            CommandClass::Completion,
+            evidence,
             AdapterCommand::ValidationFailed { round, subject },
         )
     }
@@ -1279,7 +2133,9 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
-    use crate::sumeragi::v2::{AdapterFingerprints, VerifiedHeightContext};
+    use crate::sumeragi::v2::{
+        AdapterFingerprints, DeferredBodyPipelineStageForTest, VerifiedHeightContext,
+    };
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     struct FakeCommand {
@@ -1527,9 +2383,70 @@ mod tests {
         wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Proposal(proposal))
     }
 
+    fn runtime_manifest(context: &wire::HeightContext, marker: u8) -> wire::PayloadManifest {
+        let round = wire::ConsensusRound {
+            context_id: context.id(),
+            height: context.height,
+            view: 0,
+        };
+        let subject = wire::BlockSubject {
+            parent_block_hash: None,
+            block_hash: HashOf::from_untyped_unchecked(Hash::new([marker, 3])),
+            payload_hash: Hash::new([marker, 4]),
+        };
+        let body = vec![marker; 4];
+        wire::PayloadManifest::derive(
+            context,
+            round,
+            subject,
+            u64::try_from(body.len()).expect("small runtime manifest body"),
+            &[body],
+        )
+        .expect("valid runtime manifest")
+    }
+
+    fn observe_enter_view_for_test(
+        runtime: &mut SerializedV2Runtime<SumeragiV2Adapter>,
+        previous: EventTag,
+        rebound: EventTag,
+        manifest: &wire::PayloadManifest,
+    ) {
+        runtime.observe_effects(
+            Instant::now(),
+            &[AdapterEffect::EnterView {
+                tag: rebound,
+                certificate: wire::TimeoutCertificate {
+                    round: wire::ConsensusRound {
+                        view: previous.view(),
+                        ..manifest.round
+                    },
+                    groups: vec![wire::TimeoutVoteGroup {
+                        highest_prepare_qc: None,
+                        signers: vec![0, 1, 2],
+                        aggregate_signature: vec![0xA5; 96],
+                    }],
+                },
+                protected_body: Some((manifest.round, manifest.subject)),
+            }],
+        );
+        assert_eq!(runtime.round_tag(), rebound);
+    }
+
     fn authenticated_network_runtime(
         directory: &TempDir,
         queue: RuntimeQueueConfig,
+    ) -> (
+        SerializedV2Runtime<SumeragiV2Adapter>,
+        wire::HeightContext,
+        Vec<KeyPair>,
+    ) {
+        authenticated_network_runtime_with_local_validator(directory, queue, None)
+    }
+
+    fn authenticated_network_runtime_with_local_validator(
+        directory: &TempDir,
+        queue: RuntimeQueueConfig,
+        local_validator: Option<wire::ValidatorIndex>,
     ) -> (
         SerializedV2Runtime<SumeragiV2Adapter>,
         wire::HeightContext,
@@ -1548,7 +2465,7 @@ mod tests {
         let (adapter, startup) = SumeragiV2Adapter::open(
             directory.path().join("runtime-ingress-safety.wal"),
             verified,
-            None,
+            local_validator,
             Generation::new(1),
             [0x31; 32],
             AdapterFingerprints {
@@ -1919,6 +2836,75 @@ mod tests {
     }
 
     #[test]
+    fn retiring_exact_body_completion_releases_a_capacity_one_ingress_slot() {
+        let round = wire::ConsensusRound {
+            context_id: wire::HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
+                b"retired-body-context",
+            ))),
+            height: 11,
+            view: 4,
+        };
+        let subject = wire::BlockSubject {
+            parent_block_hash: None,
+            block_hash: HashOf::from_untyped_unchecked(Hash::new(b"retired-body-block")),
+            payload_hash: Hash::new(b"retired-body-payload"),
+        };
+        let layout = wire::DataAvailabilityLayout {
+            encoding: wire::PayloadEncoding::Plain,
+            chunk_size_bytes: 1,
+            data_shards: 0,
+            parity_shards: 0,
+            max_payload_size_bytes: 1,
+            max_chunk_count: 1,
+        };
+        let original = wire::PayloadManifest {
+            round,
+            subject,
+            payload_size_bytes: 1,
+            layout,
+            chunk_hashes: vec![Hash::new(b"retired chunk")],
+            chunk_root: Hash::new(b"retired root"),
+        };
+        let replacement = wire::PayloadManifest {
+            round: wire::ConsensusRound {
+                view: round.view + 1,
+                ..round
+            },
+            chunk_hashes: vec![Hash::new(b"replacement chunk")],
+            chunk_root: Hash::new(b"replacement root"),
+            ..original.clone()
+        };
+        let original_tag = tag(4);
+        let replacement_tag = tag(5);
+        let mut ingress = BoundedIngress::new(RuntimeQueueConfig::new(1, 0, 0));
+
+        ingress
+            .enqueue_canonical_body_available(original_tag, original.clone())
+            .expect("the original completion claims the sole slot");
+        assert_eq!(
+            ingress.enqueue_canonical_body_available(replacement_tag, replacement.clone()),
+            Err(EnqueueError::Full)
+        );
+        assert_eq!(
+            ingress.retire_canonical_body_available(original_tag, &original),
+            1
+        );
+        assert_eq!(ingress.remaining_capacity(), 1);
+        ingress
+            .enqueue_canonical_body_available(replacement_tag, replacement.clone())
+            .expect("retirement releases the sole completion slot");
+        assert_eq!(ingress.len(), 1);
+        assert!(matches!(
+            ingress.commands.front(),
+            Some(TaggedCommand {
+                tag,
+                command: AdapterCommand::BodyAvailable { manifest },
+                ..
+            }) if *tag == replacement_tag && manifest == &replacement
+        ));
+    }
+
+    #[test]
     fn exact_authenticated_progress_retransmission_is_queue_coalesced() {
         let round = wire::ConsensusRound {
             context_id: wire::HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
@@ -2157,6 +3143,1673 @@ mod tests {
             Err(EnqueueError::Full),
             "wire inequality cannot inherit the duplicate's full-queue exception"
         );
+    }
+
+    #[test]
+    fn completion_retries_coalesce_across_ingress_and_busy_deferred_ownership() {
+        let directory = TempDir::new().expect("temporary completion-coalescing directory");
+        let (mut runtime, context, _keys) =
+            authenticated_network_runtime(&directory, RuntimeQueueConfig::new(8, 1, 1));
+        let owner_tag = runtime.round_tag();
+        let receipts = |manifest: &wire::PayloadManifest| {
+            let durable = DurableBodyReceipt::for_test(
+                context.id(),
+                manifest.round,
+                manifest.subject,
+                HashOf::new(manifest),
+            );
+            let validated = ValidatedBodyReceipt::for_test(durable.clone());
+            (durable, validated)
+        };
+
+        let ingress_manifest = runtime_manifest(&context, 0x91);
+        let (durable, _) = receipts(&ingress_manifest);
+        runtime
+            .enqueue_body_stored(
+                owner_tag,
+                ingress_manifest.round,
+                ingress_manifest.subject,
+                durable.clone(),
+            )
+            .expect("enqueue the first durable-store completion");
+        runtime
+            .enqueue_body_stored(
+                owner_tag,
+                ingress_manifest.round,
+                ingress_manifest.subject,
+                durable,
+            )
+            .expect("an exact retransmission coalesces in runtime ingress");
+        assert_eq!(runtime.queued_commands(), 1);
+        assert_eq!(
+            runtime
+                .retire_body_pipeline_completions(
+                    owner_tag,
+                    ingress_manifest.round,
+                    ingress_manifest.subject,
+                )
+                .expect("retire the one coalesced ingress owner"),
+            RetiredBodyPipelineCompletions {
+                body_available: 0,
+                body_stored: 1,
+                validation: 0,
+                local_proposal: 0,
+            }
+        );
+
+        let deferred_store = runtime_manifest(&context, 0x92);
+        let (durable, _) = receipts(&deferred_store);
+        runtime
+            .driver
+            .defer_body_pipeline_stage_for_test(
+                owner_tag,
+                &deferred_store,
+                DeferredBodyPipelineStageForTest::BodyStored,
+            )
+            .expect("stage a Busy-deferred durable-store completion");
+        runtime
+            .enqueue_body_stored(
+                owner_tag,
+                deferred_store.round,
+                deferred_store.subject,
+                durable,
+            )
+            .expect("a retransmit coalesces with the Busy-deferred store owner");
+        assert_eq!(runtime.queued_commands(), 0);
+
+        let deferred_validation = runtime_manifest(&context, 0x93);
+        let (_, validated) = receipts(&deferred_validation);
+        runtime
+            .driver
+            .defer_body_pipeline_stage_for_test(
+                owner_tag,
+                &deferred_validation,
+                DeferredBodyPipelineStageForTest::ValidationSucceeded,
+            )
+            .expect("stage a Busy-deferred validation completion");
+        runtime
+            .enqueue_validation_succeeded(
+                owner_tag,
+                deferred_validation.round,
+                deferred_validation.subject,
+                validated,
+            )
+            .expect("a retransmit coalesces with the Busy-deferred validation owner");
+        assert_eq!(runtime.queued_commands(), 0);
+
+        let deferred_proposal = runtime_manifest(&context, 0x94);
+        let (durable, validated) = receipts(&deferred_proposal);
+        runtime
+            .driver
+            .defer_body_pipeline_stage_for_test(
+                owner_tag,
+                &deferred_proposal,
+                DeferredBodyPipelineStageForTest::LocalProposalReady,
+            )
+            .expect("stage a Busy-deferred local-proposal completion");
+        runtime
+            .enqueue_local_proposal(owner_tag, deferred_proposal.clone(), durable, validated)
+            .expect("a retransmit coalesces with the Busy-deferred proposal owner");
+        assert_eq!(runtime.queued_commands(), 0);
+
+        for manifest in [deferred_store, deferred_validation, deferred_proposal] {
+            runtime
+                .retire_body_pipeline_completions(owner_tag, manifest.round, manifest.subject)
+                .expect("each coalesced Busy-deferred pipeline has one exact owner");
+        }
+    }
+
+    #[test]
+    fn body_available_rebind_rejects_uninstalled_destination_without_mutation() {
+        let directory = TempDir::new().expect("temporary uninstalled-rebind directory");
+        let (mut runtime, context, _keys) =
+            authenticated_network_runtime(&directory, RuntimeQueueConfig::new(8, 1, 1));
+        let source_tag = runtime.round_tag();
+        let fabricated = EventTag::new(
+            source_tag.height(),
+            source_tag.view() + 1,
+            Generation::new(source_tag.generation().get() + 1),
+        );
+        let manifest = runtime_manifest(&context, 0x8B);
+        runtime
+            .enqueue_body_available(source_tag, manifest.clone())
+            .expect("enqueue unique source owner");
+
+        assert_eq!(
+            runtime
+                .rebind_body_available(source_tag, fabricated, &manifest)
+                .expect_err("an uninstalled destination tag must be rejected"),
+            "Sumeragi v2 body completion rebind target is not the installed runtime incarnation"
+        );
+        assert!(
+            !runtime.fail_closed,
+            "caller contract rejection is recoverable"
+        );
+        assert_eq!(runtime.round_tag(), source_tag);
+        assert_eq!(runtime.queued_commands(), 1);
+        assert!(matches!(
+            runtime.ingress.commands.front(),
+            Some(TaggedCommand {
+                tag,
+                command: AdapterCommand::BodyAvailable {
+                    manifest: queued_manifest,
+                },
+                ..
+            }) if *tag == source_tag && queued_manifest == &manifest
+        ));
+        assert!(
+            runtime
+                .retire_body_available(source_tag, &manifest)
+                .expect("the untouched source owner remains retireable")
+        );
+        assert_eq!(runtime.queued_commands(), 0);
+    }
+
+    #[test]
+    fn body_available_rebind_coalesces_exact_busy_deferred_destination_owner() {
+        let directory = TempDir::new().expect("temporary destination-coalescing directory");
+        let (mut runtime, context, keys) = authenticated_network_runtime_with_local_validator(
+            &directory,
+            RuntimeQueueConfig::new(8, 1, 1),
+            Some(0),
+        );
+        let now = Instant::now();
+        runtime
+            .arm_live_clocks(now)
+            .expect("arm runtime for production dispatch");
+        runtime
+            .enqueue_network(signed_runtime_proposal(&context, &keys, 0x8C))
+            .expect("enqueue authenticated proposal");
+        let proposal_effects = match runtime.step(now).expect("dispatch proposal") {
+            RuntimeStep::Advanced(effects) => effects,
+            RuntimeStep::Idle => panic!("proposal dispatch unexpectedly idle"),
+        };
+        let (source_tag, manifest) = match proposal_effects.as_slice() {
+            [
+                AdapterEffect::FetchBody {
+                    tag,
+                    manifest: Some(manifest),
+                    ..
+                },
+            ] => (*tag, manifest.clone()),
+            effects => panic!("unexpected proposal effects: {effects:?}"),
+        };
+
+        runtime
+            .enqueue_body_available(source_tag, manifest.clone())
+            .expect("enqueue body reconstruction completion");
+        assert!(matches!(
+            runtime.step(now).expect("dispatch body reconstruction"),
+            RuntimeStep::Advanced(ref effects)
+                if matches!(effects.as_slice(), [AdapterEffect::StoreBody { .. }])
+        ));
+        let durable = DurableBodyReceipt::for_test(
+            context.id(),
+            manifest.round,
+            manifest.subject,
+            HashOf::new(&manifest),
+        );
+        runtime
+            .enqueue_body_stored(
+                source_tag,
+                manifest.round,
+                manifest.subject,
+                durable.clone(),
+            )
+            .expect("enqueue durable-store completion");
+        assert!(matches!(
+            runtime.step(now).expect("dispatch durable-store completion"),
+            RuntimeStep::Advanced(ref effects)
+                if matches!(effects.as_slice(), [AdapterEffect::ValidateBody { .. }])
+        ));
+        runtime
+            .enqueue_validation_succeeded(
+                source_tag,
+                manifest.round,
+                manifest.subject,
+                ValidatedBodyReceipt::for_test(durable),
+            )
+            .expect("enqueue validation completion");
+        assert!(matches!(
+            runtime.step(now).expect("dispatch validation completion"),
+            RuntimeStep::Advanced(ref effects)
+                if matches!(effects.as_slice(), [AdapterEffect::Sign { .. }])
+        ));
+
+        let rebound = EventTag::new(
+            source_tag.height(),
+            source_tag.view() + 1,
+            Generation::new(source_tag.generation().get() + 1),
+        );
+        assert!(
+            runtime
+                .driver
+                .body_available(source_tag, manifest.clone())
+                .expect("stage exact completion behind the signer fence")
+                .into_effects()
+                .is_empty()
+        );
+        let evidence = BodyPipelineCompletionEvidence::BodyAvailable {
+            manifest: manifest.clone(),
+        };
+        assert_eq!(
+            runtime
+                .driver
+                .deferred_body_pipeline_completion_ownership(source_tag, &evidence),
+            (1, 1),
+            "the current tag owns the real Busy-deferred completion"
+        );
+        observe_enter_view_for_test(&mut runtime, source_tag, rebound, &manifest);
+        assert_eq!(
+            runtime
+                .driver
+                .rebind_deferred_body_available(source_tag, rebound, &manifest),
+            1,
+            "the seam models an exact destination owner already transferred by another path"
+        );
+        assert_eq!(
+            runtime
+                .driver
+                .deferred_body_pipeline_completion_ownership(rebound, &evidence),
+            (1, 1),
+            "the destination must be owned by the real Busy-deferred lane"
+        );
+        runtime
+            .enqueue_body_available(source_tag, manifest.clone())
+            .expect("enqueue the unique source owner in runtime ingress");
+        assert_eq!(runtime.queued_commands(), 1);
+
+        assert!(
+            runtime
+                .rebind_body_available(source_tag, rebound, &manifest)
+                .expect("exact destination ownership coalesces the source")
+        );
+        assert!(!runtime.fail_closed);
+        assert_eq!(runtime.queued_commands(), 0, "the source owner was retired");
+        assert_eq!(
+            runtime
+                .driver
+                .deferred_body_pipeline_completion_ownership(rebound, &evidence),
+            (1, 1),
+            "coalescing retains exactly one destination owner"
+        );
+        assert!(
+            !runtime
+                .rebind_body_available(source_tag, rebound, &manifest)
+                .expect("an idempotent retry finds no remaining source owner")
+        );
+        assert!(
+            runtime
+                .retire_body_available(rebound, &manifest)
+                .expect("the unique destination owner remains retireable")
+        );
+    }
+
+    #[test]
+    fn body_available_rebind_destination_conflicts_and_duplicates_fail_closed_before_mutation() {
+        {
+            let directory = TempDir::new().expect("temporary destination-conflict directory");
+            let (mut runtime, context, _keys) =
+                authenticated_network_runtime(&directory, RuntimeQueueConfig::new(8, 1, 1));
+            let source_tag = runtime.round_tag();
+            let rebound = EventTag::new(
+                source_tag.height(),
+                source_tag.view() + 1,
+                Generation::new(source_tag.generation().get() + 1),
+            );
+            let manifest = runtime_manifest(&context, 0x8D);
+            observe_enter_view_for_test(&mut runtime, source_tag, rebound, &manifest);
+            let mut conflicting = manifest.clone();
+            conflicting.chunk_hashes[0] = Hash::new(b"conflicting rebound chunk");
+            conflicting.chunk_root = Hash::new(b"conflicting rebound root");
+            runtime
+                .enqueue_body_available(source_tag, manifest.clone())
+                .expect("enqueue unique source owner");
+            runtime
+                .ingress
+                .enqueue_canonical_body_available(rebound, conflicting.clone())
+                .expect("test seam stages conflicting destination evidence");
+
+            assert_eq!(
+                runtime
+                    .rebind_body_available(source_tag, rebound, &manifest)
+                    .expect_err("conflicting destination evidence must fail closed"),
+                "Sumeragi v2 body completion has conflicting evidence or duplicate serialized owners"
+            );
+            assert!(runtime.fail_closed);
+            assert_eq!(runtime.queued_commands(), 2);
+            assert!(runtime.ingress.commands.iter().any(|queued| matches!(
+                &queued.command,
+                AdapterCommand::BodyAvailable { manifest: queued_manifest }
+                    if queued.tag == source_tag && queued_manifest == &manifest
+            )));
+            assert!(runtime.ingress.commands.iter().any(|queued| matches!(
+                &queued.command,
+                AdapterCommand::BodyAvailable { manifest: queued_manifest }
+                    if queued.tag == rebound && queued_manifest == &conflicting
+            )));
+            assert_eq!(
+                runtime
+                    .rebind_body_available(source_tag, rebound, &manifest)
+                    .expect_err("fail-closed runtime rejects a second conflicting rebind"),
+                "Sumeragi v2 runtime is fail-closed"
+            );
+            assert_eq!(
+                runtime.enqueue_application_completed(source_tag, manifest.subject),
+                Err(EnqueueError::FailClosed)
+            );
+            assert!(matches!(
+                runtime.step(Instant::now()),
+                Err(RuntimeError::FailClosed)
+            ));
+        }
+
+        {
+            let directory = TempDir::new().expect("temporary destination-duplicate directory");
+            let (mut runtime, context, _keys) =
+                authenticated_network_runtime(&directory, RuntimeQueueConfig::new(8, 1, 1));
+            let source_tag = runtime.round_tag();
+            let rebound = EventTag::new(
+                source_tag.height(),
+                source_tag.view() + 1,
+                Generation::new(source_tag.generation().get() + 1),
+            );
+            let manifest = runtime_manifest(&context, 0x8E);
+            observe_enter_view_for_test(&mut runtime, source_tag, rebound, &manifest);
+            runtime
+                .enqueue_body_available(source_tag, manifest.clone())
+                .expect("enqueue unique source owner");
+            for _ in 0..2 {
+                runtime
+                    .ingress
+                    .enqueue_canonical_body_available(rebound, manifest.clone())
+                    .expect("test seam creates duplicate destination ownership");
+            }
+
+            assert_eq!(
+                runtime
+                    .rebind_body_available(source_tag, rebound, &manifest)
+                    .expect_err("duplicate destination ownership must fail closed"),
+                "Sumeragi v2 body completion has conflicting evidence or duplicate serialized owners"
+            );
+            assert!(runtime.fail_closed);
+            assert_eq!(runtime.queued_commands(), 3);
+            assert_eq!(
+                runtime
+                    .ingress
+                    .commands
+                    .iter()
+                    .filter(|queued| queued.tag == source_tag)
+                    .count(),
+                1,
+                "destination preflight must retain the source owner"
+            );
+            assert_eq!(
+                runtime
+                    .ingress
+                    .commands
+                    .iter()
+                    .filter(|queued| queued.tag == rebound)
+                    .count(),
+                2,
+                "destination preflight must not mutate duplicate owners"
+            );
+            assert_eq!(
+                runtime
+                    .rebind_body_available(source_tag, rebound, &manifest)
+                    .expect_err("fail-closed runtime rejects a second duplicate rebind"),
+                "Sumeragi v2 runtime is fail-closed"
+            );
+            assert_eq!(
+                runtime.enqueue_application_completed(source_tag, manifest.subject),
+                Err(EnqueueError::FailClosed)
+            );
+            assert!(matches!(
+                runtime.step(Instant::now()),
+                Err(RuntimeError::FailClosed)
+            ));
+        }
+    }
+
+    #[test]
+    fn duplicate_body_available_rebind_and_retirement_fail_closed_before_mutation() {
+        {
+            let directory = TempDir::new().expect("temporary duplicate-rebind directory");
+            let (mut runtime, context, _keys) =
+                authenticated_network_runtime(&directory, RuntimeQueueConfig::new(8, 1, 1));
+            let owner_tag = runtime.round_tag();
+            let manifest = runtime_manifest(&context, 0x8E);
+            for _ in 0..2 {
+                runtime
+                    .ingress
+                    .enqueue_canonical_body_available(owner_tag, manifest.clone())
+                    .expect("test seam creates duplicate ingress ownership");
+            }
+            let rebound = EventTag::new(
+                owner_tag.height(),
+                owner_tag.view() + 1,
+                Generation::new(owner_tag.generation().get() + 1),
+            );
+            observe_enter_view_for_test(&mut runtime, owner_tag, rebound, &manifest);
+
+            assert_eq!(
+                runtime
+                    .rebind_body_available(owner_tag, rebound, &manifest)
+                    .expect_err("duplicate ownership must prevent rebind"),
+                "Sumeragi v2 body completion has conflicting evidence or duplicate serialized owners"
+            );
+            assert!(runtime.fail_closed);
+            assert_eq!(runtime.queued_commands(), 2);
+            assert!(
+                runtime
+                    .ingress
+                    .commands
+                    .iter()
+                    .all(|queued| queued.tag == owner_tag),
+                "preflight must leave every duplicate owner at its original tag"
+            );
+            assert_eq!(
+                runtime
+                    .rebind_body_available(owner_tag, rebound, &manifest)
+                    .expect_err("fail-closed runtime must reject a second rebind"),
+                "Sumeragi v2 runtime is fail-closed"
+            );
+            assert_eq!(
+                runtime.enqueue_application_completed(owner_tag, manifest.subject),
+                Err(EnqueueError::FailClosed)
+            );
+            assert!(matches!(
+                runtime.step(Instant::now()),
+                Err(RuntimeError::FailClosed)
+            ));
+        }
+
+        {
+            let directory = TempDir::new().expect("temporary duplicate-retirement directory");
+            let (mut runtime, context, _keys) =
+                authenticated_network_runtime(&directory, RuntimeQueueConfig::new(8, 1, 1));
+            let owner_tag = runtime.round_tag();
+            let manifest = runtime_manifest(&context, 0x8F);
+            for _ in 0..2 {
+                runtime
+                    .ingress
+                    .enqueue_canonical_body_available(owner_tag, manifest.clone())
+                    .expect("test seam creates duplicate ingress ownership");
+            }
+
+            assert_eq!(
+                runtime
+                    .retire_body_available(owner_tag, &manifest)
+                    .expect_err("duplicate ownership must prevent retirement"),
+                "Sumeragi v2 body completion has conflicting evidence or duplicate serialized owners"
+            );
+            assert!(runtime.fail_closed);
+            assert_eq!(
+                runtime.queued_commands(),
+                2,
+                "preflight must not mutate duplicate serialized owners"
+            );
+            assert_eq!(
+                runtime
+                    .retire_body_available(owner_tag, &manifest)
+                    .expect_err("fail-closed runtime must reject a second retirement"),
+                "Sumeragi v2 runtime is fail-closed"
+            );
+            assert_eq!(
+                runtime.enqueue_application_completed(owner_tag, manifest.subject),
+                Err(EnqueueError::FailClosed)
+            );
+            assert!(matches!(
+                runtime.step(Instant::now()),
+                Err(RuntimeError::FailClosed)
+            ));
+        }
+    }
+
+    #[test]
+    fn conflicting_body_pipeline_evidence_fails_closed_before_body_available_pruning() {
+        let body_directory = TempDir::new().expect("temporary body evidence directory");
+        let (mut body_runtime, context, keys) =
+            authenticated_network_runtime(&body_directory, RuntimeQueueConfig::new(8, 1, 1));
+        let owner_tag = body_runtime.round_tag();
+        let proposal = signed_runtime_proposal(&context, &keys, 0x95);
+        let manifest = match &proposal.payload {
+            wire::ConsensusMessageV2Payload::Proposal(proposal) => proposal.manifest.clone(),
+            _ => unreachable!("fixture is a proposal"),
+        };
+        body_runtime
+            .enqueue_network(proposal)
+            .expect("enqueue the exact authenticated proposal");
+        body_runtime
+            .enqueue_body_available(owner_tag, manifest.clone())
+            .expect("enqueue the first canonical body completion");
+        assert_eq!(body_runtime.queued_commands(), 2);
+
+        let mut conflicting_manifest = manifest.clone();
+        conflicting_manifest.chunk_hashes[0] = Hash::new(b"conflicting completion chunk");
+        conflicting_manifest.chunk_root = Hash::new(b"conflicting completion root");
+        assert_eq!(
+            body_runtime.enqueue_body_available(owner_tag, conflicting_manifest),
+            Err(EnqueueError::DuplicateCompletionOwnership)
+        );
+        assert!(body_runtime.fail_closed);
+        assert_eq!(
+            body_runtime.queued_commands(),
+            2,
+            "ownership must fail before a conflicting completion prunes the exact proposal"
+        );
+        assert!(body_runtime.ingress.commands.iter().any(|queued| matches!(
+            &queued.command,
+            AdapterCommand::Authenticated(authenticated)
+                if matches!(
+                    authenticated.payload(),
+                    wire::ConsensusMessageV2Payload::Proposal(proposal)
+                        if proposal.manifest == manifest
+                )
+        )));
+        assert_eq!(
+            body_runtime.enqueue_body_available(owner_tag, manifest),
+            Err(EnqueueError::FailClosed)
+        );
+
+        let stored_directory = TempDir::new().expect("temporary durable evidence directory");
+        let (mut stored_runtime, context, _keys) =
+            authenticated_network_runtime(&stored_directory, RuntimeQueueConfig::new(8, 1, 1));
+        let owner_tag = stored_runtime.round_tag();
+        let manifest = runtime_manifest(&context, 0x96);
+        let exact_receipt = DurableBodyReceipt::for_test(
+            context.id(),
+            manifest.round,
+            manifest.subject,
+            HashOf::new(&manifest),
+        );
+        let mut other_manifest = manifest.clone();
+        other_manifest.chunk_hashes[0] = Hash::new(b"different durable receipt chunk");
+        other_manifest.chunk_root = Hash::new(b"different durable receipt root");
+        let conflicting_receipt = DurableBodyReceipt::for_test(
+            context.id(),
+            manifest.round,
+            manifest.subject,
+            HashOf::new(&other_manifest),
+        );
+        stored_runtime
+            .enqueue_body_stored(owner_tag, manifest.round, manifest.subject, exact_receipt)
+            .expect("enqueue exact durable receipt");
+        assert_eq!(
+            stored_runtime.enqueue_body_stored(
+                owner_tag,
+                manifest.round,
+                manifest.subject,
+                conflicting_receipt,
+            ),
+            Err(EnqueueError::DuplicateCompletionOwnership)
+        );
+        assert!(stored_runtime.fail_closed);
+
+        let validation_directory = TempDir::new().expect("temporary validation polarity directory");
+        let (mut validation_runtime, context, _keys) =
+            authenticated_network_runtime(&validation_directory, RuntimeQueueConfig::new(8, 1, 1));
+        let owner_tag = validation_runtime.round_tag();
+        let manifest = runtime_manifest(&context, 0x97);
+        let durable = DurableBodyReceipt::for_test(
+            context.id(),
+            manifest.round,
+            manifest.subject,
+            HashOf::new(&manifest),
+        );
+        validation_runtime
+            .enqueue_validation_succeeded(
+                owner_tag,
+                manifest.round,
+                manifest.subject,
+                ValidatedBodyReceipt::for_test(durable),
+            )
+            .expect("enqueue validation success");
+        assert_eq!(
+            validation_runtime.enqueue_validation_failed(
+                owner_tag,
+                manifest.round,
+                manifest.subject,
+            ),
+            Err(EnqueueError::DuplicateCompletionOwnership),
+            "opposite validation polarity is conflicting evidence"
+        );
+        assert!(validation_runtime.fail_closed);
+
+        let deferred_failure_directory =
+            TempDir::new().expect("temporary deferred validation-failure directory");
+        let (mut deferred_failure_runtime, context, _keys) = authenticated_network_runtime(
+            &deferred_failure_directory,
+            RuntimeQueueConfig::new(8, 1, 1),
+        );
+        let owner_tag = deferred_failure_runtime.round_tag();
+        let manifest = runtime_manifest(&context, 0x9B);
+        deferred_failure_runtime
+            .driver
+            .defer_body_pipeline_stage_for_test(
+                owner_tag,
+                &manifest,
+                DeferredBodyPipelineStageForTest::ValidationFailed,
+            )
+            .expect("stage Busy-deferred validation failure");
+        let durable = DurableBodyReceipt::for_test(
+            context.id(),
+            manifest.round,
+            manifest.subject,
+            HashOf::new(&manifest),
+        );
+        assert_eq!(
+            deferred_failure_runtime.enqueue_validation_succeeded(
+                owner_tag,
+                manifest.round,
+                manifest.subject,
+                ValidatedBodyReceipt::for_test(durable),
+            ),
+            Err(EnqueueError::DuplicateCompletionOwnership),
+            "Busy-deferred failure cannot coalesce an incoming success"
+        );
+        assert!(deferred_failure_runtime.fail_closed);
+
+        let deferred_success_directory =
+            TempDir::new().expect("temporary deferred validation-success directory");
+        let (mut deferred_success_runtime, context, _keys) = authenticated_network_runtime(
+            &deferred_success_directory,
+            RuntimeQueueConfig::new(8, 1, 1),
+        );
+        let owner_tag = deferred_success_runtime.round_tag();
+        let manifest = runtime_manifest(&context, 0x9C);
+        deferred_success_runtime
+            .driver
+            .defer_body_pipeline_stage_for_test(
+                owner_tag,
+                &manifest,
+                DeferredBodyPipelineStageForTest::ValidationSucceeded,
+            )
+            .expect("stage Busy-deferred validation success");
+        assert_eq!(
+            deferred_success_runtime.enqueue_validation_failed(
+                owner_tag,
+                manifest.round,
+                manifest.subject,
+            ),
+            Err(EnqueueError::DuplicateCompletionOwnership),
+            "Busy-deferred success cannot coalesce an incoming failure"
+        );
+        assert!(deferred_success_runtime.fail_closed);
+    }
+
+    #[test]
+    fn conflicting_local_and_validated_receipts_do_not_coalesce() {
+        let validation_directory =
+            TempDir::new().expect("temporary execution commitment directory");
+        let (mut validation_runtime, context, _keys) =
+            authenticated_network_runtime(&validation_directory, RuntimeQueueConfig::new(8, 1, 1));
+        let owner_tag = validation_runtime.round_tag();
+        let manifest = runtime_manifest(&context, 0x98);
+        let durable = DurableBodyReceipt::for_test(
+            context.id(),
+            manifest.round,
+            manifest.subject,
+            HashOf::new(&manifest),
+        );
+        let exact_validated = ValidatedBodyReceipt::for_test(durable.clone());
+        let conflicting_validated = ValidatedBodyReceipt::for_test_with_commitment(
+            durable,
+            wire::ExecutionCommitment::without_topups(
+                Hash::new(b"conflicting parent state"),
+                Hash::new(b"conflicting post state"),
+                Hash::new(b"conflicting ordinary writes"),
+                Hash::new(b"conflicting executed body"),
+            ),
+        );
+        validation_runtime
+            .enqueue_validation_succeeded(
+                owner_tag,
+                manifest.round,
+                manifest.subject,
+                exact_validated,
+            )
+            .expect("enqueue exact validated receipt");
+        assert_eq!(
+            validation_runtime.enqueue_validation_succeeded(
+                owner_tag,
+                manifest.round,
+                manifest.subject,
+                conflicting_validated,
+            ),
+            Err(EnqueueError::DuplicateCompletionOwnership)
+        );
+        assert!(validation_runtime.fail_closed);
+
+        let proposal_directory = TempDir::new().expect("temporary local proposal directory");
+        let (mut proposal_runtime, context, _keys) =
+            authenticated_network_runtime(&proposal_directory, RuntimeQueueConfig::new(8, 1, 1));
+        let owner_tag = proposal_runtime.round_tag();
+        let manifest = runtime_manifest(&context, 0x99);
+        let durable = DurableBodyReceipt::for_test(
+            context.id(),
+            manifest.round,
+            manifest.subject,
+            HashOf::new(&manifest),
+        );
+        let validated = ValidatedBodyReceipt::for_test(durable.clone());
+        proposal_runtime
+            .enqueue_local_proposal(owner_tag, manifest.clone(), durable, validated)
+            .expect("enqueue exact local proposal completion");
+
+        let mut conflicting_manifest = manifest.clone();
+        conflicting_manifest.chunk_hashes[0] = Hash::new(b"conflicting local proposal chunk");
+        conflicting_manifest.chunk_root = Hash::new(b"conflicting local proposal root");
+        let conflicting_durable = DurableBodyReceipt::for_test(
+            context.id(),
+            conflicting_manifest.round,
+            conflicting_manifest.subject,
+            HashOf::new(&conflicting_manifest),
+        );
+        let conflicting_validated = ValidatedBodyReceipt::for_test(conflicting_durable.clone());
+        assert_eq!(
+            proposal_runtime.enqueue_local_proposal(
+                owner_tag,
+                conflicting_manifest,
+                conflicting_durable,
+                conflicting_validated,
+            ),
+            Err(EnqueueError::DuplicateCompletionOwnership)
+        );
+        assert!(proposal_runtime.fail_closed);
+    }
+
+    #[test]
+    fn production_busy_transfer_retains_exact_validation_evidence_for_retry_and_cleanup() {
+        let directory = TempDir::new().expect("temporary production Busy-transfer directory");
+        let (mut runtime, context, keys) = authenticated_network_runtime_with_local_validator(
+            &directory,
+            RuntimeQueueConfig::new(8, 1, 1),
+            Some(0),
+        );
+        let now = Instant::now();
+        runtime
+            .arm_live_clocks(now)
+            .expect("arm runtime for production dispatch");
+        runtime
+            .enqueue_network(signed_runtime_proposal(&context, &keys, 0x9A))
+            .expect("enqueue authenticated proposal");
+        let proposal_effects = match runtime.step(now).expect("dispatch proposal") {
+            RuntimeStep::Advanced(effects) => effects,
+            RuntimeStep::Idle => panic!("proposal dispatch unexpectedly idle"),
+        };
+        let (tag, manifest) = match proposal_effects.as_slice() {
+            [
+                AdapterEffect::FetchBody {
+                    tag,
+                    manifest: Some(manifest),
+                    ..
+                },
+            ] => (*tag, manifest.clone()),
+            effects => panic!("unexpected proposal effects: {effects:?}"),
+        };
+
+        runtime
+            .enqueue_body_available(tag, manifest.clone())
+            .expect("enqueue body reconstruction completion");
+        assert!(matches!(
+            runtime.step(now).expect("dispatch body reconstruction"),
+            RuntimeStep::Advanced(ref effects)
+                if matches!(effects.as_slice(), [AdapterEffect::StoreBody { .. }])
+        ));
+        let durable = DurableBodyReceipt::for_test(
+            context.id(),
+            manifest.round,
+            manifest.subject,
+            HashOf::new(&manifest),
+        );
+        runtime
+            .enqueue_body_stored(tag, manifest.round, manifest.subject, durable.clone())
+            .expect("enqueue durable-store completion");
+        assert!(matches!(
+            runtime.step(now).expect("dispatch durable-store completion"),
+            RuntimeStep::Advanced(ref effects)
+                if matches!(effects.as_slice(), [AdapterEffect::ValidateBody { .. }])
+        ));
+        let validated = ValidatedBodyReceipt::for_test(durable);
+        runtime
+            .enqueue_validation_succeeded(tag, manifest.round, manifest.subject, validated.clone())
+            .expect("enqueue validation completion");
+        assert!(matches!(
+            runtime.step(now).expect("dispatch validation completion"),
+            RuntimeStep::Advanced(ref effects)
+                if matches!(effects.as_slice(), [AdapterEffect::Sign { .. }])
+        ));
+
+        runtime
+            .enqueue_validation_succeeded(tag, manifest.round, manifest.subject, validated.clone())
+            .expect("enqueue validation retry behind the signer fence");
+        assert!(matches!(
+            runtime.step(now).expect("transfer retry to Busy-deferred ownership"),
+            RuntimeStep::Advanced(ref effects) if effects.is_empty()
+        ));
+        assert_eq!(runtime.queued_commands(), 0);
+        runtime
+            .enqueue_validation_succeeded(tag, manifest.round, manifest.subject, validated)
+            .expect("exact retry coalesces with real Busy-deferred evidence");
+        assert_eq!(runtime.queued_commands(), 0);
+        assert_eq!(
+            runtime
+                .retire_body_pipeline_completions(tag, manifest.round, manifest.subject)
+                .expect("decision cleanup sees one exact Busy-deferred owner"),
+            RetiredBodyPipelineCompletions {
+                body_available: 0,
+                body_stored: 0,
+                validation: 1,
+                local_proposal: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn body_pipeline_retirement_spans_ingress_and_busy_deferred_owners_and_rejects_duplicates() {
+        let directory = TempDir::new().expect("temporary body-pipeline retirement directory");
+        let (mut runtime, context, _keys) =
+            authenticated_network_runtime(&directory, RuntimeQueueConfig::new(8, 1, 1));
+        let owner_tag = runtime.round_tag();
+        let receipts = |manifest: &wire::PayloadManifest| {
+            let durable = DurableBodyReceipt::for_test(
+                context.id(),
+                manifest.round,
+                manifest.subject,
+                HashOf::new(manifest),
+            );
+            let validated = ValidatedBodyReceipt::for_test(durable.clone());
+            (durable, validated)
+        };
+        let three_stages = RetiredBodyPipelineCompletions {
+            body_available: 0,
+            body_stored: 1,
+            validation: 1,
+            local_proposal: 1,
+        };
+        let validation_only = RetiredBodyPipelineCompletions {
+            body_available: 0,
+            body_stored: 0,
+            validation: 1,
+            local_proposal: 0,
+        };
+
+        let ingress_manifest = runtime_manifest(&context, 0xA1);
+        let (durable, validated) = receipts(&ingress_manifest);
+        runtime
+            .enqueue_body_stored(
+                owner_tag,
+                ingress_manifest.round,
+                ingress_manifest.subject,
+                durable.clone(),
+            )
+            .expect("enqueue ingress BodyStored owner");
+        runtime
+            .enqueue_validation_succeeded(
+                owner_tag,
+                ingress_manifest.round,
+                ingress_manifest.subject,
+                validated.clone(),
+            )
+            .expect("enqueue ingress validation-success owner");
+        runtime
+            .enqueue_local_proposal(owner_tag, ingress_manifest.clone(), durable, validated)
+            .expect("enqueue ingress LocalProposalReady owner");
+        assert_eq!(
+            runtime
+                .retire_body_pipeline_completions(
+                    owner_tag,
+                    ingress_manifest.round,
+                    ingress_manifest.subject,
+                )
+                .expect("retire ingress body pipeline"),
+            three_stages
+        );
+
+        let ingress_failure_manifest = runtime_manifest(&context, 0xA2);
+        runtime
+            .enqueue_validation_failed(
+                owner_tag,
+                ingress_failure_manifest.round,
+                ingress_failure_manifest.subject,
+            )
+            .expect("enqueue ingress validation-failure owner");
+        assert_eq!(
+            runtime
+                .retire_body_pipeline_completions(
+                    owner_tag,
+                    ingress_failure_manifest.round,
+                    ingress_failure_manifest.subject,
+                )
+                .expect("retire ingress validation failure"),
+            validation_only
+        );
+
+        let deferred_manifest = runtime_manifest(&context, 0xB1);
+        for stage in [
+            DeferredBodyPipelineStageForTest::BodyStored,
+            DeferredBodyPipelineStageForTest::ValidationSucceeded,
+            DeferredBodyPipelineStageForTest::LocalProposalReady,
+        ] {
+            runtime
+                .driver
+                .defer_body_pipeline_stage_for_test(owner_tag, &deferred_manifest, stage)
+                .expect("stage Busy-deferred body completion");
+        }
+        assert_eq!(
+            runtime
+                .retire_body_pipeline_completions(
+                    owner_tag,
+                    deferred_manifest.round,
+                    deferred_manifest.subject,
+                )
+                .expect("retire Busy-deferred body pipeline"),
+            three_stages
+        );
+
+        let deferred_failure_manifest = runtime_manifest(&context, 0xB2);
+        runtime
+            .driver
+            .defer_body_pipeline_stage_for_test(
+                owner_tag,
+                &deferred_failure_manifest,
+                DeferredBodyPipelineStageForTest::ValidationFailed,
+            )
+            .expect("stage Busy-deferred validation failure");
+        assert_eq!(
+            runtime
+                .retire_body_pipeline_completions(
+                    owner_tag,
+                    deferred_failure_manifest.round,
+                    deferred_failure_manifest.subject,
+                )
+                .expect("retire Busy-deferred validation failure"),
+            validation_only
+        );
+
+        let duplicate_body_stored = runtime_manifest(&context, 0xC1);
+        let (durable, _) = receipts(&duplicate_body_stored);
+        runtime
+            .enqueue_body_stored(
+                owner_tag,
+                duplicate_body_stored.round,
+                duplicate_body_stored.subject,
+                durable,
+            )
+            .expect("enqueue duplicate ingress BodyStored owner");
+        runtime
+            .driver
+            .defer_body_pipeline_stage_for_test(
+                owner_tag,
+                &duplicate_body_stored,
+                DeferredBodyPipelineStageForTest::BodyStored,
+            )
+            .expect("stage duplicate deferred BodyStored owner");
+        let stored_only = RetiredBodyPipelineCompletions {
+            body_available: 0,
+            body_stored: 1,
+            validation: 0,
+            local_proposal: 0,
+        };
+        assert_eq!(runtime.queued_commands(), 1);
+        assert_eq!(
+            runtime.ingress.body_pipeline_completion_counts(
+                owner_tag,
+                duplicate_body_stored.round,
+                duplicate_body_stored.subject,
+            ),
+            stored_only
+        );
+        assert_eq!(
+            runtime.driver.deferred_body_pipeline_completion_counts(
+                owner_tag,
+                duplicate_body_stored.round,
+                duplicate_body_stored.subject,
+            ),
+            stored_only
+        );
+        assert_eq!(
+            runtime
+                .retire_body_pipeline_completions(
+                    owner_tag,
+                    duplicate_body_stored.round,
+                    duplicate_body_stored.subject,
+                )
+                .expect_err("duplicate BodyStored ownership must fail"),
+            "Sumeragi v2 body pipeline has duplicate exact serialized completion stages"
+        );
+        assert!(runtime.fail_closed);
+        assert_eq!(runtime.queued_commands(), 1);
+        assert_eq!(
+            runtime.ingress.body_pipeline_completion_counts(
+                owner_tag,
+                duplicate_body_stored.round,
+                duplicate_body_stored.subject,
+            ),
+            stored_only,
+            "preflight must retain the ingress owner"
+        );
+        assert_eq!(
+            runtime.driver.deferred_body_pipeline_completion_counts(
+                owner_tag,
+                duplicate_body_stored.round,
+                duplicate_body_stored.subject,
+            ),
+            stored_only,
+            "preflight must retain the Busy-deferred owner"
+        );
+        assert_eq!(
+            runtime
+                .retire_body_pipeline_completions(
+                    owner_tag,
+                    duplicate_body_stored.round,
+                    duplicate_body_stored.subject,
+                )
+                .expect_err("fail-closed runtime must reject a second pipeline retirement"),
+            "Sumeragi v2 runtime is fail-closed"
+        );
+        assert_eq!(
+            runtime.enqueue_application_completed(owner_tag, duplicate_body_stored.subject,),
+            Err(EnqueueError::FailClosed)
+        );
+        assert!(matches!(
+            runtime.step(Instant::now()),
+            Err(RuntimeError::FailClosed)
+        ));
+    }
+
+    #[test]
+    fn decision_retires_proposal_owners_but_preserves_body_and_application_completions() {
+        let directory = TempDir::new().expect("temporary decision-retirement directory");
+        let (mut runtime, context, keys) =
+            authenticated_network_runtime(&directory, RuntimeQueueConfig::new(12, 1, 1));
+        let owner_tag = runtime.round_tag();
+        let receipts = |manifest: &wire::PayloadManifest| {
+            let durable = DurableBodyReceipt::for_test(
+                context.id(),
+                manifest.round,
+                manifest.subject,
+                HashOf::new(manifest),
+            );
+            let validated = ValidatedBodyReceipt::for_test(durable.clone());
+            (durable, validated)
+        };
+
+        let decision_manifest = runtime_manifest(&context, 0xD0);
+        let (decision_durable, decision_validated) = receipts(&decision_manifest);
+        let decision_commitment = decision_validated.execution_commitment();
+        runtime
+            .enqueue_network(signed_runtime_proposal(&context, &keys, 0xD1))
+            .expect("enqueue authenticated proposal at decided height");
+        runtime
+            .enqueue_local_proposal(
+                owner_tag,
+                decision_manifest.clone(),
+                decision_durable.clone(),
+                decision_validated,
+            )
+            .expect("enqueue exact decided LocalProposalReady");
+        let other_local_manifest = runtime_manifest(&context, 0xD2);
+        let (other_durable, other_validated) = receipts(&other_local_manifest);
+        runtime
+            .enqueue_local_proposal(
+                owner_tag,
+                other_local_manifest.clone(),
+                other_durable,
+                other_validated,
+            )
+            .expect("enqueue another local proposal at decided height");
+        runtime
+            .enqueue_body_available(owner_tag, decision_manifest.clone())
+            .expect("enqueue body-recovery completion");
+        runtime
+            .enqueue_body_stored(
+                owner_tag,
+                decision_manifest.round,
+                decision_manifest.subject,
+                decision_durable,
+            )
+            .expect("enqueue body-store completion");
+        runtime
+            .enqueue_application_completed(owner_tag, decision_manifest.subject)
+            .expect("enqueue application completion");
+
+        let deferred_proposal = match signed_runtime_proposal(&context, &keys, 0xD3).payload {
+            wire::ConsensusMessageV2Payload::Proposal(proposal) => proposal,
+            _ => unreachable!("fixture is a proposal"),
+        };
+        runtime
+            .driver
+            .defer_authenticated_proposal_for_test(owner_tag, &deferred_proposal)
+            .expect("stage Busy-deferred authenticated proposal");
+        let deferred_local_manifest = runtime_manifest(&context, 0xD4);
+        runtime
+            .driver
+            .defer_body_pipeline_stage_for_test(
+                owner_tag,
+                &deferred_local_manifest,
+                DeferredBodyPipelineStageForTest::LocalProposalReady,
+            )
+            .expect("stage Busy-deferred LocalProposalReady");
+        let deferred_body_manifest = runtime_manifest(&context, 0xD5);
+        runtime
+            .driver
+            .defer_body_pipeline_stage_for_test(
+                owner_tag,
+                &deferred_body_manifest,
+                DeferredBodyPipelineStageForTest::BodyStored,
+            )
+            .expect("stage Busy-deferred body-store completion");
+        assert_eq!(
+            runtime
+                .driver
+                .status()
+                .expect("status before decision retirement")
+                .liveness
+                .work
+                .candidate,
+            wire::SumeragiV2LocalWorkStage::Complete
+        );
+
+        assert_eq!(
+            runtime
+                .retire_proposal_work_after_decision(
+                    decision_manifest.round,
+                    decision_manifest.subject,
+                    decision_commitment,
+                )
+                .expect("retire proposal work after decision"),
+            DecisionProposalRetirement::new(Some(owner_tag), 0),
+            "the exact current-tag LocalProposalReady owner must remain queued"
+        );
+        assert_eq!(runtime.queued_commands(), 4);
+        assert!(runtime.ingress.commands.iter().all(|queued| !matches!(
+            &queued.command,
+            AdapterCommand::Authenticated(authenticated)
+                if matches!(
+                    authenticated.payload(),
+                    wire::ConsensusMessageV2Payload::Proposal(_)
+                )
+        )));
+        assert!(runtime.ingress.commands.iter().any(|queued| matches!(
+            &queued.command,
+            AdapterCommand::LocalProposalReady { manifest, .. }
+                if manifest == &decision_manifest
+        )));
+        assert!(
+            runtime
+                .ingress
+                .commands
+                .iter()
+                .any(|queued| matches!(&queued.command, AdapterCommand::BodyAvailable { .. }))
+        );
+        assert!(
+            runtime
+                .ingress
+                .commands
+                .iter()
+                .any(|queued| matches!(&queued.command, AdapterCommand::BodyStored { .. }))
+        );
+        assert!(
+            runtime
+                .ingress
+                .commands
+                .iter()
+                .any(|queued| matches!(&queued.command, AdapterCommand::ApplicationCompleted(_)))
+        );
+        assert_eq!(
+            runtime
+                .driver
+                .status()
+                .expect("status after decision retirement")
+                .liveness
+                .work
+                .candidate,
+            wire::SumeragiV2LocalWorkStage::Idle,
+            "decision retirement clears stale active proposal state"
+        );
+        let deferred_local_commitment = receipts(&deferred_local_manifest).1.execution_commitment();
+        assert_eq!(
+            runtime
+                .ingress
+                .decided_local_proposal_counts(
+                    owner_tag,
+                    deferred_local_manifest.round,
+                    deferred_local_manifest.subject,
+                    deferred_local_commitment,
+                )
+                .merge(runtime.driver.deferred_decided_local_proposal_counts(
+                    owner_tag,
+                    deferred_local_manifest.round,
+                    deferred_local_manifest.subject,
+                    deferred_local_commitment,
+                )),
+            DecisionLocalProposalCounts::default(),
+            "all nonmatching local proposal completions were retired"
+        );
+
+        assert_eq!(
+            runtime
+                .retire_body_pipeline_completions(
+                    owner_tag,
+                    decision_manifest.round,
+                    decision_manifest.subject,
+                )
+                .expect("body recovery remains queued after decision"),
+            RetiredBodyPipelineCompletions {
+                body_available: 1,
+                body_stored: 1,
+                validation: 0,
+                local_proposal: 1,
+            }
+        );
+        assert_eq!(
+            runtime
+                .retire_body_pipeline_completions(
+                    owner_tag,
+                    deferred_body_manifest.round,
+                    deferred_body_manifest.subject,
+                )
+                .expect("Busy-deferred body store remains queued after decision"),
+            RetiredBodyPipelineCompletions {
+                body_available: 0,
+                body_stored: 1,
+                validation: 0,
+                local_proposal: 0,
+            }
+        );
+        assert_eq!(runtime.queued_commands(), 1);
+        assert!(matches!(
+            runtime.ingress.commands.front().map(|queued| &queued.command),
+            Some(AdapterCommand::ApplicationCompleted(subject))
+                if *subject == decision_manifest.subject
+        ));
+
+        let duplicate_manifest = runtime_manifest(&context, 0xD6);
+        let (duplicate_durable, duplicate_validated) = receipts(&duplicate_manifest);
+        let duplicate_commitment = duplicate_validated.execution_commitment();
+        runtime
+            .enqueue_local_proposal(
+                owner_tag,
+                duplicate_manifest.clone(),
+                duplicate_durable,
+                duplicate_validated,
+            )
+            .expect("enqueue exact local completion in runtime ingress");
+        runtime
+            .driver
+            .defer_body_pipeline_stage_for_test(
+                owner_tag,
+                &duplicate_manifest,
+                DeferredBodyPipelineStageForTest::LocalProposalReady,
+            )
+            .expect("stage duplicate exact local completion in Busy-deferred lane");
+        assert_eq!(runtime.queued_commands(), 2);
+        assert_eq!(
+            runtime
+                .ingress
+                .decided_local_proposal_counts(
+                    owner_tag,
+                    duplicate_manifest.round,
+                    duplicate_manifest.subject,
+                    duplicate_commitment,
+                )
+                .retainable(),
+            1,
+        );
+        assert_eq!(
+            runtime
+                .driver
+                .deferred_decided_local_proposal_counts(
+                    owner_tag,
+                    duplicate_manifest.round,
+                    duplicate_manifest.subject,
+                    duplicate_commitment,
+                )
+                .retainable(),
+            1,
+        );
+        assert_eq!(
+            runtime
+                .retire_proposal_work_after_decision(
+                    duplicate_manifest.round,
+                    duplicate_manifest.subject,
+                    duplicate_commitment,
+                )
+                .expect_err("duplicate exact local completion ownership must fail"),
+            "Sumeragi v2 decided local proposal completion has duplicate serialized owners"
+        );
+        assert!(runtime.fail_closed);
+        assert_eq!(
+            runtime.queued_commands(),
+            2,
+            "preflight must retain the application and ingress proposal owners"
+        );
+        assert_eq!(
+            runtime
+                .ingress
+                .decided_local_proposal_counts(
+                    owner_tag,
+                    duplicate_manifest.round,
+                    duplicate_manifest.subject,
+                    duplicate_commitment,
+                )
+                .retainable(),
+            1,
+        );
+        assert_eq!(
+            runtime
+                .driver
+                .deferred_decided_local_proposal_counts(
+                    owner_tag,
+                    duplicate_manifest.round,
+                    duplicate_manifest.subject,
+                    duplicate_commitment,
+                )
+                .retainable(),
+            1,
+            "preflight must retain the Busy-deferred proposal owner"
+        );
+        assert_eq!(
+            runtime
+                .retire_proposal_work_after_decision(
+                    duplicate_manifest.round,
+                    duplicate_manifest.subject,
+                    duplicate_commitment,
+                )
+                .expect_err("fail-closed runtime must reject a second proposal retirement"),
+            "Sumeragi v2 runtime is fail-closed"
+        );
+        assert_eq!(
+            runtime.enqueue_signature(owner_tag, vec![0xD6]),
+            Err(EnqueueError::FailClosed)
+        );
+        assert!(matches!(
+            runtime.step(Instant::now()),
+            Err(RuntimeError::FailClosed)
+        ));
+    }
+
+    #[test]
+    fn decision_retires_stale_local_completion_for_durable_recovery() {
+        let directory = TempDir::new().expect("temporary stale-decision directory");
+        let (mut runtime, context, _keys) =
+            authenticated_network_runtime(&directory, RuntimeQueueConfig::new(8, 1, 1));
+        let stale_tag = runtime.round_tag();
+        let manifest = runtime_manifest(&context, 0xD7);
+        let durable = DurableBodyReceipt::for_test(
+            context.id(),
+            manifest.round,
+            manifest.subject,
+            HashOf::new(&manifest),
+        );
+        let validated = ValidatedBodyReceipt::for_test(durable.clone());
+        let commitment = validated.execution_commitment();
+        runtime
+            .enqueue_local_proposal(stale_tag, manifest.clone(), durable, validated)
+            .expect("enqueue the old reducer incarnation's completion");
+
+        runtime.round_tag = EventTag::new(
+            stale_tag.height(),
+            stale_tag.view().saturating_add(1),
+            Generation::new(stale_tag.generation().get().saturating_add(1)),
+        );
+        assert_eq!(
+            runtime
+                .retire_proposal_work_after_decision(manifest.round, manifest.subject, commitment,)
+                .expect("retire stale exact completion after certified view change"),
+            DecisionProposalRetirement::new(None, 1)
+        );
+        assert_eq!(runtime.queued_commands(), 0);
+        assert!(!runtime.fail_closed);
+        runtime
+            .enqueue_body_available(runtime.round_tag(), manifest)
+            .expect("durable reconstruction can claim the current reducer tag");
+    }
+
+    #[test]
+    fn progress_cursor_decision_preserves_outer_ingress_completion_until_apply() {
+        let directory = TempDir::new().expect("temporary Decision-race directory");
+        let (mut runtime, context, _keys) =
+            authenticated_network_runtime(&directory, RuntimeQueueConfig::new(8, 1, 1));
+        let owner_tag = runtime.round_tag();
+        let manifest = runtime_manifest(&context, 0xD9);
+        let durable = DurableBodyReceipt::for_test(
+            context.id(),
+            manifest.round,
+            manifest.subject,
+            HashOf::new(&manifest),
+        );
+        let validated = ValidatedBodyReceipt::for_test(durable.clone());
+        let commitment = validated.execution_commitment();
+        runtime
+            .enqueue_local_proposal(
+                owner_tag,
+                manifest.clone(),
+                durable.clone(),
+                validated.clone(),
+            )
+            .expect("enqueue trusted completion in the outer runtime ingress");
+        runtime
+            .enqueue_local_proposal(owner_tag, manifest.clone(), durable, validated)
+            .expect("an exact trusted retry coalesces with its existing owner");
+        assert_eq!(runtime.queued_commands(), 1);
+        let decision = wire::QuorumCertificate {
+            round: manifest.round,
+            phase: wire::GlobalPhase::Commit,
+            subject: manifest.subject,
+            execution_commitment: commitment,
+            signers: vec![0, 1, 2],
+            aggregate_signature: vec![0xD9; 96],
+        };
+        runtime
+            .ingress
+            .enqueue_authenticated(
+                owner_tag,
+                CommandClass::Progress,
+                AuthenticatedConsensusMessage::for_test(wire::ConsensusMessageV2::new(
+                    wire::ConsensusMessageV2Payload::QuorumCertificate(decision.clone()),
+                )),
+            )
+            .expect("enqueue the CommitQC progress item");
+        runtime.ingress.next_class = CommandClass::Progress;
+        let now = Instant::now();
+        runtime.arm_live_clocks(now).expect("arm runtime clocks");
+
+        let RuntimeStep::Advanced(decision_effects) = runtime
+            .step(now)
+            .expect("Progress cursor installs Decision")
+        else {
+            panic!("queued CommitQC must advance the reducer")
+        };
+        assert!(matches!(
+            decision_effects.as_slice(),
+            [AdapterEffect::FetchBody {
+                subject,
+                certificate: Some(certificate),
+                ..
+            }] if *subject == manifest.subject && certificate == &decision
+        ));
+        assert_eq!(runtime.queued_commands(), 1);
+
+        assert_eq!(
+            runtime
+                .retire_proposal_work_after_decision(manifest.round, manifest.subject, commitment,)
+                .expect("Decision cleanup preserves the exact completion"),
+            DecisionProposalRetirement::new(Some(owner_tag), 0)
+        );
+        let RuntimeStep::Advanced(completion_effects) = runtime
+            .step(now)
+            .expect("fair completion service reaches the reducer")
+        else {
+            panic!("retained completion must advance the reducer")
+        };
+        assert!(matches!(
+            completion_effects.as_slice(),
+            [AdapterEffect::Apply {
+                subject,
+                certificate,
+                ..
+            }] if *subject == manifest.subject && certificate == &decision
+        ));
+        assert!(!completion_effects.iter().any(|effect| matches!(
+            effect,
+            AdapterEffect::FetchBody { .. } | AdapterEffect::StoreBody { .. }
+        )));
+        assert_eq!(runtime.queued_commands(), 0);
+    }
+
+    #[test]
+    fn decision_cleanup_preserves_unique_busy_deferred_completion() {
+        let directory = TempDir::new().expect("temporary Busy-deferred Decision directory");
+        let (mut runtime, context, _keys) =
+            authenticated_network_runtime(&directory, RuntimeQueueConfig::new(8, 1, 1));
+        let owner_tag = runtime.round_tag();
+        let manifest = runtime_manifest(&context, 0xDA);
+        let durable = DurableBodyReceipt::for_test(
+            context.id(),
+            manifest.round,
+            manifest.subject,
+            HashOf::new(&manifest),
+        );
+        let commitment = ValidatedBodyReceipt::for_test(durable).execution_commitment();
+        runtime
+            .driver
+            .defer_body_pipeline_stage_for_test(
+                owner_tag,
+                &manifest,
+                DeferredBodyPipelineStageForTest::LocalProposalReady,
+            )
+            .expect("stage exact Busy-deferred completion");
+
+        assert_eq!(
+            runtime
+                .retire_proposal_work_after_decision(manifest.round, manifest.subject, commitment,)
+                .expect("retain exact Busy-deferred completion"),
+            DecisionProposalRetirement::new(Some(owner_tag), 0)
+        );
+        assert_eq!(runtime.queued_commands(), 0);
+        assert_eq!(
+            runtime
+                .driver
+                .deferred_decided_local_proposal_counts(
+                    owner_tag,
+                    manifest.round,
+                    manifest.subject,
+                    commitment,
+                )
+                .retainable(),
+            1
+        );
+    }
+
+    #[test]
+    fn decision_commitment_mismatch_fails_closed_before_retirement() {
+        let directory = TempDir::new().expect("temporary mismatched-decision directory");
+        let (mut runtime, context, _keys) =
+            authenticated_network_runtime(&directory, RuntimeQueueConfig::new(8, 1, 1));
+        let owner_tag = runtime.round_tag();
+        let manifest = runtime_manifest(&context, 0xD8);
+        let durable = DurableBodyReceipt::for_test(
+            context.id(),
+            manifest.round,
+            manifest.subject,
+            HashOf::new(&manifest),
+        );
+        let validated = ValidatedBodyReceipt::for_test(durable.clone());
+        let conflicting_commitment = wire::ExecutionCommitment::without_topups(
+            Hash::new(b"decision mismatch parent state"),
+            Hash::new(b"decision mismatch post state"),
+            Hash::new(b"decision mismatch ordinary writes"),
+            Hash::new(b"decision mismatch executed block"),
+        );
+        assert_ne!(validated.execution_commitment(), conflicting_commitment);
+        runtime
+            .enqueue_local_proposal(owner_tag, manifest.clone(), durable, validated)
+            .expect("enqueue exact trusted completion");
+
+        assert_eq!(
+            runtime
+                .retire_proposal_work_after_decision(
+                    manifest.round,
+                    manifest.subject,
+                    conflicting_commitment,
+                )
+                .expect_err("Decision commitment drift must fail closed"),
+            "Sumeragi v2 decided local proposal evidence conflicts with the durable Decision"
+        );
+        assert!(runtime.fail_closed);
+        assert_eq!(
+            runtime.queued_commands(),
+            1,
+            "conflict preflight must preserve the original evidence for diagnosis"
+        );
+        assert!(matches!(
+            runtime.ingress.commands.front().map(|queued| &queued.command),
+            Some(AdapterCommand::LocalProposalReady {
+                manifest: queued,
+                ..
+            }) if queued == &manifest
+        ));
+    }
+
+    #[test]
+    fn unbound_direct_vote_authentication_is_recoverable_and_becomes_admissible_after_validation() {
+        let directory = TempDir::new().expect("temporary unbound-vote directory");
+        let (mut runtime, context, keys) =
+            authenticated_network_runtime(&directory, RuntimeQueueConfig::new(8, 1, 1));
+        let manifest = runtime_manifest(&context, 0xD7);
+        let durable = DurableBodyReceipt::for_test(
+            context.id(),
+            manifest.round,
+            manifest.subject,
+            HashOf::new(&manifest),
+        );
+        let validated = ValidatedBodyReceipt::for_test(durable);
+        let mut vote = wire::Vote {
+            round: manifest.round,
+            phase: wire::GlobalPhase::Prepare,
+            subject: manifest.subject,
+            execution_commitment: validated.execution_commitment(),
+            signer: 0,
+            signature: Vec::new(),
+        };
+        vote.signature = Signature::new(
+            keys[usize::try_from(vote.signer).expect("small signer index")].private_key(),
+            &vote.signature_preimage(),
+        )
+        .payload()
+        .to_vec();
+        let signed_vote =
+            wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Vote(vote));
+
+        assert!(matches!(
+            runtime.enqueue_network(signed_vote.clone()),
+            Err(NetworkIngressError::Authentication(
+                AdapterError::MissingExecutionCommitment
+            ))
+        ));
+        assert_eq!(runtime.queued_commands(), 0);
+        assert!(
+            !runtime.fail_closed,
+            "recoverable authentication rejection must not poison the runtime"
+        );
+
+        runtime
+            .enqueue_network(signed_runtime_proposal(&context, &keys, 0xD8))
+            .expect("a subsequent valid proposal remains admissible");
+        assert_eq!(runtime.queued_commands(), 1);
+        assert!(!runtime.fail_closed);
+
+        runtime
+            .recover_validated_body(&manifest, &validated)
+            .expect("local validation establishes canonical commitment authority");
+        runtime
+            .enqueue_network(signed_vote)
+            .expect("the same signed canonical vote becomes admissible after validation");
+        assert_eq!(runtime.queued_commands(), 2);
+        assert!(!runtime.fail_closed);
     }
 
     #[test]

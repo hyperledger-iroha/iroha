@@ -38,6 +38,13 @@ public final class SumeragiV2WireFixtureTests {
               "commit_certificate_response"));
 
   @Test
+  public void unsafeProposalIgnoreReasonDecodesWireDiscriminantEleven() {
+    assertEquals(
+        SumeragiV2Wire.IgnoreReason.UNSAFE_PROPOSAL,
+        SumeragiV2Wire.IgnoreReason.decode(new byte[] {11, 0, 0, 0}));
+  }
+
+  @Test
   public void rustCanonicalMessageFixturesRoundtrip() throws Exception {
     Set<String> names = new HashSet<>();
     for (FixtureRow row : fixtureRows()) {
@@ -351,7 +358,7 @@ public final class SumeragiV2WireFixtureTests {
         decoded.liveness.outboundIntents.get(0).kind);
     assertEquals(SumeragiV2Wire.QueueKind.NETWORK_INGRESS,
         decoded.liveness.queues.get(0).queue);
-    assertEquals(SumeragiV2Wire.LivenessBlocker.COMMIT_QUORUM_MISSING,
+    assertEquals(SumeragiV2Wire.LivenessBlocker.LOCAL_CONTROL_PENDING,
         decoded.liveness.blocker);
 
     // The fifth struct field follows four fixed-width fields and is the

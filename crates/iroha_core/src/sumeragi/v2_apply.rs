@@ -716,11 +716,8 @@ impl V2ApplyService {
             .iter()
             .map(|entry| entry.validator.clone())
             .collect();
-        let state_events = state_block.apply_without_execution_with_commit_qc(
-            &committed_block,
-            commit_topology,
-            None,
-        );
+        let state_events = state_block
+            .apply_without_execution_with_verified_v2_finality(&committed_block, commit_topology);
         state_block.commit().map_err(|error| {
             V2ApplyError::committed_recovery_required("WSV publication after Kura commit", &error)
         })?;
@@ -1376,6 +1373,18 @@ mod tests {
                     .is_none(),
                 "Sumeragi v2 finality must not be projected into the legacy commit-QC store"
             );
+            assert!(
+                self.state
+                    .commit_roster_snapshot_for_block(self.context.height, self.body.hash())
+                    .is_none(),
+                "Sumeragi v2 finality must not populate the legacy commit-roster journal"
+            );
+            assert!(
+                self.kura
+                    .read_roster_metadata(self.context.height)
+                    .is_none(),
+                "Sumeragi v2 finality must not populate the legacy roster sidecar"
+            );
         }
     }
 
@@ -1485,6 +1494,15 @@ mod tests {
             nexus_fee_receipts: Vec::new(),
             native_amx_receipts: Vec::new(),
         };
+        let routing_plan = crate::queue::RoutingPlan::single(RoutingDecision::new(
+            reservation.lane_id,
+            reservation.dataspace_id,
+        ));
+        assert_eq!(
+            routing_plan.digest(),
+            reservation.routing_plan_digest,
+            "fixture routing plan must match the durable reservation"
+        );
         let execution = MergeLaneExecution {
             source_bundle: vec![1],
             source_bundle_hash: Hash::new(b"v2 reservation fixture source"),
@@ -1498,8 +1516,14 @@ mod tests {
             autonomous_payload_hash: Hash::new(b"v2 reservation fixture payload"),
             entrypoint_hashes,
             entrypoints: vec![entrypoint],
-            reservation_keys: vec![reservation.encode()],
-            routing_plans: vec![Vec::new()],
+            reservation_keys: vec![
+                norito::to_bytes(&reservation)
+                    .expect("fixture reservation key has canonical framed Norito bytes"),
+            ],
+            routing_plans: vec![
+                norito::to_bytes(&routing_plan)
+                    .expect("fixture routing plan has canonical framed Norito bytes"),
+            ],
             native_amx_receipts: vec![None],
             result_hashes,
             results,
@@ -1731,6 +1755,62 @@ mod tests {
             .expect("repeat exact reservation finalization"),
             0,
             "the post-commit boundary must be idempotent"
+        );
+    });
+
+    v2_apply_test!(committed_merge_reservation_rejects_bare_norito, {
+        let fixture = ApplyFixture::new();
+        let transaction = fixture
+            .body
+            .external_transactions()
+            .next()
+            .expect("fixture transaction")
+            .clone();
+        let (events_sender, _events_receiver) = tokio::sync::broadcast::channel(8);
+        let queue = Queue::from_config(QueueConfig::default(), events_sender);
+        let journal_dir = tempfile::tempdir().expect("reservation journal directory");
+        queue
+            .install_lane_reservation_journal(
+                journal_dir.path().join("lane-reservations.norito"),
+                1024 * 1024,
+            )
+            .expect("install reservation journal");
+        let (reservation, entrypoint) =
+            reserve_transaction_for_test(fixture.state.as_ref(), &queue, transaction);
+        let mut entry = merge_entry_with_reservation(&fixture.context, entrypoint, reservation);
+        let encoded = &mut entry
+            .execution_batch
+            .as_mut()
+            .expect("fixture execution batch")
+            .lanes[0]
+            .reservation_keys[0];
+        let bare = reservation.encode();
+        assert_ne!(
+            *encoded, bare,
+            "framed and bare Norito must remain distinct"
+        );
+        *encoded = bare;
+        fixture.state.record_direct_committed_transactions(
+            [reservation.signed_transaction_hash],
+            NonZeroUsize::new(1).expect("committed height"),
+        );
+
+        let error = finalize_certified_merge_reservations(fixture.state.as_ref(), &queue, &entry)
+            .expect_err("bare reservation metadata must fail closed");
+        let message = match error {
+            V2ReservationLifecycleError::Merge(MergeLedgerCommitError::ExecutionBatchInvalid(
+                message,
+            )) => message,
+            unexpected => panic!("unexpected bare-reservation error: {unexpected}"),
+        };
+        assert!(
+            message.contains("framed Norito"),
+            "diagnostic should identify the required framing: {message}"
+        );
+        assert_eq!(
+            queue.live_lane_reservations(),
+            vec![reservation],
+            "malformed committed evidence must not consume queue ownership"
         );
     });
 
@@ -2396,10 +2476,18 @@ mod tests {
             let fixture = ApplyFixture::new();
             let mut store = fixture.reopen_body_store();
             fixture.kura.fail_next_wsv_checkpoint_write_for_tests();
-            assert!(matches!(
-                fixture.execute(&mut store),
-                Err(V2ApplyError::Kura(_))
-            ));
+            let error = fixture
+                .execute(&mut store)
+                .expect_err("checkpoint failure follows the irreversible commit boundary");
+            assert!(
+                matches!(
+                    &error,
+                    V2ApplyError::CommittedRecoveryRequired { stage, .. }
+                        if *stage == "post-apply metadata"
+                ),
+                "unexpected committed recovery classification: {error:?}"
+            );
+            assert!(error.requires_restart_recovery());
             assert_eq!(fixture.state.committed_height(), 1);
             assert_eq!(fixture.kura.exact_durable_blocks_count().unwrap(), 1);
             fixture.assert_no_post_apply_sidecars();
@@ -2486,10 +2574,18 @@ mod tests {
         let fixture = ApplyFixture::new();
         let mut store = fixture.reopen_body_store();
         fixture.kura.fail_next_commit_manifest_write_for_tests();
-        assert!(matches!(
-            fixture.execute(&mut store),
-            Err(V2ApplyError::Kura(_))
-        ));
+        let error = fixture
+            .execute(&mut store)
+            .expect_err("manifest failure follows the irreversible commit boundary");
+        assert!(
+            matches!(
+                &error,
+                V2ApplyError::CommittedRecoveryRequired { stage, .. }
+                    if *stage == "post-apply metadata"
+            ),
+            "unexpected committed recovery classification: {error:?}"
+        );
+        assert!(error.requires_restart_recovery());
         assert_eq!(fixture.state.committed_height(), 1);
         assert!(
             fixture
@@ -2523,10 +2619,18 @@ mod tests {
         let fixture = ApplyFixture::new();
         let mut store = fixture.reopen_body_store();
         fixture.kura.fail_next_v2_finality_write_for_tests();
-        assert!(matches!(
-            fixture.execute(&mut store),
-            Err(V2ApplyError::Kura(_))
-        ));
+        let error = fixture
+            .execute(&mut store)
+            .expect_err("finality failure follows the irreversible commit boundary");
+        assert!(
+            matches!(
+                &error,
+                V2ApplyError::CommittedRecoveryRequired { stage, .. }
+                    if *stage == "v2 finality artifact"
+            ),
+            "unexpected committed recovery classification: {error:?}"
+        );
+        assert!(error.requires_restart_recovery());
         assert_eq!(fixture.state.committed_height(), 1);
         assert!(
             fixture

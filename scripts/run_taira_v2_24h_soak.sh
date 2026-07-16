@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-readonly REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+readonly REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
 readonly TAIRA_SOAK_TEST="taira_public_localnet::taira_profile_24h_packet_impairment_and_restart_soak"
 
 usage() {
@@ -12,7 +12,8 @@ Run the ignored four-validator Taira-profile Sumeragi v2 production soak.
 The acceptance profile is fixed at 24 hours, 10% deterministic inbound and
 outbound packet loss, 5 TPS, and process/membership churn every five minutes.
 Profile overrides are intentionally unsupported so every successful run is
-comparable release evidence.
+comparable release evidence. The runner uses release-profile binaries and
+offline Cargo resolution; fetch the locked dependencies before launching it.
 USAGE
 }
 
@@ -49,31 +50,75 @@ cd "$REPO_ROOT"
 # Bind every compiled and retained artifact to the complete tracked/untracked
 # checkout state. A content-addressed target also prevents a stale candidate
 # from a different source tree from satisfying binary discovery.
-source_manifest_sha256="$(python3 scripts/compute_workspace_source_manifest.py)"
-readonly source_manifest_sha256
-if [[ ! "$source_manifest_sha256" =~ ^[0-9a-f]{64}$ ]]; then
+observed_source_manifest_sha256="$(
+  python3 scripts/compute_workspace_source_manifest.py --root "$REPO_ROOT"
+)"
+if [[ ! "$observed_source_manifest_sha256" =~ ^[0-9a-f]{64}$ ]]; then
   echo "workspace source manifest helper returned an invalid digest" >&2
+  exit 1
+fi
+source_manifest_sha256="${IROHA_RELEASE_SOURCE_MANIFEST_SHA256:-$observed_source_manifest_sha256}"
+if [[ ! "$source_manifest_sha256" =~ ^[0-9a-f]{64}$ ]]; then
+  echo "IROHA_RELEASE_SOURCE_MANIFEST_SHA256 must be a lowercase SHA-256 digest" >&2
+  exit 1
+fi
+readonly source_manifest_sha256
+if [[ "$observed_source_manifest_sha256" != "$source_manifest_sha256" ]]; then
+  echo "Taira soak source manifest does not match the parent release invocation: expected ${source_manifest_sha256}, observed ${observed_source_manifest_sha256}" >&2
   exit 1
 fi
 readonly source_bound_root="${REPO_ROOT}/target/sumeragi-v2-release/${source_manifest_sha256}"
 readonly evidence_path="${source_bound_root}/evidence/taira_v2_24h_soak.json"
 unset TEST_NETWORK_BIN_IROHAD KAGAMI_BIN CARGO_BIN_EXE_iroha3d CARGO_BIN_EXE_kagami
 unset TEST_NETWORK_BIN_IROHAD_MESSAGE_CONTROL TEST_NETWORK_BIN_IROHA CARGO_BIN_EXE_iroha
-unset TEST_NETWORK_IROHAD_FEATURES TEST_NETWORK_CARGO PROFILE IROHA_TEST_BUILD_PROFILE
+unset TEST_NETWORK_IROHAD_FEATURES TEST_NETWORK_CARGO
 export IROHA_TEST_SKIP_BUILD=0
 export IROHA_TEST_ALLOW_REENTRANT_BUILD=1
 export IROHA_TEST_BUILD_TIMEOUT_MS=3600
+export IROHA_TEST_BUILD_PROFILE=release
+export PROFILE=release
+export RUST_LOG=info
+export CARGO_NET_OFFLINE=true
 export CARGO_TARGET_DIR="${source_bound_root}/test-suite"
 export IROHA_TEST_TARGET_DIR="${source_bound_root}/programs"
 export IROHA_RELEASE_SOURCE_MANIFEST_SHA256="$source_manifest_sha256"
 export IROHA_TAIRA_EVIDENCE_PATH="$evidence_path"
+
+# A source digest intentionally selects one build/evidence root. Serialize the
+# complete 24-hour run so two release jobs cannot overwrite that root's binary
+# cache or durable evidence. A hard-killed run leaves the lock behind and must
+# be inspected explicitly instead of being mistaken for a safe retry.
+mkdir -p -- "${source_bound_root}/evidence"
+readonly soak_lock_path="${source_bound_root}/evidence/.taira_v2_24h_soak.lock"
+if ! mkdir -- "$soak_lock_path"; then
+  echo "another Taira production soak owns ${soak_lock_path}; refusing shared release evidence" >&2
+  exit 1
+fi
+run_log=""
+cleanup() {
+  local status=$?
+  if [[ -n "$run_log" ]]; then
+    rm -f -- "$run_log"
+  fi
+  rm -f -- "${soak_lock_path}/owner"
+  if ! rmdir -- "$soak_lock_path"; then
+    echo "failed to remove Taira production-soak lock ${soak_lock_path}" >&2
+    status=1
+  fi
+  trap - EXIT
+  exit "$status"
+}
+trap cleanup EXIT
+printf 'pid=%s\nsource_manifest_sha256=%s\n' \
+  "$$" "$source_manifest_sha256" >"${soak_lock_path}/owner"
 rm -f -- "$evidence_path"
 
 # Cargo's test filter succeeds when it selects zero tests. First require the
 # exact ignored test to exist, then validate the executed libtest summary too so
 # an inventory/execution race cannot become zero-test release evidence.
 ignored_inventory="$(
-  cargo test --locked -p integration_tests --test consensus_and_da -- --list --ignored
+  cargo test --locked --offline --release -p integration_tests \
+    --test consensus_and_da -- --list --ignored
 )"
 inventory_count="$(grep -Fxc "${TAIRA_SOAK_TEST}: test" <<<"$ignored_inventory" || true)"
 if [[ "$inventory_count" != 1 ]]; then
@@ -82,10 +127,9 @@ if [[ "$inventory_count" != 1 ]]; then
 fi
 
 run_log="$(mktemp "${TMPDIR:-/tmp}/taira-v2-production-soak.XXXXXX")"
-trap 'rm -f -- "$run_log"' EXIT
 
 set +e
-cargo test --locked -p integration_tests --test consensus_and_da \
+cargo test --locked --offline --release -p integration_tests --test consensus_and_da \
   "$TAIRA_SOAK_TEST" -- \
   --exact --ignored --nocapture --test-threads=1 \
   2>&1 | tee "$run_log"
@@ -120,7 +164,9 @@ python3 scripts/check_taira_v2_soak_evidence.py \
   --build-root "$source_bound_root" \
   --repo-root "$REPO_ROOT"
 
-final_source_manifest_sha256="$(python3 scripts/compute_workspace_source_manifest.py)"
+final_source_manifest_sha256="$(
+  python3 scripts/compute_workspace_source_manifest.py --root "$REPO_ROOT"
+)"
 if [[ "$final_source_manifest_sha256" != "$source_manifest_sha256" ]]; then
   echo "workspace sources changed during the Taira production soak" >&2
   exit 1

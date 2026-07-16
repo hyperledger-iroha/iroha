@@ -7494,13 +7494,14 @@ class _SumeragiV2StatusParser:
                     "timeout_certificate_missing",
                     "scheduler_starvation",
                     "application_pending",
+                    "local_control_pending",
                 },
                 context=f"{context}.blocker",
             )
         )
 
         raw_ignore = cls._array(
-            record.get("ignore_counts"), f"{context}.ignore_counts", maximum=11
+            record.get("ignore_counts"), f"{context}.ignore_counts", maximum=12
         )
         ignore_counts: List[SumeragiV2IgnoreCount] = []
         ignore_reasons: set[str] = set()
@@ -7516,6 +7517,7 @@ class _SumeragiV2StatusParser:
             "already_decided",
             "recovery_pending",
             "irrelevant_view",
+            "unsafe_proposal",
         }
         for index, raw in enumerate(raw_ignore):
             item_context = f"{context}.ignore_counts[{index}]"

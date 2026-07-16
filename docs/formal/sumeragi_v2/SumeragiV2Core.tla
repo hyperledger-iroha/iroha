@@ -327,7 +327,8 @@ CurrentVoters == VotingRoster(CurrentEpoch)
 BroadcastProposals(proposal) ==
   {ProposalEnvelope(recipient, proposal): recipient \in CurrentVoters}
 BroadcastVotes(vote) ==
-  {VoteEnvelope(recipient, vote): recipient \in CurrentVoters}
+  {VoteEnvelope(recipient, vote):
+     recipient \in CurrentVoters \ {vote.signer}}
 BroadcastQCs(qc) ==
   {QcEnvelope(recipient, qc): recipient \in CurrentVoters}
 BroadcastTimeouts(vote) ==
@@ -368,6 +369,7 @@ It also prevents TLC from materializing the powerset in TcRecordSet.
 ***************************************************************************)
 SeenProposalValues == {entry.proposal: entry \in seenProposals}
 ReceivedQcValues == {entry.qc: entry \in receivedQCs}
+LockCommitQcValues == ReceivedQcValues \cup prepareQCs
 ReceivedTcValues == {entry.tc: entry \in receivedTCs}
 DecisionQcValues == {decision.qc: decision \in decisions}
 
@@ -428,16 +430,10 @@ CertificateHonestIntentBacked(qc, intents) ==
   \A signer \in qc.signers \cap Honest:
     \E vote \in intents: VoteBacksCertificate(vote, qc, signer)
 
-TimeoutVoteProtectsCommitSet(timeoutVote, commitSet) ==
-  \A commitVote \in commitSet:
-    (/\ timeoutVote.signer \in Honest
-     /\ commitVote.signer = timeoutVote.signer
-     /\ commitVote.context = timeoutVote.context
-     /\ commitVote.phase = "Commit"
-     /\ commitVote.view <= timeoutVote.view)
-    => /\ timeoutVote.highRank >= commitVote.view
-       /\ (timeoutVote.highRank = commitVote.view
-             => timeoutVote.highSubject = commitVote.subject)
+TimeoutVoteStrictlyProtectsCommit(timeoutVote, commitVote) ==
+  /\ timeoutVote.highRank >= commitVote.view
+  /\ (timeoutVote.highRank = commitVote.view
+        => timeoutVote.highSubject = commitVote.subject)
 
 TimeoutSignerSet(votes) == {vote.signer: vote \in votes}
 
@@ -484,6 +480,97 @@ TCValid(tc) ==
 
 TcHighRank(tc) == HighestTimeoutVote(tc.votes).highRank
 TcHighSubject(tc) == HighestTimeoutVote(tc.votes).highSubject
+
+InstalledTcAuthorizesCommitVote(commitVote) ==
+  \E installed \in installedTCs:
+    /\ installed.node = commitVote.signer
+    /\ installed.tc.context = commitVote.context
+    /\ installed.tc.view >= commitVote.view
+    /\ TcHighRank(installed.tc) = commitVote.view
+    /\ TcHighSubject(installed.tc) = commitVote.subject
+
+(***************************************************************************
+An honest timeout ordinarily fences later Commit creation in that view.  The
+one production exception is a Commit for the exact PrepareQC selected by a
+durably installed TC: installation first promotes that QC to the node's lock,
+and local body validation may then persist the matching historical intent only
+when no higher conflicting-subject local Prepare intent or known PrepareQC
+exists.  Higher same-subject reproposals are non-conflicting.
+The installed-TC record is retained as durable provenance after the lock later
+advances, so old timeout/Commit compatibility remains state-checkable.
+***************************************************************************)
+TimeoutVoteProtectsCommitSet(timeoutVote, commitSet) ==
+  \A commitVote \in commitSet:
+    (/\ timeoutVote.signer \in Honest
+     /\ commitVote.signer = timeoutVote.signer
+     /\ commitVote.context = timeoutVote.context
+     /\ commitVote.phase = "Commit"
+     /\ commitVote.view <= timeoutVote.view)
+    => \/ TimeoutVoteStrictlyProtectsCommit(timeoutVote, commitVote)
+       \/ InstalledTcAuthorizesCommitVote(commitVote)
+
+ResultingInstallLockRank(node, tc) ==
+  IF TcHighRank(tc) > lockRank[node]
+  THEN TcHighRank(tc)
+  ELSE lockRank[node]
+
+ResultingInstallLockSubject(node, tc) ==
+  IF TcHighRank(tc) > lockRank[node]
+  THEN TcHighSubject(tc)
+  ELSE lockSubject[node]
+
+ExactLockedCommitIntents(node, roundView, subject) ==
+  {vote \in commitIntents:
+    /\ vote.signer = node
+    /\ vote.context = context
+    /\ vote.phase = "Commit"
+    /\ vote.view = roundView
+    /\ vote.subject = subject}
+
+InstalledTcSelectsPrepareFor(node, qc) ==
+  \E installed \in installedTCs:
+    /\ installed.node = node
+    /\ installed.tc.context = qc.context
+    /\ installed.tc.view >= qc.view
+    /\ TcHighRank(installed.tc) = qc.view
+    /\ TcHighSubject(installed.tc) = qc.subject
+
+CurrentOpenPrepareForCommit(node, qc) ==
+  /\ QcAt(node, qc) \in receivedQCs
+  /\ qc.view = nodeView[node]
+  /\ ~NodeTimedOut(node, qc.view)
+
+NoHigherConflictingPrepareKnown(node, qc) ==
+  /\ ~\E vote \in prepareIntents:
+       /\ vote.signer = node
+       /\ vote.context = qc.context
+       /\ vote.phase = "Prepare"
+       /\ vote.view > qc.view
+       /\ vote.subject # qc.subject
+  /\ ~(highestRank[node] > qc.view
+        /\ highestSubject[node] # qc.subject)
+
+HistoricalTcLockedPrepareForCommit(node, qc) ==
+  /\ qc \in prepareQCs
+  /\ qc.view < nodeView[node]
+  /\ qc.view = lockRank[node]
+  /\ qc.subject = lockSubject[node]
+  /\ InstalledTcSelectsPrepareFor(node, qc)
+  /\ NoHigherConflictingPrepareKnown(node, qc)
+
+(***************************************************************************
+TC acknowledgement clears the installing node's volatile vote pool.  If the
+resulting lock still has the node's exact durable Commit intent, production
+queues that intent for re-signing.  A newly promoted lock without such an
+intent does not sign immediately: its exact body must first become durable and
+validate, after which HistoricalTcLockedPrepareForCommit authorizes the normal
+persistence-before-sign pipeline for that one historical round and subject.
+***************************************************************************)
+ActiveLockedCommitSignRequestsAfterInstall(node, tc) ==
+  {VoteSign(node, vote):
+    vote \in ExactLockedCommitIntents(
+      node, ResultingInstallLockRank(node, tc),
+      ResultingInstallLockSubject(node, tc))}
 
 ProposalJustified(node, proposal) ==
   \/ /\ proposal.view = 0
@@ -532,12 +619,12 @@ VoteSignersAt(node, roundView, phase, subject) ==
 (***************************************************************************
 Vote admission across a view installation.
 
-The volatile receipt pool is cleared for the node that installs a TC.  A
-retransmitted vote from an older view is admitted only when it is a Commit
-vote for the exact durable lock, backed by the authenticated PrepareQC ghost
-fact that established that lock.  Prepare votes and unrelated historical
-Commit votes remain current-view only.  This is the formal counterpart of
-retaining signed CommitVote control while rebuilding volatile pools.
+The volatile receipt pool is cleared for the node that installs a TC.  Every
+Commit vote, including one from the current view, is admitted only for the
+exact durable lock backed by the authenticated PrepareQC ghost fact that
+established it.  Prepare votes remain current-view only.  This is the formal
+counterpart of retaining signed CommitVote control while rebuilding volatile
+pools without allowing an unlocked current-view Commit to create a third pool.
 ***************************************************************************)
 
 LockedPrepareRound(node, roundView, subject) ==
@@ -550,13 +637,27 @@ LockedPrepareRound(node, roundView, subject) ==
        /\ qc.subject = subject
 
 VoteRoundAdmissible(node, vote) ==
-  \/ vote.view = nodeView[node]
+  \/ /\ vote.phase = "Prepare"
+     /\ vote.view = nodeView[node]
   \/ /\ vote.phase = "Commit"
      /\ LockedPrepareRound(node, vote.view, vote.subject)
 
 CommitRoundAdmissible(node, roundView, subject) ==
-  \/ roundView = nodeView[node]
-  \/ LockedPrepareRound(node, roundView, subject)
+  LockedPrepareRound(node, roundView, subject)
+
+(***************************************************************************
+After a durable LockCommit acknowledgement, production retires every
+superseded historical vote pool for that node.  It retains the current-view
+pool(s), which can still contribute to current progress, plus the one exact
+historical Commit pool selected by the newly durable lock.  Other validators'
+volatile pools are independent and remain untouched.
+***************************************************************************)
+VoteReceiptSurvivesLockCommit(received, node, roundView, subject) ==
+  \/ received.node # node
+  \/ received.vote.view = nodeView[node]
+  \/ /\ received.vote.phase = "Commit"
+     /\ received.vote.view = roundView
+     /\ received.vote.subject = subject
 
 TimeoutVotesAt(node, roundView) ==
   {received.vote:
@@ -755,6 +856,28 @@ SetGST ==
                  voteNetwork, qcNetwork, timeoutNetwork, tcNetwork,
                  decisions, applied>>
 
+(***************************************************************************
+`LocalProposalReady` is the trusted completion of the full production body
+manifest and execution-commitment checks.  Core abstracts that identity to
+context/view/subject; the adapter contract makes both the full manifest and
+execution commitment single-valued for that abstract key before this action.
+***************************************************************************)
+ExactDecidedLocalBody(node, roundView, subject) ==
+  \E decision \in decisions:
+    /\ decision.node = node
+    /\ decision.qc.context = context
+    /\ decision.qc.phase = "Commit"
+    /\ decision.qc.view = roundView
+    /\ decision.qc.subject = subject
+
+LocalBodyNotSupersededByDecision(node, roundView, subject) ==
+  \A decision \in decisions:
+    (decision.node = node
+       /\ decision.qc.context = context
+       /\ decision.qc.phase = "Commit")
+      => (decision.qc.view = roundView
+            /\ decision.qc.subject = subject)
+
 AssembleLocalBody(node, subject) ==
   LET roundView == nodeView[node]
       body == BodyRecord(node, context, roundView, subject)
@@ -763,6 +886,7 @@ AssembleLocalBody(node, subject) ==
   IN /\ node \in Honest \cap up \cap CurrentVoters
      /\ node = Leader(context, nodeView[node])
      /\ subject \in ValidSubjects
+     /\ LocalBodyNotSupersededByDecision(node, roundView, subject)
      /\ body \in BodyRecordSet
      /\ validation \in ValidationRecordSet
      /\ ~BodyHeldBy(durableBodies, node, context, roundView, subject)
@@ -1116,11 +1240,14 @@ CompleteVoteSignature(request) ==
   /\ request \in signVotes
   /\ request.vote.signer = request.node
   /\ (request.vote \in prepareIntents \/ request.vote \in commitIntents)
+  /\ VoteRoundAdmissible(request.node, request.vote)
   /\ signVotes' = signVotes \ {request}
+  /\ receivedVotes' =
+       receivedVotes \cup {VoteAt(request.node, request.vote)}
   /\ voteNetwork' = voteNetwork \cup BroadcastVotes(request.vote)
   /\ UNCHANGED <<height, context, contextHistory, nodeView, generation,
                  up, gst, availableBodies, durableBodies, retainedLockedBodies, validatedBodies,
-                 invalidBodies, seenProposals, receivedVotes, receivedQCs,
+                 invalidBodies, seenProposals, receivedQCs,
                  receivedTimeoutVotes, receivedTCs, proposalIntents,
                  prepareIntents, commitIntents, timeoutIntents, prepareQCs,
                  commitQCs, formedTCs, installedTCs, lockRank, lockSubject,
@@ -1258,11 +1385,10 @@ BeginLockCommit(node, qc) ==
   LET vote == Vote(context, qc.view, "Commit", qc.subject, node)
       request == LockCommitWal(node, qc, vote)
   IN /\ node \in Honest \cap up \cap CurrentVoters
-     /\ QcAt(node, qc) \in receivedQCs
      /\ qc.context = context
      /\ qc.phase = "Prepare"
-     /\ qc.view = nodeView[node]
-     /\ ~NodeTimedOut(node, qc.view)
+     /\ \/ CurrentOpenPrepareForCommit(node, qc)
+        \/ HistoricalTcLockedPrepareForCommit(node, qc)
      /\ BodyHeldBy(durableBodies, node, context, qc.view, qc.subject)
      /\ BodyValidatedBy(validatedBodies, node, context, qc.view,
                         generation[node], qc.subject)
@@ -1306,9 +1432,14 @@ PersistLockCommit(request) ==
              THEN request.qc.subject ELSE @]
      /\ pendingLockCommit' = pendingLockCommit \ {request}
      /\ signVotes' = signVotes \cup {signRequest}
+     /\ receivedVotes' =
+          {received \in receivedVotes:
+             VoteReceiptSurvivesLockCommit(
+               received, request.node, request.qc.view,
+               request.qc.subject)}
      /\ UNCHANGED <<height, context, contextHistory, nodeView, generation,
                     up, gst, availableBodies, durableBodies, validatedBodies,
-                    invalidBodies, seenProposals, receivedVotes, receivedQCs,
+                    invalidBodies, seenProposals, receivedQCs,
                     receivedTimeoutVotes, receivedTCs, proposalIntents,
                     prepareIntents, timeoutIntents, prepareQCs, commitQCs,
                     formedTCs, installedTCs, pendingProposal, pendingPrepare,
@@ -1471,9 +1602,14 @@ ByzantineBroadcastTimeout(signer, roundView, highRank, highSubject) ==
                     signProposals, signVotes, signTimeouts, proposalNetwork,
                     voteNetwork, qcNetwork, tcNetwork, decisions, applied>>
 
+\* Timeout delivery is the reducer ingress boundary.  Require the complete
+\* wire schema here: checking selected fields (including vote.view) cannot
+\* exclude records with a non-canonical DOMAIN.  The remaining guards perform
+\* current-context, roster, authenticated-high-reference, and rank admission.
 DeliverTimeout(envelope) ==
   LET received == TimeoutVoteAt(envelope.recipient, envelope.vote)
-  IN /\ envelope \in timeoutNetwork
+  IN /\ envelope \in TimeoutEnvelopeSet
+     /\ envelope \in timeoutNetwork
      /\ envelope.recipient \in up
      /\ envelope.vote.context = context
      /\ envelope.vote.height = height
@@ -1586,6 +1722,9 @@ PersistInstallTC(request) ==
      /\ pendingInstallTC' = pendingInstallTC \ {request}
      /\ receivedVotes' =
           {received \in receivedVotes: received.node # node}
+     /\ signVotes' =
+          signVotes
+            \cup ActiveLockedCommitSignRequestsAfterInstall(node, tc)
      /\ tcNetwork' =
           IF request.rebroadcast
           THEN tcNetwork \cup BroadcastTCs(tc)
@@ -1597,7 +1736,7 @@ PersistInstallTC(request) ==
                     prepareIntents, commitIntents, timeoutIntents, prepareQCs,
                     commitQCs, formedTCs, pendingProposal, pendingPrepare,
                     pendingObservePrepare, pendingLockCommit, pendingTimeout,
-                    pendingDecision, signProposals, signVotes, signTimeouts,
+                    pendingDecision, signProposals, signTimeouts,
                     proposalNetwork, voteNetwork, qcNetwork, timeoutNetwork,
                     decisions, applied>>
 
@@ -1826,7 +1965,7 @@ Next ==
   \/ \E node \in ValidatorIds, qc \in ReceivedQcValues:
        BeginObservePrepare(node, qc)
   \/ \E request \in pendingObservePrepare: PersistObservePrepare(request)
-  \/ \E node \in ValidatorIds, qc \in ReceivedQcValues:
+  \/ \E node \in ValidatorIds, qc \in LockCommitQcValues:
        BeginLockCommit(node, qc)
   \/ \E request \in pendingLockCommit: PersistLockCommit(request)
   \/ \E node \in ValidatorIds, roundView \in Views,

@@ -7680,11 +7680,9 @@ impl KagemushaRecursiveSpendInstalledArtifactSetV4 {
             iroha_core::zk::kagemusha_artifact_v4::KagemushaPastaCycleVerifierArtifactsV4::new(
                 &self.authenticated_release,
                 self.authenticated_payload(Parity::StepEq, Kind::Parameters)?,
-                self.authenticated_payload(Parity::StepEq, Kind::CircuitParams)?,
                 self.authenticated_payload(Parity::StepEq, Kind::VerifyingKey)?,
                 self.authenticated_payload(Parity::StepEq, Kind::BootstrapWitness)?,
                 self.authenticated_payload(Parity::StepEp, Kind::Parameters)?,
-                self.authenticated_payload(Parity::StepEp, Kind::CircuitParams)?,
                 self.authenticated_payload(Parity::StepEp, Kind::VerifyingKey)?,
                 self.authenticated_payload(Parity::StepEp, Kind::BootstrapWitness)?,
             )
@@ -7707,12 +7705,10 @@ impl KagemushaRecursiveSpendInstalledArtifactSetV4 {
             iroha_core::zk::kagemusha_artifact_v4::KagemushaPastaCycleProverArtifactsV4::new(
                 &self.authenticated_release,
                 self.authenticated_payload(Parity::StepEq, Kind::Parameters)?,
-                self.authenticated_payload(Parity::StepEq, Kind::CircuitParams)?,
                 self.authenticated_payload(Parity::StepEq, Kind::ProvingKey)?,
                 self.authenticated_payload(Parity::StepEq, Kind::VerifyingKey)?,
                 self.authenticated_payload(Parity::StepEq, Kind::BootstrapWitness)?,
                 self.authenticated_payload(Parity::StepEp, Kind::Parameters)?,
-                self.authenticated_payload(Parity::StepEp, Kind::CircuitParams)?,
                 self.authenticated_payload(Parity::StepEp, Kind::ProvingKey)?,
                 self.authenticated_payload(Parity::StepEp, Kind::VerifyingKey)?,
                 self.authenticated_payload(Parity::StepEp, Kind::BootstrapWitness)?,
@@ -7747,9 +7743,9 @@ const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_SESSIONS_V3: usize = 8;
 const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_DECLARED_BYTES_V3: u64 =
     iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_FILE_BYTES_V3 * 6;
 const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_MANIFEST_BYTES_V3: c_ulong = 1024 * 1024;
-// ABI-20 has exactly five authenticated files per parity: Params, circuit
-// parameters, PK, VK, and Bootstrap.
-const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_COUNT_V4: usize = 10;
+// ABI-20 has exactly four authenticated files per parity: Params, PK, VK,
+// and Bootstrap. Circuit parameters are authenticated inline in each profile.
+const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_COUNT_V4: usize = 8;
 const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_SESSIONS_V4: usize =
     KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_COUNT_V4;
 const KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_DECLARED_BYTES_V4: u64 =
@@ -12306,7 +12302,7 @@ pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_capabilities_v
 /// Return the exact ABI-20/V4 recursive-spend capability contract.
 ///
 /// Symbol presence is not a readiness signal. Availability requires both the
-/// production backend feature and one live authenticated ten-artifact release.
+/// production backend feature and one live authenticated eight-artifact release.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_capabilities_v4(
     out_capabilities_ptr: *mut *mut c_uchar,
@@ -13504,9 +13500,9 @@ fn install_authenticated_kagemusha_recursive_spend_artifact_set_v4(
     Ok(())
 }
 
-/// Authenticate a release and atomically install its exact ten ABI-20
-/// Params/CircuitParams/PK/VK/Bootstrap artifacts. No V3 handle or manifest
-/// participates.
+/// Authenticate a release and atomically install its exact eight ABI-20
+/// Params/PK/VK/Bootstrap artifacts. No V3 handle or manifest participates;
+/// each parity's circuit parameters are authenticated inline in the manifest.
 #[allow(clippy::too_many_arguments)]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_kagemusha_recursive_spend_artifact_set_install_v4(
@@ -15445,7 +15441,7 @@ mod kagemusha_bridge_tests {
             KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_COUNT_V4,
             iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_ROLES_V4.len()
         );
-        assert_eq!(KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_COUNT_V4, 10);
+        assert_eq!(KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_COUNT_V4, 8);
         assert!(KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_HANDLE_NAMESPACE_V4 <= i64::MAX as u64);
         assert!(!is_kagemusha_recursive_spend_artifact_handle_v4(1));
         assert!(is_kagemusha_recursive_spend_artifact_handle_v4(
@@ -15508,7 +15504,7 @@ mod kagemusha_bridge_tests {
 
     #[test]
     fn output_membership_local_carrier_enforces_operation_shape_and_exact_commitments() {
-        use KagemushaOutputMembershipOperationV4 as Operation;
+        use iroha_core::zk::kagemusha_v2::KagemushaOutputMembershipOperationV3 as Operation;
 
         let initial_root = [0x11; 32];
         let intermediate_root = [0x12; 32];
@@ -27089,7 +27085,7 @@ fn java_native_kagemusha_artifact_set_install_v4(
             .map_err(|error| format!("failed to read Kagemusha V4 handles: {error}"))?
             != KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_COUNT_V4 as i32
         {
-            return Err("Kagemusha V4 install requires exactly ten handles".to_owned());
+            return Err("Kagemusha V4 install requires exactly eight handles".to_owned());
         }
         let mut jni_handles = [0_i64; KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_COUNT_V4];
         env.get_long_array_region(&handles, 0, &mut jni_handles)

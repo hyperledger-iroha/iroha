@@ -17,6 +17,12 @@ use p256::ecdsa::{
 use sha2::{Digest as _, Sha256};
 
 pub use self::model::*;
+#[cfg(feature = "test-fixtures")]
+mod peer_transport_fixtures;
+#[cfg(feature = "test-fixtures")]
+pub use peer_transport_fixtures::{
+    KagemushaPeerTransportFixtureRecordV1, kagemusha_peer_transport_fixture_records_v1,
+};
 use crate::{
     ChainId,
     account::AccountId,

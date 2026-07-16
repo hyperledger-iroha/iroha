@@ -359,6 +359,8 @@ VARIABLES
   asyncTimeoutEmitted,
   asyncRunnerPhase,
   asyncRunnerBudget,
+  asyncCausalAdmissionOwed,
+  asyncNextLocalSource,
   asyncIoQueues,
   asyncOutstandingWork,
   asyncIoReadyCompletions,
@@ -368,6 +370,7 @@ VARIABLES
   asyncDeferredCompletionQueues,
   asyncDeferredProgressQueues,
   asyncDeferredNormalQueues,
+  asyncNextDeferredClass,
   asyncDeferredDrainOwed,
   asyncCausalQueues,
   asyncOutstandingTags,
@@ -384,12 +387,14 @@ VARIABLES
 AsyncSchedulerVars ==
   <<asyncNow, asyncCommandQueues, asyncNextCommandClass,
     asyncFifoOwed, asyncTimeoutEmitted,
-    asyncRunnerPhase, asyncRunnerBudget, asyncIoQueues,
+    asyncRunnerPhase, asyncRunnerBudget,
+    asyncCausalAdmissionOwed, asyncNextLocalSource, asyncIoQueues,
     asyncOutstandingWork, asyncIoReadyCompletions,
     asyncLocalReadyCompletions, asyncNextCompletionSource,
     asyncIoControlAvailable, asyncDeferredCompletionQueues,
     asyncDeferredProgressQueues, asyncDeferredNormalQueues,
-    asyncDeferredDrainOwed, asyncCausalQueues, asyncOutstandingTags,
+    asyncNextDeferredClass, asyncDeferredDrainOwed,
+    asyncCausalQueues, asyncOutstandingTags,
     asyncNodeDeadlines, asyncRetransmitDeadlines,
     asyncNodeServiceDeadlines, asyncIoServiceDeadlines,
     asyncSentItems, asyncRetainedControl, asyncActiveRequests, asyncTransport,
@@ -404,7 +409,13 @@ AsyncIoVars ==
 
 AsyncDeferredVars ==
   <<asyncDeferredCompletionQueues, asyncDeferredProgressQueues,
-    asyncDeferredNormalQueues, asyncDeferredDrainOwed>>
+    asyncDeferredNormalQueues, asyncNextDeferredClass,
+    asyncDeferredDrainOwed>>
+
+AsyncLocalSources == {"Producer", "Causal"}
+
+AsyncLocalAdmissionVars ==
+  <<asyncCausalAdmissionOwed, asyncNextLocalSource>>
 
 HeldChunksFor(node, roundView, subject) ==
   {receipt.chunk:
@@ -462,6 +473,17 @@ DeferredCompletionCount(node) ==
 AsyncOutstandingWorkCount(node) ==
   Cardinality(asyncOutstandingWork[node])
 
+(***************************************************************************
+`AsyncOutstandingWorkCount` is the executor's effect-work ownership: it is
+released only when a producer completion enters the serialized runtime queue.
+Queued and Busy-deferred completions consume the independent runtime/adapter
+lanes, not another executor work slot.  `AsyncCompletionLoad` remains the
+total diagnostic ownership count used by service ranks; it must not be used
+as the effect-work admission limit.  Conflating these capacities lets a stale
+Busy-deferred completion block the exact persistence completion which clears
+Busy, even though the production executor has already released that work
+slot.
+***************************************************************************)
 AsyncCompletionLoad(node) ==
   AsyncOutstandingWorkCount(node) + QueuedCompletionCount(node)
     + DeferredCompletionCount(node)
@@ -613,9 +635,45 @@ CausalCandidate(commandClass, kind, command) ==
 RetainedBodyRebindCandidate(command) ==
   CausalCandidate("Completion", "RebindRetainedBody", command)
 
+InstallCommitSignRequests(command) ==
+  {signRequest \in VoteSignSet:
+    \E installRequest \in pendingInstallTC:
+      /\ command.node = installRequest.node
+      /\ command.view = installRequest.tc.view
+      /\ signRequest \in
+           ActiveLockedCommitSignRequestsAfterInstall(
+             installRequest.node, installRequest.tc)}
+
+InstallCommitSignSuccessor(command) ==
+  LET signRequest ==
+        CHOOSE request \in InstallCommitSignRequests(command): TRUE
+  IN NoItemCandidate("Completion", "SignVote", signRequest.node,
+                     signRequest.vote.view, signRequest.vote.subject)
+
+InstallProposalSuccessor(command) ==
+  NoItemCandidate("Normal", "AssembleBody", command.node,
+                  command.view + 1, AsyncProposalSubject(command.node))
+
+(***************************************************************************
+The reducer exposes the exact active locked Commit re-sign as the first
+causal completion after TC acknowledgement.  The ordinary next-view proposal
+path follows it.  When the TC promoted a lock that has no matching local
+Commit intent, there is no synthetic signing successor at installation: the
+exact historical body must pass StoreBody -> ValidateBody, whose successor
+then enters the ordinary WAL-backed BeginLockCommit path.
+***************************************************************************)
+InstallCommandSuccessors(command) ==
+  IF InstallCommitSignRequests(command) = {}
+  THEN <<InstallProposalSuccessor(command)>>
+  ELSE <<InstallCommitSignSuccessor(command),
+         InstallProposalSuccessor(command)>>
+
 CommandSuccessors(command) ==
   CASE command.kind = "AssembleBody" ->
-         <<CausalCandidate("Completion", "BeginProposal", command)>>
+         IF ExactDecidedLocalBody(command.node, command.view,
+                                  command.subject)
+         THEN <<CausalCandidate("Completion", "Apply", command)>>
+         ELSE <<CausalCandidate("Completion", "BeginProposal", command)>>
     [] command.kind = "BeginProposal" ->
          <<CausalCandidate("Completion", "PersistProposal", command)>>
     [] command.kind = "PersistProposal" ->
@@ -635,6 +693,7 @@ CommandSuccessors(command) ==
          <<CausalCandidate("Completion", "ValidateBody", command)>>
     [] command.kind = "ValidateBody" ->
          <<CausalCandidate("Normal", "BeginPrepare", command),
+           CausalCandidate("Progress", "BeginLockCommit", command),
            CausalCandidate("Completion", "Apply", command)>>
     [] command.kind = "BeginPrepare" ->
          <<CausalCandidate("Completion", "PersistPrepare", command)>>
@@ -663,7 +722,7 @@ CommandSuccessors(command) ==
          <<CausalCandidate("Completion", "PersistDecision", command)>>
     [] command.kind = "PersistDecision" ->
          <<CausalCandidate("Completion", "ValidateBody", command),
-           CausalCandidate("Progress", "RequestCertifiedBody", command),
+           CausalCandidate("Completion", "RequestCertifiedBody", command),
            CausalCandidate("Completion", "Apply", command)>>
     [] command.kind = "BeginTimeout" ->
          <<CausalCandidate("Completion", "PersistTimeout", command)>>
@@ -678,8 +737,7 @@ CommandSuccessors(command) ==
     [] command.kind = "BeginInstallTC" ->
          <<CausalCandidate("Completion", "PersistInstallTC", command)>>
     [] command.kind = "PersistInstallTC" ->
-         <<NoItemCandidate("Normal", "AssembleBody", command.node,
-                           command.view + 1, AsyncProposalSubject(command.node))>>
+         InstallCommandSuccessors(command)
     [] OTHER -> <<>>
 
 AppendCausalSuccessors(command) ==
@@ -715,7 +773,7 @@ VoteOutbox(request) ==
   {AsyncNetworkItem(
        IF request.vote.phase = "Prepare" THEN "PrepareVote" ELSE "CommitVote",
        request.node, VoteEnvelope(recipient, request.vote)):
-     recipient \in CurrentVoters}
+     recipient \in CurrentVoters \ {request.node}}
 
 QcOutbox(node, qc) ==
   {AsyncNetworkItem(
@@ -775,15 +833,16 @@ CommitCertificateResponseItem(request, qc) ==
     "CommitCertificateResponse", request.envelope.recipient,
     QcEnvelope(request.source, qc))
 
+(***************************************************************************
+Production serves a certified request from the retained canonical body held
+by the addressed Commit-QC signer.  The validation cache is consumer-local
+pipeline state, not serving authority; requiring it here would suppress a
+response that `serve_certified_body` emits from the durable body store.
+***************************************************************************)
 CertifiedServeCanRespond(request) ==
   /\ request.kind = "CertifiedRequest"
   /\ BodyHeldBy(durableBodies, request.envelope.recipient, context,
                 request.envelope.view, request.envelope.subject)
-  /\ \E validation \in validatedBodies:
-       /\ validation.node = request.envelope.recipient
-       /\ validation.context = context
-       /\ validation.view = request.envelope.view
-       /\ validation.subject = request.envelope.subject
 
 CommitCertificateServeCanRespond(request) ==
   /\ request.kind = "CommitCertificateRequest"
@@ -814,8 +873,15 @@ BroadcastChunkOutbox(source, roundView, subject) ==
   UNION {ChunkOutbox(recipient, source, roundView, subject):
            recipient \in CurrentVoters}
 
-ItemInQueuedDelivery(item) ==
-  \E candidate \in QueuedCandidates: candidate.item = item
+(***************************************************************************
+Production records an authenticated delivery while any reducer/adapter owner
+retains it.  Model retransmission suppression over the same complete scheduler
+ownership set so a deferred or causal occurrence cannot acquire a replacement.
+***************************************************************************)
+ItemInScheduledDelivery(item) ==
+  \E candidate \in QueuedCandidates \cup DeferredCandidates
+                      \cup CausalCandidates \cup TrackedWorkCandidates:
+    candidate.item = item
 
 IngressLane(recipient, source) == asyncIngressLanes[recipient][source]
 
@@ -920,7 +986,7 @@ ItemInLocalCompletion(item) ==
       candidate.item = item
 
 ItemScheduled(item) ==
-  ItemInQueuedDelivery(item) \/ ItemInIngress(item) \/ ItemHasPacket(item)
+  ItemInScheduledDelivery(item) \/ ItemInIngress(item) \/ ItemHasPacket(item)
     \/ ItemInIoServe(item) \/ ItemInLocalCompletion(item)
 
 SendableItems(source) ==
@@ -930,6 +996,11 @@ ActiveRequestItems(source) ==
   {item \in asyncActiveRequests: item.source = source}
 
 ControlClass(item) == item.kind
+
+ControlRecipients(source, controlClass, voters) ==
+  IF controlClass \in {"PrepareVote", "CommitVote"}
+  THEN voters \ {source}
+  ELSE voters
 
 ControlView(item) ==
   CASE item.kind = "Proposal" -> item.envelope.proposal.view
@@ -1070,6 +1141,8 @@ CommandMatches(command, node, roundView, subject) ==
 
 RegularCoreCommand(command) ==
   \/ /\ command.kind = "AssembleBody"
+     /\ CommandMatches(command, command.node, nodeView[command.node],
+                       command.subject)
      /\ AssembleLocalBody(command.node, command.subject)
   \/ /\ command.kind = "BeginProposal"
      /\ BeginLocalProposal(command.node, command.subject)
@@ -1123,7 +1196,7 @@ RegularCoreCommand(command) ==
                             request.qc.subject)
           /\ PersistObservePrepare(request)
   \/ /\ command.kind = "BeginLockCommit"
-     /\ \E qc \in ReceivedQcValues:
+     /\ \E qc \in LockCommitQcValues:
           /\ CommandMatches(command, command.node, qc.view, qc.subject)
           /\ BeginLockCommit(command.node, qc)
   \/ /\ command.kind = "PersistLockCommit"
@@ -1375,7 +1448,7 @@ CausalHeadCanAdvance(node) ==
      /\ \/ CandidateInFlight(candidate)
         \/ /\ candidate.class = "Completion"
               /\ CanEnqueueIoClass(node, "Consensus")
-              /\ AsyncCompletionLoad(node) < AsyncIoWorkCapacity
+              /\ AsyncOutstandingWorkCount(node) < AsyncIoWorkCapacity
         \/ /\ candidate.class # "Completion"
               /\ CanEnqueueClass(node, candidate.class)
 
@@ -1510,7 +1583,8 @@ DeferCommand(command) ==
                            ELSE IF Len(@) < AsyncDeferredNormalCapacity
                                 THEN Append(@, command) ELSE @]
           ELSE asyncDeferredNormalQueues
-     /\ UNCHANGED <<asyncDeferredDrainOwed, asyncOutstandingTags,
+     /\ UNCHANGED <<asyncNextDeferredClass, asyncDeferredDrainOwed,
+                    asyncOutstandingTags,
                     asyncNodeDeadlines, asyncRetransmitDeadlines,
                     asyncSentItems, asyncRetainedControl, asyncActiveRequests, asyncTransport, asyncIngressLanes,
                     asyncIngressReady, asyncHeldChunks
@@ -1521,28 +1595,54 @@ DeferredQueueNonempty(node) ==
     \/ Len(asyncDeferredProgressQueues[node]) > 0
     \/ Len(asyncDeferredNormalQueues[node]) > 0
 
+(***************************************************************************
+The adapter's deferred reducer inputs use the same three-class cyclic scan as
+the runtime command queue, but keep an independent cursor.  A selected class
+always advances the cursor, including the Busy case where production pushes
+the selected input back to the front of its class queue.
+***************************************************************************)
+DeferredClassQueue(node, commandClass) ==
+  CASE commandClass = "Completion" -> asyncDeferredCompletionQueues[node]
+    [] commandClass = "Progress" -> asyncDeferredProgressQueues[node]
+    [] OTHER -> asyncDeferredNormalQueues[node]
+
+DeferredClassNonempty(node, commandClass) ==
+  Len(DeferredClassQueue(node, commandClass)) > 0
+
+SelectedDeferredClass(node) ==
+  LET first == asyncNextDeferredClass[node]
+      second == NextCommandClass(first)
+      third == NextCommandClass(second)
+  IN IF DeferredClassNonempty(node, first)
+     THEN first
+     ELSE IF DeferredClassNonempty(node, second)
+          THEN second
+          ELSE third
+
 NextDeferredCommand(node) ==
-  IF Len(asyncDeferredCompletionQueues[node]) > 0
-  THEN Head(asyncDeferredCompletionQueues[node])
-  ELSE IF Len(asyncDeferredProgressQueues[node]) > 0
-       THEN Head(asyncDeferredProgressQueues[node])
-       ELSE Head(asyncDeferredNormalQueues[node])
+  Head(DeferredClassQueue(node, SelectedDeferredClass(node)))
+
+AdvanceNextDeferredClass(node) ==
+  asyncNextDeferredClass' =
+    [asyncNextDeferredClass EXCEPT
+       ![node] = NextCommandClass(SelectedDeferredClass(node))]
 
 RemoveNextDeferredCommand(node) ==
-  IF Len(asyncDeferredCompletionQueues[node]) > 0
-  THEN /\ asyncDeferredCompletionQueues' =
-             [asyncDeferredCompletionQueues EXCEPT ![node] = Tail(@)]
-       /\ UNCHANGED <<asyncDeferredProgressQueues,
-                      asyncDeferredNormalQueues>>
-  ELSE IF Len(asyncDeferredProgressQueues[node]) > 0
-       THEN /\ asyncDeferredProgressQueues' =
-                  [asyncDeferredProgressQueues EXCEPT ![node] = Tail(@)]
-            /\ UNCHANGED <<asyncDeferredCompletionQueues,
-                           asyncDeferredNormalQueues>>
-       ELSE /\ asyncDeferredNormalQueues' =
-                  [asyncDeferredNormalQueues EXCEPT ![node] = Tail(@)]
-            /\ UNCHANGED <<asyncDeferredCompletionQueues,
-                           asyncDeferredProgressQueues>>
+  /\ IF SelectedDeferredClass(node) = "Completion"
+     THEN /\ asyncDeferredCompletionQueues' =
+                [asyncDeferredCompletionQueues EXCEPT ![node] = Tail(@)]
+          /\ UNCHANGED <<asyncDeferredProgressQueues,
+                         asyncDeferredNormalQueues>>
+     ELSE IF SelectedDeferredClass(node) = "Progress"
+          THEN /\ asyncDeferredProgressQueues' =
+                     [asyncDeferredProgressQueues EXCEPT ![node] = Tail(@)]
+               /\ UNCHANGED <<asyncDeferredCompletionQueues,
+                              asyncDeferredNormalQueues>>
+          ELSE /\ asyncDeferredNormalQueues' =
+                     [asyncDeferredNormalQueues EXCEPT ![node] = Tail(@)]
+               /\ UNCHANGED <<asyncDeferredCompletionQueues,
+                              asyncDeferredProgressQueues>>
+  /\ AdvanceNextDeferredClass(node)
 
 (***************************************************************************
 Per-recipient, per-source transport admission.
@@ -1637,6 +1737,7 @@ AdmitHiddenPacket(recipient, source) ==
           ELSE asyncIngressReady
      /\ UNCHANGED AsyncDeferredVars
      /\ LeaveCausalQueues
+     /\ UNCHANGED AsyncLocalAdmissionVars
      /\ UNCHANGED <<vars, asyncNow, asyncCommandQueues,
                     asyncNextCommandClass, asyncFifoOwed,
                     asyncTimeoutEmitted, asyncRunnerPhase,
@@ -1661,6 +1762,7 @@ CoalesceHiddenPacket(recipient, source) ==
      /\ UNCHANGED <<asyncIngressLanes, asyncIngressReady>>
      /\ UNCHANGED AsyncDeferredVars
      /\ LeaveCausalQueues
+     /\ UNCHANGED AsyncLocalAdmissionVars
      /\ UNCHANGED <<vars, asyncNow, asyncCommandQueues,
                     asyncNextCommandClass, asyncFifoOwed,
                     asyncTimeoutEmitted, asyncRunnerPhase,
@@ -1764,7 +1866,8 @@ IngressItemCanDrain(node, item) ==
                \/ CanEnqueueIoClass(node, "Serve")
           ELSE IF item.kind = "CertifiedResponse"
                THEN \/ ~CertifiedResponseAuthorized(item)
-                    \/ /\ AsyncCompletionLoad(node) < AsyncIoWorkCapacity
+                    \/ /\ AsyncOutstandingWorkCount(node)
+                              < AsyncIoWorkCapacity
                           /\ ~CandidateInFlight(
                                CertifiedResponseCandidate(item))
                ELSE IF item.kind = "CommitCertificateResponse"
@@ -1772,7 +1875,7 @@ IngressItemCanDrain(node, item) ==
                          \/ /\ CanEnqueueClass(node, "Progress")
                                /\ ~CandidateInFlight(
                                     CommitCertificateResponseCandidate(item))
-               ELSE \/ candidate \in QueuedCandidates
+               ELSE \/ CandidateScheduled(candidate)
                     \/ CanEnqueueClass(node, candidate.class)
 
 DrainableIngressLaneIndices(node, source) ==
@@ -1828,10 +1931,11 @@ PopSelectedIngress(node, index, laneIndex) ==
 
 (***************************************************************************
 The serialized Rust ingress authenticates every reducer-directed envelope
-before comparing it with already queued authenticated envelopes.  An exact
-queued retransmission is consumed from transport without taking a second
-runtime slot; after the queued occurrence leaves, the same envelope may begin
-a new ownership interval and encounter generation-aware semantic admission.
+before comparing it with scheduler-owned authenticated envelopes.  An exact
+retransmission is consumed from transport without taking a second runtime
+slot, including while the first occurrence is deferred or causal; after the
+owning occurrence leaves, the same envelope may begin a new ownership interval
+and encounter generation-aware semantic admission.
 ***************************************************************************)
 DrainFairIngressSelected(node) ==
   LET index == FirstDrainableIngressIndex(node)
@@ -1918,7 +2022,7 @@ DrainFairIngressSelected(node) ==
                                  /\ UNCHANGED <<asyncSentItems,
                                                 asyncRetainedControl,
                                                 asyncActiveRequests>>
-                  ELSE /\ IF candidate \in QueuedCandidates
+                  ELSE /\ IF CandidateScheduled(candidate)
                           THEN UNCHANGED <<asyncCommandQueues,
                                            asyncNextCommandClass>>
                           ELSE EnqueueCandidate(candidate)
@@ -2071,6 +2175,48 @@ ProducerCompletionCanAdmit(node) ==
   /\ SelectedCompletionQueueNonempty(node)
   /\ CanEnqueueClass(node, "Completion")
 
+OtherLocalSource(source) ==
+  IF source = "Producer" THEN "Causal" ELSE "Producer"
+
+LocalSourceCanAdmit(node, source) ==
+  IF source = "Producer"
+  THEN ProducerCompletionCanAdmit(node)
+  ELSE CausalHeadCanAdvance(node)
+
+(***************************************************************************
+The local admission cursor alternates producer completions with causal work.
+A producer may run while the causal head is temporarily blocked, but doing so
+records sticky causal debt.  Once that head becomes admissible, the debt makes
+it the deterministic preferred source under the existing fair RunNode action.
+***************************************************************************)
+PreferredLocalSource(node) ==
+  IF asyncCausalAdmissionOwed[node] = TRUE
+  THEN "Causal"
+  ELSE IF asyncNextLocalSource[node] = "Causal"
+       THEN "Causal"
+       ELSE "Producer"
+
+SelectedLocalSource(node) ==
+  LET preferred == PreferredLocalSource(node)
+  IN IF LocalSourceCanAdmit(node, preferred)
+     THEN preferred
+     ELSE OtherLocalSource(preferred)
+
+LocalAdmissionCanAdvance(node) ==
+  /\ asyncRunnerBudget[node] > 0
+  /\ (ProducerCompletionCanAdmit(node) \/ CausalHeadCanAdvance(node))
+
+UpdateLocalAdmissionMetadata(node, source) ==
+  /\ asyncNextLocalSource' =
+       [asyncNextLocalSource EXCEPT
+          ![node] = OtherLocalSource(source)]
+  /\ asyncCausalAdmissionOwed' =
+       [asyncCausalAdmissionOwed EXCEPT
+          ![node] =
+            IF source = "Causal"
+            THEN FALSE
+            ELSE ((@ = TRUE) \/ CausalQueueNonempty(node))]
+
 AdmitProducerCompletion(node) ==
   LET source == SelectedCompletionSource(node)
       candidate == SelectedCompletionCandidate(node)
@@ -2129,6 +2275,7 @@ ServiceIoWorker(node) ==
      /\ UNCHANGED asyncNodeServiceDeadlines
      /\ UNCHANGED AsyncDeferredVars
      /\ LeaveCausalQueues
+     /\ UNCHANGED AsyncLocalAdmissionVars
      /\ UNCHANGED <<vars, asyncNow, asyncCommandQueues,
                     asyncNextCommandClass, asyncFifoOwed,
                     asyncTimeoutEmitted, asyncRunnerPhase,
@@ -2149,6 +2296,7 @@ EnqueueIoLocalControl(node) ==
        [asyncIoControlAvailable EXCEPT ![node] = FALSE]
   /\ UNCHANGED AsyncDeferredVars
   /\ LeaveCausalQueues
+  /\ UNCHANGED AsyncLocalAdmissionVars
   /\ UNCHANGED <<vars, asyncNow, asyncCommandQueues,
                  asyncNextCommandClass, asyncFifoOwed,
                  asyncTimeoutEmitted, asyncRunnerPhase, asyncRunnerBudget,
@@ -2235,7 +2383,8 @@ DirectTimeoutStep(node) ==
      THEN AppendCausalSuccessors(TimeoutCausalCommand(node))
      ELSE LeaveCausalQueues
   /\ UNCHANGED <<asyncDeferredCompletionQueues,
-                 asyncDeferredProgressQueues, asyncDeferredNormalQueues>>
+                 asyncDeferredProgressQueues, asyncDeferredNormalQueues,
+                 asyncNextDeferredClass>>
   /\ asyncDeferredDrainOwed' =
        IF BeginTimeoutEnabled(node)
        THEN [asyncDeferredDrainOwed EXCEPT ![node] = TRUE]
@@ -2262,7 +2411,8 @@ DirectRetransmitStep(node) ==
                [asyncOutstandingTags EXCEPT
                   ![node] = @ \cup {"RetransmitElapsed"}]
   /\ UNCHANGED <<asyncDeferredCompletionQueues,
-                 asyncDeferredProgressQueues, asyncDeferredNormalQueues>>
+                 asyncDeferredProgressQueues, asyncDeferredNormalQueues,
+                 asyncNextDeferredClass>>
   /\ asyncDeferredDrainOwed' =
        IF NodeIdle(node)
        THEN [asyncDeferredDrainOwed EXCEPT ![node] = TRUE]
@@ -2291,7 +2441,8 @@ DeferredTimeoutStep(node) ==
   /\ asyncOutstandingTags' =
        [asyncOutstandingTags EXCEPT ![node] = @ \ {"TimeoutElapsed"}]
   /\ UNCHANGED <<asyncDeferredCompletionQueues,
-                 asyncDeferredProgressQueues, asyncDeferredNormalQueues>>
+                 asyncDeferredProgressQueues, asyncDeferredNormalQueues,
+                 asyncNextDeferredClass>>
   /\ asyncDeferredDrainOwed' =
        [asyncDeferredDrainOwed EXCEPT ![node] = TRUE]
   /\ UNCHANGED <<asyncCommandQueues, asyncNextCommandClass,
@@ -2310,7 +2461,8 @@ DeferredRetransmitStep(node) ==
   /\ asyncOutstandingTags' =
        [asyncOutstandingTags EXCEPT ![node] = @ \ {"RetransmitElapsed"}]
   /\ UNCHANGED <<asyncDeferredCompletionQueues,
-                 asyncDeferredProgressQueues, asyncDeferredNormalQueues>>
+                 asyncDeferredProgressQueues, asyncDeferredNormalQueues,
+                 asyncNextDeferredClass>>
   /\ asyncDeferredDrainOwed' =
        [asyncDeferredDrainOwed EXCEPT ![node] = TRUE]
   /\ LeaveCausalQueues
@@ -2346,7 +2498,8 @@ FifoRuntimeStep(node) ==
              /\ AppendCausalSuccessors(command)
              /\ UNCHANGED <<asyncDeferredCompletionQueues,
                             asyncDeferredProgressQueues,
-                            asyncDeferredNormalQueues>>
+                            asyncDeferredNormalQueues,
+                            asyncNextDeferredClass>>
              /\ asyncDeferredDrainOwed' =
                   [asyncDeferredDrainOwed EXCEPT ![node] = TRUE]
         ELSE IF ~NodeIdle(node)
@@ -2356,7 +2509,8 @@ FifoRuntimeStep(node) ==
                   /\ LeaveCausalQueues
                   /\ UNCHANGED <<asyncDeferredCompletionQueues,
                                  asyncDeferredProgressQueues,
-                                 asyncDeferredNormalQueues>>
+                                 asyncDeferredNormalQueues,
+                                 asyncNextDeferredClass>>
                   /\ asyncDeferredDrainOwed' =
                        [asyncDeferredDrainOwed EXCEPT ![node] = TRUE]
      /\ asyncFifoOwed' = [asyncFifoOwed EXCEPT ![node] = FALSE]
@@ -2372,7 +2526,8 @@ DeferredDrainStep(node) ==
                          asyncNextCommandClass, asyncFifoOwed,
                          asyncTimeoutEmitted, asyncDeferredCompletionQueues,
                          asyncDeferredProgressQueues,
-                         asyncDeferredNormalQueues, asyncOutstandingTags,
+                         asyncDeferredNormalQueues,
+                         asyncNextDeferredClass, asyncOutstandingTags,
                          asyncNodeDeadlines, asyncRetransmitDeadlines,
                          asyncSentItems, asyncRetainedControl, asyncActiveRequests, asyncTransport, asyncIngressLanes,
                          asyncIngressReady, asyncHeldChunks>>
@@ -2393,6 +2548,7 @@ DeferredDrainStep(node) ==
                                   asyncNextCommandClass, asyncFifoOwed>>
              ELSE IF ~NodeIdle(node)
                   THEN /\ LeaveCausalQueues
+                       /\ AdvanceNextDeferredClass(node)
                        /\ UNCHANGED <<vars, asyncCommandQueues,
                                       asyncNextCommandClass,
                                       asyncFifoOwed, asyncTimeoutEmitted,
@@ -2472,36 +2628,37 @@ RuntimeStep(node) ==
 LocalAdmissionStep(node) ==
   /\ asyncRunnerPhase[node] = "Local"
   /\ UNCHANGED AsyncDeferredVars
-  /\ IF asyncRunnerBudget[node] > 0 /\ ProducerCompletionCanAdmit(node)
-     THEN /\ AdmitProducerCompletion(node)
-          /\ LeaveCausalQueues
-          /\ asyncRunnerPhase' = asyncRunnerPhase
+  /\ IF LocalAdmissionCanAdvance(node)
+     THEN LET source == SelectedLocalSource(node)
+          IN /\ IF source = "Producer"
+                 THEN /\ AdmitProducerCompletion(node)
+                      /\ LeaveCausalQueues
+                 ELSE AdmitCausalHead(node)
+             /\ UpdateLocalAdmissionMetadata(node, source)
+             /\ asyncRunnerPhase' = asyncRunnerPhase
+             /\ asyncRunnerBudget' =
+                  [asyncRunnerBudget EXCEPT ![node] = @ - 1]
+     ELSE /\ LeaveCausalQueues
+          /\ UNCHANGED <<vars, asyncCommandQueues,
+                          asyncNextCommandClass,
+                          asyncFifoOwed, asyncTimeoutEmitted,
+                          AsyncIoVars, AsyncLocalAdmissionVars,
+                          asyncOutstandingTags, asyncNodeDeadlines,
+                          asyncRetransmitDeadlines, asyncSentItems,
+                          asyncRetainedControl, asyncActiveRequests,
+                          asyncTransport, asyncIngressLanes,
+                          asyncIngressReady, asyncHeldChunks>>
+          /\ asyncRunnerPhase' =
+               [asyncRunnerPhase EXCEPT ![node] = "Ingress"]
           /\ asyncRunnerBudget' =
-               [asyncRunnerBudget EXCEPT ![node] = @ - 1]
-     ELSE IF asyncRunnerBudget[node] > 0 /\ CausalHeadCanAdvance(node)
-          THEN /\ AdmitCausalHead(node)
-               /\ asyncRunnerPhase' = asyncRunnerPhase
-               /\ asyncRunnerBudget' =
-                    [asyncRunnerBudget EXCEPT ![node] = @ - 1]
-          ELSE /\ LeaveCausalQueues
-               /\ UNCHANGED <<vars, asyncCommandQueues,
-                               asyncNextCommandClass,
-                               asyncFifoOwed, asyncTimeoutEmitted,
-                               AsyncIoVars, asyncOutstandingTags,
-                               asyncNodeDeadlines,
-                               asyncRetransmitDeadlines, asyncSentItems, asyncRetainedControl, asyncActiveRequests,
-                               asyncTransport, asyncIngressLanes,
-                               asyncIngressReady, asyncHeldChunks>>
-               /\ asyncRunnerPhase' =
-                    [asyncRunnerPhase EXCEPT ![node] = "Ingress"]
-               /\ asyncRunnerBudget' =
-                    [asyncRunnerBudget EXCEPT
-                       ![node] = AsyncIngressCapacity]
+               [asyncRunnerBudget EXCEPT
+                  ![node] = AsyncIngressCapacity]
 
 IngressDrainStep(node) ==
   /\ asyncRunnerPhase[node] = "Ingress"
   /\ UNCHANGED AsyncDeferredVars
   /\ LeaveCausalQueues
+  /\ UNCHANGED AsyncLocalAdmissionVars
   /\ IF asyncRunnerBudget[node] > 0
           /\ asyncIngressReady[node] # <<>>
           /\ DrainableIngressIndices(node) # {}
@@ -2525,6 +2682,7 @@ IngressDrainStep(node) ==
 SerializedRuntimeStep(node) ==
   /\ asyncRunnerPhase[node] = "Runtime"
   /\ UNCHANGED AsyncIoVars
+  /\ UNCHANGED AsyncLocalAdmissionVars
   /\ RuntimeStep(node)
   /\ asyncRunnerPhase' = [asyncRunnerPhase EXCEPT ![node] = "Local"]
   /\ asyncRunnerBudget' =
@@ -2557,6 +2715,7 @@ HistoricalIdleStep ==
 RunHistoricalServer(node) ==
   /\ node \in AsyncCurrentResponsiveVoters
   /\ NodeHasApplication(node)
+  /\ UNCHANGED AsyncLocalAdmissionVars
   /\ IF HistoricalDrainableIngressIndices(node) # {}
      THEN DrainHistoricalIngressSelected(node)
      ELSE HistoricalIdleStep
@@ -2583,6 +2742,7 @@ PreGstLosePacket(packet) ==
   /\ asyncTransport' = asyncTransport \ {packet}
   /\ UNCHANGED AsyncDeferredVars
   /\ LeaveCausalQueues
+  /\ UNCHANGED AsyncLocalAdmissionVars
   /\ UNCHANGED <<vars, asyncNow, asyncCommandQueues,
                  asyncNextCommandClass, asyncFifoOwed,
                  asyncTimeoutEmitted, asyncRunnerPhase, asyncRunnerBudget,
@@ -2613,6 +2773,7 @@ InjectByzantineNoise(source, recipient, nonce) ==
      /\ asyncTransport' = asyncTransport \cup {packet}
      /\ UNCHANGED AsyncDeferredVars
      /\ LeaveCausalQueues
+     /\ UNCHANGED AsyncLocalAdmissionVars
      /\ UNCHANGED <<vars, asyncNow, asyncCommandQueues,
                     asyncNextCommandClass, asyncFifoOwed,
                     asyncTimeoutEmitted, asyncRunnerPhase,
@@ -2640,6 +2801,7 @@ InjectAuthenticatedJunk(kind, source, recipient, nonce) ==
      /\ UNCHANGED <<asyncRetainedControl, asyncActiveRequests>>
      /\ UNCHANGED AsyncDeferredVars
      /\ LeaveCausalQueues
+     /\ UNCHANGED AsyncLocalAdmissionVars
      /\ UNCHANGED <<vars, asyncNow, asyncCommandQueues,
                     asyncNextCommandClass, asyncFifoOwed,
                     asyncTimeoutEmitted, asyncRunnerPhase,
@@ -2667,6 +2829,7 @@ InjectByzantineCertifiedRequest(source, recipient, qc, nonce) ==
      /\ UNCHANGED <<asyncRetainedControl, asyncActiveRequests>>
      /\ UNCHANGED AsyncDeferredVars
      /\ LeaveCausalQueues
+     /\ UNCHANGED AsyncLocalAdmissionVars
      /\ UNCHANGED <<vars, asyncNow, asyncCommandQueues,
                     asyncNextCommandClass, asyncFifoOwed,
                     asyncTimeoutEmitted, asyncRunnerPhase,
@@ -2684,6 +2847,7 @@ AsyncByzantineProposal(signer, roundView, subject,
   IN /\ ByzantineBroadcastProposal(signer, roundView, subject,
                                     justifyRank, justifySubject)
      /\ PublishEphemeralItems(ByzantineProposalOutbox(signer, proposal))
+     /\ UNCHANGED AsyncLocalAdmissionVars
      /\ UNCHANGED <<asyncNow, asyncCommandQueues,
                     asyncNextCommandClass, asyncFifoOwed,
                     asyncTimeoutEmitted, asyncRunnerPhase,
@@ -2699,6 +2863,7 @@ AsyncByzantineVote(signer, roundView, phase, subject) ==
   LET vote == Vote(context, roundView, phase, subject, signer)
   IN /\ ByzantineBroadcastVote(signer, roundView, phase, subject)
      /\ PublishEphemeralItems(ByzantineVoteOutbox(signer, vote))
+     /\ UNCHANGED AsyncLocalAdmissionVars
      /\ UNCHANGED <<asyncNow, asyncCommandQueues,
                     asyncNextCommandClass, asyncFifoOwed,
                     asyncTimeoutEmitted, asyncRunnerPhase,
@@ -2714,6 +2879,7 @@ AsyncByzantineTimeout(signer, roundView, highRank, highSubject) ==
   LET vote == TimeoutVote(context, roundView, signer, highRank, highSubject)
   IN /\ ByzantineBroadcastTimeout(signer, roundView, highRank, highSubject)
      /\ PublishEphemeralItems(ByzantineTimeoutOutbox(signer, vote))
+     /\ UNCHANGED AsyncLocalAdmissionVars
      /\ UNCHANGED <<asyncNow, asyncCommandQueues,
                     asyncNextCommandClass, asyncFifoOwed,
                     asyncTimeoutEmitted, asyncRunnerPhase,
@@ -2772,9 +2938,10 @@ AsyncTickEnabled ==
 AsyncNonClockVars ==
   <<vars, asyncCommandQueues, asyncNextCommandClass,
     asyncFifoOwed, asyncTimeoutEmitted,
-    asyncRunnerPhase, asyncRunnerBudget, AsyncIoVars,
+    asyncRunnerPhase, asyncRunnerBudget, AsyncLocalAdmissionVars, AsyncIoVars,
     asyncDeferredCompletionQueues, asyncDeferredProgressQueues,
-    asyncDeferredNormalQueues, asyncDeferredDrainOwed, asyncCausalQueues,
+    asyncDeferredNormalQueues, asyncNextDeferredClass,
+    asyncDeferredDrainOwed, asyncCausalQueues,
     asyncOutstandingTags, asyncNodeDeadlines, asyncRetransmitDeadlines,
     asyncNodeServiceDeadlines, asyncIoServiceDeadlines, asyncSentItems, asyncRetainedControl, asyncActiveRequests,
     asyncTransport, asyncIngressLanes, asyncIngressReady,
@@ -2848,6 +3015,10 @@ AsyncRuntimeInit ==
   /\ asyncRunnerPhase = [node \in ValidatorIds |-> "Local"]
   /\ asyncRunnerBudget =
        [node \in ValidatorIds |-> AsyncQueueCapacity]
+  /\ asyncCausalAdmissionOwed =
+       [node \in ValidatorIds |-> FALSE]
+  /\ asyncNextLocalSource =
+       [node \in ValidatorIds |-> "Producer"]
   /\ asyncCausalQueues =
        [node \in ValidatorIds |->
           <<NoItemCandidate("Normal", "AssembleBody", node, nodeView[node],
@@ -2866,6 +3037,8 @@ AsyncDeferredInit ==
        [node \in ValidatorIds |-> <<>>]
   /\ asyncDeferredProgressQueues = [node \in ValidatorIds |-> <<>>]
   /\ asyncDeferredNormalQueues = [node \in ValidatorIds |-> <<>>]
+  /\ asyncNextDeferredClass =
+       [node \in ValidatorIds |-> "Completion"]
   /\ asyncDeferredDrainOwed = [node \in ValidatorIds |-> FALSE]
 
 AsyncTransportInit ==
@@ -2950,6 +3123,8 @@ AsyncRuntimeScalarTypeInvariant ==
        [ValidatorIds -> {"Local", "Ingress", "Runtime"}]
   /\ asyncRunnerBudget \in
        [ValidatorIds -> 0..(AsyncQueueCapacity + AsyncIngressCapacity)]
+  /\ asyncCausalAdmissionOwed \in [ValidatorIds -> BOOLEAN]
+  /\ asyncNextLocalSource \in [ValidatorIds -> AsyncLocalSources]
 
 AsyncCausalQueueOwnership(node, queue) ==
   \A candidate \in SequenceSet(queue): candidate.node = node
@@ -3028,9 +3203,8 @@ AsyncIoContentTypeInvariant ==
 AsyncIoCapacityTypeInvariant ==
   \A node \in ValidatorIds:
        /\ AsyncQueueDepth(node) <= AsyncQueueCapacity
-       /\ AsyncCompletionLoad(node) <= AsyncCompletionReserve
        /\ AsyncIoQueueDepth(node) <= AsyncIoCapacity
-       /\ AsyncCompletionLoad(node) <= AsyncIoWorkCapacity
+       /\ AsyncOutstandingWorkCount(node) <= AsyncIoWorkCapacity
 
 AsyncIoTypeInvariant ==
   /\ AsyncIoTopologyTypeInvariant
@@ -3041,6 +3215,8 @@ AsyncDeferredTopologyTypeInvariant ==
   /\ DOMAIN asyncDeferredCompletionQueues = ValidatorIds
   /\ DOMAIN asyncDeferredProgressQueues = ValidatorIds
   /\ DOMAIN asyncDeferredNormalQueues = ValidatorIds
+  /\ asyncNextDeferredClass \in
+       [ValidatorIds -> AsyncCommandClasses]
   /\ asyncDeferredDrainOwed \in [ValidatorIds -> BOOLEAN]
 
 AsyncDeferredContentTypeInvariant ==
@@ -3177,7 +3353,6 @@ AsyncTypeInvariant ==
 
 AsyncCompletionReserveInvariant ==
   \A node \in ValidatorIds:
-    /\ AsyncCompletionLoad(node) <= AsyncCompletionReserve
     /\ AsyncQueueDepth(node) <= AsyncQueueCapacity
     /\ (AsyncQueueDepth(node) >= AsyncNormalLimit
           => ~CanEnqueueClass(node, "Normal"))
@@ -3196,7 +3371,7 @@ AsyncIoReservationInvariant ==
             {index \in 1..AsyncIoQueueDepth(node):
                asyncIoQueues[node][index].class # "Control"})
             <= AsyncIoAuxCapacity + AsyncIoWorkCapacity
-       /\ AsyncCompletionLoad(node) <= AsyncIoWorkCapacity
+       /\ AsyncOutstandingWorkCount(node) <= AsyncIoWorkCapacity
 
 AsyncBoundedRetransmissionInvariant ==
   \A node \in ValidatorIds:

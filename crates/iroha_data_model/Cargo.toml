@@ -135,6 +135,11 @@ path = "src/bin/qr_stream_fixtures.rs"
 required-features = ["test-fixtures"]
 
 [[bin]]
+name = "kagemusha_peer_transport_fixtures"
+path = "src/bin/kagemusha_peer_transport_fixtures.rs"
+required-features = ["test-fixtures"]
+
+[[bin]]
 name = "sumeragi_v2_wire_fixtures"
 path = "src/bin/sumeragi_v2_wire_fixtures.rs"
 

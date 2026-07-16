@@ -1361,12 +1361,14 @@ mod tests {
     use crate::{kura::Kura, query::store::LiveQueryStore, state::World};
 
     fn keys() -> Vec<KeyPair> {
-        (1_u8..=4)
+        let mut keys = (1_u8..=4)
             .map(|seed| {
                 KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
                     .expect("deterministic BLS key")
             })
-            .collect()
+            .collect::<Vec<_>>();
+        keys.sort_by(|left, right| left.public_key().cmp(right.public_key()));
+        keys
     }
 
     fn context(height: u64, keys: &[KeyPair]) -> wire::HeightContext {
@@ -1569,11 +1571,11 @@ mod tests {
 
         assert!(matches!(
             V2NposVrfLifecycle::open(&context, &state, None, &keys[0]),
-            Err(V2NposError::InvalidSchedule)
+            Err(V2NposError::MissingCommittedParameters)
         ));
         assert!(matches!(
             validate_candidate_records(&context, &state, None),
-            Err(V2NposError::InvalidSchedule)
+            Err(V2NposError::MissingCommittedParameters)
         ));
     }
 
@@ -2264,7 +2266,25 @@ mod tests {
             V2VrfIngressOutcome::Accepted
         );
         let committed = lifecycle.pending_records().pop().expect("commit record");
-        let boundary_context = context(10, &keys);
+        let mut boundary_context = context(10, &keys);
+        boundary_context.next_epoch_snapshot = Some(wire::finality::FinalizedNextEpochSnapshot {
+            epoch: boundary_context.epoch + 1,
+            epoch_end_height: 20,
+            mode: boundary_context.mode,
+            roster: boundary_context.roster.clone(),
+            validator_set_pops: keys
+                .iter()
+                .map(|key| {
+                    iroha_crypto::bls_normal_pop_prove(key.private_key())
+                        .expect("next-epoch validator proof of possession")
+                })
+                .collect(),
+            quorum: boundary_context.quorum,
+            leader_seed: [0x45; 32],
+        });
+        boundary_context
+            .validate()
+            .expect("boundary fixture carries the mandatory next-epoch snapshot");
         let boundary = lifecycle_at(10, 10, Some(committed.clone()), None, &keys);
         let seal = boundary.pending_records().pop().expect("boundary seal");
         validate_candidate_records(

@@ -93,6 +93,12 @@ struct SimulationModes {
     membership_churn: bool,
 }
 
+#[derive(Clone, Debug)]
+struct ReleaseExecutionProfile {
+    build_profile: String,
+    cargo_net_offline: bool,
+}
+
 #[derive(Clone, Copy)]
 struct SimulationConfig {
     duration: Duration,
@@ -186,6 +192,8 @@ impl SimulationConfig {
 struct SimulationSummary {
     git_revision: String,
     workspace_source_manifest_sha256: String,
+    build_profile: String,
+    cargo_net_offline: bool,
     localnet_artifact_path: String,
     daemon_binary_path: String,
     daemon_binary_blake2b_256: String,
@@ -243,6 +251,8 @@ impl SimulationSummary {
         norito::json!({
             "git_revision": (self.git_revision.clone()),
             "workspace_source_manifest_sha256": (self.workspace_source_manifest_sha256.clone()),
+            "build_profile": (self.build_profile.clone()),
+            "cargo_net_offline": (self.cargo_net_offline),
             "localnet_artifact_path": (self.localnet_artifact_path.clone()),
             "daemon_binary_path": (self.daemon_binary_path.clone()),
             "daemon_binary_blake2b_256": (self.daemon_binary_blake2b_256.clone()),
@@ -354,6 +364,7 @@ fn blocker_label(blocker: SumeragiV2LivenessBlocker) -> &'static str {
         SumeragiV2LivenessBlocker::TimeoutCertificateMissing => "timeout_certificate_missing",
         SumeragiV2LivenessBlocker::SchedulerStarvation => "scheduler_starvation",
         SumeragiV2LivenessBlocker::ApplicationPending => "application_pending",
+        SumeragiV2LivenessBlocker::LocalControlPending => "local_control_pending",
     }
 }
 
@@ -706,6 +717,7 @@ async fn taira_profile_24h_packet_impairment_and_restart_soak() -> Result<()> {
     let cfg = SimulationConfig::from_env();
     let workspace_source_manifest_sha256 = required_release_source_manifest_sha256()?;
     let evidence_path = required_release_evidence_path()?;
+    let release_execution_profile = required_release_execution_profile()?;
     let seed = std::env::var("IROHA_TAIRA_SIM_SEED")
         .ok()
         .filter(|seed| !seed.trim().is_empty())
@@ -722,6 +734,7 @@ async fn taira_profile_24h_packet_impairment_and_restart_soak() -> Result<()> {
                 membership_churn: true,
             },
             &workspace_source_manifest_sha256,
+            &release_execution_profile,
         )
         .await?;
         write_summary(&harness.summary_path(), &evidence_path, &summary)?;
@@ -741,6 +754,7 @@ async fn run_taira_simulation(
     cfg: SimulationConfig,
     modes: SimulationModes,
     workspace_source_manifest_sha256: &str,
+    release_execution_profile: &ReleaseExecutionProfile,
 ) -> Result<SimulationSummary> {
     ensure!(cfg.tps > 0, "tps must be greater than zero");
     ensure!(
@@ -1286,6 +1300,8 @@ async fn run_taira_simulation(
     Ok(SimulationSummary {
         git_revision: harness.git_revision.clone(),
         workspace_source_manifest_sha256: workspace_source_manifest_sha256.to_owned(),
+        build_profile: release_execution_profile.build_profile.clone(),
+        cargo_net_offline: release_execution_profile.cargo_net_offline,
         localnet_artifact_path: harness.out_dir.display().to_string(),
         daemon_binary_path: harness.daemon_binary_path.display().to_string(),
         daemon_binary_blake2b_256: harness.daemon_binary_blake2b_256.clone(),
@@ -3029,6 +3045,39 @@ fn required_release_source_manifest_sha256() -> Result<String> {
     Ok(manifest)
 }
 
+fn required_release_execution_profile() -> Result<ReleaseExecutionProfile> {
+    let build_profile = std::env::var("IROHA_TEST_BUILD_PROFILE")
+        .wrap_err("IROHA_TEST_BUILD_PROFILE must be set by the release launcher")?;
+    let cargo_profile =
+        std::env::var("PROFILE").wrap_err("PROFILE must be set by the release launcher")?;
+    let cargo_net_offline = std::env::var("CARGO_NET_OFFLINE")
+        .wrap_err("CARGO_NET_OFFLINE must be set by the release launcher")?;
+    validate_release_execution_profile(&build_profile, &cargo_profile, &cargo_net_offline)
+}
+
+fn validate_release_execution_profile(
+    build_profile: &str,
+    cargo_profile: &str,
+    cargo_net_offline: &str,
+) -> Result<ReleaseExecutionProfile> {
+    ensure!(
+        build_profile == "release",
+        "IROHA_TEST_BUILD_PROFILE must be exactly release"
+    );
+    ensure!(
+        cargo_profile == build_profile,
+        "PROFILE and IROHA_TEST_BUILD_PROFILE must both select release"
+    );
+    ensure!(
+        cargo_net_offline == "true",
+        "CARGO_NET_OFFLINE must be exactly true"
+    );
+    Ok(ReleaseExecutionProfile {
+        build_profile: build_profile.to_owned(),
+        cargo_net_offline: true,
+    })
+}
+
 fn required_release_evidence_path() -> Result<PathBuf> {
     let raw = std::env::var("IROHA_TAIRA_EVIDENCE_PATH")
         .wrap_err("IROHA_TAIRA_EVIDENCE_PATH must be set by the release launcher")?;
@@ -3634,10 +3683,50 @@ fn joiner_stall_warning_threshold_matches_policy() {
     assert!(should_count_joiner_stall_as_warning(3));
 }
 
+#[test]
+fn release_execution_profile_accepts_only_the_exact_positive_profile() {
+    let profile = validate_release_execution_profile("release", "release", "true")
+        .expect("exact release/offline profile");
+    assert_eq!(profile.build_profile, "release");
+    assert!(profile.cargo_net_offline);
+}
+
+#[test]
+fn release_execution_profile_rejects_wrong_or_blank_build_profiles() {
+    for build_profile in ["", "debug", " release", "release "] {
+        assert!(
+            validate_release_execution_profile(build_profile, build_profile, "true").is_err(),
+            "unexpectedly accepted build profile {build_profile:?}"
+        );
+    }
+}
+
+#[test]
+fn release_execution_profile_rejects_cargo_profile_mismatch() {
+    for cargo_profile in ["", "debug", "release ", "Release"] {
+        assert!(
+            validate_release_execution_profile("release", cargo_profile, "true").is_err(),
+            "unexpectedly accepted Cargo profile {cargo_profile:?}"
+        );
+    }
+}
+
+#[test]
+fn release_execution_profile_rejects_non_exact_offline_values() {
+    for cargo_net_offline in ["", "1", "TRUE", " true", "true ", "false"] {
+        assert!(
+            validate_release_execution_profile("release", "release", cargo_net_offline).is_err(),
+            "unexpectedly accepted CARGO_NET_OFFLINE={cargo_net_offline:?}"
+        );
+    }
+}
+
 fn sample_simulation_summary() -> SimulationSummary {
     SimulationSummary {
         git_revision: "1".repeat(40),
         workspace_source_manifest_sha256: "a".repeat(64),
+        build_profile: "release".to_owned(),
+        cargo_net_offline: true,
         localnet_artifact_path: "/tmp/taira-localnet".to_owned(),
         daemon_binary_path: "/tmp/iroha3d".to_owned(),
         daemon_binary_blake2b_256: "b".repeat(64),
@@ -3714,6 +3803,18 @@ fn simulation_summary_json_records_release_profile_and_status_evidence() {
             .and_then(norito::json::Value::as_str),
         Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
     );
+    assert_eq!(
+        object
+            .get("build_profile")
+            .and_then(norito::json::Value::as_str),
+        Some("release")
+    );
+    assert_eq!(
+        object
+            .get("cargo_net_offline")
+            .and_then(norito::json::Value::as_bool),
+        Some(true)
+    );
     for name in [
         "daemon_binary_blake2b_256",
         "kagami_binary_blake2b_256",
@@ -3788,6 +3889,10 @@ fn simulation_summary_json_records_release_profile_and_status_evidence() {
     assert_eq!(
         blocker_label(SumeragiV2LivenessBlocker::ApplicationPending),
         "application_pending"
+    );
+    assert_eq!(
+        blocker_label(SumeragiV2LivenessBlocker::LocalControlPending),
+        "local_control_pending"
     );
 }
 

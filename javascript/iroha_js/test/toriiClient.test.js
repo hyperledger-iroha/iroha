@@ -10935,6 +10935,65 @@ test("getSumeragiStatusTyped validates and normalizes authoritative v2 status", 
   assert.equal("lane_commitments" in status, false);
 });
 
+test("getSumeragiStatusTyped accepts the local-control liveness blocker", async () => {
+  const payload = createSumeragiV2StatusPayload();
+  payload.liveness.blocker = { blocker: "local_control_pending", details: null };
+
+  const status = await sumeragiClientForPayload(payload).getSumeragiStatusTyped();
+
+  assert.equal(status.liveness.blocker.blocker, "local_control_pending");
+});
+
+test("getSumeragiStatusTyped accepts the unsafe-proposal ignore reason", async () => {
+  const payload = createSumeragiV2StatusPayload();
+  payload.liveness.ignore_counts = [
+    {
+      reason: { reason: "unsafe_proposal", details: null },
+      count: 3,
+    },
+  ];
+
+  const status = await sumeragiClientForPayload(payload).getSumeragiStatusTyped();
+
+  assert.equal(status.liveness.ignore_counts[0].reason.reason, "unsafe_proposal");
+  assert.equal(status.liveness.ignore_counts[0].count, 3);
+});
+
+test("getSumeragiStatusTyped accepts all twelve ignore reasons at the bound", async () => {
+  const reasons = [
+    "wrong_height",
+    "wrong_view",
+    "stale_generation",
+    "busy",
+    "duplicate",
+    "no_matching_work",
+    "observer",
+    "view_closed",
+    "already_decided",
+    "recovery_pending",
+    "irrelevant_view",
+    "unsafe_proposal",
+  ];
+  const payload = createSumeragiV2StatusPayload();
+  payload.liveness.ignore_counts = reasons.map((reason, index) => ({
+    reason: { reason, details: null },
+    count: index + 1,
+  }));
+
+  const status = await sumeragiClientForPayload(payload).getSumeragiStatusTyped();
+
+  assert.deepEqual(
+    status.liveness.ignore_counts.map((entry) => entry.reason.reason),
+    reasons,
+  );
+
+  payload.liveness.ignore_counts.push({ ...payload.liveness.ignore_counts.at(-1) });
+  await assert.rejects(
+    () => sumeragiClientForPayload(payload).getSumeragiStatusTyped(),
+    /ignore_counts exceeds its protocol item bound/,
+  );
+});
+
 test("getSumeragiStatusTyped rejects unsupported protocol and invalid frozen contexts", async () => {
   const legacyField = createSumeragiV2StatusPayload({ mode_tag: "retired" });
   await assert.rejects(

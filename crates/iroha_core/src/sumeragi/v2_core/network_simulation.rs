@@ -218,7 +218,9 @@ impl Simulation {
                         .expect("application completion matches the durable decision")
                         .into_effects()
                 }
-                Effect::EnterView { tag, certificate } => {
+                Effect::EnterView {
+                    tag, certificate, ..
+                } => {
                     assert_eq!(tag, self.nodes[index].reducer.current_tag());
                     assert_eq!(tag.view(), certificate.round().view() + 1);
                     Vec::new()
@@ -800,6 +802,11 @@ fn taira_divergent_views_converge_and_commit_within_one_rotation() {
                 .map(QuorumCertificate::reference),
             Some(prepare.reference())
         );
+        let pools = node.reducer.vote_pool_snapshots();
+        assert_eq!(pools.len(), 1);
+        assert_eq!(pools[0].round, prepare.round());
+        assert_eq!(pools[0].phase, Phase::Commit);
+        assert_eq!(pools[0].subject, subject);
     }
 
     // One node receives a delayed CommitQC from view zero after advancing to
@@ -817,6 +824,29 @@ fn taira_divergent_views_converge_and_commit_within_one_rotation() {
     );
     let successful_view = simulation.propose(subject);
     simulation.assert_online_committed(subject);
+    let mut current_lock_nodes = 0usize;
+    for node in &simulation.nodes {
+        if node
+            .reducer
+            .durable_state()
+            .locked()
+            .is_none_or(|locked| locked.round().view() != successful_view)
+        {
+            continue;
+        }
+        current_lock_nodes += 1;
+        assert!(
+            node.reducer
+                .vote_pool_snapshots()
+                .iter()
+                .all(|pool| pool.round.view() == successful_view),
+            "a newly durable lock must retire the inert historical Commit pool"
+        );
+    }
+    assert!(
+        current_lock_nodes > 0,
+        "the converged proposal must install at least one current-view lock"
+    );
     assert_eq!(successful_view, 3);
     assert!(successful_view <= simulation.context.roster().len() as u64);
 }

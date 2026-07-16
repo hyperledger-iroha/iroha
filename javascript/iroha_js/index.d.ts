@@ -3106,7 +3106,7 @@ export function blake2b256(
   },
 ): Uint8Array;
 
-export const IVM_PROGRAM_HEADER_LENGTH: 17;
+export const IVM_PROGRAM_HEADER_LENGTH: 49;
 export const IVM_ARTIFACT_MAX_BYTES: 4194304;
 
 /** Compute ledger/Core body identity and full-artifact SHA-256 identity. */
@@ -7390,7 +7390,8 @@ export type ToriiSumeragiV2LivenessBlocker = Readonly<{
     | "commit_quorum_missing"
     | "timeout_certificate_missing"
     | "scheduler_starvation"
-    | "application_pending";
+    | "application_pending"
+    | "local_control_pending";
   details: null;
 }>;
 
@@ -7406,7 +7407,8 @@ export type ToriiSumeragiV2IgnoreReason = Readonly<{
     | "view_closed"
     | "already_decided"
     | "recovery_pending"
-    | "irrelevant_view";
+    | "irrelevant_view"
+    | "unsafe_proposal";
   details: null;
 }>;
 

@@ -15808,13 +15808,14 @@ function parseSumeragiLivenessStatus(value, context, active) {
           "timeout_certificate_missing",
           "scheduler_starvation",
           "application_pending",
+          "local_control_pending",
         ],
         `${context}.blocker`,
       );
 
   const ignoreReasons = new Set();
   const ignoreCounts = Object.freeze(
-    assertSumeragiArrayBound(record.ignore_counts, 11, `${context}.ignore_counts`).map(
+    assertSumeragiArrayBound(record.ignore_counts, 12, `${context}.ignore_counts`).map(
       (raw, index) => {
         const itemContext = `${context}.ignore_counts[${index}]`;
         const item = assertExactSumeragiRecord(raw, ["reason", "count"], itemContext);
@@ -15833,6 +15834,7 @@ function parseSumeragiLivenessStatus(value, context, active) {
             "already_decided",
             "recovery_pending",
             "irrelevant_view",
+            "unsafe_proposal",
           ],
           `${itemContext}.reason`,
         );

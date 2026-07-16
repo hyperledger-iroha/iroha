@@ -31,6 +31,10 @@ PINNED_ENV = {
     "IROHA_TEST_SKIP_BUILD": "0",
     "IROHA_TEST_ALLOW_REENTRANT_BUILD": "1",
     "IROHA_TEST_BUILD_TIMEOUT_MS": "3600",
+    "IROHA_TEST_BUILD_PROFILE": "release",
+    "PROFILE": "release",
+    "RUST_LOG": "info",
+    "CARGO_NET_OFFLINE": "true",
 }
 
 
@@ -79,6 +83,10 @@ set -euo pipefail
     "IROHA_TEST_SKIP_BUILD=${{IROHA_TEST_SKIP_BUILD-<unset>}}" \\
     "IROHA_TEST_ALLOW_REENTRANT_BUILD=${{IROHA_TEST_ALLOW_REENTRANT_BUILD-<unset>}}" \\
     "IROHA_TEST_BUILD_TIMEOUT_MS=${{IROHA_TEST_BUILD_TIMEOUT_MS-<unset>}}" \\
+    "IROHA_TEST_BUILD_PROFILE=${{IROHA_TEST_BUILD_PROFILE-<unset>}}" \\
+    "PROFILE=${{PROFILE-<unset>}}" \\
+    "RUST_LOG=${{RUST_LOG-<unset>}}" \\
+    "CARGO_NET_OFFLINE=${{CARGO_NET_OFFLINE-<unset>}}" \\
     "IROHA_RELEASE_SOURCE_MANIFEST_SHA256=${{IROHA_RELEASE_SOURCE_MANIFEST_SHA256-<unset>}}" \\
     "IROHA_TAIRA_EVIDENCE_PATH=${{IROHA_TAIRA_EVIDENCE_PATH-<unset>}}" \\
     "IROHA_TEST_TARGET_DIR=${{IROHA_TEST_TARGET_DIR-<unset>}}" \\
@@ -161,6 +169,13 @@ def test_launcher_pins_complete_profile_and_runs_exactly_one_test(
     env["IROHA_RELEASE_SOURCE_MANIFEST_SHA256"] = "0" * 64
     env["IROHA_TAIRA_EVIDENCE_PATH"] = "/tmp/malicious-evidence.json"
 
+    mismatch = _run_launcher(env)
+
+    assert mismatch.returncode == 1
+    assert "does not match the parent release invocation" in mismatch.stderr
+    assert not capture.exists()
+
+    env["IROHA_RELEASE_SOURCE_MANIFEST_SHA256"] = "a" * 64
     result = _run_launcher(env)
 
     assert result.returncode == 0, result.stderr
@@ -168,16 +183,19 @@ def test_launcher_pins_complete_profile_and_runs_exactly_one_test(
     calls = [line for line in captured.splitlines() if line.startswith("args=")]
     assert len(calls) == 2
     assert all(
-        "test --locked -p integration_tests --test consensus_and_da" in call
+        "test --locked --offline --release -p integration_tests --test consensus_and_da"
+        in call
         for call in calls
     )
     assert "-- --list --ignored" in calls[0]
     assert EXPECTED_TEST in calls[1]
     assert "-- --exact --ignored --nocapture --test-threads=1" in calls[1]
+    captured_lines = captured.splitlines()
     for name, value in PINNED_ENV.items():
-        assert captured.count(f"{name}={value}\n") == 2
-        assert f"{name}=inherited-malicious-override" not in captured
+        assert captured_lines.count(f"{name}={value}") == 2
+        assert f"{name}=inherited-malicious-override" not in captured_lines
     source_root = REPO_ROOT / "target" / "sumeragi-v2-release" / ("a" * 64)
+    assert not (source_root / "evidence" / ".taira_v2_24h_soak.lock").exists()
     assert captured.count(f"IROHA_RELEASE_SOURCE_MANIFEST_SHA256={'a' * 64}\n") == 2
     assert captured.count(f"IROHA_TEST_TARGET_DIR={source_root / 'programs'}\n") == 2
     assert captured.count(f"CARGO_TARGET_DIR={source_root / 'test-suite'}\n") == 2
@@ -228,4 +246,19 @@ def test_launcher_rejects_profile_override_arguments_before_cargo(
 
     assert result.returncode == 2
     assert "profile overrides are not supported" in result.stderr
+    assert not capture.exists()
+
+
+def test_launcher_rejects_a_concurrent_source_bound_soak(tmp_path: Path) -> None:
+    env, capture = _stubbed_environment(tmp_path)
+    source_root = REPO_ROOT / "target" / "sumeragi-v2-release" / ("a" * 64)
+    lock_path = source_root / "evidence" / ".taira_v2_24h_soak.lock"
+    lock_path.mkdir(parents=True, exist_ok=False)
+    try:
+        result = _run_launcher(env)
+    finally:
+        lock_path.rmdir()
+
+    assert result.returncode == 1
+    assert "refusing shared release evidence" in result.stderr
     assert not capture.exists()

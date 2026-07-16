@@ -22,9 +22,10 @@ use super::{
 /// Maximum number of effects one reducer input can emit.
 ///
 /// Retransmission is the largest branch: the seven canonical control-message
-/// classes followed by at most one body-fetch or apply effect.  A future ninth
-/// effect fails closed at the refinement boundary until this limit is
-/// deliberately revised and re-verified.
+/// classes followed by at most one fetch, store, validation, or application
+/// effect for the exact durable Decision stage. A future ninth effect fails
+/// closed at the refinement boundary until this limit is deliberately revised
+/// and re-verified.
 pub const MAX_EFFECTS_PER_STEP: usize = 8;
 
 pub const EFFECT_NONE: u8 = 0;
@@ -239,6 +240,61 @@ pub struct TagProjection {
     pub(crate) height: u64,
     pub(crate) view: u64,
     pub(crate) generation: u64,
+}
+
+/// Primitive identity of one optional quorum certificate.
+///
+/// Signatures remain in the concrete reducer state and effect. This projection
+/// names the complete safety identity selected by the post-WAL view transition;
+/// the reducer separately requires the effect-carried certificate object to be
+/// exactly equal to the durable one before granting its capability.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CertificateIdentityProjection {
+    pub(crate) present: bool,
+    pub(crate) context_id: ContextId,
+    pub(crate) height: u64,
+    pub(crate) view: u64,
+    pub(crate) phase: u8,
+    pub(crate) subject: Subject,
+}
+
+/// Primitive identity of one optional timeout certificate and its selected
+/// highest `PrepareQC`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TimeoutIdentityProjection {
+    pub(crate) present: bool,
+    pub(crate) context_id: ContextId,
+    pub(crate) height: u64,
+    pub(crate) view: u64,
+    pub(crate) highest_prepare: CertificateIdentityProjection,
+}
+
+/// Exact production projection of a persisted-TC `EnterView` macro-step.
+///
+/// This relation is deliberately limited to the reducer-owned transition. It
+/// proves which lock crosses the serialized view boundary and which immediate
+/// recovery fetch names it; asynchronous ownership and scheduler fairness stay
+/// separate obligations.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct EnterViewProjection {
+    pub(crate) active: bool,
+    pub(crate) context_id: ContextId,
+    pub(crate) before_tag: TagProjection,
+    pub(crate) after_tag: TagProjection,
+    pub(crate) pending_record_kind: u8,
+    pub(crate) pending_continuation: u8,
+    pub(crate) pending_record_timeout: TimeoutIdentityProjection,
+    pub(crate) pending_continuation_timeout: TimeoutIdentityProjection,
+    pub(crate) durable_timeout_after: TimeoutIdentityProjection,
+    pub(crate) effect_timeout: TimeoutIdentityProjection,
+    pub(crate) local_lock_before: CertificateIdentityProjection,
+    pub(crate) durable_lock_after: CertificateIdentityProjection,
+    pub(crate) effect_protected_lock: CertificateIdentityProjection,
+    pub(crate) following_fetch_lock: CertificateIdentityProjection,
+    pub(crate) enter_count: u64,
+    pub(crate) fetch_count: u64,
+    pub(crate) enter_index: u8,
+    pub(crate) following_fetch_index: u8,
 }
 
 /// Primitive optional validator identity.
@@ -554,6 +610,7 @@ pub struct TransitionProjection<'a> {
     pub(crate) volatile_after: VolatileSummary,
     pub(crate) boundary_claimed: BoundaryCapabilityKey,
     pub(crate) boundary_granted: BoundaryCapabilityKey,
+    pub(crate) enter_view: EnterViewProjection,
     pub(crate) effects: EffectTrace,
 }
 
@@ -586,6 +643,7 @@ struct TransitionFacts {
     acknowledge_persist_exact: bool,
     application_transition_exact: bool,
     acknowledgement_continuation: u8,
+    enter_view_exact: bool,
     effects: EffectTrace,
 }
 
@@ -724,6 +782,22 @@ macro_rules! effect_slots_authorized_body {
     }};
 }
 
+macro_rules! final_effect_kind_body {
+    ($trace:expr, $kind:expr) => {{
+        match $trace.len {
+            1 => $trace.slot0.kind == $kind,
+            2 => $trace.slot1.kind == $kind,
+            3 => $trace.slot2.kind == $kind,
+            4 => $trace.slot3.kind == $kind,
+            5 => $trace.slot4.kind == $kind,
+            6 => $trace.slot5.kind == $kind,
+            7 => $trace.slot6.kind == $kind,
+            8 => $trace.slot7.kind == $kind,
+            _ => false,
+        }
+    }};
+}
+
 macro_rules! effect_order_constraints_body {
     (
         $trace:expr,
@@ -766,11 +840,17 @@ macro_rules! effect_order_constraints_body {
                     && $store_count == 0u64
                     && $validate_count == 0u64))
             // Body storage and validation acknowledgements are serialized
-            // one-effect transitions in their exact pipeline order.
+            // one-effect transitions in their exact pipeline order. A
+            // retransmission tick may reconstruct the one lost Decision-stage
+            // owner after retransmitting retained control messages; in that
+            // case the reconstructed body effect is last and cannot coexist
+            // with another body-stage, fetch, or report effect.
             && ($store_count == 0u64
-                || ($trace.len == 1u8 && $event_kind == 8u8))
+                || (($trace.len == 1u8 && $event_kind == 8u8)
+                    || $event_kind == 7u8))
             && ($validate_count == 0u64
-                || ($trace.len == 1u8 && $event_kind == 9u8))
+                || (($trace.len == 1u8 && $event_kind == 9u8)
+                    || $event_kind == 7u8))
             && ($enter_count == 0u64
                 || ($persist_count == 0u64
                     && $apply_count == 0u64
@@ -782,9 +862,38 @@ macro_rules! effect_order_constraints_body {
                     && $store_count == 0u64
                     && $validate_count == 0u64))
             // `fetch_count` is intentionally not bounded: retransmission may
-            // evolve to request several equivalent certified sources, but all
-            // exact slots still require concrete authorization above.
+            // evolve to request several equivalent certified sources in other
+            // transitions, but all exact slots still require concrete
+            // authorization above. The current Decision retransmission path is
+            // deliberately narrower: retained broadcasts followed by at most
+            // one exact pipeline-stage owner.
             && $fetch_count <= 8u64
+            && ($event_kind != 7u8
+                || (effect_count_body!($trace, 9u8) == 0u64
+                    && (($fetch_count == 0u64
+                        && $store_count == 0u64
+                        && $validate_count == 0u64
+                        && $apply_count == 0u64)
+                        || ($fetch_count == 1u64
+                            && $store_count == 0u64
+                            && $validate_count == 0u64
+                            && $apply_count == 0u64
+                            && final_effect_kind_body!($trace, 2u8))
+                        || ($fetch_count == 0u64
+                            && $store_count == 1u64
+                            && $validate_count == 0u64
+                            && $apply_count == 0u64
+                            && final_effect_kind_body!($trace, 3u8))
+                        || ($fetch_count == 0u64
+                            && $store_count == 0u64
+                            && $validate_count == 1u64
+                            && $apply_count == 0u64
+                            && final_effect_kind_body!($trace, 4u8))
+                        || ($fetch_count == 0u64
+                            && $store_count == 0u64
+                            && $validate_count == 0u64
+                            && $apply_count == 1u64
+                            && final_effect_kind_body!($trace, 7u8)))))
     }};
 }
 
@@ -819,7 +928,10 @@ macro_rules! volatile_summary_well_formed_body {
     ($summary:expr, $validator_count:expr) => {{
         $validator_count > 0u64
             && $validator_count <= u64::MAX / 2u64
-            // Only Prepare and Commit pools for the current view are kept.
+            // At most two active phase pools are kept: current Prepare plus
+            // either current Commit or the exact historical locked Commit.
+            // A newly durable lock retires the superseded historical pool
+            // before its current-round Commit signature can complete.
             && $summary.vote_pools <= 2u64
             && $summary.vote_entries >= $summary.vote_pools
             && $summary.vote_entries <= $validator_count * 2u64
@@ -906,6 +1018,109 @@ macro_rules! boundary_capability_equal_body {
     }};
 }
 
+macro_rules! certificate_identity_equal_body {
+    ($left:expr, $right:expr) => {{
+        $left.present == $right.present
+            && (!$left.present
+                || ($left.context_id == $right.context_id
+                    && $left.height == $right.height
+                    && $left.view == $right.view
+                    && $left.phase == $right.phase
+                    && $left.subject == $right.subject))
+    }};
+}
+
+macro_rules! timeout_identity_equal_body {
+    ($left:expr, $right:expr) => {{
+        $left.present == $right.present
+            && (!$left.present
+                || ($left.context_id == $right.context_id
+                    && $left.height == $right.height
+                    && $left.view == $right.view
+                    && certificate_identity_equal_body!(
+                        $left.highest_prepare,
+                        $right.highest_prepare
+                    )))
+    }};
+}
+
+macro_rules! prepare_identity_in_context_body {
+    ($certificate:expr, $context_id:expr, $height:expr, $maximum_view:expr) => {{
+        !$certificate.present
+            || ($certificate.context_id == $context_id
+                && $certificate.height == $height
+                && $certificate.phase == 1u8
+                && $certificate.view <= $maximum_view)
+    }};
+}
+
+// This expression is instantiated both by the concrete reducer and Verus. It
+// describes the exact post-install lock choice, without claiming anything
+// about asynchronous executor ownership or temporal fairness.
+macro_rules! enter_view_projection_gate_body {
+    ($projection:expr) => {{
+        if !$projection.active {
+            $projection.enter_count == 0u64
+        } else {
+            let timeout = $projection.pending_record_timeout;
+            let local = $projection.local_lock_before;
+            let incoming = timeout.highest_prepare;
+            let selected = if !local.present {
+                incoming
+            } else if !incoming.present || incoming.view <= local.view {
+                local
+            } else {
+                incoming
+            };
+            $projection.enter_count == 1u64
+                && $projection.pending_record_kind == 6u8
+                && $projection.pending_continuation == 2u8
+                && timeout.present
+                && timeout_identity_equal_body!(timeout, $projection.pending_continuation_timeout)
+                && timeout_identity_equal_body!(timeout, $projection.durable_timeout_after)
+                && timeout_identity_equal_body!(timeout, $projection.effect_timeout)
+                && timeout.context_id == $projection.context_id
+                && timeout.height == $projection.before_tag.height
+                && $projection.after_tag.height == $projection.before_tag.height
+                && $projection.before_tag.view <= timeout.view
+                && timeout.view < u64::MAX
+                && $projection.after_tag.view == timeout.view + 1u64
+                && $projection.before_tag.generation < u64::MAX
+                && $projection.after_tag.generation == $projection.before_tag.generation + 1u64
+                && prepare_identity_in_context_body!(
+                    local,
+                    $projection.context_id,
+                    $projection.before_tag.height,
+                    $projection.before_tag.view
+                )
+                && prepare_identity_in_context_body!(
+                    incoming,
+                    $projection.context_id,
+                    $projection.before_tag.height,
+                    timeout.view
+                )
+                && (!(local.present && incoming.present && local.view == incoming.view)
+                    || local.subject == incoming.subject)
+                && certificate_identity_equal_body!($projection.durable_lock_after, selected)
+                && certificate_identity_equal_body!(
+                    $projection.effect_protected_lock,
+                    $projection.durable_lock_after
+                )
+                && (if selected.present {
+                    $projection.fetch_count == 1u64
+                        && certificate_identity_equal_body!(
+                            $projection.following_fetch_lock,
+                            selected
+                        )
+                        && $projection.enter_index < 254u8
+                        && $projection.following_fetch_index == $projection.enter_index + 1u8
+                } else {
+                    $projection.fetch_count == 0u64 && !$projection.following_fetch_lock.present
+                })
+        }
+    }};
+}
+
 // Derive every safety/action boolean consumed by the legacy relation from
 // concrete primitive state, boundary, and capability projections.  Production
 // and Verus instantiate this exact expression with different identity types.
@@ -974,6 +1189,9 @@ macro_rules! transition_facts_from_projection_body {
         } else {
             0u8
         };
+        let enter_view_exact = enter_view_projection_gate_body!($projection.enter_view)
+            && $projection.enter_view.enter_count == effect_count_body!($projection.effects, 8u8)
+            && $projection.enter_view.fetch_count == effect_count_body!($projection.effects, 2u8);
         $facts_type {
             before_invariant: safety_projection_accepts_body!($projection.safety_before),
             after_invariant: safety_projection_accepts_body!($projection.safety_after),
@@ -1001,6 +1219,7 @@ macro_rules! transition_facts_from_projection_body {
             acknowledge_persist_exact,
             application_transition_exact: application_unchanged || application_boundary_exact,
             acknowledgement_continuation,
+            enter_view_exact,
             effects: $projection.effects,
         }
     }};
@@ -1128,8 +1347,8 @@ macro_rules! volatile_protocol_action_body {
             && $facts.generation_unchanged
             && $facts.application_unchanged
             && effect_count_body!($facts.effects, 1u8) == 0u64
-            && effect_count_body!($facts.effects, 3u8) == 0u64
-            && effect_count_body!($facts.effects, 4u8) == 0u64
+            && ($facts.event_kind == 7u8 || effect_count_body!($facts.effects, 3u8) == 0u64)
+            && ($facts.event_kind == 7u8 || effect_count_body!($facts.effects, 4u8) == 0u64)
             && effect_count_body!($facts.effects, 8u8) == 0u64
     }};
 }
@@ -1333,7 +1552,14 @@ macro_rules! transition_branch_constraints_body {
                 && $persist_count == 0u64
                 && $enter_count == 0u64
                 && ($sign_count == 0u64 || $facts.event_kind == 13u8)
-                && ($apply_count == 0u64 || $facts.event_kind == 7u8 || $facts.event_kind == 10u8)
+                // LocalProposalReady may recover Apply only when the concrete
+                // capability grant binds its exact trusted manifest to the
+                // durable decision.  The branch gate admits the event class;
+                // requested/granted key equality rejects every non-exact use.
+                && ($apply_count == 0u64
+                    || $facts.event_kind == 0u8
+                    || $facts.event_kind == 7u8
+                    || $facts.event_kind == 10u8)
         }
     }};
 }
@@ -1371,6 +1597,7 @@ macro_rules! production_transition_gate_body {
             && $volatile_gate($facts.volatile_after, $facts.validator_count)
             && $action_gate($facts)
             && $trace_gate($facts.effects, $facts.event_kind)
+            && $facts.enter_view_exact
             && $branch_gate($facts)
     }};
 }
@@ -1571,6 +1798,7 @@ mod tests {
             acknowledge_persist_exact: false,
             application_transition_exact: true,
             acknowledgement_continuation: CONTINUATION_NONE,
+            enter_view_exact: true,
             effects: EffectTrace::empty(),
         }
     }
@@ -1716,6 +1944,77 @@ mod tests {
         invented_fetch.effects = EffectTrace::empty();
         assert!(push_authorized(&mut invented_fetch.effects, EFFECT_FETCH));
         assert!(!accepts_facts(invented_fetch));
+    }
+
+    #[test]
+    fn retransmit_may_reconstruct_one_final_decision_body_stage() {
+        let mut store_retry = base_facts();
+        store_retry.action_kind = ACTION_VOLATILE_PROTOCOL;
+        store_retry.event_kind = 7;
+        for _ in 0..7 {
+            assert!(push_authorized(&mut store_retry.effects, EFFECT_BROADCAST));
+        }
+        assert!(push_authorized(&mut store_retry.effects, EFFECT_STORE));
+        assert!(accepts_facts(store_retry));
+
+        let mut validate_retry = base_facts();
+        validate_retry.action_kind = ACTION_VOLATILE_PROTOCOL;
+        validate_retry.event_kind = 7;
+        assert!(push_authorized(
+            &mut validate_retry.effects,
+            EFFECT_BROADCAST
+        ));
+        assert!(push_authorized(
+            &mut validate_retry.effects,
+            EFFECT_VALIDATE
+        ));
+        assert!(accepts_facts(validate_retry));
+
+        let mut not_final = validate_retry;
+        not_final.effects = EffectTrace::empty();
+        assert!(push_authorized(&mut not_final.effects, EFFECT_VALIDATE));
+        assert!(push_authorized(&mut not_final.effects, EFFECT_BROADCAST));
+        assert!(!accepts_facts(not_final));
+
+        let mut mixed_stages = validate_retry;
+        mixed_stages.effects = EffectTrace::empty();
+        assert!(push_authorized(&mut mixed_stages.effects, EFFECT_STORE));
+        assert!(push_authorized(&mut mixed_stages.effects, EFFECT_VALIDATE));
+        assert!(!accepts_facts(mixed_stages));
+
+        let mut fetch_and_store = validate_retry;
+        fetch_and_store.effects = EffectTrace::empty();
+        assert!(push_authorized(&mut fetch_and_store.effects, EFFECT_FETCH));
+        assert!(push_authorized(&mut fetch_and_store.effects, EFFECT_STORE));
+        assert!(!accepts_facts(fetch_and_store));
+
+        let mut report_and_store = validate_retry;
+        report_and_store.effects = EffectTrace::empty();
+        assert!(push_authorized(
+            &mut report_and_store.effects,
+            EFFECT_REPORT
+        ));
+        assert!(push_authorized(&mut report_and_store.effects, EFFECT_STORE));
+        assert!(!accepts_facts(report_and_store));
+
+        let mut apply_and_fetch = validate_retry;
+        apply_and_fetch.effects = EffectTrace::empty();
+        assert!(push_authorized(&mut apply_and_fetch.effects, EFFECT_APPLY));
+        assert!(push_authorized(&mut apply_and_fetch.effects, EFFECT_FETCH));
+        assert!(!accepts_facts(apply_and_fetch));
+
+        let mut fetch_not_final = validate_retry;
+        fetch_not_final.effects = EffectTrace::empty();
+        assert!(push_authorized(&mut fetch_not_final.effects, EFFECT_FETCH));
+        assert!(push_authorized(
+            &mut fetch_not_final.effects,
+            EFFECT_BROADCAST
+        ));
+        assert!(!accepts_facts(fetch_not_final));
+
+        let mut wrong_event = validate_retry;
+        wrong_event.event_kind = 6;
+        assert!(!accepts_facts(wrong_event));
     }
 
     #[test]

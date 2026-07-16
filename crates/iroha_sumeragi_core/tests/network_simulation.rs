@@ -220,7 +220,9 @@ impl Simulation {
                         .expect("application completion matches the durable decision")
                         .into_effects()
                 }
-                Effect::EnterView { tag, certificate } => {
+                Effect::EnterView {
+                    tag, certificate, ..
+                } => {
                     assert_eq!(tag, self.nodes[index].reducer.current_tag());
                     assert_eq!(tag.view(), certificate.round().view() + 1);
                     Vec::new()

@@ -30,9 +30,8 @@ use iroha_data_model::{
         BlockHeader,
         consensus_v2::{ConsensusMessageV2Payload, GlobalPhase},
     },
-    peer::PeerId,
+    peer::{Peer, PeerId},
 };
-use iroha_p2p::Peer;
 use norito::json::{Map, Value};
 
 /// Environment variable consumed only by the feature-isolated test daemon.
@@ -981,7 +980,7 @@ fn read_stable_private_file(path: &Path, max_bytes: usize) -> Result<Vec<u8>, Co
             .unwrap_or(max_bytes)
             .min(max_bytes),
     );
-    file.by_ref()
+    Read::by_ref(&mut file)
         .take(u64::try_from(max_bytes).expect("command bound fits u64") + 1)
         .read_to_end(&mut bytes)
         .map_err(ControlError::Io)?;
@@ -990,7 +989,7 @@ fn read_stable_private_file(path: &Path, max_bytes: usize) -> Result<Vec<u8>, Co
     }
     file.seek(SeekFrom::Start(0)).map_err(ControlError::Io)?;
     let mut confirmation = Vec::with_capacity(bytes.len());
-    file.by_ref()
+    Read::by_ref(&mut file)
         .take(u64::try_from(max_bytes).expect("command bound fits u64") + 1)
         .read_to_end(&mut confirmation)
         .map_err(ControlError::Io)?;

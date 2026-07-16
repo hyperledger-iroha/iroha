@@ -60,9 +60,23 @@
     },
     {
       "id": "timeout-protection-kernel",
-      "requirement": "A grouped TC whose honest timeout intents protect old Commit intents preserves every dual-quorum potential commit",
+      "requirement": "A grouped TC whose honest timeout intents strictly protect Commit intents already present at timeout preserves every dual-quorum potential commit",
       "module": "SumeragiV2SafetyLemmas",
       "symbol": "GroupedTimeoutProtectsCommitQuorum",
+      "status": "tlaps_proved"
+    },
+    {
+      "id": "timeout-envelope-schema",
+      "requirement": "Timeout delivery validates the complete canonical envelope DOMAIN before field authorization, and typed asynchronous delivery refines that guarded Core step",
+      "module": "SumeragiTimeoutIngressGuardTest",
+      "symbol": "SelectedViewCheckDoesNotEstablishEnvelopeSchema / FullEnvelopeGuardTypesTimeoutVote / DeliverTimeoutRequiresCanonicalEnvelope / AsyncSentTimeoutItemCarriesCanonicalEnvelope / ExecuteCoreTimeoutDeliveryCarriesCanonicalEnvelope / AsyncTypedTimeoutDeliveryRefinesCoreStep",
+      "status": "tlaps_proved"
+    },
+    {
+      "id": "timeout-wire-authorization",
+      "requirement": "Every honest pending, durable, signing, and transported timeout vote is tied to the frozen voter roster, context, height, an authenticated PrepareQC high reference, and a high rank no greater than its timeout view",
+      "module": "SumeragiV2TimeoutWireAuthorization",
+      "symbol": "CoreSpecAtAlwaysStrongTimeoutWireAuthorizationInvariant / StrongWireInvariantAuthorizesPendingTimeoutSignature / StrongWireInvariantAuthorizesHonestTimeoutEnvelope",
       "status": "tlaps_proved"
     },
     {
@@ -70,39 +84,46 @@
       "requirement": "Honest Prepare, Commit, and Timeout intents are unique per context and view",
       "module": "SumeragiV2Proofs",
       "symbol": "DurableVoteUniquenessObligation",
-      "status": "specified_unproved"
+      "status": "tlaps_proved"
     },
     {
       "id": "lock-monotonicity",
       "requirement": "A lock never decreases and changes subject only at a strictly higher PrepareQC",
       "module": "SumeragiV2Proofs",
       "symbol": "LockMonotonicityObligation",
-      "status": "specified_unproved"
+      "status": "tlaps_proved"
     },
     {
       "id": "external-validity",
       "requirement": "PrepareQCs, CommitQCs, and decisions certify only deterministically valid subjects",
       "module": "SumeragiV2Proofs",
       "symbol": "ExternalValidityObligation",
-      "status": "specified_unproved"
+      "status": "tlaps_proved"
     },
     {
       "id": "certified-body-availability",
       "requirement": "Every PrepareQC and CommitQC retains an honest durable body source",
       "module": "SumeragiV2Proofs",
       "symbol": "AvailabilityObligation",
-      "status": "specified_unproved"
+      "status": "tlaps_proved"
     },
     {
       "id": "certificate-uniqueness",
       "requirement": "No two same-view PrepareQCs or CommitQCs certify different subjects",
       "module": "SumeragiV2Proofs",
       "symbol": "CertificateUniquenessObligation",
+      "status": "tlaps_proved"
+    },
+    {
+      "id": "historical-tc-lock-commit",
+      "requirement": "After a TC durably selects an exact historical Prepare lock, and only when no higher conflicting-subject local Prepare intent or known PrepareQC exists, current-generation durable body validation may create the exact WAL-backed Commit intent; higher same-subject reproposals remain admissible and every lower-high timeout/Commit pair retains installed-TC provenance",
+      "module": "SumeragiV2Proofs",
+      "symbol": "HistoricalTcLockedCommitAuthorizationObligation",
       "status": "specified_unproved"
     },
     {
       "id": "timeout-protection",
-      "requirement": "Every TC protects every still-formable old-view CommitQC",
+      "requirement": "Every formed TC and dual-quorum still-formable old-view Commit has either direct protection from that TC's high reference or an honest TC/Commit quorum-intersection witness whose non-strict timeout/Commit pair retains durable installed-TC authorization",
       "module": "SumeragiV2Proofs",
       "symbol": "TimeoutProtectionObligation",
       "status": "specified_unproved"
@@ -112,42 +133,42 @@
       "requirement": "Correct validators cannot decide different subjects in one height context",
       "module": "SumeragiV2Proofs",
       "symbol": "AgreementObligation",
-      "status": "specified_unproved"
+      "status": "tlaps_proved"
     },
     {
       "id": "no-conflicting-commit-qcs",
       "requirement": "No two CommitQCs in one context certify different subjects",
       "module": "SumeragiV2Proofs",
       "symbol": "NoConflictingCommitCertificatesObligation",
-      "status": "specified_unproved"
+      "status": "tlaps_proved"
     },
     {
       "id": "chain-prefix",
       "requirement": "Finalized chains at correct validators are prefix comparable",
       "module": "SumeragiV2ChainEpochProofs",
       "symbol": "ChainPrefixObligation",
-      "status": "specified_unproved"
+      "status": "tlaps_proved"
     },
     {
       "id": "crash-restart",
       "requirement": "Crash/restart preserves durable safety state and suppresses incomplete writes and stale completions",
       "module": "SumeragiV2Proofs",
       "symbol": "CrashRecoveryObligation",
-      "status": "specified_unproved"
+      "status": "tlaps_proved"
     },
     {
       "id": "epoch-boundary",
       "requirement": "Reconfiguration occurs only after applied finality and old-context certificates cannot cross the boundary",
       "module": "SumeragiV2ChainEpochProofs",
       "symbol": "EpochBoundaryObligation",
-      "status": "specified_unproved"
+      "status": "tlaps_proved"
     },
     {
-      "id": "async-type-invariant",
-      "requirement": "The concrete asynchronous scheduler and transport preserve the full typed state invariant from every admissible frozen height context",
+      "id": "effective-lock-body-acquisition",
+      "requirement": "Beyond the production-checked post-WAL EnterView lock selection, executor, runtime, worker, certified-request hash, outstanding-request index, and queue ownership preserve one immutable matching acquisition while only its reducer consumer advances; subject-level retained bytes obey same-subject reuse; superseded logical work and every pending, request, ready, byte, and capacity owner are retired exactly once; and post-GST fairness with terminating local work eventually services the rebound FetchBody -> BodyAvailable -> StoreBody -> ValidateBody path or a higher lock or decision supersedes it",
       "module": "SumeragiV2AsyncLivenessProofs",
-      "symbol": "AsyncTypeInvariantObligation",
-      "status": "tlaps_proved"
+      "symbol": "EffectiveLockBodyAcquisitionCompositionObligation",
+      "status": "specified_unproved"
     },
     {
       "id": "async-runner-scheduler-preservation",
@@ -157,15 +178,22 @@
       "status": "specified_unproved"
     },
     {
+      "id": "async-type-invariant",
+      "requirement": "The concrete asynchronous scheduler and transport preserve the full typed state invariant from every admissible frozen height context",
+      "module": "SumeragiV2AsyncLivenessProofs",
+      "symbol": "AsyncTypeInvariantObligation",
+      "status": "specified_unproved"
+    },
+    {
       "id": "generation-scoped-vote-delivery",
-      "requirement": "An authenticated vote crosses a volatile receipt pool at most once, while TC installation clears that pool so the exact active locked Commit vote is eligible in the new reducer generation",
+      "requirement": "An authenticated vote crosses a volatile receipt pool at most once; Prepare admission is current-view-only while every Commit admission and locally formed CommitQC requires the exact durable lock; TC installation clears the local pool and queues an exact matching durable locked Commit for re-signing; durable LockCommit acknowledgement retires superseded historical pools while preserving current-view work and the new exact locked Commit pool; signature completion reconstructs the local vote; and outbound peer delivery excludes the signer",
       "module": "SumeragiV2AsyncLivenessProofs",
       "symbol": "GenerationScopedVoteDeliveryObligation",
       "status": "tlaps_proved"
     },
     {
       "id": "progress-witness-preservation",
-      "requirement": "Every active durable locked Commit intent and durable decision retains a concrete signing, retransmission, receipt, certificate, recovery, application, or completion witness, and protected deferred slots remain unique within their validator-count-plus-three bound",
+      "requirement": "Every active durable locked Commit intent and durable decision retains a concrete signing, retransmission, receipt, certificate, recovery, application, or completion witness; every validated exact TC-promoted lock without intent owns its BeginLockCommit or WAL reconstruction witness; and protected deferred slots remain unique within their validator-count-plus-three bound",
       "module": "SumeragiV2AsyncLivenessProofs",
       "symbol": "ProgressWitnessObligation",
       "status": "specified_unproved"
@@ -200,14 +228,14 @@
     },
     {
       "id": "rotating-leader-liveness",
-      "requirement": "After GST, rotation reaches a responsive honest leader and all responsive validators decide",
+      "requirement": "After GST, every undecided execution either decides before another rotation is needed or reaches a view in which the responsive honest scheduled leader itself is active; from such a leader view all responsive validators eventually decide",
       "module": "SumeragiV2AsyncLivenessProofs",
       "symbol": "RotatingLeaderProgressObligation",
       "status": "specified_unproved"
     },
     {
       "id": "application-liveness",
-      "requirement": "A responsive decision eventually fetches, validates, and applies its certified body",
+      "requirement": "For every responsive validator independently, once GST holds and that validator has a durable decision, it eventually recovers, validates, and applies the certified body without waiting for all other validators to decide",
       "module": "SumeragiV2AsyncLivenessProofs",
       "symbol": "ApplicationLivenessObligation",
       "status": "specified_unproved"

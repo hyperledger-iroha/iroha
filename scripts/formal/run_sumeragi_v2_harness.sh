@@ -71,9 +71,9 @@ case "$1" in
     while IFS= read -r test_name; do
       [[ -n "$test_name" ]] && listed_unit_tests+=("$test_name")
     done < <(sed -n 's/: test$//p' <<<"$unit_test_list")
-    if ((${#listed_unit_tests[@]} != 66)); then
+    if ((${#listed_unit_tests[@]} != 86)); then
       printf '%s\n' "${listed_unit_tests[@]}" >&2
-      echo "expected exactly 66 Sumeragi v2 reducer unit tests" >&2
+      echo "expected exactly 86 Sumeragi v2 reducer unit tests" >&2
       exit 1
     fi
     unit_ignored_test_list="$(
@@ -86,7 +86,7 @@ case "$1" in
     done < <(sed -n 's/: test$//p' <<<"$unit_ignored_test_list")
     if ((${#listed_ignored_unit_tests[@]} != 0)); then
       printf '%s\n' "${listed_ignored_unit_tests[@]}" >&2
-      echo "reducer unit gate requires all 66 tests to be runnable" >&2
+      echo "reducer unit gate requires all 86 tests to be runnable" >&2
       exit 1
     fi
     cargo test --locked --offline -p iroha_sumeragi_core \
@@ -182,6 +182,7 @@ case "$1" in
     fi
     required_replay_tests=(
       tlc_liveness_witness_replays_against_the_production_reducer
+      identical_commit_envelope_stutters_before_lock_and_is_admitted_after_persistence
       malformed_and_unsafe_normalized_traces_fail_closed
       crash_replay_rejects_stale_completion_and_resumes_exact_intent
       unsafe_certificate_and_vote_equivocation_do_not_decide
@@ -199,7 +200,7 @@ case "$1" in
     done < <(sed -n 's/: test$//p' <<<"$model_replay_test_list")
     if ((${#listed_replay_tests[@]} != ${#required_replay_tests[@]})); then
       printf '%s\n' "${listed_replay_tests[@]}" >&2
-      echo "expected exactly seven Sumeragi v2 model-replay tests" >&2
+      echo "expected exactly eight Sumeragi v2 model-replay tests" >&2
       exit 1
     fi
     for test_name in "${listed_replay_tests[@]}"; do
@@ -225,7 +226,7 @@ case "$1" in
     done < <(sed -n 's/: test$//p' <<<"$replay_ignored_test_list")
     if ((${#listed_ignored_replay_tests[@]} != 0)); then
       printf '%s\n' "${listed_ignored_replay_tests[@]}" >&2
-      echo "model-replay gate requires all seven tests to be runnable" >&2
+      echo "model-replay gate requires all eight tests to be runnable" >&2
       exit 1
     fi
     cargo test --locked --offline -p iroha_sumeragi_core \

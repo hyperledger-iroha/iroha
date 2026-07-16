@@ -38,6 +38,7 @@ pub const MAX_VALIDATORS_PER_HEIGHT: usize = 128;
 /// A reducer may retain one historical exact-lock group while the current
 /// round contains at most one distinct subject group per validator.
 pub const MAX_COMMIT_QUORUM_GROUPS_PER_HEIGHT: usize = MAX_VALIDATORS_PER_HEIGHT + 1;
+const MAX_LIVENESS_IGNORE_REASONS: usize = 12;
 /// Tight allocation bound for one consensus signature or aggregate.
 pub const MAX_CONSENSUS_SIGNATURE_BYTES: usize = 256;
 const HEIGHT_CONTEXT_IDENTITY_VERSION: u16 = 3;
@@ -2429,9 +2430,10 @@ pub struct SumeragiV2QueueStatus {
 
 /// Reducer transition retained for diagnostic transition age.
 ///
-/// Height progress resets `no_progress_age_ms`; timeout-vote admission and
-/// timeout-certificate installation remain visible here without resetting that
-/// height-progress clock, so repeated view churn cannot mask a stall.
+/// A transition resets `no_progress_age_ms` only when it advances the bounded
+/// height-wide semantic high-water. Timeout traffic and reconstruction of an
+/// already observed partial vote pool remain visible here without refreshing
+/// that clock, so repeated view churn cannot mask a stall.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -2521,6 +2523,8 @@ pub enum SumeragiV2LivenessBlocker {
     SchedulerStarvation,
     /// A durable decision is waiting for terminating local application work.
     ApplicationPending,
+    /// The reducer is waiting for safety-WAL persistence or consensus signing.
+    LocalControlPending,
 }
 
 /// Closed reducer reason for safely ignoring an input.
@@ -2556,8 +2560,10 @@ pub enum SumeragiV2IgnoreReason {
     AlreadyDecided,
     /// WAL replay awaits its one authorized resumption event.
     RecoveryPending,
-    /// The input's view cannot affect local state.
+    /// The input's round or safe-value rank cannot affect local state.
     IrrelevantView,
+    /// A durable lock makes the proposal's subject unsafe to prepare.
+    UnsafeProposal,
 }
 
 /// Per-height counter for one closed input-ignore reason.
@@ -2876,7 +2882,7 @@ impl SumeragiV2Status {
             || self.liveness.timeout_quorums.len() > MAX_VALIDATORS_PER_HEIGHT
             || self.liveness.outbound_intents.len() > 7
             || self.liveness.queues.len() > 9
-            || self.liveness.ignore_counts.len() > 11
+            || self.liveness.ignore_counts.len() > MAX_LIVENESS_IGNORE_REASONS
         {
             return Err(Error::LivenessCollectionTooLarge);
         }
@@ -5085,6 +5091,48 @@ mod tests {
             future_generation.validate(),
             Err(Error::LivenessGenerationFromFuture)
         );
+    }
+
+    #[test]
+    fn status_validation_accepts_all_ignore_reasons_and_rejects_a_thirteenth_entry() {
+        use SumeragiV2StatusValidationError as Error;
+
+        let context = context(&[1, 1, 1, 1]);
+        let mut exact_bound = status(&context);
+        exact_bound.liveness.ignore_counts = [
+            SumeragiV2IgnoreReason::WrongHeight,
+            SumeragiV2IgnoreReason::WrongView,
+            SumeragiV2IgnoreReason::StaleGeneration,
+            SumeragiV2IgnoreReason::Busy,
+            SumeragiV2IgnoreReason::Duplicate,
+            SumeragiV2IgnoreReason::NoMatchingWork,
+            SumeragiV2IgnoreReason::Observer,
+            SumeragiV2IgnoreReason::ViewClosed,
+            SumeragiV2IgnoreReason::AlreadyDecided,
+            SumeragiV2IgnoreReason::RecoveryPending,
+            SumeragiV2IgnoreReason::IrrelevantView,
+            SumeragiV2IgnoreReason::UnsafeProposal,
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(index, reason)| SumeragiV2IgnoreCount {
+            reason,
+            count: u64::try_from(index + 1).expect("ignore reason count fits u64"),
+        })
+        .collect();
+
+        assert_eq!(exact_bound.liveness.ignore_counts.len(), 12);
+        assert_eq!(exact_bound.validate(), Ok(()));
+
+        let mut oversized = exact_bound;
+        oversized
+            .liveness
+            .ignore_counts
+            .push(SumeragiV2IgnoreCount {
+                reason: SumeragiV2IgnoreReason::UnsafeProposal,
+                count: 13,
+            });
+        assert_eq!(oversized.validate(), Err(Error::LivenessCollectionTooLarge));
     }
 
     #[test]

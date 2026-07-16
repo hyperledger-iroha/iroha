@@ -17,7 +17,7 @@ import org.hyperledger.iroha.sdk.norito.SchemaHash
 /**
  * ABI-20 Kagemusha V4 artifact streaming and capability bridge.
  *
- * This is the sole first-release offline-cash surface. It authenticates the opaque ten-file proof
+ * This is the sole first-release offline-cash surface. It authenticates the opaque eight-file proof
  * artifact set and validates exact typed request/payment/acknowledgement and proof-bound membership
  * archives. Proof execution remains fail-closed while the native backend reports unavailable.
  * V4 lifecycle results remain opaque until dedicated ABI-20 projections are available; no V2
@@ -27,12 +27,10 @@ class KagemushaRecursiveSpendProver private constructor() {
     /** Canonical ABI-20 artifact roles. Declaration order is part of the native contract. */
     enum class ArtifactRoleV4(val fileName: String) {
         STEP_EQ_PARAMETERS("step-eq.parameters.krv4"),
-        STEP_EQ_CIRCUIT_PARAMS("step-eq.circuit-params.krv4"),
         STEP_EQ_PROVING_KEY("step-eq.proving-key.krv4"),
         STEP_EQ_VERIFYING_KEY("step-eq.verifying-key.krv4"),
         STEP_EQ_BOOTSTRAP_WITNESS("step-eq.bootstrap-witness.krv4"),
         STEP_EP_PARAMETERS("step-ep.parameters.krv4"),
-        STEP_EP_CIRCUIT_PARAMS("step-ep.circuit-params.krv4"),
         STEP_EP_PROVING_KEY("step-ep.proving-key.krv4"),
         STEP_EP_VERIFYING_KEY("step-ep.verifying-key.krv4"),
         STEP_EP_BOOTSTRAP_WITNESS("step-ep.bootstrap-witness.krv4"),
@@ -46,18 +44,16 @@ class KagemushaRecursiveSpendProver private constructor() {
         const val ARTIFACT_MANIFEST_SCHEMA: String = V4_ARTIFACT_MANIFEST_SCHEMA
         val V4_ARTIFACT_FILES: List<String> = listOf(
             "step-eq.parameters.krv4",
-            "step-eq.circuit-params.krv4",
             "step-eq.proving-key.krv4",
             "step-eq.verifying-key.krv4",
             "step-eq.bootstrap-witness.krv4",
             "step-ep.parameters.krv4",
-            "step-ep.circuit-params.krv4",
             "step-ep.proving-key.krv4",
             "step-ep.verifying-key.krv4",
             "step-ep.bootstrap-witness.krv4",
         )
         val ARTIFACT_FILES: List<String> = V4_ARTIFACT_FILES
-        const val V4_ARTIFACT_COUNT: Int = 10
+        const val V4_ARTIFACT_COUNT: Int = 8
         const val ARTIFACT_COUNT: Int = V4_ARTIFACT_COUNT
         const val MAX_MANIFEST_BYTES: Int = 1024 * 1024
         const val MAX_TRUSTED_RELEASE_POLICY_BYTES: Int = 64 * 1024
@@ -85,7 +81,7 @@ class KagemushaRecursiveSpendProver private constructor() {
 
         internal fun requireCanonicalV4ArtifactRoleInventory(roles: List<ArtifactRoleV4>) {
             require(roles.size == ArtifactRoleV4.entries.size) {
-                "artifact roles must contain exactly ten entries"
+                "artifact roles must contain exactly eight entries"
             }
             require(roles == ArtifactRoleV4.entries) {
                 "artifact roles are not in canonical V4 order"
@@ -2377,7 +2373,7 @@ class KagemushaRecursiveSpendProver private constructor() {
         )
     }
 
-    /** Coordinates one authenticated, atomic ten-artifact generation install. */
+    /** Coordinates one authenticated, atomic eight-artifact generation install. */
     class ArtifactInstallSession internal constructor(
         manifest: ByteArray,
         manifestDigest: ByteArray,
@@ -2419,7 +2415,7 @@ class KagemushaRecursiveSpendProver private constructor() {
         fun install() {
             requirePending()
             check(artifacts.size == ARTIFACT_COUNT) {
-                "artifact set must contain exactly ten streams"
+                "artifact set must contain exactly eight streams"
             }
             requireCanonicalV4ArtifactRoleInventory(artifacts.keys.toList())
             val ordered = artifacts.values.toList()

@@ -164,6 +164,18 @@ fn acknowledge(reducer: &mut Reducer, entry: &WalEntry) -> StepOutcome {
         .expect("persistence acknowledgement succeeds")
 }
 
+fn install_decision(reducer: &mut Reducer, certificate: QuorumCertificate) -> StepOutcome {
+    let entry = only_persist(
+        reducer
+            .step(Event::QuorumCertificateReceived {
+                tag: reducer.current_tag(),
+                certificate,
+            })
+            .expect("CommitQC starts durable decision persistence"),
+    );
+    acknowledge(reducer, &entry)
+}
+
 fn resume_after_replay(reducer: &mut Reducer) -> StepOutcome {
     reducer
         .step(Event::ResumeAfterReplay {
@@ -1298,6 +1310,778 @@ fn prior_view_commit_votes_rebuild_the_exact_locked_round_quorum() {
 }
 
 #[test]
+fn higher_tc_lock_prunes_superseded_commit_retransmission() {
+    let context = context();
+    let old_subject = Subject::repeat(0x91);
+    let higher_subject = Subject::repeat(0x92);
+    let old_round = Round::new(context.height(), 0);
+    let old_prepare = qc(&context, 0, Phase::Prepare, old_subject, &[1, 2, 3]);
+    let old_commit = Vote::new(context.id(), old_round, Phase::Commit, old_subject, id(1));
+    let mut reducer = Reducer::recover(
+        context.clone(),
+        Some(id(1)),
+        Generation::new(45),
+        [
+            WalEntry::new(
+                PersistenceId::new(1),
+                WalRecord::LockAndCommit {
+                    prepare: old_prepare,
+                    vote: old_commit,
+                },
+            ),
+            WalEntry::new(
+                PersistenceId::new(2),
+                WalRecord::InstallTimeout(tc_without_high(&context, 0, &[1, 2, 3])),
+            ),
+        ],
+    )
+    .expect("recover the old active lock in view one");
+
+    assert!(matches!(
+        resume_after_replay(&mut reducer).effects(),
+        [Effect::Sign {
+            message: SignableMessage::Vote(vote),
+            ..
+        }] if *vote == old_commit
+    ));
+    reducer
+        .step(Event::Signed {
+            tag: reducer.current_tag(),
+            signature: signature(1),
+        })
+        .expect("sign and retain the old active-lock Commit vote");
+    assert!(reducer.outbound_messages().any(|message| {
+        matches!(message, ConsensusMessageV2::Vote(vote) if vote.vote() == old_commit)
+    }));
+
+    let higher_prepare = qc(&context, 1, Phase::Prepare, higher_subject, &[1, 2, 3]);
+    let observed = reducer
+        .step(Event::QuorumCertificateReceived {
+            tag: reducer.current_tag(),
+            certificate: higher_prepare.clone(),
+        })
+        .expect("a strictly higher PrepareQC is safe above the old lock");
+    let observe_entry = observed
+        .effects()
+        .iter()
+        .find_map(|effect| match effect {
+            Effect::Persist { entry, .. } => Some(entry.clone()),
+            _ => None,
+        })
+        .expect("the higher PrepareQC is durably observed");
+    acknowledge(&mut reducer, &observe_entry);
+    assert_eq!(
+        reducer
+            .durable_state()
+            .locked()
+            .map(QuorumCertificate::subject),
+        Some(old_subject),
+        "observing a higher PrepareQC alone does not retag the lock"
+    );
+
+    let install = only_persist(
+        reducer
+            .step(Event::TimeoutCertificateReceived {
+                tag: reducer.current_tag(),
+                certificate: tc_with_high(&context, 1, higher_prepare.clone(), &[1, 2, 3]),
+            })
+            .expect("the next TC starts durable lock promotion"),
+    );
+    let entered = acknowledge(&mut reducer, &install);
+    assert_eq!(reducer.current_tag().view(), 2);
+    assert_eq!(
+        reducer
+            .durable_state()
+            .locked()
+            .map(QuorumCertificate::reference),
+        Some(higher_prepare.reference())
+    );
+    assert_eq!(
+        reducer.durable_state().commit_intent(old_round),
+        Some(old_commit),
+        "superseded Commit intent remains immutable WAL history"
+    );
+    assert_eq!(reducer.progress_witness_violation(), None);
+    assert!(entered.effects().iter().all(|effect| {
+        !matches!(
+            effect,
+            Effect::Sign {
+                message: SignableMessage::Vote(vote),
+                ..
+            } if *vote == old_commit
+        )
+    }));
+    assert!(reducer.outbound_messages().all(|message| {
+        !matches!(message, ConsensusMessageV2::Vote(vote) if vote.vote() == old_commit)
+    }));
+
+    let retransmit = reducer
+        .step(Event::RetransmitElapsed {
+            tag: reducer.current_tag(),
+        })
+        .expect("superseded Commit retransmission cannot violate refinement");
+    assert!(retransmit.effects().iter().all(|effect| {
+        !matches!(
+            effect,
+            Effect::Broadcast(ConsensusMessageV2::Vote(vote)) if vote.vote() == old_commit
+        )
+    }));
+    assert!(retransmit.effects().iter().any(|effect| {
+        matches!(
+            effect,
+            Effect::FetchBody {
+                subject,
+                certificate: Some(certificate),
+                ..
+            } if *subject == higher_subject && certificate.reference() == higher_prepare.reference()
+        )
+    }));
+}
+
+#[test]
+fn same_lock_tc_resigns_local_commit_and_rebuilds_quorum_without_self_delivery() {
+    let context = context();
+    let subject = Subject::repeat(0x95);
+    let round = Round::new(context.height(), 0);
+    let prepare = qc(&context, 0, Phase::Prepare, subject, &[1, 2, 3]);
+    let local_commit = Vote::new(context.id(), round, Phase::Commit, subject, id(1));
+    let mut reducer = Reducer::recover(
+        context.clone(),
+        Some(id(1)),
+        Generation::new(47),
+        [WalEntry::new(
+            PersistenceId::new(1),
+            WalRecord::LockAndCommit {
+                prepare: prepare.clone(),
+                vote: local_commit,
+            },
+        )],
+    )
+    .expect("recover the active locked Commit intent");
+
+    assert!(matches!(
+        resume_after_replay(&mut reducer).effects(),
+        [Effect::Sign {
+            message: SignableMessage::Vote(vote),
+            ..
+        }] if *vote == local_commit
+    ));
+    reducer
+        .step(Event::Signed {
+            tag: reducer.current_tag(),
+            signature: signature(1),
+        })
+        .expect("place the original local Commit in its pool");
+    assert!(matches!(
+        reducer.vote_pool_snapshots().as_slice(),
+        [VotePoolSnapshot {
+            round: pooled_round,
+            phase: Phase::Commit,
+            subject: pooled_subject,
+            signers,
+            ..
+        }] if *pooled_round == round && *pooled_subject == subject && signers == &[id(1)]
+    ));
+
+    let install = only_persist(
+        reducer
+            .step(Event::TimeoutCertificateReceived {
+                tag: reducer.current_tag(),
+                certificate: tc_with_high(&context, 0, prepare, &[1, 2, 3]),
+            })
+            .expect("begin the same-lock TC installation"),
+    );
+    let entered = acknowledge(&mut reducer, &install);
+    assert_eq!(reducer.current_tag().view(), 1);
+    assert!(reducer.vote_pool_snapshots().is_empty());
+    assert!(matches!(
+        entered.effects().last(),
+        Some(Effect::Sign {
+            message: SignableMessage::Vote(vote),
+            ..
+        }) if *vote == local_commit
+    ));
+    assert_eq!(
+        reducer.progress_witness_violation(),
+        None,
+        "the queued signature owns reconstruction of the local pool entry"
+    );
+
+    reducer
+        .step(Event::Signed {
+            tag: reducer.current_tag(),
+            signature: signature(9),
+        })
+        .expect("re-sign the exact durable Commit in the new pool generation");
+    assert!(matches!(
+        reducer.vote_pool_snapshots().as_slice(),
+        [VotePoolSnapshot { signers, .. }] if signers == &[id(1)]
+    ));
+
+    for signer in [2_u8, 3] {
+        let outcome = reducer
+            .step(Event::VoteReceived {
+                tag: reducer.current_tag(),
+                vote: SignedVote::new(
+                    Vote::new(context.id(), round, Phase::Commit, subject, id(signer)),
+                    signature(signer),
+                ),
+            })
+            .expect("responsive peer Commit enters the rebuilt locked-round pool");
+        if signer == 2 {
+            assert!(outcome.effects().is_empty());
+        } else {
+            assert!(matches!(
+                only_persist(outcome).record(),
+                WalRecord::Decision(certificate)
+                    if certificate.round() == round
+                        && certificate.phase() == Phase::Commit
+                        && certificate.subject() == subject
+            ));
+        }
+    }
+}
+
+#[test]
+fn tc_highest_prepare_missed_locally_persists_historical_commit_after_validation() {
+    let context = context();
+    let subject = Subject::repeat(0x96);
+    let round = Round::new(context.height(), 0);
+    let prepare = qc(&context, 0, Phase::Prepare, subject, &[1, 2, 3]);
+    let local_commit = Vote::new(context.id(), round, Phase::Commit, subject, id(4));
+    let mut reducer = Reducer::new(context.clone(), Some(id(4)), Generation::new(48)).unwrap();
+
+    let timeout_entry = only_persist(
+        reducer
+            .step(Event::TimeoutElapsed {
+                tag: reducer.current_tag(),
+            })
+            .expect("time out without observing the PrepareQC carried by the quorum"),
+    );
+    acknowledge(&mut reducer, &timeout_entry);
+    reducer
+        .step(Event::Signed {
+            tag: reducer.current_tag(),
+            signature: signature(4),
+        })
+        .expect("finish the durable timeout vote");
+
+    let install = only_persist(
+        reducer
+            .step(Event::TimeoutCertificateReceived {
+                tag: reducer.current_tag(),
+                certificate: tc_with_high(&context, 0, prepare.clone(), &[1, 2, 3]),
+            })
+            .expect("the TC starts durable promotion of its highest PrepareQC"),
+    );
+    let entered = acknowledge(&mut reducer, &install);
+    assert_eq!(reducer.current_tag().view(), 1);
+    assert_eq!(
+        reducer
+            .durable_state()
+            .locked()
+            .map(QuorumCertificate::reference),
+        Some(prepare.reference())
+    );
+    assert_eq!(reducer.durable_state().commit_intent(round), None);
+    assert!(entered.effects().iter().any(|effect| matches!(
+        effect,
+        Effect::FetchBody {
+            round: fetched_round,
+            subject: fetched_subject,
+            certificate: Some(certificate),
+            ..
+        } if *fetched_round == round
+            && *fetched_subject == subject
+            && certificate.reference() == prepare.reference()
+    )));
+
+    assert!(matches!(
+        reducer
+            .step(Event::BodyAvailable {
+                tag: reducer.current_tag(),
+                round,
+                subject,
+            })
+            .expect("recover the exact TC-protected body")
+            .effects(),
+        [Effect::StoreBody { .. }]
+    ));
+    assert!(matches!(
+        reducer
+            .step(Event::BodyStored {
+                tag: reducer.current_tag(),
+                round,
+                subject,
+            })
+            .expect("durably store the exact TC-protected body")
+            .effects(),
+        [Effect::ValidateBody { .. }]
+    ));
+    let commit_entry = only_persist(
+        reducer
+            .step(Event::ValidationCompleted {
+                tag: reducer.current_tag(),
+                round,
+                subject,
+                valid: true,
+            })
+            .expect("validated historical lock starts its durable Commit intent"),
+    );
+    assert!(matches!(
+        commit_entry.record(),
+        WalRecord::LockAndCommit { prepare: record, vote }
+            if record.reference() == prepare.reference() && *vote == local_commit
+    ));
+    assert_eq!(
+        reducer.durable_state().commit_intent(round),
+        None,
+        "the Commit intent is not authorized until its WAL append is acknowledged"
+    );
+    assert!(
+        reducer.awaiting_signature().is_none(),
+        "persistence acknowledgement must precede Commit signing"
+    );
+    assert_eq!(reducer.progress_witness_violation(), None);
+
+    let persisted = acknowledge(&mut reducer, &commit_entry);
+    assert_eq!(
+        reducer.durable_state().commit_intent(round),
+        Some(local_commit)
+    );
+    assert!(matches!(
+        persisted.effects(),
+        [Effect::Sign {
+            message: SignableMessage::Vote(vote),
+            ..
+        }] if *vote == local_commit
+    ));
+    reducer
+        .step(Event::Signed {
+            tag: reducer.current_tag(),
+            signature: signature(9),
+        })
+        .expect("sign and self-admit the reconstructed historical Commit");
+    assert!(matches!(
+        reducer.vote_pool_snapshots().as_slice(),
+        [VotePoolSnapshot {
+            round: pooled_round,
+            phase: Phase::Commit,
+            subject: pooled_subject,
+            signers,
+            ..
+        }] if *pooled_round == round && *pooled_subject == subject && signers == &[id(4)]
+    ));
+
+    for signer in [1_u8, 2] {
+        let outcome = reducer
+            .step(Event::VoteReceived {
+                tag: reducer.current_tag(),
+                vote: SignedVote::new(
+                    Vote::new(context.id(), round, Phase::Commit, subject, id(signer)),
+                    signature(signer),
+                ),
+            })
+            .expect("responsive peer Commit rebuilds the exact historical quorum");
+        if signer == 1 {
+            assert!(outcome.effects().is_empty());
+        } else {
+            assert!(matches!(
+                only_persist(outcome).record(),
+                WalRecord::Decision(certificate)
+                    if certificate.round() == round
+                        && certificate.phase() == Phase::Commit
+                        && certificate.subject() == subject
+            ));
+        }
+    }
+}
+
+#[test]
+fn historical_locked_commit_replays_only_after_exact_tc_lock_installation() {
+    let context = context();
+    let subject = Subject::repeat(0x97);
+    let round = Round::new(context.height(), 0);
+    let prepare = qc(&context, 0, Phase::Prepare, subject, &[1, 2, 3]);
+    let local_commit = Vote::new(context.id(), round, Phase::Commit, subject, id(4));
+    let timeout = TimeoutVote::new(context.id(), round, id(4), None);
+    let install = tc_with_high(&context, 0, prepare.clone(), &[1, 2, 3]);
+    let entries = [
+        WalEntry::new(PersistenceId::new(1), WalRecord::TimeoutIntent(timeout)),
+        WalEntry::new(
+            PersistenceId::new(2),
+            WalRecord::InstallTimeout(install.clone()),
+        ),
+        WalEntry::new(
+            PersistenceId::new(3),
+            WalRecord::LockAndCommit {
+                prepare: prepare.clone(),
+                vote: local_commit,
+            },
+        ),
+    ];
+    let mut recovered = Reducer::recover(
+        context.clone(),
+        Some(id(4)),
+        Generation::new(49),
+        entries.clone(),
+    )
+    .expect("the exact TC-installed historical lock authorizes replayed Commit intent");
+    assert_eq!(recovered.current_tag().view(), 1);
+    assert_eq!(
+        recovered.durable_state().commit_intent(round),
+        Some(local_commit)
+    );
+    assert!(matches!(
+        resume_after_replay(&mut recovered).effects(),
+        [Effect::Sign {
+            message: SignableMessage::Vote(vote),
+            ..
+        }] if *vote == local_commit
+    ));
+
+    let unlocked_entries = [
+        entries[0].clone(),
+        WalEntry::new(
+            PersistenceId::new(2),
+            WalRecord::InstallTimeout(tc_without_high(&context, 0, &[1, 2, 3])),
+        ),
+        entries[2].clone(),
+    ];
+    assert!(matches!(
+        DurableState::replay(&context, Some(id(4)), unlocked_entries),
+        Err(ReplayError::InvalidLocalVote)
+    ));
+
+    let different_prepare = qc(
+        &context,
+        0,
+        Phase::Prepare,
+        Subject::repeat(0x98),
+        &[1, 2, 3],
+    );
+    let mismatched_entries = [
+        entries[0].clone(),
+        WalEntry::new(
+            PersistenceId::new(2),
+            WalRecord::InstallTimeout(install.clone()),
+        ),
+        WalEntry::new(
+            PersistenceId::new(3),
+            WalRecord::LockAndCommit {
+                prepare: different_prepare.clone(),
+                vote: Vote::new(
+                    context.id(),
+                    round,
+                    Phase::Commit,
+                    different_prepare.subject(),
+                    id(4),
+                ),
+            },
+        ),
+    ];
+    assert!(matches!(
+        DurableState::replay(&context, Some(id(4)), mismatched_entries),
+        Err(ReplayError::InvalidLocalVote)
+    ));
+
+    let decision_first_entries = [
+        entries[0].clone(),
+        WalEntry::new(PersistenceId::new(2), WalRecord::InstallTimeout(install)),
+        WalEntry::new(
+            PersistenceId::new(3),
+            WalRecord::Decision(qc(&context, 0, Phase::Commit, subject, &[1, 2, 3])),
+        ),
+        WalEntry::new(
+            PersistenceId::new(4),
+            WalRecord::LockAndCommit {
+                prepare,
+                vote: local_commit,
+            },
+        ),
+    ];
+    assert!(matches!(
+        DurableState::replay(&context, Some(id(4)), decision_first_entries),
+        Err(ReplayError::InvalidLocalVote)
+    ));
+}
+
+#[test]
+fn higher_conflicting_prepare_intent_fences_historical_commit_reconstruction() {
+    let context = context();
+    let locked_subject = Subject::repeat(0x99);
+    let conflicting_subject = Subject::repeat(0x9A);
+    let locked_round = Round::new(context.height(), 0);
+    let higher_round = Round::new(context.height(), 1);
+    let locked_prepare = qc(&context, 0, Phase::Prepare, locked_subject, &[1, 2, 3]);
+    let higher_prepare_vote = Vote::new(
+        context.id(),
+        higher_round,
+        Phase::Prepare,
+        conflicting_subject,
+        id(4),
+    );
+    let historical_commit = Vote::new(
+        context.id(),
+        locked_round,
+        Phase::Commit,
+        locked_subject,
+        id(4),
+    );
+    let prefix = [
+        WalEntry::new(
+            PersistenceId::new(1),
+            WalRecord::InstallTimeout(tc_without_high(&context, 0, &[1, 2, 3])),
+        ),
+        WalEntry::new(
+            PersistenceId::new(2),
+            WalRecord::PrepareIntent(higher_prepare_vote),
+        ),
+        WalEntry::new(
+            PersistenceId::new(3),
+            WalRecord::InstallTimeout(tc_with_high(
+                &context,
+                1,
+                locked_prepare.clone(),
+                &[1, 2, 3],
+            )),
+        ),
+    ];
+    let mut replay = prefix.to_vec();
+    replay.push(WalEntry::new(
+        PersistenceId::new(4),
+        WalRecord::LockAndCommit {
+            prepare: locked_prepare.clone(),
+            vote: historical_commit,
+        },
+    ));
+    assert!(matches!(
+        DurableState::replay(&context, Some(id(4)), replay),
+        Err(ReplayError::InvalidLocalVote)
+    ));
+
+    let higher_conflicting_qc = qc(&context, 1, Phase::Prepare, conflicting_subject, &[1, 2, 3]);
+    let higher_qc_replay = [
+        WalEntry::new(
+            PersistenceId::new(1),
+            WalRecord::InstallTimeout(tc_without_high(&context, 0, &[1, 2, 3])),
+        ),
+        WalEntry::new(
+            PersistenceId::new(2),
+            WalRecord::ObservePrepare(higher_conflicting_qc),
+        ),
+        WalEntry::new(
+            PersistenceId::new(3),
+            WalRecord::InstallTimeout(tc_with_high(
+                &context,
+                1,
+                locked_prepare.clone(),
+                &[1, 2, 3],
+            )),
+        ),
+        WalEntry::new(
+            PersistenceId::new(4),
+            WalRecord::LockAndCommit {
+                prepare: locked_prepare.clone(),
+                vote: historical_commit,
+            },
+        ),
+    ];
+    assert!(matches!(
+        DurableState::replay(&context, Some(id(4)), higher_qc_replay),
+        Err(ReplayError::InvalidLocalVote)
+    ));
+
+    let mut reducer = Reducer::recover(context.clone(), Some(id(4)), Generation::new(50), prefix)
+        .expect("recover the higher conflicting Prepare and TC-promoted old lock");
+    resume_after_replay(&mut reducer);
+    let fetch = reducer
+        .step(Event::RetransmitElapsed {
+            tag: reducer.current_tag(),
+        })
+        .expect("the old lock retains body recovery even when its late Commit is fenced");
+    assert!(fetch.effects().iter().any(|effect| matches!(
+        effect,
+        Effect::FetchBody {
+            round,
+            subject,
+            certificate: Some(certificate),
+            ..
+        } if *round == locked_round
+            && *subject == locked_subject
+            && certificate.reference() == locked_prepare.reference()
+    )));
+    reducer
+        .step(Event::BodyAvailable {
+            tag: reducer.current_tag(),
+            round: locked_round,
+            subject: locked_subject,
+        })
+        .expect("recover the exact old locked body");
+    reducer
+        .step(Event::BodyStored {
+            tag: reducer.current_tag(),
+            round: locked_round,
+            subject: locked_subject,
+        })
+        .expect("store the exact old locked body");
+    let validation = reducer
+        .step(Event::ValidationCompleted {
+            tag: reducer.current_tag(),
+            round: locked_round,
+            subject: locked_subject,
+            valid: true,
+        })
+        .expect("validation keeps the temporal-order fence non-fatal");
+    assert_eq!(
+        validation.disposition(),
+        StepDisposition::Ignored(IgnoreReason::IrrelevantView)
+    );
+    assert!(validation.effects().is_empty());
+    assert_eq!(reducer.durable_state().commit_intent(locked_round), None);
+    assert_eq!(reducer.progress_witness_violation(), None);
+}
+
+#[test]
+fn higher_same_subject_prepare_allows_historical_commit_reconstruction() {
+    let context = context();
+    let subject = Subject::repeat(0x9B);
+    let locked_round = Round::new(context.height(), 0);
+    let higher_round = Round::new(context.height(), 1);
+    let locked_prepare = qc(&context, 0, Phase::Prepare, subject, &[1, 2, 3]);
+    let historical_commit = Vote::new(context.id(), locked_round, Phase::Commit, subject, id(4));
+    let entries = [
+        WalEntry::new(
+            PersistenceId::new(1),
+            WalRecord::InstallTimeout(tc_without_high(&context, 0, &[1, 2, 3])),
+        ),
+        WalEntry::new(
+            PersistenceId::new(2),
+            WalRecord::PrepareIntent(Vote::new(
+                context.id(),
+                higher_round,
+                Phase::Prepare,
+                subject,
+                id(4),
+            )),
+        ),
+        WalEntry::new(
+            PersistenceId::new(3),
+            WalRecord::ObservePrepare(qc(&context, 1, Phase::Prepare, subject, &[1, 2, 3])),
+        ),
+        WalEntry::new(
+            PersistenceId::new(4),
+            WalRecord::InstallTimeout(tc_with_high(
+                &context,
+                1,
+                locked_prepare.clone(),
+                &[1, 2, 3],
+            )),
+        ),
+        WalEntry::new(
+            PersistenceId::new(5),
+            WalRecord::LockAndCommit {
+                prepare: locked_prepare,
+                vote: historical_commit,
+            },
+        ),
+    ];
+    let replay = DurableState::replay(&context, Some(id(4)), entries)
+        .expect("same-subject reproposal does not conflict with the old locked value");
+    assert_eq!(replay.commit_intent(locked_round), Some(historical_commit));
+}
+
+#[test]
+fn replay_does_not_resign_commit_superseded_by_higher_tc_lock() {
+    let context = context();
+    let old_subject = Subject::repeat(0x93);
+    let higher_subject = Subject::repeat(0x94);
+    let old_prepare = qc(&context, 0, Phase::Prepare, old_subject, &[1, 2, 3]);
+    let old_commit = Vote::new(
+        context.id(),
+        old_prepare.round(),
+        Phase::Commit,
+        old_subject,
+        id(1),
+    );
+    let higher_prepare = qc(&context, 1, Phase::Prepare, higher_subject, &[1, 2, 3]);
+    let mut reducer = Reducer::recover(
+        context.clone(),
+        Some(id(1)),
+        Generation::new(46),
+        [
+            WalEntry::new(
+                PersistenceId::new(1),
+                WalRecord::LockAndCommit {
+                    prepare: old_prepare,
+                    vote: old_commit,
+                },
+            ),
+            WalEntry::new(
+                PersistenceId::new(2),
+                WalRecord::InstallTimeout(tc_without_high(&context, 0, &[1, 2, 3])),
+            ),
+            WalEntry::new(
+                PersistenceId::new(3),
+                WalRecord::ObservePrepare(higher_prepare.clone()),
+            ),
+            WalEntry::new(
+                PersistenceId::new(4),
+                WalRecord::InstallTimeout(tc_with_high(
+                    &context,
+                    1,
+                    higher_prepare.clone(),
+                    &[1, 2, 3],
+                )),
+            ),
+        ],
+    )
+    .expect("recover the TC-promoted lock");
+    assert_eq!(
+        reducer
+            .durable_state()
+            .locked()
+            .map(QuorumCertificate::reference),
+        Some(higher_prepare.reference())
+    );
+
+    let resumed = resume_after_replay(&mut reducer);
+    assert!(
+        resumed.effects().is_empty(),
+        "the immutable old Commit record is no longer an active signing intent"
+    );
+    assert_eq!(
+        reducer.durable_state().commit_intent(old_commit.round()),
+        Some(old_commit)
+    );
+    assert!(reducer.awaiting_signature().is_none());
+    assert_eq!(reducer.queued_signatures().count(), 0);
+    assert_eq!(reducer.progress_witness_violation(), None);
+
+    let retransmit = reducer
+        .step(Event::RetransmitElapsed {
+            tag: reducer.current_tag(),
+        })
+        .expect("recovered promoted lock retains a body reconstruction path");
+    assert!(retransmit.effects().iter().all(|effect| {
+        !matches!(
+            effect,
+            Effect::Broadcast(ConsensusMessageV2::Vote(vote)) if vote.vote() == old_commit
+        )
+    }));
+    assert!(retransmit.effects().iter().any(|effect| {
+        matches!(
+            effect,
+            Effect::FetchBody {
+                subject,
+                certificate: Some(certificate),
+                ..
+            } if *subject == higher_subject && certificate.reference() == higher_prepare.reference()
+        )
+    }));
+}
+
+#[test]
 fn prior_view_commit_vote_for_unlocked_prepare_is_rejected() {
     let context = context();
     let locked_subject = Subject::repeat(0x73);
@@ -1368,6 +2152,198 @@ fn prior_view_commit_vote_for_unlocked_prepare_is_rejected() {
         StepDisposition::Ignored(IgnoreReason::IrrelevantView)
     );
     assert!(outcome.effects().is_empty());
+}
+
+#[test]
+fn current_view_commit_waits_for_the_exact_durable_lock() {
+    let context = context();
+    let old_subject = Subject::repeat(0x9a);
+    let current_subject = Subject::repeat(0x9b);
+    let old_round = Round::new(context.height(), 0);
+    let current_round = Round::new(context.height(), 1);
+    let old_prepare = qc(&context, 0, Phase::Prepare, old_subject, &[1, 2, 3]);
+    let old_commit = Vote::new(context.id(), old_round, Phase::Commit, old_subject, id(1));
+    let mut reducer = Reducer::recover(
+        context.clone(),
+        Some(id(1)),
+        Generation::new(50),
+        [
+            WalEntry::new(
+                PersistenceId::new(1),
+                WalRecord::LockAndCommit {
+                    prepare: old_prepare,
+                    vote: old_commit,
+                },
+            ),
+            WalEntry::new(
+                PersistenceId::new(2),
+                WalRecord::InstallTimeout(tc_without_high(&context, 0, &[1, 2, 3])),
+            ),
+        ],
+    )
+    .expect("recover the historical lock in the next view");
+
+    assert!(matches!(
+        resume_after_replay(&mut reducer).effects(),
+        [Effect::Sign {
+            message: SignableMessage::Vote(vote),
+            ..
+        }] if *vote == old_commit
+    ));
+    reducer
+        .step(Event::Signed {
+            tag: reducer.current_tag(),
+            signature: signature(1),
+        })
+        .expect("rebuild the historical locked Commit pool");
+    reducer
+        .step(Event::VoteReceived {
+            tag: reducer.current_tag(),
+            vote: SignedVote::new(
+                Vote::new(
+                    context.id(),
+                    current_round,
+                    Phase::Prepare,
+                    current_subject,
+                    id(2),
+                ),
+                signature(2),
+            ),
+        })
+        .expect("a current-view Prepare vote enters its bounded pool");
+
+    let premature = reducer
+        .step(Event::VoteReceived {
+            tag: reducer.current_tag(),
+            vote: SignedVote::new(
+                Vote::new(
+                    context.id(),
+                    current_round,
+                    Phase::Commit,
+                    current_subject,
+                    id(2),
+                ),
+                signature(2),
+            ),
+        })
+        .expect("a Commit vote without an exact durable lock is harmless");
+    assert_eq!(
+        premature.disposition(),
+        StepDisposition::Ignored(IgnoreReason::IrrelevantView)
+    );
+    assert!(premature.effects().is_empty());
+    let pools = reducer.vote_pool_snapshots();
+    assert_eq!(pools.len(), 2);
+    assert!(pools.iter().any(|pool| {
+        pool.round == old_round && pool.phase == Phase::Commit && pool.subject == old_subject
+    }));
+    assert!(pools.iter().any(|pool| {
+        pool.round == current_round
+            && pool.phase == Phase::Prepare
+            && pool.subject == current_subject
+    }));
+
+    let current_prepare = qc(&context, 1, Phase::Prepare, current_subject, &[1, 2, 3]);
+    let observed = reducer
+        .step(Event::QuorumCertificateReceived {
+            tag: reducer.current_tag(),
+            certificate: current_prepare.clone(),
+        })
+        .expect("observe the current PrepareQC before installing its lock");
+    let observe_entry = observed
+        .effects()
+        .iter()
+        .find_map(|effect| match effect {
+            Effect::Persist { entry, .. } => Some(entry.clone()),
+            _ => None,
+        })
+        .expect("the current PrepareQC is persisted");
+    acknowledge(&mut reducer, &observe_entry);
+    assert!(matches!(
+        reducer
+            .step(Event::BodyAvailable {
+                tag: reducer.current_tag(),
+                round: current_round,
+                subject: current_subject,
+            })
+            .expect("make the certified body available")
+            .effects(),
+        [Effect::StoreBody { .. }]
+    ));
+    assert!(matches!(
+        reducer
+            .step(Event::BodyStored {
+                tag: reducer.current_tag(),
+                round: current_round,
+                subject: current_subject,
+            })
+            .expect("durably store the certified body")
+            .effects(),
+        [Effect::ValidateBody { .. }]
+    ));
+    let lock_entry = only_persist(
+        reducer
+            .step(Event::ValidationCompleted {
+                tag: reducer.current_tag(),
+                round: current_round,
+                subject: current_subject,
+                valid: true,
+            })
+            .expect("validation starts the exact LockAndCommit append"),
+    );
+    let pre_ack_pools = reducer.vote_pool_snapshots();
+    assert!(pre_ack_pools.iter().any(|pool| {
+        pool.round == old_round && pool.phase == Phase::Commit && pool.subject == old_subject
+    }));
+    assert!(pre_ack_pools.iter().any(|pool| {
+        pool.round == current_round
+            && pool.phase == Phase::Prepare
+            && pool.subject == current_subject
+    }));
+    let persisted = acknowledge(&mut reducer, &lock_entry);
+    assert!(matches!(
+        persisted.effects(),
+        [Effect::Sign {
+            message: SignableMessage::Vote(vote),
+            ..
+        }] if vote.round() == current_round && vote.subject() == current_subject
+    ));
+    assert!(
+        reducer
+            .vote_pool_snapshots()
+            .iter()
+            .all(|pool| pool.round == current_round)
+    );
+    reducer
+        .step(Event::Signed {
+            tag: reducer.current_tag(),
+            signature: signature(1),
+        })
+        .expect("self-admit the now-authorized current Commit vote");
+
+    let admitted = reducer
+        .step(Event::VoteReceived {
+            tag: reducer.current_tag(),
+            vote: SignedVote::new(
+                Vote::new(
+                    context.id(),
+                    current_round,
+                    Phase::Commit,
+                    current_subject,
+                    id(2),
+                ),
+                signature(2),
+            ),
+        })
+        .expect("the same Commit vote is admissible after exact lock persistence");
+    assert_eq!(admitted.disposition(), StepDisposition::Applied);
+    assert!(admitted.effects().is_empty());
+    assert!(reducer.vote_pool_snapshots().iter().any(|pool| {
+        pool.round == current_round
+            && pool.phase == Phase::Commit
+            && pool.subject == current_subject
+            && pool.signers == [id(1), id(2)]
+    }));
 }
 
 #[test]
@@ -1490,9 +2466,75 @@ fn replay_resigns_prepare_but_timeout_fence_suppresses_old_votes() {
             ..
         }] if vote.phase() == Phase::Prepare
     ));
+    prepared
+        .step(Event::Signed {
+            tag: prepared.current_tag(),
+            signature: signature(1),
+        })
+        .expect("publish the still-open Prepare intent");
+    assert!(prepared.outbound_messages().any(|message| {
+        matches!(
+            message,
+            ConsensusMessageV2::Vote(vote) if vote.vote() == prepare_vote
+        )
+    }));
 
-    let timeout = TimeoutVote::new(context.id(), round, id(1), None);
-    let timeout_entry = WalEntry::new(PersistenceId::new(2), WalRecord::TimeoutIntent(timeout));
+    let timeout_entry = only_persist(
+        prepared
+            .step(Event::TimeoutElapsed {
+                tag: prepared.current_tag(),
+            })
+            .expect("begin the durable timeout fence"),
+    );
+    let WalRecord::TimeoutIntent(expected_timeout) = timeout_entry.record() else {
+        panic!("timeout fence must persist its exact local vote");
+    };
+    let expected_timeout = expected_timeout.clone();
+    let timeout_sign = acknowledge(&mut prepared, &timeout_entry);
+    assert!(matches!(
+        timeout_sign.effects(),
+        [Effect::Sign {
+            message: SignableMessage::TimeoutVote(_),
+            ..
+        }]
+    ));
+    assert!(prepared.outbound_messages().all(|message| {
+        !matches!(
+            message,
+            ConsensusMessageV2::Vote(vote) if vote.vote() == prepare_vote
+        )
+    }));
+    prepared
+        .step(Event::Signed {
+            tag: prepared.current_tag(),
+            signature: signature(2),
+        })
+        .expect("publish the durable timeout vote");
+    assert!(prepared.outbound_messages().any(|message| {
+        matches!(
+            message,
+            ConsensusMessageV2::TimeoutVote(vote) if vote.vote() == expected_timeout
+        )
+    }));
+    let retry = prepared
+        .step(Event::RetransmitElapsed {
+            tag: prepared.current_tag(),
+        })
+        .expect("timeout-fenced retransmission passes refinement");
+    assert!(retry.effects().iter().all(|effect| {
+        !matches!(
+            effect,
+            Effect::Broadcast(ConsensusMessageV2::Vote(vote)) if vote.vote() == prepare_vote
+        )
+    }));
+    assert!(retry.effects().iter().any(|effect| {
+        matches!(
+            effect,
+            Effect::Broadcast(ConsensusMessageV2::TimeoutVote(vote))
+                if vote.vote() == expected_timeout
+        )
+    }));
+
     let mut closed = Reducer::recover(
         context,
         Some(id(1)),
@@ -2464,6 +3506,20 @@ fn decision_retains_in_flight_body_pipeline_without_duplicate_fetch() {
     assert!(reducer.durable_state().decision().is_some());
     assert!(reducer.durable_state().prepare_intent(round).is_none());
 
+    let store_retry = reducer
+        .step(Event::RetransmitElapsed {
+            tag: reducer.current_tag(),
+        })
+        .expect("a lost store owner is reconstructed from the decided body stage");
+    assert!(store_retry.effects().iter().any(|effect| matches!(
+        effect,
+        Effect::StoreBody {
+            round: retry_round,
+            subject: retry_subject,
+            ..
+        } if *retry_round == round && *retry_subject == subject
+    )));
+
     let stored = reducer
         .step(Event::BodyStored {
             tag: reducer.current_tag(),
@@ -2472,6 +3528,20 @@ fn decision_retains_in_flight_body_pipeline_without_duplicate_fetch() {
         })
         .expect("retained store completion advances the decided body");
     assert!(matches!(stored.effects(), [Effect::ValidateBody { .. }]));
+
+    let validation_retry = reducer
+        .step(Event::RetransmitElapsed {
+            tag: reducer.current_tag(),
+        })
+        .expect("a lost validation owner is reconstructed from the durable body stage");
+    assert!(validation_retry.effects().iter().any(|effect| matches!(
+        effect,
+        Effect::ValidateBody {
+            round: retry_round,
+            subject: retry_subject,
+            ..
+        } if *retry_round == round && *retry_subject == subject
+    )));
 
     let validated = reducer
         .step(Event::ValidationCompleted {
@@ -2489,8 +3559,219 @@ fn decision_retains_in_flight_body_pipeline_without_duplicate_fetch() {
             ..
         }] if *value == subject && certificate == &decision
     ));
+
+    let apply_retry = reducer
+        .step(Event::RetransmitElapsed {
+            tag: reducer.current_tag(),
+        })
+        .expect("a lost application owner is reconstructed from the validated body stage");
+    assert!(apply_retry.effects().iter().any(|effect| matches!(
+        effect,
+        Effect::Apply {
+            subject: retry_subject,
+            certificate,
+            ..
+        } if *retry_subject == subject && certificate == &decision
+    )));
     assert!(reducer.durable_state().prepare_intent(round).is_none());
     assert!(reducer.durable_state().commit_intent(round).is_none());
+}
+
+#[test]
+fn exact_local_body_completion_after_decision_reconstructs_apply() {
+    let context = context();
+    let subject = Subject::repeat(0x8b);
+    let round = Round::new(context.height(), 0);
+    let manifest =
+        PayloadManifest::new(subject, Digest::repeat(0x91), Digest::repeat(0x92), 384, 6);
+    let decision = qc(&context, 0, Phase::Commit, subject, &[1, 2, 3]);
+    let mut reducer = Reducer::new(
+        context.clone(),
+        Some(context.leader(0)),
+        Generation::new(41),
+    )
+    .expect("reducer");
+
+    let decided = install_decision(&mut reducer, decision.clone());
+    assert!(matches!(decided.effects(), [Effect::FetchBody { .. }]));
+    assert_eq!(reducer.body_state(round, subject), BodyState::Missing);
+
+    let completed = reducer
+        .step(Event::LocalProposalReady {
+            tag: reducer.current_tag(),
+            manifest,
+        })
+        .expect("the exact trusted local body completion passes refinement");
+    assert_eq!(completed.disposition(), StepDisposition::Applied);
+    assert!(matches!(
+        completed.effects(),
+        [Effect::Apply {
+            tag,
+            subject: effect_subject,
+            certificate,
+        }] if *tag == reducer.current_tag()
+            && *effect_subject == subject
+            && certificate == &decision
+    ));
+    assert_eq!(reducer.body_state(round, subject), BodyState::Validated);
+    assert_eq!(reducer.applied_subject(), None);
+    assert_eq!(reducer.progress_witness_violation(), None);
+}
+
+#[test]
+fn nonmatching_local_body_completions_remain_terminal_after_decision() {
+    let context = context();
+    let subject = Subject::repeat(0x8c);
+    let manifest =
+        PayloadManifest::new(subject, Digest::repeat(0x93), Digest::repeat(0x94), 256, 4);
+    let decision = qc(&context, 0, Phase::Commit, subject, &[1, 2, 3]);
+    let mut decided = Reducer::new(
+        context.clone(),
+        Some(context.leader(0)),
+        Generation::new(42),
+    )
+    .expect("reducer");
+    install_decision(&mut decided, decision);
+
+    for (tag, expected) in [
+        (
+            EventTag::new(
+                context.height(),
+                decided.current_tag().view(),
+                Generation::new(41),
+            ),
+            IgnoreReason::StaleGeneration,
+        ),
+        (
+            EventTag::new(
+                context.height() + 1,
+                decided.current_tag().view(),
+                decided.current_tag().generation(),
+            ),
+            IgnoreReason::WrongHeight,
+        ),
+    ] {
+        let mut reducer = decided.clone();
+        let before = reducer.clone();
+        let ignored = reducer
+            .step(Event::LocalProposalReady { tag, manifest })
+            .expect("a foreign completion is a refinement-safe stutter");
+        assert_eq!(ignored.disposition(), StepDisposition::Ignored(expected));
+        assert!(ignored.effects().is_empty());
+        assert_eq!(reducer, before);
+    }
+
+    let mut wrong_subject = decided.clone();
+    let before = wrong_subject.clone();
+    let ignored = wrong_subject
+        .step(Event::LocalProposalReady {
+            tag: wrong_subject.current_tag(),
+            manifest: PayloadManifest::new(
+                Subject::repeat(0x8d),
+                Digest::repeat(0x93),
+                Digest::repeat(0x94),
+                256,
+                4,
+            ),
+        })
+        .expect("a foreign subject is terminal after decision");
+    assert_eq!(
+        ignored.disposition(),
+        StepDisposition::Ignored(IgnoreReason::AlreadyDecided)
+    );
+    assert!(ignored.effects().is_empty());
+    assert_eq!(wrong_subject, before);
+}
+
+#[test]
+fn conflicting_local_manifest_cannot_replace_decided_body_identity() {
+    let context = context();
+    let subject = Subject::repeat(0x8e);
+    let round = Round::new(context.height(), 0);
+    let mut reducer =
+        Reducer::new(context.clone(), Some(id(4)), Generation::new(43)).expect("reducer");
+    let admitted = reducer
+        .step(Event::ProposalReceived {
+            tag: reducer.current_tag(),
+            proposal: proposal(
+                &context,
+                0,
+                subject,
+                ProposalJustification::ParentCommit(context.parent_commit()),
+            ),
+        })
+        .expect("authenticated proposal fixes the exact manifest");
+    assert!(matches!(admitted.effects(), [Effect::FetchBody { .. }]));
+
+    install_decision(
+        &mut reducer,
+        qc(&context, 0, Phase::Commit, subject, &[1, 2, 3]),
+    );
+    let before = reducer.clone();
+    let ignored = reducer
+        .step(Event::LocalProposalReady {
+            tag: reducer.current_tag(),
+            manifest: PayloadManifest::new(
+                subject,
+                Digest::repeat(0xa1),
+                Digest::repeat(0xa2),
+                512,
+                8,
+            ),
+        })
+        .expect("a conflicting payload commitment is terminal");
+    assert_eq!(
+        ignored.disposition(),
+        StepDisposition::Ignored(IgnoreReason::AlreadyDecided)
+    );
+    assert!(ignored.effects().is_empty());
+    assert_eq!(reducer, before);
+    assert_eq!(reducer.body_state(round, subject), BodyState::Missing);
+}
+
+#[test]
+fn tc_interleaving_cannot_retag_an_old_local_completion_as_decided_body() {
+    let context = context();
+    let old_subject = Subject::repeat(0x8f);
+    let decided_subject = Subject::repeat(0x90);
+    let mut reducer =
+        Reducer::new(context.clone(), Some(id(1)), Generation::new(44)).expect("reducer");
+    let old_tag = reducer.current_tag();
+    let tc_entry = only_persist(
+        reducer
+            .step(Event::TimeoutCertificateReceived {
+                tag: old_tag,
+                certificate: tc_without_high(&context, 0, &[1, 2, 3]),
+            })
+            .expect("TC begins installation"),
+    );
+    acknowledge(&mut reducer, &tc_entry);
+    assert_eq!(reducer.current_tag().view(), 1);
+    assert_ne!(reducer.current_tag().generation(), old_tag.generation());
+
+    install_decision(
+        &mut reducer,
+        qc(&context, 1, Phase::Commit, decided_subject, &[1, 2, 3]),
+    );
+    let before = reducer.clone();
+    let stale = reducer
+        .step(Event::LocalProposalReady {
+            tag: old_tag,
+            manifest: PayloadManifest::new(
+                old_subject,
+                Digest::repeat(0xa3),
+                Digest::repeat(0xa4),
+                128,
+                2,
+            ),
+        })
+        .expect("old-generation local completion is rejected");
+    assert_eq!(
+        stale.disposition(),
+        StepDisposition::Ignored(IgnoreReason::StaleGeneration)
+    );
+    assert!(stale.effects().is_empty());
+    assert_eq!(reducer, before);
 }
 
 #[test]

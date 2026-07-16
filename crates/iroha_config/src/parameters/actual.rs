@@ -5775,9 +5775,8 @@ impl Sumeragi {
         )?;
         let envelope_headroom = u64::try_from(defaults::sumeragi::BODY_ENVELOPE_HEADROOM_BYTES)
             .expect("static body-envelope headroom fits u64");
-        let timeout_vote_reserve =
-            u64::try_from(defaults::sumeragi::TIMEOUT_VOTE_RESERVE_BYTES)
-                .expect("static timeout-vote reserve fits u64");
+        let timeout_vote_reserve = u64::try_from(defaults::sumeragi::TIMEOUT_VOTE_RESERVE_BYTES)
+            .expect("static timeout-vote reserve fits u64");
         let minimum_body_source_bytes = max_payload_bytes
             .checked_add(envelope_headroom)
             .and_then(|minimum| minimum.checked_add(timeout_vote_reserve))

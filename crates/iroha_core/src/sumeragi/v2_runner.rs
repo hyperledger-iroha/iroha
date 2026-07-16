@@ -53,8 +53,9 @@ use super::{
         PostFinalityCleanupTarget, V2EffectExecutor,
     },
     v2_lane_work::{
-        AuthenticatedGenesisNexusAmxContext, MergeSidecarDeferralDisposition, V2LaneIngressOutcome,
-        V2LaneWorkAdapter, V2LaneWorkEffect, V2LaneWorkLimits,
+        AuthenticatedGenesisNexusAmxContext, GlobalBodyLockOutcome,
+        MergeSidecarDeferralDisposition, V2LaneIngressOutcome, V2LaneWorkAdapter, V2LaneWorkEffect,
+        V2LaneWorkLimits,
     },
     v2_recovery::{build_verified_successor, recover_active_height},
     v2_runtime::{NetworkIngressError, RuntimeQueueConfig, SerializedV2Runtime},
@@ -64,6 +65,182 @@ use crate::{block::BlockBuilder, kura::Kura, queue::Queue, state::State};
 
 const IDLE_POLL: Duration = Duration::from_millis(10);
 const CANDIDATE_WORK_RECHECK: Duration = Duration::from_millis(100);
+
+/// Exact reducer facts which own one local proposal-side work item.
+///
+/// A higher PrepareQC can replace the lock without changing [`EventTag`].
+/// Tagging local work by the runtime incarnation alone would therefore let a
+/// delayed rejection or preparation completion for the old subject mutate the
+/// new lock's scheduling state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct LocalProposalOwner {
+    tag: EventTag,
+    locked_subject: Option<wire::BlockSubject>,
+    decided_subject: Option<wire::BlockSubject>,
+}
+
+impl From<LocalProposalDirective> for LocalProposalOwner {
+    fn from(directive: LocalProposalDirective) -> Self {
+        Self {
+            tag: directive.tag(),
+            locked_subject: directive.locked_subject(),
+            decided_subject: directive.decided_subject(),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct PendingLocalEvents {
+    owner: LocalProposalOwner,
+    subject: wire::BlockSubject,
+    events: Vec<PipelineEventBox>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct CandidateWorkWait {
+    owner: LocalProposalOwner,
+    started_at: Instant,
+    next_retry: Instant,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LocalValidationDisposition {
+    Ignored,
+    RetryHeartbeat,
+    FatalHeartbeat,
+}
+
+#[derive(Default, Debug)]
+struct LocalProposalState {
+    attempted: Option<LocalProposalOwner>,
+    submitted: Option<(LocalProposalOwner, wire::BlockSubject)>,
+    heartbeat_only: Option<LocalProposalOwner>,
+    candidate_work_wait: Option<CandidateWorkWait>,
+    pending_events: Option<PendingLocalEvents>,
+}
+
+impl LocalProposalState {
+    fn from_replayed_tag(replayed_tag: Option<EventTag>, current: LocalProposalDirective) -> Self {
+        let owner = LocalProposalOwner::from(current);
+        Self {
+            attempted: replayed_tag
+                .is_some_and(|tag| tag == owner.tag)
+                .then_some(owner),
+            ..Self::default()
+        }
+    }
+
+    /// Retire every volatile item which is not owned by the exact current
+    /// lock/decision snapshot. A Decision owns no further proposal work.
+    fn reconcile(&mut self, owner: LocalProposalOwner) -> LocalProposalOwner {
+        if owner.decided_subject.is_some() {
+            *self = Self::default();
+            return owner;
+        }
+        if let Some((candidate, subject)) = self.submitted
+            && candidate != owner
+        {
+            if candidate.tag == owner.tag
+                && candidate.decided_subject == owner.decided_subject
+                && owner.locked_subject == Some(subject)
+            {
+                self.submitted = Some((owner, subject));
+            } else {
+                self.submitted = None;
+            }
+        }
+        if self
+            .pending_events
+            .as_ref()
+            .is_some_and(|pending| pending.owner != owner)
+        {
+            let preserve = self.pending_events.as_ref().is_some_and(|pending| {
+                pending.owner.tag == owner.tag
+                    && pending.owner.decided_subject == owner.decided_subject
+                    && owner.locked_subject == Some(pending.subject)
+            });
+            if preserve {
+                self.pending_events
+                    .as_mut()
+                    .expect("pending events were observed above")
+                    .owner = owner;
+            } else {
+                self.pending_events = None;
+            }
+        }
+        let continued_exact_subject = self
+            .submitted
+            .is_some_and(|(candidate, _)| candidate == owner)
+            || self
+                .pending_events
+                .as_ref()
+                .is_some_and(|pending| pending.owner == owner);
+        if self.attempted.is_some_and(|candidate| candidate != owner) {
+            self.attempted = continued_exact_subject.then_some(owner);
+        }
+        if self
+            .heartbeat_only
+            .is_some_and(|candidate| candidate != owner)
+        {
+            self.heartbeat_only = None;
+        }
+        if self
+            .candidate_work_wait
+            .is_some_and(|wait| wait.owner != owner)
+        {
+            self.candidate_work_wait = None;
+        }
+        owner
+    }
+
+    fn handle_validation_rejection(
+        &mut self,
+        owner: LocalProposalOwner,
+        expected_round: wire::ConsensusRound,
+        rejected_round: wire::ConsensusRound,
+        rejected_subject: wire::BlockSubject,
+    ) -> LocalValidationDisposition {
+        let owner = self.reconcile(owner);
+        if expected_round != rejected_round || self.submitted != Some((owner, rejected_subject)) {
+            return LocalValidationDisposition::Ignored;
+        }
+        if self
+            .pending_events
+            .as_ref()
+            .is_some_and(|pending| pending.owner == owner && pending.subject == rejected_subject)
+        {
+            self.pending_events = None;
+        }
+        if self.heartbeat_only == Some(owner) {
+            return LocalValidationDisposition::FatalHeartbeat;
+        }
+        self.attempted = None;
+        self.heartbeat_only = Some(owner);
+        self.submitted = None;
+        self.candidate_work_wait = None;
+        LocalValidationDisposition::RetryHeartbeat
+    }
+
+    fn take_prepared_events(
+        &mut self,
+        owner: LocalProposalOwner,
+        prepared_tag: EventTag,
+        prepared_subject: wire::BlockSubject,
+    ) -> Option<Vec<PipelineEventBox>> {
+        let owner = self.reconcile(owner);
+        let matches = self.pending_events.as_ref().is_some_and(|pending| {
+            pending.owner == owner
+                && pending.owner.tag == prepared_tag
+                && pending.subject == prepared_subject
+        });
+        matches.then(|| {
+            self.pending_events
+                .take()
+                .expect("matching pending events were observed above")
+                .events
+        })
+    }
+}
 
 /// Run the v2-only worker until shutdown or a fail-closed error.
 pub(super) fn run(worker: SumeragiWorker) {
@@ -407,6 +584,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
         }
         let mut services = ProductionV2Services::start(
             context.clone(),
+            executor.current_tag(),
             validator_set_pops,
             local_peer.clone(),
             local_validator,
@@ -438,6 +616,10 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             recovered_applied_height,
             Arc::clone(&output_guard),
         )?;
+        // Seed executor lock ownership from replay before consuming startup
+        // effects. Otherwise a recovered lock would look like a live first-lock
+        // transition and could retire safe work reconstructed from the same WAL.
+        let _ = reconcile_executor_locked_body(&mut executor, &mut services)?;
         if recovering_interrupted_tip {
             executor.consume_pending_tip_recovery_effects(startup_effects, &mut services)?;
         } else {
@@ -482,15 +664,9 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
         }
 
         let mut block_sync_request = None;
-        let mut attempted_tag = replayed_proposal_tag;
-        let mut local_subject = None;
-        let mut heartbeat_only_tag = None;
-        let mut candidate_work_wait: Option<(EventTag, Instant, Instant)> = None;
-        let mut pending_local_events: Option<(
-            EventTag,
-            wire::BlockSubject,
-            Vec<PipelineEventBox>,
-        )> = None;
+        let initial_directive = reconcile_executor_locked_body(&mut executor, &mut services)?;
+        let mut local_proposal_state =
+            LocalProposalState::from_replayed_tag(replayed_proposal_tag, initial_directive);
 
         let finality = loop {
             cleanup_supervisor.reap_finished();
@@ -504,47 +680,53 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
 
             services.drain_completions(&mut executor)?;
             if !recovering_interrupted_tip {
+                let directive = reconcile_executor_locked_body(&mut executor, &mut services)?;
+                local_proposal_state.reconcile(LocalProposalOwner::from(directive));
+                lane_work.retain_merge_sidecars_for_global_view(
+                    directive.tag().view(),
+                    directive.locked_subject(),
+                    directive.decided_subject(),
+                )?;
                 drive_merge_sidecar_recovery(&mut executor, &mut services, &mut lane_work)?;
                 services
                     .replay_buffered_chunks(&mut executor)
                     .map_err(V2RunnerError::Service)?;
                 while let Some(rejection) = services.take_validation_rejection() {
-                    if pending_local_events
-                        .as_ref()
-                        .is_some_and(|(tag, subject, _)| {
-                            *tag == executor.current_tag() && *subject == rejection.subject()
-                        })
-                    {
-                        pending_local_events = None;
-                    }
-                    if local_subject == Some(rejection.subject())
-                        && rejection.round().view == executor.current_tag().view()
-                    {
-                        if heartbeat_only_tag == Some(executor.current_tag()) {
+                    let current = executor.local_proposal_directive()?;
+                    let expected_round = round_for_tag(&context, current.tag())?;
+                    match local_proposal_state.handle_validation_rejection(
+                        LocalProposalOwner::from(current),
+                        expected_round,
+                        rejection.round(),
+                        rejection.subject(),
+                    ) {
+                        LocalValidationDisposition::Ignored => {}
+                        LocalValidationDisposition::FatalHeartbeat => {
                             return Err(V2RunnerError::LocalHeartbeatRejected(
                                 rejection.reason().to_owned(),
                             ));
                         }
-                        iroha_logger::warn!(
-                            reason = rejection.reason(),
-                            "local Sumeragi v2 candidate rejected; retrying an empty heartbeat"
-                        );
-                        attempted_tag = None;
-                        heartbeat_only_tag = Some(executor.current_tag());
-                        local_subject = None;
+                        LocalValidationDisposition::RetryHeartbeat => {
+                            iroha_logger::warn!(
+                                reason = rejection.reason(),
+                                "local Sumeragi v2 candidate rejected; retrying an empty heartbeat"
+                            );
+                        }
                     }
                 }
 
-                drive_block_sync(
-                    Instant::now(),
-                    &mut next_block_sync_attempt,
-                    retransmit_interval,
-                    &mut block_sync_request,
-                    &mut block_sync,
-                    &common_config.key_pair,
-                    output_guard.as_ref(),
-                    &services,
-                )?;
+                if directive.decided_subject().is_none() {
+                    drive_block_sync(
+                        Instant::now(),
+                        &mut next_block_sync_attempt,
+                        retransmit_interval,
+                        &mut block_sync_request,
+                        &mut block_sync,
+                        &common_config.key_pair,
+                        output_guard.as_ref(),
+                        &services,
+                    )?;
+                }
                 drain_v2_ingress(
                     &block_rx,
                     &mut executor,
@@ -560,6 +742,13 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                     &mut block_sync,
                     &mut block_sync_request,
                     body_queue_capacity,
+                )?;
+                let directive = reconcile_executor_locked_body(&mut executor, &mut services)?;
+                local_proposal_state.reconcile(LocalProposalOwner::from(directive));
+                lane_work.retain_merge_sidecars_for_global_view(
+                    directive.tag().view(),
+                    directive.locked_subject(),
+                    directive.decided_subject(),
                 )?;
                 drain_lane_work_ingress(
                     &vote_rx,
@@ -586,29 +775,31 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                 )?;
             } else {
                 advance_executor(&mut executor, &mut services, control_queue_capacity)?;
-                let directive = executor.local_proposal_directive()?;
+                let directive = reconcile_executor_locked_body(&mut executor, &mut services)?;
+                local_proposal_state.reconcile(LocalProposalOwner::from(directive));
                 lane_work.retain_merge_sidecars_for_global_view(
                     directive.tag().view(),
                     directive.locked_subject(),
                     directive.decided_subject(),
                 )?;
-                if let Some(locked) = directive.locked_subject() {
-                    let newly_locked = lane_work.mark_global_body_locked(locked.block_hash);
-                    if newly_locked && local_validator.is_some() {
+                if directive.decided_subject().is_none()
+                    && let Some((locked_round, locked)) = directive.locked_body()
+                {
+                    let lock_outcome = lane_work.mark_global_body_locked(locked_round, locked)?;
+                    if lock_outcome == GlobalBodyLockOutcome::Inserted && local_validator.is_some()
+                    {
                         services
-                            .request_locked_candidate(executor.current_tag(), locked)
+                            .request_locked_candidate(executor.current_tag(), locked_round, locked)
                             .map_err(V2RunnerError::Service)?;
                     }
                 }
                 while let Some(prepared) = services.take_prepared_candidate() {
-                    let matches = pending_local_events
-                        .as_ref()
-                        .is_some_and(|(tag, subject, _)| {
-                            *tag == prepared.tag()
-                                && *subject == prepared.subject()
-                                && executor.current_tag() == prepared.tag()
-                        });
-                    if matches && let Some((_, _, events)) = pending_local_events.take() {
+                    let current = executor.local_proposal_directive()?;
+                    if let Some(events) = local_proposal_state.take_prepared_events(
+                        LocalProposalOwner::from(current),
+                        prepared.tag(),
+                        prepared.subject(),
+                    ) {
                         let Some(_permit) = output_guard.acquire() else {
                             return Err(V2RunnerError::RestartRequired);
                         };
@@ -616,12 +807,6 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                             let _ = events_sender.send(EventBox::Pipeline(event));
                         }
                     }
-                }
-                if pending_local_events
-                    .as_ref()
-                    .is_some_and(|(tag, _, _)| *tag != executor.current_tag())
-                {
-                    pending_local_events = None;
                 }
                 services
                     .replay_buffered_chunks(&mut executor)
@@ -683,14 +868,10 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                 first_height_genesis.as_ref(),
                 height_started_at,
                 block_cadence,
-                &mut attempted_tag,
-                &mut local_subject,
-                heartbeat_only_tag,
-                &mut pending_local_events,
+                &mut local_proposal_state,
                 &mut executor,
                 &mut services,
                 &mut lane_work,
-                &mut candidate_work_wait,
                 retransmit_interval,
             )?;
             dispatch_lane_work_effects(&mut lane_work, &services, control_queue_capacity)?;
@@ -699,12 +880,30 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
         };
 
         let (receipt, artifact) = finality;
+        if !super::status::set_v2_successor_work_stage(
+            receipt.height(),
+            wire::SumeragiV2LocalWorkStage::Running,
+        ) {
+            iroha_logger::warn!(
+                height = receipt.height(),
+                "Sumeragi v2 successor construction has no matching published height status"
+            );
+        }
         let successor_construction = output_guard
             .begin_fail_stop_operation()
             .ok_or(V2RunnerError::RestartRequired)?;
         verified_context =
             build_verified_successor(state.as_ref(), &context_store, &artifact, &receipt)?;
         successor_construction.complete();
+        if !super::status::set_v2_successor_work_stage(
+            receipt.height(),
+            wire::SumeragiV2LocalWorkStage::Complete,
+        ) {
+            iroha_logger::warn!(
+                height = receipt.height(),
+                "Sumeragi v2 successor activation could not update the finalized height status"
+            );
+        }
         signature_policy = BlockSignaturePolicy::RotatingLeader;
         first_height_genesis = None;
         staged_genesis_nexus_amx_context = None;
@@ -742,29 +941,35 @@ fn schedule_local_proposal(
     genesis_body: Option<&SignedBlock>,
     height_started_at: Instant,
     block_cadence: Duration,
-    attempted_tag: &mut Option<EventTag>,
-    local_subject: &mut Option<wire::BlockSubject>,
-    heartbeat_only_tag: Option<EventTag>,
-    pending_local_events: &mut Option<(EventTag, wire::BlockSubject, Vec<PipelineEventBox>)>,
+    proposal_state: &mut LocalProposalState,
     executor: &mut V2EffectExecutor,
     services: &mut ProductionV2Services,
     lane_work: &mut V2LaneWorkAdapter,
-    candidate_work_wait: &mut Option<(EventTag, Instant, Instant)>,
     candidate_work_wait_bound: Duration,
 ) -> Result<(), V2RunnerError> {
     let Some(local_validator) = local_validator else {
         return Ok(());
     };
     let directive = executor.local_proposal_directive()?;
-    if candidate_work_wait
-        .as_ref()
-        .is_some_and(|(tag, _, _)| *tag != directive.tag())
-    {
-        *candidate_work_wait = None;
+    let owner = proposal_state.reconcile(LocalProposalOwner::from(directive));
+    if directive.decided_subject().is_some() {
+        return Ok(());
+    }
+    // Bind the immutable disk acquisition to the current reducer incarnation
+    // before observing readiness. A TC may have advanced the view after the
+    // worker completed its one exact-subject load; consuming only after this
+    // rebind prevents an old tag from turning ready bytes into another FIFO
+    // read.
+    if let Some((locked_round, locked)) = directive.locked_body() {
+        services
+            .request_locked_candidate(directive.tag(), locked_round, locked)
+            .map_err(V2RunnerError::Service)?;
     }
     while let Some(loaded) = services.take_loaded_candidate() {
         let current = executor.local_proposal_directive()?;
-        if loaded.tag() != current.tag() || current.locked_subject() != Some(loaded.subject()) {
+        if loaded.tag() != current.tag()
+            || current.locked_body() != Some((loaded.round(), loaded.subject()))
+        {
             iroha_logger::debug!(
                 loaded_height = loaded.tag().height(),
                 loaded_view = loaded.tag().view(),
@@ -815,14 +1020,13 @@ fn schedule_local_proposal(
             canonical_wire,
             executor,
             services,
-            local_subject,
+            proposal_state,
         )?;
-        *attempted_tag = Some(current.tag());
+        proposal_state.attempted = Some(LocalProposalOwner::from(current));
         return Ok(());
     }
     if directive.leader() != local_validator
-        || directive.decided_subject().is_some()
-        || *attempted_tag == Some(directive.tag())
+        || proposal_state.attempted == Some(owner)
         || (directive.tag().view() == 0
             && height_started_at.elapsed() < block_cadence
             && context.height > 1)
@@ -830,11 +1034,8 @@ fn schedule_local_proposal(
         return Ok(());
     }
 
-    if let Some(locked) = directive.locked_subject() {
-        services
-            .request_locked_candidate(directive.tag(), locked)
-            .map_err(V2RunnerError::Service)?;
-        *attempted_tag = Some(directive.tag());
+    if directive.locked_subject().is_some() {
+        proposal_state.attempted = Some(owner);
     } else if context.height == 1 {
         let body = genesis_body.ok_or(V2RunnerError::MissingGenesisBody)?;
         // Genesis staging retains its deterministic execution image for application, while
@@ -846,15 +1047,13 @@ fn schedule_local_proposal(
             canonical_height_one_proposal_wire(body)?,
             executor,
             services,
-            local_subject,
+            proposal_state,
         )?;
-        *attempted_tag = Some(directive.tag());
+        proposal_state.attempted = Some(owner);
     } else {
-        if candidate_work_wait
-            .as_ref()
-            .is_some_and(|(tag, _, next_retry)| {
-                *tag == directive.tag() && Instant::now() < *next_retry
-            })
+        if proposal_state
+            .candidate_work_wait
+            .is_some_and(|wait| wait.owner == owner && Instant::now() < wait.next_retry)
         {
             return Ok(());
         }
@@ -896,7 +1095,7 @@ fn schedule_local_proposal(
         let assembler = V2CandidateAssembler::new(candidate_limits, time_source.clone());
         let attachments =
             candidate_attachments(context, state, parent, directive.tag().view(), time_source)?;
-        let candidate = if heartbeat_only_tag == Some(directive.tag()) {
+        let candidate = if proposal_state.heartbeat_only == Some(owner) {
             assembler.assemble(CandidateRequest {
                 context,
                 directive,
@@ -924,20 +1123,29 @@ fn schedule_local_proposal(
             })?
         };
         let tag = candidate.tag();
+        if tag != owner.tag {
+            return Err(V2RunnerError::StaleTag);
+        }
         let report = candidate.scan_report();
-        if heartbeat_only_tag != Some(tag) && report.selected == 0 && report.work_deferred > 0 {
+        if proposal_state.heartbeat_only != Some(owner)
+            && report.selected == 0
+            && report.work_deferred > 0
+        {
             let now = Instant::now();
-            let started_at = candidate_work_wait
-                .as_ref()
-                .filter(|(waiting_tag, _, _)| *waiting_tag == tag)
-                .map_or(now, |(_, started_at, _)| *started_at);
+            let started_at = proposal_state
+                .candidate_work_wait
+                .filter(|wait| wait.owner == owner)
+                .map_or(now, |wait| wait.started_at);
             if now.saturating_duration_since(started_at) < candidate_work_wait_bound {
-                *candidate_work_wait =
-                    Some((tag, started_at, deadline_after(now, CANDIDATE_WORK_RECHECK)));
+                proposal_state.candidate_work_wait = Some(CandidateWorkWait {
+                    owner,
+                    started_at,
+                    next_retry: deadline_after(now, CANDIDATE_WORK_RECHECK),
+                });
                 return Ok(());
             }
         }
-        *candidate_work_wait = None;
+        proposal_state.candidate_work_wait = None;
         if lane_work.bind_local_candidate(round_for_tag(context, tag)?, candidate.block().hash())
             == V2LaneIngressOutcome::Rejected
         {
@@ -945,17 +1153,21 @@ fn schedule_local_proposal(
         }
         let (_block, canonical_wire, encoded_payload, events, report) = candidate.into_parts();
         let subject = encoded_payload.manifest().subject;
-        *pending_local_events = Some((tag, subject, events));
+        proposal_state.pending_events = Some(PendingLocalEvents {
+            owner,
+            subject,
+            events,
+        });
         iroha_logger::debug!(?report, "assembled bounded Sumeragi v2 candidate");
         submit_encoded_body(
-            tag,
+            owner,
             canonical_wire,
             encoded_payload,
             executor,
             services,
-            local_subject,
+            proposal_state,
         )?;
-        *attempted_tag = Some(tag);
+        proposal_state.attempted = Some(owner);
     }
 
     Ok(())
@@ -973,7 +1185,7 @@ fn submit_exact_body(
     canonical_wire: Vec<u8>,
     executor: &mut V2EffectExecutor,
     services: &mut ProductionV2Services,
-    local_subject: &mut Option<wire::BlockSubject>,
+    proposal_state: &mut LocalProposalState,
 ) -> Result<(), V2RunnerError> {
     let block = iroha_data_model::block::decode_framed_signed_block(&canonical_wire)
         .map_err(|error| V2RunnerError::Candidate(error.to_string()))?;
@@ -995,28 +1207,28 @@ fn submit_exact_body(
     let payload = encode_payload(context, round, subject, &canonical_wire)
         .map_err(|error| V2RunnerError::Candidate(error.to_string()))?;
     submit_encoded_body(
-        directive.tag(),
+        LocalProposalOwner::from(directive),
         canonical_wire,
         payload,
         executor,
         services,
-        local_subject,
+        proposal_state,
     )
 }
 
 fn submit_encoded_body(
-    tag: EventTag,
+    owner: LocalProposalOwner,
     canonical_wire: Vec<u8>,
     payload: EncodedV2Payload,
     executor: &mut V2EffectExecutor,
     services: &mut ProductionV2Services,
-    local_subject: &mut Option<wire::BlockSubject>,
+    proposal_state: &mut LocalProposalState,
 ) -> Result<(), V2RunnerError> {
     let manifest = services
-        .register_outbound_payload(payload)
+        .register_outbound_payload(owner.tag, payload)
         .map_err(V2RunnerError::Service)?;
-    *local_subject = Some(manifest.subject);
-    executor.admit_local_proposal(tag, manifest, canonical_wire, services)?;
+    proposal_state.submitted = Some((owner, manifest.subject));
+    executor.admit_local_proposal(owner.tag, manifest, canonical_wire, services)?;
     Ok(())
 }
 
@@ -1392,10 +1604,29 @@ fn advance_executor(
     for _ in 0..limit.max(1) {
         match executor.step(Instant::now(), services)? {
             EffectExecutorStep::Idle => break,
-            EffectExecutorStep::Advanced { .. } => {}
+            EffectExecutorStep::Advanced { .. } => {
+                // A PrepareQC can replace the protected lock without changing
+                // the EventTag. Reconcile immediately after every serialized
+                // transition so later ingress in the same outer batch cannot
+                // reclaim service ownership for the superseded subject.
+                let _ = reconcile_executor_locked_body(executor, services)?;
+            }
         }
     }
     Ok(())
+}
+
+fn reconcile_executor_locked_body(
+    executor: &mut V2EffectExecutor,
+    services: &mut ProductionV2Services,
+) -> Result<LocalProposalDirective, V2RunnerError> {
+    let directive = executor.local_proposal_directive()?;
+    if directive.decided_subject().is_none()
+        && let Some(lock) = directive.locked_body()
+    {
+        executor.reconcile_locked_body_for_reproposal(directive.tag(), lock, services)?;
+    }
+    Ok(directive)
 }
 
 fn advance_pending_tip_recovery_executor(
@@ -2019,6 +2250,164 @@ mod tests {
             round_for_tag(&context, EventTag::new(2, 0, Generation::new(7))),
             Err(V2RunnerError::StaleTag)
         ));
+    }
+
+    fn proposal_owner(
+        _context: &wire::HeightContext,
+        tag: EventTag,
+        lock: Option<(u64, wire::BlockSubject)>,
+        decided_subject: Option<wire::BlockSubject>,
+    ) -> LocalProposalOwner {
+        LocalProposalOwner {
+            tag,
+            locked_subject: lock.map(|(_, subject)| subject),
+            decided_subject,
+        }
+    }
+
+    fn proposal_subject(label: &[u8]) -> wire::BlockSubject {
+        wire::BlockSubject {
+            parent_block_hash: None,
+            block_hash: HashOf::from_untyped_unchecked(Hash::new(label)),
+            payload_hash: Hash::new(&[label, b" payload"].concat()),
+        }
+    }
+
+    #[test]
+    fn same_tag_higher_lock_retires_all_local_proposal_owners() {
+        let (context, _) = context();
+        let tag = EventTag::new(context.height, 5, Generation::new(11));
+        let subject_a = proposal_subject(b"local owner A");
+        let subject_b = proposal_subject(b"local owner B");
+        let owner_a = proposal_owner(&context, tag, Some((2, subject_a)), None);
+        let owner_b = proposal_owner(&context, tag, Some((4, subject_b)), None);
+        let now = Instant::now();
+        let mut state = LocalProposalState {
+            attempted: Some(owner_a),
+            submitted: Some((owner_a, subject_a)),
+            heartbeat_only: Some(owner_a),
+            candidate_work_wait: Some(CandidateWorkWait {
+                owner: owner_a,
+                started_at: now,
+                next_retry: now,
+            }),
+            pending_events: Some(PendingLocalEvents {
+                owner: owner_a,
+                subject: subject_a,
+                events: Vec::new(),
+            }),
+        };
+
+        state.reconcile(owner_b);
+
+        assert!(state.attempted.is_none());
+        assert!(state.submitted.is_none());
+        assert!(state.heartbeat_only.is_none());
+        assert!(state.candidate_work_wait.is_none());
+        assert!(state.pending_events.is_none());
+    }
+
+    #[test]
+    fn first_same_subject_lock_preserves_pending_local_proposal_events() {
+        let (context, _) = context();
+        let tag = EventTag::new(context.height, 5, Generation::new(14));
+        let subject = proposal_subject(b"first lock keeps local subject");
+        let unlocked = proposal_owner(&context, tag, None, None);
+        let locked = proposal_owner(&context, tag, Some((5, subject)), None);
+        let mut state = LocalProposalState {
+            attempted: Some(unlocked),
+            submitted: Some((unlocked, subject)),
+            pending_events: Some(PendingLocalEvents {
+                owner: unlocked,
+                subject,
+                events: Vec::new(),
+            }),
+            ..LocalProposalState::default()
+        };
+
+        state.reconcile(locked);
+
+        assert_eq!(state.attempted, Some(locked));
+        assert_eq!(state.submitted, Some((locked, subject)));
+        assert!(
+            state
+                .pending_events
+                .as_ref()
+                .is_some_and(|pending| { pending.owner == locked && pending.subject == subject })
+        );
+    }
+
+    #[test]
+    fn higher_same_subject_lock_keeps_one_local_proposal_owner() {
+        let (context, _) = context();
+        let tag = EventTag::new(context.height, 5, Generation::new(15));
+        let subject = proposal_subject(b"higher lock keeps local subject");
+        let lower = proposal_owner(&context, tag, Some((2, subject)), None);
+        let higher = proposal_owner(&context, tag, Some((4, subject)), None);
+        assert_eq!(lower, higher);
+    }
+
+    #[test]
+    fn late_old_rejection_cannot_arm_heartbeat_for_replacement_lock() {
+        let (context, _) = context();
+        let tag = EventTag::new(context.height, 5, Generation::new(12));
+        let subject_a = proposal_subject(b"rejected old A");
+        let subject_b = proposal_subject(b"current B");
+        let owner_a = proposal_owner(&context, tag, Some((2, subject_a)), None);
+        let owner_b = proposal_owner(&context, tag, Some((4, subject_b)), None);
+        let proposal_round = wire::ConsensusRound {
+            context_id: context.id(),
+            height: context.height,
+            view: tag.view(),
+        };
+        let mut state = LocalProposalState {
+            submitted: Some((owner_a, subject_a)),
+            ..LocalProposalState::default()
+        };
+
+        assert_eq!(
+            state.handle_validation_rejection(owner_b, proposal_round, proposal_round, subject_a,),
+            LocalValidationDisposition::Ignored
+        );
+        assert_eq!(state.heartbeat_only, None);
+
+        state.submitted = Some((owner_b, subject_b));
+        assert_eq!(
+            state.handle_validation_rejection(owner_b, proposal_round, proposal_round, subject_b,),
+            LocalValidationDisposition::RetryHeartbeat
+        );
+        assert_eq!(state.heartbeat_only, Some(owner_b));
+
+        state.submitted = Some((owner_b, subject_b));
+        assert_eq!(
+            state.handle_validation_rejection(owner_b, proposal_round, proposal_round, subject_b,),
+            LocalValidationDisposition::FatalHeartbeat
+        );
+    }
+
+    #[test]
+    fn decision_retires_local_work_before_prepared_delivery() {
+        let (context, _) = context();
+        let tag = EventTag::new(context.height, 6, Generation::new(13));
+        let subject = proposal_subject(b"decided proposal");
+        let active = proposal_owner(&context, tag, Some((4, subject)), None);
+        let decided = proposal_owner(&context, tag, Some((4, subject)), Some(subject));
+        let mut state = LocalProposalState {
+            attempted: Some(active),
+            submitted: Some((active, subject)),
+            heartbeat_only: None,
+            candidate_work_wait: None,
+            pending_events: Some(PendingLocalEvents {
+                owner: active,
+                subject,
+                events: Vec::new(),
+            }),
+        };
+
+        assert!(state.take_prepared_events(decided, tag, subject).is_none());
+        assert!(state.attempted.is_none());
+        assert!(state.submitted.is_none());
+        assert!(state.pending_events.is_none());
     }
 
     #[test]

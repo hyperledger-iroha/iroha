@@ -6,6 +6,10 @@ import XCTest
 @testable import IrohaSwift
 
 final class SumeragiV2WireFixtureTests: XCTestCase {
+    func testUnsafeProposalIgnoreReasonUsesWireDiscriminantEleven() {
+        XCTAssertEqual(SumeragiV2IgnoreReason(rawValue: 11), .unsafeProposal)
+    }
+
     func testRustCanonicalMessageFixturesRoundtrip() throws {
         let messages = try fixtureRows().filter { $0.kind == "message" }
         XCTAssertEqual(Set(messages.map(\.name)), expectedMessageNames)
@@ -187,7 +191,7 @@ final class SumeragiV2WireFixtureTests: XCTestCase {
         XCTAssertEqual(decoded.liveness.timeoutQuorums.count, 1)
         XCTAssertEqual(decoded.liveness.outboundIntents.first?.kind, .commitVote)
         XCTAssertEqual(decoded.liveness.queues.first?.queue, .networkIngress)
-        XCTAssertEqual(decoded.liveness.blocker, .commitQuorumMissing)
+        XCTAssertEqual(decoded.liveness.blocker, .localControlPending)
 
         // The fifth struct field follows four fixed-width fields and is the
         // canonical one-byte `restart_required` boolean.

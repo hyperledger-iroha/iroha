@@ -195,11 +195,13 @@ PROOF
   <1> QED BY <1>1
 
 (***************************************************************************
-Grouped timeout protection.  TimeoutIntentProtectsCommits is the durable
-fence invariant: if one honest signer has both an old Commit intent and a TC
-timeout vote, that timeout reports a PrepareQC no lower than the Commit lock,
-and reports the same subject when ranks are equal.  The theorem combines that
-local fact with dual-quorum honest intersection and TC maximum selection.
+Grouped timeout protection.  StrictTimeoutIntentProtectsCommits is the
+pre-existing-intent kernel: if one honest signer has both an old Commit intent
+and a TC timeout vote, that timeout reports a PrepareQC no lower than the
+Commit lock, and reports the same subject when ranks are equal.  The theorem
+combines that local fact with dual-quorum honest intersection and TC maximum
+selection.  Exact Commits created only after a TC installs its selected lock
+require the separate cross-TC induction ledgered by SumeragiV2Proofs.
 ***************************************************************************)
 
 THEOREM GroupedTimeoutProtectsCommitQuorum ==
@@ -255,8 +257,9 @@ PROOF
           /\ (timeoutVote.highRank = protectedView
                 => timeoutVote.highSubject = subject)
       BY <1>1, <2>5, <2>6, <2>7, <2>8
-         DEF TimeoutProtectionKernel, TimeoutIntentProtectsCommits,
-             TimeoutVoteProtectsCommitSet
+         DEF TimeoutProtectionKernel, StrictTimeoutIntentProtectsCommits,
+             StrictTimeoutVoteProtectsCommitSet,
+             TimeoutVoteStrictlyProtectsCommit
     <2>10. /\ TcHighRank(tc) >= timeoutVote.highRank
           /\ (TcHighRank(tc) = timeoutVote.highRank
                 => TcHighSubject(tc) = timeoutVote.highSubject)

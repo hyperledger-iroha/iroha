@@ -1325,6 +1325,130 @@ THEOREM InitEstablishesStrongInductiveInvariant ==
   Init => StrongInductiveInvariant
 BY InitAtEstablishesStrongInductiveInvariant DEF Init
 
+(***************************************************************************
+Historical locked-Commit authorization is already forced by two reducer
+clauses.  A lower-view pending Commit cannot use CurrentOpenPrepareForCommit,
+and every non-strict timeout/Commit pair covered by durable timeout protection
+must therefore carry installed-TC authorization.
+***************************************************************************)
+THEOREM PendingLowerLockCommitRequiresHistoricalTcAuthorization ==
+  PendingVoteWritesAuthorized
+    => \A request \in pendingLockCommit:
+         request.vote.view < nodeView[request.node]
+           => HistoricalTcLockedPrepareForCommit(request.node, request.qc)
+BY SMT
+   DEF PendingVoteWritesAuthorized, CurrentOpenPrepareForCommit
+
+THEOREM DurableTimeoutProtectionSuppliesInstalledTcAuthorization ==
+  DurableTimeoutsProtectCommits
+    => \A timeoutVote \in timeoutIntents,
+          commitVote \in commitIntents:
+         (/\ timeoutVote.signer \in Honest
+          /\ commitVote.signer = timeoutVote.signer
+          /\ commitVote.context = timeoutVote.context
+          /\ commitVote.phase = "Commit"
+          /\ commitVote.view <= timeoutVote.view
+          /\ ~TimeoutVoteStrictlyProtectsCommit(timeoutVote, commitVote))
+           => InstalledTcAuthorizesCommitVote(commitVote)
+BY SMT
+   DEF DurableTimeoutsProtectCommits, TimeoutIntentProtectsCommits,
+       TimeoutVoteProtectsCommitSet
+
+THEOREM ReducerProvenanceImpliesHistoricalTcLockedCommitAuthorization ==
+  ReducerProvenanceInvariant
+    => HistoricalTcLockedCommitAuthorizationInvariant
+BY PendingLowerLockCommitRequiresHistoricalTcAuthorization,
+   DurableTimeoutProtectionSuppliesInstalledTcAuthorization
+   DEF ReducerProvenanceInvariant,
+       HistoricalTcLockedCommitAuthorizationInvariant
+
+THEOREM UnchangedPendingVoteWriteVarsPreservesAuthorization ==
+  PendingVoteWritesAuthorized
+    /\ UNCHANGED <<context, nodeView, durableBodies, receivedQCs,
+                   prepareIntents, commitIntents, timeoutIntents, prepareQCs,
+                   installedTCs, lockRank, lockSubject, highestRank,
+                   highestSubject, pendingPrepare, pendingLockCommit,
+                   pendingTimeout>>
+    => PendingVoteWritesAuthorized'
+PROOF
+  <1>1. ASSUME PendingVoteWritesAuthorized,
+              UNCHANGED <<context, nodeView, durableBodies, receivedQCs,
+                          prepareIntents, commitIntents, timeoutIntents,
+                          prepareQCs, installedTCs, lockRank, lockSubject,
+                          highestRank, highestSubject, pendingPrepare,
+                          pendingLockCommit, pendingTimeout>>
+         PROVE PendingVoteWritesAuthorized'
+    <2>1. /\ context' = context
+          /\ nodeView' = nodeView
+          /\ durableBodies' = durableBodies
+          /\ receivedQCs' = receivedQCs
+          /\ prepareIntents' = prepareIntents
+          /\ commitIntents' = commitIntents
+          /\ timeoutIntents' = timeoutIntents
+          /\ prepareQCs' = prepareQCs
+          /\ installedTCs' = installedTCs
+          /\ lockRank' = lockRank
+          /\ lockSubject' = lockSubject
+          /\ highestRank' = highestRank
+          /\ highestSubject' = highestSubject
+          /\ pendingPrepare' = pendingPrepare
+          /\ pendingLockCommit' = pendingLockCommit
+          /\ pendingTimeout' = pendingTimeout
+      BY <1>1, Isa
+    <2>2. (\A request \in pendingPrepare:
+             /\ request.node \in Honest
+             /\ request.vote.phase = "Prepare"
+             /\ request.vote.signer = request.node
+             /\ request.vote.context = context
+             /\ request.vote.view = nodeView[request.node]
+             /\ request.vote.subject \in ValidSubjects
+             /\ BodyHeldBy(durableBodies, request.node,
+                           request.vote.context, request.vote.view,
+                           request.vote.subject)
+             /\ CanAppendVote(prepareIntents, request.vote)
+             /\ PrepareCarriesHigherSafeQc(request.vote))'
+      BY <1>1, <2>1, Isa
+         DEF PendingVoteWritesAuthorized, PrepareCarriesHigherSafeQc
+    <2>3. (\A request \in pendingLockCommit:
+             /\ request.node \in Honest
+             /\ request.vote.phase = "Commit"
+             /\ request.vote.signer = request.node
+             /\ request.vote.context = context
+             /\ request.vote.context = request.qc.context
+             /\ request.vote.view = request.qc.view
+             /\ request.vote.subject = request.qc.subject
+             /\ request.qc.phase = "Prepare"
+             /\ request.qc \in prepareQCs
+             /\ \/ CurrentOpenPrepareForCommit(request.node, request.qc)
+                \/ HistoricalTcLockedPrepareForCommit(request.node, request.qc)
+             /\ request.vote.subject \in ValidSubjects
+             /\ BodyHeldBy(durableBodies, request.node,
+                           request.vote.context, request.vote.view,
+                           request.vote.subject)
+             /\ request.qc.view >= lockRank[request.node]
+             /\ (request.qc.view = lockRank[request.node]
+                   => request.qc.subject = lockSubject[request.node])
+             /\ CanAppendVote(commitIntents, request.vote))'
+      BY <1>1, <2>1, Isa
+         DEF PendingVoteWritesAuthorized, CurrentOpenPrepareForCommit,
+             HistoricalTcLockedPrepareForCommit,
+             InstalledTcSelectsPrepareFor,
+             NoHigherConflictingPrepareKnown, NodeTimedOut
+    <2>4. (\A request \in pendingTimeout:
+             /\ request.node \in Honest
+             /\ request.vote.signer = request.node
+             /\ request.vote.context = context
+             /\ request.vote.view = nodeView[request.node]
+             /\ CanAppendTimeout(timeoutIntents, request.vote)
+             /\ TimeoutVoteProtectsCommitSet(
+                  request.vote, commitIntents))'
+      BY <1>1, <2>1, Isa
+         DEF PendingVoteWritesAuthorized, TimeoutVoteProtectsCommitSet,
+             TimeoutVoteStrictlyProtectsCommit,
+             InstalledTcAuthorizesCommitVote
+    <2> QED BY <2>2, <2>3, <2>4 DEF PendingVoteWritesAuthorized
+  <1> QED BY <1>1
+
 THEOREM UnchangedLineageVarsPreservesLineageInvariant ==
   LineageInvariant /\ UNCHANGED LineageVars => LineageInvariant'
 BY Isa
@@ -1349,10 +1473,15 @@ PROOF
              HonestVoteUnique, HonestTimeoutUnique, IntentPhasesCorrect,
              SameVoteSlot, SameTimeoutSlot, SameTimeoutContent
     <2>2. PendingVoteWritesAuthorized'
-      BY <1>1, Isa
-         DEF ProvenanceVars, ReducerProvenanceInvariant,
-             PendingVoteWritesAuthorized, PrepareCarriesHigherSafeQc,
-             NodeTimedOut
+      <3>1. UNCHANGED <<context, nodeView, durableBodies, receivedQCs,
+                        prepareIntents, commitIntents, timeoutIntents,
+                        prepareQCs, installedTCs, lockRank, lockSubject,
+                        highestRank, highestSubject, pendingPrepare,
+                        pendingLockCommit, pendingTimeout>>
+        BY <1>1, Isa DEF ProvenanceVars
+      <3> QED BY <1>1, <3>1,
+                   UnchangedPendingVoteWriteVarsPreservesAuthorization
+         DEF ReducerProvenanceInvariant
     <2>3. PendingCertificateWritesAuthorized'
       BY <1>1, Isa
          DEF ProvenanceVars, ReducerProvenanceInvariant,
@@ -1400,7 +1529,10 @@ PROOF
       <3>4. DurableTimeoutsProtectCommits'
         BY <1>1, Isa
            DEF ProvenanceVars, ReducerProvenanceInvariant,
-               DurableTimeoutsProtectCommits
+               DurableTimeoutsProtectCommits, TimeoutIntentProtectsCommits,
+               TimeoutVoteProtectsCommitSet,
+               TimeoutVoteStrictlyProtectsCommit,
+               InstalledTcAuthorizesCommitVote
       <3>5. HighestAndLockAreCertified'
         BY <1>1, Isa
            DEF ProvenanceVars, ReducerProvenanceInvariant,
@@ -1424,14 +1556,30 @@ PROOF
           /\ IntentPhasesCorrect'
           /\ PendingVoteWritesAuthorized'
           /\ PendingCertificateWritesAuthorized'
-      BY <1>1, Isa
-         DEF ReducerProvenanceWithoutVoteTransport,
-             ProvenanceWithoutVoteTransportVars, HonestVoteUnique,
-             HonestTimeoutUnique, IntentPhasesCorrect,
-             PendingVoteWritesAuthorized,
-             PendingCertificateWritesAuthorized,
-             PrepareCarriesHigherSafeQc, NodeTimedOut,
-             TCValid, AuthenticatedHighRef, HighRefValid, CurrentEpoch, CurrentVoters
+      <3>1. UNCHANGED <<context, nodeView, durableBodies, receivedQCs,
+                        prepareIntents, commitIntents, timeoutIntents,
+                        prepareQCs, installedTCs, lockRank, lockSubject,
+                        highestRank, highestSubject, pendingPrepare,
+                        pendingLockCommit, pendingTimeout>>
+        BY <1>1, Isa DEF ProvenanceWithoutVoteTransportVars
+      <3>2. PendingVoteWritesAuthorized'
+        BY <1>1, <3>1,
+           UnchangedPendingVoteWriteVarsPreservesAuthorization
+           DEF ReducerProvenanceWithoutVoteTransport
+      <3>3. /\ HonestVoteUnique(prepareIntents)'
+            /\ HonestVoteUnique(commitIntents)'
+            /\ HonestTimeoutUnique(timeoutIntents)'
+            /\ IntentPhasesCorrect'
+            /\ PendingCertificateWritesAuthorized'
+        BY <1>1, Isa
+           DEF ReducerProvenanceWithoutVoteTransport,
+               ProvenanceWithoutVoteTransportVars, HonestVoteUnique,
+               HonestTimeoutUnique, IntentPhasesCorrect,
+               PendingCertificateWritesAuthorized,
+               SameVoteSlot, SameTimeoutSlot, SameTimeoutContent,
+               TCValid, AuthenticatedHighRef, HighRefValid,
+               CurrentEpoch, CurrentVoters
+      <3> QED BY <3>2, <3>3
     <2>2. /\ QcTransportBacked'
           /\ HonestTimeoutTransportBacked'
           /\ TcTransportBacked'
@@ -2001,8 +2149,10 @@ PROOF
                /\ request.vote.subject = request.qc.subject
                /\ request.qc.phase = "Prepare"
                /\ request.qc \in prepareQCs'
-               /\ request.vote.view = nodeView'[request.node]
-               /\ ~NodeTimedOut(request.node, request.vote.view)'
+               /\ \/ CurrentOpenPrepareForCommit(
+                        request.node, request.qc)'
+                  \/ HistoricalTcLockedPrepareForCommit(
+                        request.node, request.qc)'
                /\ request.vote.subject \in ValidSubjects
                /\ BodyHeldBy(durableBodies', request.node,
                              request.vote.context, request.vote.view, request.vote.subject)
@@ -2020,8 +2170,10 @@ PROOF
                      /\ request.vote.subject = request.qc.subject
                      /\ request.qc.phase = "Prepare"
                      /\ request.qc \in prepareQCs'
-                     /\ request.vote.view = nodeView'[request.node]
-                     /\ ~NodeTimedOut(request.node, request.vote.view)'
+                     /\ \/ CurrentOpenPrepareForCommit(
+                              request.node, request.qc)'
+                        \/ HistoricalTcLockedPrepareForCommit(
+                              request.node, request.qc)'
                      /\ request.vote.subject \in ValidSubjects
                      /\ BodyHeldBy(durableBodies', request.node,
                                    request.vote.context, request.vote.view, request.vote.subject)
@@ -2048,14 +2200,18 @@ PROOF
                  /\ request.vote.subject = request.qc.subject
                  /\ request.qc.phase = "Prepare"
                  /\ request.qc \in prepareQCs
-                 /\ request.vote.view = nodeView[request.node]
-                 /\ ~NodeTimedOut(request.node, request.vote.view)
+                 /\ \/ CurrentOpenPrepareForCommit(
+                          request.node, request.qc)
+                    \/ HistoricalTcLockedPrepareForCommit(
+                          request.node, request.qc)
                  /\ request.vote.subject \in ValidSubjects
                  /\ request.qc.view >= lockRank[request.node]
                  /\ (request.qc.view = lockRank[request.node]
                        => request.qc.subject = lockSubject[request.node])
                  /\ CanAppendVote(commitIntents, request.vote)
-            BY <3>1, <5>3 DEF PendingVoteWritesAuthorized
+            BY <3>1, <5>3
+               DEF PendingVoteWritesAuthorized,
+                   CurrentOpenPrepareForCommit
           <5>5. /\ context' = context
                  /\ nodeView' = nodeView
                  /\ timeoutIntents' = timeoutIntents
@@ -2073,14 +2229,21 @@ PROOF
                  /\ request.vote.subject = request.qc.subject
                  /\ request.qc.phase = "Prepare"
                  /\ request.qc \in prepareQCs'
-                 /\ request.vote.view = nodeView'[request.node]
-                 /\ ~NodeTimedOut(request.node, request.vote.view)'
+                 /\ \/ CurrentOpenPrepareForCommit(
+                          request.node, request.qc)'
+                    \/ HistoricalTcLockedPrepareForCommit(
+                          request.node, request.qc)'
                  /\ request.vote.subject \in ValidSubjects
                  /\ request.qc.view >= lockRank'[request.node]
                  /\ (request.qc.view = lockRank'[request.node]
                        => request.qc.subject = lockSubject'[request.node])
                  /\ CanAppendVote(commitIntents', request.vote)
-            BY <5>4, <5>5, Isa DEF NodeTimedOut
+            BY <1>1, <5>4, <5>5, Isa
+               DEF ProofRelevantWithoutDurableVars,
+                   CurrentOpenPrepareForCommit,
+                   HistoricalTcLockedPrepareForCommit,
+                   InstalledTcSelectsPrepareFor,
+                   NoHigherConflictingPrepareKnown, NodeTimedOut
           <5> QED BY <5>2, <5>6
         <4> QED BY <4>1
       <3>4. \A request \in pendingTimeout':
@@ -2090,12 +2253,16 @@ PROOF
                /\ request.vote.view = nodeView'[request.node]
                /\ CanAppendTimeout(timeoutIntents', request.vote)
                /\ TimeoutVoteProtectsCommitSet(request.vote,
-                                               commitIntents')
+                                               commitIntents)'
         BY <1>1, <3>1, Isa
            DEF ProofRelevantWithoutDurableVars,
-               PendingVoteWritesAuthorized, NodeTimedOut
+               PendingVoteWritesAuthorized,
+               NodeTimedOut,
+               TimeoutVoteProtectsCommitSet,
+               TimeoutVoteStrictlyProtectsCommit,
+               InstalledTcAuthorizesCommitVote
       <3> QED BY <3>2, <3>3, <3>4
-         DEF PendingVoteWritesAuthorized, NodeTimedOut
+         DEF PendingVoteWritesAuthorized
     <2>5. /\ HonestVoteUnique(prepareIntents)'
           /\ HonestVoteUnique(commitIntents)'
           /\ HonestTimeoutUnique(timeoutIntents)'
@@ -2888,9 +3055,13 @@ PROOF
             /\ context' = context
             /\ nodeView' = nodeView
             /\ durableBodies' = durableBodies
+            /\ receivedQCs' = receivedQCs
             /\ prepareQCs' = prepareQCs
+            /\ installedTCs' = installedTCs
             /\ lockRank' = lockRank
             /\ lockSubject' = lockSubject
+            /\ highestRank' = highestRank
+            /\ highestSubject' = highestSubject
         BY <1>1 DEF BeginPrepare
       <3>5. \A pending \in pendingPrepare':
                /\ pending.node \in Honest
@@ -3035,8 +3206,10 @@ PROOF
                /\ pending.vote.subject = pending.qc.subject
                /\ pending.qc.phase = "Prepare"
                /\ pending.qc \in prepareQCs'
-               /\ pending.vote.view = nodeView'[pending.node]
-               /\ ~NodeTimedOut(pending.node, pending.vote.view)'
+               /\ \/ CurrentOpenPrepareForCommit(
+                        pending.node, pending.qc)'
+                  \/ HistoricalTcLockedPrepareForCommit(
+                        pending.node, pending.qc)'
                /\ pending.vote.subject \in ValidSubjects
                /\ BodyHeldBy(durableBodies', pending.node,
                              pending.vote.context, pending.vote.view, pending.vote.subject)
@@ -3045,7 +3218,11 @@ PROOF
                      => pending.qc.subject = lockSubject'[pending.node])
                /\ CanAppendVote(commitIntents', pending.vote)
         BY <3>1, <3>4, IsaM("blast")
-           DEF PendingVoteWritesAuthorized, NodeTimedOut
+           DEF PendingVoteWritesAuthorized,
+               CurrentOpenPrepareForCommit,
+               HistoricalTcLockedPrepareForCommit,
+               InstalledTcSelectsPrepareFor,
+               NoHigherConflictingPrepareKnown, NodeTimedOut
       <3>7. \A pending \in pendingTimeout':
                /\ pending.node \in Honest
                /\ pending.vote.signer = pending.node
@@ -3053,7 +3230,7 @@ PROOF
                /\ pending.vote.view = nodeView'[pending.node]
                /\ CanAppendTimeout(timeoutIntents', pending.vote)
                /\ TimeoutVoteProtectsCommitSet(pending.vote,
-                                               commitIntents')
+                                               commitIntents)'
         <4>1. \A pending \in pendingTimeout:
                  /\ pending.node \in Honest
                  /\ pending.vote.signer = pending.node
@@ -3066,13 +3243,15 @@ PROOF
         <4>2. /\ pendingTimeout' = pendingTimeout
               /\ timeoutIntents' = timeoutIntents
               /\ commitIntents' = commitIntents
+              /\ installedTCs' = installedTCs
               /\ context' = context
               /\ nodeView' = nodeView
           BY <1>1 DEF BeginPrepare
         <4> QED BY <4>1, <4>2
-           DEF CanAppendTimeout, TimeoutVoteProtectsCommitSet
+           DEF CanAppendTimeout, TimeoutVoteProtectsCommitSet,
+               InstalledTcAuthorizesCommitVote
       <3> QED BY <3>5, <3>6, <3>7
-         DEF PendingVoteWritesAuthorized, NodeTimedOut
+         DEF PendingVoteWritesAuthorized
       <2>7. /\ HonestVoteUnique(prepareIntents)'
           /\ HonestVoteUnique(commitIntents)'
           /\ HonestTimeoutUnique(timeoutIntents)'
@@ -3087,19 +3266,40 @@ PROOF
           /\ FormedTimeoutCertificatesSound'
           /\ DurableTimeoutsProtectCommits'
           /\ HighestAndLockAreCertified'
-      BY <1>1, Isa
-         DEF StrongInductiveInvariant, ReducerProvenanceInvariant,
-             BeginPrepare, HonestVoteUnique, HonestTimeoutUnique,
-             IntentPhasesCorrect,
-             PendingCertificateWritesAuthorized, TCValid, AuthenticatedHighRef, HighRefValid,
-             CurrentEpoch, CurrentVoters,
-             HonestVoteTransportBacked, QcTransportBacked,
-             HonestTimeoutTransportBacked, TcTransportBacked,
-             CertificatesBackedByIntents, HonestDurableIntentsSound,
-             FormedTimeoutCertificatesSound,
-             DurableTimeoutsProtectCommits, HighestAndLockAreCertified,
-             VoteIntentFor, TCValid, AuthenticatedHighRef, HighRefValid,
-             CurrentEpoch, CurrentVoters
+      <3>1. DurableTimeoutsProtectCommits'
+        BY <1>1, Isa
+           DEF StrongInductiveInvariant, ReducerProvenanceInvariant,
+               BeginPrepare, DurableTimeoutsProtectCommits,
+               TimeoutIntentProtectsCommits,
+               TimeoutVoteProtectsCommitSet,
+               TimeoutVoteStrictlyProtectsCommit,
+               InstalledTcAuthorizesCommitVote
+      <3>2. /\ HonestVoteUnique(prepareIntents)'
+            /\ HonestVoteUnique(commitIntents)'
+            /\ HonestTimeoutUnique(timeoutIntents)'
+            /\ IntentPhasesCorrect'
+            /\ PendingCertificateWritesAuthorized'
+            /\ HonestVoteTransportBacked'
+            /\ QcTransportBacked'
+            /\ HonestTimeoutTransportBacked'
+            /\ TcTransportBacked'
+            /\ CertificatesBackedByIntents'
+            /\ HonestDurableIntentsSound'
+            /\ FormedTimeoutCertificatesSound'
+            /\ HighestAndLockAreCertified'
+        BY <1>1, Isa
+           DEF StrongInductiveInvariant, ReducerProvenanceInvariant,
+               BeginPrepare, HonestVoteUnique, HonestTimeoutUnique,
+               IntentPhasesCorrect,
+               PendingCertificateWritesAuthorized, TCValid,
+               AuthenticatedHighRef, HighRefValid,
+               CurrentEpoch, CurrentVoters,
+               HonestVoteTransportBacked, QcTransportBacked,
+               HonestTimeoutTransportBacked, TcTransportBacked,
+               CertificatesBackedByIntents, HonestDurableIntentsSound,
+               FormedTimeoutCertificatesSound,
+               HighestAndLockAreCertified, VoteIntentFor
+      <3> QED BY <3>1, <3>2
     <2>8. ReducerProvenanceInvariant'
       BY <2>6, <2>7
          DEF ReducerProvenanceInvariant,
@@ -3281,7 +3481,7 @@ PROOF
         <4> QED BY <1>1, <3>1, <4>1, <4>5, Isa
            DEF PendingVoteWritesAuthorized, PersistPrepare,
                PrepareCarriesHigherSafeQc
-      <3>3. /\ \A pending \in pendingLockCommit':
+      <3>3. \A pending \in pendingLockCommit':
                      /\ pending.node \in Honest
                      /\ pending.vote.phase = "Commit"
                      /\ pending.vote.signer = pending.node
@@ -3291,8 +3491,10 @@ PROOF
                      /\ pending.vote.subject = pending.qc.subject
                      /\ pending.qc.phase = "Prepare"
                      /\ pending.qc \in prepareQCs'
-                     /\ pending.vote.view = nodeView'[pending.node]
-                     /\ ~NodeTimedOut(pending.node, pending.vote.view)'
+                     /\ \/ CurrentOpenPrepareForCommit(
+                              pending.node, pending.qc)'
+                        \/ HistoricalTcLockedPrepareForCommit(
+                              pending.node, pending.qc)'
                      /\ pending.vote.subject \in ValidSubjects
                      /\ BodyHeldBy(durableBodies', pending.node,
                                    pending.vote.context, pending.vote.view, pending.vote.subject)
@@ -3300,18 +3502,119 @@ PROOF
                      /\ (pending.qc.view = lockRank'[pending.node]
                            => pending.qc.subject = lockSubject'[pending.node])
                      /\ CanAppendVote(commitIntents', pending.vote)
-            /\ \A pending \in pendingTimeout':
+        <4>1. ASSUME NEW pending \in pendingLockCommit'
+               PROVE /\ pending.node \in Honest
+                     /\ pending.vote.phase = "Commit"
+                     /\ pending.vote.signer = pending.node
+                     /\ pending.vote.context = context'
+                     /\ pending.vote.context = pending.qc.context
+                     /\ pending.vote.view = pending.qc.view
+                     /\ pending.vote.subject = pending.qc.subject
+                     /\ pending.qc.phase = "Prepare"
+                     /\ pending.qc \in prepareQCs'
+                     /\ \/ CurrentOpenPrepareForCommit(
+                              pending.node, pending.qc)'
+                        \/ HistoricalTcLockedPrepareForCommit(
+                              pending.node, pending.qc)'
+                     /\ pending.vote.subject \in ValidSubjects
+                     /\ BodyHeldBy(durableBodies', pending.node,
+                                   pending.vote.context, pending.vote.view,
+                                   pending.vote.subject)
+                     /\ pending.qc.view >= lockRank'[pending.node]
+                     /\ (pending.qc.view = lockRank'[pending.node]
+                           => pending.qc.subject = lockSubject'[pending.node])
+                     /\ CanAppendVote(commitIntents', pending.vote)
+          <5>1. /\ pending \in pendingLockCommit
+                /\ request \in pendingPrepare
+                /\ pending \in AllPendingRequests
+                /\ request \in AllPendingRequests
+                /\ RequestsUniqueByNode(AllPendingRequests)
+            BY <1>1, <4>1
+               DEF StrongInductiveInvariant, Safety,
+                   OnePendingPersistencePerNode, AllPendingRequests,
+                   PersistPrepare
+          <5>2. pending # request
+            BY <1>1, <4>1
+               DEF StrongInductiveInvariant, Safety, TypeInvariant,
+                   PersistPrepare, LockCommitWalSet, PrepareWalSet
+          <5>3. pending.node # request.node
+            BY <5>1, <5>2, DistinctUniqueRequestsHaveDistinctNodes
+          <5>4. /\ pending.node \in Honest
+                /\ pending.vote.phase = "Commit"
+                /\ pending.vote.signer = pending.node
+                /\ pending.vote.context = context
+                /\ pending.vote.context = pending.qc.context
+                /\ pending.vote.view = pending.qc.view
+                /\ pending.vote.subject = pending.qc.subject
+                /\ pending.qc.phase = "Prepare"
+                /\ pending.qc \in prepareQCs
+                /\ \/ CurrentOpenPrepareForCommit(
+                         pending.node, pending.qc)
+                   \/ HistoricalTcLockedPrepareForCommit(
+                         pending.node, pending.qc)
+                /\ pending.vote.subject \in ValidSubjects
+                /\ BodyHeldBy(durableBodies, pending.node,
+                              pending.vote.context, pending.vote.view,
+                              pending.vote.subject)
+                /\ pending.qc.view >= lockRank[pending.node]
+                /\ (pending.qc.view = lockRank[pending.node]
+                      => pending.qc.subject = lockSubject[pending.node])
+                /\ CanAppendVote(commitIntents, pending.vote)
+            BY <3>1, <5>1 DEF PendingVoteWritesAuthorized
+          <5>5. /\ context' = context
+                /\ nodeView' = nodeView
+                /\ durableBodies' = durableBodies
+                /\ receivedQCs' = receivedQCs
+                /\ prepareQCs' = prepareQCs
+                /\ timeoutIntents' = timeoutIntents
+                /\ installedTCs' = installedTCs
+                /\ lockRank' = lockRank
+                /\ lockSubject' = lockSubject
+                /\ highestRank' = highestRank
+                /\ highestSubject' = highestSubject
+                /\ commitIntents' = commitIntents
+                /\ prepareIntents' = prepareIntents \cup {request.vote}
+            BY <1>1 DEF PersistPrepare
+          <5>6. CurrentOpenPrepareForCommit(pending.node, pending.qc)
+                   => CurrentOpenPrepareForCommit(pending.node, pending.qc)'
+            BY <5>5 DEF CurrentOpenPrepareForCommit, NodeTimedOut
+          <5>7. HistoricalTcLockedPrepareForCommit(
+                   pending.node, pending.qc)
+                   => HistoricalTcLockedPrepareForCommit(
+                        pending.node, pending.qc)'
+            <6>1. request.vote.signer = request.node
+              BY <3>1, <5>1 DEF PendingVoteWritesAuthorized
+            <6>2. NoHigherConflictingPrepareKnown(
+                     pending.node, pending.qc)
+                     => NoHigherConflictingPrepareKnown(
+                          pending.node, pending.qc)'
+              BY <5>3, <5>5, <6>1, Isa
+                 DEF NoHigherConflictingPrepareKnown
+            <6> QED BY <5>5, <6>2, Isa
+               DEF HistoricalTcLockedPrepareForCommit,
+                   InstalledTcSelectsPrepareFor
+          <5>8. \/ CurrentOpenPrepareForCommit(
+                       pending.node, pending.qc)'
+                 \/ HistoricalTcLockedPrepareForCommit(
+                       pending.node, pending.qc)'
+            BY <5>4, <5>6, <5>7
+          <5> QED BY <5>4, <5>5, <5>8, Isa
+        <4> QED BY <4>1
+      <3>4. \A pending \in pendingTimeout':
                      /\ pending.node \in Honest
                      /\ pending.vote.signer = pending.node
                      /\ pending.vote.context = context'
                      /\ pending.vote.view = nodeView'[pending.node]
                      /\ CanAppendTimeout(timeoutIntents', pending.vote)
                      /\ TimeoutVoteProtectsCommitSet(pending.vote,
-                                                     commitIntents')
+                                                     commitIntents)'
         BY <1>1, <3>1, Isa
-           DEF PersistPrepare, PendingVoteWritesAuthorized, NodeTimedOut
-      <3> QED BY <3>2, <3>3
-         DEF PendingVoteWritesAuthorized, NodeTimedOut
+           DEF PersistPrepare, PendingVoteWritesAuthorized,
+               TimeoutVoteProtectsCommitSet,
+               TimeoutVoteStrictlyProtectsCommit,
+               InstalledTcAuthorizesCommitVote
+      <3> QED BY <3>2, <3>3, <3>4
+         DEF PendingVoteWritesAuthorized
     <2>14. /\ HonestVoteUnique(commitIntents)'
            /\ HonestTimeoutUnique(timeoutIntents)'
            /\ PendingCertificateWritesAuthorized'
@@ -3321,15 +3624,32 @@ PROOF
            /\ FormedTimeoutCertificatesSound'
            /\ DurableTimeoutsProtectCommits'
            /\ HighestAndLockAreCertified'
-      BY <1>1, Isa
-         DEF StrongInductiveInvariant, ReducerProvenanceInvariant,
-             PersistPrepare, HonestVoteUnique, HonestTimeoutUnique,
-             PendingCertificateWritesAuthorized, TCValid, AuthenticatedHighRef, HighRefValid,
-             CurrentEpoch, CurrentVoters, QcTransportBacked,
-             HonestTimeoutTransportBacked, TcTransportBacked,
-             FormedTimeoutCertificatesSound,
-             DurableTimeoutsProtectCommits, HighestAndLockAreCertified,
-             TCValid, AuthenticatedHighRef, HighRefValid, CurrentEpoch, CurrentVoters
+      <3>1. DurableTimeoutsProtectCommits'
+        BY <1>1, Isa
+           DEF StrongInductiveInvariant, ReducerProvenanceInvariant,
+               PersistPrepare, DurableTimeoutsProtectCommits,
+               TimeoutIntentProtectsCommits,
+               TimeoutVoteProtectsCommitSet,
+               TimeoutVoteStrictlyProtectsCommit,
+               InstalledTcAuthorizesCommitVote
+      <3>2. /\ HonestVoteUnique(commitIntents)'
+            /\ HonestTimeoutUnique(timeoutIntents)'
+            /\ PendingCertificateWritesAuthorized'
+            /\ QcTransportBacked'
+            /\ HonestTimeoutTransportBacked'
+            /\ TcTransportBacked'
+            /\ FormedTimeoutCertificatesSound'
+            /\ HighestAndLockAreCertified'
+        BY <1>1, Isa
+           DEF StrongInductiveInvariant, ReducerProvenanceInvariant,
+               PersistPrepare, HonestVoteUnique, HonestTimeoutUnique,
+               PendingCertificateWritesAuthorized, TCValid,
+               AuthenticatedHighRef, HighRefValid,
+               CurrentEpoch, CurrentVoters, QcTransportBacked,
+               HonestTimeoutTransportBacked, TcTransportBacked,
+               FormedTimeoutCertificatesSound,
+               HighestAndLockAreCertified
+      <3> QED BY <3>1, <3>2
     <2>15. HonestVoteTransportBacked'
       BY <1>1, Isa
          DEF StrongInductiveInvariant, ReducerProvenanceInvariant,
@@ -3421,7 +3741,7 @@ PROOF
       BY <1>1, SMT
          DEF StrongInductiveInvariant, ReducerProvenanceInvariant,
              CompleteVoteSignature, HonestVoteTransportBacked,
-             VoteIntentFor, BroadcastVotes, VoteEnvelope,
+             VoteIntentFor, BroadcastVotes, VoteEnvelope, VoteAt,
              IntentPhasesCorrect
     <2>7. ReducerProvenanceWithoutVoteTransport'
       BY <1>1, UnchangedVoteIndependentProvenancePreserves
@@ -4790,6 +5110,7 @@ PROOF
             /\ timeoutIntents' = timeoutIntents
             /\ durableBodies' = durableBodies
             /\ prepareQCs' = prepareQCs
+            /\ installedTCs' = installedTCs
             /\ lockRank' = lockRank
             /\ lockSubject' = lockSubject
         BY <1>1 DEF BeginTimeout
@@ -4816,8 +5137,10 @@ PROOF
                /\ pending.vote.subject = pending.qc.subject
                /\ pending.qc.phase = "Prepare"
                /\ pending.qc \in prepareQCs'
-               /\ pending.vote.view = nodeView'[pending.node]
-               /\ ~NodeTimedOut(pending.node, pending.vote.view)'
+               /\ \/ CurrentOpenPrepareForCommit(
+                        pending.node, pending.qc)'
+                  \/ HistoricalTcLockedPrepareForCommit(
+                        pending.node, pending.qc)'
                /\ pending.vote.subject \in ValidSubjects
                /\ BodyHeldBy(durableBodies', pending.node,
                              pending.vote.context, pending.vote.view, pending.vote.subject)
@@ -4825,8 +5148,12 @@ PROOF
                /\ (pending.qc.view = lockRank'[pending.node]
                      => pending.qc.subject = lockSubject'[pending.node])
                /\ CanAppendVote(commitIntents', pending.vote)
-        BY <3>1, <3>3, Isa
-           DEF PendingVoteWritesAuthorized, NodeTimedOut
+        BY <1>1, <3>1, <3>3, Isa
+           DEF BeginTimeout, PendingVoteWritesAuthorized,
+               CurrentOpenPrepareForCommit,
+               HistoricalTcLockedPrepareForCommit,
+               InstalledTcSelectsPrepareFor,
+               NoHigherConflictingPrepareKnown, NodeTimedOut
       <3>6. \A pending \in pendingTimeout':
                /\ pending.node \in Honest
                /\ pending.vote.signer = pending.node
@@ -4834,7 +5161,7 @@ PROOF
                /\ pending.vote.view = nodeView'[pending.node]
                /\ CanAppendTimeout(timeoutIntents', pending.vote)
                /\ TimeoutVoteProtectsCommitSet(pending.vote,
-                                               commitIntents')
+                                               commitIntents)'
         <4>1. ASSUME NEW pending \in pendingTimeout'
                PROVE /\ pending.node \in Honest
                      /\ pending.vote.signer = pending.node
@@ -4842,13 +5169,15 @@ PROOF
                      /\ pending.vote.view = nodeView'[pending.node]
                      /\ CanAppendTimeout(timeoutIntents', pending.vote)
                      /\ TimeoutVoteProtectsCommitSet(pending.vote,
-                                                     commitIntents')
+                                                     commitIntents)'
           <5>1. pending \in pendingTimeout
                   \/ pending = TimeoutRequestFor(node)
             BY <3>3, <4>1
           <5>2. CASE pending \in pendingTimeout
             BY <3>1, <3>3, <4>1, <5>2, Isa
-               DEF PendingVoteWritesAuthorized
+               DEF PendingVoteWritesAuthorized,
+                   TimeoutVoteProtectsCommitSet,
+                   InstalledTcAuthorizesCommitVote
           <5>3. CASE pending = TimeoutRequestFor(node)
             <6>1. /\ pending.node = node
                   /\ pending.vote = LocalTimeoutVoteFor(node)
@@ -4868,6 +5197,7 @@ PROOF
                   /\ nodeView' = nodeView
                   /\ timeoutIntents' = timeoutIntents
                   /\ commitIntents' = commitIntents
+                  /\ installedTCs' = installedTCs
               BY <3>3
             <6>4. /\ pending.node \in Honest
                   /\ pending.vote.signer = pending.node
@@ -4881,13 +5211,15 @@ PROOF
                   /\ pending.vote.view = nodeView'[pending.node]
                   /\ CanAppendTimeout(timeoutIntents', pending.vote)
                   /\ TimeoutVoteProtectsCommitSet(pending.vote,
-                                                  commitIntents')
+                                                  commitIntents)'
               BY <6>3, <6>4, Isa
+                 DEF CanAppendTimeout, TimeoutVoteProtectsCommitSet,
+                     InstalledTcAuthorizesCommitVote
             <6> QED BY <6>4, <6>5
           <5> QED BY <5>1, <5>2, <5>3
         <4> QED BY <4>1
       <3> QED BY <3>4, <3>5, <3>6
-         DEF PendingVoteWritesAuthorized, NodeTimedOut
+         DEF PendingVoteWritesAuthorized
     <2>6. /\ HonestVoteUnique(prepareIntents)'
           /\ HonestVoteUnique(commitIntents)'
           /\ HonestTimeoutUnique(timeoutIntents)'
@@ -5048,7 +5380,7 @@ PROOF
                    /\ pending.vote.view = nodeView'[pending.node]
                    /\ CanAppendTimeout(timeoutIntents', pending.vote)
                    /\ TimeoutVoteProtectsCommitSet(pending.vote,
-                                                   commitIntents')
+                                                   commitIntents)'
         <4>1. /\ pending \in pendingTimeout
               /\ pending # request
           BY <1>1, <3>2 DEF PersistTimeout
@@ -5069,7 +5401,9 @@ PROOF
                                pending.vote)
           BY <4>4, DistinctSignerAppendPreservesCanAppendTimeout
         <4> QED BY <1>1, <3>1, <4>1, <4>5, Isa
-           DEF PendingVoteWritesAuthorized, PersistTimeout
+           DEF PendingVoteWritesAuthorized, PersistTimeout,
+               TimeoutVoteProtectsCommitSet,
+               InstalledTcAuthorizesCommitVote
       <3>3. \A pending \in pendingPrepare':
                      /\ pending.node \in Honest
                      /\ pending.vote.phase = "Prepare"
@@ -5094,8 +5428,10 @@ PROOF
                      /\ pending.vote.subject = pending.qc.subject
                      /\ pending.qc.phase = "Prepare"
                      /\ pending.qc \in prepareQCs'
-                     /\ pending.vote.view = nodeView'[pending.node]
-                     /\ ~NodeTimedOut(pending.node, pending.vote.view)'
+                     /\ \/ CurrentOpenPrepareForCommit(
+                              pending.node, pending.qc)'
+                        \/ HistoricalTcLockedPrepareForCommit(
+                              pending.node, pending.qc)'
                      /\ pending.vote.subject \in ValidSubjects
                      /\ BodyHeldBy(durableBodies', pending.node,
                                    pending.vote.context, pending.vote.view, pending.vote.subject)
@@ -5113,8 +5449,10 @@ PROOF
                      /\ pending.vote.subject = pending.qc.subject
                      /\ pending.qc.phase = "Prepare"
                      /\ pending.qc \in prepareQCs'
-                     /\ pending.vote.view = nodeView'[pending.node]
-                     /\ ~NodeTimedOut(pending.node, pending.vote.view)'
+                     /\ \/ CurrentOpenPrepareForCommit(
+                              pending.node, pending.qc)'
+                        \/ HistoricalTcLockedPrepareForCommit(
+                              pending.node, pending.qc)'
                      /\ pending.vote.subject \in ValidSubjects
                      /\ BodyHeldBy(durableBodies', pending.node,
                                    pending.vote.context, pending.vote.view, pending.vote.subject)
@@ -5146,8 +5484,10 @@ PROOF
                 /\ pending.vote.subject = pending.qc.subject
                 /\ pending.qc.phase = "Prepare"
                 /\ pending.qc \in prepareQCs
-                /\ pending.vote.view = nodeView[pending.node]
-                /\ ~NodeTimedOut(pending.node, pending.vote.view)
+                /\ \/ CurrentOpenPrepareForCommit(
+                         pending.node, pending.qc)
+                   \/ HistoricalTcLockedPrepareForCommit(
+                         pending.node, pending.qc)
                 /\ pending.vote.subject \in ValidSubjects
                 /\ BodyHeldBy(durableBodies, pending.node,
                               pending.vote.context, pending.vote.view, pending.vote.subject)
@@ -5160,18 +5500,34 @@ PROOF
                 /\ timeoutIntents' = timeoutIntents \cup {request.vote}
                 /\ context' = context
                 /\ nodeView' = nodeView
+                /\ receivedQCs' = receivedQCs
                 /\ prepareQCs' = prepareQCs
+                /\ installedTCs' = installedTCs
+                /\ prepareIntents' = prepareIntents
                 /\ durableBodies' = durableBodies
                 /\ lockRank' = lockRank
                 /\ lockSubject' = lockSubject
+                /\ highestRank' = highestRank
+                /\ highestSubject' = highestSubject
                 /\ commitIntents' = commitIntents
             BY <1>1, <2>1 DEF PersistTimeout
-          <5>6. ~NodeTimedOut(pending.node, pending.vote.view)'
-            BY <5>3, <5>4, <5>5, Isa DEF NodeTimedOut
+          <5>6. /\ (CurrentOpenPrepareForCommit(
+                          pending.node, pending.qc)'
+                        <=> CurrentOpenPrepareForCommit(
+                              pending.node, pending.qc))
+                 /\ (HistoricalTcLockedPrepareForCommit(
+                          pending.node, pending.qc)'
+                        <=> HistoricalTcLockedPrepareForCommit(
+                              pending.node, pending.qc))
+            BY <5>3, <5>5, Isa
+               DEF CurrentOpenPrepareForCommit,
+                   HistoricalTcLockedPrepareForCommit,
+                   InstalledTcSelectsPrepareFor,
+                   NoHigherConflictingPrepareKnown, NodeTimedOut
           <5> QED BY <5>4, <5>5, <5>6, Isa
         <4> QED BY <4>1
       <3> QED BY <3>2, <3>3, <3>4
-         DEF PendingVoteWritesAuthorized, NodeTimedOut
+         DEF PendingVoteWritesAuthorized
     <2>12. /\ HonestVoteUnique(prepareIntents)'
            /\ HonestVoteUnique(commitIntents)'
            /\ IntentPhasesCorrect'
@@ -5327,14 +5683,30 @@ PROOF
           /\ IntentPhasesCorrect'
           /\ PendingVoteWritesAuthorized'
           /\ PendingCertificateWritesAuthorized'
-      BY <1>1, Isa
-         DEF ReducerProvenanceWithoutTimeoutTransport,
-             ProvenanceWithoutTimeoutTransportVars, HonestVoteUnique,
-             HonestTimeoutUnique, IntentPhasesCorrect,
-             PendingVoteWritesAuthorized,
-             PendingCertificateWritesAuthorized,
-             PrepareCarriesHigherSafeQc, NodeTimedOut,
-             TCValid, AuthenticatedHighRef, HighRefValid, CurrentEpoch, CurrentVoters
+      <3>1. UNCHANGED <<context, nodeView, durableBodies, receivedQCs,
+                        prepareIntents, commitIntents, timeoutIntents,
+                        prepareQCs, installedTCs, lockRank, lockSubject,
+                        highestRank, highestSubject, pendingPrepare,
+                        pendingLockCommit, pendingTimeout>>
+        BY <1>1, Isa DEF ProvenanceWithoutTimeoutTransportVars
+      <3>2. PendingVoteWritesAuthorized'
+        BY <1>1, <3>1,
+           UnchangedPendingVoteWriteVarsPreservesAuthorization
+           DEF ReducerProvenanceWithoutTimeoutTransport
+      <3>3. /\ HonestVoteUnique(prepareIntents)'
+            /\ HonestVoteUnique(commitIntents)'
+            /\ HonestTimeoutUnique(timeoutIntents)'
+            /\ IntentPhasesCorrect'
+            /\ PendingCertificateWritesAuthorized'
+        BY <1>1, Isa
+           DEF ReducerProvenanceWithoutTimeoutTransport,
+               ProvenanceWithoutTimeoutTransportVars, HonestVoteUnique,
+               HonestTimeoutUnique, IntentPhasesCorrect,
+               PendingCertificateWritesAuthorized,
+               SameVoteSlot, SameTimeoutSlot, SameTimeoutContent,
+               TCValid, AuthenticatedHighRef, HighRefValid,
+               CurrentEpoch, CurrentVoters
+      <3> QED BY <3>2, <3>3
     <2>2. /\ HonestVoteTransportBacked'
           /\ QcTransportBacked'
           /\ TcTransportBacked'
@@ -6106,6 +6478,80 @@ PROOF
        DEF StrongInductiveInvariant, PersistObservePrepare, LineageVars
   <1> QED BY <1>1
 
+(***************************************************************************
+Pending LockCommit writes retain one of two authorizations across unrelated
+asynchronous transitions.  The ordinary path is exactly at the installed
+view; the TC-recovery path is strictly below it.  Both therefore install a
+lock no higher than the node's view, but only the historical path supplies
+installed-TC authorization for a Commit created after the timeout.
+***************************************************************************)
+THEOREM PendingLockCommitAuthorizationFacts ==
+  \A request:
+    /\ TypeInvariant
+    /\ PendingVoteWritesAuthorized
+    /\ request \in pendingLockCommit
+    => /\ \/ CurrentOpenPrepareForCommit(request.node, request.qc)
+           \/ HistoricalTcLockedPrepareForCommit(request.node, request.qc)
+       /\ request.qc.view <= nodeView[request.node]
+       /\ (request.qc.view < nodeView[request.node]
+             => HistoricalTcLockedPrepareForCommit(
+                  request.node, request.qc))
+PROOF
+  <1>1. ASSUME NEW request,
+                TypeInvariant,
+                PendingVoteWritesAuthorized,
+                request \in pendingLockCommit
+         PROVE /\ \/ CurrentOpenPrepareForCommit(request.node, request.qc)
+                    \/ HistoricalTcLockedPrepareForCommit(
+                         request.node, request.qc)
+               /\ request.qc.view <= nodeView[request.node]
+               /\ (request.qc.view < nodeView[request.node]
+                     => HistoricalTcLockedPrepareForCommit(
+                          request.node, request.qc))
+    <2>1. \/ CurrentOpenPrepareForCommit(request.node, request.qc)
+           \/ HistoricalTcLockedPrepareForCommit(request.node, request.qc)
+      BY <1>1 DEF PendingVoteWritesAuthorized
+    <2>2. /\ request.qc.view \in Nat
+           /\ nodeView[request.node] \in Nat
+      <3>1. pendingLockCommit \subseteq LockCommitWalSet
+        BY <1>1 DEF TypeInvariant
+      <3>2. /\ request.node \in ValidatorIds
+            /\ request.qc \in QcRecordSet
+        BY <1>1, <3>1, Isa DEF LockCommitWalSet
+      <3>3. /\ request.qc.view \in Views
+            /\ nodeView[request.node] \in Views
+        BY <1>1, <3>2, Isa DEF TypeInvariant, QcRecordSet
+      <3>4. Views \subseteq Nat
+        BY <1>1 DEF TypeInvariant, ModelConfiguration, Views
+      <3> QED BY <3>3, <3>4
+    <2>3. request.qc.view <= nodeView[request.node]
+      BY <2>1, <2>2, SMT
+         DEF CurrentOpenPrepareForCommit,
+             HistoricalTcLockedPrepareForCommit
+    <2>4. request.qc.view < nodeView[request.node]
+             => HistoricalTcLockedPrepareForCommit(
+                  request.node, request.qc)
+      BY <2>1, SMT DEF CurrentOpenPrepareForCommit
+    <2> QED BY <2>1, <2>3, <2>4
+  <1> QED BY <1>1
+
+THEOREM HistoricalPendingLockCommitHasInstalledTcAuthorization ==
+  \A request:
+    /\ PendingVoteWritesAuthorized
+    /\ request \in pendingLockCommit
+    /\ HistoricalTcLockedPrepareForCommit(request.node, request.qc)
+    => InstalledTcAuthorizesCommitVote(request.vote)
+BY SMT
+   DEF PendingVoteWritesAuthorized,
+       HistoricalTcLockedPrepareForCommit,
+       InstalledTcSelectsPrepareFor,
+       InstalledTcAuthorizesCommitVote
+
+THEOREM PersistLockCommitOnlyPrunesVoteReceipts ==
+  \A request:
+    PersistLockCommit(request) => receivedVotes' \subseteq receivedVotes
+BY SMT DEF PersistLockCommit
+
 THEOREM BeginLockCommitPreservesStrongInvariant ==
   \A node \in ValidatorIds:
     \A qc:
@@ -6122,9 +6568,18 @@ PROOF
     <2> DEFINE Request == LockCommitWal(node, qc, CommitVote)
     <2>1. qc \in prepareQCs
       <3>1. qc \in prepareQCs \cup commitQCs
-        BY <1>1
-           DEF StrongInductiveInvariant, ReducerProvenanceInvariant,
-               QcTransportBacked, BeginLockCommit, QcAt
+        <4>1. \/ CurrentOpenPrepareForCommit(node, qc)
+               \/ HistoricalTcLockedPrepareForCommit(node, qc)
+          BY <1>1 DEF BeginLockCommit
+        <4>2. QcTransportBacked
+          BY <1>1
+             DEF StrongInductiveInvariant, ReducerProvenanceInvariant
+        <4>3. CASE CurrentOpenPrepareForCommit(node, qc)
+          BY <4>2, <4>3
+             DEF QcTransportBacked, CurrentOpenPrepareForCommit, QcAt
+        <4>4. CASE HistoricalTcLockedPrepareForCommit(node, qc)
+          BY <4>4 DEF HistoricalTcLockedPrepareForCommit
+        <4> QED BY <4>1, <4>3, <4>4
       <3>2. qc.phase = "Prepare"
         BY <1>1 DEF BeginLockCommit
       <3>3. \A committed \in commitQCs: committed.phase = "Commit"
@@ -6185,8 +6640,9 @@ PROOF
           /\ Request.vote.subject = Request.qc.subject
           /\ Request.qc.phase = "Prepare"
           /\ Request.qc \in prepareQCs
-          /\ Request.vote.view = nodeView[Request.node]
-          /\ ~NodeTimedOut(Request.node, Request.vote.view)
+          /\ \/ CurrentOpenPrepareForCommit(Request.node, Request.qc)
+             \/ HistoricalTcLockedPrepareForCommit(
+                  Request.node, Request.qc)
           /\ Request.vote.subject \in ValidSubjects
           /\ BodyHeldBy(durableBodies, Request.node,
                         Request.vote.context, Request.vote.view, Request.vote.subject)
@@ -6201,8 +6657,8 @@ PROOF
             /\ qc.view \in Views
             /\ qc.subject \in ValidSubjects
             /\ qc.phase = "Prepare"
-            /\ qc.view = nodeView[node]
-            /\ ~NodeTimedOut(node, qc.view)
+            /\ \/ CurrentOpenPrepareForCommit(node, qc)
+               \/ HistoricalTcLockedPrepareForCommit(node, qc)
             /\ BodyHeldBy(durableBodies, node, context, qc.view, qc.subject)
             /\ qc.view >= lockRank[node]
             /\ (qc.view = lockRank[node]
@@ -6285,8 +6741,10 @@ PROOF
                /\ pending.vote.subject = pending.qc.subject
                /\ pending.qc.phase = "Prepare"
                /\ pending.qc \in prepareQCs'
-               /\ pending.vote.view = nodeView'[pending.node]
-               /\ ~NodeTimedOut(pending.node, pending.vote.view)'
+               /\ \/ CurrentOpenPrepareForCommit(
+                        pending.node, pending.qc)'
+                  \/ HistoricalTcLockedPrepareForCommit(
+                        pending.node, pending.qc)'
                /\ pending.vote.subject \in ValidSubjects
                /\ BodyHeldBy(durableBodies', pending.node,
                              pending.vote.context, pending.vote.view, pending.vote.subject)
@@ -6304,8 +6762,10 @@ PROOF
                      /\ pending.vote.subject = pending.qc.subject
                      /\ pending.qc.phase = "Prepare"
                      /\ pending.qc \in prepareQCs'
-                     /\ pending.vote.view = nodeView'[pending.node]
-                     /\ ~NodeTimedOut(pending.node, pending.vote.view)'
+                     /\ \/ CurrentOpenPrepareForCommit(
+                              pending.node, pending.qc)'
+                        \/ HistoricalTcLockedPrepareForCommit(
+                              pending.node, pending.qc)'
                      /\ pending.vote.subject \in ValidSubjects
                      /\ BodyHeldBy(durableBodies', pending.node,
                                    pending.vote.context, pending.vote.view, pending.vote.subject)
@@ -6325,8 +6785,10 @@ PROOF
                   /\ pending.vote.subject = pending.qc.subject
                   /\ pending.qc.phase = "Prepare"
                   /\ pending.qc \in prepareQCs
-                  /\ pending.vote.view = nodeView[pending.node]
-                  /\ ~NodeTimedOut(pending.node, pending.vote.view)
+                  /\ \/ CurrentOpenPrepareForCommit(
+                           pending.node, pending.qc)
+                     \/ HistoricalTcLockedPrepareForCommit(
+                           pending.node, pending.qc)
                   /\ pending.vote.subject \in ValidSubjects
                   /\ BodyHeldBy(durableBodies, pending.node,
                                 pending.vote.context, pending.vote.view, pending.vote.subject)
@@ -6338,54 +6800,86 @@ PROOF
             <6>2. /\ context' = context
                   /\ nodeView' = nodeView
                   /\ durableBodies' = durableBodies
+                  /\ receivedQCs' = receivedQCs
                   /\ prepareQCs' = prepareQCs
                   /\ timeoutIntents' = timeoutIntents
+                  /\ installedTCs' = installedTCs
+                  /\ prepareIntents' = prepareIntents
                   /\ lockRank' = lockRank
                   /\ lockSubject' = lockSubject
+                  /\ highestRank' = highestRank
+                  /\ highestSubject' = highestSubject
                   /\ commitIntents' = commitIntents
               BY <1>1 DEF BeginLockCommit
-            <6>3. NodeTimedOut(pending.node, pending.vote.view)'
-                    <=> NodeTimedOut(pending.node, pending.vote.view)
-              BY <6>2 DEF NodeTimedOut
+            <6>3. /\ (CurrentOpenPrepareForCommit(
+                            pending.node, pending.qc)'
+                          <=> CurrentOpenPrepareForCommit(
+                                pending.node, pending.qc))
+                   /\ (HistoricalTcLockedPrepareForCommit(
+                            pending.node, pending.qc)'
+                          <=> HistoricalTcLockedPrepareForCommit(
+                                pending.node, pending.qc))
+              BY <6>2
+                 DEF CurrentOpenPrepareForCommit,
+                     HistoricalTcLockedPrepareForCommit,
+                     InstalledTcSelectsPrepareFor,
+                     NoHigherConflictingPrepareKnown, NodeTimedOut
             <6> QED BY <6>1, <6>2, <6>3, Isa
           <5>3. CASE pending = Request
             <6>1. /\ context' = context
                   /\ nodeView' = nodeView
                   /\ durableBodies' = durableBodies
+                  /\ receivedQCs' = receivedQCs
                   /\ prepareQCs' = prepareQCs
                   /\ timeoutIntents' = timeoutIntents
+                  /\ installedTCs' = installedTCs
+                  /\ prepareIntents' = prepareIntents
                   /\ lockRank' = lockRank
                   /\ lockSubject' = lockSubject
+                  /\ highestRank' = highestRank
+                  /\ highestSubject' = highestSubject
                   /\ commitIntents' = commitIntents
               BY <1>1 DEF BeginLockCommit
             <6> QED BY <2>3, <5>3, <6>1, Isa
-               DEF NodeTimedOut
+               DEF CurrentOpenPrepareForCommit,
+                   HistoricalTcLockedPrepareForCommit,
+                   InstalledTcSelectsPrepareFor,
+                   NoHigherConflictingPrepareKnown, NodeTimedOut
           <5> QED BY <5>1, <5>2, <5>3
         <4> QED BY <4>1
-      <3>4. /\ \A pending \in pendingPrepare':
-                     /\ pending.node \in Honest
-                     /\ pending.vote.phase = "Prepare"
-                     /\ pending.vote.signer = pending.node
-                     /\ pending.vote.context = context'
-                     /\ pending.vote.view = nodeView'[pending.node]
-                     /\ pending.vote.subject \in ValidSubjects
-                     /\ BodyHeldBy(durableBodies', pending.node,
-                                   pending.vote.context, pending.vote.view, pending.vote.subject)
-                     /\ CanAppendVote(prepareIntents', pending.vote)
-                     /\ PrepareCarriesHigherSafeQc(pending.vote)'
-            /\ \A pending \in pendingTimeout':
-                     /\ pending.node \in Honest
-                     /\ pending.vote.signer = pending.node
-                     /\ pending.vote.context = context'
-                     /\ pending.vote.view = nodeView'[pending.node]
-                     /\ CanAppendTimeout(timeoutIntents', pending.vote)
-                     /\ TimeoutVoteProtectsCommitSet(
-                          pending.vote, commitIntents')
-        BY <1>1, <3>1, Isa
-           DEF BeginLockCommit, PendingVoteWritesAuthorized,
-               PrepareCarriesHigherSafeQc, NodeTimedOut
-      <3> QED BY <3>3, <3>4
-         DEF PendingVoteWritesAuthorized, NodeTimedOut
+      <3>4. UNCHANGED
+               <<context, nodeView, durableBodies, receivedQCs,
+                 prepareIntents, commitIntents, timeoutIntents, prepareQCs,
+                 installedTCs, lockRank, lockSubject, highestRank,
+                 highestSubject, pendingPrepare, pendingTimeout>>
+        BY <1>1 DEF BeginLockCommit
+      <3>5. \A pending \in pendingPrepare':
+               /\ pending.node \in Honest
+               /\ pending.vote.phase = "Prepare"
+               /\ pending.vote.signer = pending.node
+               /\ pending.vote.context = context'
+               /\ pending.vote.view = nodeView'[pending.node]
+               /\ pending.vote.subject \in ValidSubjects
+               /\ BodyHeldBy(durableBodies', pending.node,
+                             pending.vote.context, pending.vote.view,
+                             pending.vote.subject)
+               /\ CanAppendVote(prepareIntents', pending.vote)
+               /\ PrepareCarriesHigherSafeQc(pending.vote)'
+        BY <3>1, <3>4, Isa
+           DEF PendingVoteWritesAuthorized, PrepareCarriesHigherSafeQc
+      <3>6. \A pending \in pendingTimeout':
+               /\ pending.node \in Honest
+               /\ pending.vote.signer = pending.node
+               /\ pending.vote.context = context'
+               /\ pending.vote.view = nodeView'[pending.node]
+               /\ CanAppendTimeout(timeoutIntents', pending.vote)
+               /\ TimeoutVoteProtectsCommitSet(
+                    pending.vote, commitIntents)'
+        BY <3>1, <3>4, Isa
+           DEF PendingVoteWritesAuthorized, TimeoutVoteProtectsCommitSet,
+               InstalledTcAuthorizesCommitVote
+      <3> QED BY <3>3, <3>5, <3>6
+         DEF PendingVoteWritesAuthorized
     <2>7. /\ Safety'
           /\ ContextIdentityBindsFrozenEpoch'
           /\ OldContextCertificateRejected'
@@ -6480,8 +6974,10 @@ PROOF
           /\ request.vote.context = request.qc.context
           /\ request.vote.view = request.qc.view
           /\ request.vote.subject = request.qc.subject
-          /\ request.vote.view = nodeView[request.node]
-          /\ ~NodeTimedOut(request.node, request.vote.view)
+          /\ \/ CurrentOpenPrepareForCommit(request.node, request.qc)
+             \/ HistoricalTcLockedPrepareForCommit(
+                  request.node, request.qc)
+          /\ request.vote.view <= nodeView[request.node]
           /\ request.vote.subject \in ValidSubjects
           /\ BodyHeldBy(durableBodies, request.node,
                         request.vote.context, request.vote.view, request.vote.subject)
@@ -6489,9 +6985,41 @@ PROOF
           /\ (request.qc.view = lockRank[request.node]
                 => request.qc.subject = lockSubject[request.node])
           /\ CanAppendVote(commitIntents, request.vote)
-      BY <1>1
-         DEF StrongInductiveInvariant, ReducerProvenanceInvariant,
-             PendingVoteWritesAuthorized, PersistLockCommit
+      <3>1. /\ TypeInvariant
+            /\ PendingVoteWritesAuthorized
+        BY <1>1
+           DEF StrongInductiveInvariant, Safety,
+               ReducerProvenanceInvariant
+      <3>2. request \in pendingLockCommit
+        BY <1>1 DEF PersistLockCommit
+      <3>3. /\ request.node \in Honest
+            /\ request.qc \in prepareQCs
+            /\ request.qc.phase = "Prepare"
+            /\ request.vote.phase = "Commit"
+            /\ request.vote.signer = request.node
+        BY <3>1, <3>2 DEF PendingVoteWritesAuthorized
+      <3>4. /\ request.vote.context = context
+            /\ request.vote.context = request.qc.context
+            /\ request.vote.view = request.qc.view
+            /\ request.vote.subject = request.qc.subject
+            /\ request.vote.subject \in ValidSubjects
+            /\ BodyHeldBy(durableBodies, request.node,
+                          request.vote.context, request.vote.view,
+                          request.vote.subject)
+            /\ request.qc.view >= lockRank[request.node]
+            /\ (request.qc.view = lockRank[request.node]
+                  => request.qc.subject = lockSubject[request.node])
+            /\ CanAppendVote(commitIntents, request.vote)
+        BY <3>1, <3>2 DEF PendingVoteWritesAuthorized
+      <3>5. /\ \/ CurrentOpenPrepareForCommit(
+                         request.node, request.qc)
+                   \/ HistoricalTcLockedPrepareForCommit(
+                         request.node, request.qc)
+            /\ request.qc.view <= nodeView[request.node]
+        BY <3>1, <3>2, PendingLockCommitAuthorizationFacts
+      <3>6. request.vote.view <= nodeView[request.node]
+        BY <3>4, <3>5
+      <3> QED BY <3>2, <3>3, <3>4, <3>5, <3>6
     <2>2. HonestVoteUnique(commitIntents')
       BY <1>1, <2>1, DurableVoteAppendPreservesUniqueness
          DEF StrongInductiveInvariant, ReducerProvenanceInvariant,
@@ -6647,10 +7175,68 @@ PROOF
             /\ invalidBodies' \subseteq BodyRecordSet
             /\ RetainedLockedBodiesSound(retainedLockedBodies',
                                           durableBodies')
-        BY <1>1, <2>1, Isa
-           DEF StrongInductiveInvariant, Safety, TypeInvariant,
-               PersistLockCommit, RetainedLockedBodiesSound,
-               BodyHeldBy
+        <4> DEFINE Retained ==
+             RetainedLockedBodyRecord(
+               request.node, request.qc.context, request.qc.subject)
+        <4>1. /\ availableBodies \subseteq BodyRecordSet
+              /\ durableBodies \subseteq BodyRecordSet
+              /\ retainedLockedBodies
+                     \subseteq RetainedLockedBodyRecordSet
+              /\ validatedBodies \subseteq ValidationRecordSet
+              /\ invalidBodies \subseteq BodyRecordSet
+              /\ prepareQCs \subseteq QcRecordSet
+              /\ RetainedLockedBodiesSound(retainedLockedBodies,
+                                            durableBodies)
+          BY <1>1
+             DEF StrongInductiveInvariant, Safety, TypeInvariant
+        <4>2. /\ availableBodies' = availableBodies
+              /\ durableBodies' = durableBodies
+              /\ validatedBodies' = validatedBodies
+              /\ invalidBodies' = invalidBodies
+              /\ retainedLockedBodies'
+                   = retainedLockedBodies \cup {Retained}
+              /\ Retained \in RetainedLockedBodyRecordSet
+              /\ BodyHeldBy(durableBodies, request.node,
+                            request.qc.context, request.qc.view,
+                            request.qc.subject)
+          BY <1>1 DEF PersistLockCommit, Retained
+        <4>3. request.qc.view \in Views
+          BY <2>1, <4>1 DEF QcRecordSet
+        <4>4. /\ availableBodies' \subseteq BodyRecordSet
+              /\ durableBodies' \subseteq BodyRecordSet
+              /\ validatedBodies' \subseteq ValidationRecordSet
+              /\ invalidBodies' \subseteq BodyRecordSet
+          BY <4>1, <4>2
+        <4>5. retainedLockedBodies'
+                   \subseteq RetainedLockedBodyRecordSet
+          BY <4>1, <4>2, Isa
+        <4>6. RetainedLockedBodiesSound(retainedLockedBodies',
+                                        durableBodies')
+          <5>1. ASSUME NEW retained \in retainedLockedBodies'
+                 PROVE \E sourceView \in Views:
+                         BodyHeldBy(durableBodies', retained.node,
+                                    retained.context, sourceView,
+                                    retained.subject)
+            <6>1. retained \in retainedLockedBodies
+                    \/ retained = Retained
+              BY <4>2, <5>1, Isa
+            <6>2. CASE retained \in retainedLockedBodies
+              <7>1. \E sourceView \in Views:
+                       BodyHeldBy(durableBodies, retained.node,
+                                  retained.context, sourceView,
+                                  retained.subject)
+                BY <4>1, <6>2 DEF RetainedLockedBodiesSound
+              <7> QED BY <4>2, <7>1
+            <6>3. CASE retained = Retained
+              <7>1. BodyHeldBy(durableBodies', retained.node,
+                               retained.context, request.qc.view,
+                               retained.subject)
+                BY <4>2, <6>3, Isa
+                   DEF Retained, RetainedLockedBodyRecord
+              <7> QED BY <4>3, <7>1
+            <6> QED BY <6>1, <6>2, <6>3
+          <5> QED BY <5>1 DEF RetainedLockedBodiesSound
+        <4> QED BY <4>4, <4>5, <4>6
       <3> QED BY <3>2, <3>3, <3>4, <3>5, <3>6, <3>7
          DEF TypeInvariant
     <2>5. LockBelowHighest'
@@ -6846,8 +7432,10 @@ PROOF
                  /\ pending.vote.subject = pending.qc.subject
                  /\ pending.qc.phase = "Prepare"
                  /\ pending.qc \in prepareQCs'
-                 /\ pending.vote.view = nodeView'[pending.node]
-                 /\ ~NodeTimedOut(pending.node, pending.vote.view)'
+                 /\ \/ CurrentOpenPrepareForCommit(
+                          pending.node, pending.qc)'
+                    \/ HistoricalTcLockedPrepareForCommit(
+                          pending.node, pending.qc)'
                  /\ pending.vote.subject \in ValidSubjects
                  /\ BodyHeldBy(durableBodies', pending.node,
                                pending.vote.context, pending.vote.view, pending.vote.subject)
@@ -6866,9 +7454,10 @@ PROOF
                        /\ pending.vote.subject = pending.qc.subject
                        /\ pending.qc.phase = "Prepare"
                        /\ pending.qc \in prepareQCs'
-                       /\ pending.vote.view = nodeView'[pending.node]
-                       /\ ~NodeTimedOut(
-                              pending.node, pending.vote.view)'
+                       /\ \/ CurrentOpenPrepareForCommit(
+                                pending.node, pending.qc)'
+                          \/ HistoricalTcLockedPrepareForCommit(
+                                pending.node, pending.qc)'
                        /\ pending.vote.subject \in ValidSubjects
                        /\ BodyHeldBy(durableBodies', pending.node,
                                      pending.vote.context, pending.vote.view, pending.vote.subject)
@@ -6896,8 +7485,10 @@ PROOF
                   /\ pending.vote.subject = pending.qc.subject
                   /\ pending.qc.phase = "Prepare"
                   /\ pending.qc \in prepareQCs
-                  /\ pending.vote.view = nodeView[pending.node]
-                  /\ ~NodeTimedOut(pending.node, pending.vote.view)
+                  /\ \/ CurrentOpenPrepareForCommit(
+                           pending.node, pending.qc)
+                     \/ HistoricalTcLockedPrepareForCommit(
+                           pending.node, pending.qc)
                   /\ pending.vote.subject \in ValidSubjects
                   /\ BodyHeldBy(durableBodies, pending.node,
                                 pending.vote.context, pending.vote.view, pending.vote.subject)
@@ -6912,24 +7503,37 @@ PROOF
                   /\ lockRank \in [ValidatorIds -> Ranks]
                   /\ lockSubject \in
                        [ValidatorIds -> SubjectOrNone]
+                  /\ highestRank \in [ValidatorIds -> Ranks]
+                  /\ highestSubject \in
+                       [ValidatorIds -> SubjectOrNone]
               BY <1>1, <2>1, <6>1, <6>3
                  DEF StrongInductiveInvariant, Safety, TypeInvariant,
                      ModelConfiguration, QuorumConfiguration
             <6>5. /\ context' = context
                   /\ nodeView' = nodeView
                   /\ durableBodies' = durableBodies
+                  /\ receivedQCs' = receivedQCs
                   /\ prepareQCs' = prepareQCs
                   /\ timeoutIntents' = timeoutIntents
+                  /\ installedTCs' = installedTCs
+                  /\ prepareIntents' = prepareIntents
                   /\ commitIntents'
                        = commitIntents \cup {request.vote}
                   /\ lockRank'[pending.node] = lockRank[pending.node]
                   /\ lockSubject'[pending.node]
                        = lockSubject[pending.node]
+                  /\ highestRank'[pending.node]
+                       = highestRank[pending.node]
+                  /\ highestSubject'[pending.node]
+                       = highestSubject[pending.node]
               <7>1. /\ context' = context
                     /\ nodeView' = nodeView
                     /\ durableBodies' = durableBodies
+                    /\ receivedQCs' = receivedQCs
                     /\ prepareQCs' = prepareQCs
                     /\ timeoutIntents' = timeoutIntents
+                    /\ installedTCs' = installedTCs
+                    /\ prepareIntents' = prepareIntents
                     /\ commitIntents'
                          = commitIntents \cup {request.vote}
                     /\ lockRank'
@@ -6938,21 +7542,52 @@ PROOF
                     /\ lockSubject'
                          = [lockSubject EXCEPT
                               ![request.node] = request.qc.subject]
+                    /\ highestRank'
+                         = [highestRank EXCEPT
+                              ![request.node] =
+                                IF request.qc.view
+                                     > highestRank[request.node]
+                                THEN request.qc.view
+                                ELSE highestRank[request.node]]
+                    /\ highestSubject'
+                         = [highestSubject EXCEPT
+                              ![request.node] =
+                                IF request.qc.view
+                                     > highestRank[request.node]
+                                THEN request.qc.subject
+                                ELSE highestSubject[request.node]]
                 BY <1>1 DEF PersistLockCommit
-              <7>2. /\ lockRank'[pending.node]
-                           = lockRank[pending.node]
-                    /\ lockSubject'[pending.node]
-                           = lockSubject[pending.node]
-                BY <6>2, <6>3, <6>4, <7>1, Isa
-              <7> QED BY <7>1, <7>2
+              <7>2. lockRank'[pending.node]
+                       = lockRank[pending.node]
+                BY <6>2, <6>4, <7>1, Isa
+              <7>3. lockSubject'[pending.node]
+                       = lockSubject[pending.node]
+                BY <6>2, <6>4, <7>1, Isa
+              <7>4. highestRank'[pending.node]
+                       = highestRank[pending.node]
+                BY <6>2, <6>4, <7>1, Isa
+              <7>5. highestSubject'[pending.node]
+                       = highestSubject[pending.node]
+                BY <6>2, <6>4, <7>1, Isa
+              <7> QED BY <7>1, <7>2, <7>3, <7>4, <7>5
             <6>6. request.vote.signer # pending.vote.signer
               BY <2>1, <6>2, <6>3
             <6>7. CanAppendVote(commitIntents', pending.vote)
               BY <6>3, <6>5, <6>6,
                  DistinctSignerAppendPreservesCanAppendVote
-            <6>8. ~NodeTimedOut(
-                       pending.node, pending.vote.view)'
-              BY <6>3, <6>5 DEF NodeTimedOut
+            <6>8. /\ (CurrentOpenPrepareForCommit(
+                            pending.node, pending.qc)'
+                          <=> CurrentOpenPrepareForCommit(
+                                pending.node, pending.qc))
+                   /\ (HistoricalTcLockedPrepareForCommit(
+                            pending.node, pending.qc)'
+                          <=> HistoricalTcLockedPrepareForCommit(
+                                pending.node, pending.qc))
+              BY <6>5
+                 DEF CurrentOpenPrepareForCommit,
+                     HistoricalTcLockedPrepareForCommit,
+                     InstalledTcSelectsPrepareFor,
+                     NoHigherConflictingPrepareKnown, NodeTimedOut
             <6> QED BY <6>3, <6>5, <6>7, <6>8
           <5> QED BY <5>1
         <4>5. \A pending \in pendingTimeout':
@@ -6962,7 +7597,7 @@ PROOF
                  /\ pending.vote.view = nodeView'[pending.node]
                  /\ CanAppendTimeout(timeoutIntents', pending.vote)
                  /\ TimeoutVoteProtectsCommitSet(
-                      pending.vote, commitIntents')
+                      pending.vote, commitIntents)'
           <5>1. ASSUME NEW pending \in pendingTimeout'
                  PROVE /\ pending.node \in Honest
                        /\ pending.vote.signer = pending.node
@@ -6971,7 +7606,7 @@ PROOF
                        /\ CanAppendTimeout(
                             timeoutIntents', pending.vote)
                        /\ TimeoutVoteProtectsCommitSet(
-                            pending.vote, commitIntents')
+                            pending.vote, commitIntents)'
             <6>1. pending \in pendingTimeout
               BY <1>1, <5>1 DEF PersistLockCommit
             <6>2. pending # request
@@ -6999,15 +7634,17 @@ PROOF
             <6>5. /\ context' = context
                   /\ nodeView' = nodeView
                   /\ timeoutIntents' = timeoutIntents
+                  /\ installedTCs' = installedTCs
                   /\ commitIntents'
                        = commitIntents \cup {request.vote}
               BY <1>1 DEF PersistLockCommit
             <6>6. request.vote.signer # pending.vote.signer
               BY <2>1, <6>3, <6>4
             <6>7. TimeoutVoteProtectsCommitSet(
-                     pending.vote, commitIntents')
+                     pending.vote, commitIntents)'
               BY <6>4, <6>5, <6>6, Isa
-                 DEF TimeoutVoteProtectsCommitSet
+                 DEF TimeoutVoteProtectsCommitSet,
+                     InstalledTcAuthorizesCommitVote
             <6> QED BY <6>4, <6>5, <6>7
           <5> QED BY <5>1
         <4> QED BY <4>3, <4>4, <4>5
@@ -7100,7 +7737,7 @@ PROOF
             /\ QcTransportBacked'
             /\ HonestTimeoutTransportBacked'
             /\ TcTransportBacked'
-        BY <1>1, Isa
+        BY <1>1, PersistLockCommitOnlyPrunesVoteReceipts, Isa
            DEF StrongInductiveInvariant, ReducerProvenanceInvariant,
                PersistLockCommit, HonestVoteTransportBacked,
                QcTransportBacked, HonestTimeoutTransportBacked,
@@ -7144,12 +7781,13 @@ PROOF
              DEF StrongInductiveInvariant, ReducerProvenanceInvariant,
                  DurableTimeoutsProtectCommits
         <4>2. /\ timeoutIntents' = timeoutIntents
+              /\ installedTCs' = installedTCs
               /\ commitIntents'
                    = commitIntents \cup {request.vote}
           BY <1>1 DEF PersistLockCommit
         <4>3. ASSUME NEW timeoutVote \in timeoutIntents'
                PROVE TimeoutVoteProtectsCommitSet(
-                       timeoutVote, commitIntents')
+                       timeoutVote, commitIntents)'
           <5>1. /\ timeoutVote \in timeoutIntents
                 /\ TimeoutVoteProtectsCommitSet(
                      timeoutVote, commitIntents)
@@ -7163,65 +7801,117 @@ PROOF
                           /\ commitVote.context = timeoutVote.context
                           /\ commitVote.phase = "Commit"
                           /\ commitVote.view <= timeoutVote.view
-                   PROVE /\ timeoutVote.highRank >= commitVote.view
-                         /\ (timeoutVote.highRank = commitVote.view
-                               => timeoutVote.highSubject =
-                                    commitVote.subject)
+                   PROVE \/ TimeoutVoteStrictlyProtectsCommit(
+                                timeoutVote, commitVote)
+                         \/ InstalledTcAuthorizesCommitVote(commitVote)
               <7>1. /\ commitVote = request.vote
                     /\ timeoutVote.signer = request.node
                     /\ timeoutVote.context = context
                     /\ request.vote.view <= timeoutVote.view
                 BY <2>1, <6>1
-              <7>2. timeoutVote.view <=
-                       nodeView[timeoutVote.signer]
-                BY <1>1, <5>1, <6>1, <7>1
-                   DEF StrongInductiveInvariant, LineageInvariant,
-                       CurrentIntentViewsBound
-              <7>3. /\ ModelConfiguration
-                    /\ timeoutVote.view \in Views
-                    /\ request.vote.view \in Views
-                <8>1. /\ TypeInvariant
-                      /\ ModelConfiguration
-                      /\ timeoutIntents
-                           \subseteq TimeoutVoteRecordSet
-                      /\ prepareQCs \subseteq QcRecordSet
-                  BY <1>1
-                     DEF StrongInductiveInvariant, Safety,
-                         TypeInvariant
-                <8>2. timeoutVote \in TimeoutVoteRecordSet
-                  BY <5>1, <8>1
-                <8>3. timeoutVote.view \in Views
-                  BY <8>2 DEF TimeoutVoteRecordSet
-                <8>4. request.qc \in QcRecordSet
-                  BY <2>1, <8>1
-                <8>5. request.vote.view \in Views
-                  BY <2>1, <8>4 DEF QcRecordSet
-                <8> QED BY <8>1, <8>3, <8>5
-              <7>4. /\ timeoutVote.view \in Int
-                    /\ request.vote.view \in Int
-                <8>1. Ranks \subseteq Int
-                  BY <7>3, ModelRanksAreIntegers
-                <8>2. Views \subseteq Ranks
-                  BY ViewsAreRanks
-                <8> QED BY <7>3, <8>1, <8>2
-              <7>5. timeoutVote.view = request.vote.view
-                BY <2>1, <7>1, <7>2, <7>4, SMT
-              <7>6. NodeTimedOut(
-                       request.node, request.vote.view)
-                BY <5>1, <7>1, <7>5 DEF NodeTimedOut
-              <7>7. FALSE
-                BY <2>1, <7>6
-              <7> QED BY <7>7
+              <7>2. \/ CurrentOpenPrepareForCommit(
+                           request.node, request.qc)
+                     \/ HistoricalTcLockedPrepareForCommit(
+                           request.node, request.qc)
+                BY <2>1
+              <7>3. CASE HistoricalTcLockedPrepareForCommit(
+                            request.node, request.qc)
+                <8>1. InstalledTcAuthorizesCommitVote(request.vote)
+                  BY <1>1, <2>1, <7>3,
+                     HistoricalPendingLockCommitHasInstalledTcAuthorization
+                     DEF StrongInductiveInvariant,
+                         ReducerProvenanceInvariant
+                <8>2. InstalledTcAuthorizesCommitVote(commitVote)
+                  BY <7>1, <8>1
+                <8> QED BY <8>2
+              <7>4. CASE CurrentOpenPrepareForCommit(
+                            request.node, request.qc)
+                <8>1. timeoutVote.view <=
+                         nodeView[timeoutVote.signer]
+                  BY <1>1, <5>1, <6>1, <7>1
+                     DEF StrongInductiveInvariant, LineageInvariant,
+                         CurrentIntentViewsBound
+                <8>2. /\ ModelConfiguration
+                      /\ timeoutVote.view \in Views
+                      /\ request.vote.view \in Views
+                  <9>1. /\ TypeInvariant
+                        /\ ModelConfiguration
+                        /\ timeoutIntents
+                             \subseteq TimeoutVoteRecordSet
+                        /\ prepareQCs \subseteq QcRecordSet
+                    BY <1>1
+                       DEF StrongInductiveInvariant, Safety,
+                           TypeInvariant
+                  <9>2. timeoutVote \in TimeoutVoteRecordSet
+                    BY <5>1, <9>1
+                  <9>3. timeoutVote.view \in Views
+                    BY <9>2 DEF TimeoutVoteRecordSet
+                  <9>4. request.qc \in QcRecordSet
+                    BY <2>1, <9>1
+                  <9>5. request.vote.view \in Views
+                    BY <2>1, <9>4 DEF QcRecordSet
+                  <9> QED BY <9>1, <9>3, <9>5
+                <8>3. /\ timeoutVote.view \in Int
+                      /\ request.vote.view \in Int
+                  <9>1. Ranks \subseteq Int
+                    BY <8>2, ModelRanksAreIntegers
+                  <9>2. Views \subseteq Ranks
+                    BY ViewsAreRanks
+                  <9> QED BY <8>2, <9>1, <9>2
+                <8>4. timeoutVote.view = request.vote.view
+                  BY <2>1, <7>1, <7>4, <8>1, <8>3, SMT
+                     DEF CurrentOpenPrepareForCommit
+                <8>5. NodeTimedOut(
+                         request.node, request.vote.view)
+                  BY <5>1, <7>1, <8>4 DEF NodeTimedOut
+                <8>6. request.qc.view = request.vote.view
+                  BY <2>1
+                <8>7. NodeTimedOut(
+                         request.node, request.qc.view)
+                  BY <8>5, <8>6
+                <8>8. FALSE
+                  BY <7>4, <8>7 DEF CurrentOpenPrepareForCommit
+                <8> QED BY <8>8
+              <7> QED BY <7>2, <7>3, <7>4
             <6> QED BY <6>1 DEF TimeoutVoteProtectsCommitSet
           <5>3. TimeoutVoteProtectsCommitSet(
                    timeoutVote,
                    commitIntents \cup {request.vote})
             BY <5>1, <5>2, Isa DEF TimeoutVoteProtectsCommitSet
-          <5> QED BY <4>2, <5>3
+          <5>4. TimeoutVoteProtectsCommitSet(
+                   timeoutVote, commitIntents)'
+            BY <4>2, <5>3, Isa
+               DEF TimeoutVoteProtectsCommitSet,
+                   InstalledTcAuthorizesCommitVote
+          <5> QED BY <5>4
         <4> QED BY <4>3
            DEF DurableTimeoutsProtectCommits,
                TimeoutIntentProtectsCommits
-      <3>9. HighestAndLockAreCertified'
+      <3>9. HistoricalTcLockedCommitAuthorizationInvariant'
+        <4>1. \A pending \in pendingLockCommit':
+                 pending.vote.view < nodeView'[pending.node]
+                   => HistoricalTcLockedPrepareForCommit(
+                        pending.node, pending.qc)'
+          BY <3>2, SMT
+             DEF PendingVoteWritesAuthorized,
+                 CurrentOpenPrepareForCommit
+        <4>2. \A timeoutVote \in timeoutIntents',
+                    commitVote \in commitIntents':
+                 (/\ timeoutVote.signer \in Honest
+                  /\ commitVote.signer = timeoutVote.signer
+                  /\ commitVote.context = timeoutVote.context
+                  /\ commitVote.phase = "Commit"
+                  /\ commitVote.view <= timeoutVote.view
+                  /\ ~TimeoutVoteStrictlyProtectsCommit(
+                         timeoutVote, commitVote))
+                   => InstalledTcAuthorizesCommitVote(commitVote)'
+          BY <3>8, SMT
+             DEF DurableTimeoutsProtectCommits,
+                 TimeoutIntentProtectsCommits,
+                 TimeoutVoteProtectsCommitSet
+        <4> QED BY <4>1, <4>2
+           DEF HistoricalTcLockedCommitAuthorizationInvariant
+      <3>10. HighestAndLockAreCertified'
         <4>1. /\ context' = context
               /\ prepareQCs' = prepareQCs
               /\ lockRank'
@@ -7372,7 +8062,7 @@ PROOF
           <5> QED BY <5>1, <5>2
         <4> QED BY <4>4 DEF HighestAndLockAreCertified
       <3> QED BY <3>1, <3>2, <3>3, <3>4, <3>5,
-                  <3>6, <3>7, <3>8, <3>9
+                  <3>6, <3>7, <3>8, <3>9, <3>10
          DEF ReducerProvenanceInvariant
     <2>8. LineageInvariant'
       <3>1. PrepareLineageSound'
@@ -7434,8 +8124,11 @@ PROOF
                                 <= nodeView[prepareVote.signer]
                   BY <4>1 DEF CurrentIntentViewsBound
                 <8> QED BY <5>1, <5>2, <7>1, <8>1
-              <7>3. request.vote.view = nodeView[vote.signer]
-                BY <2>1, <7>1
+              <7>3. \/ CurrentOpenPrepareForCommit(
+                           request.node, request.qc)
+                     \/ HistoricalTcLockedPrepareForCommit(
+                           request.node, request.qc)
+                BY <2>1
               <7>4. /\ vote.view \in Views
                     /\ request.vote.view \in Views
                 <8>1. vote \in VoteRecordSet
@@ -7452,9 +8145,55 @@ PROOF
                 <8>1. Ranks \subseteq Int
                   BY <4>3, ModelRanksAreIntegers
                 <8> QED BY <7>4, <8>1, ViewsAreRanks
-              <7>6. FALSE
-                BY <7>1, <7>2, <7>3, <7>5, SMT
-              <7> QED BY <7>6
+              <7>6. CASE CurrentOpenPrepareForCommit(
+                            request.node, request.qc)
+                <8>1. request.vote.view = nodeView[vote.signer]
+                  BY <2>1, <7>1, <7>6
+                     DEF CurrentOpenPrepareForCommit
+                <8>2. FALSE
+                  BY <7>1, <7>2, <7>5, <8>1, SMT
+                <8> QED BY <8>2
+              <7>7. CASE HistoricalTcLockedPrepareForCommit(
+                            request.node, request.qc)
+                <8>1. vote.phase = "Prepare"
+                  BY <1>1, <5>1
+                     DEF StrongInductiveInvariant,
+                         ReducerProvenanceInvariant,
+                         IntentPhasesCorrect
+                <8>2. /\ vote \in prepareIntents
+                      /\ vote.signer = request.node
+                      /\ vote.context = request.qc.context
+                      /\ vote.phase = "Prepare"
+                      /\ vote.view > request.qc.view
+                      /\ vote.subject # request.qc.subject
+                  <9>1. vote.context = request.qc.context
+                    BY <2>1, <7>1
+                  <9>2. vote.view > request.qc.view
+                    BY <2>1, <7>1
+                  <9>3. vote.subject # request.qc.subject
+                    BY <2>1, <5>2, <6>3, SMT
+                  <9> QED BY <5>1, <7>1, <8>1,
+                              <9>1, <9>2, <9>3
+                <8>3. ~\E prepareVote \in prepareIntents:
+                         /\ prepareVote.signer = request.node
+                         /\ prepareVote.context = request.qc.context
+                         /\ prepareVote.phase = "Prepare"
+                         /\ prepareVote.view > request.qc.view
+                         /\ prepareVote.subject # request.qc.subject
+                  BY <7>7
+                     DEF HistoricalTcLockedPrepareForCommit,
+                         NoHigherConflictingPrepareKnown
+                <8>4. \E prepareVote \in prepareIntents:
+                         /\ prepareVote.signer = request.node
+                         /\ prepareVote.context = request.qc.context
+                         /\ prepareVote.phase = "Prepare"
+                         /\ prepareVote.view > request.qc.view
+                         /\ prepareVote.subject # request.qc.subject
+                  BY <8>2
+                <8>5. FALSE
+                  BY <8>3, <8>4
+                <8> QED BY <8>5
+              <7> QED BY <7>3, <7>6, <7>7
             <6> QED BY <6>1, <6>2, <6>3
           <5> QED BY <5>2 DEF PrepareCarriesHigherSafeQc
         <4> QED BY <4>4 DEF PrepareLineageSound
@@ -7586,7 +8325,7 @@ PROOF
           <5> QED BY <5>1, <5>2, <5>3
         <4> QED BY <4>4 DEF LocksCoverOwnCommits
       <3>3. CurrentIntentViewsBound'
-        BY <1>1, Isa
+        BY <1>1, <2>1, Isa
            DEF StrongInductiveInvariant, LineageInvariant,
                PersistLockCommit, CurrentIntentViewsBound
       <3>4. HonestCommitIntentPrepared'
@@ -7644,23 +8383,9 @@ PROOF
               BY <4>1, <4>2, <5>1, <6>2
                  DEF HonestCommitIntentPrepared
             <6>3. CASE vote = request.vote
-              <7>1. vote.view = nodeView'[vote.signer]
+              <7>1. vote.view <= nodeView'[vote.signer]
                 BY <2>1, <4>2, <6>3
-              <7>2. vote.view \in Nat
-                <8>1. /\ ModelConfiguration
-                      /\ nodeView \in [ValidatorIds -> Views]
-                  BY <1>1
-                     DEF StrongInductiveInvariant, Safety,
-                         TypeInvariant
-                <8>2. request.node \in ValidatorIds
-                  BY <2>1, <8>1
-                     DEF ModelConfiguration, QuorumConfiguration
-                <8>3. nodeView[request.node] \in Views
-                  BY <8>1, <8>2, FunctionValueHasCodomain
-                <8>4. ViewDomain \subseteq Nat
-                  BY <8>1 DEF ModelConfiguration
-                <8> QED BY <2>1, <6>3, <8>3, <8>4 DEF Views
-              <7> QED BY <7>1, <7>2, NaturalOrderReflexive
+              <7> QED BY <7>1
             <6> QED BY <6>1, <6>2, <6>3
           <5> QED BY <5>1
         <4> QED BY <4>3, <4>4
@@ -9403,7 +10128,7 @@ PROOF
             proposalIntents, prepareIntents, commitIntents, timeoutIntents,
             prepareQCs, commitQCs, formedTCs, pendingProposal,
             pendingPrepare, pendingObservePrepare, pendingLockCommit,
-            pendingTimeout, pendingDecision, signProposals, signVotes,
+            pendingTimeout, pendingDecision, signProposals,
             signTimeouts, proposalNetwork, voteNetwork, qcNetwork,
             timeoutNetwork, decisions, applied>>
     <2>1. /\ request \in pendingInstallTC
@@ -9555,7 +10280,13 @@ PROOF
         BY <1>1 DEF PersistInstallTC
       <3>10. pendingInstallTC' \subseteq InstallTcWalSet
         BY <3>1, <3>9, Isa DEF TypeInvariant
-      <3> QED BY <3>1, <3>2, <3>4, <3>5, <3>6, <3>8, <3>10, Isa
+      <3>11. signVotes' \subseteq VoteSignSet
+        BY <1>1, <2>1, <3>1, Isa
+           DEF PersistInstallTC,
+               ActiveLockedCommitSignRequestsAfterInstall,
+               ExactLockedCommitIntents, VoteSign, VoteSignSet
+      <3> QED BY <3>1, <3>2, <3>4, <3>5, <3>6, <3>8, <3>10,
+                   <3>11, Isa
          DEF TypeInvariant, StableVars
     <2>5. LockBelowHighest'
       <3>1. /\ lockRank' =
@@ -9867,7 +10598,7 @@ PROOF
                 /\ commitIntents' = commitIntents
                 /\ prepareQCs' = prepareQCs
                 /\ nodeView'[other.node] = nodeView[other.node]
-            BY <3>6, <3>7, <5>1
+            BY <1>1, <3>6, <3>7, <5>1 DEF PersistInstallTC
           <5>4. PrepareCarriesHigherSafeQc(other.vote)'
                     <=> PrepareCarriesHigherSafeQc(other.vote)
             BY <3>7 DEF PrepareCarriesHigherSafeQc
@@ -9883,8 +10614,10 @@ PROOF
                 /\ other.vote.subject = other.qc.subject
                 /\ other.qc.phase = "Prepare"
                 /\ other.qc \in prepareQCs'
-                /\ other.vote.view = nodeView'[other.node]
-                /\ ~NodeTimedOut(other.node, other.vote.view)'
+                /\ \/ CurrentOpenPrepareForCommit(
+                         other.node, other.qc)'
+                   \/ HistoricalTcLockedPrepareForCommit(
+                         other.node, other.qc)'
                 /\ other.vote.subject \in ValidSubjects
                 /\ BodyHeldBy(durableBodies', other.node,
                               other.vote.context, other.vote.view, other.vote.subject)
@@ -9902,8 +10635,10 @@ PROOF
                      /\ other.vote.subject = other.qc.subject
                      /\ other.qc.phase = "Prepare"
                      /\ other.qc \in prepareQCs'
-                     /\ other.vote.view = nodeView'[other.node]
-                     /\ ~NodeTimedOut(other.node, other.vote.view)'
+                     /\ \/ CurrentOpenPrepareForCommit(
+                              other.node, other.qc)'
+                        \/ HistoricalTcLockedPrepareForCommit(
+                              other.node, other.qc)'
                      /\ other.vote.subject \in ValidSubjects
                      /\ BodyHeldBy(durableBodies', other.node,
                                    other.vote.context, other.vote.view, other.vote.subject)
@@ -9922,8 +10657,10 @@ PROOF
                 /\ other.vote.subject = other.qc.subject
                 /\ other.qc.phase = "Prepare"
                 /\ other.qc \in prepareQCs
-                /\ other.vote.view = nodeView[other.node]
-                /\ ~NodeTimedOut(other.node, other.vote.view)
+                /\ \/ CurrentOpenPrepareForCommit(
+                         other.node, other.qc)
+                   \/ HistoricalTcLockedPrepareForCommit(
+                         other.node, other.qc)
                 /\ other.vote.subject \in ValidSubjects
                 /\ BodyHeldBy(durableBodies, other.node,
                               other.vote.context, other.vote.view, other.vote.subject)
@@ -9936,16 +10673,35 @@ PROOF
           <5>3. /\ context' = context
                 /\ durableBodies' = durableBodies
                 /\ timeoutIntents' = timeoutIntents
+                /\ receivedQCs' = receivedQCs
                 /\ prepareQCs' = prepareQCs
                 /\ commitIntents' = commitIntents
                 /\ nodeView'[other.node] = nodeView[other.node]
                 /\ lockRank'[other.node] = lockRank[other.node]
                 /\ lockSubject'[other.node] = lockSubject[other.node]
-            BY <3>6, <3>7, <5>1
-          <5>4. NodeTimedOut(other.node, other.vote.view)'
-                    <=> NodeTimedOut(other.node, other.vote.view)
-            BY <3>7 DEF NodeTimedOut
-          <5> QED BY <5>2, <5>3, <5>4, Isa
+            BY <1>1, <3>6, <3>7, <5>1 DEF PersistInstallTC
+          <5>4. installedTCs \subseteq installedTCs'
+            BY <1>1, Isa DEF PersistInstallTC
+          <5>5. CurrentOpenPrepareForCommit(other.node, other.qc)
+                   => CurrentOpenPrepareForCommit(other.node, other.qc)'
+            BY <1>1, <3>6, <3>7, <5>1, <5>3, Isa
+               DEF PersistInstallTC, CurrentOpenPrepareForCommit,
+                   NodeTimedOut
+          <5>6. InstalledTcSelectsPrepareFor(other.node, other.qc)
+                   => InstalledTcSelectsPrepareFor(other.node, other.qc)'
+            BY <5>4, Isa DEF InstalledTcSelectsPrepareFor
+          <5>7. NoHigherConflictingPrepareKnown(other.node, other.qc)
+                   <=> NoHigherConflictingPrepareKnown(
+                        other.node, other.qc)'
+            BY <3>6, <3>7, <5>1, Isa
+               DEF NoHigherConflictingPrepareKnown
+          <5>8. HistoricalTcLockedPrepareForCommit(
+                   other.node, other.qc)
+                   => HistoricalTcLockedPrepareForCommit(
+                        other.node, other.qc)'
+            BY <5>3, <5>6, <5>7, Isa
+               DEF HistoricalTcLockedPrepareForCommit
+          <5> QED BY <5>2, <5>3, <5>5, <5>8
         <4> QED BY <4>1
       <3>11. \A other \in pendingTimeout':
                 /\ other.node \in Honest
@@ -9953,16 +10709,16 @@ PROOF
                 /\ other.vote.context = context'
                 /\ other.vote.view = nodeView'[other.node]
                 /\ CanAppendTimeout(timeoutIntents', other.vote)
-                /\ TimeoutVoteProtectsCommitSet(other.vote,
-                                                commitIntents')
+                /\ TimeoutVoteProtectsCommitSet(
+                     other.vote, commitIntents)'
         <4>1. ASSUME NEW other \in pendingTimeout'
                PROVE /\ other.node \in Honest
                      /\ other.vote.signer = other.node
                      /\ other.vote.context = context'
                      /\ other.vote.view = nodeView'[other.node]
                      /\ CanAppendTimeout(timeoutIntents', other.vote)
-                     /\ TimeoutVoteProtectsCommitSet(other.vote,
-                                                     commitIntents')
+                     /\ TimeoutVoteProtectsCommitSet(
+                          other.vote, commitIntents)'
           <5>1. other \in AllPendingRequests'
             BY <4>1 DEF AllPendingRequests
           <5>2. /\ other.node \in Honest
@@ -9979,7 +10735,17 @@ PROOF
                 /\ commitIntents' = commitIntents
                 /\ nodeView'[other.node] = nodeView[other.node]
             BY <3>6, <3>7, <5>1
-          <5> QED BY <5>2, <5>3, Isa
+          <5>4. installedTCs \subseteq installedTCs'
+            BY <1>1, Isa DEF PersistInstallTC
+          <5>5. \A commitVote:
+                   InstalledTcAuthorizesCommitVote(commitVote)
+                     => InstalledTcAuthorizesCommitVote(commitVote)'
+            BY <5>4, Isa DEF InstalledTcAuthorizesCommitVote
+          <5>6. TimeoutVoteProtectsCommitSet(
+                   other.vote, commitIntents)'
+            BY <5>2, <5>3, <5>5, Isa
+               DEF TimeoutVoteProtectsCommitSet
+          <5> QED BY <5>2, <5>3, <5>6
         <4> QED BY <4>1
       <3>12. PendingVoteWritesAuthorized'
         BY <3>9, <3>10, <3>11 DEF PendingVoteWritesAuthorized
@@ -10124,6 +10890,8 @@ PROOF
             /\ AppliedRequiresDecision'
         BY <1>1, Isa
            DEF StrongInductiveInvariant, Safety, PersistInstallTC,
+               ActiveLockedCommitSignRequestsAfterInstall,
+               ExactLockedCommitIntents, VoteSign,
                ProposalSigningRequiresIntent,
                PrepareSigningRequiresIntent,
                CommitSigningRequiresIntent, TimeoutSigningRequiresIntent,

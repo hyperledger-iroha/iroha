@@ -1,7 +1,7 @@
 //! Generate and finalize calibrated ABI-20 Kagemusha release bundles.
 //!
 //! Candidate generation runs the current recursion source exactly once and
-//! publishes ten immutable `KRV4KEY` artifacts plus the canonical unsigned
+//! publishes eight immutable `KRV4KEY` artifacts plus the canonical unsigned
 //! manifest and role-separated signing payloads. Finalization never regenerates
 //! proof material: it authenticates the unchanged candidate against the supplied
 //! release policy, attestation, and evidence before publishing a distinct final
@@ -41,13 +41,11 @@ use iroha_data_model::{
         KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_EVIDENCE_BYTES_V1,
         KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_BOOTSTRAP_FILE_NAME_V4,
         KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V4,
-        KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_PARAMS_FILE_NAME_V4,
         KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PARAMETERS_FILE_NAME_V4,
         KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PROVING_KEY_FILE_NAME_V4,
         KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_VERIFYING_KEY_FILE_NAME_V4,
         KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_BOOTSTRAP_FILE_NAME_V4,
         KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4,
-        KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_PARAMS_FILE_NAME_V4,
         KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PARAMETERS_FILE_NAME_V4,
         KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PROVING_KEY_FILE_NAME_V4,
         KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_VERIFYING_KEY_FILE_NAME_V4,
@@ -93,10 +91,11 @@ Usage:
     --benchmark-evidence <exact-file> \\
     --cryptographic-review <exact-file>
 
-Candidate generation emits five roles per parity in exact Eq-then-Ep order:
-ParamsIPA, raw canonical CircuitParamsV4, processed proving key, processed
-verifying key, and the final-VK selector-zero BootstrapWitness. It writes a
-zero-attestation candidate manifest and canonical role-separated signing
+Candidate generation emits four files per parity in exact Eq-then-Ep order:
+ParamsIPA, processed proving key, processed verifying key, and the final-VK
+selector-zero BootstrapWitness. The canonical CircuitParamsV4 values are
+authenticated inline in the corresponding manifest profiles. Generation writes
+a zero-attestation candidate manifest and canonical role-separated signing
 payloads; that directory is not an approved release. Finalization verifies the
 signed attestation thresholds and both evidence files against the candidate,
 rechecks every staged inode/size/hash, and copies those exact bytes without
@@ -154,16 +153,11 @@ struct InputSpec {
     kind: KagemushaPastaCycleArtifactKindV4,
 }
 
-const INPUTS: [InputSpec; 10] = [
+const INPUTS: [InputSpec; 8] = [
     InputSpec {
         file_name: KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PARAMETERS_FILE_NAME_V4,
         parity: KagemushaPastaCycleParityV1::StepEq,
         kind: KagemushaPastaCycleArtifactKindV4::Parameters,
-    },
-    InputSpec {
-        file_name: KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_PARAMS_FILE_NAME_V4,
-        parity: KagemushaPastaCycleParityV1::StepEq,
-        kind: KagemushaPastaCycleArtifactKindV4::CircuitParams,
     },
     InputSpec {
         file_name: KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PROVING_KEY_FILE_NAME_V4,
@@ -184,11 +178,6 @@ const INPUTS: [InputSpec; 10] = [
         file_name: KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PARAMETERS_FILE_NAME_V4,
         parity: KagemushaPastaCycleParityV1::StepEp,
         kind: KagemushaPastaCycleArtifactKindV4::Parameters,
-    },
-    InputSpec {
-        file_name: KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_PARAMS_FILE_NAME_V4,
-        parity: KagemushaPastaCycleParityV1::StepEp,
-        kind: KagemushaPastaCycleArtifactKindV4::CircuitParams,
     },
     InputSpec {
         file_name: KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PROVING_KEY_FILE_NAME_V4,
@@ -747,8 +736,6 @@ fn prepare_bundle_metadata(
         return Err("V4 proof-pair validator returned a different measurement".into());
     }
 
-    let step_eq_circuit_params = norito::to_bytes(&step_eq.circuit_params)?;
-    let step_ep_circuit_params = norito::to_bytes(&step_ep.circuit_params)?;
     let generated_artifacts = vec![
         GeneratedArtifact {
             spec: INPUTS[0],
@@ -756,38 +743,30 @@ fn prepare_bundle_metadata(
         },
         GeneratedArtifact {
             spec: INPUTS[1],
-            payload: step_eq_circuit_params,
-        },
-        GeneratedArtifact {
-            spec: INPUTS[2],
             payload: step_eq.proving_key,
         },
         GeneratedArtifact {
-            spec: INPUTS[3],
+            spec: INPUTS[2],
             payload: step_eq.verifying_key,
         },
         GeneratedArtifact {
-            spec: INPUTS[4],
+            spec: INPUTS[3],
             payload: step_eq.bootstrap_witness,
         },
         GeneratedArtifact {
-            spec: INPUTS[5],
+            spec: INPUTS[4],
             payload: step_ep.parameters,
         },
         GeneratedArtifact {
-            spec: INPUTS[6],
-            payload: step_ep_circuit_params,
-        },
-        GeneratedArtifact {
-            spec: INPUTS[7],
+            spec: INPUTS[5],
             payload: step_ep.proving_key,
         },
         GeneratedArtifact {
-            spec: INPUTS[8],
+            spec: INPUTS[6],
             payload: step_ep.verifying_key,
         },
         GeneratedArtifact {
-            spec: INPUTS[9],
+            spec: INPUTS[7],
             payload: step_ep.bootstrap_witness,
         },
     ];
@@ -797,15 +776,10 @@ fn prepare_bundle_metadata(
         let payload_size = u64::try_from(artifact.payload.len())?;
         let digest: [u8; 32] = Sha256::digest(&artifact.payload).into();
         let duplicate = payload_digests.insert(digest, artifact.spec);
-        let allowed_circuit_params_alias = duplicate.is_some_and(|previous| {
-            previous.kind == KagemushaPastaCycleArtifactKindV4::CircuitParams
-                && artifact.spec.kind == KagemushaPastaCycleArtifactKindV4::CircuitParams
-                && previous.parity != artifact.spec.parity
-        });
         if payload_size == 0
             || payload_size >= KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_FILE_BYTES_V4
             || evidence.contains(&digest)
-            || (duplicate.is_some() && !allowed_circuit_params_alias)
+            || duplicate.is_some()
         {
             return Err(format!(
                 "generated {} payload violates the V4 artifact corridor",
@@ -998,15 +972,6 @@ fn prepare_artifact(
     let profile = profile_for(metadata, spec.parity);
     let payload_size_bytes = u64::try_from(payload.len())?;
     let payload_sha256 = Sha256::digest(&payload).into();
-    if spec.kind == KagemushaPastaCycleArtifactKindV4::CircuitParams
-        && norito::to_bytes(&profile.circuit_params)? != payload
-    {
-        return Err(format!(
-            "{} is not the raw canonical circuit-parameter payload",
-            spec.file_name
-        )
-        .into());
-    }
     let header = KagemushaPastaCycleFramedArtifactHeaderV4 {
         version: KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_HEADER_VERSION_V4,
         manifest_schema: KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V4.to_owned(),
@@ -1356,7 +1321,7 @@ fn finalize_release(options: &BTreeMap<String, String>) -> Result<(), Box<dyn Er
             staged_inputs.push((descriptor.file_name.clone(), input));
         }
         if staged_inputs.len() != INPUTS.len() {
-            return Err("V4 candidate does not contain the exact ten-artifact inventory".into());
+            return Err("V4 candidate does not contain the exact eight-artifact inventory".into());
         }
         let roster_descriptor = &manifest.topup_finality_roster_artifact;
         let roster_input = candidate.open_bound_input(
@@ -1541,9 +1506,9 @@ fn write_candidate(
     roster_bytes: &[u8],
     roster_descriptor: KagemushaTopUpFinalityRosterArtifactReferenceV4,
 ) -> Result<(), Box<dyn Error>> {
-    let mut eq_artifacts = Vec::with_capacity(5);
-    let mut ep_artifacts = Vec::with_capacity(5);
-    let mut staged_headers = Vec::with_capacity(10);
+    let mut eq_artifacts = Vec::with_capacity(4);
+    let mut ep_artifacts = Vec::with_capacity(4);
+    let mut staged_headers = Vec::with_capacity(INPUTS.len());
     for artifact in prepared {
         let (header, descriptor) = package_artifact(publication, artifact)?;
         match header.parity {
@@ -2250,18 +2215,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn artifact_inventory_is_exact_eq_then_ep_five_role_order() {
-        assert_eq!(INPUTS.len(), 10);
+    fn artifact_inventory_is_exact_eq_then_ep_four_file_order() {
+        assert_eq!(INPUTS.len(), 8);
         assert_eq!(
             INPUTS.map(|spec| (spec.parity, spec.kind)),
             [
                 (
                     KagemushaPastaCycleParityV1::StepEq,
                     KagemushaPastaCycleArtifactKindV4::Parameters,
-                ),
-                (
-                    KagemushaPastaCycleParityV1::StepEq,
-                    KagemushaPastaCycleArtifactKindV4::CircuitParams,
                 ),
                 (
                     KagemushaPastaCycleParityV1::StepEq,
@@ -2278,10 +2239,6 @@ mod tests {
                 (
                     KagemushaPastaCycleParityV1::StepEp,
                     KagemushaPastaCycleArtifactKindV4::Parameters,
-                ),
-                (
-                    KagemushaPastaCycleParityV1::StepEp,
-                    KagemushaPastaCycleArtifactKindV4::CircuitParams,
                 ),
                 (
                     KagemushaPastaCycleParityV1::StepEp,
@@ -2301,12 +2258,10 @@ mod tests {
             INPUTS.map(|spec| spec.file_name),
             [
                 KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PARAMETERS_FILE_NAME_V4,
-                KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_PARAMS_FILE_NAME_V4,
                 KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PROVING_KEY_FILE_NAME_V4,
                 KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_VERIFYING_KEY_FILE_NAME_V4,
                 KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_BOOTSTRAP_FILE_NAME_V4,
                 KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PARAMETERS_FILE_NAME_V4,
-                KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_PARAMS_FILE_NAME_V4,
                 KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PROVING_KEY_FILE_NAME_V4,
                 KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_VERIFYING_KEY_FILE_NAME_V4,
                 KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_BOOTSTRAP_FILE_NAME_V4,

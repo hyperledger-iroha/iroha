@@ -81,7 +81,6 @@ tlapm_compat_dir="${run_dir}/tlapm-stdlib"
 mkdir -p "$tlapm_compat_dir"
 ln -s "${TLAPM_STDLIB}/Functions.tla" "${tlapm_compat_dir}/Functions.tla"
 ln -s "${TLAPM_STDLIB}/Folds.tla" "${tlapm_compat_dir}/Folds.tla"
-raw_trace="${run_dir}/trace.json"
 normalized_trace="${run_dir}/trace.tsv"
 tlc_log="${run_dir}/tlc.log"
 
@@ -97,22 +96,26 @@ set +e
     -seed "$SEED" \
     -simulate num=200 \
     -config "$CONFIG" \
-    -dumpTrace json "$raw_trace" \
+    -tool \
     SumeragiV2TraceWitness
 ) >"$tlc_log" 2>&1
 tlc_status=$?
 set -e
 
-# The witness module intentionally asks TLC to violate NoDecision. TLC's
-# invariant-violation exit code proves that the JSON ends at the first durable
-# model decision; any other status is a tooling/model failure.
-if [[ "$tlc_status" -ne 12 || ! -s "$raw_trace" ]]; then
+# The witness module intentionally asks TLC to violate NoDecision. The
+# invariant-violation exit code plus the normalizer's exact tool-message checks
+# prove that the trace ends at the first durable model decision; any other
+# status is a tooling/model failure.
+if [[ "$tlc_status" -ne 12 || ! -s "$tlc_log" ]]; then
   cat "$tlc_log" >&2
   echo "TLC did not emit the expected decision witness (status=${tlc_status})" >&2
   exit 1
 fi
 
-python3 "$NORMALIZER" "$raw_trace" --seed "$SEED" >"$normalized_trace"
+if ! python3 "$NORMALIZER" "$tlc_log" --seed "$SEED" >"$normalized_trace"; then
+  echo "TLC decision witness normalization failed" >&2
+  exit 1
+fi
 if ! cmp -s "$EXPECTED" "$normalized_trace"; then
   diff -u "$EXPECTED" "$normalized_trace" || true
   echo "normalized Sumeragi v2 replay witness drifted" >&2

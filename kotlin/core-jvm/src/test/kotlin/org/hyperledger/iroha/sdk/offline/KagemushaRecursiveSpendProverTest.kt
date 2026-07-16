@@ -32,7 +32,7 @@ class KagemushaRecursiveSpendProverTest {
     @Test
     fun artifactContractAndInventoryAreCurrentOnly() {
         assertEquals(20, KagemushaRecursiveSpendProver.REQUIRED_NATIVE_BRIDGE_ABI_VERSION)
-        assertEquals(10, KagemushaRecursiveSpendProver.ARTIFACT_COUNT)
+        assertEquals(8, KagemushaRecursiveSpendProver.ARTIFACT_COUNT)
         assertEquals(2, KagemushaRecursiveSpendProver.MAXIMUM_INPUTS_PER_TRANSITION)
         assertEquals(2, KagemushaRecursiveSpendProver.MAXIMUM_LOCAL_APPEND_BUILDER_INPUTS)
         assertEquals(2, KagemushaRecursiveSpendProver.MAXIMUM_BRANCH_CLAIMS)
@@ -47,12 +47,10 @@ class KagemushaRecursiveSpendProverTest {
         assertEquals(
             listOf(
                 "step-eq.parameters.krv4",
-                "step-eq.circuit-params.krv4",
                 "step-eq.proving-key.krv4",
                 "step-eq.verifying-key.krv4",
                 "step-eq.bootstrap-witness.krv4",
                 "step-ep.parameters.krv4",
-                "step-ep.circuit-params.krv4",
                 "step-ep.proving-key.krv4",
                 "step-ep.verifying-key.krv4",
                 "step-ep.bootstrap-witness.krv4",
@@ -198,7 +196,7 @@ class KagemushaRecursiveSpendProverTest {
         val canonical = KagemushaRecursiveSpendProver.ArtifactRoleV4.entries
         KagemushaRecursiveSpendProver.requireCanonicalV4ArtifactRoleInventory(canonical)
 
-        for (count in listOf(8, 9, 11)) {
+        for (count in listOf(6, 7, 9)) {
             val invalid = List(count) { canonical[it % canonical.size] }
             assertFailsWith<IllegalArgumentException> {
                 KagemushaRecursiveSpendProver

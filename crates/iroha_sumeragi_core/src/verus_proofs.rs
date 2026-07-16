@@ -45,6 +45,18 @@ macro_rules! same_certificate_evidence_body {
     }};
 }
 
+// Compose the source-linked EnterView gate and the exact effect-count checks
+// once for both the closed specification and its branch-factored executable
+// Verus instances.
+#[allow(unused_macros)]
+macro_rules! production_enter_view_exact_body {
+    ($projection:expr) => {{
+        enter_view_projection_gate_body!($projection.enter_view)
+            && $projection.enter_view.enter_count == effect_count_body!($projection.effects, 8u8)
+            && $projection.enter_view.fetch_count == effect_count_body!($projection.effects, 2u8)
+    }};
+}
+
 verus! {
 
 /// Largest value representable by every production height/view/generation/WAL
@@ -167,6 +179,7 @@ pub proof fn schedule_periodic_delay_is_bounded()
 {
     reveal(schedule_decision);
 }
+
 
 // ---------------------------------------------------------------------------
 // Common certificate and quorum facts
@@ -2210,7 +2223,10 @@ pub open spec fn is_persistence_completion(event: EventProjection) -> bool {
 
 /// The `NoDurableChange` branch enforces the recovery and pending-write fences,
 /// may retransmit Apply only on the timer path, and may request the next
-/// already-authorized signature only after Signed.
+/// already-authorized signature only after Signed. This safety projection
+/// intentionally erases Fetch/Store/Validate; their exact Decision identity,
+/// stage, mutual exclusion, and ordering are checked by the complete production
+/// effect trace below.
 pub open spec fn no_change_effects_match_input(
     before: ReducerProjection,
     input: ReducerInputProjection,
@@ -2659,6 +2675,60 @@ pub struct ProductionTagProjection {
     pub generation: u64,
 }
 
+/// Verus-side complete safety identity of one optional quorum certificate.
+///
+/// Signature bytes remain outside this fixed-width projection. The executable
+/// reducer separately compares the complete effect-carried certificate object
+/// with the durable certificate before committing the transition.
+#[derive(Copy, Clone)]
+pub struct CertificateIdentityProjection {
+    pub present: bool,
+    pub context_id: int,
+    pub height: u64,
+    pub view: u64,
+    pub phase: u8,
+    pub subject: int,
+}
+
+/// Verus-side identity of one optional timeout certificate and its selected
+/// highest `PrepareQC`.
+#[derive(Copy, Clone)]
+pub struct TimeoutIdentityProjection {
+    pub present: bool,
+    pub context_id: int,
+    pub height: u64,
+    pub view: u64,
+    pub highest_prepare: CertificateIdentityProjection,
+}
+
+/// Exact persisted-TC `EnterView` macro-step projected by the production
+/// reducer.
+///
+/// This shape deliberately stops at the serialized reducer boundary: it names
+/// the selected lock and immediate recovery fetch, but makes no asynchronous
+/// ownership, scheduling, or temporal-fairness claim.
+#[derive(Copy, Clone)]
+pub struct EnterViewProjection {
+    pub active: bool,
+    pub context_id: int,
+    pub before_tag: ProductionTagProjection,
+    pub after_tag: ProductionTagProjection,
+    pub pending_record_kind: u8,
+    pub pending_continuation: u8,
+    pub pending_record_timeout: TimeoutIdentityProjection,
+    pub pending_continuation_timeout: TimeoutIdentityProjection,
+    pub durable_timeout_after: TimeoutIdentityProjection,
+    pub effect_timeout: TimeoutIdentityProjection,
+    pub local_lock_before: CertificateIdentityProjection,
+    pub durable_lock_after: CertificateIdentityProjection,
+    pub effect_protected_lock: CertificateIdentityProjection,
+    pub following_fetch_lock: CertificateIdentityProjection,
+    pub enter_count: u64,
+    pub fetch_count: u64,
+    pub enter_index: u8,
+    pub following_fetch_index: u8,
+}
+
 /// Verus-side shape of a concrete requested/granted effect capability.
 #[derive(Copy, Clone)]
 pub struct ProductionEffectCapabilityKeyProjection {
@@ -2816,6 +2886,7 @@ pub struct ProductionTransitionProjection {
     pub volatile_after: ProductionVolatileSummaryProjection,
     pub boundary_claimed: ProductionBoundaryCapabilityKeyProjection,
     pub boundary_granted: ProductionBoundaryCapabilityKeyProjection,
+    pub enter_view: EnterViewProjection,
     pub effects: ProductionEffectTraceProjection,
 }
 
@@ -2846,14 +2917,348 @@ pub struct ProductionTransitionFactsProjection {
     pub acknowledge_persist_exact: bool,
     pub application_transition_exact: bool,
     pub acknowledgement_continuation: u8,
+    pub enter_view_exact: bool,
     pub effects: ProductionEffectTraceProjection,
 }
 
+/// Lock selected by the persisted-TC view transition: the incoming highest
+/// `PrepareQC` replaces the local lock only when it has a strictly higher view.
+pub open spec fn production_enter_view_selected_lock(
+    projection: EnterViewProjection,
+) -> CertificateIdentityProjection {
+    let local = projection.local_lock_before;
+    let incoming = projection.pending_record_timeout.highest_prepare;
+    if !local.present {
+        incoming
+    } else if !incoming.present || incoming.view <= local.view {
+        local
+    } else {
+        incoming
+    }
+}
+
+/// Whether the effect immediately following `EnterView` is the one exact
+/// durable-lock recovery fetch.
+pub open spec fn production_enter_view_has_exact_following_fetch(
+    projection: EnterViewProjection,
+) -> bool {
+    projection.fetch_count == 1
+        && certificate_identity_equal_body!(
+            projection.following_fetch_lock,
+            projection.durable_lock_after
+        )
+        && projection.enter_index < 254
+        && projection.following_fetch_index == projection.enter_index + 1
+}
+
+/// Exact source-linked reducer relation for the persisted-TC `EnterView`
+/// macro-step.
+pub open spec fn production_enter_view_projection_relation(
+    projection: EnterViewProjection,
+) -> bool {
+    enter_view_projection_gate_body!(projection)
+}
+
 /// Exact fact derivation shared with the executable production kernel.
-pub open spec fn production_facts_from_projection(
+pub closed spec fn production_facts_from_projection(
     projection: ProductionTransitionProjection,
 ) -> ProductionTransitionFactsProjection {
     transition_facts_from_projection_body!(projection, ProductionTransitionFactsProjection)
+}
+
+/// The EnterView component of the source-linked fact constructor, isolated so
+/// its certificate-identity cases can be discharged independently of the
+/// remaining transition fields.
+pub closed spec fn production_enter_view_exact_fact(
+    projection: ProductionTransitionProjection,
+) -> bool {
+    production_enter_view_exact_body!(projection)
+}
+
+/// The full source-linked constructor projects the isolated exact EnterView
+/// fact. Case splitting keeps this definitional bridge within the normal root
+/// verifier budget without weakening either side of the equality.
+pub proof fn production_enter_view_fact_projection_is_exact(
+    projection: ProductionTransitionProjection,
+)
+    ensures
+        production_facts_from_projection(projection).enter_view_exact
+            == production_enter_view_exact_fact(projection),
+{
+    let enter_view = projection.enter_view;
+    let local = enter_view.local_lock_before;
+    let incoming = enter_view.pending_record_timeout.highest_prepare;
+    if !enter_view.active {
+        reveal(production_facts_from_projection);
+        reveal(production_enter_view_exact_fact);
+    } else if !local.present {
+        if !incoming.present {
+            reveal(production_facts_from_projection);
+            reveal(production_enter_view_exact_fact);
+        } else {
+            reveal(production_facts_from_projection);
+            reveal(production_enter_view_exact_fact);
+        }
+    } else if !incoming.present {
+        reveal(production_facts_from_projection);
+        reveal(production_enter_view_exact_fact);
+    } else if incoming.view <= local.view {
+        reveal(production_facts_from_projection);
+        reveal(production_enter_view_exact_fact);
+    } else {
+        reveal(production_facts_from_projection);
+        reveal(production_enter_view_exact_fact);
+    }
+}
+
+/// Equality of invariant, fence, and action-classification facts.
+pub open spec fn production_classification_facts_equal(
+    left: ProductionTransitionFactsProjection,
+    right: ProductionTransitionFactsProjection,
+) -> bool {
+    left.before_invariant == right.before_invariant
+        && left.after_invariant == right.after_invariant
+        && left.context_unchanged == right.context_unchanged
+        && left.whole_state_unchanged == right.whole_state_unchanged
+        && left.tag_matches == right.tag_matches
+        && left.busy_fence_open == right.busy_fence_open
+        && left.event_kind == right.event_kind
+        && left.action_kind == right.action_kind
+        && left.wal_record_kind == right.wal_record_kind
+        && left.signed_message_kind == right.signed_message_kind
+        && left.replay_effect_kind == right.replay_effect_kind
+        && left.validator_count == right.validator_count
+}
+
+/// Equality of volatile, durable-delta, capability, and effect facts.
+pub open spec fn production_delta_facts_equal(
+    left: ProductionTransitionFactsProjection,
+    right: ProductionTransitionFactsProjection,
+) -> bool {
+    left.volatile_before == right.volatile_before
+        && left.volatile_after == right.volatile_after
+        && left.durable_unchanged == right.durable_unchanged
+        && left.pending_unchanged == right.pending_unchanged
+        && left.generation_unchanged == right.generation_unchanged
+        && left.application_unchanged == right.application_unchanged
+        && left.begin_persist_exact == right.begin_persist_exact
+        && left.acknowledge_persist_exact == right.acknowledge_persist_exact
+        && left.application_transition_exact == right.application_transition_exact
+        && left.acknowledgement_continuation == right.acknowledgement_continuation
+        && left.effects == right.effects
+}
+
+/// Field equality for every production transition fact except the separately
+/// factored EnterView certificate relation.
+pub open spec fn production_non_enter_view_facts_equal(
+    left: ProductionTransitionFactsProjection,
+    right: ProductionTransitionFactsProjection,
+) -> bool {
+    production_classification_facts_equal(left, right)
+        && production_delta_facts_equal(left, right)
+}
+
+/// Equality of the factored EnterView field plus all remaining fields is
+/// extensional equality of the complete production fact projection.
+pub proof fn production_transition_fact_extensionality(
+    left: ProductionTransitionFactsProjection,
+    right: ProductionTransitionFactsProjection,
+)
+    requires
+        left.enter_view_exact == right.enter_view_exact,
+        production_non_enter_view_facts_equal(left, right),
+    ensures
+        left == right,
+{
+    reveal(production_non_enter_view_facts_equal);
+    reveal(production_classification_facts_equal);
+    reveal(production_delta_facts_equal);
+}
+
+/// Executable projection of invariant, fence, and classification facts from
+/// the exact shared constructor.
+pub fn verified_classification_facts_from_projection(
+    projection: ProductionTransitionProjection,
+) -> (facts: ProductionTransitionFactsProjection)
+    ensures
+        production_classification_facts_equal(
+            facts,
+            production_facts_from_projection(projection),
+        ),
+{
+    let facts = transition_facts_from_projection_body!(
+        projection,
+        ProductionTransitionFactsProjection
+    );
+    proof {
+        reveal(production_classification_facts_equal);
+        reveal(production_facts_from_projection);
+    }
+    facts
+}
+
+/// Executable projection of volatile, durable-delta, capability, and effect
+/// facts from the exact shared constructor.
+pub fn verified_delta_facts_from_projection(
+    projection: ProductionTransitionProjection,
+) -> (facts: ProductionTransitionFactsProjection)
+    ensures
+        production_delta_facts_equal(
+            facts,
+            production_facts_from_projection(projection),
+        ),
+{
+    let facts = transition_facts_from_projection_body!(
+        projection,
+        ProductionTransitionFactsProjection
+    );
+    proof {
+        reveal(production_delta_facts_equal);
+        reveal(production_facts_from_projection);
+    }
+    facts
+}
+
+/// Exact EnterView fact when the transition is inactive.
+pub fn verified_inactive_enter_view_fact(
+    projection: ProductionTransitionProjection,
+) -> (enter_view_exact: bool)
+    requires
+        !projection.enter_view.active,
+    ensures
+        enter_view_exact == production_enter_view_exact_fact(projection),
+{
+    let enter_view_exact = production_enter_view_exact_body!(projection);
+    proof {
+        reveal(production_enter_view_exact_fact);
+    }
+    enter_view_exact
+}
+
+/// Exact active EnterView fact when neither a local nor incoming lock exists.
+pub fn verified_empty_enter_view_lock_fact(
+    projection: ProductionTransitionProjection,
+) -> (enter_view_exact: bool)
+    requires
+        projection.enter_view.active,
+        !projection.enter_view.local_lock_before.present,
+        !projection.enter_view.pending_record_timeout.highest_prepare.present,
+    ensures
+        enter_view_exact == production_enter_view_exact_fact(projection),
+{
+    let enter_view_exact = production_enter_view_exact_body!(projection);
+    proof {
+        reveal(production_enter_view_exact_fact);
+    }
+    enter_view_exact
+}
+
+/// Exact active EnterView fact when only the incoming highest `PrepareQC`
+/// exists.
+pub fn verified_incoming_only_enter_view_lock_fact(
+    projection: ProductionTransitionProjection,
+) -> (enter_view_exact: bool)
+    requires
+        projection.enter_view.active,
+        !projection.enter_view.local_lock_before.present,
+        projection.enter_view.pending_record_timeout.highest_prepare.present,
+    ensures
+        enter_view_exact == production_enter_view_exact_fact(projection),
+{
+    let enter_view_exact = production_enter_view_exact_body!(projection);
+    proof {
+        reveal(production_enter_view_exact_fact);
+    }
+    enter_view_exact
+}
+
+/// Exact active EnterView fact when only the pre-transition local lock exists.
+pub fn verified_local_only_enter_view_lock_fact(
+    projection: ProductionTransitionProjection,
+) -> (enter_view_exact: bool)
+    requires
+        projection.enter_view.active,
+        projection.enter_view.local_lock_before.present,
+        !projection.enter_view.pending_record_timeout.highest_prepare.present,
+    ensures
+        enter_view_exact == production_enter_view_exact_fact(projection),
+{
+    let enter_view_exact = production_enter_view_exact_body!(projection);
+    proof {
+        reveal(production_enter_view_exact_fact);
+    }
+    enter_view_exact
+}
+
+/// Exact active EnterView fact when the local lock is at least as high as the
+/// incoming highest `PrepareQC`.
+pub fn verified_local_max_enter_view_lock_fact(
+    projection: ProductionTransitionProjection,
+) -> (enter_view_exact: bool)
+    requires
+        projection.enter_view.active,
+        projection.enter_view.local_lock_before.present,
+        projection.enter_view.pending_record_timeout.highest_prepare.present,
+        projection.enter_view.pending_record_timeout.highest_prepare.view
+            <= projection.enter_view.local_lock_before.view,
+    ensures
+        enter_view_exact == production_enter_view_exact_fact(projection),
+{
+    let enter_view_exact = production_enter_view_exact_body!(projection);
+    proof {
+        reveal(production_enter_view_exact_fact);
+    }
+    enter_view_exact
+}
+
+/// Exact active EnterView fact when the incoming highest `PrepareQC` is
+/// strictly higher than the local lock.
+pub fn verified_incoming_max_enter_view_lock_fact(
+    projection: ProductionTransitionProjection,
+) -> (enter_view_exact: bool)
+    requires
+        projection.enter_view.active,
+        projection.enter_view.local_lock_before.present,
+        projection.enter_view.pending_record_timeout.highest_prepare.present,
+        projection.enter_view.pending_record_timeout.highest_prepare.view
+            > projection.enter_view.local_lock_before.view,
+    ensures
+        enter_view_exact == production_enter_view_exact_fact(projection),
+{
+    let enter_view_exact = production_enter_view_exact_body!(projection);
+    proof {
+        reveal(production_enter_view_exact_fact);
+    }
+    enter_view_exact
+}
+
+/// Executable projection of only the exact EnterView fact from the same shared
+/// constructor. The selected-certificate cases are discharged separately from
+/// the remaining transition structure.
+pub fn verified_enter_view_fact_from_projection(
+    projection: ProductionTransitionProjection,
+) -> (enter_view_exact: bool)
+    ensures
+        enter_view_exact == production_enter_view_exact_fact(projection),
+{
+    let enter_view = projection.enter_view;
+    let local = enter_view.local_lock_before;
+    let incoming = enter_view.pending_record_timeout.highest_prepare;
+    if !enter_view.active {
+        verified_inactive_enter_view_fact(projection)
+    } else if !local.present {
+        if incoming.present {
+            verified_incoming_only_enter_view_lock_fact(projection)
+        } else {
+            verified_empty_enter_view_lock_fact(projection)
+        }
+    } else if !incoming.present {
+        verified_local_only_enter_view_lock_fact(projection)
+    } else if incoming.view <= local.view {
+        verified_local_max_enter_view_lock_fact(projection)
+    } else {
+        verified_incoming_max_enter_view_lock_fact(projection)
+    }
 }
 
 /// Executable fact derivation used to prove that action and authorization
@@ -2864,7 +3269,47 @@ pub fn verified_facts_from_projection(
     ensures
         facts == production_facts_from_projection(projection),
 {
-    transition_facts_from_projection_body!(projection, ProductionTransitionFactsProjection)
+    let classification_facts = verified_classification_facts_from_projection(projection);
+    let delta_facts = verified_delta_facts_from_projection(projection);
+    let enter_view_exact = verified_enter_view_fact_from_projection(projection);
+    let facts = ProductionTransitionFactsProjection {
+        before_invariant: classification_facts.before_invariant,
+        after_invariant: classification_facts.after_invariant,
+        context_unchanged: classification_facts.context_unchanged,
+        whole_state_unchanged: classification_facts.whole_state_unchanged,
+        tag_matches: classification_facts.tag_matches,
+        busy_fence_open: classification_facts.busy_fence_open,
+        event_kind: classification_facts.event_kind,
+        action_kind: classification_facts.action_kind,
+        wal_record_kind: classification_facts.wal_record_kind,
+        signed_message_kind: classification_facts.signed_message_kind,
+        replay_effect_kind: classification_facts.replay_effect_kind,
+        validator_count: classification_facts.validator_count,
+        volatile_before: delta_facts.volatile_before,
+        volatile_after: delta_facts.volatile_after,
+        durable_unchanged: delta_facts.durable_unchanged,
+        pending_unchanged: delta_facts.pending_unchanged,
+        generation_unchanged: delta_facts.generation_unchanged,
+        application_unchanged: delta_facts.application_unchanged,
+        begin_persist_exact: delta_facts.begin_persist_exact,
+        acknowledge_persist_exact: delta_facts.acknowledge_persist_exact,
+        application_transition_exact: delta_facts.application_transition_exact,
+        acknowledgement_continuation: delta_facts.acknowledgement_continuation,
+        enter_view_exact,
+        effects: delta_facts.effects,
+    };
+    proof {
+        let expected = production_facts_from_projection(projection);
+        production_enter_view_fact_projection_is_exact(projection);
+        assert(enter_view_exact == expected.enter_view_exact);
+        assert(production_non_enter_view_facts_equal(facts, expected)) by {
+            reveal(production_non_enter_view_facts_equal);
+            reveal(production_classification_facts_equal);
+            reveal(production_delta_facts_equal);
+        }
+        production_transition_fact_extensionality(facts, expected);
+    }
+    facts
 }
 
 /// Names of the TLA+ `SumeragiV2Core` actions represented at the reducer's
@@ -3308,20 +3753,13 @@ pub open spec fn production_transition_branch_relation(
 pub closed spec fn production_transition_action_relation(
     facts: ProductionTransitionFactsProjection,
 ) -> bool {
-    facts.before_invariant
-        && facts.after_invariant
-        && facts.context_unchanged
-        && production_volatile_summary_well_formed(
-            facts.volatile_before,
-            facts.validator_count,
-        )
-        && production_volatile_summary_well_formed(
-            facts.volatile_after,
-            facts.validator_count,
-        )
-        && production_named_action_relation(facts)
-        && production_effect_trace_relation(facts.effects, facts.event_kind)
-        && production_transition_branch_relation(facts)
+    production_transition_gate_body!(
+        facts,
+        production_volatile_summary_well_formed,
+        production_named_action_relation,
+        production_effect_trace_relation,
+        production_transition_branch_relation,
+    )
 }
 
 /// Every accepted production action has an explicit TLA+ macro-step name and
@@ -3750,6 +4188,43 @@ pub closed spec fn production_kernel_relation(
     production_transition_action_relation(production_facts_from_projection(projection))
 }
 
+/// An accepted active persisted-TC transition selects the maximum of the
+/// pre-transition lock and the TC's highest `PrepareQC`, carries that exact
+/// durable lock in `EnterView`, and emits one immediately following recovery
+/// fetch exactly when the selected lock is present.
+///
+/// This is a serialized transition theorem only. It intentionally makes no
+/// claim that asynchronous transport or executor work is eventually serviced.
+pub proof fn accepted_core_enter_view_projection_selects_post_install_lock(
+    projection: ProductionTransitionProjection,
+)
+    requires
+        production_kernel_relation(projection),
+        projection.enter_view.active,
+    ensures
+        production_enter_view_projection_relation(projection.enter_view),
+        certificate_identity_equal_body!(
+            projection.enter_view.durable_lock_after,
+            production_enter_view_selected_lock(projection.enter_view)
+        ),
+        certificate_identity_equal_body!(
+            projection.enter_view.effect_protected_lock,
+            projection.enter_view.durable_lock_after
+        ),
+        projection.enter_view.durable_lock_after.present
+            <==> production_enter_view_has_exact_following_fetch(projection.enter_view),
+        !projection.enter_view.durable_lock_after.present
+            ==> projection.enter_view.fetch_count == 0
+                && !projection.enter_view.following_fetch_lock.present,
+{
+    reveal(production_kernel_relation);
+    reveal(production_transition_action_relation);
+    reveal(production_facts_from_projection);
+    reveal(production_enter_view_projection_relation);
+    reveal(production_enter_view_selected_lock);
+    reveal(production_enter_view_has_exact_following_fetch);
+}
+
 /// Exact executable kernel called conceptually by `refinement::accepts`:
 /// derive facts from concrete primitives first, then evaluate the established
 /// transition gate.  No authorization or action-exactness boolean is an input.
@@ -3825,6 +4300,9 @@ pub proof fn accepted_production_transition_refines_action(
             facts.validator_count,
         ),
         production_named_action_relation(facts),
+        facts.enter_view_exact,
+        production_effect_trace_relation(facts.effects, facts.event_kind),
+        production_transition_branch_relation(facts),
         (!facts.tag_matches || !facts.busy_fence_open)
             ==> facts.whole_state_unchanged,
         facts.effects.len <= 8,

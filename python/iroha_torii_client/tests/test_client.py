@@ -3394,6 +3394,69 @@ def test_get_sumeragi_status_parses_authoritative_v2_snapshot() -> None:
     assert settlement["swap_metadata"]["liquidity_profile"]["profile"] == "Tier1"
 
 
+def test_get_sumeragi_status_accepts_local_control_pending_liveness_blocker() -> None:
+    payload = _sumeragi_v2_status_payload()
+    payload["liveness"]["blocker"] = {
+        "blocker": "local_control_pending",
+        "details": None,
+    }
+
+    status = _get_sumeragi_status(payload)
+
+    assert status.liveness.blocker == "local_control_pending"
+
+
+def test_get_sumeragi_status_accepts_unsafe_proposal_ignore_reason() -> None:
+    payload = _sumeragi_v2_status_payload()
+    payload["liveness"]["ignore_counts"] = [
+        {
+            "reason": {"reason": "unsafe_proposal", "details": None},
+            "count": 3,
+        }
+    ]
+
+    status = _get_sumeragi_status(payload)
+
+    assert [(entry.reason, entry.count) for entry in status.liveness.ignore_counts] == [
+        ("unsafe_proposal", 3)
+    ]
+
+
+def test_get_sumeragi_status_accepts_all_twelve_ignore_reasons_at_the_bound() -> None:
+    reasons = [
+        "wrong_height",
+        "wrong_view",
+        "stale_generation",
+        "busy",
+        "duplicate",
+        "no_matching_work",
+        "observer",
+        "view_closed",
+        "already_decided",
+        "recovery_pending",
+        "irrelevant_view",
+        "unsafe_proposal",
+    ]
+    payload = _sumeragi_v2_status_payload()
+    payload["liveness"]["ignore_counts"] = [
+        {
+            "reason": {"reason": reason, "details": None},
+            "count": index,
+        }
+        for index, reason in enumerate(reasons, start=1)
+    ]
+
+    status = _get_sumeragi_status(payload)
+
+    assert [entry.reason for entry in status.liveness.ignore_counts] == reasons
+
+    payload["liveness"]["ignore_counts"].append(
+        copy.deepcopy(payload["liveness"]["ignore_counts"][-1])
+    )
+    with pytest.raises(RuntimeError, match="ignore_counts exceeds its protocol item bound"):
+        _get_sumeragi_status(payload)
+
+
 def test_get_sumeragi_status_accepts_all_nine_liveness_queue_kinds() -> None:
     payload = _sumeragi_v2_status_payload()
     queue_template = payload["liveness"]["queues"][0]

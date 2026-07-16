@@ -78,9 +78,24 @@ proofs, active unshield and recursive verifier windows, branch conflicts,
 value conservation, and operation uniqueness before crediting the exact
 scaled public amount.
 
+## Operation identity and replay scope
+
+Every Kagemusha V2 operation id uses a global namespace across authorities and operation kinds.
+The operation replay marker is derived from the operation id alone: another
+authority, or a different top-up or redemption request, must not claim an id
+that has already committed. This conflict is checked before replay markers or
+ledger state are mutated.
+
+The nonce, payload-digest, and exact-request markers remain authority-scoped.
+Reusing one of those values under the same signing authority conflicts, but an
+unrelated authority cannot have its nonce or payload namespace poisoned by
+another account. An exact retry is idempotent only when its authority, typed
+request, route, and committed anchor or redemption receipt all match; otherwise
+it fails closed without partial state.
+
 ## Artifacts and native bridge
 
-Bridge ABI 19 exposes one Kagemusha capability record. It must report manifest
+Bridge ABI 20 exposes one Kagemusha capability record. It must report manifest
 schema `kagemusha.offline.recursive_spend.artifact_manifest.v3`, backend
 `halo2/ipa-pasta-cycle-v1`, the fixed transition/state circuit identifiers,
 and an exact proof-backend availability flag.
@@ -107,7 +122,7 @@ The complete first-release route set is:
 - `POST /v1/offline/redeem`
 - `GET /v1/offline/operations/{operation_id}`
 
-Readiness is a closed snapshot-bound object. It carries bridge ABI 19, maximum
+Readiness is a closed snapshot-bound object. It carries bridge ABI 20, maximum
 hop count, canonical asset and scale, evaluated block height/hash, active
 transfer, top-up-shield, unshield, recursive-transition, and recursive-state
 verifier records, proof availability, recursive-lineage support, readiness,

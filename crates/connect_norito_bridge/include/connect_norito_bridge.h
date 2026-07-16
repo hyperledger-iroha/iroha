@@ -232,12 +232,12 @@ int32_t connect_norito_kagemusha_recursive_spend_artifact_set_uninstall_v3(
     const uint8_t* expected_manifest_sha256_ptr,
     unsigned long expected_manifest_sha256_len);
 
-// ABI20 uses a distinct exact ten-artifact KRV4 inventory. Canonical order is
-// Eq then Ep and, within each parity: ParamsIPA, raw canonical CircuitParams,
-// proving key, verifying key, and BootstrapV4. Each CircuitParams stream is an
-// independent framed role authenticated by the signed manifest. These
-// entrypoints never accept or consume ABI19/V3 sessions. Begin/finalize authenticate one
-// framed artifact; install consumes all ten finalized handles atomically
+// ABI20 uses a distinct exact eight-artifact KRV4 inventory. Canonical order is
+// Eq then Ep and, within each parity: ParamsIPA, proving key, verifying key,
+// and BootstrapV4. Circuit parameters are authenticated inline in each signed
+// manifest profile. These entrypoints never accept or consume ABI19/V3
+// sessions. Begin/finalize authenticate one framed artifact; install consumes
+// all eight finalized handles atomically
 // after authenticating the release policy, signed attestation, device evidence,
 // and crypto review.
 // Caller handle order is ignored; native retains the canonical role order.

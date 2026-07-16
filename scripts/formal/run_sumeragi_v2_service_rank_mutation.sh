@@ -50,8 +50,9 @@ set +e
 old_status=$?
 set -e
 
-[[ $old_status -ne 0 ]] || {
-  echo "old value-rank mutation unexpectedly passed" >&2
+[[ $old_status -eq 13 ]] || {
+  echo "old value-rank mutation did not fail with TLC status 13" >&2
+  cat "$run_dir/old.log" >&2
   exit 1
 }
 for marker in \
@@ -84,6 +85,140 @@ echo "[tlc] exact queued-envelope coalescing closes that lasso"
 set +e
 (
   cd "$FORMAL_DIR"
+  "${common[@]}" -metadir "$run_dir/deferred-old" \
+    -config service_rank_deferred_replacement_bug.cfg \
+    SumeragiV2ServiceRankMutation.tla
+) >"$run_dir/deferred-old.log" 2>&1
+deferred_old_status=$?
+set -e
+
+[[ $deferred_old_status -eq 13 ]] || {
+  echo "old deferred-owner replacement mutation did not fail with TLC status 13" >&2
+  cat "$run_dir/deferred-old.log" >&2
+  exit 1
+}
+for marker in \
+  "TLC2 Version 2.19" \
+  "Temporal properties were violated." \
+  "Back to state 3"; do
+  grep -Fq "$marker" "$run_dir/deferred-old.log" || {
+    echo "old deferred-owner replacement mutation missed expected marker: $marker" >&2
+    cat "$run_dir/deferred-old.log" >&2
+    exit 1
+  }
+done
+
+(
+  cd "$FORMAL_DIR"
+  "${common[@]}" -metadir "$run_dir/deferred-coalesced" \
+    -config service_rank_deferred_coalesced.cfg \
+    SumeragiV2ServiceRankMutation.tla
+) >"$run_dir/deferred-coalesced.log" 2>&1
+grep -Fq "Model checking completed. No error has been found." \
+  "$run_dir/deferred-coalesced.log" || {
+  cat "$run_dir/deferred-coalesced.log" >&2
+  exit 1
+}
+
+echo "[tlc] queue-only coalescing exposes the deferred replacement lasso"
+echo "[tlc] scheduler-wide coalescing closes the deferred replacement lasso"
+
+set +e
+(
+  cd "$FORMAL_DIR"
+  "${common[@]}" -metadir "$run_dir/deferred-cursor-old" \
+    -config deferred_cursor_strict_bug.cfg \
+    SumeragiV2DeferredCursorMutation.tla
+) >"$run_dir/deferred-cursor-old.log" 2>&1
+deferred_cursor_old_status=$?
+set -e
+
+[[ $deferred_cursor_old_status -eq 13 ]] || {
+  echo "old strict deferred cursor mutation did not fail with TLC status 13" >&2
+  cat "$run_dir/deferred-cursor-old.log" >&2
+  exit 1
+}
+for marker in \
+  "TLC2 Version 2.19" \
+  "Temporal properties were violated." \
+  "3 distinct states" \
+  "Back to state 1"; do
+  grep -Fq "$marker" "$run_dir/deferred-cursor-old.log" || {
+    echo "old strict deferred cursor mutation missed expected marker: $marker" >&2
+    cat "$run_dir/deferred-cursor-old.log" >&2
+    exit 1
+  }
+done
+
+(
+  cd "$FORMAL_DIR"
+  "${common[@]}" -metadir "$run_dir/deferred-cursor-cyclic" \
+    -config deferred_cursor_cyclic.cfg \
+    SumeragiV2DeferredCursorMutation.tla
+) >"$run_dir/deferred-cursor-cyclic.log" 2>&1
+for marker in \
+  "Model checking completed. No error has been found." \
+  "6 distinct states" \
+  "depth of the complete state graph search is 5"; do
+  grep -Fq "$marker" "$run_dir/deferred-cursor-cyclic.log" || {
+    cat "$run_dir/deferred-cursor-cyclic.log" >&2
+    exit 1
+  }
+done
+
+echo "[tlc] strict deferred class priority has the required replenishment lasso"
+echo "[tlc] the cyclic deferred cursor closes the replenishment lasso"
+
+set +e
+(
+  cd "$FORMAL_DIR"
+  "${common[@]}" -metadir "$run_dir/deferred-busy-cursor-old" \
+    -config deferred_busy_cursor_strict_bug.cfg \
+    SumeragiV2DeferredBusyCursorMutation.tla
+) >"$run_dir/deferred-busy-cursor-old.log" 2>&1
+deferred_busy_cursor_old_status=$?
+set -e
+
+[[ $deferred_busy_cursor_old_status -eq 13 ]] || {
+  echo "old Busy deferred cursor mutation did not fail with TLC status 13" >&2
+  cat "$run_dir/deferred-busy-cursor-old.log" >&2
+  exit 1
+}
+for marker in \
+  "TLC2 Version 2.19" \
+  "Temporal properties were violated." \
+  "2 distinct states" \
+  "busyAttemptParity = TRUE" \
+  "Back to state 1"; do
+  grep -Fq "$marker" "$run_dir/deferred-busy-cursor-old.log" || {
+    echo "old Busy deferred cursor mutation missed expected marker: $marker" >&2
+    cat "$run_dir/deferred-busy-cursor-old.log" >&2
+    exit 1
+  }
+done
+
+(
+  cd "$FORMAL_DIR"
+  "${common[@]}" -metadir "$run_dir/deferred-busy-cursor-cyclic" \
+    -config deferred_busy_cursor_cyclic.cfg \
+    SumeragiV2DeferredBusyCursorMutation.tla
+) >"$run_dir/deferred-busy-cursor-cyclic.log" 2>&1
+for marker in \
+  "Model checking completed. No error has been found." \
+  "5 distinct states" \
+  "depth of the complete state graph search is 5"; do
+  grep -Fq "$marker" "$run_dir/deferred-busy-cursor-cyclic.log" || {
+    cat "$run_dir/deferred-busy-cursor-cyclic.log" >&2
+    exit 1
+  }
+done
+
+echo "[tlc] Busy Completion requeue without cursor advance has a fair lasso"
+echo "[tlc] Busy Completion requeue with cursor advance services Progress"
+
+set +e
+(
+  cd "$FORMAL_DIR"
   "${common[@]}" -metadir "$run_dir/head-only" \
     -config ingress_head_blocking_bug.cfg \
     SumeragiV2IngressMutation.tla
@@ -91,8 +226,9 @@ set +e
 head_only_status=$?
 set -e
 
-[[ $head_only_status -ne 0 ]] || {
-  echo "old head-only ingress mutation unexpectedly passed" >&2
+[[ $head_only_status -eq 13 ]] || {
+  echo "old head-only ingress mutation did not fail with TLC status 13" >&2
+  cat "$run_dir/head-only.log" >&2
   exit 1
 }
 for marker in \
@@ -132,8 +268,9 @@ set +e
 capacity_old_status=$?
 set -e
 
-[[ $capacity_old_status -ne 0 ]] || {
-  echo "old ingress capacity removal mutation unexpectedly passed" >&2
+[[ $capacity_old_status -eq 12 ]] || {
+  echo "old ingress capacity removal mutation did not fail with TLC status 12" >&2
+  cat "$run_dir/capacity-old.log" >&2
   exit 1
 }
 for marker in \
@@ -162,3 +299,95 @@ grep -Fq "Model checking completed. No error has been found." \
 
 echo "[tlc] an overlong lane makes removal violate the old aggregate invariant"
 echo "[tlc] the per-lane capacity bound makes the same removal invariant-safe"
+
+set +e
+(
+  cd "$FORMAL_DIR"
+  "${common[@]}" -metadir "$run_dir/completion-capacity-conflated" \
+    -config completion_capacity_conflated_bug.cfg \
+    SumeragiV2CompletionCapacityMutation.tla
+) >"$run_dir/completion-capacity-conflated.log" 2>&1
+completion_capacity_conflated_status=$?
+set -e
+
+[[ $completion_capacity_conflated_status -eq 13 ]] || {
+  echo "conflated work/completion capacity mutation did not fail with TLC status 13" >&2
+  cat "$run_dir/completion-capacity-conflated.log" >&2
+  exit 1
+}
+for marker in \
+  "TLC2 Version 2.19" \
+  "Temporal properties were violated." \
+  "2 distinct states" \
+  "Back to state 1"; do
+  grep -Fq "$marker" "$run_dir/completion-capacity-conflated.log" || {
+    echo "conflated work/completion capacity mutation missed expected marker: $marker" >&2
+    cat "$run_dir/completion-capacity-conflated.log" >&2
+    exit 1
+  }
+done
+
+(
+  cd "$FORMAL_DIR"
+  "${common[@]}" -metadir "$run_dir/completion-capacity-separated" \
+    -config completion_capacity_separated.cfg \
+    SumeragiV2CompletionCapacityMutation.tla
+) >"$run_dir/completion-capacity-separated.log" 2>&1
+for marker in \
+  "Model checking completed. No error has been found." \
+  "4 distinct states" \
+  "depth of the complete state graph search is 3"; do
+  grep -Fq "$marker" "$run_dir/completion-capacity-separated.log" || {
+    cat "$run_dir/completion-capacity-separated.log" >&2
+    exit 1
+  }
+done
+
+echo "[tlc] conflating pending-work and completion ownership has the required fair Tick lasso"
+echo "[tlc] separate pending-work admission lets the required causal completion execute"
+
+set +e
+(
+  cd "$FORMAL_DIR"
+  "${common[@]}" -metadir "$run_dir/local-admission-producer-first" \
+    -config local_admission_producer_first_bug.cfg \
+    SumeragiV2LocalAdmissionMutation.tla
+) >"$run_dir/local-admission-producer-first.log" 2>&1
+local_admission_producer_first_status=$?
+set -e
+
+[[ $local_admission_producer_first_status -eq 13 ]] || {
+  echo "producer-first local admission mutation did not fail with TLC status 13" >&2
+  cat "$run_dir/local-admission-producer-first.log" >&2
+  exit 1
+}
+for marker in \
+  "TLC2 Version 2.19" \
+  "Temporal properties were violated." \
+  "3 distinct states" \
+  "Back to state 2"; do
+  grep -Fq "$marker" "$run_dir/local-admission-producer-first.log" || {
+    echo "producer-first local admission mutation missed expected marker: $marker" >&2
+    cat "$run_dir/local-admission-producer-first.log" >&2
+    exit 1
+  }
+done
+
+(
+  cd "$FORMAL_DIR"
+  "${common[@]}" -metadir "$run_dir/local-admission-alternating" \
+    -config local_admission_alternating.cfg \
+    SumeragiV2LocalAdmissionMutation.tla
+) >"$run_dir/local-admission-alternating.log" 2>&1
+for marker in \
+  "Model checking completed. No error has been found." \
+  "7 distinct states" \
+  "depth of the complete state graph search is 7"; do
+  grep -Fq "$marker" "$run_dir/local-admission-alternating.log" || {
+    cat "$run_dir/local-admission-alternating.log" >&2
+    exit 1
+  }
+done
+
+echo "[tlc] producer-first local admission has the required three-state fair lasso"
+echo "[tlc] causal debt and the alternating source cursor service the causal owner"

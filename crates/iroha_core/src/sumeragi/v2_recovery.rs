@@ -1397,6 +1397,7 @@ mod tests {
         sync::Arc,
     };
 
+    use iroha_config::parameters::actual::LaneConfig;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
     use iroha_data_model::{
         ChainId,
@@ -1801,6 +1802,12 @@ mod tests {
         entries
     }
 
+    fn primary_lane_blocks_dir(kura: &Kura) -> PathBuf {
+        LaneConfig::default()
+            .primary()
+            .blocks_dir(kura.store_root())
+    }
+
     #[test]
     fn all_hash_only_snapshot_recovers_exact_authenticated_successor() {
         let (kura, state, record, keys) = hash_only_snapshot_boundary(3, true);
@@ -1847,8 +1854,9 @@ mod tests {
             }
             commit_to_state(&state, &block, genesis_context.context());
         }
-        let retained_body_bytes = std::fs::read(kura.store_root().join("blocks/blocks.data"))
-            .expect("read exact retained legacy body journal");
+        let retained_body_path = primary_lane_blocks_dir(kura.as_ref()).join("blocks.data");
+        let retained_body_bytes =
+            std::fs::read(&retained_body_path).expect("read exact retained legacy body journal");
         assert!(!retained_body_bytes.is_empty());
         let record = snapshot_record_for_state(&state, &genesis_context, &keys, 3);
         let payload = AuthenticatedSnapshotBootstrapPayload::for_testing(
@@ -1860,8 +1868,7 @@ mod tests {
         state.set_authenticated_snapshot_v2_bootstrap_for_testing(record.clone());
 
         assert_eq!(
-            std::fs::read(kura.store_root().join("blocks/blocks.data"))
-                .expect("reread retained legacy body journal"),
+            std::fs::read(&retained_body_path).expect("reread retained legacy body journal"),
             retained_body_bytes,
             "typed import publication must preserve every exact retained body byte"
         );
@@ -2103,10 +2110,9 @@ mod tests {
     }
 
     #[test]
-    fn later_signed_lineage_token_mint_is_read_only_until_finalization() {
-        let (kura, mut state, record, keys) = hash_only_snapshot_boundary(2, true);
+    fn later_signed_lineage_without_immutable_first_context_fails_closed_read_only() {
+        let (kura, state, record, keys) = hash_only_snapshot_boundary(2, true);
         complete_first_post_snapshot_height(kura.as_ref(), &state, &record, &keys);
-        state.set_authenticated_snapshot_v2_bootstrap_for_testing(record.clone());
         assert!(
             V2ContextStore::load_from_root_read_only(
                 kura.sumeragi_v2_storage_root(),
@@ -2120,29 +2126,23 @@ mod tests {
         let storage_root = kura.sumeragi_v2_storage_root();
         let tree_before = storage_tree(&storage_root);
 
-        let authorization = authenticate_v2_snapshot_startup(kura.as_ref(), &state, &plan)
-            .expect("signed lineage plus exact first finality authenticates")
-            .expect("snapshot startup mints a finalization authorization");
-        assert_eq!(authorization.mode(), record.context.mode);
+        assert!(matches!(
+            authenticate_v2_snapshot_startup(kura.as_ref(), &state, &plan),
+            Err(V2StartupReplayError::SnapshotBootstrapAuthentication { .. })
+        ));
         assert_eq!(storage_tree(&storage_root), tree_before);
         assert!(
             V2ContextStore::load_from_root_read_only(storage_root, record.context.height)
-                .expect("read context store after token mint")
+                .expect("read context store after failed authentication")
                 .is_none(),
-            "authorization must not publish its context before Kura consumes the token"
+            "failed reauthentication must not publish an immutable first-height context"
         );
     }
 
     #[test]
     fn finalized_later_snapshot_rejects_a_missing_immutable_first_height_context() {
         let (kura, state, record, keys) = hash_only_snapshot_boundary(2, true);
-        let initial_plan =
-            plan_v2_startup_replay(kura.as_ref()).expect("plan initial hash-only snapshot");
-        let authorization = authenticate_v2_snapshot_startup(kura.as_ref(), &state, &initial_plan)
-            .expect("authenticate original snapshot boundary")
-            .expect("imported prefix requires finalization");
-        kura.finalize_authenticated_snapshot_bootstrap(authorization)
-            .expect("consume the exact snapshot finalization authorization");
+        model_successful_snapshot_finalization(kura.as_ref(), &record);
         assert!(
             !kura.provisional_snapshot_bootstrap_pending(),
             "fixture must exercise the post-finalization trust boundary"
@@ -2698,7 +2698,7 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         kura.store_block(dummy_block(&keys[0], 1, None))
             .expect("persist canonical block");
-        let index_path = kura.store_root().join("blocks").join("blocks.index");
+        let index_path = primary_lane_blocks_dir(kura.as_ref()).join("blocks.index");
         let mut index = std::fs::OpenOptions::new()
             .append(true)
             .open(&index_path)

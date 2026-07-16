@@ -10,6 +10,7 @@ import re
 import sys
 from collections.abc import Sequence
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -38,11 +39,16 @@ RELEASE_PROOF_MODULES = (
     "SumeragiV2ChainEpochProofs",
     "SumeragiV2InductiveProofs",
     "SumeragiV2Proofs",
+    "SumeragiV2TimeoutDurability",
+    "SumeragiV2TimeoutSigningInvariant",
+    "SumeragiV2TimeoutViewInvariant",
+    "SumeragiV2TimeoutWireAuthorization",
     "SumeragiV2ChainEpochRefinement",
     "SumeragiV2TemporalLemmas",
     "SumeragiV2LivenessProofs",
     "SumeragiV2ServiceRankLemmas",
     "SumeragiV2AsyncLivenessProofs",
+    "SumeragiTimeoutIngressGuardTest",
 )
 
 REQUIRED_MODEL_MODULES = (
@@ -61,6 +67,10 @@ REQUIRED_MODEL_MODULES = (
     "SumeragiV2Inductive",
     "SumeragiV2InductiveProofs",
     "SumeragiV2Proofs",
+    "SumeragiV2TimeoutDurability",
+    "SumeragiV2TimeoutSigningInvariant",
+    "SumeragiV2TimeoutViewInvariant",
+    "SumeragiV2TimeoutWireAuthorization",
     "SumeragiV2ChainEpoch",
     "SumeragiV2ChainEpochProofs",
     "SumeragiV2ChainEpochRefinement",
@@ -69,6 +79,7 @@ REQUIRED_MODEL_MODULES = (
     "SumeragiV2ServiceRankLemmas",
     "SumeragiV2AsyncNetwork",
     "SumeragiV2AsyncLivenessProofs",
+    "SumeragiTimeoutIngressGuardTest",
 )
 
 REQUIRED_TLC_CONFIGS = (
@@ -178,6 +189,20 @@ ASYNC_LIVENESS_PROPERTY_WRAPPERS = {
 # product, and multi-height progress belongs there only after it grows an
 # indexed family of one-height async instances.
 FIXED_PROOF_OBLIGATION_TARGETS = {
+    "timeout-wire-authorization": (
+        "SumeragiV2TimeoutWireAuthorization",
+        "CoreSpecAtAlwaysStrongTimeoutWireAuthorizationInvariant / "
+        "StrongWireInvariantAuthorizesPendingTimeoutSignature / "
+        "StrongWireInvariantAuthorizesHonestTimeoutEnvelope",
+    ),
+    "historical-tc-lock-commit": (
+        "SumeragiV2Proofs",
+        "HistoricalTcLockedCommitAuthorizationObligation",
+    ),
+    "effective-lock-body-acquisition": (
+        "SumeragiV2AsyncLivenessProofs",
+        "EffectiveLockBodyAcquisitionCompositionObligation",
+    ),
     "async-type-invariant": (
         "SumeragiV2AsyncLivenessProofs",
         "AsyncTypeInvariantObligation",
@@ -189,6 +214,46 @@ FIXED_PROOF_OBLIGATION_TARGETS = {
     "height-liveness": (
         "SumeragiV2ChainEpochRefinement",
         "HeightLivenessObligation",
+    ),
+}
+
+# Temporal composition may be promoted only after its proof dependencies.  The
+# ledger order is intentional as well: reviewers should encounter each
+# prerequisite before the theorem which consumes it.
+PROOF_STATUS_DEPENDENCIES = {
+    "timeout-protection": ("historical-tc-lock-commit",),
+    "async-type-invariant": ("async-runner-scheduler-preservation",),
+    "progress-witness-preservation": (
+        "async-type-invariant",
+        "generation-scoped-vote-delivery",
+    ),
+    "post-gst-deadlock-freedom": ("async-type-invariant",),
+    "protected-service-rank": ("async-type-invariant",),
+    "post-gst-starvation-freedom": (
+        "async-type-invariant",
+        "protected-service-rank",
+    ),
+    "timeout-view-liveness": (
+        "progress-witness-preservation",
+        "post-gst-starvation-freedom",
+    ),
+    "rotating-leader-liveness": (
+        "effective-lock-body-acquisition",
+        "progress-witness-preservation",
+        "post-gst-starvation-freedom",
+        "timeout-view-liveness",
+    ),
+    "application-liveness": (
+        "progress-witness-preservation",
+        "post-gst-starvation-freedom",
+    ),
+    "genesis-height-successor-handoff": (
+        "rotating-leader-liveness",
+        "application-liveness",
+    ),
+    "height-liveness": (
+        "rotating-leader-liveness",
+        "application-liveness",
     ),
 }
 
@@ -212,8 +277,10 @@ ANY_THEOREM_DECLARATION_RE = re.compile(
     r"[A-Za-z_][A-Za-z0-9_]*\s*(?:\([^)=\n]*\))?\s*=="
 )
 TOP_LEVEL_TRUST_RE = re.compile(
-    r"(?mi)^\s*(?:ASSUME(?:S|PTION|PTIONS)?|AXIOM(?:S)?)\b"
+    r"(?mi)^[ \t]*(?P<token>ASSUME(?:S)?|ASSUMPTION(?:S)?|AXIOM(?:S)?)\b"
 )
+THEOREM_PROOF_MARKER_RE = re.compile(r"(?m)^[ \t]*(?:BY|PROOF|OBVIOUS)\b")
+STRUCTURED_PROVE_RE = re.compile(r"(?mi)^[ \t]*PROVE\b")
 OMITTED_RE = re.compile(r"(?i)\bOMITTED\b")
 VERUS_ESCAPE_RE = re.compile(
     r"(?i)(?:\b(?:assume|admit)\s*!?\s*\(|"
@@ -253,6 +320,11 @@ def load_ledger(path: Path = LEDGER_PATH) -> Any:
     return json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=_unique_object)
 
 
+# One validation pass revisits every formal module through several independent
+# fail-closed checks.  Keep the cache larger than the corridor's module count
+# so those checks stay linear without retaining an unbounded number of mutated
+# test fixtures.
+@lru_cache(maxsize=64)
 def strip_tla_comments(
     source: str, *, preserve_string_contents: bool = False
 ) -> str:
@@ -320,10 +392,40 @@ def tla_shortcut_errors(path: Path, source: str) -> list[str]:
     """Find unchecked top-level assumptions, axioms, and omitted proofs."""
 
     stripped = strip_tla_comments(source)
+    structured_assumptions: set[int] = set()
+    for declaration in ANY_THEOREM_DECLARATION_RE.finditer(stripped):
+        body_start = declaration.end()
+        next_declaration = re.compile(
+            r"(?m)^(?:[A-Za-z_][A-Za-z0-9_]*\s*"
+            r"(?:\([^)=\n]*\))?\s*==|[ \t]*(?:LOCAL[ \t]+)?"
+            r"(?:THEOREM|LEMMA|COROLLARY|PROPOSITION)\b|={4,}\s*$)"
+        ).search(stripped, body_start)
+        body_end = (
+            next_declaration.start()
+            if next_declaration is not None
+            else len(stripped)
+        )
+        body = stripped[body_start:body_end]
+        proof = THEOREM_PROOF_MARKER_RE.search(body)
+        if proof is None:
+            continue
+        statement = body[: proof.start()]
+        assumption = re.match(
+            r"(?is)\s*(?P<token>ASSUME)\b",
+            statement,
+        )
+        if assumption is None:
+            continue
+        if STRUCTURED_PROVE_RE.search(statement, assumption.end()) is None:
+            continue
+        structured_assumptions.add(body_start + assumption.start("token"))
+
     errors: list[str] = []
     for match in TOP_LEVEL_TRUST_RE.finditer(stripped):
+        if match.start("token") in structured_assumptions:
+            continue
         line = stripped.count("\n", 0, match.start()) + 1
-        token = match.group(0).strip().split()[0]
+        token = match.group("token")
         errors.append(f"{path}:{line}: unchecked top-level {token} is prohibited")
     for match in OMITTED_RE.finditer(stripped):
         line = stripped.count("\n", 0, match.start()) + 1
@@ -889,6 +991,49 @@ def _proof_obligation_architecture_errors(
     return errors
 
 
+def _proof_status_dependency_errors(obligations: list[Any]) -> list[str]:
+    """Require compositional theorems to follow and wait for prerequisites."""
+
+    errors: list[str] = []
+    by_id: dict[str, dict[str, Any]] = {}
+    positions: dict[str, int] = {}
+    for index, obligation in enumerate(obligations):
+        if not isinstance(obligation, dict):
+            continue
+        obligation_id = obligation.get("id")
+        if not _nonempty_string(obligation_id) or obligation_id in by_id:
+            continue
+        by_id[obligation_id] = obligation
+        positions[obligation_id] = index
+
+    for dependent_id, prerequisite_ids in PROOF_STATUS_DEPENDENCIES.items():
+        dependent = by_id.get(dependent_id)
+        if dependent is None:
+            continue
+        for prerequisite_id in prerequisite_ids:
+            prerequisite = by_id.get(prerequisite_id)
+            if prerequisite is None:
+                errors.append(
+                    f"proof obligation {dependent_id} is missing prerequisite "
+                    f"{prerequisite_id}"
+                )
+                continue
+            if positions[prerequisite_id] >= positions[dependent_id]:
+                errors.append(
+                    f"proof obligation {dependent_id} must appear after prerequisite "
+                    f"{prerequisite_id}"
+                )
+            if (
+                dependent.get("status") == "tlaps_proved"
+                and prerequisite.get("status") != "tlaps_proved"
+            ):
+                errors.append(
+                    f"proof obligation {dependent_id} cannot be tlaps_proved before "
+                    f"prerequisite {prerequisite_id} is tlaps_proved"
+                )
+    return errors
+
+
 def _reachable_oracle_guard_errors(formal_dir: Path) -> list[str]:
     """Reject proof-history oracles from executable Core action bodies."""
 
@@ -1007,6 +1152,32 @@ def _async_proof_architecture_errors(formal_dir: Path) -> list[str]:
             f"{path}: AsyncTypeInvariantObligation must universally quantify initialContext"
         )
 
+    if (formal_dir / "proof_coverage.json").is_file():
+        rank_theorems = (
+            "ScheduledCandidateServiceRankInCarrier",
+            "ProtectedRankExitHasWellFoundedSuccessor",
+            "ProtectedRankProgressSuppliesWellFoundedStep",
+            "ProtectedServiceRankProgressImpliesStarvation",
+        )
+        unowned_rank_name = re.compile(
+            r"(?<!Owned)ServiceRank(?:Carrier|Ordering)(?![A-Za-z0-9_])"
+        )
+        for symbol in rank_theorems:
+            extracted = _top_level_theorem_body(source, symbol)
+            if extracted is None:
+                errors.append(f"{path}: missing owned-service-rank theorem {symbol}")
+                continue
+            body, line = extracted
+            if "OwnedServiceRankCarrier" not in body:
+                errors.append(
+                    f"{path}:{line}: {symbol} must use OwnedServiceRankCarrier"
+                )
+            if unowned_rank_name.search(body):
+                errors.append(
+                    f"{path}:{line}: {symbol} may not widen scheduler-owned rank "
+                    "proofs to ServiceRankCarrier or ServiceRankOrdering"
+                )
+
     vocabulary_path = formal_dir / "SumeragiV2LivenessProofs.tla"
     if vocabulary_path.is_file():
         vocabulary_source = vocabulary_path.read_text(encoding="utf-8")
@@ -1017,6 +1188,11 @@ def _async_proof_architecture_errors(formal_dir: Path) -> list[str]:
             "ResponsiveNodesApply": (
                 r"\A node \in AsyncCurrentResponsiveVoters: NodeHasApplication(node)"
             ),
+            "ResponsiveHonestLeaderViewReached": (
+                r"\E leader \in (AsyncCurrentResponsiveVoters \cap Honest): "
+                r"/\ ~NodeHasDecision(leader) "
+                r"/\ Leader(context, nodeView[leader]) = leader"
+            ),
             "TimeoutViewProgressProperty": (
                 r"specification => \A node \in AsyncCurrentResponsiveVoters, "
                 r"roundView \in Views: (gst /\ nodeView[node] = roundView /\ "
@@ -1024,12 +1200,17 @@ def _async_proof_architecture_errors(formal_dir: Path) -> list[str]:
                 r"NodeHasDecision(node))"
             ),
             "RotatingLeaderProgressProperty": (
-                r"specification => (gst /\ ~ResponsiveNodesDecide) ~> "
-                r"ResponsiveNodesDecide"
+                r"specification => /\ (gst /\ ~ResponsiveNodesDecide) "
+                r"~> (ResponsiveHonestLeaderViewReached \/ "
+                r"ResponsiveNodesDecide) /\ (gst /\ "
+                r"ResponsiveHonestLeaderViewReached /\ "
+                r"~ResponsiveNodesDecide) ~> ResponsiveNodesDecide"
             ),
             "ApplicationLivenessProperty": (
-                r"specification => (gst /\ ResponsiveNodesDecide) ~> "
-                r"ResponsiveNodesApply"
+                r"specification => /\ \A node \in "
+                r"AsyncCurrentResponsiveVoters: (gst /\ "
+                r"NodeHasDecision(node)) ~> NodeHasApplication(node) "
+                r"/\ (gst /\ ResponsiveNodesDecide) ~> ResponsiveNodesApply"
             ),
         }
         if (formal_dir / "proof_coverage.json").is_file():
@@ -1244,9 +1425,36 @@ def _safety_property_source_fidelity_errors(formal_dir: Path) -> list[str]:
         "CertificateUniquenessProperty": (
             "specification => []CertificateUniquenessInvariant"
         ),
+        "PotentialCommitVotes": (
+            '{vote \\in commitIntents: /\\ vote.context = certificateContext '
+            '/\\ vote.view = roundView /\\ vote.phase = "Commit" '
+            "/\\ vote.subject = subject}"
+        ),
+        "PotentialCommitSigners": (
+            "{vote.signer: vote \\in PotentialCommitVotes( "
+            "certificateContext, roundView, subject)}"
+        ),
+        "InstalledTcAuthorizedPotentialCommitIntersection": (
+            "\\E timeoutVote \\in tc.votes, commitVote \\in "
+            "PotentialCommitVotes( tc.context, protectedView, subject): "
+            "/\\ timeoutVote.signer \\in Honest "
+            "/\\ commitVote.signer = timeoutVote.signer "
+            "/\\ timeoutVote.context = tc.context "
+            "/\\ timeoutVote.view = tc.view "
+            "/\\ ~TimeoutVoteStrictlyProtectsCommit(timeoutVote, commitVote) "
+            "/\\ InstalledTcAuthorizesCommitVote(commitVote)"
+        ),
+        "TCProtectsOrInstalledTcAuthorizesPotentialCommit": (
+            "\\A protectedView \\in 0..tc.view, subject \\in Subjects: "
+            "DualQuorum(tc.context.epoch, PotentialCommitSigners(tc.context, "
+            "protectedView, subject)) => "
+            "\\/ TCProtectsViewSubject(tc, protectedView, subject) "
+            "\\/ InstalledTcAuthorizedPotentialCommitIntersection( tc, "
+            "protectedView, subject)"
+        ),
         "TimeoutProtectionProperty": (
             "specification => [](\\A tc \\in formedTCs: "
-            "TCProtectsPotentialCommit(tc))"
+            "TCProtectsOrInstalledTcAuthorizesPotentialCommit(tc))"
         ),
         "AgreementProperty": "specification => []DecisionAgreement",
         "NoConflictingCommitCertificatesProperty": (
@@ -1264,7 +1472,9 @@ def _safety_property_source_fidelity_errors(formal_dir: Path) -> list[str]:
     }
     errors: list[str] = []
     for symbol, exact_body in property_contracts.items():
-        extracted = _top_level_operator_body(source, symbol)
+        extracted = _top_level_operator_body(
+            source, symbol, preserve_string_contents=True
+        )
         if extracted is None:
             errors.append(f"{path}: missing stable safety property {symbol}")
             continue
@@ -1274,6 +1484,86 @@ def _safety_property_source_fidelity_errors(formal_dir: Path) -> list[str]:
             errors.append(
                 f"{path}:{line}: {symbol} must equal only "
                 f"{exact_body!r}; found {normalized!r}"
+            )
+    return errors
+
+
+def _historical_timeout_derivation_errors(formal_dir: Path) -> list[str]:
+    """Keep historical Commit authorization derived, not duplicated."""
+
+    invariant_path = formal_dir / "SumeragiV2Inductive.tla"
+    proof_path = formal_dir / "SumeragiV2InductiveProofs.tla"
+    if not invariant_path.is_file() or not proof_path.is_file():
+        return []
+
+    errors: list[str] = []
+    invariant_source = invariant_path.read_text(encoding="utf-8")
+    for symbol in (
+        "ReducerProvenanceInvariant",
+        "ReducerProvenanceWithoutVoteTransport",
+        "ReducerProvenanceWithoutTimeoutTransport",
+    ):
+        extracted = _top_level_operator_body(invariant_source, symbol)
+        if extracted is None:
+            errors.append(f"{invariant_path}: missing reducer provenance {symbol}")
+            continue
+        body, line = extracted
+        if "HistoricalTcLockedCommitAuthorizationInvariant" in body:
+            errors.append(
+                f"{invariant_path}:{line}: {symbol} may not duplicate the derived "
+                "historical timeout/Commit authorization invariant"
+            )
+
+    proof_source = proof_path.read_text(encoding="utf-8")
+    symbol = "ReducerProvenanceImpliesHistoricalTcLockedCommitAuthorization"
+    extracted = _top_level_theorem_body(proof_source, symbol)
+    if extracted is None:
+        errors.append(f"{proof_path}: missing derived historical authorization theorem")
+        return errors
+    body, line = extracted
+    statement = re.split(
+        r"(?m)^[ \t]*(?:BY|PROOF|OBVIOUS)\b", body, maxsplit=1
+    )[0]
+    normalized = " ".join(statement.split())
+    expected = (
+        "ReducerProvenanceInvariant => "
+        "HistoricalTcLockedCommitAuthorizationInvariant"
+    )
+    if normalized != expected:
+        errors.append(
+            f"{proof_path}:{line}: {symbol} must state only {expected!r}; "
+            f"found {normalized!r}"
+        )
+    return errors
+
+
+def _progress_witness_source_fidelity_errors(formal_dir: Path) -> list[str]:
+    """Require decision recovery owners to match the decided block height."""
+
+    if not (formal_dir / "proof_coverage.json").is_file():
+        return []
+    path = formal_dir / "SumeragiV2LivenessProofs.tla"
+    if not path.is_file():
+        return []
+    source = path.read_text(encoding="utf-8")
+    required = {
+        "DecisionPipelineCandidate": "candidate.height = qc.context.height",
+        "DecisionCompletionWitness": (
+            "request.envelope.height = qc.context.height"
+        ),
+    }
+    errors: list[str] = []
+    for symbol, required_equality in required.items():
+        extracted = _top_level_operator_body(source, symbol)
+        if extracted is None:
+            errors.append(f"{path}: missing source-fidelity operator {symbol}")
+            continue
+        body, line = extracted
+        normalized = " ".join(body.split())
+        if required_equality not in normalized:
+            errors.append(
+                f"{path}:{line}: {symbol} must require exact decision-height "
+                f"ownership via {required_equality!r}"
             )
     return errors
 
@@ -1316,10 +1606,46 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
         ),
         "AsyncBaseInit": "AsyncBaseInitAt(ContextRecord(0, <<>>))",
         "AsyncStepRefinesCore": "AsyncNext => [Next]_vars",
+        "CertifiedServeCanRespond": (
+            '/\\ request.kind = "CertifiedRequest" '
+            "/\\ BodyHeldBy(durableBodies, request.envelope.recipient, "
+            "context, request.envelope.view, request.envelope.subject)"
+        ),
         "NextCommandClass": (
             'CASE commandClass = "Completion" -> "Progress" '
             '[] commandClass = "Progress" -> "Normal" '
             '[] OTHER -> "Completion"'
+        ),
+        "SelectedDeferredClass": (
+            "LET first == asyncNextDeferredClass[node] "
+            "second == NextCommandClass(first) "
+            "third == NextCommandClass(second) "
+            "IN IF DeferredClassNonempty(node, first) THEN first "
+            "ELSE IF DeferredClassNonempty(node, second) THEN second ELSE third"
+        ),
+        "NextDeferredCommand": (
+            "Head(DeferredClassQueue(node, SelectedDeferredClass(node)))"
+        ),
+        "AdvanceNextDeferredClass": (
+            "asyncNextDeferredClass' = [asyncNextDeferredClass EXCEPT "
+            "![node] = NextCommandClass(SelectedDeferredClass(node))]"
+        ),
+        "RemoveNextDeferredCommand": (
+            '/\\ IF SelectedDeferredClass(node) = "Completion" '
+            "THEN /\\ asyncDeferredCompletionQueues' = "
+            "[asyncDeferredCompletionQueues EXCEPT ![node] = Tail(@)] "
+            "/\\ UNCHANGED <<asyncDeferredProgressQueues, "
+            "asyncDeferredNormalQueues>> "
+            'ELSE IF SelectedDeferredClass(node) = "Progress" '
+            "THEN /\\ asyncDeferredProgressQueues' = "
+            "[asyncDeferredProgressQueues EXCEPT ![node] = Tail(@)] "
+            "/\\ UNCHANGED <<asyncDeferredCompletionQueues, "
+            "asyncDeferredNormalQueues>> "
+            "ELSE /\\ asyncDeferredNormalQueues' = "
+            "[asyncDeferredNormalQueues EXCEPT ![node] = Tail(@)] "
+            "/\\ UNCHANGED <<asyncDeferredCompletionQueues, "
+            "asyncDeferredProgressQueues>> "
+            "/\\ AdvanceNextDeferredClass(node)"
         ),
         "SelectedCommandClass": (
             "LET first == asyncNextCommandClass[node] "
@@ -1433,6 +1759,33 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
                 f"found {normalized!r}"
             )
 
+    liveness_path = formal_dir / "SumeragiV2LivenessProofs.tla"
+    if liveness_path.is_file():
+        liveness_source = liveness_path.read_text(encoding="utf-8")
+        extracted = _top_level_operator_body(
+            liveness_source,
+            "DeferredCandidatePosition",
+            preserve_string_contents=True,
+        )
+        expected = (
+            "3 * Cardinality( DeferredClassPrefixIndices(candidate.node, "
+            "candidate)) + CommandClassDistance( "
+            "asyncNextDeferredClass[candidate.node], candidate.class)"
+        )
+        if extracted is None:
+            errors.append(
+                f"{liveness_path}: missing source-fidelity operator "
+                "DeferredCandidatePosition"
+            )
+        else:
+            body, line = extracted
+            normalized = " ".join(body.split())
+            if normalized != expected:
+                errors.append(
+                    f"{liveness_path}:{line}: DeferredCandidatePosition must "
+                    f"equal only {expected!r}; found {normalized!r}"
+                )
+
     required_body_tokens = {
         "ServiceIoWorker": (
             "asyncIoControlAvailable'",
@@ -1453,13 +1806,33 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             "AsyncFaultStep",
         ),
         "AsyncNext": ("AsyncNonCrashStep", "PreGstCrash(node)"),
-        "AsyncSchedulerVars": ("asyncNextCommandClass",),
+        "AsyncSchedulerVars": (
+            "asyncNextCommandClass",
+            "asyncNextDeferredClass",
+        ),
         "AsyncRuntimeInit": (
             "asyncNextCommandClass =",
             '[node \\in ValidatorIds |-> "Completion"]',
         ),
         "AsyncRuntimeScalarTypeInvariant": (
             "asyncNextCommandClass \\in [ValidatorIds -> AsyncCommandClasses]",
+        ),
+        "AsyncDeferredInit": (
+            "asyncNextDeferredClass =",
+            '[node \\in ValidatorIds |-> "Completion"]',
+        ),
+        "AsyncDeferredTopologyTypeInvariant": (
+            "asyncNextDeferredClass \\in",
+            "[ValidatorIds -> AsyncCommandClasses]",
+        ),
+        "DeferredDrainStep": (
+            "NextDeferredCommand(node)",
+            "RemoveNextDeferredCommand(node)",
+            "AdvanceNextDeferredClass(node)",
+            "UNCHANGED <<vars, asyncCommandQueues,",
+            "asyncDeferredCompletionQueues,",
+            "asyncDeferredProgressQueues,",
+            "asyncDeferredNormalQueues,",
         ),
         "AsyncBodyEnvelopeTyped": ("envelope.subject \\in Subjects",),
         "FifoRuntimeStep": (
@@ -1496,8 +1869,15 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
         "HistoricalSelectedIngressItemAt": (
             "HistoricalSelectedIngressLaneIndex(node, index)",
         ),
+        "ItemInScheduledDelivery": (
+            "QueuedCandidates",
+            "DeferredCandidates",
+            "CausalCandidates",
+            "TrackedWorkCandidates",
+            "candidate.item = item",
+        ),
         "IngressItemCanDrain": (
-            "candidate \\in QueuedCandidates",
+            "CandidateScheduled(candidate)",
             "CanEnqueueClass(node, candidate.class)",
         ),
         "DrainableIngressLaneIndices": (
@@ -1533,7 +1913,7 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             "CommitCertificateResponseCandidate(item)",
             "EnqueueCandidate(discoveredCandidate)",
             "MatchingCommitCertificateRequests(item)",
-            "candidate \\in QueuedCandidates",
+            "CandidateScheduled(candidate)",
         ),
         "DrainHistoricalIngressSelected": (
             "HistoricalSelectedIngressLaneIndex(node, index)",
@@ -1545,6 +1925,17 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             "PostGstRunHistoricalServer(node)",
             "PostGstServiceIoWorker(node)",
             "PostGstAdmitHiddenPacket(recipient, source)",
+        ),
+        "VoteOutbox": (
+            "recipient \\in CurrentVoters \\ {request.node}",
+        ),
+        "InstallCommandSuccessors": (
+            "InstallCommitSignRequests(command)",
+            "InstallCommitSignSuccessor(command)",
+            "InstallProposalSuccessor(command)",
+        ),
+        "CommandSuccessors": (
+            'CausalCandidate("Completion", "RequestCertifiedBody", command)',
         ),
     }
     if (formal_dir / "proof_coverage.json").is_file():
@@ -1620,6 +2011,35 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
     core_path = formal_dir / "SumeragiV2Core.tla"
     if core_path.is_file():
         core_source = core_path.read_text(encoding="utf-8")
+        core_reconstruction_tokens = {
+            "BroadcastVotes": (
+                "recipient \\in CurrentVoters \\ {vote.signer}",
+            ),
+            "CompleteVoteSignature": (
+                "receivedVotes' = receivedVotes \\cup "
+                "{VoteAt(request.node, request.vote)}",
+            ),
+            "PersistInstallTC": (
+                "signVotes' = signVotes \\cup "
+                "ActiveLockedCommitSignRequestsAfterInstall(node, tc)",
+            ),
+        }
+        for symbol, tokens in core_reconstruction_tokens.items():
+            extracted = _top_level_operator_body(core_source, symbol)
+            if extracted is None:
+                errors.append(
+                    f"{core_path}: missing source-fidelity operator {symbol}"
+                )
+                continue
+            body, line = extracted
+            normalized = " ".join(body.split())
+            missing = [token for token in tokens if token not in normalized]
+            if missing:
+                errors.append(
+                    f"{core_path}:{line}: {symbol} omits TC vote-pool "
+                    f"reconstruction behavior {missing}"
+                )
+
         extracted = _top_level_operator_body(core_source, "DeliverVote")
         if extracted is None:
             errors.append(f"{core_path}: missing source-fidelity operator DeliverVote")
@@ -1929,6 +2349,7 @@ def _chain_source_fidelity_errors(formal_dir: Path) -> list[str]:
                 "asyncDeferredCompletionQueues",
                 "asyncDeferredProgressQueues",
                 "asyncDeferredNormalQueues",
+                "asyncNextDeferredClass",
                 "asyncDeferredDrainOwed",
                 "asyncCausalQueues",
                 "asyncOutstandingTags",
@@ -1957,40 +2378,72 @@ def _chain_source_fidelity_errors(formal_dir: Path) -> list[str]:
                     f"does not match AsyncSchedulerVars; missing {missing}"
                 )
 
-        liveness_target_async_proof = _top_level_operator_body(
-            raw_source, "LivenessTargetAsyncProof"
+        verification_context = re.search(
+            r"(?m)^CONSTANTS?[ \t]+VerificationContext[ \t]*$", source
         )
-        if liveness_target_async_proof is None:
+        if verification_context is None:
             errors.append(
-                f"{refinement_path}: missing proof-only liveness-target instance"
+                f"{refinement_path}: missing proof-only VerificationContext constant"
+            )
+
+        verification_helpers = {
+            "VerificationCore": "IndexedCore(VerificationContext, component)",
+            "VerificationScheduler": (
+                "IndexedScheduler(VerificationContext, component)"
+            ),
+        }
+        for symbol, expected_body in verification_helpers.items():
+            extracted = _top_level_operator_body(raw_source, symbol)
+            if extracted is None:
+                errors.append(
+                    f"{refinement_path}: missing proof-only {symbol} mapping"
+                )
+                continue
+            helper_body, helper_line = extracted
+            helper_normalized = " ".join(helper_body.split())
+            if helper_normalized != expected_body:
+                errors.append(
+                    f"{refinement_path}:{helper_line}: {symbol} must equal only "
+                    f"{expected_body!r}; found {helper_normalized!r}"
+                )
+
+        verification_async_proof = _top_level_operator_body(
+            raw_source, "VerificationAsyncProof"
+        )
+        if verification_async_proof is None:
+            errors.append(
+                f"{refinement_path}: missing proof-only VerificationAsyncProof instance"
             )
         else:
-            proof_body, proof_line = liveness_target_async_proof
+            proof_body, proof_line = verification_async_proof
             proof_normalized = " ".join(proof_body.split())
             proof_prefix = "INSTANCE SumeragiV2AsyncLivenessProofs WITH"
             network_prefix = "INSTANCE SumeragiV2AsyncNetwork WITH"
             if proof_prefix not in proof_normalized:
                 errors.append(
-                    f"{refinement_path}:{proof_line}: LivenessTargetAsyncProof "
+                    f"{refinement_path}:{proof_line}: VerificationAsyncProof "
                     "must directly instantiate SumeragiV2AsyncLivenessProofs"
                 )
             elif indexed_async_normalized is not None:
                 expected_proof_mapping = indexed_async_normalized.replace(
                     network_prefix, proof_prefix, 1
                 )
-                expected_proof_mapping = expected_proof_mapping.replace(
-                    "IndexedCore(initialContext,",
-                    "IndexedCore(LivenessTargetContext,",
-                ).replace(
-                    "IndexedScheduler(initialContext,",
-                    "IndexedScheduler(LivenessTargetContext,",
+                expected_proof_mapping = re.sub(
+                    r"IndexedCore\(initialContext,\s*",
+                    "VerificationCore(",
+                    expected_proof_mapping,
+                )
+                expected_proof_mapping = re.sub(
+                    r"IndexedScheduler\(initialContext,\s*",
+                    "VerificationScheduler(",
+                    expected_proof_mapping,
                 )
                 if proof_normalized != expected_proof_mapping:
                     errors.append(
                         f"{refinement_path}:{proof_line}: "
-                        "LivenessTargetAsyncProof must use the exact IndexedAsync "
-                        "Core/scheduler tuple substitution at "
-                        "LivenessTargetContext"
+                        "VerificationAsyncProof must use the exact IndexedAsync "
+                        "Core/scheduler tuple substitution through the "
+                        "VerificationCore and VerificationScheduler mappings"
                     )
 
         indexed_shape = _top_level_operator_body(
@@ -2003,7 +2456,7 @@ def _chain_source_fidelity_errors(formal_dir: Path) -> list[str]:
             normalized = " ".join(body.split())
             required = (
                 "Len(indexedAsyncState[initialContext][1]) = 46",
-                "Len(indexedAsyncState[initialContext][2]) = 30",
+                "Len(indexedAsyncState[initialContext][2]) = 31",
             )
             missing = [token for token in required if token not in normalized]
             if missing:
@@ -2021,12 +2474,12 @@ def _chain_source_fidelity_errors(formal_dir: Path) -> list[str]:
             )
         else:
             body, line = joined_non_runner
-            if "UNCHANGED IndexedScheduler(initialContext, 22)" not in " ".join(
+            if "UNCHANGED IndexedScheduler(initialContext, 23)" not in " ".join(
                 body.split()
             ):
                 errors.append(
                     f"{refinement_path}:{line}: indexed non-runner frame must "
-                    "preserve scheduler slot 22 (asyncNodeServiceDeadlines)"
+                    "preserve scheduler slot 23 (asyncNodeServiceDeadlines)"
                 )
     return errors
 
@@ -2223,8 +2676,10 @@ def validate_ledger(
     errors.extend(_reachable_oracle_guard_errors(formal_dir))
     errors.extend(_generalized_context_init_errors(formal_dir))
     errors.extend(_safety_property_source_fidelity_errors(formal_dir))
+    errors.extend(_historical_timeout_derivation_errors(formal_dir))
     errors.extend(_async_spec_shape_errors(formal_dir))
     errors.extend(_async_proof_architecture_errors(formal_dir))
+    errors.extend(_progress_witness_source_fidelity_errors(formal_dir))
     errors.extend(_async_source_fidelity_errors(formal_dir))
     errors.extend(_chain_source_fidelity_errors(formal_dir))
     for cfg_name in REQUIRED_TLC_CONFIGS:
@@ -2249,7 +2704,21 @@ def validate_ledger(
         errors.append("proof ledger obligations must be a non-empty array")
         obligations = []
     errors.extend(_proof_obligation_architecture_errors(obligations, module_sources))
+    errors.extend(_proof_status_dependency_errors(obligations))
     errors.extend(_proofless_release_theorem_errors(obligations, module_sources))
+    specified_unproved = [
+        obligation.get("id", f"obligations[{index}]")
+        if _nonempty_string(obligation.get("id"))
+        else f"obligations[{index}]"
+        for index, obligation in enumerate(obligations)
+        if isinstance(obligation, dict)
+        and obligation.get("status") == "specified_unproved"
+    ]
+    if completion and specified_unproved:
+        errors.append(
+            "machine_checked_completion=true rejects specified_unproved "
+            f"obligations: {specified_unproved}"
+        )
     seen_ids: set[str] = set()
     for index, obligation in enumerate(obligations):
         where = f"obligations[{index}]"
