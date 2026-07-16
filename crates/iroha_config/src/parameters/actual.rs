@@ -442,10 +442,15 @@ impl Root {
     }
 
     /// Apply the bundled Sora Nexus profile (SoraFS + multi-lane defaults).
+    ///
+    /// SoraFS discovery is enabled only when configuration parsing produced a
+    /// complete admission trust policy. The profile never manufactures trust
+    /// roots on behalf of the operator.
     pub fn apply_sora_profile(&mut self) {
         self.nexus.enabled = true;
         self.torii.sorafs_storage.enabled = true;
-        self.torii.sorafs_discovery.discovery_enabled = true;
+        self.torii.sorafs_discovery.discovery_enabled =
+            self.torii.sorafs_discovery.admission.is_some();
         if self.tiered_state.da_store_root.is_none() {
             self.tiered_state.da_store_root =
                 Some(PathBuf::from(defaults::tiered_state::DEFAULT_DA_STORE_ROOT));
@@ -837,6 +842,69 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
     pub(super) fn minimal_root() -> Root {
         let table: Table = toml::from_str(MINIMAL_CONFIG).expect("parse minimal config table");
         Root::from_toml_source(TomlSource::inline(table)).expect("load minimal config")
+    }
+
+    fn minimal_root_with_sorafs_admission() -> Root {
+        let config = format!(
+            r#"{MINIMAL_CONFIG}
+
+[sorafs.discovery.admission]
+envelopes_dir = "admission"
+trusted_council_keys = ["ed01206355691C178A8FF91007A7478AFB955EF7352C63E7B25703984CF78B26E21A56"]
+signature_threshold = 1
+"#
+        );
+        let table: Table = toml::from_str(&config).expect("parse config with SoraFS admission");
+        Root::from_toml_source(TomlSource::inline(table))
+            .expect("load config with valid SoraFS admission")
+    }
+
+    #[test]
+    fn apply_sora_profile_leaves_discovery_disabled_without_admission() {
+        let mut root = minimal_root();
+
+        assert!(root.torii.sorafs_discovery.admission.is_none());
+        assert!(!root.torii.sorafs_discovery.discovery_enabled);
+
+        root.apply_sora_profile();
+
+        assert!(root.nexus.enabled, "Sora profile must still enable Nexus");
+        assert!(
+            root.torii.sorafs_storage.enabled,
+            "Sora profile must still enable SoraFS storage"
+        );
+        assert!(
+            !root.torii.sorafs_discovery.discovery_enabled,
+            "discovery must remain fail-closed without an admission trust policy"
+        );
+    }
+
+    #[test]
+    fn apply_sora_profile_enables_discovery_with_parsed_admission() {
+        let mut root = minimal_root_with_sorafs_admission();
+        let trusted_council_keys = root
+            .torii
+            .sorafs_discovery
+            .admission
+            .as_ref()
+            .expect("parsed admission policy")
+            .trusted_council_keys
+            .clone();
+
+        assert!(!root.torii.sorafs_discovery.discovery_enabled);
+
+        root.apply_sora_profile();
+
+        let admission = root
+            .torii
+            .sorafs_discovery
+            .admission
+            .as_ref()
+            .expect("profile must preserve parsed admission policy");
+        assert!(root.torii.sorafs_discovery.discovery_enabled);
+        assert_eq!(admission.trusted_council_keys, trusted_council_keys);
+        assert_eq!(admission.signature_threshold.get(), 1);
+        assert_eq!(admission.envelopes_dir, PathBuf::from("admission"));
     }
 
     #[test]

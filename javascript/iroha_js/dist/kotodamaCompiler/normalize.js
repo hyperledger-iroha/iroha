@@ -788,6 +788,57 @@ function artifactHashHex(artifactBytes) {
   return toHex(digest);
 }
 
+/**
+ * Verify a detached compiler artifact and manifest at a deployment boundary.
+ *
+ * This intentionally reuses the same strict V1 checks as the compiler-client
+ * response normalizer: the complete domain-separated code identity, canonical
+ * manifest fields, authenticated ABI header, CNTR frame, literal section, and
+ * word-aligned executable stream must all agree before upload instructions are
+ * built.
+ */
+export function verifyCompiledContractArtifact(
+  artifactBytes,
+  manifest,
+  codeHash,
+  abiHash,
+) {
+  const normalizedArtifact = normalizeArtifactBytes(artifactBytes);
+  const normalizedManifest = snapshotRecord(
+    manifest,
+    "Kotodama deployment manifest",
+  );
+  const codeHashHex = normalizeHashHex(codeHash, "codeHash");
+  const abiHashHex = normalizeHashHex(abiHash, "abiHash");
+  if (artifactHashHex(normalizedArtifact) !== codeHashHex) {
+    throw new Error("Kotodama compiler artifact bytes do not match codeHash");
+  }
+  if (
+    normalizeHashHex(normalizedManifest.code_hash, "manifest code_hash") !==
+    codeHashHex
+  ) {
+    throw new Error("Kotodama compiler manifest code_hash does not match the artifact");
+  }
+  if (
+    normalizeHashHex(normalizedManifest.abi_hash, "manifest abi_hash") !==
+    abiHashHex
+  ) {
+    throw new Error("Kotodama compiler manifest abi_hash does not match abiHash");
+  }
+  validateCompilerManifest(normalizedManifest);
+  validateCompiledArtifactV1(
+    normalizedArtifact,
+    normalizedManifest,
+    abiHashHex,
+  );
+  return Object.freeze({
+    artifactBytes: normalizedArtifact,
+    manifest: normalizedManifest,
+    codeHashHex,
+    abiHashHex,
+  });
+}
+
 function requireCanonicalBase64(value, label) {
   requireString(value, label);
   if (

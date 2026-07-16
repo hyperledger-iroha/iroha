@@ -190,6 +190,7 @@ export {
   noritoDecodeInstruction,
   noritoEncodePrivacyProofEnvelope,
   noritoDecodePrivacyProofEnvelope,
+  noritoEncodeContractManifestSignaturePayload,
   noritoEncodeTransactionPayloadBatch,
   noritoEncodeMultisigProposeRequest,
   noritoEncodeMultisigContractCallProposeRequest,
@@ -303,10 +304,24 @@ export {
   browserSignedTransactionHashHex,
   browserTransactionCodec,
   browserTransactionPayloadHashHex,
+  buildBrowserInstructionTransactionPayload,
   buildBrowserTransferPayload,
+  finalizeBrowserInstructionTransaction,
   finalizeBrowserSignedTransaction,
+  validateBrowserInstructionTransactionSignable,
   validateBrowserTransferSignable,
 } from "./transactionCodec.js";
+export {
+  SMART_CONTRACT_CODE_CHUNK_BYTES,
+  deploySmartContractBrowser,
+  deriveContractAddress,
+  prepareBrowserContractArtifact,
+} from "./smartContractDeployment.js";
+export {
+  IVM_ARTIFACT_ADMISSION_MAX_INPUT_BYTES,
+  instantiateIvmArtifactAdmissionWasm,
+  verifyIvmContractArtifactAdmission,
+} from "./ivmArtifactAdmissionWasm.js";
 export {
   buildBurnAssetInstruction,
   buildMintAssetInstruction,
@@ -356,6 +371,10 @@ export {
   buildRegisterKaigiRelayInstruction,
   buildRegisterSmartContractCodeInstruction,
   buildRegisterSmartContractBytesInstruction,
+  buildUploadSmartContractCodeChunkInstruction,
+  buildFinalizeSmartContractCodeUploadInstruction,
+  buildCancelSmartContractCodeUploadInstruction,
+  buildCommitContractDeploymentInstruction,
   buildRemoveSmartContractBytesInstruction,
   buildProposeDeployContractInstruction,
   buildProposeSccpRouteGovernanceInstruction,
