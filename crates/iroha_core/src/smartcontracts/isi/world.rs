@@ -40,6 +40,7 @@ pub mod isi {
         },
         asset_definition::{CanModifyAssetDefinitionMetadata, CanUnregisterAssetDefinition},
         domain::{CanModifyDomainMetadata, CanUnregisterDomain},
+        governance::CanEnactGovernance,
         nft::{CanModifyNftMetadata, CanRegisterNft, CanTransferNft, CanUnregisterNft},
         smart_contract::CanRegisterSmartContractCode,
         zk_ace::CanManageZkAceIdentityForAccount,
@@ -93,7 +94,7 @@ pub mod isi {
             AxtProofEnvelope, DomainCommittee, DomainEndorsement, DomainEndorsementPolicy,
             DomainEndorsementRecord, LANE_RELAY_FASTPQ_EFFECT_TYPE, LaneRelayEmergencyValidatorSet,
             LaneRelayEnvelopeRef, VerifiedLaneRelayRecord, VerifiedNexusFeeBudgetRecord,
-            lane_relay_fastpq_claim_digest, nexus_fee_budget_claim_digest, proof_matches_manifest,
+            lane_relay_fastpq_claim_digest, nexus_fee_budget_claim_digest,
         },
         parameter::Parameter,
         prelude::*,
@@ -674,8 +675,9 @@ pub mod isi {
                             .is_some_and(|entry| entry.id == dataspace_id)
                     })
             });
+        let governance_permission: Permission = CanEnactGovernance.into();
         if protected_address
-            && !has_permission(&state_transaction.world, authority, "CanEnactGovernance")
+            && !has_exact_permission(&state_transaction.world, authority, &governance_permission)
         {
             return Err(InstructionExecutionError::InvariantViolation(
                 "not permitted: CanEnactGovernance".into(),
@@ -5737,6 +5739,273 @@ pub mod isi {
                         activated_by: authority.clone(),
                     },
                 )));
+            Ok(())
+        }
+    }
+
+    impl Execute for scode::CommitContractDeployment {
+        fn execute(
+            self,
+            authority: &AccountId,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            let scode::CommitContractDeployment {
+                expected_deploy_nonce,
+                contract_address,
+                code_hash,
+                contract_alias,
+                lease_expiry_ms,
+                expected_previous_contract_address,
+            } = self;
+
+            // Deployment never creates or repairs its authority implicitly.
+            state_transaction
+                .world
+                .account(authority)
+                .map_err(Error::from)?;
+            ensure_contract_binding_governance(authority, &contract_address, state_transaction)?;
+
+            let nonce_key = Name::from_str(
+                iroha_data_model::smart_contract::CONTRACT_DEPLOY_NONCE_METADATA_KEY,
+            )
+            .expect("contract deployment nonce metadata key must remain valid");
+            let current_nonce = state_transaction
+                .world
+                .account(authority)
+                .map_err(Error::from)?
+                .metadata()
+                .get(&nonce_key)
+                .map_or(Ok(0_u64), |value| {
+                    value.clone().try_into_any_norito::<u64>().map_err(|_| {
+                        InstructionExecutionError::InvariantViolation(
+                            format!(
+                                "account metadata key `{nonce_key}` contains an invalid native contract deployment nonce"
+                            )
+                            .into(),
+                        )
+                    })
+                })?;
+            if current_nonce != expected_deploy_nonce {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        format!(
+                            "stale contract deployment nonce: expected {expected_deploy_nonce}, current {current_nonce}"
+                        )
+                        .into(),
+                    ),
+                ));
+            }
+            let next_nonce = current_nonce.checked_add(1).ok_or_else(|| {
+                InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                    "contract deployment nonce overflow".into(),
+                ))
+            })?;
+
+            let (_, _, alias_dataspace_id) =
+                crate::smartcontracts::isi::domain::isi::resolve_contract_alias_components(
+                    state_transaction,
+                    &contract_alias,
+                )?;
+            let address_dataspace_id = contract_address.dataspace_id().map_err(|err| {
+                InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                    err.to_string().into(),
+                ))
+            })?;
+            if address_dataspace_id != alias_dataspace_id {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "contract alias dataspace must match contract address dataspace".into(),
+                    ),
+                ));
+            }
+            let derived_address = iroha_data_model::smart_contract::ContractAddress::derive(
+                iroha_data_model::account::address::chain_discriminant(),
+                authority,
+                current_nonce,
+                alias_dataspace_id,
+            )
+            .map_err(|err| {
+                InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                    err.to_string().into(),
+                ))
+            })?;
+            if contract_address != derived_address {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        format!(
+                            "contract address does not match authority, nonce, chain, and alias dataspace; expected {derived_address}"
+                        )
+                        .into(),
+                    ),
+                ));
+            }
+            if state_transaction
+                .world
+                .contract_instances
+                .get(&contract_address)
+                .is_some()
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    format!("new contract address `{contract_address}` is already active").into(),
+                ));
+            }
+
+            let now_ms = state_transaction.block_unix_timestamp_ms();
+            if lease_expiry_ms.is_some_and(|expiry| expiry <= now_ms) {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "lease_expiry_ms must be greater than the current block timestamp".into(),
+                    ),
+                ));
+            }
+
+            let raw_previous_contract_address = state_transaction
+                .world
+                .contract_aliases
+                .get(&contract_alias)
+                .cloned();
+            let current_previous_contract_address = raw_previous_contract_address
+                .as_ref()
+                .map(|previous| {
+                    let binding = state_transaction
+                        .world
+                        .contract_alias_bindings
+                        .get(previous)
+                        .ok_or_else(|| {
+                            InstructionExecutionError::InvariantViolation(
+                                format!(
+                                    "contract alias `{contract_alias}` has no canonical binding record"
+                                )
+                                .into(),
+                            )
+                        })?;
+                    if binding.alias != contract_alias {
+                        return Err(InstructionExecutionError::InvariantViolation(
+                            format!(
+                                "contract alias `{contract_alias}` has an inconsistent canonical binding record"
+                            )
+                            .into(),
+                        ));
+                    }
+                    Ok((!binding.is_grace_expired_at(now_ms)).then_some(previous.clone()))
+                })
+                .transpose()?
+                .flatten();
+            if current_previous_contract_address != expected_previous_contract_address {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        format!(
+                            "stale contract alias target for `{contract_alias}`: expected {:?}, current {:?}",
+                            expected_previous_contract_address,
+                            current_previous_contract_address
+                        )
+                        .into(),
+                    ),
+                ));
+            }
+            if current_previous_contract_address.as_ref() == Some(&contract_address) {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "contract deployment cannot rotate an alias to the same address".into(),
+                ));
+            }
+            if let Some(previous) = current_previous_contract_address.as_ref() {
+                let previous_dataspace_id = previous.dataspace_id().map_err(|err| {
+                    InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(err.to_string().into()),
+                    )
+                })?;
+                if previous_dataspace_id != alias_dataspace_id {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "current contract alias target `{previous}` belongs to the wrong dataspace"
+                        )
+                        .into(),
+                    ));
+                }
+                if state_transaction
+                    .world
+                    .contract_instances
+                    .get(previous)
+                    .is_none()
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!(
+                            "current contract alias target `{previous}` is not an active contract"
+                        )
+                        .into(),
+                    ));
+                }
+                ensure_contract_binding_governance(authority, previous, state_transaction)?;
+            }
+
+            crate::smartcontracts::isi::domain::isi::ensure_authority_can_manage_contract_alias(
+                state_transaction,
+                authority,
+                &contract_alias,
+            )?;
+            crate::smartcontracts::isi::domain::isi::ensure_account_alias_namespace_available_for_contract_alias(
+                state_transaction,
+                &contract_alias,
+            )?;
+
+            let manifest = state_transaction
+                .world
+                .contract_manifests
+                .get(&code_hash)
+                .cloned()
+                .ok_or_else(|| {
+                    InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(
+                            "manifest for code_hash not found".into(),
+                        ),
+                    )
+                })?;
+            verify_registered_contract_artifact_for_manifest(
+                &state_transaction.world,
+                &code_hash,
+                &manifest,
+            )?;
+
+            // Clear a canonical but expired raw binding before rebinding. It is not a live prior
+            // target for CAS purposes and therefore is not deactivated here.
+            if let Some(raw_previous) = raw_previous_contract_address.as_ref() {
+                iroha_data_model::isi::contract_alias::SetContractAlias::clear(
+                    raw_previous.clone(),
+                )
+                .execute(authority, state_transaction)?;
+            }
+            if let Some(previous) = current_previous_contract_address {
+                scode::DeactivateContractInstance {
+                    contract_address: previous,
+                    reason: Some("atomic contract deployment rotation".to_owned()),
+                }
+                .execute(authority, state_transaction)?;
+            }
+            scode::ActivateContractInstance {
+                contract_address: contract_address.clone(),
+                code_hash,
+            }
+            .execute(authority, state_transaction)?;
+            iroha_data_model::isi::contract_alias::SetContractAlias::bind(
+                contract_address,
+                contract_alias,
+                lease_expiry_ms,
+            )
+            .execute(authority, state_transaction)?;
+
+            let nonce_value = Json::new(next_nonce);
+            state_transaction
+                .world
+                .account_mut(authority)
+                .map_err(Error::from)?
+                .insert(nonce_key.clone(), nonce_value.clone());
+            state_transaction
+                .world
+                .emit_events(Some(AccountEvent::MetadataInserted(MetadataChanged {
+                    target: authority.clone(),
+                    key: nonce_key,
+                    value: nonce_value,
+                })));
             Ok(())
         }
     }
@@ -16240,6 +16509,15 @@ pub mod isi {
                     "verified lane relay registration requires nexus.enabled=true".into(),
                 ));
             }
+            if self.effect_proof_blob.is_some() {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "verified lane relay business-effect promotion is disabled until an effect-specific statement is derived from a finalized, QC-anchored settlement ledger entry"
+                            .into(),
+                    ),
+                )
+                .into());
+            }
 
             let envelope = self.envelope().clone();
             envelope.verify().map_err(|err| {
@@ -16424,6 +16702,15 @@ pub mod isi {
                 )
                 .into());
             }
+            if binding.effect_binding.is_some() {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "verified lane relay block proof must not carry a business-effect binding"
+                            .into(),
+                    ),
+                )
+                .into());
+            }
             let expected_claim_digest =
                 lane_relay_fastpq_claim_digest(&envelope).map_err(|err| {
                     InstructionExecutionError::InvalidParameter(
@@ -16446,89 +16733,9 @@ pub mod isi {
                         format!("verified lane relay FASTPQ verification failed: {err}").into(),
                     )
                 })?;
-            let (record_statement_digest, record_proof_digest, record_binding) = match self
-                .effect_proof_blob
-                .as_ref()
-            {
-                Some(effect_proof_blob) => {
-                    if effect_proof_blob.payload.is_empty() {
-                        return Err(InstructionExecutionError::InvalidParameter(
-                            InvalidParameterError::SmartContract(
-                                "verified lane relay effect proof payload is empty".into(),
-                            ),
-                        )
-                        .into());
-                    }
-                    if let Some(expiry_slot) = effect_proof_blob.expiry_slot
-                        && verified_at_height > expiry_slot
-                    {
-                        return Err(InstructionExecutionError::InvalidParameter(
-                            InvalidParameterError::SmartContract(format!(
-                                "verified lane relay effect proof expired at slot {expiry_slot}"
-                            )),
-                        )
-                        .into());
-                    }
-                    if !proof_matches_manifest(
-                        effect_proof_blob,
-                        envelope.dataspace_id,
-                        manifest_root,
-                    ) {
-                        return Err(InstructionExecutionError::InvalidParameter(
-                                InvalidParameterError::SmartContract(
-                                    "verified lane relay effect proof does not match the declared manifest_root"
-                                        .into(),
-                                ),
-                            )
-                            .into());
-                    }
-                    let effect_envelope =
-                        norito::decode_from_bytes::<AxtProofEnvelope>(&effect_proof_blob.payload)
-                            .map_err(|err| {
-                            InstructionExecutionError::InvalidParameter(
-                                InvalidParameterError::SmartContract(format!(
-                                    "verified lane relay effect proof envelope decode failed: {err}"
-                                )),
-                            )
-                        })?;
-                    let Some(effect_binding) = effect_envelope.fastpq_binding.clone() else {
-                        return Err(InstructionExecutionError::InvalidParameter(
-                            InvalidParameterError::SmartContract(
-                                "verified lane relay effect proof is missing fastpq_binding".into(),
-                            ),
-                        )
-                        .into());
-                    };
-                    if effect_binding.verified_effect_type == LANE_RELAY_FASTPQ_EFFECT_TYPE {
-                        return Err(InstructionExecutionError::InvalidParameter(
-                            InvalidParameterError::SmartContract(
-                                "verified lane relay effect proof must not use lane_relay_block"
-                                    .into(),
-                            ),
-                        )
-                        .into());
-                    }
-                    let verified_effect_fastpq = fastpq_prover::verify_axt_proof_envelope(
-                        &effect_envelope,
-                    )
-                    .map_err(|err| {
-                        InstructionExecutionError::InvariantViolation(
-                            format!("verified lane relay effect FASTPQ verification failed: {err}")
-                                .into(),
-                        )
-                    })?;
-                    (
-                        verified_effect_fastpq.statement_digest,
-                        verified_effect_fastpq.proof_digest,
-                        effect_binding,
-                    )
-                }
-                None => (
-                    verified_fastpq.statement_digest,
-                    verified_fastpq.proof_digest,
-                    binding,
-                ),
-            };
+            let record_statement_digest = verified_fastpq.statement_digest;
+            let record_proof_digest = verified_fastpq.proof_digest;
+            let record_binding = binding;
 
             let record = VerifiedLaneRelayRecord::new(
                 envelope,
@@ -16896,6 +17103,24 @@ pub mod isi {
                     )
                     .into());
                 }
+            }
+            if !rule.asset_transfer_definition_ids.is_empty()
+                && (rule.executable_kinds
+                    != BTreeSet::from([
+                        iroha_data_model::nexus::FeeSponsorExecutableKind::Instructions,
+                    ])
+                    || rule.instruction_wire_ids
+                        != BTreeSet::from([
+                            iroha_data_model::isi::transfer::TransferBox::WIRE_ID.to_owned()
+                        ])
+                    || !rule.contract_selectors.is_empty())
+            {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(format!(
+                        "fee sponsor policy rule {rule_index} asset-transfer selector requires exactly the instructions executable kind and iroha.transfer wire id with no contract selectors"
+                    )),
+                )
+                .into());
             }
             for (selector_index, selector) in rule.contract_selectors.iter().enumerate() {
                 if selector
@@ -27679,6 +27904,15 @@ seiyaku GovernanceLifecycle {
             selector.entrypoints.insert(String::new());
             empty_entrypoint.rules[0].contract_selectors.push(selector);
 
+            let mut malformed_asset_transfer_selector =
+                allow_all_fee_sponsor_policy(&sponsor_id, "malformed_asset_selector");
+            malformed_asset_transfer_selector.rules[0]
+                .asset_transfer_definition_ids
+                .insert(AssetDefinitionId::new(
+                    DomainId::try_new("wonderland", "universal").expect("fixture domain"),
+                    "pkr".parse().expect("fixture asset name"),
+                ));
+
             let (unknown_sponsor_id, _) = gen_account_in("wonderland");
             let unknown_sponsor_policy =
                 allow_all_fee_sponsor_policy(&unknown_sponsor_id, "unknown_sponsor");
@@ -27687,6 +27921,10 @@ seiyaku GovernanceLifecycle {
                 (no_allow, "must contain at least one allow rule"),
                 (empty_wire_id, "empty instruction wire id"),
                 (empty_entrypoint, "empty entrypoint"),
+                (
+                    malformed_asset_transfer_selector,
+                    "asset-transfer selector requires exactly the instructions executable kind and iroha.transfer wire id",
+                ),
                 (unknown_sponsor_policy, "unknown fee sponsor policy sponsor"),
             ] {
                 let err = UpsertFeeSponsorPolicy { policy }
@@ -27703,6 +27941,26 @@ seiyaku GovernanceLifecycle {
                 stx.world.fee_sponsor_policies.is_empty(),
                 "rejected policies must not be persisted"
             );
+
+            let mut exact_asset_transfer =
+                allow_all_fee_sponsor_policy(&sponsor_id, "exact_asset_transfer");
+            exact_asset_transfer.rules[0].executable_kinds =
+                BTreeSet::from([FeeSponsorExecutableKind::Instructions]);
+            exact_asset_transfer.rules[0].instruction_wire_ids =
+                BTreeSet::from([iroha_data_model::isi::transfer::TransferBox::WIRE_ID.to_owned()]);
+            exact_asset_transfer.rules[0]
+                .asset_transfer_definition_ids
+                .insert(AssetDefinitionId::new(
+                    DomainId::try_new("wonderland", "universal").expect("fixture domain"),
+                    "pkr".parse().expect("fixture asset name"),
+                ));
+            let exact_id = exact_asset_transfer.id.clone();
+            UpsertFeeSponsorPolicy {
+                policy: exact_asset_transfer,
+            }
+            .execute(&sponsor_id, &mut stx)
+            .expect("an exact native asset-transfer selector must be accepted");
+            assert!(stx.world.fee_sponsor_policies.get(&exact_id).is_some());
         }
 
         #[test]
@@ -36340,6 +36598,246 @@ seiyaku GovernanceLifecycle {
                     .contract_code_upload_chunks
                     .iter()
                     .all(|(key, _)| &key.upload != &upload_key)
+            );
+        }
+
+        #[test]
+        fn commit_contract_deployment_enforces_cas_derivation_and_protected_rotation() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new_for_testing(World::default(), kura, query_handle);
+            let header = iroha_data_model::block::BlockHeader::new(
+                NonZeroU64::new(1).unwrap(),
+                None,
+                None,
+                None,
+                0,
+                0,
+            );
+            let mut block = state.block(header);
+            let mut stx = block.transaction();
+            Register::account(Account::new(ALICE_ID.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .expect("seed deployment authority");
+            grant_contract_lifecycle_authority(&mut stx, &ALICE_ID);
+            stx.world.add_account_permission(
+                &ALICE_ID,
+                Permission::from(
+                    iroha_executor_data_model::permission::account::CanManageAccountAlias {
+                        scope: iroha_executor_data_model::permission::account::AccountAliasPermissionScope::Dataspace(
+                            DataSpaceId::UNIVERSAL,
+                        ),
+                    },
+                ),
+            );
+
+            let (artifact, manifest) = minimal_contract_artifact();
+            let code_hash = manifest.code_hash.expect("artifact code hash");
+            scode::RegisterSmartContractBytes {
+                code_hash,
+                code: artifact,
+            }
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register verified artifact");
+            scode::RegisterSmartContractCode {
+                manifest: manifest.signed(&ALICE_KEYPAIR),
+            }
+            .execute(&ALICE_ID, &mut stx)
+            .expect("register verified manifest");
+            stx.apply();
+            let mut stx = block.transaction();
+
+            let alias: ContractAlias = "payments::universal".parse().expect("contract alias");
+            let address_at_nonce_0 = ContractAddress::derive(
+                iroha_data_model::account::address::chain_discriminant(),
+                &ALICE_ID,
+                0,
+                DataSpaceId::UNIVERSAL,
+            )
+            .expect("nonce zero address");
+            let address_at_nonce_1 = ContractAddress::derive(
+                iroha_data_model::account::address::chain_discriminant(),
+                &ALICE_ID,
+                1,
+                DataSpaceId::UNIVERSAL,
+            )
+            .expect("nonce one address");
+
+            let error = scode::CommitContractDeployment {
+                expected_deploy_nonce: 0,
+                contract_address: address_at_nonce_1.clone(),
+                code_hash,
+                contract_alias: alias.clone(),
+                lease_expiry_ms: None,
+                expected_previous_contract_address: None,
+            }
+            .execute(&ALICE_ID, &mut stx)
+            .expect_err("wrong derived address must fail");
+            let message = smart_contract_error_message(
+                iroha_data_model::ValidationFail::InstructionFailed(error),
+            );
+            assert!(
+                message.contains("does not match authority"),
+                "unexpected wrong-address error: {message}"
+            );
+
+            let wrong_dataspace_address = ContractAddress::derive(
+                iroha_data_model::account::address::chain_discriminant(),
+                &ALICE_ID,
+                0,
+                DataSpaceId::new(7),
+            )
+            .expect("wrong dataspace address");
+            let error = scode::CommitContractDeployment {
+                expected_deploy_nonce: 0,
+                contract_address: wrong_dataspace_address,
+                code_hash,
+                contract_alias: alias.clone(),
+                lease_expiry_ms: None,
+                expected_previous_contract_address: None,
+            }
+            .execute(&ALICE_ID, &mut stx)
+            .expect_err("alias/address dataspace mismatch must fail");
+            let message = smart_contract_error_message(
+                iroha_data_model::ValidationFail::InstructionFailed(error),
+            );
+            assert!(message.contains("dataspace must match"));
+            assert!(
+                stx.world
+                    .contract_instances
+                    .get(&address_at_nonce_0)
+                    .is_none()
+                    && stx
+                        .world
+                        .contract_instances
+                        .get(&address_at_nonce_1)
+                        .is_none()
+            );
+
+            scode::CommitContractDeployment {
+                expected_deploy_nonce: 0,
+                contract_address: address_at_nonce_0.clone(),
+                code_hash,
+                contract_alias: alias.clone(),
+                lease_expiry_ms: None,
+                expected_previous_contract_address: None,
+            }
+            .execute(&ALICE_ID, &mut stx)
+            .expect("first atomic deployment");
+            assert_eq!(
+                stx.world.contract_instances.get(&address_at_nonce_0),
+                Some(&code_hash)
+            );
+            assert_eq!(
+                stx.world.contract_address_by_alias_at(&alias, 0),
+                Some(address_at_nonce_0.clone())
+            );
+
+            let nonce_key: Name =
+                iroha_data_model::smart_contract::CONTRACT_DEPLOY_NONCE_METADATA_KEY
+                    .parse()
+                    .expect("nonce metadata key");
+            let stored_nonce = stx
+                .world
+                .account(&ALICE_ID)
+                .expect("deployment authority")
+                .metadata()
+                .get(&nonce_key)
+                .expect("deployment nonce")
+                .clone()
+                .try_into_any_norito::<u64>()
+                .expect("u64 deployment nonce");
+            assert_eq!(stored_nonce, 1);
+
+            let error = scode::CommitContractDeployment {
+                expected_deploy_nonce: 1,
+                contract_address: address_at_nonce_1.clone(),
+                code_hash,
+                contract_alias: alias.clone(),
+                lease_expiry_ms: None,
+                expected_previous_contract_address: None,
+            }
+            .execute(&ALICE_ID, &mut stx)
+            .expect_err("stale previous alias CAS target must fail");
+            let message = smart_contract_error_message(
+                iroha_data_model::ValidationFail::InstructionFailed(error),
+            );
+            assert!(message.contains("stale contract alias target"));
+            assert_eq!(
+                stx.world.contract_address_by_alias_at(&alias, 0),
+                Some(address_at_nonce_0.clone())
+            );
+
+            let protected = iroha_data_model::parameter::custom::CustomParameter::new(
+                iroha_data_model::parameter::custom::CustomParameterId(
+                    "gov_protected_namespaces".parse().expect("parameter id"),
+                ),
+                Json::new(vec!["universal".to_owned()]),
+            );
+            stx.world
+                .parameters
+                .get_mut()
+                .set_parameter(Parameter::Custom(protected));
+            let rotation = scode::CommitContractDeployment {
+                expected_deploy_nonce: 1,
+                contract_address: address_at_nonce_1.clone(),
+                code_hash,
+                contract_alias: alias.clone(),
+                lease_expiry_ms: None,
+                expected_previous_contract_address: Some(address_at_nonce_0.clone()),
+            };
+            let error = rotation
+                .clone()
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("protected rotation requires governance authority");
+            let message = smart_contract_error_message(
+                iroha_data_model::ValidationFail::InstructionFailed(error),
+            );
+            assert!(message.contains("CanEnactGovernance"));
+            assert_eq!(
+                stx.world.contract_address_by_alias_at(&alias, 0),
+                Some(address_at_nonce_0.clone())
+            );
+
+            stx.world.add_account_permission(
+                &ALICE_ID,
+                Permission::from(
+                    iroha_executor_data_model::permission::governance::CanEnactGovernance,
+                ),
+            );
+            rotation
+                .clone()
+                .execute(&ALICE_ID, &mut stx)
+                .expect("governance-authorized protected rotation");
+            assert!(
+                stx.world
+                    .contract_instances
+                    .get(&address_at_nonce_0)
+                    .is_none(),
+                "the exact prior alias target must be deactivated"
+            );
+            assert_eq!(
+                stx.world.contract_instances.get(&address_at_nonce_1),
+                Some(&code_hash)
+            );
+            assert_eq!(
+                stx.world.contract_address_by_alias_at(&alias, 0),
+                Some(address_at_nonce_1.clone())
+            );
+
+            let error = rotation
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("a concurrent deployment using the consumed nonce must lose CAS");
+            let message = smart_contract_error_message(
+                iroha_data_model::ValidationFail::InstructionFailed(error),
+            );
+            assert!(
+                message.contains("stale contract deployment nonce"),
+                "unexpected stale deployment error: {message}"
+            );
+            assert_eq!(
+                stx.world.contract_address_by_alias_at(&alias, 0),
+                Some(address_at_nonce_1)
             );
         }
 

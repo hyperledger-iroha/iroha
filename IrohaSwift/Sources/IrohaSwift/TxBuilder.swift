@@ -1024,7 +1024,7 @@ public struct KagemushaTopUpShieldSnapshotBinding: Equatable, Sendable {
 /// construct it. Wallets persist this atomically with note secrets before
 /// signing or submitting the request.
 public struct KagemushaTopUpShieldPreparation: Equatable, Sendable {
-    public let unsigned: KagemushaRecursiveSpendTopUpUnsigned
+    public let unsigned: KagemushaRecursiveSpendTopUpUnsignedV4
     public let opening: KagemushaNoteOpening
     /// Exact post-top-up membership and dummy-zero paths retained in encrypted
     /// local state. This witness never enters the Torii top-up request.
@@ -1143,7 +1143,7 @@ public final class IrohaSDK: @unchecked Sendable {
         payer: String,
         operationId: Data,
         opening: KagemushaNoteOpening,
-        artifactBinding: KagemushaRecursiveSpendArtifactBinding,
+        artifactBinding: KagemushaRecursiveSpendArtifactBindingV4,
         expectedReadiness: KagemushaTopUpShieldReadinessExpectation
     ) async throws -> KagemushaTopUpShieldPreparation {
         guard let toriiRestClient else {
@@ -1187,14 +1187,15 @@ public final class IrohaSDK: @unchecked Sendable {
               zeroPath.leafIndex == UInt64(snapshot.frontierLen) else {
             throw KagemushaRecursiveSpendError.invalidField("topUp.zeroPath")
         }
-        let unsigned = try KagemushaTopUpShieldBuildRequest(
+        let unsigned = try KagemushaTopUpShieldBuildRequestV4(
             chainID: chainId,
             assetID: canonicalAssetId,
             amount: amount,
             payer: payer,
             operationID: operationId,
             opening: opening,
-            zeroPath: zeroPath,
+            leafIndex: UInt32(zeroPath.leafIndex),
+            zeroPath: PrivacyConfidentialMerklePathWitnessV2(path: zeroPath),
             shieldVerifierID: "\(verifier.id.backend):\(verifier.id.name)",
             shieldVerifierCommitment: verifierCommitment,
             artifactBinding: artifactBinding

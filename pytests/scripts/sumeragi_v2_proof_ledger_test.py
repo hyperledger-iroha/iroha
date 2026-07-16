@@ -3145,8 +3145,8 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters() -> None:
         ].splitlines()
         if line.strip().startswith("sumeragi::")
     )
-    assert len(production_inventory) == 115
-    assert len(set(production_inventory)) == 115
+    assert len(production_inventory) == 124
+    assert len(set(production_inventory)) == 124
     assert (
         "sumeragi::v2_effects::tests::"
         "runtime_step_dispatches_entire_effect_batch_before_returning"
@@ -3191,6 +3191,10 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters() -> None:
     assert "compute_workspace_source_manifest.py" in release_source
     assert 'compute_workspace_source_manifest.py --root "$repo_root"' in release_source
     assert "IROHA_RELEASE_SOURCE_MANIFEST_SHA256" in release_source
+    assert "source_manifest_contract_tests=(" in release_source
+    assert "test_workspace_manifest_binds_ignored_cargo_lock" in release_source
+    assert "test_workspace_manifest_rejects_unmerged_index" in release_source
+    assert "did not run exactly six passing tests" in release_source
     assert "seed_launcher_contract_tests=(" in release_source
     assert "did not run exactly ten passing tests" in release_source
     assert "taira_release_ignored_contract_list=" in release_source

@@ -50,7 +50,7 @@ sealed class KagemushaNfcCommand {
 }
 
 object KagemushaNfcProtocol {
-    const val RAW_TRANSPORT_VERSION = 2
+    const val RAW_TRANSPORT_VERSION = 4
     const val MINIMUM_APPLICATION_IDENTIFIER_BYTES = 5
     const val MAXIMUM_APPLICATION_IDENTIFIER_BYTES = 16
     const val SAFE_CHUNK_BYTES = 220
@@ -63,6 +63,8 @@ object KagemushaNfcProtocol {
     private const val INSTRUCTION_WRITE_METADATA = 0x20
     private const val INSTRUCTION_WRITE_CHUNK = 0x21
     private const val INSTRUCTION_COMMIT = 0x22
+    private const val OFFSET_BYTES = 4
+    private const val READ_REQUEST_BYTES = OFFSET_BYTES + 2
     private val DEFAULT_AID = hexToBytes(KagemushaPeerTransportContract.NFC_APPLICATION_IDENTIFIER_HEX)
     private val SUCCESS = byteArrayOf(0x90.toByte(), 0)
 
@@ -111,67 +113,58 @@ object KagemushaNfcProtocol {
     }
 
     @JvmStatic fun getInfoCommand(): ByteArray =
-        byteArrayOf(INSTRUCTION_CLASS.toByte(), INSTRUCTION_GET_INFO.toByte(), 0, 0, 0)
+        byteArrayOf(
+            INSTRUCTION_CLASS.toByte(),
+            INSTRUCTION_GET_INFO.toByte(),
+            RAW_TRANSPORT_VERSION.toByte(),
+            0,
+            0,
+        )
 
     @JvmStatic
     @JvmOverloads
     fun readChunkCommand(offset: Int, length: Int = SAFE_CHUNK_BYTES): ByteArray {
-        requireOffset(offset)
         requireChunkLength(length, MAXIMUM_EXTENDED_READ_CHUNK_BYTES)
-        return if (length <= 0xff) {
-            byteArrayOf(
-                INSTRUCTION_CLASS.toByte(), INSTRUCTION_READ_CHUNK.toByte(),
-                (offset ushr 8).toByte(), offset.toByte(), length.toByte(),
-            )
-        } else {
-            byteArrayOf(
-                INSTRUCTION_CLASS.toByte(), INSTRUCTION_READ_CHUNK.toByte(),
-                (offset ushr 8).toByte(), offset.toByte(), 0,
-                (length ushr 8).toByte(), length.toByte(),
-            )
-        }
+        requireTransferRange(offset, length, MAXIMUM_EXTENDED_READ_CHUNK_BYTES)
+        val data = ByteArray(READ_REQUEST_BYTES)
+        data.writeU32(0, offset.toLong())
+        data.writeU16(OFFSET_BYTES, length)
+        return dataCommand(INSTRUCTION_READ_CHUNK, data)
     }
 
     @JvmStatic
     fun writeMetadataCommand(kind: KagemushaPeerPayloadKind, payloadBytes: ByteArray): ByteArray {
         requirePayloadLength(payloadBytes.size)
         val digest = sha256(payloadBytes)
-        return ByteArray(43).also { out ->
-            out[0] = INSTRUCTION_CLASS.toByte()
-            out[1] = INSTRUCTION_WRITE_METADATA.toByte()
-            out[2] = 0
-            out[3] = 0
-            out[4] = 38
-            out[5] = RAW_TRANSPORT_VERSION.toByte()
-            out[6] = kind.code.toByte()
-            out.writeU32(7, payloadBytes.size.toLong())
-            digest.copyInto(out, 11)
+        val metadata = ByteArray(38).also { out ->
+            out[0] = RAW_TRANSPORT_VERSION.toByte()
+            out[1] = kind.code.toByte()
+            out.writeU32(2, payloadBytes.size.toLong())
+            digest.copyInto(out, 6)
             digest.fill(0)
         }
+        return dataCommand(INSTRUCTION_WRITE_METADATA, metadata)
     }
 
     @JvmStatic
     fun writeChunkCommand(offset: Int, bytes: ByteArray): ByteArray {
-        requireOffset(offset)
         requireChunkLength(bytes.size, MAXIMUM_EXTENDED_WRITE_CHUNK_BYTES)
-        val header = if (bytes.size <= 0xff) 5 else 7
-        return ByteArray(header + bytes.size).also { out ->
-            out[0] = INSTRUCTION_CLASS.toByte()
-            out[1] = INSTRUCTION_WRITE_CHUNK.toByte()
-            out[2] = (offset ushr 8).toByte()
-            out[3] = offset.toByte()
-            if (header == 5) out[4] = bytes.size.toByte()
-            else {
-                out[4] = 0
-                out[5] = (bytes.size ushr 8).toByte()
-                out[6] = bytes.size.toByte()
-            }
-            bytes.copyInto(out, header)
+        requireTransferRange(offset, bytes.size, MAXIMUM_EXTENDED_WRITE_CHUNK_BYTES)
+        val data = ByteArray(OFFSET_BYTES + bytes.size).also { out ->
+            out.writeU32(0, offset.toLong())
+            bytes.copyInto(out, OFFSET_BYTES)
         }
+        return dataCommand(INSTRUCTION_WRITE_CHUNK, data)
     }
 
     @JvmStatic fun commitCommand(): ByteArray =
-        byteArrayOf(INSTRUCTION_CLASS.toByte(), INSTRUCTION_COMMIT.toByte(), 0, 0, 0)
+        byteArrayOf(
+            INSTRUCTION_CLASS.toByte(),
+            INSTRUCTION_COMMIT.toByte(),
+            RAW_TRANSPORT_VERSION.toByte(),
+            0,
+            0,
+        )
 
     @JvmStatic
     @JvmOverloads
@@ -185,11 +178,12 @@ object KagemushaNfcProtocol {
         val commands = arrayListOf(writeMetadataCommand(kind, payloadBytes))
         var offset = 0
         while (offset < payloadBytes.size) {
+            val end = minOf(offset + maximumChunkLength, payloadBytes.size)
             commands += writeChunkCommand(
                 offset,
-                payloadBytes.copyOfRange(offset, minOf(offset + maximumChunkLength, payloadBytes.size)),
+                payloadBytes.copyOfRange(offset, end),
             )
-            offset += maximumChunkLength
+            offset = end
         }
         commands += commitCommand()
         return commands
@@ -206,18 +200,39 @@ object KagemushaNfcProtocol {
         if (isAnySelect(command)) return KagemushaNfcCommand.SelectOtherApplication
         if ((command[0].toInt() and 0xff) != INSTRUCTION_CLASS) return KagemushaNfcCommand.Unsupported
         val instruction = command[1].toInt() and 0xff
-        val offset = ((command[2].toInt() and 0xff) shl 8) or (command[3].toInt() and 0xff)
+        val canonicalParameters =
+            (command[2].toInt() and 0xff) == RAW_TRANSPORT_VERSION && command[3].toInt() == 0
         return when (instruction) {
-            INSTRUCTION_GET_INFO -> if (offset == 0 && isNoData(command))
+            INSTRUCTION_GET_INFO -> if (canonicalParameters && isNoData(command))
                 KagemushaNfcCommand.GetInfo else KagemushaNfcCommand.Invalid
-            INSTRUCTION_READ_CHUNK -> readCommandLength(command)?.let {
-                KagemushaNfcCommand.ReadChunk(offset, it)
-            } ?: KagemushaNfcCommand.Invalid
-            INSTRUCTION_WRITE_METADATA -> parseMetadata(offset, command)
-            INSTRUCTION_WRITE_CHUNK -> commandData(command)?.takeIf {
-                it.isNotEmpty() && it.size <= MAXIMUM_EXTENDED_WRITE_CHUNK_BYTES
-            }?.let { KagemushaNfcCommand.WriteChunk(offset, it) } ?: KagemushaNfcCommand.Invalid
-            INSTRUCTION_COMMIT -> if (offset == 0 && isNoData(command))
+            INSTRUCTION_READ_CHUNK -> if (!canonicalParameters) KagemushaNfcCommand.Invalid else {
+                val data = commandData(command)
+                if (data == null || data.size != READ_REQUEST_BYTES) {
+                    KagemushaNfcCommand.Invalid
+                } else {
+                    val offset = data.readU32(0).toInt()
+                    val length = data.readU16(OFFSET_BYTES)
+                    if (transferRangeIsValid(offset, length, MAXIMUM_EXTENDED_READ_CHUNK_BYTES)) {
+                        KagemushaNfcCommand.ReadChunk(offset, length)
+                    } else KagemushaNfcCommand.Invalid
+                }
+            }
+            INSTRUCTION_WRITE_METADATA -> parseMetadata(canonicalParameters, command)
+            INSTRUCTION_WRITE_CHUNK -> if (!canonicalParameters) KagemushaNfcCommand.Invalid else {
+                val data = commandData(command)
+                if (data == null || data.size <= OFFSET_BYTES ||
+                    data.size > OFFSET_BYTES + MAXIMUM_EXTENDED_WRITE_CHUNK_BYTES
+                ) {
+                    KagemushaNfcCommand.Invalid
+                } else {
+                    val offset = data.readU32(0).toInt()
+                    val chunk = data.copyOfRange(OFFSET_BYTES, data.size)
+                    if (transferRangeIsValid(offset, chunk.size, MAXIMUM_EXTENDED_WRITE_CHUNK_BYTES)) {
+                        KagemushaNfcCommand.WriteChunk(offset, chunk)
+                    } else KagemushaNfcCommand.Invalid
+                }
+            }
+            INSTRUCTION_COMMIT -> if (canonicalParameters && isNoData(command))
                 KagemushaNfcCommand.Commit else KagemushaNfcCommand.Invalid
             else -> KagemushaNfcCommand.Unsupported
         }
@@ -267,8 +282,11 @@ object KagemushaNfcProtocol {
         ByteArray(0) else response.copyOf(response.size - 2)
     @JvmStatic fun sha256(data: ByteArray): ByteArray = MessageDigest.getInstance("SHA-256").digest(data)
 
-    private fun parseMetadata(offset: Int, command: ByteArray): KagemushaNfcCommand {
-        if (offset != 0) return KagemushaNfcCommand.Invalid
+    private fun parseMetadata(
+        canonicalParameters: Boolean,
+        command: ByteArray,
+    ): KagemushaNfcCommand {
+        if (!canonicalParameters) return KagemushaNfcCommand.Invalid
         val data = commandData(command) ?: return KagemushaNfcCommand.Invalid
         if (data.size != 38 ||
             (data[0].toInt() and 0xff) != RAW_TRANSPORT_VERSION
@@ -305,14 +323,6 @@ object KagemushaNfcProtocol {
     private fun isNoData(command: ByteArray): Boolean = command.size == 4 ||
         (command.size == 5 && command[4].toInt() == 0)
 
-    private fun readCommandLength(command: ByteArray): Int? = when {
-        command.size == 5 && (command[4].toInt() and 0xff) > 0 -> command[4].toInt() and 0xff
-        command.size == 7 && command[4].toInt() == 0 ->
-            (((command[5].toInt() and 0xff) shl 8) or (command[6].toInt() and 0xff))
-                .takeIf { it in 1..MAXIMUM_EXTENDED_READ_CHUNK_BYTES }
-        else -> null
-    }
-
     private fun commandData(command: ByteArray): ByteArray? {
         if (command.size < 5) return null
         val shortLength = command[4].toInt() and 0xff
@@ -324,7 +334,35 @@ object KagemushaNfcProtocol {
             ?.copyOfRange(7, command.size)
     }
 
-    private fun requireOffset(offset: Int) = require(offset in 0..0xffff) { "Invalid NFC offset" }
+    private fun dataCommand(instruction: Int, data: ByteArray): ByteArray {
+        require(data.isNotEmpty() && data.size <= 0xffff) { "Invalid NFC APDU data length" }
+        val header = if (data.size <= 0xff) 5 else 7
+        return ByteArray(header + data.size).also { out ->
+            out[0] = INSTRUCTION_CLASS.toByte()
+            out[1] = instruction.toByte()
+            out[2] = RAW_TRANSPORT_VERSION.toByte()
+            out[3] = 0
+            if (header == 5) {
+                out[4] = data.size.toByte()
+            } else {
+                out[4] = 0
+                out[5] = (data.size ushr 8).toByte()
+                out[6] = data.size.toByte()
+            }
+            data.copyInto(out, header)
+        }
+    }
+
+    private fun transferRangeIsValid(offset: Int, length: Int, maximumChunkLength: Int): Boolean =
+        offset >= 0 && length in 1..maximumChunkLength &&
+            offset < MAXIMUM_PAYLOAD_BYTES &&
+            offset.toLong() + length.toLong() <= MAXIMUM_PAYLOAD_BYTES.toLong()
+
+    private fun requireTransferRange(offset: Int, length: Int, maximumChunkLength: Int) =
+        require(transferRangeIsValid(offset, length, maximumChunkLength)) {
+            "Invalid NFC transfer range"
+        }
+
     private fun requirePayloadLength(length: Int) =
         require(length in 1..MAXIMUM_PAYLOAD_BYTES) { "Invalid NFC payload length" }
     private fun requireChunkLength(length: Int, maximum: Int) =

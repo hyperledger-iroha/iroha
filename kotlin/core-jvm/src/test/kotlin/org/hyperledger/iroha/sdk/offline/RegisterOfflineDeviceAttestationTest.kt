@@ -14,6 +14,7 @@ import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
 
 /** Exact Rust/Kotlin parity and adversarial coverage for the sole ABI-20 registration path. */
@@ -28,6 +29,13 @@ class RegisterOfflineDeviceAttestationTest {
         assertEquals(20, DeviceAttestationRegistration.REQUIRED_NATIVE_BRIDGE_ABI_VERSION)
         assertContentEquals(hexToBytes(rust[0]), registration.noritoEncoded())
         assertContentEquals(hexToBytes(rust[2]), registration.challengeHash)
+        assertContentEquals(hexToBytes(rust[4]), registration.canonicalRegistrationHash())
+        assertFalse(
+            registration.canonicalRegistrationHash().contentEquals(
+                MessageDigest.getInstance("SHA-256").digest(registration.noritoEncoded()),
+            ),
+            "registration ID is canonical Iroha Hash, not raw SHA-256",
+        )
 
         val request = request(registration)
         val instruction = request.instruction()
@@ -205,9 +213,9 @@ class RegisterOfflineDeviceAttestationTest {
 
         private fun registration(
             accountId: String,
-            packageName: String = "org.hyperledger.iroha.abi19.fixture",
+            packageName: String = "org.hyperledger.iroha.abi20.fixture",
             signingCertificate: ByteArray =
-                sha256(bytes("abi19-unit-test-signing-certificate")),
+                sha256(bytes("abi20-unit-test-signing-certificate")),
             challengeHash: ByteArray? = null,
             reportHash: ByteArray? = null,
             evidenceHash: ByteArray? = null,
@@ -218,7 +226,7 @@ class RegisterOfflineDeviceAttestationTest {
                 version = 1,
                 platform = DeviceAttestationRegistration.ANDROID_KEYMINT_PLATFORM,
                 keyId = hexLower(sha256(assertionPublicKey)),
-                deviceId = "abi19-android-unit-test-device",
+                deviceId = "abi20-android-unit-test-device",
                 accountId = accountId,
                 assetDefinitionId = null,
                 iosTeamId = null,
@@ -237,11 +245,11 @@ class RegisterOfflineDeviceAttestationTest {
                 challengeHash = challengeHash,
                 attestationReportHash = reportHash,
                 attestationReport =
-                    bytes("abi19-unit-test-not-physical-attestation-evidence"),
+                    bytes("abi20-unit-test-not-physical-attestation-evidence"),
                 evidenceHash = evidenceHash,
                 evidence = evidence,
                 recentBlockHeight = 42,
-                recentBlockHash = IrohaHash.prehash(bytes("abi19-unit-test-block")),
+                recentBlockHash = IrohaHash.prehash(bytes("abi20-unit-test-block")),
                 expiresAtMs = 2_000_000_000_000,
             )
         }

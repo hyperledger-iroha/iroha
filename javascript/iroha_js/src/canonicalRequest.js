@@ -1,4 +1,5 @@
 import { Buffer } from "buffer";
+import { AccountAddress } from "./address.js";
 import { createHash, randomBytes } from "./cryptoHash.js";
 import { signEd25519 } from "./crypto.js";
 
@@ -31,6 +32,31 @@ function requireExactNonBlankString(value, field, context) {
     throw new Error(`${field} must not contain surrounding whitespace for ${context}`);
   }
   return value;
+}
+
+const CANONICAL_AUTH_ACCOUNT_ALIAS_PATTERN =
+  /^[a-z0-9]+(?:[._-][a-z0-9]+)*@[a-z0-9]+(?:-[a-z0-9]+)*(?:\.[a-z0-9]+(?:-[a-z0-9]+)*)?$/u;
+
+function requireCanonicalAuthAccount(value, context) {
+  if (typeof value !== "string" || value.length === 0 || value.trim() !== value) {
+    throw new TypeError(
+      `${context} must be an exact canonical I105 account or ASCII account alias`,
+    );
+  }
+  if (CANONICAL_AUTH_ACCOUNT_ALIAS_PATTERN.test(value)) {
+    return value;
+  }
+  try {
+    const parsed = AccountAddress.parseEncoded(value);
+    if (parsed.address.toI105(parsed.chainDiscriminant) === value) {
+      return value;
+    }
+  } catch {
+    // Use the single stable diagnostic below for every malformed identifier.
+  }
+  throw new TypeError(
+    `${context} must be an exact canonical I105 account or ASCII account alias`,
+  );
 }
 
 /**
@@ -99,6 +125,8 @@ export function canonicalRequestSignatureMessage({
 
 /**
  * Build canonical signing headers for app-facing Torii endpoints.
+ * `accountId` is the exact canonical I105 account or active canonical ASCII
+ * account alias carried by `X-Iroha-Account`.
  * @param {{accountId: string, method: string, path: string, query?: string | URLSearchParams, body?: Buffer | ArrayBuffer | ArrayBufferView | string, privateKey: Buffer | ArrayBuffer | ArrayBufferView, timestampMs?: number, nonce?: string}} params
  * @returns {{ "X-Iroha-Account": string, "X-Iroha-Signature": string, "X-Iroha-Timestamp-Ms": string, "X-Iroha-Nonce": string }}
  */
@@ -112,10 +140,9 @@ export function buildCanonicalRequestHeaders({
   timestampMs = Date.now(),
   nonce = randomBytes(16).toString("hex"),
 }) {
-  const checkedAccountId = requireExactNonBlankString(
+  const checkedAccount = requireCanonicalAuthAccount(
     accountId,
     "accountId",
-    "canonical headers",
   );
   if (!privateKey) {
     throw new Error("privateKey is required for canonical headers");
@@ -135,7 +162,7 @@ export function buildCanonicalRequestHeaders({
   });
   const signature = signEd25519(message, privateKey);
   return {
-    "X-Iroha-Account": checkedAccountId,
+    "X-Iroha-Account": checkedAccount,
     "X-Iroha-Signature": Buffer.from(signature).toString("base64"),
     "X-Iroha-Timestamp-Ms": String(normalizedTimestampMs),
     "X-Iroha-Nonce": checkedNonce,
@@ -236,6 +263,8 @@ function canonicalTargetFromPath({ path, query, baseUrl }) {
  * The returned body string is the exact JSON payload covered by the signature.
  * Callers with private key bytes can pass `privateKey`; browser keystores can
  * pass an async `sign` callback and keep private keys out of application code.
+ * `accountId` must be the exact canonical I105 account or active canonical
+ * ASCII alias used as the auth header.
  *
  * @param {{accountId: string, method?: string, path: string, baseUrl?: string, query?: string | URLSearchParams, body?: unknown, headers?: Headers | Array<[string, string]> | Record<string, string>, privateKey?: Buffer | ArrayBuffer | ArrayBufferView, sign?: (input: {message: Buffer, messageBase64: string, method: string, path: string, query?: string | URLSearchParams, body: string, timestampMs: number, nonce: string}) => Promise<Buffer | ArrayBuffer | ArrayBufferView | string> | Buffer | ArrayBuffer | ArrayBufferView | string, timestampMs?: number, nonce?: string}} params
  * @returns {Promise<{method: string, headers: Record<string, string>, body: string}>}
@@ -253,10 +282,9 @@ export async function buildCanonicalJsonRequest({
   timestampMs = Date.now(),
   nonce = randomBytes(16).toString("hex"),
 }) {
-  const checkedAccountId = requireExactNonBlankString(
+  const checkedAccount = requireCanonicalAuthAccount(
     accountId,
     "accountId",
-    "canonical JSON requests",
   );
   if (!path) {
     throw new Error("path is required for canonical JSON requests");
@@ -303,7 +331,7 @@ export async function buildCanonicalJsonRequest({
     headers: {
       ...DEFAULT_JSON_HEADERS,
       ...normalizeHeadersInit(headers),
-      "X-Iroha-Account": checkedAccountId,
+      "X-Iroha-Account": checkedAccount,
       "X-Iroha-Signature": signatureBase64,
       "X-Iroha-Timestamp-Ms": String(normalizedTimestampMs),
       "X-Iroha-Nonce": checkedNonce,

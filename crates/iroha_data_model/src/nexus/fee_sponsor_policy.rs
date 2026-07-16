@@ -8,6 +8,7 @@ use norito::codec::{Decode, Encode};
 
 use crate::{
     account::{AccountId, ParsedAccountId},
+    asset::AssetDefinitionId,
     name::Name,
     smart_contract::{ContractAddress, ContractAlias},
 };
@@ -34,6 +35,7 @@ pub enum FeeSponsorPolicyIdParseError {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[norito(deny_unknown_fields)]
 pub struct FeeSponsorPolicyId {
     /// Sponsor account that owns and pays through the policy.
     pub sponsor: AccountId,
@@ -78,7 +80,12 @@ impl FromStr for FeeSponsorPolicyId {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
-#[norito(tag = "kind", content = "value", rename_all = "snake_case")]
+#[norito(
+    tag = "kind",
+    content = "value",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum FeeSponsorExecutableKind {
     /// Ordered native instruction batch.
     Instructions,
@@ -96,7 +103,12 @@ pub enum FeeSponsorExecutableKind {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
-#[norito(tag = "effect", content = "value", rename_all = "snake_case")]
+#[norito(
+    tag = "effect",
+    content = "value",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub enum FeeSponsorRuleEffect {
     /// Permit the matched operation if no deny rule also matches.
     Allow,
@@ -110,6 +122,7 @@ pub enum FeeSponsorRuleEffect {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[norito(deny_unknown_fields)]
 pub struct FeeSponsorContractSelector {
     /// Optional stable contract alias that must match the target.
     #[norito(skip_serializing_if = "Option::is_none")]
@@ -130,6 +143,7 @@ pub struct FeeSponsorContractSelector {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[norito(deny_unknown_fields)]
 pub struct FeeSponsorRule {
     /// Allow or deny effect.
     pub effect: FeeSponsorRuleEffect,
@@ -151,6 +165,14 @@ pub struct FeeSponsorRule {
     /// Optional native instruction wire IDs. Empty means all native instruction IDs.
     #[norito(default)]
     pub instruction_wire_ids: BTreeSet<String>,
+    /// Optional asset-definition IDs for native asset transfers.
+    ///
+    /// A non-empty set matches only `iroha.transfer` operations whose concrete
+    /// transfer variant is an asset-quantity transfer for one of these
+    /// definitions. Domain, asset-definition, and NFT ownership transfers do
+    /// not match this selector even though they share the same wire ID.
+    #[norito(default)]
+    pub asset_transfer_definition_ids: BTreeSet<AssetDefinitionId>,
     /// Optional contract-call selectors. Empty means all contract calls.
     #[norito(default)]
     pub contract_selectors: Vec<FeeSponsorContractSelector>,
@@ -166,6 +188,7 @@ impl FeeSponsorRule {
             dataspaces: BTreeSet::new(),
             executable_kinds: BTreeSet::new(),
             instruction_wire_ids: BTreeSet::new(),
+            asset_transfer_definition_ids: BTreeSet::new(),
             contract_selectors: Vec::new(),
         }
     }
@@ -177,6 +200,7 @@ impl FeeSponsorRule {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[norito(deny_unknown_fields)]
 pub struct FeeSponsorPolicy {
     /// Policy identifier.
     pub id: FeeSponsorPolicyId,
@@ -227,6 +251,7 @@ mod tests {
         dataspaces: BTreeSet<DataSpaceId>,
         executable_kinds: BTreeSet<FeeSponsorExecutableKind>,
         instruction_wire_ids: BTreeSet<String>,
+        asset_transfer_definition_ids: BTreeSet<AssetDefinitionId>,
         contract_selectors: Vec<FeeSponsorContractSelector>,
     }
 
@@ -327,6 +352,7 @@ mod tests {
             dataspaces: BTreeSet::new(),
             executable_kinds: BTreeSet::new(),
             instruction_wire_ids: BTreeSet::new(),
+            asset_transfer_definition_ids: BTreeSet::new(),
             contract_selectors: Vec::new(),
         };
         let encoded = forged.encode();
@@ -346,12 +372,18 @@ mod tests {
             .insert(FeeSponsorExecutableKind::Instructions);
         rule.instruction_wire_ids
             .insert("iroha.transfer".to_owned());
+        rule.asset_transfer_definition_ids.insert(
+            "66owaQmAQMuHxPzxUN3bqZ6FJfDa"
+                .parse()
+                .expect("canonical asset definition id"),
+        );
 
         let json = norito::json::to_json(&rule).expect("serialize rule fee cap");
         let decoded: FeeSponsorRule =
             norito::json::from_str(&json).expect("deserialize rule fee cap");
         assert_eq!(decoded, rule);
         assert!(json.contains("\"max_fee\":\"0.01\""));
+        assert!(json.contains("\"asset_transfer_definition_ids\""));
 
         let negative = json.replacen("\"0.01\"", "\"-0.01\"", 1);
         assert!(

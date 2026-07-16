@@ -71,29 +71,50 @@ network prefix stay aligned with `docs/source/sns/address_display_guidelines.md`
 ## Kagemusha proof artifacts and device registration
 
 The Android/JVM offline surface has exactly two current pieces. `KagemushaRecursiveSpendProver`
-requires native bridge ABI 19, streams the six authenticated V3 proof-key artifacts into an atomic
-generation install, and exposes typed `initSpend`, `appendSpend`, `verifySpend`, and `buildRedeem`
-calls over the fixed native exports. `KagemushaScaledAmount` converts decimal input to positive
+requires native bridge ABI 20, streams the eight authenticated V4 proof artifacts into an atomic
+generation install, and exposes typed `initSpendV4`, `appendSpendV4`, `verifySpendV4`, and
+`buildRedeemV4` calls over the fixed native exports. `KagemushaScaledAmount` converts decimal input to positive
 `u128` atomic units exactly at the authoritative asset scale and never rounds. The standalone
 `DeviceAttestationRegistration` plus `RegisterOfflineDeviceAttestation` path validates finalized
 KeyMint/App Attest material and builds the exact one-instruction on-chain registration transaction.
 Android products remain fail-closed until the native proof backend reports available and the
-matching artifact generation is installed. The protocol and JVM append builder accept one or two
+matching artifact generation is installed. The exact external inventory is `ParamsIPA`, processed
+proving key, processed verifying key, and final-key selector-zero bootstrap witness for each Eq/Ep
+parity. Bounded circuit parameters are authenticated inline in the V4 manifest, not streamed as
+extra artifacts. The protocol and JVM append builder accept one or two
 inputs and enforce an eight-peer-hop ceiling natively. Inputs are canonicalized by authenticated
 bundle digest; duplicate or conflicting exact-state branches fail closed. Peer request and
 acknowledgement signing expose only strict P-256 device key/signature wrappers; callers never pass
 native wire discriminants.
 
+Artifact installation requires the canonical candidate-bound promotion record through
+`ReleaseAuthentication`, in addition to the trusted policy, attestation, benchmark evidence, and
+cryptographic review. An authenticated-but-unpromoted release cannot become active.
+
 `newToriiClient(...)` exposes only `getReadiness`, `submitTopUp`, `submitRedeem`, and
 `getOperation`. Commands send the typed Norito request directly with `application/x-norito` and the
-signed lowercase operation id as `Idempotency-Key`; responses must be typed Norito as well.
-`projectReadiness` returns the live asset scale, committed height/hash, and all role-specific
-verifier commitments and activation windows. `prepareTopUp` accepts Torii's authoritative
+signed lowercase operation id as `Idempotency-Key`; responses must be typed Norito as well. Top-up
+bodies are limited to 512 KiB and redemption bodies to 48 MiB, exposed as
+`MAX_TORII_TOP_UP_REQUEST_BYTES_V4` and `MAX_TORII_REDEEM_REQUEST_BYTES_V4`.
+`projectReadiness` returns the live asset scale, committed height/hash, all role-specific verifier
+commitments and activation windows, and the required nullable authenticated `artifactSet`. A
+present set binds the V4 generation, manifest, release-policy and release-attestation digests,
+issuance window, proof-pair bound, and asset scale to exact logical roles
+`kagemusha_recursive_step_eq_v4_verifier_record` and
+`kagemusha_recursive_step_ep_v4_verifier_record` with circuits
+`kagemusha-recursive-spend-step-eq-authenticated-layout-v4` and
+`kagemusha-recursive-spend-step-ep-authenticated-layout-v4`, respectively. An absent artifact set
+requires both recursive records and backend construction to be unavailable with exactly one
+`recursive_v4_registry_unavailable` or `recursive_v4_registry_malformed` blocker; a present set
+forbids both. `proofBackendAvailable` reports exact backend construction independently.
+`recursiveLineageSupported` additionally requires the authenticated artifact set and distinct
+active Eq/Ep records, while `ready` is true only when the complete blocker set is empty.
+`recursive_lineage_unavailable` is present exactly when lineage is false. `prepareTopUp` accepts Torii's authoritative
 `next_zero_path`; the resulting recursive init persists its own native membership witness rather
 than the earlier shield-tree witness. Typed decoders restore the opening and exact canonical
 top-up/redemption submissions for idempotent restart retries. Secret-bearing append/redemption
 build requests are single-use and zeroized when native proving consumes them.
-Each projected branch carries its complete ordered exact-state claim set and authenticated V3
+Each projected branch carries its complete ordered exact-state claim set and authenticated V4
 artifact binding. Native `conflictsWith` compares every claim pair, rejecting equality and
 ancestor/descendant overlap while allowing the two consistent sibling outputs from one split;
 applications never parse lineage paths.

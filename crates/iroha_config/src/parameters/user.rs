@@ -7697,9 +7697,10 @@ pub struct Offline {
     /// Escrow account bindings keyed by asset definition id.
     #[config(default = "BTreeMap::new()")]
     pub escrow_accounts: BTreeMap<String, String>,
-    /// Enable Kagemusha shielded offline-offline payments.
-    #[config(default = "defaults::settlement::offline::KAGEMUSHA_ENABLED")]
-    pub kagemusha_enabled: bool,
+    /// Canonical Norito policy authenticating promoted Kagemusha releases.
+    pub kagemusha_release_policy_path: Option<PathBuf>,
+    /// Directory containing manifest-digest-addressed Kagemusha release artifacts.
+    pub kagemusha_artifact_dir: Option<PathBuf>,
 }
 
 impl Default for Offline {
@@ -7707,7 +7708,9 @@ impl Default for Offline {
         Self {
             escrow_required: false,
             escrow_accounts: BTreeMap::new(),
-            kagemusha_enabled: defaults::settlement::offline::KAGEMUSHA_ENABLED,
+            kagemusha_release_policy_path:
+                defaults::settlement::offline::kagemusha_release_policy_path(),
+            kagemusha_artifact_dir: defaults::settlement::offline::kagemusha_artifact_dir(),
         }
     }
 }
@@ -7929,8 +7932,28 @@ impl Offline {
         let Offline {
             escrow_required,
             escrow_accounts,
-            kagemusha_enabled,
+            kagemusha_release_policy_path,
+            kagemusha_artifact_dir,
         } = self;
+        if kagemusha_release_policy_path.is_some() != kagemusha_artifact_dir.is_some() {
+            emitter.emit(
+                Report::new(ParseError::InvalidSettlementConfig).attach(
+                    "settlement.offline.kagemusha_release_policy_path and settlement.offline.kagemusha_artifact_dir must be configured together",
+                ),
+            );
+        }
+        if kagemusha_release_policy_path
+            .as_ref()
+            .is_some_and(|path| path.as_os_str().is_empty())
+            || kagemusha_artifact_dir
+                .as_ref()
+                .is_some_and(|path| path.as_os_str().is_empty())
+        {
+            emitter.emit(
+                Report::new(ParseError::InvalidSettlementConfig)
+                    .attach("settlement.offline Kagemusha release paths must not be empty"),
+            );
+        }
         let mut escrow_bindings = BTreeMap::new();
         for (definition, account) in escrow_accounts {
             let definition_id = match definition.parse() {
@@ -7965,7 +7988,8 @@ impl Offline {
         actual::Offline {
             escrow_required,
             escrow_accounts: escrow_bindings,
-            kagemusha_enabled,
+            kagemusha_release_policy_path,
+            kagemusha_artifact_dir,
         }
     }
 }
@@ -15036,22 +15060,36 @@ pub struct ToriiOnboarding {
     pub authority: String,
     /// Private key corresponding to the onboarding authority.
     pub private_key: ExposedPrivateKey,
+    /// Exact fully-qualified onboarding domain to lowercase hexadecimal BLAKE3 token digest.
+    ///
+    /// Each digest must be unique so one credential authenticates exactly one domain. An empty
+    /// map keeps signer-backed onboarding configured but makes its HTTP routes fail closed. Raw
+    /// tokens must never be written to peer configuration.
+    #[config(default)]
+    #[norito(default)]
+    pub api_token_hashes_by_domain: BTreeMap<String, String>,
     /// Permission names that onboarding is allowed to grant to new accounts.
     #[config(default)]
     #[norito(default = "default_torii_onboarding_allowed_permissions")]
     pub allowed_permissions: Vec<String>,
-    /// Exact dataspace ids for read-only account-alias resolution grants applied to every
-    /// newly onboarded account.
+    /// Exact dataspace ids for domainless account-alias resolution grants applied to every
+    /// newly onboarded account. These scopes are independent of `alias_resolve_domains`.
     #[config(default)]
     #[norito(default)]
     pub alias_resolve_dataspaces: Vec<u64>,
-    /// Exact fully-qualified domains for read-only account-alias resolution grants applied to
-    /// every newly onboarded account.
+    /// Exact fully-qualified domains for domain-qualified account-alias resolution grants applied
+    /// to every newly onboarded account. A domain scope does not grant its enclosing dataspace.
     #[config(default)]
     #[norito(default)]
     pub alias_resolve_domains: Vec<String>,
-    /// Optional sponsor account granted via `CanUseFeeSponsor`.
+    /// Optional sponsor account used for exact per-account policy enrollment.
+    ///
+    /// Must be configured together with `fee_sponsor_policy`; neither field has a fallback.
     pub fee_sponsor_account: Option<String>,
+    /// Optional explicit sponsor-local policy used for exact per-account enrollment.
+    ///
+    /// Must be configured together with `fee_sponsor_account`; neither field has a fallback.
+    pub fee_sponsor_policy: Option<String>,
     /// Default alias lease term applied during onboarding.
     #[config(default = "1")]
     #[norito(default = "default_torii_onboarding_alias_lease_term_years")]
@@ -15088,6 +15126,42 @@ impl ToriiOnboarding {
             },
             iroha_data_model::account::ParsedAccountId::into_account_id,
         );
+        let mut seen_api_token_hashes = BTreeSet::new();
+        let api_token_hashes_by_domain = self
+            .api_token_hashes_by_domain
+            .into_iter()
+            .map(|(domain, value)| {
+                let parsed = DomainId::parse_fully_qualified(&domain).unwrap_or_else(|err| {
+                    panic!(
+                        "invalid torii.onboarding.api_token_hashes_by_domain key `{domain}`: {}",
+                        err.reason()
+                    )
+                });
+                assert_eq!(
+                    domain,
+                    parsed.to_string(),
+                    "torii.onboarding.api_token_hashes_by_domain key `{domain}` must be canonical `{parsed}`"
+                );
+                assert!(
+                    value.len() == 64
+                        && value.bytes().all(|byte| {
+                            byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)
+                        }),
+                    "torii.onboarding.api_token_hashes_by_domain digest for `{domain}` must be exactly 64 lowercase hexadecimal characters"
+                );
+                let decoded = hex::decode(&value).expect(
+                    "validated torii.onboarding.api_token_hashes_by_domain digest must decode",
+                );
+                let digest = <[u8; 32]>::try_from(decoded.as_slice()).expect(
+                    "validated torii.onboarding.api_token_hashes_by_domain digest must be 32 bytes",
+                );
+                assert!(
+                    seen_api_token_hashes.insert(digest),
+                    "torii.onboarding.api_token_hashes_by_domain must not reuse a token digest across domains"
+                );
+                (parsed, digest)
+            })
+            .collect();
         let allowed_permissions = self
             .allowed_permissions
             .into_iter()
@@ -15118,12 +15192,32 @@ impl ToriiOnboarding {
                 parsed
             })
             .collect();
-        let fee_sponsor_account = self.fee_sponsor_account.map(|account| {
-            AccountId::parse_encoded(&account).map_or_else(
-                |err| panic!("invalid torii.onboarding.fee_sponsor_account `{account}`: {err}"),
-                iroha_data_model::account::ParsedAccountId::into_account_id,
-            )
-        });
+        let fee_sponsor = match (self.fee_sponsor_account, self.fee_sponsor_policy) {
+            (None, None) => None,
+            (Some(account), Some(policy)) => {
+                let account = AccountId::parse_encoded(&account).map_or_else(
+                    |err| panic!("invalid torii.onboarding.fee_sponsor_account `{account}`: {err}"),
+                    iroha_data_model::account::ParsedAccountId::into_account_id,
+                );
+                let parsed_policy = policy
+                    .parse::<iroha_data_model::name::Name>()
+                    .unwrap_or_else(|err| {
+                        panic!("invalid torii.onboarding.fee_sponsor_policy `{policy}`: {err}")
+                    });
+                assert_eq!(
+                    policy,
+                    parsed_policy.to_string(),
+                    "torii.onboarding.fee_sponsor_policy `{policy}` must be canonical `{parsed_policy}`"
+                );
+                Some(actual::ToriiOnboardingFeeSponsor {
+                    account,
+                    policy: parsed_policy,
+                })
+            }
+            _ => panic!(
+                "torii.onboarding.fee_sponsor_account and torii.onboarding.fee_sponsor_policy must be configured together"
+            ),
+        };
         let alias_auto_renew_subscription_domain =
             self.alias_auto_renew_subscription_domain.map(|domain| {
                 DomainId::parse_fully_qualified(&domain).unwrap_or_else(|err| {
@@ -15136,10 +15230,11 @@ impl ToriiOnboarding {
         Some(actual::ToriiOnboarding {
             authority,
             private_key: self.private_key,
+            api_token_hashes_by_domain,
             allowed_permissions,
             alias_resolve_dataspaces,
             alias_resolve_domains,
-            fee_sponsor_account,
+            fee_sponsor,
             alias_lease_term_years: self.alias_lease_term_years,
             alias_auto_renew_enabled: self.alias_auto_renew_enabled,
             alias_auto_renew_retry_backoff_ms: self.alias_auto_renew_retry_backoff_ms,
@@ -19862,9 +19957,10 @@ mod offline_cfg_tests {
 
 #[cfg(test)]
 mod duration_clamp_tests {
-    use std::{path::PathBuf, time::Duration as StdDuration};
+    use std::{collections::BTreeMap, path::PathBuf, time::Duration as StdDuration};
 
     use iroha_config_base::{read::ConfigReader, toml::TomlSource};
+    use iroha_data_model::domain::DomainId;
     use toml::{Table, Value};
 
     use crate::parameters::{actual, defaults, user::SoracloudRuntime};
@@ -20231,6 +20327,199 @@ private_key = "8926201CA347641228C3B79AA43839DEDC85FA51C0E8B9B6A00F6B0D6B0423E90
             onboarding.alias_auto_renew_subscription_domain.is_none(),
             "subscription domain remains optional"
         );
+        assert!(
+            onboarding.api_token_hashes_by_domain.is_empty(),
+            "missing onboarding token digest map must remain explicit so Torii can fail closed"
+        );
+    }
+
+    fn table_with_onboarding_token_hashes(
+        first_domain: &str,
+        first_hash: &str,
+        second_domain: &str,
+        second_hash: &str,
+    ) -> Table {
+        let mut table = base_table();
+        let torii = table
+            .get_mut("torii")
+            .and_then(Value::as_table_mut)
+            .expect("torii table");
+        let authority = iroha_data_model::account::AccountId::new(
+            checked_onboarding_authority_ed25519_key_fixture()
+                .public_key()
+                .clone(),
+        )
+        .to_string();
+        let onboarding: Table = toml::from_str(&format!(
+            r#"
+enabled = true
+authority = "{authority}"
+private_key = "8926201CA347641228C3B79AA43839DEDC85FA51C0E8B9B6A00F6B0D6B0423E902973F"
+api_token_hashes_by_domain = {{ "{first_domain}" = "{first_hash}", "{second_domain}" = "{second_hash}" }}
+"#,
+        ))
+        .expect("parse onboarding table");
+        torii.insert("onboarding".into(), Value::Table(onboarding));
+        table
+    }
+
+    #[test]
+    fn onboarding_api_token_hashes_parse_exact_domain_scoped_lowercase_blake3_digests() {
+        let actual = load_user_root(table_with_onboarding_token_hashes(
+            "hbl.sbp",
+            &"ab".repeat(32),
+            "ubl.sbp",
+            &"cd".repeat(32),
+        ))
+        .parse()
+        .expect("parse user config");
+        let hbl = DomainId::try_new("hbl", "sbp").expect("HBL domain");
+        let ubl = DomainId::try_new("ubl", "sbp").expect("UBL domain");
+        assert_eq!(
+            actual
+                .torii
+                .onboarding
+                .expect("onboarding enabled")
+                .api_token_hashes_by_domain,
+            BTreeMap::from([(hbl, [0xab; 32]), (ubl, [0xcd; 32])])
+        );
+    }
+
+    #[test]
+    fn onboarding_api_token_hashes_reject_noncanonical_digest_text() {
+        for invalid in [
+            "AB".repeat(32),
+            format!(" {}", "ab".repeat(32)),
+            format!("{} ", "ab".repeat(32)),
+            "ab".repeat(31),
+            "ab".repeat(33),
+            "g0".repeat(32),
+        ] {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _ = load_user_root(table_with_onboarding_token_hashes(
+                    "hbl.sbp",
+                    &invalid,
+                    "ubl.sbp",
+                    &"cd".repeat(32),
+                ))
+                .parse();
+            }));
+            assert!(
+                result.is_err(),
+                "noncanonical onboarding digest `{invalid}` must fail closed"
+            );
+        }
+    }
+
+    #[test]
+    fn onboarding_api_token_hashes_reject_noncanonical_domain_keys() {
+        for invalid in [" hbl.sbp", "hbl.sbp ", "HBL.sbp", "hbl"] {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _ = load_user_root(table_with_onboarding_token_hashes(
+                    invalid,
+                    &"ab".repeat(32),
+                    "ubl.sbp",
+                    &"cd".repeat(32),
+                ))
+                .parse();
+            }));
+            assert!(
+                result.is_err(),
+                "noncanonical onboarding domain `{invalid}` must fail closed"
+            );
+        }
+    }
+
+    #[test]
+    fn onboarding_api_token_hashes_reject_cross_domain_digest_reuse() {
+        let digest = "ab".repeat(32);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = load_user_root(table_with_onboarding_token_hashes(
+                "hbl.sbp", &digest, "ubl.sbp", &digest,
+            ))
+            .parse();
+        }));
+        assert!(
+            result.is_err(),
+            "cross-domain digest reuse must fail closed"
+        );
+    }
+
+    fn table_with_onboarding_fee_sponsor(
+        sponsor_account: Option<&str>,
+        sponsor_policy: Option<&str>,
+    ) -> Table {
+        let mut table = table_with_onboarding_token_hashes(
+            "hbl.sbp",
+            &"ab".repeat(32),
+            "ubl.sbp",
+            &"cd".repeat(32),
+        );
+        let onboarding = table
+            .get_mut("torii")
+            .and_then(Value::as_table_mut)
+            .and_then(|torii| torii.get_mut("onboarding"))
+            .and_then(Value::as_table_mut)
+            .expect("torii onboarding table");
+        if let Some(account) = sponsor_account {
+            onboarding.insert(
+                "fee_sponsor_account".into(),
+                Value::String(account.to_owned()),
+            );
+        }
+        if let Some(policy) = sponsor_policy {
+            onboarding.insert(
+                "fee_sponsor_policy".into(),
+                Value::String(policy.to_owned()),
+            );
+        }
+        table
+    }
+
+    #[test]
+    fn onboarding_fee_sponsor_requires_and_parses_one_explicit_exact_pair() {
+        let sponsor = iroha_data_model::account::AccountId::new(
+            checked_onboarding_authority_ed25519_key_fixture()
+                .public_key()
+                .clone(),
+        );
+        let actual = load_user_root(table_with_onboarding_fee_sponsor(
+            Some(&sponsor.to_string()),
+            Some("retail"),
+        ))
+        .parse()
+        .expect("parse exact onboarding fee sponsor pair");
+        let fee_sponsor = actual
+            .torii
+            .onboarding
+            .expect("onboarding enabled")
+            .fee_sponsor
+            .expect("fee sponsor configured");
+        assert_eq!(fee_sponsor.account, sponsor);
+        assert_eq!(fee_sponsor.policy.to_string(), "retail");
+    }
+
+    #[test]
+    fn onboarding_fee_sponsor_rejects_partial_or_implicit_configuration() {
+        let sponsor = iroha_data_model::account::AccountId::new(
+            checked_onboarding_authority_ed25519_key_fixture()
+                .public_key()
+                .clone(),
+        )
+        .to_string();
+        for (account, policy) in [
+            (Some(sponsor.as_str()), None),
+            (None, Some("retail")),
+            (Some(sponsor.as_str()), Some(" retail")),
+        ] {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _ = load_user_root(table_with_onboarding_fee_sponsor(account, policy)).parse();
+            }));
+            assert!(
+                result.is_err(),
+                "partial or noncanonical fee sponsor configuration must fail closed"
+            );
+        }
     }
 
     #[test]
@@ -21774,15 +22063,61 @@ mod settlement_offline_tests {
     use super::*;
 
     #[test]
-    fn offline_parse_preserves_enabled_kagemusha_defaults() {
+    fn offline_parse_preserves_unconfigured_kagemusha_defaults() {
         let mut emitter = Emitter::new();
         let actual = Offline::default().parse(&mut emitter);
 
         assert!(emitter.into_result().is_ok());
-        assert!(
-            actual.kagemusha_enabled,
-            "Kagemusha must remain enabled after user-config parsing"
-        );
+        assert!(actual.kagemusha_release_policy_path.is_none());
+        assert!(actual.kagemusha_artifact_dir.is_none());
+    }
+
+    #[test]
+    fn offline_parse_requires_release_paths_as_a_pair() {
+        for offline in [
+            Offline {
+                kagemusha_release_policy_path: Some("policy.norito".into()),
+                ..Offline::default()
+            },
+            Offline {
+                kagemusha_artifact_dir: Some("artifacts".into()),
+                ..Offline::default()
+            },
+        ] {
+            let mut emitter = Emitter::new();
+            let _ = offline.parse(&mut emitter);
+            assert!(emitter.into_result().is_err());
+        }
+    }
+
+    #[test]
+    fn offline_parse_preserves_paired_release_paths() {
+        let policy = PathBuf::from("policy.norito");
+        let artifacts = PathBuf::from("artifacts");
+        let mut emitter = Emitter::new();
+        let actual = Offline {
+            kagemusha_release_policy_path: Some(policy.clone()),
+            kagemusha_artifact_dir: Some(artifacts.clone()),
+            ..Offline::default()
+        }
+        .parse(&mut emitter);
+
+        assert!(emitter.into_result().is_ok());
+        assert_eq!(actual.kagemusha_release_policy_path, Some(policy));
+        assert_eq!(actual.kagemusha_artifact_dir, Some(artifacts));
+    }
+
+    #[test]
+    fn offline_parse_rejects_empty_release_paths() {
+        let mut emitter = Emitter::new();
+        let _ = Offline {
+            kagemusha_release_policy_path: Some(PathBuf::new()),
+            kagemusha_artifact_dir: Some(PathBuf::from("artifacts")),
+            ..Offline::default()
+        }
+        .parse(&mut emitter);
+
+        assert!(emitter.into_result().is_err());
     }
 }
 

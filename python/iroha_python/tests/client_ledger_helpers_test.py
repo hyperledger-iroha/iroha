@@ -31,6 +31,7 @@ from iroha_python._privacy_backends import (
     _is_production_verify_backend_label,
     _require_production_verify_backend_label,
 )
+from iroha_python.client import ACCOUNT_ONBOARDING_TOKEN_HEADER
 from iroha_python.repo import (
     RepoAgreementListPage,
     RepoCashLeg,
@@ -66,6 +67,28 @@ class FakeSession:
         return response
 
 
+class OnboardingSession:
+    def __init__(self, responses: list[requests.Response]):
+        self.responses = responses
+        self.calls: list[dict[str, object]] = []
+
+    def request(self, method: str, url: str, **kwargs: object) -> requests.Response:
+        self.calls.append(
+            {
+                "method": method,
+                "path": urlsplit(url).path,
+                "headers": dict(kwargs.get("headers") or {}),
+                "data": kwargs.get("data"),
+                "allow_redirects": kwargs.get("allow_redirects"),
+            }
+        )
+        if not self.responses:
+            raise AssertionError(f"unexpected request {method} {url}")
+        response = self.responses.pop(0)
+        response.url = url
+        return response
+
+
 def response(
     status: int,
     payload: object | None = None,
@@ -82,6 +105,129 @@ def response(
         result._content = json.dumps(payload).encode("utf-8")
         result.headers["Content-Type"] = "application/json"
     return result
+
+
+ONBOARDING_TOKEN = "0123456789abcdef0123456789ABCDEF"
+ONBOARDING_UAID = "uaid:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
+
+def test_onboard_account_sends_exact_route_token_and_current_json_contract() -> None:
+    session = OnboardingSession([response(202, {"status": "QUEUED"})])
+    client = ToriiClient(
+        "https://torii.example",
+        session=session,
+        api_token="global-api-token",
+    )
+
+    result = client.onboard_account(
+        onboarding_token=ONBOARDING_TOKEN,
+        alias="merchant@universal",
+        uaid=ONBOARDING_UAID.upper(),
+        public_key_hex="AB" * 32,
+        identity_commitment_hex="CD" * 32,
+        permissions=["CanFoo", "CanFoo", "CanBar"],
+    )
+
+    assert result.status_code == 202
+    assert len(session.calls) == 1
+    call = session.calls[0]
+    assert call["method"] == "POST"
+    assert call["path"] == "/v1/accounts/onboard"
+    assert call["allow_redirects"] is False
+    headers = call["headers"]
+    assert isinstance(headers, dict)
+    onboarding_headers = [
+        (name, value)
+        for name, value in headers.items()
+        if name.lower() == ACCOUNT_ONBOARDING_TOKEN_HEADER.lower()
+    ]
+    assert onboarding_headers == [(ACCOUNT_ONBOARDING_TOKEN_HEADER, ONBOARDING_TOKEN)]
+    assert headers["X-API-Token"] == "global-api-token"
+    assert headers["Accept"] == "application/json"
+    assert headers["Content-Type"] == "application/json"
+    data = call["data"]
+    assert isinstance(data, bytes)
+    assert ONBOARDING_TOKEN.encode() not in data
+    assert json.loads(data) == {
+        "alias": "merchant@universal",
+        "uaid": ONBOARDING_UAID,
+        "public_key_hex": "ab" * 32,
+        "identity_commitment_hex": "cd" * 32,
+        "permissions": ["CanFoo", "CanBar"],
+    }
+
+
+@pytest.mark.parametrize(
+    "token",
+    [
+        None,
+        "",
+        "T" * 31,
+        "T" * 257,
+        "T" * 31 + " ",
+        "T" * 31 + "é",
+    ],
+)
+def test_onboard_account_rejects_malformed_route_token_before_dispatch(
+    token: object,
+) -> None:
+    session = OnboardingSession([])
+    client = ToriiClient("https://torii.example", session=session)
+
+    with pytest.raises((TypeError, ValueError)) as error:
+        client.onboard_account(
+            onboarding_token=token,  # type: ignore[arg-type]
+            alias="merchant@universal",
+            uaid=ONBOARDING_UAID,
+            public_key_hex="ab" * 32,
+        )
+
+    if token:
+        assert str(token) not in str(error.value)
+    assert session.calls == []
+
+
+def test_onboard_account_requires_explicit_token_and_rejects_global_default() -> None:
+    session = OnboardingSession([])
+    client = ToriiClient("https://torii.example", session=session)
+
+    with pytest.raises(TypeError, match="onboarding_token"):
+        client.onboard_account(  # type: ignore[call-arg]
+            alias="merchant@universal",
+            uaid=ONBOARDING_UAID,
+            public_key_hex="ab" * 32,
+        )
+    with pytest.raises(ValueError, match="pass onboarding_token explicitly"):
+        ToriiClient(
+            "https://torii.example",
+            session=session,
+            default_headers={ACCOUNT_ONBOARDING_TOKEN_HEADER.lower(): ONBOARDING_TOKEN},
+        )
+    assert session.calls == []
+
+
+def test_onboard_account_does_not_follow_redirect_or_accept_retired_fields() -> None:
+    session = OnboardingSession([response(307, text="redirect")])
+    client = ToriiClient("https://torii.example", session=session)
+
+    result = client.onboard_account(
+        onboarding_token=ONBOARDING_TOKEN,
+        alias="merchant@universal",
+        uaid=ONBOARDING_UAID,
+        public_key_hex="ab" * 32,
+    )
+
+    assert result.status_code == 307
+    assert len(session.calls) == 1
+    assert session.calls[0]["allow_redirects"] is False
+    with pytest.raises(TypeError, match="gas_asset_id"):
+        client.onboard_account(  # type: ignore[call-arg]
+            onboarding_token=ONBOARDING_TOKEN,
+            alias="merchant@universal",
+            uaid=ONBOARDING_UAID,
+            public_key_hex="ab" * 32,
+            gas_asset_id="retired",
+        )
 
 
 def _expected_backend_rejection_message(backend: object) -> str:
@@ -1741,63 +1887,6 @@ def test_account_permission_listing_rejects_foreign_chain_discriminant() -> None
         client.list_account_permissions(taira_account)
     assert session.calls == []
 
-
-def test_deploy_contract_bundle_reads_code_file_and_waits(tmp_path) -> None:
-    code_file = tmp_path / "contract.to"
-    code_file.write_bytes(b"contract-code")
-    tx_hash = "a" * 64
-    session = FakeSession(
-        [
-            response(
-                200,
-                {
-                    "ok": True,
-                    "bundle_name": "single",
-                    "bundle_digest": "digest",
-                    "chain_fingerprint": "chain",
-                    "dry_run": False,
-                    "completed_stages": [],
-                    "contracts": [
-                        {
-                            "name": "contract",
-                            "contract_alias": "contract::is",
-                            "contract_address": "addr",
-                            "kaizen": False,
-                            "tx_hash_hex": tx_hash,
-                            "code_hash_hex": "b" * 64,
-                            "abi_hash_hex": "c" * 64,
-                            "status": "submitted",
-                        }
-                    ],
-                    "hajimari_calls": [],
-                    "assertions": [],
-                },
-            ),
-            response(200, {"status": {"kind": "Applied"}, "hash": tx_hash}),
-        ]
-    )
-    client = ToriiClient("http://torii.example", session=session, max_retries=0)
-
-    result = client.deploy_contract_bundle(
-        authority="authority@is",
-        private_key="priv",
-        contract_alias="contract::is",
-        code_file=code_file,
-        wait=True,
-        timeout_ms=1000,
-        interval=0,
-        gas_asset_id="xor#sora",
-        fee_sponsor="sponsor@sora",
-        gas_limit=10_000_000,
-    )
-
-    assert result["terminal_kind"] == "Applied"
-    assert result["tx_hashes"] == [tx_hash]
-    deploy_payload = json.loads(session.calls[0]["data"].decode("utf-8"))
-    assert deploy_payload["code_b64"] == "Y29udHJhY3QtY29kZQ=="
-    assert deploy_payload["gas_asset_id"] == "xor#sora"
-    assert deploy_payload["fee_sponsor"] == "sponsor@sora"
-    assert deploy_payload["gas_limit"] == 10_000_000
 
 
 def test_call_contract_and_wait_posts_typed_request() -> None:

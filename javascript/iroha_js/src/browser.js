@@ -31,10 +31,28 @@ export {
   browserSignedTransactionHashHex,
   browserTransactionCodec,
   browserTransactionPayloadHashHex,
+  buildBrowserInstructionTransactionPayload,
   buildBrowserTransferPayload,
+  finalizeBrowserInstructionTransaction,
   finalizeBrowserSignedTransaction,
+  validateBrowserInstructionTransactionSignable,
   validateBrowserTransferSignable,
 } from "./transactionCodec.js";
+
+export {
+  SMART_CONTRACT_CODE_CHUNK_BYTES,
+  deploySmartContractBrowser,
+  deriveContractAddress,
+  prepareBrowserContractArtifact,
+} from "./smartContractDeployment.js";
+
+export {
+  buildCancelSmartContractCodeUploadInstruction,
+  buildCommitContractDeploymentInstruction,
+  buildFinalizeSmartContractCodeUploadInstruction,
+  buildRegisterSmartContractCodeInstruction,
+  buildUploadSmartContractCodeChunkInstruction,
+} from "./instructionBuilders.js";
 
 export {
   noritoDecodeInstruction,
@@ -50,6 +68,21 @@ export {
   ToriiBrowserClient as ToriiClient,
   ToriiBrowserHttpError as ToriiHttpError,
 } from "./toriiBrowserClient.js";
+
+export {
+  KAGEMUSHA_MANIFEST_VERSION,
+  KAGEMUSHA_MAX_HOPS,
+  KAGEMUSHA_REDEEM_REQUEST_MAX_BYTES,
+  KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION,
+  KAGEMUSHA_TOP_UP_REQUEST_MAX_BYTES,
+  normalizeKagemushaAssetSelector,
+  normalizeKagemushaOperationId,
+  normalizeKagemushaOperationReference,
+  normalizeKagemushaOperationStatus,
+  normalizeKagemushaRedeemRequestV4,
+  normalizeKagemushaReadinessV4,
+  normalizeKagemushaTopUpRequestV4,
+} from "./kagemushaOffline.js";
 
 export {
   assetReferencesMatch,

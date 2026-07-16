@@ -23,6 +23,20 @@ Alternatively, check out the [documentation](https://docs.iroha.tech/get-started
 The CLI will attempt to detect your system language for messages. Use `--language <CODE>` to override this selection.
 For automation, prefer `--output-format json --machine` to suppress startup chatter and fail fast when `client.toml` is missing.
 
+The Taira write canary requires an explicit owner-only token file for account
+onboarding. The file must be a current-user-owned, regular non-symlink with no
+group/other permissions and must contain the exact 32–256 byte printable-ASCII
+credential without a trailing newline:
+
+```bash
+iroha taira write-canary \
+  --public-root https://taira.sora.org \
+  --onboarding-token-file "$HOME/.config/iroha/taira-onboarding.token"
+```
+
+The credential is sent only as `X-Iroha-Onboarding-Token` on the JSON onboarding
+request and is never forwarded across redirects.
+
 ### Client configuration
 
 `client.toml` now owns canonical I105 parsing/rendering through `[account].chain_discriminant`.
@@ -47,7 +61,6 @@ Use the built-in wait flow instead of shell polling:
 
 ```bash
 iroha tx status --hash <SIGNED_TX_HASH> --wait
-iroha contract deploy --authority <ACCOUNT_ID> --private-key <HEX> --code-file ./contract.to --wait
 iroha contract call --contract-alias router::dex.universal --entrypoint swap --wait
 iroha contract call --contract-alias router::dex.universal --entrypoint swap --simulate
 ```

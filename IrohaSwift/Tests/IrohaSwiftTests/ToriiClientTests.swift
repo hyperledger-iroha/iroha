@@ -1406,6 +1406,7 @@ fileprivate func tcMakeStubProofSummary() -> ToriiDaProofSummary {
 
 final class ToriiClientTests: XCTestCase {
     private static let pipelineHash = String(repeating: "d", count: 64)
+    private let onboardingToken = String(repeating: "T", count: 32)
     private let encodedRoseAssetID = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
     private let roseAssetDefinitionId = "66owaQmAQMuHxPzxUN3bqZ6FJfDa"
 
@@ -1424,24 +1425,34 @@ final class ToriiClientTests: XCTestCase {
           "withdrawal_height": null
         },
         "active_recursive_step_eq_verifier": {
-          "id": {"backend": "halo2/ipa", "name": "hbl_kagemusha_recursive_step_eq_release_2026q3"},
+          "id": {"backend": "halo2/ipa", "name": "kagemusha_recursive_step_eq_v4_verifier_record"},
           "version": 1,
           "circuit_id": "kagemusha-recursive-spend-step-eq-authenticated-layout-v4",
           "commitment": "4444444444444444444444444444444444444444444444444444444444444444",
           "public_inputs_schema_hash": "4545454545454545454545454545454545454545454545454545454545454545",
           "max_proof_bytes": 4096,
-          "activation_height": 0,
-          "withdrawal_height": null
+          "activation_height": 1,
+          "withdrawal_height": 80
         },
         "active_recursive_step_ep_verifier": {
-          "id": {"backend": "halo2/ipa", "name": "hbl_kagemusha_recursive_step_ep_release_2026q3"},
+          "id": {"backend": "halo2/ipa", "name": "kagemusha_recursive_step_ep_v4_verifier_record"},
           "version": 1,
           "circuit_id": "kagemusha-recursive-spend-step-ep-authenticated-layout-v4",
           "commitment": "5555555555555555555555555555555555555555555555555555555555555555",
           "public_inputs_schema_hash": "5656565656565656565656565656565656565656565656565656565656565656",
           "max_proof_bytes": 4096,
-          "activation_height": 0,
-          "withdrawal_height": null
+          "activation_height": 1,
+          "withdrawal_height": 80
+        },
+        "artifact_set": {
+          "generation": "release-v4",
+          "manifest_sha256": "b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1b1",
+          "release_policy_sha256": "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
+          "release_attestation_sha256": "b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3",
+          "activation_height": 1,
+          "withdrawal_height": 80,
+          "max_proof_bytes": 4096,
+          "asset_scale": 9
         },
         "proof_backend_available": true,
         "recursive_lineage_supported": true,
@@ -1508,11 +1519,14 @@ final class ToriiClientTests: XCTestCase {
         irohaSwiftPackageRootURL().deletingLastPathComponent()
     }
 
-    private func makeClient(baseURL: URL = URL(string: "https://example.test")!) -> ToriiClient {
+    private func makeClient(
+        baseURL: URL = URL(string: "https://example.test")!,
+        defaultHeaders: [String: String] = [:]
+    ) -> ToriiClient {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [StubURLProtocol.self]
         let session = URLSession(configuration: configuration)
-        return ToriiClient(baseURL: baseURL, session: session)
+        return ToriiClient(baseURL: baseURL, session: session, defaultHeaders: defaultHeaders)
     }
 
     private func assertToriiInvalidPayload(
@@ -10359,6 +10373,17 @@ final class ToriiClientTests: XCTestCase {
             XCTAssertEqual(request.httpMethod, "POST")
             XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
             XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/json")
+            XCTAssertEqual(request.value(forHTTPHeaderField: ToriiAPITokenHeader), "global-api-token")
+            XCTAssertEqual(
+                request.value(forHTTPHeaderField: ToriiAccountOnboardingTokenHeader),
+                self.onboardingToken
+            )
+            XCTAssertEqual(
+                request.allHTTPHeaderFields?.keys.filter {
+                    $0.caseInsensitiveCompare(ToriiAccountOnboardingTokenHeader) == .orderedSame
+                }.count,
+                1
+            )
             let payload = self.bodyJSON(from: request)
             XCTAssertEqual(payload["alias"] as? String, "alice@universal")
             XCTAssertEqual(payload["account_id"] as? String, accountId)
@@ -10367,6 +10392,7 @@ final class ToriiClientTests: XCTestCase {
             XCTAssertEqual(payload["identity_commitment_hex"] as? String, commitmentHex)
             XCTAssertEqual(payload["permissions"] as? [String], ["CanFoo", "CanBar"])
             XCTAssertNil(payload["identity"])
+            XCTAssertFalse(String(data: self.bodyData(from: request)!, encoding: .utf8)!.contains(self.onboardingToken))
             let response = HTTPURLResponse(url: request.url!,
                                            statusCode: 202,
                                            httpVersion: nil,
@@ -10374,14 +10400,18 @@ final class ToriiClientTests: XCTestCase {
             return (response, responseBody)
         }
 
-        let response = try await makeClient().registerAccount(
+        let response = try await makeClient(defaultHeaders: [
+            ToriiAPITokenHeader: "global-api-token",
+            ToriiAccountOnboardingTokenHeader.lowercased(): "retired-default-token-must-not-be-used"
+        ]).registerAccount(
             ToriiAccountOnboardingRequest(
                 alias: "alice@universal",
                 accountId: accountId,
                 uaid: "UAID:\(uaidHex.uppercased())",
                 identityCommitmentHex: "  \(commitmentHex.uppercased())  ",
                 permissions: [" CanFoo ", "", "CanFoo", "CanBar"]
-            )
+            ),
+            onboardingToken: onboardingToken
         )
         XCTAssertEqual(response.uaid, "uaid:\(uaidHex)")
         XCTAssertEqual(response.status, .queued)
@@ -10398,6 +10428,150 @@ final class ToriiClientTests: XCTestCase {
         XCTAssertEqual(response.lease.nextChargeMs, 900)
         XCTAssertEqual(response.lease.lastInvoiceStatus, "paid")
         XCTAssertEqual(response.lease.maxChargeAmount, "2500")
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testRegisterAccountRejectsMalformedOnboardingTokenBeforeNetwork() async {
+        StubURLProtocol.handler = { _ in
+            XCTFail("malformed onboarding token reached HTTP dispatch")
+            throw URLError(.badURL)
+        }
+        let request = ToriiAccountOnboardingRequest(
+            alias: "alice@universal",
+            publicKeyHex: String(repeating: "11", count: 32),
+            uaid: "uaid:00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
+        )
+        let malformed = [
+            "",
+            String(repeating: "T", count: 31),
+            String(repeating: "T", count: 257),
+            String(repeating: "T", count: 31) + " ",
+            String(repeating: "T", count: 31) + "é"
+        ]
+
+        for token in malformed {
+            do {
+                _ = try await makeClient().registerAccount(request, onboardingToken: token)
+                XCTFail("Expected malformed onboarding token to fail")
+            } catch {
+                guard case let ToriiClientError.invalidPayload(message) = error else {
+                    return XCTFail("Expected invalidPayload error, got \(error)")
+                }
+                if !token.isEmpty {
+                    XCTAssertFalse(message.contains(token), "credential must not appear in validation errors")
+                }
+            }
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testRegisterAccountDoesNotFollowRedirects() async {
+        var requestCount = 0
+        StubURLProtocol.handler = { request in
+            requestCount += 1
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 307,
+                httpVersion: nil,
+                headerFields: [
+                    "Location": "https://redirect.example/v1/accounts/onboard",
+                    "x-iroha-reject-code": self.onboardingToken
+                ]
+            )!
+            return (
+                response,
+                Data("{\"message\":\"server echoed \(self.onboardingToken)\"}".utf8)
+            )
+        }
+
+        do {
+            _ = try await makeClient().registerAccount(
+                ToriiAccountOnboardingRequest(
+                    alias: "alice@universal",
+                    publicKeyHex: String(repeating: "11", count: 32),
+                    uaid: "uaid:00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
+                ),
+                onboardingToken: onboardingToken
+            )
+            XCTFail("Expected redirect response to fail closed")
+        } catch {
+            guard case let ToriiClientError.httpStatus(code, message, rejectCode) = error else {
+                return XCTFail("Expected HTTP status error, got \(error)")
+            }
+            XCTAssertEqual(code, 307)
+            XCTAssertEqual(message, "server echoed <redacted>")
+            XCTAssertEqual(rejectCode, "<redacted>")
+            XCTAssertFalse(error.localizedDescription.contains(onboardingToken))
+        }
+        XCTAssertEqual(requestCount, 1)
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testRegisterAccountRedactsCredentialBeforeDecodingSuccessResponse() async {
+        StubURLProtocol.handler = { request in
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 202,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            return (
+                response,
+                Data("{\"\(self.onboardingToken)\":null}".utf8)
+            )
+        }
+
+        do {
+            _ = try await makeClient().registerAccount(
+                ToriiAccountOnboardingRequest(
+                    alias: "alice@universal",
+                    publicKeyHex: String(repeating: "11", count: 32),
+                    uaid: "uaid:00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
+                ),
+                onboardingToken: onboardingToken
+            )
+            XCTFail("Expected malformed success response to fail")
+        } catch {
+            XCTAssertFalse(error.localizedDescription.contains(onboardingToken))
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testRegisterAccountRedactsJsonEscapedCredentialBeforeDecoding() async throws {
+        let escapedToken = String(repeating: "\"", count: 32)
+        let uaid = "uaid:00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
+        let accountId = try canonicalOwnerLiteral()
+        let baseResponse = onboardingResponseBody(accountId: accountId, uaid: uaid)
+        var responseObject = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: baseResponse) as? [String: Any]
+        )
+        responseObject["status"] = escapedToken
+        let encodedResponse = try JSONSerialization.data(withJSONObject: responseObject)
+        XCTAssertFalse(String(decoding: encodedResponse, as: UTF8.self).contains(escapedToken))
+
+        StubURLProtocol.handler = { request in
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 202,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            return (response, encodedResponse)
+        }
+
+        do {
+            _ = try await makeClient().registerAccount(
+                ToriiAccountOnboardingRequest(
+                    alias: "alice@universal",
+                    publicKeyHex: String(repeating: "11", count: 32),
+                    uaid: uaid
+                ),
+                onboardingToken: escapedToken
+            )
+            XCTFail("Expected invalid onboarding status to fail")
+        } catch {
+            XCTAssertFalse(error.localizedDescription.contains(escapedToken))
+        }
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -10429,7 +10603,8 @@ final class ToriiClientTests: XCTestCase {
                 alias: "bob@universal",
                 publicKeyHex: publicKeyHex,
                 uaid: uaid
-            )
+            ),
+            onboardingToken: onboardingToken
         )
         XCTAssertEqual(response.status, .queued)
         XCTAssertEqual(response.lease.alias, "bob@universal")
@@ -10449,7 +10624,8 @@ final class ToriiClientTests: XCTestCase {
                     alias: "alice@universal",
                     publicKeyHex: String(repeating: "11", count: 32),
                     uaid: invalidUaid
-                )
+                ),
+                onboardingToken: onboardingToken
             )
             XCTFail("Expected invalid UAID error")
         } catch {
@@ -10474,7 +10650,8 @@ final class ToriiClientTests: XCTestCase {
                     publicKeyHex: String(repeating: "11", count: 32),
                     uaid: "uaid:\(uaidHex)",
                     identityCommitmentHex: "abcd"
-                )
+                ),
+                onboardingToken: onboardingToken
             )
             XCTFail("Expected invalid identity commitment error")
         } catch {
@@ -10498,7 +10675,8 @@ final class ToriiClientTests: XCTestCase {
                     alias: "alice@universal",
                     publicKeyHex: "abcd",
                     uaid: uaid
-                )
+                ),
+                onboardingToken: onboardingToken
             )
             XCTFail("Expected invalid public key error")
         } catch {
@@ -10530,7 +10708,8 @@ final class ToriiClientTests: XCTestCase {
                     alias: "alice@universal",
                     publicKeyHex: String(repeating: "11", count: 32),
                     uaid: uaid
-                )
+                ),
+                onboardingToken: onboardingToken
             )
             XCTFail("Expected non-QUEUED response to fail decoding")
         } catch {
@@ -10565,7 +10744,8 @@ final class ToriiClientTests: XCTestCase {
                     alias: "alice@universal",
                     publicKeyHex: String(repeating: "11", count: 32),
                     uaid: uaid
-                )
+                ),
+                onboardingToken: onboardingToken
             )
             XCTFail("Expected missing lease to fail decoding")
         } catch {
@@ -10934,6 +11114,7 @@ final class ToriiClientTests: XCTestCase {
         let schemaHash = String(repeating: "cd", count: 32)
 
         func construct(
+            version: UInt32 = 7,
             circuitId: String = KagemushaRecursiveSpend.VerifierRole.transfer.circuitID,
             commitment: String = canonicalHash,
             publicInputsSchemaHash: String = schemaHash,
@@ -10943,7 +11124,7 @@ final class ToriiClientTests: XCTestCase {
         ) throws -> ToriiKagemushaActiveTransferVerifier {
             try ToriiKagemushaActiveTransferVerifier(
                 id: id,
-                version: 7,
+                version: version,
                 circuitId: circuitId,
                 commitment: commitment,
                 publicInputsSchemaHash: publicInputsSchemaHash,
@@ -10953,6 +11134,7 @@ final class ToriiClientTests: XCTestCase {
             )
         }
 
+        XCTAssertThrowsError(try construct(version: 0))
         XCTAssertThrowsError(try construct(commitment: "AB" + String(repeating: "ab", count: 31)))
         XCTAssertThrowsError(try construct(commitment: String(repeating: "0", count: 64)))
         XCTAssertThrowsError(
@@ -10971,8 +11153,8 @@ final class ToriiClientTests: XCTestCase {
           \(currentKagemushaReadinessFields)
           "asset_definition_id": "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
           "asset_scale": 9,
-          "evaluated_block_height": 18446744073709551615,
-          "evaluated_block_hash": "abababababababababababababababababababababababababababababababab",
+          "evaluated_block_height": 19,
+          "evaluated_block_hash": "0000000000000000000000000000000000000000000000000000000000000000",
           "active_transfer_verifier": {
             "id": {"backend": "halo2/ipa", "name": "confidential_transfer_v2_verifier_record"},
             "version": 7,
@@ -10993,10 +11175,8 @@ final class ToriiClientTests: XCTestCase {
             "activation_height": 0,
             "withdrawal_height": null
           },
-          "ready": false,
-          "blockers": [
-            {"code": "offline_disabled", "message": "Offline transfers are disabled"}
-          ]
+          "ready": true,
+          "blockers": []
         }
         """.data(using: .utf8)!
 
@@ -11018,9 +11198,9 @@ final class ToriiClientTests: XCTestCase {
         XCTAssertEqual(readiness.requiredBridgeAbiVersion, 20)
         XCTAssertEqual(readiness.maxHops, 8)
         XCTAssertEqual(readiness.assetScale, 9)
-        XCTAssertEqual(readiness.evaluatedBlockHeight, UInt64.max)
-        XCTAssertEqual(readiness.evaluatedBlockHash, String(repeating: "ab", count: 32))
-        XCTAssertEqual(readiness.evaluatedBlockHashBytes, Data(repeating: 0xAB, count: 32))
+        XCTAssertEqual(readiness.evaluatedBlockHeight, 19)
+        XCTAssertEqual(readiness.evaluatedBlockHash, String(repeating: "0", count: 64))
+        XCTAssertEqual(readiness.evaluatedBlockHashBytes, Data(repeating: 0, count: 32))
         XCTAssertEqual(readiness.activeTransferVerifier?.id.backend, "halo2/ipa")
         XCTAssertEqual(
             readiness.activeTransferVerifier?.id.name,
@@ -11037,18 +11217,33 @@ final class ToriiClientTests: XCTestCase {
         XCTAssertNotNil(readiness.activeUnshieldVerifier)
         XCTAssertEqual(
             readiness.activeRecursiveStepEqVerifier?.id.name,
-            "hbl_kagemusha_recursive_step_eq_release_2026q3"
+            "kagemusha_recursive_step_eq_v4_verifier_record"
         )
         XCTAssertEqual(
             readiness.activeRecursiveStepEpVerifier?.id.name,
-            "hbl_kagemusha_recursive_step_ep_release_2026q3"
+            "kagemusha_recursive_step_ep_v4_verifier_record"
         )
+        XCTAssertEqual(readiness.artifactSet?.generation, "release-v4")
+        XCTAssertEqual(
+            readiness.artifactSet?.manifestSha256,
+            String(repeating: "b1", count: 32)
+        )
+        XCTAssertEqual(
+            readiness.artifactSet?.releasePolicySha256,
+            String(repeating: "b2", count: 32)
+        )
+        XCTAssertEqual(
+            readiness.artifactSet?.releaseAttestationSha256,
+            String(repeating: "b3", count: 32)
+        )
+        XCTAssertEqual(readiness.artifactSet?.activationHeight, 1)
+        XCTAssertEqual(readiness.artifactSet?.withdrawalHeight, 80)
+        XCTAssertEqual(readiness.artifactSet?.maxProofBytes, 4096)
+        XCTAssertEqual(readiness.artifactSet?.assetScale, 9)
         XCTAssertTrue(readiness.proofBackendAvailable)
         XCTAssertTrue(readiness.recursiveLineageSupported)
-        XCTAssertFalse(readiness.ready)
-        XCTAssertEqual(readiness.blockers.count, 1)
-        XCTAssertEqual(readiness.blockers[0].code, "offline_disabled")
-        XCTAssertEqual(readiness.blockers[0].message, "Offline transfers are disabled")
+        XCTAssertTrue(readiness.ready)
+        XCTAssertTrue(readiness.blockers.isEmpty)
     }
 
     @available(iOS 15.0, macOS 12.0, *)
@@ -11087,13 +11282,40 @@ final class ToriiClientTests: XCTestCase {
         let canonical = try XCTUnwrap(
             JSONSerialization.jsonObject(with: Data(base.utf8)) as? [String: Any]
         )
+        var unrelatedBlocker = canonical
+        unrelatedBlocker["ready"] = false
+        unrelatedBlocker["blockers"] = [[
+            "code": "issuer_unavailable",
+            "message": "The offline command issuer is unavailable.",
+        ]]
+        let blockedReadiness = try JSONDecoder().decode(
+            ToriiKagemushaReadiness.self,
+            from: JSONSerialization.data(withJSONObject: unrelatedBlocker)
+        )
+        XCTAssertTrue(blockedReadiness.proofBackendAvailable)
+        XCTAssertTrue(blockedReadiness.recursiveLineageSupported)
+        XCTAssertFalse(blockedReadiness.ready)
+
         let mutations: [((inout [String: Any]) -> Void, String)] = [
-            ({ $0["required_bridge_abi_version"] = 17 }, "required_bridge_abi_version"),
+            ({ $0["required_bridge_abi_version"] = 19 }, "required_bridge_abi_version"),
             ({ $0["max_hops"] = 9 }, "max_hops"),
             ({ $0["proof_backend_available"] = false }, "proof_backend_available"),
             (
                 { $0["recursive_lineage_supported"] = false },
-                "recursive lineage support"
+                "exact authenticated ABI-20 lineage conjunction"
+            ),
+            (
+                { $0["ready"] = false },
+                "an unavailable readiness response must include a blocker"
+            ),
+            (
+                {
+                    $0["blockers"] = [[
+                        "code": "offline_disabled",
+                        "message": "Offline transfers are disabled",
+                    ]]
+                },
+                "ready must equal the complete ABI-20 runtime conjunction"
             ),
             (
                 { $0["active_recursive_step_ep_verifier"] = NSNull() },
@@ -11106,7 +11328,17 @@ final class ToriiClientTests: XCTestCase {
                         "kagemusha-recursive-spend-step-eq-two-parent-operation-protocol-v2"
                     $0["active_recursive_step_eq_verifier"] = stepEq
                 },
-                "must use a dynamic ABI-20 registry name with the exact V4 backend and circuit"
+                "must use the exact kagemusha_recursive_step_eq_v4_verifier_record V4 role and circuit"
+            ),
+            (
+                {
+                    var stepEp = $0["active_recursive_step_ep_verifier"] as! [String: Any]
+                    var id = stepEp["id"] as! [String: Any]
+                    id["name"] = "hbl_kagemusha_recursive_step_ep_release_2026q3"
+                    stepEp["id"] = id
+                    $0["active_recursive_step_ep_verifier"] = stepEp
+                },
+                "must use the exact kagemusha_recursive_step_ep_v4_verifier_record V4 role and circuit"
             ),
             (
                 {
@@ -11166,6 +11398,260 @@ final class ToriiClientTests: XCTestCase {
                     assetDefinitionId: "xor#wonderland"
                 )
                 XCTFail("expected substituted readiness contract to fail")
+            } catch {
+                XCTAssertTrue(
+                    String(describing: error).contains(expected),
+                    "expected \(expected), got \(error)"
+                )
+            }
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testGetOfflineReadinessRejectsMalformedOrUnboundAuthenticatedArtifactSet() async throws {
+        let base = """
+        {
+          \(currentKagemushaReadinessFields)
+          "asset_definition_id": "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
+          "asset_scale": 9,
+          "evaluated_block_height": 7,
+          "evaluated_block_hash": "abababababababababababababababababababababababababababababababab",
+          "active_transfer_verifier": {
+            "id": {"backend":"halo2/ipa","name":"confidential_transfer_v2_verifier_record"},
+            "version": 1,
+            "circuit_id": "halo2/pasta/ipa/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
+            "commitment": "1111111111111111111111111111111111111111111111111111111111111111",
+            "public_inputs_schema_hash": "1212121212121212121212121212121212121212121212121212121212121212",
+            "max_proof_bytes": 4096,
+            "activation_height": 0,
+            "withdrawal_height": null
+          },
+          "active_topup_shield_verifier": {
+            "id": {"backend":"halo2/ipa","name":"kagemusha_topup_shield_v2_verifier_record"},
+            "version": 1,
+            "circuit_id": "halo2/pasta/ipa/kagemusha-topup-shield-merkle16-axiom-poseidon-v3",
+            "commitment": "2121212121212121212121212121212121212121212121212121212121212121",
+            "public_inputs_schema_hash": "2323232323232323232323232323232323232323232323232323232323232323",
+            "max_proof_bytes": 196608,
+            "activation_height": 0,
+            "withdrawal_height": null
+          },
+          "ready": true,
+          "blockers": []
+        }
+        """
+        let canonical = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: Data(base.utf8)) as? [String: Any]
+        )
+
+        func changingArtifact(
+            _ change: @escaping (inout [String: Any]) -> Void
+        ) -> (inout [String: Any]) -> Void {
+            { root in
+                var artifact = root["artifact_set"] as! [String: Any]
+                change(&artifact)
+                root["artifact_set"] = artifact
+            }
+        }
+
+        func changingVerifier(
+            _ field: String,
+            _ change: @escaping (inout [String: Any]) -> Void
+        ) -> (inout [String: Any]) -> Void {
+            { root in
+                var verifier = root[field] as! [String: Any]
+                change(&verifier)
+                root[field] = verifier
+            }
+        }
+
+        let mutations: [((inout [String: Any]) -> Void, String)] = [
+            (
+                changingArtifact { $0["future"] = true },
+                "Unsupported Kagemusha authenticated artifact set field"
+            ),
+            (
+                changingArtifact { $0.removeValue(forKey: "generation") },
+                "generation"
+            ),
+            (
+                changingArtifact { $0["generation"] = "con.release" },
+                "generation must be a canonical cross-platform artifact identifier"
+            ),
+            (
+                changingArtifact { $0["generation"] = "../release" },
+                "generation must be a canonical cross-platform artifact identifier"
+            ),
+            (
+                changingArtifact { $0["generation"] = "COM1.cache" },
+                "generation must be a canonical cross-platform artifact identifier"
+            ),
+            (
+                changingArtifact { $0["generation"] = String(repeating: "a", count: 129) },
+                "generation must be a canonical cross-platform artifact identifier"
+            ),
+            (
+                changingArtifact { $0["manifest_sha256"] = String(repeating: "B1", count: 32) },
+                "manifest_sha256 must be a nonzero lowercase SHA-256 digest"
+            ),
+            (
+                changingArtifact { $0["release_policy_sha256"] = String(repeating: "0", count: 64) },
+                "release_policy_sha256 must be a nonzero lowercase SHA-256 digest"
+            ),
+            (
+                changingArtifact { $0["release_attestation_sha256"] = String(repeating: "b3", count: 31) },
+                "release_attestation_sha256 must be a nonzero lowercase SHA-256 digest"
+            ),
+            (
+                changingArtifact {
+                    let manifestDigest = $0["manifest_sha256"]
+                    $0["release_policy_sha256"] = manifestDigest
+                },
+                "artifact_set SHA-256 digests must be pairwise distinct"
+            ),
+            (
+                changingArtifact { $0["activation_height"] = 0 },
+                "activation_height must be greater than zero"
+            ),
+            (
+                changingArtifact { $0["withdrawal_height"] = 1 },
+                "withdrawal_height must be greater than activation_height"
+            ),
+            (
+                changingArtifact { $0["max_proof_bytes"] = 0 },
+                "max_proof_bytes must be within the ABI-20 V4 absolute proof limit"
+            ),
+            (
+                changingArtifact { $0["max_proof_bytes"] = 16 * 1_024 * 1_024 + 1 },
+                "max_proof_bytes must be within the ABI-20 V4 absolute proof limit"
+            ),
+            (
+                changingArtifact { $0["asset_scale"] = 29 },
+                "asset_scale must not exceed 28"
+            ),
+            (
+                changingArtifact { $0["asset_scale"] = 8 },
+                "artifact_set must bind the live asset_scale"
+            ),
+            (
+                changingArtifact { $0["activation_height"] = 8 },
+                "artifact_set must be active at evaluated_block_height"
+            ),
+            (
+                changingVerifier("active_recursive_step_eq_verifier") {
+                    $0["activation_height"] = 2
+                },
+                "active_recursive_step_eq_verifier must be bound exactly to artifact_set"
+            ),
+            (
+                changingVerifier("active_recursive_step_ep_verifier") {
+                    $0["withdrawal_height"] = 79
+                },
+                "active_recursive_step_ep_verifier must be bound exactly to artifact_set"
+            ),
+            (
+                changingVerifier("active_recursive_step_eq_verifier") {
+                    $0["max_proof_bytes"] = 4097
+                },
+                "active_recursive_step_eq_verifier must be bound exactly to artifact_set"
+            ),
+            (
+                { $0["artifact_set"] = NSNull() },
+                "null artifact_set requires exactly one authenticated V4 registry blocker"
+            ),
+            (
+                {
+                    $0["artifact_set"] = NSNull()
+                    $0["blockers"] = [
+                        [
+                            "code": "recursive_v4_registry_unavailable",
+                            "message": "The authenticated V4 registry is unavailable",
+                        ],
+                        [
+                            "code": "recursive_lineage_unavailable",
+                            "message": "Recursive lineage is unavailable",
+                        ],
+                    ]
+                },
+                "recursive verifiers require an authenticated artifact_set"
+            ),
+            (
+                {
+                    $0["active_recursive_step_eq_verifier"] = NSNull()
+                    $0["blockers"] = [
+                        [
+                            "code": "recursive_step_eq_verifier_unavailable",
+                            "message": "The StepEq verifier is unavailable",
+                        ],
+                        [
+                            "code": "recursive_lineage_unavailable",
+                            "message": "Recursive lineage is unavailable",
+                        ],
+                    ]
+                },
+                "artifact_set requires both recursive V4 verifiers"
+            ),
+            (
+                {
+                    $0["blockers"] = [
+                        [
+                            "code": "recursive_v4_registry_malformed",
+                            "message": "The authenticated V4 registry is malformed",
+                        ],
+                        [
+                            "code": "recursive_lineage_unavailable",
+                            "message": "Recursive lineage is unavailable",
+                        ],
+                    ]
+                },
+                "artifact_set contradicts the authenticated V4 registry blocker"
+            ),
+            (
+                {
+                    $0["active_recursive_step_eq_verifier"] = NSNull()
+                    $0["active_recursive_step_ep_verifier"] = NSNull()
+                    $0["artifact_set"] = NSNull()
+                    $0["blockers"] = [
+                        [
+                            "code": "recursive_v4_registry_unavailable",
+                            "message": "The authenticated V4 registry is unavailable",
+                        ],
+                        [
+                            "code": "recursive_step_eq_verifier_unavailable",
+                            "message": "The StepEq verifier is unavailable",
+                        ],
+                        [
+                            "code": "recursive_step_ep_verifier_unavailable",
+                            "message": "The StepEp verifier is unavailable",
+                        ],
+                        [
+                            "code": "recursive_lineage_unavailable",
+                            "message": "Recursive lineage is unavailable",
+                        ],
+                    ]
+                },
+                "proof_backend_available requires an authenticated artifact_set"
+            ),
+        ]
+
+        for (mutate, expected) in mutations {
+            var object = canonical
+            mutate(&object)
+            let body = try JSONSerialization.data(withJSONObject: object)
+            StubURLProtocol.handler = { request in
+                let response = HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: ["Content-Type": "application/json"]
+                )!
+                return (response, body)
+            }
+            do {
+                _ = try await makeClient().getKagemushaReadiness(
+                    assetDefinitionId: "xor#wonderland"
+                )
+                XCTFail("expected malformed or unbound artifact set to fail")
             } catch {
                 XCTAssertTrue(
                     String(describing: error).contains(expected),
@@ -11340,12 +11826,15 @@ final class ToriiClientTests: XCTestCase {
                 "code must be a 1-64 character lowercase stable identifier"
             ),
             (
-                payload(blockers: "[{\"code\":\"blocked\",\"message\":\"no\"}]"),
-                "ready must be true exactly when blockers is empty"
+                payload(
+                    ready: "true",
+                    blockers: "[{\"code\":\"blocked\",\"message\":\"no\"}]"
+                ),
+                "ready must equal the complete ABI-20 runtime conjunction"
             ),
             (
-                payload(ready: "false"),
-                "ready must be true exactly when blockers is empty"
+                payload(ready: "false", blockers: "[]"),
+                "an unavailable readiness response must include a blocker"
             ),
             (
                 payload(assetScale: "null"),
@@ -11407,6 +11896,21 @@ final class ToriiClientTests: XCTestCase {
                 }
                 """),
                 "circuit_id must use the portable OpenVerify grammar"
+            ),
+            (
+                payload(activeTransferVerifier: """
+                {
+                  "id": {"backend": "halo2/ipa", "name": "confidential_transfer_v2_verifier_record"},
+                  "version": 0,
+                  "circuit_id": "halo2/pasta/ipa/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
+                  "commitment": "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+                  "public_inputs_schema_hash": "efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+                  "max_proof_bytes": 4096,
+                  "activation_height": 0,
+                  "withdrawal_height": null
+                }
+                """),
+                "version must be greater than zero"
             ),
             (
                 payload(activeTransferVerifier: """
@@ -11684,6 +12188,10 @@ final class ToriiClientTests: XCTestCase {
                 "active_recursive_step_ep_verifier is required"
             ),
             (
+                without("artifact_set"),
+                "artifact_set is required"
+            ),
+            (
                 valid.replacingOccurrences(
                     of: ",\n    \"withdrawal_height\": null",
                     with: ""
@@ -11731,6 +12239,7 @@ final class ToriiClientTests: XCTestCase {
           "active_unshield_verifier": null,
           "active_recursive_step_eq_verifier": null,
           "active_recursive_step_ep_verifier": null,
+          "artifact_set": null,
           "proof_backend_available": false,
           "recursive_lineage_supported": false,
           "ready": false,
@@ -11739,6 +12248,7 @@ final class ToriiClientTests: XCTestCase {
             {"code": "transfer_verifier_unavailable", "message": "The verifier is unavailable"},
             {"code": "topup_shield_verifier_unavailable", "message": "The top-up shield verifier is unavailable"},
             {"code": "unshield_verifier_unavailable", "message": "The unshield verifier is unavailable"},
+            {"code": "recursive_v4_registry_unavailable", "message": "The authenticated V4 registry is unavailable"},
             {"code": "recursive_step_eq_verifier_unavailable", "message": "The StepEq verifier is unavailable"},
             {"code": "recursive_step_ep_verifier_unavailable", "message": "The StepEp verifier is unavailable"},
             {"code": "proof_backend_unavailable", "message": "The proof backend is unavailable"},
@@ -11766,6 +12276,7 @@ final class ToriiClientTests: XCTestCase {
         XCTAssertNil(readiness.activeUnshieldVerifier)
         XCTAssertNil(readiness.activeRecursiveStepEqVerifier)
         XCTAssertNil(readiness.activeRecursiveStepEpVerifier)
+        XCTAssertNil(readiness.artifactSet)
         XCTAssertFalse(readiness.proofBackendAvailable)
         XCTAssertFalse(readiness.recursiveLineageSupported)
         XCTAssertFalse(readiness.ready)
@@ -11868,7 +12379,7 @@ final class ToriiClientTests: XCTestCase {
             "withdrawal_height": null
           },
           "ready": false,
-          "blockers": [{"code":"offline_disabled","message":\(encodedMessage)}]
+          "blockers": [{"code":"issuer_unavailable","message":\(encodedMessage)}]
         }
         """.data(using: .utf8)!
 
@@ -12843,6 +13354,16 @@ final class ToriiClientTests: XCTestCase {
 }
 
 final class ToriiClientHeaderTests: XCTestCase {
+    func testAuthenticationContextDoesNotRetainOnboardingCredential() {
+        let authentication = ToriiClientAuthentication(headers: [
+            ToriiAccountOnboardingTokenHeader.lowercased(): String(repeating: "T", count: 32)
+        ])
+
+        XCTAssertFalse(authentication.headers.keys.contains {
+            $0.caseInsensitiveCompare(ToriiAccountOnboardingTokenHeader) == .orderedSame
+        })
+    }
+
     func testDecodePdpCommitmentHeaderDecodesData() throws {
         let payload = Data([0x01, 0x02, 0x03])
         let header = payload.base64EncodedString()
@@ -17602,74 +18123,6 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             XCTAssertEqual(manifest.abiHash?.count, 64)
             XCTAssertFalse(manifest.entrypoints?.isEmpty ?? true)
         }
-    }
-
-    func testDeployContractRejectsRemovedServerSideSigningFlow() async {
-        let req = ToriiDeployContractRequest(authority: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
-                                             codeB64: "AQ==",
-                                             contractAlias: "mint::universal")
-        await XCTAssertThrowsErrorAsync(try await makeClient().deployContract(req)) { error in
-            guard case let ToriiClientError.invalidPayload(reason) = error else {
-                return XCTFail("Expected invalidPayload, got \(error)")
-            }
-            XCTAssertTrue(reason.contains("/v1/contracts/deploy"))
-            XCTAssertTrue(reason.contains("locally signed transaction"))
-        }
-    }
-
-    func testDeployContractRejectsInvalidBase64() {
-        let request = ToriiDeployContractRequest(authority: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
-                                                 codeB64: "%%%",
-                                                 contractAlias: "mint::universal")
-        XCTAssertThrowsError(try JSONEncoder().encode(request)) { error in
-            guard case ToriiClientError.invalidPayload = error else {
-                return XCTFail("Expected invalidPayload error")
-            }
-        }
-    }
-
-    func testDeployContractEncodesAliasFirstPayload() throws {
-        let request = ToriiDeployContractRequest(authority: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
-                                                 codeB64: "AQ==",
-                                                 contractAlias: "mint::universal",
-                                                 leaseExpiryMs: 42)
-        let body = try XCTUnwrap(try JSONSerialization.jsonObject(with: JSONEncoder().encode(request)) as? [String: Any])
-        XCTAssertEqual(body["authority"] as? String, "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB")
-        XCTAssertEqual(body["code_b64"] as? String, "AQ==")
-        XCTAssertEqual(body["contract_alias"] as? String, "mint::universal")
-        XCTAssertEqual(body["lease_expiry_ms"] as? Int, 42)
-    }
-
-    func testDeployContractRejectsInvalidAlias() {
-        let request = ToriiDeployContractRequest(authority: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
-                                                 codeB64: "AQ==",
-                                                 contractAlias: "mint@universal")
-        XCTAssertThrowsError(try JSONEncoder().encode(request)) { error in
-            guard case ToriiClientError.invalidPayload = error else {
-                return XCTFail("Expected invalidPayload error")
-            }
-        }
-    }
-
-    func testDeployContractParsesKaizenResponse() throws {
-        let codeHash = String(repeating: "a", count: 64)
-        let abiHash = String(repeating: "b", count: 64)
-        let txHash = String(repeating: "c", count: 64)
-        let payload = """
-        {"ok":true,"contract_alias":"mint::universal","contract_address":"tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8","previous_contract_address":"tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq9","kaizen":true,"dataspace":"universal","deploy_nonce":7,"tx_hash_hex":"\(txHash)","pipeline_status":{"hash":"\(txHash)","status":{"kind":"Queued","block_height":null,"rejection_reason":null},"summary":"Queued","diagnostics":[],"scope":"local","resolved_from":"queue"},"code_hash_hex":"\(codeHash)","abi_hash_hex":"\(abiHash)"}
-        """.data(using: .utf8)!
-        let response = try JSONDecoder().decode(ToriiDeployContractResponse.self, from: payload)
-        XCTAssertTrue(response.ok)
-        XCTAssertEqual(response.contractAlias, "mint::universal")
-        XCTAssertEqual(response.contractAddress, "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8")
-        XCTAssertEqual(response.previousContractAddress, "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq9")
-        XCTAssertTrue(response.kaizen)
-        XCTAssertEqual(response.dataspace, "universal")
-        XCTAssertEqual(response.deployNonce, 7)
-        XCTAssertEqual(response.txHashHex, txHash)
-        XCTAssertEqual(response.pipelineStatus?.status.kind, "Queued")
-        XCTAssertEqual(response.codeHashHex, codeHash)
-        XCTAssertEqual(response.abiHashHex, abiHash)
     }
 
     func testDeployContractInstanceRejectsRemovedServerSideSigningFlow() async {

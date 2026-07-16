@@ -4831,6 +4831,8 @@ mod transaction {
         Ivm(Ivm),
         /// Send a transaction using JSON input from stdin
         Stdin(Stdin),
+        /// Build and sign stdin instructions locally, then print their exact framed size without submitting
+        SignedSize(SignedSize),
     }
 
     impl Run for Command {
@@ -4842,6 +4844,7 @@ mod transaction {
                 Ping(cmd) => cmd.run(context),
                 Ivm(cmd) => cmd.run(context),
                 Stdin(cmd) => cmd.run(context),
+                SignedSize(cmd) => cmd.run(context),
             }
         }
     }
@@ -4851,8 +4854,20 @@ mod transaction {
         /// Hash of the signed transaction to inspect
         #[arg(short('H'), long)]
         pub hash: HashOf<iroha::data_model::transaction::SignedTransaction>,
+        /// Explicit status routing scope. Omit with `--wait`, which selects the safe scope for
+        /// the requested terminal states.
+        #[arg(long, value_enum, conflicts_with = "wait")]
+        pub scope: Option<StatusScope>,
         #[command(flatten)]
         pub wait: TransactionWaitArgs,
+    }
+
+    #[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum StatusScope {
+        /// Query only the configured Torii peer.
+        Local,
+        /// Permit Torii's global/fanout status lookup.
+        Global,
     }
 
     impl Run for Status {
@@ -4862,9 +4877,15 @@ mod transaction {
                 let status = crate::wait_for_transaction_status(&client, self.hash, &self.wait)?;
                 context.print_data(&status)
             } else {
-                let status = client
-                    .get_transaction_status_response(self.hash)?
-                    .ok_or_else(|| eyre!("Transaction status not found"))?;
+                let status = match self.scope.unwrap_or(StatusScope::Local) {
+                    StatusScope::Local => {
+                        client.get_transaction_status_response_local(self.hash)?
+                    }
+                    StatusScope::Global => {
+                        client.get_transaction_status_response_auto(self.hash)?
+                    }
+                }
+                .ok_or_else(|| eyre!("Transaction status not found"))?;
                 context.print_data(&status)
             }
         }
@@ -5219,6 +5240,42 @@ mod transaction {
             context
                 .finish(instructions)
                 .wrap_err("Failed to submit parsed instructions")
+        }
+    }
+
+    #[derive(clap::Args, Debug)]
+    pub struct SignedSize;
+
+    impl Run for SignedSize {
+        fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+            if context.output_instructions() {
+                eyre::bail!("Incompatible `--output` flag with `iroha tx signed-size`");
+            }
+            let instructions: Vec<InstructionBox> = parse_json_stdin(context)?;
+            let metadata = context.transaction_metadata().cloned().unwrap_or_default();
+            let transaction = context
+                .client_from_config()
+                .try_build_transaction(instructions, metadata)
+                .wrap_err("Failed to build and sign transaction for exact size measurement")?;
+            let signed_transaction_bytes = u64::try_from(
+                norito::to_bytes(&transaction)
+                    .wrap_err("Failed to encode signed transaction for exact size measurement")?
+                    .len(),
+            )
+            .unwrap_or(u64::MAX);
+
+            match context.output_format() {
+                CliOutputFormat::Json => {
+                    let result = json_utils::json_object(vec![(
+                        "signed_transaction_bytes",
+                        json_utils::json_value(&signed_transaction_bytes)?,
+                    )])?;
+                    context.print_data(&result)
+                }
+                CliOutputFormat::Text => context.println(format_args!(
+                    "signed_transaction_bytes: {signed_transaction_bytes}"
+                )),
+            }
         }
     }
 }
@@ -9029,6 +9086,38 @@ mod tests {
 
         assert!(!status.wait.wait);
         assert!(status.wait.is_enabled());
+        assert_eq!(status.scope, None);
+    }
+
+    #[test]
+    fn tx_status_scope_is_explicit_and_cannot_override_wait_routing() {
+        let args = Args::try_parse_from([
+            "iroha",
+            "tx",
+            "status",
+            "--hash",
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "--scope",
+            "local",
+        ])
+        .expect("parse explicitly local tx status");
+        let Command::Tx(transaction::Command::Status(status)) = args.command else {
+            panic!("expected tx status command");
+        };
+        assert_eq!(status.scope, Some(transaction::StatusScope::Local));
+
+        let error = Args::try_parse_from([
+            "iroha",
+            "tx",
+            "status",
+            "--hash",
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "--scope",
+            "global",
+            "--wait",
+        ])
+        .expect_err("explicit scope must not override transaction wait routing");
+        assert_eq!(error.kind(), ErrorKind::ArgumentConflict);
     }
 
     #[test]
@@ -9126,6 +9215,25 @@ mod tests {
     }
 
     #[test]
+    fn signed_transaction_size_cli_parses_canonical_and_short_paths() {
+        let canonical = Args::try_parse_from(["iroha", "ledger", "transaction", "signed-size"])
+            .expect("canonical signed-size command should parse");
+        assert!(matches!(
+            canonical.command,
+            Command::Ledger(ledger::Command::Transaction(
+                transaction::Command::SignedSize(_)
+            ))
+        ));
+
+        let short = Args::try_parse_from(["iroha", "tx", "signed-size"])
+            .expect("short signed-size command should parse");
+        assert!(matches!(
+            short.command,
+            Command::Tx(transaction::Command::SignedSize(_))
+        ));
+    }
+
+    #[test]
     fn printjsoncontext_routes_text_to_stderr_in_json_mode() {
         let mut ctx = test_context(CliOutputFormat::Json);
         ctx.println("hello").expect("println");
@@ -9180,6 +9288,8 @@ mod tests {
             "rollout",
             "--gas-asset-id",
             "asset",
+            "--onboarding-token-file",
+            "/tmp/taira-onboarding.token",
             "--write-config",
             "/tmp/taira-canary-client.toml",
             "--json",
@@ -9191,6 +9301,10 @@ mod tests {
         assert_eq!(cmd.public_root, "https://taira.sora.org");
         assert_eq!(cmd.alias_prefix, "rollout");
         assert_eq!(cmd.gas_asset_id, "asset");
+        assert_eq!(
+            cmd.onboarding_token_file,
+            std::path::PathBuf::from("/tmp/taira-onboarding.token")
+        );
         assert_eq!(
             cmd.write_config.as_deref(),
             Some(std::path::Path::new("/tmp/taira-canary-client.toml"))

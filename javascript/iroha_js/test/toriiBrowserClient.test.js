@@ -401,3 +401,101 @@ test("ToriiBrowserClient submits multisig Norito payloads to registered routes",
   assert.equal(calls[2].url, "https://torii.example/v1/contracts/call/multisig/approve");
   assert.equal(calls[2].init.headers["Content-Type"], "application/x-norito");
 });
+
+test("ToriiBrowserClient waits for exact global persisted Applied finality", async () => {
+  const hash = "ab".repeat(32);
+  const payloads = [
+    {
+      hash,
+      status: { kind: "Committed", block_height: 17 },
+      scope: "global",
+      resolved_from: "cache",
+    },
+    {
+      hash,
+      status: { kind: "Applied", block_height: 17 },
+      scope: "global",
+      resolved_from: "state",
+    },
+  ];
+  const urls = [];
+  const client = new ToriiBrowserClient("https://torii.example", {
+    fetchImpl: async (url) => {
+      urls.push(String(url));
+      return jsonResponse(payloads.shift());
+    },
+  });
+
+  const status = await client.waitForTransactionStatus(hash, {
+    intervalMs: 0,
+    maxAttempts: 2,
+  });
+
+  assert.equal(status.status.kind, "Applied");
+  assert.equal(urls.length, 2);
+  for (const url of urls) {
+    assert.equal(
+      url,
+      `https://torii.example/v1/pipeline/transactions/status?hash=${hash}&scope=global`,
+    );
+  }
+});
+
+test("ToriiBrowserClient rejects wrong-hash and unpersisted Applied envelopes", async () => {
+  const hash = "cd".repeat(32);
+  for (const [payload, pattern] of [
+    [
+      {
+        hash: "ef".repeat(32),
+        status: { kind: "Applied", block_height: 1 },
+        scope: "global",
+        resolved_from: "state",
+      },
+      /does not match the requested transaction/u,
+    ],
+    [
+      {
+        hash,
+        status: { kind: "Applied", block_height: 1 },
+        scope: "global",
+        resolved_from: "cache",
+      },
+      /resolved_from must be state/u,
+    ],
+    [
+      {
+        hash,
+        status: { kind: "Applied", block_height: 0 },
+        scope: "global",
+        resolved_from: "state",
+      },
+      /block_height must be a positive safe integer/u,
+    ],
+  ]) {
+    const client = new ToriiBrowserClient("https://torii.example", {
+      fetchImpl: async () => jsonResponse(payload),
+    });
+    await assert.rejects(
+      client.waitForTransactionStatus(hash, { intervalMs: 0, maxAttempts: 1 }),
+      pattern,
+    );
+  }
+});
+
+test("ToriiBrowserClient does not treat nested Committed markers as finality", async () => {
+  const hash = "12".repeat(32);
+  const client = new ToriiBrowserClient("https://torii.example", {
+    fetchImpl: async () =>
+      jsonResponse({
+        hash,
+        status: { kind: "Queued", content: { Committed: true } },
+        scope: "global",
+        resolved_from: "queue",
+      }),
+  });
+
+  await assert.rejects(
+    client.waitForTransactionStatus(hash, { intervalMs: 0, maxAttempts: 1 }),
+    /did not reach persisted Applied status/u,
+  );
+});

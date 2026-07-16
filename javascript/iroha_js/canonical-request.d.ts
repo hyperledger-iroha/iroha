@@ -17,6 +17,7 @@ export interface CanonicalRequestSignatureMessageInput
 
 export interface CanonicalRequestHeadersInput
   extends CanonicalRequestMessageInput {
+  /** Exact canonical I105 account or active ASCII alias used as X-Iroha-Account. */
   accountId: string;
   privateKey: CanonicalRequestBytes;
   timestampMs?: number;
@@ -49,6 +50,7 @@ export type CanonicalJsonRequestSignature =
   | string;
 
 export interface CanonicalJsonRequestInput {
+  /** Exact canonical I105 account or active ASCII alias used as X-Iroha-Account. */
   accountId: string;
   method?: string;
   path: string;

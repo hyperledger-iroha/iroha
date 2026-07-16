@@ -48,8 +48,9 @@ export IROHA_TAIRA_KEEP_LOCALNET=1
 cd "$REPO_ROOT"
 
 # Bind every compiled and retained artifact to the complete tracked/untracked
-# checkout state. A content-addressed target also prevents a stale candidate
-# from a different source tree from satisfying binary discovery.
+# checkout state plus the ignored workspace Cargo.lock. The helper also
+# rejects an unresolved Git index. A content-addressed target prevents a stale
+# candidate from a different source tree from satisfying binary discovery.
 observed_source_manifest_sha256="$(
   python3 scripts/compute_workspace_source_manifest.py --root "$REPO_ROOT"
 )"

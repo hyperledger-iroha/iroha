@@ -53,6 +53,32 @@ isi! {
 impl crate::seal::Instruction for ActivateContractInstance {}
 
 isi! {
+    /// Atomically deploy a new contract address and move its stable alias.
+    ///
+    /// `expected_deploy_nonce` and `expected_previous_contract_address` are compare-and-swap
+    /// guards. The executor derives `contract_address` from the authority, nonce, chain, and
+    /// alias dataspace, then either creates the first binding or replaces the exact active alias
+    /// target. The authority must already exist and hold `CanRegisterSmartContractCode`;
+    /// protected namespaces additionally require governance authority.
+    pub struct CommitContractDeployment {
+        /// Exact next deployment nonce expected in the authority's reserved metadata.
+        pub expected_deploy_nonce: u64,
+        /// Newly derived canonical contract address.
+        pub contract_address: crate::smart_contract::ContractAddress,
+        /// Domain-separated canonical hash of the complete `.to` artifact to activate.
+        pub code_hash: iroha_crypto::Hash,
+        /// Stable alias to bind to the new address.
+        pub contract_alias: crate::smart_contract::ContractAlias,
+        /// Optional alias lease expiry in Unix milliseconds.
+        pub lease_expiry_ms: Option<u64>,
+        /// Exact previous live alias target expected by the submitter, or `None` for first deploy.
+        pub expected_previous_contract_address: Option<crate::smart_contract::ContractAddress>,
+    }
+}
+
+impl crate::seal::Instruction for CommitContractDeployment {}
+
+isi! {
     /// Register compiled contract bytecode on-chain keyed by its `code_hash`.
     ///
     /// The bytecode is the full compiled `.to` image including the IVM header.
@@ -224,6 +250,55 @@ impl<'a> norito::core::DecodeFromSlice<'a> for ActivateContractInstance {
     }
 }
 
+impl<'a> norito::core::DecodeFromSlice<'a> for CommitContractDeployment {
+    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
+        let flags = smart_contract_code_decode_flags();
+        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
+            return super::decode_packed_instruction_payload::<Self>(bytes);
+        }
+
+        let mut offset = 0usize;
+        let expected_deploy_nonce = super::decode_aos_canonical_field::<u64>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        let contract_address = super::decode_aos_canonical_field::<
+            crate::smart_contract::ContractAddress,
+        >(super::read_aos_field(bytes, &mut offset, flags)?, flags)?;
+        let code_hash = super::decode_aos_canonical_field::<iroha_crypto::Hash>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        let contract_alias = super::decode_aos_canonical_field::<
+            crate::smart_contract::ContractAlias,
+        >(super::read_aos_field(bytes, &mut offset, flags)?, flags)?;
+        let lease_expiry_ms = super::decode_aos_canonical_field::<Option<u64>>(
+            super::read_aos_field(bytes, &mut offset, flags)?,
+            flags,
+        )?;
+        let expected_previous_contract_address =
+            super::decode_aos_canonical_field::<Option<crate::smart_contract::ContractAddress>>(
+                super::read_aos_field(bytes, &mut offset, flags)?,
+                flags,
+            )?;
+        if offset != bytes.len() {
+            return Err(norito::core::Error::LengthMismatch);
+        }
+        norito::core::note_payload_access(bytes, offset);
+        Ok((
+            Self {
+                expected_deploy_nonce,
+                contract_address,
+                code_hash,
+                contract_alias,
+                lease_expiry_ms,
+                expected_previous_contract_address,
+            },
+            offset,
+        ))
+    }
+}
+
 impl<'a> norito::core::DecodeFromSlice<'a> for RegisterSmartContractBytes {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let flags = smart_contract_code_decode_flags();
@@ -382,7 +457,11 @@ mod tests {
     use norito::core::DecodeFromSlice;
 
     use super::*;
-    use crate::{account::AccountId, nexus::DataSpaceId, smart_contract::ContractAddress};
+    use crate::{
+        account::AccountId,
+        nexus::DataSpaceId,
+        smart_contract::{ContractAddress, ContractAlias},
+    };
 
     fn account() -> AccountId {
         let key_pair = KeyPair::try_from_seed(vec![0xD1; 32], Algorithm::Ed25519)
@@ -397,6 +476,10 @@ mod tests {
 
     fn code_hash() -> Hash {
         Hash::new(b"contract-code")
+    }
+
+    fn contract_alias() -> ContractAlias {
+        "payments::universal".parse().expect("contract alias")
     }
 
     fn manifest() -> ContractManifest {
@@ -457,6 +540,14 @@ mod tests {
             contract_address: contract_address(),
             code_hash: code_hash(),
         });
+        assert_slice_roundtrip(CommitContractDeployment {
+            expected_deploy_nonce: 7,
+            contract_address: contract_address(),
+            code_hash: code_hash(),
+            contract_alias: contract_alias(),
+            lease_expiry_ms: Some(42_000),
+            expected_previous_contract_address: Some(contract_address()),
+        });
         assert_slice_roundtrip(RegisterSmartContractBytes {
             code_hash: code_hash(),
             code: vec![0x01, 0x02, 0x03],
@@ -483,11 +574,46 @@ mod tests {
     }
 
     #[test]
+    fn commit_contract_deployment_rejects_missing_trailing_fields() {
+        let encoded = CommitContractDeployment {
+            expected_deploy_nonce: 7,
+            contract_address: contract_address(),
+            code_hash: code_hash(),
+            contract_alias: contract_alias(),
+            lease_expiry_ms: None,
+            expected_previous_contract_address: None,
+        }
+        .encode();
+        let flags = norito::core::default_encode_flags();
+        assert_eq!(
+            flags & norito::core::header_flags::PACKED_STRUCT,
+            0,
+            "truncation fixture requires the canonical AoS layout"
+        );
+
+        let mut offset = 0usize;
+        for _ in 0..4 {
+            crate::isi::read_aos_field(&encoded, &mut offset, flags).expect("required field");
+        }
+        assert!(
+            CommitContractDeployment::decode_from_slice(&encoded[..offset]).is_err(),
+            "wire payload missing both optional-valued fields must be rejected"
+        );
+
+        crate::isi::read_aos_field(&encoded, &mut offset, flags).expect("lease field");
+        assert!(
+            CommitContractDeployment::decode_from_slice(&encoded[..offset]).is_err(),
+            "wire payload missing expected_previous_contract_address must be rejected"
+        );
+    }
+
+    #[test]
     fn smart_contract_code_registry_decodes_type_names() {
         let registry = crate::isi::InstructionRegistry::new()
             .register_slice::<RegisterSmartContractCode>()
             .register_slice::<DeactivateContractInstance>()
             .register_slice::<ActivateContractInstance>()
+            .register_slice::<CommitContractDeployment>()
             .register_slice::<RegisterSmartContractBytes>()
             .register_slice::<UploadSmartContractCodeChunk>()
             .register_slice::<FinalizeSmartContractCodeUpload>()
@@ -512,6 +638,17 @@ mod tests {
             ActivateContractInstance {
                 contract_address: contract_address(),
                 code_hash: code_hash(),
+            },
+        );
+        assert_registry_decodes(
+            &registry,
+            CommitContractDeployment {
+                expected_deploy_nonce: 7,
+                contract_address: contract_address(),
+                code_hash: code_hash(),
+                contract_alias: contract_alias(),
+                lease_expiry_ms: Some(42_000),
+                expected_previous_contract_address: Some(contract_address()),
             },
         );
         assert_registry_decodes(
@@ -579,6 +716,17 @@ mod tests {
             &registry,
             CancelSmartContractCodeUpload {
                 code_hash: code_hash(),
+            },
+        );
+        assert_registry_decodes(
+            &registry,
+            CommitContractDeployment {
+                expected_deploy_nonce: 7,
+                contract_address: contract_address(),
+                code_hash: code_hash(),
+                contract_alias: contract_alias(),
+                lease_expiry_ms: None,
+                expected_previous_contract_address: None,
             },
         );
     }

@@ -35,15 +35,13 @@ use snark_verifier::{
 };
 
 use super::kagemusha_accumulation::{
-    KAGEMUSHA_IPA_ACCUMULATION_WIRE_VERSION_V1, KAGEMUSHA_IPA_ACCUMULATION_WIRE_VERSION_V4,
-    KAGEMUSHA_IPA_ACCUMULATOR_INSTANCE_LIMBS_V1, KAGEMUSHA_IPA_ACCUMULATOR_ROUNDS_V1,
-    kagemusha_ipa_accumulator_instance_limbs_v4,
+    KAGEMUSHA_IPA_ACCUMULATION_WIRE_VERSION_V4, kagemusha_ipa_accumulator_instance_limbs_v4,
 };
 
 /// Domain separator for the fixed-shape selector-bound deferred audit.
-pub(super) const KAGEMUSHA_DEFERRED_AUDIT_DOMAIN_V3: &[u8] = b"iroha:kagemusha:deferred-audit:v3";
+pub(super) const KAGEMUSHA_DEFERRED_AUDIT_DOMAIN_V4: &[u8] = b"iroha:kagemusha:deferred-audit:v4";
 /// Version encoded in every selector-bound deferred-audit preimage.
-pub(super) const KAGEMUSHA_DEFERRED_AUDIT_VERSION_V3: u32 = 3;
+pub(super) const KAGEMUSHA_DEFERRED_AUDIT_VERSION_V4: u32 = 4;
 
 /// Limb width chosen so products of three-limb Pasta integers retain
 /// ample native-field headroom in either parity.
@@ -322,80 +320,14 @@ where
         self.scalar_integer.range
     }
 
-    /// Constrain the canonical byte preimage joined to the reciprocal point
-    /// half. Callers prepend the authenticated manifest/VK/schema identities
-    /// and append the exact loaded transcript scalars before hashing.
-    pub(super) fn assigned_equation_bytes(
-        &self,
-        ctx: &mut ScalarContext<C>,
-    ) -> Vec<AssignedValue<Inner<C>>> {
-        fn push_u32<F: BigPrimeField>(
-            ctx: &mut halo2_base::Context<F>,
-            output: &mut Vec<AssignedValue<F>>,
-            value: u32,
-        ) {
-            output.extend(
-                value
-                    .to_le_bytes()
-                    .into_iter()
-                    .map(|byte| ctx.load_constant(F::from(u64::from(byte)))),
-            );
-        }
-
-        let audit = self.audit();
-        let ctx = ctx.main();
-        let mut output = Vec::new();
-        push_u32(ctx, &mut output, 1);
-        push_u32(
-            ctx,
-            &mut output,
-            u32::try_from(audit.sources.len()).expect("fixed source count fits u32"),
-        );
-        push_u32(
-            ctx,
-            &mut output,
-            u32::try_from(audit.equations.len()).expect("fixed equation count fits u32"),
-        );
-        for source in &audit.sources {
-            output.extend(proper_uint_le_bytes(ctx, self.coordinate.range, &source.x));
-            output.extend(proper_uint_le_bytes(ctx, self.coordinate.range, &source.y));
-        }
-        for equation in &audit.equations {
-            push_u32(
-                ctx,
-                &mut output,
-                u32::try_from(equation.terms.len()).expect("fixed term count fits u32"),
-            );
-            for term in &equation.terms {
-                push_u32(
-                    ctx,
-                    &mut output,
-                    u32::try_from(term.source_index).expect("fixed source index fits u32"),
-                );
-                let scalar: AssignedCoordinate<C> = self
-                    .scalar_integer
-                    .load_private(ctx, *term.coefficient.value());
-                let scalar: AssignedCoordinate<C> =
-                    self.scalar_integer.enforce_less_than(ctx, scalar).into();
-                ctx.constrain_equal(scalar.native(), &term.coefficient);
-                output.extend(proper_uint_le_bytes(
-                    ctx,
-                    self.scalar_integer.range,
-                    &scalar,
-                ));
-            }
-        }
-        output
-    }
-
-    /// Constrain the V3 selector-bound deferred-audit preimage.
+    /// Constrain the V4 selector-bound deferred-audit preimage.
     ///
     /// `gate_tags` and `selectors` have one entry per equation in audit order.
     /// Gate tags describe the statically compiled stage while every selector is
     /// a Boolean derived from the current Step's public parent count.  Encoding
     /// both prevents the reciprocal half from accepting the same equation
     /// vector under a different enable schedule.
-    pub(super) fn assigned_equation_bytes_v3(
+    pub(super) fn assigned_equation_bytes_v4(
         &self,
         ctx: &mut ScalarContext<C>,
         gate_tags: &[u32],
@@ -427,9 +359,9 @@ where
         }
         let ctx = ctx.main();
         let mut output = Vec::new();
-        push_constant_bytes(ctx, &mut output, KAGEMUSHA_DEFERRED_AUDIT_DOMAIN_V3);
+        push_constant_bytes(ctx, &mut output, KAGEMUSHA_DEFERRED_AUDIT_DOMAIN_V4);
         push_constant_bytes(ctx, &mut output, &[0]);
-        push_u32(ctx, &mut output, KAGEMUSHA_DEFERRED_AUDIT_VERSION_V3);
+        push_u32(ctx, &mut output, KAGEMUSHA_DEFERRED_AUDIT_VERSION_V4);
         push_u32(
             ctx,
             &mut output,
@@ -537,74 +469,6 @@ where
             &source.x,
             &source.y,
         ))
-    }
-
-    /// Constrain the fixed field-neutral public-instance representation of one
-    /// loaded IPA accumulator.
-    ///
-    /// The returned cells use the exact release layout
-    /// `version || round_count || xi[0..k] || compressed(U)`, where every
-    /// 32-byte value is packed into eight little-endian `u32` limbs.  Scalar
-    /// canonicality and the accumulated-point equation are constrained before
-    /// packing, so equality with public cells cannot authorize a substituted
-    /// host accumulator.
-    pub(super) fn assigned_accumulator_instance_limbs(
-        &self,
-        ctx: &mut ScalarContext<C>,
-        round_challenges: &[AssignedValue<Inner<C>>],
-        folded_generator: &DeferredScalarPoint<C>,
-    ) -> Result<Vec<AssignedValue<Inner<C>>>, Error> {
-        if round_challenges.len() != KAGEMUSHA_IPA_ACCUMULATOR_ROUNDS_V1 {
-            return Err(Error::InvalidInstances);
-        }
-
-        let mut bytes = Vec::with_capacity((round_challenges.len() + 1) * 32);
-        for challenge in round_challenges {
-            bytes.extend(self.assigned_scalar_bytes(ctx, *challenge));
-        }
-        bytes.extend(self.assigned_point_bytes(ctx, folded_generator)?);
-
-        let gate = self.scalar.clone();
-        let mut limbs = Vec::with_capacity(KAGEMUSHA_IPA_ACCUMULATOR_INSTANCE_LIMBS_V1);
-        limbs.push(ctx.main().load_constant(Inner::<C>::from(u64::from(
-            KAGEMUSHA_IPA_ACCUMULATION_WIRE_VERSION_V1,
-        ))));
-        limbs.push(
-            ctx.main().load_constant(Inner::<C>::from(
-                u64::try_from(KAGEMUSHA_IPA_ACCUMULATOR_ROUNDS_V1)
-                    .expect("fixed Kagemusha IPA round count fits u64"),
-            )),
-        );
-        limbs.extend(bytes.chunks_exact(4).map(|chunk| {
-            gate.inner_product(
-                ctx.main(),
-                chunk.iter().copied().map(Existing),
-                [1_u64, 1 << 8, 1 << 16, 1 << 24]
-                    .into_iter()
-                    .map(|value| Constant(Inner::<C>::from(value))),
-            )
-        }));
-        debug_assert_eq!(limbs.len(), KAGEMUSHA_IPA_ACCUMULATOR_INSTANCE_LIMBS_V1);
-        Ok(limbs)
-    }
-
-    /// Equality-bind a loaded accumulator to already-assigned public limbs.
-    pub(super) fn constrain_accumulator_instance_limbs(
-        &self,
-        ctx: &mut ScalarContext<C>,
-        round_challenges: &[AssignedValue<Inner<C>>],
-        folded_generator: &DeferredScalarPoint<C>,
-        expected: &[AssignedValue<Inner<C>>],
-    ) -> Result<(), Error> {
-        if expected.len() != KAGEMUSHA_IPA_ACCUMULATOR_INSTANCE_LIMBS_V1 {
-            return Err(Error::InvalidInstances);
-        }
-        let assigned =
-            self.assigned_accumulator_instance_limbs(ctx, round_challenges, folded_generator)?;
-        for (assigned, expected) in assigned.iter().zip(expected) {
-            ctx.main().constrain_equal(assigned, expected);
-        }
-        Ok(())
     }
 
     /// Constrain the degree-parameterized V4 accumulator representation.
@@ -1275,6 +1139,14 @@ where
             .to_vec()
     }
 
+    /// Assign the `halo2_ecc` canonical `(0, 0)` representation of the point
+    /// at infinity without passing `C::identity()` through the affine-only
+    /// constant-point loader.
+    fn assign_identity(&self, ctx: &mut SinglePhaseCoreManager<Outer<C>>) -> Point<C> {
+        let zero = self.base.load_constant(ctx.main(), Outer::<C>::ZERO);
+        AssignedEcPoint::new(zero.clone(), zero)
+    }
+
     pub(super) fn canonical_point(
         &self,
         ctx: &mut SinglePhaseCoreManager<Outer<C>>,
@@ -1283,24 +1155,6 @@ where
         let x = self.base.enforce_less_than(ctx.main(), point.x).into();
         let y = self.base.enforce_less_than(ctx.main(), point.y).into();
         AssignedEcPoint::new(x, y)
-    }
-
-    /// Assign the reciprocal point-half witness, constrain every source to the
-    /// proof curve, and require every deferred MSM to equal the identity.
-    ///
-    /// The returned cells are also used to reconstruct the exact SHA join. A
-    /// host-created [`DeferredEquationWitness`] cannot authorize a proof: any
-    /// changed point or coefficient either violates these equations or changes
-    /// the join exposed by the sibling scalar circuit.
-    pub(super) fn constrain_deferred_equations(
-        &mut self,
-        ctx: &mut SinglePhaseCoreManager<Outer<C>>,
-        witness: &DeferredEquationWitness<C>,
-    ) -> Result<AssignedDeferredPointAudit<C>, String> {
-        let selectors = (0..witness.equations.len())
-            .map(|_| ctx.main().load_constant(Outer::<C>::ONE))
-            .collect::<Vec<_>>();
-        self.constrain_deferred_equations_with_selectors(ctx, witness, &selectors)
     }
 
     /// Assign and canonicalize every source and coefficient, evaluate every
@@ -1367,23 +1221,17 @@ where
                 .map(|(source_index, coefficient)| (coefficient, &sources[*source_index]))
                 .collect::<Vec<_>>();
             let result = <Self as EccInstructions<C>>::variable_base_msm(self, ctx, &pairs);
-            let identity = self
-                .curve()
-                .assign_constant_point(ctx.main(), C::identity());
-            for (result_coordinate, identity_coordinate) in
-                [(&result.x, &identity.x), (&result.y, &identity.y)]
-            {
-                let difference = <GateChip<Outer<C>> as GateInstructions<Outer<C>>>::sub(
-                    self.base.gate(),
-                    ctx.main(),
-                    Existing(*result_coordinate.native()),
-                    Existing(*identity_coordinate.native()),
-                );
+            // `halo2_ecc` represents the point at infinity as `(0, 0)`. Its
+            // constant-point loader accepts affine points only, so construct
+            // the selector-gated identity check directly on that canonical
+            // representation instead of attempting to unwrap affine
+            // coordinates from `C::identity()`.
+            for result_coordinate in [&result.x, &result.y] {
                 let selected = <GateChip<Outer<C>> as GateInstructions<Outer<C>>>::mul(
                     self.base.gate(),
                     ctx.main(),
                     Existing(selector),
-                    Existing(difference),
+                    Existing(*result_coordinate.native()),
                 );
                 self.base
                     .gate()
@@ -1394,71 +1242,13 @@ where
         Ok(AssignedDeferredPointAudit { sources, equations })
     }
 
-    /// Constrain the reciprocal point half's canonical SHA-join preimage.
-    pub(super) fn assigned_equation_bytes(
-        &self,
-        ctx: &mut SinglePhaseCoreManager<Outer<C>>,
-        audit: &AssignedDeferredPointAudit<C>,
-    ) -> Vec<AssignedValue<Outer<C>>> {
-        fn push_u32<F: BigPrimeField>(
-            ctx: &mut halo2_base::Context<F>,
-            output: &mut Vec<AssignedValue<F>>,
-            value: u32,
-        ) {
-            output.extend(
-                value
-                    .to_le_bytes()
-                    .into_iter()
-                    .map(|byte| ctx.load_constant(F::from(u64::from(byte)))),
-            );
-        }
-
-        let ctx = ctx.main();
-        let mut output = Vec::new();
-        push_u32(ctx, &mut output, 1);
-        push_u32(
-            ctx,
-            &mut output,
-            u32::try_from(audit.sources.len()).expect("fixed source count fits u32"),
-        );
-        push_u32(
-            ctx,
-            &mut output,
-            u32::try_from(audit.equations.len()).expect("fixed equation count fits u32"),
-        );
-        for source in &audit.sources {
-            output.extend(proper_uint_le_bytes(ctx, self.base.range, &source.x));
-            output.extend(proper_uint_le_bytes(ctx, self.base.range, &source.y));
-        }
-        for equation in &audit.equations {
-            push_u32(
-                ctx,
-                &mut output,
-                u32::try_from(equation.len()).expect("fixed term count fits u32"),
-            );
-            for (source_index, coefficient) in equation {
-                push_u32(
-                    ctx,
-                    &mut output,
-                    u32::try_from(*source_index).expect("fixed source index fits u32"),
-                );
-                output.extend(proper_uint_le_bytes(
-                    ctx,
-                    self.scalar.field.range,
-                    coefficient,
-                ));
-            }
-        }
-        output
-    }
-
-    /// Constrain the reciprocal V3 selector-bound audit preimage.
+    /// Constrain the reciprocal V4 selector-bound audit preimage.
     ///
     /// This is byte-for-byte identical to
-    /// [`DeferredScalarEccChip::assigned_equation_bytes_v3`].  Selectors are
+    /// [`DeferredScalarEccChip::assigned_equation_bytes_v4`].  Selectors are
     /// independently derived from this circuit's public parent-count cell;
     /// they are not copied from the scalar-half witness.
-    pub(super) fn assigned_equation_bytes_v3(
+    pub(super) fn assigned_equation_bytes_v4(
         &self,
         ctx: &mut SinglePhaseCoreManager<Outer<C>>,
         audit: &AssignedDeferredPointAudit<C>,
@@ -1486,13 +1276,13 @@ where
         }
 
         if gate_tags.len() != audit.equations.len() || selectors.len() != audit.equations.len() {
-            return Err("Kagemusha V3 deferred-audit selector shape mismatch".to_owned());
+            return Err("Kagemusha V4 deferred-audit selector shape mismatch".to_owned());
         }
         let ctx = ctx.main();
         let mut output = Vec::new();
-        push_constant_bytes(ctx, &mut output, KAGEMUSHA_DEFERRED_AUDIT_DOMAIN_V3);
+        push_constant_bytes(ctx, &mut output, KAGEMUSHA_DEFERRED_AUDIT_DOMAIN_V4);
         push_constant_bytes(ctx, &mut output, &[0]);
-        push_u32(ctx, &mut output, KAGEMUSHA_DEFERRED_AUDIT_VERSION_V3);
+        push_u32(ctx, &mut output, KAGEMUSHA_DEFERRED_AUDIT_VERSION_V4);
         push_u32(
             ctx,
             &mut output,
@@ -1688,9 +1478,7 @@ where
             .map(|(scalar, point)| (self.canonical_scalar(ctx, scalar), *point))
             .unzip();
         if points.is_empty() {
-            return self
-                .curve()
-                .assign_constant_point(ctx.main(), C::identity());
+            return self.assign_identity(ctx);
         }
         self.curve()
             .fixed_base_msm::<C>(ctx, &points, scalars, LIMB_BITS)
@@ -1705,9 +1493,7 @@ where
         )],
     ) -> Self::AssignedEcPoint {
         if pairs.is_empty() {
-            return self
-                .curve()
-                .assign_constant_point(ctx.main(), C::identity());
+            return self.assign_identity(ctx);
         }
         let scalars = pairs
             .iter()
@@ -1810,7 +1596,7 @@ mod tests {
     }
 
     #[test]
-    fn selector_bound_v3_preimage_is_identical_in_both_halves_and_has_one_domain() {
+    fn selector_bound_v4_preimage_is_identical_in_both_halves_and_has_one_domain() {
         let generator = EqAffine::generator();
         let doubled = (generator.to_curve() + generator.to_curve()).to_affine();
         let gate_tags = [0x0102_0304];
@@ -1831,8 +1617,8 @@ mod tests {
         let witness = scalar_chip.audit().witness();
         assert_eq!(witness.equations.len(), 1);
         let scalar_preimage = scalar_chip
-            .assigned_equation_bytes_v3(&mut scalar_ctx, &gate_tags, &[scalar_selector])
-            .expect("canonical scalar-half V3 preimage");
+            .assigned_equation_bytes_v4(&mut scalar_ctx, &gate_tags, &[scalar_selector])
+            .expect("canonical scalar-half V4 preimage");
         let scalar_preimage = assigned_preimage_bytes(&scalar_preimage);
 
         let mut point_builder = BaseCircuitBuilder::<Fq>::new(false)
@@ -1850,23 +1636,23 @@ mod tests {
                 &witness,
                 &[point_selector],
             )
-            .expect("canonical reciprocal V3 audit");
+            .expect("canonical reciprocal V4 audit");
         let point_preimage = point_chip
-            .assigned_equation_bytes_v3(&mut point_ctx, &point_audit, &gate_tags, &[point_selector])
-            .expect("canonical reciprocal V3 preimage");
+            .assigned_equation_bytes_v4(&mut point_ctx, &point_audit, &gate_tags, &[point_selector])
+            .expect("canonical reciprocal V4 preimage");
         let point_preimage = assigned_preimage_bytes(&point_preimage);
 
         assert_eq!(scalar_preimage, point_preimage);
-        let mut expected_prefix = KAGEMUSHA_DEFERRED_AUDIT_DOMAIN_V3.to_vec();
+        let mut expected_prefix = KAGEMUSHA_DEFERRED_AUDIT_DOMAIN_V4.to_vec();
         expected_prefix.push(0);
-        expected_prefix.extend_from_slice(&KAGEMUSHA_DEFERRED_AUDIT_VERSION_V3.to_le_bytes());
+        expected_prefix.extend_from_slice(&KAGEMUSHA_DEFERRED_AUDIT_VERSION_V4.to_le_bytes());
         assert_eq!(
             &scalar_preimage[..expected_prefix.len()],
             expected_prefix.as_slice(),
-            "V3 preimage must contain exactly domain, NUL, and version once"
+            "V4 preimage must contain exactly domain, NUL, and version once"
         );
-        let mut duplicated_prefix = KAGEMUSHA_DEFERRED_AUDIT_DOMAIN_V3.to_vec();
-        duplicated_prefix.extend_from_slice(KAGEMUSHA_DEFERRED_AUDIT_DOMAIN_V3);
+        let mut duplicated_prefix = KAGEMUSHA_DEFERRED_AUDIT_DOMAIN_V4.to_vec();
+        duplicated_prefix.extend_from_slice(KAGEMUSHA_DEFERRED_AUDIT_DOMAIN_V4);
         assert!(!scalar_preimage.starts_with(&duplicated_prefix));
     }
 

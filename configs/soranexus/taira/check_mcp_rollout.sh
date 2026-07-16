@@ -1501,8 +1501,9 @@ check_route_parity() {
   check_route_status "$label" POST "${root_url}/v1/musubi/instructions/yank-release" "200" \
     "Musubi pre-signing instruction builder route" \
     '{"package":"dex.universal/swap-core@1.2.3","reason":"rollout preflight"}'
-  check_route_status "$label" POST "${root_url}/v1/contracts/deploy" "400 401 403 415 422" \
-    "contract deploy route should reject an empty preflight body, not be missing" '{}'
+  check_route_status "$label" POST "${root_url}/v1/contracts/deploy" "404" \
+    "retired server-side contract deploy route must remain unmounted" '{}' \
+    "route_not_found"
   check_route_status "$label" POST "${root_url}/v1/bridge/messages" "400 401 403 415 422" \
     "bridge message preflight should hit the mounted route, not return 404/405" '{}'
 }

@@ -14,12 +14,11 @@ use halo2_base::{
 };
 use halo2_proofs::halo2curves::pasta::Fp;
 use iroha_data_model::offline::{
-    KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_TAG_DOMAIN_V2, KagemushaRecursiveSpendBranchClaimV2,
-    KagemushaRecursiveSpendBranchV2, KagemushaRecursiveSpendInitRequestV2,
-    KagemushaRecursiveSpendInitRequestV4, KagemushaRecursiveSpendPublicStatementV2,
-    KagemushaRecursiveSpendPublicStatementV4, KagemushaRecursiveSpendRedemptionIntentV2,
-    KagemushaRecursiveSpendRedemptionIntentV4, KagemushaRecursiveSpendSplitIntentV2,
-    KagemushaRecursiveSpendSplitIntentV4, KagemushaRecursiveSpendTransitionV2,
+    KAGEMUSHA_CONFIDENTIAL_TREE_DEPTH_V2, KAGEMUSHA_RECURSIVE_SPEND_TRANSITION_TAG_DOMAIN_V2,
+    KagemushaRecursiveSpendBranchClaimV2, KagemushaRecursiveSpendBranchV2,
+    KagemushaRecursiveSpendInitRequestV4, KagemushaRecursiveSpendOperationVectorV4,
+    KagemushaRecursiveSpendPublicStatementV4, KagemushaRecursiveSpendRedemptionIntentV4,
+    KagemushaRecursiveSpendSplitIntentV4, KagemushaRecursiveSpendTransitionV4,
     kagemusha_confidential_amount_encoding_v2, kagemusha_recursive_spend_transition_tag_v2,
 };
 use norito::codec::{Decode, Encode};
@@ -74,40 +73,33 @@ use super::kagemusha_v2::{
     I_TRANSFER_SCALE as O_TRANSFER_SCALE, I_UNSHIELD_PUBLIC_AMOUNT as O_UNSHIELD_PUBLIC_AMOUNT,
     I_UNSHIELD_PUBLIC_INPUTS_DIGEST as O_UNSHIELD_PUBLIC_INPUTS_DIGEST,
     I_VERIFIER_KEY_ID_DIGEST as O_VERIFIER_KEY_ID_DIGEST,
-    KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_CLAIM_HISTORY_LIMBS_V1,
-    KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_CLAIM_LIMBS_V1,
-    KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V1,
-    KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_TRANSITION_TAG_LIMBS_V1,
-    KagemushaOutputMembershipCircuitV3, KagemushaOutputMembershipOperationV3,
-    KagemushaOutputMembershipWitnessV3, KagemushaRecursiveSpendTransitionValuesV2,
-    S_ARTIFACT_MANIFEST_SHA256, S_ASSET_SCALE, S_ASSET_TAG, S_BRANCH_CLAIM_COUNT, S_BRANCH_CLAIMS,
-    S_CHAIN_TAG, S_CURRENT_AMOUNT, S_CURRENT_COMMITMENT, S_CURRENT_NULLIFIER, S_CURRENT_SCALE,
-    S_FINAL_ROOT, S_PEER_HOP_COUNT, S_PROOF_STEP_COUNT, S_TOPUP_ANCHOR_COUNT, S_TOPUP_ANCHORS,
-    S_VERIFIER_KEY_ID, S_VERSION,
+    KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_CLAIM_HISTORY_LIMBS_V2,
+    KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_CLAIM_LIMBS_V2,
+    KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V2,
+    KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_TRANSITION_TAG_LIMBS_V2,
+    KagemushaOutputMembershipCircuitV4, KagemushaOutputMembershipOperationV4,
+    KagemushaOutputMembershipWitnessV4, S_ARTIFACT_MANIFEST_SHA256, S_ASSET_SCALE, S_ASSET_TAG,
+    S_BRANCH_CLAIM_COUNT, S_BRANCH_CLAIMS, S_CHAIN_TAG, S_CURRENT_AMOUNT, S_CURRENT_COMMITMENT,
+    S_CURRENT_NULLIFIER, S_CURRENT_SCALE, S_FINAL_ROOT, S_NEXT_ZERO_LEAF_INDEX, S_PEER_HOP_COUNT,
+    S_PROOF_STEP_COUNT, S_TOPUP_ANCHOR_COUNT, S_TOPUP_ANCHORS, S_VERIFIER_KEY_ID, S_VERSION,
 };
 
-/// Number of canonical Pallas-field elements in the existing V2 operation row.
-pub const KAGEMUSHA_STEP_OPERATION_FIELD_ELEMENTS_V3: usize = 135;
+/// Number of canonical Pallas-field elements in one ABI-20 V4 operation row.
+pub const KAGEMUSHA_STEP_OPERATION_FIELD_ELEMENTS_V4: usize = 135;
 /// Exact number of little-endian `u32` limbs carrying the operation row.
-pub const KAGEMUSHA_STEP_OPERATION_LIMBS_V3: usize = KAGEMUSHA_STEP_OPERATION_FIELD_ELEMENTS_V3 * 8;
+pub const KAGEMUSHA_STEP_OPERATION_LIMBS_V4: usize = KAGEMUSHA_STEP_OPERATION_FIELD_ELEMENTS_V4 * 8;
+const _: [(); KAGEMUSHA_STEP_OPERATION_LIMBS_V4] =
+    [(); iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_OPERATION_LIMBS_V4];
 
 /// Pallas `Fp` modulus as eight little-endian `u32` limbs.
 ///
 /// Both Pasta parities use this bound. `Fp` is the smaller Pasta modulus, so a
 /// canonical value reconstructed in either native field cannot wrap.
-pub const KAGEMUSHA_STEP_OPERATION_FP_MODULUS_U32_LE_V3: [u32; 8] = [
-    0x0000_0001,
-    0x992d_30ed,
-    0x094c_f91b,
-    0x2246_98fc,
-    0x0000_0000,
-    0x0000_0000,
-    0x0000_0000,
-    0x4000_0000,
-];
+pub const KAGEMUSHA_STEP_OPERATION_FP_MODULUS_U32_LE_V4: [u32; 8] =
+    iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_OPERATION_FP_MODULUS_U32_LE_V4;
 
-const _: [(); KAGEMUSHA_STEP_OPERATION_FIELD_ELEMENTS_V3] = [(); O_UNSHIELD_PUBLIC_AMOUNT + 1];
-const _: [(); KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V1] = [(); S_VERIFIER_KEY_ID + 8];
+const _: [(); KAGEMUSHA_STEP_OPERATION_FIELD_ELEMENTS_V4] = [(); O_UNSHIELD_PUBLIC_AMOUNT + 1];
+const _: [(); KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V2] = [(); S_VERIFIER_KEY_ID + 8];
 
 const ANCHOR_LIMBS: usize = 16;
 const ANCHOR_SLOTS: usize = 2;
@@ -119,30 +111,40 @@ const CLAIM_HISTORY: usize = 11;
 
 /// Exact fixed-size field-neutral operation vector shared by StepEq and StepEp.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-pub struct KagemushaStepOperationVectorV3 {
+pub struct KagemushaStepOperationVectorV4 {
     /// Eight little-endian `u32` limbs per canonical Pallas-field element.
-    pub limbs: [u32; KAGEMUSHA_STEP_OPERATION_LIMBS_V3],
+    pub limbs: [u32; KAGEMUSHA_STEP_OPERATION_LIMBS_V4],
 }
 
-impl Default for KagemushaStepOperationVectorV3 {
-    fn default() -> Self {
+impl From<&KagemushaRecursiveSpendOperationVectorV4> for KagemushaStepOperationVectorV4 {
+    fn from(operation: &KagemushaRecursiveSpendOperationVectorV4) -> Self {
         Self {
-            limbs: [0; KAGEMUSHA_STEP_OPERATION_LIMBS_V3],
+            limbs: operation.limbs,
         }
     }
 }
 
-impl KagemushaStepOperationVectorV3 {
-    /// Encode the existing canonical V2 operation row without field reduction.
-    #[must_use]
-    pub fn from_transition_values(values: &KagemushaRecursiveSpendTransitionValuesV2<Fp>) -> Self {
-        Self::from_fields(values.public)
+impl From<&KagemushaStepOperationVectorV4> for KagemushaRecursiveSpendOperationVectorV4 {
+    fn from(operation: &KagemushaStepOperationVectorV4) -> Self {
+        Self {
+            limbs: operation.limbs,
+        }
     }
+}
 
+impl Default for KagemushaStepOperationVectorV4 {
+    fn default() -> Self {
+        Self {
+            limbs: [0; KAGEMUSHA_STEP_OPERATION_LIMBS_V4],
+        }
+    }
+}
+
+impl KagemushaStepOperationVectorV4 {
     /// Encode 135 canonical Pallas elements as exact little-endian limbs.
     #[must_use]
-    pub fn from_fields(fields: [Fp; KAGEMUSHA_STEP_OPERATION_FIELD_ELEMENTS_V3]) -> Self {
-        let mut limbs = [0_u32; KAGEMUSHA_STEP_OPERATION_LIMBS_V3];
+    pub fn from_fields(fields: [Fp; KAGEMUSHA_STEP_OPERATION_FIELD_ELEMENTS_V4]) -> Self {
+        let mut limbs = [0_u32; KAGEMUSHA_STEP_OPERATION_LIMBS_V4];
         for (field_index, field) in fields.into_iter().enumerate() {
             let repr = field.to_repr();
             for (limb_index, chunk) in repr.as_ref().chunks_exact(4).enumerate() {
@@ -154,8 +156,8 @@ impl KagemushaStepOperationVectorV3 {
     }
 
     /// Decode every exact limb group, rejecting values at or above `Fp::MODULUS`.
-    pub fn to_fields(&self) -> Result<[Fp; KAGEMUSHA_STEP_OPERATION_FIELD_ELEMENTS_V3], String> {
-        let mut fields = [Fp::ZERO; KAGEMUSHA_STEP_OPERATION_FIELD_ELEMENTS_V3];
+    pub fn to_fields(&self) -> Result<[Fp; KAGEMUSHA_STEP_OPERATION_FIELD_ELEMENTS_V4], String> {
+        let mut fields = [Fp::ZERO; KAGEMUSHA_STEP_OPERATION_FIELD_ELEMENTS_V4];
         for (field_index, field) in fields.iter_mut().enumerate() {
             let mut repr = <Fp as PrimeField>::Repr::default();
             for (chunk, limb) in repr
@@ -304,7 +306,7 @@ impl KagemushaStepOperationVectorV3 {
                     ),
                 ])
             }
-            Some(KagemushaRecursiveSpendTransitionV2::PeerSplit(transition)) => {
+            Some(KagemushaRecursiveSpendTransitionV4::PeerSplit(transition)) => {
                 if transition.parent_max_proof_step_count == 0 {
                     return Err(
                         "Kagemusha V4 peer split must consume an initialized parent".to_owned()
@@ -387,7 +389,7 @@ impl KagemushaStepOperationVectorV3 {
                 }
                 Ok(())
             }
-            Some(KagemushaRecursiveSpendTransitionV2::RedemptionChange(transition)) => {
+            Some(KagemushaRecursiveSpendTransitionV4::RedemptionChange(transition)) => {
                 if transition.parent_proof_step_count == 0 {
                     return Err(
                         "Kagemusha V4 redemption change must consume an initialized parent"
@@ -455,7 +457,7 @@ impl KagemushaStepOperationVectorV3 {
 /// Exact public cells emitted by the secure transfer relation, represented in
 /// canonical byte form before they enter StepEq.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct KagemushaStepTransferPublicV3 {
+pub struct KagemushaStepTransferPublicV4 {
     /// Input commitments in parent-slot order; slot 1 is zero when absent.
     pub input_commitments: [[u8; 32]; 2],
     /// Input nullifiers in parent-slot order; slot 1 is zero when absent.
@@ -478,7 +480,7 @@ fn fp_from_bytes(bytes: [u8; 32], label: &str) -> Result<Fp, String> {
 }
 
 fn put_full_field(
-    fields: &mut [Fp; KAGEMUSHA_STEP_OPERATION_FIELD_ELEMENTS_V3],
+    fields: &mut [Fp; KAGEMUSHA_STEP_OPERATION_FIELD_ELEMENTS_V4],
     index: usize,
     bytes: [u8; 32],
     label: &str,
@@ -488,7 +490,7 @@ fn put_full_field(
 }
 
 fn put_digest(
-    fields: &mut [Fp; KAGEMUSHA_STEP_OPERATION_FIELD_ELEMENTS_V3],
+    fields: &mut [Fp; KAGEMUSHA_STEP_OPERATION_FIELD_ELEMENTS_V4],
     index: usize,
     bytes: [u8; 32],
 ) {
@@ -500,7 +502,7 @@ fn put_digest(
 }
 
 fn put_amount(
-    fields: &mut [Fp; KAGEMUSHA_STEP_OPERATION_FIELD_ELEMENTS_V3],
+    fields: &mut [Fp; KAGEMUSHA_STEP_OPERATION_FIELD_ELEMENTS_V4],
     index: usize,
     amount: u128,
 ) {
@@ -520,200 +522,13 @@ fn encode_u32_scalar(value: u32) -> [u8; 32] {
     bytes
 }
 
-fn fill_statement_fields(
-    statement: &KagemushaRecursiveSpendPublicStatementV2,
-) -> Result<[Fp; KAGEMUSHA_STEP_OPERATION_FIELD_ELEMENTS_V3], String> {
-    statement
-        .validate_public_binding()
-        .map_err(|error| error.to_string())?;
-    let mut fields = [Fp::ZERO; KAGEMUSHA_STEP_OPERATION_FIELD_ELEMENTS_V3];
-    fields[O_LAYOUT_VERSION] = Fp::ONE;
-    fields[O_PROOF_STEP_COUNT] = Fp::from(u64::from(statement.proof_step_count));
-    fields[O_PEER_HOP_COUNT] = Fp::from(u64::from(statement.peer_hop_count));
-    fields[O_ASSET_SCALE] = Fp::from(u64::from(statement.asset_scale));
-    fields[O_CURRENT_SCALE] = Fp::from(u64::from(statement.current_note.amount.scale));
-    put_amount(
-        &mut fields,
-        O_CURRENT_AMOUNT_LO,
-        statement.current_note.amount.atomic_units,
-    );
-    put_full_field(
-        &mut fields,
-        O_FINAL_ROOT,
-        statement.final_root,
-        "result root",
-    )?;
-    put_full_field(
-        &mut fields,
-        O_CURRENT_COMMITMENT,
-        statement.current_note.note_commitment,
-        "current commitment",
-    )?;
-    put_full_field(
-        &mut fields,
-        O_CURRENT_NULLIFIER,
-        statement.current_note.spend_nullifier,
-        "current nullifier",
-    )?;
-
-    let asset_tag =
-        super::confidential_v2::derive_confidential_asset_tag_v3(&statement.asset.to_string())?;
-    let chain_tag =
-        super::confidential_v2::derive_confidential_chain_tag_v3(statement.chain_id.as_str())?;
-    put_full_field(&mut fields, O_ASSET_TAG, asset_tag, "asset tag")?;
-    put_full_field(&mut fields, O_CHAIN_TAG, chain_tag, "chain tag")?;
-    put_digest(
-        &mut fields,
-        O_STATEMENT_DIGEST,
-        statement.digest().map_err(|error| error.to_string())?,
-    );
-    put_digest(
-        &mut fields,
-        O_CHAIN_ID_DIGEST,
-        canonical_binding_digest(&statement.chain_id)?,
-    );
-    put_digest(
-        &mut fields,
-        O_ASSET_ID_DIGEST,
-        canonical_binding_digest(&statement.asset)?,
-    );
-    put_digest(
-        &mut fields,
-        O_ARTIFACT_MANIFEST_SHA256,
-        statement.artifact_binding.manifest_sha256,
-    );
-    put_digest(
-        &mut fields,
-        O_VERIFIER_KEY_ID_DIGEST,
-        canonical_binding_digest(&statement.verifier_key_id)?,
-    );
-
-    let first_anchor = statement
-        .topup_anchor_refs
-        .first()
-        .ok_or_else(|| "Kagemusha Step statement has no top-up anchor".to_owned())?;
-    fields[O_TOPUP_ANCHOR_COUNT] = Fp::from(
-        u64::try_from(statement.topup_anchor_refs.len())
-            .map_err(|_| "Kagemusha Step anchor count does not fit u64")?,
-    );
-    put_digest(
-        &mut fields,
-        O_TOPUP_OPERATION_ID,
-        first_anchor.topup_operation_id,
-    );
-    put_digest(
-        &mut fields,
-        O_TOPUP_ANCHOR_DIGEST,
-        first_anchor.anchor_digest,
-    );
-    // The compact carried receipt identity is the finalized anchor digest.
-    put_digest(
-        &mut fields,
-        O_TOPUP_RECEIPT_DIGEST,
-        first_anchor.anchor_digest,
-    );
-
-    let first_claim = statement
-        .branch_claims
-        .first()
-        .ok_or_else(|| "Kagemusha Step statement has no branch claim".to_owned())?;
-    fields[O_BRANCH_DEPTH] = Fp::from(u64::from(first_claim.path.depth));
-    fields[O_BRANCH_PATH_BITS] = Fp::from(u64::from_be_bytes(first_claim.path.path_bits));
-    put_digest(
-        &mut fields,
-        O_BRANCH_LINEAGE_ROOT,
-        first_claim.path.lineage_root,
-    );
-
-    match statement.transition.as_ref() {
-        None => {}
-        Some(KagemushaRecursiveSpendTransitionV2::PeerSplit(transition)) => {
-            fields[O_APPEND_PROFILE] = Fp::ONE;
-            fields[O_BRANCH_CHANGE] = Fp::from(matches!(
-                transition.branch,
-                KagemushaRecursiveSpendBranchV2::Change
-            ) as u64);
-            fields[O_PREVIOUS_PROOF_STEP_COUNT] =
-                Fp::from(u64::from(transition.parent_max_proof_step_count));
-            fields[O_PREVIOUS_PEER_HOP_COUNT] =
-                Fp::from(u64::from(transition.parent_max_peer_hop_count));
-            put_digest(&mut fields, O_SPLIT_DIGEST, transition.binding_digest);
-            put_digest(
-                &mut fields,
-                O_RECIPIENT_REQUEST_DIGEST,
-                transition.recipient_request_digest,
-            );
-            put_digest(&mut fields, O_OPERATION_ID, transition.operation_id);
-            let tag = kagemusha_recursive_spend_transition_tag_v2(transition.binding_digest)
-                .map_err(|error| error.to_string())?;
-            let mut padded_tag = [0_u8; 32];
-            padded_tag[..tag.len()].copy_from_slice(&tag);
-            put_digest(&mut fields, O_CURRENT_HOP_DOMAIN_TAG, padded_tag);
-            let parent = first_claim
-                .path
-                .parent()
-                .ok_or_else(|| "Kagemusha append first claim has no parent".to_owned())?;
-            fields[O_PARENT_BRANCH_DEPTH] = Fp::from(u64::from(parent.depth));
-            fields[O_PARENT_BRANCH_PATH_BITS] = Fp::from(u64::from_be_bytes(parent.path_bits));
-            put_digest(
-                &mut fields,
-                O_PARENT_BRANCH_LINEAGE_ROOT,
-                parent.lineage_root,
-            );
-            put_digest(
-                &mut fields,
-                O_PARENT_TOPUP_RECEIPT_DIGEST,
-                first_anchor.anchor_digest,
-            );
-        }
-        Some(KagemushaRecursiveSpendTransitionV2::RedemptionChange(transition)) => {
-            fields[O_REDEMPTION_PROFILE] = Fp::ONE;
-            fields[O_BRANCH_CHANGE] = Fp::ONE;
-            fields[O_HAS_CHANGE] = Fp::ONE;
-            fields[O_PREVIOUS_PROOF_STEP_COUNT] =
-                Fp::from(u64::from(transition.parent_proof_step_count));
-            fields[O_PREVIOUS_PEER_HOP_COUNT] =
-                Fp::from(u64::from(transition.parent_peer_hop_count));
-            put_digest(&mut fields, O_SPLIT_DIGEST, transition.binding_digest);
-            put_digest(
-                &mut fields,
-                O_PARENT_BUNDLE_DIGEST,
-                transition.parent_bundle_digest,
-            );
-            put_digest(&mut fields, O_OPERATION_ID, transition.operation_id);
-            let tag = kagemusha_recursive_spend_transition_tag_v2(transition.binding_digest)
-                .map_err(|error| error.to_string())?;
-            let mut padded_tag = [0_u8; 32];
-            padded_tag[..tag.len()].copy_from_slice(&tag);
-            put_digest(&mut fields, O_CURRENT_HOP_DOMAIN_TAG, padded_tag);
-            let parent = first_claim
-                .path
-                .parent()
-                .ok_or_else(|| "Kagemusha redemption first claim has no parent".to_owned())?;
-            fields[O_PARENT_BRANCH_DEPTH] = Fp::from(u64::from(parent.depth));
-            fields[O_PARENT_BRANCH_PATH_BITS] = Fp::from(u64::from_be_bytes(parent.path_bits));
-            put_digest(
-                &mut fields,
-                O_PARENT_BRANCH_LINEAGE_ROOT,
-                parent.lineage_root,
-            );
-            put_digest(
-                &mut fields,
-                O_PARENT_TOPUP_RECEIPT_DIGEST,
-                first_anchor.anchor_digest,
-            );
-        }
-    }
-    Ok(fields)
-}
-
 fn fill_statement_fields_v4(
     statement: &KagemushaRecursiveSpendPublicStatementV4,
-) -> Result<[Fp; KAGEMUSHA_STEP_OPERATION_FIELD_ELEMENTS_V3], String> {
+) -> Result<[Fp; KAGEMUSHA_STEP_OPERATION_FIELD_ELEMENTS_V4], String> {
     statement
         .validate_public_binding()
         .map_err(|error| error.to_string())?;
-    let mut fields = [Fp::ZERO; KAGEMUSHA_STEP_OPERATION_FIELD_ELEMENTS_V3];
+    let mut fields = [Fp::ZERO; KAGEMUSHA_STEP_OPERATION_FIELD_ELEMENTS_V4];
     fields[O_LAYOUT_VERSION] = Fp::ONE;
     fields[O_PROOF_STEP_COUNT] = Fp::from(u64::from(statement.proof_step_count));
     fields[O_PEER_HOP_COUNT] = Fp::from(u64::from(statement.peer_hop_count));
@@ -813,7 +628,7 @@ fn fill_statement_fields_v4(
 
     match statement.transition.as_ref() {
         None => {}
-        Some(KagemushaRecursiveSpendTransitionV2::PeerSplit(transition)) => {
+        Some(KagemushaRecursiveSpendTransitionV4::PeerSplit(transition)) => {
             fields[O_APPEND_PROFILE] = Fp::ONE;
             fields[O_BRANCH_CHANGE] = Fp::from(matches!(
                 transition.branch,
@@ -852,7 +667,7 @@ fn fill_statement_fields_v4(
                 first_anchor.anchor_digest,
             );
         }
-        Some(KagemushaRecursiveSpendTransitionV2::RedemptionChange(transition)) => {
+        Some(KagemushaRecursiveSpendTransitionV4::RedemptionChange(transition)) => {
             fields[O_REDEMPTION_PROFILE] = Fp::ONE;
             fields[O_BRANCH_CHANGE] = Fp::ONE;
             fields[O_HAS_CHANGE] = Fp::ONE;
@@ -893,421 +708,15 @@ fn fill_statement_fields_v4(
     Ok(fields)
 }
 
-impl KagemushaStepOperationVectorV3 {
-    /// Construct an initialization operation only from validated finalized
-    /// provenance, the resulting public statement, and exact secure public
-    /// bindings. No caller-supplied operation row is accepted.
-    pub fn from_init(
-        request: &KagemushaRecursiveSpendInitRequestV2,
-        statement: &KagemushaRecursiveSpendPublicStatementV2,
-        topup: &super::confidential_v2::KagemushaTopUpShieldPublicInputsV2,
-        membership: &KagemushaOutputMembershipWitnessV3,
-    ) -> Result<Self, String> {
-        request
-            .validate_public_binding()
-            .map_err(|error| error.to_string())?;
-        statement
-            .validate_public_binding()
-            .map_err(|error| error.to_string())?;
-        KagemushaOutputMembershipCircuitV3::new(membership.clone())?;
-        let anchor = &request.topup_anchor;
-        if statement.transition.is_some()
-            || membership.operation != KagemushaOutputMembershipOperationV3::Init
-            || statement.chain_id != anchor.chain_id
-            || statement.asset != *anchor.asset.definition()
-            || statement.asset_scale != anchor.asset_scale
-            || statement.current_note != anchor.current_note
-            || statement.final_root != anchor.finalized_root
-            || statement.topup_anchor_refs.as_slice()
-                != [anchor.compact_ref().map_err(|e| e.to_string())?]
-            || membership.initial_root != anchor.initial_root
-            || membership.final_root != anchor.finalized_root
-            || membership.recipient.as_ref().map(|leaf| leaf.commitment)
-                != Some(anchor.current_note.note_commitment)
-            || membership.change.is_some()
-            || topup.output_commitment != anchor.current_note.note_commitment
-            || topup.spend_nullifier != anchor.current_note.spend_nullifier
-            || topup.initial_root != anchor.initial_root
-            || topup.finalized_root != anchor.finalized_root
-            || topup.atomic_amount
-                != kagemusha_confidential_amount_encoding_v2(anchor.amount.atomic_units)
-            || topup.asset_scale != encode_u32_scalar(anchor.asset_scale)
-            || topup.leaf_index != encode_u32_scalar(anchor.shield_leaf_index)
-        {
-            return Err(
-                "Kagemusha Step init bindings do not match the finalized top-up".to_owned(),
-            );
-        }
-        let expected_asset_tag =
-            super::confidential_v2::derive_confidential_asset_tag_v3(&statement.asset.to_string())?;
-        let expected_chain_tag =
-            super::confidential_v2::derive_confidential_chain_tag_v3(statement.chain_id.as_str())?;
-        let expected_payer_tag =
-            super::confidential_v2::derive_kagemusha_topup_payer_tag_v3(&anchor.payer.to_string())?;
-        let expected_operation_tag =
-            super::confidential_v2::derive_kagemusha_topup_operation_tag_v3(
-                &anchor.topup_operation_id,
-            )?;
-        if topup.asset_tag != expected_asset_tag
-            || topup.chain_tag != expected_chain_tag
-            || topup.payer_tag != expected_payer_tag
-            || topup.operation_tag != expected_operation_tag
-        {
-            return Err("Kagemusha Step init confidential tags mismatch".to_owned());
-        }
-
-        let mut fields = fill_statement_fields(statement)?;
-        // These two four-field digest groups are unused by the initialization
-        // profile. Carry the exact canonical secure-relation scalars there so
-        // StepEq can reconstruct and copy-bind all eleven top-up outputs. The
-        // append/redemption profiles retain their legacy meanings for these
-        // slots and are selected by `is_init` at the StepEq boundary.
-        put_digest(&mut fields, O_RECIPIENT_REQUEST_DIGEST, expected_payer_tag);
-        put_digest(&mut fields, O_OPERATION_ID, expected_operation_tag);
-        fields[O_INPUT_SCALE] = fields[O_ASSET_SCALE];
-        fields[O_TRANSFER_SCALE] = fields[O_ASSET_SCALE];
-        fields[O_RECIPIENT_SCALE] = fields[O_ASSET_SCALE];
-        put_amount(&mut fields, O_INPUT_AMOUNT_LO, anchor.amount.atomic_units);
-        put_amount(
-            &mut fields,
-            O_TRANSFER_AMOUNT_LO,
-            anchor.amount.atomic_units,
-        );
-        put_amount(
-            &mut fields,
-            O_RECIPIENT_AMOUNT_LO,
-            anchor.amount.atomic_units,
-        );
-        fields[O_RECORD_OUTPUT_COUNT] = Fp::ONE;
-        fields[O_TRANSFER_OUTPUT_COUNT] = Fp::ONE;
-        put_full_field(
-            &mut fields,
-            O_INITIAL_ROOT,
-            anchor.initial_root,
-            "init root",
-        )?;
-        put_full_field(
-            &mut fields,
-            O_RECORD_ROOT_BEFORE,
-            anchor.initial_root,
-            "init root before",
-        )?;
-        fields[O_RECORD_ROOT_AFTER] = fields[O_FINAL_ROOT];
-        fields[O_TRANSFER_ROOT] = fields[O_FINAL_ROOT];
-        fields[O_RECIPIENT_COMMITMENT] = fields[O_CURRENT_COMMITMENT];
-        fields[O_RECIPIENT_NULLIFIER] = fields[O_CURRENT_NULLIFIER];
-        fields[O_RECORD_OUTPUT_0] = fields[O_CURRENT_COMMITMENT];
-        fields[O_TRANSFER_OUTPUT_0] = fields[O_CURRENT_COMMITMENT];
-        Ok(Self::from_fields(fields))
-    }
-
-    /// Construct a one- or two-parent append operation from a validated split,
-    /// the selected child statement, secure transfer public cells, and the
-    /// exact output-membership witness.
-    pub fn from_append(
-        split: &KagemushaRecursiveSpendSplitIntentV2,
-        statement: &KagemushaRecursiveSpendPublicStatementV2,
-        transfer: &KagemushaStepTransferPublicV3,
-        membership: &KagemushaOutputMembershipWitnessV3,
-    ) -> Result<Self, String> {
-        split
-            .validate_public_binding()
-            .map_err(|error| error.to_string())?;
-        statement
-            .validate_public_binding()
-            .map_err(|error| error.to_string())?;
-        KagemushaOutputMembershipCircuitV3::new(membership.clone())?;
-        let Some(KagemushaRecursiveSpendTransitionV2::PeerSplit(transition)) =
-            statement.transition.as_ref()
-        else {
-            return Err("Kagemusha Step append result has no peer-split transition".to_owned());
-        };
-        let selected_note = match transition.branch {
-            KagemushaRecursiveSpendBranchV2::Recipient => &split.recipient_output,
-            KagemushaRecursiveSpendBranchV2::Change => split
-                .change_output
-                .as_ref()
-                .ok_or_else(|| "Kagemusha Step selected an absent change branch".to_owned())?,
-        };
-        let root = split
-            .inputs
-            .first()
-            .ok_or_else(|| "Kagemusha Step append has no input".to_owned())?
-            .input_root;
-        if split.inputs.iter().any(|input| input.input_root != root)
-            || transition.binding_digest != split.binding_digest().map_err(|e| e.to_string())?
-            || transition.recipient_request_digest != split.recipient_request_digest
-            || transition.operation_id != split.operation_id
-            || statement.current_note != *selected_note
-            || statement.final_root != membership.final_root
-            || membership.operation != KagemushaOutputMembershipOperationV3::Split
-            || membership.initial_root != root
-            || membership.recipient.as_ref().map(|leaf| leaf.commitment)
-                != Some(split.recipient_output.note_commitment)
-            || membership.change.as_ref().map(|leaf| leaf.commitment)
-                != split
-                    .change_output
-                    .as_ref()
-                    .map(|note| note.note_commitment)
-            || transfer.root != root
-            || transfer.input_commitments[0] != split.inputs[0].input_note.note_commitment
-            || transfer.input_nullifiers[0] != split.inputs[0].input_note.spend_nullifier
-            || transfer.input_commitments[1]
-                != split
-                    .inputs
-                    .get(1)
-                    .map_or([0; 32], |input| input.input_note.note_commitment)
-            || transfer.input_nullifiers[1]
-                != split
-                    .inputs
-                    .get(1)
-                    .map_or([0; 32], |input| input.input_note.spend_nullifier)
-            || transfer.output_commitments[0] != split.recipient_output.note_commitment
-            || transfer.output_commitments[1]
-                != split
-                    .change_output
-                    .as_ref()
-                    .map_or([0; 32], |note| note.note_commitment)
-        {
-            return Err("Kagemusha Step append public bindings mismatch".to_owned());
-        }
-        let expected_asset_tag =
-            super::confidential_v2::derive_confidential_asset_tag_v3(&split.asset.to_string())?;
-        let expected_chain_tag =
-            super::confidential_v2::derive_confidential_chain_tag_v3(split.chain_id.as_str())?;
-        if transfer.asset_tag != expected_asset_tag || transfer.chain_tag != expected_chain_tag {
-            return Err("Kagemusha Step append confidential tags mismatch".to_owned());
-        }
-
-        let input_amount = split.input_amount().map_err(|error| error.to_string())?;
-        let mut fields = fill_statement_fields(statement)?;
-        fields[O_HAS_CHANGE] = Fp::from(split.change_output.is_some() as u64);
-        fields[O_INPUT_SCALE] = fields[O_ASSET_SCALE];
-        fields[O_TRANSFER_SCALE] = fields[O_ASSET_SCALE];
-        fields[O_RECIPIENT_SCALE] = fields[O_ASSET_SCALE];
-        fields[O_CHANGE_SCALE] = Fp::from(
-            split
-                .change_output
-                .as_ref()
-                .map_or(0, |note| u64::from(note.amount.scale)),
-        );
-        let input_count = u64::try_from(split.inputs.len())
-            .map_err(|_| "Kagemusha Step input count does not fit u64")?;
-        fields[O_RECORD_INPUT_COUNT] = Fp::from(input_count);
-        fields[O_TRANSFER_INPUT_COUNT] = Fp::from(input_count);
-        let output_count = 1 + u64::from(split.change_output.is_some());
-        fields[O_RECORD_OUTPUT_COUNT] = Fp::from(output_count);
-        fields[O_TRANSFER_OUTPUT_COUNT] = Fp::from(output_count);
-        put_amount(&mut fields, O_INPUT_AMOUNT_LO, input_amount.atomic_units);
-        put_amount(
-            &mut fields,
-            O_TRANSFER_AMOUNT_LO,
-            split.transfer_amount.atomic_units,
-        );
-        put_amount(
-            &mut fields,
-            O_RECIPIENT_AMOUNT_LO,
-            split.transfer_amount.atomic_units,
-        );
-        put_amount(
-            &mut fields,
-            O_CHANGE_AMOUNT_LO,
-            split
-                .change_output
-                .as_ref()
-                .map_or(0, |note| note.amount.atomic_units),
-        );
-        put_full_field(&mut fields, O_RECORD_ROOT_BEFORE, root, "append input root")?;
-        fields[O_RECORD_ROOT_AFTER] = fields[O_FINAL_ROOT];
-        fields[O_TRANSFER_ROOT] = fields[O_FINAL_ROOT];
-        fields[O_PARENT_FINAL_ROOT] = fields[O_RECORD_ROOT_BEFORE];
-        for slot in 0..2 {
-            let input = split.inputs.get(slot);
-            let commitment = input.map_or([0; 32], |input| input.input_note.note_commitment);
-            let nullifier = input.map_or([0; 32], |input| input.input_note.spend_nullifier);
-            put_full_field(
-                &mut fields,
-                O_TRANSFER_INPUT_COMMITMENT_0 + slot,
-                commitment,
-                "append input commitment",
-            )?;
-            put_full_field(
-                &mut fields,
-                O_TRANSFER_NULLIFIER_0 + slot,
-                nullifier,
-                "append input nullifier",
-            )?;
-            fields[O_RECORD_INPUT_NULLIFIER_0 + slot] = fields[O_TRANSFER_NULLIFIER_0 + slot];
-        }
-        fields[O_INPUT_COMMITMENT] = fields[O_TRANSFER_INPUT_COMMITMENT_0];
-        fields[O_INPUT_NULLIFIER] = fields[O_TRANSFER_NULLIFIER_0];
-        put_full_field(
-            &mut fields,
-            O_RECIPIENT_COMMITMENT,
-            split.recipient_output.note_commitment,
-            "append recipient commitment",
-        )?;
-        put_full_field(
-            &mut fields,
-            O_RECIPIENT_NULLIFIER,
-            split.recipient_output.spend_nullifier,
-            "append recipient nullifier",
-        )?;
-        if let Some(change) = &split.change_output {
-            put_full_field(
-                &mut fields,
-                O_CHANGE_COMMITMENT,
-                change.note_commitment,
-                "append change commitment",
-            )?;
-            put_full_field(
-                &mut fields,
-                O_CHANGE_NULLIFIER,
-                change.spend_nullifier,
-                "append change nullifier",
-            )?;
-        }
-        fields[O_RECORD_OUTPUT_0] = fields[O_RECIPIENT_COMMITMENT];
-        fields[O_TRANSFER_OUTPUT_0] = fields[O_RECIPIENT_COMMITMENT];
-        fields[O_RECORD_OUTPUT_1] = fields[O_CHANGE_COMMITMENT];
-        fields[O_TRANSFER_OUTPUT_1] = fields[O_CHANGE_COMMITMENT];
-        Ok(Self::from_fields(fields))
-    }
-
-    /// Construct a partial-redemption Step operation from the validated intent,
-    /// selected change statement, parsed unshield public words, and exact
-    /// change-output membership witness.
-    pub fn from_redemption_change(
-        intent: &KagemushaRecursiveSpendRedemptionIntentV2,
-        statement: &KagemushaRecursiveSpendPublicStatementV2,
-        membership: &KagemushaOutputMembershipWitnessV3,
-    ) -> Result<Self, String> {
-        intent
-            .validate_public_binding()
-            .map_err(|error| error.to_string())?;
-        statement
-            .validate_public_binding()
-            .map_err(|error| error.to_string())?;
-        KagemushaOutputMembershipCircuitV3::new(membership.clone())?;
-        let change = intent
-            .change_output
-            .as_ref()
-            .ok_or_else(|| "Kagemusha Step redemption has no continuing change".to_owned())?;
-        let Some(KagemushaRecursiveSpendTransitionV2::RedemptionChange(transition)) =
-            statement.transition.as_ref()
-        else {
-            return Err("Kagemusha Step redemption result has no redemption transition".to_owned());
-        };
-        let public = &intent.unshield_public_inputs;
-        if statement.current_note != *change
-            || statement.final_root != membership.final_root
-            || membership.operation != KagemushaOutputMembershipOperationV3::RedemptionChange
-            || membership.initial_root != intent.input_root
-            || membership.recipient.is_some()
-            || membership.change.as_ref().map(|leaf| leaf.commitment)
-                != Some(change.note_commitment)
-            || transition.binding_digest != intent.binding_digest().map_err(|e| e.to_string())?
-            || transition.parent_bundle_digest != intent.parent_bundle_digest
-            || transition.operation_id != intent.operation_id
-            || public.input_commitment_0 != intent.input_note.note_commitment
-            || public.input_commitment_1 != [0; 32]
-            || public.nullifier_0 != intent.input_note.spend_nullifier
-            || public.nullifier_1 != [0; 32]
-            || public.change_output_commitment != change.note_commitment
-            || public.root != intent.input_root
-            || public.public_amount
-                != kagemusha_confidential_amount_encoding_v2(intent.public_amount.atomic_units)
-        {
-            return Err("Kagemusha Step redemption public bindings mismatch".to_owned());
-        }
-
-        let mut fields = fill_statement_fields(statement)?;
-        fields[O_INPUT_SCALE] = fields[O_ASSET_SCALE];
-        fields[O_TRANSFER_SCALE] = fields[O_ASSET_SCALE];
-        fields[O_RECIPIENT_SCALE] = fields[O_ASSET_SCALE];
-        fields[O_CHANGE_SCALE] = fields[O_ASSET_SCALE];
-        fields[O_RECORD_INPUT_COUNT] = Fp::ONE;
-        fields[O_TRANSFER_INPUT_COUNT] = Fp::ONE;
-        fields[O_RECORD_OUTPUT_COUNT] = Fp::ONE;
-        fields[O_TRANSFER_OUTPUT_COUNT] = Fp::ONE;
-        put_amount(
-            &mut fields,
-            O_INPUT_AMOUNT_LO,
-            intent.input_note.amount.atomic_units,
-        );
-        put_amount(
-            &mut fields,
-            O_TRANSFER_AMOUNT_LO,
-            intent.public_amount.atomic_units,
-        );
-        put_amount(
-            &mut fields,
-            O_RECIPIENT_AMOUNT_LO,
-            intent.public_amount.atomic_units,
-        );
-        put_amount(&mut fields, O_CHANGE_AMOUNT_LO, change.amount.atomic_units);
-        fields[O_UNSHIELD_PUBLIC_AMOUNT] = Fp::from_u128(intent.public_amount.atomic_units);
-        put_full_field(
-            &mut fields,
-            O_RECORD_ROOT_BEFORE,
-            intent.input_root,
-            "redemption input root",
-        )?;
-        fields[O_RECORD_ROOT_AFTER] = fields[O_FINAL_ROOT];
-        fields[O_TRANSFER_ROOT] = fields[O_RECORD_ROOT_BEFORE];
-        fields[O_PARENT_FINAL_ROOT] = fields[O_RECORD_ROOT_BEFORE];
-        put_full_field(
-            &mut fields,
-            O_TRANSFER_INPUT_COMMITMENT_0,
-            intent.input_note.note_commitment,
-            "redemption input commitment",
-        )?;
-        put_full_field(
-            &mut fields,
-            O_TRANSFER_NULLIFIER_0,
-            intent.input_note.spend_nullifier,
-            "redemption input nullifier",
-        )?;
-        fields[O_INPUT_COMMITMENT] = fields[O_TRANSFER_INPUT_COMMITMENT_0];
-        fields[O_INPUT_NULLIFIER] = fields[O_TRANSFER_NULLIFIER_0];
-        fields[O_RECORD_INPUT_NULLIFIER_0] = fields[O_TRANSFER_NULLIFIER_0];
-        fields[O_CHANGE_COMMITMENT] = fields[O_CURRENT_COMMITMENT];
-        fields[O_CHANGE_NULLIFIER] = fields[O_CURRENT_NULLIFIER];
-        fields[O_RECORD_OUTPUT_0] = fields[O_CHANGE_COMMITMENT];
-        fields[O_TRANSFER_OUTPUT_0] = fields[O_CHANGE_COMMITMENT];
-        put_digest(
-            &mut fields,
-            O_REDEMPTION_RECIPIENT_DIGEST,
-            canonical_binding_digest(&intent.recipient)?,
-        );
-        put_digest(
-            &mut fields,
-            O_UNSHIELD_PUBLIC_INPUTS_DIGEST,
-            intent.unshield_public_inputs_digest,
-        );
-        put_full_field(
-            &mut fields,
-            O_ASSET_TAG,
-            public.asset_tag,
-            "unshield asset tag",
-        )?;
-        put_full_field(
-            &mut fields,
-            O_CHAIN_TAG,
-            public.chain_tag,
-            "unshield chain tag",
-        )?;
-        Ok(Self::from_fields(fields))
-    }
-
+impl KagemushaStepOperationVectorV4 {
     /// Construct an ABI-20 initialization operation directly from the V4
     /// finalized receipt and V4 public statement. The V4 carriers are
-    /// validated in place; this path never re-encodes them as V2/V3 carriers.
+    /// validated in place without projecting through a retired lifecycle carrier.
     pub fn from_init_v4(
         request: &KagemushaRecursiveSpendInitRequestV4,
         statement: &KagemushaRecursiveSpendPublicStatementV4,
         topup: &super::confidential_v2::KagemushaTopUpShieldPublicInputsV2,
-        membership: &KagemushaOutputMembershipWitnessV3,
+        membership: &KagemushaOutputMembershipWitnessV4,
     ) -> Result<Self, String> {
         request
             .validate_public_binding()
@@ -1315,7 +724,7 @@ impl KagemushaStepOperationVectorV3 {
         statement
             .validate_public_binding()
             .map_err(|error| error.to_string())?;
-        KagemushaOutputMembershipCircuitV3::new(membership.clone())?;
+        KagemushaOutputMembershipCircuitV4::new(membership.clone())?;
         let anchor = &request.topup_anchor;
         let anchor_ref = anchor.compact_ref().map_err(|error| error.to_string())?;
         let expected_claims = vec![
@@ -1329,13 +738,17 @@ impl KagemushaStepOperationVectorV3 {
             || statement.asset_scale != anchor.asset_scale
             || statement.current_note != anchor.current_note
             || statement.final_root != anchor.finalized_root
+            || statement.next_zero_leaf_index != membership.dummy_leaf_index
             || statement.topup_anchor_refs.as_slice() != [anchor_ref]
             || statement.branch_claims != expected_claims
-            || membership.operation != KagemushaOutputMembershipOperationV3::Init
+            || membership.operation != KagemushaOutputMembershipOperationV4::Init
             || membership.initial_root != anchor.initial_root
             || membership.final_root != anchor.finalized_root
             || membership.recipient.as_ref().map(|leaf| leaf.commitment)
                 != Some(anchor.current_note.note_commitment)
+            || membership.recipient.as_ref().map(|leaf| leaf.leaf_index)
+                != Some(anchor.shield_leaf_index)
+            || anchor.shield_leaf_index.checked_add(1) != Some(membership.dummy_leaf_index)
             || membership.change.is_some()
             || topup.output_commitment != anchor.current_note.note_commitment
             || topup.spend_nullifier != anchor.current_note.spend_nullifier
@@ -1413,8 +826,8 @@ impl KagemushaStepOperationVectorV3 {
     pub fn from_append_v4(
         split: &KagemushaRecursiveSpendSplitIntentV4,
         statement: &KagemushaRecursiveSpendPublicStatementV4,
-        transfer: &KagemushaStepTransferPublicV3,
-        membership: &KagemushaOutputMembershipWitnessV3,
+        transfer: &KagemushaStepTransferPublicV4,
+        membership: &KagemushaOutputMembershipWitnessV4,
     ) -> Result<Self, String> {
         split
             .validate_public_binding()
@@ -1422,8 +835,8 @@ impl KagemushaStepOperationVectorV3 {
         statement
             .validate_public_binding()
             .map_err(|error| error.to_string())?;
-        KagemushaOutputMembershipCircuitV3::new(membership.clone())?;
-        let Some(KagemushaRecursiveSpendTransitionV2::PeerSplit(transition)) =
+        KagemushaOutputMembershipCircuitV4::new(membership.clone())?;
+        let Some(KagemushaRecursiveSpendTransitionV4::PeerSplit(transition)) =
             statement.transition.as_ref()
         else {
             return Err("Kagemusha Step V4 append has no peer-split transition".to_owned());
@@ -1470,7 +883,8 @@ impl KagemushaStepOperationVectorV3 {
             || transition.parent_max_peer_hop_count != parent_max_peer_hop_count
             || statement.current_note != *selected_note
             || statement.final_root != membership.final_root
-            || membership.operation != KagemushaOutputMembershipOperationV3::Split
+            || statement.next_zero_leaf_index != membership.dummy_leaf_index
+            || membership.operation != KagemushaOutputMembershipOperationV4::Split
             || membership.initial_root != root
             || membership.recipient.as_ref().map(|leaf| leaf.commitment)
                 != Some(split.recipient_output.note_commitment)
@@ -1614,7 +1028,32 @@ impl KagemushaStepOperationVectorV3 {
     pub fn from_redemption_change_v4(
         intent: &KagemushaRecursiveSpendRedemptionIntentV4,
         statement: &KagemushaRecursiveSpendPublicStatementV4,
-        membership: &KagemushaOutputMembershipWitnessV3,
+        membership: &KagemushaOutputMembershipWitnessV4,
+    ) -> Result<Self, String> {
+        KagemushaOutputMembershipCircuitV4::new(membership.clone())?;
+        let change = intent
+            .change_output
+            .as_ref()
+            .ok_or_else(|| "Kagemusha Step V4 redemption has no continuing change".to_owned())?;
+        if statement.final_root != membership.final_root
+            || statement.next_zero_leaf_index != membership.dummy_leaf_index
+            || membership.operation != KagemushaOutputMembershipOperationV4::RedemptionChange
+            || membership.initial_root != intent.input_root
+            || membership.recipient.is_some()
+            || membership.change.as_ref().map(|leaf| leaf.commitment)
+                != Some(change.note_commitment)
+        {
+            return Err("Kagemusha Step V4 redemption membership bindings mismatch".to_owned());
+        }
+        Self::from_redemption_change_public_v4(intent, statement)
+    }
+
+    /// Reconstruct the exact public ABI-20 redemption-change operation at a
+    /// terminal verifier. Confidential membership paths are proved inside the
+    /// carried pair; no private witness is accepted or synthesized here.
+    pub fn from_redemption_change_public_v4(
+        intent: &KagemushaRecursiveSpendRedemptionIntentV4,
+        statement: &KagemushaRecursiveSpendPublicStatementV4,
     ) -> Result<Self, String> {
         intent
             .validate_public_binding()
@@ -1622,7 +1061,6 @@ impl KagemushaStepOperationVectorV3 {
         statement
             .validate_public_binding()
             .map_err(|error| error.to_string())?;
-        KagemushaOutputMembershipCircuitV3::new(membership.clone())?;
         let change = intent
             .change_output
             .as_ref()
@@ -1630,7 +1068,7 @@ impl KagemushaStepOperationVectorV3 {
         let change_binding = intent.change_artifact_binding.as_ref().ok_or_else(|| {
             "Kagemusha Step V4 redemption change has no artifact binding".to_owned()
         })?;
-        let Some(KagemushaRecursiveSpendTransitionV2::RedemptionChange(transition)) =
+        let Some(KagemushaRecursiveSpendTransitionV4::RedemptionChange(transition)) =
             statement.transition.as_ref()
         else {
             return Err(
@@ -1650,12 +1088,6 @@ impl KagemushaStepOperationVectorV3 {
             || statement.branch_claims != expected_claims
             || statement.current_note != *change
             || statement.final_root == intent.input_root
-            || statement.final_root != membership.final_root
-            || membership.operation != KagemushaOutputMembershipOperationV3::RedemptionChange
-            || membership.initial_root != intent.input_root
-            || membership.recipient.is_some()
-            || membership.change.as_ref().map(|leaf| leaf.commitment)
-                != Some(change.note_commitment)
             || transition.binding_digest != binding_digest
             || transition.parent_bundle_digest != intent.parent_bundle_digest
             || transition.operation_id != intent.operation_id
@@ -1755,11 +1187,11 @@ impl KagemushaStepOperationVectorV3 {
 
 /// Assigned canonical operation values reconstructed from the exact public limbs.
 #[derive(Clone, Debug)]
-pub struct AssignedKagemushaStepOperationV3<F: BigPrimeField> {
+pub struct AssignedKagemushaStepOperationV4<F: BigPrimeField> {
     /// The original public cells; no limb is re-assigned by this module.
-    pub limbs: [AssignedValue<F>; KAGEMUSHA_STEP_OPERATION_LIMBS_V3],
+    pub limbs: [AssignedValue<F>; KAGEMUSHA_STEP_OPERATION_LIMBS_V4],
     /// Canonically reconstructed native values in existing V2 row order.
-    pub fields: [AssignedValue<F>; KAGEMUSHA_STEP_OPERATION_FIELD_ELEMENTS_V3],
+    pub fields: [AssignedValue<F>; KAGEMUSHA_STEP_OPERATION_FIELD_ELEMENTS_V4],
 }
 
 fn assert_equal<F: BigPrimeField>(
@@ -1808,7 +1240,7 @@ fn enforce_fp_canonical_limbs<F: BigPrimeField>(
     let mut is_less = ctx.load_constant(F::ZERO);
     for index in (0..8).rev() {
         let modulus_limb = F::from(u64::from(
-            KAGEMUSHA_STEP_OPERATION_FP_MODULUS_U32_LE_V3[index],
+            KAGEMUSHA_STEP_OPERATION_FP_MODULUS_U32_LE_V4[index],
         ));
         let limb_less =
             range.is_less_than(ctx, limbs[index], QuantumCell::Constant(modulus_limb), 32);
@@ -1840,7 +1272,7 @@ fn reconstruct_u32_limbs<F: BigPrimeField>(
 fn constrain_typed_operation_fields<F: BigPrimeField>(
     ctx: &mut Context<F>,
     range: &RangeChip<F>,
-    fields: &[AssignedValue<F>; KAGEMUSHA_STEP_OPERATION_FIELD_ELEMENTS_V3],
+    fields: &[AssignedValue<F>; KAGEMUSHA_STEP_OPERATION_FIELD_ELEMENTS_V4],
 ) {
     let gate = &range.gate;
     gate.assert_is_const(ctx, &fields[O_LAYOUT_VERSION], &F::ONE);
@@ -1881,11 +1313,11 @@ fn constrain_typed_operation_fields<F: BigPrimeField>(
 /// Every one of the 1080 source cells is used directly. In particular, this
 /// does not call `load_witness`, and it proves `< Fp::MODULUS` limbwise before
 /// reconstructing a native value in either Pasta field.
-pub fn assign_kagemusha_step_operation_v3<F: BigPrimeField>(
+pub fn assign_kagemusha_step_operation_v4<F: BigPrimeField>(
     ctx: &mut Context<F>,
     range: &RangeChip<F>,
-    operation_limbs: &[AssignedValue<F>; KAGEMUSHA_STEP_OPERATION_LIMBS_V3],
-) -> AssignedKagemushaStepOperationV3<F> {
+    operation_limbs: &[AssignedValue<F>; KAGEMUSHA_STEP_OPERATION_LIMBS_V4],
+) -> AssignedKagemushaStepOperationV4<F> {
     for limb in operation_limbs {
         range.range_check(ctx, *limb, 32);
     }
@@ -1895,7 +1327,7 @@ pub fn assign_kagemusha_step_operation_v3<F: BigPrimeField>(
         reconstruct_u32_limbs(ctx, range, limbs)
     });
     constrain_typed_operation_fields(ctx, range, &fields);
-    AssignedKagemushaStepOperationV3 {
+    AssignedKagemushaStepOperationV4 {
         limbs: *operation_limbs,
         fields,
     }
@@ -1905,7 +1337,7 @@ pub fn assign_kagemusha_step_operation_v3<F: BigPrimeField>(
 #[derive(Clone, Debug)]
 pub struct NamedTransitionBindings<F: BigPrimeField> {
     /// Canonically reconstructed operation row.
-    pub operation: AssignedKagemushaStepOperationV3<F>,
+    pub operation: AssignedKagemushaStepOperationV4<F>,
     /// Initialization profile (`1 - append - redemption`).
     pub is_init: AssignedValue<F>,
     /// Peer split profile.
@@ -1918,6 +1350,10 @@ pub struct NamedTransitionBindings<F: BigPrimeField> {
     pub input_root: AssignedValue<F>,
     /// Result/output root (operation field 35/37).
     pub output_root: AssignedValue<F>,
+    /// Append-only frontier inherited from every present parent.
+    pub input_next_zero_leaf_index: AssignedValue<F>,
+    /// Append-only frontier committed by the result state.
+    pub output_next_zero_leaf_index: AssignedValue<F>,
     /// Exact input commitments in parent-slot order.
     pub input_commitments: [AssignedValue<F>; 2],
     /// Exact input nullifiers in parent-slot order.
@@ -1942,7 +1378,7 @@ pub struct NamedTransitionBindings<F: BigPrimeField> {
 /// range-checked operation limbs. The operation loader has proved that the
 /// value is below the Pallas base-field modulus, so this cannot wrap in either
 /// Pasta recursion parity.
-pub(crate) fn reconstruct_kagemusha_step_scalar_v3<F: BigPrimeField>(
+pub(crate) fn reconstruct_kagemusha_step_scalar_v4<F: BigPrimeField>(
     ctx: &mut Context<F>,
     range: &RangeChip<F>,
     limbs: &[AssignedValue<F>; 8],
@@ -1953,16 +1389,16 @@ pub(crate) fn reconstruct_kagemusha_step_scalar_v3<F: BigPrimeField>(
 /// Copy-bind the two init-only scalar tags to outputs 9 and 10 of the secure
 /// top-up relation. The constraint is profile-gated because the same operation
 /// slots carry descendant metadata for append and redemption.
-pub(crate) fn constrain_kagemusha_step_init_topup_tags_v3<F: BigPrimeField>(
+pub(crate) fn constrain_kagemusha_step_init_topup_tags_v4<F: BigPrimeField>(
     ctx: &mut Context<F>,
     range: &RangeChip<F>,
     bindings: &NamedTransitionBindings<F>,
     secure_payer_tag: AssignedValue<F>,
     secure_operation_tag: AssignedValue<F>,
 ) {
-    let payer = reconstruct_kagemusha_step_scalar_v3(ctx, range, &bindings.init_payer_tag_limbs);
+    let payer = reconstruct_kagemusha_step_scalar_v4(ctx, range, &bindings.init_payer_tag_limbs);
     let operation =
-        reconstruct_kagemusha_step_scalar_v3(ctx, range, &bindings.init_operation_tag_limbs);
+        reconstruct_kagemusha_step_scalar_v4(ctx, range, &bindings.init_operation_tag_limbs);
     assert_equal_if(ctx, range, bindings.is_init, payer, secure_payer_tag);
     assert_equal_if(
         ctx,
@@ -1974,14 +1410,14 @@ pub(crate) fn constrain_kagemusha_step_init_topup_tags_v3<F: BigPrimeField>(
 }
 
 fn operation_full_limbs<F: BigPrimeField>(
-    operation: &AssignedKagemushaStepOperationV3<F>,
+    operation: &AssignedKagemushaStepOperationV4<F>,
     field: usize,
 ) -> &[AssignedValue<F>] {
     &operation.limbs[field_limb_range(field)]
 }
 
 fn operation_digest_limbs<F: BigPrimeField>(
-    operation: &AssignedKagemushaStepOperationV3<F>,
+    operation: &AssignedKagemushaStepOperationV4<F>,
     first_field: usize,
 ) -> [AssignedValue<F>; 8] {
     std::array::from_fn(|limb| {
@@ -2070,7 +1506,7 @@ fn reconstruct_state_u128<F: BigPrimeField>(
 fn operation_u128<F: BigPrimeField>(
     ctx: &mut Context<F>,
     range: &RangeChip<F>,
-    operation: &AssignedKagemushaStepOperationV3<F>,
+    operation: &AssignedKagemushaStepOperationV4<F>,
     low_field: usize,
 ) -> AssignedValue<F> {
     range.gate.mul_add(
@@ -2249,11 +1685,11 @@ fn extend_claim<F: BigPrimeField>(
     range: &RangeChip<F>,
     claim: &[AssignedValue<F>],
     branch: AssignedValue<F>,
-    tag: &[AssignedValue<F>; KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_TRANSITION_TAG_LIMBS_V1],
+    tag: &[AssignedValue<F>; KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_TRANSITION_TAG_LIMBS_V2],
 ) -> Vec<AssignedValue<F>> {
     debug_assert_eq!(
         claim.len(),
-        KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_CLAIM_LIMBS_V1
+        KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_CLAIM_LIMBS_V2
     );
     let gate = &range.gate;
     let depth = claim[CLAIM_DEPTH];
@@ -2264,7 +1700,7 @@ fn extend_claim<F: BigPrimeField>(
         gate.is_equal(ctx, depth, QuantumCell::Constant(F::from(candidate as u64)))
     });
 
-    let mut extended = Vec::with_capacity(KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_CLAIM_LIMBS_V1);
+    let mut extended = Vec::with_capacity(KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_CLAIM_LIMBS_V2);
     extended.extend_from_slice(&claim[CLAIM_LINEAGE_ROOT..CLAIM_DEPTH]);
     extended.push(gate.add(ctx, depth, QuantumCell::Constant(F::ONE)));
     for path_limb in 0..2 {
@@ -2286,11 +1722,11 @@ fn extend_claim<F: BigPrimeField>(
         extended.push(gate.add(ctx, claim[CLAIM_PATH + path_limb], branch_bit));
     }
 
-    for history_limb in 0..KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_CLAIM_HISTORY_LIMBS_V1 {
+    for history_limb in 0..KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_CLAIM_HISTORY_LIMBS_V2 {
         let tag_index =
-            history_limb / KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_TRANSITION_TAG_LIMBS_V1;
+            history_limb / KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_TRANSITION_TAG_LIMBS_V2;
         let tag_limb =
-            history_limb % KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_TRANSITION_TAG_LIMBS_V1;
+            history_limb % KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_TRANSITION_TAG_LIMBS_V2;
         let before = range.is_less_than(
             ctx,
             QuantumCell::Constant(F::from(tag_index as u64)),
@@ -2319,7 +1755,7 @@ fn bind_full_field_to_state_if<F: BigPrimeField>(
     ctx: &mut Context<F>,
     range: &RangeChip<F>,
     condition: AssignedValue<F>,
-    operation: &AssignedKagemushaStepOperationV3<F>,
+    operation: &AssignedKagemushaStepOperationV4<F>,
     field: usize,
     state: &[AssignedValue<F>],
 ) {
@@ -2336,7 +1772,7 @@ fn bind_digest_to_state_if<F: BigPrimeField>(
     ctx: &mut Context<F>,
     range: &RangeChip<F>,
     condition: AssignedValue<F>,
-    operation: &AssignedKagemushaStepOperationV3<F>,
+    operation: &AssignedKagemushaStepOperationV4<F>,
     first_field: usize,
     state: &[AssignedValue<F>],
 ) {
@@ -2357,18 +1793,18 @@ fn bind_digest_to_state_if<F: BigPrimeField>(
 /// must additionally copy-bind the returned cells to the assigned secure
 /// relation from `confidential_v2`; StepEp constrains this field-neutral
 /// application relation and the same exact public limbs.
-pub fn constrain_two_input_step_transition_v3<F: BigPrimeField>(
+pub fn constrain_two_input_step_transition_v4<F: BigPrimeField>(
     ctx: &mut Context<F>,
     range: &RangeChip<F>,
     parent_count: AssignedValue<F>,
     parent_states: [&[AssignedValue<F>]; 2],
     result_state: &[AssignedValue<F>],
-    operation_limbs: &[AssignedValue<F>; KAGEMUSHA_STEP_OPERATION_LIMBS_V3],
+    operation_limbs: &[AssignedValue<F>; KAGEMUSHA_STEP_OPERATION_LIMBS_V4],
 ) -> Result<NamedTransitionBindings<F>, String> {
     if parent_states
         .iter()
-        .any(|state| state.len() != KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V1)
-        || result_state.len() != KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V1
+        .any(|state| state.len() != KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V2)
+        || result_state.len() != KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V2
     {
         return Err("Kagemusha Step state-vector length mismatch".to_owned());
     }
@@ -2380,7 +1816,7 @@ pub fn constrain_two_input_step_transition_v3<F: BigPrimeField>(
         range.range_check(ctx, *limb, 32);
     }
 
-    let operation = assign_kagemusha_step_operation_v3(ctx, range, operation_limbs);
+    let operation = assign_kagemusha_step_operation_v4(ctx, range, operation_limbs);
     let gate = &range.gate;
     let fields = &operation.fields;
     let one = ctx.load_constant(F::ONE);
@@ -2403,10 +1839,40 @@ pub fn constrain_two_input_step_transition_v3<F: BigPrimeField>(
             range,
             parent_present[slot],
             parent_states[slot][S_VERSION],
-            QuantumCell::Constant(F::ONE),
+            QuantumCell::Constant(F::from(u64::from(
+                super::kagemusha_v2::KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V2,
+            ))),
         );
     }
-    gate.assert_is_const(ctx, &result_state[S_VERSION], &F::ONE);
+    gate.assert_is_const(
+        ctx,
+        &result_state[S_VERSION],
+        &F::from(u64::from(
+            super::kagemusha_v2::KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V2,
+        )),
+    );
+
+    let input_next_zero_leaf_index = parent_states[0][S_NEXT_ZERO_LEAF_INDEX];
+    let output_next_zero_leaf_index = result_state[S_NEXT_ZERO_LEAF_INDEX];
+    range.range_check(
+        ctx,
+        output_next_zero_leaf_index,
+        KAGEMUSHA_CONFIDENTIAL_TREE_DEPTH_V2,
+    );
+    for slot in 0..2 {
+        range.range_check(
+            ctx,
+            parent_states[slot][S_NEXT_ZERO_LEAF_INDEX],
+            KAGEMUSHA_CONFIDENTIAL_TREE_DEPTH_V2,
+        );
+        assert_equal_if(
+            ctx,
+            range,
+            parent_present[slot],
+            parent_states[slot][S_NEXT_ZERO_LEAF_INDEX],
+            input_next_zero_leaf_index,
+        );
+    }
 
     // Parent cardinality is operation input cardinality. Init consumes zero,
     // append consumes one or two, and the current redemption wire consumes one.
@@ -2420,6 +1886,18 @@ pub fn constrain_two_input_step_transition_v3<F: BigPrimeField>(
         redemption,
         parent_count,
         QuantumCell::Constant(F::ONE),
+    );
+    let expected_output_next_zero_leaf_index = gate.add(
+        ctx,
+        input_next_zero_leaf_index,
+        fields[O_RECORD_OUTPUT_COUNT],
+    );
+    assert_equal_if(
+        ctx,
+        range,
+        extends,
+        output_next_zero_leaf_index,
+        expected_output_next_zero_leaf_index,
     );
 
     let branch = fields[O_BRANCH_CHANGE];
@@ -2981,8 +2459,8 @@ pub fn constrain_two_input_step_transition_v3<F: BigPrimeField>(
     assert_nonzero_if(ctx, range, one, result_claim_count);
     assert_equal(ctx, range, result_claim_count, result_anchor_count);
     let result_claims: [&[AssignedValue<F>]; CLAIM_SLOTS] = std::array::from_fn(|slot| {
-        let start = S_BRANCH_CLAIMS + slot * KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_CLAIM_LIMBS_V1;
-        &result_state[start..start + KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_CLAIM_LIMBS_V1]
+        let start = S_BRANCH_CLAIMS + slot * KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_CLAIM_LIMBS_V2;
+        &result_state[start..start + KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_CLAIM_LIMBS_V2]
     });
     let result_second_claim_absent = gate.not(ctx, result_claim_present[1]);
     assert_slice_zero_if(ctx, range, result_second_claim_absent, result_claims[1]);
@@ -2996,8 +2474,8 @@ pub fn constrain_two_input_step_transition_v3<F: BigPrimeField>(
     );
 
     let tag8 = operation_digest_limbs(&operation, O_CURRENT_HOP_DOMAIN_TAG);
-    let tag: [AssignedValue<F>; KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_TRANSITION_TAG_LIMBS_V1] =
-        tag8[..KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_TRANSITION_TAG_LIMBS_V1]
+    let tag: [AssignedValue<F>; KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_TRANSITION_TAG_LIMBS_V2] =
+        tag8[..KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_TRANSITION_TAG_LIMBS_V2]
             .try_into()
             .expect("transition tag is six limbs");
     assert_slice_zero_if(ctx, range, one, &tag8[6..]);
@@ -3046,9 +2524,9 @@ pub fn constrain_two_input_step_transition_v3<F: BigPrimeField>(
         );
         for claim_slot in 0..2 {
             let start = S_BRANCH_CLAIMS
-                + claim_slot * KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_CLAIM_LIMBS_V1;
+                + claim_slot * KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_CLAIM_LIMBS_V2;
             let claim =
-                &parent[start..start + KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_CLAIM_LIMBS_V1];
+                &parent[start..start + KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_CLAIM_LIMBS_V2];
             let present = gate.mul(ctx, parent_present[slot], local_present[claim_slot]);
             let absent = gate.not(ctx, present);
             assert_slice_zero_if(ctx, range, absent, claim);
@@ -3056,12 +2534,12 @@ pub fn constrain_two_input_step_transition_v3<F: BigPrimeField>(
             extended_presence.push(present);
         }
         let first = S_BRANCH_CLAIMS;
-        let second = first + KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_CLAIM_LIMBS_V1;
+        let second = first + KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_CLAIM_LIMBS_V2;
         let ordered = claim_path_less(
             ctx,
             range,
-            &parent[first..first + KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_CLAIM_LIMBS_V1],
-            &parent[second..second + KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_CLAIM_LIMBS_V1],
+            &parent[first..first + KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_CLAIM_LIMBS_V2],
+            &parent[second..second + KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_CLAIM_LIMBS_V2],
         );
         let require_order = gate.mul(ctx, parent_present[slot], local_present[1]);
         assert_equal_if(
@@ -3101,7 +2579,7 @@ pub fn constrain_two_input_step_transition_v3<F: BigPrimeField>(
         result_claim_present,
     );
 
-    // Bind legacy first-claim operation fields deterministically while the
+    // Bind canonical first-claim operation fields deterministically while the
     // complete histories remain in the exact result state.
     bind_digest_to_state_if(
         ctx,
@@ -3169,6 +2647,8 @@ pub fn constrain_two_input_step_transition_v3<F: BigPrimeField>(
     Ok(NamedTransitionBindings {
         input_root: fields[O_RECORD_ROOT_BEFORE],
         output_root: fields[O_FINAL_ROOT],
+        input_next_zero_leaf_index,
+        output_next_zero_leaf_index,
         input_commitments: [
             fields[O_TRANSFER_INPUT_COMMITMENT_0],
             fields[O_TRANSFER_INPUT_COMMITMENT_1],
@@ -3192,6 +2672,7 @@ pub fn constrain_two_input_step_transition_v3<F: BigPrimeField>(
 
 #[cfg(test)]
 mod tests {
+    use crate::zk::kagemusha_v2::KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V2;
     use halo2_base::{
         AssignedValue, gates::circuit::builder::BaseCircuitBuilder, utils::BigPrimeField,
     };
@@ -3208,22 +2689,22 @@ mod tests {
             &KagemushaRecursiveSpendInitRequestV4,
             &KagemushaRecursiveSpendPublicStatementV4,
             &super::super::confidential_v2::KagemushaTopUpShieldPublicInputsV2,
-            &KagemushaOutputMembershipWitnessV3,
-        ) -> Result<KagemushaStepOperationVectorV3, String> =
-            KagemushaStepOperationVectorV3::from_init_v4;
+            &KagemushaOutputMembershipWitnessV4,
+        ) -> Result<KagemushaStepOperationVectorV4, String> =
+            KagemushaStepOperationVectorV4::from_init_v4;
         let _: fn(
             &KagemushaRecursiveSpendSplitIntentV4,
             &KagemushaRecursiveSpendPublicStatementV4,
-            &KagemushaStepTransferPublicV3,
-            &KagemushaOutputMembershipWitnessV3,
-        ) -> Result<KagemushaStepOperationVectorV3, String> =
-            KagemushaStepOperationVectorV3::from_append_v4;
+            &KagemushaStepTransferPublicV4,
+            &KagemushaOutputMembershipWitnessV4,
+        ) -> Result<KagemushaStepOperationVectorV4, String> =
+            KagemushaStepOperationVectorV4::from_append_v4;
         let _: fn(
             &KagemushaRecursiveSpendRedemptionIntentV4,
             &KagemushaRecursiveSpendPublicStatementV4,
-            &KagemushaOutputMembershipWitnessV3,
-        ) -> Result<KagemushaStepOperationVectorV3, String> =
-            KagemushaStepOperationVectorV3::from_redemption_change_v4;
+            &KagemushaOutputMembershipWitnessV4,
+        ) -> Result<KagemushaStepOperationVectorV4, String> =
+            KagemushaStepOperationVectorV4::from_redemption_change_v4;
     }
 
     fn scalar_limbs(value: Fp) -> [u32; 8] {
@@ -3251,12 +2732,10 @@ mod tests {
             asset::AssetDefinitionId,
             domain::DomainId,
             offline::{
-                KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4,
-                KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4,
-                KagemushaRecursiveSpendArtifactBindingV4, KagemushaRecursiveSpendTopUpAnchorRefV2,
-                KagemushaScaledAmountV2, KagemushaSpendableNoteDescriptorV2,
+                KagemushaPastaCycleParityV1, KagemushaRecursiveSpendArtifactBindingV4,
+                KagemushaRecursiveSpendTopUpAnchorRefV2, KagemushaScaledAmountV2,
+                KagemushaSpendableNoteDescriptorV2, kagemusha_recursive_spend_verifier_key_id_v4,
             },
-            proof::VerifyingKeyId,
         };
 
         let chain_id = ChainId::from("kagemusha-v4-terminal-operation-binding");
@@ -3268,11 +2747,21 @@ mod tests {
             topup_operation_id: [0x41; 32],
             anchor_digest: [0x42; 32],
         };
+        let artifact_binding = KagemushaRecursiveSpendArtifactBindingV4 {
+            version: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_WIRE_VERSION_V4,
+            generation: "release-generation-4".to_owned(),
+            manifest_sha256: [0x43; 32],
+        };
+        let verifier_key_id = kagemusha_recursive_spend_verifier_key_id_v4(
+            KagemushaPastaCycleParityV1::StepEq,
+            artifact_binding.manifest_sha256,
+        );
         KagemushaRecursiveSpendPublicStatementV4 {
             chain_id: chain_id.clone(),
             asset: asset.clone(),
             asset_scale: 9,
             final_root: scalar_bytes(Fp::from(12)),
+            next_zero_leaf_index: 8,
             topup_anchor_refs: vec![anchor],
             proof_step_count: 1,
             peer_hop_count: 0,
@@ -3288,14 +2777,8 @@ mod tests {
                     .expect("root claim"),
             ],
             transition: None,
-            artifact_binding: KagemushaRecursiveSpendArtifactBindingV4 {
-                generation: "release-generation-4".to_owned(),
-                manifest_sha256: [0x43; 32],
-            },
-            verifier_key_id: VerifyingKeyId::new(
-                KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4,
-                KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4,
-            ),
+            artifact_binding,
+            verifier_key_id,
         }
     }
 
@@ -3311,7 +2794,7 @@ mod tests {
         // The payer tag is contextual and deliberately not derivable from the
         // compact public anchor reference.
         put_digest(&mut fields, O_RECIPIENT_REQUEST_DIGEST, [0x55; 32]);
-        let operation = KagemushaStepOperationVectorV3::from_fields(fields);
+        let operation = KagemushaStepOperationVectorV4::from_fields(fields);
         operation
             .validate_terminal_statement_v4(&statement)
             .expect("canonical init operation projection");
@@ -3319,7 +2802,7 @@ mod tests {
         let mut wrong_tag = operation.to_fields().expect("canonical operation fields");
         wrong_tag[O_OPERATION_ID] += Fp::ONE;
         assert!(
-            KagemushaStepOperationVectorV3::from_fields(wrong_tag)
+            KagemushaStepOperationVectorV4::from_fields(wrong_tag)
                 .validate_terminal_statement_v4(&statement)
                 .is_err()
         );
@@ -3327,7 +2810,7 @@ mod tests {
         let mut wrong_profile = operation.to_fields().expect("canonical operation fields");
         wrong_profile[O_REDEMPTION_PROFILE] = Fp::ONE;
         assert!(
-            KagemushaStepOperationVectorV3::from_fields(wrong_profile)
+            KagemushaStepOperationVectorV4::from_fields(wrong_profile)
                 .validate_terminal_statement_v4(&statement)
                 .is_err()
         );
@@ -3348,15 +2831,15 @@ mod tests {
     }
 
     fn write_digest_fields(
-        fields: &mut [Fp; KAGEMUSHA_STEP_OPERATION_FIELD_ELEMENTS_V3],
+        fields: &mut [Fp; KAGEMUSHA_STEP_OPERATION_FIELD_ELEMENTS_V4],
         start: usize,
         bytes: [u8; 32],
     ) {
         put_digest(fields, start, bytes);
     }
 
-    fn init_fixture() -> (KagemushaStepOperationVectorV3, [Vec<u32>; 2], Vec<u32>) {
-        let mut fields = [Fp::ZERO; KAGEMUSHA_STEP_OPERATION_FIELD_ELEMENTS_V3];
+    fn init_fixture() -> (KagemushaStepOperationVectorV4, [Vec<u32>; 2], Vec<u32>) {
+        let mut fields = [Fp::ZERO; KAGEMUSHA_STEP_OPERATION_FIELD_ELEMENTS_V4];
         fields[O_LAYOUT_VERSION] = Fp::ONE;
         fields[O_PROOF_STEP_COUNT] = Fp::ONE;
         fields[O_ASSET_SCALE] = Fp::from(2);
@@ -3411,8 +2894,9 @@ mod tests {
         write_digest_fields(&mut fields, O_ARTIFACT_MANIFEST_SHA256, manifest);
         write_digest_fields(&mut fields, O_VERIFIER_KEY_ID_DIGEST, verifier);
 
-        let mut result = vec![0_u32; KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V1];
-        result[S_VERSION] = 1;
+        let mut result = vec![0_u32; KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V2];
+        result[S_VERSION] = KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V2;
+        result[S_NEXT_ZERO_LEAF_INDEX] = 8;
         write_full_state(&mut result, S_CHAIN_TAG, Fp::from(52));
         write_full_state(&mut result, S_ASSET_TAG, Fp::from(51));
         result[S_ASSET_SCALE] = 2;
@@ -3433,14 +2917,14 @@ mod tests {
         result[S_VERIFIER_KEY_ID..S_VERIFIER_KEY_ID + 8].copy_from_slice(&exact_limbs(verifier));
 
         (
-            KagemushaStepOperationVectorV3::from_fields(fields),
-            std::array::from_fn(|_| vec![0_u32; KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V1]),
+            KagemushaStepOperationVectorV4::from_fields(fields),
+            std::array::from_fn(|_| vec![0_u32; KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V2]),
             result,
         )
     }
 
     fn transition_builder<F: BigPrimeField>(
-        operation: &KagemushaStepOperationVectorV3,
+        operation: &KagemushaStepOperationVectorV4,
         parent_count: u32,
         parents: &[Vec<u32>; 2],
         result: &[u32],
@@ -3449,7 +2933,7 @@ mod tests {
         let mut builder = BaseCircuitBuilder::new(false).use_k(18).use_lookup_bits(17);
         let range = builder.range_chip();
         let ctx = builder.main(0);
-        let operation_cells: [AssignedValue<F>; KAGEMUSHA_STEP_OPERATION_LIMBS_V3] = ctx
+        let operation_cells: [AssignedValue<F>; KAGEMUSHA_STEP_OPERATION_LIMBS_V4] = ctx
             .assign_witnesses(
                 operation
                     .limbs
@@ -3465,7 +2949,7 @@ mod tests {
         let result_cells =
             ctx.assign_witnesses(result.iter().copied().map(|limb| F::from(u64::from(limb))));
         let parent_count = ctx.load_witness(F::from(u64::from(parent_count)));
-        let bindings = constrain_two_input_step_transition_v3(
+        let bindings = constrain_two_input_step_transition_v4(
             ctx,
             &range,
             parent_count,
@@ -3483,7 +2967,7 @@ mod tests {
             };
             let payer = ctx.load_witness(from_limbs(payer_limbs));
             let operation = ctx.load_witness(from_limbs(operation_limbs));
-            constrain_kagemusha_step_init_topup_tags_v3(ctx, &range, &bindings, payer, operation);
+            constrain_kagemusha_step_init_topup_tags_v4(ctx, &range, &bindings, payer, operation);
         }
         builder.calculate_params(Some(9));
         builder
@@ -3519,14 +3003,14 @@ mod tests {
     fn operation_vector_round_trips_and_rejects_fp_modulus() {
         let (vector, _, _) = init_fixture();
         assert_eq!(
-            KagemushaStepOperationVectorV3::from_fields(
+            KagemushaStepOperationVectorV4::from_fields(
                 vector.to_fields().expect("canonical operation")
             ),
             vector
         );
         let mut noncanonical = vector;
         noncanonical.limbs[field_limb_range(O_CHAIN_TAG)]
-            .copy_from_slice(&KAGEMUSHA_STEP_OPERATION_FP_MODULUS_U32_LE_V3);
+            .copy_from_slice(&KAGEMUSHA_STEP_OPERATION_FP_MODULUS_U32_LE_V4);
         assert!(noncanonical.to_fields().is_err());
     }
 

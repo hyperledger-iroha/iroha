@@ -43,7 +43,9 @@ object KagemushaPeerTransportContract {
     const val RECEIVE_REQUEST_CONTENT_TYPE = "text/vnd.pk.kagemusha-v2.receive-request"
     const val PAYMENT_CONTENT_TYPE = "text/vnd.pk.kagemusha-v2.payment"
     const val ACKNOWLEDGEMENT_CONTENT_TYPE = "text/vnd.pk.kagemusha-v2.ack"
-    const val MAXIMUM_ARCHIVE_BYTES = KagemushaRecursiveSpendProver.MAX_PEER_ARCHIVE_BYTES
+    const val MAXIMUM_ARCHIVE_BYTES_V2 = KagemushaRecursiveSpendProver.MAX_PEER_ARCHIVE_BYTES_V2
+    const val MAXIMUM_ARCHIVE_BYTES_V4 = KagemushaRecursiveSpendProver.MAX_PEER_ARCHIVE_BYTES_V4
+    const val MAXIMUM_ARCHIVE_BYTES = MAXIMUM_ARCHIVE_BYTES_V4
     const val MAXIMUM_TEXT_ENVELOPE_BYTES =
         KagemushaRecursiveSpendProver.MAX_PEER_TEXT_ENVELOPE_BYTES
 }

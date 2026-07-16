@@ -1,4 +1,14 @@
 import { NumericV1, NumericV1Error } from "./numericV1.js";
+import {
+  normalizeKagemushaAssetSelector,
+  normalizeKagemushaOperationId,
+  normalizeKagemushaOperationReference,
+  normalizeKagemushaOperationStatus,
+  normalizeKagemushaRedeemRequestV4,
+  normalizeKagemushaReadinessV4,
+  normalizeKagemushaTopUpRequestV4,
+  requireKagemushaJsonContentType,
+} from "./kagemushaOffline.js";
 
 const DEFAULT_SUCCESS_STATUSES = [200];
 const MULTISIG_PROPOSAL_STATUS_VALUES = new Set([
@@ -300,6 +310,15 @@ function signalFrom(options) {
   return options.signal === undefined ? undefined : options.signal;
 }
 
+function kagemushaOptions(options, context) {
+  const item = requireObject(options, context);
+  const unknown = Object.keys(item).filter((key) => key !== "signal");
+  if (unknown.length > 0) {
+    throw new TypeError(`${context} contains unsupported option ${unknown[0]}`);
+  }
+  return item;
+}
+
 function copyRequestFields(source) {
   const body = { ...source };
   delete body.signal;
@@ -460,6 +479,81 @@ export class ToriiBrowserClient {
     };
     this.timeoutMs =
       normalizedOptions.config?.toriiClient?.timeoutMs ?? normalizedOptions.timeoutMs ?? null;
+  }
+
+  getKagemushaReadinessV4(assetDefinitionId, options = {}) {
+    const selector = normalizeKagemushaAssetSelector(assetDefinitionId);
+    const opts = kagemushaOptions(options, "getKagemushaReadinessV4 options");
+    return this._json("GET", "/v1/offline/readiness", {
+      params: { asset_definition_id: selector },
+      signal: opts.signal,
+      responseObserver: (response) => requireKagemushaJsonContentType(
+        response.headers.get("content-type"),
+        "Kagemusha readiness response",
+      ),
+    }).then((payload) => normalizeKagemushaReadinessV4(payload, selector));
+  }
+
+  submitKagemushaTopUpV4(request, options = {}) {
+    return this._submitKagemushaCommandV4(
+      "/v1/offline/top-up",
+      "top_up",
+      request,
+      options,
+      "submitKagemushaTopUpV4",
+    );
+  }
+
+  submitKagemushaRedeemV4(request, options = {}) {
+    return this._submitKagemushaCommandV4(
+      "/v1/offline/redeem",
+      "redeem",
+      request,
+      options,
+      "submitKagemushaRedeemV4",
+    );
+  }
+
+  getKagemushaOperationStatus(operationId, options = {}) {
+    const canonicalId = normalizeKagemushaOperationId(operationId);
+    const opts = kagemushaOptions(options, "getKagemushaOperationStatus options");
+    return this._json("GET", `/v1/offline/operations/${canonicalId}`, {
+      signal: opts.signal,
+      responseObserver: (response) => requireKagemushaJsonContentType(
+        response.headers.get("content-type"),
+        "Kagemusha operation status response",
+      ),
+    }).then((payload) => normalizeKagemushaOperationStatus(payload, canonicalId));
+  }
+
+  _submitKagemushaCommandV4(path, kind, request, options, context) {
+    const normalizeRequest = kind === "top_up"
+      ? normalizeKagemushaTopUpRequestV4
+      : normalizeKagemushaRedeemRequestV4;
+    const normalized = normalizeRequest(request, `${context} request`);
+    const opts = kagemushaOptions(options, `${context} options`);
+    let location = null;
+    return this._json("POST", path, {
+      rawBody: normalized.norito,
+      contentType: "application/x-norito",
+      headers: {
+        Accept: "application/json",
+        "Idempotency-Key": normalized.operationId,
+      },
+      signal: opts.signal,
+      successStatuses: [202],
+      responseObserver: (response) => {
+        requireKagemushaJsonContentType(
+          response.headers.get("content-type"),
+          "Kagemusha operation reference response",
+        );
+        location = response.headers.get("location");
+      },
+    }).then((payload) => normalizeKagemushaOperationReference(payload, {
+      expectedOperationId: normalized.operationId,
+      expectedKind: kind,
+      location,
+    }));
   }
 
   _url(path, params) {
@@ -1004,14 +1098,6 @@ export class ToriiBrowserClient {
     return this._json("GET", "/v1/kaigi/relays/health", { signal: signalFrom(opts) });
   }
 
-  deployContract(request, options = {}) {
-    const opts = requireObject(options, "deployContract options");
-    return this._json("POST", "/v1/contracts/deploy", {
-      body: requireObject(request, "deployContract request"),
-      signal: signalFrom(opts),
-      successStatuses: [200, 202],
-    });
-  }
 }
 
 export { ToriiBrowserClient as ToriiClient, ToriiBrowserHttpError as ToriiHttpError };

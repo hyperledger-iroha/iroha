@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 from collections.abc import Mapping
 import datetime as dt
 import hashlib
@@ -12,8 +13,8 @@ import os
 from pathlib import Path
 from pathlib import PurePosixPath
 import re
-import shutil
 import stat
+import struct
 import subprocess
 import sys
 import tempfile
@@ -22,7 +23,7 @@ import unicodedata
 
 
 EXPECTED_DIRS: tuple[str, ...] = ("telemetry", "attestation", "queue", "logs")
-OPTIONAL_EVIDENCE_DIRS: tuple[str, ...] = ("evidence", "handoff", "wallet")
+OPTIONAL_EVIDENCE_DIRS: tuple[str, ...] = ("evidence", "handoff", "wallet", "scenario")
 FORBIDDEN_OPENSSL_CHILD_ENV_KEYS: frozenset[str] = frozenset(
     (
         "OPENSSL_CONF",
@@ -38,6 +39,24 @@ FORBIDDEN_OPENSSL_CHILD_ENV_KEYS: frozenset[str] = frozenset(
         "DYLD_LIBRARY_PATH",
     )
 )
+ANDROID_KEY_ATTESTATION_EXTENSION_OID = "1.3.6.1.4.1.11129.2.1.17"
+ANDROID_KEY_ATTESTATION_EXTENSION_OID_DER = bytes.fromhex(
+    "060a2b06010401d679020111"
+)
+KAGEMUSHA_WALLET_PACKAGE_NAME = "org.hyperledger.iroha.kagemushawallet"
+ANDROID_SECURITY_LEVEL_STRONGBOX = 2
+ANDROID_VERIFIED_BOOT_STATE_VERIFIED = 0
+ANDROID_TAG_ALL_APPLICATIONS = 600
+ANDROID_TAG_ROOT_OF_TRUST = 704
+ANDROID_TAG_ATTESTATION_APPLICATION_ID = 709
+MAX_ANDROID_ATTESTATION_REVOCATION_STATUS_BYTES = 1024 * 1024
+MAX_AUTHORITY_TOOL_BYTES = 256 * 1024 * 1024
+
+# Set only after all paths, metadata, and caller-supplied digests have been
+# checked. The command-line entry point requires an explicit configuration for
+# production evidence. Tests and other in-process callers use the same public
+# configurator; there is deliberately no PATH or SDK-directory discovery.
+_ANDROID_EVIDENCE_AUTHORITY: dict[str, Any] | None = None
 REQUIRED_KAGEMUSHA_SLOT_ARTIFACT_PATHS: tuple[str, ...] = (
     "telemetry/telemetry.json",
     "telemetry/status.ndjson",
@@ -48,8 +67,116 @@ REQUIRED_KAGEMUSHA_SLOT_ARTIFACT_PATHS: tuple[str, ...] = (
     "logs/runtime.log",
 )
 KAGEMUSHA_SIGNED_EVIDENCE_ARTIFACT_PATH = "evidence/signed-evidence.json"
+KAGEMUSHA_CANDIDATE_BINDING_ARTIFACT_PATH = "evidence/candidate-binding-v2.json"
+KAGEMUSHA_CANDIDATE_LIFECYCLE_TRANSCRIPT_PATH = "evidence/lifecycle-transcript-v2.json"
+KAGEMUSHA_STRONGBOX_CHALLENGE_DOMAIN_V1: bytes = (
+    b"IROHA_KAGEMUSHA_STRONGBOX_CHALLENGE_V1\x00"
+)
+KAGEMUSHA_STRONGBOX_CHALLENGE_FIELDS_V1: tuple[str, ...] = (
+    "slot_id",
+    "candidate_record_sha256",
+    "candidate_manifest_sha256",
+    "candidate_stage_manifest_sha256",
+    "candidate_lab_native_library_sha256",
+    "candidate_lab_apk_sha256",
+    "candidate_lab_test_apk_sha256",
+    "candidate_source_commit",
+    "candidate_source_tree_sha256",
+)
+KAGEMUSHA_CANDIDATE_STAGE_MANIFEST_PATH_V1 = "candidate-stage-manifest-v1.json"
+KAGEMUSHA_CANDIDATE_STAGE_MANIFEST_SCHEMA_V1 = (
+    "iroha.kagemusha.android_candidate_stage_manifest.v1"
+)
+KAGEMUSHA_CANDIDATE_STAGE_MANIFEST_FIELDS_V1: frozenset[str] = frozenset(
+    {
+        "schema",
+        "version",
+        "stage_manifest_path",
+        "stage_manifest_mode",
+        "stage_manifest_size_bytes",
+        "candidate_record_sha256",
+        "candidate_manifest_sha256",
+        "candidate_validation_report_sha256",
+        "scenario_inventory_sha256",
+        "source_commit",
+        "source_tree_sha256",
+        "source_repo_dirty",
+        "validator",
+        "entry_count",
+        "scenario_entry_count",
+        "entries",
+    }
+)
+KAGEMUSHA_CANDIDATE_STAGE_ENTRY_FIELDS_V1: frozenset[str] = frozenset(
+    {"path", "mode", "size_bytes", "sha256"}
+)
+KAGEMUSHA_CANDIDATE_STAGE_VALIDATOR_FIELDS_V1: frozenset[str] = frozenset(
+    {
+        "schema",
+        "candidate_binary_name",
+        "candidate_binary_sha256",
+        "scenario_binary_name",
+        "scenario_binary_sha256",
+        "cargo_binary_sha256",
+        "cargo_version_verbose",
+        "rustc_binary_sha256",
+        "rustc_version_verbose",
+        "locked",
+        "offline",
+        "isolated_target",
+        "build_jobs",
+        "candidate_package",
+        "scenario_package",
+        "features",
+        "profile",
+    }
+)
+KAGEMUSHA_CANDIDATE_STAGE_VALIDATOR_SCHEMA_V1 = (
+    "iroha.kagemusha.android_candidate_validator.v1"
+)
+KAGEMUSHA_CANDIDATE_SCENARIO_INVENTORY_DOMAIN_V1: bytes = (
+    b"iroha.kagemusha.android-candidate-scenario-inventory.v1\x00"
+)
+KAGEMUSHA_CANDIDATE_SCENARIO_FILES_V1: tuple[str, ...] = (
+    "init-top-up-anchor-v4.norito",
+    "init-top-up-finality-proof-v2.norito",
+    "init-top-up-finality-roster-artifact-v2.norito",
+    "init-opening-v2.norito",
+    "init-output-membership-v4.norito",
+    "transfer-verifier-commitment-v2.bin",
+    "append-hop-01-recipient-request-v2.norito",
+    "append-hop-01-recipient-opening-v2.norito",
+    "append-hop-01-change-opening-v2.norito",
+    "append-hop-01-output-membership-v4.norito",
+    "append-hop-01-operation-id.bin",
+    "append-hop-01-block-height.txt",
+    "append-hop-01-verified-at-ms.txt",
+    "append-hop-02-recipient-request-v2.norito",
+    "append-hop-02-recipient-opening-v2.norito",
+    "append-hop-02-change-opening-v2.norito",
+    "append-hop-02-output-membership-v4.norito",
+    "append-hop-02-operation-id.bin",
+    "append-hop-02-block-height.txt",
+    "append-hop-02-verified-at-ms.txt",
+    "redeem-recipient-account-id.txt",
+    "unshield-verifier-commitment-v2.bin",
+    "redeem-hop-01-operation-id.bin",
+    "redeem-hop-01-block-height.txt",
+    "redeem-hop-02-operation-id.bin",
+    "redeem-hop-02-block-height.txt",
+    "redeem-sender-change-operation-id.bin",
+    "redeem-sender-change-block-height.txt",
+    "duplicate-input-recipient-request-v2.norito",
+    "duplicate-input-output-membership-v4.norito",
+    "duplicate-input-operation-id.bin",
+    "duplicate-input-block-height.txt",
+    "duplicate-input-verified-at-ms.txt",
+)
 MAX_KAGEMUSHA_REQUIRED_SLOT_ARTIFACT_BYTES = 16 * 1024 * 1024
 MAX_KAGEMUSHA_WALLET_APK_BYTES = 64 * 1024 * 1024
+MAX_KAGEMUSHA_CANDIDATE_NATIVE_LIBRARY_BYTES = 256 * 1024 * 1024
+MAX_KAGEMUSHA_KRV4_ARTIFACT_BYTES = 256 * 1024 * 1024
+MAX_KAGEMUSHA_KRV4_HEADER_BYTES = 64 * 1024
 MAX_ANDROID_DEVICE_LAB_JSON_BYTES = 16 * 1024 * 1024
 KAGEMUSHA_WALLET_APK_PATH = "evidence/kagemusha-wallet-release.apk"
 MAX_ANDROID_DEVICE_LAB_SHA256_MANIFEST_BYTES = 1024 * 1024
@@ -72,6 +199,375 @@ KAGEMUSHA_STATUS_FAILURE_VALUES = {
     "timeout",
     "timed_out",
 }
+
+
+def derive_kagemusha_strongbox_challenge_v1(metadata: Mapping[str, Any]) -> bytes:
+    """Derive the exact 32-byte candidate-stage StrongBox challenge."""
+
+    digest = hashlib.sha256()
+    digest.update(KAGEMUSHA_STRONGBOX_CHALLENGE_DOMAIN_V1)
+    for field in KAGEMUSHA_STRONGBOX_CHALLENGE_FIELDS_V1:
+        value = metadata.get(field)
+        if not isinstance(value, str) or not value or value != value.strip():
+            raise ValueError(f"{field} must be one exact non-empty string")
+        if any(ord(character) < 0x20 or ord(character) == 0x7F for character in value):
+            raise ValueError(f"{field} must not contain control characters")
+        field_bytes = field.encode("utf-8")
+        value_bytes = value.encode("utf-8")
+        if len(field_bytes) > 0xFFFFFFFF or len(value_bytes) > 0xFFFFFFFF:
+            raise ValueError(f"{field} exceeds the u32 framing limit")
+        digest.update(len(field_bytes).to_bytes(4, "big"))
+        digest.update(field_bytes)
+        digest.update(len(value_bytes).to_bytes(4, "big"))
+        digest.update(value_bytes)
+    return digest.digest()
+
+
+def validate_kagemusha_candidate_stage_manifest_v1(
+    stage_root: Path,
+    *,
+    candidate_sha256: str,
+    stage_sha256: str,
+    source_commit: str,
+    source_tree_sha256: str,
+) -> dict[str, Any]:
+    """Verify the canonical stage manifest and every one of its 44 files."""
+
+    def reject_duplicate_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError(f"stage manifest repeats JSON key {key!r}")
+            result[key] = value
+        return result
+
+    def file_digest(path: Path) -> str:
+        digest = hashlib.sha256()
+        with path.open("rb") as handle:
+            while chunk := handle.read(1024 * 1024):
+                digest.update(chunk)
+        return digest.hexdigest()
+
+    if not SHA256_HEX_RE.fullmatch(candidate_sha256) or candidate_sha256 == "0" * 64:
+        raise ValueError("candidate_sha256 must be non-zero lowercase SHA-256")
+    if not SHA256_HEX_RE.fullmatch(stage_sha256) or stage_sha256 == "0" * 64:
+        raise ValueError("stage_sha256 must be non-zero lowercase SHA-256")
+    if not re.fullmatch(r"[0-9a-f]{40}", source_commit):
+        raise ValueError("source_commit must be lowercase git hex")
+    if not SHA256_HEX_RE.fullmatch(source_tree_sha256) or source_tree_sha256 == "0" * 64:
+        raise ValueError("source_tree_sha256 must be non-zero lowercase SHA-256")
+
+    root = stage_root.resolve()
+    manifest_path = root / KAGEMUSHA_CANDIDATE_STAGE_MANIFEST_PATH_V1
+    manifest_stat = manifest_path.lstat()
+    if not stat.S_ISREG(manifest_stat.st_mode) or manifest_stat.st_nlink != 1:
+        raise ValueError("candidate stage manifest must be one singly-linked regular file")
+    if stat.S_IMODE(manifest_stat.st_mode) != 0o600:
+        raise ValueError("candidate stage manifest mode must be 0600")
+    payload_bytes = manifest_path.read_bytes()
+    if not payload_bytes or len(payload_bytes) > 1024 * 1024:
+        raise ValueError("candidate stage manifest is empty or oversized")
+    if hashlib.sha256(payload_bytes).hexdigest() != stage_sha256:
+        raise ValueError("candidate stage manifest digest is not the stage identity")
+    try:
+        manifest = json.loads(
+            payload_bytes.decode("utf-8"),
+            object_pairs_hook=reject_duplicate_pairs,
+            parse_constant=lambda value: (_ for _ in ()).throw(
+                ValueError(f"non-finite JSON value {value}")
+            ),
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as error:
+        raise ValueError(f"candidate stage manifest is not strict JSON: {error}") from error
+    if not isinstance(manifest, dict) or set(manifest) != KAGEMUSHA_CANDIDATE_STAGE_MANIFEST_FIELDS_V1:
+        raise ValueError("candidate stage manifest must have the exact V1 fields")
+    canonical = (
+        json.dumps(manifest, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+        + "\n"
+    ).encode("utf-8")
+    if canonical != payload_bytes:
+        raise ValueError("candidate stage manifest bytes are not canonical JSON")
+    exact_top = {
+        "schema": KAGEMUSHA_CANDIDATE_STAGE_MANIFEST_SCHEMA_V1,
+        "version": 1,
+        "stage_manifest_path": KAGEMUSHA_CANDIDATE_STAGE_MANIFEST_PATH_V1,
+        "stage_manifest_mode": "0600",
+        "stage_manifest_size_bytes": len(payload_bytes),
+        "candidate_record_sha256": candidate_sha256,
+        "source_commit": source_commit,
+        "source_tree_sha256": source_tree_sha256,
+        "source_repo_dirty": False,
+        "entry_count": 44,
+        "scenario_entry_count": 33,
+    }
+    for key, expected in exact_top.items():
+        if manifest.get(key) != expected or isinstance(manifest.get(key), bool) != isinstance(expected, bool):
+            raise ValueError(f"candidate stage manifest {key} is not exact")
+
+    validator = manifest.get("validator")
+    if not isinstance(validator, dict) or set(validator) != KAGEMUSHA_CANDIDATE_STAGE_VALIDATOR_FIELDS_V1:
+        raise ValueError("candidate stage manifest validator must have the exact V1 fields")
+    validator_exact = {
+        "schema": KAGEMUSHA_CANDIDATE_STAGE_VALIDATOR_SCHEMA_V1,
+        "candidate_binary_name": "kagemusha_recursive_spend_v4_bundle",
+        "scenario_binary_name": "kagemusha_candidate_scenario_validator",
+        "locked": True,
+        "offline": True,
+        "isolated_target": True,
+        "build_jobs": 2,
+        "candidate_package": "iroha_core",
+        "scenario_package": "connect_norito_bridge",
+        "features": ["kagemusha-candidate-evidence-lab"],
+        "profile": "debug",
+    }
+    for key, expected in validator_exact.items():
+        if validator.get(key) != expected or isinstance(validator.get(key), bool) != isinstance(expected, bool):
+            raise ValueError(f"candidate stage manifest validator.{key} is not exact")
+    for key in (
+        "candidate_binary_sha256",
+        "scenario_binary_sha256",
+        "cargo_binary_sha256",
+        "rustc_binary_sha256",
+    ):
+        value = validator.get(key)
+        if not isinstance(value, str) or not SHA256_HEX_RE.fullmatch(value) or value == "0" * 64:
+            raise ValueError(f"candidate stage manifest validator.{key} is invalid")
+    for key in ("cargo_version_verbose", "rustc_version_verbose"):
+        value = validator.get(key)
+        if (
+            not isinstance(value, str)
+            or not value
+            or len(value.encode("utf-8")) > 64 * 1024
+            or not value.endswith("\n")
+            or "\x00" in value
+            or "\r" in value
+        ):
+            raise ValueError(f"candidate stage manifest validator.{key} is invalid")
+
+    expected_paths = {
+        "evidence/candidate/candidate-v4.norito",
+        "evidence/candidate/manifest-v4.norito",
+        "evidence/candidate/candidate-validation-v1.json",
+        *(
+            f"evidence/candidate/artifacts/{name}"
+            for name in KAGEMUSHA_CANDIDATE_ARTIFACT_FILE_NAMES_V4
+        ),
+        *(f"scenario/{name}" for name in KAGEMUSHA_CANDIDATE_SCENARIO_FILES_V1),
+    }
+    entries = manifest.get("entries")
+    if not isinstance(entries, list) or len(entries) != 44:
+        raise ValueError("candidate stage manifest entries must contain exactly 44 objects")
+    paths: list[str] = []
+    measured: dict[str, tuple[int, str]] = {}
+    for index, entry in enumerate(entries):
+        if not isinstance(entry, dict) or set(entry) != KAGEMUSHA_CANDIDATE_STAGE_ENTRY_FIELDS_V1:
+            raise ValueError(f"candidate stage manifest entries[{index}] has wrong fields")
+        relative = entry.get("path")
+        if not isinstance(relative, str) or relative not in expected_paths:
+            raise ValueError(f"candidate stage manifest entries[{index}] path is not canonical")
+        paths.append(relative)
+        if entry.get("mode") != "0600":
+            raise ValueError(f"candidate stage manifest entry {relative} mode must be 0600")
+        path = root / relative
+        current = path.lstat()
+        if not stat.S_ISREG(current.st_mode) or current.st_nlink != 1:
+            raise ValueError(f"candidate stage entry is not singly-linked regular: {relative}")
+        if stat.S_IMODE(current.st_mode) != 0o600:
+            raise ValueError(f"candidate stage entry mode is not 0600: {relative}")
+        size = entry.get("size_bytes")
+        digest = entry.get("sha256")
+        if not isinstance(size, int) or isinstance(size, bool) or size <= 0 or size != current.st_size:
+            raise ValueError(f"candidate stage entry size is not exact: {relative}")
+        if not isinstance(digest, str) or not SHA256_HEX_RE.fullmatch(digest):
+            raise ValueError(f"candidate stage entry digest is invalid: {relative}")
+        if file_digest(path) != digest:
+            raise ValueError(f"candidate stage entry digest is not exact: {relative}")
+        measured[relative] = (size, digest)
+    expected_order = sorted(expected_paths, key=lambda path: path.encode("utf-8"))
+    if paths != expected_order or set(paths) != expected_paths:
+        raise ValueError("candidate stage entries are not the exact byte-lexicographic inventory")
+
+    digest_bindings = {
+        "candidate_record_sha256": "evidence/candidate/candidate-v4.norito",
+        "candidate_manifest_sha256": "evidence/candidate/manifest-v4.norito",
+        "candidate_validation_report_sha256": (
+            "evidence/candidate/candidate-validation-v1.json"
+        ),
+    }
+    for key, path in digest_bindings.items():
+        if manifest.get(key) != measured[path][1]:
+            raise ValueError(f"candidate stage manifest {key} does not bind {path}")
+    scenario_paths = sorted(
+        (f"scenario/{name}" for name in KAGEMUSHA_CANDIDATE_SCENARIO_FILES_V1),
+        key=lambda path: path.encode("utf-8"),
+    )
+    scenario_digest = hashlib.sha256()
+    scenario_digest.update(KAGEMUSHA_CANDIDATE_SCENARIO_INVENTORY_DOMAIN_V1)
+    scenario_digest.update(len(scenario_paths).to_bytes(4, "big"))
+    for relative in scenario_paths:
+        path_bytes = relative.encode("utf-8")
+        size, digest = measured[relative]
+        scenario_digest.update(len(path_bytes).to_bytes(4, "big"))
+        scenario_digest.update(path_bytes)
+        scenario_digest.update(size.to_bytes(8, "big"))
+        scenario_digest.update(bytes.fromhex(digest))
+    if manifest.get("scenario_inventory_sha256") != scenario_digest.hexdigest():
+        raise ValueError("candidate stage manifest scenario_inventory_sha256 is not exact")
+    return manifest
+
+
+def extract_apk_signing_certificate_sha256(apk_path: Path) -> str:
+    """Verify APK v2/v3 signatures and return the sole signer DER digest."""
+
+    signing_scheme_ids = {0x7109871A, 0xF05368C0, 0x1B93AD61}
+
+    def take_length_prefixed(payload: bytes, offset: int, label: str) -> tuple[bytes, int]:
+        if offset + 4 > len(payload):
+            raise ValueError(f"APK signing block truncates {label} length")
+        length = int.from_bytes(payload[offset : offset + 4], "little")
+        start = offset + 4
+        end = start + length
+        if length <= 0 or end > len(payload):
+            raise ValueError(f"APK signing block has invalid {label} length")
+        return payload[start:end], end
+
+    def require_der_certificate(payload: bytes) -> None:
+        if len(payload) < 4 or payload[0] != 0x30:
+            raise ValueError("APK signer certificate is not a DER SEQUENCE")
+        first_length = payload[1]
+        if first_length < 0x80:
+            header_length = 2
+            content_length = first_length
+        else:
+            length_octets = first_length & 0x7F
+            if length_octets == 0 or length_octets > 4 or 2 + length_octets > len(payload):
+                raise ValueError("APK signer certificate DER length is invalid")
+            if payload[2] == 0:
+                raise ValueError("APK signer certificate DER length is non-minimal")
+            header_length = 2 + length_octets
+            content_length = int.from_bytes(payload[2:header_length], "big")
+            if content_length < 0x80:
+                raise ValueError("APK signer certificate DER length is non-minimal")
+        if header_length + content_length != len(payload):
+            raise ValueError("APK signer certificate DER is truncated or has trailing bytes")
+
+    path = apk_path.resolve()
+    file_stat = path.stat()
+    if not stat.S_ISREG(file_stat.st_mode) or file_stat.st_size < 64:
+        raise ValueError("APK must be one non-empty regular file")
+    apksigner, apksigner_sha256 = _configured_authority_tool("apksigner")
+    checked_path, _, tool_errors = _read_pinned_authority_file(
+        apksigner,
+        apksigner_sha256,
+        label="configured apksigner",
+        maximum_bytes=MAX_AUTHORITY_TOOL_BYTES,
+        executable=True,
+    )
+    if checked_path is None or tool_errors:
+        raise ValueError("configured apksigner no longer matches its authority pin")
+    verifier_env = {
+        "HOME": "/var/empty",
+        "LANG": "C",
+        "LC_ALL": "C",
+        "PATH": "/usr/bin:/bin",
+    }
+    verified = subprocess.run(
+        [os.fspath(apksigner), "verify", "--verbose", "--print-certs", str(path)],
+        capture_output=True,
+        text=True,
+        env=verifier_env,
+        check=False,
+    )
+    checked_path, _, tool_errors = _read_pinned_authority_file(
+        apksigner,
+        apksigner_sha256,
+        label="configured apksigner",
+        maximum_bytes=MAX_AUTHORITY_TOOL_BYTES,
+        executable=True,
+    )
+    if checked_path is None or tool_errors:
+        raise ValueError("configured apksigner changed during verification")
+    if verified.returncode != 0:
+        raise ValueError("apksigner cryptographic verification failed")
+    verifier_digests = re.findall(
+        r"^Signer #[0-9]+ certificate SHA-256 digest: ([0-9A-Fa-f:]{64,95})$",
+        verified.stdout,
+        flags=re.MULTILINE,
+    )
+    normalized_verifier_digests = {
+        digest.replace(":", "").lower() for digest in verifier_digests
+    }
+    if len(normalized_verifier_digests) != 1:
+        raise ValueError("apksigner must report exactly one current signer digest")
+    with path.open("rb") as handle:
+        tail_size = min(file_stat.st_size, 22 + 0xFFFF)
+        handle.seek(file_stat.st_size - tail_size)
+        tail = handle.read(tail_size)
+        eocd_offset = tail.rfind(b"PK\x05\x06")
+        if eocd_offset < 0 or eocd_offset + 22 > len(tail):
+            raise ValueError("APK has no complete ZIP end-of-central-directory record")
+        comment_length = int.from_bytes(tail[eocd_offset + 20 : eocd_offset + 22], "little")
+        if eocd_offset + 22 + comment_length != len(tail):
+            raise ValueError("APK ZIP end-of-central-directory record is not final")
+        central_offset = int.from_bytes(tail[eocd_offset + 16 : eocd_offset + 20], "little")
+        if central_offset in (0, 0xFFFFFFFF) or central_offset < 24:
+            raise ValueError("APK ZIP central-directory offset is unsupported")
+        handle.seek(central_offset - 24)
+        footer = handle.read(24)
+        if len(footer) != 24 or footer[8:] != b"APK Sig Block 42":
+            raise ValueError("APK has no v2/v3 signing block")
+        block_size = struct.unpack_from("<Q", footer, 0)[0]
+        total_size = block_size + 8
+        if block_size < 24 or total_size > central_offset or total_size > 64 * 1024 * 1024:
+            raise ValueError("APK signing block size is invalid")
+        block_start = central_offset - total_size
+        handle.seek(block_start)
+        block = handle.read(total_size)
+    if len(block) != total_size or struct.unpack_from("<Q", block, 0)[0] != block_size:
+        raise ValueError("APK signing block header/footer sizes differ")
+    pairs = block[8:-24]
+    pair_offset = 0
+    signer_certificates: set[bytes] = set()
+    while pair_offset < len(pairs):
+        if pair_offset + 8 > len(pairs):
+            raise ValueError("APK signing block truncates an ID-value pair")
+        pair_size = struct.unpack_from("<Q", pairs, pair_offset)[0]
+        pair_start = pair_offset + 8
+        pair_end = pair_start + pair_size
+        if pair_size < 4 or pair_end > len(pairs):
+            raise ValueError("APK signing block ID-value pair size is invalid")
+        pair_id = struct.unpack_from("<I", pairs, pair_start)[0]
+        if pair_id in signing_scheme_ids:
+            scheme_block = pairs[pair_start + 4 : pair_end]
+            signers, scheme_end = take_length_prefixed(
+                scheme_block, 0, "signers sequence"
+            )
+            if scheme_end != len(scheme_block):
+                raise ValueError("APK signing scheme block has trailing bytes")
+            signer_offset = 0
+            while signer_offset < len(signers):
+                signer, signer_offset = take_length_prefixed(
+                    signers, signer_offset, "signer"
+                )
+                signed_data, _ = take_length_prefixed(signer, 0, "signed data")
+                _, signed_offset = take_length_prefixed(signed_data, 0, "digests")
+                certificates, _ = take_length_prefixed(
+                    signed_data, signed_offset, "certificates"
+                )
+                certificate, certificate_end = take_length_prefixed(
+                    certificates, 0, "certificate"
+                )
+                if certificate_end != len(certificates):
+                    raise ValueError("APK signer must contain exactly one certificate")
+                require_der_certificate(certificate)
+                signer_certificates.add(certificate)
+        pair_offset = pair_end
+    if pair_offset != len(pairs) or len(signer_certificates) != 1:
+        raise ValueError("APK must expose exactly one current v2/v3 signer certificate")
+    measured = hashlib.sha256(signer_certificates.pop()).hexdigest()
+    if normalized_verifier_digests != {measured}:
+        raise ValueError("apksigner digest differs from parsed signer certificate DER")
+    return measured
 STATUS_EVENT_FIELDS: frozenset[str] = frozenset(
     {
         "status",
@@ -83,6 +579,12 @@ STATUS_EVENT_FIELDS: frozenset[str] = frozenset(
 def _slot_artifact_max_bytes(relative: str) -> int:
     if relative == KAGEMUSHA_WALLET_APK_PATH:
         return MAX_KAGEMUSHA_WALLET_APK_BYTES
+    if relative.endswith(".apk") and _safe_relative_path_is_child_of(relative, "evidence"):
+        return MAX_KAGEMUSHA_WALLET_APK_BYTES
+    if relative.endswith(".so") and _safe_relative_path_is_child_of(relative, "evidence"):
+        return MAX_KAGEMUSHA_CANDIDATE_NATIVE_LIBRARY_BYTES
+    if relative.endswith(".krv4") and _safe_relative_path_is_child_of(relative, "evidence"):
+        return MAX_KAGEMUSHA_KRV4_ARTIFACT_BYTES
     return MAX_KAGEMUSHA_REQUIRED_SLOT_ARTIFACT_BYTES
 DEVICE_LAB_ROOT_SUMMARY_LABEL = "<local-device-lab-root>"
 SUMMARY_REDACTION_KEY_COLLISION_FIELD = "summary_redaction_key_collision"
@@ -114,6 +616,283 @@ PRIVATE_KEY_PEM_MARKERS = (
     b"-----BEGIN DSA PRIVATE KEY-----",
     b"-----BEGIN OPENSSH PRIVATE KEY-----",
 )
+
+
+def _read_pinned_authority_file(
+    path_value: str | os.PathLike[str],
+    expected_sha256: str,
+    *,
+    label: str,
+    maximum_bytes: int,
+    executable: bool = False,
+) -> tuple[Path | None, bytes | None, list[str]]:
+    """Read one immutable-by-contract authority input without following aliases."""
+
+    errors: list[str] = []
+    path = Path(path_value)
+    path_text = os.fspath(path)
+    if not path.is_absolute():
+        errors.append(f"{label} must be an absolute path")
+        return None, None, errors
+    if path_text != path_text.strip() or _contains_control_character(path_text):
+        errors.append(f"{label} must be one canonical path")
+        return None, None, errors
+    if not isinstance(expected_sha256, str) or SHA256_HEX_RE.fullmatch(
+        expected_sha256
+    ) is None:
+        errors.append(f"{label} SHA-256 must be 64 lowercase hex characters")
+        return None, None, errors
+    try:
+        canonical = path.resolve(strict=True)
+        path_stat = path.lstat()
+    except OSError:
+        errors.append(f"{label} could not be inspected")
+        return None, None, errors
+    if canonical != path or stat.S_ISLNK(path_stat.st_mode):
+        errors.append(f"{label} must be an absolute canonical non-symlink path")
+        return None, None, errors
+    if not stat.S_ISREG(path_stat.st_mode):
+        errors.append(f"{label} must be a regular file")
+    if path_stat.st_nlink != 1:
+        errors.append(f"{label} must have exactly one hard link")
+    if path_stat.st_uid not in {0, os.geteuid()}:
+        errors.append(f"{label} must be owned by root or the invoking user")
+    if path_stat.st_mode & 0o022:
+        errors.append(f"{label} must not be group- or world-writable")
+    if executable and not path_stat.st_mode & stat.S_IXUSR:
+        errors.append(f"{label} must be owner-executable")
+    if path_stat.st_size <= 0 or path_stat.st_size > maximum_bytes:
+        errors.append(f"{label} has an invalid file size")
+    if errors:
+        return None, None, errors
+
+    flags = os.O_RDONLY
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    chunks: list[bytes] = []
+    measured = hashlib.sha256()
+    try:
+        descriptor = os.open(path, flags)
+        try:
+            open_stat = os.fstat(descriptor)
+            expected_identity = (path_stat.st_dev, path_stat.st_ino)
+            if (
+                not stat.S_ISREG(open_stat.st_mode)
+                or (open_stat.st_dev, open_stat.st_ino) != expected_identity
+                or open_stat.st_nlink != 1
+                or open_stat.st_size != path_stat.st_size
+            ):
+                errors.append(f"{label} changed while being opened")
+                return None, None, errors
+            size = 0
+            while True:
+                chunk = os.read(descriptor, min(1024 * 1024, maximum_bytes + 1 - size))
+                if not chunk:
+                    break
+                size += len(chunk)
+                if size > maximum_bytes:
+                    errors.append(f"{label} exceeds its size limit")
+                    return None, None, errors
+                chunks.append(chunk)
+                measured.update(chunk)
+            final_stat = path.lstat()
+            if (
+                (final_stat.st_dev, final_stat.st_ino) != expected_identity
+                or final_stat.st_size != size
+                or final_stat.st_mtime_ns != path_stat.st_mtime_ns
+                or final_stat.st_ctime_ns != path_stat.st_ctime_ns
+            ):
+                errors.append(f"{label} changed while being read")
+                return None, None, errors
+        finally:
+            os.close(descriptor)
+    except OSError:
+        errors.append(f"{label} could not be read")
+        return None, None, errors
+    if measured.hexdigest() != expected_sha256:
+        errors.append(f"{label} SHA-256 does not match the pinned digest")
+        return None, None, errors
+    return path, b"".join(chunks), errors
+
+
+def _strict_json_object_bytes(payload: bytes, label: str) -> dict[str, Any]:
+    def reject_duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError(f"{label} repeats JSON key {key!r}")
+            result[key] = value
+        return result
+
+    try:
+        decoded = payload.decode("utf-8")
+        value = json.loads(
+            decoded,
+            object_pairs_hook=reject_duplicates,
+            parse_constant=lambda token: (_ for _ in ()).throw(
+                ValueError(f"{label} contains non-finite {token}")
+            ),
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as error:
+        raise ValueError(f"{label} must be strict UTF-8 JSON: {error}") from error
+    if not isinstance(value, dict):
+        raise ValueError(f"{label} must be a JSON object")
+    return value
+
+
+def configure_android_evidence_authority(
+    *,
+    apksigner: str | os.PathLike[str],
+    apksigner_sha256: str,
+    openssl: str | os.PathLike[str],
+    openssl_sha256: str,
+    attestation_trust_roots: Iterable[str | os.PathLike[str]],
+    attestation_trust_root_sha256: Iterable[str],
+    attestation_revocation_status: str | os.PathLike[str],
+    attestation_revocation_status_sha256: str,
+) -> list[str]:
+    """Install the explicit, digest-pinned local authority configuration."""
+
+    global _ANDROID_EVIDENCE_AUTHORITY
+    _ANDROID_EVIDENCE_AUTHORITY = None
+    errors: list[str] = []
+    apk_path, _, apk_errors = _read_pinned_authority_file(
+        apksigner,
+        apksigner_sha256,
+        label="--apksigner",
+        maximum_bytes=MAX_AUTHORITY_TOOL_BYTES,
+        executable=True,
+    )
+    errors.extend(apk_errors)
+    openssl_path, _, openssl_errors = _read_pinned_authority_file(
+        openssl,
+        openssl_sha256,
+        label="--openssl",
+        maximum_bytes=MAX_AUTHORITY_TOOL_BYTES,
+        executable=True,
+    )
+    errors.extend(openssl_errors)
+
+    roots = list(attestation_trust_roots)
+    root_digests = list(attestation_trust_root_sha256)
+    if not roots or len(roots) != len(root_digests):
+        errors.append(
+            "Android attestation trust-root paths and SHA-256 pins must be non-empty and aligned"
+        )
+    root_records: list[dict[str, Any]] = []
+    for index, (root, digest) in enumerate(zip(roots, root_digests)):
+        root_path, root_bytes, root_errors = _read_pinned_authority_file(
+            root,
+            digest,
+            label=f"--android-attestation-trust-root[{index}]",
+            maximum_bytes=MAX_ATTESTATION_CERTIFICATE_CHAIN_BYTES,
+        )
+        errors.extend(root_errors)
+        if root_path is not None and root_bytes is not None:
+            root_records.append(
+                {"path": root_path, "sha256": digest, "bytes": root_bytes}
+            )
+
+    status_path, status_bytes, status_errors = _read_pinned_authority_file(
+        attestation_revocation_status,
+        attestation_revocation_status_sha256,
+        label="--android-attestation-revocation-status",
+        maximum_bytes=MAX_ANDROID_ATTESTATION_REVOCATION_STATUS_BYTES,
+    )
+    errors.extend(status_errors)
+    revocation_status: dict[str, Any] | None = None
+    if status_bytes is not None:
+        try:
+            revocation_status = _strict_json_object_bytes(
+                status_bytes,
+                "Android attestation revocation status",
+            )
+        except ValueError as error:
+            errors.append(str(error))
+        else:
+            entries = revocation_status.get("entries")
+            if set(revocation_status) != {"entries"} or not isinstance(entries, dict):
+                errors.append(
+                    "Android attestation revocation status must contain exactly an entries object"
+                )
+            else:
+                for serial, record in entries.items():
+                    if (
+                        not isinstance(serial, str)
+                        or re.fullmatch(r"(?:0|[1-9a-f][0-9a-f]*)", serial) is None
+                        or not isinstance(record, dict)
+                        or not isinstance(record.get("status"), str)
+                        or record.get("status") == ""
+                    ):
+                        errors.append(
+                            "Android attestation revocation status contains a malformed entry"
+                        )
+                        break
+
+    if errors:
+        return errors
+    assert apk_path is not None
+    assert openssl_path is not None
+    assert status_path is not None
+    assert revocation_status is not None
+    _ANDROID_EVIDENCE_AUTHORITY = {
+        "apksigner": {"path": apk_path, "sha256": apksigner_sha256},
+        "openssl": {"path": openssl_path, "sha256": openssl_sha256},
+        "attestation_trust_roots": tuple(root_records),
+        "attestation_revocation_status": {
+            "path": status_path,
+            "sha256": attestation_revocation_status_sha256,
+            "payload": revocation_status,
+        },
+    }
+    return []
+
+
+def _configure_android_evidence_authority_from_args(
+    args: argparse.Namespace,
+) -> list[str]:
+    """Forward one complete CLI authority request to the public configurator."""
+
+    return configure_android_evidence_authority(
+        apksigner=args.apksigner,
+        apksigner_sha256=args.apksigner_sha256,
+        openssl=args.openssl,
+        openssl_sha256=args.openssl_sha256,
+        attestation_trust_roots=args.android_attestation_trust_root or [],
+        attestation_trust_root_sha256=(
+            args.android_attestation_trust_root_sha256 or []
+        ),
+        attestation_revocation_status=args.android_attestation_revocation_status,
+        attestation_revocation_status_sha256=(
+            args.android_attestation_revocation_status_sha256
+        ),
+    )
+
+
+def android_evidence_authority_projection() -> dict[str, Any] | None:
+    """Return the non-secret digests bound into release summaries."""
+
+    authority = _ANDROID_EVIDENCE_AUTHORITY
+    if authority is None:
+        return None
+    return {
+        "apksigner_sha256": authority["apksigner"]["sha256"],
+        "openssl_sha256": authority["openssl"]["sha256"],
+        "attestation_trust_root_sha256": sorted(
+            root["sha256"] for root in authority["attestation_trust_roots"]
+        ),
+        "attestation_revocation_status_sha256": authority[
+            "attestation_revocation_status"
+        ]["sha256"],
+    }
+
+
+def _configured_authority_tool(name: str) -> tuple[Path, str]:
+    authority = _ANDROID_EVIDENCE_AUTHORITY
+    if authority is None:
+        raise ValueError("digest-pinned Android evidence authority tools are required")
+    record = authority[name]
+    return record["path"], record["sha256"]
 KAGEMUSHA_STANDARD_DEVICE_FAMILIES: tuple[str, ...] = (
     "Google Pixel 6 / 6a",
     "Google Pixel 7 / 7 Pro",
@@ -161,36 +940,230 @@ KAGEMUSHA_DEVICE_FAMILY_MODEL_RULES: tuple[
     ),
 )
 RAW_TEST_COMMAND_REQUIRED_MARKERS: tuple[str, ...] = (
-    ":core-jvm:test",
-    ":client-android:assembleRelease",
-    "adb shell am instrument",
-    "org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendProverTest",
-    "org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendLifecycleTest",
-    "org.hyperledger.iroha.sdk.offline.KagemushaDeviceLabArtifactExportTest",
+    "scripts/run_kagemusha_candidate_android_lab.sh",
+    "--build-only",
+    "--stage-sha256",
+    "--attestation-slot",
+    "--trusted-signer-public-key",
+    "org.hyperledger.iroha.sdk.kagemusha.candidate.lab."
+    "KagemushaCandidateLifecycleInstrumentedTest",
+    "org.hyperledger.iroha.sdk.kagemusha.candidate.lab."
+    "KagemushaCandidateArtifactExportInstrumentedTest",
+    "kagemushaAttestationChallengeHex",
+    "kagemushaStrongboxAttestation true",
+    "kagemushaPhysicalDeviceAttestation true",
+)
+KAGEMUSHA_ANDROID_PRODUCTION_RAW_BUILD_COMMAND = (
+    "scripts/run_kagemusha_candidate_android_lab.sh --build-only "
+    '--candidate-sha256 "$CANDIDATE_SHA256" '
+    '--stage-sha256 "$STAGE_SHA256" '
+    '--source-commit "$SOURCE_COMMIT" '
+    '--source-tree-sha256 "$SOURCE_TREE_SHA256" '
+    '--generation "$GENERATION" --slot-id "$SLOT_ID"'
 )
 KAGEMUSHA_ANDROID_PRODUCTION_RAW_HARNESS_COMMAND = (
-    "./gradlew :core-jvm:test --tests "
-    "org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendProverTest "
-    ":client-android:assembleRelease"
+    "scripts/run_kagemusha_candidate_android_lab.sh "
+    '--candidate-sha256 "$CANDIDATE_SHA256" '
+    '--stage-sha256 "$STAGE_SHA256" '
+    '--source-commit "$SOURCE_COMMIT" '
+    '--source-tree-sha256 "$SOURCE_TREE_SHA256" '
+    '--generation "$GENERATION" --slot-id "$SLOT_ID" '
+    '--attestation-slot "$SLOT_PATH" '
+    '--trusted-signer-public-key "$TRUSTED_SIGNER_PUBLIC_KEY"'
 )
 KAGEMUSHA_ANDROID_PRODUCTION_RAW_LIFECYCLE_COMMAND = (
-    "adb shell am instrument -w -e class "
-    "org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendLifecycleTest "
-    "org.hyperledger.iroha.sdk.kagemusha.lab.test/"
+    "adb shell am instrument -w -r -e class "
+    "org.hyperledger.iroha.sdk.kagemusha.candidate.lab."
+    "KagemushaCandidateLifecycleInstrumentedTest "
+    '-e kagemushaAttestationChallengeHex "$CHALLENGE_HEX" '
+    '-e kagemushaAttestationChallengeSha256 "$CHALLENGE_SHA256" '
+    "-e kagemushaAttestationCertificateChainSha256 "
+    '"$ATTESTATION_CERTIFICATE_CHAIN_SHA256" '
+    '-e kagemushaAppSigningCertificateSha256 "$APP_SIGNING_CERTIFICATE_SHA256" '
+    "-e kagemushaStrongboxAttestation true "
+    "-e kagemushaPhysicalDeviceAttestation true "
+    "org.hyperledger.iroha.sdk.kagemusha.candidate.lab.test/"
     "androidx.test.runner.AndroidJUnitRunner"
 )
 KAGEMUSHA_ANDROID_PRODUCTION_RAW_EXPORT_COMMAND = (
-    "adb shell am instrument -w -e class "
-    "org.hyperledger.iroha.sdk.offline.KagemushaDeviceLabArtifactExportTest "
-    "org.hyperledger.iroha.sdk.kagemusha.lab.test/"
+    "adb shell am instrument -w -r -e class "
+    "org.hyperledger.iroha.sdk.kagemusha.candidate.lab."
+    "KagemushaCandidateArtifactExportInstrumentedTest "
+    '-e kagemushaAttestationChallengeHex "$CHALLENGE_HEX" '
+    '-e kagemushaAttestationChallengeSha256 "$CHALLENGE_SHA256" '
+    "-e kagemushaAttestationCertificateChainSha256 "
+    '"$ATTESTATION_CERTIFICATE_CHAIN_SHA256" '
+    '-e kagemushaAppSigningCertificateSha256 "$APP_SIGNING_CERTIFICATE_SHA256" '
+    "-e kagemushaStrongboxAttestation true "
+    "-e kagemushaPhysicalDeviceAttestation true "
+    "org.hyperledger.iroha.sdk.kagemusha.candidate.lab.test/"
     "androidx.test.runner.AndroidJUnitRunner"
 )
 KAGEMUSHA_ANDROID_PRODUCTION_RAW_TEST_COMMANDS: tuple[str, ...] = (
+    KAGEMUSHA_ANDROID_PRODUCTION_RAW_BUILD_COMMAND,
     KAGEMUSHA_ANDROID_PRODUCTION_RAW_HARNESS_COMMAND,
     KAGEMUSHA_ANDROID_PRODUCTION_RAW_LIFECYCLE_COMMAND,
     KAGEMUSHA_ANDROID_PRODUCTION_RAW_EXPORT_COMMAND,
 )
-SIGNED_EVIDENCE_SCHEMA = "iroha.android.device_lab.kagemusha.signed_evidence.v1"
+SIGNED_EVIDENCE_SCHEMA_V1 = "iroha.android.device_lab.kagemusha.signed_evidence.v1"
+SIGNED_EVIDENCE_SCHEMA_V2 = "iroha.android.device_lab.kagemusha.signed_evidence.v2"
+SIGNED_EVIDENCE_SCHEMA = SIGNED_EVIDENCE_SCHEMA_V2
+KAGEMUSHA_SLOT_SCHEMA_V1 = "iroha.android.device_lab.kagemusha.v1"
+KAGEMUSHA_SLOT_SCHEMA_V2 = "iroha.android.device_lab.kagemusha.v2"
+KAGEMUSHA_CANDIDATE_BINDING_SCHEMA_V2 = (
+    "iroha.android.device_lab.kagemusha.candidate_binding.v2"
+)
+KAGEMUSHA_CANDIDATE_LIFECYCLE_SCHEMA_V2 = (
+    "iroha.android.device_lab.kagemusha.lifecycle_transcript.v2"
+)
+KAGEMUSHA_CANDIDATE_CAUSAL_EVENT_FIELDS_V1: frozenset[str] = frozenset(
+    {
+        "sequence",
+        "phase",
+        "operation",
+        "outcome",
+        "duration_nanos",
+        "input_sha256",
+        "output_sha256",
+        "output_size_bytes",
+        "rejection_classification",
+        "exception_class",
+        "error_message_sha256",
+    }
+)
+KAGEMUSHA_CANDIDATE_CAUSAL_OPERATIONS_V1: tuple[str, ...] = (
+    "candidate_install",
+    "build_init_request",
+    "init",
+    "build_append_hop_01_request",
+    "append_hop_01",
+    "build_append_hop_02_request",
+    "append_hop_02",
+    "candidate_reinstall_after_process_restart",
+    "restore_init_result_after_restart",
+    "restore_hop_01_result_after_restart",
+    "restore_hop_02_result_after_restart",
+    "validate_init_branch_after_restart",
+    "validate_hop_01_change_continuity",
+    "validate_hop_01_recipient_branch",
+    "validate_hop_02_recipient_branch",
+    "validate_sender_change_branch",
+    "build_verify_first_recipient_proof_request",
+    "verify_first_recipient_proof",
+    "build_verify_multi_hop_recipient_proof_request",
+    "verify_multi_hop_recipient_proof",
+    "build_duplicate_input_request_from_observed_branch",
+    "duplicate_input_rejection",
+    "build_redeem_first_recipient_request",
+    "redeem_first_recipient",
+    "build_redeem_second_recipient_request",
+    "redeem_second_recipient",
+    "build_redeem_sender_change_request",
+    "redeem_sender_change",
+)
+KAGEMUSHA_CANDIDATE_ARTIFACT_ROLES_V4: tuple[str, ...] = (
+    "step_eq_params_ipa",
+    "step_eq_proving_key",
+    "step_eq_verifying_key",
+    "step_eq_bootstrap_witness",
+    "step_ep_params_ipa",
+    "step_ep_proving_key",
+    "step_ep_verifying_key",
+    "step_ep_bootstrap_witness",
+)
+KAGEMUSHA_CANDIDATE_ARTIFACT_FILE_NAMES_V4: tuple[str, ...] = (
+    "step-eq.params-ipa.krv4",
+    "step-eq.proving-key.krv4",
+    "step-eq.verifying-key.krv4",
+    "step-eq.bootstrap-witness.krv4",
+    "step-ep.params-ipa.krv4",
+    "step-ep.proving-key.krv4",
+    "step-ep.verifying-key.krv4",
+    "step-ep.bootstrap-witness.krv4",
+)
+KAGEMUSHA_CANDIDATE_BINDING_FIELDS_V2: frozenset[str] = frozenset(
+    {
+        "schema",
+        "candidate_record_path",
+        "candidate_record_sha256",
+        "candidate_manifest_path",
+        "candidate_manifest_sha256",
+        "candidate_stage_manifest_path",
+        "candidate_stage_manifest_sha256",
+        "source_commit",
+        "source_tree_sha256",
+        "source_repo_dirty",
+        "generation",
+        "bridge_abi_version",
+        "lab_native_library_path",
+        "lab_native_library_sha256",
+        "lab_apk_path",
+        "lab_apk_sha256",
+        "lab_apk_signing_cert_sha256",
+        "lab_test_apk_path",
+        "lab_test_apk_sha256",
+        "lab_test_apk_signing_cert_sha256",
+        "production_capability_observed",
+        "native_accepted_candidate_record_sha256",
+        "native_accepted_candidate_manifest_sha256",
+        "native_accepted_source_commit",
+        "native_accepted_source_tree_sha256",
+        "native_accepted_source_repo_dirty",
+        "native_accepted_generation",
+        "native_accepted_bridge_abi_version",
+        "native_accepted_inventory_sha256",
+        "lifecycle_transcript_path",
+        "lifecycle_transcript_sha256",
+        "artifact_inventory",
+    }
+)
+KAGEMUSHA_CANDIDATE_ARTIFACT_ENTRY_FIELDS_V2: frozenset[str] = frozenset(
+    {
+        "role",
+        "path",
+        "framed_size_bytes",
+        "framed_sha256",
+        "payload_size_bytes",
+        "payload_sha256",
+    }
+)
+KAGEMUSHA_CANDIDATE_LIFECYCLE_FIELDS_V2: frozenset[str] = frozenset(
+    {
+        "schema",
+        "slot_id",
+        "candidate_record_sha256",
+        "candidate_manifest_sha256",
+        "candidate_stage_manifest_path",
+        "candidate_stage_manifest_sha256",
+        "candidate_inventory_sha256",
+        "source_commit",
+        "source_tree_sha256",
+        "source_repo_dirty",
+        "generation",
+        "bridge_abi_version",
+        "production_capability_observed",
+        "initial_atomic",
+        "first_recipient_atomic",
+        "second_recipient_atomic",
+        "sender_change_atomic",
+        "redeemed_atomic",
+        "final_unspent_atomic",
+        "proof_hops",
+        "init_proof_verified",
+        "first_spend_verified",
+        "multi_hop_proof_verified",
+        "independent_branch_redemption_verified",
+        "duplicate_rejected",
+        "restart_recovered",
+        "network_requests_during_peer_transfers",
+        "attestation_challenge_sha256",
+        "attestation_certificate_chain_sha256",
+        "app_signing_certificate_sha256",
+        "strongbox_attestation",
+        "physical_device_attestation",
+        "causal_events",
+    }
+)
 D2D_PAYMENT_TRANSCRIPT_SCHEMA = "iroha.android.device_lab.kagemusha.d2d_payment.v1"
 D2D_PAYMENT_PAYLOAD_SCHEMA = "kagemusha.recursive_spend.d2d.v1"
 WALLET_INTEGRITY_TRANSCRIPT_SCHEMA = (
@@ -204,7 +1177,7 @@ ATTESTATION_CERTIFICATE_CHAIN_SUFFIXES = (".der", ".pem")
 MAX_ATTESTATION_CERTIFICATE_CHAIN_BYTES = 64 * 1024
 SIGNED_EVIDENCE_SIGNATURE_ALGORITHMS = {"ed25519"}
 ED25519_SIGNATURE_BYTES = 64
-REQUIRED_KAGEMUSHA_NATIVE_BRIDGE_ABI_VERSION = 19
+REQUIRED_KAGEMUSHA_NATIVE_BRIDGE_ABI_VERSION = 20
 KAGEMUSHA_RECURSIVE_SPEND_JNI_PROBE_STATES = {"recursive_spend_verified"}
 KAGEMUSHA_RECURSIVE_SPEND_PROVER_STATES = {"multi_hop_proof_composed"}
 SIGNED_EVIDENCE_SLOT_STRING_FIELDS: tuple[str, ...] = (
@@ -224,12 +1197,30 @@ SIGNED_EVIDENCE_SLOT_STRING_FIELDS: tuple[str, ...] = (
     "kagemusha_recursive_spend_ffi_surface",
     "kagemusha_recursive_spend_jni_probe",
     "kagemusha_recursive_spend_prover_state",
+    "candidate_binding_path",
+    "candidate_record_path",
+    "candidate_manifest_path",
+    "candidate_stage_manifest_path",
+    "candidate_source_commit",
+    "candidate_generation",
+    "candidate_lab_native_library_path",
+    "candidate_lab_apk_path",
+    "candidate_lab_test_apk_path",
+    "candidate_lifecycle_transcript_path",
 )
 SIGNED_EVIDENCE_SLOT_ARTIFACT_PATH_FIELDS: tuple[str, ...] = (
     "attestation_certificate_chain_path",
     "kagemusha_wallet_apk_path",
     "d2d_payment_transcript_path",
     "wallet_integrity_transcript_path",
+    "candidate_binding_path",
+    "candidate_record_path",
+    "candidate_manifest_path",
+    "candidate_stage_manifest_path",
+    "candidate_lab_native_library_path",
+    "candidate_lab_apk_path",
+    "candidate_lab_test_apk_path",
+    "candidate_lifecycle_transcript_path",
 )
 SIGNED_EVIDENCE_SLOT_SHA256_FIELDS: tuple[str, ...] = (
     "app_signing_certificate_sha256",
@@ -239,6 +1230,20 @@ SIGNED_EVIDENCE_SLOT_SHA256_FIELDS: tuple[str, ...] = (
     "kagemusha_wallet_apk_sha256",
     "d2d_payment_transcript_sha256",
     "wallet_integrity_transcript_sha256",
+    "candidate_binding_sha256",
+    "candidate_record_sha256",
+    "candidate_manifest_sha256",
+    "candidate_stage_manifest_sha256",
+    "candidate_source_tree_sha256",
+    "candidate_source_tree_sha256_before",
+    "candidate_source_tree_sha256_after",
+    "candidate_lab_native_library_sha256",
+    "candidate_lab_apk_sha256",
+    "candidate_lab_test_apk_sha256",
+    "candidate_lab_apk_signing_certificate_sha256",
+    "candidate_lab_test_apk_signing_certificate_sha256",
+    "candidate_lifecycle_transcript_sha256",
+    "candidate_inventory_sha256",
 )
 SIGNED_EVIDENCE_SLOT_INT_FIELDS: tuple[str, ...] = (
     "native_bridge_abi_version",
@@ -248,6 +1253,10 @@ SIGNED_EVIDENCE_SLOT_TRUE_FIELDS: tuple[str, ...] = (
     "physical_device_attestation",
     "one_use_key_rotation_passed",
     "rollback_rejection_passed",
+)
+SIGNED_EVIDENCE_SLOT_FALSE_FIELDS: tuple[str, ...] = (
+    "production_capability_observed",
+    "candidate_source_repo_dirty",
 )
 PENDING_QUEUE_FIELDS: frozenset[str] = frozenset(
     {
@@ -277,6 +1286,7 @@ SLOT_METADATA_FIELDS: frozenset[str] = frozenset(
         *SIGNED_EVIDENCE_SLOT_SHA256_FIELDS,
         *SIGNED_EVIDENCE_SLOT_INT_FIELDS,
         *SIGNED_EVIDENCE_SLOT_TRUE_FIELDS,
+        *SIGNED_EVIDENCE_SLOT_FALSE_FIELDS,
         "raw_test_commands",
         D2D_PAYMENT_TRANSCRIPTS_FIELD,
         "signed_evidence_artifact_path",
@@ -286,6 +1296,11 @@ SLOT_METADATA_FIELDS: frozenset[str] = frozenset(
 SIGNED_EVIDENCE_FIELDS: frozenset[str] = frozenset(
     {
         "schema",
+        *SIGNED_EVIDENCE_SLOT_STRING_FIELDS,
+        *SIGNED_EVIDENCE_SLOT_SHA256_FIELDS,
+        *SIGNED_EVIDENCE_SLOT_INT_FIELDS,
+        *SIGNED_EVIDENCE_SLOT_TRUE_FIELDS,
+        *SIGNED_EVIDENCE_SLOT_FALSE_FIELDS,
         "slot_id",
         "device_family",
         "device_model",
@@ -323,6 +1338,7 @@ SIGNED_EVIDENCE_FIELDS: frozenset[str] = frozenset(
         "signature_payload_sha256",
         "signature",
         "artifact_digests",
+        *SIGNED_EVIDENCE_SLOT_FALSE_FIELDS,
     }
 )
 ATTESTATION_RESULT_SLOT_BINDING_FIELDS: tuple[str, ...] = (
@@ -1018,18 +2034,41 @@ KAGEMUSHA_SUMMARY_RELEASE_ARTIFACTS: tuple[tuple[str, str], ...] = (
     ("kagemusha_wallet_apk_path", "kagemusha_wallet_apk_sha256"),
     ("d2d_payment_transcript_path", "d2d_payment_transcript_sha256"),
     ("wallet_integrity_transcript_path", "wallet_integrity_transcript_sha256"),
+    ("candidate_record_path", "candidate_record_sha256"),
+    ("candidate_manifest_path", "candidate_manifest_sha256"),
+    ("candidate_stage_manifest_path", "candidate_stage_manifest_sha256"),
+    ("candidate_lab_native_library_path", "candidate_lab_native_library_sha256"),
+    ("candidate_lab_apk_path", "candidate_lab_apk_sha256"),
+    ("candidate_lab_test_apk_path", "candidate_lab_test_apk_sha256"),
+    ("candidate_lifecycle_transcript_path", "candidate_lifecycle_transcript_sha256"),
+    ("candidate_binding_path", "candidate_binding_sha256"),
 )
 KAGEMUSHA_SUMMARY_RELEASE_ARTIFACT_ROOTS: dict[str, str] = {
     "attestation_certificate_chain_path": "attestation",
     "kagemusha_wallet_apk_path": "evidence",
     "d2d_payment_transcript_path": "handoff",
     "wallet_integrity_transcript_path": "wallet",
+    "candidate_record_path": "evidence",
+    "candidate_manifest_path": "evidence",
+    "candidate_stage_manifest_path": "<slot-root>",
+    "candidate_lab_native_library_path": "evidence",
+    "candidate_lab_apk_path": "evidence",
+    "candidate_lab_test_apk_path": "evidence",
+    "candidate_lifecycle_transcript_path": "evidence",
+    "candidate_binding_path": "evidence",
 }
 KAGEMUSHA_SUMMARY_RELEASE_SHA256_FIELDS: tuple[str, ...] = (
     "signed_evidence_artifact_sha256",
     "signed_evidence_signer_public_key_sha256",
     "device_fingerprint_sha256",
+    "app_signing_certificate_sha256",
     "attestation_challenge_sha256",
+    "candidate_source_tree_sha256_before",
+    "candidate_source_tree_sha256_after",
+    "candidate_lab_apk_signing_certificate_sha256",
+    "candidate_lab_test_apk_signing_certificate_sha256",
+    "candidate_source_tree_sha256",
+    "candidate_inventory_sha256",
     *(
         digest_field
         for _, digest_field in KAGEMUSHA_SUMMARY_RELEASE_ARTIFACTS
@@ -1043,6 +2082,12 @@ KAGEMUSHA_SUMMARY_RELEASE_SLOT_FIELDS: frozenset[str] = frozenset(
         "device_model",
         "device_codename",
         "signed_at_utc",
+        "candidate_source_commit",
+        "candidate_generation",
+        "production_capability_observed",
+        "candidate_source_repo_dirty",
+        "strongbox_attestation",
+        "physical_device_attestation",
         "d2d_payment_transport",
         "d2d_payment_transports",
         D2D_PAYMENT_TRANSCRIPTS_FIELD,
@@ -1156,6 +2201,18 @@ def _summary_release_kagemusha(
         return None
     if not _summary_release_timestamp(kagemusha.get("signed_at_utc")):
         return None
+    source_commit = kagemusha.get("candidate_source_commit")
+    generation = kagemusha.get("candidate_generation")
+    if (
+        not isinstance(source_commit, str)
+        or re.fullmatch(r"[0-9a-f]{40}", source_commit) is None
+        or source_commit == "0" * 40
+        or not isinstance(generation, str)
+        or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", generation) is None
+        or kagemusha.get("production_capability_observed") is not False
+        or kagemusha.get("candidate_source_repo_dirty") is not False
+    ):
+        return None
     if any(
         not _summary_release_sha256(kagemusha.get(field))
         for field in KAGEMUSHA_SUMMARY_RELEASE_SHA256_FIELDS
@@ -1171,8 +2228,16 @@ def _summary_release_kagemusha(
         return None
     for path_field, _ in KAGEMUSHA_SUMMARY_RELEASE_ARTIFACTS:
         root = KAGEMUSHA_SUMMARY_RELEASE_ARTIFACT_ROOTS[path_field]
-        if not _summary_release_artifact_path_under(kagemusha.get(path_field), root):
+        if path_field == "candidate_stage_manifest_path":
+            if kagemusha.get(path_field) != KAGEMUSHA_CANDIDATE_STAGE_MANIFEST_PATH_V1:
+                return None
+        elif not _summary_release_artifact_path_under(kagemusha.get(path_field), root):
             return None
+    if (
+        kagemusha.get("strongbox_attestation") is not True
+        or kagemusha.get("physical_device_attestation") is not True
+    ):
+        return None
     return kagemusha
 
 
@@ -2465,6 +3530,11 @@ def _require_true(data: dict[str, Any], key: str, errors: list[str]) -> None:
         errors.append(f"slot.json {key} must be true")
 
 
+def _require_false(data: dict[str, Any], key: str, errors: list[str]) -> None:
+    if data.get(key) is not False:
+        errors.append(f"slot.json {key} must be false")
+
+
 def _require_int(
     data: dict[str, Any],
     key: str,
@@ -2481,6 +3551,11 @@ def _require_int(
 def _require_evidence_true(data: dict[str, Any], key: str, errors: list[str]) -> None:
     if data.get(key) is not True:
         errors.append(f"signed evidence artifact {key} must be true")
+
+
+def _require_evidence_false(data: dict[str, Any], key: str, errors: list[str]) -> None:
+    if data.get(key) is not False:
+        errors.append(f"signed evidence artifact {key} must be false")
 
 
 def _require_evidence_int(
@@ -2917,6 +3992,7 @@ def validate_attestation_harness_result(
     errors: list[str],
     *,
     attestation_certificate_chain_bytes: bytes | None = None,
+    attestation_certificate_count: int | None = None,
 ) -> None:
     """Validate the original StrongBox attestation harness result preserved in the slot."""
 
@@ -2963,6 +4039,21 @@ def validate_attestation_harness_result(
                 challenge = bytes.fromhex(challenge_hex)
             except ValueError:
                 errors.append("attestation/harness-result.json challenge_hex must be hex")
+    if challenge is not None and len(challenge) != 32:
+        errors.append(
+            "attestation/harness-result.json challenge_hex must encode exactly 32 bytes"
+        )
+    if challenge is not None:
+        try:
+            derived_challenge = derive_kagemusha_strongbox_challenge_v1(metadata)
+        except ValueError as error:
+            errors.append(f"candidate StrongBox challenge inputs are invalid: {error}")
+        else:
+            if challenge != derived_challenge:
+                errors.append(
+                    "attestation/harness-result.json challenge_hex must equal the "
+                    "candidate-stage StrongBox challenge"
+                )
     expected_challenge_digest = metadata.get("attestation_challenge_sha256")
     if (
         challenge is not None
@@ -2979,6 +4070,12 @@ def validate_attestation_harness_result(
         errors.append("attestation/harness-result.json chain_length must be an integer")
     elif chain_length < 2:
         errors.append("attestation/harness-result.json chain_length must be at least 2")
+    elif attestation_certificate_count is not None:
+        if chain_length != attestation_certificate_count:
+            errors.append(
+                "attestation/harness-result.json chain_length must match "
+                "attestation certificate-chain certificate count"
+            )
     elif attestation_certificate_chain_bytes is not None:
         certificate_count = _certificate_chain_pem_count(attestation_certificate_chain_bytes)
         if certificate_count and chain_length != certificate_count:
@@ -3628,6 +4725,605 @@ def _validate_attestation_certificate_chain_artifact(
         errors.append("attestation certificate chain DER must start with ASN.1 SEQUENCE")
 
 
+class _StrictDerReader:
+    """Small strict DER reader for the Android KeyDescription policy fields."""
+
+    def __init__(self, payload: bytes):
+        self.payload = payload
+        self.offset = 0
+
+    def remaining(self) -> bool:
+        return self.offset < len(self.payload)
+
+    def read(self) -> tuple[int, bool, int, bytes, bytes]:
+        start = self.offset
+        if self.offset >= len(self.payload):
+            raise ValueError("DER value is truncated")
+        first = self.payload[self.offset]
+        self.offset += 1
+        tag_class = first >> 6
+        constructed = bool(first & 0x20)
+        tag = first & 0x1F
+        if tag == 0x1F:
+            tag = 0
+            first_tag_octet = True
+            while True:
+                if self.offset >= len(self.payload):
+                    raise ValueError("DER high tag number is truncated")
+                octet = self.payload[self.offset]
+                self.offset += 1
+                if first_tag_octet and octet == 0x80:
+                    raise ValueError("DER high tag number is non-minimal")
+                first_tag_octet = False
+                if tag > (1 << 31):
+                    raise ValueError("DER tag number is too large")
+                tag = (tag << 7) | (octet & 0x7F)
+                if not octet & 0x80:
+                    break
+            if tag < 31:
+                raise ValueError("DER high tag number is non-minimal")
+        if self.offset >= len(self.payload):
+            raise ValueError("DER length is truncated")
+        first_length = self.payload[self.offset]
+        self.offset += 1
+        if first_length < 0x80:
+            length = first_length
+        else:
+            octets = first_length & 0x7F
+            if octets == 0 or octets > 4 or self.offset + octets > len(self.payload):
+                raise ValueError("DER length is invalid")
+            encoded = self.payload[self.offset : self.offset + octets]
+            self.offset += octets
+            if encoded[0] == 0:
+                raise ValueError("DER length is non-minimal")
+            length = int.from_bytes(encoded, "big")
+            if length < 0x80:
+                raise ValueError("DER length is non-minimal")
+        end = self.offset + length
+        if end > len(self.payload):
+            raise ValueError("DER value is truncated")
+        value = self.payload[self.offset : end]
+        self.offset = end
+        return tag_class, constructed, tag, value, self.payload[start:end]
+
+    def expect(
+        self,
+        tag_class: int,
+        constructed: bool,
+        tag: int,
+        label: str,
+    ) -> bytes:
+        actual_class, actual_constructed, actual_tag, value, _ = self.read()
+        if (actual_class, actual_constructed, actual_tag) != (
+            tag_class,
+            constructed,
+            tag,
+        ):
+            raise ValueError(f"{label} has an unexpected DER tag")
+        return value
+
+    def finish(self, label: str) -> None:
+        if self.remaining():
+            raise ValueError(f"{label} contains trailing DER data")
+
+
+def _der_unsigned_integer(value: bytes, label: str) -> int:
+    if not value or value[0] & 0x80:
+        raise ValueError(f"{label} must be a non-negative DER integer")
+    if len(value) > 1 and value[0] == 0 and not value[1] & 0x80:
+        raise ValueError(f"{label} DER integer is non-minimal")
+    return int.from_bytes(value, "big")
+
+
+def _der_boolean(value: bytes, label: str) -> bool:
+    if value not in (b"\x00", b"\xff"):
+        raise ValueError(f"{label} must be one canonical DER boolean")
+    return value == b"\xff"
+
+
+def _split_der_certificate_chain(payload: bytes) -> list[bytes]:
+    reader = _StrictDerReader(payload)
+    certificates: list[bytes] = []
+    while reader.remaining():
+        tag_class, constructed, tag, _, encoded = reader.read()
+        if (tag_class, constructed, tag) != (0, True, 16):
+            raise ValueError("DER attestation chain must contain only X.509 sequences")
+        certificates.append(encoded)
+    return certificates
+
+
+def _decode_attestation_certificate_chain(relative: str, payload: bytes) -> list[bytes]:
+    suffix = PurePosixPath(relative).suffix.lower()
+    if suffix == ".der":
+        certificates = _split_der_certificate_chain(payload)
+    elif suffix == ".pem":
+        pattern = re.compile(
+            rb"-----BEGIN CERTIFICATE-----\r?\n([A-Za-z0-9+/=\r\n]+)"
+            rb"-----END CERTIFICATE-----"
+        )
+        certificates = []
+        position = 0
+        for match in pattern.finditer(payload):
+            if payload[position : match.start()].strip():
+                raise ValueError("PEM attestation chain contains non-certificate data")
+            encoded = re.sub(rb"\s+", b"", match.group(1))
+            try:
+                certificate = base64.b64decode(encoded, validate=True)
+            except ValueError as error:
+                raise ValueError("PEM attestation chain contains invalid base64") from error
+            parsed = _split_der_certificate_chain(certificate)
+            if len(parsed) != 1 or parsed[0] != certificate:
+                raise ValueError("PEM attestation chain contains invalid certificate DER")
+            certificates.append(certificate)
+            position = match.end()
+        if payload[position:].strip():
+            raise ValueError("PEM attestation chain contains trailing non-certificate data")
+    else:
+        raise ValueError("attestation chain suffix is unsupported")
+    if len(certificates) < 2:
+        raise ValueError("attestation certificate chain must contain at least two certificates")
+    if len(certificates) > 8:
+        raise ValueError("attestation certificate chain contains too many certificates")
+    digests = [hashlib.sha256(certificate).digest() for certificate in certificates]
+    if len(set(digests)) != len(digests):
+        raise ValueError("attestation certificate chain repeats a certificate")
+    return certificates
+
+
+def _x509_certificate_serial_and_attestation_extension(
+    certificate: bytes,
+) -> tuple[str, bytes]:
+    certificate_reader = _StrictDerReader(certificate)
+    certificate_sequence = certificate_reader.expect(0, True, 16, "X.509 certificate")
+    certificate_reader.finish("X.509 certificate")
+    outer = _StrictDerReader(certificate_sequence)
+    _, tbs_constructed, tbs_tag, tbs, _ = outer.read()
+    if not tbs_constructed or tbs_tag != 16:
+        raise ValueError("X.509 TBSCertificate is malformed")
+    outer.expect(0, True, 16, "X.509 signatureAlgorithm")
+    outer.expect(0, False, 3, "X.509 signatureValue")
+    outer.finish("X.509 certificate")
+
+    reader = _StrictDerReader(tbs)
+    first_class, first_constructed, first_tag, first_value, _ = reader.read()
+    if (first_class, first_constructed, first_tag) == (2, True, 0):
+        version_reader = _StrictDerReader(first_value)
+        _der_unsigned_integer(
+            version_reader.expect(0, False, 2, "X.509 version"),
+            "X.509 version",
+        )
+        version_reader.finish("X.509 version")
+        serial_value = reader.expect(0, False, 2, "X.509 serialNumber")
+    elif (first_class, first_constructed, first_tag) == (0, False, 2):
+        serial_value = first_value
+    else:
+        raise ValueError("X.509 TBSCertificate serialNumber is malformed")
+    serial = _der_unsigned_integer(serial_value, "X.509 serialNumber")
+    if serial == 0:
+        raise ValueError("X.509 serialNumber must be positive")
+    for label in (
+        "X.509 signature",
+        "X.509 issuer",
+        "X.509 validity",
+        "X.509 subject",
+        "X.509 subjectPublicKeyInfo",
+    ):
+        reader.expect(0, True, 16, label)
+
+    extension_payload: bytes | None = None
+    while reader.remaining():
+        tag_class, constructed, tag, value, _ = reader.read()
+        if (tag_class, constructed, tag) != (2, True, 3):
+            if tag_class == 2 and tag in {1, 2}:
+                continue
+            raise ValueError("X.509 TBSCertificate contains an unexpected trailing field")
+        if extension_payload is not None:
+            raise ValueError("X.509 TBSCertificate repeats extensions")
+        extension_payload = value
+    if extension_payload is None:
+        raise ValueError("X.509 certificate has no extensions")
+
+    wrapper = _StrictDerReader(extension_payload)
+    extension_sequence = wrapper.expect(0, True, 16, "X.509 extensions")
+    wrapper.finish("X.509 extensions")
+    extensions = _StrictDerReader(extension_sequence)
+    attestation_extension: bytes | None = None
+    oid_value = ANDROID_KEY_ATTESTATION_EXTENSION_OID_DER[2:]
+    while extensions.remaining():
+        encoded_extension = extensions.expect(0, True, 16, "X.509 extension")
+        extension = _StrictDerReader(encoded_extension)
+        oid = extension.expect(0, False, 6, "X.509 extension OID")
+        if extension.remaining():
+            next_class, next_constructed, next_tag, next_value, _ = extension.read()
+            if (next_class, next_constructed, next_tag) == (0, False, 1):
+                _der_boolean(next_value, "X.509 extension critical")
+                value = extension.expect(0, False, 4, "X.509 extension value")
+            elif (next_class, next_constructed, next_tag) == (0, False, 4):
+                value = next_value
+            else:
+                raise ValueError("X.509 extension value is malformed")
+        else:
+            raise ValueError("X.509 extension has no value")
+        extension.finish("X.509 extension")
+        if oid == oid_value:
+            if attestation_extension is not None:
+                raise ValueError("leaf repeats the Android key-attestation extension")
+            attestation_extension = value
+    if attestation_extension is None:
+        raise ValueError(
+            f"leaf certificate is missing Android extension {ANDROID_KEY_ATTESTATION_EXTENSION_OID}"
+        )
+    return format(serial, "x"), attestation_extension
+
+
+def _x509_certificate_serial(certificate: bytes) -> str:
+    certificate_reader = _StrictDerReader(certificate)
+    certificate_sequence = certificate_reader.expect(0, True, 16, "X.509 certificate")
+    certificate_reader.finish("X.509 certificate")
+    outer = _StrictDerReader(certificate_sequence)
+    tbs = outer.expect(0, True, 16, "X.509 TBSCertificate")
+    outer.expect(0, True, 16, "X.509 signatureAlgorithm")
+    outer.expect(0, False, 3, "X.509 signatureValue")
+    outer.finish("X.509 certificate")
+    reader = _StrictDerReader(tbs)
+    first_class, first_constructed, first_tag, first_value, _ = reader.read()
+    if (first_class, first_constructed, first_tag) == (2, True, 0):
+        version = _StrictDerReader(first_value)
+        _der_unsigned_integer(
+            version.expect(0, False, 2, "X.509 version"), "X.509 version"
+        )
+        version.finish("X.509 version")
+        serial_value = reader.expect(0, False, 2, "X.509 serialNumber")
+    elif (first_class, first_constructed, first_tag) == (0, False, 2):
+        serial_value = first_value
+    else:
+        raise ValueError("X.509 TBSCertificate serialNumber is malformed")
+    serial = _der_unsigned_integer(serial_value, "X.509 serialNumber")
+    if serial == 0:
+        raise ValueError("X.509 serialNumber must be positive")
+    return format(serial, "x")
+
+
+def _parse_attestation_application_id(value: bytes) -> tuple[set[str], set[bytes]]:
+    explicit = _StrictDerReader(value)
+    encoded = explicit.expect(0, False, 4, "attestationApplicationId OCTET STRING")
+    explicit.finish("attestationApplicationId")
+    wrapper = _StrictDerReader(encoded)
+    sequence = wrapper.expect(0, True, 16, "attestationApplicationId")
+    wrapper.finish("attestationApplicationId")
+    reader = _StrictDerReader(sequence)
+    packages_bytes = reader.expect(0, True, 17, "attestation packageInfos")
+    digests_bytes = reader.expect(0, True, 17, "attestation signatureDigests")
+    reader.finish("attestationApplicationId")
+
+    packages: set[str] = set()
+    package_reader = _StrictDerReader(packages_bytes)
+    while package_reader.remaining():
+        package_sequence = package_reader.expect(0, True, 16, "attestation packageInfo")
+        package = _StrictDerReader(package_sequence)
+        name_bytes = package.expect(0, False, 4, "attestation packageName")
+        _der_unsigned_integer(
+            package.expect(0, False, 2, "attestation packageVersion"),
+            "attestation packageVersion",
+        )
+        package.finish("attestation packageInfo")
+        try:
+            name = name_bytes.decode("utf-8")
+        except UnicodeDecodeError as error:
+            raise ValueError("attestation packageName must be UTF-8") from error
+        if not name or name in packages:
+            raise ValueError("attestationApplicationId repeats or empties a package name")
+        packages.add(name)
+
+    digests: set[bytes] = set()
+    digest_reader = _StrictDerReader(digests_bytes)
+    while digest_reader.remaining():
+        digest = digest_reader.expect(0, False, 4, "attestation signatureDigest")
+        if len(digest) != 32 or digest in digests:
+            raise ValueError("attestationApplicationId has an invalid signing digest")
+        digests.add(digest)
+    if not packages or not digests:
+        raise ValueError("attestationApplicationId must bind a package and signing digest")
+    return packages, digests
+
+
+def _parse_android_root_of_trust(value: bytes) -> None:
+    explicit = _StrictDerReader(value)
+    sequence = explicit.expect(0, True, 16, "rootOfTrust")
+    explicit.finish("rootOfTrust")
+    reader = _StrictDerReader(sequence)
+    verified_boot_key = reader.expect(0, False, 4, "verifiedBootKey")
+    locked = _der_boolean(reader.expect(0, False, 1, "deviceLocked"), "deviceLocked")
+    state = _der_unsigned_integer(
+        reader.expect(0, False, 10, "verifiedBootState"),
+        "verifiedBootState",
+    )
+    verified_boot_hash = (
+        reader.expect(0, False, 4, "verifiedBootHash") if reader.remaining() else None
+    )
+    reader.finish("rootOfTrust")
+    if not verified_boot_key:
+        raise ValueError("verifiedBootKey must be non-empty")
+    if not locked:
+        raise ValueError("Android attestation requires deviceLocked=true")
+    if state != ANDROID_VERIFIED_BOOT_STATE_VERIFIED:
+        raise ValueError("Android attestation requires verifiedBootState=Verified")
+    if verified_boot_hash is None or len(verified_boot_hash) != 32:
+        raise ValueError("Android StrongBox attestation requires a SHA-256 verifiedBootHash")
+
+
+def _parse_android_authorization_list(
+    value: bytes,
+    *,
+    hardware: bool,
+) -> tuple[list[tuple[set[str], set[bytes]]], int]:
+    reader = _StrictDerReader(value)
+    applications: list[tuple[set[str], set[bytes]]] = []
+    roots = 0
+    seen_tags: set[int] = set()
+    while reader.remaining():
+        tag_class, _, tag, entry, _ = reader.read()
+        if tag_class != 2:
+            raise ValueError("Android authorization entry must be context-specific")
+        if tag in seen_tags:
+            raise ValueError(f"Android authorization list repeats tag {tag}")
+        seen_tags.add(tag)
+        if tag == ANDROID_TAG_ALL_APPLICATIONS:
+            raise ValueError("Android attestation must not authorize all applications")
+        if tag == ANDROID_TAG_ATTESTATION_APPLICATION_ID:
+            applications.append(_parse_attestation_application_id(entry))
+        elif tag == ANDROID_TAG_ROOT_OF_TRUST:
+            if not hardware:
+                raise ValueError("rootOfTrust must be hardware-enforced")
+            _parse_android_root_of_trust(entry)
+            roots += 1
+    return applications, roots
+
+
+def _parse_android_key_description(
+    extension: bytes,
+    *,
+    expected_challenge: bytes,
+    expected_package: str,
+    expected_signing_digest: bytes,
+) -> None:
+    wrapper = _StrictDerReader(extension)
+    sequence = wrapper.expect(0, True, 16, "Android KeyDescription")
+    wrapper.finish("Android KeyDescription")
+    reader = _StrictDerReader(sequence)
+    attestation_version = _der_unsigned_integer(
+        reader.expect(0, False, 2, "attestationVersion"), "attestationVersion"
+    )
+    attestation_level = _der_unsigned_integer(
+        reader.expect(0, False, 10, "attestationSecurityLevel"),
+        "attestationSecurityLevel",
+    )
+    keymint_version = _der_unsigned_integer(
+        reader.expect(0, False, 2, "keyMintVersion"), "keyMintVersion"
+    )
+    keymint_level = _der_unsigned_integer(
+        reader.expect(0, False, 10, "keyMintSecurityLevel"),
+        "keyMintSecurityLevel",
+    )
+    challenge = reader.expect(0, False, 4, "attestationChallenge")
+    reader.expect(0, False, 4, "uniqueId")
+    software = reader.expect(0, True, 16, "softwareEnforced")
+    hardware = reader.expect(0, True, 16, "hardwareEnforced")
+    reader.finish("Android KeyDescription")
+    if attestation_version <= 0 or keymint_version <= 0:
+        raise ValueError("Android attestation and KeyMint versions must be positive")
+    if (
+        attestation_level != ANDROID_SECURITY_LEVEL_STRONGBOX
+        or keymint_level != ANDROID_SECURITY_LEVEL_STRONGBOX
+    ):
+        raise ValueError(
+            "Android attestationSecurityLevel and keyMintSecurityLevel must both be StrongBox(2)"
+        )
+    if len(challenge) != 32 or challenge != expected_challenge:
+        raise ValueError("leaf Android attestation challenge is not the exact candidate challenge")
+
+    app_ids: list[tuple[set[str], set[bytes]]] = []
+    root_count = 0
+    parsed_apps, parsed_roots = _parse_android_authorization_list(
+        software, hardware=False
+    )
+    app_ids.extend(parsed_apps)
+    root_count += parsed_roots
+    parsed_apps, parsed_roots = _parse_android_authorization_list(
+        hardware, hardware=True
+    )
+    app_ids.extend(parsed_apps)
+    root_count += parsed_roots
+    if len(app_ids) != 1:
+        raise ValueError("Android attestation must contain exactly one attestationApplicationId")
+    packages, digests = app_ids[0]
+    if packages != {expected_package}:
+        raise ValueError("attestationApplicationId does not bind exactly the wallet package")
+    if digests != {expected_signing_digest}:
+        raise ValueError(
+            "attestationApplicationId does not bind exactly the production wallet signing digest"
+        )
+    if root_count != 1:
+        raise ValueError("Android attestation must contain exactly one hardware rootOfTrust")
+
+
+def _certificate_pem(certificate: bytes) -> bytes:
+    encoded = base64.b64encode(certificate)
+    lines = [encoded[index : index + 64] for index in range(0, len(encoded), 64)]
+    return b"-----BEGIN CERTIFICATE-----\n" + b"\n".join(lines) + (
+        b"\n-----END CERTIFICATE-----\n"
+    )
+
+
+def _run_pinned_openssl(arguments: list[str]) -> subprocess.CompletedProcess[bytes]:
+    openssl, openssl_sha256 = _configured_authority_tool("openssl")
+    checked, _, errors = _read_pinned_authority_file(
+        openssl,
+        openssl_sha256,
+        label="configured openssl",
+        maximum_bytes=MAX_AUTHORITY_TOOL_BYTES,
+        executable=True,
+    )
+    if checked is None or errors:
+        raise ValueError("configured openssl no longer matches its authority pin")
+    completed = subprocess.run(
+        [os.fspath(openssl), *arguments],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=_openssl_child_env(),
+        check=False,
+    )
+    checked, _, errors = _read_pinned_authority_file(
+        openssl,
+        openssl_sha256,
+        label="configured openssl",
+        maximum_bytes=MAX_AUTHORITY_TOOL_BYTES,
+        executable=True,
+    )
+    if checked is None or errors:
+        raise ValueError("configured openssl changed during verification")
+    return completed
+
+
+def _decode_single_trust_root(path: Path, payload: bytes) -> bytes:
+    if path.suffix.lower() == ".der":
+        certificates = _split_der_certificate_chain(payload)
+    elif path.suffix.lower() == ".pem":
+        pattern = re.compile(
+            rb"^\s*-----BEGIN CERTIFICATE-----\r?\n([A-Za-z0-9+/=\r\n]+)"
+            rb"-----END CERTIFICATE-----\s*$"
+        )
+        match = pattern.fullmatch(payload)
+        if match is None:
+            raise ValueError("Android attestation trust root PEM is malformed")
+        try:
+            certificate = base64.b64decode(
+                re.sub(rb"\s+", b"", match.group(1)), validate=True
+            )
+        except ValueError as error:
+            raise ValueError("Android attestation trust root PEM is malformed") from error
+        certificates = _split_der_certificate_chain(certificate)
+    else:
+        raise ValueError("Android attestation trust root must end in .der or .pem")
+    if len(certificates) != 1:
+        raise ValueError("each Android attestation trust root must contain one certificate")
+    return certificates[0]
+
+
+def _validate_android_attestation_certificate_chain(
+    relative: str,
+    payload: bytes,
+    metadata: Mapping[str, Any],
+    errors: list[str],
+) -> int | None:
+    """Cryptographically validate and independently project Android attestation."""
+
+    authority = _ANDROID_EVIDENCE_AUTHORITY
+    if authority is None:
+        errors.append("digest-pinned Android attestation authority inputs are required")
+        return None
+    try:
+        certificates = _decode_attestation_certificate_chain(relative, payload)
+        roots = [
+            _decode_single_trust_root(record["path"], record["bytes"])
+            for record in authority["attestation_trust_roots"]
+        ]
+        root_by_digest = {
+            hashlib.sha256(root).hexdigest(): root for root in roots
+        }
+        if len(root_by_digest) != len(roots):
+            raise ValueError("Android attestation trust roots contain duplicates")
+        if hashlib.sha256(certificates[-1]).hexdigest() not in root_by_digest:
+            raise ValueError("attestation chain is not terminated by an explicit trusted root")
+
+        expected_challenge = derive_kagemusha_strongbox_challenge_v1(metadata)
+        expected_package = metadata.get("app_package_name")
+        expected_signer = metadata.get("app_signing_certificate_sha256")
+        if expected_package != KAGEMUSHA_WALLET_PACKAGE_NAME:
+            raise ValueError("slot app_package_name is not the production wallet package")
+        if not isinstance(expected_signer, str) or SHA256_HEX_RE.fullmatch(
+            expected_signer
+        ) is None:
+            raise ValueError("slot wallet signing-certificate digest is invalid")
+        serials: list[str] = []
+        serial, extension = _x509_certificate_serial_and_attestation_extension(
+            certificates[0]
+        )
+        serials.append(serial)
+        _parse_android_key_description(
+            extension,
+            expected_challenge=expected_challenge,
+            expected_package=expected_package,
+            expected_signing_digest=bytes.fromhex(expected_signer),
+        )
+        for certificate in certificates[1:]:
+            serials.append(_x509_certificate_serial(certificate))
+
+        entries = authority["attestation_revocation_status"]["payload"]["entries"]
+        for serial_number in serials[:-1]:
+            if serial_number in entries:
+                raise ValueError(
+                    "Android attestation certificate serial is present in the authenticated revocation status"
+                )
+
+        with tempfile.TemporaryDirectory(prefix="iroha-android-attestation-") as temp:
+            temp_path = Path(temp)
+            os.chmod(temp_path, 0o700)
+            paths: list[Path] = []
+            for index, certificate in enumerate(certificates):
+                certificate_path = temp_path / f"chain-{index}.pem"
+                certificate_path.write_bytes(_certificate_pem(certificate))
+                certificate_path.chmod(0o600)
+                paths.append(certificate_path)
+            roots_path = temp_path / "trusted-roots.pem"
+            roots_path.write_bytes(b"".join(_certificate_pem(root) for root in roots))
+            roots_path.chmod(0o600)
+            intermediates_path = temp_path / "intermediates.pem"
+            intermediates_path.write_bytes(
+                b"".join(_certificate_pem(cert) for cert in certificates[1:-1])
+            )
+            intermediates_path.chmod(0o600)
+
+            for index in range(len(paths) - 1):
+                completed = _run_pinned_openssl(
+                    [
+                        "verify",
+                        "-x509_strict",
+                        "-purpose",
+                        "any",
+                        "-partial_chain",
+                        "-CAfile",
+                        os.fspath(paths[index + 1]),
+                        os.fspath(paths[index]),
+                    ]
+                )
+                if completed.returncode != 0:
+                    raise ValueError(
+                        f"attestation certificate {index} signature/path verification failed"
+                    )
+            full_arguments = [
+                "verify",
+                "-x509_strict",
+                "-purpose",
+                "any",
+                "-CAfile",
+                os.fspath(roots_path),
+            ]
+            if len(certificates) > 2:
+                full_arguments.extend(
+                    ["-untrusted", os.fspath(intermediates_path)]
+                )
+            full_arguments.append(os.fspath(paths[0]))
+            completed = _run_pinned_openssl(full_arguments)
+            if completed.returncode != 0:
+                raise ValueError("Android attestation PKIX path validation failed")
+    except (OSError, ValueError) as error:
+        errors.append(f"Android StrongBox certificate-chain validation failed: {error}")
+        return None
+    return len(certificates)
+
+
 def _canonical_signed_evidence_payload(evidence: dict[str, Any]) -> bytes:
     payload = {
         key: value
@@ -3661,20 +5357,35 @@ def _parse_hex_bytes(
 
 
 def _require_openssl(errors: list[str]) -> str | None:
-    openssl = shutil.which("openssl")
-    if openssl is None:
-        errors.append("openssl is required to verify Kagemusha signed evidence artifacts")
+    try:
+        openssl, openssl_sha256 = _configured_authority_tool("openssl")
+    except ValueError:
+        errors.append(
+            "digest-pinned openssl is required to verify Kagemusha evidence artifacts"
+        )
         return None
-    return openssl
+    checked, _, tool_errors = _read_pinned_authority_file(
+        openssl,
+        openssl_sha256,
+        label="configured openssl",
+        maximum_bytes=MAX_AUTHORITY_TOOL_BYTES,
+        executable=True,
+    )
+    if checked is None or tool_errors:
+        errors.append("configured openssl no longer matches its authority pin")
+        return None
+    return os.fspath(openssl)
 
 
 def _openssl_child_env() -> dict[str, str]:
     """Return an OpenSSL child environment without operator config overrides."""
 
-    env = os.environ.copy()
-    for key in FORBIDDEN_OPENSSL_CHILD_ENV_KEYS:
-        env.pop(key, None)
-    return env
+    return {
+        "HOME": "/var/empty",
+        "LANG": "C",
+        "LC_ALL": "C",
+        "PATH": "/usr/bin",
+    }
 
 
 def _openssl_public_key_der(
@@ -3695,13 +5406,9 @@ def _openssl_public_key_der(
     if any(marker in public_key_bytes for marker in PRIVATE_KEY_PEM_MARKERS):
         errors.append(f"{label} must contain public key material, not a private key")
         return None
-    openssl = _require_openssl(errors)
-    if openssl is None:
-        return None
     try:
-        completed = subprocess.run(
+        completed = _run_pinned_openssl(
             [
-                openssl,
                 "pkey",
                 "-pubin",
                 "-in",
@@ -3709,17 +5416,13 @@ def _openssl_public_key_der(
                 "-pubout",
                 "-outform",
                 "DER",
-            ],
-            check=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            env=_openssl_child_env(),
+            ]
         )
-    except subprocess.CalledProcessError:
-        errors.append(f"{label} must be a valid OpenSSL public key")
-        return None
-    except OSError:
+    except (OSError, ValueError):
         errors.append(f"{label} OpenSSL public key command could not be run")
+        return None
+    if completed.returncode != 0:
+        errors.append(f"{label} must be a valid OpenSSL public key")
         return None
     return completed.stdout
 
@@ -4043,9 +5746,6 @@ def _verify_ed25519_signature(
 ) -> None:
     if not _validate_public_key_path_shape(public_key_path, errors=errors, label=label):
         return
-    openssl = _require_openssl(errors)
-    if openssl is None:
-        return
     try:
         with tempfile.TemporaryDirectory(prefix="iroha-kagemusha-evidence-") as temp:
             temp_path = Path(temp)
@@ -4070,9 +5770,8 @@ def _verify_ed25519_signature(
                 errors.extend(stage_errors)
                 return
             try:
-                completed = subprocess.run(
+                completed = _run_pinned_openssl(
                     [
-                        openssl,
                         "pkeyutl",
                         "-verify",
                         "-pubin",
@@ -4083,12 +5782,9 @@ def _verify_ed25519_signature(
                         str(payload_path),
                         "-sigfile",
                         str(signature_path),
-                    ],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    env=_openssl_child_env(),
+                    ]
                 )
-            except OSError:
+            except (OSError, ValueError):
                 errors.append("signature verification command could not be run")
                 return
     except OSError:
@@ -4117,7 +5813,7 @@ def _validate_signed_at_utc(value: str | None, errors: list[str]) -> None:
 
 
 def _is_required_signed_evidence_digest_path(relative: str) -> bool:
-    for root in (*EXPECTED_DIRS, "handoff", "wallet"):
+    for root in (*EXPECTED_DIRS, "handoff", "wallet", "scenario"):
         if _safe_relative_path_is_child_of(relative, root):
             return True
     return (
@@ -4458,6 +6154,796 @@ def _validate_required_runtime_log_artifact(slot_path: Path, errors: list[str]) 
             errors.append(f"logs/runtime.log must not contain failure marker {marker}")
 
 
+def _candidate_binding_string(
+    binding: dict[str, Any], key: str, errors: list[str]
+) -> str | None:
+    value = binding.get(key)
+    if (
+        not isinstance(value, str)
+        or not value
+        or value != value.strip()
+        or _contains_control_character(value)
+        or SECRET_RE.search(value)
+    ):
+        errors.append(f"candidate binding {key} must be canonical non-empty text")
+        return None
+    return value
+
+
+def _candidate_binding_sha256(
+    binding: dict[str, Any], key: str, errors: list[str]
+) -> str | None:
+    value = binding.get(key)
+    if (
+        not isinstance(value, str)
+        or SHA256_HEX_RE.fullmatch(value) is None
+        or value == "0" * 64
+    ):
+        errors.append(f"candidate binding {key} must be non-zero lowercase sha256 hex")
+        return None
+    return value
+
+
+def _candidate_binding_path(
+    binding: dict[str, Any], key: str, errors: list[str]
+) -> str | None:
+    value = _candidate_binding_string(binding, key, errors)
+    if value is None:
+        return None
+    relative = _normalise_safe_relative_path(value, errors, f"candidate binding {key}")
+    if relative is None:
+        return None
+    if not _safe_relative_path_is_child_of(relative, "evidence"):
+        errors.append(f"candidate binding {key} must stay under evidence/")
+        return None
+    return relative
+
+
+def _candidate_artifact_measurement(
+    slot_path: Path, relative: str, errors: list[str]
+) -> dict[str, int | str] | None:
+    """Measure one KRV4 frame without trusting metadata-supplied offsets."""
+
+    artifact_path, artifact_stat, path_errors = (
+        _validate_signed_evidence_artifact_for_digest(slot_path, relative)
+    )
+    if path_errors:
+        errors.extend(path_errors)
+        return None
+    assert artifact_path is not None and artifact_stat is not None
+    if artifact_stat.st_size > MAX_KAGEMUSHA_KRV4_ARTIFACT_BYTES:
+        errors.append(f"candidate artifact {_display_path(relative)} exceeds the KRV4 bound")
+        return None
+    framed = hashlib.sha256()
+    payload = hashlib.sha256()
+    payload_size = 0
+    expected_identity = (artifact_stat.st_dev, artifact_stat.st_ino)
+    try:
+        with artifact_path.open("rb") as handle:
+            open_stat = os.fstat(handle.fileno())
+            if (open_stat.st_dev, open_stat.st_ino) != expected_identity:
+                errors.append(
+                    f"candidate artifact {_display_path(relative)} changed while being opened"
+                )
+                return None
+            prefix = handle.read(12)
+            if len(prefix) != 12 or prefix[:8] != b"KRV4KEY\0":
+                errors.append(
+                    f"candidate artifact {_display_path(relative)} has invalid KRV4 framing"
+                )
+                return None
+            header_len = int.from_bytes(prefix[8:12], "little")
+            if header_len == 0 or header_len > MAX_KAGEMUSHA_KRV4_HEADER_BYTES:
+                errors.append(
+                    f"candidate artifact {_display_path(relative)} has invalid KRV4 header length"
+                )
+                return None
+            header = handle.read(header_len)
+            if len(header) != header_len:
+                errors.append(
+                    f"candidate artifact {_display_path(relative)} has a truncated KRV4 header"
+                )
+                return None
+            framed.update(prefix)
+            framed.update(header)
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                payload_size += len(chunk)
+                if payload_size > MAX_KAGEMUSHA_KRV4_ARTIFACT_BYTES:
+                    errors.append(
+                        f"candidate artifact {_display_path(relative)} exceeds the KRV4 payload bound"
+                    )
+                    return None
+                framed.update(chunk)
+                payload.update(chunk)
+            if payload_size == 0:
+                errors.append(
+                    f"candidate artifact {_display_path(relative)} has an empty KRV4 payload"
+                )
+                return None
+            final_stat = artifact_path.lstat()
+            if (final_stat.st_dev, final_stat.st_ino) != expected_identity:
+                errors.append(
+                    f"candidate artifact {_display_path(relative)} changed while being read"
+                )
+                return None
+    except OSError:
+        errors.append(f"candidate artifact {_display_path(relative)} could not be read")
+        return None
+    return {
+        "framed_size_bytes": int(artifact_stat.st_size),
+        "framed_sha256": framed.hexdigest(),
+        "payload_size_bytes": payload_size,
+        "payload_sha256": payload.hexdigest(),
+    }
+
+
+def _candidate_inventory_sha256(inventory: list[dict[str, Any]]) -> str:
+    digest = hashlib.sha256()
+    for entry in inventory:
+        digest.update(str(entry["role"]).encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(str(entry["framed_size_bytes"]).encode("ascii"))
+        digest.update(b"\0")
+        digest.update(str(entry["framed_sha256"]).encode("ascii"))
+        digest.update(b"\0")
+        digest.update(str(entry["payload_size_bytes"]).encode("ascii"))
+        digest.update(b"\0")
+        digest.update(str(entry["payload_sha256"]).encode("ascii"))
+        digest.update(b"\n")
+    return digest.hexdigest()
+
+
+def _validate_candidate_causal_events_v1(value: Any, errors: list[str]) -> None:
+    if not isinstance(value, list) or len(value) != len(
+        KAGEMUSHA_CANDIDATE_CAUSAL_OPERATIONS_V1
+    ):
+        errors.append("candidate lifecycle causal_events must contain exactly 28 events")
+        return
+    null_output_operations = {
+        "candidate_install",
+        "candidate_reinstall_after_process_restart",
+        "restore_init_result_after_restart",
+        "restore_hop_01_result_after_restart",
+        "restore_hop_02_result_after_restart",
+    }
+    expected_input_counts = (
+        0, 5, 1, 8, 2, 8, 2, 0, 1, 1, 1, 4, 4, 4, 4, 4,
+        3, 1, 3, 1, 7, 3, 8, 1, 8, 1, 8, 1,
+    )
+    for sequence, (event, operation, input_count) in enumerate(
+        zip(value, KAGEMUSHA_CANDIDATE_CAUSAL_OPERATIONS_V1, expected_input_counts)
+    ):
+        label = f"candidate lifecycle causal_events[{sequence}]"
+        if not isinstance(event, dict):
+            errors.append(f"{label} must be an object")
+            continue
+        if set(event) != KAGEMUSHA_CANDIDATE_CAUSAL_EVENT_FIELDS_V1:
+            errors.append(f"{label} must have the exact V1 fields")
+        if event.get("sequence") != sequence or isinstance(event.get("sequence"), bool):
+            errors.append(f"{label} sequence must be {sequence}")
+        expected_phase = "phase_1" if sequence < 7 else "phase_2"
+        if event.get("phase") != expected_phase:
+            errors.append(f"{label} phase must be {expected_phase}")
+        if event.get("operation") != operation:
+            errors.append(f"{label} operation must be {operation}")
+        duration = event.get("duration_nanos")
+        if isinstance(duration, bool) or not isinstance(duration, int) or duration <= 0:
+            errors.append(f"{label} duration_nanos must be a positive integer")
+        input_digests = event.get("input_sha256")
+        if not isinstance(input_digests, list) or len(input_digests) != input_count:
+            errors.append(f"{label} input_sha256 must contain exactly {input_count} digests")
+        else:
+            for digest in input_digests:
+                if (
+                    not isinstance(digest, str)
+                    or SHA256_HEX_RE.fullmatch(digest) is None
+                    or digest == "0" * 64
+                ):
+                    errors.append(f"{label} input_sha256 contains an invalid digest")
+                    break
+        output_digest = event.get("output_sha256")
+        output_size = event.get("output_size_bytes")
+        if operation == "duplicate_input_rejection":
+            if event.get("outcome") != "rejected":
+                errors.append(f"{label} outcome must be rejected")
+            if output_digest is not None or output_size != 0:
+                errors.append(f"{label} must not claim rejected output bytes")
+            if event.get("rejection_classification") != "duplicate_input_bundle":
+                errors.append(f"{label} rejection_classification must be duplicate_input_bundle")
+            if event.get("exception_class") != "java.lang.IllegalArgumentException":
+                errors.append(f"{label} exception_class must be java.lang.IllegalArgumentException")
+            error_digest = event.get("error_message_sha256")
+            if (
+                not isinstance(error_digest, str)
+                or SHA256_HEX_RE.fullmatch(error_digest) is None
+                or error_digest == "0" * 64
+            ):
+                errors.append(f"{label} error_message_sha256 must be non-zero lowercase SHA-256")
+            continue
+        if event.get("outcome") != "succeeded":
+            errors.append(f"{label} outcome must be succeeded")
+        for key in ("rejection_classification", "exception_class", "error_message_sha256"):
+            if event.get(key) is not None:
+                errors.append(f"{label} {key} must be null for success")
+        if operation in null_output_operations:
+            if output_digest is not None or output_size != 0:
+                errors.append(f"{label} must have null output and zero output size")
+        else:
+            if (
+                not isinstance(output_digest, str)
+                or SHA256_HEX_RE.fullmatch(output_digest) is None
+                or output_digest == "0" * 64
+            ):
+                errors.append(f"{label} output_sha256 must be non-zero lowercase SHA-256")
+            if isinstance(output_size, bool) or not isinstance(output_size, int) or output_size <= 0:
+                errors.append(f"{label} output_size_bytes must be a positive integer")
+
+    if not all(isinstance(event, dict) for event in value):
+        return
+
+    def event_input(event_index: int, input_index: int) -> str | None:
+        inputs = value[event_index].get("input_sha256")
+        if not isinstance(inputs, list) or input_index >= len(inputs):
+            return None
+        digest = inputs[input_index]
+        return digest if isinstance(digest, str) else None
+
+    def event_output(event_index: int) -> str | None:
+        digest = value[event_index].get("output_sha256")
+        return digest if isinstance(digest, str) else None
+
+    output_links = (
+        (1, 2, 0, "init request must feed init"),
+        (3, 4, 0, "first append request must feed first append"),
+        (5, 6, 0, "second append request must feed second append"),
+        (2, 8, 0, "persisted init result must be restored exactly"),
+        (4, 9, 0, "persisted first append result must be restored exactly"),
+        (6, 10, 0, "persisted second append result must be restored exactly"),
+        (16, 17, 0, "first verify request must feed first verify"),
+        (18, 19, 0, "multi-hop verify request must feed multi-hop verify"),
+        (20, 21, 0, "observed duplicate request must feed duplicate rejection"),
+        (22, 23, 0, "first redemption request must feed first redemption"),
+        (24, 25, 0, "second redemption request must feed second redemption"),
+        (26, 27, 0, "sender-change redemption request must feed redemption"),
+    )
+    for output_event, input_event, input_index, description in output_links:
+        output_digest = event_output(output_event)
+        input_digest = event_input(input_event, input_index)
+        if output_digest is not None and input_digest is not None and output_digest != input_digest:
+            errors.append(f"candidate lifecycle causal linkage failed: {description}")
+
+    # (source event, source input, consumer event, consumer input, semantic label)
+    input_links = (
+        # Restored init branch projected into the exact first append and restart validation.
+        (3, 0, 11, 0, "init bundle projection"),
+        (3, 1, 11, 1, "init provenance projection"),
+        (3, 3, 11, 2, "init membership projection"),
+        (3, 2, 11, 3, "init opening projection"),
+        # Restored hop-one change projected into the exact second append and validation.
+        (5, 0, 12, 0, "hop-one change bundle projection"),
+        (5, 1, 12, 1, "hop-one change provenance projection"),
+        (5, 3, 12, 2, "hop-one change membership projection"),
+        (5, 2, 12, 3, "hop-one change opening projection"),
+        # First recipient branch and original recipient request feed verification.
+        (13, 0, 16, 0, "first recipient verify bundle"),
+        (13, 1, 16, 2, "first recipient verify provenance"),
+        (4, 1, 16, 1, "first recipient request projection"),
+        # Second recipient branch and original recipient request feed verification.
+        (14, 0, 18, 0, "multi-hop recipient verify bundle"),
+        (14, 1, 18, 2, "multi-hop recipient verify provenance"),
+        (6, 1, 18, 1, "multi-hop recipient request projection"),
+        # The duplicate request must be built from the exact observed first-recipient branch.
+        (13, 0, 20, 0, "duplicate observed bundle"),
+        (13, 1, 20, 1, "duplicate observed provenance"),
+        (13, 3, 20, 2, "duplicate observed opening"),
+        (13, 2, 20, 3, "duplicate observed membership"),
+        (13, 0, 21, 2, "duplicate rejection source bundle"),
+        # Each redemption builder must project the exact validated branch.
+        (13, 0, 22, 0, "first redemption bundle"),
+        (13, 1, 22, 1, "first redemption provenance"),
+        (13, 3, 22, 2, "first redemption opening"),
+        (13, 2, 22, 3, "first redemption membership"),
+        (14, 0, 24, 0, "second redemption bundle"),
+        (14, 1, 24, 1, "second redemption provenance"),
+        (14, 3, 24, 2, "second redemption opening"),
+        (14, 2, 24, 3, "second redemption membership"),
+        (15, 0, 26, 0, "sender-change redemption bundle"),
+        (15, 1, 26, 1, "sender-change redemption provenance"),
+        (15, 3, 26, 2, "sender-change redemption opening"),
+        (15, 2, 26, 3, "sender-change redemption membership"),
+        # Common redemption recipient and verifier commitment are exact assets.
+        (22, 4, 24, 4, "common redemption recipient"),
+        (22, 4, 26, 4, "common sender-change redemption recipient"),
+        (22, 6, 24, 6, "common redemption verifier commitment"),
+        (22, 6, 26, 6, "common sender-change verifier commitment"),
+    )
+    for source_event, source_input, target_event, target_input, description in input_links:
+        source_digest = event_input(source_event, source_input)
+        target_digest = event_input(target_event, target_input)
+        if source_digest is not None and target_digest is not None and source_digest != target_digest:
+            errors.append(f"candidate lifecycle causal linkage failed: {description}")
+
+
+def _validate_candidate_lifecycle_transcript_v2(
+    slot_path: Path,
+    relative: str,
+    expected_sha256: str,
+    binding: dict[str, Any],
+    metadata: dict[str, Any],
+    errors: list[str],
+) -> None:
+    actual_sha256, digest_errors = _signed_evidence_artifact_sha256(slot_path, relative)
+    if digest_errors:
+        errors.extend(digest_errors)
+        return
+    if actual_sha256 != expected_sha256:
+        errors.append("candidate lifecycle transcript digest does not match its file")
+        return
+    transcript = _load_json(
+        slot_path / relative, "candidate lifecycle transcript", errors
+    )
+    if transcript is None:
+        return
+    for field in sorted(set(transcript) - KAGEMUSHA_CANDIDATE_LIFECYCLE_FIELDS_V2):
+        errors.append(
+            f"candidate lifecycle transcript contains unexpected field {_display_path(field)}"
+        )
+    for field in sorted(KAGEMUSHA_CANDIDATE_LIFECYCLE_FIELDS_V2 - set(transcript)):
+        errors.append(
+            f"candidate lifecycle transcript is missing field {_display_path(field)}"
+        )
+    if transcript.get("schema") != KAGEMUSHA_CANDIDATE_LIFECYCLE_SCHEMA_V2:
+        errors.append(
+            "candidate lifecycle transcript schema must be "
+            f"{KAGEMUSHA_CANDIDATE_LIFECYCLE_SCHEMA_V2}"
+        )
+    expected_bindings = {
+        "slot_id": metadata.get("slot_id"),
+        "candidate_record_sha256": binding.get("candidate_record_sha256"),
+        "candidate_manifest_sha256": binding.get("candidate_manifest_sha256"),
+        "candidate_stage_manifest_path": binding.get("candidate_stage_manifest_path"),
+        "candidate_stage_manifest_sha256": binding.get(
+            "candidate_stage_manifest_sha256"
+        ),
+        "candidate_inventory_sha256": binding.get("native_accepted_inventory_sha256"),
+        "source_commit": binding.get("source_commit"),
+        "source_tree_sha256": binding.get("source_tree_sha256"),
+        "source_repo_dirty": False,
+        "generation": binding.get("generation"),
+        "bridge_abi_version": REQUIRED_KAGEMUSHA_NATIVE_BRIDGE_ABI_VERSION,
+        "production_capability_observed": False,
+        "attestation_challenge_sha256": metadata.get("attestation_challenge_sha256"),
+        "attestation_certificate_chain_sha256": metadata.get(
+            "attestation_certificate_chain_sha256"
+        ),
+        "app_signing_certificate_sha256": metadata.get(
+            "app_signing_certificate_sha256"
+        ),
+        "strongbox_attestation": True,
+        "physical_device_attestation": True,
+    }
+    for key, expected in expected_bindings.items():
+        if transcript.get(key) != expected:
+            errors.append(
+                f"candidate lifecycle transcript {key} must match the accepted candidate binding"
+            )
+    atomic_values: dict[str, int] = {}
+    for key in (
+        "initial_atomic",
+        "first_recipient_atomic",
+        "second_recipient_atomic",
+        "sender_change_atomic",
+        "redeemed_atomic",
+        "final_unspent_atomic",
+    ):
+        value = transcript.get(key)
+        if not isinstance(value, str) or re.fullmatch(r"(?:0|[1-9][0-9]*)", value) is None:
+            errors.append(f"candidate lifecycle transcript {key} must be canonical decimal atomic units")
+            continue
+        atomic_values[key] = int(value)
+    if len(atomic_values) == 6:
+        if atomic_values["initial_atomic"] <= 0:
+            errors.append("candidate lifecycle transcript initial_atomic must be positive")
+        if (
+            atomic_values["first_recipient_atomic"]
+            + atomic_values["second_recipient_atomic"]
+            + atomic_values["sender_change_atomic"]
+            != atomic_values["initial_atomic"]
+        ):
+            errors.append("candidate lifecycle transcript does not conserve exact atomic value")
+        if atomic_values["redeemed_atomic"] != atomic_values["initial_atomic"]:
+            errors.append("candidate lifecycle transcript must redeem the complete initial value")
+        if atomic_values["final_unspent_atomic"] != 0:
+            errors.append("candidate lifecycle transcript must finish with zero unspent atomic value")
+    hops = transcript.get("proof_hops")
+    if isinstance(hops, bool) or not isinstance(hops, int) or not 2 <= hops <= 8:
+        errors.append("candidate lifecycle transcript proof_hops must be an integer from 2 through 8")
+    for key in (
+        "init_proof_verified",
+        "first_spend_verified",
+        "multi_hop_proof_verified",
+        "independent_branch_redemption_verified",
+        "duplicate_rejected",
+        "restart_recovered",
+    ):
+        if transcript.get(key) is not True:
+            errors.append(f"candidate lifecycle transcript {key} must be true")
+    network_requests = transcript.get("network_requests_during_peer_transfers")
+    if isinstance(network_requests, bool) or network_requests != 0:
+        errors.append(
+            "candidate lifecycle transcript network_requests_during_peer_transfers must be zero"
+        )
+    _validate_candidate_causal_events_v1(transcript.get("causal_events"), errors)
+
+
+def validate_candidate_binding_v2(
+    slot_path: Path,
+    metadata: dict[str, Any],
+    errors: list[str],
+) -> dict[str, Any]:
+    """Authenticate exact candidate, binary, inventory, and lifecycle file bindings."""
+
+    details: dict[str, Any] = {}
+    binding_relative = metadata.get("candidate_binding_path")
+    if binding_relative != KAGEMUSHA_CANDIDATE_BINDING_ARTIFACT_PATH:
+        errors.append(
+            "slot.json candidate_binding_path must be "
+            f"{KAGEMUSHA_CANDIDATE_BINDING_ARTIFACT_PATH}"
+        )
+        return details
+    binding_sha256 = metadata.get("candidate_binding_sha256")
+    if (
+        not isinstance(binding_sha256, str)
+        or SHA256_HEX_RE.fullmatch(binding_sha256) is None
+        or binding_sha256 == "0" * 64
+    ):
+        errors.append("slot.json candidate_binding_sha256 must be non-zero lowercase sha256 hex")
+        return details
+    actual_binding_sha256, digest_errors = _signed_evidence_artifact_sha256(
+        slot_path, binding_relative
+    )
+    if digest_errors:
+        errors.extend(digest_errors)
+        return details
+    if actual_binding_sha256 != binding_sha256:
+        errors.append("slot.json candidate_binding_sha256 does not match candidate_binding_path")
+        return details
+    binding = _load_json(slot_path / binding_relative, "candidate binding", errors)
+    if binding is None:
+        return details
+    for field in sorted(set(binding) - KAGEMUSHA_CANDIDATE_BINDING_FIELDS_V2):
+        errors.append(f"candidate binding contains unexpected field {_display_path(field)}")
+    missing = sorted(KAGEMUSHA_CANDIDATE_BINDING_FIELDS_V2 - set(binding))
+    for field in missing:
+        errors.append(f"candidate binding is missing field {_display_path(field)}")
+    if binding.get("schema") != KAGEMUSHA_CANDIDATE_BINDING_SCHEMA_V2:
+        errors.append(f"candidate binding schema must be {KAGEMUSHA_CANDIDATE_BINDING_SCHEMA_V2}")
+
+    source_commit = _candidate_binding_string(binding, "source_commit", errors)
+    if source_commit is not None and (
+        re.fullmatch(r"[0-9a-f]{40}", source_commit) is None
+        or source_commit == "0" * 40
+    ):
+        errors.append("candidate binding source_commit must be non-zero lowercase 40-byte git hex")
+    generation = _candidate_binding_string(binding, "generation", errors)
+    if generation is not None and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", generation) is None:
+        errors.append("candidate binding generation must be a portable identifier")
+    digest_fields = (
+        "candidate_record_sha256",
+        "candidate_manifest_sha256",
+        "candidate_stage_manifest_sha256",
+        "source_tree_sha256",
+        "lab_native_library_sha256",
+        "lab_apk_sha256",
+        "lab_apk_signing_cert_sha256",
+        "lab_test_apk_sha256",
+        "lab_test_apk_signing_cert_sha256",
+        "native_accepted_candidate_record_sha256",
+        "native_accepted_candidate_manifest_sha256",
+        "native_accepted_source_tree_sha256",
+        "native_accepted_inventory_sha256",
+        "lifecycle_transcript_sha256",
+    )
+    for key in digest_fields:
+        _candidate_binding_sha256(binding, key, errors)
+    if binding.get("bridge_abi_version") != REQUIRED_KAGEMUSHA_NATIVE_BRIDGE_ABI_VERSION:
+        errors.append("candidate binding bridge_abi_version must be 20")
+    if binding.get("native_accepted_bridge_abi_version") != REQUIRED_KAGEMUSHA_NATIVE_BRIDGE_ABI_VERSION:
+        errors.append("candidate binding native_accepted_bridge_abi_version must be 20")
+    if binding.get("production_capability_observed") is not False:
+        errors.append("candidate binding production_capability_observed must be false")
+    if binding.get("source_repo_dirty") is not False:
+        errors.append("candidate binding source_repo_dirty must be false")
+    if binding.get("native_accepted_source_repo_dirty") is not False:
+        errors.append("candidate binding native_accepted_source_repo_dirty must be false")
+
+    equality_pairs = (
+        ("candidate_record_sha256", "native_accepted_candidate_record_sha256"),
+        ("candidate_manifest_sha256", "native_accepted_candidate_manifest_sha256"),
+        ("source_commit", "native_accepted_source_commit"),
+        ("source_tree_sha256", "native_accepted_source_tree_sha256"),
+        ("source_repo_dirty", "native_accepted_source_repo_dirty"),
+        ("generation", "native_accepted_generation"),
+        ("bridge_abi_version", "native_accepted_bridge_abi_version"),
+    )
+    for expected_key, accepted_key in equality_pairs:
+        if binding.get(expected_key) != binding.get(accepted_key):
+            errors.append(
+                f"candidate binding {accepted_key} must match {expected_key}"
+            )
+
+    metadata_bindings = {
+        "candidate_record_path": "candidate_record_path",
+        "candidate_record_sha256": "candidate_record_sha256",
+        "candidate_manifest_path": "candidate_manifest_path",
+        "candidate_manifest_sha256": "candidate_manifest_sha256",
+        "candidate_stage_manifest_path": "candidate_stage_manifest_path",
+        "candidate_stage_manifest_sha256": "candidate_stage_manifest_sha256",
+        "source_commit": "candidate_source_commit",
+        "source_tree_sha256": "candidate_source_tree_sha256",
+        "source_repo_dirty": "candidate_source_repo_dirty",
+        "generation": "candidate_generation",
+        "lab_native_library_path": "candidate_lab_native_library_path",
+        "lab_native_library_sha256": "candidate_lab_native_library_sha256",
+        "lab_apk_path": "candidate_lab_apk_path",
+        "lab_apk_sha256": "candidate_lab_apk_sha256",
+        "lab_apk_signing_cert_sha256": (
+            "candidate_lab_apk_signing_certificate_sha256"
+        ),
+        "lab_test_apk_path": "candidate_lab_test_apk_path",
+        "lab_test_apk_sha256": "candidate_lab_test_apk_sha256",
+        "lab_test_apk_signing_cert_sha256": (
+            "candidate_lab_test_apk_signing_certificate_sha256"
+        ),
+        "lifecycle_transcript_path": "candidate_lifecycle_transcript_path",
+        "lifecycle_transcript_sha256": "candidate_lifecycle_transcript_sha256",
+        "native_accepted_inventory_sha256": "candidate_inventory_sha256",
+        "production_capability_observed": "production_capability_observed",
+    }
+    for binding_key, metadata_key in metadata_bindings.items():
+        if binding.get(binding_key) != metadata.get(metadata_key):
+            errors.append(
+                f"candidate binding {binding_key} must match slot.json {metadata_key}"
+            )
+
+    file_bindings = (
+        ("candidate_record_path", "candidate_record_sha256", None),
+        ("candidate_manifest_path", "candidate_manifest_sha256", None),
+        ("lab_native_library_path", "lab_native_library_sha256", ".so"),
+        ("lab_apk_path", "lab_apk_sha256", ".apk"),
+        ("lab_test_apk_path", "lab_test_apk_sha256", ".apk"),
+    )
+    bound_paths = [binding.get(path_key) for path_key, _, _ in file_bindings]
+    if any(not isinstance(path, str) for path in bound_paths) or len(set(bound_paths)) != len(
+        bound_paths
+    ):
+        errors.append(
+            "candidate binding candidate, manifest, native library, main APK, and test APK paths must be distinct"
+        )
+    if binding.get("candidate_record_sha256") == binding.get("candidate_manifest_sha256"):
+        errors.append("candidate binding candidate and manifest digests must be distinct")
+    for path_key, digest_key, suffix in file_bindings:
+        relative = _candidate_binding_path(binding, path_key, errors)
+        expected_digest = binding.get(digest_key)
+        if relative is None or not isinstance(expected_digest, str):
+            continue
+        if suffix is not None and not relative.endswith(suffix):
+            errors.append(f"candidate binding {path_key} must end in {suffix}")
+            continue
+        actual_digest, file_errors = _signed_evidence_artifact_sha256(slot_path, relative)
+        if file_errors:
+            errors.extend(file_errors)
+        elif actual_digest != expected_digest:
+            errors.append(f"candidate binding {digest_key} does not match {path_key}")
+    if binding.get("lab_apk_path") == metadata.get("kagemusha_wallet_apk_path"):
+        errors.append("candidate lab APK path must be distinct from the wallet APK path")
+    if binding.get("lab_apk_sha256") == metadata.get("kagemusha_wallet_apk_sha256"):
+        errors.append("candidate lab APK digest must be distinct from the wallet APK digest")
+    if binding.get("lab_test_apk_sha256") == metadata.get("kagemusha_wallet_apk_sha256"):
+        errors.append("candidate lab test APK digest must be distinct from the wallet APK digest")
+    if binding.get("lab_apk_sha256") == binding.get("lab_test_apk_sha256"):
+        errors.append("candidate lab main and test APK digests must be distinct")
+    if binding.get("lab_apk_signing_cert_sha256") != binding.get(
+        "lab_test_apk_signing_cert_sha256"
+    ):
+        errors.append("candidate lab main and test APK signing certificates must match")
+    if binding.get("lab_apk_signing_cert_sha256") == metadata.get(
+        "app_signing_certificate_sha256"
+    ):
+        errors.append("candidate lab signer must be distinct from the attested wallet signer")
+
+    expected_main_apk = (
+        "evidence/kagemusha-candidate-evidence-lab-DO-NOT-SHIP-"
+        f"{binding.get('candidate_record_sha256')}-debug.apk"
+    )
+    expected_test_apk = (
+        "evidence/kagemusha-candidate-evidence-lab-DO-NOT-SHIP-"
+        f"{binding.get('candidate_record_sha256')}-debug-androidTest.apk"
+    )
+    if binding.get("lab_apk_path") != expected_main_apk:
+        errors.append("candidate binding lab_apk_path must use the exact marker-bearing name")
+    if binding.get("lab_test_apk_path") != expected_test_apk:
+        errors.append("candidate binding lab_test_apk_path must use the exact marker-bearing name")
+
+    for path_key, certificate_key in (
+        ("lab_apk_path", "lab_apk_signing_cert_sha256"),
+        ("lab_test_apk_path", "lab_test_apk_signing_cert_sha256"),
+    ):
+        relative = binding.get(path_key)
+        if not isinstance(relative, str):
+            continue
+        normalized = _normalise_safe_relative_path(
+            relative, errors, f"candidate binding {path_key}"
+        )
+        if normalized is None or not _safe_relative_path_is_child_of(
+            normalized, "evidence"
+        ):
+            continue
+        try:
+            measured_certificate = extract_apk_signing_certificate_sha256(
+                slot_path / normalized
+            )
+        except (OSError, ValueError) as error:
+            errors.append(f"candidate binding {path_key} signer is invalid: {error}")
+        else:
+            if measured_certificate != binding.get(certificate_key):
+                errors.append(
+                    f"candidate binding {certificate_key} does not match APK signer DER"
+                )
+
+    stage_path = binding.get("candidate_stage_manifest_path")
+    if stage_path != KAGEMUSHA_CANDIDATE_STAGE_MANIFEST_PATH_V1:
+        errors.append(
+            "candidate binding candidate_stage_manifest_path must be "
+            f"{KAGEMUSHA_CANDIDATE_STAGE_MANIFEST_PATH_V1}"
+        )
+    else:
+        try:
+            validate_kagemusha_candidate_stage_manifest_v1(
+                slot_path,
+                candidate_sha256=str(binding.get("candidate_record_sha256")),
+                stage_sha256=str(binding.get("candidate_stage_manifest_sha256")),
+                source_commit=str(binding.get("source_commit")),
+                source_tree_sha256=str(binding.get("source_tree_sha256")),
+            )
+        except (OSError, ValueError) as error:
+            errors.append(f"candidate stage manifest validation failed: {error}")
+
+    for key in (
+        "candidate_source_tree_sha256_before",
+        "candidate_source_tree_sha256_after",
+    ):
+        if metadata.get(key) != binding.get("source_tree_sha256"):
+            errors.append(f"slot.json {key} must equal the accepted source-tree seal")
+
+    raw_inventory = binding.get("artifact_inventory")
+    measured_inventory: list[dict[str, Any]] = []
+    if not isinstance(raw_inventory, list) or len(raw_inventory) != 8:
+        errors.append("candidate binding artifact_inventory must contain exactly eight entries")
+    else:
+        seen_paths: set[str] = {
+            path for path in bound_paths if isinstance(path, str)
+        }
+        for index, (entry, expected_role, expected_name) in enumerate(
+            zip(
+                raw_inventory,
+                KAGEMUSHA_CANDIDATE_ARTIFACT_ROLES_V4,
+                KAGEMUSHA_CANDIDATE_ARTIFACT_FILE_NAMES_V4,
+            )
+        ):
+            if not isinstance(entry, dict):
+                errors.append(f"candidate binding artifact_inventory[{index}] must be an object")
+                continue
+            for field in sorted(set(entry) - KAGEMUSHA_CANDIDATE_ARTIFACT_ENTRY_FIELDS_V2):
+                errors.append(
+                    f"candidate binding artifact_inventory[{index}] contains unexpected field {_display_path(field)}"
+                )
+            if set(entry) != KAGEMUSHA_CANDIDATE_ARTIFACT_ENTRY_FIELDS_V2:
+                errors.append(
+                    f"candidate binding artifact_inventory[{index}] must have the exact V2 fields"
+                )
+            if entry.get("role") != expected_role:
+                errors.append(
+                    f"candidate binding artifact_inventory[{index}] role must be {expected_role}"
+                )
+            relative = entry.get("path")
+            if not isinstance(relative, str):
+                errors.append(f"candidate binding artifact_inventory[{index}] path must be text")
+                continue
+            normalized = _normalise_safe_relative_path(
+                relative, errors, f"candidate binding artifact_inventory[{index}] path"
+            )
+            if (
+                normalized is None
+                or not _safe_relative_path_is_child_of(normalized, "evidence")
+                or PurePosixPath(normalized).name != expected_name
+            ):
+                errors.append(
+                    f"candidate binding artifact_inventory[{index}] path must bind {expected_name} under evidence/"
+                )
+                continue
+            if normalized in seen_paths:
+                errors.append("candidate binding artifact_inventory paths must be unique")
+                continue
+            seen_paths.add(normalized)
+            measured = _candidate_artifact_measurement(slot_path, normalized, errors)
+            if measured is None:
+                continue
+            for key in (
+                "framed_size_bytes",
+                "framed_sha256",
+                "payload_size_bytes",
+                "payload_sha256",
+            ):
+                if entry.get(key) != measured[key]:
+                    errors.append(
+                        f"candidate binding artifact_inventory[{index}] {key} does not match the KRV4 file"
+                    )
+            measured_inventory.append({"role": expected_role, **measured})
+    if len(measured_inventory) == 8:
+        inventory_sha256 = _candidate_inventory_sha256(measured_inventory)
+        if inventory_sha256 != binding.get("native_accepted_inventory_sha256"):
+            errors.append("candidate binding native_accepted_inventory_sha256 is not exact")
+        if inventory_sha256 != metadata.get("candidate_inventory_sha256"):
+            errors.append("slot.json candidate_inventory_sha256 is not exact")
+        details["candidate_inventory_sha256"] = inventory_sha256
+
+    lifecycle_relative = _candidate_binding_path(
+        binding, "lifecycle_transcript_path", errors
+    )
+    lifecycle_sha256 = binding.get("lifecycle_transcript_sha256")
+    if lifecycle_relative != KAGEMUSHA_CANDIDATE_LIFECYCLE_TRANSCRIPT_PATH:
+        errors.append(
+            "candidate binding lifecycle_transcript_path must be "
+            f"{KAGEMUSHA_CANDIDATE_LIFECYCLE_TRANSCRIPT_PATH}"
+        )
+    elif isinstance(lifecycle_sha256, str):
+        _validate_candidate_lifecycle_transcript_v2(
+            slot_path,
+            lifecycle_relative,
+            lifecycle_sha256,
+            binding,
+            metadata,
+            errors,
+        )
+
+    for field in (
+        "candidate_binding_path",
+        "candidate_record_path",
+        "candidate_record_sha256",
+        "candidate_manifest_path",
+        "candidate_manifest_sha256",
+        "candidate_stage_manifest_path",
+        "candidate_stage_manifest_sha256",
+        "candidate_source_commit",
+        "candidate_source_tree_sha256",
+        "candidate_source_tree_sha256_before",
+        "candidate_source_tree_sha256_after",
+        "candidate_generation",
+        "candidate_lab_native_library_path",
+        "candidate_lab_native_library_sha256",
+        "candidate_lab_apk_path",
+        "candidate_lab_apk_sha256",
+        "candidate_lab_apk_signing_certificate_sha256",
+        "candidate_lab_test_apk_path",
+        "candidate_lab_test_apk_sha256",
+        "candidate_lab_test_apk_signing_certificate_sha256",
+        "candidate_lifecycle_transcript_path",
+        "candidate_lifecycle_transcript_sha256",
+        "candidate_inventory_sha256",
+        "attestation_challenge_sha256",
+        "attestation_certificate_chain_sha256",
+        "app_signing_certificate_sha256",
+    ):
+        value = metadata.get(field)
+        if isinstance(value, str):
+            details[field] = value
+    details["candidate_binding_sha256"] = binding_sha256
+    details["production_capability_observed"] = False
+    details["candidate_source_repo_dirty"] = False
+    return details
+
+
 def validate_signed_evidence_artifact(
     slot_path: Path,
     artifact_path: Path,
@@ -4505,6 +6991,10 @@ def validate_signed_evidence_artifact(
             errors.append(f"signed evidence artifact {key} must match slot.json {key}")
     for key in SIGNED_EVIDENCE_SLOT_TRUE_FIELDS:
         _require_evidence_true(evidence, key, errors)
+        if metadata.get(key) is not None and evidence.get(key) != metadata.get(key):
+            errors.append(f"signed evidence artifact {key} must match slot.json {key}")
+    for key in SIGNED_EVIDENCE_SLOT_FALSE_FIELDS:
+        _require_evidence_false(evidence, key, errors)
         if metadata.get(key) is not None and evidence.get(key) != metadata.get(key):
             errors.append(f"signed evidence artifact {key} must match slot.json {key}")
     if (
@@ -4710,9 +7200,13 @@ def validate_kagemusha_production_metadata(
         return errors, details
 
     attestation_certificate_chain_bytes: bytes | None = None
+    attestation_certificate_count: int | None = None
     validate_slot_metadata_fields(metadata, errors)
-    if metadata.get("schema") != "iroha.android.device_lab.kagemusha.v1":
-        errors.append("slot.json schema must be iroha.android.device_lab.kagemusha.v1")
+    if metadata.get("schema") != KAGEMUSHA_SLOT_SCHEMA_V2:
+        errors.append(
+            "slot.json schema must be candidate-bound "
+            f"{KAGEMUSHA_SLOT_SCHEMA_V2}; V1 evidence is not production evidence"
+        )
     slot_id = _require_non_empty_string(metadata, "slot_id", errors)
     if slot_id is not None and slot_id != slot_path.name:
         errors.append("slot.json slot_id must match the slot directory name")
@@ -4785,6 +7279,14 @@ def validate_kagemusha_production_metadata(
                     chain_bytes,
                     errors,
                 )
+                attestation_certificate_count = (
+                    _validate_android_attestation_certificate_chain(
+                        chain_relative,
+                        chain_bytes,
+                        metadata,
+                        errors,
+                    )
+                )
                 if chain_digest is not None:
                     if actual_chain_digest != chain_digest:
                         errors.append(
@@ -4833,6 +7335,22 @@ def validate_kagemusha_production_metadata(
                 else:
                     details["kagemusha_wallet_apk_path"] = apk_relative
                     details["kagemusha_wallet_apk_sha256"] = apk_digest
+                try:
+                    wallet_signer = extract_apk_signing_certificate_sha256(
+                        slot_path / apk_relative
+                    )
+                except (OSError, ValueError) as error:
+                    errors.append(
+                        "production wallet APK signature verification failed: "
+                        f"{error}"
+                    )
+                else:
+                    if wallet_signer != metadata.get(
+                        "app_signing_certificate_sha256"
+                    ):
+                        errors.append(
+                            "slot.json app_signing_certificate_sha256 must match the verified production wallet APK signer"
+                        )
 
     d2d_relative, d2d_digest, d2d_transport = validate_d2d_payment_transcript_binding(
         slot_path,
@@ -4889,6 +7407,7 @@ def validate_kagemusha_production_metadata(
     _require_true(metadata, "physical_device_attestation", errors)
     _require_true(metadata, "one_use_key_rotation_passed", errors)
     _require_true(metadata, "rollback_rejection_passed", errors)
+    _require_false(metadata, "production_capability_observed", errors)
     _require_status(metadata, "kagemusha_recursive_spend_ffi_surface", {"passed"}, errors)
     _require_status(
         metadata,
@@ -4924,6 +7443,14 @@ def validate_kagemusha_production_metadata(
     security_level = _require_non_empty_string(metadata, "keymint_security_level", errors)
     if security_level is not None and security_level not in STRONGBOX_LEVELS:
         errors.append("slot.json keymint_security_level must be STRONGBOX")
+    candidate_details = validate_candidate_binding_v2(slot_path, metadata, errors)
+    details.update(candidate_details)
+    if attestation_certificate_count is not None:
+        details["strongbox_attestation"] = True
+        details["physical_device_attestation"] = True
+        authority_projection = android_evidence_authority_projection()
+        if authority_projection is not None:
+            details["authority_tools"] = authority_projection
     attestation_result = validate_attestation_result(slot_path, metadata, errors)
     attestation_report = validate_attestation_report(slot_path, metadata, errors)
     validate_attestation_report_result_level_binding(
@@ -4936,6 +7463,7 @@ def validate_kagemusha_production_metadata(
         metadata,
         errors,
         attestation_certificate_chain_bytes=attestation_certificate_chain_bytes,
+        attestation_certificate_count=attestation_certificate_count,
     )
 
     digest = _require_non_empty_string(metadata, "signed_evidence_artifact_sha256", errors)
@@ -5391,6 +7919,7 @@ def build_summary(
         summary["kagemusha"] = {
             "production_evidence_required": require_kagemusha_production_evidence,
             "standard_matrix_required": require_kagemusha_standard_matrix,
+            "authority_tools": android_evidence_authority_projection(),
             "required_device_families": list(KAGEMUSHA_STANDARD_DEVICE_FAMILIES),
             "covered_device_families": covered,
             "missing_device_families": missing,
@@ -5872,7 +8401,233 @@ def _cleanup_summary_output(
     return []
 
 
+KAGEMUSHA_ANDROID_CONFIRMATION_COMPARISON_SCHEMA_V1 = (
+    "iroha.android.device_lab.kagemusha.confirmation_comparison.v1"
+)
+
+
+def _read_confirmation_json_artifact(
+    path: Path,
+    label: str,
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None, list[str]]:
+    errors: list[str] = []
+    path_text = os.fspath(path)
+    if not path.is_absolute() or path_text != path_text.strip():
+        return None, None, [f"{label} must be one canonical absolute path"]
+    try:
+        canonical = path.resolve(strict=True)
+        initial = path.lstat()
+    except OSError:
+        return None, None, [f"{label} could not be inspected"]
+    if canonical != path or stat.S_ISLNK(initial.st_mode):
+        return None, None, [f"{label} must be a canonical non-symlink path"]
+    if not stat.S_ISREG(initial.st_mode) or initial.st_nlink != 1:
+        return None, None, [f"{label} must be a single-link regular file"]
+    if initial.st_uid not in {0, os.geteuid()} or initial.st_mode & 0o077:
+        return None, None, [f"{label} must be owner-private and owned by root or the invoking user"]
+    if initial.st_size <= 0 or initial.st_size > MAX_ANDROID_DEVICE_LAB_JSON_BYTES:
+        return None, None, [f"{label} has an invalid file size"]
+    flags = os.O_RDONLY
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    chunks: list[bytes] = []
+    digest = hashlib.sha256()
+    try:
+        descriptor = os.open(path, flags)
+        try:
+            opened = os.fstat(descriptor)
+            identity = (initial.st_dev, initial.st_ino)
+            if (
+                (opened.st_dev, opened.st_ino) != identity
+                or not stat.S_ISREG(opened.st_mode)
+                or opened.st_nlink != 1
+                or opened.st_size != initial.st_size
+            ):
+                return None, None, [f"{label} changed while being opened"]
+            while True:
+                chunk = os.read(descriptor, 1024 * 1024)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                digest.update(chunk)
+            final = path.lstat()
+            if (
+                (final.st_dev, final.st_ino) != identity
+                or final.st_size != opened.st_size
+                or final.st_mtime_ns != initial.st_mtime_ns
+                or final.st_ctime_ns != initial.st_ctime_ns
+            ):
+                return None, None, [f"{label} changed while being read"]
+        finally:
+            os.close(descriptor)
+    except OSError:
+        return None, None, [f"{label} could not be read"]
+    payload = b"".join(chunks)
+    try:
+        document = _strict_json_object_bytes(payload, label)
+    except ValueError as error:
+        errors.append(str(error))
+        return None, None, errors
+    return document, {
+        "path": path_text,
+        "size_bytes": len(payload),
+        "sha256": digest.hexdigest(),
+    }, errors
+
+
+def validate_kagemusha_android_confirmation(
+    *,
+    reference_slot: Path,
+    confirmation_binding_path: Path,
+    confirmation_lifecycle_path: Path,
+    trusted_signer_public_keys: dict[str, Path],
+) -> dict[str, Any]:
+    """Compare an independent rerun with one fully authenticated reference slot."""
+
+    errors: list[str] = []
+    artifacts: dict[str, Any] = {}
+    reference_report = scan_slot(
+        reference_slot,
+        require_kagemusha_production_evidence=True,
+        trusted_signer_public_keys=trusted_signer_public_keys,
+    )
+    if reference_report.get("status") != "ok":
+        errors.append("reference slot failed full authenticated production validation")
+
+    metadata = _load_json(reference_slot / "slot.json", "reference slot.json", errors)
+    reference_binding: dict[str, Any] | None = None
+    reference_lifecycle: dict[str, Any] | None = None
+    if metadata is not None:
+        binding_relative = metadata.get("candidate_binding_path")
+        lifecycle_relative = metadata.get("candidate_lifecycle_transcript_path")
+        if isinstance(binding_relative, str):
+            reference_binding, measurement, measurement_errors = (
+                _read_confirmation_json_artifact(
+                    (reference_slot / binding_relative).resolve(),
+                    "reference candidate binding",
+                )
+            )
+            errors.extend(measurement_errors)
+            if measurement is not None:
+                artifacts["reference_binding"] = measurement
+        else:
+            errors.append("reference slot has no candidate binding path")
+        if isinstance(lifecycle_relative, str):
+            reference_lifecycle, measurement, measurement_errors = (
+                _read_confirmation_json_artifact(
+                    (reference_slot / lifecycle_relative).resolve(),
+                    "reference lifecycle transcript",
+                )
+            )
+            errors.extend(measurement_errors)
+            if measurement is not None:
+                artifacts["reference_lifecycle"] = measurement
+        else:
+            errors.append("reference slot has no lifecycle transcript path")
+
+    confirmation_binding, measurement, measurement_errors = (
+        _read_confirmation_json_artifact(
+            confirmation_binding_path,
+            "confirmation candidate binding",
+        )
+    )
+    errors.extend(measurement_errors)
+    if measurement is not None:
+        artifacts["confirmation_binding"] = measurement
+    confirmation_lifecycle, lifecycle_measurement, measurement_errors = (
+        _read_confirmation_json_artifact(
+            confirmation_lifecycle_path,
+            "confirmation lifecycle transcript",
+        )
+    )
+    errors.extend(measurement_errors)
+    if lifecycle_measurement is not None:
+        artifacts["confirmation_lifecycle"] = lifecycle_measurement
+
+    if reference_binding is not None and confirmation_binding is not None:
+        if set(confirmation_binding) != KAGEMUSHA_CANDIDATE_BINDING_FIELDS_V2:
+            errors.append("confirmation candidate binding does not have the exact V2 fields")
+        if confirmation_binding.get("schema") != KAGEMUSHA_CANDIDATE_BINDING_SCHEMA_V2:
+            errors.append("confirmation candidate binding schema is not V2")
+        deterministic_binding_mismatch = False
+        for key in sorted(set(reference_binding) | set(confirmation_binding)):
+            if key == "lifecycle_transcript_sha256":
+                continue
+            if confirmation_binding.get(key) != reference_binding.get(key):
+                deterministic_binding_mismatch = True
+        if deterministic_binding_mismatch:
+            errors.append(
+                "confirmation candidate binding deterministic fields differ from reference"
+            )
+    if confirmation_binding is not None and lifecycle_measurement is not None:
+        if confirmation_binding.get("lifecycle_transcript_sha256") != lifecycle_measurement.get(
+            "sha256"
+        ):
+            errors.append(
+                "confirmation candidate binding does not bind the pulled lifecycle transcript"
+            )
+
+    if (
+        metadata is not None
+        and confirmation_binding is not None
+        and confirmation_lifecycle is not None
+        and lifecycle_measurement is not None
+    ):
+        lifecycle_validation_errors: list[str] = []
+        _validate_candidate_lifecycle_transcript_v2(
+            confirmation_lifecycle_path.parent,
+            confirmation_lifecycle_path.name,
+            lifecycle_measurement["sha256"],
+            confirmation_binding,
+            metadata,
+            lifecycle_validation_errors,
+        )
+        errors.extend(
+            f"confirmation lifecycle validation failed: {error}"
+            for error in lifecycle_validation_errors
+        )
+
+    if reference_lifecycle is not None and confirmation_lifecycle is not None:
+        def without_durations(document: dict[str, Any]) -> dict[str, Any]:
+            normalized = json.loads(json.dumps(document, allow_nan=False))
+            events = normalized.get("causal_events")
+            if isinstance(events, list):
+                for event in events:
+                    if isinstance(event, dict) and "duration_nanos" in event:
+                        event["duration_nanos"] = "<allowed-to-differ>"
+            return normalized
+
+        if without_durations(confirmation_lifecycle) != without_durations(
+            reference_lifecycle
+        ):
+            errors.append(
+                "confirmation lifecycle differs from reference outside causal duration_nanos"
+            )
+
+    required_artifacts = {
+        "reference_binding",
+        "reference_lifecycle",
+        "confirmation_binding",
+        "confirmation_lifecycle",
+    }
+    if set(artifacts) != required_artifacts:
+        errors.append("confirmation comparison did not measure all four required artifacts")
+    return {
+        "schema": KAGEMUSHA_ANDROID_CONFIRMATION_COMPARISON_SCHEMA_V1,
+        "status": "ok" if not errors else "error",
+        "errors": errors,
+        "artifacts": artifacts,
+        "comparison": {
+            "deterministic_fields_equal": not errors,
+            "only_duration_nanos_may_differ": True,
+        },
+        "authority_tools": android_evidence_authority_projection(),
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
+    global _ANDROID_EVIDENCE_AUTHORITY
+    _ANDROID_EVIDENCE_AUTHORITY = None
     parser = argparse.ArgumentParser(
         description="Validate Android device-lab slots for AND6 compliance."
     )
@@ -5923,6 +8678,68 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="PEM public key for a trusted Android lab evidence signer.",
     )
+    parser.add_argument(
+        "--apksigner",
+        default=None,
+        help="Canonical absolute Android apksigner executable path.",
+    )
+    parser.add_argument(
+        "--apksigner-sha256",
+        default=None,
+        help="Pinned lowercase SHA-256 of --apksigner.",
+    )
+    parser.add_argument(
+        "--openssl",
+        default=None,
+        help="Canonical absolute OpenSSL executable path.",
+    )
+    parser.add_argument(
+        "--openssl-sha256",
+        default=None,
+        help="Pinned lowercase SHA-256 of --openssl.",
+    )
+    parser.add_argument(
+        "--android-attestation-trust-root",
+        action="append",
+        default=None,
+        help="Canonical absolute DER/PEM Android attestation trust root (repeatable).",
+    )
+    parser.add_argument(
+        "--android-attestation-trust-root-sha256",
+        action="append",
+        default=None,
+        help="Aligned lowercase SHA-256 pin for each attestation trust root.",
+    )
+    parser.add_argument(
+        "--android-attestation-revocation-status",
+        default=None,
+        help="Canonical absolute local Android attestation revocation-status JSON.",
+    )
+    parser.add_argument(
+        "--android-attestation-revocation-status-sha256",
+        default=None,
+        help="Pinned lowercase SHA-256 of the revocation-status JSON.",
+    )
+    parser.add_argument(
+        "--confirmation-reference-slot",
+        default=None,
+        help="Fully authenticated reference slot for an independent candidate rerun.",
+    )
+    parser.add_argument(
+        "--confirmation-binding",
+        default=None,
+        help="Pulled candidate-binding-v2.json from the independent rerun.",
+    )
+    parser.add_argument(
+        "--confirmation-lifecycle",
+        default=None,
+        help="Pulled lifecycle-transcript-v2.json from the independent rerun.",
+    )
+    parser.add_argument(
+        "--confirmation-json-out",
+        default=None,
+        help="Required machine report for confirmation comparison mode.",
+    )
     args = parser.parse_args(argv)
 
     path_arg_errors = []
@@ -5948,6 +8765,67 @@ def main(argv: list[str] | None = None) -> int:
         for error in path_arg_errors:
             print(f"[device-lab] {error}", file=sys.stderr)
         return 1
+
+    confirmation_values = (
+        args.confirmation_reference_slot,
+        args.confirmation_binding,
+        args.confirmation_lifecycle,
+        args.confirmation_json_out,
+    )
+    if any(value is not None for value in confirmation_values):
+        if any(value is None for value in confirmation_values):
+            print(
+                "[device-lab] confirmation mode requires reference slot, binding, lifecycle, and JSON output",
+                file=sys.stderr,
+            )
+            return 1
+        authority_values = (
+            args.apksigner,
+            args.apksigner_sha256,
+            args.openssl,
+            args.openssl_sha256,
+            args.android_attestation_revocation_status,
+            args.android_attestation_revocation_status_sha256,
+        )
+        if any(value is None for value in authority_values):
+            print(
+                "[device-lab] confirmation mode requires every digest-pinned authority path/digest pair",
+                file=sys.stderr,
+            )
+            return 1
+        authority_errors = _configure_android_evidence_authority_from_args(args)
+        if authority_errors:
+            for error in authority_errors:
+                print(f"[device-lab] {error}", file=sys.stderr)
+            return 1
+        trusted_signer_public_keys, signer_errors = load_trusted_signer_public_keys(
+            args.trusted_signer_public_keys
+        )
+        if signer_errors or not trusted_signer_public_keys:
+            for error in signer_errors or [
+                "confirmation mode requires at least one trusted signer public key"
+            ]:
+                print(f"[device-lab] {error}", file=sys.stderr)
+            return 1
+        comparison = validate_kagemusha_android_confirmation(
+            reference_slot=Path(args.confirmation_reference_slot),
+            confirmation_binding_path=Path(args.confirmation_binding),
+            confirmation_lifecycle_path=Path(args.confirmation_lifecycle),
+            trusted_signer_public_keys=trusted_signer_public_keys,
+        )
+        write_errors = write_summary(Path(args.confirmation_json_out), comparison)
+        if write_errors:
+            for error in write_errors:
+                print(f"[device-lab] {error}", file=sys.stderr)
+            return 1
+        if comparison["status"] != "ok":
+            print(
+                "[device-lab] independent candidate confirmation differs from authenticated reference",
+                file=sys.stderr,
+            )
+            return 1
+        print("[device-lab] independent candidate confirmation: ok")
+        return 0
 
     slot_ids, slot_id_errors = validate_slot_ids(args.slots)
     if slot_id_errors:
@@ -5986,6 +8864,36 @@ def main(argv: list[str] | None = None) -> int:
         args.require_kagemusha_production_evidence
         or args.require_kagemusha_standard_matrix
     )
+    authority_values = (
+        args.apksigner,
+        args.apksigner_sha256,
+        args.openssl,
+        args.openssl_sha256,
+        args.android_attestation_revocation_status,
+        args.android_attestation_revocation_status_sha256,
+    )
+    authority_lists = (
+        args.android_attestation_trust_root or [],
+        args.android_attestation_trust_root_sha256 or [],
+    )
+    if any(value is not None for value in authority_values) or any(authority_lists):
+        if any(value is None for value in authority_values):
+            print(
+                "[device-lab] all apksigner, openssl, and attestation revocation path/digest pairs are required",
+                file=sys.stderr,
+            )
+            return 1
+        authority_errors = _configure_android_evidence_authority_from_args(args)
+        if authority_errors:
+            for error in authority_errors:
+                print(f"[device-lab] {error}", file=sys.stderr)
+            return 1
+    if require_kagemusha and _ANDROID_EVIDENCE_AUTHORITY is None:
+        print(
+            "[device-lab] production evidence requires explicit digest-pinned Android authority inputs",
+            file=sys.stderr,
+        )
+        return 1
     trusted_signer_public_keys, signer_errors = load_trusted_signer_public_keys(
         args.trusted_signer_public_keys
     )

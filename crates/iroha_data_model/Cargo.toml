@@ -13,7 +13,7 @@ license.workspace = true
 workspace = true
 
 [features]
-default = ["governance", "json"]
+default = ["governance", "json", "pqc"]
 bridge = []
 # Retained for compatibility dependencies; no additional behavior is gated by `std` in this crate.
 std = []
@@ -46,6 +46,7 @@ trybuild-tests = ["dep:trybuild"]
 bench = []
 ids_projection = []
 governance = []
+pqc = ["iroha_crypto/pqc", "sorafs_manifest/pqc"]
 zk-ballot = []
 # Recognize `packed-struct` used by derive macros in dependencies.
 # Not enabled by default; declared to silence unexpected-cfg warnings.
@@ -72,7 +73,7 @@ norito = {workspace = true}
 norito_derive = { workspace = true, optional = true }
 mv = { path = "../mv", optional = true }
 p256 = { version = "0.13.2", default-features = false, features = ["std", "ecdsa"] }
-sorafs_manifest = { workspace = true }
+sorafs_manifest = { path = "../sorafs_manifest", default-features = false }
 thiserror = { workspace = true }
 displaydoc = { workspace = true, features = ["std"] }
 getset = { workspace = true }
@@ -132,11 +133,6 @@ required-features = ["test-fixtures"]
 [[bin]]
 name = "qr_stream_fixtures"
 path = "src/bin/qr_stream_fixtures.rs"
-required-features = ["test-fixtures"]
-
-[[bin]]
-name = "kagemusha_peer_transport_fixtures"
-path = "src/bin/kagemusha_peer_transport_fixtures.rs"
 required-features = ["test-fixtures"]
 
 [[bin]]

@@ -292,6 +292,7 @@ struct BoundedIngress<C> {
     config: RuntimeQueueConfig,
     commands: VecDeque<TaggedCommand<C>>,
     next_class: CommandClass,
+    reserved_body_available: Option<BodyAvailableReservation>,
 }
 
 impl<C> BoundedIngress<C> {
@@ -300,6 +301,7 @@ impl<C> BoundedIngress<C> {
             config,
             commands: VecDeque::with_capacity(config.capacity),
             next_class: CommandClass::Completion,
+            reserved_body_available: None,
         }
     }
 
@@ -315,8 +317,12 @@ impl<C> BoundedIngress<C> {
             CommandClass::Progress => self.config.progress_limit(),
             CommandClass::Completion => self.config.capacity,
         };
-        if self.commands.len() >= limit {
-            return Err(if self.commands.len() >= self.config.capacity {
+        let occupied = self
+            .commands
+            .len()
+            .saturating_add(usize::from(self.reserved_body_available.is_some()));
+        if occupied >= limit {
+            return Err(if occupied >= self.config.capacity {
                 EnqueueError::Full
             } else {
                 EnqueueError::ReservedCapacity
@@ -362,7 +368,11 @@ impl<C> BoundedIngress<C> {
     }
 
     fn remaining_capacity(&self) -> usize {
-        self.config.capacity - self.commands.len()
+        self.config.capacity.saturating_sub(
+            self.commands
+                .len()
+                .saturating_add(usize::from(self.reserved_body_available.is_some())),
+        )
     }
 
     fn lane_snapshot(&self, class: CommandClass, now: Instant) -> RuntimeQueueLaneSnapshot {
@@ -411,6 +421,56 @@ pub(crate) struct RuntimeQueueSnapshot {
     pub(crate) progress: RuntimeQueueLaneSnapshot,
     /// Trusted local I/O and application completions.
     pub(crate) completion: RuntimeQueueLaneSnapshot,
+}
+
+/// Exclusive reservation for one exact `BodyAvailable` runtime handoff.
+///
+/// A new reservation consumes completion capacity without exposing a reducer
+/// command. An exact completion already owned by the serialized runtime yields
+/// a coalescing reservation instead. The executor commits this token only
+/// after the body-fetch service transfers its exact owner; until then it may
+/// abort the token without changing any queued command.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[must_use = "a body-available reservation must be committed or aborted"]
+pub(crate) struct BodyAvailableReservation {
+    tag: EventTag,
+    manifest: wire::PayloadManifest,
+    owns_new_slot: bool,
+}
+
+impl BodyAvailableReservation {
+    /// Construct a token which owns one unpublished completion slot.
+    pub(crate) fn reserved(tag: EventTag, manifest: wire::PayloadManifest) -> Self {
+        Self {
+            tag,
+            manifest,
+            owns_new_slot: true,
+        }
+    }
+
+    /// Construct a token which coalesces with one exact existing owner.
+    pub(crate) fn coalesced(tag: EventTag, manifest: wire::PayloadManifest) -> Self {
+        Self {
+            tag,
+            manifest,
+            owns_new_slot: false,
+        }
+    }
+
+    /// Reducer incarnation which will consume the completion.
+    pub(crate) const fn tag(&self) -> EventTag {
+        self.tag
+    }
+
+    /// Exact canonical manifest carried by the completion.
+    pub(crate) const fn manifest(&self) -> &wire::PayloadManifest {
+        &self.manifest
+    }
+
+    /// Whether this token reserved a new bounded ingress slot.
+    pub(crate) const fn owns_new_slot(&self) -> bool {
+        self.owns_new_slot
+    }
 }
 
 /// Preflight ownership counts for exact decided local-proposal completions.
@@ -874,19 +934,73 @@ impl BoundedIngress<AdapterCommand> {
         Ok(tag)
     }
 
+    #[cfg(test)]
     fn enqueue_canonical_body_available(
         &mut self,
         tag: EventTag,
         manifest: wire::PayloadManifest,
     ) -> Result<(), EnqueueError> {
-        self.discard_proposals_conflicting_with(&manifest);
-        self.enqueue(TaggedCommand {
-            tag,
+        let reservation = self.reserve_canonical_body_available(tag, manifest)?;
+        self.commit_canonical_body_available(reservation);
+        Ok(())
+    }
+
+    fn reserve_canonical_body_available(
+        &mut self,
+        tag: EventTag,
+        manifest: wire::PayloadManifest,
+    ) -> Result<BodyAvailableReservation, EnqueueError> {
+        if self.reserved_body_available.is_some() {
+            return Err(EnqueueError::DuplicateCompletionOwnership);
+        }
+        let conflicting = self
+            .commands
+            .iter()
+            .filter(|queued| {
+                queued
+                    .command
+                    .is_authenticated_proposal_conflicting_with(&manifest)
+            })
+            .count();
+        let occupied_after_commit = self
+            .commands
+            .len()
+            .saturating_sub(conflicting)
+            .saturating_add(1);
+        if occupied_after_commit > self.config.capacity {
+            return Err(EnqueueError::Full);
+        }
+        let reservation = BodyAvailableReservation::reserved(tag, manifest);
+        self.reserved_body_available = Some(reservation.clone());
+        Ok(reservation)
+    }
+
+    fn commit_canonical_body_available(&mut self, reservation: BodyAvailableReservation) {
+        if !reservation.owns_new_slot() {
+            return;
+        }
+        if self.reserved_body_available.as_ref() != Some(&reservation) {
+            return;
+        }
+        self.reserved_body_available = None;
+        self.discard_proposals_conflicting_with(reservation.manifest());
+        self.commands.push_back(TaggedCommand {
+            tag: reservation.tag(),
             class: CommandClass::Completion,
-            command: AdapterCommand::BodyAvailable { manifest },
+            command: AdapterCommand::BodyAvailable {
+                manifest: reservation.manifest,
+            },
             admitted_at: Instant::now(),
             eligible_skips: 0,
-        })
+        });
+    }
+
+    fn abort_canonical_body_available(&mut self, reservation: BodyAvailableReservation) {
+        if reservation.owns_new_slot()
+            && self.reserved_body_available.as_ref() == Some(&reservation)
+        {
+            self.reserved_body_available = None;
+        }
     }
 
     fn discard_proposals_conflicting_with(&mut self, manifest: &wire::PayloadManifest) {
@@ -1711,13 +1825,40 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         tag: EventTag,
         manifest: wire::PayloadManifest,
     ) -> Result<(), EnqueueError> {
+        let reservation = self.reserve_body_available(tag, manifest)?;
+        self.commit_body_available(reservation);
+        Ok(())
+    }
+
+    /// Reserve exact runtime ownership for a reconstructed body completion.
+    ///
+    /// Capacity and conflicting queued proposals are evaluated without
+    /// exposing a reducer command. The returned token exclusively owns any
+    /// claimed completion slot until committed or aborted by the executor.
+    pub(crate) fn reserve_body_available(
+        &mut self,
+        tag: EventTag,
+        manifest: wire::PayloadManifest,
+    ) -> Result<BodyAvailableReservation, EnqueueError> {
         let evidence = BodyPipelineCompletionEvidence::BodyAvailable {
             manifest: manifest.clone(),
         };
         if self.body_pipeline_completion_is_owned(tag, &evidence)? {
-            return Ok(());
+            return Ok(BodyAvailableReservation::coalesced(tag, manifest));
         }
-        self.ingress.enqueue_canonical_body_available(tag, manifest)
+        self.ingress.reserve_canonical_body_available(tag, manifest)
+    }
+
+    /// Publish one previously reserved completion without another fallible
+    /// capacity or ownership check.
+    pub(crate) fn commit_body_available(&mut self, reservation: BodyAvailableReservation) {
+        self.ingress.commit_canonical_body_available(reservation);
+    }
+
+    /// Release an unpublished completion reservation after an all-or-error
+    /// service transfer rejected the operation.
+    pub(crate) fn abort_body_available(&mut self, reservation: BodyAvailableReservation) {
+        self.ingress.abort_canonical_body_available(reservation);
     }
 
     /// Transfer one already admitted exact-body completion to a certified later view.

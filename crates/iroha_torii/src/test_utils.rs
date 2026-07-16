@@ -4,13 +4,12 @@
 //! queue-drain and state-apply boilerplate when exercising app API endpoints.
 
 use std::{
+    borrow::Cow,
     collections::BTreeMap,
     num::NonZeroU64,
     path::{Path, PathBuf},
-    sync::{
-        Arc,
-        atomic::{AtomicU64, Ordering},
-    },
+    str::FromStr as _,
+    sync::Arc,
     time::Duration,
 };
 
@@ -19,18 +18,27 @@ use iroha_core::{
     block::{BlockBuilder, CommittedBlock},
     queue::{Queue, TransactionGuard},
     smartcontracts::Execute,
-    state::{State, StateBlock, StateReadOnly},
+    state::{State, StateBlock, StateReadOnly, WorldReadOnly},
+    tx::AcceptedTransaction,
 };
-use iroha_crypto::Algorithm;
+use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{
     ChainId, Registrable,
     account::AccountId,
     block::{BlockHeader, SignedBlock},
     content::ContentAuthMode,
     domain::DomainId,
+    isi::smart_contract_code::{
+        CommitContractDeployment, FinalizeSmartContractCodeUpload, RegisterSmartContractCode,
+        SMART_CONTRACT_CODE_CHUNK_BYTES, UploadSmartContractCodeChunk,
+    },
     jurisdiction::JdgSignatureScheme,
+    nexus::DataSpaceId,
     permission,
-    prelude::{Account, Domain, ExposedPrivateKey, Grant},
+    prelude::{
+        Account, Domain, ExposedPrivateKey, Grant, InstructionBox, Name, TransactionBuilder,
+    },
+    smart_contract::{CONTRACT_DEPLOY_NONCE_METADATA_KEY, ContractAddress},
     sorafs::pricing::PricingScheduleRecord,
 };
 use iroha_executor_data_model::permission::{
@@ -316,30 +324,108 @@ pub fn grant_contract_operator_permissions(state: &Arc<State>, authority: &Accou
         .expect("commit contract operator permissions");
 }
 
-/// Build JSON string for deploy request body.
-pub fn deploy_request_json(
-    account: &AccountId,
+/// Build and enqueue a locally signed atomic contract deployment transaction.
+///
+/// This deliberately exercises the native deployment instructions instead of
+/// recreating the retired server-side signing endpoint in test routers.
+pub fn enqueue_locally_signed_contract_deployment(
+    state: &Arc<State>,
+    queue: &Arc<Queue>,
+    chain_id: &ChainId,
+    authority: &AccountId,
     private_key: &ExposedPrivateKey,
-    code_b64: &str,
-) -> String {
-    static DEPLOY_ALIAS_COUNTER: AtomicU64 = AtomicU64::new(1);
+    artifact: &[u8],
+) -> (ContractAddress, String, String) {
+    let verified = ivm::verify_contract_artifact(artifact).expect("verify contract artifact");
+    let key_pair =
+        KeyPair::from_private_key(private_key.0.clone()).expect("derive local deployment key pair");
+    assert_eq!(
+        key_pair.public_key(),
+        authority.signatory(),
+        "local deployment key must match authority"
+    );
+    let manifest = verified
+        .manifest
+        .try_signed(&key_pair)
+        .expect("sign contract manifest locally");
 
-    let alias = iroha_data_model::smart_contract::ContractAlias::from_components(
-        &format!(
-            "deploy{}",
-            DEPLOY_ALIAS_COUNTER.fetch_add(1, Ordering::Relaxed)
-        ),
+    let nonce_key = Name::from_str(CONTRACT_DEPLOY_NONCE_METADATA_KEY)
+        .expect("contract deployment nonce metadata key");
+    let state_view = state.view();
+    let deploy_nonce = state_view
+        .world
+        .account(authority)
+        .expect("deployment authority exists")
+        .metadata()
+        .get(&nonce_key)
+        .map(|value| {
+            value
+                .clone()
+                .try_into_any_norito::<u64>()
+                .expect("canonical contract deployment nonce")
+        })
+        .unwrap_or(0);
+    drop(state_view);
+
+    let contract_alias = iroha_data_model::smart_contract::ContractAlias::from_components(
+        &format!("fixture{deploy_nonce}"),
         None,
         "universal",
     )
     .expect("construct contract alias");
-    let value = crate::json_object(vec![
-        crate::json_entry("authority", account.clone()),
-        crate::json_entry("private_key", private_key.to_string()),
-        crate::json_entry("code_b64", code_b64),
-        crate::json_entry("contract_alias", alias),
-    ]);
-    norito::json::to_json(&value).expect("serialize deploy request")
+    let contract_address = ContractAddress::derive(
+        iroha_data_model::account::address::chain_discriminant(),
+        authority,
+        deploy_nonce,
+        DataSpaceId::UNIVERSAL,
+    )
+    .expect("derive contract address");
+    let total_size = u64::try_from(artifact.len()).expect("artifact size fits u64");
+    let chunk_count = u32::try_from(artifact.len().div_ceil(SMART_CONTRACT_CODE_CHUNK_BYTES))
+        .expect("contract upload chunk count fits u32");
+    assert_ne!(chunk_count, 0, "contract artifact must not be empty");
+
+    let mut instructions =
+        Vec::with_capacity(usize::try_from(chunk_count).expect("chunk count fits usize") + 3);
+    for (index, chunk) in artifact.chunks(SMART_CONTRACT_CODE_CHUNK_BYTES).enumerate() {
+        instructions.push(InstructionBox::from(UploadSmartContractCodeChunk {
+            code_hash: verified.code_hash,
+            total_size,
+            chunk_index: u32::try_from(index).expect("chunk index fits u32"),
+            chunk_count,
+            chunk: chunk.to_vec(),
+        }));
+    }
+    instructions.push(InstructionBox::from(FinalizeSmartContractCodeUpload {
+        code_hash: verified.code_hash,
+        total_size,
+        chunk_count,
+    }));
+    instructions.push(InstructionBox::from(RegisterSmartContractCode { manifest }));
+    instructions.push(InstructionBox::from(CommitContractDeployment {
+        expected_deploy_nonce: deploy_nonce,
+        contract_address: contract_address.clone(),
+        code_hash: verified.code_hash,
+        contract_alias,
+        lease_expiry_ms: None,
+        expected_previous_contract_address: None,
+    }));
+
+    let transaction = TransactionBuilder::new(chain_id.clone(), authority.clone())
+        .with_instructions(instructions)
+        .sign(key_pair.private_key());
+    queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(transaction)),
+            state.view(),
+        )
+        .expect("enqueue locally signed contract deployment");
+
+    (
+        contract_address,
+        hex::encode(verified.code_hash.as_ref()),
+        hex::encode(verified.abi_hash.as_ref()),
+    )
 }
 
 /// Build JSON string for contract call request body.

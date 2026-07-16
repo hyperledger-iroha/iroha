@@ -2,7 +2,7 @@
 //! Torii account onboarding tests.
 #![cfg(feature = "app_api")]
 
-use std::{num::NonZeroU64, str::FromStr, sync::Arc};
+use std::{collections::BTreeMap, num::NonZeroU64, str::FromStr, sync::Arc};
 
 use axum::{extract::connect_info::ConnectInfo, http::Request};
 use http::StatusCode;
@@ -28,15 +28,42 @@ use iroha_data_model::{
     prelude::{Account, Domain, ExposedPrivateKey, Mint},
 };
 use iroha_executor_data_model::permission::account::{
-    AccountAliasPermissionScope, CanManageAccountAlias,
+    AccountAliasPermissionScope, CanManageAccountAlias, CanRegisterAccount,
 };
-use iroha_executor_data_model::permission::nexus::CanPublishSpaceDirectoryManifest;
+use iroha_executor_data_model::permission::nexus::{
+    CanEnrollFeeSponsorPolicyForAccountDomain, CanPublishSpaceDirectoryManifest,
+    CanPublishSpaceDirectoryManifestForAccountDomain, CanUseFeeSponsorForAccount,
+};
 use iroha_torii::{Torii, json_entry, json_object};
 use mv::storage::StorageReadOnly;
 use tower::ServiceExt as _;
 
 #[path = "fixtures.rs"]
 mod fixtures;
+
+const ONBOARDING_API_TOKEN: &str = "torii-onboarding-test-token-32-bytes";
+
+fn onboarding_api_token_hash() -> [u8; 32] {
+    *blake3::hash(ONBOARDING_API_TOKEN.as_bytes()).as_bytes()
+}
+
+fn onboarding_domain_execution_permissions(
+    domain: &DomainId,
+    dataspace: DataSpaceId,
+) -> [Permission; 3] {
+    [
+        Permission::from(CanManageAccountAlias {
+            scope: AccountAliasPermissionScope::Domain(domain.clone()),
+        }),
+        Permission::from(CanRegisterAccount {
+            domain: domain.clone(),
+        }),
+        Permission::from(CanPublishSpaceDirectoryManifestForAccountDomain {
+            dataspace,
+            domain: domain.clone(),
+        }),
+    ]
+}
 
 fn checked_onboard_ed25519_key_fixture() -> KeyPair {
     KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
@@ -55,7 +82,10 @@ fn accounts_onboard_ed25519_fixture_uses_checked_key_generation() {
 }
 
 async fn post_account_onboarding_for_validation(
+    uri: &str,
     body: norito::json::Value,
+    token_headers: &[&str],
+    configured_token_hash: Option<[u8; 32]>,
 ) -> (StatusCode, norito::json::Value) {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let (kiso, _child) = KisoHandle::start(cfg.clone());
@@ -97,12 +127,12 @@ async fn post_account_onboarding_for_validation(
         );
         let mut block = state.block(header);
         let mut stx = block.transaction();
-        stx.world_mut_for_testing().add_account_permission(
-            &authority_id,
-            Permission::from(CanManageAccountAlias {
-                scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::UNIVERSAL),
-            }),
-        );
+        for permission in
+            onboarding_domain_execution_permissions(&domain_id, DataSpaceId::UNIVERSAL)
+        {
+            stx.world_mut_for_testing()
+                .add_account_permission(&authority_id, permission);
+        }
         stx.apply();
         block.commit().expect("commit should persist permission");
     }
@@ -110,10 +140,13 @@ async fn post_account_onboarding_for_validation(
     cfg.torii.onboarding = Some(iroha_config::parameters::actual::ToriiOnboarding {
         authority: authority_id,
         private_key: ExposedPrivateKey(authority_kp.private_key().clone()),
+        api_token_hashes_by_domain: configured_token_hash
+            .map(|hash| BTreeMap::from([(domain_id.clone(), hash)]))
+            .unwrap_or_default(),
         allowed_permissions: Vec::new(),
         alias_resolve_dataspaces: Vec::new(),
         alias_resolve_domains: Vec::new(),
-        fee_sponsor_account: None,
+        fee_sponsor: None,
         alias_lease_term_years: 1,
         alias_auto_renew_enabled: false,
         alias_auto_renew_retry_backoff_ms: 86_400_000,
@@ -183,13 +216,15 @@ async fn post_account_onboarding_for_validation(
     };
 
     let body = norito::json::to_json(&body).expect("serialize onboarding request");
-    let mut req = Request::builder()
+    let mut builder = Request::builder()
         .method("POST")
-        .uri("/v1/accounts/onboard")
+        .uri(uri)
         .header(axum::http::header::CONTENT_TYPE, "application/json")
-        .header(axum::http::header::ACCEPT, "application/json")
-        .body(axum::body::Body::from(body))
-        .unwrap();
+        .header(axum::http::header::ACCEPT, "application/json");
+    for token in token_headers {
+        builder = builder.header("x-iroha-onboarding-token", *token);
+    }
+    let mut req = builder.body(axum::body::Body::from(body)).unwrap();
     req.extensions_mut()
         .insert(ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 0))));
 
@@ -221,14 +256,14 @@ async fn accounts_onboard_rejects_invalid_uaid_contract() {
         (
             "missing_uaid",
             norito::json!({
-                "alias": "invalid-missing-uaid@universal",
+                "alias": "invalid-missing-uaid@wonderland.universal",
                 "account_id": (account_id.to_string())
             }),
         ),
         (
             "raw_identity_not_allowed",
             norito::json!({
-                "alias": "invalid-raw-identity@universal",
+                "alias": "invalid-raw-identity@wonderland.universal",
                 "account_id": (account_id.to_string()),
                 "uaid": (uaid.to_string()),
                 "identity": { "email": "alice@example.test" }
@@ -237,7 +272,7 @@ async fn accounts_onboard_rejects_invalid_uaid_contract() {
         (
             "ambiguous_account_material",
             norito::json!({
-                "alias": "invalid-ambiguous@universal",
+                "alias": "invalid-ambiguous@wonderland.universal",
                 "account_id": (account_id.to_string()),
                 "public_key_hex": public_key_hex,
                 "uaid": (uaid.to_string())
@@ -246,7 +281,7 @@ async fn accounts_onboard_rejects_invalid_uaid_contract() {
         (
             "invalid_identity_commitment",
             norito::json!({
-                "alias": "invalid-commitment@universal",
+                "alias": "invalid-commitment@wonderland.universal",
                 "account_id": (account_id.to_string()),
                 "uaid": (uaid.to_string()),
                 "identity_commitment_hex": "abcd"
@@ -255,14 +290,191 @@ async fn accounts_onboard_rejects_invalid_uaid_contract() {
     ];
 
     for (expected_code, body) in cases {
-        let (status, payload) = post_account_onboarding_for_validation(body).await;
+        let (status, payload) = post_account_onboarding_for_validation(
+            "/v1/accounts/onboard",
+            body,
+            &[ONBOARDING_API_TOKEN],
+            Some(onboarding_api_token_hash()),
+        )
+        .await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "payload: {payload:?}");
         assert_eq!(
             payload
                 .as_object()
-                .and_then(|payload| payload.get("error_code"))
+                .and_then(|payload| payload.get("code"))
                 .and_then(norito::json::Value::as_str),
             Some(expected_code)
+        );
+    }
+}
+
+#[tokio::test]
+async fn accounts_onboard_requires_one_exact_dedicated_token_and_fails_closed_without_hash() {
+    const SHORT_TOKEN: &str = "too-short";
+    const WHITESPACE_TOKEN: &str = "torii onboarding token with spaces 0001";
+    let requests = [
+        (
+            "/v1/accounts/onboard",
+            norito::json!({
+                "alias": "auth-gate@wonderland.universal",
+                "account_id": (AccountId::new(checked_onboard_ed25519_key_fixture().public_key().clone()).to_string()),
+                "uaid": (UniversalAccountId::from_hash(Hash::new(b"accounts-onboard::auth-gate")).to_string())
+            }),
+        ),
+        (
+            "/v1/accounts/onboard/multisig",
+            norito::json!({
+                "alias": "multisig-auth-gate@wonderland.universal",
+                "required_signers": 2,
+                "member_account_ids": [
+                    (AccountId::new(checked_onboard_ed25519_key_fixture().public_key().clone()).to_string()),
+                    (AccountId::new(checked_onboard_ed25519_key_fixture().public_key().clone()).to_string())
+                ]
+            }),
+        ),
+        (
+            "/v1/accounts/onboard",
+            norito::json!({ "malformed_for_onboarding": true }),
+        ),
+        (
+            "/v1/accounts/onboard/multisig",
+            norito::json!({ "malformed_for_onboarding": true }),
+        ),
+    ];
+    let cases = [
+        (
+            "missing",
+            Vec::<&str>::new(),
+            Some(onboarding_api_token_hash()),
+            StatusCode::UNAUTHORIZED,
+            "onboarding_auth_required",
+        ),
+        (
+            "wrong",
+            vec!["wrong-onboarding-token-that-is-32-bytes"],
+            Some(onboarding_api_token_hash()),
+            StatusCode::UNAUTHORIZED,
+            "onboarding_auth_required",
+        ),
+        (
+            "duplicate",
+            vec![ONBOARDING_API_TOKEN, ONBOARDING_API_TOKEN],
+            Some(onboarding_api_token_hash()),
+            StatusCode::UNAUTHORIZED,
+            "onboarding_auth_required",
+        ),
+        (
+            "short_even_when_digest_matches",
+            vec![SHORT_TOKEN],
+            Some(*blake3::hash(SHORT_TOKEN.as_bytes()).as_bytes()),
+            StatusCode::UNAUTHORIZED,
+            "onboarding_auth_required",
+        ),
+        (
+            "whitespace_even_when_digest_matches",
+            vec![WHITESPACE_TOKEN],
+            Some(*blake3::hash(WHITESPACE_TOKEN.as_bytes()).as_bytes()),
+            StatusCode::UNAUTHORIZED,
+            "onboarding_auth_required",
+        ),
+        (
+            "unconfigured",
+            vec![ONBOARDING_API_TOKEN],
+            None,
+            StatusCode::SERVICE_UNAVAILABLE,
+            "onboarding_auth_unavailable",
+        ),
+    ];
+    for (uri, body) in requests {
+        for (label, tokens, configured_hash, expected_status, expected_code) in &cases {
+            let (status, payload) =
+                post_account_onboarding_for_validation(uri, body.clone(), tokens, *configured_hash)
+                    .await;
+            assert_eq!(
+                status, *expected_status,
+                "route={uri} case={label} payload={payload:?}"
+            );
+            assert_eq!(
+                payload
+                    .as_object()
+                    .and_then(|payload| payload.get("code"))
+                    .and_then(norito::json::Value::as_str),
+                Some(*expected_code),
+                "route={uri} case={label} payload={payload:?}",
+            );
+            assert!(
+                !format!("{payload:?}").contains(ONBOARDING_API_TOKEN),
+                "authentication errors must not expose the supplied token"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn accounts_onboard_token_is_bound_to_one_fully_qualified_alias_domain_on_both_routes() {
+    let account_id = AccountId::new(checked_onboard_ed25519_key_fixture().public_key().clone());
+    let member_one = AccountId::new(checked_onboard_ed25519_key_fixture().public_key().clone());
+    let member_two = AccountId::new(checked_onboard_ed25519_key_fixture().public_key().clone());
+    let uaid = UniversalAccountId::from_hash(Hash::new(b"accounts-onboard::domain-scope"));
+    let cases = [
+        (
+            "/v1/accounts/onboard",
+            norito::json!({
+                "alias": "cross-domain@other.universal",
+                "account_id": (account_id.to_string()),
+                "uaid": (uaid.to_string())
+            }),
+        ),
+        (
+            "/v1/accounts/onboard",
+            norito::json!({
+                "alias": "domainless@universal",
+                "account_id": (account_id.to_string()),
+                "uaid": (uaid.to_string())
+            }),
+        ),
+        (
+            "/v1/accounts/onboard/multisig",
+            norito::json!({
+                "alias": "cross-domain-multisig@other.universal",
+                "required_signers": 2,
+                "member_account_ids": [member_one.to_string(), member_two.to_string()]
+            }),
+        ),
+        (
+            "/v1/accounts/onboard/multisig",
+            norito::json!({
+                "alias": "domainless-multisig@universal",
+                "required_signers": 2,
+                "member_account_ids": [member_one.to_string(), member_two.to_string()]
+            }),
+        ),
+    ];
+
+    for (uri, body) in cases {
+        let (status, payload) = post_account_onboarding_for_validation(
+            uri,
+            body,
+            &[ONBOARDING_API_TOKEN],
+            Some(onboarding_api_token_hash()),
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::FORBIDDEN,
+            "route={uri} payload={payload:?}"
+        );
+        assert_eq!(
+            payload
+                .as_object()
+                .and_then(|payload| payload.get("code"))
+                .and_then(norito::json::Value::as_str),
+            Some("onboarding_domain_forbidden"),
+            "route={uri} payload={payload:?}",
+        );
+        assert!(
+            !format!("{payload:?}").contains(ONBOARDING_API_TOKEN),
+            "authorization errors must not expose the supplied token"
         );
     }
 }
@@ -279,9 +491,12 @@ async fn accounts_onboard_publishes_global_manifest_and_binding() {
     let genesis_domain_id = DomainId::try_new("genesis", "universal").expect("genesis domain id");
     let authority_kp = checked_onboard_ed25519_key_fixture();
     let authority_id = AccountId::new(authority_kp.public_key().clone());
+    let sponsor_id = AccountId::new(checked_onboard_ed25519_key_fixture().public_key().clone());
+    let fee_sponsor_policy: Name = "retail".parse().expect("retail fee sponsor policy");
     let genesis_domain = Domain::new(genesis_domain_id).build(&authority_id);
     let domain = Domain::new(domain_id.clone()).build(&authority_id);
     let authority_account = Account::new(authority_id.clone()).build(&authority_id);
+    let sponsor_account = Account::new(sponsor_id.clone()).build(&authority_id);
     let payment_asset_definition_id: AssetDefinitionId = "61CtjvNd9T3THAR65GsMVHr82Bjc"
         .parse()
         .expect("payment asset definition id");
@@ -290,7 +505,7 @@ async fn accounts_onboard_publishes_global_manifest_and_binding() {
         .build(&authority_id);
     let mut world = World::with(
         [genesis_domain, domain],
-        [authority_account],
+        [authority_account, sponsor_account],
         [payment_definition],
     );
     fixtures::seed_peer(&mut world, local_peer_id.clone());
@@ -315,10 +530,18 @@ async fn accounts_onboard_publishes_global_manifest_and_binding() {
                 dataspace: DataSpaceId::UNIVERSAL,
             }),
         );
+        for permission in
+            onboarding_domain_execution_permissions(&domain_id, DataSpaceId::UNIVERSAL)
+        {
+            stx.world_mut_for_testing()
+                .add_account_permission(&authority_id, permission);
+        }
         stx.world_mut_for_testing().add_account_permission(
             &authority_id,
-            Permission::from(CanManageAccountAlias {
-                scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::UNIVERSAL),
+            Permission::from(CanEnrollFeeSponsorPolicyForAccountDomain {
+                sponsor: sponsor_id.clone(),
+                policy: fee_sponsor_policy.clone(),
+                domain: domain_id.clone(),
             }),
         );
         Mint::asset_quantity(
@@ -334,10 +557,19 @@ async fn accounts_onboard_publishes_global_manifest_and_binding() {
     cfg.torii.onboarding = Some(iroha_config::parameters::actual::ToriiOnboarding {
         authority: authority_id.clone(),
         private_key: ExposedPrivateKey(authority_kp.private_key().clone()),
+        api_token_hashes_by_domain: BTreeMap::from([(
+            domain_id.clone(),
+            onboarding_api_token_hash(),
+        )]),
         allowed_permissions: Vec::new(),
         alias_resolve_dataspaces: Vec::new(),
         alias_resolve_domains: Vec::new(),
-        fee_sponsor_account: None,
+        fee_sponsor: Some(
+            iroha_config::parameters::actual::ToriiOnboardingFeeSponsor {
+                account: sponsor_id.clone(),
+                policy: fee_sponsor_policy.clone(),
+            },
+        ),
         alias_lease_term_years: 1,
         alias_auto_renew_enabled: true,
         alias_auto_renew_retry_backoff_ms: 86_400_000,
@@ -411,7 +643,7 @@ async fn accounts_onboard_publishes_global_manifest_and_binding() {
     let user_id = AccountId::new(user_kp.public_key().clone());
     let expected_uaid = UniversalAccountId::from_hash(Hash::new(b"accounts-onboard::p2p-user"));
     let body = json_object(vec![
-        json_entry("alias", "p2p-user@universal"),
+        json_entry("alias", "p2p-user@wonderland.universal"),
         json_entry("account_id", user_id.to_string()),
         json_entry("uaid", expected_uaid.to_string()),
     ]);
@@ -419,6 +651,7 @@ async fn accounts_onboard_publishes_global_manifest_and_binding() {
     let mut req = Request::builder()
         .method("POST")
         .uri("/v1/accounts/onboard")
+        .header("x-iroha-onboarding-token", ONBOARDING_API_TOKEN)
         .header(axum::http::header::CONTENT_TYPE, "application/json")
         .body(axum::body::Body::from(body))
         .unwrap();
@@ -447,7 +680,7 @@ async fn accounts_onboard_publishes_global_manifest_and_binding() {
         lease_payload
             .get("alias")
             .and_then(norito::json::Value::as_str),
-        Some("p2p-user@universal")
+        Some("p2p-user@wonderland.universal")
     );
     assert_eq!(
         lease_payload
@@ -472,6 +705,34 @@ async fn accounts_onboard_publishes_global_manifest_and_binding() {
         .world()
         .account(&user_id)
         .expect("onboarded account exists");
+    let fee_sponsor_permissions = view
+        .world()
+        .account_permissions_iter(&user_id)
+        .expect("onboarded account permissions")
+        .filter(|permission| permission.name().to_string() == "CanUseFeeSponsorForAccount")
+        .collect::<Vec<_>>();
+    assert_eq!(
+        fee_sponsor_permissions.len(),
+        1,
+        "onboarding must grant exactly one per-account fee sponsor permission"
+    );
+    let fee_sponsor_permission = fee_sponsor_permissions[0]
+        .payload()
+        .try_into_any_norito::<CanUseFeeSponsorForAccount>()
+        .expect("decode exact fee sponsor permission");
+    assert_eq!(fee_sponsor_permission.sponsor, sponsor_id);
+    assert_eq!(fee_sponsor_permission.policy, fee_sponsor_policy);
+    assert_eq!(fee_sponsor_permission.beneficiary, user_id);
+    assert_eq!(fee_sponsor_permission.domain, domain_id);
+    assert_eq!(
+        view.world()
+            .account_permissions_iter(&user_id)
+            .expect("onboarded account permissions")
+            .filter(|permission| permission.name().to_string() == "CanUseFeeSponsor")
+            .count(),
+        0,
+        "onboarding must never grant legacy broad fee sponsor authority"
+    );
     let uaid = account_entry
         .value()
         .uaid()
@@ -500,7 +761,7 @@ async fn accounts_onboard_publishes_global_manifest_and_binding() {
         view.world(),
         &view.nexus.dataspace_catalog,
         iroha_core::sns::SnsNamespace::AccountAlias,
-        "p2p-user@universal",
+        "p2p-user@wonderland.universal",
         0,
     )
     .expect("alias lease should exist");
@@ -550,7 +811,7 @@ async fn accounts_onboard_publishes_global_manifest_and_binding() {
         alias_item
             .get("alias")
             .and_then(norito::json::Value::as_str),
-        Some("p2p-user@universal")
+        Some("p2p-user@wonderland.universal")
     );
     assert_eq!(
         alias_item
@@ -608,12 +869,12 @@ async fn accounts_onboard_multisig_registers_multisig_account() {
         );
         let mut block = state.block(header);
         let mut stx = block.transaction();
-        stx.world_mut_for_testing().add_account_permission(
-            &authority_id,
-            Permission::from(CanManageAccountAlias {
-                scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::UNIVERSAL),
-            }),
-        );
+        for permission in
+            onboarding_domain_execution_permissions(&domain_id, DataSpaceId::UNIVERSAL)
+        {
+            stx.world_mut_for_testing()
+                .add_account_permission(&authority_id, permission);
+        }
         Mint::asset_quantity(
             10_000_u64,
             AssetId::of(payment_asset_definition_id.clone(), authority_id.clone()),
@@ -627,10 +888,14 @@ async fn accounts_onboard_multisig_registers_multisig_account() {
     cfg.torii.onboarding = Some(iroha_config::parameters::actual::ToriiOnboarding {
         authority: authority_id.clone(),
         private_key: ExposedPrivateKey(authority_kp.private_key().clone()),
+        api_token_hashes_by_domain: BTreeMap::from([(
+            domain_id.clone(),
+            onboarding_api_token_hash(),
+        )]),
         allowed_permissions: Vec::new(),
         alias_resolve_dataspaces: Vec::new(),
         alias_resolve_domains: Vec::new(),
-        fee_sponsor_account: None,
+        fee_sponsor: None,
         alias_lease_term_years: 1,
         alias_auto_renew_enabled: true,
         alias_auto_renew_retry_backoff_ms: 86_400_000,
@@ -703,7 +968,7 @@ async fn accounts_onboard_multisig_registers_multisig_account() {
     let signer_a = AccountId::new(checked_onboard_ed25519_key_fixture().public_key().clone());
     let signer_b = AccountId::new(checked_onboard_ed25519_key_fixture().public_key().clone());
     let body = json_object(vec![
-        json_entry("alias", "multisig-company@universal"),
+        json_entry("alias", "multisig-company@wonderland.universal"),
         json_entry("required_signers", 2_u64),
         json_entry(
             "member_account_ids",
@@ -714,6 +979,7 @@ async fn accounts_onboard_multisig_registers_multisig_account() {
     let mut req = Request::builder()
         .method("POST")
         .uri("/v1/accounts/onboard/multisig")
+        .header("x-iroha-onboarding-token", ONBOARDING_API_TOKEN)
         .header(axum::http::header::CONTENT_TYPE, "application/json")
         .body(axum::body::Body::from(body))
         .unwrap();
@@ -767,7 +1033,7 @@ async fn accounts_onboard_multisig_registers_multisig_account() {
         view.world(),
         &view.nexus.dataspace_catalog,
         iroha_core::sns::SnsNamespace::AccountAlias,
-        "multisig-company@universal",
+        "multisig-company@wonderland.universal",
         0,
     )
     .expect("multisig alias lease should exist");
@@ -785,10 +1051,12 @@ async fn accounts_onboard_succeeds_without_auto_renew_subscription_domain_when_d
     let query = LiveQueryStore::start_test();
     let local_peer_id = PeerId::new(cfg.common.key_pair.public_key().clone());
 
+    let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
     let genesis_domain_id = DomainId::try_new("genesis", "universal").expect("genesis domain id");
     let authority_kp = checked_onboard_ed25519_key_fixture();
     let authority_id = AccountId::new(authority_kp.public_key().clone());
     let genesis_domain = Domain::new(genesis_domain_id).build(&authority_id);
+    let domain = Domain::new(domain_id.clone()).build(&authority_id);
     let authority_account = Account::new(authority_id.clone()).build(&authority_id);
     let payment_asset_definition_id: AssetDefinitionId = "61CtjvNd9T3THAR65GsMVHr82Bjc"
         .parse()
@@ -796,7 +1064,11 @@ async fn accounts_onboard_succeeds_without_auto_renew_subscription_domain_when_d
     let payment_definition = AssetDefinition::numeric(payment_asset_definition_id.clone())
         .with_name("xor".to_owned())
         .build(&authority_id);
-    let mut world = World::with([genesis_domain], [authority_account], [payment_definition]);
+    let mut world = World::with(
+        [genesis_domain, domain],
+        [authority_account],
+        [payment_definition],
+    );
     fixtures::seed_peer(&mut world, local_peer_id.clone());
     let state = Arc::new(State::new_for_testing(world, kura.clone(), query));
     {
@@ -819,12 +1091,12 @@ async fn accounts_onboard_succeeds_without_auto_renew_subscription_domain_when_d
                 dataspace: DataSpaceId::UNIVERSAL,
             }),
         );
-        stx.world_mut_for_testing().add_account_permission(
-            &authority_id,
-            Permission::from(CanManageAccountAlias {
-                scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::UNIVERSAL),
-            }),
-        );
+        for permission in
+            onboarding_domain_execution_permissions(&domain_id, DataSpaceId::UNIVERSAL)
+        {
+            stx.world_mut_for_testing()
+                .add_account_permission(&authority_id, permission);
+        }
         Mint::asset_quantity(
             10_000_u64,
             AssetId::of(payment_asset_definition_id.clone(), authority_id.clone()),
@@ -838,10 +1110,14 @@ async fn accounts_onboard_succeeds_without_auto_renew_subscription_domain_when_d
     cfg.torii.onboarding = Some(iroha_config::parameters::actual::ToriiOnboarding {
         authority: authority_id.clone(),
         private_key: ExposedPrivateKey(authority_kp.private_key().clone()),
+        api_token_hashes_by_domain: BTreeMap::from([(
+            domain_id.clone(),
+            onboarding_api_token_hash(),
+        )]),
         allowed_permissions: Vec::new(),
         alias_resolve_dataspaces: Vec::new(),
         alias_resolve_domains: Vec::new(),
-        fee_sponsor_account: None,
+        fee_sponsor: None,
         alias_lease_term_years: 1,
         alias_auto_renew_enabled: false,
         alias_auto_renew_retry_backoff_ms: 86_400_000,
@@ -915,7 +1191,7 @@ async fn accounts_onboard_succeeds_without_auto_renew_subscription_domain_when_d
     let user_id = AccountId::new(user_kp.public_key().clone());
     let expected_uaid = UniversalAccountId::from_hash(Hash::new(b"accounts-onboard::no-renew"));
     let body = json_object(vec![
-        json_entry("alias", "no-renew@universal"),
+        json_entry("alias", "no-renew@wonderland.universal"),
         json_entry("account_id", user_id.to_string()),
         json_entry("uaid", expected_uaid.to_string()),
     ]);
@@ -923,6 +1199,7 @@ async fn accounts_onboard_succeeds_without_auto_renew_subscription_domain_when_d
     let mut req = Request::builder()
         .method("POST")
         .uri("/v1/accounts/onboard")
+        .header("x-iroha-onboarding-token", ONBOARDING_API_TOKEN)
         .header(axum::http::header::CONTENT_TYPE, "application/json")
         .body(axum::body::Body::from(body))
         .unwrap();
@@ -975,7 +1252,7 @@ async fn accounts_onboard_succeeds_without_auto_renew_subscription_domain_when_d
         view.world(),
         &view.nexus.dataspace_catalog,
         iroha_core::sns::SnsNamespace::AccountAlias,
-        "no-renew@universal",
+        "no-renew@wonderland.universal",
         0,
     )
     .expect("alias lease should exist");
@@ -1007,10 +1284,12 @@ async fn accounts_onboard_multisig_succeeds_without_auto_renew_subscription_doma
     let query = LiveQueryStore::start_test();
     let local_peer_id = PeerId::new(cfg.common.key_pair.public_key().clone());
 
+    let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
     let genesis_domain_id = DomainId::try_new("genesis", "universal").expect("genesis domain id");
     let authority_kp = checked_onboard_ed25519_key_fixture();
     let authority_id = AccountId::new(authority_kp.public_key().clone());
     let genesis_domain = Domain::new(genesis_domain_id).build(&authority_id);
+    let domain = Domain::new(domain_id.clone()).build(&authority_id);
     let authority_account = Account::new(authority_id.clone()).build(&authority_id);
     let payment_asset_definition_id: AssetDefinitionId = "61CtjvNd9T3THAR65GsMVHr82Bjc"
         .parse()
@@ -1018,7 +1297,11 @@ async fn accounts_onboard_multisig_succeeds_without_auto_renew_subscription_doma
     let payment_definition = AssetDefinition::numeric(payment_asset_definition_id.clone())
         .with_name("xor".to_owned())
         .build(&authority_id);
-    let mut world = World::with([genesis_domain], [authority_account], [payment_definition]);
+    let mut world = World::with(
+        [genesis_domain, domain],
+        [authority_account],
+        [payment_definition],
+    );
     fixtures::seed_peer(&mut world, local_peer_id.clone());
     let state = Arc::new(State::new_for_testing(world, kura.clone(), query));
     {
@@ -1035,12 +1318,12 @@ async fn accounts_onboard_multisig_succeeds_without_auto_renew_subscription_doma
         );
         let mut block = state.block(header);
         let mut stx = block.transaction();
-        stx.world_mut_for_testing().add_account_permission(
-            &authority_id,
-            Permission::from(CanManageAccountAlias {
-                scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::UNIVERSAL),
-            }),
-        );
+        for permission in
+            onboarding_domain_execution_permissions(&domain_id, DataSpaceId::UNIVERSAL)
+        {
+            stx.world_mut_for_testing()
+                .add_account_permission(&authority_id, permission);
+        }
         Mint::asset_quantity(
             10_000_u64,
             AssetId::of(payment_asset_definition_id.clone(), authority_id.clone()),
@@ -1054,10 +1337,14 @@ async fn accounts_onboard_multisig_succeeds_without_auto_renew_subscription_doma
     cfg.torii.onboarding = Some(iroha_config::parameters::actual::ToriiOnboarding {
         authority: authority_id.clone(),
         private_key: ExposedPrivateKey(authority_kp.private_key().clone()),
+        api_token_hashes_by_domain: BTreeMap::from([(
+            domain_id.clone(),
+            onboarding_api_token_hash(),
+        )]),
         allowed_permissions: Vec::new(),
         alias_resolve_dataspaces: Vec::new(),
         alias_resolve_domains: Vec::new(),
-        fee_sponsor_account: None,
+        fee_sponsor: None,
         alias_lease_term_years: 1,
         alias_auto_renew_enabled: false,
         alias_auto_renew_retry_backoff_ms: 86_400_000,
@@ -1130,7 +1417,7 @@ async fn accounts_onboard_multisig_succeeds_without_auto_renew_subscription_doma
     let signer_a = AccountId::new(checked_onboard_ed25519_key_fixture().public_key().clone());
     let signer_b = AccountId::new(checked_onboard_ed25519_key_fixture().public_key().clone());
     let body = json_object(vec![
-        json_entry("alias", "no-renew-multisig@universal"),
+        json_entry("alias", "no-renew-multisig@wonderland.universal"),
         json_entry("required_signers", 2_u64),
         json_entry(
             "member_account_ids",
@@ -1141,6 +1428,7 @@ async fn accounts_onboard_multisig_succeeds_without_auto_renew_subscription_doma
     let mut req = Request::builder()
         .method("POST")
         .uri("/v1/accounts/onboard/multisig")
+        .header("x-iroha-onboarding-token", ONBOARDING_API_TOKEN)
         .header(axum::http::header::CONTENT_TYPE, "application/json")
         .body(axum::body::Body::from(body))
         .unwrap();
@@ -1194,7 +1482,7 @@ async fn accounts_onboard_multisig_succeeds_without_auto_renew_subscription_doma
         view.world(),
         &view.nexus.dataspace_catalog,
         iroha_core::sns::SnsNamespace::AccountAlias,
-        "no-renew-multisig@universal",
+        "no-renew-multisig@wonderland.universal",
         0,
     )
     .expect("multisig alias lease should exist");

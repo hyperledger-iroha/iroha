@@ -2,7 +2,8 @@
 
 use std::{
     fs,
-    path::PathBuf,
+    io::Read as _,
+    path::{Path, PathBuf},
     str::FromStr,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -28,6 +29,7 @@ use reqwest::blocking::Client as HttpClient;
 use scrypt::{Params as ScryptParams, scrypt as derive_scrypt};
 use sha2::{Digest, Sha256};
 use url::Url;
+use zeroize::Zeroizing;
 
 use crate::{CliOutputFormat, Run, RunContext};
 
@@ -39,6 +41,7 @@ const DEFAULT_ALIAS_PREFIX: &str = "taira-rollout-canary";
 const DEFAULT_WRITE_TTL_MS: u64 = 120_000;
 const DEFAULT_WRITE_STATUS_TIMEOUT_MS: u64 = 120_000;
 const FAUCET_POW_DOMAIN_SEPARATOR: &[u8] = b"iroha:accounts:faucet:pow:v2";
+const ACCOUNT_ONBOARDING_TOKEN_HEADER: &str = "x-iroha-onboarding-token";
 
 const REQUIRED_MCP_TOOLS: &[&str] = &[
     "iroha.status",
@@ -135,6 +138,9 @@ pub struct WriteCanary {
     /// Gas asset definition id inserted into transaction metadata.
     #[arg(long, default_value = DEFAULT_GAS_ASSET_ID)]
     pub gas_asset_id: String,
+    /// Owner-only regular file containing the exact account-onboarding route token.
+    #[arg(long, value_name = "PATH")]
+    pub onboarding_token_file: PathBuf,
     /// Persist the runtime signer config to this explicit path.
     #[arg(long, value_name = "PATH")]
     pub write_config: Option<PathBuf>,
@@ -314,6 +320,7 @@ fn run_doctor(public_root: &str) -> Result<Value> {
 
 fn run_write_canary(config: &Config, args: &WriteCanary) -> Result<Value> {
     let public_root = normalize_root_url(&args.public_root)?;
+    let onboarding_token = read_onboarding_token_file(&args.onboarding_token_file)?;
     // Account literals in both onboarding and faucet payloads must use the
     // same I105 network discriminant as the fresh Taira genesis.  Install the
     // guard before the first AccountId formatting operation, not only before
@@ -337,6 +344,7 @@ fn run_write_canary(config: &Config, args: &WriteCanary) -> Result<Value> {
         &alias,
         &signer.public_key_raw_hex,
         &uaid,
+        &onboarding_token,
     )?;
     let onboarding_contract =
         validate_onboarding_response(onboarding.body.as_ref(), &signer.account_id, &uaid, &alias);
@@ -760,10 +768,97 @@ fn join_url(root: &str, path: &str) -> Result<Url> {
         .wrap_err_with(|| format!("failed to build URL from `{root}` and `{path}`"))
 }
 
+fn validate_onboarding_token(token: &str) -> Result<&str> {
+    let bytes = token.as_bytes();
+    if !(32..=256).contains(&bytes.len()) || !bytes.iter().all(|byte| (0x21..=0x7e).contains(byte))
+    {
+        eyre::bail!(
+            "account onboarding token must contain 32..256 printable ASCII bytes without spaces or normalization"
+        );
+    }
+    Ok(token)
+}
+
+#[cfg(unix)]
+fn validate_onboarding_token_file_metadata(metadata: &fs::Metadata) -> Result<()> {
+    use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+
+    if metadata.uid() != rustix::process::geteuid().as_raw() {
+        eyre::bail!("account onboarding token file must be owned by the current user");
+    }
+    let mode = metadata.permissions().mode();
+    if mode & 0o077 != 0 {
+        eyre::bail!("account onboarding token file must not grant group or other access");
+    }
+    if mode & 0o400 == 0 {
+        eyre::bail!("account onboarding token file must be owner-readable");
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn validate_onboarding_token_file_metadata(_metadata: &fs::Metadata) -> Result<()> {
+    Ok(())
+}
+
+fn read_onboarding_token_file(path: &Path) -> Result<Zeroizing<String>> {
+    let before =
+        fs::symlink_metadata(path).wrap_err("failed to inspect account onboarding token file")?;
+    if before.file_type().is_symlink() || !before.file_type().is_file() {
+        eyre::bail!("account onboarding token file must be a regular non-symlink file");
+    }
+    validate_onboarding_token_file_metadata(&before)?;
+
+    #[cfg(unix)]
+    let mut file = {
+        let descriptor = rustix::fs::open(
+            path,
+            rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::CLOEXEC | rustix::fs::OFlags::NOFOLLOW,
+            rustix::fs::Mode::empty(),
+        )
+        .wrap_err("failed to securely open account onboarding token file")?;
+        fs::File::from(descriptor)
+    };
+    #[cfg(not(unix))]
+    let mut file = fs::OpenOptions::new()
+        .read(true)
+        .open(path)
+        .wrap_err("failed to open account onboarding token file")?;
+
+    let opened = file
+        .metadata()
+        .wrap_err("failed to inspect opened account onboarding token file")?;
+    if !opened.file_type().is_file() {
+        eyre::bail!("account onboarding token file must remain a regular file");
+    }
+    validate_onboarding_token_file_metadata(&opened)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+        if opened.dev() != before.dev() || opened.ino() != before.ino() {
+            eyre::bail!("account onboarding token file changed during secure open");
+        }
+    }
+
+    let mut raw = Zeroizing::new(Vec::with_capacity(257));
+    file.by_ref()
+        .take(257)
+        .read_to_end(&mut raw)
+        .wrap_err("failed to read account onboarding token file")?;
+    if raw.len() > 256 {
+        eyre::bail!("account onboarding token file exceeds the maximum credential length");
+    }
+    let token = std::str::from_utf8(&raw)
+        .map_err(|_| eyre!("account onboarding token file must contain printable ASCII"))?;
+    validate_onboarding_token(token)?;
+    Ok(Zeroizing::new(token.to_owned()))
+}
+
 fn http_client() -> Result<HttpClient> {
     HttpClient::builder()
         .timeout(Duration::from_secs(30))
         .user_agent("iroha-taira-devex/1")
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .wrap_err("failed to build HTTP client")
 }
@@ -786,6 +881,10 @@ fn http_json(
     let response = request
         .send()
         .wrap_err_with(|| format!("request failed for {url}"))?;
+    decode_http_json_response(response)
+}
+
+fn decode_http_json_response(response: reqwest::blocking::Response) -> Result<HttpJson> {
     let status = response.status().as_u16();
     let text = response.text().unwrap_or_default();
     let parsed = if text.trim().is_empty() {
@@ -798,6 +897,42 @@ fn http_json(
         body: parsed,
         text,
     })
+}
+
+fn redact_sensitive_json(value: &mut Value, sensitive_value: &str) {
+    match value {
+        Value::String(text) => {
+            if text.contains(sensitive_value) {
+                *text = text.replace(sensitive_value, "<redacted>");
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                redact_sensitive_json(item, sensitive_value);
+            }
+        }
+        Value::Object(object) => {
+            let original = std::mem::take(object);
+            for (key, mut item) in original {
+                redact_sensitive_json(&mut item, sensitive_value);
+                object.insert(key.replace(sensitive_value, "<redacted>"), item);
+            }
+        }
+        Value::Null | Value::Bool(_) | Value::Number(_) => {}
+    }
+}
+
+fn redact_http_json(response: &mut HttpJson, sensitive_value: &str) {
+    if response.text.contains(sensitive_value) {
+        response.text = response.text.replace(sensitive_value, "<redacted>");
+    }
+    if let Some(body) = &mut response.body {
+        redact_sensitive_json(body, sensitive_value);
+        response.text =
+            json::to_json(body).unwrap_or_else(|_| "\"<redacted JSON response>\"".to_owned());
+    } else if !response.text.trim().is_empty() {
+        response.text = "<invalid JSON response>".to_owned();
+    }
 }
 
 fn collect_status_warnings(status: Option<&Value>, warnings: &mut Vec<String>) {
@@ -931,6 +1066,7 @@ fn onboard_canary(
     alias: &str,
     public_key_raw_hex: &str,
     uaid: &UniversalAccountId,
+    onboarding_token: &str,
 ) -> Result<HttpJson> {
     let url = join_url(public_root, "/v1/accounts/onboard")?;
     let mut body = Map::new();
@@ -940,13 +1076,25 @@ fn onboard_canary(
         Value::String(public_key_raw_hex.to_owned()),
     );
     body.insert("uaid".into(), Value::String(uaid.to_string()));
-    let result = http_json(
-        http,
-        reqwest::Method::POST,
-        url.as_str(),
-        Some(&Value::Object(body)),
-    )?;
-    Ok(result)
+    let bytes = json::to_vec(&Value::Object(body))
+        .map_err(|err| eyre!("encode JSON request body: {err}"))?;
+    let mut header_value =
+        reqwest::header::HeaderValue::from_str(validate_onboarding_token(onboarding_token)?)
+            .map_err(|_| {
+                eyre!("validated account onboarding token was not a valid HTTP header value")
+            })?;
+    header_value.set_sensitive(true);
+    let response = http
+        .post(url.clone())
+        .header(reqwest::header::ACCEPT, "application/json")
+        .header(reqwest::header::CONTENT_TYPE, "application/json")
+        .header(ACCOUNT_ONBOARDING_TOKEN_HEADER, header_value)
+        .body(bytes)
+        .send()
+        .wrap_err_with(|| format!("request failed for {url}"))?;
+    let mut response = decode_http_json_response(response)?;
+    redact_http_json(&mut response, onboarding_token);
+    Ok(response)
 }
 
 fn derive_canary_uaid(public_key_raw_hex: &str) -> UniversalAccountId {
@@ -1388,17 +1536,65 @@ mod tests {
         },
         thread,
     };
+    use tempfile::NamedTempFile;
 
-    #[derive(Clone, Debug)]
+    const TEST_ONBOARDING_TOKEN: &str = "0123456789abcdef0123456789ABCDEF";
+
+    fn test_onboarding_token_file() -> NamedTempFile {
+        let mut file = NamedTempFile::new().expect("create onboarding token file");
+        file.write_all(TEST_ONBOARDING_TOKEN.as_bytes())
+            .expect("write onboarding token file");
+        file.flush().expect("flush onboarding token file");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            fs::set_permissions(file.path(), fs::Permissions::from_mode(0o600))
+                .expect("set onboarding token file mode");
+        }
+        file
+    }
+
+    #[derive(Clone)]
     struct MockRequest {
         method: String,
         path: String,
+        headers: Vec<(String, String)>,
         body: String,
+    }
+
+    impl std::fmt::Debug for MockRequest {
+        fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter
+                .debug_struct("MockRequest")
+                .field("method", &self.method)
+                .field("path", &self.path)
+                .field(
+                    "header_names",
+                    &self
+                        .headers
+                        .iter()
+                        .map(|(name, _)| name)
+                        .collect::<Vec<_>>(),
+                )
+                .field("body", &self.body)
+                .finish()
+        }
+    }
+
+    impl MockRequest {
+        fn header_values(&self, name: &str) -> Vec<&str> {
+            self.headers
+                .iter()
+                .filter(|(candidate, _)| candidate.eq_ignore_ascii_case(name))
+                .map(|(_, value)| value.as_str())
+                .collect()
+        }
     }
 
     struct MockResponse {
         status: u16,
         content_type: &'static str,
+        headers: Vec<(&'static str, String)>,
         body: String,
     }
 
@@ -1467,6 +1663,7 @@ mod tests {
             Self {
                 status,
                 content_type: "application/json",
+                headers: Vec::new(),
                 body: json::to_json(&value).expect("mock JSON response"),
             }
         }
@@ -1475,6 +1672,7 @@ mod tests {
             Self {
                 status,
                 content_type: "text/plain",
+                headers: Vec::new(),
                 body: body.into(),
             }
         }
@@ -1567,8 +1765,21 @@ mod tests {
         let mut parts = request_line.split_whitespace();
         let method = parts.next().expect("method").to_owned();
         let path = parts.next().expect("path").to_owned();
+        let parsed_headers = headers
+            .lines()
+            .skip(1)
+            .filter_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                Some((name.trim().to_owned(), value.trim().to_owned()))
+            })
+            .collect();
         let body = String::from_utf8_lossy(&raw[header_end + 4..]).to_string();
-        MockRequest { method, path, body }
+        MockRequest {
+            method,
+            path,
+            headers: parsed_headers,
+            body,
+        }
     }
 
     fn find_header_end(raw: &[u8]) -> Option<usize> {
@@ -1578,6 +1789,8 @@ mod tests {
     fn write_mock_response(stream: &mut TcpStream, response: MockResponse) {
         let reason = match response.status {
             200 => "OK",
+            202 => "Accepted",
+            307 => "Temporary Redirect",
             400 => "Bad Request",
             404 => "Not Found",
             503 => "Service Unavailable",
@@ -1586,13 +1799,17 @@ mod tests {
         let body = response.body.as_bytes();
         write!(
             stream,
-            "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\n",
             response.status,
             reason,
             response.content_type,
             body.len()
         )
         .expect("write mock response headers");
+        for (name, value) in response.headers {
+            write!(stream, "{name}: {value}\r\n").expect("write mock response header");
+        }
+        write!(stream, "\r\n").expect("finish mock response headers");
         stream.write_all(body).expect("write mock response body");
     }
 
@@ -1837,6 +2054,150 @@ mod tests {
     }
 
     #[test]
+    fn onboarding_token_validation_is_byte_exact_and_redacted() {
+        assert_eq!(
+            validate_onboarding_token(TEST_ONBOARDING_TOKEN).expect("valid token"),
+            TEST_ONBOARDING_TOKEN
+        );
+        for malformed in [
+            String::new(),
+            "T".repeat(31),
+            "T".repeat(257),
+            format!("{} ", "T".repeat(31)),
+            format!("{}é", "T".repeat(31)),
+        ] {
+            let error = validate_onboarding_token(&malformed)
+                .expect_err("malformed onboarding token must fail closed");
+            if !malformed.is_empty() {
+                assert!(!format!("{error:#}").contains(&malformed));
+            }
+        }
+    }
+
+    #[test]
+    fn onboarding_response_redaction_covers_text_keys_and_values() {
+        let escaped_token = "\"".repeat(32);
+        let mut body = Map::new();
+        body.insert(
+            escaped_token.clone(),
+            Value::Array(vec![Value::String(escaped_token.clone())]),
+        );
+        let encoded = json::to_json(&Value::Object(body.clone())).expect("encode echoed token");
+        assert!(!encoded.contains(&escaped_token));
+        let mut response = HttpJson {
+            status: 400,
+            text: encoded,
+            body: Some(Value::Object(body)),
+        };
+
+        redact_http_json(&mut response, &escaped_token);
+
+        let rendered = compact_json(response.body.as_ref().expect("redacted body"));
+        assert!(!response.text.contains(&escaped_token));
+        assert!(!rendered.contains(&escaped_token));
+        assert!(!response.text.contains(&"\\\"".repeat(32)));
+        assert!(rendered.contains("<redacted>"));
+    }
+
+    #[test]
+    fn onboarding_token_file_is_exact_owner_only_regular_and_not_cached() {
+        let file = test_onboarding_token_file();
+        assert_eq!(
+            read_onboarding_token_file(file.path())
+                .expect("read token")
+                .as_str(),
+            TEST_ONBOARDING_TOKEN
+        );
+
+        let replacement = "Z".repeat(32);
+        fs::write(file.path(), &replacement).expect("replace token bytes");
+        assert_eq!(
+            read_onboarding_token_file(file.path())
+                .expect("read replacement token")
+                .as_str(),
+            replacement
+        );
+
+        fs::write(file.path(), format!("{TEST_ONBOARDING_TOKEN}\n")).expect("write newline token");
+        let error = read_onboarding_token_file(file.path())
+            .expect_err("newline must not be trimmed from token file");
+        assert!(format!("{error:#}").contains("printable ASCII"));
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::{PermissionsExt as _, symlink};
+
+            fs::write(file.path(), TEST_ONBOARDING_TOKEN).expect("restore token");
+            fs::set_permissions(file.path(), fs::Permissions::from_mode(0o640))
+                .expect("set unsafe permissions");
+            let error = read_onboarding_token_file(file.path())
+                .expect_err("group-readable token file must fail closed");
+            assert!(format!("{error:#}").contains("group or other"));
+
+            fs::set_permissions(file.path(), fs::Permissions::from_mode(0o600))
+                .expect("restore safe permissions");
+            let directory = tempfile::tempdir().expect("token symlink directory");
+            let link = directory.path().join("onboarding.token");
+            symlink(file.path(), &link).expect("create token symlink");
+            let error =
+                read_onboarding_token_file(&link).expect_err("token symlink must fail closed");
+            assert!(format!("{error:#}").contains("non-symlink"));
+        }
+
+        let directory = tempfile::tempdir().expect("token directory");
+        let error = read_onboarding_token_file(directory.path())
+            .expect_err("directory token path must fail closed");
+        assert!(format!("{error:#}").contains("regular non-symlink"));
+    }
+
+    #[test]
+    fn onboard_canary_refuses_redirect_without_forwarding_token() {
+        let destination = spawn_mock_http(1, |_request| {
+            MockResponse::json(200, norito::json!({"unexpected": "redirect followed"}))
+        });
+        let destination_url = format!("{}/v1/accounts/onboard", destination.base_url);
+        let redirect = spawn_mock_http(1, move |_request| MockResponse {
+            status: 307,
+            content_type: "text/plain",
+            headers: vec![("Location", destination_url.clone())],
+            body: format!("server echoed {TEST_ONBOARDING_TOKEN}"),
+        });
+        let http = http_client().expect("HTTP client");
+        let public_key_hex = "ab".repeat(32);
+        let uaid = derive_canary_uaid(&public_key_hex);
+
+        let response = onboard_canary(
+            &http,
+            &redirect.base_url,
+            "canary@universal",
+            &public_key_hex,
+            &uaid,
+            TEST_ONBOARDING_TOKEN,
+        )
+        .expect("redirect remains an HTTP response");
+        let redirect_requests = finish_mock(redirect);
+        let destination_requests = finish_mock(destination);
+
+        assert_eq!(response.status, 307);
+        assert_eq!(response.text, "<invalid JSON response>");
+        assert!(!response.text.contains(TEST_ONBOARDING_TOKEN));
+        assert_eq!(redirect_requests.len(), 1);
+        assert_eq!(
+            redirect_requests[0]
+                .header_values(ACCOUNT_ONBOARDING_TOKEN_HEADER)
+                .len(),
+            1
+        );
+        assert!(
+            redirect_requests[0]
+                .header_values(ACCOUNT_ONBOARDING_TOKEN_HEADER)
+                .first()
+                .is_some_and(|value| *value == TEST_ONBOARDING_TOKEN)
+        );
+        assert!(destination_requests.is_empty());
+    }
+
+    #[test]
     fn doctor_mock_required_tool_missing_reports_failure() {
         let missing_tool = REQUIRED_MCP_TOOLS[0];
         let server = spawn_mock_http(13, move |request| {
@@ -1861,11 +2222,13 @@ mod tests {
 
     #[test]
     fn write_canary_mock_success_returns_redacted_receipt() {
+        let onboarding_token_file = test_onboarding_token_file();
         let server = spawn_mock_http(9, |request| write_canary_mock_response(request, 202));
         let args = WriteCanary {
             public_root: server.base_url.clone(),
             alias_prefix: "mock-canary".to_owned(),
             gas_asset_id: DEFAULT_GAS_ASSET_ID.to_owned(),
+            onboarding_token_file: onboarding_token_file.path().to_path_buf(),
             write_config: None,
             use_config_signer: false,
             json: true,
@@ -1887,6 +2250,24 @@ mod tests {
                 request.method == "POST" && path_only(&request.path) == "/v1/accounts/onboard"
             })
             .expect("onboarding request");
+        assert_eq!(
+            onboarding
+                .header_values(ACCOUNT_ONBOARDING_TOKEN_HEADER)
+                .len(),
+            1
+        );
+        assert!(
+            onboarding
+                .header_values(ACCOUNT_ONBOARDING_TOKEN_HEADER)
+                .first()
+                .is_some_and(|value| *value == TEST_ONBOARDING_TOKEN),
+            "onboarding credential header did not match the exact token-file bytes"
+        );
+        assert_eq!(
+            onboarding.header_values("content-type"),
+            vec!["application/json"]
+        );
+        assert!(!onboarding.body.contains(TEST_ONBOARDING_TOKEN));
         let onboarding_body =
             json::from_str::<Value>(&onboarding.body).expect("decode onboarding request");
         let onboarding_object = onboarding_body.as_object().expect("onboarding object");
@@ -1998,11 +2379,13 @@ mod tests {
 
     #[test]
     fn write_canary_mock_onboarding_400_does_not_attempt_faucet() {
+        let onboarding_token_file = test_onboarding_token_file();
         let server = spawn_mock_http(1, |request| write_canary_mock_response(request, 400));
         let args = WriteCanary {
             public_root: server.base_url.clone(),
             alias_prefix: "mock-canary".to_owned(),
             gas_asset_id: DEFAULT_GAS_ASSET_ID.to_owned(),
+            onboarding_token_file: onboarding_token_file.path().to_path_buf(),
             write_config: None,
             use_config_signer: false,
             json: true,

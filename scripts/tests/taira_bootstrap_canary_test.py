@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import importlib.util
+import io
 import json
 import sys
 from pathlib import Path
+from urllib import error
+
+import pytest
 
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "taira_bootstrap_canary.py"
@@ -14,6 +18,8 @@ MODULE = importlib.util.module_from_spec(SPEC)
 assert SPEC and SPEC.loader  # pragma: no cover
 sys.modules[SPEC.name] = MODULE
 SPEC.loader.exec_module(MODULE)
+
+ONBOARDING_TOKEN = "0123456789abcdef0123456789ABCDEF"
 
 
 def test_default_chain_id_targets_public_sumeragi_v2_taira() -> None:
@@ -159,8 +165,8 @@ def test_onboarding_uses_current_universal_account_dto(monkeypatch) -> None:
     public_key_hex = "AABBCC"
     alias = "canary@universal"
 
-    def fake_http_json(method, url, payload=None):
-        captured.update(method=method, url=url, payload=payload)
+    def fake_http_json(method, url, payload=None, **kwargs):
+        captured.update(method=method, url=url, payload=payload, **kwargs)
         return 202, current_onboarding_response(public_key_hex, alias)
 
     monkeypatch.setattr(MODULE, "_http_json", fake_http_json)
@@ -168,6 +174,7 @@ def test_onboarding_uses_current_universal_account_dto(monkeypatch) -> None:
         "https://taira.example",
         alias,
         public_key_hex,
+        onboarding_token=ONBOARDING_TOKEN,
         permissions=["CanFoo", "", "CanFoo", "CanBar"],
     )
 
@@ -182,6 +189,9 @@ def test_onboarding_uses_current_universal_account_dto(monkeypatch) -> None:
             "uaid": MODULE.derive_canary_uaid(public_key_hex),
             "permissions": ["CanFoo", "CanBar"],
         },
+        "headers": {MODULE.ACCOUNT_ONBOARDING_TOKEN_HEADER: ONBOARDING_TOKEN},
+        "allow_redirects": False,
+        "sensitive_value": ONBOARDING_TOKEN,
     }
 
 
@@ -196,7 +206,10 @@ def test_onboarding_rejects_retired_synchronous_response(monkeypatch) -> None:
 
     try:
         MODULE.onboard_account(
-            "https://taira.example", "canary@universal", "aabbcc"
+            "https://taira.example",
+            "canary@universal",
+            "aabbcc",
+            onboarding_token=ONBOARDING_TOKEN,
         )
     except RuntimeError as error:
         assert "status=200" in str(error)
@@ -215,12 +228,154 @@ def test_onboarding_rejects_mismatched_uaid(monkeypatch) -> None:
 
     try:
         MODULE.onboard_account(
-            "https://taira.example", "canary@universal", "aabbcc"
+            "https://taira.example",
+            "canary@universal",
+            "aabbcc",
+            onboarding_token=ONBOARDING_TOKEN,
         )
     except RuntimeError as error:
         assert "does not match" in str(error)
     else:  # pragma: no cover
         raise AssertionError("mismatched onboarding UAID was accepted")
+
+
+@pytest.mark.parametrize(
+    "token",
+    ["", "T" * 31, "T" * 257, "T" * 31 + " ", "T" * 31 + "é"],
+)
+def test_onboarding_rejects_malformed_token_before_http(monkeypatch, token) -> None:
+    monkeypatch.setattr(
+        MODULE,
+        "_http_json",
+        lambda *_args, **_kwargs: pytest.fail("malformed token reached HTTP dispatch"),
+    )
+
+    with pytest.raises(ValueError) as captured:
+        MODULE.onboard_account(
+            "https://taira.example",
+            "canary@universal",
+            "aabbcc",
+            onboarding_token=token,
+        )
+
+    if token:
+        assert token not in str(captured.value)
+    assert captured.value.__cause__ is None
+    assert captured.value.__context__ is None
+
+
+def test_onboarding_token_file_is_exact_owner_only_regular_and_not_cached(
+    tmp_path, monkeypatch
+) -> None:
+    token_file = tmp_path / "onboarding.token"
+    token_file.write_bytes(ONBOARDING_TOKEN.encode("ascii"))
+    token_file.chmod(0o600)
+
+    assert MODULE.read_onboarding_token_file(token_file) == ONBOARDING_TOKEN
+    replacement = "Z" * 32
+    token_file.write_bytes(replacement.encode("ascii"))
+    assert MODULE.read_onboarding_token_file(token_file) == replacement
+
+    token_file.write_bytes((ONBOARDING_TOKEN + "\n").encode("ascii"))
+    with pytest.raises(ValueError):
+        MODULE.read_onboarding_token_file(token_file)
+
+    token_file.write_bytes(b"T" * 31 + b"\xff")
+    with pytest.raises(ValueError) as captured:
+        MODULE.read_onboarding_token_file(token_file)
+    assert captured.value.__cause__ is None
+    assert captured.value.__context__ is None
+
+    token_file.write_bytes(ONBOARDING_TOKEN.encode("ascii"))
+    token_file.chmod(0o640)
+    with pytest.raises(RuntimeError, match="group or other"):
+        MODULE.read_onboarding_token_file(token_file)
+
+    token_file.chmod(0o600)
+    if hasattr(MODULE.os, "geteuid"):
+        actual_uid = MODULE.os.geteuid()
+        monkeypatch.setattr(MODULE.os, "geteuid", lambda: actual_uid + 1)
+        with pytest.raises(RuntimeError, match="owned by the current user"):
+            MODULE.read_onboarding_token_file(token_file)
+        monkeypatch.setattr(MODULE.os, "geteuid", lambda: actual_uid)
+
+    symlink = tmp_path / "onboarding-link.token"
+    symlink.symlink_to(token_file)
+    with pytest.raises(RuntimeError, match="non-symlink"):
+        MODULE.read_onboarding_token_file(symlink)
+    with pytest.raises(RuntimeError, match="regular"):
+        MODULE.read_onboarding_token_file(tmp_path)
+
+
+def test_onboarding_http_refuses_redirect_and_sends_one_header(monkeypatch) -> None:
+    captured = {}
+
+    class RedirectOpener:
+        @staticmethod
+        def open(req):
+            captured["headers"] = [
+                (key.lower(), value) for key, value in req.header_items()
+            ]
+            raise error.HTTPError(
+                req.full_url,
+                307,
+                "Temporary Redirect",
+                {"Location": "https://redirect.example/v1/accounts/onboard"},
+                io.BytesIO(f"server echoed {ONBOARDING_TOKEN}".encode()),
+            )
+
+    monkeypatch.setattr(
+        MODULE.request,
+        "build_opener",
+        lambda *_handlers: RedirectOpener(),
+    )
+
+    status, body = MODULE._http_json(
+        "POST",
+        "https://taira.example/v1/accounts/onboard",
+        {"alias": "canary@universal"},
+        headers={
+            MODULE.ACCOUNT_ONBOARDING_TOKEN_HEADER.lower(): "stale-duplicate",
+            MODULE.ACCOUNT_ONBOARDING_TOKEN_HEADER: ONBOARDING_TOKEN,
+        },
+        allow_redirects=False,
+        sensitive_value=ONBOARDING_TOKEN,
+    )
+
+    assert status == 307
+    assert body == "<invalid JSON response>"
+    onboarding_headers = [
+        value
+        for name, value in captured["headers"]
+        if name == MODULE.ACCOUNT_ONBOARDING_TOKEN_HEADER.lower()
+    ]
+    assert onboarding_headers == [ONBOARDING_TOKEN]
+
+
+def test_onboarding_redacts_server_echo_before_error(monkeypatch) -> None:
+    monkeypatch.setattr(
+        MODULE,
+        "_http_json",
+        lambda *_args, **_kwargs: (
+            307,
+            {
+                "message": f"server echoed {ONBOARDING_TOKEN}",
+                "nested": [ONBOARDING_TOKEN],
+                ONBOARDING_TOKEN: "echoed as an object key",
+            },
+        ),
+    )
+
+    with pytest.raises(RuntimeError) as captured:
+        MODULE.onboard_account(
+            "https://taira.example",
+            "canary@universal",
+            "aabbcc",
+            onboarding_token=ONBOARDING_TOKEN,
+        )
+
+    assert ONBOARDING_TOKEN not in str(captured.value)
+    assert "<redacted>" in str(captured.value)
 
 
 def test_http_json_uses_first_release_api_without_version_header(monkeypatch) -> None:

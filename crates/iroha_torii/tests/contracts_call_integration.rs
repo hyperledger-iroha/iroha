@@ -399,35 +399,12 @@ seiyaku ContractCallConfigureAccountMapTest {
 
 fn contract_test_app(
     state: Arc<State>,
-    kura: Arc<Kura>,
+    _kura: Arc<Kura>,
     queue: Arc<Queue>,
     chain_id: iroha_data_model::ChainId,
     telemetry: iroha_torii::MaybeTelemetry,
 ) -> Router {
     Router::new()
-        .route(
-            "/v1/contracts/deploy",
-            post({
-                let chain_id = Arc::new(chain_id.clone());
-                let kura = kura.clone();
-                let queue = queue.clone();
-                let state = state.clone();
-                let telemetry = telemetry.clone();
-                move |iroha_torii::NoritoJson(req): iroha_torii::NoritoJson<
-                    iroha_torii::DeployContractDto,
-                >| async move {
-                    iroha_torii::handle_post_contract_deploy(
-                        chain_id.clone(),
-                        kura.clone(),
-                        queue.clone(),
-                        state.clone(),
-                        telemetry.clone(),
-                        iroha_torii::NoritoJson(req),
-                    )
-                    .await
-                }
-            }),
-        )
         .route(
             "/v1/contracts/call",
             post({
@@ -509,28 +486,6 @@ async fn run_contract_view_response(
     )
 }
 
-fn deployed_contract_address(response: &json::Value) -> String {
-    response
-        .get("contracts")
-        .and_then(json::Value::as_array)
-        .and_then(|contracts| contracts.first())
-        .and_then(|contract| contract.get("contract_address"))
-        .and_then(json::Value::as_str)
-        .expect("contract_address present in deploy response")
-        .to_owned()
-}
-
-fn deployed_contract_abi_hash_hex(response: &json::Value) -> String {
-    response
-        .get("contracts")
-        .and_then(json::Value::as_array)
-        .and_then(|contracts| contracts.first())
-        .and_then(|contract| contract.get("abi_hash_hex"))
-        .and_then(json::Value::as_str)
-        .expect("abi_hash_hex present in deploy response")
-        .to_owned()
-}
-
 #[tokio::test]
 async fn contracts_call_enqueues_transaction() {
     if std::env::var("IROHA_RUN_IGNORED").ok().as_deref() != Some("1") {
@@ -565,22 +520,16 @@ async fn contracts_call_enqueues_transaction() {
     );
 
     let program = iroha_torii::test_utils::minimal_ivm_program(1);
-    let code_hash_hex = iroha_torii::test_utils::contract_code_hash_hex(&program);
-    let code_b64 = base64::engine::general_purpose::STANDARD.encode(&program);
-    let deploy_body =
-        iroha_torii::test_utils::deploy_request_json(&creds.account, &creds.private_key, &code_b64);
-    let deploy_req = http::Request::builder()
-        .method("POST")
-        .uri("/v1/contracts/deploy")
-        .header(http::header::CONTENT_TYPE, "application/json")
-        .body(axum::body::Body::from(deploy_body))
-        .unwrap();
-    let deploy_resp = app.clone().oneshot(deploy_req).await.unwrap();
-    assert_eq!(deploy_resp.status(), http::StatusCode::OK);
-    let deploy_bytes = deploy_resp.into_body().collect().await.unwrap().to_bytes();
-    let deploy_json: json::Value = json::from_slice(&deploy_bytes).unwrap();
-    let contract_address = deployed_contract_address(&deploy_json);
-    let abi_hash_hex = deployed_contract_abi_hash_hex(&deploy_json);
+    let (contract_address, code_hash_hex, abi_hash_hex) =
+        iroha_torii::test_utils::enqueue_locally_signed_contract_deployment(
+            &state,
+            &queue,
+            &chain_id,
+            &creds.account,
+            &creds.private_key,
+            &program,
+        );
+    let contract_address = contract_address.to_string();
 
     let applied_deploy =
         iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 1);
@@ -956,21 +905,16 @@ async fn contracts_view_surfaces_source_path_in_vm_diagnostic() {
 
     let source_path = "contracts/view_trap_test.ko";
     let program = contract_view_trap_program_with_source_path(source_path);
-    let _code_hash_hex = iroha_torii::test_utils::contract_code_hash_hex(&program);
-    let code_b64 = base64::engine::general_purpose::STANDARD.encode(&program);
-    let deploy_body =
-        iroha_torii::test_utils::deploy_request_json(&creds.account, &creds.private_key, &code_b64);
-    let deploy_req = http::Request::builder()
-        .method("POST")
-        .uri("/v1/contracts/deploy")
-        .header(http::header::CONTENT_TYPE, "application/json")
-        .body(axum::body::Body::from(deploy_body))
-        .unwrap();
-    let deploy_resp = app.clone().oneshot(deploy_req).await.unwrap();
-    assert_eq!(deploy_resp.status(), http::StatusCode::OK);
-    let deploy_bytes = deploy_resp.into_body().collect().await.unwrap().to_bytes();
-    let deploy_json: json::Value = json::from_slice(&deploy_bytes).unwrap();
-    let contract_address = deployed_contract_address(&deploy_json);
+    let (contract_address, _, _) =
+        iroha_torii::test_utils::enqueue_locally_signed_contract_deployment(
+            &state,
+            &queue,
+            &chain_id,
+            &creds.account,
+            &creds.private_key,
+            &program,
+        );
+    let contract_address = contract_address.to_string();
 
     let applied_deploy =
         iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 1);
@@ -1044,22 +988,16 @@ async fn contracts_view_decodes_literal_and_persisted_bytes_returns() {
     );
 
     let program = contract_view_bytes_program();
-    let deploy_body = iroha_torii::test_utils::deploy_request_json(
-        &creds.account,
-        &creds.private_key,
-        &base64::engine::general_purpose::STANDARD.encode(&program),
-    );
-    let deploy_req = http::Request::builder()
-        .method("POST")
-        .uri("/v1/contracts/deploy")
-        .header(http::header::CONTENT_TYPE, "application/json")
-        .body(axum::body::Body::from(deploy_body))
-        .unwrap();
-    let deploy_resp = app.clone().oneshot(deploy_req).await.unwrap();
-    assert_eq!(deploy_resp.status(), http::StatusCode::OK);
-    let deploy_bytes = deploy_resp.into_body().collect().await.unwrap().to_bytes();
-    let deploy_json: json::Value = json::from_slice(&deploy_bytes).unwrap();
-    let contract_address = deployed_contract_address(&deploy_json);
+    let (contract_address, _, _) =
+        iroha_torii::test_utils::enqueue_locally_signed_contract_deployment(
+            &state,
+            &queue,
+            &chain_id,
+            &creds.account,
+            &creds.private_key,
+            &program,
+        );
+    let contract_address = contract_address.to_string();
     let applied_deploy =
         iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 1);
     assert_eq!(applied_deploy, 1);
@@ -1152,21 +1090,16 @@ async fn contracts_call_honors_requested_entrypoint_and_payload() {
     );
 
     let program = contract_call_dispatch_program();
-    let _code_hash_hex = iroha_torii::test_utils::contract_code_hash_hex(&program);
-    let code_b64 = base64::engine::general_purpose::STANDARD.encode(&program);
-    let deploy_body =
-        iroha_torii::test_utils::deploy_request_json(&creds.account, &creds.private_key, &code_b64);
-    let deploy_req = http::Request::builder()
-        .method("POST")
-        .uri("/v1/contracts/deploy")
-        .header(http::header::CONTENT_TYPE, "application/json")
-        .body(axum::body::Body::from(deploy_body))
-        .unwrap();
-    let deploy_resp = app.clone().oneshot(deploy_req).await.unwrap();
-    assert_eq!(deploy_resp.status(), http::StatusCode::OK);
-    let deploy_bytes = deploy_resp.into_body().collect().await.unwrap().to_bytes();
-    let deploy_json: json::Value = json::from_slice(&deploy_bytes).unwrap();
-    let contract_address = deployed_contract_address(&deploy_json);
+    let (contract_address, _, _) =
+        iroha_torii::test_utils::enqueue_locally_signed_contract_deployment(
+            &state,
+            &queue,
+            &chain_id,
+            &creds.account,
+            &creds.private_key,
+            &program,
+        );
+    let contract_address = contract_address.to_string();
 
     let applied_deploy =
         iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 1);
@@ -1286,22 +1219,16 @@ async fn contracts_view_roundtrips_account_id_literals_and_persisted_state() {
     );
 
     let program = contract_view_account_id_program();
-    let deploy_body = iroha_torii::test_utils::deploy_request_json(
-        &creds.account,
-        &creds.private_key,
-        &base64::engine::general_purpose::STANDARD.encode(&program),
-    );
-    let deploy_req = http::Request::builder()
-        .method("POST")
-        .uri("/v1/contracts/deploy")
-        .header(http::header::CONTENT_TYPE, "application/json")
-        .body(axum::body::Body::from(deploy_body))
-        .unwrap();
-    let deploy_resp = app.clone().oneshot(deploy_req).await.unwrap();
-    assert_eq!(deploy_resp.status(), http::StatusCode::OK);
-    let deploy_bytes = deploy_resp.into_body().collect().await.unwrap().to_bytes();
-    let deploy_json: json::Value = json::from_slice(&deploy_bytes).unwrap();
-    let contract_address = deployed_contract_address(&deploy_json);
+    let (contract_address, _, _) =
+        iroha_torii::test_utils::enqueue_locally_signed_contract_deployment(
+            &state,
+            &queue,
+            &chain_id,
+            &creds.account,
+            &creds.private_key,
+            &program,
+        );
+    let contract_address = contract_address.to_string();
     let applied_deploy =
         iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 1);
     assert_eq!(applied_deploy, 1);
@@ -1419,34 +1346,25 @@ async fn contracts_call_configure_roundtrips_account_id_map_state() {
     );
 
     let program = contract_call_configure_account_map_program();
-    let deploy_body = iroha_torii::test_utils::deploy_request_json(
-        &creds.account,
-        &creds.private_key,
-        &base64::engine::general_purpose::STANDARD.encode(&program),
-    );
-    let deploy_req = http::Request::builder()
-        .method("POST")
-        .uri("/v1/contracts/deploy")
-        .header(http::header::CONTENT_TYPE, "application/json")
-        .body(axum::body::Body::from(deploy_body))
-        .unwrap();
-    let deploy_app = app.clone();
-    let deploy_task = tokio::spawn(async move {
-        let deploy_resp = deploy_app.oneshot(deploy_req).await.unwrap();
-        let deploy_status = deploy_resp.status();
-        let deploy_bytes = deploy_resp.into_body().collect().await.unwrap().to_bytes();
-        (deploy_status, deploy_bytes)
-    });
-    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    let (contract_address, _, _) =
+        iroha_torii::test_utils::enqueue_locally_signed_contract_deployment(
+            &state,
+            &queue,
+            &chain_id,
+            &creds.account,
+            &creds.private_key,
+            &program,
+        );
+    let contract_address = contract_address.to_string();
     let applied_deploy =
         iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 1);
-    assert_eq!(applied_deploy, 1, "expected queued deploy transaction");
+    assert_eq!(applied_deploy, 1, "expected locally signed deployment");
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .expect("system time after epoch")
         .as_millis() as u64;
     let deploy_alias: iroha_data_model::smart_contract::ContractAlias =
-        "deploy1::universal".parse().expect("deploy alias");
+        "fixture0::universal".parse().expect("deployment alias");
     let post_apply_view = state.view();
     let alias_target = post_apply_view
         .world
@@ -1462,23 +1380,6 @@ async fn contracts_call_configure_roundtrips_account_id_map_state() {
         alias_active,
         "post-apply alias state missing or inactive: alias_target={alias_target:?}"
     );
-    let (deploy_status, deploy_bytes) = deploy_task.await.unwrap();
-    if deploy_status != http::StatusCode::OK {
-        panic!(
-            "deploy failed with status {deploy_status}: alias_target={alias_target:?} body_lossy={:?} body_hex={}",
-            String::from_utf8_lossy(&deploy_bytes),
-            hex::encode(&deploy_bytes)
-        );
-    }
-    let deploy_json: json::Value = match json::from_slice(&deploy_bytes) {
-        Ok(value) => value,
-        Err(err) => panic!(
-            "deploy returned non-JSON body: alias_target={alias_target:?} err={err:?} body_lossy={:?} body_hex={}",
-            String::from_utf8_lossy(&deploy_bytes),
-            hex::encode(&deploy_bytes)
-        ),
-    };
-    let contract_address = deployed_contract_address(&deploy_json);
 
     let configure_payload = iroha_torii::json_object(vec![
         iroha_torii::json_entry("admin", creds.account.to_string()),
@@ -1573,21 +1474,16 @@ async fn contracts_call_persists_declared_state_fields_across_calls() {
     );
 
     let program = contract_call_declared_state_program();
-    let _code_hash_hex = iroha_torii::test_utils::contract_code_hash_hex(&program);
-    let code_b64 = base64::engine::general_purpose::STANDARD.encode(&program);
-    let deploy_body =
-        iroha_torii::test_utils::deploy_request_json(&creds.account, &creds.private_key, &code_b64);
-    let deploy_req = http::Request::builder()
-        .method("POST")
-        .uri("/v1/contracts/deploy")
-        .header(http::header::CONTENT_TYPE, "application/json")
-        .body(axum::body::Body::from(deploy_body))
-        .unwrap();
-    let deploy_resp = app.clone().oneshot(deploy_req).await.unwrap();
-    assert_eq!(deploy_resp.status(), http::StatusCode::OK);
-    let deploy_bytes = deploy_resp.into_body().collect().await.unwrap().to_bytes();
-    let deploy_json: json::Value = json::from_slice(&deploy_bytes).unwrap();
-    let contract_address = deployed_contract_address(&deploy_json);
+    let (contract_address, _, _) =
+        iroha_torii::test_utils::enqueue_locally_signed_contract_deployment(
+            &state,
+            &queue,
+            &chain_id,
+            &creds.account,
+            &creds.private_key,
+            &program,
+        );
+    let contract_address = contract_address.to_string();
 
     let applied_deploy =
         iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 1);
@@ -1732,21 +1628,16 @@ async fn contracts_call_persists_declared_state_after_emitting_isi() {
     );
 
     let program = contract_call_declared_state_with_isi_program();
-    let _code_hash_hex = iroha_torii::test_utils::contract_code_hash_hex(&program);
-    let code_b64 = base64::engine::general_purpose::STANDARD.encode(&program);
-    let deploy_body =
-        iroha_torii::test_utils::deploy_request_json(&creds.account, &creds.private_key, &code_b64);
-    let deploy_req = http::Request::builder()
-        .method("POST")
-        .uri("/v1/contracts/deploy")
-        .header(http::header::CONTENT_TYPE, "application/json")
-        .body(axum::body::Body::from(deploy_body))
-        .unwrap();
-    let deploy_resp = app.clone().oneshot(deploy_req).await.unwrap();
-    assert_eq!(deploy_resp.status(), http::StatusCode::OK);
-    let deploy_bytes = deploy_resp.into_body().collect().await.unwrap().to_bytes();
-    let deploy_json: json::Value = json::from_slice(&deploy_bytes).unwrap();
-    let contract_address = deployed_contract_address(&deploy_json);
+    let (contract_address, _, _) =
+        iroha_torii::test_utils::enqueue_locally_signed_contract_deployment(
+            &state,
+            &queue,
+            &chain_id,
+            &creds.account,
+            &creds.private_key,
+            &program,
+        );
+    let contract_address = contract_address.to_string();
 
     let applied_deploy =
         iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 1);
@@ -1862,21 +1753,16 @@ async fn contracts_call_persists_declared_state_after_mint_asset() {
     );
 
     let program = contract_call_declared_state_with_mint_program();
-    let _code_hash_hex = iroha_torii::test_utils::contract_code_hash_hex(&program);
-    let code_b64 = base64::engine::general_purpose::STANDARD.encode(&program);
-    let deploy_body =
-        iroha_torii::test_utils::deploy_request_json(&creds.account, &creds.private_key, &code_b64);
-    let deploy_req = http::Request::builder()
-        .method("POST")
-        .uri("/v1/contracts/deploy")
-        .header(http::header::CONTENT_TYPE, "application/json")
-        .body(axum::body::Body::from(deploy_body))
-        .unwrap();
-    let deploy_resp = app.clone().oneshot(deploy_req).await.unwrap();
-    assert_eq!(deploy_resp.status(), http::StatusCode::OK);
-    let deploy_bytes = deploy_resp.into_body().collect().await.unwrap().to_bytes();
-    let deploy_json: json::Value = json::from_slice(&deploy_bytes).unwrap();
-    let contract_address = deployed_contract_address(&deploy_json);
+    let (contract_address, _, _) =
+        iroha_torii::test_utils::enqueue_locally_signed_contract_deployment(
+            &state,
+            &queue,
+            &chain_id,
+            &creds.account,
+            &creds.private_key,
+            &program,
+        );
+    let contract_address = contract_address.to_string();
 
     let applied_deploy =
         iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 1);
@@ -1996,21 +1882,16 @@ async fn contracts_call_persists_n3x_like_state_after_mint_asset() {
     );
 
     let program = contract_call_n3x_like_program();
-    let _code_hash_hex = iroha_torii::test_utils::contract_code_hash_hex(&program);
-    let code_b64 = base64::engine::general_purpose::STANDARD.encode(&program);
-    let deploy_body =
-        iroha_torii::test_utils::deploy_request_json(&creds.account, &creds.private_key, &code_b64);
-    let deploy_req = http::Request::builder()
-        .method("POST")
-        .uri("/v1/contracts/deploy")
-        .header(http::header::CONTENT_TYPE, "application/json")
-        .body(axum::body::Body::from(deploy_body))
-        .unwrap();
-    let deploy_resp = app.clone().oneshot(deploy_req).await.unwrap();
-    assert_eq!(deploy_resp.status(), http::StatusCode::OK);
-    let deploy_bytes = deploy_resp.into_body().collect().await.unwrap().to_bytes();
-    let deploy_json: json::Value = json::from_slice(&deploy_bytes).unwrap();
-    let contract_address = deployed_contract_address(&deploy_json);
+    let (contract_address, _, _) =
+        iroha_torii::test_utils::enqueue_locally_signed_contract_deployment(
+            &state,
+            &queue,
+            &chain_id,
+            &creds.account,
+            &creds.private_key,
+            &program,
+        );
+    let contract_address = contract_address.to_string();
 
     let applied_deploy =
         iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 1);
@@ -2147,21 +2028,16 @@ async fn contracts_call_executes_n3x_like_burn_after_mint_asset() {
     );
 
     let program = contract_call_n3x_like_program();
-    let _code_hash_hex = iroha_torii::test_utils::contract_code_hash_hex(&program);
-    let code_b64 = base64::engine::general_purpose::STANDARD.encode(&program);
-    let deploy_body =
-        iroha_torii::test_utils::deploy_request_json(&creds.account, &creds.private_key, &code_b64);
-    let deploy_req = http::Request::builder()
-        .method("POST")
-        .uri("/v1/contracts/deploy")
-        .header(http::header::CONTENT_TYPE, "application/json")
-        .body(axum::body::Body::from(deploy_body))
-        .unwrap();
-    let deploy_resp = app.clone().oneshot(deploy_req).await.unwrap();
-    assert_eq!(deploy_resp.status(), http::StatusCode::OK);
-    let deploy_bytes = deploy_resp.into_body().collect().await.unwrap().to_bytes();
-    let deploy_json: json::Value = json::from_slice(&deploy_bytes).unwrap();
-    let contract_address = deployed_contract_address(&deploy_json);
+    let (contract_address, _, _) =
+        iroha_torii::test_utils::enqueue_locally_signed_contract_deployment(
+            &state,
+            &queue,
+            &chain_id,
+            &creds.account,
+            &creds.private_key,
+            &program,
+        );
+    let contract_address = contract_address.to_string();
 
     let applied_deploy =
         iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 1);

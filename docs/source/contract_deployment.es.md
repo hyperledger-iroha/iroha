@@ -65,19 +65,13 @@ Status: implemented and exercised by Torii, CLI, and core admission tests (May 2
 
 ## Torii endpoints (feature `app_api`)
 
-- `POST /v1/contracts/deploy`
-  - Request body: `DeployContractDto` (see `docs/source/torii_contracts_api.md` for field details).
-  - Torii decodes the base64 payload, verifies the embedded `CNTR` interface,
-    derives the manifest from the artifact itself, allocates a fresh immutable
-    `contract_address`, binds the requested stable `contract_alias` to that
-    address, prepends a domainless self-registration for the authority, and
-    submits the resulting transaction on behalf of the caller.
-  - Redeploying the same `contract_alias` performs an in-place `kaizen`/`改善`:
-    Torii deploys a new address, rebinds the alias atomically, and deactivates
-    the previous address.
-  - Response: `DeployContractBundleReceiptDto` with bundle metadata plus one entry in `contracts[]` for this single-contract shortcut.
-  - Errors: invalid base64, invalid contract artifact, size cap exceeded,
-    governance gating for protected namespaces, or fee/balance failures.
+- Torii does not expose server-side deployment or deployment-receipt routes.
+  Clients verify artifacts, sign manifests, and submit native deployment
+  instructions locally through the standard transaction pipeline.
+- `CommitContractDeployment` atomically validates the expected authority nonce,
+  derived address, registered artifact, and previous alias target before
+  activation and alias rotation. The reserved nonce cannot be written through
+  generic account metadata instructions.
 - `GET /v1/contracts/code/{code_hash}`
   - Returns `{ code_hash, abi_hash, manifest: <ContractManifest> }`. The two
     top-level convenience values are raw lowercase hex; `manifest` uses the
@@ -85,19 +79,16 @@ Status: implemented and exercised by Torii, CLI, and core admission tests (May 2
     both checksummed `Hash` literals, exact entrypoint argument/return schemas,
     state and error declarations, access metadata, trigger descriptors,
     localization data, and signed provenance when present. Fields are never
-    silently truncated.
+    silently truncated. V1 aggregate schemas are one flat preorder tape. A
+    `List` node contains only `capacity`; its exact element subtree immediately
+    follows it. Missing or trailing nodes and the retired nested `element`
+    representation are rejected.
 - `GET /v1/contracts/code-bytes/{code_hash}`
   - Returns `{ code_b64 }` with the stored `.to` image encoded as base64.
 
-All contract lifecycle endpoints share a dedicated deploy limiter configured via
-`torii.deploy_rate_per_origin_per_sec` (tokens per second) and
-`torii.deploy_burst_per_origin` (burst tokens). Defaults are 4 req/s with a burst of
-8 for each token/key derived from `X-API-Token`, the remote IP, or the endpoint hint.
-Set either field to `null` to disable the limiter for trusted operators. When the
-limiter fires, Torii increments the
-`torii_contract_throttled_total{endpoint="deploy"}` telemetry counter and
-returns HTTP 429; any handler error increments
-`torii_contract_errors_total{endpoint=…}` for alerting.
+The artifact-read endpoints are content-addressed reads. Deployment admission,
+fees, permissions, routing, and governance are enforced on the locally signed
+native transactions rather than by a separate Torii deployment limiter.
 
 ## Governance integration & protected namespaces
 
@@ -125,8 +116,16 @@ returns HTTP 429; any handler error increments
 
 ## CLI helpers
 
-- `iroha contract deploy --authority <id> --private-key <hex> --code-file <path> --contract-alias <name::dataspace>`
-  submits the alias-first Torii deploy request (computing hashes on the fly).
+- `ivm_contract_deploy` uses the same native plan in blocking and emit modes.
+  Transactions 1 through N-1 each carry one chunk; the final registration
+  transaction carries chunk N plus finalization. Manifest registration and
+  activation remain separate transactions. Emit mode names files
+  `register-bytes-chunk-NNNN-of-NNNN`, `register-bytes-finalize`,
+  `register-manifest`, and `activate` in submission order. Its JSON reports
+  `register_bytes_tx_strategy = "native_chunks"`, chunk size/count,
+  `register_bytes_stage_tx_hashes`, and the finalization hash in
+  `register_bytes_tx_hash`. `--skip-register-bytes` omits the complete
+  upload/finalize sequence.
 - `iroha contract manifest build --code-file <path> [--sign-with <hex>]` computes
   `code_hash`/`abi_hash` for compiled `.to`, derives the manifest from the
   embedded `CNTR`, and optionally signs it for inspection, printing JSON or

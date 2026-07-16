@@ -164,30 +164,38 @@ pub fn compress_auto(payload: Vec<u8>) -> std::io::Result<(Compression, Vec<u8>)
     match select_compression_for_len(payload.len()) {
         CompressionPlan::None => Ok((Compression::None, payload)),
         CompressionPlan::GpuZstd { level: _level } => {
-            #[cfg(all(feature = "compression", feature = "gpu-compression"))]
+            #[cfg(all(
+                feature = "compression",
+                feature = "gpu-compression",
+                not(target_arch = "wasm32")
+            ))]
             {
                 let out = super::gpu_zstd::encode_all(payload, _level)?;
                 Ok((Compression::Zstd, out))
             }
-            #[cfg(all(feature = "compression", not(feature = "gpu-compression")))]
+            #[cfg(all(
+                feature = "compression",
+                not(feature = "gpu-compression"),
+                not(target_arch = "wasm32")
+            ))]
             {
                 // GPU path requested, but GPU compression is not compiled in: fall back to CPU zstd
                 let out = zstd::encode_all(std::io::Cursor::new(payload), get().zstd_level_large)?;
                 Ok((Compression::Zstd, out))
             }
-            #[cfg(not(feature = "compression"))]
+            #[cfg(any(not(feature = "compression"), target_arch = "wasm32"))]
             {
                 // Compression fully disabled: degrade gracefully with no compression
                 Ok((Compression::None, payload))
             }
         }
         CompressionPlan::CpuZstd { level } => {
-            #[cfg(feature = "compression")]
+            #[cfg(all(feature = "compression", not(target_arch = "wasm32")))]
             {
                 let out = zstd::encode_all(std::io::Cursor::new(payload), level)?;
                 Ok((Compression::Zstd, out))
             }
-            #[cfg(not(feature = "compression"))]
+            #[cfg(any(not(feature = "compression"), target_arch = "wasm32"))]
             {
                 let _ = level;
                 Ok((Compression::None, payload))

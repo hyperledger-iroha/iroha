@@ -243,12 +243,12 @@ fn anonymous_escrow_proof_gas(any: &dyn std::any::Any) -> Option<u64> {
     None
 }
 
-fn gas_for_recursive_kagemusha_topup_v2(topup: &dm_isi::offline::TopUpKagemushaRecursiveV2) -> u64 {
+fn gas_for_recursive_kagemusha_topup_v4(topup: &dm_isi::offline::TopUpKagemushaRecursiveV4) -> u64 {
     gas_for_proof_attachment(&topup.request.shield_evidence.proof, 0, 1)
 }
 
-fn gas_for_recursive_kagemusha_redeem_v2(
-    redeem: &dm_isi::offline::RedeemKagemushaRecursiveV2,
+fn gas_for_recursive_kagemusha_redeem_v4(
+    redeem: &dm_isi::offline::RedeemKagemushaRecursiveV4,
 ) -> u64 {
     let request = &redeem.request;
     let mut gas = gas_for_proof_attachment(
@@ -256,16 +256,23 @@ fn gas_for_recursive_kagemusha_redeem_v2(
         1,
         usize::from(request.offline_change.is_some()),
     );
-    let recursive_proof_bytes =
-        u64::try_from(request.bundle.recursive_proof.proof.bytes.len()).unwrap_or(u64::MAX);
-    gas = gas.saturating_add(zk_gas_base_verify());
-    gas = gas.saturating_add(zk_gas_per_proof_byte().saturating_mul(recursive_proof_bytes));
-    gas = gas.saturating_add(
-        zk_gas_per_public_input().saturating_mul(
-            u64::try_from(crate::zk::kagemusha_v2::KAGEMUSHA_RECURSIVE_SPEND_V2_INSTANCE_ROWS)
+    let recursive_bundles = std::iter::once(&request.bundle)
+        .chain(request.offline_change.iter().map(|change| &change.bundle));
+    for bundle in recursive_bundles {
+        let recursive_proof_bytes =
+            u64::try_from(bundle.recursive_proof.proof_envelope.proof.bytes.len())
+                .unwrap_or(u64::MAX);
+        gas = gas.saturating_add(zk_gas_base_verify());
+        gas = gas.saturating_add(zk_gas_per_proof_byte().saturating_mul(recursive_proof_bytes));
+        gas = gas.saturating_add(
+            zk_gas_per_public_input().saturating_mul(
+                u64::try_from(
+                    crate::zk::kagemusha_step_transition::KAGEMUSHA_STEP_OPERATION_LIMBS_V4,
+                )
                 .unwrap_or(u64::MAX),
-        ),
-    );
+            ),
+        );
+    }
     gas
 }
 
@@ -449,11 +456,11 @@ pub fn meter_instruction(instr: &InstructionBox) -> u64 {
             transfer.outputs.len(),
         );
     }
-    if let Some(topup) = any.downcast_ref::<dm_isi::offline::TopUpKagemushaRecursiveV2>() {
-        return gas_for_recursive_kagemusha_topup_v2(topup);
+    if let Some(topup) = any.downcast_ref::<dm_isi::offline::TopUpKagemushaRecursiveV4>() {
+        return gas_for_recursive_kagemusha_topup_v4(topup);
     }
-    if let Some(redeem) = any.downcast_ref::<dm_isi::offline::RedeemKagemushaRecursiveV2>() {
-        return gas_for_recursive_kagemusha_redeem_v2(redeem);
+    if let Some(redeem) = any.downcast_ref::<dm_isi::offline::RedeemKagemushaRecursiveV4>() {
+        return gas_for_recursive_kagemusha_redeem_v4(redeem);
     }
     if let Some(unshield) = any.downcast_ref::<dm_isi::zk::Unshield>() {
         return gas_for_proof_attachment(&unshield.proof, unshield.inputs.len(), 0);
@@ -509,11 +516,11 @@ pub fn confidential_gas_cost(instr: &InstructionBox) -> u64 {
             transfer.outputs.len(),
         );
     }
-    if let Some(topup) = any.downcast_ref::<dm_isi::offline::TopUpKagemushaRecursiveV2>() {
-        return gas_for_recursive_kagemusha_topup_v2(topup);
+    if let Some(topup) = any.downcast_ref::<dm_isi::offline::TopUpKagemushaRecursiveV4>() {
+        return gas_for_recursive_kagemusha_topup_v4(topup);
     }
-    if let Some(redeem) = any.downcast_ref::<dm_isi::offline::RedeemKagemushaRecursiveV2>() {
-        return gas_for_recursive_kagemusha_redeem_v2(redeem);
+    if let Some(redeem) = any.downcast_ref::<dm_isi::offline::RedeemKagemushaRecursiveV4>() {
+        return gas_for_recursive_kagemusha_redeem_v4(redeem);
     }
     if let Some(unshield) = any.downcast_ref::<dm_isi::zk::Unshield>() {
         return gas_for_proof_attachment(&unshield.proof, unshield.inputs.len(), 0);

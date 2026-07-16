@@ -49,9 +49,9 @@ use iroha_data_model::{
     isi::{
         runtime_upgrade::{ActivateRuntimeUpgrade, CancelRuntimeUpgrade, ProposeRuntimeUpgrade},
         smart_contract_code::{
-            ActivateContractInstance, DeactivateContractInstance, FinalizeSmartContractCodeUpload,
-            RegisterSmartContractBytes, RegisterSmartContractCode, RemoveSmartContractBytes,
-            UploadSmartContractCodeChunk,
+            ActivateContractInstance, CommitContractDeployment, DeactivateContractInstance,
+            FinalizeSmartContractCodeUpload, RegisterSmartContractBytes, RegisterSmartContractCode,
+            RemoveSmartContractBytes, UploadSmartContractCodeChunk,
         },
     },
     name::Name,
@@ -2808,6 +2808,10 @@ impl Queue {
                         .is_some()
                         || instruction
                             .as_any()
+                            .downcast_ref::<CommitContractDeployment>()
+                            .is_some()
+                        || instruction
+                            .as_any()
                             .downcast_ref::<DeactivateContractInstance>()
                             .is_some()
                     {
@@ -2991,18 +2995,29 @@ impl Queue {
 
         let mut contract_targets = BTreeSet::new();
         let mut register_code_seen = false;
+        let mut commit_deployment_count = 0_usize;
+        let mut activate_seen = false;
+        let mut deactivate_seen = false;
         match signed.instructions() {
             Executable::Instructions(instructions) => {
                 for instruction in instructions {
-                    if let Some(activate) = instruction
+                    if let Some(commit) = instruction
+                        .as_any()
+                        .downcast_ref::<CommitContractDeployment>()
+                    {
+                        commit_deployment_count += 1;
+                        contract_targets.insert(commit.contract_address().clone());
+                    } else if let Some(activate) = instruction
                         .as_any()
                         .downcast_ref::<ActivateContractInstance>()
                     {
+                        activate_seen = true;
                         contract_targets.insert(activate.contract_address().clone());
                     } else if let Some(deactivate) = instruction
                         .as_any()
                         .downcast_ref::<DeactivateContractInstance>()
                     {
+                        deactivate_seen = true;
                         contract_targets.insert(deactivate.contract_address().clone());
                     } else {
                         let modifies_contract_code = {
@@ -3023,6 +3038,16 @@ impl Queue {
                 contract_targets.insert(call.contract_address.clone());
             }
             Executable::Ivm(_) | Executable::IvmProved(_) => {}
+        }
+
+        if commit_deployment_count > 1
+            || (commit_deployment_count == 1 && (activate_seen || deactivate_seen))
+            || (activate_seen && deactivate_seen)
+        {
+            return Err(Self::enforcement_error(
+                alias,
+                "protected contract rotations must use exactly one `CommitContractDeployment` instruction and no legacy activate/deactivate pair",
+            ));
         }
 
         if let Some(contract_address) = metadata_governance_contract_address.clone() {

@@ -4,13 +4,16 @@ set -euo pipefail
 ROOT_DIR="${KAGEMUSHA_RECURSIVE_SPEND_SWIFT_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 SWIFTC_BIN="${KAGEMUSHA_RECURSIVE_SPEND_SWIFTC_BIN:-swiftc}"
 SWIFT_BIN="${KAGEMUSHA_RECURSIVE_SPEND_SWIFT_BIN:-swift}"
-SWIFT_TEST_ARGS=()
-if [[ -n "${KAGEMUSHA_RECURSIVE_SPEND_SWIFT_SCRATCH_PATH:-}" ]]; then
-  SWIFT_TEST_ARGS+=(
-    --scratch-path
-    "${KAGEMUSHA_RECURSIVE_SPEND_SWIFT_SCRATCH_PATH}"
-  )
-fi
+
+run_swift_test() {
+  if [[ -n "${KAGEMUSHA_RECURSIVE_SPEND_SWIFT_SCRATCH_PATH:-}" ]]; then
+    "${SWIFT_BIN}" test \
+      --scratch-path "${KAGEMUSHA_RECURSIVE_SPEND_SWIFT_SCRATCH_PATH}" \
+      "$@"
+  else
+    "${SWIFT_BIN}" test "$@"
+  fi
+}
 
 cd "${ROOT_DIR}"
 "${SWIFTC_BIN}" --version
@@ -77,57 +80,57 @@ cd "${ROOT_DIR}"
 
 (
   cd IrohaSwift
-  "${SWIFT_BIN}" test "${SWIFT_TEST_ARGS[@]}" --filter ToriiClientTests/testGetOfflineReadiness
+  run_swift_test --filter ToriiClientTests/testGetOfflineReadiness
 )
 
 (
   cd IrohaSwift
-  "${SWIFT_BIN}" test "${SWIFT_TEST_ARGS[@]}" --filter 'ToriiClientTests/testCanonicalQuerySelectorsRejectSurroundingWhitespace|ToriiClientTests/testAccountAssetQueryHelpersRejectSurroundingWhitespace|ToriiClientTests/testGetAssetsEncodesScopeSelectorFilter|ToriiClientTests/testGetAssetsRejectsPaddedScopeBeforeNetwork|ToriiClientTests/testGetUaidPortfolioRejectsPaddedLiteralBeforeNetwork'
+  run_swift_test --filter 'ToriiClientTests/testCanonicalQuerySelectorsRejectSurroundingWhitespace|ToriiClientTests/testAccountAssetQueryHelpersRejectSurroundingWhitespace|ToriiClientTests/testGetAssetsEncodesScopeSelectorFilter|ToriiClientTests/testGetAssetsRejectsPaddedScopeBeforeNetwork|ToriiClientTests/testGetUaidPortfolioRejectsPaddedLiteralBeforeNetwork'
 )
 
 (
   cd IrohaSwift
-  "${SWIFT_BIN}" test "${SWIFT_TEST_ARGS[@]}" --filter ToriiKagemushaAPIModelsTests
+  run_swift_test --filter ToriiKagemushaAPIModelsTests
 )
 
 (
   cd IrohaSwift
-  "${SWIFT_BIN}" test "${SWIFT_TEST_ARGS[@]}" \
+  run_swift_test \
     --filter 'ToriiClientTests/testGetOfflineReadinessParsesExactContract|ToriiClientTests/testGetOfflineReadinessRejectsProtocolSubstitutionAndContradictoryClaims'
 )
 
 (
   cd IrohaSwift
-  "${SWIFT_BIN}" test "${SWIFT_TEST_ARGS[@]}" --filter PrivacyConfidentialWitnessTests
+  run_swift_test --filter PrivacyConfidentialWitnessTests
 )
 
 (
   cd IrohaSwift
-  "${SWIFT_BIN}" test "${SWIFT_TEST_ARGS[@]}" --filter KagemushaScaledAmountTests
+  run_swift_test --filter KagemushaScaledAmountTests
 )
 
 (
   cd IrohaSwift
-  "${SWIFT_BIN}" test "${SWIFT_TEST_ARGS[@]}" --filter KagemushaRecursiveSpendTests
+  run_swift_test --filter KagemushaRecursiveSpendTests
 )
 
 (
   cd IrohaSwift
-  "${SWIFT_BIN}" test "${SWIFT_TEST_ARGS[@]}" --filter 'ToriiClientTests/testGetVerifyingKeyAsync|ToriiClientTests/testGetVerifyingKeyRejectsCrossWiredDetail|ToriiClientTests/testVerifyingKeyDetailConvertsExactNoritoRecordForKagemusha|ToriiClientTests/testVerifyingKeyDetailRejectsNoncanonicalRecordNoritoBase64'
+  run_swift_test --filter 'ToriiClientTests/testGetVerifyingKeyAsync|ToriiClientTests/testGetVerifyingKeyRejectsCrossWiredDetail|ToriiClientTests/testVerifyingKeyDetailConvertsExactNoritoRecordForKagemusha|ToriiClientTests/testVerifyingKeyDetailRejectsNoncanonicalRecordNoritoBase64'
 )
 
 (
   cd IrohaSwift
-  "${SWIFT_BIN}" test "${SWIFT_TEST_ARGS[@]}" --filter NoritoTests
+  run_swift_test --filter NoritoTests
 )
 
 (
   cd IrohaSwift
-  "${SWIFT_BIN}" test "${SWIFT_TEST_ARGS[@]}" \
+  run_swift_test \
     --filter 'KagemushaPeerTransportTests|KagemushaQRStreamTests|KagemushaNFCTests|KagemushaNearbyTests'
 )
 
 (
   cd IrohaSwift
-  "${SWIFT_BIN}" test "${SWIFT_TEST_ARGS[@]}" --filter ToriiKagemushaAPIModelsTests
+  run_swift_test --filter ToriiKagemushaAPIModelsTests
 )

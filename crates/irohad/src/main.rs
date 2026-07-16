@@ -4998,6 +4998,32 @@ impl Iroha {
         }
         // Thread chain id into state for VRF prehash binding.
         state.chain_id = config.common.chain.clone();
+        let kagemusha_release_catalog = match (
+            config
+                .settlement
+                .offline
+                .kagemusha_release_policy_path
+                .as_deref(),
+            config.settlement.offline.kagemusha_artifact_dir.as_deref(),
+        ) {
+            (None, None) => iroha_core::smartcontracts::isi::offline::KagemushaReleaseCatalogV4::empty(),
+            (Some(policy_path), Some(artifact_dir)) => {
+                iroha_core::smartcontracts::isi::offline::KagemushaReleaseCatalogV4::load(
+                    policy_path,
+                    artifact_dir,
+                )
+                .map_err(|error| {
+                    Report::new(StartError::InitKura)
+                        .attach(format!("failed to authenticate Kagemusha V4 release catalog: {error}"))
+                })?
+            }
+            _ => {
+                return Err(Report::new(StartError::InitKura).attach(
+                    "Kagemusha V4 release policy and artifact directory must be configured together",
+                ));
+            }
+        };
+        state.set_kagemusha_release_catalog(kagemusha_release_catalog);
         if !loaded_state_from_snapshot {
             // Snapshot candidates install this at their post-decode,
             // pre-reconciliation boundary. Fresh and Kura-rebuilt state has no
@@ -5201,6 +5227,20 @@ impl Iroha {
                 signed_consensus_mode,
             )
             .map_err(|err| Report::new(StartError::InitKura).attach(err))?;
+        }
+        {
+            let world = state.world.view();
+            let height = u64::try_from(state.committed_height()).unwrap_or(u64::MAX);
+            iroha_core::smartcontracts::isi::offline::ensure_kagemusha_active_release_material_v4(
+                &world,
+                &state.kagemusha_release_catalog,
+                height,
+            )
+            .map_err(|error| {
+                Report::new(StartError::InitKura).attach(format!(
+                    "active Kagemusha V4 release material is unavailable: {error}"
+                ))
+            })?;
         }
         // No Kura writer is live while trust selection or replay can still fail. Only the fully
         // authenticated and replayed state may publish the canonical writer thread.

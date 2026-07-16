@@ -253,8 +253,9 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::ram_lfe::DeactivateRamLfeProgramPolicy>,
     dispatch_instruction::<iroha_data_model::isi::SetAssetDefinitionAlias>,
     dispatch_instruction::<iroha_data_model::isi::SetAssetDefinitionBalancePolicy>,
-    dispatch_instruction::<iroha_data_model::isi::offline::TopUpKagemushaRecursiveV2>,
-    dispatch_instruction::<iroha_data_model::isi::offline::RedeemKagemushaRecursiveV2>,
+    dispatch_instruction::<iroha_data_model::isi::offline::TopUpKagemushaRecursiveV4>,
+    dispatch_instruction::<iroha_data_model::isi::offline::RedeemKagemushaRecursiveV4>,
+    dispatch_instruction::<iroha_data_model::isi::offline::ActivateKagemushaRecursiveReleaseV4>,
     dispatch_instruction::<iroha_data_model::isi::offline::RegisterOfflineDeviceAttestation>,
     dispatch_instruction::<iroha_data_model::isi::offline::SetOfflineDeviceAttestationPolicy>,
     dispatch_instruction::<iroha_data_model::isi::social::ClaimTwitterFollowReward>,
@@ -377,6 +378,7 @@ define_instruction_handlers! {
         iroha_data_model::isi::smart_contract_code::CancelSmartContractCodeUpload
     >,
     dispatch_instruction::<iroha_data_model::isi::smart_contract_code::ActivateContractInstance>,
+    dispatch_instruction::<iroha_data_model::isi::smart_contract_code::CommitContractDeployment>,
     dispatch_instruction::<iroha_data_model::isi::smart_contract_code::DeactivateContractInstance>,
     dispatch_instruction::<iroha_data_model::isi::smart_contract_code::RemoveSmartContractBytes>,
     dispatch_instruction::<verifying_keys::RegisterVerifyingKey>,
@@ -1234,6 +1236,13 @@ mod tests {
         .expect("lane catalog");
         state_transaction.nexus.lane_config = RuntimeLaneConfig::from_catalog(&lane_catalog);
         state_transaction.nexus.lane_catalog = lane_catalog;
+        state_transaction.lane_incarnations.insert(
+            lane_id,
+            iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
+        );
+        state_transaction
+            .lane_incarnation_activation_heights
+            .insert(lane_id, 0);
     }
 
     fn sample_lane_relay_envelope(
@@ -2782,7 +2791,81 @@ mod tests {
     }
 
     #[test]
-    async fn register_verified_lane_relay_persists_effect_proof_binding() -> Result<()> {
+    async fn register_verified_lane_relay_rejects_business_effect_smuggled_in_lane_proof()
+    -> Result<()> {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+        let valid_block = ValidBlock::new_dummy(checked_keypair().private_key());
+        let block_header = valid_block.as_ref().header().clone();
+        let mut state_block = state.block(block_header.clone());
+        let mut state_transaction = state_block.transaction();
+        let dsid = DataSpaceId::new(10);
+        let lane_id = LaneId::new(3);
+        configure_lane_relay_catalogs(&mut state_transaction, dsid, lane_id);
+
+        let envelope = sample_lane_relay_envelope(
+            block_header,
+            lane_id,
+            dsid,
+            [0x42; 32],
+            iroha_crypto::Hash::new(b"placeholder-axt-proof-payload"),
+        );
+        let mut proof_blob = axt_lane_relay_proof_blob_for(
+            &envelope,
+            b"register-lane-relay-smuggled-business-effect",
+            state_transaction.block_height() + 10,
+        );
+        let mut proof_envelope: AxtProofEnvelope = norito::decode_from_bytes(&proof_blob.payload)?;
+        proof_envelope
+            .fastpq_binding
+            .as_mut()
+            .expect("test fastpq binding")
+            .effect_binding = Some(AxtEffectBinding {
+            destination_domain: Some("hbl.sbp".to_owned()),
+            destination_account_id: Some(ALICE_ID.to_string()),
+            vault_account_id: None,
+            issuance_account_id: None,
+            source_asset_definition_id: Some("aed#cbuae".to_owned()),
+            destination_asset_definition_id: Some("pkr#sbp".to_owned()),
+            source_amount_i64: Some(10),
+            destination_amount_i64: Some(760),
+        });
+        proof_blob.payload = norito::to_bytes(&proof_envelope)?;
+        let envelope = lane_relay_envelope_with_proof_payload(
+            envelope,
+            &proof_blob,
+            state_transaction.block_height(),
+        );
+        let relay_state_key = relay_state_key_for_test(&envelope);
+        let instruction = iroha_data_model::isi::nexus::RegisterVerifiedLaneRelay {
+            envelope,
+            proof_blob,
+            effect_proof_blob: None,
+        };
+
+        let err = instruction
+            .execute(&ALICE_ID, &mut state_transaction)
+            .expect_err("lane proof must not smuggle a business-effect binding");
+        assert!(matches!(
+            err,
+            InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(message)
+            ) if message.contains("lane relay block proof must not carry a business-effect binding")
+        ));
+        assert!(
+            state_transaction
+                .world
+                .smart_contract_state
+                .get(&relay_state_key)
+                .is_none(),
+            "rejected smuggled business effect must not persist relay state"
+        );
+        Ok(())
+    }
+
+    #[test]
+    async fn register_verified_lane_relay_rejects_unanchored_business_effect_proof() -> Result<()> {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new(World::default(), kura, query_handle);
@@ -2817,34 +2900,39 @@ mod tests {
             state_transaction.block_height(),
         );
         let relay_state_key = relay_state_key_for_test(&envelope);
-        let proof_payload_hash = iroha_crypto::Hash::new(&proof_blob.payload);
         let instruction = iroha_data_model::isi::nexus::RegisterVerifiedLaneRelay {
             envelope,
             proof_blob,
             effect_proof_blob: Some(effect_proof_blob),
         };
 
-        instruction.execute(&ALICE_ID, &mut state_transaction)?;
-        let payload = state_transaction
-            .world
-            .smart_contract_state
-            .get(&relay_state_key)
-            .expect("verified relay record persisted");
-        let stored_json: Json = norito::decode_from_bytes(payload)?;
-        let record: VerifiedLaneRelayRecord =
-            norito::json::from_slice(stored_json.get().as_bytes())?;
-
-        assert_eq!(record.proof_payload_hash, proof_payload_hash);
-        assert_eq!(
-            record.fastpq_binding.verified_effect_type,
-            "aed_to_pkr_settlement"
+        let err = instruction
+            .execute(&ALICE_ID, &mut state_transaction)
+            .expect_err("unanchored business-effect proof must be rejected");
+        assert!(
+            matches!(
+                &err,
+                InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(message)
+                ) if message.contains("business-effect promotion is disabled")
+                    && message.contains("finalized, QC-anchored settlement ledger entry")
+            ),
+            "unexpected rejection before the business-effect promotion guard: {err:?}"
         );
-        assert!(record.fastpq_binding.effect_binding.is_some());
+        assert!(
+            state_transaction
+                .world
+                .smart_contract_state
+                .get(&relay_state_key)
+                .is_none(),
+            "rejected business-effect proof must not persist relay state"
+        );
         Ok(())
     }
 
     #[test]
-    async fn register_verified_lane_relay_rejects_lane_proof_as_effect_proof() -> Result<()> {
+    async fn register_verified_lane_relay_rejects_effect_proof_before_proof_verification()
+    -> Result<()> {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new(World::default(), kura, query_handle);
@@ -2863,30 +2951,28 @@ mod tests {
             [0x42; 32],
             iroha_crypto::Hash::new(b"placeholder-axt-proof-payload"),
         );
-        let proof_blob = axt_lane_relay_proof_blob_for(
-            &envelope,
-            b"register-lane-relay-effect-lane-proof",
-            state_transaction.block_height() + 10,
-        );
-        let envelope = lane_relay_envelope_with_proof_payload(
-            envelope,
-            &proof_blob,
-            state_transaction.block_height(),
-        );
+        let proof_blob = ProofBlob {
+            payload: Vec::new(),
+            expiry_slot: None,
+        };
         let instruction = iroha_data_model::isi::nexus::RegisterVerifiedLaneRelay {
             envelope,
-            effect_proof_blob: Some(proof_blob.clone()),
+            effect_proof_blob: Some(ProofBlob {
+                payload: vec![0xFF],
+                expiry_slot: Some(state_transaction.block_height().saturating_sub(1)),
+            }),
             proof_blob,
         };
 
         let err = instruction
             .execute(&ALICE_ID, &mut state_transaction)
-            .expect_err("lane proof in the effect slot must be rejected");
+            .expect_err("disabled effect proof must be rejected before proof verification");
         assert!(matches!(
             err,
             InstructionExecutionError::InvalidParameter(
                 InvalidParameterError::SmartContract(message)
-            ) if message.contains("effect proof must not use lane_relay_block")
+            ) if message.contains("business-effect promotion is disabled")
+                && message.contains("finalized, QC-anchored settlement ledger entry")
         ));
         Ok(())
     }

@@ -2641,7 +2641,8 @@ fn minimal_config_snapshot() {
                     prune_batch_size: 128,
                     escrow_required: false,
                     escrow_accounts: {},
-                    kagemusha_enabled: true,
+                    kagemusha_release_policy_path: None,
+                    kagemusha_artifact_dir: None,
                 },
                 router: Router {
                     twap_window: 60s,

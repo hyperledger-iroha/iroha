@@ -1369,8 +1369,8 @@ final class KagemushaOperationFinalityCoordinatorTests: XCTestCase {
         let request = try KagemushaRedeemRequest(
             noritoArchive: requestArchive(
                 schema: KagemushaRecursiveSpend.redeemRequestWireName,
-                fieldCount: 9,
-                operationIdFieldIndex: 7,
+                fieldCount: 10,
+                operationIdFieldIndex: 8,
                 operationId: operationBytes
             )
         )
@@ -1633,15 +1633,16 @@ final class KagemushaOperationFinalityCoordinatorTests: XCTestCase {
         var payload = CompactNoritoWriter()
         for index in 0..<fieldCount {
             payload.writeField(
-                index == operationIdFieldIndex
+                index == 0
+                    ? CompactNorito.encodeUInt16(KagemushaRecursiveSpend.wireVersionV4)
+                    : index == operationIdFieldIndex
                     ? operationId
                     : Data([UInt8(index + 1)])
             )
         }
-        return noritoEncode(
-            typeName: schema,
-            payload: payload.data,
-            flags: NoritoHeader.compactLen
+        return KagemushaRecursiveSpend.frameArchive(
+            schema: schema,
+            payload: payload.data
         )
     }
 
@@ -1651,8 +1652,8 @@ final class KagemushaOperationFinalityCoordinatorTests: XCTestCase {
         .redeem(try KagemushaRedeemRequest(
             noritoArchive: requestArchive(
                 schema: KagemushaRecursiveSpend.redeemRequestWireName,
-                fieldCount: 9,
-                operationIdFieldIndex: 7,
+                fieldCount: 10,
+                operationIdFieldIndex: 8,
                 operationId: Data(repeating: byte, count: 32)
             )
         ))

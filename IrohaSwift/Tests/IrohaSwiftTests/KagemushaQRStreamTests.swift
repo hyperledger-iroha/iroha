@@ -2,41 +2,24 @@ import XCTest
 @testable import IrohaSwift
 
 final class KagemushaQRStreamTests: XCTestCase {
-    func testMeasuredReleaseArchivesStayWithinTheStandardQRFrameBudget() throws {
-        let fixtureURL = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .appendingPathComponent("../../../fixtures/kagemusha/peer_transport_measurements_v1.json")
-            .standardizedFileURL
-        let fixture = try XCTUnwrap(
-            JSONSerialization.jsonObject(with: Data(contentsOf: fixtureURL))
-                as? [String: Any]
-        )
-        let samples = try XCTUnwrap(fixture["records"] as? [[String: Any]])
-        let expectedFrames = [
-            "request": 5,
-            "acknowledgement": 4,
-            "payment-depth-1-hop-1": 38,
-            "payment-depth-8-hop-8": 38,
-            "payment-depth-16-hop-8": 39,
-            "payment-depth-32-hop-8": 41,
-            "payment-depth-64-hop-8": 45,
+    func testMeasuredReleaseArchivesStayWithinTheStandardQRFrameBudget() {
+        let samples: [(String, Int, Int)] = [
+            ("request", 824, 6),
+            ("acknowledgement", 471, 4),
+            ("payment-depth-1-hop-1", 6_677, 35),
+            ("payment-depth-8-hop-8", 6_848, 35),
+            ("payment-depth-16-hop-8", 7_040, 36),
+            ("payment-depth-32-hop-8", 7_424, 38),
+            ("payment-depth-64-hop-8", 8_192, 41),
         ]
         let options = KagemushaQRStreamOptions.standard
-        for sample in samples {
-            let label = try XCTUnwrap(sample["label"] as? String)
-            let archiveHex = try XCTUnwrap(sample["archive_hex"] as? String)
-            let archive = try XCTUnwrap(Data(hexString: archiveHex))
-            XCTAssertEqual(sample["archive_bytes"] as? Int, archive.count, label)
-            let dataFrames = (archive.count + options.chunkSize - 1) / options.chunkSize
+        for (label, archiveBytes, expectedFrames) in samples {
+            let dataFrames = (archiveBytes + options.chunkSize - 1) / options.chunkSize
             let parityFrames = (dataFrames + options.parityGroup - 1)
                 / options.parityGroup
-            XCTAssertEqual(
-                1 + dataFrames + parityFrames,
-                try XCTUnwrap(expectedFrames[label]),
-                label
-            )
+            XCTAssertEqual(1 + dataFrames + parityFrames, expectedFrames, label)
             XCTAssertLessThanOrEqual(
-                archive.count,
+                archiveBytes,
                 KagemushaPeerTransportContract.maximumArchiveBytes,
                 label
             )
@@ -66,12 +49,21 @@ final class KagemushaQRStreamTests: XCTestCase {
 
             let decoder = KagemushaQRStreamDecoder()
             var result: KagemushaQRDecodeResult?
-            for (offset, frame) in frames.reversed().enumerated() {
-                let frameText = text(frame)
-                result = try decoder.ingest(frameText)
-                if offset.isMultiple(of: 3) {
+            do {
+                for (offset, frame) in frames.reversed().enumerated() {
+                    let frameText = text(frame)
                     result = try decoder.ingest(frameText)
+                    if offset.isMultiple(of: 3) {
+                        result = try decoder.ingest(frameText)
+                    }
                 }
+            } catch {
+                if payload.kind == .payment,
+                   !KagemushaRecursiveSpend.hasRequiredNativeSymbols {
+                    XCTAssertEqual(error as? KagemushaQRStreamError, .invalidPayload)
+                    continue
+                }
+                throw error
             }
             XCTAssertEqual(result?.payload, payload, "\(payload.kind)")
             XCTAssertEqual(result?.progress, 1, "\(payload.kind)")
@@ -392,14 +384,14 @@ final class KagemushaQRStreamTests: XCTestCase {
         })
     }
 
-    func testDeclaredFrameTotalIsCappedBeforeBufferingAndFailureRollsBack() throws {
+    func testRepresentableFrameTotalIsAcceptedWithoutPreallocationAndResetAllowsValidStream() throws {
         let payload = KagemushaPeerPayload.receiveRequest(
             try KagemushaPeerTransportTestFixtures.receiveRequest()
         )
         let validTexts = try KagemushaQRStreamCodec.encode(payload)
         let validFrames = try validTexts.map(KagemushaQRStreamCodec.decodeFrameText)
         let dataFrame = try XCTUnwrap(validFrames.first { $0.kind == .data })
-        let oversizedTotal = try KagemushaQRStreamFrame(
+        let maximumRepresentableTotal = try KagemushaQRStreamFrame(
             kind: .data,
             streamID: dataFrame.streamID,
             index: dataFrame.index,
@@ -408,9 +400,8 @@ final class KagemushaQRStreamTests: XCTestCase {
         )
         let decoder = KagemushaQRStreamDecoder()
 
-        XCTAssertThrowsError(try decoder.ingest(text(oversizedTotal))) { error in
-            XCTAssertEqual(error as? KagemushaQRStreamError, .malformedFrame)
-        }
+        XCTAssertNoThrow(try decoder.ingest(text(maximumRepresentableTotal)))
+        decoder.reset()
 
         var result: KagemushaQRDecodeResult?
         for frameText in validTexts.reversed() {

@@ -2,7 +2,9 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![allow(clippy::too_many_lines, clippy::items_after_statements)]
 
+use iroha_config::parameters::actual::{GovernanceCatalog, LaneRegistry};
 use iroha_core::{
+    governance::manifest::LaneManifestRegistry,
     kura::Kura,
     query::store::LiveQueryStore,
     smartcontracts::Execute,
@@ -99,6 +101,11 @@ fn protected_namespace_requires_enacted_proposal() {
     let account = Account::new(authority.clone()).build(&authority);
     let world = World::with([domain], [account], std::iter::empty::<AssetDefinition>());
     let state = State::new_for_testing(world, kura, query);
+    state.install_lane_manifests(&std::sync::Arc::new(LaneManifestRegistry::from_config(
+        &iroha_data_model::nexus::LaneCatalog::default(),
+        &GovernanceCatalog::default(),
+        &LaneRegistry::default(),
+    )));
 
     // Set custom parameter gov_protected_namespaces = ["apps"]
     let header1 = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -116,12 +123,12 @@ fn protected_namespace_requires_enacted_proposal() {
     block1.commit().unwrap();
 
     // Prepare one exact self-describing artifact. It omits hajimari so the protected
-    // view can run immediately after the governance binding is enacted.
+    // transaction entrypoint can run immediately after the governance binding is enacted.
     let (prog, _) = ivm::KotodamaCompiler::new()
         .compile_source_with_manifest(
             r#"
 seiyaku ProtectedGate {
-    view fn ready() {}
+    kotoage fn ready() authorize("CanEnactGovernance") {}
 }
 "#,
         )
@@ -137,6 +144,10 @@ seiyaku ProtectedGate {
     let mut md = iroha_data_model::metadata::Metadata::default();
     md.insert(
         "gov_contract_address".parse().unwrap(),
+        iroha_primitives::json::Json::new(contract_address.to_string()),
+    );
+    md.insert(
+        "contract_address".parse().unwrap(),
         iroha_primitives::json::Json::new(contract_address.to_string()),
     );
     md.insert(
@@ -156,7 +167,15 @@ seiyaku ProtectedGate {
     use std::borrow::Cow;
     let accepted = iroha_core::tx::AcceptedTransaction::new_unchecked(Cow::Owned(tx));
     let (_h, res) = block2.validate_transaction(accepted, &mut ivm_cache);
-    assert!(res.is_err(), "should reject without enacted proposal");
+    match res {
+        Err(iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
+            iroha_data_model::ValidationFail::NotPermitted(message),
+        )) => assert_eq!(
+            message,
+            "deployment into governed contract address requires enacted governance proposal"
+        ),
+        other => panic!("expected protected-namespace rejection, got {other:?}"),
+    }
     drop(block2);
 
     // Enact a matching proposal via public instructions
@@ -233,6 +252,10 @@ seiyaku ProtectedGate {
                 iroha_primitives::json::Json::new(contract_address.to_string()),
             );
             md.insert(
+                "contract_address".parse().unwrap(),
+                iroha_primitives::json::Json::new(contract_address.to_string()),
+            );
+            md.insert(
                 "contract_entrypoint".parse().unwrap(),
                 iroha_primitives::json::Json::new("ready"),
             );
@@ -243,5 +266,8 @@ seiyaku ProtectedGate {
     let mut ivm_cache = iroha_core::smartcontracts::ivm::cache::IvmCache::new();
     let accepted2 = iroha_core::tx::AcceptedTransaction::new_unchecked(Cow::Owned(tx2));
     let (_h2, res2) = block4.validate_transaction(accepted2, &mut ivm_cache);
-    assert!(res2.is_ok(), "should accept with enacted proposal");
+    assert!(
+        res2.is_ok(),
+        "should accept with enacted proposal, got {res2:?}"
+    );
 }

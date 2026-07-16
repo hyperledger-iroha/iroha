@@ -199,8 +199,24 @@ pub mod account {
 
     permission! {
         /// Permission to resolve account aliases in the specified scope.
+        ///
+        /// A domain scope authorizes only that fully-qualified domain. A dataspace scope
+        /// authorizes domainless aliases in that dataspace; the two scope kinds are independent.
         pub struct CanResolveAccountAlias {
             /// Alias permission scope.
+            pub scope: AccountAliasPermissionScope,
+        }
+    }
+
+    permission! {
+        /// Permission to grant or revoke alias-resolution access in the specified scope.
+        ///
+        /// Only the corresponding domain or dataspace-alias owner may grant or
+        /// revoke this delegation token. Holding it authorizes delegation of
+        /// [`CanResolveAccountAlias`] for the exact same scope; it never
+        /// authorizes alias mutation or further delegation of this token.
+        pub struct CanDelegateAccountAliasResolution {
+            /// Exact alias scope whose resolution access may be delegated.
             pub scope: AccountAliasPermissionScope,
         }
     }
@@ -254,6 +270,39 @@ pub mod account {
                 .collect::<Vec<_>>();
 
             assert_eq!(tags, vec!["domain", "dataspace"]);
+        }
+
+        #[test]
+        fn alias_resolution_delegation_roundtrips_with_an_exact_scope() {
+            let permission = CanDelegateAccountAliasResolution {
+                scope: AccountAliasPermissionScope::Domain(
+                    DomainId::try_new("hbl", "sbp").expect("canonical HBL domain"),
+                ),
+            };
+            let encoded = norito::json::to_json(&permission)
+                .expect("serialize alias-resolution delegation permission");
+            let decoded: CanDelegateAccountAliasResolution = norito::json::from_str(&encoded)
+                .expect("deserialize alias-resolution delegation permission");
+
+            assert_eq!(decoded, permission);
+            assert!(encoded.contains("hbl.sbp"));
+        }
+    }
+}
+
+/// Permission tokens governing reads from restricted Nexus dataspaces.
+pub mod query {
+    use super::*;
+
+    permission! {
+        /// Permission to read non-public ledger data from one exact dataspace.
+        ///
+        /// The token does not authorize writes, reads from any other dataspace,
+        /// or account-alias resolution without its separate exact permission.
+        #[derive(Copy)]
+        pub struct CanReadRestrictedDataspace {
+            /// Exact restricted dataspace whose ledger data may be read.
+            pub dataspace: DataSpaceId,
         }
     }
 }
@@ -374,6 +423,29 @@ pub mod escrow {
         /// Permission to resolve a disputed native asset escrow.
         #[derive(Copy)]
         pub struct CanResolveEscrowDispute;
+    }
+}
+
+/// Permission tokens covering governed offline-settlement releases.
+pub mod offline {
+    use super::*;
+
+    permission! {
+        /// Permission to manage native offline escrow issuance and settlement.
+        #[derive(Copy)]
+        pub struct CanManageOfflineEscrow;
+    }
+
+    permission! {
+        /// Permission to activate an authenticated Kagemusha ABI-20/V4 recursive release.
+        #[derive(Copy)]
+        pub struct CanActivateKagemushaRecursiveReleaseV4;
+    }
+
+    permission! {
+        /// Permission to publish or rotate the governed offline device-attestation policy.
+        #[derive(Copy)]
+        pub struct CanManageOfflineDeviceAttestationPolicy;
     }
 }
 
@@ -879,6 +951,7 @@ mod tests {
     use super::oracle::{
         CanManageTwitterBindings, CanRegisterOracleFeed, CanVoteOracleChangeStage,
     };
+    use super::query::CanReadRestrictedDataspace;
     use crate::permission::Permission as _;
     use iroha_data_model::oracle::OracleChangeStage;
     use iroha_data_model::{
@@ -960,6 +1033,25 @@ mod tests {
         assert_eq!(
             CanResolveEscrowDispute::name().as_str(),
             "CanResolveEscrowDispute"
+        );
+    }
+
+    #[test]
+    fn restricted_dataspace_read_permission_is_exact_and_typed() {
+        let permission = CanReadRestrictedDataspace {
+            dataspace: DataSpaceId::new(10),
+        };
+        let json = norito::json::to_json(&permission).expect("serialize permission");
+
+        assert_eq!(
+            CanReadRestrictedDataspace::name().as_str(),
+            "CanReadRestrictedDataspace"
+        );
+        assert_eq!(json, "{\"dataspace\":10}");
+        assert!(
+            norito::json::from_str::<CanReadRestrictedDataspace>("{\"dataspace\":\"sbp\"}")
+                .is_err(),
+            "restricted read grants must carry a numeric DataSpaceId"
         );
     }
 

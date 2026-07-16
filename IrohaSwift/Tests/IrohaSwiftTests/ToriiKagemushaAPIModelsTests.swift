@@ -158,7 +158,7 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
         XCTAssertEqual(anchor.finalizedBlockHeight, 1)
         XCTAssertEqual(
             anchor.digest,
-            try KagemushaRecursiveSpendCodecs.decodeTopUpAnchor(archive).anchorDigest
+            try KagemushaRecursiveSpendCodecs.decodeTopUpAnchorV4(archive).anchorDigest
         )
         XCTAssertEqual(anchor, try KagemushaTopUpAnchor(noritoArchive: archive))
 
@@ -199,7 +199,7 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
 
         XCTAssertThrowsError(try KagemushaTopUpAnchor(noritoArchive: Data()))
         XCTAssertThrowsError(try KagemushaTopUpAnchor(noritoArchive: noritoEncode(
-            typeName: KagemushaRecursiveSpend.topUpAnchorWireName,
+            typeName: KagemushaRecursiveSpend.topUpAnchorWireNameV4,
             payload: Data(
                 repeating: 0xa4,
                 count: KagemushaRecursiveSpend.topUpFinalityAnchorMaximumArchiveBytes
@@ -458,14 +458,14 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
         let expectedOperationId = String(repeating: "ab", count: 32)
         let topUpArchive = requestArchive(
             schema: KagemushaRecursiveSpend.topUpRequestWireName,
-            fieldCount: 7,
-            operationIdFieldIndex: 5,
+            fieldCount: 8,
+            operationIdFieldIndex: 6,
             operationId: operationId
         )
         let redeemArchive = requestArchive(
             schema: KagemushaRecursiveSpend.redeemRequestWireName,
-            fieldCount: 9,
-            operationIdFieldIndex: 7,
+            fieldCount: 10,
+            operationIdFieldIndex: 8,
             operationId: operationId
         )
 
@@ -481,12 +481,16 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
     func testRequestsEnforceExactToriiRequestBodyCeiling() throws {
         XCTAssertEqual(
             KagemushaTopUpRequest.maximumArchiveBytes,
-            KagemushaRedeemRequest.maximumArchiveBytes
+            512 * 1_024
+        )
+        XCTAssertEqual(
+            KagemushaRedeemRequest.maximumArchiveBytes,
+            48 * 1_024 * 1_024
         )
         try assertExactRequestBodyCeiling(
             schema: KagemushaRecursiveSpend.topUpRequestWireName,
-            fieldCount: 7,
-            operationIdFieldIndex: 5,
+            fieldCount: 8,
+            operationIdFieldIndex: 6,
             maximumBytes: KagemushaTopUpRequest.maximumArchiveBytes,
             construct: { archive in
                 _ = try KagemushaTopUpRequest(noritoArchive: archive)
@@ -494,8 +498,8 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
         )
         try assertExactRequestBodyCeiling(
             schema: KagemushaRecursiveSpend.redeemRequestWireName,
-            fieldCount: 9,
-            operationIdFieldIndex: 7,
+            fieldCount: 10,
+            operationIdFieldIndex: 8,
             maximumBytes: KagemushaRedeemRequest.maximumArchiveBytes,
             construct: { archive in
                 _ = try KagemushaRedeemRequest(noritoArchive: archive)
@@ -507,14 +511,14 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
         let operationId = Data(repeating: 0x11, count: 32)
         let topUpArchive = requestArchive(
             schema: KagemushaRecursiveSpend.topUpRequestWireName,
-            fieldCount: 7,
-            operationIdFieldIndex: 5,
+            fieldCount: 8,
+            operationIdFieldIndex: 6,
             operationId: operationId
         )
         let redeemArchive = requestArchive(
             schema: KagemushaRecursiveSpend.redeemRequestWireName,
-            fieldCount: 9,
-            operationIdFieldIndex: 7,
+            fieldCount: 10,
+            operationIdFieldIndex: 8,
             operationId: operationId
         )
 
@@ -523,16 +527,16 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
         XCTAssertThrowsError(
             try KagemushaTopUpRequest(noritoArchive: requestArchive(
                 schema: KagemushaRecursiveSpend.topUpRequestWireName,
-                fieldCount: 7,
-                operationIdFieldIndex: 4,
+                fieldCount: 8,
+                operationIdFieldIndex: 5,
                 operationId: operationId
             ))
         )
         XCTAssertThrowsError(
             try KagemushaRedeemRequest(noritoArchive: requestArchive(
                 schema: KagemushaRecursiveSpend.redeemRequestWireName,
-                fieldCount: 9,
-                operationIdFieldIndex: 6,
+                fieldCount: 10,
+                operationIdFieldIndex: 7,
                 operationId: operationId
             ))
         )
@@ -546,16 +550,16 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
         ] {
             XCTAssertThrowsError(try KagemushaTopUpRequest(noritoArchive: requestArchive(
                 schema: KagemushaRecursiveSpend.topUpRequestWireName,
-                fieldCount: 7,
-                operationIdFieldIndex: 5,
+                fieldCount: 8,
+                operationIdFieldIndex: 6,
                 operationId: operationId
             ))) { error in
                 XCTAssertEqual(error as? KagemushaOperationError, .invalidField("operation_id"))
             }
             XCTAssertThrowsError(try KagemushaRedeemRequest(noritoArchive: requestArchive(
                 schema: KagemushaRecursiveSpend.redeemRequestWireName,
-                fieldCount: 9,
-                operationIdFieldIndex: 7,
+                fieldCount: 10,
+                operationIdFieldIndex: 8,
                 operationId: operationId
             ))) { error in
                 XCTAssertEqual(error as? KagemushaOperationError, .invalidField("operation_id"))
@@ -566,8 +570,8 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
     func testRequestsRejectNonCanonicalFramingAndTrailingPayload() throws {
         let operationId = Data(repeating: 0x11, count: 32)
         let canonicalPayload = requestPayload(
-            fieldCount: 7,
-            operationIdFieldIndex: 5,
+            fieldCount: 8,
+            operationIdFieldIndex: 6,
             operationId: operationId
         )
         let schema = KagemushaRecursiveSpend.topUpRequestWireName
@@ -581,8 +585,8 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
 
         XCTAssertThrowsError(try KagemushaTopUpRequest(noritoArchive: requestArchive(
             schema: schema,
-            fieldCount: 8,
-            operationIdFieldIndex: 5,
+            fieldCount: 9,
+            operationIdFieldIndex: 6,
             operationId: operationId
         )))
 
@@ -640,9 +644,11 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
             var payload = CompactNoritoWriter()
             for index in 0..<fieldCount {
                 let field: Data
-                if index == operationIdFieldIndex {
+                if index == 0 {
+                    field = CompactNorito.encodeUInt16(KagemushaRecursiveSpend.wireVersionV4)
+                } else if index == operationIdFieldIndex {
                     field = operationId
-                } else if index == 0 {
+                } else if index == 1 {
                     field = Data(repeating: 0x5a, count: fillerBytes)
                 } else {
                     field = Data([UInt8(index + 1)])
@@ -685,56 +691,121 @@ final class ToriiKagemushaAPIModelsTests: XCTestCase {
     ) -> Data {
         var payload = CompactNoritoWriter()
         for index in 0..<fieldCount {
-            payload.writeField(
-                index == operationIdFieldIndex ? operationId : Data([UInt8(index + 1)])
-            )
+            let field: Data
+            if index == 0 {
+                field = CompactNorito.encodeUInt16(KagemushaRecursiveSpend.wireVersionV4)
+            } else if index == operationIdFieldIndex {
+                field = operationId
+            } else {
+                field = Data([UInt8(index + 1)])
+            }
+            payload.writeField(field)
         }
         return payload.data
     }
 
     private func canonicalTopUpAnchorArchive() throws -> Data {
+        func fields(_ values: [Data]) -> Data {
+            var writer = CompactNoritoWriter()
+            values.forEach { writer.writeField($0) }
+            return writer.data
+        }
+        func constVector(_ value: Data) -> Data {
+            fields(value.map { Data([$0]) })
+        }
+        func uint16(_ value: UInt16) -> Data {
+            var writer = CompactNoritoWriter()
+            writer.writeUInt16LE(value)
+            return writer.data
+        }
+        func uint32(_ value: UInt32) -> Data {
+            var writer = CompactNoritoWriter()
+            writer.writeUInt32LE(value)
+            return writer.data
+        }
+        func uint64(_ value: UInt64) -> Data {
+            var writer = CompactNoritoWriter()
+            writer.writeUInt64LE(value)
+            return writer.data
+        }
+
         var assetBytes = Data((0..<16).map { UInt8($0 + 1) })
         assetBytes[6] = (assetBytes[6] & 0x0f) | 0x40
         assetBytes[8] = (assetBytes[8] & 0x3f) | 0x80
-        let assetDefinitionId = try XCTUnwrap(
-            AssetDefinitionAddress.encode(uuidBytes: assetBytes)
-        )
         let fixed32: (UInt8) -> Data = { Data(repeating: $0, count: 32) }
         let payer = try AccountAddress
             .fromAccount(publicKey: fixed32(0xc0))
             .toI105(networkPrefix: 0x02f1)
-        let amount = try KagemushaScaledAmount(atomicUnits: "1", scale: 2)
-        let note = try KagemushaSpendableNoteDescriptor(
-            chainID: "swift-offline-api",
-            assetDefinitionID: assetDefinitionId,
-            noteCommitment: fixed32(0xd0),
-            spendNullifier: fixed32(0xd1),
-            amount: amount
+        let account = try AccountAddress
+            .parseEncoded(payer, expectedPrefix: 0x02f1)
+            .compactNoritoAccountControllerPayload()
+
+        func chain(_ value: String) -> Data {
+            var writer = CompactNoritoWriter()
+            writer.writeField(CompactNorito.encodeString(value))
+            return writer.data
+        }
+        func amount() -> Data {
+            var atomic = Data(repeating: 0, count: 16)
+            atomic[0] = 1
+            var writer = CompactNoritoWriter()
+            writer.writeField(atomic)
+            writer.writeField(uint32(2))
+            return writer.data
+        }
+        func note() -> Data {
+            var writer = CompactNoritoWriter()
+            writer.writeField(chain("swift-offline-api"))
+            writer.writeField(constVector(assetBytes))
+            writer.writeField(fixed32(0xd0))
+            writer.writeField(fixed32(0xd1))
+            writer.writeField(amount())
+            return writer.data
+        }
+        func assetID() -> Data {
+            var writer = CompactNoritoWriter()
+            writer.writeField(account)
+            writer.writeField(constVector(assetBytes))
+            writer.writeField(uint32(0))
+            return writer.data
+        }
+        func verifierKeyID() -> Data {
+            var writer = CompactNoritoWriter()
+            writer.writeField(CompactNorito.encodeString("halo2/ipa"))
+            writer.writeField(CompactNorito.encodeString("fixture-topup-shield"))
+            return writer.data
+        }
+        func binding() -> Data {
+            var writer = CompactNoritoWriter()
+            writer.writeField(uint16(KagemushaRecursiveSpend.wireVersionV4))
+            writer.writeField(CompactNorito.encodeString("generation-v4-test"))
+            writer.writeField(fixed32(0xd9))
+            return writer.data
+        }
+
+        let payload = fields([
+            uint16(KagemushaRecursiveSpend.wireVersionV4),
+            chain("swift-offline-api"),
+            account,
+            assetID(),
+            uint32(2),
+            amount(),
+            fixed32(0xd2),
+            fixed32(0xd3),
+            uint32(7),
+            note(),
+            fixed32(0xd5),
+            verifierKeyID(),
+            fixed32(0xd6),
+            binding(),
+            uint64(1),
+            fixed32(0xd7),
+            fixed32(0xd8),
+        ])
+        return KagemushaRecursiveSpend.frameArchive(
+            schema: KagemushaRecursiveSpend.topUpAnchorWireNameV4,
+            payload: payload
         )
-        let draft = try KagemushaRecursiveSpendTopUpAnchor(
-            version: 2,
-            chainID: note.chainID,
-            payer: payer,
-            assetID: "\(assetDefinitionId)#\(payer)",
-            assetScale: 2,
-            amount: amount,
-            initialRoot: fixed32(0xd2),
-            finalizedRoot: fixed32(0xd3),
-            shieldLeafIndex: 7,
-            currentNote: note,
-            topUpOperationID: fixed32(0xd5),
-            shieldVerifierID: "halo2/ipa:fixture-topup-shield",
-            shieldVerifierCommitment: fixed32(0xd6),
-            artifactBinding: try KagemushaRecursiveSpendArtifactBinding(
-                generation: "generation-v3-test",
-                manifestSHA256: fixed32(0xd9)
-            ),
-            finalizedHeight: 1,
-            finalizedTransactionHash: fixed32(0xd7),
-            anchorDigest: fixed32(0xd8),
-            archive: Data([1])
-        )
-        return try KagemushaRecursiveSpendCodecs.encodeTopUpAnchor(draft)
     }
 
     private func canonicalTopUpFinalityProofArchive() -> Data {

@@ -60,7 +60,7 @@ fn plain_ballot_conviction_applies() {
     let instr = CastPlainBallot {
         referendum_id: "ref-conviction".to_string(),
         owner: ALICE_ID.clone(),
-        amount,
+        amount: amount.into(),
         duration_blocks,
         direction: 0,
     };

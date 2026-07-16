@@ -17,8 +17,11 @@ public final class KagemushaPeerTransport {
       "text/vnd.pk.kagemusha-v2.receive-request";
   public static final String PAYMENT_CONTENT_TYPE = "text/vnd.pk.kagemusha-v2.payment";
   public static final String ACKNOWLEDGEMENT_CONTENT_TYPE = "text/vnd.pk.kagemusha-v2.ack";
-  public static final int MAXIMUM_ARCHIVE_BYTES =
-      KagemushaRecursiveSpendProver.MAX_PEER_ARCHIVE_BYTES;
+  public static final int MAXIMUM_ARCHIVE_BYTES_V2 =
+      KagemushaRecursiveSpendProver.MAX_PEER_ARCHIVE_BYTES_V2;
+  public static final int MAXIMUM_ARCHIVE_BYTES_V4 =
+      KagemushaRecursiveSpendProver.MAX_PEER_ARCHIVE_BYTES_V4;
+  public static final int MAXIMUM_ARCHIVE_BYTES = MAXIMUM_ARCHIVE_BYTES_V4;
   public static final int MAXIMUM_TEXT_ENVELOPE_BYTES =
       KagemushaRecursiveSpendProver.MAX_PEER_TEXT_ENVELOPE_BYTES;
 

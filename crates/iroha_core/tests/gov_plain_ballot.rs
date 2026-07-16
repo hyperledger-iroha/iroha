@@ -61,7 +61,7 @@ fn plain_ballot_emits_ballot_accepted_with_weight() {
     let instr = CastPlainBallot {
         referendum_id: "ref-1".to_string(),
         owner: ALICE_ID.clone(),
-        amount,
+        amount: amount.into(),
         duration_blocks,
         direction: 0, // Aye
     };
@@ -91,7 +91,7 @@ fn plain_ballot_emits_ballot_accepted_with_weight() {
     let instr2 = CastPlainBallot {
         referendum_id: "ref-1".to_string(),
         owner: ALICE_ID.clone(),
-        amount,
+        amount: amount.into(),
         duration_blocks: 200,
         direction: 0,
     };

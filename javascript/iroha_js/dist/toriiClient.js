@@ -13,6 +13,7 @@ import {
   normalizeAccountAliasLiteral,
   normalizeAccountId,
   normalizeAccountIdOrAliasLiteral,
+  normalizeAssetDefinitionId,
   normalizeAssetId,
   normalizeAssetHoldingId,
   normalizeIdentifierInput,
@@ -73,6 +74,16 @@ import {
 } from "./sccp.js";
 import { snapshotValidationFeePolicyVerificationContext } from "./validationFeePolicy.js";
 import { IVM_ARTIFACT_MAX_BYTES } from "./ivmArtifact.js";
+import {
+  normalizeKagemushaAssetSelector,
+  normalizeKagemushaOperationId,
+  normalizeKagemushaOperationReference,
+  normalizeKagemushaOperationStatus,
+  normalizeKagemushaRedeemRequestV4,
+  normalizeKagemushaReadinessV4,
+  normalizeKagemushaTopUpRequestV4,
+  requireKagemushaJsonContentType,
+} from "./kagemushaOffline.js";
 
 const DEFAULT_PAGE_SIZE = 100;
 const VALIDATION_FEE_VERIFICATION_CONTEXTS = new WeakMap();
@@ -245,8 +256,6 @@ const MAX_NUMERIC_TEXT_LENGTH = 185;
 const MIN_NUMERIC_MANTISSA = -(1n << BigInt(MAX_NUMERIC_BITS - 1));
 const MAX_NUMERIC_MANTISSA = (1n << BigInt(MAX_NUMERIC_BITS - 1)) - 1n;
 const UINT64_MASK = 0xffff_ffff_ffff_ffffn;
-const RAW_UTF8_HEADERS_INIT_KEY = "__irohaRawUtf8Headers";
-const RAW_UTF8_HEADER_SUPPORT_FLAG = "__irohaSupportsRawUtf8Headers";
 const BFV_IDENTIFIER_SCHEMA_NAME =
   "iroha_crypto::fhe_bfv::BfvIdentifierCiphertext";
 const NORITO_COMPACT_LEN_FLAG = 0x02;
@@ -1669,6 +1678,111 @@ export class ToriiClient {
         "ToriiClient: auth/api tokens require an https base URL; pass allowInsecure: true for local/dev use only.",
       );
     }
+  }
+
+  /** Fetch the transport-only ABI-20/V4 Kagemusha readiness projection. */
+  async getKagemushaReadinessV4(assetDefinitionId, options = {}) {
+    const selector = normalizeKagemushaAssetSelector(assetDefinitionId);
+    const { signal, rest } = ToriiClient._normalizeOptionsWithSignal(
+      options,
+      "getKagemushaReadinessV4",
+    );
+    assertSupportedOptionKeys(rest, new Set([]), "getKagemushaReadinessV4 options");
+    const response = await this._request("GET", "/v1/offline/readiness", {
+      params: { asset_definition_id: selector },
+      headers: JSON_ACCEPT_HEADERS,
+      signal,
+    });
+    await this._expectStatus(response, [200]);
+    requireKagemushaJsonContentType(
+      this._getHeader(response, "content-type"),
+      "Kagemusha readiness response",
+    );
+    const payload = await this._maybeJson(response);
+    if (!payload) {
+      throw new TypeError("Kagemusha readiness response must contain JSON");
+    }
+    return normalizeKagemushaReadinessV4(payload, selector);
+  }
+
+  /** Submit an externally produced manifest-V4 top-up Norito archive. */
+  submitKagemushaTopUpV4(request, options = {}) {
+    return this._submitKagemushaCommandV4(
+      "/v1/offline/top-up",
+      "top_up",
+      request,
+      options,
+      "submitKagemushaTopUpV4",
+    );
+  }
+
+  /** Submit an externally produced manifest-V4 redemption Norito archive. */
+  submitKagemushaRedeemV4(request, options = {}) {
+    return this._submitKagemushaCommandV4(
+      "/v1/offline/redeem",
+      "redeem",
+      request,
+      options,
+      "submitKagemushaRedeemV4",
+    );
+  }
+
+  /** Poll one Kagemusha operation through the unchanged operation route. */
+  async getKagemushaOperationStatus(operationId, options = {}) {
+    const canonicalId = normalizeKagemushaOperationId(operationId);
+    const { signal, rest } = ToriiClient._normalizeOptionsWithSignal(
+      options,
+      "getKagemushaOperationStatus",
+    );
+    assertSupportedOptionKeys(rest, new Set([]), "getKagemushaOperationStatus options");
+    const response = await this._request(
+      "GET",
+      `/v1/offline/operations/${canonicalId}`,
+      { headers: JSON_ACCEPT_HEADERS, signal },
+    );
+    await this._expectStatus(response, [200]);
+    requireKagemushaJsonContentType(
+      this._getHeader(response, "content-type"),
+      "Kagemusha operation status response",
+    );
+    const payload = await this._maybeJson(response);
+    if (!payload) {
+      throw new TypeError("Kagemusha operation status response must contain JSON");
+    }
+    return normalizeKagemushaOperationStatus(payload, canonicalId);
+  }
+
+  async _submitKagemushaCommandV4(path, kind, request, options, context) {
+    const normalizeRequest = kind === "top_up"
+      ? normalizeKagemushaTopUpRequestV4
+      : normalizeKagemushaRedeemRequestV4;
+    const normalized = normalizeRequest(request, `${context} request`);
+    const { signal, rest } = ToriiClient._normalizeOptionsWithSignal(options, context);
+    assertSupportedOptionKeys(rest, new Set([]), `${context} options`);
+    const response = await this._request("POST", path, {
+      headers: {
+        Accept: APPLICATION_JSON,
+        "Content-Type": "application/x-norito",
+        "Idempotency-Key": normalized.operationId,
+      },
+      body: Buffer.from(normalized.norito),
+      signal,
+    });
+    await this._expectStatus(response, [202]);
+    requireKagemushaJsonContentType(
+      this._getHeader(response, "content-type"),
+      "Kagemusha operation reference response",
+    );
+    const location = this._getHeader(response, "location");
+    const payload = await this._maybeJson(response);
+    if (!payload) {
+      throw new TypeError("Kagemusha operation reference response must contain JSON");
+    }
+    return normalizeKagemushaOperationReference(payload, {
+      expectedOperationId: normalized.operationId,
+      expectedKind: kind,
+      location,
+    });
   }
 
   /**
@@ -8360,22 +8474,6 @@ export class ToriiClient {
   }
 
   /**
-   * Deploy contract bytecode and register the manifest (`POST /v1/contracts/deploy`).
-   * @param {DeployContractRequest} request
-   * @returns {Promise<DeployContractResponse | null>}
-   */
-  async deployContract(request = {}) {
-    const payload = normalizeDeployContractRequest(request);
-    const response = await this._request("POST", "/v1/contracts/deploy", {
-      headers: JSON_REQUEST_HEADERS,
-      body: JSON.stringify(payload),
-    });
-    await this._expectStatus(response, [200, 202]);
-    const body = await this._maybeJson(response);
-    return body ? normalizeDeployContractResponse(body) : null;
-  }
-
-  /**
    * Bind, update, or clear a contract alias (`POST /v1/contracts/aliases`).
    * @param {SetContractAliasRequest} request
    * @returns {Promise<SetContractAliasResponse | null>}
@@ -9903,27 +10001,6 @@ export class ToriiClient {
       for (const [key, value] of Object.entries(canonicalHeaders)) {
         setHeader(initHeaders, key, value);
       }
-      if (headerValueRequiresRawUtf8Transport(canonicalHeaders["X-Iroha-Account"])) {
-        init[RAW_UTF8_HEADERS_INIT_KEY] = {
-          "X-Iroha-Account": canonicalHeaders["X-Iroha-Account"],
-        };
-      }
-    }
-    const rawUtf8Headers = cloneRawUtf8Headers(init[RAW_UTF8_HEADERS_INIT_KEY]);
-    const shouldUseNodeRawUtf8Transport =
-      rawUtf8Headers &&
-      !fetchSupportsRawUtf8Headers(this._fetch) &&
-      canUseNodeRawUtf8Transport(url);
-    if (
-      rawUtf8Headers &&
-      !fetchSupportsRawUtf8Headers(this._fetch) &&
-      !shouldUseNodeRawUtf8Transport
-    ) {
-      throw createValidationError(
-        ValidationErrorCode.INVALID_OBJECT,
-        "ToriiClient: canonicalAuth.accountId contains UTF-8 characters that require a fetch implementation with raw UTF-8 header support.",
-        "canonicalAuth.accountId",
-      );
     }
     const retryProfileName =
       typeof options.retryProfile === "string" && options.retryProfile
@@ -9976,25 +10053,13 @@ export class ToriiClient {
         }, this._config.timeoutMs);
       }
       try {
-        const response = shouldUseNodeRawUtf8Transport
-          ? await performNodeRawUtf8Request({
-              url,
-              method: methodUpper,
-              headers: cloneHeadersForFetch(initHeaders),
-              rawUtf8Headers,
-              body: init.body,
-              signal: signal ?? undefined,
-            })
-          : await this._fetch(url.toString(), {
-              ...init,
-              // Give fetch a fresh header bag for each retry attempt. Reusing the
-              // same object across retries can break native fetch implementations.
-              headers: cloneHeadersForFetch(initHeaders),
-              [RAW_UTF8_HEADERS_INIT_KEY]: cloneRawUtf8Headers(
-                init[RAW_UTF8_HEADERS_INIT_KEY],
-              ),
-              signal: signal ?? undefined,
-            });
+        const response = await this._fetch(url.toString(), {
+          ...init,
+          // Give fetch a fresh header bag for each retry attempt. Reusing the
+          // same object across retries can break native fetch implementations.
+          headers: cloneHeadersForFetch(initHeaders),
+          signal: signal ?? undefined,
+        });
         if (timeoutId) {
           clearTimeout(timeoutId);
         }
@@ -11793,7 +11858,24 @@ export class ToriiClient {
         `${context}.accountId`,
       );
     }
-    const accountId = ToriiClient._normalizeAccountId(rawAccountId, `${context}.accountId`);
+    let accountId;
+    try {
+      if (typeof rawAccountId !== "string") {
+        throw new TypeError("credential must be a string");
+      }
+      accountId = normalizeAccountAliasFqn(rawAccountId, `${context}.accountId`);
+      if (accountId !== rawAccountId) {
+        throw new TypeError("credential is not an exact canonical ASCII alias");
+      }
+    } catch (error) {
+      throw createValidationError(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${context}.accountId must be an exact canonical ASCII account alias ` +
+          "(name@dataspace or name@domain.dataspace)",
+        `${context}.accountId`,
+        error,
+      );
+    }
     const privateKey = ToriiClient._normalizePrivateKey(
       record.privateKey,
       `${context}.privateKey`,
@@ -20595,377 +20677,6 @@ function cloneHeadersForFetch(headers) {
   return clone;
 }
 
-function cloneRawUtf8Headers(headers) {
-  if (!headers || typeof headers !== "object") {
-    return undefined;
-  }
-  const clone = {};
-  for (const [key, value] of Object.entries(headers)) {
-    clone[key] = String(value);
-  }
-  return Object.keys(clone).length > 0 ? clone : undefined;
-}
-
-function headerValueRequiresRawUtf8Transport(value) {
-  if (value == null) {
-    return false;
-  }
-  const rendered = String(value);
-  for (let index = 0; index < rendered.length; index += 1) {
-    if (rendered.charCodeAt(index) > 0xff) {
-      return true;
-    }
-  }
-  return false;
-}
-
-function fetchSupportsRawUtf8Headers(fetchImpl) {
-  return Boolean(fetchImpl && fetchImpl[RAW_UTF8_HEADER_SUPPORT_FLAG] === true);
-}
-
-function canUseNodeRawUtf8Transport(url) {
-  const parsed = url instanceof URL ? url : new URL(String(url));
-  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-    return false;
-  }
-  return typeof process !== "undefined" && Boolean(process?.versions?.node);
-}
-
-async function performNodeRawUtf8Request({
-  url,
-  method,
-  headers,
-  rawUtf8Headers,
-  body,
-  signal,
-}) {
-  const parsed = url instanceof URL ? url : new URL(String(url));
-  const requestBuffer = buildRawUtf8HttpRequestBuffer({
-    url: parsed,
-    method,
-    headers,
-    rawUtf8Headers,
-    body,
-  });
-  throwIfAborted(signal);
-  const socket = await openNodeRawUtf8Socket(parsed);
-  if (typeof socket.setNoDelay === "function") {
-    socket.setNoDelay(true);
-  }
-  return new Promise((resolve, reject) => {
-    let settled = false;
-    const chunks = [];
-    const finishWithError = (error) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      cleanup();
-      reject(error instanceof Error ? error : new Error(String(error)));
-    };
-    const finishWithResponse = () => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      cleanup();
-      try {
-        resolve(createNodeRawUtf8Response(Buffer.concat(chunks)));
-      } catch (error) {
-        reject(error);
-      }
-    };
-    const onAbort = () => {
-      const reason = signalAbortReason(signal) ?? createAbortError();
-      try {
-        socket.destroy(reason instanceof Error ? reason : undefined);
-      } catch {
-        // Ignore socket teardown failures during abort.
-      }
-      finishWithError(reason);
-    };
-    const cleanup = () => {
-      socket.removeListener("error", onError);
-      socket.removeListener("data", onData);
-      socket.removeListener("end", onEnd);
-      socket.removeListener("close", onClose);
-      if (signal) {
-        removeSignalAbortListener(signal, onAbort);
-      }
-    };
-    const onError = (error) => {
-      finishWithError(error);
-    };
-    const onData = (chunk) => {
-      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-    };
-    const onEnd = () => {
-      finishWithResponse();
-    };
-    const onClose = (hadError) => {
-      if (settled || hadError) {
-        return;
-      }
-      if (chunks.length > 0) {
-        finishWithResponse();
-        return;
-      }
-      finishWithError(new Error("raw UTF-8 request socket closed before a response arrived"));
-    };
-    socket.once("error", onError);
-    socket.on("data", onData);
-    socket.once("end", onEnd);
-    socket.once("close", onClose);
-    if (signal) {
-      addSignalAbortListener(signal, onAbort);
-      if (signalIsAborted(signal)) onAbort();
-    }
-    try {
-      socket.write(requestBuffer);
-    } catch (error) {
-      finishWithError(error);
-    }
-  });
-}
-
-async function openNodeRawUtf8Socket(url) {
-  const port =
-    url.port !== "" ? Number(url.port) : url.protocol === "https:" ? 443 : 80;
-  if (!Number.isInteger(port) || port <= 0 || port > 65535) {
-    throw new Error(`invalid port for raw UTF-8 request: ${url.port}`);
-  }
-  if (url.protocol === "https:") {
-    const tls = await import("node:tls");
-    return tls.connect({
-      host: url.hostname,
-      port,
-      ALPNProtocols: ["http/1.1"],
-      servername: url.hostname.includes(":") ? undefined : url.hostname,
-    });
-  }
-  const net = await import("node:net");
-  return net.createConnection({
-    host: url.hostname,
-    port,
-  });
-}
-
-function buildRawUtf8HttpRequestBuffer({
-  url,
-  method,
-  headers,
-  rawUtf8Headers,
-  body,
-}) {
-  const renderedHeaders = cloneHeadersForFetch(headers);
-  const rawHeaders = cloneRawUtf8Headers(rawUtf8Headers) ?? {};
-  for (const name of Object.keys(rawHeaders)) {
-    deleteHeader(renderedHeaders, name);
-  }
-  if (!hasHeader(renderedHeaders, "Host")) {
-    renderedHeaders.Host = renderRawHttpHostHeader(url);
-  }
-  if (!hasHeader(renderedHeaders, "Connection")) {
-    renderedHeaders.Connection = "close";
-  }
-  const bodyBuffer = encodeRawUtf8RequestBody(body);
-  if (
-    bodyBuffer &&
-    !hasHeader(renderedHeaders, "Content-Length") &&
-    !hasHeader(renderedHeaders, "Transfer-Encoding")
-  ) {
-    renderedHeaders["Content-Length"] = String(bodyBuffer.length);
-  }
-  const target = `${url.pathname || "/"}${url.search || ""}` || "/";
-  const chunks = [Buffer.from(`${method} ${target} HTTP/1.1\r\n`, "ascii")];
-  for (const [name, value] of Object.entries(renderedHeaders)) {
-    chunks.push(encodeRawHttpHeaderLine(name, value));
-  }
-  for (const [name, value] of Object.entries(rawHeaders)) {
-    chunks.push(encodeRawHttpHeaderLine(name, value));
-  }
-  chunks.push(Buffer.from("\r\n", "ascii"));
-  if (bodyBuffer) {
-    chunks.push(bodyBuffer);
-  }
-  return Buffer.concat(chunks);
-}
-
-function encodeRawUtf8RequestBody(body) {
-  if (body === undefined || body === null) {
-    return null;
-  }
-  if (typeof body === "string") {
-    return Buffer.from(body, "utf8");
-  }
-  if (body instanceof URLSearchParams) {
-    return Buffer.from(body.toString(), "utf8");
-  }
-  return toBuffer(body);
-}
-
-function renderRawHttpHostHeader(url) {
-  const defaultPort = url.protocol === "https:" ? "443" : "80";
-  const hostname = url.hostname.includes(":") ? `[${url.hostname}]` : url.hostname;
-  if (url.port && url.port !== defaultPort) {
-    return `${hostname}:${url.port}`;
-  }
-  return hostname;
-}
-
-function encodeRawHttpHeaderLine(name, value) {
-  const renderedName = String(name);
-  if (!/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/u.test(renderedName)) {
-    throw new TypeError(`invalid raw HTTP header name: ${renderedName}`);
-  }
-  const renderedValue = value == null ? "" : String(value);
-  if (/[\r\n]/u.test(renderedValue)) {
-    throw new TypeError(`invalid raw HTTP header value for ${renderedName}`);
-  }
-  return Buffer.concat([
-    Buffer.from(`${renderedName}: `, "ascii"),
-    Buffer.from(renderedValue, "utf8"),
-    Buffer.from("\r\n", "ascii"),
-  ]);
-}
-
-function createNodeRawUtf8Response(buffer) {
-  const parsed = parseRawHttpResponse(buffer);
-  if (typeof Response === "function") {
-    return new Response(parsed.body, {
-      status: parsed.status,
-      statusText: parsed.statusText,
-      headers: parsed.headers,
-    });
-  }
-  attachHeaderAccessors(parsed.headers);
-  return {
-    status: parsed.status,
-    statusText: parsed.statusText,
-    headers: parsed.headers,
-    body: null,
-    json: async () => JSON.parse(parsed.body.toString("utf8")),
-    text: async () => parsed.body.toString("utf8"),
-    arrayBuffer: async () =>
-      parsed.body.buffer.slice(
-        parsed.body.byteOffset,
-        parsed.body.byteOffset + parsed.body.byteLength,
-      ),
-  };
-}
-
-function parseRawHttpResponse(buffer) {
-  const headerSeparator = buffer.indexOf("\r\n\r\n");
-  if (headerSeparator === -1) {
-    throw new Error("invalid raw HTTP response: missing header terminator");
-  }
-  const headerBlock = buffer.subarray(0, headerSeparator).toString("latin1");
-  const lines = headerBlock.split("\r\n");
-  const statusLine = lines.shift();
-  const match =
-    typeof statusLine === "string"
-      ? /^HTTP\/1\.[01]\s+(\d{3})(?:\s+(.*))?$/u.exec(statusLine)
-      : null;
-  if (!match) {
-    throw new Error("invalid raw HTTP response: malformed status line");
-  }
-  const headers = {};
-  for (const line of lines) {
-    const delimiter = line.indexOf(":");
-    if (delimiter === -1) {
-      continue;
-    }
-    const name = line.slice(0, delimiter).trim();
-    const value = line.slice(delimiter + 1).trim();
-    const existing = findHeaderKey(headers, name);
-    if (existing) {
-      headers[existing] = `${headers[existing]}, ${value}`;
-    } else {
-      headers[name] = value;
-    }
-  }
-  let body = buffer.subarray(headerSeparator + 4);
-  const status = Number.parseInt(match[1], 10);
-  if (status < 200 || status === 204 || status === 304) {
-    body = Buffer.alloc(0);
-  } else if (responseUsesChunkedTransferEncoding(headers)) {
-    body = decodeChunkedHttpBody(body);
-  } else {
-    const contentLength = parseContentLengthHeader(headers);
-    if (contentLength !== null) {
-      if (body.length < contentLength) {
-        throw new Error("invalid raw HTTP response: body shorter than content-length");
-      }
-      body = body.subarray(0, contentLength);
-    }
-  }
-  return {
-    status,
-    statusText: match[2] ?? "",
-    headers,
-    body,
-  };
-}
-
-function responseUsesChunkedTransferEncoding(headers) {
-  const key = findHeaderKey(headers, "transfer-encoding");
-  if (!key) {
-    return false;
-  }
-  return String(headers[key])
-    .split(",")
-    .some((entry) => entry.trim().toLowerCase() === "chunked");
-}
-
-function parseContentLengthHeader(headers) {
-  const key = findHeaderKey(headers, "content-length");
-  if (!key) {
-    return null;
-  }
-  const parsed = Number.parseInt(String(headers[key]).trim(), 10);
-  if (!Number.isInteger(parsed) || parsed < 0) {
-    throw new Error("invalid raw HTTP response: malformed content-length");
-  }
-  return parsed;
-}
-
-function decodeChunkedHttpBody(buffer) {
-  const chunks = [];
-  let offset = 0;
-  while (offset < buffer.length) {
-    const lineEnd = buffer.indexOf("\r\n", offset);
-    if (lineEnd === -1) {
-      throw new Error("invalid raw HTTP response: unterminated chunk size");
-    }
-    const sizeLine = buffer
-      .subarray(offset, lineEnd)
-      .toString("latin1")
-      .split(";", 1)[0]
-      .trim();
-    const size = Number.parseInt(sizeLine, 16);
-    if (!Number.isInteger(size) || size < 0) {
-      throw new Error("invalid raw HTTP response: malformed chunk size");
-    }
-    offset = lineEnd + 2;
-    if (size === 0) {
-      if (offset + 2 > buffer.length) {
-        throw new Error("invalid raw HTTP response: missing chunk terminator");
-      }
-      return Buffer.concat(chunks);
-    }
-    if (offset + size + 2 > buffer.length) {
-      throw new Error("invalid raw HTTP response: truncated chunk body");
-    }
-    chunks.push(buffer.subarray(offset, offset + size));
-    offset += size;
-    if (buffer[offset] !== 13 || buffer[offset + 1] !== 10) {
-      throw new Error("invalid raw HTTP response: malformed chunk delimiter");
-    }
-    offset += 2;
-  }
-  throw new Error("invalid raw HTTP response: missing terminating chunk");
-}
-
 function headersContainCredentials(headers) {
   if (!headers || typeof headers !== "object") {
     return false;
@@ -23203,313 +22914,6 @@ function normalizeRevokeSpaceDirectoryManifestRequest(input) {
   return payload;
 }
 
-function normalizeDeployContractRequest(input) {
-  const record = ensureRecord(input, "deployContract request");
-  const credentials = normalizeAuthorityCredentials(record, "deployContract");
-  const codeB64 = record.code_b64 ?? record.codeB64;
-  const contractAlias = record.contract_alias ?? record.contractAlias;
-  const payload = {
-    ...credentials,
-    code_b64: normalizeIvmArtifactBytecodeInput(
-      codeB64,
-      "deployContract.codeB64",
-    ),
-    contract_alias: requireNonEmptyString(
-      contractAlias,
-      "deployContract.contract_alias",
-    ),
-  };
-  if (record.dataspace !== undefined && record.dataspace !== null) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_OBJECT,
-      "deployContract.dataspace is not accepted by /v1/contracts/deploy; use contractAlias to select the dataspace",
-      "deployContract.dataspace",
-    );
-  }
-  if (record.manifest !== undefined && record.manifest !== null) {
-    throw createValidationError(
-      ValidationErrorCode.INVALID_OBJECT,
-      "deployContract.manifest is not accepted by /v1/contracts/deploy",
-      "deployContract.manifest",
-    );
-  }
-  const leaseExpiryValue = record.lease_expiry_ms ?? record.leaseExpiryMs;
-  if (leaseExpiryValue !== undefined && leaseExpiryValue !== null) {
-    const leaseExpiryMs = coerceInteger(
-      leaseExpiryValue,
-      "deployContract.lease_expiry_ms",
-    );
-    if (leaseExpiryMs < 0) {
-      throw createValidationError(
-        ValidationErrorCode.INVALID_NUMERIC,
-        "deployContract.lease_expiry_ms must be a non-negative integer",
-        "deployContract.lease_expiry_ms",
-      );
-    }
-    payload.lease_expiry_ms = leaseExpiryMs;
-  }
-  return payload;
-}
-
-function normalizeDeployContractResponse(payload) {
-  const record = ensureRecord(payload, "deployContract response");
-  if (!Array.isArray(record.contracts)) {
-    throw new TypeError("deployContract.response.contracts must be an array");
-  }
-  if (!Array.isArray(record.hajimari_calls)) {
-    throw new TypeError("deployContract.response.hajimari_calls must be an array");
-  }
-  if (!Array.isArray(record.completed_stages)) {
-    throw new TypeError("deployContract.response.completed_stages must be an array");
-  }
-  const normalizeOptionalString = (value, context) =>
-    value === undefined || value === null ? null : requireNonEmptyString(value, context);
-  const normalizeOptionalHash = (value, context) =>
-    value === undefined || value === null ? null : normalizeHex32String(value, context);
-  const normalizeContract = (contractPayload, index) => {
-    const contract = ensureRecord(
-      contractPayload,
-      `deployContract.response.contracts[${index}]`,
-    );
-    const contractResult = {
-      name: requireNonEmptyString(
-        contract.name,
-        `deployContract.response.contracts[${index}].name`,
-      ),
-      contract_alias: requireNonEmptyString(
-        contract.contract_alias,
-        `deployContract.response.contracts[${index}].contract_alias`,
-      ),
-      contract_address: requireNonEmptyString(
-        contract.contract_address,
-        `deployContract.response.contracts[${index}].contract_address`,
-      ),
-      previous_contract_address: normalizeOptionalString(
-        contract.previous_contract_address,
-        `deployContract.response.contracts[${index}].previous_contract_address`,
-      ),
-      kaizen: Boolean(contract.kaizen),
-      dataspace: requireNonEmptyString(
-        contract.dataspace,
-        `deployContract.response.contracts[${index}].dataspace`,
-      ),
-      deploy_nonce: coerceInteger(
-        contract.deploy_nonce,
-        `deployContract.response.contracts[${index}].deploy_nonce`,
-      ),
-      code_hash_hex: normalizeHex32String(
-        contract.code_hash_hex,
-        `deployContract.response.contracts[${index}].code_hash_hex`,
-      ),
-      abi_hash_hex: normalizeHex32String(
-        contract.abi_hash_hex,
-        `deployContract.response.contracts[${index}].abi_hash_hex`,
-      ),
-      tx_hash_hex: normalizeOptionalHash(
-        contract.tx_hash_hex,
-        `deployContract.response.contracts[${index}].tx_hash_hex`,
-      ),
-      status: requireNonEmptyString(
-        contract.status,
-        `deployContract.response.contracts[${index}].status`,
-      ),
-    };
-    if (contract.pipeline_status !== undefined) {
-      contractResult.pipeline_status =
-        contract.pipeline_status === null
-          ? null
-          : normalizePipelineTransactionStatus(
-              contract.pipeline_status,
-              `deployContract.response.contracts[${index}].pipeline_status`,
-            );
-    }
-    return contractResult;
-  };
-  const normalizeCall = (callPayload, index) => {
-    const call = ensureRecord(callPayload, `deployContract.response.hajimari_calls[${index}]`);
-    const callResult = {
-      id: requireNonEmptyString(call.id, `deployContract.response.hajimari_calls[${index}].id`),
-      contract_alias: requireNonEmptyString(
-        call.contract_alias,
-        `deployContract.response.hajimari_calls[${index}].contract_alias`,
-      ),
-      entrypoint: normalizeOptionalString(
-        call.entrypoint,
-        `deployContract.response.hajimari_calls[${index}].entrypoint`,
-      ),
-      tx_hash_hex: normalizeOptionalHash(
-        call.tx_hash_hex,
-        `deployContract.response.hajimari_calls[${index}].tx_hash_hex`,
-      ),
-      status: requireNonEmptyString(
-        call.status,
-        `deployContract.response.hajimari_calls[${index}].status`,
-      ),
-    };
-    if (call.pipeline_status !== undefined) {
-      callResult.pipeline_status =
-        call.pipeline_status === null
-          ? null
-          : normalizePipelineTransactionStatus(
-              call.pipeline_status,
-              `deployContract.response.hajimari_calls[${index}].pipeline_status`,
-            );
-    }
-    return callResult;
-  };
-  const normalizeAssertion = (assertionPayload, index) => {
-    const assertion = ensureRecord(
-      assertionPayload,
-      `deployContract.response.assertions[${index}]`,
-    );
-    const assertionResult = {
-      id: requireNonEmptyString(
-        assertion.id,
-        `deployContract.response.assertions[${index}].id`,
-      ),
-      contract_alias: requireNonEmptyString(
-        assertion.contract_alias,
-        `deployContract.response.assertions[${index}].contract_alias`,
-      ),
-      entrypoint: normalizeOptionalString(
-        assertion.entrypoint,
-        `deployContract.response.assertions[${index}].entrypoint`,
-      ),
-      status: requireNonEmptyString(
-        assertion.status,
-        `deployContract.response.assertions[${index}].status`,
-      ),
-    };
-    if (assertion.actual_result !== undefined) {
-      assertionResult.actual_result = assertion.actual_result;
-    }
-    if (assertion.expected_result !== undefined) {
-      assertionResult.expected_result = assertion.expected_result;
-    }
-    if (assertion.error !== undefined) {
-      assertionResult.error = normalizeOptionalString(
-        assertion.error,
-        `deployContract.response.assertions[${index}].error`,
-      );
-    }
-    return assertionResult;
-  };
-  const normalizeOperationReceipt = (receiptPayload) => {
-    const receipt = ensureRecord(
-      receiptPayload,
-      "deployContract.response.operation_receipt",
-    );
-    const receiptResult = {
-      operation_kind: requireNonEmptyString(
-        receipt.operation_kind,
-        "deployContract.response.operation_receipt.operation_kind",
-      ),
-      status: requireNonEmptyString(
-        receipt.status,
-        "deployContract.response.operation_receipt.status",
-      ),
-      transport: requireNonEmptyString(
-        receipt.transport,
-        "deployContract.response.operation_receipt.transport",
-      ),
-      dataspace: requireNonEmptyString(
-        receipt.dataspace,
-        "deployContract.response.operation_receipt.dataspace",
-      ),
-      contract_alias: normalizeOptionalString(
-        receipt.contract_alias,
-        "deployContract.response.operation_receipt.contract_alias",
-      ),
-      contract_address: normalizeOptionalString(
-        receipt.contract_address,
-        "deployContract.response.operation_receipt.contract_address",
-      ),
-      code_hash_hex: normalizeOptionalHash(
-        receipt.code_hash_hex,
-        "deployContract.response.operation_receipt.code_hash_hex",
-      ),
-      abi_hash_hex: normalizeOptionalHash(
-        receipt.abi_hash_hex,
-        "deployContract.response.operation_receipt.abi_hash_hex",
-      ),
-      tx_hash_hex: normalizeOptionalHash(
-        receipt.tx_hash_hex,
-        "deployContract.response.operation_receipt.tx_hash_hex",
-      ),
-      entrypoint: normalizeOptionalString(
-        receipt.entrypoint,
-        "deployContract.response.operation_receipt.entrypoint",
-      ),
-      entrypoint_hash_hex: normalizeOptionalHash(
-        receipt.entrypoint_hash_hex,
-        "deployContract.response.operation_receipt.entrypoint_hash_hex",
-      ),
-      gas_limit:
-        receipt.gas_limit === undefined || receipt.gas_limit === null
-          ? null
-          : coerceInteger(
-              receipt.gas_limit,
-              "deployContract.response.operation_receipt.gas_limit",
-            ),
-      gas_used:
-        receipt.gas_used === undefined || receipt.gas_used === null
-          ? null
-          : coerceInteger(
-              receipt.gas_used,
-              "deployContract.response.operation_receipt.gas_used",
-            ),
-      gas_asset_id: normalizeOptionalString(
-        receipt.gas_asset_id,
-        "deployContract.response.operation_receipt.gas_asset_id",
-      ),
-      fee_sponsor: normalizeOptionalString(
-        receipt.fee_sponsor,
-        "deployContract.response.operation_receipt.fee_sponsor",
-      ),
-      payload_digest_hex: normalizeHex32String(
-        receipt.payload_digest_hex,
-        "deployContract.response.operation_receipt.payload_digest_hex",
-      ),
-    };
-    return receiptResult;
-  };
-  const normalized = {
-    ok: Boolean(record.ok),
-    bundle_name: requireNonEmptyString(
-      record.bundle_name,
-      "deployContract.response.bundle_name",
-    ),
-    bundle_digest: normalizeHex32String(
-      record.bundle_digest,
-      "deployContract.response.bundle_digest",
-      { allowShort: true },
-    ),
-    chain_fingerprint: requireNonEmptyString(
-      record.chain_fingerprint,
-      "deployContract.response.chain_fingerprint",
-    ),
-    dry_run: Boolean(record.dry_run),
-    completed_stages: record.completed_stages.map((stage, index) =>
-      requireNonEmptyString(stage, `deployContract.response.completed_stages[${index}]`),
-    ),
-    failure_point: normalizeOptionalString(
-      record.failure_point,
-      "deployContract.response.failure_point",
-    ),
-    contracts: record.contracts.map(normalizeContract),
-    hajimari_calls: record.hajimari_calls.map(normalizeCall),
-    assertions: Array.isArray(record.assertions)
-      ? record.assertions.map(normalizeAssertion)
-      : [],
-  };
-  if (record.operation_receipt !== undefined) {
-    normalized.operation_receipt =
-      record.operation_receipt === null
-        ? null
-        : normalizeOperationReceipt(record.operation_receipt);
-  }
-  return normalized;
-}
 
 function normalizeSetContractAliasRequest(input) {
   const record = ensureRecord(input, "setContractAlias request");
@@ -26197,13 +25601,26 @@ function normalizeFeeSponsorPolicyResponse(
       normalizedRule,
       new Set([
         "effect",
+        "max_fee",
         "dataspaces",
         "executable_kinds",
         "instruction_wire_ids",
+        "asset_transfer_definition_ids",
         "contract_selectors",
       ]),
       `${context}.rules[${index}]`,
     );
+    if (normalizedRule.max_fee !== undefined && normalizedRule.max_fee !== null) {
+      const maxFee = requireCanonicalQuantity(
+        normalizedRule.max_fee,
+        `${context}.rules[${index}].max_fee`,
+      );
+      if (maxFee !== normalizedRule.max_fee) {
+        throw new TypeError(
+          `${context}.rules[${index}].max_fee must be a canonical quantity string`,
+        );
+      }
+    }
     const effect = ensureRecord(
       normalizedRule.effect,
       `${context}.rules[${index}].effect`,
@@ -26280,6 +25697,21 @@ function normalizeFeeSponsorPolicyResponse(
       normalizedRule.instruction_wire_ids,
       `${context}.rules[${index}].instruction_wire_ids`,
     );
+    const assetTransferDefinitionIds = requireCanonicalSortedStringSet(
+      normalizedRule.asset_transfer_definition_ids,
+      `${context}.rules[${index}].asset_transfer_definition_ids`,
+    );
+    assetTransferDefinitionIds.forEach((assetDefinitionId, assetIndex) => {
+      const normalized = normalizeAssetDefinitionId(
+        assetDefinitionId,
+        `${context}.rules[${index}].asset_transfer_definition_ids[${assetIndex}]`,
+      );
+      if (normalized !== assetDefinitionId) {
+        throw new TypeError(
+          `${context}.rules[${index}].asset_transfer_definition_ids must contain canonical asset definition ids`,
+        );
+      }
+    });
     requireDenseArray(
       normalizedRule.contract_selectors,
       `${context}.rules[${index}].contract_selectors`,

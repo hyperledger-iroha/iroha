@@ -105,7 +105,7 @@ test("resolveAlias normalises IBAN input and requires canonical alias responses"
 
 test("resolveAlias attaches canonical auth when provided", async () => {
   const { privateKey, publicKey } = generateKeyPair({ seed: Buffer.alloc(32, 12) });
-  const signerAccountId = AccountAddress.fromAccount({ publicKey }).toI105();
+  const signerAccountAlias = "operator-1@mibank.paynet";
   let lastRequest = null;
   const fetchImpl = async (input, init) => {
     lastRequest = { input, init };
@@ -115,17 +115,16 @@ test("resolveAlias attaches canonical auth when provided", async () => {
       source: "runtime",
     });
   };
-  fetchImpl.__irohaSupportsRawUtf8Headers = true;
   const client = new ToriiClient("https://example.test", {
     fetchImpl,
   });
 
   const result = await client.resolveAlias("tidal-river-4160@mibank.paynet", {
-    canonicalAuth: { accountId: signerAccountId, privateKey },
+    canonicalAuth: { accountId: signerAccountAlias, privateKey },
   });
 
   assert.equal(result.account_id, ToriiClient._requireAccountId(VALID_ACCOUNT_ID));
-  assert.equal(lastRequest.init.headers["X-Iroha-Account"], signerAccountId);
+  assert.equal(lastRequest.init.headers["X-Iroha-Account"], signerAccountAlias);
   const url = new URL(lastRequest.input);
   const timestampMs = Number(lastRequest.init.headers["X-Iroha-Timestamp-Ms"]);
   const nonce = lastRequest.init.headers["X-Iroha-Nonce"];
@@ -455,9 +454,11 @@ test("findFeeSponsorPolicyById posts the exact id and returns the direct policy"
     rules: [
       {
         effect: { effect: "allow", value: null },
+        max_fee: "0.01",
         dataspaces: [0],
         executable_kinds: [{ kind: "instructions", value: null }],
-        instruction_wire_ids: ["iroha.settlement.fx_corridor.settle"],
+        instruction_wire_ids: ["iroha.transfer"],
+        asset_transfer_definition_ids: ["66owaQmAQMuHxPzxUN3bqZ6FJfDa"],
         contract_selectors: [],
       },
     ],
@@ -523,6 +524,7 @@ test("findFeeSponsorPolicyById rejects malformed canonical policy shapes", async
     dataspaces: [0],
     executable_kinds: [{ kind: "instructions", value: null }],
     instruction_wire_ids: ["iroha.settlement.fx_corridor.settle"],
+    asset_transfer_definition_ids: [],
     contract_selectors: [],
   };
   const cases = [
@@ -534,6 +536,8 @@ test("findFeeSponsorPolicyById rejects malformed canonical policy shapes", async
       executable_kinds: [{ kind: "instructions", value: null, extra: true }],
     },
     { ...baseRule, instruction_wire_ids: ["z", "a"] },
+    { ...baseRule, asset_transfer_definition_ids: ["not-canonical"] },
+    { ...baseRule, max_fee: "-0.01" },
     { ...baseRule, contract_selectors: [{ contract_alias: "c@sbp" }] },
   ];
 

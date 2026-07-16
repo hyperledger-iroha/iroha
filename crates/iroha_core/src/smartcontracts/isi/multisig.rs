@@ -9,7 +9,7 @@ use std::{
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
     ValidationFail,
-    account::{AccountId, MultisigMember, MultisigPolicy, rekey::AccountRekeyRecord},
+    account::{AccountId, MultisigMember, MultisigPolicy},
     isi::{
         AddSignatory, CustomInstruction, InstructionBox, RemoveSignatory, SetAccountQuorum,
         error::{InstructionExecutionError, InvalidParameterError},
@@ -542,6 +542,42 @@ fn rekey_account_id(
         }
     }
 
+    // Build every continuity update before changing the account table. A malformed or missing
+    // record must fail this canonical rekey atomically instead of leaving a partially moved
+    // account when this helper is exercised directly.
+    let mut rekey_record_updates = Vec::with_capacity(labels_to_repoint.len());
+    for label in &labels_to_repoint {
+        let record = state_transaction
+            .world
+            .account_rekey_records
+            .get(label)
+            .cloned()
+            .ok_or_else(|| {
+                InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "cannot rekey account alias `{label:?}` without its canonical continuity record"
+                    )
+                    .into(),
+                )
+            })?;
+        if &record.label != label || &record.active_account_id != old_account {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "cannot rekey account alias `{label:?}` whose continuity record does not target `{old_account}`"
+                )
+                .into(),
+            ));
+        }
+        let record = record
+            .repoint_for_account_id_rekey(new_account.clone())
+            .map_err(|error| {
+                InstructionExecutionError::InvariantViolation(
+                    format!("cannot extend malformed account rekey history: {error}").into(),
+                )
+            })?;
+        rekey_record_updates.push((label.clone(), record));
+    }
+
     let old_multisig_role = multisig_role_for(home_domain, old_account);
     let new_multisig_role = multisig_role_for(home_domain, new_account);
     if old_multisig_role != new_multisig_role
@@ -584,23 +620,14 @@ fn rekey_account_id(
         .accounts
         .insert(new_account.clone(), account_value.clone());
 
-    for label in &labels_to_repoint {
+    for (label, record) in rekey_record_updates {
         state_transaction
             .world
             .insert_account_alias_binding(label.clone(), new_account.clone());
-        let record = match state_transaction
-            .world
-            .account_rekey_records
-            .get(label)
-            .cloned()
-        {
-            Some(record) => record.repoint_to_account(new_account.clone()),
-            None => AccountRekeyRecord::new(label.clone(), new_account.clone()),
-        };
         state_transaction
             .world
             .account_rekey_records
-            .insert(label.clone(), record);
+            .insert(label, record);
     }
     for (_, (storage_key, record)) in alias_lease_updates {
         state_transaction
@@ -3090,7 +3117,7 @@ mod tests {
         ChainId, IntoKeyValue, Registrable,
         account::{
             Account, AccountController, AccountId, MultisigMember, MultisigPolicy,
-            rekey::{AccountAlias, AccountAliasDomain},
+            rekey::{AccountAlias, AccountAliasDomain, AccountRekeyTransitionProvenance},
         },
         asset::{AssetDefinition, AssetDefinitionId, AssetId},
         block::BlockHeader,
@@ -4432,6 +4459,11 @@ mod tests {
             vec![multisig_id.clone()],
             "rekey record should retain the prior concrete multisig account"
         );
+        assert_eq!(
+            rekey_record.transition_provenance,
+            vec![AccountRekeyTransitionProvenance::AccountIdRekey],
+            "canonical multisig rekey must record trusted account-id provenance"
+        );
         let lease = account_alias_lease_record(&state_transaction, &alias);
         assert_eq!(
             lease.owner, updated_account,
@@ -5220,6 +5252,7 @@ mod tests {
         let error_text = err.to_string();
         assert!(
             error_text.contains("failed to decode SNS lease")
+                || error_text.contains("failed to decode account-alias SNS record")
                 || error_text.contains("trailing bytes"),
             "{err}"
         );
@@ -5257,6 +5290,58 @@ mod tests {
             .world
             .smart_contract_state
             .insert(lease_keys[4].clone(), canonical_leases[4].clone());
+
+        let canonical_rekey_record = state_transaction
+            .world
+            .account_rekey_records
+            .get(&aliases[0])
+            .cloned()
+            .expect("canonical continuity record");
+        state_transaction
+            .world
+            .account_rekey_records
+            .remove(aliases[0].clone());
+        let err = rekey_account_id(
+            &mut state_transaction,
+            &old_account,
+            &new_account,
+            Some(&domain_id),
+        )
+        .expect_err("missing continuity record must reject account rekey");
+        assert!(
+            err.to_string().contains("canonical continuity record"),
+            "{err}"
+        );
+        state_transaction
+            .world
+            .account_rekey_records
+            .insert(aliases[0].clone(), canonical_rekey_record.clone());
+        assert_account_rekey_not_applied(&state_transaction, &old_account, &new_account, &aliases);
+
+        let mut malformed_rekey_record = canonical_rekey_record.clone();
+        malformed_rekey_record
+            .transition_provenance
+            .push(AccountRekeyTransitionProvenance::LegacyUnspecified);
+        state_transaction
+            .world
+            .account_rekey_records
+            .insert(aliases[0].clone(), malformed_rekey_record);
+        let err = rekey_account_id(
+            &mut state_transaction,
+            &old_account,
+            &new_account,
+            Some(&domain_id),
+        )
+        .expect_err("malformed continuity record must reject account rekey");
+        assert!(
+            err.to_string().contains("malformed account rekey history"),
+            "{err}"
+        );
+        assert_account_rekey_not_applied(&state_transaction, &old_account, &new_account, &aliases);
+        state_transaction
+            .world
+            .account_rekey_records
+            .insert(aliases[0].clone(), canonical_rekey_record);
 
         rekey_account_id(
             &mut state_transaction,

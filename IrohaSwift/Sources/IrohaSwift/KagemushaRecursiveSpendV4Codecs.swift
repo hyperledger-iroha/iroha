@@ -125,17 +125,10 @@ enum KagemushaRecursiveSpendCodecsV4 {
             field: "verifyRequestV4.recipientRequest"
         ))
         writer.writeField(try nestedPayload(
-            request.topUpFinalityRosterArtifact.noritoArchive,
-            schema: KagemushaRecursiveSpend.topUpFinalityRosterArtifactWireName,
-            field: "verifyRequestV4.topUpFinalityRosterArtifact"
+            request.topUpProvenance.noritoArchive,
+            schema: KagemushaRecursiveSpend.topUpProvenanceWireNameV4,
+            field: "verifyRequestV4.topUpProvenance"
         ))
-        writer.writeField(try sequence(request.topUpFinalityEvidence.enumerated().map {
-            try nestedPayload(
-                $0.element.noritoArchive,
-                schema: KagemushaRecursiveSpend.topUpFinalityEvidenceWireNameV4,
-                field: "verifyRequestV4.topUpFinalityEvidence[\($0.offset)]"
-            )
-        }))
         writer.writeField(uint32(request.maximumHops))
         writer.writeField(artifactBinding(request.artifactBinding))
         writer.writeField(uint64(request.blockHeight))
@@ -169,6 +162,11 @@ enum KagemushaRecursiveSpendCodecsV4 {
             schema: KagemushaRecursiveSpend.bundleWireNameV4,
             field: "redeemLocalRequestV4.bundle"
         ))
+        writer.writeField(try nestedPayload(
+            request.input.topUpProvenance.noritoArchive,
+            schema: KagemushaRecursiveSpend.topUpProvenanceWireNameV4,
+            field: "redeemLocalRequestV4.topUpProvenance"
+        ))
         writer.writeField(try noteOpening(
             request.input.opening,
             field: "redeemLocalRequestV4.inputOpening"
@@ -198,6 +196,32 @@ enum KagemushaRecursiveSpendCodecsV4 {
         )
     }
 
+    static func encodeRedemptionChangePrepareRequest(
+        _ request: KagemushaRecursiveSpendRedemptionChangePrepareRequestV4
+    ) throws -> Data {
+        var writer = CompactNoritoWriter()
+        defer { writer.wipe() }
+        writer.writeField(uint16(request.version))
+        writer.writeField(try nestedPayload(
+            request.bundle.noritoArchive,
+            schema: KagemushaRecursiveSpend.bundleWireNameV4,
+            field: "redemptionChangePrepareRequestV4.bundle"
+        ))
+        var openingPayload = try noteOpening(
+            request.inputOpening,
+            field: "redemptionChangePrepareRequestV4.inputOpening"
+        )
+        defer { openingPayload.resetBytes(in: 0..<openingPayload.count) }
+        writer.writeField(openingPayload)
+        writer.writeField(try scaledAmount(request.changeAmount))
+        writer.writeField(request.operationID)
+        writer.writeField(request.entropy)
+        return frame(
+            KagemushaRecursiveSpend.redemptionChangePrepareRequestWireNameV4,
+            payload: writer.data
+        )
+    }
+
     private static func appendInput(
         _ input: KagemushaRecursiveSpendAppendInputV4
     ) throws -> Data {
@@ -207,6 +231,11 @@ enum KagemushaRecursiveSpendCodecsV4 {
             schema: KagemushaRecursiveSpend.bundleWireNameV4,
             field: "appendInputV4.previousBundle"
         ))
+        writer.writeField(try nestedPayload(
+            input.topUpProvenance.noritoArchive,
+            schema: KagemushaRecursiveSpend.topUpProvenanceWireNameV4,
+            field: "appendInputV4.topUpProvenance"
+        ))
         return writer.data
     }
 
@@ -214,6 +243,7 @@ enum KagemushaRecursiveSpendCodecsV4 {
         _ value: KagemushaRecursiveSpendArtifactBindingV4
     ) -> Data {
         var writer = CompactNoritoWriter()
+        writer.writeField(uint16(KagemushaRecursiveSpend.wireVersionV4))
         writer.writeField(CompactNorito.encodeString(value.generation))
         writer.writeField(value.manifestSHA256)
         return writer.data
@@ -223,8 +253,10 @@ enum KagemushaRecursiveSpendCodecsV4 {
         _ opening: KagemushaNoteOpening,
         field: String
     ) throws -> Data {
-        try nestedPayload(
-            KagemushaRecursiveSpendCodecs.encodeNoteOpening(opening),
+        var archive = try KagemushaRecursiveSpendCodecs.encodeNoteOpening(opening)
+        defer { archive.resetBytes(in: 0..<archive.count) }
+        return try nestedPayload(
+            archive,
             schema: KagemushaRecursiveSpend.noteOpeningWireName,
             field: field
         )

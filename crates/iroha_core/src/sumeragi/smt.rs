@@ -34,7 +34,7 @@ pub struct KvPair {
 }
 
 /// Dedicated execution-witness key tag for a finalized Kagemusha V2 top-up.
-pub(crate) const KAGEMUSHA_V2_TOPUP_ANCHOR_WITNESS_KEY_TAG: u8 = 0xD1;
+pub(crate) const KAGEMUSHA_V4_TOPUP_ANCHOR_WITNESS_KEY_TAG: u8 = 0xD2;
 /// Exact tagged-key length: one domain byte and a 32-byte operation id.
 pub(crate) const KAGEMUSHA_V2_TOPUP_ANCHOR_WITNESS_KEY_BYTES: usize = 33;
 /// Maximum top-up anchors committed by one block.
@@ -174,7 +174,7 @@ pub fn build_kagemusha_topup_block_commitment(
     let mut leaves = Vec::new();
     for (key, value) in canonical {
         let pair = KvPair { key, value };
-        if pair.key.first() == Some(&KAGEMUSHA_V2_TOPUP_ANCHOR_WITNESS_KEY_TAG) {
+        if pair.key.first() == Some(&KAGEMUSHA_V4_TOPUP_ANCHOR_WITNESS_KEY_TAG) {
             validate_kagemusha_topup_leaf(&pair)?;
             leaves.push(pair);
         } else {
@@ -308,7 +308,7 @@ pub fn verify_kagemusha_topup_write_inclusion(
 
 fn validate_kagemusha_topup_leaf(pair: &KvPair) -> Result<(), &'static str> {
     if pair.key.len() != KAGEMUSHA_V2_TOPUP_ANCHOR_WITNESS_KEY_BYTES
-        || pair.key[0] != KAGEMUSHA_V2_TOPUP_ANCHOR_WITNESS_KEY_TAG
+        || pair.key[0] != KAGEMUSHA_V4_TOPUP_ANCHOR_WITNESS_KEY_TAG
     {
         return Err("Kagemusha V2 top-up witness key has the wrong shape");
     }
@@ -580,7 +580,7 @@ mod tests {
     }
 
     fn topup_leaf(operation: u8, digest: u8) -> KvPair {
-        let mut key = vec![KAGEMUSHA_V2_TOPUP_ANCHOR_WITNESS_KEY_TAG];
+        let mut key = vec![KAGEMUSHA_V4_TOPUP_ANCHOR_WITNESS_KEY_TAG];
         key.extend_from_slice(&[operation; 32]);
         KvPair::new(key, vec![digest; 32])
     }

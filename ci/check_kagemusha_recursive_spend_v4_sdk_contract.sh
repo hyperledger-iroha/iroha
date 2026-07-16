@@ -3,20 +3,27 @@ set -euo pipefail
 
 ROOT_DIR="${KAGEMUSHA_RECURSIVE_SPEND_V4_SDK_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 
-if [[ $# -ne 0 ]]; then
-  echo "usage: ci/check_kagemusha_recursive_spend_v4_sdk_contract.sh" >&2
+MODE="${1:-}"
+if [[ $# -gt 1 || ( -n "$MODE" && "$MODE" != "--self-test" ) ]]; then
+  echo "usage: ci/check_kagemusha_recursive_spend_v4_sdk_contract.sh [--self-test]" >&2
   exit 2
 fi
 
-python3 - "$ROOT_DIR" <<'PY'
+python3 - "$ROOT_DIR" "$MODE" "${BASH_SOURCE[0]}" <<'PY'
 from __future__ import annotations
 
+import os
 import re
+import shutil
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 
 root = Path(sys.argv[1]).resolve()
+mode = sys.argv[2]
+script = Path(sys.argv[3]).resolve()
 paths = {
     "data_model": Path("crates/iroha_data_model/src/offline/mod.rs"),
     "rust": Path("crates/connect_norito_bridge/src/lib.rs"),
@@ -26,12 +33,22 @@ paths = {
     "swift_v4_codecs": Path(
         "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendV4Codecs.swift"
     ),
+    "swift_codecs": Path(
+        "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendV2Codecs.swift"
+    ),
     "swift_native": Path(
         "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendV2Native.swift"
     ),
     "swift_bridge": Path("IrohaSwift/Sources/IrohaSwift/NativeBridge.swift"),
     "swift_coordinator": Path(
         "IrohaSwift/Sources/IrohaSwift/KagemushaArtifactCoordinator.swift"
+    ),
+    "swift_hardware_test": Path(
+        "IrohaSwift/Tests/IrohaSwiftTests/KagemushaHardwareAuthorizationV2Tests.swift"
+    ),
+    "hardware_authorization_vector": Path(
+        "crates/connect_norito_bridge/tests/fixtures/"
+        "kagemusha_request_authorization_v2_hardware.hex"
     ),
     "kagami": Path("crates/iroha_kagami/src/kagemusha.rs"),
     "bundle": Path("crates/iroha_core/src/bin/kagemusha_recursive_spend_v4_bundle.rs"),
@@ -43,6 +60,10 @@ paths = {
     "java": Path(
         "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/"
         "KagemushaRecursiveSpendProver.java"
+    ),
+    "android_keymint": Path(
+        "java/iroha_android/android/src/main/java/org/hyperledger/iroha/android/offline/"
+        "KagemushaAndroidKeyMint.java"
     ),
     "xcframework_build": Path("scripts/build_norito_xcframework.sh"),
     "mobile_check": Path("scripts/check_mobile_sdk_artifacts.sh"),
@@ -80,42 +101,37 @@ def require(label: str, needle: str) -> None:
         errors.append(f"{paths[label]}: missing {needle!r}")
 
 
-def forbid(label: str, needle: str) -> None:
-    if needle in texts[label]:
-        errors.append(f"{paths[label]}: forbidden stale V4 artifact marker {needle!r}")
-
-
 def require_regex(label: str, pattern: str, description: str) -> None:
     if re.search(pattern, texts[label], re.MULTILINE | re.DOTALL) is None:
         errors.append(f"{paths[label]}: missing {description}")
 
 
 v4_files = (
-    "step-eq.parameters.krv4",
+    "step-eq.params-ipa.krv4",
     "step-eq.proving-key.krv4",
     "step-eq.verifying-key.krv4",
     "step-eq.bootstrap-witness.krv4",
-    "step-ep.parameters.krv4",
+    "step-ep.params-ipa.krv4",
     "step-ep.proving-key.krv4",
     "step-ep.verifying-key.krv4",
     "step-ep.bootstrap-witness.krv4",
 )
 v4_roles = (
-    "step_eq_parameters",
+    "step_eq_params_ipa",
     "step_eq_proving_key",
     "step_eq_verifying_key",
     "step_eq_bootstrap_witness",
-    "step_ep_parameters",
+    "step_ep_params_ipa",
     "step_ep_proving_key",
     "step_ep_verifying_key",
     "step_ep_bootstrap_witness",
 )
 v4_case_names = (
-    "stepEqParameters",
+    "stepEqParamsIpa",
     "stepEqProvingKey",
     "stepEqVerifyingKey",
     "stepEqBootstrapWitness",
-    "stepEpParameters",
+    "stepEpParamsIpa",
     "stepEpProvingKey",
     "stepEpVerifyingKey",
     "stepEpBootstrapWitness",
@@ -140,7 +156,10 @@ native_methods = (
     "nativeArtifactSetInstallV4",
     "nativeArtifactSetIsInstalledV4",
     "nativeArtifactSetUninstallV4",
+    "nativeBuildOutputMembershipFrontierV4",
     "nativeBuildOutputMembershipPathsV4",
+    "nativeDeriveOutputMembershipPathsV4",
+    "nativeValidateSpendableBranchV4",
     "nativeBuildInitRequestV4",
     "nativeBuildAppendRequestV4",
     "nativeBuildVerifyRequestV4",
@@ -158,6 +177,8 @@ for label in ("kotlin", "java"):
     require(label, "kagemusha.offline.recursive_spend.artifact_manifest.v4")
     require(label, "requireV4ArtifactBridge")
     require(label, "requireV4ProofBackend")
+    require(label, "MAX_PROMOTION_RECORD_BYTES")
+    require(label, "promotionRecordNorito")
     for file_name in v4_files:
         require(label, file_name)
     for type_name, schema in sdk_schema_types.items():
@@ -168,6 +189,161 @@ for label in ("kotlin", "java"):
         )
     for method in ("initSpendV4", "appendSpendV4", "verifySpendV4", "buildRedeemV4"):
         require_regex(label, rf"\b{method}\s*\(", f"distinct public V4 lifecycle method {method}")
+    for method in (
+        "buildOutputMembershipFrontierV4",
+        "decodeOutputMembershipFrontierV4",
+        "deriveOutputMembershipPathsV4",
+        "restoreSpendableBranchV4",
+    ):
+        require_regex(label, rf"\b{method}\s*\(", f"proof-bound V4 frontier method {method}")
+    require(label, "connect_norito_bridge::KagemushaOutputMembershipFrontierV4")
+
+require_regex(
+    "kotlin",
+    r"class\s+ReleaseAuthentication\s*\("
+    r"[\s\S]{0,900}?cryptographicReview[^\n]*\n"
+    r"[\s\S]{0,120}?promotionRecordNorito[\s\S]{0,40}?\)\s*\{",
+    "mandatory promotion record constructor input",
+)
+require_regex(
+    "java",
+    r"public\s+ReleaseAuthentication\s*\("
+    r"[\s\S]{0,900}?cryptographicReview[^\n]*\n"
+    r"[\s\S]{0,120}?promotionRecordNorito[\s\S]{0,40}?\)\s*\{",
+    "mandatory promotion record constructor input",
+)
+for label in ("kotlin", "java"):
+    require_regex(
+        label,
+        r"nativeArtifactSetInstallV4\s*\("
+        r"[\s\S]{0,900}?cryptographicReview[^\n]*\n"
+        r"[\s\S]{0,120}?promotionRecordNorito[^\n]*\n"
+        r"[\s\S]{0,120}?artifactHandles",
+        "promotion-record-bound native install signature",
+    )
+
+require("swift", "maximumPromotionRecordBytesV4")
+require("swift", "promotionRecordNorito")
+require_regex(
+    "swift",
+    r"struct\s+KagemushaRecursiveSpendReleaseAuthenticationV4\b"
+    r"[\s\S]{0,1300}?cryptographicReview:\s*Data,"
+    r"[\s\S]{0,160}?promotionRecordNorito:\s*Data",
+    "mandatory Swift promotion record constructor input",
+)
+require_regex(
+    "swift_native",
+    r"kagemushaRecursiveSpendArtifactSetInstallV4\s*\("
+    r"[\s\S]{0,600}?cryptographicReview:\s*Data,"
+    r"[\s\S]{0,160}?promotionRecordArchive:\s*Data,"
+    r"[\s\S]{0,100}?handles:\s*\[UInt64\]",
+    "promotion-record-bound Swift native install signature",
+)
+require_regex(
+    "swift",
+    r"authorizeWithIosAppAttest\s*\("
+    r"[\s\S]{0,900}?service:\s*DCAppAttestService\s*=\s*\.shared"
+    r"[\s\S]{0,900}?service\.isSupported"
+    r"[\s\S]{0,1300}?service\.generateAssertion\s*\("
+    r"[\s\S]{0,300}?clientDataHash:\s*signingBytes"
+    r"[\s\S]{0,1300}?finalizeIosAppAttest\(assertionObject:\s*assertionObject\)",
+    "physical App Attest assertion over the exact authorization preparation",
+)
+require("swift_hardware_test", "final class KagemushaHardwareAuthorizationV2Tests")
+require(
+    "swift_hardware_test",
+    '.appendingPathComponent("crates/connect_norito_bridge/tests/fixtures")',
+)
+require(
+    "swift_hardware_test",
+    '.appendingPathComponent("kagemusha_request_authorization_v2_hardware.hex")',
+)
+for vector_key in (
+    "authority_public_key",
+    "registration_hash",
+    "android_preparation",
+    "android_signing_preimage",
+    "ios_preparation",
+    "ios_client_data_hash",
+):
+    require("swift_hardware_test", f'"{vector_key}"')
+canonical_hardware_vector_identifiers = {
+    "authority_public_key":
+        "a09aa5f47a6759802ff955f8dc2d2a14a5c99d23be97f864127ff9383455a4f0",
+    "registration_hash":
+        "289ab8f0dcaad32e86ab947b6bd48a3a63385b4d52b85f09f54260ad106d00c3",
+}
+for vector_key, canonical_value in canonical_hardware_vector_identifiers.items():
+    require(
+        "hardware_authorization_vector",
+        f"{vector_key}={canonical_value}",
+    )
+    require("swift_hardware_test", f'try hex("{canonical_value}")')
+require_regex(
+    "swift_hardware_test",
+    r'XCTAssertEqual\s*\(\s*try\s+hex\s*\(try\s+XCTUnwrap\s*\('
+    r'values\["authority_public_key"\]\s*\)\s*\)\s*,\s*try\s+authorityPublicKey\s*\(\s*\)',
+    "canonical authority_public_key fixture binding",
+)
+require_regex(
+    "swift_hardware_test",
+    r'XCTAssertEqual\s*\(\s*try\s+hex\s*\(try\s+XCTUnwrap\s*\('
+    r'values\["registration_hash"\]\s*\)\s*\)\s*,\s*try\s+registrationHash\s*\(\s*\)',
+    "canonical registration_hash fixture binding",
+)
+for needle in (
+    "PackageManager.FEATURE_KEYSTORE_SINGLE_USE_KEY",
+    "KeyProperties.KEY_ALGORITHM_EC",
+    'CURVE_NAME = "secp256r1"',
+    "KeyProperties.PURPOSE_SIGN",
+    "KeyProperties.DIGEST_SHA256",
+    ".setAttestationChallenge(request.challenge())",
+    ".setMaxUsageCount(1)",
+    'SIGNATURE_ALGORITHM = "SHA256withECDSA"',
+    "StrongBoxPolicy.REQUIRED",
+    "builder.setIsStrongBoxBacked(true)",
+    "keyInfo.isInsideSecureHardware()",
+    "keyInfo.getRemainingUsageCount() != 1",
+    "getCertificateChain(request.alias())",
+    "DeviceAttestationRegistration.androidPreKeyGenerationChallengeHash",
+    "KagemushaP256Codec.rawLowSFromStrictDer(signatureDer)",
+):
+    require("android_keymint", needle)
+require_regex(
+    "android_keymint",
+    r"generateRegistration\s*\("
+    r"[\s\S]{0,900}?RegistrationParameters\s+parameters"
+    r"[\s\S]{0,1300}?requiredParameters\.attestationChallenge\(\)"
+    r"[\s\S]{0,900}?requiredParameters\.registration\(material\)",
+    "registration-derived Android KeyMint pre-key challenge flow",
+)
+require_regex(
+    "android_keymint",
+    r"authorize\s*\("
+    r"[\s\S]{0,900}?RequestAuthorizationPreparation\s+preparation"
+    r"[\s\S]{0,1300}?requiredPreparation\.signingBytes\(\)"
+    r"[\s\S]{0,900}?finalizeRequestAuthorization\s*\("
+    r"[\s\S]{0,180}?requiredPreparation,\s*signatureDer",
+    "physical Android KeyMint signature over the exact authorization preparation",
+)
+require_regex(
+    "android_keymint",
+    r"new\s+KeyGenParameterSpec\.Builder\(request\.alias\(\),\s*"
+    r"KeyProperties\.PURPOSE_SIGN\)"
+    r"[\s\S]{0,500}?new\s+ECGenParameterSpec\(\"secp256r1\"\)"
+    r"[\s\S]{0,300}?setDigests\(KeyProperties\.DIGEST_SHA256\)"
+    r"[\s\S]{0,300}?setAttestationChallenge\(request\.challenge\(\)\)"
+    r"[\s\S]{0,300}?setMaxUsageCount\(1\)",
+    "exact sign-only P-256/SHA-256/challenge/single-use KeyMint generation profile",
+)
+if "KeyProperties.DIGEST_NONE" in texts["android_keymint"]:
+    errors.append(
+        f"{paths['android_keymint']}: physical KeyMint path must not use DIGEST_NONE"
+    )
+if "PREFERRED" in texts["android_keymint"]:
+    errors.append(
+        f"{paths['android_keymint']}: physical KeyMint path must not silently prefer/downgrade StrongBox"
+    )
 
 swift_v4_types = (
     "KagemushaRecursiveSpendArtifactBindingV4",
@@ -188,12 +364,75 @@ swift_v4_types = (
     "KagemushaRecursiveSpendSplitResultV4",
     "KagemushaRecursiveSpendVerifyResultV4",
     "KagemushaRecursiveSpendRedeemBuildResultV4",
+    "KagemushaRecursiveSpendRedemptionChangePreparationV4",
 )
 for type_name in swift_v4_types:
     require_regex(
         "swift_v4",
         rf"public\s+struct\s+{re.escape(type_name)}\b",
         f"distinct Swift carrier {type_name}",
+    )
+
+for needle in (
+    "redemptionChangePrepareRequestWireNameV4",
+    "KagemushaRecursiveSpendRedemptionChangePrepareRequestV4",
+    "redemptionChangePrepareResultWireNameV4",
+    "KagemushaRecursiveSpendRedemptionChangePrepareResultV4",
+):
+    require("swift", needle)
+require_regex(
+    "swift_v4",
+    r"static\s+func\s+prepareRedemptionChangeV4\s*\("
+    r"[\s\S]{0,700}?input:\s*KagemushaRecursiveSpendSpendableBranchV4,"
+    r"[\s\S]{0,350}?changeAmount:\s*KagemushaScaledAmount,"
+    r"[\s\S]{0,350}?operationID:\s*Data,"
+    r"[\s\S]{0,350}?entropy:\s*Data"
+    r"[\s\S]{0,2600}?kagemushaRecursiveSpendRedemptionChangePrepareV4",
+    "native-derived Swift redemption-change workflow",
+)
+require_regex(
+    "swift_v4_codecs",
+    r"encodeRedemptionChangePrepareRequest\s*\("
+    r"[\s\S]{0,1800}?writeField\(uint16\(request\.version\)\)"
+    r"[\s\S]{0,700}?request\.bundle\.noritoArchive"
+    r"[\s\S]{0,700}?request\.inputOpening"
+    r"[\s\S]{0,700}?request\.changeAmount"
+    r"[\s\S]{0,500}?request\.operationID"
+    r"[\s\S]{0,500}?request\.entropy"
+    r"[\s\S]{0,500}?redemptionChangePrepareRequestWireNameV4",
+    "field-for-field Swift redemption-change request encoder",
+)
+require_regex(
+    "swift_codecs",
+    r"decodeRedemptionChangePrepareResultV4\s*\("
+    r"[\s\S]{0,3000}?canonical\s*=\s*try\s+"
+    r"encodeRedemptionChangePrepareResultV4\(preparation\)"
+    r"[\s\S]{0,500}?canonical\s*==\s*archive",
+    "strict Swift redemption-change result canonical re-encode",
+)
+require_regex(
+    "swift_native",
+    r"kagemushaRecursiveSpendRedemptionChangePrepareV4\s*\("
+    r"[\s\S]{0,1800}?connect_norito_kagemusha_secret_free_buffer"
+    r"[\s\S]{0,1000}?NativeBridgeError\.fromStatus\(status\)"
+    r"[\s\S]{0,500}?secureFree\(output\)"
+    r"[\s\S]{0,500}?copyKagemushaNativeSecretArchiveOutput",
+    "Swift secret output secure-free on native error and success",
+)
+if re.search(
+    r"kagemushaRecursiveSpendRedemptionChangePrepareV4\s*\("
+    r"[\s\S]{0,2800}?connect_norito_free",
+    texts["swift_native"],
+):
+    errors.append(
+        f"{paths['swift_native']}: secret redemption-change output must never use connect_norito_free"
+    )
+if "redemptionChange(spendKey:" in texts["swift"] or re.search(
+    r"redemptionChange[\s\S]{0,300}?defaultDiversifier\(\)",
+    texts["swift"],
+):
+    errors.append(
+        f"{paths['swift']}: callers must not fabricate redemption-change rho or diversifier"
     )
 
 for method, native_call, result_type in (
@@ -305,7 +544,7 @@ for label in ("kotlin", "java"):
     )
     require_regex(
         label,
-        r"nativeBuildVerifyRequestV4\s*\([\s\S]{0,350}?bundle[\s\S]{0,350}?(?:recipientRequest|recipient_request)[\s\S]{0,350}?roster",
+        r"nativeBuildVerifyRequestV4\s*\([\s\S]{0,350}?bundle[\s\S]{0,350}?(?:recipientRequest|recipient_request)[\s\S]{0,350}?(?:topUpProvenance|top_up_provenance)",
         "genuine V4 verify builder inputs",
     )
     require_regex(
@@ -339,6 +578,26 @@ require_regex(
     r"V4_REQUIRED_NATIVE_BRIDGE_ABI_VERSION\s*:\s*Int\s*=\s*20\b",
     "exact ABI20 Kotlin constant",
 )
+require_regex(
+    "kotlin",
+    r"MAX_TORII_TOP_UP_REQUEST_BYTES_V4\s*:\s*Int\s*=\s*512\s*\*\s*1024\b",
+    "exact Kotlin V4 top-up request ceiling",
+)
+require_regex(
+    "kotlin",
+    r"MAX_TORII_REDEEM_REQUEST_BYTES_V4\s*:\s*Int\s*=\s*48\s*\*\s*1024\s*\*\s*1024\b",
+    "exact Kotlin V4 redeem request ceiling",
+)
+require_regex(
+    "kotlin",
+    r"class\s+TopUpRequest\b[\s\S]{0,400}?MAX_TORII_TOP_UP_REQUEST_BYTES_V4",
+    "Kotlin top-up request ceiling binding",
+)
+require_regex(
+    "kotlin",
+    r"class\s+RedeemSubmissionRequest\b[\s\S]{0,400}?MAX_TORII_REDEEM_REQUEST_BYTES_V4",
+    "Kotlin redeem request ceiling binding",
+)
 
 
 def quoted_inventory(label: str, pattern: str, declaration: str) -> tuple[str, ...]:
@@ -370,7 +629,7 @@ if artifact_kind_match is None:
     errors.append(f"{paths['data_model']}: missing V4 artifact-kind enum")
 else:
     kind_cases = tuple(re.findall(r"^\s*([A-Z][A-Za-z0-9]*)\s*,", artifact_kind_match.group(1), re.MULTILINE))
-    if kind_cases != ("Parameters", "ProvingKey", "VerifyingKey", "BootstrapWitness"):
+    if kind_cases != ("ParamsIpa", "ProvingKey", "VerifyingKey", "BootstrapWitness"):
         errors.append(f"{paths['data_model']}: V4 artifact kinds are not canonical: {kind_cases!r}")
 
 require_regex(
@@ -391,8 +650,8 @@ bundle_inputs_match = re.search(
 if bundle_inputs_match is not None:
     bundle_kinds = tuple(re.findall(r"kind:\s*KagemushaPastaCycleArtifactKindV4::([A-Za-z0-9]+)", bundle_inputs_match.group(1)))
     expected_kinds = (
-        "Parameters", "ProvingKey", "VerifyingKey", "BootstrapWitness",
-        "Parameters", "ProvingKey", "VerifyingKey", "BootstrapWitness",
+        "ParamsIpa", "ProvingKey", "VerifyingKey", "BootstrapWitness",
+        "ParamsIpa", "ProvingKey", "VerifyingKey", "BootstrapWitness",
     )
     if bundle_kinds != expected_kinds:
         errors.append(f"{paths['bundle']}: V4 bundle kind order is not canonical: {bundle_kinds!r}")
@@ -471,34 +730,47 @@ if release_pairs != tuple(zip(v4_roles, v4_files)):
         f"{release_pairs!r}"
     )
 
-require_regex(
-    "data_model",
-    r"pub\s+circuit_params\s*:\s*KagemushaStepCircuitParamsV4",
-    "inline authenticated V4 circuit parameters",
-)
-require_regex(
-    "bundle",
-    r"KagemushaPastaCycleProofProfileV4\s*\{[\s\S]{0,500}?circuit_params:",
-    "bundle embedding circuit parameters in each V4 profile",
-)
 for label in (
-    "data_model",
-    "rust",
-    "header",
-    "kagami",
-    "bundle",
-    "swift",
-    "kotlin",
-    "java",
+    "data_model", "rust", "header", "swift", "swift_v4", "swift_v4_codecs",
+    "swift_coordinator", "kotlin", "java", "kagami", "bundle", "core_artifact",
     "xcframework_build",
 ):
-    for stale_file in (
-        "step-eq.circuit-params.krv4",
-        "step-ep.circuit-params.krv4",
+    # Inline profile parameters and their authenticated header digests are
+    # mandatory. Only a ninth/tenth standalone role or file is forbidden.
+    if (
+        "circuit-params.krv4" in texts[label]
+        or "CIRCUIT_PARAMS_FILE_NAME_V4" in texts[label]
+        or "KagemushaPastaCycleArtifactKindV4::CircuitParams" in texts[label]
+        or re.search(r'\bCircuitParams\s*,', texts[label])
+        or re.search(r'["\']step_(?:eq|ep)_circuit_params["\']', texts[label])
     ):
-        forbid(label, stale_file)
-for label in ("rust", "kagami", "bundle"):
-    forbid(label, "KagemushaPastaCycleArtifactKindV4::CircuitParams")
+        errors.append(f"{paths[label]}: separate V4 CircuitParams artifact path is forbidden")
+    if re.search(
+        r"(?:exact(?:ly)?\s+(?:ten|10)|ten[- ](?:artifact|file)|all\s+ten|"
+        r"\[&str;\s*10\]|\[InputSpec;\s*10\]|ARTIFACT_COUNT[^\n=]*=\s*10\b)",
+        texts[label],
+        re.IGNORECASE,
+    ):
+        errors.append(f"{paths[label]}: exact-ten V4 inventory language is forbidden")
+
+# The exact-eight external inventory does not weaken circuit-profile binding:
+# parameters remain inline in the authenticated manifest and every artifact
+# header carries their domain-separated digest.
+for required in (
+    "KagemushaStepCircuitParamsV4",
+    "circuit_params: KagemushaStepCircuitParamsV4",
+    "circuit_params_sha256",
+    "step_eq_circuit_params_sha256",
+    "step_ep_circuit_params_sha256",
+):
+    require("data_model", required)
+for label in ("core_artifact", "bundle"):
+    require(label, "circuit_params_sha256")
+require("bundle", "KagemushaStepCircuitParamsV4")
+require("core_artifact", "profile.circuit_params")
+require("core_artifact", ".sha256()")
+require("header", "signed manifest profile")
+require("header", "domain-separated digest")
 
 require_regex(
     "header",
@@ -509,6 +781,26 @@ require_regex(
     "java",
     r"V4_REQUIRED_NATIVE_BRIDGE_ABI_VERSION\s*=\s*20\s*;",
     "exact ABI20 Java constant",
+)
+require_regex(
+    "java",
+    r"MAX_TORII_TOP_UP_REQUEST_BYTES_V4\s*=\s*512\s*\*\s*1024\s*;",
+    "exact Java V4 top-up request ceiling",
+)
+require_regex(
+    "java",
+    r"MAX_TORII_REDEEM_REQUEST_BYTES_V4\s*=\s*48\s*\*\s*1024\s*\*\s*1024\s*;",
+    "exact Java V4 redeem request ceiling",
+)
+require_regex(
+    "java",
+    r"class\s+TopUpRequest\b[\s\S]{0,500}?MAX_TORII_TOP_UP_REQUEST_BYTES_V4",
+    "Java top-up request ceiling binding",
+)
+require_regex(
+    "java",
+    r"class\s+RedeemSubmissionRequest\b[\s\S]{0,500}?MAX_TORII_REDEEM_REQUEST_BYTES_V4",
+    "Java redeem request ceiling binding",
 )
 require_regex(
     "kotlin",
@@ -542,20 +834,122 @@ for method in native_methods:
             f"Rust JNI export {package}.{method}",
         )
 
+base_bridge_symbols = (
+    "connect_norito_bridge_abi_version",
+    "connect_norito_free",
+    "connect_norito_encode_transfer_signed_transaction",
+    "connect_norito_encode_transfer_instruction_box",
+    "connect_norito_encode_validation_fee_transfer_signed_transaction",
+    "connect_norito_detached_transaction_scaffold_inspect_v1",
+    "connect_norito_detached_transaction_scaffold_finalize_ed25519_v1",
+    "connect_norito_canonical_json_blake3_v1",
+)
 c_symbols = (
     "connect_norito_kagemusha_recursive_spend_capabilities_v4",
+    "connect_norito_kagemusha_topup_finality_verify_v4",
+    "connect_norito_kagemusha_topup_shield_build_unsigned_v4",
     "connect_norito_kagemusha_recursive_spend_artifact_begin_v4",
     "connect_norito_kagemusha_recursive_spend_artifact_write_v4",
     "connect_norito_kagemusha_recursive_spend_artifact_finalize_v4",
     "connect_norito_kagemusha_recursive_spend_artifact_cancel_v4",
     "connect_norito_kagemusha_recursive_spend_artifact_set_install_v4",
     "connect_norito_kagemusha_recursive_spend_artifact_set_is_installed_v4",
+    "connect_norito_kagemusha_recursive_spend_installed_manifest_sha256_v4",
     "connect_norito_kagemusha_recursive_spend_artifact_set_uninstall_v4",
+    "connect_norito_kagemusha_output_membership_frontier_build_v4",
+    "connect_norito_kagemusha_output_membership_paths_derive_v4",
+    "connect_norito_kagemusha_recursive_spend_branch_validate_v4",
+    "connect_norito_kagemusha_recursive_spend_topup_provenance_build_v4",
+    "connect_norito_kagemusha_recursive_spend_topup_provenance_validate_v4",
     "connect_norito_kagemusha_recursive_spend_init_v4",
+    "connect_norito_kagemusha_recursive_spend_topup_unsigned_payload_digest_v4",
+    "connect_norito_kagemusha_recursive_spend_topup_finalize_request_v4",
+    "connect_norito_kagemusha_recursive_spend_topup_v4",
     "connect_norito_kagemusha_recursive_spend_append_v4",
     "connect_norito_kagemusha_recursive_spend_verify_v4",
+    "connect_norito_kagemusha_recursive_spend_redeem_unsigned_payload_digest_v4",
+    "connect_norito_kagemusha_recursive_spend_redeem_finalize_request_v4",
     "connect_norito_kagemusha_recursive_spend_redeem_v4",
+    "connect_norito_kagemusha_recursive_spend_redemption_change_prepare_v4",
+    "connect_norito_kagemusha_secret_free_buffer",
+    "connect_norito_kagemusha_receiver_key_reference_v2",
+    "connect_norito_kagemusha_recipient_output_derive_v2",
+    "connect_norito_kagemusha_recipient_payment_request_signing_bytes_v2",
+    "connect_norito_kagemusha_recipient_payment_request_create_v2",
+    "connect_norito_kagemusha_recipient_payment_request_verify_v2",
+    "connect_norito_kagemusha_request_authorization_signing_bytes_v2",
+    "connect_norito_kagemusha_request_authorization_create_v2",
+    "connect_norito_kagemusha_request_authorization_finalize_hardware_v2",
+    "connect_norito_kagemusha_request_authorization_finalize_ios_app_attest_v2",
+    "connect_norito_kagemusha_receiver_acknowledgement_payload_v2",
+    "connect_norito_kagemusha_receiver_acknowledgement_signing_bytes_v2",
+    "connect_norito_kagemusha_receiver_acknowledgement_create_v2",
+    "connect_norito_kagemusha_receiver_acknowledgement_verify_v2",
+    "connect_norito_kagemusha_recursive_spend_peer_payment_from_split_v4",
+    "connect_norito_kagemusha_recursive_spend_peer_payment_validate_v4",
+    "connect_norito_kagemusha_recursive_spend_bundle_summary_v4",
 )
+required_bridge_symbols = base_bridge_symbols + c_symbols
+
+
+def parse_shell_symbol_array(label: str, name: str) -> tuple[str, ...]:
+    match = re.search(
+        rf"^{re.escape(name)}=\(\s*\n(?P<body>.*?)^\)",
+        texts[label],
+        re.MULTILINE | re.DOTALL,
+    )
+    if match is None:
+        errors.append(f"{paths[label]}: missing shell array {name}")
+        return ()
+    values: list[str] = []
+    for raw_line in match.group("body").splitlines():
+        value = raw_line.strip()
+        if not value or value.startswith("#"):
+            continue
+        if value.startswith('"') and value.endswith('"'):
+            value = value[1:-1]
+        values.append(value)
+    return tuple(values)
+
+
+def parse_manifest_symbol_inventory(label: str) -> tuple[str, ...]:
+    match = re.search(
+        r'"required_symbols"\s*:\s*\[(?P<body>.*?)\]',
+        texts[label],
+        re.MULTILINE | re.DOTALL,
+    )
+    if match is None:
+        errors.append(f"{paths[label]}: missing required_symbols manifest inventory")
+        return ()
+    return tuple(re.findall(r'"(connect_norito_[A-Za-z0-9_]+)"', match.group("body")))
+
+
+actual_kagemusha_symbols = parse_shell_symbol_array("mobile_check", "KAGEMUSHA_C_SYMBOLS")
+if actual_kagemusha_symbols != c_symbols:
+    errors.append(
+        f"{paths['mobile_check']}: exact ordered 43-symbol Kagemusha C inventory mismatch "
+        f"(found {len(actual_kagemusha_symbols)})"
+    )
+
+actual_required_bridge_symbols: list[str] = []
+for value in parse_shell_symbol_array("mobile_check", "REQUIRED_BRIDGE_SYMBOLS"):
+    if value == "${KAGEMUSHA_C_SYMBOLS[@]}":
+        actual_required_bridge_symbols.extend(actual_kagemusha_symbols)
+    else:
+        actual_required_bridge_symbols.append(value)
+if tuple(actual_required_bridge_symbols) != required_bridge_symbols:
+    errors.append(
+        f"{paths['mobile_check']}: exact ordered 51-symbol required bridge inventory mismatch "
+        f"(found {len(actual_required_bridge_symbols)})"
+    )
+
+for label in ("xcframework_build", "mobile_check_test"):
+    actual_manifest_symbols = parse_manifest_symbol_inventory(label)
+    if actual_manifest_symbols != required_bridge_symbols:
+        errors.append(
+            f"{paths[label]}: exact ordered 51-symbol required bridge inventory mismatch "
+            f"(found {len(actual_manifest_symbols)})"
+        )
 
 require_regex(
     "rust",
@@ -565,15 +959,26 @@ require_regex(
 require_regex(
     "rust",
     r"KagemushaPastaCycleProverArtifactsV4::new\s*\(\s*&self\.authenticated_release,"
-    r"[\s\S]{0,260}?Kind::Parameters\)\?,"
+    r"[\s\S]{0,260}?Kind::ParamsIpa\)\?,"
     r"[\s\S]{0,260}?Kind::ProvingKey\)\?,"
     r"[\s\S]{0,260}?Kind::VerifyingKey\)\?,"
     r"[\s\S]{0,260}?Kind::BootstrapWitness\)\?,"
-    r"[\s\S]{0,260}?Kind::Parameters\)\?,"
+    r"[\s\S]{0,260}?Kind::ParamsIpa\)\?,"
     r"[\s\S]{0,260}?Kind::ProvingKey\)\?,"
     r"[\s\S]{0,260}?Kind::VerifyingKey\)\?,"
     r"[\s\S]{0,260}?Kind::BootstrapWitness\)\?,",
     "authenticated-release exact-eight V4 prover construction",
+)
+require_regex(
+    "rust",
+    r"KagemushaPastaCycleVerifierArtifactsV4::new\s*\(\s*&self\.authenticated_release,"
+    r"[\s\S]{0,260}?Kind::ParamsIpa\)\?,"
+    r"[\s\S]{0,260}?Kind::VerifyingKey\)\?,"
+    r"[\s\S]{0,260}?Kind::BootstrapWitness\)\?,"
+    r"[\s\S]{0,260}?Kind::ParamsIpa\)\?,"
+    r"[\s\S]{0,260}?Kind::VerifyingKey\)\?,"
+    r"[\s\S]{0,260}?Kind::BootstrapWitness\)\?,",
+    "authenticated-release exact-six V4 verifier construction",
 )
 require_regex(
     "rust",
@@ -587,6 +992,32 @@ for symbol in c_symbols:
     for label in ("xcframework_build", "mobile_check", "mobile_check_test"):
         require(label, symbol)
 
+# First-release ABI-20 does not publish compatibility aliases for recursive
+# lifecycle or artifact installation. Shared V2 leaf primitives above remain
+# intentionally legal because V4 reuses their unchanged wire types.
+forbidden_recursive_alias = re.compile(
+    r"\bconnect_norito_kagemusha_recursive_spend_"
+    r"(?:init|append|verify|redeem|topup|peer_payment_from_split|"
+    r"peer_payment_validate|bundle_summary|build_split_intent|artifact_[a-z_]+)_v[23]\b"
+)
+if forbidden_recursive_alias.search(texts["header"]):
+    errors.append(f"{paths['header']}: published V2/V3 recursive lifecycle alias is forbidden")
+if re.search(
+    r"pub\s+(?:unsafe\s+)?extern\s+\"C\"\s+fn\s+" + forbidden_recursive_alias.pattern,
+    texts["rust"],
+):
+    errors.append(f"{paths['rust']}: exported V2/V3 recursive lifecycle alias is forbidden")
+swift_symbol_inventory = "\n".join(
+    match.group(1)
+    for match in re.finditer(
+        r"required(?:Proof|Protocol)Symbols\s*=\s*\[(.*?)\n\s*\]",
+        texts["swift"],
+        re.MULTILINE | re.DOTALL,
+    )
+)
+if forbidden_recursive_alias.search(swift_symbol_inventory):
+    errors.append(f"{paths['swift']}: required-symbol inventory contains a V2/V3 lifecycle alias")
+
 for macro in (
     "CONNECT_NORITO_ERR_KAGEMUSHA_RECURSIVE_SPEND_V4_UNAVAILABLE",
     "CONNECT_NORITO_ERR_KAGEMUSHA_RECURSIVE_SPEND_V4_ARTIFACT",
@@ -599,8 +1030,135 @@ if errors:
         print(f" - {error}", file=sys.stderr)
     raise SystemExit(1)
 
+if mode == "--self-test":
+    def replace_once(path: Path, old: str, new: str) -> None:
+        value = path.read_text(encoding="utf-8")
+        if value.count(old) != 1:
+            raise SystemExit(
+                f"self-test fixture expected exactly one {old!r} in {path}, "
+                f"found {value.count(old)}"
+            )
+        path.write_text(value.replace(old, new, 1), encoding="utf-8")
+
+    def run_negative(name: str, mutate, expected: str) -> None:
+        with tempfile.TemporaryDirectory(prefix="kagemusha-v4-sdk-guard-") as temporary:
+            fixture = Path(temporary)
+            for relative in paths.values():
+                destination = fixture / relative
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(root / relative, destination)
+            mutate(fixture)
+            environment = os.environ.copy()
+            environment["KAGEMUSHA_RECURSIVE_SPEND_V4_SDK_ROOT"] = str(fixture)
+            result = subprocess.run(
+                ["bash", str(script)],
+                cwd=fixture,
+                env=environment,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                check=False,
+            )
+            if result.returncode == 0 or expected not in result.stdout:
+                raise SystemExit(
+                    f"self-test {name!r} did not fail for {expected!r}:\n{result.stdout}"
+                )
+
+    run_negative(
+        "ABI20 cannot regress to ABI19",
+        lambda fixture: replace_once(
+            fixture / paths["kotlin"],
+            "V4_REQUIRED_NATIVE_BRIDGE_ABI_VERSION: Int = 20",
+            "V4_REQUIRED_NATIVE_BRIDGE_ABI_VERSION: Int = 19",
+        ),
+        "exact ABI20 Kotlin constant",
+    )
+    run_negative(
+        "promotion record cannot be removed from SDK authentication",
+        lambda fixture: replace_once(
+            fixture / paths["kotlin"],
+            "        cryptographicReview: ByteArray,\n"
+            "        promotionRecordNorito: ByteArray,\n"
+            "    ) {",
+            "        cryptographicReview: ByteArray,\n"
+            "    ) {",
+        ),
+        "mandatory promotion record constructor input",
+    )
+    run_negative(
+        "exact-eight inventory rejects substitution",
+        lambda fixture: replace_once(
+            fixture / paths["swift"],
+            '"step-eq.params-ipa.krv4",',
+            '"step-eq.proving-key.krv4",',
+        ),
+        "V4 files are not canonical",
+    )
+    run_negative(
+        "App Attest cannot sign a substituted client-data hash",
+        lambda fixture: replace_once(
+            fixture / paths["swift"],
+            "                clientDataHash: signingBytes\n",
+            "                clientDataHash: Data(repeating: 0, count: 32)\n",
+        ),
+        "physical App Attest assertion over the exact authorization preparation",
+    )
+    run_negative(
+        "Swift hardware parity cannot leave the shared fixture",
+        lambda fixture: replace_once(
+            fixture / paths["swift_hardware_test"],
+            '.appendingPathComponent("kagemusha_request_authorization_v2_hardware.hex")',
+            '.appendingPathComponent("dummy_hardware_authorization.hex")',
+        ),
+        "kagemusha_request_authorization_v2_hardware.hex",
+    )
+    run_negative(
+        "Swift hardware parity cannot substitute the canonical authority key",
+        lambda fixture: replace_once(
+            fixture / paths["swift_hardware_test"],
+            'values["authority_public_key"]',
+            'values["dummy_authority_public_key"]',
+        ),
+        "canonical authority_public_key fixture binding",
+    )
+    run_negative(
+        "Android KeyMint cannot relax the hardware usage count",
+        lambda fixture: replace_once(
+            fixture / paths["android_keymint"],
+            ".setMaxUsageCount(1);",
+            ".setMaxUsageCount(2);",
+        ),
+        "exact sign-only P-256/SHA-256/challenge/single-use KeyMint generation profile",
+    )
+    run_negative(
+        "required bridge symbol order drift is rejected",
+        lambda fixture: replace_once(
+            fixture / paths["xcframework_build"],
+            '    "connect_norito_free",\n'
+            '    "connect_norito_encode_transfer_signed_transaction",',
+            '    "connect_norito_encode_transfer_signed_transaction",\n'
+            '    "connect_norito_free",',
+        ),
+        "exact ordered 51-symbol required bridge inventory mismatch",
+    )
+
+    def inject_v3_alias(fixture: Path) -> None:
+        header = fixture / paths["header"]
+        header.write_text(
+            header.read_text(encoding="utf-8")
+            + "\nint32_t connect_norito_kagemusha_recursive_spend_init_v3(void);\n",
+            encoding="utf-8",
+        )
+
+    run_negative(
+        "V3 lifecycle alias is rejected",
+        inject_v3_alias,
+        "published V2/V3 recursive lifecycle alias is forbidden",
+    )
+
 print(
     "Kagemusha ABI20 SDK contract passed: exact8 DM/Kagami/bundle inventory and "
-    "distinct direct C/JNI/Swift/Kotlin/Java lifecycle parity are complete."
+    "promotion-record-bound direct C/JNI/Swift/Kotlin/Java lifecycle parity are complete"
+    + ("; negative self-tests passed." if mode == "--self-test" else ".")
 )
 PY

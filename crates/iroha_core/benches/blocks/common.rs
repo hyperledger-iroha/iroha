@@ -8,6 +8,7 @@ use std::{
 
 use iroha_core::{
     block::{BlockBuilder, CommittedBlock},
+    governance::manifest::LaneManifestRegistry,
     prelude::*,
     query::store::LiveQueryStore,
     smartcontracts::{Execute, Registrable as _},
@@ -248,7 +249,7 @@ pub fn build_state(
     let domain_id: DomainId =
         DomainId::try_new("bench", "universal").expect("valid bench domain id");
     let domain = Domain::new(domain_id.clone()).build(account_id);
-    let state = State::new(
+    let state = State::try_new(
         World::with(
             [domain],
             [Account::new(account_id.clone()).build(account_id)],
@@ -258,7 +259,12 @@ pub fn build_state(
         query_handle,
         #[cfg(feature = "telemetry")]
         <_>::default(),
-    );
+    )
+    .expect("benchmark State startup must validate");
+    let nexus = state.nexus_snapshot();
+    state.install_lane_manifests(&Arc::new(
+        LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
+    ));
 
     {
         let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");

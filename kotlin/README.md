@@ -8,7 +8,7 @@ Not published to Maven Central yet. Build locally and consume via `mavenLocal()`
 
 | Artifact | Type | Description |
 |----------|------|-------------|
-| `org.hyperledger.iroha.sdk:core-jvm` | JAR | Pure Kotlin/JVM models, codec, crypto, clients, and ABI-19 artifact streaming |
+| `org.hyperledger.iroha.sdk:core-jvm` | JAR | Pure Kotlin/JVM models, codec, crypto, clients, and ABI-20/V4 artifact streaming |
 | `org.hyperledger.iroha.sdk:client-android` | AAR | Android keystore, device telemetry, IrohaKeyManager, shared JNI bridge for ML-DSA / offline flows |
 
 ### Consumer usage
@@ -49,31 +49,53 @@ have a gap.
 
 ### Kagemusha proof artifacts
 
-`core-jvm` exposes the exact ABI-19 typed Kagemusha init, fractional append/change, verification,
-and redemption builders through the fixed native surface. It also provides exact scaled amounts,
-Kagemusha V3 artifact streaming and backend-capability checks, plus the sole current
+`core-jvm` exposes the exact ABI-20/V4 typed Kagemusha init, fractional append/change,
+verification, and redemption builders through the fixed native surface. It also provides exact
+scaled amounts, V4 artifact streaming and backend-capability checks, plus the sole current
 `DeviceAttestationRegistration` / `RegisterOfflineDeviceAttestation` transaction path. The latter
 validates finalized platform material and emits exactly one native registration instruction.
 Artifact streaming installs
-exactly six Pasta artifacts atomically: transition and state parameters, proving keys, and verifying
-keys. The top-up-finality roster is authenticated release metadata, not a seventh proof-key stream.
+exactly eight Pasta artifacts atomically: `ParamsIPA`, processed proving key, processed verifying
+key, and final-key selector-zero bootstrap witness for each Eq/Ep parity. Each profile's bounded
+circuit parameters are authenticated inline in the V4 manifest, not streamed as a ninth or tenth
+artifact. The top-up-finality roster is authenticated release metadata outside the exact eight-role
+cryptographic inventory. `ReleaseAuthentication` also requires the canonical candidate-bound
+promotion record alongside the trusted policy, attestation, benchmark evidence, and cryptographic
+review; an authenticated-but-unpromoted release cannot be installed.
 
 Lifecycle calls fail closed until the proof backend and the exact manifest-bound artifact set are
 available. Request and result archives stay typed and canonically framed while recursive proof,
 membership, note-opening, and accumulator details remain native-owned opaque bytes.
 The protocol and JVM append builder accept one or two inputs and support up to eight peer hops.
 Inputs are canonicalized by authenticated bundle digest; duplicate or conflicting exact-state
-branches fail closed. `projectReadiness` supplies the
-authoritative scale, committed height/hash, and role-specific verifier commitments/windows.
+branches fail closed. `projectReadiness` supplies the authoritative scale, committed height/hash,
+role-specific verifier commitments/windows, and the required nullable authenticated `artifactSet`.
+When present, that set binds the V4 generation, manifest, release-policy and release-attestation
+digests, issuance window, proof-pair bound, and asset scale to the atomic recursive verifier pair.
+The pair uses exact roles `kagemusha_recursive_step_eq_v4_verifier_record` and
+`kagemusha_recursive_step_ep_v4_verifier_record` with circuits
+`kagemusha-recursive-spend-step-eq-authenticated-layout-v4` and
+`kagemusha-recursive-spend-step-ep-authenticated-layout-v4`, respectively.
+An absent artifact set requires both recursive records and backend construction
+to be unavailable with exactly one `recursive_v4_registry_unavailable` or
+`recursive_v4_registry_malformed` blocker; a present set forbids both.
+`proofBackendAvailable` reports authenticated backend construction independently.
+`recursiveLineageSupported` is true only with the authenticated artifact set, distinct active
+Eq/Ep records, and that backend; `recursive_lineage_unavailable` is its exact inverse. `ready` is
+true only when the complete blocker set is empty, so unrelated blockers do not erase valid backend
+or lineage facts.
 `prepareTopUp` accepts only Torii's authoritative `next_zero_path` and retains the local note
 opening. Init results do not yet carry a proof-bound output membership witness, so the JVM surface
 intentionally does not project or restore a spendable init branch. Persisted openings and
 submission archives use typed decoders so idempotent retries reuse exact canonical bytes.
 Secret-bearing append and redeem requests are single-use and zeroized after native consumption.
-Each projected branch carries its complete ordered exact-state claim set and authenticated V3
+Each projected branch carries its complete ordered exact-state claim set and authenticated V4
 artifact binding. Native `conflictsWith` compares every claim pair, rejecting equality and
 ancestor/descendant overlap while allowing the two consistent sibling outputs from one split;
 wallet code never parses lineage paths.
+Torii command bodies use distinct exact ceilings: 512 KiB for top-up and 48 MiB for redemption,
+exposed as `MAX_TORII_TOP_UP_REQUEST_BYTES_V4` and
+`MAX_TORII_REDEEM_REQUEST_BYTES_V4`.
 
 ---
 
@@ -131,7 +153,13 @@ echo $ANDROID_NDK_HOME  # must point to NDK 28+
 This Gradle task:
 1. Reads `iroha.dir` from `local.properties`
 2. Runs `cargo ndk` for `arm64-v8a` and `x86_64` targets
-3. Copies `libconnect_norito_bridge.so` into `client-android/src/main/jniLibs/`
+3. Canonically strips both libraries with the selected Android NDK's
+   `llvm-strip --strip-unneeded`
+4. Writes `libconnect_norito_bridge.so` into `client-android/src/main/jniLibs/`
+
+The release AAR preserves those exact staged bytes. The mobile artifact checker
+rejects an unstripped library or any hash difference between `jniLibs` and the
+AAR.
 
 The production-gated form passes `--features privacy-production-enabled` to
 `connect_norito_bridge`; the default form intentionally omits that feature so
@@ -141,10 +169,10 @@ First build takes ~5-10 minutes (compiles all Rust dependencies). Incremental bu
 
 **Output:**
 
-| ABI | File | Size |
-|-----|------|-----:|
-| arm64-v8a | `client-android/src/main/jniLibs/arm64-v8a/libconnect_norito_bridge.so` | ~14MB |
-| x86_64 | `client-android/src/main/jniLibs/x86_64/libconnect_norito_bridge.so` | ~18MB |
+| ABI | File |
+|-----|------|
+| arm64-v8a | `client-android/src/main/jniLibs/arm64-v8a/libconnect_norito_bridge.so` |
+| x86_64 | `client-android/src/main/jniLibs/x86_64/libconnect_norito_bridge.so` |
 
 > **Note:** `armeabi-v7a` (32-bit ARM) is not supported due to an upstream `rkyv` crate incompatibility with 32-bit targets.
 

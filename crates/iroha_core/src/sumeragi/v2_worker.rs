@@ -1440,11 +1440,12 @@ pub(crate) enum PayloadChunkDisposition {
     Rejected,
 }
 
+#[derive(Clone)]
 enum LocalCompletion {
     Reconstructed {
         task: BodyFetchTask,
         manifest: wire::PayloadManifest,
-        body: Vec<u8>,
+        body: Arc<[u8]>,
     },
 }
 
@@ -2719,14 +2720,15 @@ impl ProductionV2Services {
                         retained_runtime: false,
                     } if runtime_capacity_available => self
                         .local_completions
-                        .pop_front()
+                        .front()
+                        .cloned()
                         .map_or_else(IoCompletionTake::unavailable, |completion| {
                             IoCompletionTake::ready(PendingServiceCompletion::Local(completion))
                         }),
                     completion => completion,
                 },
                 CompletionSource::Local if runtime_capacity_available => {
-                    self.local_completions.pop_front().map_or_else(
+                    self.local_completions.front().cloned().map_or_else(
                         || self.take_io_completion(true),
                         |completion| {
                             IoCompletionTake::ready(PendingServiceCompletion::Local(completion))
@@ -2772,6 +2774,7 @@ impl ProductionV2Services {
         let mut count = 0usize;
         let mut attempts = 0usize;
         let mut worker_completion_deferred = false;
+        let mut local_completion_deferred = false;
         while attempts < MAX_COMPLETION_DRAIN_BATCH {
             let runtime_capacity_available = executor.remaining_completion_capacity() != 0;
             let take = self.take_next_completion(runtime_capacity_available);
@@ -2994,6 +2997,9 @@ impl ProductionV2Services {
                                 );
                             }
                             Ok(_) => {}
+                            Err(EffectTransportError::Backpressure) => {
+                                local_completion_deferred = true;
+                            }
                             Err(error) => {
                                 return Err(executor.external_service_failed(error, self));
                             }
@@ -3008,6 +3014,10 @@ impl ProductionV2Services {
                 io.acknowledge_completion_at(work_id, ownership_position);
             }
             serviced?;
+            if local_completion_deferred {
+                worker_completion_deferred = true;
+                break;
+            }
             count = count.saturating_add(1);
         }
         if count != 0 || worker_completion_deferred {
@@ -3591,15 +3601,36 @@ impl V2EffectServices for ProductionV2Services {
                 return Ok(());
             }
             BodyFetchServiceOwner::Live => {
-                let existing = self
+                let existing_task = self
                     .fetches
                     .get(&task.id())
-                    .expect("live body-fetch owner was classified above");
-                if task != existing.task && !task.monotonically_extends(&existing.task) {
+                    .map(|fetch| fetch.task.clone())
+                    .ok_or_else(|| {
+                        "classified Sumeragi v2 body-fetch owner disappeared".to_owned()
+                    })?;
+                if task != existing_task && !task.monotonically_extends(&existing_task) {
                     return Err("conflicting Sumeragi v2 body-fetch task".to_owned());
                 }
                 let manifest_upgrade =
-                    existing.task.manifest().is_none() && task.manifest().is_some();
+                    existing_task.manifest().is_none() && task.manifest().is_some();
+                let manifest_hash = manifest_upgrade.then(|| {
+                    HashOf::new(task.manifest().expect("manifest upgrade was checked above"))
+                });
+                if manifest_hash.is_some_and(|hash| self.fetch_by_manifest.contains_key(&hash)) {
+                    return Err("duplicate Sumeragi v2 fetch manifest".to_owned());
+                }
+                let certified_message = task
+                    .certified_request()
+                    .map(|request| {
+                        Self::preencode_v2_network_message(wire::ConsensusMessageV2::new(
+                            wire::ConsensusMessageV2Payload::CertifiedBodyRequest(request.clone()),
+                        ))
+                    })
+                    .transpose()?;
+                let certified_sources = certified_message
+                    .as_ref()
+                    .map(|_| task.sources().to_vec())
+                    .unwrap_or_default();
                 let opened_chunks = manifest_upgrade
                     .then(|| {
                         V2ChunkSession::open(
@@ -3612,42 +3643,25 @@ impl V2EffectServices for ProductionV2Services {
                     })
                     .transpose()
                     .map_err(|error| error.to_string())?;
-
-                if let Some(request) = task.certified_request() {
-                    let message = wire::ConsensusMessageV2::new(
-                        wire::ConsensusMessageV2Payload::CertifiedBodyRequest(request.clone()),
-                    );
-                    for peer in task.sources() {
-                        if peer != &self.local_peer {
-                            self.post_block_message_while_guarded(
-                                peer.clone(),
-                                BlockMessage::V2(message.clone()),
-                                operation.permit(),
-                            )?;
+                let fetch = self.fetches.get_mut(&task.id()).ok_or_else(|| {
+                    "preflighted Sumeragi v2 body-fetch owner disappeared".to_owned()
+                })?;
+                if let (Some(chunks), Some(manifest_hash)) = (opened_chunks, manifest_hash) {
+                    self.fetch_by_manifest.insert(manifest_hash, task.id());
+                    fetch.chunks = Some(chunks);
+                }
+                fetch.task = task;
+                if let Some(data) = certified_message {
+                    for peer in certified_sources {
+                        if peer != self.local_peer {
+                            self.network.post(Post {
+                                data: data.clone(),
+                                peer_id: peer,
+                                priority: Priority::High,
+                            });
                         }
                     }
                 }
-                if let Some(chunks) = opened_chunks {
-                    let manifest_hash =
-                        HashOf::new(task.manifest().expect("opened chunks require a manifest"));
-                    match self.fetch_by_manifest.entry(manifest_hash) {
-                        std::collections::btree_map::Entry::Vacant(entry) => {
-                            entry.insert(task.id());
-                        }
-                        std::collections::btree_map::Entry::Occupied(_) => {
-                            return Err("duplicate Sumeragi v2 fetch manifest".to_owned());
-                        }
-                    }
-                    self.fetches
-                        .get_mut(&task.id())
-                        .expect("live body-fetch owner was classified above")
-                        .chunks = Some(chunks);
-                }
-                let work_id = task.id();
-                self.fetches
-                    .get_mut(&work_id)
-                    .expect("live body-fetch owner was classified above")
-                    .task = task;
                 operation.complete();
                 return Ok(());
             }
@@ -3657,39 +3671,44 @@ impl V2EffectServices for ProductionV2Services {
         if task.manifest().is_none() && task.certified_request().is_none() {
             return Err("Sumeragi v2 body-fetch task has no acquisition authority".to_owned());
         }
+        let manifest_hash = task.manifest().map(HashOf::new);
+        if manifest_hash.is_some_and(|hash| self.fetch_by_manifest.contains_key(&hash)) {
+            return Err("duplicate Sumeragi v2 fetch manifest".to_owned());
+        }
+        let certified_message = task
+            .certified_request()
+            .map(|request| {
+                Self::preencode_v2_network_message(wire::ConsensusMessageV2::new(
+                    wire::ConsensusMessageV2Payload::CertifiedBodyRequest(request.clone()),
+                ))
+            })
+            .transpose()?;
+        let certified_sources = certified_message
+            .as_ref()
+            .map(|_| task.sources().to_vec())
+            .unwrap_or_default();
         let chunks = task
             .manifest()
             .cloned()
             .map(|manifest| V2ChunkSession::open(&self.chunk_root, &self.context, manifest))
             .transpose()
             .map_err(|error| error.to_string())?;
-        if let Some(manifest) = task.manifest() {
-            let hash = HashOf::new(manifest);
-            match self.fetch_by_manifest.entry(hash) {
-                std::collections::btree_map::Entry::Vacant(entry) => {
-                    entry.insert(task.id());
-                }
-                std::collections::btree_map::Entry::Occupied(_) => {
-                    return Err("duplicate Sumeragi v2 fetch manifest".to_owned());
+        if let Some(hash) = manifest_hash {
+            self.fetch_by_manifest.insert(hash, task.id());
+        }
+        let work_id = task.id();
+        self.fetches.insert(work_id, FetchSession { task, chunks });
+        if let Some(data) = certified_message {
+            for peer in certified_sources {
+                if peer != self.local_peer {
+                    self.network.post(Post {
+                        data: data.clone(),
+                        peer_id: peer,
+                        priority: Priority::High,
+                    });
                 }
             }
         }
-        if let Some(request) = task.certified_request() {
-            let message = wire::ConsensusMessageV2::new(
-                wire::ConsensusMessageV2Payload::CertifiedBodyRequest(request.clone()),
-            );
-            for peer in task.sources() {
-                if peer != &self.local_peer {
-                    self.post_block_message_while_guarded(
-                        peer.clone(),
-                        BlockMessage::V2(message.clone()),
-                        operation.permit(),
-                    )?;
-                }
-            }
-        }
-        self.fetches
-            .insert(task.id(), FetchSession { task, chunks });
         operation.complete();
         Ok(())
     }
@@ -3757,6 +3776,19 @@ impl V2EffectServices for ProductionV2Services {
         Ok(())
     }
 
+    fn complete_body_reconstruction_fetch(
+        &mut self,
+        task: &BodyFetchTask,
+    ) -> Result<(), Self::Error> {
+        let output_guard = Arc::clone(&self.output_guard);
+        let operation = output_guard
+            .begin_fail_stop_operation()
+            .ok_or_else(|| "Sumeragi v2 consensus requires process restart".to_owned())?;
+        self.remove_exact_body_fetch_owner(task)?;
+        operation.complete();
+        Ok(())
+    }
+
     fn complete_certified_body_fetch(&mut self, task: &BodyFetchTask) -> Result<(), Self::Error> {
         let output_guard = Arc::clone(&self.output_guard);
         let operation = output_guard
@@ -3811,7 +3843,6 @@ impl V2EffectServices for ProductionV2Services {
                 return Ok(AuthenticatedChunkDisposition::Accepted);
             }
             Err(V2ChunkError::PayloadMismatch | V2ChunkError::ReconstructionFailed) => {
-                self.remove_exact_body_fetch_owner(task)?;
                 operation.complete();
                 return Ok(AuthenticatedChunkDisposition::Rejected);
             }
@@ -3827,7 +3858,6 @@ impl V2EffectServices for ProductionV2Services {
                 .manifest()
                 .clone();
         if canonical_manifest != manifest {
-            self.remove_exact_body_fetch_owner(task)?;
             operation.complete();
             return Ok(AuthenticatedChunkDisposition::Rejected);
         }
@@ -3855,7 +3885,7 @@ impl V2EffectServices for ProductionV2Services {
             .push_back(LocalCompletion::Reconstructed {
                 task: fetch.task,
                 manifest,
-                body,
+                body: body.into(),
             });
         operation.complete();
         Ok(AuthenticatedChunkDisposition::Accepted)
@@ -4039,7 +4069,8 @@ mod tests {
         v2_chunks::encode_payload,
         v2_effects::EffectQueueConfig,
         v2_runtime::{
-            DecisionProposalRetirement, EnqueueError, RetiredBodyPipelineCompletions, RuntimeStep,
+            BodyAvailableReservation, DecisionProposalRetirement, EnqueueError,
+            RetiredBodyPipelineCompletions, RuntimeStep,
         },
         v2_transport::authenticate_payload_chunk,
     };
@@ -4102,6 +4133,18 @@ mod tests {
         ) -> Result<(), EnqueueError> {
             Self::reject_completion()
         }
+
+        fn reserve_body_available(
+            &mut self,
+            _tag: EventTag,
+            _manifest: wire::PayloadManifest,
+        ) -> Result<BodyAvailableReservation, EnqueueError> {
+            Err(EnqueueError::Full)
+        }
+
+        fn commit_body_available(&mut self, _reservation: BodyAvailableReservation) {}
+
+        fn abort_body_available(&mut self, _reservation: BodyAvailableReservation) {}
 
         fn rebind_body_available(
             &mut self,
@@ -5341,7 +5384,7 @@ mod tests {
                 .push_back(LocalCompletion::Reconstructed {
                     task: BodyFetchTask::ordinary_for_test(id, completion_tag, manifest.clone()),
                     manifest: manifest.clone(),
-                    body: payload.to_vec(),
+                    body: payload.to_vec().into(),
                 });
         }
 
@@ -5352,13 +5395,21 @@ mod tests {
                 ..
             }
         ));
-        assert!(matches!(
-            service.take_next_completion(true),
-            IoCompletionTake {
-                completion: Some(PendingServiceCompletion::Local(_)),
-                ..
-            }
-        ));
+        let first_local = service.take_next_completion(true);
+        let IoCompletionTake {
+            completion:
+                Some(PendingServiceCompletion::Local(LocalCompletion::Reconstructed {
+                    task: first_task,
+                    ..
+                })),
+            ..
+        } = first_local
+        else {
+            panic!("the local source must follow the first I/O completion");
+        };
+        service
+            .complete_body_reconstruction_fetch(&first_task)
+            .expect("successful reducer admission retires the exact local owner");
         assert!(matches!(
             service.take_next_completion(true),
             IoCompletionTake {
@@ -5366,13 +5417,21 @@ mod tests {
                 ..
             }
         ));
-        assert!(matches!(
-            service.take_next_completion(true),
-            IoCompletionTake {
-                completion: Some(PendingServiceCompletion::Local(_)),
-                ..
-            }
-        ));
+        let second_local = service.take_next_completion(true);
+        let IoCompletionTake {
+            completion:
+                Some(PendingServiceCompletion::Local(LocalCompletion::Reconstructed {
+                    task: second_task,
+                    ..
+                })),
+            ..
+        } = second_local
+        else {
+            panic!("the local source must follow the second I/O completion");
+        };
+        service
+            .complete_body_reconstruction_fetch(&second_task)
+            .expect("successful reducer admission retires the exact local owner");
         assert!(matches!(
             service.take_next_completion(true),
             IoCompletionTake {
@@ -5777,7 +5836,7 @@ mod tests {
             .push_back(LocalCompletion::Reconstructed {
                 task: task.clone(),
                 manifest: payload.manifest().clone(),
-                body: canonical_wire,
+                body: canonical_wire.into(),
             });
 
         service
@@ -5848,7 +5907,7 @@ mod tests {
             .push_back(LocalCompletion::Reconstructed {
                 task: task.clone(),
                 manifest: payload.manifest().clone(),
-                body: canonical_wire,
+                body: canonical_wire.into(),
             });
         service
             .rebind_body_fetch(&task, rebound.clone())
@@ -5884,7 +5943,7 @@ mod tests {
             .push_back(LocalCompletion::Reconstructed {
                 task: task.clone(),
                 manifest: payload.manifest().clone(),
-                body: canonical_wire,
+                body: canonical_wire.into(),
             });
 
         let error = service
@@ -5913,7 +5972,7 @@ mod tests {
             .push_back(LocalCompletion::Reconstructed {
                 task: task.clone(),
                 manifest: payload.manifest().clone(),
-                body: canonical_wire,
+                body: canonical_wire.into(),
             });
 
         service
@@ -5948,7 +6007,7 @@ mod tests {
             .push_back(LocalCompletion::Reconstructed {
                 task: task.clone(),
                 manifest: conflicting_manifest,
-                body: canonical_wire,
+                body: canonical_wire.into(),
             });
 
         let error = service
@@ -5989,7 +6048,7 @@ mod tests {
     }
 
     #[test]
-    fn invalid_reconstruction_retires_remote_fetch_without_restart() {
+    fn invalid_reconstruction_waits_for_reducer_authorized_retirement() {
         let (mut service, keys) = fixture();
         let _chunk_root = install_temporary_chunk_root(&mut service);
         allow_fixture_block_payload(&mut service.context);
@@ -6040,9 +6099,19 @@ mod tests {
                 .expect("invalid remote reconstruction is not a local service failure"),
             AuthenticatedChunkDisposition::Rejected
         );
+        assert_eq!(service.fetches[&task.id()].task, task);
+        assert_eq!(
+            service.fetch_by_manifest[&HashOf::new(&invalid_manifest)],
+            task.id()
+        );
+        assert!(service.local_completions.is_empty());
+        assert!(!service.output_guard.restart_required());
+
+        service
+            .complete_body_reconstruction_fetch(&task)
+            .expect("the reducer retires the exact rejected reconstruction owner");
         assert!(service.fetches.is_empty());
         assert!(service.fetch_by_manifest.is_empty());
-        assert!(service.local_completions.is_empty());
         assert!(!service.output_guard.restart_required());
     }
 
@@ -6089,7 +6158,7 @@ mod tests {
             .push_back(LocalCompletion::Reconstructed {
                 task: task.clone(),
                 manifest: payload.manifest().clone(),
-                body: canonical_wire,
+                body: canonical_wire.into(),
             });
 
         let error = service
@@ -6221,7 +6290,7 @@ mod tests {
             .push_back(LocalCompletion::Reconstructed {
                 task: queued_ordinary,
                 manifest: payload.manifest().clone(),
-                body,
+                body: body.into(),
             });
         service
             .enqueue_body_fetch(queued_task.clone())
@@ -6324,7 +6393,7 @@ mod tests {
                 .push_back(LocalCompletion::Reconstructed {
                     task: task.clone(),
                     manifest: payload.manifest().clone(),
-                    body: body.clone(),
+                    body: body.clone().into(),
                 });
         }
 

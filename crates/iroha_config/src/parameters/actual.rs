@@ -7207,14 +7207,19 @@ pub struct ToriiOnboarding {
     pub authority: AccountId,
     /// Private key corresponding to the onboarding authority.
     pub private_key: ExposedPrivateKey,
+    /// Exact onboarding domain to dedicated API-token BLAKE3 digest.
+    ///
+    /// When empty, signer-backed onboarding routes fail closed with service unavailable. Digests
+    /// are unique, so an authenticated credential is scoped to exactly one domain.
+    pub api_token_hashes_by_domain: BTreeMap<DomainId, [u8; 32]>,
     /// Permission names that onboarding may grant to newly registered accounts.
     pub allowed_permissions: Vec<String>,
-    /// Exact account-alias dataspaces automatically granted for read-only resolution.
+    /// Exact domainless account-alias dataspaces automatically granted for read-only resolution.
     pub alias_resolve_dataspaces: Vec<DataSpaceId>,
-    /// Exact account-alias domains automatically granted for read-only resolution.
+    /// Exact domain-qualified account-alias domains automatically granted for read-only resolution.
     pub alias_resolve_domains: Vec<DomainId>,
-    /// Optional sponsor account granted via `CanUseFeeSponsor`.
-    pub fee_sponsor_account: Option<AccountId>,
+    /// Optional exact sponsor-policy pair granted per newly onboarded account.
+    pub fee_sponsor: Option<ToriiOnboardingFeeSponsor>,
     /// Default alias lease term applied during onboarding.
     pub alias_lease_term_years: u8,
     /// Whether onboarding should create a default auto-renew subscription.
@@ -7227,6 +7232,15 @@ pub struct ToriiOnboarding {
     pub alias_auto_renew_max_failures: u32,
     /// Existing domain used to store internal alias auto-renew subscription NFTs.
     pub alias_auto_renew_subscription_domain: Option<DomainId>,
+}
+
+/// Exact fee-sponsor policy enrollment used by signer-backed onboarding.
+#[derive(Debug, Clone)]
+pub struct ToriiOnboardingFeeSponsor {
+    /// Sponsor account that owns the policy.
+    pub account: AccountId,
+    /// Explicit sponsor-local policy name.
+    pub policy: Name,
 }
 
 /// App-facing faucet configuration exposed to Torii.
@@ -9420,10 +9434,10 @@ pub struct Offline {
     pub escrow_required: bool,
     /// Escrow accounts keyed by Kagemusha asset definition.
     pub escrow_accounts: BTreeMap<AssetDefinitionId, AccountId>,
-    /// Whether Kagemusha shielded offline-offline payments are active.
-    ///
-    /// Chain execution enforces this gate before any Kagemusha mutation.
-    pub kagemusha_enabled: bool,
+    /// Canonical Norito policy authenticating promoted Kagemusha releases.
+    pub kagemusha_release_policy_path: Option<PathBuf>,
+    /// Directory containing manifest-digest-addressed Kagemusha release artifacts.
+    pub kagemusha_artifact_dir: Option<PathBuf>,
 }
 
 impl Default for Offline {
@@ -9431,7 +9445,9 @@ impl Default for Offline {
         Self {
             escrow_required: false,
             escrow_accounts: BTreeMap::new(),
-            kagemusha_enabled: defaults::settlement::offline::KAGEMUSHA_ENABLED,
+            kagemusha_release_policy_path:
+                defaults::settlement::offline::kagemusha_release_policy_path(),
+            kagemusha_artifact_dir: defaults::settlement::offline::kagemusha_artifact_dir(),
         }
     }
 }
@@ -10893,12 +10909,10 @@ mod tests {
     }
 
     #[test]
-    fn offline_defaults_keep_kagemusha_enabled() {
+    fn offline_defaults_leave_kagemusha_release_unconfigured() {
         let offline = Offline::default();
-        assert!(
-            offline.kagemusha_enabled,
-            "Kagemusha must remain enabled by default"
-        );
+        assert!(offline.kagemusha_release_policy_path.is_none());
+        assert!(offline.kagemusha_artifact_dir.is_none());
     }
 
     #[test]

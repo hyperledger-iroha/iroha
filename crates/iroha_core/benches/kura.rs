@@ -2,9 +2,9 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![allow(clippy::all)]
 #![allow(clippy::disallowed_types)]
-use std::fs;
+use std::{fs, sync::Arc};
 #[cfg(feature = "bench")]
-use std::{num::NonZeroUsize, sync::Arc, time::Duration};
+use std::{num::NonZeroUsize, time::Duration};
 
 #[cfg(feature = "bench")]
 use criterion::BatchSize;
@@ -19,6 +19,7 @@ use iroha_config::{
 #[allow(clippy::disallowed_types)]
 use iroha_core::{
     block::*,
+    governance::manifest::LaneManifestRegistry,
     kura::BlockStore,
     prelude::*,
     query::store::LiveQueryStore,
@@ -279,12 +280,19 @@ fn measure_block_size_for_n_executors(n_executors: u32) {
     let (kura, _) = iroha_core::kura::Kura::new(&cfg, &LaneConfig::default()).unwrap();
     // Use a lightweight, test-friendly handle that doesn't require a running Tokio runtime
     let query_handle = LiveQueryStore::start_test();
-    let state = Box::new(State::new(
-        World::new(),
-        kura,
-        query_handle,
-        #[cfg(feature = "telemetry")]
-        <_>::default(),
+    let state = Box::new(
+        State::try_new(
+            World::new(),
+            kura,
+            query_handle,
+            #[cfg(feature = "telemetry")]
+            <_>::default(),
+        )
+        .expect("benchmark State startup must validate"),
+    );
+    let nexus = state.nexus_snapshot();
+    state.install_lane_manifests(&Arc::new(
+        LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
     ));
 
     let (alice_id, alice_keypair) = gen_account_in("test");

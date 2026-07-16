@@ -126,7 +126,7 @@ fn sora_parliament_plain_lifecycle_with_20_citizens() {
     let mut gov_cfg = state.gov.clone();
     gov_cfg.voting_asset_id = asset_def_id.clone();
     gov_cfg.citizenship_asset_id = asset_def_id.clone();
-    gov_cfg.citizenship_bond_amount = CITIZEN_BOND;
+    gov_cfg.citizenship_bond_amount = CITIZEN_BOND.into();
     gov_cfg.citizenship_escrow_account = escrow_id.clone();
     gov_cfg.bond_escrow_account = escrow_id.clone();
     gov_cfg.slash_receiver_account = escrow_id.clone();
@@ -211,7 +211,7 @@ fn sora_parliament_plain_lifecycle_with_20_citizens() {
 
         RegisterCitizen {
             owner: citizen.clone(),
-            amount: CITIZEN_BOND,
+            amount: CITIZEN_BOND.into(),
         }
         .execute(citizen, &mut stx_1)
         .expect("bond citizenship");
@@ -307,7 +307,7 @@ fn sora_parliament_plain_lifecycle_with_20_citizens() {
         CastPlainBallot {
             referendum_id: referendum_id.clone(),
             owner: citizen.clone(),
-            amount: BALLOT_LOCK,
+            amount: BALLOT_LOCK.into(),
             duration_blocks: 20,
             direction,
         }

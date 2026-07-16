@@ -183,6 +183,11 @@ public final class DeviceAttestationRegistration {
     return OfflineDeviceAttestationCodec.canonicalChallengeHash(this);
   }
 
+  /** Canonical Iroha Hash/registration ID of the exact framed Norito registration archive. */
+  public byte[] canonicalRegistrationHash() {
+    return IrohaHash.prehash(noritoEncoded());
+  }
+
   /**
    * Build the canonical Android challenge before KeyMint generates the assertion key.
    *

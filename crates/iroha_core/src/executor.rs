@@ -18,7 +18,7 @@ use base64::Engine as _;
 use derive_more::Debug;
 use iroha_config::parameters::actual::{GasLiquidity, GasVolatility, NexusFees};
 use iroha_data_model::{
-    Identifiable as _, Registrable as _, ValidationFail,
+    Identifiable as _, ValidationFail,
     account::{AccountId, address::AccountAddress},
     asset::{
         AssetBalancePolicy, AssetDefinition,
@@ -28,8 +28,8 @@ use iroha_data_model::{
     block::{BlockHeader, consensus::NexusFeeScheduleInputs},
     executor::{self as data_model_executor, ExecutorDataModel},
     isi::{
-        CustomInstruction, GrantBox, InstructionBox, InstructionBox as DMInstructionBox,
-        RemoveKeyValueBox, RevokeBox, SetKeyValueBox, TransferBox,
+        CustomInstruction, Grant, GrantBox, InstructionBox, InstructionBox as DMInstructionBox,
+        RemoveKeyValueBox, Revoke, RevokeBox, SetKeyValueBox, TransferBox, UnregisterBox,
         error::InstructionExecutionError,
         mint_burn::MintBox,
         register::RegisterBox,
@@ -45,7 +45,7 @@ use iroha_data_model::{
     },
     parameter::{CustomParameter, CustomParameterId},
     permission::Permission,
-    prelude::{Account, Burn, Domain, DomainId, Register, Transfer, Trigger},
+    prelude::{Account, Burn, Domain, DomainId, Mint, Register, Transfer, Trigger, Unregister},
     query::{AnyQueryBox, QueryRequest, SingularQueryBox},
     role::{Role, RoleId},
     smart_contract::payloads::{ExecutorContext, Validate as ValidatePayload},
@@ -177,6 +177,62 @@ fn validate_builtin_account_alias_query_permission(
                 require_alias(&alias)?;
             }
             Ok(())
+        }
+        _ => Ok(()),
+    }
+}
+
+fn validate_builtin_initial_query_permission(
+    world: &impl WorldReadOnly,
+    latest_block: Option<&BlockHeader>,
+    authority: &AccountId,
+    query: &QueryRequest,
+) -> Result<(), ValidationFail> {
+    // Mirror the query visitors supplied by the default executor while a chain
+    // still runs the native Initial executor. Standard Iroha queries are public;
+    // only the authoritative SoraFS orderbook and per-juror eligibility record
+    // carry additional confidentiality rules in the default policy.
+    if latest_block.is_none_or(BlockHeader::is_genesis) {
+        return Ok(());
+    }
+    let QueryRequest::Singular(query) = query else {
+        return Ok(());
+    };
+
+    match query {
+        SingularQueryBox::FindSorafsOrderbookPolicy(_)
+        | SingularQueryBox::FindSorafsOrderbookOrderById(_)
+        | SingularQueryBox::FindSorafsOrderbookCancellationByOrderId(_)
+        | SingularQueryBox::FindSorafsOrderbookReceiptById(_)
+        | SingularQueryBox::FindSorafsOrderbookStatus(_)
+        | SingularQueryBox::FindSorafsOrderbookOrders(_)
+        | SingularQueryBox::FindSorafsOrderbookReceipts(_) => {
+            let can_set_pricing: Permission =
+                executor_permission::sorafs::CanSetSorafsPricing.into();
+            let can_complete_orders: Permission =
+                executor_permission::sorafs::CanCompleteSorafsReplicationOrder.into();
+            if authority_has_permission(world, authority, &can_set_pricing)?
+                || authority_has_permission(world, authority, &can_complete_orders)?
+            {
+                Ok(())
+            } else {
+                Err(ValidationFail::NotPermitted(
+                    "Can't read authoritative SoraFS orderbook state".to_owned(),
+                ))
+            }
+        }
+        SingularQueryBox::FindSorafsModerationJurorEligibility(query) => {
+            let can_manage_moderation: Permission =
+                executor_permission::sorafs::CanManageSorafsModeration.into();
+            if authority == &query.juror
+                || authority_has_permission(world, authority, &can_manage_moderation)?
+            {
+                Ok(())
+            } else {
+                Err(ValidationFail::NotPermitted(
+                    "Can't read another juror's moderation PoP eligibility record".to_owned(),
+                ))
+            }
         }
         _ => Ok(()),
     }
@@ -341,7 +397,7 @@ impl FixtureExecutorKind {
 /// to sequential execution.
 #[allow(clippy::too_many_lines)]
 pub(crate) fn execute_instruction_detached(
-    authority: &AccountId,
+    _authority: &AccountId,
     instruction: &iroha_data_model::isi::InstructionBox,
     delta: &mut crate::state::DetachedStateTransactionDelta,
 ) -> Result<(), ValidationFail> {
@@ -359,105 +415,24 @@ pub(crate) fn execute_instruction_detached(
 
     let any = instruction.as_any();
 
-    // SetKeyValue
-    if let Some(kv) = any.downcast_ref::<SetKeyValueBox>() {
-        match kv {
-            SetKeyValueBox::Account(s) => {
-                delta.set_account_kv(s.object.clone(), s.key.clone(), s.value.clone());
-            }
-            SetKeyValueBox::Domain(s) => {
-                delta.set_domain_kv(s.object.clone(), s.key.clone(), s.value.clone());
-            }
-            SetKeyValueBox::AssetDefinition(s) => {
-                delta.set_asset_def_kv(s.object.clone(), s.key.clone(), s.value.clone());
-            }
-            SetKeyValueBox::Nft(s) => {
-                delta.set_nft_kv(s.object.clone(), s.key.clone(), s.value.clone());
-            }
-            SetKeyValueBox::Trigger(_) => {
-                return Err(ValidationFail::InternalError(
-                    "detached: unsupported SetKeyValue<Trigger>".to_owned(),
-                ));
-            }
-        }
-        return Ok(());
-    }
-
-    // RemoveKeyValue
-    if let Some(rm) = any.downcast_ref::<RemoveKeyValueBox>() {
-        match rm {
-            RemoveKeyValueBox::Account(r) => {
-                delta.remove_account_kv(r.object.clone(), r.key.clone())
-            }
-            RemoveKeyValueBox::Domain(r) => delta.remove_domain_kv(r.object.clone(), r.key.clone()),
-            RemoveKeyValueBox::AssetDefinition(r) => {
-                delta.remove_asset_def_kv(r.object.clone(), r.key.clone())
-            }
-            RemoveKeyValueBox::Nft(r) => {
-                delta.remove_nft_kv(r.object.clone(), r.key.clone());
-            }
-            RemoveKeyValueBox::Trigger(_) => {
-                return Err(ValidationFail::InternalError(
-                    "detached: unsupported RemoveKeyValue<Trigger>".to_owned(),
-                ));
-            }
-        }
-        return Ok(());
-    }
-
-    // Mint / Burn
-    if let Some(mb) = any.downcast_ref::<MintBox>() {
-        match mb {
-            MintBox::Asset(m) => {
-                let asset_id = m.destination.clone();
-                let qty = m.object.clone().into_numeric();
-                // Record per-account balance increase and total supply increase
-                delta.add_asset_add(asset_id.clone(), qty.clone());
-                delta.add_total_add(asset_id.definition().clone(), qty);
-                // Track mintability usage so block application can update the definition.
-                delta.record_mint_consumption(asset_id.definition().clone(), 1);
-            }
-            MintBox::TriggerRepetitions(_) => {
-                return Err(ValidationFail::InternalError(
-                    "detached: unsupported Mint<Trigger>".to_owned(),
-                ));
-            }
-        }
-        return Ok(());
-    }
-    if let Some(bb) = any.downcast_ref::<BurnBox>() {
-        match bb {
-            BurnBox::Asset(b) => {
-                let asset_id = b.destination.clone();
-                let qty = b.object.clone().into_numeric();
-                // Record per-account balance decrease and total supply decrease
-                delta.add_asset_sub(asset_id.clone(), qty.clone());
-                delta.add_total_sub(asset_id.definition().clone(), qty);
-            }
-            BurnBox::TriggerRepetitions(_) => {
-                return Err(ValidationFail::InternalError(
-                    "detached: unsupported Burn<Trigger>".to_owned(),
-                ));
-            }
-        }
-        return Ok(());
-    }
-
-    // SetParameter
-    if let Some(sp) = any.downcast_ref::<iroha_data_model::isi::SetParameter>() {
-        delta.set_parameter(sp.inner().clone());
-        return Ok(());
-    }
-
-    // ExecuteTrigger (by-call)
-    if let Some(et) = any.downcast_ref::<iroha_data_model::isi::ExecuteTrigger>() {
-        let evt = iroha_data_model::events::execute_trigger::ExecuteTriggerEvent {
-            trigger_id: et.trigger.clone(),
-            authority: authority.clone(),
-            args: et.args.clone(),
-        };
-        delta.execute_trigger_by_call(evt);
-        return Ok(());
+    // These mutations all depend on live ownership, permission, reserved-key, or
+    // trigger state. A detached delta has no authoritative world view, so recording
+    // them here would bypass the Initial executor's consensus authorization. Force
+    // the caller onto the sequential path instead.
+    if any.downcast_ref::<SetKeyValueBox>().is_some()
+        || any.downcast_ref::<RemoveKeyValueBox>().is_some()
+        || any.downcast_ref::<MintBox>().is_some()
+        || any.downcast_ref::<BurnBox>().is_some()
+        || any
+            .downcast_ref::<iroha_data_model::isi::SetParameter>()
+            .is_some()
+        || any
+            .downcast_ref::<iroha_data_model::isi::ExecuteTrigger>()
+            .is_some()
+    {
+        return Err(ValidationFail::InternalError(
+            "detached: live authorization requires sequential execution".to_owned(),
+        ));
     }
 
     // Transfers
@@ -481,72 +456,43 @@ pub(crate) fn execute_instruction_detached(
         return Ok(());
     }
 
-    // Register / Unregister: record peer changes directly so peer management works
-    // even when the runtime executor is not yet upgraded.
+    // Registration and removal depend on live ownership and permission state.
     if let Some(rb) = any.downcast_ref::<RegisterBox>() {
         match rb {
-            RegisterBox::Nft(r) => {
-                let nft = r.object.clone().build(authority);
-                delta.register_nft(nft);
-            }
-            RegisterBox::Peer(_r) => {
-                return Err(ValidationFail::InternalError(
-                    "detached: peer management requires sequential path".to_owned(),
-                ));
-            }
-            _ => {
-                return Err(ValidationFail::InternalError(
-                    "detached: unsupported Register".to_owned(),
-                ));
-            }
+            RegisterBox::Peer(_) => {}
+            RegisterBox::Domain(_)
+            | RegisterBox::Account(_)
+            | RegisterBox::AssetDefinition(_)
+            | RegisterBox::Nft(_)
+            | RegisterBox::Role(_)
+            | RegisterBox::Trigger(_) => {}
         }
-        return Ok(());
+        return Err(ValidationFail::InternalError(
+            "detached: registration requires sequential authorization".to_owned(),
+        ));
     }
     if let Some(ub) = any.downcast_ref::<UnregisterBox>() {
         match ub {
-            UnregisterBox::Nft(u) => delta.unregister_nft(u.object.clone()),
-            UnregisterBox::Peer(_u) => {
-                return Err(ValidationFail::InternalError(
-                    "detached: peer management requires sequential path".to_owned(),
-                ));
-            }
-            _ => {
-                return Err(ValidationFail::InternalError(
-                    "detached: unsupported Unregister".to_owned(),
-                ));
-            }
+            UnregisterBox::Peer(_) => {}
+            UnregisterBox::Domain(_)
+            | UnregisterBox::Account(_)
+            | UnregisterBox::AssetDefinition(_)
+            | UnregisterBox::Nft(_)
+            | UnregisterBox::Role(_)
+            | UnregisterBox::Trigger(_) => {}
         }
-        return Ok(());
+        return Err(ValidationFail::InternalError(
+            "detached: removal requires sequential authorization".to_owned(),
+        ));
     }
 
-    // Grant / Revoke on accounts
-    if let Some(gb) = any.downcast_ref::<GrantBox>() {
-        match gb {
-            GrantBox::Permission(g) => {
-                delta.grant_permission(g.destination.clone(), g.object.clone());
-            }
-            GrantBox::Role(g) => {
-                delta.grant_role(g.destination.clone(), g.object.clone());
-            }
-            GrantBox::RolePermission(g) => {
-                delta.grant_role_permission(g.destination.clone(), g.object.clone());
-            }
-        }
-        return Ok(());
-    }
-    if let Some(rb) = any.downcast_ref::<RevokeBox>() {
-        match rb {
-            RevokeBox::Permission(r) => {
-                delta.revoke_permission(r.destination.clone(), r.object.clone());
-            }
-            RevokeBox::Role(r) => {
-                delta.revoke_role(r.destination.clone(), r.object.clone());
-            }
-            RevokeBox::RolePermission(r) => {
-                delta.revoke_role_permission(r.destination.clone(), r.object.clone());
-            }
-        }
-        return Ok(());
+    // Permission and role mutation depends on live authority, ownership, and role state.
+    // Never pre-apply it to a detached delta: force the sequential executor path so the
+    // same consensus authorization is evaluated for every scheduling profile.
+    if any.downcast_ref::<GrantBox>().is_some() || any.downcast_ref::<RevokeBox>().is_some() {
+        return Err(ValidationFail::InternalError(
+            "detached: permission and role mutation requires sequential authorization".to_owned(),
+        ));
     }
 
     // Unknown instruction kind – signal fallback
@@ -937,6 +883,15 @@ impl ContractDeploymentSelfBootstrapAuthorization {
         if world.account(authority).is_ok() {
             return None;
         }
+        if instructions.iter().any(|instruction| {
+            instruction
+                .as_any()
+                .is::<iroha_data_model::isi::smart_contract_code::CommitContractDeployment>()
+        }) {
+            // Atomic deployment consumes a nonce owned by an account that existed before the
+            // transaction. Never extend the upload-only bootstrap exception to this instruction.
+            return None;
+        }
 
         let Some([register, grant, deployment]) = instructions.get(..3) else {
             return None;
@@ -1021,35 +976,123 @@ fn is_exact_contract_deployment_self_grant(
     authority: &AccountId,
     instruction: &InstructionBox,
 ) -> bool {
-    let Some(GrantBox::Permission(grant)) = instruction.as_any().downcast_ref::<GrantBox>() else {
-        return false;
-    };
     let expected_permission: Permission =
         executor_permission::smart_contract::CanRegisterSmartContractCode.into();
-    grant.destination() == authority && grant.object() == &expected_permission
+    matches!(
+        extract_permission_or_role_mutation(instruction),
+        Some(PermissionOrRoleMutation::AccountPermission {
+            permission,
+            destination,
+            is_revoke: false,
+        }) if destination == authority && permission == &expected_permission
+    )
+}
+
+#[derive(Clone, Copy)]
+enum PermissionOrRoleMutation<'a> {
+    AccountPermission {
+        permission: &'a Permission,
+        destination: &'a AccountId,
+        is_revoke: bool,
+    },
+    AccountRole {
+        role: &'a RoleId,
+    },
+    RolePermission {
+        permission: &'a Permission,
+        role: &'a RoleId,
+    },
+}
+
+fn extract_permission_or_role_mutation(
+    instruction: &InstructionBox,
+) -> Option<PermissionOrRoleMutation<'_>> {
+    fn from_grant(grant: &GrantBox) -> PermissionOrRoleMutation<'_> {
+        match grant {
+            GrantBox::Permission(grant) => PermissionOrRoleMutation::AccountPermission {
+                permission: grant.object(),
+                destination: grant.destination(),
+                is_revoke: false,
+            },
+            GrantBox::Role(grant) => PermissionOrRoleMutation::AccountRole {
+                role: grant.object(),
+            },
+            GrantBox::RolePermission(grant) => PermissionOrRoleMutation::RolePermission {
+                permission: grant.object(),
+                role: grant.destination(),
+            },
+        }
+    }
+
+    fn from_revoke(revoke: &RevokeBox) -> PermissionOrRoleMutation<'_> {
+        match revoke {
+            RevokeBox::Permission(revoke) => PermissionOrRoleMutation::AccountPermission {
+                permission: revoke.object(),
+                destination: revoke.destination(),
+                is_revoke: true,
+            },
+            RevokeBox::Role(revoke) => PermissionOrRoleMutation::AccountRole {
+                role: revoke.object(),
+            },
+            RevokeBox::RolePermission(revoke) => PermissionOrRoleMutation::RolePermission {
+                permission: revoke.object(),
+                role: revoke.destination(),
+            },
+        }
+    }
+
+    let any = instruction.as_any();
+    if let Some(grant) = any.downcast_ref::<GrantBox>() {
+        return Some(from_grant(grant));
+    }
+    if let Some(revoke) = any.downcast_ref::<RevokeBox>() {
+        return Some(from_revoke(revoke));
+    }
+    if let Some(grant) = any.downcast_ref::<Grant<Permission, Account>>() {
+        return Some(PermissionOrRoleMutation::AccountPermission {
+            permission: grant.object(),
+            destination: grant.destination(),
+            is_revoke: false,
+        });
+    }
+    if let Some(revoke) = any.downcast_ref::<Revoke<Permission, Account>>() {
+        return Some(PermissionOrRoleMutation::AccountPermission {
+            permission: revoke.object(),
+            destination: revoke.destination(),
+            is_revoke: true,
+        });
+    }
+    if let Some(grant) = any.downcast_ref::<Grant<RoleId, Account>>() {
+        return Some(PermissionOrRoleMutation::AccountRole {
+            role: grant.object(),
+        });
+    }
+    if let Some(revoke) = any.downcast_ref::<Revoke<RoleId, Account>>() {
+        return Some(PermissionOrRoleMutation::AccountRole {
+            role: revoke.object(),
+        });
+    }
+    if let Some(grant) = any.downcast_ref::<Grant<Permission, Role>>() {
+        return Some(PermissionOrRoleMutation::RolePermission {
+            permission: grant.object(),
+            role: grant.destination(),
+        });
+    }
+    any.downcast_ref::<Revoke<Permission, Role>>()
+        .map(|revoke| PermissionOrRoleMutation::RolePermission {
+            permission: revoke.object(),
+            role: revoke.destination(),
+        })
 }
 
 fn mutates_contract_deployment_permission(instruction: &InstructionBox) -> bool {
-    let permission = instruction
-        .as_any()
-        .downcast_ref::<GrantBox>()
-        .and_then(|grant| match grant {
-            GrantBox::Permission(grant) => Some(grant.object()),
-            GrantBox::RolePermission(grant) => Some(grant.object()),
-            GrantBox::Role(_) => None,
-        })
-        .or_else(|| {
-            instruction
-                .as_any()
-                .downcast_ref::<RevokeBox>()
-                .and_then(|revoke| match revoke {
-                    RevokeBox::Permission(revoke) => Some(revoke.object()),
-                    RevokeBox::RolePermission(revoke) => Some(revoke.object()),
-                    RevokeBox::Role(_) => None,
-                })
-        });
-
-    permission.is_some_and(|permission| permission.name() == "CanRegisterSmartContractCode")
+    matches!(
+        extract_permission_or_role_mutation(instruction),
+        Some(
+            PermissionOrRoleMutation::AccountPermission { permission, .. }
+                | PermissionOrRoleMutation::RolePermission { permission, .. }
+        ) if permission.name() == "CanRegisterSmartContractCode"
+    )
 }
 
 fn ensure_contract_deployment_permission_mutation_allowed(
@@ -1064,6 +1107,60 @@ fn ensure_contract_deployment_permission_mutation_allowed(
                 .to_owned(),
         ));
     }
+    Ok(())
+}
+
+fn ensure_contract_runtime_permission_mutation_allowed(
+    authority: &AccountId,
+    instruction: &InstructionBox,
+    contract_runtime_context: Option<&ContractRuntimeExecutionContext>,
+) -> Result<(), ValidationFail> {
+    let Some(context) = contract_runtime_context else {
+        return Ok(());
+    };
+
+    let mutation = extract_permission_or_role_mutation(instruction);
+    let mutates_role = extract_register_role(instruction).is_some()
+        || extract_unregister_role(instruction).is_some()
+        || matches!(
+            mutation,
+            Some(
+                PermissionOrRoleMutation::AccountRole { .. }
+                    | PermissionOrRoleMutation::RolePermission { .. }
+            )
+        );
+    if mutates_role {
+        return Err(ValidationFail::NotPermitted(
+            "deployed contracts may not register, unregister, or mutate role membership or role permissions"
+                .to_owned(),
+        ));
+    }
+
+    let Some(PermissionOrRoleMutation::AccountPermission { permission, .. }) = mutation else {
+        return Ok(());
+    };
+
+    let scoped =
+        executor_permission::smart_contract::CanInvokeContractEntrypoint::try_from(permission)
+            .map_err(|_| {
+                ValidationFail::NotPermitted(
+            "deployed contracts may grant or revoke only exact CanInvokeContractEntrypoint tokens"
+                .to_owned(),
+        )
+            })?;
+    if authority != &context.contract_subject
+        || scoped.contract != context.contract_address
+        || scoped.contract.subject_id() != *authority
+        || context.contract_address.subject_id() != context.contract_subject
+        || scoped.entrypoint.is_empty()
+        || scoped.entrypoint.trim() != scoped.entrypoint
+    {
+        return Err(ValidationFail::NotPermitted(
+            "deployed contract permission mutation must be bound to its immutable subject, address, and a canonical selector"
+                .to_owned(),
+        ));
+    }
+
     Ok(())
 }
 
@@ -1115,21 +1212,8 @@ fn redeem_funded_nexus_fee_capacity(
     for instruction in instructions {
         let any = instruction.as_any();
         if let Some(redeem) =
-            any.downcast_ref::<iroha_data_model::isi::offline::RedeemKagemushaRecursiveV2>()
+            any.downcast_ref::<iroha_data_model::isi::offline::RedeemKagemushaRecursiveV4>()
         {
-            // Do not admit a transaction against credit that execution cannot
-            // produce.  The public V2 wire type remains decodable while its
-            // recursive proof backend is unavailable, but Core rejects the
-            // instruction before mutating balances.  Returning `None` also
-            // denies mixed batches rather than letting another redeem mask the
-            // unsupported instruction.
-            // ABI V1 never admits fee credit from a proof-gated instruction
-            // that Core cannot execute. A future ABI may change that contract
-            // only by shipping admission and the complete execution backend
-            // atomically.
-            if !iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PROOF_BACKEND_AVAILABLE {
-                return Ok(None);
-            }
             if &redeem.request.recipient != payer {
                 return Ok(None);
             }
@@ -1538,8 +1622,23 @@ pub(crate) fn fee_sponsor_policy_ids_read_only(
 struct FeeSponsorOperation {
     kind: FeeSponsorExecutableKind,
     instruction_wire_id: Option<String>,
+    asset_transfer_definition_id: Option<AssetDefinitionId>,
     contract_address: Option<iroha_data_model::smart_contract::ContractAddress>,
     contract_entrypoint: Option<String>,
+}
+
+fn fee_sponsor_asset_transfer_definition_id(
+    instruction: &InstructionBox,
+) -> Option<AssetDefinitionId> {
+    let any = instruction.as_any();
+    if let Some(transfer) = any.downcast_ref::<TransferBox>() {
+        return match transfer {
+            TransferBox::Asset(transfer) => Some(transfer.source.definition().clone()),
+            TransferBox::Domain(_) | TransferBox::AssetDefinition(_) | TransferBox::Nft(_) => None,
+        };
+    }
+    any.downcast_ref::<Transfer<Asset, Quantity, Account>>()
+        .map(|transfer| transfer.source.definition().clone())
 }
 
 fn fee_sponsor_executable_kind(executable: &Executable) -> FeeSponsorExecutableKind {
@@ -1569,6 +1668,9 @@ fn fee_sponsor_operations(
                 Ok(FeeSponsorOperation {
                     kind: FeeSponsorExecutableKind::Instructions,
                     instruction_wire_id: Some(wire_id),
+                    asset_transfer_definition_id: fee_sponsor_asset_transfer_definition_id(
+                        instruction,
+                    ),
                     contract_address: None,
                     contract_entrypoint: None,
                 })
@@ -1577,12 +1679,14 @@ fn fee_sponsor_operations(
         Executable::ContractCall(invocation) => Ok(vec![FeeSponsorOperation {
             kind: FeeSponsorExecutableKind::ContractCall,
             instruction_wire_id: None,
+            asset_transfer_definition_id: None,
             contract_address: Some(invocation.contract_address.clone()),
             contract_entrypoint: Some(invocation.entrypoint.clone()),
         }]),
         Executable::Ivm(_) => Ok(vec![FeeSponsorOperation {
             kind: FeeSponsorExecutableKind::Ivm,
             instruction_wire_id: None,
+            asset_transfer_definition_id: None,
             contract_address: None,
             contract_entrypoint: None,
         }]),
@@ -1601,6 +1705,9 @@ fn fee_sponsor_operations(
                 Ok(FeeSponsorOperation {
                     kind: FeeSponsorExecutableKind::IvmProved,
                     instruction_wire_id: Some(wire_id),
+                    asset_transfer_definition_id: fee_sponsor_asset_transfer_definition_id(
+                        instruction,
+                    ),
                     contract_address: None,
                     contract_entrypoint: None,
                 })
@@ -1661,6 +1768,17 @@ fn fee_sponsor_rule_matches_operation(
             .instruction_wire_id
             .as_ref()
             .is_some_and(|wire_id| rule.instruction_wire_ids.contains(wire_id))
+    {
+        return false;
+    }
+    if !rule.asset_transfer_definition_ids.is_empty()
+        && !operation
+            .asset_transfer_definition_id
+            .as_ref()
+            .is_some_and(|asset_definition_id| {
+                rule.asset_transfer_definition_ids
+                    .contains(asset_definition_id)
+            })
     {
         return false;
     }
@@ -2075,6 +2193,9 @@ pub(crate) fn ensure_lifecycle_hook_cannot_mutate_contract_binding(
     if instruction
         .downcast_ref::<iroha_data_model::isi::smart_contract_code::ActivateContractInstance>()
         .is_none()
+        && instruction
+            .downcast_ref::<iroha_data_model::isi::smart_contract_code::CommitContractDeployment>()
+            .is_none()
         && instruction
             .downcast_ref::<iroha_data_model::isi::smart_contract_code::DeactivateContractInstance>(
             )
@@ -5580,6 +5701,11 @@ impl Executor {
             contract_runtime_context,
             &instruction,
         )?;
+        ensure_contract_runtime_permission_mutation_allowed(
+            authority,
+            &instruction,
+            contract_runtime_context,
+        )?;
         trace!("Running instruction execution");
         let instr_id = instruction.id();
 
@@ -5621,6 +5747,11 @@ impl Executor {
         ensure_lifecycle_hook_cannot_mutate_contract_binding(
             contract_runtime_context,
             instruction,
+        )?;
+        ensure_contract_runtime_permission_mutation_allowed(
+            authority,
+            instruction,
+            contract_runtime_context,
         )?;
         trace!("Running borrowed instruction execution");
         let instr_id = instruction.id();
@@ -5731,41 +5862,19 @@ impl Executor {
         let is_genesis =
             state_transaction._curr_block.is_genesis() && state_transaction.block_hashes.is_empty();
 
-        if let Some(context) = contract_runtime_context {
-            let contract_permission = instruction
-                .as_any()
-                .downcast_ref::<GrantBox>()
-                .and_then(|grant| match grant {
-                    GrantBox::Permission(grant) => Some(&grant.object),
-                    GrantBox::Role(_) | GrantBox::RolePermission(_) => None,
-                })
-                .or_else(|| {
-                    instruction
-                        .as_any()
-                        .downcast_ref::<RevokeBox>()
-                        .and_then(|revoke| match revoke {
-                            RevokeBox::Permission(revoke) => Some(&revoke.object),
-                            RevokeBox::Role(_) | RevokeBox::RolePermission(_) => None,
-                        })
-                });
-            if let Some(permission) = contract_permission {
-                let scoped = iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntrypoint::try_from(permission)
-                    .map_err(|_| ValidationFail::NotPermitted(
-                        "deployed contracts may grant or revoke only exact CanInvokeContractEntrypoint tokens"
-                            .to_owned(),
-                    ))?;
-                if authority != &context.contract_subject
-                    || scoped.contract != context.contract_address
-                    || scoped.entrypoint.is_empty()
-                    || scoped.entrypoint.trim() != scoped.entrypoint
-                {
-                    return Err(ValidationFail::NotPermitted(
-                        "deployed contract permission mutation must be bound to its immutable subject, address, and a canonical selector"
-                            .to_owned(),
-                    ));
-                }
-            }
-        }
+        validate_initial_permission_or_role_mutation(
+            state_transaction,
+            authority,
+            instruction,
+            is_genesis,
+            contract_runtime_context,
+        )?;
+        validate_initial_native_instruction_authority(
+            state_transaction,
+            authority,
+            instruction,
+            is_genesis,
+        )?;
 
         if let Some(register_role) = extract_register_role(instruction) {
             if let Some(multisig_account) =
@@ -5780,9 +5889,28 @@ impl Executor {
             let role = register_role.object();
             let mut normalized_role = Role::new(role.id().clone(), role.grant_to().clone());
             for permission in role.inner().permissions() {
-                normalized_role = normalized_role.add_permission(
-                    normalize_role_permission_for_initial_executor(state_transaction, permission)?,
-                );
+                let normalized =
+                    normalize_role_permission_for_initial_executor(state_transaction, permission)?;
+                if normalized.name() == "CanUseFeeSponsorForAccount" {
+                    return Err(ValidationFail::NotPermitted(
+                        "CanUseFeeSponsorForAccount is exact to one beneficiary and cannot be attached to a role"
+                            .to_owned(),
+                    ));
+                }
+                if !is_genesis
+                    && !initial_permission_delegation_allowed(
+                        state_transaction,
+                        authority,
+                        &normalized,
+                        contract_runtime_context,
+                    )?
+                {
+                    return Err(ValidationFail::NotPermitted(format!(
+                        "Can't seed role with permission `{}`",
+                        normalized.name()
+                    )));
+                }
+                normalized_role = normalized_role.add_permission(normalized);
             }
 
             if !is_genesis {
@@ -5805,9 +5933,18 @@ impl Executor {
             return Ok(());
         }
 
-        // Minimal built-in permission enforcement for critical instructions used in tests.
-        // This mirrors the default executor behavior sufficiently for integration tests
-        // without requiring an on-chain executor upgrade.
+        if extract_unregister_role(instruction).is_some() && !is_genesis {
+            let can_manage_roles: Permission = executor_permission::role::CanManageRoles.into();
+            if !authority_has_permission(&state_transaction.world, authority, &can_manage_roles)? {
+                return Err(ValidationFail::NotPermitted(
+                    "Can't unregister role".to_owned(),
+                ));
+            }
+        }
+
+        // Native fail-safe authorization remains active until an on-chain executor is
+        // installed. Keep the specialized validation below for registration invariants
+        // and CBDC-specific authority relationships that go beyond the generic gates.
         // Only attempt to decode as Register<Trigger> when the dynamic type matches.
         // Guard against panics in Norito deserialization for mismatched schemas.
         let is_reg_trigger = instruction
@@ -5850,6 +5987,30 @@ impl Executor {
                 authority,
                 &reg_asset_definition,
             )?;
+        }
+
+        if !is_genesis
+            && let Some(mint) = extract_mint_asset(instruction)
+            && !can_mint_asset(&state_transaction.world, authority, mint.destination())?
+        {
+            return Err(ValidationFail::NotPermitted(
+                "Can't mint an asset without owning its definition or an exact mint permission"
+                    .to_owned(),
+            ));
+        }
+
+        if !is_genesis
+            && let Some(asset_definition_id) = extract_asset_definition_metadata_target(instruction)
+            && !can_modify_asset_definition_metadata(
+                &state_transaction.world,
+                authority,
+                &asset_definition_id,
+            )?
+        {
+            return Err(ValidationFail::NotPermitted(
+                "Can't modify asset-definition metadata without ownership or an exact permission"
+                    .to_owned(),
+            ));
         }
 
         if let Some(account_id) = extract_account_metadata_target(instruction) {
@@ -6070,7 +6231,12 @@ impl Executor {
         )?;
 
         match self {
-            Self::Initial => Ok(()),
+            Self::Initial => validate_builtin_initial_query_permission(
+                world_ro,
+                latest_block.as_ref(),
+                authority,
+                query,
+            ),
             Self::UserProvided(loaded_executor) => {
                 if let Some(kind) = detect_fixture_executor_kind(loaded_executor) {
                     return validate_query_with_fixture(kind, query);
@@ -7054,6 +7220,20 @@ fn extract_register_role(instruction: &InstructionBox) -> Option<Register<Role>>
     None
 }
 
+fn extract_unregister_role(instruction: &InstructionBox) -> Option<Unregister<Role>> {
+    let instr_any = instruction.as_any();
+    if let Some(unregister) = instr_any.downcast_ref::<Unregister<Role>>() {
+        return Some(unregister.clone());
+    }
+    if let Some(unregister_box) = instr_any.downcast_ref::<UnregisterBox>() {
+        return match unregister_box {
+            UnregisterBox::Role(unregister) => Some(unregister.clone()),
+            _ => None,
+        };
+    }
+    None
+}
+
 fn extract_register_domain(instruction: &InstructionBox) -> Option<Register<Domain>> {
     let instr_any = instruction.as_any();
     if let Some(reg) = instr_any.downcast_ref::<Register<Domain>>() {
@@ -7097,6 +7277,67 @@ fn extract_account_metadata_target(instruction: &InstructionBox) -> Option<Accou
                 .downcast_ref::<iroha_data_model::isi::RemoveKeyValue<iroha_data_model::account::Account>>()
                 .map(|rm| rm.object.clone())
         })
+}
+
+fn extract_asset_definition_metadata_target(
+    instruction: &InstructionBox,
+) -> Option<AssetDefinitionId> {
+    instruction
+        .as_any()
+        .downcast_ref::<SetKeyValueBox>()
+        .and_then(|set| match set {
+            SetKeyValueBox::AssetDefinition(set) => Some(set.object.clone()),
+            _ => None,
+        })
+        .or_else(|| {
+            instruction
+                .as_any()
+                .downcast_ref::<
+                    iroha_data_model::isi::SetKeyValue<
+                        iroha_data_model::asset::AssetDefinition,
+                    >,
+                >()
+                .map(|set| set.object.clone())
+        })
+        .or_else(|| {
+            instruction
+                .as_any()
+                .downcast_ref::<RemoveKeyValueBox>()
+                .and_then(|remove| match remove {
+                    RemoveKeyValueBox::AssetDefinition(remove) => Some(remove.object.clone()),
+                    _ => None,
+                })
+        })
+        .or_else(|| {
+            instruction
+                .as_any()
+                .downcast_ref::<
+                    iroha_data_model::isi::RemoveKeyValue<
+                        iroha_data_model::asset::AssetDefinition,
+                    >,
+                >()
+                .map(|remove| remove.object.clone())
+        })
+}
+
+fn extract_mint_asset(instruction: &InstructionBox) -> Option<Mint<Quantity, Asset>> {
+    let any = instruction.as_any();
+    if let Some(mint) = any.downcast_ref::<Mint<Quantity, Asset>>() {
+        return Some(mint.clone());
+    }
+    if let Some(mint) = any.downcast_ref::<MintBox>() {
+        return match mint {
+            MintBox::Asset(mint) => Some(mint.clone()),
+            MintBox::TriggerRepetitions(_) => None,
+        };
+    }
+    if !instruction_has_concrete_type::<Mint<Quantity, Asset>>(instruction) {
+        return None;
+    }
+    let bytes = instruction.dyn_encode();
+    std::panic::catch_unwind(|| Mint::<Quantity, Asset>::decode(&mut bytes.as_slice()).ok())
+        .ok()
+        .flatten()
 }
 
 fn extract_transfer_asset(
@@ -7230,6 +7471,1509 @@ fn authority_has_permission(
     }
 
     Ok(false)
+}
+
+fn authority_has_role(world: &impl WorldReadOnly, authority: &AccountId, role_id: &RoleId) -> bool {
+    world
+        .account_roles_iter(authority)
+        .any(|assigned| assigned == role_id)
+}
+
+const INITIAL_GENESIS_ONLY_PERMISSION_NAMES: &[&str] = &[
+    "CanManagePeers",
+    "CanManageLaneRelayEmergency",
+    "CanRegisterDomain",
+    "CanManageRoles",
+    "CanUpgradeExecutor",
+    "CanRegisterSmartContractCode",
+    "CanReadRestrictedDataspace",
+    "CanManageFxCorridors",
+    "CanManageOfflineEscrow",
+    "CanActivateKagemushaRecursiveReleaseV4",
+    "CanManageOfflineDeviceAttestationPolicy",
+];
+
+fn initial_permission_is_genesis_only(permission: &Permission) -> bool {
+    INITIAL_GENESIS_ONLY_PERMISSION_NAMES.contains(&permission.name().as_ref())
+}
+
+fn invalid_initial_permission_payload(
+    permission: &Permission,
+    error: impl core::fmt::Debug,
+) -> ValidationFail {
+    ValidationFail::NotPermitted(format!(
+        "{permission:?}: Invalid permission payload ({error:?})"
+    ))
+}
+
+fn initial_alias_scope_owned_by(
+    state_transaction: &StateTransaction<'_, '_>,
+    authority: &AccountId,
+    scope: &executor_permission::account::AccountAliasPermissionScope,
+) -> Result<bool, ValidationFail> {
+    match scope {
+        executor_permission::account::AccountAliasPermissionScope::Domain(domain) => {
+            authority_owns_domain(&state_transaction.world, authority, domain)
+        }
+        executor_permission::account::AccountAliasPermissionScope::Dataspace(dataspace) => {
+            let now_ms = state_transaction.block_unix_timestamp_ms();
+            Ok(crate::sns::active_dataspace_owner_by_id(
+                &state_transaction.world,
+                state_transaction.world.dataspace_catalog(),
+                *dataspace,
+                now_ms,
+            )
+            .as_ref()
+                == Some(authority))
+        }
+    }
+}
+
+fn account_is_bound_to_alias_domain(
+    state_transaction: &StateTransaction<'_, '_>,
+    account: &AccountId,
+    domain: &DomainId,
+) -> Result<bool, ValidationFail> {
+    let now_ms = state_transaction.block_unix_timestamp_ms();
+    for alias in state_transaction.world.bound_account_aliases(account) {
+        let resolved_domain = alias
+            .domain_id(state_transaction.world.dataspace_catalog())
+            .map_err(|error| {
+                ValidationFail::InstructionFailed(InstructionExecutionError::InvariantViolation(
+                    error.to_string().into(),
+                ))
+            })?;
+        if resolved_domain.as_ref() == Some(domain)
+            && crate::sns::resolve_active_account_alias(
+                &state_transaction.world,
+                state_transaction.world.dataspace_catalog(),
+                &alias,
+                now_ms,
+            )
+            .as_ref()
+                == Some(account)
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn initial_nft_transfer_authority(
+    state_transaction: &StateTransaction<'_, '_>,
+    authority: &AccountId,
+    nft_id: &iroha_data_model::nft::NftId,
+) -> Result<bool, ValidationFail> {
+    let owner = state_transaction
+        .world
+        .nft(nft_id)
+        .map(|nft| nft.owned_by.clone())
+        .map_err(|error| {
+            ValidationFail::InstructionFailed(InstructionExecutionError::Find(error))
+        })?;
+    Ok(owner == *authority
+        || authority_owns_domain(&state_transaction.world, authority, nft_id.domain())?)
+}
+
+fn initial_trigger_authority(
+    state_transaction: &StateTransaction<'_, '_>,
+    authority: &AccountId,
+    trigger_id: &iroha_data_model::trigger::TriggerId,
+) -> Result<bool, ValidationFail> {
+    use crate::smartcontracts::isi::triggers::set::SetReadOnly as _;
+
+    state_transaction
+        .world
+        .triggers()
+        .inspect_by_id(trigger_id, |action| action.authority() == authority)
+        .ok_or_else(|| {
+            ValidationFail::NotPermitted(format!(
+                "permission references unknown trigger `{trigger_id}`"
+            ))
+        })
+}
+
+#[allow(clippy::too_many_lines)]
+fn initial_permission_resource_authority(
+    state_transaction: &StateTransaction<'_, '_>,
+    authority: &AccountId,
+    permission: &Permission,
+    contract_runtime_context: Option<&ContractRuntimeExecutionContext>,
+) -> Result<Option<bool>, ValidationFail> {
+    macro_rules! decode {
+        ($permission_ty:path) => {
+            <$permission_ty>::try_from(permission)
+                .map_err(|error| invalid_initial_permission_payload(permission, error))?
+        };
+    }
+
+    let result = match permission.name().as_ref() {
+        "CanUnregisterDomain" => {
+            let token = decode!(executor_permission::domain::CanUnregisterDomain);
+            authority_owns_domain(&state_transaction.world, authority, &token.domain)?
+        }
+        "CanModifyDomainMetadata" => {
+            let token = decode!(executor_permission::domain::CanModifyDomainMetadata);
+            authority_owns_domain(&state_transaction.world, authority, &token.domain)?
+        }
+        "CanRegisterAccount" => {
+            let token = decode!(executor_permission::account::CanRegisterAccount);
+            authority_owns_domain(&state_transaction.world, authority, &token.domain)?
+        }
+        "CanUnregisterAccount" => {
+            let token = decode!(executor_permission::account::CanUnregisterAccount);
+            token.account == *authority
+        }
+        "CanModifyAccountMetadata" => {
+            let token = decode!(executor_permission::account::CanModifyAccountMetadata);
+            token.account == *authority
+        }
+        "CanReplaceAccountController" => {
+            let token = decode!(executor_permission::account::CanReplaceAccountController);
+            token.account == *authority
+        }
+        "CanManageZkAceIdentityForAccount" => {
+            let token = decode!(executor_permission::zk_ace::CanManageZkAceIdentityForAccount);
+            token.account == *authority
+        }
+        "CanResolveAccountAlias" => {
+            let token = decode!(executor_permission::account::CanResolveAccountAlias);
+            let delegation: Permission =
+                executor_permission::account::CanDelegateAccountAliasResolution {
+                    scope: token.scope.clone(),
+                }
+                .into();
+            authority_has_permission(&state_transaction.world, authority, &delegation)?
+                || initial_alias_scope_owned_by(state_transaction, authority, &token.scope)?
+        }
+        "CanDelegateAccountAliasResolution" => {
+            let token = decode!(executor_permission::account::CanDelegateAccountAliasResolution);
+            initial_alias_scope_owned_by(state_transaction, authority, &token.scope)?
+        }
+        "CanManageAccountAlias" => {
+            let token = decode!(executor_permission::account::CanManageAccountAlias);
+            initial_alias_scope_owned_by(state_transaction, authority, &token.scope)?
+        }
+        "CanUnregisterAssetDefinition" => {
+            let token =
+                decode!(executor_permission::asset_definition::CanUnregisterAssetDefinition);
+            authority_owns_asset_definition(
+                &state_transaction.world,
+                authority,
+                &token.asset_definition,
+            )?
+        }
+        "CanModifyAssetDefinitionMetadata" => {
+            let token =
+                decode!(executor_permission::asset_definition::CanModifyAssetDefinitionMetadata);
+            authority_owns_asset_definition(
+                &state_transaction.world,
+                authority,
+                &token.asset_definition,
+            )?
+        }
+        "CanMintAssetWithDefinition" => {
+            let token = decode!(executor_permission::asset::CanMintAssetWithDefinition);
+            authority_owns_asset_definition(
+                &state_transaction.world,
+                authority,
+                &token.asset_definition,
+            )?
+        }
+        "CanBurnAssetWithDefinition" => {
+            let token = decode!(executor_permission::asset::CanBurnAssetWithDefinition);
+            authority_owns_asset_definition(
+                &state_transaction.world,
+                authority,
+                &token.asset_definition,
+            )?
+        }
+        "CanTransferAssetWithDefinition" => {
+            let token = decode!(executor_permission::asset::CanTransferAssetWithDefinition);
+            authority_owns_asset_definition(
+                &state_transaction.world,
+                authority,
+                &token.asset_definition,
+            )?
+        }
+        "CanModifyAssetMetadataWithDefinition" => {
+            let token = decode!(executor_permission::asset::CanModifyAssetMetadataWithDefinition);
+            authority_owns_asset_definition(
+                &state_transaction.world,
+                authority,
+                &token.asset_definition,
+            )?
+        }
+        "CanSetAssetTransferFreeze" => {
+            let token = decode!(executor_permission::asset::CanSetAssetTransferFreeze);
+            authority_owns_asset_definition(
+                &state_transaction.world,
+                authority,
+                &token.asset_definition,
+            )?
+        }
+        "CanSetAssetTransferDailyLimit" => {
+            let token = decode!(executor_permission::asset::CanSetAssetTransferDailyLimit);
+            authority_owns_asset_definition(
+                &state_transaction.world,
+                authority,
+                &token.asset_definition,
+            )?
+        }
+        "CanMintAsset" => {
+            let token = decode!(executor_permission::asset::CanMintAsset);
+            token.asset.account() == authority
+        }
+        "CanBurnAsset" => {
+            let token = decode!(executor_permission::asset::CanBurnAsset);
+            token.asset.account() == authority
+        }
+        "CanTransferAsset" => {
+            let token = decode!(executor_permission::asset::CanTransferAsset);
+            token.asset.account() == authority
+        }
+        "CanModifyAssetMetadata" => {
+            let token = decode!(executor_permission::asset::CanModifyAssetMetadata);
+            token.asset.account() == authority
+        }
+        "CanRegisterNft" => {
+            let token = decode!(executor_permission::nft::CanRegisterNft);
+            authority_owns_domain(&state_transaction.world, authority, &token.domain)?
+        }
+        "CanUnregisterNft" => {
+            let token = decode!(executor_permission::nft::CanUnregisterNft);
+            authority_owns_domain(&state_transaction.world, authority, token.nft.domain())?
+        }
+        "CanTransferNft" => {
+            let token = decode!(executor_permission::nft::CanTransferNft);
+            initial_nft_transfer_authority(state_transaction, authority, &token.nft)?
+        }
+        "CanModifyNftMetadata" => {
+            let token = decode!(executor_permission::nft::CanModifyNftMetadata);
+            authority_owns_domain(&state_transaction.world, authority, token.nft.domain())?
+        }
+        "CanRegisterTrigger" => {
+            let token = decode!(executor_permission::trigger::CanRegisterTrigger);
+            token.authority == *authority
+        }
+        "CanUnregisterTrigger" => {
+            let token = decode!(executor_permission::trigger::CanUnregisterTrigger);
+            initial_trigger_authority(state_transaction, authority, &token.trigger)?
+        }
+        "CanModifyTrigger" => {
+            let token = decode!(executor_permission::trigger::CanModifyTrigger);
+            initial_trigger_authority(state_transaction, authority, &token.trigger)?
+        }
+        "CanExecuteTrigger" => {
+            let token = decode!(executor_permission::trigger::CanExecuteTrigger);
+            initial_trigger_authority(state_transaction, authority, &token.trigger)?
+        }
+        "CanModifyTriggerMetadata" => {
+            let token = decode!(executor_permission::trigger::CanModifyTriggerMetadata);
+            initial_trigger_authority(state_transaction, authority, &token.trigger)?
+        }
+        "CanInvokeContractEntrypoint" => {
+            let token = decode!(executor_permission::smart_contract::CanInvokeContractEntrypoint);
+            if token.entrypoint.is_empty() || token.entrypoint.trim() != token.entrypoint {
+                return Err(ValidationFail::NotPermitted(
+                    "contract entrypoint permission must use a non-empty canonical selector"
+                        .to_owned(),
+                ));
+            }
+            let registrar: Permission =
+                executor_permission::smart_contract::CanRegisterSmartContractCode.into();
+            token.contract.subject_id() == *authority
+                || contract_runtime_context.is_some_and(|context| {
+                    context.contract_subject == *authority
+                        && context.contract_address == token.contract
+                })
+                || authority_has_permission(&state_transaction.world, authority, &registrar)?
+        }
+        "CanSetFxCorridorPolicy" | "CanSettleFxCorridor" => {
+            if permission.name() == "CanSetFxCorridorPolicy" {
+                let _ = decode!(executor_permission::settlement::CanSetFxCorridorPolicy);
+            } else {
+                let _ = decode!(executor_permission::settlement::CanSettleFxCorridor);
+            }
+            let manager: Permission = executor_permission::settlement::CanManageFxCorridors.into();
+            authority_has_permission(&state_transaction.world, authority, &manager)?
+        }
+        "CanPublishSpaceDirectoryManifest" => {
+            let token = decode!(executor_permission::nexus::CanPublishSpaceDirectoryManifest);
+            let exact: Permission = token.clone().into();
+            authority_has_permission(&state_transaction.world, authority, &exact)?
+                || crate::sns::active_dataspace_owner_by_id(
+                    &state_transaction.world,
+                    state_transaction.world.dataspace_catalog(),
+                    token.dataspace,
+                    state_transaction.block_unix_timestamp_ms(),
+                )
+                .as_ref()
+                    == Some(authority)
+        }
+        "CanPublishSpaceDirectoryManifestForUaid" => {
+            let token =
+                decode!(executor_permission::nexus::CanPublishSpaceDirectoryManifestForUaid);
+            let exact: Permission = token.clone().into();
+            let wide: Permission = executor_permission::nexus::CanPublishSpaceDirectoryManifest {
+                dataspace: token.dataspace,
+            }
+            .into();
+            authority_has_permission(&state_transaction.world, authority, &exact)?
+                || authority_has_permission(&state_transaction.world, authority, &wide)?
+        }
+        "CanPublishSpaceDirectoryManifestForAccountDomain" => {
+            let token = decode!(
+                executor_permission::nexus::CanPublishSpaceDirectoryManifestForAccountDomain
+            );
+            let exact: Permission = token.clone().into();
+            let wide: Permission = executor_permission::nexus::CanPublishSpaceDirectoryManifest {
+                dataspace: token.dataspace,
+            }
+            .into();
+            authority_has_permission(&state_transaction.world, authority, &exact)?
+                || authority_has_permission(&state_transaction.world, authority, &wide)?
+                || authority_owns_domain(&state_transaction.world, authority, &token.domain)?
+        }
+        "CanUseFeeSponsor" => {
+            let token = decode!(executor_permission::nexus::CanUseFeeSponsor);
+            token.sponsor == *authority
+        }
+        "CanEnrollFeeSponsorPolicyForAccountDomain" => {
+            let token =
+                decode!(executor_permission::nexus::CanEnrollFeeSponsorPolicyForAccountDomain);
+            token.sponsor == *authority
+        }
+        "CanUseFeeSponsorForAccount" => {
+            let token = decode!(executor_permission::nexus::CanUseFeeSponsorForAccount);
+            let enrollment: Permission =
+                executor_permission::nexus::CanEnrollFeeSponsorPolicyForAccountDomain {
+                    sponsor: token.sponsor.clone(),
+                    policy: token.policy.clone(),
+                    domain: token.domain.clone(),
+                }
+                .into();
+            token.sponsor == *authority
+                || authority_has_permission(&state_transaction.world, authority, &enrollment)?
+        }
+        "CanManageFeeSponsorPolicy" => {
+            let token = decode!(executor_permission::nexus::CanManageFeeSponsorPolicy);
+            token.sponsor == *authority
+        }
+        "CanProposeSccpRouteGovernance" => {
+            let _ = decode!(executor_permission::sccp::CanProposeSccpRouteGovernance);
+            let manager: Permission = executor_permission::sccp::CanManageSccpGovernance.into();
+            authority_has_permission(&state_transaction.world, authority, &manager)?
+        }
+        _ => return Ok(None),
+    };
+    Ok(Some(result))
+}
+
+fn initial_permission_delegation_allowed(
+    state_transaction: &StateTransaction<'_, '_>,
+    authority: &AccountId,
+    permission: &Permission,
+    contract_runtime_context: Option<&ContractRuntimeExecutionContext>,
+) -> Result<bool, ValidationFail> {
+    if initial_permission_is_genesis_only(permission) {
+        return Ok(false);
+    }
+    if let Some(allowed) = initial_permission_resource_authority(
+        state_transaction,
+        authority,
+        permission,
+        contract_runtime_context,
+    )? {
+        return Ok(allowed);
+    }
+    authority_has_permission(&state_transaction.world, authority, permission)
+}
+
+fn validate_initial_account_permission_destination(
+    state_transaction: &StateTransaction<'_, '_>,
+    permission: &Permission,
+    destination: &AccountId,
+    is_genesis: bool,
+    is_revoke: bool,
+) -> Result<(), ValidationFail> {
+    if permission.name() != "CanUseFeeSponsorForAccount" {
+        return Ok(());
+    }
+    let token = executor_permission::nexus::CanUseFeeSponsorForAccount::try_from(permission)
+        .map_err(|error| invalid_initial_permission_payload(permission, error))?;
+    if token.beneficiary != *destination {
+        return Err(ValidationFail::NotPermitted(
+            "CanUseFeeSponsorForAccount may only be granted to or revoked from its exact beneficiary"
+                .to_owned(),
+        ));
+    }
+    if !is_genesis
+        && !is_revoke
+        && !account_is_bound_to_alias_domain(state_transaction, &token.beneficiary, &token.domain)?
+    {
+        return Err(ValidationFail::NotPermitted(
+            "fee sponsor beneficiary is not bound to the delegated account domain".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_initial_permission_or_role_mutation(
+    state_transaction: &StateTransaction<'_, '_>,
+    authority: &AccountId,
+    instruction: &InstructionBox,
+    is_genesis: bool,
+    contract_runtime_context: Option<&ContractRuntimeExecutionContext>,
+) -> Result<(), ValidationFail> {
+    let mutation = extract_permission_or_role_mutation(instruction);
+    let Some(mutation) = mutation else {
+        return Ok(());
+    };
+
+    match mutation {
+        PermissionOrRoleMutation::AccountPermission {
+            permission,
+            destination,
+            is_revoke,
+        } => {
+            validate_initial_account_permission_destination(
+                state_transaction,
+                permission,
+                destination,
+                is_genesis,
+                is_revoke,
+            )?;
+            if is_genesis
+                || initial_permission_delegation_allowed(
+                    state_transaction,
+                    authority,
+                    permission,
+                    contract_runtime_context,
+                )?
+            {
+                return Ok(());
+            }
+            Err(ValidationFail::NotPermitted(format!(
+                "authority cannot grant or revoke permission `{}`",
+                permission.name()
+            )))
+        }
+        PermissionOrRoleMutation::AccountRole { role: role_id } => {
+            if is_genesis {
+                return Ok(());
+            }
+            if !authority_has_role(&state_transaction.world, authority, role_id) {
+                return Err(ValidationFail::NotPermitted(
+                    "authority cannot grant or revoke a role it does not hold".to_owned(),
+                ));
+            }
+            let role = state_transaction
+                .world
+                .roles()
+                .get(role_id)
+                .ok_or_else(|| {
+                    ValidationFail::NotPermitted("cannot delegate an unknown role".to_owned())
+                })?;
+            for permission in role.permissions() {
+                let normalized =
+                    normalize_role_permission_for_initial_executor(state_transaction, permission)?;
+                if normalized.name() == "CanUseFeeSponsorForAccount" {
+                    return Err(ValidationFail::NotPermitted(
+                        "CanUseFeeSponsorForAccount is exact to one beneficiary and cannot be attached to or delegated through a role"
+                            .to_owned(),
+                    ));
+                }
+                if !initial_permission_delegation_allowed(
+                    state_transaction,
+                    authority,
+                    &normalized,
+                    contract_runtime_context,
+                )? {
+                    return Err(ValidationFail::NotPermitted(format!(
+                        "authority cannot grant or revoke role `{role_id}` because it cannot delegate contained permission `{}`",
+                        normalized.name()
+                    )));
+                }
+            }
+            Ok(())
+        }
+        PermissionOrRoleMutation::RolePermission { permission, role } => {
+            let normalized =
+                normalize_role_permission_for_initial_executor(state_transaction, permission)?;
+            if normalized.name() == "CanUseFeeSponsorForAccount" {
+                return Err(ValidationFail::NotPermitted(
+                    "CanUseFeeSponsorForAccount is exact to one beneficiary and cannot be attached to a role"
+                        .to_owned(),
+                ));
+            }
+            if is_genesis {
+                return Ok(());
+            }
+            if !authority_has_role(&state_transaction.world, authority, role) {
+                return Err(ValidationFail::NotPermitted(
+                    "authority cannot modify a role it does not hold".to_owned(),
+                ));
+            }
+            if !initial_permission_delegation_allowed(
+                state_transaction,
+                authority,
+                &normalized,
+                contract_runtime_context,
+            )? {
+                return Err(ValidationFail::NotPermitted(format!(
+                    "authority cannot grant or revoke role permission `{}`",
+                    normalized.name()
+                )));
+            }
+            Ok(())
+        }
+    }
+}
+
+fn initial_authority_has_exact_permission(
+    state_transaction: &StateTransaction<'_, '_>,
+    authority: &AccountId,
+    permission: Permission,
+) -> Result<bool, ValidationFail> {
+    authority_has_permission(&state_transaction.world, authority, &permission)
+}
+
+fn can_unregister_domain_initial(
+    state_transaction: &StateTransaction<'_, '_>,
+    authority: &AccountId,
+    domain: &DomainId,
+) -> Result<bool, ValidationFail> {
+    if authority_owns_domain(&state_transaction.world, authority, domain)? {
+        return Ok(true);
+    }
+    initial_authority_has_exact_permission(
+        state_transaction,
+        authority,
+        executor_permission::domain::CanUnregisterDomain {
+            domain: domain.clone(),
+        }
+        .into(),
+    )
+}
+
+fn can_modify_domain_metadata_initial(
+    state_transaction: &StateTransaction<'_, '_>,
+    authority: &AccountId,
+    domain: &DomainId,
+) -> Result<bool, ValidationFail> {
+    if authority_owns_domain(&state_transaction.world, authority, domain)? {
+        return Ok(true);
+    }
+    initial_authority_has_exact_permission(
+        state_transaction,
+        authority,
+        executor_permission::domain::CanModifyDomainMetadata {
+            domain: domain.clone(),
+        }
+        .into(),
+    )
+}
+
+fn can_unregister_account_initial(
+    state_transaction: &StateTransaction<'_, '_>,
+    authority: &AccountId,
+    account: &AccountId,
+) -> Result<bool, ValidationFail> {
+    if authority == account {
+        return Ok(true);
+    }
+    initial_authority_has_exact_permission(
+        state_transaction,
+        authority,
+        executor_permission::account::CanUnregisterAccount {
+            account: account.clone(),
+        }
+        .into(),
+    )
+}
+
+fn can_replace_account_controller_initial(
+    state_transaction: &StateTransaction<'_, '_>,
+    authority: &AccountId,
+    account: &AccountId,
+) -> Result<bool, ValidationFail> {
+    if authority == account {
+        return Ok(true);
+    }
+    initial_authority_has_exact_permission(
+        state_transaction,
+        authority,
+        executor_permission::account::CanReplaceAccountController {
+            account: account.clone(),
+        }
+        .into(),
+    )
+}
+
+fn initial_accounts_share_active_lineage(
+    state_transaction: &StateTransaction<'_, '_>,
+    authority: &AccountId,
+    target: &AccountId,
+) -> Result<bool, ValidationFail> {
+    if authority == target {
+        return Ok(true);
+    }
+    let now_ms = state_transaction.block_unix_timestamp_ms();
+    let Some(authority) = crate::sns::resolve_active_account_id_rekey_lineage(
+        &state_transaction.world,
+        state_transaction.world.dataspace_catalog(),
+        authority,
+        now_ms,
+    ) else {
+        return Ok(false);
+    };
+    let Some(target) = crate::sns::resolve_active_account_id_rekey_lineage(
+        &state_transaction.world,
+        state_transaction.world.dataspace_catalog(),
+        target,
+        now_ms,
+    ) else {
+        return Ok(false);
+    };
+    Ok(authority == target)
+}
+
+fn can_unregister_asset_definition_initial(
+    state_transaction: &StateTransaction<'_, '_>,
+    authority: &AccountId,
+    asset_definition: &AssetDefinitionId,
+) -> Result<bool, ValidationFail> {
+    if authority_owns_asset_definition(&state_transaction.world, authority, asset_definition)? {
+        return Ok(true);
+    }
+    initial_authority_has_exact_permission(
+        state_transaction,
+        authority,
+        executor_permission::asset_definition::CanUnregisterAssetDefinition {
+            asset_definition: asset_definition.clone(),
+        }
+        .into(),
+    )
+}
+
+fn can_register_nft_initial(
+    state_transaction: &StateTransaction<'_, '_>,
+    authority: &AccountId,
+    domain: &DomainId,
+) -> Result<bool, ValidationFail> {
+    if authority_owns_domain(&state_transaction.world, authority, domain)? {
+        return Ok(true);
+    }
+    initial_authority_has_exact_permission(
+        state_transaction,
+        authority,
+        executor_permission::nft::CanRegisterNft {
+            domain: domain.clone(),
+        }
+        .into(),
+    )
+}
+
+fn can_unregister_nft_initial(
+    state_transaction: &StateTransaction<'_, '_>,
+    authority: &AccountId,
+    nft: &iroha_data_model::nft::NftId,
+) -> Result<bool, ValidationFail> {
+    if authority_owns_domain(&state_transaction.world, authority, nft.domain())? {
+        return Ok(true);
+    }
+    initial_authority_has_exact_permission(
+        state_transaction,
+        authority,
+        executor_permission::nft::CanUnregisterNft { nft: nft.clone() }.into(),
+    )
+}
+
+fn can_modify_nft_metadata_initial(
+    state_transaction: &StateTransaction<'_, '_>,
+    authority: &AccountId,
+    nft: &iroha_data_model::nft::NftId,
+) -> Result<bool, ValidationFail> {
+    if authority_owns_domain(&state_transaction.world, authority, nft.domain())? {
+        return Ok(true);
+    }
+    initial_authority_has_exact_permission(
+        state_transaction,
+        authority,
+        executor_permission::nft::CanModifyNftMetadata { nft: nft.clone() }.into(),
+    )
+}
+
+fn can_modify_trigger_initial(
+    state_transaction: &StateTransaction<'_, '_>,
+    authority: &AccountId,
+    trigger: &iroha_data_model::trigger::TriggerId,
+) -> Result<bool, ValidationFail> {
+    if initial_trigger_authority(state_transaction, authority, trigger)? {
+        return Ok(true);
+    }
+    initial_authority_has_exact_permission(
+        state_transaction,
+        authority,
+        executor_permission::trigger::CanModifyTrigger {
+            trigger: trigger.clone(),
+        }
+        .into(),
+    )
+}
+
+fn can_unregister_trigger_initial(
+    state_transaction: &StateTransaction<'_, '_>,
+    authority: &AccountId,
+    trigger: &iroha_data_model::trigger::TriggerId,
+) -> Result<bool, ValidationFail> {
+    if initial_trigger_authority(state_transaction, authority, trigger)? {
+        return Ok(true);
+    }
+    initial_authority_has_exact_permission(
+        state_transaction,
+        authority,
+        executor_permission::trigger::CanUnregisterTrigger {
+            trigger: trigger.clone(),
+        }
+        .into(),
+    )
+}
+
+fn can_execute_trigger_initial(
+    state_transaction: &StateTransaction<'_, '_>,
+    authority: &AccountId,
+    trigger: &iroha_data_model::trigger::TriggerId,
+) -> Result<bool, ValidationFail> {
+    if initial_trigger_authority(state_transaction, authority, trigger)? {
+        return Ok(true);
+    }
+    initial_authority_has_exact_permission(
+        state_transaction,
+        authority,
+        executor_permission::trigger::CanExecuteTrigger {
+            trigger: trigger.clone(),
+        }
+        .into(),
+    )
+}
+
+fn can_modify_trigger_metadata_initial(
+    state_transaction: &StateTransaction<'_, '_>,
+    authority: &AccountId,
+    trigger: &iroha_data_model::trigger::TriggerId,
+) -> Result<bool, ValidationFail> {
+    if initial_trigger_authority(state_transaction, authority, trigger)? {
+        return Ok(true);
+    }
+    initial_authority_has_exact_permission(
+        state_transaction,
+        authority,
+        executor_permission::trigger::CanModifyTriggerMetadata {
+            trigger: trigger.clone(),
+        }
+        .into(),
+    )
+}
+
+fn can_burn_asset_initial(
+    state_transaction: &StateTransaction<'_, '_>,
+    authority: &AccountId,
+    asset: &AssetId,
+) -> Result<bool, ValidationFail> {
+    if asset.account() == authority
+        || authority_owns_asset_definition(&state_transaction.world, authority, asset.definition())?
+    {
+        return Ok(true);
+    }
+    let exact: Permission = executor_permission::asset::CanBurnAsset {
+        asset: asset.clone(),
+    }
+    .into();
+    if authority_has_permission(&state_transaction.world, authority, &exact)? {
+        return Ok(true);
+    }
+    initial_authority_has_exact_permission(
+        state_transaction,
+        authority,
+        executor_permission::asset::CanBurnAssetWithDefinition {
+            asset_definition: asset.definition().clone(),
+        }
+        .into(),
+    )
+}
+
+fn can_modify_asset_metadata_initial(
+    state_transaction: &StateTransaction<'_, '_>,
+    authority: &AccountId,
+    asset: &AssetId,
+) -> Result<bool, ValidationFail> {
+    if asset.account() == authority
+        || authority_owns_asset_definition(&state_transaction.world, authority, asset.definition())?
+    {
+        return Ok(true);
+    }
+    let exact: Permission = executor_permission::asset::CanModifyAssetMetadata {
+        asset: asset.clone(),
+    }
+    .into();
+    if authority_has_permission(&state_transaction.world, authority, &exact)? {
+        return Ok(true);
+    }
+    initial_authority_has_exact_permission(
+        state_transaction,
+        authority,
+        executor_permission::asset::CanModifyAssetMetadataWithDefinition {
+            asset_definition: asset.definition().clone(),
+        }
+        .into(),
+    )
+}
+
+fn initial_native_instruction_is_explicitly_admitted(instruction: &InstructionBox) -> bool {
+    use iroha_data_model::isi::{BurnBox, MintBox, RegisterBox, UnregisterBox};
+
+    let any = instruction.as_any();
+    macro_rules! is_any {
+        ($($ty:ty),+ $(,)?) => {
+            false $(|| any.downcast_ref::<$ty>().is_some())+
+        };
+    }
+
+    // Standard ISIs are authorized by the native parity gates above.
+    if is_any!(
+        iroha_data_model::isi::SetParameter,
+        iroha_data_model::isi::Log,
+        iroha_data_model::isi::ExecuteTrigger,
+        BurnBox,
+        GrantBox,
+        MintBox,
+        RegisterBox,
+        RemoveKeyValueBox,
+        RevokeBox,
+        SetKeyValueBox,
+        TransferBox,
+        UnregisterBox,
+        iroha_data_model::isi::Upgrade,
+        iroha_data_model::isi::register::RegisterPeerWithPop,
+    ) {
+        return true;
+    }
+
+    // CBDC account control, native multisig rotation, and alias lifecycle.
+    if is_any!(
+        iroha_data_model::isi::AddSignatory,
+        iroha_data_model::isi::RemoveSignatory,
+        iroha_data_model::isi::SetAccountQuorum,
+        iroha_data_model::isi::ReplaceAccountController,
+        iroha_data_model::isi::SetAccountRecoveryPolicy,
+        iroha_data_model::isi::ClearAccountRecoveryPolicy,
+        iroha_data_model::isi::ProposeAccountRecovery,
+        iroha_data_model::isi::ApproveAccountRecovery,
+        iroha_data_model::isi::CancelAccountRecovery,
+        iroha_data_model::isi::FinalizeAccountRecovery,
+        iroha_data_model::isi::account_alias_lease::AcquireAccountAliasLease,
+        iroha_data_model::isi::account_alias_lease::RenewAccountAliasLease,
+        iroha_data_model::isi::domain_link::SetAccountAliasBinding,
+        iroha_data_model::isi::domain_link::SetPrimaryAccountAlias,
+        iroha_data_model::isi::sns::RegisterSnsName,
+        iroha_data_model::isi::sns::RenewSnsName,
+    ) {
+        return true;
+    }
+
+    // Asset controls and CBDC policy records have Core owner/scope checks.
+    if is_any!(
+        iroha_data_model::isi::SetAssetKeyValue,
+        iroha_data_model::isi::RemoveAssetKeyValue,
+        iroha_data_model::isi::SetAssetTransferFreeze,
+        iroha_data_model::isi::SetAssetTransferControl,
+        iroha_data_model::isi::SetAssetTransferBlacklist,
+        iroha_data_model::isi::asset_alias::SetAssetDefinitionAlias,
+        iroha_data_model::isi::asset_alias::SetAssetDefinitionBalancePolicy,
+        iroha_data_model::isi::nexus::UpsertFeeSponsorPolicy,
+        iroha_data_model::isi::nexus::RemoveFeeSponsorPolicy,
+    ) {
+        return true;
+    }
+
+    // Smart-contract deployment and instance lifecycle enforce immutable subject,
+    // code, nonce, and deployment permissions inside Core.
+    if is_any!(
+        iroha_data_model::isi::smart_contract_code::RegisterSmartContractCode,
+        iroha_data_model::isi::smart_contract_code::DeactivateContractInstance,
+        iroha_data_model::isi::smart_contract_code::ActivateContractInstance,
+        iroha_data_model::isi::smart_contract_code::CommitContractDeployment,
+        iroha_data_model::isi::smart_contract_code::RegisterSmartContractBytes,
+        iroha_data_model::isi::smart_contract_code::UploadSmartContractCodeChunk,
+        iroha_data_model::isi::smart_contract_code::FinalizeSmartContractCodeUpload,
+        iroha_data_model::isi::smart_contract_code::CancelSmartContractCodeUpload,
+        iroha_data_model::isi::smart_contract_code::RemoveSmartContractBytes,
+        iroha_data_model::isi::contract_alias::SetContractAlias,
+    ) {
+        return true;
+    }
+
+    // Offline/Kagemusha execution is guarded by the native escrow, activation,
+    // release, and device-attestation policy checks in Core.
+    if is_any!(
+        iroha_data_model::isi::offline::TopUpKagemushaRecursiveV4,
+        iroha_data_model::isi::offline::RedeemKagemushaRecursiveV4,
+        iroha_data_model::isi::offline::ActivateKagemushaRecursiveReleaseV4,
+        iroha_data_model::isi::offline::RegisterOfflineDeviceAttestation,
+        iroha_data_model::isi::offline::SetOfflineDeviceAttestationPolicy,
+    ) {
+        return true;
+    }
+
+    // Cross-border settlement and relays either require an exact governance
+    // permission or consume a cryptographically verified, replay-protected proof.
+    if is_any!(
+        iroha_data_model::isi::settlement::SettlementInstructionBox,
+        iroha_data_model::isi::bridge::SubmitBridgeProof,
+        iroha_data_model::isi::bridge::RecordBridgeReceipt,
+        iroha_data_model::isi::bridge::ApplySccpRouteGovernance,
+        iroha_data_model::isi::bridge::RecordSccpMessage,
+        iroha_data_model::isi::governance::ProposeSccpRouteGovernance,
+        iroha_data_model::isi::nexus::RegisterVerifiedLaneRelay,
+        iroha_data_model::isi::nexus::RegisterVerifiedNexusFeeBudget,
+        iroha_data_model::isi::nexus::SetLaneRelayEmergencyValidators,
+    ) {
+        return true;
+    }
+
+    // Retail identifier policies and claims are bound to their signed policy and
+    // RAM-LFE proof state by Core.
+    if is_any!(
+        iroha_data_model::isi::identifier::RegisterIdentifierPolicy,
+        iroha_data_model::isi::identifier::ActivateIdentifierPolicy,
+        iroha_data_model::isi::identifier::ClaimIdentifier,
+        iroha_data_model::isi::identifier::RevokeIdentifier,
+        iroha_data_model::isi::ram_lfe::RegisterRamLfeProgramPolicy,
+        iroha_data_model::isi::ram_lfe::ActivateRamLfeProgramPolicy,
+        iroha_data_model::isi::ram_lfe::DeactivateRamLfeProgramPolicy,
+    ) {
+        return true;
+    }
+
+    // Public-validator mutations have the explicit CanManagePeers gate above.
+    if is_any!(
+        iroha_data_model::isi::staking::RegisterPublicLaneValidator,
+        iroha_data_model::isi::staking::ActivatePublicLaneValidator,
+        iroha_data_model::isi::staking::ExitPublicLaneValidator,
+    ) {
+        return true;
+    }
+
+    // The Initial executor is a deliberately narrow CBDC bootstrap profile.
+    // Proof-bound social, endorsement, ZK, and Musubi operations are not part of
+    // the PK release surface and remain closed until an installed executor
+    // explicitly admits them.
+    false
+}
+
+#[allow(clippy::too_many_lines)]
+fn validate_initial_native_instruction_authority(
+    state_transaction: &StateTransaction<'_, '_>,
+    authority: &AccountId,
+    instruction: &InstructionBox,
+    is_genesis: bool,
+) -> Result<(), ValidationFail> {
+    use iroha_data_model::isi::{BurnBox, MintBox, RegisterBox, UnregisterBox};
+
+    let any = instruction.as_any();
+    let deny = |message: &'static str| Err(ValidationFail::NotPermitted(message.to_owned()));
+
+    // Direct multisig mutations are accepted only from the account being changed
+    // (including its active rekey lineage), or from an exact controller delegate.
+    // The transaction layer still applies the native multisig proposal/quorum flow
+    // before the instruction reaches this gate.
+    let direct_multisig_target = any
+        .downcast_ref::<iroha_data_model::isi::AddSignatory>()
+        .map(|instruction| &instruction.account)
+        .or_else(|| {
+            any.downcast_ref::<iroha_data_model::isi::RemoveSignatory>()
+                .map(|instruction| &instruction.account)
+        })
+        .or_else(|| {
+            any.downcast_ref::<iroha_data_model::isi::SetAccountQuorum>()
+                .map(|instruction| &instruction.account)
+        });
+    if let Some(target) = direct_multisig_target
+        && !is_genesis
+        && !initial_accounts_share_active_lineage(state_transaction, authority, target)?
+        && !can_replace_account_controller_initial(state_transaction, authority, target)?
+    {
+        return deny("authority cannot mutate another account's multisig controller");
+    }
+
+    if let Some(set_parameter) = any.downcast_ref::<iroha_data_model::isi::SetParameter>() {
+        if matches!(
+            set_parameter.inner(),
+            iroha_data_model::parameter::Parameter::Custom(parameter)
+                if parameter.id().name().as_ref() == "sccp_registry_v1"
+        ) {
+            return deny(
+                "the reserved SCCP registry cannot be changed through SetParameter; use route governance",
+            );
+        }
+        if is_genesis
+            || initial_authority_has_exact_permission(
+                state_transaction,
+                authority,
+                executor_permission::parameter::CanSetParameters.into(),
+            )?
+        {
+            return Ok(());
+        }
+        return deny("Can't set network parameters without CanSetParameters");
+    }
+
+    if any
+        .downcast_ref::<iroha_data_model::isi::Upgrade>()
+        .is_some()
+    {
+        if is_genesis
+            || initial_authority_has_exact_permission(
+                state_transaction,
+                authority,
+                executor_permission::executor::CanUpgradeExecutor.into(),
+            )?
+        {
+            return Ok(());
+        }
+        return deny("Can't upgrade executor without CanUpgradeExecutor");
+    }
+
+    // The default executor does not admit these authority-free administrative
+    // instructions. Genesis may seed their state, but post-genesis callers must use
+    // the corresponding governed lifecycle instead of falling through Core Execute.
+    let default_denied_administrative_instruction = any
+        .downcast_ref::<iroha_data_model::isi::governance::FinalizeReferendum>()
+        .is_some()
+        || any
+            .downcast_ref::<iroha_data_model::isi::soradns::PublishDirectory>()
+            .is_some()
+        || any
+            .downcast_ref::<iroha_data_model::isi::soradns::RevokeResolver>()
+            .is_some()
+        || any
+            .downcast_ref::<iroha_data_model::isi::soradns::UnrevokeResolver>()
+            .is_some()
+        || any
+            .downcast_ref::<iroha_data_model::isi::soradns::AddReleaseSigner>()
+            .is_some()
+        || any
+            .downcast_ref::<iroha_data_model::isi::soradns::RemoveReleaseSigner>()
+            .is_some()
+        || any
+            .downcast_ref::<iroha_data_model::isi::soradns::SetDirectoryRotationPolicy>()
+            .is_some()
+        || any
+            .downcast_ref::<iroha_data_model::isi::sns::TransferSnsName>()
+            .is_some()
+        || any
+            .downcast_ref::<iroha_data_model::isi::sns::UnfreezeSnsName>()
+            .is_some()
+        || any
+            .downcast_ref::<iroha_data_model::isi::content::PublishContentBundle>()
+            .is_some()
+        || any
+            .downcast_ref::<iroha_data_model::isi::content::RetireContentBundle>()
+            .is_some()
+        || any
+            .downcast_ref::<iroha_data_model::isi::zk::RegisterZkAsset>()
+            .is_some()
+        || any
+            .downcast_ref::<iroha_data_model::isi::zk::RegisterAssetHiddenZkPool>()
+            .is_some()
+        || any
+            .downcast_ref::<iroha_data_model::isi::zk::ScheduleConfidentialPolicyTransition>()
+            .is_some()
+        || any
+            .downcast_ref::<iroha_data_model::isi::zk::CancelConfidentialPolicyTransition>()
+            .is_some()
+        || any
+            .downcast_ref::<iroha_data_model::isi::staking::SlashPublicLaneValidator>()
+            .is_some()
+        || any
+            .downcast_ref::<iroha_data_model::isi::staking::CancelConsensusEvidencePenalty>()
+            .is_some()
+        || any
+            .downcast_ref::<iroha_data_model::isi::staking::RecordPublicLaneRewards>()
+            .is_some();
+    if !is_genesis && default_denied_administrative_instruction {
+        return deny("administrative instruction requires an explicit governed lifecycle");
+    }
+
+    let mutates_public_validator_lifecycle = any
+        .downcast_ref::<iroha_data_model::isi::staking::RegisterPublicLaneValidator>()
+        .is_some()
+        || any
+            .downcast_ref::<iroha_data_model::isi::staking::ActivatePublicLaneValidator>()
+            .is_some()
+        || any
+            .downcast_ref::<iroha_data_model::isi::staking::ExitPublicLaneValidator>()
+            .is_some();
+    if mutates_public_validator_lifecycle
+        && !is_genesis
+        && !initial_authority_has_exact_permission(
+            state_transaction,
+            authority,
+            executor_permission::peer::CanManagePeers.into(),
+        )?
+    {
+        return deny("public validator lifecycle requires CanManagePeers");
+    }
+
+    if any
+        .downcast_ref::<iroha_data_model::isi::register::RegisterPeerWithPop>()
+        .is_some()
+        && !is_genesis
+        && !initial_authority_has_exact_permission(
+            state_transaction,
+            authority,
+            executor_permission::peer::CanManagePeers.into(),
+        )?
+    {
+        return deny("peer registration requires CanManagePeers");
+    }
+
+    if let Some(register) = any.downcast_ref::<RegisterBox>() {
+        let allowed = match register {
+            RegisterBox::Peer(_) => {
+                is_genesis
+                    || initial_authority_has_exact_permission(
+                        state_transaction,
+                        authority,
+                        executor_permission::peer::CanManagePeers.into(),
+                    )?
+            }
+            RegisterBox::Domain(_) => {
+                is_genesis
+                    || initial_authority_has_exact_permission(
+                        state_transaction,
+                        authority,
+                        executor_permission::domain::CanRegisterDomain.into(),
+                    )?
+            }
+            RegisterBox::Nft(register) => can_register_nft_initial(
+                state_transaction,
+                authority,
+                register.object().id().domain(),
+            )?,
+            RegisterBox::Account(_)
+            | RegisterBox::AssetDefinition(_)
+            | RegisterBox::Role(_)
+            | RegisterBox::Trigger(_) => true,
+        };
+        if !allowed {
+            return deny("authority cannot register this resource");
+        }
+    }
+
+    if let Some(unregister) = any.downcast_ref::<UnregisterBox>() {
+        let allowed = match unregister {
+            UnregisterBox::Peer(_) => {
+                is_genesis
+                    || initial_authority_has_exact_permission(
+                        state_transaction,
+                        authority,
+                        executor_permission::peer::CanManagePeers.into(),
+                    )?
+            }
+            UnregisterBox::Domain(unregister) => {
+                is_genesis
+                    || can_unregister_domain_initial(
+                        state_transaction,
+                        authority,
+                        unregister.object(),
+                    )?
+            }
+            UnregisterBox::Account(unregister) => {
+                is_genesis
+                    || can_unregister_account_initial(
+                        state_transaction,
+                        authority,
+                        unregister.object(),
+                    )?
+            }
+            UnregisterBox::AssetDefinition(unregister) => {
+                is_genesis
+                    || can_unregister_asset_definition_initial(
+                        state_transaction,
+                        authority,
+                        unregister.object(),
+                    )?
+            }
+            UnregisterBox::Nft(unregister) => {
+                is_genesis
+                    || can_unregister_nft_initial(
+                        state_transaction,
+                        authority,
+                        unregister.object(),
+                    )?
+            }
+            UnregisterBox::Trigger(unregister) => {
+                is_genesis
+                    || can_unregister_trigger_initial(
+                        state_transaction,
+                        authority,
+                        unregister.object(),
+                    )?
+            }
+            UnregisterBox::Role(_) => true,
+        };
+        if !allowed {
+            return deny("authority cannot remove this resource");
+        }
+    }
+
+    if let Some(mint) = any.downcast_ref::<MintBox>()
+        && let MintBox::TriggerRepetitions(mint) = mint
+        && !is_genesis
+        && !can_modify_trigger_initial(state_transaction, authority, mint.destination())?
+    {
+        return deny("authority cannot modify trigger repetitions");
+    }
+
+    if let Some(burn) = any.downcast_ref::<BurnBox>() {
+        let allowed = match burn {
+            BurnBox::Asset(burn) => {
+                is_genesis
+                    || can_burn_asset_initial(state_transaction, authority, burn.destination())?
+            }
+            BurnBox::TriggerRepetitions(burn) => {
+                is_genesis
+                    || can_modify_trigger_initial(state_transaction, authority, burn.destination())?
+            }
+        };
+        if !allowed {
+            return deny("authority cannot burn this resource");
+        }
+    }
+
+    if let Some(execute) = any.downcast_ref::<iroha_data_model::isi::ExecuteTrigger>()
+        && !is_genesis
+        && !can_execute_trigger_initial(state_transaction, authority, execute.trigger())?
+    {
+        return deny("authority cannot execute this trigger");
+    }
+
+    if let Some(set) = any.downcast_ref::<SetKeyValueBox>() {
+        let allowed = match set {
+            SetKeyValueBox::Domain(set) => {
+                is_genesis
+                    || can_modify_domain_metadata_initial(
+                        state_transaction,
+                        authority,
+                        set.object(),
+                    )?
+            }
+            SetKeyValueBox::Account(set) => {
+                if crate::smartcontracts::isi::multisig::is_reserved_multisig_metadata_key(
+                    set.key(),
+                ) {
+                    return deny("native multisig metadata keys cannot be changed directly");
+                }
+                is_genesis
+                    || can_modify_account_metadata(
+                        &state_transaction.world,
+                        authority,
+                        set.object(),
+                    )?
+            }
+            SetKeyValueBox::AssetDefinition(set) => {
+                is_genesis
+                    || can_modify_asset_definition_metadata(
+                        &state_transaction.world,
+                        authority,
+                        set.object(),
+                    )?
+            }
+            SetKeyValueBox::Nft(set) => {
+                is_genesis
+                    || can_modify_nft_metadata_initial(state_transaction, authority, set.object())?
+            }
+            SetKeyValueBox::Trigger(set) => {
+                is_genesis
+                    || can_modify_trigger_metadata_initial(
+                        state_transaction,
+                        authority,
+                        set.object(),
+                    )?
+            }
+        };
+        if !allowed {
+            return deny("authority cannot modify this metadata");
+        }
+    }
+
+    if let Some(remove) = any.downcast_ref::<RemoveKeyValueBox>() {
+        let allowed = match remove {
+            RemoveKeyValueBox::Domain(remove) => {
+                is_genesis
+                    || can_modify_domain_metadata_initial(
+                        state_transaction,
+                        authority,
+                        remove.object(),
+                    )?
+            }
+            RemoveKeyValueBox::Account(remove) => {
+                if crate::smartcontracts::isi::multisig::is_reserved_multisig_metadata_key(
+                    remove.key(),
+                ) {
+                    return deny("native multisig metadata keys cannot be changed directly");
+                }
+                is_genesis
+                    || can_modify_account_metadata(
+                        &state_transaction.world,
+                        authority,
+                        remove.object(),
+                    )?
+            }
+            RemoveKeyValueBox::AssetDefinition(remove) => {
+                is_genesis
+                    || can_modify_asset_definition_metadata(
+                        &state_transaction.world,
+                        authority,
+                        remove.object(),
+                    )?
+            }
+            RemoveKeyValueBox::Nft(remove) => {
+                is_genesis
+                    || can_modify_nft_metadata_initial(
+                        state_transaction,
+                        authority,
+                        remove.object(),
+                    )?
+            }
+            RemoveKeyValueBox::Trigger(remove) => {
+                is_genesis
+                    || can_modify_trigger_metadata_initial(
+                        state_transaction,
+                        authority,
+                        remove.object(),
+                    )?
+            }
+        };
+        if !allowed {
+            return deny("authority cannot remove this metadata");
+        }
+    }
+
+    if let Some(set) = any.downcast_ref::<iroha_data_model::isi::SetAssetKeyValue>()
+        && !is_genesis
+        && !can_modify_asset_metadata_initial(state_transaction, authority, set.asset())?
+    {
+        return deny("authority cannot modify this asset metadata");
+    }
+    if let Some(remove) = any.downcast_ref::<iroha_data_model::isi::RemoveAssetKeyValue>()
+        && !is_genesis
+        && !can_modify_asset_metadata_initial(state_transaction, authority, remove.asset())?
+    {
+        return deny("authority cannot remove this asset metadata");
+    }
+
+    let recovery_account = any
+        .downcast_ref::<iroha_data_model::isi::ReplaceAccountController>()
+        .map(|instruction| instruction.account())
+        .or_else(|| {
+            any.downcast_ref::<iroha_data_model::isi::SetAccountRecoveryPolicy>()
+                .map(|instruction| instruction.account())
+        })
+        .or_else(|| {
+            any.downcast_ref::<iroha_data_model::isi::ClearAccountRecoveryPolicy>()
+                .map(|instruction| instruction.account())
+        });
+    if let Some(account) = recovery_account
+        && !is_genesis
+        && !can_replace_account_controller_initial(state_transaction, authority, account)?
+    {
+        return deny("authority cannot replace another account's controller or recovery policy");
+    }
+
+    if let Some(set_alias) =
+        any.downcast_ref::<iroha_data_model::isi::asset_alias::SetAssetDefinitionAlias>()
+        && !is_genesis
+        && !authority_owns_asset_definition(
+            &state_transaction.world,
+            authority,
+            &set_alias.asset_definition_id,
+        )?
+    {
+        return deny("only the asset-definition owner may change its alias");
+    }
+    if let Some(set_policy) =
+        any.downcast_ref::<iroha_data_model::isi::asset_alias::SetAssetDefinitionBalancePolicy>()
+        && !is_genesis
+        && !authority_owns_asset_definition(
+            &state_transaction.world,
+            authority,
+            &set_policy.asset_definition_id,
+        )?
+    {
+        return deny("only the asset-definition owner may change its balance policy");
+    }
+
+    if !is_genesis && !initial_native_instruction_is_explicitly_admitted(instruction) {
+        return Err(ValidationFail::NotPermitted(format!(
+            "Initial executor does not admit unclassified native instruction `{}`",
+            instruction.id()
+        )));
+    }
+
+    Ok(())
+}
+
+fn authority_owns_asset_definition(
+    world: &impl WorldReadOnly,
+    authority: &AccountId,
+    asset_definition_id: &AssetDefinitionId,
+) -> Result<bool, ValidationFail> {
+    world
+        .asset_definition(asset_definition_id)
+        .map(|definition| definition.owned_by() == authority)
+        .map_err(|err| ValidationFail::InstructionFailed(InstructionExecutionError::Find(err)))
+}
+
+fn can_mint_asset(
+    world: &impl WorldReadOnly,
+    authority: &AccountId,
+    asset_id: &AssetId,
+) -> Result<bool, ValidationFail> {
+    if authority_owns_asset_definition(world, authority, asset_id.definition())? {
+        return Ok(true);
+    }
+    let by_definition: Permission = executor_permission::asset::CanMintAssetWithDefinition {
+        asset_definition: asset_id.definition().clone(),
+    }
+    .into();
+    if authority_has_permission(world, authority, &by_definition)? {
+        return Ok(true);
+    }
+    let exact_asset: Permission = executor_permission::asset::CanMintAsset {
+        asset: asset_id.clone(),
+    }
+    .into();
+    authority_has_permission(world, authority, &exact_asset)
+}
+
+fn can_modify_asset_definition_metadata(
+    world: &impl WorldReadOnly,
+    authority: &AccountId,
+    asset_definition_id: &AssetDefinitionId,
+) -> Result<bool, ValidationFail> {
+    if authority_owns_asset_definition(world, authority, asset_definition_id)? {
+        return Ok(true);
+    }
+    let required: Permission =
+        executor_permission::asset_definition::CanModifyAssetDefinitionMetadata {
+            asset_definition: asset_definition_id.clone(),
+        }
+        .into();
+    authority_has_permission(world, authority, &required)
 }
 
 pub(crate) fn enforce_contract_entrypoint_permission(
@@ -7719,6 +9463,7 @@ fn instruction_has_concrete_type<T: 'static>(instruction: &InstructionBox) -> bo
 
 const INITIAL_EXECUTOR_PERMISSION_NAMES: &[&str] = &[
     "CanManagePeers",
+    "CanManageLaneRelayEmergency",
     "CanRegisterDomain",
     "CanUnregisterDomain",
     "CanModifyDomainMetadata",
@@ -7727,6 +9472,11 @@ const INITIAL_EXECUTOR_PERMISSION_NAMES: &[&str] = &[
     "CanRegisterAccount",
     "CanUnregisterAccount",
     "CanModifyAccountMetadata",
+    "CanReplaceAccountController",
+    "CanManageAccountAlias",
+    "CanDelegateAccountAliasResolution",
+    "CanResolveAccountAlias",
+    "CanReadRestrictedDataspace",
     "CanMintAssetWithDefinition",
     "CanBurnAssetWithDefinition",
     "CanTransferAssetWithDefinition",
@@ -7735,6 +9485,9 @@ const INITIAL_EXECUTOR_PERMISSION_NAMES: &[&str] = &[
     "CanTransferAsset",
     "CanModifyAssetMetadataWithDefinition",
     "CanModifyAssetMetadata",
+    "CanSetAssetTransferFreeze",
+    "CanSetAssetTransferDailyLimit",
+    "CanManageZkAceIdentityForAccount",
     "CanRegisterNft",
     "CanUnregisterNft",
     "CanTransferNft",
@@ -7745,15 +9498,25 @@ const INITIAL_EXECUTOR_PERMISSION_NAMES: &[&str] = &[
     "CanExecuteTrigger",
     "CanModifyTriggerMetadata",
     "CanSetParameters",
+    "CanManageSccpGovernance",
+    "CanProposeSccpRouteGovernance",
+    "CanManageOfflineEscrow",
+    "CanActivateKagemushaRecursiveReleaseV4",
+    "CanManageOfflineDeviceAttestationPolicy",
     "CanManageRoles",
     "CanUpgradeExecutor",
     "CanRegisterSmartContractCode",
+    "CanInvokeContractEntrypoint",
+    "CanManageFxCorridors",
+    "CanSetFxCorridorPolicy",
+    "CanSettleFxCorridor",
     "CanPublishSpaceDirectoryManifest",
     "CanPublishSpaceDirectoryManifestForUaid",
     "CanPublishSpaceDirectoryManifestForAccountDomain",
     "CanUseFeeSponsor",
     "CanUseFeeSponsorForAccount",
     "CanEnrollFeeSponsorPolicyForAccountDomain",
+    "CanManageFeeSponsorPolicy",
     "CanProposeContractDeployment",
     "CanSubmitGovernanceBallot",
     "CanEnactGovernance",
@@ -7771,12 +9534,21 @@ const INITIAL_EXECUTOR_PERMISSION_NAMES: &[&str] = &[
     "CanIssueSorafsReplicationOrder",
     "CanCompleteSorafsReplicationOrder",
     "CanSetSorafsPricing",
+    "CanManageSorafsModeration",
+    "CanManageSorafsPopRegistry",
+    "CanOperateSorafsPopIssuer",
     "CanUpsertSorafsProviderCredit",
     "CanOperateSorafsRepair",
     "CanRegisterSorafsProviderOwner",
     "CanUnregisterSorafsProviderOwner",
     "CanSetMusubiShortAlias",
     "CanIngestSoranetPrivacy",
+    "CanRegisterOracleFeed",
+    "CanProposeOracleChange",
+    "CanVoteOracleChangeStage",
+    "CanRollbackOracleChange",
+    "CanResolveOracleDispute",
+    "CanManageTwitterBindings",
     "CanResolveEscrowDispute",
 ];
 
@@ -7827,7 +9599,9 @@ pub(crate) fn ensure_asset_definition_registration_allowed(
     }
 
     let Some(domain_id) = reg_asset_definition.object().id().try_domain() else {
-        return Ok(());
+        return Err(ValidationFail::NotPermitted(
+            "domainless asset definitions may only be registered in genesis".to_owned(),
+        ));
     };
 
     let domain_owner = state_transaction
@@ -8438,6 +10212,158 @@ mod tests {
         AccountId::new(checked_keypair().public_key().clone())
     }
 
+    #[test]
+    fn initial_account_lineage_requires_live_explicit_account_id_rekey_provenance() {
+        use iroha_data_model::{
+            account::{
+                AccountAddress,
+                rekey::{AccountAlias, AccountRekeyRecord, AccountRekeyTransitionProvenance},
+            },
+            nexus::{DataSpaceCatalog, DataSpaceId},
+            sns::{NameControllerV1, NameRecordV1, NameStatus, NameTombstoneStateV1},
+        };
+
+        let retired = checked_account_id();
+        let active = checked_account_id();
+        let unrelated = checked_account_id();
+        let mut world = World::with(
+            [],
+            [
+                Account::new(active.clone()).build(&active),
+                Account::new(unrelated.clone()).build(&active),
+            ],
+            [],
+        );
+        let alias = AccountAlias::domainless(
+            "executor-lineage".parse().expect("alias label"),
+            DataSpaceId::UNIVERSAL,
+        );
+        let selector = crate::sns::selector_for_account_alias(&alias, &DataSpaceCatalog::default())
+            .expect("alias selector");
+        let address = AccountAddress::from_account_id(&active).expect("active account address");
+        let mut lease = NameRecordV1::new(
+            selector.clone(),
+            active.clone(),
+            vec![NameControllerV1::account(&address)],
+            0,
+            0,
+            100,
+            200,
+            300,
+            Metadata::default(),
+        );
+        let storage_key = crate::sns::record_storage_key(&selector);
+        world
+            .smart_contract_state_mut_for_testing()
+            .insert(storage_key.clone(), lease.encode());
+        world.account_aliases.insert(alias.clone(), active.clone());
+        let canonical = AccountRekeyRecord::new(alias.clone(), retired.clone())
+            .repoint_for_account_id_rekey(active.clone())
+            .expect("canonical account-id rekey fixture");
+        world
+            .account_rekey_records
+            .insert(alias.clone(), canonical.clone());
+
+        let state = State::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            query::store::LiveQueryStore::start_test(),
+        );
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 50, 0));
+        let mut state_transaction = block.transaction();
+
+        assert!(
+            initial_accounts_share_active_lineage(&state_transaction, &retired, &active)
+                .expect("lineage check")
+        );
+        assert!(
+            initial_accounts_share_active_lineage(&state_transaction, &active, &retired)
+                .expect("reverse lineage check")
+        );
+        assert!(
+            !initial_accounts_share_active_lineage(&state_transaction, &unrelated, &active)
+                .expect("unrelated lineage check")
+        );
+
+        lease.status = NameStatus::Tombstoned(NameTombstoneStateV1 {
+            reason: "revoked".to_owned(),
+        });
+        state_transaction
+            .world
+            .smart_contract_state
+            .insert(storage_key.clone(), lease.encode());
+        assert!(
+            !initial_accounts_share_active_lineage(&state_transaction, &retired, &active)
+                .expect("revoked lineage check")
+        );
+
+        lease.status = NameStatus::Active;
+        lease.expires_at_ms = 40;
+        lease.grace_expires_at_ms = 45;
+        lease.redemption_expires_at_ms = 50;
+        state_transaction
+            .world
+            .smart_contract_state
+            .insert(storage_key.clone(), lease.encode());
+        assert!(
+            !initial_accounts_share_active_lineage(&state_transaction, &retired, &active)
+                .expect("stale lineage check")
+        );
+
+        lease.expires_at_ms = 100;
+        lease.grace_expires_at_ms = 200;
+        lease.redemption_expires_at_ms = 300;
+        state_transaction
+            .world
+            .smart_contract_state
+            .insert(storage_key, lease.encode());
+        state_transaction.world.account_rekey_records.insert(
+            alias.clone(),
+            AccountRekeyRecord::new(alias.clone(), retired.clone())
+                .reassign_alias_to_account(active.clone())
+                .expect("alias reassignment fixture"),
+        );
+        assert!(
+            !initial_accounts_share_active_lineage(&state_transaction, &retired, &active)
+                .expect("alias reassignment lineage check")
+        );
+
+        let mut cyclic = canonical;
+        cyclic.previous_account_ids.push(active.clone());
+        cyclic
+            .transition_provenance
+            .push(AccountRekeyTransitionProvenance::AccountIdRekey);
+        state_transaction
+            .world
+            .account_rekey_records
+            .insert(alias, cyclic);
+        assert!(
+            !initial_accounts_share_active_lineage(&state_transaction, &retired, &active)
+                .expect("malformed lineage check")
+        );
+    }
+
+    macro_rules! concrete_instruction_box {
+        ($instruction_ty:ty, $instruction:expr) => {{
+            let instruction: $instruction_ty = $instruction;
+            let registry =
+                iroha_data_model::isi::InstructionRegistry::new().register::<$instruction_ty>();
+            let (payload, flags) = norito::codec::encode_with_header_flags(&instruction);
+            let framed =
+                norito::core::frame_bare_with_header_flags::<$instruction_ty>(&payload, flags)
+                    .expect("frame concrete instruction");
+            let decoded = registry
+                .decode(core::any::type_name::<$instruction_ty>(), &framed)
+                .expect("concrete instruction type is registered")
+                .expect("decode concrete instruction");
+            assert!(
+                decoded.as_any().is::<$instruction_ty>(),
+                "test fixture must preserve the concrete instruction dynamic shape",
+            );
+            decoded
+        }};
+    }
+
     fn contract_deployment_permission() -> Permission {
         executor_permission::smart_contract::CanRegisterSmartContractCode.into()
     }
@@ -8631,6 +10557,33 @@ mod tests {
             &authority,
             &sign(shifted)
         ));
+
+        let mut atomic_deployment = exact.clone();
+        atomic_deployment.push(
+            iroha_data_model::isi::smart_contract_code::CommitContractDeployment {
+                expected_deploy_nonce: 0,
+                contract_address: ContractAddress::derive(
+                    iroha_data_model::account::address::chain_discriminant(),
+                    &authority,
+                    0,
+                    DataSpaceId::UNIVERSAL,
+                )
+                .expect("atomic deployment address"),
+                code_hash,
+                contract_alias: "payments::universal".parse().expect("contract alias"),
+                lease_expiry_ms: None,
+                expected_previous_contract_address: None,
+            }
+            .into(),
+        );
+        assert!(
+            !allows_contract_deployment_self_bootstrap(
+                &world.view(),
+                &authority,
+                &sign(atomic_deployment)
+            ),
+            "atomic deployment must require an authority that existed before the transaction"
+        );
 
         let proved_transaction = TransactionBuilder::new(chain, authority.clone())
             .with_executable(Executable::IvmProved(
@@ -9125,7 +11078,15 @@ mod tests {
             Grant::account_permission(malformed, authority.clone()).into(),
             Revoke::account_permission(canonical.clone(), authority.clone()).into(),
             Grant::role_permission(canonical.clone(), role_id.clone()).into(),
-            Revoke::role_permission(canonical.clone(), role_id).into(),
+            Revoke::role_permission(canonical.clone(), role_id.clone()).into(),
+            concrete_instruction_box!(
+                Grant<Permission, Account>,
+                Grant::account_permission(canonical.clone(), authority.clone())
+            ),
+            concrete_instruction_box!(
+                Revoke<Permission, Role>,
+                Revoke::role_permission(canonical.clone(), role_id)
+            ),
         ] {
             let error = super::Executor::Initial
                 .execute_instruction(&mut state_transaction, &authority, instruction)
@@ -9141,6 +11102,510 @@ mod tests {
             .cloned()
             .collect();
         assert_eq!(stored, BTreeSet::from([canonical]));
+    }
+
+    #[test]
+    fn initial_executor_denies_post_genesis_governed_offline_self_grants() {
+        let authority = checked_account_id();
+        let account = Account::new(authority.clone()).build(&authority);
+        let state = State::new_for_testing(
+            World::with([], [account], []),
+            Kura::blank_kura_for_testing(),
+            query::store::LiveQueryStore::start_test(),
+        );
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+        let mut state_transaction = block.transaction();
+
+        for name in [
+            "CanManageOfflineEscrow",
+            "CanActivateKagemushaRecursiveReleaseV4",
+            "CanManageOfflineDeviceAttestationPolicy",
+        ] {
+            let permission = Permission::new(name.to_owned(), Json::new(()));
+            let instruction =
+                Grant::account_permission(permission.clone(), authority.clone()).into();
+            let error = super::Executor::Initial
+                .execute_instruction(&mut state_transaction, &authority, instruction)
+                .expect_err("an unprivileged account must not self-grant governed offline power");
+            assert!(
+                matches!(error, ValidationFail::NotPermitted(_)),
+                "unexpected {name} self-grant rejection: {error:?}",
+            );
+            assert!(
+                !state_transaction
+                    .world
+                    .account_permissions_iter(&authority)
+                    .expect("authority permissions")
+                    .any(|stored| stored == &permission),
+                "rejected {name} self-grant must not mutate world state",
+            );
+        }
+    }
+
+    #[test]
+    fn initial_executor_denies_chain_and_foreign_controller_takeover_paths() {
+        let attacker = checked_account_id();
+        let victim = checked_account_id();
+        let world = World::with(
+            [],
+            [
+                Account::new(attacker.clone()).build(&attacker),
+                Account::new(victim.clone()).build(&victim),
+            ],
+            [],
+        );
+        let state = State::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            query::store::LiveQueryStore::start_test(),
+        );
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+        let mut state_transaction = block.transaction();
+        let custom_id: CustomParameterId = "attacker_parameter".parse().expect("parameter id");
+        let set_parameter = iroha_data_model::isi::SetParameter::new(
+            iroha_data_model::parameter::Parameter::Custom(CustomParameter::new(
+                custom_id,
+                Json::new(1_u32),
+            )),
+        );
+        let upgrade = iroha_data_model::isi::Upgrade::new(data_model_executor::Executor::new(
+            IvmBytecode::from_compiled(generate_denied_program("attacker executor")),
+        ));
+        let foreign_signatory = checked_keypair().public_key().clone();
+
+        let instructions: Vec<InstructionBox> = vec![
+            set_parameter.into(),
+            upgrade.into(),
+            iroha_data_model::isi::AddSignatory::new(victim.clone(), foreign_signatory.clone())
+                .into(),
+            iroha_data_model::isi::RemoveSignatory::new(victim.clone(), foreign_signatory).into(),
+            iroha_data_model::isi::SetAccountQuorum::new(
+                victim.clone(),
+                std::num::NonZeroU16::new(1).expect("quorum"),
+            )
+            .into(),
+            iroha_data_model::isi::governance::FinalizeReferendum {
+                referendum_id: "attacker-forced-finalization".to_owned(),
+                proposal_id: [0xA5; 32],
+            }
+            .into(),
+        ];
+
+        for instruction in instructions {
+            let error = super::Executor::Initial
+                .execute_instruction(&mut state_transaction, &attacker, instruction)
+                .expect_err(
+                    "an ordinary account must not mutate chain policy or a foreign controller",
+                );
+            assert!(
+                matches!(error, ValidationFail::NotPermitted(_)),
+                "{error:?}"
+            );
+        }
+        assert!(matches!(
+            &*state_transaction.world.executor,
+            super::Executor::Initial
+        ));
+        assert!(state_transaction.world.account(&victim).is_ok());
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn initial_executor_authorizes_every_permission_and_role_mutation_path() {
+        let attacker = checked_account_id();
+        let administrator = checked_account_id();
+        let attacker_account = Account::new(attacker.clone()).build(&attacker);
+        let administrator_account = Account::new(administrator.clone()).build(&administrator);
+        let ordinary_permission: Permission =
+            executor_permission::parameter::CanSetParameters.into();
+        let offline_permission: Permission =
+            executor_permission::offline::CanManageOfflineEscrow.into();
+        let mut world = World::with([], [attacker_account, administrator_account], []);
+        world.account_permissions.insert(
+            administrator.clone(),
+            BTreeSet::from([ordinary_permission.clone(), offline_permission.clone()]),
+        );
+        let state = State::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            query::store::LiveQueryStore::start_test(),
+        );
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+        let mut state_transaction = block.transaction();
+
+        let ordinary_role: RoleId = "initial_executor_ordinary_role".parse().expect("role id");
+        Register::role(
+            Role::new(ordinary_role.clone(), administrator.clone())
+                .add_permission(ordinary_permission.clone()),
+        )
+        .execute(&administrator, &mut state_transaction)
+        .expect("seed ordinary role fixture");
+        let offline_role: RoleId = "initial_executor_offline_role".parse().expect("role id");
+        Register::role(
+            Role::new(offline_role.clone(), administrator.clone())
+                .add_permission(offline_permission.clone()),
+        )
+        .execute(&administrator, &mut state_transaction)
+        .expect("seed governed role fixture");
+
+        let denied = [
+            Grant::account_permission(ordinary_permission.clone(), attacker.clone()).into(),
+            Revoke::account_permission(ordinary_permission.clone(), administrator.clone()).into(),
+            Grant::role_permission(ordinary_permission.clone(), ordinary_role.clone()).into(),
+            Revoke::role_permission(ordinary_permission.clone(), ordinary_role.clone()).into(),
+            Grant::account_role(ordinary_role.clone(), attacker.clone()).into(),
+            Revoke::account_role(ordinary_role.clone(), administrator.clone()).into(),
+            Unregister::role(ordinary_role.clone()).into(),
+        ];
+        for instruction in denied {
+            super::Executor::Initial
+                .execute_instruction(&mut state_transaction, &attacker, instruction)
+                .expect_err("an unprivileged authority must not mutate permissions or roles");
+        }
+        assert!(
+            !state_transaction
+                .world
+                .account_permissions_iter(&attacker)
+                .expect("attacker permissions")
+                .any(|permission| permission == &ordinary_permission)
+        );
+        assert!(!authority_has_role(
+            &state_transaction.world,
+            &attacker,
+            &ordinary_role
+        ));
+
+        super::Executor::Initial
+            .execute_instruction(
+                &mut state_transaction,
+                &administrator,
+                Grant::account_permission(ordinary_permission.clone(), attacker.clone()).into(),
+            )
+            .expect("an exact holder may delegate an ordinary exact permission");
+        assert!(
+            state_transaction
+                .world
+                .account_permissions_iter(&attacker)
+                .expect("attacker permissions")
+                .any(|permission| permission == &ordinary_permission)
+        );
+
+        for instruction in [
+            Grant::account_permission(offline_permission.clone(), attacker.clone()).into(),
+            Grant::account_role(offline_role.clone(), attacker.clone()).into(),
+        ] {
+            super::Executor::Initial
+                .execute_instruction(&mut state_transaction, &administrator, instruction)
+                .expect_err(
+                    "genesis-only authority must not be delegated directly or through a role",
+                );
+        }
+        assert!(
+            !state_transaction
+                .world
+                .account_permissions_iter(&attacker)
+                .expect("attacker permissions")
+                .any(|permission| permission == &offline_permission)
+        );
+        assert!(!authority_has_role(
+            &state_transaction.world,
+            &attacker,
+            &offline_role
+        ));
+    }
+
+    #[test]
+    fn initial_executor_restricted_reader_cannot_mutate_direct_or_role_grants() {
+        let holder = checked_account_id();
+        let grant_destination = checked_account_id();
+        let revoke_destination = checked_account_id();
+        let exact: Permission = executor_permission::query::CanReadRestrictedDataspace {
+            dataspace: DataSpaceId::new(10),
+        }
+        .into();
+        let can_manage_roles: Permission = executor_permission::role::CanManageRoles.into();
+        let mut world = World::with(
+            [],
+            [
+                Account::new(holder.clone()).build(&holder),
+                Account::new(grant_destination.clone()).build(&grant_destination),
+                Account::new(revoke_destination.clone()).build(&revoke_destination),
+            ],
+            [],
+        );
+        world.account_permissions.insert(
+            holder.clone(),
+            BTreeSet::from([exact.clone(), can_manage_roles]),
+        );
+        let state = State::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            query::store::LiveQueryStore::start_test(),
+        );
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+        let mut state_transaction = block.transaction();
+
+        let reader_role: RoleId = "restricted_reader_role".parse().expect("role id");
+        Register::role(
+            Role::new(reader_role.clone(), holder.clone()).add_permission(exact.clone()),
+        )
+        .execute(&holder, &mut state_transaction)
+        .expect("seed restricted-reader role fixture");
+        Grant::account_role(reader_role.clone(), revoke_destination.clone())
+            .execute(&holder, &mut state_transaction)
+            .expect("seed revocation membership fixture");
+
+        let empty_role: RoleId = "empty_reader_role".parse().expect("role id");
+        Register::role(Role::new(empty_role.clone(), holder.clone()))
+            .execute(&holder, &mut state_transaction)
+            .expect("seed empty role fixture");
+
+        let attempted_registration: RoleId =
+            "attempted_restricted_reader_role".parse().expect("role id");
+        let denied = [
+            (
+                "direct grant",
+                Grant::account_permission(exact.clone(), grant_destination.clone()).into(),
+            ),
+            (
+                "direct revoke",
+                Revoke::account_permission(exact.clone(), holder.clone()).into(),
+            ),
+            (
+                "role membership grant",
+                Grant::account_role(reader_role.clone(), grant_destination.clone()).into(),
+            ),
+            (
+                "role membership revoke",
+                Revoke::account_role(reader_role.clone(), revoke_destination.clone()).into(),
+            ),
+            (
+                "role permission grant",
+                Grant::role_permission(exact.clone(), empty_role.clone()).into(),
+            ),
+            (
+                "role permission revoke",
+                Revoke::role_permission(exact.clone(), reader_role.clone()).into(),
+            ),
+            (
+                "role registration",
+                InstructionBox::from(RegisterBox::Role(Register::role(
+                    Role::new(attempted_registration.clone(), holder.clone())
+                        .add_permission(exact.clone()),
+                ))),
+            ),
+        ];
+
+        for (path, instruction) in denied {
+            let error = super::Executor::Initial
+                .execute_instruction(&mut state_transaction, &holder, instruction)
+                .expect_err("restricted-read permission mutations must be genesis-only");
+            assert!(matches!(error, ValidationFail::NotPermitted(_)));
+            assert!(
+                error.to_string().contains("CanReadRestrictedDataspace"),
+                "unexpected rejection for {path}: {error}",
+            );
+        }
+
+        let grant_destination_permissions = state_transaction
+            .world
+            .account_permissions_iter(&grant_destination)
+            .expect("grant destination permissions")
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        assert!(!grant_destination_permissions.contains(&exact));
+        assert!(
+            state_transaction
+                .world
+                .account_permissions_iter(&holder)
+                .expect("holder permissions")
+                .any(|permission| permission == &exact),
+            "rejected direct revoke must leave the exact permission in place",
+        );
+        assert!(!authority_has_role(
+            &state_transaction.world,
+            &grant_destination,
+            &reader_role,
+        ));
+        assert!(
+            authority_has_role(&state_transaction.world, &revoke_destination, &reader_role,),
+            "rejected role revoke must leave membership in place",
+        );
+        assert!(
+            !state_transaction
+                .world
+                .roles()
+                .get(&empty_role)
+                .expect("empty role")
+                .permissions()
+                .any(|permission| permission == &exact),
+            "rejected role-permission grant must not mutate the role",
+        );
+        assert!(
+            state_transaction
+                .world
+                .roles()
+                .get(&reader_role)
+                .expect("reader role")
+                .permissions()
+                .any(|permission| permission == &exact),
+            "rejected role-permission revoke must leave the token in place",
+        );
+        assert!(
+            state_transaction
+                .world
+                .roles()
+                .get(&attempted_registration)
+                .is_none(),
+            "rejected role registration must not create the role",
+        );
+    }
+
+    #[test]
+    fn initial_executor_revalidates_every_permission_contained_in_a_role() {
+        let sponsor = checked_account_id();
+        let holder = checked_account_id();
+        let destination = checked_account_id();
+        let world = World::with(
+            [],
+            [
+                Account::new(sponsor.clone()).build(&sponsor),
+                Account::new(holder.clone()).build(&holder),
+                Account::new(destination.clone()).build(&destination),
+            ],
+            [],
+        );
+        let state = State::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            query::store::LiveQueryStore::start_test(),
+        );
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+        let mut state_transaction = block.transaction();
+        let domain = DomainId::try_new("hbl", "sbp").expect("HBL domain");
+        let policy: Name = "retail".parse().expect("retail policy");
+        let sponsor_bound_permissions: [Permission; 4] = [
+            executor_permission::nexus::CanUseFeeSponsor {
+                sponsor: sponsor.clone(),
+                policy: policy.clone(),
+            }
+            .into(),
+            executor_permission::nexus::CanEnrollFeeSponsorPolicyForAccountDomain {
+                sponsor: sponsor.clone(),
+                policy: policy.clone(),
+                domain: domain.clone(),
+            }
+            .into(),
+            executor_permission::nexus::CanManageFeeSponsorPolicy {
+                sponsor: sponsor.clone(),
+            }
+            .into(),
+            executor_permission::nexus::CanUseFeeSponsorForAccount {
+                sponsor,
+                policy,
+                beneficiary: holder.clone(),
+                domain,
+            }
+            .into(),
+        ];
+
+        for (index, permission) in sponsor_bound_permissions.into_iter().enumerate() {
+            let role_id: RoleId = format!("sponsor_bound_role_{index}")
+                .parse()
+                .expect("role id");
+            Register::role(
+                Role::new(role_id.clone(), holder.clone()).add_permission(permission.clone()),
+            )
+            .execute(&holder, &mut state_transaction)
+            .expect("seed legacy sponsor-bound role fixture");
+
+            let error = super::Executor::Initial
+                .execute_instruction(
+                    &mut state_transaction,
+                    &holder,
+                    Grant::account_role(role_id.clone(), destination.clone()).into(),
+                )
+                .expect_err(
+                    "a role holder must not bypass a contained sponsor-bound delegation policy",
+                );
+            assert!(matches!(error, ValidationFail::NotPermitted(_)));
+            assert!(
+                !authority_has_role(&state_transaction.world, &destination, &role_id),
+                "rejected sponsor-bound role delegation must not mutate membership",
+            );
+        }
+
+        let unknown_permission =
+            Permission::new("UnknownLegacyRolePermission".to_owned(), Json::new(()));
+        let unknown_role: RoleId = "unknown_legacy_role".parse().expect("role id");
+        Register::role(
+            Role::new(unknown_role.clone(), holder.clone())
+                .add_permission(unknown_permission.clone()),
+        )
+        .execute(&holder, &mut state_transaction)
+        .expect("seed legacy unknown-permission role fixture");
+        for instruction in [
+            InstructionBox::from(Grant::account_role(
+                unknown_role.clone(),
+                destination.clone(),
+            )),
+            concrete_instruction_box!(
+                Grant<RoleId, Account>,
+                Grant::account_role(unknown_role.clone(), destination.clone())
+            ),
+        ] {
+            let error = super::Executor::Initial
+                .execute_instruction(&mut state_transaction, &holder, instruction)
+                .expect_err("unknown legacy role contents must fail closed");
+            assert!(matches!(error, ValidationFail::NotPermitted(_)));
+            assert!(error.to_string().contains("Unknown permission"));
+        }
+        assert!(!authority_has_role(
+            &state_transaction.world,
+            &destination,
+            &unknown_role,
+        ));
+
+        let ordinary_permission: Permission =
+            executor_permission::parameter::CanSetParameters.into();
+        state_transaction.world.account_permissions.insert(
+            holder.clone(),
+            BTreeSet::from([ordinary_permission.clone()]),
+        );
+        let ordinary_role: RoleId = "ordinary_delegable_role".parse().expect("role id");
+        Register::role(
+            Role::new(ordinary_role.clone(), holder.clone()).add_permission(ordinary_permission),
+        )
+        .execute(&holder, &mut state_transaction)
+        .expect("seed ordinary role fixture");
+        for instruction in [
+            InstructionBox::from(Grant::role_permission(
+                unknown_permission.clone(),
+                ordinary_role.clone(),
+            )),
+            concrete_instruction_box!(
+                Revoke<Permission, Role>,
+                Revoke::role_permission(unknown_permission.clone(), ordinary_role.clone())
+            ),
+        ] {
+            let error = super::Executor::Initial
+                .execute_instruction(&mut state_transaction, &holder, instruction)
+                .expect_err("unknown role-permission mutation must fail closed");
+            assert!(matches!(error, ValidationFail::NotPermitted(_)));
+            assert!(error.to_string().contains("Unknown permission"));
+        }
+        super::Executor::Initial
+            .execute_instruction(
+                &mut state_transaction,
+                &holder,
+                Grant::account_role(ordinary_role.clone(), destination.clone()).into(),
+            )
+            .expect("an exact holder may delegate an ordinary role");
+        assert!(authority_has_role(
+            &state_transaction.world,
+            &destination,
+            &ordinary_role,
+        ));
     }
 
     #[test]
@@ -9164,6 +11629,16 @@ mod tests {
                 iroha_data_model::isi::smart_contract_code::DeactivateContractInstance {
                     contract_address: contract_address.clone(),
                     reason: Some("executor lifecycle guard".to_owned()),
+                },
+            ),
+            InstructionBox::from(
+                iroha_data_model::isi::smart_contract_code::CommitContractDeployment {
+                    expected_deploy_nonce: 404,
+                    contract_address: contract_address.clone(),
+                    code_hash: Hash::new(b"executor-lifecycle-atomic-deployment"),
+                    contract_alias: "payments::universal".parse().expect("contract alias"),
+                    lease_expiry_ms: None,
+                    expected_previous_contract_address: None,
                 },
             ),
         ];
@@ -9199,6 +11674,193 @@ mod tests {
             )
             .expect("ordinary kotoage dispatch is governed by the instruction permission layer");
         }
+    }
+
+    #[test]
+    fn contract_runtime_permission_boundary_precedes_user_executor_dispatch() {
+        let deployer = checked_account_id();
+        let destination = checked_account_id();
+        let contract_address = ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &deployer,
+            505,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("contract address");
+        let contract_subject = contract_address.subject_id();
+        let context = ContractRuntimeExecutionContext {
+            contract_subject: contract_subject.clone(),
+            contract_address: contract_address.clone(),
+            contract_alias: None,
+            entrypoint: "main".to_owned(),
+        };
+        let world = World::with(
+            [],
+            [
+                Account::new(contract_subject.clone()).build(&contract_subject),
+                Account::new(destination.clone()).build(&destination),
+            ],
+            [],
+        );
+        let state = State::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            query::store::LiveQueryStore::start_test(),
+        );
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+        let mut state_transaction = block.transaction();
+        state_transaction.tx_call_hash = Some(Hash::prehashed([0xD8; Hash::LENGTH]));
+        let raw = data_model_executor::Executor::new(IvmBytecode::from_compiled(
+            generate_denied_program("user executor reached"),
+        ));
+        let executor = super::Executor::UserProvided(
+            super::LoadedExecutor::load(raw).expect("load denying executor"),
+        );
+        let role_id: RoleId = "contract_forbidden_role".parse().expect("role id");
+        let role = Role::new(role_id.clone(), destination.clone())
+            .add_permission(executor_permission::parameter::CanSetParameters);
+        let register_role = Register::role(role);
+        let unregister_role = Unregister::role(role_id.clone());
+        let ordinary_permission: Permission =
+            executor_permission::parameter::CanSetParameters.into();
+        let boxed_forbidden = vec![
+            InstructionBox::from(RegisterBox::Role(register_role.clone())),
+            InstructionBox::from(UnregisterBox::Role(unregister_role.clone())),
+            Grant::account_role(role_id.clone(), destination.clone()).into(),
+            Revoke::account_role(role_id.clone(), destination.clone()).into(),
+            Grant::role_permission(ordinary_permission.clone(), role_id.clone()).into(),
+            Revoke::role_permission(ordinary_permission.clone(), role_id.clone()).into(),
+            Grant::account_permission(ordinary_permission.clone(), destination.clone()).into(),
+            Revoke::account_permission(ordinary_permission.clone(), destination.clone()).into(),
+        ];
+        let concrete_forbidden = vec![
+            concrete_instruction_box!(Register<Role>, register_role),
+            concrete_instruction_box!(Unregister<Role>, unregister_role),
+            concrete_instruction_box!(
+                Grant<RoleId, Account>,
+                Grant::account_role(role_id.clone(), destination.clone())
+            ),
+            concrete_instruction_box!(
+                Revoke<RoleId, Account>,
+                Revoke::account_role(role_id.clone(), destination.clone())
+            ),
+            concrete_instruction_box!(
+                Grant<Permission, Role>,
+                Grant::role_permission(ordinary_permission.clone(), role_id.clone())
+            ),
+            concrete_instruction_box!(
+                Revoke<Permission, Role>,
+                Revoke::role_permission(ordinary_permission.clone(), role_id.clone())
+            ),
+            concrete_instruction_box!(
+                Grant<Permission, Account>,
+                Grant::account_permission(ordinary_permission.clone(), destination.clone())
+            ),
+            concrete_instruction_box!(
+                Revoke<Permission, Account>,
+                Revoke::account_permission(ordinary_permission, destination.clone())
+            ),
+        ];
+
+        for instruction in boxed_forbidden.into_iter().chain(concrete_forbidden) {
+            let error = executor
+                .execute_instruction_with_contract_runtime_context(
+                    &mut state_transaction,
+                    &contract_subject,
+                    instruction,
+                    Some(&context),
+                )
+                .expect_err("the common contract boundary must reject before user executor IVM");
+            assert!(
+                !error.to_string().contains("user executor reached"),
+                "forbidden mutation reached the user executor: {error}",
+            );
+            assert!(matches!(error, ValidationFail::NotPermitted(_)));
+        }
+
+        let borrowed_role_grant: InstructionBox =
+            Grant::account_role(role_id, destination.clone()).into();
+        let error = executor
+            .execute_borrowed_overlay_instruction(
+                &mut state_transaction,
+                &contract_subject,
+                &borrowed_role_grant,
+                Some(&context),
+            )
+            .expect_err("the borrowed path must apply the same common contract boundary");
+        assert!(
+            !error.to_string().contains("user executor reached"),
+            "borrowed role mutation reached the user executor: {error}",
+        );
+
+        let exact: Permission = executor_permission::smart_contract::CanInvokeContractEntrypoint {
+            contract: contract_address.clone(),
+            entrypoint: "main".to_owned(),
+        }
+        .into();
+        let error = executor
+            .execute_instruction_with_contract_runtime_context(
+                &mut state_transaction,
+                &contract_subject,
+                Grant::account_permission(exact, destination.clone()).into(),
+                Some(&context),
+            )
+            .expect_err("the denying user executor must receive an exact bound token");
+        assert!(
+            error.to_string().contains("user executor reached"),
+            "an exact bound token should pass the common boundary: {error}",
+        );
+
+        let inconsistent_context = ContractRuntimeExecutionContext {
+            contract_subject: destination.clone(),
+            contract_address: contract_address.clone(),
+            contract_alias: None,
+            entrypoint: "main".to_owned(),
+        };
+        let inconsistent_exact: Permission =
+            executor_permission::smart_contract::CanInvokeContractEntrypoint {
+                contract: contract_address.clone(),
+                entrypoint: "main".to_owned(),
+            }
+            .into();
+        let error = executor
+            .execute_instruction_with_contract_runtime_context(
+                &mut state_transaction,
+                &destination,
+                Grant::account_permission(inconsistent_exact, destination.clone()).into(),
+                Some(&inconsistent_context),
+            )
+            .expect_err("an inconsistent contract subject/address context must fail closed");
+        assert!(
+            !error.to_string().contains("user executor reached"),
+            "inconsistent contract context reached the user executor: {error}",
+        );
+
+        let sibling_address = ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &deployer,
+            506,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("sibling contract address");
+        let sibling: Permission =
+            executor_permission::smart_contract::CanInvokeContractEntrypoint {
+                contract: sibling_address,
+                entrypoint: "main".to_owned(),
+            }
+            .into();
+        let error = executor
+            .execute_instruction_with_contract_runtime_context(
+                &mut state_transaction,
+                &contract_subject,
+                Grant::account_permission(sibling, destination).into(),
+                Some(&context),
+            )
+            .expect_err("a contract may not delegate a sibling contract token");
+        assert!(
+            !error.to_string().contains("user executor reached"),
+            "sibling token reached the user executor: {error}",
+        );
     }
 
     #[test]
@@ -9973,9 +12635,7 @@ mod tests {
 
         let err = execute_instruction_detached(&alice(), &InstructionBox::from(isi), &mut delta)
             .expect_err("peer registration must be unsupported in detached mode");
-        assert!(
-            matches!(err, ValidationFail::InternalError(msg) if msg.contains("peer management"))
-        );
+        assert!(matches!(err, ValidationFail::InternalError(msg) if msg.contains("registration")));
     }
 
     #[test]
@@ -9986,9 +12646,7 @@ mod tests {
 
         let err = execute_instruction_detached(&alice(), &InstructionBox::from(isi), &mut delta)
             .expect_err("peer removal must be unsupported in detached mode");
-        assert!(
-            matches!(err, ValidationFail::InternalError(msg) if msg.contains("peer management"))
-        );
+        assert!(matches!(err, ValidationFail::InternalError(msg) if msg.contains("removal")));
     }
 
     #[test]
@@ -10012,38 +12670,15 @@ mod tests {
     }
 
     #[test]
-    fn detached_nft_metadata_records_delta() {
-        let (bob_id, _bob_kp) = gen_account_in("wonderland");
-        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
-        let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
-        let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
-        let bob_account = Account::new(bob_id.clone()).build(&bob_id);
+    fn detached_nft_metadata_forces_sequential_authorization() {
         let nft_id: NftId = "nft_detached$wonderland.universal".parse().expect("nft id");
-        let nft = Nft::new(nft_id.clone(), Metadata::default()).build(&bob_id);
-
-        let world = World::with_assets([domain], [alice_account, bob_account], [], [], [nft]);
-        let kura = Kura::blank_kura_for_testing();
-        let query_handle = query::store::LiveQueryStore::start_test();
-        let chain: ChainId = "test-chain".parse().unwrap();
-        let state = State::new_with_chain(world, kura, query_handle, chain);
-        let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
-        let mut block = state.block(header);
-
         let key: Name = "meta".parse().expect("key");
-        let set = SetKeyValue::nft(nft_id.clone(), key.clone(), "value");
+        let set = SetKeyValue::nft(nft_id, key, "value");
         let mut delta = crate::state::DetachedStateTransactionDelta::default();
-        execute_instruction_detached(&bob_id, &InstructionBox::from(set), &mut delta)
-            .expect("detached nft metadata should be supported");
-
-        let _ = delta
-            .merge_into(&mut block, &bob_id)
-            .expect("merge succeeds");
-        block.commit().expect("commit");
-
-        let view = state.view();
-        let nft_val = view.world().nfts().get(&nft_id).expect("nft exists");
-        let stored = nft_val.content.get(&key).expect("metadata set");
-        assert_eq!(stored, &Json::from("value"));
+        let error = execute_instruction_detached(&alice(), &InstructionBox::from(set), &mut delta)
+            .expect_err("metadata authorization requires the live sequential world");
+        assert!(matches!(error, ValidationFail::InternalError(message) if
+            message.contains("live authorization") && message.contains("sequential")));
     }
     use std::collections::{BTreeMap, BTreeSet};
 
@@ -10474,7 +13109,11 @@ mod tests {
         let query_handle = query::store::LiveQueryStore::start_test();
         let state = State::new(world, kura, query_handle);
 
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        state
+            .block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0))
+            .commit()
+            .expect("commit bootstrap block");
+        let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
 
         {
@@ -10613,7 +13252,7 @@ mod tests {
     }
 
     #[test]
-    fn initial_executor_allows_registering_opaque_asset_definition_without_domain_projection() {
+    fn initial_executor_rejects_domainless_asset_definition_registration_after_genesis() {
         let alice_id = ALICE_ID.clone();
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let domain: Domain = Domain::new(domain_id.clone()).build(&alice_id);
@@ -10624,7 +13263,11 @@ mod tests {
         let query_handle = query::store::LiveQueryStore::start_test();
         let state = State::new(world, kura, query_handle);
 
-        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        state
+            .block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0))
+            .commit()
+            .expect("commit bootstrap block");
+        let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
 
         let executor = super::Executor::Initial;
@@ -10638,12 +13281,129 @@ mod tests {
         ));
 
         let mut stx = block.transaction();
-        executor
-            .execute_instruction(&mut stx, &alice_id, instruction)
-            .expect("opaque asset definition should not require a domain projection");
+        let result = executor.execute_instruction(&mut stx, &alice_id, instruction);
         assert!(
-            stx.world.asset_definition(&asset_definition_id).is_ok(),
-            "opaque asset definition must be inserted into world state"
+            matches!(
+                result,
+                Err(ValidationFail::NotPermitted(ref message))
+                    if message.contains("domainless asset definitions may only be registered in genesis")
+            ),
+            "post-genesis opaque asset registration must fail closed: {result:?}"
+        );
+        assert!(
+            stx.world.asset_definition(&asset_definition_id).is_err(),
+            "a rejected opaque asset definition must not enter world state"
+        );
+    }
+
+    #[test]
+    fn initial_executor_enforces_exact_pkr_mint_and_metadata_permissions() {
+        let owner = ALICE_ID.clone();
+        let retail = checked_account_id();
+        let domain_id = DomainId::try_new("wonderland", "universal").expect("domain id");
+        let pkr = AssetDefinitionId::from_uuid_bytes([
+            0x5d, 0x9f, 0x4d, 0x8d, 0x11, 0x5a, 0x49, 0xc0, 0x95, 0x3a, 0x6a, 0x9b, 0xe8, 0x22,
+            0x77, 0x01,
+        ])
+        .expect("opaque PKR definition id");
+        let world = World::with(
+            [Domain::new(domain_id).build(&owner)],
+            [
+                Account::new(owner.clone()).build(&owner),
+                Account::new(retail.clone()).build(&retail),
+            ],
+            [AssetDefinition::numeric(pkr.clone())
+                .with_name("PKR".to_owned())
+                .build(&owner)],
+        );
+        let state = State::new(
+            world,
+            Kura::blank_kura_for_testing(),
+            query::store::LiveQueryStore::start_test(),
+        );
+        state
+            .block(BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0))
+            .commit()
+            .expect("commit bootstrap block");
+        let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0));
+        let mut stx = block.transaction();
+        let executor = super::Executor::Initial;
+        let retail_pkr = AssetId::new(pkr.clone(), retail.clone());
+
+        let unprivileged_mint = executor.execute_instruction(
+            &mut stx,
+            &retail,
+            InstructionBox::from(Mint::asset_quantity(1_u32, retail_pkr.clone())),
+        );
+        assert!(matches!(
+            unprivileged_mint,
+            Err(ValidationFail::NotPermitted(ref message))
+                if message.contains("exact mint permission")
+        ));
+
+        let offline_key: Name = "offline.enabled".parse().expect("metadata key");
+        let unprivileged_metadata = executor.execute_instruction(
+            &mut stx,
+            &retail,
+            InstructionBox::from(iroha_data_model::isi::SetKeyValue::asset_definition(
+                pkr.clone(),
+                offline_key.clone(),
+                Json::new(true),
+            )),
+        );
+        assert!(matches!(
+            unprivileged_metadata,
+            Err(ValidationFail::NotPermitted(ref message))
+                if message.contains("asset-definition metadata")
+        ));
+
+        stx.world.account_permissions.insert(
+            retail.clone(),
+            BTreeSet::from([
+                Permission::from(executor_permission::asset::CanMintAssetWithDefinition {
+                    asset_definition: pkr.clone(),
+                }),
+                Permission::from(
+                    executor_permission::asset_definition::CanModifyAssetDefinitionMetadata {
+                        asset_definition: pkr.clone(),
+                    },
+                ),
+            ]),
+        );
+        executor
+            .execute_instruction(
+                &mut stx,
+                &retail,
+                InstructionBox::from(Mint::asset_quantity(1_u32, retail_pkr.clone())),
+            )
+            .expect("the exact PKR definition mint grant must authorize minting");
+        executor
+            .execute_instruction(
+                &mut stx,
+                &retail,
+                InstructionBox::from(iroha_data_model::isi::SetKeyValue::asset_definition(
+                    pkr.clone(),
+                    offline_key,
+                    Json::new(true),
+                )),
+            )
+            .expect("the exact PKR metadata grant must authorize offline metadata changes");
+
+        assert_eq!(
+            stx.world
+                .assets
+                .get(&retail_pkr)
+                .expect("minted retail PKR balance")
+                .as_ref(),
+            &Quantity::from(1_u32),
+        );
+        assert_eq!(
+            stx.world
+                .asset_definition(&pkr)
+                .expect("PKR definition")
+                .metadata()
+                .get(&"offline.enabled".parse::<Name>().expect("metadata key")),
+            Some(&Json::new(true)),
         );
     }
 
@@ -11090,9 +13850,11 @@ mod tests {
             matches!(
                 result,
                 Err(ValidationFail::NotPermitted(ref message))
-                    if message.contains("executor denies permission grants")
+                    if message.contains(
+                        "deployed contracts may grant or revoke only exact CanInvokeContractEntrypoint tokens"
+                    )
             ),
-            "contract alias must not bypass the user-provided executor verdict: {result:?}"
+            "contract alias must not bypass the common permission boundary: {result:?}"
         );
     }
 
@@ -11810,6 +14572,44 @@ mod tests {
         metadata
     }
 
+    fn configure_lane_relay_sponsored_fee_budget(
+        fixture: &mut SponsoredFeeAdmissionFixture,
+        verified_balance: Quantity,
+    ) {
+        let fee_asset_id = {
+            let fees = &mut fixture.state.nexus.get_mut().fees;
+            fees.settlement_mode =
+                iroha_config::parameters::actual::NexusFeeSettlementMode::LaneRelayBurn;
+            fees.fee_receipts_activation_height = 1;
+            fees.canonical_sponsor_account_id = Some(fixture.sponsor_id.to_string());
+            fees.sponsor_verified_balance_safety_floor = Quantity::from(1_000_u32);
+            fees.fee_asset_id.clone()
+        };
+        seed_verified_nexus_fee_budget(
+            &fixture.state,
+            &fixture.sponsor_id,
+            &fee_asset_id,
+            verified_balance,
+        );
+    }
+
+    fn sponsored_native_log_transaction(
+        fixture: &SponsoredFeeAdmissionFixture,
+        message: &str,
+    ) -> SignedTransaction {
+        sign_sponsored_fixture_transaction(
+            fixture,
+            Executable::Instructions(
+                vec![InstructionBox::from(Log::new(
+                    Level::INFO,
+                    message.to_owned(),
+                ))]
+                .into(),
+            ),
+            sponsored_fee_metadata(fixture),
+        )
+    }
+
     fn insert_gas_limit(metadata: &mut Metadata, gas_limit: u64) {
         metadata.insert(
             Name::from_str("gas_limit").expect("static metadata key"),
@@ -11918,23 +14718,36 @@ mod tests {
         )
     }
 
-    fn kagemusha_fee_test_recursive_redeem_v2(
+    fn kagemusha_fee_test_recursive_redeem_v4(
         asset: AssetDefinitionId,
         recipient: AccountId,
-        signer: &KeyPair,
-    ) -> iroha_data_model::isi::offline::RedeemKagemushaRecursiveV2 {
+        _signer: &KeyPair,
+        with_change: bool,
+    ) -> iroha_data_model::isi::offline::RedeemKagemushaRecursiveV4 {
         use iroha_data_model::{
             offline::{
-                KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V3,
-                KagemushaRecursiveSpendArtifactBindingV3, KagemushaRecursiveSpendBranchClaimV2,
-                KagemushaRecursiveSpendBundleV2, KagemushaRecursiveSpendProofV2,
-                KagemushaRecursiveSpendPublicStatementV2, KagemushaRecursiveSpendRedeemRequestV2,
-                KagemushaRecursiveSpendRedemptionIntentBuildRequestV2,
-                KagemushaRecursiveSpendTopUpAnchorV2, KagemushaRequestAuthorizationV2,
-                KagemushaScaledAmountV2, KagemushaSpendableNoteDescriptorV2,
-                KagemushaUnshieldPublicInputsBindingV2, kagemusha_recursive_spend_lineage_root_v2,
+                KAGEMUSHA_RECURSIVE_SPEND_OPERATION_LIMBS_V4,
+                KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4,
+                KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_PROOF_ENVELOPE_VERSION_V4,
+                KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V4,
+                KAGEMUSHA_RECURSIVE_SPEND_STATE_BOUNDARY_VERSION_V2,
+                KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V2,
+                KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V2,
+                KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V4,
+                KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4,
+                KAGEMUSHA_RECURSIVE_SPEND_WIRE_VERSION_V4, KagemushaPastaCycleProofEnvelopeV4,
+                KagemushaRecursiveSpendArtifactBindingV4, KagemushaRecursiveSpendBranchClaimV2,
+                KagemushaRecursiveSpendBundleV4, KagemushaRecursiveSpendOperationVectorV4,
+                KagemushaRecursiveSpendProofV4, KagemushaRecursiveSpendPublicStatementV4,
+                KagemushaRecursiveSpendRedeemChangeBranchV4,
+                KagemushaRecursiveSpendRedeemRequestV4, KagemushaRecursiveSpendRedemptionIntentV4,
+                KagemushaRecursiveSpendStateBoundaryV2, KagemushaRecursiveSpendTopUpAnchorRefV2,
+                KagemushaRequestAuthorizationV2, KagemushaScaledAmountV2,
+                KagemushaSpendableNoteDescriptorV2, KagemushaUnshieldPublicInputsBindingV2,
+                kagemusha_recursive_spend_lineage_root_v2,
+                kagemusha_recursive_spend_verifier_key_id_v4,
             },
-            proof::{ProofBox, VerifyingKeyId},
+            proof::ProofBox,
         };
 
         let chain_id = ChainId::from("fee-policy-chain");
@@ -11949,68 +14762,80 @@ mod tests {
             spend_nullifier: [0x42; 32],
             amount,
         };
-        let artifact_binding = KagemushaRecursiveSpendArtifactBindingV3 {
-            generation: "fee-policy-v3".to_owned(),
+        let artifact_binding = KagemushaRecursiveSpendArtifactBindingV4 {
+            version: KAGEMUSHA_RECURSIVE_SPEND_WIRE_VERSION_V4,
+            generation: "fee-policy-v4".to_owned(),
             manifest_sha256: [0x43; 32],
         };
-        let topup_operation_id = [0x47; 32];
-        let topup_anchor = KagemushaRecursiveSpendTopUpAnchorV2 {
-            version: 2,
-            chain_id: chain_id.clone(),
-            payer: recipient.clone(),
-            asset: AssetId::new(asset.clone(), recipient.clone()),
-            asset_scale: amount.scale,
-            amount,
-            initial_root: [0x44; 32],
-            finalized_root: [0x45; 32],
-            shield_leaf_index: 0,
-            current_note: note.clone(),
-            topup_operation_id,
-            shield_verifier_id: VerifyingKeyId::new(
-                "halo2/ipa",
-                "fee-policy-kagemusha-topup-shield-v2",
-            ),
-            shield_verifier_commitment: [0x53; 32],
-            artifact_binding: artifact_binding.clone(),
-            finalized_height: 1,
-            finalized_tx_hash: [0x54; 32],
-            anchor_digest: [0; 32],
-        }
-        .finalize_digest()
-        .expect("canonical fee-policy V2 top-up anchor");
-        let topup_anchor_ref = topup_anchor
-            .compact_ref()
-            .expect("canonical fee-policy V2 anchor reference");
+        let topup_anchor_ref = KagemushaRecursiveSpendTopUpAnchorRefV2 {
+            topup_operation_id: [0x47; 32],
+            anchor_digest: [0x45; 32],
+        };
         let lineage_root =
             kagemusha_recursive_spend_lineage_root_v2(topup_anchor_ref.anchor_digest)
-                .expect("canonical fee-policy V2 lineage root");
+                .expect("canonical fee-policy V4 lineage root");
         let branch_claim = KagemushaRecursiveSpendBranchClaimV2::root(lineage_root)
-            .expect("canonical fee-policy V2 root claim");
-        let verifier_key_id =
-            VerifyingKeyId::new("halo2/ipa", KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V3);
-        let statement = KagemushaRecursiveSpendPublicStatementV2 {
+            .expect("canonical fee-policy V4 root claim");
+        let verifier_key_id = kagemusha_recursive_spend_verifier_key_id_v4(
+            iroha_data_model::offline::KagemushaPastaCycleParityV1::StepEq,
+            artifact_binding.manifest_sha256,
+        );
+        let statement = KagemushaRecursiveSpendPublicStatementV4 {
             chain_id: chain_id.clone(),
             asset: asset.clone(),
             asset_scale: amount.scale,
-            final_root: topup_anchor.finalized_root,
+            final_root: [0x45; 32],
+            next_zero_leaf_index: 1,
             topup_anchor_refs: vec![topup_anchor_ref],
             proof_step_count: 1,
             peer_hop_count: 0,
             current_note: note.clone(),
             branch_claims: vec![branch_claim],
             transition: None,
-            artifact_binding,
+            artifact_binding: artifact_binding.clone(),
             verifier_key_id: verifier_key_id.clone(),
         };
         let public_statement_digest = statement
             .digest()
-            .expect("canonical fee-policy V2 public statement");
-        let bundle = KagemushaRecursiveSpendBundleV2 {
+            .expect("canonical fee-policy V4 public statement");
+        let mut operation_limbs = [0_u32; KAGEMUSHA_RECURSIVE_SPEND_OPERATION_LIMBS_V4];
+        operation_limbs[0] = 1;
+        let mut state_limbs = vec![0_u32; KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V2];
+        state_limbs[0] = KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V2;
+        let bundle = KagemushaRecursiveSpendBundleV4 {
             statement,
-            recursive_proof: KagemushaRecursiveSpendProofV2 {
-                verifier_key_id: verifier_key_id.clone(),
+            operation: KagemushaRecursiveSpendOperationVectorV4 {
+                limbs: operation_limbs,
+            },
+            recursive_proof: KagemushaRecursiveSpendProofV4 {
+                verifier_key_id,
                 public_statement_digest,
-                proof: ProofBox::new("halo2/ipa".parse().expect("backend ident"), vec![0x49; 32]),
+                proof_envelope: KagemushaPastaCycleProofEnvelopeV4 {
+                    version: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_PROOF_ENVELOPE_VERSION_V4,
+                    proof_backend: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4.to_owned(),
+                    transcript_profile: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V4
+                        .to_owned(),
+                    step_eq_circuit_id: KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4.to_owned(),
+                    step_ep_circuit_id: KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V4.to_owned(),
+                    artifact_generation: artifact_binding.generation.clone(),
+                    manifest_sha256: artifact_binding.manifest_sha256,
+                    step_eq_parameter_generation: "fee-policy-v4-eq-params".to_owned(),
+                    step_ep_parameter_generation: "fee-policy-v4-ep-params".to_owned(),
+                    step_eq_circuit_params_sha256: [0x54; 32],
+                    step_ep_circuit_params_sha256: [0x55; 32],
+                    step_eq_verifier_key_sha256: [0x56; 32],
+                    step_ep_verifier_key_sha256: [0x57; 32],
+                    state_boundary: KagemushaRecursiveSpendStateBoundaryV2 {
+                        layout_version: KAGEMUSHA_RECURSIVE_SPEND_STATE_BOUNDARY_VERSION_V2,
+                        state_limbs,
+                    },
+                    proof: ProofBox::new(
+                        KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4
+                            .parse()
+                            .expect("V4 backend ident"),
+                        vec![0x49; 32],
+                    ),
+                },
             },
         };
         let operation_id = [0x4A; 32];
@@ -12027,48 +14852,65 @@ mod tests {
             asset_tag: [0x4B; 32],
             chain_tag: [0x4C; 32],
         };
-        let redemption = KagemushaRecursiveSpendRedemptionIntentBuildRequestV2 {
-            previous_bundle: bundle.clone(),
+        let redemption = KagemushaRecursiveSpendRedemptionIntentV4 {
+            chain_id,
+            asset: asset.clone(),
+            input_note: note,
+            parent_branch_claims: bundle.statement.branch_claims.clone(),
+            parent_topup_anchor_refs: bundle.statement.topup_anchor_refs.clone(),
+            parent_proof_step_count: bundle.statement.proof_step_count,
+            parent_peer_hop_count: bundle.statement.peer_hop_count,
+            parent_bundle_digest: [0x50; 32],
+            input_root: bundle.statement.final_root,
             recipient: recipient.clone(),
             public_amount: amount,
             change_output: None,
             change_artifact_binding: None,
-            unshield_public_inputs,
             unshield_public_inputs_digest: unshield_public_inputs
                 .digest()
-                .expect("canonical fee-policy V2 unshield digest"),
+                .expect("canonical fee-policy V4 unshield digest"),
+            unshield_public_inputs,
             operation_id,
-        }
-        .into_intent()
-        .expect("canonical fee-policy V2 redemption intent");
+        };
         let authorization = KagemushaRequestAuthorizationV2 {
             authority: recipient.clone(),
-            device_id: "fee-policy-v2-device".to_owned(),
+            device_id: "fee-policy-v4-device".to_owned(),
+            asset_definition_id: asset,
             operation_id,
             issued_at_ms: 1,
             expires_at_ms: 2,
             nonce: [0x51; 32],
             payload_digest: [0x52; 32],
-            app_attest_evidence_sha256: None,
-            app_attest_evidence: None,
-            signature: iroha_crypto::Signature::try_new(
-                signer.private_key(),
-                b"fee-policy-v2-unsupported",
-            )
-            .expect("fixture signature"),
+            registration_hash: [0x53; 32],
+            hardware_assertion:
+                iroha_data_model::offline::KagemushaOnlineHardwareAssertionV1::AndroidKeyMint(
+                    iroha_data_model::offline::KagemushaAndroidKeyMintHardwareAssertionV1 {
+                        signature:
+                            iroha_data_model::offline::KagemushaDeviceSignatureV2::from_raw_bytes(
+                                &[1_u8; 64],
+                            )
+                            .expect("fixture hardware signature"),
+                    },
+                ),
         };
-        let request = KagemushaRecursiveSpendRedeemRequestV2 {
+        let offline_change = with_change.then(|| KagemushaRecursiveSpendRedeemChangeBranchV4 {
+            output: bundle.statement.current_note.clone(),
+            branch_claims: bundle.statement.branch_claims.clone(),
+            bundle: bundle.clone(),
+        });
+        let request = KagemushaRecursiveSpendRedeemRequestV4 {
+            version: KAGEMUSHA_RECURSIVE_SPEND_WIRE_VERSION_V4,
             bundle,
             recipient,
             amount,
-            redeem_proof: kagemusha_fee_test_proof_attachment("fee-policy-kagemusha-redeem-v2"),
+            redeem_proof: kagemusha_fee_test_proof_attachment("fee-policy-kagemusha-redeem-v4"),
             redemption,
-            offline_change: None,
+            offline_change,
             block_height: 1,
             operation_id,
             authorization,
         };
-        iroha_data_model::isi::offline::RedeemKagemushaRecursiveV2::new(request)
+        iroha_data_model::isi::offline::RedeemKagemushaRecursiveV4::new(request)
     }
 
     fn signed_fee_policy_transaction(
@@ -12605,6 +15447,93 @@ mod tests {
     }
 
     #[test]
+    fn nexus_fee_sponsor_asset_transfer_selector_rejects_other_assets_and_ownership_transfers() {
+        let mut fixture = sponsored_fee_admission_fixture(true);
+        let pkr = AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").expect("fixture domain"),
+            "pkr".parse().expect("fixture asset name"),
+        );
+        let foreign_asset = AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").expect("fixture domain"),
+            "foreign".parse().expect("fixture asset name"),
+        );
+        let recipient = gen_account_in("wonderland").0;
+
+        let mut pkr_transfers = FeeSponsorRule::new(FeeSponsorRuleEffect::Allow);
+        pkr_transfers
+            .executable_kinds
+            .insert(FeeSponsorExecutableKind::Instructions);
+        pkr_transfers
+            .instruction_wire_ids
+            .insert(TransferBox::WIRE_ID.to_owned());
+        pkr_transfers
+            .asset_transfer_definition_ids
+            .insert(pkr.clone());
+        let policy = FeeSponsorPolicy {
+            id: FeeSponsorPolicyId::new(
+                fixture.sponsor_id.clone(),
+                "default".parse().expect("fixture policy name"),
+            ),
+            enabled: true,
+            max_fee: None,
+            rules: vec![pkr_transfers],
+        };
+        fixture
+            .state
+            .world
+            .fee_sponsor_policies
+            .insert(policy.id.clone(), policy);
+
+        let pkr_transfer = InstructionBox::from(Transfer::asset_quantity(
+            AssetId::new(pkr.clone(), fixture.authority_id.clone()),
+            1_u32,
+            recipient.clone(),
+        ));
+        let tx = sign_sponsored_fixture_transaction(
+            &fixture,
+            Executable::Instructions(vec![pkr_transfer].into()),
+            sponsored_fee_metadata(&fixture),
+        );
+        let view = fixture.state.view();
+        check_external_nexus_fee_admission(&view.world, &view.nexus, &tx, 0, 1, None)
+            .expect("the exact selected PKR asset transfer must remain sponsored");
+        drop(view);
+
+        let blocked = [
+            InstructionBox::from(Transfer::asset_quantity(
+                AssetId::new(foreign_asset.clone(), fixture.authority_id.clone()),
+                1_u32,
+                recipient.clone(),
+            )),
+            InstructionBox::from(Transfer::domain(
+                fixture.authority_id.clone(),
+                DomainId::try_new("owned", "universal").expect("owned domain"),
+                recipient.clone(),
+            )),
+            InstructionBox::from(Transfer::asset_definition(
+                fixture.authority_id.clone(),
+                foreign_asset,
+                recipient.clone(),
+            )),
+            InstructionBox::from(Transfer::nft(
+                fixture.authority_id.clone(),
+                "sponsor_guard$nfts.universal"
+                    .parse::<NftId>()
+                    .expect("fixture NFT id"),
+                recipient,
+            )),
+        ];
+        for instruction in blocked {
+            expect_sponsored_admission_rejection(
+                &fixture,
+                Executable::Instructions(vec![instruction].into()),
+                sponsored_fee_metadata(&fixture),
+                "fee sponsor policy is not authorized",
+            );
+        }
+    }
+
+    #[test]
     fn nexus_fee_sponsor_policy_rejects_native_batch_with_unallowed_operation() {
         let mut fixture = sponsored_fee_admission_fixture(true);
         let allowed_instruction: InstructionBox =
@@ -13050,6 +15979,105 @@ mod tests {
 
         let snap = crate::sumeragi::status::nexus_fee_snapshot();
         assert_eq!(snap.charged_total, 1);
+    }
+
+    #[test]
+    fn nexus_fee_sponsor_verified_balance_safety_floor_is_inclusive_for_explicit_sponsor() {
+        for (verified_balance, should_accept) in [(1_001_u32, true), (1_000_u32, false)] {
+            let mut fixture = sponsored_fee_admission_fixture(false);
+            configure_lane_relay_sponsored_fee_budget(
+                &mut fixture,
+                Quantity::from(verified_balance),
+            );
+            let tx = sponsored_native_log_transaction(
+                &fixture,
+                if should_accept {
+                    "sponsor floor accepted"
+                } else {
+                    "sponsor floor rejected"
+                },
+            );
+            let view = fixture.state.view();
+            let result =
+                check_external_nexus_fee_admission(&view.world, &view.nexus, &tx, 0, 1, None);
+
+            if should_accept {
+                result.expect("fee 1 must leave the exact verified sponsor floor of 1000");
+            } else {
+                let error = result.expect_err(
+                    "a verified sponsor balance equal to the floor cannot also cover fee 1",
+                );
+                assert!(matches!(
+                    error,
+                    NexusFeeAdmissionError::Rejected(reason)
+                        if reason.contains("requires 1001, available 1000")
+                ));
+            }
+        }
+    }
+
+    #[test]
+    fn nexus_fee_sponsor_verified_balance_safety_floor_reserves_in_flight_receipts() {
+        let _guard = crate::sumeragi::status::nexus_fee_test_lock()
+            .lock()
+            .expect("nexus fee test lock");
+        crate::sumeragi::status::reset_nexus_economics_for_tests();
+
+        let mut fixture = sponsored_fee_admission_fixture(false);
+        configure_lane_relay_sponsored_fee_budget(&mut fixture, Quantity::from(1_002_u32));
+        let fee_asset_id = {
+            let view = fixture.state.view();
+            view.nexus.fees.fee_asset_id.clone()
+        };
+        let first = sponsored_native_log_transaction(&fixture, "first sponsored relay receipt");
+        let second = sponsored_native_log_transaction(&fixture, "second sponsored relay receipt");
+        let third = sponsored_native_log_transaction(&fixture, "third sponsored relay receipt");
+        let block_header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+        let mut block = fixture.state.block(block_header);
+        let executor = super::Executor::Initial;
+        let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
+
+        {
+            let mut stx = block.transaction();
+            executor
+                .execute_transaction(&mut stx, &fixture.authority_id, first, &mut ivm_cache)
+                .expect("first fee must leave 1001, above the 1000 safety floor");
+            assert_eq!(
+                stx.pending_nexus_fee_amount_for(&fixture.sponsor_id, &fee_asset_id),
+                Some(Numeric::from(1_u32)),
+                "the explicit sponsor must own the in-flight relay reservation"
+            );
+            stx.apply();
+        }
+
+        {
+            let mut stx = block.transaction();
+            executor
+                .execute_transaction(&mut stx, &fixture.authority_id, second, &mut ivm_cache)
+                .expect("second fee must be accepted at the exact floor boundary");
+            assert_eq!(
+                stx.pending_nexus_fee_amount_for(&fixture.sponsor_id, &fee_asset_id),
+                Some(Numeric::from(2_u32)),
+            );
+            stx.apply();
+        }
+
+        {
+            let mut stx = block.transaction();
+            let error = executor
+                .execute_transaction(&mut stx, &fixture.authority_id, third, &mut ivm_cache)
+                .expect_err("two in-flight fees plus fee 1 must preserve the safety floor");
+            assert!(matches!(
+                error,
+                ValidationFail::NotPermitted(reason)
+                    if reason.contains("requires 1003, available 1002")
+            ));
+            assert_eq!(
+                stx.pending_nexus_fee_amount_for(&fixture.sponsor_id, &fee_asset_id),
+                Some(Numeric::from(2_u32)),
+                "a rejected fee must not create another in-flight reservation"
+            );
+        }
     }
 
     #[test]
@@ -13541,31 +16569,31 @@ mod tests {
     }
 
     #[test]
-    fn unavailable_kagemusha_v2_redeem_cannot_self_fund_nexus_fee() {
-        assert!(
-            !iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PROOF_BACKEND_AVAILABLE,
-            "this regression test must be replaced by end-to-end V2 execution coverage when the backend ships"
-        );
+    fn kagemusha_v4_redeem_can_self_fund_nexus_fee_before_exact_execution_validation() {
         let (mut state, authority_id, authority_kp, asset_def_id) =
             nexus_fee_lane_relay_burn_admission_fixture();
         state.nexus.get_mut().fees.fee_asset_id = asset_def_id.to_string();
-        let redeem = kagemusha_fee_test_recursive_redeem_v2(
-            asset_def_id,
-            authority_id.clone(),
-            &authority_kp,
-        );
-        let tx = signed_fee_policy_transaction(authority_id, &authority_kp, redeem.into());
 
-        let view = state.view();
-        let capacity =
-            redeem_funded_nexus_fee_capacity(&view.world, &view.nexus.fees, &tx, 0, false)
-                .expect("unsupported V2 classification must not fail");
-        assert_eq!(
-            capacity, None,
-            "an unavailable V2 proof backend cannot produce fee-paying credit"
-        );
-        drop(view);
-        assert_lane_relay_burn_requires_fee_budget(&state, &tx);
+        for with_change in [false, true] {
+            let redeem = kagemusha_fee_test_recursive_redeem_v4(
+                asset_def_id.clone(),
+                authority_id.clone(),
+                &authority_kp,
+                with_change,
+            );
+            let tx =
+                signed_fee_policy_transaction(authority_id.clone(), &authority_kp, redeem.into());
+
+            let view = state.view();
+            let capacity =
+                redeem_funded_nexus_fee_capacity(&view.world, &view.nexus.fees, &tx, 0, false)
+                    .expect("V4 recursive redemption classification must not fail")
+                    .expect("pending V4 redemption credit must fund admission");
+            assert_eq!(capacity.payer, authority_id);
+            assert_eq!(capacity.capacity, Numeric::from(1_u32));
+            check_external_nexus_fee_admission(&view.world, &view.nexus, &tx, 0, 2, None)
+                .expect("pending V4 redemption credit must cover the Nexus admission fee");
+        }
     }
 
     #[test]
@@ -16387,6 +19415,104 @@ seiyaku IdentityRequired {
         executor
             .validate_query(&state_tx, &ALICE_ID.clone(), &query)
             .expect("validation");
+    }
+
+    #[test]
+    fn initial_executor_mirrors_default_private_query_permissions() {
+        use iroha_data_model::query::sorafs::prelude::{
+            FindSorafsModerationJurorEligibility, FindSorafsOrderbookPolicy,
+        };
+
+        let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
+        let bob_account = Account::new(BOB_ID.clone()).build(&BOB_ID);
+        let world = World::with([], [alice_account, bob_account], []);
+        let latest_block = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+        let state = State::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            query::store::LiveQueryStore::start_test(),
+        );
+        let mut block = state.block(latest_block.clone());
+        let mut state_transaction = block.transaction();
+        let executor = super::Executor::Initial;
+        let orderbook = QueryRequest::Singular(FindSorafsOrderbookPolicy.into());
+        let own_eligibility = QueryRequest::Singular(
+            FindSorafsModerationJurorEligibility::new(
+                "case-1".to_owned(),
+                "round-1".to_owned(),
+                ALICE_ID.clone(),
+            )
+            .into(),
+        );
+        let foreign_eligibility = QueryRequest::Singular(
+            FindSorafsModerationJurorEligibility::new(
+                "case-1".to_owned(),
+                "round-1".to_owned(),
+                BOB_ID.clone(),
+            )
+            .into(),
+        );
+
+        let orderbook_error = executor
+            .validate_query_with_world_parts(
+                &state_transaction.world,
+                Some(latest_block.clone()),
+                &ALICE_ID,
+                &orderbook,
+            )
+            .expect_err("orderbook state must not be public under the Initial executor");
+        assert!(matches!(orderbook_error, ValidationFail::NotPermitted(_)));
+        executor
+            .validate_query_with_world_parts(
+                &state_transaction.world,
+                Some(latest_block.clone()),
+                &ALICE_ID,
+                &own_eligibility,
+            )
+            .expect("a juror must be able to read their own eligibility");
+        let eligibility_error = executor
+            .validate_query_with_world_parts(
+                &state_transaction.world,
+                Some(latest_block.clone()),
+                &ALICE_ID,
+                &foreign_eligibility,
+            )
+            .expect_err("another juror's eligibility must remain private");
+        assert!(matches!(eligibility_error, ValidationFail::NotPermitted(_)));
+
+        state_transaction.world.account_permissions.insert(
+            ALICE_ID.clone(),
+            BTreeSet::from([
+                Permission::from(executor_permission::sorafs::CanSetSorafsPricing),
+                Permission::from(executor_permission::sorafs::CanManageSorafsModeration),
+            ]),
+        );
+        executor
+            .validate_query_with_world_parts(
+                &state_transaction.world,
+                Some(latest_block.clone()),
+                &ALICE_ID,
+                &orderbook,
+            )
+            .expect("pricing operators must be able to read orderbook state");
+        executor
+            .validate_query_with_world_parts(
+                &state_transaction.world,
+                Some(latest_block),
+                &ALICE_ID,
+                &foreign_eligibility,
+            )
+            .expect("moderation managers must be able to read juror eligibility");
+
+        let public_query = QueryRequest::Singular(SingularQueryBox::FindParameters(FindParameters));
+        executor
+            .validate_query_with_world_parts(
+                &state_transaction.world,
+                None,
+                &ALICE_ID,
+                &public_query,
+            )
+            .expect("standard public queries must remain available");
     }
 
     #[test]

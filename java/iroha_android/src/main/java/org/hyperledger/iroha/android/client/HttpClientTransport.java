@@ -729,29 +729,6 @@ public final class HttpClientTransport implements IrohaClient {
     return executeAccepted(request, "verifying key update", 202);
   }
 
-  /** Deploys contract bytecode via `POST /v1/contracts/deploy`. */
-  public CompletableFuture<Optional<ContractDeployResponse>> deployContract(
-      final String authority,
-      final String privateKey,
-      final String codeB64,
-      final String contractAlias,
-      final Long leaseExpiryMs) {
-    final byte[] body =
-        encodeJsonBody(
-            buildDeployContractPayload(authority, privateKey, codeB64, contractAlias, leaseExpiryMs));
-    final TransportRequest request = buildJsonPostRequest("/v1/contracts/deploy", body);
-    return fetchOptionalJson(request, ContractJsonParser::parseDeployResponse, "contract deploy");
-  }
-
-  /** Deploys contract bytecode via `POST /v1/contracts/deploy`. */
-  public CompletableFuture<Optional<ContractDeployResponse>> deployContract(
-      final String authority,
-      final String privateKey,
-      final String codeB64,
-      final String contractAlias) {
-    return deployContract(authority, privateKey, codeB64, contractAlias, null);
-  }
-
   /** Calls a deployed contract via `POST /v1/contracts/call`. */
   public CompletableFuture<ContractCallResponse> callContract(
       final String authority,
@@ -2025,26 +2002,6 @@ public final class HttpClientTransport implements IrohaClient {
     payload.put("client_voucher_hex", normalizeEvenLengthHex(clientVoucherHex, "clientVoucherHex"));
     if (leaseIdHex != null) {
       payload.put("lease_id_hex", normalizeHex32(leaseIdHex, "leaseIdHex"));
-    }
-    return payload;
-  }
-
-  static Map<String, Object> buildDeployContractPayload(
-      final String authority,
-      final String privateKey,
-      final String codeB64,
-      final String contractAlias,
-      final Long leaseExpiryMs) {
-    final Map<String, Object> payload = new LinkedHashMap<>();
-    payload.put("authority", normalizeNonBlank(authority, "authority"));
-    payload.put("private_key", normalizeNonBlank(privateKey, "privateKey"));
-    payload.put("code_b64", normalizeRequiredBase64Payload(codeB64, "codeB64"));
-    payload.put("contract_alias", normalizeNonBlank(contractAlias, "contractAlias"));
-    if (leaseExpiryMs != null) {
-      if (leaseExpiryMs.longValue() < 0L) {
-        throw new IllegalArgumentException("leaseExpiryMs must be non-negative");
-      }
-      payload.put("lease_expiry_ms", leaseExpiryMs);
     }
     return payload;
   }

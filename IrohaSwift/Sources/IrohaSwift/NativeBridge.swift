@@ -568,8 +568,6 @@ enum NativeBridgeError: Error, Equatable {
     case offlineCommitment
     case offlineBlinding
     case kagemushaProve
-    case kagemushaRecursiveSpendV2Unavailable
-    case kagemushaRecursiveSpendV2Artifact
     case kagemushaRecursiveSpendV4Unavailable
     case kagemushaRecursiveSpendV4Artifact
     case invalidKagemushaVerifierOutput
@@ -633,8 +631,6 @@ enum NativeBridgeError: Error, Equatable {
         case -305: return .offlineCommitment
         case -306: return .offlineBlinding
         case -311: return .kagemushaProve
-        case -314: return .kagemushaRecursiveSpendV2Unavailable
-        case -315: return .kagemushaRecursiveSpendV2Artifact
         case -316: return .kagemushaRecursiveSpendV4Unavailable
         case -317: return .kagemushaRecursiveSpendV4Artifact
         case -402: return .multisigSpec
@@ -2336,10 +2332,17 @@ public final class NoritoNativeBridge: @unchecked Sendable {
             self.encodeTransferInstructionBoxFn = nil
         }
         loadPrivacySymbols(from: staticHandle)
-        self.detachedTransactionInspectFn = connect_norito_detached_transaction_scaffold_inspect_v1
-        self.detachedTransactionFinalizeEd25519Fn =
-            connect_norito_detached_transaction_scaffold_finalize_ed25519_v1
-        self.canonicalJSONBlake3Fn = connect_norito_canonical_json_blake3_v1
+        self.detachedTransactionInspectFn = staticHandle
+            .flatMap { dlsym($0, "connect_norito_detached_transaction_scaffold_inspect_v1") }
+            .map { unsafeBitCast($0, to: DetachedTransactionInspectFn.self) }
+        self.detachedTransactionFinalizeEd25519Fn = staticHandle
+            .flatMap {
+                dlsym($0, "connect_norito_detached_transaction_scaffold_finalize_ed25519_v1")
+            }
+            .map { unsafeBitCast($0, to: DetachedTransactionFinalizeEd25519Fn.self) }
+        self.canonicalJSONBlake3Fn = staticHandle
+            .flatMap { dlsym($0, "connect_norito_canonical_json_blake3_v1") }
+            .map { unsafeBitCast($0, to: CanonicalJSONBlake3Fn.self) }
         self.freeFn = connect_norito_free
         self.setChainDiscriminantFn = connect_norito_set_chain_discriminant
         self.bridgeStatus = .valid(path: "static", identifier: NoritoBridgeLoader.currentIdentifier())
@@ -3489,13 +3492,12 @@ public final class NoritoNativeBridge: @unchecked Sendable {
         #endif
     }
 
-    /// Whether ABI 20 exposes the complete V4 Kagemusha surface, including
-    /// the retained explicitly suffixed V3 compatibility symbols.
+    /// Whether ABI 20 exposes the complete selector-free V4 Kagemusha surface.
     public var isKagemushaRecursiveSpendBridgeAvailable: Bool {
         #if canImport(Darwin)
         guard bridgeEnabledForRuntime else { return false }
         return loadedBridgeAbiVersion == KagemushaRecursiveSpend.requiredNativeBridgeAbiVersion
-            && hasKagemushaRecursiveSpendV2Symbols(
+            && hasKagemushaRecursiveSpendV4Symbols(
                 KagemushaRecursiveSpend.requiredNativeSymbols + ["connect_norito_free"]
             )
         #else

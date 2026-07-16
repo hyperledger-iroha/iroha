@@ -117,10 +117,6 @@ class _MockState:
         self.gov_contracts: Dict[str, Dict[str, Any]] = {}
         self.contract_manifests: Dict[str, Dict[str, Any]] = {}
         self.contract_code_bytes: Dict[str, Dict[str, Any]] = {}
-        self.contract_deploy_response: Dict[str, Any] = {}
-        self.contract_bundle_response: Dict[str, Any] = {}
-        self.contract_bundle_receipts: Dict[str, Dict[str, Any]] = {}
-        self.contract_bundle_error: Optional[Dict[str, Any]] = None
         self.contract_call_response: Dict[str, Any] = {}
         self.gov_proposals: Dict[str, Dict[str, Any]] = {}
         self.gov_propose_deploy_response: Dict[str, Any] = {}
@@ -184,13 +180,6 @@ class _MockState:
             return self._account_get(account_id)
         if method == "POST" and path == "/v1/gov/proposals/deploy-contract":
             return self._gov_propose_deploy(body)
-        if method == "POST" and path == "/v1/contracts/deploy":
-            return self._contracts_deploy(body)
-        if method == "POST" and path == "/v1/contracts/deploy-bundle":
-            return self._contracts_deploy_bundle(params, body)
-        if method == "GET" and path.startswith("/v1/contracts/deploy-bundles/"):
-            bundle_digest = path.split("/")[-1]
-            return self._contracts_deploy_bundle_status(bundle_digest)
         if method == "POST" and path == "/v1/contracts/call":
             return self._contracts_call(body)
         if method == "POST" and path == "/v1/gov/finalize":
@@ -273,8 +262,6 @@ class _MockState:
             return self._pipeline_config(body)
         if method == "POST" and path == "/__mock__/accounts/config":
             return self._account_config(body)
-        if method == "POST" and path == "/__mock__/contracts/config":
-            return self._contracts_config(body)
         if method == "POST" and path == "/__mock__/gov/config":
             return self._gov_config(body)
         if method == "POST" and path == "/__mock__/sccp/config":
@@ -352,39 +339,7 @@ class _MockState:
             self.gov_contracts.clear()
             self.contract_manifests.clear()
             self.contract_code_bytes.clear()
-            self.contract_deploy_response = {
-                "ok": True,
-                "bundle_name": "single-contract-deploy",
-                "bundle_digest": "mock-single-contract-digest",
-                "chain_fingerprint": "mock-chain@height-0",
-                "dry_run": False,
-                "completed_stages": ["plan", "deploy"],
-                "failure_point": None,
-                "contracts": [
-                    {
-                        "name": "router::universal",
-                        "contract_alias": "router::universal",
-                        "contract_address": "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
-                        "previous_contract_address": None,
-                        "kaizen": False,
-                        "dataspace": "universal",
-                        "deploy_nonce": 0,
-                        "tx_hash_hex": "11" * 32,
-                        "pipeline_status": self._queued_pipeline_status("11" * 32),
-                        "code_hash_hex": "22" * 32,
-                        "abi_hash_hex": "33" * 32,
-                        "status": "submitted",
-                    }
-                ],
-                "hajimari_calls": [],
-                "assertions": [],
-            }
-            self.contract_bundle_response = {
-                "bundle_digest": "mock-bundle-digest",
-                "chain_fingerprint": "mock-chain@height-0",
-            }
-            self.contract_bundle_receipts = {}
-            self.contract_bundle_error = None
+
             self.contract_call_response = {
                 "ok": True,
                 "submitted": True,
@@ -507,40 +462,6 @@ class _MockState:
             self._seed_reports()
             self._seed_sumeragi()
 
-    def _contracts_config(self, body: bytes) -> _Response:
-        try:
-            payload = json.loads(body.decode("utf-8") or "{}")
-        except json.JSONDecodeError as err:
-            raise ValueError(f"invalid contracts config: {err}") from err
-        if not isinstance(payload, dict):
-            raise ValueError("contracts config must be an object")
-
-        bundle_response = payload.get("bundle_response")
-        if bundle_response is not None:
-            if not isinstance(bundle_response, dict):
-                raise ValueError("bundle_response must be an object")
-            self.contract_bundle_response = dict(bundle_response)
-
-        bundle_receipts = payload.get("bundle_receipts")
-        if bundle_receipts is not None:
-            if not isinstance(bundle_receipts, dict):
-                raise ValueError("bundle_receipts must be an object")
-            normalized_receipts: Dict[str, Dict[str, Any]] = {}
-            for bundle_digest, receipt in bundle_receipts.items():
-                if not isinstance(receipt, dict):
-                    raise ValueError("bundle_receipts entry must be an object")
-                normalized_receipts[str(bundle_digest)] = dict(receipt)
-            self.contract_bundle_receipts = normalized_receipts
-
-        bundle_error = payload.get("bundle_error")
-        if bundle_error is not None:
-            if not isinstance(bundle_error, dict):
-                raise ValueError("bundle_error must be an object")
-            self.contract_bundle_error = dict(bundle_error)
-        elif "bundle_error" in payload:
-            self.contract_bundle_error = None
-
-        return _json_response(HTTPStatus.OK, {"ok": True})
 
     def _sccp_config(self, body: bytes) -> _Response:
         try:
@@ -799,12 +720,6 @@ class _MockState:
             self.contract_code_bytes = normalized_code_bytes
         else:
             self.contract_code_bytes = {}
-
-        contract_deploy_payload = payload.get("contract_deploy_response")
-        if contract_deploy_payload is not None:
-            if not isinstance(contract_deploy_payload, dict):
-                raise ValueError("contract_deploy_response must be an object")
-            self.contract_deploy_response = dict(contract_deploy_payload)
 
         contract_call_payload = payload.get("contract_call_response")
         if contract_call_payload is not None:
@@ -1154,162 +1069,6 @@ class _MockState:
             return _json_response(HTTPStatus.NOT_FOUND, {"error": "code bytes not found"})
         return _json_response(HTTPStatus.OK, payload)
 
-    def _contracts_deploy(self, body: bytes) -> _Response:
-        try:
-            payload = json.loads(body.decode("utf-8") or "{}")
-        except json.JSONDecodeError as err:
-            raise ValueError(f"invalid contract deploy payload: {err}") from err
-        if not isinstance(payload, dict):
-            raise ValueError("contract deploy payload must be an object")
-        for key in ("authority", "private_key", "code_b64", "contract_alias"):
-            value = payload.get(key)
-            if not isinstance(value, str) or not value.strip():
-                raise ValueError(f"contract deploy payload missing '{key}'")
-        if "dataspace" in payload:
-            raise ValueError("contract deploy payload must not include dataspace")
-        if "manifest" in payload:
-            raise ValueError("contract deploy payload must not include manifest")
-        if "lease_expiry_ms" in payload and not isinstance(payload.get("lease_expiry_ms"), (int, float, str)):
-            raise ValueError("contract deploy payload lease_expiry_ms must be numeric")
-        receipt = dict(self.contract_deploy_response)
-        contracts = receipt.get("contracts")
-        if isinstance(contracts, list) and contracts:
-            contract = dict(contracts[0])
-            contract.setdefault("name", payload["contract_alias"])
-            contract.setdefault("contract_alias", payload["contract_alias"])
-            tx_hash_hex = contract.get("tx_hash_hex")
-            if isinstance(tx_hash_hex, str):
-                contract.setdefault("pipeline_status", self._queued_pipeline_status(tx_hash_hex))
-            receipt["contracts"] = [contract]
-        return _json_response(HTTPStatus.ACCEPTED, receipt)
-
-    def _contracts_deploy_bundle(
-        self,
-        params: Mapping[str, List[str]],
-        body: bytes,
-    ) -> _Response:
-        try:
-            payload = json.loads(body.decode("utf-8") or "{}")
-        except json.JSONDecodeError as err:
-            raise ValueError(f"invalid contract bundle payload: {err}") from err
-        if not isinstance(payload, dict):
-            raise ValueError("contract bundle payload must be an object")
-        for key in ("bundle_name", "authority", "private_key"):
-            value = payload.get(key)
-            if not isinstance(value, str) or not value.strip():
-                raise ValueError(f"contract bundle payload missing '{key}'")
-        contracts = payload.get("contracts")
-        if not isinstance(contracts, list) or not contracts:
-            raise ValueError("contract bundle payload must include non-empty contracts")
-        for index, contract in enumerate(contracts):
-            if not isinstance(contract, dict):
-                raise ValueError(f"contract bundle contract[{index}] must be an object")
-            for key in ("name", "contract_alias", "code_b64"):
-                value = contract.get(key)
-                if not isinstance(value, str) or not value.strip():
-                    raise ValueError(
-                        f"contract bundle contract[{index}] missing '{key}'"
-                    )
-
-        if self.contract_bundle_error is not None:
-            status_value = self.contract_bundle_error.get("status", HTTPStatus.BAD_REQUEST)
-            try:
-                status = int(status_value)
-            except (TypeError, ValueError) as err:
-                raise ValueError("bundle_error.status must be numeric") from err
-            error_body = self.contract_bundle_error.get(
-                "body",
-                {"error": "mock contract bundle error"},
-            )
-            return _json_response(status, error_body)
-
-        dry_run = _is_true(params.get("dry_run"))
-        receipt = {
-            "ok": True,
-            "bundle_name": payload["bundle_name"],
-            "bundle_digest": "mock-bundle-digest",
-            "chain_fingerprint": "mock-chain@height-0",
-            "dry_run": dry_run,
-            "completed_stages": ["plan"] if dry_run else ["plan", "deploy"],
-            "failure_point": None,
-            "contracts": [],
-            "hajimari_calls": [],
-            "assertions": [],
-        }
-        if self.contract_bundle_response:
-            receipt.update(dict(self.contract_bundle_response))
-
-        receipt["contracts"] = [
-            {
-                "name": contract["name"],
-                "contract_alias": contract["contract_alias"],
-                "contract_address": (
-                    f"tairac1qmockbundle{index:02d}"
-                    "qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq"
-                )[:59],
-                "previous_contract_address": None,
-                "kaizen": False,
-                "dataspace": contract["contract_alias"].rsplit("::", 1)[-1],
-                "deploy_nonce": index,
-                "code_hash_hex": "22" * 32,
-                "abi_hash_hex": "33" * 32,
-                "tx_hash_hex": None if dry_run else f"{index + 1:02x}" * 32,
-                "pipeline_status": None
-                if dry_run
-                else self._queued_pipeline_status(f"{index + 1:02x}" * 32),
-                "status": "planned" if dry_run else "deployed",
-            }
-            for index, contract in enumerate(contracts)
-        ]
-
-        hajimari_calls = payload.get("hajimari_calls", [])
-        if not isinstance(hajimari_calls, list):
-            raise ValueError("contract bundle payload hajimari_calls must be a list")
-        receipt["hajimari_calls"] = [
-            {
-                "id": call.get("id", f"init-{index}"),
-                "contract_alias": call.get("contract_alias", contracts[0]["contract_alias"]),
-                "entrypoint": call.get("entrypoint"),
-                "tx_hash_hex": None if dry_run else f"{index + 17:02x}" * 32,
-                "pipeline_status": None
-                if dry_run
-                else self._queued_pipeline_status(f"{index + 17:02x}" * 32),
-                "status": "pending" if dry_run else "submitted",
-            }
-            for index, call in enumerate(hajimari_calls)
-            if isinstance(call, dict)
-        ]
-
-        assertions = payload.get("assertions", [])
-        if not isinstance(assertions, list):
-            raise ValueError("contract bundle payload assertions must be a list")
-        receipt["assertions"] = [
-            {
-                "id": assertion.get("id", f"assert-{index}"),
-                "contract_alias": assertion.get(
-                    "contract_alias",
-                    contracts[0]["contract_alias"],
-                ),
-                "entrypoint": assertion.get("entrypoint"),
-                "status": "pending" if dry_run else "passed",
-                "actual_result": None,
-                "expected_result": assertion.get("expected_result"),
-                "error": None,
-            }
-            for index, assertion in enumerate(assertions)
-            if isinstance(assertion, dict)
-        ]
-
-        bundle_digest = receipt.get("bundle_digest")
-        if isinstance(bundle_digest, str) and not dry_run:
-            self.contract_bundle_receipts[bundle_digest] = dict(receipt)
-        return _json_response(HTTPStatus.OK, receipt)
-
-    def _contracts_deploy_bundle_status(self, bundle_digest: str) -> _Response:
-        receipt = self.contract_bundle_receipts.get(bundle_digest)
-        if receipt is None:
-            return _json_response(HTTPStatus.NOT_FOUND, {"error": "bundle receipt not found"})
-        return _json_response(HTTPStatus.OK, receipt)
 
     def _contracts_call(self, body: bytes) -> _Response:
         try:

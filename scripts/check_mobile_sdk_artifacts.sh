@@ -90,32 +90,63 @@ fi
 
 ROOT_DIR="$(cd "$ROOT_ARG" && pwd)"
 FAILURES=0
+CANDIDATE_LAB_MARKER="KAGEMUSHA_CANDIDATE_EVIDENCE_LAB_DO_NOT_SHIP_V2"
+CANDIDATE_LAB_SYMBOL_FRAGMENT="kagemusha_recursive_spend_candidate_lab_"
+CANDIDATE_LAB_FEATURE="kagemusha-candidate-evidence-lab"
+CANDIDATE_LAB_HEADER_MACRO="CONNECT_NORITO_KAGEMUSHA_CANDIDATE_EVIDENCE_LAB"
+CANDIDATE_LAB_HEADER_MARKER="CONNECT_NORITO_KAGEMUSHA_CANDIDATE_EVIDENCE_LAB_DO_NOT_SHIP_V2"
+
+# Exact non-shipping C surface consumed only by the authenticated candidate
+# evidence harness. These names may exist in source only behind the dedicated
+# feature/header guard and must never appear in a production binary.
+KAGEMUSHA_CANDIDATE_LAB_C_SYMBOLS=(
+  connect_norito_kagemusha_recursive_spend_candidate_lab_artifact_begin_v4
+  connect_norito_kagemusha_recursive_spend_candidate_lab_artifact_write_v4
+  connect_norito_kagemusha_recursive_spend_candidate_lab_artifact_finalize_v4
+  connect_norito_kagemusha_recursive_spend_candidate_lab_artifact_cancel_v4
+  connect_norito_kagemusha_recursive_spend_candidate_lab_artifact_set_install_v4
+  connect_norito_kagemusha_recursive_spend_candidate_lab_artifact_set_is_installed_v4
+  connect_norito_kagemusha_recursive_spend_candidate_lab_accepted_identity_v4
+  connect_norito_kagemusha_recursive_spend_candidate_lab_artifact_set_uninstall_v4
+  connect_norito_kagemusha_recursive_spend_candidate_lab_init_v4
+  connect_norito_kagemusha_recursive_spend_candidate_lab_append_v4
+  connect_norito_kagemusha_recursive_spend_candidate_lab_verify_v4
+  connect_norito_kagemusha_recursive_spend_candidate_lab_redeem_v4
+)
 
 # The first mobile release is one exact ABI-20/V4 contract. Keep the complete
 # Kagemusha C export allow-list here so Apple archives, Android shared objects,
 # checked-out Rust, and the checked-in header are all compared against the same
-# surface. V2 suffixes below are supporting request/finality primitives used by
-# the V4 lifecycle; V1/V2/V3 lifecycle and V3 artifact entrypoints are retired.
+# surface. V2 suffixes below are unchanged note, authorization, membership, and
+# acknowledgement primitives reused by V4; all recursive V2/V3 aliases are retired.
 KAGEMUSHA_C_SYMBOLS=(
   connect_norito_kagemusha_recursive_spend_capabilities_v4
-  connect_norito_kagemusha_topup_finality_verify_v2
-  connect_norito_kagemusha_topup_shield_build_unsigned_v2
+  connect_norito_kagemusha_topup_finality_verify_v4
+  connect_norito_kagemusha_topup_shield_build_unsigned_v4
   connect_norito_kagemusha_recursive_spend_artifact_begin_v4
   connect_norito_kagemusha_recursive_spend_artifact_write_v4
   connect_norito_kagemusha_recursive_spend_artifact_finalize_v4
   connect_norito_kagemusha_recursive_spend_artifact_cancel_v4
   connect_norito_kagemusha_recursive_spend_artifact_set_install_v4
   connect_norito_kagemusha_recursive_spend_artifact_set_is_installed_v4
+  connect_norito_kagemusha_recursive_spend_installed_manifest_sha256_v4
   connect_norito_kagemusha_recursive_spend_artifact_set_uninstall_v4
+  connect_norito_kagemusha_output_membership_frontier_build_v4
+  connect_norito_kagemusha_output_membership_paths_derive_v4
+  connect_norito_kagemusha_recursive_spend_branch_validate_v4
+  connect_norito_kagemusha_recursive_spend_topup_provenance_build_v4
+  connect_norito_kagemusha_recursive_spend_topup_provenance_validate_v4
   connect_norito_kagemusha_recursive_spend_init_v4
-  connect_norito_kagemusha_recursive_spend_topup_unsigned_payload_digest_v2
-  connect_norito_kagemusha_recursive_spend_topup_finalize_request_v2
-  connect_norito_kagemusha_recursive_spend_topup_v2
+  connect_norito_kagemusha_recursive_spend_topup_unsigned_payload_digest_v4
+  connect_norito_kagemusha_recursive_spend_topup_finalize_request_v4
+  connect_norito_kagemusha_recursive_spend_topup_v4
   connect_norito_kagemusha_recursive_spend_append_v4
   connect_norito_kagemusha_recursive_spend_verify_v4
-  connect_norito_kagemusha_recursive_spend_redeem_unsigned_payload_digest_v2
-  connect_norito_kagemusha_recursive_spend_redeem_finalize_request_v2
+  connect_norito_kagemusha_recursive_spend_redeem_unsigned_payload_digest_v4
+  connect_norito_kagemusha_recursive_spend_redeem_finalize_request_v4
   connect_norito_kagemusha_recursive_spend_redeem_v4
+  connect_norito_kagemusha_recursive_spend_redemption_change_prepare_v4
+  connect_norito_kagemusha_secret_free_buffer
   connect_norito_kagemusha_receiver_key_reference_v2
   connect_norito_kagemusha_recipient_output_derive_v2
   connect_norito_kagemusha_recipient_payment_request_signing_bytes_v2
@@ -123,18 +154,23 @@ KAGEMUSHA_C_SYMBOLS=(
   connect_norito_kagemusha_recipient_payment_request_verify_v2
   connect_norito_kagemusha_request_authorization_signing_bytes_v2
   connect_norito_kagemusha_request_authorization_create_v2
+  connect_norito_kagemusha_request_authorization_finalize_hardware_v2
+  connect_norito_kagemusha_request_authorization_finalize_ios_app_attest_v2
   connect_norito_kagemusha_receiver_acknowledgement_payload_v2
   connect_norito_kagemusha_receiver_acknowledgement_signing_bytes_v2
   connect_norito_kagemusha_receiver_acknowledgement_create_v2
   connect_norito_kagemusha_receiver_acknowledgement_verify_v2
-  connect_norito_kagemusha_recursive_spend_peer_payment_from_split_v2
-  connect_norito_kagemusha_recursive_spend_peer_payment_validate_v2
-  connect_norito_kagemusha_recursive_spend_bundle_summary_v2
-  connect_norito_kagemusha_recursive_spend_build_split_intent_v2
+  connect_norito_kagemusha_recursive_spend_peer_payment_from_split_v4
+  connect_norito_kagemusha_recursive_spend_peer_payment_validate_v4
+  connect_norito_kagemusha_recursive_spend_bundle_summary_v4
 )
 
 REQUIRED_BRIDGE_SYMBOLS=(
   connect_norito_bridge_abi_version
+  connect_norito_free
+  connect_norito_encode_transfer_signed_transaction
+  connect_norito_encode_transfer_instruction_box
+  connect_norito_encode_validation_fee_transfer_signed_transaction
   connect_norito_detached_transaction_scaffold_inspect_v1
   connect_norito_detached_transaction_scaffold_finalize_ed25519_v1
   connect_norito_canonical_json_blake3_v1
@@ -155,31 +191,43 @@ KAGEMUSHA_JNI_METHODS=(
   nativeBranchClaimsConflictV2
   nativeBridgeAbiVersion
   nativeBuildAppendRequestV4
+  nativeBuildArtifactBindingV4
   nativeBuildInitRequestV4
+  nativeBuildOutputMembershipFrontierV4
   nativeBuildOutputMembershipPathsV4
   nativeBuildRedeemRequestV4
   nativeBuildRedeemV4
+  nativeBuildTopUpProvenanceV4
   nativeBuildVerifyRequestV4
   nativeCreateAcknowledgementV2
   nativeCreateAuthorizationV2
   nativeCreateRecipientRequestV2
-  nativeFinalizeRedeemV2
-  nativeFinalizeTopUpV2
+  nativeDeriveOutputMembershipPathsV4
+  nativeFinalizeHardwareAuthorizationV2
+  nativeFinalizeIosAppAttestAuthorizationV2
+  nativeFinalizeRedeemV4
+  nativeFinalizeTopUpV4
   nativeInitSpendV4
+  nativeInstalledManifestSha256V4
   nativePastaCycleV4BackendAvailable
   nativePrepareAcknowledgementV2
   nativePrepareAuthorizationV2
   nativePrepareNoteOpeningV2
+  nativePrepareRedemptionChangeV4
   nativePrepareRecipientRequestV2
-  nativePrepareTopUpV2
+  nativePrepareTopUpV4
   nativeProjectActiveVerifierV2
-  nativeProjectOperationStatusV2
-  nativeProjectPeerPaymentV2
-  nativeProjectReadinessV2
+  nativeProjectAuthenticatedArtifactSetV4
+  nativeProjectInitResultV4
+  nativeProjectOperationStatusV4
+  nativeProjectPeerPaymentV4
+  nativeProjectReadinessV4
   nativeProjectRecipientRequestV2
-  nativeProjectRedeemBuildResultV2
-  nativeProjectSplitResultV2
-  nativeProjectVerifyResultV2
+  nativeProjectRedeemBuildResultV4
+  nativeProjectSplitResultV4
+  nativeProjectVerifyResultV4
+  nativeValidateSpendableBranchV4
+  nativeValidateTopUpProvenanceV4
   nativeVerifyAcknowledgementV2
   nativeVerifyRecipientRequestV2
   nativeVerifySpendV4
@@ -249,6 +297,94 @@ require_glob() {
   done < <(compgen -G "$pattern" || true)
   if [[ ${#matches[@]} -eq 0 ]]; then
     fail "missing $label: $pattern"
+  fi
+}
+
+reject_candidate_lab_content() {
+  local path="$1"
+  local label="$2"
+  [[ -f "$path" ]] || return
+  if ! python3 - "$path" "$CANDIDATE_LAB_MARKER" "$CANDIDATE_LAB_SYMBOL_FRAGMENT" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+needles = tuple(value.encode("ascii") for value in sys.argv[2:])
+overlap = max(map(len, needles)) - 1
+tail = b""
+with path.open("rb") as handle:
+    while True:
+        chunk = handle.read(1024 * 1024)
+        if not chunk:
+            break
+        window = tail + chunk
+        if any(needle in window for needle in needles):
+            raise SystemExit(1)
+        tail = window[-overlap:] if overlap else b""
+PY
+  then
+    fail "$label contains a non-shipping Kagemusha candidate-lab marker or symbol"
+  fi
+}
+
+reject_candidate_lab_archive() {
+  local path="$1"
+  local label="$2"
+  [[ -f "$path" ]] || return
+  if ! python3 - "$path" "$CANDIDATE_LAB_MARKER" "$CANDIDATE_LAB_SYMBOL_FRAGMENT" <<'PY'
+import io
+import sys
+import zipfile
+
+needles = tuple(value.encode("ascii") for value in sys.argv[2:])
+overlap = max(map(len, needles)) - 1
+archive_suffixes = (".aar", ".jar", ".zip")
+
+def scan_stream(handle):
+    tail = b""
+    chunks = []
+    total = 0
+    while True:
+        chunk = handle.read(1024 * 1024)
+        if not chunk:
+            break
+        window = tail + chunk
+        if any(needle in window for needle in needles):
+            raise SystemExit(1)
+        total += len(chunk)
+        if total <= 256 * 1024 * 1024:
+            chunks.append(chunk)
+        tail = window[-overlap:] if overlap else b""
+    return b"".join(chunks) if total <= 256 * 1024 * 1024 else None
+
+def scan_archive(archive, depth=0):
+    if depth > 3:
+        raise SystemExit(2)
+    for entry in archive.infolist():
+        if entry.is_dir() or entry.file_size > 256 * 1024 * 1024:
+            if entry.file_size > 256 * 1024 * 1024:
+                raise SystemExit(2)
+            continue
+        with archive.open(entry) as handle:
+            payload = scan_stream(handle)
+        if entry.filename.lower().endswith(archive_suffixes):
+            if payload is None:
+                raise SystemExit(2)
+            try:
+                with zipfile.ZipFile(io.BytesIO(payload)) as nested:
+                    scan_archive(nested, depth + 1)
+            except zipfile.BadZipFile:
+                raise SystemExit(2)
+
+try:
+    archive = zipfile.ZipFile(sys.argv[1])
+except (OSError, zipfile.BadZipFile):
+    raise SystemExit(2)
+with archive:
+    scan_archive(archive)
+PY
+  then
+    fail "$label is unreadable or contains a non-shipping Kagemusha candidate-lab marker or symbol"
   fi
 }
 
@@ -335,29 +471,282 @@ bridge_source_fingerprint() {
 check_bridge_source_contract() {
   local bridge_source="$ROOT_DIR/crates/connect_norito_bridge/src/lib.rs"
   local bridge_header="$ROOT_DIR/crates/connect_norito_bridge/include/connect_norito_bridge.h"
+  local bridge_cargo="$ROOT_DIR/crates/connect_norito_bridge/Cargo.toml"
 
   # Packaged artifacts can be checked outside a source checkout. When source is
   # present, however, refuse to certify a build whose callable Kagemusha ABI is
   # broader or narrower than the exact first-release allow-list.
   if [[ -f "$bridge_source" ]]; then
-    if ! python3 - "$bridge_source" "${KAGEMUSHA_C_SYMBOLS[@]}" <<'PY'
+    if ! python3 - "$bridge_source" "$bridge_cargo" \
+        "$CANDIDATE_LAB_FEATURE" "$CANDIDATE_LAB_MARKER" \
+        "$CANDIDATE_LAB_HEADER_MARKER" \
+        --shipping "${KAGEMUSHA_C_SYMBOLS[@]}" \
+        --lab "${KAGEMUSHA_CANDIDATE_LAB_C_SYMBOLS[@]}" <<'PY'
+from collections import Counter
 import re
 import sys
+import tomllib
 
 path = sys.argv[1]
-expected = set(sys.argv[2:])
+cargo_path = sys.argv[2]
+feature = sys.argv[3]
+marker = sys.argv[4]
+marker_symbol = sys.argv[5]
+shipping_separator = sys.argv.index("--shipping")
+lab_separator = sys.argv.index("--lab")
+expected = set(sys.argv[shipping_separator + 1:lab_separator])
+expected_lab = set(sys.argv[lab_separator + 1:])
 text = open(path, "r", encoding="utf-8").read()
-abi = re.search(
+
+
+def rust_code_mask(source):
+    """Mark Rust tokens while excluding comments and string/byte literals."""
+
+    mask = bytearray(b"\x01") * len(source)
+
+    def hide(start, end):
+        mask[start:end] = b"\x00" * (end - start)
+
+    def raw_literal_end(start):
+        if start > 0 and (source[start - 1].isalnum() or source[start - 1] == "_"):
+            return None
+        for prefix in ("br", "cr", "r"):
+            if not source.startswith(prefix, start):
+                continue
+            cursor = start + len(prefix)
+            hashes = 0
+            while cursor < len(source) and source[cursor] == "#":
+                hashes += 1
+                cursor += 1
+            if cursor >= len(source) or source[cursor] != '"':
+                continue
+            closing = '"' + ("#" * hashes)
+            end = source.find(closing, cursor + 1)
+            return len(source) if end < 0 else end + len(closing)
+        return None
+
+    cursor = 0
+    while cursor < len(source):
+        if source.startswith("//", cursor):
+            end = source.find("\n", cursor + 2)
+            end = len(source) if end < 0 else end
+            hide(cursor, end)
+            cursor = end
+            continue
+        if source.startswith("/*", cursor):
+            depth = 1
+            end = cursor + 2
+            while end < len(source) and depth:
+                if source.startswith("/*", end):
+                    depth += 1
+                    end += 2
+                elif source.startswith("*/", end):
+                    depth -= 1
+                    end += 2
+                else:
+                    end += 1
+            hide(cursor, end)
+            cursor = end
+            continue
+        raw_end = raw_literal_end(cursor)
+        if raw_end is not None:
+            hide(cursor, raw_end)
+            cursor = raw_end
+            continue
+        quote = None
+        if source[cursor] == '"':
+            quote = cursor
+        elif (
+            source[cursor] in ("b", "c")
+            and cursor + 1 < len(source)
+            and source[cursor + 1] == '"'
+            and (cursor == 0 or not (source[cursor - 1].isalnum() or source[cursor - 1] == "_"))
+        ):
+            quote = cursor + 1
+        if quote is not None:
+            end = quote + 1
+            while end < len(source):
+                if source[end] == "\\":
+                    end = min(len(source), end + 2)
+                elif source[end] == '"':
+                    end += 1
+                    break
+                else:
+                    end += 1
+            hide(cursor, end)
+            cursor = end
+            continue
+        cursor += 1
+    return mask
+
+
+code_mask = rust_code_mask(text)
+
+
+def code_matches(pattern):
+    return [match for match in pattern.finditer(text) if code_mask[match.start()]]
+
+
+errors = []
+abi_matches = code_matches(re.compile(
     r"CONNECT_NORITO_BRIDGE_ABI_VERSION\s*:\s*u32\s*=\s*(\d+)\s*;",
-    text,
-)
-actual = set(re.findall(
+))
+export_pattern = re.compile(
     r'pub\s+(?:unsafe\s+)?extern\s+"C"\s+fn\s+'
     r'(connect_norito_kagemusha_[A-Za-z0-9_]+)\s*\(',
-    text,
-))
-errors = []
-if abi is None or abi.group(1) != "20":
+)
+lab_function_pattern = re.compile(
+    r'\bfn\s+(connect_norito_kagemusha_[A-Za-z0-9_]*candidate_lab_'
+    r'[A-Za-z0-9_]+)\s*\(',
+)
+jni_pattern = re.compile(
+    r'(?m)^pub\s+unsafe\s+extern\s+"system"\s+fn\s+'
+    r'(Java_org_hyperledger_iroha_sdk_kagemusha_candidate_lab_[A-Za-z0-9_]+)\s*\('
+)
+marker_symbol_pattern = re.compile(rf'\b{re.escape(marker_symbol)}\b')
+
+all_export_counts = Counter(match.group(1) for match in code_matches(export_pattern))
+lab_function_counts = Counter(
+    match.group(1) for match in code_matches(lab_function_pattern)
+)
+lab_export_counts = Counter(
+    name for name, count in all_export_counts.items()
+    for _ in range(count) if "_candidate_lab_" in name
+)
+jni_matches = code_matches(jni_pattern)
+jni_counts = Counter(match.group(1) for match in jni_matches)
+marker_occurrences = code_matches(marker_symbol_pattern)
+cargo = None
+cargo_error = None
+try:
+    with open(cargo_path, "rb") as handle:
+        cargo = tomllib.load(handle)
+except (OSError, tomllib.TOMLDecodeError) as error:
+    cargo_error = error
+cargo_features = cargo.get("features") if isinstance(cargo, dict) else None
+cargo_declares_lab = isinstance(cargo_features, dict) and feature in cargo_features
+lab_present = bool(
+    lab_function_counts
+    or lab_export_counts
+    or jni_counts
+    or marker_occurrences
+    or cargo_declares_lab
+)
+
+if lab_present:
+    for label, counts in (
+        ("Rust function", lab_function_counts),
+        ("Rust/C export", lab_export_counts),
+    ):
+        observed = set(counts)
+        missing = sorted(expected_lab - observed)
+        unexpected = sorted(observed - expected_lab)
+        duplicates = sorted(name for name, count in counts.items() if count != 1)
+        if missing or unexpected or duplicates:
+            errors.append(
+                f"candidate-lab {label} inventory is not exact "
+                f"(missing={missing}, unexpected={unexpected}, "
+                f"non_single_occurrence={duplicates})"
+            )
+
+    for name in sorted(expected_lab):
+        declaration = re.compile(
+            rf'(?m)^#\[cfg\(feature = "{re.escape(feature)}"\)\][ \t]*\n'
+            rf'#\[unsafe\(no_mangle\)\][ \t]*\n'
+            rf'^pub\s+(?:unsafe\s+)?extern\s+"C"\s+fn\s+{re.escape(name)}\s*\('
+        )
+        if len(code_matches(declaration)) != 1:
+            errors.append(
+                "candidate-lab Rust export is not directly guarded by its exact "
+                f"feature: {name}"
+            )
+
+    marker_const = re.compile(
+        rf'(?m)^#\[cfg\(feature = "{re.escape(feature)}"\)\][ \t]*\n'
+        r'^pub\s+const\s+KAGEMUSHA_CANDIDATE_EVIDENCE_LAB_DO_NOT_SHIP_MARKER_V2'
+        rf'\s*:\s*&str\s*=\s*\n?[ \t]*"{re.escape(marker)}"\s*;'
+    )
+    marker_static = re.compile(
+        rf'(?ms)^#\[cfg\(feature = "{re.escape(feature)}"\)\][ \t]*\n'
+        rf'#\[used\][ \t]*\n#\[unsafe\(no_mangle\)\][ \t]*\n'
+        rf'pub\s+static\s+{re.escape(marker_symbol)}\s*:\s*\[u8;[^\]]+\]\s*='
+        rf'\s*\*b"{re.escape(marker)}"\s*;'
+    )
+    marker_definitions = code_matches(re.compile(
+        rf'(?m)^pub\s+static\s+{re.escape(marker_symbol)}\b'
+    ))
+    if len(code_matches(marker_const)) != 1:
+        errors.append(
+            "candidate-lab Rust marker value is not directly guarded by its exact feature"
+        )
+    if len(code_matches(marker_static)) != 1 or len(marker_definitions) != 1:
+        errors.append(
+            "candidate-lab Rust link marker is not one exact guarded no-mangle static"
+        )
+
+    if not jni_counts:
+        errors.append("candidate-lab JNI export surface is missing")
+    exact_jni_cfg = (
+        rf'(?ms)^#\[cfg\(all\(\s*feature\s*=\s*"{re.escape(feature)}"\s*,'
+        r'\s*any\(\s*target_os\s*=\s*"android"\s*,'
+        r'\s*target_os\s*=\s*"linux"\s*,'
+        r'\s*target_os\s*=\s*"macos"\s*,'
+        r'\s*target_os\s*=\s*"windows"\s*\)\s*\)\)\][ \t]*\n'
+    )
+    for name, count in sorted(jni_counts.items()):
+        if count != 1:
+            errors.append(
+                f"candidate-lab JNI export occurs {count} times instead of once: {name}"
+            )
+            continue
+        declaration = re.compile(
+            exact_jni_cfg
+            + r'(?:#\[(?!cfg\(|unsafe\(no_mangle\))[^\n]+\][ \t]*\n)*'
+            + r'#\[unsafe\(no_mangle\)\][ \t]*\n'
+            + rf'pub\s+unsafe\s+extern\s+"system"\s+fn\s+{re.escape(name)}\s*\('
+        )
+        if len(code_matches(declaration)) != 1:
+            errors.append(
+                f"candidate-lab JNI export lacks its exact conjunctive feature guard: {name}"
+            )
+
+    if cargo_error is not None:
+        errors.append(
+            f"candidate-lab Cargo feature policy is unreadable: {cargo_error}"
+        )
+    else:
+        features = cargo_features
+        exact_delegation = [f"iroha_core/{feature}"]
+        if not isinstance(features, dict) or features.get(feature) != exact_delegation:
+            errors.append("candidate-lab Cargo feature delegation is not exact")
+        else:
+            default = features.get("default", [])
+            if not isinstance(default, list) or not all(
+                isinstance(item, str) for item in default
+            ):
+                errors.append("candidate-lab Cargo default feature list is malformed")
+            else:
+                reachable = set()
+                pending = list(default)
+                while pending:
+                    item = pending.pop()
+                    if item in reachable:
+                        continue
+                    reachable.add(item)
+                    delegated = features.get(item)
+                    if isinstance(delegated, list):
+                        pending.extend(
+                            value for value in delegated if isinstance(value, str)
+                        )
+                if feature in reachable:
+                    errors.append(
+                        "candidate-lab Cargo feature is enabled directly or transitively by default"
+                    )
+
+# Candidate-evidence exports are excluded from the shipping ABI only after all
+# checks above authenticate the complete lab-only source contract.
+actual = set(all_export_counts) - set(lab_export_counts)
+if len(abi_matches) != 1 or abi_matches[0].group(1) != "20":
     errors.append("bridge source does not declare exact ABI 20")
 missing = sorted(expected - actual)
 retired_or_extra = sorted(actual - expected)
@@ -375,17 +764,174 @@ PY
   fi
 
   if [[ -f "$bridge_header" ]]; then
-    if ! python3 - "$bridge_header" "${KAGEMUSHA_C_SYMBOLS[@]}" <<'PY'
+    if ! python3 - "$bridge_header" "$CANDIDATE_LAB_HEADER_MARKER" \
+        "$CANDIDATE_LAB_HEADER_MACRO" \
+        --shipping "${KAGEMUSHA_C_SYMBOLS[@]}" \
+        --lab "${KAGEMUSHA_CANDIDATE_LAB_C_SYMBOLS[@]}" <<'PY'
+from collections import Counter
 import re
 import sys
 
 path = sys.argv[1]
-expected = set(sys.argv[2:])
+marker = sys.argv[2]
+header_macro = sys.argv[3]
+shipping_separator = sys.argv.index("--shipping")
+lab_separator = sys.argv.index("--lab")
+expected = set(sys.argv[shipping_separator + 1:lab_separator])
+expected_lab = set(sys.argv[lab_separator + 1:])
 text = open(path, "r", encoding="utf-8").read()
-actual = set(re.findall(
+
+
+def c_code_mask(source):
+    """Mark C tokens while excluding comments and string/character literals."""
+
+    mask = bytearray(b"\x01") * len(source)
+
+    def hide(start, end):
+        mask[start:end] = b"\x00" * (end - start)
+
+    cursor = 0
+    while cursor < len(source):
+        if source.startswith("//", cursor):
+            end = source.find("\n", cursor + 2)
+            end = len(source) if end < 0 else end
+            hide(cursor, end)
+            cursor = end
+            continue
+        if source.startswith("/*", cursor):
+            end = source.find("*/", cursor + 2)
+            end = len(source) if end < 0 else end + 2
+            hide(cursor, end)
+            cursor = end
+            continue
+        quote = None
+        literal_start = cursor
+        for prefix in ("u8", "L", "u", "U", ""):
+            candidate = cursor + len(prefix)
+            if (
+                source.startswith(prefix, cursor)
+                and candidate < len(source)
+                and source[candidate] in ('"', "'")
+                and (
+                    not prefix
+                    or cursor == 0
+                    or not (source[cursor - 1].isalnum() or source[cursor - 1] == "_")
+                )
+            ):
+                quote = candidate
+                break
+        if quote is not None:
+            delimiter = source[quote]
+            end = quote + 1
+            while end < len(source):
+                if source[end] == "\\":
+                    end = min(len(source), end + 2)
+                elif source[end] == delimiter:
+                    end += 1
+                    break
+                else:
+                    end += 1
+            hide(literal_start, end)
+            cursor = end
+            continue
+        cursor += 1
+    return mask
+
+
+code_mask = c_code_mask(text)
+
+
+def code_matches(pattern, *, start=0, end=None):
+    boundary = len(text) if end is None else end
+    return [
+        match for match in pattern.finditer(text, start, boundary)
+        if code_mask[match.start()]
+    ]
+
+
+export_pattern = re.compile(
     r'\b(connect_norito_kagemusha_[A-Za-z0-9_]+)\s*\(',
-    text,
-))
+)
+export_matches = code_matches(export_pattern)
+export_counts = Counter(match.group(1) for match in export_matches)
+lab_export_matches = [
+    match for match in export_matches if "_candidate_lab_" in match.group(1)
+]
+lab_export_counts = Counter(match.group(1) for match in lab_export_matches)
+guard_pattern = re.compile(
+    rf'(?m)^#ifdef[ \t]+{re.escape(header_macro)}[ \t]*$'
+)
+guard_matches = code_matches(guard_pattern)
+marker_declaration = f"extern const uint8_t {marker}[];"
+marker_pattern = re.compile(re.escape(marker_declaration))
+marker_matches = code_matches(marker_pattern)
+define_pattern = re.compile(
+    rf'(?m)^#[ \t]*define[ \t]+{re.escape(header_macro)}\b'
+)
+define_matches = code_matches(define_pattern)
+lab_present = bool(
+    lab_export_counts or guard_matches or marker_matches or define_matches
+)
+errors = []
+
+if lab_present:
+    observed = set(lab_export_counts)
+    missing_lab = sorted(expected_lab - observed)
+    unexpected_lab = sorted(observed - expected_lab)
+    duplicate_lab = sorted(
+        name for name, count in lab_export_counts.items() if count != 1
+    )
+    if missing_lab or unexpected_lab or duplicate_lab:
+        errors.append(
+            "candidate-lab header inventory is not exact "
+            f"(missing={missing_lab}, unexpected={unexpected_lab}, "
+            f"non_single_occurrence={duplicate_lab})"
+        )
+    if len(guard_matches) != 1:
+        errors.append(
+            "candidate-lab header declarations require one exact non-shipping guard"
+        )
+    else:
+        guard = guard_matches[0]
+        end_pattern = re.compile(r'(?m)^#endif[ \t]*$')
+        ends = code_matches(end_pattern, start=guard.end())
+        if not ends:
+            errors.append("candidate-lab header guard is unterminated")
+        else:
+            guard_end = ends[0]
+            nested_pattern = re.compile(
+                r'(?m)^#[ \t]*(?:if|ifdef|ifndef|elif|else|endif)\b'
+            )
+            if code_matches(
+                nested_pattern, start=guard.end(), end=guard_end.start()
+            ):
+                errors.append(
+                    "candidate-lab header guard contains a nested preprocessor branch"
+                )
+            guarded_export_matches = code_matches(
+                export_pattern, start=guard.end(), end=guard_end.start()
+            )
+            guarded_counts = Counter(
+                match.group(1) for match in guarded_export_matches
+            )
+            if guarded_counts != Counter({name: 1 for name in expected_lab}):
+                errors.append("candidate-lab header declaration escaped its guard")
+            guarded_markers = code_matches(
+                marker_pattern, start=guard.end(), end=guard_end.start()
+            )
+            if len(guarded_markers) != 1 or len(marker_matches) != 1:
+                errors.append(
+                    "candidate-lab header guard lacks its exact do-not-ship marker"
+                )
+            outside_lab = [
+                match for match in lab_export_matches
+                if not (guard.end() <= match.start() < guard_end.start())
+            ]
+            if outside_lab:
+                errors.append("candidate-lab header declaration escaped its guard")
+    if define_matches:
+        errors.append("bridge header must not enable the candidate-lab macro")
+actual = set(export_counts) - set(lab_export_counts)
 missing = sorted(expected - actual)
 retired_or_extra = sorted(actual - expected)
 if missing:
@@ -400,7 +946,9 @@ if retired_or_extra:
         "Kagemusha declarations: " + ", ".join(retired_or_extra),
         file=sys.stderr,
     )
-raise SystemExit(1 if missing or retired_or_extra else 0)
+for error in errors:
+    print("[mobile-sdk-artifacts] ERROR: " + error, file=sys.stderr)
+raise SystemExit(1 if missing or retired_or_extra or errors else 0)
 PY
     then
       FAILURES=1
@@ -426,6 +974,7 @@ expected_wrappers = {
     "buildRedeemV4",
     "ensureProofBackendAvailableV4",
     "initSpendV4",
+    "prepareRedemptionChangeV4",
     "verifySpendV4",
 }
 expected_native_lifecycle = {
@@ -440,6 +989,7 @@ expected_native_lifecycle = {
     "kagemushaRecursiveSpendCapabilitiesV4",
     "kagemushaRecursiveSpendInitV4",
     "kagemushaRecursiveSpendRedeemV4",
+    "kagemushaRecursiveSpendRedemptionChangePrepareV4",
     "kagemushaRecursiveSpendVerifyV4",
 }
 actual_symbols = set(re.findall(
@@ -448,11 +998,12 @@ actual_symbols = set(re.findall(
 ))
 actual_wrappers = set(re.findall(
     r"\bfunc\s+((?:ensureProofBackendAvailable|initSpend|appendSpend|verifySpend|"
-    r"buildRedeem)V[0-9]+)\s*\(",
+    r"buildRedeem|prepareRedemptionChange)V[0-9]+)\s*\(",
     text,
 ))
 actual_native_lifecycle = set(re.findall(
     r"\bfunc\s+(kagemushaRecursiveSpend(?:Capabilities|Init|Append|Verify|Redeem|"
+    r"RedemptionChangePrepare|"
     r"Artifact(?:Begin|Write|Finalize|Cancel|SetInstall|SetIsInstalled|SetUninstall))"
     r"V[0-9]+)\s*\(",
     text,
@@ -478,6 +1029,17 @@ if re.search(
     text,
 ):
     errors.append("Swift SDK retains an unversioned retired lifecycle wrapper")
+if "redemptionChange(spendKey:" in text or re.search(
+    r"redemptionChange[\s\S]{0,300}?defaultDiversifier\(\)", text
+):
+    errors.append("Swift SDK lets callers fabricate partial-redemption rho or diversifier")
+if not re.search(
+    r"kagemushaRecursiveSpendRedemptionChangePrepareV4[\s\S]{0,2200}?"
+    r"connect_norito_kagemusha_secret_free_buffer[\s\S]{0,1600}?"
+    r"copyKagemushaNativeSecretArchiveOutput",
+    text,
+):
+    errors.append("Swift redemption-change output is not bound to secure native deallocation")
 for error in errors:
     print(
         "[mobile-sdk-artifacts] ERROR: " + error,
@@ -494,6 +1056,7 @@ check_android_kagemusha_source_contract() {
   local rust_source="$ROOT_DIR/crates/connect_norito_bridge/src/lib.rs"
   local kotlin_source="$ROOT_DIR/kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt"
   local java_source="$ROOT_DIR/java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProver.java"
+  local android_keymint_source="$ROOT_DIR/java/iroha_android/android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaAndroidKeyMint.java"
   local namespace
   local expected_jni=()
 
@@ -591,6 +1154,60 @@ PY
       FAILURES=1
     fi
   fi
+
+  if [[ ! -f "$android_keymint_source" ]]; then
+    fail "physical Android Kagemusha KeyMint integration source is missing"
+  elif ! python3 - "$android_keymint_source" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text(encoding="utf-8")
+required = (
+    "PackageManager.FEATURE_KEYSTORE_SINGLE_USE_KEY",
+    "KeyProperties.KEY_ALGORITHM_EC",
+    'CURVE_NAME = "secp256r1"',
+    "KeyProperties.PURPOSE_SIGN",
+    "KeyProperties.DIGEST_SHA256",
+    ".setAttestationChallenge(request.challenge())",
+    ".setMaxUsageCount(1)",
+    'SIGNATURE_ALGORITHM = "SHA256withECDSA"',
+    "StrongBoxPolicy.REQUIRED",
+    "builder.setIsStrongBoxBacked(true)",
+    "keyInfo.isInsideSecureHardware()",
+    "keyInfo.getRemainingUsageCount() != 1",
+    "getCertificateChain(request.alias())",
+    "DeviceAttestationRegistration.androidPreKeyGenerationChallengeHash",
+    "requiredPreparation.signingBytes()",
+    "KagemushaP256Codec.rawLowSFromStrictDer(signatureDer)",
+)
+errors = [f"missing {marker!r}" for marker in required if marker not in text]
+if "KeyProperties.DIGEST_NONE" in text:
+    errors.append("physical KeyMint path uses DIGEST_NONE")
+if "PREFERRED" in text:
+    errors.append("physical KeyMint path exposes a silent StrongBox preference/downgrade")
+if re.search(
+    r"generateRegistration\s*\([\s\S]{0,1800}?"
+    r"requiredParameters\.attestationChallenge\(\)"
+    r"[\s\S]{0,900}?requiredParameters\.registration\(material\)",
+    text,
+) is None:
+    errors.append("registration does not derive and bind the exact pre-key challenge")
+if re.search(
+    r"authorize\s*\([\s\S]{0,1800}?requiredPreparation\.signingBytes\(\)"
+    r"[\s\S]{0,900}?finalizeRequestAuthorization\s*\("
+    r"[\s\S]{0,180}?requiredPreparation,\s*signatureDer",
+    text,
+) is None:
+    errors.append("authorization does not sign and finalize the exact preparation")
+for error in errors:
+    print(f"[mobile-sdk-artifacts] ERROR: {path}: {error}", file=sys.stderr)
+raise SystemExit(1 if errors else 0)
+PY
+  then
+    FAILURES=1
+  fi
 }
 
 require_plist_slice() {
@@ -631,6 +1248,9 @@ check_xcframework() {
     require_dir "$slice_dir" "XCFramework slice directory"
     if [[ -d "$slice_dir" ]]; then
       require_file "$slice_dir/libNoritoBridge.a" "XCFramework slice binary"
+      reject_candidate_lab_content \
+        "$slice_dir/libNoritoBridge.a" \
+        "NoritoBridge $slice production binary"
       require_dir "$headers_dir" "XCFramework slice headers"
       if [[ -d "$headers_dir" ]]; then
         require_file "$headers_dir/NoritoBridge.h" "XCFramework slice header"
@@ -885,8 +1505,10 @@ check_android_native_symbols() {
     fail "llvm-nm (or MOBILE_SDK_ANDROID_NM) is required to inspect client-android $abi native bridge"
     return
   fi
-  if ! symbols="$("$nm_tool" -g --defined-only "$binary" 2>/dev/null)"; then
-    if ! symbols="$("$nm_tool" -D -g --defined-only "$binary" 2>/dev/null)"; then
+  # Shipping Android libraries are stripped canonically, so the exact public
+  # surface lives in the ELF dynamic symbol table rather than .symtab.
+  if ! symbols="$("$nm_tool" -D -g --defined-only "$binary" 2>/dev/null)"; then
+    if ! symbols="$("$nm_tool" -g --defined-only "$binary" 2>/dev/null)"; then
       if ! symbols="$("$nm_tool" -gj "$binary" 2>/dev/null)"; then
         fail "unable to inspect client-android $abi native bridge with $nm_tool"
         return
@@ -944,6 +1566,24 @@ PY
   fi
 }
 
+check_android_native_stripped() {
+  local binary="$1"
+  local abi="$2"
+  local description
+
+  if ! command -v file >/dev/null 2>&1; then
+    fail "file is required to verify that the client-android $abi native bridge is stripped"
+    return
+  fi
+  if ! description="$(file -b "$binary" 2>/dev/null)"; then
+    fail "unable to inspect client-android $abi native bridge file type"
+    return
+  fi
+  if ! grep -Eq '(^|, )stripped(,|$)' <<<"$description"; then
+    fail "client-android $abi native bridge is not canonically stripped"
+  fi
+}
+
 check_android_package() {
   local settings="$ROOT_DIR/kotlin/settings.gradle.kts"
 
@@ -965,11 +1605,21 @@ check_android_package() {
 
     require_zip_entry "$client_aar" "AndroidManifest.xml" "client-android release aar"
     require_zip_entry "$client_aar" "classes.jar" "client-android release aar"
+    reject_candidate_lab_archive "$client_aar" "client-android release aar"
+
+    local production_archive
+    while IFS= read -r production_archive; do
+      reject_candidate_lab_archive "$production_archive" "production mobile SDK archive"
+    done < <(
+      compgen -G "$ROOT_DIR/kotlin/core-jvm/build/libs/core-jvm-*.jar" || true
+      compgen -G "$ROOT_DIR/kotlin/offline-wallet-android/build/outputs/aar/offline-wallet-android-*.aar" || true
+    )
 
     for abi in arm64-v8a x86_64; do
       local source_native="$ROOT_DIR/kotlin/client-android/src/main/jniLibs/$abi/libconnect_norito_bridge.so"
       local aar_entry="jni/$abi/libconnect_norito_bridge.so"
       require_file "$source_native" "client-android $abi native bridge library"
+      reject_candidate_lab_content "$source_native" "client-android $abi production bridge"
       require_zip_entry "$client_aar" "jni/$abi/libconnect_norito_bridge.so" "client-android release aar"
       if [[ -f "$source_native" && -f "$client_aar" ]] \
           && unzip -Z1 "$client_aar" 2>/dev/null | grep -Fxq -- "$aar_entry"; then
@@ -977,6 +1627,7 @@ check_android_package() {
           fail "client-android $abi native bridge differs between jniLibs and release aar"
         fi
         if [[ "${MOBILE_SDK_SKIP_BINARY_INSPECTION:-0}" != "1" ]]; then
+          check_android_native_stripped "$source_native" "$abi"
           check_android_native_symbols "$source_native" "$abi"
         fi
       fi

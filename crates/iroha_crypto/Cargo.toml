@@ -12,7 +12,7 @@ license.workspace = true
 workspace = true
 
 [features]
-default = ["std", "rand", "json", "ecc-batch", "bfv-accel"]
+default = ["std", "rand", "json", "ecc-batch", "bfv-accel", "pqc"]
 std = []
 json = ["norito/json", "mv"]
 bfv-accel = []
@@ -53,6 +53,7 @@ secp256k1-msm-batch = []
 # - Ed25519 uses ed25519-dalek's MSM-based batch verify with a deterministic transcript
 # - Secp256k1 remains per-signature (no secure MSM batch included); kept for symmetry
 ecc-batch = ["dep:subtle", "ed25519-dalek/batch"]
+pqc = ["dep:pqcrypto-traits", "dep:pqcrypto-mldsa", "dep:soranet_pq"]
 
 [dependencies]
 iroha_primitives = { workspace = true }
@@ -70,7 +71,7 @@ thiserror = { version = "2.0.17" }
 displaydoc = { workspace = true, features = ["std"] }
 blake3 = { workspace = true }
 base64 = { workspace = true }
-soranet_pq = { workspace = true }
+soranet_pq = { workspace = true, optional = true }
 
 digest = { version = "0.10.7", default-features = false, features = ["alloc", "std"] }
 blake2 = { version = "0.10.6", default-features = false, features = ["std"] }
@@ -124,16 +125,16 @@ k256 = { version = "0.13.4", default-features = false, features = ["alloc", "ecd
 argon2 = { version = "0.5.3", default-features = false, features = ["std"] }
 
 # PQC (ML-DSA available by default, ML-KEM available through `soranet_pq`)
-pqcrypto-traits = { version = "0.3.5" }
+pqcrypto-traits = { version = "0.3.5", optional = true }
 time = { workspace = true, features = ["formatting", "parsing"] }
 
 # pqcrypto-mldsa's NEON C backend is not compatible with MSVC. Keep ML-DSA
 # enabled on Windows/AArch64 through its portable clean C implementation.
 [target.'cfg(all(target_os = "windows", target_arch = "aarch64"))'.dependencies]
-pqcrypto-mldsa = { version = "0.1.2", default-features = false, features = ["std"] }
+pqcrypto-mldsa = { version = "0.1.2", default-features = false, features = ["std"], optional = true }
 
 [target.'cfg(not(all(target_os = "windows", target_arch = "aarch64")))'.dependencies]
-pqcrypto-mldsa = { version = "0.1.2" }
+pqcrypto-mldsa = { version = "0.1.2", optional = true }
 
 [dev-dependencies]
 criterion = { workspace = true }

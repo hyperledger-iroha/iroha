@@ -3801,8 +3801,19 @@ pub mod settlement {
     }
     /// Offline settlement defaults.
     pub mod offline {
-        /// Kagemusha shielded offline-offline payments are enabled by default.
-        pub const KAGEMUSHA_ENABLED: bool = true;
+        use std::path::PathBuf;
+
+        /// No Kagemusha release policy is trusted unless an operator configures one.
+        #[must_use]
+        pub const fn kagemusha_release_policy_path() -> Option<PathBuf> {
+            None
+        }
+
+        /// No Kagemusha artifact catalog is loaded unless an operator configures one.
+        #[must_use]
+        pub const fn kagemusha_artifact_dir() -> Option<PathBuf> {
+            None
+        }
     }
     /// Router defaults (shadow price, guard rails).
     pub mod router {

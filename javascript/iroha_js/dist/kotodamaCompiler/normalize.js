@@ -43,6 +43,23 @@ const IVM_EXECUTION_HEADER_BYTES = 17;
 const IVM_ABI_HASH_BYTES = 32;
 const IVM_HEADER_BYTES = IVM_EXECUTION_HEADER_BYTES + IVM_ABI_HASH_BYTES;
 const NORITO_FRAME_HEADER_BYTES = 40;
+const TYPED_ARRAY_PROTOTYPE = Object.getPrototypeOf(Uint8Array.prototype);
+const TYPED_ARRAY_TAG_GETTER = Object.getOwnPropertyDescriptor(
+  TYPED_ARRAY_PROTOTYPE,
+  Symbol.toStringTag,
+)?.get;
+const TYPED_ARRAY_BUFFER_GETTER = Object.getOwnPropertyDescriptor(
+  TYPED_ARRAY_PROTOTYPE,
+  "buffer",
+)?.get;
+const TYPED_ARRAY_BYTE_OFFSET_GETTER = Object.getOwnPropertyDescriptor(
+  TYPED_ARRAY_PROTOTYPE,
+  "byteOffset",
+)?.get;
+const TYPED_ARRAY_BYTE_LENGTH_GETTER = Object.getOwnPropertyDescriptor(
+  TYPED_ARRAY_PROTOTYPE,
+  "byteLength",
+)?.get;
 // `Archived<EmbeddedContractInterfaceV1>` is at most 8-byte aligned, and the
 // 40-byte NRT0 header is already aligned. The Rust decoder requires this exact
 // schema padding rather than the looser unknown-schema 64-byte fallback.
@@ -350,33 +367,30 @@ function toHex(bytes) {
   return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
+function snapshotUint8Array(value) {
+  if (!ArrayBuffer.isView(value)) return null;
+  try {
+    if (TYPED_ARRAY_TAG_GETTER.call(value) !== "Uint8Array") return null;
+    const buffer = TYPED_ARRAY_BUFFER_GETTER.call(value);
+    const byteOffset = TYPED_ARRAY_BYTE_OFFSET_GETTER.call(value);
+    const byteLength = TYPED_ARRAY_BYTE_LENGTH_GETTER.call(value);
+    if (byteLength > MAX_ARTIFACT_BYTES) {
+      throw new RangeError(
+        `Kotodama compiler artifactBytes must contain 1..${MAX_ARTIFACT_BYTES} bytes`,
+      );
+    }
+    return new Uint8Array(buffer, byteOffset, byteLength).slice();
+  } catch (error) {
+    if (error instanceof RangeError) throw error;
+    throw new TypeError("Kotodama compiler artifactBytes must be a readable Uint8Array");
+  }
+}
+
 function normalizeArtifactBytes(value) {
   let bytes;
-  if (value instanceof Uint8Array && ArrayBuffer.isView(value)) {
-    const typedArrayPrototype = Object.getPrototypeOf(Uint8Array.prototype);
-    const bufferGetter = Object.getOwnPropertyDescriptor(typedArrayPrototype, "buffer")?.get;
-    const byteOffsetGetter = Object.getOwnPropertyDescriptor(
-      typedArrayPrototype,
-      "byteOffset",
-    )?.get;
-    const byteLengthGetter = Object.getOwnPropertyDescriptor(
-      typedArrayPrototype,
-      "byteLength",
-    )?.get;
-    try {
-      const buffer = bufferGetter.call(value);
-      const byteOffset = byteOffsetGetter.call(value);
-      const byteLength = byteLengthGetter.call(value);
-      if (byteLength > MAX_ARTIFACT_BYTES) {
-        throw new RangeError(
-          `Kotodama compiler artifactBytes must contain 1..${MAX_ARTIFACT_BYTES} bytes`,
-        );
-      }
-      bytes = new Uint8Array(buffer, byteOffset, byteLength).slice();
-    } catch (error) {
-      if (error instanceof RangeError) throw error;
-      throw new TypeError("Kotodama compiler artifactBytes must be an attached byte array");
-    }
+  const byteView = snapshotUint8Array(value);
+  if (byteView !== null) {
+    bytes = byteView;
   } else if (Array.isArray(value)) {
     const snapshot = snapshotDenseArray(
       value,
@@ -1266,7 +1280,14 @@ function validatePosition(value, label) {
 }
 
 function validateSpan(value, label) {
-  requireExactKeys(value, ["source", "start", "end", "byte_range"], label);
+  requireExactKeys(
+    value,
+    ["package_identity", "source", "start", "end", "byte_range"],
+    label,
+  );
+  requireNullableString(value.package_identity, `${label}.package_identity`, {
+    maximum: MAX_SOURCE_PATH_BYTES,
+  });
   requireNullableString(value.source, `${label}.source`, { maximum: MAX_SOURCE_PATH_BYTES });
   validatePosition(value.start, `${label}.start`);
   validatePosition(value.end, `${label}.end`);

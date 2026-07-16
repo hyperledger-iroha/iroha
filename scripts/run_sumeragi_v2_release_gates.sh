@@ -91,8 +91,14 @@ required_production_liveness_tests=(
   sumeragi::v2_effects::tests::first_lock_retires_unlocked_fetch_store_and_validation_owners
   sumeragi::v2_effects::tests::first_lock_retires_queued_store_validation_and_local_proposal_completions
   sumeragi::v2_effects::tests::lock_reconciliation_rejects_same_round_conflict_and_late_lower_lock
+  sumeragi::v2_effects::tests::failed_lock_cleanup_keeps_exact_owner_and_requires_restart
+  sumeragi::v2_effects::tests::lock_cleanup_rejects_inconsistent_certified_request_before_mutation
+  sumeragi::v2_effects::tests::lock_cleanup_status_failure_preserves_committed_replacement
   sumeragi::v2_effects::tests::higher_round_same_subject_preserves_current_proposal_pipeline_with_same_tag
   sumeragi::v2_effects::tests::decision_installation_frees_losing_capacity_before_fetch
+  sumeragi::v2_effects::tests::failed_decision_cleanup_keeps_losing_owner_and_requires_restart
+  sumeragi::v2_effects::tests::decision_cleanup_fetch_failure_preserves_exact_local_pipeline_consumer
+  sumeragi::v2_effects::tests::decision_cleanup_rejects_inconsistent_certified_request_before_mutation
   sumeragi::v2_effects::tests::decision_converts_queued_local_proposal_to_body_progress
   sumeragi::v2_effects::tests::decision_rebinds_exact_local_validation_to_reducer_progress
   sumeragi::v2_effects::tests::decision_preserves_current_tag_local_proposal_for_direct_apply
@@ -103,6 +109,9 @@ required_production_liveness_tests=(
   sumeragi::v2_effects::tests::production_certified_body_request_rejects_locally_conflicting_qc_without_fail_close
   sumeragi::v2_effects::tests::production_commit_certificate_response_conflict_keeps_discovery_outstanding_and_runtime_open
   sumeragi::v2_effects::tests::runtime_step_dispatches_entire_effect_batch_before_returning
+  sumeragi::v2_effects::tests::failed_view_cleanup_keeps_stale_fetch_and_requires_restart
+  sumeragi::v2_effects::tests::view_cleanup_rejects_inconsistent_protected_request_before_lock_mutation
+  sumeragi::v2_effects::tests::view_cleanup_second_cancellation_failure_commits_no_fetch_retirement
   sumeragi::v2_lane_work::tests::direct_decision_quiesces_losing_lane_and_retransmission_work
   sumeragi::v2_lane_work::tests::persisted_lane_session_uses_only_selected_qc_signer_pops
   sumeragi::v2_lane_work::tests::planner_view_one_binds_rotated_global_leader_to_fresh_lane_view
@@ -160,7 +169,7 @@ required_production_liveness_tests=(
   sumeragi::status::v2_liveness_watchdog_tests::effect_completion_overlay_preserves_capacity_age_and_service_debt
   sumeragi::status::v2_liveness_watchdog_tests::live_effect_completion_observer_survives_stopped_runner_and_clears_stale_depth
 )
-readonly expected_production_liveness_test_count=115
+readonly expected_production_liveness_test_count=124
 if (( ${#required_production_liveness_tests[@]} != expected_production_liveness_test_count )); then
   echo "expected exactly ${expected_production_liveness_test_count} production Sumeragi v2 liveness tests, found ${#required_production_liveness_tests[@]}" >&2
   exit 1
@@ -295,6 +304,34 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q \
   python/iroha_torii_client/tests/test_client.py::test_get_sumeragi_status_accepts_local_control_pending_liveness_blocker \
   python/iroha_torii_client/tests/test_client.py::test_get_sumeragi_status_accepts_unsafe_proposal_ignore_reason \
   python/iroha_torii_client/tests/test_client.py::test_get_sumeragi_status_accepts_all_twelve_ignore_reasons_at_the_bound
+
+# The release identity must include every checkout source plus the ignored
+# workspace lockfile, and it must reject an unresolved Git index. Keep this
+# exact inventory in the pre-network corridor so weakening the manifest helper
+# cannot silently reuse source-bound build or evidence roots.
+source_manifest_contract_tests=(
+  pytests/scripts/workspace_source_manifest_test.py::test_manifest_is_order_independent_and_content_sensitive
+  pytests/scripts/workspace_source_manifest_test.py::test_manifest_distinguishes_deleted_and_symlink_entries
+  pytests/scripts/workspace_source_manifest_test.py::test_manifest_tracks_executable_mode
+  pytests/scripts/workspace_source_manifest_test.py::test_workspace_manifest_binds_ignored_cargo_lock
+  pytests/scripts/workspace_source_manifest_test.py::test_git_unmerged_paths_are_parsed_and_deduplicated
+  pytests/scripts/workspace_source_manifest_test.py::test_workspace_manifest_rejects_unmerged_index
+)
+source_manifest_contract_log="$(mktemp "${TMPDIR:-/tmp}/sumeragi-v2-source-manifest-contract.XXXXXX")"
+set +e
+PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q \
+  "${source_manifest_contract_tests[@]}" 2>&1 | tee "$source_manifest_contract_log"
+source_manifest_pipeline_status=("${PIPESTATUS[@]}")
+set -e
+source_manifest_pass_summary="$(
+  grep -Ec '^6 passed in [0-9]+([.][0-9]+)?s$' "$source_manifest_contract_log" || true
+)"
+rm -f -- "$source_manifest_contract_log"
+if ((source_manifest_pipeline_status[0] != 0 || source_manifest_pipeline_status[1] != 0)) \
+  || [[ "$source_manifest_pass_summary" != 1 ]]; then
+  echo "Sumeragi v2 source-manifest contract preflight did not run exactly six passing tests (pytest=${source_manifest_pipeline_status[0]}, tee=${source_manifest_pipeline_status[1]})" >&2
+  exit 1
+fi
 
 # Exercise the shell/evidence contract with a mocked Cargo before spending a
 # fresh network attempt. Explicit node IDs make a rename or missing adversarial

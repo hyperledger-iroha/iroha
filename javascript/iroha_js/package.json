@@ -24,6 +24,11 @@
       "import": "./dist/transactionCodec.js",
       "types": "./transaction-codec.d.ts"
     },
+    "./smart-contract-deployment": {
+      "browser": "./dist/smartContractDeployment.js",
+      "import": "./dist/smartContractDeployment.js",
+      "types": "./smart-contract-deployment.d.ts"
+    },
     "./normalizers": {
       "browser": "./dist/normalizers.js",
       "import": "./dist/normalizers.js",
@@ -100,6 +105,9 @@
       ],
       "transaction-codec": [
         "./transaction-codec.d.ts"
+      ],
+      "smart-contract-deployment": [
+        "./smart-contract-deployment.d.ts"
       ],
       "normalizers": [
         "./index.d.ts"
@@ -191,6 +199,7 @@
     "canonical-request.d.ts",
     "ivm-artifact.d.ts",
     "transaction-codec.d.ts",
+    "smart-contract-deployment.d.ts",
     "connect.browser.d.ts",
     "nexus-app.d.ts",
     "kotodama-compiler.d.ts",

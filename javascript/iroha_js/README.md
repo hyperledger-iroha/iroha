@@ -97,9 +97,23 @@ proof, `validatePdpCommitmentChallenge(...)` or
 
 ## Offline cash SDK boundary
 
-The JavaScript package is a general-purpose chain SDK. Kagemusha wallet
-operations are supported by the Swift SDK, so JavaScript does not publish a
-wallet lifecycle, Torii wallet helpers, proof wrappers, or peer transport.
+The JavaScript package exposes the four stable Kagemusha Torii routes through
+`getKagemushaReadinessV4`, `submitKagemushaTopUpV4`,
+`submitKagemushaRedeemV4`, and `getKagemushaOperationStatus`. Readiness is
+accepted only for bridge ABI 20, a maximum of eight hops, and the authenticated
+manifest-V4 Eq/Ep verifier pair. ABI-19 and V3 responses are rejected rather
+than upgraded.
+
+This is deliberately a transport-only boundary. Command helpers require an
+externally produced `{ version: 4, operationId, norito }` archive and never
+derive witnesses, install recursive artifacts, or claim a native prover. Use a
+supported Swift or JVM wallet implementation to create the archive, then pass a
+detached copy to JavaScript only when a web or Node service owns Torii
+submission and operation polling. Top-up archives are limited to 512 KiB and
+redeem archives to 48 MiB; the exported
+`KAGEMUSHA_TOP_UP_REQUEST_MAX_BYTES` and
+`KAGEMUSHA_REDEEM_REQUEST_MAX_BYTES` constants expose those exact Torii
+boundaries.
 
 ## Native Privacy Bridge
 
@@ -1353,7 +1367,7 @@ if (resolved) {
 
 const permissioned = await torii.resolveAlias("tidal-river-4160@mibank.paynet", {
   canonicalAuth: {
-    accountId: operatorAccountId,
+    accountId: "operator-1@mibank.paynet",
     privateKey: operatorPrivateKey,
   },
 });
@@ -1365,7 +1379,12 @@ console.log(indexed?.source); // "iso_bridge"
 
 `resolveAlias*` returns `null` when the alias is missing and throws when the ISO
 bridge runtime is disabled, matching Torii’s semantics. Pass `canonicalAuth`
-when an alias namespace requires Torii request signatures.
+when an alias namespace requires Torii request signatures. Its `accountId`
+credential must be an exact canonical ASCII on-chain account alias
+(`name@dataspace` or `name@domain.dataspace`). I105 remains the canonical form
+for ordinary account fields, paths, and response models, but is intentionally
+rejected as an HTTP authentication header credential; values are never trimmed,
+case-folded, percent-decoded, base64-decoded, or sent through a raw socket.
 
 Browser wallets that keep private keys sealed can sign the same request through
 an async signer callback:
@@ -1374,7 +1393,7 @@ an async signer callback:
 import { buildCanonicalJsonRequest } from "@iroha/iroha-js/canonical-request";
 
 const request = await buildCanonicalJsonRequest({
-  accountId: operatorAccountIdOrAlias,
+  accountId: "operator-1@mibank.paynet",
   baseUrl: toriiBaseUrl,
   path: "/v1/aliases/resolve",
   body: { alias: "tidal-river-4160@mibank.paynet" },
@@ -1814,7 +1833,7 @@ for await (const event of torii.streamSorafsOrderbookEventsWebSocket({
 }
 const orderResult = await torii.submitSorafsOrderbookOrder(orderRequestNoritoBytes, {
   canonicalAuth: {
-    accountId: "<canonical_i105_account_id>",
+    accountId: "operator-1@sorafs",
     privateKey: requestEnvelopePrivateKey,
   },
 });
@@ -1822,10 +1841,10 @@ console.log("local orderbook order status", orderResult.status);
 // Cancel and receipt helpers use the same envelope auth. The Norito payload
 // bytes must already include their embedded orderbook payload signature.
 await torii.submitSorafsOrderbookCancel(orderCancelNoritoBytes, {
-  canonicalAuth: { accountId: "<canonical_i105_account_id>", privateKey: requestEnvelopePrivateKey },
+  canonicalAuth: { accountId: "operator-1@sorafs", privateKey: requestEnvelopePrivateKey },
 });
 await torii.submitSorafsOrderbookReceipt(settlementReceiptNoritoBytes, {
-  canonicalAuth: { accountId: "<canonical_i105_account_id>", privateKey: requestEnvelopePrivateKey },
+  canonicalAuth: { accountId: "operator-1@sorafs", privateKey: requestEnvelopePrivateKey },
 });
 
 for await (const manifest of torii.iterateSorafsPinManifests({ pageSize: 25 })) {
@@ -3367,11 +3386,12 @@ Asset and RWA quantities use the stricter `QuantityInput` surface:
 `number` is deliberately rejected, and strings are never trimmed or rewritten;
 for example `"1"` is valid while `" 1"`, `"01"`, `"+1"`, and `"1.0"` are not.
 
-Kagemusha offline cash is intentionally not exposed through the JavaScript
-client in the first release. Its top-up and redemption bodies are canonical
-Norito archives and its peer-transfer keys must remain device-bound, so browser
-and Node applications must not hand-encode or submit those payloads. Use the
-IrohaSwift or JVM Kagemusha APIs in a trusted mobile client.
+Kagemusha proving is intentionally not exposed through the JavaScript client.
+Its top-up and redemption bodies are canonical manifest-V4 Norito archives and
+its peer-transfer keys must remain device-bound, so browser and Node
+applications must not hand-encode those payloads. They may submit and poll an
+archive produced by a supported IrohaSwift or JVM wallet through the typed
+ABI-20/V4 Torii helpers described above.
 
 for await (const assetDef of torii.iterateAssetDefinitions({
   pageSize: 50,

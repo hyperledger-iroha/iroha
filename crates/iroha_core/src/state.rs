@@ -4671,6 +4671,10 @@ impl<'world> WorldBlock<'world> {
         collect_reverts!(self.account_recovery_policies, AccountRecoveryPolicy);
         collect_reverts!(self.account_recovery_requests, AccountRecoveryRequest);
         collect_reverts!(self.asset_definitions, AssetDefinition);
+        collect_reverts!(
+            self.asset_definition_alias_bindings,
+            AssetDefinitionAliasBinding
+        );
         collect_reverts!(self.assets, Asset);
         collect_reverts!(self.asset_metadata, AssetMetadata);
         collect_reverts!(self.nfts, Nft);
@@ -4703,6 +4707,7 @@ impl<'world> WorldBlock<'world> {
         collect_reverts!(self.contract_code_upload_chunks, ContractCodeUploadChunk);
         collect_reverts!(self.contract_instances, ContractInstance);
         collect_reverts!(self.contract_subject_bindings, ContractSubjectBinding);
+        collect_reverts!(self.contract_alias_bindings, ContractAliasBinding);
         collect_reverts!(self.smart_contract_state, SmartContractState);
         collect_reverts!(self.zk_assets, ZkAsset);
         collect_reverts!(self.elections, Election);
@@ -4740,6 +4745,10 @@ impl<'world> WorldBlock<'world> {
         collect_payload!(self.account_recovery_policies, AccountRecoveryPolicy);
         collect_payload!(self.account_recovery_requests, AccountRecoveryRequest);
         collect_payload!(self.asset_definitions, AssetDefinition);
+        collect_payload!(
+            self.asset_definition_alias_bindings,
+            AssetDefinitionAliasBinding
+        );
         collect_payload!(self.assets, Asset);
         collect_payload!(self.asset_metadata, AssetMetadata);
         collect_payload!(self.nfts, Nft);
@@ -4772,6 +4781,7 @@ impl<'world> WorldBlock<'world> {
         collect_payload!(self.contract_code_upload_chunks, ContractCodeUploadChunk);
         collect_payload!(self.contract_instances, ContractInstance);
         collect_payload!(self.contract_subject_bindings, ContractSubjectBinding);
+        collect_payload!(self.contract_alias_bindings, ContractAliasBinding);
         collect_payload!(self.smart_contract_state, SmartContractState);
         collect_payload!(self.zk_assets, ZkAsset);
         collect_payload!(self.elections, Election);
@@ -5601,6 +5611,30 @@ pub struct WorldTransaction<'block, 'world> {
     pub(crate) internal_event_buf: Vec<Arc<DataEvent>>,
 }
 
+fn validate_alias_lease_window(
+    lease_expiry_ms: Option<u64>,
+    grace_until_ms: Option<u64>,
+    bound_at_ms: u64,
+) -> Result<(), Error> {
+    match (lease_expiry_ms, grace_until_ms) {
+        (None, None) => Ok(()),
+        (None, Some(_)) => Err(Error::InvariantViolation(
+            "alias grace_until_ms requires lease_expiry_ms".into(),
+        )),
+        (Some(lease_expiry_ms), _) if lease_expiry_ms <= bound_at_ms => {
+            Err(Error::InvariantViolation(
+                "alias lease_expiry_ms must be greater than bound_at_ms".into(),
+            ))
+        }
+        (Some(lease_expiry_ms), Some(grace_until_ms)) if grace_until_ms < lease_expiry_ms => {
+            Err(Error::InvariantViolation(
+                "alias grace_until_ms must not precede lease_expiry_ms".into(),
+            ))
+        }
+        (Some(_), _) => Ok(()),
+    }
+}
+
 #[allow(single_use_lifetimes)]
 impl<'block, 'world> WorldTransaction<'block, 'world> {
     #[cfg(any(test, feature = "iroha-core-tests"))]
@@ -5622,6 +5656,26 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         iroha_data_model::smart_contract::manifest::ContractManifest,
     > {
         &mut self.contract_manifests
+    }
+
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    /// Install the minimal internally consistent active-address and subject
+    /// bindings needed by API identity tests. Artifact metadata is deliberately
+    /// not synthesized here; governed-contract tests must register a real
+    /// verified artifact through the production admission path.
+    pub fn bind_active_contract_subject_for_testing(
+        &mut self,
+        contract_address: iroha_data_model::smart_contract::ContractAddress,
+        code_hash: iroha_crypto::Hash,
+    ) {
+        let binding = crate::smartcontracts::code::ContractSubjectBinding::new(&contract_address);
+        let subject = binding.subject.clone();
+        self.contract_instances
+            .insert(contract_address.clone(), code_hash);
+        self.contract_subject_bindings
+            .insert(contract_address.clone(), binding);
+        self.contract_subject_addresses
+            .insert(subject, contract_address);
     }
 
     #[cfg(any(test, feature = "iroha-core-tests"))]
@@ -6413,6 +6467,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         grace_until_ms: Option<u64>,
         bound_at_ms: u64,
     ) -> Result<(), Error> {
+        validate_alias_lease_window(lease_expiry_ms, grace_until_ms, bound_at_ms)?;
         if let Some(existing_definition) = self.asset_definition_aliases.get(&alias).cloned()
             && existing_definition != *definition_id
         {
@@ -6491,6 +6546,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         grace_until_ms: Option<u64>,
         bound_at_ms: u64,
     ) -> Result<(), Error> {
+        validate_alias_lease_window(lease_expiry_ms, grace_until_ms, bound_at_ms)?;
         if let Some(existing_contract) = self.contract_aliases.get(&alias).cloned()
             && existing_contract != *contract_address
         {
@@ -8837,8 +8893,14 @@ impl AssetDefinitionAliasBindingRecord {
     /// Return `true` when the alias should be unbound at `now_ms`.
     #[must_use]
     pub fn is_grace_expired_at(&self, now_ms: u64) -> bool {
-        self.grace_until_ms
-            .is_some_and(|grace_until| now_ms > grace_until)
+        match (self.lease_expiry_ms, self.grace_until_ms) {
+            (None, None) => false,
+            (None, Some(_)) => true,
+            (Some(lease_expiry_ms), Some(grace_until_ms)) => {
+                grace_until_ms < lease_expiry_ms || now_ms > grace_until_ms
+            }
+            (Some(lease_expiry_ms), None) => now_ms >= lease_expiry_ms,
+        }
     }
 }
 
@@ -8899,8 +8961,14 @@ impl ContractAliasBindingRecord {
     /// Return `true` when the alias should be unbound at `now_ms`.
     #[must_use]
     pub fn is_grace_expired_at(&self, now_ms: u64) -> bool {
-        self.grace_until_ms
-            .is_some_and(|grace_until| now_ms > grace_until)
+        match (self.lease_expiry_ms, self.grace_until_ms) {
+            (None, None) => false,
+            (None, Some(_)) => true,
+            (Some(lease_expiry_ms), Some(grace_until_ms)) => {
+                grace_until_ms < lease_expiry_ms || now_ms > grace_until_ms
+            }
+            (Some(lease_expiry_ms), None) => now_ms >= lease_expiry_ms,
+        }
     }
 }
 
@@ -9871,6 +9939,9 @@ pub struct State {
     pub content: iroha_config::parameters::actual::Content,
     /// Settlement configuration (repo defaults, collateral policies).
     pub settlement: iroha_config::parameters::actual::Settlement,
+    /// Immutable startup-authenticated ABI-20 recursive release catalog.
+    pub kagemusha_release_catalog:
+        Arc<crate::smartcontracts::isi::offline::KagemushaReleaseCatalogV4>,
     /// Unified settlement engine for XOR quoting.
     pub settlement_engine: crate::settlement::SettlementEngine,
     /// Chain identifier from configuration (used in VRF prehash binding).
@@ -10111,6 +10182,9 @@ pub struct StateBlock<'state> {
     pub content: iroha_config::parameters::actual::Content,
     /// Settlement configuration snapshot for this block.
     pub settlement: iroha_config::parameters::actual::Settlement,
+    /// Immutable ABI-20 recursive release catalog snapshot for this block.
+    pub kagemusha_release_catalog:
+        Arc<crate::smartcontracts::isi::offline::KagemushaReleaseCatalogV4>,
     /// Settlement engine snapshot for this block.
     pub settlement_engine: crate::settlement::SettlementEngine,
     /// Chain identifier for this block.
@@ -10683,6 +10757,9 @@ pub struct StateTransaction<'block, 'state> {
     pub content: iroha_config::parameters::actual::Content,
     /// Settlement configuration snapshot for this transaction.
     pub settlement: iroha_config::parameters::actual::Settlement,
+    /// Immutable ABI-20 recursive release catalog snapshot for this transaction.
+    pub kagemusha_release_catalog:
+        Arc<crate::smartcontracts::isi::offline::KagemushaReleaseCatalogV4>,
     /// Settlement engine snapshot for this transaction.
     pub settlement_engine: crate::settlement::SettlementEngine,
     /// Chain identifier (from configuration). Used for VRF prehash binding.
@@ -11016,6 +11093,9 @@ pub struct StateView<'state> {
     pub content: iroha_config::parameters::actual::Content,
     /// Settlement configuration snapshot for this view.
     pub settlement: iroha_config::parameters::actual::Settlement,
+    /// Immutable ABI-20 recursive release catalog snapshot for this view.
+    pub kagemusha_release_catalog:
+        Arc<crate::smartcontracts::isi::offline::KagemushaReleaseCatalogV4>,
     /// Settlement engine snapshot for this view.
     pub settlement_engine: crate::settlement::SettlementEngine,
     /// Chain identifier for this view.
@@ -14147,7 +14227,10 @@ mod storage_migration_tests {
 
     use iroha_crypto::Hash;
     use iroha_data_model::{
-        account::{AccountAlias, AccountAliasDomain, AccountDetails, AccountId},
+        account::{
+            AccountAlias, AccountAliasDomain, AccountDetails, AccountId,
+            AccountRekeyTransitionProvenance,
+        },
         domain::DomainId,
         metadata::Metadata,
         name::Name,
@@ -14582,7 +14665,7 @@ mod storage_migration_tests {
     }
 
     #[test]
-    fn account_rekey_rebuild_backfills_alias_bound_multisig_accounts() {
+    fn account_rekey_rebuild_rejects_alias_binding_without_continuity_record() {
         let mut world = World::default();
 
         let domain_id: DomainId = DomainId::try_new("alias", "world").expect("domain id");
@@ -14605,26 +14688,21 @@ mod storage_migration_tests {
         world
             .accounts
             .insert(account_id.clone(), AccountValue::new(details));
+        world
+            .account_aliases
+            .insert(label.clone(), account_id.clone());
 
         world
             .rebuild_account_alias_index()
             .expect("alias index rebuild should succeed");
-        world
+        let error = world
             .rebuild_account_rekey_records()
-            .expect("rekey record rebuild should backfill multisig aliases");
-
-        let records = world.account_rekey_records.view();
-        let record = records
-            .get(&label)
-            .expect("rekey record should be backfilled");
-        assert_eq!(record.active_account_id, account_id);
-        assert!(record.active_signatory.is_none());
-        assert!(record.previous_account_ids.is_empty());
-        assert!(record.previous_signatories.is_empty());
+            .expect_err("startup must not fabricate missing controller continuity");
+        assert!(error.contains("missing its continuity record"), "{error}");
     }
 
     #[test]
-    fn account_rekey_rebuild_repoints_stale_records_to_current_alias_binding() {
+    fn account_rekey_rebuild_rejects_stale_continuity_record() {
         let mut world = World::default();
 
         let domain_id: DomainId = DomainId::try_new("alias", "world").expect("domain id");
@@ -14642,6 +14720,9 @@ mod storage_migration_tests {
         world
             .accounts
             .insert(second_id.clone(), AccountValue::new(second_details));
+        world
+            .account_aliases
+            .insert(label.clone(), second_id.clone());
         world.account_rekey_records.insert(
             label.clone(),
             AccountRekeyRecord::new(label.clone(), first_id.clone()),
@@ -14650,20 +14731,175 @@ mod storage_migration_tests {
         world
             .rebuild_account_alias_index()
             .expect("alias index rebuild should succeed");
+        let error = world
+            .rebuild_account_rekey_records()
+            .expect_err("startup must not repoint stale controller continuity");
+        assert!(error.contains("continuity record points"), "{error}");
+    }
+
+    #[test]
+    fn account_rekey_rebuild_normalizes_legacy_history_as_non_authorizing() {
+        let mut world = World::default();
+        let domain_id = DomainId::try_new("alias", "world").expect("domain id");
+        let label = alias_in_domain(&domain_id, "legacy".parse().expect("label"));
+        let retired = AccountId::new(crate::state::checked_keypair().public_key().clone());
+        let active = AccountId::new(crate::state::checked_keypair().public_key().clone());
+        world.accounts.insert(
+            active.clone(),
+            AccountValue::new(AccountDetails::new(
+                Metadata::default(),
+                Some(label.clone()),
+                None,
+                Vec::new(),
+            )),
+        );
+        world.account_aliases.insert(label.clone(), active.clone());
+        let mut legacy = AccountRekeyRecord::new(label.clone(), retired)
+            .repoint_for_account_id_rekey(active)
+            .expect("fixture transition");
+        legacy.transition_provenance.clear();
+        world.account_rekey_records.insert(label.clone(), legacy);
+
         world
             .rebuild_account_rekey_records()
-            .expect("rekey record rebuild should repoint stale records");
+            .expect("legacy record must normalize deterministically");
 
-        let records = world.account_rekey_records.view();
-        let record = records
-            .get(&label)
-            .expect("rekey record should survive rebuild");
-        assert_eq!(record.active_account_id, second_id);
-        assert_eq!(record.previous_account_ids, vec![first_id]);
         assert_eq!(
-            record.active_signatory,
-            Some(second_key.public_key().clone())
+            world
+                .account_rekey_records
+                .view()
+                .get(&label)
+                .expect("normalized record")
+                .transition_provenance,
+            vec![AccountRekeyTransitionProvenance::LegacyUnspecified]
         );
+    }
+
+    #[test]
+    fn account_rekey_rebuild_rejects_live_retired_predecessor_and_ambiguous_targets() {
+        let mut live_predecessor_world = World::default();
+        let domain_id = DomainId::try_new("alias", "world").expect("domain id");
+        let label = alias_in_domain(&domain_id, "retirement".parse().expect("label"));
+        let predecessor = AccountId::new(crate::state::checked_keypair().public_key().clone());
+        let active = AccountId::new(crate::state::checked_keypair().public_key().clone());
+        for account_id in [&predecessor, &active] {
+            live_predecessor_world.accounts.insert(
+                account_id.clone(),
+                AccountValue::new(AccountDetails::new(
+                    Metadata::default(),
+                    None,
+                    None,
+                    Vec::new(),
+                )),
+            );
+        }
+        live_predecessor_world
+            .account_aliases
+            .insert(label.clone(), active.clone());
+        live_predecessor_world.account_rekey_records.insert(
+            label.clone(),
+            AccountRekeyRecord::new(label.clone(), predecessor.clone())
+                .repoint_for_account_id_rekey(active)
+                .expect("fixture transition"),
+        );
+        let error = live_predecessor_world
+            .rebuild_account_rekey_records()
+            .expect_err("an account-id rekey predecessor must be retired");
+        assert!(error.contains("independently live account"), "{error}");
+
+        let mut ambiguous_world = World::default();
+        let first_label = alias_in_domain(&domain_id, "first".parse().expect("label"));
+        let second_label = alias_in_domain(&domain_id, "second".parse().expect("label"));
+        let first_active = AccountId::new(crate::state::checked_keypair().public_key().clone());
+        let second_active = AccountId::new(crate::state::checked_keypair().public_key().clone());
+        for account_id in [&first_active, &second_active] {
+            ambiguous_world.accounts.insert(
+                account_id.clone(),
+                AccountValue::new(AccountDetails::new(
+                    Metadata::default(),
+                    None,
+                    None,
+                    Vec::new(),
+                )),
+            );
+        }
+        for (label, active) in [(first_label, first_active), (second_label, second_active)] {
+            ambiguous_world
+                .account_aliases
+                .insert(label.clone(), active.clone());
+            ambiguous_world.account_rekey_records.insert(
+                label.clone(),
+                AccountRekeyRecord::new(label.clone(), predecessor.clone())
+                    .repoint_for_account_id_rekey(active)
+                    .expect("fixture transition"),
+            );
+        }
+        let error = ambiguous_world
+            .rebuild_account_rekey_records()
+            .expect_err("one predecessor cannot target two active accounts");
+        assert!(error.contains("ambiguously targets"), "{error}");
+    }
+
+    #[test]
+    fn account_rekey_rebuild_rejects_malformed_or_cyclic_active_suffix() {
+        let domain_id = DomainId::try_new("alias", "world").expect("domain id");
+        let label = alias_in_domain(&domain_id, "cycle".parse().expect("label"));
+        let first = AccountId::new(crate::state::checked_keypair().public_key().clone());
+        let active = AccountId::new(crate::state::checked_keypair().public_key().clone());
+
+        let mut malformed_world = World::default();
+        malformed_world.accounts.insert(
+            active.clone(),
+            AccountValue::new(AccountDetails::new(
+                Metadata::default(),
+                None,
+                None,
+                Vec::new(),
+            )),
+        );
+        malformed_world
+            .account_aliases
+            .insert(label.clone(), active.clone());
+        let intermediate = AccountId::new(crate::state::checked_keypair().public_key().clone());
+        let mut malformed = AccountRekeyRecord::new(label.clone(), first.clone())
+            .repoint_for_account_id_rekey(intermediate)
+            .expect("first transition")
+            .repoint_for_account_id_rekey(active.clone())
+            .expect("second transition");
+        malformed.transition_provenance.pop();
+        malformed_world
+            .account_rekey_records
+            .insert(label.clone(), malformed);
+        let error = malformed_world
+            .rebuild_account_rekey_records()
+            .expect_err("partial provenance must fail");
+        assert!(error.contains("malformed provenance"), "{error}");
+
+        let mut cyclic_world = World::default();
+        cyclic_world.accounts.insert(
+            active.clone(),
+            AccountValue::new(AccountDetails::new(
+                Metadata::default(),
+                None,
+                None,
+                Vec::new(),
+            )),
+        );
+        cyclic_world
+            .account_aliases
+            .insert(label.clone(), active.clone());
+        let mut cyclic = AccountRekeyRecord::new(label.clone(), first)
+            .repoint_for_account_id_rekey(active.clone())
+            .expect("fixture transition");
+        cyclic.previous_account_ids.push(active);
+        cyclic
+            .transition_provenance
+            .push(AccountRekeyTransitionProvenance::AccountIdRekey);
+        cyclic_world.account_rekey_records.insert(label, cyclic);
+        let error = cyclic_world
+            .rebuild_account_rekey_records()
+            .expect_err("active id in its predecessor suffix must fail");
+        assert!(error.contains("cycle"), "{error}");
     }
 
     #[test]
@@ -17157,6 +17393,7 @@ impl World {
         grace_until_ms: Option<u64>,
         bound_at_ms: u64,
     ) -> Result<(), Error> {
+        validate_alias_lease_window(lease_expiry_ms, grace_until_ms, bound_at_ms)?;
         if let Some(existing_contract) = self.contract_aliases.view().get(&alias).cloned()
             && existing_contract != *contract_address
         {
@@ -17799,6 +18036,7 @@ impl World {
 
     fn rebuild_account_rekey_records(&mut self) -> Result<(), String> {
         let mut records = BTreeMap::new();
+        let mut active_account_id_rekey_targets = BTreeMap::<AccountId, AccountId>::new();
         let existing_records: Vec<_> = self
             .account_rekey_records
             .view()
@@ -17813,7 +18051,7 @@ impl World {
             .collect();
         let view = self.accounts.view();
 
-        for (label, record) in existing_records {
+        for (label, mut record) in existing_records {
             if record.label != label {
                 return Err(format!(
                     "Account rekey record {label:?} stores mismatched label {:?}",
@@ -17825,6 +18063,11 @@ impl World {
                     "Account rekey record {label:?} looks like raw PII; use UAID/opaque identifiers"
                 ));
             }
+            record
+                .normalize_legacy_transition_provenance()
+                .map_err(|error| {
+                    format!("Account rekey record {label:?} has malformed provenance: {error}")
+                })?;
             if let Some(existing) = records.get(&label) {
                 if existing != &record {
                     return Err(format!(
@@ -17862,6 +18105,53 @@ impl World {
                     record.active_account_id
                 ));
             };
+            let predecessors = record
+                .active_account_id_rekey_predecessors()
+                .map_err(|error| {
+                    format!("Account rekey record {label:?} has malformed provenance: {error}")
+                })?;
+            let mut unique_predecessors = BTreeSet::new();
+            for predecessor in predecessors {
+                if predecessor == &record.active_account_id {
+                    return Err(format!(
+                        "Account rekey record {label:?} contains an active account-id rekey cycle at {predecessor}"
+                    ));
+                }
+                if !unique_predecessors.insert(predecessor.clone()) {
+                    return Err(format!(
+                        "Account rekey record {label:?} repeats active account-id rekey predecessor {predecessor}"
+                    ));
+                }
+                if let Some(existing_target) = active_account_id_rekey_targets
+                    .insert(predecessor.clone(), record.active_account_id.clone())
+                    && existing_target != record.active_account_id
+                {
+                    return Err(format!(
+                        "Account-id rekey predecessor {predecessor} ambiguously targets {existing_target} and {}",
+                        record.active_account_id
+                    ));
+                }
+            }
+        }
+
+        for predecessor in active_account_id_rekey_targets.keys() {
+            let mut cursor = predecessor;
+            let mut visited = BTreeSet::new();
+            while let Some(next) = active_account_id_rekey_targets.get(cursor) {
+                if !visited.insert(cursor.clone()) {
+                    return Err(format!(
+                        "Account-id rekey provenance contains a cycle through {cursor}"
+                    ));
+                }
+                cursor = next;
+            }
+        }
+        for predecessor in active_account_id_rekey_targets.keys() {
+            if view.get(predecessor).is_some() {
+                return Err(format!(
+                    "Account-id rekey predecessor {predecessor} remains an independently live account"
+                ));
+            }
         }
 
         self.account_rekey_records = records.into_iter().collect();
@@ -17875,6 +18165,17 @@ impl World {
         let definitions = self.asset_definitions.view();
 
         for (definition_id, binding) in self.asset_definition_alias_bindings.view().iter() {
+            validate_alias_lease_window(
+                binding.lease_expiry_ms,
+                binding.grace_until_ms,
+                binding.bound_at_ms,
+            )
+            .map_err(|error| {
+                format!(
+                    "Asset alias binding `{}` has an invalid lease window: {error}",
+                    binding.alias
+                )
+            })?;
             if definitions.get(definition_id).is_none() {
                 return Err(format!(
                     "Asset alias binding `{}` references missing asset definition {definition_id}",
@@ -17918,6 +18219,17 @@ impl World {
         let mut by_contract = BTreeMap::<ContractAddress, ContractAliasBindingRecord>::new();
 
         for (contract_address, binding) in self.contract_alias_bindings.view().iter() {
+            validate_alias_lease_window(
+                binding.lease_expiry_ms,
+                binding.grace_until_ms,
+                binding.bound_at_ms,
+            )
+            .map_err(|error| {
+                format!(
+                    "Contract alias binding `{}` has an invalid lease window: {error}",
+                    binding.alias
+                )
+            })?;
             if let Some(existing) = by_alias.get(&binding.alias)
                 && existing != contract_address
             {
@@ -19469,7 +19781,10 @@ pub trait WorldReadOnly {
                 Some(definition_id)
             }
             Some(_) => None,
-            None => Some(definition_id),
+            // First-release asset aliases are valid only together with their
+            // consensus-persisted lease record. Treat an index-only entry as
+            // corrupt state instead of silently reviving a legacy binding.
+            None => None,
         }
     }
 
@@ -19496,7 +19811,10 @@ pub trait WorldReadOnly {
                 Some(contract_address)
             }
             Some(_) => None,
-            None => Some(contract_address),
+            // First-release contract aliases are valid only together with their
+            // consensus-persisted lease record.  Treat an index-only entry as
+            // corrupt state instead of silently reviving a legacy binding.
+            None => None,
         }
     }
 
@@ -25504,6 +25822,14 @@ impl State {
     }
 
     pub(crate) fn rebuild_derived_state_indexes(&mut self) -> core::result::Result<(), String> {
+        self.world
+            .rebuild_asset_definition_alias_indexes()
+            .map_err(|error| {
+                format!("failed to rebuild asset definition alias indexes: {error}")
+            })?;
+        self.world
+            .rebuild_contract_alias_indexes()
+            .map_err(|error| format!("failed to rebuild contract alias indexes: {error}"))?;
         let rebuilt = self.rebuild_uaid_dataspace_bindings()?;
         iroha_logger::debug!(
             rebuilt_uaids = rebuilt,
@@ -26150,6 +26476,9 @@ impl State {
                 stripe_layout: iroha_config::parameters::defaults::content::default_stripe_layout(),
             },
             settlement: settlement_cfg,
+            kagemusha_release_catalog: Arc::new(
+                crate::smartcontracts::isi::offline::KagemushaReleaseCatalogV4::empty(),
+            ),
             settlement_engine,
             #[cfg(feature = "telemetry")]
             telemetry,
@@ -26712,6 +27041,7 @@ impl State {
             gov: self.gov.clone(),
             content: self.content.clone(),
             settlement: self.settlement.clone(),
+            kagemusha_release_catalog: Arc::clone(&self.kagemusha_release_catalog),
             settlement_engine: self.settlement_engine.clone(),
             chain_id: self.chain_id.clone(),
             pre_block_npos_seed,
@@ -27273,6 +27603,7 @@ impl State {
             gov: self.gov.clone(),
             content: self.content.clone(),
             settlement: self.settlement.clone(),
+            kagemusha_release_catalog: Arc::clone(&self.kagemusha_release_catalog),
             settlement_engine: self.settlement_engine.clone(),
             chain_id: self.chain_id.clone(),
             pre_block_npos_seed,
@@ -27376,6 +27707,7 @@ impl State {
             gov: self.gov.clone(),
             content: self.content.clone(),
             settlement: self.settlement.clone(),
+            kagemusha_release_catalog: Arc::clone(&self.kagemusha_release_catalog),
             settlement_engine: self.settlement_engine.clone(),
             chain_id: self.chain_id.clone(),
             pre_block_npos_seed,
@@ -28275,6 +28607,7 @@ impl State {
                 gov: self.gov.clone(),
                 content: self.content.clone(),
                 settlement: self.settlement.clone(),
+                kagemusha_release_catalog: Arc::clone(&self.kagemusha_release_catalog),
                 settlement_engine: self.settlement_engine.clone(),
                 chain_id: self.chain_id.clone(),
                 created_at: Instant::now(),
@@ -30248,6 +30581,7 @@ impl State {
             || record.manifest_root != manifest_root
             || record.fastpq_binding.source_dsid != envelope.dataspace_id.as_u64()
             || record.fastpq_binding.verified_effect_type != LANE_RELAY_FASTPQ_EFFECT_TYPE
+            || record.fastpq_binding.effect_binding.is_some()
         {
             return Err(LaneRelayError::InvalidFastpqProof);
         }
@@ -35432,6 +35766,17 @@ impl State {
         self.settlement_engine = SettlementEngine::from_router_config(&self.settlement.router);
     }
 
+    /// Install the fully authenticated immutable Kagemusha V4 release catalog.
+    ///
+    /// Startup calls this before Kura replay; transaction execution receives an
+    /// `Arc` snapshot and never performs release filesystem access.
+    pub fn set_kagemusha_release_catalog(
+        &mut self,
+        catalog: crate::smartcontracts::isi::offline::KagemushaReleaseCatalogV4,
+    ) {
+        self.kagemusha_release_catalog = Arc::new(catalog);
+    }
+
     /// Current settlement configuration snapshot.
     #[must_use]
     pub fn settlement(&self) -> &iroha_config::parameters::actual::Settlement {
@@ -36275,7 +36620,35 @@ impl State {
 
         // Drop account/role permissions targeting removed dataspaces so
         // permission payload references do not outlive catalog entries.
+        let is_stale_account_alias_scope =
+            |scope: &iroha_executor_data_model::permission::account::AccountAliasPermissionScope| {
+                match scope {
+                    iroha_executor_data_model::permission::account::AccountAliasPermissionScope::Domain(
+                        domain,
+                    ) => !dataspace_aliases.contains(domain.dataspace().as_ref()),
+                    iroha_executor_data_model::permission::account::AccountAliasPermissionScope::Dataspace(
+                        dataspace,
+                    ) => !dataspace_ids.contains(dataspace),
+                }
+            };
         let is_stale_dataspace_permission = |permission: &Permission| {
+            if let Ok(permission) =
+                iroha_executor_data_model::permission::account::CanResolveAccountAlias::try_from(
+                    permission,
+                )
+            {
+                return is_stale_account_alias_scope(&permission.scope);
+            }
+            if let Ok(permission) = iroha_executor_data_model::permission::account::CanDelegateAccountAliasResolution::try_from(permission) {
+                return is_stale_account_alias_scope(&permission.scope);
+            }
+            if let Ok(permission) =
+                iroha_executor_data_model::permission::account::CanManageAccountAlias::try_from(
+                    permission,
+                )
+            {
+                return is_stale_account_alias_scope(&permission.scope);
+            }
             if let Ok(permission) =
                 iroha_executor_data_model::permission::nexus::CanPublishSpaceDirectoryManifest::try_from(
                     permission,
@@ -43652,6 +44025,7 @@ impl<'state> StateBlock<'state> {
             gov: self.gov.clone(),
             content: self.content.clone(),
             settlement: self.settlement.clone(),
+            kagemusha_release_catalog: Arc::clone(&self.kagemusha_release_catalog),
             settlement_engine: self.settlement_engine.clone(),
             chain_id: self.chain_id.clone(),
             settlement_accumulator: &mut self.settlement_accumulator,
@@ -48393,6 +48767,44 @@ mod tiered_snapshot_diff_tests {
         (key, marker)
     }
 
+    fn sample_alias_bindings() -> (
+        AssetDefinitionId,
+        AssetDefinitionAliasBindingRecord,
+        ContractAddress,
+        ContractAliasBindingRecord,
+    ) {
+        let definition_id = AssetDefinitionId::from_uuid_bytes_unchecked([
+            0x21, 0x43, 0x65, 0x87, 0xa9, 0xcb, 0x4d, 0xef, 0x80, 0x12, 0x23, 0x34, 0x45, 0x56,
+            0x67, 0x78,
+        ]);
+        let asset_binding = AssetDefinitionAliasBindingRecord {
+            alias: "tiered_asset#universal".parse().expect("asset alias"),
+            lease_expiry_ms: Some(2_000),
+            grace_until_ms: Some(2_500),
+            bound_at_ms: 1_000,
+        };
+        let authority = AccountId::new(checked_keypair().public_key().clone());
+        let contract_address = ContractAddress::derive(
+            iroha_data_model::smart_contract::CHAIN_DISCRIMINANT_MAINNET,
+            &authority,
+            77,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("contract address");
+        let contract_binding = ContractAliasBindingRecord {
+            alias: "tiered_router::universal".parse().expect("contract alias"),
+            lease_expiry_ms: Some(3_000),
+            grace_until_ms: Some(3_500),
+            bound_at_ms: 1_000,
+        };
+        (
+            definition_id,
+            asset_binding,
+            contract_address,
+            contract_binding,
+        )
+    }
+
     #[test]
     fn contract_upload_json_keys_are_stable_text_and_reject_trailing_components() {
         use mv::json::JsonKeyCodec;
@@ -48506,6 +48918,14 @@ mod tiered_snapshot_diff_tests {
     fn world_block_tiered_snapshot_diff_collects_changed_keys() {
         let world = World::default();
         let mut block = world.block();
+        let (definition_id, asset_binding, contract_address, contract_binding) =
+            sample_alias_bindings();
+        block
+            .asset_definition_alias_bindings
+            .insert(definition_id.clone(), asset_binding);
+        block
+            .contract_alias_bindings
+            .insert(contract_address.clone(), contract_binding);
         let hash = iroha_crypto::Hash::new([7_u8; 32]);
         block.contract_code.insert(hash, vec![1, 2, 3]);
         let upload_key = SmartContractCodeUploadKey::new(
@@ -48566,12 +48986,26 @@ mod tiered_snapshot_diff_tests {
         assert!(diff.entries().iter().any(|entry| {
             matches!(entry, TieredKeyHandle::SccpOutboundProof(key) if *key == proof_key)
         }));
+        assert!(diff.entries().iter().any(|entry| {
+            matches!(entry, TieredKeyHandle::AssetDefinitionAliasBinding(key) if *key == definition_id)
+        }));
+        assert!(diff.entries().iter().any(|entry| {
+            matches!(entry, TieredKeyHandle::ContractAliasBinding(key) if *key == contract_address)
+        }));
     }
 
     #[test]
     fn world_block_tiered_snapshot_payload_collects_changed_keys() {
         let world = World::default();
         let mut block = world.block();
+        let (definition_id, asset_binding, contract_address, contract_binding) =
+            sample_alias_bindings();
+        block
+            .asset_definition_alias_bindings
+            .insert(definition_id.clone(), asset_binding);
+        block
+            .contract_alias_bindings
+            .insert(contract_address.clone(), contract_binding);
         let hash = iroha_crypto::Hash::new([9_u8; 32]);
         block.contract_code.insert(hash, vec![4, 5, 6]);
         let upload_key = SmartContractCodeUploadKey::new(
@@ -48632,6 +49066,12 @@ mod tiered_snapshot_diff_tests {
         }));
         assert!(diff.entries().iter().any(|entry| {
             matches!(entry, TieredKeyHandle::SccpOutboundProof(key) if *key == proof_key)
+        }));
+        assert!(diff.entries().iter().any(|entry| {
+            matches!(entry, TieredKeyHandle::AssetDefinitionAliasBinding(key) if *key == definition_id)
+        }));
+        assert!(diff.entries().iter().any(|entry| {
+            matches!(entry, TieredKeyHandle::ContractAliasBinding(key) if *key == contract_address)
         }));
     }
 
@@ -60293,13 +60733,13 @@ pub(crate) mod deserialize {
         world
             .rebuild_asset_definition_alias_indexes()
             .map_err(|message| json::Error::InvalidField {
-                field: "asset_definition_aliases".into(),
+                field: "asset_definition_alias_bindings".into(),
                 message,
             })?;
         world
             .rebuild_contract_alias_indexes()
             .map_err(|message| json::Error::InvalidField {
-                field: "contract_aliases".into(),
+                field: "contract_alias_bindings".into(),
                 message,
             })?;
         world.rebuild_asset_definition_indexes();
@@ -60493,6 +60933,9 @@ pub(crate) mod deserialize {
             gov: default_governance(),
             content: default_content_cfg(),
             settlement: iroha_config::parameters::actual::Settlement::default(),
+            kagemusha_release_catalog: Arc::new(
+                crate::smartcontracts::isi::offline::KagemushaReleaseCatalogV4::empty(),
+            ),
             settlement_engine: SettlementEngine::new_roadmap_default(),
             chain_id,
             snapshot_v2_bootstrap_candidate,
@@ -61504,6 +61947,51 @@ mod tests {
         )
     }
 
+    fn seed_active_account_alias_binding(
+        world: &mut World,
+        owner: &AccountId,
+        alias: &AccountAlias,
+    ) {
+        world.account_aliases.insert(alias.clone(), owner.clone());
+        let mut aliases = world
+            .account_aliases_by_account
+            .view()
+            .get(owner)
+            .cloned()
+            .unwrap_or_default();
+        aliases.insert(alias.clone());
+        world
+            .account_aliases_by_account
+            .insert(owner.clone(), aliases);
+        world.account_rekey_records.insert(
+            alias.clone(),
+            AccountRekeyRecord::new(alias.clone(), owner.clone()),
+        );
+
+        let selector = crate::sns::selector_for_account_alias(alias, &DataSpaceCatalog::default())
+            .expect("account alias selector");
+        let address = iroha_data_model::account::AccountAddress::from_account_id(owner)
+            .expect("account address");
+        let record = iroha_data_model::sns::NameRecordV1::new(
+            selector.clone(),
+            owner.clone(),
+            vec![iroha_data_model::sns::NameControllerV1::account(&address)],
+            0,
+            0,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            Metadata::default(),
+        );
+        world.smart_contract_state.insert(
+            crate::sns::record_storage_key(&selector),
+            norito::codec::Encode::encode(&record),
+        );
+        world
+            .rebuild_account_scope_directory()
+            .expect("active account alias must define a valid account scope");
+    }
+
     fn seed_account_alias_lease(
         tx: &mut StateTransaction<'_, '_>,
         owner: &AccountId,
@@ -61589,6 +62077,128 @@ mod tests {
             permanent_binding.status_at(10_000),
             AssetDefinitionAliasLeaseStatus::Permanent
         );
+        assert!(!permanent_binding.is_grace_expired_at(u64::MAX));
+
+        let no_grace_binding = AssetDefinitionAliasBindingRecord {
+            alias: "usd#no_grace".parse().expect("no-grace alias"),
+            lease_expiry_ms: Some(200),
+            grace_until_ms: None,
+            bound_at_ms: 100,
+        };
+        assert!(!no_grace_binding.is_grace_expired_at(199));
+        assert!(no_grace_binding.is_grace_expired_at(200));
+        assert_eq!(
+            no_grace_binding.status_at(200),
+            AssetDefinitionAliasLeaseStatus::ExpiredPendingCleanup
+        );
+
+        let malformed_binding = AssetDefinitionAliasBindingRecord {
+            alias: "usd#malformed".parse().expect("malformed alias"),
+            lease_expiry_ms: None,
+            grace_until_ms: Some(250),
+            bound_at_ms: 100,
+        };
+        assert!(
+            malformed_binding.is_grace_expired_at(0),
+            "a grace-only record must never revive a permanent alias"
+        );
+    }
+
+    #[test]
+    fn contract_alias_binding_without_grace_expires_at_lease_boundary() {
+        let binding = ContractAliasBindingRecord {
+            alias: "router::universal".parse().expect("contract alias"),
+            lease_expiry_ms: Some(200),
+            grace_until_ms: None,
+            bound_at_ms: 100,
+        };
+        assert!(!binding.is_grace_expired_at(199));
+        assert!(binding.is_grace_expired_at(200));
+        assert_eq!(
+            binding.status_at(200),
+            ContractAliasLeaseStatus::ExpiredPendingCleanup
+        );
+    }
+
+    #[test]
+    fn alias_binding_rejects_incoherent_lease_windows() {
+        let error = validate_alias_lease_window(None, Some(300), 100)
+            .expect_err("grace without a lease must fail");
+        assert!(error.to_string().contains("requires lease_expiry_ms"));
+
+        let mut world = World::new();
+
+        let contract_address = ContractAddress::derive(
+            iroha_data_model::smart_contract::CHAIN_DISCRIMINANT_MAINNET,
+            &ALICE_ID,
+            6,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("contract address");
+        let error = world
+            .bind_contract_alias(
+                &contract_address,
+                "router_invalid::universal".parse().expect("contract alias"),
+                Some(200),
+                Some(199),
+                100,
+            )
+            .expect_err("grace before expiry must fail");
+        assert!(error.to_string().contains("must not precede"));
+
+        let error = world
+            .bind_contract_alias(
+                &contract_address,
+                "router_expired::universal".parse().expect("contract alias"),
+                Some(100),
+                None,
+                100,
+            )
+            .expect_err("already-expired lease must fail");
+        assert!(error.to_string().contains("greater than bound_at_ms"));
+    }
+
+    #[test]
+    fn alias_index_rebuild_rejects_incoherent_persisted_lease_windows() {
+        let (mut world, definition_id) = asset_alias_test_world();
+        world.asset_definition_alias_bindings = std::iter::once((
+            definition_id,
+            AssetDefinitionAliasBindingRecord {
+                alias: "usd#invalid_persisted".parse().expect("asset alias"),
+                lease_expiry_ms: None,
+                grace_until_ms: Some(300),
+                bound_at_ms: 100,
+            },
+        ))
+        .collect();
+        let error = world
+            .rebuild_asset_definition_alias_indexes()
+            .expect_err("asset alias rebuild must reject grace without a lease");
+        assert!(error.contains("requires lease_expiry_ms"));
+
+        let contract_address = ContractAddress::derive(
+            iroha_data_model::smart_contract::CHAIN_DISCRIMINANT_MAINNET,
+            &ALICE_ID,
+            7,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("contract address");
+        world.contract_alias_bindings = std::iter::once((
+            contract_address,
+            ContractAliasBindingRecord {
+                alias: "router_invalid_persisted::universal"
+                    .parse()
+                    .expect("contract alias"),
+                lease_expiry_ms: Some(100),
+                grace_until_ms: None,
+                bound_at_ms: 100,
+            },
+        ))
+        .collect();
+        let error = world
+            .rebuild_contract_alias_indexes()
+            .expect_err("contract alias rebuild must reject a non-forward lease");
+        assert!(error.contains("greater than bound_at_ms"));
     }
 
     #[test]
@@ -61658,6 +62268,55 @@ mod tests {
         assert!(
             err.to_string().contains("already bound"),
             "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn contract_alias_time_lookup_rejects_index_without_binding_record() {
+        let mut world = World::new();
+        let contract_address = ContractAddress::derive(
+            iroha_data_model::smart_contract::CHAIN_DISCRIMINANT_MAINNET,
+            &ALICE_ID,
+            7,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("contract address");
+        let alias: ContractAlias = "index_only::universal".parse().expect("contract alias");
+        world
+            .contract_aliases
+            .insert(alias.clone(), contract_address.clone());
+
+        let view = world.view();
+        assert_eq!(
+            view.contract_address_by_alias(&alias),
+            Some(contract_address),
+            "the raw index remains inspectable for state repair"
+        );
+        assert_eq!(
+            view.contract_address_by_alias_at(&alias, 0),
+            None,
+            "an index-only entry must never become an effective first-release binding"
+        );
+    }
+
+    #[test]
+    fn asset_alias_time_lookup_rejects_index_without_binding_record() {
+        let (mut world, definition_id) = asset_alias_test_world();
+        let alias: AssetDefinitionAlias = "usd#index_only".parse().expect("asset alias");
+        world
+            .asset_definition_aliases
+            .insert(alias.clone(), definition_id.clone());
+
+        let view = world.view();
+        assert_eq!(
+            view.asset_definition_id_by_alias(&alias),
+            Some(definition_id),
+            "the raw index remains inspectable for state repair"
+        );
+        assert_eq!(
+            view.asset_definition_id_by_alias_at(&alias, 0),
+            None,
+            "an index-only entry must never become an effective first-release binding"
         );
     }
 
@@ -63198,6 +63857,128 @@ mod tests {
                 .as_ref(),
             Some(&alias)
         );
+    }
+
+    #[test]
+    fn contract_alias_bindings_roundtrip_through_state_json() {
+        let mut world = World::default();
+        let contract_address = ContractAddress::derive(
+            iroha_data_model::smart_contract::CHAIN_DISCRIMINANT_MAINNET,
+            &ALICE_ID,
+            41,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("contract address");
+        let alias: ContractAlias = "snapshot_router::universal"
+            .parse()
+            .expect("contract alias");
+        world
+            .bind_contract_alias(
+                &contract_address,
+                alias.clone(),
+                Some(2_000),
+                Some(2_500),
+                1_000,
+            )
+            .expect("bind contract alias");
+        let expected = world
+            .contract_alias_bindings
+            .view()
+            .get(&contract_address)
+            .expect("binding")
+            .clone();
+
+        let state = State::new(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let json_value = norito::json::to_value(&state).expect("serialize state");
+        let restored = deserialize_state_snapshot_value(json_value).expect("deserialize state");
+        let view = restored.world_view();
+
+        assert_eq!(
+            view.contract_alias_bindings()
+                .get(&contract_address)
+                .expect("binding"),
+            &expected
+        );
+        assert_eq!(view.contract_aliases().get(&alias), Some(&contract_address));
+    }
+
+    #[test]
+    fn state_snapshot_rejects_malformed_asset_alias_lease_window() {
+        let (world, definition_id) = asset_alias_test_world();
+        let state = State::new(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 100, 0);
+        let mut block = state.block(header);
+        block.world.asset_definition_alias_bindings.insert(
+            definition_id,
+            AssetDefinitionAliasBindingRecord {
+                alias: "usd#invalid_snapshot".parse().expect("asset alias"),
+                lease_expiry_ms: None,
+                grace_until_ms: Some(300),
+                bound_at_ms: 100,
+            },
+        );
+        block
+            .commit()
+            .expect("commit adversarial alias snapshot fixture");
+
+        let json_value = norito::json::to_value(&state).expect("serialize state");
+        let error = deserialize_state_snapshot_value(json_value)
+            .err()
+            .expect("grace-only asset alias binding must fail snapshot restore");
+        let message = error.to_string();
+        assert!(
+            message.contains("asset_definition_alias_bindings"),
+            "{message}"
+        );
+        assert!(message.contains("requires lease_expiry_ms"), "{message}");
+    }
+
+    #[test]
+    fn state_snapshot_rejects_malformed_contract_alias_lease_window() {
+        let state = State::new(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let contract_address = ContractAddress::derive(
+            iroha_data_model::smart_contract::CHAIN_DISCRIMINANT_MAINNET,
+            &ALICE_ID,
+            42,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("contract address");
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 100, 0);
+        let mut block = state.block(header);
+        block.world.contract_alias_bindings.insert(
+            contract_address,
+            ContractAliasBindingRecord {
+                alias: "invalid_snapshot_router::universal"
+                    .parse()
+                    .expect("contract alias"),
+                lease_expiry_ms: Some(100),
+                grace_until_ms: None,
+                bound_at_ms: 100,
+            },
+        );
+        block
+            .commit()
+            .expect("commit adversarial contract alias snapshot fixture");
+
+        let json_value = norito::json::to_value(&state).expect("serialize state");
+        let error = deserialize_state_snapshot_value(json_value)
+            .err()
+            .expect("non-forward contract alias lease must fail snapshot restore");
+        let message = error.to_string();
+        assert!(message.contains("contract_alias_bindings"), "{message}");
+        assert!(message.contains("greater than bound_at_ms"), "{message}");
     }
 
     #[test]
@@ -87203,6 +87984,22 @@ mod tests {
             domain: DomainId::try_new("retained", "other").expect("mismatched domain id"),
         }
         .into();
+        let stale_alias_delegation_permission: Permission =
+            iroha_executor_data_model::permission::account::CanDelegateAccountAliasResolution {
+                scope: iroha_executor_data_model::permission::account::AccountAliasPermissionScope::Domain(
+                    DomainId::try_new("hbl", "historical")
+                        .expect("stale alias-delegation domain"),
+                ),
+            }
+            .into();
+        let retained_alias_delegation_permission: Permission =
+            iroha_executor_data_model::permission::account::CanDelegateAccountAliasResolution {
+                scope: iroha_executor_data_model::permission::account::AccountAliasPermissionScope::Domain(
+                    DomainId::try_new("hbl", "universal")
+                        .expect("retained alias-delegation domain"),
+                ),
+            }
+            .into();
         let holder = ALICE_ID.clone();
         let sponsor = AccountId::new(checked_keypair().public_key().clone());
         let beneficiary = AccountId::new(checked_keypair().public_key().clone());
@@ -87250,6 +88047,8 @@ mod tests {
                 stale_domain_permission.clone(),
                 retained_domain_permission.clone(),
                 mismatched_domain_permission.clone(),
+                stale_alias_delegation_permission.clone(),
+                retained_alias_delegation_permission.clone(),
                 stale_sponsor_permission.clone(),
                 retained_sponsor_permission.clone(),
                 stale_enrollment_permission.clone(),
@@ -87268,6 +88067,8 @@ mod tests {
                     stale_domain_permission.clone(),
                     retained_domain_permission.clone(),
                     mismatched_domain_permission.clone(),
+                    stale_alias_delegation_permission.clone(),
+                    retained_alias_delegation_permission.clone(),
                     stale_sponsor_permission.clone(),
                     retained_sponsor_permission.clone(),
                     stale_enrollment_permission.clone(),
@@ -87281,6 +88082,8 @@ mod tests {
                     (stale_domain_permission.clone(), 1),
                     (retained_domain_permission.clone(), 1),
                     (mismatched_domain_permission.clone(), 1),
+                    (stale_alias_delegation_permission.clone(), 1),
+                    (retained_alias_delegation_permission.clone(), 1),
                     (stale_sponsor_permission.clone(), 1),
                     (retained_sponsor_permission.clone(), 1),
                     (stale_enrollment_permission.clone(), 1),
@@ -87346,6 +88149,14 @@ mod tests {
             "account-domain permission whose domain alias maps to another dataspace must be pruned"
         );
         assert!(
+            account_permissions.contains(&retained_alias_delegation_permission),
+            "alias-resolution delegation in a retained domain must remain on account"
+        );
+        assert!(
+            !account_permissions.contains(&stale_alias_delegation_permission),
+            "alias-resolution delegation in a removed dataspace alias must be pruned from account"
+        );
+        assert!(
             account_permissions.contains(&retained_sponsor_permission),
             "sponsor-use permission in a retained domain must remain on account"
         );
@@ -87405,6 +88216,17 @@ mod tests {
         );
         assert!(
             role.permissions()
+                .any(|permission| permission == &retained_alias_delegation_permission),
+            "retained alias-resolution delegation should remain on role"
+        );
+        assert!(
+            !role
+                .permissions()
+                .any(|permission| permission == &stale_alias_delegation_permission),
+            "stale alias-resolution delegation must be pruned from role"
+        );
+        assert!(
+            role.permissions()
                 .any(|permission| permission == &retained_sponsor_permission),
             "retained sponsor-use permission should remain on role"
         );
@@ -87457,6 +88279,7 @@ mod tests {
         );
         for stale in [
             &mismatched_domain_permission,
+            &stale_alias_delegation_permission,
             &stale_sponsor_permission,
             &stale_enrollment_permission,
         ] {
@@ -87466,6 +88289,7 @@ mod tests {
             );
         }
         for retained_permission in [
+            &retained_alias_delegation_permission,
             &retained_sponsor_permission,
             &retained_enrollment_permission,
         ] {
@@ -94863,6 +95687,23 @@ mod tests {
     fn merge_candidates_ignore_contract_state_record_with_effect_type_mismatch() {
         assert_corrupted_contract_state_relay_record_is_ignored(|record| {
             record.fastpq_binding.verified_effect_type = "nexus_fee_budget".to_owned();
+        });
+    }
+
+    #[test]
+    fn merge_candidates_ignore_contract_state_lane_record_with_business_effect_binding() {
+        assert_corrupted_contract_state_relay_record_is_ignored(|record| {
+            record.fastpq_binding.effect_binding =
+                Some(iroha_data_model::nexus::AxtEffectBinding {
+                    destination_domain: Some("hbl.sbp".to_owned()),
+                    destination_account_id: Some("forged-recipient".to_owned()),
+                    vault_account_id: None,
+                    issuance_account_id: None,
+                    source_asset_definition_id: Some("forged-aed".to_owned()),
+                    destination_asset_definition_id: Some("forged-pkr".to_owned()),
+                    source_amount_i64: Some(10),
+                    destination_amount_i64: Some(760),
+                });
         });
     }
 
@@ -108414,11 +109255,10 @@ mod tests {
         let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
         let alice_account = new_sample_account(&ALICE_ID).build(&ALICE_ID);
         let bob_alias = alias_in_domain(&domain_id, "bob".parse().expect("alias"));
-        let bob_account = new_sample_account(&BOB_ID)
-            .with_label(Some(bob_alias))
-            .build(&BOB_ID);
+        let bob_account = new_sample_account(&BOB_ID).build(&BOB_ID);
 
-        let world = World::with([domain], [alice_account, bob_account], []);
+        let mut world = World::with([domain], [alice_account, bob_account], []);
+        seed_active_account_alias_binding(&mut world, &BOB_ID, &bob_alias);
         let view = world.view();
         let delta = DetachedStateTransactionDelta::default();
 
@@ -108443,19 +109283,16 @@ mod tests {
         let transferred_domain = Domain::new(transferred_domain_id.clone()).build(&user1);
         let alice_domain = Domain::new(sample_domain_id()).build(&ALICE_ID);
         let alice_account = new_sample_account(&ALICE_ID).build(&ALICE_ID);
-        let user1_account = new_account_in_domain(&user1, &users_domain_id)
-            .with_label(Some(alias_in_domain(
-                &users_domain_id,
-                "user1".parse().expect("alias"),
-            )))
-            .build(&user1);
+        let user1_alias = alias_in_domain(&users_domain_id, "user1".parse().expect("alias"));
+        let user1_account = new_account_in_domain(&user1, &users_domain_id).build(&user1);
         let user2_account = new_account_in_domain(&user2, &users_domain_id).build(&user2);
 
-        let world = World::with(
+        let mut world = World::with(
             [alice_domain, users_domain, transferred_domain],
             [alice_account, user1_account, user2_account],
             [],
         );
+        seed_active_account_alias_binding(&mut world, &user1, &user1_alias);
         let view = world.view();
         let transfer =
             iroha_data_model::isi::Transfer::domain(user1, transferred_domain_id, user2.clone());
@@ -108482,15 +109319,11 @@ mod tests {
         let transferred_domain = Domain::new(transferred_domain_id.clone()).build(&user1);
         let alice_domain = Domain::new(sample_domain_id()).build(&ALICE_ID);
         let alice_account = new_sample_account(&ALICE_ID).build(&ALICE_ID);
-        let user1_account = new_account_in_domain(&user1, &users_domain_id)
-            .with_label(Some(alias_in_domain(
-                &users_domain_id,
-                "user1".parse().expect("alias"),
-            )))
-            .build(&user1);
+        let user1_alias = alias_in_domain(&users_domain_id, "user1".parse().expect("alias"));
+        let user1_account = new_account_in_domain(&user1, &users_domain_id).build(&user1);
         let user2_account = new_account_in_domain(&user2, &users_domain_id).build(&user2);
 
-        let world = World::with(
+        let mut world = World::with(
             [
                 alice_domain,
                 users_domain.clone(),
@@ -108499,6 +109332,7 @@ mod tests {
             [alice_account, user1_account, user2_account],
             [],
         );
+        seed_active_account_alias_binding(&mut world, &user1, &user1_alias);
         let view = world.view();
         let transfer = iroha_data_model::isi::Transfer::domain(
             user1.clone(),

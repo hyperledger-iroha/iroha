@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import copy
 import gzip
 import hashlib
@@ -13,18 +14,21 @@ import os
 import shutil
 import stat
 import subprocess
+import sys
 import tarfile
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 import tempfile
 import unittest
 from unittest import mock
+import zipfile
 
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "check_android_device_lab_slot.py"
 SPEC = importlib.util.spec_from_file_location("check_android_device_lab_slot", MODULE_PATH)
 assert SPEC and SPEC.loader  # pragma: no cover - import guard
 device_lab = importlib.util.module_from_spec(SPEC)
+sys.modules[SPEC.name] = device_lab
 SPEC.loader.exec_module(device_lab)  # type: ignore[misc]
 
 SIGNER_MODULE_PATH = (
@@ -71,6 +75,247 @@ def write_text(path: Path, text: str) -> None:
 
 def write_json(path: Path, payload: dict) -> None:
     write_text(path, json.dumps(payload, indent=2, sort_keys=True) + "\n")
+
+
+_TEST_ATTESTATION_OPENSSL: Path | None = None
+_TEST_ATTESTATION_ROOT_KEY: Path | None = None
+_TEST_ATTESTATION_ROOT_CERT: Path | None = None
+_TEST_ATTESTATION_CHAIN_CACHE: dict[
+    tuple[bytes, str, bytes, int, int, int, bool, bool], bytes
+] = {}
+
+
+def _der_length(length: int) -> bytes:
+    if length < 0x80:
+        return bytes((length,))
+    encoded = length.to_bytes((length.bit_length() + 7) // 8, "big")
+    return bytes((0x80 | len(encoded),)) + encoded
+
+
+def _der_tlv(tag: bytes, value: bytes) -> bytes:
+    return tag + _der_length(len(value)) + value
+
+
+def _der_integer(value: int, *, enumerated: bool = False) -> bytes:
+    if value < 0:
+        raise AssertionError("test DER integers must be non-negative")
+    encoded = value.to_bytes(max(1, (value.bit_length() + 7) // 8), "big")
+    if encoded[0] & 0x80:
+        encoded = b"\0" + encoded
+    return _der_tlv(b"\x0a" if enumerated else b"\x02", encoded)
+
+
+def _der_sequence(*values: bytes) -> bytes:
+    return _der_tlv(b"\x30", b"".join(values))
+
+
+def _der_set(*values: bytes) -> bytes:
+    return _der_tlv(b"\x31", b"".join(sorted(values)))
+
+
+def _der_octets(value: bytes) -> bytes:
+    return _der_tlv(b"\x04", value)
+
+
+def _der_context_explicit(tag: int, value: bytes) -> bytes:
+    if tag < 31:
+        encoded_tag = bytes((0xA0 | tag,))
+    else:
+        chunks = [tag & 0x7F]
+        tag >>= 7
+        while tag:
+            chunks.append(0x80 | (tag & 0x7F))
+            tag >>= 7
+        encoded_tag = b"\xbf" + bytes(reversed(chunks))
+    return _der_tlv(encoded_tag, value)
+
+
+def android_key_description_der(
+    challenge: bytes,
+    package_name: str,
+    signing_digest: bytes,
+    *,
+    attestation_level: int = 2,
+    keymint_level: int = 2,
+    verified_boot_state: int = 0,
+    device_locked: bool = True,
+    append_ninth_sequence: bool = False,
+) -> bytes:
+    package_info = _der_sequence(
+        _der_octets(package_name.encode("utf-8")),
+        _der_integer(1),
+    )
+    app_id = _der_sequence(
+        _der_set(package_info),
+        _der_set(_der_octets(signing_digest)),
+    )
+    root_of_trust = _der_sequence(
+        _der_octets(b"\x11" * 32),
+        _der_tlv(b"\x01", b"\xff" if device_locked else b"\x00"),
+        _der_integer(verified_boot_state, enumerated=True),
+        _der_octets(b"\x22" * 32),
+    )
+    software = _der_sequence(
+        _der_context_explicit(
+            device_lab.ANDROID_TAG_ATTESTATION_APPLICATION_ID,
+            _der_octets(app_id),
+        )
+    )
+    hardware = _der_sequence(
+        _der_context_explicit(
+            device_lab.ANDROID_TAG_ROOT_OF_TRUST,
+            root_of_trust,
+        )
+    )
+    fields = [
+        _der_integer(400),
+        _der_integer(attestation_level, enumerated=True),
+        _der_integer(400),
+        _der_integer(keymint_level, enumerated=True),
+        _der_octets(challenge),
+        _der_octets(b""),
+        software,
+        hardware,
+    ]
+    if append_ninth_sequence:
+        fields.append(_der_sequence())
+    return _der_sequence(*fields)
+
+
+def test_android_attestation_chain(
+    challenge: bytes,
+    package_name: str,
+    signing_digest: bytes,
+    *,
+    attestation_level: int = 2,
+    keymint_level: int = 2,
+    verified_boot_state: int = 0,
+    device_locked: bool = True,
+    append_ninth_sequence: bool = False,
+) -> bytes:
+    cache_key = (
+        challenge,
+        package_name,
+        signing_digest,
+        attestation_level,
+        keymint_level,
+        verified_boot_state,
+        device_locked,
+        append_ninth_sequence,
+    )
+    cached = _TEST_ATTESTATION_CHAIN_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+    if (
+        _TEST_ATTESTATION_OPENSSL is None
+        or _TEST_ATTESTATION_ROOT_KEY is None
+        or _TEST_ATTESTATION_ROOT_CERT is None
+    ):
+        raise AssertionError("test Android attestation authority is not initialized")
+    description = android_key_description_der(
+        challenge,
+        package_name,
+        signing_digest,
+        attestation_level=attestation_level,
+        keymint_level=keymint_level,
+        verified_boot_state=verified_boot_state,
+        device_locked=device_locked,
+        append_ninth_sequence=append_ninth_sequence,
+    )
+    with tempfile.TemporaryDirectory() as temp:
+        root = Path(temp)
+        leaf_key = root / "leaf.key"
+        leaf_csr = root / "leaf.csr"
+        leaf_pem = root / "leaf.pem"
+        extensions = root / "extensions.cnf"
+        write_text(
+            extensions,
+            "basicConstraints=critical,CA:FALSE\n"
+            "keyUsage=critical,digitalSignature\n"
+            "subjectKeyIdentifier=hash\n"
+            "authorityKeyIdentifier=keyid,issuer\n"
+            f"{device_lab.ANDROID_KEY_ATTESTATION_EXTENSION_OID}=DER:{description.hex()}\n",
+        )
+        subprocess.run(
+            [
+                str(_TEST_ATTESTATION_OPENSSL),
+                "genpkey",
+                "-algorithm",
+                "EC",
+                "-pkeyopt",
+                "ec_paramgen_curve:P-256",
+                "-out",
+                str(leaf_key),
+            ],
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            [
+                str(_TEST_ATTESTATION_OPENSSL),
+                "req",
+                "-new",
+                "-key",
+                str(leaf_key),
+                "-subj",
+                "/CN=Iroha Android StrongBox Test Leaf",
+                "-out",
+                str(leaf_csr),
+            ],
+            check=True,
+            capture_output=True,
+        )
+        serial = int.from_bytes(hashlib.sha256(b"serial\0" + challenge).digest()[:16], "big") or 1
+        subprocess.run(
+            [
+                str(_TEST_ATTESTATION_OPENSSL),
+                "x509",
+                "-req",
+                "-in",
+                str(leaf_csr),
+                "-CA",
+                str(_TEST_ATTESTATION_ROOT_CERT),
+                "-CAkey",
+                str(_TEST_ATTESTATION_ROOT_KEY),
+                "-set_serial",
+                hex(serial),
+                "-days",
+                "3650",
+                "-sha256",
+                "-extfile",
+                str(extensions),
+                "-out",
+                str(leaf_pem),
+            ],
+            check=True,
+            capture_output=True,
+        )
+        chain = leaf_pem.read_bytes() + _TEST_ATTESTATION_ROOT_CERT.read_bytes()
+    _TEST_ATTESTATION_CHAIN_CACHE[cache_key] = chain
+    return chain
+
+
+test_android_attestation_chain.__test__ = False
+
+
+def android_attestation_metadata(slot_id: str = "pixel8-crypto") -> dict[str, str]:
+    signing_digest = hashlib.sha256(f"{slot_id}:wallet-signer".encode()).hexdigest()
+    metadata = {
+        "slot_id": slot_id,
+        "candidate_record_sha256": hashlib.sha256(b"candidate-record").hexdigest(),
+        "candidate_manifest_sha256": hashlib.sha256(b"candidate-manifest").hexdigest(),
+        "candidate_stage_manifest_sha256": hashlib.sha256(b"stage-manifest").hexdigest(),
+        "candidate_lab_native_library_sha256": hashlib.sha256(b"native-library").hexdigest(),
+        "candidate_lab_apk_sha256": hashlib.sha256(b"candidate-apk").hexdigest(),
+        "candidate_lab_test_apk_sha256": hashlib.sha256(b"candidate-test-apk").hexdigest(),
+        "candidate_source_commit": "1" * 40,
+        "candidate_source_tree_sha256": hashlib.sha256(b"source-tree").hexdigest(),
+        "app_package_name": device_lab.KAGEMUSHA_WALLET_PACKAGE_NAME,
+        "app_signing_certificate_sha256": signing_digest,
+    }
+    challenge = device_lab.derive_kagemusha_strongbox_challenge_v1(metadata)
+    metadata["attestation_challenge_sha256"] = hashlib.sha256(challenge).hexdigest()
+    return metadata
 
 
 
@@ -297,7 +542,13 @@ def trusted_signers_for(signer: dict[str, Path | str]) -> dict[str, Path]:
 
 def required_artifact_digests(slot: Path) -> dict[str, str]:
     digests = {}
-    for relative in device_lab._required_signed_evidence_digest_paths(slot):  # type: ignore[attr-defined]
+    required_paths = set(
+        device_lab._required_signed_evidence_digest_paths(slot)  # type: ignore[attr-defined]
+    )
+    stage_manifest = device_lab.KAGEMUSHA_CANDIDATE_STAGE_MANIFEST_PATH_V1
+    if (slot / stage_manifest).is_file():
+        required_paths.add(stage_manifest)
+    for relative in sorted(required_paths):
         digests[relative] = hashlib.sha256((slot / relative).read_bytes()).hexdigest()
     return digests
 
@@ -548,6 +799,697 @@ def device_identity_for_family(family: str) -> tuple[str, str]:
     return identity
 
 
+_SIGNED_CANDIDATE_APK_FIXTURE: tuple[bytes, bytes, str] | None = None
+_SIGNED_WALLET_APK_FIXTURE: tuple[bytes, str] | None = None
+
+
+def signed_candidate_apk_fixture() -> tuple[bytes, bytes, str]:
+    global _SIGNED_CANDIDATE_APK_FIXTURE
+    if _SIGNED_CANDIDATE_APK_FIXTURE is not None:
+        return _SIGNED_CANDIDATE_APK_FIXTURE
+    sdk_roots = tuple(
+        dict.fromkeys(
+            Path(value).expanduser()
+            for value in (
+                os.environ.get("ANDROID_SDK_ROOT"),
+                os.environ.get("ANDROID_HOME"),
+                str(Path.home() / "Library" / "Android" / "sdk"),
+            )
+            if value
+        )
+    )
+    apksigner = shutil.which("apksigner")
+    if apksigner is None:
+        candidates = sorted(
+            candidate
+            for sdk_root in sdk_roots
+            for candidate in (sdk_root / "build-tools").glob("*/apksigner")
+            if candidate.is_file() and os.access(candidate, os.X_OK)
+        )
+        if candidates:
+            apksigner = str(candidates[-1])
+    aapt2 = shutil.which("aapt2")
+    if aapt2 is None:
+        candidates = sorted(
+            candidate
+            for sdk_root in sdk_roots
+            for candidate in (sdk_root / "build-tools").glob("*/aapt2")
+            if candidate.is_file() and os.access(candidate, os.X_OK)
+        )
+        if candidates:
+            aapt2 = str(candidates[-1])
+    android_jars = sorted(
+        candidate
+        for sdk_root in sdk_roots
+        for candidate in (sdk_root / "platforms").glob("android-*/android.jar")
+        if candidate.is_file()
+    )
+    keytool = shutil.which("keytool")
+    if apksigner is None or aapt2 is None or not android_jars or keytool is None:
+        raise AssertionError(
+            "candidate APK validator tests require apksigner, aapt2, android.jar, "
+            "and keytool"
+        )
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        manifest = root / "AndroidManifest.xml"
+        manifest.write_text(
+            '<?xml version="1.0" encoding="utf-8"?>\n'
+            '<manifest xmlns:android="http://schemas.android.com/apk/res/android" '
+            'package="org.hyperledger.iroha.candidate.fixture">\n'
+            '  <uses-sdk android:minSdkVersion="28" android:targetSdkVersion="35"/>\n'
+            '  <application android:hasCode="false"/>\n'
+            '</manifest>\n',
+            encoding="utf-8",
+        )
+        keystore = root / "candidate-lab-test.p12"
+        subprocess.run(
+            [
+                keytool,
+                "-genkeypair",
+                "-alias",
+                "candidate-lab",
+                "-keystore",
+                str(keystore),
+                "-storetype",
+                "PKCS12",
+                "-storepass",
+                "candidate-lab-test",
+                "-keypass",
+                "candidate-lab-test",
+                "-keyalg",
+                "RSA",
+                "-keysize",
+                "2048",
+                "-validity",
+                "3650",
+                "-dname",
+                "CN=Iroha Candidate Lab Test",
+            ],
+            check=True,
+            capture_output=True,
+        )
+        signed_payloads: list[bytes] = []
+        signed_paths: list[Path] = []
+        for label in ("main", "androidTest"):
+            unsigned = root / f"{label}-unsigned.apk"
+            signed = root / f"{label}.apk"
+            subprocess.run(
+                [
+                    aapt2,
+                    "link",
+                    "--manifest",
+                    str(manifest),
+                    "-I",
+                    str(android_jars[-1]),
+                    "-o",
+                    str(unsigned),
+                ],
+                check=True,
+                capture_output=True,
+            )
+            with zipfile.ZipFile(unsigned, "a", compression=zipfile.ZIP_STORED) as archive:
+                archive.writestr("fixture.txt", f"candidate-lab-{label}\n")
+            subprocess.run(
+                [
+                    apksigner,
+                    "sign",
+                    "--min-sdk-version",
+                    "28",
+                    "--ks",
+                    str(keystore),
+                    "--ks-pass",
+                    "pass:candidate-lab-test",
+                    "--key-pass",
+                    "pass:candidate-lab-test",
+                    "--out",
+                    str(signed),
+                    str(unsigned),
+                ],
+                check=True,
+                capture_output=True,
+            )
+            signed_payloads.append(signed.read_bytes())
+            signed_paths.append(signed)
+        certificate_sha256 = device_lab.extract_apk_signing_certificate_sha256(
+            signed_paths[0]
+        )
+        if (
+            device_lab.extract_apk_signing_certificate_sha256(signed_paths[1])
+            != certificate_sha256
+        ):
+            raise AssertionError("candidate APK fixture signers differ")
+        _SIGNED_CANDIDATE_APK_FIXTURE = (
+            signed_payloads[0],
+            signed_payloads[1],
+            certificate_sha256,
+        )
+    return _SIGNED_CANDIDATE_APK_FIXTURE
+
+
+def signed_wallet_apk_fixture() -> tuple[bytes, str]:
+    global _SIGNED_WALLET_APK_FIXTURE
+    if _SIGNED_WALLET_APK_FIXTURE is not None:
+        return _SIGNED_WALLET_APK_FIXTURE
+    authority = device_lab._ANDROID_EVIDENCE_AUTHORITY
+    if authority is None:
+        raise AssertionError("Android authority is not configured")
+    apksigner = authority["apksigner"]["path"]
+    keytool = shutil.which("keytool")
+    sdk_roots = tuple(
+        Path(value).expanduser()
+        for value in (
+            os.environ.get("ANDROID_SDK_ROOT"),
+            os.environ.get("ANDROID_HOME"),
+            str(Path.home() / "Library" / "Android" / "sdk"),
+        )
+        if value
+    )
+    aapt_candidates = sorted(
+        candidate
+        for sdk_root in sdk_roots
+        for candidate in (sdk_root / "build-tools").glob("*/aapt2")
+        if candidate.is_file() and os.access(candidate, os.X_OK)
+    )
+    android_jars = sorted(
+        candidate
+        for sdk_root in sdk_roots
+        for candidate in (sdk_root / "platforms").glob("android-*/android.jar")
+        if candidate.is_file()
+    )
+    if keytool is None or not aapt_candidates or not android_jars:
+        raise AssertionError("wallet APK fixture requires keytool, aapt2, and android.jar")
+    with tempfile.TemporaryDirectory() as temp:
+        root = Path(temp)
+        unsigned = root / "wallet-unsigned.apk"
+        signed = root / "wallet-signed.apk"
+        manifest = root / "AndroidManifest.xml"
+        manifest.write_text(
+            '<?xml version="1.0" encoding="utf-8"?>\n'
+            '<manifest xmlns:android="http://schemas.android.com/apk/res/android" '
+            'package="org.hyperledger.iroha.kagemushawallet">\n'
+            '  <uses-sdk android:minSdkVersion="28" android:targetSdkVersion="35"/>\n'
+            '  <application android:hasCode="false"/>\n'
+            '</manifest>\n',
+            encoding="utf-8",
+        )
+        subprocess.run(
+            [
+                str(aapt_candidates[-1]),
+                "link",
+                "--manifest",
+                str(manifest),
+                "-I",
+                str(android_jars[-1]),
+                "-o",
+                str(unsigned),
+            ],
+            check=True,
+            capture_output=True,
+        )
+        with zipfile.ZipFile(unsigned, "a", compression=zipfile.ZIP_STORED) as archive:
+            archive.writestr("fixture.txt", "production-wallet-fixture\n")
+        keystore = root / "wallet-test.p12"
+        subprocess.run(
+            [
+                keytool,
+                "-genkeypair",
+                "-alias",
+                "wallet",
+                "-keystore",
+                str(keystore),
+                "-storetype",
+                "PKCS12",
+                "-storepass",
+                "wallet-test",
+                "-keypass",
+                "wallet-test",
+                "-keyalg",
+                "RSA",
+                "-keysize",
+                "2048",
+                "-validity",
+                "3650",
+                "-dname",
+                "CN=Iroha Wallet Test",
+            ],
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            [
+                str(apksigner),
+                "sign",
+                "--min-sdk-version",
+                "28",
+                "--ks",
+                str(keystore),
+                "--ks-pass",
+                "pass:wallet-test",
+                "--key-pass",
+                "pass:wallet-test",
+                "--out",
+                str(signed),
+                str(unsigned),
+            ],
+            check=True,
+            capture_output=True,
+        )
+        certificate = device_lab.extract_apk_signing_certificate_sha256(signed)
+        _SIGNED_WALLET_APK_FIXTURE = (signed.read_bytes(), certificate)
+    return _SIGNED_WALLET_APK_FIXTURE
+
+
+def write_candidate_binding_v2(
+    slot: Path,
+    slot_id: str,
+    *,
+    app_signing_certificate_sha256: str | None = None,
+    attestation_certificate_chain_sha256: str | None = None,
+) -> tuple[dict[str, object], bytes]:
+    """Write a byte-consistent candidate lab fixture for validator tests."""
+
+    candidate_record_path = "evidence/candidate/candidate-v4.norito"
+    candidate_manifest_path = "evidence/candidate/manifest-v4.norito"
+    candidate_validation_path = "evidence/candidate/candidate-validation-v1.json"
+    native_library_path = (
+        "evidence/candidate/lib/arm64-v8a/libconnect_norito_bridge.so"
+    )
+    source_commit = "1" * 40
+    source_tree_sha256 = hashlib.sha256(
+        f"{slot_id}:source-tree".encode("utf-8")
+    ).hexdigest()
+    generation = f"candidate-{slot_id}"
+    write_text(slot / candidate_record_path, f"{slot_id}:candidate-v4\n")
+    write_text(slot / candidate_manifest_path, f"{slot_id}:manifest-v4\n")
+    write_json(
+        slot / candidate_validation_path,
+        {"schema": "candidate-validation-test-v1", "slot_id": slot_id},
+    )
+    candidate_record_sha256 = hashlib.sha256(
+        (slot / candidate_record_path).read_bytes()
+    ).hexdigest()
+    candidate_manifest_sha256 = hashlib.sha256(
+        (slot / candidate_manifest_path).read_bytes()
+    ).hexdigest()
+    inventory: list[dict[str, object]] = []
+    measured_inventory: list[dict[str, object]] = []
+    for role, file_name in zip(
+        device_lab.KAGEMUSHA_CANDIDATE_ARTIFACT_ROLES_V4,
+        device_lab.KAGEMUSHA_CANDIDATE_ARTIFACT_FILE_NAMES_V4,
+    ):
+        relative = f"evidence/candidate/artifacts/{file_name}"
+        header = f"{slot_id}:{role}:header".encode("utf-8")
+        payload = f"{slot_id}:{role}:payload".encode("utf-8")
+        framed = b"KRV4KEY\0" + len(header).to_bytes(4, "little") + header + payload
+        path = slot / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(framed)
+        path.chmod(0o600)
+        measurement: dict[str, object] = {
+            "role": role,
+            "framed_size_bytes": len(framed),
+            "framed_sha256": hashlib.sha256(framed).hexdigest(),
+            "payload_size_bytes": len(payload),
+            "payload_sha256": hashlib.sha256(payload).hexdigest(),
+        }
+        measured_inventory.append(measurement)
+        inventory.append({"path": relative, **measurement})
+    inventory_sha256 = device_lab._candidate_inventory_sha256(measured_inventory)
+
+    for file_name in device_lab.KAGEMUSHA_CANDIDATE_SCENARIO_FILES_V1:
+        write_text(slot / "scenario" / file_name, f"{slot_id}:{file_name}\n")
+
+    stage_paths = sorted(
+        {
+            candidate_record_path,
+            candidate_manifest_path,
+            candidate_validation_path,
+            *(
+                f"evidence/candidate/artifacts/{name}"
+                for name in device_lab.KAGEMUSHA_CANDIDATE_ARTIFACT_FILE_NAMES_V4
+            ),
+            *(
+                f"scenario/{name}"
+                for name in device_lab.KAGEMUSHA_CANDIDATE_SCENARIO_FILES_V1
+            ),
+        },
+        key=lambda value: value.encode("utf-8"),
+    )
+    stage_entries: list[dict[str, object]] = []
+    for relative in stage_paths:
+        payload = (slot / relative).read_bytes()
+        stage_entries.append(
+            {
+                "path": relative,
+                "mode": "0600",
+                "size_bytes": len(payload),
+                "sha256": hashlib.sha256(payload).hexdigest(),
+            }
+        )
+    scenario_entries = [
+        entry for entry in stage_entries if str(entry["path"]).startswith("scenario/")
+    ]
+    scenario_digest = hashlib.sha256()
+    scenario_digest.update(device_lab.KAGEMUSHA_CANDIDATE_SCENARIO_INVENTORY_DOMAIN_V1)
+    scenario_digest.update(len(scenario_entries).to_bytes(4, "big"))
+    for entry in scenario_entries:
+        path_bytes = str(entry["path"]).encode("utf-8")
+        scenario_digest.update(len(path_bytes).to_bytes(4, "big"))
+        scenario_digest.update(path_bytes)
+        scenario_digest.update(int(entry["size_bytes"]).to_bytes(8, "big"))
+        scenario_digest.update(bytes.fromhex(str(entry["sha256"])))
+    stage_manifest: dict[str, object] = {
+        "schema": device_lab.KAGEMUSHA_CANDIDATE_STAGE_MANIFEST_SCHEMA_V1,
+        "version": 1,
+        "stage_manifest_path": device_lab.KAGEMUSHA_CANDIDATE_STAGE_MANIFEST_PATH_V1,
+        "stage_manifest_mode": "0600",
+        "stage_manifest_size_bytes": 0,
+        "candidate_record_sha256": candidate_record_sha256,
+        "candidate_manifest_sha256": candidate_manifest_sha256,
+        "candidate_validation_report_sha256": hashlib.sha256(
+            (slot / candidate_validation_path).read_bytes()
+        ).hexdigest(),
+        "scenario_inventory_sha256": scenario_digest.hexdigest(),
+        "source_commit": source_commit,
+        "source_tree_sha256": source_tree_sha256,
+        "source_repo_dirty": False,
+        "validator": {
+            "schema": device_lab.KAGEMUSHA_CANDIDATE_STAGE_VALIDATOR_SCHEMA_V1,
+            "candidate_binary_name": "kagemusha_recursive_spend_v4_bundle",
+            "candidate_binary_sha256": "2" * 64,
+            "scenario_binary_name": "kagemusha_candidate_scenario_validator",
+            "scenario_binary_sha256": "3" * 64,
+            "cargo_binary_sha256": "4" * 64,
+            "cargo_version_verbose": "cargo test fixture\n",
+            "rustc_binary_sha256": "5" * 64,
+            "rustc_version_verbose": "rustc test fixture\n",
+            "locked": True,
+            "offline": True,
+            "isolated_target": True,
+            "build_jobs": 2,
+            "candidate_package": "iroha_core",
+            "scenario_package": "connect_norito_bridge",
+            "features": ["kagemusha-candidate-evidence-lab"],
+            "profile": "debug",
+        },
+        "entry_count": len(stage_entries),
+        "scenario_entry_count": len(scenario_entries),
+        "entries": stage_entries,
+    }
+    while True:
+        encoded_manifest = (
+            json.dumps(
+                stage_manifest,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=True,
+            )
+            + "\n"
+        ).encode("utf-8")
+        if stage_manifest["stage_manifest_size_bytes"] == len(encoded_manifest):
+            break
+        stage_manifest["stage_manifest_size_bytes"] = len(encoded_manifest)
+    stage_manifest_path = slot / device_lab.KAGEMUSHA_CANDIDATE_STAGE_MANIFEST_PATH_V1
+    stage_manifest_path.write_bytes(encoded_manifest)
+    stage_manifest_path.chmod(0o600)
+    stage_manifest_sha256 = hashlib.sha256(encoded_manifest).hexdigest()
+
+    write_text(slot / native_library_path, f"{slot_id}:candidate-lab-native\n")
+    native_library_sha256 = hashlib.sha256(
+        (slot / native_library_path).read_bytes()
+    ).hexdigest()
+    main_apk, test_apk, lab_signing_certificate_sha256 = signed_candidate_apk_fixture()
+    lab_apk_path = (
+        "evidence/kagemusha-candidate-evidence-lab-DO-NOT-SHIP-"
+        f"{candidate_record_sha256}-debug.apk"
+    )
+    lab_test_apk_path = (
+        "evidence/kagemusha-candidate-evidence-lab-DO-NOT-SHIP-"
+        f"{candidate_record_sha256}-debug-androidTest.apk"
+    )
+    for relative, payload in (
+        (lab_apk_path, main_apk),
+        (lab_test_apk_path, test_apk),
+    ):
+        path = slot / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(payload)
+        path.chmod(0o600)
+    lab_apk_sha256 = hashlib.sha256(main_apk).hexdigest()
+    lab_test_apk_sha256 = hashlib.sha256(test_apk).hexdigest()
+
+    wallet_certificate = app_signing_certificate_sha256 or hashlib.sha256(
+        f"{slot_id}:wallet-signer".encode()
+    ).hexdigest()
+    chain_sha256 = attestation_certificate_chain_sha256 or hashlib.sha256(
+        f"{slot_id}:attestation-chain".encode()
+    ).hexdigest()
+    challenge = device_lab.derive_kagemusha_strongbox_challenge_v1(
+        {
+            "slot_id": slot_id,
+            "candidate_record_sha256": candidate_record_sha256,
+            "candidate_manifest_sha256": candidate_manifest_sha256,
+            "candidate_stage_manifest_sha256": stage_manifest_sha256,
+            "candidate_lab_native_library_sha256": native_library_sha256,
+            "candidate_lab_apk_sha256": lab_apk_sha256,
+            "candidate_lab_test_apk_sha256": lab_test_apk_sha256,
+            "candidate_source_commit": source_commit,
+            "candidate_source_tree_sha256": source_tree_sha256,
+        }
+    )
+    if _TEST_ATTESTATION_ROOT_CERT is not None:
+        chain_payload = test_android_attestation_chain(
+            challenge,
+            device_lab.KAGEMUSHA_WALLET_PACKAGE_NAME,
+            bytes.fromhex(wallet_certificate),
+        )
+        chain_path = slot / "attestation" / "keymint-certificate-chain.pem"
+        chain_path.parent.mkdir(parents=True, exist_ok=True)
+        chain_path.write_bytes(chain_payload)
+        chain_path.chmod(0o600)
+        chain_sha256 = hashlib.sha256(chain_payload).hexdigest()
+    challenge_sha256 = hashlib.sha256(challenge).hexdigest()
+
+    input_counts = (
+        0, 5, 1, 8, 2, 8, 2, 0, 1, 1, 1, 4, 4, 4, 4, 4,
+        3, 1, 3, 1, 7, 3, 8, 1, 8, 1, 8, 1,
+    )
+    causal_events: list[dict[str, object]] = []
+    for sequence, (operation, input_count) in enumerate(
+        zip(device_lab.KAGEMUSHA_CANDIDATE_CAUSAL_OPERATIONS_V1, input_counts)
+    ):
+        inputs = [
+            hashlib.sha256(f"{slot_id}:{operation}:input:{index}".encode()).hexdigest()
+            for index in range(input_count)
+        ]
+        event: dict[str, object] = {
+            "sequence": sequence,
+            "phase": "phase_1" if sequence < 7 else "phase_2",
+            "operation": operation,
+            "outcome": "succeeded",
+            "duration_nanos": sequence + 1,
+            "input_sha256": inputs,
+            "output_sha256": hashlib.sha256(
+                f"{slot_id}:{operation}:output".encode()
+            ).hexdigest(),
+            "output_size_bytes": 32,
+            "rejection_classification": None,
+            "exception_class": None,
+            "error_message_sha256": None,
+        }
+        if operation in {
+            "candidate_install",
+            "candidate_reinstall_after_process_restart",
+            "restore_init_result_after_restart",
+            "restore_hop_01_result_after_restart",
+            "restore_hop_02_result_after_restart",
+        }:
+            event["output_sha256"] = None
+            event["output_size_bytes"] = 0
+        if operation == "duplicate_input_rejection":
+            event.update(
+                {
+                    "outcome": "rejected",
+                    "output_sha256": None,
+                    "output_size_bytes": 0,
+                    "rejection_classification": "duplicate_input_bundle",
+                    "exception_class": "java.lang.IllegalArgumentException",
+                    "error_message_sha256": hashlib.sha256(
+                        f"{slot_id}:duplicate-rejected".encode()
+                    ).hexdigest(),
+                }
+            )
+        causal_events.append(event)
+
+    def link_output(output_event: int, input_event: int, input_index: int) -> None:
+        digest = causal_events[output_event]["output_sha256"]
+        assert isinstance(digest, str)
+        inputs = causal_events[input_event]["input_sha256"]
+        assert isinstance(inputs, list)
+        inputs[input_index] = digest
+
+    def link_input(
+        source_event: int,
+        source_input: int,
+        target_event: int,
+        target_input: int,
+    ) -> None:
+        source = causal_events[source_event]["input_sha256"]
+        target = causal_events[target_event]["input_sha256"]
+        assert isinstance(source, list) and isinstance(target, list)
+        target[target_input] = source[source_input]
+
+    for output_event, input_event, input_index in (
+        (1, 2, 0),
+        (3, 4, 0),
+        (5, 6, 0),
+        (2, 8, 0),
+        (4, 9, 0),
+        (6, 10, 0),
+        (16, 17, 0),
+        (18, 19, 0),
+        (20, 21, 0),
+        (22, 23, 0),
+        (24, 25, 0),
+        (26, 27, 0),
+    ):
+        link_output(output_event, input_event, input_index)
+    for source_event, source_input, target_event, target_input in (
+        (3, 0, 11, 0), (3, 1, 11, 1), (3, 3, 11, 2), (3, 2, 11, 3),
+        (5, 0, 12, 0), (5, 1, 12, 1), (5, 3, 12, 2), (5, 2, 12, 3),
+        (13, 0, 16, 0), (13, 1, 16, 2), (4, 1, 16, 1),
+        (14, 0, 18, 0), (14, 1, 18, 2), (6, 1, 18, 1),
+        (13, 0, 20, 0), (13, 1, 20, 1), (13, 3, 20, 2), (13, 2, 20, 3),
+        (13, 0, 21, 2),
+        (13, 0, 22, 0), (13, 1, 22, 1), (13, 3, 22, 2), (13, 2, 22, 3),
+        (14, 0, 24, 0), (14, 1, 24, 1), (14, 3, 24, 2), (14, 2, 24, 3),
+        (15, 0, 26, 0), (15, 1, 26, 1), (15, 3, 26, 2), (15, 2, 26, 3),
+        (22, 4, 24, 4), (22, 4, 26, 4), (22, 6, 24, 6), (22, 6, 26, 6),
+    ):
+        link_input(source_event, source_input, target_event, target_input)
+
+    lifecycle_path = device_lab.KAGEMUSHA_CANDIDATE_LIFECYCLE_TRANSCRIPT_PATH
+    write_json(
+        slot / lifecycle_path,
+        {
+            "schema": device_lab.KAGEMUSHA_CANDIDATE_LIFECYCLE_SCHEMA_V2,
+            "slot_id": slot_id,
+            "candidate_record_sha256": candidate_record_sha256,
+            "candidate_manifest_sha256": candidate_manifest_sha256,
+            "candidate_stage_manifest_path": (
+                device_lab.KAGEMUSHA_CANDIDATE_STAGE_MANIFEST_PATH_V1
+            ),
+            "candidate_stage_manifest_sha256": stage_manifest_sha256,
+            "candidate_inventory_sha256": inventory_sha256,
+            "source_commit": source_commit,
+            "source_tree_sha256": source_tree_sha256,
+            "source_repo_dirty": False,
+            "generation": generation,
+            "bridge_abi_version": device_lab.REQUIRED_KAGEMUSHA_NATIVE_BRIDGE_ABI_VERSION,
+            "production_capability_observed": False,
+            "initial_atomic": "1075",
+            "first_recipient_atomic": "625",
+            "second_recipient_atomic": "210",
+            "sender_change_atomic": "240",
+            "redeemed_atomic": "1075",
+            "final_unspent_atomic": "0",
+            "proof_hops": 2,
+            "init_proof_verified": True,
+            "first_spend_verified": True,
+            "multi_hop_proof_verified": True,
+            "independent_branch_redemption_verified": True,
+            "duplicate_rejected": True,
+            "restart_recovered": True,
+            "network_requests_during_peer_transfers": 0,
+            "attestation_challenge_sha256": challenge_sha256,
+            "attestation_certificate_chain_sha256": chain_sha256,
+            "app_signing_certificate_sha256": wallet_certificate,
+            "strongbox_attestation": True,
+            "physical_device_attestation": True,
+            "causal_events": causal_events,
+        },
+    )
+    lifecycle_sha256 = hashlib.sha256((slot / lifecycle_path).read_bytes()).hexdigest()
+    binding_path = device_lab.KAGEMUSHA_CANDIDATE_BINDING_ARTIFACT_PATH
+    write_json(
+        slot / binding_path,
+        {
+            "schema": device_lab.KAGEMUSHA_CANDIDATE_BINDING_SCHEMA_V2,
+            "candidate_record_path": candidate_record_path,
+            "candidate_record_sha256": candidate_record_sha256,
+            "candidate_manifest_path": candidate_manifest_path,
+            "candidate_manifest_sha256": candidate_manifest_sha256,
+            "candidate_stage_manifest_path": (
+                device_lab.KAGEMUSHA_CANDIDATE_STAGE_MANIFEST_PATH_V1
+            ),
+            "candidate_stage_manifest_sha256": stage_manifest_sha256,
+            "source_commit": source_commit,
+            "source_tree_sha256": source_tree_sha256,
+            "source_repo_dirty": False,
+            "generation": generation,
+            "bridge_abi_version": device_lab.REQUIRED_KAGEMUSHA_NATIVE_BRIDGE_ABI_VERSION,
+            "lab_native_library_path": native_library_path,
+            "lab_native_library_sha256": native_library_sha256,
+            "lab_apk_path": lab_apk_path,
+            "lab_apk_sha256": lab_apk_sha256,
+            "lab_apk_signing_cert_sha256": lab_signing_certificate_sha256,
+            "lab_test_apk_path": lab_test_apk_path,
+            "lab_test_apk_sha256": lab_test_apk_sha256,
+            "lab_test_apk_signing_cert_sha256": lab_signing_certificate_sha256,
+            "production_capability_observed": False,
+            "native_accepted_candidate_record_sha256": candidate_record_sha256,
+            "native_accepted_candidate_manifest_sha256": candidate_manifest_sha256,
+            "native_accepted_source_commit": source_commit,
+            "native_accepted_source_tree_sha256": source_tree_sha256,
+            "native_accepted_source_repo_dirty": False,
+            "native_accepted_generation": generation,
+            "native_accepted_bridge_abi_version": (
+                device_lab.REQUIRED_KAGEMUSHA_NATIVE_BRIDGE_ABI_VERSION
+            ),
+            "native_accepted_inventory_sha256": inventory_sha256,
+            "lifecycle_transcript_path": lifecycle_path,
+            "lifecycle_transcript_sha256": lifecycle_sha256,
+            "artifact_inventory": inventory,
+        },
+    )
+    binding_sha256 = hashlib.sha256((slot / binding_path).read_bytes()).hexdigest()
+    return {
+        "candidate_binding_path": binding_path,
+        "candidate_binding_sha256": binding_sha256,
+        "candidate_record_path": candidate_record_path,
+        "candidate_record_sha256": candidate_record_sha256,
+        "candidate_manifest_path": candidate_manifest_path,
+        "candidate_manifest_sha256": candidate_manifest_sha256,
+        "candidate_stage_manifest_path": (
+            device_lab.KAGEMUSHA_CANDIDATE_STAGE_MANIFEST_PATH_V1
+        ),
+        "candidate_stage_manifest_sha256": stage_manifest_sha256,
+        "candidate_source_commit": source_commit,
+        "candidate_source_tree_sha256": source_tree_sha256,
+        "candidate_source_tree_sha256_before": source_tree_sha256,
+        "candidate_source_tree_sha256_after": source_tree_sha256,
+        "candidate_source_repo_dirty": False,
+        "candidate_generation": generation,
+        "candidate_lab_native_library_path": native_library_path,
+        "candidate_lab_native_library_sha256": native_library_sha256,
+        "candidate_lab_apk_path": lab_apk_path,
+        "candidate_lab_apk_sha256": lab_apk_sha256,
+        "candidate_lab_apk_signing_certificate_sha256": (
+            lab_signing_certificate_sha256
+        ),
+        "candidate_lab_test_apk_path": lab_test_apk_path,
+        "candidate_lab_test_apk_sha256": lab_test_apk_sha256,
+        "candidate_lab_test_apk_signing_certificate_sha256": (
+            lab_signing_certificate_sha256
+        ),
+        "candidate_lifecycle_transcript_path": lifecycle_path,
+        "candidate_lifecycle_transcript_sha256": lifecycle_sha256,
+        "candidate_inventory_sha256": inventory_sha256,
+        "production_capability_observed": False,
+    }, challenge
+
+
 def summary_release_report(
     slot="slot-0",
     family=None,
@@ -583,6 +1525,7 @@ def summary_release_report(
                 "attestation/keymint-certificate-chain.pem"
             ),
             "attestation_certificate_chain_sha256": "5" * 64,
+            "app_signing_certificate_sha256": "2" * 64,
             "kagemusha_wallet_apk_path": "evidence/kagemusha-wallet-release.apk",
             "kagemusha_wallet_apk_sha256": "6" * 64,
             "d2d_payment_transcript_path": "handoff/d2d-payment.json",
@@ -590,6 +1533,46 @@ def summary_release_report(
             "d2d_payment_transport": d2d_payment_transport,
             "wallet_integrity_transcript_path": "wallet/integrity.json",
             "wallet_integrity_transcript_sha256": "8" * 64,
+            "candidate_binding_path": "evidence/candidate-binding-v2.json",
+            "candidate_binding_sha256": "9" * 64,
+            "candidate_record_path": "evidence/candidate/candidate-v4.norito",
+            "candidate_record_sha256": "a" * 64,
+            "candidate_manifest_path": "evidence/candidate/manifest-v4.norito",
+            "candidate_manifest_sha256": "b" * 64,
+            "candidate_stage_manifest_path": (
+                device_lab.KAGEMUSHA_CANDIDATE_STAGE_MANIFEST_PATH_V1
+            ),
+            "candidate_stage_manifest_sha256": "c" * 64,
+            "candidate_source_commit": "c" * 40,
+            "candidate_source_tree_sha256": "c" * 64,
+            "candidate_source_tree_sha256_before": "c" * 64,
+            "candidate_source_tree_sha256_after": "c" * 64,
+            "candidate_generation": "candidate-summary-v2",
+            "candidate_lab_native_library_path": (
+                "evidence/candidate/lib/arm64-v8a/libconnect_norito_bridge.so"
+            ),
+            "candidate_lab_native_library_sha256": "d" * 64,
+            "candidate_lab_apk_path": (
+                "evidence/kagemusha-candidate-evidence-lab-DO-NOT-SHIP-"
+                "summary-debug.apk"
+            ),
+            "candidate_lab_apk_sha256": "1" * 64,
+            "candidate_lab_apk_signing_certificate_sha256": "3" * 64,
+            "candidate_lab_test_apk_path": (
+                "evidence/kagemusha-candidate-evidence-lab-DO-NOT-SHIP-"
+                "summary-debug-androidTest.apk"
+            ),
+            "candidate_lab_test_apk_sha256": "2" * 64,
+            "candidate_lab_test_apk_signing_certificate_sha256": "3" * 64,
+            "candidate_lifecycle_transcript_path": (
+                "evidence/lifecycle-transcript-v2.json"
+            ),
+            "candidate_lifecycle_transcript_sha256": "e" * 64,
+            "candidate_inventory_sha256": "f" * 64,
+            "production_capability_observed": False,
+            "candidate_source_repo_dirty": False,
+            "strongbox_attestation": True,
+            "physical_device_attestation": True,
         },
     }
     report["kagemusha"].update(kagemusha_overrides)
@@ -631,11 +1614,7 @@ def create_slot(
     device_fingerprint = f"{name}/fingerprint"
     os_build_id = f"{name}-build"
     app_package_name = "org.hyperledger.iroha.kagemushawallet"
-    app_signing_certificate_sha256 = hashlib.sha256(
-        f"{name}:app-signing-certificate".encode("utf-8")
-    ).hexdigest()
-    attestation_challenge = f"{name}:attestation-challenge".encode("utf-8")
-    attestation_challenge_sha256 = hashlib.sha256(attestation_challenge).hexdigest()
+    wallet_apk_payload, app_signing_certificate_sha256 = signed_wallet_apk_fixture()
     attestation_certificate_chain_path = "attestation/keymint-certificate-chain.pem"
     write_text(
         slot / attestation_certificate_chain_path,
@@ -649,14 +1628,30 @@ def create_slot(
     attestation_certificate_chain_sha256 = hashlib.sha256(
         (slot / attestation_certificate_chain_path).read_bytes()
     ).hexdigest()
+    candidate_metadata: dict[str, object] = {}
+    if family is not None:
+        candidate_metadata, attestation_challenge = write_candidate_binding_v2(
+            slot,
+            name,
+            app_signing_certificate_sha256=app_signing_certificate_sha256,
+            attestation_certificate_chain_sha256=(
+                attestation_certificate_chain_sha256
+            ),
+        )
+        attestation_certificate_chain_sha256 = hashlib.sha256(
+            (slot / attestation_certificate_chain_path).read_bytes()
+        ).hexdigest()
+    else:
+        attestation_challenge = f"{name}:attestation-challenge".encode("utf-8")
+    attestation_challenge_sha256 = hashlib.sha256(attestation_challenge).hexdigest()
     kagemusha_wallet_policy_sha256 = hashlib.sha256(
         b"kagemusha-wallet-policy-v1"
     ).hexdigest()
     kagemusha_wallet_apk_path = "evidence/kagemusha-wallet-release.apk"
-    write_text(
-        slot / kagemusha_wallet_apk_path,
-        f"{name}:kagemusha-wallet-release-apk\n",
-    )
+    wallet_apk_file = slot / kagemusha_wallet_apk_path
+    wallet_apk_file.parent.mkdir(parents=True, exist_ok=True)
+    wallet_apk_file.write_bytes(wallet_apk_payload)
+    wallet_apk_file.chmod(0o600)
     kagemusha_wallet_apk_sha256 = hashlib.sha256(
         (slot / kagemusha_wallet_apk_path).read_bytes()
     ).hexdigest()
@@ -834,6 +1829,7 @@ def create_slot(
                     "kagemusha_recursive_spend_ffi_surface": "passed",
                     "kagemusha_recursive_spend_jni_probe": "recursive_spend_verified",
                     "kagemusha_recursive_spend_prover_state": "multi_hop_proof_composed",
+                    **candidate_metadata,
                     "raw_test_commands": raw_test_commands,
                     "signed_at_utc": "2026-06-06T00:00:00Z",
                     "signer_key_id": "android-lab-release-signer-v1",
@@ -848,7 +1844,7 @@ def create_slot(
         write_json(
             slot / "slot.json",
             {
-                "schema": "iroha.android.device_lab.kagemusha.v1",
+                "schema": device_lab.KAGEMUSHA_SLOT_SCHEMA_V2,
                 "slot_id": name,
                 "device_family": family,
                 "device_model": device_model,
@@ -882,6 +1878,7 @@ def create_slot(
                 "kagemusha_recursive_spend_ffi_surface": "passed",
                 "kagemusha_recursive_spend_jni_probe": "recursive_spend_verified",
                 "kagemusha_recursive_spend_prover_state": "multi_hop_proof_composed",
+                **candidate_metadata,
                 "signed_evidence_artifact_path": "evidence/signed-evidence.json",
                 "signed_evidence_artifact_sha256": evidence_digest,
                 "raw_test_commands": raw_test_commands,
@@ -963,9 +1960,11 @@ def write_unsigned_production_slot_metadata(slot: Path, name: str, family: str) 
     telemetry["device_codename"] = device_codename
     telemetry["app_package_name"] = app_package_name
     write_json(telemetry_path, telemetry)
-    app_signing_certificate_sha256 = hashlib.sha256(
-        f"{name}:app-signing-certificate".encode("utf-8")
-    ).hexdigest()
+    app_signing_certificate_sha256 = (
+        device_lab.extract_apk_signing_certificate_sha256(
+            slot / kagemusha_wallet_apk_path
+        )
+    )
     kagemusha_wallet_policy_sha256 = hashlib.sha256(
         b"kagemusha-wallet-policy-v1"
     ).hexdigest()
@@ -976,6 +1975,32 @@ def write_unsigned_production_slot_metadata(slot: Path, name: str, family: str) 
     kagemusha_wallet_apk_sha256 = hashlib.sha256(
         (slot / kagemusha_wallet_apk_path).read_bytes()
     ).hexdigest()
+    candidate_metadata, attestation_challenge = write_candidate_binding_v2(
+        slot,
+        name,
+        app_signing_certificate_sha256=app_signing_certificate_sha256,
+        attestation_certificate_chain_sha256=attestation_certificate_chain_sha256,
+    )
+    attestation_certificate_chain_sha256 = hashlib.sha256(
+        (slot / attestation_certificate_chain_path).read_bytes()
+    ).hexdigest()
+    attestation_challenge_sha256 = hashlib.sha256(attestation_challenge).hexdigest()
+    attestation_harness_path = slot / "attestation" / "harness-result.json"
+    attestation_harness = json.loads(attestation_harness_path.read_text(encoding="utf-8"))
+    attestation_harness["challenge_hex"] = attestation_challenge.hex()
+    write_json(attestation_harness_path, attestation_harness)
+    for attestation_name in ("result.json", "report.json"):
+        attestation_path = slot / "attestation" / attestation_name
+        attestation = json.loads(attestation_path.read_text(encoding="utf-8"))
+        attestation["attestation_challenge_sha256"] = attestation_challenge_sha256
+        attestation["attestation_certificate_chain_sha256"] = (
+            attestation_certificate_chain_sha256
+        )
+        if attestation_name == "result.json":
+            attestation["app_signing_certificate_sha256"] = (
+                app_signing_certificate_sha256
+            )
+        write_json(attestation_path, attestation)
     d2d_payment_transcript_path, d2d_payment_transcript_sha256 = (
         write_d2d_payment_transcript(
             slot,
@@ -985,9 +2010,7 @@ def write_unsigned_production_slot_metadata(slot: Path, name: str, family: str) 
             os_build_id=f"{name}-build",
             app_package_name=app_package_name,
             app_signing_certificate_sha256=app_signing_certificate_sha256,
-            attestation_challenge_sha256=hashlib.sha256(
-                f"{name}:attestation-challenge".encode("utf-8")
-            ).hexdigest(),
+            attestation_challenge_sha256=attestation_challenge_sha256,
             kagemusha_wallet_policy_sha256=kagemusha_wallet_policy_sha256,
             kagemusha_wallet_apk_sha256=kagemusha_wallet_apk_sha256,
         )
@@ -1001,9 +2024,7 @@ def write_unsigned_production_slot_metadata(slot: Path, name: str, family: str) 
             os_build_id=f"{name}-build",
             app_package_name=app_package_name,
             app_signing_certificate_sha256=app_signing_certificate_sha256,
-            attestation_challenge_sha256=hashlib.sha256(
-                f"{name}:attestation-challenge".encode("utf-8")
-            ).hexdigest(),
+            attestation_challenge_sha256=attestation_challenge_sha256,
             attestation_certificate_chain_sha256=attestation_certificate_chain_sha256,
             kagemusha_wallet_policy_sha256=kagemusha_wallet_policy_sha256,
             kagemusha_wallet_apk_sha256=kagemusha_wallet_apk_sha256,
@@ -1012,7 +2033,7 @@ def write_unsigned_production_slot_metadata(slot: Path, name: str, family: str) 
     write_json(
         slot / "slot.json",
         {
-            "schema": "iroha.android.device_lab.kagemusha.v1",
+            "schema": device_lab.KAGEMUSHA_SLOT_SCHEMA_V2,
             "slot_id": name,
             "device_family": family,
             "device_model": device_model,
@@ -1026,9 +2047,7 @@ def write_unsigned_production_slot_metadata(slot: Path, name: str, family: str) 
             "d2d_payment_transcript_path": d2d_payment_transcript_path,
             "wallet_integrity_transcript_path": wallet_integrity_transcript_path,
             "app_signing_certificate_sha256": app_signing_certificate_sha256,
-            "attestation_challenge_sha256": hashlib.sha256(
-                f"{name}:attestation-challenge".encode("utf-8")
-            ).hexdigest(),
+            "attestation_challenge_sha256": attestation_challenge_sha256,
             "attestation_certificate_chain_sha256": attestation_certificate_chain_sha256,
             "kagemusha_wallet_policy_sha256": kagemusha_wallet_policy_sha256,
             "kagemusha_wallet_apk_sha256": kagemusha_wallet_apk_sha256,
@@ -1043,6 +2062,7 @@ def write_unsigned_production_slot_metadata(slot: Path, name: str, family: str) 
             "kagemusha_recursive_spend_ffi_surface": "passed",
             "kagemusha_recursive_spend_jni_probe": "recursive_spend_verified",
             "kagemusha_recursive_spend_prover_state": "multi_hop_proof_composed",
+            **candidate_metadata,
             "signed_evidence_artifact_path": "evidence/signed-evidence.json",
             "signed_evidence_artifact_sha256": "0" * 64,
             "raw_test_commands": raw_test_commands,
@@ -1053,8 +2073,845 @@ def write_unsigned_production_slot_metadata(slot: Path, name: str, family: str) 
 
 
 class AndroidDeviceLabSlotTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        global _TEST_ATTESTATION_OPENSSL
+        global _TEST_ATTESTATION_ROOT_KEY
+        global _TEST_ATTESTATION_ROOT_CERT
+
+        cls._authority_directory = tempfile.TemporaryDirectory()
+        authority = Path(cls._authority_directory.name).resolve(strict=True)
+        openssl_found = shutil.which("openssl")
+        if openssl_found is None:
+            raise unittest.SkipTest("OpenSSL is required for Android attestation tests")
+        openssl = Path(openssl_found).resolve(strict=True)
+        sdk_roots = tuple(
+            Path(value).expanduser()
+            for value in (
+                os.environ.get("ANDROID_SDK_ROOT"),
+                os.environ.get("ANDROID_HOME"),
+                str(Path.home() / "Library" / "Android" / "sdk"),
+            )
+            if value
+        )
+        apksigners = sorted(
+            candidate.resolve(strict=True)
+            for sdk_root in sdk_roots
+            for candidate in (sdk_root / "build-tools").glob("*/apksigner")
+            if candidate.is_file() and os.access(candidate, os.X_OK)
+        )
+        if not apksigners:
+            raise unittest.SkipTest("Android build-tools apksigner is required")
+        apksigner = apksigners[-1]
+        root_key = authority / "android-attestation-test-root.key"
+        root_cert = authority / "android-attestation-test-root.pem"
+        subprocess.run(
+            [
+                str(openssl),
+                "req",
+                "-x509",
+                "-newkey",
+                "ec",
+                "-pkeyopt",
+                "ec_paramgen_curve:P-256",
+                "-nodes",
+                "-keyout",
+                str(root_key),
+                "-out",
+                str(root_cert),
+                "-days",
+                "3650",
+                "-sha256",
+                "-subj",
+                "/CN=Iroha Android Attestation Test Root",
+                "-addext",
+                "basicConstraints=critical,CA:TRUE,pathlen:1",
+                "-addext",
+                "keyUsage=critical,keyCertSign,cRLSign",
+            ],
+            check=True,
+            capture_output=True,
+        )
+        root_key.chmod(0o600)
+        root_cert.chmod(0o600)
+        status = authority / "android-attestation-status.json"
+        write_json(status, {"entries": {}})
+        cls._authority_kwargs = {
+            "apksigner": apksigner,
+            "apksigner_sha256": hashlib.sha256(apksigner.read_bytes()).hexdigest(),
+            "openssl": openssl,
+            "openssl_sha256": hashlib.sha256(openssl.read_bytes()).hexdigest(),
+            "attestation_trust_roots": [root_cert],
+            "attestation_trust_root_sha256": [
+                hashlib.sha256(root_cert.read_bytes()).hexdigest()
+            ],
+            "attestation_revocation_status": status,
+            "attestation_revocation_status_sha256": hashlib.sha256(
+                status.read_bytes()
+            ).hexdigest(),
+        }
+        authority_errors = device_lab.configure_android_evidence_authority(
+            **cls._authority_kwargs,
+        )
+        if authority_errors:
+            raise AssertionError(authority_errors)
+        _TEST_ATTESTATION_OPENSSL = openssl
+        _TEST_ATTESTATION_ROOT_KEY = root_key
+        _TEST_ATTESTATION_ROOT_CERT = root_cert
+        cls._authority_cli_args = [
+            "--apksigner", str(apksigner),
+            "--apksigner-sha256", cls._authority_kwargs["apksigner_sha256"],
+            "--openssl", str(openssl),
+            "--openssl-sha256", cls._authority_kwargs["openssl_sha256"],
+            "--android-attestation-trust-root", str(root_cert),
+            "--android-attestation-trust-root-sha256",
+            cls._authority_kwargs["attestation_trust_root_sha256"][0],
+            "--android-attestation-revocation-status", str(status),
+            "--android-attestation-revocation-status-sha256",
+            cls._authority_kwargs["attestation_revocation_status_sha256"],
+        ]
+        cls._original_device_lab_main = staticmethod(device_lab.main)
+
+        def configured_main(argv=None):
+            arguments = list(argv or [])
+            if (
+                any(
+                    flag in arguments
+                    for flag in (
+                        "--require-kagemusha-production-evidence",
+                        "--require-kagemusha-standard-matrix",
+                    )
+                )
+                and "--openssl" not in arguments
+            ):
+                arguments.extend(cls._authority_cli_args)
+            return cls._original_device_lab_main(arguments)
+
+        device_lab.main = configured_main
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        global _TEST_ATTESTATION_OPENSSL
+        global _TEST_ATTESTATION_ROOT_KEY
+        global _TEST_ATTESTATION_ROOT_CERT
+        _TEST_ATTESTATION_OPENSSL = None
+        _TEST_ATTESTATION_ROOT_KEY = None
+        _TEST_ATTESTATION_ROOT_CERT = None
+        _TEST_ATTESTATION_CHAIN_CACHE.clear()
+        device_lab.main = cls._original_device_lab_main
+        device_lab._ANDROID_EVIDENCE_AUTHORITY = None  # type: ignore[attr-defined]
+        cls._authority_directory.cleanup()
+
+    def test_kagemusha_production_evidence_requires_current_v4_bridge(self) -> None:
+        self.assertEqual(device_lab.REQUIRED_KAGEMUSHA_NATIVE_BRIDGE_ABI_VERSION, 20)
+
+    def test_candidate_bound_v2_slot_passes_exact_inventory_validation(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            signer = create_test_signer(root / "keys")
+            slot = create_slot(
+                root / "slots",
+                "pixel6",
+                device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[0],
+                signer,
+            )
+            report = device_lab.scan_slot(
+                slot,
+                require_kagemusha_production_evidence=True,
+                trusted_signer_public_keys=trusted_signers_for(signer),
+            )
+
+        self.assertEqual(report["status"], "ok", report["errors"])
+        self.assertIn("candidate_inventory_sha256", report["kagemusha"])
+        self.assertIs(report["kagemusha"]["production_capability_observed"], False)
+
+    def test_android_strongbox_chain_projects_cryptographic_facts(self) -> None:
+        metadata = android_attestation_metadata()
+        challenge = device_lab.derive_kagemusha_strongbox_challenge_v1(metadata)
+        chain = test_android_attestation_chain(
+            challenge,
+            metadata["app_package_name"],
+            bytes.fromhex(metadata["app_signing_certificate_sha256"]),
+        )
+        errors: list[str] = []
+        count = device_lab._validate_android_attestation_certificate_chain(
+            "attestation/keymint-certificate-chain.pem",
+            chain,
+            metadata,
+            errors,
+        )
+        self.assertEqual(count, 2, errors)
+        self.assertEqual(errors, [])
+
+    def test_failed_reconfiguration_and_missing_cli_cannot_reuse_stale_authority(self) -> None:
+        bad = dict(self._authority_kwargs)
+        bad["openssl_sha256"] = "0" * 64
+        errors = device_lab.configure_android_evidence_authority(**bad)
+        self.assertTrue(errors)
+        self.assertIsNone(device_lab._ANDROID_EVIDENCE_AUTHORITY)
+
+        metadata = android_attestation_metadata("pixel8-stale-authority")
+        validation_errors: list[str] = []
+        self.assertIsNone(
+            device_lab._validate_android_attestation_certificate_chain(
+                "attestation/chain.pem",
+                b"-----BEGIN CERTIFICATE-----\nAA==\n-----END CERTIFICATE-----\n",
+                metadata,
+                validation_errors,
+            )
+        )
+        self.assertIn(
+            "digest-pinned Android attestation authority inputs are required",
+            validation_errors,
+        )
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve() / "slots"
+            (root / "slot-one").mkdir(parents=True)
+            with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
+                status = self._original_device_lab_main(
+                    [
+                        "--root",
+                        str(root),
+                        "--require-kagemusha-production-evidence",
+                    ]
+                )
+        self.assertEqual(status, 1)
+        self.assertIsNone(device_lab._ANDROID_EVIDENCE_AUTHORITY)
+
+    def test_cli_has_exactly_one_direct_authority_configurator_call(self) -> None:
+        module = ast.parse(MODULE_PATH.read_text(encoding="utf-8"))
+        direct_calls = [
+            node
+            for node in ast.walk(module)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "configure_android_evidence_authority"
+        ]
+
+        self.assertEqual(len(direct_calls), 1)
+
+    def test_confirmation_mode_delegates_authority_configuration_once(self) -> None:
+        authority_args = [
+            "--apksigner",
+            "/authority/apksigner",
+            "--apksigner-sha256",
+            "11" * 32,
+            "--openssl",
+            "/authority/openssl",
+            "--openssl-sha256",
+            "22" * 32,
+            "--android-attestation-revocation-status",
+            "/authority/status.json",
+            "--android-attestation-revocation-status-sha256",
+            "33" * 32,
+        ]
+        with (
+            mock.patch.object(
+                device_lab,
+                "_configure_android_evidence_authority_from_args",
+                return_value=[],
+            ) as configure,
+            mock.patch.object(
+                device_lab,
+                "load_trusted_signer_public_keys",
+                return_value=([object()], []),
+            ),
+            mock.patch.object(
+                device_lab,
+                "validate_kagemusha_android_confirmation",
+                return_value={"status": "ok"},
+            ),
+            mock.patch.object(device_lab, "write_summary", return_value=[]),
+            redirect_stdout(io.StringIO()),
+            redirect_stderr(io.StringIO()),
+        ):
+            status = self._original_device_lab_main(
+                [
+                    "--confirmation-reference-slot",
+                    "/evidence/reference",
+                    "--confirmation-binding",
+                    "/evidence/candidate-binding-v2.json",
+                    "--confirmation-lifecycle",
+                    "/evidence/lifecycle-transcript-v2.json",
+                    "--confirmation-json-out",
+                    "/evidence/confirmation.json",
+                    "--trusted-signer-public-key",
+                    "/authority/signer.pem",
+                    *authority_args,
+                ]
+            )
+
+        self.assertEqual(status, 0)
+        configure.assert_called_once()
+
+    def test_slot_mode_delegates_authority_configuration_once(self) -> None:
+        def install_authority(_args: argparse.Namespace) -> list[str]:
+            device_lab._ANDROID_EVIDENCE_AUTHORITY = {
+                "apksigner": {"sha256": "11" * 32},
+                "openssl": {"sha256": "22" * 32},
+                "attestation_trust_roots": (),
+                "attestation_revocation_status": {"sha256": "33" * 32},
+            }
+            return []
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "slots"
+            slot = root / "slot-one"
+            slot.mkdir(parents=True)
+            with (
+                mock.patch.object(
+                    device_lab,
+                    "_configure_android_evidence_authority_from_args",
+                    side_effect=install_authority,
+                ) as configure,
+                mock.patch.object(
+                    device_lab,
+                    "discover_slots",
+                    return_value=([slot], []),
+                ),
+                mock.patch.object(
+                    device_lab,
+                    "load_trusted_signer_public_keys",
+                    return_value=([object()], []),
+                ),
+                mock.patch.object(
+                    device_lab,
+                    "scan_slot",
+                    return_value={"slot": "slot-one", "status": "ok", "errors": []},
+                ),
+                redirect_stdout(io.StringIO()),
+                redirect_stderr(io.StringIO()),
+            ):
+                status = self._original_device_lab_main(
+                    [
+                        "--root",
+                        str(root),
+                        "--require-kagemusha-production-evidence",
+                        "--apksigner",
+                        "/authority/apksigner",
+                        "--apksigner-sha256",
+                        "11" * 32,
+                        "--openssl",
+                        "/authority/openssl",
+                        "--openssl-sha256",
+                        "22" * 32,
+                        "--android-attestation-revocation-status",
+                        "/authority/status.json",
+                        "--android-attestation-revocation-status-sha256",
+                        "33" * 32,
+                    ]
+                )
+
+        self.assertEqual(status, 0)
+        configure.assert_called_once()
+
+    def test_forged_attestation_report_cannot_rescue_fake_certificate_chain(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            signer = create_test_signer(Path(temp) / "keys")
+            slot = create_slot(
+                Path(temp) / "slots",
+                "pixel8-forged-report",
+                device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[2],
+                signer,
+            )
+            report_payload = json.loads(
+                (slot / "attestation" / "report.json").read_text(encoding="utf-8")
+            )
+            self.assertIs(report_payload["verification"]["strongbox_attestation"], True)
+            self.assertIs(report_payload["verification"]["physical_device_attestation"], True)
+            write_text(
+                slot / "attestation" / "keymint-certificate-chain.pem",
+                "-----BEGIN CERTIFICATE-----\nnot-a-certificate\n"
+                "-----END CERTIFICATE-----\n",
+            )
+            rewrite_sha256sum(slot)
+            report = device_lab.scan_slot(
+                slot,
+                require_kagemusha_production_evidence=True,
+                trusted_signer_public_keys=trusted_signers_for(signer),
+            )
+        self.assertEqual(report["status"], "error")
+        self.assertTrue(
+            any(
+                "Android StrongBox certificate-chain validation failed" in error
+                for error in report["errors"]
+            ),
+            report["errors"],
+        )
+
+    def test_production_wallet_apk_substitution_rejects_different_valid_signer(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            signer = create_test_signer(Path(temp) / "keys")
+            slot = create_slot(
+                Path(temp) / "slots",
+                "pixel8-wallet-substitution",
+                device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[2],
+                signer,
+            )
+            metadata = json.loads((slot / "slot.json").read_text(encoding="utf-8"))
+            wallet_path = slot / metadata["kagemusha_wallet_apk_path"]
+            candidate_path = slot / metadata["candidate_lab_apk_path"]
+            wallet_path.write_bytes(candidate_path.read_bytes())
+            wallet_path.chmod(0o600)
+            rewrite_sha256sum(slot)
+            report = device_lab.scan_slot(
+                slot,
+                require_kagemusha_production_evidence=True,
+                trusted_signer_public_keys=trusted_signers_for(signer),
+            )
+        self.assertEqual(report["status"], "error")
+        self.assertIn(
+            "slot.json app_signing_certificate_sha256 must match the verified production wallet APK signer",
+            report["errors"],
+        )
+
+    def test_android_attestation_rejects_untrusted_root_and_wrong_challenge(self) -> None:
+        metadata = android_attestation_metadata("pixel8-root-challenge")
+        challenge = device_lab.derive_kagemusha_strongbox_challenge_v1(metadata)
+        chain = test_android_attestation_chain(
+            challenge,
+            metadata["app_package_name"],
+            bytes.fromhex(metadata["app_signing_certificate_sha256"]),
+        )
+        certificates = device_lab._decode_attestation_certificate_chain(
+            "chain.pem", chain
+        )
+        unrelated_root = (
+            MODULE_PATH.parents[1] / "certs" / "google_attestation_root_ecdsa.der"
+        ).read_bytes()
+        untrusted_chain = device_lab._certificate_pem(certificates[0]) + (
+            device_lab._certificate_pem(unrelated_root)
+        )
+        errors: list[str] = []
+        self.assertIsNone(
+            device_lab._validate_android_attestation_certificate_chain(
+                "attestation/chain.pem", untrusted_chain, metadata, errors
+            )
+        )
+        self.assertTrue(any("explicit trusted root" in error for error in errors), errors)
+
+        wrong_challenge_chain = test_android_attestation_chain(
+            b"\xff" * 32,
+            metadata["app_package_name"],
+            bytes.fromhex(metadata["app_signing_certificate_sha256"]),
+        )
+        errors = []
+        self.assertIsNone(
+            device_lab._validate_android_attestation_certificate_chain(
+                "attestation/chain.pem", wrong_challenge_chain, metadata, errors
+            )
+        )
+        self.assertTrue(any("exact candidate challenge" in error for error in errors), errors)
+
+    def test_android_attestation_rejects_non_strongbox_wrong_app_and_bad_boot(self) -> None:
+        metadata = android_attestation_metadata("pixel8-policy")
+        challenge = device_lab.derive_kagemusha_strongbox_challenge_v1(metadata)
+        signer = bytes.fromhex(metadata["app_signing_certificate_sha256"])
+        variants = (
+            (
+                "attestation level",
+                test_android_attestation_chain(
+                    challenge,
+                    metadata["app_package_name"],
+                    signer,
+                    attestation_level=1,
+                ),
+                "both be StrongBox(2)",
+            ),
+            (
+                "keymint level",
+                test_android_attestation_chain(
+                    challenge,
+                    metadata["app_package_name"],
+                    signer,
+                    keymint_level=1,
+                ),
+                "both be StrongBox(2)",
+            ),
+            (
+                "package",
+                test_android_attestation_chain(
+                    challenge,
+                    "org.example.substituted",
+                    signer,
+                ),
+                "wallet package",
+            ),
+            (
+                "signer",
+                test_android_attestation_chain(
+                    challenge,
+                    metadata["app_package_name"],
+                    b"\x77" * 32,
+                ),
+                "wallet signing digest",
+            ),
+            (
+                "boot state",
+                test_android_attestation_chain(
+                    challenge,
+                    metadata["app_package_name"],
+                    signer,
+                    verified_boot_state=1,
+                ),
+                "verifiedBootState=Verified",
+            ),
+            (
+                "device lock",
+                test_android_attestation_chain(
+                    challenge,
+                    metadata["app_package_name"],
+                    signer,
+                    device_locked=False,
+                ),
+                "deviceLocked=true",
+            ),
+            (
+                "nonstandard ninth field",
+                test_android_attestation_chain(
+                    challenge,
+                    metadata["app_package_name"],
+                    signer,
+                    append_ninth_sequence=True,
+                ),
+                "trailing DER data",
+            ),
+        )
+        for label, chain, expected in variants:
+            with self.subTest(label=label):
+                errors: list[str] = []
+                self.assertIsNone(
+                    device_lab._validate_android_attestation_certificate_chain(
+                        "attestation/chain.pem", chain, metadata, errors
+                    )
+                )
+                self.assertTrue(any(expected in error for error in errors), errors)
+
+    def test_android_attestation_rejects_authenticated_revoked_serial(self) -> None:
+        metadata = android_attestation_metadata("pixel8-revoked")
+        challenge = device_lab.derive_kagemusha_strongbox_challenge_v1(metadata)
+        chain = test_android_attestation_chain(
+            challenge,
+            metadata["app_package_name"],
+            bytes.fromhex(metadata["app_signing_certificate_sha256"]),
+        )
+        leaf = device_lab._decode_attestation_certificate_chain("chain.pem", chain)[0]
+        serial = device_lab._x509_certificate_serial(leaf)
+        authority = device_lab._ANDROID_EVIDENCE_AUTHORITY
+        assert authority is not None
+        status_record = authority["attestation_revocation_status"]
+        original_payload = status_record["payload"]
+        try:
+            status_record["payload"] = {
+                "entries": {serial: {"status": "REVOKED", "reason": "KEY_COMPROMISE"}}
+            }
+            errors: list[str] = []
+            self.assertIsNone(
+                device_lab._validate_android_attestation_certificate_chain(
+                    "attestation/chain.pem", chain, metadata, errors
+                )
+            )
+        finally:
+            status_record["payload"] = original_payload
+        self.assertTrue(any("authenticated revocation status" in error for error in errors), errors)
+
+    def test_candidate_causal_stream_rejects_unrelated_valid_digests(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            slot = Path(temp) / "pixel8-causal"
+            write_candidate_binding_v2(
+                slot,
+                slot.name,
+                app_signing_certificate_sha256=hashlib.sha256(b"wallet").hexdigest(),
+            )
+            transcript = json.loads(
+                (slot / device_lab.KAGEMUSHA_CANDIDATE_LIFECYCLE_TRANSCRIPT_PATH).read_text(
+                    encoding="utf-8"
+                )
+            )
+        events = transcript["causal_events"]
+        for sequence, event in enumerate(events):
+            event["input_sha256"] = [
+                hashlib.sha256(f"unrelated:{sequence}:{index}".encode()).hexdigest()
+                for index in range(len(event["input_sha256"]))
+            ]
+        errors: list[str] = []
+        device_lab._validate_candidate_causal_events_v1(events, errors)
+        self.assertTrue(any("causal linkage failed" in error for error in errors), errors)
+
+    def test_raw_command_contract_rejects_omission_and_substitution(self) -> None:
+        commands = list(device_lab.KAGEMUSHA_ANDROID_PRODUCTION_RAW_TEST_COMMANDS)
+        for label, mutated in (
+            ("omitted export", commands[:-1]),
+            (
+                "substituted lifecycle",
+                [
+                    *commands[:2],
+                    commands[2].replace(
+                        "KagemushaCandidateLifecycleInstrumentedTest",
+                        "UnrelatedInstrumentedTest",
+                    ),
+                    commands[3],
+                ],
+            ),
+        ):
+            with self.subTest(label=label):
+                errors: list[str] = []
+                device_lab._validate_raw_test_command_markers(
+                    mutated, label="raw_test_commands", errors=errors
+                )
+                self.assertTrue(errors)
+                self.assertTrue(
+                    any("exactly match" in error or "must include" in error for error in errors),
+                    errors,
+                )
+
+    def test_confirmation_comparator_allows_only_duration_variance(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp).resolve()
+            signer = create_test_signer(root / "keys")
+            reference = create_slot(
+                root / "slots",
+                "pixel8-reference",
+                device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[2],
+                signer,
+            )
+            metadata = json.loads((reference / "slot.json").read_text(encoding="utf-8"))
+            binding = json.loads(
+                (reference / metadata["candidate_binding_path"]).read_text(encoding="utf-8")
+            )
+            lifecycle = json.loads(
+                (reference / metadata["candidate_lifecycle_transcript_path"]).read_text(
+                    encoding="utf-8"
+                )
+            )
+            lifecycle["causal_events"][0]["duration_nanos"] += 100
+            confirmation_dir = root / "confirmation"
+            lifecycle_path = confirmation_dir / "lifecycle-transcript-v2.json"
+            binding_path = confirmation_dir / "candidate-binding-v2.json"
+            write_json(lifecycle_path, lifecycle)
+            binding["lifecycle_transcript_sha256"] = hashlib.sha256(
+                lifecycle_path.read_bytes()
+            ).hexdigest()
+            write_json(binding_path, binding)
+            report = device_lab.validate_kagemusha_android_confirmation(
+                reference_slot=reference,
+                confirmation_binding_path=binding_path,
+                confirmation_lifecycle_path=lifecycle_path,
+                trusted_signer_public_keys=trusted_signers_for(signer),
+            )
+            self.assertEqual(report["status"], "ok", report["errors"])
+            self.assertEqual(
+                set(report["artifacts"]),
+                {
+                    "reference_binding",
+                    "reference_lifecycle",
+                    "confirmation_binding",
+                    "confirmation_lifecycle",
+                },
+            )
+
+            lifecycle["causal_events"][2]["input_sha256"][0] = hashlib.sha256(
+                b"substituted-init-request"
+            ).hexdigest()
+            write_json(lifecycle_path, lifecycle)
+            binding["lifecycle_transcript_sha256"] = hashlib.sha256(
+                lifecycle_path.read_bytes()
+            ).hexdigest()
+            write_json(binding_path, binding)
+            rejected = device_lab.validate_kagemusha_android_confirmation(
+                reference_slot=reference,
+                confirmation_binding_path=binding_path,
+                confirmation_lifecycle_path=lifecycle_path,
+                trusted_signer_public_keys=trusted_signers_for(signer),
+            )
+        self.assertEqual(rejected["status"], "error")
+        self.assertTrue(
+            any(
+                "outside causal duration_nanos" in error
+                or "causal linkage failed" in error
+                for error in rejected["errors"]
+            ),
+            rejected["errors"],
+        )
+
+    def test_v1_slot_is_not_accepted_as_production_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            signer = create_test_signer(root / "keys")
+            slot = create_slot(
+                root / "slots",
+                "pixel6",
+                device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[0],
+                signer,
+            )
+            metadata_path = slot / "slot.json"
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            metadata["schema"] = device_lab.KAGEMUSHA_SLOT_SCHEMA_V1
+            write_json(metadata_path, metadata)
+            rewrite_sha256sum(slot)
+            report = device_lab.scan_slot(
+                slot,
+                require_kagemusha_production_evidence=True,
+                trusted_signer_public_keys=trusted_signers_for(signer),
+            )
+
+        self.assertEqual(report["status"], "error")
+        self.assertTrue(
+            any("V1 evidence is not production evidence" in error for error in report["errors"]),
+            report["errors"],
+        )
+
+    def test_candidate_binding_rejects_reordered_exact_eight_inventory(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            signer = create_test_signer(root / "keys")
+            slot = create_slot(
+                root / "slots",
+                "pixel6",
+                device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[0],
+                signer,
+            )
+            metadata_path = slot / "slot.json"
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            binding_path = slot / device_lab.KAGEMUSHA_CANDIDATE_BINDING_ARTIFACT_PATH
+            binding = json.loads(binding_path.read_text(encoding="utf-8"))
+            binding["artifact_inventory"][0], binding["artifact_inventory"][1] = (
+                binding["artifact_inventory"][1],
+                binding["artifact_inventory"][0],
+            )
+            write_json(binding_path, binding)
+            metadata["candidate_binding_sha256"] = hashlib.sha256(
+                binding_path.read_bytes()
+            ).hexdigest()
+            errors: list[str] = []
+            device_lab.validate_candidate_binding_v2(slot, metadata, errors)
+
+        self.assertTrue(any("role must be" in error for error in errors), errors)
+
+    def test_candidate_binding_rejects_substituted_krv4_payload(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            signer = create_test_signer(root / "keys")
+            slot = create_slot(
+                root / "slots",
+                "pixel6",
+                device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[0],
+                signer,
+            )
+            metadata = json.loads((slot / "slot.json").read_text(encoding="utf-8"))
+            binding = json.loads(
+                (slot / device_lab.KAGEMUSHA_CANDIDATE_BINDING_ARTIFACT_PATH).read_text(
+                    encoding="utf-8"
+                )
+            )
+            artifact_path = slot / binding["artifact_inventory"][0]["path"]
+            artifact_path.write_bytes(artifact_path.read_bytes() + b"substitution")
+            errors: list[str] = []
+            device_lab.validate_candidate_binding_v2(slot, metadata, errors)
+
+        self.assertTrue(
+            any("does not match the KRV4 file" in error for error in errors), errors
+        )
+
+    def test_candidate_binding_requires_production_capability_to_remain_false(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            signer = create_test_signer(root / "keys")
+            slot = create_slot(
+                root / "slots",
+                "pixel6",
+                device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[0],
+                signer,
+            )
+            metadata_path = slot / "slot.json"
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            binding_path = slot / device_lab.KAGEMUSHA_CANDIDATE_BINDING_ARTIFACT_PATH
+            binding = json.loads(binding_path.read_text(encoding="utf-8"))
+            binding["production_capability_observed"] = True
+            write_json(binding_path, binding)
+            metadata["candidate_binding_sha256"] = hashlib.sha256(
+                binding_path.read_bytes()
+            ).hexdigest()
+            errors: list[str] = []
+            device_lab.validate_candidate_binding_v2(slot, metadata, errors)
+
+        self.assertIn("candidate binding production_capability_observed must be false", errors)
+
+    def test_candidate_binding_rejects_wallet_apk_as_candidate_lab_apk(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            signer = create_test_signer(root / "keys")
+            slot = create_slot(
+                root / "slots",
+                "pixel6",
+                device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[0],
+                signer,
+            )
+            metadata_path = slot / "slot.json"
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            binding_path = slot / device_lab.KAGEMUSHA_CANDIDATE_BINDING_ARTIFACT_PATH
+            binding = json.loads(binding_path.read_text(encoding="utf-8"))
+            binding["lab_apk_path"] = metadata["kagemusha_wallet_apk_path"]
+            binding["lab_apk_sha256"] = metadata["kagemusha_wallet_apk_sha256"]
+            metadata["candidate_lab_apk_path"] = binding["lab_apk_path"]
+            metadata["candidate_lab_apk_sha256"] = binding["lab_apk_sha256"]
+            write_json(binding_path, binding)
+            metadata["candidate_binding_sha256"] = hashlib.sha256(
+                binding_path.read_bytes()
+            ).hexdigest()
+            errors: list[str] = []
+            device_lab.validate_candidate_binding_v2(slot, metadata, errors)
+
+        self.assertIn(
+            "candidate lab APK path must be distinct from the wallet APK path",
+            errors,
+        )
+        self.assertIn(
+            "candidate lab APK digest must be distinct from the wallet APK digest",
+            errors,
+        )
+
+    def test_candidate_lifecycle_rejects_nonconserving_observed_value(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            signer = create_test_signer(root / "keys")
+            slot = create_slot(
+                root / "slots",
+                "pixel6",
+                device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES[0],
+                signer,
+            )
+            metadata_path = slot / "slot.json"
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+            lifecycle_path = slot / device_lab.KAGEMUSHA_CANDIDATE_LIFECYCLE_TRANSCRIPT_PATH
+            lifecycle = json.loads(lifecycle_path.read_text(encoding="utf-8"))
+            lifecycle["sender_change_atomic"] = "241"
+            write_json(lifecycle_path, lifecycle)
+            lifecycle_sha256 = hashlib.sha256(lifecycle_path.read_bytes()).hexdigest()
+            binding_path = slot / device_lab.KAGEMUSHA_CANDIDATE_BINDING_ARTIFACT_PATH
+            binding = json.loads(binding_path.read_text(encoding="utf-8"))
+            binding["lifecycle_transcript_sha256"] = lifecycle_sha256
+            write_json(binding_path, binding)
+            metadata["candidate_lifecycle_transcript_sha256"] = lifecycle_sha256
+            metadata["candidate_binding_sha256"] = hashlib.sha256(
+                binding_path.read_bytes()
+            ).hexdigest()
+            errors: list[str] = []
+            device_lab.validate_candidate_binding_v2(slot, metadata, errors)
+
+        self.assertIn(
+            "candidate lifecycle transcript does not conserve exact atomic value",
+            errors,
+        )
+
     def setUp(self) -> None:
         restore_path_type_method_shadows()
+        errors = device_lab.configure_android_evidence_authority(
+            **self._authority_kwargs
+        )
+        if errors:
+            raise AssertionError(errors)
 
     def tearDown(self) -> None:
         restore_path_type_method_shadows()
@@ -7465,7 +9322,7 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             report["errors"],
         )
 
-    def test_production_metadata_rejects_missing_d2d_handoff_raw_command_marker(self) -> None:
+    def test_production_metadata_rejects_missing_lifecycle_raw_command_marker(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             signer = create_test_signer(Path(temp))
             trusted = trusted_signers_for(signer)
@@ -7478,7 +9335,7 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             stale_commands = [
                 command
                 for command in KAGEMUSHA_ANDROID_RAW_TEST_COMMANDS
-                if "KagemushaRecursiveSpendLifecycleTest" not in command
+                if "KagemushaCandidateLifecycleInstrumentedTest" not in command
             ]
             metadata_path = slot / "slot.json"
             metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
@@ -7498,11 +9355,11 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
 
         self.assertEqual(report["status"], "error")
         self.assertIn(
-            "slot.json raw_test_commands must include org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendLifecycleTest",
+            "slot.json raw_test_commands must include org.hyperledger.iroha.sdk.kagemusha.candidate.lab.KagemushaCandidateLifecycleInstrumentedTest",
             report["errors"],
         )
         self.assertIn(
-            "signed evidence artifact raw_test_commands must include org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendLifecycleTest",
+            "signed evidence artifact raw_test_commands must include org.hyperledger.iroha.sdk.kagemusha.candidate.lab.KagemushaCandidateLifecycleInstrumentedTest",
             report["errors"],
         )
 
@@ -8542,62 +10399,15 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             )
 
         self.assertEqual(report["status"], "error")
-        self.assertIn(
-            "slot.json raw_test_commands must include :core-jvm:test",
-            report["errors"],
-        )
-        self.assertIn(
-            "slot.json raw_test_commands must include :client-android:assembleRelease",
-            report["errors"],
-        )
-        self.assertIn(
-            "slot.json raw_test_commands must include :client-android:assembleRelease",
-            report["errors"],
-        )
-        self.assertIn(
-            "slot.json raw_test_commands must include org.hyperledger.iroha.sdk.offline.KagemushaDeviceLabArtifactExportTest",
-            report["errors"],
-        )
-        self.assertIn(
-            "slot.json raw_test_commands must include adb shell am instrument",
-            report["errors"],
-        )
-        self.assertIn(
-            "slot.json raw_test_commands must include org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendProverTest",
-            report["errors"],
-        )
-        self.assertIn(
-            "slot.json raw_test_commands must include org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendLifecycleTest",
-            report["errors"],
-        )
-        self.assertIn(
-            "signed evidence artifact raw_test_commands must include :core-jvm:test",
-            report["errors"],
-        )
-        self.assertIn(
-            "signed evidence artifact raw_test_commands must include :client-android:assembleRelease",
-            report["errors"],
-        )
-        self.assertIn(
-            "signed evidence artifact raw_test_commands must include :client-android:assembleRelease",
-            report["errors"],
-        )
-        self.assertIn(
-            "signed evidence artifact raw_test_commands must include org.hyperledger.iroha.sdk.offline.KagemushaDeviceLabArtifactExportTest",
-            report["errors"],
-        )
-        self.assertIn(
-            "signed evidence artifact raw_test_commands must include adb shell am instrument",
-            report["errors"],
-        )
-        self.assertIn(
-            "signed evidence artifact raw_test_commands must include org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendProverTest",
-            report["errors"],
-        )
-        self.assertIn(
-            "signed evidence artifact raw_test_commands must include org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendLifecycleTest",
-            report["errors"],
-        )
+        for marker in device_lab.RAW_TEST_COMMAND_REQUIRED_MARKERS:
+            self.assertIn(
+                f"slot.json raw_test_commands must include {marker}",
+                report["errors"],
+            )
+            self.assertIn(
+                f"signed evidence artifact raw_test_commands must include {marker}",
+                report["errors"],
+            )
 
     def test_production_metadata_rejects_marker_stuffed_raw_test_commands(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -8610,18 +10420,7 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
                 signer,
             )
             stuffed_commands = [
-                (
-                    "echo :client-android:assembleRelease "
-                    ":client-android:assembleRelease "
-                    ":core-jvm:test "
-                    "adb shell am instrument "
-                    "KagemushaRecursiveSpendLifecycleTest "
-                    "KagemushaDeviceLabArtifactExportTest "
-                    "adb shell am instrument "
-                    "org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendProverTest "
-                    "org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendLifecycleTest "
-                    "org.hyperledger.iroha.sdk.offline.KagemushaDeviceLabArtifactExportTest"
-                )
+                "echo " + " ".join(device_lab.RAW_TEST_COMMAND_REQUIRED_MARKERS)
             ]
             metadata_path = slot / "slot.json"
             metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
@@ -10905,9 +12704,11 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
     def test_trusted_signer_public_key_rejects_secret_path_before_openssl_lookup(
         self,
     ) -> None:
-        original_which = device_lab.shutil.which
-        try:
-            device_lab.shutil.which = lambda _command: None
+        with mock.patch.object(
+            device_lab,
+            "_require_openssl",
+            side_effect=AssertionError("OpenSSL lookup must not run"),
+        ):
             with tempfile.TemporaryDirectory() as temp:
                 secret_public_key = Path(temp) / "token=supersecret-public.pem"
 
@@ -10915,8 +12716,6 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
                     [secret_public_key]
                 )
                 rendered = "\n".join(errors)
-        finally:
-            device_lab.shutil.which = original_which
 
         self.assertEqual(trusted, {})
         self.assertEqual(
@@ -10930,9 +12729,11 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
     def test_trusted_signer_public_key_rejects_control_path_before_openssl_lookup(
         self,
     ) -> None:
-        original_which = device_lab.shutil.which
-        try:
-            device_lab.shutil.which = lambda _command: None
+        with mock.patch.object(
+            device_lab,
+            "_require_openssl",
+            side_effect=AssertionError("OpenSSL lookup must not run"),
+        ):
             with tempfile.TemporaryDirectory() as temp:
                 control_public_key = Path(temp) / "control\npublic.pem"
 
@@ -10940,8 +12741,6 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
                     [control_public_key]
                 )
                 rendered = "\n".join(errors)
-        finally:
-            device_lab.shutil.which = original_which
 
         self.assertEqual(trusted, {})
         self.assertEqual(
@@ -11041,8 +12840,8 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
                 public_key = root / public_key
                 with self.subTest(public_key=public_key):
                     with mock.patch.object(
-                        device_lab.shutil,
-                        "which",
+                        device_lab,
+                        "_require_openssl",
                         side_effect=AssertionError("OpenSSL lookup must not run"),
                     ):
                         trusted, errors = device_lab.load_trusted_signer_public_keys(
@@ -11083,9 +12882,11 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
     def test_verify_signature_rejects_secret_public_key_path_before_openssl_lookup(
         self,
     ) -> None:
-        original_which = device_lab.shutil.which
-        try:
-            device_lab.shutil.which = lambda _command: None
+        with mock.patch.object(
+            device_lab,
+            "_require_openssl",
+            side_effect=AssertionError("OpenSSL lookup must not run"),
+        ):
             with tempfile.TemporaryDirectory() as temp:
                 secret_public_key = Path(temp) / "token=supersecret-public.pem"
                 errors: list[str] = []
@@ -11098,8 +12899,6 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
                     label="signer public key",
                 )
                 rendered = "\n".join(errors)
-        finally:
-            device_lab.shutil.which = original_which
 
         self.assertEqual(
             errors,
@@ -11195,7 +12994,9 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         original_run = device_lab.subprocess.run
 
         def failing_run(*args, **kwargs):
-            raise subprocess.CalledProcessError(1, args[0])
+            return subprocess.CompletedProcess(
+                args[0], 1, stdout=b"", stderr=b"invalid public key"
+            )
 
         try:
             device_lab._require_openssl = lambda _errors: "/usr/bin/openssl"  # type: ignore[attr-defined]
@@ -11659,9 +13460,13 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
     def test_private_public_pair_preserves_public_key_path_error_before_mismatch(
         self,
     ) -> None:
-        original_which = device_lab.shutil.which
+        original_require_openssl = device_lab._require_openssl  # type: ignore[attr-defined]
+
+        def unexpected_require_openssl(_errors):
+            self.fail("OpenSSL must not be resolved after a public-key path error")
+
         try:
-            device_lab.shutil.which = lambda _command: None
+            device_lab._require_openssl = unexpected_require_openssl  # type: ignore[attr-defined]
             with tempfile.TemporaryDirectory() as temp:
                 secret_public_key = Path(temp) / "token=supersecret-public.pem"
                 errors: list[str] = []
@@ -11674,7 +13479,7 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
                 )
                 rendered = "\n".join(errors)
         finally:
-            device_lab.shutil.which = original_which
+            device_lab._require_openssl = original_require_openssl  # type: ignore[attr-defined]
 
         self.assertEqual(
             errors,
@@ -15870,34 +17675,11 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
                 )
 
         self.assertEqual(status, 1)
-        self.assertIn(
-            "slot.json raw_test_commands must include :core-jvm:test",
-            stderr.getvalue(),
-        )
-        self.assertIn(
-            "slot.json raw_test_commands must include :client-android:assembleRelease",
-            stderr.getvalue(),
-        )
-        self.assertIn(
-            "slot.json raw_test_commands must include :client-android:assembleRelease",
-            stderr.getvalue(),
-        )
-        self.assertIn(
-            "slot.json raw_test_commands must include org.hyperledger.iroha.sdk.offline.KagemushaDeviceLabArtifactExportTest",
-            stderr.getvalue(),
-        )
-        self.assertIn(
-            "slot.json raw_test_commands must include adb shell am instrument",
-            stderr.getvalue(),
-        )
-        self.assertIn(
-            "slot.json raw_test_commands must include org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendProverTest",
-            stderr.getvalue(),
-        )
-        self.assertIn(
-            "slot.json raw_test_commands must include org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendLifecycleTest",
-            stderr.getvalue(),
-        )
+        for marker in device_lab.RAW_TEST_COMMAND_REQUIRED_MARKERS:
+            self.assertIn(
+                f"slot.json raw_test_commands must include {marker}",
+                stderr.getvalue(),
+            )
         self.assertFalse((slot / "evidence" / "signed-evidence.json").exists())
 
     def test_signer_helper_rejects_padded_raw_test_command_before_write(self) -> None:
@@ -15955,18 +17737,7 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
             metadata_path = slot / "slot.json"
             metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
             metadata["raw_test_commands"] = [
-                (
-                    "echo :client-android:assembleRelease "
-                    ":client-android:assembleRelease "
-                    ":core-jvm:test "
-                    "adb shell am instrument "
-                    "KagemushaRecursiveSpendLifecycleTest "
-                    "KagemushaDeviceLabArtifactExportTest "
-                    "adb shell am instrument "
-                    "org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendProverTest "
-                    "org.hyperledger.iroha.sdk.offline.KagemushaRecursiveSpendLifecycleTest "
-                    "org.hyperledger.iroha.sdk.offline.KagemushaDeviceLabArtifactExportTest"
-                )
+                "echo " + " ".join(device_lab.RAW_TEST_COMMAND_REQUIRED_MARKERS)
             ]
             write_json(metadata_path, metadata)
             rewrite_sha256sum(slot)
@@ -16519,9 +18290,11 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
     def test_sign_ed25519_rejects_secret_private_key_path_before_openssl_lookup(
         self,
     ) -> None:
-        original_which = device_lab.shutil.which
-        try:
-            device_lab.shutil.which = lambda _command: None
+        with mock.patch.object(
+            device_lab,
+            "_require_openssl",
+            side_effect=AssertionError("OpenSSL lookup must not run"),
+        ):
             with tempfile.TemporaryDirectory() as temp:
                 secret_private_key = Path(temp) / "private_key=supersecret.pem"
                 errors: list[str] = []
@@ -16532,8 +18305,6 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
                     errors,
                 )
                 rendered = "\n".join(errors)
-        finally:
-            device_lab.shutil.which = original_which
 
         self.assertIsNone(signature)
         self.assertEqual(
@@ -16547,9 +18318,11 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
     def test_sign_ed25519_rejects_control_private_key_path_before_openssl_lookup(
         self,
     ) -> None:
-        original_which = device_lab.shutil.which
-        try:
-            device_lab.shutil.which = lambda _command: None
+        with mock.patch.object(
+            device_lab,
+            "_require_openssl",
+            side_effect=AssertionError("OpenSSL lookup must not run"),
+        ):
             with tempfile.TemporaryDirectory() as temp:
                 control_private_key = Path(temp) / "control\nprivate.pem"
                 errors: list[str] = []
@@ -16560,8 +18333,6 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
                     errors,
                 )
                 rendered = "\n".join(errors)
-        finally:
-            device_lab.shutil.which = original_which
 
         self.assertIsNone(signature)
         self.assertEqual(
@@ -17457,52 +19228,38 @@ class AndroidDeviceLabSlotTest(unittest.TestCase):
         self.assertNotIn("slot-0/fingerprint", rendered)
         self.assertNotIn("slot-0/fingerprint", summary_text)
 
-    def test_standard_matrix_rejects_duplicate_attestation_challenge(self) -> None:
+    def test_build_summary_reports_duplicate_attestation_challenge(self) -> None:
+        duplicate_challenge = hashlib.sha256(
+            b"duplicate-kagemusha-attestation-challenge"
+        ).hexdigest()
+        reports = [
+            summary_release_report(
+                "slot-0",
+                device_fingerprint_sha256="a" * 64,
+                attestation_challenge_sha256=duplicate_challenge,
+                d2d_payment_transcript_sha256="1" * 64,
+            ),
+            summary_release_report(
+                "slot-1",
+                device_fingerprint_sha256="b" * 64,
+                attestation_challenge_sha256=duplicate_challenge,
+                d2d_payment_transcript_sha256="2" * 64,
+            ),
+        ]
+
         with tempfile.TemporaryDirectory() as temp:
-            root = Path(temp) / "slots"
-            summary_path = Path(temp) / "summary.json"
-            signer = create_test_signer(Path(temp) / "keys")
-            for index, family in enumerate(device_lab.KAGEMUSHA_STANDARD_DEVICE_FAMILIES):
-                create_slot(root, f"slot-{index}", family, signer)
-            copy_slot_binding(
-                source=root / "slot-0",
-                target=root / "slot-1",
-                signer=signer,
-                key="attestation_challenge_sha256",
+            summary = device_lab.build_summary(
+                Path(temp),
+                reports,
+                require_kagemusha_production_evidence=True,
+                trusted_signer_public_keys={"4" * 64: Path(temp) / "safe.pem"},
             )
 
-            stdout = io.StringIO()
-            stderr = io.StringIO()
-            with redirect_stdout(stdout), redirect_stderr(stderr):
-                status = device_lab.main(
-                    [
-                        "--root",
-                        str(root),
-                        "--require-slot",
-                        "--require-kagemusha-standard-matrix",
-                        "--trusted-signer-public-key",
-                        str(signer["public_key"]),
-                        "--json-out",
-                        str(summary_path),
-                    ]
-                )
-            rendered = stdout.getvalue() + stderr.getvalue()
-            summary = json.loads(summary_path.read_text(encoding="utf-8"))
-
-        self.assertEqual(status, 1)
-        self.assertIn(
-            "duplicate Kagemusha attestation_challenge_sha256 across slots: "
-            "slot-0, slot-1",
-            rendered,
-        )
         duplicate = summary["kagemusha"]["duplicate_bindings"][
             "attestation_challenge_sha256"
         ][0]
         self.assertEqual(duplicate["slots"], ["slot-0", "slot-1"])
-        self.assertEqual(
-            duplicate["value_sha256"],
-            hashlib.sha256(b"slot-0:attestation-challenge").hexdigest(),
-        )
+        self.assertEqual(duplicate["value_sha256"], duplicate_challenge)
 
     def test_build_summary_reports_duplicate_d2d_transcript_digest(self) -> None:
         duplicate_digest = "7" * 64

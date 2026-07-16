@@ -3,7 +3,11 @@
 
 The manifest covers tracked and untracked, non-ignored paths reported by Git,
 including deletions, symlink targets, and executable bits. Build artifacts and
-other ignored files are deliberately excluded.
+other ignored files are deliberately excluded, except for the workspace
+``Cargo.lock``: Cargo consumes that file even when repository policy keeps it
+untracked, so a release manifest must bind its exact bytes. Unresolved index
+entries are rejected because they do not identify one reproducible source
+tree.
 """
 
 from __future__ import annotations
@@ -15,27 +19,59 @@ from pathlib import Path
 import stat
 import struct
 import subprocess
+import sys
 from typing import Iterable
 
 
-_DOMAIN = b"iroha-workspace-source-manifest-v1\0"
+_DOMAIN = b"iroha-workspace-source-manifest-v2\0"
+_WORKSPACE_LOCKFILE = "Cargo.lock"
+
+
+class UnmergedSourceError(RuntimeError):
+    """The Git index contains unresolved source entries."""
+
+
+def _git_unmerged_paths(root: Path) -> list[str]:
+    result = subprocess.run(
+        ["git", "ls-files", "--unmerged", "-z"],
+        cwd=root,
+        check=True,
+        stdout=subprocess.PIPE,
+    )
+    paths: set[str] = set()
+    for entry in result.stdout.split(b"\0"):
+        if not entry:
+            continue
+        _, separator, raw_path = entry.partition(b"\t")
+        if not separator:
+            raise RuntimeError("git returned a malformed unmerged index entry")
+        paths.add(os.fsdecode(raw_path))
+    return sorted(paths, key=os.fsencode)
 
 
 def _git_source_paths(root: Path) -> list[str]:
+    unmerged = _git_unmerged_paths(root)
+    if unmerged:
+        rendered = ", ".join(unmerged)
+        raise UnmergedSourceError(
+            f"workspace contains unresolved merge entries: {rendered}"
+        )
     result = subprocess.run(
         ["git", "ls-files", "-co", "--exclude-standard", "-z"],
         cwd=root,
         check=True,
         stdout=subprocess.PIPE,
     )
-    return sorted(
-        {
-            os.fsdecode(raw)
-            for raw in result.stdout.split(b"\0")
-            if raw
-        },
-        key=os.fsencode,
-    )
+    paths = {
+        os.fsdecode(raw)
+        for raw in result.stdout.split(b"\0")
+        if raw
+    }
+    # This workspace intentionally keeps Cargo.lock untracked. Cargo still
+    # consumes it, and `--locked` validates it, so excluding it would allow a
+    # build input to drift without invalidating release evidence.
+    paths.add(_WORKSPACE_LOCKFILE)
+    return sorted(paths, key=os.fsencode)
 
 
 def _frame(hasher: "hashlib._Hash", payload: bytes) -> None:
@@ -89,7 +125,12 @@ def main() -> int:
         help="Git checkout root (defaults to this repository)",
     )
     args = parser.parse_args()
-    print(workspace_source_manifest(args.root))
+    try:
+        digest = workspace_source_manifest(args.root)
+    except UnmergedSourceError as error:
+        print(f"workspace source manifest error: {error}", file=sys.stderr)
+        return 2
+    print(digest)
     return 0
 
 

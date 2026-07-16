@@ -31,20 +31,6 @@ use snark_verifier::{
     util::arithmetic::{Domain, root_of_unity},
 };
 
-/// Version of the canonical accumulated-opening wire.
-pub const KAGEMUSHA_IPA_ACCUMULATION_WIRE_VERSION_V1: u16 = 1;
-/// Number of IPA round challenges for the authenticated degree-12 release.
-pub const KAGEMUSHA_IPA_ACCUMULATOR_ROUNDS_V1: usize =
-    iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_IPA_K_V1 as usize;
-/// Fixed number of field-neutral `u32` limbs used to expose one accumulator.
-///
-/// The first two limbs are the wire version and round count. They are followed
-/// by every canonical 32-byte challenge and the canonical compressed point.
-pub const KAGEMUSHA_IPA_ACCUMULATOR_INSTANCE_LIMBS_V1: usize =
-    2 + (KAGEMUSHA_IPA_ACCUMULATOR_ROUNDS_V1 + 1) * 8;
-/// Exact size of a non-ZK BGH19 accumulation proof at degree 12.
-pub const KAGEMUSHA_IPA_ACCUMULATION_PROOF_BYTES_V1: usize =
-    (8 + 2 * KAGEMUSHA_IPA_ACCUMULATOR_ROUNDS_V1) * 32;
 /// Version of the degree-parameterized accumulated-opening wire.
 ///
 /// V4 is intentionally a distinct wire.  A V1 value can never be accepted by
@@ -116,192 +102,9 @@ type EpTranscript<S> = PoseidonTranscript<
     POSEIDON_PARTIAL_ROUNDS,
 >;
 
-/// Field-neutral encoding of one IPA accumulator.
-///
-/// Scalar and point encodings remain canonical curve encodings.  No field
-/// reduction is permitted while crossing from the Eq half to the Ep half (or
-/// vice versa).
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-pub struct KagemushaIpaAccumulatorWireV1 {
-    /// Wire layout version.
-    pub version: u16,
-    /// Ordered canonical IPA round challenges.
-    pub round_challenges: Vec<[u8; 32]>,
-    /// Canonical compressed accumulated generator.
-    pub folded_generator: [u8; 32],
-}
-
-impl KagemushaIpaAccumulatorWireV1 {
-    /// Encode an Eq/Vesta accumulator without reducing its Fp challenges.
-    #[must_use]
-    pub fn from_eq(accumulator: &IpaAccumulator<EqAffine, NativeLoader>) -> Self {
-        Self {
-            version: KAGEMUSHA_IPA_ACCUMULATION_WIRE_VERSION_V1,
-            round_challenges: accumulator
-                .xi
-                .iter()
-                .map(|scalar| {
-                    let mut bytes = [0_u8; 32];
-                    bytes.copy_from_slice(scalar.to_repr().as_ref());
-                    bytes
-                })
-                .collect(),
-            folded_generator: {
-                let mut bytes = [0_u8; 32];
-                bytes.copy_from_slice(accumulator.u.to_bytes().as_ref());
-                bytes
-            },
-        }
-    }
-
-    /// Encode an Ep/Pallas accumulator without reducing its Fq challenges.
-    #[must_use]
-    pub fn from_ep(accumulator: &IpaAccumulator<EpAffine, NativeLoader>) -> Self {
-        Self {
-            version: KAGEMUSHA_IPA_ACCUMULATION_WIRE_VERSION_V1,
-            round_challenges: accumulator
-                .xi
-                .iter()
-                .map(|scalar| {
-                    let mut bytes = [0_u8; 32];
-                    bytes.copy_from_slice(scalar.to_repr().as_ref());
-                    bytes
-                })
-                .collect(),
-            folded_generator: {
-                let mut bytes = [0_u8; 32];
-                bytes.copy_from_slice(accumulator.u.to_bytes().as_ref());
-                bytes
-            },
-        }
-    }
-
-    /// Parse this wire as an Eq/Vesta accumulator.
-    pub fn to_eq(&self) -> Result<IpaAccumulator<EqAffine, NativeLoader>, String> {
-        self.validate_shape()?;
-        let xi = self
-            .round_challenges
-            .iter()
-            .map(|bytes| {
-                Option::<Fp>::from(Fp::from_repr((*bytes).into()))
-                    .ok_or_else(|| "Kagemusha Eq accumulator scalar is non-canonical".to_owned())
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        let u = Option::<EqAffine>::from(EqAffine::from_bytes(&self.folded_generator.into()))
-            .ok_or_else(|| "Kagemusha Eq accumulator point is non-canonical".to_owned())?;
-        Ok(IpaAccumulator::new(xi, u))
-    }
-
-    /// Parse this wire as an Ep/Pallas accumulator.
-    pub fn to_ep(&self) -> Result<IpaAccumulator<EpAffine, NativeLoader>, String> {
-        self.validate_shape()?;
-        let xi = self
-            .round_challenges
-            .iter()
-            .map(|bytes| {
-                Option::<Fq>::from(Fq::from_repr((*bytes).into()))
-                    .ok_or_else(|| "Kagemusha Ep accumulator scalar is non-canonical".to_owned())
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        let u = Option::<EpAffine>::from(EpAffine::from_bytes(&self.folded_generator.into()))
-            .ok_or_else(|| "Kagemusha Ep accumulator point is non-canonical".to_owned())?;
-        Ok(IpaAccumulator::new(xi, u))
-    }
-
-    /// Encode the accumulator as a fixed field-neutral public-instance vector.
-    pub fn instance_limbs(&self) -> Result<Vec<u32>, String> {
-        self.validate_shape()?;
-        let mut limbs = Vec::with_capacity(KAGEMUSHA_IPA_ACCUMULATOR_INSTANCE_LIMBS_V1);
-        limbs.push(u32::from(self.version));
-        limbs.push(
-            u32::try_from(self.round_challenges.len())
-                .map_err(|_| "Kagemusha IPA round count does not fit u32".to_owned())?,
-        );
-        for bytes in self
-            .round_challenges
-            .iter()
-            .chain(std::iter::once(&self.folded_generator))
-        {
-            limbs.extend(bytes.chunks_exact(4).map(|chunk| {
-                u32::from_le_bytes(chunk.try_into().expect("32-byte value has exact limbs"))
-            }));
-        }
-        debug_assert_eq!(limbs.len(), KAGEMUSHA_IPA_ACCUMULATOR_INSTANCE_LIMBS_V1);
-        Ok(limbs)
-    }
-
-    /// Decode the exact public-instance representation without field reduction.
-    pub fn from_instance_limbs(limbs: &[u32]) -> Result<Self, String> {
-        if limbs.len() != KAGEMUSHA_IPA_ACCUMULATOR_INSTANCE_LIMBS_V1
-            || limbs[0] != u32::from(KAGEMUSHA_IPA_ACCUMULATION_WIRE_VERSION_V1)
-            || limbs[1]
-                != u32::try_from(KAGEMUSHA_IPA_ACCUMULATOR_ROUNDS_V1)
-                    .expect("fixed Kagemusha IPA round count fits u32")
-        {
-            return Err("Kagemusha IPA accumulator instance shape mismatch".to_owned());
-        }
-        let values = limbs[2..]
-            .chunks_exact(8)
-            .map(|value_limbs| {
-                let mut bytes = [0_u8; 32];
-                for (target, limb) in bytes.chunks_exact_mut(4).zip(value_limbs) {
-                    target.copy_from_slice(&limb.to_le_bytes());
-                }
-                bytes
-            })
-            .collect::<Vec<_>>();
-        let (folded_generator, round_challenges) = values
-            .split_last()
-            .ok_or_else(|| "Kagemusha IPA accumulator instance is empty".to_owned())?;
-        let wire = Self {
-            version: KAGEMUSHA_IPA_ACCUMULATION_WIRE_VERSION_V1,
-            round_challenges: round_challenges.to_vec(),
-            folded_generator: *folded_generator,
-        };
-        wire.validate_shape()?;
-        Ok(wire)
-    }
-
-    fn validate_shape(&self) -> Result<(), String> {
-        if self.version != KAGEMUSHA_IPA_ACCUMULATION_WIRE_VERSION_V1
-            || self.round_challenges.len() != KAGEMUSHA_IPA_ACCUMULATOR_ROUNDS_V1
-        {
-            return Err("Kagemusha IPA accumulator wire shape mismatch".to_owned());
-        }
-        Ok(())
-    }
-}
-
-/// Opaque fold proof appended to one ordinary augmented Halo2 proof.
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-pub struct KagemushaIpaAccumulationProofV1 {
-    /// Wire layout version.
-    pub version: u16,
-    /// Empty for an initialization step; otherwise the exact BGH19 fold proof.
-    pub bytes: Vec<u8>,
-}
-
-impl KagemushaIpaAccumulationProofV1 {
-    /// Construct the initialization marker, where the current opening is the
-    /// only outstanding accumulator.
-    #[must_use]
-    pub fn initialization() -> Self {
-        Self {
-            version: KAGEMUSHA_IPA_ACCUMULATION_WIRE_VERSION_V1,
-            bytes: Vec::new(),
-        }
-    }
-
-    /// Validate whether this wire matches the presence of a parent claim.
-    pub fn validate(&self, has_parent: bool) -> Result<(), String> {
-        if self.version != KAGEMUSHA_IPA_ACCUMULATION_WIRE_VERSION_V1
-            || (has_parent && self.bytes.len() != KAGEMUSHA_IPA_ACCUMULATION_PROOF_BYTES_V1)
-            || (!has_parent && !self.bytes.is_empty())
-        {
-            return Err("Kagemusha IPA accumulation proof shape mismatch".to_owned());
-        }
-        Ok(())
-    }
+fn catch_native_verifier_panic<T>(label: &str, verify: impl FnOnce() -> T) -> Result<T, String> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(verify))
+        .map_err(|_| format!("Kagemusha V4 {label} rejected an invalid native verifier relation"))
 }
 
 /// Degree-parameterized field-neutral IPA accumulator.
@@ -447,41 +250,6 @@ impl KagemushaIpaAccumulatorWireV4 {
         Ok(limbs)
     }
 
-    /// Decode the exact dynamic V4 instance representation.
-    pub fn from_instance_limbs(
-        limbs: &[u32],
-        authenticated_round_count: u32,
-    ) -> Result<Self, String> {
-        let expected = kagemusha_ipa_accumulator_instance_limbs_v4(authenticated_round_count)?;
-        if limbs.len() != expected
-            || limbs.first().copied() != Some(u32::from(KAGEMUSHA_IPA_ACCUMULATION_WIRE_VERSION_V4))
-            || limbs.get(1).copied() != Some(authenticated_round_count)
-        {
-            return Err("Kagemusha V4 IPA accumulator instance shape mismatch".to_owned());
-        }
-        let values = limbs[2..]
-            .chunks_exact(8)
-            .map(|value_limbs| {
-                let mut bytes = [0_u8; 32];
-                for (target, limb) in bytes.chunks_exact_mut(4).zip(value_limbs) {
-                    target.copy_from_slice(&limb.to_le_bytes());
-                }
-                bytes
-            })
-            .collect::<Vec<_>>();
-        let (folded_generator, round_challenges) = values
-            .split_last()
-            .ok_or_else(|| "Kagemusha V4 IPA accumulator instance is empty".to_owned())?;
-        let wire = Self {
-            version: KAGEMUSHA_IPA_ACCUMULATION_WIRE_VERSION_V4,
-            round_count: authenticated_round_count,
-            round_challenges: round_challenges.to_vec(),
-            folded_generator: *folded_generator,
-        };
-        wire.validate_shape(authenticated_round_count)?;
-        Ok(wire)
-    }
-
     /// Validate only the authenticated V4 wire shape.
     pub fn validate_shape(&self, authenticated_round_count: u32) -> Result<(), String> {
         kagemusha_ipa_accumulator_instance_limbs_v4(authenticated_round_count)?;
@@ -600,72 +368,6 @@ fn ep_keys(
     )
 }
 
-/// Fold the current Eq opening with the parent Eq accumulator.
-pub fn fold_eq_accumulators(
-    params: &halo2_proofs::poly::ipa::commitment::ParamsIPA<EqAffine>,
-    current: IpaAccumulator<EqAffine, NativeLoader>,
-    parent: Option<IpaAccumulator<EqAffine, NativeLoader>>,
-) -> Result<
-    (
-        KagemushaIpaAccumulationProofV1,
-        IpaAccumulator<EqAffine, NativeLoader>,
-    ),
-    String,
-> {
-    let Some(parent) = parent else {
-        return Ok((KagemushaIpaAccumulationProofV1::initialization(), current));
-    };
-    let (proving_key, _) = eq_keys(params);
-    let inputs = [current, parent];
-    let mut transcript = EqTranscript::new::<POSEIDON_SECURE_MDS>(Vec::new());
-    let accumulated = <EqAccumulation as AccumulationSchemeProver<EqAffine>>::create_proof(
-        &proving_key,
-        &inputs,
-        &mut transcript,
-        rand_core_06::OsRng,
-    )
-    .map_err(|error| format!("failed to create Kagemusha Eq accumulation proof: {error:?}"))?;
-    let proof = KagemushaIpaAccumulationProofV1 {
-        version: KAGEMUSHA_IPA_ACCUMULATION_WIRE_VERSION_V1,
-        bytes: transcript.finalize(),
-    };
-    proof.validate(true)?;
-    Ok((proof, accumulated))
-}
-
-/// Fold the current Ep opening with the parent Ep accumulator.
-pub fn fold_ep_accumulators(
-    params: &halo2_proofs::poly::ipa::commitment::ParamsIPA<EpAffine>,
-    current: IpaAccumulator<EpAffine, NativeLoader>,
-    parent: Option<IpaAccumulator<EpAffine, NativeLoader>>,
-) -> Result<
-    (
-        KagemushaIpaAccumulationProofV1,
-        IpaAccumulator<EpAffine, NativeLoader>,
-    ),
-    String,
-> {
-    let Some(parent) = parent else {
-        return Ok((KagemushaIpaAccumulationProofV1::initialization(), current));
-    };
-    let (proving_key, _) = ep_keys(params);
-    let inputs = [current, parent];
-    let mut transcript = EpTranscript::new::<POSEIDON_SECURE_MDS>(Vec::new());
-    let accumulated = <EpAccumulation as AccumulationSchemeProver<EpAffine>>::create_proof(
-        &proving_key,
-        &inputs,
-        &mut transcript,
-        rand_core_06::OsRng,
-    )
-    .map_err(|error| format!("failed to create Kagemusha Ep accumulation proof: {error:?}"))?;
-    let proof = KagemushaIpaAccumulationProofV1 {
-        version: KAGEMUSHA_IPA_ACCUMULATION_WIRE_VERSION_V1,
-        bytes: transcript.finalize(),
-    };
-    proof.validate(true)?;
-    Ok((proof, accumulated))
-}
-
 /// Fold Eq accumulators under an explicit authenticated V4 degree.
 pub fn fold_eq_accumulators_v4(
     params: &halo2_proofs::poly::ipa::commitment::ParamsIPA<EqAffine>,
@@ -756,88 +458,6 @@ pub fn fold_ep_accumulators_v4(
     Ok((proof, accumulated))
 }
 
-/// Verify an Eq fold and terminally decide its single resulting claim.
-pub fn verify_and_decide_eq_accumulation(
-    params: &halo2_proofs::poly::ipa::commitment::ParamsIPA<EqAffine>,
-    current: IpaAccumulator<EqAffine, NativeLoader>,
-    parent: Option<IpaAccumulator<EqAffine, NativeLoader>>,
-    proof: &KagemushaIpaAccumulationProofV1,
-) -> Result<IpaAccumulator<EqAffine, NativeLoader>, String> {
-    proof.validate(parent.is_some())?;
-    let (_, deciding_key) = eq_keys(params);
-    let accumulated = if let Some(parent) = parent {
-        let inputs = [current, parent];
-        let cursor = std::io::Cursor::new(proof.bytes.clone());
-        let mut transcript = EqTranscript::new::<POSEIDON_SECURE_MDS>(cursor);
-        let parsed = <EqAccumulation as AccumulationScheme<EqAffine, NativeLoader>>::read_proof(
-            deciding_key.as_ref(),
-            &inputs,
-            &mut transcript,
-        )
-        .map_err(|error| format!("failed to parse Kagemusha Eq accumulation proof: {error:?}"))?;
-        let accumulated = <EqAccumulation as AccumulationScheme<EqAffine, NativeLoader>>::verify(
-            deciding_key.as_ref(),
-            &inputs,
-            &parsed,
-        )
-        .map_err(|error| format!("failed to verify Kagemusha Eq accumulation proof: {error:?}"))?;
-        let cursor = transcript.finalize();
-        if cursor.position() != proof.bytes.len() as u64 {
-            return Err("Kagemusha Eq accumulation proof has trailing bytes".to_owned());
-        }
-        accumulated
-    } else {
-        current
-    };
-    <EqAccumulation as AccumulationDecider<EqAffine, NativeLoader>>::decide(
-        &deciding_key,
-        accumulated.clone(),
-    )
-    .map_err(|error| format!("Kagemusha Eq accumulated opening decision failed: {error:?}"))?;
-    Ok(accumulated)
-}
-
-/// Verify an Ep fold and terminally decide its single resulting claim.
-pub fn verify_and_decide_ep_accumulation(
-    params: &halo2_proofs::poly::ipa::commitment::ParamsIPA<EpAffine>,
-    current: IpaAccumulator<EpAffine, NativeLoader>,
-    parent: Option<IpaAccumulator<EpAffine, NativeLoader>>,
-    proof: &KagemushaIpaAccumulationProofV1,
-) -> Result<IpaAccumulator<EpAffine, NativeLoader>, String> {
-    proof.validate(parent.is_some())?;
-    let (_, deciding_key) = ep_keys(params);
-    let accumulated = if let Some(parent) = parent {
-        let inputs = [current, parent];
-        let cursor = std::io::Cursor::new(proof.bytes.clone());
-        let mut transcript = EpTranscript::new::<POSEIDON_SECURE_MDS>(cursor);
-        let parsed = <EpAccumulation as AccumulationScheme<EpAffine, NativeLoader>>::read_proof(
-            deciding_key.as_ref(),
-            &inputs,
-            &mut transcript,
-        )
-        .map_err(|error| format!("failed to parse Kagemusha Ep accumulation proof: {error:?}"))?;
-        let accumulated = <EpAccumulation as AccumulationScheme<EpAffine, NativeLoader>>::verify(
-            deciding_key.as_ref(),
-            &inputs,
-            &parsed,
-        )
-        .map_err(|error| format!("failed to verify Kagemusha Ep accumulation proof: {error:?}"))?;
-        let cursor = transcript.finalize();
-        if cursor.position() != proof.bytes.len() as u64 {
-            return Err("Kagemusha Ep accumulation proof has trailing bytes".to_owned());
-        }
-        accumulated
-    } else {
-        current
-    };
-    <EpAccumulation as AccumulationDecider<EpAffine, NativeLoader>>::decide(
-        &deciding_key,
-        accumulated.clone(),
-    )
-    .map_err(|error| format!("Kagemusha Ep accumulated opening decision failed: {error:?}"))?;
-    Ok(accumulated)
-}
-
 /// Verify and terminally decide an Eq fold under the authenticated V4 degree.
 pub fn verify_and_decide_eq_accumulation_v4(
     params: &halo2_proofs::poly::ipa::commitment::ParamsIPA<EqAffine>,
@@ -860,22 +480,27 @@ pub fn verify_and_decide_eq_accumulation_v4(
         let inputs = [current, parent];
         let cursor = std::io::Cursor::new(proof.bytes.clone());
         let mut transcript = EqTranscript::new::<POSEIDON_SECURE_MDS>(cursor);
-        let parsed = <EqAccumulation as AccumulationScheme<EqAffine, NativeLoader>>::read_proof(
-            deciding_key.as_ref(),
-            &inputs,
-            &mut transcript,
-        )
+        let parsed = catch_native_verifier_panic("Eq accumulation proof parse", || {
+            <EqAccumulation as AccumulationScheme<EqAffine, NativeLoader>>::read_proof(
+                deciding_key.as_ref(),
+                &inputs,
+                &mut transcript,
+            )
+        })?
         .map_err(|error| {
             format!("failed to parse Kagemusha V4 Eq accumulation proof: {error:?}")
         })?;
-        let accumulated = <EqAccumulation as AccumulationScheme<EqAffine, NativeLoader>>::verify(
-            deciding_key.as_ref(),
-            &inputs,
-            &parsed,
-        )
-        .map_err(|error| {
-            format!("failed to verify Kagemusha V4 Eq accumulation proof: {error:?}")
-        })?;
+        let accumulated =
+            catch_native_verifier_panic("Eq accumulation proof verification", || {
+                <EqAccumulation as AccumulationScheme<EqAffine, NativeLoader>>::verify(
+                    deciding_key.as_ref(),
+                    &inputs,
+                    &parsed,
+                )
+            })?
+            .map_err(|error| {
+                format!("failed to verify Kagemusha V4 Eq accumulation proof: {error:?}")
+            })?;
         let cursor = transcript.finalize();
         if cursor.position()
             != u64::try_from(proof.bytes.len())
@@ -887,10 +512,12 @@ pub fn verify_and_decide_eq_accumulation_v4(
     } else {
         current
     };
-    <EqAccumulation as AccumulationDecider<EqAffine, NativeLoader>>::decide(
-        &deciding_key,
-        accumulated.clone(),
-    )
+    catch_native_verifier_panic("Eq accumulated decision", || {
+        <EqAccumulation as AccumulationDecider<EqAffine, NativeLoader>>::decide(
+            &deciding_key,
+            accumulated.clone(),
+        )
+    })?
     .map_err(|error| format!("Kagemusha V4 Eq accumulated decision failed: {error:?}"))?;
     Ok(accumulated)
 }
@@ -917,22 +544,27 @@ pub fn verify_and_decide_ep_accumulation_v4(
         let inputs = [current, parent];
         let cursor = std::io::Cursor::new(proof.bytes.clone());
         let mut transcript = EpTranscript::new::<POSEIDON_SECURE_MDS>(cursor);
-        let parsed = <EpAccumulation as AccumulationScheme<EpAffine, NativeLoader>>::read_proof(
-            deciding_key.as_ref(),
-            &inputs,
-            &mut transcript,
-        )
+        let parsed = catch_native_verifier_panic("Ep accumulation proof parse", || {
+            <EpAccumulation as AccumulationScheme<EpAffine, NativeLoader>>::read_proof(
+                deciding_key.as_ref(),
+                &inputs,
+                &mut transcript,
+            )
+        })?
         .map_err(|error| {
             format!("failed to parse Kagemusha V4 Ep accumulation proof: {error:?}")
         })?;
-        let accumulated = <EpAccumulation as AccumulationScheme<EpAffine, NativeLoader>>::verify(
-            deciding_key.as_ref(),
-            &inputs,
-            &parsed,
-        )
-        .map_err(|error| {
-            format!("failed to verify Kagemusha V4 Ep accumulation proof: {error:?}")
-        })?;
+        let accumulated =
+            catch_native_verifier_panic("Ep accumulation proof verification", || {
+                <EpAccumulation as AccumulationScheme<EpAffine, NativeLoader>>::verify(
+                    deciding_key.as_ref(),
+                    &inputs,
+                    &parsed,
+                )
+            })?
+            .map_err(|error| {
+                format!("failed to verify Kagemusha V4 Ep accumulation proof: {error:?}")
+            })?;
         let cursor = transcript.finalize();
         if cursor.position()
             != u64::try_from(proof.bytes.len())
@@ -944,10 +576,12 @@ pub fn verify_and_decide_ep_accumulation_v4(
     } else {
         current
     };
-    <EpAccumulation as AccumulationDecider<EpAffine, NativeLoader>>::decide(
-        &deciding_key,
-        accumulated.clone(),
-    )
+    catch_native_verifier_panic("Ep accumulated decision", || {
+        <EpAccumulation as AccumulationDecider<EpAffine, NativeLoader>>::decide(
+            &deciding_key,
+            accumulated.clone(),
+        )
+    })?
     .map_err(|error| format!("Kagemusha V4 Ep accumulated decision failed: {error:?}"))?;
     Ok(accumulated)
 }
@@ -962,47 +596,7 @@ mod tests {
 
     use super::*;
 
-    #[test]
-    fn v4_dynamic_sizes_are_checked_and_cross_version() {
-        assert_eq!(
-            kagemusha_ipa_accumulator_instance_limbs_v4(12).unwrap(),
-            KAGEMUSHA_IPA_ACCUMULATOR_INSTANCE_LIMBS_V1
-        );
-        assert_eq!(
-            kagemusha_ipa_accumulation_proof_bytes_v4(12).unwrap(),
-            KAGEMUSHA_IPA_ACCUMULATION_PROOF_BYTES_V1
-        );
-        assert_eq!(
-            kagemusha_ipa_accumulator_instance_limbs_v4(20).unwrap(),
-            170
-        );
-        assert_eq!(
-            kagemusha_ipa_accumulation_proof_bytes_v4(20).unwrap(),
-            1_536
-        );
-        assert!(kagemusha_ipa_accumulator_instance_limbs_v4(0).is_err());
-        assert!(kagemusha_ipa_accumulator_instance_limbs_v4(u32::MAX).is_err());
-        assert!(kagemusha_ipa_accumulation_proof_bytes_v4(u32::MAX).is_err());
-
-        let v4_fold = KagemushaIpaAccumulationProofV4::from_fold_bytes(
-            20,
-            vec![0; kagemusha_ipa_accumulation_proof_bytes_v4(20).unwrap()],
-        )
-        .unwrap();
-        assert!(v4_fold.validate_fixed_transcript(20).is_ok());
-        assert!(v4_fold.validate_fixed_transcript(12).is_err());
-        let cross_version = KagemushaIpaAccumulationProofV4 {
-            version: KAGEMUSHA_IPA_ACCUMULATION_WIRE_VERSION_V1,
-            ..v4_fold
-        };
-        assert!(cross_version.validate_fixed_transcript(20).is_err());
-    }
-
     fn ipa_h_coefficients<F: ff::Field>(challenges: &[F], scalar: F) -> Vec<F> {
-        // This is the BGH19 coefficient expansion used by the verifier: walk
-        // challenges in reverse and duplicate each existing half scaled by
-        // the next challenge.
-        assert!(!challenges.is_empty());
         let mut coefficients = vec![F::ZERO; 1 << challenges.len()];
         coefficients[0] = scalar;
         for (len, challenge) in challenges
@@ -1025,8 +619,8 @@ mod tests {
         params: &ParamsIPA<EqAffine>,
         seed: u64,
     ) -> IpaAccumulator<EqAffine, NativeLoader> {
-        use halo2_proofs::poly::commitment::ParamsProver as _;
-        let xi = (0..KAGEMUSHA_IPA_ACCUMULATOR_ROUNDS_V1)
+        let round_count = usize::try_from(params.k()).expect("test degree fits usize");
+        let xi = (0..round_count)
             .map(|round| Fp::from(seed + round as u64 + 1))
             .collect::<Vec<_>>();
         let coefficients = ipa_h_coefficients(&xi, Fp::ONE);
@@ -1041,213 +635,73 @@ mod tests {
         IpaAccumulator::new(xi, u)
     }
 
-    fn ep_accumulator(
-        params: &ParamsIPA<EpAffine>,
-        seed: u64,
-    ) -> IpaAccumulator<EpAffine, NativeLoader> {
-        use halo2_proofs::poly::commitment::ParamsProver as _;
-        let xi = (0..KAGEMUSHA_IPA_ACCUMULATOR_ROUNDS_V1)
-            .map(|round| Fq::from(seed + round as u64 + 1))
-            .collect::<Vec<_>>();
-        let coefficients = ipa_h_coefficients(&xi, Fq::ONE);
-        let u = params
-            .get_g()
-            .iter()
-            .zip(coefficients)
-            .fold(Ep::identity(), |sum, (base, coefficient)| {
-                sum + *base * coefficient
-            })
-            .to_affine();
-        IpaAccumulator::new(xi, u)
-    }
-
     #[test]
-    fn accumulator_wire_is_canonical_for_both_pasta_parities() {
-        let eq_params = ParamsIPA::<EqAffine>::new(
-            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_IPA_K_V1,
-        );
-        let ep_params = ParamsIPA::<EpAffine>::new(
-            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_IPA_K_V1,
-        );
-        let eq = eq_accumulator(&eq_params, 7);
-        let ep = ep_accumulator(&ep_params, 11);
+    fn v4_dynamic_sizes_and_headers_are_exact() {
         assert_eq!(
-            KagemushaIpaAccumulatorWireV1::from_eq(&eq)
-                .to_eq()
-                .unwrap()
-                .xi,
-            eq.xi
+            kagemusha_ipa_accumulator_instance_limbs_v4(12).unwrap(),
+            106
         );
         assert_eq!(
-            KagemushaIpaAccumulatorWireV1::from_ep(&ep)
-                .to_ep()
-                .unwrap()
-                .xi,
-            ep.xi
+            kagemusha_ipa_accumulation_proof_bytes_v4(12).unwrap(),
+            1_024
         );
-
-        let eq_wire = KagemushaIpaAccumulatorWireV1::from_eq(&eq);
         assert_eq!(
-            KagemushaIpaAccumulatorWireV1::from_instance_limbs(&eq_wire.instance_limbs().unwrap())
-                .unwrap(),
-            eq_wire
+            kagemusha_ipa_accumulator_instance_limbs_v4(20).unwrap(),
+            170
         );
-
-        let mut noncanonical = KagemushaIpaAccumulatorWireV1::from_eq(&eq);
-        noncanonical.round_challenges[0] = [0xFF; 32];
-        assert!(noncanonical.to_eq().is_err());
-    }
-
-    #[test]
-    fn accumulator_wire_rejects_every_shape_and_canonicality_substitution() {
-        let eq_params = ParamsIPA::<EqAffine>::new(
-            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_IPA_K_V1,
+        assert_eq!(
+            kagemusha_ipa_accumulation_proof_bytes_v4(20).unwrap(),
+            1_536
         );
-        let ep_params = ParamsIPA::<EpAffine>::new(
-            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_IPA_K_V1,
-        );
-        let eq_wire = KagemushaIpaAccumulatorWireV1::from_eq(&eq_accumulator(&eq_params, 31));
-        let ep_wire = KagemushaIpaAccumulatorWireV1::from_ep(&ep_accumulator(&ep_params, 37));
+        assert!(kagemusha_ipa_accumulator_instance_limbs_v4(0).is_err());
+        assert!(kagemusha_ipa_accumulator_instance_limbs_v4(u32::MAX).is_err());
+        assert!(kagemusha_ipa_accumulation_proof_bytes_v4(u32::MAX).is_err());
 
-        let mut wrong_version = eq_wire.clone();
-        wrong_version.version += 1;
-        assert!(wrong_version.to_eq().is_err());
-        assert!(wrong_version.instance_limbs().is_err());
-
-        let mut wrong_round_count = eq_wire.clone();
-        wrong_round_count.round_challenges.pop();
-        assert!(wrong_round_count.to_eq().is_err());
-        assert!(wrong_round_count.instance_limbs().is_err());
-
-        let mut noncanonical_eq_point = eq_wire.clone();
-        noncanonical_eq_point.folded_generator = [0xFF; 32];
-        assert!(noncanonical_eq_point.to_eq().is_err());
-
-        let mut noncanonical_ep_scalar = ep_wire.clone();
-        noncanonical_ep_scalar.round_challenges[0] = [0xFF; 32];
-        assert!(noncanonical_ep_scalar.to_ep().is_err());
-        let mut noncanonical_ep_point = ep_wire;
-        noncanonical_ep_point.folded_generator = [0xFF; 32];
-        assert!(noncanonical_ep_point.to_ep().is_err());
-
-        let limbs = eq_wire.instance_limbs().unwrap();
-        assert!(
-            KagemushaIpaAccumulatorWireV1::from_instance_limbs(&limbs[..limbs.len() - 1]).is_err()
-        );
-        let mut wrong_instance_version = limbs.clone();
-        wrong_instance_version[0] += 1;
-        assert!(
-            KagemushaIpaAccumulatorWireV1::from_instance_limbs(&wrong_instance_version).is_err()
-        );
-        let mut wrong_instance_round_count = limbs;
-        wrong_instance_round_count[1] -= 1;
-        assert!(
-            KagemushaIpaAccumulatorWireV1::from_instance_limbs(&wrong_instance_round_count)
-                .is_err()
-        );
-    }
-
-    #[test]
-    fn accumulation_proof_shape_distinguishes_initialization_from_parent_fold() {
-        let initialization = KagemushaIpaAccumulationProofV1::initialization();
-        assert!(initialization.validate(false).is_ok());
-        assert!(initialization.validate(true).is_err());
-
-        let mut wrong_version = initialization.clone();
-        wrong_version.version += 1;
-        assert!(wrong_version.validate(false).is_err());
-
-        let mut unexpected_init_bytes = initialization;
-        unexpected_init_bytes.bytes.push(0);
-        assert!(unexpected_init_bytes.validate(false).is_err());
-
-        let exact_fold = KagemushaIpaAccumulationProofV1 {
-            version: KAGEMUSHA_IPA_ACCUMULATION_WIRE_VERSION_V1,
-            bytes: vec![0; KAGEMUSHA_IPA_ACCUMULATION_PROOF_BYTES_V1],
-        };
-        assert!(exact_fold.validate(true).is_ok());
-        let mut truncated = exact_fold.clone();
-        truncated.bytes.pop();
-        assert!(truncated.validate(true).is_err());
-        let mut trailing = exact_fold;
-        trailing.bytes.push(0);
-        assert!(trailing.validate(true).is_err());
-    }
-
-    #[test]
-    fn eq_and_ep_accumulation_fold_and_reject_substitution() {
-        let eq_params = ParamsIPA::<EqAffine>::new(
-            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_IPA_K_V1,
-        );
-        let eq_current = eq_accumulator(&eq_params, 3);
-        let eq_parent = eq_accumulator(&eq_params, 19);
-        let (eq_proof, eq_expected) =
-            fold_eq_accumulators(&eq_params, eq_current.clone(), Some(eq_parent.clone())).unwrap();
-        let eq_actual = verify_and_decide_eq_accumulation(
-            &eq_params,
-            eq_current.clone(),
-            Some(eq_parent),
-            &eq_proof,
+        let proof = KagemushaIpaAccumulationProofV4::from_fold_bytes(
+            20,
+            vec![0; kagemusha_ipa_accumulation_proof_bytes_v4(20).unwrap()],
         )
         .unwrap();
-        assert_eq!(eq_actual.xi, eq_expected.xi);
-        assert_eq!(eq_actual.u, eq_expected.u);
-        let mut tampered = eq_proof;
+        assert!(proof.validate_fixed_transcript(20).is_ok());
+        assert!(proof.validate_fixed_transcript(12).is_err());
+        let cross_version = KagemushaIpaAccumulationProofV4 {
+            version: 1,
+            ..proof
+        };
+        assert!(cross_version.validate_fixed_transcript(20).is_err());
+    }
+
+    #[test]
+    fn v4_eq_wire_and_fold_reject_substitution() {
+        const K: u32 = 12;
+        let params = ParamsIPA::<EqAffine>::new(K);
+        let current = eq_accumulator(&params, 3);
+        let parent = eq_accumulator(&params, 19);
+        let wire = KagemushaIpaAccumulatorWireV4::from_eq(&current, K).unwrap();
+        assert_eq!(wire.to_eq(K).unwrap().xi, current.xi);
+        assert_eq!(wire.instance_limbs(K).unwrap().len(), 106);
+        let mut noncanonical = wire;
+        noncanonical.round_challenges[0] = [0xFF; 32];
+        assert!(noncanonical.to_eq(K).is_err());
+
+        let (proof, expected) =
+            fold_eq_accumulators_v4(&params, K, current.clone(), Some(parent.clone())).unwrap();
+        let actual = verify_and_decide_eq_accumulation_v4(
+            &params,
+            K,
+            current.clone(),
+            Some(parent.clone()),
+            &proof,
+        )
+        .unwrap();
+        assert_eq!(actual.xi, expected.xi);
+        assert_eq!(actual.u, expected.u);
+
+        let mut tampered = proof;
         tampered.bytes[0] ^= 1;
         assert!(
-            verify_and_decide_eq_accumulation(
-                &eq_params,
-                eq_current,
-                Some(eq_accumulator(&eq_params, 19)),
-                &tampered,
-            )
-            .is_err()
-        );
-
-        let (eq_proof, _) = fold_eq_accumulators(
-            &eq_params,
-            eq_accumulator(&eq_params, 3),
-            Some(eq_accumulator(&eq_params, 19)),
-        )
-        .unwrap();
-        assert!(
-            verify_and_decide_eq_accumulation(
-                &eq_params,
-                eq_accumulator(&eq_params, 3),
-                Some(eq_accumulator(&eq_params, 20)),
-                &eq_proof,
-            )
-            .is_err(),
-            "a different parent accumulator must invalidate the fold transcript"
-        );
-
-        let ep_params = ParamsIPA::<EpAffine>::new(
-            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_IPA_K_V1,
-        );
-        let ep_current = ep_accumulator(&ep_params, 5);
-        let ep_parent = ep_accumulator(&ep_params, 23);
-        let (ep_proof, ep_expected) =
-            fold_ep_accumulators(&ep_params, ep_current.clone(), Some(ep_parent.clone())).unwrap();
-        let ep_actual = verify_and_decide_ep_accumulation(
-            &ep_params,
-            ep_current.clone(),
-            Some(ep_parent),
-            &ep_proof,
-        )
-        .unwrap();
-        assert_eq!(ep_actual.xi, ep_expected.xi);
-        assert_eq!(ep_actual.u, ep_expected.u);
-        let mut tampered_ep = ep_proof;
-        let tamper_index = tampered_ep.bytes.len() / 2;
-        tampered_ep.bytes[tamper_index] ^= 1;
-        assert!(
-            verify_and_decide_ep_accumulation(
-                &ep_params,
-                ep_current,
-                Some(ep_accumulator(&ep_params, 23)),
-                &tampered_ep,
-            )
-            .is_err()
+            verify_and_decide_eq_accumulation_v4(&params, K, current, Some(parent), &tampered,)
+                .is_err()
         );
     }
 }

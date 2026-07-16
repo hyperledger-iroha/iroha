@@ -61,7 +61,14 @@ allowed_origins = [
   "https://nftstorage.link",
 ]
 allowed_methods = ["GET", "POST", "DELETE", "OPTIONS"]
-allowed_headers = ["accept", "authorization", "content-type", "idempotency-key"]
+allowed_headers = [
+  "accept",
+  "authorization",
+  "content-type",
+  "idempotency-key",
+  "x-api-token",
+  "x-iroha-onboarding-token",
+]
 exposed_headers = ["etag", "location", "retry-after"]
 
 [torii.mcp]

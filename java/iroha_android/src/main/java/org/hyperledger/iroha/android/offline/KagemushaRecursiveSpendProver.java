@@ -8,9 +8,11 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
+import java.util.function.Function;
 import org.hyperledger.iroha.android.client.transport.TransportExecutor;
 import org.hyperledger.iroha.android.client.transport.TransportRequest;
 import org.hyperledger.iroha.android.client.transport.TransportResponse;
@@ -24,10 +26,25 @@ import org.hyperledger.iroha.norito.SchemaHash;
  * <p>This is the sole first-release offline-cash surface. It authenticates the opaque eight-file proof
  * artifact set and validates exact typed request/payment/acknowledgement and proof-bound membership
  * archives. Proof execution remains fail-closed while the native backend reports unavailable.
- * V4 lifecycle results remain opaque until dedicated ABI-20 projections are available; no V2
- * result decoder is used as a substitute.
+ * Every recursive lifecycle result is projected only through an ABI-20/V4 native decoder.
  */
 public final class KagemushaRecursiveSpendProver {
+  /** Closed first-release hardware assertion profiles for online operations. */
+  public enum OnlineHardwareAssertionPlatform {
+    ANDROID_KEYMINT(DeviceAttestationRegistration.ANDROID_KEYMINT_PLATFORM),
+    IOS_APP_ATTEST(DeviceAttestationRegistration.IOS_APP_ATTEST_PLATFORM);
+
+    private final String wireName;
+
+    OnlineHardwareAssertionPlatform(final String wireName) {
+      this.wireName = wireName;
+    }
+
+    public String wireName() {
+      return wireName;
+    }
+  }
+
   public static final int V4_REQUIRED_NATIVE_BRIDGE_ABI_VERSION = 20;
   public static final int REQUIRED_NATIVE_BRIDGE_ABI_VERSION = V4_REQUIRED_NATIVE_BRIDGE_ABI_VERSION;
   public static final String V4_ARTIFACT_MANIFEST_SCHEMA =
@@ -35,11 +52,11 @@ public final class KagemushaRecursiveSpendProver {
   public static final String ARTIFACT_MANIFEST_SCHEMA = V4_ARTIFACT_MANIFEST_SCHEMA;
   public static final List<String> V4_ARTIFACT_FILES =
       Collections.unmodifiableList(Arrays.asList(
-          "step-eq.parameters.krv4",
+          "step-eq.params-ipa.krv4",
           "step-eq.proving-key.krv4",
           "step-eq.verifying-key.krv4",
           "step-eq.bootstrap-witness.krv4",
-          "step-ep.parameters.krv4",
+          "step-ep.params-ipa.krv4",
           "step-ep.proving-key.krv4",
           "step-ep.verifying-key.krv4",
           "step-ep.bootstrap-witness.krv4"));
@@ -50,32 +67,53 @@ public final class KagemushaRecursiveSpendProver {
   public static final int MAX_TRUSTED_RELEASE_POLICY_BYTES = 64 * 1024;
   public static final int MAX_RELEASE_ATTESTATION_BYTES = 1024 * 1024;
   public static final int MAX_RELEASE_EVIDENCE_BYTES = 16 * 1024 * 1024;
+  public static final int MAX_PROMOTION_RECORD_BYTES = 1024 * 1024;
   public static final int MAX_PEER_TEXT_ENVELOPE_BYTES = 12 * 1024;
   public static final int MAX_PEER_TEXT_ARCHIVE_BYTES = 9_211;
-  public static final int MAX_PEER_ARCHIVE_BYTES = 32 * 1024;
-  public static final int MAX_LOCAL_REQUEST_ARCHIVE_BYTES = 8 * 1024 * 1024;
-  public static final int MAX_LOCAL_RESULT_ARCHIVE_BYTES = 64 * 1024;
-  public static final int MAX_TORII_REQUEST_BYTES = 512 * 1024;
+  public static final int MAX_PEER_ARCHIVE_BYTES_V2 = 32 * 1024;
+  /** Consensus ceiling for one canonical recipient-only ABI-20 peer archive. */
+  public static final int MAX_PEER_ARCHIVE_BYTES_V4 = 32 * 1024 * 1024;
+  public static final int MAX_PEER_ARCHIVE_BYTES = MAX_PEER_ARCHIVE_BYTES_V4;
+  /** Consensus-derived ceiling for one canonical ABI-20 top-up provenance archive. */
+  public static final int MAX_TOP_UP_PROVENANCE_ARCHIVE_BYTES_V4 = 6_488_064;
+  /** Largest V4 local verify carrier accepted by the native bridge, plus framing headroom. */
+  public static final int MAX_LOCAL_REQUEST_ARCHIVE_BYTES_V4 = 64 * 1024 * 1024 + 64;
+  public static final int MAX_LOCAL_RESULT_ARCHIVE_BYTES_V4 = 64 * 1024 * 1024 + 64;
+  public static final int MAX_LOCAL_REQUEST_ARCHIVE_BYTES = MAX_LOCAL_REQUEST_ARCHIVE_BYTES_V4;
+  public static final int MAX_LOCAL_RESULT_ARCHIVE_BYTES = MAX_LOCAL_RESULT_ARCHIVE_BYTES_V4;
+  /** Exact Torii body ceiling for the ABI-20/V4 top-up route. */
+  public static final int MAX_TORII_TOP_UP_REQUEST_BYTES_V4 = 512 * 1024;
+
+  /** Exact Torii body ceiling for the ABI-20/V4 redemption route. */
+  public static final int MAX_TORII_REDEEM_REQUEST_BYTES_V4 = 48 * 1024 * 1024;
+
+  private static final int MAX_REQUEST_AUTHORIZATION_BYTES = 512 * 1024;
+  private static final int IOS_APP_ATTEST_ASSERTION_OBJECT_MAX_BYTES = 8 * 1024;
+  private static final int IOS_APP_ATTEST_AUTHENTICATOR_DATA_BYTES = 37;
+  private static final int IOS_APP_ATTEST_AUTHENTICATOR_DATA_MAX_BYTES = 4 * 1024;
+  private static final int IOS_APP_ATTEST_EXTENSION_DATA_FLAG = 0x80;
   public static final int MAX_TORII_RESPONSE_BYTES = 4 * 1024 * 1024;
   public static final int MAXIMUM_INPUTS_PER_TRANSITION = 2;
   public static final int MAXIMUM_LOCAL_APPEND_BUILDER_INPUTS = MAXIMUM_INPUTS_PER_TRANSITION;
   public static final int MAXIMUM_BRANCH_CLAIMS = 2;
   public static final int MAXIMUM_PEER_HOPS = 8;
+  public static final int MAXIMUM_RECURSIVE_PROOF_PAIR_BYTES_V4 = 16 * 1024 * 1024;
   public static final int CONFIDENTIAL_TREE_DEPTH = 16;
+  public static final int MAX_OUTPUT_MEMBERSHIP_FRONTIER_ARCHIVE_BYTES_V4 = 4 * 1024;
+  public static final int MAX_OUTPUT_MEMBERSHIP_PATHS_ARCHIVE_BYTES_V4 = 16 * 1024;
 
   private static final int EXACT_STATE_PROJECTION_VERSION = 1;
 
   private static final String LIBRARY_NAME = "connect_norito_bridge";
   private static final boolean ARTIFACT_BRIDGE_AVAILABLE = loadArtifactBridge();
-  private static final boolean PROOF_BACKEND_AVAILABLE = loadProofBackendCapability();
 
   /** Canonical ABI-20 artifact roles. Declaration order is part of the native contract. */
   public enum ArtifactRoleV4 {
-    STEP_EQ_PARAMETERS("step-eq.parameters.krv4"),
+    STEP_EQ_PARAMS_IPA("step-eq.params-ipa.krv4"),
     STEP_EQ_PROVING_KEY("step-eq.proving-key.krv4"),
     STEP_EQ_VERIFYING_KEY("step-eq.verifying-key.krv4"),
     STEP_EQ_BOOTSTRAP_WITNESS("step-eq.bootstrap-witness.krv4"),
-    STEP_EP_PARAMETERS("step-ep.parameters.krv4"),
+    STEP_EP_PARAMS_IPA("step-ep.params-ipa.krv4"),
     STEP_EP_PROVING_KEY("step-ep.proving-key.krv4"),
     STEP_EP_VERIFYING_KEY("step-ep.verifying-key.krv4"),
     STEP_EP_BOOTSTRAP_WITNESS("step-ep.bootstrap-witness.krv4");
@@ -92,6 +130,88 @@ public final class KagemushaRecursiveSpendProver {
   }
 
   private KagemushaRecursiveSpendProver() {}
+
+  private static <T> T transferChangeOpeningOwnership(
+      final NoteOpening changeOpening,
+      final Function<NoteOpening, T> transfer) {
+    NoteOpening locallyOwned = changeOpening;
+    try {
+      final T result = Objects.requireNonNull(transfer, "transfer").apply(locallyOwned);
+      locallyOwned = null;
+      return result;
+    } finally {
+      if (locallyOwned != null) locallyOwned.destroy();
+    }
+  }
+
+  /** Null-safe zeroization shared by secret-bearing native request builders. */
+  static final class SecretArchiveWiper {
+    private SecretArchiveWiper() {}
+
+    interface DigestCopyObserver {
+      void copied(byte[] copy);
+    }
+
+    interface OpeningDigestAction<T> {
+      T run(byte[] spendKey, byte[] rho, byte[] diversifier);
+    }
+
+    static void wipe(final byte[] archive) {
+      if (archive != null) Arrays.fill(archive, (byte) 0);
+    }
+
+    static void wipeAll(final byte[][] archives) {
+      if (archives == null) return;
+      for (final byte[] archive : archives) wipe(archive);
+    }
+
+    static <T> T withOpeningDigests(
+        final byte[] spendKey,
+        final String spendKeyName,
+        final byte[] rho,
+        final String rhoName,
+        final byte[] diversifier,
+        final String diversifierName,
+        final OpeningDigestAction<T> action) {
+      return withOpeningDigests(
+          spendKey,
+          spendKeyName,
+          rho,
+          rhoName,
+          diversifier,
+          diversifierName,
+          copy -> {},
+          action);
+    }
+
+    static <T> T withOpeningDigests(
+        final byte[] spendKey,
+        final String spendKeyName,
+        final byte[] rho,
+        final String rhoName,
+        final byte[] diversifier,
+        final String diversifierName,
+        final DigestCopyObserver observer,
+        final OpeningDigestAction<T> action) {
+      byte[] spendKeyCopy = null;
+      byte[] rhoCopy = null;
+      byte[] diversifierCopy = null;
+      try {
+        spendKeyCopy = requireDigest(spendKey, spendKeyName);
+        Objects.requireNonNull(observer, "observer").copied(spendKeyCopy);
+        rhoCopy = requireDigest(rho, rhoName);
+        observer.copied(rhoCopy);
+        diversifierCopy = requireDigest(diversifier, diversifierName);
+        observer.copied(diversifierCopy);
+        return Objects.requireNonNull(action, "action")
+            .run(spendKeyCopy, rhoCopy, diversifierCopy);
+      } finally {
+        wipe(diversifierCopy);
+        wipe(rhoCopy);
+        wipe(spendKeyCopy);
+      }
+    }
+  }
 
   static void requireCanonicalV4ArtifactRoleInventory(final List<ArtifactRoleV4> roles) {
     Objects.requireNonNull(roles, "roles");
@@ -111,7 +231,22 @@ public final class KagemushaRecursiveSpendProver {
   }
 
   public static boolean isProofBackendAvailable() {
-    return PROOF_BACKEND_AVAILABLE;
+    if (!ARTIFACT_BRIDGE_AVAILABLE) return false;
+    try {
+      return nativePastaCycleV4BackendAvailable();
+    } catch (final UnsatisfiedLinkError | RuntimeException failure) {
+      return false;
+    }
+  }
+
+  /** Returns the exact authenticated manifest installed in native, or null when absent. */
+  public static byte[] installedArtifactManifestSha256V4() {
+    if (!ARTIFACT_BRIDGE_AVAILABLE) return null;
+    try {
+      return requireDigest(nativeInstalledManifestSha256V4(), "installedManifestSha256");
+    } catch (final UnsatisfiedLinkError | RuntimeException failure) {
+      return null;
+    }
   }
 
   public static ArtifactIngest beginArtifactIngest(
@@ -168,7 +303,8 @@ public final class KagemushaRecursiveSpendProver {
 
   public static AppendRequestV4 decodeAppendRequestV4(
       final byte[] archive, final NoteOpening changeOpening) {
-    return new AppendRequestV4(archive, changeOpening);
+    return transferChangeOpeningOwnership(
+        changeOpening, opening -> new AppendRequestV4(archive, opening));
   }
 
   public static VerifyRequestV4 decodeVerifyRequestV4(final byte[] archive) {
@@ -187,20 +323,222 @@ public final class KagemushaRecursiveSpendProver {
     return new TopUpFinalityEvidenceV4(archive);
   }
 
-  /** Restore one secret-bearing V4 branch from independently persisted typed archives. */
+  public static TopUpProvenanceV4 decodeTopUpProvenanceV4(final byte[] archive) {
+    return new TopUpProvenanceV4(archive);
+  }
+
+  /** Restores canonical persisted frontier bytes without making a branch spendable. */
+  public static OutputMembershipFrontierV4 decodeOutputMembershipFrontierV4(
+      final byte[] archive) {
+    return new OutputMembershipFrontierV4(archive);
+  }
+
+  /** Builds the canonical next-zero frontier that must be persisted atomically with a branch. */
+  public static OutputMembershipFrontierV4 buildOutputMembershipFrontierV4(
+      final OutputMembershipPath zeroPath) {
+    requireArtifactBridge();
+    final OutputMembershipPath path = Objects.requireNonNull(zeroPath, "zeroPath");
+    final byte[] siblings = path.flattenedSiblings();
+    final byte[] directions = path.directions();
+    final byte[] root = path.root();
+    try {
+      return new OutputMembershipFrontierV4(nativeBuildOutputMembershipFrontierV4(
+          path.leafIndex(), siblings, directions, root));
+    } finally {
+      Arrays.fill(siblings, (byte) 0);
+      Arrays.fill(directions, (byte) 0);
+      Arrays.fill(root, (byte) 0);
+    }
+  }
+
+  /** Derives the only valid consecutive output paths from one authenticated frontier. */
+  public static OutputMembershipPaths deriveOutputMembershipPathsV4(
+      final OutputMembershipFrontierV4 frontier,
+      final byte[] recipientCommitment,
+      final byte[] changeCommitment) {
+    if (recipientCommitment == null && changeCommitment == null) {
+      throw new IllegalArgumentException(
+          "recipientCommitment or changeCommitment must be present");
+    }
+    requireArtifactBridge();
+    final byte[] frontierArchive = Objects.requireNonNull(frontier, "frontier").noritoEncoded();
+    final byte[] recipient = recipientCommitment == null
+        ? new byte[0] : requireDigest(recipientCommitment, "recipientCommitment");
+    final byte[] change = changeCommitment == null
+        ? new byte[0] : requireDigest(changeCommitment, "changeCommitment");
+    try {
+      return outputMembershipPathsFromNativeProjection(
+          nativeDeriveOutputMembershipPathsV4(frontierArchive, recipient, change));
+    } finally {
+      Arrays.fill(frontierArchive, (byte) 0);
+      Arrays.fill(recipient, (byte) 0);
+      Arrays.fill(change, (byte) 0);
+    }
+  }
+
+  /**
+   * Restore one secret-bearing V4 branch only after native revalidates its provenance against the
+   * bundle and the release installed at the current block height. Ownership of {@code opening}
+   * transfers at call entry: failure destroys it, while success transfers it to the returned
+   * closeable branch.
+   */
   public static SpendableBranchV4 restoreSpendableBranchV4(
       final BundleV4 bundle,
       final NoteMembershipWitness membershipWitness,
-      final NoteOpening opening) {
-    return new SpendableBranchV4(
-        Objects.requireNonNull(bundle, "bundle"),
-        Objects.requireNonNull(membershipWitness, "membershipWitness"),
-        Objects.requireNonNull(opening, "opening"));
+      final NoteOpening opening,
+      final TopUpProvenanceV4 topUpProvenance,
+      final long blockHeight) {
+    return transferChangeOpeningOwnership(
+        opening,
+        ownedOpening -> restoreSpendableBranchV4Owned(
+            bundle,
+            membershipWitness,
+            Objects.requireNonNull(ownedOpening, "opening"),
+            topUpProvenance,
+            blockHeight));
+  }
+
+  private static SpendableBranchV4 restoreSpendableBranchV4Owned(
+      final BundleV4 bundle,
+      final NoteMembershipWitness membershipWitness,
+      final NoteOpening opening,
+      final TopUpProvenanceV4 topUpProvenance,
+      final long blockHeight) {
+    if (blockHeight <= 0) {
+      throw new IllegalArgumentException("blockHeight must be positive");
+    }
+    requireArtifactBridge();
+    requireV4ProofBackend();
+    final BundleV4 requiredBundle = Objects.requireNonNull(bundle, "bundle");
+    final NoteMembershipWitness requiredWitness =
+        Objects.requireNonNull(membershipWitness, "membershipWitness");
+    final NoteOpening requiredOpening = Objects.requireNonNull(opening, "opening");
+    final TopUpProvenanceV4 requiredProvenance =
+        Objects.requireNonNull(topUpProvenance, "topUpProvenance");
+    final byte[] bundleArchive = requiredBundle.noritoEncoded();
+    final byte[] provenanceArchive = requiredProvenance.noritoEncoded();
+    final byte[] witnessArchive = requiredWitness.noritoEncoded();
+    final byte[] openingArchive = requiredOpening.noritoEncoded();
+    try {
+      final OutputMembershipFrontierV4 frontier = new OutputMembershipFrontierV4(
+          nativeValidateSpendableBranchV4(
+              bundleArchive,
+              provenanceArchive,
+              witnessArchive,
+              openingArchive,
+              blockHeight));
+      return new SpendableBranchV4(
+          requiredBundle,
+          requiredWitness,
+          requiredOpening,
+          requiredProvenance,
+          frontier);
+    } finally {
+      Arrays.fill(bundleArchive, (byte) 0);
+      Arrays.fill(provenanceArchive, (byte) 0);
+      Arrays.fill(witnessArchive, (byte) 0);
+      Arrays.fill(openingArchive, (byte) 0);
+    }
+  }
+
+  /** Restore finalized top-up state with its caller-retained, local-only note opening. */
+  public static SpendableBranchV4 restoreInitBranchV4(
+      final InitResultV4 result,
+      final NoteOpening opening,
+      final long blockHeight) {
+    return transferChangeOpeningOwnership(opening, ownedOpening -> {
+      if (blockHeight <= 0) {
+        throw new IllegalArgumentException("blockHeight must be positive");
+      }
+      final InitProjectionV4 projection = projectInitResultV4(
+          Objects.requireNonNull(result, "result"));
+      final BranchProjection branch = projection.branch();
+      return restoreSpendableBranchV4Owned(
+          branch.bundle(),
+          branch.membershipWitness(),
+          Objects.requireNonNull(ownedOpening, "opening"),
+          projection.topUpProvenance(),
+          blockHeight);
+    });
+  }
+
+  /** Restore a received offline payment with the receiver's local-only note opening. */
+  public static SpendableBranchV4 restorePeerPaymentBranchV4(
+      final PeerPayment payment,
+      final NoteOpening opening,
+      final long blockHeight) {
+    return transferChangeOpeningOwnership(opening, ownedOpening -> {
+      if (blockHeight <= 0) {
+        throw new IllegalArgumentException("blockHeight must be positive");
+      }
+      final PeerPaymentProjection projection = projectPeerPayment(
+          Objects.requireNonNull(payment, "payment"));
+      final BranchProjection branch = projection.branch();
+      return restoreSpendableBranchV4Owned(
+          branch.bundle(),
+          branch.membershipWitness(),
+          Objects.requireNonNull(ownedOpening, "opening"),
+          projection.topUpProvenance(),
+          blockHeight);
+    });
+  }
+
+  /** Restore sender change retained locally after a successful offline split. */
+  public static SpendableBranchV4 restoreSplitChangeBranchV4(
+      final SplitResultV4 result,
+      final long blockHeight) {
+    if (blockHeight <= 0) {
+      throw new IllegalArgumentException("blockHeight must be positive");
+    }
+    final SplitResultV4 requiredResult = Objects.requireNonNull(result, "result");
+    final NoteOpening opening = requiredResult.takeChangeOpening();
+    if (opening == null) {
+      throw new IllegalStateException("split result has no local change opening");
+    }
+    return transferChangeOpeningOwnership(
+        opening,
+        ownedOpening -> {
+          final SplitProjection projection = projectSplitResultV4(requiredResult);
+          final BranchProjection change = projection.change();
+          final TopUpProvenanceV4 provenance = projection.changeTopUpProvenance();
+          if (change == null || provenance == null) {
+            throw new IllegalStateException("split result has no spendable change branch");
+          }
+          return restoreSpendableBranchV4Owned(
+              change.bundle(), change.membershipWitness(), ownedOpening, provenance, blockHeight);
+        });
+  }
+
+  /** Restore offline change retained locally after building a partial redemption. */
+  public static SpendableBranchV4 restoreRedeemChangeBranchV4(
+      final RedeemBuildResultV4 result,
+      final long blockHeight) {
+    if (blockHeight <= 0) {
+      throw new IllegalArgumentException("blockHeight must be positive");
+    }
+    final RedeemBuildResultV4 requiredResult = Objects.requireNonNull(result, "result");
+    final NoteOpening opening = requiredResult.takeChangeOpening();
+    if (opening == null) {
+      throw new IllegalStateException("redeem result has no local change opening");
+    }
+    return transferChangeOpeningOwnership(
+        opening,
+        ownedOpening -> {
+          final RedeemBuildProjection projection = projectRedeemBuildResultV4(requiredResult);
+          final BranchProjection change = projection.change();
+          final TopUpProvenanceV4 provenance = projection.changeTopUpProvenance();
+          if (change == null || provenance == null) {
+            throw new IllegalStateException("redeem result has no spendable change branch");
+          }
+          return restoreSpendableBranchV4Owned(
+              change.bundle(), change.membershipWitness(), ownedOpening, provenance, blockHeight);
+        });
   }
 
   public static RedeemRequestV4 decodeRedeemRequestV4(
       final byte[] archive, final NoteOpening changeOpening) {
-    return new RedeemRequestV4(archive, changeOpening);
+    return transferChangeOpeningOwnership(
+        changeOpening, opening -> new RedeemRequestV4(archive, opening));
   }
 
   public static InitResultV4 decodeInitResultV4(final byte[] archive) {
@@ -209,7 +547,8 @@ public final class KagemushaRecursiveSpendProver {
 
   public static SplitResultV4 decodeSplitResultV4(
       final byte[] archive, final NoteOpening changeOpening) {
-    return new SplitResultV4(archive, changeOpening);
+    return transferChangeOpeningOwnership(
+        changeOpening, opening -> new SplitResultV4(archive, opening));
   }
 
   public static VerifyResultV4 decodeVerifyResultV4(final byte[] archive) {
@@ -218,7 +557,8 @@ public final class KagemushaRecursiveSpendProver {
 
   public static RedeemBuildResultV4 decodeRedeemBuildResultV4(
       final byte[] archive, final NoteOpening changeOpening) {
-    return new RedeemBuildResultV4(archive, changeOpening);
+    return transferChangeOpeningOwnership(
+        changeOpening, opening -> new RedeemBuildResultV4(archive, opening));
   }
 
   public static TopUpFinalityRosterArtifact decodeTopUpFinalityRosterArtifact(
@@ -238,7 +578,7 @@ public final class KagemushaRecursiveSpendProver {
 
   public static OperationStatusProjection projectOperationStatus(final OperationStatus status) {
     requireArtifactBridge();
-    final byte[][] fields = nativeProjectOperationStatusV2(
+    final byte[][] fields = nativeProjectOperationStatusV4(
         Objects.requireNonNull(status, "status").noritoEncoded());
     requireFieldCount(fields, 10, "operation status projection");
     final String stateText = canonicalText(fields[0], "operationState");
@@ -264,7 +604,7 @@ public final class KagemushaRecursiveSpendProver {
         throw new IllegalStateException("native Kagemusha finalized top-up fields are invalid");
       }
       finalizedTopUp = new FinalizedTopUp(
-          new TopUpAnchor(fields[6]), new TopUpFinalityProof(fields[7]),
+          new TopUpAnchorV4(fields[6]), new TopUpFinalityProof(fields[7]),
           heightOrSubmittedAt, serverTime);
     } else {
       finalizedTopUp = null;
@@ -292,8 +632,8 @@ public final class KagemushaRecursiveSpendProver {
   public static ReadinessProjection projectReadiness(final Readiness readiness) {
     requireArtifactBridge();
     final byte[][] fields =
-        nativeProjectReadinessV2(Objects.requireNonNull(readiness, "readiness").noritoEncoded());
-    if (fields == null || fields.length < 15) {
+        nativeProjectReadinessV4(Objects.requireNonNull(readiness, "readiness").noritoEncoded());
+    if (fields == null || fields.length < 16) {
       throw new IllegalStateException(
           "native Kagemusha readiness projection returned invalid fields");
     }
@@ -303,8 +643,8 @@ public final class KagemushaRecursiveSpendProver {
             "native Kagemusha readiness projection returned a null field");
       }
     }
-    final int blockerCount = integer(fields[14], "blockerCount");
-    if (blockerCount < 0 || fields.length != 15 + blockerCount * 2) {
+    final int blockerCount = integer(fields[15], "blockerCount");
+    if (blockerCount < 0 || fields.length != 16 + blockerCount * 2) {
       throw new IllegalStateException(
           "native Kagemusha readiness projection returned invalid blockers");
     }
@@ -313,8 +653,8 @@ public final class KagemushaRecursiveSpendProver {
     for (int index = 0; index < blockerCount; index++) {
       blockers.add(
           new ReadinessBlocker(
-              canonicalText(fields[15 + index * 2], "blockerCode"),
-              canonicalText(fields[16 + index * 2], "blockerMessage")));
+              canonicalText(fields[16 + index * 2], "blockerCode"),
+              canonicalText(fields[17 + index * 2], "blockerMessage")));
     }
     return new ReadinessProjection(
         integer(fields[0], "requiredBridgeAbiVersion"),
@@ -331,46 +671,96 @@ public final class KagemushaRecursiveSpendProver {
         activeVerifier(fields[11]),
         activeVerifier(fields[12]),
         activeVerifier(fields[13]),
+        authenticatedArtifactSet(fields[14]),
         blockers);
   }
 
   public static RequestAuthorizationPreparation prepareRequestAuthorization(
       final String authority,
       final String deviceId,
+      final String assetDefinitionId,
       final byte[] operationId,
       final long issuedAtMilliseconds,
       final long expiresAtMilliseconds,
       final byte[] nonce,
       final byte[] payloadDigest,
-      final byte[] appAttestEvidence) {
+      final byte[] registrationHash,
+      final OnlineHardwareAssertionPlatform platform) {
     requireArtifactBridge();
     final byte[][] fields = nativePrepareAuthorizationV2(
         utf8(authority, "authority"),
         utf8(deviceId, "deviceId"),
+        utf8(assetDefinitionId, "assetDefinitionId"),
         requireDigest(operationId, "operationId"),
         issuedAtMilliseconds,
         expiresAtMilliseconds,
         requireDigest(nonce, "nonce"),
         requireDigest(payloadDigest, "payloadDigest"),
-        appAttestEvidence == null ? new byte[0] : Arrays.copyOf(appAttestEvidence, appAttestEvidence.length));
+        requireDigest(registrationHash, "registrationHash"),
+        utf8(Objects.requireNonNull(platform, "platform").wireName(), "hardwareAssertionPlatform"));
     requireFieldCount(fields, 5, "authorization preparation");
     return new RequestAuthorizationPreparation(
-        new RequestAuthorizationTemplate(fields[0]), fields[1], fields[2], fields[3],
-        fields[4].length == 0 ? null : fields[4]);
+        new RequestAuthorizationPreparationArchive(fields[0]),
+        fields[1], fields[2], fields[3], fields[4]);
   }
 
-  public static RequestAuthorization signRequestAuthorization(
-      final RequestAuthorizationPreparation preparation, final byte[] signature) {
+  public static RequestAuthorization finalizeRequestAuthorization(
+      final RequestAuthorizationPreparation preparation, final byte[] platformSignatureDer) {
+    return finalizeRequestAuthorization(preparation, platformSignatureDer, new byte[0]);
+  }
+
+  public static RequestAuthorization finalizeRequestAuthorization(
+      final RequestAuthorizationPreparation preparation,
+      final byte[] platformSignatureDer,
+      final byte[] authenticatorData) {
     requireArtifactBridge();
-    return new RequestAuthorization(nativeCreateAuthorizationV2(
-        Objects.requireNonNull(preparation, "preparation").template.noritoEncoded(),
-        copyRequired(signature, "signature")));
+    final byte[] der = copyRequired(platformSignatureDer, "platformSignatureDer");
+    final byte[] expectedRaw = KagemushaP256Codec.rawLowSFromStrictDer(der);
+    final byte[][] fields = nativeFinalizeHardwareAuthorizationV2(
+        Objects.requireNonNull(preparation, "preparation").archive.noritoEncoded(),
+        authenticatorData == null
+            ? new byte[0]
+            : Arrays.copyOf(authenticatorData, authenticatorData.length),
+        der);
+    requireFieldCount(fields, 2, "authorization finalization");
+    if (!Arrays.equals(fields[1], expectedRaw)) {
+      throw new IllegalStateException(
+          "native authorization signature normalization drifted from the SDK");
+    }
+    return new RequestAuthorization(fields[0]);
+  }
+
+  /** Finalize directly from the CBOR returned by DCAppAttestService.generateAssertion. */
+  public static RequestAuthorization finalizeIosAppAttest(
+      final RequestAuthorizationPreparation preparation, final byte[] assertionObject) {
+    requireArtifactBridge();
+    final byte[] boundedAssertionObject = copyRequired(assertionObject, "assertionObject");
+    if (boundedAssertionObject.length > IOS_APP_ATTEST_ASSERTION_OBJECT_MAX_BYTES) {
+      throw new IllegalArgumentException("assertionObject exceeds the App Attest response bound");
+    }
+    final byte[][] fields = nativeFinalizeIosAppAttestAuthorizationV2(
+        Objects.requireNonNull(preparation, "preparation").archive.noritoEncoded(),
+        boundedAssertionObject);
+    return requestAuthorizationFromIosAppAttestNativeProjection(fields);
+  }
+
+  static RequestAuthorization requestAuthorizationFromIosAppAttestNativeProjection(
+      final byte[][] fields) {
+    requireFieldCount(fields, 3, "App Attest authorization finalization");
+    try {
+      KagemushaP256Codec.requireRawLowSSignature(fields[1]);
+    } catch (final IllegalArgumentException failure) {
+      throw new IllegalStateException(
+          "native Kagemusha App Attest finalization returned an invalid raw signature", failure);
+    }
+    requireIosAppAttestAuthenticatorDataProjection(fields[2]);
+    return new RequestAuthorization(fields[0]);
   }
 
   public static TopUpRequest finalizeTopUp(
       final TopUpUnsigned unsigned, final RequestAuthorization authorization) {
     requireArtifactBridge();
-    return new TopUpRequest(nativeFinalizeTopUpV2(
+    return new TopUpRequest(nativeFinalizeTopUpV4(
         Objects.requireNonNull(unsigned, "unsigned").noritoEncoded(),
         Objects.requireNonNull(authorization, "authorization").noritoEncoded()));
   }
@@ -391,50 +781,71 @@ public final class KagemushaRecursiveSpendProver {
       final byte[] openingDiversifier,
       final TopUpZeroPath zeroPath,
       final byte[] shieldVerifierCommitment,
-      final ArtifactBinding artifactBinding) {
+      final ArtifactBindingV4 artifactBinding) {
     requireArtifactBridge();
     Objects.requireNonNull(amount, "amount");
     Objects.requireNonNull(zeroPath, "zeroPath");
     Objects.requireNonNull(artifactBinding, "artifactBinding");
-    final byte[] spendKeyCopy = requireDigest(openingSpendKey, "openingSpendKey");
-    final byte[] rhoCopy = requireDigest(openingRho, "openingRho");
-    final byte[] diversifierCopy = requireDigest(openingDiversifier, "openingDiversifier");
-    final byte[][] fields;
-    try {
-      fields = nativePrepareTopUpV2(
-          utf8(chainId, "chainId"),
-          utf8(assetDefinitionId, "assetDefinitionId"),
-          utf8(payerAccountId, "payerAccountId"),
-          utf8(amount.atomicUnits(), "atomicUnits"),
-          amount.scale(),
-          requireDigest(operationId, "operationId"),
-          spendKeyCopy,
-          rhoCopy,
-          diversifierCopy,
-          zeroPath.leafIndex,
-          zeroPath.flattenedSiblings(),
-          zeroPath.directions(),
-          zeroPath.root(),
-          requireDigest(shieldVerifierCommitment, "shieldVerifierCommitment"),
-          artifactBinding.noritoEncoded());
-    } finally {
-      Arrays.fill(spendKeyCopy, (byte) 0);
-      Arrays.fill(rhoCopy, (byte) 0);
-      Arrays.fill(diversifierCopy, (byte) 0);
-    }
-    requireFieldCount(fields, 11, "top-up preparation");
-    return new TopUpPreparation(
-        new TopUpUnsigned(fields[0]), fields[1], new NoteOpening(fields[2]), fields[3], fields[4],
-        fields[5], fields[6], fields[7], amount(fields[8], fields[9]),
-        integer(fields[10], "leafIndex"));
+    return SecretArchiveWiper.withOpeningDigests(
+        openingSpendKey,
+        "openingSpendKey",
+        openingRho,
+        "openingRho",
+        openingDiversifier,
+        "openingDiversifier",
+        (spendKeyCopy, rhoCopy, diversifierCopy) -> {
+          byte[][] fields = null;
+          NoteOpening locallyOwnedOpening = null;
+          try {
+            fields = nativePrepareTopUpV4(
+                utf8(chainId, "chainId"),
+                utf8(assetDefinitionId, "assetDefinitionId"),
+                utf8(payerAccountId, "payerAccountId"),
+                utf8(amount.atomicUnits(), "atomicUnits"),
+                amount.scale(),
+                requireDigest(operationId, "operationId"),
+                spendKeyCopy,
+                rhoCopy,
+                diversifierCopy,
+                zeroPath.leafIndex,
+                zeroPath.flattenedSiblings(),
+                zeroPath.directions(),
+                zeroPath.root(),
+                requireDigest(shieldVerifierCommitment, "shieldVerifierCommitment"),
+                artifactBinding.noritoEncoded());
+            requireFieldCount(fields, 11, "top-up preparation");
+            locallyOwnedOpening = new NoteOpening(fields[2]);
+            final TopUpPreparation preparation = new TopUpPreparation(
+                new TopUpUnsigned(fields[0]),
+                fields[1],
+                locallyOwnedOpening,
+                fields[3],
+                fields[4],
+                fields[5],
+                fields[6],
+                fields[7],
+                amount(fields[8], fields[9]),
+                integer(fields[10], "leafIndex"));
+            locallyOwnedOpening = null;
+            return preparation;
+          } finally {
+            if (locallyOwnedOpening != null) locallyOwnedOpening.close();
+            SecretArchiveWiper.wipeAll(fields);
+          }
+        });
   }
 
   public static RedeemFinalization finalizeRedeemV4(
       final RedeemBuildResultV4 buildResult, final RequestAuthorization authorization) {
     Objects.requireNonNull(buildResult, "buildResult");
     Objects.requireNonNull(authorization, "authorization");
-    requireV4ProofBackend();
-    throw new IllegalStateException("native Kagemusha V4 redeem finalization is unavailable");
+    requireArtifactBridge();
+    final byte[][] fields = nativeFinalizeRedeemV4(
+        buildResult.noritoEncoded(), authorization.noritoEncoded());
+    requireFieldCount(fields, 2, "V4 redeem finalization");
+    return new RedeemFinalization(
+        new RedeemSubmissionRequest(fields[0]),
+        requireDigest(fields[1], "operationId"));
   }
 
   public static RecipientRequestPreparation prepareRecipientPaymentRequest(
@@ -452,38 +863,47 @@ public final class KagemushaRecursiveSpendProver {
       final byte[] diversifier) {
     requireArtifactBridge();
     Objects.requireNonNull(amount, "amount");
-    final byte[] spendKeyCopy = requireDigest(spendKey, "spendKey");
-    final byte[] rhoCopy = requireDigest(rho, "rho");
-    final byte[] diversifierCopy = requireDigest(diversifier, "diversifier");
-    final byte[][] fields;
-    try {
-      fields = nativePrepareRecipientRequestV2(
-          utf8(chainId, "chainId"),
-          utf8(assetDefinitionId, "assetDefinitionId"),
-          utf8(amount.atomicUnits(), "atomicUnits"),
-          amount.scale(),
-          utf8(recipientAccountId, "recipientAccountId"),
-          utf8(receiverDeviceId, "receiverDeviceId"),
-          Objects.requireNonNull(receiverPublicKey, "receiverPublicKey").sec1Bytes(),
-          requireDigest(requestId, "requestId"),
-          issuedAtMilliseconds,
-          expiresAtMilliseconds,
-          spendKeyCopy,
-          rhoCopy,
-          diversifierCopy);
-    } finally {
-      Arrays.fill(spendKeyCopy, (byte) 0);
-      Arrays.fill(rhoCopy, (byte) 0);
-      Arrays.fill(diversifierCopy, (byte) 0);
-    }
-    requireFieldCount(fields, 5, "recipient request preparation");
-    return new RecipientRequestPreparation(
-        new RecipientRequestPayload(fields[0]),
-        fields[1],
-        new NoteOpening(fields[2]),
-        fields[3],
-        fields[4],
-        amount);
+    return SecretArchiveWiper.withOpeningDigests(
+        spendKey,
+        "spendKey",
+        rho,
+        "rho",
+        diversifier,
+        "diversifier",
+        (spendKeyCopy, rhoCopy, diversifierCopy) -> {
+          byte[][] fields = null;
+          NoteOpening locallyOwnedOpening = null;
+          try {
+            fields = nativePrepareRecipientRequestV2(
+                utf8(chainId, "chainId"),
+                utf8(assetDefinitionId, "assetDefinitionId"),
+                utf8(amount.atomicUnits(), "atomicUnits"),
+                amount.scale(),
+                utf8(recipientAccountId, "recipientAccountId"),
+                utf8(receiverDeviceId, "receiverDeviceId"),
+                Objects.requireNonNull(receiverPublicKey, "receiverPublicKey").sec1Bytes(),
+                requireDigest(requestId, "requestId"),
+                issuedAtMilliseconds,
+                expiresAtMilliseconds,
+                spendKeyCopy,
+                rhoCopy,
+                diversifierCopy);
+            requireFieldCount(fields, 5, "recipient request preparation");
+            locallyOwnedOpening = new NoteOpening(fields[2]);
+            final RecipientRequestPreparation preparation = new RecipientRequestPreparation(
+                new RecipientRequestPayload(fields[0]),
+                fields[1],
+                locallyOwnedOpening,
+                fields[3],
+                fields[4],
+                amount);
+            locallyOwnedOpening = null;
+            return preparation;
+          } finally {
+            if (locallyOwnedOpening != null) locallyOwnedOpening.close();
+            SecretArchiveWiper.wipeAll(fields);
+          }
+        });
   }
 
   public static RecipientPaymentRequest signRecipientPaymentRequest(
@@ -501,16 +921,100 @@ public final class KagemushaRecursiveSpendProver {
   public static NoteOpening prepareNoteOpening(
       final byte[] spendKey, final byte[] rho, final byte[] diversifier) {
     requireArtifactBridge();
-    final byte[] spendKeyCopy = requireDigest(spendKey, "spendKey");
-    final byte[] rhoCopy = requireDigest(rho, "rho");
-    final byte[] diversifierCopy = requireDigest(diversifier, "diversifier");
+    return SecretArchiveWiper.withOpeningDigests(
+        spendKey,
+        "spendKey",
+        rho,
+        "rho",
+        diversifier,
+        "diversifier",
+        (spendKeyCopy, rhoCopy, diversifierCopy) -> {
+          byte[] nativeArchive = null;
+          try {
+            nativeArchive = nativePrepareNoteOpeningV2(
+                spendKeyCopy, rhoCopy, diversifierCopy);
+            return new NoteOpening(nativeArchive);
+          } finally {
+            SecretArchiveWiper.wipe(nativeArchive);
+          }
+        });
+  }
+
+  /**
+   * Prepares partial-redemption change inside the native secret boundary.
+   *
+   * <p>Native revalidates the exact input note/opening and derives a fresh opening from a
+   * domain-separated binding over that input, the change amount, operation id, and caller entropy.
+   * The authoritative confidential diversifier is selected natively.</p>
+   */
+  public static RedemptionChangePreparationV4 prepareRedemptionChangeV4(
+      final SpendableBranchV4 input,
+      final KagemushaScaledAmount changeAmount,
+      final byte[] operationId,
+      final byte[] entropy) {
+    requireArtifactBridge();
+    Objects.requireNonNull(input, "input");
+    Objects.requireNonNull(changeAmount, "changeAmount");
+    byte[] operation = null;
+    byte[] freshEntropy = null;
+    byte[] bundleArchive = null;
+    byte[] openingArchive = null;
+    byte[] atomicUnits = null;
+    byte[][] fields = null;
+    NoteOpening opening = null;
     try {
-      return new NoteOpening(
-          nativePrepareNoteOpeningV2(spendKeyCopy, rhoCopy, diversifierCopy));
+      operation = requireDigest(operationId, "operationId");
+      freshEntropy = requireDigest(entropy, "entropy");
+      if (Arrays.equals(operation, freshEntropy)) {
+        throw new IllegalArgumentException("entropy must be distinct from operationId");
+      }
+      bundleArchive = input.bundle().noritoEncoded();
+      openingArchive = input.opening().noritoEncoded();
+      atomicUnits = utf8(changeAmount.atomicUnits(), "atomicUnits");
+      fields = nativePrepareRedemptionChangeV4(
+          bundleArchive,
+          openingArchive,
+          atomicUnits,
+          changeAmount.scale(),
+          operation,
+          freshEntropy);
+      requireFieldCount(fields, 7, "V4 redemption change preparation");
+      final String[] digestNames = {"rho", "diversifier", "commitment", "spendNullifier"};
+      for (int index = 1; index <= 4; index++) {
+        final byte[] checked = requireDigest(fields[index], digestNames[index - 1]);
+        Arrays.fill(checked, (byte) 0);
+      }
+      if (Arrays.equals(fields[1], fields[2])) {
+        throw new IllegalStateException(
+            "native Kagemusha redemption opening coordinates collide");
+      }
+      final KagemushaScaledAmount projectedAmount = amount(fields[5], fields[6]);
+      if (!projectedAmount.equals(changeAmount)) {
+        throw new IllegalStateException("native Kagemusha redemption change amount changed");
+      }
+      opening = new NoteOpening(fields[0]);
+      final NoteOpening preparedOpening = opening;
+      opening = null;
+      final RedemptionChangePreparationV4 preparation = new RedemptionChangePreparationV4(
+          preparedOpening,
+          fields[1],
+          fields[2],
+          fields[3],
+          fields[4],
+          projectedAmount);
+      return preparation;
     } finally {
-      Arrays.fill(spendKeyCopy, (byte) 0);
-      Arrays.fill(rhoCopy, (byte) 0);
-      Arrays.fill(diversifierCopy, (byte) 0);
+      if (opening != null) opening.destroy();
+      if (fields != null) {
+        for (final byte[] field : fields) {
+          if (field != null) Arrays.fill(field, (byte) 0);
+        }
+      }
+      if (atomicUnits != null) Arrays.fill(atomicUnits, (byte) 0);
+      if (openingArchive != null) Arrays.fill(openingArchive, (byte) 0);
+      if (bundleArchive != null) Arrays.fill(bundleArchive, (byte) 0);
+      if (freshEntropy != null) Arrays.fill(freshEntropy, (byte) 0);
+      if (operation != null) Arrays.fill(operation, (byte) 0);
     }
   }
 
@@ -563,24 +1067,97 @@ public final class KagemushaRecursiveSpendProver {
       throw new IllegalArgumentException(
           "initialization requires exactly one recipient output path");
     }
-    final byte[] openingArchive = Objects.requireNonNull(opening, "opening").noritoEncoded();
-    final byte[] membershipArchive = membership.nativeArchive();
+    byte[] openingArchive = null;
+    byte[] membershipArchive = null;
+    byte[] nativeArchive = null;
     try {
-      return new InitRequestV4(nativeBuildInitRequestV4(
+      openingArchive = Objects.requireNonNull(opening, "opening").noritoEncoded();
+      membershipArchive = membership.nativeArchive();
+      nativeArchive = nativeBuildInitRequestV4(
           Objects.requireNonNull(topUpAnchor, "topUpAnchor").noritoEncoded(),
           Objects.requireNonNull(topUpFinalityProof, "topUpFinalityProof").noritoEncoded(),
           Objects.requireNonNull(topUpFinalityRosterArtifact, "topUpFinalityRosterArtifact")
               .noritoEncoded(),
           openingArchive,
-          membershipArchive));
+          membershipArchive);
+      return new InitRequestV4(nativeArchive);
     } finally {
-      Arrays.fill(openingArchive, (byte) 0);
-      Arrays.fill(membershipArchive, (byte) 0);
+      SecretArchiveWiper.wipe(nativeArchive);
+      SecretArchiveWiper.wipe(membershipArchive);
+      SecretArchiveWiper.wipe(openingArchive);
     }
+  }
+
+  /** Build and validate the complete origin-finality inventory for one V4 bundle. */
+  public static TopUpProvenanceV4 buildTopUpProvenanceV4(
+      final BundleV4 bundle,
+      final TopUpFinalityRosterArtifact topUpFinalityRosterArtifact,
+      final List<TopUpAnchorV4> topUpAnchors,
+      final List<TopUpFinalityProof> topUpFinalityProofs,
+      final long blockHeight) {
+    Objects.requireNonNull(topUpAnchors, "topUpAnchors");
+    Objects.requireNonNull(topUpFinalityProofs, "topUpFinalityProofs");
+    if (topUpAnchors.size() < 1
+        || topUpAnchors.size() > MAXIMUM_INPUTS_PER_TRANSITION
+        || topUpFinalityProofs.size() != topUpAnchors.size()) {
+      throw new IllegalArgumentException(
+          "topUpAnchors and topUpFinalityProofs must have the same 1..2 count");
+    }
+    requireArtifactBridge();
+    final byte[][] anchors = new byte[topUpAnchors.size()][];
+    final byte[][] proofs = new byte[topUpFinalityProofs.size()][];
+    for (int index = 0; index < anchors.length; index++) {
+      anchors[index] = Objects.requireNonNull(
+          topUpAnchors.get(index), "topUpAnchors[" + index + "]").noritoEncoded();
+      proofs[index] = Objects.requireNonNull(
+          topUpFinalityProofs.get(index), "topUpFinalityProofs[" + index + "]").noritoEncoded();
+    }
+    try {
+      return new TopUpProvenanceV4(nativeBuildTopUpProvenanceV4(
+          Objects.requireNonNull(bundle, "bundle").noritoEncoded(),
+          Objects.requireNonNull(
+              topUpFinalityRosterArtifact, "topUpFinalityRosterArtifact").noritoEncoded(),
+          anchors,
+          proofs,
+          blockHeight));
+    } finally {
+      for (final byte[] value : anchors) Arrays.fill(value, (byte) 0);
+      for (final byte[] value : proofs) Arrays.fill(value, (byte) 0);
+    }
+  }
+
+  /** Revalidate persisted provenance against the bundle and current installed release. */
+  public static TopUpProvenanceV4 validateTopUpProvenanceV4(
+      final BundleV4 bundle,
+      final TopUpProvenanceV4 topUpProvenance,
+      final long blockHeight) {
+    requireArtifactBridge();
+    return new TopUpProvenanceV4(nativeValidateTopUpProvenanceV4(
+        Objects.requireNonNull(bundle, "bundle").noritoEncoded(),
+        Objects.requireNonNull(topUpProvenance, "topUpProvenance").noritoEncoded(),
+        blockHeight));
   }
 
   /** Build one canonical append request from one or two independently spendable inputs. */
   public static AppendRequestV4 buildAppendRequestV4(
+      final List<SpendableBranchV4> inputs,
+      final NoteOpening changeOpening,
+      final OutputMembershipPaths outputMembershipPaths,
+      final byte[] transferVerifierCommitment,
+      final byte[] operationId,
+      final long blockHeight) {
+    return transferChangeOpeningOwnership(
+        changeOpening,
+        ownedChangeOpening -> buildAppendRequestV4Owned(
+            inputs,
+            ownedChangeOpening,
+            outputMembershipPaths,
+            transferVerifierCommitment,
+            operationId,
+            blockHeight));
+  }
+
+  private static AppendRequestV4 buildAppendRequestV4Owned(
       final List<SpendableBranchV4> inputs,
       final NoteOpening changeOpening,
       final OutputMembershipPaths outputMembershipPaths,
@@ -610,87 +1187,221 @@ public final class KagemushaRecursiveSpendProver {
     }
     requireArtifactBridge();
     requireV4ProofBackend();
-    final byte[][] bundles = new byte[inputs.size()][];
-    final byte[][] openings = new byte[inputs.size()][];
-    final byte[][] witnesses = new byte[inputs.size()][];
-    for (int index = 0; index < inputs.size(); index++) {
-      final SpendableBranchV4 value = inputs.get(index);
-      bundles[index] = value.bundle().noritoEncoded();
-      openings[index] = value.opening().noritoEncoded();
-      witnesses[index] = value.membershipWitness().noritoEncoded();
-    }
-    final byte[] change = changeOpening == null ? new byte[0] : changeOpening.noritoEncoded();
-    final byte[] outputMembership = membership.nativeArchive();
-    final byte[] verifier =
-        requireDigest(transferVerifierCommitment, "transferVerifierCommitment");
-    final byte[] operation = requireDigest(operationId, "operationId");
-    final byte[] archive;
+    byte[][] bundles = null;
+    byte[][] topUpProvenances = null;
+    byte[][] openings = null;
+    byte[][] witnesses = null;
+    byte[] change = null;
+    byte[] outputMembership = null;
+    byte[] verifier = null;
+    byte[] operation = null;
+    byte[] archive = null;
     try {
+      bundles = new byte[inputs.size()][];
+      topUpProvenances = new byte[inputs.size()][];
+      openings = new byte[inputs.size()][];
+      witnesses = new byte[inputs.size()][];
+      for (int index = 0; index < inputs.size(); index++) {
+        final SpendableBranchV4 value = inputs.get(index);
+        bundles[index] = value.bundle().noritoEncoded();
+        topUpProvenances[index] = value.topUpProvenance().noritoEncoded();
+        openings[index] = value.opening().noritoEncoded();
+        witnesses[index] = value.membershipWitness().noritoEncoded();
+      }
+      change = changeOpening == null ? new byte[0] : changeOpening.noritoEncoded();
+      outputMembership = membership.nativeArchive();
+      verifier = requireDigest(transferVerifierCommitment, "transferVerifierCommitment");
+      operation = requireDigest(operationId, "operationId");
       archive = nativeBuildAppendRequestV4(
-          bundles, openings, witnesses, change, outputMembership, verifier, operation,
+          bundles, topUpProvenances, openings, witnesses, change, outputMembership, verifier, operation,
           blockHeight);
+      return new AppendRequestV4(archive, changeOpening);
     } finally {
-      for (final byte[] value : bundles) Arrays.fill(value, (byte) 0);
-      for (final byte[] value : openings) Arrays.fill(value, (byte) 0);
-      for (final byte[] value : witnesses) Arrays.fill(value, (byte) 0);
-      Arrays.fill(change, (byte) 0);
-      Arrays.fill(outputMembership, (byte) 0);
-      Arrays.fill(verifier, (byte) 0);
-      Arrays.fill(operation, (byte) 0);
+      SecretArchiveWiper.wipeAll(bundles);
+      SecretArchiveWiper.wipeAll(topUpProvenances);
+      SecretArchiveWiper.wipeAll(openings);
+      SecretArchiveWiper.wipeAll(witnesses);
+      SecretArchiveWiper.wipe(change);
+      SecretArchiveWiper.wipe(outputMembership);
+      SecretArchiveWiper.wipe(verifier);
+      SecretArchiveWiper.wipe(operation);
+      SecretArchiveWiper.wipe(archive);
     }
-    return new AppendRequestV4(archive, changeOpening);
   }
 
   public static PeerPaymentProjection projectPeerPayment(final PeerPayment payment) {
     requireArtifactBridge();
     Objects.requireNonNull(payment, "payment");
-    final byte[][] fields = nativeProjectPeerPaymentV2(payment.noritoEncoded());
+    final byte[][] fields = nativeProjectPeerPaymentV4(payment.noritoEncoded());
     final ProjectionCursor cursor = new ProjectionCursor(fields, "peer payment projection");
     requireProjectionVersion(cursor.next("version"), "peer payment projection");
     final byte[] operationId = requireDigest(cursor.next("operationId"), "operationId");
     final byte[] requestDigest = requireDigest(cursor.next("requestDigest"), "requestDigest");
+    final TopUpProvenanceV4 topUpProvenance =
+        new TopUpProvenanceV4(cursor.next("topUpProvenance"));
     final BranchProjection projection = branchProjection(cursor);
     cursor.finish();
     final PeerPaymentProjection result =
-        new PeerPaymentProjection(projection, operationId, requestDigest);
+        new PeerPaymentProjection(projection, topUpProvenance, operationId, requestDigest);
     Arrays.fill(operationId, (byte) 0);
     Arrays.fill(requestDigest, (byte) 0);
     return result;
   }
 
+  public static InitProjectionV4 projectInitResultV4(final InitResultV4 result) {
+    requireArtifactBridge();
+    final ProjectionCursor cursor = new ProjectionCursor(
+        nativeProjectInitResultV4(Objects.requireNonNull(result, "result").noritoEncoded()),
+        "V4 init result projection");
+    requireProjectionVersion(cursor.next("version"), "V4 init result projection");
+    final TopUpProvenanceV4 topUpProvenance =
+        new TopUpProvenanceV4(cursor.next("topUpProvenance"));
+    final BranchProjection branch = branchProjection(cursor);
+    final byte[] publicStatementDigest =
+        requireDigest(cursor.next("publicStatementDigest"), "publicStatementDigest");
+    cursor.finish();
+    return new InitProjectionV4(branch, topUpProvenance, publicStatementDigest);
+  }
+
+  public static SplitProjection projectSplitResultV4(final SplitResultV4 result) {
+    requireArtifactBridge();
+    final ProjectionCursor cursor = new ProjectionCursor(
+        nativeProjectSplitResultV4(Objects.requireNonNull(result, "result").noritoEncoded()),
+        "V4 split result projection");
+    requireProjectionVersion(cursor.next("version"), "V4 split result projection");
+    final PeerPayment payment = new PeerPayment(cursor.next("peerPayment"));
+    final byte[] operationId = requireDigest(cursor.next("operationId"), "operationId");
+    final byte[] requestDigest = requireDigest(cursor.next("requestDigest"), "requestDigest");
+    final byte[] splitBindingDigest =
+        requireDigest(cursor.next("splitBindingDigest"), "splitBindingDigest");
+    final TopUpProvenanceV4 recipientTopUpProvenance =
+        new TopUpProvenanceV4(cursor.next("recipientTopUpProvenance"));
+    final BranchProjection recipient = branchProjection(cursor);
+    final boolean changePresent = bool(cursor.next("changePresent"), "changePresent");
+    final TopUpProvenanceV4 changeTopUpProvenance = changePresent
+        ? new TopUpProvenanceV4(cursor.next("changeTopUpProvenance")) : null;
+    final BranchProjection change = changePresent ? branchProjection(cursor) : null;
+    cursor.finish();
+    return new SplitProjection(
+        payment, recipient, change, recipientTopUpProvenance, changeTopUpProvenance,
+        operationId, requestDigest, splitBindingDigest);
+  }
+
+  public static VerifyProjection projectVerifyResultV4(final VerifyResultV4 result) {
+    requireArtifactBridge();
+    final ProjectionCursor cursor = new ProjectionCursor(
+        nativeProjectVerifyResultV4(Objects.requireNonNull(result, "result").noritoEncoded()),
+        "V4 verify result projection");
+    requireProjectionVersion(cursor.next("version"), "V4 verify result projection");
+    final boolean valid = bool(cursor.next("valid"), "valid");
+    final boolean chainAdmissible = bool(cursor.next("chainAdmissible"), "chainAdmissible");
+    final boolean lineageRedeemable =
+        bool(cursor.next("lineageRedeemable"), "lineageRedeemable");
+    final boolean witnesslessRedemptionSupported = bool(
+        cursor.next("witnesslessRedemptionSupported"), "witnesslessRedemptionSupported");
+    final byte[] commitment = cursor.next("commitment");
+    final byte[] spendNullifier = cursor.next("spendNullifier");
+    final KagemushaScaledAmount amount =
+        amount(cursor.next("atomicUnits"), cursor.next("scale"));
+    final int hopCount = integer(cursor.next("hopCount"), "hopCount");
+    final int proofStepCount = integer(cursor.next("proofStepCount"), "proofStepCount");
+    final byte[] bundleDigest = cursor.next("bundleDigest");
+    final String assetDefinitionId =
+        canonicalText(cursor.next("assetDefinitionId"), "assetDefinitionId");
+    final ArtifactBindingV4 artifactBinding =
+        new ArtifactBindingV4(cursor.next("artifactBinding"));
+    final byte[] requestDigest = cursor.next("requestDigest");
+    final byte[] outputBindingDigest = cursor.next("outputBindingDigest");
+    final String verifierBackend =
+        canonicalText(cursor.next("verifierBackend"), "verifierBackend");
+    final String verifierName = canonicalText(cursor.next("verifierName"), "verifierName");
+    final String verifierCircuitId =
+        canonicalText(cursor.next("verifierCircuitId"), "verifierCircuitId");
+    final byte[] activationBytes = cursor.next("verifierActivationHeight");
+    final Long activation = activationBytes.length == 0
+        ? null : longInteger(activationBytes, "verifierActivationHeight");
+    final byte[] withdrawalBytes = cursor.next("verifierWithdrawalHeight");
+    final Long withdrawal = withdrawalBytes.length == 0
+        ? null : longInteger(withdrawalBytes, "verifierWithdrawalHeight");
+    final long verifiedAtBlockHeight =
+        longInteger(cursor.next("verifiedAtBlockHeight"), "verifiedAtBlockHeight");
+    final long verifiedAtMilliseconds =
+        longInteger(cursor.next("verifiedAtMilliseconds"), "verifiedAtMilliseconds");
+    final int claimCount = projectionCount(cursor.next("branchClaimCount"), "branchClaim");
+    final List<BranchClaim> claims = new ArrayList<>(claimCount);
+    for (int index = 0; index < claimCount; index++) {
+      claims.add(new BranchClaim(cursor.next("branchClaim[" + index + "]")));
+    }
+    cursor.finish();
+    return new VerifyProjection(
+        valid, chainAdmissible, lineageRedeemable, witnesslessRedemptionSupported,
+        commitment, spendNullifier, amount, hopCount, proofStepCount, bundleDigest,
+        assetDefinitionId, artifactBinding, requestDigest, outputBindingDigest,
+        verifierBackend, verifierName, verifierCircuitId, activation, withdrawal,
+        verifiedAtBlockHeight, verifiedAtMilliseconds, claims);
+  }
+
+  public static RedeemBuildProjection projectRedeemBuildResultV4(
+      final RedeemBuildResultV4 result) {
+    requireArtifactBridge();
+    final ProjectionCursor cursor = new ProjectionCursor(
+        nativeProjectRedeemBuildResultV4(
+            Objects.requireNonNull(result, "result").noritoEncoded()),
+        "V4 redeem build projection");
+    requireProjectionVersion(cursor.next("version"), "V4 redeem build projection");
+    final RedeemUnsignedV4 unsigned = new RedeemUnsignedV4(cursor.next("unsigned"));
+    final byte[] authorizationDigest = cursor.next("authorizationDigest");
+    final byte[] operationId = cursor.next("operationId");
+    final boolean changePresent = bool(cursor.next("changePresent"), "changePresent");
+    final TopUpProvenanceV4 changeTopUpProvenance = changePresent
+        ? new TopUpProvenanceV4(cursor.next("changeTopUpProvenance")) : null;
+    final BranchProjection change = changePresent ? branchProjection(cursor) : null;
+    cursor.finish();
+    return new RedeemBuildProjection(
+        unsigned, authorizationDigest, change, changeTopUpProvenance, operationId);
+  }
+
   public static VerifyRequestV4 buildVerifyRequestV4(
       final BundleV4 bundle,
       final RecipientPaymentRequest recipientRequest,
-      final TopUpFinalityRosterArtifact topUpFinalityRosterArtifact,
-      final List<TopUpFinalityEvidenceV4> topUpFinalityEvidence,
+      final TopUpProvenanceV4 topUpProvenance,
       final int maximumHops,
       final long blockHeight,
       final long verifiedAtMilliseconds) {
     requireArtifactBridge();
     requireV4ProofBackend();
-    Objects.requireNonNull(topUpFinalityEvidence, "topUpFinalityEvidence");
-    final byte[][] evidence = new byte[topUpFinalityEvidence.size()][];
-    for (int index = 0; index < topUpFinalityEvidence.size(); index++) {
-      evidence[index] = Objects.requireNonNull(
-          topUpFinalityEvidence.get(index), "topUpFinalityEvidence[" + index + "]")
-          .noritoEncoded();
-    }
-    try {
-      return new VerifyRequestV4(nativeBuildVerifyRequestV4(
-          Objects.requireNonNull(bundle, "bundle").noritoEncoded(),
-          Objects.requireNonNull(recipientRequest, "recipientRequest").noritoEncoded(),
-          Objects.requireNonNull(topUpFinalityRosterArtifact, "topUpFinalityRosterArtifact")
-              .noritoEncoded(),
-          evidence,
-          maximumHops,
-          blockHeight,
-          verifiedAtMilliseconds));
-    } finally {
-      for (final byte[] value : evidence) Arrays.fill(value, (byte) 0);
-    }
+    return new VerifyRequestV4(nativeBuildVerifyRequestV4(
+        Objects.requireNonNull(bundle, "bundle").noritoEncoded(),
+        Objects.requireNonNull(recipientRequest, "recipientRequest").noritoEncoded(),
+        Objects.requireNonNull(topUpProvenance, "topUpProvenance").noritoEncoded(),
+        maximumHops,
+        blockHeight,
+        verifiedAtMilliseconds));
   }
 
   public static RedeemRequestV4 buildRedeemRequestV4(
+      final SpendableBranchV4 input,
+      final String recipientAccountId,
+      final KagemushaScaledAmount amount,
+      final NoteOpening changeOpening,
+      final OutputMembershipPaths changeOutputMembershipPaths,
+      final byte[] unshieldVerifierCommitment,
+      final byte[] operationId,
+      final long blockHeight) {
+    return transferChangeOpeningOwnership(
+        changeOpening,
+        ownedChangeOpening -> buildRedeemRequestV4Owned(
+            input,
+            recipientAccountId,
+            amount,
+            ownedChangeOpening,
+            changeOutputMembershipPaths,
+            unshieldVerifierCommitment,
+            operationId,
+            blockHeight));
+  }
+
+  private static RedeemRequestV4 buildRedeemRequestV4Owned(
       final SpendableBranchV4 input,
       final String recipientAccountId,
       final KagemushaScaledAmount amount,
@@ -713,32 +1424,46 @@ public final class KagemushaRecursiveSpendProver {
       throw new IllegalArgumentException(
           "redemption change requires exactly one change output path");
     }
-    final byte[] change = changeOpening == null ? new byte[0] : changeOpening.noritoEncoded();
-    final byte[] outputMembership = changeOutputMembershipPaths == null
-        ? new byte[0] : changeOutputMembershipPaths.nativeArchive();
-    final byte[] verifier =
-        requireDigest(unshieldVerifierCommitment, "unshieldVerifierCommitment");
-    final byte[] operation = requireDigest(operationId, "operationId");
-    final byte[] bundleArchive = input.bundle().noritoEncoded();
-    final byte[] openingArchive = input.opening().noritoEncoded();
-    final byte[] witnessArchive = input.membershipWitness().noritoEncoded();
-    final byte[] recipient = utf8(recipientAccountId, "recipientAccountId");
-    final byte[] atomicUnits = utf8(amount.atomicUnits(), "atomicUnits");
+    byte[] change = null;
+    byte[] outputMembership = null;
+    byte[] verifier = null;
+    byte[] operation = null;
+    byte[] bundleArchive = null;
+    byte[] topUpProvenanceArchive = null;
+    byte[] openingArchive = null;
+    byte[] witnessArchive = null;
+    byte[] recipient = null;
+    byte[] atomicUnits = null;
+    byte[] archive = null;
     try {
-      return new RedeemRequestV4(nativeBuildRedeemRequestV4(
-          bundleArchive, openingArchive, witnessArchive, recipient,
+      change = changeOpening == null ? new byte[0] : changeOpening.noritoEncoded();
+      outputMembership = changeOutputMembershipPaths == null
+          ? new byte[0] : changeOutputMembershipPaths.nativeArchive();
+      verifier = requireDigest(unshieldVerifierCommitment, "unshieldVerifierCommitment");
+      operation = requireDigest(operationId, "operationId");
+      bundleArchive = input.bundle().noritoEncoded();
+      topUpProvenanceArchive = input.topUpProvenance().noritoEncoded();
+      openingArchive = input.opening().noritoEncoded();
+      witnessArchive = input.membershipWitness().noritoEncoded();
+      recipient = utf8(recipientAccountId, "recipientAccountId");
+      atomicUnits = utf8(amount.atomicUnits(), "atomicUnits");
+      archive = nativeBuildRedeemRequestV4(
+          bundleArchive, topUpProvenanceArchive, openingArchive, witnessArchive, recipient,
           atomicUnits, amount.scale(), change,
-          outputMembership, verifier, operation, blockHeight), changeOpening);
+          outputMembership, verifier, operation, blockHeight);
+      return new RedeemRequestV4(archive, changeOpening);
     } finally {
-      Arrays.fill(change, (byte) 0);
-      Arrays.fill(outputMembership, (byte) 0);
-      Arrays.fill(verifier, (byte) 0);
-      Arrays.fill(operation, (byte) 0);
-      Arrays.fill(bundleArchive, (byte) 0);
-      Arrays.fill(openingArchive, (byte) 0);
-      Arrays.fill(witnessArchive, (byte) 0);
-      Arrays.fill(recipient, (byte) 0);
-      Arrays.fill(atomicUnits, (byte) 0);
+      SecretArchiveWiper.wipe(change);
+      SecretArchiveWiper.wipe(outputMembership);
+      SecretArchiveWiper.wipe(verifier);
+      SecretArchiveWiper.wipe(operation);
+      SecretArchiveWiper.wipe(bundleArchive);
+      SecretArchiveWiper.wipe(topUpProvenanceArchive);
+      SecretArchiveWiper.wipe(openingArchive);
+      SecretArchiveWiper.wipe(witnessArchive);
+      SecretArchiveWiper.wipe(recipient);
+      SecretArchiveWiper.wipe(atomicUnits);
+      SecretArchiveWiper.wipe(archive);
     }
   }
 
@@ -785,13 +1510,16 @@ public final class KagemushaRecursiveSpendProver {
 
   /** Build the first spendable branch from a finalized top-up anchor. */
   public static InitResultV4 initSpendV4(final InitRequestV4 request) {
-    Objects.requireNonNull(request, "request");
-    requireProofBackend();
+    final InitRequestV4 requiredRequest = Objects.requireNonNull(request, "request");
+    final byte[] secretArchive = requiredRequest.consumeAndDestroy();
     try {
+      requireProofBackend();
       return new InitResultV4(
-          requireNativeResult(nativeInitSpendV4(request.noritoEncoded()), "init spend"));
+          requireNativeResult(nativeInitSpendV4(secretArchive), "init spend"));
     } catch (final UnsatisfiedLinkError failure) {
       throw new IllegalStateException("native Kagemusha init spend entrypoint is unavailable", failure);
+    } finally {
+      SecretArchiveWiper.wipe(secretArchive);
     }
   }
 
@@ -800,28 +1528,30 @@ public final class KagemushaRecursiveSpendProver {
       final AppendRequestV4 request,
       final RecipientPaymentRequest recipientRequest,
       final long verifiedAtMilliseconds) {
-    if (verifiedAtMilliseconds <= 0) {
-      throw new IllegalArgumentException("verifiedAtMilliseconds must be positive");
-    }
-    Objects.requireNonNull(request, "request");
-    Objects.requireNonNull(recipientRequest, "recipientRequest");
-    requireProofBackend();
-    final NoteOpening changeOpening = request.changeOpening;
-    final byte[] secretArchive = request.consumeAndDestroy();
-    try {
-      return new SplitResultV4(
-          requireNativeResult(
-              nativeAppendSpendV4(
-                  secretArchive,
-                  recipientRequest.noritoEncoded(),
-                  verifiedAtMilliseconds),
-              "append spend"),
-          changeOpening);
-    } catch (final UnsatisfiedLinkError failure) {
-      throw new IllegalStateException("native Kagemusha append spend entrypoint is unavailable", failure);
-    } finally {
-      Arrays.fill(secretArchive, (byte) 0);
-    }
+    final AppendRequestV4 requiredRequest = Objects.requireNonNull(request, "request");
+    return transferChangeOpeningOwnership(requiredRequest.takeChangeOpening(), changeOpening -> {
+      if (verifiedAtMilliseconds <= 0) {
+        throw new IllegalArgumentException("verifiedAtMilliseconds must be positive");
+      }
+      Objects.requireNonNull(recipientRequest, "recipientRequest");
+      requireProofBackend();
+      final byte[] secretArchive = requiredRequest.consumeAndDestroy();
+      try {
+        return new SplitResultV4(
+            requireNativeResult(
+                nativeAppendSpendV4(
+                    secretArchive,
+                    recipientRequest.noritoEncoded(),
+                    verifiedAtMilliseconds),
+                "append spend"),
+            changeOpening);
+      } catch (final UnsatisfiedLinkError failure) {
+        throw new IllegalStateException(
+            "native Kagemusha append spend entrypoint is unavailable", failure);
+      } finally {
+        Arrays.fill(secretArchive, (byte) 0);
+      }
+    });
   }
 
   /** Verify the recursive proof, exact split bindings, membership, and hop limit. */
@@ -840,21 +1570,23 @@ public final class KagemushaRecursiveSpendProver {
 
   /** Build a full or partial redemption and its optional proof-bound offline change. */
   public static RedeemBuildResultV4 buildRedeemV4(final RedeemRequestV4 request) {
-    Objects.requireNonNull(request, "request");
-    requireProofBackend();
-    final NoteOpening changeOpening = request.changeOpening;
-    final byte[] secretArchive = request.consumeAndDestroy();
-    try {
-      return new RedeemBuildResultV4(
-          requireNativeResult(
-              nativeBuildRedeemV4(secretArchive),
-              "build redeem"),
-          changeOpening);
-    } catch (final UnsatisfiedLinkError failure) {
-      throw new IllegalStateException("native Kagemusha build redeem entrypoint is unavailable", failure);
-    } finally {
-      Arrays.fill(secretArchive, (byte) 0);
-    }
+    final RedeemRequestV4 requiredRequest = Objects.requireNonNull(request, "request");
+    return transferChangeOpeningOwnership(requiredRequest.takeChangeOpening(), changeOpening -> {
+      requireProofBackend();
+      final byte[] secretArchive = requiredRequest.consumeAndDestroy();
+      try {
+        return new RedeemBuildResultV4(
+            requireNativeResult(
+                nativeBuildRedeemV4(secretArchive),
+                "build redeem"),
+            changeOpening);
+      } catch (final UnsatisfiedLinkError failure) {
+        throw new IllegalStateException(
+            "native Kagemusha build redeem entrypoint is unavailable", failure);
+      } finally {
+        Arrays.fill(secretArchive, (byte) 0);
+      }
+    });
   }
 
   public static ToriiClient newToriiClient(
@@ -890,13 +1622,6 @@ public final class KagemushaRecursiveSpendProver {
                 () -> nativeArtifactBeginV4(new byte[] {0}, new byte[32], new byte[32])));
   }
 
-  private static boolean loadProofBackendCapability() {
-    return detectExactNativeAvailability(
-        () -> System.loadLibrary(LIBRARY_NAME),
-        KagemushaRecursiveSpendProver::nativeBridgeAbiVersion,
-        KagemushaRecursiveSpendProver::nativePastaCycleV4BackendAvailable);
-  }
-
   private static boolean expectIllegalArgumentProbe(final NativeProbe probe) {
     try {
       probe.run();
@@ -923,7 +1648,7 @@ public final class KagemushaRecursiveSpendProver {
   }
 
   private static void requireV4ProofBackend() {
-    if (!PROOF_BACKEND_AVAILABLE) {
+    if (!isProofBackendAvailable()) {
       throw new IllegalStateException(
           LIBRARY_NAME + " ABI " + REQUIRED_NATIVE_BRIDGE_ABI_VERSION
               + " Kagemusha proof backend is unavailable");
@@ -963,6 +1688,27 @@ public final class KagemushaRecursiveSpendProver {
     }
   }
 
+  private static void requireIosAppAttestAuthenticatorDataProjection(
+      final byte[] authenticatorData) {
+    if (authenticatorData.length < IOS_APP_ATTEST_AUTHENTICATOR_DATA_BYTES
+        || authenticatorData.length > IOS_APP_ATTEST_AUTHENTICATOR_DATA_MAX_BYTES) {
+      throw new IllegalStateException(
+          "native Kagemusha App Attest finalization returned invalid authenticator data");
+    }
+    final int flags = authenticatorData[32] & 0xff;
+    if ((flags & ~IOS_APP_ATTEST_EXTENSION_DATA_FLAG) != 0) {
+      throw new IllegalStateException(
+          "native Kagemusha App Attest finalization returned unsupported authenticator flags");
+    }
+    final boolean hasExtensions = (flags & IOS_APP_ATTEST_EXTENSION_DATA_FLAG) != 0;
+    if ((hasExtensions && authenticatorData.length == IOS_APP_ATTEST_AUTHENTICATOR_DATA_BYTES)
+        || (!hasExtensions
+            && authenticatorData.length != IOS_APP_ATTEST_AUTHENTICATOR_DATA_BYTES)) {
+      throw new IllegalStateException(
+          "native Kagemusha App Attest finalization returned inconsistent authenticator data");
+    }
+  }
+
   private static KagemushaScaledAmount amount(final byte[] atomic, final byte[] scale) {
     return KagemushaScaledAmount.fromAtomicUnits(
         new String(atomic, StandardCharsets.US_ASCII), integer(scale, "scale"));
@@ -981,6 +1727,86 @@ public final class KagemushaRecursiveSpendProver {
       return Long.parseLong(new String(value, StandardCharsets.US_ASCII));
     } catch (final RuntimeException failure) {
       throw new IllegalStateException("native Kagemusha " + field + " is invalid", failure);
+    }
+  }
+
+  private static List<byte[]> outputMembershipSiblings(
+      final byte[] flattened, final String field) {
+    if (flattened.length != CONFIDENTIAL_TREE_DEPTH * 32) {
+      throw new IllegalStateException(
+          "native Kagemusha " + field + " has an invalid sibling count");
+    }
+    final ArrayList<byte[]> siblings = new ArrayList<>(CONFIDENTIAL_TREE_DEPTH);
+    for (int index = 0; index < CONFIDENTIAL_TREE_DEPTH; index++) {
+      siblings.add(Arrays.copyOfRange(flattened, index * 32, (index + 1) * 32));
+    }
+    return siblings;
+  }
+
+  private static OutputMembershipPath outputMembershipPathFromNativeProjection(
+      final byte[][] fields,
+      final int leafIndex,
+      final int siblingsIndex,
+      final int directionsIndex,
+      final int rootIndex,
+      final String field) {
+    try {
+      return new OutputMembershipPath(
+          leafIndex,
+          outputMembershipSiblings(fields[siblingsIndex], field + ".siblings"),
+          fields[directionsIndex],
+          fields[rootIndex]);
+    } catch (final IllegalArgumentException failure) {
+      throw new IllegalStateException(
+          "native Kagemusha " + field + " is invalid", failure);
+    }
+  }
+
+  private static OutputMembershipLeafPaths outputMembershipLeafFromNativeProjection(
+      final byte[][] fields, final int offset, final String field) {
+    boolean anyPresent = false;
+    boolean allPresent = true;
+    for (int index = offset; index < offset + 7; index++) {
+      anyPresent |= fields[index].length != 0;
+      allPresent &= fields[index].length != 0;
+    }
+    if (!anyPresent) return null;
+    if (!allPresent) {
+      throw new IllegalStateException(
+          "native Kagemusha " + field + " is only partially present");
+    }
+    final int leafIndex = integer(fields[offset], field + ".leafIndex");
+    return new OutputMembershipLeafPaths(
+        outputMembershipPathFromNativeProjection(
+            fields, leafIndex, offset + 1, offset + 2, offset + 3, field + ".updatePath"),
+        outputMembershipPathFromNativeProjection(
+            fields, leafIndex, offset + 4, offset + 5, offset + 6,
+            field + ".membershipPath"));
+  }
+
+  private static OutputMembershipPaths outputMembershipPathsFromNativeProjection(
+      final byte[][] fields) {
+    requireFieldCount(fields, 21, "V4 output membership derivation");
+    final OutputMembershipLeafPaths recipient =
+        outputMembershipLeafFromNativeProjection(fields, 3, "recipient");
+    final OutputMembershipLeafPaths change =
+        outputMembershipLeafFromNativeProjection(fields, 10, "change");
+    if (fields[17].length == 0
+        || fields[18].length == 0
+        || fields[19].length == 0
+        || fields[20].length == 0) {
+      throw new IllegalStateException(
+          "native Kagemusha dummy output membership path is absent");
+    }
+    final int dummyLeafIndex = integer(fields[17], "dummy.leafIndex");
+    final OutputMembershipPath dummy = outputMembershipPathFromNativeProjection(
+        fields, dummyLeafIndex, 18, 19, 20, "dummy.path");
+    try {
+      return new OutputMembershipPaths(
+          fields[1], fields[2], recipient, change, dummy, fields[0]);
+    } catch (final IllegalArgumentException failure) {
+      throw new IllegalStateException(
+          "native Kagemusha V4 output membership derivation is invalid", failure);
     }
   }
 
@@ -1013,6 +1839,23 @@ public final class KagemushaRecursiveSpendProver {
         integer(fields[6], "maximumProofBytes"),
         longInteger(fields[7], "activationHeight"),
         fields[8].length == 0 ? null : longInteger(fields[8], "withdrawalHeight"));
+  }
+
+  private static AuthenticatedArtifactSet authenticatedArtifactSet(final byte[] archive) {
+    if (archive.length == 0) {
+      return null;
+    }
+    final byte[][] fields = nativeProjectAuthenticatedArtifactSetV4(archive);
+    requireFieldCount(fields, 8, "authenticated artifact-set projection");
+    return new AuthenticatedArtifactSet(
+        canonicalText(fields[0], "artifactGeneration"),
+        requireDigest(fields[1], "artifactManifestSha256"),
+        requireDigest(fields[2], "artifactReleasePolicySha256"),
+        requireDigest(fields[3], "artifactReleaseAttestationSha256"),
+        longInteger(fields[4], "artifactActivationHeight"),
+        longInteger(fields[5], "artifactWithdrawalHeight"),
+        integer(fields[6], "artifactMaximumProofBytes"),
+        integer(fields[7], "artifactAssetScale"));
   }
 
   private static boolean bool(final byte[] value, final String field) {
@@ -1072,7 +1915,7 @@ public final class KagemushaRecursiveSpendProver {
   }
 
   private static BranchProjection branchProjection(final ProjectionCursor cursor) {
-    final Bundle bundle = new Bundle(cursor.next("bundle"));
+    final BundleV4 bundle = new BundleV4(cursor.next("bundle"));
     final NoteMembershipWitness witness =
         new NoteMembershipWitness(cursor.next("membershipWitness"));
     final byte[] commitment = cursor.next("commitment");
@@ -1082,7 +1925,8 @@ public final class KagemushaRecursiveSpendProver {
     final int hopCount = integer(cursor.next("hopCount"), "hopCount");
     final int proofStepCount = integer(cursor.next("proofStepCount"), "proofStepCount");
     final byte[] bundleDigest = cursor.next("bundleDigest");
-    final ArtifactBinding artifactBinding = new ArtifactBinding(cursor.next("artifactBinding"));
+    final ArtifactBindingV4 artifactBinding =
+        new ArtifactBindingV4(cursor.next("artifactBinding"));
     final int claimCount = projectionCount(cursor.next("branchClaimCount"), "branchClaim");
     final List<BranchClaim> claims = new ArrayList<>(claimCount);
     for (int index = 0; index < claimCount; index++) {
@@ -1138,23 +1982,28 @@ public final class KagemushaRecursiveSpendProver {
           field + " must contain 1.." + maximumBytes + " bytes");
     }
     final byte[] archive = Arrays.copyOf(value, value.length);
-    final NoritoHeader.DecodeResult decoded;
     try {
-      decoded = NoritoHeader.decode(archive, SchemaHash.hash16(schema));
-    } catch (final RuntimeException failure) {
-      throw new IllegalArgumentException(field + " must contain canonical " + schema, failure);
+      final NoritoHeader.DecodeResult decoded;
+      try {
+        decoded = NoritoHeader.decode(archive, SchemaHash.hash16(schema));
+      } catch (final RuntimeException failure) {
+        throw new IllegalArgumentException(field + " must contain canonical " + schema, failure);
+      }
+      final NoritoHeader header = decoded.header();
+      if (header.compression() != NoritoHeader.COMPRESSION_NONE
+          || header.flags() != NoritoHeader.COMPACT_LEN
+          || decoded.payload().length == 0
+          || archive.length != NoritoHeader.HEADER_LENGTH + decoded.payload().length
+          || !Arrays.equals(
+              header.encode(), Arrays.copyOfRange(archive, 0, NoritoHeader.HEADER_LENGTH))) {
+        throw new IllegalArgumentException(field + " must use canonical compact Norito framing");
+      }
+      header.validateChecksum(decoded.payload());
+      return archive;
+    } catch (final RuntimeException | Error failure) {
+      Arrays.fill(archive, (byte) 0);
+      throw failure;
     }
-    final NoritoHeader header = decoded.header();
-    if (header.compression() != NoritoHeader.COMPRESSION_NONE
-        || header.flags() != NoritoHeader.COMPACT_LEN
-        || decoded.payload().length == 0
-        || archive.length != NoritoHeader.HEADER_LENGTH + decoded.payload().length
-        || !Arrays.equals(
-            header.encode(), Arrays.copyOfRange(archive, 0, NoritoHeader.HEADER_LENGTH))) {
-      throw new IllegalArgumentException(field + " must use canonical compact Norito framing");
-    }
-    header.validateChecksum(decoded.payload());
-    return archive;
   }
 
   /** Immutable canonical Norito archive; proof and accumulator bytes remain opaque. */
@@ -1212,7 +2061,7 @@ public final class KagemushaRecursiveSpendProver {
           archive,
           "KagemushaRecipientPaymentRequestV2",
           "recipientPaymentRequest",
-          MAX_PEER_ARCHIVE_BYTES);
+          MAX_PEER_ARCHIVE_BYTES_V2);
     }
   }
 
@@ -1220,9 +2069,9 @@ public final class KagemushaRecursiveSpendProver {
     private PeerPayment(final byte[] archive) {
       super(
           archive,
-          "KagemushaRecursiveSpendPeerPaymentV2",
+          "KagemushaRecursiveSpendPeerPaymentV4",
           "peerPayment",
-          MAX_PEER_ARCHIVE_BYTES);
+          MAX_PEER_ARCHIVE_BYTES_V4);
     }
   }
 
@@ -1232,7 +2081,7 @@ public final class KagemushaRecursiveSpendProver {
           archive,
           "KagemushaReceiverAcknowledgementV2",
           "receiverAcknowledgement",
-          MAX_PEER_ARCHIVE_BYTES);
+          MAX_PEER_ARCHIVE_BYTES_V2);
     }
   }
 
@@ -1243,14 +2092,155 @@ public final class KagemushaRecursiveSpendProver {
           archive,
           "KagemushaNoteMembershipWitnessV2",
           "noteMembershipWitness",
-          MAX_PEER_ARCHIVE_BYTES);
+          MAX_PEER_ARCHIVE_BYTES_V2);
     }
   }
 
-  /** Encrypted local note opening; never send this archive to Torii or a peer. */
-  public static final class NoteOpening extends CanonicalArchive {
+  /**
+   * Encrypted local note opening; never send this archive to Torii or a peer.
+   *
+   * <p>Close this value, preferably with try-with-resources, as soon as ownership ends so its
+   * secret archive is zeroized deterministically.</p>
+   */
+  public static final class NoteOpening extends CanonicalArchive implements AutoCloseable {
     private NoteOpening(final byte[] archive) {
       super(archive, "KagemushaNoteOpeningV2", "noteOpening", MAX_LOCAL_REQUEST_ARCHIVE_BYTES);
+    }
+
+    /** Zeroize this opening. Repeated closes are harmless. */
+    @Override
+    public void close() {
+      destroy();
+    }
+  }
+
+  private static final class ChangeOpeningOwner implements AutoCloseable {
+    private NoteOpening opening;
+    private boolean transferred;
+    private boolean closed;
+
+    private ChangeOpeningOwner(final NoteOpening opening) {
+      this.opening = opening;
+    }
+
+    private synchronized NoteOpening take() {
+      if (closed) throw new IllegalStateException("change-opening owner has been closed");
+      if (transferred) {
+        throw new IllegalStateException("change opening has already been transferred");
+      }
+      transferred = true;
+      final NoteOpening ownedOpening = opening;
+      opening = null;
+      return ownedOpening;
+    }
+
+    @Override
+    public synchronized void close() {
+      if (closed) return;
+      if (opening != null) {
+        opening.destroy();
+        opening = null;
+      }
+      closed = true;
+    }
+  }
+
+  /** Owns native-derived redemption change secrets until {@link #takeOpening()} moves the opening. */
+  public static final class RedemptionChangePreparationV4 implements AutoCloseable {
+    private NoteOpening opening;
+    private final byte[] rho;
+    private final byte[] diversifier;
+    private final byte[] commitment;
+    private final byte[] spendNullifier;
+    private final KagemushaScaledAmount amount;
+    private boolean closed;
+
+    RedemptionChangePreparationV4(
+        final NoteOpening opening,
+        final byte[] rho,
+        final byte[] diversifier,
+        final byte[] commitment,
+        final byte[] spendNullifier,
+        final KagemushaScaledAmount amount) {
+      final NoteOpening ownedOpening = Objects.requireNonNull(opening, "opening");
+      byte[] rhoCopy = null;
+      byte[] diversifierCopy = null;
+      byte[] commitmentCopy = null;
+      byte[] spendNullifierCopy = null;
+      try {
+        if (ownedOpening.isDestroyed()) {
+          throw new IllegalStateException("opening has already been destroyed");
+        }
+        final KagemushaScaledAmount requiredAmount = Objects.requireNonNull(amount, "amount");
+        rhoCopy = requireDigest(rho, "rho");
+        diversifierCopy = requireDigest(diversifier, "diversifier");
+        commitmentCopy = requireDigest(commitment, "commitment");
+        spendNullifierCopy = requireDigest(spendNullifier, "spendNullifier");
+        if (Arrays.equals(rhoCopy, diversifierCopy)) {
+          throw new IllegalStateException(
+              "native Kagemusha redemption opening coordinates collide");
+        }
+        this.opening = ownedOpening;
+        this.rho = rhoCopy;
+        this.diversifier = diversifierCopy;
+        this.commitment = commitmentCopy;
+        this.spendNullifier = spendNullifierCopy;
+        this.amount = requiredAmount;
+      } catch (final RuntimeException | Error failure) {
+        if (spendNullifierCopy != null) Arrays.fill(spendNullifierCopy, (byte) 0);
+        if (commitmentCopy != null) Arrays.fill(commitmentCopy, (byte) 0);
+        if (diversifierCopy != null) Arrays.fill(diversifierCopy, (byte) 0);
+        if (rhoCopy != null) Arrays.fill(rhoCopy, (byte) 0);
+        ownedOpening.destroy();
+        throw failure;
+      }
+    }
+
+    /** Move the opening to a request/result owner. This succeeds exactly once. */
+    public synchronized NoteOpening takeOpening() {
+      requireOpen();
+      if (opening == null) {
+        throw new IllegalStateException(
+            "redemption change opening has already been transferred");
+      }
+      final NoteOpening ownedOpening = opening;
+      opening = null;
+      return ownedOpening;
+    }
+    public synchronized byte[] rho() { requireOpen(); return Arrays.copyOf(rho, rho.length); }
+    public synchronized byte[] diversifier() {
+      requireOpen();
+      return Arrays.copyOf(diversifier, diversifier.length);
+    }
+    public synchronized byte[] commitment() {
+      requireOpen();
+      return Arrays.copyOf(commitment, commitment.length);
+    }
+    public synchronized byte[] spendNullifier() {
+      requireOpen();
+      return Arrays.copyOf(spendNullifier, spendNullifier.length);
+    }
+    public synchronized KagemushaScaledAmount amount() {
+      requireOpen();
+      return amount;
+    }
+
+    @Override
+    public synchronized void close() {
+      if (closed) return;
+      if (opening != null) {
+        opening.destroy();
+        opening = null;
+      }
+      Arrays.fill(rho, (byte) 0);
+      Arrays.fill(diversifier, (byte) 0);
+      Arrays.fill(commitment, (byte) 0);
+      Arrays.fill(spendNullifier, (byte) 0);
+      closed = true;
+    }
+
+    private void requireOpen() {
+      if (closed) throw new IllegalStateException("redemption change preparation has been destroyed");
     }
   }
 
@@ -1260,21 +2250,11 @@ public final class KagemushaRecursiveSpendProver {
           archive,
           "KagemushaRecipientPaymentRequestSigningPayloadV2",
           "recipientRequestPayload",
-          MAX_PEER_ARCHIVE_BYTES);
+          MAX_PEER_ARCHIVE_BYTES_V2);
     }
   }
 
-  public static final class Bundle extends CanonicalArchive {
-    private Bundle(final byte[] archive) {
-      super(
-          archive,
-          "KagemushaRecursiveSpendBundleV2",
-          "bundle",
-          MAX_LOCAL_REQUEST_ARCHIVE_BYTES);
-    }
-  }
-
-  /** Opaque ABI-20 recursive state; it is never decoded as a V2/V3 bundle. */
+  /** Opaque ABI-20 recursive state. */
   public static final class BundleV4 extends CanonicalArchive {
     private BundleV4(final byte[] archive) {
       super(
@@ -1292,7 +2272,7 @@ public final class KagemushaRecursiveSpendProver {
           archive,
           "KagemushaRecursiveSpendBranchClaimV2",
           "branchClaim",
-          MAX_PEER_ARCHIVE_BYTES);
+          MAX_PEER_ARCHIVE_BYTES_V2);
     }
 
     public boolean conflictsWith(final BranchClaim other) {
@@ -1302,27 +2282,29 @@ public final class KagemushaRecursiveSpendProver {
     }
   }
 
-  public static final class ArtifactBinding extends CanonicalArchive {
-    private ArtifactBinding(final byte[] archive) {
-      super(archive, "KagemushaRecursiveSpendArtifactBindingV3", "artifactBinding", MAX_MANIFEST_BYTES);
+  public static final class ArtifactBindingV4 extends CanonicalArchive {
+    private ArtifactBindingV4(final byte[] archive) {
+      super(archive, "KagemushaRecursiveSpendArtifactBindingV4", "artifactBinding", MAX_MANIFEST_BYTES);
     }
   }
 
   public static final class TopUpUnsigned extends CanonicalArchive {
     private TopUpUnsigned(final byte[] archive) {
-      super(archive, "KagemushaRecursiveSpendTopUpUnsignedV2", "topUpUnsigned", MAX_TORII_REQUEST_BYTES);
+      super(
+          archive,
+          "KagemushaRecursiveSpendTopUpUnsignedV4",
+          "topUpUnsigned",
+          MAX_TORII_TOP_UP_REQUEST_BYTES_V4);
     }
   }
 
   public static final class TopUpRequest extends CanonicalArchive {
     TopUpRequest(final byte[] archive) {
-      super(archive, "iroha.torii.v1.offline.top_up.request", "topUpRequest", MAX_TORII_REQUEST_BYTES);
-    }
-  }
-
-  public static final class TopUpAnchor extends CanonicalArchive {
-    private TopUpAnchor(final byte[] archive) {
-      super(archive, "KagemushaRecursiveSpendTopUpAnchorV2", "topUpAnchor", MAX_TORII_RESPONSE_BYTES);
+      super(
+          archive,
+          "iroha.torii.v1.offline.top_up.request",
+          "topUpRequest",
+          MAX_TORII_TOP_UP_REQUEST_BYTES_V4);
     }
   }
 
@@ -1364,21 +2346,54 @@ public final class KagemushaRecursiveSpendProver {
     }
   }
 
-  public static final class RedeemSubmissionRequest extends CanonicalArchive {
-    RedeemSubmissionRequest(final byte[] archive) {
-      super(archive, "iroha.torii.v1.offline.redeem.request", "redeemSubmissionRequest", MAX_TORII_REQUEST_BYTES);
+  /** Complete bounded origin-finality inventory required to spend or verify one V4 bundle. */
+  public static final class TopUpProvenanceV4 extends CanonicalArchive {
+    private TopUpProvenanceV4(final byte[] archive) {
+      super(
+          archive,
+          "KagemushaRecursiveSpendTopUpProvenanceV4",
+          "topUpProvenanceV4",
+          MAX_TOP_UP_PROVENANCE_ARCHIVE_BYTES_V4);
     }
   }
 
-  public static final class RequestAuthorizationTemplate extends CanonicalArchive {
-    private RequestAuthorizationTemplate(final byte[] archive) {
-      super(archive, "KagemushaRequestAuthorizationV2", "requestAuthorizationTemplate", MAX_TORII_REQUEST_BYTES);
+  public static final class RedeemSubmissionRequest extends CanonicalArchive {
+    RedeemSubmissionRequest(final byte[] archive) {
+      super(
+          archive,
+          "iroha.torii.v1.offline.redeem.request",
+          "redeemSubmissionRequest",
+          MAX_TORII_REDEEM_REQUEST_BYTES_V4);
+    }
+  }
+
+  public static final class RedeemUnsignedV4 extends CanonicalArchive {
+    private RedeemUnsignedV4(final byte[] archive) {
+      super(
+          archive,
+          "KagemushaRecursiveSpendRedeemUnsignedV4",
+          "redeemUnsignedV4",
+          MAX_TORII_REDEEM_REQUEST_BYTES_V4);
+    }
+  }
+
+  public static final class RequestAuthorizationPreparationArchive extends CanonicalArchive {
+    private RequestAuthorizationPreparationArchive(final byte[] archive) {
+      super(
+          archive,
+          "KagemushaRequestAuthorizationPreparationV2",
+          "requestAuthorizationPreparation",
+          MAX_REQUEST_AUTHORIZATION_BYTES);
     }
   }
 
   public static final class RequestAuthorization extends CanonicalArchive {
     private RequestAuthorization(final byte[] archive) {
-      super(archive, "KagemushaRequestAuthorizationV2", "requestAuthorization", MAX_TORII_REQUEST_BYTES);
+      super(
+          archive,
+          "KagemushaRequestAuthorizationV2",
+          "requestAuthorization",
+          MAX_REQUEST_AUTHORIZATION_BYTES);
     }
   }
 
@@ -1455,6 +2470,17 @@ public final class KagemushaRecursiveSpendProver {
       final ZkMerklePathResponse.Entry path = response.requireNextZeroPath();
       return new TopUpZeroPath(
           path.leafIndex(), path.siblingBytes(), path.directions(), path.rootBytes());
+    }
+  }
+
+  /** Canonical next-zero cursor persisted atomically with every restored ABI-20 branch. */
+  public static final class OutputMembershipFrontierV4 extends CanonicalArchive {
+    private OutputMembershipFrontierV4(final byte[] archive) {
+      super(
+          archive,
+          "connect_norito_bridge::KagemushaOutputMembershipFrontierV4",
+          "outputMembershipFrontierV4",
+          MAX_OUTPUT_MEMBERSHIP_FRONTIER_ARCHIVE_BYTES_V4);
     }
   }
 
@@ -1577,6 +2603,7 @@ public final class KagemushaRecursiveSpendProver {
     private final OutputMembershipLeafPaths recipient;
     private final OutputMembershipLeafPaths change;
     private final OutputMembershipPath dummyPath;
+    private final byte[] canonicalArchive;
 
     public OutputMembershipPaths(
         final byte[] initialRoot,
@@ -1584,6 +2611,16 @@ public final class KagemushaRecursiveSpendProver {
         final OutputMembershipLeafPaths recipient,
         final OutputMembershipLeafPaths change,
         final OutputMembershipPath dummyPath) {
+      this(initialRoot, finalRoot, recipient, change, dummyPath, null);
+    }
+
+    private OutputMembershipPaths(
+        final byte[] initialRoot,
+        final byte[] finalRoot,
+        final OutputMembershipLeafPaths recipient,
+        final OutputMembershipLeafPaths change,
+        final OutputMembershipPath dummyPath,
+        final byte[] canonicalArchive) {
       this.initialRoot = requireDigest(initialRoot, "initialRoot");
       this.finalRoot = requireDigest(finalRoot, "finalRoot");
       this.recipient = recipient;
@@ -1618,6 +2655,13 @@ public final class KagemushaRecursiveSpendProver {
         throw new IllegalArgumentException(
             "change output must immediately follow the recipient output");
       }
+      final int lastOutputLeafIndex = change != null
+          ? change.leafIndex()
+          : recipient.leafIndex();
+      if (dummyPath.leafIndex() != lastOutputLeafIndex + 1) {
+        throw new IllegalArgumentException(
+            "dummyPath must immediately follow the final output");
+      }
       if ((recipient != null && recipient.leafIndex() == dummyPath.leafIndex())
           || (change != null && change.leafIndex() == dummyPath.leafIndex())
           || (recipient != null && change != null
@@ -1625,6 +2669,11 @@ public final class KagemushaRecursiveSpendProver {
         throw new IllegalArgumentException(
             "output and dummy paths must address distinct leaves");
       }
+      this.canonicalArchive = canonicalArchive == null ? null : requireCanonicalArchive(
+          canonicalArchive,
+          "connect_norito_bridge::KagemushaOutputMembershipPathsV4",
+          "outputMembershipPathsV4",
+          MAX_OUTPUT_MEMBERSHIP_PATHS_ARCHIVE_BYTES_V4);
     }
 
     public byte[] initialRoot() { return Arrays.copyOf(initialRoot, initialRoot.length); }
@@ -1638,6 +2687,9 @@ public final class KagemushaRecursiveSpendProver {
     public OutputMembershipPath dummyPath() { return dummyPath; }
 
     private byte[] nativeArchive() {
+      if (canonicalArchive != null) {
+        return Arrays.copyOf(canonicalArchive, canonicalArchive.length);
+      }
       requireArtifactBridge();
       final byte[][] recipientFields =
           recipient == null ? new byte[0][] : recipient.nativeFields();
@@ -1663,7 +2715,8 @@ public final class KagemushaRecursiveSpendProver {
     }
   }
 
-  public static final class InitRequestV4 extends CanonicalArchive {
+  /** Local secret-bearing initialization input. Close it if it is not submitted. */
+  public static final class InitRequestV4 extends CanonicalArchive implements AutoCloseable {
     private InitRequestV4(final byte[] archive) {
       super(
           archive,
@@ -1671,11 +2724,17 @@ public final class KagemushaRecursiveSpendProver {
           "initRequest",
           MAX_LOCAL_REQUEST_ARCHIVE_BYTES);
     }
+
+    /** Zeroize an unconsumed initialization request. Repeated closes are harmless. */
+    @Override
+    public void close() {
+      destroy();
+    }
   }
 
   /** Local secret-bearing append input. Native code consumes and wipes its openings. */
   public static final class AppendRequestV4 extends CanonicalArchive implements AutoCloseable {
-    private final NoteOpening changeOpening;
+    private final ChangeOpeningOwner changeOpeningOwner;
 
     private AppendRequestV4(final byte[] archive, final NoteOpening changeOpening) {
       super(
@@ -1683,11 +2742,19 @@ public final class KagemushaRecursiveSpendProver {
           "KagemushaRecursiveSpendAppendLocalRequestV4",
           "appendRequest",
           MAX_LOCAL_REQUEST_ARCHIVE_BYTES);
-      this.changeOpening = changeOpening;
+      this.changeOpeningOwner = new ChangeOpeningOwner(changeOpening);
+    }
+
+    synchronized NoteOpening takeChangeOpening() {
+      if (isDestroyed()) throw new IllegalStateException("append request has been closed");
+      return changeOpeningOwner.take();
     }
 
     @Override
-    public void close() { destroy(); }
+    public synchronized void close() {
+      destroy();
+      changeOpeningOwner.close();
+    }
   }
 
   public static final class VerifyRequestV4 extends CanonicalArchive {
@@ -1702,7 +2769,7 @@ public final class KagemushaRecursiveSpendProver {
 
   /** Local secret-bearing redemption input. Native code consumes and wipes its openings. */
   public static final class RedeemRequestV4 extends CanonicalArchive implements AutoCloseable {
-    private final NoteOpening changeOpening;
+    private final ChangeOpeningOwner changeOpeningOwner;
 
     private RedeemRequestV4(final byte[] archive, final NoteOpening changeOpening) {
       super(
@@ -1710,11 +2777,19 @@ public final class KagemushaRecursiveSpendProver {
           "KagemushaRecursiveSpendRedeemLocalRequestV4",
           "redeemRequest",
           MAX_LOCAL_REQUEST_ARCHIVE_BYTES);
-      this.changeOpening = changeOpening;
+      this.changeOpeningOwner = new ChangeOpeningOwner(changeOpening);
+    }
+
+    synchronized NoteOpening takeChangeOpening() {
+      if (isDestroyed()) throw new IllegalStateException("redeem request has been closed");
+      return changeOpeningOwner.take();
     }
 
     @Override
-    public void close() { destroy(); }
+    public synchronized void close() {
+      destroy();
+      changeOpeningOwner.close();
+    }
   }
 
   public static final class InitResultV4 extends CanonicalArchive {
@@ -1727,8 +2802,8 @@ public final class KagemushaRecursiveSpendProver {
     }
   }
 
-  public static final class SplitResultV4 extends CanonicalArchive {
-    private final NoteOpening changeOpening;
+  public static final class SplitResultV4 extends CanonicalArchive implements AutoCloseable {
+    private final ChangeOpeningOwner changeOpeningOwner;
 
     private SplitResultV4(final byte[] archive, final NoteOpening changeOpening) {
       super(
@@ -1736,7 +2811,18 @@ public final class KagemushaRecursiveSpendProver {
           "KagemushaRecursiveSpendSplitResultV4",
           "splitResult",
           MAX_LOCAL_RESULT_ARCHIVE_BYTES);
-      this.changeOpening = changeOpening;
+      this.changeOpeningOwner = new ChangeOpeningOwner(changeOpening);
+    }
+
+    synchronized NoteOpening takeChangeOpening() {
+      if (isDestroyed()) throw new IllegalStateException("split result has been closed");
+      return changeOpeningOwner.take();
+    }
+
+    @Override
+    public synchronized void close() {
+      destroy();
+      changeOpeningOwner.close();
     }
   }
 
@@ -1750,8 +2836,8 @@ public final class KagemushaRecursiveSpendProver {
     }
   }
 
-  public static final class RedeemBuildResultV4 extends CanonicalArchive {
-    private final NoteOpening changeOpening;
+  public static final class RedeemBuildResultV4 extends CanonicalArchive implements AutoCloseable {
+    private final ChangeOpeningOwner changeOpeningOwner;
 
     private RedeemBuildResultV4(final byte[] archive, final NoteOpening changeOpening) {
       super(
@@ -1759,7 +2845,18 @@ public final class KagemushaRecursiveSpendProver {
           "KagemushaRecursiveSpendRedeemBuildResultV4",
           "redeemBuildResult",
           MAX_LOCAL_RESULT_ARCHIVE_BYTES);
-      this.changeOpening = changeOpening;
+      this.changeOpeningOwner = new ChangeOpeningOwner(changeOpening);
+    }
+
+    synchronized NoteOpening takeChangeOpening() {
+      if (isDestroyed()) throw new IllegalStateException("redeem result has been closed");
+      return changeOpeningOwner.take();
+    }
+
+    @Override
+    public synchronized void close() {
+      destroy();
+      changeOpeningOwner.close();
     }
   }
 
@@ -1778,12 +2875,30 @@ public final class KagemushaRecursiveSpendProver {
         final byte[] commitment,
         final byte[] nullifier,
         final KagemushaScaledAmount amount) {
-      this.payload = payload;
-      this.signingBytes = copyRequired(signingBytes, "signingBytes");
-      this.opening = opening;
-      this.commitment = requireDigest(commitment, "commitment");
-      this.nullifier = requireDigest(nullifier, "nullifier");
-      this.amount = amount;
+      final NoteOpening ownedOpening = Objects.requireNonNull(opening, "opening");
+      byte[] signingBytesCopy = null;
+      byte[] commitmentCopy = null;
+      byte[] nullifierCopy = null;
+      try {
+        final RecipientRequestPayload requiredPayload =
+            Objects.requireNonNull(payload, "payload");
+        final KagemushaScaledAmount requiredAmount = Objects.requireNonNull(amount, "amount");
+        signingBytesCopy = copyRequired(signingBytes, "signingBytes");
+        commitmentCopy = requireDigest(commitment, "commitment");
+        nullifierCopy = requireDigest(nullifier, "nullifier");
+        this.payload = requiredPayload;
+        this.signingBytes = signingBytesCopy;
+        this.opening = ownedOpening;
+        this.commitment = commitmentCopy;
+        this.nullifier = nullifierCopy;
+        this.amount = requiredAmount;
+      } catch (final RuntimeException | Error failure) {
+        SecretArchiveWiper.wipe(nullifierCopy);
+        SecretArchiveWiper.wipe(commitmentCopy);
+        SecretArchiveWiper.wipe(signingBytesCopy);
+        ownedOpening.close();
+        throw failure;
+      }
     }
 
     public byte[] signingBytes() { return Arrays.copyOf(signingBytes, signingBytes.length); }
@@ -1881,32 +2996,30 @@ public final class KagemushaRecursiveSpendProver {
   }
 
   public static final class RequestAuthorizationPreparation {
-    private final RequestAuthorizationTemplate template;
+    private final RequestAuthorizationPreparationArchive archive;
     private final byte[] signingBytes;
     private final byte[] operationId;
     private final byte[] payloadDigest;
-    private final byte[] appAttestEvidenceSha256;
+    private final byte[] registrationHash;
 
     private RequestAuthorizationPreparation(
-        final RequestAuthorizationTemplate template,
+        final RequestAuthorizationPreparationArchive archive,
         final byte[] signingBytes,
         final byte[] operationId,
         final byte[] payloadDigest,
-        final byte[] appAttestEvidenceSha256) {
-      this.template = template;
+        final byte[] registrationHash) {
+      this.archive = archive;
       this.signingBytes = copyRequired(signingBytes, "signingBytes");
       this.operationId = requireDigest(operationId, "operationId");
       this.payloadDigest = requireDigest(payloadDigest, "payloadDigest");
-      this.appAttestEvidenceSha256 = appAttestEvidenceSha256 == null
-          ? null : requireDigest(appAttestEvidenceSha256, "appAttestEvidenceSha256");
+      this.registrationHash = requireDigest(registrationHash, "registrationHash");
     }
 
     public byte[] signingBytes() { return Arrays.copyOf(signingBytes, signingBytes.length); }
     public byte[] operationId() { return Arrays.copyOf(operationId, operationId.length); }
     public byte[] payloadDigest() { return Arrays.copyOf(payloadDigest, payloadDigest.length); }
-    public byte[] appAttestEvidenceSha256() {
-      return appAttestEvidenceSha256 == null ? null
-          : Arrays.copyOf(appAttestEvidenceSha256, appAttestEvidenceSha256.length);
+    public byte[] registrationHash() {
+      return Arrays.copyOf(registrationHash, registrationHash.length);
     }
   }
 
@@ -1933,16 +3046,42 @@ public final class KagemushaRecursiveSpendProver {
         final byte[] operationId,
         final KagemushaScaledAmount amount,
         final int leafIndex) {
-      this.unsigned = unsigned;
-      this.authorizationDigest = requireDigest(authorizationDigest, "authorizationDigest");
-      this.opening = opening;
-      this.noteCommitment = requireDigest(noteCommitment, "noteCommitment");
-      this.spendNullifier = requireDigest(spendNullifier, "spendNullifier");
-      this.initialRoot = requireDigest(initialRoot, "initialRoot");
-      this.finalizedRoot = requireDigest(finalizedRoot, "finalizedRoot");
-      this.operationId = requireDigest(operationId, "operationId");
-      this.amount = amount;
-      this.leafIndex = leafIndex;
+      final NoteOpening ownedOpening = Objects.requireNonNull(opening, "opening");
+      byte[] authorizationDigestCopy = null;
+      byte[] noteCommitmentCopy = null;
+      byte[] spendNullifierCopy = null;
+      byte[] initialRootCopy = null;
+      byte[] finalizedRootCopy = null;
+      byte[] operationIdCopy = null;
+      try {
+        final TopUpUnsigned requiredUnsigned = Objects.requireNonNull(unsigned, "unsigned");
+        final KagemushaScaledAmount requiredAmount = Objects.requireNonNull(amount, "amount");
+        authorizationDigestCopy = requireDigest(authorizationDigest, "authorizationDigest");
+        noteCommitmentCopy = requireDigest(noteCommitment, "noteCommitment");
+        spendNullifierCopy = requireDigest(spendNullifier, "spendNullifier");
+        initialRootCopy = requireDigest(initialRoot, "initialRoot");
+        finalizedRootCopy = requireDigest(finalizedRoot, "finalizedRoot");
+        operationIdCopy = requireDigest(operationId, "operationId");
+        this.unsigned = requiredUnsigned;
+        this.authorizationDigest = authorizationDigestCopy;
+        this.opening = ownedOpening;
+        this.noteCommitment = noteCommitmentCopy;
+        this.spendNullifier = spendNullifierCopy;
+        this.initialRoot = initialRootCopy;
+        this.finalizedRoot = finalizedRootCopy;
+        this.operationId = operationIdCopy;
+        this.amount = requiredAmount;
+        this.leafIndex = leafIndex;
+      } catch (final RuntimeException | Error failure) {
+        SecretArchiveWiper.wipe(operationIdCopy);
+        SecretArchiveWiper.wipe(finalizedRootCopy);
+        SecretArchiveWiper.wipe(initialRootCopy);
+        SecretArchiveWiper.wipe(spendNullifierCopy);
+        SecretArchiveWiper.wipe(noteCommitmentCopy);
+        SecretArchiveWiper.wipe(authorizationDigestCopy);
+        ownedOpening.close();
+        throw failure;
+      }
     }
 
     public TopUpUnsigned unsigned() { return unsigned; }
@@ -1973,7 +3112,7 @@ public final class KagemushaRecursiveSpendProver {
   }
 
   public static class BranchProjection {
-    private final Bundle bundle;
+    private final BundleV4 bundle;
     private final NoteMembershipWitness membershipWitness;
     private final byte[] commitment;
     private final byte[] spendNullifier;
@@ -1981,11 +3120,11 @@ public final class KagemushaRecursiveSpendProver {
     private final int hopCount;
     private final int proofStepCount;
     private final byte[] bundleDigest;
-    private final ArtifactBinding artifactBinding;
+    private final ArtifactBindingV4 artifactBinding;
     private final List<BranchClaim> branchClaims;
 
     private BranchProjection(
-        final Bundle bundle,
+        final BundleV4 bundle,
         final NoteMembershipWitness membershipWitness,
         final byte[] commitment,
         final byte[] spendNullifier,
@@ -1993,7 +3132,7 @@ public final class KagemushaRecursiveSpendProver {
         final int hopCount,
         final int proofStepCount,
         final byte[] bundleDigest,
-        final ArtifactBinding artifactBinding,
+        final ArtifactBindingV4 artifactBinding,
         final List<BranchClaim> branchClaims) {
       this.bundle = bundle;
       this.membershipWitness = membershipWitness;
@@ -2019,12 +3158,12 @@ public final class KagemushaRecursiveSpendProver {
       this.branchClaims = Collections.unmodifiableList(new ArrayList<>(branchClaims));
     }
 
-    public Bundle bundle() { return bundle; }
+    public BundleV4 bundle() { return bundle; }
     public NoteMembershipWitness membershipWitness() { return membershipWitness; }
     public byte[] commitment() { return Arrays.copyOf(commitment, commitment.length); }
     public byte[] spendNullifier() { return Arrays.copyOf(spendNullifier, spendNullifier.length); }
     public byte[] bundleDigest() { return Arrays.copyOf(bundleDigest, bundleDigest.length); }
-    public ArtifactBinding artifactBinding() { return artifactBinding; }
+    public ArtifactBindingV4 artifactBinding() { return artifactBinding; }
     public List<BranchClaim> branchClaims() { return branchClaims; }
     public boolean conflictsWith(final BranchProjection other) {
       Objects.requireNonNull(other, "other");
@@ -2040,71 +3179,92 @@ public final class KagemushaRecursiveSpendProver {
     public int proofStepCount() { return proofStepCount; }
   }
 
-  public static final class SpendableBranch extends BranchProjection {
-    private final NoteOpening opening;
-
-    private SpendableBranch(
-        final Bundle bundle,
-        final NoteMembershipWitness membershipWitness,
-        final NoteOpening opening,
-        final byte[] commitment,
-        final byte[] spendNullifier,
-        final KagemushaScaledAmount amount,
-        final int hopCount,
-        final int proofStepCount,
-        final byte[] bundleDigest,
-        final ArtifactBinding artifactBinding,
-        final List<BranchClaim> branchClaims) {
-      super(
-          bundle, membershipWitness, commitment, spendNullifier, amount, hopCount,
-          proofStepCount, bundleDigest, artifactBinding, branchClaims);
-      this.opening = Objects.requireNonNull(opening, "opening");
-    }
-
-    public NoteOpening opening() { return opening; }
-  }
-
   /** Secret-bearing local state used only by the genuine ABI-20 builders. */
-  public static final class SpendableBranchV4 {
+  public static final class SpendableBranchV4 implements AutoCloseable {
     private final BundleV4 bundle;
     private final NoteMembershipWitness membershipWitness;
     private final NoteOpening opening;
+    private final TopUpProvenanceV4 topUpProvenance;
+    private final OutputMembershipFrontierV4 frontier;
 
     private SpendableBranchV4(
         final BundleV4 bundle,
         final NoteMembershipWitness membershipWitness,
-        final NoteOpening opening) {
+        final NoteOpening opening,
+        final TopUpProvenanceV4 topUpProvenance,
+        final OutputMembershipFrontierV4 frontier) {
       this.bundle = Objects.requireNonNull(bundle, "bundle");
       this.membershipWitness = Objects.requireNonNull(membershipWitness, "membershipWitness");
       this.opening = Objects.requireNonNull(opening, "opening");
+      this.topUpProvenance = Objects.requireNonNull(topUpProvenance, "topUpProvenance");
+      this.frontier = Objects.requireNonNull(frontier, "frontier");
     }
 
     public BundleV4 bundle() { return bundle; }
     public NoteMembershipWitness membershipWitness() { return membershipWitness; }
     public NoteOpening opening() { return opening; }
+    public TopUpProvenanceV4 topUpProvenance() { return topUpProvenance; }
+    public OutputMembershipFrontierV4 frontier() { return frontier; }
+
+    /** Destroy the locally held secret opening; public proof artifacts remain immutable. */
+    @Override
+    public void close() {
+      opening.destroy();
+    }
   }
 
   public static final class PeerPaymentProjection {
     private final BranchProjection branch;
+    private final TopUpProvenanceV4 topUpProvenance;
     private final byte[] operationId;
     private final byte[] requestDigest;
 
     private PeerPaymentProjection(
-        final BranchProjection branch, final byte[] operationId, final byte[] requestDigest) {
+        final BranchProjection branch,
+        final TopUpProvenanceV4 topUpProvenance,
+        final byte[] operationId,
+        final byte[] requestDigest) {
       this.branch = Objects.requireNonNull(branch, "branch");
+      this.topUpProvenance = Objects.requireNonNull(topUpProvenance, "topUpProvenance");
       this.operationId = requireDigest(operationId, "operationId");
       this.requestDigest = requireDigest(requestDigest, "requestDigest");
     }
 
     public BranchProjection branch() { return branch; }
+    public TopUpProvenanceV4 topUpProvenance() { return topUpProvenance; }
     public byte[] operationId() { return Arrays.copyOf(operationId, operationId.length); }
     public byte[] requestDigest() { return Arrays.copyOf(requestDigest, requestDigest.length); }
+  }
+
+  public static final class InitProjectionV4 {
+    private final BranchProjection branch;
+    private final TopUpProvenanceV4 topUpProvenance;
+    private final byte[] publicStatementDigest;
+
+    private InitProjectionV4(
+        final BranchProjection branch,
+        final TopUpProvenanceV4 topUpProvenance,
+        final byte[] publicStatementDigest) {
+      this.branch = Objects.requireNonNull(branch, "branch");
+      this.topUpProvenance = Objects.requireNonNull(topUpProvenance, "topUpProvenance");
+      this.publicStatementDigest =
+          requireDigest(publicStatementDigest, "publicStatementDigest");
+    }
+
+    public BranchProjection branch() { return branch; }
+    public BundleV4 bundle() { return branch.bundle(); }
+    public TopUpProvenanceV4 topUpProvenance() { return topUpProvenance; }
+    public byte[] publicStatementDigest() {
+      return Arrays.copyOf(publicStatementDigest, publicStatementDigest.length);
+    }
   }
 
   public static final class SplitProjection {
     private final PeerPayment peerPayment;
     private final BranchProjection recipient;
     private final BranchProjection change;
+    private final TopUpProvenanceV4 recipientTopUpProvenance;
+    private final TopUpProvenanceV4 changeTopUpProvenance;
     private final byte[] operationId;
     private final byte[] requestDigest;
     private final byte[] splitBindingDigest;
@@ -2113,12 +3273,21 @@ public final class KagemushaRecursiveSpendProver {
         final PeerPayment peerPayment,
         final BranchProjection recipient,
         final BranchProjection change,
+        final TopUpProvenanceV4 recipientTopUpProvenance,
+        final TopUpProvenanceV4 changeTopUpProvenance,
         final byte[] operationId,
         final byte[] requestDigest,
         final byte[] splitBindingDigest) {
       this.peerPayment = peerPayment;
       this.recipient = recipient;
       this.change = change;
+      this.recipientTopUpProvenance =
+          Objects.requireNonNull(recipientTopUpProvenance, "recipientTopUpProvenance");
+      if ((change == null) != (changeTopUpProvenance == null)) {
+        throw new IllegalStateException(
+            "native Kagemusha change provenance does not match change projection");
+      }
+      this.changeTopUpProvenance = changeTopUpProvenance;
       this.operationId = requireDigest(operationId, "operationId");
       this.requestDigest = requireDigest(requestDigest, "requestDigest");
       this.splitBindingDigest = requireDigest(splitBindingDigest, "splitBindingDigest");
@@ -2127,6 +3296,8 @@ public final class KagemushaRecursiveSpendProver {
     public PeerPayment peerPayment() { return peerPayment; }
     public BranchProjection recipient() { return recipient; }
     public BranchProjection change() { return change; }
+    public TopUpProvenanceV4 recipientTopUpProvenance() { return recipientTopUpProvenance; }
+    public TopUpProvenanceV4 changeTopUpProvenance() { return changeTopUpProvenance; }
     public byte[] operationId() { return Arrays.copyOf(operationId, operationId.length); }
     public byte[] requestDigest() { return Arrays.copyOf(requestDigest, requestDigest.length); }
     public byte[] splitBindingDigest() { return Arrays.copyOf(splitBindingDigest, splitBindingDigest.length); }
@@ -2144,7 +3315,7 @@ public final class KagemushaRecursiveSpendProver {
     public final int proofStepCount;
     private final byte[] bundleDigest;
     public final String assetDefinitionId;
-    private final ArtifactBinding artifactBinding;
+    private final ArtifactBindingV4 artifactBinding;
     private final byte[] requestDigest;
     private final byte[] outputBindingDigest;
     public final String verifierBackend;
@@ -2162,7 +3333,7 @@ public final class KagemushaRecursiveSpendProver {
         final byte[] spendNullifier,
         final KagemushaScaledAmount amount, final int hopCount, final int proofStepCount,
         final byte[] bundleDigest, final String assetDefinitionId,
-        final ArtifactBinding artifactBinding, final byte[] requestDigest,
+        final ArtifactBindingV4 artifactBinding, final byte[] requestDigest,
         final byte[] outputBindingDigest,
         final String verifierBackend, final String verifierName, final String verifierCircuitId,
         final Long verifierActivationHeight, final Long verifierWithdrawalHeight,
@@ -2209,30 +3380,38 @@ public final class KagemushaRecursiveSpendProver {
     public byte[] spendNullifier() { return Arrays.copyOf(spendNullifier, spendNullifier.length); }
     public KagemushaScaledAmount amount() { return amount; }
     public byte[] bundleDigest() { return Arrays.copyOf(bundleDigest, bundleDigest.length); }
-    public ArtifactBinding artifactBinding() { return artifactBinding; }
+    public ArtifactBindingV4 artifactBinding() { return artifactBinding; }
     public byte[] requestDigest() { return Arrays.copyOf(requestDigest, requestDigest.length); }
     public byte[] outputBindingDigest() { return Arrays.copyOf(outputBindingDigest, outputBindingDigest.length); }
     public List<BranchClaim> branchClaims() { return branchClaims; }
   }
 
   public static final class RedeemBuildProjection {
-    private final byte[] unsignedRequest;
+    private final RedeemUnsignedV4 unsigned;
     private final byte[] authorizationDigest;
     private final BranchProjection change;
+    private final TopUpProvenanceV4 changeTopUpProvenance;
     private final byte[] operationId;
 
     private RedeemBuildProjection(
-        final byte[] unsignedRequest, final byte[] authorizationDigest,
-        final BranchProjection change, final byte[] operationId) {
-      this.unsignedRequest = copyRequired(unsignedRequest, "unsignedRequest");
+        final RedeemUnsignedV4 unsigned, final byte[] authorizationDigest,
+        final BranchProjection change, final TopUpProvenanceV4 changeTopUpProvenance,
+        final byte[] operationId) {
+      this.unsigned = Objects.requireNonNull(unsigned, "unsigned");
       this.authorizationDigest = requireDigest(authorizationDigest, "authorizationDigest");
+      if ((change == null) != (changeTopUpProvenance == null)) {
+        throw new IllegalStateException(
+            "native Kagemusha redemption change provenance does not match change projection");
+      }
       this.change = change;
+      this.changeTopUpProvenance = changeTopUpProvenance;
       this.operationId = requireDigest(operationId, "operationId");
     }
 
-    public byte[] unsignedRequest() { return Arrays.copyOf(unsignedRequest, unsignedRequest.length); }
+    public RedeemUnsignedV4 unsigned() { return unsigned; }
     public byte[] authorizationDigest() { return Arrays.copyOf(authorizationDigest, authorizationDigest.length); }
     public BranchProjection change() { return change; }
+    public TopUpProvenanceV4 changeTopUpProvenance() { return changeTopUpProvenance; }
     public byte[] operationId() { return Arrays.copyOf(operationId, operationId.length); }
   }
 
@@ -2312,7 +3491,7 @@ public final class KagemushaRecursiveSpendProver {
     private final long activationHeight;
     private final Long withdrawalHeight;
 
-    private ActiveVerifier(
+    ActiveVerifier(
         final String backend,
         final String name,
         final int version,
@@ -2351,11 +3530,116 @@ public final class KagemushaRecursiveSpendProver {
     }
   }
 
+  /** Authenticated ABI-20 V4 release identity selected at the readiness snapshot. */
+  public static final class AuthenticatedArtifactSet {
+    private final String generation;
+    private final byte[] manifestSha256;
+    private final byte[] releasePolicySha256;
+    private final byte[] releaseAttestationSha256;
+    private final long activationHeight;
+    private final long withdrawalHeight;
+    private final int maximumProofBytes;
+    private final int assetScale;
+
+    AuthenticatedArtifactSet(
+        final String generation,
+        final byte[] manifestSha256,
+        final byte[] releasePolicySha256,
+        final byte[] releaseAttestationSha256,
+        final long activationHeight,
+        final long withdrawalHeight,
+        final int maximumProofBytes,
+        final int assetScale) {
+      if (!isPortableArtifactGeneration(generation)) {
+        throw new IllegalArgumentException(
+            "artifactGeneration must be a portable V4 identifier");
+      }
+      final String basename = generation.split("\\.", 2)[0].toLowerCase(Locale.ROOT);
+      if (basename.equals("con") || basename.equals("prn")
+          || basename.equals("aux") || basename.equals("nul")
+          || (basename.length() == 4
+              && (basename.startsWith("com") || basename.startsWith("lpt"))
+              && basename.charAt(3) >= '1' && basename.charAt(3) <= '9')) {
+        throw new IllegalArgumentException(
+            "artifactGeneration must not use a Windows reserved basename");
+      }
+      this.generation = generation;
+      this.manifestSha256 = requireDigest(manifestSha256, "artifactManifestSha256");
+      this.releasePolicySha256 =
+          requireDigest(releasePolicySha256, "artifactReleasePolicySha256");
+      this.releaseAttestationSha256 =
+          requireDigest(releaseAttestationSha256, "artifactReleaseAttestationSha256");
+      if (Arrays.equals(this.manifestSha256, this.releasePolicySha256)
+          || Arrays.equals(this.manifestSha256, this.releaseAttestationSha256)
+          || Arrays.equals(this.releasePolicySha256, this.releaseAttestationSha256)) {
+        throw new IllegalArgumentException(
+            "authenticated artifact digests must be pairwise distinct");
+      }
+      if (activationHeight <= 0 || withdrawalHeight <= activationHeight) {
+        throw new IllegalArgumentException(
+            "authenticated artifact activation window is invalid");
+      }
+      if (maximumProofBytes <= 0
+          || maximumProofBytes > MAXIMUM_RECURSIVE_PROOF_PAIR_BYTES_V4) {
+        throw new IllegalArgumentException(
+            "artifactMaximumProofBytes exceeds the ABI-20 V4 release limit");
+      }
+      if (assetScale < 0 || assetScale > KagemushaScaledAmount.MAXIMUM_SCALE) {
+        throw new IllegalArgumentException(
+            "artifactAssetScale exceeds the offline payment limit");
+      }
+      this.activationHeight = activationHeight;
+      this.withdrawalHeight = withdrawalHeight;
+      this.maximumProofBytes = maximumProofBytes;
+      this.assetScale = assetScale;
+    }
+
+    private static boolean isPortableArtifactGeneration(final String generation) {
+      if (generation == null || generation.isEmpty() || generation.length() > 128
+          || !isAsciiAlphanumeric(generation.charAt(0))
+          || !isAsciiAlphanumeric(generation.charAt(generation.length() - 1))) {
+        return false;
+      }
+      for (int index = 0; index < generation.length(); index++) {
+        final char character = generation.charAt(index);
+        if (!isAsciiAlphanumeric(character)
+            && character != '.' && character != '_' && character != '-') {
+          return false;
+        }
+      }
+      return true;
+    }
+
+    private static boolean isAsciiAlphanumeric(final char character) {
+      return (character >= 'a' && character <= 'z')
+          || (character >= 'A' && character <= 'Z')
+          || (character >= '0' && character <= '9');
+    }
+
+    public String generation() { return generation; }
+    public byte[] manifestSha256() {
+      return Arrays.copyOf(manifestSha256, manifestSha256.length);
+    }
+    public byte[] releasePolicySha256() {
+      return Arrays.copyOf(releasePolicySha256, releasePolicySha256.length);
+    }
+    public byte[] releaseAttestationSha256() {
+      return Arrays.copyOf(releaseAttestationSha256, releaseAttestationSha256.length);
+    }
+    public long activationHeight() { return activationHeight; }
+    public long withdrawalHeight() { return withdrawalHeight; }
+    public int maximumProofBytes() { return maximumProofBytes; }
+    public int assetScale() { return assetScale; }
+    public boolean isActiveAt(final long blockHeight) {
+      return blockHeight >= activationHeight && blockHeight < withdrawalHeight;
+    }
+  }
+
   public static final class ReadinessBlocker {
     private final String code;
     private final String message;
 
-    private ReadinessBlocker(final String code, final String message) {
+    ReadinessBlocker(final String code, final String message) {
       this.code = code;
       this.message = message;
     }
@@ -2379,9 +3663,10 @@ public final class KagemushaRecursiveSpendProver {
     private final ActiveVerifier unshieldVerifier;
     private final ActiveVerifier recursiveStepEqVerifier;
     private final ActiveVerifier recursiveStepEpVerifier;
+    private final AuthenticatedArtifactSet artifactSet;
     private final List<ReadinessBlocker> blockers;
 
-    private ReadinessProjection(
+    ReadinessProjection(
         final int requiredBridgeAbiVersion,
         final int maximumHops,
         final String assetDefinitionId,
@@ -2396,6 +3681,7 @@ public final class KagemushaRecursiveSpendProver {
         final ActiveVerifier unshieldVerifier,
         final ActiveVerifier recursiveStepEqVerifier,
         final ActiveVerifier recursiveStepEpVerifier,
+        final AuthenticatedArtifactSet artifactSet,
         final List<ReadinessBlocker> blockers) {
       this.requiredBridgeAbiVersion = requiredBridgeAbiVersion;
       this.maximumHops = maximumHops;
@@ -2411,6 +3697,7 @@ public final class KagemushaRecursiveSpendProver {
       this.unshieldVerifier = unshieldVerifier;
       this.recursiveStepEqVerifier = recursiveStepEqVerifier;
       this.recursiveStepEpVerifier = recursiveStepEpVerifier;
+      this.artifactSet = artifactSet;
       this.blockers = Collections.unmodifiableList(new java.util.ArrayList<>(blockers));
     }
 
@@ -2430,6 +3717,7 @@ public final class KagemushaRecursiveSpendProver {
     public ActiveVerifier unshieldVerifier() { return unshieldVerifier; }
     public ActiveVerifier recursiveStepEqVerifier() { return recursiveStepEqVerifier; }
     public ActiveVerifier recursiveStepEpVerifier() { return recursiveStepEpVerifier; }
+    public AuthenticatedArtifactSet artifactSet() { return artifactSet; }
     public List<ReadinessBlocker> blockers() { return blockers; }
     public boolean bridgeCompatible() {
       return requiredBridgeAbiVersion == REQUIRED_NATIVE_BRIDGE_ABI_VERSION;
@@ -2445,14 +3733,26 @@ public final class KagemushaRecursiveSpendProver {
           && recursiveStepEpVerifier.isActiveAt(evaluatedBlockHeight);
     }
     public boolean chainArtifactSetReady() {
-      return proofBackendAvailable && recursiveLineageSupported && allVerifiersActive();
+      return proofBackendAvailable && artifactSet != null
+          && artifactSet.isActiveAt(evaluatedBlockHeight)
+          && recursiveStepEqVerifier != null
+          && recursiveStepEqVerifier.isActiveAt(evaluatedBlockHeight)
+          && recursiveStepEpVerifier != null
+          && recursiveStepEpVerifier.isActiveAt(evaluatedBlockHeight);
+    }
+    /** Whether native holds the exact manifest authenticated by this Torii snapshot. */
+    public boolean localArtifactSetMatches() {
+      if (artifactSet == null) return false;
+      final byte[] installed = installedArtifactManifestSha256V4();
+      return installed != null && Arrays.equals(installed, artifactSet.manifestSha256());
     }
     public boolean offlineReady() {
-      return ready && bridgeCompatible() && chainArtifactSetReady() && assetScale != null
+      return ready && recursiveLineageSupported && bridgeCompatible()
+          && chainArtifactSetReady() && allVerifiersActive() && assetScale != null
           && assetScale >= 0 && assetScale <= KagemushaScaledAmount.MAXIMUM_SCALE
           && evaluatedBlockHeight > 0
           && maximumHops == MAXIMUM_PEER_HOPS
-          && isProofBackendAvailable() && blockers.isEmpty();
+          && isProofBackendAvailable() && localArtifactSetMatches() && blockers.isEmpty();
     }
   }
 
@@ -2490,13 +3790,13 @@ public final class KagemushaRecursiveSpendProver {
   }
 
   public static final class FinalizedTopUp {
-    private final TopUpAnchor anchor;
+    private final TopUpAnchorV4 anchor;
     private final TopUpFinalityProof finalityProof;
     private final long finalizedBlockHeight;
     private final long serverTimeMilliseconds;
 
     private FinalizedTopUp(
-        final TopUpAnchor anchor,
+        final TopUpAnchorV4 anchor,
         final TopUpFinalityProof finalityProof,
         final long finalizedBlockHeight,
         final long serverTimeMilliseconds) {
@@ -2506,7 +3806,7 @@ public final class KagemushaRecursiveSpendProver {
       this.serverTimeMilliseconds = serverTimeMilliseconds;
     }
 
-    public TopUpAnchor anchor() { return anchor; }
+    public TopUpAnchorV4 anchor() { return anchor; }
     public TopUpFinalityProof finalityProof() { return finalityProof; }
     public long finalizedBlockHeight() { return finalizedBlockHeight; }
     public long serverTimeMilliseconds() { return serverTimeMilliseconds; }
@@ -2775,19 +4075,22 @@ public final class KagemushaRecursiveSpendProver {
    *
    * <p>The policy must be provisioned from the deployment trust root rather than copied from the
    * downloaded release. Native code verifies the signed role thresholds and hashes both evidence
-   * files before any finalized artifact handle can be consumed.
+   * files before validating the candidate-bound promotion record and consuming any finalized
+   * artifact handle.
    */
   public static final class ReleaseAuthentication {
     private final byte[] trustedPolicyNorito;
     private final byte[] releaseAttestationNorito;
     private final byte[] benchmarkEvidence;
     private final byte[] cryptographicReview;
+    private final byte[] promotionRecordNorito;
 
     public ReleaseAuthentication(
         final byte[] trustedPolicyNorito,
         final byte[] releaseAttestationNorito,
         final byte[] benchmarkEvidence,
-        final byte[] cryptographicReview) {
+        final byte[] cryptographicReview,
+        final byte[] promotionRecordNorito) {
       this.trustedPolicyNorito = requireBoundedBytes(
           trustedPolicyNorito,
           "trustedPolicyNorito",
@@ -2804,6 +4107,10 @@ public final class KagemushaRecursiveSpendProver {
           cryptographicReview,
           "cryptographicReview",
           MAX_RELEASE_EVIDENCE_BYTES);
+      this.promotionRecordNorito = requireBoundedBytes(
+          promotionRecordNorito,
+          "promotionRecordNorito",
+          MAX_PROMOTION_RECORD_BYTES);
     }
   }
 
@@ -2815,6 +4122,7 @@ public final class KagemushaRecursiveSpendProver {
     private final byte[] releaseAttestationNorito;
     private final byte[] benchmarkEvidence;
     private final byte[] cryptographicReview;
+    private final byte[] promotionRecordNorito;
     private final Map<ArtifactRoleV4, ArtifactIngest> artifacts = new LinkedHashMap<>();
     private final List<String> artifactDigests = new ArrayList<>();
     private boolean installed;
@@ -2838,6 +4146,9 @@ public final class KagemushaRecursiveSpendProver {
       this.cryptographicReview = Arrays.copyOf(
           releaseAuthentication.cryptographicReview,
           releaseAuthentication.cryptographicReview.length);
+      this.promotionRecordNorito = Arrays.copyOf(
+          releaseAuthentication.promotionRecordNorito,
+          releaseAuthentication.promotionRecordNorito.length);
     }
 
     public synchronized ArtifactIngest beginArtifact(
@@ -2883,6 +4194,7 @@ public final class KagemushaRecursiveSpendProver {
             releaseAttestationNorito,
             benchmarkEvidence,
             cryptographicReview,
+            promotionRecordNorito,
             handles);
       } catch (final RuntimeException | UnsatisfiedLinkError failure) {
         for (int index = 0; index < claimed; index++) {
@@ -2902,12 +4214,12 @@ public final class KagemushaRecursiveSpendProver {
       return !closed && nativeArtifactSetIsInstalledV4(manifestNorito, manifestSha256);
     }
 
-    public synchronized ArtifactBinding artifactBinding() {
+    public synchronized ArtifactBindingV4 artifactBinding() {
       if (!installed || closed || !isInstalled()) {
         throw new IllegalStateException("artifact set is not installed");
       }
-      throw new IllegalStateException(
-          "ABI20 V4 artifact binding projection is unavailable until the V4 registry is linked");
+      return new ArtifactBindingV4(
+          nativeBuildArtifactBindingV4(manifestNorito, manifestSha256));
     }
 
     public synchronized void uninstall() {
@@ -2990,9 +4302,13 @@ public final class KagemushaRecursiveSpendProver {
       byte[] releaseAttestationNorito,
       byte[] benchmarkEvidence,
       byte[] cryptographicReview,
+      byte[] promotionRecordNorito,
       long[] artifactHandles);
 
   private static native boolean nativeArtifactSetIsInstalledV4(
+      byte[] manifestNorito, byte[] manifestSha256);
+  private static native byte[] nativeInstalledManifestSha256V4();
+  private static native byte[] nativeBuildArtifactBindingV4(
       byte[] manifestNorito, byte[] manifestSha256);
 
   private static native void nativeArtifactSetUninstallV4(byte[] manifestSha256);
@@ -3013,57 +4329,69 @@ public final class KagemushaRecursiveSpendProver {
       byte[] diversifier);
   private static native byte[] nativeCreateRecipientRequestV2(byte[] payload, byte[] signature);
   private static native byte[] nativeVerifyRecipientRequestV2(byte[] request, long verifiedAtMilliseconds);
+  private static native byte[] nativeBuildOutputMembershipFrontierV4(
+      int leafIndex, byte[] flattenedSiblings, byte[] directions, byte[] root);
+  private static native byte[][] nativeDeriveOutputMembershipPathsV4(
+      byte[] frontier, byte[] recipientCommitment, byte[] changeCommitment);
+  private static native byte[] nativeValidateSpendableBranchV4(
+      byte[] bundle, byte[] provenance, byte[] membershipWitness, byte[] opening,
+      long blockHeight);
   private static native byte[] nativeBuildOutputMembershipPathsV4(
       byte[] initialRoot, byte[] finalRoot, byte[][] recipientFields,
       byte[][] changeFields, byte[][] dummyFields);
-  private static native byte[] nativeBuildInitRequestV2(
-      byte[] anchor, byte[] proof, byte[] roster);
   private static native byte[] nativeBuildInitRequestV4(
       byte[] anchor, byte[] proof, byte[] roster, byte[] opening, byte[] outputMembership);
-  private static native byte[] nativeBuildAppendRequestV2(
-      byte[][] bundles, byte[][] openings, byte[][] witnesses, byte[] changeOpening,
-      byte[] verifierCommitment, byte[] operationId, long blockHeight);
+  private static native byte[] nativeBuildTopUpProvenanceV4(
+      byte[] bundle, byte[] roster, byte[][] anchors, byte[][] finalityProofs, long blockHeight);
+  private static native byte[] nativeValidateTopUpProvenanceV4(
+      byte[] bundle, byte[] provenance, long blockHeight);
   private static native byte[] nativeBuildAppendRequestV4(
-      byte[][] bundles, byte[][] openings, byte[][] witnesses, byte[] changeOpening,
-      byte[] outputMembership, byte[] verifierCommitment, byte[] operationId, long blockHeight);
-  private static native byte[][] nativeProjectPeerPaymentV2(byte[] payment);
-  private static native byte[][] nativeProjectSplitResultV2(byte[] result);
-  private static native byte[] nativeBuildVerifyRequestV2(
-      byte[] payment, byte[] request, int maximumHops, long blockHeight, long verifiedAtMilliseconds);
+      byte[][] bundles, byte[][] topUpProvenances, byte[][] openings, byte[][] witnesses,
+      byte[] changeOpening, byte[] outputMembership, byte[] verifierCommitment,
+      byte[] operationId, long blockHeight);
+  private static native byte[][] nativeProjectPeerPaymentV4(byte[] payment);
+  private static native byte[][] nativeProjectInitResultV4(byte[] result);
+  private static native byte[][] nativeProjectSplitResultV4(byte[] result);
   private static native byte[] nativeBuildVerifyRequestV4(
-      byte[] bundle, byte[] recipientRequest, byte[] roster, byte[][] finalityEvidence,
+      byte[] bundle, byte[] recipientRequest, byte[] topUpProvenance,
       int maximumHops, long blockHeight, long verifiedAtMilliseconds);
-  private static native byte[][] nativeProjectVerifyResultV2(byte[] result);
-  private static native byte[] nativeBuildRedeemRequestV2(
-      byte[] bundle, byte[] opening, byte[] witness, byte[] recipient, byte[] atomicUnits, int scale,
-      byte[] changeOpening, byte[] verifierCommitment, byte[] operationId, long blockHeight);
+  private static native byte[][] nativeProjectVerifyResultV4(byte[] result);
   private static native byte[] nativeBuildRedeemRequestV4(
-      byte[] bundle, byte[] opening, byte[] membershipWitness, byte[] recipient,
+      byte[] bundle, byte[] topUpProvenance, byte[] opening, byte[] membershipWitness,
+      byte[] recipient,
       byte[] atomicUnits, int scale, byte[] changeOpening, byte[] changeOutputMembership,
       byte[] verifierCommitment, byte[] operationId, long blockHeight);
-  private static native byte[][] nativeProjectRedeemBuildResultV2(byte[] result);
+  private static native byte[][] nativeProjectRedeemBuildResultV4(byte[] result);
   private static native byte[][] nativePrepareAcknowledgementV2(
       byte[] request, byte[] payment, long acceptedAtMilliseconds);
   private static native byte[] nativeCreateAcknowledgementV2(
       byte[] payload, byte[] signature, byte[] request, byte[] payment);
   private static native byte[][] nativeVerifyAcknowledgementV2(
       byte[] acknowledgement, byte[] request, byte[] payment);
-  private static native byte[][] nativeProjectReadinessV2(byte[] readiness);
+  private static native byte[][] nativeProjectReadinessV4(byte[] readiness);
+  private static native byte[][] nativeProjectAuthenticatedArtifactSetV4(byte[] artifactSet);
   private static native byte[][] nativeProjectActiveVerifierV2(byte[] verifier);
-  private static native byte[] nativeArtifactBindingV3(byte[] manifest, byte[] manifestSha256);
   private static native byte[][] nativePrepareAuthorizationV2(
-      byte[] authority, byte[] deviceId, byte[] operationId, long issuedAtMilliseconds,
-      long expiresAtMilliseconds, byte[] nonce, byte[] payloadDigest, byte[] appAttestEvidence);
+      byte[] authority, byte[] deviceId, byte[] assetDefinitionId, byte[] operationId,
+      long issuedAtMilliseconds, long expiresAtMilliseconds, byte[] nonce, byte[] payloadDigest,
+      byte[] registrationHash, byte[] hardwareAssertionPlatform);
   private static native byte[] nativeCreateAuthorizationV2(byte[] template, byte[] signature);
-  private static native byte[] nativeFinalizeTopUpV2(byte[] unsigned, byte[] authorization);
-  private static native byte[][] nativeFinalizeRedeemV2(byte[] buildResult, byte[] authorization);
-  private static native byte[][] nativePrepareTopUpV2(
+  private static native byte[][] nativeFinalizeHardwareAuthorizationV2(
+      byte[] preparation, byte[] authenticatorData, byte[] signatureDer);
+  private static native byte[][] nativeFinalizeIosAppAttestAuthorizationV2(
+      byte[] preparation, byte[] assertionObject);
+  private static native byte[] nativeFinalizeTopUpV4(byte[] unsigned, byte[] authorization);
+  private static native byte[][] nativeFinalizeRedeemV4(byte[] buildResult, byte[] authorization);
+  private static native byte[][] nativePrepareTopUpV4(
       byte[] chainId, byte[] assetDefinition, byte[] payer, byte[] atomicUnits, int scale,
       byte[] operationId, byte[] spendKey, byte[] rho, byte[] diversifier, int leafIndex,
       byte[] flattenedSiblings, byte[] directions, byte[] root,
       byte[] shieldVerifierCommitment, byte[] artifactBinding);
-  private static native byte[][] nativeProjectOperationStatusV2(byte[] status);
+  private static native byte[][] nativeProjectOperationStatusV4(byte[] status);
   private static native boolean nativeBranchClaimsConflictV2(byte[] left, byte[] right);
+  private static native byte[][] nativePrepareRedemptionChangeV4(
+      byte[] bundle, byte[] inputOpening, byte[] atomicUnits, int scale,
+      byte[] operationId, byte[] entropy);
   private static native byte[] nativePrepareNoteOpeningV2(
       byte[] spendKey, byte[] rho, byte[] diversifier);
   private static native byte[][] nativeProjectRecipientRequestV2(byte[] request);

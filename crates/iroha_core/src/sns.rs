@@ -7,7 +7,10 @@
 
 #[cfg(test)]
 use std::time::SystemTime;
-use std::{collections::BTreeMap, str::FromStr};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    str::FromStr,
+};
 
 #[cfg(test)]
 use iroha_data_model::block::BlockHeader;
@@ -1973,6 +1976,89 @@ pub fn resolve_active_account_alias(
     Some(indexed_owner.clone())
 }
 
+fn active_account_id_rekey_suffix_for_alias<'world>(
+    world: &'world impl WorldReadOnly,
+    catalog: &DataSpaceCatalog,
+    alias: &AccountAlias,
+    now_ms: u64,
+) -> Result<Option<(AccountId, &'world [AccountId])>, ()> {
+    let Some(active_account_id) = resolve_active_account_alias(world, catalog, alias, now_ms)
+    else {
+        return Ok(None);
+    };
+    let record = world.account_rekey_records().get(alias).ok_or(())?;
+    if &record.label != alias || record.active_account_id != active_account_id {
+        return Err(());
+    }
+    let predecessors = record
+        .active_account_id_rekey_predecessors()
+        .map_err(|_| ())?;
+    let mut unique_predecessors = BTreeSet::new();
+    for predecessor in predecessors {
+        if predecessor == &active_account_id
+            || !unique_predecessors.insert(predecessor.clone())
+            || world.account(predecessor).is_ok()
+        {
+            return Err(());
+        }
+    }
+    Ok(Some((active_account_id, predecessors)))
+}
+
+/// Resolve an account id through one exact alias's active, explicitly proven account-id rekey
+/// suffix.
+///
+/// Legacy history and ordinary alias reassignment are permanently non-authorizing. The alias
+/// lease, forward index, continuity record, and active account must agree at `now_ms`; every
+/// predecessor in the active suffix must be unique and retired.
+#[must_use]
+pub fn resolve_active_account_id_rekey_lineage_for_alias(
+    world: &impl WorldReadOnly,
+    catalog: &DataSpaceCatalog,
+    alias: &AccountAlias,
+    account_id: &AccountId,
+    now_ms: u64,
+) -> Option<AccountId> {
+    let (active_account_id, predecessors) =
+        active_account_id_rekey_suffix_for_alias(world, catalog, alias, now_ms)
+            .ok()
+            .flatten()?;
+    (account_id == &active_account_id || predecessors.contains(account_id))
+        .then_some(active_account_id)
+}
+
+/// Resolve an account id to its unique active account-id rekey target across all live aliases.
+///
+/// A currently registered account resolves to itself. Any malformed live suffix, reused retired
+/// predecessor, cycle, or conflicting active target fails closed.
+#[must_use]
+pub fn resolve_active_account_id_rekey_lineage(
+    world: &impl WorldReadOnly,
+    catalog: &DataSpaceCatalog,
+    account_id: &AccountId,
+    now_ms: u64,
+) -> Option<AccountId> {
+    let mut resolved = world.account(account_id).ok().map(|_| account_id.clone());
+    for (alias, _) in world.account_rekey_records().iter() {
+        let Some((active_account_id, predecessors)) =
+            active_account_id_rekey_suffix_for_alias(world, catalog, alias, now_ms).ok()?
+        else {
+            continue;
+        };
+        if account_id != &active_account_id && !predecessors.contains(account_id) {
+            continue;
+        }
+        if resolved
+            .as_ref()
+            .is_some_and(|existing| existing != &active_account_id)
+        {
+            return None;
+        }
+        resolved = Some(active_account_id);
+    }
+    resolved
+}
+
 /// Return the active owner for a domain-name lease record.
 #[must_use]
 pub fn active_domain_owner(
@@ -2301,6 +2387,178 @@ mod tests {
             resolve_active_account_alias(&world.view(), &catalog, &alias, 50),
             None,
             "split binding indexes must fail closed"
+        );
+    }
+
+    #[test]
+    fn account_id_rekey_lineage_requires_typed_live_unambiguous_retired_history() {
+        use iroha_data_model::account::rekey::{
+            AccountRekeyRecord, AccountRekeyTransitionProvenance,
+        };
+
+        let catalog = dataspace_catalog();
+        let alias =
+            AccountAlias::domainless("lineage".parse().expect("label"), DataSpaceId::UNIVERSAL);
+        let selector = selector_for_account_alias(&alias, &catalog).expect("selector");
+        let retired = checked_account_id();
+        let active = checked_account_id();
+        let unrelated = checked_account_id();
+        let mut world = World::with(
+            [],
+            [
+                Account::new(active.clone()).build(&active),
+                Account::new(unrelated.clone()).build(&active),
+            ],
+            [],
+        );
+        let mut lease = NameRecordV1::new(
+            selector.clone(),
+            active.clone(),
+            vec![controller(&active)],
+            0,
+            0,
+            100,
+            200,
+            300,
+            Metadata::default(),
+        );
+        let storage_key = record_storage_key(&selector);
+        world
+            .smart_contract_state_mut_for_testing()
+            .insert(storage_key.clone(), lease.encode());
+        world.account_aliases.insert(alias.clone(), active.clone());
+        let canonical = AccountRekeyRecord::new(alias.clone(), retired.clone())
+            .repoint_for_account_id_rekey(active.clone())
+            .expect("canonical account-id rekey fixture");
+        world
+            .account_rekey_records
+            .insert(alias.clone(), canonical.clone());
+
+        assert_eq!(
+            resolve_active_account_id_rekey_lineage_for_alias(
+                &world.view(),
+                &catalog,
+                &alias,
+                &retired,
+                50,
+            ),
+            Some(active.clone())
+        );
+        assert_eq!(
+            resolve_active_account_id_rekey_lineage(&world.view(), &catalog, &retired, 50),
+            Some(active.clone())
+        );
+        assert_eq!(
+            resolve_active_account_id_rekey_lineage_for_alias(
+                &world.view(),
+                &catalog,
+                &alias,
+                &unrelated,
+                50,
+            ),
+            None,
+            "an unrelated account must not join the lineage"
+        );
+
+        lease.expires_at_ms = 40;
+        lease.grace_expires_at_ms = 45;
+        lease.redemption_expires_at_ms = 50;
+        world
+            .smart_contract_state_mut_for_testing()
+            .insert(storage_key.clone(), lease.encode());
+        assert_eq!(
+            resolve_active_account_id_rekey_lineage(&world.view(), &catalog, &retired, 50),
+            None,
+            "expired lineage lease must fail closed"
+        );
+
+        lease.status = NameStatus::Tombstoned(NameTombstoneStateV1 {
+            reason: "revoked".to_owned(),
+        });
+        lease.expires_at_ms = 100;
+        lease.grace_expires_at_ms = 200;
+        lease.redemption_expires_at_ms = 300;
+        world
+            .smart_contract_state_mut_for_testing()
+            .insert(storage_key.clone(), lease.encode());
+        assert_eq!(
+            resolve_active_account_id_rekey_lineage(&world.view(), &catalog, &retired, 50),
+            None,
+            "revoked lineage lease must fail closed"
+        );
+
+        lease.status = NameStatus::Active;
+        world
+            .smart_contract_state_mut_for_testing()
+            .insert(storage_key.clone(), lease.encode());
+        world.account_rekey_records.insert(
+            alias.clone(),
+            AccountRekeyRecord::new(alias.clone(), retired.clone())
+                .reassign_alias_to_account(active.clone())
+                .expect("alias reassignment fixture"),
+        );
+        assert_eq!(
+            resolve_active_account_id_rekey_lineage(&world.view(), &catalog, &retired, 50),
+            None,
+            "ordinary alias reassignment must break controller lineage"
+        );
+
+        let mut malformed = canonical.clone();
+        malformed.previous_account_ids.push(retired.clone());
+        malformed
+            .transition_provenance
+            .push(AccountRekeyTransitionProvenance::AccountIdRekey);
+        world.account_rekey_records.insert(alias.clone(), malformed);
+        assert_eq!(
+            resolve_active_account_id_rekey_lineage(&world.view(), &catalog, &retired, 50),
+            None,
+            "duplicate predecessor history must fail closed"
+        );
+
+        let mut cyclic = canonical.clone();
+        cyclic.previous_account_ids.push(active.clone());
+        cyclic
+            .transition_provenance
+            .push(AccountRekeyTransitionProvenance::AccountIdRekey);
+        world.account_rekey_records.insert(alias.clone(), cyclic);
+        assert_eq!(
+            resolve_active_account_id_rekey_lineage(&world.view(), &catalog, &retired, 50),
+            None,
+            "active-id cycles must fail closed"
+        );
+
+        world.account_rekey_records.insert(alias.clone(), canonical);
+        let second_alias =
+            AccountAlias::domainless("ambiguous".parse().expect("label"), DataSpaceId::UNIVERSAL);
+        let second_selector =
+            selector_for_account_alias(&second_alias, &catalog).expect("selector");
+        let second_lease = NameRecordV1::new(
+            second_selector.clone(),
+            unrelated.clone(),
+            vec![controller(&unrelated)],
+            0,
+            0,
+            100,
+            200,
+            300,
+            Metadata::default(),
+        );
+        world
+            .smart_contract_state_mut_for_testing()
+            .insert(record_storage_key(&second_selector), second_lease.encode());
+        world
+            .account_aliases
+            .insert(second_alias.clone(), unrelated.clone());
+        world.account_rekey_records.insert(
+            second_alias.clone(),
+            AccountRekeyRecord::new(second_alias, retired.clone())
+                .repoint_for_account_id_rekey(unrelated)
+                .expect("ambiguous fixture transition"),
+        );
+        assert_eq!(
+            resolve_active_account_id_rekey_lineage(&world.view(), &catalog, &retired, 50),
+            None,
+            "one retired predecessor cannot resolve to two active targets"
         );
     }
 

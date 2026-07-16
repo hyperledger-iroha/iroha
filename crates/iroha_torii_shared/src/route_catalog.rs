@@ -63,12 +63,23 @@ pub enum Listener {
     Torii,
 }
 
-/// Authentication applied before a route handler runs.
+/// Authentication contract enforced by the route boundary.
+///
+/// Most policies are middleware-backed. Protocol exchanges and explicitly
+/// reviewed canonical-account handlers may enforce their credential while
+/// entering the handler, before parsing or acting on protected request data.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AuthenticationPolicy {
     /// The listener's configured API-token policy applies.
     ToriiDefault,
-    /// The route requires a request signature bound to the submitted identity.
+    /// The listener's configured API-token policy applies and the route also
+    /// requires exactly one dedicated signer-backed onboarding token.
+    OnboardingToken,
+    /// The route requires canonical `X-Iroha-*` request authentication bound to
+    /// an on-ledger account identity.
+    CanonicalAccountSignature,
+    /// The route requires an operator-style request signature bound to a
+    /// handler-validated dynamic key identity.
     IdentityBoundSignature,
     /// The route additionally requires an operator signature.
     OperatorSignature,
@@ -1004,7 +1015,10 @@ pub mod offline {
 
 /// Alias lookup, private evaluation, and recipient-resolution descriptors.
 pub mod aliases {
-    use super::{ApiSurface, FeatureGate, HttpMethod, Listener, RouteDescriptor, RouteProjections};
+    use super::{
+        ApiSurface, AuthenticationPolicy, FeatureGate, HttpMethod, Listener, RouteDescriptor,
+        RouteProjections,
+    };
 
     const fn public_lookup(stable_route_id: &'static str, path: &'static str) -> RouteDescriptor {
         RouteDescriptor::new(
@@ -1020,22 +1034,28 @@ pub mod aliases {
     }
 
     /// Resolve an account alias.
-    pub const RESOLVE: RouteDescriptor = public_lookup("aliases.resolve", "/v1/aliases/resolve");
+    pub const RESOLVE: RouteDescriptor = public_lookup("aliases.resolve", "/v1/aliases/resolve")
+        .with_authentication(AuthenticationPolicy::CanonicalAccountSignature);
     /// Resolve the deterministic numeric alias index.
     pub const RESOLVE_INDEX: RouteDescriptor =
-        public_lookup("aliases.resolve_index", "/v1/aliases/resolve-index");
+        public_lookup("aliases.resolve_index", "/v1/aliases/resolve-index")
+            .with_authentication(AuthenticationPolicy::CanonicalAccountSignature);
     /// List aliases bound to an account.
     pub const BY_ACCOUNT: RouteDescriptor =
-        public_lookup("aliases.by_account", "/v1/aliases/by-account");
+        public_lookup("aliases.by_account", "/v1/aliases/by-account")
+            .with_authentication(AuthenticationPolicy::CanonicalAccountSignature);
     /// Resolve a retail recipient reference.
     pub const RETAIL_RECIPIENT_LOOKUP: RouteDescriptor =
-        public_lookup("retail.recipient.lookup", "/v1/retail/recipients/lookup");
+        public_lookup("retail.recipient.lookup", "/v1/retail/recipients/lookup")
+            .with_authentication(AuthenticationPolicy::CanonicalAccountSignature);
     /// Resolve a privacy-minimized retail recipient route.
     pub const RETAIL_RECIPIENT_ROUTE: RouteDescriptor =
-        public_lookup("retail.recipient.route", "/v1/retail/recipients/route");
+        public_lookup("retail.recipient.route", "/v1/retail/recipients/route")
+            .with_authentication(AuthenticationPolicy::CanonicalAccountSignature);
     /// Read one exact on-chain fee sponsor policy.
     pub const FEE_SPONSOR_POLICY_BY_ID: RouteDescriptor =
-        public_lookup("fee_sponsor_policy.by_id", "/v1/fee-sponsor-policies/by-id");
+        public_lookup("fee_sponsor_policy.by_id", "/v1/fee-sponsor-policies/by-id")
+            .with_authentication(AuthenticationPolicy::CanonicalAccountSignature);
     /// Resolve an asset alias.
     pub const ASSET_RESOLVE: RouteDescriptor =
         public_lookup("assets.alias.resolve", "/v1/assets/aliases/resolve");
@@ -2332,6 +2352,12 @@ pub mod sumeragi {
     /// Read a self-contained bridge finality proof.
     pub const BRIDGE_FINALITY: RouteDescriptor =
         public_get("bridge.finality_proof.read", "/v1/bridge/finality/{height}");
+    /// Read a challenge-bound node-signed durable-tip finality attestation.
+    pub const BRIDGE_FINALITY_ATTESTATION: RouteDescriptor = public_get(
+        "bridge.finality_attestation.read",
+        "/v1/bridge/finality/attestation/{height}",
+    )
+    .with_projections(RouteProjections::OPENAPI);
     /// Read a bridge finality commitment and justification bundle.
     pub const BRIDGE_FINALITY_BUNDLE: RouteDescriptor = public_get(
         "bridge.finality_bundle.read",
@@ -2394,6 +2420,7 @@ pub mod sumeragi {
         CHECKPOINTS,
         COMMIT_CERTIFICATES,
         BRIDGE_FINALITY,
+        BRIDGE_FINALITY_ATTESTATION,
         BRIDGE_FINALITY_BUNDLE,
         VALIDATOR_SETS,
         VALIDATOR_SET_BY_HEIGHT,
@@ -2442,6 +2469,10 @@ pub mod runtime_governance {
 
     const fn app_get(id: &'static str, path: &'static str) -> RouteDescriptor {
         public_get(id, path).with_feature_gate(FeatureGate::Feature("app_api"))
+    }
+
+    const fn app_signed_get(id: &'static str, path: &'static str) -> RouteDescriptor {
+        app_get(id, path).with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
     }
 
     const fn app_post(id: &'static str, path: &'static str) -> RouteDescriptor {
@@ -2651,7 +2682,8 @@ pub mod runtime_governance {
     pub const GOV_PROTECTED_POST: RouteDescriptor = app_operator_post(
         "operator.governance.protected_namespaces.update",
         "/v1/gov/protected-namespaces",
-    );
+    )
+    .with_projections(RouteProjections::OPENAPI.union(RouteProjections::MCP));
     /// Read the protected namespace set.
     pub const GOV_PROTECTED_GET: RouteDescriptor = app_get(
         "governance.protected_namespaces.read",
@@ -2676,7 +2708,7 @@ pub mod runtime_governance {
     pub const GOV_UNLOCK_STATS: RouteDescriptor =
         app_get("governance.unlock.stats", "/v1/gov/unlocks/stats");
     /// Read an active governance contract binding.
-    pub const GOV_CONTRACT_GET: RouteDescriptor = app_get(
+    pub const GOV_CONTRACT_GET: RouteDescriptor = app_signed_get(
         "governance.contract.read",
         "/v1/gov/contracts/{contract_address}",
     );
@@ -3378,6 +3410,19 @@ pub mod application_api {
         .with_cors_options(true)
     }
 
+    const fn internal_get(id: &'static str, path: &'static str) -> RouteDescriptor {
+        RouteDescriptor::new(
+            id,
+            HttpMethod::Get,
+            path,
+            ApiSurface::Public,
+            Listener::Torii,
+        )
+        .with_feature_gate(FeatureGate::Feature("app_api"))
+        .with_projections(RouteProjections::NONE)
+        .with_implicit_head(true)
+    }
+
     const fn app_post(id: &'static str, path: &'static str) -> RouteDescriptor {
         RouteDescriptor::new(
             id,
@@ -3397,6 +3442,14 @@ pub mod application_api {
 
     const fn app_sdk_post(id: &'static str, path: &'static str) -> RouteDescriptor {
         app_post(id, path).with_projections(RouteProjections::SDK)
+    }
+
+    const fn onboarding_post(id: &'static str, path: &'static str) -> RouteDescriptor {
+        app_post(id, path).with_authentication(AuthenticationPolicy::OnboardingToken)
+    }
+
+    const fn onboarding_sdk_post(id: &'static str, path: &'static str) -> RouteDescriptor {
+        onboarding_post(id, path).with_projections(RouteProjections::SDK)
     }
 
     const fn app_delete(id: &'static str, path: &'static str) -> RouteDescriptor {
@@ -3492,6 +3545,9 @@ pub mod application_api {
         API_CID_BY_CID_BY_PATH_GET => app_wildcard_get("application.api_cid_by_cid_by_path_get", "/v1/api/cid/{cid}/{*path}");
         API_CID_BY_CID_BY_PATH_POST => app_wildcard_post("application.api_cid_by_cid_by_path_post", "/v1/api/cid/{cid}/{*path}");
         ACCOUNTS_BY_ACCOUNT_ID_GET => app_get("application.accounts_by_account_id_get", "/v1/accounts/{account_id}");
+        INTERNAL_ACCOUNTS_BY_ACCOUNT_ID_GET => internal_get("application.internal_accounts_by_account_id_get", "/v1/internal/accounts/{account_id}");
+        INTERNAL_ACCOUNTS_BY_ACCOUNT_ID_TRANSACTIONS_BY_ENTRYPOINT_HASH_GET => internal_get("application.internal_accounts_by_account_id_transactions_by_entrypoint_hash_get", "/v1/internal/accounts/{account_id}/transactions/{entrypoint_hash}");
+        INTERNAL_ACCOUNTS_BY_ACCOUNT_ID_ASSETS_BY_ASSET_DEFINITION_ID_GET => internal_get("application.internal_accounts_by_account_id_assets_by_asset_definition_id_get", "/v1/internal/accounts/{account_id}/assets/{asset_definition_id}");
         ACCOUNTS_BY_ACCOUNT_ID_TRANSACTIONS_QUERY_POST => app_post("application.accounts_by_account_id_transactions_query_post", "/v1/accounts/{account_id}/transactions/query");
         TRANSACTIONS_HISTORY_GET => app_get("application.transactions_history_get", "/v1/transactions/history");
         CONTRACTS_ACTIVITY_GET => app_get("application.contracts_activity_get", "/v1/contracts/activity");
@@ -3520,10 +3576,10 @@ pub mod application_api {
         ACCOUNTS_QUERY_POST => app_post("application.accounts_query_post", "/v1/accounts/query");
         TRANSACTIONS_QUERY_POST => app_post("application.transactions_query_post", "/v1/transactions/query");
         TRANSACTIONS_VISIBLE_QUERY_POST => app_post("application.transactions_visible_query_post", "/v1/transactions/visible/query");
-        ACCOUNTS_ONBOARD_POST => app_post("application.accounts_onboard_post", "/v1/accounts/onboard");
+        ACCOUNTS_ONBOARD_POST => onboarding_post("application.accounts_onboard_post", "/v1/accounts/onboard");
         ACCOUNTS_FAUCET_PUZZLE_GET => app_get("application.accounts_faucet_puzzle_get", "/v1/accounts/faucet/puzzle");
         ACCOUNTS_FAUCET_POST => app_post("application.accounts_faucet_post", "/v1/accounts/faucet");
-        ACCOUNTS_ONBOARD_MULTISIG_POST => app_sdk_post("application.accounts_onboard_multisig_post", "/v1/accounts/onboard/multisig");
+        ACCOUNTS_ONBOARD_MULTISIG_POST => onboarding_sdk_post("application.accounts_onboard_multisig_post", "/v1/accounts/onboard/multisig");
         ACCOUNTS_BY_ACCOUNT_ID_ALIASES_GET => app_sdk_get("application.accounts_by_account_id_aliases_get", "/v1/accounts/{account_id}/aliases");
         ACCOUNTS_BY_ACCOUNT_ID_ALIASES_BY_LITERAL_RENEW_POST => app_sdk_post("application.accounts_by_account_id_aliases_by_literal_renew_post", "/v1/accounts/{account_id}/aliases/{literal}/renew");
         ACCOUNTS_BY_ACCOUNT_ID_ALIASES_BY_LITERAL_AUTO_RENEW_POST => app_sdk_post("application.accounts_by_account_id_aliases_by_literal_auto_renew_post", "/v1/accounts/{account_id}/aliases/{literal}/auto-renew");
@@ -3706,6 +3762,10 @@ pub mod contracts_and_verification_keys {
         .with_cors_options(true)
     }
 
+    const fn app_signed_get(id: &'static str, path: &'static str) -> RouteDescriptor {
+        app_get(id, path).with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
+    }
+
     const fn app_post(id: &'static str, path: &'static str) -> RouteDescriptor {
         RouteDescriptor::new(
             id,
@@ -3717,6 +3777,10 @@ pub mod contracts_and_verification_keys {
         .with_feature_gate(FeatureGate::Feature("app_api"))
         .with_projections(RouteProjections::OPENAPI_AND_SDK)
         .with_cors_options(true)
+    }
+
+    const fn app_signed_post(id: &'static str, path: &'static str) -> RouteDescriptor {
+        app_post(id, path).with_authentication(AuthenticationPolicy::CanonicalAccountSignature)
     }
 
     const fn app_sdk_get(id: &'static str, path: &'static str) -> RouteDescriptor {
@@ -3774,12 +3838,10 @@ pub mod contracts_and_verification_keys {
     }
 
     declare_routes! {
-        CONTRACTS_CODE_BYTES_BY_CODE_HASH_GET => app_get("contracts.contracts_code_bytes_by_code_hash_get", "/v1/contracts/code-bytes/{code_hash}");
-        CONTRACTS_DEPLOY_POST => app_post("contracts.contracts_deploy_post", "/v1/contracts/deploy");
-        CONTRACTS_DEPLOY_BUNDLE_POST => app_sdk_post("contracts.contracts_deploy_bundle_post", "/v1/contracts/deploy-bundle");
+        CONTRACTS_CODE_BYTES_BY_CODE_HASH_GET => app_signed_get("contracts.contracts_code_bytes_by_code_hash_get", "/v1/contracts/code-bytes/{code_hash}");
         CONTRACTS_ALIASES_POST => app_post("contracts.contracts_aliases_post", "/v1/contracts/aliases");
-        CONTRACTS_DEPLOY_BUNDLES_BY_BUNDLE_DIGEST_GET => app_sdk_get("contracts.contracts_deploy_bundles_by_bundle_digest_get", "/v1/contracts/deploy-bundles/{bundle_digest}");
-        CONTRACTS_ALIASES_RESOLVE_POST => app_post("contracts.contracts_aliases_resolve_post", "/v1/contracts/aliases/resolve");
+        CONTRACTS_ALIASES_RESOLVE_POST => app_signed_post("contracts.contracts_aliases_resolve_post", "/v1/contracts/aliases/resolve");
+        CONTRACTS_DEPLOYMENT_STATE_POST => app_signed_post("contracts.contracts_deployment_state_post", "/v1/contracts/deployment-state");
         ASSETS_TRANSFER_POST => app_post("assets.assets_transfer_post", "/v1/assets/transfer");
         CONTRACTS_CALL_POST => app_post("contracts.contracts_call_post", "/v1/contracts/call");
         CONTRACTS_CALL_SIMULATE_POST => app_post("contracts.contracts_call_simulate_post", "/v1/contracts/call/simulate");
@@ -3795,14 +3857,9 @@ pub mod contracts_and_verification_keys {
         MULTISIG_PROPOSE_POST => app_post("contracts.multisig_propose_post", "/v1/multisig/propose");
         MULTISIG_APPROVE_POST => app_post("contracts.multisig_approve_post", "/v1/multisig/approve");
         MULTISIG_CANCEL_POST => app_post("contracts.multisig_cancel_post", "/v1/multisig/cancel");
-        MULTISIG_SPEC_POST => app_post("contracts.multisig_spec_post", "/v1/multisig/spec");
-        MULTISIG_PROPOSALS_QUERY_POST => app_post("contracts.multisig_proposals_query_post", "/v1/multisig/proposals/query");
-        MULTISIG_PROPOSALS_LOOKUP_POST => app_post("contracts.multisig_proposals_lookup_post", "/v1/multisig/proposals/lookup");
-        MULTISIG_PROPOSALS_RESOLVE_POST => app_post("contracts.multisig_proposals_resolve_post", "/v1/multisig/proposals/resolve");
-        MULTISIG_APPROVALS_QUERY_POST => app_post("contracts.multisig_approvals_query_post", "/v1/multisig/approvals/query");
-        MULTISIG_APPROVALS_LOOKUP_POST => app_post("contracts.multisig_approvals_lookup_post", "/v1/multisig/approvals/lookup");
-        MULTISIG_APPROVALS_QUERY_FOR_AUTHORITY_POST => app_post("contracts.multisig_approvals_query_for_authority_post", "/v1/multisig/approvals/query-for-authority");
-        MULTISIG_APPROVALS_LOOKUP_FOR_AUTHORITY_POST => app_post("contracts.multisig_approvals_lookup_for_authority_post", "/v1/multisig/approvals/lookup-for-authority");
+        MULTISIG_SPEC_POST => app_signed_post("contracts.multisig_spec_post", "/v1/multisig/spec");
+        MULTISIG_PROPOSALS_QUERY_POST => app_signed_post("contracts.multisig_proposals_query_post", "/v1/multisig/proposals/query");
+        MULTISIG_PROPOSALS_RESOLVE_POST => app_signed_post("contracts.multisig_proposals_resolve_post", "/v1/multisig/proposals/resolve");
         CONTROLS_ASSET_TRANSFER_QUERY_POST => app_post("contracts.controls_asset_transfer_query_post", "/v1/controls/asset-transfer/query");
         ZK_VK_REGISTER_POST => app_sdk_post("contracts.zk_vk_register_post", "/v1/zk/vk/register");
         ZK_VK_UPDATE_POST => app_sdk_post("contracts.zk_vk_update_post", "/v1/zk/vk/update");
@@ -4153,6 +4210,7 @@ pub const CATALOGED_ROUTES: &[RouteDescriptor] = &[
     sumeragi::CHECKPOINTS,
     sumeragi::COMMIT_CERTIFICATES,
     sumeragi::BRIDGE_FINALITY,
+    sumeragi::BRIDGE_FINALITY_ATTESTATION,
     sumeragi::BRIDGE_FINALITY_BUNDLE,
     sumeragi::VALIDATOR_SETS,
     sumeragi::VALIDATOR_SET_BY_HEIGHT,
@@ -4307,6 +4365,9 @@ pub const CATALOGED_ROUTES: &[RouteDescriptor] = &[
     application_api::API_CID_BY_CID_BY_PATH_GET,
     application_api::API_CID_BY_CID_BY_PATH_POST,
     application_api::ACCOUNTS_BY_ACCOUNT_ID_GET,
+    application_api::INTERNAL_ACCOUNTS_BY_ACCOUNT_ID_GET,
+    application_api::INTERNAL_ACCOUNTS_BY_ACCOUNT_ID_TRANSACTIONS_BY_ENTRYPOINT_HASH_GET,
+    application_api::INTERNAL_ACCOUNTS_BY_ACCOUNT_ID_ASSETS_BY_ASSET_DEFINITION_ID_GET,
     application_api::ACCOUNTS_BY_ACCOUNT_ID_TRANSACTIONS_QUERY_POST,
     application_api::TRANSACTIONS_HISTORY_GET,
     application_api::CONTRACTS_ACTIVITY_GET,
@@ -4498,11 +4559,9 @@ pub const CATALOGED_ROUTES: &[RouteDescriptor] = &[
     application_api::WEBHOOKS_POST,
     application_api::WEBHOOKS_BY_ID_DELETE,
     contracts_and_verification_keys::CONTRACTS_CODE_BYTES_BY_CODE_HASH_GET,
-    contracts_and_verification_keys::CONTRACTS_DEPLOY_POST,
-    contracts_and_verification_keys::CONTRACTS_DEPLOY_BUNDLE_POST,
     contracts_and_verification_keys::CONTRACTS_ALIASES_POST,
-    contracts_and_verification_keys::CONTRACTS_DEPLOY_BUNDLES_BY_BUNDLE_DIGEST_GET,
     contracts_and_verification_keys::CONTRACTS_ALIASES_RESOLVE_POST,
+    contracts_and_verification_keys::CONTRACTS_DEPLOYMENT_STATE_POST,
     contracts_and_verification_keys::ASSETS_TRANSFER_POST,
     contracts_and_verification_keys::CONTRACTS_CALL_POST,
     contracts_and_verification_keys::CONTRACTS_CALL_SIMULATE_POST,
@@ -4520,12 +4579,7 @@ pub const CATALOGED_ROUTES: &[RouteDescriptor] = &[
     contracts_and_verification_keys::MULTISIG_CANCEL_POST,
     contracts_and_verification_keys::MULTISIG_SPEC_POST,
     contracts_and_verification_keys::MULTISIG_PROPOSALS_QUERY_POST,
-    contracts_and_verification_keys::MULTISIG_PROPOSALS_LOOKUP_POST,
     contracts_and_verification_keys::MULTISIG_PROPOSALS_RESOLVE_POST,
-    contracts_and_verification_keys::MULTISIG_APPROVALS_QUERY_POST,
-    contracts_and_verification_keys::MULTISIG_APPROVALS_LOOKUP_POST,
-    contracts_and_verification_keys::MULTISIG_APPROVALS_QUERY_FOR_AUTHORITY_POST,
-    contracts_and_verification_keys::MULTISIG_APPROVALS_LOOKUP_FOR_AUTHORITY_POST,
     contracts_and_verification_keys::CONTROLS_ASSET_TRANSFER_QUERY_POST,
     contracts_and_verification_keys::ZK_VK_REGISTER_POST,
     contracts_and_verification_keys::ZK_VK_UPDATE_POST,
@@ -4722,8 +4776,30 @@ mod tests {
     }
 
     #[test]
+    fn protected_namespace_update_is_an_explicit_operator_mcp_route() {
+        let route = runtime_governance::GOV_PROTECTED_POST;
+        assert_eq!(route.surface(), ApiSurface::Operator);
+        assert_eq!(
+            route.authentication(),
+            AuthenticationPolicy::OperatorSignature
+        );
+        assert!(route.projections().openapi());
+        assert!(!route.projections().sdk());
+        assert!(route.projections().mcp());
+
+        let routes = [route];
+        let projected = RouteCatalog::new(&routes)
+            .project(CatalogProjection::Mcp, EnabledFeatures::new(&["app_api"]));
+        assert_eq!(projected, vec![&routes[0]]);
+    }
+
+    #[test]
     fn bridge_finality_routes_are_not_telemetry_gated() {
-        for route in [sumeragi::BRIDGE_FINALITY, sumeragi::BRIDGE_FINALITY_BUNDLE] {
+        for route in [
+            sumeragi::BRIDGE_FINALITY,
+            sumeragi::BRIDGE_FINALITY_ATTESTATION,
+            sumeragi::BRIDGE_FINALITY_BUNDLE,
+        ] {
             assert_eq!(route.feature_gate(), FeatureGate::Always);
         }
     }
@@ -4830,6 +4906,90 @@ mod tests {
                 .all(|route| route.path() != "/soradns/{fqdn}/"),
             "the first-release gateway must not expose a trailing-slash alias"
         );
+    }
+
+    #[test]
+    fn dedicated_onboarding_authentication_is_exactly_scoped() {
+        for route in [
+            application_api::ACCOUNTS_ONBOARD_POST,
+            application_api::ACCOUNTS_ONBOARD_MULTISIG_POST,
+        ] {
+            assert_eq!(
+                route.authentication(),
+                AuthenticationPolicy::OnboardingToken,
+                "{} must advertise its dedicated credential",
+                route.stable_route_id()
+            );
+        }
+        assert_eq!(
+            CATALOGED_ROUTES
+                .iter()
+                .filter(|route| { route.authentication() == AuthenticationPolicy::OnboardingToken })
+                .count(),
+            2,
+            "no unrelated route may inherit the onboarding credential policy"
+        );
+    }
+
+    #[test]
+    fn trusted_internal_account_reads_are_not_projected_to_public_tooling() {
+        let routes = [
+            application_api::INTERNAL_ACCOUNTS_BY_ACCOUNT_ID_GET,
+            application_api::INTERNAL_ACCOUNTS_BY_ACCOUNT_ID_TRANSACTIONS_BY_ENTRYPOINT_HASH_GET,
+            application_api::INTERNAL_ACCOUNTS_BY_ACCOUNT_ID_ASSETS_BY_ASSET_DEFINITION_ID_GET,
+        ];
+        let catalog = RouteCatalog::new(&routes);
+        assert_eq!(catalog.validate(), Ok(()));
+        for route in routes {
+            assert_eq!(route.projections(), RouteProjections::NONE);
+            assert!(!route.cors_options());
+        }
+        let enabled = EnabledFeatures::new(&["app_api"]);
+        assert!(
+            catalog
+                .project(CatalogProjection::OpenApi, enabled)
+                .is_empty()
+        );
+        assert!(catalog.project(CatalogProjection::Sdk, enabled).is_empty());
+        assert!(catalog.project(CatalogProjection::Mcp, enabled).is_empty());
+    }
+
+    #[test]
+    fn account_alias_and_recipient_reads_declare_canonical_account_authentication() {
+        for route in [
+            aliases::RESOLVE,
+            aliases::RESOLVE_INDEX,
+            aliases::BY_ACCOUNT,
+            aliases::RETAIL_RECIPIENT_LOOKUP,
+            aliases::RETAIL_RECIPIENT_ROUTE,
+            aliases::FEE_SPONSOR_POLICY_BY_ID,
+        ] {
+            assert_eq!(
+                route.authentication(),
+                AuthenticationPolicy::CanonicalAccountSignature,
+                "{} must not advertise permissionless alias or recipient data",
+                route.stable_route_id()
+            );
+        }
+
+        assert_eq!(
+            aliases::ASSET_RESOLVE.authentication(),
+            AuthenticationPolicy::ToriiDefault,
+            "public asset aliases do not expose an account binding"
+        );
+
+        for route in [
+            contracts_and_verification_keys::CONTRACTS_ALIASES_RESOLVE_POST,
+            contracts_and_verification_keys::CONTRACTS_DEPLOYMENT_STATE_POST,
+            runtime_governance::GOV_CONTRACT_GET,
+        ] {
+            assert_eq!(
+                route.authentication(),
+                AuthenticationPolicy::CanonicalAccountSignature,
+                "{} exposes contract identity and must require a canonical account signature",
+                route.stable_route_id()
+            );
+        }
     }
 
     #[test]
@@ -5004,6 +5164,7 @@ mod tests {
             EnabledFeatures::new(&["app_api"]),
         );
         for unsupported_path in [
+            "/v1/multisig/proposals/lookup",
             "/v1/multisig/proposals/list",
             "/v1/multisig/proposals/get",
             "/v1/multisig/proposals/search",
@@ -5011,6 +5172,10 @@ mod tests {
             "/v1/multisig/approvals/get",
             "/v1/multisig/approvals/list_for_authority",
             "/v1/multisig/approvals/get_for_authority",
+            "/v1/multisig/approvals/query",
+            "/v1/multisig/approvals/lookup",
+            "/v1/multisig/approvals/query-for-authority",
+            "/v1/multisig/approvals/lookup-for-authority",
             "/v1/controls/asset-transfer/get",
             "/v1/nexus/public_lanes/{lane_id}/validators",
             "/v1/sorafs/capacity/por-challenge",
@@ -5034,12 +5199,7 @@ mod tests {
         for canonical_path in [
             "/v1/assets/transfer",
             "/v1/multisig/proposals/query",
-            "/v1/multisig/proposals/lookup",
             "/v1/multisig/proposals/resolve",
-            "/v1/multisig/approvals/query",
-            "/v1/multisig/approvals/lookup",
-            "/v1/multisig/approvals/query-for-authority",
-            "/v1/multisig/approvals/lookup-for-authority",
             "/v1/controls/asset-transfer/query",
             "/v1/nexus/public-lanes/{lane_id}/validators",
         ] {
@@ -5052,6 +5212,20 @@ mod tests {
 
     #[test]
     fn contract_and_application_route_policies_are_projection_safe() {
+        for route in [
+            contracts_and_verification_keys::CONTRACTS_CODE_BYTES_BY_CODE_HASH_GET,
+            contracts_and_verification_keys::MULTISIG_SPEC_POST,
+            contracts_and_verification_keys::MULTISIG_PROPOSALS_QUERY_POST,
+            contracts_and_verification_keys::MULTISIG_PROPOSALS_RESOLVE_POST,
+        ] {
+            assert_eq!(
+                route.authentication(),
+                AuthenticationPolicy::CanonicalAccountSignature,
+                "{}",
+                route.stable_route_id()
+            );
+        }
+
         for route in [
             contracts_and_verification_keys::SORAFS_CAPACITY_POR_PROOF_POST,
             contracts_and_verification_keys::SORAFS_CAPACITY_POR_VERDICT_POST,
@@ -5086,12 +5260,7 @@ mod tests {
             contracts_and_verification_keys::BRIDGE_PROOFS_SUBMIT_POST,
             contracts_and_verification_keys::BRIDGE_MESSAGES_POST,
             contracts_and_verification_keys::MULTISIG_PROPOSALS_QUERY_POST,
-            contracts_and_verification_keys::MULTISIG_PROPOSALS_LOOKUP_POST,
             contracts_and_verification_keys::MULTISIG_PROPOSALS_RESOLVE_POST,
-            contracts_and_verification_keys::MULTISIG_APPROVALS_QUERY_POST,
-            contracts_and_verification_keys::MULTISIG_APPROVALS_LOOKUP_POST,
-            contracts_and_verification_keys::MULTISIG_APPROVALS_QUERY_FOR_AUTHORITY_POST,
-            contracts_and_verification_keys::MULTISIG_APPROVALS_LOOKUP_FOR_AUTHORITY_POST,
         ] {
             assert!(route.projections().openapi(), "{}", route.stable_route_id());
         }
@@ -5101,16 +5270,6 @@ mod tests {
         ] {
             assert!(route.projections().sdk(), "{}", route.stable_route_id());
         }
-        assert!(
-            contracts_and_verification_keys::CONTRACTS_DEPLOY_BUNDLE_POST
-                .projections()
-                .sdk()
-        );
-        assert!(
-            !contracts_and_verification_keys::CONTRACTS_DEPLOY_BUNDLE_POST
-                .projections()
-                .openapi()
-        );
         assert!(application_api::SORACLOUD_DEPLOY_POST.projections().sdk());
         assert!(
             !application_api::SORACLOUD_DEPLOY_POST

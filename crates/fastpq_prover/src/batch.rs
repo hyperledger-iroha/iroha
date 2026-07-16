@@ -5,6 +5,13 @@ use std::collections::BTreeMap;
 use norito::json::{JsonDeserialize, JsonSerialize};
 use norito::{NoritoDeserialize, NoritoSerialize};
 
+/// Stable nominal Norito schema identity for [`TransitionBatch`].
+///
+/// This intentionally preserves the type-name hash carried by the existing
+/// canonical FASTPQ fixtures while making it independent of Cargo features and
+/// Rust module refactors.
+pub const TRANSITION_BATCH_SCHEMA_NAME: &str = "fastpq_prover::batch::TransitionBatch";
+
 /// Public inputs supplied by the host for a FASTPQ batch.
 #[derive(
     Debug,
@@ -158,6 +165,7 @@ impl OperationKind {
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
 )]
+#[norito(schema_name = "fastpq_prover::batch::TransitionBatch")]
 pub struct TransitionBatch {
     /// Canonical parameter set name expected for this proof.
     pub parameter: String,
@@ -206,6 +214,26 @@ impl TransitionBatch {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn transition_batch_schema_identity_is_stable() {
+        let expected = norito::core::schema_hash_for_name(TRANSITION_BATCH_SCHEMA_NAME);
+        assert_eq!(
+            <TransitionBatch as NoritoSerialize>::schema_hash(),
+            expected
+        );
+        assert_eq!(
+            <TransitionBatch as NoritoDeserialize>::schema_hash(),
+            expected
+        );
+        assert_eq!(
+            expected,
+            [
+                0x51, 0x76, 0x0d, 0xe0, 0xa1, 0x40, 0x63, 0xa6, 0x83, 0xc3, 0x80, 0x1f, 0xe0, 0x79,
+                0xd1, 0x1f,
+            ]
+        );
+    }
 
     #[test]
     fn sort_orders_by_key() {

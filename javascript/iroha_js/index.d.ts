@@ -1,6 +1,8 @@
 /// <reference types="node" />
 
 export * from "./kotodama-compiler.js";
+export * from "./transaction-codec.js";
+export * from "./smart-contract-deployment.js";
 
 export type JsonValue =
   | null
@@ -9,6 +11,144 @@ export type JsonValue =
   | string
   | JsonValue[]
   | { [key: string]: JsonValue };
+
+export const KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION: 20;
+export const KAGEMUSHA_MANIFEST_VERSION: 4;
+export const KAGEMUSHA_MAX_HOPS: 8;
+export const KAGEMUSHA_TOP_UP_REQUEST_MAX_BYTES: 524288;
+export const KAGEMUSHA_REDEEM_REQUEST_MAX_BYTES: 50331648;
+
+export interface KagemushaNoritoRequestV4 {
+  readonly version: 4;
+  readonly operationId: string;
+  readonly norito: Uint8Array;
+}
+
+export interface KagemushaReadinessBlocker {
+  readonly code: string;
+  readonly message: string;
+}
+
+export interface KagemushaVerifierId {
+  readonly backend: "halo2/ipa";
+  readonly name: string;
+}
+
+export interface KagemushaActiveVerifier {
+  readonly id: KagemushaVerifierId;
+  readonly version: number;
+  readonly circuit_id: string;
+  readonly commitment: string;
+  readonly public_inputs_schema_hash: string;
+  readonly max_proof_bytes: number;
+  readonly activation_height: number;
+  readonly withdrawal_height: number | null;
+}
+
+export interface KagemushaAuthenticatedArtifactSetV4 {
+  readonly generation: string;
+  readonly manifest_sha256: string;
+  readonly release_policy_sha256: string;
+  readonly release_attestation_sha256: string;
+  readonly activation_height: number;
+  readonly withdrawal_height: number;
+  readonly max_proof_bytes: number;
+  readonly asset_scale: number;
+}
+
+export interface KagemushaReadinessV4 {
+  readonly required_bridge_abi_version: 20;
+  readonly max_hops: 8;
+  readonly asset_definition_id: string;
+  readonly asset_scale: number | null;
+  readonly evaluated_block_height: number;
+  readonly evaluated_block_hash: string;
+  readonly active_transfer_verifier: KagemushaActiveVerifier | null;
+  readonly active_topup_shield_verifier: KagemushaActiveVerifier | null;
+  readonly active_unshield_verifier: KagemushaActiveVerifier | null;
+  readonly active_recursive_step_eq_verifier: KagemushaActiveVerifier | null;
+  readonly active_recursive_step_ep_verifier: KagemushaActiveVerifier | null;
+  readonly artifact_set: KagemushaAuthenticatedArtifactSetV4 | null;
+  readonly proof_backend_available: boolean;
+  readonly recursive_lineage_supported: boolean;
+  readonly ready: boolean;
+  readonly blockers: readonly KagemushaReadinessBlocker[];
+}
+
+export type KagemushaOperationKind = Readonly<{
+  kind: "top_up" | "redeem";
+  value: null;
+}>;
+
+export interface KagemushaOperationReference {
+  readonly operation_id: string;
+  readonly kind: KagemushaOperationKind;
+  readonly state: Readonly<{ state: "pending"; value: null }>;
+  readonly transaction_hash: string;
+  readonly status_uri: string;
+  readonly submitted_at_ms: number;
+}
+
+export type KagemushaOperationStatus =
+  | Readonly<{
+      state: "pending";
+      value: Readonly<{
+        operation_id: string;
+        kind: KagemushaOperationKind;
+        transaction_hash: string;
+        submitted_at_ms: number;
+      }>;
+    }>
+  | Readonly<{
+      state: "applied";
+      value: Readonly<{
+        operation_id: string;
+        result: Readonly<{
+          kind: "top_up" | "redeem";
+          result: Readonly<Record<string, JsonValue>>;
+        }>;
+      }>;
+    }>
+  | Readonly<{
+      state: "rejected";
+      value: Readonly<{
+        operation_id: string;
+        kind: KagemushaOperationKind;
+        transaction_hash: string;
+        error: Readonly<{
+          code: string;
+          message: string;
+          details?: Readonly<Record<string, JsonValue>>;
+        }>;
+      }>;
+    }>;
+
+export function normalizeKagemushaAssetSelector(value: string, context?: string): string;
+export function normalizeKagemushaOperationId(value: string, context?: string): string;
+export function normalizeKagemushaTopUpRequestV4(
+  value: KagemushaNoritoRequestV4,
+  context?: string,
+): KagemushaNoritoRequestV4;
+export function normalizeKagemushaRedeemRequestV4(
+  value: KagemushaNoritoRequestV4,
+  context?: string,
+): KagemushaNoritoRequestV4;
+export function normalizeKagemushaReadinessV4(
+  payload: Record<string, unknown>,
+  requestedAssetSelector: string,
+): KagemushaReadinessV4;
+export function normalizeKagemushaOperationReference(
+  payload: Record<string, unknown>,
+  expected: {
+    expectedOperationId: string;
+    expectedKind: "top_up" | "redeem";
+    location: string | null;
+  },
+): KagemushaOperationReference;
+export function normalizeKagemushaOperationStatus(
+  payload: Record<string, unknown>,
+  expectedOperationId: string,
+): KagemushaOperationStatus;
 
 export type CryptoAlgorithm =
   | "ed25519"
@@ -3159,6 +3299,7 @@ export interface ContractEventStreamOptions {
 }
 
 export interface CanonicalRequestAuth {
+  /** Exact canonical ASCII account alias; I105 is not valid in this HTTP header credential. */
   accountId: string;
   privateKey:
     | Buffer
@@ -3465,9 +3606,11 @@ export interface FeeSponsorContractSelector {
 
 export interface FeeSponsorRule {
   effect: FeeSponsorRuleEffect;
+  max_fee?: string | null;
   dataspaces: ReadonlyArray<number>;
   executable_kinds: ReadonlyArray<FeeSponsorExecutableKind>;
   instruction_wire_ids: ReadonlyArray<string>;
+  asset_transfer_definition_ids: ReadonlyArray<string>;
   contract_selectors: ReadonlyArray<FeeSponsorContractSelector>;
 }
 
@@ -4400,21 +4543,19 @@ export type ToriiPipelineEvent =
   | ToriiPipelineWitnessEvent;
 
 export interface ToriiPipelineTransactionStatusStatus {
-  kind: string;
-  content: unknown;
-  [key: string]: unknown;
-}
-
-export interface ToriiPipelineTransactionStatusContent {
-  hash: string;
-  status: ToriiPipelineTransactionStatusStatus;
-  [key: string]: unknown;
+  kind: "Queued" | "Approved" | "Committed" | "Applied" | "Rejected" | "Expired";
+  block_height?: number | null;
+  rejection_reason?: unknown | null;
 }
 
 export interface ToriiPipelineTransactionStatus {
-  kind: string;
-  content: ToriiPipelineTransactionStatusContent;
-  [key: string]: unknown;
+  hash: string;
+  status: ToriiPipelineTransactionStatusStatus;
+  summary?: string;
+  diagnostics?: ReadonlyArray<Record<string, unknown>>;
+  trigger_completions?: ReadonlyArray<Record<string, unknown>>;
+  scope: "local" | "auto" | "global";
+  resolved_from: "cache" | "queue" | "state";
 }
 
 export interface ToriiProofEventBase {
@@ -5415,6 +5556,7 @@ type NoritoRuntimeNamespaceExport =
     "noritoDecodeInstruction"
   | "noritoDecodePrivacyProofEnvelope"
   | "noritoEncodeInstruction"
+  | "noritoEncodeContractManifestSignaturePayload"
   | "noritoEncodeMultisigContractCallApproveRequest"
   | "noritoEncodeMultisigContractCallProposeRequest"
   | "noritoEncodeMultisigProposeRequest"
@@ -10875,6 +11017,35 @@ export interface RegisterSmartContractBytesInstructionInput {
   code: ArrayBufferView | ArrayBuffer | Buffer | string;
 }
 
+export type SmartContractUnsigned64 = number | bigint | string;
+
+export interface UploadSmartContractCodeChunkInstructionInput {
+  codeHash: HashLike;
+  totalSize: SmartContractUnsigned64;
+  chunkIndex: number;
+  chunkCount: number;
+  chunk: ArrayBufferView | ArrayBuffer | Buffer | string;
+}
+
+export interface FinalizeSmartContractCodeUploadInstructionInput {
+  codeHash: HashLike;
+  totalSize: SmartContractUnsigned64;
+  chunkCount: number;
+}
+
+export interface CancelSmartContractCodeUploadInstructionInput {
+  codeHash: HashLike;
+}
+
+export interface CommitContractDeploymentInstructionInput {
+  expectedDeployNonce: SmartContractUnsigned64;
+  contractAddress: string;
+  codeHash: HashLike;
+  contractAlias: string;
+  leaseExpiryMs?: SmartContractUnsigned64 | null;
+  expectedPreviousContractAddress?: string | null;
+}
+
 export interface RemoveSmartContractBytesInstructionInput {
   codeHash: HashLike;
   reason?: string | null;
@@ -11456,6 +11627,66 @@ export interface ToriiBrowserClientOptions {
   };
 }
 
+export interface ToriiBrowserRequestOptions {
+  signal?: AbortSignal;
+  headers?: Record<string, string>;
+  successStatuses?: ReadonlyArray<number>;
+}
+
+export interface ToriiBrowserTransactionStatusOptions
+  extends ToriiBrowserRequestOptions {
+  scope?: "local" | "auto" | "global";
+}
+
+export interface ToriiBrowserTransactionStatusPollOptions
+  extends ToriiBrowserRequestOptions {
+  scope?: "global";
+  intervalMs?: number;
+  timeoutMs?: number;
+  maxAttempts?: number;
+}
+
+export interface ToriiBrowserSubmitTransactionAndWaitOptions
+  extends ToriiBrowserTransactionStatusPollOptions {
+  hashHex?: string;
+}
+
+export interface ToriiBrowserNodeCapabilities {
+  abi_version: number;
+  data_model_version: number;
+  signed_transaction_schema_hash_hex: string;
+  crypto?: Record<string, unknown>;
+  query?: Record<string, unknown>;
+}
+
+export interface ToriiBrowserContractDeploymentStateRequest {
+  authority: string;
+  contract_alias: string;
+}
+
+export interface ToriiBrowserContractDeploymentStateResponse {
+  authority: string;
+  contract_alias: string;
+  deploy_nonce: string;
+  dataspace_alias: string;
+  dataspace_id: string;
+  previous_contract_address: string | null;
+  observed_block_height: string;
+  observed_block_hash: string;
+  ledger_time_ms: string;
+  chain_discriminant: string;
+}
+
+export interface ToriiBrowserContractDeploymentStateOptions
+  extends ToriiBrowserRequestOptions {
+  authAccountId?: string;
+  sign?: (
+    input: CanonicalJsonRequestSignerInput,
+  ) => CanonicalJsonRequestSignature | Promise<CanonicalJsonRequestSignature>;
+  timestampMs?: number;
+  nonce?: string;
+}
+
 export declare class ToriiBrowserHttpError extends Error {
   readonly response: Response;
   readonly status: number;
@@ -11464,6 +11695,53 @@ export declare class ToriiBrowserHttpError extends Error {
 
 export declare class ToriiBrowserClient {
   constructor(baseUrl: string | URL, options?: ToriiBrowserClientOptions);
+  submitTransaction(
+    signedTransaction: ArrayBufferView | ArrayBuffer | Buffer,
+    options?: ToriiBrowserRequestOptions,
+  ): Promise<unknown | null>;
+  getTransactionStatus(
+    hashHex: string,
+    options?: ToriiBrowserTransactionStatusOptions,
+  ): Promise<ToriiPipelineTransactionStatus | null>;
+  waitForTransactionStatus(
+    hashHex: string,
+    options?: ToriiBrowserTransactionStatusPollOptions,
+  ): Promise<ToriiPipelineTransactionStatus>;
+  submitTransactionAndWait(
+    signedTransaction: ArrayBufferView | ArrayBuffer | Buffer,
+    options: ToriiBrowserSubmitTransactionAndWaitOptions,
+  ): Promise<ToriiPipelineTransactionStatus>;
+  getNodeCapabilities(
+    options?: ToriiBrowserRequestOptions,
+  ): Promise<ToriiBrowserNodeCapabilities>;
+  getContractDeploymentState(
+    request: ToriiBrowserContractDeploymentStateRequest,
+    options?: ToriiBrowserContractDeploymentStateOptions,
+  ): Promise<ToriiBrowserContractDeploymentStateResponse>;
+  resolveContractAlias(
+    contractAlias: string,
+    options?: ToriiBrowserRequestOptions,
+  ): Promise<unknown>;
+  getAccount(
+    accountId: string,
+    options?: ToriiBrowserRequestOptions,
+  ): Promise<unknown>;
+  getKagemushaReadinessV4(
+    assetDefinitionId: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<KagemushaReadinessV4>;
+  submitKagemushaTopUpV4(
+    request: KagemushaNoritoRequestV4,
+    options?: { signal?: AbortSignal },
+  ): Promise<KagemushaOperationReference>;
+  submitKagemushaRedeemV4(
+    request: KagemushaNoritoRequestV4,
+    options?: { signal?: AbortSignal },
+  ): Promise<KagemushaOperationReference>;
+  getKagemushaOperationStatus(
+    operationId: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<KagemushaOperationStatus>;
   listExplorerAccounts(options?: Record<string, unknown>): Promise<unknown>;
   getExplorerAccount(
     accountId: string,
@@ -11599,6 +11877,22 @@ export declare class ToriiBrowserClient {
 
 export declare class ToriiClient {
   constructor(baseUrl: string, options?: ToriiClientOptions);
+  getKagemushaReadinessV4(
+    assetDefinitionId: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<KagemushaReadinessV4>;
+  submitKagemushaTopUpV4(
+    request: KagemushaNoritoRequestV4,
+    options?: { signal?: AbortSignal },
+  ): Promise<KagemushaOperationReference>;
+  submitKagemushaRedeemV4(
+    request: KagemushaNoritoRequestV4,
+    options?: { signal?: AbortSignal },
+  ): Promise<KagemushaOperationReference>;
+  getKagemushaOperationStatus(
+    operationId: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<KagemushaOperationStatus>;
   listAccounts<T = ToriiAccountListItem>(
     options?: IterableListOptions,
   ): Promise<ToriiIterableListResponse<T>>;
@@ -13048,6 +13342,14 @@ export function sm2FixtureFromSeed(
 ): Sm2Fixture;
 
 export function noritoEncodeInstruction(instruction: object | string): Buffer;
+/** Encode a canonical compact `InstructionBox` archive for a transaction. */
+export function noritoEncodeInstructionBoxArchive(
+  instruction: object | string | ArrayBufferView | ArrayBuffer | Buffer,
+): Buffer;
+/** Encode the exact current Rust manifest-provenance signing frame. */
+export function noritoEncodeContractManifestSignaturePayload(
+  manifest: Record<string, unknown>,
+): Buffer;
 export function noritoEncodeTransactionPayloadBatch(
   payloads: ReadonlyArray<ArrayBufferView | ArrayBuffer | Buffer>,
 ): Buffer;
@@ -14486,6 +14788,22 @@ export function buildRegisterSmartContractCodeInstruction(
 
 export function buildRegisterSmartContractBytesInstruction(
   input: RegisterSmartContractBytesInstructionInput,
+): object;
+
+export function buildUploadSmartContractCodeChunkInstruction(
+  input: UploadSmartContractCodeChunkInstructionInput,
+): object;
+
+export function buildFinalizeSmartContractCodeUploadInstruction(
+  input: FinalizeSmartContractCodeUploadInstructionInput,
+): object;
+
+export function buildCancelSmartContractCodeUploadInstruction(
+  input: CancelSmartContractCodeUploadInstructionInput,
+): object;
+
+export function buildCommitContractDeploymentInstruction(
+  input: CommitContractDeploymentInstructionInput,
 ): object;
 
 export function buildRemoveSmartContractBytesInstruction(

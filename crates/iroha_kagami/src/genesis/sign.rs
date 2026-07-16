@@ -19,7 +19,7 @@ use iroha_core::{
     state::{State, World},
     sumeragi::{VotingBlock, network_topology::Topology},
 };
-use iroha_crypto::{Algorithm, KeyPair, PrivateKey};
+use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair, PrivateKey};
 use iroha_data_model::{
     asset::AssetDefinitionAlias, block::consensus_v2::ConsensusMode as WireConsensusMode,
     da::commitment::DaProofPolicyBundle, isi::RegisterPublicLaneValidator,
@@ -27,6 +27,7 @@ use iroha_data_model::{
 };
 use iroha_genesis::{GenesisBuilder, GenesisTopologyEntry, RawGenesisTransaction};
 use iroha_primitives::time::TimeSource;
+use zeroize::Zeroize as _;
 
 use super::{
     ConsensusPolicy, build_line_from_env, ensure_npos_parameters, generate::ConsensusModeArg,
@@ -57,6 +58,13 @@ pub struct Args {
     /// Private key hex (multihash payload, not prefixed) that matches the genesis public key.
     #[clap(long, conflicts_with = "seed", value_name = "HEX")]
     private_key: Option<String>,
+    /// Owner-held mode-0600 file containing one canonical private-key multihash.
+    #[clap(
+        long,
+        conflicts_with_all = ["private_key", "seed"],
+        value_name = "PATH"
+    )]
+    private_key_file: Option<PathBuf>,
     /// Seed string to derive the genesis key (testing convenience).
     #[clap(long, conflicts_with = "private_key", value_name = "SEED")]
     seed: Option<String>,
@@ -656,12 +664,20 @@ impl<T: Write> RunArgs<T> for Args {
         }
         let genesis_key_pair = load_genesis_key(
             self.private_key.as_deref(),
+            self.private_key_file.as_deref(),
             self.seed.as_deref(),
             self.algorithm,
         )?;
         let da_proof_policies = resolve_da_proof_policies(self.config.as_deref())?;
         let confidential_policy_hash = resolve_confidential_policy_hash(self.config.as_deref())?;
         let peer_config = self.config.as_deref().map(load_peer_config).transpose()?;
+        if let Some(config) = peer_config.as_ref()
+            && config.genesis.public_key != *genesis_key_pair.public_key()
+        {
+            return Err(eyre!(
+                "genesis signing key does not match the public key pinned by --config"
+            ));
+        }
         let direct_sign_safe = topology_override.is_none() && !needs_npos_bootstrap;
         let prepared_genesis = if direct_sign_safe {
             genesis.with_consensus_mode(consensus_mode)
@@ -734,21 +750,53 @@ fn reject_legacy_scale_out_file(path: &Path) -> Result<(), color_eyre::eyre::Err
 
 fn load_genesis_key(
     private_key_hex: Option<&str>,
+    private_key_file: Option<&Path>,
     seed: Option<&str>,
     algorithm: Algorithm,
 ) -> Result<KeyPair, color_eyre::eyre::Error> {
-    match (private_key_hex, seed) {
-        (Some(hex), None) => {
+    match (private_key_hex, private_key_file, seed) {
+        (Some(hex), None, None) => {
             let sk = PrivateKey::from_hex(algorithm, hex).wrap_err("decode genesis private key")?;
             KeyPair::from_private_key(sk).wrap_err("derive genesis key pair from private key")
         }
-        (None, Some(seed)) => KeyPair::try_from_seed(seed.as_bytes().to_vec(), algorithm)
+        (None, Some(path), None) => load_genesis_key_file(path, algorithm),
+        (None, None, Some(seed)) => KeyPair::try_from_seed(seed.as_bytes().to_vec(), algorithm)
             .wrap_err("derive seeded genesis key pair"),
-        (None, None) => Err(eyre!(
-            "genesis signing requires a private key; pass --private-key or --seed"
+        (None, None, None) => Err(eyre!(
+            "genesis signing requires a private key; pass --private-key-file, --private-key, or --seed"
         )),
-        (Some(_), Some(_)) => unreachable!("clap enforces conflicts"),
+        _ => unreachable!("clap enforces key-source conflicts"),
     }
+}
+
+fn load_genesis_key_file(
+    path: &Path,
+    algorithm: Algorithm,
+) -> Result<KeyPair, color_eyre::eyre::Error> {
+    let mut raw = zeroize::Zeroizing::new(crate::secure_fs::read_private_file(path)?);
+    let text =
+        std::str::from_utf8(raw.as_slice()).wrap_err("genesis private-key file is not UTF-8")?;
+    let canonical = text.strip_suffix('\n').ok_or_else(|| {
+        eyre!("genesis private-key file must contain one canonical key and a final newline")
+    })?;
+    if canonical.is_empty()
+        || canonical.chars().any(char::is_whitespace)
+        || format!("{canonical}\n").as_bytes() != raw.as_slice()
+    {
+        return Err(eyre!(
+            "genesis private-key file is not one canonical key record"
+        ));
+    }
+    let exposed = canonical
+        .parse::<ExposedPrivateKey>()
+        .wrap_err("decode canonical genesis private-key file")?;
+    if exposed.to_string() != canonical || exposed.0.algorithm() != algorithm {
+        return Err(eyre!(
+            "genesis private-key file encoding or algorithm is not canonical"
+        ));
+    }
+    raw.zeroize();
+    KeyPair::from_private_key(exposed.0).wrap_err("derive genesis key pair from private-key file")
 }
 
 fn build_topology_entries(
@@ -879,10 +927,7 @@ mod tests {
     use iroha_data_model::{
         ChainId,
         asset::AssetDefinitionAlias,
-        block::{
-            SignedBlock, consensus_v2::SumeragiV2GenesisContextParameters,
-            decode_framed_signed_block,
-        },
+        block::{SignedBlock, decode_framed_signed_block},
         isi::{
             SetParameter, asset_alias::SetAssetDefinitionAlias, mint_burn::MintBox,
             register::RegisterBox, staking::RegisterPublicLaneValidator,
@@ -1028,6 +1073,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             topology: None,
             peer_pops: Vec::new(),
             private_key: Some(test_private_key_hex()),
+            private_key_file: None,
             seed: None,
             algorithm: Algorithm::Ed25519,
             config: Some(root.join(config_path)),
@@ -1143,7 +1189,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
                 "{genesis_path} must carry the exact context produced by the production signing path"
             );
             assert_eq!(
-                Some(signed.consensus_fingerprint.as_str()),
+                Some(signed.consensus_fingerprint),
                 manifest.consensus_fingerprint(),
                 "{genesis_path} fingerprint must cover the exact staged context"
             );
@@ -1214,6 +1260,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
                 topology: None,
                 peer_pops: Vec::new(),
                 private_key: Some(test_private_key_hex()),
+                private_key_file: None,
                 seed: None,
                 algorithm: Algorithm::Ed25519,
                 config: None,
@@ -1239,6 +1286,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             topology: None,
             peer_pops: Vec::new(),
             private_key: Some(test_private_key_hex()),
+            private_key_file: None,
             seed: None,
             algorithm: Algorithm::Ed25519,
             config: None,
@@ -1260,6 +1308,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
                 topology: None,
                 peer_pops: Vec::new(),
                 private_key: Some(test_private_key_hex()),
+                private_key_file: None,
                 seed: None,
                 algorithm: Algorithm::Ed25519,
                 config: None,
@@ -1301,6 +1350,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             topology: None,
             peer_pops: vec!["pk=00".to_string()],
             private_key: Some(test_private_key_hex()),
+            private_key_file: None,
             seed: None,
             algorithm: Algorithm::Ed25519,
             config: None,
@@ -1329,6 +1379,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             topology: Some(topology_json),
             peer_pops: vec![dup.clone(), dup],
             private_key: Some(test_private_key_hex()),
+            private_key_file: None,
             seed: None,
             algorithm: Algorithm::Ed25519,
             config: None,
@@ -1376,6 +1427,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             topology: None,
             peer_pops: Vec::new(),
             private_key: Some(test_private_key_hex()),
+            private_key_file: None,
             seed: None,
             algorithm: Algorithm::Ed25519,
             config: None,
@@ -1394,7 +1446,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
 
     #[test]
     fn load_genesis_key_accepts_seed_and_algorithm() {
-        let kp = load_genesis_key(None, Some("seed-123"), Algorithm::Secp256k1)
+        let kp = load_genesis_key(None, None, Some("seed-123"), Algorithm::Secp256k1)
             .expect("seed path should work");
         assert_eq!(
             kp.public_key()
@@ -1412,6 +1464,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             topology: Some("not valid json".to_owned()),
             peer_pops: Vec::new(),
             private_key: Some(test_private_key_hex()),
+            private_key_file: None,
             seed: None,
             algorithm: Algorithm::Ed25519,
             config: None,
@@ -1432,6 +1485,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             topology: None,
             peer_pops: Vec::new(),
             private_key: None,
+            private_key_file: None,
             seed: None,
             algorithm: Algorithm::Ed25519,
             config: None,
@@ -1451,6 +1505,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             topology: None,
             peer_pops: Vec::new(),
             private_key: Some(test_private_key_hex()),
+            private_key_file: None,
             seed: None,
             algorithm: Algorithm::Ed25519,
             config: None,
@@ -1475,6 +1530,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             topology: None,
             peer_pops: Vec::new(),
             private_key: Some(test_private_key_hex()),
+            private_key_file: None,
             seed: None,
             algorithm: Algorithm::Ed25519,
             config: None,
@@ -1509,6 +1565,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
                 "00" // minimal hex payload for test
             )],
             private_key: Some(test_private_key_hex()),
+            private_key_file: None,
             seed: None,
             algorithm: Algorithm::Ed25519,
             config: None,
@@ -1556,6 +1613,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             topology: Some(topology_json),
             peer_pops: vec![format!("{}=01", new_peer.public_key())],
             private_key: Some(test_private_key_hex()),
+            private_key_file: None,
             seed: None,
             algorithm: Algorithm::Ed25519,
             config: None,
@@ -1630,6 +1688,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             topology: None,
             peer_pops: vec![],
             private_key: None,
+            private_key_file: None,
             seed: Some(seed.to_owned()),
             algorithm: Algorithm::Ed25519,
             config: None,
@@ -1684,7 +1743,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             out_dir: temp.path().to_path_buf(),
             extra_accounts: 0,
             assets: Vec::new(),
-            block_time_ms: None,
+            block_cadence_ms: None,
             consensus_mode: SumeragiConsensusMode::Npos,
         };
         crate::localnet::generate_localnet(&options, &mut BufWriter::new(Vec::new()))
@@ -1732,12 +1791,11 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             topology: None,
             peer_pops: vec![],
             private_key: Some(hex::encode(genesis_private_key_bytes)),
+            private_key_file: None,
             seed: None,
             algorithm: Algorithm::Ed25519,
             config: Some(config_path),
             consensus_mode: None,
-            next_consensus_mode: None,
-            mode_activation_height: None,
         };
 
         let mut writer = BufWriter::new(Vec::new());
@@ -1852,6 +1910,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             topology: Some(topology_json),
             peer_pops: vec![format!("{}=00", peer.public_key())],
             private_key: Some(test_private_key_hex()),
+            private_key_file: None,
             seed: None,
             algorithm: Algorithm::Ed25519,
             config: None,
@@ -1955,6 +2014,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             topology: Some(topology_json),
             peer_pops: vec![format!("{}=00", peer.public_key())],
             private_key: Some(test_private_key_hex()),
+            private_key_file: None,
             seed: None,
             algorithm: Algorithm::Ed25519,
             config: Some(nexus_profile_with_stake_asset_id("xor#universal")),
@@ -2013,6 +2073,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             topology: Some(topology_json),
             peer_pops: vec![format!("{}=00", peer.public_key())],
             private_key: Some(test_private_key_hex()),
+            private_key_file: None,
             seed: None,
             algorithm: Algorithm::Ed25519,
             config: None,
@@ -2068,6 +2129,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             topology: Some(topology_json),
             peer_pops: vec![format!("{}=00", peer.public_key())],
             private_key: Some(test_private_key_hex()),
+            private_key_file: None,
             seed: None,
             algorithm: Algorithm::Ed25519,
             config: None,
@@ -2098,6 +2160,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             topology: Some(topology_json),
             peer_pops: vec![format!("{}=00", peer.public_key())],
             private_key: Some(test_private_key_hex()),
+            private_key_file: None,
             seed: None,
             algorithm: Algorithm::Ed25519,
             config: Some(nexus_profile_with_stake_asset_id(
@@ -2131,6 +2194,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             topology: Some(topology_json),
             peer_pops: vec![format!("{}=00", peer.public_key())],
             private_key: Some(test_private_key_hex()),
+            private_key_file: None,
             seed: None,
             algorithm: Algorithm::Ed25519,
             config: None,
@@ -2161,6 +2225,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             topology: Some(topology_json),
             peer_pops: vec![format!("{}=00", peer.public_key())],
             private_key: Some(test_private_key_hex()),
+            private_key_file: None,
             seed: None,
             algorithm: Algorithm::Ed25519,
             config: Some(nexus_profile_with_validator_modes(
@@ -2209,6 +2274,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             topology: Some(topology_json),
             peer_pops: vec![format!("{}=00", peer.public_key())],
             private_key: Some(test_private_key_hex()),
+            private_key_file: None,
             seed: None,
             algorithm: Algorithm::Ed25519,
             config: None,
@@ -2253,6 +2319,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             topology: None,
             peer_pops: Vec::new(),
             private_key: Some(test_private_key_hex()),
+            private_key_file: None,
             seed: None,
             algorithm: Algorithm::Ed25519,
             config: None,
@@ -2277,6 +2344,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             topology: None,
             peer_pops: Vec::new(),
             private_key: Some(test_private_key_hex()),
+            private_key_file: None,
             seed: None,
             algorithm: Algorithm::Ed25519,
             config: None,
@@ -2304,6 +2372,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             topology: None,
             peer_pops: Vec::new(),
             private_key: Some(test_private_key_hex()),
+            private_key_file: None,
             seed: None,
             algorithm: Algorithm::Ed25519,
             config: Some(nexus_profile_config_path()),
@@ -2335,6 +2404,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             topology: None,
             peer_pops: Vec::new(),
             private_key: Some(test_private_key_hex()),
+            private_key_file: None,
             seed: None,
             algorithm: Algorithm::Ed25519,
             config: None,
@@ -2534,6 +2604,66 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         fs::write(genesis_file.path(), json).expect("write genesis json");
         let (_file, path) = genesis_file.keep().expect("persist temp genesis");
         path
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn private_key_file_round_trips_owner_only_canonical_material() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let temp = tempfile::tempdir().expect("private key temp dir");
+        let key_pair = checked_genesis_sign_keypair_with_algorithm(Algorithm::Ed25519);
+        let canonical = ExposedPrivateKey(key_pair.private_key().clone()).to_string();
+        let path = temp.path().join("genesis.private_key");
+        let raw = zeroize::Zeroizing::new(format!("{canonical}\n").into_bytes());
+        crate::secure_fs::write_private_file_atomic(&path, raw.as_slice())
+            .expect("write canonical private key");
+
+        assert_eq!(
+            fs::metadata(&path)
+                .expect("private key metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+        let loaded =
+            load_genesis_key_file(&path, Algorithm::Ed25519).expect("load canonical private key");
+        assert_eq!(loaded.public_key(), key_pair.public_key());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn private_key_file_rejects_unsafe_mode_symlink_hardlink_and_whitespace() {
+        use std::os::unix::fs::{PermissionsExt as _, symlink};
+
+        let temp = tempfile::tempdir().expect("private key temp dir");
+        let key_pair = checked_genesis_sign_keypair_with_algorithm(Algorithm::Ed25519);
+        let canonical = ExposedPrivateKey(key_pair.private_key().clone()).to_string();
+        let unsafe_mode = temp.path().join("unsafe-mode.key");
+        fs::write(&unsafe_mode, format!("{canonical}\n")).expect("write unsafe key");
+        fs::set_permissions(&unsafe_mode, fs::Permissions::from_mode(0o644))
+            .expect("set unsafe mode");
+        assert!(load_genesis_key_file(&unsafe_mode, Algorithm::Ed25519).is_err());
+
+        fs::set_permissions(&unsafe_mode, fs::Permissions::from_mode(0o600))
+            .expect("set safe mode");
+        let symlink_path = temp.path().join("symlink.key");
+        symlink(&unsafe_mode, &symlink_path).expect("create symlink");
+        assert!(load_genesis_key_file(&symlink_path, Algorithm::Ed25519).is_err());
+
+        let hardlink_path = temp.path().join("hardlink.key");
+        fs::hard_link(&unsafe_mode, &hardlink_path).expect("create hardlink");
+        assert!(load_genesis_key_file(&unsafe_mode, Algorithm::Ed25519).is_err());
+        fs::remove_file(&hardlink_path).expect("remove hardlink");
+
+        let whitespace = temp.path().join("whitespace.key");
+        crate::secure_fs::write_private_file_atomic(
+            &whitespace,
+            format!(" {canonical}\n").as_bytes(),
+        )
+        .expect("write whitespace key");
+        assert!(load_genesis_key_file(&whitespace, Algorithm::Ed25519).is_err());
     }
 
     fn test_private_key_hex() -> String {

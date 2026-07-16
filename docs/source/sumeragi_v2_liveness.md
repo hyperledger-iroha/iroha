@@ -145,6 +145,37 @@ ownership fails closed without changing either side. Body-pipeline and Decision
 retirement use the same transactional preflight: every owner count and evidence
 invariant is checked before any queue entry is removed.
 
+Higher-lock, Decision, and certified-view cleanup also treat an external
+cancellation failure as a restart boundary, never as a successful retirement.
+The executor keeps the exact fetch/store/validation owner until all required
+service cancellations acknowledge; a failure latches the process-wide
+restart-required guard while the safety WAL or durable Decision remains the
+reconstruction source. Adversarial tests inject cancellation failure at each
+of these three cleanup boundaries while an exact certified fetch is pending
+and require that fetch owner, signed-request hash, and accounting projection to
+remain exact. Cleanup preflights both certified-request indexes before runtime
+or service mutation and commits their removal as one infallible serialized
+step. Separate corrupt-index tests require lock, view, and Decision cleanup to
+fail closed before issuing even the first external cancellation. Direct
+locked-body reconciliation closes itself on a service/runtime cleanup failure
+instead of relying solely on the outer runner to terminate.
+Multi-fetch view cleanup also completes every ordered service callback before
+committing any executor or certified-request retirement; failure on the second
+callback therefore leaves the complete executor projection unchanged and
+forces restart recovery.
+Decision cleanup similarly defers detaching an exact decided local
+store/validation consumer until all losing service owners acknowledge
+cancellation, so a failed losing fetch cannot orphan the decided local
+pipeline.
+If the final status publication fails after cleanup commits, the replacement
+lock and retired certified indexes remain the authoritative executor state and
+the node still fails closed; retries cannot resurrect the superseded owner.
+Across later view-cleanup categories, an already acknowledged signature,
+store, or validation cancellation is not rolled back if a subsequent callback
+fails. The fail-closed process must restart; WAL replay restores the TC, lock,
+and Commit intent, while the locked QC recreates any required body fetch.
+Unprotected stale work is not a progress witness in the installed view.
+
 Remote certificate conflicts at the body-recovery transport boundary are
 nonfatal. A certified-body request whose QC conflicts with local authority is
 rejected without closing the runtime, and a conflicting Commit-certificate
@@ -298,12 +329,13 @@ The following focused checks were recorded through 2026-07-16:
 - an exact-evidence four-validator genesis reproduction which passed its first
   attempt in 351.76 seconds, with retained logs under
   `target/sumeragi-v2-genesis-recheck-exact-evidence-20260715/irohad_test_network_3XUobQ`;
-- the complete ten production-liveness modules at 52/52 reducer/core, 10/10
-  refinement, 4/4 reducer source-link, 51/51 adapter, 81/81 effects, 55/55
-  lane work, 34/34 runtime, 19/19 runner, 66/66 worker, and 14/14 watchdog
-  tests (386 passed, 0 failed, 0 ignored), including the exact-lock and
-  consumer-epoch regressions. Cargo discovery confirmed all 103 required tests
-  are present and non-ignored.
+- the complete eleven production-liveness modules at 56/56 reducer/core,
+  10/10 refinement, 9/9 reducer source-link, 55/55 adapter, 26/26 apply,
+  115/115 effects, 55/55 lane work, 38/38 runtime, 19/19 runner, 66/66 worker,
+  and 14/14 watchdog tests (463 passed, 0 failed, 0 ignored). The broader
+  serialized Sumeragi v2 namespace passed 582/582 tests, and release discovery
+  confirmed all 124 explicitly required production tests are present and
+  non-ignored.
 
 The focused source-bound additions above are green. The gate names nine
 completion-ownership regressions: exact ingress/Busy-deferred
@@ -361,11 +393,18 @@ inconsistent counters, and forged status classifications. They validate the
 release machinery; they are not substitutes for the 24-hour validator soak.
 
 Both profiles compute the canonical tracked/untracked checkout manifest before
-their first Cargo command, export it to the network matrix, and use its digest
-as the build-root identity. The seed runner compares that parent digest after
-test inventory, before and after every scenario, and on both sides of completion
-publication; the PR profile also recomputes it after the formal harness. Any
-drift leaves only partial evidence and fails the corridor.
+their first Cargo command, bind the ignored workspace `Cargo.lock` as an
+explicit build input, reject unresolved Git index entries, export the digest to
+the network matrix, and use it as the build-root identity. The seed runner
+compares that parent digest after test inventory, before and after every
+scenario, and on both sides of completion publication; the PR profile also
+recomputes it after the formal harness. Any drift leaves only partial evidence
+and fails the corridor.
+
+Before any network attempt, the release gate also requires all six exact
+source-manifest contract tests to pass. They cover content and ordering,
+deletions, symlinks, executable modes, ignored `Cargo.lock` drift, unmerged
+index parsing, and fail-closed rejection of unresolved entries.
 
 Seed evidence is isolated per invocation beneath a manifest-addressed root. An
 atomic directory lock rejects a concurrent writer to the same root, and a

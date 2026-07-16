@@ -38,7 +38,7 @@ use iroha_data_model::{
         types::{BlobDigest, ExtraMetadata},
     },
     nexus::{
-        AssetPermissionManifest, LaneLifecycleParameterV1, LaneLifecyclePlan,
+        AssetPermissionManifest, FeeSponsorPolicyId, LaneLifecycleParameterV1, LaneLifecyclePlan,
         LaneLifecycleStatusV1, UniversalAccountId,
     },
     sorafs::moderation::{SoraFsModerationBallotCommitV1, SoraFsModerationBallotRevealV1},
@@ -122,6 +122,11 @@ const APPLICATION_JSON: &str = "application/json";
 const SCCP_CAPABILITIES_RESPONSE_MAX_BYTES: usize = 64 * 1024;
 const SCCP_RECENT_RESPONSE_MAX_BYTES: usize = 8 * 1024 * 1024;
 const SCCP_JSON_RESPONSE_MAX_BYTES: usize = 64 * 1024 * 1024;
+const CONTRACT_CODE_ARTIFACT_MAX_BYTES: usize = 16 * 1024 * 1024;
+const CONTRACT_CODE_ARTIFACT_BASE64_MAX_BYTES: usize =
+    ((CONTRACT_CODE_ARTIFACT_MAX_BYTES + 2) / 3) * 4;
+const CONTRACT_CODE_ARTIFACT_RESPONSE_MAX_BYTES: usize =
+    CONTRACT_CODE_ARTIFACT_BASE64_MAX_BYTES + 128;
 const SCCP_NATIVE_NORITO_RESPONSE_MAX_BYTES: usize =
     iroha_sccp::SCCP_TAIRA_MAX_ENCODED_PROOF_BYTES_V1;
 const SCCP_DESTINATION_NORITO_RESPONSE_MAX_BYTES: usize =
@@ -140,6 +145,21 @@ const HEADER_OPERATOR_TIMESTAMP_MS: &str = "x-iroha-operator-timestamp-ms";
 const HEADER_OPERATOR_NONCE: &str = "x-iroha-operator-nonce";
 const HEADER_OPERATOR_SIGNATURE: &str = "x-iroha-operator-signature";
 pub(crate) const APPLICATION_NORITO: &str = "application/x-norito";
+
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+#[norito(deny_unknown_fields)]
+struct ContractCodeBytesResponse {
+    code_b64: String,
+}
 
 /// Preferred response wire format for Torii endpoints that support negotiation.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -183,6 +203,46 @@ fn sorafs_pin_register_gas_asset_id() -> Option<String> {
 // Integration scenarios involving DA/RBC can legitimately spend a few seconds
 // in the mempool before proposal assembly starts; keep the queue grace period
 // generous enough to avoid spurious timeouts.
+
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+#[norito(deny_unknown_fields)]
+/// Selector-explicit request for the Torii multisig authority-spec API.
+pub struct MultisigSpecRequest {
+    /// Active concrete multisig account id.
+    #[norito(default)]
+    pub multisig_account_id: Option<iroha_data_model::account::AccountId>,
+    /// Stable multisig alias in canonical `name@domain.dataspace` or `name@dataspace` form.
+    #[norito(default)]
+    pub multisig_account_alias: Option<String>,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+#[norito(deny_unknown_fields)]
+/// Exact active multisig authority spec returned by Torii.
+pub struct MultisigSpecResponse {
+    /// Canonical multisig account id resolved by the server.
+    pub resolved_multisig_account_id: iroha_data_model::account::AccountId,
+    /// Native multisig authority policy bound to the resolved account.
+    pub spec: iroha_executor_data_model::isi::multisig::MultisigSpec,
+}
 
 #[derive(
     Clone,
@@ -1931,6 +1991,7 @@ fn decode_sccp_bridge_submit_response(
     norito::derive::NoritoSerialize,
     norito::derive::NoritoDeserialize,
 )]
+#[norito(deny_unknown_fields)]
 /// Selector-explicit request for the Torii multisig proposals query API.
 pub struct MultisigProposalsQueryRequest {
     /// Active concrete multisig account id.
@@ -1960,6 +2021,7 @@ pub struct MultisigProposalsQueryRequest {
     norito::derive::NoritoSerialize,
     norito::derive::NoritoDeserialize,
 )]
+#[norito(deny_unknown_fields)]
 /// Multisig proposal entry returned by the Torii multisig proposals API.
 pub struct MultisigProposalEntry {
     /// Stable proposal identifier.
@@ -1990,6 +2052,7 @@ pub struct MultisigProposalEntry {
     norito::derive::NoritoSerialize,
     norito::derive::NoritoDeserialize,
 )]
+#[norito(deny_unknown_fields)]
 /// Response payload returned by the Torii multisig proposals query API.
 pub struct MultisigProposalsQueryResponse {
     /// Canonical multisig account id resolved by the server.
@@ -2011,6 +2074,7 @@ pub struct MultisigProposalsQueryResponse {
     norito::derive::NoritoSerialize,
     norito::derive::NoritoDeserialize,
 )]
+#[norito(deny_unknown_fields)]
 /// Selector-explicit request for one multisig proposal.
 pub struct MultisigProposalsResolveRequest {
     /// Active concrete multisig account id.
@@ -2037,6 +2101,7 @@ pub struct MultisigProposalsResolveRequest {
     norito::derive::NoritoSerialize,
     norito::derive::NoritoDeserialize,
 )]
+#[norito(deny_unknown_fields)]
 /// Response payload returned by the Torii multisig proposal resolve API.
 pub struct MultisigProposalResolveResponse {
     /// Canonical multisig account id resolved by the server.
@@ -2806,7 +2871,6 @@ fn is_production_verify_backend_label(backend: &str) -> bool {
     }
 
     backend == ZK_PRODUCTION_BACKEND_HALO2_IPA
-        || backend == iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V1
         || is_stark_fri_production_backend_label(backend)
         || is_native_halo2_pasta_production_backend_label(backend)
 }
@@ -4473,7 +4537,7 @@ pub struct SorafsPinRegisterArgs<'a> {
     /// Exact Norito manifest bytes to forward for Torii-side validation.
     ///
     /// Leave this as `None` to submit the canonical encoding derived from `manifest`.
-    /// Set it when the manifest digest must match an already-encoded compatibility payload.
+    /// Set it when the manifest digest must match caller-retained canonical bytes.
     pub manifest_bytes: Option<&'a [u8]>,
     /// SHA3-256 digest of the manifest chunk referenced for registration.
     pub chunk_digest_sha3_256: [u8; 32],
@@ -5215,6 +5279,121 @@ impl Client {
         Ok(())
     }
 
+    fn validate_offline_readiness_artifact_set(readiness: &OfflineReadiness) -> Result<()> {
+        let has_blocker = |code: &str| {
+            readiness
+                .blockers
+                .iter()
+                .any(|blocker| blocker.code == code)
+        };
+        let registry_blocker_count = [
+            "recursive_v4_registry_unavailable",
+            "recursive_v4_registry_malformed",
+        ]
+        .into_iter()
+        .filter(|code| has_blocker(code))
+        .count();
+        let recursive_verifiers = (
+            readiness.active_recursive_step_eq_verifier.as_ref(),
+            readiness.active_recursive_step_ep_verifier.as_ref(),
+        );
+
+        let Some(artifact_set) = readiness.artifact_set.as_ref() else {
+            if registry_blocker_count != 1 {
+                return Err(eyre!(
+                    "offline readiness response omitted artifact_set without exactly one authenticated V4 registry blocker"
+                ));
+            }
+            if recursive_verifiers.0.is_some() || recursive_verifiers.1.is_some() {
+                return Err(eyre!(
+                    "offline readiness response exposes recursive verifiers without an authenticated artifact_set"
+                ));
+            }
+            if readiness.proof_backend_available {
+                return Err(eyre!(
+                    "offline readiness response exposes a proof backend without an authenticated artifact_set"
+                ));
+            }
+            return Ok(());
+        };
+
+        if registry_blocker_count != 0 {
+            return Err(eyre!(
+                "offline readiness response contains both artifact_set and an authenticated V4 registry blocker"
+            ));
+        }
+        let (Some(step_eq), Some(step_ep)) = recursive_verifiers else {
+            return Err(eyre!(
+                "offline readiness response contains artifact_set without both recursive verifiers"
+            ));
+        };
+        if !iroha_data_model::offline::is_kagemusha_portable_identifier(&artifact_set.generation) {
+            return Err(eyre!(
+                "offline readiness response contains an invalid artifact_set generation"
+            ));
+        }
+        let mut artifact_digests = std::collections::BTreeSet::new();
+        for (field, digest) in [
+            ("manifest_sha256", &artifact_set.manifest_sha256),
+            ("release_policy_sha256", &artifact_set.release_policy_sha256),
+            (
+                "release_attestation_sha256",
+                &artifact_set.release_attestation_sha256,
+            ),
+        ] {
+            Self::require_lower_hex_32(digest, &format!("artifact_set.{field}"))?;
+            if digest.bytes().all(|byte| byte == b'0') {
+                return Err(eyre!(
+                    "offline readiness response contains a zero artifact_set.{field} digest"
+                ));
+            }
+            if !artifact_digests.insert(digest.as_str()) {
+                return Err(eyre!(
+                    "offline readiness response reuses an authenticated artifact digest"
+                ));
+            }
+        }
+        if artifact_set.activation_height == 0
+            || artifact_set.withdrawal_height <= artifact_set.activation_height
+            || readiness.evaluated_block_height < artifact_set.activation_height
+            || readiness.evaluated_block_height >= artifact_set.withdrawal_height
+        {
+            return Err(eyre!(
+                "offline readiness response selected artifact_set outside its activation window"
+            ));
+        }
+        if artifact_set.max_proof_bytes == 0
+            || artifact_set.max_proof_bytes
+                > iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4
+        {
+            return Err(eyre!(
+                "offline readiness response contains an invalid artifact_set proof limit"
+            ));
+        }
+        if artifact_set.asset_scale
+            > iroha_data_model::offline::KAGEMUSHA_SCALED_AMOUNT_MAX_SCALE_V2
+            || readiness.asset_scale != Some(artifact_set.asset_scale)
+        {
+            return Err(eyre!(
+                "offline readiness response artifact_set is not bound to the live asset scale"
+            ));
+        }
+        for (field, verifier) in [
+            ("active_recursive_step_eq_verifier", step_eq),
+            ("active_recursive_step_ep_verifier", step_ep),
+        ] {
+            if verifier.activation_height != artifact_set.activation_height
+                || verifier.withdrawal_height != Some(artifact_set.withdrawal_height)
+                || verifier.max_proof_bytes != artifact_set.max_proof_bytes
+            {
+                return Err(eyre!(
+                    "offline readiness response {field} is not bound to artifact_set"
+                ));
+            }
+        }
+        Ok(())
+    }
+
     /// Evaluate whether one asset definition is ready for offline payments.
     ///
     /// A normal not-ready domain state is returned as `Ok` with `ready == false`.
@@ -5246,17 +5425,12 @@ impl Client {
         }
         Self::require_lower_hex_32(&readiness.evaluated_block_hash, "evaluated_block_hash")?;
         if readiness.required_bridge_abi_version
-            != iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3
+            != iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4
             || readiness.max_hops
                 != iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2
         {
             return Err(eyre!(
                 "offline readiness response does not describe the first-release Kagemusha contract"
-            ));
-        }
-        if readiness.ready != readiness.blockers.is_empty() {
-            return Err(eyre!(
-                "offline readiness response has an inconsistent ready/blockers state"
             ));
         }
         let has_blocker = |code: &str| {
@@ -5269,34 +5443,60 @@ impl Client {
         for blocker in &readiness.blockers {
             let code = blocker.code.as_str();
             if code.is_empty()
+                || code.len() > 64
                 || !code
-                    .bytes()
-                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
+                    .as_bytes()
+                    .first()
+                    .is_some_and(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
+                || !code.as_bytes()[1..]
+                    .iter()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || *byte == b'_')
                 || !blocker_codes.insert(code)
             {
                 return Err(eyre!(
                     "offline readiness response contains an invalid or duplicate blocker code"
                 ));
             }
-        }
-        match readiness.asset_scale {
-            None if !has_blocker("asset_scale_unavailable") => {
+            let message = blocker.message.as_str();
+            let message_chars = message.chars().count();
+            if message_chars == 0
+                || message_chars > 1_024
+                || message
+                    .chars()
+                    .next()
+                    .is_some_and(char::is_whitespace)
+                || message
+                    .chars()
+                    .next_back()
+                    .is_some_and(char::is_whitespace)
+                || message
+                    .chars()
+                    .any(|character| matches!(character, '\u{0000}'..='\u{001f}' | '\u{007f}'..='\u{009f}'))
+            {
                 return Err(eyre!(
-                    "offline readiness response omitted the live asset scale without an asset_scale_unavailable blocker"
+                    "offline readiness response contains an invalid blocker message"
+                ));
+            }
+        }
+        let scale_unavailable = has_blocker("asset_scale_unavailable");
+        let scale_unsupported = has_blocker("asset_scale_unsupported");
+        match readiness.asset_scale {
+            None if !scale_unavailable || scale_unsupported => {
+                return Err(eyre!(
+                    "offline readiness response omitted the live asset scale without exactly the asset_scale_unavailable blocker"
                 ));
             }
             Some(scale)
                 if scale > iroha_data_model::offline::KAGEMUSHA_SCALED_AMOUNT_MAX_SCALE_V2
-                    && !has_blocker("asset_scale_unsupported") =>
+                    && (!scale_unsupported || scale_unavailable) =>
             {
                 return Err(eyre!(
-                    "offline readiness response exposes an unsupported asset scale without an asset_scale_unsupported blocker"
+                    "offline readiness response exposes an unsupported asset scale without exactly the asset_scale_unsupported blocker"
                 ));
             }
             Some(scale)
                 if scale <= iroha_data_model::offline::KAGEMUSHA_SCALED_AMOUNT_MAX_SCALE_V2
-                    && (has_blocker("asset_scale_unavailable")
-                        || has_blocker("asset_scale_unsupported")) =>
+                    && (scale_unavailable || scale_unsupported) =>
             {
                 return Err(eyre!(
                     "offline readiness response has an inconsistent asset scale blocker"
@@ -5342,25 +5542,22 @@ impl Client {
             readiness.active_recursive_step_eq_verifier.as_ref(),
             "active_recursive_step_eq_verifier",
             "recursive_step_eq_verifier_unavailable",
-            iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_STEP_EQ_V3,
-            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V3,
-            Some(
-                iroha_data_model::offline::kagemusha_recursive_spend_step_eq_public_inputs_schema_hash_v3(),
-            ),
-            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROOF_BYTES_V3,
+            iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_STEP_EQ_V4,
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4,
+            None,
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4,
         )?;
         Self::validate_offline_readiness_verifier(
             &readiness,
             readiness.active_recursive_step_ep_verifier.as_ref(),
             "active_recursive_step_ep_verifier",
             "recursive_step_ep_verifier_unavailable",
-            iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_STEP_EP_V3,
-            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V3,
-            Some(
-                iroha_data_model::offline::kagemusha_recursive_spend_step_ep_public_inputs_schema_hash_v3(),
-            ),
-            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROOF_BYTES_V3,
+            iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_STEP_EP_V4,
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V4,
+            None,
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4,
         )?;
+        Self::validate_offline_readiness_artifact_set(&readiness)?;
         let mut verifier_ids = std::collections::BTreeSet::new();
         let mut verifier_commitments = std::collections::BTreeSet::new();
         let mut verifier_schema_hashes = std::collections::BTreeSet::new();
@@ -5388,14 +5585,35 @@ impl Client {
                 "offline readiness response has an inconsistent proof backend blocker"
             ));
         }
-        let expected_recursive_lineage = readiness.proof_backend_available
+        let expected_recursive_lineage_supported = readiness.proof_backend_available
+            && readiness.artifact_set.is_some()
             && readiness.active_recursive_step_eq_verifier.is_some()
             && readiness.active_recursive_step_ep_verifier.is_some();
-        if readiness.recursive_lineage_supported != expected_recursive_lineage
-            || readiness.recursive_lineage_supported == has_blocker("recursive_lineage_unavailable")
-        {
+        if readiness.recursive_lineage_supported != expected_recursive_lineage_supported {
             return Err(eyre!(
-                "offline readiness response has an inconsistent recursive lineage state"
+                "offline readiness response has an inconsistent exact ABI-20 recursive lineage capability"
+            ));
+        }
+        if readiness.recursive_lineage_supported == has_blocker("recursive_lineage_unavailable") {
+            return Err(eyre!(
+                "offline readiness response has an inconsistent recursive lineage blocker"
+            ));
+        }
+        let expected_ready = readiness.proof_backend_available
+            && readiness.recursive_lineage_supported
+            && readiness.artifact_set.is_some()
+            && readiness.asset_scale.is_some_and(|scale| {
+                scale <= iroha_data_model::offline::KAGEMUSHA_SCALED_AMOUNT_MAX_SCALE_V2
+            })
+            && readiness.active_transfer_verifier.is_some()
+            && readiness.active_topup_shield_verifier.is_some()
+            && readiness.active_unshield_verifier.is_some()
+            && readiness.active_recursive_step_eq_verifier.is_some()
+            && readiness.active_recursive_step_ep_verifier.is_some()
+            && readiness.blockers.is_empty();
+        if readiness.ready != expected_ready {
+            return Err(eyre!(
+                "offline readiness response has an inconsistent complete ABI-20 readiness claim"
             ));
         }
         Ok(readiness)
@@ -6058,6 +6276,8 @@ mod offline_client_tests {
         nonce: u64,
     }
 
+    const TEST_RECURSIVE_PROOF_MAX_BYTES: u32 = 65_536;
+
     fn asset_definition_id(name: &str) -> AssetDefinitionId {
         AssetDefinitionId::new(
             DomainId::try_new("wonderland", "universal").expect("asset domain id"),
@@ -6119,6 +6339,16 @@ mod offline_client_tests {
         }
     }
 
+    fn readiness_blocker(
+        code: &str,
+        message: &str,
+    ) -> iroha_torii_shared::offline_api::OfflineReadinessBlocker {
+        iroha_torii_shared::offline_api::OfflineReadinessBlocker {
+            code: code.to_owned(),
+            message: message.to_owned(),
+        }
+    }
+
     fn active_transfer_verifier() -> iroha_torii_shared::offline_api::OfflineActiveTransferVerifier
     {
         active_verifier(
@@ -6154,34 +6384,48 @@ mod offline_client_tests {
 
     fn active_recursive_step_eq_verifier()
     -> iroha_torii_shared::offline_api::OfflineActiveRecursiveStepEqVerifier {
-        active_verifier(
-            iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_STEP_EQ_V3,
-            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V3,
-            hex::encode(
-                iroha_data_model::offline::kagemusha_recursive_spend_step_eq_public_inputs_schema_hash_v3(),
-            ),
+        let mut verifier = active_verifier(
+            iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_STEP_EQ_V4,
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4,
+            "99".repeat(32),
             "77",
-            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROOF_BYTES_V3,
-        )
+            TEST_RECURSIVE_PROOF_MAX_BYTES,
+        );
+        verifier.withdrawal_height = Some(80);
+        verifier
     }
 
     fn active_recursive_step_ep_verifier()
     -> iroha_torii_shared::offline_api::OfflineActiveRecursiveStepEpVerifier {
-        active_verifier(
-            iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_STEP_EP_V3,
-            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V3,
-            hex::encode(
-                iroha_data_model::offline::kagemusha_recursive_spend_step_ep_public_inputs_schema_hash_v3(),
-            ),
+        let mut verifier = active_verifier(
+            iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_STEP_EP_V4,
+            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V4,
+            "aa".repeat(32),
             "88",
-            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROOF_BYTES_V3,
-        )
+            TEST_RECURSIVE_PROOF_MAX_BYTES,
+        );
+        verifier.withdrawal_height = Some(80);
+        verifier
     }
 
-    fn ready_readiness(asset_definition_id: &AssetDefinitionId) -> OfflineReadiness {
+    fn authenticated_artifact_set()
+    -> iroha_torii_shared::offline_api::OfflineAuthenticatedArtifactSet {
+        iroha_torii_shared::offline_api::OfflineAuthenticatedArtifactSet {
+            generation: "release-v4".to_owned(),
+            manifest_sha256: "b1".repeat(32),
+            release_policy_sha256: "b2".repeat(32),
+            release_attestation_sha256: "b3".repeat(32),
+            activation_height: 1,
+            withdrawal_height: 80,
+            max_proof_bytes: TEST_RECURSIVE_PROOF_MAX_BYTES,
+            asset_scale: 9,
+        }
+    }
+
+    fn first_release_readiness(asset_definition_id: &AssetDefinitionId) -> OfflineReadiness {
         OfflineReadiness {
             required_bridge_abi_version:
-                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3,
+                iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4,
             max_hops: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_MAX_PEER_HOPS_V2,
             asset_definition_id: asset_definition_id.to_string(),
             asset_scale: Some(9),
@@ -6192,6 +6436,7 @@ mod offline_client_tests {
             active_unshield_verifier: Some(active_unshield_verifier()),
             active_recursive_step_eq_verifier: Some(active_recursive_step_eq_verifier()),
             active_recursive_step_ep_verifier: Some(active_recursive_step_ep_verifier()),
+            artifact_set: Some(authenticated_artifact_set()),
             proof_backend_available: true,
             recursive_lineage_supported: true,
             ready: true,
@@ -6202,12 +6447,12 @@ mod offline_client_tests {
     #[test]
     fn readiness_request_is_typed_negotiated_and_asset_bound() {
         let asset_definition_id = asset_definition_id("xor");
-        let mut readiness = ready_readiness(&asset_definition_id);
+        let mut readiness = first_release_readiness(&asset_definition_id);
         readiness.ready = false;
-        readiness.blockers = vec![iroha_torii_shared::offline_api::OfflineReadinessBlocker {
-            code: "issuer_unavailable".to_owned(),
-            message: "issuer is unavailable".to_owned(),
-        }];
+        readiness.blockers.push(readiness_blocker(
+            "issuer_unavailable",
+            "The issuer is unavailable.",
+        ));
         let response = HttpResponse::builder()
             .status(StatusCode::OK)
             .header("content-type", "application/json; charset=utf-8")
@@ -6220,6 +6465,14 @@ mod offline_client_tests {
         .expect("readiness response");
 
         assert!(!result.ready);
+        assert!(result.proof_backend_available);
+        assert!(result.recursive_lineage_supported);
+        assert!(
+            result
+                .blockers
+                .iter()
+                .any(|blocker| blocker.code == "issuer_unavailable")
+        );
         let snapshots = snapshots.lock().expect("snapshots");
         assert_eq!(snapshots.len(), 1);
         let snapshot = &snapshots[0];
@@ -6240,13 +6493,10 @@ mod offline_client_tests {
     fn readiness_rejects_cross_asset_and_inconsistent_states() {
         let requested = asset_definition_id("xor");
         let other_asset = asset_definition_id("rose");
-        let cross_asset = ready_readiness(&other_asset);
-        let mut inconsistent = ready_readiness(&requested);
-        inconsistent.blockers = vec![iroha_torii_shared::offline_api::OfflineReadinessBlocker {
-            code: "forged".to_owned(),
-            message: "forged".to_owned(),
-        }];
-        let mut uppercase_hash = ready_readiness(&requested);
+        let cross_asset = first_release_readiness(&other_asset);
+        let mut inconsistent = first_release_readiness(&requested);
+        inconsistent.ready = false;
+        let mut uppercase_hash = first_release_readiness(&requested);
         uppercase_hash.evaluated_block_hash = "AB".repeat(32);
         for readiness in [cross_asset, inconsistent, uppercase_hash] {
             let response = HttpResponse::builder()
@@ -6276,22 +6526,35 @@ mod offline_client_tests {
         };
         let mut future_verifier = active_transfer_verifier();
         future_verifier.activation_height = 20;
-        let mut missing_scale_blocker = ready_readiness(&requested);
+        let mut missing_scale_blocker = first_release_readiness(&requested);
         missing_scale_blocker.asset_scale = None;
-        missing_scale_blocker.ready = false;
-        missing_scale_blocker.blockers = vec![unrelated_blocker()];
-        let mut missing_transfer_blocker = ready_readiness(&requested);
+        missing_scale_blocker.blockers.push(unrelated_blocker());
+        let mut missing_transfer_blocker = first_release_readiness(&requested);
         missing_transfer_blocker.active_transfer_verifier = None;
-        missing_transfer_blocker.ready = false;
-        missing_transfer_blocker.blockers = vec![unrelated_blocker()];
-        let mut future_transfer = ready_readiness(&requested);
+        missing_transfer_blocker.blockers.push(unrelated_blocker());
+        let mut future_transfer = first_release_readiness(&requested);
         future_transfer.active_transfer_verifier = Some(future_verifier);
-        future_transfer.ready = false;
-        future_transfer.blockers = vec![unrelated_blocker()];
+        future_transfer.blockers.push(unrelated_blocker());
+        let mut null_scale_with_conflicting_blockers = first_release_readiness(&requested);
+        null_scale_with_conflicting_blockers.asset_scale = None;
+        null_scale_with_conflicting_blockers.blockers.extend([
+            readiness_blocker("asset_scale_unavailable", "The asset scale is unavailable."),
+            readiness_blocker("asset_scale_unsupported", "The asset scale is unsupported."),
+        ]);
+        let mut unsupported_scale_with_conflicting_blockers = first_release_readiness(&requested);
+        unsupported_scale_with_conflicting_blockers.asset_scale = Some(29);
+        unsupported_scale_with_conflicting_blockers
+            .blockers
+            .extend([
+                readiness_blocker("asset_scale_unavailable", "The asset scale is unavailable."),
+                readiness_blocker("asset_scale_unsupported", "The asset scale is unsupported."),
+            ]);
         for readiness in [
             missing_scale_blocker,
             missing_transfer_blocker,
             future_transfer,
+            null_scale_with_conflicting_blockers,
+            unsupported_scale_with_conflicting_blockers,
         ] {
             let response = HttpResponse::builder()
                 .status(StatusCode::OK)
@@ -6314,38 +6577,54 @@ mod offline_client_tests {
     #[test]
     fn readiness_rejects_contract_verifier_and_lineage_substitution() {
         let requested = asset_definition_id("xor");
-        let mut wrong_abi = ready_readiness(&requested);
+        let mut wrong_abi = first_release_readiness(&requested);
         wrong_abi.required_bridge_abi_version -= 1;
-        let mut wrong_hops = ready_readiness(&requested);
+        let mut wrong_hops = first_release_readiness(&requested);
         wrong_hops.max_hops -= 1;
-        let mut substituted_topup = ready_readiness(&requested);
+        let mut substituted_topup = first_release_readiness(&requested);
         substituted_topup
             .active_topup_shield_verifier
             .as_mut()
             .expect("fixture top-up verifier")
             .id
             .name = iroha_data_model::offline::KAGEMUSHA_VERIFIER_ROLE_TRANSFER_V2.to_owned();
-        let mut substituted_unshield = ready_readiness(&requested);
+        let mut substituted_unshield = first_release_readiness(&requested);
         substituted_unshield
             .active_unshield_verifier
             .as_mut()
             .expect("fixture unshield verifier")
             .circuit_id =
             "halo2/pasta/ipa/confidential-transfer-2x2-merkle16-axiom-poseidon-v3".to_owned();
-        let mut substituted_step_eq_schema = ready_readiness(&requested);
-        substituted_step_eq_schema
+        let mut zero_step_eq_schema = first_release_readiness(&requested);
+        zero_step_eq_schema
             .active_recursive_step_eq_verifier
             .as_mut()
             .expect("fixture StepEq verifier")
-            .public_inputs_schema_hash = "99".repeat(32);
-        let mut oversized_step_ep_proof = ready_readiness(&requested);
-        oversized_step_ep_proof
+            .public_inputs_schema_hash = "00".repeat(32);
+        let mut zero_transfer_version = first_release_readiness(&requested);
+        zero_transfer_version
+            .active_transfer_verifier
+            .as_mut()
+            .expect("fixture transfer verifier")
+            .version = 0;
+        let mut zero_topup_commitment = first_release_readiness(&requested);
+        zero_topup_commitment
+            .active_topup_shield_verifier
+            .as_mut()
+            .expect("fixture top-up verifier")
+            .commitment = "00".repeat(32);
+        let mut mismatched_step_ep_proof = first_release_readiness(&requested);
+        let artifact_proof_limit = mismatched_step_ep_proof
+            .artifact_set
+            .as_ref()
+            .expect("fixture artifact set")
+            .max_proof_bytes;
+        mismatched_step_ep_proof
             .active_recursive_step_ep_verifier
             .as_mut()
             .expect("fixture StepEp verifier")
-            .max_proof_bytes =
-            iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROOF_BYTES_V3 + 1;
-        let mut reused_commitment = ready_readiness(&requested);
+            .max_proof_bytes = artifact_proof_limit + 1;
+        let mut reused_commitment = first_release_readiness(&requested);
         let transfer_commitment = reused_commitment
             .active_transfer_verifier
             .as_ref()
@@ -6357,7 +6636,7 @@ mod offline_client_tests {
             .as_mut()
             .expect("fixture top-up verifier")
             .commitment = transfer_commitment;
-        let mut reused_schema = ready_readiness(&requested);
+        let mut reused_schema = first_release_readiness(&requested);
         let transfer_schema = reused_schema
             .active_transfer_verifier
             .as_ref()
@@ -6369,9 +6648,9 @@ mod offline_client_tests {
             .as_mut()
             .expect("fixture top-up verifier")
             .public_inputs_schema_hash = transfer_schema;
-        let mut forged_lineage = ready_readiness(&requested);
+        let mut forged_lineage = first_release_readiness(&requested);
         forged_lineage.recursive_lineage_supported = false;
-        let mut duplicate_blockers = ready_readiness(&requested);
+        let mut duplicate_blockers = first_release_readiness(&requested);
         duplicate_blockers.ready = false;
         duplicate_blockers.blockers = vec![
             iroha_torii_shared::offline_api::OfflineReadinessBlocker {
@@ -6389,8 +6668,10 @@ mod offline_client_tests {
             wrong_hops,
             substituted_topup,
             substituted_unshield,
-            substituted_step_eq_schema,
-            oversized_step_ep_proof,
+            zero_step_eq_schema,
+            zero_transfer_version,
+            zero_topup_commitment,
+            mismatched_step_ep_proof,
             reused_commitment,
             reused_schema,
             forged_lineage,
@@ -6406,6 +6687,177 @@ mod offline_client_tests {
                 || client_with_base_url(base_url()).get_offline_readiness(&requested),
             )
             .expect_err("substituted Kagemusha readiness must fail closed");
+        }
+    }
+
+    #[test]
+    fn readiness_accepts_exact_authenticated_backend_and_lineage() {
+        let requested = asset_definition_id("xor");
+        let readiness = first_release_readiness(&requested);
+        let response = HttpResponse::builder()
+            .status(StatusCode::OK)
+            .header("content-type", APPLICATION_NORITO)
+            .body(norito::to_bytes(&readiness).expect("encode readiness"))
+            .expect("response");
+
+        let decoded = with_mock_http(
+            respond_with(&Arc::new(Mutex::new(Vec::new())), response),
+            || client_with_base_url(base_url()).get_offline_readiness(&requested),
+        )
+        .expect("the exact authenticated release is a valid ready state");
+
+        assert!(decoded.artifact_set.is_some());
+        assert!(decoded.proof_backend_available);
+        assert!(decoded.recursive_lineage_supported);
+        assert!(decoded.ready);
+        assert!(decoded.blockers.is_empty());
+    }
+
+    #[test]
+    fn readiness_accepts_nullable_unavailable_v4_artifact_set() {
+        let requested = asset_definition_id("xor");
+        let mut readiness = first_release_readiness(&requested);
+        readiness.active_recursive_step_eq_verifier = None;
+        readiness.active_recursive_step_ep_verifier = None;
+        readiness.artifact_set = None;
+        readiness.proof_backend_available = false;
+        readiness.recursive_lineage_supported = false;
+        readiness.ready = false;
+        readiness.blockers = vec![
+            readiness_blocker(
+                "recursive_v4_registry_unavailable",
+                "No active authenticated V4 registry release is installed.",
+            ),
+            readiness_blocker(
+                "recursive_step_eq_verifier_unavailable",
+                "The recursive StepEq verifier is unavailable.",
+            ),
+            readiness_blocker(
+                "recursive_step_ep_verifier_unavailable",
+                "The recursive StepEp verifier is unavailable.",
+            ),
+            readiness_blocker(
+                "proof_backend_unavailable",
+                "The proof backend is unavailable.",
+            ),
+            readiness_blocker(
+                "recursive_lineage_unavailable",
+                "Recursive lineage transaction verification and redemption are not implemented.",
+            ),
+        ];
+        let response = HttpResponse::builder()
+            .status(StatusCode::OK)
+            .header("content-type", APPLICATION_NORITO)
+            .body(norito::to_bytes(&readiness).expect("encode readiness"))
+            .expect("response");
+
+        let decoded = with_mock_http(
+            respond_with(&Arc::new(Mutex::new(Vec::new())), response),
+            || client_with_base_url(base_url()).get_offline_readiness(&requested),
+        )
+        .expect("an unavailable authenticated V4 release is a valid domain state");
+
+        assert!(decoded.artifact_set.is_none());
+        assert!(!decoded.proof_backend_available);
+        assert!(!decoded.recursive_lineage_supported);
+        assert!(!decoded.ready);
+    }
+
+    #[test]
+    fn readiness_rejects_malformed_or_unbound_v4_artifact_set() {
+        let requested = asset_definition_id("xor");
+        let mut invalid_generation = first_release_readiness(&requested);
+        invalid_generation
+            .artifact_set
+            .as_mut()
+            .expect("fixture artifact set")
+            .generation = "con.release".to_owned();
+        let mut invalid_manifest_digest = first_release_readiness(&requested);
+        invalid_manifest_digest
+            .artifact_set
+            .as_mut()
+            .expect("fixture artifact set")
+            .manifest_sha256 = "B1".repeat(32);
+        let mut invalid_policy_digest = first_release_readiness(&requested);
+        invalid_policy_digest
+            .artifact_set
+            .as_mut()
+            .expect("fixture artifact set")
+            .release_policy_sha256 = "b2".repeat(31);
+        let mut invalid_attestation_digest = first_release_readiness(&requested);
+        invalid_attestation_digest
+            .artifact_set
+            .as_mut()
+            .expect("fixture artifact set")
+            .release_attestation_sha256 = "00".repeat(32);
+        let mut reused_artifact_digest = first_release_readiness(&requested);
+        let manifest_digest = reused_artifact_digest
+            .artifact_set
+            .as_ref()
+            .expect("fixture artifact set")
+            .manifest_sha256
+            .clone();
+        reused_artifact_digest
+            .artifact_set
+            .as_mut()
+            .expect("fixture artifact set")
+            .release_policy_sha256 = manifest_digest;
+        let mut zero_activation = first_release_readiness(&requested);
+        zero_activation
+            .artifact_set
+            .as_mut()
+            .expect("fixture artifact set")
+            .activation_height = 0;
+        let mut invalid_withdrawal = first_release_readiness(&requested);
+        invalid_withdrawal
+            .artifact_set
+            .as_mut()
+            .expect("fixture artifact set")
+            .withdrawal_height = 1;
+        let mut zero_proof_limit = first_release_readiness(&requested);
+        zero_proof_limit
+            .artifact_set
+            .as_mut()
+            .expect("fixture artifact set")
+            .max_proof_bytes = 0;
+        let mut cross_scale = first_release_readiness(&requested);
+        cross_scale
+            .artifact_set
+            .as_mut()
+            .expect("fixture artifact set")
+            .asset_scale = 8;
+        let mut missing_artifact = first_release_readiness(&requested);
+        missing_artifact.artifact_set = None;
+        let mut mismatched_window = first_release_readiness(&requested);
+        mismatched_window
+            .active_recursive_step_eq_verifier
+            .as_mut()
+            .expect("fixture StepEq verifier")
+            .withdrawal_height = Some(79);
+
+        for readiness in [
+            invalid_generation,
+            invalid_manifest_digest,
+            invalid_policy_digest,
+            invalid_attestation_digest,
+            reused_artifact_digest,
+            zero_activation,
+            invalid_withdrawal,
+            zero_proof_limit,
+            cross_scale,
+            missing_artifact,
+            mismatched_window,
+        ] {
+            let response = HttpResponse::builder()
+                .status(StatusCode::OK)
+                .header("content-type", APPLICATION_NORITO)
+                .body(norito::to_bytes(&readiness).expect("encode readiness"))
+                .expect("response");
+            with_mock_http(
+                respond_with(&Arc::new(Mutex::new(Vec::new())), response),
+                || client_with_base_url(base_url()).get_offline_readiness(&requested),
+            )
+            .expect_err("malformed or unbound artifact metadata must fail closed");
         }
     }
 
@@ -6546,7 +6998,7 @@ mod offline_client_tests {
 
     #[test]
     fn negotiated_decoder_rejects_retired_and_missing_media_types() {
-        let readiness = ready_readiness(&asset_definition_id("xor"));
+        let readiness = first_release_readiness(&asset_definition_id("xor"));
         let body = norito::json::to_vec(&readiness).expect("encode readiness");
         for content_type in [Some("text/json"), Some("application/octet-stream"), None] {
             let response = mk_response(StatusCode::OK, body.clone(), content_type);
@@ -8524,9 +8976,7 @@ mod evidence_http_tests {
             .pin_policy(sorafs_manifest::PinPolicy::default())
             .build()
             .expect("manifest build");
-        let explicit_manifest_bytes = manifest
-            .encode_legacy_norito()
-            .expect("legacy manifest encoding");
+        let explicit_manifest_bytes = manifest.encode().expect("canonical manifest encoding");
         let explicit_digest = *manifest.digest().expect("manifest digest").as_bytes();
 
         let payload = Client::build_sorafs_pin_register_payload(
@@ -9149,6 +9599,7 @@ mod evidence_http_tests {
             recorded_at_height: 42,
             recorded_at_view: 5,
             recorded_at_ms: 123_456,
+            consensus_admitted_at_height: None,
             penalty_applied: false,
             penalty_cancelled: false,
             penalty_cancelled_at_height: None,
@@ -9953,6 +10404,55 @@ mod evidence_http_tests {
         assert!(
             snapshot.url.query_pairs().all(|(key, _)| key != "scope"),
             "generic status lookups should use Torii's strict local default"
+        );
+    }
+
+    #[test]
+    fn get_transaction_status_response_local_sets_local_scope() {
+        use iroha_torii_shared::{PipelineTransactionStatus, PipelineTransactionStatusResponse};
+
+        let hash =
+            HashOf::<crate::data_model::transaction::SignedTransaction>::from_untyped_unchecked(
+                Hash::prehashed([0x46; Hash::LENGTH]),
+            );
+        let payload = PipelineTransactionStatusResponse::new(
+            hash.to_string(),
+            PipelineTransactionStatus {
+                kind: "Committed".to_owned(),
+                block_height: Some(7),
+                rejection_reason: None,
+            },
+            "local".to_owned(),
+            "state".to_owned(),
+        );
+        let body = norito::json::to_string(
+            &norito::json::to_value(&payload).expect("status payload value"),
+        )
+        .expect("status payload");
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::OK, &body);
+
+        let decoded = with_mock_http(respond_with(&store, response), || {
+            let client = client_with_base_url(base_url());
+            client.get_transaction_status_response_local(hash)
+        })
+        .expect("transaction status response")
+        .expect("status payload");
+
+        assert_eq!(decoded, payload);
+        let snapshot = store
+            .lock()
+            .expect("snapshot lock")
+            .first()
+            .cloned()
+            .expect("status snapshot");
+        assert_eq!(
+            snapshot
+                .url
+                .query_pairs()
+                .find(|(key, _)| key == "scope")
+                .map(|(_, value)| value.to_string()),
+            Some("local".to_owned())
         );
     }
 
@@ -12226,6 +12726,19 @@ impl Client {
         self.get_transaction_status_response_with_scope(hash, None)
     }
 
+    /// GET `/v1/pipeline/transactions/status?scope=local` — typed pipeline status lookup
+    /// using explicit peer-local routing.
+    ///
+    /// # Errors
+    /// Returns an error if the HTTP request fails, the response has an unexpected content type,
+    /// or the typed JSON payload cannot be decoded.
+    pub fn get_transaction_status_response_local(
+        &self,
+        hash: HashOf<SignedTransaction>,
+    ) -> Result<Option<PipelineTransactionStatusResponse>> {
+        self.get_transaction_status_response_with_scope(hash, Some("local"))
+    }
+
     /// GET `/v1/pipeline/transactions/status?scope=global` — typed pipeline status lookup
     /// using explicit global/fanout routing.
     ///
@@ -12965,11 +13478,10 @@ impl Client {
     pub fn post_alias_resolve(&self, alias: &str) -> Result<Response<Vec<u8>>> {
         let url = join_torii_url(&self.torii_url, "v1/aliases/resolve");
         let body = norito::json::to_vec(&norito::json!({ "alias": alias }))?;
-        self.default_request(HttpMethod::POST, url)
-            .header("Content-Type", APPLICATION_JSON)
-            .body(body)
-            .build()?
-            .send()
+        self.send_builder(
+            self.account_signed_request(HttpMethod::POST, url, body)?
+                .header("Content-Type", APPLICATION_JSON),
+        )
     }
 
     /// Convenience: POST `/v1/aliases/resolve-index` with an index payload.
@@ -12979,11 +13491,10 @@ impl Client {
     pub fn post_alias_resolve_index(&self, index: u64) -> Result<Response<Vec<u8>>> {
         let url = join_torii_url(&self.torii_url, "v1/aliases/resolve-index");
         let body = norito::json::to_vec(&norito::json!({ "index": index }))?;
-        self.default_request(HttpMethod::POST, url)
-            .header("Content-Type", APPLICATION_JSON)
-            .body(body)
-            .build()?
-            .send()
+        self.send_builder(
+            self.account_signed_request(HttpMethod::POST, url, body)?
+                .header("Content-Type", APPLICATION_JSON),
+        )
     }
 
     /// Convenience: POST `/v1/aliases/by-account` with a canonical account id and optional
@@ -13003,11 +13514,73 @@ impl Client {
             "dataspace": dataspace,
             "domain": domain,
         }))?;
-        self.default_request(HttpMethod::POST, url)
-            .header("Content-Type", APPLICATION_JSON)
-            .body(body)
-            .build()?
-            .send()
+        self.send_builder(
+            self.account_signed_request(HttpMethod::POST, url, body)?
+                .header("Content-Type", APPLICATION_JSON),
+        )
+    }
+
+    /// Account-signed GET `/v1/accounts/{account_id}/permissions` retaining the exact response.
+    ///
+    /// The route returns effective permissions (direct grants plus assigned-role grants) for one
+    /// exact account. Callers that use the result for policy convergence should additionally
+    /// require the `x-iroha-account-permission-semantics: effective-v1` response header.
+    ///
+    /// # Errors
+    /// Returns an error if request signing, construction, or the HTTP call fails.
+    pub fn get_account_permissions_response(
+        &self,
+        account_id: &AccountId,
+    ) -> Result<Response<Vec<u8>>> {
+        self.get_account_permissions_page_response(account_id, 500, 0)
+    }
+
+    /// Account-signed page of effective permissions for one exact account.
+    ///
+    /// Query pagination is included before canonical request signing and count mode is always
+    /// `exact`, allowing callers to fail closed while traversing a response larger than one page.
+    ///
+    /// # Errors
+    /// Returns an error if request signing, construction, or the HTTP call fails.
+    pub fn get_account_permissions_page_response(
+        &self,
+        account_id: &AccountId,
+        limit: u64,
+        offset: u64,
+    ) -> Result<Response<Vec<u8>>> {
+        let path = format!("v1/accounts/{account_id}/permissions");
+        let mut url = join_torii_url(&self.torii_url, &path);
+        let limit = limit.to_string();
+        let offset = offset.to_string();
+        url.query_pairs_mut()
+            .append_pair("limit", &limit)
+            .append_pair("offset", &offset)
+            .append_pair("count_mode", "exact");
+        self.send_builder(
+            self.account_signed_request(HttpMethod::GET, url, Vec::new())?
+                .header("Accept", APPLICATION_JSON),
+        )
+    }
+
+    /// Account-signed POST `/v1/fee-sponsor-policies/by-id` retaining the exact response.
+    ///
+    /// # Errors
+    /// Returns an error if request signing, JSON serialization, construction, or the HTTP call
+    /// fails.
+    pub fn post_fee_sponsor_policy_by_id(
+        &self,
+        policy_id: &FeeSponsorPolicyId,
+    ) -> Result<Response<Vec<u8>>> {
+        let url = join_torii_url(&self.torii_url, "v1/fee-sponsor-policies/by-id");
+        let body = norito::json::to_vec(&norito::json!({
+            "sponsor_account_id": (policy_id.sponsor.to_string()),
+            "policy_name": (policy_id.name.to_string()),
+        }))?;
+        self.send_builder(
+            self.account_signed_request(HttpMethod::POST, url, body)?
+                .header("Content-Type", APPLICATION_JSON)
+                .header("Accept", APPLICATION_JSON),
+        )
     }
 
     /// Convenience: POST `/v1/assets/aliases/resolve` with an asset alias literal.
@@ -13038,7 +13611,48 @@ impl Client {
             .send()
     }
 
-    /// Convenience: selector-explicit POST `/v1/multisig/proposals/query`.
+    /// Convenience: account-signed, selector-explicit POST `/v1/multisig/spec`.
+    ///
+    /// # Errors
+    /// Returns an error if request signing, construction, JSON serialization, the HTTP call,
+    /// or closed-schema response decoding fails.
+    pub fn post_multisig_spec(
+        &self,
+        request: &MultisigSpecRequest,
+    ) -> Result<MultisigSpecResponse> {
+        validate_multisig_read_selector(
+            request.multisig_account_id.as_ref(),
+            request.multisig_account_alias.as_deref(),
+        )?;
+        let url = join_torii_url(&self.torii_url, "v1/multisig/spec");
+        let body = norito::json::to_vec(request)?;
+        let resp = self.send_builder(
+            self.account_signed_request(HttpMethod::POST, url, body)?
+                .header("Content-Type", APPLICATION_JSON)
+                .header("Accept", APPLICATION_JSON),
+        )?;
+        if resp.status() != StatusCode::OK {
+            return Err(eyre!(
+                "Failed to read multisig spec with HTTP status: {}. {}",
+                resp.status(),
+                std::str::from_utf8(resp.body()).unwrap_or("")
+            ));
+        }
+        let decoded: MultisigSpecResponse = norito::json::from_slice(resp.body())
+            .map_err(|err| eyre!("failed to decode closed multisig spec response: {err}"))?;
+        if request
+            .multisig_account_id
+            .as_ref()
+            .is_some_and(|expected| expected != &decoded.resolved_multisig_account_id)
+        {
+            return Err(eyre!(
+                "multisig spec response resolved account does not match the requested account"
+            ));
+        }
+        Ok(decoded)
+    }
+
+    /// Convenience: account-signed, selector-explicit POST `/v1/multisig/proposals/query`.
     ///
     /// # Errors
     /// Returns an error if request construction, JSON serialization, the HTTP call,
@@ -13053,13 +13667,11 @@ impl Client {
         )?;
         let url = join_torii_url(&self.torii_url, "v1/multisig/proposals/query");
         let body = norito::json::to_vec(request)?;
-        let resp = self
-            .default_request(HttpMethod::POST, url)
-            .header("Content-Type", APPLICATION_JSON)
-            .header("Accept", APPLICATION_JSON)
-            .body(body)
-            .build()?
-            .send()?;
+        let resp = self.send_builder(
+            self.account_signed_request(HttpMethod::POST, url, body)?
+                .header("Content-Type", APPLICATION_JSON)
+                .header("Accept", APPLICATION_JSON),
+        )?;
         if resp.status() != StatusCode::OK {
             return Err(eyre!(
                 "Failed to query multisig proposals with HTTP status: {}. {}",
@@ -13067,8 +13679,20 @@ impl Client {
                 std::str::from_utf8(resp.body()).unwrap_or("")
             ));
         }
-        norito::json::from_slice(resp.body())
-            .map_err(|err| eyre!("failed to decode multisig proposals query response: {err}"))
+        let decoded: MultisigProposalsQueryResponse = norito::json::from_slice(resp.body())
+            .map_err(|err| {
+                eyre!("failed to decode closed multisig proposals query response: {err}")
+            })?;
+        if request
+            .multisig_account_id
+            .as_ref()
+            .is_some_and(|expected| expected != &decoded.resolved_multisig_account_id)
+        {
+            return Err(eyre!(
+                "multisig proposals query response resolved account does not match the requested account"
+            ));
+        }
+        Ok(decoded)
     }
 
     /// Convenience: selector-explicit POST `/v1/multisig/proposals/resolve`.
@@ -13091,13 +13715,11 @@ impl Client {
         )?;
         let url = join_torii_url(&self.torii_url, "v1/multisig/proposals/resolve");
         let body = norito::json::to_vec(request)?;
-        let resp = self
-            .default_request(HttpMethod::POST, url)
-            .header("Content-Type", APPLICATION_JSON)
-            .header("Accept", APPLICATION_JSON)
-            .body(body)
-            .build()?
-            .send()?;
+        let resp = self.send_builder(
+            self.account_signed_request(HttpMethod::POST, url, body)?
+                .header("Content-Type", APPLICATION_JSON)
+                .header("Accept", APPLICATION_JSON),
+        )?;
         if resp.status() != StatusCode::OK {
             return Err(eyre!(
                 "Failed to resolve multisig proposal with HTTP status: {}. {}",
@@ -13105,8 +13727,34 @@ impl Client {
                 std::str::from_utf8(resp.body()).unwrap_or("")
             ));
         }
-        norito::json::from_slice(resp.body())
-            .map_err(|err| eyre!("failed to decode multisig proposal resolve response: {err}"))
+        let decoded: MultisigProposalResolveResponse = norito::json::from_slice(resp.body())
+            .map_err(|err| {
+                eyre!("failed to decode closed multisig proposal resolve response: {err}")
+            })?;
+        if request
+            .multisig_account_id
+            .as_ref()
+            .is_some_and(|expected| expected != &decoded.resolved_multisig_account_id)
+        {
+            return Err(eyre!(
+                "multisig proposal resolve response resolved account does not match the requested account"
+            ));
+        }
+        if request
+            .proposal_id
+            .as_ref()
+            .is_some_and(|expected| expected != &decoded.proposal_id)
+            || request
+                .instructions_hash
+                .as_ref()
+                .is_some_and(|expected| expected != &decoded.instructions_hash)
+            || decoded.proposal_id != decoded.instructions_hash
+        {
+            return Err(eyre!(
+                "multisig proposal resolve response does not match the exact requested proposal"
+            ));
+        }
+        Ok(decoded)
     }
 
     /// Convenience: POST `/v1/multisig/propose` with a typed instruction batch.
@@ -16358,9 +17006,7 @@ impl Client {
         &self,
         contract_address: &iroha_data_model::smart_contract::ContractAddress,
     ) -> Result<norito::json::Value> {
-        let path = format!("v1/gov/contracts/{contract_address}");
-        let url = join_torii_url(&self.torii_url, &path);
-        let resp = self.send_builder(self.default_request(HttpMethod::GET, url))?;
+        let resp = self.get_gov_contract_response(contract_address)?;
         if resp.status() != StatusCode::OK {
             return Err(eyre!(
                 "Failed to get governed contract: {} {}",
@@ -16371,14 +17017,49 @@ impl Client {
         Ok(norito::json::from_slice(resp.body())?)
     }
 
-    /// GET `/v1/contracts/code-bytes/{code_hash}` and decode base64 into bytes
+    /// GET `/v1/gov/contracts/{contract_address}` and retain the exact response bytes.
+    ///
+    /// This is intended for callers that enforce a closed response schema and must detect
+    /// duplicate JSON fields before decoding. The request uses canonical account signing.
     ///
     /// # Errors
-    /// Returns an error if the HTTP request fails, the response is non-OK, or the response JSON lacks `code_b64`.
+    /// Returns an error if request signing, construction, or transport fails.
+    pub fn get_gov_contract_response(
+        &self,
+        contract_address: &iroha_data_model::smart_contract::ContractAddress,
+    ) -> Result<Response<Vec<u8>>> {
+        let path = format!("v1/gov/contracts/{contract_address}");
+        let url = join_torii_url(&self.torii_url, &path);
+        self.send_builder(self.account_signed_request(HttpMethod::GET, url, Vec::new())?)
+    }
+
+    /// Account-signed GET `/v1/contracts/code-bytes/{code_hash}` and decode a bounded,
+    /// canonical base64 artifact whose digest exactly matches `code_hash`.
+    ///
+    /// # Errors
+    /// Returns an error if request signing or transport fails, the response is non-OK,
+    /// oversized or not a closed JSON object, base64 is not canonical, or the artifact
+    /// does not match the requested hash.
     pub fn get_contract_code_bytes(&self, code_hash_hex: &str) -> Result<Vec<u8>> {
+        if code_hash_hex.len() != 64
+            || !code_hash_hex
+                .as_bytes()
+                .iter()
+                .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+        {
+            return Err(eyre!(
+                "contract code hash must be exactly 32 lowercase hexadecimal bytes"
+            ));
+        }
+        let mut expected_hash = [0_u8; 32];
+        hex::decode_to_slice(code_hash_hex, &mut expected_hash)
+            .wrap_err("failed to decode exact contract code hash")?;
         let path = format!("v1/contracts/code-bytes/{code_hash_hex}");
         let url = join_torii_url(&self.torii_url, &path);
-        let resp = self.send_builder(self.default_request(HttpMethod::GET, url))?;
+        let resp = self.send_builder(
+            self.account_signed_request(HttpMethod::GET, url, Vec::new())?
+                .header("Accept", APPLICATION_JSON),
+        )?;
         if resp.status() != StatusCode::OK {
             return Err(eyre!(
                 "Failed to get code bytes: {} {}",
@@ -16386,14 +17067,29 @@ impl Client {
                 std::str::from_utf8(resp.body()).unwrap_or("")
             ));
         }
-        let v: norito::json::Value = norito::json::from_slice(resp.body())?;
-        let s = v
-            .get("code_b64")
-            .and_then(|x| x.as_str())
-            .ok_or_else(|| eyre!("missing code_b64"))?;
-        Ok(base64::engine::general_purpose::STANDARD
-            .decode(s.as_bytes())
-            .unwrap_or_default())
+        if resp.body().len() > CONTRACT_CODE_ARTIFACT_RESPONSE_MAX_BYTES {
+            return Err(eyre!(
+                "contract code response exceeds the first-release artifact limit"
+            ));
+        }
+        let response: ContractCodeBytesResponse = norito::json::from_slice(resp.body())
+            .wrap_err("failed to decode closed contract code response")?;
+        let code = decode_canonical_sccp_base64(
+            &response.code_b64,
+            "contract code response.code_b64",
+            CONTRACT_CODE_ARTIFACT_BASE64_MAX_BYTES,
+        )?;
+        if code.len() > CONTRACT_CODE_ARTIFACT_MAX_BYTES {
+            return Err(eyre!(
+                "contract code artifact exceeds the first-release artifact limit"
+            ));
+        }
+        if *iroha_crypto::Hash::new(&code).as_ref() != expected_hash {
+            return Err(eyre!(
+                "contract code artifact digest does not match the requested hash"
+            ));
+        }
+        Ok(code)
     }
 
     /// GET `/v1/contracts/code/{code_hash}` and return manifest JSON
@@ -16406,103 +17102,6 @@ impl Client {
         if resp.status() != StatusCode::OK {
             return Err(eyre!(
                 "Failed to get contract manifest: {} {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
-        Ok(norito::json::from_slice(resp.body())?)
-    }
-
-    /// POST `/v1/contracts/deploy` with JSON body
-    /// `{ authority, private_key, code_b64, contract_alias, lease_expiry_ms? }`.
-    /// # Errors
-    /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
-    pub fn post_contract_deploy_json(
-        &self,
-        authority: &iroha_data_model::account::AccountId,
-        private_key: &iroha_crypto::PrivateKey,
-        code_b64: &str,
-        contract_alias: &iroha_data_model::smart_contract::ContractAlias,
-        lease_expiry_ms: Option<u64>,
-    ) -> Result<norito::json::Value> {
-        let url = join_torii_url(&self.torii_url, "v1/contracts/deploy");
-        let mut payload = norito::json::Map::new();
-        payload.insert("authority".into(), authority.to_string().into());
-        payload.insert(
-            "private_key".into(),
-            norito::json::to_value(&iroha_data_model::prelude::ExposedPrivateKey(
-                private_key.clone(),
-            ))?,
-        );
-        payload.insert("code_b64".into(), code_b64.into());
-        payload.insert(
-            "contract_alias".into(),
-            norito::json::to_value(contract_alias)?,
-        );
-        if let Some(lease_expiry_ms) = lease_expiry_ms {
-            payload.insert("lease_expiry_ms".into(), lease_expiry_ms.into());
-        }
-        let body = norito::json::to_vec(&norito::json::Value::from(payload))?;
-        let resp = self
-            .default_request(HttpMethod::POST, url)
-            .header("Content-Type", APPLICATION_JSON)
-            .body(body)
-            .build()?
-            .send()?;
-        if resp.status() != StatusCode::OK {
-            return Err(ResponseReport::with_msg("Failed to deploy contract", &resp)
-                .unwrap_or_else(core::convert::identity)
-                .into());
-        }
-        Ok(norito::json::from_slice(resp.body())?)
-    }
-
-    /// POST `/v1/contracts/deploy-bundle` with a JSON bundle body.
-    ///
-    /// # Errors
-    /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
-    pub fn post_contract_deploy_bundle_json(
-        &self,
-        bundle: &norito::json::Value,
-        dry_run: bool,
-    ) -> Result<norito::json::Value> {
-        let path = if dry_run {
-            "v1/contracts/deploy-bundle?dry_run=true"
-        } else {
-            "v1/contracts/deploy-bundle"
-        };
-        let url = join_torii_url(&self.torii_url, path);
-        let body = norito::json::to_vec(bundle)?;
-        let resp = self
-            .default_request(HttpMethod::POST, url)
-            .header("Content-Type", APPLICATION_JSON)
-            .body(body)
-            .build()?
-            .send()?;
-        if resp.status() != StatusCode::OK {
-            return Err(
-                ResponseReport::with_msg("Failed to deploy contract bundle", &resp)
-                    .unwrap_or_else(core::convert::identity)
-                    .into(),
-            );
-        }
-        Ok(norito::json::from_slice(resp.body())?)
-    }
-
-    /// GET `/v1/contracts/deploy-bundles/{bundle_digest}`.
-    ///
-    /// # Errors
-    /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
-    pub fn get_contract_deploy_bundle_status_json(
-        &self,
-        bundle_digest: &str,
-    ) -> Result<norito::json::Value> {
-        let path = format!("v1/contracts/deploy-bundles/{bundle_digest}");
-        let url = join_torii_url(&self.torii_url, &path);
-        let resp = self.send_builder(self.default_request(HttpMethod::GET, url))?;
-        if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to get contract bundle status: {} {}",
                 resp.status(),
                 std::str::from_utf8(resp.body()).unwrap_or("")
             ));
@@ -16631,10 +17230,9 @@ impl Client {
             "contract_alias": contract_alias,
         }))?;
         self.send_builder(
-            self.default_request(HttpMethod::POST, url)
+            self.account_signed_request(HttpMethod::POST, url, payload)?
                 .header("Content-Type", APPLICATION_JSON)
-                .header("Accept", APPLICATION_JSON)
-                .body(payload),
+                .header("Accept", APPLICATION_JSON),
         )
     }
 
@@ -18614,7 +19212,7 @@ mod subscription_http_tests {
     };
 
     use http::StatusCode;
-    use iroha_primitives::numeric::{Numeric, Quantity};
+    use iroha_primitives::numeric::Quantity;
     use iroha_test_samples::gen_account_in;
     use norito::json::{JsonSerialize, Value as JsonValue};
 
@@ -20813,7 +21411,7 @@ mod tests {
         time::Duration,
     };
 
-    use iroha_crypto::{Hash, HashOf, SignatureOf};
+    use iroha_crypto::{Hash, HashOf, Signature, SignatureOf};
     use iroha_data_model::{
         account::AccountAddress,
         block::{
@@ -20930,6 +21528,51 @@ mod tests {
 
     impl rand::rand_core::TryCryptoRng for FailingClientRng {}
 
+    fn assert_canonical_account_signed_request(client: &Client, snapshot: &RequestSnapshot) {
+        let headers: HashMap<_, _> = snapshot.headers.iter().cloned().collect();
+        assert_eq!(
+            headers.get(HEADER_ACCOUNT),
+            Some(&client.account.to_string()),
+            "request signer must be the configured client account",
+        );
+        let timestamp_ms = headers
+            .get(HEADER_TIMESTAMP_MS)
+            .expect("timestamp header")
+            .parse::<u64>()
+            .expect("timestamp header should parse");
+        let nonce = headers.get(HEADER_NONCE).expect("nonce header");
+        assert!(!nonce.is_empty(), "nonce must not be empty");
+        let signature_bytes = base64::engine::general_purpose::STANDARD
+            .decode(
+                headers
+                    .get(HEADER_SIGNATURE)
+                    .expect("signature header")
+                    .as_bytes(),
+            )
+            .expect("signature header should decode");
+        let signature = Signature::try_from_bytes(&signature_bytes)
+            .expect("account signature header must pass checked admission");
+        let signed_message = Client::operator_request_message(
+            &snapshot.method,
+            &snapshot.url,
+            &snapshot.body,
+            timestamp_ms,
+            nonce,
+        );
+        signature
+            .verify(client.key_pair.public_key(), &signed_message)
+            .expect("signature must cover the exact method, path, query, and body");
+    }
+
+    fn assert_canonical_account_signed_json_request(client: &Client, snapshot: &RequestSnapshot) {
+        assert_canonical_account_signed_request(client, snapshot);
+        let headers: HashMap<_, _> = snapshot.headers.iter().cloned().collect();
+        assert_eq!(
+            headers.get("content-type"),
+            Some(&APPLICATION_JSON.to_owned()),
+        );
+    }
+
     #[test]
     fn signed_request_nonce_reports_rng_failure() {
         let mut rng = FailingClientRng;
@@ -20940,6 +21583,408 @@ mod tests {
         let message = error.to_string();
         assert!(message.contains("signed request nonce OS RNG failed"));
         assert!(message.contains("failing client RNG"));
+    }
+
+    #[test]
+    fn account_alias_resolve_sends_canonical_account_signed_request() {
+        let client = client_with_base_url(base_url());
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::OK, "{}");
+
+        with_mock_http(respond_with(&store, response), || {
+            client
+                .post_alias_resolve("bright-brook-5859@ubl.sbp")
+                .expect("signed alias resolve request");
+        });
+
+        let snapshots = store.lock().expect("snapshot store");
+        let snapshot = snapshots.first().expect("snapshot");
+        assert_eq!(snapshot.method, HttpMethod::POST);
+        assert_eq!(snapshot.url.path(), "/v1/aliases/resolve");
+        let body: JsonValue =
+            norito::json::from_slice(&snapshot.body).expect("decode alias resolve body");
+        assert_eq!(
+            body,
+            norito::json!({ "alias": "bright-brook-5859@ubl.sbp" }),
+        );
+        assert_canonical_account_signed_json_request(&client, snapshot);
+    }
+
+    #[test]
+    fn account_alias_resolve_index_sends_canonical_account_signed_request() {
+        let client = client_with_base_url(base_url());
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::OK, "{}");
+
+        with_mock_http(respond_with(&store, response), || {
+            client
+                .post_alias_resolve_index(42)
+                .expect("signed alias-index resolve request");
+        });
+
+        let snapshots = store.lock().expect("snapshot store");
+        let snapshot = snapshots.first().expect("snapshot");
+        assert_eq!(snapshot.method, HttpMethod::POST);
+        assert_eq!(snapshot.url.path(), "/v1/aliases/resolve-index");
+        let body: JsonValue =
+            norito::json::from_slice(&snapshot.body).expect("decode alias-index resolve body");
+        assert_eq!(body, norito::json!({ "index": 42_u64 }));
+        assert_canonical_account_signed_json_request(&client, snapshot);
+    }
+
+    #[test]
+    fn account_alias_by_account_sends_canonical_account_signed_request() {
+        let client = client_with_base_url(base_url());
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::OK, "{}");
+
+        with_mock_http(respond_with(&store, response), || {
+            client
+                .post_alias_lookup_by_account(TEST_WORKER_I105, Some("sbp"), Some("ubl.sbp"))
+                .expect("signed alias-by-account request");
+        });
+
+        let snapshots = store.lock().expect("snapshot store");
+        let snapshot = snapshots.first().expect("snapshot");
+        assert_eq!(snapshot.method, HttpMethod::POST);
+        assert_eq!(snapshot.url.path(), "/v1/aliases/by-account");
+        let body: JsonValue =
+            norito::json::from_slice(&snapshot.body).expect("decode alias-by-account body");
+        assert_eq!(
+            body,
+            norito::json!({
+                "account_id": TEST_WORKER_I105,
+                "dataspace": "sbp",
+                "domain": "ubl.sbp",
+            }),
+        );
+        assert_canonical_account_signed_json_request(&client, snapshot);
+    }
+
+    #[test]
+    fn account_permissions_read_is_exact_and_canonically_signed() {
+        let client = client_with_base_url(base_url());
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::OK, r#"{"items":[]}"#);
+
+        with_mock_http(respond_with(&store, response), || {
+            client
+                .get_account_permissions_response(&client.account)
+                .expect("signed exact account-permissions read");
+        });
+
+        let snapshots = store.lock().expect("snapshot store");
+        let snapshot = snapshots.first().expect("snapshot");
+        assert_eq!(snapshot.method, HttpMethod::GET);
+        assert_eq!(
+            snapshot.url.path(),
+            format!("/v1/accounts/{}/permissions", client.account)
+        );
+        assert_eq!(
+            snapshot
+                .url
+                .query_pairs()
+                .map(|(key, value)| (key.into_owned(), value.into_owned()))
+                .collect::<HashMap<_, _>>(),
+            HashMap::from([
+                ("limit".to_owned(), "500".to_owned()),
+                ("offset".to_owned(), "0".to_owned()),
+                ("count_mode".to_owned(), "exact".to_owned()),
+            ])
+        );
+        assert!(snapshot.body.is_empty());
+        assert_canonical_account_signed_request(&client, snapshot);
+    }
+
+    #[test]
+    fn account_permissions_page_is_exact_and_canonically_signed() {
+        let client = client_with_base_url(base_url());
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::OK, r#"{"items":[]}"#);
+
+        with_mock_http(respond_with(&store, response), || {
+            client
+                .get_account_permissions_page_response(&client.account, 17, 34)
+                .expect("signed exact account-permissions page read");
+        });
+
+        let snapshots = store.lock().expect("snapshot store");
+        let snapshot = snapshots.first().expect("snapshot");
+        assert_eq!(snapshot.method, HttpMethod::GET);
+        assert_eq!(
+            snapshot.url.path(),
+            format!("/v1/accounts/{}/permissions", client.account)
+        );
+        assert_eq!(
+            snapshot
+                .url
+                .query_pairs()
+                .map(|(key, value)| (key.into_owned(), value.into_owned()))
+                .collect::<HashMap<_, _>>(),
+            HashMap::from([
+                ("limit".to_owned(), "17".to_owned()),
+                ("offset".to_owned(), "34".to_owned()),
+                ("count_mode".to_owned(), "exact".to_owned()),
+            ])
+        );
+        assert!(snapshot.body.is_empty());
+        assert_canonical_account_signed_request(&client, snapshot);
+    }
+
+    #[test]
+    fn fee_sponsor_policy_by_id_is_exact_and_canonically_signed() {
+        let client = client_with_base_url(base_url());
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::OK, "{}");
+        let policy_id = FeeSponsorPolicyId::new(
+            client.account.clone(),
+            "retail".parse().expect("canonical policy name"),
+        );
+
+        with_mock_http(respond_with(&store, response), || {
+            client
+                .post_fee_sponsor_policy_by_id(&policy_id)
+                .expect("signed exact fee-sponsor-policy read");
+        });
+
+        let snapshots = store.lock().expect("snapshot store");
+        let snapshot = snapshots.first().expect("snapshot");
+        assert_eq!(snapshot.method, HttpMethod::POST);
+        assert_eq!(snapshot.url.path(), "/v1/fee-sponsor-policies/by-id");
+        let body: JsonValue =
+            norito::json::from_slice(&snapshot.body).expect("decode policy selector body");
+        assert_eq!(
+            body,
+            norito::json!({
+                "sponsor_account_id": (client.account.to_string()),
+                "policy_name": "retail",
+            })
+        );
+        assert_canonical_account_signed_json_request(&client, snapshot);
+    }
+
+    #[test]
+    fn contract_alias_resolve_sends_canonical_account_signed_request() {
+        let client = client_with_base_url(base_url());
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::OK, "{}");
+        let alias: iroha_data_model::smart_contract::ContractAlias =
+            "router::universal".parse().expect("contract alias");
+
+        with_mock_http(respond_with(&store, response), || {
+            client
+                .post_contract_alias_resolve(&alias)
+                .expect("signed contract alias resolve request");
+        });
+
+        let snapshots = store.lock().expect("snapshot store");
+        let snapshot = snapshots.first().expect("snapshot");
+        assert_eq!(snapshot.method, HttpMethod::POST);
+        assert_eq!(snapshot.url.path(), "/v1/contracts/aliases/resolve");
+        let body: JsonValue =
+            norito::json::from_slice(&snapshot.body).expect("decode contract alias body");
+        assert_eq!(body, norito::json!({ "contract_alias": alias }));
+        assert_canonical_account_signed_json_request(&client, snapshot);
+    }
+
+    #[test]
+    fn governed_contract_read_sends_canonical_account_signed_request() {
+        let client = client_with_base_url(base_url());
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::OK, "{}");
+        let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &client.account,
+            0,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("contract address");
+
+        with_mock_http(respond_with(&store, response), || {
+            client
+                .get_gov_contract_json(&contract_address)
+                .expect("signed governed contract read");
+        });
+
+        let snapshots = store.lock().expect("snapshot store");
+        let snapshot = snapshots.first().expect("snapshot");
+        assert_eq!(snapshot.method, HttpMethod::GET);
+        assert_eq!(
+            snapshot.url.path(),
+            format!("/v1/gov/contracts/{contract_address}")
+        );
+        assert!(snapshot.body.is_empty());
+        assert_canonical_account_signed_request(&client, snapshot);
+    }
+
+    #[test]
+    fn governed_contract_raw_read_preserves_bytes_for_strict_decoders() {
+        let client = client_with_base_url(base_url());
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let raw = br#"{"found":false,"found":true}"#;
+        let response = json_response(
+            StatusCode::OK,
+            std::str::from_utf8(raw).expect("fixture JSON"),
+        );
+        let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &client.account,
+            1,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("contract address");
+
+        let response = with_mock_http(respond_with(&store, response), || {
+            client
+                .get_gov_contract_response(&contract_address)
+                .expect("signed raw governed contract read")
+        });
+
+        assert_eq!(response.body(), raw);
+        let snapshots = store.lock().expect("snapshot store");
+        let snapshot = snapshots.first().expect("snapshot");
+        assert_canonical_account_signed_request(&client, snapshot);
+    }
+
+    #[test]
+    fn contract_code_artifact_read_is_signed_canonical_bounded_and_hash_bound() {
+        let client = client_with_base_url(base_url());
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let code = b"first-release-contract-artifact";
+        let code_hash = hex::encode(iroha_crypto::Hash::new(code).as_ref());
+        let code_b64 = base64::engine::general_purpose::STANDARD.encode(code);
+        let response = json_response(StatusCode::OK, &format!(r#"{{"code_b64":"{code_b64}"}}"#));
+
+        let decoded = with_mock_http(respond_with(&store, response), || {
+            client
+                .get_contract_code_bytes(&code_hash)
+                .expect("signed exact contract artifact read")
+        });
+
+        assert_eq!(decoded, code);
+        let snapshots = store.lock().expect("snapshot store");
+        let snapshot = snapshots.first().expect("snapshot");
+        assert_eq!(snapshot.method, HttpMethod::GET);
+        assert_eq!(
+            snapshot.url.path(),
+            format!("/v1/contracts/code-bytes/{code_hash}")
+        );
+        assert!(snapshot.body.is_empty());
+        assert_canonical_account_signed_request(&client, snapshot);
+    }
+
+    #[test]
+    fn contract_code_artifact_read_rejects_nonexact_inputs_and_hostile_responses() {
+        let client = client_with_base_url(base_url());
+        let code = b"hash-bound-contract-artifact";
+        let code_hash = hex::encode(iroha_crypto::Hash::new(code).as_ref());
+        let code_b64 = base64::engine::general_purpose::STANDARD.encode(code);
+
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        with_mock_http(
+            respond_with(&store, json_response(StatusCode::OK, "{}")),
+            || {
+                for invalid in [
+                    format!("A{}", &code_hash[1..]),
+                    format!(" {code_hash}"),
+                    code_hash[..63].to_owned(),
+                ] {
+                    let _ = client
+                        .get_contract_code_bytes(&invalid)
+                        .expect_err("non-exact code hash must fail before I/O");
+                }
+            },
+        );
+        assert!(
+            store.lock().expect("snapshot store").is_empty(),
+            "invalid hashes must not issue HTTP requests"
+        );
+
+        for hostile in [
+            r#"{}"#.to_owned(),
+            r#"{"code_b64":"AA"}"#.to_owned(),
+            format!(r#"{{"code_b64":"{code_b64}","unexpected":true}}"#),
+            format!(r#"{{"code_b64":"{code_b64}","code_b64":"{code_b64}"}}"#),
+            format!(
+                r#"{{"code_b64":"{}"}}"#,
+                base64::engine::general_purpose::STANDARD.encode(b"different artifact")
+            ),
+        ] {
+            let response = json_response(StatusCode::OK, &hostile);
+            with_mock_http(
+                move |_| Ok(response.clone()),
+                || {
+                    let _ = client
+                        .get_contract_code_bytes(&code_hash)
+                        .expect_err("hostile artifact response must fail closed");
+                },
+            );
+        }
+    }
+
+    #[test]
+    fn multisig_reads_are_account_signed_for_concrete_selectors() {
+        let client = client_with_base_url(base_url());
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let account_id = AccountId::new(checked_random_keypair().public_key().clone());
+        let response = json_response(
+            StatusCode::OK,
+            &format!(
+                r#"{{"resolved_multisig_account_id":"{account_id}","proposals":[],"next_cursor":null}}"#
+            ),
+        );
+        let request = MultisigProposalsQueryRequest {
+            multisig_account_id: Some(account_id.clone()),
+            multisig_account_alias: None,
+            status: Vec::new(),
+            cursor: None,
+            limit: Some(10),
+        };
+
+        with_mock_http(respond_with(&store, response), || {
+            client
+                .post_multisig_proposals_query(&request)
+                .expect("signed multisig read");
+        });
+
+        let snapshots = store.lock().expect("snapshot store");
+        let snapshot = snapshots.first().expect("snapshot");
+        assert_eq!(snapshot.method, HttpMethod::POST);
+        assert_eq!(snapshot.url.path(), "/v1/multisig/proposals/query");
+        assert_canonical_account_signed_json_request(&client, snapshot);
+    }
+
+    #[test]
+    fn multisig_reads_reject_response_selector_confusion_and_extensions() {
+        let client = client_with_base_url(base_url());
+        let requested = AccountId::new(checked_random_keypair().public_key().clone());
+        let substituted = AccountId::new(checked_random_keypair().public_key().clone());
+        let request = MultisigProposalsQueryRequest {
+            multisig_account_id: Some(requested.clone()),
+            multisig_account_alias: None,
+            status: Vec::new(),
+            cursor: None,
+            limit: None,
+        };
+
+        for hostile in [
+            format!(
+                r#"{{"resolved_multisig_account_id":"{substituted}","proposals":[],"next_cursor":null}}"#
+            ),
+            format!(
+                r#"{{"resolved_multisig_account_id":"{requested}","proposals":[],"next_cursor":null,"unexpected":true}}"#
+            ),
+        ] {
+            let response = json_response(StatusCode::OK, &hostile);
+            with_mock_http(
+                move |_| Ok(response.clone()),
+                || {
+                    let _ = client
+                        .post_multisig_proposals_query(&request)
+                        .expect_err("confused or extended multisig response must fail closed");
+                },
+            );
+        }
     }
 
     #[test]

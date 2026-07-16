@@ -586,6 +586,27 @@ pub(crate) fn typed_request_content_format(
     })
 }
 
+/// Validate the canonical first-release JSON request representation.
+///
+/// Unlike the compatibility-oriented [`extractors::JsonOnly`] extractor, this
+/// requires exactly one `Content-Type` header and accepts only
+/// `application/json` with an optional UTF-8 charset. It deliberately rejects
+/// structured-suffix JSON and native Norito so an endpoint cannot advertise a
+/// narrower protocol than it actually enforces.
+#[allow(clippy::result_large_err)]
+pub(crate) fn canonical_json_request_content_type(
+    headers: &axum::http::HeaderMap,
+) -> Result<(), Response> {
+    match typed_request_content_format(headers)? {
+        TypedRequestContentFormat::Json => Ok(()),
+        TypedRequestContentFormat::Norito => Err(typed_request_media_rejection(
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "request_content_type_unsupported",
+            "unsupported Content-Type `application/x-norito`; use application/json",
+        )),
+    }
+}
+
 /// Validate the first-release Kagemusha command media type.
 ///
 /// Offline top-up and redemption accept one canonical Norito representation;
@@ -2069,6 +2090,27 @@ pub mod extractors {
         }
     }
 
+    /// Extractor enforcing the canonical first-release JSON request media type.
+    #[derive(Clone, Debug)]
+    pub struct CanonicalJsonOnly<T>(pub T);
+
+    impl<S, T> FromRequest<S> for CanonicalJsonOnly<T>
+    where
+        Bytes: FromRequest<S, Rejection = axum::extract::rejection::BytesRejection>,
+        S: Send + Sync,
+        T: JsonDeserializeOwned + Send,
+    {
+        type Rejection = Response;
+
+        async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
+            super::canonical_json_request_content_type(req.headers())?;
+            let body = Bytes::from_request(req, state)
+                .await
+                .map_err(typed_body_rejection)?;
+            decode_as_json::<T>(&body).map(CanonicalJsonOnly)
+        }
+    }
+
     /// Extractor for URL query strings decoded into `JsonDeserialize` types.
     #[derive(Clone, Debug)]
     pub struct NoritoQuery<T>(pub T);
@@ -3544,6 +3586,123 @@ pub mod extractors {
                 .await
                 .expect("extract json suffix");
             assert_eq!(extracted.0.value, 9);
+        }
+
+        #[tokio::test]
+        async fn canonical_json_only_accepts_exact_json_representations() {
+            #[derive(Clone, Debug, PartialEq, crate::json_macros::JsonDeserialize)]
+            struct Payload {
+                value: u32,
+            }
+
+            for content_type in [
+                "application/json",
+                "application/json;charset=utf-8",
+                "application/json; charset=\"UTF-8\"",
+            ] {
+                let req = Request::builder()
+                    .method("POST")
+                    .header(CONTENT_TYPE, content_type)
+                    .body(Body::from(r#"{"value":9}"#))
+                    .expect("build canonical JSON request");
+                let extracted = CanonicalJsonOnly::<Payload>::from_request(req, &())
+                    .await
+                    .expect("extract canonical JSON");
+                assert_eq!(extracted.0.value, 9, "content_type={content_type}");
+            }
+        }
+
+        #[tokio::test]
+        async fn canonical_json_only_rejects_noncanonical_media_before_body_decode() {
+            #[derive(Clone, Debug, PartialEq, crate::json_macros::JsonDeserialize)]
+            struct Payload {
+                value: u32,
+            }
+
+            for (content_type, expected_status, expected_code) in [
+                (
+                    Some("application/x-norito"),
+                    StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                    "request_content_type_unsupported",
+                ),
+                (
+                    Some("application/problem+json"),
+                    StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                    "request_content_type_unsupported",
+                ),
+                (
+                    Some("application/json;profile=torii"),
+                    StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                    "request_content_type_unsupported",
+                ),
+                (
+                    Some("application/json;charset=utf-8;CHARSET=utf-8"),
+                    StatusCode::BAD_REQUEST,
+                    "request_content_type_invalid",
+                ),
+                (
+                    None,
+                    StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                    "request_content_type_missing",
+                ),
+            ] {
+                let mut builder = Request::builder().method("POST");
+                if let Some(content_type) = content_type {
+                    builder = builder.header(CONTENT_TYPE, content_type);
+                }
+                let request = builder
+                    .body(Body::from("not a JSON body"))
+                    .expect("build rejected request");
+                let response = super::super::with_current_response_format(
+                    super::super::ResponseFormat::Json,
+                    CanonicalJsonOnly::<Payload>::from_request(request, &()),
+                )
+                .await
+                .expect_err("noncanonical media must be rejected");
+                assert_eq!(
+                    response.status(),
+                    expected_status,
+                    "content_type={content_type:?}"
+                );
+                let body = response
+                    .into_body()
+                    .collect()
+                    .await
+                    .expect("collect canonical JSON rejection")
+                    .to_bytes();
+                let envelope: iroha_torii_shared::ErrorEnvelope =
+                    norito::json::from_slice(&body).expect("decode canonical JSON rejection");
+                assert_eq!(
+                    envelope.code(),
+                    expected_code,
+                    "content_type={content_type:?}"
+                );
+            }
+
+            let mut duplicate = Request::builder()
+                .method("POST")
+                .header(CONTENT_TYPE, "application/json")
+                .body(Body::from("not a JSON body"))
+                .expect("build duplicate Content-Type request");
+            duplicate
+                .headers_mut()
+                .append(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+            let response = super::super::with_current_response_format(
+                super::super::ResponseFormat::Json,
+                CanonicalJsonOnly::<Payload>::from_request(duplicate, &()),
+            )
+            .await
+            .expect_err("duplicate Content-Type must be rejected");
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+            let body = response
+                .into_body()
+                .collect()
+                .await
+                .expect("collect duplicate Content-Type rejection")
+                .to_bytes();
+            let envelope: iroha_torii_shared::ErrorEnvelope =
+                norito::json::from_slice(&body).expect("decode duplicate Content-Type rejection");
+            assert_eq!(envelope.code(), "request_content_type_invalid");
         }
 
         #[tokio::test]

@@ -712,13 +712,22 @@ async fn mcp_writer_prefix_policy_lists_only_curated_iroha_tools() {
     for required in [
         "iroha.accounts.query",
         "iroha.contracts.call_and_wait",
-        "iroha.contracts.deploy",
         "iroha.accounts.onboard",
         "iroha.transactions.submit_and_wait",
     ] {
         assert!(
             names.iter().any(|name| name == required),
             "expected `{required}` in visible tool list, got {names:?}"
+        );
+    }
+    for retired in [
+        "iroha.contracts.deploy",
+        "iroha.contracts.deploy_bundle",
+        "iroha.contracts.deploy_bundles.get",
+    ] {
+        assert!(
+            names.iter().all(|name| name != retired),
+            "retired server-side deployment tool leaked into MCP: {retired}"
         );
     }
     assert!(
@@ -2144,18 +2153,14 @@ async fn mcp_jsonrpc_tools_call_agent_alias_gov_endpoints_dispatch() {
 }
 
 #[tokio::test]
-async fn mcp_jsonrpc_tools_call_agent_alias_contract_post_endpoints_dispatch() {
+async fn mcp_jsonrpc_tools_call_agent_alias_contract_call_dispatches() {
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
     cfg.torii.mcp.enabled = true;
     cfg.torii.mcp.profile = iroha_config::parameters::actual::ToriiMcpProfile::Operator;
 
     let app = build_router(cfg);
-    for (id, tool_name) in [
-        (10401, "iroha.contracts.deploy"),
-        (10402, "iroha.contracts.deploy_bundle"),
-        (10403, "iroha.contracts.call"),
-    ] {
+    for (id, tool_name) in [(10403, "iroha.contracts.call")] {
         let (status, call) = post_mcp(
             &app,
             norito::json!({
@@ -2303,41 +2308,34 @@ async fn mcp_jsonrpc_tools_call_agent_alias_contracts_code_bytes_get_accepts_has
 }
 
 #[tokio::test]
-async fn mcp_jsonrpc_tools_call_agent_alias_contracts_deploy_bundles_get_accepts_digest_shortcut() {
+async fn retired_server_contract_deploy_mcp_tools_are_not_callable() {
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
     cfg.torii.mcp.enabled = true;
 
     let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 10410,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.contracts.deploy_bundles.get",
-                "arguments": {
-                    "digest": "not-a-bundle-digest"
-                }
-            }
-        }),
-    )
-    .await;
+    for (id, name) in [
+        (10410, "iroha.contracts.deploy"),
+        (10411, "iroha.contracts.deploy_bundle"),
+        (10412, "iroha.contracts.deploy_bundles.get"),
+    ] {
+        let (status, call) = post_mcp(
+            &app,
+            norito::json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "method": "tools/call",
+                "params": { "name": name, "arguments": {} }
+            }),
+        )
+        .await;
 
-    assert_eq!(status, StatusCode::OK);
-    assert!(
-        tool_is_error(&call),
-        "invalid deploy bundle digest should be marked as MCP tool error"
-    );
-    let structured = structured_content(&call);
-    assert!(
-        structured
-            .get("status")
-            .and_then(Value::as_u64)
-            .is_some_and(|status| status >= 400),
-        "expected invalid deploy bundle digest to be rejected by deploy-bundle receipt alias"
-    );
+        assert_eq!(status, StatusCode::OK);
+        assert!(
+            tool_is_error(&call),
+            "retired tool remained callable: {name}"
+        );
+    }
 }
 
 #[tokio::test]
@@ -2803,22 +2801,16 @@ async fn mcp_tools_list_exposes_account_and_transaction_interfaces() {
             .any(|name| name == "iroha.contracts.code.bytes.get"),
         "expected agent-friendly contract code-bytes MCP tool"
     );
-    assert!(
-        names.iter().any(|name| name == "iroha.contracts.deploy"),
-        "expected agent-friendly contract deploy MCP tool"
-    );
-    assert!(
-        names
-            .iter()
-            .any(|name| name == "iroha.contracts.deploy_bundle"),
-        "expected agent-friendly contract deploy-bundle MCP tool"
-    );
-    assert!(
-        names
-            .iter()
-            .any(|name| name == "iroha.contracts.deploy_bundles.get"),
-        "expected agent-friendly contract deploy-bundle receipt MCP tool"
-    );
+    for retired in [
+        "iroha.contracts.deploy",
+        "iroha.contracts.deploy_bundle",
+        "iroha.contracts.deploy_bundles.get",
+    ] {
+        assert!(
+            names.iter().all(|name| name != retired),
+            "retired server-side deployment MCP tool leaked into tool list: {retired}"
+        );
+    }
     assert!(
         names.iter().any(|name| name == "iroha.contracts.call"),
         "expected agent-friendly contract call MCP tool"

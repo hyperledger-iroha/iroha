@@ -104,7 +104,7 @@ binds the verified anchor digest, and redemption resolves compact anchor
 references from chain state before crediting value. The native verifier remains
 fail-closed until the authenticated release-envelope trust root is available.
 
-`KagemushaRecursiveSpendPeerPaymentV2` intentionally contains only the
+`KagemushaRecursiveSpendPeerPaymentV4` intentionally contains only the
 recipient bundle and its proof-bound membership witness. A future finality
 package must therefore remain a deduplicated wallet/transport sidecar keyed by
 compact anchor reference; it must not be added to the canonical two-field

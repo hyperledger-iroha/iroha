@@ -175,20 +175,16 @@ fn authority_has_permission(
     false
 }
 
-/// Return `true` when the authority holds the exact permissions required to resolve `alias`.
+/// Return `true` when the authority holds the exact permission required to resolve `alias`.
+///
+/// Domain-qualified aliases require their exact domain permission. Dataspace permission applies
+/// only to domainless aliases, so a domain grant neither widens to sibling domains nor to the
+/// enclosing dataspace.
 pub fn authority_can_resolve_account_alias(
     world: &impl WorldReadOnly,
     authority: &AccountId,
     alias: &AccountAlias,
 ) -> bool {
-    let dataspace_permission: Permission = CanResolveAccountAlias {
-        scope: AccountAliasPermissionScope::Dataspace(alias.dataspace),
-    }
-    .into();
-    if !authority_has_permission(world, authority, &dataspace_permission) {
-        return false;
-    }
-
     match alias.domain_id(world.dataspace_catalog()) {
         Ok(Some(domain_id)) => {
             let domain_permission: Permission = CanResolveAccountAlias {
@@ -197,7 +193,13 @@ pub fn authority_can_resolve_account_alias(
             .into();
             authority_has_permission(world, authority, &domain_permission)
         }
-        Ok(None) => true,
+        Ok(None) => {
+            let dataspace_permission: Permission = CanResolveAccountAlias {
+                scope: AccountAliasPermissionScope::Dataspace(alias.dataspace),
+            }
+            .into();
+            authority_has_permission(world, authority, &dataspace_permission)
+        }
         Err(_) => false,
     }
 }

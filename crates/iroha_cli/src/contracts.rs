@@ -59,8 +59,6 @@ pub enum Command {
     /// Contract alias helpers
     #[command(subcommand)]
     Alias(AliasCommand),
-    /// Deploy compiled `.to` code via Torii (POST /v1/contracts/deploy)
-    Deploy(DeployArgs),
     /// Derive a canonical contract address locally from authority, deploy nonce, and dataspace
     DeriveAddress(DeriveAddressArgs),
     /// Submit a contract call through Torii (POST /v1/contracts/call)
@@ -85,7 +83,6 @@ impl Run for Command {
             Command::Dev(cmd) => cmd.run(context),
             Command::Code(cmd) => cmd.run(context),
             Command::Alias(cmd) => cmd.run(context),
-            Command::Deploy(args) => args.run(context),
             Command::DeriveAddress(args) => args.run(context),
             Command::Call(args) => args.run(context),
             Command::View(args) => args.run(context),
@@ -114,18 +111,14 @@ impl Command {
             | Self::DebugCall(_)
             | Self::Manifest(ManifestCommand::Build(_))
             | Self::Simulate(_) => true,
-            Self::App(AppCommand::Plan(_) | AppCommand::Deploy(_) | AppCommand::Resume(_))
-            | Self::Dev(
+            Self::Dev(
                 DevCommand::Doctor(_)
-                | DevCommand::Deploy(_)
-                | DevCommand::Resume(_)
                 | DevCommand::Call(_)
                 | DevCommand::View(_)
                 | DevCommand::Smoke(_),
             )
             | Self::Code(_)
             | Self::Alias(_)
-            | Self::Deploy(_)
             | Self::Call(_)
             | Self::View(_)
             | Self::Manifest(ManifestCommand::Get(_)) => false,
@@ -137,21 +130,12 @@ impl Command {
 pub enum AppCommand {
     /// Build an `iroha.contracts.toml` manifest into a compiled deployable bundle
     Build(AppBuildArgs),
-    /// Compile a manifest and ask Torii for a dry-run deployment plan
-    Plan(AppPlanArgs),
-    /// Compile a manifest and deploy the bundle through Torii
-    Deploy(AppDeployArgs),
-    /// Resume an interrupted bundle deployment using the same manifest payload
-    Resume(AppResumeArgs),
 }
 
 impl Run for AppCommand {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
             AppCommand::Build(args) => args.run(context),
-            AppCommand::Plan(args) => args.run(context),
-            AppCommand::Deploy(args) => args.run(context),
-            AppCommand::Resume(args) => args.run(context),
         }
     }
 }
@@ -168,10 +152,6 @@ pub enum DevCommand {
     Doctor(DevDoctorArgs),
     /// Generate Markdown schema docs and sample payloads from interfaces
     Schema(DevSchemaArgs),
-    /// Build and deploy all contracts from the manifest
-    Deploy(DevDeployArgs),
-    /// Build and resume deployment for all contracts from the manifest
-    Resume(DevDeployArgs),
     /// Call a named manifest contract with typed payload validation
     Call(DevCallArgs),
     /// View a named manifest contract with typed payload validation
@@ -188,8 +168,6 @@ impl Run for DevCommand {
             DevCommand::Test(args) => args.run(context),
             DevCommand::Doctor(args) => args.run(context),
             DevCommand::Schema(args) => args.run(context),
-            DevCommand::Deploy(args) => args.run_with_action(context, DevDeployAction::Deploy),
-            DevCommand::Resume(args) => args.run_with_action(context, DevDeployAction::Resume),
             DevCommand::Call(args) => args.run(context),
             DevCommand::View(args) => args.run(context),
             DevCommand::Smoke(args) => args.run(context),
@@ -268,18 +246,6 @@ pub struct DevSchemaArgs {
 }
 
 #[derive(clap::Args, Debug)]
-pub struct DevDeployArgs {
-    #[command(flatten)]
-    pub manifest: DevManifestArgs,
-    /// Authority account identifier (canonical I105 account literal)
-    #[arg(long)]
-    pub authority: String,
-    /// Hex-encoded private key for signing
-    #[arg(long, value_name = "HEX")]
-    pub private_key: String,
-}
-
-#[derive(clap::Args, Debug)]
 pub struct DevCallArgs {
     #[command(flatten)]
     pub manifest: DevManifestArgs,
@@ -345,11 +311,6 @@ pub struct DevSmokeArgs {
     pub private_key: Option<String>,
     #[command(flatten)]
     pub wait: TransactionWaitArgs,
-}
-
-enum DevDeployAction {
-    Deploy,
-    Resume,
 }
 
 #[derive(clap::Subcommand, Debug)]
@@ -484,51 +445,6 @@ pub struct AppBuildArgs {
     /// Optional output path for the compiled bundle JSON
     #[arg(long)]
     pub out: Option<PathBuf>,
-}
-
-#[derive(clap::Args, Debug)]
-pub struct AppPlanArgs {
-    #[command(flatten)]
-    pub manifest: ContractAppManifestArgs,
-    /// Authority account identifier (canonical I105 account literal)
-    #[arg(long)]
-    pub authority: String,
-    /// Hex-encoded private key for signing
-    #[arg(long, value_name = "HEX")]
-    pub private_key: String,
-    /// Optional transaction time-to-live in milliseconds for bundle deploy and hajimari transactions.
-    #[arg(long)]
-    pub transaction_ttl_ms: Option<u64>,
-}
-
-#[derive(clap::Args, Debug)]
-pub struct AppDeployArgs {
-    #[command(flatten)]
-    pub manifest: ContractAppManifestArgs,
-    /// Authority account identifier (canonical I105 account literal)
-    #[arg(long)]
-    pub authority: String,
-    /// Hex-encoded private key for signing
-    #[arg(long, value_name = "HEX")]
-    pub private_key: String,
-    /// Optional transaction time-to-live in milliseconds for bundle deploy and hajimari transactions.
-    #[arg(long)]
-    pub transaction_ttl_ms: Option<u64>,
-}
-
-#[derive(clap::Args, Debug)]
-pub struct AppResumeArgs {
-    #[command(flatten)]
-    pub manifest: ContractAppManifestArgs,
-    /// Authority account identifier (canonical I105 account literal)
-    #[arg(long)]
-    pub authority: String,
-    /// Hex-encoded private key for signing
-    #[arg(long, value_name = "HEX")]
-    pub private_key: String,
-    /// Optional transaction time-to-live in milliseconds for bundle deploy and hajimari transactions.
-    #[arg(long)]
-    pub transaction_ttl_ms: Option<u64>,
 }
 
 fn default_contract_artifact_path(manifest_path: &Path, seiyaku_name: &str) -> Result<PathBuf> {
@@ -1068,40 +984,6 @@ fn build_contract_app_bundle(manifest_path: &Path) -> Result<norito::json::Value
     }))
 }
 
-fn wrap_contract_bundle_request(
-    bundle: norito::json::Value,
-    authority: &AccountId,
-    private_key: &PrivateKey,
-    transaction_ttl_ms: Option<u64>,
-) -> Result<norito::json::Value> {
-    let mut object = bundle
-        .as_object()
-        .cloned()
-        .ok_or_else(|| eyre!("compiled bundle must be a JSON object"))?;
-    object.insert("authority".to_owned(), authority.to_string().into());
-    object.insert(
-        "private_key".to_owned(),
-        norito::json::to_value(&iroha_data_model::prelude::ExposedPrivateKey(
-            private_key.clone(),
-        ))?,
-    );
-    if let Some(transaction_ttl_ms) = transaction_ttl_ms {
-        object.insert("transaction_ttl_ms".to_owned(), transaction_ttl_ms.into());
-    }
-    Ok(norito::json::Value::Object(object))
-}
-
-fn resolve_contract_app_authority<C: RunContext>(
-    context: &C,
-    authority: &str,
-    private_key: &str,
-) -> Result<(AccountId, PrivateKey)> {
-    let authority =
-        crate::resolve_account_id(context, authority).wrap_err("failed to resolve --authority")?;
-    let private_key = private_key.parse().wrap_err("invalid --private-key")?;
-    Ok((authority, private_key))
-}
-
 impl Run for AppBuildArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let bundle = build_contract_app_bundle(&self.manifest.manifest)?;
@@ -1113,60 +995,6 @@ impl Run for AppBuildArgs {
         } else {
             context.print_data(&bundle)?;
         }
-        Ok(())
-    }
-}
-
-impl Run for AppPlanArgs {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let bundle = build_contract_app_bundle(&self.manifest.manifest)?;
-        let (authority, private_key) =
-            resolve_contract_app_authority(context, &self.authority, &self.private_key)?;
-        let request = wrap_contract_bundle_request(
-            bundle,
-            &authority,
-            &private_key,
-            self.transaction_ttl_ms,
-        )?;
-        let client: Client = context.client_from_config();
-        let response = client.post_contract_deploy_bundle_json(&request, true)?;
-        context.print_data(&response)?;
-        Ok(())
-    }
-}
-
-impl Run for AppDeployArgs {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let bundle = build_contract_app_bundle(&self.manifest.manifest)?;
-        let (authority, private_key) =
-            resolve_contract_app_authority(context, &self.authority, &self.private_key)?;
-        let request = wrap_contract_bundle_request(
-            bundle,
-            &authority,
-            &private_key,
-            self.transaction_ttl_ms,
-        )?;
-        let client: Client = context.client_from_config();
-        let response = client.post_contract_deploy_bundle_json(&request, false)?;
-        context.print_data(&response)?;
-        Ok(())
-    }
-}
-
-impl Run for AppResumeArgs {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let bundle = build_contract_app_bundle(&self.manifest.manifest)?;
-        let (authority, private_key) =
-            resolve_contract_app_authority(context, &self.authority, &self.private_key)?;
-        let request = wrap_contract_bundle_request(
-            bundle,
-            &authority,
-            &private_key,
-            self.transaction_ttl_ms,
-        )?;
-        let client: Client = context.client_from_config();
-        let response = client.post_contract_deploy_bundle_json(&request, false)?;
-        context.print_data(&response)?;
         Ok(())
     }
 }
@@ -1329,41 +1157,6 @@ impl DevSchemaArgs {
                 .print_data(&norito::json!({ "ok": true, "schema": (path.display().to_string()) }))
         } else {
             context.println(markdown)
-        }
-    }
-}
-
-impl DevDeployArgs {
-    fn run_with_action<C: RunContext>(
-        self,
-        context: &mut C,
-        action: DevDeployAction,
-    ) -> Result<()> {
-        let _ = dev_build_manifest(
-            &self.manifest.manifest,
-            &self.manifest.profile,
-            true,
-            self.manifest.zk,
-        )?;
-        match action {
-            DevDeployAction::Deploy => AppDeployArgs {
-                manifest: ContractAppManifestArgs {
-                    manifest: self.manifest.manifest,
-                },
-                authority: self.authority,
-                private_key: self.private_key,
-                transaction_ttl_ms: None,
-            }
-            .run(context),
-            DevDeployAction::Resume => AppResumeArgs {
-                manifest: ContractAppManifestArgs {
-                    manifest: self.manifest.manifest,
-                },
-                authority: self.authority,
-                private_key: self.private_key,
-                transaction_ttl_ms: None,
-            }
-            .run(context),
         }
     }
 }
@@ -2433,127 +2226,6 @@ impl Run for ContractAliasResolveArgs {
             )),
         }
     }
-}
-
-#[derive(clap::Args, Debug)]
-pub struct DeployArgs {
-    /// Authority account identifier (canonical I105 account literal)
-    #[arg(long)]
-    pub authority: String,
-    /// Stable on-chain contract alias (`name::domain.dataspace` or `name::dataspace`)
-    #[arg(long)]
-    pub contract_alias: Option<String>,
-    /// Contract alias name segment. Prefer this with --dataspace over precomposed --contract-alias.
-    #[arg(long, conflicts_with = "contract_alias")]
-    pub alias: Option<String>,
-    /// Contract alias domain segment.
-    #[arg(long, conflicts_with = "contract_alias")]
-    pub domain: Option<String>,
-    /// Contract alias dataspace segment.
-    #[arg(long, conflicts_with = "contract_alias")]
-    pub dataspace: Option<String>,
-    /// Optional lease expiry timestamp (unix ms) for the alias binding
-    #[arg(long)]
-    pub lease_expiry_ms: Option<u64>,
-    /// Hex-encoded private key for signing
-    #[arg(long, value_name = "HEX")]
-    pub private_key: String,
-    /// Path to compiled `.to` file (mutually exclusive with --code-b64)
-    #[arg(long, conflicts_with = "code_b64")]
-    pub code_file: Option<PathBuf>,
-    /// Base64-encoded code (mutually exclusive with --code-file)
-    #[arg(long, conflicts_with = "code_file")]
-    pub code_b64: Option<String>,
-    #[command(flatten)]
-    pub wait: TransactionWaitArgs,
-}
-
-impl Run for DeployArgs {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let client: Client = context.client_from_config();
-        // Parse authority and key
-        let authority = crate::resolve_account_id(context, &self.authority)
-            .wrap_err("failed to resolve --authority")?;
-        let private_key: iroha_crypto::PrivateKey =
-            self.private_key.parse().wrap_err("invalid --private-key")?;
-        // Obtain base64 code
-        let code_b64 = if let Some(p) = self.code_file {
-            let bytes = std::fs::read(&p).wrap_err("read --code-file")?;
-            base64::engine::general_purpose::STANDARD.encode(bytes)
-        } else if let Some(s) = self.code_b64 {
-            s
-        } else {
-            return Err(eyre!("either --code-file or --code-b64 must be provided"));
-        };
-        let contract_alias = resolve_deploy_contract_alias(
-            self.contract_alias.as_deref(),
-            self.alias.as_deref(),
-            self.domain.as_deref(),
-            self.dataspace.as_deref(),
-        )?;
-        let v = client.post_contract_deploy_json(
-            &authority,
-            &private_key,
-            &code_b64,
-            &contract_alias,
-            self.lease_expiry_ms,
-        )?;
-        if self.wait.is_enabled() {
-            let tx_hash = extract_submitted_transaction_hash(&v)
-                .wrap_err("deploy response missing canonical `tx_hash_hex`")?;
-            let status = wait_for_transaction_status(&client, tx_hash, &self.wait)?;
-            context.print_data(&ContractSubmissionWaitResponse {
-                submit: v,
-                trace: None,
-                terminal_kind: status.terminal_kind,
-                attempts: status.attempts,
-                elapsed_ms: status.elapsed_ms,
-                block_height: status.block_height,
-                rejection_reason: status.rejection_reason,
-                scope: status.scope,
-                resolved_from: status.resolved_from,
-                summary: status.summary,
-                diagnostics: status.diagnostics,
-                trigger_completions: status.trigger_completions,
-                r#final: status.r#final,
-            })?;
-        } else {
-            context.print_data(&contract_submit_only_response(v, None))?;
-        }
-        Ok(())
-    }
-}
-
-fn resolve_deploy_contract_alias(
-    contract_alias: Option<&str>,
-    alias: Option<&str>,
-    domain: Option<&str>,
-    dataspace: Option<&str>,
-) -> Result<iroha::data_model::smart_contract::ContractAlias> {
-    if let Some(contract_alias) = contract_alias
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        if alias.is_some() || domain.is_some() || dataspace.is_some() {
-            return Err(eyre!(
-                "use either --contract-alias or the explicit --alias/--domain/--dataspace fields"
-            ));
-        }
-        return contract_alias.parse().wrap_err("invalid --contract-alias");
-    }
-
-    let alias = alias
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| eyre!("provide --alias and --dataspace, or pass --contract-alias"))?;
-    let dataspace = dataspace
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| eyre!("provide --dataspace with --alias"))?;
-    let domain = domain.map(str::trim).filter(|value| !value.is_empty());
-    iroha::data_model::smart_contract::ContractAlias::from_components(alias, domain, dataspace)
-        .map_err(|err| eyre!(err.to_string()))
-        .wrap_err("invalid contract alias fields")
 }
 
 #[derive(clap::Args, Debug)]
@@ -4244,85 +3916,6 @@ mod tests {
             assert!(
                 submit.get(forbidden_key).is_none(),
                 "CLI submit response must not expose `{forbidden_key}`"
-            );
-        }
-    }
-
-    #[test]
-    fn resolve_deploy_contract_alias_composes_explicit_fields() {
-        let alias = resolve_deploy_contract_alias(None, Some("router"), None, Some("is"))
-            .expect("domainless alias");
-        assert_eq!(alias.to_string(), "router::is");
-
-        let domain_alias =
-            resolve_deploy_contract_alias(None, Some("router"), Some("finance"), Some("alpha"))
-                .expect("domain-scoped alias");
-        assert_eq!(domain_alias.to_string(), "router::finance.alpha");
-    }
-
-    #[test]
-    fn resolve_deploy_contract_alias_trims_explicit_fields_and_blank_domain() {
-        let alias = resolve_deploy_contract_alias(None, Some(" router "), Some("  "), Some(" is "))
-            .expect("trimmed explicit alias");
-
-        assert_eq!(alias.to_string(), "router::is");
-    }
-
-    #[test]
-    fn resolve_deploy_contract_alias_preserves_legacy_contract_alias() {
-        let alias = resolve_deploy_contract_alias(Some("router::finance.alpha"), None, None, None)
-            .expect("legacy alias");
-
-        assert_eq!(alias.to_string(), "router::finance.alpha");
-    }
-
-    #[test]
-    fn resolve_deploy_contract_alias_rejects_ambiguous_or_partial_inputs() {
-        let ambiguous = resolve_deploy_contract_alias(
-            Some("router::universal"),
-            Some("router"),
-            None,
-            Some("is"),
-        )
-        .expect_err("legacy and explicit fields conflict");
-        assert!(
-            ambiguous
-                .to_string()
-                .contains("use either --contract-alias"),
-            "unexpected error: {ambiguous}"
-        );
-
-        let missing_dataspace = resolve_deploy_contract_alias(None, Some("router"), None, None)
-            .expect_err("dataspace is required with alias");
-        assert!(
-            missing_dataspace
-                .to_string()
-                .contains("provide --dataspace with --alias"),
-            "unexpected error: {missing_dataspace}"
-        );
-
-        let missing_alias = resolve_deploy_contract_alias(None, None, None, Some("is"))
-            .expect_err("alias is required with dataspace");
-        assert!(
-            missing_alias
-                .to_string()
-                .contains("provide --alias and --dataspace"),
-            "unexpected error: {missing_alias}"
-        );
-    }
-
-    #[test]
-    fn resolve_deploy_contract_alias_rejects_adversarial_components() {
-        for (alias, domain, dataspace) in [
-            ("", None, "is"),
-            ("router::evil", None, "is"),
-            ("router", Some("bad domain"), "is"),
-            ("router", None, ""),
-            ("router", None, "bad dataspace"),
-        ] {
-            assert!(
-                resolve_deploy_contract_alias(None, Some(alias), domain, Some(dataspace)).is_err(),
-                "adversarial alias components should fail: alias={alias:?} domain={domain:?} dataspace={dataspace:?}"
             );
         }
     }

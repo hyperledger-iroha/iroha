@@ -21,7 +21,7 @@ use iroha_data_model::{
         RevokeBox, SetAssetKeyValue, SetKeyValueBox, SetParameter, TransferAssetBatch, TransferBox,
         UnregisterBox, Upgrade,
         mint_burn::BurnBox,
-        offline::{RedeemKagemushaRecursiveV2, TopUpKagemushaRecursiveV2},
+        offline::{RedeemKagemushaRecursiveV4, TopUpKagemushaRecursiveV4},
         runtime_upgrade::{ActivateRuntimeUpgrade, CancelRuntimeUpgrade, ProposeRuntimeUpgrade},
         zk::{Shield, Unshield, ZkTransfer},
     },
@@ -867,9 +867,9 @@ pub(crate) fn instruction_kind(instruction: &InstructionBox) -> ExplorerInstruct
                 ExplorerInstructionKind::ZkTransfer
             } else if any.downcast_ref::<Unshield>().is_some() {
                 ExplorerInstructionKind::Unshield
-            } else if any.downcast_ref::<TopUpKagemushaRecursiveV2>().is_some() {
+            } else if any.downcast_ref::<TopUpKagemushaRecursiveV4>().is_some() {
                 ExplorerInstructionKind::KagemushaTopUp
-            } else if any.downcast_ref::<RedeemKagemushaRecursiveV2>().is_some() {
+            } else if any.downcast_ref::<RedeemKagemushaRecursiveV4>().is_some() {
                 ExplorerInstructionKind::KagemushaRedeem
             } else {
                 ExplorerInstructionKind::Custom
@@ -1202,7 +1202,7 @@ fn log_payload(instruction: &InstructionBox) -> Option<Value> {
 fn kagemusha_top_up_payload(instruction: &InstructionBox) -> Option<Value> {
     let isi = instruction
         .as_any()
-        .downcast_ref::<TopUpKagemushaRecursiveV2>()?;
+        .downcast_ref::<TopUpKagemushaRecursiveV4>()?;
     let request = &isi.request;
     let mut value = Map::new();
     value.insert(
@@ -1234,7 +1234,7 @@ fn kagemusha_top_up_payload(instruction: &InstructionBox) -> Option<Value> {
 fn kagemusha_redeem_payload(instruction: &InstructionBox) -> Option<Value> {
     let isi = instruction
         .as_any()
-        .downcast_ref::<RedeemKagemushaRecursiveV2>()?;
+        .downcast_ref::<RedeemKagemushaRecursiveV4>()?;
     let request = &isi.request;
     let mut value = Map::new();
     value.insert(

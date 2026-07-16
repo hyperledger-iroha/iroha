@@ -9,6 +9,7 @@ import importlib.util
 import json
 import os
 import re
+import stat
 import subprocess
 import sys
 import tempfile
@@ -69,6 +70,58 @@ PLACEHOLDER_VALUES = {
     "REPLACE_WITH_CANARY_PUBLIC_KEY",
     "REPLACE_WITH_CANARY_PRIVATE_KEY",
 }
+ACCOUNT_ONBOARDING_TOKEN_HEADER = "X-Iroha-Onboarding-Token"
+
+
+def validate_onboarding_token(value: str) -> str:
+    if not isinstance(value, str):
+        raise TypeError("onboarding token must be a string")
+    if (
+        not 32 <= len(value) <= 256
+        or not value.isascii()
+        or any(ord(character) < 0x21 or ord(character) > 0x7E for character in value)
+    ):
+        raise ValueError(
+            "onboarding token must contain 32..256 printable ASCII bytes "
+            "without spaces or normalization"
+        )
+    return value
+
+
+def read_onboarding_token_file(path: Path) -> str:
+    token_path = Path(path)
+    metadata = os.lstat(token_path)
+    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+        raise RuntimeError("onboarding token file must be a regular non-symlink file")
+    if hasattr(os, "geteuid") and metadata.st_uid != os.geteuid():
+        raise RuntimeError("onboarding token file must be owned by the current user")
+    if metadata.st_mode & 0o077:
+        raise RuntimeError("onboarding token file must not grant group or other access")
+    if not metadata.st_mode & stat.S_IRUSR:
+        raise RuntimeError("onboarding token file must be owner-readable")
+
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(token_path, flags)
+    try:
+        opened = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or opened.st_dev != metadata.st_dev
+            or opened.st_ino != metadata.st_ino
+            or opened.st_uid != metadata.st_uid
+            or opened.st_mode & 0o077
+            or not opened.st_mode & stat.S_IRUSR
+        ):
+            raise RuntimeError("onboarding token file changed during secure open")
+        raw = os.read(descriptor, 257)
+        if os.read(descriptor, 1):
+            raise RuntimeError("onboarding token file exceeds the maximum credential length")
+    finally:
+        os.close(descriptor)
+    if not raw.isascii():
+        raise ValueError("onboarding token file must contain printable ASCII")
+    value = raw.decode("ascii")
+    return validate_onboarding_token(value)
 
 
 def encode_varint(value: int) -> bytes:
@@ -122,24 +175,79 @@ def decode_multihash_payload(multihash_hex: str, expected_multicodec: int) -> by
     return payload
 
 
-def _http_json(method: str, url: str, payload: dict[str, Any] | None = None) -> tuple[int, Any]:
+class _NoRedirectHandler(request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def _http_json(
+    method: str,
+    url: str,
+    payload: dict[str, Any] | None = None,
+    *,
+    headers: dict[str, str] | None = None,
+    allow_redirects: bool = True,
+    sensitive_value: str | None = None,
+) -> tuple[int, Any]:
     data = None
-    headers = {"accept": "application/json"}
+    request_headers = {"accept": "application/json"}
+    for name, value in (headers or {}).items():
+        for existing in list(request_headers):
+            if existing.lower() == name.lower():
+                del request_headers[existing]
+        request_headers[name] = value
     if payload is not None:
         data = json.dumps(payload).encode("utf-8")
-        headers["content-type"] = "application/json"
-    req = request.Request(url, data=data, headers=headers, method=method)
+        for existing in list(request_headers):
+            if existing.lower() == "content-type":
+                del request_headers[existing]
+        request_headers["content-type"] = "application/json"
+    req = request.Request(url, data=data, headers=request_headers, method=method)
     try:
-        with request.urlopen(req) as resp:
+        response = (
+            request.urlopen(req)
+            if allow_redirects
+            else request.build_opener(_NoRedirectHandler()).open(req)
+        )
+        with response as resp:
             body = resp.read().decode("utf-8", errors="replace")
-            return resp.status, json.loads(body) if body else None
+            if sensitive_value:
+                body = body.replace(sensitive_value, "<redacted>")
+            if not body:
+                return resp.status, None
+            try:
+                return resp.status, json.loads(body)
+            except json.JSONDecodeError:
+                if sensitive_value:
+                    return resp.status, "<invalid JSON response>"
+                raise
     except error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")
+        if sensitive_value:
+            body = body.replace(sensitive_value, "<redacted>")
         try:
             parsed: Any = json.loads(body) if body else None
         except json.JSONDecodeError:
-            parsed = body
+            parsed = "<invalid JSON response>" if sensitive_value else body
         return exc.code, parsed
+
+
+def _redact_sensitive(value: Any, sensitive_value: str) -> Any:
+    """Return a copy with a request credential removed from server-controlled data."""
+    if isinstance(value, str):
+        return value.replace(sensitive_value, "<redacted>")
+    if isinstance(value, list):
+        return [_redact_sensitive(item, sensitive_value) for item in value]
+    if isinstance(value, dict):
+        return {
+            (
+                key.replace(sensitive_value, "<redacted>")
+                if isinstance(key, str)
+                else key
+            ): _redact_sensitive(item, sensitive_value)
+            for key, item in value.items()
+        }
+    return value
 
 
 def run_command(
@@ -595,8 +703,10 @@ def onboard_account(
     alias: str,
     public_key_hex: str,
     *,
+    onboarding_token: str,
     permissions: list[str] | None = None,
 ) -> dict[str, Any]:
+    exact_onboarding_token = validate_onboarding_token(onboarding_token)
     payload: dict[str, Any] = {
         "alias": alias,
         "public_key_hex": public_key_hex,
@@ -609,7 +719,13 @@ def onboard_account(
         "POST",
         f"{torii_root.rstrip('/')}/v1/accounts/onboard",
         payload,
+        headers={ACCOUNT_ONBOARDING_TOKEN_HEADER: exact_onboarding_token},
+        allow_redirects=False,
+        sensitive_value=exact_onboarding_token,
     )
+    # The response is controlled by the peer.  Redact an echoed credential
+    # before validation, reporting, or exception formatting can expose it.
+    response = _redact_sensitive(response, exact_onboarding_token)
     if status == 202:
         validate_onboarding_response(response, payload["uaid"], alias)
         return {
@@ -923,6 +1039,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--torii-root", required=True, help="Torii root URL")
     parser.add_argument(
+        "--onboarding-token-file",
+        type=Path,
+        required=True,
+        help="Owner-only regular file containing the exact account-onboarding route token",
+    )
+    parser.add_argument(
         "--output-config",
         required=True,
         help="Runtime-only client config path to create or refresh",
@@ -1013,12 +1135,15 @@ def main(argv: list[str] | None = None) -> int:
     alias = build_alias(args.alias_prefix, public_key, domain)
     account_id = None
     try:
+        onboarding_token = read_onboarding_token_file(args.onboarding_token_file)
         onboarding = onboard_account(
             args.torii_root,
             alias,
             public_key_raw_hex,
+            onboarding_token=onboarding_token,
             permissions=args.permissions,
         )
+        del onboarding_token
         response = onboarding.get("response")
         if isinstance(response, dict):
             value = response.get("account_id")

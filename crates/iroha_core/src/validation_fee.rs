@@ -2623,6 +2623,20 @@ fn native_instruction_ds_effect_disposition(
     // These families have native, state-derived balance/supply/custody effects that cannot be
     // represented faithfully as a signed transparent transfer coordinate. Keep them disabled
     // until they have an effect-plan representation covered by the user signature.
+    if let Some(commit) = instruction
+        .as_any()
+        .downcast_ref::<iroha_data_model::isi::smart_contract_code::CommitContractDeployment>(
+    ) {
+        return if commit.expected_previous_contract_address().is_some() {
+            // Rotation deactivates the exact prior target and therefore has the same policy-era
+            // rebinding risk as an explicit DeactivateContractInstance.
+            NativeInstructionDsEffectDisposition::RejectKnownDsCapable(core::any::type_name::<
+                iroha_data_model::isi::smart_contract_code::CommitContractDeployment,
+            >())
+        } else {
+            NativeInstructionDsEffectDisposition::AuditedNoDsEffect
+        };
+    }
     reject_known!(
         // Active-policy deployments are intentionally one-way: registration and first
         // activation are balance-neutral (and allowed below), while removal/deactivation
@@ -2649,8 +2663,8 @@ fn native_instruction_ds_effect_disposition(
         iroha_data_model::isi::account_alias_lease::RenewAccountAliasLease,
         iroha_data_model::isi::sns::RegisterSnsName,
         iroha_data_model::isi::sns::RenewSnsName,
-        iroha_data_model::isi::offline::TopUpKagemushaRecursiveV2,
-        iroha_data_model::isi::offline::RedeemKagemushaRecursiveV2,
+        iroha_data_model::isi::offline::TopUpKagemushaRecursiveV4,
+        iroha_data_model::isi::offline::RedeemKagemushaRecursiveV4,
         iroha_data_model::isi::social::ClaimTwitterFollowReward,
         iroha_data_model::isi::social::SendToTwitter,
         iroha_data_model::isi::social::CancelTwitterEscrow,
@@ -3422,7 +3436,7 @@ mod tests {
     fn active_policy_allows_balance_neutral_permissionless_contract_deployment_steps() {
         use iroha_data_model::{
             isi::smart_contract_code::{
-                ActivateContractInstance, CancelSmartContractCodeUpload,
+                ActivateContractInstance, CancelSmartContractCodeUpload, CommitContractDeployment,
                 FinalizeSmartContractCodeUpload, RegisterSmartContractBytes,
                 RegisterSmartContractCode, UploadSmartContractCodeChunk,
             },
@@ -3432,9 +3446,10 @@ mod tests {
         let treasury = account(3);
         let policy = policy(&treasury);
         let code_hash = Hash::new(b"permissionless-contract-artifact");
-        let contract_address = "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8"
-            .parse()
-            .expect("contract address");
+        let contract_address: iroha_data_model::smart_contract::ContractAddress =
+            "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8"
+                .parse()
+                .expect("contract address");
         let instructions: Vec<InstructionBox> = vec![
             RegisterSmartContractBytes {
                 code_hash,
@@ -3473,8 +3488,17 @@ mod tests {
             }
             .into(),
             ActivateContractInstance {
+                contract_address: contract_address.clone(),
+                code_hash,
+            }
+            .into(),
+            CommitContractDeployment {
+                expected_deploy_nonce: 0,
                 contract_address,
                 code_hash,
+                contract_alias: "payments::universal".parse().expect("contract alias"),
+                lease_expiry_ms: None,
+                expected_previous_contract_address: None,
             }
             .into(),
         ];
@@ -3494,18 +3518,19 @@ mod tests {
     #[test]
     fn active_policy_rejects_contract_rebinding_and_artifact_removal_steps() {
         use iroha_data_model::isi::smart_contract_code::{
-            DeactivateContractInstance, RemoveSmartContractBytes,
+            CommitContractDeployment, DeactivateContractInstance, RemoveSmartContractBytes,
         };
 
         let treasury = account(3);
         let policy = policy(&treasury);
         let code_hash = Hash::new(b"immutable-contract-artifact");
-        let contract_address = "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8"
-            .parse()
-            .expect("contract address");
+        let contract_address: iroha_data_model::smart_contract::ContractAddress =
+            "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8"
+                .parse()
+                .expect("contract address");
         let instructions: Vec<InstructionBox> = vec![
             DeactivateContractInstance {
-                contract_address,
+                contract_address: contract_address.clone(),
                 reason: Some("attempted policy-era rebind".to_owned()),
             }
             .into(),
@@ -3514,13 +3539,22 @@ mod tests {
                 reason: Some("attempted policy-era removal".to_owned()),
             }
             .into(),
+            CommitContractDeployment {
+                expected_deploy_nonce: 1,
+                contract_address: contract_address.clone(),
+                code_hash,
+                contract_alias: "payments::universal".parse().expect("contract alias"),
+                lease_expiry_ms: None,
+                expected_previous_contract_address: Some(contract_address),
+            }
+            .into(),
         ];
 
         for (index, instruction) in instructions.into_iter().enumerate() {
-            let instruction_wire_id = if index == 0 {
-                core::any::type_name::<DeactivateContractInstance>()
-            } else {
-                core::any::type_name::<RemoveSmartContractBytes>()
+            let instruction_wire_id = match index {
+                0 => core::any::type_name::<DeactivateContractInstance>(),
+                1 => core::any::type_name::<RemoveSmartContractBytes>(),
+                _ => core::any::type_name::<CommitContractDeployment>(),
             };
             assert_eq!(
                 enforce_policy(&tx(1, vec![instruction], Metadata::default()), &policy,),

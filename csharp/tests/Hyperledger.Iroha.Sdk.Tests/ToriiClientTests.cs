@@ -13,6 +13,7 @@ namespace Hyperledger.Iroha.Sdk.Tests;
 
 public sealed class ToriiClientTests
 {
+    private const string AccountOnboardingToken = "0123456789abcdef0123456789ABCDEF";
     private static readonly byte[] CanonicalPrivateKeySeed = Convert.FromHexString("616e64726f69642d666978747572652d7369676e696e672d6b65792d30313032");
     private const string CanonicalAccountId = "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53";
     private static readonly string MultisigMemberAccountId1 = TestAccountId(0x41);
@@ -7759,7 +7760,6 @@ public sealed class ToriiClientTests
         yield return new object[] { "quote", "lease_secs", RemoveTopLevelJsonField(VpnQuoteRawResponseJson("lease_secs", 3600), "lease_secs"), "must not be null" };
         yield return new object[] { "quote", "lease_secs", VpnQuoteRawResponseJson("lease_secs", 0), "positive" };
         yield return new object[] { "quote", "quote_expires_at_ms", RemoveTopLevelJsonField(VpnQuoteRawResponseJson("quote_expires_at_ms", 1700000000000), "quote_expires_at_ms"), "must not be null" };
-        yield return new object[] { "quote", "quote_expires_at_ms", VpnQuoteRawResponseJson("quote_expires_at_ms", 0), "positive" };
         yield return new object[] { "quote", "lease_fee", RemoveTopLevelJsonField(VpnQuoteRawResponseJson("lease_fee", "1000000.25"), "lease_fee"), "must not be null" };
         yield return new object[] { "quote", "lease_fee", VpnQuoteRawResponseJson("lease_fee", "01"), "canonical" };
         yield return new object[] { "quote", "mtu_bytes", RemoveTopLevelJsonField(VpnQuoteRawResponseJson("mtu_bytes", 1280), "mtu_bytes"), "must not be null" };
@@ -7788,9 +7788,7 @@ public sealed class ToriiClientTests
         yield return new object[] { "session", "lease_secs", RemoveTopLevelJsonField(VpnSessionRawResponseJson("lease_secs", 3600), "lease_secs"), "must not be null" };
         yield return new object[] { "session", "lease_secs", VpnSessionRawResponseJson("lease_secs", 0), "positive" };
         yield return new object[] { "session", "expires_at_ms", RemoveTopLevelJsonField(VpnSessionRawResponseJson("expires_at_ms", 1700003000000), "expires_at_ms"), "must not be null" };
-        yield return new object[] { "session", "expires_at_ms", VpnSessionRawResponseJson("expires_at_ms", 0), "positive" };
         yield return new object[] { "session", "connected_at_ms", RemoveTopLevelJsonField(VpnSessionRawResponseJson("connected_at_ms", 1699999400000), "connected_at_ms"), "must not be null" };
-        yield return new object[] { "session", "connected_at_ms", VpnSessionRawResponseJson("connected_at_ms", 0), "positive" };
         yield return new object[] { "session", "expires_at_ms", VpnSessionRawResponseJson("expires_at_ms", 1699999399999), "greater than connected_at_ms" };
         yield return new object[] { "session", "meter_family", VpnSessionRawResponseJson("meter_family", null), "must not be null" };
         yield return new object[] { "session", "quote_id", VpnSessionRawResponseJson("quote_id", null), "must not be null" };
@@ -7828,9 +7826,7 @@ public sealed class ToriiClientTests
         yield return new object[] { "receipt", "relay_endpoint", VpnReceiptRawResponseJson("relay_endpoint", null), "must not be null" };
         yield return new object[] { "receipt", "meter_family", VpnReceiptRawResponseJson("meter_family", null), "must not be null" };
         yield return new object[] { "receipt", "connected_at_ms", RemoveTopLevelJsonField(VpnReceiptRawResponseJson("connected_at_ms", 1699999400000), "connected_at_ms"), "must not be null" };
-        yield return new object[] { "receipt", "connected_at_ms", VpnReceiptRawResponseJson("connected_at_ms", 0), "positive" };
         yield return new object[] { "receipt", "disconnected_at_ms", RemoveTopLevelJsonField(VpnReceiptRawResponseJson("disconnected_at_ms", 1700000000000), "disconnected_at_ms"), "must not be null" };
-        yield return new object[] { "receipt", "disconnected_at_ms", VpnReceiptRawResponseJson("disconnected_at_ms", 0), "positive" };
         yield return new object[] { "receipt", "disconnected_at_ms", VpnReceiptRawResponseJson("disconnected_at_ms", 1699999399999), "greater than or equal to connected_at_ms" };
         yield return new object[] { "receipt", "duration_ms", RemoveTopLevelJsonField(VpnReceiptRawResponseJson("duration_ms", 600000), "duration_ms"), "must not be null" };
         yield return new object[] { "receipt", "bytes_in", RemoveTopLevelJsonField(VpnReceiptRawResponseJson("bytes_in", 123), "bytes_in"), "must not be null" };
@@ -7860,7 +7856,6 @@ public sealed class ToriiClientTests
         yield return new object[] { "receipt-list", "items[0].session_id", RemoveFirstArrayItemObjectJsonField(VpnReceiptListRawResponseJson("total", 1), "items", "session_id"), "must not be null" };
         yield return new object[] { "receipt-list", "items[0].session_id", VpnReceiptListRawNestedReceiptJson("session_id", null), "must not be null" };
         yield return new object[] { "receipt-list", "items[0].connected_at_ms", RemoveFirstArrayItemObjectJsonField(VpnReceiptListRawResponseJson("total", 1), "items", "connected_at_ms"), "must not be null" };
-        yield return new object[] { "receipt-list", "items[0].connected_at_ms", VpnReceiptListRawNestedReceiptJson("connected_at_ms", 0), "positive" };
         yield return new object[] { "receipt-list", "items[0].disconnected_at_ms", RemoveFirstArrayItemObjectJsonField(VpnReceiptListRawResponseJson("total", 1), "items", "disconnected_at_ms"), "must not be null" };
         yield return new object[] { "receipt-list", "items[0].duration_ms", RemoveFirstArrayItemObjectJsonField(VpnReceiptListRawResponseJson("total", 1), "items", "duration_ms"), "must not be null" };
         yield return new object[] { "receipt-list", "items[0].bytes_in", RemoveFirstArrayItemObjectJsonField(VpnReceiptListRawResponseJson("total", 1), "items", "bytes_in"), "must not be null" };
@@ -7947,15 +7942,13 @@ public sealed class ToriiClientTests
     }
 
     [Fact]
-    public void RawVpnQuoteWriteRejectsZeroExpiration()
+    public void RawVpnQuoteWriteAcceptsZeroUnsignedExpiration()
     {
         var quote = ValidVpnQuote();
 
-        var error = Assert.Throws<JsonException>(() =>
-            SerializeWithPrivateField(quote, "quoteExpiresAtMilliseconds", 0UL));
+        var json = SerializeWithPrivateField(quote, "quoteExpiresAtMilliseconds", 0UL);
 
-        Assert.Contains("quote_expires_at_ms", error.Message);
-        Assert.Contains("positive", error.Message);
+        Assert.Contains("\"quote_expires_at_ms\":0", json);
     }
 
     [Fact]
@@ -7976,17 +7969,15 @@ public sealed class ToriiClientTests
     }
 
     [Fact]
-    public void RawVpnSessionWriteRejectsZeroAndReversedTimestamps()
+    public void RawVpnSessionWriteAcceptsZeroConnectedTimestampAndRejectsReversedTimestamps()
     {
         var zeroConnected = ValidVpnSession();
         var reversedExpiry = ValidVpnSession() with { ExpiresAtMilliseconds = 1699999399999 };
 
-        var zeroError = Assert.Throws<JsonException>(() =>
-            SerializeWithPrivateField(zeroConnected, "connectedAtMilliseconds", 0UL));
+        var zeroJson = SerializeWithPrivateField(zeroConnected, "connectedAtMilliseconds", 0UL);
         var orderError = Assert.Throws<JsonException>(() => JsonSerializer.Serialize(reversedExpiry));
 
-        Assert.Contains("connected_at_ms", zeroError.Message);
-        Assert.Contains("positive", zeroError.Message);
+        Assert.Contains("\"connected_at_ms\":0", zeroJson);
         Assert.Contains("expires_at_ms", orderError.Message);
         Assert.Contains("greater than connected_at_ms", orderError.Message);
     }
@@ -8021,17 +8012,18 @@ public sealed class ToriiClientTests
     }
 
     [Fact]
-    public void RawVpnReceiptWriteRejectsZeroAndReversedTimestamps()
+    public void RawVpnReceiptWriteAcceptsZeroTimestampsAndRejectsReversedTimestamps()
     {
-        var zeroDisconnected = ValidVpnReceipt();
+        var zeroTimestamps = ValidVpnReceipt();
+        SetPrivateField(zeroTimestamps, "connectedAtMilliseconds", 0UL);
+        SetPrivateField(zeroTimestamps, "disconnectedAtMilliseconds", 0UL);
         var reversedDisconnect = ValidVpnReceipt() with { DisconnectedAtMilliseconds = 1699999399999 };
 
-        var zeroError = Assert.Throws<JsonException>(() =>
-            SerializeWithPrivateField(zeroDisconnected, "disconnectedAtMilliseconds", 0UL));
+        var zeroJson = JsonSerializer.Serialize(zeroTimestamps);
         var orderError = Assert.Throws<JsonException>(() => JsonSerializer.Serialize(reversedDisconnect));
 
-        Assert.Contains("disconnected_at_ms", zeroError.Message);
-        Assert.Contains("positive", zeroError.Message);
+        Assert.Contains("\"connected_at_ms\":0", zeroJson);
+        Assert.Contains("\"disconnected_at_ms\":0", zeroJson);
         Assert.Contains("disconnected_at_ms", orderError.Message);
         Assert.Contains("greater than or equal to connected_at_ms", orderError.Message);
     }
@@ -14383,6 +14375,12 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             var payload = ReadBodyAsJson(request);
             Assert.Equal("/v1/accounts/onboard", request.RequestUri!.AbsolutePath);
             Assert.Equal(HttpMethod.Post, request.Method);
+            Assert.Equal(
+                AccountOnboardingToken,
+                Assert.Single(request.Headers.GetValues(ToriiClient.AccountOnboardingTokenHeaderName)));
+            Assert.Equal("global-api-token", Assert.Single(request.Headers.GetValues("X-API-Token")));
+            Assert.Equal("application/json", Assert.Single(request.Headers.Accept).MediaType);
+            Assert.Equal("application/json", request.Content!.Headers.ContentType!.MediaType);
             Assert.Equal("merchant@paynet", payload.RootElement.GetProperty("alias").GetString());
             Assert.Equal(CanonicalAccountId, payload.RootElement.GetProperty("account_id").GetString());
             Assert.Equal(
@@ -14391,6 +14389,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             Assert.Equal(
                 "uaid:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
                 payload.RootElement.GetProperty("uaid").GetString());
+            Assert.DoesNotContain(AccountOnboardingToken, request.Content.ReadAsStringAsync().GetAwaiter().GetResult());
 
             return new HttpResponseMessage(HttpStatusCode.Accepted)
             {
@@ -14405,7 +14404,14 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             };
         });
 
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var httpClient = new HttpClient(handler);
+        httpClient.DefaultRequestHeaders.TryAddWithoutValidation("X-API-Token", "global-api-token");
+        httpClient.DefaultRequestHeaders.TryAddWithoutValidation(
+            ToriiClient.AccountOnboardingTokenHeaderName,
+            ["stale-default-token-one", "stale-default-token-two"]);
+        using var client = new ToriiClient(new Uri("https://torii.example"), httpClient);
+        Assert.False(httpClient.DefaultRequestHeaders.Contains(
+            ToriiClient.AccountOnboardingTokenHeaderName));
         var response = await client.RegisterAccountAsync(new ToriiAccountOnboardingRequest
         {
             Alias = "merchant@paynet",
@@ -14413,7 +14419,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             IdentityCommitmentHex = new string('A', 64),
             Uaid = "UAID:0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF",
             Permissions = ["CanResolveAccountAlias"],
-        }, cancellationToken: TestContext.Current.CancellationToken);
+        }, AccountOnboardingToken, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(CanonicalAccountId, response.AccountId);
         Assert.Equal(ToriiTransactionHashHex, response.TransactionHashHex);
@@ -14498,11 +14504,111 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
 
         var error = await Assert.ThrowsAnyAsync<ArgumentException>(() =>
-            client.RegisterAccountAsync(request, cancellationToken: TestContext.Current.CancellationToken));
+            client.RegisterAccountAsync(
+                request,
+                AccountOnboardingToken,
+                cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Equal(expectedParamName, error.ParamName);
         Assert.Contains(expectedMessage, error.Message);
         Assert.Null(handler.LastRequest);
+    }
+
+    public static IEnumerable<object?[]> InvalidAccountOnboardingTokens()
+    {
+        yield return new object?[] { null };
+        yield return new object?[] { string.Empty };
+        yield return new object?[] { new string('T', 31) };
+        yield return new object?[] { new string('T', 257) };
+        yield return new object?[] { new string('T', 31) + " " };
+        yield return new object?[] { new string('T', 31) + "é" };
+    }
+
+    [Theory]
+    [MemberData(nameof(InvalidAccountOnboardingTokens))]
+    public async Task AccountOnboardingApisRejectMalformedCredentialBeforeDispatch(string? onboardingToken)
+    {
+        using var handler = new RecordingHandler(_ =>
+            throw new InvalidOperationException("malformed onboarding token reached HTTP dispatch"));
+        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+
+        foreach (var operation in new Func<Task>[]
+                 {
+                     () => client.RegisterAccountAsync(
+                         ValidAccountOnboardingRequest(),
+                         onboardingToken!,
+                         cancellationToken: TestContext.Current.CancellationToken),
+                     () => client.RegisterMultisigAccountAsync(
+                         ValidMultisigAccountOnboardingRequest(),
+                         onboardingToken!,
+                         cancellationToken: TestContext.Current.CancellationToken),
+                 })
+        {
+            var error = await Assert.ThrowsAnyAsync<ArgumentException>(operation);
+            Assert.Equal("onboardingToken", error.ParamName);
+            if (!string.IsNullOrEmpty(onboardingToken))
+            {
+                Assert.DoesNotContain(onboardingToken, error.Message);
+            }
+        }
+
+        Assert.Null(handler.LastRequest);
+    }
+
+    [Fact]
+    public async Task RegisterAccountAsyncRejectsRedirectWithoutReplayingCredential()
+    {
+        var requestCount = 0;
+        using var handler = new RecordingHandler(_ =>
+        {
+            requestCount++;
+            return new HttpResponseMessage(HttpStatusCode.TemporaryRedirect)
+            {
+                Headers = { Location = new Uri("https://redirect.example/v1/accounts/onboard") },
+                ReasonPhrase = AccountOnboardingToken,
+                Content = new StringContent($"server echoed {AccountOnboardingToken}"),
+            };
+        });
+        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+
+        var error = await Assert.ThrowsAsync<ToriiApiException>(() =>
+            client.RegisterAccountAsync(
+                ValidAccountOnboardingRequest(),
+                AccountOnboardingToken,
+                cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.Equal(HttpStatusCode.TemporaryRedirect, error.StatusCode);
+        Assert.DoesNotContain(AccountOnboardingToken, error.Message);
+        Assert.DoesNotContain(AccountOnboardingToken, error.ResponseBody);
+        Assert.Equal("server echoed <redacted>", error.ResponseBody);
+        Assert.Equal(1, requestCount);
+    }
+
+    [Fact]
+    public async Task RegisterAccountAsyncRedactsCredentialBeforeDecodingSuccessResponse()
+    {
+        var escapedOnboardingToken = new string('"', 32);
+        var responseJson = JsonSerializer.Serialize(new Dictionary<string, object?>
+        {
+            ["account_id"] = OnboardingAccountId,
+            ["uaid"] = "uaid:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            ["tx_hash_hex"] = ToriiTransactionHashHex,
+            ["status"] = escapedOnboardingToken,
+        });
+        Assert.DoesNotContain(escapedOnboardingToken, responseJson);
+        using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.Accepted)
+        {
+            Content = new StringContent(responseJson),
+        });
+        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+
+        var error = await Assert.ThrowsAsync<JsonException>(() =>
+            client.RegisterAccountAsync(
+                ValidAccountOnboardingRequest(),
+                escapedOnboardingToken,
+                cancellationToken: TestContext.Current.CancellationToken));
+
+        Assert.DoesNotContain(escapedOnboardingToken, error.Message);
     }
 
     [Fact]
@@ -15213,6 +15319,10 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         {
             var payload = ReadBodyAsJson(request);
             Assert.Equal("/v1/accounts/onboard/multisig", request.RequestUri!.AbsolutePath);
+            Assert.Equal(
+                AccountOnboardingToken,
+                Assert.Single(request.Headers.GetValues(ToriiClient.AccountOnboardingTokenHeaderName)));
+            Assert.Equal("application/json", request.Content!.Headers.ContentType!.MediaType);
             Assert.Equal("treasury@paynet", payload.RootElement.GetProperty("alias").GetString());
             Assert.Equal(2, payload.RootElement.GetProperty("required_signers").GetInt32());
             Assert.Equal(MultisigMemberAccountId1, payload.RootElement.GetProperty("member_account_ids")[0].GetString());
@@ -15239,7 +15349,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             MemberAccountIds = [MultisigMemberAccountId1, MultisigMemberAccountId2],
             MemberWeights = [1, 2],
             TransactionTtlMilliseconds = 60_000,
-        }, cancellationToken: TestContext.Current.CancellationToken);
+        }, AccountOnboardingToken, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(MultisigOnboardingAccountId, response.AccountId);
         Assert.Equal(string.Empty, response.TransactionHashHex);
@@ -15283,7 +15393,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             MemberAccountIds = memberAccountIds,
             MemberWeights = memberWeights,
             TransactionTtlMilliseconds = 60_000,
-        }, cancellationToken: TestContext.Current.CancellationToken);
+        }, AccountOnboardingToken, cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(MultisigOnboardingAccountId, response.AccountId);
         Assert.Equal(ToriiTransactionHashHex, response.TransactionHashHex);
@@ -15658,7 +15768,10 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
 
         var error = await Assert.ThrowsAnyAsync<ArgumentException>(() =>
-            client.RegisterMultisigAccountAsync(request, cancellationToken: TestContext.Current.CancellationToken));
+            client.RegisterMultisigAccountAsync(
+                request,
+                AccountOnboardingToken,
+                cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Equal(expectedParamName, error.ParamName);
         Assert.Contains(expectedMessage, error.Message);
@@ -16242,74 +16355,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     }
 
     [Fact]
-    public async Task DeployContractAsyncEncodesRouteAndDeserializesResponse()
-    {
-        using var handler = new RecordingHandler(request =>
-        {
-            var payload = ReadBodyAsJson(request);
-            Assert.Equal(ContractAuthorityAccountId, payload.RootElement.GetProperty("authority").GetString());
-            Assert.Equal("router::dex.universal", payload.RootElement.GetProperty("contract_alias").GetString());
-            Assert.False(payload.RootElement.TryGetProperty("dataspace", out _));
-
-            return new HttpResponseMessage(HttpStatusCode.OK)
-            {
-                Content = new StringContent(ContractDeploymentResponseJson("deploy")),
-            };
-        });
-
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-        var response = await client.DeployContractAsync(new ToriiDeployContractRequest
-        {
-            Authority = ContractAuthorityAccountId,
-            PrivateKey = "ed0120AABB",
-            CodeBase64 = "AQID",
-            ContractAlias = "router::dex.universal",
-        }, cancellationToken: TestContext.Current.CancellationToken);
-
-        Assert.True(response.Ok);
-        Assert.Equal("universal", response.Dataspace);
-        Assert.Equal((ulong)4, response.DeployNonce);
-        Assert.Equal("/v1/contracts/deploy", handler.LastRequest!.RequestUri!.AbsolutePath);
-        Assert.Equal(HttpMethod.Post, handler.LastRequest.Method);
-    }
-
-    public static IEnumerable<object[]> InvalidDeployContractRequests()
-    {
-        var valid = ValidDeployContractRequest();
-        yield return new object[] { valid with { Authority = " " + ContractAuthorityAccountId }, "Authority", "whitespace" };
-        yield return new object[] { valid with { Authority = "merchant@sora" }, "Authority", "canonical I105" };
-        yield return new object[] { valid with { Authority = "0x000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f" }, "Authority", "canonical I105" };
-        yield return new object[] { valid with { Authority = "n753Xnﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛ" }, "Authority", "canonical I105" };
-        yield return new object[] { valid with { PrivateKey = "ed0120AABB\u0001" }, "PrivateKey", "control characters" };
-        yield return new object[] { valid with { CodeBase64 = " AQID" }, "CodeBase64", "whitespace" };
-        yield return new object[] { valid with { CodeBase64 = "" }, "CodeBase64", "null or whitespace" };
-        yield return new object[] { valid with { CodeBase64 = "not-base64" }, "CodeBase64", "base64 encoded" };
-        yield return new object[] { valid with { CodeBase64 = "AR==" }, "CodeBase64", "canonical base64" };
-        yield return new object[] { valid with { ContractAlias = "" }, "ContractAlias", "null or whitespace" };
-        yield return new object[] { valid with { ContractAlias = " router::dex.universal" }, "ContractAlias", "whitespace" };
-        yield return new object[] { valid with { ContractAlias = "router::dex.universal\u0001" }, "ContractAlias", "control characters" };
-    }
-
-    [Theory]
-    [MemberData(nameof(InvalidDeployContractRequests))]
-    public async Task DeployContractAsyncRejectsMalformedRequestBeforeDispatch(
-        ToriiDeployContractRequest request,
-        string expectedParamName,
-        string expectedMessage)
-    {
-        using var handler = new RecordingHandler(_ =>
-            throw new InvalidOperationException("malformed contract deploy request reached HTTP dispatch"));
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-
-        var error = await Assert.ThrowsAnyAsync<ArgumentException>(() =>
-            client.DeployContractAsync(request, cancellationToken: TestContext.Current.CancellationToken));
-
-        Assert.Equal(expectedParamName, error.ParamName);
-        Assert.Contains(expectedMessage, error.Message);
-        Assert.Null(handler.LastRequest);
-    }
-
-    [Fact]
     public async Task GetContractCodeBytesAsyncEncodesCodeHashAndDecodesBase64()
     {
         using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
@@ -16473,490 +16518,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             new ToriiContractCodeBytesResponse { CodeBase64 = codeBase64 });
 
         Assert.Contains(expectedMessage, error.Message);
-    }
-
-    [Fact]
-    public async Task DeployAndActivateContractInstanceAsyncEncodesRouteAndDeserializesResponse()
-    {
-        using var handler = new RecordingHandler(request =>
-        {
-            var payload = ReadBodyAsJson(request);
-            Assert.Equal(ContractAuthorityAccountId, payload.RootElement.GetProperty("authority").GetString());
-            Assert.Equal("apps", payload.RootElement.GetProperty("namespace").GetString());
-            Assert.Equal("calc.v1", payload.RootElement.GetProperty("contract_id").GetString());
-
-            return new HttpResponseMessage(HttpStatusCode.OK)
-            {
-                Content = new StringContent(ContractDeploymentResponseJson("deploy-and-activate")),
-            };
-        });
-
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-        var response = await client.DeployAndActivateContractInstanceAsync(new ToriiDeployAndActivateContractInstanceRequest
-        {
-            Authority = ContractAuthorityAccountId,
-            PrivateKey = "ed0120AABB",
-            Namespace = "apps",
-            ContractId = "calc.v1",
-            CodeBase64 = "AQID",
-        }, cancellationToken: TestContext.Current.CancellationToken);
-
-        Assert.True(response.Ok);
-        Assert.Equal("apps", response.Namespace);
-        Assert.Equal("calc.v1", response.ContractId);
-        Assert.Equal("/v1/contracts/instance", handler.LastRequest!.RequestUri!.AbsolutePath);
-        Assert.Equal(HttpMethod.Post, handler.LastRequest.Method);
-    }
-
-    public static IEnumerable<object[]> InvalidDeployAndActivateContractInstanceRequests()
-    {
-        var valid = ValidDeployAndActivateContractInstanceRequest();
-        yield return new object[] { valid with { Authority = "" }, "Authority", "null or whitespace" };
-        yield return new object[] { valid with { Authority = "merchant@sora" }, "Authority", "canonical I105" };
-        yield return new object[] { valid with { Authority = "0x000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f" }, "Authority", "canonical I105" };
-        yield return new object[] { valid with { Authority = "n753Xnﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛ" }, "Authority", "canonical I105" };
-        yield return new object[] { valid with { PrivateKey = " ed0120AABB" }, "PrivateKey", "whitespace" };
-        yield return new object[] { valid with { Namespace = " apps" }, "Namespace", "whitespace" };
-        yield return new object[] { valid with { ContractId = "calc.v1\u0001" }, "ContractId", "control characters" };
-        yield return new object[] { valid with { CodeBase64 = " AQID" }, "CodeBase64", "whitespace" };
-        yield return new object[] { valid with { CodeBase64 = "not-base64" }, "CodeBase64", "base64 encoded" };
-    }
-
-    [Theory]
-    [MemberData(nameof(InvalidDeployAndActivateContractInstanceRequests))]
-    public async Task DeployAndActivateContractInstanceAsyncRejectsMalformedRequestBeforeDispatch(
-        ToriiDeployAndActivateContractInstanceRequest request,
-        string expectedParamName,
-        string expectedMessage)
-    {
-        using var handler = new RecordingHandler(_ =>
-            throw new InvalidOperationException("malformed contract instance deploy request reached HTTP dispatch"));
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-
-        var error = await Assert.ThrowsAnyAsync<ArgumentException>(() =>
-            client.DeployAndActivateContractInstanceAsync(request, cancellationToken: TestContext.Current.CancellationToken));
-
-        Assert.Equal(expectedParamName, error.ParamName);
-        Assert.Contains(expectedMessage, error.Message);
-        Assert.Null(handler.LastRequest);
-    }
-
-    [Fact]
-    public async Task ActivateContractInstanceAsyncEncodesRouteAndDeserializesResponse()
-    {
-        using var handler = new RecordingHandler(request =>
-        {
-            var payload = ReadBodyAsJson(request);
-            Assert.Equal(ContractAuthorityAccountId, payload.RootElement.GetProperty("authority").GetString());
-            Assert.Equal(new string('a', 64), payload.RootElement.GetProperty("code_hash").GetString());
-
-            return new HttpResponseMessage(HttpStatusCode.OK)
-            {
-                Content = new StringContent("""{ "ok": true }"""),
-            };
-        });
-
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-        var response = await client.ActivateContractInstanceAsync(new ToriiActivateContractInstanceRequest
-        {
-            Authority = ContractAuthorityAccountId,
-            PrivateKey = "ed0120AABB",
-            Namespace = "apps",
-            ContractId = "calc.v1",
-            CodeHash = new string('a', 64),
-        }, cancellationToken: TestContext.Current.CancellationToken);
-
-        Assert.True(response.Ok);
-        Assert.Equal("/v1/contracts/instance/activate", handler.LastRequest!.RequestUri!.AbsolutePath);
-        Assert.Equal(HttpMethod.Post, handler.LastRequest.Method);
-    }
-
-    public static IEnumerable<object[]> InvalidActivateContractInstanceRequests()
-    {
-        var valid = ValidActivateContractInstanceRequest();
-        yield return new object[] { valid with { Authority = ContractAuthorityAccountId + " " }, "Authority", "whitespace" };
-        yield return new object[] { valid with { Authority = "merchant@sora" }, "Authority", "canonical I105" };
-        yield return new object[] { valid with { Authority = "0x000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f" }, "Authority", "canonical I105" };
-        yield return new object[] { valid with { Authority = "n753Xnﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛ" }, "Authority", "canonical I105" };
-        yield return new object[] { valid with { Namespace = "" }, "Namespace", "null or whitespace" };
-        yield return new object[] { valid with { ContractId = "calc v1" }, "ContractId", "whitespace" };
-        yield return new object[] { valid with { CodeHash = " " + new string('a', 64) }, "CodeHash", "whitespace" };
-        yield return new object[] { valid with { CodeHash = new string('a', 63) }, "CodeHash", "32-byte hex string" };
-        yield return new object[] { valid with { CodeHash = new string('g', 64) }, "CodeHash", "32-byte hex string" };
-        yield return new object[] { valid with { CodeHash = "0x" + new string('a', 64) }, "CodeHash", "32-byte hex string" };
-    }
-
-    [Theory]
-    [MemberData(nameof(InvalidActivateContractInstanceRequests))]
-    public async Task ActivateContractInstanceAsyncRejectsMalformedRequestBeforeDispatch(
-        ToriiActivateContractInstanceRequest request,
-        string expectedParamName,
-        string expectedMessage)
-    {
-        using var handler = new RecordingHandler(_ =>
-            throw new InvalidOperationException("malformed contract activation request reached HTTP dispatch"));
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-
-        var error = await Assert.ThrowsAnyAsync<ArgumentException>(() =>
-            client.ActivateContractInstanceAsync(request, cancellationToken: TestContext.Current.CancellationToken));
-
-        Assert.Equal(expectedParamName, error.ParamName);
-        Assert.Contains(expectedMessage, error.Message);
-        Assert.Null(handler.LastRequest);
-    }
-
-    [Theory]
-    [InlineData("deploy")]
-    [InlineData("deploy-and-activate")]
-    [InlineData("activate")]
-    public async Task ContractDeploymentAsyncRejectsFalseOkResponse(string operation)
-    {
-        using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
-        {
-            Content = new StringContent(ContractDeploymentResponseJson(operation, ok: false)),
-        });
-
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-
-        var error = await Assert.ThrowsAsync<JsonException>(() =>
-            InvokeContractDeploymentOperationAsync(client, operation));
-
-        Assert.Contains(".ok must be true", error.Message);
-    }
-
-    public static IEnumerable<object[]> InvalidContractDeploymentHashResponses()
-    {
-        yield return new object[] { "deploy", "code_hash_hex", "", "non-empty 32-byte hex string" };
-        yield return new object[] { "deploy", "code_hash_hex", " " + ContractCodeHashHex, "surrounding whitespace" };
-        yield return new object[] { "deploy", "abi_hash_hex", ContractAbiHashHex + " ", "surrounding whitespace" };
-        yield return new object[] { "deploy-and-activate", "code_hash_hex", ContractCodeHashHex[..32] + " " + ContractCodeHashHex[32..], "whitespace" };
-        yield return new object[] { "deploy-and-activate", "abi_hash_hex", ContractAbiHashHex + "\u0001", "control characters" };
-        yield return new object[] { "deploy-and-activate", "code_hash_hex", new string('a', 63), "32-byte hex string" };
-        yield return new object[] { "deploy", "abi_hash_hex", "0x" + ContractAbiHashHex, "32-byte hex string" };
-        yield return new object[] { "deploy-and-activate", "abi_hash_hex", new string('g', 64), "32-byte hex string" };
-    }
-
-    [Theory]
-    [MemberData(nameof(InvalidContractDeploymentHashResponses))]
-    public async Task ContractDeploymentAsyncRejectsNonExactHashResponse(
-        string operation,
-        string field,
-        string value,
-        string expectedMessage)
-    {
-        var codeHashHex = field == "code_hash_hex" ? value : ContractCodeHashHex;
-        var abiHashHex = field == "abi_hash_hex" ? value : ContractAbiHashHex;
-        using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
-        {
-            Content = new StringContent(ContractDeploymentResponseJson(operation, codeHashHex: codeHashHex, abiHashHex: abiHashHex)),
-        });
-
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-
-        var error = await Assert.ThrowsAsync<JsonException>(() =>
-            InvokeContractDeploymentOperationAsync(client, operation));
-
-        Assert.Contains(field, error.Message);
-        Assert.Contains(expectedMessage, error.Message);
-    }
-
-    public static IEnumerable<object?[]> InvalidContractDeploymentIdentifierResponses()
-    {
-        yield return new object?[] { "deploy", "contract_address", null, "must not be null" };
-        yield return new object?[] { "deploy", "contract_address", "", "non-empty" };
-        yield return new object?[] { "deploy", "contract_address", " iroha1qqqq", "surrounding whitespace" };
-        yield return new object?[] { "deploy", "dataspace", null, "must not be null" };
-        yield return new object?[] { "deploy", "dataspace", "universal ", "surrounding whitespace" };
-        yield return new object?[] { "deploy", "dataspace", "uni versal", "whitespace" };
-        yield return new object?[] { "deploy", "dataspace", "universal\u0001", "control characters" };
-        yield return new object?[] { "deploy-and-activate", "namespace", null, "must not be null" };
-        yield return new object?[] { "deploy-and-activate", "namespace", "", "non-empty" };
-        yield return new object?[] { "deploy-and-activate", "namespace", " apps", "surrounding whitespace" };
-        yield return new object?[] { "deploy-and-activate", "contract_id", null, "must not be null" };
-        yield return new object?[] { "deploy-and-activate", "contract_id", "calc v1", "whitespace" };
-        yield return new object?[] { "deploy-and-activate", "contract_id", "calc.v1\u0001", "control characters" };
-    }
-
-    [Theory]
-    [MemberData(nameof(InvalidContractDeploymentIdentifierResponses))]
-    public async Task ContractDeploymentAsyncRejectsNonExactIdentifierResponse(
-        string operation,
-        string field,
-        object? value,
-        string expectedMessage)
-    {
-        using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
-        {
-            Content = new StringContent(ContractDeploymentResponseJson(operation, field, value)),
-        });
-
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-
-        var error = await Assert.ThrowsAsync<JsonException>(() =>
-            InvokeContractDeploymentOperationAsync(client, operation));
-
-        Assert.Contains(field, error.Message);
-        Assert.Contains(expectedMessage, error.Message);
-    }
-
-    public static IEnumerable<object[]> InvalidContractDeploymentRequiredStringPresenceResponses()
-    {
-        foreach (var field in new[] { "contract_address", "dataspace", "code_hash_hex", "abi_hash_hex" })
-        {
-            yield return new object[]
-            {
-                "deploy",
-                field,
-                ContractDeploymentResponseJson("deploy", field, null),
-                "must not be null",
-            };
-            yield return new object[]
-            {
-                "deploy",
-                field,
-                RemoveTopLevelJsonField(ContractDeploymentResponseJson("deploy"), field),
-                "must not be null",
-            };
-        }
-
-        foreach (var field in new[] { "namespace", "contract_id", "code_hash_hex", "abi_hash_hex" })
-        {
-            yield return new object[]
-            {
-                "deploy-and-activate",
-                field,
-                ContractDeploymentResponseJson("deploy-and-activate", field, null),
-                "must not be null",
-            };
-            yield return new object[]
-            {
-                "deploy-and-activate",
-                field,
-                RemoveTopLevelJsonField(ContractDeploymentResponseJson("deploy-and-activate"), field),
-                "must not be null",
-            };
-        }
-    }
-
-    [Theory]
-    [MemberData(nameof(InvalidContractDeploymentRequiredStringPresenceResponses))]
-    public async Task ContractDeploymentAsyncRejectsMissingRequiredStringResponse(
-        string operation,
-        string expectedField,
-        string json,
-        string expectedMessage)
-    {
-        using var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
-        {
-            Content = new StringContent(json),
-        });
-
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
-
-        var error = await Assert.ThrowsAsync<JsonException>(() =>
-            InvokeContractDeploymentOperationAsync(client, operation));
-
-        Assert.Contains(expectedField, error.Message);
-        Assert.Contains(expectedMessage, error.Message);
-    }
-
-    [Theory]
-    [MemberData(nameof(InvalidContractDeploymentRequiredStringPresenceResponses))]
-    public void RawContractDeploymentResponsesRejectMissingRequiredStrings(
-        string operation,
-        string expectedField,
-        string json,
-        string expectedMessage)
-    {
-        var error = Assert.Throws<JsonException>(() =>
-            DeserializeRawContractDeploymentResponse(operation, json));
-
-        Assert.Contains(expectedField, error.Message);
-        Assert.Contains(expectedMessage, error.Message);
-    }
-
-    public static IEnumerable<object[]> InvalidRawDeployContractResponses()
-    {
-        yield return new object[] { "contract deploy response", "null", "must not be null" };
-        yield return new object[] { "contract deploy response", "[]", "object" };
-        yield return new object[]
-        {
-            "ok",
-            ContractDeploymentDuplicatePropertyJson("deploy", "ok"),
-            "must not appear more than once",
-        };
-        yield return new object[]
-        {
-            "contract deploy response.audit.nonce",
-            ContractDeploymentUnknownExtensionDuplicateJson("deploy"),
-            "must not appear more than once",
-        };
-        yield return new object[] { "ok", RemoveTopLevelJsonField(ContractDeploymentRawResponseJson("deploy", "ok", true), "ok"), "must not be null" };
-        yield return new object[] { "ok", ContractDeploymentRawResponseJson("deploy", "ok", "true"), "boolean" };
-        yield return new object[] { "ok", ContractDeploymentRawResponseJson("deploy", "ok", false), "must be true" };
-        yield return new object[] { "contract_address", ContractDeploymentRawResponseJson("deploy", "contract_address", null), "must not be null" };
-        yield return new object[] { "contract_address", ContractDeploymentRawResponseJson("deploy", "contract_address", 1), "string" };
-        yield return new object[] { "dataspace", ContractDeploymentRawResponseJson("deploy", "dataspace", "universal "), "surrounding whitespace" };
-        yield return new object[] { "deploy_nonce", RemoveTopLevelJsonField(ContractDeploymentRawResponseJson("deploy", "deploy_nonce", 4), "deploy_nonce"), "must not be null" };
-        yield return new object[] { "deploy_nonce", ContractDeploymentRawResponseJson("deploy", "deploy_nonce", -1), "unsigned integer" };
-        yield return new object[] { "deploy_nonce", ContractDeploymentRawResponseJson("deploy", "deploy_nonce", "4"), "unsigned integer" };
-        yield return new object[] { "code_hash_hex", ContractDeploymentRawResponseJson("deploy", "code_hash_hex", ContractCodeHashHex.ToUpperInvariant()), "lowercase" };
-        yield return new object[] { "abi_hash_hex", ContractDeploymentRawResponseJson("deploy", "abi_hash_hex", "0x" + ContractAbiHashHex), "32-byte hex string" };
-    }
-
-    [Theory]
-    [MemberData(nameof(InvalidRawDeployContractResponses))]
-    public void RawDeployContractResponseRejectsMalformedPayloads(
-        string expectedField,
-        string json,
-        string expectedMessage)
-    {
-        var error = Assert.Throws<JsonException>(() =>
-            JsonSerializer.Deserialize<ToriiDeployContractResponse>(json));
-
-        Assert.Contains(expectedField, error.Message);
-        Assert.Contains(expectedMessage, error.Message);
-    }
-
-    public static IEnumerable<object[]> InvalidRawDeployAndActivateContractInstanceResponses()
-    {
-        yield return new object[] { "contract instance deploy response", "null", "must not be null" };
-        yield return new object[] { "contract instance deploy response", "[]", "object" };
-        yield return new object[]
-        {
-            "ok",
-            ContractDeploymentDuplicatePropertyJson("deploy-and-activate", "ok"),
-            "must not appear more than once",
-        };
-        yield return new object[]
-        {
-            "contract instance deploy response.audit.nonce",
-            ContractDeploymentUnknownExtensionDuplicateJson("deploy-and-activate"),
-            "must not appear more than once",
-        };
-        yield return new object[] { "ok", RemoveTopLevelJsonField(ContractDeploymentRawResponseJson("deploy-and-activate", "ok", true), "ok"), "must not be null" };
-        yield return new object[] { "ok", ContractDeploymentRawResponseJson("deploy-and-activate", "ok", "true"), "boolean" };
-        yield return new object[] { "ok", ContractDeploymentRawResponseJson("deploy-and-activate", "ok", false), "must be true" };
-        yield return new object[] { "namespace", ContractDeploymentRawResponseJson("deploy-and-activate", "namespace", null), "must not be null" };
-        yield return new object[] { "namespace", ContractDeploymentRawResponseJson("deploy-and-activate", "namespace", " apps"), "surrounding whitespace" };
-        yield return new object[] { "contract_id", ContractDeploymentRawResponseJson("deploy-and-activate", "contract_id", "calc v1"), "whitespace" };
-        yield return new object[] { "code_hash_hex", ContractDeploymentRawResponseJson("deploy-and-activate", "code_hash_hex", ContractCodeHashHex.ToUpperInvariant()), "lowercase" };
-        yield return new object[] { "abi_hash_hex", ContractDeploymentRawResponseJson("deploy-and-activate", "abi_hash_hex", "0x" + ContractAbiHashHex), "32-byte hex string" };
-    }
-
-    [Theory]
-    [MemberData(nameof(InvalidRawDeployAndActivateContractInstanceResponses))]
-    public void RawDeployAndActivateContractInstanceResponseRejectsMalformedPayloads(
-        string expectedField,
-        string json,
-        string expectedMessage)
-    {
-        var error = Assert.Throws<JsonException>(() =>
-            JsonSerializer.Deserialize<ToriiDeployAndActivateContractInstanceResponse>(json));
-
-        Assert.Contains(expectedField, error.Message);
-        Assert.Contains(expectedMessage, error.Message);
-    }
-
-    public static IEnumerable<object[]> InvalidRawActivateContractInstanceResponses()
-    {
-        yield return new object[] { "contract instance activation response", "null", "must not be null" };
-        yield return new object[] { "contract instance activation response", "[]", "object" };
-        yield return new object[]
-        {
-            "ok",
-            ContractDeploymentDuplicatePropertyJson("activate", "ok"),
-            "must not appear more than once",
-        };
-        yield return new object[]
-        {
-            "contract instance activation response.audit.nonce",
-            ContractDeploymentUnknownExtensionDuplicateJson("activate"),
-            "must not appear more than once",
-        };
-        yield return new object[] { "ok", RemoveTopLevelJsonField(ContractDeploymentRawResponseJson("activate", "ok", true), "ok"), "must not be null" };
-        yield return new object[] { "ok", ContractDeploymentRawResponseJson("activate", "ok", "true"), "boolean" };
-        yield return new object[] { "ok", ContractDeploymentRawResponseJson("activate", "ok", false), "must be true" };
-    }
-
-    [Theory]
-    [MemberData(nameof(InvalidRawActivateContractInstanceResponses))]
-    public void RawActivateContractInstanceResponseRejectsMalformedPayloads(
-        string expectedField,
-        string json,
-        string expectedMessage)
-    {
-        var error = Assert.Throws<JsonException>(() =>
-            JsonSerializer.Deserialize<ToriiActivateContractInstanceResponse>(json));
-
-        Assert.Contains(expectedField, error.Message);
-        Assert.Contains(expectedMessage, error.Message);
-    }
-
-    public static IEnumerable<object?[]> InvalidDirectContractDeploymentMetadata()
-    {
-        yield return new object?[] { "deploy", "Ok", false };
-        yield return new object?[] { "deploy", "ContractAddress", " iroha1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq" };
-        yield return new object?[] { "deploy", "Dataspace", "uni versal" };
-        yield return new object?[] { "deploy", "CodeHashHex", "0x" + ContractCodeHashHex };
-        yield return new object?[] { "deploy", "AbiHashHex", new string('B', 64) };
-
-        yield return new object?[] { "deploy-and-activate", "Ok", false };
-        yield return new object?[] { "deploy-and-activate", "Namespace", " apps" };
-        yield return new object?[] { "deploy-and-activate", "ContractId", "calc v1" };
-        yield return new object?[] { "deploy-and-activate", "CodeHashHex", ContractCodeHashHex.ToUpperInvariant() };
-        yield return new object?[] { "deploy-and-activate", "AbiHashHex", "0x" + ContractAbiHashHex };
-
-        yield return new object?[] { "activate", "Ok", false };
-    }
-
-    [Theory]
-    [MemberData(nameof(InvalidDirectContractDeploymentMetadata))]
-    public void ContractDeploymentDtosRejectMalformedDirectMetadata(
-        string operation,
-        string propertyName,
-        object? value)
-    {
-        var error = Assert.ThrowsAny<ArgumentException>(() =>
-            SetContractDeploymentDirectMetadata(operation, propertyName, value));
-
-        Assert.Equal(propertyName, error.ParamName);
-    }
-
-    [Fact]
-    public void RawDeployContractResponseWriteRejectsMalformedHash()
-    {
-        var response = ValidDeployContractResponse();
-        SetPrivateField(response, "codeHashHex", ContractCodeHashHex.ToUpperInvariant());
-
-        var error = Assert.Throws<JsonException>(() => JsonSerializer.Serialize(response));
-
-        Assert.Contains("code_hash_hex", error.Message);
-        Assert.Contains("lowercase", error.Message);
-    }
-
-    [Fact]
-    public void RawDeployAndActivateContractInstanceResponseWriteRejectsMalformedContractId()
-    {
-        var response = ValidDeployAndActivateContractInstanceResponse();
-        SetPrivateField(response, "contractId", "calc v1");
-
-        var error = Assert.Throws<JsonException>(() => JsonSerializer.Serialize(response));
-
-        Assert.Contains("contract_id", error.Message);
-        Assert.Contains("whitespace", error.Message);
-    }
-
-    [Fact]
-    public void RawActivateContractInstanceResponseWriteRejectsFalseOk()
-    {
-        var response = ValidActivateContractInstanceResponse();
-        SetPrivateField(response, "ok", false);
-
-        var error = Assert.Throws<JsonException>(() => JsonSerializer.Serialize(response));
-
-        Assert.Contains("ok", error.Message);
-        Assert.Contains("must be true", error.Message);
     }
 
     [Fact]
@@ -21806,95 +21367,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             ExecutedTransactionHashHex = null,
             CreationTimeMilliseconds = 321,
             SigningMessageBase64 = "bXVsdGlzaWc=",
-        };
-    }
-
-    private static void SetContractDeploymentDirectMetadata(string operation, string propertyName, object? value)
-    {
-        object? constructed = (operation, propertyName) switch
-        {
-            ("deploy", "Ok") => ValidDeployContractResponse() with
-            {
-                Ok = RequiredBoolValue(value),
-            },
-            ("deploy", "ContractAddress") => ValidDeployContractResponse() with
-            {
-                ContractAddress = RequiredStringValue(value),
-            },
-            ("deploy", "Dataspace") => ValidDeployContractResponse() with
-            {
-                Dataspace = RequiredStringValue(value),
-            },
-            ("deploy", "CodeHashHex") => ValidDeployContractResponse() with
-            {
-                CodeHashHex = RequiredStringValue(value),
-            },
-            ("deploy", "AbiHashHex") => ValidDeployContractResponse() with
-            {
-                AbiHashHex = RequiredStringValue(value),
-            },
-            ("deploy-and-activate", "Ok") => ValidDeployAndActivateContractInstanceResponse() with
-            {
-                Ok = RequiredBoolValue(value),
-            },
-            ("deploy-and-activate", "Namespace") => ValidDeployAndActivateContractInstanceResponse() with
-            {
-                Namespace = RequiredStringValue(value),
-            },
-            ("deploy-and-activate", "ContractId") => ValidDeployAndActivateContractInstanceResponse() with
-            {
-                ContractId = RequiredStringValue(value),
-            },
-            ("deploy-and-activate", "CodeHashHex") => ValidDeployAndActivateContractInstanceResponse() with
-            {
-                CodeHashHex = RequiredStringValue(value),
-            },
-            ("deploy-and-activate", "AbiHashHex") => ValidDeployAndActivateContractInstanceResponse() with
-            {
-                AbiHashHex = RequiredStringValue(value),
-            },
-            ("activate", "Ok") => ValidActivateContractInstanceResponse() with
-            {
-                Ok = RequiredBoolValue(value),
-            },
-            _ => throw new ArgumentOutOfRangeException(
-                nameof(propertyName),
-                propertyName,
-                "Unknown contract deployment direct metadata field."),
-        };
-        GC.KeepAlive(constructed);
-    }
-
-    private static ToriiDeployContractResponse ValidDeployContractResponse()
-    {
-        return new ToriiDeployContractResponse
-        {
-            Ok = true,
-            ContractAddress = "iroha1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq",
-            Dataspace = "universal",
-            DeployNonce = 4,
-            CodeHashHex = ContractCodeHashHex,
-            AbiHashHex = ContractAbiHashHex,
-        };
-    }
-
-    private static ToriiDeployAndActivateContractInstanceResponse ValidDeployAndActivateContractInstanceResponse()
-    {
-        return new ToriiDeployAndActivateContractInstanceResponse
-        {
-            Ok = true,
-            Namespace = "apps",
-            ContractId = "calc.v1",
-            CodeHashHex = ContractCodeHashHex,
-            AbiHashHex = ContractAbiHashHex,
-        };
-    }
-
-    private static ToriiActivateContractInstanceResponse ValidActivateContractInstanceResponse()
-    {
-        return new ToriiActivateContractInstanceResponse
-        {
-            Ok = true,
         };
     }
 
@@ -29083,65 +28555,6 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         };
     }
 
-    private static ToriiDeployContractRequest ValidDeployContractRequest()
-    {
-        return new ToriiDeployContractRequest
-        {
-            Authority = ContractAuthorityAccountId,
-            PrivateKey = "ed0120AABB",
-            CodeBase64 = "AQID",
-            ContractAlias = "router::dex.universal",
-        };
-    }
-
-    private static ToriiDeployAndActivateContractInstanceRequest ValidDeployAndActivateContractInstanceRequest()
-    {
-        return new ToriiDeployAndActivateContractInstanceRequest
-        {
-            Authority = ContractAuthorityAccountId,
-            PrivateKey = "ed0120AABB",
-            Namespace = "apps",
-            ContractId = "calc.v1",
-            CodeBase64 = "AQID",
-        };
-    }
-
-    private static ToriiActivateContractInstanceRequest ValidActivateContractInstanceRequest()
-    {
-        return new ToriiActivateContractInstanceRequest
-        {
-            Authority = ContractAuthorityAccountId,
-            PrivateKey = "ed0120AABB",
-            Namespace = "apps",
-            ContractId = "calc.v1",
-            CodeHash = new string('a', 64),
-        };
-    }
-
-    private static Task InvokeContractDeploymentOperationAsync(
-        ToriiClient client,
-        string operation)
-    {
-        return operation switch
-        {
-            "deploy" => client.DeployContractAsync(ValidDeployContractRequest()),
-            "deploy-and-activate" => client.DeployAndActivateContractInstanceAsync(ValidDeployAndActivateContractInstanceRequest()),
-            "activate" => client.ActivateContractInstanceAsync(ValidActivateContractInstanceRequest()),
-            _ => throw new ArgumentOutOfRangeException(nameof(operation), operation, "Unknown contract deployment operation."),
-        };
-    }
-
-    private static object? DeserializeRawContractDeploymentResponse(string operation, string json)
-    {
-        return operation switch
-        {
-            "deploy" => JsonSerializer.Deserialize<ToriiDeployContractResponse>(json),
-            "deploy-and-activate" => JsonSerializer.Deserialize<ToriiDeployAndActivateContractInstanceResponse>(json),
-            "activate" => JsonSerializer.Deserialize<ToriiActivateContractInstanceResponse>(json),
-            _ => throw new ArgumentOutOfRangeException(nameof(operation), operation, "Unknown contract deployment operation."),
-        };
-    }
-
     private static string ContractMetadataHashResponseJson(string operation, string field, string value)
     {
         var codeHash = ContractCodeHashHex;
@@ -30323,141 +29736,20 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         };
     }
 
-    private static string ContractDeploymentResponseJson(
-        string operation,
-        bool ok = true,
-        string? codeHashHex = null,
-        string? abiHashHex = null)
-    {
-        return ContractDeploymentResponseJson(operation, field: null, value: null, ok, codeHashHex, abiHashHex);
-    }
-
-    private static string ContractDeploymentResponseJson(
-        string operation,
-        string? field,
-        object? value,
-        bool ok = true,
-        string? codeHashHex = null,
-        string? abiHashHex = null)
-    {
-        var response = ContractDeploymentResponseJsonObject(operation, codeHashHex, abiHashHex);
-
-        switch (field)
-        {
-            case null:
-                break;
-            case "ok":
-            case "deploy_nonce":
-            case "contract_address":
-            case "dataspace":
-            case "namespace":
-            case "contract_id":
-            case "code_hash_hex":
-            case "abi_hash_hex":
-                response[field] = JsonValueForContractDeployment(value);
-                break;
-            default:
-                throw new ArgumentOutOfRangeException(nameof(field), field, "Unknown contract deployment response field.");
-        }
-
-        response["ok"] = ok;
-        return response.ToJsonString();
-    }
-
-    private static JsonObject ContractDeploymentResponseJsonObject(
-        string operation,
-        string? codeHashHex = null,
-        string? abiHashHex = null)
-    {
-        return operation switch
-        {
-            "deploy" => new JsonObject
-            {
-                ["contract_address"] = "iroha1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq",
-                ["dataspace"] = "universal",
-                ["deploy_nonce"] = 4,
-                ["code_hash_hex"] = codeHashHex ?? ContractCodeHashHex,
-                ["abi_hash_hex"] = abiHashHex ?? ContractAbiHashHex,
-            },
-            "deploy-and-activate" => new JsonObject
-            {
-                ["namespace"] = "apps",
-                ["contract_id"] = "calc.v1",
-                ["code_hash_hex"] = codeHashHex ?? ContractCodeHashHex,
-                ["abi_hash_hex"] = abiHashHex ?? ContractAbiHashHex,
-            },
-            "activate" => new JsonObject(),
-            _ => throw new ArgumentOutOfRangeException(nameof(operation), operation, "Unknown contract deployment operation."),
-        };
-    }
-
-    private static string ContractDeploymentRawResponseJson(string operation, string field, object? value)
-    {
-        var response = ContractDeploymentResponseJsonObject(operation);
-        response["ok"] = true;
-        response[field] = JsonValueForContractDeployment(value);
-        return response.ToJsonString();
-    }
-
-    private static string ContractDeploymentDuplicatePropertyJson(string operation, string propertyName)
-    {
-        return operation switch
-        {
-            "deploy" => $$"""
-                {
-                  "{{propertyName}}": true,
-                  "{{propertyName}}": true,
-                  "contract_address": "iroha1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq",
-                  "dataspace": "universal",
-                  "deploy_nonce": 4,
-                  "code_hash_hex": "{{ContractCodeHashHex}}",
-                  "abi_hash_hex": "{{ContractAbiHashHex}}"
-                }
-                """,
-            "deploy-and-activate" => $$"""
-                {
-                  "{{propertyName}}": true,
-                  "{{propertyName}}": true,
-                  "namespace": "apps",
-                  "contract_id": "calc.v1",
-                  "code_hash_hex": "{{ContractCodeHashHex}}",
-                  "abi_hash_hex": "{{ContractAbiHashHex}}"
-                }
-                """,
-            "activate" => $$"""
-                {
-                  "{{propertyName}}": true,
-                  "{{propertyName}}": true
-                }
-                """,
-            _ => throw new ArgumentOutOfRangeException(nameof(operation), operation, "Unknown contract deployment operation."),
-        };
-    }
-
-    private static string ContractDeploymentUnknownExtensionDuplicateJson(string operation)
-    {
-        return JsonWithIgnoredAuditDuplicate(ContractDeploymentRawResponseJson(operation, "ok", true));
-    }
-
-    private static JsonNode? JsonValueForContractDeployment(object? value)
-    {
-        return value switch
-        {
-            null => null,
-            string text => JsonValue.Create(text),
-            int number => JsonValue.Create(number),
-            long number => JsonValue.Create(number),
-            ulong number => JsonValue.Create(number),
-            bool boolean => JsonValue.Create(boolean),
-            _ => throw new ArgumentOutOfRangeException(nameof(value), value, "Unsupported contract deployment JSON value."),
-        };
-    }
-
     private static string ContractCodeBytesRawResponseJson(object? codeBase64)
     {
         return new JsonObject
         {
-            ["code_b64"] = JsonValueForContractDeployment(codeBase64),
+            ["code_b64"] = codeBase64 switch
+            {
+                null => null,
+                string text => JsonValue.Create(text),
+                int number => JsonValue.Create(number),
+                _ => throw new ArgumentOutOfRangeException(
+                    nameof(codeBase64),
+                    codeBase64,
+                    "Unsupported contract code-byte JSON value."),
+            },
         }.ToJsonString();
     }
 
@@ -30707,12 +29999,16 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     {
         return operation switch
         {
-            "account-onboarding" => client.RegisterAccountAsync(ValidAccountOnboardingRequest()),
+            "account-onboarding" => client.RegisterAccountAsync(
+                ValidAccountOnboardingRequest(),
+                AccountOnboardingToken),
             "account-faucet" => client.ClaimAccountFaucetAsync(new ToriiAccountFaucetRequest
             {
                 AccountId = CanonicalAccountId,
             }),
-            "multisig-account-onboarding" => client.RegisterMultisigAccountAsync(ValidMultisigAccountOnboardingRequest()),
+            "multisig-account-onboarding" => client.RegisterMultisigAccountAsync(
+                ValidMultisigAccountOnboardingRequest(),
+                AccountOnboardingToken),
             "contract-call" => client.CallContractAsync(ValidContractCallRequest()),
             "multisig-propose" => client.ProposeMultisigAsync(ValidMultisigProposeRequest()),
             "multisig-contract-propose" => client.ProposeMultisigContractCallAsync(ValidMultisigContractCallProposeRequest()),
