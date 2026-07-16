@@ -7,6 +7,9 @@ import Darwin
 extension NoritoNativeBridge {
     private typealias KagemushaV2SymbolProbeFn = @convention(c) () -> Void
     private typealias KagemushaV2FreeFn = @convention(c) (UnsafeMutablePointer<UInt8>?) -> Void
+    private typealias KagemushaV4SecretFreeFn = @convention(c) (
+        UnsafeMutablePointer<UInt8>?
+    ) -> Void
     private typealias KagemushaV2ArchiveOutFn = @convention(c) (
         UnsafePointer<UInt8>?, CUnsignedLong,
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?
@@ -26,10 +29,24 @@ extension NoritoNativeBridge {
         UInt64,
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?
     ) -> Int32
+    private typealias KagemushaV2TwoArchiveThreeOutFn = @convention(c) (
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?,
+        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?,
+        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?
+    ) -> Int32
     private typealias KagemushaV2ThreeArchiveOutFn = @convention(c) (
         UnsafePointer<UInt8>?, CUnsignedLong,
         UnsafePointer<UInt8>?, CUnsignedLong,
         UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?
+    ) -> Int32
+    private typealias KagemushaV2ThreeArchiveTwoOutFn = @convention(c) (
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafePointer<UInt8>?, CUnsignedLong,
+        UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?,
         UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>?, UnsafeMutablePointer<CUnsignedLong>?
     ) -> Int32
     private typealias KagemushaV2FourArchiveOutFn = @convention(c) (
@@ -129,6 +146,26 @@ extension NoritoNativeBridge {
         #endif
     }
 
+    #if canImport(Darwin)
+    static func copyKagemushaNativeSecretArchiveOutput(
+        pointer: UnsafeMutablePointer<UInt8>?,
+        length: CUnsignedLong,
+        secureFree: (UnsafeMutablePointer<UInt8>?) -> Void
+    ) throws -> Data {
+        guard let pointer else {
+            throw NativeBridgeError.nullPointer
+        }
+        defer { secureFree(pointer) }
+        guard length > 0,
+              length <= CUnsignedLong(
+                  KagemushaRecursiveSpend.maximumRedemptionChangePreparationArchiveBytesV4
+              ) else {
+            throw NativeBridgeError.kagemushaProve
+        }
+        return Data(bytes: pointer, count: Int(length))
+    }
+    #endif
+
     func kagemushaReceiverKeyReferenceV2(
         publicKey: Data
     ) throws -> Data? {
@@ -164,6 +201,50 @@ extension NoritoNativeBridge {
         )
     }
 
+    func kagemushaRecursiveSpendRedemptionChangePrepareV4(
+        requestArchive: Data
+    ) throws -> Data? {
+        guard !requestArchive.isEmpty,
+              requestArchive.count
+                <= KagemushaRecursiveSpend.maximumPeerArchiveBytesV4
+                    + KagemushaRecursiveSpend.maximumRedemptionChangePreparationArchiveBytesV4
+        else {
+            throw NativeBridgeError.kagemushaProve
+        }
+        #if canImport(Darwin)
+        guard let function = resolveKagemushaV2Symbol(
+            "connect_norito_kagemusha_recursive_spend_redemption_change_prepare_v4",
+            as: KagemushaV2ArchiveOutFn.self
+        ), let secureFree = resolveKagemushaV2Symbol(
+            "connect_norito_kagemusha_secret_free_buffer",
+            as: KagemushaV4SecretFreeFn.self
+        ) else {
+            return nil
+        }
+        var output: UnsafeMutablePointer<UInt8>?
+        var outputLength: CUnsignedLong = 0
+        let status = requestArchive.withUnsafeBytes { buffer in
+            function(
+                buffer.bindMemory(to: UInt8.self).baseAddress,
+                CUnsignedLong(buffer.count),
+                &output,
+                &outputLength
+            )
+        }
+        if let error = NativeBridgeError.fromStatus(status) {
+            if let output { secureFree(output) }
+            throw error
+        }
+        return try Self.copyKagemushaNativeSecretArchiveOutput(
+            pointer: output,
+            length: outputLength,
+            secureFree: secureFree
+        )
+        #else
+        return nil
+        #endif
+    }
+
     func kagemushaRecipientPaymentRequestSigningBytesV2(payloadArchive: Data) throws -> Data? {
         try callKagemushaV2Archive(
             symbol: "connect_norito_kagemusha_recipient_payment_request_signing_bytes_v2",
@@ -193,22 +274,157 @@ extension NoritoNativeBridge {
         )
     }
 
-    func kagemushaRequestAuthorizationSigningBytesV2(templateArchive: Data) throws -> Data? {
+    func kagemushaRequestAuthorizationSigningBytesV2(
+        preparationArchive: Data
+    ) throws -> Data? {
         try callKagemushaV2Archive(
             symbol: "connect_norito_kagemusha_request_authorization_signing_bytes_v2",
-            archive: templateArchive
+            archive: preparationArchive
         )
     }
 
-    func kagemushaRequestAuthorizationCreateV2(
-        templateArchive: Data,
-        signature: Data
-    ) throws -> Data? {
-        try callKagemushaV2TwoArchives(
-            symbol: "connect_norito_kagemusha_request_authorization_create_v2",
-            first: templateArchive,
-            second: signature
+    func kagemushaRequestAuthorizationFinalizeHardwareV2(
+        preparationArchive: Data,
+        authenticatorData: Data,
+        derSignature: Data
+    ) throws -> (authorizationArchive: Data, rawSignature: Data)? {
+        guard !preparationArchive.isEmpty,
+              preparationArchive.count <= KagemushaRecursiveSpend.maximumPeerArchiveBytesV2,
+              authenticatorData.count <= 4 * 1024,
+              !derSignature.isEmpty,
+              derSignature.count <= 72 else {
+            throw NativeBridgeError.kagemushaProve
+        }
+        #if canImport(Darwin)
+        guard let function = resolveKagemushaV2Symbol(
+            "connect_norito_kagemusha_request_authorization_finalize_hardware_v2",
+            as: KagemushaV2ThreeArchiveTwoOutFn.self
+        ), let freeFunction = resolveKagemushaV2Symbol(
+            "connect_norito_free",
+            as: KagemushaV2FreeFn.self
+        ) else {
+            return nil
+        }
+        var authorization: UnsafeMutablePointer<UInt8>?
+        var authorizationLength: CUnsignedLong = 0
+        var rawSignature: UnsafeMutablePointer<UInt8>?
+        var rawSignatureLength: CUnsignedLong = 0
+        let status = preparationArchive.withUnsafeBytes { preparationBuffer in
+            authenticatorData.withUnsafeBytes { authenticatorBuffer in
+                derSignature.withUnsafeBytes { signatureBuffer in
+                    function(
+                        preparationBuffer.bindMemory(to: UInt8.self).baseAddress,
+                        CUnsignedLong(preparationBuffer.count),
+                        authenticatorBuffer.bindMemory(to: UInt8.self).baseAddress,
+                        CUnsignedLong(authenticatorBuffer.count),
+                        signatureBuffer.bindMemory(to: UInt8.self).baseAddress,
+                        CUnsignedLong(signatureBuffer.count),
+                        &authorization,
+                        &authorizationLength,
+                        &rawSignature,
+                        &rawSignatureLength
+                    )
+                }
+            }
+        }
+        defer {
+            if let authorization { freeFunction(authorization) }
+            if let rawSignature { freeFunction(rawSignature) }
+        }
+        if let error = NativeBridgeError.fromStatus(status) {
+            throw error
+        }
+        guard let authorization,
+              authorizationLength > 0,
+              authorizationLength
+                <= CUnsignedLong(KagemushaRecursiveSpend.maximumPeerArchiveBytesV2),
+              let rawSignature,
+              rawSignatureLength == CUnsignedLong(KagemushaDeviceSignatureV2.rawByteCount) else {
+            throw NativeBridgeError.kagemushaProve
+        }
+        return (
+            Data(bytes: authorization, count: Int(authorizationLength)),
+            Data(bytes: rawSignature, count: Int(rawSignatureLength))
         )
+        #else
+        return nil
+        #endif
+    }
+
+    func kagemushaRequestAuthorizationFinalizeIosAppAttestV2(
+        preparationArchive: Data,
+        assertionObject: Data
+    ) throws -> (
+        authorizationArchive: Data,
+        rawSignature: Data,
+        authenticatorData: Data
+    )? {
+        guard !preparationArchive.isEmpty,
+              preparationArchive.count <= KagemushaRecursiveSpend.maximumPeerArchiveBytesV2,
+              !assertionObject.isEmpty,
+              assertionObject.count
+                <= KagemushaRecursiveSpend.maximumIosAppAttestAssertionObjectBytesV2 else {
+            throw NativeBridgeError.kagemushaProve
+        }
+        #if canImport(Darwin)
+        guard let function = resolveKagemushaV2Symbol(
+            "connect_norito_kagemusha_request_authorization_finalize_ios_app_attest_v2",
+            as: KagemushaV2TwoArchiveThreeOutFn.self
+        ), let freeFunction = resolveKagemushaV2Symbol(
+            "connect_norito_free",
+            as: KagemushaV2FreeFn.self
+        ) else {
+            return nil
+        }
+        var authorization: UnsafeMutablePointer<UInt8>?
+        var authorizationLength: CUnsignedLong = 0
+        var rawSignature: UnsafeMutablePointer<UInt8>?
+        var rawSignatureLength: CUnsignedLong = 0
+        var authenticatorData: UnsafeMutablePointer<UInt8>?
+        var authenticatorDataLength: CUnsignedLong = 0
+        let status = preparationArchive.withUnsafeBytes { preparationBuffer in
+            assertionObject.withUnsafeBytes { assertionBuffer in
+                function(
+                    preparationBuffer.bindMemory(to: UInt8.self).baseAddress,
+                    CUnsignedLong(preparationBuffer.count),
+                    assertionBuffer.bindMemory(to: UInt8.self).baseAddress,
+                    CUnsignedLong(assertionBuffer.count),
+                    &authorization,
+                    &authorizationLength,
+                    &rawSignature,
+                    &rawSignatureLength,
+                    &authenticatorData,
+                    &authenticatorDataLength
+                )
+            }
+        }
+        defer {
+            if let authorization { freeFunction(authorization) }
+            if let rawSignature { freeFunction(rawSignature) }
+            if let authenticatorData { freeFunction(authenticatorData) }
+        }
+        if let error = NativeBridgeError.fromStatus(status) {
+            throw error
+        }
+        guard let authorization,
+              authorizationLength > 0,
+              authorizationLength
+                <= CUnsignedLong(KagemushaRecursiveSpend.maximumPeerArchiveBytesV2),
+              let rawSignature,
+              rawSignatureLength == CUnsignedLong(KagemushaDeviceSignatureV2.rawByteCount),
+              let authenticatorData,
+              (37...KagemushaRecursiveSpend.maximumIosAppAttestAuthenticatorDataBytesV2)
+                .contains(Int(authenticatorDataLength)) else {
+            throw NativeBridgeError.kagemushaProve
+        }
+        return (
+            Data(bytes: authorization, count: Int(authorizationLength)),
+            Data(bytes: rawSignature, count: Int(rawSignatureLength)),
+            Data(bytes: authenticatorData, count: Int(authenticatorDataLength))
+        )
+        #else
+        return nil
+        #endif
     }
 
     func kagemushaReceiverAcknowledgementPayloadV2(

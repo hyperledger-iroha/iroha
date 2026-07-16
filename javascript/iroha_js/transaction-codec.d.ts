@@ -39,6 +39,18 @@ export interface BrowserTransferInput {
   chainDiscriminant?: BrowserTransactionUnsigned;
 }
 
+export interface BrowserInstructionTransactionInput {
+  chainId: string;
+  authority: string;
+  instructions: readonly object[];
+  metadata?: string | { readonly [key: string]: BrowserTransactionMetadataValue } | null;
+  creationTimeMs?: BrowserTransactionUnsigned;
+  ttlMs?: BrowserTransactionUnsigned | null;
+  nonce?: BrowserTransactionUnsigned | null;
+  networkPrefix?: BrowserTransactionUnsigned;
+  chainDiscriminant?: BrowserTransactionUnsigned;
+}
+
 export interface BrowserTransactionSignable {
   payloadBytes: BrowserTransactionBytes;
   payloadHashHex?: string;
@@ -84,6 +96,10 @@ export class BrowserTransactionCodecError extends TypeError {
 
 export function buildBrowserTransferPayload(input: BrowserTransferInput): Uint8Array;
 
+export function buildBrowserInstructionTransactionPayload(
+  input: BrowserInstructionTransactionInput,
+): Uint8Array;
+
 export function browserTransactionPayloadHashHex(
   payloadBytes: BrowserTransactionBytes,
 ): string;
@@ -93,7 +109,18 @@ export function validateBrowserTransferSignable(
   constraints?: BrowserTransactionSignableConstraints,
 ): Readonly<ValidatedBrowserTransactionSignable>;
 
+export function validateBrowserInstructionTransactionSignable(
+  signable: BrowserTransactionSignable,
+  constraints?: BrowserTransactionSignableConstraints,
+): Readonly<ValidatedBrowserTransactionSignable>;
+
 export function finalizeBrowserSignedTransaction(
+  signable: BrowserTransactionSignable,
+  signature: BrowserTransactionSignature,
+  signingPublicKey: BrowserTransactionBytes | string,
+): BrowserFinalizedSignedTransaction;
+
+export function finalizeBrowserInstructionTransaction(
   signable: BrowserTransactionSignable,
   signature: BrowserTransactionSignature,
   signingPublicKey: BrowserTransactionBytes | string,
@@ -105,7 +132,10 @@ export function browserSignedTransactionHashHex(
 
 export const browserTransactionCodec: Readonly<NexusTransactionCodec> & Readonly<{
   buildTransferPayload: typeof buildBrowserTransferPayload;
+  buildInstructionPayload: typeof buildBrowserInstructionTransactionPayload;
   payloadHashHex: typeof browserTransactionPayloadHashHex;
   finalizeSignedTransaction: typeof finalizeBrowserSignedTransaction;
+  finalizeInstructionTransaction: typeof finalizeBrowserInstructionTransaction;
   validateSignable: typeof validateBrowserTransferSignable;
+  validateInstructionSignable: typeof validateBrowserInstructionTransactionSignable;
 }>;

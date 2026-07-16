@@ -10,7 +10,7 @@ documentation = "https://docs.rs/ivm_abi"
 
 [dependencies]
 iroha_data_model = { path = "../iroha_data_model", default-features = false, features = ["transparent_api", "json", "governance"] }
-iroha_crypto = { path = "../iroha_crypto", features = ["rayon", "sm"] }
+iroha_crypto = { path = "../iroha_crypto", default-features = false, features = ["std", "json"] }
 norito = { path = "../norito" }
 
 [features]

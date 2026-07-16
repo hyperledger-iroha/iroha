@@ -1,4 +1,8 @@
+import { Buffer } from "buffer";
+
 import { NumericV1, NumericV1Error } from "./numericV1.js";
+import { browserSignedTransactionHashHex } from "./transactionCodec.js";
+import { buildCanonicalJsonRequest } from "./canonicalRequest.js";
 import {
   normalizeKagemushaAssetSelector,
   normalizeKagemushaOperationId,
@@ -11,6 +15,17 @@ import {
 } from "./kagemushaOffline.js";
 
 const DEFAULT_SUCCESS_STATUSES = [200];
+const PIPELINE_SUCCESS_STATUS = "Applied";
+const PIPELINE_STATUS_VALUES = new Set([
+  "Queued",
+  "Approved",
+  "Committed",
+  PIPELINE_SUCCESS_STATUS,
+  "Rejected",
+  "Expired",
+]);
+const PIPELINE_FAILURE_STATUSES = new Set(["Rejected", "Expired"]);
+const HASH_LITERAL_PATTERN = /^hash:([0-9A-F]{64})#([0-9A-F]{4})$/u;
 const MULTISIG_PROPOSAL_STATUS_VALUES = new Set([
   "COLLECTING_SIGNATURES",
   "FINALIZED",
@@ -69,6 +84,261 @@ function requireNonEmptyString(value, context) {
     throw new TypeError(`${context} must not be empty`);
   }
   return trimmed;
+}
+
+function normalizeContractDeploymentStateRequest(value) {
+  if (!isPlainObject(value)) {
+    throw new TypeError("contract deployment-state request must be a plain object");
+  }
+  const keys = Object.keys(value).sort();
+  if (
+    keys.length !== 2 ||
+    keys[0] !== "authority" ||
+    keys[1] !== "contract_alias"
+  ) {
+    throw new TypeError(
+      "contract deployment-state request requires exactly authority and contract_alias",
+    );
+  }
+  const authority = requireNonEmptyString(
+    value.authority,
+    "contract deployment-state authority",
+  );
+  const contractAlias = requireNonEmptyString(
+    value.contract_alias,
+    "contract deployment-state contract_alias",
+  );
+  if (authority !== value.authority || contractAlias !== value.contract_alias) {
+    throw new TypeError("contract deployment-state identifiers must be exact strings");
+  }
+  return {
+    authority,
+    contract_alias: contractAlias,
+  };
+}
+
+function requireCanonicalDecimalString(value, context, { positive = false } = {}) {
+  if (typeof value !== "string" || !/^(?:0|[1-9]\d*)$/u.test(value)) {
+    throw new TypeError(`${context} must be a canonical decimal string`);
+  }
+  if (positive && value === "0") {
+    throw new TypeError(`${context} must be positive`);
+  }
+  return value;
+}
+
+function normalizeContractDeploymentStateResponse(value, request) {
+  if (!isPlainObject(value)) {
+    throw new TypeError("contract deployment-state response must be a plain object");
+  }
+  const fields = [
+    "authority",
+    "contract_alias",
+    "deploy_nonce",
+    "dataspace_alias",
+    "dataspace_id",
+    "previous_contract_address",
+    "observed_block_height",
+    "observed_block_hash",
+    "ledger_time_ms",
+    "chain_discriminant",
+  ];
+  const keys = Object.keys(value).sort();
+  if (keys.length !== fields.length || keys.some((key) => !fields.includes(key))) {
+    throw new TypeError(
+      "contract deployment-state response has missing or unsupported fields",
+    );
+  }
+  if (value.authority !== request.authority) {
+    throw new Error("contract deployment-state response authority mismatch");
+  }
+  if (value.contract_alias !== request.contract_alias) {
+    throw new Error("contract deployment-state response alias mismatch");
+  }
+  const dataspaceAlias = requireNonEmptyString(
+    value.dataspace_alias,
+    "contract deployment-state response dataspace_alias",
+  );
+  if (dataspaceAlias !== value.dataspace_alias) {
+    throw new TypeError(
+      "contract deployment-state response dataspace_alias must be exact",
+    );
+  }
+  const observedBlockHash = requireNonEmptyString(
+    value.observed_block_hash,
+    "contract deployment-state response observed_block_hash",
+  );
+  const hashMatch = HASH_LITERAL_PATTERN.exec(observedBlockHash);
+  if (hashMatch === null || hashLiteralCrc16(hashMatch[1]) !== hashMatch[2]) {
+    throw new TypeError(
+      "contract deployment-state response observed_block_hash must be canonical",
+    );
+  }
+  const previous = value.previous_contract_address;
+  if (previous !== null) {
+    const exactPrevious = requireNonEmptyString(
+      previous,
+      "contract deployment-state response previous_contract_address",
+    );
+    if (exactPrevious !== previous) {
+      throw new TypeError(
+        "contract deployment-state response previous_contract_address must be exact",
+      );
+    }
+  }
+  const chainDiscriminant = requireCanonicalDecimalString(
+    value.chain_discriminant,
+    "contract deployment-state response chain_discriminant",
+  );
+  if (BigInt(chainDiscriminant) > 0xffffn) {
+    throw new RangeError(
+      "contract deployment-state response chain_discriminant exceeds u16",
+    );
+  }
+  return Object.freeze({
+    authority: value.authority,
+    contract_alias: value.contract_alias,
+    deploy_nonce: requireCanonicalDecimalString(
+      value.deploy_nonce,
+      "contract deployment-state response deploy_nonce",
+    ),
+    dataspace_alias: dataspaceAlias,
+    dataspace_id: requireCanonicalDecimalString(
+      value.dataspace_id,
+      "contract deployment-state response dataspace_id",
+    ),
+    previous_contract_address: previous,
+    observed_block_height: requireCanonicalDecimalString(
+      value.observed_block_height,
+      "contract deployment-state response observed_block_height",
+      { positive: true },
+    ),
+    observed_block_hash: observedBlockHash,
+    ledger_time_ms: requireCanonicalDecimalString(
+      value.ledger_time_ms,
+      "contract deployment-state response ledger_time_ms",
+    ),
+    chain_discriminant: chainDiscriminant,
+  });
+}
+
+function requireExactHashHex(value, context) {
+  if (typeof value !== "string" || !/^[0-9a-fA-F]{64}$/u.test(value)) {
+    throw new TypeError(`${context} must be an exact 32-byte hexadecimal string`);
+  }
+  return value.toLowerCase();
+}
+
+function hashLiteralCrc16(body) {
+  let crc = 0xffff;
+  for (const byte of Buffer.from(`hash:${body}`, "utf8")) {
+    crc ^= (byte & 0xff) << 8;
+    for (let bit = 0; bit < 8; bit += 1) {
+      crc =
+        (crc & 0x8000) !== 0
+          ? ((crc << 1) ^ 0x1021) & 0xffff
+          : (crc << 1) & 0xffff;
+    }
+  }
+  return crc.toString(16).toUpperCase().padStart(4, "0");
+}
+
+function requireMatchingReceiptHashHeader(response, name, expectedHash) {
+  const literal = response.headers.get(name);
+  if (literal === null) return;
+  const match = HASH_LITERAL_PATTERN.exec(literal);
+  if (match === null || hashLiteralCrc16(match[1]) !== match[2]) {
+    throw new Error(`${name} must be a canonical Iroha hash literal`);
+  }
+  if (match[1].toLowerCase() !== expectedHash) {
+    throw new Error(`${name} does not match the locally signed transaction`);
+  }
+}
+
+function requireTransactionBytes(value, context) {
+  let bytes;
+  if (value instanceof Uint8Array) {
+    bytes = new Uint8Array(value);
+  } else if (ArrayBuffer.isView(value)) {
+    bytes = new Uint8Array(
+      value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength),
+    );
+  } else if (value instanceof ArrayBuffer) {
+    bytes = new Uint8Array(value.slice(0));
+  } else {
+    throw new TypeError(`${context} must be transaction bytes`);
+  }
+  if (bytes.length < 2 || bytes[0] !== 1) {
+    throw new TypeError(
+      `${context} must be an exact version-1 signed transaction payload`,
+    );
+  }
+  return bytes;
+}
+
+function requireGlobalPipelineStatusEnvelope(value, requestedHash, context) {
+  if (!isPlainObject(value)) {
+    throw new TypeError(`${context} must be a pipeline status object`);
+  }
+  const hash = requireExactHashHex(value.hash, `${context}.hash`);
+  if (hash !== requestedHash) {
+    throw new Error(`${context}.hash does not match the requested transaction`);
+  }
+  if (value.scope !== "global") {
+    throw new Error(`${context}.scope must be global`);
+  }
+  if (!isPlainObject(value.status) || typeof value.status.kind !== "string") {
+    throw new TypeError(`${context}.status.kind must be a string`);
+  }
+  if (!PIPELINE_STATUS_VALUES.has(value.status.kind)) {
+    throw new Error(`${context}.status.kind is not a current pipeline status`);
+  }
+  return value.status.kind;
+}
+
+function requirePersistedAppliedStatus(value, requestedHash, context) {
+  const kind = requireGlobalPipelineStatusEnvelope(value, requestedHash, context);
+  if (kind !== PIPELINE_SUCCESS_STATUS) {
+    return kind;
+  }
+  if (value.resolved_from !== "state") {
+    throw new Error(`${context}.resolved_from must be state for Applied finality`);
+  }
+  const blockHeight = value.status.block_height;
+  if (!Number.isSafeInteger(blockHeight) || blockHeight < 1) {
+    throw new Error(`${context}.status.block_height must be a positive safe integer`);
+  }
+  return kind;
+}
+
+function abortError() {
+  if (typeof DOMException === "function") {
+    return new DOMException("The operation was aborted", "AbortError");
+  }
+  const error = new Error("The operation was aborted");
+  error.name = "AbortError";
+  return error;
+}
+
+function throwIfAborted(signal) {
+  if (signal?.aborted) throw signal.reason ?? abortError();
+}
+
+function delayWithSignal(milliseconds, signal) {
+  throwIfAborted(signal);
+  if (milliseconds === 0) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, milliseconds);
+    const onAbort = () => {
+      clearTimeout(timeout);
+      signal?.removeEventListener("abort", onAbort);
+      reject(signal.reason ?? abortError());
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
 }
 
 function requireCanonicalQuantity(value, context) {
@@ -636,6 +906,233 @@ export class ToriiBrowserClient {
     }
     const text = await response.text();
     return text ? jsonParser(text) : null;
+  }
+
+  /** Submit exact locally signed version-1 transaction bytes to the pipeline. */
+  submitTransaction(signedTransaction, options = {}) {
+    const opts = requireObject(options, "submitTransaction options");
+    const body = requireTransactionBytes(
+      signedTransaction,
+      "submitTransaction signedTransaction",
+    );
+    const expectedHash = browserSignedTransactionHashHex(body);
+    return this._json("POST", "/v1/pipeline/transactions", {
+      rawBody: body,
+      contentType: "application/x-norito",
+      headers: {
+        Accept: "application/json",
+        ...(opts.headers ?? {}),
+      },
+      signal: signalFrom(opts),
+      successStatuses: opts.successStatuses ?? [200, 201, 202, 204],
+      responseObserver: (response) => {
+        for (const name of [
+          "x-iroha-entrypoint-hash",
+          "x-iroha-transaction-hash",
+          "x-iroha-signed-transaction-hash",
+        ]) {
+          requireMatchingReceiptHashHeader(response, name, expectedHash);
+        }
+      },
+    });
+  }
+
+  /** Fetch one exact pipeline status by transaction hash. */
+  async getTransactionStatus(hashHex, options = {}) {
+    const opts = requireObject(options, "getTransactionStatus options");
+    const hash = requireExactHashHex(hashHex, "getTransactionStatus hashHex");
+    try {
+      return await this._json("GET", "/v1/pipeline/transactions/status", {
+        params: {
+          hash,
+          scope: opts.scope ?? "global",
+        },
+        headers: opts.headers,
+        signal: signalFrom(opts),
+        successStatuses: [200],
+      });
+    } catch (error) {
+      if (error instanceof ToriiBrowserHttpError && error.status === 404) {
+        return null;
+      }
+      throw error;
+    }
+  }
+
+  /** Poll until global chain state proves the exact transaction was applied. */
+  async waitForTransactionStatus(hashHex, options = {}) {
+    const opts = requireObject(options, "waitForTransactionStatus options");
+    const hash = requireExactHashHex(hashHex, "waitForTransactionStatus hashHex");
+    if (opts.scope !== undefined && opts.scope !== "global") {
+      throw new TypeError(
+        "waitForTransactionStatus.scope must be global for persisted finality",
+      );
+    }
+    const intervalMs = normalizeOffset(
+      opts.intervalMs,
+      "waitForTransactionStatus.intervalMs",
+      250,
+    );
+    const timeoutMs = normalizePositiveInteger(
+      opts.timeoutMs,
+      "waitForTransactionStatus.timeoutMs",
+      60_000,
+    );
+    const maxAttempts = normalizePositiveInteger(
+      opts.maxAttempts,
+      "waitForTransactionStatus.maxAttempts",
+      Math.max(1, Math.ceil(timeoutMs / Math.max(1, intervalMs))),
+    );
+    const signal = signalFrom(opts);
+    const deadline = Date.now() + timeoutMs;
+    let lastStatus = null;
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      throwIfAborted(signal);
+      lastStatus = await this.getTransactionStatus(hash, {
+        signal,
+        scope: opts.scope ?? "global",
+        headers: opts.headers,
+      });
+      if (lastStatus === null) {
+        if (attempt >= maxAttempts || Date.now() >= deadline) break;
+        await delayWithSignal(
+          Math.min(intervalMs, Math.max(0, deadline - Date.now())),
+          signal,
+        );
+        continue;
+      }
+      const kind = requirePersistedAppliedStatus(
+        lastStatus,
+        hash,
+        "pipeline transaction status",
+      );
+      if (kind === PIPELINE_SUCCESS_STATUS) return lastStatus;
+      if (PIPELINE_FAILURE_STATUSES.has(kind)) {
+        const error = new Error(
+          `Transaction ${hash} reached terminal ${kind} status`,
+        );
+        error.name = "ToriiBrowserTransactionStatusError";
+        error.hashHex = hash;
+        error.status = kind;
+        error.payload = lastStatus;
+        throw error;
+      }
+      if (attempt >= maxAttempts || Date.now() >= deadline) break;
+      await delayWithSignal(Math.min(intervalMs, Math.max(0, deadline - Date.now())), signal);
+    }
+    const error = new Error(
+      `Transaction ${hash} did not reach persisted Applied status within ${timeoutMs}ms`,
+    );
+    error.name = "ToriiBrowserTransactionTimeoutError";
+    error.hashHex = hash;
+    error.payload = lastStatus;
+    throw error;
+  }
+
+  /** Submit exact locally signed bytes and wait for persisted Applied finality. */
+  async submitTransactionAndWait(signedTransaction, options = {}) {
+    const opts = requireObject(options, "submitTransactionAndWait options");
+    const body = requireTransactionBytes(
+      signedTransaction,
+      "submitTransactionAndWait signedTransaction",
+    );
+    const hashHex = browserSignedTransactionHashHex(body);
+    if (opts.hashHex !== undefined) {
+      const assertedHash = requireExactHashHex(
+        opts.hashHex,
+        "submitTransactionAndWait options.hashHex",
+      );
+      if (assertedHash !== hashHex) {
+        throw new Error(
+          "submitTransactionAndWait options.hashHex does not match signedTransaction",
+        );
+      }
+    }
+    await this.submitTransaction(body, {
+      signal: signalFrom(opts),
+      headers: opts.headers,
+    });
+    return this.waitForTransactionStatus(hashHex, opts);
+  }
+
+  /** Read the node compatibility advert before constructing deployment bytes. */
+  getNodeCapabilities(options = {}) {
+    const opts = requireObject(options, "getNodeCapabilities options");
+    return this._json("GET", "/v1/node/capabilities", {
+      headers: opts.headers,
+      signal: signalFrom(opts),
+      successStatuses: opts.successStatuses ?? [200],
+    });
+  }
+
+  /** Resolve a contract alias; caller-supplied canonical signing headers are preserved. */
+  resolveContractAlias(contractAlias, options = {}) {
+    const opts = requireObject(options, "resolveContractAlias options");
+    return this._json("POST", "/v1/contracts/aliases/resolve", {
+      body: {
+        contract_alias: requireNonEmptyString(
+          contractAlias,
+          "resolveContractAlias contractAlias",
+        ),
+      },
+      headers: opts.headers,
+      signal: signalFrom(opts),
+      successStatuses: opts.successStatuses ?? [200],
+    });
+  }
+
+  /** Read the exact one-view deployment CAS state through canonical app auth. */
+  async getContractDeploymentState(request, options = {}) {
+    const body = normalizeContractDeploymentStateRequest(request);
+    const opts = requireObject(options, "getContractDeploymentState options");
+    if (opts.sign !== undefined) {
+      if (typeof opts.sign !== "function") {
+        throw new TypeError("getContractDeploymentState options.sign must be a function");
+      }
+      const signed = await buildCanonicalJsonRequest({
+        accountId: requireNonEmptyString(
+          opts.authAccountId,
+          "getContractDeploymentState options.authAccountId",
+        ),
+        method: "POST",
+        path: "/v1/contracts/deployment-state",
+        baseUrl: this.baseUrl,
+        body,
+        headers: opts.headers,
+        sign: opts.sign,
+        timestampMs: opts.timestampMs,
+        nonce: opts.nonce,
+      });
+      const response = await this._json("POST", "/v1/contracts/deployment-state", {
+        rawBody: signed.body,
+        contentType: "application/json",
+        headers: signed.headers,
+        signal: signalFrom(opts),
+        successStatuses: opts.successStatuses ?? [200],
+      });
+      return normalizeContractDeploymentStateResponse(response, body);
+    }
+    const response = await this._json("POST", "/v1/contracts/deployment-state", {
+      body,
+      headers: opts.headers,
+      signal: signalFrom(opts),
+      successStatuses: opts.successStatuses ?? [200],
+    });
+    return normalizeContractDeploymentStateResponse(response, body);
+  }
+
+  /** Read exact account state; caller-supplied canonical signing headers are preserved. */
+  getAccount(accountId, options = {}) {
+    const opts = requireObject(options, "getAccount options");
+    return this._json(
+      "GET",
+      `/v1/accounts/${encodeURIComponent(requireNonEmptyString(accountId, "accountId"))}`,
+      {
+        headers: opts.headers,
+        signal: signalFrom(opts),
+        successStatuses: opts.successStatuses ?? [200],
+      },
+    );
   }
 
   listExplorerAccounts(options = {}) {

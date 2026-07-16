@@ -157,33 +157,20 @@ pub mod isi {
         policy.contains_guardian(authority)
     }
 
-    fn ensure_recovery_request_targets_current_lineage(
+    pub(super) fn ensure_recovery_request_targets_current_lineage(
         state_transaction: &StateTransaction<'_, '_>,
         request: &AccountRecoveryRequest,
         current_account: &AccountId,
     ) -> Result<(), Error> {
-        let record = state_transaction
-            .world
-            .account_rekey_records
-            .get(&request.alias)
-            .ok_or_else(|| {
-                invalid_account_recovery(format!(
-                    "account recovery alias `{:#?}` no longer has a continuity record",
-                    request.alias
-                ))
-            })?;
-
-        if &record.active_account_id != current_account {
-            return Err(invalid_account_recovery(format!(
-                "account recovery alias `{:#?}` no longer points to the expected active account",
-                request.alias
-            )));
-        }
-
-        if record.active_account_id != request.active_account_id_at_proposal
-            && !record
-                .previous_account_ids
-                .contains(&request.active_account_id_at_proposal)
+        if crate::sns::resolve_active_account_id_rekey_lineage_for_alias(
+            &state_transaction.world,
+            &state_transaction.nexus.dataspace_catalog,
+            &request.alias,
+            &request.active_account_id_at_proposal,
+            state_transaction.block_unix_timestamp_ms(),
+        )
+        .as_ref()
+            != Some(current_account)
         {
             return Err(invalid_account_recovery(format!(
                 "account recovery request for `{:#?}` no longer matches the active alias lineage",
@@ -1163,14 +1150,15 @@ pub mod query {
         request: &AccountRecoveryRequest,
         current_account: &AccountId,
     ) -> bool {
-        let Some(record) = state_ro.world().account_rekey_records().get(&request.alias) else {
-            return false;
-        };
-        &record.active_account_id == current_account
-            && (record.active_account_id == request.active_account_id_at_proposal
-                || record
-                    .previous_account_ids
-                    .contains(&request.active_account_id_at_proposal))
+        crate::sns::resolve_active_account_id_rekey_lineage_for_alias(
+            state_ro.world(),
+            &state_ro.nexus().dataspace_catalog,
+            &request.alias,
+            &request.active_account_id_at_proposal,
+            latest_ledger_time_ms(state_ro),
+        )
+        .as_ref()
+            == Some(current_account)
     }
 
     #[cfg(test)]
@@ -2016,6 +2004,7 @@ pub mod query {
         use iroha_primitives::json::Json;
         use iroha_test_samples::{ALICE_ID, gen_account_in};
 
+        use super::super::isi::ensure_recovery_request_targets_current_lineage;
         use super::*;
         use crate::{
             block::ValidBlock,
@@ -2467,6 +2456,77 @@ pub mod query {
             .execute(&guardian_id, &mut stx)
             .expect_err("finalized request must not be replayable");
             assert_smart_contract_error_contains(err, "is not pending");
+        }
+
+        #[test]
+        fn recovery_lineage_accepts_only_explicit_account_id_rekey_suffix() {
+            use iroha_data_model::account::rekey::AccountRekeyRecord;
+
+            let state = new_state_with_authority();
+            let active = checked_account_id();
+            let retired = checked_account_id();
+            let alias = root_alias("typed-recovery-lineage");
+            let replacement = checked_keypair();
+            let mut block = state.block(new_block_header(1, 50));
+            let mut stx = block.transaction();
+            register_labeled_account(&mut stx, &ALICE_ID, &active, &alias);
+            seed_account_alias_lease(&mut stx, &active, &alias);
+
+            let canonical = AccountRekeyRecord::new(alias.clone(), retired.clone())
+                .repoint_for_account_id_rekey(active.clone())
+                .expect("canonical account-id rekey fixture");
+            stx.world
+                .account_rekey_records
+                .insert(alias.clone(), canonical.clone());
+            let request = AccountRecoveryRequest::new(
+                alias.clone(),
+                retired.clone(),
+                AccountController::single(replacement.public_key().clone()),
+                active.clone(),
+                60,
+            );
+
+            ensure_recovery_request_targets_current_lineage(&stx, &request, &active)
+                .expect("explicit retired account-id rekey must preserve recovery continuity");
+            assert!(recovery_request_matches_current_lineage(
+                &stx, &request, &active
+            ));
+
+            stx.world.account_rekey_records.insert(
+                alias.clone(),
+                AccountRekeyRecord::new(alias.clone(), retired.clone())
+                    .reassign_alias_to_account(active.clone())
+                    .expect("alias reassignment fixture"),
+            );
+            assert!(
+                ensure_recovery_request_targets_current_lineage(&stx, &request, &active).is_err(),
+                "ordinary alias reassignment must not preserve a prior owner's recovery request"
+            );
+            assert!(!recovery_request_matches_current_lineage(
+                &stx, &request, &active
+            ));
+
+            let mut legacy = canonical;
+            legacy.transition_provenance.clear();
+            stx.world
+                .account_rekey_records
+                .insert(alias.clone(), legacy);
+            assert!(
+                ensure_recovery_request_targets_current_lineage(&stx, &request, &active).is_err(),
+                "legacy unspecified history must remain non-authorizing"
+            );
+
+            let current_request = AccountRecoveryRequest::new(
+                alias.clone(),
+                active.clone(),
+                AccountController::single(checked_keypair().public_key().clone()),
+                active.clone(),
+                60,
+            );
+            assert!(
+                recovery_request_matches_current_lineage(&stx, &current_request, &active),
+                "the exact currently active account remains its own recovery lineage"
+            );
         }
 
         #[test]

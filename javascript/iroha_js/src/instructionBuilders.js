@@ -12203,6 +12203,226 @@ export function buildRegisterSmartContractBytesInstruction(options) {
   };
 }
 
+const SMART_CONTRACT_CODE_CHUNK_BYTES = 65_536;
+const U64_MAX_VALUE = 0xffff_ffff_ffff_ffffn;
+
+function normalizeSmartContractU64(value, name) {
+  let normalized;
+  if (typeof value === "bigint") {
+    normalized = value;
+  } else if (typeof value === "number") {
+    if (!Number.isSafeInteger(value)) {
+      fail(
+        ValidationErrorCode.INVALID_NUMERIC,
+        `${name} must be a safe unsigned integer, bigint, or canonical decimal string`,
+        name,
+      );
+    }
+    normalized = BigInt(value);
+  } else if (typeof value === "string" && /^(?:0|[1-9]\d*)$/u.test(value)) {
+    normalized = BigInt(value);
+  } else {
+    fail(
+      ValidationErrorCode.INVALID_NUMERIC,
+      `${name} must be an unsigned integer, bigint, or canonical decimal string`,
+      name,
+    );
+  }
+  if (normalized < 0n || normalized > U64_MAX_VALUE) {
+    fail(
+      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      `${name} must fit in an unsigned 64-bit integer`,
+      name,
+    );
+  }
+  return normalized.toString();
+}
+
+function normalizeSmartContractExactString(value, name) {
+  const literal = assertString(value, name);
+  if (literal.length === 0 || literal.trim() !== literal || /[\u0000-\u001F\u007F]/u.test(literal)) {
+    fail(
+      ValidationErrorCode.INVALID_STRING,
+      `${name} must be a non-empty exact string without control characters`,
+      name,
+    );
+  }
+  return literal;
+}
+
+function normalizeSmartContractChunk(value, name) {
+  let buffer;
+  if (typeof value === "string") {
+    const canonical = normalizeBase64(value, name);
+    buffer = Buffer.from(canonical, "base64");
+  } else {
+    buffer = toBinaryBuffer(value, name);
+  }
+  if (buffer.length === 0 || buffer.length > SMART_CONTRACT_CODE_CHUNK_BYTES) {
+    fail(
+      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      `${name} must contain 1..=${SMART_CONTRACT_CODE_CHUNK_BYTES} bytes`,
+      name,
+    );
+  }
+  return buffer.toString("base64");
+}
+
+/**
+ * Build one bounded `UploadSmartContractCodeChunk` instruction.
+ * @param {{codeHash: string|Buffer, totalSize: number|bigint|string, chunkIndex: number, chunkCount: number, chunk: ArrayBufferView|ArrayBuffer|Buffer|string}} options
+ */
+export function buildUploadSmartContractCodeChunkInstruction(options) {
+  const source = assertPlainObject(options, "uploadSmartContractCodeChunk");
+  const totalSize = normalizeSmartContractU64(
+    source.totalSize ?? source.total_size,
+    "uploadSmartContractCodeChunk.totalSize",
+  );
+  const chunkIndex = normalizeU32(
+    source.chunkIndex ?? source.chunk_index,
+    "uploadSmartContractCodeChunk.chunkIndex",
+  );
+  const chunkCount = normalizePositiveU32(
+    source.chunkCount ?? source.chunk_count,
+    "uploadSmartContractCodeChunk.chunkCount",
+  );
+  if (chunkIndex >= chunkCount) {
+    fail(
+      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      "uploadSmartContractCodeChunk.chunkIndex must be less than chunkCount",
+      "uploadSmartContractCodeChunk.chunkIndex",
+    );
+  }
+  const chunk = normalizeSmartContractChunk(
+    source.chunk,
+    "uploadSmartContractCodeChunk.chunk",
+  );
+  const totalSizeBigInt = BigInt(totalSize);
+  const expectedChunkCount =
+    (totalSizeBigInt + BigInt(SMART_CONTRACT_CODE_CHUNK_BYTES) - 1n) /
+    BigInt(SMART_CONTRACT_CODE_CHUNK_BYTES);
+  if (totalSizeBigInt === 0n || expectedChunkCount !== BigInt(chunkCount)) {
+    fail(
+      ValidationErrorCode.INVALID_NUMERIC,
+      "uploadSmartContractCodeChunk.chunkCount must equal ceil(totalSize / 65536)",
+      "uploadSmartContractCodeChunk.chunkCount",
+    );
+  }
+  const chunkBytes = Buffer.from(chunk, "base64").length;
+  const expectedChunkBytes =
+    chunkIndex + 1 === chunkCount
+      ? Number(totalSizeBigInt - BigInt(chunkIndex) * BigInt(SMART_CONTRACT_CODE_CHUNK_BYTES))
+      : SMART_CONTRACT_CODE_CHUNK_BYTES;
+  if (chunkBytes !== expectedChunkBytes) {
+    fail(
+      ValidationErrorCode.INVALID_NUMERIC,
+      `uploadSmartContractCodeChunk.chunk must contain exactly ${expectedChunkBytes} bytes for this descriptor`,
+      "uploadSmartContractCodeChunk.chunk",
+    );
+  }
+  return {
+    UploadSmartContractCodeChunk: {
+      code_hash: normalizeHash(
+        source.codeHash ?? source.code_hash,
+        "uploadSmartContractCodeChunk.codeHash",
+      ),
+      total_size: totalSize,
+      chunk_index: chunkIndex,
+      chunk_count: chunkCount,
+      chunk,
+    },
+  };
+}
+
+/** Build a `FinalizeSmartContractCodeUpload` instruction. */
+export function buildFinalizeSmartContractCodeUploadInstruction(options) {
+  const source = assertPlainObject(options, "finalizeSmartContractCodeUpload");
+  const totalSize = normalizeSmartContractU64(
+    source.totalSize ?? source.total_size,
+    "finalizeSmartContractCodeUpload.totalSize",
+  );
+  const chunkCount = normalizePositiveU32(
+    source.chunkCount ?? source.chunk_count,
+    "finalizeSmartContractCodeUpload.chunkCount",
+  );
+  const expectedChunkCount =
+    (BigInt(totalSize) + BigInt(SMART_CONTRACT_CODE_CHUNK_BYTES) - 1n) /
+    BigInt(SMART_CONTRACT_CODE_CHUNK_BYTES);
+  if (BigInt(totalSize) === 0n || expectedChunkCount !== BigInt(chunkCount)) {
+    fail(
+      ValidationErrorCode.INVALID_NUMERIC,
+      "finalizeSmartContractCodeUpload.chunkCount must equal ceil(totalSize / 65536)",
+      "finalizeSmartContractCodeUpload.chunkCount",
+    );
+  }
+  return {
+    FinalizeSmartContractCodeUpload: {
+      code_hash: normalizeHash(
+        source.codeHash ?? source.code_hash,
+        "finalizeSmartContractCodeUpload.codeHash",
+      ),
+      total_size: totalSize,
+      chunk_count: chunkCount,
+    },
+  };
+}
+
+/** Build an owner-scoped `CancelSmartContractCodeUpload` instruction. */
+export function buildCancelSmartContractCodeUploadInstruction(options) {
+  const source = assertPlainObject(options, "cancelSmartContractCodeUpload");
+  return {
+    CancelSmartContractCodeUpload: {
+      code_hash: normalizeHash(
+        source.codeHash ?? source.code_hash,
+        "cancelSmartContractCodeUpload.codeHash",
+      ),
+    },
+  };
+}
+
+/** Build the nonce- and alias-CAS guarded `CommitContractDeployment` instruction. */
+export function buildCommitContractDeploymentInstruction(options) {
+  const source = assertPlainObject(options, "commitContractDeployment");
+  const leaseExpiry = source.leaseExpiryMs ?? source.lease_expiry_ms;
+  const previousAddress =
+    source.expectedPreviousContractAddress ??
+    source.expected_previous_contract_address;
+  return {
+    CommitContractDeployment: {
+      expected_deploy_nonce: normalizeSmartContractU64(
+        source.expectedDeployNonce ?? source.expected_deploy_nonce,
+        "commitContractDeployment.expectedDeployNonce",
+      ),
+      contract_address: normalizeSmartContractExactString(
+        source.contractAddress ?? source.contract_address,
+        "commitContractDeployment.contractAddress",
+      ),
+      code_hash: normalizeHash(
+        source.codeHash ?? source.code_hash,
+        "commitContractDeployment.codeHash",
+      ),
+      contract_alias: normalizeSmartContractExactString(
+        source.contractAlias ?? source.contract_alias,
+        "commitContractDeployment.contractAlias",
+      ),
+      lease_expiry_ms:
+        leaseExpiry === undefined || leaseExpiry === null
+          ? null
+          : normalizeSmartContractU64(
+              leaseExpiry,
+              "commitContractDeployment.leaseExpiryMs",
+            ),
+      expected_previous_contract_address:
+        previousAddress === undefined || previousAddress === null
+          ? null
+          : normalizeSmartContractExactString(
+              previousAddress,
+              "commitContractDeployment.expectedPreviousContractAddress",
+            ),
+    },
+  };
+}
+
 /**
  * Build a `RemoveSmartContractBytes` instruction payload.
  * @param {{codeHash: string | Buffer, reason?: string | null}} options

@@ -39,6 +39,7 @@ use iroha_data_model::{
         KAGEMUSHA_RECURSIVE_SPEND_CANDIDATE_SCHEMA_V4,
         KAGEMUSHA_RECURSIVE_SPEND_CANDIDATE_VERSION_V4,
         KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_FILE_NAME_V1,
+        KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_MAX_BYTES_V4,
         KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4,
         KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4,
         KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V4,
@@ -65,10 +66,10 @@ use iroha_data_model::{
         KagemushaPastaCycleArtifactKindV4, KagemushaPastaCycleArtifactV4,
         KagemushaPastaCycleFramedArtifactHeaderV4, KagemushaPastaCycleParityV1,
         KagemushaPastaCycleProofProfileV4, KagemushaRecursiveSpendArtifactManifestV4,
-        KagemushaRecursiveSpendCandidateV4, KagemushaRecursiveSpendPromotedReleaseV4,
-        KagemushaRecursiveSpendReleaseAttestationV4, KagemushaRecursiveSpendReleasePolicyV1,
-        KagemushaStepCircuitParamsV4, KagemushaTopUpFinalityRosterArtifactReferenceV4,
-        KagemushaTopUpFinalityRosterArtifactV2,
+        KagemushaRecursiveSpendCandidateV4, KagemushaRecursiveSpendCryptographicReviewEvidenceV4,
+        KagemushaRecursiveSpendPromotedReleaseV4, KagemushaRecursiveSpendReleaseAttestationV4,
+        KagemushaRecursiveSpendReleasePolicyV1, KagemushaStepCircuitParamsV4,
+        KagemushaTopUpFinalityRosterArtifactReferenceV4, KagemushaTopUpFinalityRosterArtifactV2,
     },
 };
 use norito::{JsonDeserialize, JsonSerialize};
@@ -111,7 +112,9 @@ clean, pre-evidence candidate record; that directory is not an approved release
 and contains no approval payload. Candidate generation requires the requested
 commit to be the clean, signed checkout HEAD. Finalization binds the two supplied
 evidence files into the release manifest, verifies signed attestation thresholds,
-requires that same clean, signed candidate checkout, rechecks every staged
+requires canonical signed Norito cryptographic-review evidence bound to the exact
+candidate and policy reviewer identities, requires that same clean, signed
+candidate checkout, rechecks every staged
 inode/size/hash, and copies those exact bytes without keygen or proof generation.
 Both output directories must be new.
 ";
@@ -1624,10 +1627,15 @@ fn finalize_release(options: &BTreeMap<String, String>) -> Result<(), Box<dyn Er
         let benchmark_bytes = benchmark_input.read_all()?;
         let mut review_input = open_input(
             Path::new(required(options, "cryptographic-review")),
-            evidence_maximum,
-            "V4 cryptographic review evidence",
+            u64::try_from(KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_MAX_BYTES_V4)?,
+            "canonical signed V4 cryptographic review evidence",
         )?;
         let review_bytes = review_input.read_all()?;
+        KagemushaRecursiveSpendCryptographicReviewEvidenceV4::validate_canonical_bytes_against_candidate(
+            &review_bytes,
+            &candidate_record,
+        )
+        .map_err(|error| format!("invalid signed V4 cryptographic review: {error}"))?;
 
         #[cfg(unix)]
         {

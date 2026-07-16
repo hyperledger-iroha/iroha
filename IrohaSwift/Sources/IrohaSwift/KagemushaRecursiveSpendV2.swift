@@ -1,6 +1,10 @@
 import CryptoKit
 import Foundation
 
+#if canImport(DeviceCheck)
+import DeviceCheck
+#endif
+
 #if canImport(Darwin)
 import Darwin
 #endif
@@ -11,6 +15,7 @@ public enum KagemushaRecursiveSpendError: Error, Equatable, LocalizedError {
     case nativeBridgeUnavailable
     case proofBackendUnavailable
     case finalityTrustUnavailable
+    case hardwareAssertionUnavailable
 
     public var errorDescription: String? {
         switch self {
@@ -24,6 +29,8 @@ public enum KagemushaRecursiveSpendError: Error, Equatable, LocalizedError {
             return "Kagemusha recursive spend V4 is unavailable until the ABI-20 proof backend is promoted."
         case .finalityTrustUnavailable:
             return "Kagemusha top-up finality is unavailable until the authenticated release trust root is wired and recursive init consumes its result."
+        case .hardwareAssertionUnavailable:
+            return "The requested physical hardware assertion service is unavailable on this device."
         }
     }
 }
@@ -146,6 +153,7 @@ public enum KagemushaRecursiveSpend {
     }
 
     public static let requiredNativeBridgeAbiVersion: UInt32 = 20
+    public static let authorizationPreparationVersionV2: UInt16 = 2
     public static let wireVersionV4: UInt16 = 4
     public static let localWitnessVersionV4: UInt16 = 4
     /// First-release maximum number of recursive parents consumed by one transition.
@@ -232,12 +240,18 @@ public enum KagemushaRecursiveSpend {
         "connect_norito_bridge::KagemushaRecursiveSpendVerifyLocalRequestV4"
     public static let redeemLocalRequestWireNameV4 =
         "connect_norito_bridge::KagemushaRecursiveSpendRedeemLocalRequestV4"
+    public static let redemptionChangePrepareRequestWireNameV4 =
+        "connect_norito_bridge::KagemushaRecursiveSpendRedemptionChangePrepareRequestV4"
+    public static let redemptionChangePrepareResultWireNameV4 =
+        "connect_norito_bridge::KagemushaRecursiveSpendRedemptionChangePrepareResultV4"
     public static let branchPathWireName = wire("KagemushaRecursiveSpendBranchPathV2")
     public static let branchClaimWireName = wire("KagemushaRecursiveSpendBranchClaimV2")
     public static let recipientRequestPayloadWireName =
         wire("KagemushaRecipientPaymentRequestSigningPayloadV2")
     public static let recipientRequestWireName = wire("KagemushaRecipientPaymentRequestV2")
     public static let authorizationWireName = wire("KagemushaRequestAuthorizationV2")
+    public static let authorizationPreparationWireName =
+        "connect_norito_bridge::KagemushaRequestAuthorizationPreparationV2"
     public static let artifactManifestWireName =
         wire("KagemushaRecursiveSpendArtifactManifestV4")
     public static let artifactBindingWireNameV4 =
@@ -323,6 +337,8 @@ public enum KagemushaRecursiveSpend {
              verifyLocalRequestWireNameV4,
              verifyResultWireNameV4,
              redeemLocalRequestWireNameV4,
+             redemptionChangePrepareRequestWireNameV4,
+             redemptionChangePrepareResultWireNameV4,
              redeemBuildResultWireNameV4,
              redeemUnsignedWireNameV4,
              redeemResultWireNameV4:
@@ -339,6 +355,7 @@ public enum KagemushaRecursiveSpend {
              outputMembershipPathsWireNameV4,
              outputMembershipFrontierWireNameV4,
              branchClaimWireName,
+             authorizationPreparationWireName,
              authorizationWireName,
              artifactBindingWireNameV4,
              artifactManifestWireName,
@@ -385,6 +402,10 @@ public enum KagemushaRecursiveSpend {
     public static let maximumPeerTextArchiveBytes =
         (maximumPeerTextEnvelopeBytes - peerTextDiscriminatorBytes) * 3 / 4
     public static let maximumPeerArchiveBytesV2 = 32 * 1024
+    /// Exact bridge ceiling for the CBOR object returned by App Attest.
+    public static let maximumIosAppAttestAssertionObjectBytesV2 = 8 * 1024
+    /// Exact protocol ceiling for App Attest authenticator data.
+    public static let maximumIosAppAttestAuthenticatorDataBytesV2 = 4 * 1024
     /// Consensus ceiling for one canonical recipient-only ABI-20 peer archive.
     /// Text and individual QR/APDU frames retain smaller independent bounds.
     public static let maximumPeerArchiveBytesV4 = 32 * 1024 * 1024
@@ -400,6 +421,7 @@ public enum KagemushaRecursiveSpend {
             + 64 * 1024
     public static let maximumOutputMembershipFrontierArchiveBytesV4 = 4 * 1024
     public static let maximumOutputMembershipPathsArchiveBytesV4 = 16 * 1024
+    public static let maximumRedemptionChangePreparationArchiveBytesV4 = 64 * 1024
     public static let maximumBranchClaims = 2
     public static let transitionTagBytes = 24
     public static let transitionTagDomain =
@@ -422,13 +444,17 @@ public enum KagemushaRecursiveSpend {
         "connect_norito_kagemusha_recursive_spend_topup_finalize_request_v4",
         "connect_norito_kagemusha_recursive_spend_redeem_unsigned_payload_digest_v4",
         "connect_norito_kagemusha_recursive_spend_redeem_finalize_request_v4",
+        "connect_norito_kagemusha_recursive_spend_redemption_change_prepare_v4",
+        "connect_norito_kagemusha_secret_free_buffer",
         "connect_norito_kagemusha_receiver_key_reference_v2",
         "connect_norito_kagemusha_recipient_output_derive_v2",
         "connect_norito_kagemusha_recipient_payment_request_signing_bytes_v2",
         "connect_norito_kagemusha_recipient_payment_request_create_v2",
         "connect_norito_kagemusha_recipient_payment_request_verify_v2",
-        "connect_norito_kagemusha_request_authorization_signing_bytes_v2",
         "connect_norito_kagemusha_request_authorization_create_v2",
+        "connect_norito_kagemusha_request_authorization_signing_bytes_v2",
+        "connect_norito_kagemusha_request_authorization_finalize_hardware_v2",
+        "connect_norito_kagemusha_request_authorization_finalize_ios_app_attest_v2",
         "connect_norito_kagemusha_receiver_acknowledgement_payload_v2",
         "connect_norito_kagemusha_receiver_acknowledgement_signing_bytes_v2",
         "connect_norito_kagemusha_receiver_acknowledgement_create_v2",
@@ -677,7 +703,7 @@ public struct KagemushaDeviceSignatureV2: Equatable, Hashable, Sendable {
     public let rawBytes: Data
 
     /// Parse a strict ASN.1 DER ECDSA signature and normalize it to the unique
-    /// low-S fixed-width protocol representation used by Secure Enclave.
+    /// low-S fixed-width representation used by the hardware-assertion wire protocol.
     public init(derBytes: Data) throws {
         guard let parsed = try? P256.Signing.ECDSASignature(
             derRepresentation: derBytes
@@ -813,16 +839,6 @@ public struct KagemushaNoteOpening: Equatable, Sendable {
 
     func noritoEncoded() throws -> Data {
         try KagemushaRecursiveSpendCodecs.encodeNoteOpening(self)
-    }
-
-    /// Create the only opening shape accepted by unshield-v3 for a private
-    /// partial-redemption change output.
-    public static func redemptionChange(spendKey: Data, rho: Data) throws -> Self {
-        try Self(
-            spendKey: spendKey,
-            rho: rho,
-            diversifier: ConfidentialOwnerTag.defaultDiversifier()
-        )
     }
 }
 
@@ -1314,108 +1330,377 @@ public struct KagemushaVerifiedRecipientPaymentRequest: Equatable, Sendable {
     }
 }
 
-/// Unsigned fields of the self-contained account/device authorization used by
-/// top-up and redemption. Private key material stays with the caller-provided
-/// signing closure and never enters this model.
+/// Exact online hardware assertion profile carried by a V2 authorization.
+///
+/// The discriminants are part of the local preparation ABI and must stay in
+/// lockstep with `KagemushaRequestAuthorizationPlatformV2` in the native
+/// bridge. There is intentionally no stringly-typed fallback variant.
+public enum KagemushaOnlineHardwareAssertionPlatform: UInt32, Equatable, Hashable, Sendable {
+    case androidKeyMint = 0
+    case iosAppAttest = 1
+
+    public var wireName: String {
+        switch self {
+        case .androidKeyMint:
+            return KagemushaDeviceAttestation.androidKeyMintPlatform
+        case .iosAppAttest:
+            return KagemushaDeviceAttestation.iosAppAttestPlatform
+        }
+    }
+}
+
+/// Canonical hardware assertion returned by the native authorization finalizer.
+/// Platform APIs emit strict ASN.1 DER; the native boundary converts that DER
+/// to the unique low-S `r || s` representation stored here and on the wire.
+public enum KagemushaOnlineHardwareAssertion: Equatable, Sendable {
+    case androidKeyMint(signature: KagemushaDeviceSignatureV2)
+    case iosAppAttest(
+        authenticatorData: Data,
+        signature: KagemushaDeviceSignatureV2
+    )
+
+    public var platform: KagemushaOnlineHardwareAssertionPlatform {
+        switch self {
+        case .androidKeyMint:
+            return .androidKeyMint
+        case .iosAppAttest:
+            return .iosAppAttest
+        }
+    }
+
+    public var signature: KagemushaDeviceSignatureV2 {
+        switch self {
+        case let .androidKeyMint(signature):
+            return signature
+        case let .iosAppAttest(_, signature):
+            return signature
+        }
+    }
+
+    public var authenticatorData: Data? {
+        switch self {
+        case .androidKeyMint:
+            return nil
+        case let .iosAppAttest(authenticatorData, _):
+            return Data(authenticatorData)
+        }
+    }
+}
+
+/// Unsigned public fields of the self-contained hardware authorization used by
+/// online top-up and redemption. Private keys, DER signatures, and App Attest
+/// assertion bytes are deliberately absent from this value.
 public struct KagemushaRequestAuthorizationFields: Equatable, Sendable {
     public let authority: String
     public let deviceID: String
+    public let assetDefinitionID: String
     public let operationID: Data
     public let issuedAtMilliseconds: UInt64
     public let expiresAtMilliseconds: UInt64
     public let nonce: Data
     public let payloadDigest: Data
-    public let appAttestEvidenceSHA256: Data?
-    public let appAttestEvidence: Data?
+    /// Canonical Iroha hash of the exact Norito registration admitted on-chain.
+    public let registrationHash: Data
+    public let platform: KagemushaOnlineHardwareAssertionPlatform
 
     public init(
         authority: String,
         deviceID: String,
+        assetDefinitionID: String,
         operationID: Data,
         issuedAtMilliseconds: UInt64,
         expiresAtMilliseconds: UInt64,
         nonce: Data,
         payloadDigest: Data,
-        appAttestEvidenceSHA256: Data? = nil,
-        appAttestEvidence: Data? = nil
+        registrationHash: Data,
+        platform: KagemushaOnlineHardwareAssertionPlatform
     ) throws {
         _ = try AccountAddress.parseEncoded(authority, expectedPrefix: 0x02F1)
         try KagemushaRecursiveSpend.requirePortableText(deviceID, field: "deviceID")
+        guard AssetDefinitionAddress.decode(assetDefinitionID) != nil else {
+            throw KagemushaRecursiveSpendError.invalidField("assetDefinitionID")
+        }
         try KagemushaRecursiveSpend.requireNonzeroFixed32(operationID, field: "operationID")
         try KagemushaRecursiveSpend.requireNonzeroFixed32(nonce, field: "nonce")
         try KagemushaRecursiveSpend.requireNonzeroFixed32(payloadDigest, field: "payloadDigest")
+        try KagemushaRecursiveSpend.requireNonzeroFixed32(
+            registrationHash,
+            field: "registrationHash"
+        )
         guard issuedAtMilliseconds > 0,
               expiresAtMilliseconds > issuedAtMilliseconds,
               expiresAtMilliseconds - issuedAtMilliseconds
                 <= KagemushaRecursiveSpend.maximumAuthorizationTTLMilliseconds else {
             throw KagemushaRecursiveSpendError.invalidField("authorization.expiry")
         }
-        switch (appAttestEvidenceSHA256, appAttestEvidence) {
-        case (nil, nil):
-            break
-        case let (.some(digest), .some(evidence)):
-            try KagemushaRecursiveSpend.requireNonzeroFixed32(
-                digest,
-                field: "appAttestEvidenceSHA256"
-            )
-            guard !evidence.isEmpty, evidence.count <= 16 * 1024 else {
-                throw KagemushaRecursiveSpendError.invalidField("appAttestEvidence")
-            }
-        default:
-            throw KagemushaRecursiveSpendError.invalidField("appAttestEvidence")
-        }
         self.authority = authority
         self.deviceID = deviceID
+        self.assetDefinitionID = assetDefinitionID
         self.operationID = Data(operationID)
         self.issuedAtMilliseconds = issuedAtMilliseconds
         self.expiresAtMilliseconds = expiresAtMilliseconds
         self.nonce = Data(nonce)
         self.payloadDigest = Data(payloadDigest)
-        self.appAttestEvidenceSHA256 = appAttestEvidenceSHA256.map { Data($0) }
-        self.appAttestEvidence = appAttestEvidence.map { Data($0) }
+        self.registrationHash = Data(registrationHash)
+        self.platform = platform
     }
 
-    public func signingBytes() throws -> Data {
-        let template = try KagemushaRecursiveSpendCodecs.encodeAuthorizationTemplate(self)
-        guard let bytes = try NoritoNativeBridge.shared
-            .kagemushaRequestAuthorizationSigningBytesV2(templateArchive: template) else {
+    /// Prepare the exact bytes supplied to the selected hardware API.
+    ///
+    /// Android signs `signingBytes` with KeyMint `SHA256withECDSA`. For iOS,
+    /// `signingBytes` is the 32-byte `clientDataHash` passed to
+    /// `DCAppAttestService.generateAssertion`.
+    public func prepare() throws -> KagemushaRequestAuthorizationPreparation {
+        let preparationArchive = try KagemushaRecursiveSpendCodecs
+            .encodeAuthorizationPreparation(self)
+        guard let signingBytes = try NoritoNativeBridge.shared
+            .kagemushaRequestAuthorizationSigningBytesV2(
+                preparationArchive: preparationArchive
+            ) else {
             throw KagemushaRecursiveSpendError.nativeBridgeUnavailable
         }
-        return bytes
+        return try KagemushaRequestAuthorizationPreparation(
+            fields: self,
+            preparationArchive: preparationArchive,
+            signingBytes: signingBytes
+        )
+    }
+}
+
+/// Opaque native-checked unsigned authorization retained across one hardware
+/// signing call. It is not a `KagemushaRequestAuthorizationV2` archive and can
+/// never be submitted as a signed authorization.
+public struct KagemushaRequestAuthorizationPreparation: Equatable, Sendable {
+    public let fields: KagemushaRequestAuthorizationFields
+    public let signingBytes: Data
+    let preparationArchive: Data
+
+    init(
+        fields: KagemushaRequestAuthorizationFields,
+        preparationArchive: Data,
+        signingBytes: Data
+    ) throws {
+        try KagemushaRecursiveSpend.requireArchive(
+            preparationArchive,
+            schema: KagemushaRecursiveSpend.authorizationPreparationWireName,
+            field: "authorizationPreparation"
+        )
+        guard !signingBytes.isEmpty,
+              signingBytes.count <= KagemushaRecursiveSpend.maximumPeerArchiveBytesV2,
+              fields.platform != .iosAppAttest || signingBytes.count == 32 else {
+            throw KagemushaRecursiveSpendError.invalidArchive(
+                "authorizationPreparation.signingBytes"
+            )
+        }
+        self.fields = fields
+        self.preparationArchive = Data(preparationArchive)
+        self.signingBytes = Data(signingBytes)
     }
 
-    public func signed(signature: Data) throws -> KagemushaRequestAuthorization {
-        let template = try KagemushaRecursiveSpendCodecs.encodeAuthorizationTemplate(self)
-        guard let archive = try NoritoNativeBridge.shared.kagemushaRequestAuthorizationCreateV2(
-            templateArchive: template,
-            signature: signature
-        ) else {
+    /// Finalize an Android KeyMint `SHA256withECDSA` result.
+    public func finalizeAndroidKeyMint(
+        derSignature: Data
+    ) throws -> KagemushaRequestAuthorization {
+        guard fields.platform == .androidKeyMint else {
+            throw KagemushaRecursiveSpendError.invalidField("authorization.platform")
+        }
+        return try finalize(authenticatorData: Data(), derSignature: derSignature)
+    }
+
+    /// Finalize the exact CBOR object returned by
+    /// `DCAppAttestService.generateAssertion`.
+    public func finalizeIosAppAttest(
+        assertionObject: Data
+    ) throws -> KagemushaRequestAuthorization {
+        guard fields.platform == .iosAppAttest else {
+            throw KagemushaRecursiveSpendError.invalidField("authorization.platform")
+        }
+        guard !assertionObject.isEmpty,
+              assertionObject.count
+                <= KagemushaRecursiveSpend.maximumIosAppAttestAssertionObjectBytesV2 else {
+            throw KagemushaRecursiveSpendError.invalidField(
+                "authorization.assertionObject"
+            )
+        }
+        guard let result = try NoritoNativeBridge.shared
+            .kagemushaRequestAuthorizationFinalizeIosAppAttestV2(
+                preparationArchive: preparationArchive,
+                assertionObject: assertionObject
+            ) else {
             throw KagemushaRecursiveSpendError.nativeBridgeUnavailable
+        }
+        try Self.validateIosAuthenticatorData(result.authenticatorData)
+        let nativeSignature = try KagemushaDeviceSignatureV2(
+            rawBytes: result.rawSignature
+        )
+        return try KagemushaRequestAuthorization(
+            fields: fields,
+            hardwareAssertion: .iosAppAttest(
+                authenticatorData: result.authenticatorData,
+                signature: nativeSignature
+            ),
+            archive: result.authorizationArchive
+        )
+    }
+
+    #if canImport(DeviceCheck)
+    /// Ask the physical App Attest service to sign this exact authorization
+    /// preparation, then finalize its returned CBOR assertion without allowing
+    /// the caller to substitute a different client-data hash.
+    @available(iOS 15.0, macOS 12.0, *)
+    public func authorizeWithIosAppAttest(
+        keyId: String,
+        service: DCAppAttestService = .shared
+    ) async throws -> KagemushaRequestAuthorization {
+        guard fields.platform == .iosAppAttest,
+              signingBytes.count == 32 else {
+            throw KagemushaRecursiveSpendError.invalidField(
+                "authorization.platform"
+            )
+        }
+        guard let decodedKeyId = Data(base64Encoded: keyId),
+              !decodedKeyId.isEmpty,
+              decodedKeyId.base64EncodedString() == keyId else {
+            throw KagemushaRecursiveSpendError.invalidField(
+                "authorization.appAttest.keyId"
+            )
+        }
+        guard service.isSupported else {
+            throw KagemushaRecursiveSpendError.hardwareAssertionUnavailable
+        }
+        let assertionObject: Data = try await withCheckedThrowingContinuation {
+            continuation in
+            service.generateAssertion(
+                keyId,
+                clientDataHash: signingBytes
+            ) { assertionObject, error in
+                if let error {
+                    continuation.resume(throwing: error)
+                } else if let assertionObject {
+                    continuation.resume(returning: assertionObject)
+                } else {
+                    continuation.resume(
+                        throwing: KagemushaRecursiveSpendError
+                            .hardwareAssertionUnavailable
+                    )
+                }
+            }
+        }
+        return try finalizeIosAppAttest(assertionObject: assertionObject)
+    }
+    #endif
+
+    /// Advanced finalization from already separated App Attest fields.
+    /// Prefer the assertion-object overload for normal `generateAssertion` use.
+    public func finalizeIosAppAttest(
+        authenticatorData: Data,
+        derSignature: Data
+    ) throws -> KagemushaRequestAuthorization {
+        guard fields.platform == .iosAppAttest else {
+            throw KagemushaRecursiveSpendError.invalidField("authorization.platform")
+        }
+        try Self.validateIosAuthenticatorData(authenticatorData)
+        return try finalize(
+            authenticatorData: authenticatorData,
+            derSignature: derSignature
+        )
+    }
+
+    private func finalize(
+        authenticatorData: Data,
+        derSignature: Data
+    ) throws -> KagemushaRequestAuthorization {
+        // Independently normalize DER in Swift, then require the native result
+        // to agree byte-for-byte. This catches ABI mix-ups without making Swift
+        // the authority that constructs the on-wire assertion.
+        let swiftSignature = try KagemushaDeviceSignatureV2(derBytes: derSignature)
+        guard let result = try NoritoNativeBridge.shared
+            .kagemushaRequestAuthorizationFinalizeHardwareV2(
+                preparationArchive: preparationArchive,
+                authenticatorData: authenticatorData,
+                derSignature: derSignature
+            ) else {
+            throw KagemushaRecursiveSpendError.nativeBridgeUnavailable
+        }
+        let nativeSignature = try KagemushaDeviceSignatureV2(
+            rawBytes: result.rawSignature
+        )
+        guard nativeSignature == swiftSignature else {
+            throw KagemushaRecursiveSpendError.invalidArchive(
+                "authorization.signature.normalization"
+            )
+        }
+        let assertion: KagemushaOnlineHardwareAssertion
+        switch fields.platform {
+        case .androidKeyMint:
+            guard authenticatorData.isEmpty else {
+                throw KagemushaRecursiveSpendError.invalidField(
+                    "authorization.authenticatorData"
+                )
+            }
+            assertion = .androidKeyMint(signature: nativeSignature)
+        case .iosAppAttest:
+            try Self.validateIosAuthenticatorData(authenticatorData)
+            assertion = .iosAppAttest(
+                authenticatorData: Data(authenticatorData),
+                signature: nativeSignature
+            )
         }
         return try KagemushaRequestAuthorization(
-            fields: self,
-            signature: signature,
-            archive: archive
+            fields: fields,
+            hardwareAssertion: assertion,
+            archive: result.authorizationArchive
         )
+    }
+
+    private static func validateIosAuthenticatorData(_ authenticatorData: Data) throws {
+        let legacyLength = 37
+        let maximumLength =
+            KagemushaRecursiveSpend.maximumIosAppAttestAuthenticatorDataBytesV2
+        guard (legacyLength...maximumLength).contains(authenticatorData.count) else {
+            throw KagemushaRecursiveSpendError.invalidField(
+                "authorization.authenticatorData"
+            )
+        }
+        let flags = authenticatorData[authenticatorData.startIndex + 32]
+        let extensionDataFlag: UInt8 = 0x80
+        guard flags & ~extensionDataFlag == 0,
+              flags & extensionDataFlag == 0
+                ? authenticatorData.count == legacyLength
+                : authenticatorData.count > legacyLength else {
+            throw KagemushaRecursiveSpendError.invalidField(
+                "authorization.authenticatorData.flags"
+            )
+        }
     }
 }
 
 public struct KagemushaRequestAuthorization: Equatable, Sendable {
     public let fields: KagemushaRequestAuthorizationFields
-    public let signature: Data
+    public let hardwareAssertion: KagemushaOnlineHardwareAssertion
     public let archive: Data
 
-    init(fields: KagemushaRequestAuthorizationFields, signature: Data, archive: Data) throws {
+    /// Canonical raw low-S signature retained for source compatibility.
+    public var signature: Data {
+        hardwareAssertion.signature.rawBytes
+    }
+
+    init(
+        fields: KagemushaRequestAuthorizationFields,
+        hardwareAssertion: KagemushaOnlineHardwareAssertion,
+        archive: Data
+    ) throws {
         try KagemushaRecursiveSpend.requireArchive(
             archive,
             schema: KagemushaRecursiveSpend.authorizationWireName,
             field: "authorization"
         )
-        guard !signature.isEmpty else {
-            throw KagemushaRecursiveSpendError.invalidField("authorization.signature")
+        guard fields.platform == hardwareAssertion.platform,
+              archive.count <= KagemushaRecursiveSpend.maximumPeerArchiveBytesV2 else {
+            throw KagemushaRecursiveSpendError.invalidArchive("authorization.binding")
         }
         self.fields = fields
-        self.signature = Data(signature)
+        self.hardwareAssertion = hardwareAssertion
         self.archive = Data(archive)
     }
 }

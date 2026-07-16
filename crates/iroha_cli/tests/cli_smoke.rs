@@ -4568,7 +4568,7 @@ fn tx_status_command_against_torii_mock() {
                 {
                     "kind": "Committed",
                     "block_height": 42,
-                    "scope": "global",
+                    "scope": "local",
                     "resolved_from": "state"
                 }
             ]
@@ -4579,7 +4579,7 @@ fn tx_status_command_against_torii_mock() {
     let output = command()
         .arg("--config")
         .arg(&config_path)
-        .args(["tx", "status", "--hash", hash])
+        .args(["tx", "status", "--hash", hash, "--scope", "local"])
         .output()
         .expect("failed to run iroha tx status");
     assert!(
@@ -4591,7 +4591,7 @@ fn tx_status_command_against_torii_mock() {
     assert_eq!(payload["hash"].as_str(), Some(hash));
     assert_eq!(payload["status"]["kind"].as_str(), Some("Committed"));
     assert_eq!(payload["status"]["block_height"].as_u64(), Some(42));
-    assert_eq!(payload["scope"].as_str(), Some("global"));
+    assert_eq!(payload["scope"].as_str(), Some("local"));
     assert_eq!(payload["resolved_from"].as_str(), Some("state"));
 
     let missing_hash = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";

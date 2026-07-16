@@ -186,10 +186,10 @@ mod tests {
     }
 
     #[test]
-    fn kagemusha_verify_release_requires_complete_evidence_pair() {
+    fn retired_kagemusha_verify_release_command_is_rejected() {
         assert!(
             parse("kagami kagemusha verify-release --bundle-dir ./release").is_err(),
-            "release verification must hash-check both evidence files"
+            "the pre-V4 release verifier must remain unavailable"
         );
         assert!(
             parse(
@@ -198,7 +198,8 @@ mod tests {
                  --benchmark-evidence ./benchmark.evidence \
                  --cryptographic-review ./review.evidence"
             )
-            .is_ok()
+            .is_err(),
+            "complete evidence must not revive the retired verifier"
         );
         assert!(
             parse(

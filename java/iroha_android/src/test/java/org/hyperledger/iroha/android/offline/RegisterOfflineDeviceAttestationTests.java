@@ -44,6 +44,10 @@ public final class RegisterOfflineDeviceAttestationTests {
     assertEquals(20, DeviceAttestationRegistration.REQUIRED_NATIVE_BRIDGE_ABI_VERSION);
     assertArrayEquals(hexToBytes(rust.get(0)), registration.noritoEncoded());
     assertArrayEquals(hexToBytes(rust.get(2)), registration.challengeHash());
+    assertArrayEquals(hexToBytes(rust.get(4)), registration.canonicalRegistrationHash());
+    assert !Arrays.equals(
+        registration.canonicalRegistrationHash(), sha256(registration.noritoEncoded()))
+        : "registration ID is canonical Iroha Hash, not raw SHA-256";
 
     final RegisterOfflineDeviceAttestation request = request(registration);
     final InstructionBox instruction = request.instruction();

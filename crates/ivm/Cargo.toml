@@ -33,6 +33,7 @@ iroha_primitives = { path = "../iroha_primitives" }
 iroha_telemetry = { path = "../iroha_telemetry", features = ["metric-instrumentation"] }
 iroha_i18n = { path = "../iroha_i18n" }
 ivm_abi = { path = "../ivm_abi" }
+ivm_artifact_admission = { path = "../ivm_artifact_admission" }
 kotodama_lang = { path = "../kotodama_lang" }
 nonzero_ext = { workspace = true }
 ## Do not depend on serde/serde_json directly; use `norito::json` helpers instead.

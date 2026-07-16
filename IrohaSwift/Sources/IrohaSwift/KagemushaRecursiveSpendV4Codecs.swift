@@ -196,6 +196,32 @@ enum KagemushaRecursiveSpendCodecsV4 {
         )
     }
 
+    static func encodeRedemptionChangePrepareRequest(
+        _ request: KagemushaRecursiveSpendRedemptionChangePrepareRequestV4
+    ) throws -> Data {
+        var writer = CompactNoritoWriter()
+        defer { writer.wipe() }
+        writer.writeField(uint16(request.version))
+        writer.writeField(try nestedPayload(
+            request.bundle.noritoArchive,
+            schema: KagemushaRecursiveSpend.bundleWireNameV4,
+            field: "redemptionChangePrepareRequestV4.bundle"
+        ))
+        var openingPayload = try noteOpening(
+            request.inputOpening,
+            field: "redemptionChangePrepareRequestV4.inputOpening"
+        )
+        defer { openingPayload.resetBytes(in: 0..<openingPayload.count) }
+        writer.writeField(openingPayload)
+        writer.writeField(try scaledAmount(request.changeAmount))
+        writer.writeField(request.operationID)
+        writer.writeField(request.entropy)
+        return frame(
+            KagemushaRecursiveSpend.redemptionChangePrepareRequestWireNameV4,
+            payload: writer.data
+        )
+    }
+
     private static func appendInput(
         _ input: KagemushaRecursiveSpendAppendInputV4
     ) throws -> Data {
@@ -227,8 +253,10 @@ enum KagemushaRecursiveSpendCodecsV4 {
         _ opening: KagemushaNoteOpening,
         field: String
     ) throws -> Data {
-        try nestedPayload(
-            KagemushaRecursiveSpendCodecs.encodeNoteOpening(opening),
+        var archive = try KagemushaRecursiveSpendCodecs.encodeNoteOpening(opening)
+        defer { archive.resetBytes(in: 0..<archive.count) }
+        return try nestedPayload(
+            archive,
             schema: KagemushaRecursiveSpend.noteOpeningWireName,
             field: field
         )

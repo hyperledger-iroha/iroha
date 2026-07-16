@@ -38,7 +38,7 @@ use iroha_data_model::{
         types::{BlobDigest, ExtraMetadata},
     },
     nexus::{
-        AssetPermissionManifest, LaneLifecycleParameterV1, LaneLifecyclePlan,
+        AssetPermissionManifest, FeeSponsorPolicyId, LaneLifecycleParameterV1, LaneLifecyclePlan,
         LaneLifecycleStatusV1, UniversalAccountId,
     },
     sorafs::moderation::{SoraFsModerationBallotCommitV1, SoraFsModerationBallotRevealV1},
@@ -10408,6 +10408,55 @@ mod evidence_http_tests {
     }
 
     #[test]
+    fn get_transaction_status_response_local_sets_local_scope() {
+        use iroha_torii_shared::{PipelineTransactionStatus, PipelineTransactionStatusResponse};
+
+        let hash =
+            HashOf::<crate::data_model::transaction::SignedTransaction>::from_untyped_unchecked(
+                Hash::prehashed([0x46; Hash::LENGTH]),
+            );
+        let payload = PipelineTransactionStatusResponse::new(
+            hash.to_string(),
+            PipelineTransactionStatus {
+                kind: "Committed".to_owned(),
+                block_height: Some(7),
+                rejection_reason: None,
+            },
+            "local".to_owned(),
+            "state".to_owned(),
+        );
+        let body = norito::json::to_string(
+            &norito::json::to_value(&payload).expect("status payload value"),
+        )
+        .expect("status payload");
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::OK, &body);
+
+        let decoded = with_mock_http(respond_with(&store, response), || {
+            let client = client_with_base_url(base_url());
+            client.get_transaction_status_response_local(hash)
+        })
+        .expect("transaction status response")
+        .expect("status payload");
+
+        assert_eq!(decoded, payload);
+        let snapshot = store
+            .lock()
+            .expect("snapshot lock")
+            .first()
+            .cloned()
+            .expect("status snapshot");
+        assert_eq!(
+            snapshot
+                .url
+                .query_pairs()
+                .find(|(key, _)| key == "scope")
+                .map(|(_, value)| value.to_string()),
+            Some("local".to_owned())
+        );
+    }
+
+    #[test]
     fn get_transaction_status_response_auto_sets_global_scope() {
         use iroha_torii_shared::{PipelineTransactionStatus, PipelineTransactionStatusResponse};
 
@@ -12677,6 +12726,19 @@ impl Client {
         self.get_transaction_status_response_with_scope(hash, None)
     }
 
+    /// GET `/v1/pipeline/transactions/status?scope=local` — typed pipeline status lookup
+    /// using explicit peer-local routing.
+    ///
+    /// # Errors
+    /// Returns an error if the HTTP request fails, the response has an unexpected content type,
+    /// or the typed JSON payload cannot be decoded.
+    pub fn get_transaction_status_response_local(
+        &self,
+        hash: HashOf<SignedTransaction>,
+    ) -> Result<Option<PipelineTransactionStatusResponse>> {
+        self.get_transaction_status_response_with_scope(hash, Some("local"))
+    }
+
     /// GET `/v1/pipeline/transactions/status?scope=global` — typed pipeline status lookup
     /// using explicit global/fanout routing.
     ///
@@ -13455,6 +13517,69 @@ impl Client {
         self.send_builder(
             self.account_signed_request(HttpMethod::POST, url, body)?
                 .header("Content-Type", APPLICATION_JSON),
+        )
+    }
+
+    /// Account-signed GET `/v1/accounts/{account_id}/permissions` retaining the exact response.
+    ///
+    /// The route returns effective permissions (direct grants plus assigned-role grants) for one
+    /// exact account. Callers that use the result for policy convergence should additionally
+    /// require the `x-iroha-account-permission-semantics: effective-v1` response header.
+    ///
+    /// # Errors
+    /// Returns an error if request signing, construction, or the HTTP call fails.
+    pub fn get_account_permissions_response(
+        &self,
+        account_id: &AccountId,
+    ) -> Result<Response<Vec<u8>>> {
+        self.get_account_permissions_page_response(account_id, 500, 0)
+    }
+
+    /// Account-signed page of effective permissions for one exact account.
+    ///
+    /// Query pagination is included before canonical request signing and count mode is always
+    /// `exact`, allowing callers to fail closed while traversing a response larger than one page.
+    ///
+    /// # Errors
+    /// Returns an error if request signing, construction, or the HTTP call fails.
+    pub fn get_account_permissions_page_response(
+        &self,
+        account_id: &AccountId,
+        limit: u64,
+        offset: u64,
+    ) -> Result<Response<Vec<u8>>> {
+        let path = format!("v1/accounts/{account_id}/permissions");
+        let mut url = join_torii_url(&self.torii_url, &path);
+        let limit = limit.to_string();
+        let offset = offset.to_string();
+        url.query_pairs_mut()
+            .append_pair("limit", &limit)
+            .append_pair("offset", &offset)
+            .append_pair("count_mode", "exact");
+        self.send_builder(
+            self.account_signed_request(HttpMethod::GET, url, Vec::new())?
+                .header("Accept", APPLICATION_JSON),
+        )
+    }
+
+    /// Account-signed POST `/v1/fee-sponsor-policies/by-id` retaining the exact response.
+    ///
+    /// # Errors
+    /// Returns an error if request signing, JSON serialization, construction, or the HTTP call
+    /// fails.
+    pub fn post_fee_sponsor_policy_by_id(
+        &self,
+        policy_id: &FeeSponsorPolicyId,
+    ) -> Result<Response<Vec<u8>>> {
+        let url = join_torii_url(&self.torii_url, "v1/fee-sponsor-policies/by-id");
+        let body = norito::json::to_vec(&norito::json!({
+            "sponsor_account_id": (policy_id.sponsor.to_string()),
+            "policy_name": (policy_id.name.to_string()),
+        }))?;
+        self.send_builder(
+            self.account_signed_request(HttpMethod::POST, url, body)?
+                .header("Content-Type", APPLICATION_JSON)
+                .header("Accept", APPLICATION_JSON),
         )
     }
 
@@ -21532,6 +21657,108 @@ mod tests {
                 "dataspace": "sbp",
                 "domain": "ubl.sbp",
             }),
+        );
+        assert_canonical_account_signed_json_request(&client, snapshot);
+    }
+
+    #[test]
+    fn account_permissions_read_is_exact_and_canonically_signed() {
+        let client = client_with_base_url(base_url());
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::OK, r#"{"items":[]}"#);
+
+        with_mock_http(respond_with(&store, response), || {
+            client
+                .get_account_permissions_response(&client.account)
+                .expect("signed exact account-permissions read");
+        });
+
+        let snapshots = store.lock().expect("snapshot store");
+        let snapshot = snapshots.first().expect("snapshot");
+        assert_eq!(snapshot.method, HttpMethod::GET);
+        assert_eq!(
+            snapshot.url.path(),
+            format!("/v1/accounts/{}/permissions", client.account)
+        );
+        assert_eq!(
+            snapshot
+                .url
+                .query_pairs()
+                .map(|(key, value)| (key.into_owned(), value.into_owned()))
+                .collect::<HashMap<_, _>>(),
+            HashMap::from([
+                ("limit".to_owned(), "500".to_owned()),
+                ("offset".to_owned(), "0".to_owned()),
+                ("count_mode".to_owned(), "exact".to_owned()),
+            ])
+        );
+        assert!(snapshot.body.is_empty());
+        assert_canonical_account_signed_request(&client, snapshot);
+    }
+
+    #[test]
+    fn account_permissions_page_is_exact_and_canonically_signed() {
+        let client = client_with_base_url(base_url());
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::OK, r#"{"items":[]}"#);
+
+        with_mock_http(respond_with(&store, response), || {
+            client
+                .get_account_permissions_page_response(&client.account, 17, 34)
+                .expect("signed exact account-permissions page read");
+        });
+
+        let snapshots = store.lock().expect("snapshot store");
+        let snapshot = snapshots.first().expect("snapshot");
+        assert_eq!(snapshot.method, HttpMethod::GET);
+        assert_eq!(
+            snapshot.url.path(),
+            format!("/v1/accounts/{}/permissions", client.account)
+        );
+        assert_eq!(
+            snapshot
+                .url
+                .query_pairs()
+                .map(|(key, value)| (key.into_owned(), value.into_owned()))
+                .collect::<HashMap<_, _>>(),
+            HashMap::from([
+                ("limit".to_owned(), "17".to_owned()),
+                ("offset".to_owned(), "34".to_owned()),
+                ("count_mode".to_owned(), "exact".to_owned()),
+            ])
+        );
+        assert!(snapshot.body.is_empty());
+        assert_canonical_account_signed_request(&client, snapshot);
+    }
+
+    #[test]
+    fn fee_sponsor_policy_by_id_is_exact_and_canonically_signed() {
+        let client = client_with_base_url(base_url());
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::OK, "{}");
+        let policy_id = FeeSponsorPolicyId::new(
+            client.account.clone(),
+            "retail".parse().expect("canonical policy name"),
+        );
+
+        with_mock_http(respond_with(&store, response), || {
+            client
+                .post_fee_sponsor_policy_by_id(&policy_id)
+                .expect("signed exact fee-sponsor-policy read");
+        });
+
+        let snapshots = store.lock().expect("snapshot store");
+        let snapshot = snapshots.first().expect("snapshot");
+        assert_eq!(snapshot.method, HttpMethod::POST);
+        assert_eq!(snapshot.url.path(), "/v1/fee-sponsor-policies/by-id");
+        let body: JsonValue =
+            norito::json::from_slice(&snapshot.body).expect("decode policy selector body");
+        assert_eq!(
+            body,
+            norito::json!({
+                "sponsor_account_id": (client.account.to_string()),
+                "policy_name": "retail",
+            })
         );
         assert_canonical_account_signed_json_request(&client, snapshot);
     }

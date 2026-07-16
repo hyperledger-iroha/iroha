@@ -278,6 +278,10 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         "connect_norito_kagemusha_recursive_spend_append_v4",
         "connect_norito_kagemusha_recursive_spend_verify_v4",
         "connect_norito_kagemusha_recursive_spend_redeem_v4",
+        "connect_norito_kagemusha_recursive_spend_redemption_change_prepare_v4",
+        "connect_norito_kagemusha_secret_free_buffer",
+        "KagemushaRecursiveSpendRedemptionChangePrepareRequestV4",
+        "KagemushaRecursiveSpendRedemptionChangePrepareResultV4",
     )
     require(
         texts[HEADER],
@@ -286,6 +290,8 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         "CONNECT_NORITO_BRIDGE_ABI_VERSION 20",
         "connect_norito_kagemusha_recursive_spend_artifact_begin_v4",
         "connect_norito_kagemusha_recursive_spend_artifact_set_install_v4",
+        "connect_norito_kagemusha_recursive_spend_redemption_change_prepare_v4",
+        "connect_norito_kagemusha_secret_free_buffer",
         "promotion_record_norito_ptr",
     )
     forbid(
@@ -335,6 +341,8 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         "fn configured_policy_bytes(path: &Path)",
         'decode_canonical_norito(&configured, "configured Kagemusha V4 release policy")',
         "KagemushaAuthenticatedReleaseV4::verify",
+        "ActivateKagemushaRecursiveReleaseV4::new(activation, policy)",
+        r'instruction_count\":1',
     )
     require(
         texts[CONFIG] + texts[NODE],
@@ -351,6 +359,9 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         errors,
         "impl Execute for ActivateKagemushaRecursiveReleaseV4",
         "CanActivateKagemushaRecursiveReleaseV4",
+        "CanManageOfflineDeviceAttestationPolicy",
+        "validate_offline_attestation_policy_for_release_activation",
+        "self.device_attestation_policy",
         "impl Execute for TopUpKagemushaRecursiveV4",
         "impl Execute for RedeemKagemushaRecursiveV4",
         "issuance_active_at",

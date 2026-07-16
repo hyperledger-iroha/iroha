@@ -184,6 +184,7 @@ pub fn impl_derive_visit(emitter: &mut Emitter, input: &syn::DeriveInput) -> Tok
         "fn visit_find_sorafs_orderbook_orders(operation: &::iroha_executor::data_model::query::sorafs::prelude::FindSorafsOrderbookOrders)",
         "fn visit_find_sorafs_orderbook_receipts(operation: &::iroha_executor::data_model::query::sorafs::prelude::FindSorafsOrderbookReceipts)",
         "fn visit_find_sorafs_moderation_policy(operation: &::iroha_executor::data_model::query::sorafs::prelude::FindSorafsModerationPolicy)",
+        "fn visit_find_sorafs_moderation_juror_eligibility(operation: &::iroha_executor::data_model::query::sorafs::prelude::FindSorafsModerationJurorEligibility)",
         "fn visit_find_sorafs_moderation_case(operation: &::iroha_executor::data_model::query::sorafs::prelude::FindSorafsModerationCase)",
         "fn visit_find_sorafs_moderation_commit(operation: &::iroha_executor::data_model::query::sorafs::prelude::FindSorafsModerationCommit)",
         "fn visit_find_sorafs_moderation_reveal(operation: &::iroha_executor::data_model::query::sorafs::prelude::FindSorafsModerationReveal)",

@@ -3,7 +3,7 @@
 //! The module exposes one lifecycle: exact online top-up, recursive
 //! offline split/spend, and exact online redemption.
 
-use iroha_crypto::{Algorithm, Hash, KeyPair, PublicKey, Signature, SignatureOf};
+use iroha_crypto::{Algorithm, Hash, KeyPair, PublicKey, SignatureOf};
 use iroha_data_model_derive::model;
 use iroha_primitives::numeric::{Numeric, Quantity};
 use iroha_schema::IntoSchema;
@@ -55,6 +55,15 @@ pub const OFFLINE_DEVICE_ATTESTATION_ANDROID_KEYMINT_ASSERTION_SCHEME: &str =
 /// Canonical Android assertion-key algorithm for Kagemusha.
 pub const OFFLINE_DEVICE_ATTESTATION_ANDROID_KEYMINT_ASSERTION_KEY_ALGORITHM: &str =
     "ecdsa-p256-sha256";
+/// Canonical Apple App Attest platform label for Kagemusha.
+pub const OFFLINE_DEVICE_ATTESTATION_IOS_APP_ATTEST_PLATFORM: &str = "ios-appattest";
+/// Legacy App Attest assertion authenticator-data size (RP hash, flags, counter).
+pub const KAGEMUSHA_IOS_APP_ATTEST_ASSERTION_AUTH_DATA_BYTES_V1: usize = 37;
+/// Minimum App Attest assertion authenticator-data size.
+pub const KAGEMUSHA_IOS_APP_ATTEST_ASSERTION_AUTH_DATA_MIN_BYTES_V1: usize =
+    KAGEMUSHA_IOS_APP_ATTEST_ASSERTION_AUTH_DATA_BYTES_V1;
+/// Maximum App Attest assertion authenticator-data size, including iOS 27 extensions.
+pub const KAGEMUSHA_IOS_APP_ATTEST_ASSERTION_AUTH_DATA_MAX_BYTES_V1: usize = 4 * 1024;
 
 /// Maximum asset scale accepted by the exact Kagemusha V2 amount contract.
 pub const KAGEMUSHA_SCALED_AMOUNT_MAX_SCALE_V2: u32 = 28;
@@ -187,6 +196,9 @@ pub const KAGEMUSHA_VERIFIER_PURPOSE_STEP_V4: &str = "kagemusha_recursive_spend_
 /// Domain separator for the self-contained V2 request authorization signature.
 pub const KAGEMUSHA_REQUEST_AUTHORIZATION_DOMAIN_V2: &str =
     "iroha:kagemusha:v2:request-authorization";
+/// Domain separator for the hardware assertion authorizing one exact online operation.
+pub const KAGEMUSHA_ONLINE_HARDWARE_ASSERTION_DOMAIN_V1: &str =
+    "iroha:kagemusha:v1:online-hardware-assertion";
 /// Domain separator for receiver acknowledgement signing payloads.
 pub const KAGEMUSHA_RECEIVER_ACKNOWLEDGEMENT_DOMAIN_V2: &str =
     "iroha:kagemusha:v2:receiver-acknowledgement";
@@ -294,6 +306,16 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_RELEASE_APPROVAL_DOMAIN_V1: &str =
 /// Domain separator for role-specific V4 release approvals.
 pub const KAGEMUSHA_RECURSIVE_SPEND_RELEASE_APPROVAL_DOMAIN_V4: &str =
     "iroha:kagemusha:recursive-spend-release-approval:v4";
+/// Schema identifier for a signed, candidate-bound V4 cryptographic review.
+pub const KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_SCHEMA_V4: &str =
+    "kagemusha.offline.recursive_spend.cryptographic_review.v4";
+/// Domain separator signed by every V4 cryptographic reviewer.
+pub const KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_DOMAIN_V4: &str =
+    "iroha:kagemusha:recursive-spend-cryptographic-review:v4";
+/// Version of the canonical signed V4 cryptographic-review envelope.
+pub const KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_VERSION_V4: u16 = 4;
+/// Exact number of independently evidenced checks in a production V4 review.
+pub const KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_CHECK_COUNT_V4: usize = 6;
 /// Current release policy, attestation, and promotion-record version.
 pub const KAGEMUSHA_RECURSIVE_SPEND_RELEASE_AUTH_VERSION_V1: u16 = 1;
 /// Signed-envelope version for explicitly degree-parameterized V4 releases.
@@ -302,6 +324,8 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_RELEASE_AUTH_VERSION_V4: u16 = 4;
 pub const KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_APPROVALS_V1: usize = 64;
 /// Maximum signed review or physical-device evidence file accepted by promotion tooling.
 pub const KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_EVIDENCE_BYTES_V1: usize = 16 * 1024 * 1024;
+/// Maximum canonical signed V4 cryptographic-review envelope size.
+pub const KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_MAX_BYTES_V4: usize = 1024 * 1024;
 /// Maximum canonical ABI-20/V4 promotion record accepted by release consumers.
 pub const KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROMOTION_BYTES_V4: usize = 1024 * 1024;
 /// Historical version-one attestation file name retained by policy tooling.
@@ -313,7 +337,7 @@ pub const KAGEMUSHA_RECURSIVE_SPEND_RELEASE_ATTESTATION_FILE_NAME_V4: &str =
 /// Canonical opaque file containing signed physical-device benchmark evidence.
 pub const KAGEMUSHA_RECURSIVE_SPEND_BENCHMARK_EVIDENCE_FILE_NAME_V1: &str =
     "physical-device-benchmark.evidence";
-/// Canonical opaque file containing the independent cryptographic review artifact.
+/// Canonical Norito file containing the signed, candidate-bound cryptographic review.
 pub const KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_FILE_NAME_V1: &str =
     "cryptographic-review.evidence";
 /// Version of the canonical authenticated V4 circuit configuration.
@@ -568,6 +592,8 @@ pub enum KagemushaReleaseVerificationError {
     InvalidPolicy,
     /// The signed release envelope is malformed or does not bind the manifest.
     InvalidAttestation,
+    /// The cryptographic review is non-canonical, incomplete, rejected, or mis-bound.
+    InvalidCryptographicReview,
     /// A supplied evidence file is empty, oversized, or has the wrong digest.
     EvidenceMismatch {
         /// Evidence role with invalid content.
@@ -606,6 +632,7 @@ impl KagemushaReleaseVerificationError {
             Self::InvalidManifest => "invalid_manifest",
             Self::InvalidPolicy => "invalid_policy",
             Self::InvalidAttestation => "invalid_attestation",
+            Self::InvalidCryptographicReview => "invalid_cryptographic_review",
             Self::EvidenceMismatch { .. } => "evidence_mismatch",
             Self::UnknownSigner { .. } => "unknown_signer",
             Self::DuplicateOrUnorderedSigner => "duplicate_or_unordered_signer",
@@ -623,6 +650,9 @@ impl core::fmt::Display for KagemushaReleaseVerificationError {
             Self::InvalidPolicy => f.write_str("invalid Kagemusha release policy"),
             Self::InvalidAttestation => {
                 f.write_str("invalid or mismatched Kagemusha release attestation")
+            }
+            Self::InvalidCryptographicReview => {
+                f.write_str("invalid or mismatched Kagemusha cryptographic review")
             }
             Self::EvidenceMismatch { role } => {
                 write!(f, "Kagemusha release evidence mismatch for {role:?}")
@@ -974,17 +1004,61 @@ mod model {
         pub signature: KagemushaDeviceSignatureV2,
     }
 
-    /// Self-contained payer/recipient authorization carried inside one V2 archive.
+    /// Platform assertion made by the exact hardware key admitted at registration.
+    ///
+    /// Both platforms carry the same canonical raw low-S P-256 signature. iOS
+    /// additionally carries the App Attest authenticator data that Apple binds
+    /// ahead of the client-data hash.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct KagemushaAndroidKeyMintHardwareAssertionV1 {
+        /// Canonical raw low-S P-256 signature (`r || s`).
+        pub signature: KagemushaDeviceSignatureV2,
+    }
+
+    /// Apple App Attest assertion result for an online operation.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct KagemushaIosAppAttestHardwareAssertionV1 {
+        /// Exact authenticator data returned by `generateAssertion`.
+        pub authenticator_data: Vec<u8>,
+        /// Canonical raw low-S P-256 signature (`r || s`).
+        pub signature: KagemushaDeviceSignatureV2,
+    }
+
+    /// Typed platform assertion, without a stringly-typed fallback variant.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    #[norito(tag = "platform", content = "assertion", rename_all = "snake_case")]
+    pub enum KagemushaOnlineHardwareAssertionV1 {
+        /// Android KeyMint `SHA256withECDSA` assertion from a maxUsageCount=1 key.
+        AndroidKeyMint(KagemushaAndroidKeyMintHardwareAssertionV1),
+        /// Apple App Attest assertion over authenticatorData || clientDataHash.
+        IosAppAttest(KagemushaIosAppAttestHardwareAssertionV1),
+    }
+
+    /// Self-contained payer/recipient hardware authorization carried inside one V2 archive.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(
         feature = "json",
         derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
     )]
     pub struct KagemushaRequestAuthorizationV2 {
-        /// Account whose key signs this request.
+        /// Account bound by the registered hardware assertion key.
         pub authority: AccountId,
-        /// Registered device identifier used for policy/App-Attest lookup.
+        /// Registered device identifier used for exact registration lookup.
         pub device_id: String,
+        /// Asset definition bound into the hardware-signed operation.
+        pub asset_definition_id: AssetDefinitionId,
         /// Globally unique chain idempotency/replay identifier.
         ///
         /// Unlike nonces and payload digests, this identifier is not scoped by
@@ -1002,16 +1076,11 @@ mod model {
         /// Digest of the canonical unsigned top-up or redemption payload.
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
         pub payload_digest: [u8; 32],
-        /// SHA-256 of App-Attest evidence, present exactly when evidence is attached.
-        #[cfg_attr(
-            feature = "json",
-            norito(with = "crate::json_helpers::fixed_bytes::option")
-        )]
-        pub app_attest_evidence_sha256: Option<[u8; 32]>,
-        /// Platform evidence verified against the registered device lineage.
-        pub app_attest_evidence: Option<Vec<u8>>,
-        /// Authority signature over the canonical authorization signing bytes.
-        pub signature: Signature,
+        /// Canonical Iroha hash of the exact registration admitted by consensus.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub registration_hash: [u8; 32],
+        /// Typed assertion from the registered online hardware key.
+        pub hardware_assertion: KagemushaOnlineHardwareAssertionV1,
     }
 
     /// Typed public-to-confidential shield evidence for one online top-up.
@@ -1579,6 +1648,160 @@ mod model {
         pub version: u16,
         /// Complete pre-evidence manifest with its three promotion digest slots zeroed.
         pub manifest: KagemushaRecursiveSpendArtifactManifestV4,
+    }
+
+    /// Immutable release identity reviewed before evidence finalization.
+    ///
+    /// `candidate_sha256` commits the complete artifact/profile/roster/window
+    /// inventory. The repeated human-auditable fields prevent a correctly signed
+    /// review from being presented with an ambiguous release description.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    #[norito(deny_unknown_fields)]
+    pub struct KagemushaRecursiveSpendCryptographicReviewSubjectV4 {
+        /// SHA-256 of the canonical immutable pre-evidence candidate.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub candidate_sha256: [u8; 32],
+        /// Exact release generation copied from the candidate.
+        pub generation: String,
+        /// Exact source revision copied from the candidate.
+        pub source_commit: String,
+        /// Exact source-tree identity copied from the candidate.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub source_tree_sha256: [u8; 32],
+        /// Exact dirty-tree state copied from the candidate; production requires false.
+        pub source_repo_dirty: bool,
+        /// Chain for which the reviewed candidate was built.
+        pub chain_id: ChainId,
+        /// Asset definition for which the reviewed candidate was built.
+        pub asset: AssetDefinitionId,
+        /// Native bridge ABI required by the reviewed candidate.
+        pub bridge_abi_version: u32,
+    }
+
+    /// Production disposition recorded by an independent cryptographic review.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    #[norito(tag = "decision", content = "value", rename_all = "snake_case")]
+    pub enum KagemushaRecursiveSpendCryptographicReviewDecisionV4 {
+        /// The exact candidate is approved for release finalization.
+        Approved,
+        /// The exact candidate is rejected and must not be finalized.
+        Rejected,
+    }
+
+    /// Closed, canonically ordered set of security properties reviewed for V4.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    #[norito(tag = "check", content = "value", rename_all = "snake_case")]
+    pub enum KagemushaRecursiveSpendCryptographicReviewCheckV4 {
+        /// Recursive-circuit constraints cover every claimed state transition.
+        RecursiveCircuitConstraintCoverage,
+        /// Pasta-cycle recursion and transcripts are domain- and lineage-bound.
+        RecursiveCycleAndTranscriptBinding,
+        /// Public inputs bind the complete state transition and operation.
+        PublicInputAndStateTransitionBinding,
+        /// Parameters, artifacts, and verifying keys bind the reviewed candidate.
+        ArtifactParameterAndVerifyingKeyBinding,
+        /// Nullifiers, replay protection, and finality inputs are correctly constrained.
+        NullifierReplayAndFinalityBinding,
+        /// Parsers are canonical and all attacker-controlled resources are bounded.
+        ParserCanonicalizationAndResourceBounds,
+    }
+
+    /// Result of one mandatory cryptographic-review check.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    #[norito(tag = "status", content = "value", rename_all = "snake_case")]
+    pub enum KagemushaRecursiveSpendCryptographicReviewCheckStatusV4 {
+        /// The referenced evidence supports the reviewed property.
+        Passed,
+        /// The referenced evidence does not support the reviewed property.
+        Failed,
+    }
+
+    /// One content-addressed mandatory check inside a V4 review.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    #[norito(deny_unknown_fields)]
+    pub struct KagemushaRecursiveSpendCryptographicReviewCheckResultV4 {
+        /// Mandatory reviewed property.
+        pub check: KagemushaRecursiveSpendCryptographicReviewCheckV4,
+        /// Review result; production finalization requires `Passed`.
+        pub status: KagemushaRecursiveSpendCryptographicReviewCheckStatusV4,
+        /// SHA-256 of property-specific evidence retained by the reviewer.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub evidence_sha256: [u8; 32],
+    }
+
+    /// Exact domain-separated payload signed by every V4 reviewer.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    #[norito(deny_unknown_fields)]
+    pub struct KagemushaRecursiveSpendCryptographicReviewPayloadV4 {
+        /// Cross-protocol replay separator.
+        pub domain: String,
+        /// Exact immutable candidate under review.
+        pub subject: KagemushaRecursiveSpendCryptographicReviewSubjectV4,
+        /// Review disposition; production requires `Approved`.
+        pub decision: KagemushaRecursiveSpendCryptographicReviewDecisionV4,
+        /// SHA-256 of the complete retained review report.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub report_sha256: [u8; 32],
+        /// Exact Eq-then-Ep cryptographic artifact roles reviewed for ABI-20.
+        pub artifact_roles: Vec<String>,
+        /// Exact ordered set of mandatory, independently evidenced checks.
+        pub checks: Vec<KagemushaRecursiveSpendCryptographicReviewCheckResultV4>,
+    }
+
+    /// One policy-authorized signature over a complete V4 review payload.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    #[norito(deny_unknown_fields)]
+    pub struct KagemushaRecursiveSpendCryptographicReviewApprovalV4 {
+        /// Reviewer identity selected by the trusted release policy.
+        pub public_key: PublicKey,
+        /// Signature over the exact domain, candidate, report, roles, and checks.
+        pub signature: SignatureOf<KagemushaRecursiveSpendCryptographicReviewPayloadV4>,
+    }
+
+    /// Canonical signed independent cryptographic-review evidence for ABI-20/V4.
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    #[norito(deny_unknown_fields)]
+    pub struct KagemushaRecursiveSpendCryptographicReviewEvidenceV4 {
+        /// Exact V4 cryptographic-review schema.
+        pub schema: String,
+        /// Cryptographic-review envelope version.
+        pub version: u16,
+        /// Candidate-bound review decision signed by every approval.
+        pub payload: KagemushaRecursiveSpendCryptographicReviewPayloadV4,
+        /// Strictly ascending, unique reviewer approvals.
+        pub approvals: Vec<KagemushaRecursiveSpendCryptographicReviewApprovalV4>,
     }
 
     /// Independent authority role required to promote an authenticated release.
@@ -2794,10 +3017,12 @@ pub struct OfflineAndroidKeyMintChallenge {
 
 /// Governed Offline device-attestation verifier policy.
 ///
-/// Nodes use this chain-stored policy when present and otherwise fall back to
-/// the built-in first-release platform roots. Operators can publish this policy
-/// to rotate roots, publish deterministic revocations, and restrict accepted app
-/// identities without relying on external middleware state.
+/// Nodes require this policy to be installed in chain state before accepting
+/// hardware-backed offline registration or transaction authorization. The
+/// first-release platform roots are accepted only when included in that
+/// explicit governed policy; absence of policy state fails closed. Operators
+/// can rotate roots, publish deterministic revocations, and restrict accepted
+/// app identities without relying on external middleware state.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -2814,9 +3039,16 @@ pub struct OfflineDeviceAttestationPolicy {
     pub ios_apps: Vec<OfflineIosAppAttestationPolicy>,
     /// Accepted Android `KeyMint` app identities.
     pub android_apps: Vec<OfflineAndroidAppAttestationPolicy>,
-    /// When true, iOS registration requires a matching entry in `ios_apps`.
+    /// Explicitly enables iOS registration and online assertions when a matching
+    /// entry exists in `ios_apps`.
+    ///
+    /// iOS App Attest is disabled when this is false; there is no implicit app
+    /// identity or legacy-authData fallback.
     pub require_ios_app_policy: bool,
-    /// When true, Android registration requires a matching entry in `android_apps`.
+    /// Explicitly enables Android registration when a matching entry exists in `android_apps`.
+    ///
+    /// Android KeyMint is disabled when this is false; there is no implicit
+    /// unlisted-package or signing-certificate fallback.
     pub require_android_app_policy: bool,
 }
 
@@ -2844,12 +3076,18 @@ pub struct OfflineDeviceAttestationTrustedRoot {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 pub struct OfflineIosAppAttestationPolicy {
-    /// Apple Developer Team ID.
+    /// Apple App ID prefix (normally the Apple Developer Team ID).
     pub team_id: String,
     /// iOS bundle identifier.
     pub bundle_id: String,
     /// App Attest environment, either `production` or `development`.
     pub environment: String,
+    /// Allowed Apple validation categories from extension-bearing App Attest data.
+    pub allowed_validation_categories: Vec<u32>,
+    /// Allowed application bundle versions from extension-bearing App Attest data.
+    pub allowed_bundle_versions: Vec<String>,
+    /// Whether legacy App Attest attestation and assertion authData without extensions remains accepted.
+    pub allow_legacy_auth_data_without_extensions: bool,
 }
 
 /// Allowed Android `KeyMint` app identity.
@@ -2931,12 +3169,14 @@ struct KagemushaRequestAuthorizationSigningPreimageV2 {
     domain: String,
     authority: AccountId,
     device_id: String,
+    asset_definition_id: AssetDefinitionId,
     operation_id: [u8; 32],
     issued_at_ms: u64,
     expires_at_ms: u64,
     nonce: [u8; 32],
     payload_digest: [u8; 32],
-    app_attest_evidence_sha256: Option<[u8; 32]>,
+    registration_hash: [u8; 32],
+    platform: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
@@ -3863,28 +4103,148 @@ impl KagemushaRecipientPaymentRequestV2 {
     }
 }
 
+impl KagemushaOnlineHardwareAssertionV1 {
+    /// Canonical registration platform selected by this typed assertion.
+    #[must_use]
+    pub const fn platform(&self) -> &'static str {
+        match self {
+            Self::AndroidKeyMint(_) => OFFLINE_DEVICE_ATTESTATION_ANDROID_KEYMINT_PLATFORM,
+            Self::IosAppAttest(_) => OFFLINE_DEVICE_ATTESTATION_IOS_APP_ATTEST_PLATFORM,
+        }
+    }
+}
+
 impl KagemushaRequestAuthorizationV2 {
-    /// Return the exact domain-separated bytes the authority must sign.
-    ///
-    /// Native bridges may construct the public fields with a placeholder
-    /// signature, request user-presence signing from the device key, then
-    /// replace only `signature`; the signature itself is deliberately excluded
-    /// from this preimage.
-    pub fn signing_bytes(&self) -> Result<Vec<u8>, KagemushaValidationError> {
+    #[allow(clippy::too_many_arguments)]
+    fn hardware_assertion_preimage_bytes_for_fields(
+        authority: &AccountId,
+        device_id: &str,
+        asset_definition_id: &AssetDefinitionId,
+        operation_id: [u8; 32],
+        issued_at_ms: u64,
+        expires_at_ms: u64,
+        nonce: [u8; 32],
+        payload_digest: [u8; 32],
+        registration_hash: [u8; 32],
+        platform: &str,
+    ) -> Result<Vec<u8>, KagemushaValidationError> {
         Ok(to_bytes(&KagemushaRequestAuthorizationSigningPreimageV2 {
-            domain: KAGEMUSHA_REQUEST_AUTHORIZATION_DOMAIN_V2.to_owned(),
-            authority: self.authority.clone(),
-            device_id: self.device_id.clone(),
-            operation_id: self.operation_id,
-            issued_at_ms: self.issued_at_ms,
-            expires_at_ms: self.expires_at_ms,
-            nonce: self.nonce,
-            payload_digest: self.payload_digest,
-            app_attest_evidence_sha256: self.app_attest_evidence_sha256,
+            domain: KAGEMUSHA_ONLINE_HARDWARE_ASSERTION_DOMAIN_V1.to_owned(),
+            authority: authority.clone(),
+            device_id: device_id.to_owned(),
+            asset_definition_id: asset_definition_id.clone(),
+            operation_id,
+            issued_at_ms,
+            expires_at_ms,
+            nonce,
+            payload_digest,
+            registration_hash,
+            platform: platform.to_owned(),
         })?)
     }
 
-    /// Verify structure, evidence digest, payload binding, and account signature.
+    /// Derive platform signing input from unsigned public fields without constructing an
+    /// on-wire authorization or fabricating a signature/authenticatorData value.
+    #[allow(clippy::too_many_arguments)]
+    pub fn signing_bytes_for_fields(
+        authority: &AccountId,
+        device_id: &str,
+        asset_definition_id: &AssetDefinitionId,
+        operation_id: [u8; 32],
+        issued_at_ms: u64,
+        expires_at_ms: u64,
+        nonce: [u8; 32],
+        payload_digest: [u8; 32],
+        registration_hash: [u8; 32],
+        platform: &str,
+    ) -> Result<Vec<u8>, KagemushaValidationError> {
+        let preimage = Self::hardware_assertion_preimage_bytes_for_fields(
+            authority,
+            device_id,
+            asset_definition_id,
+            operation_id,
+            issued_at_ms,
+            expires_at_ms,
+            nonce,
+            payload_digest,
+            registration_hash,
+            platform,
+        )?;
+        match platform {
+            OFFLINE_DEVICE_ATTESTATION_ANDROID_KEYMINT_PLATFORM => Ok(preimage),
+            OFFLINE_DEVICE_ATTESTATION_IOS_APP_ATTEST_PLATFORM => {
+                Ok(Sha256::digest(preimage).to_vec())
+            }
+            _ => Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "authorization.hardware_assertion.platform",
+            }),
+        }
+    }
+
+    /// Return the exact bytes supplied to the platform assertion API.
+    ///
+    /// Android signs the complete canonical domain-separated preimage with
+    /// `SHA256withECDSA`. App Attest accepts a 32-byte client-data hash, so the
+    /// iOS form returns SHA-256 of that same canonical preimage.
+    pub fn signing_bytes(&self) -> Result<Vec<u8>, KagemushaValidationError> {
+        Self::signing_bytes_for_fields(
+            &self.authority,
+            &self.device_id,
+            &self.asset_definition_id,
+            self.operation_id,
+            self.issued_at_ms,
+            self.expires_at_ms,
+            self.nonce,
+            self.payload_digest,
+            self.registration_hash,
+            self.hardware_assertion.platform(),
+        )
+    }
+
+    /// Verify the typed hardware assertion under the exact registered key.
+    pub fn verify_hardware_signature(
+        &self,
+        assertion_public_key: &[u8],
+    ) -> Result<(), KagemushaValidationError> {
+        let public_key = KagemushaDevicePublicKeyV2::from_sec1_bytes(assertion_public_key)
+            .map_err(|_| KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "authorization.assertion_public_key",
+            })?;
+        let signing_bytes = self.signing_bytes()?;
+        match &self.hardware_assertion {
+            KagemushaOnlineHardwareAssertionV1::AndroidKeyMint(assertion) => {
+                assertion.signature.verify(&public_key, &signing_bytes)
+            }
+            KagemushaOnlineHardwareAssertionV1::IosAppAttest(assertion) => {
+                let mut signed =
+                    Vec::with_capacity(assertion.authenticator_data.len() + signing_bytes.len());
+                signed.extend_from_slice(&assertion.authenticator_data);
+                signed.extend_from_slice(&signing_bytes);
+                assertion.signature.verify(&public_key, &signed)
+            }
+        }
+        .map_err(|_| KagemushaValidationError::InvalidRecursiveSpendProof {
+            field: "authorization.hardware_assertion.signature",
+        })
+    }
+
+    /// Replace only the hardware signature in a prepared authorization.
+    pub fn set_hardware_signature(&mut self, signature: KagemushaDeviceSignatureV2) {
+        match &mut self.hardware_assertion {
+            KagemushaOnlineHardwareAssertionV1::AndroidKeyMint(assertion) => {
+                assertion.signature = signature;
+            }
+            KagemushaOnlineHardwareAssertionV1::IosAppAttest(assertion) => {
+                assertion.signature = signature;
+            }
+        }
+    }
+
+    /// Verify structure and exact unsigned-payload binding.
+    ///
+    /// Consensus verifies the signature only after resolving
+    /// `registration_hash` to the exact validated registration and its P-256
+    /// assertion public key.
     pub fn validate_for_payload(
         &self,
         expected_payload_digest: [u8; 32],
@@ -3895,6 +4255,7 @@ impl KagemushaRequestAuthorizationV2 {
             || self.device_id.chars().any(char::is_control)
             || self.operation_id == [0; 32]
             || self.nonce == [0; 32]
+            || self.registration_hash == [0; 32]
             || self.payload_digest != expected_payload_digest
             || self.issued_at_ms == 0
             || self.expires_at_ms <= self.issued_at_ms
@@ -3905,23 +4266,33 @@ impl KagemushaRequestAuthorizationV2 {
                 field: "authorization",
             });
         }
-        match (&self.app_attest_evidence, self.app_attest_evidence_sha256) {
-            (None, None) => {}
-            (Some(evidence), Some(expected))
-                if !evidence.is_empty()
-                    && evidence.len() <= 16 * 1024
-                    && <[u8; 32]>::from(Sha256::digest(evidence)) == expected => {}
-            _ => {
-                return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
-                    field: "authorization.app_attest_evidence",
-                });
+        match &self.hardware_assertion {
+            KagemushaOnlineHardwareAssertionV1::AndroidKeyMint(assertion) => {
+                assertion.signature.validate()
+            }
+            KagemushaOnlineHardwareAssertionV1::IosAppAttest(assertion)
+                if (KAGEMUSHA_IOS_APP_ATTEST_ASSERTION_AUTH_DATA_MIN_BYTES_V1
+                    ..=KAGEMUSHA_IOS_APP_ATTEST_ASSERTION_AUTH_DATA_MAX_BYTES_V1)
+                    .contains(&assertion.authenticator_data.len())
+                    && assertion.authenticator_data[32] & !0x80 == 0
+                    && ((assertion.authenticator_data[32] & 0x80 == 0
+                        && assertion.authenticator_data.len()
+                            == KAGEMUSHA_IOS_APP_ATTEST_ASSERTION_AUTH_DATA_BYTES_V1)
+                        || (assertion.authenticator_data[32] & 0x80 != 0
+                            && assertion.authenticator_data.len()
+                                > KAGEMUSHA_IOS_APP_ATTEST_ASSERTION_AUTH_DATA_BYTES_V1)) =>
+            {
+                assertion.signature.validate()
+            }
+            KagemushaOnlineHardwareAssertionV1::IosAppAttest(_) => {
+                Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                    field: "authorization.hardware_assertion.authenticator_data",
+                })
             }
         }
-        self.signature
-            .verify(self.authority.signatory(), &self.signing_bytes()?)
-            .map_err(|_| KagemushaValidationError::InvalidRecursiveSpendProof {
-                field: "authorization.signature",
-            })
+        .map_err(|_| KagemushaValidationError::InvalidRecursiveSpendProof {
+            field: "authorization.hardware_assertion.signature",
+        })
     }
 
     /// Verify the signed request is live at the authoritative Torii time.
@@ -4652,6 +5023,86 @@ impl KagemushaRecursiveSpendCandidateV4 {
         self.validate()?;
         Ok(Sha256::digest(to_bytes(self)?).into())
     }
+
+    /// Build the exact candidate-bound subject signed by cryptographic reviewers.
+    pub fn cryptographic_review_subject(
+        &self,
+    ) -> Result<KagemushaRecursiveSpendCryptographicReviewSubjectV4, KagemushaValidationError> {
+        let candidate_sha256 = self.sha256()?;
+        Ok(KagemushaRecursiveSpendCryptographicReviewSubjectV4 {
+            candidate_sha256,
+            generation: self.manifest.generation.clone(),
+            source_commit: self.manifest.source_commit.clone(),
+            source_tree_sha256: self.manifest.source_tree_sha256,
+            source_repo_dirty: self.manifest.source_repo_dirty,
+            chain_id: self.manifest.chain_id.clone(),
+            asset: self.manifest.asset.clone(),
+            bridge_abi_version: self.manifest.bridge_abi_version,
+        })
+    }
+}
+
+impl KagemushaRecursiveSpendCryptographicReviewCheckV4 {
+    /// Exact canonical check order required by every production V4 review.
+    pub const ALL: [Self; KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_CHECK_COUNT_V4] = [
+        Self::RecursiveCircuitConstraintCoverage,
+        Self::RecursiveCycleAndTranscriptBinding,
+        Self::PublicInputAndStateTransitionBinding,
+        Self::ArtifactParameterAndVerifyingKeyBinding,
+        Self::NullifierReplayAndFinalityBinding,
+        Self::ParserCanonicalizationAndResourceBounds,
+    ];
+}
+
+impl KagemushaRecursiveSpendCryptographicReviewPayloadV4 {
+    /// Construct the canonical approved-review payload for an immutable candidate.
+    ///
+    /// The six check-evidence digests must follow
+    /// [`KagemushaRecursiveSpendCryptographicReviewCheckV4::ALL`]. Final release
+    /// authentication still validates every digest and reviewer signature.
+    pub fn approved(
+        candidate: &KagemushaRecursiveSpendCandidateV4,
+        report_sha256: [u8; 32],
+        check_evidence_sha256: [[u8; 32];
+            KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_CHECK_COUNT_V4],
+    ) -> Result<Self, KagemushaValidationError> {
+        let subject = candidate.cryptographic_review_subject()?;
+        let mut evidence_digests = std::collections::BTreeSet::new();
+        evidence_digests.insert(subject.candidate_sha256);
+        if report_sha256 == [0; 32] || !evidence_digests.insert(report_sha256) {
+            return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "pasta_cycle.v4.cryptographic_review_evidence",
+            });
+        }
+        for evidence_sha256 in &check_evidence_sha256 {
+            if *evidence_sha256 == [0; 32] || !evidence_digests.insert(*evidence_sha256) {
+                return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                    field: "pasta_cycle.v4.cryptographic_review_evidence",
+                });
+            }
+        }
+        let checks = KagemushaRecursiveSpendCryptographicReviewCheckV4::ALL
+            .into_iter()
+            .zip(check_evidence_sha256)
+            .map(|(check, evidence_sha256)| {
+                KagemushaRecursiveSpendCryptographicReviewCheckResultV4 {
+                    check,
+                    status: KagemushaRecursiveSpendCryptographicReviewCheckStatusV4::Passed,
+                    evidence_sha256,
+                }
+            })
+            .collect();
+        Ok(Self {
+            domain: KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_DOMAIN_V4.to_owned(),
+            subject,
+            decision: KagemushaRecursiveSpendCryptographicReviewDecisionV4::Approved,
+            report_sha256,
+            artifact_roles: KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_ROLES_V4
+                .map(str::to_owned)
+                .to_vec(),
+            checks,
+        })
+    }
 }
 
 impl KagemushaRecursiveSpendReleaseApprovalRoleV1 {
@@ -4725,6 +5176,136 @@ impl KagemushaRecursiveSpendReleasePolicyV1 {
         self.roles
             .get(role.index())
             .filter(|policy| policy.role == role)
+    }
+}
+
+impl KagemushaRecursiveSpendCryptographicReviewEvidenceV4 {
+    fn validate_against_candidate(
+        &self,
+        candidate: &KagemushaRecursiveSpendCandidateV4,
+    ) -> Result<Vec<PublicKey>, KagemushaReleaseVerificationError> {
+        let expected_subject = candidate
+            .cryptographic_review_subject()
+            .map_err(|_| KagemushaReleaseVerificationError::InvalidCryptographicReview)?;
+        let expected_artifact_roles =
+            KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_ROLES_V4.map(str::to_owned);
+        if self.schema != KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_SCHEMA_V4
+            || self.version != KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_VERSION_V4
+            || self.payload.domain != KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_DOMAIN_V4
+            || self.payload.subject != expected_subject
+            || self.payload.decision
+                != KagemushaRecursiveSpendCryptographicReviewDecisionV4::Approved
+            || self.payload.artifact_roles != expected_artifact_roles
+            || self.payload.checks.len()
+                != KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_CHECK_COUNT_V4
+            || self.approvals.is_empty()
+            || self.approvals.len() > KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_APPROVALS_V1
+            || !self
+                .approvals
+                .windows(2)
+                .all(|pair| pair[0].public_key < pair[1].public_key)
+        {
+            return Err(KagemushaReleaseVerificationError::InvalidCryptographicReview);
+        }
+
+        let mut evidence_digests = std::collections::BTreeSet::new();
+        evidence_digests.insert(self.payload.subject.candidate_sha256);
+        if self.payload.report_sha256 == [0; 32]
+            || !evidence_digests.insert(self.payload.report_sha256)
+        {
+            return Err(KagemushaReleaseVerificationError::InvalidCryptographicReview);
+        }
+        for (result, expected_check) in self
+            .payload
+            .checks
+            .iter()
+            .zip(KagemushaRecursiveSpendCryptographicReviewCheckV4::ALL)
+        {
+            if result.check != expected_check
+                || result.status != KagemushaRecursiveSpendCryptographicReviewCheckStatusV4::Passed
+                || result.evidence_sha256 == [0; 32]
+                || !evidence_digests.insert(result.evidence_sha256)
+            {
+                return Err(KagemushaReleaseVerificationError::InvalidCryptographicReview);
+            }
+        }
+
+        let mut reviewer_keys = Vec::with_capacity(self.approvals.len());
+        for approval in &self.approvals {
+            approval
+                .signature
+                .verify(&approval.public_key, &self.payload)
+                .map_err(|_| KagemushaReleaseVerificationError::InvalidSignature {
+                    role: KagemushaRecursiveSpendReleaseApprovalRoleV1::CryptographicReview,
+                })?;
+            reviewer_keys.push(approval.public_key.clone());
+        }
+        Ok(reviewer_keys)
+    }
+
+    /// Decode canonical Norito review bytes and validate their candidate binding.
+    ///
+    /// This structural entry point verifies every embedded signature. Release
+    /// authentication additionally authorizes those identities against the local
+    /// policy and binds the exact same reviewer set into the release attestation.
+    pub fn validate_canonical_bytes_against_candidate(
+        bytes: &[u8],
+        candidate: &KagemushaRecursiveSpendCandidateV4,
+    ) -> Result<Vec<PublicKey>, KagemushaReleaseVerificationError> {
+        if bytes.is_empty()
+            || bytes.len() > KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_MAX_BYTES_V4
+        {
+            return Err(KagemushaReleaseVerificationError::EvidenceMismatch {
+                role: KagemushaRecursiveSpendReleaseApprovalRoleV1::CryptographicReview,
+            });
+        }
+        let decode_limits = norito::core::DecodeLimits::new(
+            16 * 1024,
+            KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_MAX_BYTES_V4,
+            128 * 1024,
+            4 * KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_MAX_BYTES_V4,
+            64,
+        );
+        let evidence: Self = norito::decode_from_bytes_with_limits(bytes, decode_limits)
+            .map_err(|_| KagemushaReleaseVerificationError::InvalidCryptographicReview)?;
+        let canonical_bytes = to_bytes(&evidence)
+            .map_err(|_| KagemushaReleaseVerificationError::InvalidCryptographicReview)?;
+        if canonical_bytes != bytes {
+            return Err(KagemushaReleaseVerificationError::InvalidCryptographicReview);
+        }
+        evidence.validate_against_candidate(candidate)
+    }
+
+    fn authenticate_canonical_bytes(
+        bytes: &[u8],
+        candidate: &KagemushaRecursiveSpendCandidateV4,
+        policy: &KagemushaRecursiveSpendReleasePolicyV1,
+    ) -> Result<Vec<PublicKey>, KagemushaReleaseVerificationError> {
+        policy.validate()?;
+        let reviewer_keys = Self::validate_canonical_bytes_against_candidate(bytes, candidate)?;
+        let role = KagemushaRecursiveSpendReleaseApprovalRoleV1::CryptographicReview;
+        let role_policy = policy
+            .role_policy(role)
+            .ok_or(KagemushaReleaseVerificationError::InvalidPolicy)?;
+        for public_key in &reviewer_keys {
+            if role_policy
+                .authorized_signers
+                .binary_search(public_key)
+                .is_err()
+            {
+                return Err(KagemushaReleaseVerificationError::UnknownSigner { role });
+            }
+        }
+        let collected = u16::try_from(reviewer_keys.len())
+            .map_err(|_| KagemushaReleaseVerificationError::InvalidCryptographicReview)?;
+        if collected < role_policy.threshold {
+            return Err(KagemushaReleaseVerificationError::InsufficientThreshold {
+                role,
+                collected,
+                required: role_policy.threshold,
+            });
+        }
+        Ok(reviewer_keys)
     }
 }
 
@@ -4828,26 +5409,49 @@ impl KagemushaAuthenticatedReleaseV4 {
         benchmark_evidence: &[u8],
         cryptographic_review: &[u8],
     ) -> Result<Self, KagemushaReleaseVerificationError> {
-        for (role, bytes, expected_digest) in [
+        for (role, bytes, expected_digest, maximum_bytes) in [
             (
                 KagemushaRecursiveSpendReleaseApprovalRoleV1::PhysicalDeviceBenchmark,
                 benchmark_evidence,
                 manifest.benchmark_evidence_sha256,
+                KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_EVIDENCE_BYTES_V1,
             ),
             (
                 KagemushaRecursiveSpendReleaseApprovalRoleV1::CryptographicReview,
                 cryptographic_review,
                 manifest.cryptographic_review_sha256,
+                KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_MAX_BYTES_V4,
             ),
         ] {
             if bytes.is_empty()
-                || bytes.len() > KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_EVIDENCE_BYTES_V1
+                || bytes.len() > maximum_bytes
                 || <[u8; 32]>::from(Sha256::digest(bytes)) != expected_digest
             {
                 return Err(KagemushaReleaseVerificationError::EvidenceMismatch { role });
             }
         }
-        Self::verify_attestation(manifest, policy, attestation)
+        let candidate = manifest
+            .immutable_candidate()
+            .map_err(|_| KagemushaReleaseVerificationError::InvalidManifest)?;
+        let review_signers =
+            KagemushaRecursiveSpendCryptographicReviewEvidenceV4::authenticate_canonical_bytes(
+                cryptographic_review,
+                &candidate,
+                policy,
+            )?;
+        let authenticated = Self::verify_attestation(manifest, policy, attestation)?;
+        let attested_review_signers = authenticated
+            .approved_signers
+            .iter()
+            .filter(|signer| {
+                signer.role == KagemushaRecursiveSpendReleaseApprovalRoleV1::CryptographicReview
+            })
+            .map(|signer| signer.public_key.clone())
+            .collect::<Vec<_>>();
+        if review_signers != attested_review_signers {
+            return Err(KagemushaReleaseVerificationError::InvalidCryptographicReview);
+        }
+        Ok(authenticated)
     }
 
     /// Authenticated V4 manifest selected by this runtime proof.
@@ -5003,21 +5607,31 @@ impl KagemushaRecursiveSpendReleaseRecordV4 {
                 KagemushaRecursiveSpendReleaseApprovalRoleV1::PhysicalDeviceBenchmark,
                 self.physical_device_benchmark_summary.as_slice(),
                 self.manifest.benchmark_evidence_sha256,
+                KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_EVIDENCE_BYTES_V1,
             ),
             (
                 KagemushaRecursiveSpendReleaseApprovalRoleV1::CryptographicReview,
                 self.cryptographic_review_summary.as_slice(),
                 self.manifest.cryptographic_review_sha256,
+                KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_MAX_BYTES_V4,
             ),
         ];
-        for (role, summary, expected_sha256) in summaries {
+        for (role, summary, expected_sha256, maximum_bytes) in summaries {
             if summary.is_empty()
-                || summary.len() > KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_EVIDENCE_BYTES_V1
+                || summary.len() > maximum_bytes
                 || <[u8; 32]>::from(Sha256::digest(summary)) != expected_sha256
             {
                 return Err(KagemushaReleaseVerificationError::EvidenceMismatch { role });
             }
         }
+        let candidate = self
+            .manifest
+            .immutable_candidate()
+            .map_err(|_| KagemushaReleaseVerificationError::InvalidManifest)?;
+        KagemushaRecursiveSpendCryptographicReviewEvidenceV4::validate_canonical_bytes_against_candidate(
+            &self.cryptographic_review_summary,
+            &candidate,
+        )?;
         if self.manifest.source_repo_dirty
             || attestation_sha256 != self.manifest.release_attestation_sha256
             || self.promotion_record.generation != self.manifest.generation
@@ -5754,7 +6368,12 @@ impl KagemushaUnshieldPublicInputsBindingV2 {
 
 #[cfg(test)]
 mod kagemusha_v4_artifact_contract_tests {
-    use crate::domain::DomainId;
+    use norito::core::{DecodeFromSlice as _, NoritoDeserialize as _};
+
+    use crate::{
+        domain::DomainId,
+        isi::{InstructionBox, offline::ActivateKagemushaRecursiveReleaseV4},
+    };
 
     use super::*;
 
@@ -5890,6 +6509,60 @@ mod kagemusha_v4_artifact_contract_tests {
         }
     }
 
+    fn unsigned_candidate(
+        template: &KagemushaRecursiveSpendArtifactManifestV4,
+    ) -> KagemushaRecursiveSpendCandidateV4 {
+        let mut manifest = template.clone();
+        manifest.source_repo_dirty = false;
+        manifest.benchmark_evidence_sha256 = [0; 32];
+        manifest.cryptographic_review_sha256 = [0; 32];
+        manifest.release_attestation_sha256 = [0; 32];
+        let candidate = KagemushaRecursiveSpendCandidateV4 {
+            schema: KAGEMUSHA_RECURSIVE_SPEND_CANDIDATE_SCHEMA_V4.to_owned(),
+            version: KAGEMUSHA_RECURSIVE_SPEND_CANDIDATE_VERSION_V4,
+            manifest,
+        };
+        candidate.validate().expect("valid test V4 candidate");
+        candidate
+    }
+
+    fn signed_review_bytes(
+        candidate: &KagemushaRecursiveSpendCandidateV4,
+        reviewers: &[&KeyPair],
+    ) -> Vec<u8> {
+        let payload = KagemushaRecursiveSpendCryptographicReviewPayloadV4::approved(
+            candidate,
+            digest(b"complete independent cryptographic review report"),
+            [
+                digest(b"constraint coverage evidence"),
+                digest(b"cycle and transcript evidence"),
+                digest(b"public input and transition evidence"),
+                digest(b"artifact parameter and verifying key evidence"),
+                digest(b"nullifier replay and finality evidence"),
+                digest(b"parser canonicalization and resource bound evidence"),
+            ],
+        )
+        .expect("canonical approved review payload");
+        let mut approvals = reviewers
+            .iter()
+            .map(
+                |key_pair| KagemushaRecursiveSpendCryptographicReviewApprovalV4 {
+                    public_key: key_pair.public_key().clone(),
+                    signature: SignatureOf::try_new(key_pair.private_key(), &payload)
+                        .expect("test cryptographic review signature"),
+                },
+            )
+            .collect::<Vec<_>>();
+        approvals.sort_by(|left, right| left.public_key.cmp(&right.public_key));
+        to_bytes(&KagemushaRecursiveSpendCryptographicReviewEvidenceV4 {
+            schema: KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_SCHEMA_V4.to_owned(),
+            version: KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_VERSION_V4,
+            payload,
+            approvals,
+        })
+        .expect("canonical signed review evidence")
+    }
+
     fn promoted_release() -> KagemushaRecursiveSpendPromotedReleaseV4 {
         let approved_signers = [
             KagemushaRecursiveSpendReleaseApprovalRoleV1::Release,
@@ -5920,6 +6593,73 @@ mod kagemusha_v4_artifact_contract_tests {
                 .map(str::to_owned)
                 .to_vec(),
             max_proof_bytes: 9_000,
+        }
+    }
+
+    fn release_activation_wire_fixture() -> KagemushaRecursiveSpendReleaseActivationV4 {
+        let manifest = manifest();
+        let release_attestation = KagemushaRecursiveSpendReleaseAttestationV4 {
+            schema: KAGEMUSHA_RECURSIVE_SPEND_RELEASE_ATTESTATION_SCHEMA_V4.to_owned(),
+            version: KAGEMUSHA_RECURSIVE_SPEND_RELEASE_AUTH_VERSION_V4,
+            subject: manifest
+                .release_attestation_subject()
+                .expect("wire fixture manifest has a canonical attestation subject"),
+            approvals: Vec::new(),
+        };
+        KagemushaRecursiveSpendReleaseActivationV4 {
+            release_record: KagemushaRecursiveSpendReleaseRecordV4 {
+                manifest,
+                release_attestation,
+                physical_device_benchmark_summary: b"wire-bound benchmark evidence".to_vec(),
+                cryptographic_review_summary: b"wire-bound review evidence".to_vec(),
+                promotion_record: promoted_release(),
+            },
+            configured_policy_sha256: digest(b"wire-bound release policy"),
+            step_eq_verifier_key_id: VerifyingKeyId::new("halo2/ipa", "wire-bound-step-eq"),
+            step_eq_verifier_record: VerifyingKeyRecord::new(
+                7,
+                KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4,
+                BackendTag::Halo2IpaPasta,
+                KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_VERIFIER_CURVE_V4,
+                digest(b"wire-bound Eq public inputs"),
+                digest(b"wire-bound Eq verifier"),
+            ),
+            step_ep_verifier_key_id: VerifyingKeyId::new("halo2/ipa", "wire-bound-step-ep"),
+            step_ep_verifier_record: VerifyingKeyRecord::new(
+                7,
+                KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V4,
+                BackendTag::Halo2IpaPasta,
+                KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_VERIFIER_CURVE_V4,
+                digest(b"wire-bound Ep public inputs"),
+                digest(b"wire-bound Ep verifier"),
+            ),
+        }
+    }
+
+    fn device_attestation_policy_wire_fixture() -> OfflineDeviceAttestationPolicy {
+        OfflineDeviceAttestationPolicy {
+            version: 1,
+            trusted_roots: vec![OfflineDeviceAttestationTrustedRoot {
+                platform: OFFLINE_DEVICE_ATTESTATION_IOS_APP_ATTEST_PLATFORM.to_owned(),
+                der: vec![0x30, 0x01, 0x42],
+                not_before_ms: Some(1_700_000_000_000),
+                not_after_ms: Some(1_900_000_000_000),
+            }],
+            revoked_certificate_sha256: vec![vec![0x51; 32]],
+            ios_apps: vec![OfflineIosAppAttestationPolicy {
+                team_id: "WIRETEAM1".to_owned(),
+                bundle_id: "com.example.wire".to_owned(),
+                environment: "production".to_owned(),
+                allowed_validation_categories: vec![1, 10],
+                allowed_bundle_versions: vec!["1.0".to_owned()],
+                allow_legacy_auth_data_without_extensions: false,
+            }],
+            android_apps: vec![OfflineAndroidAppAttestationPolicy {
+                package_name: "com.example.wire".to_owned(),
+                signing_certificate_sha256: vec![vec![0x61; 32]],
+            }],
+            require_ios_app_policy: true,
+            require_android_app_policy: true,
         }
     }
 
@@ -6333,8 +7073,20 @@ mod kagemusha_v4_artifact_contract_tests {
     #[test]
     fn v4_attestation_subject_breaks_only_the_attestation_digest_cycle() {
         let benchmark = b"signed V4 physical-device benchmark evidence".to_vec();
-        let review = b"independent V4 cryptographic review evidence".to_vec();
+        let roles = [
+            KagemushaRecursiveSpendReleaseApprovalRoleV1::Release,
+            KagemushaRecursiveSpendReleaseApprovalRoleV1::CryptographicReview,
+            KagemushaRecursiveSpendReleaseApprovalRoleV1::PhysicalDeviceBenchmark,
+        ];
+        let key_pairs = [
+            KeyPair::from_seed(vec![21; 32], Algorithm::Ed25519),
+            KeyPair::from_seed(vec![22; 32], Algorithm::Ed25519),
+            KeyPair::from_seed(vec![23; 32], Algorithm::Ed25519),
+        ];
         let mut manifest = manifest();
+        manifest.source_repo_dirty = false;
+        let candidate = unsigned_candidate(&manifest);
+        let review = signed_review_bytes(&candidate, &[&key_pairs[1]]);
         manifest.benchmark_evidence_sha256 = digest(&benchmark);
         manifest.cryptographic_review_sha256 = digest(&review);
         manifest.release_attestation_sha256 = digest(b"first nonzero staging digest");
@@ -6365,16 +7117,6 @@ mod kagemusha_v4_artifact_contract_tests {
                 .expect("valid modified bootstrap subject")
         );
 
-        let roles = [
-            KagemushaRecursiveSpendReleaseApprovalRoleV1::Release,
-            KagemushaRecursiveSpendReleaseApprovalRoleV1::CryptographicReview,
-            KagemushaRecursiveSpendReleaseApprovalRoleV1::PhysicalDeviceBenchmark,
-        ];
-        let key_pairs = [
-            KeyPair::from_seed(vec![21; 32], Algorithm::Ed25519),
-            KeyPair::from_seed(vec![22; 32], Algorithm::Ed25519),
-            KeyPair::from_seed(vec![23; 32], Algorithm::Ed25519),
-        ];
         let policy = KagemushaRecursiveSpendReleasePolicyV1 {
             schema: KAGEMUSHA_RECURSIVE_SPEND_RELEASE_POLICY_SCHEMA_V1.to_owned(),
             version: KAGEMUSHA_RECURSIVE_SPEND_RELEASE_AUTH_VERSION_V1,
@@ -6427,6 +7169,42 @@ mod kagemusha_v4_artifact_contract_tests {
         assert_eq!(authenticated.manifest(), &manifest);
         assert_eq!(authenticated.approved_signers().len(), roles.len());
 
+        let alternate_reviewer = KeyPair::from_seed(vec![24; 32], Algorithm::Ed25519);
+        let mut mismatched_policy = policy.clone();
+        mismatched_policy.roles[1]
+            .authorized_signers
+            .push(alternate_reviewer.public_key().clone());
+        mismatched_policy.roles[1].authorized_signers.sort();
+        let mut mismatched_attestation = attestation.clone();
+        let mismatched_review_approval = mismatched_attestation
+            .approvals
+            .iter_mut()
+            .find(|approval| {
+                approval.role == KagemushaRecursiveSpendReleaseApprovalRoleV1::CryptographicReview
+            })
+            .expect("cryptographic-review attestation approval");
+        mismatched_review_approval.public_key = alternate_reviewer.public_key().clone();
+        mismatched_review_approval.signature = SignatureOf::try_new(
+            alternate_reviewer.private_key(),
+            &subject.approval_payload(
+                KagemushaRecursiveSpendReleaseApprovalRoleV1::CryptographicReview,
+            ),
+        )
+        .expect("alternate release-review signature");
+        let mut mismatched_manifest = manifest.clone();
+        mismatched_manifest.release_attestation_sha256 =
+            digest(&to_bytes(&mismatched_attestation).expect("mismatched canonical attestation"));
+        assert_eq!(
+            KagemushaAuthenticatedReleaseV4::verify(
+                &mismatched_manifest,
+                &mismatched_policy,
+                &mismatched_attestation,
+                &benchmark,
+                &review,
+            ),
+            Err(KagemushaReleaseVerificationError::InvalidCryptographicReview)
+        );
+
         let mut signed_params_tamper = manifest.clone();
         signed_params_tamper.profiles[0].circuit_params.num_fixed += 1;
         assert_eq!(
@@ -6437,7 +7215,7 @@ mod kagemusha_v4_artifact_contract_tests {
                 &benchmark,
                 &review,
             ),
-            Err(KagemushaReleaseVerificationError::InvalidAttestation)
+            Err(KagemushaReleaseVerificationError::InvalidCryptographicReview)
         );
         let mut signed_bootstrap_tamper = manifest;
         signed_bootstrap_tamper.profiles[0].artifacts[3].payload_sha256[0] ^= 1;
@@ -6449,7 +7227,124 @@ mod kagemusha_v4_artifact_contract_tests {
                 &benchmark,
                 &review,
             ),
-            Err(KagemushaReleaseVerificationError::InvalidAttestation)
+            Err(KagemushaReleaseVerificationError::InvalidCryptographicReview)
+        );
+    }
+
+    #[test]
+    fn v4_cryptographic_review_is_canonical_signed_and_candidate_bound() {
+        let candidate = unsigned_candidate(&manifest());
+        let reviewer = KeyPair::from_seed(vec![61; 32], Algorithm::Ed25519);
+        let review_bytes = signed_review_bytes(&candidate, &[&reviewer]);
+        assert_eq!(
+            KagemushaRecursiveSpendCryptographicReviewEvidenceV4::validate_canonical_bytes_against_candidate(
+                &review_bytes,
+                &candidate,
+            )
+            .expect("canonical signed review"),
+            vec![reviewer.public_key().clone()]
+        );
+
+        assert!(
+            KagemushaRecursiveSpendCryptographicReviewPayloadV4::approved(
+                &candidate,
+                [0; 32],
+                [
+                    [0x91; 32], [0x92; 32], [0x93; 32], [0x94; 32], [0x95; 32], [0x96; 32]
+                ],
+            )
+            .is_err(),
+            "the producer constructor must reject an absent report digest"
+        );
+        assert!(
+            KagemushaRecursiveSpendCryptographicReviewPayloadV4::approved(
+                &candidate,
+                [0x90; 32],
+                [[0x91; 32]; KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_CHECK_COUNT_V4],
+            )
+            .is_err(),
+            "the producer constructor must reject duplicate check evidence"
+        );
+        let oversized_review =
+            vec![0; KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_MAX_BYTES_V4 + 1];
+        assert_eq!(
+            KagemushaRecursiveSpendCryptographicReviewEvidenceV4::validate_canonical_bytes_against_candidate(
+                &oversized_review,
+                &candidate,
+            ),
+            Err(KagemushaReleaseVerificationError::EvidenceMismatch {
+                role: KagemushaRecursiveSpendReleaseApprovalRoleV1::CryptographicReview,
+            })
+        );
+
+        assert_eq!(
+            KagemushaRecursiveSpendCryptographicReviewEvidenceV4::validate_canonical_bytes_against_candidate(
+                b"approved by independent review",
+                &candidate,
+            ),
+            Err(KagemushaReleaseVerificationError::InvalidCryptographicReview)
+        );
+
+        let mut wrong_candidate = candidate.clone();
+        wrong_candidate.manifest.activation_height += 1;
+        wrong_candidate
+            .validate()
+            .expect("valid distinct review candidate");
+        assert_eq!(
+            KagemushaRecursiveSpendCryptographicReviewEvidenceV4::validate_canonical_bytes_against_candidate(
+                &review_bytes,
+                &wrong_candidate,
+            ),
+            Err(KagemushaReleaseVerificationError::InvalidCryptographicReview)
+        );
+
+        let review: KagemushaRecursiveSpendCryptographicReviewEvidenceV4 =
+            norito::decode_from_bytes(&review_bytes).expect("decode test review");
+        let mut rejected = review.clone();
+        rejected.payload.decision = KagemushaRecursiveSpendCryptographicReviewDecisionV4::Rejected;
+        assert_eq!(
+            KagemushaRecursiveSpendCryptographicReviewEvidenceV4::validate_canonical_bytes_against_candidate(
+                &to_bytes(&rejected).expect("rejected review bytes"),
+                &candidate,
+            ),
+            Err(KagemushaReleaseVerificationError::InvalidCryptographicReview)
+        );
+
+        let mut failed_check = review.clone();
+        failed_check.payload.checks[0].status =
+            KagemushaRecursiveSpendCryptographicReviewCheckStatusV4::Failed;
+        assert_eq!(
+            KagemushaRecursiveSpendCryptographicReviewEvidenceV4::validate_canonical_bytes_against_candidate(
+                &to_bytes(&failed_check).expect("failed-check review bytes"),
+                &candidate,
+            ),
+            Err(KagemushaReleaseVerificationError::InvalidCryptographicReview)
+        );
+
+        let mut duplicate_digest = review.clone();
+        duplicate_digest.payload.checks[1].evidence_sha256 =
+            duplicate_digest.payload.checks[0].evidence_sha256;
+        assert_eq!(
+            KagemushaRecursiveSpendCryptographicReviewEvidenceV4::validate_canonical_bytes_against_candidate(
+                &to_bytes(&duplicate_digest).expect("duplicate-digest review bytes"),
+                &candidate,
+            ),
+            Err(KagemushaReleaseVerificationError::InvalidCryptographicReview)
+        );
+
+        let impostor = KeyPair::from_seed(vec![62; 32], Algorithm::Ed25519);
+        let mut invalid_signature = review.clone();
+        invalid_signature.approvals[0].signature =
+            SignatureOf::try_new(impostor.private_key(), &invalid_signature.payload)
+                .expect("impostor review signature");
+        assert_eq!(
+            KagemushaRecursiveSpendCryptographicReviewEvidenceV4::validate_canonical_bytes_against_candidate(
+                &to_bytes(&invalid_signature).expect("invalid-signature review bytes"),
+                &candidate,
+            ),
+            Err(KagemushaReleaseVerificationError::InvalidSignature {
+                role: KagemushaRecursiveSpendReleaseApprovalRoleV1::CryptographicReview,
+            })
         );
     }
 
@@ -6578,6 +7473,51 @@ mod kagemusha_v4_artifact_contract_tests {
     }
 
     #[test]
+    fn v4_activation_wire_binds_policy_and_rejects_legacy_one_field_layout() {
+        let policy = device_attestation_policy_wire_fixture();
+        let instruction = ActivateKagemushaRecursiveReleaseV4::new(
+            release_activation_wire_fixture(),
+            policy.clone(),
+        );
+
+        let boxed = InstructionBox::from(instruction.clone());
+        let bytes = norito::core::to_bytes(&boxed).expect("serialize composite activation");
+        let archived = norito::core::from_bytes::<InstructionBox>(&bytes)
+            .expect("decode composite activation archive");
+        let decoded = InstructionBox::try_deserialize(archived)
+            .expect("deserialize composite activation instruction");
+        assert_eq!(
+            decoded
+                .as_any()
+                .downcast_ref::<ActivateKagemushaRecursiveReleaseV4>(),
+            Some(&instruction),
+            "the embedded device policy must survive the actual instruction-box wire path",
+        );
+        assert_eq!(instruction.device_attestation_policy(), &policy);
+
+        let encoded = instruction.encode();
+        let flags = norito::core::default_encode_flags();
+        assert_eq!(
+            flags & norito::core::header_flags::PACKED_STRUCT,
+            0,
+            "legacy-layout fixture requires the canonical AoS encoding",
+        );
+        let (roundtrip, used) = ActivateKagemushaRecursiveReleaseV4::decode_from_slice(&encoded)
+            .expect("composite activation payload must roundtrip");
+        assert_eq!(used, encoded.len());
+        assert_eq!(roundtrip, instruction);
+
+        let mut legacy_len = 0usize;
+        crate::isi::read_aos_field(&encoded, &mut legacy_len, flags)
+            .expect("read the former activation-only field");
+        assert!(legacy_len < encoded.len());
+        assert!(
+            ActivateKagemushaRecursiveReleaseV4::decode_from_slice(&encoded[..legacy_len]).is_err(),
+            "legacy one-field activation bytes must fail closed instead of defaulting a policy",
+        );
+    }
+
+    #[test]
     fn v4_verifier_ids_are_manifest_and_parity_qualified() {
         let manifest_sha256 = [0xab; 32];
         let eq = kagemusha_recursive_spend_verifier_key_id_v4(
@@ -6618,6 +7558,7 @@ mod device_authority_p256_tests {
     use p256::ecdsa::{Signature as P256Signature, SigningKey, signature::Signer as _};
 
     use super::*;
+    use crate::domain::DomainId;
 
     const P256_ORDER: [u8; 32] = [
         0xff, 0xff, 0xff, 0xff, 0x00, 0x00, 0x00, 0x00, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
@@ -6659,6 +7600,71 @@ mod device_authority_p256_tests {
         let mut value = [0_u8; 32];
         value[31] = 1;
         value
+    }
+
+    fn account(seed: u8) -> AccountId {
+        AccountId::new(
+            KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+                .expect("deterministic account key")
+                .public_key()
+                .clone(),
+        )
+    }
+
+    fn asset(name: &str) -> AssetDefinitionId {
+        AssetDefinitionId::new(
+            DomainId::try_new("offline", "universal").expect("test domain"),
+            name.parse().expect("test asset name"),
+        )
+    }
+
+    fn placeholder_signature() -> KagemushaDeviceSignatureV2 {
+        KagemushaDeviceSignatureV2::from_raw_bytes(&scalar_pair(one(), one()))
+            .expect("valid low-S placeholder")
+    }
+
+    fn authorization(
+        assertion_key: &SigningKey,
+        ios_authenticator_data: Option<Vec<u8>>,
+    ) -> KagemushaRequestAuthorizationV2 {
+        let hardware_assertion = match ios_authenticator_data {
+            None => KagemushaOnlineHardwareAssertionV1::AndroidKeyMint(
+                KagemushaAndroidKeyMintHardwareAssertionV1 {
+                    signature: placeholder_signature(),
+                },
+            ),
+            Some(authenticator_data) => KagemushaOnlineHardwareAssertionV1::IosAppAttest(
+                KagemushaIosAppAttestHardwareAssertionV1 {
+                    authenticator_data,
+                    signature: placeholder_signature(),
+                },
+            ),
+        };
+        let mut authorization = KagemushaRequestAuthorizationV2 {
+            authority: account(21),
+            device_id: "hardware-device-21".to_owned(),
+            asset_definition_id: asset("cash"),
+            operation_id: [0x21; 32],
+            issued_at_ms: 1_800_000_000_000,
+            expires_at_ms: 1_800_000_030_000,
+            nonce: [0x22; 32],
+            payload_digest: [0x23; 32],
+            registration_hash: [0x24; 32],
+            hardware_assertion,
+        };
+        let signing_bytes = authorization
+            .signing_bytes()
+            .expect("authorization signing bytes");
+        let signed_message = match &authorization.hardware_assertion {
+            KagemushaOnlineHardwareAssertionV1::AndroidKeyMint(_) => signing_bytes,
+            KagemushaOnlineHardwareAssertionV1::IosAppAttest(assertion) => [
+                assertion.authenticator_data.as_slice(),
+                signing_bytes.as_slice(),
+            ]
+            .concat(),
+        };
+        authorization.set_hardware_signature(sign(assertion_key, &signed_message));
+        authorization
     }
 
     #[test]
@@ -6770,6 +7776,120 @@ mod device_authority_p256_tests {
             signature
                 .verify(&device_public_key(&wrong_key), message)
                 .is_err()
+        );
+    }
+
+    #[test]
+    fn online_android_assertion_binds_every_authorization_coordinate_and_key() {
+        let key = signing_key(31);
+        let wrong_key = signing_key(32);
+        let authorization = authorization(&key, None);
+        let public_key = key.verifying_key().to_encoded_point(false);
+        authorization
+            .validate_for_payload(authorization.payload_digest)
+            .expect("valid authorization structure");
+        authorization
+            .verify_hardware_signature(public_key.as_bytes())
+            .expect("exact registered key verifies");
+        assert!(
+            authorization
+                .verify_hardware_signature(
+                    wrong_key.verifying_key().to_encoded_point(false).as_bytes(),
+                )
+                .is_err(),
+            "a substituted assertion key must fail",
+        );
+
+        let mut mutations = Vec::new();
+        let mut changed = authorization.clone();
+        changed.authority = account(22);
+        mutations.push(changed);
+        let mut changed = authorization.clone();
+        changed.device_id = "hardware-device-22".to_owned();
+        mutations.push(changed);
+        let mut changed = authorization.clone();
+        changed.asset_definition_id = asset("other_cash");
+        mutations.push(changed);
+        let mut changed = authorization.clone();
+        changed.operation_id = [0x31; 32];
+        mutations.push(changed);
+        let mut changed = authorization.clone();
+        changed.issued_at_ms += 1;
+        mutations.push(changed);
+        let mut changed = authorization.clone();
+        changed.expires_at_ms += 1;
+        mutations.push(changed);
+        let mut changed = authorization.clone();
+        changed.nonce = [0x32; 32];
+        mutations.push(changed);
+        let mut changed = authorization.clone();
+        changed.payload_digest = [0x33; 32];
+        mutations.push(changed);
+        let mut changed = authorization.clone();
+        changed.registration_hash = [0x34; 32];
+        mutations.push(changed);
+        let mut changed = authorization.clone();
+        changed.hardware_assertion = KagemushaOnlineHardwareAssertionV1::IosAppAttest(
+            KagemushaIosAppAttestHardwareAssertionV1 {
+                authenticator_data: vec![0; 37],
+                signature: match &authorization.hardware_assertion {
+                    KagemushaOnlineHardwareAssertionV1::AndroidKeyMint(assertion) => {
+                        assertion.signature
+                    }
+                    KagemushaOnlineHardwareAssertionV1::IosAppAttest(_) => unreachable!(),
+                },
+            },
+        );
+        mutations.push(changed);
+
+        for mutation in mutations {
+            assert!(
+                mutation
+                    .verify_hardware_signature(public_key.as_bytes())
+                    .is_err(),
+                "every account/device/asset/platform/hash/time/operation coordinate is signed",
+            );
+        }
+    }
+
+    #[test]
+    fn online_ios_assertion_binds_authenticator_data_and_client_data_hash() {
+        let key = signing_key(41);
+        let mut authenticator_data = vec![0_u8; 37];
+        authenticator_data[..32].copy_from_slice(&[0x41; 32]);
+        authenticator_data[36] = 1;
+        let authorization = authorization(&key, Some(authenticator_data));
+        let public_key = key.verifying_key().to_encoded_point(false);
+        authorization
+            .verify_hardware_signature(public_key.as_bytes())
+            .expect("exact App Attest assertion verifies");
+
+        let mut changed_counter = authorization.clone();
+        let KagemushaOnlineHardwareAssertionV1::IosAppAttest(assertion) =
+            &mut changed_counter.hardware_assertion
+        else {
+            unreachable!()
+        };
+        assertion.authenticator_data[36] = 2;
+        assert!(
+            changed_counter
+                .verify_hardware_signature(public_key.as_bytes())
+                .is_err(),
+            "the signature must bind the exact authenticatorData counter",
+        );
+
+        let mut wrong_length = authorization;
+        let KagemushaOnlineHardwareAssertionV1::IosAppAttest(assertion) =
+            &mut wrong_length.hardware_assertion
+        else {
+            unreachable!()
+        };
+        assertion.authenticator_data.truncate(36);
+        assert!(
+            wrong_length
+                .validate_for_payload(wrong_length.payload_digest)
+                .is_err(),
+            "truncated assertion authData must fail at typed ingress",
         );
     }
 }
@@ -7197,6 +8317,7 @@ impl KagemushaRecursiveSpendTopUpRequestV4 {
         let unsigned = self.unsigned_payload();
         unsigned.validate_public_binding()?;
         if self.asset.account() != &self.authorization.authority
+            || self.asset.definition() != &self.authorization.asset_definition_id
             || self.authorization.operation_id != self.operation_id
         {
             return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
@@ -9122,6 +10243,7 @@ impl KagemushaRecursiveSpendRedeemRequestV4 {
         unsigned.validate_public_binding()?;
         if self.authorization.operation_id != self.operation_id
             || self.authorization.authority != self.recipient
+            || self.authorization.asset_definition_id != self.bundle.statement.asset
         {
             return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
                 field: "authorization.v4",

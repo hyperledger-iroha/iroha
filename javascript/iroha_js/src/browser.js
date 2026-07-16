@@ -31,10 +31,28 @@ export {
   browserSignedTransactionHashHex,
   browserTransactionCodec,
   browserTransactionPayloadHashHex,
+  buildBrowserInstructionTransactionPayload,
   buildBrowserTransferPayload,
+  finalizeBrowserInstructionTransaction,
   finalizeBrowserSignedTransaction,
+  validateBrowserInstructionTransactionSignable,
   validateBrowserTransferSignable,
 } from "./transactionCodec.js";
+
+export {
+  SMART_CONTRACT_CODE_CHUNK_BYTES,
+  deploySmartContractBrowser,
+  deriveContractAddress,
+  prepareBrowserContractArtifact,
+} from "./smartContractDeployment.js";
+
+export {
+  buildCancelSmartContractCodeUploadInstruction,
+  buildCommitContractDeploymentInstruction,
+  buildFinalizeSmartContractCodeUploadInstruction,
+  buildRegisterSmartContractCodeInstruction,
+  buildUploadSmartContractCodeChunkInstruction,
+} from "./instructionBuilders.js";
 
 export {
   noritoDecodeInstruction,

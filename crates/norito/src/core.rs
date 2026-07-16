@@ -44,7 +44,7 @@ pub use simd_crc64::crc64_neon;
 pub use simd_crc64::crc64_sse42;
 pub use simd_crc64::{crc64_fallback, hardware_crc64};
 
-#[cfg(feature = "gpu-compression")]
+#[cfg(all(feature = "gpu-compression", not(target_arch = "wasm32")))]
 pub mod gpu_zstd;
 
 /// Default upper bound on Norito archive length (bytes) when hosts do not
@@ -5091,12 +5091,12 @@ impl Error {
     }
 
     fn supported_compressions() -> &'static [Compression] {
-        #[cfg(feature = "compression")]
+        #[cfg(all(feature = "compression", not(target_arch = "wasm32")))]
         {
             const SUPPORTED: &[Compression] = &[Compression::None, Compression::Zstd];
             SUPPORTED
         }
-        #[cfg(not(feature = "compression"))]
+        #[cfg(any(not(feature = "compression"), target_arch = "wasm32"))]
         {
             const SUPPORTED: &[Compression] = &[Compression::None];
             SUPPORTED
@@ -6735,7 +6735,7 @@ impl<'a, T: NoritoDeserialize<'a> + 'static, const N: usize> NoritoDeserialize<'
 }
 
 pub mod stream {
-    #[cfg(feature = "compression")]
+    #[cfg(all(feature = "compression", not(target_arch = "wasm32")))]
     use std::io::BufReader;
     use std::{
         alloc::{Layout, alloc, dealloc},
@@ -6915,7 +6915,7 @@ pub mod stream {
 
     pub(super) enum PayloadStream<R: Read> {
         Plain(R),
-        #[cfg(feature = "compression")]
+        #[cfg(all(feature = "compression", not(target_arch = "wasm32")))]
         Zstd(zstd::Decoder<'static, BufReader<R>>),
     }
 
@@ -6924,11 +6924,11 @@ pub mod stream {
             match compression {
                 Compression::None => Ok(Self::Plain(reader)),
                 Compression::Zstd => {
-                    #[cfg(feature = "compression")]
+                    #[cfg(all(feature = "compression", not(target_arch = "wasm32")))]
                     {
                         Ok(Self::Zstd(zstd::Decoder::new(reader)?))
                     }
-                    #[cfg(not(feature = "compression"))]
+                    #[cfg(any(not(feature = "compression"), target_arch = "wasm32"))]
                     {
                         let _ = reader;
                         Err(io::Error::other("compression support disabled").into())
@@ -6942,7 +6942,7 @@ pub mod stream {
         fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
             match self {
                 PayloadStream::Plain(inner) => inner.read(buf),
-                #[cfg(feature = "compression")]
+                #[cfg(all(feature = "compression", not(target_arch = "wasm32")))]
                 PayloadStream::Zstd(decoder) => decoder.read(buf),
             }
         }
@@ -8364,17 +8364,25 @@ pub fn to_compressed_bytes<T: NoritoSerialize>(
     let (algorithm, body) = match compression {
         None => (Compression::None, payload),
         Some(cfg) => {
-            #[cfg(not(feature = "compression"))]
+            #[cfg(any(not(feature = "compression"), target_arch = "wasm32"))]
             {
                 let _ = cfg;
                 return Err(std::io::Error::other("compression support disabled").into());
             }
 
-            #[cfg(all(feature = "compression", feature = "gpu-compression"))]
+            #[cfg(all(
+                feature = "compression",
+                feature = "gpu-compression",
+                not(target_arch = "wasm32")
+            ))]
             {
                 (Compression::Zstd, gpu_zstd::encode_all(payload, cfg.level)?)
             }
-            #[cfg(all(feature = "compression", not(feature = "gpu-compression")))]
+            #[cfg(all(
+                feature = "compression",
+                not(feature = "gpu-compression"),
+                not(target_arch = "wasm32")
+            ))]
             {
                 (
                     Compression::Zstd,
@@ -8411,6 +8419,7 @@ pub fn to_compressed_bytes<T: NoritoSerialize>(
     Ok(out)
 }
 
+#[cfg(all(feature = "compression", not(target_arch = "wasm32")))]
 fn validate_zstd_stream(compressed: &[u8]) -> Result<(), Error> {
     if compressed.is_empty() {
         return Err(Error::LengthMismatch);
@@ -8448,12 +8457,21 @@ pub fn from_compressed_bytes<T: for<'de> NoritoDeserialize<'de>>(
             trimmed.to_vec()
         }
         Compression::Zstd => {
+            #[cfg(all(feature = "compression", not(target_arch = "wasm32")))]
             validate_zstd_stream(compressed)?;
-            #[cfg(all(feature = "compression", feature = "gpu-compression"))]
+            #[cfg(all(
+                feature = "compression",
+                feature = "gpu-compression",
+                not(target_arch = "wasm32")
+            ))]
             {
                 gpu_zstd::decode_all(compressed, header.length)?
             }
-            #[cfg(all(feature = "compression", not(feature = "gpu-compression")))]
+            #[cfg(all(
+                feature = "compression",
+                not(feature = "gpu-compression"),
+                not(target_arch = "wasm32")
+            ))]
             {
                 let decoder = zstd::Decoder::new(compressed)?;
                 // Bound output to the declared payload length (+1 to detect overflow).
@@ -8462,7 +8480,7 @@ pub fn from_compressed_bytes<T: for<'de> NoritoDeserialize<'de>>(
                 decoder.take(max_len as u64).read_to_end(&mut out)?;
                 out
             }
-            #[cfg(not(feature = "compression"))]
+            #[cfg(any(not(feature = "compression"), target_arch = "wasm32"))]
             {
                 return Err(std::io::Error::other("compression support disabled").into());
             }

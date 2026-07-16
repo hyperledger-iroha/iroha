@@ -140,6 +140,7 @@ public enum KagemushaRecursiveSpendCodecs {
 
     public static func encodeNoteOpening(_ opening: KagemushaNoteOpening) throws -> Data {
         var writer = CompactNoritoWriter()
+        defer { writer.wipe() }
         writer.writeField(opening.spendKey)
         writer.writeField(opening.rho)
         writer.writeField(opening.diversifier)
@@ -158,6 +159,7 @@ public enum KagemushaRecursiveSpendCodecs {
             schema: KagemushaRecursiveSpend.noteOpeningWireName,
             field: "noteOpening"
         ))
+        defer { reader.wipe() }
         let opening = try KagemushaNoteOpening(
             spendKey: packedFixed(
                 reader.field(), count: 32, field: "noteOpening.spendKey"
@@ -168,10 +170,60 @@ public enum KagemushaRecursiveSpendCodecs {
             )
         )
         try reader.finish("noteOpening")
-        guard try encodeNoteOpening(opening) == archive else {
+        var canonical = try encodeNoteOpening(opening)
+        defer { canonical.resetBytes(in: 0..<canonical.count) }
+        guard canonical == archive else {
             throw KagemushaRecursiveSpendError.invalidArchive("noteOpening.canonical")
         }
         return opening
+    }
+
+    static func decodeRedemptionChangePrepareResultV4(
+        _ archive: Data,
+        inputOpening: KagemushaNoteOpening,
+        inputSummary: KagemushaRecursiveSpendBundleSummaryV4,
+        changeAmount: KagemushaScaledAmount
+    ) throws -> KagemushaRecursiveSpendRedemptionChangePreparationV4 {
+        var reader = KagemushaV2Reader(try payload(
+            archive,
+            schema: KagemushaRecursiveSpend.redemptionChangePrepareResultWireNameV4,
+            field: "redemptionChangePrepareResultV4"
+        ))
+        defer { reader.wipe() }
+        let version = try scalarUInt16(
+            reader.field(),
+            field: "redemptionChangePrepareResultV4.version"
+        )
+        var openingPayload = try reader.field()
+        defer { openingPayload.resetBytes(in: 0..<openingPayload.count) }
+        var openingArchive = frame(
+            KagemushaRecursiveSpend.noteOpeningWireName,
+            payload: openingPayload
+        )
+        defer { openingArchive.resetBytes(in: 0..<openingArchive.count) }
+        let opening = try decodeNoteOpening(openingArchive)
+        let output = try decodeNote(reader.field())
+        try reader.finish("redemptionChangePrepareResultV4")
+        guard version == KagemushaRecursiveSpend.wireVersionV4 else {
+            throw KagemushaRecursiveSpendError.invalidArchive(
+                "redemptionChangePrepareResultV4.version"
+            )
+        }
+        let preparation = try KagemushaRecursiveSpendRedemptionChangePreparationV4(
+            opening: opening,
+            output: output,
+            inputOpening: inputOpening,
+            inputSummary: inputSummary,
+            changeAmount: changeAmount
+        )
+        var canonical = try encodeRedemptionChangePrepareResultV4(preparation)
+        defer { canonical.resetBytes(in: 0..<canonical.count) }
+        guard canonical == archive else {
+            throw KagemushaRecursiveSpendError.invalidArchive(
+                "redemptionChangePrepareResultV4.canonical"
+            )
+        }
+        return preparation
     }
 
     /// Encodes local encrypted Merkle membership data for one owned note.
@@ -314,10 +366,25 @@ public enum KagemushaRecursiveSpendCodecs {
         try decodeRecipientRequest(archive).verified(atMilliseconds: atMilliseconds)
     }
 
-    public static func encodeAuthorizationTemplate(
+    public static func encodeAuthorizationPreparation(
         _ fields: KagemushaRequestAuthorizationFields
     ) throws -> Data {
-        try encodeAuthorization(fields, signature: Data([1]))
+        var writer = CompactNoritoWriter()
+        writer.writeField(uint16(KagemushaRecursiveSpend.authorizationPreparationVersionV2))
+        writer.writeField(try accountID(fields.authority))
+        writer.writeField(string(fields.deviceID))
+        writer.writeField(try assetDefinitionID(fields.assetDefinitionID))
+        writer.writeField(fields.operationID)
+        writer.writeField(uint64(fields.issuedAtMilliseconds))
+        writer.writeField(uint64(fields.expiresAtMilliseconds))
+        writer.writeField(fields.nonce)
+        writer.writeField(fields.payloadDigest)
+        writer.writeField(fields.registrationHash)
+        writer.writeField(uint32(fields.platform.rawValue))
+        return frame(
+            KagemushaRecursiveSpend.authorizationPreparationWireName,
+            payload: writer.data
+        )
     }
 
     public static func encodeTopUpShieldBuildRequestV4(
@@ -593,24 +660,6 @@ public enum KagemushaRecursiveSpendCodecs {
         return frame(KagemushaRecursiveSpend.recipientRequestWireName, payload: result.data)
     }
 
-    private static func encodeAuthorization(
-        _ fields: KagemushaRequestAuthorizationFields,
-        signature: Data
-    ) throws -> Data {
-        var writer = CompactNoritoWriter()
-        writer.writeField(try accountID(fields.authority))
-        writer.writeField(string(fields.deviceID))
-        writer.writeField(fields.operationID)
-        writer.writeField(uint64(fields.issuedAtMilliseconds))
-        writer.writeField(uint64(fields.expiresAtMilliseconds))
-        writer.writeField(fields.nonce)
-        writer.writeField(fields.payloadDigest)
-        writer.writeField(option(fields.appAttestEvidenceSHA256.map(constVec)))
-        writer.writeField(option(fields.appAttestEvidence.map(bytes)))
-        writer.writeField(signatureBytes(signature))
-        return frame(KagemushaRecursiveSpend.authorizationWireName, payload: writer.data)
-    }
-
     private static func decodeRecipientRequestPayloadFields(
         _ reader: inout KagemushaV2Reader
     ) throws -> KagemushaRecipientPaymentRequestSigningPayload {
@@ -667,6 +716,28 @@ public enum KagemushaRecursiveSpendCodecs {
         writer.writeField(value.spendNullifier)
         writer.writeField(try scaledAmount(value.amount))
         return writer.data
+    }
+
+    static func encodeRedemptionChangePrepareResultV4(
+        _ preparation: KagemushaRecursiveSpendRedemptionChangePreparationV4
+    ) throws -> Data {
+        var openingArchive = try encodeNoteOpening(preparation.opening)
+        defer { openingArchive.resetBytes(in: 0..<openingArchive.count) }
+        var writer = CompactNoritoWriter()
+        defer { writer.wipe() }
+        writer.writeField(uint16(KagemushaRecursiveSpend.wireVersionV4))
+        var openingPayload = try payload(
+            openingArchive,
+            schema: KagemushaRecursiveSpend.noteOpeningWireName,
+            field: "redemptionChangePrepareResultV4.opening"
+        )
+        defer { openingPayload.resetBytes(in: 0..<openingPayload.count) }
+        writer.writeField(openingPayload)
+        writer.writeField(try note(preparation.output))
+        return frame(
+            KagemushaRecursiveSpend.redemptionChangePrepareResultWireNameV4,
+            payload: writer.data
+        )
     }
 
     private static func decodeNote(_ data: Data) throws -> KagemushaSpendableNoteDescriptor {
@@ -1192,16 +1263,6 @@ public enum KagemushaRecursiveSpendCodecs {
             value.append(byte)
         }
         return value
-    }
-
-    private static func signatureBytes(_ value: Data) -> Data {
-        var writer = CompactNoritoWriter()
-        writer.writeUInt64LE(UInt64(value.count))
-        for byte in value {
-            writer.writeLength(1)
-            writer.writeUInt8(byte)
-        }
-        return writer.data
     }
 
     private static func decodeSignature(_ data: Data, field: String) throws -> Data {
@@ -1931,7 +1992,7 @@ public enum KagemushaRecursiveSpendCodecs {
 }
 
 private struct KagemushaV2Reader {
-    private let data: Data
+    private var data: Data
     private(set) var offset = 0
 
     init(_ data: Data) {
@@ -1939,6 +2000,12 @@ private struct KagemushaV2Reader {
     }
 
     var isEmpty: Bool { offset == data.count }
+
+    mutating func wipe() {
+        data.resetBytes(in: 0..<data.count)
+        data.removeAll(keepingCapacity: false)
+        offset = 0
+    }
 
     mutating func finish(_ field: String) throws {
         guard isEmpty else {

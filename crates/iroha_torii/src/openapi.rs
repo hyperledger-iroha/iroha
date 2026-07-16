@@ -3023,6 +3023,10 @@ fn contracts_paths() -> Map {
         Value::Object(contract_alias_resolve_operation()),
     );
     paths.insert(
+        "/v1/contracts/deployment-state".to_owned(),
+        Value::Object(contract_deployment_state_operation()),
+    );
+    paths.insert(
         "/v1/contracts/aliases".to_owned(),
         Value::Object(json_post_operation(
             "Contracts",
@@ -9967,6 +9971,7 @@ fn is_read_operation(method: &str, path: &str) -> bool {
                     | "/v1/assets/holders/query"
                     | "/v1/assets/query"
                     | "/v1/contracts/aliases/resolve"
+                    | "/v1/contracts/deployment-state"
                     | "/v1/contracts/view"
                     | "/v1/contracts/view/batch"
                     | "/v1/controls/asset-transfer/query"
@@ -10009,7 +10014,8 @@ fn alias_resolve_operation() -> Map {
             "Accepts one exact canonical fully-qualified alias, routes it through the Nexus \
              read proxy using the encoded dataspace, and returns its account binding. Canonical \
              request signing is required, and the signer must hold exact alias-resolution \
-             permission for the alias dataspace and its qualified domain. The route is \
+             permission for the qualified domain, or for the dataspace when the alias is \
+             domainless. The route is \
              independently rate limited."
                 .to_owned(),
         ),
@@ -10109,6 +10115,104 @@ fn contract_alias_resolve_operation() -> Map {
     );
     let mut methods = Map::new();
     operation.insert("responses".into(), Value::Object(responses));
+    methods.insert("post".to_owned(), Value::Object(operation));
+    methods
+}
+
+fn contract_deployment_state_operation() -> Map {
+    let mut operation = Map::new();
+    operation.insert(
+        "tags".into(),
+        Value::Array(vec![Value::String("Contracts".to_owned())]),
+    );
+    operation.insert(
+        "summary".into(),
+        Value::String("Read an atomic contract deployment CAS snapshot.".to_owned()),
+    );
+    operation.insert(
+        "description".into(),
+        Value::String(
+            "Authenticate as the exact deployment authority and read its reserved nonce, the alias's active dataspace and live previous target, and one committed block anchor from a single state view. All u64 values are returned as canonical decimal strings. Malformed native nonce or alias indexes fail closed."
+                .to_owned(),
+        ),
+    );
+    operation.insert(
+        "operationId".into(),
+        Value::String("contractDeploymentState".to_owned()),
+    );
+    operation.insert(
+        "parameters".into(),
+        Value::Array(canonical_request_auth_header_parameters()),
+    );
+    operation.insert(
+        "requestBody".into(),
+        norito::json!({
+            "required": true,
+            "content": {
+                "application/json": {
+                    "schema": { "$ref": "#/components/schemas/ContractDeploymentStateRequest" }
+                }
+            }
+        }),
+    );
+    let mut responses = Map::new();
+    responses.insert(
+        "200".to_owned(),
+        json_response(
+            "One committed, internally consistent deployment CAS snapshot.",
+            schema_ref("ContractDeploymentStateResponse"),
+        ),
+    );
+    responses.insert(
+        "400".to_owned(),
+        json_response(
+            "The JSON body, I105 authority, or contract alias is not exact and canonical.",
+            error_schema_reference(),
+        ),
+    );
+    responses.insert(
+        "401".to_owned(),
+        alias_auth_required_response(
+            "Canonical account request signing is required for deployment-state reads.",
+        ),
+    );
+    responses.insert(
+        "403".to_owned(),
+        json_response(
+            "The authenticated account differs from the requested deployment authority.",
+            error_schema_reference(),
+        ),
+    );
+    responses.insert(
+        "404".to_owned(),
+        json_response(
+            "The requested deployment authority does not exist.",
+            error_schema_reference(),
+        ),
+    );
+    responses.insert(
+        "429".to_owned(),
+        json_response(
+            "Contract deployment-state read rate exceeded.",
+            error_schema_reference(),
+        ),
+    );
+    responses.insert(
+        "500".to_owned(),
+        json_response(
+            "The reserved nonce, alias indexes, binding record, active instance, dataspace, or block anchor is internally inconsistent.",
+            error_schema_reference(),
+        ),
+    );
+    responses.insert(
+        "503".to_owned(),
+        json_response(
+            "No committed block is available to anchor deployment state.",
+            error_schema_reference(),
+        ),
+    );
+    operation.insert("responses".into(), Value::Object(responses));
+    let mut methods = Map::new();
     methods.insert("post".to_owned(), Value::Object(operation));
     methods
 }
@@ -18517,6 +18621,78 @@ fn openapi_schemas() -> Map {
                 "contract_alias": {
                     "type": "string",
                     "description": "Exact canonical contract alias (`name::domain.dataspace` or `name::dataspace`) without surrounding whitespace."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "ContractDeploymentStateRequest".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["authority", "contract_alias"],
+            "additionalProperties": false,
+            "properties": {
+                "authority": {
+                    "type": "string",
+                    "description": "Exact canonical I105 deployment authority. The canonical X-Iroha-Account caller must be this account."
+                },
+                "contract_alias": {
+                    "type": "string",
+                    "description": "Exact canonical contract alias (`name::domain.dataspace` or `name::dataspace`) without surrounding whitespace."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "ContractDeploymentStateResponse".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "authority",
+                "contract_alias",
+                "deploy_nonce",
+                "dataspace_alias",
+                "dataspace_id",
+                "previous_contract_address",
+                "observed_block_height",
+                "observed_block_hash",
+                "ledger_time_ms",
+                "chain_discriminant"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "authority": { "type": "string" },
+                "contract_alias": { "type": "string" },
+                "deploy_nonce": {
+                    "type": "string",
+                    "pattern": "^(0|[1-9][0-9]*)$",
+                    "description": "Current reserved native deployment nonce as canonical decimal u64 text."
+                },
+                "dataspace_alias": { "type": "string" },
+                "dataspace_id": {
+                    "type": "string",
+                    "pattern": "^(0|[1-9][0-9]*)$",
+                    "description": "Resolved active dataspace id as canonical decimal u64 text."
+                },
+                "previous_contract_address": {
+                    "oneOf": [
+                        { "type": "string" },
+                        { "type": "null" }
+                    ],
+                    "description": "Exact live alias target for CAS, or null for a first deployment or grace-expired raw binding."
+                },
+                "observed_block_height": {
+                    "type": "string",
+                    "pattern": "^[1-9][0-9]*$"
+                },
+                "observed_block_hash": { "type": "string" },
+                "ledger_time_ms": {
+                    "type": "string",
+                    "pattern": "^(0|[1-9][0-9]*)$"
+                },
+                "chain_discriminant": {
+                    "type": "string",
+                    "pattern": "^(0|[1-9][0-9]*)$"
                 }
             }
         }),

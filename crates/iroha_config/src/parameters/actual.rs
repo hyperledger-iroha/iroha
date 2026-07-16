@@ -7207,18 +7207,19 @@ pub struct ToriiOnboarding {
     pub authority: AccountId,
     /// Private key corresponding to the onboarding authority.
     pub private_key: ExposedPrivateKey,
-    /// Optional BLAKE3 digest of the dedicated onboarding API token.
+    /// Exact onboarding domain to dedicated API-token BLAKE3 digest.
     ///
-    /// When absent, signer-backed onboarding routes fail closed with service unavailable.
-    pub api_token_hash: Option<[u8; 32]>,
+    /// When empty, signer-backed onboarding routes fail closed with service unavailable. Digests
+    /// are unique, so an authenticated credential is scoped to exactly one domain.
+    pub api_token_hashes_by_domain: BTreeMap<DomainId, [u8; 32]>,
     /// Permission names that onboarding may grant to newly registered accounts.
     pub allowed_permissions: Vec<String>,
-    /// Exact account-alias dataspaces automatically granted for read-only resolution.
+    /// Exact domainless account-alias dataspaces automatically granted for read-only resolution.
     pub alias_resolve_dataspaces: Vec<DataSpaceId>,
-    /// Exact account-alias domains automatically granted for read-only resolution.
+    /// Exact domain-qualified account-alias domains automatically granted for read-only resolution.
     pub alias_resolve_domains: Vec<DomainId>,
-    /// Optional sponsor account granted via `CanUseFeeSponsor`.
-    pub fee_sponsor_account: Option<AccountId>,
+    /// Optional exact sponsor-policy pair granted per newly onboarded account.
+    pub fee_sponsor: Option<ToriiOnboardingFeeSponsor>,
     /// Default alias lease term applied during onboarding.
     pub alias_lease_term_years: u8,
     /// Whether onboarding should create a default auto-renew subscription.
@@ -7231,6 +7232,15 @@ pub struct ToriiOnboarding {
     pub alias_auto_renew_max_failures: u32,
     /// Existing domain used to store internal alias auto-renew subscription NFTs.
     pub alias_auto_renew_subscription_domain: Option<DomainId>,
+}
+
+/// Exact fee-sponsor policy enrollment used by signer-backed onboarding.
+#[derive(Debug, Clone)]
+pub struct ToriiOnboardingFeeSponsor {
+    /// Sponsor account that owns the policy.
+    pub account: AccountId,
+    /// Explicit sponsor-local policy name.
+    pub policy: Name,
 }
 
 /// App-facing faucet configuration exposed to Torii.

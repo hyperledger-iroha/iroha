@@ -61,10 +61,12 @@ iroha_data_model_derive::model_single! {
     #[derive(Decode, Encode)]
     #[derive(iroha_schema::IntoSchema)]
     #[getset(get = "pub")]
-    /// Atomically activate one signed ABI-20 release and its Eq/Ep verifier records.
+    /// Atomically publish one device-attestation policy and activate one signed ABI-20 release.
     pub struct ActivateKagemushaRecursiveReleaseV4 {
         /// Complete authenticated release activation payload.
         pub activation: KagemushaRecursiveSpendReleaseActivationV4,
+        /// Exact governed device-attestation policy installed with the release.
+        pub device_attestation_policy: OfflineDeviceAttestationPolicy,
     }
 }
 
@@ -119,10 +121,16 @@ impl RedeemKagemushaRecursiveV4 {
 }
 
 impl ActivateKagemushaRecursiveReleaseV4 {
-    /// Construct an atomic ABI-20 release activation instruction.
+    /// Construct an atomic device-policy and ABI-20 release activation instruction.
     #[must_use]
-    pub fn new(activation: KagemushaRecursiveSpendReleaseActivationV4) -> Self {
-        Self { activation }
+    pub fn new(
+        activation: KagemushaRecursiveSpendReleaseActivationV4,
+        device_attestation_policy: OfflineDeviceAttestationPolicy,
+    ) -> Self {
+        Self {
+            activation,
+            device_attestation_policy,
+        }
     }
 }
 
@@ -173,14 +181,41 @@ macro_rules! impl_decode_one_canonical_offline_field {
     };
 }
 
+impl<'a> norito::core::DecodeFromSlice<'a> for ActivateKagemushaRecursiveReleaseV4 {
+    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
+        let flags = offline_decode_flags();
+        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
+            return super::decode_packed_instruction_payload::<Self>(bytes);
+        }
+
+        let mut offset = 0usize;
+        let activation = super::decode_aos_canonical_field::<
+            KagemushaRecursiveSpendReleaseActivationV4,
+        >(super::read_aos_field(bytes, &mut offset, flags)?, flags)?;
+        let device_attestation_policy = super::decode_aos_canonical_field::<
+            OfflineDeviceAttestationPolicy,
+        >(
+            super::read_aos_field(bytes, &mut offset, flags)?, flags
+        )?;
+        if offset != bytes.len() {
+            return Err(norito::core::Error::LengthMismatch);
+        }
+        norito::core::note_payload_access(bytes, offset);
+        Ok((
+            Self {
+                activation,
+                device_attestation_policy,
+            },
+            offset,
+        ))
+    }
+}
+
 impl_decode_one_canonical_offline_field!(TopUpKagemushaRecursiveV4 {
     request: KagemushaRecursiveSpendTopUpRequestV4
 });
 impl_decode_one_canonical_offline_field!(RedeemKagemushaRecursiveV4 {
     request: KagemushaRecursiveSpendRedeemRequestV4
-});
-impl_decode_one_canonical_offline_field!(ActivateKagemushaRecursiveReleaseV4 {
-    activation: KagemushaRecursiveSpendReleaseActivationV4
 });
 impl_decode_one_canonical_offline_field!(RegisterOfflineDeviceAttestation {
     registration: OfflineDeviceAttestationRegistration

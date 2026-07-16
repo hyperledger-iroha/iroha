@@ -2184,27 +2184,51 @@ mod tests {
             authorization: KagemushaRequestAuthorizationV2 {
                 authority,
                 device_id: "submission-coordinator-device".to_owned(),
+                asset_definition_id: definition,
                 operation_id,
                 issued_at_ms,
                 expires_at_ms: issued_at_ms
                     .saturating_add(KAGEMUSHA_REQUEST_AUTHORIZATION_MAX_TTL_MS_V2),
                 nonce: [0x63; 32],
                 payload_digest: [0x64; 32],
-                app_attest_evidence_sha256: None,
-                app_attest_evidence: None,
-                signature: Signature::new(key_pair.private_key(), b"placeholder"),
+                registration_hash: [0x6A; 32],
+                hardware_assertion:
+                    iroha_data_model::offline::KagemushaOnlineHardwareAssertionV1::AndroidKeyMint(
+                        iroha_data_model::offline::KagemushaAndroidKeyMintHardwareAssertionV1 {
+                            signature: iroha_data_model::offline::KagemushaDeviceSignatureV2::from_raw_bytes(
+                                &[1_u8; 64],
+                            )
+                            .expect("fixture hardware signature"),
+                        },
+                    ),
             },
         };
         let signing_bytes = request
             .authorization
             .signing_bytes()
             .expect("encode exact offline authorization signing bytes");
-        request.authorization.signature = Signature::new(key_pair.private_key(), &signing_bytes);
+        use p256::{ecdsa::signature::Signer as _, elliptic_curve::sec1::ToEncodedPoint as _};
+        let hardware_key =
+            p256::ecdsa::SigningKey::from_slice(&[1_u8; 32]).expect("fixed P-256 fixture key");
+        let hardware_signature: p256::ecdsa::Signature = hardware_key.sign(&signing_bytes);
+        let hardware_signature = hardware_signature
+            .normalize_s()
+            .unwrap_or(hardware_signature);
+        request.authorization.set_hardware_signature(
+            iroha_data_model::offline::KagemushaDeviceSignatureV2::from_raw_bytes(
+                hardware_signature.to_bytes().as_slice(),
+            )
+            .expect("canonical hardware fixture signature"),
+        );
         request
             .authorization
-            .signature
-            .verify(request.authorization.authority.signatory(), &signing_bytes)
-            .expect("offline authorization fixture signature must bind the exact typed fields");
+            .verify_hardware_signature(
+                hardware_key
+                    .verifying_key()
+                    .to_encoded_point(false)
+                    .as_bytes(),
+            )
+            .expect("offline hardware fixture signature must bind the exact typed fields");
         request
     }
 

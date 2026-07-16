@@ -1358,6 +1358,9 @@ mod model {
 
     type FastDslParts<'a> = (QueryItemKind, &'a [u8], &'a [u8], &'a [u8]);
 
+    #[cfg(feature = "fast_dsl")]
+    const INVALID_FAST_DSL_COMPONENT: [u8; 4] = [0xFF; 4];
+
     impl QueryWithParams {
         /// Convenience constructor from a boxed erased query and params.
         ///
@@ -1395,6 +1398,7 @@ mod model {
                 try_build!(crate::account::AccountId, AccountId);
                 try_build!(crate::asset::value::Asset, Asset);
                 try_build!(crate::asset::definition::AssetDefinition, AssetDefinition);
+                try_build!(crate::repo::RepoAgreement, RepoAgreement);
                 try_build!(crate::nft::Nft, Nft);
                 try_build!(crate::rwa::Rwa, Rwa);
                 try_build!(crate::role::Role, Role);
@@ -1421,19 +1425,22 @@ mod model {
                 try_build!(crate::oracle::OracleDispute, OracleDispute);
                 try_build!(crate::oracle::OracleChangeProposal, OracleChangeProposal);
                 try_build!(crate::oracle::TwitterBindingRecord, TwitterBindingRecord);
+                try_build!(crate::oracle::DefiOracleAttestation, DefiOracleAttestation);
                 try_build!(crate::escrow::AssetEscrowRecord, AssetEscrowRecord);
                 try_build!(
                     crate::escrow::AnonymousAssetEscrowRecord,
                     AnonymousAssetEscrowRecord
                 );
 
-                // Fallback: if unknown, leave everything empty/default and rely on server-side validation
+                // Keep the infallible constructor API, but encode an unsupported erased type as a
+                // deliberately noncanonical envelope. All three byte components fail decoding,
+                // and the query payload is not the canonical encoding of either domain query.
                 Self {
                     query: (),
-                    query_payload: Vec::new(),
-                    item: QueryItemKind::Domain, // default; will be rejected if used
-                    predicate_bytes: Vec::new(),
-                    selector_bytes: Vec::new(),
+                    query_payload: INVALID_FAST_DSL_COMPONENT.to_vec(),
+                    item: QueryItemKind::Domain,
+                    predicate_bytes: INVALID_FAST_DSL_COMPONENT.to_vec(),
+                    selector_bytes: INVALID_FAST_DSL_COMPONENT.to_vec(),
                     params,
                 }
             }
@@ -3746,6 +3753,78 @@ mod json_roundtrip_tests {
             }
             _ => panic!("expected Start request"),
         }
+    }
+
+    #[cfg(feature = "fast_dsl")]
+    #[test]
+    fn query_with_params_fast_dsl_unknown_type_is_non_executable() {
+        use crate::query::{
+            QueryItemKind,
+            domain::prelude::{FindDomains, FindDomainsByAccountId},
+        };
+
+        let unknown: QueryBox<QueryOutputBatchBox> =
+            Box::new(ErasedIterQuery::<QueryOutputBatchBox>::new(
+                CompoundPredicate::PASS,
+                SelectorTuple::default(),
+                Vec::new(),
+            ));
+        let built = QueryWithParams::new(&unknown, parameters::QueryParams::default());
+        let invalid_component = [0xFF; 4];
+
+        assert_eq!(built.item, QueryItemKind::Domain);
+        assert_eq!(built.query_payload, invalid_component);
+        assert_eq!(built.predicate_bytes, invalid_component);
+        assert_eq!(built.selector_bytes, invalid_component);
+        assert_ne!(
+            built.query_payload,
+            norito::codec::Encode::encode(&FindDomains),
+            "the compatibility carrier must not encode the global domain query"
+        );
+
+        let mut parameterized_input = built.query_payload.as_slice();
+        if let Ok(decoded) =
+            <FindDomainsByAccountId as norito::codec::Decode>::decode(&mut parameterized_input)
+        {
+            assert_ne!(
+                norito::codec::Encode::encode(&decoded),
+                built.query_payload,
+                "the compatibility carrier must not be a canonical parameterized domain query"
+            );
+        }
+
+        let mut predicate_input = built.predicate_bytes.as_slice();
+        assert!(
+            <CompoundPredicate<Domain> as norito::codec::Decode>::decode(&mut predicate_input)
+                .is_err(),
+            "the compatibility carrier predicate must fail closed"
+        );
+    }
+
+    #[cfg(feature = "fast_dsl")]
+    #[test]
+    fn query_with_params_fast_dsl_maps_previously_omitted_item_kinds() {
+        let invalid_component = [0xFF; 4];
+        let repo: QueryBox<QueryOutputBatchBox> =
+            Box::new(ErasedIterQuery::<crate::repo::RepoAgreement>::new(
+                CompoundPredicate::PASS,
+                SelectorTuple::default(),
+                Vec::new(),
+            ));
+        let repo = QueryWithParams::new(&repo, parameters::QueryParams::default());
+        assert_eq!(repo.item, QueryItemKind::RepoAgreement);
+        assert_ne!(repo.predicate_bytes, invalid_component);
+
+        let defi: QueryBox<QueryOutputBatchBox> = Box::new(ErasedIterQuery::<
+            crate::oracle::DefiOracleAttestation,
+        >::new(
+            CompoundPredicate::PASS,
+            SelectorTuple::default(),
+            vec![0x42],
+        ));
+        let defi = QueryWithParams::new(&defi, parameters::QueryParams::default());
+        assert_eq!(defi.item, QueryItemKind::DefiOracleAttestation);
+        assert_ne!(defi.predicate_bytes, invalid_component);
     }
 
     #[cfg(feature = "fast_dsl")]

@@ -95,6 +95,17 @@ finality roster. A wallet must verify the release policy and attestation,
 manifest digest, every framed and payload size and SHA-256, role, circuit, ABI,
 and purpose before atomically installing the exact eight-file set.
 
+The V4 cryptographic review is a canonical Norito signed envelope, not a text
+report accepted by hash alone. Its signed payload binds the immutable candidate
+and release identity, a nonzero retained-report digest, the exact eight artifact
+roles, and the fixed ordered six-check matrix. Production requires an approved
+decision, all checks passed with distinct nonzero evidence digests, canonical
+ordered signatures from policy-authorized review keys, the configured review
+threshold, and exact reviewer-set equality with the cryptographic-review role in
+the release attestation. Native finalization, release-directory verification,
+and consensus release-record admission all enforce the same data-model
+validator.
+
 Authenticated artifact installation and backend construction are necessary
 but not by themselves sufficient for complete node readiness. Torii carries a
 required nullable `artifact_set`: it is present only with the atomic V4

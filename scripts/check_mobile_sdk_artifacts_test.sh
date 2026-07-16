@@ -133,6 +133,7 @@ enum KagemushaRecursiveSpendV4Fixture {
     static func appendSpendV4() {}
     static func verifySpendV4() {}
     static func buildRedeemV4() {}
+    static func prepareRedemptionChangeV4() {}
 
     static let symbols = [
         "connect_norito_kagemusha_recursive_spend_capabilities_v4",
@@ -175,6 +176,7 @@ native_lifecycle = (
     "kagemushaRecursiveSpendCapabilitiesV4",
     "kagemushaRecursiveSpendInitV4",
     "kagemushaRecursiveSpendRedeemV4",
+    "kagemushaRecursiveSpendRedemptionChangePrepareV4",
     "kagemushaRecursiveSpendVerifyV4",
 )
 swift = root / "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendV2.swift"
@@ -182,7 +184,12 @@ swift.write_text(
     "\n".join(
         [
             *(f'let symbol_{index} = "{symbol}"' for index, symbol in enumerate(c_symbols)),
-            *(f"func {method}() {{}}" for method in native_lifecycle),
+            *(f"func {method}() {{}}" for method in native_lifecycle
+              if method != "kagemushaRecursiveSpendRedemptionChangePrepareV4"),
+            "func kagemushaRecursiveSpendRedemptionChangePrepareV4() {",
+            '    let secureFree = "connect_norito_kagemusha_secret_free_buffer"',
+            "    copyKagemushaNativeSecretArchiveOutput()",
+            "}",
         ]
     )
     + "\n",
@@ -337,6 +344,8 @@ PLIST
     "connect_norito_kagemusha_recursive_spend_redeem_unsigned_payload_digest_v4",
     "connect_norito_kagemusha_recursive_spend_redeem_finalize_request_v4",
     "connect_norito_kagemusha_recursive_spend_redeem_v4",
+    "connect_norito_kagemusha_recursive_spend_redemption_change_prepare_v4",
+    "connect_norito_kagemusha_secret_free_buffer",
     "connect_norito_kagemusha_receiver_key_reference_v2",
     "connect_norito_kagemusha_recipient_output_derive_v2",
     "connect_norito_kagemusha_recipient_payment_request_signing_bytes_v2",
@@ -344,6 +353,8 @@ PLIST
     "connect_norito_kagemusha_recipient_payment_request_verify_v2",
     "connect_norito_kagemusha_request_authorization_signing_bytes_v2",
     "connect_norito_kagemusha_request_authorization_create_v2",
+    "connect_norito_kagemusha_request_authorization_finalize_hardware_v2",
+    "connect_norito_kagemusha_request_authorization_finalize_ios_app_attest_v2",
     "connect_norito_kagemusha_receiver_acknowledgement_payload_v2",
     "connect_norito_kagemusha_receiver_acknowledgement_signing_bytes_v2",
     "connect_norito_kagemusha_receiver_acknowledgement_create_v2",

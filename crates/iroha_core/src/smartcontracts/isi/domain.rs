@@ -210,24 +210,40 @@ pub mod isi {
         Ok(())
     }
 
-    fn upsert_account_rekey_record(
+    pub(super) fn upsert_account_rekey_record(
         state_transaction: &mut StateTransaction<'_, '_>,
         label: &AccountAlias,
         account: &AccountId,
-    ) {
+    ) -> Result<(), InstructionExecutionError> {
         let record = match state_transaction
             .world
             .account_rekey_records
             .get(label)
             .cloned()
         {
-            Some(record) => record.repoint_to_account(account.clone()),
+            Some(record) => {
+                if &record.label != label {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "cannot reassign an account alias with a mismatched continuity record"
+                            .into(),
+                    ));
+                }
+                record
+                    .reassign_alias_to_account(account.clone())
+                    .map_err(|error| {
+                        InstructionExecutionError::InvariantViolation(
+                            format!("cannot reassign malformed account alias history: {error}")
+                                .into(),
+                        )
+                    })?
+            }
             None => AccountRekeyRecord::new(label.clone(), account.clone()),
         };
         state_transaction
             .world
             .account_rekey_records
             .insert(label.clone(), record);
+        Ok(())
     }
 
     fn purge_stale_account_label_state(
@@ -3190,7 +3206,7 @@ pub mod isi {
             state_transaction
                 .world
                 .insert_account_alias_binding(alias.clone(), account.clone());
-            upsert_account_rekey_record(state_transaction, &alias, &account);
+            upsert_account_rekey_record(state_transaction, &alias, &account)?;
 
             Ok(())
         }
@@ -3357,7 +3373,7 @@ pub mod isi {
             state_transaction
                 .world
                 .insert_account_alias_binding(alias.clone(), account.clone());
-            upsert_account_rekey_record(state_transaction, &alias, &account);
+            upsert_account_rekey_record(state_transaction, &alias, &account)?;
 
             Ok(())
         }
@@ -3871,7 +3887,7 @@ mod tests {
         account::{
             Account, AccountAddress, NewAccount, OpaqueAccountId,
             controller::{MultisigMember, MultisigPolicy},
-            rekey::AccountAlias,
+            rekey::{AccountAlias, AccountRekeyRecord, AccountRekeyTransitionProvenance},
         },
         asset::definition::AssetConfidentialPolicy,
         asset::{
@@ -3906,6 +3922,7 @@ mod tests {
     use iroha_test_samples::{ALICE_ID, BOB_ID};
     use nonzero_ext::nonzero;
 
+    use super::isi::upsert_account_rekey_record;
     use super::*;
     use crate::{
         kura::Kura,
@@ -5787,6 +5804,48 @@ mod tests {
     }
 
     #[test]
+    fn account_rekey_upsert_records_alias_reassignment_provenance() {
+        let state = test_state();
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        let alias = AccountAlias::domainless(
+            "direct-reassignment".parse().expect("alias label"),
+            DataSpaceId::UNIVERSAL,
+        );
+        let first = AccountId::new(checked_keypair().public_key().clone());
+        let second = AccountId::new(checked_keypair().public_key().clone());
+
+        upsert_account_rekey_record(&mut tx, &alias, &first).expect("initial continuity record");
+        upsert_account_rekey_record(&mut tx, &alias, &second).expect("alias reassignment");
+        let record = tx
+            .world
+            .account_rekey_records
+            .get(&alias)
+            .expect("updated continuity record");
+        assert_eq!(record.active_account_id, second);
+        assert_eq!(record.previous_account_ids, vec![first]);
+        assert_eq!(
+            record.transition_provenance,
+            vec![AccountRekeyTransitionProvenance::AliasReassignment]
+        );
+        let active_account_id = record.active_account_id.clone();
+
+        let mismatched_alias = AccountAlias::domainless(
+            "mismatched".parse().expect("alias label"),
+            DataSpaceId::UNIVERSAL,
+        );
+        tx.world.account_rekey_records.insert(
+            alias.clone(),
+            AccountRekeyRecord::new(mismatched_alias, active_account_id),
+        );
+        let replacement = AccountId::new(checked_keypair().public_key().clone());
+        let error = upsert_account_rekey_record(&mut tx, &alias, &replacement)
+            .expect_err("mismatched embedded alias must fail closed");
+        assert!(error.to_string().contains("mismatched continuity record"));
+    }
+
+    #[test]
     fn set_account_label_allows_account_registrar_to_repoint_existing_alias() {
         let mut state = test_state();
         let domain_id: DomainId = DomainId::try_new("label", "universal").expect("domain id");
@@ -5871,6 +5930,13 @@ mod tests {
             rekey_record.previous_account_ids,
             vec![first_id],
             "rekey record should retain the prior concrete account"
+        );
+        assert_eq!(
+            rekey_record.transition_provenance,
+            vec![
+                iroha_data_model::account::rekey::AccountRekeyTransitionProvenance::AliasReassignment
+            ],
+            "ordinary alias repointing must not claim account-id controller continuity"
         );
         assert_eq!(
             rekey_record.active_signatory,

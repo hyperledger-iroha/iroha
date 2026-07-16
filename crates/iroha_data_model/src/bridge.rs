@@ -1337,6 +1337,7 @@ mod tests {
                 signed_power,
                 total_power: context.quorum.total_power,
             }),
+            liveness: Default::default(),
         };
         let body = BridgeFinalityAttestationBodyV1 {
             version: BRIDGE_FINALITY_ATTESTATION_VERSION_V1,

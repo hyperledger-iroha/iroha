@@ -1,6 +1,7 @@
 //! Authenticated Kagemusha ABI-20/V4 release verification and activation preparation.
 
 use std::{
+    collections::BTreeSet,
     fs::{self, File, OpenOptions},
     io::{Read, Write},
     path::{Path, PathBuf},
@@ -20,6 +21,7 @@ use iroha_data_model::offline::{
     KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_ROLES_V4,
     KAGEMUSHA_RECURSIVE_SPEND_BENCHMARK_EVIDENCE_FILE_NAME_V1,
     KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_FILE_NAME_V1,
+    KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_MAX_BYTES_V4,
     KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4,
     KAGEMUSHA_RECURSIVE_SPEND_PROMOTED_RELEASE_SCHEMA_V4,
     KAGEMUSHA_RECURSIVE_SPEND_RELEASE_ATTESTATION_FILE_NAME_V4,
@@ -30,7 +32,7 @@ use iroha_data_model::offline::{
     KagemushaRecursiveSpendArtifactManifestV4, KagemushaRecursiveSpendCandidateV4,
     KagemushaRecursiveSpendPromotedReleaseV4, KagemushaRecursiveSpendReleaseAttestationV4,
     KagemushaRecursiveSpendReleasePolicyV1, KagemushaTopUpFinalityRosterArtifactV2,
-    kagemusha_recursive_spend_release_sha256,
+    OfflineDeviceAttestationPolicy, kagemusha_recursive_spend_release_sha256,
 };
 
 use crate::{Outcome, RunArgs};
@@ -82,7 +84,7 @@ struct VerifyReleaseV4Args {
     /// Signed physical-device benchmark evidence file.
     #[arg(long)]
     benchmark_evidence: PathBuf,
-    /// Independent cryptographic review evidence file.
+    /// Canonical signed, candidate-bound cryptographic review Norito file.
     #[arg(long)]
     cryptographic_review: PathBuf,
 }
@@ -101,7 +103,7 @@ struct PromoteReleaseV4Args {
     /// Signed physical-device benchmark evidence file.
     #[arg(long)]
     benchmark_evidence: PathBuf,
-    /// Independent cryptographic review evidence file.
+    /// Canonical signed, candidate-bound cryptographic review Norito file.
     #[arg(long)]
     cryptographic_review: PathBuf,
 }
@@ -120,6 +122,10 @@ struct PrepareActivationV4Args {
     /// Next atomic Eq/Ep verifier version observed from live consensus state.
     #[arg(long)]
     verifier_version: u32,
+    /// Exact governed verifier policy derived from authenticated physical-device evidence.
+    /// The policy and release are embedded in one composite consensus instruction.
+    #[arg(long)]
+    device_attestation_policy: PathBuf,
     /// New private file receiving a JSON array accepted by `iroha multisig propose`.
     #[arg(long)]
     output: PathBuf,
@@ -170,7 +176,12 @@ impl<T: Write> RunArgs<T> for Args {
                 let activation = catalog
                     .build_activation(args.manifest_sha256, args.verifier_version)
                     .map_err(|error| eyre!(error))?;
-                let instruction = ActivateKagemushaRecursiveReleaseV4::new(activation);
+                let policy = configured_device_attestation_policy(&args.device_attestation_policy)?;
+                let state_bytes = norito::to_bytes(&policy)
+                    .wrap_err("failed to encode governed device-attestation policy state")?;
+                let policy_state_sha256 =
+                    hex::encode(kagemusha_recursive_spend_release_sha256(&state_bytes));
+                let instruction = ActivateKagemushaRecursiveReleaseV4::new(activation, policy);
                 let instructions = vec![InstructionBox::from(instruction)];
                 let instructions_hash = HashOf::new(&instructions);
                 let mut instruction_json = norito::json::to_string(&instructions)
@@ -179,10 +190,11 @@ impl<T: Write> RunArgs<T> for Args {
                 write_new_durable_file(&args.output, instruction_json.as_bytes())?;
                 writeln!(
                     writer,
-                    "{{\"status\":\"prepared\",\"manifest_sha256\":\"{}\",\"verifier_version\":{},\"instruction_count\":1,\"instructions_hash\":\"{}\"}}",
+                    "{{\"status\":\"prepared\",\"manifest_sha256\":\"{}\",\"verifier_version\":{},\"instruction_count\":1,\"instructions_hash\":\"{}\",\"device_attestation_policy_state_sha256\":\"{}\"}}",
                     hex::encode(args.manifest_sha256),
                     args.verifier_version,
                     instructions_hash,
+                    policy_state_sha256,
                 )?;
             }
         }
@@ -214,6 +226,132 @@ fn configured_policy_bytes(path: &Path) -> Result<Vec<u8>> {
         decode_canonical_norito(&configured, "configured Kagemusha V4 release policy")?;
     policy.validate().map_err(|error| eyre!(error))?;
     Ok(configured)
+}
+
+fn configured_device_attestation_policy(path: &Path) -> Result<OfflineDeviceAttestationPolicy> {
+    let raw = read_external_bounded(
+        path,
+        MAX_POLICY_BYTES,
+        "governed Offline device-attestation policy",
+    )?;
+    let policy: OfflineDeviceAttestationPolicy = norito::json::from_slice(&raw)
+        .wrap_err("failed to decode governed Offline device-attestation policy JSON")?;
+    validate_device_attestation_policy_for_atomic_activation(&policy)?;
+    let canonical = norito::json::to_string(&policy)
+        .wrap_err("failed to encode canonical Offline device-attestation policy JSON")?;
+    let reparsed: OfflineDeviceAttestationPolicy = norito::json::from_str(&canonical)
+        .wrap_err("failed to reparse canonical Offline device-attestation policy JSON")?;
+    if reparsed != policy {
+        bail!("Offline device-attestation policy JSON is not lossless");
+    }
+    Ok(policy)
+}
+
+fn validate_device_attestation_policy_for_atomic_activation(
+    policy: &OfflineDeviceAttestationPolicy,
+) -> Result<()> {
+    if policy.version != 1
+        || !policy.require_ios_app_policy
+        || !policy.require_android_app_policy
+        || policy.trusted_roots.is_empty()
+        || policy.ios_apps.is_empty()
+        || policy.android_apps.is_empty()
+    {
+        bail!(
+            "atomic Kagemusha activation requires version-1 fail-closed iOS and Android app policy"
+        );
+    }
+    let mut root_ids = BTreeSet::new();
+    let mut platforms = BTreeSet::new();
+    for root in &policy.trusted_roots {
+        if !matches!(root.platform.as_str(), "ios-appattest" | "android-keymint")
+            || root.der.is_empty()
+            || root.der.len() > 16 * 1024
+            || root.der.first() != Some(&0x30)
+            || root
+                .not_before_ms
+                .zip(root.not_after_ms)
+                .is_some_and(|(start, end)| start >= end)
+            || !root_ids.insert((
+                root.platform.clone(),
+                kagemusha_recursive_spend_release_sha256(&root.der),
+            ))
+        {
+            bail!("atomic Kagemusha activation contains an invalid or duplicate trusted root");
+        }
+        platforms.insert(root.platform.as_str());
+    }
+    if platforms != BTreeSet::from(["android-keymint", "ios-appattest"]) {
+        bail!("atomic Kagemusha activation requires both platform trust roots");
+    }
+    let mut revoked = BTreeSet::new();
+    for digest in &policy.revoked_certificate_sha256 {
+        if digest.len() != 32 || !revoked.insert(digest.as_slice()) {
+            bail!("atomic Kagemusha activation contains an invalid duplicate revocation");
+        }
+    }
+    let mut ios_ids = BTreeSet::new();
+    for app in &policy.ios_apps {
+        if app.team_id.is_empty()
+            || !app.team_id.is_ascii()
+            || app.bundle_id.is_empty()
+            || !app.bundle_id.is_ascii()
+            || app.environment != "production"
+            || app.allowed_validation_categories.is_empty()
+            || app.allowed_bundle_versions.is_empty()
+            || app.allow_legacy_auth_data_without_extensions
+            || app
+                .allowed_bundle_versions
+                .iter()
+                .any(|value| value.is_empty() || !value.is_ascii())
+            || app.allowed_validation_categories
+                != app
+                    .allowed_validation_categories
+                    .iter()
+                    .copied()
+                    .collect::<BTreeSet<_>>()
+                    .into_iter()
+                    .collect::<Vec<_>>()
+            || app.allowed_bundle_versions
+                != app
+                    .allowed_bundle_versions
+                    .iter()
+                    .cloned()
+                    .collect::<BTreeSet<_>>()
+                    .into_iter()
+                    .collect::<Vec<_>>()
+            || !ios_ids.insert((
+                app.team_id.clone(),
+                app.bundle_id.clone(),
+                app.environment.clone(),
+            ))
+        {
+            bail!("atomic Kagemusha activation contains an invalid iOS app policy");
+        }
+    }
+    let mut android_ids = BTreeSet::new();
+    for app in &policy.android_apps {
+        if app.package_name.is_empty()
+            || !app.package_name.is_ascii()
+            || app.signing_certificate_sha256.is_empty()
+            || app
+                .signing_certificate_sha256
+                .iter()
+                .any(|digest| digest.len() != 32)
+            || app.signing_certificate_sha256
+                != app
+                    .signing_certificate_sha256
+                    .iter()
+                    .cloned()
+                    .collect::<BTreeSet<_>>()
+                    .into_iter()
+                    .collect::<Vec<_>>()
+            || !android_ids.insert(app.package_name.clone())
+        {
+            bail!("atomic Kagemusha activation contains an invalid Android app policy");
+        }
+    }
+    Ok(())
 }
 
 struct VerifiedReleaseV4 {
@@ -337,7 +475,7 @@ fn verify_release_directory_v4(
         &root,
         cryptographic_review_path,
         KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_FILE_NAME_V1,
-        "cryptographic review",
+        "canonical signed cryptographic review",
     )?;
     let benchmark = read_regular_bounded(
         &root,
@@ -348,8 +486,8 @@ fn verify_release_directory_v4(
     let review = read_regular_bounded(
         &root,
         KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_FILE_NAME_V1,
-        KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_EVIDENCE_BYTES_V1,
-        "cryptographic review",
+        KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_MAX_BYTES_V4,
+        "canonical signed cryptographic review",
     )?;
     let authenticated = KagemushaAuthenticatedReleaseV4::verify(
         &manifest,
@@ -858,7 +996,50 @@ impl VerificationReportV4 {
 
 #[cfg(test)]
 mod tests {
-    use super::{REPORT_ARTIFACT_PURPOSES_V4, REPORT_ROSTER_PURPOSE, parse_manifest_sha256};
+    use iroha_data_model::offline::{
+        OfflineAndroidAppAttestationPolicy, OfflineDeviceAttestationPolicy,
+        OfflineDeviceAttestationTrustedRoot, OfflineIosAppAttestationPolicy,
+    };
+
+    use super::{
+        REPORT_ARTIFACT_PURPOSES_V4, REPORT_ROSTER_PURPOSE, parse_manifest_sha256,
+        validate_device_attestation_policy_for_atomic_activation,
+    };
+
+    fn valid_device_attestation_policy() -> OfflineDeviceAttestationPolicy {
+        OfflineDeviceAttestationPolicy {
+            version: 1,
+            trusted_roots: vec![
+                OfflineDeviceAttestationTrustedRoot {
+                    platform: "android-keymint".to_owned(),
+                    der: vec![0x30, 0x01],
+                    not_before_ms: None,
+                    not_after_ms: None,
+                },
+                OfflineDeviceAttestationTrustedRoot {
+                    platform: "ios-appattest".to_owned(),
+                    der: vec![0x30, 0x02],
+                    not_before_ms: None,
+                    not_after_ms: None,
+                },
+            ],
+            revoked_certificate_sha256: vec![],
+            ios_apps: vec![OfflineIosAppAttestationPolicy {
+                team_id: "YLWWUD25VZ".to_owned(),
+                bundle_id: "pk.retail.wallet.ios".to_owned(),
+                environment: "production".to_owned(),
+                allowed_validation_categories: vec![4],
+                allowed_bundle_versions: vec!["202605050324".to_owned()],
+                allow_legacy_auth_data_without_extensions: false,
+            }],
+            android_apps: vec![OfflineAndroidAppAttestationPolicy {
+                package_name: "com.pk.retailwallet".to_owned(),
+                signing_certificate_sha256: vec![vec![0x11; 32]],
+            }],
+            require_ios_app_policy: true,
+            require_android_app_policy: true,
+        }
+    }
 
     #[test]
     fn activation_manifest_digest_parser_is_lowercase_and_exact() {
@@ -885,5 +1066,61 @@ mod tests {
         );
         assert_eq!(REPORT_ARTIFACT_PURPOSES_V4.len(), 8);
         assert_eq!(REPORT_ROSTER_PURPOSE, "topup_finality_roster");
+    }
+
+    #[test]
+    fn atomic_activation_accepts_only_fail_closed_production_app_policy() {
+        let policy = valid_device_attestation_policy();
+        assert!(validate_device_attestation_policy_for_atomic_activation(&policy).is_ok());
+
+        for mutate in [
+            |policy: &mut OfflineDeviceAttestationPolicy| {
+                policy.require_android_app_policy = false;
+            },
+            |policy: &mut OfflineDeviceAttestationPolicy| {
+                policy.ios_apps[0].environment = "development".to_owned();
+            },
+            |policy: &mut OfflineDeviceAttestationPolicy| {
+                policy.ios_apps[0].allow_legacy_auth_data_without_extensions = true;
+            },
+            |policy: &mut OfflineDeviceAttestationPolicy| {
+                policy.android_apps[0].signing_certificate_sha256[0].pop();
+            },
+        ] {
+            let mut changed = policy.clone();
+            mutate(&mut changed);
+            assert!(validate_device_attestation_policy_for_atomic_activation(&changed).is_err());
+        }
+    }
+
+    #[test]
+    fn atomic_activation_rejects_missing_duplicate_and_noncanonical_policy_entries() {
+        let policy = valid_device_attestation_policy();
+
+        let mut missing_platform = policy.clone();
+        missing_platform.trusted_roots.pop();
+        assert!(
+            validate_device_attestation_policy_for_atomic_activation(&missing_platform).is_err()
+        );
+
+        let mut duplicate_root = policy.clone();
+        duplicate_root
+            .trusted_roots
+            .push(duplicate_root.trusted_roots[0].clone());
+        assert!(validate_device_attestation_policy_for_atomic_activation(&duplicate_root).is_err());
+
+        let mut unsorted_categories = policy.clone();
+        unsorted_categories.ios_apps[0].allowed_validation_categories = vec![8, 7];
+        assert!(
+            validate_device_attestation_policy_for_atomic_activation(&unsorted_categories).is_err()
+        );
+
+        let mut duplicate_signer = policy;
+        duplicate_signer.android_apps[0]
+            .signing_certificate_sha256
+            .push(vec![0x11; 32]);
+        assert!(
+            validate_device_attestation_policy_for_atomic_activation(&duplicate_signer).is_err()
+        );
     }
 }

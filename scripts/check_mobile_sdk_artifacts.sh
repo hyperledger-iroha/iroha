@@ -145,6 +145,8 @@ KAGEMUSHA_C_SYMBOLS=(
   connect_norito_kagemusha_recursive_spend_redeem_unsigned_payload_digest_v4
   connect_norito_kagemusha_recursive_spend_redeem_finalize_request_v4
   connect_norito_kagemusha_recursive_spend_redeem_v4
+  connect_norito_kagemusha_recursive_spend_redemption_change_prepare_v4
+  connect_norito_kagemusha_secret_free_buffer
   connect_norito_kagemusha_receiver_key_reference_v2
   connect_norito_kagemusha_recipient_output_derive_v2
   connect_norito_kagemusha_recipient_payment_request_signing_bytes_v2
@@ -152,6 +154,8 @@ KAGEMUSHA_C_SYMBOLS=(
   connect_norito_kagemusha_recipient_payment_request_verify_v2
   connect_norito_kagemusha_request_authorization_signing_bytes_v2
   connect_norito_kagemusha_request_authorization_create_v2
+  connect_norito_kagemusha_request_authorization_finalize_hardware_v2
+  connect_norito_kagemusha_request_authorization_finalize_ios_app_attest_v2
   connect_norito_kagemusha_receiver_acknowledgement_payload_v2
   connect_norito_kagemusha_receiver_acknowledgement_signing_bytes_v2
   connect_norito_kagemusha_receiver_acknowledgement_create_v2
@@ -199,6 +203,8 @@ KAGEMUSHA_JNI_METHODS=(
   nativeCreateAuthorizationV2
   nativeCreateRecipientRequestV2
   nativeDeriveOutputMembershipPathsV4
+  nativeFinalizeHardwareAuthorizationV2
+  nativeFinalizeIosAppAttestAuthorizationV2
   nativeFinalizeRedeemV4
   nativeFinalizeTopUpV4
   nativeInitSpendV4
@@ -207,6 +213,7 @@ KAGEMUSHA_JNI_METHODS=(
   nativePrepareAcknowledgementV2
   nativePrepareAuthorizationV2
   nativePrepareNoteOpeningV2
+  nativePrepareRedemptionChangeV4
   nativePrepareRecipientRequestV2
   nativePrepareTopUpV4
   nativeProjectActiveVerifierV2
@@ -967,6 +974,7 @@ expected_wrappers = {
     "buildRedeemV4",
     "ensureProofBackendAvailableV4",
     "initSpendV4",
+    "prepareRedemptionChangeV4",
     "verifySpendV4",
 }
 expected_native_lifecycle = {
@@ -981,6 +989,7 @@ expected_native_lifecycle = {
     "kagemushaRecursiveSpendCapabilitiesV4",
     "kagemushaRecursiveSpendInitV4",
     "kagemushaRecursiveSpendRedeemV4",
+    "kagemushaRecursiveSpendRedemptionChangePrepareV4",
     "kagemushaRecursiveSpendVerifyV4",
 }
 actual_symbols = set(re.findall(
@@ -989,11 +998,12 @@ actual_symbols = set(re.findall(
 ))
 actual_wrappers = set(re.findall(
     r"\bfunc\s+((?:ensureProofBackendAvailable|initSpend|appendSpend|verifySpend|"
-    r"buildRedeem)V[0-9]+)\s*\(",
+    r"buildRedeem|prepareRedemptionChange)V[0-9]+)\s*\(",
     text,
 ))
 actual_native_lifecycle = set(re.findall(
     r"\bfunc\s+(kagemushaRecursiveSpend(?:Capabilities|Init|Append|Verify|Redeem|"
+    r"RedemptionChangePrepare|"
     r"Artifact(?:Begin|Write|Finalize|Cancel|SetInstall|SetIsInstalled|SetUninstall))"
     r"V[0-9]+)\s*\(",
     text,
@@ -1019,6 +1029,17 @@ if re.search(
     text,
 ):
     errors.append("Swift SDK retains an unversioned retired lifecycle wrapper")
+if "redemptionChange(spendKey:" in text or re.search(
+    r"redemptionChange[\s\S]{0,300}?defaultDiversifier\(\)", text
+):
+    errors.append("Swift SDK lets callers fabricate partial-redemption rho or diversifier")
+if not re.search(
+    r"kagemushaRecursiveSpendRedemptionChangePrepareV4[\s\S]{0,2200}?"
+    r"connect_norito_kagemusha_secret_free_buffer[\s\S]{0,1600}?"
+    r"copyKagemushaNativeSecretArchiveOutput",
+    text,
+):
+    errors.append("Swift redemption-change output is not bound to secure native deallocation")
 for error in errors:
     print(
         "[mobile-sdk-artifacts] ERROR: " + error,
@@ -1035,6 +1056,7 @@ check_android_kagemusha_source_contract() {
   local rust_source="$ROOT_DIR/crates/connect_norito_bridge/src/lib.rs"
   local kotlin_source="$ROOT_DIR/kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaRecursiveSpendProver.kt"
   local java_source="$ROOT_DIR/java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProver.java"
+  local android_keymint_source="$ROOT_DIR/java/iroha_android/android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaAndroidKeyMint.java"
   local namespace
   local expected_jni=()
 
@@ -1131,6 +1153,60 @@ PY
     then
       FAILURES=1
     fi
+  fi
+
+  if [[ ! -f "$android_keymint_source" ]]; then
+    fail "physical Android Kagemusha KeyMint integration source is missing"
+  elif ! python3 - "$android_keymint_source" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text(encoding="utf-8")
+required = (
+    "PackageManager.FEATURE_KEYSTORE_SINGLE_USE_KEY",
+    "KeyProperties.KEY_ALGORITHM_EC",
+    'CURVE_NAME = "secp256r1"',
+    "KeyProperties.PURPOSE_SIGN",
+    "KeyProperties.DIGEST_SHA256",
+    ".setAttestationChallenge(request.challenge())",
+    ".setMaxUsageCount(1)",
+    'SIGNATURE_ALGORITHM = "SHA256withECDSA"',
+    "StrongBoxPolicy.REQUIRED",
+    "builder.setIsStrongBoxBacked(true)",
+    "keyInfo.isInsideSecureHardware()",
+    "keyInfo.getRemainingUsageCount() != 1",
+    "getCertificateChain(request.alias())",
+    "DeviceAttestationRegistration.androidPreKeyGenerationChallengeHash",
+    "requiredPreparation.signingBytes()",
+    "KagemushaP256Codec.rawLowSFromStrictDer(signatureDer)",
+)
+errors = [f"missing {marker!r}" for marker in required if marker not in text]
+if "KeyProperties.DIGEST_NONE" in text:
+    errors.append("physical KeyMint path uses DIGEST_NONE")
+if "PREFERRED" in text:
+    errors.append("physical KeyMint path exposes a silent StrongBox preference/downgrade")
+if re.search(
+    r"generateRegistration\s*\([\s\S]{0,1800}?"
+    r"requiredParameters\.attestationChallenge\(\)"
+    r"[\s\S]{0,900}?requiredParameters\.registration\(material\)",
+    text,
+) is None:
+    errors.append("registration does not derive and bind the exact pre-key challenge")
+if re.search(
+    r"authorize\s*\([\s\S]{0,1800}?requiredPreparation\.signingBytes\(\)"
+    r"[\s\S]{0,900}?finalizeRequestAuthorization\s*\("
+    r"[\s\S]{0,180}?requiredPreparation,\s*signatureDer",
+    text,
+) is None:
+    errors.append("authorization does not sign and finalize the exact preparation")
+for error in errors:
+    print(f"[mobile-sdk-artifacts] ERROR: {path}: {error}", file=sys.stderr)
+raise SystemExit(1 if errors else 0)
+PY
+  then
+    FAILURES=1
   fi
 }
 

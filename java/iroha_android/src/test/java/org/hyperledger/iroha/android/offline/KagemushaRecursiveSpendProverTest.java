@@ -1,8 +1,10 @@
 package org.hyperledger.iroha.android.offline;
 
-import java.net.URI;
+import java.lang.reflect.Constructor;
+import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
+import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -22,9 +24,17 @@ import org.hyperledger.iroha.norito.SchemaHash;
 public final class KagemushaRecursiveSpendProverTest {
   public static void main(final String[] args) {
     exactAbiIsRequired();
+    appAttestNativeProjectionRejectsCorruptAuxiliaryFields();
     artifactContractIsFixed();
     frontierContractIsPersistableAndProofBound();
     outputMembershipPathsRejectNonconsecutiveDummyFrontier();
+    redemptionChangePreparationTransfersOpeningOwnershipExactlyOnce();
+    redemptionChangePreparationDestroysOnlyAnUntransferredOpening();
+    redemptionChangeRequestFailureDestroysTransferredOpening();
+    redemptionChangeCarriersCloseOrTransferOneOwnerExactlyOnce();
+    noteOpeningAndInitRequestCloseIdempotently();
+    temporarySecretArchivesAreWipedAfterPartialConstructionAndOwnerCopy();
+    preparationConstructorFailuresDestroyStagedOpenings();
     artifactRoleInventoryRejectsCountsDuplicatesAndReordering();
     releaseAuthenticationIsMandatoryAndBounded();
     readinessPreservesExactReleaseCapabilitiesIndependently();
@@ -50,6 +60,56 @@ public final class KagemushaRecursiveSpendProverTest {
         () -> {}, () -> 20, () -> false);
     assert !KagemushaRecursiveSpendProver.detectExactNativeAvailability(
         () -> { throw new UnsatisfiedLinkError("missing"); }, () -> 20, () -> true);
+  }
+
+  private static void appAttestNativeProjectionRejectsCorruptAuxiliaryFields() {
+    final byte[] authorizationArchive = archive("KagemushaRequestAuthorizationV2");
+    final byte[] rawLowSSignature = new byte[64];
+    rawLowSSignature[31] = 1;
+    rawLowSSignature[63] = 1;
+    final byte[] legacyAuthenticatorData = new byte[37];
+    legacyAuthenticatorData[36] = 1;
+    final KagemushaRecursiveSpendProver.RequestAuthorization accepted =
+        KagemushaRecursiveSpendProver.requestAuthorizationFromIosAppAttestNativeProjection(
+            new byte[][] {authorizationArchive, rawLowSSignature, legacyAuthenticatorData});
+    assert Arrays.equals(authorizationArchive, accepted.noritoEncoded());
+
+    final byte[] extensionAuthenticatorData = new byte[38];
+    extensionAuthenticatorData[32] = (byte) 0x80;
+    extensionAuthenticatorData[37] = (byte) 0xa0;
+    KagemushaRecursiveSpendProver.requestAuthorizationFromIosAppAttestNativeProjection(
+        new byte[][] {authorizationArchive, rawLowSSignature, extensionAuthenticatorData});
+
+    final List<byte[][]> invalidProjections = Arrays.asList(
+        new byte[][] {authorizationArchive, rawLowSSignature},
+        new byte[][] {authorizationArchive, new byte[0], legacyAuthenticatorData},
+        new byte[][] {
+          authorizationArchive, Arrays.copyOf(rawLowSSignature, 63), legacyAuthenticatorData
+        },
+        new byte[][] {authorizationArchive, new byte[64], legacyAuthenticatorData},
+        new byte[][] {authorizationArchive, rawLowSSignature, new byte[36]},
+        new byte[][] {authorizationArchive, rawLowSSignature, new byte[38]},
+        new byte[][] {
+          authorizationArchive, rawLowSSignature, authenticatorData(37, 0x80)
+        },
+        new byte[][] {
+          authorizationArchive, rawLowSSignature, authenticatorData(37, 0x01)
+        },
+        new byte[][] {
+          authorizationArchive, rawLowSSignature, authenticatorData(4 * 1024 + 1, 0x80)
+        },
+        new byte[][] {authorizationArchive, null, legacyAuthenticatorData});
+    for (final byte[][] projection : invalidProjections) {
+      assertThrowsIllegalState(() ->
+          KagemushaRecursiveSpendProver
+              .requestAuthorizationFromIosAppAttestNativeProjection(projection));
+    }
+  }
+
+  private static byte[] authenticatorData(final int length, final int flags) {
+    final byte[] value = new byte[length];
+    if (length > 32) value[32] = (byte) flags;
+    return value;
   }
 
   private static void artifactContractIsFixed() {
@@ -119,6 +179,49 @@ public final class KagemushaRecursiveSpendProverTest {
           byte[].class,
           long[].class
         });
+    final Method authorizationPrepareNative = Arrays.stream(methods)
+        .filter(method -> method.getName().equals("nativePrepareAuthorizationV2"))
+        .findFirst()
+        .orElseThrow();
+    assert authorizationPrepareNative.getReturnType() == byte[][].class;
+    assert Arrays.equals(
+        authorizationPrepareNative.getParameterTypes(),
+        new Class<?>[] {
+          byte[].class,
+          byte[].class,
+          byte[].class,
+          byte[].class,
+          long.class,
+          long.class,
+          byte[].class,
+          byte[].class,
+          byte[].class,
+          byte[].class
+        });
+    final Method legacyAuthorizationFinalizeNative = Arrays.stream(methods)
+        .filter(method -> method.getName().equals("nativeCreateAuthorizationV2"))
+        .findFirst()
+        .orElseThrow();
+    assert legacyAuthorizationFinalizeNative.getReturnType() == byte[].class;
+    assert Arrays.equals(
+        legacyAuthorizationFinalizeNative.getParameterTypes(),
+        new Class<?>[] {byte[].class, byte[].class});
+    final Method authorizationFinalizeNative = Arrays.stream(methods)
+        .filter(method -> method.getName().equals("nativeFinalizeHardwareAuthorizationV2"))
+        .findFirst()
+        .orElseThrow();
+    assert authorizationFinalizeNative.getReturnType() == byte[][].class;
+    assert Arrays.equals(
+        authorizationFinalizeNative.getParameterTypes(),
+        new Class<?>[] {byte[].class, byte[].class, byte[].class});
+    final Method iosAuthorizationFinalizeNative = Arrays.stream(methods)
+        .filter(method -> method.getName().equals("nativeFinalizeIosAppAttestAuthorizationV2"))
+        .findFirst()
+        .orElseThrow();
+    assert iosAuthorizationFinalizeNative.getReturnType() == byte[][].class;
+    assert Arrays.equals(
+        iosAuthorizationFinalizeNative.getParameterTypes(),
+        new Class<?>[] {byte[].class, byte[].class});
     final Method[] publicInstallFactories = Arrays.stream(methods)
         .filter(method -> Modifier.isPublic(method.getModifiers()))
         .filter(method -> method.getName().equals("beginArtifactInstallSession"))
@@ -224,6 +327,335 @@ public final class KagemushaRecursiveSpendProverTest {
             null,
             redemptionChange,
             outputMembershipPath(finalRoot, 7)));
+  }
+
+  private static void redemptionChangePreparationTransfersOpeningOwnershipExactlyOnce() {
+    final KagemushaRecursiveSpendProver.NoteOpening opening =
+        KagemushaRecursiveSpendProver.decodeNoteOpening(
+            archive("KagemushaNoteOpeningV2"));
+    final KagemushaRecursiveSpendProver.RedemptionChangePreparationV4 preparation =
+        new KagemushaRecursiveSpendProver.RedemptionChangePreparationV4(
+            opening,
+            filled(0x21),
+            filled(0x22),
+            filled(0x23),
+            filled(0x24),
+            KagemushaScaledAmount.fromAtomicUnits("375", 2));
+    final byte[] rho = preparation.rho();
+    Arrays.fill(rho, (byte) 0);
+    assert Arrays.equals(preparation.rho(), filled(0x21));
+    assert "375".equals(preparation.amount().atomicUnits());
+
+    final KagemushaRecursiveSpendProver.NoteOpening transferred = preparation.takeOpening();
+    try {
+      assert transferred == opening;
+      assertThrowsIllegalState(preparation::takeOpening);
+
+      preparation.close();
+      preparation.close();
+      assert !transferred.isDestroyed();
+      assert transferred.noritoEncoded().length > 0;
+      assertThrowsIllegalState(preparation::takeOpening);
+      assertThrowsIllegalState(preparation::rho);
+      assertThrowsIllegalState(preparation::commitment);
+      assertThrowsIllegalState(preparation::amount);
+    } finally {
+      transferred.destroy();
+    }
+  }
+
+  private static void redemptionChangePreparationDestroysOnlyAnUntransferredOpening() {
+    final KagemushaRecursiveSpendProver.NoteOpening opening =
+        KagemushaRecursiveSpendProver.decodeNoteOpening(
+            archive("KagemushaNoteOpeningV2"));
+    final KagemushaRecursiveSpendProver.RedemptionChangePreparationV4 preparation =
+        new KagemushaRecursiveSpendProver.RedemptionChangePreparationV4(
+            opening,
+            filled(0x31),
+            filled(0x32),
+            filled(0x33),
+            filled(0x34),
+            KagemushaScaledAmount.fromAtomicUnits("125", 2));
+
+    preparation.close();
+    preparation.close();
+    assert opening.isDestroyed();
+    assertThrowsIllegalState(preparation::takeOpening);
+    assertThrowsIllegalState(preparation::diversifier);
+    assertThrowsIllegalState(preparation::amount);
+
+    final KagemushaRecursiveSpendProver.NoteOpening rejectedOpening =
+        KagemushaRecursiveSpendProver.decodeNoteOpening(
+            archive("KagemushaNoteOpeningV2"));
+    assertThrowsIllegalState(() ->
+        new KagemushaRecursiveSpendProver.RedemptionChangePreparationV4(
+            rejectedOpening,
+            filled(0x41),
+            filled(0x41),
+            filled(0x43),
+            filled(0x44),
+            KagemushaScaledAmount.fromAtomicUnits("125", 2)));
+    assert rejectedOpening.isDestroyed();
+  }
+
+  private static void redemptionChangeRequestFailureDestroysTransferredOpening() {
+    final KagemushaRecursiveSpendProver.NoteOpening opening =
+        KagemushaRecursiveSpendProver.decodeNoteOpening(
+            archive("KagemushaNoteOpeningV2", 0x45));
+    assertThrowsIllegalArgument(() ->
+        KagemushaRecursiveSpendProver.decodeRedeemRequestV4(new byte[0], opening));
+    assert opening.isDestroyed();
+
+    final KagemushaRecursiveSpendProver.SpendableBranchV4 redeemInput = spendableBranch(0x46);
+    final KagemushaRecursiveSpendProver.NoteOpening redeemChange =
+        KagemushaRecursiveSpendProver.decodeNoteOpening(
+            archive("KagemushaNoteOpeningV2", 0x47));
+    try {
+      assertThrowsNativeFailure(() -> KagemushaRecursiveSpendProver.buildRedeemRequestV4(
+          redeemInput,
+          "alice@wonderland",
+          KagemushaScaledAmount.fromAtomicUnits("125", 2),
+          redeemChange,
+          redemptionChangeOutputMembershipPaths(),
+          filled(0x48),
+          filled(0x49),
+          1));
+      assert redeemChange.isDestroyed();
+    } finally {
+      redeemInput.close();
+    }
+
+    final KagemushaRecursiveSpendProver.SpendableBranchV4 appendInput = spendableBranch(0x50);
+    final KagemushaRecursiveSpendProver.NoteOpening appendChange =
+        KagemushaRecursiveSpendProver.decodeNoteOpening(
+            archive("KagemushaNoteOpeningV2", 0x51));
+    try {
+      assertThrowsNativeFailure(() -> KagemushaRecursiveSpendProver.buildAppendRequestV4(
+          Collections.singletonList(appendInput),
+          appendChange,
+          appendChangeOutputMembershipPaths(),
+          filled(0x52),
+          filled(0x53),
+          1));
+      assert appendChange.isDestroyed();
+    } finally {
+      appendInput.close();
+    }
+
+    final KagemushaRecursiveSpendProver.NoteOpening restoreOpening =
+        KagemushaRecursiveSpendProver.decodeNoteOpening(
+            archive("KagemushaNoteOpeningV2", 0x54));
+    assertThrowsIllegalArgument(() ->
+        KagemushaRecursiveSpendProver.restoreSpendableBranchV4(
+            KagemushaRecursiveSpendProver.decodeBundleV4(
+                archive("KagemushaRecursiveSpendBundleV4", 0x55)),
+            KagemushaRecursiveSpendProver.decodeNoteMembershipWitness(
+                archive("KagemushaNoteMembershipWitnessV2", 0x56)),
+            restoreOpening,
+            KagemushaRecursiveSpendProver.decodeTopUpProvenanceV4(
+                archive("KagemushaRecursiveSpendTopUpProvenanceV4", 0x57)),
+            0));
+    assert restoreOpening.isDestroyed();
+  }
+
+  private static void redemptionChangeCarriersCloseOrTransferOneOwnerExactlyOnce() {
+    assert AutoCloseable.class.isAssignableFrom(
+        KagemushaRecursiveSpendProver.SpendableBranchV4.class);
+    final KagemushaRecursiveSpendProver.NoteOpening closeOwnedOpening =
+        KagemushaRecursiveSpendProver.decodeNoteOpening(
+            archive("KagemushaNoteOpeningV2", 0x4a));
+    final KagemushaRecursiveSpendProver.RedeemRequestV4 closeOwnedRequest =
+        KagemushaRecursiveSpendProver.decodeRedeemRequestV4(
+            archive("KagemushaRecursiveSpendRedeemLocalRequestV4", 0x4b),
+            closeOwnedOpening);
+    closeOwnedRequest.close();
+    closeOwnedRequest.close();
+    assert closeOwnedOpening.isDestroyed();
+    assertThrowsIllegalState(closeOwnedRequest::takeChangeOpening);
+
+    final KagemushaRecursiveSpendProver.NoteOpening handedOffOpening =
+        KagemushaRecursiveSpendProver.decodeNoteOpening(
+            archive("KagemushaNoteOpeningV2", 0x4c));
+    final KagemushaRecursiveSpendProver.RedeemRequestV4 request =
+        KagemushaRecursiveSpendProver.decodeRedeemRequestV4(
+            archive("KagemushaRecursiveSpendRedeemLocalRequestV4", 0x4d),
+            handedOffOpening);
+    final KagemushaRecursiveSpendProver.NoteOpening requestHandoff =
+        request.takeChangeOpening();
+    assert requestHandoff == handedOffOpening;
+    request.close();
+    request.close();
+    assert !handedOffOpening.isDestroyed();
+    assertThrowsIllegalState(request::takeChangeOpening);
+
+    final KagemushaRecursiveSpendProver.RedeemBuildResultV4 result =
+        KagemushaRecursiveSpendProver.decodeRedeemBuildResultV4(
+            archive("KagemushaRecursiveSpendRedeemBuildResultV4", 0x4e),
+            requestHandoff);
+    final KagemushaRecursiveSpendProver.NoteOpening resultHandoff =
+        result.takeChangeOpening();
+    assert resultHandoff == handedOffOpening;
+    result.close();
+    result.close();
+    assert !handedOffOpening.isDestroyed();
+    assertThrowsIllegalState(result::takeChangeOpening);
+    resultHandoff.destroy();
+    assert handedOffOpening.isDestroyed();
+
+    final KagemushaRecursiveSpendProver.SpendableBranchV4 spendableBranch =
+        spendableBranch(0x4f);
+    final KagemushaRecursiveSpendProver.NoteOpening spendableOpening = spendableBranch.opening();
+    spendableBranch.close();
+    spendableBranch.close();
+    assert spendableOpening.isDestroyed();
+  }
+
+  private static void temporarySecretArchivesAreWipedAfterPartialConstructionAndOwnerCopy() {
+    final byte[] first = filled(0x61);
+    final byte[] second = filled(0x62);
+    final byte[][] partiallyConstructed = new byte[][] {first, null, second};
+    KagemushaRecursiveSpendProver.SecretArchiveWiper.wipeAll(partiallyConstructed);
+    assert allZero(first);
+    assert allZero(second);
+    KagemushaRecursiveSpendProver.SecretArchiveWiper.wipeAll(null);
+
+    final byte[] rawNativeArchive =
+        archive("KagemushaRecursiveSpendRedeemLocalRequestV4", 0x63);
+    final KagemushaRecursiveSpendProver.RedeemRequestV4 owner =
+        KagemushaRecursiveSpendProver.decodeRedeemRequestV4(rawNativeArchive, null);
+    KagemushaRecursiveSpendProver.SecretArchiveWiper.wipe(rawNativeArchive);
+    assert allZero(rawNativeArchive);
+    assert owner.noritoEncoded().length > NoritoHeader.HEADER_LENGTH;
+    owner.close();
+    KagemushaRecursiveSpendProver.SecretArchiveWiper.wipe(null);
+
+    final List<byte[]> firstCopyObserved = new ArrayList<>();
+    assertThrowsIllegalArgument(() ->
+        KagemushaRecursiveSpendProver.SecretArchiveWiper.withOpeningDigests(
+            filled(0x64),
+            "spendKey",
+            new byte[31],
+            "rho",
+            filled(0x66),
+            "diversifier",
+            firstCopyObserved::add,
+            (spendKey, rho, diversifier) -> null));
+    assert firstCopyObserved.size() == 1;
+    assert allZero(firstCopyObserved.get(0));
+
+    final List<byte[]> firstAndSecondCopiesObserved = new ArrayList<>();
+    assertThrowsIllegalArgument(() ->
+        KagemushaRecursiveSpendProver.SecretArchiveWiper.withOpeningDigests(
+            filled(0x67),
+            "spendKey",
+            filled(0x68),
+            "rho",
+            new byte[31],
+            "diversifier",
+            firstAndSecondCopiesObserved::add,
+            (spendKey, rho, diversifier) -> null));
+    assert firstAndSecondCopiesObserved.size() == 2;
+    assert allZero(firstAndSecondCopiesObserved.get(0));
+    assert allZero(firstAndSecondCopiesObserved.get(1));
+
+    final byte[] rawOpeningArchive = archive("KagemushaNoteOpeningV2", 0x69);
+    final KagemushaRecursiveSpendProver.NoteOpening openingOwner =
+        KagemushaRecursiveSpendProver.decodeNoteOpening(rawOpeningArchive);
+    KagemushaRecursiveSpendProver.SecretArchiveWiper.wipe(rawOpeningArchive);
+    assert allZero(rawOpeningArchive);
+    assert openingOwner.noritoEncoded().length > NoritoHeader.HEADER_LENGTH;
+    openingOwner.close();
+
+    final byte[] rawInitArchive =
+        archive("KagemushaRecursiveSpendInitLocalRequestV4", 0x6a);
+    final KagemushaRecursiveSpendProver.InitRequestV4 initOwner =
+        KagemushaRecursiveSpendProver.decodeInitRequestV4(rawInitArchive);
+    KagemushaRecursiveSpendProver.SecretArchiveWiper.wipe(rawInitArchive);
+    assert allZero(rawInitArchive);
+    assert initOwner.noritoEncoded().length > NoritoHeader.HEADER_LENGTH;
+    initOwner.close();
+  }
+
+  private static void noteOpeningAndInitRequestCloseIdempotently() {
+    assert AutoCloseable.class.isAssignableFrom(
+        KagemushaRecursiveSpendProver.NoteOpening.class);
+    final KagemushaRecursiveSpendProver.NoteOpening opening =
+        KagemushaRecursiveSpendProver.decodeNoteOpening(
+            archive("KagemushaNoteOpeningV2", 0x5c));
+    opening.close();
+    opening.close();
+    assert opening.isDestroyed();
+    assertThrowsIllegalState(opening::noritoEncoded);
+
+    assert AutoCloseable.class.isAssignableFrom(
+        KagemushaRecursiveSpendProver.InitRequestV4.class);
+    final KagemushaRecursiveSpendProver.InitRequestV4 init =
+        KagemushaRecursiveSpendProver.decodeInitRequestV4(
+            archive("KagemushaRecursiveSpendInitLocalRequestV4", 0x5d));
+    init.close();
+    init.close();
+    assert init.isDestroyed();
+    assertThrowsIllegalState(init::noritoEncoded);
+  }
+
+  private static void preparationConstructorFailuresDestroyStagedOpenings() {
+    final KagemushaRecursiveSpendProver.NoteOpening recipientOpening =
+        KagemushaRecursiveSpendProver.decodeNoteOpening(
+            archive("KagemushaNoteOpeningV2", 0x5e));
+    assertThrowsIllegalArgument(() ->
+        construct(
+            KagemushaRecursiveSpendProver.RecipientRequestPreparation.class,
+            new Class<?>[] {
+              KagemushaRecursiveSpendProver.RecipientRequestPayload.class,
+              byte[].class,
+              KagemushaRecursiveSpendProver.NoteOpening.class,
+              byte[].class,
+              byte[].class,
+              KagemushaScaledAmount.class
+            },
+            construct(
+                KagemushaRecursiveSpendProver.RecipientRequestPayload.class,
+                new Class<?>[] {byte[].class},
+                archive("KagemushaRecipientPaymentRequestSigningPayloadV2", 0x5f)),
+            new byte[] {1},
+            recipientOpening,
+            filled(0x60),
+            new byte[31],
+            KagemushaScaledAmount.fromAtomicUnits("125", 2)));
+    assert recipientOpening.isDestroyed();
+
+    final KagemushaRecursiveSpendProver.NoteOpening topUpOpening =
+        KagemushaRecursiveSpendProver.decodeNoteOpening(
+            archive("KagemushaNoteOpeningV2", 0x70));
+    assertThrowsIllegalArgument(() ->
+        construct(
+            KagemushaRecursiveSpendProver.TopUpPreparation.class,
+            new Class<?>[] {
+              KagemushaRecursiveSpendProver.TopUpUnsigned.class,
+              byte[].class,
+              KagemushaRecursiveSpendProver.NoteOpening.class,
+              byte[].class,
+              byte[].class,
+              byte[].class,
+              byte[].class,
+              byte[].class,
+              KagemushaScaledAmount.class,
+              int.class
+            },
+            construct(
+                KagemushaRecursiveSpendProver.TopUpUnsigned.class,
+                new Class<?>[] {byte[].class},
+                archive("KagemushaRecursiveSpendTopUpUnsignedV4", 0x71)),
+            filled(0x72),
+            topUpOpening,
+            filled(0x73),
+            filled(0x74),
+            filled(0x75),
+            filled(0x76),
+            new byte[31],
+            KagemushaScaledAmount.fromAtomicUnits("125", 2),
+            0));
+    assert topUpOpening.isDestroyed();
   }
 
   private static void artifactRoleInventoryRejectsCountsDuplicatesAndReordering() {
@@ -500,7 +932,12 @@ public final class KagemushaRecursiveSpendProverTest {
         unavailableRejected = true;
       }
       assert unavailableRejected;
+      assert init.isDestroyed();
+      assertThrowsIllegalState(() -> KagemushaRecursiveSpendProver.initSpendV4(init));
     }
+    init.close();
+    init.close();
+    assert init.isDestroyed();
     append.close();
     assert append.isDestroyed();
     boolean destroyedRejected = false;
@@ -896,6 +1333,8 @@ public final class KagemushaRecursiveSpendProverTest {
             "decodeVerifyRequestV4",
             "decodeVerifyResultV4",
             "decodeTopUpFinalityRosterArtifact",
+            "finalizeIosAppAttest",
+            "finalizeRequestAuthorization",
             "finalizeRedeemV4",
             "finalizeTopUp",
             "deriveOutputMembershipPathsV4",
@@ -906,6 +1345,7 @@ public final class KagemushaRecursiveSpendProverTest {
             "newToriiClient",
             "prepareAcknowledgement",
             "prepareNoteOpening",
+            "prepareRedemptionChangeV4",
             "prepareRecipientPaymentRequest",
             "prepareRequestAuthorization",
             "prepareTopUp",
@@ -924,7 +1364,6 @@ public final class KagemushaRecursiveSpendProverTest {
             "restoreSplitChangeBranchV4",
             "signAcknowledgement",
             "signRecipientPaymentRequest",
-            "signRequestAuthorization",
             "verifyAcknowledgement",
             "verifyRecipientPaymentRequest",
             "verifySpendV4",
@@ -1008,6 +1447,64 @@ public final class KagemushaRecursiveSpendProverTest {
         outputMembershipPath(finalRoot, 1));
   }
 
+  private static KagemushaRecursiveSpendProver.OutputMembershipPaths
+      appendChangeOutputMembershipPaths() {
+    final byte[] initialRoot = filled(0x31);
+    final byte[] afterRecipientRoot = filled(0x32);
+    final byte[] finalRoot = filled(0x33);
+    return new KagemushaRecursiveSpendProver.OutputMembershipPaths(
+        initialRoot,
+        finalRoot,
+        new KagemushaRecursiveSpendProver.OutputMembershipLeafPaths(
+            outputMembershipPath(initialRoot, 0), outputMembershipPath(finalRoot, 0)),
+        new KagemushaRecursiveSpendProver.OutputMembershipLeafPaths(
+            outputMembershipPath(afterRecipientRoot, 1), outputMembershipPath(finalRoot, 1)),
+        outputMembershipPath(finalRoot, 2));
+  }
+
+  private static KagemushaRecursiveSpendProver.OutputMembershipPaths
+      redemptionChangeOutputMembershipPaths() {
+    final byte[] initialRoot = filled(0x41);
+    final byte[] finalRoot = filled(0x42);
+    return new KagemushaRecursiveSpendProver.OutputMembershipPaths(
+        initialRoot,
+        finalRoot,
+        null,
+        new KagemushaRecursiveSpendProver.OutputMembershipLeafPaths(
+            outputMembershipPath(initialRoot, 0), outputMembershipPath(finalRoot, 0)),
+        outputMembershipPath(finalRoot, 1));
+  }
+
+  private static KagemushaRecursiveSpendProver.SpendableBranchV4 spendableBranch(
+      final int seed) {
+    try {
+      final java.lang.reflect.Constructor<KagemushaRecursiveSpendProver.SpendableBranchV4>
+          constructor = KagemushaRecursiveSpendProver.SpendableBranchV4.class
+              .getDeclaredConstructor(
+                  KagemushaRecursiveSpendProver.BundleV4.class,
+                  KagemushaRecursiveSpendProver.NoteMembershipWitness.class,
+                  KagemushaRecursiveSpendProver.NoteOpening.class,
+                  KagemushaRecursiveSpendProver.TopUpProvenanceV4.class,
+                  KagemushaRecursiveSpendProver.OutputMembershipFrontierV4.class);
+      constructor.setAccessible(true);
+      return constructor.newInstance(
+          KagemushaRecursiveSpendProver.decodeBundleV4(
+              archive("KagemushaRecursiveSpendBundleV4", seed)),
+          KagemushaRecursiveSpendProver.decodeNoteMembershipWitness(
+              archive("KagemushaNoteMembershipWitnessV2", seed + 1)),
+          KagemushaRecursiveSpendProver.decodeNoteOpening(
+              archive("KagemushaNoteOpeningV2", seed + 2)),
+          KagemushaRecursiveSpendProver.decodeTopUpProvenanceV4(
+              archive("KagemushaRecursiveSpendTopUpProvenanceV4", seed + 3)),
+          KagemushaRecursiveSpendProver.decodeOutputMembershipFrontierV4(
+              archive(
+                  "connect_norito_bridge::KagemushaOutputMembershipFrontierV4",
+                  seed + 4)));
+    } catch (final ReflectiveOperationException failure) {
+      throw new AssertionError("failed to construct a spendable test branch", failure);
+    }
+  }
+
   private static KagemushaRecursiveSpendProver.OutputMembershipPath outputMembershipPath(
       final byte[] root,
       final int leafIndex) {
@@ -1047,11 +1544,43 @@ public final class KagemushaRecursiveSpendProverTest {
     }
   }
 
+  private static void assertThrowsNativeFailure(final Runnable action) {
+    try {
+      action.run();
+      assert false : "expected fail-closed native builder failure";
+    } catch (final RuntimeException | UnsatisfiedLinkError expected) {
+      // Expected when no exact native proof backend is installed for source-level tests.
+    }
+  }
+
+  private static boolean allZero(final byte[] value) {
+    for (final byte byteValue : value) {
+      if (byteValue != 0) return false;
+    }
+    return true;
+  }
+
   private static Method declaredMethod(final String name, final Class<?>... parameterTypes) {
     try {
       return KagemushaRecursiveSpendProver.class.getDeclaredMethod(name, parameterTypes);
     } catch (final ReflectiveOperationException failure) {
       throw new AssertionError("missing method " + name, failure);
+    }
+  }
+
+  private static <T> T construct(
+      final Class<T> type, final Class<?>[] parameterTypes, final Object... arguments) {
+    try {
+      final Constructor<T> constructor = type.getDeclaredConstructor(parameterTypes);
+      constructor.setAccessible(true);
+      return constructor.newInstance(arguments);
+    } catch (final InvocationTargetException failure) {
+      final Throwable cause = failure.getCause();
+      if (cause instanceof RuntimeException) throw (RuntimeException) cause;
+      if (cause instanceof Error) throw (Error) cause;
+      throw new AssertionError("constructor failed", cause);
+    } catch (final ReflectiveOperationException failure) {
+      throw new AssertionError("missing constructor for " + type.getName(), failure);
     }
   }
 

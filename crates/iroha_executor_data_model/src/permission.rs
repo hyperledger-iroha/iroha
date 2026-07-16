@@ -199,6 +199,9 @@ pub mod account {
 
     permission! {
         /// Permission to resolve account aliases in the specified scope.
+        ///
+        /// A domain scope authorizes only that fully-qualified domain. A dataspace scope
+        /// authorizes domainless aliases in that dataspace; the two scope kinds are independent.
         pub struct CanResolveAccountAlias {
             /// Alias permission scope.
             pub scope: AccountAliasPermissionScope,
@@ -283,6 +286,23 @@ pub mod account {
 
             assert_eq!(decoded, permission);
             assert!(encoded.contains("hbl.sbp"));
+        }
+    }
+}
+
+/// Permission tokens governing reads from restricted Nexus dataspaces.
+pub mod query {
+    use super::*;
+
+    permission! {
+        /// Permission to read non-public ledger data from one exact dataspace.
+        ///
+        /// The token does not authorize writes, reads from any other dataspace,
+        /// or account-alias resolution without its separate exact permission.
+        #[derive(Copy)]
+        pub struct CanReadRestrictedDataspace {
+            /// Exact restricted dataspace whose ledger data may be read.
+            pub dataspace: DataSpaceId,
         }
     }
 }
@@ -411,9 +431,21 @@ pub mod offline {
     use super::*;
 
     permission! {
+        /// Permission to manage native offline escrow issuance and settlement.
+        #[derive(Copy)]
+        pub struct CanManageOfflineEscrow;
+    }
+
+    permission! {
         /// Permission to activate an authenticated Kagemusha ABI-20/V4 recursive release.
         #[derive(Copy)]
         pub struct CanActivateKagemushaRecursiveReleaseV4;
+    }
+
+    permission! {
+        /// Permission to publish or rotate the governed offline device-attestation policy.
+        #[derive(Copy)]
+        pub struct CanManageOfflineDeviceAttestationPolicy;
     }
 }
 
@@ -919,6 +951,7 @@ mod tests {
     use super::oracle::{
         CanManageTwitterBindings, CanRegisterOracleFeed, CanVoteOracleChangeStage,
     };
+    use super::query::CanReadRestrictedDataspace;
     use crate::permission::Permission as _;
     use iroha_data_model::oracle::OracleChangeStage;
     use iroha_data_model::{
@@ -1000,6 +1033,25 @@ mod tests {
         assert_eq!(
             CanResolveEscrowDispute::name().as_str(),
             "CanResolveEscrowDispute"
+        );
+    }
+
+    #[test]
+    fn restricted_dataspace_read_permission_is_exact_and_typed() {
+        let permission = CanReadRestrictedDataspace {
+            dataspace: DataSpaceId::new(10),
+        };
+        let json = norito::json::to_json(&permission).expect("serialize permission");
+
+        assert_eq!(
+            CanReadRestrictedDataspace::name().as_str(),
+            "CanReadRestrictedDataspace"
+        );
+        assert_eq!(json, "{\"dataspace\":10}");
+        assert!(
+            norito::json::from_str::<CanReadRestrictedDataspace>("{\"dataspace\":\"sbp\"}")
+                .is_err(),
+            "restricted read grants must carry a numeric DataSpaceId"
         );
     }
 

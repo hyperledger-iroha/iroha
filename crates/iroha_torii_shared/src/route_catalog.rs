@@ -3410,6 +3410,19 @@ pub mod application_api {
         .with_cors_options(true)
     }
 
+    const fn internal_get(id: &'static str, path: &'static str) -> RouteDescriptor {
+        RouteDescriptor::new(
+            id,
+            HttpMethod::Get,
+            path,
+            ApiSurface::Public,
+            Listener::Torii,
+        )
+        .with_feature_gate(FeatureGate::Feature("app_api"))
+        .with_projections(RouteProjections::NONE)
+        .with_implicit_head(true)
+    }
+
     const fn app_post(id: &'static str, path: &'static str) -> RouteDescriptor {
         RouteDescriptor::new(
             id,
@@ -3532,6 +3545,9 @@ pub mod application_api {
         API_CID_BY_CID_BY_PATH_GET => app_wildcard_get("application.api_cid_by_cid_by_path_get", "/v1/api/cid/{cid}/{*path}");
         API_CID_BY_CID_BY_PATH_POST => app_wildcard_post("application.api_cid_by_cid_by_path_post", "/v1/api/cid/{cid}/{*path}");
         ACCOUNTS_BY_ACCOUNT_ID_GET => app_get("application.accounts_by_account_id_get", "/v1/accounts/{account_id}");
+        INTERNAL_ACCOUNTS_BY_ACCOUNT_ID_GET => internal_get("application.internal_accounts_by_account_id_get", "/v1/internal/accounts/{account_id}");
+        INTERNAL_ACCOUNTS_BY_ACCOUNT_ID_TRANSACTIONS_BY_ENTRYPOINT_HASH_GET => internal_get("application.internal_accounts_by_account_id_transactions_by_entrypoint_hash_get", "/v1/internal/accounts/{account_id}/transactions/{entrypoint_hash}");
+        INTERNAL_ACCOUNTS_BY_ACCOUNT_ID_ASSETS_BY_ASSET_DEFINITION_ID_GET => internal_get("application.internal_accounts_by_account_id_assets_by_asset_definition_id_get", "/v1/internal/accounts/{account_id}/assets/{asset_definition_id}");
         ACCOUNTS_BY_ACCOUNT_ID_TRANSACTIONS_QUERY_POST => app_post("application.accounts_by_account_id_transactions_query_post", "/v1/accounts/{account_id}/transactions/query");
         TRANSACTIONS_HISTORY_GET => app_get("application.transactions_history_get", "/v1/transactions/history");
         CONTRACTS_ACTIVITY_GET => app_get("application.contracts_activity_get", "/v1/contracts/activity");
@@ -3825,6 +3841,7 @@ pub mod contracts_and_verification_keys {
         CONTRACTS_CODE_BYTES_BY_CODE_HASH_GET => app_signed_get("contracts.contracts_code_bytes_by_code_hash_get", "/v1/contracts/code-bytes/{code_hash}");
         CONTRACTS_ALIASES_POST => app_post("contracts.contracts_aliases_post", "/v1/contracts/aliases");
         CONTRACTS_ALIASES_RESOLVE_POST => app_signed_post("contracts.contracts_aliases_resolve_post", "/v1/contracts/aliases/resolve");
+        CONTRACTS_DEPLOYMENT_STATE_POST => app_signed_post("contracts.contracts_deployment_state_post", "/v1/contracts/deployment-state");
         ASSETS_TRANSFER_POST => app_post("assets.assets_transfer_post", "/v1/assets/transfer");
         CONTRACTS_CALL_POST => app_post("contracts.contracts_call_post", "/v1/contracts/call");
         CONTRACTS_CALL_SIMULATE_POST => app_post("contracts.contracts_call_simulate_post", "/v1/contracts/call/simulate");
@@ -4348,6 +4365,9 @@ pub const CATALOGED_ROUTES: &[RouteDescriptor] = &[
     application_api::API_CID_BY_CID_BY_PATH_GET,
     application_api::API_CID_BY_CID_BY_PATH_POST,
     application_api::ACCOUNTS_BY_ACCOUNT_ID_GET,
+    application_api::INTERNAL_ACCOUNTS_BY_ACCOUNT_ID_GET,
+    application_api::INTERNAL_ACCOUNTS_BY_ACCOUNT_ID_TRANSACTIONS_BY_ENTRYPOINT_HASH_GET,
+    application_api::INTERNAL_ACCOUNTS_BY_ACCOUNT_ID_ASSETS_BY_ASSET_DEFINITION_ID_GET,
     application_api::ACCOUNTS_BY_ACCOUNT_ID_TRANSACTIONS_QUERY_POST,
     application_api::TRANSACTIONS_HISTORY_GET,
     application_api::CONTRACTS_ACTIVITY_GET,
@@ -4541,6 +4561,7 @@ pub const CATALOGED_ROUTES: &[RouteDescriptor] = &[
     contracts_and_verification_keys::CONTRACTS_CODE_BYTES_BY_CODE_HASH_GET,
     contracts_and_verification_keys::CONTRACTS_ALIASES_POST,
     contracts_and_verification_keys::CONTRACTS_ALIASES_RESOLVE_POST,
+    contracts_and_verification_keys::CONTRACTS_DEPLOYMENT_STATE_POST,
     contracts_and_verification_keys::ASSETS_TRANSFER_POST,
     contracts_and_verification_keys::CONTRACTS_CALL_POST,
     contracts_and_verification_keys::CONTRACTS_CALL_SIMULATE_POST,
@@ -4911,6 +4932,29 @@ mod tests {
     }
 
     #[test]
+    fn trusted_internal_account_reads_are_not_projected_to_public_tooling() {
+        let routes = [
+            application_api::INTERNAL_ACCOUNTS_BY_ACCOUNT_ID_GET,
+            application_api::INTERNAL_ACCOUNTS_BY_ACCOUNT_ID_TRANSACTIONS_BY_ENTRYPOINT_HASH_GET,
+            application_api::INTERNAL_ACCOUNTS_BY_ACCOUNT_ID_ASSETS_BY_ASSET_DEFINITION_ID_GET,
+        ];
+        let catalog = RouteCatalog::new(&routes);
+        assert_eq!(catalog.validate(), Ok(()));
+        for route in routes {
+            assert_eq!(route.projections(), RouteProjections::NONE);
+            assert!(!route.cors_options());
+        }
+        let enabled = EnabledFeatures::new(&["app_api"]);
+        assert!(
+            catalog
+                .project(CatalogProjection::OpenApi, enabled)
+                .is_empty()
+        );
+        assert!(catalog.project(CatalogProjection::Sdk, enabled).is_empty());
+        assert!(catalog.project(CatalogProjection::Mcp, enabled).is_empty());
+    }
+
+    #[test]
     fn account_alias_and_recipient_reads_declare_canonical_account_authentication() {
         for route in [
             aliases::RESOLVE,
@@ -4936,6 +4980,7 @@ mod tests {
 
         for route in [
             contracts_and_verification_keys::CONTRACTS_ALIASES_RESOLVE_POST,
+            contracts_and_verification_keys::CONTRACTS_DEPLOYMENT_STATE_POST,
             runtime_governance::GOV_CONTRACT_GET,
         ] {
             assert_eq!(

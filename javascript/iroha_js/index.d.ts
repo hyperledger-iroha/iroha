@@ -1,6 +1,8 @@
 /// <reference types="node" />
 
 export * from "./kotodama-compiler.js";
+export * from "./transaction-codec.js";
+export * from "./smart-contract-deployment.js";
 
 export type JsonValue =
   | null
@@ -4541,21 +4543,19 @@ export type ToriiPipelineEvent =
   | ToriiPipelineWitnessEvent;
 
 export interface ToriiPipelineTransactionStatusStatus {
-  kind: string;
-  content: unknown;
-  [key: string]: unknown;
-}
-
-export interface ToriiPipelineTransactionStatusContent {
-  hash: string;
-  status: ToriiPipelineTransactionStatusStatus;
-  [key: string]: unknown;
+  kind: "Queued" | "Approved" | "Committed" | "Applied" | "Rejected" | "Expired";
+  block_height?: number | null;
+  rejection_reason?: unknown | null;
 }
 
 export interface ToriiPipelineTransactionStatus {
-  kind: string;
-  content: ToriiPipelineTransactionStatusContent;
-  [key: string]: unknown;
+  hash: string;
+  status: ToriiPipelineTransactionStatusStatus;
+  summary?: string;
+  diagnostics?: ReadonlyArray<Record<string, unknown>>;
+  trigger_completions?: ReadonlyArray<Record<string, unknown>>;
+  scope: "local" | "auto" | "global";
+  resolved_from: "cache" | "queue" | "state";
 }
 
 export interface ToriiProofEventBase {
@@ -5556,6 +5556,7 @@ type NoritoRuntimeNamespaceExport =
     "noritoDecodeInstruction"
   | "noritoDecodePrivacyProofEnvelope"
   | "noritoEncodeInstruction"
+  | "noritoEncodeContractManifestSignaturePayload"
   | "noritoEncodeMultisigContractCallApproveRequest"
   | "noritoEncodeMultisigContractCallProposeRequest"
   | "noritoEncodeMultisigProposeRequest"
@@ -11014,6 +11015,35 @@ export interface RegisterSmartContractBytesInstructionInput {
   code: ArrayBufferView | ArrayBuffer | Buffer | string;
 }
 
+export type SmartContractUnsigned64 = number | bigint | string;
+
+export interface UploadSmartContractCodeChunkInstructionInput {
+  codeHash: HashLike;
+  totalSize: SmartContractUnsigned64;
+  chunkIndex: number;
+  chunkCount: number;
+  chunk: ArrayBufferView | ArrayBuffer | Buffer | string;
+}
+
+export interface FinalizeSmartContractCodeUploadInstructionInput {
+  codeHash: HashLike;
+  totalSize: SmartContractUnsigned64;
+  chunkCount: number;
+}
+
+export interface CancelSmartContractCodeUploadInstructionInput {
+  codeHash: HashLike;
+}
+
+export interface CommitContractDeploymentInstructionInput {
+  expectedDeployNonce: SmartContractUnsigned64;
+  contractAddress: string;
+  codeHash: HashLike;
+  contractAlias: string;
+  leaseExpiryMs?: SmartContractUnsigned64 | null;
+  expectedPreviousContractAddress?: string | null;
+}
+
 export interface RemoveSmartContractBytesInstructionInput {
   codeHash: HashLike;
   reason?: string | null;
@@ -11595,6 +11625,66 @@ export interface ToriiBrowserClientOptions {
   };
 }
 
+export interface ToriiBrowserRequestOptions {
+  signal?: AbortSignal;
+  headers?: Record<string, string>;
+  successStatuses?: ReadonlyArray<number>;
+}
+
+export interface ToriiBrowserTransactionStatusOptions
+  extends ToriiBrowserRequestOptions {
+  scope?: "local" | "auto" | "global";
+}
+
+export interface ToriiBrowserTransactionStatusPollOptions
+  extends ToriiBrowserRequestOptions {
+  scope?: "global";
+  intervalMs?: number;
+  timeoutMs?: number;
+  maxAttempts?: number;
+}
+
+export interface ToriiBrowserSubmitTransactionAndWaitOptions
+  extends ToriiBrowserTransactionStatusPollOptions {
+  hashHex?: string;
+}
+
+export interface ToriiBrowserNodeCapabilities {
+  abi_version: number;
+  data_model_version: number;
+  signed_transaction_schema_hash_hex: string;
+  crypto?: Record<string, unknown>;
+  query?: Record<string, unknown>;
+}
+
+export interface ToriiBrowserContractDeploymentStateRequest {
+  authority: string;
+  contract_alias: string;
+}
+
+export interface ToriiBrowserContractDeploymentStateResponse {
+  authority: string;
+  contract_alias: string;
+  deploy_nonce: string;
+  dataspace_alias: string;
+  dataspace_id: string;
+  previous_contract_address: string | null;
+  observed_block_height: string;
+  observed_block_hash: string;
+  ledger_time_ms: string;
+  chain_discriminant: string;
+}
+
+export interface ToriiBrowserContractDeploymentStateOptions
+  extends ToriiBrowserRequestOptions {
+  authAccountId?: string;
+  sign?: (
+    input: CanonicalJsonRequestSignerInput,
+  ) => CanonicalJsonRequestSignature | Promise<CanonicalJsonRequestSignature>;
+  timestampMs?: number;
+  nonce?: string;
+}
+
 export declare class ToriiBrowserHttpError extends Error {
   readonly response: Response;
   readonly status: number;
@@ -11603,6 +11693,37 @@ export declare class ToriiBrowserHttpError extends Error {
 
 export declare class ToriiBrowserClient {
   constructor(baseUrl: string | URL, options?: ToriiBrowserClientOptions);
+  submitTransaction(
+    signedTransaction: ArrayBufferView | ArrayBuffer | Buffer,
+    options?: ToriiBrowserRequestOptions,
+  ): Promise<unknown | null>;
+  getTransactionStatus(
+    hashHex: string,
+    options?: ToriiBrowserTransactionStatusOptions,
+  ): Promise<ToriiPipelineTransactionStatus | null>;
+  waitForTransactionStatus(
+    hashHex: string,
+    options?: ToriiBrowserTransactionStatusPollOptions,
+  ): Promise<ToriiPipelineTransactionStatus>;
+  submitTransactionAndWait(
+    signedTransaction: ArrayBufferView | ArrayBuffer | Buffer,
+    options: ToriiBrowserSubmitTransactionAndWaitOptions,
+  ): Promise<ToriiPipelineTransactionStatus>;
+  getNodeCapabilities(
+    options?: ToriiBrowserRequestOptions,
+  ): Promise<ToriiBrowserNodeCapabilities>;
+  getContractDeploymentState(
+    request: ToriiBrowserContractDeploymentStateRequest,
+    options?: ToriiBrowserContractDeploymentStateOptions,
+  ): Promise<ToriiBrowserContractDeploymentStateResponse>;
+  resolveContractAlias(
+    contractAlias: string,
+    options?: ToriiBrowserRequestOptions,
+  ): Promise<unknown>;
+  getAccount(
+    accountId: string,
+    options?: ToriiBrowserRequestOptions,
+  ): Promise<unknown>;
   getKagemushaReadinessV4(
     assetDefinitionId: string,
     options?: { signal?: AbortSignal },
@@ -13219,6 +13340,14 @@ export function sm2FixtureFromSeed(
 ): Sm2Fixture;
 
 export function noritoEncodeInstruction(instruction: object | string): Buffer;
+/** Encode a canonical compact `InstructionBox` archive for a transaction. */
+export function noritoEncodeInstructionBoxArchive(
+  instruction: object | string | ArrayBufferView | ArrayBuffer | Buffer,
+): Buffer;
+/** Encode the exact current Rust manifest-provenance signing frame. */
+export function noritoEncodeContractManifestSignaturePayload(
+  manifest: Record<string, unknown>,
+): Buffer;
 export function noritoEncodeTransactionPayloadBatch(
   payloads: ReadonlyArray<ArrayBufferView | ArrayBuffer | Buffer>,
 ): Buffer;
@@ -14657,6 +14786,22 @@ export function buildRegisterSmartContractCodeInstruction(
 
 export function buildRegisterSmartContractBytesInstruction(
   input: RegisterSmartContractBytesInstructionInput,
+): object;
+
+export function buildUploadSmartContractCodeChunkInstruction(
+  input: UploadSmartContractCodeChunkInstructionInput,
+): object;
+
+export function buildFinalizeSmartContractCodeUploadInstruction(
+  input: FinalizeSmartContractCodeUploadInstructionInput,
+): object;
+
+export function buildCancelSmartContractCodeUploadInstruction(
+  input: CancelSmartContractCodeUploadInstructionInput,
+): object;
+
+export function buildCommitContractDeploymentInstruction(
+  input: CommitContractDeploymentInstructionInput,
 ): object;
 
 export function buildRemoveSmartContractBytesInstruction(

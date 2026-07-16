@@ -4854,8 +4854,20 @@ mod transaction {
         /// Hash of the signed transaction to inspect
         #[arg(short('H'), long)]
         pub hash: HashOf<iroha::data_model::transaction::SignedTransaction>,
+        /// Explicit status routing scope. Omit with `--wait`, which selects the safe scope for
+        /// the requested terminal states.
+        #[arg(long, value_enum, conflicts_with = "wait")]
+        pub scope: Option<StatusScope>,
         #[command(flatten)]
         pub wait: TransactionWaitArgs,
+    }
+
+    #[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum StatusScope {
+        /// Query only the configured Torii peer.
+        Local,
+        /// Permit Torii's global/fanout status lookup.
+        Global,
     }
 
     impl Run for Status {
@@ -4865,9 +4877,15 @@ mod transaction {
                 let status = crate::wait_for_transaction_status(&client, self.hash, &self.wait)?;
                 context.print_data(&status)
             } else {
-                let status = client
-                    .get_transaction_status_response(self.hash)?
-                    .ok_or_else(|| eyre!("Transaction status not found"))?;
+                let status = match self.scope.unwrap_or(StatusScope::Local) {
+                    StatusScope::Local => {
+                        client.get_transaction_status_response_local(self.hash)?
+                    }
+                    StatusScope::Global => {
+                        client.get_transaction_status_response_auto(self.hash)?
+                    }
+                }
+                .ok_or_else(|| eyre!("Transaction status not found"))?;
                 context.print_data(&status)
             }
         }
@@ -9068,6 +9086,38 @@ mod tests {
 
         assert!(!status.wait.wait);
         assert!(status.wait.is_enabled());
+        assert_eq!(status.scope, None);
+    }
+
+    #[test]
+    fn tx_status_scope_is_explicit_and_cannot_override_wait_routing() {
+        let args = Args::try_parse_from([
+            "iroha",
+            "tx",
+            "status",
+            "--hash",
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "--scope",
+            "local",
+        ])
+        .expect("parse explicitly local tx status");
+        let Command::Tx(transaction::Command::Status(status)) = args.command else {
+            panic!("expected tx status command");
+        };
+        assert_eq!(status.scope, Some(transaction::StatusScope::Local));
+
+        let error = Args::try_parse_from([
+            "iroha",
+            "tx",
+            "status",
+            "--hash",
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "--scope",
+            "global",
+            "--wait",
+        ])
+        .expect_err("explicit scope must not override transaction wait routing");
+        assert_eq!(error.kind(), ErrorKind::ArgumentConflict);
     }
 
     #[test]

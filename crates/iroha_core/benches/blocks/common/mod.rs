@@ -6,11 +6,13 @@ mod common;
 use std::{
     collections::HashSet,
     num::{NonZeroU16, NonZeroU64, NonZeroUsize},
+    sync::Arc,
 };
 
 pub use common::*;
 use iroha_core::{
     block::{BlockBuilder, CommittedBlock},
+    governance::manifest::LaneManifestRegistry,
     prelude::*,
     query::store::LiveQueryStore,
     smartcontracts::{Execute, Registrable as _},
@@ -208,7 +210,7 @@ pub fn build_state(
         LiveQueryStore::start_test()
     };
     let domain = Domain::new(account_id.domain().clone()).build(account_id);
-    let state = State::new(
+    let state = State::try_new(
         World::with(
             [domain],
             [Account::new(account_id.clone()).build(account_id)],
@@ -216,7 +218,14 @@ pub fn build_state(
         ),
         kura,
         query_handle,
-    );
+        #[cfg(feature = "telemetry")]
+        <_>::default(),
+    )
+    .expect("benchmark State startup must validate");
+    let nexus = state.nexus_snapshot();
+    state.install_lane_manifests(&Arc::new(
+        LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
+    ));
 
     {
         let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");

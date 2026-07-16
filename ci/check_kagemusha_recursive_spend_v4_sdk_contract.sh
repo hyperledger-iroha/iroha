@@ -33,12 +33,22 @@ paths = {
     "swift_v4_codecs": Path(
         "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendV4Codecs.swift"
     ),
+    "swift_codecs": Path(
+        "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendV2Codecs.swift"
+    ),
     "swift_native": Path(
         "IrohaSwift/Sources/IrohaSwift/KagemushaRecursiveSpendV2Native.swift"
     ),
     "swift_bridge": Path("IrohaSwift/Sources/IrohaSwift/NativeBridge.swift"),
     "swift_coordinator": Path(
         "IrohaSwift/Sources/IrohaSwift/KagemushaArtifactCoordinator.swift"
+    ),
+    "swift_hardware_test": Path(
+        "IrohaSwift/Tests/IrohaSwiftTests/KagemushaHardwareAuthorizationV2Tests.swift"
+    ),
+    "hardware_authorization_vector": Path(
+        "crates/connect_norito_bridge/tests/fixtures/"
+        "kagemusha_request_authorization_v2_hardware.hex"
     ),
     "kagami": Path("crates/iroha_kagami/src/kagemusha.rs"),
     "bundle": Path("crates/iroha_core/src/bin/kagemusha_recursive_spend_v4_bundle.rs"),
@@ -50,6 +60,10 @@ paths = {
     "java": Path(
         "java/iroha_android/src/main/java/org/hyperledger/iroha/android/offline/"
         "KagemushaRecursiveSpendProver.java"
+    ),
+    "android_keymint": Path(
+        "java/iroha_android/android/src/main/java/org/hyperledger/iroha/android/offline/"
+        "KagemushaAndroidKeyMint.java"
     ),
     "xcframework_build": Path("scripts/build_norito_xcframework.sh"),
     "mobile_check": Path("scripts/check_mobile_sdk_artifacts.sh"),
@@ -225,6 +239,111 @@ require_regex(
     r"[\s\S]{0,100}?handles:\s*\[UInt64\]",
     "promotion-record-bound Swift native install signature",
 )
+require_regex(
+    "swift",
+    r"authorizeWithIosAppAttest\s*\("
+    r"[\s\S]{0,900}?service:\s*DCAppAttestService\s*=\s*\.shared"
+    r"[\s\S]{0,900}?service\.isSupported"
+    r"[\s\S]{0,1300}?service\.generateAssertion\s*\("
+    r"[\s\S]{0,300}?clientDataHash:\s*signingBytes"
+    r"[\s\S]{0,1300}?finalizeIosAppAttest\(assertionObject:\s*assertionObject\)",
+    "physical App Attest assertion over the exact authorization preparation",
+)
+require("swift_hardware_test", "final class KagemushaHardwareAuthorizationV2Tests")
+require(
+    "swift_hardware_test",
+    '.appendingPathComponent("crates/connect_norito_bridge/tests/fixtures")',
+)
+require(
+    "swift_hardware_test",
+    '.appendingPathComponent("kagemusha_request_authorization_v2_hardware.hex")',
+)
+for vector_key in (
+    "authority_public_key",
+    "registration_hash",
+    "android_preparation",
+    "android_signing_preimage",
+    "ios_preparation",
+    "ios_client_data_hash",
+):
+    require("swift_hardware_test", f'"{vector_key}"')
+canonical_hardware_vector_identifiers = {
+    "authority_public_key":
+        "a09aa5f47a6759802ff955f8dc2d2a14a5c99d23be97f864127ff9383455a4f0",
+    "registration_hash":
+        "289ab8f0dcaad32e86ab947b6bd48a3a63385b4d52b85f09f54260ad106d00c3",
+}
+for vector_key, canonical_value in canonical_hardware_vector_identifiers.items():
+    require(
+        "hardware_authorization_vector",
+        f"{vector_key}={canonical_value}",
+    )
+    require("swift_hardware_test", f'try hex("{canonical_value}")')
+require_regex(
+    "swift_hardware_test",
+    r'XCTAssertEqual\s*\(\s*try\s+hex\s*\(try\s+XCTUnwrap\s*\('
+    r'values\["authority_public_key"\]\s*\)\s*\)\s*,\s*try\s+authorityPublicKey\s*\(\s*\)',
+    "canonical authority_public_key fixture binding",
+)
+require_regex(
+    "swift_hardware_test",
+    r'XCTAssertEqual\s*\(\s*try\s+hex\s*\(try\s+XCTUnwrap\s*\('
+    r'values\["registration_hash"\]\s*\)\s*\)\s*,\s*try\s+registrationHash\s*\(\s*\)',
+    "canonical registration_hash fixture binding",
+)
+for needle in (
+    "PackageManager.FEATURE_KEYSTORE_SINGLE_USE_KEY",
+    "KeyProperties.KEY_ALGORITHM_EC",
+    'CURVE_NAME = "secp256r1"',
+    "KeyProperties.PURPOSE_SIGN",
+    "KeyProperties.DIGEST_SHA256",
+    ".setAttestationChallenge(request.challenge())",
+    ".setMaxUsageCount(1)",
+    'SIGNATURE_ALGORITHM = "SHA256withECDSA"',
+    "StrongBoxPolicy.REQUIRED",
+    "builder.setIsStrongBoxBacked(true)",
+    "keyInfo.isInsideSecureHardware()",
+    "keyInfo.getRemainingUsageCount() != 1",
+    "getCertificateChain(request.alias())",
+    "DeviceAttestationRegistration.androidPreKeyGenerationChallengeHash",
+    "KagemushaP256Codec.rawLowSFromStrictDer(signatureDer)",
+):
+    require("android_keymint", needle)
+require_regex(
+    "android_keymint",
+    r"generateRegistration\s*\("
+    r"[\s\S]{0,900}?RegistrationParameters\s+parameters"
+    r"[\s\S]{0,1300}?requiredParameters\.attestationChallenge\(\)"
+    r"[\s\S]{0,900}?requiredParameters\.registration\(material\)",
+    "registration-derived Android KeyMint pre-key challenge flow",
+)
+require_regex(
+    "android_keymint",
+    r"authorize\s*\("
+    r"[\s\S]{0,900}?RequestAuthorizationPreparation\s+preparation"
+    r"[\s\S]{0,1300}?requiredPreparation\.signingBytes\(\)"
+    r"[\s\S]{0,900}?finalizeRequestAuthorization\s*\("
+    r"[\s\S]{0,180}?requiredPreparation,\s*signatureDer",
+    "physical Android KeyMint signature over the exact authorization preparation",
+)
+require_regex(
+    "android_keymint",
+    r"new\s+KeyGenParameterSpec\.Builder\(request\.alias\(\),\s*"
+    r"KeyProperties\.PURPOSE_SIGN\)"
+    r"[\s\S]{0,500}?new\s+ECGenParameterSpec\(\"secp256r1\"\)"
+    r"[\s\S]{0,300}?setDigests\(KeyProperties\.DIGEST_SHA256\)"
+    r"[\s\S]{0,300}?setAttestationChallenge\(request\.challenge\(\)\)"
+    r"[\s\S]{0,300}?setMaxUsageCount\(1\)",
+    "exact sign-only P-256/SHA-256/challenge/single-use KeyMint generation profile",
+)
+if "KeyProperties.DIGEST_NONE" in texts["android_keymint"]:
+    errors.append(
+        f"{paths['android_keymint']}: physical KeyMint path must not use DIGEST_NONE"
+    )
+if "PREFERRED" in texts["android_keymint"]:
+    errors.append(
+        f"{paths['android_keymint']}: physical KeyMint path must not silently prefer/downgrade StrongBox"
+    )
 
 swift_v4_types = (
     "KagemushaRecursiveSpendArtifactBindingV4",
@@ -245,12 +364,75 @@ swift_v4_types = (
     "KagemushaRecursiveSpendSplitResultV4",
     "KagemushaRecursiveSpendVerifyResultV4",
     "KagemushaRecursiveSpendRedeemBuildResultV4",
+    "KagemushaRecursiveSpendRedemptionChangePreparationV4",
 )
 for type_name in swift_v4_types:
     require_regex(
         "swift_v4",
         rf"public\s+struct\s+{re.escape(type_name)}\b",
         f"distinct Swift carrier {type_name}",
+    )
+
+for needle in (
+    "redemptionChangePrepareRequestWireNameV4",
+    "KagemushaRecursiveSpendRedemptionChangePrepareRequestV4",
+    "redemptionChangePrepareResultWireNameV4",
+    "KagemushaRecursiveSpendRedemptionChangePrepareResultV4",
+):
+    require("swift", needle)
+require_regex(
+    "swift_v4",
+    r"static\s+func\s+prepareRedemptionChangeV4\s*\("
+    r"[\s\S]{0,700}?input:\s*KagemushaRecursiveSpendSpendableBranchV4,"
+    r"[\s\S]{0,350}?changeAmount:\s*KagemushaScaledAmount,"
+    r"[\s\S]{0,350}?operationID:\s*Data,"
+    r"[\s\S]{0,350}?entropy:\s*Data"
+    r"[\s\S]{0,2600}?kagemushaRecursiveSpendRedemptionChangePrepareV4",
+    "native-derived Swift redemption-change workflow",
+)
+require_regex(
+    "swift_v4_codecs",
+    r"encodeRedemptionChangePrepareRequest\s*\("
+    r"[\s\S]{0,1800}?writeField\(uint16\(request\.version\)\)"
+    r"[\s\S]{0,700}?request\.bundle\.noritoArchive"
+    r"[\s\S]{0,700}?request\.inputOpening"
+    r"[\s\S]{0,700}?request\.changeAmount"
+    r"[\s\S]{0,500}?request\.operationID"
+    r"[\s\S]{0,500}?request\.entropy"
+    r"[\s\S]{0,500}?redemptionChangePrepareRequestWireNameV4",
+    "field-for-field Swift redemption-change request encoder",
+)
+require_regex(
+    "swift_codecs",
+    r"decodeRedemptionChangePrepareResultV4\s*\("
+    r"[\s\S]{0,3000}?canonical\s*=\s*try\s+"
+    r"encodeRedemptionChangePrepareResultV4\(preparation\)"
+    r"[\s\S]{0,500}?canonical\s*==\s*archive",
+    "strict Swift redemption-change result canonical re-encode",
+)
+require_regex(
+    "swift_native",
+    r"kagemushaRecursiveSpendRedemptionChangePrepareV4\s*\("
+    r"[\s\S]{0,1800}?connect_norito_kagemusha_secret_free_buffer"
+    r"[\s\S]{0,1000}?NativeBridgeError\.fromStatus\(status\)"
+    r"[\s\S]{0,500}?secureFree\(output\)"
+    r"[\s\S]{0,500}?copyKagemushaNativeSecretArchiveOutput",
+    "Swift secret output secure-free on native error and success",
+)
+if re.search(
+    r"kagemushaRecursiveSpendRedemptionChangePrepareV4\s*\("
+    r"[\s\S]{0,2800}?connect_norito_free",
+    texts["swift_native"],
+):
+    errors.append(
+        f"{paths['swift_native']}: secret redemption-change output must never use connect_norito_free"
+    )
+if "redemptionChange(spendKey:" in texts["swift"] or re.search(
+    r"redemptionChange[\s\S]{0,300}?defaultDiversifier\(\)",
+    texts["swift"],
+):
+    errors.append(
+        f"{paths['swift']}: callers must not fabricate redemption-change rho or diversifier"
     )
 
 for method, native_call, result_type in (
@@ -688,6 +870,8 @@ c_symbols = (
     "connect_norito_kagemusha_recursive_spend_redeem_unsigned_payload_digest_v4",
     "connect_norito_kagemusha_recursive_spend_redeem_finalize_request_v4",
     "connect_norito_kagemusha_recursive_spend_redeem_v4",
+    "connect_norito_kagemusha_recursive_spend_redemption_change_prepare_v4",
+    "connect_norito_kagemusha_secret_free_buffer",
     "connect_norito_kagemusha_receiver_key_reference_v2",
     "connect_norito_kagemusha_recipient_output_derive_v2",
     "connect_norito_kagemusha_recipient_payment_request_signing_bytes_v2",
@@ -695,6 +879,8 @@ c_symbols = (
     "connect_norito_kagemusha_recipient_payment_request_verify_v2",
     "connect_norito_kagemusha_request_authorization_signing_bytes_v2",
     "connect_norito_kagemusha_request_authorization_create_v2",
+    "connect_norito_kagemusha_request_authorization_finalize_hardware_v2",
+    "connect_norito_kagemusha_request_authorization_finalize_ios_app_attest_v2",
     "connect_norito_kagemusha_receiver_acknowledgement_payload_v2",
     "connect_norito_kagemusha_receiver_acknowledgement_signing_bytes_v2",
     "connect_norito_kagemusha_receiver_acknowledgement_create_v2",
@@ -741,7 +927,7 @@ def parse_manifest_symbol_inventory(label: str) -> tuple[str, ...]:
 actual_kagemusha_symbols = parse_shell_symbol_array("mobile_check", "KAGEMUSHA_C_SYMBOLS")
 if actual_kagemusha_symbols != c_symbols:
     errors.append(
-        f"{paths['mobile_check']}: exact ordered 39-symbol Kagemusha C inventory mismatch "
+        f"{paths['mobile_check']}: exact ordered 43-symbol Kagemusha C inventory mismatch "
         f"(found {len(actual_kagemusha_symbols)})"
     )
 
@@ -753,7 +939,7 @@ for value in parse_shell_symbol_array("mobile_check", "REQUIRED_BRIDGE_SYMBOLS")
         actual_required_bridge_symbols.append(value)
 if tuple(actual_required_bridge_symbols) != required_bridge_symbols:
     errors.append(
-        f"{paths['mobile_check']}: exact ordered 47-symbol required bridge inventory mismatch "
+        f"{paths['mobile_check']}: exact ordered 51-symbol required bridge inventory mismatch "
         f"(found {len(actual_required_bridge_symbols)})"
     )
 
@@ -761,7 +947,7 @@ for label in ("xcframework_build", "mobile_check_test"):
     actual_manifest_symbols = parse_manifest_symbol_inventory(label)
     if actual_manifest_symbols != required_bridge_symbols:
         errors.append(
-            f"{paths[label]}: exact ordered 47-symbol required bridge inventory mismatch "
+            f"{paths[label]}: exact ordered 51-symbol required bridge inventory mismatch "
             f"(found {len(actual_manifest_symbols)})"
         )
 
@@ -909,6 +1095,42 @@ if mode == "--self-test":
         "V4 files are not canonical",
     )
     run_negative(
+        "App Attest cannot sign a substituted client-data hash",
+        lambda fixture: replace_once(
+            fixture / paths["swift"],
+            "                clientDataHash: signingBytes\n",
+            "                clientDataHash: Data(repeating: 0, count: 32)\n",
+        ),
+        "physical App Attest assertion over the exact authorization preparation",
+    )
+    run_negative(
+        "Swift hardware parity cannot leave the shared fixture",
+        lambda fixture: replace_once(
+            fixture / paths["swift_hardware_test"],
+            '.appendingPathComponent("kagemusha_request_authorization_v2_hardware.hex")',
+            '.appendingPathComponent("dummy_hardware_authorization.hex")',
+        ),
+        "kagemusha_request_authorization_v2_hardware.hex",
+    )
+    run_negative(
+        "Swift hardware parity cannot substitute the canonical authority key",
+        lambda fixture: replace_once(
+            fixture / paths["swift_hardware_test"],
+            'values["authority_public_key"]',
+            'values["dummy_authority_public_key"]',
+        ),
+        "canonical authority_public_key fixture binding",
+    )
+    run_negative(
+        "Android KeyMint cannot relax the hardware usage count",
+        lambda fixture: replace_once(
+            fixture / paths["android_keymint"],
+            ".setMaxUsageCount(1);",
+            ".setMaxUsageCount(2);",
+        ),
+        "exact sign-only P-256/SHA-256/challenge/single-use KeyMint generation profile",
+    )
+    run_negative(
         "required bridge symbol order drift is rejected",
         lambda fixture: replace_once(
             fixture / paths["xcframework_build"],
@@ -917,7 +1139,7 @@ if mode == "--self-test":
             '    "connect_norito_encode_transfer_signed_transaction",\n'
             '    "connect_norito_free",',
         ),
-        "exact ordered 47-symbol required bridge inventory mismatch",
+        "exact ordered 51-symbol required bridge inventory mismatch",
     )
 
     def inject_v3_alias(fixture: Path) -> None:

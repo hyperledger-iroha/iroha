@@ -26,6 +26,10 @@ public struct KagemushaRecursiveSpendArtifactBindingV4: Equatable, Hashable, Sen
 }
 
 /// Wallet-safe public projection of one validated ABI-20 recursive bundle.
+///
+/// The frozen summary wire intentionally omits the chain ID. Callers must not
+/// use this projection to authenticate a chain independently of the native
+/// bridge that validated the opaque bundle.
 public struct KagemushaRecursiveSpendBundleSummaryV4: Equatable, Sendable {
     public let assetDefinitionID: String
     public let amount: KagemushaScaledAmount
@@ -698,6 +702,89 @@ public struct KagemushaRecursiveSpendSpendableBranchV4: Equatable, Sendable {
     }
 }
 
+/// Exact local bridge request for native-derived partial-redemption change.
+/// The archive contains the input opening and is wiped immediately after use.
+struct KagemushaRecursiveSpendRedemptionChangePrepareRequestV4: Equatable, Sendable {
+    let version: UInt16
+    let bundle: KagemushaRecursiveSpendBundleV4
+    let inputOpening: KagemushaNoteOpening
+    let changeAmount: KagemushaScaledAmount
+    let operationID: Data
+    let entropy: Data
+
+    init(
+        bundle: KagemushaRecursiveSpendBundleV4,
+        inputOpening: KagemushaNoteOpening,
+        changeAmount: KagemushaScaledAmount,
+        operationID: Data,
+        entropy: Data
+    ) throws {
+        try KagemushaRecursiveSpend.requireNonzeroFixed32(
+            operationID,
+            field: "redemptionChangeV4.operationID"
+        )
+        try KagemushaRecursiveSpend.requireNonzeroFixed32(
+            entropy,
+            field: "redemptionChangeV4.entropy"
+        )
+        guard operationID != entropy else {
+            throw KagemushaRecursiveSpendError.invalidField("redemptionChangeV4.entropy")
+        }
+        version = KagemushaRecursiveSpend.wireVersionV4
+        self.bundle = bundle
+        self.inputOpening = inputOpening
+        self.changeAmount = changeAmount
+        self.operationID = Data(operationID)
+        self.entropy = Data(entropy)
+    }
+}
+
+/// Native-derived secret opening and complete public descriptor for a
+/// partial-redemption change note.
+public struct KagemushaRecursiveSpendRedemptionChangePreparationV4:
+    Equatable, Sendable
+{
+    public let opening: KagemushaNoteOpening
+    /// Complete descriptor returned by the native bridge. Swift rechecks every
+    /// binding exposed by `KagemushaRecursiveSpendBundleSummaryV4`; because the
+    /// frozen summary omits chain ID, `output.chainID` remains native-authenticated
+    /// rather than independently authenticated by this Swift result decoder.
+    public let output: KagemushaSpendableNoteDescriptor
+    /// Exact public unshield amount: input amount minus the private change output.
+    public let publicAmount: KagemushaScaledAmount
+
+    init(
+        opening: KagemushaNoteOpening,
+        output: KagemushaSpendableNoteDescriptor,
+        inputOpening: KagemushaNoteOpening,
+        inputSummary: KagemushaRecursiveSpendBundleSummaryV4,
+        changeAmount: KagemushaScaledAmount
+    ) throws {
+        guard opening.spendKey == inputOpening.spendKey,
+              opening.rho != inputOpening.rho,
+              opening.rho != opening.diversifier,
+              opening.diversifier == ConfidentialOwnerTag.defaultDiversifier(),
+              output.assetDefinitionID == inputSummary.assetDefinitionID,
+              output.amount == changeAmount,
+              output.noteCommitment != inputSummary.noteCommitment,
+              output.spendNullifier != inputSummary.spendNullifier,
+              let publicAtomicUnits = KagemushaScaledAmount.subtractAtomicUnits(
+                  output.amount.atomicUnits,
+                  from: inputSummary.amount.atomicUnits
+              ) else {
+            throw KagemushaRecursiveSpendError.invalidArchive(
+                "redemptionChangePrepareResultV4.binding"
+            )
+        }
+        self.opening = opening
+        self.output = output
+        publicAmount = try KagemushaScaledAmount(
+            atomicUnits: publicAtomicUnits,
+            scale: inputSummary.amount.scale
+        )
+    }
+}
+
 /// Secret-bearing ABI-20 append input. It encodes the flat V4 bridge carrier,
 /// not a version wrapper around the frozen request.
 public struct KagemushaRecursiveSpendAppendLocalRequestV4: Equatable, Sendable {
@@ -1105,6 +1192,73 @@ public struct KagemushaRecursiveSpendRedeemResultV4: Equatable, Sendable {
 }
 
 public extension KagemushaRecursiveSpend {
+    /// Derive partial-redemption change entirely inside the native bridge.
+    ///
+    /// The input bundle and opening are reauthenticated by native code. The
+    /// caller supplies only the exact smaller change amount, operation id, and
+    /// fresh entropy; rho and the protocol diversifier are never caller-chosen.
+    static func prepareRedemptionChangeV4(
+        input: KagemushaRecursiveSpendSpendableBranchV4,
+        changeAmount: KagemushaScaledAmount,
+        operationID: Data,
+        entropy: Data
+    ) throws -> KagemushaRecursiveSpendRedemptionChangePreparationV4 {
+        let request = try KagemushaRecursiveSpendRedemptionChangePrepareRequestV4(
+            bundle: input.bundle,
+            inputOpening: input.opening,
+            changeAmount: changeAmount,
+            operationID: operationID,
+            entropy: entropy
+        )
+        let inputSummary = try input.bundle.projectedSummary()
+        try validateRedemptionChangeV4(
+            inputSummary: inputSummary,
+            changeAmount: changeAmount,
+            operationID: operationID,
+            entropy: entropy
+        )
+        var requestArchive = try KagemushaRecursiveSpendCodecsV4
+            .encodeRedemptionChangePrepareRequest(request)
+        defer { requestArchive.resetBytes(in: 0..<requestArchive.count) }
+        guard var resultArchive = try NoritoNativeBridge.shared
+            .kagemushaRecursiveSpendRedemptionChangePrepareV4(
+                requestArchive: requestArchive
+            ) else {
+            throw KagemushaRecursiveSpendError.nativeBridgeUnavailable
+        }
+        defer { resultArchive.resetBytes(in: 0..<resultArchive.count) }
+        return try KagemushaRecursiveSpendCodecs.decodeRedemptionChangePrepareResultV4(
+            resultArchive,
+            inputOpening: input.opening,
+            inputSummary: inputSummary,
+            changeAmount: changeAmount
+        )
+    }
+
+    static func validateRedemptionChangeV4(
+        inputSummary: KagemushaRecursiveSpendBundleSummaryV4,
+        changeAmount: KagemushaScaledAmount,
+        operationID: Data,
+        entropy: Data
+    ) throws {
+        try requireNonzeroFixed32(
+            operationID,
+            field: "redemptionChangeV4.operationID"
+        )
+        try requireNonzeroFixed32(
+            entropy,
+            field: "redemptionChangeV4.entropy"
+        )
+        guard operationID != entropy,
+              changeAmount.scale == inputSummary.amount.scale,
+              KagemushaScaledAmount.compareAtomicUnits(
+                  changeAmount.atomicUnits,
+                  inputSummary.amount.atomicUnits
+              ) == .orderedAscending else {
+            throw KagemushaRecursiveSpendError.invalidField("redemptionChangeV4")
+        }
+    }
+
     static func ensureProofBackendAvailableV4() throws {
         guard hasRequiredNativeSymbols else {
             throw KagemushaRecursiveSpendError.nativeBridgeUnavailable

@@ -31,6 +31,16 @@ as a compatibility marker and is not a V4 admission selector. Branch paths
 retain depth 64, while peer spends permit at most eight hops and each transition
 consumes at most two recursive inputs. Redemption-change extends proof lineage
 without adding a peer hop. These are protocol bounds, not availability signals.
+Wallet-facing partial-redemption change opening preparation now has a single
+native secret boundary. Callers provide the authenticated input branch, its
+owned opening, the smaller same-scale change amount, a nonzero operation id,
+and fresh entropy; native code revalidates the full bundle and input note,
+derives rho with the fixed V4 keyed-BLAKE3 transcript, and selects the protocol
+diversifier. The C result uses a dedicated zeroizing allocator, while Swift,
+Kotlin/JVM, and Android Java copy or transfer the opening under explicit
+single-owner lifetimes and wipe temporary archives. This implementation does
+not change production availability or count as review, device evidence, or a
+promotion approval.
 The two-layer Pasta IPA/Poseidon backend now contains the fixed-shape
 EqAffine/Vesta transition proof and EpAffine/Pallas wrapper. They authenticate
 parent proofs under release-bound verifier keys, bind the exact public
@@ -57,11 +67,14 @@ ingestion can atomically install the exact external artifact set and construct a
 authenticated backend. Core/Torii lineage support additionally requires the
 transaction-selected artifact set and distinct active Eq/Ep registry records;
 an unrelated readiness blocker does not erase those capability facts. Release
-work must still complete the full substitution matrix, independent
-cryptographic review, reproducible clean-commit generation, physical-device
-benchmarks, signed threshold approval, and the production promotion corridor
-before publishing an authenticated V4 release. Until then, authoritative
-production availability stays false.
+work must still complete the full substitution matrix, produce fresh
+independent review evidence through the canonical candidate-bound signed Norito
+review envelope, perform reproducible clean-commit generation and
+physical-device benchmarks, collect signed threshold approval, and complete the
+production promotion corridor before publishing an authenticated V4 release.
+The review schema and native fail-closed validator do not substitute for that
+external review evidence. Until then, authoritative production availability
+stays false.
 The historical ABI-19/V3 path had a 1,600-byte per-step limit and 21,764-byte
 proof payload cap. Its degree-18 prototype produced 7,296-byte ordinary and
 7,328-byte augmented proofs even before full confidential/output-membership
@@ -1008,6 +1021,17 @@ from the first release and must not appear as launch blockers or evidence rows.
 
 **Status:** active.
 
+- Keep permission and role authorization consensus-owned across Initial and
+  user-provided executors. Contract-originated instruction overlays now pass a
+  common pre-dispatch boundary on both owned and borrowed paths; they cannot
+  register, unregister, assign, or mutate roles, and their only account-token
+  mutation is an exact canonical `CanInvokeContractEntrypoint` token bound to
+  the immutable contract subject and address. Initial and default role
+  membership delegation now revalidate every contained permission, reject
+  unknown legacy contents and beneficiary-exact fee-sponsor tokens, and apply
+  sponsor/resource authority to the transaction actor rather than the role's
+  destination. Fee-sponsor grants require the live beneficiary/domain binding
+  in both executors, while revoke remains available for offboarding.
 - Continue the crypto-boundary audit after the completed signature decoder
   hardening: `Signature` JSON and Norito admission now rejects empty/all-zero
   payloads centrally, `BlockSignature` wire decoding routes through the checked
@@ -1865,8 +1889,9 @@ from the first release and must not appear as launch blockers or evidence rows.
   and authorizes future certificates by attested certificate-payload hash. The
   on-chain verifier now has a governed policy instruction for deterministic
   platform root rotation, certificate-DER revocation digests, and optional
-  iOS/Android app allowlists while preserving built-in first-release roots as
-  the no-policy default. Swift, Kotlin/JVM, and Java Android SDK parity now
+  iOS/Android app allowlists. Admission fails closed when that governed policy
+  is absent; built-in roots are not a no-policy fallback. Swift, Kotlin/JVM,
+  and Java Android SDK parity now
   carries the registration model, canonical challenge-preimage hash, and
   `RegisterOfflineDeviceAttestation` instruction bytes through the shared
   Offline Note V2 interop fixture. Core and the mobile SDKs also reject the
@@ -1886,6 +1911,12 @@ from the first release and must not appear as launch blockers or evidence rows.
   retired signature counter is removed, and the Kagemusha policy guard's
   retired App Attest negative control rejects reintroducing that metric or
   old-path wording.
+  Online recursive-spend authorization now also has a native-owned, canonical
+  one-use hardware boundary: Android API 31+ uses an attested KeyMint P-256 key
+  and iOS finalizes a direct App Attest assertion over the same frozen request
+  vector. Release evidence must still include a fresh physical single-use
+  KeyMint execution and a live entitled App Attest call; unit, bridge, and SDK
+  parity results do not replace those hardware runs.
 - Move the shared Iroha 2 / Iroha 3 codebase toward a broadly consumable
   release with clear release notes, SDK parity, and operator documentation.
 - CUDA acceleration release readiness now has focused Norito helper, IVM CUDA

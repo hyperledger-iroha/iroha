@@ -14,6 +14,7 @@ import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
 
 /** Exact Rust/Kotlin parity and adversarial coverage for the sole ABI-20 registration path. */
@@ -28,6 +29,13 @@ class RegisterOfflineDeviceAttestationTest {
         assertEquals(20, DeviceAttestationRegistration.REQUIRED_NATIVE_BRIDGE_ABI_VERSION)
         assertContentEquals(hexToBytes(rust[0]), registration.noritoEncoded())
         assertContentEquals(hexToBytes(rust[2]), registration.challengeHash)
+        assertContentEquals(hexToBytes(rust[4]), registration.canonicalRegistrationHash())
+        assertFalse(
+            registration.canonicalRegistrationHash().contentEquals(
+                MessageDigest.getInstance("SHA-256").digest(registration.noritoEncoded()),
+            ),
+            "registration ID is canonical Iroha Hash, not raw SHA-256",
+        )
 
         val request = request(registration)
         val instruction = request.instruction()

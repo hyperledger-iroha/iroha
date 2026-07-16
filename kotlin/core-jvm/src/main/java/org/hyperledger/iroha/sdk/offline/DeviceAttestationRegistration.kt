@@ -119,6 +119,9 @@ class DeviceAttestationRegistration(
     fun canonicalChallengeHash(): ByteArray =
         OfflineDeviceAttestationCodec.canonicalChallengeHash(this)
 
+    /** Canonical Iroha Hash/registration ID of the exact framed Norito registration archive. */
+    fun canonicalRegistrationHash(): ByteArray = IrohaHash.prehash(noritoEncoded())
+
     private fun requireCore() {
         require(version == REGISTRATION_VERSION) { "registration version must be exactly 1" }
         require(oneUse) { "device attestation authority must be one-use" }

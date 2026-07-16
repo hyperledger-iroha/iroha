@@ -288,14 +288,28 @@ cargo run -p iroha_core --bin kagemusha_recursive_spend_v4_bundle -- \
   --release-policy <canonical-norito-file> \
   --release-attestation <canonical-norito-file> \
   --benchmark-evidence <exact-file> \
-  --cryptographic-review <exact-file>
+  --cryptographic-review <canonical-signed-norito-file>
 ```
 
 Candidate generation records the clean source and exact inline Eq/Ep circuit
 parameters and emits the eight role-separated artifacts. The candidate is not
-an approved release. Finalization authenticates the policy and attestation,
-binds the exact evidence files, and rechecks the staged bytes before publishing
-a new immutable directory. Runtime and proof-envelope validation consume the
+an approved release. The review file keeps the historical
+`cryptographic-review.evidence` name, but its content is not opaque text. It is
+the canonical Norito
+`KagemushaRecursiveSpendCryptographicReviewEvidenceV4` envelope. Every reviewer
+signs the exact domain-separated payload containing the immutable candidate
+digest and release identity, an approved decision, the nonzero retained-report
+digest, the exact eight artifact roles, and the fixed ordered six-check matrix
+with distinct nonzero evidence digests. All checks must pass. Reviewer keys are
+strictly ordered, must satisfy the configured cryptographic-review policy, and
+must exactly equal the cryptographic-review signer set in the release
+attestation. Plain strings, non-canonical encodings, rejected or incomplete
+reviews, substituted candidates, duplicate identities, and signature or signer
+set mismatches fail closed.
+
+Finalization authenticates that review, the policy, and the attestation, binds
+the exact evidence files, and rechecks the staged bytes before publishing a new
+immutable directory. Runtime and proof-envelope validation consume the
 canonical Norito bytes; JSON remains an operator view and is never re-encoded
 into a trust anchor. A partial candidate or finalization failure cannot expose
 an active generation.

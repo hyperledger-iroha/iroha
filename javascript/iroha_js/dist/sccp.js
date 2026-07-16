@@ -84,9 +84,16 @@ const MAX_MERKLE_PROOF_STEPS = 64;
 const MAX_FINALITY_PROOF_BYTES = 16 * 1024 * 1024;
 export const SCCP_SOLANA_TESTNET_GENESIS_HASH =
   "4uhcVJyU9pJkvQyS88uRDiswHXSCkY3zQawwpjk2NsNY";
-const SOLANA_TESTNET_GENESIS_BYTES = Uint8Array.from(
-  Buffer.from("3a132ece10305ec1830725502fa2b7e7eb8157e9123d4c1f654a71787161dc21", "hex"),
-);
+// Keep this module browser-native. `instructionBuilders.js` imports SCCP at
+// module evaluation time, before an application could install a Node Buffer
+// compatibility global, so even an otherwise unrelated browser transfer flow
+// must not depend on `Buffer` here.
+const SOLANA_TESTNET_GENESIS_BYTES = Uint8Array.from([
+  0x3a, 0x13, 0x2e, 0xce, 0x10, 0x30, 0x5e, 0xc1,
+  0x83, 0x07, 0x25, 0x50, 0x2f, 0xa2, 0xb7, 0xe7,
+  0xeb, 0x81, 0x57, 0xe9, 0x12, 0x3d, 0x4c, 0x1f,
+  0x65, 0x4a, 0x71, 0x78, 0x71, 0x61, 0xdc, 0x21,
+]);
 const SOLANA_CLASSIC_TOKEN_PROGRAM_ID = Uint8Array.from([
   6, 221, 246, 225, 215, 101, 161, 147, 217, 203, 225, 70, 206, 235, 121, 172,
   28, 180, 133, 237, 95, 91, 55, 145, 58, 140, 245, 133, 126, 255, 0, 169,

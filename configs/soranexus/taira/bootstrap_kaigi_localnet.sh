@@ -222,6 +222,7 @@ enabled = true
 authority = "{authority}"
 private_key = "{private_key}"
 fee_sponsor_account = "{fee_sponsor_account}"
+fee_sponsor_policy = "default"
 allowed_permissions = []
 """
 

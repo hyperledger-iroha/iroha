@@ -5,14 +5,14 @@
 //!
 //! It writes fixtures under `crates/iroha_core/tests/fixtures/`.
 
-use std::{error::Error, fs, io::Write, path::PathBuf};
+use std::{error::Error, fs, io::Write, path::PathBuf, sync::Arc};
 
 use iroha_core::{
     block::{BlockBuilder, ValidBlock},
+    governance::manifest::LaneManifestRegistry,
     state::StateReadOnly,
 };
 use iroha_data_model::{prelude::*, transaction::signed::TransactionSignatureError};
-use iroha_primitives::numeric::Numeric;
 // use mv::storage::StorageReadOnly; // not needed in example
 
 fn fixtures_dir() -> PathBuf {
@@ -86,15 +86,11 @@ fn run_block_and_events(
     let world = iroha_core::state::World::with_assets([domain], [acc_a, acc_b], [ad], [a0, b0], []);
     let kura = iroha_core::kura::Kura::blank_kura_for_testing();
     let query = iroha_core::query::store::LiveQueryStore::start_test();
-    #[cfg(feature = "telemetry")]
-    let mut state = iroha_core::state::State::new(
-        world,
-        kura,
-        query,
-        iroha_core::telemetry::StateTelemetry::default(),
-    );
-    #[cfg(not(feature = "telemetry"))]
-    let mut state = iroha_core::state::State::new(world, kura, query);
+    let mut state = iroha_core::state::State::new_for_testing(world, kura, query);
+    let nexus = state.nexus_snapshot();
+    state.install_lane_manifests(&Arc::new(
+        LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
+    ));
     let mut cfg = state.view().pipeline().clone();
     cfg.parallel_apply = parallel_apply;
     state.set_pipeline(cfg);

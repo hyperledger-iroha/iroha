@@ -1635,6 +1635,8 @@ mod tests {
             KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V4,
             KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_VERSION_V4,
             KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_ROLES_V4,
+            KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_SCHEMA_V4,
+            KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_VERSION_V4,
             KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V4,
             KAGEMUSHA_RECURSIVE_SPEND_PROMOTED_RELEASE_SCHEMA_V4,
             KAGEMUSHA_RECURSIVE_SPEND_RELEASE_ATTESTATION_SCHEMA_V4,
@@ -1657,9 +1659,12 @@ mod tests {
             KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_TYPE_V2,
             KAGEMUSHA_TOPUP_FINALITY_ROSTER_FILE_NAME_V4, KagemushaPastaCycleArtifactV4,
             KagemushaPastaCycleProofProfileV4, KagemushaPastaPublicLayoutV4,
-            KagemushaRecursiveSpendArtifactManifestV4, KagemushaRecursiveSpendPromotedReleaseV4,
-            KagemushaRecursiveSpendReleaseApprovalRoleV1, KagemushaRecursiveSpendReleaseApprovalV4,
-            KagemushaRecursiveSpendReleaseAttestationV4,
+            KagemushaRecursiveSpendArtifactManifestV4,
+            KagemushaRecursiveSpendCryptographicReviewApprovalV4,
+            KagemushaRecursiveSpendCryptographicReviewEvidenceV4,
+            KagemushaRecursiveSpendCryptographicReviewPayloadV4,
+            KagemushaRecursiveSpendPromotedReleaseV4, KagemushaRecursiveSpendReleaseApprovalRoleV1,
+            KagemushaRecursiveSpendReleaseApprovalV4, KagemushaRecursiveSpendReleaseAttestationV4,
             KagemushaRecursiveSpendReleaseRolePolicyV1, KagemushaReleaseVerificationError,
             KagemushaStepCircuitParamsV4, KagemushaTopUpFinalityRosterArtifactReferenceV4,
         },
@@ -1756,7 +1761,6 @@ mod tests {
         KagemushaRecursiveSpendPromotedReleaseV4,
     ) {
         let benchmark = b"signed candidate-binding device benchmark";
-        let review = b"signed candidate-binding cryptographic review";
         let mut manifest = KagemushaRecursiveSpendArtifactManifestV4 {
             schema: KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V4.to_owned(),
             version: KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_VERSION_V4,
@@ -1793,7 +1797,7 @@ mod tests {
                     iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4,
             },
             benchmark_evidence_sha256: Sha256::digest(benchmark).into(),
-            cryptographic_review_sha256: Sha256::digest(review).into(),
+            cryptographic_review_sha256: [0x63; 32],
             release_attestation_sha256: [0x62; 32],
         };
         let roles = [
@@ -1806,6 +1810,29 @@ mod tests {
             KeyPair::from_seed(vec![0x72; 32], Algorithm::Ed25519),
             KeyPair::from_seed(vec![0x73; 32], Algorithm::Ed25519),
         ];
+        let candidate = manifest
+            .immutable_candidate()
+            .expect("candidate-binding immutable candidate");
+        let review_payload = KagemushaRecursiveSpendCryptographicReviewPayloadV4::approved(
+            &candidate,
+            [0x81; 32],
+            [
+                [0x82; 32], [0x83; 32], [0x84; 32], [0x85; 32], [0x86; 32], [0x87; 32],
+            ],
+        )
+        .expect("candidate-binding review payload");
+        let review = norito::to_bytes(&KagemushaRecursiveSpendCryptographicReviewEvidenceV4 {
+            schema: KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_SCHEMA_V4.to_owned(),
+            version: KAGEMUSHA_RECURSIVE_SPEND_CRYPTOGRAPHIC_REVIEW_VERSION_V4,
+            approvals: vec![KagemushaRecursiveSpendCryptographicReviewApprovalV4 {
+                public_key: key_pairs[1].public_key().clone(),
+                signature: SignatureOf::try_new(key_pairs[1].private_key(), &review_payload)
+                    .expect("candidate-binding review signature"),
+            }],
+            payload: review_payload,
+        })
+        .expect("candidate-binding canonical signed review");
+        manifest.cryptographic_review_sha256 = Sha256::digest(&review).into();
         let policy = KagemushaRecursiveSpendReleasePolicyV1 {
             schema: KAGEMUSHA_RECURSIVE_SPEND_RELEASE_POLICY_SCHEMA_V1.to_owned(),
             version: KAGEMUSHA_RECURSIVE_SPEND_RELEASE_AUTH_VERSION_V1,
@@ -1853,7 +1880,7 @@ mod tests {
             &policy,
             &attestation,
             benchmark,
-            review,
+            &review,
         )
         .expect("authenticated candidate-binding release");
         let candidate_sha256 = manifest

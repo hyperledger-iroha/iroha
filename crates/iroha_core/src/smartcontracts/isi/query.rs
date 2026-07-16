@@ -1280,6 +1280,19 @@ trait ExecuteQueryBox {
     ) -> Result<QueryOutputBatchBox, Error>;
 }
 
+/// Decode an erased iterable-query payload only when it is the canonical encoding of `Q`.
+///
+/// Norito unit structs decode from any byte slice, so decode success alone is not enough to
+/// distinguish a legitimate unit query from a malformed or parameterized query payload.
+fn decode_iter_query_payload_exact<Q>(payload: &[u8]) -> Option<Q>
+where
+    Q: norito::codec::Decode + norito::codec::Encode,
+{
+    let mut input = payload;
+    let query = Q::decode(&mut input).ok()?;
+    (norito::codec::Encode::encode(&query) == payload).then_some(query)
+}
+
 // NOTE: This trait is currently unused. Iterable query execution of erased
 // `QueryBox<QueryOutputBatchBox>` is performed in `ValidQueryRequest::execute`
 // via registry-based dispatch (`iter_query_inner::<T>`), followed by
@@ -1293,19 +1306,6 @@ impl ExecuteQueryBox for QueryBox<QueryOutputBatchBox> {
         params: &QueryParams,
     ) -> Result<QueryOutputBatchBox, Error> {
         use iroha_data_model as dm;
-        fn decode_query<Q: norito::codec::Decode>(payload: &[u8]) -> Result<Q, Error> {
-            let mut cursor = std::io::Cursor::new(payload);
-            let query = Q::decode(&mut cursor).map_err(|_| {
-                Error::Conversion("failed to decode iterable query payload".to_string())
-            })?;
-            if usize::try_from(cursor.position()).unwrap_or(usize::MAX) != payload.len() {
-                return Err(Error::Conversion(
-                    "iterable query payload had trailing bytes".to_string(),
-                ));
-            }
-            Ok(query)
-        }
-
         fn run_dispatch<T, Q>(
             qbox: &QueryBox<QueryOutputBatchBox>,
             state: &impl StateReadOnly,
@@ -1320,13 +1320,13 @@ impl ExecuteQueryBox for QueryBox<QueryOutputBatchBox> {
                 + Sync
                 + 'static,
             <T as HasProjection<SelectorMarker>>::Projection: EvaluateSelector<T> + Send + Sync,
-            Q: super::super::ValidQuery<Item = T> + norito::codec::Decode,
+            Q: super::super::ValidQuery<Item = T> + norito::codec::Decode + norito::codec::Encode,
             QueryOutputBatchBox: From<Vec<T>>,
         {
             let erased = dm::query::iter_query_inner::<T>(qbox)?;
-            let concrete = match decode_query::<Q>(erased.payload()) {
-                Ok(q) => q,
-                Err(_) => return None,
+            let concrete = match decode_iter_query_payload_exact::<Q>(erased.payload()) {
+                Some(query) => query,
+                None => return None,
             };
             let iter =
                 match super::super::ValidQuery::execute(concrete, erased.predicate_cloned(), state)
@@ -3789,12 +3789,9 @@ impl ValidQueryRequest {
                     >,
                 ) -> Option<Q>
                 where
-                    Q: norito::codec::Decode,
+                    Q: norito::codec::Decode + norito::codec::Encode,
                 {
-                    let bytes = erased.payload();
-                    let mut cur = bytes;
-                    let query = Q::decode(&mut cur).ok()?;
-                    cur.is_empty().then_some(query)
+                    decode_iter_query_payload_exact(erased.payload())
                 }
 
                 #[allow(clippy::too_many_arguments)]
@@ -3870,15 +3867,22 @@ impl ValidQueryRequest {
                                 )
                             })
                         }
-                        // Helper to run a unit iterable query ("find all ...") using the encoded predicate/selector.
+                        // Helper to run an iterable query using the encoded predicate/selector.
                         macro_rules! run_payload_or_default {
-                            // For unit queries: ignore payload and run the default constructor (FindX::new())
+                            // Unit queries have an empty canonical payload. Reject any other bytes so
+                            // parameterized or malformed payloads cannot become global queries.
                             ($itemty:ty, $find:ty) => {{
                                 let pred: iroha_data_model::query::dsl::CompoundPredicate<$itemty> =
                                     dec(&iter_query.predicate_bytes)?;
                                 let sel: iroha_data_model::query::dsl::SelectorTuple<$itemty> =
                                     dec(&iter_query.selector_bytes)?;
-                                let concrete = <$find>::new();
+                                let concrete: $find =
+                                    decode_iter_query_payload_exact(&iter_query.query_payload)
+                                        .ok_or_else(|| {
+                                            Error::Conversion(
+                                                "malformed payload for unit iterable query".into(),
+                                            )
+                                        })?;
                                 let iter =
                                     ValidQuery::execute(concrete.clone(), pred.clone(), state)?;
                                 let output = handle_iter_start_stored_replayable(
@@ -3901,17 +3905,15 @@ impl ValidQueryRequest {
                                     dec(&iter_query.predicate_bytes)?;
                                 let sel: iroha_data_model::query::dsl::SelectorTuple<$itemty> =
                                     dec(&iter_query.selector_bytes)?;
-                                if iter_query.query_payload.is_empty() {
-                                    return Err(Error::Conversion(
-                                        "missing query payload for parameterized iterable query"
+                                let concrete: $find = decode_iter_query_payload_exact(
+                                    &iter_query.query_payload,
+                                )
+                                .ok_or_else(|| {
+                                    Error::Conversion(
+                                        "missing or malformed parameterized iterable query payload"
                                             .into(),
-                                    ));
-                                }
-                                let mut cursor = std::io::Cursor::new(&iter_query.query_payload);
-                                let concrete: $find = norito::codec::Decode::decode(&mut cursor)
-                                    .map_err(|_| {
-                                        Error::Conversion("failed to decode query payload".into())
-                                    })?;
+                                    )
+                                })?;
                                 let iter =
                                     ValidQuery::execute(concrete.clone(), pred.clone(), state)?;
                                 let output = handle_iter_start_stored_replayable(
@@ -3935,7 +3937,13 @@ impl ValidQueryRequest {
                                     dec(&iter_query.predicate_bytes)?;
                                 let sel: iroha_data_model::query::dsl::SelectorTuple<$itemty> =
                                     dec(&iter_query.selector_bytes)?;
-                                let concrete = <$find>::new();
+                                let concrete: $find =
+                                    decode_iter_query_payload_exact(&iter_query.query_payload)
+                                        .ok_or_else(|| {
+                                            Error::Conversion(
+                                                "malformed payload for unit iterable query".into(),
+                                            )
+                                        })?;
                                 let iter =
                                     ValidQuery::execute(concrete.clone(), pred.clone(), state)?;
                                 let output = handle_iter_start_stored_replayable(
@@ -4043,6 +4051,14 @@ impl ValidQueryRequest {
                                 iroha_data_model::query::trigger::prelude::FindTriggers
                             ),
                             QueryItemKind::CommittedTransaction => {
+                                decode_iter_query_payload_exact::<
+                                    iroha_data_model::query::transaction::prelude::FindTransactions,
+                                >(&iter_query.query_payload)
+                                .ok_or_else(|| {
+                                    Error::Conversion(
+                                        "malformed payload for unit iterable query".into(),
+                                    )
+                                })?;
                                 let pred = dec::<CompoundPredicate<CommittedTransaction>>(
                                     &iter_query.predicate_bytes,
                                 )?;
@@ -4087,13 +4103,9 @@ impl ValidQueryRequest {
                                 )?;
                                 macro_rules! try_proof_query {
                                     ($find:ty) => {{
-                                        let mut cursor =
-                                            std::io::Cursor::new(&iter_query.query_payload);
-                                        if let Ok(concrete) =
-                                            <$find as norito::codec::Decode>::decode(&mut cursor)
-                                            && usize::try_from(cursor.position())
-                                                .unwrap_or(usize::MAX)
-                                                == iter_query.query_payload.len()
+                                        if let Some(concrete) = decode_iter_query_payload_exact::<
+                                            $find,
+                                        >(&iter_query.query_payload)
                                         {
                                             let iter = ValidQuery::execute(
                                                 concrete.clone(),
@@ -4229,7 +4241,13 @@ impl ValidQueryRequest {
                                 dec(&iter_query.predicate_bytes)?;
                             let sel: iroha_data_model::query::dsl::SelectorTuple<$itemty> =
                                 dec(&iter_query.selector_bytes)?;
-                            let concrete = <$find>::new();
+                            let concrete: $find =
+                                decode_iter_query_payload_exact(&iter_query.query_payload)
+                                    .ok_or_else(|| {
+                                        Error::Conversion(
+                                            "malformed payload for unit iterable query".into(),
+                                        )
+                                    })?;
                             let iter = ValidQuery::execute(concrete.clone(), pred.clone(), state)?;
                             let output = handle_iter_start_stored_replayable(
                                 iter,
@@ -4372,7 +4390,14 @@ impl ValidQueryRequest {
                                 dec(&iter_query.predicate_bytes)?;
                             let sel: iroha_data_model::query::dsl::SelectorTuple<$itemty> =
                                 dec(&iter_query.selector_bytes)?;
-                            let iter = ValidQuery::execute(<$find>::new(), pred, state)?;
+                            let concrete: $find =
+                                decode_iter_query_payload_exact(&iter_query.query_payload)
+                                    .ok_or_else(|| {
+                                        Error::Conversion(
+                                            "malformed payload for unit iterable query".into(),
+                                        )
+                                    })?;
+                            let iter = ValidQuery::execute(concrete, pred, state)?;
                             let (output, _processed_items) =
                                 apply_query_postprocessing_ephemeral_with_budget(
                                     iter, sel, params, limits, None,
@@ -4507,7 +4532,13 @@ impl ValidQueryRequest {
                                 dec(&iter_query.predicate_bytes)?;
                             let sel: iroha_data_model::query::dsl::SelectorTuple<$itemty> =
                                 dec(&iter_query.selector_bytes)?;
-                            let concrete = <$find>::new();
+                            let concrete: $find =
+                                decode_iter_query_payload_exact(&iter_query.query_payload)
+                                    .ok_or_else(|| {
+                                        Error::Conversion(
+                                            "malformed payload for unit iterable query".into(),
+                                        )
+                                    })?;
                             let iter = ValidQuery::execute(concrete.clone(), pred.clone(), state)?;
                             let output = handle_iter_start_stored_replayable(
                                 iter,
@@ -4676,7 +4707,6 @@ impl ValidQueryRequest {
                     replay_state.clone(),
                     |e| {
                         try_decode_query::<iroha_data_model::query::domain::prelude::FindDomains>(e)
-                            .or(Some(iroha_data_model::query::domain::prelude::FindDomains))
                     },
                 )? {
                     return Ok(resp);
@@ -4699,9 +4729,6 @@ impl ValidQueryRequest {
                         try_decode_query::<iroha_data_model::query::account::prelude::FindAccounts>(
                             e,
                         )
-                        .or(Some(
-                            iroha_data_model::query::account::prelude::FindAccounts,
-                        ))
                     },
                 )? {
                     return Ok(resp);
@@ -4761,10 +4788,7 @@ impl ValidQueryRequest {
                     authority,
                     stored_cursor_budget,
                     replay_state.clone(),
-                    |e| {
-                        try_decode_query::<iroha_data_model::query::asset::prelude::FindAssets>(e)
-                            .or(Some(iroha_data_model::query::asset::prelude::FindAssets))
-                    },
+                    |e| try_decode_query::<iroha_data_model::query::asset::prelude::FindAssets>(e),
                 )? {
                     return Ok(resp);
                 }
@@ -4785,9 +4809,6 @@ impl ValidQueryRequest {
                         try_decode_query::<
                             iroha_data_model::query::asset::prelude::FindAssetsDefinitions,
                         >(e)
-                        .or(Some(
-                            iroha_data_model::query::asset::prelude::FindAssetsDefinitions,
-                        ))
                     },
                 )? {
                     return Ok(resp);
@@ -4806,12 +4827,9 @@ impl ValidQueryRequest {
                     stored_cursor_budget,
                     replay_state.clone(),
                     |e| {
-                        try_decode_query::<
-                            iroha_data_model::query::repo::prelude::FindRepoAgreements,
-                        >(e)
-                        .or(Some(
-                            iroha_data_model::query::repo::prelude::FindRepoAgreements,
-                        ))
+                        try_decode_query::<iroha_data_model::query::repo::prelude::FindRepoAgreements>(
+                            e,
+                        )
                     },
                 )? {
                     return Ok(resp);
@@ -4850,10 +4868,7 @@ impl ValidQueryRequest {
                     authority,
                     stored_cursor_budget,
                     replay_state.clone(),
-                    |e| {
-                        try_decode_query::<iroha_data_model::query::nft::prelude::FindNfts>(e)
-                            .or(Some(iroha_data_model::query::nft::prelude::FindNfts))
-                    },
+                    |e| try_decode_query::<iroha_data_model::query::nft::prelude::FindNfts>(e),
                 )? {
                     return Ok(resp);
                 }
@@ -4870,10 +4885,7 @@ impl ValidQueryRequest {
                     authority,
                     stored_cursor_budget,
                     replay_state.clone(),
-                    |e| {
-                        try_decode_query::<iroha_data_model::query::role::prelude::FindRoles>(e)
-                            .or(Some(iroha_data_model::query::role::prelude::FindRoles))
-                    },
+                    |e| try_decode_query::<iroha_data_model::query::role::prelude::FindRoles>(e),
                 )? {
                     return Ok(resp);
                 }
@@ -4891,10 +4903,7 @@ impl ValidQueryRequest {
                     authority,
                     stored_cursor_budget,
                     replay_state.clone(),
-                    |e| {
-                        try_decode_query::<iroha_data_model::query::role::prelude::FindRoleIds>(e)
-                            .or(Some(iroha_data_model::query::role::prelude::FindRoleIds))
-                    },
+                    |e| try_decode_query::<iroha_data_model::query::role::prelude::FindRoleIds>(e),
                 )? {
                     return Ok(resp);
                 }
@@ -4995,10 +5004,7 @@ impl ValidQueryRequest {
                     authority,
                     stored_cursor_budget,
                     replay_state.clone(),
-                    |e| {
-                        try_decode_query::<iroha_data_model::query::peer::prelude::FindPeers>(e)
-                            .or(Some(iroha_data_model::query::peer::prelude::FindPeers))
-                    },
+                    |e| try_decode_query::<iroha_data_model::query::peer::prelude::FindPeers>(e),
                 )? {
                     return Ok(resp);
                 }
@@ -5019,9 +5025,6 @@ impl ValidQueryRequest {
                         try_decode_query::<
                             iroha_data_model::query::trigger::prelude::FindActiveTriggerIds,
                         >(e)
-                        .or(Some(
-                            iroha_data_model::query::trigger::prelude::FindActiveTriggerIds,
-                        ))
                     },
                 )? {
                     return Ok(resp);
@@ -5043,14 +5046,20 @@ impl ValidQueryRequest {
                         try_decode_query::<iroha_data_model::query::trigger::prelude::FindTriggers>(
                             e,
                         )
-                        .or(Some(
-                            iroha_data_model::query::trigger::prelude::FindTriggers,
-                        ))
                     },
                 )? {
                     return Ok(resp);
                 }
                 if let Some(erased) = query::iter_query_inner::<CommittedTransaction>(qbox) {
+                    if decode_iter_query_payload_exact::<
+                        iroha_data_model::query::transaction::prelude::FindTransactions,
+                    >(erased.payload())
+                    .is_none()
+                    {
+                        return Err(Error::Conversion(
+                            "malformed payload for transaction iterable query".into(),
+                        ));
+                    }
                     let output = handle_find_transactions_stored(
                         state,
                         erased.predicate_cloned(),
@@ -5077,10 +5086,7 @@ impl ValidQueryRequest {
                     authority,
                     stored_cursor_budget,
                     replay_state.clone(),
-                    |e| {
-                        try_decode_query::<iroha_data_model::query::block::prelude::FindBlocks>(e)
-                            .or(Some(iroha_data_model::query::block::prelude::FindBlocks))
-                    },
+                    |e| try_decode_query::<iroha_data_model::query::block::prelude::FindBlocks>(e),
                 )? {
                     return Ok(resp);
                 }
@@ -5101,9 +5107,6 @@ impl ValidQueryRequest {
                         try_decode_query::<iroha_data_model::query::block::prelude::FindBlockHeaders>(
                             e,
                         )
-                        .or(Some(
-                            iroha_data_model::query::block::prelude::FindBlockHeaders,
-                        ))
                     },
                 )? {
                     return Ok(resp);
@@ -5122,12 +5125,9 @@ impl ValidQueryRequest {
                     stored_cursor_budget,
                     replay_state.clone(),
                     |e| {
-                        try_decode_query::<
-                            iroha_data_model::query::oracle::prelude::FindOracleFeeds,
-                        >(e)
-                        .or(Some(
-                            iroha_data_model::query::oracle::prelude::FindOracleFeeds,
-                        ))
+                        try_decode_query::<iroha_data_model::query::oracle::prelude::FindOracleFeeds>(
+                            e,
+                        )
                     },
                 )? {
                     return Ok(resp);
@@ -5212,9 +5212,6 @@ impl ValidQueryRequest {
                         try_decode_query::<
                             iroha_data_model::query::oracle::prelude::FindOracleDisputes,
                         >(e)
-                        .or(Some(
-                            iroha_data_model::query::oracle::prelude::FindOracleDisputes,
-                        ))
                     },
                 )? {
                     return Ok(resp);
@@ -5236,9 +5233,6 @@ impl ValidQueryRequest {
                         try_decode_query::<
                             iroha_data_model::query::oracle::prelude::FindOracleChanges,
                         >(e)
-                        .or(Some(
-                            iroha_data_model::query::oracle::prelude::FindOracleChanges,
-                        ))
                     },
                 )? {
                     return Ok(resp);
@@ -5365,12 +5359,9 @@ impl ValidQueryRequest {
                     >,
                 ) -> Option<Q>
                 where
-                    Q: norito::codec::Decode,
+                    Q: norito::codec::Decode + norito::codec::Encode,
                 {
-                    let bytes = erased.payload();
-                    let mut cur = bytes;
-                    let query = Q::decode(&mut cur).ok()?;
-                    cur.is_empty().then_some(query)
+                    decode_iter_query_payload_exact(erased.payload())
                 }
 
                 #[allow(clippy::too_many_arguments)]
@@ -5437,15 +5428,23 @@ impl ValidQueryRequest {
                                 )
                             })
                         }
-                        // Helper to run a unit iterable query ("find all ...") using the encoded predicate/selector.
+                        // Helper to run an iterable query using the encoded predicate/selector.
                         macro_rules! run_payload_or_default {
-                            // For unit queries: ignore payload and run the default constructor (FindX::new())
+                            // Unit queries have an empty canonical payload. Reject any other bytes so
+                            // parameterized or malformed payloads cannot become global queries.
                             ($itemty:ty, $find:ty) => {{
                                 let pred: iroha_data_model::query::dsl::CompoundPredicate<$itemty> =
                                     dec(&iter_query.predicate_bytes)?;
                                 let sel: iroha_data_model::query::dsl::SelectorTuple<$itemty> =
                                     dec(&iter_query.selector_bytes)?;
-                                let iter = ValidQuery::execute(<$find>::new(), pred, state)?;
+                                let concrete: $find =
+                                    decode_iter_query_payload_exact(&iter_query.query_payload)
+                                        .ok_or_else(|| {
+                                            Error::Conversion(
+                                                "malformed payload for unit iterable query".into(),
+                                            )
+                                        })?;
+                                let iter = ValidQuery::execute(concrete, pred, state)?;
                                 let (output, processed_items) =
                                     apply_query_postprocessing_ephemeral_with_budget(
                                         iter,
@@ -5462,12 +5461,14 @@ impl ValidQueryRequest {
                                     dec(&iter_query.predicate_bytes)?;
                                 let sel: iroha_data_model::query::dsl::SelectorTuple<$itemty> =
                                     dec(&iter_query.selector_bytes)?;
-                                let mut cursor = std::io::Cursor::new(&iter_query.query_payload);
-                                let concrete = <$find as norito::codec::Decode>::decode(
-                                    &mut cursor,
+                                let concrete: $find = decode_iter_query_payload_exact(
+                                    &iter_query.query_payload,
                                 )
-                                .map_err(|_| {
-                                    Error::Conversion("missing or malformed query payload".into())
+                                .ok_or_else(|| {
+                                    Error::Conversion(
+                                        "missing or malformed parameterized iterable query payload"
+                                            .into(),
+                                    )
                                 })?;
                                 let iter = ValidQuery::execute(concrete, pred, state)?;
                                 let (output, processed_items) =
@@ -5569,6 +5570,14 @@ impl ValidQueryRequest {
                                 iroha_data_model::query::trigger::prelude::FindTriggers
                             ),
                             QueryItemKind::CommittedTransaction => {
+                                decode_iter_query_payload_exact::<
+                                    iroha_data_model::query::transaction::prelude::FindTransactions,
+                                >(&iter_query.query_payload)
+                                .ok_or_else(|| {
+                                    Error::Conversion(
+                                        "malformed payload for unit iterable query".into(),
+                                    )
+                                })?;
                                 let pred = dec::<CompoundPredicate<CommittedTransaction>>(
                                     &iter_query.predicate_bytes,
                                 )?;
@@ -5610,13 +5619,9 @@ impl ValidQueryRequest {
                                 )?;
                                 macro_rules! try_proof_query {
                                     ($find:ty) => {{
-                                        let mut cursor =
-                                            std::io::Cursor::new(&iter_query.query_payload);
-                                        if let Ok(concrete) =
-                                            <$find as norito::codec::Decode>::decode(&mut cursor)
-                                            && usize::try_from(cursor.position())
-                                                .unwrap_or(usize::MAX)
-                                                == iter_query.query_payload.len()
+                                        if let Some(concrete) = decode_iter_query_payload_exact::<
+                                            $find,
+                                        >(&iter_query.query_payload)
                                         {
                                             let iter = ValidQuery::execute(concrete, pred, state)?;
                                             let (output, processed_items) =
@@ -5765,7 +5770,6 @@ impl ValidQueryRequest {
                     None,
                     |e| {
                         try_decode_query::<iroha_data_model::query::domain::prelude::FindDomains>(e)
-                            .or(Some(iroha_data_model::query::domain::prelude::FindDomains))
                     },
                 )? {
                     return Ok((resp, processed_items));
@@ -5787,9 +5791,6 @@ impl ValidQueryRequest {
                         try_decode_query::<iroha_data_model::query::account::prelude::FindAccounts>(
                             e,
                         )
-                        .or(Some(
-                            iroha_data_model::query::account::prelude::FindAccounts,
-                        ))
                     },
                 )? {
                     return Ok((resp, processed_items));
@@ -5849,10 +5850,7 @@ impl ValidQueryRequest {
                     live_query_store,
                     authority,
                     None,
-                    |e| {
-                        try_decode_query::<iroha_data_model::query::asset::prelude::FindAssets>(e)
-                            .or(Some(iroha_data_model::query::asset::prelude::FindAssets))
-                    },
+                    |e| try_decode_query::<iroha_data_model::query::asset::prelude::FindAssets>(e),
                 )? {
                     return Ok((resp, processed_items));
                 }
@@ -5873,9 +5871,6 @@ impl ValidQueryRequest {
                         try_decode_query::<
                             iroha_data_model::query::asset::prelude::FindAssetsDefinitions,
                         >(e)
-                        .or(Some(
-                            iroha_data_model::query::asset::prelude::FindAssetsDefinitions,
-                        ))
                     },
                 )? {
                     return Ok((resp, processed_items));
@@ -5914,10 +5909,7 @@ impl ValidQueryRequest {
                     live_query_store,
                     authority,
                     None,
-                    |e| {
-                        try_decode_query::<iroha_data_model::query::nft::prelude::FindNfts>(e)
-                            .or(Some(iroha_data_model::query::nft::prelude::FindNfts))
-                    },
+                    |e| try_decode_query::<iroha_data_model::query::nft::prelude::FindNfts>(e),
                 )? {
                     return Ok((resp, processed_items));
                 }
@@ -5934,10 +5926,7 @@ impl ValidQueryRequest {
                     live_query_store,
                     authority,
                     None,
-                    |e| {
-                        try_decode_query::<iroha_data_model::query::role::prelude::FindRoles>(e)
-                            .or(Some(iroha_data_model::query::role::prelude::FindRoles))
-                    },
+                    |e| try_decode_query::<iroha_data_model::query::role::prelude::FindRoles>(e),
                 )? {
                     return Ok((resp, processed_items));
                 }
@@ -5954,10 +5943,7 @@ impl ValidQueryRequest {
                     live_query_store,
                     authority,
                     None,
-                    |e| {
-                        try_decode_query::<iroha_data_model::query::role::prelude::FindRoleIds>(e)
-                            .or(Some(iroha_data_model::query::role::prelude::FindRoleIds))
-                    },
+                    |e| try_decode_query::<iroha_data_model::query::role::prelude::FindRoleIds>(e),
                 )? {
                     return Ok((resp, processed_items));
                 }
@@ -5974,10 +5960,7 @@ impl ValidQueryRequest {
                     live_query_store,
                     authority,
                     None,
-                    |e| {
-                        try_decode_query::<iroha_data_model::query::peer::prelude::FindPeers>(e)
-                            .or(Some(iroha_data_model::query::peer::prelude::FindPeers))
-                    },
+                    |e| try_decode_query::<iroha_data_model::query::peer::prelude::FindPeers>(e),
                 )? {
                     return Ok((resp, processed_items));
                 }
@@ -5998,9 +5981,6 @@ impl ValidQueryRequest {
                         try_decode_query::<
                             iroha_data_model::query::trigger::prelude::FindActiveTriggerIds,
                         >(e)
-                        .or(Some(
-                            iroha_data_model::query::trigger::prelude::FindActiveTriggerIds,
-                        ))
                     },
                 )? {
                     return Ok((resp, processed_items));
@@ -6022,14 +6002,20 @@ impl ValidQueryRequest {
                         try_decode_query::<iroha_data_model::query::trigger::prelude::FindTriggers>(
                             e,
                         )
-                        .or(Some(
-                            iroha_data_model::query::trigger::prelude::FindTriggers,
-                        ))
                     },
                 )? {
                     return Ok((resp, processed_items));
                 }
                 if let Some(erased) = query::iter_query_inner::<CommittedTransaction>(qbox) {
+                    if decode_iter_query_payload_exact::<
+                        iroha_data_model::query::transaction::prelude::FindTransactions,
+                    >(erased.payload())
+                    .is_none()
+                    {
+                        return Err(Error::Conversion(
+                            "malformed payload for transaction iterable query".into(),
+                        ));
+                    }
                     let (output, processed_items) = handle_find_transactions_ephemeral(
                         state,
                         erased.predicate_cloned(),
@@ -6053,10 +6039,7 @@ impl ValidQueryRequest {
                     live_query_store,
                     authority,
                     None,
-                    |e| {
-                        try_decode_query::<iroha_data_model::query::block::prelude::FindBlocks>(e)
-                            .or(Some(iroha_data_model::query::block::prelude::FindBlocks))
-                    },
+                    |e| try_decode_query::<iroha_data_model::query::block::prelude::FindBlocks>(e),
                 )? {
                     return Ok((resp, processed_items));
                 }
@@ -6074,12 +6057,9 @@ impl ValidQueryRequest {
                     authority,
                     None,
                     |e| {
-                        try_decode_query::<
-                        iroha_data_model::query::block::prelude::FindBlockHeaders,
-                    >(e)
-                    .or(Some(
-                        iroha_data_model::query::block::prelude::FindBlockHeaders,
-                    ))
+                        try_decode_query::<iroha_data_model::query::block::prelude::FindBlockHeaders>(
+                            e,
+                        )
                     },
                 )? {
                     return Ok((resp, processed_items));
@@ -6161,12 +6141,9 @@ impl ValidQueryRequest {
                     authority,
                     None,
                     |e| {
-                        try_decode_query::<
-                            iroha_data_model::query::oracle::prelude::FindOracleFeeds,
-                        >(e)
-                        .or(Some(
-                            iroha_data_model::query::oracle::prelude::FindOracleFeeds,
-                        ))
+                        try_decode_query::<iroha_data_model::query::oracle::prelude::FindOracleFeeds>(
+                            e,
+                        )
                     },
                 )? {
                     return Ok((resp, processed_items));
@@ -6251,9 +6228,6 @@ impl ValidQueryRequest {
                         try_decode_query::<
                             iroha_data_model::query::oracle::prelude::FindOracleDisputes,
                         >(e)
-                        .or(Some(
-                            iroha_data_model::query::oracle::prelude::FindOracleDisputes,
-                        ))
                     },
                 )? {
                     return Ok((resp, processed_items));
@@ -6275,9 +6249,6 @@ impl ValidQueryRequest {
                         try_decode_query::<
                             iroha_data_model::query::oracle::prelude::FindOracleChanges,
                         >(e)
-                        .or(Some(
-                            iroha_data_model::query::oracle::prelude::FindOracleChanges,
-                        ))
                     },
                 )? {
                     return Ok((resp, processed_items));
@@ -6398,6 +6369,217 @@ mod tests {
             QueryOutputBatchBox::CommittedTransaction(transactions) => transactions,
             other => panic!("unexpected transaction batch: {other:?}"),
         }
+    }
+
+    fn iterable_request_with_box(qbox: QueryBox<QueryOutputBatchBox>) -> ValidQueryRequest {
+        #[cfg(feature = "fast_dsl")]
+        let query = iroha_data_model::query::QueryWithParams::new(&qbox, QueryParams::default());
+        #[cfg(not(feature = "fast_dsl"))]
+        let query = iroha_data_model::query::QueryWithParams::new(qbox, QueryParams::default());
+
+        ValidQueryRequest {
+            request: QueryRequest::Start(query),
+            limits: QueryLimits::default(),
+        }
+    }
+
+    fn domain_request_with_payload(payload: Vec<u8>) -> ValidQueryRequest {
+        iterable_request_with_box(erased_domain_query(payload))
+    }
+
+    fn transaction_request_with_payload(payload: Vec<u8>) -> ValidQueryRequest {
+        iterable_request_with_box(Box::new(iroha_data_model::query::ErasedIterQuery::<
+            CommittedTransaction,
+        >::new(
+            CompoundPredicate::PASS,
+            SelectorTuple::default(),
+            payload,
+        )))
+    }
+
+    fn block_request_with_payload(payload: Vec<u8>) -> ValidQueryRequest {
+        iterable_request_with_box(Box::new(iroha_data_model::query::ErasedIterQuery::<
+            iroha_data_model::block::SignedBlock,
+        >::new(
+            CompoundPredicate::PASS,
+            SelectorTuple::default(),
+            payload,
+        )))
+    }
+
+    fn role_request_with_payload(payload: Vec<u8>) -> ValidQueryRequest {
+        iterable_request_with_box(Box::new(iroha_data_model::query::ErasedIterQuery::<
+            iroha_data_model::role::Role,
+        >::new(
+            CompoundPredicate::PASS,
+            SelectorTuple::default(),
+            payload,
+        )))
+    }
+
+    fn erased_domain_query(payload: Vec<u8>) -> QueryBox<QueryOutputBatchBox> {
+        Box::new(iroha_data_model::query::ErasedIterQuery::<
+            iroha_data_model::domain::Domain,
+        >::new(
+            CompoundPredicate::PASS, SelectorTuple::default(), payload
+        ))
+    }
+
+    #[test]
+    fn iterable_query_payload_decode_is_canonical_and_variant_safe() {
+        use iroha_data_model::query::{
+            account::prelude::FindAccountsWithAsset,
+            domain::prelude::{FindDomains, FindDomainsByAccountId},
+        };
+
+        let unit_payload = norito::codec::Encode::encode(&FindDomains);
+        assert!(decode_iter_query_payload_exact::<FindDomains>(&unit_payload).is_some());
+
+        let mut trailing_unit_payload = unit_payload;
+        trailing_unit_payload.push(0xA5);
+        assert!(
+            decode_iter_query_payload_exact::<FindDomains>(&trailing_unit_payload).is_none(),
+            "a unit query must not accept nonempty or trailing payload bytes"
+        );
+
+        let parameterized = FindDomainsByAccountId {
+            id: ALICE_ID.clone(),
+        };
+        let parameterized_payload = norito::codec::Encode::encode(&parameterized);
+        assert!(
+            decode_iter_query_payload_exact::<FindDomainsByAccountId>(&parameterized_payload)
+                .is_some()
+        );
+        assert!(
+            decode_iter_query_payload_exact::<FindDomains>(&parameterized_payload).is_none(),
+            "a parameterized payload must not collide with the global unit query"
+        );
+
+        let mut trailing_parameterized_payload = parameterized_payload;
+        trailing_parameterized_payload.push(0x5A);
+        assert!(
+            decode_iter_query_payload_exact::<FindDomainsByAccountId>(
+                &trailing_parameterized_payload
+            )
+            .is_none(),
+            "a parameterized query must reject trailing payload bytes"
+        );
+
+        let other_parameterized_payload = norito::codec::Encode::encode(&FindAccountsWithAsset {
+            asset_definition: iroha_data_model::asset::AssetDefinitionId::new(
+                DomainId::try_new("wonderland", "universal").expect("valid domain"),
+                "rose".parse().expect("valid asset name"),
+            ),
+        });
+        assert!(
+            decode_iter_query_payload_exact::<FindDomains>(&other_parameterized_payload).is_none(),
+            "another query variant's payload must not become a global domain query"
+        );
+    }
+
+    #[tokio::test]
+    async fn iterable_query_engines_reject_noncanonical_payloads_before_global_execution()
+    -> Result<()> {
+        use iroha_data_model::query::{
+            account::prelude::FindAccountsWithAsset,
+            domain::prelude::{FindDomains, FindDomainsByAccountId},
+        };
+
+        let state = state_with_test_blocks_and_transactions(1, 1, 0)?;
+        let state_view = state.view();
+        let query_handle = state_view.query_handle().clone();
+
+        let mut trailing_unit = norito::codec::Encode::encode(&FindDomains);
+        trailing_unit.push(0xA5);
+        let mut trailing_parameterized = norito::codec::Encode::encode(&FindDomainsByAccountId {
+            id: ALICE_ID.clone(),
+        });
+        trailing_parameterized.push(0x5A);
+        let cross_variant = norito::codec::Encode::encode(&FindAccountsWithAsset {
+            asset_definition: iroha_data_model::asset::AssetDefinitionId::new(
+                DomainId::try_new("wonderland", "universal").expect("valid domain"),
+                "rose".parse().expect("valid asset name"),
+            ),
+        });
+
+        for (case, payload) in [
+            ("trailing unit bytes", trailing_unit),
+            ("trailing parameterized bytes", trailing_parameterized),
+            ("cross-variant parameterized bytes", cross_variant),
+            ("malformed bytes", vec![0xFF, 0x00, 0xA5]),
+        ] {
+            assert!(
+                domain_request_with_payload(payload.clone())
+                    .execute(&query_handle, &state_view, &ALICE_ID)
+                    .is_err(),
+                "stored execution accepted {case} as a global domain query"
+            );
+            assert!(
+                domain_request_with_payload(payload.clone())
+                    .execute_ephemeral(&query_handle, &state_view, &ALICE_ID)
+                    .is_err(),
+                "ephemeral execution accepted {case} as a global domain query"
+            );
+            assert!(
+                <QueryBox<QueryOutputBatchBox> as ExecuteQueryBox>::execute(
+                    erased_domain_query(payload),
+                    &state_view,
+                    &QueryParams::default(),
+                )
+                .is_err(),
+                "direct QueryBox execution accepted {case} as a global domain query"
+            );
+        }
+
+        let cross_variant = norito::codec::Encode::encode(&FindAccountsWithAsset {
+            asset_definition: iroha_data_model::asset::AssetDefinitionId::new(
+                DomainId::try_new("wonderland", "universal").expect("valid domain"),
+                "rose".parse().expect("valid asset name"),
+            ),
+        });
+        let unit_query_cases: [(&str, fn(Vec<u8>) -> ValidQueryRequest); 3] = [
+            ("transaction history", transaction_request_with_payload),
+            ("signed blocks", block_request_with_payload),
+            ("roles", role_request_with_payload),
+        ];
+        for (item, make_request) in unit_query_cases {
+            assert!(
+                make_request(cross_variant.clone())
+                    .execute(&query_handle, &state_view, &ALICE_ID)
+                    .is_err(),
+                "stored execution treated FindAccountsWithAsset bytes as global {item}"
+            );
+            assert!(
+                make_request(cross_variant.clone())
+                    .execute_ephemeral(&query_handle, &state_view, &ALICE_ID)
+                    .is_err(),
+                "ephemeral execution treated FindAccountsWithAsset bytes as global {item}"
+            );
+        }
+
+        let unsupported_request = || {
+            iterable_request_with_box(Box::new(iroha_data_model::query::ErasedIterQuery::<
+                QueryOutputBatchBox,
+            >::new(
+                CompoundPredicate::PASS,
+                SelectorTuple::default(),
+                Vec::new(),
+            )))
+        };
+        assert!(
+            unsupported_request()
+                .execute(&query_handle, &state_view, &ALICE_ID)
+                .is_err(),
+            "the fast-DSL unknown-type carrier must not execute as a stored domain query"
+        );
+        assert!(
+            unsupported_request()
+                .execute_ephemeral(&query_handle, &state_view, &ALICE_ID)
+                .is_err(),
+            "the fast-DSL unknown-type carrier must not execute as an ephemeral domain query"
+        );
+
+        Ok(())
     }
 
     #[test]

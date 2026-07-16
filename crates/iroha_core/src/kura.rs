@@ -33378,17 +33378,22 @@ mod tests {
             authorization: KagemushaRequestAuthorizationV2 {
                 authority: SAMPLE_GENESIS_ACCOUNT_ID.clone(),
                 device_id: "kura-operation-index-device".to_owned(),
+                asset_definition_id: definition,
                 operation_id: authorization_operation_id,
                 issued_at_ms: 1,
                 expires_at_ms: u64::MAX,
                 nonce: [0x33; 32],
                 payload_digest: [0x34; 32],
-                app_attest_evidence_sha256: None,
-                app_attest_evidence: None,
-                signature: Signature::new(
-                    SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key(),
-                    b"kura offline operation index fixture",
-                ),
+                registration_hash: [0x35; 32],
+                hardware_assertion:
+                    iroha_data_model::offline::KagemushaOnlineHardwareAssertionV1::AndroidKeyMint(
+                        iroha_data_model::offline::KagemushaAndroidKeyMintHardwareAssertionV1 {
+                            signature: iroha_data_model::offline::KagemushaDeviceSignatureV2::from_raw_bytes(
+                                &[1_u8; 64],
+                            )
+                            .expect("fixture hardware signature"),
+                        },
+                    ),
             },
         };
         let outer_authority_id = AccountId::new(outer_authority.public_key().clone());

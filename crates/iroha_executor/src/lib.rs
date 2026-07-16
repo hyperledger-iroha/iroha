@@ -3,6 +3,9 @@
 #![allow(unexpected_cfgs)]
 #![allow(clippy::result_large_err)]
 
+#[cfg(test)]
+extern crate self as iroha_executor;
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use data_model::{ValidationFail, executor::Result, parameter::CustomParameterId};

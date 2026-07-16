@@ -1771,6 +1771,58 @@ pub struct ContractAliasResolveRequestDto {
     pub contract_alias: String,
 }
 
+#[derive(
+    Clone,
+    Debug,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+)]
+#[norito(deny_unknown_fields)]
+/// Authenticated request accepted by `/v1/contracts/deployment-state`.
+pub struct ContractDeploymentStateRequestDto {
+    /// Canonical I105 account that will authorize the deployment transaction.
+    pub authority: String,
+    /// Exact contract alias literal whose deployment CAS state is requested.
+    pub contract_alias: String,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+)]
+#[norito(deny_unknown_fields)]
+/// One internally consistent smart-contract deployment CAS snapshot.
+pub struct ContractDeploymentStateResponseDto {
+    /// Canonical I105 deployment authority.
+    pub authority: String,
+    /// Exact canonical contract alias.
+    pub contract_alias: String,
+    /// Current reserved deployment nonce as canonical decimal text.
+    pub deploy_nonce: String,
+    /// Active dataspace alias selected by the contract alias.
+    pub dataspace_alias: String,
+    /// Active dataspace identifier as canonical decimal text.
+    pub dataspace_id: String,
+    /// Current live alias target, or `null` for a first deployment or grace-expired binding.
+    pub previous_contract_address: Option<String>,
+    /// Height of the committed block anchoring this snapshot, as canonical decimal text.
+    pub observed_block_height: String,
+    /// Canonical hash of the committed block anchoring this snapshot.
+    pub observed_block_hash: String,
+    /// Anchoring block timestamp in Unix milliseconds, as canonical decimal text.
+    pub ledger_time_ms: String,
+    /// Active account/contract address chain discriminant as canonical decimal text.
+    pub chain_discriminant: String,
+}
+
 #[cfg(feature = "app_api")]
 #[derive(
     Clone,
@@ -40926,7 +40978,8 @@ where
 }
 
 #[cfg(feature = "app_api")]
-fn tx_references_account_id(
+/// Return whether a committed transaction directly names the exact account.
+pub(crate) fn tx_references_account_id(
     tx: &iroha_data_model::query::CommittedTransaction,
     expected: &AccountId,
 ) -> bool {
@@ -42350,7 +42403,8 @@ pub(crate) fn parse_account_literal_with_state(
         Err(base_err) => {
             // This generic parser deliberately accepts account IDs only. Alias resolution is a
             // permissioned operation and must use a caller-aware path that verifies the exact
-            // dataspace/domain `CanResolveAccountAlias` grants before consulting active SNS state.
+            // applicable domain or dataspace `CanResolveAccountAlias` grant before consulting
+            // active SNS state.
             record_account_literal_reject(telemetry, context, literal, base_err.reason());
             Err(base_err)
         }
@@ -42938,7 +42992,8 @@ mod stateful_account_path_parser_tests {
 }
 
 #[cfg(feature = "app_api")]
-fn committed_transactions_snapshot(
+/// Load the canonical committed-transaction snapshot visible to Torii.
+pub(crate) fn committed_transactions_snapshot(
     state: &CoreState,
 ) -> Result<Vec<iroha_data_model::query::CommittedTransaction>> {
     let view = state.view();
@@ -66295,7 +66350,7 @@ fn onboarding_manifest_issued_ms() -> u64 {
 }
 
 #[cfg(feature = "app_api")]
-fn ensure_onboarding_signer_can_manage_alias(
+pub(crate) fn ensure_onboarding_signer_can_manage_alias(
     state: &CoreState,
     authority: &AccountId,
     alias: &account::rekey::AccountAlias,
@@ -66319,6 +66374,133 @@ fn alias_domain_to_domain_id(
         let message = format!("invalid account alias domain scope: {err}");
         onboarding_invalid_request(&message)
     })
+}
+
+#[cfg(feature = "app_api")]
+fn ensure_authenticated_onboarding_domain(
+    alias: &account::rekey::AccountAlias,
+    catalog: &iroha_data_model::nexus::DataSpaceCatalog,
+    authenticated_domain: &iroha_data_model::domain::DomainId,
+) -> Result<()> {
+    let requested_domain = alias_domain_to_domain_id(alias, catalog)?;
+    if requested_domain.as_ref() == Some(authenticated_domain) {
+        return Ok(());
+    }
+
+    iroha_logger::warn!(
+        target: "torii.onboard",
+        authenticated_domain = %authenticated_domain,
+        requested_domain = ?requested_domain,
+        "domain-scoped onboarding credential rejected"
+    );
+    Err(Error::AppForbidden {
+        code: "onboarding_domain_forbidden",
+        message: "The authenticated onboarding credential is not authorized for the requested fully-qualified alias domain."
+            .to_owned(),
+    })
+}
+
+#[cfg(feature = "app_api")]
+fn onboarding_fee_sponsor_permission(
+    fee_sponsor: Option<&iroha_config::parameters::actual::ToriiOnboardingFeeSponsor>,
+    beneficiary: &AccountId,
+    authenticated_domain: &iroha_data_model::domain::DomainId,
+) -> Option<Permission> {
+    fee_sponsor.map(|fee_sponsor| {
+        Permission::from(
+            iroha_executor_data_model::permission::nexus::CanUseFeeSponsorForAccount {
+                sponsor: fee_sponsor.account.clone(),
+                policy: fee_sponsor.policy.clone(),
+                beneficiary: beneficiary.clone(),
+                domain: authenticated_domain.clone(),
+            },
+        )
+    })
+}
+
+#[cfg(all(feature = "app_api", test))]
+mod onboarding_domain_scope_tests {
+    use iroha_test_samples::{ALICE_ID, BOB_ID};
+
+    use super::*;
+
+    fn sbp_catalog() -> iroha_data_model::nexus::DataSpaceCatalog {
+        iroha_data_model::nexus::DataSpaceCatalog::new(vec![
+            iroha_data_model::nexus::DataSpaceMetadata::default(),
+            iroha_data_model::nexus::DataSpaceMetadata {
+                id: iroha_data_model::nexus::DataSpaceId::new(20),
+                alias: "sbp".to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("SBP dataspace catalog")
+    }
+
+    #[test]
+    fn onboarding_alias_authenticated_domain_is_exact() {
+        let catalog = sbp_catalog();
+        let hbl = iroha_data_model::domain::DomainId::try_new("hbl", "sbp").expect("HBL domain");
+        let ubl = iroha_data_model::domain::DomainId::try_new("ubl", "sbp").expect("UBL domain");
+        let alias = account::rekey::AccountAlias::from_literal("alice@hbl.sbp", &catalog)
+            .expect("HBL alias");
+
+        ensure_authenticated_onboarding_domain(&alias, &catalog, &hbl)
+            .expect("HBL credential must authorize HBL alias");
+        assert!(matches!(
+            ensure_authenticated_onboarding_domain(&alias, &catalog, &ubl),
+            Err(Error::AppForbidden {
+                code: "onboarding_domain_forbidden",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn onboarding_alias_authenticated_domain_rejects_domainless_alias() {
+        let catalog = sbp_catalog();
+        let hbl = iroha_data_model::domain::DomainId::try_new("hbl", "sbp").expect("HBL domain");
+        let alias = account::rekey::AccountAlias::from_literal("alice@sbp", &catalog)
+            .expect("domainless SBP alias");
+
+        assert!(matches!(
+            ensure_authenticated_onboarding_domain(&alias, &catalog, &hbl),
+            Err(Error::AppForbidden {
+                code: "onboarding_domain_forbidden",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn onboarding_alias_fee_sponsor_grant_is_exact_to_domain_and_beneficiary() {
+        let hbl = iroha_data_model::domain::DomainId::try_new("hbl", "sbp").expect("HBL domain");
+        let fee_sponsor = iroha_config::parameters::actual::ToriiOnboardingFeeSponsor {
+            account: ALICE_ID.clone(),
+            policy: "retail".parse().expect("retail policy"),
+        };
+
+        let permission = onboarding_fee_sponsor_permission(Some(&fee_sponsor), &BOB_ID, &hbl)
+            .expect("configured sponsor must emit one exact permission");
+        assert_eq!(permission.name().to_string(), "CanUseFeeSponsorForAccount");
+        assert_ne!(permission.name().to_string(), "CanUseFeeSponsor");
+        let decoded = permission
+            .payload()
+            .try_into_any_norito::<
+                iroha_executor_data_model::permission::nexus::CanUseFeeSponsorForAccount,
+            >()
+            .expect("decode exact fee sponsor permission");
+        assert_eq!(decoded.sponsor, ALICE_ID.clone());
+        assert_eq!(decoded.policy.to_string(), "retail");
+        assert_eq!(decoded.beneficiary, BOB_ID.clone());
+        assert_eq!(decoded.domain, hbl);
+    }
+
+    #[test]
+    fn onboarding_alias_absent_fee_sponsor_emits_no_permission() {
+        let hbl = iroha_data_model::domain::DomainId::try_new("hbl", "sbp").expect("HBL domain");
+        assert!(onboarding_fee_sponsor_permission(None, &BOB_ID, &hbl).is_none());
+    }
 }
 
 #[cfg(feature = "app_api")]
@@ -66424,6 +66606,7 @@ fn build_onboarding_alias_auto_renew_instructions(
 #[cfg(feature = "app_api")]
 pub async fn handle_v1_accounts_onboard(
     app: crate::SharedAppState,
+    authenticated_domain: iroha_data_model::domain::DomainId,
     crate::CanonicalJsonOnly(req): crate::CanonicalJsonOnly<AccountOnboardingRequestDto>,
     telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse> {
@@ -66449,6 +66632,11 @@ pub async fn handle_v1_accounts_onboard(
     let alias_label =
         account::rekey::AccountAlias::from_literal(trimmed_alias, &nexus.dataspace_catalog)
             .map_err(|err| onboarding_invalid_request(&err.to_string()))?;
+    ensure_authenticated_onboarding_domain(
+        &alias_label,
+        &nexus.dataspace_catalog,
+        &authenticated_domain,
+    )?;
     ensure_onboarding_signer_can_manage_alias(app.state.as_ref(), &signer.authority, &alias_label)?;
     let canonical_alias = alias_label
         .to_literal(&nexus.dataspace_catalog)
@@ -66548,27 +66736,7 @@ pub async fn handle_v1_accounts_onboard(
     );
 
     let mut permission_instructions = Vec::new();
-    for dataspace in &signer.alias_resolve_dataspaces {
-        let permission = iroha_data_model::permission::Permission::from(
-            iroha_executor_data_model::permission::account::CanResolveAccountAlias {
-                scope: iroha_executor_data_model::permission::account::AccountAliasPermissionScope::Dataspace(
-                    *dataspace,
-                ),
-            },
-        );
-        permission_instructions.push(InstructionBox::from(Grant::account_permission(
-            permission,
-            account_id.clone(),
-        )));
-    }
-    for domain in &signer.alias_resolve_domains {
-        let permission = iroha_data_model::permission::Permission::from(
-            iroha_executor_data_model::permission::account::CanResolveAccountAlias {
-                scope: iroha_executor_data_model::permission::account::AccountAliasPermissionScope::Domain(
-                    domain.clone(),
-                ),
-            },
-        );
+    for permission in onboarding_alias_resolve_permissions(signer) {
         permission_instructions.push(InstructionBox::from(Grant::account_permission(
             permission,
             account_id.clone(),
@@ -66587,10 +66755,14 @@ pub async fn handle_v1_accounts_onboard(
         }
         if matches!(
             normalized.as_str(),
-            "CanResolveAccountAlias" | "CanManageAccountAlias"
+            "CanResolveAccountAlias"
+                | "CanManageAccountAlias"
+                | "CanUseFeeSponsor"
+                | "CanUseFeeSponsorForAccount"
+                | "CanEnrollFeeSponsorPolicyForAccountDomain"
         ) {
             return Err(onboarding_invalid_request(
-                "account-alias permissions must use the configured typed scopes",
+                "scoped onboarding permissions must use the configured typed scopes",
             ));
         }
         let permission = iroha_data_model::permission::Permission::new(
@@ -66605,13 +66777,11 @@ pub async fn handle_v1_accounts_onboard(
         )));
     }
 
-    if let Some(sponsor) = signer.fee_sponsor_account.as_ref() {
-        let permission = iroha_data_model::permission::Permission::from(
-            iroha_executor_data_model::permission::nexus::CanUseFeeSponsor {
-                sponsor: sponsor.clone(),
-                policy: "default".parse().expect("default fee sponsor policy"),
-            },
-        );
+    if let Some(permission) = onboarding_fee_sponsor_permission(
+        signer.fee_sponsor.as_ref(),
+        &account_id,
+        &authenticated_domain,
+    ) {
         permission_instructions.push(InstructionBox::from(Grant::account_permission(
             permission,
             account_id.clone(),
@@ -66896,6 +67066,7 @@ pub async fn handle_v1_accounts_faucet(
 #[cfg(feature = "app_api")]
 pub async fn handle_v1_accounts_onboard_multisig(
     app: crate::SharedAppState,
+    authenticated_domain: iroha_data_model::domain::DomainId,
     crate::CanonicalJsonOnly(req): crate::CanonicalJsonOnly<MultisigAccountOnboardingRequestDto>,
     telemetry: MaybeTelemetry,
 ) -> Result<impl IntoResponse> {
@@ -66925,6 +67096,11 @@ pub async fn handle_v1_accounts_onboard_multisig(
     let alias_label =
         account::rekey::AccountAlias::from_literal(trimmed_alias, &nexus.dataspace_catalog)
             .map_err(|err| onboarding_invalid_request(&err.to_string()))?;
+    ensure_authenticated_onboarding_domain(
+        &alias_label,
+        &nexus.dataspace_catalog,
+        &authenticated_domain,
+    )?;
     ensure_onboarding_signer_can_manage_alias(app.state.as_ref(), &signer.authority, &alias_label)?;
     let canonical_alias = alias_label
         .to_literal(&nexus.dataspace_catalog)
@@ -67084,6 +67260,11 @@ pub async fn handle_v1_accounts_onboard_multisig(
         auto_renew_instructions = instructions;
     }
 
+    let fee_sponsor_permission = onboarding_fee_sponsor_permission(
+        signer.fee_sponsor.as_ref(),
+        &multisig_account,
+        &authenticated_domain,
+    );
     let tx_metadata = metadata_with_default_gas_asset(app.state.as_ref());
     let mut builder = TransactionBuilder::new((*app.chain_id).clone(), signer.authority.clone())
         .with_metadata(tx_metadata)
@@ -67101,6 +67282,12 @@ pub async fn handle_v1_accounts_onboard_multisig(
                 InstructionBox::from(register),
                 InstructionBox::from(bind_alias),
             ];
+            if let Some(permission) = fee_sponsor_permission {
+                instructions.push(InstructionBox::from(Grant::account_permission(
+                    permission,
+                    multisig_account.clone(),
+                )));
+            }
             instructions.extend(auto_renew_instructions);
             instructions
         });
@@ -78067,11 +78254,11 @@ mod subscription_api_tests {
             app_state.uaid_onboarding = Some(crate::AccountOnboardingSigner {
                 authority: provider.clone(),
                 private_key: ExposedPrivateKey(ALICE_KEYPAIR.private_key().clone()),
-                api_token_hash: Some([0xA5; 32]),
+                api_token_hashes_by_domain: std::collections::BTreeMap::new(),
                 allowed_permissions: std::collections::BTreeSet::new(),
                 alias_resolve_dataspaces: std::collections::BTreeSet::new(),
                 alias_resolve_domains: std::collections::BTreeSet::new(),
-                fee_sponsor_account: None,
+                fee_sponsor: None,
                 alias_lease_term_years: 1,
                 alias_auto_renew_enabled: true,
                 alias_auto_renew_retry_backoff_ms: 500,

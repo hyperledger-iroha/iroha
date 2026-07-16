@@ -15060,27 +15060,36 @@ pub struct ToriiOnboarding {
     pub authority: String,
     /// Private key corresponding to the onboarding authority.
     pub private_key: ExposedPrivateKey,
-    /// Lowercase hexadecimal BLAKE3 digest of the dedicated onboarding API token.
+    /// Exact fully-qualified onboarding domain to lowercase hexadecimal BLAKE3 token digest.
     ///
-    /// Omitting the digest keeps signer-backed onboarding configured but makes its HTTP routes
-    /// fail closed. The raw token must never be written to the peer configuration.
-    pub api_token_hash_hex: Option<String>,
+    /// Each digest must be unique so one credential authenticates exactly one domain. An empty
+    /// map keeps signer-backed onboarding configured but makes its HTTP routes fail closed. Raw
+    /// tokens must never be written to peer configuration.
+    #[config(default)]
+    #[norito(default)]
+    pub api_token_hashes_by_domain: BTreeMap<String, String>,
     /// Permission names that onboarding is allowed to grant to new accounts.
     #[config(default)]
     #[norito(default = "default_torii_onboarding_allowed_permissions")]
     pub allowed_permissions: Vec<String>,
-    /// Exact dataspace ids for read-only account-alias resolution grants applied to every
-    /// newly onboarded account.
+    /// Exact dataspace ids for domainless account-alias resolution grants applied to every
+    /// newly onboarded account. These scopes are independent of `alias_resolve_domains`.
     #[config(default)]
     #[norito(default)]
     pub alias_resolve_dataspaces: Vec<u64>,
-    /// Exact fully-qualified domains for read-only account-alias resolution grants applied to
-    /// every newly onboarded account.
+    /// Exact fully-qualified domains for domain-qualified account-alias resolution grants applied
+    /// to every newly onboarded account. A domain scope does not grant its enclosing dataspace.
     #[config(default)]
     #[norito(default)]
     pub alias_resolve_domains: Vec<String>,
-    /// Optional sponsor account granted via `CanUseFeeSponsor`.
+    /// Optional sponsor account used for exact per-account policy enrollment.
+    ///
+    /// Must be configured together with `fee_sponsor_policy`; neither field has a fallback.
     pub fee_sponsor_account: Option<String>,
+    /// Optional explicit sponsor-local policy used for exact per-account enrollment.
+    ///
+    /// Must be configured together with `fee_sponsor_account`; neither field has a fallback.
+    pub fee_sponsor_policy: Option<String>,
     /// Default alias lease term applied during onboarding.
     #[config(default = "1")]
     #[norito(default = "default_torii_onboarding_alias_lease_term_years")]
@@ -15117,18 +15126,42 @@ impl ToriiOnboarding {
             },
             iroha_data_model::account::ParsedAccountId::into_account_id,
         );
-        let api_token_hash = self.api_token_hash_hex.map(|value| {
-            let canonical = value.as_str();
-            assert!(
-                canonical.len() == 64
-                    && canonical.bytes().all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)),
-                "torii.onboarding.api_token_hash_hex must be exactly 64 lowercase hexadecimal characters"
-            );
-            let decoded = hex::decode(canonical)
-                .expect("validated torii.onboarding.api_token_hash_hex must decode");
-            <[u8; 32]>::try_from(decoded.as_slice())
-                .expect("validated torii.onboarding.api_token_hash_hex must be 32 bytes")
-        });
+        let mut seen_api_token_hashes = BTreeSet::new();
+        let api_token_hashes_by_domain = self
+            .api_token_hashes_by_domain
+            .into_iter()
+            .map(|(domain, value)| {
+                let parsed = DomainId::parse_fully_qualified(&domain).unwrap_or_else(|err| {
+                    panic!(
+                        "invalid torii.onboarding.api_token_hashes_by_domain key `{domain}`: {}",
+                        err.reason()
+                    )
+                });
+                assert_eq!(
+                    domain,
+                    parsed.to_string(),
+                    "torii.onboarding.api_token_hashes_by_domain key `{domain}` must be canonical `{parsed}`"
+                );
+                assert!(
+                    value.len() == 64
+                        && value.bytes().all(|byte| {
+                            byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)
+                        }),
+                    "torii.onboarding.api_token_hashes_by_domain digest for `{domain}` must be exactly 64 lowercase hexadecimal characters"
+                );
+                let decoded = hex::decode(&value).expect(
+                    "validated torii.onboarding.api_token_hashes_by_domain digest must decode",
+                );
+                let digest = <[u8; 32]>::try_from(decoded.as_slice()).expect(
+                    "validated torii.onboarding.api_token_hashes_by_domain digest must be 32 bytes",
+                );
+                assert!(
+                    seen_api_token_hashes.insert(digest),
+                    "torii.onboarding.api_token_hashes_by_domain must not reuse a token digest across domains"
+                );
+                (parsed, digest)
+            })
+            .collect();
         let allowed_permissions = self
             .allowed_permissions
             .into_iter()
@@ -15159,12 +15192,32 @@ impl ToriiOnboarding {
                 parsed
             })
             .collect();
-        let fee_sponsor_account = self.fee_sponsor_account.map(|account| {
-            AccountId::parse_encoded(&account).map_or_else(
-                |err| panic!("invalid torii.onboarding.fee_sponsor_account `{account}`: {err}"),
-                iroha_data_model::account::ParsedAccountId::into_account_id,
-            )
-        });
+        let fee_sponsor = match (self.fee_sponsor_account, self.fee_sponsor_policy) {
+            (None, None) => None,
+            (Some(account), Some(policy)) => {
+                let account = AccountId::parse_encoded(&account).map_or_else(
+                    |err| panic!("invalid torii.onboarding.fee_sponsor_account `{account}`: {err}"),
+                    iroha_data_model::account::ParsedAccountId::into_account_id,
+                );
+                let parsed_policy = policy
+                    .parse::<iroha_data_model::name::Name>()
+                    .unwrap_or_else(|err| {
+                        panic!("invalid torii.onboarding.fee_sponsor_policy `{policy}`: {err}")
+                    });
+                assert_eq!(
+                    policy,
+                    parsed_policy.to_string(),
+                    "torii.onboarding.fee_sponsor_policy `{policy}` must be canonical `{parsed_policy}`"
+                );
+                Some(actual::ToriiOnboardingFeeSponsor {
+                    account,
+                    policy: parsed_policy,
+                })
+            }
+            _ => panic!(
+                "torii.onboarding.fee_sponsor_account and torii.onboarding.fee_sponsor_policy must be configured together"
+            ),
+        };
         let alias_auto_renew_subscription_domain =
             self.alias_auto_renew_subscription_domain.map(|domain| {
                 DomainId::parse_fully_qualified(&domain).unwrap_or_else(|err| {
@@ -15177,11 +15230,11 @@ impl ToriiOnboarding {
         Some(actual::ToriiOnboarding {
             authority,
             private_key: self.private_key,
-            api_token_hash,
+            api_token_hashes_by_domain,
             allowed_permissions,
             alias_resolve_dataspaces,
             alias_resolve_domains,
-            fee_sponsor_account,
+            fee_sponsor,
             alias_lease_term_years: self.alias_lease_term_years,
             alias_auto_renew_enabled: self.alias_auto_renew_enabled,
             alias_auto_renew_retry_backoff_ms: self.alias_auto_renew_retry_backoff_ms,
@@ -19904,9 +19957,10 @@ mod offline_cfg_tests {
 
 #[cfg(test)]
 mod duration_clamp_tests {
-    use std::{path::PathBuf, time::Duration as StdDuration};
+    use std::{collections::BTreeMap, path::PathBuf, time::Duration as StdDuration};
 
     use iroha_config_base::{read::ConfigReader, toml::TomlSource};
+    use iroha_data_model::domain::DomainId;
     use toml::{Table, Value};
 
     use crate::parameters::{actual, defaults, user::SoracloudRuntime};
@@ -20274,12 +20328,17 @@ private_key = "8926201CA347641228C3B79AA43839DEDC85FA51C0E8B9B6A00F6B0D6B0423E90
             "subscription domain remains optional"
         );
         assert!(
-            onboarding.api_token_hash.is_none(),
-            "missing onboarding token digest must remain explicit so Torii can fail closed"
+            onboarding.api_token_hashes_by_domain.is_empty(),
+            "missing onboarding token digest map must remain explicit so Torii can fail closed"
         );
     }
 
-    fn table_with_onboarding_token_hash(hash: &str) -> Table {
+    fn table_with_onboarding_token_hashes(
+        first_domain: &str,
+        first_hash: &str,
+        second_domain: &str,
+        second_hash: &str,
+    ) -> Table {
         let mut table = base_table();
         let torii = table
             .get_mut("torii")
@@ -20296,7 +20355,7 @@ private_key = "8926201CA347641228C3B79AA43839DEDC85FA51C0E8B9B6A00F6B0D6B0423E90
 enabled = true
 authority = "{authority}"
 private_key = "8926201CA347641228C3B79AA43839DEDC85FA51C0E8B9B6A00F6B0D6B0423E902973F"
-api_token_hash_hex = "{hash}"
+api_token_hashes_by_domain = {{ "{first_domain}" = "{first_hash}", "{second_domain}" = "{second_hash}" }}
 "#,
         ))
         .expect("parse onboarding table");
@@ -20305,22 +20364,29 @@ api_token_hash_hex = "{hash}"
     }
 
     #[test]
-    fn onboarding_api_token_hash_parses_exact_lowercase_blake3_digest() {
-        let actual = load_user_root(table_with_onboarding_token_hash(&"ab".repeat(32)))
-            .parse()
-            .expect("parse user config");
+    fn onboarding_api_token_hashes_parse_exact_domain_scoped_lowercase_blake3_digests() {
+        let actual = load_user_root(table_with_onboarding_token_hashes(
+            "hbl.sbp",
+            &"ab".repeat(32),
+            "ubl.sbp",
+            &"cd".repeat(32),
+        ))
+        .parse()
+        .expect("parse user config");
+        let hbl = DomainId::try_new("hbl", "sbp").expect("HBL domain");
+        let ubl = DomainId::try_new("ubl", "sbp").expect("UBL domain");
         assert_eq!(
             actual
                 .torii
                 .onboarding
                 .expect("onboarding enabled")
-                .api_token_hash,
-            Some([0xab; 32])
+                .api_token_hashes_by_domain,
+            BTreeMap::from([(hbl, [0xab; 32]), (ubl, [0xcd; 32])])
         );
     }
 
     #[test]
-    fn onboarding_api_token_hash_rejects_noncanonical_text() {
+    fn onboarding_api_token_hashes_reject_noncanonical_digest_text() {
         for invalid in [
             "AB".repeat(32),
             format!(" {}", "ab".repeat(32)),
@@ -20330,11 +20396,128 @@ api_token_hash_hex = "{hash}"
             "g0".repeat(32),
         ] {
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let _ = load_user_root(table_with_onboarding_token_hash(&invalid)).parse();
+                let _ = load_user_root(table_with_onboarding_token_hashes(
+                    "hbl.sbp",
+                    &invalid,
+                    "ubl.sbp",
+                    &"cd".repeat(32),
+                ))
+                .parse();
             }));
             assert!(
                 result.is_err(),
                 "noncanonical onboarding digest `{invalid}` must fail closed"
+            );
+        }
+    }
+
+    #[test]
+    fn onboarding_api_token_hashes_reject_noncanonical_domain_keys() {
+        for invalid in [" hbl.sbp", "hbl.sbp ", "HBL.sbp", "hbl"] {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _ = load_user_root(table_with_onboarding_token_hashes(
+                    invalid,
+                    &"ab".repeat(32),
+                    "ubl.sbp",
+                    &"cd".repeat(32),
+                ))
+                .parse();
+            }));
+            assert!(
+                result.is_err(),
+                "noncanonical onboarding domain `{invalid}` must fail closed"
+            );
+        }
+    }
+
+    #[test]
+    fn onboarding_api_token_hashes_reject_cross_domain_digest_reuse() {
+        let digest = "ab".repeat(32);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = load_user_root(table_with_onboarding_token_hashes(
+                "hbl.sbp", &digest, "ubl.sbp", &digest,
+            ))
+            .parse();
+        }));
+        assert!(
+            result.is_err(),
+            "cross-domain digest reuse must fail closed"
+        );
+    }
+
+    fn table_with_onboarding_fee_sponsor(
+        sponsor_account: Option<&str>,
+        sponsor_policy: Option<&str>,
+    ) -> Table {
+        let mut table = table_with_onboarding_token_hashes(
+            "hbl.sbp",
+            &"ab".repeat(32),
+            "ubl.sbp",
+            &"cd".repeat(32),
+        );
+        let onboarding = table
+            .get_mut("torii")
+            .and_then(Value::as_table_mut)
+            .and_then(|torii| torii.get_mut("onboarding"))
+            .and_then(Value::as_table_mut)
+            .expect("torii onboarding table");
+        if let Some(account) = sponsor_account {
+            onboarding.insert(
+                "fee_sponsor_account".into(),
+                Value::String(account.to_owned()),
+            );
+        }
+        if let Some(policy) = sponsor_policy {
+            onboarding.insert(
+                "fee_sponsor_policy".into(),
+                Value::String(policy.to_owned()),
+            );
+        }
+        table
+    }
+
+    #[test]
+    fn onboarding_fee_sponsor_requires_and_parses_one_explicit_exact_pair() {
+        let sponsor = iroha_data_model::account::AccountId::new(
+            checked_onboarding_authority_ed25519_key_fixture()
+                .public_key()
+                .clone(),
+        );
+        let actual = load_user_root(table_with_onboarding_fee_sponsor(
+            Some(&sponsor.to_string()),
+            Some("retail"),
+        ))
+        .parse()
+        .expect("parse exact onboarding fee sponsor pair");
+        let fee_sponsor = actual
+            .torii
+            .onboarding
+            .expect("onboarding enabled")
+            .fee_sponsor
+            .expect("fee sponsor configured");
+        assert_eq!(fee_sponsor.account, sponsor);
+        assert_eq!(fee_sponsor.policy.to_string(), "retail");
+    }
+
+    #[test]
+    fn onboarding_fee_sponsor_rejects_partial_or_implicit_configuration() {
+        let sponsor = iroha_data_model::account::AccountId::new(
+            checked_onboarding_authority_ed25519_key_fixture()
+                .public_key()
+                .clone(),
+        )
+        .to_string();
+        for (account, policy) in [
+            (Some(sponsor.as_str()), None),
+            (None, Some("retail")),
+            (Some(sponsor.as_str()), Some(" retail")),
+        ] {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let _ = load_user_root(table_with_onboarding_fee_sponsor(account, policy)).parse();
+            }));
+            assert!(
+                result.is_err(),
+                "partial or noncanonical fee sponsor configuration must fail closed"
             );
         }
     }

@@ -314,6 +314,22 @@ int32_t connect_norito_kagemusha_recipient_output_derive_v2(
     uint8_t** out_result_ptr,
     unsigned long* out_result_len);
 
+// Input is canonical bridge-local
+// `KagemushaRecursiveSpendRedemptionChangePrepareRequestV4` in exact field
+// order: version (u16), bundle, input_opening, change_amount, operation_id
+// ([u8; 32]), entropy ([u8; 32]). Native validates the complete bundle public
+// binding and the exact current-note opening before deriving change.
+// Output is canonical bridge-local
+// `KagemushaRecursiveSpendRedemptionChangePrepareResultV4` in exact field
+// order: version (u16), opening, output (complete spendable-note descriptor).
+// The output is secret and must be released only with
+// `connect_norito_kagemusha_secret_free_buffer`.
+int32_t connect_norito_kagemusha_recursive_spend_redemption_change_prepare_v4(
+    const uint8_t* request_norito_ptr,
+    unsigned long request_norito_len,
+    uint8_t** out_result_ptr,
+    unsigned long* out_result_len);
+
 int32_t connect_norito_kagemusha_recipient_payment_request_signing_bytes_v2(
     const uint8_t* payload_norito_ptr,
     unsigned long payload_norito_len,
@@ -335,12 +351,18 @@ int32_t connect_norito_kagemusha_recipient_payment_request_verify_v2(
     uint8_t** out_digest_ptr,
     unsigned long* out_digest_len);
 
-// Authorization signing uses a canonical template with a disposable non-empty
-// signature marker. The create call replaces that marker and verifies the real
-// account signature before returning a protocol archive.
+// Authorization signing uses a canonical local-only unsigned preparation.
+// It contains no signature or authenticatorData and cannot decode as an
+// on-wire authorization. Finalization accepts strict platform DER, normalizes
+// it to canonical low-S r||s, and returns both the authorization and raw form.
+// KagemushaRequestAuthorizationPreparationV2 fields are, in order:
+// version(u16=2), authority, device_id, asset_definition_id, operation_id,
+// issued_at_ms, expires_at_ms, nonce, payload_digest, registration_hash,
+// platform(KagemushaRequestAuthorizationPlatformV2: AndroidKeyMint=0,
+// IosAppAttest=1).
 int32_t connect_norito_kagemusha_request_authorization_signing_bytes_v2(
-    const uint8_t* template_norito_ptr,
-    unsigned long template_norito_len,
+    const uint8_t* preparation_norito_ptr,
+    unsigned long preparation_norito_len,
     uint8_t** out_signing_bytes_ptr,
     unsigned long* out_signing_bytes_len);
 
@@ -351,6 +373,34 @@ int32_t connect_norito_kagemusha_request_authorization_create_v2(
     unsigned long signature_len,
     uint8_t** out_authorization_ptr,
     unsigned long* out_authorization_len);
+
+int32_t connect_norito_kagemusha_request_authorization_finalize_hardware_v2(
+    const uint8_t* preparation_norito_ptr,
+    unsigned long preparation_norito_len,
+    const uint8_t* authenticator_data_ptr,
+    unsigned long authenticator_data_len,
+    const uint8_t* signature_der_ptr,
+    unsigned long signature_der_len,
+    uint8_t** out_authorization_ptr,
+    unsigned long* out_authorization_len,
+    uint8_t** out_signature_raw_ptr,
+    unsigned long* out_signature_raw_len);
+
+// Direct finalization from the bounded two-field CBOR object returned by
+// DCAppAttestService.generateAssertion. The exact fields are authenticatorData
+// and signature, both byte strings. Outputs are the authorization archive,
+// canonical raw-low-S signature, and exact extracted authenticatorData.
+int32_t connect_norito_kagemusha_request_authorization_finalize_ios_app_attest_v2(
+    const uint8_t* preparation_norito_ptr,
+    unsigned long preparation_norito_len,
+    const uint8_t* assertion_object_ptr,
+    unsigned long assertion_object_len,
+    uint8_t** out_authorization_ptr,
+    unsigned long* out_authorization_len,
+    uint8_t** out_signature_raw_ptr,
+    unsigned long* out_signature_raw_len,
+    uint8_t** out_authenticator_data_ptr,
+    unsigned long* out_authenticator_data_len);
 
 // Durable receiver ACK lifecycle. Creation and verification bind the exact
 // signed request and recipient-only peer payment; callers must additionally check the
@@ -576,6 +626,11 @@ int32_t connect_norito_kagemusha_recursive_spend_redeem_v4(
     unsigned long request_norito_len,
     uint8_t** out_build_result_ptr,
     unsigned long* out_build_result_len);
+
+// Zeroizes both the hidden allocation header and secret payload before release.
+// Accepts null. Passing a public buffer or any pointer not returned by a
+// Kagemusha secret-output entrypoint is invalid.
+void connect_norito_kagemusha_secret_free_buffer(uint8_t* ptr);
 
 void connect_norito_free(uint8_t* ptr);
 

@@ -7,6 +7,7 @@ use std::sync::{Arc, LazyLock};
 use criterion::{BatchSize, Criterion};
 use iroha_core::{
     block::*,
+    governance::manifest::LaneManifestRegistry,
     prelude::*,
     query::store::LiveQueryStore,
     smartcontracts::{Execute, isi::Registrable as _, ivm::cache::IvmCache},
@@ -58,7 +59,7 @@ fn build_test_and_transient_state() -> State {
     let query_handle = LiveQueryStore::start_test();
     let (account_id, key_pair) = gen_account_in(&*STARTER_DOMAIN);
 
-    let state = State::new(
+    let state = State::try_new(
         {
             let domain = Domain::new(STARTER_DOMAIN.clone()).build(&account_id);
             let account = Account::new(account_id.clone()).build(&account_id);
@@ -68,7 +69,12 @@ fn build_test_and_transient_state() -> State {
         query_handle,
         #[cfg(feature = "telemetry")]
         <_>::default(),
-    );
+    )
+    .expect("benchmark State startup must validate");
+    let nexus = state.nexus_snapshot();
+    state.install_lane_manifests(&Arc::new(
+        LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
+    ));
 
     {
         let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
@@ -287,13 +293,14 @@ fn sign_blocks(criterion: &mut Criterion) {
     // Ensure Tokio reactor is available for LiveQueryStore background task
     let _guard = RUNTIME.enter();
     let query_handle = LiveQueryStore::start_test();
-    let state = State::new(
+    let state = State::try_new(
         World::new(),
         kura,
         query_handle,
         #[cfg(feature = "telemetry")]
         <_>::default(),
-    );
+    )
+    .expect("benchmark State startup must validate");
     let (max_clock_drift, tx_limits) = {
         let state_view = state.world.view();
         let params = state_view.parameters();

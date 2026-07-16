@@ -14159,7 +14159,10 @@ mod storage_migration_tests {
 
     use iroha_crypto::Hash;
     use iroha_data_model::{
-        account::{AccountAlias, AccountAliasDomain, AccountDetails, AccountId},
+        account::{
+            AccountAlias, AccountAliasDomain, AccountDetails, AccountId,
+            AccountRekeyTransitionProvenance,
+        },
         domain::DomainId,
         metadata::Metadata,
         name::Name,
@@ -14594,7 +14597,7 @@ mod storage_migration_tests {
     }
 
     #[test]
-    fn account_rekey_rebuild_backfills_alias_bound_multisig_accounts() {
+    fn account_rekey_rebuild_rejects_alias_binding_without_continuity_record() {
         let mut world = World::default();
 
         let domain_id: DomainId = DomainId::try_new("alias", "world").expect("domain id");
@@ -14617,26 +14620,21 @@ mod storage_migration_tests {
         world
             .accounts
             .insert(account_id.clone(), AccountValue::new(details));
+        world
+            .account_aliases
+            .insert(label.clone(), account_id.clone());
 
         world
             .rebuild_account_alias_index()
             .expect("alias index rebuild should succeed");
-        world
+        let error = world
             .rebuild_account_rekey_records()
-            .expect("rekey record rebuild should backfill multisig aliases");
-
-        let records = world.account_rekey_records.view();
-        let record = records
-            .get(&label)
-            .expect("rekey record should be backfilled");
-        assert_eq!(record.active_account_id, account_id);
-        assert!(record.active_signatory.is_none());
-        assert!(record.previous_account_ids.is_empty());
-        assert!(record.previous_signatories.is_empty());
+            .expect_err("startup must not fabricate missing controller continuity");
+        assert!(error.contains("missing its continuity record"), "{error}");
     }
 
     #[test]
-    fn account_rekey_rebuild_repoints_stale_records_to_current_alias_binding() {
+    fn account_rekey_rebuild_rejects_stale_continuity_record() {
         let mut world = World::default();
 
         let domain_id: DomainId = DomainId::try_new("alias", "world").expect("domain id");
@@ -14654,6 +14652,9 @@ mod storage_migration_tests {
         world
             .accounts
             .insert(second_id.clone(), AccountValue::new(second_details));
+        world
+            .account_aliases
+            .insert(label.clone(), second_id.clone());
         world.account_rekey_records.insert(
             label.clone(),
             AccountRekeyRecord::new(label.clone(), first_id.clone()),
@@ -14662,20 +14663,175 @@ mod storage_migration_tests {
         world
             .rebuild_account_alias_index()
             .expect("alias index rebuild should succeed");
+        let error = world
+            .rebuild_account_rekey_records()
+            .expect_err("startup must not repoint stale controller continuity");
+        assert!(error.contains("continuity record points"), "{error}");
+    }
+
+    #[test]
+    fn account_rekey_rebuild_normalizes_legacy_history_as_non_authorizing() {
+        let mut world = World::default();
+        let domain_id = DomainId::try_new("alias", "world").expect("domain id");
+        let label = alias_in_domain(&domain_id, "legacy".parse().expect("label"));
+        let retired = AccountId::new(crate::state::checked_keypair().public_key().clone());
+        let active = AccountId::new(crate::state::checked_keypair().public_key().clone());
+        world.accounts.insert(
+            active.clone(),
+            AccountValue::new(AccountDetails::new(
+                Metadata::default(),
+                Some(label.clone()),
+                None,
+                Vec::new(),
+            )),
+        );
+        world.account_aliases.insert(label.clone(), active.clone());
+        let mut legacy = AccountRekeyRecord::new(label.clone(), retired)
+            .repoint_for_account_id_rekey(active)
+            .expect("fixture transition");
+        legacy.transition_provenance.clear();
+        world.account_rekey_records.insert(label.clone(), legacy);
+
         world
             .rebuild_account_rekey_records()
-            .expect("rekey record rebuild should repoint stale records");
+            .expect("legacy record must normalize deterministically");
 
-        let records = world.account_rekey_records.view();
-        let record = records
-            .get(&label)
-            .expect("rekey record should survive rebuild");
-        assert_eq!(record.active_account_id, second_id);
-        assert_eq!(record.previous_account_ids, vec![first_id]);
         assert_eq!(
-            record.active_signatory,
-            Some(second_key.public_key().clone())
+            world
+                .account_rekey_records
+                .view()
+                .get(&label)
+                .expect("normalized record")
+                .transition_provenance,
+            vec![AccountRekeyTransitionProvenance::LegacyUnspecified]
         );
+    }
+
+    #[test]
+    fn account_rekey_rebuild_rejects_live_retired_predecessor_and_ambiguous_targets() {
+        let mut live_predecessor_world = World::default();
+        let domain_id = DomainId::try_new("alias", "world").expect("domain id");
+        let label = alias_in_domain(&domain_id, "retirement".parse().expect("label"));
+        let predecessor = AccountId::new(crate::state::checked_keypair().public_key().clone());
+        let active = AccountId::new(crate::state::checked_keypair().public_key().clone());
+        for account_id in [&predecessor, &active] {
+            live_predecessor_world.accounts.insert(
+                account_id.clone(),
+                AccountValue::new(AccountDetails::new(
+                    Metadata::default(),
+                    None,
+                    None,
+                    Vec::new(),
+                )),
+            );
+        }
+        live_predecessor_world
+            .account_aliases
+            .insert(label.clone(), active.clone());
+        live_predecessor_world.account_rekey_records.insert(
+            label.clone(),
+            AccountRekeyRecord::new(label.clone(), predecessor.clone())
+                .repoint_for_account_id_rekey(active)
+                .expect("fixture transition"),
+        );
+        let error = live_predecessor_world
+            .rebuild_account_rekey_records()
+            .expect_err("an account-id rekey predecessor must be retired");
+        assert!(error.contains("independently live account"), "{error}");
+
+        let mut ambiguous_world = World::default();
+        let first_label = alias_in_domain(&domain_id, "first".parse().expect("label"));
+        let second_label = alias_in_domain(&domain_id, "second".parse().expect("label"));
+        let first_active = AccountId::new(crate::state::checked_keypair().public_key().clone());
+        let second_active = AccountId::new(crate::state::checked_keypair().public_key().clone());
+        for account_id in [&first_active, &second_active] {
+            ambiguous_world.accounts.insert(
+                account_id.clone(),
+                AccountValue::new(AccountDetails::new(
+                    Metadata::default(),
+                    None,
+                    None,
+                    Vec::new(),
+                )),
+            );
+        }
+        for (label, active) in [(first_label, first_active), (second_label, second_active)] {
+            ambiguous_world
+                .account_aliases
+                .insert(label.clone(), active.clone());
+            ambiguous_world.account_rekey_records.insert(
+                label.clone(),
+                AccountRekeyRecord::new(label.clone(), predecessor.clone())
+                    .repoint_for_account_id_rekey(active)
+                    .expect("fixture transition"),
+            );
+        }
+        let error = ambiguous_world
+            .rebuild_account_rekey_records()
+            .expect_err("one predecessor cannot target two active accounts");
+        assert!(error.contains("ambiguously targets"), "{error}");
+    }
+
+    #[test]
+    fn account_rekey_rebuild_rejects_malformed_or_cyclic_active_suffix() {
+        let domain_id = DomainId::try_new("alias", "world").expect("domain id");
+        let label = alias_in_domain(&domain_id, "cycle".parse().expect("label"));
+        let first = AccountId::new(crate::state::checked_keypair().public_key().clone());
+        let active = AccountId::new(crate::state::checked_keypair().public_key().clone());
+
+        let mut malformed_world = World::default();
+        malformed_world.accounts.insert(
+            active.clone(),
+            AccountValue::new(AccountDetails::new(
+                Metadata::default(),
+                None,
+                None,
+                Vec::new(),
+            )),
+        );
+        malformed_world
+            .account_aliases
+            .insert(label.clone(), active.clone());
+        let intermediate = AccountId::new(crate::state::checked_keypair().public_key().clone());
+        let mut malformed = AccountRekeyRecord::new(label.clone(), first.clone())
+            .repoint_for_account_id_rekey(intermediate)
+            .expect("first transition")
+            .repoint_for_account_id_rekey(active.clone())
+            .expect("second transition");
+        malformed.transition_provenance.pop();
+        malformed_world
+            .account_rekey_records
+            .insert(label.clone(), malformed);
+        let error = malformed_world
+            .rebuild_account_rekey_records()
+            .expect_err("partial provenance must fail");
+        assert!(error.contains("malformed provenance"), "{error}");
+
+        let mut cyclic_world = World::default();
+        cyclic_world.accounts.insert(
+            active.clone(),
+            AccountValue::new(AccountDetails::new(
+                Metadata::default(),
+                None,
+                None,
+                Vec::new(),
+            )),
+        );
+        cyclic_world
+            .account_aliases
+            .insert(label.clone(), active.clone());
+        let mut cyclic = AccountRekeyRecord::new(label.clone(), first)
+            .repoint_for_account_id_rekey(active.clone())
+            .expect("fixture transition");
+        cyclic.previous_account_ids.push(active);
+        cyclic
+            .transition_provenance
+            .push(AccountRekeyTransitionProvenance::AccountIdRekey);
+        cyclic_world.account_rekey_records.insert(label, cyclic);
+        let error = cyclic_world
+            .rebuild_account_rekey_records()
+            .expect_err("active id in its predecessor suffix must fail");
+        assert!(error.contains("cycle"), "{error}");
     }
 
     #[test]
@@ -17812,6 +17968,7 @@ impl World {
 
     fn rebuild_account_rekey_records(&mut self) -> Result<(), String> {
         let mut records = BTreeMap::new();
+        let mut active_account_id_rekey_targets = BTreeMap::<AccountId, AccountId>::new();
         let existing_records: Vec<_> = self
             .account_rekey_records
             .view()
@@ -17826,7 +17983,7 @@ impl World {
             .collect();
         let view = self.accounts.view();
 
-        for (label, record) in existing_records {
+        for (label, mut record) in existing_records {
             if record.label != label {
                 return Err(format!(
                     "Account rekey record {label:?} stores mismatched label {:?}",
@@ -17838,6 +17995,11 @@ impl World {
                     "Account rekey record {label:?} looks like raw PII; use UAID/opaque identifiers"
                 ));
             }
+            record
+                .normalize_legacy_transition_provenance()
+                .map_err(|error| {
+                    format!("Account rekey record {label:?} has malformed provenance: {error}")
+                })?;
             if let Some(existing) = records.get(&label) {
                 if existing != &record {
                     return Err(format!(
@@ -17875,6 +18037,53 @@ impl World {
                     record.active_account_id
                 ));
             };
+            let predecessors = record
+                .active_account_id_rekey_predecessors()
+                .map_err(|error| {
+                    format!("Account rekey record {label:?} has malformed provenance: {error}")
+                })?;
+            let mut unique_predecessors = BTreeSet::new();
+            for predecessor in predecessors {
+                if predecessor == &record.active_account_id {
+                    return Err(format!(
+                        "Account rekey record {label:?} contains an active account-id rekey cycle at {predecessor}"
+                    ));
+                }
+                if !unique_predecessors.insert(predecessor.clone()) {
+                    return Err(format!(
+                        "Account rekey record {label:?} repeats active account-id rekey predecessor {predecessor}"
+                    ));
+                }
+                if let Some(existing_target) = active_account_id_rekey_targets
+                    .insert(predecessor.clone(), record.active_account_id.clone())
+                    && existing_target != record.active_account_id
+                {
+                    return Err(format!(
+                        "Account-id rekey predecessor {predecessor} ambiguously targets {existing_target} and {}",
+                        record.active_account_id
+                    ));
+                }
+            }
+        }
+
+        for predecessor in active_account_id_rekey_targets.keys() {
+            let mut cursor = predecessor;
+            let mut visited = BTreeSet::new();
+            while let Some(next) = active_account_id_rekey_targets.get(cursor) {
+                if !visited.insert(cursor.clone()) {
+                    return Err(format!(
+                        "Account-id rekey provenance contains a cycle through {cursor}"
+                    ));
+                }
+                cursor = next;
+            }
+        }
+        for predecessor in active_account_id_rekey_targets.keys() {
+            if view.get(predecessor).is_some() {
+                return Err(format!(
+                    "Account-id rekey predecessor {predecessor} remains an independently live account"
+                ));
+            }
         }
 
         self.account_rekey_records = records.into_iter().collect();
@@ -61581,6 +61790,51 @@ mod tests {
             Some(AccountAliasDomain::new(domain_id.name().clone())),
             DataSpaceId::UNIVERSAL,
         )
+    }
+
+    fn seed_active_account_alias_binding(
+        world: &mut World,
+        owner: &AccountId,
+        alias: &AccountAlias,
+    ) {
+        world.account_aliases.insert(alias.clone(), owner.clone());
+        let mut aliases = world
+            .account_aliases_by_account
+            .view()
+            .get(owner)
+            .cloned()
+            .unwrap_or_default();
+        aliases.insert(alias.clone());
+        world
+            .account_aliases_by_account
+            .insert(owner.clone(), aliases);
+        world.account_rekey_records.insert(
+            alias.clone(),
+            AccountRekeyRecord::new(alias.clone(), owner.clone()),
+        );
+
+        let selector = crate::sns::selector_for_account_alias(alias, &DataSpaceCatalog::default())
+            .expect("account alias selector");
+        let address = iroha_data_model::account::AccountAddress::from_account_id(owner)
+            .expect("account address");
+        let record = iroha_data_model::sns::NameRecordV1::new(
+            selector.clone(),
+            owner.clone(),
+            vec![iroha_data_model::sns::NameControllerV1::account(&address)],
+            0,
+            0,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            Metadata::default(),
+        );
+        world.smart_contract_state.insert(
+            crate::sns::record_storage_key(&selector),
+            norito::codec::Encode::encode(&record),
+        );
+        world
+            .rebuild_account_scope_directory()
+            .expect("active account alias must define a valid account scope");
     }
 
     fn seed_account_alias_lease(
@@ -108753,11 +109007,10 @@ mod tests {
         let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
         let alice_account = new_sample_account(&ALICE_ID).build(&ALICE_ID);
         let bob_alias = alias_in_domain(&domain_id, "bob".parse().expect("alias"));
-        let bob_account = new_sample_account(&BOB_ID)
-            .with_label(Some(bob_alias))
-            .build(&BOB_ID);
+        let bob_account = new_sample_account(&BOB_ID).build(&BOB_ID);
 
-        let world = World::with([domain], [alice_account, bob_account], []);
+        let mut world = World::with([domain], [alice_account, bob_account], []);
+        seed_active_account_alias_binding(&mut world, &BOB_ID, &bob_alias);
         let view = world.view();
         let delta = DetachedStateTransactionDelta::default();
 
@@ -108782,19 +109035,16 @@ mod tests {
         let transferred_domain = Domain::new(transferred_domain_id.clone()).build(&user1);
         let alice_domain = Domain::new(sample_domain_id()).build(&ALICE_ID);
         let alice_account = new_sample_account(&ALICE_ID).build(&ALICE_ID);
-        let user1_account = new_account_in_domain(&user1, &users_domain_id)
-            .with_label(Some(alias_in_domain(
-                &users_domain_id,
-                "user1".parse().expect("alias"),
-            )))
-            .build(&user1);
+        let user1_alias = alias_in_domain(&users_domain_id, "user1".parse().expect("alias"));
+        let user1_account = new_account_in_domain(&user1, &users_domain_id).build(&user1);
         let user2_account = new_account_in_domain(&user2, &users_domain_id).build(&user2);
 
-        let world = World::with(
+        let mut world = World::with(
             [alice_domain, users_domain, transferred_domain],
             [alice_account, user1_account, user2_account],
             [],
         );
+        seed_active_account_alias_binding(&mut world, &user1, &user1_alias);
         let view = world.view();
         let transfer =
             iroha_data_model::isi::Transfer::domain(user1, transferred_domain_id, user2.clone());
@@ -108821,15 +109071,11 @@ mod tests {
         let transferred_domain = Domain::new(transferred_domain_id.clone()).build(&user1);
         let alice_domain = Domain::new(sample_domain_id()).build(&ALICE_ID);
         let alice_account = new_sample_account(&ALICE_ID).build(&ALICE_ID);
-        let user1_account = new_account_in_domain(&user1, &users_domain_id)
-            .with_label(Some(alias_in_domain(
-                &users_domain_id,
-                "user1".parse().expect("alias"),
-            )))
-            .build(&user1);
+        let user1_alias = alias_in_domain(&users_domain_id, "user1".parse().expect("alias"));
+        let user1_account = new_account_in_domain(&user1, &users_domain_id).build(&user1);
         let user2_account = new_account_in_domain(&user2, &users_domain_id).build(&user2);
 
-        let world = World::with(
+        let mut world = World::with(
             [
                 alice_domain,
                 users_domain.clone(),
@@ -108838,6 +109084,7 @@ mod tests {
             [alice_account, user1_account, user2_account],
             [],
         );
+        seed_active_account_alias_binding(&mut world, &user1, &user1_alias);
         let view = world.view();
         let transfer = iroha_data_model::isi::Transfer::domain(
             user1.clone(),

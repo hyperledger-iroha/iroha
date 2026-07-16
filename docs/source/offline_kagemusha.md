@@ -180,13 +180,18 @@ logs, and signing inputs remain untracked runtime material.
 
 A validator must be provisioned and restarted with a candidate before
 `ActivateKagemushaRecursiveReleaseV4` is submitted. Activation authenticates
-the policy digest, signed release and evidence, exact-eight inventory,
+the release-policy digest, signed release and evidence, exact-eight inventory,
 chain/asset/scale and future issuance window, distinct inline Eq/Ep verifier
-records, and matching local cached material before writing consensus state
-atomically. A validator missing non-revoked material for an already active
-release fails before joining the voting set. Withdrawal ends new issuance and
-offline-change creation, but retained material continues to verify and fully
-redeem previously issued branches indefinitely.
+records, matching local cached material, and the embedded production iOS and
+Android device-attestation policy. The instruction requires both release-
+activation and device-policy governance permissions, then publishes the exact
+device policy, release, and Eq/Ep records in one consensus transaction overlay.
+There is no independently reorderable or standalone release-activation path. A
+validator missing non-revoked material for an already active release fails
+before joining the voting set. Withdrawal ends new issuance and offline-change
+creation, but retained material continues to verify and fully redeem previously
+issued branches indefinitely. Later governed device-policy rotation remains a
+separate operation and invalidates prior registrations, forcing re-registration.
 
 ## Production boundary
 

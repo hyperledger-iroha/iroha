@@ -58,6 +58,18 @@ test("canonical request signing: headers include a verifiable signature", () => 
   assert.equal(headers["X-Iroha-Timestamp-Ms"], String(timestampMs));
   assert.equal(headers["X-Iroha-Nonce"], nonce);
   assert.equal(verifyEd25519(message, signature, publicKey), true);
+
+  const i105Headers = buildCanonicalRequestHeaders({
+    accountId,
+    method: "get",
+    path,
+    query: "limit=10",
+    body,
+    privateKey,
+    timestampMs,
+    nonce: `${nonce}-i105`,
+  });
+  assert.equal(i105Headers["X-Iroha-Account"], accountId);
 });
 
 test("canonical request signing: rejects padded auth fields", async () => {
@@ -88,7 +100,7 @@ test("canonical request signing: rejects padded auth fields", async () => {
         timestampMs,
         nonce: "nonce",
       }),
-    /exact canonical ASCII account alias/,
+    /exact canonical I105 account or ASCII account alias/,
   );
   assert.throws(
     () =>
@@ -112,7 +124,7 @@ test("canonical request signing: rejects padded auth fields", async () => {
         timestampMs,
         nonce: "nonce",
       }),
-    /exact canonical ASCII account alias/,
+    /exact canonical I105 account or ASCII account alias/,
   );
   await assert.rejects(
     () =>
@@ -128,7 +140,6 @@ test("canonical request signing: rejects padded auth fields", async () => {
   );
 
   for (const invalidAccountId of [
-    accountId,
     "Alice-1@wonderland",
     "alice-1@Wonderland",
     "alíce-1@wonderland",
@@ -145,7 +156,7 @@ test("canonical request signing: rejects padded auth fields", async () => {
           timestampMs,
           nonce: "nonce",
         }),
-      /exact canonical ASCII account alias/,
+      /exact canonical I105 account or ASCII account alias/,
       invalidAccountId,
     );
     await assert.rejects(
@@ -158,7 +169,7 @@ test("canonical request signing: rejects padded auth fields", async () => {
           timestampMs,
           nonce: "nonce",
         }),
-      /exact canonical ASCII account alias/,
+      /exact canonical I105 account or ASCII account alias/,
       invalidAccountId,
     );
   }

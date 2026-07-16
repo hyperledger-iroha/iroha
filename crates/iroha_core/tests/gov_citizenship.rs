@@ -83,7 +83,7 @@ fn register_and_revoke_citizenship_moves_bond() {
         .cloned()
         .expect("citizen record stored");
     assert_eq!(record.owner, *ALICE_ID);
-    assert_eq!(record.amount, 50);
+    assert_eq!(record.amount, Quantity::from(50_u64));
     assert_eq!(record.bonded_height, 1);
 
     let alice_asset_id = AssetId::new(def_id.clone(), ALICE_ID.clone());
@@ -216,7 +216,7 @@ fn citizenship_gate_blocks_and_allows_governance() {
         stx.world
             .citizens()
             .get(&*ALICE_ID)
-            .is_some_and(|rec| rec.amount >= 10)
+            .is_some_and(|rec| rec.amount >= Quantity::from(10_u64))
     );
     assert!(stx.world.governance_locks().get("citizen-ref").is_some());
 }
@@ -259,7 +259,7 @@ fn citizenship_records_persist_across_transactions() {
         .get(&*ALICE_ID)
         .cloned()
         .expect("citizen record should persist after tx apply");
-    assert_eq!(citizen_record.amount, 50);
+    assert_eq!(citizen_record.amount, Quantity::from(50_u64));
 
     let header_2 = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
     let mut block_2 = state.block(header_2);

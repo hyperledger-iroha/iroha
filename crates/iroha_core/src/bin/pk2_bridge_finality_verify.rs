@@ -1457,6 +1457,7 @@ mod tests {
                 signed_power,
                 total_power: context.quorum.total_power,
             }),
+            liveness: Default::default(),
         };
         let expectations = ExpectedRosterDocument {
             schema_version: LEGACY_EXPECTATIONS_SCHEMA_VERSION,

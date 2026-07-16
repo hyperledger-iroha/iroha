@@ -7,6 +7,7 @@ use iroha_config::parameters::actual::{GasLiquidity, GasVolatility};
 use iroha_core::{
     executor::Executor,
     gas as isi_gas,
+    governance::manifest::LaneManifestRegistry,
     kura::Kura,
     query,
     state::{State, World, WorldReadOnly},
@@ -26,6 +27,10 @@ fn new_state(
 ) -> State {
     let mut state = State::new_for_testing(world, kura, query_handle);
     state.nexus.get_mut().enabled = false;
+    let nexus = state.nexus_snapshot();
+    let lane_manifests =
+        Arc::new(LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance));
+    state.install_lane_manifests(&lane_manifests);
     state
 }
 
@@ -1051,7 +1056,7 @@ fn ivm_gas_fees_record_settlement_receipt() {
         .remove(&tx_hash)
         .expect("settlement receipt recorded");
     assert_eq!(record.asset_definition_id, asset_def_id);
-    assert_eq!(record.local_amount, fee);
+    assert_eq!(record.local_amount, Quantity::from(fee));
 }
 
 #[test]

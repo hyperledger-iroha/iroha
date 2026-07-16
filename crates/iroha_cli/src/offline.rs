@@ -9,6 +9,7 @@ use std::{
 use clap::{Args, Subcommand, ValueEnum};
 use eyre::{Result, WrapErr, eyre};
 use iroha::data_model::isi::{InstructionBox, offline::ActivateKagemushaRecursiveReleaseV4};
+use iroha::data_model::offline::OfflineDeviceAttestationPolicy;
 use iroha::data_model::petal_stream::{
     PETAL_CAPTURE_DEFAULT_MIN_SUCCESS_RATIO_BPS, PETAL_CAPTURE_RATIO_BPS_SCALE,
     PETAL_STREAM_GRID_SIZES, PetalStreamCaptureProfile, PetalStreamDecoder, PetalStreamEncoder,
@@ -98,6 +99,9 @@ pub(crate) struct ActivateReleaseV4Args {
     /// Next atomic Eq/Ep verifier version in consensus state.
     #[arg(long = "verifier-version")]
     verifier_version: u32,
+    /// Exact governed device-attestation policy to publish atomically with the release.
+    #[arg(long = "device-attestation-policy", value_name = "PATH")]
+    device_attestation_policy: PathBuf,
 }
 
 impl Run for ActivateReleaseV4Args {
@@ -109,7 +113,18 @@ impl Run for ActivateReleaseV4Args {
             .build_activation(self.manifest_sha256, self.verifier_version)
             .map_err(|error| eyre!(error))
             .wrap_err("failed to construct the governed Kagemusha V4 activation")?;
-        let instruction = ActivateKagemushaRecursiveReleaseV4::new(activation);
+        let policy_bytes = fs::read(&self.device_attestation_policy)
+            .wrap_err("failed to read the governed device-attestation policy")?;
+        if policy_bytes.len() > 1024 * 1024 {
+            return Err(eyre!(
+                "governed device-attestation policy exceeds the 1 MiB CLI limit"
+            ));
+        }
+        let device_attestation_policy: OfflineDeviceAttestationPolicy =
+            norito::json::from_slice(&policy_bytes)
+                .wrap_err("failed to decode the governed device-attestation policy")?;
+        let instruction =
+            ActivateKagemushaRecursiveReleaseV4::new(activation, device_attestation_policy);
         context.finish([InstructionBox::from(instruction)])
     }
 }
@@ -2718,6 +2733,7 @@ mod tests {
                 artifact_dir: PathBuf::from("catalog"),
                 manifest_sha256: [0x11; 32],
                 verifier_version: 1,
+                device_attestation_policy: PathBuf::from("device-attestation-policy.json"),
             }));
         assert!(!command.allows_fallback_config());
     }

@@ -4,6 +4,7 @@ import java.net.URI
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.test.Test
+import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
@@ -27,6 +28,59 @@ class KagemushaRecursiveSpendProverTest {
                 symbolProbe = { true },
             ),
         )
+    }
+
+    @Test
+    fun appAttestNativeProjectionRejectsCorruptAuxiliaryFields() {
+        val authorizationArchive = archive("KagemushaRequestAuthorizationV2")
+        val rawLowSSignature = ByteArray(64).also {
+            it[31] = 1
+            it[63] = 1
+        }
+        val legacyAuthenticatorData = ByteArray(37).also { it[36] = 1 }
+        val accepted = KagemushaRecursiveSpendProver
+            .requestAuthorizationFromIosAppAttestNativeProjection(
+                arrayOf(authorizationArchive, rawLowSSignature, legacyAuthenticatorData),
+            )
+        assertContentEquals(authorizationArchive, accepted.noritoEncoded())
+
+        val extensionAuthenticatorData = ByteArray(38).also {
+            it[32] = 0x80.toByte()
+            it[37] = 0xa0.toByte()
+        }
+        KagemushaRecursiveSpendProver.requestAuthorizationFromIosAppAttestNativeProjection(
+            arrayOf(authorizationArchive, rawLowSSignature, extensionAuthenticatorData),
+        )
+
+        val invalidProjections = listOf(
+            arrayOf(authorizationArchive, rawLowSSignature),
+            arrayOf(authorizationArchive, ByteArray(0), legacyAuthenticatorData),
+            arrayOf(authorizationArchive, rawLowSSignature.copyOf(63), legacyAuthenticatorData),
+            arrayOf(authorizationArchive, ByteArray(64), legacyAuthenticatorData),
+            arrayOf(authorizationArchive, rawLowSSignature, ByteArray(36)),
+            arrayOf(authorizationArchive, rawLowSSignature, ByteArray(38)),
+            arrayOf(
+                authorizationArchive,
+                rawLowSSignature,
+                ByteArray(37).also { it[32] = 0x80.toByte() },
+            ),
+            arrayOf(
+                authorizationArchive,
+                rawLowSSignature,
+                ByteArray(37).also { it[32] = 0x01 },
+            ),
+            arrayOf(
+                authorizationArchive,
+                rawLowSSignature,
+                ByteArray(4 * 1024 + 1).also { it[32] = 0x80.toByte() },
+            ),
+        )
+        invalidProjections.forEach { projection ->
+            assertFailsWith<IllegalStateException> {
+                KagemushaRecursiveSpendProver
+                    .requestAuthorizationFromIosAppAttestNativeProjection(projection)
+            }
+        }
     }
 
     @Test
@@ -73,6 +127,336 @@ class KagemushaRecursiveSpendProverTest {
                 dummyPath = outputMembershipPath(finalRoot, 7),
             )
         }
+    }
+
+    @Test
+    fun redemptionChangePreparationTransfersOpeningOwnershipExactlyOnce() {
+        val opening = KagemushaRecursiveSpendProver.NoteOpening(
+            archive("KagemushaNoteOpeningV2"),
+        )
+        val preparation = KagemushaRecursiveSpendProver.RedemptionChangePreparationV4(
+            opening = opening,
+            rho = ByteArray(32) { 0x21 },
+            diversifier = ByteArray(32) { 0x22 },
+            commitment = ByteArray(32) { 0x23 },
+            spendNullifier = ByteArray(32) { 0x24 },
+            amount = KagemushaScaledAmount.fromAtomicUnits("375", 2),
+        )
+        val rho = preparation.rho()
+        rho.fill(0)
+        assertTrue(preparation.rho().all { it == 0x21.toByte() })
+        assertEquals("375", preparation.amount.atomicUnits)
+
+        val transferred = preparation.takeOpening()
+        try {
+            assertTrue(transferred === opening)
+            assertFailsWith<IllegalStateException> { preparation.takeOpening() }
+
+            preparation.close()
+            preparation.close()
+            assertFalse(transferred.isDestroyed())
+            assertTrue(transferred.noritoEncoded().isNotEmpty())
+            assertFailsWith<IllegalStateException> { preparation.takeOpening() }
+            assertFailsWith<IllegalStateException> { preparation.rho() }
+            assertFailsWith<IllegalStateException> { preparation.commitment() }
+            assertFailsWith<IllegalStateException> { preparation.amount }
+        } finally {
+            transferred.destroy()
+        }
+    }
+
+    @Test
+    fun redemptionChangePreparationDestroysOnlyAnUntransferredOpening() {
+        val opening = KagemushaRecursiveSpendProver.NoteOpening(
+            archive("KagemushaNoteOpeningV2"),
+        )
+        val preparation = KagemushaRecursiveSpendProver.RedemptionChangePreparationV4(
+            opening = opening,
+            rho = ByteArray(32) { 0x31 },
+            diversifier = ByteArray(32) { 0x32 },
+            commitment = ByteArray(32) { 0x33 },
+            spendNullifier = ByteArray(32) { 0x34 },
+            amount = KagemushaScaledAmount.fromAtomicUnits("125", 2),
+        )
+
+        preparation.close()
+        preparation.close()
+        assertTrue(opening.isDestroyed())
+        assertFailsWith<IllegalStateException> { preparation.takeOpening() }
+        assertFailsWith<IllegalStateException> { preparation.diversifier() }
+        assertFailsWith<IllegalStateException> { preparation.amount }
+
+        val rejectedOpening = KagemushaRecursiveSpendProver.NoteOpening(
+            archive("KagemushaNoteOpeningV2"),
+        )
+        assertFailsWith<IllegalStateException> {
+            KagemushaRecursiveSpendProver.RedemptionChangePreparationV4(
+                opening = rejectedOpening,
+                rho = ByteArray(32) { 0x41 },
+                diversifier = ByteArray(32) { 0x41 },
+                commitment = ByteArray(32) { 0x43 },
+                spendNullifier = ByteArray(32) { 0x44 },
+                amount = KagemushaScaledAmount.fromAtomicUnits("125", 2),
+            )
+        }
+        assertTrue(rejectedOpening.isDestroyed())
+    }
+
+    @Test
+    fun redemptionChangeRequestFailureDestroysTheTransferredOpening() {
+        val opening = KagemushaRecursiveSpendProver.NoteOpening(
+            archive("KagemushaNoteOpeningV2", 0x45),
+        )
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaRecursiveSpendProver.decodeRedeemRequestV4(
+                archive = byteArrayOf(),
+                changeOpening = opening,
+            )
+        }
+        assertTrue(opening.isDestroyed())
+
+        val redeemInput = spendableBranch(0x47)
+        val backendOpening = KagemushaRecursiveSpendProver.NoteOpening(
+            archive("KagemushaNoteOpeningV2", 0x46),
+        )
+        try {
+            assertFailsWith<RuntimeException> {
+                KagemushaRecursiveSpendProver.buildRedeemRequestV4(
+                    input = redeemInput,
+                    recipientAccountId = "alice@wonderland",
+                    amount = KagemushaScaledAmount.fromAtomicUnits("125", 2),
+                    changeOpening = backendOpening,
+                    changeOutputMembershipPaths = redemptionChangeOutputMembershipPaths(),
+                    unshieldVerifierCommitment = ByteArray(32) { 0x48 },
+                    operationId = ByteArray(32) { 0x49 },
+                    blockHeight = 1,
+                )
+            }
+            assertTrue(backendOpening.isDestroyed())
+        } finally {
+            redeemInput.close()
+        }
+
+        val appendInput = spendableBranch(0x50)
+        val appendOpening = KagemushaRecursiveSpendProver.NoteOpening(
+            archive("KagemushaNoteOpeningV2", 0x51),
+        )
+        try {
+            assertFailsWith<RuntimeException> {
+                KagemushaRecursiveSpendProver.buildAppendRequestV4(
+                    inputs = listOf(appendInput),
+                    changeOpening = appendOpening,
+                    outputMembershipPaths = appendChangeOutputMembershipPaths(),
+                    transferVerifierCommitment = ByteArray(32) { 0x52 },
+                    operationId = ByteArray(32) { 0x53 },
+                    blockHeight = 1,
+                )
+            }
+            assertTrue(appendOpening.isDestroyed())
+        } finally {
+            appendInput.close()
+        }
+
+        val restoreOpening = KagemushaRecursiveSpendProver.NoteOpening(
+            archive("KagemushaNoteOpeningV2", 0x54),
+        )
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaRecursiveSpendProver.restoreSpendableBranchV4(
+                bundle = KagemushaRecursiveSpendProver.decodeBundleV4(
+                    archive("KagemushaRecursiveSpendBundleV4", 0x55),
+                ),
+                membershipWitness = KagemushaRecursiveSpendProver.NoteMembershipWitness(
+                    archive("KagemushaNoteMembershipWitnessV2", 0x56),
+                ),
+                opening = restoreOpening,
+                topUpProvenance = KagemushaRecursiveSpendProver.decodeTopUpProvenanceV4(
+                    archive("KagemushaRecursiveSpendTopUpProvenanceV4", 0x57),
+                ),
+                blockHeight = 0,
+            )
+        }
+        assertTrue(restoreOpening.isDestroyed())
+    }
+
+    @Test
+    fun redemptionChangeCarriersCloseOrTransferOneOwnerExactlyOnce() {
+        val closeOwnedOpening = KagemushaRecursiveSpendProver.NoteOpening(
+            archive("KagemushaNoteOpeningV2", 0x4a),
+        )
+        val closeOwnedRequest = KagemushaRecursiveSpendProver.RedeemRequestV4(
+            archive("KagemushaRecursiveSpendRedeemLocalRequestV4", 0x4b),
+            closeOwnedOpening,
+        )
+        closeOwnedRequest.close()
+        closeOwnedRequest.close()
+        assertTrue(closeOwnedOpening.isDestroyed())
+        assertFailsWith<IllegalStateException> { closeOwnedRequest.takeChangeOpening() }
+
+        val handedOffOpening = KagemushaRecursiveSpendProver.NoteOpening(
+            archive("KagemushaNoteOpeningV2", 0x4c),
+        )
+        val request = KagemushaRecursiveSpendProver.RedeemRequestV4(
+            archive("KagemushaRecursiveSpendRedeemLocalRequestV4", 0x4d),
+            handedOffOpening,
+        )
+        val requestHandoff = request.takeChangeOpening()
+        assertTrue(requestHandoff === handedOffOpening)
+        request.close()
+        request.close()
+        assertFalse(handedOffOpening.isDestroyed())
+        assertFailsWith<IllegalStateException> { request.takeChangeOpening() }
+
+        val result = KagemushaRecursiveSpendProver.RedeemBuildResultV4(
+            archive("KagemushaRecursiveSpendRedeemBuildResultV4", 0x4e),
+            requestHandoff,
+        )
+        val resultHandoff = result.takeChangeOpening()
+        assertTrue(resultHandoff === handedOffOpening)
+        result.close()
+        result.close()
+        assertFalse(handedOffOpening.isDestroyed())
+        assertFailsWith<IllegalStateException> { result.takeChangeOpening() }
+        resultHandoff.destroy()
+        assertTrue(handedOffOpening.isDestroyed())
+
+        val spendableBranch = spendableBranch(0x4f)
+        val spendableOpening = spendableBranch.opening
+        spendableBranch.close()
+        spendableBranch.close()
+        assertTrue(spendableOpening.isDestroyed())
+    }
+
+    @Test
+    fun temporarySecretArchivesAreWipedAfterPartialConstructionAndOwnerCopy() {
+        val first = ByteArray(32) { 0x61 }
+        val second = ByteArray(32) { 0x62 }
+        val partiallyConstructed = arrayOf<ByteArray?>(first, null, second)
+        KagemushaRecursiveSpendProver.SecretArchiveWiper.wipeAll(partiallyConstructed)
+        assertTrue(first.all { it == 0.toByte() })
+        assertTrue(second.all { it == 0.toByte() })
+        KagemushaRecursiveSpendProver.SecretArchiveWiper.wipeAll(null)
+
+        val rawNativeArchive = archive("KagemushaRecursiveSpendRedeemLocalRequestV4", 0x63)
+        val owner = KagemushaRecursiveSpendProver.RedeemRequestV4(rawNativeArchive, null)
+        KagemushaRecursiveSpendProver.SecretArchiveWiper.wipe(rawNativeArchive)
+        assertTrue(rawNativeArchive.all { it == 0.toByte() })
+        assertTrue(owner.noritoEncoded().size > NoritoHeader.HEADER_LENGTH)
+        owner.close()
+        KagemushaRecursiveSpendProver.SecretArchiveWiper.wipe(null)
+
+        val firstCopyObserved = mutableListOf<ByteArray>()
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaRecursiveSpendProver.SecretArchiveWiper.withOpeningDigests(
+                ByteArray(32) { 0x64 },
+                "spendKey",
+                ByteArray(31),
+                "rho",
+                ByteArray(32) { 0x66 },
+                "diversifier",
+                observer = { firstCopyObserved += it },
+            ) { _, _, _ -> Unit }
+        }
+        assertEquals(1, firstCopyObserved.size)
+        assertTrue(firstCopyObserved.single().all { it == 0.toByte() })
+
+        val firstAndSecondCopiesObserved = mutableListOf<ByteArray>()
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaRecursiveSpendProver.SecretArchiveWiper.withOpeningDigests(
+                ByteArray(32) { 0x67 },
+                "spendKey",
+                ByteArray(32) { 0x68 },
+                "rho",
+                ByteArray(31),
+                "diversifier",
+                observer = { firstAndSecondCopiesObserved += it },
+            ) { _, _, _ -> Unit }
+        }
+        assertEquals(2, firstAndSecondCopiesObserved.size)
+        assertTrue(firstAndSecondCopiesObserved.all { copy -> copy.all { it == 0.toByte() } })
+
+        val rawOpeningArchive = archive("KagemushaNoteOpeningV2", 0x69)
+        val openingOwner = KagemushaRecursiveSpendProver.decodeNoteOpening(rawOpeningArchive)
+        KagemushaRecursiveSpendProver.SecretArchiveWiper.wipe(rawOpeningArchive)
+        assertTrue(rawOpeningArchive.all { it == 0.toByte() })
+        assertTrue(openingOwner.noritoEncoded().size > NoritoHeader.HEADER_LENGTH)
+        openingOwner.close()
+
+        val rawInitArchive = archive("KagemushaRecursiveSpendInitLocalRequestV4", 0x6a)
+        val initOwner = KagemushaRecursiveSpendProver.decodeInitRequestV4(rawInitArchive)
+        KagemushaRecursiveSpendProver.SecretArchiveWiper.wipe(rawInitArchive)
+        assertTrue(rawInitArchive.all { it == 0.toByte() })
+        assertTrue(initOwner.noritoEncoded().size > NoritoHeader.HEADER_LENGTH)
+        initOwner.close()
+    }
+
+    @Test
+    fun noteOpeningAndInitRequestCloseIdempotently() {
+        assertTrue(
+            AutoCloseable::class.java.isAssignableFrom(
+                KagemushaRecursiveSpendProver.NoteOpening::class.java,
+            ),
+        )
+        val opening = KagemushaRecursiveSpendProver.decodeNoteOpening(
+            archive("KagemushaNoteOpeningV2", 0x5c),
+        )
+        opening.close()
+        opening.close()
+        assertTrue(opening.isDestroyed())
+        assertFailsWith<IllegalStateException> { opening.noritoEncoded() }
+
+        assertTrue(
+            AutoCloseable::class.java.isAssignableFrom(
+                KagemushaRecursiveSpendProver.InitRequestV4::class.java,
+            ),
+        )
+        val init = KagemushaRecursiveSpendProver.decodeInitRequestV4(
+            archive("KagemushaRecursiveSpendInitLocalRequestV4", 0x5d),
+        )
+        init.close()
+        init.close()
+        assertTrue(init.isDestroyed())
+        assertFailsWith<IllegalStateException> { init.noritoEncoded() }
+    }
+
+    @Test
+    fun preparationConstructorFailuresDestroyStagedOpenings() {
+        val recipientOpening = KagemushaRecursiveSpendProver.decodeNoteOpening(
+            archive("KagemushaNoteOpeningV2", 0x5e),
+        )
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaRecursiveSpendProver.RecipientRequestPreparation(
+                payload = KagemushaRecursiveSpendProver.RecipientRequestPayload(
+                    archive("KagemushaRecipientPaymentRequestSigningPayloadV2", 0x5f),
+                ),
+                signingBytes = byteArrayOf(1),
+                opening = recipientOpening,
+                commitment = ByteArray(32) { 0x60 },
+                nullifier = ByteArray(31),
+                amount = KagemushaScaledAmount.fromAtomicUnits("125", 2),
+            )
+        }
+        assertTrue(recipientOpening.isDestroyed())
+
+        val topUpOpening = KagemushaRecursiveSpendProver.decodeNoteOpening(
+            archive("KagemushaNoteOpeningV2", 0x70),
+        )
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaRecursiveSpendProver.TopUpPreparation(
+                unsigned = KagemushaRecursiveSpendProver.TopUpUnsigned(
+                    archive("KagemushaRecursiveSpendTopUpUnsignedV4", 0x71),
+                ),
+                authorizationDigest = ByteArray(32) { 0x72 },
+                opening = topUpOpening,
+                noteCommitment = ByteArray(32) { 0x73 },
+                spendNullifier = ByteArray(32) { 0x74 },
+                initialRoot = ByteArray(32) { 0x75 },
+                finalizedRoot = ByteArray(32) { 0x76 },
+                operationId = ByteArray(31),
+                amount = KagemushaScaledAmount.fromAtomicUnits("125", 2),
+                leafIndex = 0,
+            )
+        }
+        assertTrue(topUpOpening.isDestroyed())
     }
 
     @Test
@@ -157,6 +541,39 @@ class KagemushaRecursiveSpendProverTest {
             LongArray::class.java,
         )
         assertEquals(8, nativeInstall.parameterCount)
+        val nativeAuthorizationPrepare = KagemushaRecursiveSpendProver::class.java.getDeclaredMethod(
+            "nativePrepareAuthorizationV2",
+            ByteArray::class.java,
+            ByteArray::class.java,
+            ByteArray::class.java,
+            ByteArray::class.java,
+            java.lang.Long.TYPE,
+            java.lang.Long.TYPE,
+            ByteArray::class.java,
+            ByteArray::class.java,
+            ByteArray::class.java,
+            ByteArray::class.java,
+        )
+        assertEquals(arrayOf<ByteArray>().javaClass, nativeAuthorizationPrepare.returnType)
+        val legacyNativeAuthorizationFinalize = KagemushaRecursiveSpendProver::class.java.getDeclaredMethod(
+            "nativeCreateAuthorizationV2",
+            ByteArray::class.java,
+            ByteArray::class.java,
+        )
+        assertEquals(ByteArray::class.java, legacyNativeAuthorizationFinalize.returnType)
+        val nativeAuthorizationFinalize = KagemushaRecursiveSpendProver::class.java.getDeclaredMethod(
+            "nativeFinalizeHardwareAuthorizationV2",
+            ByteArray::class.java,
+            ByteArray::class.java,
+            ByteArray::class.java,
+        )
+        assertEquals(arrayOf<ByteArray>().javaClass, nativeAuthorizationFinalize.returnType)
+        val nativeIosAuthorizationFinalize = KagemushaRecursiveSpendProver::class.java.getDeclaredMethod(
+            "nativeFinalizeIosAppAttestAuthorizationV2",
+            ByteArray::class.java,
+            ByteArray::class.java,
+        )
+        assertEquals(arrayOf<ByteArray>().javaClass, nativeIosAuthorizationFinalize.returnType)
         val methods = KagemushaRecursiveSpendProver::class.java.declaredMethods
             .filter {
                 java.lang.reflect.Modifier.isPublic(it.modifiers) &&
@@ -199,6 +616,8 @@ class KagemushaRecursiveSpendProverTest {
                 "decodeVerifyResultV4",
                 "decodeTopUpFinalityRosterArtifact",
                 "deriveOutputMembershipPathsV4",
+                "finalizeIosAppAttest",
+                "finalizeRequestAuthorization",
                 "finalizeRedeemV4",
                 "finalizeTopUp",
                 "initSpendV4",
@@ -208,6 +627,7 @@ class KagemushaRecursiveSpendProverTest {
                 "newToriiClient",
                 "prepareAcknowledgement",
                 "prepareNoteOpening",
+                "prepareRedemptionChangeV4",
                 "prepareRecipientPaymentRequest",
                 "prepareRequestAuthorization",
                 "prepareTopUp",
@@ -226,7 +646,6 @@ class KagemushaRecursiveSpendProverTest {
                 "restoreSplitChangeBranchV4",
                 "signAcknowledgement",
                 "signRecipientPaymentRequest",
-                "signRequestAuthorization",
                 "verifyAcknowledgement",
                 "verifyRecipientPaymentRequest",
                 "verifySpendV4",
@@ -540,7 +959,14 @@ class KagemushaRecursiveSpendProverTest {
             assertFailsWith<IllegalStateException> {
                 KagemushaRecursiveSpendProver.initSpendV4(init)
             }
+            assertTrue(init.isDestroyed())
+            assertFailsWith<IllegalStateException> {
+                KagemushaRecursiveSpendProver.initSpendV4(init)
+            }
         }
+        init.close()
+        init.close()
+        assertTrue(init.isDestroyed())
         append.close()
         redeem.close()
         assertTrue(append.isDestroyed())
@@ -1131,6 +1557,42 @@ class KagemushaRecursiveSpendProverTest {
                 membershipPath = outputMembershipPath(finalRoot, 0),
             ),
             change = null,
+            dummyPath = outputMembershipPath(finalRoot, 1),
+        )
+    }
+
+    private fun appendChangeOutputMembershipPaths():
+        KagemushaRecursiveSpendProver.OutputMembershipPaths {
+        val initialRoot = ByteArray(32) { 0x31 }
+        val afterRecipientRoot = ByteArray(32) { 0x32 }
+        val finalRoot = ByteArray(32) { 0x33 }
+        return KagemushaRecursiveSpendProver.OutputMembershipPaths(
+            initialRoot = initialRoot,
+            finalRoot = finalRoot,
+            recipient = KagemushaRecursiveSpendProver.OutputMembershipLeafPaths(
+                updatePath = outputMembershipPath(initialRoot, 0),
+                membershipPath = outputMembershipPath(finalRoot, 0),
+            ),
+            change = KagemushaRecursiveSpendProver.OutputMembershipLeafPaths(
+                updatePath = outputMembershipPath(afterRecipientRoot, 1),
+                membershipPath = outputMembershipPath(finalRoot, 1),
+            ),
+            dummyPath = outputMembershipPath(finalRoot, 2),
+        )
+    }
+
+    private fun redemptionChangeOutputMembershipPaths():
+        KagemushaRecursiveSpendProver.OutputMembershipPaths {
+        val initialRoot = ByteArray(32) { 0x31 }
+        val finalRoot = ByteArray(32) { 0x32 }
+        return KagemushaRecursiveSpendProver.OutputMembershipPaths(
+            initialRoot = initialRoot,
+            finalRoot = finalRoot,
+            recipient = null,
+            change = KagemushaRecursiveSpendProver.OutputMembershipLeafPaths(
+                updatePath = outputMembershipPath(initialRoot, 0),
+                membershipPath = outputMembershipPath(finalRoot, 0),
+            ),
             dummyPath = outputMembershipPath(finalRoot, 1),
         )
     }

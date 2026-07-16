@@ -2291,6 +2291,10 @@ fn render_peer_config(
             "fee_sponsor_account".into(),
             Value::String(localnet_client_account.clone()),
         );
+        onboarding.insert(
+            "fee_sponsor_policy".into(),
+            Value::String("default".to_owned()),
+        );
     }
     torii.insert("onboarding".into(), Value::Table(onboarding));
 
@@ -4260,6 +4264,12 @@ mod tests {
                 .get("fee_sponsor_account")
                 .and_then(toml::Value::as_str),
             Some(client_account_id.as_str())
+        );
+        assert_eq!(
+            onboarding
+                .get("fee_sponsor_policy")
+                .and_then(toml::Value::as_str),
+            Some("default")
         );
 
         let settlement_offline = peer_cfg

@@ -171,6 +171,8 @@ declare_permissions! {
     iroha_executor_data_model::permission::account::{CanDelegateAccountAliasResolution},
     iroha_executor_data_model::permission::account::{CanResolveAccountAlias},
 
+    iroha_executor_data_model::permission::query::{CanReadRestrictedDataspace},
+
     iroha_executor_data_model::permission::asset_definition::{CanUnregisterAssetDefinition},
     iroha_executor_data_model::permission::asset_definition::{CanModifyAssetDefinitionMetadata},
 
@@ -194,7 +196,9 @@ declare_permissions! {
     iroha_executor_data_model::permission::parameter::{CanSetParameters},
     iroha_executor_data_model::permission::sccp::{CanManageSccpGovernance},
     iroha_executor_data_model::permission::sccp::{CanProposeSccpRouteGovernance},
+    iroha_executor_data_model::permission::offline::{CanManageOfflineEscrow},
     iroha_executor_data_model::permission::offline::{CanActivateKagemushaRecursiveReleaseV4},
+    iroha_executor_data_model::permission::offline::{CanManageOfflineDeviceAttestationPolicy},
     iroha_executor_data_model::permission::role::{CanManageRoles},
 
     iroha_executor_data_model::permission::trigger::{CanRegisterTrigger},
@@ -239,6 +243,28 @@ declare_permissions! {
     iroha_executor_data_model::permission::nexus::{CanEnrollFeeSponsorPolicyForAccountDomain},
     iroha_executor_data_model::permission::nexus::{CanUseFeeSponsor},
     iroha_executor_data_model::permission::nexus::{CanUseFeeSponsorForAccount},
+    iroha_executor_data_model::permission::nexus::{CanManageFeeSponsorPolicy},
+}
+
+mod query {
+    use iroha_executor_data_model::permission::query::CanReadRestrictedDataspace;
+
+    use super::*;
+
+    impl ValidateGrantRevoke for CanReadRestrictedDataspace {
+        fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
+            OnlyGenesis::from(self).validate(authority, host, context)
+        }
+
+        fn validate_revoke(
+            &self,
+            authority: &AccountId,
+            context: &Context,
+            host: &Iroha,
+        ) -> Result {
+            OnlyGenesis::from(self).validate(authority, host, context)
+        }
+    }
 }
 
 /// Trait that enables using permissions on the blockchain
@@ -503,9 +529,9 @@ mod settlement {
 
 mod nexus {
     use iroha_executor_data_model::permission::nexus::{
-        CanEnrollFeeSponsorPolicyForAccountDomain, CanPublishSpaceDirectoryManifest,
-        CanPublishSpaceDirectoryManifestForAccountDomain, CanPublishSpaceDirectoryManifestForUaid,
-        CanUseFeeSponsor, CanUseFeeSponsorForAccount,
+        CanEnrollFeeSponsorPolicyForAccountDomain, CanManageFeeSponsorPolicy,
+        CanPublishSpaceDirectoryManifest, CanPublishSpaceDirectoryManifestForAccountDomain,
+        CanPublishSpaceDirectoryManifestForUaid, CanUseFeeSponsor, CanUseFeeSponsorForAccount,
     };
 
     use super::*;
@@ -704,6 +730,29 @@ mod nexus {
         }
     }
 
+    impl<'a> From<&'a CanManageFeeSponsorPolicy> for SponsorAccount<'a> {
+        fn from(value: &'a CanManageFeeSponsorPolicy) -> Self {
+            Self {
+                sponsor: &value.sponsor,
+            }
+        }
+    }
+
+    impl ValidateGrantRevoke for CanManageFeeSponsorPolicy {
+        fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
+            SponsorAccount::from(self).validate(authority, host, context)
+        }
+
+        fn validate_revoke(
+            &self,
+            authority: &AccountId,
+            context: &Context,
+            host: &Iroha,
+        ) -> Result {
+            SponsorAccount::from(self).validate(authority, host, context)
+        }
+    }
+
     impl ValidateGrantRevoke for CanUseFeeSponsor {
         fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
             SponsorAccount::from(self).validate(authority, host, context)
@@ -772,19 +821,18 @@ mod nexus {
         host: &Iroha,
         require_current_domain_binding: bool,
     ) -> Result {
-        if authority == &permission.sponsor {
-            return Ok(());
-        }
-        let enrollment = CanEnrollFeeSponsorPolicyForAccountDomain {
-            sponsor: permission.sponsor.clone(),
-            policy: permission.policy.clone(),
-            domain: permission.domain.clone(),
-        };
-        if !enrollment.is_owned_by(authority, host) {
-            return Err(ValidationFail::NotPermitted(
-                "Current authority does not hold the exact account-domain sponsor enrollment permission"
-                    .to_owned(),
-            ));
+        if authority != &permission.sponsor {
+            let enrollment = CanEnrollFeeSponsorPolicyForAccountDomain {
+                sponsor: permission.sponsor.clone(),
+                policy: permission.policy.clone(),
+                domain: permission.domain.clone(),
+            };
+            if !enrollment.is_owned_by(authority, host) {
+                return Err(ValidationFail::NotPermitted(
+                    "Current authority does not hold the exact account-domain sponsor enrollment permission"
+                        .to_owned(),
+                ));
+            }
         }
         if require_current_domain_binding
             && !beneficiary_is_bound_to_account_domain(
@@ -1041,24 +1089,44 @@ mod sccp {
 
 mod offline {
     //! Pass conditions for governed offline-settlement releases.
-    use iroha_executor_data_model::permission::offline::CanActivateKagemushaRecursiveReleaseV4;
+    use iroha_executor_data_model::permission::offline::{
+        CanActivateKagemushaRecursiveReleaseV4, CanManageOfflineDeviceAttestationPolicy,
+        CanManageOfflineEscrow,
+    };
 
     use super::*;
 
-    impl ValidateGrantRevoke for CanActivateKagemushaRecursiveReleaseV4 {
-        fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
-            OnlyGenesis::from(self).validate(authority, host, context)
-        }
+    macro_rules! impl_genesis_only_offline_permission {
+        ($($permission:ty),+ $(,)?) => {
+            $(
+                impl ValidateGrantRevoke for $permission {
+                    fn validate_grant(
+                        &self,
+                        authority: &AccountId,
+                        context: &Context,
+                        host: &Iroha,
+                    ) -> Result {
+                        OnlyGenesis::from(self).validate(authority, host, context)
+                    }
 
-        fn validate_revoke(
-            &self,
-            authority: &AccountId,
-            context: &Context,
-            host: &Iroha,
-        ) -> Result {
-            OnlyGenesis::from(self).validate(authority, host, context)
+                    fn validate_revoke(
+                        &self,
+                        authority: &AccountId,
+                        context: &Context,
+                        host: &Iroha,
+                    ) -> Result {
+                        OnlyGenesis::from(self).validate(authority, host, context)
+                    }
+                }
+            )+
         }
     }
+
+    impl_genesis_only_offline_permission!(
+        CanManageOfflineEscrow,
+        CanActivateKagemushaRecursiveReleaseV4,
+        CanManageOfflineDeviceAttestationPolicy,
+    );
 }
 
 pub mod asset {
@@ -2178,7 +2246,10 @@ mod tests {
     use std::{num::NonZeroU64, vec::Vec};
 
     use iroha_crypto::{Hash, PublicKey};
-    use iroha_executor_data_model::permission::offline::CanActivateKagemushaRecursiveReleaseV4;
+    use iroha_executor_data_model::permission::offline::{
+        CanActivateKagemushaRecursiveReleaseV4, CanManageOfflineDeviceAttestationPolicy,
+        CanManageOfflineEscrow,
+    };
     use iroha_executor_data_model::permission::{
         account::{
             AccountAliasPermissionScope, CanDelegateAccountAliasResolution, CanResolveAccountAlias,
@@ -2186,15 +2257,16 @@ mod tests {
         asset::CanMintAssetWithDefinition,
         domain::CanRegisterDomain,
         nexus::{
-            CanEnrollFeeSponsorPolicyForAccountDomain, CanPublishSpaceDirectoryManifest,
-            CanPublishSpaceDirectoryManifestForAccountDomain,
+            CanEnrollFeeSponsorPolicyForAccountDomain, CanManageFeeSponsorPolicy,
+            CanPublishSpaceDirectoryManifest, CanPublishSpaceDirectoryManifestForAccountDomain,
             CanPublishSpaceDirectoryManifestForUaid, CanUseFeeSponsorForAccount,
         },
         peer::CanManagePeers,
+        query::CanReadRestrictedDataspace,
     };
 
     use super::{
-        OnlyGenesis, PassCondition, ValidateGrantRevoke, has_permission_in_roles,
+        AnyPermission, OnlyGenesis, PassCondition, ValidateGrantRevoke, has_permission_in_roles,
         permission_owned_in_sources,
     };
     use crate::permission::test_override;
@@ -2371,48 +2443,135 @@ mod tests {
     }
 
     #[test]
-    fn kagemusha_v4_activation_permission_is_immutable_after_genesis() {
+    fn governed_offline_permissions_are_immutable_after_genesis() {
         let banking_authority = make_account_id();
-        let fi_mobile_or_validator_destination = make_third_account_id();
-        assert_ne!(banking_authority, fi_mobile_or_validator_destination);
         let context = make_context(&banking_authority, 2);
-        let permission = CanActivateKagemushaRecursiveReleaseV4;
-        let previous = test_override::replace_permissions(vec![PermissionObject::from(permission)]);
+        let results = [
+            (
+                "CanManageOfflineEscrow",
+                CanManageOfflineEscrow.validate_grant(&banking_authority, &context, &Iroha),
+                CanManageOfflineEscrow.validate_revoke(&banking_authority, &context, &Iroha),
+            ),
+            (
+                "CanActivateKagemushaRecursiveReleaseV4",
+                CanActivateKagemushaRecursiveReleaseV4.validate_grant(
+                    &banking_authority,
+                    &context,
+                    &Iroha,
+                ),
+                CanActivateKagemushaRecursiveReleaseV4.validate_revoke(
+                    &banking_authority,
+                    &context,
+                    &Iroha,
+                ),
+            ),
+            (
+                "CanManageOfflineDeviceAttestationPolicy",
+                CanManageOfflineDeviceAttestationPolicy.validate_grant(
+                    &banking_authority,
+                    &context,
+                    &Iroha,
+                ),
+                CanManageOfflineDeviceAttestationPolicy.validate_revoke(
+                    &banking_authority,
+                    &context,
+                    &Iroha,
+                ),
+            ),
+        ];
 
-        let self_delegation = permission.validate_grant(&banking_authority, &context, &Iroha);
-        let grant_to_third_party = permission.validate_grant(&banking_authority, &context, &Iroha);
-        let revoke_from_banking = permission.validate_revoke(&banking_authority, &context, &Iroha);
-
-        test_override::replace_permissions(previous);
-        for result in [self_delegation, grant_to_third_party, revoke_from_banking] {
-            let error = result.expect_err(
-                "the genesis-seeded activation permission must not be mutated post-genesis",
-            );
-            assert!(matches!(error, ValidationFail::NotPermitted(_)));
-            assert!(
-                error
-                    .to_string()
-                    .contains("only allowed inside the genesis block")
-            );
+        for (name, grant, revoke) in results {
+            for result in [grant, revoke] {
+                let error = result.expect_err(
+                    "a genesis-seeded offline permission must not be mutated post-genesis",
+                );
+                assert!(matches!(error, ValidationFail::NotPermitted(_)));
+                assert!(
+                    error
+                        .to_string()
+                        .contains("only allowed inside the genesis block"),
+                    "unexpected {name} mutation rejection: {error}",
+                );
+            }
         }
     }
 
     #[test]
-    fn kagemusha_v4_activation_permission_can_only_be_seeded_in_genesis() {
+    fn governed_offline_permissions_can_only_be_seeded_in_genesis() {
         let genesis_authority = make_account_id();
         let context = make_context(&genesis_authority, 1);
-        let permission = CanActivateKagemushaRecursiveReleaseV4;
 
+        let results = [
+            (
+                "CanManageOfflineEscrow",
+                CanManageOfflineEscrow.validate_grant(&genesis_authority, &context, &Iroha),
+                CanManageOfflineEscrow.validate_revoke(&genesis_authority, &context, &Iroha),
+            ),
+            (
+                "CanActivateKagemushaRecursiveReleaseV4",
+                CanActivateKagemushaRecursiveReleaseV4.validate_grant(
+                    &genesis_authority,
+                    &context,
+                    &Iroha,
+                ),
+                CanActivateKagemushaRecursiveReleaseV4.validate_revoke(
+                    &genesis_authority,
+                    &context,
+                    &Iroha,
+                ),
+            ),
+            (
+                "CanManageOfflineDeviceAttestationPolicy",
+                CanManageOfflineDeviceAttestationPolicy.validate_grant(
+                    &genesis_authority,
+                    &context,
+                    &Iroha,
+                ),
+                CanManageOfflineDeviceAttestationPolicy.validate_revoke(
+                    &genesis_authority,
+                    &context,
+                    &Iroha,
+                ),
+            ),
+        ];
+        for (name, grant, revoke) in results {
+            assert!(grant.is_ok(), "genesis must grant {name}: {grant:?}");
+            assert!(revoke.is_ok(), "genesis must revoke {name}: {revoke:?}");
+        }
+    }
+
+    #[test]
+    fn fee_sponsor_policy_manager_is_typed_and_only_the_sponsor_may_delegate_it() {
+        let sponsor = make_account_id();
+        let outsider = make_other_account_id();
+        let context = make_context(&sponsor, 2);
+        let permission = CanManageFeeSponsorPolicy {
+            sponsor: sponsor.clone(),
+        };
+        let raw: PermissionObject = permission.clone().into();
+
+        assert!(matches!(
+            AnyPermission::try_from(&raw),
+            Ok(AnyPermission::CanManageFeeSponsorPolicy(parsed)) if parsed == permission
+        ));
         assert!(
             permission
-                .validate_grant(&genesis_authority, &context, &Iroha)
+                .validate_grant(&sponsor, &context, &Iroha)
                 .is_ok()
         );
         assert!(
             permission
-                .validate_revoke(&genesis_authority, &context, &Iroha)
+                .validate_revoke(&sponsor, &context, &Iroha)
                 .is_ok()
         );
+        assert!(matches!(
+            permission.validate_grant(&outsider, &context, &Iroha),
+            Err(ValidationFail::NotPermitted(_))
+        ));
+        assert!(matches!(
+            permission.validate_revoke(&outsider, &context, &Iroha),
+            Err(ValidationFail::NotPermitted(_))
+        ));
     }
 
     #[test]
@@ -2447,6 +2606,43 @@ mod tests {
             recursive_delegation,
             Err(ValidationFail::NotPermitted(_))
         ));
+    }
+
+    #[test]
+    fn restricted_dataspace_reader_cannot_grant_or_revoke_after_genesis() {
+        let authority = make_account_id();
+        let post_genesis = make_context(&authority, 2);
+        let exact = CanReadRestrictedDataspace {
+            dataspace: DataSpaceId::new(10),
+        };
+        let permission = PermissionObject::from(exact);
+        let role_dispatched =
+            AnyPermission::try_from(&permission).expect("restricted-read permission must be typed");
+        let previous = test_override::replace_permissions(vec![permission]);
+
+        let denied = [
+            exact.validate_grant(&authority, &post_genesis, &Iroha),
+            exact.validate_revoke(&authority, &post_genesis, &Iroha),
+            role_dispatched.validate_grant(&authority, &post_genesis, &Iroha),
+            role_dispatched.validate_revoke(&authority, &post_genesis, &Iroha),
+        ];
+
+        test_override::replace_permissions(previous);
+        for result in denied {
+            let error = result
+                .expect_err("a restricted reader must not mutate the exact token after genesis");
+            assert!(matches!(error, ValidationFail::NotPermitted(_)));
+            assert!(
+                error
+                    .to_string()
+                    .contains("only allowed inside the genesis block"),
+                "unexpected restricted-read mutation rejection: {error}",
+            );
+        }
+
+        let genesis = make_context(&authority, 1);
+        assert!(exact.validate_grant(&authority, &genesis, &Iroha).is_ok());
+        assert!(exact.validate_revoke(&authority, &genesis, &Iroha).is_ok());
     }
 
     #[test]
@@ -2658,19 +2854,30 @@ mod tests {
     }
 
     #[test]
-    fn sponsor_can_directly_grant_and_revoke_exact_account_token() {
+    fn sponsor_grant_requires_live_binding_but_revoke_allows_offboarding() {
         let sponsor = make_account_id();
         let beneficiary = make_third_account_id();
         let context = make_context(&sponsor, 2);
+        let domain = DomainId::try_new("hbl", "sbp").expect("HBL account domain");
         let exact = CanUseFeeSponsorForAccount {
             sponsor: sponsor.clone(),
             policy: "retail".parse().expect("retail policy"),
-            beneficiary,
-            domain: DomainId::try_new("hbl", "sbp").expect("HBL account domain"),
+            beneficiary: beneficiary.clone(),
+            domain: domain.clone(),
         };
+        let previous_bindings =
+            test_override::replace_account_domain_bindings(Some(vec![(beneficiary, domain)]));
 
         assert!(exact.validate_grant(&sponsor, &context, &Iroha).is_ok());
+
+        test_override::replace_account_domain_bindings(Some(Vec::new()));
+        assert!(matches!(
+            exact.validate_grant(&sponsor, &context, &Iroha),
+            Err(ValidationFail::NotPermitted(_))
+        ));
         assert!(exact.validate_revoke(&sponsor, &context, &Iroha).is_ok());
+
+        test_override::replace_account_domain_bindings(previous_bindings);
     }
 
     #[test]

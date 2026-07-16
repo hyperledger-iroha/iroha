@@ -2651,8 +2651,9 @@ mod measured_bytes_impls {
     use iroha_data_model::{
         account::{
             AccountAlias, AccountController, AccountDetails, AccountId, AccountRecoveryPolicy,
-            AccountRecoveryRequest, AccountRecoveryStatus, AccountRekeyRecord, MultisigMember,
-            MultisigPolicy, OpaqueAccountId, RecoveryGuardian, rekey::AccountAliasDomain,
+            AccountRecoveryRequest, AccountRecoveryStatus, AccountRekeyRecord,
+            AccountRekeyTransitionProvenance, MultisigMember, MultisigPolicy, OpaqueAccountId,
+            RecoveryGuardian, rekey::AccountAliasDomain,
         },
         asset::{
             AssetDefinition, AssetDefinitionId, AssetId,
@@ -2773,6 +2774,7 @@ mod measured_bytes_impls {
         i128,
         isize,
         AbiVersion,
+        AccountRekeyTransitionProvenance,
         BackendTag,
         BridgeHashFunction,
         BridgeNativeProofBackendV1,
@@ -3209,7 +3211,9 @@ mod measured_bytes_impls {
             let mut total = size_of::<AccountRekeyRecord>();
             total = total.saturating_add(self.label.measured_bytes_extra());
             total = total.saturating_add(self.active_signatory.measured_bytes_extra());
+            total = total.saturating_add(self.previous_account_ids.measured_bytes_extra());
             total = total.saturating_add(self.previous_signatories.measured_bytes_extra());
+            total = total.saturating_add(self.transition_provenance.measured_bytes_extra());
             total
         }
     }
