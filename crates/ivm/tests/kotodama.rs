@@ -3,7 +3,10 @@
 use std::convert::TryInto;
 
 use iroha_crypto as _;
-use iroha_data_model::nexus::{DataSpaceId, LaneId};
+use iroha_data_model::{
+    nexus::{DataSpaceId, LaneId},
+    prelude::Quantity,
+};
 use ivm::{
     ProgramMetadata, axt, encoding, instruction,
     kotodama::{
@@ -2746,7 +2749,7 @@ fn raw_axt_intrinsics_are_rejected() {
             origin_dsid: Some(dsid),
         },
         budget: axt::HandleBudget {
-            remaining: 10,
+            remaining: Quantity::from(10_u64),
             per_use: None,
         },
         handle_era: 1,

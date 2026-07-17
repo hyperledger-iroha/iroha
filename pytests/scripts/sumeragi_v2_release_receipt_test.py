@@ -18,6 +18,49 @@ FINAL_MARKER = (
     "Sumeragi v2 formal gate passed: source-bound TLAPS, adversarial scheduler "
     "mutations, bounded TLC, trace replay, and production Verus"
 )
+CHAOS_MARKER = (
+    "SUMERAGI_V2_CHAOS_COMPLETED permissioned_heights=50000 "
+    "npos_heights=50000 total_heights=100000 supplied_commit_qcs=100000 "
+    "supplied_tcs=75000 finalized_validators=400000 wal_append_restarts=314 "
+    "fetch_restarts=312 store_restarts=312 validation_restarts=312 "
+    "application_restarts=312 stale_generation_rejections=1562 "
+    "deferred_fetch_completions=400936 deferred_store_completions=400624 "
+    "deferred_validation_completions=400312 "
+    "deferred_application_completions=400000 duplicate_commit_qcs=3124 "
+    "reordered_commit_batches=75000 reordered_tc_batches=75000 "
+    "insufficient_dual_qcs=1030 count_only_qcs=515 power_only_qcs=515 "
+    "restart_interval=64 duplicate_interval=32 under_quorum_interval=97 "
+    "certificate_source=external_fixture"
+)
+CHAOS_FIELDS = {
+    "schema_version": "2",
+    "permissioned_heights": "50000",
+    "npos_heights": "50000",
+    "completed_heights": "100000",
+    "supplied_commit_qcs": "100000",
+    "supplied_tcs": "75000",
+    "finalized_validators": "400000",
+    "wal_append_restarts": "314",
+    "fetch_restarts": "312",
+    "store_restarts": "312",
+    "validation_restarts": "312",
+    "application_restarts": "312",
+    "stale_generation_rejections": "1562",
+    "deferred_fetch_completions": "400936",
+    "deferred_store_completions": "400624",
+    "deferred_validation_completions": "400312",
+    "deferred_application_completions": "400000",
+    "duplicate_commit_qcs": "3124",
+    "reordered_commit_batches": "75000",
+    "reordered_tc_batches": "75000",
+    "insufficient_dual_qcs": "1030",
+    "count_only_qcs": "515",
+    "power_only_qcs": "515",
+    "restart_interval": "64",
+    "duplicate_interval": "32",
+    "under_quorum_interval": "97",
+    "certificate_source": "external_fixture",
+}
 SCENARIOS = (
     "authoritative_v2_genesis_commits_on_every_validator",
     "authoritative_v2_finalizes_through_validator_restart",
@@ -356,10 +399,8 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
         "\n".join(
             (
                 "running 1 test",
-                "test accelerated_100_000_block_chaos_preserves_chain_prefix ... "
-                "SUMERAGI_V2_CHAOS_COMPLETED permissioned_heights=50000 "
-                "npos_heights=50000 total_heights=100000",
-                "ok",
+                CHAOS_MARKER,
+                "test accelerated_100_000_block_chaos_preserves_chain_prefix ... ok",
                 "",
                 "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; "
                 "9 filtered out; finished in 0.01s",
@@ -372,14 +413,11 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
     write_tsv(
         chaos_completion,
         {
-            "schema_version": "1",
+            **CHAOS_FIELDS,
             "head_commit": head,
             "head_tree": tree,
             "source_manifest_sha256": sealed_manifest,
             "cargo_lock_sha256": lock,
-            "permissioned_heights": "50000",
-            "npos_heights": "50000",
-            "completed_heights": "100000",
             "log_sha256": sha256(chaos_log),
         },
     )
@@ -536,6 +574,41 @@ def test_receipt_hashes_every_formal_matrix_chaos_and_soak_artifact(
         {"path": str(path.resolve()), "sha256": sha256(path)}
         for path in corridor_logs
     ]
+
+
+def test_receipt_accepts_transcript_published_by_chaos_launcher(
+    tmp_path: Path,
+) -> None:
+    release_root = tmp_path / "release"
+    release_root.mkdir()
+    evidence = make_evidence(release_root)
+    chaos_symbols = runpy.run_path(
+        str(ROOT_DIR / "pytests" / "scripts" / "sumeragi_v2_chaos_release_test.py")
+    )
+    launcher_root = tmp_path / "launcher"
+    launcher_root.mkdir()
+    launcher, env, chaos_evidence = chaos_symbols["_fixture"](
+        launcher_root,
+        manifest=evidence["sealed_manifest"],
+        head=evidence["head"],
+        tree=evidence["tree"],
+        lock=evidence["lock"],
+    )
+
+    launch_result = chaos_symbols["_run"](launcher, env)
+
+    assert launch_result.returncode == 0, launch_result.stderr
+    invocations = list(chaos_evidence.glob("invocation.*"))
+    assert len(invocations) == 1
+    evidence["chaos_completion"] = invocations[0] / "COMPLETED.tsv"
+    evidence["chaos_log"] = invocations[0] / "chaos-100k.log"
+    writer = fixture_writer(tmp_path / "writer")
+    output = tmp_path / "receipt" / "RELEASE_COMPLETED.json"
+
+    receipt_result = run_writer(evidence, output, writer)
+
+    assert receipt_result.returncode == 0, receipt_result.stderr
+    assert json.loads(output.read_text(encoding="utf-8"))["result"] == "release-complete"
 
 
 @pytest.mark.parametrize(
@@ -873,6 +946,56 @@ def test_receipt_rejects_rehashed_chaos_log_without_required_semantics(
 
     assert result.returncode == 1
     assert "does not prove its one exact passing release test" in result.stderr
+
+    duplicate_root = tmp_path / "duplicate-marker"
+    duplicate_root.mkdir()
+    duplicate_evidence = make_evidence(duplicate_root)
+    duplicate_writer = fixture_writer(duplicate_root)
+    duplicate_log = duplicate_evidence["chaos_log"]
+    duplicate_completion = duplicate_evidence["chaos_completion"]
+    assert isinstance(duplicate_log, Path)
+    assert isinstance(duplicate_completion, Path)
+    duplicate_log.write_text(
+        duplicate_log.read_text(encoding="utf-8") + CHAOS_MARKER + "\n",
+        encoding="utf-8",
+    )
+    duplicate_fields = dict(
+        line.split("\t", 1)
+        for line in duplicate_completion.read_text(encoding="utf-8").splitlines()
+    )
+    duplicate_fields["log_sha256"] = sha256(duplicate_log)
+    write_tsv(duplicate_completion, duplicate_fields)
+
+    duplicate_result = run_writer(
+        duplicate_evidence, duplicate_root / "receipt.json", duplicate_writer
+    )
+
+    assert duplicate_result.returncode == 1
+    assert "does not prove its one exact passing release test" in (
+        duplicate_result.stderr
+    )
+
+    counter_root = tmp_path / "wrong-counter"
+    counter_root.mkdir()
+    counter_evidence = make_evidence(counter_root)
+    counter_writer = fixture_writer(counter_root)
+    counter_completion = counter_evidence["chaos_completion"]
+    assert isinstance(counter_completion, Path)
+    counter_fields = dict(
+        line.split("\t", 1)
+        for line in counter_completion.read_text(encoding="utf-8").splitlines()
+    )
+    counter_fields["wal_append_restarts"] = "315"
+    write_tsv(counter_completion, counter_fields)
+
+    counter_result = run_writer(
+        counter_evidence, counter_root / "receipt.json", counter_writer
+    )
+
+    assert counter_result.returncode == 1
+    assert "does not match the exact release identity and reducer schedule" in (
+        counter_result.stderr
+    )
 
 
 def test_receipt_rejects_seed_summary_row_with_extra_column(tmp_path: Path) -> None:

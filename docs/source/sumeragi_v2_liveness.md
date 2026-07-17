@@ -443,9 +443,17 @@ macOS stub; the selected canonical binary remains hash-bound in release
 evidence.
 A standalone focused 100,000-height permissioned/NPoS chaos run preserved
 both 50,000-height chain prefixes in 52.97 seconds; the release profile must
-still reproduce it under the checkout-manifest-bound evidence root. The fully
-pinned 24-hour Taira-profile soak also remains outstanding. The complete PR
-corridor is not claimed green here until its source-bound run finishes.
+still reproduce it under the checkout-manifest-bound evidence root. The gate
+now additionally queues local adapter work and rotates deterministic restart at
+the Decision-WAL, body-fetch, body-store, validation, and application
+boundaries, rejecting each old-generation completion. Because that expansion
+postdates the older recorded run, fresh evidence was required. The expanded
+320-height smoke and exact schema-v2 100,000-height harness run are now green;
+the latter completed in 57.52 seconds and matched every pinned counter. The
+source-attested wrapper intentionally rejects the current dirty worktree, so
+checkout-manifest-bound evidence still requires a signed clean commit. The
+fully pinned 24-hour Taira-profile soak also remains outstanding. The complete
+PR corridor is not claimed green here until its source-bound run finishes.
 
 ## Deterministic and production gates
 
@@ -605,11 +613,14 @@ ledger checker again, so a hand-written JSON object claiming
 
 The chaos runner requires the sealed clean identity before and after execution,
 accepts only the one exact ignored 100,000-height test, libtest summary, and
-explicit 50,000-per-mode completion marker, and atomically publishes a
-completion record containing HEAD, tree, sealed source manifest, `Cargo.lock`,
-both mode counts, completed height count, and the full log SHA-256. This is an
-accelerated production-reducer chain-prefix test with externally supplied valid
-certificates and synchronous local work, not a real-network fault campaign.
+explicit schema-v2 50,000-per-mode completion marker. The marker and atomic
+completion record bind the exact restart, duplicate, under-quorum, reordered
+delivery, deferred-work, and stale-generation counters as well as HEAD, tree,
+sealed source manifest, `Cargo.lock`, both mode counts, completed height count,
+and the full log SHA-256. This is an accelerated production-reducer
+chain-prefix test with externally supplied valid certificates and a finite
+deterministic local scheduler, not a real-network quorum-formation or partition
+campaign.
 
 The production soak runner clears inherited daemon/Kagami overrides, pins
 release-profile binaries, `CARGO_NET_OFFLINE=true`, and `RUST_LOG=info`, and

@@ -519,11 +519,6 @@ ResponsiveReplayDraining(node) ==
 ResponsiveReplayExecutorAllowed(node) ==
   ~ResponsiveReplayQuarantined(node) \/ ResponsiveReplayDraining(node)
 
-ResponsiveReplayScheduledCandidates(node) ==
-  {candidate \in QueuedCandidates \cup DeferredCandidates
-                    \cup CausalCandidates \cup TrackedWorkCandidates:
-     candidate.node = node}
-
 HeldChunksFor(node, roundView, subject) ==
   {receipt.chunk:
      receipt \in {entry \in asyncHeldChunks:
@@ -641,6 +636,11 @@ CausalCandidates ==
 
 TrackedWorkCandidates ==
   UNION {asyncOutstandingWork[node]: node \in ValidatorIds}
+
+ResponsiveReplayScheduledCandidates(node) ==
+  {candidate \in QueuedCandidates \cup DeferredCandidates
+                    \cup CausalCandidates \cup TrackedWorkCandidates:
+     candidate.node = node}
 
 CandidateScheduled(candidate) ==
   candidate \in QueuedCandidates \cup DeferredCandidates \cup CausalCandidates
@@ -3037,6 +3037,14 @@ ResponsiveReplayRunNode ==
   IN /\ ~gst
      /\ ResponsiveReplayDraining(node)
      /\ RunNode(node)
+     /\ UNCHANGED <<up, AsyncRecoveryVars>>
+
+ResponsiveReplayServiceIoWorker ==
+  LET node == asyncRecoveryNode
+  IN /\ ~gst
+     /\ ResponsiveReplayDraining(node)
+     /\ ServiceIoWorker(node)
+     /\ UNCHANGED <<up, AsyncRecoveryVars>>
 
 HistoricalIdleStep ==
   /\ UNCHANGED <<vars, asyncCommandQueues, asyncNextCommandClass,
@@ -3100,6 +3108,23 @@ RestartLockedCommitIntents(node) ==
      /\ vote.phase = "Commit"
      /\ vote.view = lockRank[node]
      /\ vote.subject = lockSubject[node]}
+
+ReplayCommitIntentReady(node, vote) ==
+  \/ VoteSign(node, vote) \in signVotes
+  \/ \E item \in asyncRetainedControl:
+       /\ item.kind = "CommitVote"
+       /\ item.source = node
+       /\ item.envelope.vote = vote
+  \/ VoteAt(node, vote) \in receivedVotes
+  \/ \E qc \in commitQCs:
+       /\ qc.context = vote.context
+       /\ qc.view = vote.view
+       /\ qc.subject = vote.subject
+  \/ NodeHasDecision(node)
+
+ReplayCommitSourcesReady(node) ==
+  \A vote \in RestartLockedCommitIntents(node):
+    ReplayCommitIntentReady(node, vote)
 
 RestartTimeoutIntents(node) ==
   {vote \in timeoutIntents:
@@ -3461,6 +3486,7 @@ FinishResponsiveReplay ==
      /\ node \in Responsive \cap up
      /\ generation[node] = asyncRecoveryGeneration
      /\ NodeIdle(node)
+     /\ ReplayCommitSourcesReady(node)
      /\ UNCHANGED vars
      /\ asyncCausalQueues' =
           IF Len(runner) = 0
@@ -3500,9 +3526,11 @@ Validation receipts and chunk sessions are deliberately outside the durable
 restart frontier in this abstraction.  A durable Prepare/Commit intent is the
 post-validation WAL witness consumed by ResumeVote, while chunk assembly is
 process-local and is reconstructed through the ordinary body-fetch/validation
-pipeline.  Likewise, a durable Decision is the completed Kura boundary here;
-physical fsync sub-stages belong to the implementation/refinement trace, not
-to a second consensus replay owner in this module.
+pipeline.  A durable Decision is only the completed Decision-WAL frame here;
+body recovery, store, validation, application, and successor activation remain
+separate modeled stages.  The write/flush/fsync sub-stages before WAL
+acknowledgement belong to the implementation/refinement trace, not to a second
+consensus replay owner in this module.
 ***************************************************************************)
 
 InjectByzantineNoise(source, recipient, nonce) ==
@@ -3750,8 +3778,11 @@ AsyncFairnessAt(initialContext) ==
   /\ WF_AsyncAllVars(PreGstResponsiveRestart)
   /\ WF_AsyncAllVars(PreGstResponsiveReplay)
   \* Signature replay executes through the ordinary serialized node runner
-  \* before the next durable intent may be installed in Core.
+  \* and completion I/O worker before the next durable intent may be installed
+  \* in Core.  GST remains disabled until that replay corridor drains, so its
+  \* I/O worker needs replay-scoped fairness independent of post-GST fairness.
   /\ WF_AsyncAllVars(ResponsiveReplayRunNode)
+  /\ WF_AsyncAllVars(ResponsiveReplayServiceIoWorker)
   /\ WF_AsyncAllVars(DriveResponsiveReplayHead)
   /\ WF_AsyncAllVars(FinishResponsiveReplay)
   /\ WF_AsyncAllVars(AsyncTick)

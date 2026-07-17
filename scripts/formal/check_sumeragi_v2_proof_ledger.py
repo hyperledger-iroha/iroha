@@ -2082,12 +2082,85 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
         ),
         "AsyncSetGST": (
             '/\\ ~gst '
-            '/\\ asyncRecoveryPhase \\notin {"RestartRequired", "ReplayRequired"} '
+            '/\\ asyncRecoveryPhase \\notin '
+            '{"RestartRequired", "ReplayRequired", "Replaying"} '
             "/\\ Responsive \\subseteq up /\\ SetGST "
             "/\\ UNCHANGED <<AsyncSchedulerVars, AsyncRecoveryVars>>"
         ),
         "AsyncRecoveryVars": (
+            "<<asyncRecoveryPhase, asyncRecoveryNode, asyncRecoveryGeneration, "
+            "asyncRecoveryReplayQueue>>"
+        ),
+        "AsyncRecoveryLifecycleVars": (
             "<<asyncRecoveryPhase, asyncRecoveryNode, asyncRecoveryGeneration>>"
+        ),
+        "AsyncRecoveryPhases": (
+            '{"Eligible", "RestartRequired", "ReplayRequired", "Replaying", '
+            '"Recovered"}'
+        ),
+        "ResponsiveReplayQuarantined": (
+            '/\\ node = asyncRecoveryNode /\\ asyncRecoveryPhase \\in '
+            '{"ReplayRequired", "Replaying"}'
+        ),
+        "ResponsiveReplayDraining": (
+            'node = asyncRecoveryNode /\\ asyncRecoveryPhase = "Replaying"'
+        ),
+        "ResponsiveReplayExecutorAllowed": (
+            "~ResponsiveReplayQuarantined(node) \\/ "
+            "ResponsiveReplayDraining(node)"
+        ),
+        "ResponsiveReplayServiceIoWorker": (
+            "LET node == asyncRecoveryNode IN /\\ ~gst "
+            "/\\ ResponsiveReplayDraining(node) "
+            "/\\ ServiceIoWorker(node) "
+            "/\\ UNCHANGED <<up, AsyncRecoveryVars>>"
+        ),
+        "ReplayCommitIntentReady": (
+            "\\/ VoteSign(node, vote) \\in signVotes "
+            "\\/ \\E item \\in asyncRetainedControl: "
+            '/\\ item.kind = "CommitVote" '
+            "/\\ item.source = node /\\ item.envelope.vote = vote "
+            "\\/ VoteAt(node, vote) \\in receivedVotes "
+            "\\/ \\E qc \\in commitQCs: "
+            "/\\ qc.context = vote.context /\\ qc.view = vote.view "
+            "/\\ qc.subject = vote.subject \\/ NodeHasDecision(node)"
+        ),
+        "ReplayCommitSourcesReady": (
+            "\\A vote \\in RestartLockedCommitIntents(node): "
+            "ReplayCommitIntentReady(node, vote)"
+        ),
+        "RestartTimeoutOrProposalReplay": (
+            "IF RestartTimeoutIntents(node) # {} "
+            "THEN RestartTimeoutReplay(node) "
+            "ELSE IF RestartProposalIntents(node) # {} "
+            "THEN RestartProposalReplay(node) ELSE <<>>"
+        ),
+        "RestartPrepareReplayIfActive": (
+            "IF RestartPrepareIntents(node) # {} "
+            "THEN RestartPrepareReplay(node) ELSE <<>>"
+        ),
+        "RestartLockedCommitReplayIfActive": (
+            "IF RestartLockedCommitIntents(node) # {} "
+            "THEN RestartLockedCommitReplay(node) ELSE <<>>"
+        ),
+        "RestartSignatureReplay": (
+            "IF NodeHasApplication(node) \\/ RestartDecisions(node) # {} "
+            "THEN <<>> ELSE RestartTimeoutOrProposalReplay(node) "
+            "\\o RestartPrepareReplayIfActive(node) "
+            "\\o RestartLockedCommitReplayIfActive(node)"
+        ),
+        "RestartReplay": (
+            "IF NodeHasApplication(node) THEN <<>> "
+            "ELSE IF RestartDecisions(node) # {} "
+            "THEN RestartDecisionReplay(node) "
+            "ELSE LET signatures == RestartSignatureReplay(node) "
+            "IN IF Len(signatures) > 0 THEN <<Head(signatures)>> "
+            "ELSE RestartRunnerAssembly(node)"
+        ),
+        "AsyncRestartAuthorityInvariant": (
+            "asyncRecoveryPhase \\in "
+            '{"RestartRequired", "ReplayRequired", "Replaying"} '
+            "=> generation[asyncRecoveryNode] = asyncRecoveryGeneration"
         ),
         "AsyncAllVars": "<<vars, AsyncSchedulerVars, AsyncRecoveryVars>>",
         "RetainedControlEmissionItems": (
@@ -2166,6 +2239,7 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
         "CommandExecutionEnabled": (
             "\\E selectedCommand \\in {command}: "
             "\\/ ENABLED ExecuteRegularCommand(selectedCommand) "
+            "\\/ ENABLED ExecuteDecisionFetch(selectedCommand) "
             "\\/ ENABLED ExecuteSignProposal(selectedCommand) "
             "\\/ ENABLED ExecuteSignVote(selectedCommand) "
             "\\/ ENABLED ExecuteFormPrepareQC(selectedCommand) "
@@ -2447,6 +2521,58 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
                 f"missing={missing}, unexpected={unexpected}, "
                 f"duplicate_labels={len(case_labels) - len(actual_successor_parents)}"
             )
+        fetch_branch = re.search(
+            r'\[\] command\.kind = "FetchBody"\s*->(?P<body>.*?)'
+            r'(?=\n\s*\[\] command\.kind = "RebindRetainedBody")',
+            successor_body,
+            re.DOTALL,
+        )
+        expected_fetch_branch = (
+            "IF DecisionFetchFrontier(command) "
+            "THEN IF BodyHeldBy(durableBodies, command.node, context, "
+            "command.view, command.subject) "
+            'THEN <<CausalCandidate("Completion", "ValidateBody", command)>> '
+            "ELSE <<>> "
+            'ELSE <<CausalCandidate("Completion", "StoreBody", command)>>'
+        )
+        if fetch_branch is None:
+            errors.append(
+                f"{path}:{successor_line}: CommandSuccessors is missing the "
+                "Decision FetchBody frontier"
+            )
+        else:
+            fetch_normalized = " ".join(fetch_branch.group("body").split())
+            if fetch_normalized != expected_fetch_branch:
+                errors.append(
+                    f"{path}:{successor_line}: FetchBody successors must equal "
+                    "only the durable-body Validate frontier, certified-request "
+                    "wait, or ordinary StoreBody frontier; found "
+                    f"{fetch_normalized!r}"
+                )
+        persist_decision_branch = re.search(
+            r'\[\] command\.kind = "PersistDecision"\s*->(?P<body>.*?)'
+            r'(?=\n\s*\[\] command\.kind = "BeginTimeout")',
+            successor_body,
+            re.DOTALL,
+        )
+        expected_persist_decision_branch = (
+            '<<CausalCandidate("Completion", "FetchBody", command)>>'
+        )
+        if persist_decision_branch is None:
+            errors.append(
+                f"{path}:{successor_line}: CommandSuccessors is missing the "
+                "durable Decision FetchBody frontier"
+            )
+        else:
+            persist_decision_normalized = " ".join(
+                persist_decision_branch.group("body").split()
+            )
+            if persist_decision_normalized != expected_persist_decision_branch:
+                errors.append(
+                    f"{path}:{successor_line}: PersistDecision must schedule "
+                    "exactly one FetchBody frontier; found "
+                    f"{persist_decision_normalized!r}"
+                )
 
     liveness_path = formal_dir / "SumeragiV2LivenessProofs.tla"
     if liveness_path.is_file():
@@ -2475,10 +2601,77 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
                     f"equal only {expected!r}; found {normalized!r}"
                 )
 
+    async_liveness_path = formal_dir / "SumeragiV2AsyncLivenessProofs.tla"
+    if async_liveness_path.is_file():
+        async_liveness_source = async_liveness_path.read_text(encoding="utf-8")
+        restart_theorems = {
+            "RestartDecisionOwnsOneFetchFrontier": (
+                '\\A node: RestartDecisions(node) # {} => '
+                "/\\ Len(RestartDecisionReplay(node)) = 1 "
+                '/\\ RestartDecisionReplay(node)[1].kind = "FetchBody"'
+            ),
+            "RestartSignatureReplayExactOrder": (
+                "\\A node: RestartSignatureReplay(node) = "
+                "IF NodeHasApplication(node) \\/ RestartDecisions(node) # {} "
+                "THEN <<>> ELSE RestartTimeoutOrProposalReplay(node) "
+                "\\o RestartPrepareReplayIfActive(node) "
+                "\\o RestartLockedCommitReplayIfActive(node)"
+            ),
+            "AppliedRecoveryCannotScheduleSameHeightAssembly": (
+                "\\A node: NodeHasApplication(node) => "
+                "RestartRunnerAssembly(node) = <<>>"
+            ),
+            "AppliedRecoverySchedulesNoSameHeightWork": (
+                "\\A node: NodeHasApplication(node) => "
+                "RestartReplay(node) = <<>>"
+            ),
+            "RestartSignatureReplayProperties": (
+                "\\A node \\in ValidatorIds: TypeInvariant => "
+                "/\\ AsyncQueueTyped(RestartSignatureReplay(node)) "
+                "/\\ AsyncCausalQueueOwnership(node, "
+                "RestartSignatureReplay(node)) "
+                "/\\ SequenceHasUniqueValues(RestartSignatureReplay(node)) "
+                "/\\ Len(RestartSignatureReplay(node)) <= 3"
+            ),
+            "RestartReplayIsTypedOwnedAndUnique": (
+                "\\A node \\in ValidatorIds: StrongInductiveInvariant => "
+                "/\\ AsyncQueueTyped(RestartReplay(node)) "
+                "/\\ AsyncCausalQueueOwnership(node, RestartReplay(node)) "
+                "/\\ SequenceHasUniqueValues(RestartReplay(node)) "
+                "/\\ Len(RestartReplay(node)) <= 1"
+            ),
+        }
+        for symbol, expected_statement in restart_theorems.items():
+            extracted = _top_level_theorem_body(
+                async_liveness_source,
+                symbol,
+                preserve_string_contents=True,
+            )
+            if extracted is None:
+                errors.append(
+                    f"{async_liveness_path}: missing restart source-fidelity "
+                    f"theorem {symbol}"
+                )
+                continue
+            theorem_body, theorem_line = extracted
+            statement = re.split(
+                r"(?m)^[ \t]*(?:BY|PROOF|OBVIOUS)\b",
+                theorem_body,
+                maxsplit=1,
+            )[0]
+            normalized_statement = " ".join(statement.split())
+            if normalized_statement != expected_statement:
+                errors.append(
+                    f"{async_liveness_path}:{theorem_line}: {symbol} must "
+                    f"state only {expected_statement!r}; found "
+                    f"{normalized_statement!r}"
+                )
+
     required_body_tokens = {
         "ServiceIoWorker": (
             "asyncIoControlAvailable'",
             "EXCEPT ![node] = TRUE",
+            "ResponsiveReplayExecutorAllowed(node)",
             "CommitCertificateServeCanRespond",
             "CommitCertificateResponseItems",
         ),
@@ -2535,10 +2728,26 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             "DecisionQcValues",
             "ValidateDecidedBody(command.node, qc)",
         ),
-        "RunNode": ("~NodeHasApplication(node)",),
+        "RunNode": (
+            "~NodeHasApplication(node)",
+            "IF ResponsiveReplayQuarantined(node)",
+            "ResponsiveReplayDraining(node)",
+            "asyncIngressReady[node] = <<>>",
+            "LocalAdmissionStep(node)",
+            "IngressDrainStep(node)",
+            "SerializedRuntimeStep(node)",
+        ),
         "RunHistoricalServer": (
+            "~ResponsiveReplayQuarantined(node)",
             "NodeHasApplication(node)",
             "DrainHistoricalIngressSelected(node)",
+        ),
+        "ResponsiveReplayRunNode": (
+            "node == asyncRecoveryNode",
+            "~gst",
+            "ResponsiveReplayDraining(node)",
+            "RunNode(node)",
+            "UNCHANGED <<up, AsyncRecoveryVars>>",
         ),
         "HistoricalIngressItemCanDrain": (
             'item.kind = "CertifiedRequest"',
@@ -2661,6 +2870,13 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             "node, candidate",
         ),
         "AsyncFairnessAt": (
+            "WF_AsyncAllVars(AsyncSetGST)",
+            "WF_AsyncAllVars(PreGstResponsiveRestart)",
+            "WF_AsyncAllVars(PreGstResponsiveReplay)",
+            "WF_AsyncAllVars(ResponsiveReplayRunNode)",
+            "WF_AsyncAllVars(ResponsiveReplayServiceIoWorker)",
+            "WF_AsyncAllVars(DriveResponsiveReplayHead)",
+            "WF_AsyncAllVars(FinishResponsiveReplay)",
             "PostGstRunNode(node)",
             "PostGstRunHistoricalServer(node)",
             "PostGstCommitCertificateDiscovery(node)",
@@ -2676,7 +2892,11 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             "InstallProposalSuccessor(command)",
         ),
         "CommandSuccessors": (
-            'CausalCandidate("Completion", "RequestCertifiedBody", command)',
+            'command.kind = "FetchBody"',
+            "DecisionFetchFrontier(command)",
+            "BodyHeldBy(durableBodies, command.node, context,",
+            'CausalCandidate("Completion", "ValidateBody", command)',
+            'CausalCandidate("Completion", "StoreBody", command)',
         ),
         "AsyncProgressOwnershipInvariant": (
             "AsyncLogicalCandidateOwnershipInvariant",
@@ -2694,6 +2914,239 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             "CausalCandidates",
             "TrackedWorkCandidates",
         ),
+        "ExecuteDecisionFetch": (
+            "DecisionFetchFrontier(command)",
+            "BodyHeldBy(durableBodies, command.node, context, command.view, command.subject)",
+            "THEN /\\ UNCHANGED vars /\\ UNCHANGED <<asyncSentItems, asyncRetainedControl, asyncActiveRequests, asyncTransport>>",
+            "decision.node = command.node",
+            "decision.qc.context = context",
+            "decision.qc.view = command.view",
+            "decision.qc.subject = command.subject",
+            'decision.qc.phase = "Commit"',
+            "PublishCertifiedRequests(",
+            "CertifiedRequestOutbox(command.node, decision.qc)",
+        ),
+        "ExecuteCommand": (
+            "ExecuteRegularCommand(command)",
+            "ExecuteDecisionFetch(command)",
+        ),
+        "RestartRunnerAssemblyEnabled": (
+            "node \\in Honest \\cap up \\cap CurrentVoters",
+            "node = Leader(context, nodeView[node])",
+            "~NodeHasApplication(node)",
+            "RestartDecisions(node) = {}",
+            "~NodeTimedOut(node, nodeView[node])",
+            "~BodyHeldBy(durableBodies, node, context, nodeView[node],",
+        ),
+        "RestartDecisions": (
+            "decision \\in decisions",
+            "decision.node = node",
+            "decision.qc.context = context",
+            'decision.qc.phase = "Commit"',
+            "[node |-> node, qc |-> decision.qc] \\notin applied",
+        ),
+        "RestartLockedCommitIntents": (
+            "vote \\in commitIntents",
+            "vote.context = context",
+            "vote.signer = node",
+            'vote.phase = "Commit"',
+            "vote.view = lockRank[node]",
+            "vote.subject = lockSubject[node]",
+        ),
+        "RestartTimeoutIntents": (
+            "vote \\in timeoutIntents",
+            "vote.context = context",
+            "vote.signer = node",
+            "vote.view = nodeView[node]",
+        ),
+        "RestartPrepareIntents": (
+            "vote \\in prepareIntents",
+            "vote.context = context",
+            "vote.signer = node",
+            'vote.phase = "Prepare"',
+            "vote.view = nodeView[node]",
+            "RestartTimeoutIntents(node) = {}",
+        ),
+        "RestartProposalIntents": (
+            "proposal \\in proposalIntents",
+            "proposal.context = context",
+            "proposal.proposer = node",
+            "proposal.view = nodeView[node]",
+            "RestartTimeoutIntents(node) = {}",
+        ),
+        "RestartDecisionReplay": (
+            'RestartCandidate("Completion", "FetchBody", node,',
+            "qc.view, qc.subject, qc)",
+        ),
+        "RestartLockedCommitReplay": (
+            'RestartCandidate("Completion", "SignVote", node,',
+            "vote.view, vote.subject, vote)",
+        ),
+        "RestartTimeoutReplay": (
+            'RestartCandidate("Completion", "SignTimeout", node,',
+            "vote.view, vote.highSubject, vote)",
+        ),
+        "RestartPrepareReplay": (
+            'RestartCandidate("Completion", "SignVote", node,',
+            "vote.view, vote.subject, vote)",
+        ),
+        "RestartProposalReplay": (
+            'RestartCandidate("Completion", "SignProposal", node,',
+            "proposal.view, proposal.subject, proposal)",
+        ),
+        "PreGstResponsiveCrash": (
+            'asyncRecoveryPhase = "Eligible"',
+            "node \\in Responsive \\cap up",
+            "generation[node] < MaxGeneration",
+            'asyncRecoveryPhase\' = "RestartRequired"',
+            "asyncRecoveryNode' = node",
+            "asyncRecoveryGeneration' = generation[node]",
+            "asyncRecoveryReplayQueue' = <<>>",
+            "UNCHANGED AsyncSchedulerVars",
+        ),
+        "PreGstResponsiveRestart": (
+            'asyncRecoveryPhase = "RestartRequired"',
+            "generation[node] = asyncRecoveryGeneration",
+            "Restart(node)",
+            "UNCHANGED AsyncSchedulerVars",
+            'asyncRecoveryPhase\' = "ReplayRequired"',
+            "asyncRecoveryGeneration' = generation[node] + 1",
+            "asyncRecoveryReplayQueue' = asyncRecoveryReplayQueue",
+        ),
+        "PreGstResponsiveReplay": (
+            "signatures == RestartSignatureReplay(node)",
+            "replay == RestartReplay(node)",
+            'asyncRecoveryPhase = "ReplayRequired"',
+            "NodeIdle(node)",
+            "IF Len(signatures) > 0 THEN RecoveryCoreReplay(node, Head(signatures)) ELSE UNCHANGED vars",
+            "ResetNodeSchedulerForRestart(node, replay)",
+            'IF Len(signatures) > 0 THEN "Replaying" ELSE "Recovered"',
+            "IF Len(signatures) > 0 THEN Tail(signatures) ELSE <<>>",
+        ),
+        "DriveResponsiveReplayHead": (
+            "candidate == Head(asyncRecoveryReplayQueue)",
+            'asyncRecoveryPhase = "Replaying"',
+            "Len(asyncRecoveryReplayQueue) > 0",
+            "NodeIdle(node)",
+            "RecoveryCoreReplay(node, candidate)",
+            "![node] = @ \\o FreshCandidateSequence(candidate)",
+            "asyncRecoveryReplayQueue' = Tail(asyncRecoveryReplayQueue)",
+            "UNCHANGED AsyncRecoveryLifecycleVars",
+        ),
+        "FinishResponsiveReplay": (
+            "runner == RestartRunnerAssembly(node)",
+            'asyncRecoveryPhase = "Replaying"',
+            "asyncRecoveryReplayQueue = <<>>",
+            "NodeIdle(node)",
+            "ReplayCommitSourcesReady(node)",
+            "FreshCandidateSequence(runner[1])",
+            'asyncRecoveryPhase\' = "Recovered"',
+            "asyncRecoveryReplayQueue' = <<>>",
+        ),
+        "RearmResponsiveRecovery": (
+            'asyncRecoveryPhase = "Recovered"',
+            "Responsive \\subseteq up",
+            "asyncRecoveryReplayQueue = <<>>",
+            'asyncRecoveryPhase\' = "Eligible"',
+            "asyncRecoveryNode' = 0",
+            "asyncRecoveryGeneration' = 0",
+            "asyncRecoveryReplayQueue' = <<>>",
+            "UNCHANGED <<vars, AsyncSchedulerVars>>",
+        ),
+        "AsyncNonCrashStep": (
+            "DriveResponsiveReplayHead",
+            "FinishResponsiveReplay",
+            "RearmResponsiveRecovery",
+        ),
+        "AsyncNext": (
+            "PreGstResponsiveCrash(node)",
+            "PreGstResponsiveRestart",
+            "PreGstResponsiveReplay",
+        ),
+        "AsyncRecoveryTypeInvariant": (
+            "asyncRecoveryPhase \\in AsyncRecoveryPhases",
+            "AsyncQueueTyped(asyncRecoveryReplayQueue)",
+            "Len(asyncRecoveryReplayQueue) <= 2",
+            'candidate.class = "Completion"',
+            'candidate.kind \\in {"SignProposal", "SignVote", "SignTimeout"}',
+            "candidate.node = asyncRecoveryNode",
+            "CandidateConsumerCurrent(candidate)",
+            "SequenceSet(RestartSignatureReplay(asyncRecoveryNode))",
+            'asyncRecoveryPhase # "Replaying" => asyncRecoveryReplayQueue = <<>>',
+            'asyncRecoveryPhase = "Replaying"',
+            "~NodeHasApplication(asyncRecoveryNode)",
+            "asyncIngressReady[asyncRecoveryNode] = <<>>",
+            "request.source # asyncRecoveryNode",
+            "ResponsiveReplayScheduledCandidates(asyncRecoveryNode)",
+        ),
+        "RestartHighestPrepareQCs": (
+            "highestRank[node] # NoRank",
+            "qc.context = context",
+            'qc.phase = "Prepare"',
+            "qc.view = highestRank[node]",
+            "qc.subject = highestSubject[node]",
+        ),
+        "RestartDecisionQCs": (
+            "decision.qc",
+            "entry \\in decisions",
+            "entry.node = node",
+            "entry.qc.context = context",
+        ),
+        "RestartLastInstalledTCs": (
+            "tc \\in RestartInstalledTCs(node)",
+            "other \\in RestartInstalledTCs(node)",
+            "other.view <= tc.view",
+        ),
+        "RestartHighestPrepareControl": (
+            "certificates == RestartHighestPrepareQCs(node)",
+            "IF certificates = {} THEN {}",
+            "QcOutbox(node, CHOOSE qc \\in certificates: TRUE)",
+        ),
+        "RestartDecisionControl": (
+            "certificates == RestartDecisionQCs(node)",
+            "IF certificates = {} THEN {}",
+            "QcOutbox(node, CHOOSE qc \\in certificates: TRUE)",
+        ),
+        "RestartLastTCControl": (
+            "certificates == RestartLastInstalledTCs(node)",
+            "IF certificates = {} THEN {}",
+            "TcOutbox(node, CHOOSE tc \\in certificates: TRUE)",
+        ),
+        "RestartRetainedControl": (
+            "{item \\in asyncRetainedControl: item.source # node}",
+            "RememberedControl(cleared, RestartHighestPrepareControl(node))",
+            "RememberedControl(withPrepare, RestartDecisionControl(node))",
+            "RememberedControl(withDecision, RestartLastTCControl(node))",
+        ),
+        "ResetNodeSchedulerForRestart": (
+            "asyncCommandQueues' = [asyncCommandQueues EXCEPT ![node] = <<>>]",
+            "asyncNextCommandClass' = [asyncNextCommandClass EXCEPT ![node] = \"Completion\"]",
+            "asyncFifoOwed' = [asyncFifoOwed EXCEPT ![node] = FALSE]",
+            "asyncRunnerPhase' = [asyncRunnerPhase EXCEPT ![node] = \"Local\"]",
+            "asyncRunnerBudget' = [asyncRunnerBudget EXCEPT ![node] = AsyncQueueCapacity]",
+            "asyncIoQueues' = [asyncIoQueues EXCEPT ![node] = <<>>]",
+            "asyncOutstandingWork' = [asyncOutstandingWork EXCEPT ![node] = {}]",
+            "asyncDeferredCompletionQueues' = [asyncDeferredCompletionQueues EXCEPT ![node] = <<>>]",
+            "asyncDeferredProgressQueues' = [asyncDeferredProgressQueues EXCEPT ![node] = <<>>]",
+            "asyncDeferredNormalQueues' = [asyncDeferredNormalQueues EXCEPT ![node] = <<>>]",
+            "asyncCausalQueues' = [asyncCausalQueues EXCEPT ![node] = replay]",
+            "asyncOutstandingTags' = [asyncOutstandingTags EXCEPT ![node] = {}]",
+            "asyncSentItems' = asyncSentItems",
+            "asyncRetainedControl' = RestartRetainedControl(node)",
+            "asyncActiveRequests' = {item \\in asyncActiveRequests: item.source # node}",
+            "asyncTransport' = asyncTransport",
+            "asyncIngressLanes' = [asyncIngressLanes EXCEPT ![node] = [source \\in AsyncIngressSources |-> <<>>]]",
+            "asyncIngressReady' = [asyncIngressReady EXCEPT ![node] = <<>>]",
+            "asyncHeldChunks' = {receipt \\in asyncHeldChunks: receipt.node # node}",
+        ),
+        "CommitCertificateDiscoveryDue": (
+            "~ResponsiveReplayQuarantined(node)",
+        ),
+        "TimeoutDue": ("~ResponsiveReplayQuarantined(node)",),
+        "RetransmitDue": ("~ResponsiveReplayQuarantined(node)",),
+        "AdmitHiddenPacket": ("~ResponsiveReplayQuarantined(recipient)",),
+        "CoalesceHiddenPacket": ("~ResponsiveReplayQuarantined(recipient)",),
+        "EnqueueIoLocalControl": ("~ResponsiveReplayQuarantined(node)",),
     }
     if (formal_dir / "proof_coverage.json").is_file():
         required_body_tokens.update({
@@ -2727,6 +3180,80 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
         if missing:
             errors.append(
                 f"{path}:{line}: {symbol} omits required production behavior {missing}"
+            )
+
+    scheduler_tuple = _top_level_operator_body(source, "AsyncSchedulerVars")
+    reset_scheduler = _top_level_operator_body(
+        source, "ResetNodeSchedulerForRestart", preserve_string_contents=True
+    )
+    if scheduler_tuple is not None and reset_scheduler is not None:
+        scheduler_match = re.fullmatch(
+            r"\s*<<(.+)>>\s*", scheduler_tuple[0], re.DOTALL
+        )
+        scheduler_fields = (
+            set()
+            if scheduler_match is None
+            else {
+                field.strip()
+                for field in scheduler_match.group(1).split(",")
+            }
+        )
+        reset_writes = set(
+            re.findall(r"\b([A-Za-z][A-Za-z0-9_]*)'\s*=", reset_scheduler[0])
+        )
+        if not scheduler_fields or reset_writes != scheduler_fields:
+            errors.append(
+                f"{path}:{reset_scheduler[1]}: ResetNodeSchedulerForRestart "
+                "must write every and only AsyncSchedulerVars component; "
+                f"missing={sorted(scheduler_fields - reset_writes)}, "
+                f"unexpected={sorted(reset_writes - scheduler_fields)}"
+            )
+
+    fairness = _top_level_operator_body(
+        source, "AsyncFairnessAt", preserve_string_contents=True
+    )
+    if fairness is not None:
+        normalized_fairness = " ".join(fairness[0].split())
+        recovery_fairness_clauses = (
+            "WF_AsyncAllVars(PreGstResponsiveRestart)",
+            "WF_AsyncAllVars(PreGstResponsiveReplay)",
+            "WF_AsyncAllVars(ResponsiveReplayRunNode)",
+            "WF_AsyncAllVars(ResponsiveReplayServiceIoWorker)",
+            "WF_AsyncAllVars(DriveResponsiveReplayHead)",
+            "WF_AsyncAllVars(FinishResponsiveReplay)",
+        )
+        invalid_counts = {
+            clause: normalized_fairness.count(clause)
+            for clause in recovery_fairness_clauses
+            if normalized_fairness.count(clause) != 1
+        }
+        if invalid_counts:
+            errors.append(
+                f"{path}:{fairness[1]}: AsyncFairnessAt must contain exactly "
+                "one weak-fair clause for every restart/replay service action; "
+                f"counts={invalid_counts}"
+            )
+
+    decision_fetch = _top_level_operator_body(
+        source, "ExecuteDecisionFetch", preserve_string_contents=True
+    )
+    if decision_fetch is not None:
+        decision_fetch_body, decision_fetch_line = decision_fetch
+        forbidden_decision_fetch = (
+            "StoreBody(",
+            "ValidateBody(",
+            "ValidateDecidedBody(",
+            "ApplyDecision(",
+            "FetchCertifiedBody(",
+        )
+        present_forbidden = [
+            token for token in forbidden_decision_fetch if token in decision_fetch_body
+        ]
+        if present_forbidden:
+            errors.append(
+                f"{path}:{decision_fetch_line}: ExecuteDecisionFetch may only "
+                "resolve the durable catalog or open certified recovery; "
+                f"prohibited eager work {present_forbidden}"
             )
 
     runtime_step = _top_level_operator_body(
@@ -2958,6 +3485,173 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
     core_path = formal_dir / "SumeragiV2Core.tla"
     if core_path.is_file():
         core_source = core_path.read_text(encoding="utf-8")
+        crash = _top_level_operator_body(
+            core_source, "Crash", preserve_string_contents=True
+        )
+        expected_crash_writes = {
+            "up",
+            "availableBodies",
+            "retainedLockedBodies",
+            "validatedBodies",
+            "invalidBodies",
+            "seenProposals",
+            "receivedVotes",
+            "receivedQCs",
+            "receivedTimeoutVotes",
+            "receivedTCs",
+            "pendingProposal",
+            "pendingPrepare",
+            "pendingObservePrepare",
+            "pendingLockCommit",
+            "pendingTimeout",
+            "pendingInstallTC",
+            "pendingDecision",
+            "signProposals",
+            "signVotes",
+            "signTimeouts",
+        }
+        if crash is None:
+            errors.append(f"{core_path}: missing source-fidelity operator Crash")
+        else:
+            crash_body, crash_line = crash
+            crash_normalized = " ".join(crash_body.split())
+            crash_writes = set(
+                re.findall(
+                    r"\b([A-Za-z][A-Za-z0-9_]*)'\s*=", crash_body
+                )
+            )
+            if crash_writes != expected_crash_writes:
+                errors.append(
+                    f"{core_path}:{crash_line}: Crash must clear every and "
+                    "only node-local volatile reducer component; "
+                    f"missing={sorted(expected_crash_writes - crash_writes)}, "
+                    f"unexpected={sorted(crash_writes - expected_crash_writes)}"
+                )
+            crash_reset_tokens = (
+                "up' = up \\ {node}",
+                "availableBodies' = {body \\in availableBodies: body.node # node}",
+                "retainedLockedBodies' = {body \\in retainedLockedBodies: body.node # node}",
+                "validatedBodies' = {validation \\in validatedBodies: validation.node # node}",
+                "invalidBodies' = {body \\in invalidBodies: body.node # node}",
+                "seenProposals' = {entry \\in seenProposals: entry.node # node}",
+                "receivedVotes' = {entry \\in receivedVotes: entry.node # node}",
+                "receivedQCs' = {entry \\in receivedQCs: entry.node # node}",
+                "receivedTimeoutVotes' = {entry \\in receivedTimeoutVotes: entry.node # node}",
+                "receivedTCs' = {entry \\in receivedTCs: entry.node # node}",
+                "pendingProposal' = {request \\in pendingProposal: request.node # node}",
+                "pendingPrepare' = {request \\in pendingPrepare: request.node # node}",
+                "pendingObservePrepare' = {request \\in pendingObservePrepare: request.node # node}",
+                "pendingLockCommit' = {request \\in pendingLockCommit: request.node # node}",
+                "pendingTimeout' = {request \\in pendingTimeout: request.node # node}",
+                "pendingInstallTC' = {request \\in pendingInstallTC: request.node # node}",
+                "pendingDecision' = {request \\in pendingDecision: request.node # node}",
+                "signProposals' = {request \\in signProposals: request.node # node}",
+                "signVotes' = {request \\in signVotes: request.node # node}",
+                "signTimeouts' = {request \\in signTimeouts: request.node # node}",
+            )
+            missing_resets = [
+                token for token in crash_reset_tokens if token not in crash_normalized
+            ]
+            if missing_resets:
+                errors.append(
+                    f"{core_path}:{crash_line}: Crash must reset volatile "
+                    f"knowledge only for the crashed node; missing {missing_resets}"
+                )
+            durable_frame_tokens = (
+                "height",
+                "context",
+                "contextHistory",
+                "nodeView",
+                "generation",
+                "gst",
+                "durableBodies",
+                "proposalIntents",
+                "prepareIntents",
+                "commitIntents",
+                "timeoutIntents",
+                "prepareQCs",
+                "commitQCs",
+                "formedTCs",
+                "installedTCs",
+                "lockRank",
+                "lockSubject",
+                "highestRank",
+                "highestSubject",
+                "proposalNetwork",
+                "voteNetwork",
+                "qcNetwork",
+                "timeoutNetwork",
+                "tcNetwork",
+                "decisions",
+                "applied",
+            )
+            unchanged_match = re.search(
+                r"UNCHANGED\s*<<(.*?)>>", crash_body, re.DOTALL
+            )
+            unchanged_fields = (
+                set()
+                if unchanged_match is None
+                else {
+                    field.strip()
+                    for field in unchanged_match.group(1).split(",")
+                }
+            )
+            missing_durable_frame = sorted(
+                set(durable_frame_tokens) - unchanged_fields
+            )
+            if missing_durable_frame:
+                errors.append(
+                    f"{core_path}:{crash_line}: Crash may not orphan durable "
+                    "intent, certificate, lock, decision, body, or authenticated "
+                    f"history state; missing UNCHANGED {missing_durable_frame}"
+                )
+
+        restart = _top_level_operator_body(
+            core_source, "Restart", preserve_string_contents=True
+        )
+        if restart is None:
+            errors.append(f"{core_path}: missing source-fidelity operator Restart")
+        else:
+            restart_body, restart_line = restart
+            restart_normalized = " ".join(restart_body.split())
+            restart_writes = set(
+                re.findall(
+                    r"\b([A-Za-z][A-Za-z0-9_]*)'\s*=", restart_body
+                )
+            )
+            if restart_writes != {"up", "generation"}:
+                errors.append(
+                    f"{core_path}:{restart_line}: Restart must write only up "
+                    "and the authenticated generation; "
+                    f"found {sorted(restart_writes)}"
+                )
+            restart_tokens = (
+                "node \\in ValidatorIds \\ up",
+                "generation[node] < MaxGeneration",
+                "up' = up \\cup {node}",
+                "generation' = [generation EXCEPT ![node] = @ + 1]",
+                "durableBodies",
+                "proposalIntents",
+                "prepareIntents",
+                "commitIntents",
+                "timeoutIntents",
+                "prepareQCs",
+                "commitQCs",
+                "installedTCs",
+                "lockRank",
+                "highestRank",
+                "decisions",
+                "applied",
+            )
+            missing_restart = [
+                token for token in restart_tokens if token not in restart_normalized
+            ]
+            if missing_restart:
+                errors.append(
+                    f"{core_path}:{restart_line}: Restart omits authenticated "
+                    f"generation or durable-state preservation {missing_restart}"
+                )
+
         core_reconstruction_tokens = {
             "BroadcastVotes": (
                 "recipient \\in CurrentVoters \\ {vote.signer}",
@@ -2970,9 +3664,21 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
                 "signVotes' = signVotes \\cup "
                 "ActiveLockedCommitSignRequestsAfterInstall(node, tc)",
             ),
+            "VoteResumeAuthorized": (
+                'vote.phase = "Prepare"',
+                "vote \\in prepareIntents",
+                "vote.view = nodeView[node]",
+                "~NodeTimedOut(node, vote.view)",
+                'vote.phase = "Commit"',
+                "vote \\in commitIntents",
+                "vote.view <= nodeView[node]",
+                "LockedPrepareRound(node, vote.view, vote.subject)",
+            ),
         }
         for symbol, tokens in core_reconstruction_tokens.items():
-            extracted = _top_level_operator_body(core_source, symbol)
+            extracted = _top_level_operator_body(
+                core_source, symbol, preserve_string_contents=True
+            )
             if extracted is None:
                 errors.append(
                     f"{core_path}: missing source-fidelity operator {symbol}"
@@ -3650,6 +4356,7 @@ def _chain_source_fidelity_errors(formal_dir: Path) -> list[str]:
         "asyncRecoveryPhase",
         "asyncRecoveryNode",
         "asyncRecoveryGeneration",
+        "asyncRecoveryReplayQueue",
     )
     recovery_arity = len(recovery_fields)
     node_service_deadline_slot = scheduler_fields.index(
@@ -4597,6 +5304,158 @@ def _retired_path_present(path: Path) -> bool:
     return path.exists()
 
 
+def _nightly_chaos_cold_cache_errors(repo_root: Path) -> list[str]:
+    """Pin the online prefetch/offline chaos boundary for a cold Cargo cache."""
+
+    harness_path = repo_root / "scripts" / "formal" / "run_sumeragi_v2_harness.sh"
+    lock_path = repo_root / "scripts" / "formal" / "sumeragi_v2_harness.lock"
+    launcher_path = repo_root / "scripts" / "run_sumeragi_v2_100k_chaos.sh"
+    workflow_path = repo_root / ".github" / "workflows" / "nightly_sumeragi_formal.yml"
+    required_paths = (harness_path, lock_path, launcher_path, workflow_path)
+    errors = [
+        f"{path}: missing cold-cache chaos contract input"
+        for path in required_paths
+        if not path.is_file() or path.is_symlink()
+    ]
+    if errors:
+        return errors
+
+    harness = harness_path.read_text(encoding="utf-8")
+    lock_declaration = (
+        'readonly HARNESS_LOCK="${REPO_ROOT}/scripts/formal/'
+        'sumeragi_v2_harness.lock"'
+    )
+    if harness.count(lock_declaration) != 1:
+        errors.append(
+            f"{harness_path}: harness must name the pinned standalone lock "
+            "exactly once"
+        )
+    digest_matches = re.findall(
+        r'(?m)^readonly HARNESS_LOCK_SHA256="([0-9a-f]{64})"$', harness
+    )
+    if len(digest_matches) != 1:
+        errors.append(
+            f"{harness_path}: harness must pin exactly one literal SHA-256 "
+            "for the standalone lock"
+        )
+    else:
+        actual_digest = hashlib.sha256(lock_path.read_bytes()).hexdigest()
+        if digest_matches[0] != actual_digest:
+            errors.append(
+                f"{harness_path}: pinned standalone lock digest disagrees "
+                f"with {lock_path}"
+            )
+
+    normalized_harness = " ".join(harness.split())
+    exact_network_mode = (
+        'if [[ "$1" == "--fetch" ]]; then export CARGO_NET_OFFLINE=false '
+        "else export CARGO_NET_OFFLINE=true fi"
+    )
+    if exact_network_mode not in normalized_harness:
+        errors.append(
+            f"{harness_path}: only --fetch may run online and every test mode "
+            "must force CARGO_NET_OFFLINE=true"
+        )
+    lock_validation_tokens = (
+        '[[ ! -f "$HARNESS_LOCK" || -L "$HARNESS_LOCK"',
+        '"$(hash_file "$HARNESS_LOCK")" != "$HARNESS_LOCK_SHA256"',
+    )
+    missing_lock_validation = [
+        token for token in lock_validation_tokens if token not in normalized_harness
+    ]
+    if missing_lock_validation:
+        errors.append(
+            f"{harness_path}: standalone lock validation is incomplete; "
+            f"missing {missing_lock_validation}"
+        )
+
+    lock_copy = harness.find('cp -- "$HARNESS_LOCK" Cargo.lock')
+    case_start = harness.find('case "$1" in')
+    fetch_start = harness.find("  --fetch)", case_start)
+    unit_start = harness.find("  --unit)", fetch_start)
+    if not (0 <= lock_copy < case_start < fetch_start < unit_start):
+        errors.append(
+            f"{harness_path}: the verified standalone lock must be copied "
+            "before dispatching --fetch or any offline test mode"
+        )
+        fetch_branch = ""
+    else:
+        fetch_branch = harness[fetch_start:unit_start]
+    fetch_commands = re.findall(r"(?m)^\s*cargo fetch[^\n]*$", fetch_branch)
+    if fetch_commands != ["    cargo fetch --locked"]:
+        errors.append(
+            f"{harness_path}: --fetch must perform exactly one online "
+            f"`cargo fetch --locked`; found {fetch_commands}"
+        )
+
+    chaos_start = harness.find("  --chaos-100k)", unit_start)
+    replay_start = harness.find("  --model-replay)", chaos_start)
+    chaos_branch = (
+        ""
+        if chaos_start < 0 or replay_start < 0
+        else harness[chaos_start:replay_start]
+    )
+    chaos_cargo_commands = re.findall(r"(?m)^\s*cargo test\b", chaos_branch)
+    offline_chaos_commands = re.findall(
+        r"(?m)^\s*cargo test --locked --offline "
+        r"-p iroha_sumeragi_core\s*\\?$",
+        chaos_branch,
+    )
+    if len(chaos_cargo_commands) != 2 or len(offline_chaos_commands) != 2:
+        errors.append(
+            f"{harness_path}: --chaos-100k inventory and execution must both "
+            "remain --locked --offline"
+        )
+
+    launcher = launcher_path.read_text(encoding="utf-8")
+    chaos_invocation = (
+        "bash scripts/formal/run_sumeragi_v2_harness.sh --chaos-100k"
+    )
+    if launcher.count(chaos_invocation) != 1:
+        errors.append(
+            f"{launcher_path}: source-attested chaos launcher must invoke "
+            "the offline harness gate exactly once"
+        )
+
+    workflow = workflow_path.read_text(encoding="utf-8")
+    job_match = re.search(
+        r"(?ms)^  sumeragi-v2-chaos-100k:\n(?P<body>.*?)"
+        r"(?=^  [A-Za-z0-9_-]+:\n|\Z)",
+        workflow,
+    )
+    if job_match is None:
+        errors.append(
+            f"{workflow_path}: missing independent sumeragi-v2-chaos-100k job"
+        )
+    else:
+        job = job_match.group("body")
+        cache_marker = "- uses: Swatinem/rust-cache@v2"
+        fetch_marker = (
+            "run: bash scripts/formal/run_sumeragi_v2_harness.sh --fetch"
+        )
+        gate_marker = "run: bash scripts/run_sumeragi_v2_100k_chaos.sh"
+        counts = {
+            "cache": job.count(cache_marker),
+            "fetch": job.count(fetch_marker),
+            "source_attested_gate": job.count(gate_marker),
+        }
+        if counts != {"cache": 1, "fetch": 1, "source_attested_gate": 1}:
+            errors.append(
+                f"{workflow_path}: nightly chaos job must contain exactly one "
+                f"cache, pinned prefetch, and source-attested gate; counts={counts}"
+            )
+        elif not (
+            job.index(cache_marker)
+            < job.index(fetch_marker)
+            < job.index(gate_marker)
+        ):
+            errors.append(
+                f"{workflow_path}: nightly --fetch must run after cache restore "
+                "and before the source-attested chaos gate"
+            )
+    return errors
+
+
 def _release_evidence_errors(
     ledger: dict[str, Any],
     evidence: dict[str, Any] | None,
@@ -4788,6 +5647,7 @@ def validate_ledger(
     errors.extend(_async_source_fidelity_errors(formal_dir))
     errors.extend(_ownership_n1_configuration_errors(formal_dir))
     errors.extend(_chain_source_fidelity_errors(formal_dir))
+    errors.extend(_nightly_chaos_cold_cache_errors(ROOT_DIR))
     for cfg_name in REQUIRED_TLC_CONFIGS:
         cfg = formal_dir / cfg_name
         if not cfg.is_file():

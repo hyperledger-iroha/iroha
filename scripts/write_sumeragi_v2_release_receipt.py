@@ -28,6 +28,49 @@ _FORMAL_FINAL_MARKER = (
     "Sumeragi v2 formal gate passed: source-bound TLAPS, adversarial scheduler "
     "mutations, bounded TLC, trace replay, and production Verus"
 )
+_CHAOS_MARKER = (
+    "SUMERAGI_V2_CHAOS_COMPLETED permissioned_heights=50000 "
+    "npos_heights=50000 total_heights=100000 supplied_commit_qcs=100000 "
+    "supplied_tcs=75000 finalized_validators=400000 wal_append_restarts=314 "
+    "fetch_restarts=312 store_restarts=312 validation_restarts=312 "
+    "application_restarts=312 stale_generation_rejections=1562 "
+    "deferred_fetch_completions=400936 deferred_store_completions=400624 "
+    "deferred_validation_completions=400312 "
+    "deferred_application_completions=400000 duplicate_commit_qcs=3124 "
+    "reordered_commit_batches=75000 reordered_tc_batches=75000 "
+    "insufficient_dual_qcs=1030 count_only_qcs=515 power_only_qcs=515 "
+    "restart_interval=64 duplicate_interval=32 under_quorum_interval=97 "
+    "certificate_source=external_fixture"
+)
+_CHAOS_FIXED_FIELDS = {
+    "schema_version": "2",
+    "permissioned_heights": "50000",
+    "npos_heights": "50000",
+    "completed_heights": "100000",
+    "supplied_commit_qcs": "100000",
+    "supplied_tcs": "75000",
+    "finalized_validators": "400000",
+    "wal_append_restarts": "314",
+    "fetch_restarts": "312",
+    "store_restarts": "312",
+    "validation_restarts": "312",
+    "application_restarts": "312",
+    "stale_generation_rejections": "1562",
+    "deferred_fetch_completions": "400936",
+    "deferred_store_completions": "400624",
+    "deferred_validation_completions": "400312",
+    "deferred_application_completions": "400000",
+    "duplicate_commit_qcs": "3124",
+    "reordered_commit_batches": "75000",
+    "reordered_tc_batches": "75000",
+    "insufficient_dual_qcs": "1030",
+    "count_only_qcs": "515",
+    "power_only_qcs": "515",
+    "restart_interval": "64",
+    "duplicate_interval": "32",
+    "under_quorum_interval": "97",
+    "certificate_source": "external_fixture",
+}
 _HARNESS_LOCK_SHA256 = "9c49a60551d9f66c8786f2497cb107fb3214fb3420c4f5c23ba3d24814b3f97e"
 _SEED_SCENARIOS = (
     "authoritative_v2_genesis_commits_on_every_validator",
@@ -884,30 +927,26 @@ def build_receipt(
     _require_fields(
         chaos,
         {
-            "schema_version",
             "head_commit",
             "head_tree",
             "source_manifest_sha256",
             "cargo_lock_sha256",
-            "permissioned_heights",
-            "npos_heights",
-            "completed_heights",
             "log_sha256",
-        },
+        }
+        | set(_CHAOS_FIXED_FIELDS),
         "chaos completion",
     )
     expected_chaos = {
-        "schema_version": "1",
+        **_CHAOS_FIXED_FIELDS,
         "head_commit": sealed["head_commit"],
         "head_tree": sealed["head_tree"],
         "source_manifest_sha256": manifest,
         "cargo_lock_sha256": sealed["cargo_lock_sha256"],
-        "permissioned_heights": "50000",
-        "npos_heights": "50000",
-        "completed_heights": "100000",
     }
     if any(chaos.get(field) != value for field, value in expected_chaos.items()):
-        raise ReceiptError("chaos completion is not bound to the release identity")
+        raise ReceiptError(
+            "chaos completion does not match the exact release identity and reducer schedule"
+        )
     chaos_log = _regular_file(chaos_path.with_name("chaos-100k.log"), "chaos log")
     if _sha256(chaos_log) != chaos["log_sha256"]:
         raise ReceiptError("chaos completion log digest mismatch")
@@ -916,6 +955,10 @@ def build_receipt(
     except UnicodeDecodeError as error:
         raise ReceiptError("chaos log is not UTF-8") from error
     chaos_results = [line for line in chaos_lines if line.startswith("test result:")]
+    chaos_test_prefix = (
+        "test accelerated_100_000_block_chaos_preserves_chain_prefix ... "
+    )
+    chaos_completion_line = chaos_test_prefix + "ok"
     if (
         chaos_lines.count("running 1 test") != 1
         or len(chaos_results) != 1
@@ -924,17 +967,9 @@ def build_receipt(
             r"9 filtered out; finished in .+",
             chaos_results[0],
         )
-        or sum(
-            "test accelerated_100_000_block_chaos_preserves_chain_prefix ... " in line
-            for line in chaos_lines
-        )
-        != 1
-        or sum(
-            "SUMERAGI_V2_CHAOS_COMPLETED permissioned_heights=50000 "
-            "npos_heights=50000 total_heights=100000" in line
-            for line in chaos_lines
-        )
-        != 1
+        or sum(chaos_test_prefix in line for line in chaos_lines) != 1
+        or chaos_lines.count(chaos_completion_line) != 1
+        or chaos_lines.count(_CHAOS_MARKER) != 1
     ):
         raise ReceiptError(
             "chaos log does not prove its one exact passing release test"

@@ -1758,6 +1758,261 @@ THEOREM RestartSignatureReplayExactOrder ==
              \o RestartLockedCommitReplayIfActive(node)
 BY DEF RestartSignatureReplay
 
+THEOREM EmptyReplayProperties ==
+  \A node:
+    /\ AsyncQueueTyped(<<>>)
+    /\ AsyncCausalQueueOwnership(node, <<>>)
+    /\ SequenceHasUniqueValues(<<>>)
+    /\ Len(<<>>) = 0
+BY EmptySeq, RangeEquality, FS_EmptySet, Isa
+   DEF AsyncQueueTyped, AsyncCausalQueueOwnership,
+       SequenceHasUniqueValues, SequenceSet
+
+THEOREM ReplayUniqueSequenceIsInjective ==
+  \A sequence:
+    /\ sequence \in Seq(Range(sequence))
+    /\ SequenceHasUniqueValues(sequence)
+    => IsInjective(sequence)
+PROOF
+  <1>1. ASSUME NEW sequence,
+                sequence \in Seq(Range(sequence)),
+                SequenceHasUniqueValues(sequence)
+         PROVE IsInjective(sequence)
+    <2>1. /\ Len(sequence) \in Nat
+           /\ sequence \in [1..Len(sequence) -> Range(sequence)]
+      BY <1>1, LenProperties
+    <2>2. /\ IsFiniteSet(1..Len(sequence))
+           /\ Cardinality(1..Len(sequence)) = Len(sequence)
+      BY <2>1, FS_Interval, SMT
+    <2>3. SequenceSet(sequence) = Range(sequence)
+      BY <1>1, RangeEquality DEF SequenceSet
+    <2>4. sequence \in Surjection(1..Len(sequence), Range(sequence))
+      BY <2>1, Fun_RangeProperties
+    <2>5. Cardinality(1..Len(sequence)) =
+             Cardinality(Range(sequence))
+      BY <1>1, <2>2, <2>3 DEF SequenceHasUniqueValues
+    <2>6. sequence \in Injection(1..Len(sequence), Range(sequence))
+      BY <2>2, <2>4, <2>5, FS_SurjSameCardinalityImpliesInj
+    <2> QED BY <2>6 DEF Injection
+  <1> QED BY <1>1
+
+THEOREM ReplayInjectiveSequenceIsUnique ==
+  \A sequence:
+    /\ sequence \in Seq(Range(sequence))
+    /\ IsInjective(sequence)
+    => SequenceHasUniqueValues(sequence)
+PROOF
+  <1>1. ASSUME NEW sequence,
+                sequence \in Seq(Range(sequence)),
+                IsInjective(sequence)
+         PROVE SequenceHasUniqueValues(sequence)
+    <2>1. /\ Len(sequence) \in Nat
+           /\ sequence \in [1..Len(sequence) -> Range(sequence)]
+      BY <1>1, LenProperties
+    <2>2. /\ IsFiniteSet(1..Len(sequence))
+           /\ Cardinality(1..Len(sequence)) = Len(sequence)
+      BY <2>1, FS_Interval, SMT
+    <2>3. sequence \in Surjection(1..Len(sequence), Range(sequence))
+      BY <2>1, Fun_RangeProperties
+    <2>4. sequence \in Injection(1..Len(sequence), Range(sequence))
+      BY <1>1, <2>1 DEF Injection
+    <2>5. Cardinality(Range(sequence)) =
+             Cardinality(1..Len(sequence))
+      BY <2>2, <2>3, <2>4, FS_Surjection
+    <2>6. SequenceSet(sequence) = Range(sequence)
+      BY <1>1, RangeEquality DEF SequenceSet
+    <2> QED BY <2>2, <2>5, <2>6 DEF SequenceHasUniqueValues
+  <1> QED BY <1>1
+
+THEOREM ConcatTypedOwnedDisjointReplay ==
+  \A node, left, right:
+    /\ AsyncQueueTyped(left)
+    /\ AsyncCausalQueueOwnership(node, left)
+    /\ SequenceHasUniqueValues(left)
+    /\ AsyncQueueTyped(right)
+    /\ AsyncCausalQueueOwnership(node, right)
+    /\ SequenceHasUniqueValues(right)
+    /\ SequenceSet(left) \cap SequenceSet(right) = {}
+    => /\ AsyncQueueTyped(left \o right)
+       /\ AsyncCausalQueueOwnership(node, left \o right)
+       /\ SequenceHasUniqueValues(left \o right)
+       /\ Len(left \o right) = Len(left) + Len(right)
+PROOF
+  <1>1. ASSUME NEW node, NEW left, NEW right,
+                AsyncQueueTyped(left),
+                AsyncCausalQueueOwnership(node, left),
+                SequenceHasUniqueValues(left),
+                AsyncQueueTyped(right),
+                AsyncCausalQueueOwnership(node, right),
+                SequenceHasUniqueValues(right),
+                SequenceSet(left) \cap SequenceSet(right) = {}
+         PROVE /\ AsyncQueueTyped(left \o right)
+               /\ AsyncCausalQueueOwnership(node, left \o right)
+               /\ SequenceHasUniqueValues(left \o right)
+               /\ Len(left \o right) = Len(left) + Len(right)
+    <2>1. /\ left \in Seq(Range(left))
+           /\ right \in Seq(Range(right))
+           /\ SequenceSet(left) = Range(left)
+           /\ SequenceSet(right) = Range(right)
+      BY <1>1, RangeEquality DEF AsyncQueueTyped, SequenceSet
+    <2>2. /\ left \o right
+                  \in Seq(Range(left) \cup Range(right))
+           /\ Len(left \o right) = Len(left) + Len(right)
+           /\ Range(left \o right) =
+                Range(left) \cup Range(right)
+      BY <2>1, ConcatProperties, RangeConcatenation
+    <2>3. AsyncQueueTyped(left \o right)
+      BY <1>1, <2>1, <2>2, Isa DEF AsyncQueueTyped
+    <2>4. AsyncCausalQueueOwnership(node, left \o right)
+      BY <1>1, <2>1, <2>2, Isa
+         DEF AsyncCausalQueueOwnership, SequenceSet
+    <2>5. /\ IsInjective(left)
+           /\ IsInjective(right)
+           /\ Range(left) \cap Range(right) = {}
+      BY <1>1, <2>1, ReplayUniqueSequenceIsInjective
+    <2>6. IsInjective(left \o right)
+      BY <2>1, <2>5, ConcatInjectiveSeq
+    <2>7. SequenceHasUniqueValues(left \o right)
+      BY <2>2, <2>6, ReplayInjectiveSequenceIsUnique
+    <2> QED BY <2>2, <2>3, <2>4, <2>7
+  <1> QED BY <1>1
+
+THEOREM RestartTimeoutOrProposalReplayProperties ==
+  \A node \in ValidatorIds:
+    TypeInvariant =>
+      /\ AsyncQueueTyped(RestartTimeoutOrProposalReplay(node))
+      /\ AsyncCausalQueueOwnership(
+           node, RestartTimeoutOrProposalReplay(node))
+      /\ SequenceHasUniqueValues(RestartTimeoutOrProposalReplay(node))
+      /\ Len(RestartTimeoutOrProposalReplay(node)) <= 1
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds, TypeInvariant
+         PROVE /\ AsyncQueueTyped(RestartTimeoutOrProposalReplay(node))
+               /\ AsyncCausalQueueOwnership(
+                    node, RestartTimeoutOrProposalReplay(node))
+               /\ SequenceHasUniqueValues(
+                    RestartTimeoutOrProposalReplay(node))
+               /\ Len(RestartTimeoutOrProposalReplay(node)) <= 1
+    <2>1. CASE RestartTimeoutIntents(node) # {}
+      <3>1. /\ AsyncQueueTyped(RestartTimeoutReplay(node))
+             /\ AsyncCausalQueueOwnership(
+                  node, RestartTimeoutReplay(node))
+             /\ SequenceHasUniqueValues(RestartTimeoutReplay(node))
+        BY <1>1, <2>1, RestartTimeoutReplayProperties
+      <3>2. /\ RestartTimeoutOrProposalReplay(node) =
+                    RestartTimeoutReplay(node)
+             /\ Len(RestartTimeoutReplay(node)) = 1
+        BY <2>1 DEF RestartTimeoutOrProposalReplay,
+                      RestartTimeoutReplay
+      <3> QED BY <3>1, <3>2
+    <2>2. CASE /\ RestartTimeoutIntents(node) = {}
+                 /\ RestartProposalIntents(node) # {}
+      <3>1. /\ AsyncQueueTyped(RestartProposalReplay(node))
+             /\ AsyncCausalQueueOwnership(
+                  node, RestartProposalReplay(node))
+             /\ SequenceHasUniqueValues(RestartProposalReplay(node))
+        BY <1>1, <2>2, RestartProposalReplayProperties
+      <3>2. /\ RestartTimeoutOrProposalReplay(node) =
+                    RestartProposalReplay(node)
+             /\ Len(RestartProposalReplay(node)) = 1
+        BY <2>2 DEF RestartTimeoutOrProposalReplay,
+                      RestartProposalReplay
+      <3> QED BY <3>1, <3>2
+    <2>3. CASE /\ RestartTimeoutIntents(node) = {}
+                 /\ RestartProposalIntents(node) = {}
+      <3>1. RestartTimeoutOrProposalReplay(node) = <<>>
+        BY <2>3 DEF RestartTimeoutOrProposalReplay
+      <3> QED BY <3>1, EmptyReplayProperties
+    <2> QED BY <2>1, <2>2, <2>3, SMT
+  <1> QED BY <1>1
+
+THEOREM RestartPrepareReplayIfActiveProperties ==
+  \A node \in ValidatorIds:
+    TypeInvariant =>
+      /\ AsyncQueueTyped(RestartPrepareReplayIfActive(node))
+      /\ AsyncCausalQueueOwnership(
+           node, RestartPrepareReplayIfActive(node))
+      /\ SequenceHasUniqueValues(RestartPrepareReplayIfActive(node))
+      /\ Len(RestartPrepareReplayIfActive(node)) <= 1
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds, TypeInvariant
+         PROVE /\ AsyncQueueTyped(RestartPrepareReplayIfActive(node))
+               /\ AsyncCausalQueueOwnership(
+                    node, RestartPrepareReplayIfActive(node))
+               /\ SequenceHasUniqueValues(
+                    RestartPrepareReplayIfActive(node))
+               /\ Len(RestartPrepareReplayIfActive(node)) <= 1
+    <2>1. CASE RestartPrepareIntents(node) # {}
+      <3>1. /\ AsyncQueueTyped(RestartPrepareReplay(node))
+             /\ AsyncCausalQueueOwnership(node, RestartPrepareReplay(node))
+             /\ SequenceHasUniqueValues(RestartPrepareReplay(node))
+        BY <1>1, <2>1, RestartPrepareReplayProperties
+      <3>2. /\ RestartPrepareReplayIfActive(node) =
+                    RestartPrepareReplay(node)
+             /\ Len(RestartPrepareReplay(node)) = 1
+        BY <2>1 DEF RestartPrepareReplayIfActive, RestartPrepareReplay
+      <3> QED BY <3>1, <3>2
+    <2>2. CASE RestartPrepareIntents(node) = {}
+      <3>1. RestartPrepareReplayIfActive(node) = <<>>
+        BY <2>2 DEF RestartPrepareReplayIfActive
+      <3> QED BY <3>1, EmptyReplayProperties
+    <2> QED BY <2>1, <2>2
+  <1> QED BY <1>1
+
+THEOREM RestartLockedCommitReplayIfActiveProperties ==
+  \A node \in ValidatorIds:
+    TypeInvariant =>
+      /\ AsyncQueueTyped(RestartLockedCommitReplayIfActive(node))
+      /\ AsyncCausalQueueOwnership(
+           node, RestartLockedCommitReplayIfActive(node))
+      /\ SequenceHasUniqueValues(
+           RestartLockedCommitReplayIfActive(node))
+      /\ Len(RestartLockedCommitReplayIfActive(node)) <= 1
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds, TypeInvariant
+         PROVE /\ AsyncQueueTyped(RestartLockedCommitReplayIfActive(node))
+               /\ AsyncCausalQueueOwnership(
+                    node, RestartLockedCommitReplayIfActive(node))
+               /\ SequenceHasUniqueValues(
+                    RestartLockedCommitReplayIfActive(node))
+               /\ Len(RestartLockedCommitReplayIfActive(node)) <= 1
+    <2>1. CASE RestartLockedCommitIntents(node) # {}
+      <3>1. /\ AsyncQueueTyped(RestartLockedCommitReplay(node))
+             /\ AsyncCausalQueueOwnership(
+                  node, RestartLockedCommitReplay(node))
+             /\ SequenceHasUniqueValues(RestartLockedCommitReplay(node))
+        BY <1>1, <2>1, RestartLockedCommitReplayProperties
+      <3>2. /\ RestartLockedCommitReplayIfActive(node) =
+                    RestartLockedCommitReplay(node)
+             /\ Len(RestartLockedCommitReplay(node)) = 1
+        BY <2>1 DEF RestartLockedCommitReplayIfActive,
+                      RestartLockedCommitReplay
+      <3> QED BY <3>1, <3>2
+    <2>2. CASE RestartLockedCommitIntents(node) = {}
+      <3>1. RestartLockedCommitReplayIfActive(node) = <<>>
+        BY <2>2 DEF RestartLockedCommitReplayIfActive
+      <3> QED BY <3>1, EmptyReplayProperties
+    <2> QED BY <2>1, <2>2
+  <1> QED BY <1>1
+
+THEOREM RestartSignatureReplayComponentsAreDisjoint ==
+  \A node:
+    /\ SequenceSet(RestartTimeoutOrProposalReplay(node)) \cap
+         SequenceSet(RestartPrepareReplayIfActive(node)) = {}
+    /\ SequenceSet(RestartTimeoutOrProposalReplay(node)) \cap
+         SequenceSet(RestartLockedCommitReplayIfActive(node)) = {}
+    /\ SequenceSet(RestartPrepareReplayIfActive(node)) \cap
+         SequenceSet(RestartLockedCommitReplayIfActive(node)) = {}
+BY Isa
+   DEF RestartTimeoutOrProposalReplay,
+       RestartPrepareReplayIfActive, RestartLockedCommitReplayIfActive,
+       RestartTimeoutReplay, RestartProposalReplay,
+       RestartPrepareReplay, RestartLockedCommitReplay,
+       RestartTimeoutIntents, RestartProposalIntents,
+       RestartPrepareIntents, RestartLockedCommitIntents,
+       RestartCandidate, AsyncCandidateAtConsumer,
+       AsyncCandidateWithIdentity, SequenceSet
+
 THEOREM RestartSignatureReplayProperties ==
   \A node \in ValidatorIds:
     TypeInvariant =>
@@ -1765,17 +2020,119 @@ THEOREM RestartSignatureReplayProperties ==
       /\ AsyncCausalQueueOwnership(node, RestartSignatureReplay(node))
       /\ SequenceHasUniqueValues(RestartSignatureReplay(node))
       /\ Len(RestartSignatureReplay(node)) <= 3
-BY RestartLockedCommitReplayProperties,
-   RestartTimeoutReplayProperties,
-   RestartPrepareReplayProperties,
-   RestartProposalReplayProperties,
-   FS_EmptySet, SMTT(60), Isa
-   DEF RestartSignatureReplay, RestartTimeoutOrProposalReplay,
-       RestartPrepareReplayIfActive, RestartLockedCommitReplayIfActive,
-       RestartDecisions, RestartLockedCommitIntents,
-       RestartTimeoutIntents, RestartPrepareIntents,
-       RestartProposalIntents, AsyncQueueTyped,
-       AsyncCausalQueueOwnership, SequenceHasUniqueValues, SequenceSet
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds, TypeInvariant
+         PROVE /\ AsyncQueueTyped(RestartSignatureReplay(node))
+               /\ AsyncCausalQueueOwnership(
+                    node, RestartSignatureReplay(node))
+               /\ SequenceHasUniqueValues(RestartSignatureReplay(node))
+               /\ Len(RestartSignatureReplay(node)) <= 3
+    <2>1. CASE NodeHasApplication(node) \/ RestartDecisions(node) # {}
+      <3>1. RestartSignatureReplay(node) = <<>>
+        BY <2>1 DEF RestartSignatureReplay
+      <3> QED BY <3>1, EmptyReplayProperties
+    <2>2. CASE /\ ~NodeHasApplication(node)
+                 /\ RestartDecisions(node) = {}
+      <3> DEFINE First == RestartTimeoutOrProposalReplay(node)
+      <3> DEFINE Second == RestartPrepareReplayIfActive(node)
+      <3> DEFINE Third == RestartLockedCommitReplayIfActive(node)
+      <3>1. /\ AsyncQueueTyped(First)
+             /\ AsyncCausalQueueOwnership(node, First)
+             /\ SequenceHasUniqueValues(First)
+             /\ Len(First) <= 1
+        BY <1>1, RestartTimeoutOrProposalReplayProperties DEF First
+      <3>2. /\ AsyncQueueTyped(Second)
+             /\ AsyncCausalQueueOwnership(node, Second)
+             /\ SequenceHasUniqueValues(Second)
+             /\ Len(Second) <= 1
+        BY <1>1, RestartPrepareReplayIfActiveProperties DEF Second
+      <3>3. /\ AsyncQueueTyped(Third)
+             /\ AsyncCausalQueueOwnership(node, Third)
+             /\ SequenceHasUniqueValues(Third)
+             /\ Len(Third) <= 1
+        BY <1>1, RestartLockedCommitReplayIfActiveProperties DEF Third
+      <3>4. /\ SequenceSet(First) \cap SequenceSet(Second) = {}
+             /\ SequenceSet(First) \cap SequenceSet(Third) = {}
+             /\ SequenceSet(Second) \cap SequenceSet(Third) = {}
+        BY RestartSignatureReplayComponentsAreDisjoint
+           DEF First, Second, Third
+      <3>5. /\ AsyncQueueTyped(First \o Second)
+             /\ AsyncCausalQueueOwnership(node, First \o Second)
+             /\ SequenceHasUniqueValues(First \o Second)
+             /\ Len(First \o Second) = Len(First) + Len(Second)
+        BY <3>1, <3>2, <3>4, ConcatTypedOwnedDisjointReplay
+      <3>6. SequenceSet(First \o Second) \cap SequenceSet(Third) = {}
+        BY <3>1, <3>2, <3>4, RangeConcatenation, RangeEquality, Isa
+           DEF AsyncQueueTyped, SequenceSet
+      <3>7. /\ AsyncQueueTyped((First \o Second) \o Third)
+             /\ AsyncCausalQueueOwnership(node, (First \o Second) \o Third)
+             /\ SequenceHasUniqueValues((First \o Second) \o Third)
+             /\ Len((First \o Second) \o Third) =
+                  Len(First \o Second) + Len(Third)
+        BY <3>3, <3>5, <3>6, ConcatTypedOwnedDisjointReplay
+      <3>8. RestartSignatureReplay(node) =
+               (First \o Second) \o Third
+        BY <2>2 DEF RestartSignatureReplay, First, Second, Third
+      <3>9. Len((First \o Second) \o Third) <= 3
+        BY <3>1, <3>2, <3>3, <3>5, <3>7, SMT
+      <3> QED BY <3>7, <3>8, <3>9
+    <2> QED BY <2>1, <2>2
+  <1> QED BY <1>1
+
+ReplayLockedCommitCandidate(node, vote) ==
+  RestartCandidate("Completion", "SignVote", node,
+                   vote.view, vote.subject, vote)
+
+THEOREM UnreadyActiveLockedCommitIsInSignatureReplay ==
+  \A node \in Responsive:
+    \A vote \in RestartLockedCommitIntents(node):
+    /\ StrongInductiveInvariant
+    /\ ~NodeHasApplication(node)
+    /\ ~ReplayCommitIntentReady(node, vote)
+    => ReplayLockedCommitCandidate(node, vote)
+         \in SequenceSet(RestartSignatureReplay(node))
+BY RestartLockedCommitChoiceIsAvailable, SMTT(60), Isa
+   DEF StrongInductiveInvariant, Safety, TypeInvariant,
+       ModelConfiguration, HonestCommitUniqueness,
+       RestartLockedCommitIntents, RestartLockedCommitIntent,
+       RestartLockedCommitReplayIfActive,
+       RestartLockedCommitReplay, RestartSignatureReplay,
+       RestartTimeoutOrProposalReplay, RestartPrepareReplayIfActive,
+       RestartDecisions, ReplayCommitIntentReady,
+       ReplayLockedCommitCandidate, RestartCandidate,
+       AsyncCandidateAtConsumer, AsyncCandidateWithIdentity,
+       NodeHasDecision, NodeHasApplication, SequenceSet
+
+THEOREM ReplayTailRetainsNonHeadValue ==
+  \A sequence, value:
+    /\ sequence \in Seq(Range(sequence))
+    /\ Len(sequence) > 0
+    /\ value \in SequenceSet(sequence)
+    /\ value # Head(sequence)
+    => value \in SequenceSet(Tail(sequence))
+PROOF
+  <1>1. ASSUME NEW sequence, NEW value,
+                sequence \in Seq(Range(sequence)),
+                Len(sequence) > 0,
+                value \in SequenceSet(sequence),
+                value # Head(sequence)
+         PROVE value \in SequenceSet(Tail(sequence))
+    <2>1. PICK original \in 1..Len(sequence):
+             value = sequence[original]
+      BY <1>1 DEF SequenceSet
+    <2>2. /\ sequence # <<>>
+           /\ Head(sequence) = sequence[1]
+           /\ Tail(sequence) \in Seq(Range(sequence))
+           /\ Len(Tail(sequence)) = Len(sequence) - 1
+           /\ \A index \in 1..Len(Tail(sequence)):
+                Tail(sequence)[index] = sequence[index + 1]
+      BY <1>1, EmptySeq, HeadTailProperties, SMT
+    <2>3. original - 1 \in 1..Len(Tail(sequence))
+      BY <1>1, <2>1, <2>2, SMT
+    <2>4. Tail(sequence)[original - 1] = value
+      BY <2>1, <2>2, <2>3, SMT
+    <2> QED BY <2>3, <2>4 DEF SequenceSet
+  <1> QED BY <1>1
 
 THEOREM RestartRunnerAssemblyProperties ==
   \A node \in ValidatorIds:
@@ -1784,13 +2141,47 @@ THEOREM RestartRunnerAssemblyProperties ==
       /\ AsyncCausalQueueOwnership(node, RestartRunnerAssembly(node))
       /\ SequenceHasUniqueValues(RestartRunnerAssembly(node))
       /\ Len(RestartRunnerAssembly(node)) <= 1
-BY RestartCandidateIsTyped, TypedOwnedSingletonIsReplay,
-   EmptySeq, FS_EmptySet, SMTT(40), Isa
-   DEF RestartRunnerAssembly, RestartRunnerAssemblyEnabled,
-       RestartCandidate, AsyncProposalSubject, AsyncCausalCoreTypingFacts,
-       TypeInvariant, AsyncCommandClasses, AsyncWorkKinds,
-       AsyncReducerKinds, AsyncEvidenceSet, AsyncQueueTyped,
-       AsyncCausalQueueOwnership, SequenceHasUniqueValues, SequenceSet
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds, TypeInvariant
+         PROVE /\ AsyncQueueTyped(RestartRunnerAssembly(node))
+               /\ AsyncCausalQueueOwnership(
+                    node, RestartRunnerAssembly(node))
+               /\ SequenceHasUniqueValues(RestartRunnerAssembly(node))
+               /\ Len(RestartRunnerAssembly(node)) <= 1
+    <2>1. CASE ~RestartRunnerAssemblyEnabled(node)
+      <3>1. RestartRunnerAssembly(node) = <<>>
+        BY <2>1 DEF RestartRunnerAssembly
+      <3> QED BY <3>1, EmptyReplayProperties
+    <2>2. CASE RestartRunnerAssemblyEnabled(node)
+      <3> DEFINE Candidate ==
+             RestartCandidate(
+               "Normal", "AssembleBody", node, nodeView[node],
+               AsyncProposalSubject(node), NoAsyncItem)
+      <3>1. AsyncCausalCoreTypingFacts
+        BY <1>1, CoreTypeImpliesCausalTypingFacts
+      <3>2. /\ nodeView[node] \in Views
+             /\ AsyncProposalSubject(node) \in SubjectOrNone
+             /\ NoAsyncItem \in AsyncEvidenceSet
+        BY <1>1, <3>1, SMT
+           DEF AsyncCausalCoreTypingFacts, AsyncProposalSubject,
+               AsyncEvidenceSet
+      <3>3. AsyncCandidateTyped(Candidate)
+        BY <1>1, <3>2, RestartCandidateIsTyped
+           DEF Candidate, AsyncCommandClasses, AsyncWorkKinds,
+               AsyncReducerKinds
+      <3>4. Candidate.node = node
+        BY DEF Candidate, RestartCandidate, AsyncCandidateAtConsumer,
+               AsyncCandidateWithIdentity
+      <3>5. /\ AsyncQueueTyped(<<Candidate>>)
+             /\ AsyncCausalQueueOwnership(node, <<Candidate>>)
+             /\ SequenceHasUniqueValues(<<Candidate>>)
+        BY <3>3, <3>4, TypedOwnedSingletonIsReplay
+      <3>6. /\ RestartRunnerAssembly(node) = <<Candidate>>
+             /\ Len(<<Candidate>>) = 1
+        BY <2>2 DEF RestartRunnerAssembly, Candidate
+      <3> QED BY <3>5, <3>6
+    <2> QED BY <2>1, <2>2
+  <1> QED BY <1>1
 
 THEOREM AppliedRecoveryCannotScheduleSameHeightAssembly ==
   \A node:
@@ -19546,15 +19937,98 @@ PROOF
     <2> QED BY <2>1, <2>2
   <1> QED BY <1>1
 
+THEOREM TimeoutPoolFilteredSubsetPreservesInvariant ==
+  /\ ReceivedTimeoutVotePoolInvariant
+  /\ receivedTimeoutVotes' \subseteq receivedTimeoutVotes
+  /\ context' = context
+  /\ height' = height
+  /\ prepareQCs' = prepareQCs
+  => ReceivedTimeoutVotePoolInvariant'
+PROOF
+  <1>1. ASSUME ReceivedTimeoutVotePoolInvariant,
+              receivedTimeoutVotes' \subseteq receivedTimeoutVotes,
+              context' = context,
+              height' = height,
+              prepareQCs' = prepareQCs
+         PROVE ReceivedTimeoutVotePoolInvariant'
+    <2>1. /\ IsFiniteSet(receivedTimeoutVotes)
+           /\ IsFiniteSet(receivedTimeoutVotes')
+      BY <1>1, FS_Subset DEF ReceivedTimeoutVotePoolInvariant
+    <2>2. CurrentVoters' = CurrentVoters
+      BY <1>1, Isa DEF CurrentVoters, CurrentEpoch
+    <2>3. ReceivedTimeoutVoteSlotsUnique'
+      <3>1. ASSUME NEW left \in receivedTimeoutVotes',
+                    NEW right \in receivedTimeoutVotes',
+                    SameTimeoutVoteSlot(left, right)'
+             PROVE left = right
+        <4>1. /\ left \in receivedTimeoutVotes
+               /\ right \in receivedTimeoutVotes
+               /\ SameTimeoutVoteSlot(left, right)
+          BY <1>1, <3>1, Isa DEF SameTimeoutVoteSlot
+        <4> QED BY <1>1, <4>1
+             DEF ReceivedTimeoutVotePoolInvariant,
+                 ReceivedTimeoutVoteSlotsUnique
+      <3> QED BY <3>1 DEF ReceivedTimeoutVoteSlotsUnique
+    <2>4. \A received \in receivedTimeoutVotes':
+             /\ received.node \in ValidatorIds
+             /\ received.vote \in TimeoutVoteRecordSet
+             /\ received.vote.context = context'
+             /\ received.vote.height = height'
+             /\ received.vote.signer \in CurrentVoters'
+             /\ AuthenticatedHighRef(
+                  received.vote.highRank, received.vote.highSubject)'
+             /\ received.vote.highRank <= received.vote.view
+      <3>1. ASSUME NEW received \in receivedTimeoutVotes'
+             PROVE /\ received.node \in ValidatorIds
+                   /\ received.vote \in TimeoutVoteRecordSet
+                   /\ received.vote.context = context'
+                   /\ received.vote.height = height'
+                   /\ received.vote.signer \in CurrentVoters'
+                   /\ AuthenticatedHighRef(
+                        received.vote.highRank,
+                        received.vote.highSubject)'
+                   /\ received.vote.highRank <= received.vote.view
+        <4>1. received \in receivedTimeoutVotes
+          BY <1>1, <3>1
+        <4>2. /\ received.node \in ValidatorIds
+               /\ received.vote \in TimeoutVoteRecordSet
+               /\ received.vote.context = context
+               /\ received.vote.height = height
+               /\ received.vote.signer \in CurrentVoters
+               /\ AuthenticatedHighRef(
+                    received.vote.highRank, received.vote.highSubject)
+               /\ received.vote.highRank <= received.vote.view
+          BY <1>1, <4>1 DEF ReceivedTimeoutVotePoolInvariant
+        <4>3. AuthenticatedHighRef(
+                 received.vote.highRank, received.vote.highSubject)'
+          BY <1>1, <4>2, Isa DEF AuthenticatedHighRef, HighRefValid
+        <4> QED BY <1>1, <2>2, <4>2, <4>3
+      <3> QED BY <3>1
+    <2> QED BY <2>1, <2>3, <2>4
+         DEF ReceivedTimeoutVotePoolInvariant
+  <1> QED BY <1>1
+
 THEOREM CrashPreservesTimeoutPoolInvariant ==
   \A node \in ValidatorIds:
     /\ ReceivedTimeoutVotePoolInvariant
     /\ Crash(node)
     => ReceivedTimeoutVotePoolInvariant'
-BY SMTT(45), Isa
-   DEF Crash, ReceivedTimeoutVotePoolInvariant,
-       ReceivedTimeoutVoteSlotsUnique, SameTimeoutVoteSlot,
-       TimeoutVoteRecordSet, AuthenticatedHighRef, HighRefValid
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds,
+                ReceivedTimeoutVotePoolInvariant,
+                Crash(node)
+         PROVE ReceivedTimeoutVotePoolInvariant'
+    <2>1. /\ receivedTimeoutVotes' =
+                  {entry \in receivedTimeoutVotes: entry.node # node}
+           /\ context' = context
+           /\ height' = height
+           /\ prepareQCs' = prepareQCs
+      BY <1>1 DEF Crash
+    <2>2. receivedTimeoutVotes' \subseteq receivedTimeoutVotes
+      BY <2>1
+    <2> QED BY <1>1, <2>1, <2>2,
+                TimeoutPoolFilteredSubsetPreservesInvariant
+  <1> QED BY <1>1
 
 THEOREM AsyncNextPreservesTimeoutPoolInvariant ==
   AsyncTypeInvariant /\ AsyncNext
@@ -21167,12 +21641,217 @@ THEOREM PreGstResponsiveRestartPreservesSchedulerType ==
 BY AsyncSchedulerStateStutterPreservesType, Isa
    DEF PreGstResponsiveRestart, Restart, AsyncSchedulerVars, vars
 
+THEOREM RemoveRetainedControlSourcePreservesType ==
+  \A retained, voters, node:
+    AsyncRetainedControlType(retained, voters)
+      => AsyncRetainedControlType(
+           {item \in retained: item.source # node}, voters)
+PROOF
+  <1>1. ASSUME NEW retained, NEW voters, NEW node,
+                AsyncRetainedControlType(retained, voters)
+         PROVE AsyncRetainedControlType(
+                 {item \in retained: item.source # node}, voters)
+    <2> DEFINE Cleared == {item \in retained: item.source # node}
+    <2>1. /\ Cleared \subseteq retained
+           /\ IsFiniteSet(Cleared)
+           /\ \A item \in Cleared:
+                /\ AsyncItemTyped(item)
+                /\ item.kind \in AsyncControlKinds
+      BY <1>1, FS_Subset DEF AsyncRetainedControlType, Cleared
+    <2>2. \A source \in ValidatorIds,
+                  controlClass \in AsyncControlKinds:
+             LET retainedClass ==
+                   RetainedClassItems(Cleared, source, controlClass)
+             IN \/ retainedClass = {}
+                \/ /\ Cardinality(retainedClass) <=
+                         Cardinality(voters)
+                   /\ {item.envelope.recipient:
+                         item \in retainedClass} =
+                        ControlRecipients(source, controlClass, voters)
+                   /\ \A left, right \in retainedClass:
+                        ControlView(left) = ControlView(right)
+      <3>1. ASSUME NEW source \in ValidatorIds,
+                    NEW controlClass \in AsyncControlKinds
+             PROVE LET retainedClass ==
+                         RetainedClassItems(
+                           Cleared, source, controlClass)
+                   IN \/ retainedClass = {}
+                      \/ /\ Cardinality(retainedClass) <=
+                               Cardinality(voters)
+                         /\ {item.envelope.recipient:
+                               item \in retainedClass} =
+                              ControlRecipients(
+                                source, controlClass, voters)
+                         /\ \A left, right \in retainedClass:
+                              ControlView(left) = ControlView(right)
+        <4>1. CASE source = node
+          BY <4>1, Isa DEF Cleared, RetainedClassItems
+        <4>2. CASE source # node
+          <5>1. RetainedClassItems(Cleared, source, controlClass) =
+                   RetainedClassItems(retained, source, controlClass)
+            BY <4>2, Isa DEF Cleared, RetainedClassItems
+          <5> QED BY <1>1, <3>1, <5>1
+               DEF AsyncRetainedControlType
+        <4> QED BY <4>1, <4>2
+      <3> QED BY <3>1
+    <2> QED BY <2>1, <2>2 DEF AsyncRetainedControlType, Cleared
+  <1> QED BY <1>1
+
+THEOREM RestartHighestPrepareControlIsRetainable ==
+  \A node \in ValidatorIds:
+    AsyncTypeInvariant =>
+      RetainableControlBatch(
+        RestartHighestPrepareControl(node), CurrentVoters)
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds, AsyncTypeInvariant
+         PROVE RetainableControlBatch(
+                 RestartHighestPrepareControl(node), CurrentVoters)
+    <2>1. CASE RestartHighestPrepareQCs(node) = {}
+      BY <2>1 DEF RestartHighestPrepareControl,
+                     RetainableControlBatch
+    <2>2. CASE RestartHighestPrepareQCs(node) # {}
+      <3> DEFINE Certificate ==
+             CHOOSE qc \in RestartHighestPrepareQCs(node): TRUE
+      <3>1. Certificate \in RestartHighestPrepareQCs(node)
+        BY <2>2, FS_EmptySet, Zenon DEF Certificate
+      <3>2. Certificate \in QcRecordSet
+        BY <1>1, <3>1 DEF AsyncTypeInvariant, TypeInvariant,
+                              RestartHighestPrepareQCs
+      <3>3. RetainableControlBatch(
+               QcOutbox(node, Certificate), CurrentVoters)
+        BY <1>1, <3>2, QcOutboxIsRetainable
+      <3>4. RestartHighestPrepareControl(node) =
+               QcOutbox(node, Certificate)
+        BY <2>2 DEF RestartHighestPrepareControl, Certificate
+      <3> QED BY <3>3, <3>4
+    <2> QED BY <2>1, <2>2
+  <1> QED BY <1>1
+
+THEOREM RestartDecisionControlIsRetainable ==
+  \A node \in ValidatorIds:
+    /\ StrongInductiveInvariant
+    /\ AsyncTypeInvariant
+    => RetainableControlBatch(
+         RestartDecisionControl(node), CurrentVoters)
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds,
+                StrongInductiveInvariant,
+                AsyncTypeInvariant
+         PROVE RetainableControlBatch(
+                 RestartDecisionControl(node), CurrentVoters)
+    <2>1. CASE RestartDecisionQCs(node) = {}
+      BY <2>1 DEF RestartDecisionControl, RetainableControlBatch
+    <2>2. CASE RestartDecisionQCs(node) # {}
+      <3> DEFINE Certificate ==
+             CHOOSE qc \in RestartDecisionQCs(node): TRUE
+      <3>1. Certificate \in RestartDecisionQCs(node)
+        BY <2>2, FS_EmptySet, Zenon DEF Certificate
+      <3>2. Certificate \in QcRecordSet
+        BY <1>1, <3>1, SMT
+           DEF RestartDecisionQCs, StrongInductiveInvariant,
+               Safety, DecisionAgreement, TypeInvariant
+      <3>3. RetainableControlBatch(
+               QcOutbox(node, Certificate), CurrentVoters)
+        BY <1>1, <3>2, QcOutboxIsRetainable
+      <3>4. RestartDecisionControl(node) =
+               QcOutbox(node, Certificate)
+        BY <2>2 DEF RestartDecisionControl, Certificate
+      <3> QED BY <3>3, <3>4
+    <2> QED BY <2>1, <2>2
+  <1> QED BY <1>1
+
+THEOREM RestartLastTcControlIsRetainable ==
+  \A node \in ValidatorIds:
+    AsyncTypeInvariant =>
+      RetainableControlBatch(RestartLastTCControl(node), CurrentVoters)
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds, AsyncTypeInvariant
+         PROVE RetainableControlBatch(
+                 RestartLastTCControl(node), CurrentVoters)
+    <2>1. CASE RestartLastInstalledTCs(node) = {}
+      BY <2>1 DEF RestartLastTCControl, RetainableControlBatch
+    <2>2. CASE RestartLastInstalledTCs(node) # {}
+      <3> DEFINE Certificate ==
+             CHOOSE tc \in RestartLastInstalledTCs(node): TRUE
+      <3>1. Certificate \in RestartLastInstalledTCs(node)
+        BY <2>2, FS_EmptySet, Zenon DEF Certificate
+      <3>2. Certificate \in TcRecordSet
+        BY <1>1, <3>1, SMT
+           DEF RestartLastInstalledTCs, RestartInstalledTCs,
+               AsyncTypeInvariant, TypeInvariant, TcWellTyped
+      <3>3. RetainableControlBatch(
+               TcOutbox(node, Certificate), CurrentVoters)
+        BY <1>1, <3>2, TcOutboxIsRetainable
+      <3>4. RestartLastTCControl(node) =
+               TcOutbox(node, Certificate)
+        BY <2>2 DEF RestartLastTCControl, Certificate
+      <3> QED BY <3>3, <3>4
+    <2> QED BY <2>1, <2>2
+  <1> QED BY <1>1
+
+THEOREM RestartRetainedControlPreservesType ==
+  \A node \in ValidatorIds:
+    /\ StrongInductiveInvariant
+    /\ AsyncTypeInvariant
+    => AsyncRetainedControlType(
+         RestartRetainedControl(node), CurrentVoters)
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds,
+                StrongInductiveInvariant,
+                AsyncTypeInvariant
+         PROVE AsyncRetainedControlType(
+                 RestartRetainedControl(node), CurrentVoters)
+    <2> DEFINE Cleared ==
+           {item \in asyncRetainedControl: item.source # node}
+    <2> DEFINE WithPrepare ==
+           RememberedControl(
+             Cleared, RestartHighestPrepareControl(node))
+    <2> DEFINE WithDecision ==
+           RememberedControl(
+             WithPrepare, RestartDecisionControl(node))
+    <2>1. AsyncRetainedControlType(
+             asyncRetainedControl, CurrentVoters)
+      BY <1>1
+         DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+             AsyncTransportTypeInvariant,
+             AsyncTransportContentTypeInvariant,
+             AsyncTransportHistoryTypeInvariant
+    <2>2. AsyncRetainedControlType(Cleared, CurrentVoters)
+      BY <2>1, RemoveRetainedControlSourcePreservesType DEF Cleared
+    <2>3. RetainableControlBatch(
+             RestartHighestPrepareControl(node), CurrentVoters)
+      BY <1>1, RestartHighestPrepareControlIsRetainable
+    <2>4. AsyncRetainedControlType(WithPrepare, CurrentVoters)
+      BY <2>2, <2>3, RememberedControlPreservesRetainedType
+         DEF WithPrepare
+    <2>5. RetainableControlBatch(
+             RestartDecisionControl(node), CurrentVoters)
+      BY <1>1, RestartDecisionControlIsRetainable
+    <2>6. AsyncRetainedControlType(WithDecision, CurrentVoters)
+      BY <2>4, <2>5, RememberedControlPreservesRetainedType
+         DEF WithDecision
+    <2>7. RetainableControlBatch(
+             RestartLastTCControl(node), CurrentVoters)
+      BY <1>1, RestartLastTcControlIsRetainable
+    <2>8. AsyncRetainedControlType(
+             RememberedControl(
+               WithDecision, RestartLastTCControl(node)),
+             CurrentVoters)
+      BY <2>6, <2>7, RememberedControlPreservesRetainedType
+    <2>9. RestartRetainedControl(node) =
+             RememberedControl(
+               WithDecision, RestartLastTCControl(node))
+      BY DEF RestartRetainedControl, Cleared, WithPrepare, WithDecision
+    <2> QED BY <2>8, <2>9
+  <1> QED BY <1>1
+
 THEOREM PreGstResponsiveReplayPreservesSchedulerType ==
   /\ StrongInductiveInvariant
   /\ AsyncTypeInvariant
   /\ PreGstResponsiveReplay
   => AsyncSchedulerTypeInvariant'
-BY RestartReplayIsTypedOwnedAndUnique, SMTT(30), Isa
+BY RestartReplayIsTypedOwnedAndUnique,
+   RestartRetainedControlPreservesType, SMTT(30), Isa
    DEF PreGstResponsiveReplay, RecoveryCoreReplay,
        ResetNodeSchedulerForRestart,
        AsyncSchedulerTypeInvariant, AsyncRuntimeTypeInvariant,
@@ -21198,23 +21877,103 @@ BY RestartReplayIsTypedOwnedAndUnique, SMTT(30), Isa
        ResumeProposal, ResumeVote, ResumeTimeout,
        StrongInductiveInvariant, Safety, AsyncTypeInvariant
 
+THEOREM FreshTypedOwnedReplayCandidateProperties ==
+  \A node, candidate:
+    /\ AsyncCandidateTyped(candidate)
+    /\ candidate.node = node
+    => /\ AsyncQueueTyped(FreshCandidateSequence(candidate))
+       /\ AsyncCausalQueueOwnership(
+            node, FreshCandidateSequence(candidate))
+       /\ SequenceHasUniqueValues(FreshCandidateSequence(candidate))
+       /\ Len(FreshCandidateSequence(candidate)) <= 1
+PROOF
+  <1>1. ASSUME NEW node, NEW candidate,
+                AsyncCandidateTyped(candidate),
+                candidate.node = node
+         PROVE /\ AsyncQueueTyped(FreshCandidateSequence(candidate))
+               /\ AsyncCausalQueueOwnership(
+                    node, FreshCandidateSequence(candidate))
+               /\ SequenceHasUniqueValues(
+                    FreshCandidateSequence(candidate))
+               /\ Len(FreshCandidateSequence(candidate)) <= 1
+    <2>1. CASE CandidateScheduled(candidate)
+      <3>1. FreshCandidateSequence(candidate) = <<>>
+        BY <2>1 DEF FreshCandidateSequence
+      <3> QED BY <3>1, EmptyReplayProperties
+    <2>2. CASE ~CandidateScheduled(candidate)
+      <3>1. /\ AsyncQueueTyped(<<candidate>>)
+             /\ AsyncCausalQueueOwnership(node, <<candidate>>)
+             /\ SequenceHasUniqueValues(<<candidate>>)
+        BY <1>1, TypedOwnedSingletonIsReplay
+      <3>2. /\ FreshCandidateSequence(candidate) = <<candidate>>
+             /\ Len(<<candidate>>) = 1
+        BY <2>2 DEF FreshCandidateSequence
+      <3> QED BY <3>1, <3>2
+    <2> QED BY <2>1, <2>2
+  <1> QED BY <1>1
+
+THEOREM FreshReplayCandidateIsDisjointFromScheduled ==
+  \A candidate:
+    SequenceSet(FreshCandidateSequence(candidate)) \cap
+      (QueuedCandidates \cup DeferredCandidates \cup CausalCandidates
+        \cup TrackedWorkCandidates) = {}
+BY Isa
+   DEF FreshCandidateSequence, CandidateScheduled, SequenceSet
+
 THEOREM DriveResponsiveReplayHeadPreservesSchedulerType ==
   /\ StrongInductiveInvariant
   /\ AsyncTypeInvariant
   /\ AsyncRecoveryTypeInvariant
   /\ DriveResponsiveReplayHead
   => AsyncSchedulerTypeInvariant'
-BY RestartSignatureReplayProperties, SMTT(45), Isa
-   DEF DriveResponsiveReplayHead, RecoveryCoreReplay,
-       ResumeProposal, ResumeVote, ResumeTimeout,
-       AsyncRecoveryTypeInvariant, ResponsiveReplayScheduledCandidates,
-       AsyncSchedulerTypeInvariant, AsyncRuntimeTypeInvariant,
-       AsyncRuntimeScalarTypeInvariant, AsyncCausalTypeInvariant,
-       AsyncCommandQueueOwnership, AsyncCausalQueueOwnership,
-       AsyncQueueTyped, FreshCandidateSequence, SequenceSet,
-       AsyncIoTypeInvariant, AsyncDeferredTypeInvariant,
-       AsyncTransportTypeInvariant, AsyncIngressTypeInvariant,
-       AsyncTypeInvariant, StrongInductiveInvariant, Safety
+PROOF
+  <1>1. ASSUME StrongInductiveInvariant,
+              AsyncTypeInvariant,
+              AsyncRecoveryTypeInvariant,
+              DriveResponsiveReplayHead
+         PROVE AsyncSchedulerTypeInvariant'
+    <2> DEFINE Node == asyncRecoveryNode
+    <2> DEFINE Candidate == Head(asyncRecoveryReplayQueue)
+    <2> DEFINE Fresh == FreshCandidateSequence(Candidate)
+    <2>1. /\ Node \in ValidatorIds
+           /\ AsyncCausalTypeInvariant
+           /\ AsyncQueueTyped(asyncRecoveryReplayQueue)
+           /\ Len(asyncRecoveryReplayQueue) > 0
+      BY <1>1, SMT
+         DEF Node, AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+             AsyncRuntimeTypeInvariant, AsyncRecoveryTypeInvariant,
+             DriveResponsiveReplayHead, ModelConfiguration
+    <2>2. /\ AsyncCandidateTyped(Candidate)
+           /\ Candidate.node = Node
+      BY <1>1, <2>1, TypedQueueTailFacts, SMT
+         DEF Candidate, Node, AsyncRecoveryTypeInvariant,
+             SequenceSet
+    <2>3. /\ AsyncQueueTyped(Fresh)
+           /\ AsyncCausalQueueOwnership(Node, Fresh)
+           /\ SequenceHasUniqueValues(Fresh)
+           /\ Len(Fresh) <= 1
+      BY <2>2, FreshTypedOwnedReplayCandidateProperties DEF Fresh
+    <2>4. asyncCausalQueues' =
+             [asyncCausalQueues EXCEPT ![Node] = @ \o Fresh]
+      BY <1>1 DEF DriveResponsiveReplayHead, Node, Candidate, Fresh
+    <2>5. AsyncCausalTypeInvariant'
+      BY <2>1, <2>3, <2>4,
+         AppendOwnedCausalSuccessorsPreservesCausalType
+    <2>6. /\ AsyncRuntimeScalarTypeInvariant'
+           /\ AsyncIoTypeInvariant'
+           /\ AsyncDeferredTypeInvariant'
+           /\ AsyncTransportTypeInvariant'
+           /\ AsyncIngressTypeInvariant'
+      BY <1>1, Isa
+         DEF DriveResponsiveReplayHead, RecoveryCoreReplay,
+             ResumeProposal, ResumeVote, ResumeTimeout,
+             AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+             AsyncRuntimeTypeInvariant, AsyncIoTypeInvariant,
+             AsyncDeferredTypeInvariant, AsyncTransportTypeInvariant,
+             AsyncIngressTypeInvariant
+    <2> QED BY <2>5, <2>6
+         DEF AsyncSchedulerTypeInvariant, AsyncRuntimeTypeInvariant
+  <1> QED BY <1>1
 
 THEOREM FinishResponsiveReplayPreservesSchedulerType ==
   /\ StrongInductiveInvariant
@@ -21222,16 +21981,66 @@ THEOREM FinishResponsiveReplayPreservesSchedulerType ==
   /\ AsyncRecoveryTypeInvariant
   /\ FinishResponsiveReplay
   => AsyncSchedulerTypeInvariant'
-BY RestartRunnerAssemblyProperties, SMTT(45), Isa
-   DEF FinishResponsiveReplay, AsyncRecoveryTypeInvariant,
-       ResponsiveReplayScheduledCandidates,
-       AsyncSchedulerTypeInvariant, AsyncRuntimeTypeInvariant,
-       AsyncRuntimeScalarTypeInvariant, AsyncCausalTypeInvariant,
-       AsyncCommandQueueOwnership, AsyncCausalQueueOwnership,
-       AsyncQueueTyped, FreshCandidateSequence, SequenceSet,
-       AsyncIoTypeInvariant, AsyncDeferredTypeInvariant,
-       AsyncTransportTypeInvariant, AsyncIngressTypeInvariant,
-       AsyncTypeInvariant, StrongInductiveInvariant, Safety
+PROOF
+  <1>1. ASSUME StrongInductiveInvariant,
+              AsyncTypeInvariant,
+              AsyncRecoveryTypeInvariant,
+              FinishResponsiveReplay
+         PROVE AsyncSchedulerTypeInvariant'
+    <2> DEFINE Node == asyncRecoveryNode
+    <2> DEFINE Runner == RestartRunnerAssembly(Node)
+    <2>1. /\ Node \in ValidatorIds
+           /\ TypeInvariant
+           /\ AsyncCausalTypeInvariant
+      BY <1>1, SMT
+         DEF Node, FinishResponsiveReplay,
+             AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+             AsyncRuntimeTypeInvariant, ModelConfiguration
+    <2>2. /\ AsyncQueueTyped(Runner)
+           /\ AsyncCausalQueueOwnership(Node, Runner)
+           /\ SequenceHasUniqueValues(Runner)
+           /\ Len(Runner) <= 1
+      BY <2>1, RestartRunnerAssemblyProperties DEF Runner
+    <2>3. CASE Len(Runner) = 0
+      <3>1. UNCHANGED asyncCausalQueues
+        BY <1>1, <2>3 DEF FinishResponsiveReplay, Node, Runner
+      <3> QED BY <2>1, <3>1, Isa DEF AsyncCausalTypeInvariant
+    <2>4. CASE Len(Runner) > 0
+      <3> DEFINE Candidate == Runner[1]
+      <3> DEFINE Fresh == FreshCandidateSequence(Candidate)
+      <3>1. /\ Len(Runner) = 1
+             /\ AsyncCandidateTyped(Candidate)
+             /\ Candidate.node = Node
+        BY <2>2, <2>4, SMT
+           DEF Candidate, AsyncQueueTyped,
+               AsyncCausalQueueOwnership, SequenceSet
+      <3>2. /\ AsyncQueueTyped(Fresh)
+             /\ AsyncCausalQueueOwnership(Node, Fresh)
+             /\ SequenceHasUniqueValues(Fresh)
+             /\ Len(Fresh) <= 1
+        BY <3>1, FreshTypedOwnedReplayCandidateProperties DEF Fresh
+      <3>3. asyncCausalQueues' =
+               [asyncCausalQueues EXCEPT ![Node] = @ \o Fresh]
+        BY <1>1, <3>1
+           DEF FinishResponsiveReplay, Node, Runner, Candidate, Fresh
+      <3> QED BY <2>1, <3>2, <3>3,
+                   AppendOwnedCausalSuccessorsPreservesCausalType
+    <2>5. AsyncCausalTypeInvariant'
+      BY <2>2, <2>3, <2>4, SMT
+    <2>6. /\ AsyncRuntimeScalarTypeInvariant'
+           /\ AsyncIoTypeInvariant'
+           /\ AsyncDeferredTypeInvariant'
+           /\ AsyncTransportTypeInvariant'
+           /\ AsyncIngressTypeInvariant'
+      BY <1>1, Isa
+         DEF FinishResponsiveReplay,
+             AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+             AsyncRuntimeTypeInvariant, AsyncIoTypeInvariant,
+             AsyncDeferredTypeInvariant, AsyncTransportTypeInvariant,
+             AsyncIngressTypeInvariant
+    <2> QED BY <2>5, <2>6
+         DEF AsyncSchedulerTypeInvariant, AsyncRuntimeTypeInvariant
+  <1> QED BY <1>1
 
 THEOREM AsyncNextPreservesSchedulerType ==
   /\ StrongInductiveInvariant
@@ -21311,10 +22120,12 @@ PROOF
       BY <1>1 DEF AsyncStrongTypeInvariant
     <2>2. AsyncTypeInvariant
       BY <1>1, AsyncStrongTypeProjectsAsyncType
+    <2>2a. AsyncRecoveryTypeInvariant
+      BY <1>1 DEF AsyncStrongTypeInvariant
     <2>3. StrongInductiveInvariant'
       BY <1>1, <2>1, AsyncNextPreservesStrongInductiveInvariant
     <2>4. AsyncSchedulerTypeInvariant'
-      BY <1>1, <2>1, <2>2,
+      BY <1>1, <2>1, <2>2, <2>2a,
          AsyncNextPreservesSchedulerType
     <2>5. ReceivedTimeoutVotePoolInvariant'
       BY <1>1, <2>2, AsyncNextPreservesTimeoutPoolInvariant
@@ -24189,22 +25000,134 @@ PROOF
 (***************************************************************************
 The replay-drain obligation is intentionally separate from restart
 selection.  It is the exact starvation-freedom boundary: the quarantined
-node's ordinary serialized runner must consume the current signature before
-DriveResponsiveReplayHead may install the next FIFO element, and an empty
-tail must eventually enable FinishResponsiveReplay.
+node's ordinary serialized runner and completion I/O worker must consume the
+current signature before DriveResponsiveReplayHead may install the next FIFO
+element, and an empty tail must eventually enable FinishResponsiveReplay.
 ***************************************************************************)
+THEOREM ResponsiveReplayRunNodeEnabledWhileReplaying ==
+  /\ AsyncStrongTypeInvariant
+  /\ AsyncRecoveryReplayingPending
+  => ENABLED <<ResponsiveReplayRunNode>>_AsyncAllVars
+BY ResponsiveUnappliedRunNodeIsEnabled, ExpandENABLED, Isa
+   DEF AsyncStrongTypeInvariant, AsyncRecoveryTypeInvariant,
+       AsyncRecoveryReplayingPending, ResponsiveReplayRunNode,
+       ResponsiveReplayDraining, RunNode, AsyncAllVars,
+       AsyncRecoveryVars
+
+THEOREM ResponsiveReplayIoWorkerEnabledWhileQueued ==
+  /\ AsyncStrongTypeInvariant
+  /\ AsyncRecoveryReplayingPending
+  /\ AsyncIoQueueDepth(asyncRecoveryNode) > 0
+  => ENABLED <<ResponsiveReplayServiceIoWorker>>_AsyncAllVars
+BY ExpandENABLED, Isa
+   DEF AsyncStrongTypeInvariant, AsyncRecoveryTypeInvariant,
+       AsyncRecoveryReplayingPending,
+       ResponsiveReplayServiceIoWorker, ResponsiveReplayDraining,
+       ServiceIoWorker, ResponsiveReplayExecutorAllowed,
+       PublishEphemeralItems, LeaveCausalQueues,
+       AsyncIoQueueDepth, AsyncAllVars, AsyncSchedulerVars,
+       AsyncLocalAdmissionVars, AsyncDeferredVars, vars
+
+THEOREM DriveResponsiveReplayEnabledAtIdleHead ==
+  /\ AsyncStrongTypeInvariant
+  /\ AsyncRecoveryReplayingPending
+  /\ NodeIdle(asyncRecoveryNode)
+  /\ Len(asyncRecoveryReplayQueue) > 0
+  => ENABLED <<DriveResponsiveReplayHead>>_AsyncAllVars
+BY RestartSignatureReplayProperties, ExpandENABLED, SMTT(45), Isa
+   DEF AsyncStrongTypeInvariant, StrongInductiveInvariant, Safety,
+       AsyncRecoveryTypeInvariant, AsyncRecoveryReplayingPending,
+       DriveResponsiveReplayHead, RecoveryCoreReplay,
+       ResumeProposal, ResumeVote, ResumeTimeout, VoteResumeAuthorized,
+       RestartSignatureReplay, RestartTimeoutOrProposalReplay,
+       RestartPrepareReplayIfActive, RestartLockedCommitReplayIfActive,
+       RestartTimeoutIntents, RestartProposalIntents,
+       RestartPrepareIntents, RestartLockedCommitIntents,
+       FreshCandidateSequence, CandidateScheduled,
+       AsyncAllVars, AsyncRecoveryVars, AsyncSchedulerVars, vars,
+       SequenceSet
+
+THEOREM FinishResponsiveReplayEnabledAtIdleTail ==
+  /\ AsyncStrongTypeInvariant
+  /\ AsyncRecoveryReplayingPending
+  /\ NodeIdle(asyncRecoveryNode)
+  /\ asyncRecoveryReplayQueue = <<>>
+  /\ ReplayCommitSourcesReady(asyncRecoveryNode)
+  => ENABLED <<FinishResponsiveReplay>>_AsyncAllVars
+BY RestartRunnerAssemblyProperties, ExpandENABLED, SMTT(30), Isa
+   DEF AsyncStrongTypeInvariant, StrongInductiveInvariant, Safety,
+       AsyncRecoveryTypeInvariant, AsyncRecoveryReplayingPending,
+       FinishResponsiveReplay, ReplayCommitSourcesReady,
+       ReplayCommitIntentReady, RestartRunnerAssembly,
+       RestartRunnerAssemblyEnabled, FreshCandidateSequence,
+       CandidateScheduled, AsyncAllVars, AsyncRecoveryVars,
+       AsyncSchedulerVars, vars
+
 THEOREM AsyncRecoverySignatureDrainObligation ==
   \A initialContext:
     AsyncSpecAt(initialContext)
       => (AsyncRecoveryReplayingPending ~> AsyncRecoveryRecoveredReady)
-BY AsyncRecoveryReplayingStep, SMTT(60), Isa, PTL
-   DEF AsyncSpecAt, AsyncFairnessAt,
-       AsyncRecoveryReplayingPending, AsyncRecoveryRecoveredReady,
-       ResponsiveReplayRunNode, DriveResponsiveReplayHead,
-       FinishResponsiveReplay, RunNode, RecoveryCoreReplay,
-       ResumeProposal, ResumeVote, ResumeTimeout,
-       AsyncStrongTypeInvariant, AsyncRecoveryTypeInvariant,
-       AsyncAllVars, AsyncRecoveryVars, vars
+PROOF
+  <1>1. ASSUME NEW initialContext
+         PROVE AsyncSpecAt(initialContext)
+                 => (AsyncRecoveryReplayingPending
+                       ~> AsyncRecoveryRecoveredReady)
+    <2>1. AsyncSpecAt(initialContext) => []AsyncStrongTypeInvariant
+      BY AsyncSpecAlwaysStrongTypeInvariant
+    <2>2. /\ AsyncStrongTypeInvariant
+           /\ AsyncRecoveryReplayingPending
+           /\ [AsyncNext]_AsyncAllVars
+          => AsyncRecoveryReplayingPending'
+               \/ AsyncRecoveryRecoveredReady'
+      BY AsyncRecoveryReplayingStep
+    <2>3. /\ AsyncStrongTypeInvariant
+           /\ AsyncRecoveryReplayingPending
+          => ENABLED <<ResponsiveReplayRunNode>>_AsyncAllVars
+      BY ResponsiveReplayRunNodeEnabledWhileReplaying
+    <2>4. /\ AsyncStrongTypeInvariant
+           /\ AsyncRecoveryReplayingPending
+           /\ AsyncIoQueueDepth(asyncRecoveryNode) > 0
+          => ENABLED
+               <<ResponsiveReplayServiceIoWorker>>_AsyncAllVars
+      BY ResponsiveReplayIoWorkerEnabledWhileQueued
+    <2>5. /\ AsyncStrongTypeInvariant
+           /\ AsyncRecoveryReplayingPending
+           /\ NodeIdle(asyncRecoveryNode)
+           /\ Len(asyncRecoveryReplayQueue) > 0
+          => ENABLED <<DriveResponsiveReplayHead>>_AsyncAllVars
+      BY DriveResponsiveReplayEnabledAtIdleHead
+    <2>6. /\ AsyncStrongTypeInvariant
+           /\ AsyncRecoveryReplayingPending
+           /\ NodeIdle(asyncRecoveryNode)
+           /\ asyncRecoveryReplayQueue = <<>>
+           /\ ReplayCommitSourcesReady(asyncRecoveryNode)
+          => ENABLED <<FinishResponsiveReplay>>_AsyncAllVars
+      BY FinishResponsiveReplayEnabledAtIdleTail
+    <2>7. AsyncSpecAt(initialContext)
+            => WF_AsyncAllVars(ResponsiveReplayRunNode)
+      BY DEF AsyncSpecAt, AsyncFairnessAt
+    <2>8. AsyncSpecAt(initialContext)
+            => WF_AsyncAllVars(ResponsiveReplayServiceIoWorker)
+      BY DEF AsyncSpecAt, AsyncFairnessAt
+    <2>9. AsyncSpecAt(initialContext)
+            => WF_AsyncAllVars(DriveResponsiveReplayHead)
+      BY DEF AsyncSpecAt, AsyncFairnessAt
+    <2>10. AsyncSpecAt(initialContext)
+             => WF_AsyncAllVars(FinishResponsiveReplay)
+      BY DEF AsyncSpecAt, AsyncFairnessAt
+    <2> QED BY <2>1, <2>2, <2>3, <2>4, <2>5, <2>6,
+                <2>7, <2>8, <2>9, <2>10,
+                RestartSignatureReplayProperties, SMTT(60), Isa, PTL
+         DEF AsyncSpecAt, AsyncRecoveryReplayingPending,
+             AsyncRecoveryRecoveredReady,
+             ResponsiveReplayRunNode,
+             ResponsiveReplayServiceIoWorker,
+             DriveResponsiveReplayHead, FinishResponsiveReplay,
+             RunNode, ServiceIoWorker, RecoveryCoreReplay,
+             ResumeProposal, ResumeVote, ResumeTimeout,
+             AsyncStrongTypeInvariant, AsyncRecoveryTypeInvariant,
+             AsyncAllVars, AsyncRecoveryVars, vars
+  <1> QED BY <1>1
 
 THEOREM AsyncRecoveryReplayLeadsToRecoveredReady ==
   \A initialContext:
@@ -24217,12 +25140,51 @@ THEOREM ResponsiveRestartConsumesOneGenerationSlot ==
   /\ AsyncStrongTypeInvariant
   /\ PreGstResponsiveRestart
   => RecoveryGenerationBudget' < RecoveryGenerationBudget
-BY SMTT(45), Isa
-   DEF RecoveryGenerationBudget, RecoveryGenerationSlots,
-       PreGstResponsiveRestart, Restart,
-       AsyncStrongTypeInvariant, StrongInductiveInvariant,
-       Safety, TypeInvariant, Generations, ValidatorIds,
-       AsyncRecoveryTypeInvariant, AsyncRestartAuthorityInvariant
+PROOF
+  <1>1. ASSUME AsyncStrongTypeInvariant,
+              PreGstResponsiveRestart
+         PROVE RecoveryGenerationBudget' < RecoveryGenerationBudget
+    <2> DEFINE Node == asyncRecoveryNode
+    <2> DEFINE Lost == <<Node, generation[Node] + 1>>
+    <2>1. /\ Node \in Responsive
+           /\ Node \in ValidatorIds
+           /\ generation[Node] \in Generations
+           /\ generation[Node] < MaxGeneration
+           /\ generation' =
+                [generation EXCEPT ![Node] = @ + 1]
+      BY <1>1, SMT
+         DEF Node, PreGstResponsiveRestart, Restart,
+             AsyncStrongTypeInvariant, StrongInductiveInvariant,
+             Safety, TypeInvariant, AsyncRecoveryTypeInvariant,
+             ModelConfiguration
+    <2>2. /\ generation[Node] + 1 \in Generations
+           /\ Lost \in Responsive \X Generations
+           /\ Lost \in RecoveryGenerationSlots
+      BY <2>1, SMT
+         DEF Generations, Lost, RecoveryGenerationSlots
+    <2>3. RecoveryGenerationSlots' =
+             RecoveryGenerationSlots \ {Lost}
+      BY <2>1, Isa
+         DEF RecoveryGenerationSlots, Lost, Generations
+    <2>4. /\ IsFiniteSet(Responsive)
+           /\ IsFiniteSet(Generations)
+           /\ IsFiniteSet(Responsive \X Generations)
+      BY <1>1, FS_Interval, FS_Subset, FS_Product
+         DEF AsyncStrongTypeInvariant, StrongInductiveInvariant,
+             Safety, TypeInvariant, ModelConfiguration,
+             QuorumConfiguration, ValidatorIds, Generations
+    <2>5. IsFiniteSet(RecoveryGenerationSlots)
+      BY <2>4, FS_Subset DEF RecoveryGenerationSlots
+    <2>6. Cardinality(RecoveryGenerationSlots \ {Lost}) =
+             Cardinality(RecoveryGenerationSlots) - 1
+      BY <2>2, <2>5, FS_RemoveElement
+    <2>7. Cardinality(RecoveryGenerationSlots) \in Nat \ {0}
+      BY <2>2, <2>5, FS_CardinalityType, FS_EmptySet, SMT
+    <2>8. Cardinality(RecoveryGenerationSlots \ {Lost}) <
+             Cardinality(RecoveryGenerationSlots)
+      BY <2>6, <2>7, SMT
+    <2> QED BY <2>3, <2>8 DEF RecoveryGenerationBudget
+  <1> QED BY <1>1
 
 THEOREM AsyncRecoveredReadyLeadsToGst ==
   \A initialContext:
@@ -24467,41 +25429,134 @@ THEOREM DriveResponsiveReplayHeadPreservesProgressOwnership ==
   /\ AsyncProgressOwnershipInvariant
   /\ DriveResponsiveReplayHead
   => AsyncProgressOwnershipInvariant'
-BY RestartSignatureReplayProperties, SMTT(45), Isa
-   DEF DriveResponsiveReplayHead, RecoveryCoreReplay,
-       ResumeProposal, ResumeVote, ResumeTimeout,
-       AsyncStrongTypeInvariant, AsyncRecoveryTypeInvariant,
-       AsyncProgressOwnershipInvariant,
-       AsyncLogicalCandidateOwnershipInvariant,
-       AsyncOutstandingCarrierInvariant,
-       SerializedBusyOwnershipInvariant, BusyCompletionWitnessInvariant,
-       QueuedCandidates, DeferredCandidates, CausalCandidates,
-       TrackedWorkCandidates, ConsensusIoCandidates,
-       SerializedBusyOwners, BusyCompletionCandidates,
-       ActiveBusyCompletionCarrier, FreshCandidateSequence,
-       SequenceHasUniqueValues, SequenceSet, NodeIdle,
-       PendingNodes, SigningNodes, AllPendingRequests,
-       RequestNodeSet, RequestsUniqueByNode, AsyncCandidateTyped
+PROOF
+  <1>1. ASSUME AsyncStrongTypeInvariant,
+              AsyncProgressOwnershipInvariant,
+              DriveResponsiveReplayHead
+         PROVE AsyncProgressOwnershipInvariant'
+    <2> DEFINE Node == asyncRecoveryNode
+    <2> DEFINE Candidate == Head(asyncRecoveryReplayQueue)
+    <2> DEFINE Fresh == FreshCandidateSequence(Candidate)
+    <2>1. /\ AsyncRecoveryTypeInvariant
+           /\ AsyncQueueTyped(asyncRecoveryReplayQueue)
+           /\ Len(asyncRecoveryReplayQueue) > 0
+           /\ Node \in ValidatorIds
+      BY <1>1, SMT
+         DEF AsyncStrongTypeInvariant, AsyncRecoveryTypeInvariant,
+             DriveResponsiveReplayHead, Node, ModelConfiguration
+    <2>2. /\ AsyncCandidateTyped(Candidate)
+           /\ Candidate.node = Node
+      BY <2>1, TypedQueueTailFacts, SMT
+         DEF Candidate, Node, AsyncRecoveryTypeInvariant, SequenceSet
+    <2>3. /\ AsyncQueueTyped(Fresh)
+           /\ AsyncCausalQueueOwnership(Node, Fresh)
+           /\ SequenceHasUniqueValues(Fresh)
+           /\ Len(Fresh) <= 1
+      BY <2>2, FreshTypedOwnedReplayCandidateProperties DEF Fresh
+    <2>4. SequenceSet(Fresh) \cap
+             (QueuedCandidates \cup DeferredCandidates \cup
+                CausalCandidates \cup TrackedWorkCandidates) = {}
+      BY FreshReplayCandidateIsDisjointFromScheduled DEF Fresh
+    <2>5. /\ asyncCausalQueues' =
+                  [asyncCausalQueues EXCEPT ![Node] = @ \o Fresh]
+           /\ asyncRecoveryReplayQueue' =
+                  Tail(asyncRecoveryReplayQueue)
+           /\ NodeIdle(Node)
+           /\ RecoveryCoreReplay(Node, Candidate)
+      BY <1>1 DEF DriveResponsiveReplayHead, Node, Candidate, Fresh
+    <2> QED BY <1>1, <2>1, <2>2, <2>3, <2>4, <2>5,
+                ConcatTypedOwnedDisjointReplay, RangeConcatenation,
+                RangeEquality, Isa
+         DEF DriveResponsiveReplayHead, RecoveryCoreReplay,
+             ResumeProposal, ResumeVote, ResumeTimeout,
+             AsyncStrongTypeInvariant, AsyncRecoveryTypeInvariant,
+             AsyncProgressOwnershipInvariant,
+             AsyncLogicalCandidateOwnershipInvariant,
+             AsyncOutstandingCarrierInvariant,
+             SerializedBusyOwnershipInvariant,
+             BusyCompletionWitnessInvariant,
+             QueuedCandidates, DeferredCandidates, CausalCandidates,
+             TrackedWorkCandidates, ConsensusIoCandidates,
+             SerializedBusyOwners, BusyCompletionCandidates,
+             ActiveBusyCompletionCarrier, FreshCandidateSequence,
+             SequenceHasUniqueValues, SequenceSet, NodeIdle,
+             PendingNodes, SigningNodes, AllPendingRequests,
+             RequestNodeSet, RequestsUniqueByNode, AsyncCandidateTyped,
+             Node, Candidate, Fresh
+  <1> QED BY <1>1
 
 THEOREM FinishResponsiveReplayPreservesProgressOwnership ==
   /\ AsyncStrongTypeInvariant
   /\ AsyncProgressOwnershipInvariant
   /\ FinishResponsiveReplay
   => AsyncProgressOwnershipInvariant'
-BY RestartRunnerAssemblyProperties, SMTT(45), Isa
-   DEF FinishResponsiveReplay,
-       AsyncStrongTypeInvariant, AsyncRecoveryTypeInvariant,
-       AsyncProgressOwnershipInvariant,
-       AsyncLogicalCandidateOwnershipInvariant,
-       AsyncOutstandingCarrierInvariant,
-       SerializedBusyOwnershipInvariant, BusyCompletionWitnessInvariant,
-       QueuedCandidates, DeferredCandidates, CausalCandidates,
-       TrackedWorkCandidates, ConsensusIoCandidates,
-       SerializedBusyOwners, BusyCompletionCandidates,
-       ActiveBusyCompletionCarrier, FreshCandidateSequence,
-       SequenceHasUniqueValues, SequenceSet, NodeIdle,
-       PendingNodes, SigningNodes, AllPendingRequests,
-       RequestNodeSet, RequestsUniqueByNode, AsyncCandidateTyped
+PROOF
+  <1>1. ASSUME AsyncStrongTypeInvariant,
+              AsyncProgressOwnershipInvariant,
+              FinishResponsiveReplay
+         PROVE AsyncProgressOwnershipInvariant'
+    <2> DEFINE Node == asyncRecoveryNode
+    <2> DEFINE Runner == RestartRunnerAssembly(Node)
+    <2>1. /\ Node \in ValidatorIds
+           /\ TypeInvariant
+      BY <1>1, SMT
+         DEF AsyncStrongTypeInvariant, StrongInductiveInvariant, Safety,
+             FinishResponsiveReplay, Node, ModelConfiguration
+    <2>2. /\ AsyncQueueTyped(Runner)
+           /\ AsyncCausalQueueOwnership(Node, Runner)
+           /\ SequenceHasUniqueValues(Runner)
+           /\ Len(Runner) <= 1
+      BY <2>1, RestartRunnerAssemblyProperties DEF Runner
+    <2>3. CASE Len(Runner) = 0
+      <3>1. UNCHANGED AsyncProgressOwnershipVars
+        BY <1>1, <3>1, Isa
+           DEF FinishResponsiveReplay, Runner, Node,
+               AsyncProgressOwnershipVars,
+               AsyncProgressOwnershipCoreVars,
+               AsyncProgressOwnershipSchedulerVars
+      <3> QED BY <1>1, <3>1, AsyncProgressOwnershipStutter
+    <2>4. CASE Len(Runner) > 0
+      <3> DEFINE Candidate == Runner[1]
+      <3> DEFINE Fresh == FreshCandidateSequence(Candidate)
+      <3>1. /\ Len(Runner) = 1
+             /\ AsyncCandidateTyped(Candidate)
+             /\ Candidate.node = Node
+        BY <2>2, <2>4, SMT
+           DEF Candidate, AsyncQueueTyped,
+               AsyncCausalQueueOwnership, SequenceSet
+      <3>2. /\ AsyncQueueTyped(Fresh)
+             /\ AsyncCausalQueueOwnership(Node, Fresh)
+             /\ SequenceHasUniqueValues(Fresh)
+             /\ Len(Fresh) <= 1
+        BY <3>1, FreshTypedOwnedReplayCandidateProperties DEF Fresh
+      <3>3. SequenceSet(Fresh) \cap
+               (QueuedCandidates \cup DeferredCandidates \cup
+                  CausalCandidates \cup TrackedWorkCandidates) = {}
+        BY FreshReplayCandidateIsDisjointFromScheduled DEF Fresh
+      <3>4. asyncCausalQueues' =
+               [asyncCausalQueues EXCEPT ![Node] = @ \o Fresh]
+        BY <1>1, <3>1
+           DEF FinishResponsiveReplay, Node, Runner, Candidate, Fresh
+      <3> QED BY <1>1, <2>2, <3>1, <3>2, <3>3, <3>4,
+                   ConcatTypedOwnedDisjointReplay,
+                   RangeConcatenation, RangeEquality, Isa
+           DEF FinishResponsiveReplay,
+               AsyncStrongTypeInvariant, AsyncRecoveryTypeInvariant,
+               AsyncProgressOwnershipInvariant,
+               AsyncLogicalCandidateOwnershipInvariant,
+               AsyncOutstandingCarrierInvariant,
+               SerializedBusyOwnershipInvariant,
+               BusyCompletionWitnessInvariant,
+               QueuedCandidates, DeferredCandidates, CausalCandidates,
+               TrackedWorkCandidates, ConsensusIoCandidates,
+               SerializedBusyOwners, BusyCompletionCandidates,
+               ActiveBusyCompletionCarrier, FreshCandidateSequence,
+               SequenceHasUniqueValues, SequenceSet, NodeIdle,
+               PendingNodes, SigningNodes, AllPendingRequests,
+               RequestNodeSet, RequestsUniqueByNode,
+               AsyncCandidateTyped, Node, Runner, Candidate, Fresh
+    <2> QED BY <2>2, <2>3, <2>4, SMT
+  <1> QED BY <1>1
 
 THEOREM EnqueueIoControlPreservesProgressOwnership ==
   \A node \in AsyncCurrentResponsiveVoters:
@@ -29159,6 +30214,26 @@ THEOREM PreGstResponsiveRestartLeavesProgressCarriers ==
                     asyncCausalQueues>>
 BY DEF PreGstResponsiveRestart, AsyncSchedulerVars
 
+THEOREM RestartSignatureReplayClassesAreCompletion ==
+  \A node:
+    \A command \in SequenceSet(RestartSignatureReplay(node)):
+      command.class = "Completion"
+BY Isa
+   DEF RestartSignatureReplay, RestartTimeoutOrProposalReplay,
+       RestartPrepareReplayIfActive, RestartLockedCommitReplayIfActive,
+       RestartLockedCommitReplay, RestartTimeoutReplay,
+       RestartPrepareReplay, RestartProposalReplay,
+       RestartCandidate, AsyncCandidateAtConsumer,
+       AsyncCandidateWithIdentity, SequenceSet
+
+THEOREM RestartRunnerAssemblyClassesAreNormal ==
+  \A node:
+    \A command \in SequenceSet(RestartRunnerAssembly(node)):
+      command.class = "Normal"
+BY Isa
+   DEF RestartRunnerAssembly, RestartCandidate,
+       AsyncCandidateAtConsumer, AsyncCandidateWithIdentity, SequenceSet
+
 THEOREM RestartReplayClassesAreNonProgress ==
   \A node:
     \A command \in SequenceSet(RestartReplay(node)):
@@ -29318,18 +30393,102 @@ THEOREM DriveResponsiveReplayHeadPreservesProgressCommitSlotInvariant ==
      /\ DeferredProgressCommitHistoryInvariant'
      /\ CausalProgressCommitHistoryInvariant'
      /\ ProtectedDeferredProgressInvariant'
-BY RestartReplayClassesAreNonProgress, SMTT(45), Isa
-   DEF DriveResponsiveReplayHead, RecoveryCoreReplay,
-       ResumeProposal, ResumeVote, ResumeTimeout,
-       AsyncStrongTypeInvariant, AsyncRecoveryTypeInvariant,
-       ProgressCommitSlotInvariant,
-       QueuedProgressCommitHistoryInvariant,
-       DeferredProgressCommitHistoryInvariant,
-       CausalProgressCommitHistoryInvariant,
-       ProtectedDeferredProgressInvariant,
-       ProtectedDeferredProgressIndices, ProtectedProgressCommand,
-       SameProtectedProgressSlot, ProgressSlotShape,
-       FreshCandidateSequence, SequenceSet
+PROOF
+  <1>1. ASSUME AsyncStrongTypeInvariant,
+              ProgressCommitSlotInvariant,
+              DriveResponsiveReplayHead
+         PROVE /\ QueuedProgressCommitHistoryInvariant'
+               /\ DeferredProgressCommitHistoryInvariant'
+               /\ CausalProgressCommitHistoryInvariant'
+               /\ ProtectedDeferredProgressInvariant'
+    <2> DEFINE Node == asyncRecoveryNode
+    <2> DEFINE Candidate == Head(asyncRecoveryReplayQueue)
+    <2> DEFINE Fresh == FreshCandidateSequence(Candidate)
+    <2>1. /\ StrongInductiveInvariant
+           /\ AsyncTypeInvariant
+           /\ AsyncRecoveryTypeInvariant
+           /\ AsyncRuntimeScalarTypeInvariant
+           /\ AsyncCausalTypeInvariant
+           /\ AsyncDeferredTypeInvariant
+           /\ N \in Nat \ {0}
+           /\ Node \in ValidatorIds
+           /\ AsyncQueueTyped(asyncRecoveryReplayQueue)
+           /\ Len(asyncRecoveryReplayQueue) > 0
+           /\ AsyncCandidateTyped(Candidate)
+           /\ Candidate.node = Node
+      BY <1>1, AsyncStrongTypeProjectsAsyncType,
+         TypedQueueTailFacts, SMT
+         DEF Node, Candidate, AsyncStrongTypeInvariant,
+             StrongInductiveInvariant, Safety, TypeInvariant,
+             AsyncSchedulerTypeInvariant, AsyncRuntimeTypeInvariant,
+             AsyncRecoveryTypeInvariant, DriveResponsiveReplayHead,
+             ModelConfiguration, QuorumConfiguration, SequenceSet
+    <2>2. /\ AsyncQueueTyped(Fresh)
+           /\ ProgressCommitSourcesIn(Fresh)
+      <3>1. AsyncQueueTyped(Fresh)
+        BY <2>1, FreshTypedOwnedReplayCandidateProperties DEF Fresh
+      <3>2. Candidate \in SequenceSet(asyncRecoveryReplayQueue)
+        BY <2>1, PositiveSequenceIsNonempty,
+           NonemptySequenceHeadIsFirst DEF Candidate, SequenceSet
+      <3>3. Candidate.class = "Completion"
+        BY <1>1, <2>1, <3>2,
+           RestartSignatureReplayClassesAreCompletion
+           DEF AsyncStrongTypeInvariant, AsyncRecoveryTypeInvariant,
+               Node, Candidate
+      <3>4. ProgressCommitSource(Candidate)
+        BY <3>3, CompletionCandidateHasProgressCommitSource
+      <3>5. CASE CandidateScheduled(Candidate)
+        <4>1. Fresh = <<>>
+          BY <3>5 DEF Fresh, FreshCandidateSequence
+        <4> QED BY <4>1, EmptySequenceHasProgressCommitSources
+      <3>6. CASE ~CandidateScheduled(Candidate)
+        <4>1. Fresh = <<Candidate>>
+          BY <3>6 DEF Fresh, FreshCandidateSequence
+        <4> QED BY <3>4, <4>1,
+             SingletonSequenceHasProgressCommitSources
+      <3> QED BY <3>1, <3>5, <3>6
+    <2>3. AsyncNext
+      BY <1>1, Isa
+         DEF AsyncNext, AsyncNonCrashStep, RecoveryCoreReplay,
+             ResumeProposal, ResumeVote, ResumeTimeout,
+             DriveResponsiveReplayHead
+    <2>4. /\ AsyncStrongTypeInvariant'
+           /\ TypeInvariant'
+      BY <1>1, <2>3, AsyncNextPreservesStrongTypeInvariant
+         DEF AsyncStrongTypeInvariant, StrongInductiveInvariant, Safety
+    <2>5. ProgressFrontierAction
+      BY <2>1, <2>3, AsyncNextEstablishesProgressFrontierAction
+    <2>6. /\ QueuedProgressCommitHistoryInvariant
+           /\ DeferredProgressCommitHistoryInvariant
+           /\ CausalProgressCommitHistoryInvariant
+           /\ ProtectedDeferredProgressInvariant
+           /\ LockWithinNodeViewInvariant
+      BY <1>1 DEF ProgressCommitSlotInvariant
+    <2>7. /\ UNCHANGED asyncCommandQueues
+           /\ UNCHANGED asyncDeferredProgressQueues
+           /\ UNCHANGED <<context, prepareQCs>>
+           /\ asyncCausalQueues' =
+                [asyncCausalQueues EXCEPT
+                   ![Node] = asyncCausalQueues[Node] \o Fresh]
+      BY <1>1, Isa
+         DEF Node, Candidate, Fresh, DriveResponsiveReplayHead,
+             RecoveryCoreReplay, ResumeProposal, ResumeVote,
+             ResumeTimeout, AsyncDeferredVars, vars
+    <2>8. QueuedProgressCommitHistoryInvariant'
+      BY <2>1, <2>4, <2>5, <2>6, <2>7,
+         UnchangedCommandQueuesPreserveProgressCommitHistory
+    <2>9. DeferredProgressCommitHistoryInvariant'
+      BY <2>1, <2>4, <2>5, <2>6, <2>7,
+         UnchangedDeferredProgressQueuesPreserveCommitHistory
+    <2>10. CausalProgressCommitHistoryInvariant'
+      BY <2>1, <2>2, <2>4, <2>5, <2>6, <2>7,
+         AppendTypedCausalSequencePreservesProgressCommitHistory
+    <2>11. ProtectedDeferredProgressInvariant'
+      BY <2>1, <2>5, <2>6, <2>7,
+         LockAdvancePreservesProtectedDeferredProgressInvariant
+         DEF ProgressFrontierAction
+    <2> QED BY <2>8, <2>9, <2>10, <2>11
+  <1> QED BY <1>1
 
 THEOREM FinishResponsiveReplayPreservesProgressCommitSlotInvariant ==
   /\ AsyncStrongTypeInvariant
@@ -29339,17 +30498,107 @@ THEOREM FinishResponsiveReplayPreservesProgressCommitSlotInvariant ==
      /\ DeferredProgressCommitHistoryInvariant'
      /\ CausalProgressCommitHistoryInvariant'
      /\ ProtectedDeferredProgressInvariant'
-BY RestartReplayClassesAreNonProgress, SMTT(45), Isa
-   DEF FinishResponsiveReplay,
-       AsyncStrongTypeInvariant, AsyncRecoveryTypeInvariant,
-       ProgressCommitSlotInvariant,
-       QueuedProgressCommitHistoryInvariant,
-       DeferredProgressCommitHistoryInvariant,
-       CausalProgressCommitHistoryInvariant,
-       ProtectedDeferredProgressInvariant,
-       ProtectedDeferredProgressIndices, ProtectedProgressCommand,
-       SameProtectedProgressSlot, ProgressSlotShape,
-       FreshCandidateSequence, SequenceSet
+PROOF
+  <1>1. ASSUME AsyncStrongTypeInvariant,
+              ProgressCommitSlotInvariant,
+              FinishResponsiveReplay
+         PROVE /\ QueuedProgressCommitHistoryInvariant'
+               /\ DeferredProgressCommitHistoryInvariant'
+               /\ CausalProgressCommitHistoryInvariant'
+               /\ ProtectedDeferredProgressInvariant'
+    <2> DEFINE Node == asyncRecoveryNode
+    <2> DEFINE Runner == RestartRunnerAssembly(Node)
+    <2>1. /\ StrongInductiveInvariant
+           /\ AsyncTypeInvariant
+           /\ AsyncRuntimeScalarTypeInvariant
+           /\ AsyncCausalTypeInvariant
+           /\ AsyncDeferredTypeInvariant
+           /\ N \in Nat \ {0}
+           /\ Node \in ValidatorIds
+           /\ AsyncQueueTyped(Runner)
+           /\ Len(Runner) <= 1
+      BY <1>1, AsyncStrongTypeProjectsAsyncType,
+         RestartRunnerAssemblyProperties, SMT
+         DEF Node, Runner, AsyncStrongTypeInvariant,
+             StrongInductiveInvariant, Safety, TypeInvariant,
+             AsyncSchedulerTypeInvariant, AsyncRuntimeTypeInvariant,
+             AsyncRecoveryTypeInvariant, FinishResponsiveReplay,
+             ModelConfiguration, QuorumConfiguration
+    <2>2. AsyncNext
+      BY <1>1, Isa
+         DEF AsyncNext, AsyncNonCrashStep, FinishResponsiveReplay
+    <2>3. /\ AsyncStrongTypeInvariant'
+           /\ TypeInvariant'
+      BY <1>1, <2>2, AsyncNextPreservesStrongTypeInvariant
+         DEF AsyncStrongTypeInvariant, StrongInductiveInvariant, Safety
+    <2>4. ProgressFrontierAction
+      BY <2>1, <2>2, AsyncNextEstablishesProgressFrontierAction
+    <2>5. /\ QueuedProgressCommitHistoryInvariant
+           /\ DeferredProgressCommitHistoryInvariant
+           /\ CausalProgressCommitHistoryInvariant
+           /\ ProtectedDeferredProgressInvariant
+           /\ LockWithinNodeViewInvariant
+      BY <1>1 DEF ProgressCommitSlotInvariant
+    <2>6. /\ UNCHANGED asyncCommandQueues
+           /\ UNCHANGED asyncDeferredProgressQueues
+           /\ UNCHANGED <<context, prepareQCs>>
+      BY <1>1, Isa
+         DEF FinishResponsiveReplay, AsyncDeferredVars, vars
+    <2>7. QueuedProgressCommitHistoryInvariant'
+      BY <2>1, <2>3, <2>4, <2>5, <2>6,
+         UnchangedCommandQueuesPreserveProgressCommitHistory
+    <2>8. DeferredProgressCommitHistoryInvariant'
+      BY <2>1, <2>3, <2>4, <2>5, <2>6,
+         UnchangedDeferredProgressQueuesPreserveCommitHistory
+    <2>9. ProtectedDeferredProgressInvariant'
+      BY <2>1, <2>4, <2>5, <2>6,
+         LockAdvancePreservesProtectedDeferredProgressInvariant
+         DEF ProgressFrontierAction
+    <2>10. CausalProgressCommitHistoryInvariant'
+      <3>1. CASE Len(Runner) = 0
+        <4>1. UNCHANGED asyncCausalQueues
+          BY <1>1, <3>1 DEF FinishResponsiveReplay, Node, Runner
+        <4> QED BY <2>1, <2>3, <2>4, <2>5, <4>1,
+             UnchangedCausalQueuesPreserveProgressCommitHistory
+      <3>2. CASE Len(Runner) > 0
+        <4> DEFINE Candidate == Runner[1]
+        <4> DEFINE Fresh == FreshCandidateSequence(Candidate)
+        <4>1. /\ Len(Runner) = 1
+               /\ AsyncCandidateTyped(Candidate)
+               /\ Candidate.node = Node
+          BY <2>1, <3>2, SMT
+             DEF Candidate, AsyncQueueTyped,
+                 AsyncCausalQueueOwnership, SequenceSet
+        <4>2. /\ AsyncQueueTyped(Fresh)
+               /\ ProgressCommitSourcesIn(Fresh)
+          <5>1. AsyncQueueTyped(Fresh)
+            BY <4>1, FreshTypedOwnedReplayCandidateProperties DEF Fresh
+          <5>2. Candidate \in SequenceSet(Runner)
+            BY <4>1, Isa DEF Candidate, SequenceSet
+          <5>3. Candidate.class = "Normal"
+            BY <5>2, RestartRunnerAssemblyClassesAreNormal DEF Runner
+          <5>4. ProgressCommitSource(Candidate)
+            BY <5>3 DEF ProgressCommitSource
+          <5>5. CASE CandidateScheduled(Candidate)
+            <6>1. Fresh = <<>>
+              BY <5>5 DEF Fresh, FreshCandidateSequence
+            <6> QED BY <6>1, EmptySequenceHasProgressCommitSources
+          <5>6. CASE ~CandidateScheduled(Candidate)
+            <6>1. Fresh = <<Candidate>>
+              BY <5>6 DEF Fresh, FreshCandidateSequence
+            <6> QED BY <5>4, <6>1,
+                 SingletonSequenceHasProgressCommitSources
+          <5> QED BY <5>1, <5>5, <5>6
+        <4>3. asyncCausalQueues' =
+                 [asyncCausalQueues EXCEPT
+                    ![Node] = asyncCausalQueues[Node] \o Fresh]
+          BY <1>1, <4>1
+             DEF FinishResponsiveReplay, Node, Runner, Candidate, Fresh
+        <4> QED BY <2>1, <2>3, <2>4, <2>5, <4>2, <4>3,
+             AppendTypedCausalSequencePreservesProgressCommitHistory
+      <3> QED BY <2>1, <3>1, <3>2, SMT
+    <2> QED BY <2>7, <2>8, <2>9, <2>10
+  <1> QED BY <1>1
 
 THEOREM AsyncNextPreservesProgressCommitSlotInvariant ==
   /\ AsyncStrongTypeInvariant
@@ -30586,15 +31835,21 @@ BY SMTT(120), Isa
        RetainedCommitIntent, NodeHasDecision, VoteSign,
        AsyncCurrentResponsiveVoters, CurrentVoters, CurrentEpoch
 
-THEOREM ResponsiveReplayContinuationPreservesCommitSourceAuxiliaryInvariant ==
+THEOREM ReplayCommitIntentReadyIsProgressWitness ==
+  \A node, vote:
+    ReplayCommitIntentReady(node, vote)
+      <=> CommitIntentProgressWitness(node, vote)
+BY Isa
+   DEF ReplayCommitIntentReady, CommitIntentProgressWitness,
+       RetainedCommitIntent
+
+THEOREM DriveResponsiveReplayPreservesCommitSourceAuxiliaryInvariant ==
   /\ AsyncStrongTypeInvariant
   /\ CommitSourceRetentionInvariant
-  /\ ResponsiveReplayContinuationCommitSourceTransition
+  /\ DriveResponsiveReplayHead
   => CommitSourceAuxiliaryInvariant'
-BY RestartSignatureReplayProperties, SMTT(120), Isa
-   DEF ResponsiveReplayContinuationCommitSourceTransition,
-       DriveResponsiveReplayHead, FinishResponsiveReplay,
-       RearmResponsiveRecovery, RecoveryCoreReplay,
+BY RestartSignatureReplayProperties, SMTT(90), Isa
+   DEF DriveResponsiveReplayHead, RecoveryCoreReplay,
        ResumeProposal, ResumeVote, ResumeTimeout, VoteResumeAuthorized,
        AsyncStrongTypeInvariant, AsyncRecoveryTypeInvariant,
        AsyncRestartAuthorityInvariant,
@@ -30608,6 +31863,67 @@ BY RestartSignatureReplayProperties, SMTT(120), Isa
        RetainedCommitIntent, NodeHasDecision, VoteSign,
        ResponsiveReplayScheduledCandidates,
        AsyncCurrentResponsiveVoters, CurrentVoters, CurrentEpoch
+
+THEOREM FinishResponsiveReplayPreservesCommitSourceAuxiliaryInvariant ==
+  /\ AsyncStrongTypeInvariant
+  /\ CommitSourceRetentionInvariant
+  /\ FinishResponsiveReplay
+  => CommitSourceAuxiliaryInvariant'
+BY ReplayCommitIntentReadyIsProgressWitness, SMTT(120), Isa
+   DEF FinishResponsiveReplay, ReplayCommitSourcesReady,
+       RestartLockedCommitIntents,
+       AsyncStrongTypeInvariant, AsyncRecoveryTypeInvariant,
+       AsyncRestartAuthorityInvariant,
+       StrongInductiveInvariant, Safety, TypeInvariant,
+       HonestVoteUnique, HonestCommitUniqueness,
+       CommitSourceRetentionInvariant, CommitSourceAuxiliaryInvariant,
+       ResponsiveRetainedCommitControlSound,
+       ActiveCommitIntentSourceOwnership,
+       AsyncCommitIntentProgressWitness, CommitIntentProgressWitness,
+       CommitRecoveryAuthority, ActiveLockedCommitIntent,
+       RetainedCommitIntent, NodeHasDecision, VoteSign,
+       ResponsiveReplayScheduledCandidates,
+       AsyncCurrentResponsiveVoters, CurrentVoters, CurrentEpoch
+
+THEOREM RearmResponsiveRecoveryPreservesCommitSourceAuxiliaryInvariant ==
+  /\ AsyncStrongTypeInvariant
+  /\ CommitSourceRetentionInvariant
+  /\ RearmResponsiveRecovery
+  => CommitSourceAuxiliaryInvariant'
+BY SMTT(60), Isa
+   DEF RearmResponsiveRecovery,
+       AsyncStrongTypeInvariant, AsyncRecoveryTypeInvariant,
+       AsyncRestartAuthorityInvariant,
+       CommitSourceRetentionInvariant, CommitSourceAuxiliaryInvariant,
+       ResponsiveRetainedCommitControlSound,
+       ActiveCommitIntentSourceOwnership,
+       AsyncCommitIntentProgressWitness, CommitIntentProgressWitness,
+       CommitRecoveryAuthority, ActiveLockedCommitIntent,
+       RetainedCommitIntent, NodeHasDecision,
+       AsyncCurrentResponsiveVoters, CurrentVoters, CurrentEpoch
+
+THEOREM ResponsiveReplayContinuationPreservesCommitSourceAuxiliaryInvariant ==
+  /\ AsyncStrongTypeInvariant
+  /\ CommitSourceRetentionInvariant
+  /\ ResponsiveReplayContinuationCommitSourceTransition
+  => CommitSourceAuxiliaryInvariant'
+PROOF
+  <1>1. ASSUME AsyncStrongTypeInvariant,
+              CommitSourceRetentionInvariant,
+              ResponsiveReplayContinuationCommitSourceTransition
+         PROVE CommitSourceAuxiliaryInvariant'
+    <2>1. CASE DriveResponsiveReplayHead
+      BY <1>1, <2>1,
+         DriveResponsiveReplayPreservesCommitSourceAuxiliaryInvariant
+    <2>2. CASE FinishResponsiveReplay
+      BY <1>1, <2>2,
+         FinishResponsiveReplayPreservesCommitSourceAuxiliaryInvariant
+    <2>3. CASE RearmResponsiveRecovery
+      BY <1>1, <2>3,
+         RearmResponsiveRecoveryPreservesCommitSourceAuxiliaryInvariant
+    <2> QED BY <1>1, <2>1, <2>2, <2>3
+         DEF ResponsiveReplayContinuationCommitSourceTransition
+  <1> QED BY <1>1
 
 THEOREM AsyncNextPreservesCommitSourceRetention ==
   /\ AsyncStrongTypeInvariant

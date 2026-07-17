@@ -29,6 +29,26 @@ def load_checker():
     return module
 
 
+def copy_async_source_fidelity_fixture(
+    tmp_path: Path, module, *formal_names: str
+) -> Path:
+    """Copy the async formal inputs and their production-source bindings."""
+
+    formal_dir = tmp_path / "docs" / "formal" / "sumeragi_v2"
+    formal_dir.mkdir(parents=True)
+    for relative in (
+        Path("crates/iroha_core/src/sumeragi/v2_runner.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2.rs"),
+        Path("crates/iroha_core/src/sumeragi/v2_effects.rs"),
+    ):
+        destination = tmp_path / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(ROOT_DIR / relative, destination)
+    for name in formal_names:
+        shutil.copyfile(module.FORMAL_DIR / name, formal_dir / name)
+    return formal_dir
+
+
 def test_tla_comment_stripping_reuses_bounded_content_cache() -> None:
     module = load_checker()
     source = 'Value == "kept" (* stripped *)\n'
@@ -2118,8 +2138,9 @@ def test_async_source_fidelity_requires_post_apply_historical_recovery(
     path.write_text(
         source.replace("AsyncNext => [Next]_vars", "AsyncNext => [NextV2]_vars")
         .replace(
-            "  /\\ ~NodeHasApplication(node)\n  /\\ \\/ LocalAdmissionStep(node)",
-            "  /\\ \\/ LocalAdmissionStep(node)",
+            "  /\\ ~NodeHasApplication(node)\n"
+            "  /\\ IF ResponsiveReplayQuarantined(node)",
+            "  /\\ IF ResponsiveReplayQuarantined(node)",
         )
         .replace("PostGstRunHistoricalServer(node)", "PostGstRunNode(node)"),
         encoding="utf-8",
@@ -2228,8 +2249,10 @@ def test_async_source_fidelity_pins_candidate_consumer_and_restart_state(
 
     mutations = (
         (
-            "<<asyncRecoveryPhase, asyncRecoveryNode, asyncRecoveryGeneration>>",
-            "<<asyncRecoveryPhase, asyncRecoveryGeneration, asyncRecoveryNode>>",
+            "<<asyncRecoveryPhase, asyncRecoveryNode, asyncRecoveryGeneration,\n"
+            "    asyncRecoveryReplayQueue>>",
+            "<<asyncRecoveryPhase, asyncRecoveryGeneration, asyncRecoveryNode,\n"
+            "    asyncRecoveryReplayQueue>>",
             "AsyncRecoveryVars must equal only",
         ),
         (
@@ -2238,8 +2261,8 @@ def test_async_source_fidelity_pins_candidate_consumer_and_restart_state(
             "AsyncAllVars must equal only",
         ),
         (
-            "  /\\ asyncRecoveryPhase \\notin "
-            '{"RestartRequired", "ReplayRequired"}\n',
+            "  /\\ asyncRecoveryPhase\n"
+            '       \\notin {"RestartRequired", "ReplayRequired", "Replaying"}\n',
             "",
             "AsyncSetGST must equal only",
         ),
@@ -2262,6 +2285,372 @@ def test_async_source_fidelity_pins_candidate_consumer_and_restart_state(
             expected_error,
             errors,
         )
+
+
+def test_async_source_fidelity_pins_exact_restart_fifo_and_decision_frontier(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    formal_dir = copy_async_source_fidelity_fixture(
+        tmp_path,
+        module,
+        "SumeragiV2AsyncNetwork.tla",
+        "SumeragiV2Core.tla",
+        "SumeragiV2AsyncLivenessProofs.tla",
+    )
+    paths = {
+        name: formal_dir / name
+        for name in (
+            "SumeragiV2AsyncNetwork.tla",
+            "SumeragiV2Core.tla",
+            "SumeragiV2AsyncLivenessProofs.tla",
+        )
+    }
+    sources = {
+        name: path.read_text(encoding="utf-8") for name, path in paths.items()
+    }
+    assert module._async_source_fidelity_errors(formal_dir) == []
+
+    mutations = (
+        (
+            "SumeragiV2AsyncNetwork.tla",
+            "     /\\ RestartTimeoutIntents(node) = {}}\n\n"
+            "RestartProposalIntents(node) ==",
+            "}\n\nRestartProposalIntents(node) ==",
+            "RestartPrepareIntents omits required production behavior",
+        ),
+        (
+            "SumeragiV2AsyncNetwork.tla",
+            "ELSE RestartTimeoutOrProposalReplay(node)\n"
+            "         \\o RestartPrepareReplayIfActive(node)\n"
+            "         \\o RestartLockedCommitReplayIfActive(node)",
+            "ELSE RestartTimeoutOrProposalReplay(node)\n"
+            "         \\o RestartLockedCommitReplayIfActive(node)\n"
+            "         \\o RestartPrepareReplayIfActive(node)",
+            "RestartSignatureReplay must equal only",
+        ),
+        (
+            "SumeragiV2AsyncNetwork.tla",
+            "         \\o RestartPrepareReplayIfActive(node)\n"
+            "         \\o RestartLockedCommitReplayIfActive(node)",
+            "         \\o RestartPrepareReplayIfActive(node)",
+            "RestartSignatureReplay must equal only",
+        ),
+        (
+            "SumeragiV2AsyncNetwork.tla",
+            "          IF Len(signatures) > 0 THEN Tail(signatures) ELSE <<>>",
+            "          IF Len(signatures) > 0 THEN <<>> ELSE <<>>",
+            "PreGstResponsiveReplay omits required production behavior",
+        ),
+        (
+            "SumeragiV2AsyncNetwork.tla",
+            "     /\\ asyncRecoveryReplayQueue' = Tail(asyncRecoveryReplayQueue)",
+            "     /\\ asyncRecoveryReplayQueue' = <<>>",
+            "DriveResponsiveReplayHead omits required production behavior",
+        ),
+        (
+            "SumeragiV2AsyncNetwork.tla",
+            "  /\\ Len(asyncRecoveryReplayQueue) <= 2",
+            "  /\\ Len(asyncRecoveryReplayQueue) <= 3",
+            "AsyncRecoveryTypeInvariant omits required production behavior",
+        ),
+        (
+            "SumeragiV2AsyncNetwork.tla",
+            'RestartCandidate("Completion", "FetchBody", node,\n'
+            "                        qc.view, qc.subject, qc)",
+            'RestartCandidate("Completion", "ValidateBody", node,\n'
+            "                        qc.view, qc.subject, qc)",
+            "RestartDecisionReplay omits required production behavior",
+        ),
+        (
+            "SumeragiV2AsyncNetwork.tla",
+            '    [] command.kind = "PersistDecision" ->\n'
+            '         <<CausalCandidate("Completion", "FetchBody", command)>>',
+            '    [] command.kind = "PersistDecision" ->\n'
+            '         <<CausalCandidate("Completion", "Apply", command)>>',
+            "PersistDecision must schedule exactly one FetchBody frontier",
+        ),
+        (
+            "SumeragiV2AsyncNetwork.tla",
+            "              THEN <<CausalCandidate(\"Completion\", "
+            '"ValidateBody", command)>>\n'
+            "              ELSE <<>>\n"
+            '         ELSE <<CausalCandidate("Completion", "StoreBody", command)>>',
+            "              THEN <<CausalCandidate(\"Completion\", "
+            '"ValidateBody", command)>>\n'
+            "              ELSE <<CausalCandidate(\"Completion\", "
+            '"RequestCertifiedBody", command)>>\n'
+            '         ELSE <<CausalCandidate("Completion", "StoreBody", command)>>',
+            "FetchBody successors must equal only",
+        ),
+        (
+            "SumeragiV2AsyncNetwork.tla",
+            "  \\/ ExecuteDecisionFetch(command)\n",
+            "",
+            "ExecuteCommand omits required production behavior",
+        ),
+        (
+            "SumeragiV2AsyncNetwork.tla",
+            "    \\/ ENABLED ExecuteDecisionFetch(selectedCommand)\n",
+            "",
+            "CommandExecutionEnabled must equal only",
+        ),
+        (
+            "SumeragiV2AsyncNetwork.tla",
+            "     THEN /\\ UNCHANGED vars\n"
+            "          /\\ UNCHANGED <<asyncSentItems, asyncRetainedControl,\n"
+            "                          asyncActiveRequests, asyncTransport>>",
+            "     THEN /\\ ApplyDecision(command.node, command.evidence)\n"
+            "          /\\ UNCHANGED <<asyncSentItems, asyncRetainedControl,\n"
+            "                          asyncActiveRequests, asyncTransport>>",
+            "ExecuteDecisionFetch omits required production behavior",
+        ),
+        (
+            "SumeragiV2Core.tla",
+            "     /\\ ~NodeTimedOut(node, vote.view)\n"
+            '  \\/ /\\ vote.phase = "Commit"',
+            '  \\/ /\\ vote.phase = "Commit"',
+            "VoteResumeAuthorized omits TC vote-pool reconstruction behavior",
+        ),
+        (
+            "SumeragiV2AsyncLivenessProofs.tla",
+            "      /\\ Len(RestartSignatureReplay(node)) <= 3",
+            "      /\\ Len(RestartSignatureReplay(node)) <= 2",
+            "RestartSignatureReplayProperties must state only",
+        ),
+        (
+            "SumeragiV2AsyncLivenessProofs.tla",
+            "    NodeHasApplication(node) => RestartReplay(node) = <<>>",
+            "    NodeHasApplication(node) => RestartSignatureReplay(node) = <<>>",
+            "AppliedRecoverySchedulesNoSameHeightWork must state only",
+        ),
+    )
+    for name, needle, replacement, expected_error in mutations:
+        source = sources[name]
+        assert needle in source, (name, needle)
+        paths[name].write_text(source.replace(needle, replacement, 1), encoding="utf-8")
+        errors = module._async_source_fidelity_errors(formal_dir)
+        assert any(expected_error in error for error in errors), (
+            expected_error,
+            errors,
+        )
+        paths[name].write_text(source, encoding="utf-8")
+
+
+def test_async_source_fidelity_pins_recovery_quarantine_rearm_and_fairness(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    formal_dir = copy_async_source_fidelity_fixture(
+        tmp_path,
+        module,
+        "SumeragiV2AsyncNetwork.tla",
+        "SumeragiV2Core.tla",
+    )
+    path = formal_dir / "SumeragiV2AsyncNetwork.tla"
+    source = path.read_text(encoding="utf-8")
+    assert module._async_source_fidelity_errors(formal_dir) == []
+
+    mutations = (
+        (
+            '{"ReplayRequired", "Replaying"}',
+            '{"ReplayRequired"}',
+            "ResponsiveReplayQuarantined must equal only",
+        ),
+        (
+            '{"RestartRequired", "ReplayRequired", "Replaying"} =>\n'
+            "    generation[asyncRecoveryNode] = asyncRecoveryGeneration",
+            '{"RestartRequired", "ReplayRequired"} =>\n'
+            "    generation[asyncRecoveryNode] = asyncRecoveryGeneration",
+            "AsyncRestartAuthorityInvariant must equal only",
+        ),
+        (
+            "       \\notin {\"RestartRequired\", \"ReplayRequired\", "
+            '"Replaying"}',
+            '       \\notin {"RestartRequired", "ReplayRequired"}',
+            "AsyncSetGST must equal only",
+        ),
+        (
+            "     /\\ UNCHANGED <<up, AsyncRecoveryVars>>\n\n"
+            "ResponsiveReplayServiceIoWorker ==",
+            "\nResponsiveReplayServiceIoWorker ==",
+            "ResponsiveReplayRunNode omits required production behavior",
+        ),
+        (
+            "  /\\ WF_AsyncAllVars(ResponsiveReplayRunNode)\n",
+            "",
+            "AsyncFairnessAt omits required production behavior",
+        ),
+        (
+            "ResponsiveReplayServiceIoWorker ==\n",
+            "RemovedResponsiveReplayServiceIoWorker ==\n",
+            "missing source-fidelity operator ResponsiveReplayServiceIoWorker",
+        ),
+        (
+            "  /\\ WF_AsyncAllVars(ResponsiveReplayServiceIoWorker)\n",
+            "",
+            "AsyncFairnessAt omits required production behavior",
+        ),
+        (
+            "  \\/ VoteAt(node, vote) \\in receivedVotes\n",
+            "  \\/ TRUE\n",
+            "ReplayCommitIntentReady must equal only",
+        ),
+        (
+            "  \\A vote \\in RestartLockedCommitIntents(node):\n"
+            "    ReplayCommitIntentReady(node, vote)",
+            "  \\A vote \\in commitIntents:\n"
+            "    ReplayCommitIntentReady(node, vote)",
+            "ReplayCommitSourcesReady must equal only",
+        ),
+        (
+            "     /\\ ReplayCommitSourcesReady(node)\n",
+            "",
+            "FinishResponsiveReplay omits required production behavior",
+        ),
+        (
+            "          /\\ asyncIngressReady[node] = <<>>\n",
+            "",
+            "RunNode omits required production behavior",
+        ),
+        (
+            "     /\\ ~ResponsiveReplayQuarantined(recipient)\n"
+            "     /\\ DueSourcePackets(recipient, source) # {}",
+            "     /\\ DueSourcePackets(recipient, source) # {}",
+            "AdmitHiddenPacket omits required production behavior",
+        ),
+        (
+            "        /\\ \\A request \\in asyncActiveRequests:\n"
+            "             request.source # asyncRecoveryNode\n",
+            "",
+            "AsyncRecoveryTypeInvariant omits required production behavior",
+        ),
+        (
+            "  \\/ /\\ RearmResponsiveRecovery\n"
+            "     /\\ UNCHANGED up",
+            "  \\/ /\\ UNCHANGED AsyncAllVars\n"
+            "     /\\ UNCHANGED up",
+            "AsyncNonCrashStep omits required production behavior",
+        ),
+        (
+            '  /\\ asyncRecoveryPhase\' = "Eligible"\n',
+            '  /\\ asyncRecoveryPhase\' = "Recovered"\n',
+            "RearmResponsiveRecovery omits required production behavior",
+        ),
+        (
+            "  /\\ generation[node] < MaxGeneration\n"
+            "  /\\ Crash(node)",
+            "  /\\ Crash(node)",
+            "PreGstResponsiveCrash omits required production behavior",
+        ),
+    )
+    for needle, replacement, expected_error in mutations:
+        assert needle in source, needle
+        path.write_text(source.replace(needle, replacement, 1), encoding="utf-8")
+        errors = module._async_source_fidelity_errors(formal_dir)
+        assert any(expected_error in error for error in errors), (
+            expected_error,
+            errors,
+        )
+        path.write_text(source, encoding="utf-8")
+
+
+def test_async_source_fidelity_pins_restart_reset_and_retained_control(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    formal_dir = copy_async_source_fidelity_fixture(
+        tmp_path,
+        module,
+        "SumeragiV2AsyncNetwork.tla",
+        "SumeragiV2Core.tla",
+    )
+    paths = {
+        name: formal_dir / name
+        for name in ("SumeragiV2AsyncNetwork.tla", "SumeragiV2Core.tla")
+    }
+    sources = {
+        name: path.read_text(encoding="utf-8") for name, path in paths.items()
+    }
+    assert module._async_source_fidelity_errors(formal_dir) == []
+
+    mutations = (
+        (
+            "SumeragiV2AsyncNetwork.tla",
+            "     /\\ qc.subject = highestSubject[node]}",
+            "}",
+            "RestartHighestPrepareQCs omits required production behavior",
+        ),
+        (
+            "SumeragiV2AsyncNetwork.tla",
+            "     decision \\in {entry \\in decisions:",
+            "     decision \\in {entry \\in commitQCs:",
+            "RestartDecisionQCs omits required production behavior",
+        ),
+        (
+            "SumeragiV2AsyncNetwork.tla",
+            "other.view <= tc.view",
+            "other.view >= tc.view",
+            "RestartLastInstalledTCs omits required production behavior",
+        ),
+        (
+            "SumeragiV2AsyncNetwork.tla",
+            "RememberedControl(withPrepare, RestartDecisionControl(node))",
+            "RememberedControl(cleared, RestartDecisionControl(node))",
+            "RestartRetainedControl omits required production behavior",
+        ),
+        (
+            "SumeragiV2AsyncNetwork.tla",
+            "  /\\ asyncSentItems' = asyncSentItems\n"
+            "  /\\ asyncRetainedControl' = RestartRetainedControl(node)",
+            "  /\\ asyncSentItems' = {}\n"
+            "  /\\ asyncRetainedControl' = RestartRetainedControl(node)",
+            "ResetNodeSchedulerForRestart omits required production behavior",
+        ),
+        (
+            "SumeragiV2AsyncNetwork.tla",
+            "  /\\ asyncCommandQueues' =\n"
+            "       [asyncCommandQueues EXCEPT ![node] = <<>>]",
+            "  /\\ asyncCommandQueues' =\n"
+            "       [other \\in ValidatorIds |-> <<>>]",
+            "ResetNodeSchedulerForRestart omits required production behavior",
+        ),
+        (
+            "SumeragiV2AsyncNetwork.tla",
+            "  /\\ asyncHeldChunks' =\n"
+            "       {receipt \\in asyncHeldChunks: receipt.node # node}",
+            "  /\\ UNCHANGED asyncHeldChunks",
+            "must write every and only AsyncSchedulerVars component",
+        ),
+        (
+            "SumeragiV2Core.tla",
+            "                 durableBodies, proposalIntents, prepareIntents,",
+            "                 proposalIntents, prepareIntents,",
+            "Crash may not orphan durable intent",
+        ),
+        (
+            "SumeragiV2Core.tla",
+            "  /\\ receivedQCs' = {entry \\in receivedQCs: entry.node # node}",
+            "  /\\ receivedQCs' = {}",
+            "Crash must reset volatile knowledge only for the crashed node",
+        ),
+        (
+            "SumeragiV2Core.tla",
+            "  /\\ generation' = [generation EXCEPT ![node] = @ + 1]",
+            "  /\\ generation' = [generation EXCEPT ![node] = @ + 2]",
+            "Restart omits authenticated generation",
+        ),
+    )
+    for name, needle, replacement, expected_error in mutations:
+        source = sources[name]
+        assert needle in source, (name, needle)
+        paths[name].write_text(source.replace(needle, replacement, 1), encoding="utf-8")
+        errors = module._async_source_fidelity_errors(formal_dir)
+        assert any(expected_error in error for error in errors), (
+            expected_error,
+            errors,
+        )
+        paths[name].write_text(source, encoding="utf-8")
 
 
 def test_async_source_fidelity_requires_tc_commit_pool_reconstruction(
@@ -2300,9 +2689,12 @@ def test_async_source_fidelity_requires_tc_commit_pool_reconstruction(
             "InstallCommandSuccessors omits required production behavior",
         ),
         (
-            'CausalCandidate("Completion", "RequestCertifiedBody", command)',
-            'CausalCandidate("Progress", "RequestCertifiedBody", command)',
-            "CommandSuccessors omits required production behavior",
+            "              ELSE <<>>\n"
+            '         ELSE <<CausalCandidate("Completion", "StoreBody", command)>>',
+            "              ELSE <<CausalCandidate(\"Completion\", "
+            '"RequestCertifiedBody", command)>>\n'
+            '         ELSE <<CausalCandidate("Completion", "StoreBody", command)>>',
+            "FetchBody successors must equal only",
         ),
     )
     for needle, replacement, expected in async_mutations:
@@ -2549,6 +2941,7 @@ ChainEpochTlcInvariant == TypeInvariant /\\ ChainEpochInvariant
         "asyncRecoveryPhase",
         "asyncRecoveryNode",
         "asyncRecoveryGeneration",
+        "asyncRecoveryReplayQueue",
     )
     recovery_mapping = ",\n       ".join(
         f"{field} <- IndexedRecovery(initialContext, {index})"
@@ -2642,7 +3035,7 @@ ChainEpochTlcInvariant == TypeInvariant /\\ ChainEpochInvariant
         "  /\\ Len(indexedAsyncState[initialContext]) = 3\n"
         "  /\\ Len(indexedAsyncState[initialContext][1]) = 46\n"
         "  /\\ Len(indexedAsyncState[initialContext][2]) = 33\n"
-        "  /\\ Len(indexedAsyncState[initialContext][3]) = 3\n"
+        "  /\\ Len(indexedAsyncState[initialContext][3]) = 4\n"
         "THEOREM IndexedInstanceVariablesAreExact ==\n"
         "  IndexedAsyncStateShape\n"
         "    => \\A initialContext \\in AdmissibleContextRecords:\n"
@@ -2796,8 +3189,8 @@ def test_chain_indexed_scheduler_mapping_tracks_async_scheduler_tuple(
             1,
         )
         .replace(
+            "Len(indexedAsyncState[initialContext][3]) = 4",
             "Len(indexedAsyncState[initialContext][3]) = 3",
-            "Len(indexedAsyncState[initialContext][3]) = 2",
             1,
         )
         .replace(
@@ -2842,8 +3235,8 @@ def test_chain_indexed_scheduler_mapping_tracks_async_scheduler_tuple(
 
     path.write_text(
         source.replace(
-            "asyncRecoveryGeneration <- VerificationRecovery(3)",
-            "asyncRecoveryGeneration <- VerificationRecovery(2)",
+            "asyncRecoveryReplayQueue <- VerificationRecovery(4)",
+            "asyncRecoveryReplayQueue <- VerificationRecovery(3)",
             1,
         ),
         encoding="utf-8",
@@ -2853,6 +3246,17 @@ def test_chain_indexed_scheduler_mapping_tracks_async_scheduler_tuple(
         "VerificationAsyncProof must use the exact IndexedAsync" in error
         for error in errors
     )
+
+    path.write_text(
+        source.replace(
+            "asyncRecoveryReplayQueue <- IndexedRecovery(initialContext, 4)",
+            "asyncRecoveryReplayQueue <- IndexedRecovery(initialContext, 3)",
+            1,
+        ),
+        encoding="utf-8",
+    )
+    errors = module._chain_source_fidelity_errors(formal_dir)
+    assert any("recovery tuple mapping" in error for error in errors)
 
     path.write_text(
         source.replace(
@@ -2929,8 +3333,10 @@ def test_chain_indexed_scheduler_mapping_tracks_async_scheduler_tuple(
 
     async_path.write_text(
         async_source.replace(
-            "<<asyncRecoveryPhase, asyncRecoveryNode, asyncRecoveryGeneration>>",
-            "<<asyncRecoveryPhase, asyncRecoveryGeneration, asyncRecoveryNode>>",
+            "<<asyncRecoveryPhase, asyncRecoveryNode, asyncRecoveryGeneration,\n"
+            "    asyncRecoveryReplayQueue>>",
+            "<<asyncRecoveryPhase, asyncRecoveryGeneration, asyncRecoveryNode,\n"
+            "    asyncRecoveryReplayQueue>>",
             1,
         ),
         encoding="utf-8",
@@ -3619,6 +4025,107 @@ def test_formal_gate_validates_fresh_evidence_before_tlc_and_replay() -> None:
     fast_network = verus_source.index("--fast-network")
     backend = verus_source.index("cargo verus verify")
     assert unit < fast_network < backend
+
+
+def test_nightly_chaos_cold_cache_prefetch_is_pinned_and_fail_closed(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    relative_paths = (
+        Path("scripts/formal/run_sumeragi_v2_harness.sh"),
+        Path("scripts/formal/sumeragi_v2_harness.lock"),
+        Path("scripts/run_sumeragi_v2_100k_chaos.sh"),
+        Path(".github/workflows/nightly_sumeragi_formal.yml"),
+    )
+    paths: dict[Path, Path] = {}
+    sources: dict[Path, str] = {}
+    for relative in relative_paths:
+        destination = tmp_path / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(ROOT_DIR / relative, destination)
+        paths[relative] = destination
+        sources[relative] = destination.read_text(encoding="utf-8")
+
+    assert module._nightly_chaos_cold_cache_errors(tmp_path) == []
+
+    harness = Path("scripts/formal/run_sumeragi_v2_harness.sh")
+    launcher = Path("scripts/run_sumeragi_v2_100k_chaos.sh")
+    workflow = Path(".github/workflows/nightly_sumeragi_formal.yml")
+    mutations = (
+        (
+            harness,
+            "  export CARGO_NET_OFFLINE=false\n",
+            "  export CARGO_NET_OFFLINE=true\n",
+            "only --fetch may run online",
+        ),
+        (
+            harness,
+            "    cargo fetch --locked\n",
+            "    cargo fetch --locked --offline\n",
+            "exactly one online `cargo fetch --locked`",
+        ),
+        (
+            harness,
+            'cp -- "$HARNESS_LOCK" Cargo.lock\n',
+            'cp -- "$REPO_ROOT/Cargo.lock" Cargo.lock\n',
+            "verified standalone lock must be copied",
+        ),
+        (
+            harness,
+            'readonly HARNESS_LOCK_SHA256="9c49a60551d9f66c8786f2497cb107fb3214fb3420c4f5c23ba3d24814b3f97e"',
+            'readonly HARNESS_LOCK_SHA256="0000000000000000000000000000000000000000000000000000000000000000"',
+            "pinned standalone lock digest disagrees",
+        ),
+        (
+            harness,
+            '    readonly ignored_test="accelerated_100_000_block_chaos_preserves_chain_prefix"\n'
+            '    ignored_test_list="$(\n'
+            "      cargo test --locked --offline -p iroha_sumeragi_core \\\n"
+            "        --test network_simulation -- --list --ignored",
+            '    readonly ignored_test="accelerated_100_000_block_chaos_preserves_chain_prefix"\n'
+            '    ignored_test_list="$(\n'
+            "      cargo test --locked -p iroha_sumeragi_core \\\n"
+            "        --test network_simulation -- --list --ignored",
+            "inventory and execution must both remain --locked --offline",
+        ),
+        (
+            launcher,
+            "bash scripts/formal/run_sumeragi_v2_harness.sh --chaos-100k \\\n",
+            "bash scripts/formal/run_sumeragi_v2_harness.sh --fast-network \\\n",
+            "offline harness gate exactly once",
+        ),
+        (
+            workflow,
+            "      - name: Prefetch pinned standalone harness dependencies\n"
+            "        run: bash scripts/formal/run_sumeragi_v2_harness.sh --fetch\n",
+            "",
+            "exactly one cache, pinned prefetch, and source-attested gate",
+        ),
+        (
+            workflow,
+            "      - name: Prefetch pinned standalone harness dependencies\n"
+            "        run: bash scripts/formal/run_sumeragi_v2_harness.sh --fetch\n"
+            "      - name: Sumeragi v2 source-attested 100,000-height chaos gate\n"
+            "        run: bash scripts/run_sumeragi_v2_100k_chaos.sh\n",
+            "      - name: Sumeragi v2 source-attested 100,000-height chaos gate\n"
+            "        run: bash scripts/run_sumeragi_v2_100k_chaos.sh\n"
+            "      - name: Prefetch pinned standalone harness dependencies\n"
+            "        run: bash scripts/formal/run_sumeragi_v2_harness.sh --fetch\n",
+            "nightly --fetch must run after cache restore and before",
+        ),
+    )
+    for relative, needle, replacement, expected_error in mutations:
+        source = sources[relative]
+        assert needle in source, (relative, needle)
+        paths[relative].write_text(
+            source.replace(needle, replacement, 1), encoding="utf-8"
+        )
+        errors = module._nightly_chaos_cold_cache_errors(tmp_path)
+        assert any(expected_error in error for error in errors), (
+            expected_error,
+            errors,
+        )
+        paths[relative].write_text(source, encoding="utf-8")
 
 
 def test_release_corridor_rejects_network_skips_and_zero_test_filters() -> None:

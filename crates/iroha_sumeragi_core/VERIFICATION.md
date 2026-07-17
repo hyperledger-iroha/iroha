@@ -146,14 +146,15 @@ through certified views, varies delivery order, accepts delayed old-view
 decision, applies the exact certified body, consumes a matching durable Kura
 receipt, and binds the resulting `CommitQC` as the next height's parent.
 
-Run it directly or through the nightly formal workflow:
+Run the workspace-excluded harness directly, or use the clean-source launcher
+through the nightly workflow's independent chaos job (the strict formal job
+remains separately failure-blocking):
 
 ```text
 CARGO_TARGET_DIR=/tmp/sumeragi-v2-chaos \
-  cargo test --locked -p iroha_sumeragi_core \
-  --test network_simulation \
-  accelerated_100_000_block_chaos_preserves_chain_prefix \
-  -- --ignored --nocapture
+  bash scripts/formal/run_sumeragi_v2_harness.sh --chaos-100k
+
+bash scripts/run_sumeragi_v2_100k_chaos.sh
 ```
 
 The 2026-07-13 macOS arm64 run completed all 100,000 heights in 57.53 seconds
@@ -166,9 +167,19 @@ profile's checkout-manifest-bound evidence rerun.
 The ignored test emits one exact `SUMERAGI_V2_CHAOS_COMPLETED` marker only after
 both 50,000-height prefixes close. The source-bound launcher and aggregate
 receipt require that marker as well as the one-test libtest result. The harness
-still supplies valid certificates directly and completes local services
-synchronously, so it does not stand in for the real-network seed matrix or the
-Taira-profile soak.
+still supplies valid certificates directly, so it does not prove network quorum
+formation. Local adapter effects are queued one per deterministic scheduler
+rank. Every 64th height rotates through restart after Decision-WAL append,
+FetchBody, StoreBody, validation, and application; the recovered reducer must
+reject the captured old-generation completion. The gate also pins duplicate
+and reordered certificate delivery plus insufficient count-only and power-only
+NPoS certificates. Its schema-v2 marker binds the exact schedule and counters.
+These are bounded reducer/recovery faults with terminating fixture work, not a
+substitute for the real-network seed matrix or Taira-profile soak. An exact
+schema-v2 harness run on 2026-07-17 completed all 100,000 heights in 57.52
+seconds and matched every pinned counter. The source-attested wrapper correctly
+refuses a dirty worktree, so the final checkout-manifest-bound rerun remains
+required after these changes are in a signed clean commit.
 
 ## Current refinement model
 

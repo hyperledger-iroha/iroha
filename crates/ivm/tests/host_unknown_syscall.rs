@@ -1,4 +1,7 @@
-use iroha_data_model::nexus::{AxtFastpqBinding, DataSpaceId, LaneId};
+use iroha_data_model::{
+    nexus::{AxtFastpqBinding, DataSpaceId, LaneId},
+    prelude::Quantity,
+};
 use ivm::{
     IVM, IVMHost, PointerType, VMError,
     axt::{
@@ -152,8 +155,8 @@ fn default_host_axt_syscalls_dispatch_and_fail_closed_without_verifier() {
             origin_dsid: Some(dsid),
         },
         budget: HandleBudget {
-            remaining: 200,
-            per_use: Some(150),
+            remaining: Quantity::from(200_u64),
+            per_use: Some(Quantity::from(150_u64)),
         },
         handle_era: 1,
         sub_nonce: 5,
@@ -178,7 +181,7 @@ fn default_host_axt_syscalls_dispatch_and_fail_closed_without_verifier() {
             kind: "transfer".into(),
             from: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".into(),
             to: "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888".into(),
-            amount: "100".into(),
+            amount: Some(Quantity::from(100_u64)),
         },
     };
     let intent_ptr = store_tlv(

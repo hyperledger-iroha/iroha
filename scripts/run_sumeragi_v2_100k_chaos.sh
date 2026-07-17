@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run and attest the exact 100,000-height Sumeragi v2 chaos gate.
+# Run and attest the exact 100,000-height certificate-supplied reducer chaos gate.
 
 set -euo pipefail
 
@@ -93,7 +93,7 @@ readonly run_log="${invocation_dir}/chaos-100k.log"
 readonly invocation_attestation="${invocation_dir}/invocation.tsv"
 readonly completion_attestation="${invocation_dir}/COMPLETED.tsv"
 printf '%s\t%s\n' \
-  schema_version 1 \
+  schema_version 2 \
   head_commit "$head_commit" \
   head_tree "$head_tree" \
   source_manifest_sha256 "$source_manifest_sha256" \
@@ -101,6 +101,10 @@ printf '%s\t%s\n' \
   expected_heights 100000 \
   permissioned_heights 50000 \
   npos_heights 50000 \
+  restart_interval 64 \
+  duplicate_interval 32 \
+  under_quorum_interval 97 \
+  certificate_source external_fixture \
   >"$invocation_attestation"
 
 verify_identity "before execution"
@@ -120,11 +124,15 @@ passing_one="$(
   grep -Ec '^test result: ok\. 1 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in .+$' \
     "$run_log" || true
 )"
-readonly chaos_completion_marker='SUMERAGI_V2_CHAOS_COMPLETED permissioned_heights=50000 npos_heights=50000 total_heights=100000'
-completion_marker_lines="$(grep -Fc -- "$chaos_completion_marker" "$run_log" || true)"
+readonly chaos_completion_marker='SUMERAGI_V2_CHAOS_COMPLETED permissioned_heights=50000 npos_heights=50000 total_heights=100000 supplied_commit_qcs=100000 supplied_tcs=75000 finalized_validators=400000 wal_append_restarts=314 fetch_restarts=312 store_restarts=312 validation_restarts=312 application_restarts=312 stale_generation_rejections=1562 deferred_fetch_completions=400936 deferred_store_completions=400624 deferred_validation_completions=400312 deferred_application_completions=400000 duplicate_commit_qcs=3124 reordered_commit_batches=75000 reordered_tc_batches=75000 insufficient_dual_qcs=1030 count_only_qcs=515 power_only_qcs=515 restart_interval=64 duplicate_interval=32 under_quorum_interval=97 certificate_source=external_fixture'
+readonly chaos_test_prefix='test accelerated_100_000_block_chaos_preserves_chain_prefix ... '
+readonly chaos_test_completion_line="${chaos_test_prefix}ok"
+completion_marker_lines="$(grep -Fxc -- "$chaos_completion_marker" "$run_log" || true)"
+completion_test_lines="$(grep -Fxc -- "$chaos_test_completion_line" "$run_log" || true)"
 if [[ "$running_one" != 1 || "$passing_one" != 1 ]] \
   || [[ "$completion_marker_lines" != 1 ]] \
-  || ! grep -Fq 'test accelerated_100_000_block_chaos_preserves_chain_prefix ... ' "$run_log"; then
+  || [[ "$completion_test_lines" != 1 ]] \
+  || [[ "$(grep -Fc -- "$chaos_test_prefix" "$run_log" || true)" != 1 ]]; then
   echo "100,000-height chaos output does not prove exactly one passing release test" >&2
   exit 1
 fi
@@ -132,7 +140,7 @@ fi
 log_sha256="$(hash_file "$run_log")"
 completion_tmp="${invocation_dir}/.COMPLETED.tsv.$$"
 printf '%s\t%s\n' \
-  schema_version 1 \
+  schema_version 2 \
   head_commit "$head_commit" \
   head_tree "$head_tree" \
   source_manifest_sha256 "$source_manifest_sha256" \
@@ -140,6 +148,29 @@ printf '%s\t%s\n' \
   permissioned_heights 50000 \
   npos_heights 50000 \
   completed_heights 100000 \
+  supplied_commit_qcs 100000 \
+  supplied_tcs 75000 \
+  finalized_validators 400000 \
+  wal_append_restarts 314 \
+  fetch_restarts 312 \
+  store_restarts 312 \
+  validation_restarts 312 \
+  application_restarts 312 \
+  stale_generation_rejections 1562 \
+  deferred_fetch_completions 400936 \
+  deferred_store_completions 400624 \
+  deferred_validation_completions 400312 \
+  deferred_application_completions 400000 \
+  duplicate_commit_qcs 3124 \
+  reordered_commit_batches 75000 \
+  reordered_tc_batches 75000 \
+  insufficient_dual_qcs 1030 \
+  count_only_qcs 515 \
+  power_only_qcs 515 \
+  restart_interval 64 \
+  duplicate_interval 32 \
+  under_quorum_interval 97 \
+  certificate_source external_fixture \
   log_sha256 "$log_sha256" \
   >"$completion_tmp"
 mv -- "$completion_tmp" "$completion_attestation"

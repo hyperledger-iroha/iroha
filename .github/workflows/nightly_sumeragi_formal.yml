@@ -54,7 +54,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 240
     env:
-      CARGO_TERM_COLOR: always
+      CARGO_TERM_COLOR: never
       CARGO_TARGET_DIR: ${{ github.workspace }}/target/sumeragi-v2-chaos-build
     steps:
       - uses: actions/checkout@v4
@@ -80,6 +80,8 @@ jobs:
         with:
           cache-on-failure: "true"
           shared-key: sumeragi-v2-chaos-100k-1.93.1
+      - name: Prefetch pinned standalone harness dependencies
+        run: bash scripts/formal/run_sumeragi_v2_harness.sh --fetch
       - name: Sumeragi v2 source-attested 100,000-height chaos gate
         run: bash scripts/run_sumeragi_v2_100k_chaos.sh
       - name: Upload Sumeragi v2 chaos evidence

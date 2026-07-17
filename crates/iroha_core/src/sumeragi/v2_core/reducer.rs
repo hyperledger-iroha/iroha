@@ -4316,9 +4316,8 @@ mod source_link_tests {
         assert!(!refinement::accepts(omitted));
 
         let mut reordered = projection;
-        let prepare_slot = reordered.boundary_claimed.replay_plan.slot1;
-        reordered.boundary_claimed.replay_plan.slot1 = reordered.boundary_claimed.replay_plan.slot2;
-        reordered.boundary_claimed.replay_plan.slot2 = prepare_slot;
+        let replay_plan = &mut reordered.boundary_claimed.replay_plan;
+        std::mem::swap(&mut replay_plan.slot1, &mut replay_plan.slot2);
         assert!(!refinement::accepts(reordered));
 
         let mut substituted = projection;

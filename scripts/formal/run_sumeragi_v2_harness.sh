@@ -5,7 +5,7 @@ set -euo pipefail
 # creating a lockfile in the production workspace. The copied authoritative
 # reducer keeps the verification package's source-link relationship intact.
 if (($# == 0)); then
-  echo "usage: $0 [--unit|--fast-network|--model-replay|--chaos-100k|<command> [argument ...]]" >&2
+  echo "usage: $0 [--fetch|--unit|--fast-network|--model-replay|--chaos-100k|<command> [argument ...]]" >&2
   exit 2
 fi
 
@@ -27,7 +27,11 @@ if [[ ! -f "$HARNESS_LOCK" || -L "$HARNESS_LOCK" \
   echo "pinned Sumeragi v2 harness lock is missing or has the wrong digest" >&2
   exit 1
 fi
-export CARGO_NET_OFFLINE=true
+if [[ "$1" == "--fetch" ]]; then
+  export CARGO_NET_OFFLINE=false
+else
+  export CARGO_NET_OFFLINE=true
+fi
 verify_workspace="$(mktemp -d "${TMPDIR:-/tmp}/sumeragi-v2-harness.XXXXXX")"
 cleanup_paths=("$verify_workspace")
 if [[ -z "${CARGO_TARGET_DIR:-}" ]]; then
@@ -75,6 +79,15 @@ EOF
 cd "$verify_workspace"
 cp -- "$HARNESS_LOCK" Cargo.lock
 case "$1" in
+  --fetch)
+    if (($# != 1)); then
+      echo "--fetch accepts no additional arguments" >&2
+      exit 2
+    fi
+    # Populate a cold Cargo home from the checksum-pinned standalone lock.
+    # All verification/test modes remain offline and consume this exact graph.
+    cargo fetch --locked
+    ;;
   --unit)
     if (($# != 1)); then
       echo "--unit accepts no additional arguments" >&2

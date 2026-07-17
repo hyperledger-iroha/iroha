@@ -25330,7 +25330,14 @@ focused 100,000-height permissioned/NPoS chaos run also preserved both
 50,000-height chain prefixes in 52.97 seconds. The four-seed PR and 32-seed
 release real-network matrices plus the 24-hour Taira runner remain unexecuted;
 the release profile must also reproduce the chaos result under its
-checkout-manifest-bound evidence root.
+checkout-manifest-bound evidence root. The current schema-v2 gate additionally
+queues local work, rotates restart across five persistence/application
+boundaries every 64th height, rejects stale-generation completions, and binds
+exact duplicate, reordered, and count-only/power-only negative counters. Its
+post-hardening 320-height smoke and exact 100,000-height harness run are green;
+the latter completed in 57.52 seconds with every schema-v2 counter matched.
+The checkout-manifest-bound rerun remains outstanding until these changes are
+available as a signed clean commit.
 
 Production release execution is now structurally isolated from mutable source:
 active Git operations are rejected, the candidate must be one clean committed
@@ -25427,7 +25434,9 @@ release work:
   including the 50-second Taira bound;
 - reproduce and archive the green 100,000-height permissioned/NPoS
   chain-prefix chaos gate inside the source-manifest-bound release corridor;
-  the standalone focused run completed in 52.97 seconds; and
+  the current queued-work/restart schema is green in the standalone 320-height
+  smoke and exact 100,000-height harness (57.52 seconds), but still needs the
+  clean-source attestation rerun; and
 - complete and archive the fully pinned 24-hour Taira-profile soak, including
   its recorded seed, load, impairment, anchored churn schedule, wall-clock
   throughput, and acceptance bounds, with zero unclassified no-progress

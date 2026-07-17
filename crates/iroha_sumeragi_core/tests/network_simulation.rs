@@ -1,9 +1,11 @@
 //! Deterministic multi-validator simulations for the production Sumeragi v2 reducer.
 //!
 //! The harness deliberately keeps networking, signatures, body storage, and
-//! validation outside the reducer.  It acknowledges those adapter effects
-//! synchronously while delivering network messages through a deterministic
-//! lossy, duplicating, and reordering scheduler.
+//! validation outside the reducer. The network scenarios execute adapters
+//! synchronously behind a deterministic lossy, duplicating, and reordering
+//! scheduler. The accelerated chain-prefix gate instead queues every local
+//! completion and injects deterministic WAL/replay interruptions; its QCs and
+//! TCs are externally supplied fixtures, so it does not claim quorum formation.
 
 use std::collections::{BTreeSet, VecDeque};
 
@@ -921,7 +923,7 @@ fn accelerated_100_000_block_chaos_preserves_chain_prefix() {
     let mut stats = run_accelerated_chain_chaos(per_mode, VotingMode::Permissioned);
     stats.merge(run_accelerated_chain_chaos(per_mode, VotingMode::Npos));
     println!(
-        "SUMERAGI_V2_CHAOS_COMPLETED permissioned_heights={per_mode} npos_heights={per_mode} total_heights={ACCELERATED_CHAOS_HEIGHTS} supplied_commit_qcs={} supplied_tcs={} finalized_validators={} wal_append_restarts={} fetch_restarts={} store_restarts={} validation_restarts={} application_restarts={} stale_generation_rejections={} deferred_fetch_completions={} deferred_store_completions={} deferred_validation_completions={} deferred_application_completions={} duplicate_commit_qcs={} reordered_commit_batches={} reordered_tc_batches={} insufficient_dual_qcs={} count_only_qcs={} power_only_qcs={} certificate_source=external_fixture",
+        "SUMERAGI_V2_CHAOS_COMPLETED permissioned_heights={per_mode} npos_heights={per_mode} total_heights={ACCELERATED_CHAOS_HEIGHTS} supplied_commit_qcs={} supplied_tcs={} finalized_validators={} wal_append_restarts={} fetch_restarts={} store_restarts={} validation_restarts={} application_restarts={} stale_generation_rejections={} deferred_fetch_completions={} deferred_store_completions={} deferred_validation_completions={} deferred_application_completions={} duplicate_commit_qcs={} reordered_commit_batches={} reordered_tc_batches={} insufficient_dual_qcs={} count_only_qcs={} power_only_qcs={} restart_interval={} duplicate_interval={} under_quorum_interval={} certificate_source=external_fixture",
         stats.supplied_commit_qcs,
         stats.supplied_tcs,
         stats.finalized_validators,
@@ -941,13 +943,13 @@ fn accelerated_100_000_block_chaos_preserves_chain_prefix() {
         stats.insufficient_dual_qcs,
         stats.count_only_qcs,
         stats.power_only_qcs,
+        ACCELERATED_RESTART_INTERVAL,
+        ACCELERATED_DUPLICATE_INTERVAL,
+        ACCELERATED_UNDER_QUORUM_INTERVAL,
     );
 }
 
-fn run_accelerated_chain_chaos(
-    height_count: u64,
-    mode: VotingMode,
-) -> AcceleratedChaosStats {
+fn run_accelerated_chain_chaos(height_count: u64, mode: VotingMode) -> AcceleratedChaosStats {
     let mut parent = None;
     let mut stats = AcceleratedChaosStats::default();
     for height in 1..=height_count {
@@ -989,6 +991,7 @@ fn run_accelerated_chain_chaos(
     stats
 }
 
+#[allow(clippy::too_many_lines)]
 fn run_accelerated_height(
     context: &HeightContext,
     subject: Subject,
@@ -1000,17 +1003,15 @@ fn run_accelerated_height(
     let mut nodes = context
         .roster()
         .iter()
-        .map(|validator| {
-            AcceleratedNode {
-                reducer: Reducer::new(
-                    context.clone(),
-                    Some(validator.id()),
-                    Generation::new(chaos_sequence),
-                )
-                .expect("accelerated height has a valid frozen context"),
-                wal: Vec::new(),
-                pending: VecDeque::new(),
-            }
+        .map(|validator| AcceleratedNode {
+            reducer: Reducer::new(
+                context.clone(),
+                Some(validator.id()),
+                Generation::new(chaos_sequence),
+            )
+            .expect("accelerated height has a valid frozen context"),
+            wal: Vec::new(),
+            pending: VecDeque::new(),
         })
         .collect::<Vec<_>>();
     let mut signature_sequence = chaos_sequence;
@@ -1121,10 +1122,11 @@ fn run_accelerated_height(
             chaos_sequence % u64::try_from(nodes.len()).expect("four nodes fit in u64"),
         )
         .expect("duplicate target fits in usize");
+        let tag = nodes[index].reducer.current_tag();
         let outcome = nodes[index]
             .reducer
             .step(Event::QuorumCertificateReceived {
-                tag: nodes[index].reducer.current_tag(),
+                tag,
                 certificate: decision.clone(),
             })
             .expect("an identical supplied CommitQC is a safe stutter");
@@ -1171,10 +1173,7 @@ fn run_accelerated_height(
     stats.completed_heights += 1;
 }
 
-fn enqueue_accelerated_event(
-    node: &mut AcceleratedNode,
-    event: Event,
-) -> StepDisposition {
+fn enqueue_accelerated_event(node: &mut AcceleratedNode, event: Event) -> StepDisposition {
     let outcome = node
         .reducer
         .step(event)
@@ -1184,6 +1183,7 @@ fn enqueue_accelerated_event(
     disposition
 }
 
+#[allow(clippy::too_many_lines)]
 fn drain_accelerated_effects(
     nodes: &mut [AcceleratedNode],
     context: &HeightContext,
@@ -1192,6 +1192,9 @@ fn drain_accelerated_effects(
     signature_sequence: &mut u64,
     stats: &mut AcceleratedChaosStats,
 ) {
+    // Process at most one adapter effect per node and pass. Follow-up work is
+    // therefore always deferred behind another deterministic scheduler rank,
+    // rather than being completed recursively in the reducer call stack.
     let mut scheduler_pass = 0_u64;
     let mut restart_injected = false;
     while nodes.iter().any(|node| !node.pending.is_empty()) {
@@ -1216,106 +1219,109 @@ fn drain_accelerated_effects(
                 continue;
             }
             let follow_up = match effect {
-            Effect::Persist { tag, entry } => {
-                nodes[index].wal.push(entry.clone());
-                nodes[index]
-                    .reducer
-                    .step(Event::Persisted {
-                        tag,
-                        id: entry.id(),
-                    })
-                    .expect("in-memory chaos WAL acknowledges the requested frame")
-                    .into_effects()
-            }
-            Effect::Sign { tag, message } => {
-                *signature_sequence = signature_sequence
-                    .checked_add(1)
-                    .expect("accelerated signature sequence remains bounded");
-                let signature = simulator_signature(
+                Effect::Persist { tag, entry } => {
+                    nodes[index].wal.push(entry.clone());
                     nodes[index]
                         .reducer
-                        .local_validator()
-                        .expect("accelerated nodes are validators"),
-                    *signature_sequence,
-                    &message,
-                );
-                nodes[index]
-                    .reducer
-                    .step(Event::Signed { tag, signature })
-                    .expect("signature completes the exact durable intent")
-                    .into_effects()
-            }
-            Effect::Broadcast(_) | Effect::EnterView { .. } => Vec::new(),
-            Effect::FetchBody {
-                tag,
-                round,
-                subject,
-                ..
-            } => {
-                stats.deferred_fetch_completions += 1;
-                nodes[index]
-                    .reducer
-                    .step(Event::BodyAvailable {
-                        tag,
-                        round,
-                        subject,
-                    })
-                    .expect("certified signer supplies the exact body")
-                    .into_effects()
-            }
-            Effect::StoreBody {
-                tag,
-                round,
-                subject,
-            } => {
-                stats.deferred_store_completions += 1;
-                nodes[index]
-                    .reducer
-                    .step(Event::BodyStored {
-                        tag,
-                        round,
-                        subject,
-                    })
-                    .expect("accelerated body store acknowledges durability")
-                    .into_effects()
-            }
-            Effect::ValidateBody {
-                tag,
-                round,
-                subject,
-            } => {
-                stats.deferred_validation_completions += 1;
-                nodes[index]
-                    .reducer
-                    .step(Event::ValidationCompleted {
-                        tag,
-                        round,
-                        subject,
-                        valid: true,
-                    })
-                    .expect("deterministic validation accepts the exact body")
-                    .into_effects()
-            }
-            Effect::Apply {
-                tag,
-                subject,
-                certificate,
-            } => {
-                assert_eq!(certificate.subject(), subject);
-                stats.deferred_application_completions += 1;
-                nodes[index]
-                    .reducer
-                    .step(Event::ApplicationCompleted { tag, subject })
-                    .expect("application matches the durable decision")
-                    .into_effects()
-            }
-            Effect::ReportEquivocation { .. } | Effect::ReportInvalidCertifiedBody { .. } => {
-                panic!("accelerated valid corridor emitted an adversarial report")
-            }
-        };
+                        .step(Event::Persisted {
+                            tag,
+                            id: entry.id(),
+                        })
+                        .expect("in-memory chaos WAL acknowledges the requested frame")
+                        .into_effects()
+                }
+                Effect::Sign { tag, message } => {
+                    *signature_sequence = signature_sequence
+                        .checked_add(1)
+                        .expect("accelerated signature sequence remains bounded");
+                    let signature = simulator_signature(
+                        nodes[index]
+                            .reducer
+                            .local_validator()
+                            .expect("accelerated nodes are validators"),
+                        *signature_sequence,
+                        &message,
+                    );
+                    nodes[index]
+                        .reducer
+                        .step(Event::Signed { tag, signature })
+                        .expect("signature completes the exact durable intent")
+                        .into_effects()
+                }
+                Effect::Broadcast(_) | Effect::EnterView { .. } => Vec::new(),
+                Effect::FetchBody {
+                    tag,
+                    round,
+                    subject,
+                    ..
+                } => {
+                    stats.deferred_fetch_completions += 1;
+                    nodes[index]
+                        .reducer
+                        .step(Event::BodyAvailable {
+                            tag,
+                            round,
+                            subject,
+                        })
+                        .expect("certified signer supplies the exact body")
+                        .into_effects()
+                }
+                Effect::StoreBody {
+                    tag,
+                    round,
+                    subject,
+                } => {
+                    stats.deferred_store_completions += 1;
+                    nodes[index]
+                        .reducer
+                        .step(Event::BodyStored {
+                            tag,
+                            round,
+                            subject,
+                        })
+                        .expect("accelerated body store acknowledges durability")
+                        .into_effects()
+                }
+                Effect::ValidateBody {
+                    tag,
+                    round,
+                    subject,
+                } => {
+                    stats.deferred_validation_completions += 1;
+                    nodes[index]
+                        .reducer
+                        .step(Event::ValidationCompleted {
+                            tag,
+                            round,
+                            subject,
+                            valid: true,
+                        })
+                        .expect("deterministic validation accepts the exact body")
+                        .into_effects()
+                }
+                Effect::Apply {
+                    tag,
+                    subject,
+                    certificate,
+                } => {
+                    assert_eq!(certificate.subject(), subject);
+                    stats.deferred_application_completions += 1;
+                    nodes[index]
+                        .reducer
+                        .step(Event::ApplicationCompleted { tag, subject })
+                        .expect("application matches the durable decision")
+                        .into_effects()
+                }
+                Effect::ReportEquivocation { .. } | Effect::ReportInvalidCertifiedBody { .. } => {
+                    panic!("accelerated valid corridor emitted an adversarial report")
+                }
+            };
             nodes[index].pending.extend(follow_up);
         }
-        assert!(progressed, "deferred local-work scheduler must make progress");
+        assert!(
+            progressed,
+            "deferred local-work scheduler must make progress"
+        );
         scheduler_pass = scheduler_pass
             .checked_add(1)
             .expect("accelerated scheduler pass remains bounded");
@@ -1374,15 +1380,11 @@ fn assert_under_quorum_decision_is_transactional(
     assert_eq!(reducer, &before);
 }
 
-fn accelerated_effect_matches_restart(
-    effect: &Effect,
-    point: AcceleratedRestartPoint,
-) -> bool {
+fn accelerated_effect_matches_restart(effect: &Effect, point: AcceleratedRestartPoint) -> bool {
     match (effect, point) {
-        (
-            Effect::Persist { entry, .. },
-            AcceleratedRestartPoint::WalAppended,
-        ) => matches!(entry.record(), WalRecord::Decision(_)),
+        (Effect::Persist { entry, .. }, AcceleratedRestartPoint::WalAppended) => {
+            matches!(entry.record(), WalRecord::Decision(_))
+        }
         (Effect::FetchBody { .. }, AcceleratedRestartPoint::FetchPending)
         | (Effect::StoreBody { .. }, AcceleratedRestartPoint::StorePending)
         | (Effect::ValidateBody { .. }, AcceleratedRestartPoint::ValidationPending)
@@ -1391,6 +1393,7 @@ fn accelerated_effect_matches_restart(
     }
 }
 
+#[allow(clippy::too_many_lines)]
 fn restart_accelerated_node(
     node: &mut AcceleratedNode,
     context: &HeightContext,
@@ -1402,6 +1405,8 @@ fn restart_accelerated_node(
         Effect::Persist { tag, entry } => {
             assert_eq!(point, AcceleratedRestartPoint::WalAppended);
             assert!(matches!(entry.record(), WalRecord::Decision(_)));
+            // The complete frame reached the durable WAL, but the process
+            // dies before its Persisted acknowledgement or Decide follow-up.
             node.wal.push(entry.clone());
             stats.wal_append_restarts += 1;
             Event::Persisted {
@@ -1505,6 +1510,8 @@ fn accelerated_restart_plan(
     if !sequence.is_multiple_of(ACCELERATED_RESTART_INTERVAL) {
         return None;
     }
+    // Rotate both the interrupted production boundary and the affected
+    // validator without introducing a random-number dependency into the gate.
     let occurrence = sequence / ACCELERATED_RESTART_INTERVAL - 1;
     let point = match occurrence % 5 {
         0 => AcceleratedRestartPoint::WalAppended,
@@ -1521,10 +1528,7 @@ fn accelerated_restart_plan(
     Some((index, point))
 }
 
-fn expected_accelerated_chaos_stats(
-    height_count: u64,
-    mode: VotingMode,
-) -> AcceleratedChaosStats {
+fn expected_accelerated_chaos_stats(height_count: u64, mode: VotingMode) -> AcceleratedChaosStats {
     let mut expected = AcceleratedChaosStats::default();
     for height in 1..=height_count {
         expected.completed_heights += 1;
