@@ -1,6 +1,6 @@
 # Roadmap
 
-Last updated: 2026-07-16
+Last updated: 2026-07-17
 
 This roadmap is the public, high-level view of current Hyperledger Iroha work.
 Completed history lives in [`status.md`](./status.md).
@@ -25295,6 +25295,21 @@ runs are not release evidence. The earlier exact one-attempt four-validator
 genesis rerun passed on all validators in 456.76 seconds, with retained logs at
 `target/sumeragi-v2-genesis-final-hardening-20260716/irohad_test_network_7sJJmM`.
 
+A newer current-working-tree diagnostic ran the exact authoritative
+four-validator genesis regression with networking required, network-start
+retries disabled,
+and its exact deterministic seed. Its single permitted startup attempt passed
+1/1. Live snapshots crossed the original reset boundary through view 10 while
+retaining the exact view-9 locked Commit intent; the regression then observed
+genesis applied on every validator and a common awaiting-proposal successor
+height. All four peers exited with status 0, and libtest completed in 1192.57
+seconds including the cold re-entrant network binary build. Its temporary log
+is `/tmp/iroha-root-genesis.1T17yY/run.log`, and its temporary localnet is
+`/tmp/iroha-root-genesis.1T17yY/irohad_test_network_FbEl6A`. This mutable-source
+diagnostic is not a clean signed, checkout-manifest-bound source-attested
+release receipt and therefore does not reduce the outstanding four-seed PR,
+32-seed release, strict-proof, clean chaos-attestation, or 24-hour soak gates.
+
 Ten arbitrary-context Core safety obligations are TLAPS-proved: durable-vote
 uniqueness, lock monotonicity, external validity, certified-body availability,
 certificate uniqueness, agreement, conflicting-CommitQC exclusion, and crash
@@ -25368,58 +25383,76 @@ is cooperative self-consistency rather than authenticated host/runner
 provenance: malformed, incomplete, cross-source, semantically mismatched, and
 digest-mismatched evidence observed during generation is rejected, but a
 same-UID actor can synthesize a fully self-consistent transcript and recompute
-its hashes. The remaining work is to execute these hardened gates, not to
-accept evidence from the mutable caller.
+its hashes. The remaining work is to discharge the proof debts below and then
+execute the hardened gates, not to accept evidence from the mutable caller.
 
-The ledger retains exactly 13 `specified_unproved` obligations. Outstanding
-release work:
+The 46-entry ledger contains 24 `tlaps_proved`, 15 `specified_unproved`, 6
+`trusted_contract`, and 1 `out_of_scope` entries; machine-checked completion
+remains false. Outstanding release work:
 
 - preserve the strict-green 196/196 Stage-4 protected-rank checkpoint and its
   counterexample gate (four causal refill lassos, causal replacement,
-  Commit-certificate discovery debt, all-I/O indexing, and the 19,081-state
+  Commit-certificate discovery debt, all-I/O indexing, and the 42,817-state
   ownership check), then extend it to progress-relevant Normal
   proposal/Prepare work and replace the weak enabled-action deadlock seam with
   a productive protocol/deadline/rank decrease theorem. The checkpoint is
   evidence for this sub-slice only and does not discharge any proof debt;
+- discharge the executable
+  `EffectiveLockAcquisitionModelObligation` over the height-scoped immutable
+  physical-owner/mutable-consumer state machine. Its exhaustive bounded TLC and
+  reload/retry/future-completion mutations are regression evidence only;
 - discharge the ten concrete asynchronous obligations for the
-  production effective-lock body-acquisition composition, runner scheduler
+  production effective-lock body-acquisition refinement, runner scheduler
   preservation, async type closure, progress-witness preservation, post-GST
   deadlock freedom, protected service-rank decrease, post-GST starvation
   freedom, timeout-view progress, responsive-leader rotation, and application
   liveness. Rotation must reach a view in which the responsive honest scheduled
   leader itself is active (or decide first), and application must be proved per
   responsive validator without waiting for every peer to decide. Generation-
-  scoped delivery is already `tlaps_proved`. Async type
-  closure may be promoted only after runner preservation, deadlock freedom only
-  after async type closure, and starvation only after service-rank progress.
+  scoped delivery and the typed 18-action fairness refinement are already
+  `tlaps_proved`; the latter is strict-green at 1,143/1,143 obligations. Async
+  type closure may be promoted only after runner preservation, deadlock freedom
+  only after async type closure, and starvation only after service-rank
+  progress.
   Progress witnesses additionally wait for async type and generation-scoped
   delivery; timeout-view progress waits for progress witnesses and starvation;
   rotating-leader progress waits for effective-lock body acquisition,
   witnesses, starvation, and timeout-view progress; application waits for
   witnesses and starvation;
 - discharge the ledgered
-  `SuccessorActivationAndHistoricalCatchUpProductionRefinementObligation` by
+  `SuccessorActivationStarvationFreedomObligation` by proving that every exact
+  queued/running activation owned by a responsive validator has an enabled step
+  and the minimal `0..19` decreasing rank, including the one-time pre-failure
+  `+9` offset, until exact publication or legitimate later-height supersession.
+  Do not strengthen this to validators outside `Responsive`: an honest node may
+  queue work before GST and subsequently become nonresponsive;
+- discharge
+  `SuccessorActivationAndExactHistoricalRecoveryProductionRefinementObligation`
+  by
   machine-checking the Rust trace mapping for full-context Applied/Recovered
   tokens, fail-closed complete-tip recovery, ordered startup prerequisites,
-  kind-specific publication, staged historical body recovery, and terminal
+  kind-specific publication, exact Async CommitQC import and ordinary reducer
+  body recovery, and terminal
   observer application without successor activation. The fail-closed static
   source mapping and its four mutation checks now bind the concrete runner,
   status, runtime, effect, and block-sync order, but the exact deductive
   refinement theorem remains unproved;
 - discharge the concrete genesis chain product's exact first-successor handoff,
   ledgered as `GenesisHeightSuccessorHandoffObligation`, only after
-  rotating-leader, application liveness, and the production successor/catch-up
-  refinement seam are proved;
+  rotating-leader, application liveness, successor-activation starvation, and
+  the production successor/exact-recovery refinement seam are proved;
 - prove the indexed multi-height
   `SumeragiV2ChainEpochRefinement!HeightLivenessObligation` over the explicit
   successor-instance product by discharging its activation/fairness suffix,
-  authenticated historical catch-up fairness transfer for validators absent
+  authenticated exact historical-recovery fairness transfer for validators absent
   from an old roster, and finite-height temporal induction, without global
   asynchronous shadow state, an alternate consensus transition relation, or a
   favourable-network corridor; this promotion likewise follows the
-  rotating-leader, application-liveness, and production-refinement proofs;
+  rotating-leader, application-liveness, successor-activation starvation, and
+  production-refinement proofs;
 - execute the cross-SDK fixture/status-parser legs and complete four-seed PR
-  corridor against the final source tree. The 166-test/14-module pre-network
+  corridor against the final source tree. Current-tree discovery finds all 166
+  required tests with none missing or ignored; the 14-module pre-network
   production-liveness inventory includes completion
   ownership, installed destination rebind, unbound-Vote authority,
   exact-lock/consumer-epoch admission, transactional certified retirement,

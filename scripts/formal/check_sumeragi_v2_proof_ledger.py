@@ -48,9 +48,179 @@ RELEASE_PROOF_MODULES = (
     "SumeragiV2TemporalLemmas",
     "SumeragiV2LivenessProofs",
     "SumeragiV2ServiceRankLemmas",
+    "SumeragiV2EffectiveLockAcquisitionProofs",
+    "SumeragiV2AsyncFairnessRefinementProofs",
     "SumeragiV2AsyncLivenessProofs",
     "SumeragiTimeoutIngressGuardTest",
 )
+
+# Reviewed release obligation inventory.  Keeping this independent from the
+# checked-in ledger makes removing, adding, reordering, or retargeting an
+# obligation an explicit proof-gate change rather than a self-authorizing JSON
+# edit.  Requirement prose and proof status remain ledger-owned so proof debt
+# can be promoted without rewriting this structural contract.
+REQUIRED_PROOF_OBLIGATION_INVENTORY = {
+    "dual-quorum-definition": (
+        "SumeragiV2QuorumProofs",
+        "DualQuorumCarriesBothThresholds",
+    ),
+    "vocabulary-helper-facts": (
+        "SumeragiV2VocabularyProofs",
+        "PrepareSignerAvailabilityIncludesDurability / "
+        "CrashDoesNotErasePrepareIntents / CrashDoesNotEraseDecisions / "
+        "IncompleteFrameIsNotAcknowledged / ContextRecordCarriesFrozenEpoch / "
+        "ContextRecordCarriesParent / ContextRecordCarriesParentContext / "
+        "EquivalentParentCommitQcsConverge / ForeignParentLineageHasDifferentIdentity",
+    ),
+    "quorum-honest-intersection": (
+        "SumeragiV2Proofs",
+        "QuorumIntersectionObligation",
+    ),
+    "durable-vote-append-kernel": (
+        "SumeragiV2SafetyLemmas",
+        "DurableVoteAppendPreservesUniqueness / "
+        "DurableTimeoutAppendPreservesUniqueness",
+    ),
+    "same-view-certificate-kernel": (
+        "SumeragiV2SafetyLemmas",
+        "SameViewCertificateUniqueness",
+    ),
+    "validity-availability-kernel": (
+        "SumeragiV2SafetyLemmas",
+        "BackedCertificateIsValidAndAvailable",
+    ),
+    "lock-transition-kernel": (
+        "SumeragiV2SafetyLemmas",
+        "CommitPersistenceAdvancesLockMonotonically / "
+        "TimeoutInstallationAdvancesLockMonotonically / MonotoneLockUpdatesCompose",
+    ),
+    "timeout-protection-kernel": (
+        "SumeragiV2SafetyLemmas",
+        "GroupedTimeoutProtectsCommitQuorum",
+    ),
+    "timeout-envelope-schema": (
+        "SumeragiTimeoutIngressGuardTest",
+        "SelectedViewCheckDoesNotEstablishEnvelopeSchema / "
+        "FullEnvelopeGuardTypesTimeoutVote / DeliverTimeoutRequiresCanonicalEnvelope / "
+        "AsyncSentTimeoutItemCarriesCanonicalEnvelope / "
+        "ExecuteCoreTimeoutDeliveryCarriesCanonicalEnvelope / "
+        "AsyncTypedTimeoutDeliveryRefinesCoreStep",
+    ),
+    "timeout-wire-authorization": (
+        "SumeragiV2TimeoutWireAuthorization",
+        "CoreSpecAtAlwaysStrongTimeoutWireAuthorizationInvariant / "
+        "StrongWireInvariantAuthorizesPendingTimeoutSignature / "
+        "StrongWireInvariantAuthorizesHonestTimeoutEnvelope",
+    ),
+    "durable-vote-uniqueness": (
+        "SumeragiV2Proofs",
+        "DurableVoteUniquenessObligation",
+    ),
+    "lock-monotonicity": ("SumeragiV2Proofs", "LockMonotonicityObligation"),
+    "external-validity": ("SumeragiV2Proofs", "ExternalValidityObligation"),
+    "certified-body-availability": (
+        "SumeragiV2Proofs",
+        "AvailabilityObligation",
+    ),
+    "certificate-uniqueness": (
+        "SumeragiV2Proofs",
+        "CertificateUniquenessObligation",
+    ),
+    "historical-tc-lock-commit": (
+        "SumeragiV2Proofs",
+        "HistoricalTcLockedCommitAuthorizationObligation",
+    ),
+    "timeout-protection": ("SumeragiV2Proofs", "TimeoutProtectionObligation"),
+    "agreement": ("SumeragiV2Proofs", "AgreementObligation"),
+    "no-conflicting-commit-qcs": (
+        "SumeragiV2Proofs",
+        "NoConflictingCommitCertificatesObligation",
+    ),
+    "chain-prefix": ("SumeragiV2ChainEpochProofs", "ChainPrefixObligation"),
+    "crash-restart": ("SumeragiV2Proofs", "CrashRecoveryObligation"),
+    "epoch-boundary": ("SumeragiV2ChainEpochProofs", "EpochBoundaryObligation"),
+    "effective-lock-body-acquisition-model": (
+        "SumeragiV2EffectiveLockAcquisitionProofs",
+        "EffectiveLockAcquisitionModelObligation",
+    ),
+    "effective-lock-body-acquisition-production-refinement": (
+        "SumeragiV2AsyncLivenessProofs",
+        "EffectiveLockBodyAcquisitionProductionRefinementObligation",
+    ),
+    "async-runner-scheduler-preservation": (
+        "SumeragiV2AsyncLivenessProofs",
+        "AsyncRunnerStepPreservesSchedulerType",
+    ),
+    "async-type-invariant": (
+        "SumeragiV2AsyncLivenessProofs",
+        "AsyncTypeInvariantObligation",
+    ),
+    "async-fair-action-refinement": (
+        "SumeragiV2AsyncFairnessRefinementProofs",
+        "AsyncFairActionsRefineAsyncNextObligation",
+    ),
+    "generation-scoped-vote-delivery": (
+        "SumeragiV2AsyncLivenessProofs",
+        "GenerationScopedVoteDeliveryObligation",
+    ),
+    "progress-witness-preservation": (
+        "SumeragiV2AsyncLivenessProofs",
+        "ProgressWitnessObligation",
+    ),
+    "post-gst-deadlock-freedom": (
+        "SumeragiV2AsyncLivenessProofs",
+        "DeadlockFreedomObligation",
+    ),
+    "protected-service-rank": (
+        "SumeragiV2AsyncLivenessProofs",
+        "ProtectedServiceRankProgressObligation",
+    ),
+    "post-gst-starvation-freedom": (
+        "SumeragiV2AsyncLivenessProofs",
+        "StarvationFreedomObligation",
+    ),
+    "timeout-view-liveness": (
+        "SumeragiV2AsyncLivenessProofs",
+        "TimeoutViewProgressObligation",
+    ),
+    "rotating-leader-liveness": (
+        "SumeragiV2AsyncLivenessProofs",
+        "RotatingLeaderProgressObligation",
+    ),
+    "application-liveness": (
+        "SumeragiV2AsyncLivenessProofs",
+        "ApplicationLivenessObligation",
+    ),
+    "successor-activation-starvation-freedom": (
+        "SumeragiV2SuccessorActivationRefinementProofs",
+        "SuccessorActivationStarvationFreedomObligation",
+    ),
+    "successor-activation-exact-recovery-production-refinement": (
+        "SumeragiV2ChainEpochRefinement",
+        "SuccessorActivationAndExactHistoricalRecoveryProductionRefinementObligation",
+    ),
+    "genesis-height-successor-handoff": (
+        "SumeragiV2ChainEpochRefinement",
+        "GenesisHeightSuccessorHandoffObligation",
+    ),
+    "height-liveness": (
+        "SumeragiV2ChainEpochRefinement",
+        "HeightLivenessObligation",
+    ),
+    "cryptography": ("trusted-boundary", "cryptography"),
+    "durability-system-call": ("trusted-boundary", "os-fsync"),
+    "deterministic-execution": ("trusted-boundary", "deterministic-execution"),
+    "post-gst-responsive-quorum": (
+        "trusted-boundary",
+        "post-gst-responsive-quorum",
+    ),
+    "network-after-gst": ("trusted-boundary", "post-gst-delivery"),
+    "runtime-after-gst": ("trusted-boundary", "post-gst-runtime-service"),
+    "transaction-inclusion-fairness": (
+        "trusted-boundary",
+        "transaction-inclusion-fairness",
+    ),
+}
 
 REQUIRED_MODEL_MODULES = (
     "SumeragiV2",
@@ -79,7 +249,10 @@ REQUIRED_MODEL_MODULES = (
     "SumeragiV2TemporalLemmas",
     "SumeragiV2LivenessProofs",
     "SumeragiV2ServiceRankLemmas",
+    "SumeragiV2EffectiveLockAcquisition",
+    "SumeragiV2EffectiveLockAcquisitionProofs",
     "SumeragiV2AsyncNetwork",
+    "SumeragiV2AsyncFairnessRefinementProofs",
     "SumeragiV2AsyncLivenessProofs",
     "SumeragiTimeoutIngressGuardTest",
 )
@@ -91,6 +264,7 @@ REQUIRED_TLC_CONFIGS = (
     "safety_stake.cfg",
     "chain_epoch.cfg",
     "liveness.cfg",
+    "effective_lock_acquisition.cfg",
     "resume_locked_commit_witness.cfg",
 )
 
@@ -101,6 +275,7 @@ REQUIRED_TLC_CONFIG_HEADERS = {
     "safety_stake.cfg": "INIT Init\nNEXT Next",
     "chain_epoch.cfg": "SPECIFICATION ChainEpochTlcSpec",
     "liveness.cfg": "SPECIFICATION AsyncFiniteSpec",
+    "effective_lock_acquisition.cfg": "SPECIFICATION AcquisitionSpec",
     "resume_locked_commit_witness.cfg": "SPECIFICATION CoreSpec",
 }
 
@@ -178,7 +353,7 @@ ASYNC_LIVENESS_PROPERTY_WRAPPERS = {
     "generation-scoped-vote-delivery": "GenerationScopedVoteDeliveryProperty",
     "progress-witness-preservation": "ProgressWitnessProperty",
     "post-gst-deadlock-freedom": "DeadlockFreedomProperty",
-    "protected-service-rank": "ProtectedServiceRankProgressProperty",
+    "protected-service-rank": "ProtectedServiceRanksProgressProperty",
     "post-gst-starvation-freedom": "StarvationFreedomProperty",
     "timeout-view-liveness": "TimeoutViewProgressProperty",
     "rotating-leader-liveness": "RotatingLeaderProgressProperty",
@@ -187,7 +362,8 @@ ASYNC_LIVENESS_PROPERTY_WRAPPERS = {
 
 # These obligations are release-architecture seams, not declarations that may
 # drift between proof modules.  Type closure belongs to the concrete async
-# proof; successor/catch-up production refinement, genesis handoff, and
+# proof; successor activation, exact-recovery production refinement, genesis
+# handoff, and
 # multi-height progress belong to the current receipt-driven indexed chain
 # product.
 FIXED_PROOF_OBLIGATION_TARGETS = {
@@ -201,17 +377,25 @@ FIXED_PROOF_OBLIGATION_TARGETS = {
         "SumeragiV2Proofs",
         "HistoricalTcLockedCommitAuthorizationObligation",
     ),
-    "effective-lock-body-acquisition": (
+    "effective-lock-body-acquisition-model": (
+        "SumeragiV2EffectiveLockAcquisitionProofs",
+        "EffectiveLockAcquisitionModelObligation",
+    ),
+    "effective-lock-body-acquisition-production-refinement": (
         "SumeragiV2AsyncLivenessProofs",
-        "EffectiveLockBodyAcquisitionCompositionObligation",
+        "EffectiveLockBodyAcquisitionProductionRefinementObligation",
     ),
     "async-type-invariant": (
         "SumeragiV2AsyncLivenessProofs",
         "AsyncTypeInvariantObligation",
     ),
-    "successor-activation-catch-up-production-refinement": (
+    "successor-activation-starvation-freedom": (
+        "SumeragiV2SuccessorActivationRefinementProofs",
+        "SuccessorActivationStarvationFreedomObligation",
+    ),
+    "successor-activation-exact-recovery-production-refinement": (
         "SumeragiV2ChainEpochRefinement",
-        "SuccessorActivationAndHistoricalCatchUpProductionRefinementObligation",
+        "SuccessorActivationAndExactHistoricalRecoveryProductionRefinementObligation",
     ),
     "genesis-height-successor-handoff": (
         "SumeragiV2ChainEpochRefinement",
@@ -233,35 +417,48 @@ PROOF_STATUS_DEPENDENCIES = {
         "async-type-invariant",
         "generation-scoped-vote-delivery",
     ),
-    "post-gst-deadlock-freedom": ("async-type-invariant",),
-    "protected-service-rank": ("async-type-invariant",),
+    "post-gst-deadlock-freedom": (
+        "async-type-invariant",
+        "async-fair-action-refinement",
+    ),
+    "protected-service-rank": (
+        "async-type-invariant",
+        "async-fair-action-refinement",
+    ),
     "post-gst-starvation-freedom": (
         "async-type-invariant",
+        "async-fair-action-refinement",
         "protected-service-rank",
     ),
     "timeout-view-liveness": (
+        "async-fair-action-refinement",
         "progress-witness-preservation",
         "post-gst-starvation-freedom",
     ),
     "rotating-leader-liveness": (
-        "effective-lock-body-acquisition",
+        "effective-lock-body-acquisition-model",
+        "effective-lock-body-acquisition-production-refinement",
+        "async-fair-action-refinement",
         "progress-witness-preservation",
         "post-gst-starvation-freedom",
         "timeout-view-liveness",
     ),
     "application-liveness": (
+        "async-fair-action-refinement",
         "progress-witness-preservation",
         "post-gst-starvation-freedom",
     ),
     "genesis-height-successor-handoff": (
         "rotating-leader-liveness",
         "application-liveness",
-        "successor-activation-catch-up-production-refinement",
+        "successor-activation-starvation-freedom",
+        "successor-activation-exact-recovery-production-refinement",
     ),
     "height-liveness": (
         "rotating-leader-liveness",
         "application-liveness",
-        "successor-activation-catch-up-production-refinement",
+        "successor-activation-starvation-freedom",
+        "successor-activation-exact-recovery-production-refinement",
     ),
 }
 
@@ -835,6 +1032,53 @@ def _proofless_release_theorem_errors(
     return errors
 
 
+def _proof_obligation_inventory_errors(obligations: list[Any]) -> list[str]:
+    """Require the ledger to match the independently reviewed release inventory."""
+
+    errors: list[str] = []
+    observed_ids: list[str] = []
+    by_id: dict[str, dict[str, Any]] = {}
+    for obligation in obligations:
+        if not isinstance(obligation, dict):
+            continue
+        obligation_id = obligation.get("id")
+        if not _nonempty_string(obligation_id):
+            continue
+        observed_ids.append(obligation_id)
+        by_id.setdefault(obligation_id, obligation)
+
+    expected_ids = list(REQUIRED_PROOF_OBLIGATION_INVENTORY)
+    expected_id_set = set(expected_ids)
+    for obligation_id, (expected_module, expected_symbol) in (
+        REQUIRED_PROOF_OBLIGATION_INVENTORY.items()
+    ):
+        obligation = by_id.get(obligation_id)
+        if obligation is None:
+            errors.append(f"proof ledger is missing reviewed obligation {obligation_id}")
+            continue
+        if obligation.get("module") != expected_module:
+            errors.append(
+                f"proof obligation {obligation_id} must use reviewed module "
+                f"{expected_module}"
+            )
+        if obligation.get("symbol") != expected_symbol:
+            errors.append(
+                f"proof obligation {obligation_id} must use reviewed symbol "
+                f"{expected_symbol}"
+            )
+
+    for obligation_id in dict.fromkeys(observed_ids):
+        if obligation_id not in expected_id_set:
+            errors.append(f"proof ledger contains unreviewed obligation {obligation_id}")
+
+    if observed_ids != expected_ids:
+        errors.append(
+            "proof ledger obligations must follow the reviewed canonical order; "
+            f"expected {expected_ids}, found {observed_ids}"
+        )
+    return errors
+
+
 def _proof_obligation_architecture_errors(
     obligations: list[Any], module_sources: dict[str, str]
 ) -> list[str]:
@@ -1071,7 +1315,7 @@ def _reachable_oracle_guard_errors(formal_dir: Path) -> list[str]:
 
 
 def _async_spec_shape_errors(formal_dir: Path) -> list[str]:
-    """Separate arbitrary-context deduction from the finite genesis TLC instance."""
+    """Keep deductive and finite specs on one canonical state/fairness surface."""
 
     path = formal_dir / "SumeragiV2AsyncNetwork.tla"
     expected = {
@@ -1082,6 +1326,7 @@ def _async_spec_shape_errors(formal_dir: Path) -> list[str]:
             "AsyncBaseInitAt(initialContext) /\\ ViewDomain = FiniteViews"
         ),
         "AsyncFiniteInit": "AsyncFiniteInitAt(ContextRecord(0, <<>>))",
+        "AsyncAllVars": "<<vars, AsyncSchedulerVars, AsyncRecoveryVars>>",
         "AsyncSpec": "AsyncInit /\\ [][AsyncNext]_AsyncAllVars /\\ AsyncFairness",
         "AsyncSpecAt": (
             "AsyncInitAt(initialContext) /\\ [][AsyncNext]_AsyncAllVars "
@@ -1091,9 +1336,11 @@ def _async_spec_shape_errors(formal_dir: Path) -> list[str]:
             "AsyncFiniteInit /\\ [][AsyncNext]_AsyncAllVars /\\ AsyncFairness"
         ),
         "AsyncFiniteSpecAt": (
-            "AsyncFiniteInitAt(initialContext) /\\ [][AsyncNext]_AsyncAllVars "
+            "AsyncFiniteInitAt(initialContext) "
+            "/\\ [][AsyncNext]_AsyncAllVars "
             "/\\ AsyncFairnessAt(initialContext)"
         ),
+        "AsyncFairness": "AsyncFairnessAt(ContextRecord(0, <<>>))",
     }
     errors: list[str] = []
     if path.is_file():
@@ -1109,6 +1356,36 @@ def _async_spec_shape_errors(formal_dir: Path) -> list[str]:
                 errors.append(
                     f"{path}:{line}: {symbol} must equal only {exact_body!r}; "
                     f"found {normalized!r}"
+                )
+
+        stripped = strip_tla_comments(source)
+        for forbidden in (
+            "AsyncTlcAllVars",
+            "AsyncTlcFairnessAt",
+            "AsyncTlcFairness",
+        ):
+            for match in re.finditer(rf"\b{re.escape(forbidden)}\b", stripped):
+                line = stripped.count("\n", 0, match.start()) + 1
+                errors.append(
+                    f"{path}:{line}: TLC-only duplicate {forbidden} is prohibited; "
+                    "finite and deductive specs must share AsyncAllVars and "
+                    "AsyncFairnessAt"
+                )
+
+        public_fairness = _top_level_operator_body(
+            source, "AsyncFairnessAt", preserve_string_contents=True
+        )
+        if public_fairness is None:
+            errors.append(f"{path}: missing required asynchronous operator AsyncFairnessAt")
+        else:
+            public_body, public_line = public_fairness
+            public_subscripts = set(
+                re.findall(r"\bWF_([A-Za-z][A-Za-z0-9_]*)\s*\(", public_body)
+            )
+            if public_subscripts != {"AsyncAllVars"}:
+                errors.append(
+                    f"{path}:{public_line}: AsyncFairnessAt may use only the "
+                    f"public AsyncAllVars subscript; found {sorted(public_subscripts)}"
                 )
 
     for module in ("SumeragiV2LivenessProofs", "SumeragiV2AsyncLivenessProofs"):
@@ -1585,6 +1862,10 @@ def _async_proof_architecture_errors(formal_dir: Path) -> list[str]:
                 r"ServiceRankLess( ServeJobRank(node, job), "
                 r"<<5, position>>))"
               ),
+              "ProtectedServiceRanksProgressProperty": (
+                r"/\ ProtectedServiceRankProgressProperty(specification) "
+                r"/\ ProtectedServeRankProgressProperty(specification)"
+              ),
               "ProtectedServeStarvationProperty": (
                 r"specification => \A node \in "
                 r"AsyncCurrentResponsiveVoters, job \in AsyncServeJobSet: "
@@ -2058,6 +2339,118 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
     stripped = strip_tla_comments(source)
     errors: list[str] = []
 
+    reviewed_local_theorems: tuple[str, ...] = ()
+    observed_local_theorems = tuple(
+        re.findall(
+            r"(?m)^[ \t]*(?:LOCAL[ \t]+)?"
+            r"(?:THEOREM|LEMMA|COROLLARY|PROPOSITION)[ \t]+"
+            r"([A-Za-z_][A-Za-z0-9_]*)\b",
+            stripped,
+        )
+    )
+    if observed_local_theorems != reviewed_local_theorems:
+        errors.append(
+            f"{path}: SumeragiV2AsyncNetwork must declare exactly the "
+            "reviewed local theorem inventory "
+            f"{reviewed_local_theorems!r}; found {observed_local_theorems!r}"
+        )
+
+    fairness_proof_path = (
+        formal_dir / "SumeragiV2AsyncFairnessRefinementProofs.tla"
+    )
+    if fairness_proof_path.is_file():
+        fairness_proof_source = fairness_proof_path.read_text(encoding="utf-8")
+        fairness_proof_stripped = strip_tla_comments(fairness_proof_source)
+        reviewed_fairness_theorems = (
+            "CoreStutterRefinesBracketNext",
+            "SetGstRefinesCoreNext",
+            "RestartRefinesCoreNext",
+            "ResumeProposalRefinesCoreNext",
+            "ResumeVoteRefinesCoreNext",
+            "ResumeTimeoutRefinesCoreNext",
+            "RecoveryCoreReplayRefinesBracketNext",
+            "BodyRecordMembershipProjectsSubject",
+            "RegularCoreCommandRefinesCoreNext",
+            "FormPrepareQcRefinesCoreNext",
+            "ExecuteCoreDeliveryRefinesCoreNext",
+            "ExecuteCommandRefinesCoreBracketNext",
+            "BeginTimeoutRefinesCoreNext",
+            "DirectTimeoutStepRefinesCoreBracketNext",
+            "DeferredTimeoutStepRefinesCoreBracketNext",
+            "DeferredTagStepRefinesCoreBracketNext",
+            "FifoRuntimeStepRefinesCoreBracketNext",
+            "DeferredDrainStepRefinesCoreBracketNext",
+            "RuntimeStepRefinesCoreBracketNext",
+            "LocalAdmissionStepRefinesCoreBracketNext",
+            "DrainFairIngressSelectedCoreChoice",
+            "ImportCommitCertificateRefinesCoreNext",
+            "DrainFairIngressSelectedRefinesCoreBracketNext",
+            "IngressDrainStepRefinesCoreBracketNext",
+            "SerializedRuntimeStepRefinesCoreBracketNext",
+            "RunNodeWorkRefinesCoreBracketNext",
+            "RunNodeRefinesCoreBracketNext",
+            "RunHistoricalRecoveryNodeRefinesCoreBracketNext",
+            "RunHistoricalServerRefinesCoreBracketNext",
+            "RunNodeAnyRefinesCoreBracketNext",
+            "RunHistoricalRecoveryNodeAnyRefinesCoreBracketNext",
+            "PreGstResponsiveRestartRefinesCoreBracketNext",
+            "PreGstResponsiveReplayRefinesCoreBracketNext",
+            "DriveResponsiveReplayHeadRefinesCoreBracketNext",
+            "AsyncFairActionsRefineCoreBracketNext",
+            "RunnerCategorySuppliesOuterFrame",
+            "NonRunnerCategorySuppliesOuterFrame",
+            "RecoveryCategorySuppliesOuterFrame",
+            "AsyncFairActionsSupplyOuterFrame",
+            "AsyncFairActionsRefineAsyncNextObligation",
+        )
+        observed_fairness_theorems = tuple(
+            re.findall(
+                r"(?m)^[ \t]*(?:LOCAL[ \t]+)?"
+                r"(?:THEOREM|LEMMA|COROLLARY|PROPOSITION)[ \t]+"
+                r"([A-Za-z_][A-Za-z0-9_]*)\b",
+                fairness_proof_stripped,
+            )
+        )
+        if observed_fairness_theorems != reviewed_fairness_theorems:
+            errors.append(
+                f"{fairness_proof_path}: fairness refinement proof must "
+                "declare exactly the reviewed theorem inventory "
+                f"{reviewed_fairness_theorems!r}; found "
+                f"{observed_fairness_theorems!r}"
+            )
+        refinement_proof = _top_level_theorem_body(
+            fairness_proof_source,
+            "AsyncFairActionsRefineAsyncNextObligation",
+            preserve_string_contents=True,
+        )
+        expected_refinement_statement = (
+            "/\\ TypeInvariant /\\ AsyncSchedulerTypeInvariant "
+            "=> \\A initialContext \\in ContextRecords: "
+            "AsyncFairActionAt(initialContext) => AsyncNext"
+        )
+        if refinement_proof is None:
+            errors.append(
+                f"{fairness_proof_path}: missing exact fair-action "
+                "refinement theorem"
+            )
+        else:
+            refinement_body, refinement_line = refinement_proof
+            refinement_statement = re.split(
+                r"(?m)^[ \t]*(?:BY|PROOF|OBVIOUS)\b",
+                refinement_body,
+                maxsplit=1,
+            )[0]
+            normalized_refinement_statement = " ".join(
+                refinement_statement.split()
+            )
+            if normalized_refinement_statement != expected_refinement_statement:
+                errors.append(
+                    f"{fairness_proof_path}:{refinement_line}: "
+                    "AsyncFairActionsRefineAsyncNextObligation must state "
+                    f"only {expected_refinement_statement!r}; found "
+                    f"{normalized_refinement_statement!r}"
+                )
+
     for symbol in (
         "asyncCertifiedHeight",
         "decidedAt",
@@ -2080,12 +2473,78 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             "subject: Subjects, chunk: 0..AsyncChunkCount, "
             "nonce: 0..(AsyncIngressCapacity - 1)]"
         ),
+        "AsyncTcRecordTyped": (
+            '/\\ DOMAIN tc = {"context", "height", "view", "votes"} '
+            "/\\ tc.context \\in ContextRecords "
+            "/\\ tc.height \\in Heights "
+            "/\\ tc.view \\in Views "
+            "/\\ tc.votes \\subseteq TimeoutVoteRecordSet"
+        ),
+        "AsyncTcEnvelopeTyped": (
+            '/\\ DOMAIN envelope = {"recipient", "tc"} '
+            "/\\ envelope.recipient \\in ValidatorIds "
+            "/\\ AsyncTcRecordTyped(envelope.tc)"
+        ),
+        "AsyncEvidenceTyped": (
+            "\\/ evidence = NoAsyncItem "
+            "\\/ AsyncItemTyped(evidence) "
+            "\\/ evidence \\in ProposalRecordSet "
+            "\\/ evidence \\in VoteRecordSet "
+            "\\/ evidence \\in TimeoutVoteRecordSet "
+            "\\/ evidence \\in QcRecordSet "
+            "\\/ AsyncTcRecordTyped(evidence) "
+            "\\/ evidence \\in BodyRecordSet"
+        ),
+        "AsyncCoreOuterFrame": "UNCHANGED <<height, context>>",
+        "AsyncNonCrashOuterFrame": (
+            "/\\ UNCHANGED up /\\ UNCHANGED AsyncRecoveryVars "
+            "/\\ AsyncCoreOuterFrame"
+        ),
+        "AsyncNonRunnerOuterFrame": (
+            "/\\ UNCHANGED asyncNodeServiceDeadlines "
+            "/\\ AsyncNonCrashOuterFrame"
+        ),
+        "AsyncRecoveryOuterFrame": (
+            "/\\ UNCHANGED up /\\ AsyncCoreOuterFrame"
+        ),
+        "AsyncFairActionAt": (
+            "\\/ AsyncSetGST "
+            "\\/ PreGstResponsiveRestart "
+            "\\/ PreGstResponsiveReplay "
+            "\\/ ResponsiveReplayRunNode "
+            "\\/ ResponsiveReplayServiceIoWorker "
+            "\\/ DriveResponsiveReplayHead "
+            "\\/ FinishResponsiveReplay "
+            "\\/ AsyncTick "
+            "\\/ (\\E node \\in AsyncVotersAt(initialContext): "
+            "PostGstRunNode(node)) "
+            "\\/ (\\E node \\in Responsive: "
+            "PostGstOpenHistoricalRecovery(node)) "
+            "\\/ (\\E node \\in Responsive: "
+            "PostGstRunHistoricalRecoveryNode(node)) "
+            "\\/ (\\E node \\in AsyncVotersAt(initialContext): "
+            "PostGstRunHistoricalServer(node)) "
+            "\\/ (\\E node \\in AsyncVotersAt(initialContext): "
+            "PostGstCommitCertificateDiscovery(node)) "
+            "\\/ (\\E node \\in Responsive: "
+            "PostGstHistoricalCommitCertificateDiscovery(node)) "
+            "\\/ (\\E node \\in AsyncVotersAt(initialContext): "
+            "PostGstServiceIoWorker(node)) "
+            "\\/ (\\E node \\in Responsive: "
+            "PostGstServiceHistoricalRecoveryIoWorker(node)) "
+            "\\/ (\\E recipient \\in AsyncVotersAt(initialContext), "
+            "source \\in AsyncVotersAt(initialContext): "
+            "PostGstAdmitHiddenPacket(recipient, source)) "
+            "\\/ (\\E recipient \\in ValidatorIds, source \\in ValidatorIds: "
+            "PostGstAdmitHistoricalRecoveryPacket(recipient, source))"
+        ),
         "AsyncSetGST": (
             '/\\ ~gst '
             '/\\ asyncRecoveryPhase \\notin '
             '{"RestartRequired", "ReplayRequired", "Replaying"} '
             "/\\ Responsive \\subseteq up /\\ SetGST "
-            "/\\ UNCHANGED <<AsyncSchedulerVars, AsyncRecoveryVars>>"
+            "/\\ UNCHANGED <<AsyncSchedulerVars, AsyncRecoveryVars>> "
+            "/\\ AsyncNonRunnerOuterFrame"
         ),
         "AsyncRecoveryVars": (
             "<<asyncRecoveryPhase, asyncRecoveryNode, asyncRecoveryGeneration, "
@@ -2113,7 +2572,7 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             "LET node == asyncRecoveryNode IN /\\ ~gst "
             "/\\ ResponsiveReplayDraining(node) "
             "/\\ ServiceIoWorker(node) "
-            "/\\ UNCHANGED <<up, AsyncRecoveryVars>>"
+            "/\\ AsyncNonRunnerOuterFrame"
         ),
         "ReplayCommitIntentReady": (
             "\\/ VoteSign(node, vote) \\in signVotes "
@@ -2290,6 +2749,113 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             "asyncCausalQueues' = [asyncCausalQueues EXCEPT "
             "![command.node] = @ \\o FreshCommandSuccessors(command)]"
         ),
+        "HistoricalRecoveryTarget": (
+            "node \\in asyncHistoricalRecoveryTargets"
+        ),
+        "HistoricalRecoverySourceReady": (
+            "/\\ node \\in Responsive \\cap up "
+            "/\\ ~NodeHasDecision(node) "
+            "/\\ ~NodeHasApplication(node) "
+            "/\\ \\E server \\in "
+            "(AsyncCurrentResponsiveVoters \\cap up) \\ {node}: "
+            "NodeHasApplication(server)"
+        ),
+        "OpenHistoricalRecovery": (
+            "/\\ gst /\\ HistoricalRecoverySourceReady(node) "
+            "/\\ ~HistoricalRecoveryTarget(node) "
+            "/\\ asyncHistoricalRecoveryTargets' = "
+            "asyncHistoricalRecoveryTargets \\cup {node} "
+            "/\\ UNCHANGED <<vars, "
+            "AsyncSchedulerExceptHistoricalRecoveryTargets, "
+            "AsyncRecoveryVars>>"
+        ),
+        "CommitCertificateDiscoveryDue": (
+            "/\\ node \\in AsyncCurrentResponsiveVoters "
+            "/\\ CommitCertificateDiscoveryReady(node)"
+        ),
+        "HistoricalCommitCertificateDiscoveryDue": (
+            "/\\ HistoricalRecoveryTarget(node) "
+            "/\\ CommitCertificateDiscoveryReady(node)"
+        ),
+        "CommitCertificateResponseAuthorized": (
+            '/\\ item.kind = "CommitCertificateResponse" '
+            "/\\ item.source \\in CurrentVoters "
+            "/\\ item.envelope.qc \\in commitQCs "
+            "/\\ item.envelope.qc.context = context "
+            '/\\ item.envelope.qc.phase = "Commit" '
+            "/\\ MatchingCommitCertificateRequests(item) # {}"
+        ),
+        "DirectCommitCertificateDiscoveryStep": (
+            "/\\ CommitCertificateDiscoveryDue(node) "
+            "/\\ CommitCertificateDiscoveryStepWork(node)"
+        ),
+        "DirectHistoricalCommitCertificateDiscoveryStep": (
+            "/\\ HistoricalCommitCertificateDiscoveryDue(node) "
+            "/\\ CommitCertificateDiscoveryStepWork(node)"
+        ),
+        "ServiceIoWorker": (
+            "/\\ node \\in AsyncCurrentResponsiveVoters "
+            "/\\ ServiceIoWorkerWork(node)"
+        ),
+        "ServiceHistoricalRecoveryIoWorker": (
+            "/\\ HistoricalRecoveryTarget(node) "
+            "/\\ ServiceIoWorkerWork(node)"
+        ),
+        "EnqueueIoLocalControl": (
+            "/\\ node \\in AsyncCurrentResponsiveVoters "
+            "/\\ EnqueueIoLocalControlWork(node)"
+        ),
+        "EnqueueHistoricalRecoveryIoLocalControl": (
+            "/\\ HistoricalRecoveryTarget(node) "
+            "/\\ EnqueueIoLocalControlWork(node)"
+        ),
+        "RunNode": (
+            "/\\ node \\in AsyncCurrentResponsiveVoters "
+            "/\\ RunNodeWork(node)"
+        ),
+        "RunHistoricalRecoveryNode": (
+            "/\\ HistoricalRecoveryTarget(node) /\\ RunNodeWork(node)"
+        ),
+        "PostGstOpenHistoricalRecovery": (
+            "/\\ gst /\\ OpenHistoricalRecovery(node) "
+            "/\\ AsyncNonRunnerOuterFrame"
+        ),
+        "PostGstRunHistoricalRecoveryNode": (
+            "/\\ gst /\\ RunHistoricalRecoveryNode(node) "
+            "/\\ AsyncNonCrashOuterFrame"
+        ),
+        "PostGstHistoricalCommitCertificateDiscovery": (
+            "/\\ gst "
+            "/\\ DirectHistoricalCommitCertificateDiscoveryStep(node) "
+            "/\\ AsyncNonRunnerOuterFrame"
+        ),
+        "PostGstServiceHistoricalRecoveryIoWorker": (
+            "/\\ gst /\\ ServiceHistoricalRecoveryIoWorker(node) "
+            "/\\ AsyncNonRunnerOuterFrame"
+        ),
+        "HistoricalRecoveryPacketCorridor": (
+            "\\/ /\\ HistoricalRecoveryTarget(recipient) "
+            "/\\ source \\in AsyncCurrentResponsiveVoters "
+            "\\/ /\\ HistoricalRecoveryTarget(source) "
+            "/\\ recipient \\in AsyncCurrentResponsiveVoters"
+        ),
+        "PostGstAdmitHistoricalRecoveryPacket": (
+            "/\\ gst "
+            "/\\ HistoricalRecoveryPacketCorridor(recipient, source) "
+            "/\\ AdmitIngressPacket(recipient, source) "
+            "/\\ AsyncNonRunnerOuterFrame"
+        ),
+        "AsyncHistoricalRecoveryTypeInvariant": (
+            "/\\ asyncHistoricalRecoveryTargets \\subseteq "
+            "Responsive \\cap up "
+            "/\\ (asyncHistoricalRecoveryTargets # {} => gst) "
+            "/\\ \\A node \\in asyncHistoricalRecoveryTargets: "
+            "~NodeHasApplication(node)"
+        ),
+        "ActiveBusyCompletionCarrier": (
+            "QueuedCandidates \\cup CausalCandidates \\cup "
+            "TrackedWorkCandidates"
+        ),
     }
     if (formal_dir / "proof_coverage.json").is_file():
         exact.update({
@@ -2443,6 +3009,37 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
                 "/\\ AsyncTimeoutVoteByteGateAllows(item)"
             ),
         })
+
+    fair_action_frames = {
+        "PreGstResponsiveRestart": "AsyncCoreOuterFrame",
+        "PreGstResponsiveReplay": "AsyncCoreOuterFrame",
+        "ResponsiveReplayRunNode": "AsyncNonCrashOuterFrame",
+        "PostGstRunNode": "AsyncNonCrashOuterFrame",
+        "PostGstRunHistoricalRecoveryNode": "AsyncNonCrashOuterFrame",
+        "PostGstRunHistoricalServer": "AsyncNonCrashOuterFrame",
+        "DriveResponsiveReplayHead": "AsyncRecoveryOuterFrame",
+        "FinishResponsiveReplay": "AsyncRecoveryOuterFrame",
+        "AsyncSetGST": "AsyncNonRunnerOuterFrame",
+        "ResponsiveReplayServiceIoWorker": "AsyncNonRunnerOuterFrame",
+        "AsyncTick": "AsyncNonRunnerOuterFrame",
+        "PostGstOpenHistoricalRecovery": "AsyncNonRunnerOuterFrame",
+        "PostGstCommitCertificateDiscovery": "AsyncNonRunnerOuterFrame",
+        "PostGstHistoricalCommitCertificateDiscovery": (
+            "AsyncNonRunnerOuterFrame"
+        ),
+        "PostGstServiceIoWorker": "AsyncNonRunnerOuterFrame",
+        "PostGstServiceHistoricalRecoveryIoWorker": (
+            "AsyncNonRunnerOuterFrame"
+        ),
+        "PostGstAdmitHiddenPacket": "AsyncNonRunnerOuterFrame",
+        "PostGstAdmitHistoricalRecoveryPacket": "AsyncNonRunnerOuterFrame",
+    }
+    outer_frames = {
+        "AsyncCoreOuterFrame",
+        "AsyncNonCrashOuterFrame",
+        "AsyncNonRunnerOuterFrame",
+        "AsyncRecoveryOuterFrame",
+    }
     for symbol, expected in exact.items():
         extracted = _top_level_operator_body(
             source, symbol, preserve_string_contents=True
@@ -2457,6 +3054,184 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
                 f"{path}:{line}: {symbol} must equal only {expected!r}; "
                 f"found {normalized!r}"
             )
+
+    fair_refinement = _top_level_operator_body(
+        source,
+        "AsyncFairActionsRefineAsyncNext",
+        preserve_string_contents=True,
+    )
+    expected_fair_refinement = (
+        "/\\ TypeInvariant /\\ AsyncSchedulerTypeInvariant "
+        "=> \\A initialContext \\in ContextRecords: "
+        "AsyncFairActionAt(initialContext) => AsyncNext"
+    )
+    if fair_refinement is None:
+        errors.append(
+            f"{path}: missing source-fidelity claim "
+            "AsyncFairActionsRefineAsyncNext"
+        )
+    else:
+        body, line = fair_refinement
+        normalized = " ".join(body.split())
+        if normalized != expected_fair_refinement:
+            errors.append(
+                f"{path}:{line}: AsyncFairActionsRefineAsyncNext must equal "
+                f"only {expected_fair_refinement!r}; found {normalized!r}"
+            )
+
+    for action, expected_frame in fair_action_frames.items():
+        extracted = _top_level_operator_body(
+            source, action, preserve_string_contents=True
+        )
+        if extracted is None:
+            errors.append(f"{path}: missing fair action {action}")
+            continue
+        body, line = extracted
+        frame_counts = {
+            frame: len(re.findall(rf"\b{re.escape(frame)}\b", body))
+            for frame in outer_frames
+        }
+        unexpected_frames = {
+            frame: count
+            for frame, count in frame_counts.items()
+            if frame != expected_frame and count != 0
+        }
+        if frame_counts[expected_frame] != 1 or unexpected_frames:
+            errors.append(
+                f"{path}:{line}: fair action {action} must use exactly one "
+                f"{expected_frame} and no other outer-frame category; "
+                f"counts={frame_counts}"
+            )
+
+    busy_completions = _top_level_operator_body(
+        source, "BusyCompletionCandidates", preserve_string_contents=True
+    )
+    if busy_completions is None:
+        errors.append(
+            f"{path}: missing source-fidelity operator BusyCompletionCandidates"
+        )
+    else:
+        busy_body, busy_line = busy_completions
+        busy_normalized = " ".join(busy_body.split())
+        if not busy_normalized.startswith(
+            "{candidate \\in ActiveBusyCompletionCarrier:"
+        ) or "AsyncCandidateSet" in busy_normalized:
+            errors.append(
+                f"{path}:{busy_line}: BusyCompletionCandidates must filter the "
+                "finite ActiveBusyCompletionCarrier and may not quantify over "
+                "AsyncCandidateSet"
+            )
+
+    for symbol, forbidden_carrier in (
+        ("AsyncItemTyped", "TcEnvelopeSet"),
+        ("AsyncEvidenceTyped", "TcRecordSet"),
+        ("AsyncCandidateTyped", "AsyncEvidenceSet"),
+    ):
+        extracted = _top_level_operator_body(
+            source, symbol, preserve_string_contents=True
+        )
+        if extracted is None:
+            continue
+        carrier_body, carrier_line = extracted
+        if forbidden_carrier in carrier_body:
+            errors.append(
+                f"{path}:{carrier_line}: {symbol} must use structural finite-value "
+                f"typing and may not enumerate {forbidden_carrier}"
+            )
+
+    scheduler_vars = _top_level_operator_body(source, "AsyncSchedulerVars")
+    scheduler_without_historical = _top_level_operator_body(
+        source, "AsyncSchedulerExceptHistoricalRecoveryTargets"
+    )
+    if scheduler_vars is not None and scheduler_without_historical is not None:
+        scheduler_match = re.fullmatch(
+            r"\s*<<(.*)>>\s*", scheduler_vars[0], re.DOTALL
+        )
+        scheduler_without_match = re.fullmatch(
+            r"\s*<<(.*)>>\s*", scheduler_without_historical[0], re.DOTALL
+        )
+        scheduler_fields = (
+            ()
+            if scheduler_match is None
+            else tuple(
+                field.strip() for field in scheduler_match.group(1).split(",")
+            )
+        )
+        scheduler_without_fields = (
+            ()
+            if scheduler_without_match is None
+            else tuple(
+                field.strip()
+                for field in scheduler_without_match.group(1).split(",")
+            )
+        )
+        expected_scheduler_without = tuple(
+            field
+            for field in scheduler_fields
+            if field != "asyncHistoricalRecoveryTargets"
+        )
+        if (
+            scheduler_fields.count("asyncHistoricalRecoveryTargets") != 1
+            or scheduler_without_fields != expected_scheduler_without
+        ):
+            errors.append(
+                f"{path}:{scheduler_without_historical[1]}: historical recovery "
+                "ownership must be one exact AsyncSchedulerVars component and "
+                "the open-action frame must exclude only that component"
+            )
+
+    apply_action = _top_level_operator_body(
+        source, "ExecuteApply", preserve_string_contents=True
+    )
+    if apply_action is not None:
+        apply_body, apply_line = apply_action
+        apply_normalized = " ".join(apply_body.split())
+        apply_writes = re.findall(
+            r"\b([A-Za-z][A-Za-z0-9_]*)'\s*=", apply_body
+        )
+        retirement = (
+            "asyncHistoricalRecoveryTargets' = "
+            "asyncHistoricalRecoveryTargets \\ {command.node}"
+        )
+        if apply_writes != ["asyncHistoricalRecoveryTargets"] or (
+            apply_normalized.count(retirement) != 1
+        ):
+            errors.append(
+                f"{path}:{apply_line}: ExecuteApply must atomically retire only "
+                "the applying node's historical recovery target; "
+                f"found direct writes {apply_writes}"
+            )
+
+    drain_action = _top_level_operator_body(
+        source, "DrainFairIngressSelected", preserve_string_contents=True
+    )
+    if drain_action is not None:
+        drain_body, drain_line = drain_action
+        drain_normalized = " ".join(drain_body.split())
+        exact_import = (
+            '/\\ IF /\\ item.kind = "CommitCertificateResponse" '
+            "/\\ item \\in asyncSentItems "
+            "/\\ CommitCertificateResponseAuthorized(item) "
+            "/\\ item.envelope \\notin qcNetwork "
+            "THEN ImportAuthenticatedCommitCertificate(item.envelope) "
+            "ELSE UNCHANGED vars"
+        )
+        if exact_import not in drain_normalized:
+            errors.append(
+                f"{path}:{drain_line}: DrainFairIngressSelected must import "
+                "only an authorized, sent, not-yet-present Commit-certificate "
+                "response before scheduler admission"
+            )
+
+    target_write_count = len(
+        re.findall(r"(?m)^\s*/\\\s+asyncHistoricalRecoveryTargets'\s*=", stripped)
+    )
+    if target_write_count != 3:
+        errors.append(
+            f"{path}: exactly open, Apply retirement, and restart reset may "
+            "write asyncHistoricalRecoveryTargets; "
+            f"found {target_write_count} writes"
+        )
 
     for retired in (
         "DominatedProtectedProgressIndices",
@@ -2667,8 +3442,162 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
                     f"{normalized_statement!r}"
                 )
 
+        budget_lifting_theorems = (
+            "AsyncRecoveryEligibleAtBudgetLeadsLowerCycleOrRequired",
+            "AsyncRecoveryRecoveredAtBudgetLeadsLowerCycleOrEligible",
+            "AsyncRecoveryReplayAtBudgetLeadsLowerCycleOrRecovered",
+            "AsyncRecoveryReplayingAtBudgetLeadsLowerCycleOrRecovered",
+        )
+        for symbol in budget_lifting_theorems:
+            extracted = _top_level_theorem_body(
+                async_liveness_source,
+                symbol,
+                preserve_string_contents=True,
+            )
+            if extracted is None:
+                errors.append(
+                    f"{async_liveness_path}: missing recovery-budget theorem "
+                    f"{symbol}"
+                )
+                continue
+            theorem_body, theorem_line = extracted
+            stripped_theorem_body = strip_tla_comments(theorem_body)
+            for required_fact in (
+                "AsyncSpecAlwaysStrongTypeInvariant",
+                "AsyncRecoveryCycleAtBudgetStep",
+            ):
+                if required_fact not in stripped_theorem_body:
+                    errors.append(
+                        f"{async_liveness_path}:{theorem_line}: {symbol} proof "
+                        f"must cite {required_fact}"
+                    )
+
+        theorem_transition_coverage = {
+            "ChangedRunNodeWorkExecutesCommand": ("RunNodeWork",),
+            "ChangedAsyncRunnerExecutesCommand": (
+                "RunHistoricalRecoveryNode",
+            ),
+            "AsyncNonRunnerStepKeepsTimeoutPool": (
+                "OpenHistoricalRecovery",
+                "DirectHistoricalCommitCertificateDiscoveryStep",
+                "ServiceHistoricalRecoveryIoWorker",
+                "EnqueueHistoricalRecoveryIoLocalControl",
+            ),
+            "AsyncRunnerStepLeavesDiscoveryClock": (
+                "RunHistoricalRecoveryNode",
+                "RunNodeWork",
+            ),
+            "AsyncNonRunnerStepPreservesDiscoveryClockThreshold": (
+                "OpenHistoricalRecovery",
+                "DirectHistoricalCommitCertificateDiscoveryStep",
+                "ServiceHistoricalRecoveryIoWorker",
+                "EnqueueHistoricalRecoveryIoLocalControl",
+            ),
+            "ReplayingRunNodeWorkPreservesCommitCarrierFrame": (
+                "RunNodeWork",
+            ),
+            "ReplayingNonRunnerStepPreservesCommitCarrierFrame": (
+                "OpenHistoricalRecovery",
+                "DirectHistoricalCommitCertificateDiscoveryStep",
+                "ServiceHistoricalRecoveryIoWorker",
+                "EnqueueHistoricalRecoveryIoLocalControl",
+            ),
+            "ReplayingOrdinaryAsyncStepPreservesCommitCarrierFrame": (
+                "RunHistoricalRecoveryNode",
+            ),
+            "EnqueueIoControlPreservesProgressOwnership": (
+                "EnqueueIoLocalControlWork",
+            ),
+            "ServiceIoWorkerPreservesProgressOwnership": (
+                "ServiceIoWorkerWork",
+            ),
+            "DirectCommitDiscoveryPreservesProgressOwnership": (
+                "CommitCertificateDiscoveryStepWork",
+            ),
+            "RunNodeWorkPreservesProgressOwnership": ("RunNodeWork",),
+            "AsyncNonRunnerPreservesProgressOwnership": (
+                "OpenHistoricalRecovery",
+                "DirectHistoricalCommitCertificateDiscoveryStep",
+                "ServiceHistoricalRecoveryIoWorker",
+                "EnqueueHistoricalRecoveryIoLocalControl",
+            ),
+            "AsyncNextPreservesProgressOwnership": (
+                "RunHistoricalRecoveryNode",
+            ),
+            "RunNodeWorkPreservesProgressCommitSlotInvariant": (
+                "RunNodeWork",
+            ),
+            "AsyncNonRunnerStepLeavesProgressCarriers": (
+                "OpenHistoricalRecovery",
+                "DirectHistoricalCommitCertificateDiscoveryStep",
+                "ServiceHistoricalRecoveryIoWorker",
+                "EnqueueHistoricalRecoveryIoLocalControl",
+            ),
+            "AsyncRunnerStepPreservesProgressCommitSlotInvariant": (
+                "RunHistoricalRecoveryNode",
+            ),
+            "RunNodeWorkHasCommitSourceTransition": ("RunNodeWork",),
+            "AsyncNextHasCommitSourceTransition": (
+                "RunHistoricalRecoveryNode",
+                "OpenHistoricalRecovery",
+                "DirectHistoricalCommitCertificateDiscoveryStep",
+                "ServiceHistoricalRecoveryIoWorker",
+                "EnqueueHistoricalRecoveryIoLocalControl",
+            ),
+            "ProtectedStage5UnlessProgress": (
+                "RunHistoricalRecoveryNode",
+                "OpenHistoricalRecovery",
+                "DirectHistoricalCommitCertificateDiscoveryStep",
+                "ServiceHistoricalRecoveryIoWorker",
+                "EnqueueHistoricalRecoveryIoLocalControl",
+            ),
+            "Stage4BlockedAuxStep": (
+                "RunHistoricalRecoveryNode",
+                "OpenHistoricalRecovery",
+                "DirectHistoricalCommitCertificateDiscoveryStep",
+                "ServiceHistoricalRecoveryIoWorker",
+                "EnqueueHistoricalRecoveryIoLocalControl",
+            ),
+            "Stage4CapacityBlockedStep": (
+                "RunHistoricalRecoveryNode",
+                "OpenHistoricalRecovery",
+                "DirectHistoricalCommitCertificateDiscoveryStep",
+                "ServiceHistoricalRecoveryIoWorker",
+                "EnqueueHistoricalRecoveryIoLocalControl",
+            ),
+            "Stage4ActionableUnlessProgress": (
+                "RunHistoricalRecoveryNode",
+                "OpenHistoricalRecovery",
+                "DirectHistoricalCommitCertificateDiscoveryStep",
+                "ServiceHistoricalRecoveryIoWorker",
+                "EnqueueHistoricalRecoveryIoLocalControl",
+            ),
+        }
+        for symbol, tokens in theorem_transition_coverage.items():
+            extracted = _top_level_theorem_body(
+                async_liveness_source,
+                symbol,
+                preserve_string_contents=True,
+            )
+            if extracted is None:
+                errors.append(
+                    f"{async_liveness_path}: missing transition-coverage "
+                    f"theorem {symbol}"
+                )
+                continue
+            theorem_body, theorem_line = extracted
+            normalized = " ".join(
+                strip_tla_comments(theorem_body).split()
+            )
+            missing = [token for token in tokens if token not in normalized]
+            if missing:
+                errors.append(
+                    f"{async_liveness_path}:{theorem_line}: {symbol} proof "
+                    f"omits required transition coverage {missing}"
+                )
+
     required_body_tokens = {
-        "ServiceIoWorker": (
+        "ServiceIoWorkerWork": (
             "asyncIoControlAvailable'",
             "EXCEPT ![node] = TRUE",
             "ResponsiveReplayExecutorAllowed(node)",
@@ -2677,14 +3606,27 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
         ),
         "CertifiedRequestOutbox": ("qc.signers \\ {node}",),
         "SendNodeRetransmissions": ("RetryableItems(node)",),
-        "AsyncTickEnabled": ("~gst", "OverdueResponsivePackets"),
-        "AsyncRunnerStep": ("RunNode(node)", "RunHistoricalServer(node)"),
+        "AsyncTickEnabled": (
+            "~gst",
+            "OverdueResponsivePackets",
+            "AsyncCurrentResponsiveVoters",
+            "asyncHistoricalRecoveryTargets",
+        ),
+        "AsyncRunnerStep": (
+            "\\E node \\in AsyncCurrentResponsiveVoters: RunNode(node)",
+            "\\E node \\in asyncHistoricalRecoveryTargets: RunHistoricalRecoveryNode(node)",
+            "RunHistoricalServer(node)",
+        ),
         "AsyncNonRunnerStep": (
             "AsyncSetGST",
             "AsyncTick",
+            "\\E node \\in ValidatorIds: OpenHistoricalRecovery(node)",
             "DirectCommitCertificateDiscoveryStep(node)",
+            "\\E node \\in asyncHistoricalRecoveryTargets: DirectHistoricalCommitCertificateDiscoveryStep(node)",
             "ServiceIoWorker(node)",
+            "\\E node \\in asyncHistoricalRecoveryTargets: ServiceHistoricalRecoveryIoWorker(node)",
             "EnqueueIoLocalControl(node)",
+            "\\E node \\in asyncHistoricalRecoveryTargets: EnqueueHistoricalRecoveryIoLocalControl(node)",
             "AsyncNetworkStep",
             "AsyncFaultStep",
         ),
@@ -2692,6 +3634,7 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
         "AsyncSchedulerVars": (
             "asyncNextCommandClass",
             "asyncNextDeferredClass",
+            "asyncHistoricalRecoveryTargets",
         ),
         "AsyncRuntimeInit": (
             "asyncNextCommandClass =",
@@ -2718,6 +3661,13 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             "asyncDeferredNormalQueues,",
         ),
         "AsyncBodyEnvelopeTyped": ("envelope.subject \\in Subjects",),
+        "AsyncItemTyped": (
+            'item.kind = "TimeoutCertificate"',
+            "AsyncTcEnvelopeTyped(item.envelope)",
+        ),
+        "AsyncCandidateTyped": (
+            "AsyncEvidenceTyped(candidate.evidence)",
+        ),
         "FifoRuntimeStep": (
             "NextNodeCommand(node)",
             "RemoveNextNodeCommand(node)",
@@ -2728,7 +3678,7 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             "DecisionQcValues",
             "ValidateDecidedBody(command.node, qc)",
         ),
-        "RunNode": (
+        "RunNodeWork": (
             "~NodeHasApplication(node)",
             "IF ResponsiveReplayQuarantined(node)",
             "ResponsiveReplayDraining(node)",
@@ -2747,7 +3697,7 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             "~gst",
             "ResponsiveReplayDraining(node)",
             "RunNode(node)",
-            "UNCHANGED <<up, AsyncRecoveryVars>>",
+            "AsyncNonCrashOuterFrame",
         ),
         "HistoricalIngressItemCanDrain": (
             'item.kind = "CertifiedRequest"',
@@ -2806,7 +3756,10 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             "UNCHANGED asyncNextLocalSource",
         ),
         "AdmitProducerCompletion": ("ProducerCompletionCanAdvance(node)",),
-        "EnqueueIoLocalControl": ("~CompletionCausalAdmissionDebt(node)",),
+        "EnqueueIoLocalControlWork": (
+            "~ResponsiveReplayQuarantined(node)",
+            "~CompletionCausalAdmissionDebt(node)",
+        ),
         "LocalAdmissionStep": ("RecordBlockedCausalDebt(node)",),
         "DrainableIngressLaneIndices": (
             "IngressItemCanDrain(node, IngressLane(node, source)[index])",
@@ -2824,8 +3777,7 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             "SequenceWithoutIndex(@, laneIndex)",
             "ReadyAfterSelectedDrain(node, index)",
         ),
-        "DirectCommitCertificateDiscoveryStep": (
-            "CommitCertificateDiscoveryDue(node)",
+        "CommitCertificateDiscoveryStepWork": (
             "UNCHANGED <<vars, asyncNow,",
             "asyncCommandQueues, asyncNextCommandClass,",
             "asyncFifoOwed, asyncTimeoutEmitted,",
@@ -2840,11 +3792,15 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             "gst",
             "DirectCommitCertificateDiscoveryStep(node)",
         ),
-        "CommitCertificateDiscoveryDue": (
+        "CommitCertificateDiscoveryReady": (
+            "~ResponsiveReplayQuarantined(node)",
             "asyncNow >= AsyncRoundTimeout",
             "~NodeHasDecision(node)",
             "ActiveCommitCertificateRequests(node) = {}",
             "CommitCertificateRequestOutbox(node) # {}",
+        ),
+        "CommitCertificateRequestAuthorized": (
+            "CurrentVoters \\cup asyncHistoricalRecoveryTargets",
         ),
         "CommitCertificateResponseAuthorized": (
             'item.kind = "CommitCertificateResponse"',
@@ -2855,6 +3811,9 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             "SelectedIngressItemAt(node, index)",
             "PopSelectedIngress(node, index, laneIndex)",
             "CommitCertificateResponseAuthorized(item)",
+            "item.envelope \\notin qcNetwork",
+            "ImportAuthenticatedCommitCertificate(item.envelope)",
+            "ELSE UNCHANGED vars",
             "CommitCertificateResponseCandidate(item)",
             "EnqueueCandidate(discoveredCandidate)",
             "MatchingCommitCertificateRequests(item)",
@@ -2877,11 +3836,17 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             "WF_AsyncAllVars(ResponsiveReplayServiceIoWorker)",
             "WF_AsyncAllVars(DriveResponsiveReplayHead)",
             "WF_AsyncAllVars(FinishResponsiveReplay)",
+            "WF_AsyncAllVars(AsyncTick)",
             "PostGstRunNode(node)",
+            "\\A node \\in Responsive: WF_AsyncAllVars(PostGstOpenHistoricalRecovery(node))",
+            "\\A node \\in Responsive: WF_AsyncAllVars(PostGstRunHistoricalRecoveryNode(node))",
             "PostGstRunHistoricalServer(node)",
             "PostGstCommitCertificateDiscovery(node)",
+            "\\A node \\in Responsive: WF_AsyncAllVars(PostGstHistoricalCommitCertificateDiscovery(node))",
             "PostGstServiceIoWorker(node)",
+            "\\A node \\in Responsive: WF_AsyncAllVars(PostGstServiceHistoricalRecoveryIoWorker(node))",
             "PostGstAdmitHiddenPacket(recipient, source)",
+            "\\A recipient \\in ValidatorIds, source \\in ValidatorIds: WF_AsyncAllVars( PostGstAdmitHistoricalRecoveryPacket(recipient, source))",
         ),
         "VoteOutbox": (
             "recipient \\in CurrentVoters \\ {request.node}",
@@ -2906,8 +3871,7 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
         ),
         "BusyCompletionWitnessInvariant": (
             "~NodeIdle(node)",
-            "BusyCompletionCandidates(node)",
-            "ActiveBusyCompletionCarrier",
+            "BusyCompletionCandidates(node) # {}",
         ),
         "ActiveBusyCompletionCarrier": (
             "QueuedCandidates",
@@ -2929,6 +3893,11 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
         "ExecuteCommand": (
             "ExecuteRegularCommand(command)",
             "ExecuteDecisionFetch(command)",
+        ),
+        "ExecuteApply": (
+            "ApplyDecision(command.node, qc)",
+            "asyncHistoricalRecoveryTargets' =",
+            "asyncHistoricalRecoveryTargets \\ {command.node}",
         ),
         "RestartRunnerAssemblyEnabled": (
             "node \\in Honest \\cap up \\cap CurrentVoters",
@@ -3138,15 +4107,16 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             "asyncIngressLanes' = [asyncIngressLanes EXCEPT ![node] = [source \\in AsyncIngressSources |-> <<>>]]",
             "asyncIngressReady' = [asyncIngressReady EXCEPT ![node] = <<>>]",
             "asyncHeldChunks' = {receipt \\in asyncHeldChunks: receipt.node # node}",
-        ),
-        "CommitCertificateDiscoveryDue": (
-            "~ResponsiveReplayQuarantined(node)",
+            "asyncHistoricalRecoveryTargets' = asyncHistoricalRecoveryTargets \\ {node}",
         ),
         "TimeoutDue": ("~ResponsiveReplayQuarantined(node)",),
         "RetransmitDue": ("~ResponsiveReplayQuarantined(node)",),
         "AdmitHiddenPacket": ("~ResponsiveReplayQuarantined(recipient)",),
         "CoalesceHiddenPacket": ("~ResponsiveReplayQuarantined(recipient)",),
-        "EnqueueIoLocalControl": ("~ResponsiveReplayQuarantined(node)",),
+        "AsyncTransportInit": ("asyncHistoricalRecoveryTargets = {}",),
+        "AsyncSchedulerTypeInvariant": (
+            "AsyncHistoricalRecoveryTypeInvariant",
+        ),
     }
     if (formal_dir / "proof_coverage.json").is_file():
         required_body_tokens.update({
@@ -3213,25 +4183,72 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
         source, "AsyncFairnessAt", preserve_string_contents=True
     )
     if fairness is not None:
-        normalized_fairness = " ".join(fairness[0].split())
-        recovery_fairness_clauses = (
+        normalized_fairness = re.sub(r"\s+", " ", fairness[0]).strip()
+        normalized_fairness = re.sub(r"\(\s+", "(", normalized_fairness)
+        normalized_fairness = re.sub(r"\s+\)", ")", normalized_fairness)
+        fairness_clauses = (
+            "WF_AsyncAllVars(AsyncSetGST)",
             "WF_AsyncAllVars(PreGstResponsiveRestart)",
             "WF_AsyncAllVars(PreGstResponsiveReplay)",
             "WF_AsyncAllVars(ResponsiveReplayRunNode)",
             "WF_AsyncAllVars(ResponsiveReplayServiceIoWorker)",
             "WF_AsyncAllVars(DriveResponsiveReplayHead)",
             "WF_AsyncAllVars(FinishResponsiveReplay)",
+            "WF_AsyncAllVars(AsyncTick)",
+            "\\A node \\in AsyncVotersAt(initialContext): "
+            "WF_AsyncAllVars(PostGstRunNode(node))",
+            "\\A node \\in Responsive: "
+            "WF_AsyncAllVars(PostGstOpenHistoricalRecovery(node))",
+            "\\A node \\in Responsive: "
+            "WF_AsyncAllVars(PostGstRunHistoricalRecoveryNode(node))",
+            "\\A node \\in AsyncVotersAt(initialContext): "
+            "WF_AsyncAllVars(PostGstRunHistoricalServer(node))",
+            "\\A node \\in AsyncVotersAt(initialContext): "
+            "WF_AsyncAllVars(PostGstCommitCertificateDiscovery(node))",
+            "\\A node \\in Responsive: "
+            "WF_AsyncAllVars("
+            "PostGstHistoricalCommitCertificateDiscovery(node))",
+            "\\A node \\in AsyncVotersAt(initialContext): "
+            "WF_AsyncAllVars(PostGstServiceIoWorker(node))",
+            "\\A node \\in Responsive: "
+            "WF_AsyncAllVars(PostGstServiceHistoricalRecoveryIoWorker(node))",
+            "\\A recipient \\in AsyncVotersAt(initialContext), "
+            "source \\in AsyncVotersAt(initialContext): "
+            "WF_AsyncAllVars(PostGstAdmitHiddenPacket(recipient, source))",
+            "\\A recipient \\in ValidatorIds, source \\in ValidatorIds: "
+            "WF_AsyncAllVars("
+            "PostGstAdmitHistoricalRecoveryPacket(recipient, source))",
         )
         invalid_counts = {
             clause: normalized_fairness.count(clause)
-            for clause in recovery_fairness_clauses
+            for clause in fairness_clauses
             if normalized_fairness.count(clause) != 1
         }
+        fair_action_names = re.findall(
+            r"WF_AsyncAllVars\s*\(\s*([A-Za-z][A-Za-z0-9_]*)",
+            fairness[0],
+        )
+        action_counts = {
+            action: fair_action_names.count(action)
+            for action in fair_action_frames
+            if fair_action_names.count(action) != 1
+        }
+        unexpected_actions = sorted(
+            set(fair_action_names).difference(fair_action_frames)
+        )
         if invalid_counts:
             errors.append(
                 f"{path}:{fairness[1]}: AsyncFairnessAt must contain exactly "
-                "one weak-fair clause for every restart/replay service action; "
+                "one raw weak-fair clause with the canonical domain for every "
+                "fair action; "
                 f"counts={invalid_counts}"
+            )
+        if action_counts or unexpected_actions or len(fair_action_names) != 18:
+            errors.append(
+                f"{path}:{fairness[1]}: AsyncFairnessAt must name exactly the "
+                "18 canonical framed actions directly; "
+                f"counts={action_counts}, unexpected={unexpected_actions}, "
+                f"total={len(fair_action_names)}"
             )
 
     decision_fetch = _top_level_operator_body(
@@ -3485,6 +4502,134 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
     core_path = formal_dir / "SumeragiV2Core.tla"
     if core_path.is_file():
         core_source = core_path.read_text(encoding="utf-8")
+        imported_commit_certificate = _top_level_operator_body(
+            core_source,
+            "ImportAuthenticatedCommitCertificate",
+            preserve_string_contents=True,
+        )
+        imported_commit_certificate_frame = (
+            "height",
+            "context",
+            "contextHistory",
+            "nodeView",
+            "generation",
+            "up",
+            "gst",
+            "availableBodies",
+            "durableBodies",
+            "retainedLockedBodies",
+            "validatedBodies",
+            "invalidBodies",
+            "seenProposals",
+            "receivedVotes",
+            "receivedQCs",
+            "receivedTimeoutVotes",
+            "receivedTCs",
+            "proposalIntents",
+            "prepareIntents",
+            "commitIntents",
+            "timeoutIntents",
+            "prepareQCs",
+            "commitQCs",
+            "formedTCs",
+            "installedTCs",
+            "lockRank",
+            "lockSubject",
+            "highestRank",
+            "highestSubject",
+            "pendingProposal",
+            "pendingPrepare",
+            "pendingObservePrepare",
+            "pendingLockCommit",
+            "pendingTimeout",
+            "pendingInstallTC",
+            "pendingDecision",
+            "signProposals",
+            "signVotes",
+            "signTimeouts",
+            "proposalNetwork",
+            "voteNetwork",
+            "timeoutNetwork",
+            "tcNetwork",
+            "decisions",
+            "applied",
+        )
+        if imported_commit_certificate is None:
+            errors.append(
+                f"{core_path}: missing source-fidelity operator "
+                "ImportAuthenticatedCommitCertificate"
+            )
+        else:
+            import_body, import_line = imported_commit_certificate
+            import_update = re.search(r"(?m)^\s*/\\\s+qcNetwork'\s*=", import_body)
+            import_guards = (
+                ""
+                if import_update is None
+                else " ".join(import_body[: import_update.start()].split())
+            )
+            expected_import_guards = (
+                "/\\ envelope \\in QcEnvelopeSet "
+                "/\\ envelope.recipient \\in Responsive \\cap up "
+                "/\\ envelope.qc \\in commitQCs "
+                "/\\ envelope.qc.context = context "
+                '/\\ envelope.qc.phase = "Commit" '
+                "/\\ QcWireValid(envelope.qc) "
+                "/\\ envelope \\notin qcNetwork"
+            )
+            if import_guards != expected_import_guards:
+                errors.append(
+                    f"{core_path}:{import_line}: "
+                    "ImportAuthenticatedCommitCertificate must retain the exact "
+                    "authenticated Commit/context/responsive-up/idempotence guards; "
+                    f"found {import_guards!r}"
+                )
+
+            import_writes = re.findall(
+                r"\b([A-Za-z][A-Za-z0-9_]*)'\s*=", import_body
+            )
+            if import_writes != ["qcNetwork"] or (
+                "qcNetwork' = qcNetwork \\cup {envelope}"
+                not in " ".join(import_body.split())
+            ):
+                errors.append(
+                    f"{core_path}:{import_line}: "
+                    "ImportAuthenticatedCommitCertificate must write exactly one "
+                    "idempotent qcNetwork envelope insertion; "
+                    f"found writes {import_writes}"
+                )
+
+            import_frames = re.findall(
+                r"UNCHANGED\s*<<(.*?)>>", import_body, re.DOTALL
+            )
+            actual_import_frame = (
+                ()
+                if len(import_frames) != 1
+                else tuple(
+                    field.strip() for field in import_frames[0].split(",")
+                )
+            )
+            if actual_import_frame != imported_commit_certificate_frame:
+                errors.append(
+                    f"{core_path}:{import_line}: "
+                    "ImportAuthenticatedCommitCertificate must frame exactly the "
+                    "45 non-qcNetwork Core variables; "
+                    f"missing={sorted(set(imported_commit_certificate_frame) - set(actual_import_frame))}, "
+                    f"unexpected={sorted(set(actual_import_frame) - set(imported_commit_certificate_frame))}, "
+                    f"count={len(actual_import_frame)}"
+                )
+            expected_import_body = (
+                f"{expected_import_guards} "
+                "/\\ qcNetwork' = qcNetwork \\cup {envelope} "
+                "/\\ UNCHANGED <<"
+                f"{', '.join(imported_commit_certificate_frame)}>>"
+            )
+            if " ".join(import_body.split()) != expected_import_body:
+                errors.append(
+                    f"{core_path}:{import_line}: "
+                    "ImportAuthenticatedCommitCertificate must contain only "
+                    "the exact guarded insertion and complete Core frame"
+                )
+
         crash = _top_level_operator_body(
             core_source, "Crash", preserve_string_contents=True
         )
@@ -3778,12 +4923,35 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
                 )
 
         extracted = _top_level_operator_body(core_source, "Next")
-        if extracted is not None:
+        if extracted is None:
+            errors.append(f"{core_path}: missing source-fidelity operator Next")
+        else:
             body, line = extracted
-            if "ValidateDecidedBody(node, qc)" not in " ".join(body.split()):
+            normalized_next = " ".join(body.split())
+            if "ValidateDecidedBody(node, qc)" not in normalized_next:
                 errors.append(
                     f"{core_path}:{line}: Core Next must expose certificate-first "
                     "decision body validation"
+                )
+            expected_import_arm = (
+                "\\/ \\E envelope \\in QcEnvelopeSet: "
+                "ImportAuthenticatedCommitCertificate(envelope)"
+            )
+            import_arm_start = normalized_next.find(
+                "\\/ \\E envelope \\in QcEnvelopeSet:"
+            )
+            import_arm_end = normalized_next.find(
+                "\\/ \\E envelope \\in qcNetwork:", import_arm_start + 1
+            )
+            actual_import_arm = (
+                ""
+                if import_arm_start < 0 or import_arm_end < 0
+                else normalized_next[import_arm_start:import_arm_end].strip()
+            )
+            if actual_import_arm != expected_import_arm:
+                errors.append(
+                    f"{core_path}:{line}: Core Next must expose the exact "
+                    "authenticated Commit-certificate import arm"
                 )
 
     repo_root = formal_dir.parents[2]
@@ -3910,7 +5078,7 @@ def _ownership_n1_configuration_errors(formal_dir: Path) -> list[str]:
 
 
 def _successor_production_source_fidelity_errors(repo_root: Path) -> list[str]:
-    """Bind the indexed successor/catch-up actions to production source order."""
+    """Bind indexed successor and exact-recovery actions to production order."""
 
     errors: list[str] = []
 
@@ -4309,6 +5477,250 @@ def _successor_production_source_fidelity_errors(repo_root: Path) -> list[str]:
     return errors
 
 
+def _successor_activation_rank_source_fidelity_errors(
+    formal_dir: Path,
+) -> list[str]:
+    """Pin the exact finite-rank corridor used by successor liveness."""
+
+    proof_path = formal_dir / "SumeragiV2SuccessorActivationRefinementProofs.tla"
+    if not proof_path.is_file():
+        return []
+
+    source = proof_path.read_text(encoding="utf-8")
+    errors: list[str] = []
+    operator_contracts = {
+        "SuccessorActivationRankCarrier": "0..19",
+        "SuccessorActivationPipelineDistance": " ".join(
+            r'''
+            LET successorContext ==
+                  CanonicalIndexedContext(parentContext.height + 1)
+                marker ==
+                  SuccessorActivationMarker(parentContext, node, successorContext)
+            IN CASE successorActivationStatus[parentContext][node] = "Queued"
+                      -> IF SuccessorActivationOwner(parentContext, node)
+                              \in successorActivationFailureHistory
+                         THEN 9 ELSE 10
+               [] /\ successorActivationStatus[parentContext][node] = "Running"
+                  /\ ~SuccessorActivationCredentialReady(
+                        parentContext, node, successorContext)
+                      -> 9
+               [] /\ SuccessorActivationCredentialReady(
+                        parentContext, node, successorContext)
+                  /\ successorActivationPrerequisites[parentContext][node] = {}
+                      -> 8
+               [] /\ SuccessorActivationCredentialReady(
+                        parentContext, node, successorContext)
+                  /\ successorActivationPrerequisites[parentContext][node]
+                       = SuccessorActivationAdapterPrerequisites
+                      -> 7
+               [] /\ SuccessorActivationCredentialReady(
+                        parentContext, node, successorContext)
+                  /\ successorActivationPrerequisites[parentContext][node]
+                       = SuccessorActivationRuntimePrerequisites
+                      -> 6
+               [] /\ SuccessorActivationCredentialReady(
+                        parentContext, node, successorContext)
+                  /\ successorActivationPrerequisites[parentContext][node]
+                       = SuccessorActivationServicePrerequisites
+                      -> 5
+               [] /\ SuccessorActivationCredentialReady(
+                        parentContext, node, successorContext)
+                  /\ successorActivationPrerequisites[parentContext][node]
+                       = SuccessorActivationStartupPrerequisites
+                      -> 4
+               [] /\ SuccessorActivationCredentialReady(
+                        parentContext, node, successorContext)
+                  /\ successorActivationPrerequisites[parentContext][node]
+                       = SuccessorActivationClockPrerequisites
+                  /\ marker \notin preparedSuccessorActivationMarkers
+                      -> 3
+               [] /\ SuccessorActivationCredentialReady(
+                        parentContext, node, successorContext)
+                  /\ successorActivationPrerequisites[parentContext][node]
+                       = SuccessorActivationClockPrerequisites
+                  /\ marker \in preparedSuccessorActivationMarkers
+                      -> 2
+               [] /\ SuccessorActivationCredentialReady(
+                        parentContext, node, successorContext)
+                  /\ successorActivationPrerequisites[parentContext][node]
+                       = SuccessorActivationRequiredPrerequisites
+                      -> 1
+               [] OTHER -> 0
+            '''.split()
+        ),
+        "SuccessorActivationRank": (
+            "IF SuccessorPublicationOrSuperseded(parentContext, node) THEN 0 "
+            "ELSE IF SuccessorActivationOwner(parentContext, node) "
+            "\\notin successorActivationFailureHistory THEN 9 + "
+            "SuccessorActivationPipelineDistance(parentContext, node) "
+            "ELSE SuccessorActivationPipelineDistance(parentContext, node)"
+        ),
+        "SuccessorActivationPending": (
+            "IndexedSuccessorActivationPending(parentContext, node)"
+        ),
+        "SuccessorActivationHasDurableParentWitness": (
+            "/\\ \\E application \\in Chain!DecisionEvidenceSet: "
+            "ExactDurableParentApplication(parentContext, node, application)"
+        ),
+        "SuccessorActivationAtRank": (
+            "/\\ SuccessorActivationPending(parentContext, node) "
+            "/\\ SuccessorActivationRank(parentContext, node) = rank"
+        ),
+        "SuccessorActivationPendingStructureProperty": (
+            "[](\\A parentContext \\in AdmissibleContextRecords, "
+            "node \\in Responsive: "
+            "SuccessorActivationPending(parentContext, node) "
+            "=> /\\ SuccessorActivationHasDurableParentWitness( "
+            "parentContext, node) "
+            "/\\ SuccessorActivationPipelineDistance(parentContext, node) "
+            "\\in 1..10 "
+            "/\\ SuccessorActivationRank(parentContext, node) "
+            "\\in SuccessorActivationRankCarrier "
+            "/\\ ENABLED <<IndexedSuccessorActivationProgressStep( "
+            "parentContext, node)>>_(IndexedChainVars))"
+        ),
+        "SuccessorActivationStepDecreasesRankProperty": (
+            "\\A parentContext \\in AdmissibleContextRecords, "
+            "node \\in Responsive: "
+            "[][ /\\ SuccessorActivationPending(parentContext, node) "
+            "/\\ IndexedSuccessorActivationProgressStep(parentContext, node) "
+            "=> \\/ SuccessorPublicationOrSuperseded(parentContext, node)' "
+            "\\/ /\\ SuccessorActivationPending(parentContext, node)' "
+            "/\\ SuccessorActivationRank(parentContext, node)' "
+            "< SuccessorActivationRank(parentContext, node) "
+            "]_IndexedChainVars"
+        ),
+        "SuccessorActivationPendingIsNotOrphanedProperty": (
+            "\\A parentContext \\in AdmissibleContextRecords, "
+            "node \\in Responsive: "
+            "[][ /\\ SuccessorActivationPending(parentContext, node) "
+            "/\\ [IndexedChainNext]_IndexedChainVars "
+            "=> \\/ SuccessorPublicationOrSuperseded(parentContext, node)' "
+            "\\/ /\\ SuccessorActivationPending(parentContext, node)' "
+            "/\\ SuccessorActivationRank(parentContext, node)' "
+            "<= SuccessorActivationRank(parentContext, node) "
+            "]_IndexedChainVars"
+        ),
+        "SuccessorActivationOutcomeIsStableProperty": (
+            "\\A parentContext \\in AdmissibleContextRecords, "
+            "node \\in Responsive: "
+            "[][ /\\ SuccessorPublicationOrSuperseded(parentContext, node) "
+            "/\\ [IndexedChainNext]_IndexedChainVars "
+            "=> SuccessorPublicationOrSuperseded(parentContext, node)' "
+            "]_IndexedChainVars"
+        ),
+        "SuccessorActivationRankProgressProperty": (
+            "\\A parentContext \\in AdmissibleContextRecords, "
+            "node \\in Responsive, "
+            "rank \\in SuccessorActivationRankCarrier: "
+            "SuccessorActivationAtRank(parentContext, node, rank) "
+            "~> (SuccessorPublicationOrSuperseded(parentContext, node) "
+            "\\/ \\E lower \\in SetLessThan( rank, OpToRel(<, Nat), "
+            "SuccessorActivationRankCarrier): "
+            "SuccessorActivationAtRank(parentContext, node, lower))"
+        ),
+        "SuccessorActivationStarvationFreedomProperty": (
+            "\\A parentContext \\in AdmissibleContextRecords, "
+            "node \\in Responsive: "
+            "SuccessorActivationPending(parentContext, node) "
+            "~> SuccessorPublicationOrSuperseded(parentContext, node)"
+        ),
+    }
+    for symbol, exact_body in operator_contracts.items():
+        extracted = _top_level_operator_body(
+            source, symbol, preserve_string_contents=True
+        )
+        if extracted is None:
+            errors.append(f"{proof_path}: missing successor-rank operator {symbol}")
+            continue
+        body, line = extracted
+        normalized = " ".join(body.split())
+        if normalized != exact_body:
+            errors.append(
+                f"{proof_path}:{line}: {symbol} must equal only "
+                f"{exact_body!r}; found {normalized!r}"
+            )
+
+    chain_path = formal_dir / "SumeragiV2ChainEpochRefinement.tla"
+    if chain_path.is_file():
+        chain_source = chain_path.read_text(encoding="utf-8")
+        pending = _top_level_operator_body(
+            chain_source,
+            "IndexedSuccessorActivationPending",
+            preserve_string_contents=True,
+        )
+        exact_pending = (
+            "/\\ parentContext \\in AdmissibleContextRecords "
+            "/\\ node \\in ValidatorIds "
+            "/\\ parentContext.height < MaxHeight "
+            "/\\ successorActivationStatus[parentContext][node] "
+            '\\in {"Queued", "Running"} '
+            "/\\ ~SuccessorPublicationOrSuperseded(parentContext, node)"
+        )
+        if pending is None:
+            errors.append(
+                f"{chain_path}: missing IndexedSuccessorActivationPending"
+            )
+        else:
+            body, line = pending
+            normalized = " ".join(body.split())
+            if normalized != exact_pending:
+                errors.append(
+                    f"{chain_path}:{line}: IndexedSuccessorActivationPending "
+                    f"must equal only {exact_pending!r}; found {normalized!r}"
+                )
+
+    theorem_symbol = "SuccessorActivationStarvationFreedomObligation"
+    theorem = _top_level_theorem_body(
+        source, theorem_symbol, preserve_string_contents=True
+    )
+    exact_statement = (
+        "IndexedChainSpec "
+        "=> /\\ SuccessorActivationPendingStructureProperty "
+        "/\\ SuccessorActivationStepDecreasesRankProperty "
+        "/\\ SuccessorActivationPendingIsNotOrphanedProperty "
+        "/\\ SuccessorActivationOutcomeIsStableProperty "
+        "/\\ SuccessorActivationRankProgressProperty "
+        "/\\ SuccessorActivationStarvationFreedomProperty"
+    )
+    if theorem is None:
+        errors.append(f"{proof_path}: missing {theorem_symbol}")
+    else:
+        body, line = theorem
+        statement = re.split(
+            r"(?m)^[ \t]*(?:BY|PROOF|OBVIOUS)\b", body, maxsplit=1
+        )[0]
+        normalized = " ".join(statement.split())
+        if normalized != exact_statement:
+            errors.append(
+                f"{proof_path}:{line}: {theorem_symbol} must state only "
+                f"{exact_statement!r}; found {normalized!r}"
+            )
+
+    equivalence_symbol = "SuccessorActivationStarvationMatchesChainProgress"
+    equivalence = _top_level_theorem_body(
+        source, equivalence_symbol, preserve_string_contents=True
+    )
+    exact_equivalence = (
+        "SuccessorActivationStarvationFreedomProperty "
+        "<=> IndexedSuccessorActivationProgress"
+    )
+    if equivalence is None:
+        errors.append(f"{proof_path}: missing {equivalence_symbol}")
+    else:
+        body, line = equivalence
+        statement = re.split(
+            r"(?m)^[ \t]*(?:BY|PROOF|OBVIOUS)\b", body, maxsplit=1
+        )[0]
+        normalized = " ".join(statement.split())
+        if normalized != exact_equivalence:
+            errors.append(
+                f"{proof_path}:{line}: {equivalence_symbol} must state only "
+                f"{exact_equivalence!r}; found {normalized!r}"
+            )
+    return errors
+
+
 def _chain_source_fidelity_errors(formal_dir: Path) -> list[str]:
     """Keep chain composition per-node and independent of the old global barrier."""
 
@@ -4350,6 +5762,7 @@ def _chain_source_fidelity_errors(formal_dir: Path) -> list[str]:
         "asyncIngressLanes",
         "asyncIngressReady",
         "asyncHeldChunks",
+        "asyncHistoricalRecoveryTargets",
     )
     scheduler_arity = len(scheduler_fields)
     recovery_fields = (
@@ -4592,6 +6005,9 @@ def _chain_source_fidelity_errors(formal_dir: Path) -> list[str]:
             "asyncDurableApplicationEvidence",
             "AsyncHistoryNext",
             "AsyncHistoryVars",
+            "historicalCatchUpDecisions",
+            "historicalCatchUpApplications",
+            "historicalCatchUpStage",
         )
         for symbol in retired_shadows:
             for match in re.finditer(rf"\b{re.escape(symbol)}\b", source):
@@ -4600,6 +6016,26 @@ def _chain_source_fidelity_errors(formal_dir: Path) -> list[str]:
                     f"{refinement_path}:{line}: stale async chain shadow {symbol} "
                     "is prohibited"
                 )
+        for match in re.finditer(
+            r"\b(?:HistoricalCatchUp|IndexedHistoricalCatchUp|IndexedCatchUp)"
+            r"[A-Za-z0-9_]*\b",
+            source,
+        ):
+            line = source.count("\n", 0, match.start()) + 1
+            errors.append(
+                f"{refinement_path}:{line}: standalone historical catch-up "
+                f"state or transition {match.group(0)} is prohibited; recovery "
+                "must remain inside the exact indexed Async product"
+            )
+        for match in re.finditer(
+            r"\bIndexedReachedAncestorHasEveryResponsiveJoined\b", source
+        ):
+            line = source.count("\n", 0, match.start()) + 1
+            errors.append(
+                f"{refinement_path}:{line}: retired false static ancestor-join "
+                "theorem is prohibited; height progress must use the temporal "
+                "activation-to-join bridge"
+            )
         for forbidden in ("CommonAppliedSubject", "AdvanceContext", "NextV2"):
             for match in re.finditer(rf"\b{forbidden}\b", source):
                 line = source.count("\n", 0, match.start()) + 1
@@ -4951,7 +6387,7 @@ def _chain_source_fidelity_errors(formal_dir: Path) -> list[str]:
         # Small unit-test fixtures exercise only the tuple projection above.
         # The production refinement is distinguished by its authoritative
         # indexed product action; once that action exists, every explicit
-        # successor and catch-up contract below is mandatory.
+        # successor and exact-recovery contract below is mandatory.
         if _top_level_operator_body(raw_source, "IndexedProductActionAt") is None:
             return errors
 
@@ -4983,7 +6419,7 @@ def _chain_source_fidelity_errors(formal_dir: Path) -> list[str]:
             if missing_tokens:
                 errors.append(
                     f"{refinement_path}:{operator_line}: {symbol} omits exact "
-                    f"successor/catch-up behavior {missing_tokens}"
+                    f"successor/exact-recovery behavior {missing_tokens}"
                 )
             present_forbidden = [
                 token for token in forbidden if token in operator_normalized
@@ -4991,9 +6427,106 @@ def _chain_source_fidelity_errors(formal_dir: Path) -> list[str]:
             if present_forbidden:
                 errors.append(
                     f"{refinement_path}:{operator_line}: {symbol} contains "
-                    f"prohibited successor/catch-up behavior {present_forbidden}"
+                    f"prohibited successor/exact-recovery behavior "
+                    f"{present_forbidden}"
                 )
             return operator_normalized
+
+        def require_chain_theorem(symbol: str, exact: str) -> None:
+            extracted = _top_level_theorem_body(
+                raw_source, symbol, preserve_string_contents=True
+            )
+            if extracted is None:
+                errors.append(
+                    f"{refinement_path}: missing explicit chain theorem {symbol}"
+                )
+                return
+            theorem_body, theorem_line = extracted
+            statement = re.split(
+                r"(?m)^[ \t]*(?:BY|PROOF|OBVIOUS)\b",
+                theorem_body,
+                maxsplit=1,
+            )[0]
+            theorem_normalized = " ".join(statement.split())
+            if theorem_normalized != exact:
+                errors.append(
+                    f"{refinement_path}:{theorem_line}: {symbol} must state only "
+                    f"{exact!r}; found {theorem_normalized!r}"
+                )
+
+        require_chain_operator(
+            "IndexedSuccessorActivationProgress",
+            exact=(
+                "\\A parentContext \\in AdmissibleContextRecords, "
+                "node \\in Responsive: "
+                "IndexedSuccessorActivationPending(parentContext, node) "
+                "~> SuccessorPublicationOrSuperseded(parentContext, node)"
+            ),
+        )
+        require_chain_operator(
+            "IndexedJoinedThroughLocalHeight",
+            exact=(
+                "\\A node \\in ValidatorIds, blockHeight \\in Heights: "
+                "blockHeight <= nodeHeight[node] "
+                "=> /\\ CanonicalIndexedContext(blockHeight) "
+                "\\in AdmissibleContextRecords "
+                "/\\ \\/ node \\in joinedByContext[ "
+                "CanonicalIndexedContext(blockHeight)] "
+                "\\/ /\\ blockHeight = nodeHeight[node] "
+                "/\\ blockHeight > 0 "
+                "/\\ LET parentContext == "
+                "CanonicalIndexedContext(blockHeight - 1) "
+                "IN /\\ successorActivationStatus[parentContext][node] "
+                '\\in {"Queued", "Running"} '
+                "/\\ \\E application \\in Chain!DecisionEvidenceSet: "
+                "ExactDurableParentApplication( "
+                "parentContext, node, application)"
+            ),
+        )
+        require_chain_operator(
+            "IndexedActivationPendingIntoContext",
+            exact=(
+                "IF initialContext.height = 0 THEN FALSE "
+                "ELSE /\\ initialContext = "
+                "CanonicalIndexedContext(initialContext.height) "
+                "/\\ IndexedSuccessorActivationPending( "
+                "CanonicalIndexedContext(initialContext.height - 1), node)"
+            ),
+        )
+        require_chain_theorem(
+            "IndexedActivationPendingIntoContextEventuallyJoins",
+            (
+                "/\\ IndexedChainSpec "
+                "/\\ IndexedSuccessorActivationProgress "
+                "=> \\A initialContext \\in AdmissibleContextRecords, "
+                "node \\in Responsive: "
+                "IndexedActivationPendingIntoContext(initialContext, node) "
+                "~> node \\in joinedByContext[initialContext]"
+            ),
+        )
+        require_chain_theorem(
+            "IndexedReachedAncestorEventuallyJoinsEveryResponsiveNode",
+            (
+                "/\\ IndexedChainSpec "
+                "/\\ IndexedSuccessorActivationProgress "
+                "=> \\A targetContext \\in AdmissibleContextRecords: "
+                "\\A blockHeight \\in 0..targetContext.height: "
+                "(IndexedTargetJoined(targetContext) "
+                "/\\ IndexedResponsiveHeightReached(blockHeight)) "
+                "~> IndexedAllResponsiveJoined( "
+                "IndexedAncestorContext(targetContext, blockHeight))"
+            ),
+        )
+        require_chain_theorem(
+            "HeightLivenessFromOneHeightAndExactRecoveryProgress",
+            (
+                "/\\ IndexedChainSpec "
+                "/\\ IndexedExactHistoricalRecoveryProgress "
+                "/\\ IndexedSuccessorActivationProgress "
+                "/\\ VerificationOneHeightCompletion "
+                "=> IndexedHeightLivenessProperty"
+            ),
+        )
 
         require_chain_operator(
             "SuccessorActivationRequiredPrerequisites",
@@ -5176,122 +6709,269 @@ def _chain_source_fidelity_errors(formal_dir: Path) -> list[str]:
             )
 
         require_chain_operator(
-            "HistoricalCatchUpTarget",
-            required=(
-                "node \\in Responsive",
-                "nodeHeight[node] = initialContext.height",
-                "nodeContext[node] = initialContext",
-                "~IndexedProjectedNodeHasApplication(initialContext, node)",
-            ),
-            forbidden=(
-                "initialContext.height < MaxHeight",
-                "VotingRoster",
+            "IndexedHistoricalRecoveryTargetReady",
+            exact=(
+                "/\\ node \\in Responsive "
+                "/\\ node \\in IndexedCore(initialContext, 6) "
+                "/\\ node \\in joinedByContext[initialContext] "
+                "/\\ ExactNodeLocationAt(initialContext, node) "
+                "/\\ ~IndexedAsync(initialContext)!NodeHasDecision(node) "
+                "/\\ ~IndexedProjectedNodeHasApplication(initialContext, node) "
+                "/\\ ~IndexedAsync(initialContext)!HistoricalRecoveryTarget(node)"
             ),
         )
         require_chain_operator(
-            "HistoricalCatchUpSource",
+            "IndexedHistoricalRecoverySourceReady",
             required=(
+                "initialContext \\in JoinedContexts",
+                "source \\in IndexedCurrentDecisions(initialContext)",
+                "source \\in IndexedCurrentApplications(initialContext)",
                 "source \\in durableDecisionEvidence",
                 "source \\in durableApplicationEvidence",
+                "source.node = server",
                 "initialContext.height < MaxHeight",
                 "Chain!CanonicalCommitForSlot(",
                 "initialContext.height = MaxHeight",
                 "Chain!ReceiptOutsideChainHorizon(source)",
                 "server \\in source.qc.signers \\cap Honest",
-                "BodyHeldBy(",
+                "server \\in IndexedAsync(initialContext)! AsyncCurrentResponsiveVoters",
+                "server \\in IndexedCore(initialContext, 6)",
+                "server \\in joinedByContext[initialContext]",
+                "BodyHeldBy(IndexedCore(initialContext, 9), server,",
+            ),
+            forbidden=("VotingRoster",),
+        )
+        require_chain_operator(
+            "IndexedHistoricalRecoveryReady",
+            exact=(
+                "/\\ node \\in Responsive "
+                "/\\ node \\in IndexedCore(initialContext, 6) "
+                "/\\ node \\in joinedByContext[initialContext] "
+                "/\\ ExactNodeLocationAt(initialContext, node) "
+                "/\\ ~IndexedAsync(initialContext)!NodeHasDecision(node) "
+                "/\\ ~IndexedProjectedNodeHasApplication(initialContext, node) "
+                "/\\ \\E server \\in ValidatorIds, "
+                "source \\in Chain!DecisionEvidenceSet: "
+                "IndexedHistoricalRecoverySourceReady( "
+                "initialContext, server, source)"
             ),
         )
         require_chain_operator(
-            "HistoricalCatchUpShape",
-            required=(
-                '{"Idle", "DecisionRecovered", "BodyRecovered", "Stored", "Validated", "Applied"}',
+            "IndexedOpenHistoricalRecovery",
+            exact=(
+                "/\\ IndexedHistoricalRecoveryTargetReady(initialContext, node) "
+                "/\\ IndexedHistoricalRecoverySourceReady( "
+                "initialContext, server, source) "
+                "/\\ IndexedAsync(initialContext)!OpenHistoricalRecovery(node)"
             ),
         )
-        historical_stage_contracts = {
-            "IndexedHistoricalCatchUpDecision": (
-                '= "Idle"',
-                '= "DecisionRecovered"',
-                "Chain!RecordKnownDecision(decision)",
+        require_chain_operator(
+            "IndexedJoinedRunnerStep",
+            required=(
+                "\\E node \\in Responsive: IndexedAsync(initialContext)!RunHistoricalRecoveryNode(node)",
+                "IndexedNodeCurrentAt(initialContext, node)",
+                "IndexedAsync(initialContext)!RunNode(node)",
+                "node \\in joinedByContext[initialContext]",
+                "IndexedAsync(initialContext)!RunHistoricalServer(node)",
             ),
-            "IndexedHistoricalCatchUpBodyRecovery": (
-                '= "DecisionRecovered"',
-                '= "BodyRecovered"',
+        )
+        require_chain_operator(
+            "IndexedJoinedNonRunnerStep",
+            required=(
+                "\\E node \\in Responsive: IndexedAsync(initialContext)! DirectHistoricalCommitCertificateDiscoveryStep(node)",
+                "\\E node \\in Responsive: IndexedAsync(initialContext)! ServiceHistoricalRecoveryIoWorker(node)",
+                "\\E node \\in Responsive: IndexedAsync(initialContext)! EnqueueHistoricalRecoveryIoLocalControl(node)",
+                "IndexedOpenHistoricalRecovery( initialContext, node, server, source)",
+                "UNCHANGED IndexedScheduler(initialContext, 25)",
             ),
-            "IndexedHistoricalCatchUpBodyStore": (
-                '= "BodyRecovered"',
-                '= "Stored"',
+        )
+        require_chain_operator(
+            "IndexedProductActionAt",
+            exact=(
+                "/\\ IndexedJoinedAsyncNext(initialContext) "
+                "/\\ \\A otherContext \\in AdmissibleContextRecords "
+                "\\ {initialContext}: UNCHANGED IndexedAsyncStateAt(otherContext) "
+                "/\\ IndexedAsyncStateShape' "
+                "/\\ JoinedByContextShape' "
+                "/\\ SuccessorActivationShape' "
+                "/\\ IndexedReceiptClassification(initialContext)"
             ),
-            "IndexedHistoricalCatchUpValidation": (
-                '= "Stored"',
-                '= "Validated"',
+        )
+        require_chain_operator(
+            "IndexedChainNext",
+            exact=(
+                "/\\ IndexedAsyncStateShape "
+                "/\\ JoinedByContextShape "
+                "/\\ SuccessorActivationShape "
+                "/\\ \\/ \\E initialContext \\in JoinedContexts: "
+                "IndexedProductActionAt(initialContext) "
+                "\\/ \\E parentContext \\in AdmissibleContextRecords, "
+                "node \\in ValidatorIds: "
+                "IndexedSuccessorActivationProgressStep(parentContext, node)"
+            ),
+        )
+        historical_product_steps = {
+            "IndexedOpenHistoricalRecoveryStep": (
+                "/\\ IndexedChainNext "
+                "/\\ \\E server \\in ValidatorIds, "
+                "source \\in Chain!DecisionEvidenceSet: "
+                "IndexedOpenHistoricalRecovery( "
+                "initialContext, node, server, source)"
+            ),
+            "IndexedRunHistoricalRecoveryStep": (
+                "/\\ IndexedChainNext "
+                "/\\ IndexedAsync(initialContext)! "
+                "PostGstRunHistoricalRecoveryNode(node)"
+            ),
+            "IndexedHistoricalCommitCertificateDiscoveryStep": (
+                "/\\ IndexedChainNext "
+                "/\\ IndexedAsync(initialContext)! "
+                "PostGstHistoricalCommitCertificateDiscovery(node)"
+            ),
+            "IndexedHistoricalRecoveryIoWorkerStep": (
+                "/\\ IndexedChainNext "
+                "/\\ IndexedAsync(initialContext)! "
+                "PostGstServiceHistoricalRecoveryIoWorker(node)"
+            ),
+            "IndexedAdmitHistoricalRecoveryPacketStep": (
+                "/\\ IndexedChainNext "
+                "/\\ IndexedAsync(initialContext)! "
+                "PostGstAdmitHistoricalRecoveryPacket(recipient, source)"
             ),
         }
-        for symbol, tokens in historical_stage_contracts.items():
-            require_chain_operator(
-                symbol,
-                required=(
-                    "HistoricalCatchUpSource(initialContext, server, source)",
-                    *tokens,
-                ),
+        for symbol, exact_body in historical_product_steps.items():
+            require_chain_operator(symbol, exact=exact_body)
+        require_chain_operator(
+            "IndexedHistoricalRecoveryTargetCoherence",
+            exact=(
+                "\\A initialContext \\in AdmissibleContextRecords, "
+                "node \\in ValidatorIds: "
+                "IndexedAsync(initialContext)!HistoricalRecoveryTarget(node) "
+                "=> /\\ node \\in Responsive "
+                "/\\ node \\in joinedByContext[initialContext] "
+                "/\\ ExactNodeLocationAt(initialContext, node) "
+                "/\\ ~IndexedAsync(initialContext)!NodeHasApplication(node)"
+            ),
+        )
+        require_chain_operator(
+            "HistoricalRecoveryOutstanding",
+            exact=(
+                "/\\ node \\in Responsive "
+                "/\\ node \\in joinedByContext[initialContext] "
+                "/\\ ExactNodeLocationAt(initialContext, node) "
+                "/\\ ~IndexedAsync(initialContext)!NodeHasApplication(node)"
+            ),
+        )
+        require_chain_operator(
+            "HistoricalRecoveryComplete",
+            exact=(
+                "IF initialContext.height = MaxHeight "
+                "THEN IndexedAsync(initialContext)!NodeHasApplication(node) "
+                "ELSE nodeHeight[node] > initialContext.height"
+            ),
+        )
+        require_chain_operator(
+            "IndexedExactHistoricalRecoveryProgress",
+            exact=(
+                "\\A initialContext \\in AdmissibleContextRecords, "
+                "node \\in Responsive: "
+                "HistoricalRecoveryOutstanding(initialContext, node) "
+                "~> HistoricalRecoveryComplete(initialContext, node)"
+            ),
+        )
+        require_chain_operator(
+            "IndexedAllResponsiveExactApplicationsAt",
+            exact=(
+                "\\A node \\in Responsive: "
+                "IndexedAsync(initialContext)!NodeHasApplication(node)"
+            ),
+        )
+        require_chain_operator(
+            "IndexedContextCompleted",
+            exact=(
+                "IF initialContext.height = MaxHeight "
+                "THEN IndexedAllResponsiveExactApplicationsAt(initialContext) "
+                "ELSE \\A node \\in Responsive: "
+                "nodeHeight[node] > initialContext.height"
+            ),
+        )
+        require_chain_operator(
+            "SuccessorActivationAndExactHistoricalRecoveryProductionRefinementInvariant",
+            required=(
+                "SuccessorActivationShape",
+                "SuccessorHeightActivated(parentContext, node)",
+                "node \\in joinedByContext[ CanonicalIndexedContext( parentContext.height + 1)]",
+                "terminalContext.height = MaxHeight",
+                "IndexedAsync(terminalContext)!NodeHasApplication(node)",
+                "nodeHeight[node] = terminalContext.height",
+                "nodeContext[node] = terminalContext",
+                'successorActivationStatus[terminalContext][node] = "Idle"',
+            ),
+        )
+        production_obligation = _top_level_theorem_body(
+            raw_source,
+            "SuccessorActivationAndExactHistoricalRecoveryProductionRefinementObligation",
+            preserve_string_contents=True,
+        )
+        exact_production_obligation = (
+            "IndexedChainSpec => []"
+            "SuccessorActivationAndExactHistoricalRecoveryProductionRefinementInvariant"
+        )
+        if production_obligation is None:
+            errors.append(
+                f"{refinement_path}: missing canonical exact historical-recovery "
+                "production refinement obligation"
             )
-        require_chain_operator(
-            "IndexedHistoricalCatchUpNonterminalApplication",
-            required=(
-                "initialContext.height < MaxHeight",
-                '= "Validated"',
-                "Chain!RecordAppliedNext(application)",
-                "QueueSuccessorActivation(initialContext, node)",
-                '= "Applied"',
-                "UNCHANGED <<historicalCatchUpDecisions, indexedAsyncState, joinedByContext>>",
-            ),
-            forbidden=("joinedByContext'",),
-        )
-        require_chain_operator(
-            "IndexedHistoricalCatchUpTerminalApplication",
-            required=(
-                "initialContext.height = MaxHeight",
-                "Chain!ReceiptOutsideChainHorizon(application)",
-                '= "Validated"',
-                "Chain!RecordKnownApplication(application)",
-                '= "Applied"',
-                "UNCHANGED <<historicalCatchUpDecisions, indexedAsyncState, joinedByContext, SuccessorActivationVars>>",
-            ),
-            forbidden=(
-                "Chain!RecordAppliedNext(application)",
-                "QueueSuccessorActivation",
-                "joinedByContext'",
-            ),
-        )
-        require_chain_operator(
-            "IndexedHistoricalCatchUpPipelineAction",
-            required=(
-                "IndexedHistoricalCatchUpDecision(",
-                "IndexedHistoricalCatchUpBodyRecovery(",
-                "IndexedHistoricalCatchUpBodyStore(",
-                "IndexedHistoricalCatchUpValidation(",
-                "IndexedHistoricalCatchUpApplication(",
-            ),
-        )
+        else:
+            obligation_body, obligation_line = production_obligation
+            obligation_statement = re.split(
+                r"(?m)^[ \\t]*(?:BY|PROOF|OBVIOUS)\\b",
+                obligation_body,
+                maxsplit=1,
+            )[0]
+            obligation_normalized = " ".join(obligation_statement.split())
+            if obligation_normalized != exact_production_obligation:
+                errors.append(
+                    f"{refinement_path}:{obligation_line}: canonical exact "
+                    "historical-recovery production refinement obligation must "
+                    f"state only {exact_production_obligation!r}; found "
+                    f"{obligation_normalized!r}"
+                )
         if indexed_fairness is not None:
             fairness_normalized = " ".join(indexed_fairness[0].split())
-            catch_up_fairness = (
-                "WF_IndexedChainVars( "
-                "IndexedCatchUpPipelineStep(initialContext, node))"
+            exact_historical_fairness = (
+                "\\A node \\in Responsive: WF_IndexedChainVars( "
+                "IndexedOpenHistoricalRecoveryStep(initialContext, node))",
+                "\\A node \\in Responsive: WF_IndexedChainVars( "
+                "IndexedRunHistoricalRecoveryStep(initialContext, node))",
+                "\\A node \\in Responsive: WF_IndexedChainVars( "
+                "IndexedHistoricalCommitCertificateDiscoveryStep( "
+                "initialContext, node))",
+                "\\A node \\in Responsive: WF_IndexedChainVars( "
+                "IndexedHistoricalRecoveryIoWorkerStep( initialContext, node))",
+                "\\A recipient \\in ValidatorIds, source \\in ValidatorIds: "
+                "WF_IndexedChainVars( IndexedAdmitHistoricalRecoveryPacketStep( "
+                "initialContext, recipient, source))",
             )
             activation_fairness = (
-                "WF_IndexedChainVars( "
+                "\\A node \\in Responsive: WF_IndexedChainVars( "
                 "IndexedSuccessorActivationProgressStep( initialContext, node))"
             )
-            if fairness_normalized.count(catch_up_fairness) != 1:
-                errors.append(
-                    f"{refinement_path}:{indexed_fairness[1]}: IndexedFairness "
-                    "must contain exactly one fair staged historical catch-up pipeline"
-                )
+            for exact_fairness in exact_historical_fairness:
+                if fairness_normalized.count(exact_fairness) != 1:
+                    errors.append(
+                        f"{refinement_path}:{indexed_fairness[1]}: "
+                        "IndexedFairness must contain exactly one all-required-"
+                        "node exact historical-recovery product clause "
+                        f"{exact_fairness!r}"
+                    )
             if fairness_normalized.count(activation_fairness) != 1:
                 errors.append(
                     f"{refinement_path}:{indexed_fairness[1]}: IndexedFairness "
-                    "must contain exactly one fair successor-activation pipeline"
+                    "must contain exactly one responsive-validator fair "
+                    "successor-activation pipeline"
                 )
+    errors.extend(_successor_activation_rank_source_fidelity_errors(formal_dir))
     errors.extend(_successor_production_source_fidelity_errors(ROOT_DIR))
     return errors
 
@@ -5659,16 +7339,28 @@ def validate_ledger(
             errors.append(
                 f"{cfg}: TLC configuration must start with {expected_header!r}"
             )
-        if '  ValidSubjects = {"A"}\n' not in source:
+        if (
+            cfg_name != "effective_lock_acquisition.cfg"
+            and '  ValidSubjects = {"A"}\n' not in source
+        ):
             errors.append(
                 f"{cfg}: TLC configuration must keep B externally invalid so "
                 "bounded searches exercise validation rejection"
+            )
+        if (
+            cfg_name == "effective_lock_acquisition.cfg"
+            and "AcquisitionSubjects = "
+            "{AcquisitionSubjectA, AcquisitionSubjectB}\n" not in source
+        ):
+            errors.append(
+                f"{cfg}: effective-lock search must keep two distinct subjects"
             )
 
     obligations = ledger.get("obligations")
     if not isinstance(obligations, list) or not obligations:
         errors.append("proof ledger obligations must be a non-empty array")
         obligations = []
+    errors.extend(_proof_obligation_inventory_errors(obligations))
     errors.extend(_proof_obligation_architecture_errors(obligations, module_sources))
     errors.extend(_proof_status_dependency_errors(obligations))
     errors.extend(_proofless_release_theorem_errors(obligations, module_sources))

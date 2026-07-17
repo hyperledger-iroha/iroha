@@ -105,6 +105,8 @@ readonly invocation_dir
 readonly gate_log="${invocation_dir}/formal-gate.log"
 readonly ledger_copy="${invocation_dir}/proof_coverage.json"
 readonly evidence_copy="${invocation_dir}/proof_evidence.json"
+readonly verus_evidence_copy="${invocation_dir}/verus_evidence.json"
+readonly verus_log_copy="${invocation_dir}/verus.log"
 readonly harness_lock_copy="${invocation_dir}/harness-Cargo.lock"
 readonly toolchain_copy="${invocation_dir}/formal-toolchain.tsv"
 readonly completion_attestation="${invocation_dir}/COMPLETED.tsv"
@@ -130,15 +132,23 @@ fi
 
 readonly source_ledger="docs/formal/sumeragi_v2/proof_coverage.json"
 readonly source_evidence="target/formal/sumeragi_v2/proof_evidence.json"
+readonly source_verus_evidence="target/formal/sumeragi_v2/verus_evidence.json"
+readonly source_verus_log="target/formal/sumeragi_v2/verus.log"
 if [[ ! -f "$source_ledger" || -L "$source_ledger" \
-  || ! -f "$source_evidence" || -L "$source_evidence" ]]; then
-  echo "strict formal release gate did not produce regular ledger/evidence files" >&2
+  || ! -f "$source_evidence" || -L "$source_evidence" \
+  || ! -f "$source_verus_evidence" || -L "$source_verus_evidence" \
+  || ! -f "$source_verus_log" || -L "$source_verus_log" ]]; then
+  echo "strict formal release gate did not produce regular TLAPS/Verus evidence files" >&2
   exit 1
 fi
 cp -- "$source_ledger" "${ledger_copy}.partial"
 mv -- "${ledger_copy}.partial" "$ledger_copy"
 cp -- "$source_evidence" "${evidence_copy}.partial"
 mv -- "${evidence_copy}.partial" "$evidence_copy"
+cp -- "$source_verus_evidence" "${verus_evidence_copy}.partial"
+mv -- "${verus_evidence_copy}.partial" "$verus_evidence_copy"
+cp -- "$source_verus_log" "${verus_log_copy}.partial"
+mv -- "${verus_log_copy}.partial" "$verus_log_copy"
 readonly source_harness_lock="scripts/formal/sumeragi_v2_harness.lock"
 if [[ ! -f "$source_harness_lock" || -L "$source_harness_lock" ]]; then
   echo "strict formal release gate lacks its regular pinned harness lock" >&2
@@ -176,11 +186,17 @@ python3 scripts/formal/check_sumeragi_v2_proof_ledger.py \
   --ledger "$ledger_copy" \
   --release \
   --evidence "$evidence_copy"
+python3 scripts/formal/sumeragi_v2_verus_evidence.py validate \
+  --root "$repo_root" \
+  --evidence "$verus_evidence_copy" \
+  --log "$verus_log_copy"
 verify_identity "after archived proof validation"
 
 gate_log_sha256="$(hash_file "$gate_log")"
 proof_coverage_sha256="$(hash_file "$ledger_copy")"
 proof_evidence_sha256="$(hash_file "$evidence_copy")"
+verus_evidence_sha256="$(hash_file "$verus_evidence_copy")"
+verus_log_sha256="$(hash_file "$verus_log_copy")"
 harness_cargo_lock_sha256="$(hash_file "$harness_lock_copy")"
 formal_toolchain_sha256="$(hash_file "$toolchain_copy")"
 completion_tmp="${invocation_dir}/.COMPLETED.tsv.$$"
@@ -193,6 +209,8 @@ printf '%s\t%s\n' \
   formal_gate_log_sha256 "$gate_log_sha256" \
   proof_coverage_sha256 "$proof_coverage_sha256" \
   proof_evidence_sha256 "$proof_evidence_sha256" \
+  verus_evidence_sha256 "$verus_evidence_sha256" \
+  verus_log_sha256 "$verus_log_sha256" \
   harness_cargo_lock_sha256 "$harness_cargo_lock_sha256" \
   formal_toolchain_sha256 "$formal_toolchain_sha256" \
   >"$completion_tmp"

@@ -462,6 +462,16 @@ ProtectedServeRankProgressProperty(specification) ==
                 \/ ServiceRankLess(
                      ServeJobRank(node, job), <<5, position>>))
 
+(***************************************************************************
+The release rank obligation covers both protected reducer candidates and the
+separate fresh-nonce Serve FIFO.  Keeping the conjunction named prevents a
+proof of the candidate rank alone from being reported as complete scheduler
+rank coverage.
+***************************************************************************)
+ProtectedServiceRanksProgressProperty(specification) ==
+  /\ ProtectedServiceRankProgressProperty(specification)
+  /\ ProtectedServeRankProgressProperty(specification)
+
 ProtectedServeStarvationProperty(specification) ==
   specification
     => \A node \in AsyncCurrentResponsiveVoters,

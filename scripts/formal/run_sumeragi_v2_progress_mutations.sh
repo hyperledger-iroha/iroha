@@ -168,10 +168,30 @@ run_case io-candidate-consensus-only \
   "Model checking completed. No error has been found." \
   "1 distinct states" "depth of the complete state graph search is 1"
 
+run_case effective-lock-rebind-fixed \
+  SumeragiV2EffectiveLockAcquisitionMutation.tla \
+  effective_lock_rebind_fixed.cfg 0 \
+  "Model checking completed. No error has been found." \
+  "10 distinct states" "depth of the complete state graph search is 2"
+run_case effective-lock-rebind-bug \
+  SumeragiV2EffectiveLockAcquisitionMutation.tla \
+  effective_lock_rebind_bug.cfg 12 \
+  "Invariant ViewRebindKeepsOnePhysicalLoad is violated." \
+  "BuggyRebindSameLock"
+run_case effective-lock-no-retry-bug \
+  SumeragiV2EffectiveLockAcquisitionMutation.tla \
+  effective_lock_no_retry_bug.cfg 13 \
+  "Temporal properties were violated." \
+  "5 distinct states" "State 4: Stuttering"
+run_case effective-lock-future-completion-bug \
+  SumeragiV2EffectiveLockAcquisitionMutation.tla \
+  effective_lock_future_completion_bug.cfg 12 \
+  "Invariant BuggyFutureCompletionFailsClosed is violated by the initial state"
+
 run_case ownership-invariant-n1 \
   SumeragiV2OwnershipInvariantCheck.tla ownership_n1.cfg 0 \
   "Model checking completed. No error has been found." \
-  "19081 states generated, 3104 distinct states found" \
-  "depth of the complete state graph search is 44"
+  "42817 states generated, 6208 distinct states found" \
+  "depth of the complete state graph search is 45"
 
-echo "[tlc] protected-rank mutation matrix and ownership invariant passed"
+echo "[tlc] protected-rank, effective-lock, and ownership mutation matrix passed"

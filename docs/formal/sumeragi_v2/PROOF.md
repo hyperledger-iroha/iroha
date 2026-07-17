@@ -408,9 +408,14 @@ selector. The corresponding solver queries are isolated in
 they are not a separately transcribed protocol. This is not a cross-tool proof
 that the independently parsed TLA+
 body matches those Rust expressions, nor a temporal theorem that the runtime or
-external body service is eventually invoked. Ordinary-Rust map/hash/service
-projection, worker/request ownership, and post-GST fairness therefore remain
-in `EffectiveLockBodyAcquisitionCompositionObligation`, ledgered
+external body service is eventually invoked. The executable height-scoped
+acquisition owner now specifies immutable physical identity, mutable consumer
+rebind, exact completion classification, certified recovery, and retry. Its
+`EffectiveLockAcquisitionModelObligation` is still `specified_unproved`;
+exhaustive bounded TLC is counterexample search, not a deductive discharge.
+Ordinary-Rust map/hash/service projection, worker/request ownership, and
+post-GST fairness remain separately in
+`EffectiveLockBodyAcquisitionProductionRefinementObligation`, also ledgered
 `specified_unproved`. The exact enabled-`RunNode` result is only a scheduler
 lemma: post-GST deadlock freedom requires an enabled `AsyncNext` step that grows
 current-height protocol evidence, strictly consumes a concrete deadline debt,
@@ -429,16 +434,21 @@ ledgered `specified_unproved`. The chain
 refinement now contains the authoritative indexed successor-instance product
 and its exact `SumeragiV2ChainEpochRefinement!HeightLivenessObligation`. Its
 source proof body composes instance activation, exact-action fairness,
-historical catch-up for validators absent from an old roster, and finite-height
-temporal induction, but the ledger remains `specified_unproved` until the whole
-theorem passes a fresh pinned strict proof after rotating-leader and application
-liveness and after the separately ledgered
-`SuccessorActivationAndHistoricalCatchUpProductionRefinementObligation` maps
-the production startup/block-sync trace to the model. Historical catch-up is
-receipt-refining rather than a second
-consensus relation: an authenticated certified signer serves an
-already canonical exact CommitQC/body, after which the reducer traverses
-DecisionRecovered, BodyRecovered, Stored, Validated, and Applied. Nonterminal
+exact historical recovery for responsive validators absent from an old roster,
+and finite-height temporal induction, but the ledger remains
+`specified_unproved` until the whole theorem passes a fresh pinned strict proof
+after rotating-leader, application liveness, and the separately ledgered
+`SuccessorActivationStarvationFreedomObligation` and
+`SuccessorActivationAndExactHistoricalRecoveryProductionRefinementObligation`.
+The former pins the minimal `0..19` queue-to-publication rank for each
+responsive validator, including the one-time pre-failure `+9` offset. It makes
+no progress claim for an honest validator outside `Responsive`, which may stop
+with pre-GST local work still queued. The latter maps production startup and
+block-sync traces to the model. Historical recovery is an exact Async reducer path rather than a
+second consensus or receipt relation: an authenticated current voter serves an
+already canonical exact CommitQC, the Core imports that envelope into ordinary
+certificate delivery, and the reducer performs decision persistence, body
+recovery, store, validation, and application. Nonterminal
 application queues successor startup and does not join; only exact Applied or
 Recovered publication joins. Recovered publication requires absent
 process-visible predecessor ownership plus durable complete-tip authority and
@@ -446,8 +456,8 @@ never writes a fictitious predecessor `Complete`. At terminal `MaxHeight`, a
 responsive observer records known application without advancing height or
 creating activation state. Its
 dormant `InitAt` parent receipts remain private to their one-height instances,
-while the global projection contains exact current-context and explicit
-catch-up receipt deltas. No global asynchronous shadow state, alternate
+while the global projection contains only exact current-context receipt deltas.
+No global asynchronous shadow state, alternate
 consensus transition relation, or favourable-network protocol relation may
 stand in for that proof.
 
@@ -459,10 +469,27 @@ rule even outside release mode. The ledger also prohibits promoting async type
 closure ahead of runner scheduler preservation, post-GST deadlock freedom ahead
 of async type closure, starvation freedom ahead of service-rank progress, or
 genesis handoff or indexed height liveness ahead of rotating-leader,
-application liveness, and the production successor/catch-up refinement seam.
+application liveness, successor-activation starvation freedom, and the
+production successor/exact-recovery refinement seam.
 The
 conditional liveness premises remain visible as trusted contracts rather than
 being restated as the theorem to prove.
+
+Each of the 18 actions named by `AsyncFairnessAt` now carries its complete
+category-specific outer frame. `AsyncFairActionAt` repeats the exact quantified
+inventory. `AsyncFairActionsRefineAsyncNext` is the typed source claim, while
+`SumeragiV2AsyncFairnessRefinementProofs!AsyncFairActionsRefineAsyncNextObligation`
+is its deductive theorem. The decomposed proof projects typed command execution,
+all 18 fair actions, and their runner, non-runner, and recovery outer frames;
+the exact release invocation proves 1,143/1,143 obligations. The proof checker
+rejects a missing action, changed quantifier domain, misclassified frame,
+weakened claim or theorem, unreviewed helper theorem, duplicate TLC-only
+variable tuple, or alternate TLC fairness relation. The complete Core `Next`
+relation is not embedded in every `WF` target, because that redundant search
+causes TLC to test unrelated conflicting Core branches during `ENABLED`.
+This promotes only `async-fair-action-refinement` to `tlaps_proved`; the
+46-entry ledger still contains 15 `specified_unproved`, 6 `trusted_contract`,
+and 1 `out_of_scope` entries, so `machine_checked_completion` remains false.
 
 TLC runs exhaustive constant checks and bounded asynchronous counterexample
 searches. It cannot upgrade a proof status. The scheduler corridor runs the original eight
@@ -477,8 +504,9 @@ model exhausts seven bounded states without error and returns status 0. These
 are followed by the causal-capacity refill matrix, blind-successor/coalesced
 replacement, in-runner/independent Commit-discovery, and all-I/O/Consensus-only
 index mutations. An exhaustive one-validator configuration checks the logical
-ownership invariant through 19,081 generated states, 3,104 distinct states,
-and depth 44. These are bounded regression witnesses, not deductive proof and not a reason to
+ownership invariant through 42,817 generated states, 6,208 distinct states,
+and depth 45. The larger graph covers separate non-timeout-progress and
+TimeoutVote ingress reservations. These are bounded regression witnesses, not deductive proof and not a reason to
 promote a ledger entry. Two additional seam models make the remaining temporal
 gap executable: an unprotected Normal proposal/Prepare candidate starves, and
 a dynamic delivery-class mutation loses a stored CommitVote after a TC, while
@@ -496,7 +524,8 @@ The current pre-network release inventory names 166 tests across fourteen Rust
 modules. It includes exact completion ownership, body-owner binding and
 rebind, byte retirement, three-class production arbitration, the exact
 `3N+1` ingress and `2N+3` deferred partitions, successor activation/recovery,
-historical catch-up, and watchdog classification. Cargo discovery found all
+authenticated exact historical recovery, and watchdog classification. Cargo
+discovery found all
 162 then-required names among 6,744 tests with no missing or ignored release
 test before the four replay-FIFO/refinement regressions raised the inventory to
 166; the authoritative ingress module was green at 30/30. Fresh 166-name Cargo

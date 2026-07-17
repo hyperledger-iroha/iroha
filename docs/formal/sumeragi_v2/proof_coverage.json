@@ -164,10 +164,17 @@
       "status": "tlaps_proved"
     },
     {
-      "id": "effective-lock-body-acquisition",
-      "requirement": "The source-linked Rust/Verus safety kernel proves post-WAL effective-lock selection, monotonic typed FetchBody -> BodyAvailable -> StoreBody -> ValidateBody identity, strictly advancing same-body consumer rebind, unique cross-lane completion ownership, exact supersession byte residuals, and bounded three-class runtime arbitration. The remaining composition must prove ordinary-Rust map/hash/service projection fidelity plus post-GST fair invocation and terminating local work eventually service the rebound path or a higher lock or decision supersedes it",
+      "id": "effective-lock-body-acquisition-model",
+      "requirement": "The executable height-scoped acquisition owner keeps physical ID and subject immutable across same-lock consumer rebinds, defers a higher different-subject replacement until the active local read terminates, rejects future/wrong/duplicate completions, waits for the exact certified durable store, retries once, and under weak fairness eventually makes every stable effective lock ready and repeatedly deliverable to the latest consumer",
+      "module": "SumeragiV2EffectiveLockAcquisitionProofs",
+      "symbol": "EffectiveLockAcquisitionModelObligation",
+      "status": "specified_unproved"
+    },
+    {
+      "id": "effective-lock-body-acquisition-production-refinement",
+      "requirement": "The source-linked Rust/Verus safety kernels and ordinary production worker, effect-executor, runtime, and runner state refine the executable effective-lock acquisition owner: post-WAL EnterView emits the exact protected certified fetch; map/hash/byte ownership is exact; the control-reserved physical load and certified recovery callbacks are fairly invoked; and terminating local work eventually delivers the rebound body or a higher lock or decision supersedes it",
       "module": "SumeragiV2AsyncLivenessProofs",
-      "symbol": "EffectiveLockBodyAcquisitionCompositionObligation",
+      "symbol": "EffectiveLockBodyAcquisitionProductionRefinementObligation",
       "status": "specified_unproved"
     },
     {
@@ -183,6 +190,13 @@
       "module": "SumeragiV2AsyncLivenessProofs",
       "symbol": "AsyncTypeInvariantObligation",
       "status": "specified_unproved"
+    },
+    {
+      "id": "async-fair-action-refinement",
+      "requirement": "At every state satisfying the Core and scheduler type invariants, each of the exact 18 weak-fairness targets is one fully framed AsyncNext transition; the proof must project runner command execution to a typed Core Next arm without conjoining the global Core disjunction to every fairness ENABLED query",
+      "module": "SumeragiV2AsyncFairnessRefinementProofs",
+      "symbol": "AsyncFairActionsRefineAsyncNextObligation",
+      "status": "tlaps_proved"
     },
     {
       "id": "generation-scoped-vote-delivery",
@@ -241,10 +255,17 @@
       "status": "specified_unproved"
     },
     {
-      "id": "successor-activation-catch-up-production-refinement",
-      "requirement": "Production successor startup refines the full-context Applied/Recovered token pipeline through ordered adapter, runtime, services, startup effects, clocks, marker, ingress, and publication actions; fail-closed recovery requires exact durable complete-tip authority and never fabricates physical predecessor completion; historical catch-up copies exact canonical signer-backed evidence through decision, body, store, validation, and application stages, with terminal observers applying without height advance or successor activation",
+      "id": "successor-activation-starvation-freedom",
+      "requirement": "Every responsive validator's Queued or Running successor activation has an exact durable parent witness, an enabled progress action, and a rank in the minimal finite 0..19 carrier; the one permitted fail-closed reset crosses the pre-failure +9 offset, every later startup action strictly decreases the local distance or publishes/supersedes the successor, no chain step orphans pending responsive activation or increases its rank, and weak fairness eventually reaches publication or legitimate later-height supersession; no progress claim is made for validators outside Responsive",
+      "module": "SumeragiV2SuccessorActivationRefinementProofs",
+      "symbol": "SuccessorActivationStarvationFreedomObligation",
+      "status": "specified_unproved"
+    },
+    {
+      "id": "successor-activation-exact-recovery-production-refinement",
+      "requirement": "Production successor startup refines the full-context Applied/Recovered token pipeline through ordered adapter, runtime, services, startup effects, clocks, marker, ingress, and publication actions; fail-closed recovery requires exact durable complete-tip authority and never fabricates physical predecessor completion; historical recovery opens an exact per-context Async target, imports only an authenticated exact CommitQC, and traverses the ordinary decision, body recovery, store, validation, and application reducer path, with terminal observers applying without height advance or successor activation",
       "module": "SumeragiV2ChainEpochRefinement",
-      "symbol": "SuccessorActivationAndHistoricalCatchUpProductionRefinementObligation",
+      "symbol": "SuccessorActivationAndExactHistoricalRecoveryProductionRefinementObligation",
       "status": "specified_unproved"
     },
     {

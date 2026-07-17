@@ -49,6 +49,90 @@ def copy_async_source_fidelity_fixture(
     return formal_dir
 
 
+def mutate_tla_operator(
+    source: str,
+    symbol: str,
+    old: str,
+    new: str,
+) -> str:
+    """Replace one exact fragment inside a named top-level TLA+ operator."""
+
+    declaration = re.search(
+        rf"(?m)^{re.escape(symbol)}\s*(?:\([^)=]*\))?\s*==", source
+    )
+    assert declaration is not None, symbol
+    next_declaration = re.search(
+        r"(?m)^(?:[A-Za-z_][A-Za-z0-9_]*\s*"
+        r"(?:\([^)=]*\))?\s*==|={4,}\s*$)",
+        source[declaration.end() :],
+    )
+    operator_end = (
+        len(source)
+        if next_declaration is None
+        else declaration.end() + next_declaration.start()
+    )
+    position = source.find(old, declaration.end(), operator_end)
+    assert position >= 0, (symbol, old)
+    return source[:position] + new + source[position + len(old) :]
+
+
+def mutate_tla_theorem(
+    source: str,
+    symbol: str,
+    old: str,
+    new: str,
+) -> str:
+    """Replace one exact fragment inside a named top-level TLA+ theorem."""
+
+    declaration = re.search(
+        rf"(?m)^THEOREM\s+{re.escape(symbol)}\s*(?:\([^)=]*\))?\s*==",
+        source,
+    )
+    assert declaration is not None, symbol
+    next_declaration = re.search(
+        r"(?m)^(?:(?:THEOREM|LEMMA|COROLLARY|PROPOSITION)\s+"
+        r"[A-Za-z_][A-Za-z0-9_]*\s*(?:\([^)=]*\))?\s*==|"
+        r"[A-Za-z_][A-Za-z0-9_]*\s*(?:\([^)=]*\))?\s*==|={4,}\s*$)",
+        source[declaration.end() :],
+    )
+    theorem_end = (
+        len(source)
+        if next_declaration is None
+        else declaration.end() + next_declaration.start()
+    )
+    position = source.find(old, declaration.end(), theorem_end)
+    assert position >= 0, (symbol, old)
+    return source[:position] + new + source[position + len(old) :]
+
+
+def delete_tla_theorem_token(source: str, symbol: str, token: str) -> str:
+    """Delete every occurrence of a token inside one top-level theorem."""
+
+    declaration = re.search(
+        rf"(?m)^THEOREM\s+{re.escape(symbol)}\s*(?:\([^)=]*\))?\s*==",
+        source,
+    )
+    assert declaration is not None, symbol
+    next_declaration = re.search(
+        r"(?m)^(?:(?:THEOREM|LEMMA|COROLLARY|PROPOSITION)\s+"
+        r"[A-Za-z_][A-Za-z0-9_]*\s*(?:\([^)=]*\))?\s*==|"
+        r"[A-Za-z_][A-Za-z0-9_]*\s*(?:\([^)=]*\))?\s*==|={4,}\s*$)",
+        source[declaration.end() :],
+    )
+    theorem_end = (
+        len(source)
+        if next_declaration is None
+        else declaration.end() + next_declaration.start()
+    )
+    theorem = source[declaration.end() : theorem_end]
+    assert token in theorem, (symbol, token)
+    return (
+        source[: declaration.end()]
+        + theorem.replace(token, "")
+        + source[theorem_end:]
+    )
+
+
 def test_tla_comment_stripping_reuses_bounded_content_cache() -> None:
     module = load_checker()
     source = 'Value == "kept" (* stripped *)\n'
@@ -94,6 +178,52 @@ def test_repository_ledger_has_only_explicit_unproved_debt() -> None:
     assert result.machine_checked_completion is ledger["machine_checked_completion"]
 
 
+def test_reviewed_obligation_inventory_rejects_deleted_obligation() -> None:
+    module = load_checker()
+    ledger = copy.deepcopy(module.load_ledger())
+    ledger["obligations"] = [
+        obligation
+        for obligation in ledger["obligations"]
+        if obligation["id"] != "dual-quorum-definition"
+    ]
+
+    errors = module.validate_ledger(ledger).errors
+
+    assert (
+        "proof ledger is missing reviewed obligation dual-quorum-definition" in errors
+    )
+    assert any("must follow the reviewed canonical order" in error for error in errors)
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement", "expected_error"),
+    (
+        (
+            "module",
+            "SumeragiV2VocabularyProofs",
+            "proof obligation dual-quorum-definition must use reviewed module "
+            "SumeragiV2QuorumProofs",
+        ),
+        (
+            "symbol",
+            "PrepareSignerAvailabilityIncludesDurability",
+            "proof obligation dual-quorum-definition must use reviewed symbol "
+            "DualQuorumCarriesBothThresholds",
+        ),
+    ),
+)
+def test_reviewed_obligation_inventory_rejects_retargeting(
+    field: str, replacement: str, expected_error: str
+) -> None:
+    module = load_checker()
+    ledger = copy.deepcopy(module.load_ledger())
+    ledger["obligations"][0][field] = replacement
+
+    errors = module.validate_ledger(ledger).errors
+
+    assert expected_error in errors
+
+
 def test_repository_ledger_pins_exact_current_proof_debt_and_dependencies() -> None:
     module = load_checker()
     ledger = module.load_ledger()
@@ -103,7 +233,8 @@ def test_repository_ledger_pins_exact_current_proof_debt_and_dependencies() -> N
         for obligation in ledger["obligations"]
         if obligation["status"] == "specified_unproved"
     ) == (
-        "effective-lock-body-acquisition",
+        "effective-lock-body-acquisition-model",
+        "effective-lock-body-acquisition-production-refinement",
         "async-runner-scheduler-preservation",
         "async-type-invariant",
         "progress-witness-preservation",
@@ -113,7 +244,8 @@ def test_repository_ledger_pins_exact_current_proof_debt_and_dependencies() -> N
         "timeout-view-liveness",
         "rotating-leader-liveness",
         "application-liveness",
-        "successor-activation-catch-up-production-refinement",
+        "successor-activation-starvation-freedom",
+        "successor-activation-exact-recovery-production-refinement",
         "genesis-height-successor-handoff",
         "height-liveness",
     )
@@ -124,35 +256,48 @@ def test_repository_ledger_pins_exact_current_proof_debt_and_dependencies() -> N
             "async-type-invariant",
             "generation-scoped-vote-delivery",
         ),
-        "post-gst-deadlock-freedom": ("async-type-invariant",),
-        "protected-service-rank": ("async-type-invariant",),
+        "post-gst-deadlock-freedom": (
+            "async-type-invariant",
+            "async-fair-action-refinement",
+        ),
+        "protected-service-rank": (
+            "async-type-invariant",
+            "async-fair-action-refinement",
+        ),
         "post-gst-starvation-freedom": (
             "async-type-invariant",
+            "async-fair-action-refinement",
             "protected-service-rank",
         ),
         "timeout-view-liveness": (
+            "async-fair-action-refinement",
             "progress-witness-preservation",
             "post-gst-starvation-freedom",
         ),
         "rotating-leader-liveness": (
-            "effective-lock-body-acquisition",
+            "effective-lock-body-acquisition-model",
+            "effective-lock-body-acquisition-production-refinement",
+            "async-fair-action-refinement",
             "progress-witness-preservation",
             "post-gst-starvation-freedom",
             "timeout-view-liveness",
         ),
         "application-liveness": (
+            "async-fair-action-refinement",
             "progress-witness-preservation",
             "post-gst-starvation-freedom",
         ),
         "genesis-height-successor-handoff": (
             "rotating-leader-liveness",
             "application-liveness",
-            "successor-activation-catch-up-production-refinement",
+            "successor-activation-starvation-freedom",
+            "successor-activation-exact-recovery-production-refinement",
         ),
         "height-liveness": (
             "rotating-leader-liveness",
             "application-liveness",
-            "successor-activation-catch-up-production-refinement",
+            "successor-activation-starvation-freedom",
+            "successor-activation-exact-recovery-production-refinement",
         ),
     }
     assert module._proof_status_dependency_errors(ledger["obligations"]) == []
@@ -173,6 +318,34 @@ def test_every_declared_proof_dependency_fails_closed_on_early_promotion() -> No
                 f"proof obligation {dependent_id} cannot be tlaps_proved before "
                 f"prerequisite {prerequisite_id} is tlaps_proved"
             ) in errors
+
+
+@pytest.mark.parametrize(
+    "dependent_id",
+    (
+        "post-gst-deadlock-freedom",
+        "protected-service-rank",
+        "post-gst-starvation-freedom",
+        "timeout-view-liveness",
+        "rotating-leader-liveness",
+        "application-liveness",
+    ),
+)
+def test_fairness_consuming_proof_cannot_precede_action_refinement(
+    dependent_id: str,
+) -> None:
+    module = load_checker()
+    obligations = copy.deepcopy(module.load_ledger()["obligations"])
+    by_id = {item["id"]: item for item in obligations}
+    by_id[dependent_id]["status"] = "tlaps_proved"
+    by_id["async-fair-action-refinement"]["status"] = "specified_unproved"
+
+    errors = module._proof_status_dependency_errors(obligations)
+
+    assert (
+        f"proof obligation {dependent_id} cannot be tlaps_proved before "
+        "prerequisite async-fair-action-refinement is tlaps_proved"
+    ) in errors
 
 
 def test_historical_tc_lock_commit_exception_is_exact_and_wal_backed() -> None:
@@ -342,7 +515,8 @@ def test_temporal_proof_promotions_require_prerequisites_and_ledger_order() -> N
         for prerequisite_id in (
             "rotating-leader-liveness",
             "application-liveness",
-            "successor-activation-catch-up-production-refinement",
+            "successor-activation-starvation-freedom",
+            "successor-activation-exact-recovery-production-refinement",
         ):
             assert (
                 f"proof obligation {dependent_id} cannot be tlaps_proved before "
@@ -368,6 +542,25 @@ def test_temporal_proof_promotions_require_prerequisites_and_ledger_order() -> N
     assert (
         "proof obligation post-gst-starvation-freedom must appear after "
         "prerequisite protected-service-rank"
+    ) in errors
+
+    obligations = copy.deepcopy(module.load_ledger()["obligations"])
+    fair = next(
+        obligation
+        for obligation in obligations
+        if obligation["id"] == "async-fair-action-refinement"
+    )
+    obligations.remove(fair)
+    protected_rank_index = next(
+        index
+        for index, obligation in enumerate(obligations)
+        if obligation["id"] == "protected-service-rank"
+    )
+    obligations.insert(protected_rank_index + 1, fair)
+    errors = module._proof_status_dependency_errors(obligations)
+    assert (
+        "proof obligation protected-service-rank must appear after "
+        "prerequisite async-fair-action-refinement"
     ) in errors
 
     for dependent_id, prerequisite_id in (
@@ -421,7 +614,11 @@ def test_temporal_proof_promotions_require_prerequisites_and_ledger_order() -> N
         ) in errors
         assert (
             f"proof obligation {dependent_id} must appear after prerequisite "
-            "successor-activation-catch-up-production-refinement"
+            "successor-activation-starvation-freedom"
+        ) in errors
+        assert (
+            f"proof obligation {dependent_id} must appear after prerequisite "
+            "successor-activation-exact-recovery-production-refinement"
         ) in errors
 
 
@@ -626,8 +823,23 @@ def test_release_module_list_covers_every_present_module_with_theorems() -> None
         for name in module.RELEASE_PROOF_MODULES
         if (module.FORMAL_DIR / f"{name}.tla").is_file()
     }
+    source_fidelity_theorem_modules: set[str] = set()
+    async_source = module.strip_tla_comments(
+        (module.FORMAL_DIR / "SumeragiV2AsyncNetwork.tla").read_text()
+    )
+    async_theorems = tuple(
+        re.findall(
+            r"(?m)^[ \t]*(?:LOCAL[ \t]+)?"
+            r"(?:THEOREM|LEMMA|COROLLARY|PROPOSITION)[ \t]+"
+            r"([A-Za-z_][A-Za-z0-9_]*)\b",
+            async_source,
+        )
+    )
 
-    assert theorem_modules == present_release_modules
+    assert theorem_modules == (
+        present_release_modules | source_fidelity_theorem_modules
+    )
+    assert async_theorems == ()
 
 
 def test_async_production_model_and_proofs_are_ci_gated() -> None:
@@ -644,6 +856,15 @@ def test_async_production_model_and_proofs_are_ci_gated() -> None:
     assert "SumeragiV2TimeoutWireAuthorization" in module.REQUIRED_MODEL_MODULES
     assert "SumeragiV2TemporalLemmas" in module.RELEASE_PROOF_MODULES
     assert "SumeragiV2ServiceRankLemmas" in module.RELEASE_PROOF_MODULES
+    assert "SumeragiV2EffectiveLockAcquisition" in module.REQUIRED_MODEL_MODULES
+    assert (
+        "SumeragiV2EffectiveLockAcquisitionProofs"
+        in module.RELEASE_PROOF_MODULES
+    )
+    assert (
+        "SumeragiV2AsyncFairnessRefinementProofs"
+        in module.RELEASE_PROOF_MODULES
+    )
     assert "SumeragiV2AsyncLivenessProofs" in module.RELEASE_PROOF_MODULES
     assert "SumeragiTimeoutIngressGuardTest" in module.RELEASE_PROOF_MODULES
     assert "SumeragiV2TimeoutDurability" in module.RELEASE_PROOF_MODULES
@@ -661,9 +882,15 @@ def test_first_release_type_and_height_debt_targets_are_pinned() -> None:
     expected_status = {
         "timeout-wire-authorization": "tlaps_proved",
         "historical-tc-lock-commit": "tlaps_proved",
-        "effective-lock-body-acquisition": "specified_unproved",
+        "effective-lock-body-acquisition-model": "specified_unproved",
+        "effective-lock-body-acquisition-production-refinement": (
+            "specified_unproved"
+        ),
         "async-type-invariant": "specified_unproved",
-        "successor-activation-catch-up-production-refinement": "specified_unproved",
+        "successor-activation-starvation-freedom": "specified_unproved",
+        "successor-activation-exact-recovery-production-refinement": (
+            "specified_unproved"
+        ),
         "genesis-height-successor-handoff": "specified_unproved",
         "height-liveness": "specified_unproved",
     }
@@ -685,22 +912,43 @@ def test_first_release_type_and_height_debt_targets_are_pinned() -> None:
     )
 
 
-def test_effective_lock_body_composition_remains_explicit_debt() -> None:
+def test_effective_lock_body_model_and_production_refinement_remain_separate_debt() -> None:
     module = load_checker()
     ledger = module.load_ledger()
     by_id = {obligation["id"]: obligation for obligation in ledger["obligations"]}
 
-    composition = by_id["effective-lock-body-acquisition"]
-    assert composition == {
-        "id": "effective-lock-body-acquisition",
-        "requirement": composition["requirement"],
+    model = by_id["effective-lock-body-acquisition-model"]
+    assert model == {
+        "id": "effective-lock-body-acquisition-model",
+        "requirement": model["requirement"],
+        "module": "SumeragiV2EffectiveLockAcquisitionProofs",
+        "symbol": "EffectiveLockAcquisitionModelObligation",
+        "status": "specified_unproved",
+    }
+    model_source = (
+        module.FORMAL_DIR / "SumeragiV2EffectiveLockAcquisitionProofs.tla"
+    ).read_text()
+    model_theorem = module._top_level_theorem_body(
+        model_source, "EffectiveLockAcquisitionModelObligation"
+    )
+    assert model_theorem is not None
+    assert "AcquisitionSpec" in model_theorem[0]
+    assert "EffectiveLockAcquisitionProgress" in model_theorem[0]
+    assert "StableEffectiveLockDelivery" in model_theorem[0]
+
+    refinement = by_id[
+        "effective-lock-body-acquisition-production-refinement"
+    ]
+    assert refinement == {
+        "id": "effective-lock-body-acquisition-production-refinement",
+        "requirement": refinement["requirement"],
         "module": "SumeragiV2AsyncLivenessProofs",
-        "symbol": "EffectiveLockBodyAcquisitionCompositionObligation",
+        "symbol": "EffectiveLockBodyAcquisitionProductionRefinementObligation",
         "status": "specified_unproved",
     }
     source = (module.FORMAL_DIR / "SumeragiV2AsyncLivenessProofs.tla").read_text()
     theorem = module._top_level_theorem_body(
-        source, "EffectiveLockBodyAcquisitionCompositionObligation"
+        source, "EffectiveLockBodyAcquisitionProductionRefinementObligation"
     )
     assert theorem is not None
     statement = theorem[0].strip()
@@ -714,31 +962,67 @@ def test_effective_lock_body_composition_remains_explicit_debt() -> None:
         assert f"{proposition} = TRUE" in source
 
 
-def test_successor_activation_and_catch_up_refinement_remains_explicit_debt() -> None:
+def test_successor_activation_and_exact_recovery_refinement_remains_explicit_debt() -> None:
     module = load_checker()
     ledger = module.load_ledger()
     by_id = {obligation["id"]: obligation for obligation in ledger["obligations"]}
 
-    obligation = by_id["successor-activation-catch-up-production-refinement"]
+    obligation = by_id[
+        "successor-activation-exact-recovery-production-refinement"
+    ]
     assert obligation["module"] == "SumeragiV2ChainEpochRefinement"
     assert (
         obligation["symbol"]
-        == "SuccessorActivationAndHistoricalCatchUpProductionRefinementObligation"
+        == "SuccessorActivationAndExactHistoricalRecoveryProductionRefinementObligation"
     )
     assert obligation["status"] == "specified_unproved"
 
     source = (module.FORMAL_DIR / "SumeragiV2ChainEpochRefinement.tla").read_text()
     theorem = module._top_level_theorem_body(
         source,
-        "SuccessorActivationAndHistoricalCatchUpProductionRefinementObligation",
+        "SuccessorActivationAndExactHistoricalRecoveryProductionRefinementObligation",
     )
     assert theorem is not None
     assert "IndexedChainSpec" in theorem[0]
     assert (
-        "SuccessorActivationAndHistoricalCatchUpProductionRefinementInvariant"
+        "SuccessorActivationAndExactHistoricalRecoveryProductionRefinementInvariant"
         in theorem[0]
     )
     assert module._chain_source_fidelity_errors(module.FORMAL_DIR) == []
+
+
+def test_successor_activation_starvation_freedom_remains_explicit_debt() -> None:
+    module = load_checker()
+    ledger = module.load_ledger()
+    by_id = {obligation["id"]: obligation for obligation in ledger["obligations"]}
+
+    assert all("catch-up" not in obligation_id for obligation_id in by_id)
+    obligation = by_id["successor-activation-starvation-freedom"]
+    assert obligation["module"] == "SumeragiV2SuccessorActivationRefinementProofs"
+    assert obligation["symbol"] == "SuccessorActivationStarvationFreedomObligation"
+    assert obligation["status"] == "specified_unproved"
+
+    source = (
+        module.FORMAL_DIR / "SumeragiV2SuccessorActivationRefinementProofs.tla"
+    ).read_text(encoding="utf-8")
+    theorem = module._top_level_theorem_body(
+        source, "SuccessorActivationStarvationFreedomObligation"
+    )
+    assert theorem is not None
+    statement = " ".join(theorem[0].split())
+    assert statement == (
+        "IndexedChainSpec "
+        "=> /\\ SuccessorActivationPendingStructureProperty "
+        "/\\ SuccessorActivationStepDecreasesRankProperty "
+        "/\\ SuccessorActivationPendingIsNotOrphanedProperty "
+        "/\\ SuccessorActivationOutcomeIsStableProperty "
+        "/\\ SuccessorActivationRankProgressProperty "
+        "/\\ SuccessorActivationStarvationFreedomProperty"
+    )
+    assert (
+        module._successor_activation_rank_source_fidelity_errors(module.FORMAL_DIR)
+        == []
+    )
 
 
 @pytest.mark.parametrize(
@@ -1009,6 +1293,23 @@ def test_release_obligations_are_bound_to_direct_production_specs() -> None:
         "TimeoutViewProgressObligation must state only" in error for error in errors
     )
 
+    candidate_only_rank_sources = dict(sources)
+    candidate_only_rank_sources["SumeragiV2AsyncLivenessProofs"] = (
+        liveness_source.replace(
+            "ProtectedServiceRanksProgressProperty(AsyncSpecAt(initialContext))",
+            "ProtectedServiceRankProgressProperty(AsyncSpecAt(initialContext))",
+            1,
+        )
+    )
+    errors = module._proof_obligation_architecture_errors(
+        obligations, candidate_only_rank_sources
+    )
+    assert any(
+        "ProtectedServiceRankProgressObligation must state only" in error
+        and "ProtectedServiceRanksProgressProperty" in error
+        for error in errors
+    )
+
     global_barrier_sources = dict(sources)
     global_barrier_sources["SumeragiV2ChainEpochProofs"] = chain_source.replace(
         "ChainPrefixProperty(ChainEpochSpec)",
@@ -1020,6 +1321,37 @@ def test_release_obligations_are_bound_to_direct_production_specs() -> None:
     )
     assert any("ChainPrefixObligation must state only" in error for error in errors)
     assert any("legacy global-barrier operator Spec" in error for error in errors)
+
+
+def test_protected_service_rank_contract_cannot_drop_serve_fifo_rank(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    formal_dir = copy_async_source_fidelity_fixture(
+        tmp_path,
+        module,
+        "proof_coverage.json",
+        "SumeragiV2AsyncLivenessProofs.tla",
+        "SumeragiV2LivenessProofs.tla",
+    )
+    path = formal_dir / "SumeragiV2LivenessProofs.tla"
+    source = path.read_text(encoding="utf-8")
+    path.write_text(
+        mutate_tla_operator(
+            source,
+            "ProtectedServiceRanksProgressProperty",
+            "/\\ ProtectedServeRankProgressProperty(specification)",
+            "/\\ TRUE",
+        ),
+        encoding="utf-8",
+    )
+
+    errors = module._async_proof_architecture_errors(formal_dir)
+
+    assert any(
+        "ProtectedServiceRanksProgressProperty must equal only" in error
+        for error in errors
+    ), errors
 
 
 def test_async_release_requires_checked_type_closure_and_step_refinement(
@@ -1486,7 +1818,9 @@ def test_verus_runner_records_output_without_masking_failures() -> None:
 
     assert "set -euo pipefail" in source
     assert "target/formal/sumeragi_v2/verus.log" in source
-    assert '2>&1 | tee "$VERUS_LOG"' in source
+    assert '2>&1 | tee -a "$verus_log_tmp"' in source
+    assert 'verus_pipeline_status=("${PIPESTATUS[@]}")' in source
+    assert "sumeragi_v2_verus_evidence.py" in source
 
 
 def test_tla_shortcut_scan_rejects_unchecked_constructs_but_allows_proof_assume(
@@ -1656,7 +1990,18 @@ def test_async_deductive_and_finite_specs_cannot_be_conflated(tmp_path: Path) ->
     module = load_checker()
     formal_dir = tmp_path / "formal"
     formal_dir.mkdir()
+    (formal_dir / "SumeragiV2Core.tla").write_text(
+        "---- MODULE SumeragiV2Core ----\n"
+        "vars == <<coreState>>\n"
+        "=============================================================================\n",
+        encoding="utf-8",
+    )
     canonical = """---- MODULE SumeragiV2AsyncNetwork ----
+AsyncSchedulerVars == <<schedulerState>>
+AsyncRecoveryVars == <<recoveryPhase, recoveryQueue>>
+AsyncAllVars == <<vars, AsyncSchedulerVars, AsyncRecoveryVars>>
+AsyncFairnessAt(initialContext) == WF_AsyncAllVars(AsyncNext)
+AsyncFairness == AsyncFairnessAt(ContextRecord(0, <<>>))
 AsyncBaseInitAt(initialContext) == TRUE
 AsyncBaseInit == AsyncBaseInitAt(ContextRecord(0, <<>>))
 AsyncInitAt(initialContext) == AsyncBaseInitAt(initialContext) /\\ ViewDomain = Nat
@@ -1683,6 +2028,120 @@ AsyncFiniteSpecAt(initialContext) == AsyncFiniteInitAt(initialContext) /\\ [][As
     )
     errors = module._async_spec_shape_errors(formal_dir)
     assert any("AsyncSpec must equal only" in error for error in errors)
+
+
+@pytest.mark.parametrize(
+    ("symbol", "old", "new", "expected_error"),
+    (
+        (
+            "AsyncAllVars",
+            "<<vars, AsyncSchedulerVars, AsyncRecoveryVars>>",
+            "<<vars, AsyncSchedulerVars>>",
+            "AsyncAllVars must equal only",
+        ),
+        (
+            "AsyncAllVars",
+            "<<vars, AsyncSchedulerVars, AsyncRecoveryVars>>",
+            "<<vars, AsyncRecoveryVars, AsyncSchedulerVars>>",
+            "AsyncAllVars must equal only",
+        ),
+        (
+            "AsyncAllVars",
+            "<<vars, AsyncSchedulerVars, AsyncRecoveryVars>>",
+            "<<coreState, schedulerState, recoveryPhase, recoveryQueue>>",
+            "AsyncAllVars must equal only",
+        ),
+        (
+            "AsyncFiniteSpec",
+            "AsyncFiniteInit /\\ [][AsyncNext]_AsyncAllVars /\\ AsyncFairness",
+            "AsyncFiniteInit /\\ [][AsyncNext]_AsyncTlcAllVars /\\ AsyncFairness",
+            "AsyncFiniteSpec must equal only",
+        ),
+        (
+            "AsyncFiniteSpec",
+            "AsyncFiniteInit /\\ [][AsyncNext]_AsyncAllVars /\\ AsyncFairness",
+            "AsyncFiniteInit /\\ [][AsyncNext]_AsyncAllVars /\\ AsyncTlcFairness",
+            "AsyncFiniteSpec must equal only",
+        ),
+        (
+            "AsyncFiniteSpecAt",
+            "/\\ AsyncFairnessAt(initialContext)",
+            "/\\ AsyncFairness",
+            "AsyncFiniteSpecAt must equal only",
+        ),
+        (
+            "AsyncFairnessAt",
+            "WF_AsyncAllVars(AsyncSetGST)",
+            "WF_AsyncTlcAllVars(AsyncSetGST)",
+            "AsyncFairnessAt may use only the public AsyncAllVars subscript",
+        ),
+        (
+            "AsyncSpec",
+            "AsyncInit /\\ [][AsyncNext]_AsyncAllVars /\\ AsyncFairness",
+            "AsyncInit /\\ [][AsyncNext]_AsyncTlcAllVars /\\ AsyncFairness",
+            "AsyncSpec must equal only",
+        ),
+    ),
+)
+def test_async_canonical_spec_surface_mutations_fail_closed(
+    tmp_path: Path,
+    symbol: str,
+    old: str,
+    new: str,
+    expected_error: str,
+) -> None:
+    module = load_checker()
+    formal_dir = tmp_path / "formal"
+    formal_dir.mkdir()
+    for name in ("SumeragiV2Core.tla", "SumeragiV2AsyncNetwork.tla"):
+        shutil.copyfile(module.FORMAL_DIR / name, formal_dir / name)
+    path = formal_dir / "SumeragiV2AsyncNetwork.tla"
+    source = path.read_text(encoding="utf-8")
+    path.write_text(
+        mutate_tla_operator(source, symbol, old, new),
+        encoding="utf-8",
+    )
+
+    errors = module._async_spec_shape_errors(formal_dir)
+
+    assert any(expected_error in error for error in errors), errors
+
+
+@pytest.mark.parametrize(
+    "duplicate",
+    (
+        "AsyncTlcAllVars == AsyncAllVars",
+        "AsyncTlcFairnessAt(initialContext) == AsyncFairnessAt(initialContext)",
+        "AsyncTlcFairness == AsyncFairness",
+    ),
+)
+def test_async_tlc_only_duplicate_aliases_are_prohibited(
+    tmp_path: Path,
+    duplicate: str,
+) -> None:
+    module = load_checker()
+    formal_dir = tmp_path / "formal"
+    formal_dir.mkdir()
+    for name in ("SumeragiV2Core.tla", "SumeragiV2AsyncNetwork.tla"):
+        shutil.copyfile(module.FORMAL_DIR / name, formal_dir / name)
+    path = formal_dir / "SumeragiV2AsyncNetwork.tla"
+    source = path.read_text(encoding="utf-8")
+    path.write_text(
+        source.replace(
+            "AsyncFairnessAt(initialContext) ==",
+            f"{duplicate}\n\nAsyncFairnessAt(initialContext) ==",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    errors = module._async_spec_shape_errors(formal_dir)
+
+    symbol = duplicate.split(" ", 1)[0].split("(", 1)[0]
+    assert any(
+        f"TLC-only duplicate {symbol} is prohibited" in error
+        for error in errors
+    ), errors
 
 
 def test_generalized_core_init_cannot_regress_to_genesis_only_or_invalid_lineage(
@@ -1778,7 +2237,7 @@ def test_async_source_fidelity_rejects_old_progress_shortcuts(tmp_path: Path) ->
             "       CommitCertificateRequestOutbox(node))\n",
             "  /\\ UNCHANGED <<asyncSentItems, asyncRetainedControl,\n"
             "                  asyncActiveRequests, asyncTransport>>\n",
-            "DirectCommitCertificateDiscoveryStep omits required production behavior",
+            "CommitCertificateDiscoveryStepWork omits required production behavior",
         ),
     )
     for needle, replacement_text, expected_error in mutations:
@@ -2148,7 +2607,10 @@ def test_async_source_fidelity_requires_post_apply_historical_recovery(
 
     errors = module._async_source_fidelity_errors(formal_dir)
     assert any("AsyncStepRefinesCore must equal only" in error for error in errors)
-    assert any("RunNode omits required production behavior" in error for error in errors)
+    assert any(
+        "RunNodeWork omits required production behavior" in error
+        for error in errors
+    )
     assert any("AsyncFairnessAt omits required production behavior" in error for error in errors)
 
 
@@ -2424,6 +2886,67 @@ def test_async_source_fidelity_pins_exact_restart_fifo_and_decision_frontier(
             "    NodeHasApplication(node) => RestartSignatureReplay(node) = <<>>",
             "AppliedRecoverySchedulesNoSameHeightWork must state only",
         ),
+        (
+            "SumeragiV2AsyncLivenessProofs.tla",
+            "BY AsyncEligibleReadyLeadsToGstOrRecovery,\n"
+            "   AsyncSpecAlwaysStrongTypeInvariant,\n"
+            "   AsyncRecoveryCycleAtBudgetStep, SMTT(45), Isa, PTL",
+            "BY AsyncEligibleReadyLeadsToGstOrRecovery,\n"
+            "   AsyncRecoveryCycleAtBudgetStep, SMTT(45), Isa, PTL",
+            "AsyncRecoveryEligibleAtBudgetLeadsLowerCycleOrRequired proof "
+            "must cite AsyncSpecAlwaysStrongTypeInvariant",
+        ),
+        (
+            "SumeragiV2AsyncLivenessProofs.tla",
+            "BY AsyncRecoveredReadyLeadsToGstOrEligible,\n"
+            "   AsyncSpecAlwaysStrongTypeInvariant,\n"
+            "   AsyncRecoveryCycleAtBudgetStep, SMTT(45), Isa, PTL",
+            "BY AsyncRecoveredReadyLeadsToGstOrEligible,\n"
+            "   AsyncRecoveryCycleAtBudgetStep, SMTT(45), Isa, PTL",
+            "AsyncRecoveryRecoveredAtBudgetLeadsLowerCycleOrEligible proof "
+            "must cite AsyncSpecAlwaysStrongTypeInvariant",
+        ),
+        (
+            "SumeragiV2AsyncLivenessProofs.tla",
+            "BY AsyncRecoveryReplayLeadsToRecoveredReady,\n"
+            "   AsyncSpecAlwaysStrongTypeInvariant,\n"
+            "   AsyncRecoveryCycleAtBudgetStep, SMTT(45), Isa, PTL",
+            "BY AsyncRecoveryReplayLeadsToRecoveredReady,\n"
+            "   AsyncRecoveryCycleAtBudgetStep, SMTT(45), Isa, PTL",
+            "AsyncRecoveryReplayAtBudgetLeadsLowerCycleOrRecovered proof "
+            "must cite AsyncSpecAlwaysStrongTypeInvariant",
+        ),
+        (
+            "SumeragiV2AsyncLivenessProofs.tla",
+            "BY AsyncRecoverySignatureDrainObligation,\n"
+            "   AsyncSpecAlwaysStrongTypeInvariant,\n"
+            "   AsyncRecoveryCycleAtBudgetStep, SMTT(45), Isa, PTL",
+            "BY AsyncRecoverySignatureDrainObligation,\n"
+            "   AsyncRecoveryCycleAtBudgetStep, SMTT(45), Isa, PTL",
+            "AsyncRecoveryReplayingAtBudgetLeadsLowerCycleOrRecovered proof "
+            "must cite AsyncSpecAlwaysStrongTypeInvariant",
+        ),
+        (
+            "SumeragiV2AsyncLivenessProofs.tla",
+            "BY AsyncEligibleReadyLeadsToGstOrRecovery,\n"
+            "   AsyncSpecAlwaysStrongTypeInvariant,\n"
+            "   AsyncRecoveryCycleAtBudgetStep, SMTT(45), Isa, PTL",
+            "BY AsyncEligibleReadyLeadsToGstOrRecovery,\n"
+            "   AsyncSpecAlwaysStrongTypeInvariant, SMTT(45), Isa, PTL",
+            "AsyncRecoveryEligibleAtBudgetLeadsLowerCycleOrRequired proof "
+            "must cite AsyncRecoveryCycleAtBudgetStep",
+        ),
+        (
+            "SumeragiV2AsyncLivenessProofs.tla",
+            "BY AsyncEligibleReadyLeadsToGstOrRecovery,\n"
+            "   AsyncSpecAlwaysStrongTypeInvariant,\n"
+            "   AsyncRecoveryCycleAtBudgetStep, SMTT(45), Isa, PTL",
+            "BY AsyncEligibleReadyLeadsToGstOrRecovery,\n"
+            "   (* AsyncSpecAlwaysStrongTypeInvariant *)\n"
+            "   AsyncRecoveryCycleAtBudgetStep, SMTT(45), Isa, PTL",
+            "AsyncRecoveryEligibleAtBudgetLeadsLowerCycleOrRequired proof "
+            "must cite AsyncSpecAlwaysStrongTypeInvariant",
+        ),
     )
     for name, needle, replacement, expected_error in mutations:
         source = sources[name]
@@ -2471,10 +2994,11 @@ def test_async_source_fidelity_pins_recovery_quarantine_rearm_and_fairness(
             "AsyncSetGST must equal only",
         ),
         (
-            "     /\\ UNCHANGED <<up, AsyncRecoveryVars>>\n\n"
+            "     /\\ AsyncNonCrashOuterFrame\n\n"
             "ResponsiveReplayServiceIoWorker ==",
             "\nResponsiveReplayServiceIoWorker ==",
-            "ResponsiveReplayRunNode omits required production behavior",
+            "fair action ResponsiveReplayRunNode must use exactly one "
+            "AsyncNonCrashOuterFrame",
         ),
         (
             "  /\\ WF_AsyncAllVars(ResponsiveReplayRunNode)\n",
@@ -2511,7 +3035,7 @@ def test_async_source_fidelity_pins_recovery_quarantine_rearm_and_fairness(
         (
             "          /\\ asyncIngressReady[node] = <<>>\n",
             "",
-            "RunNode omits required production behavior",
+            "RunNodeWork omits required production behavior",
         ),
         (
             "     /\\ ~ResponsiveReplayQuarantined(recipient)\n"
@@ -2553,6 +3077,393 @@ def test_async_source_fidelity_pins_recovery_quarantine_rearm_and_fairness(
             errors,
         )
         path.write_text(source, encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    ("symbol", "old", "new"),
+    (
+        (
+            "AsyncCoreOuterFrame",
+            "UNCHANGED <<height, context>>",
+            "UNCHANGED height",
+        ),
+        (
+            "AsyncNonCrashOuterFrame",
+            "/\\ UNCHANGED AsyncRecoveryVars",
+            "/\\ UNCHANGED AsyncSchedulerVars",
+        ),
+        (
+            "AsyncNonRunnerOuterFrame",
+            "/\\ UNCHANGED asyncNodeServiceDeadlines",
+            "/\\ UNCHANGED asyncIoServiceDeadlines",
+        ),
+        (
+            "AsyncRecoveryOuterFrame",
+            "/\\ UNCHANGED up",
+            "/\\ UNCHANGED AsyncRecoveryVars",
+        ),
+    ),
+)
+def test_async_source_fidelity_pins_exact_outer_frame_helpers(
+    tmp_path: Path,
+    symbol: str,
+    old: str,
+    new: str,
+) -> None:
+    module = load_checker()
+    formal_dir = copy_async_source_fidelity_fixture(
+        tmp_path,
+        module,
+        "SumeragiV2AsyncNetwork.tla",
+        "SumeragiV2Core.tla",
+    )
+    path = formal_dir / "SumeragiV2AsyncNetwork.tla"
+    source = path.read_text(encoding="utf-8")
+    path.write_text(
+        mutate_tla_operator(source, symbol, old, new),
+        encoding="utf-8",
+    )
+
+    errors = module._async_source_fidelity_errors(formal_dir)
+
+    assert any(f"{symbol} must equal only" in error for error in errors), errors
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    (
+        ("  \\/ AsyncTick\n", ""),
+        (
+            "  \\/ (\\E node \\in Responsive:\n"
+            "        PostGstOpenHistoricalRecovery(node))",
+            "  \\/ (\\E node \\in ValidatorIds:\n"
+            "        PostGstOpenHistoricalRecovery(node))",
+        ),
+        (
+            "  \\/ (\\E recipient \\in ValidatorIds, source \\in ValidatorIds:\n"
+            "        PostGstAdmitHistoricalRecoveryPacket(recipient, source))",
+            "",
+        ),
+    ),
+)
+def test_async_source_fidelity_pins_exact_fair_action_union(
+    tmp_path: Path,
+    old: str,
+    new: str,
+) -> None:
+    module = load_checker()
+    formal_dir = copy_async_source_fidelity_fixture(
+        tmp_path,
+        module,
+        "SumeragiV2AsyncNetwork.tla",
+        "SumeragiV2Core.tla",
+    )
+    path = formal_dir / "SumeragiV2AsyncNetwork.tla"
+    source = path.read_text(encoding="utf-8")
+    path.write_text(
+        mutate_tla_operator(source, "AsyncFairActionAt", old, new),
+        encoding="utf-8",
+    )
+
+    errors = module._async_source_fidelity_errors(formal_dir)
+
+    assert any(
+        "AsyncFairActionAt must equal only" in error for error in errors
+    ), errors
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    (
+        (
+            "AsyncFairActionAt(initialContext) => AsyncNext",
+            "AsyncFairActionAt(initialContext) => TRUE",
+        ),
+        (
+            "\\A initialContext \\in ContextRecords:",
+            "\\A initialContext \\in Views:",
+        ),
+        (
+            "/\\ AsyncSchedulerTypeInvariant",
+            "/\\ TRUE",
+        ),
+    ),
+)
+def test_async_source_fidelity_pins_fair_action_refinement_claim(
+    tmp_path: Path,
+    old: str,
+    new: str,
+) -> None:
+    module = load_checker()
+    formal_dir = copy_async_source_fidelity_fixture(
+        tmp_path,
+        module,
+        "SumeragiV2AsyncNetwork.tla",
+        "SumeragiV2Core.tla",
+    )
+    path = formal_dir / "SumeragiV2AsyncNetwork.tla"
+    source = path.read_text(encoding="utf-8")
+    path.write_text(
+        mutate_tla_operator(
+            source,
+            "AsyncFairActionsRefineAsyncNext",
+            old,
+            new,
+        ),
+        encoding="utf-8",
+    )
+
+    errors = module._async_source_fidelity_errors(formal_dir)
+
+    assert any(
+        "AsyncFairActionsRefineAsyncNext must equal only" in error
+        for error in errors
+    ), errors
+
+
+def test_async_source_fidelity_rejects_a_second_model_local_theorem(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    formal_dir = copy_async_source_fidelity_fixture(
+        tmp_path,
+        module,
+        "SumeragiV2AsyncNetwork.tla",
+        "SumeragiV2Core.tla",
+    )
+    path = formal_dir / "SumeragiV2AsyncNetwork.tla"
+    source = path.read_text(encoding="utf-8")
+    path.write_text(
+        source.replace(
+            "\nAsyncFairnessAt(initialContext) ==",
+            "\nTHEOREM UnreviewedAsyncEscape == TRUE\n"
+            "BY OBVIOUS\n\n"
+            "AsyncFairnessAt(initialContext) ==",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    errors = module._async_source_fidelity_errors(formal_dir)
+
+    assert any(
+        "must declare exactly the reviewed local theorem inventory" in error
+        and "UnreviewedAsyncEscape" in error
+        for error in errors
+    ), errors
+
+
+def test_async_source_fidelity_pins_fairness_refinement_proof_statement(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    formal_dir = copy_async_source_fidelity_fixture(
+        tmp_path,
+        module,
+        "SumeragiV2AsyncNetwork.tla",
+        "SumeragiV2AsyncFairnessRefinementProofs.tla",
+        "SumeragiV2Core.tla",
+    )
+    path = formal_dir / "SumeragiV2AsyncFairnessRefinementProofs.tla"
+    source = path.read_text(encoding="utf-8")
+    path.write_text(
+        mutate_tla_theorem(
+            source,
+            "AsyncFairActionsRefineAsyncNextObligation",
+            "AsyncFairActionAt(initialContext) => AsyncNext",
+            "AsyncFairActionAt(initialContext) => TRUE",
+        ),
+        encoding="utf-8",
+    )
+
+    errors = module._async_source_fidelity_errors(formal_dir)
+
+    assert any(
+        "AsyncFairActionsRefineAsyncNextObligation must state only" in error
+        for error in errors
+    ), errors
+
+
+def test_async_source_fidelity_rejects_unreviewed_fairness_proof_theorem(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    formal_dir = copy_async_source_fidelity_fixture(
+        tmp_path,
+        module,
+        "SumeragiV2AsyncNetwork.tla",
+        "SumeragiV2AsyncFairnessRefinementProofs.tla",
+        "SumeragiV2Core.tla",
+    )
+    path = formal_dir / "SumeragiV2AsyncFairnessRefinementProofs.tla"
+    source = path.read_text(encoding="utf-8")
+    path.write_text(
+        source.replace(
+            "\nTHEOREM AsyncFairActionsRefineAsyncNextObligation ==",
+            "\nTHEOREM UnreviewedFairnessEscape == TRUE\n"
+            "BY OBVIOUS\n\n"
+            "THEOREM AsyncFairActionsRefineAsyncNextObligation ==",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    errors = module._async_source_fidelity_errors(formal_dir)
+
+    assert any(
+        "fairness refinement proof must declare exactly the reviewed "
+        "theorem inventory" in error
+        and "UnreviewedFairnessEscape" in error
+        for error in errors
+    ), errors
+
+
+@pytest.mark.parametrize(
+    ("action", "expected_frame"),
+    (
+        ("PreGstResponsiveRestart", "AsyncCoreOuterFrame"),
+        ("PreGstResponsiveReplay", "AsyncCoreOuterFrame"),
+        ("ResponsiveReplayRunNode", "AsyncNonCrashOuterFrame"),
+        ("PostGstRunNode", "AsyncNonCrashOuterFrame"),
+        ("PostGstRunHistoricalRecoveryNode", "AsyncNonCrashOuterFrame"),
+        ("PostGstRunHistoricalServer", "AsyncNonCrashOuterFrame"),
+        ("DriveResponsiveReplayHead", "AsyncRecoveryOuterFrame"),
+        ("FinishResponsiveReplay", "AsyncRecoveryOuterFrame"),
+        ("AsyncSetGST", "AsyncNonRunnerOuterFrame"),
+        ("ResponsiveReplayServiceIoWorker", "AsyncNonRunnerOuterFrame"),
+        ("AsyncTick", "AsyncNonRunnerOuterFrame"),
+        ("PostGstOpenHistoricalRecovery", "AsyncNonRunnerOuterFrame"),
+        ("PostGstCommitCertificateDiscovery", "AsyncNonRunnerOuterFrame"),
+        (
+            "PostGstHistoricalCommitCertificateDiscovery",
+            "AsyncNonRunnerOuterFrame",
+        ),
+        ("PostGstServiceIoWorker", "AsyncNonRunnerOuterFrame"),
+        (
+            "PostGstServiceHistoricalRecoveryIoWorker",
+            "AsyncNonRunnerOuterFrame",
+        ),
+        ("PostGstAdmitHiddenPacket", "AsyncNonRunnerOuterFrame"),
+        (
+            "PostGstAdmitHistoricalRecoveryPacket",
+            "AsyncNonRunnerOuterFrame",
+        ),
+    ),
+)
+def test_async_source_fidelity_rejects_every_fair_action_frame_misclassification(
+    tmp_path: Path,
+    action: str,
+    expected_frame: str,
+) -> None:
+    module = load_checker()
+    formal_dir = copy_async_source_fidelity_fixture(
+        tmp_path,
+        module,
+        "SumeragiV2AsyncNetwork.tla",
+        "SumeragiV2Core.tla",
+    )
+    path = formal_dir / "SumeragiV2AsyncNetwork.tla"
+    source = path.read_text(encoding="utf-8")
+    wrong_frame = (
+        "AsyncNonRunnerOuterFrame"
+        if expected_frame == "AsyncRecoveryOuterFrame"
+        else "AsyncRecoveryOuterFrame"
+    )
+    path.write_text(
+        mutate_tla_operator(source, action, expected_frame, wrong_frame),
+        encoding="utf-8",
+    )
+
+    errors = module._async_source_fidelity_errors(formal_dir)
+
+    assert any(
+        f"fair action {action} must use exactly one {expected_frame}" in error
+        for error in errors
+    ), errors
+
+
+@pytest.mark.parametrize(
+    ("action", "expected_frame"),
+    (
+        ("PreGstResponsiveRestart", "AsyncCoreOuterFrame"),
+        ("ResponsiveReplayRunNode", "AsyncNonCrashOuterFrame"),
+        ("DriveResponsiveReplayHead", "AsyncRecoveryOuterFrame"),
+        ("AsyncTick", "AsyncNonRunnerOuterFrame"),
+    ),
+)
+def test_async_source_fidelity_rejects_deleted_fair_action_frames(
+    tmp_path: Path,
+    action: str,
+    expected_frame: str,
+) -> None:
+    module = load_checker()
+    formal_dir = copy_async_source_fidelity_fixture(
+        tmp_path,
+        module,
+        "SumeragiV2AsyncNetwork.tla",
+        "SumeragiV2Core.tla",
+    )
+    path = formal_dir / "SumeragiV2AsyncNetwork.tla"
+    source = path.read_text(encoding="utf-8")
+    path.write_text(
+        mutate_tla_operator(source, action, expected_frame, ""),
+        encoding="utf-8",
+    )
+
+    errors = module._async_source_fidelity_errors(formal_dir)
+
+    assert any(
+        f"fair action {action} must use exactly one {expected_frame}" in error
+        for error in errors
+    ), errors
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "expected_error"),
+    (
+        (
+            "WF_AsyncAllVars(AsyncSetGST)",
+            "WF_AsyncAllVars(AsyncFairAction(AsyncSetGST))",
+            "must name exactly the 18 canonical framed actions directly",
+        ),
+        (
+            "\\A node \\in AsyncVotersAt(initialContext):\n"
+            "       WF_AsyncAllVars(PostGstRunNode(node))",
+            "\\A node \\in Responsive:\n"
+            "       WF_AsyncAllVars(PostGstRunNode(node))",
+            "canonical domain for every fair action",
+        ),
+        (
+            "WF_AsyncAllVars(AsyncTick)",
+            "WF_AsyncAllVars(AsyncTick)\n"
+            "  /\\ WF_AsyncAllVars(AsyncSetGST)",
+            "must name exactly the 18 canonical framed actions directly",
+        ),
+    ),
+)
+def test_async_source_fidelity_pins_raw_fairness_inventory_and_domains(
+    tmp_path: Path,
+    old: str,
+    new: str,
+    expected_error: str,
+) -> None:
+    module = load_checker()
+    formal_dir = copy_async_source_fidelity_fixture(
+        tmp_path,
+        module,
+        "SumeragiV2AsyncNetwork.tla",
+        "SumeragiV2Core.tla",
+    )
+    path = formal_dir / "SumeragiV2AsyncNetwork.tla"
+    source = path.read_text(encoding="utf-8")
+    path.write_text(
+        mutate_tla_operator(source, "AsyncFairnessAt", old, new),
+        encoding="utf-8",
+    )
+
+    errors = module._async_source_fidelity_errors(formal_dir)
+
+    assert any(expected_error in error for error in errors), errors
 
 
 def test_async_source_fidelity_pins_restart_reset_and_retained_control(
@@ -2731,6 +3642,664 @@ def test_async_source_fidelity_requires_tc_commit_pool_reconstruction(
         errors = module._async_source_fidelity_errors(formal_dir)
         assert any(expected in error for error in errors)
         core_path.write_text(core_source, encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "expected_error"),
+    (
+        (
+            "  /\\ envelope \\in QcEnvelopeSet\n",
+            "",
+            "must retain the exact authenticated Commit/context/responsive-up/"
+            "idempotence guards",
+        ),
+        (
+            "  /\\ envelope.recipient \\in Responsive \\cap up\n",
+            "  /\\ envelope.recipient \\in ValidatorIds\n",
+            "must retain the exact authenticated Commit/context/responsive-up/"
+            "idempotence guards",
+        ),
+        (
+            "  /\\ envelope.qc \\in commitQCs\n",
+            "",
+            "must retain the exact authenticated Commit/context/responsive-up/"
+            "idempotence guards",
+        ),
+        (
+            "  /\\ envelope.qc.context = context\n",
+            "",
+            "must retain the exact authenticated Commit/context/responsive-up/"
+            "idempotence guards",
+        ),
+        (
+            "  /\\ envelope.qc.context = context\n",
+            "  /\\ envelope.qc.context \\in ContextRecords\n",
+            "must retain the exact authenticated Commit/context/responsive-up/"
+            "idempotence guards",
+        ),
+        (
+            '  /\\ envelope.qc.phase = "Commit"\n',
+            "",
+            "must retain the exact authenticated Commit/context/responsive-up/"
+            "idempotence guards",
+        ),
+        (
+            '  /\\ envelope.qc.phase = "Commit"\n',
+            "  /\\ envelope.qc.phase \\in Phases\n",
+            "must retain the exact authenticated Commit/context/responsive-up/"
+            "idempotence guards",
+        ),
+        (
+            "  /\\ QcWireValid(envelope.qc)\n",
+            "",
+            "must retain the exact authenticated Commit/context/responsive-up/"
+            "idempotence guards",
+        ),
+        (
+            "  /\\ envelope \\notin qcNetwork\n",
+            "",
+            "must retain the exact authenticated Commit/context/responsive-up/"
+            "idempotence guards",
+        ),
+        (
+            "  /\\ qcNetwork' = qcNetwork \\cup {envelope}\n",
+            "  /\\ qcNetwork' = qcNetwork \\cup QcEnvelopeSet\n",
+            "must write exactly one idempotent qcNetwork envelope insertion",
+        ),
+        (
+            "  /\\ qcNetwork' = qcNetwork \\cup {envelope}\n",
+            "  /\\ qcNetwork' = qcNetwork \\cup {envelope}\n"
+            "  /\\ gst' = gst\n",
+            "must write exactly one idempotent qcNetwork envelope insertion",
+        ),
+        (
+            "                 up, gst, availableBodies, durableBodies,\n",
+            "                 up, availableBodies, durableBodies,\n",
+            "must frame exactly the 45 non-qcNetwork Core variables",
+        ),
+        (
+            "                 voteNetwork, timeoutNetwork, tcNetwork, decisions, applied>>",
+            "                 voteNetwork, qcNetwork, timeoutNetwork, tcNetwork, decisions, applied>>",
+            "must frame exactly the 45 non-qcNetwork Core variables",
+        ),
+    ),
+)
+def test_core_commit_certificate_import_is_exact_and_fail_closed(
+    tmp_path: Path,
+    old: str,
+    new: str,
+    expected_error: str,
+) -> None:
+    module = load_checker()
+    formal_dir = copy_async_source_fidelity_fixture(
+        tmp_path,
+        module,
+        "SumeragiV2AsyncNetwork.tla",
+        "SumeragiV2Core.tla",
+    )
+    core_path = formal_dir / "SumeragiV2Core.tla"
+    source = core_path.read_text(encoding="utf-8")
+    operator_start = source.index("ImportAuthenticatedCommitCertificate(envelope) ==")
+    operator_end = source.index("\nDeliverQC(envelope) ==", operator_start)
+    mutation = source.find(old, operator_start, operator_end)
+    assert mutation >= 0, old
+    core_path.write_text(
+        source[:mutation] + new + source[mutation + len(old) :],
+        encoding="utf-8",
+    )
+
+    errors = module._async_source_fidelity_errors(formal_dir)
+
+    assert any(expected_error in error for error in errors), errors
+
+
+def test_core_next_must_expose_exact_commit_certificate_import_arm(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    formal_dir = copy_async_source_fidelity_fixture(
+        tmp_path,
+        module,
+        "SumeragiV2AsyncNetwork.tla",
+        "SumeragiV2Core.tla",
+    )
+    core_path = formal_dir / "SumeragiV2Core.tla"
+    source = core_path.read_text(encoding="utf-8")
+    arm = (
+        "  \\/ \\E envelope \\in QcEnvelopeSet:\n"
+        "       ImportAuthenticatedCommitCertificate(envelope)\n"
+    )
+    next_start = source.index("Next ==")
+    mutation = source.find(arm, next_start)
+    assert mutation >= 0
+    core_path.write_text(
+        source[:mutation] + source[mutation + len(arm) :], encoding="utf-8"
+    )
+
+    errors = module._async_source_fidelity_errors(formal_dir)
+
+    assert any(
+        "Core Next must expose the exact authenticated Commit-certificate import arm"
+        in error
+        for error in errors
+    ), errors
+
+
+@pytest.mark.parametrize(
+    ("symbol", "old", "new", "expected_error"),
+    (
+        (
+            "HistoricalRecoveryTarget",
+            "node \\in asyncHistoricalRecoveryTargets",
+            "node \\in ValidatorIds",
+            "HistoricalRecoveryTarget must equal only",
+        ),
+        (
+            "HistoricalRecoverySourceReady",
+            "  /\\ node \\in Responsive \\cap up\n",
+            "",
+            "HistoricalRecoverySourceReady must equal only",
+        ),
+        (
+            "HistoricalRecoverySourceReady",
+            "  /\\ ~NodeHasDecision(node)\n",
+            "",
+            "HistoricalRecoverySourceReady must equal only",
+        ),
+        (
+            "HistoricalRecoverySourceReady",
+            "  /\\ ~NodeHasApplication(node)\n",
+            "",
+            "HistoricalRecoverySourceReady must equal only",
+        ),
+        (
+            "HistoricalRecoverySourceReady",
+            "       NodeHasApplication(server)",
+            "       TRUE",
+            "HistoricalRecoverySourceReady must equal only",
+        ),
+        (
+            "OpenHistoricalRecovery",
+            "  /\\ gst\n",
+            "",
+            "OpenHistoricalRecovery must equal only",
+        ),
+        (
+            "OpenHistoricalRecovery",
+            "  /\\ HistoricalRecoverySourceReady(node)\n",
+            "",
+            "OpenHistoricalRecovery must equal only",
+        ),
+        (
+            "OpenHistoricalRecovery",
+            "  /\\ ~HistoricalRecoveryTarget(node)\n",
+            "",
+            "OpenHistoricalRecovery must equal only",
+        ),
+        (
+            "OpenHistoricalRecovery",
+            "       asyncHistoricalRecoveryTargets \\cup {node}",
+            "       asyncHistoricalRecoveryTargets \\cup Responsive",
+            "OpenHistoricalRecovery must equal only",
+        ),
+        (
+            "AsyncTransportInit",
+            "  /\\ asyncHistoricalRecoveryTargets = {}\n",
+            "",
+            "AsyncTransportInit omits required production behavior",
+        ),
+        (
+            "AsyncHistoricalRecoveryTypeInvariant",
+            "  /\\ asyncHistoricalRecoveryTargets \\subseteq Responsive \\cap up\n",
+            "",
+            "AsyncHistoricalRecoveryTypeInvariant must equal only",
+        ),
+        (
+            "AsyncHistoricalRecoveryTypeInvariant",
+            "  /\\ (asyncHistoricalRecoveryTargets # {} => gst)\n",
+            "",
+            "AsyncHistoricalRecoveryTypeInvariant must equal only",
+        ),
+        (
+            "AsyncHistoricalRecoveryTypeInvariant",
+            "  /\\ \\A node \\in asyncHistoricalRecoveryTargets:\n"
+            "       ~NodeHasApplication(node)",
+            "",
+            "AsyncHistoricalRecoveryTypeInvariant must equal only",
+        ),
+        (
+            "AsyncSchedulerTypeInvariant",
+            "  /\\ AsyncHistoricalRecoveryTypeInvariant\n",
+            "",
+            "AsyncSchedulerTypeInvariant omits required production behavior",
+        ),
+        (
+            "AsyncSchedulerVars",
+            "    asyncIngressLanes, asyncIngressReady, asyncHeldChunks,\n"
+            "    asyncHistoricalRecoveryTargets>>",
+            "    asyncIngressLanes, asyncIngressReady, asyncHeldChunks>>",
+            "AsyncSchedulerVars omits required production behavior",
+        ),
+        (
+            "AsyncSchedulerExceptHistoricalRecoveryTargets",
+            "    asyncIngressLanes, asyncIngressReady, asyncHeldChunks>>",
+            "    asyncIngressLanes, asyncIngressReady>>",
+            "historical recovery ownership must be one exact AsyncSchedulerVars component",
+        ),
+        (
+            "AsyncRunnerStep",
+            "  \\/ (\\E node \\in asyncHistoricalRecoveryTargets:\n"
+            "        RunHistoricalRecoveryNode(node))\n",
+            "",
+            "AsyncRunnerStep omits required production behavior",
+        ),
+        (
+            "RunHistoricalRecoveryNode",
+            "  /\\ HistoricalRecoveryTarget(node)\n",
+            "",
+            "RunHistoricalRecoveryNode must equal only",
+        ),
+        (
+            "AsyncNonRunnerStep",
+            "     \\/ (\\E node \\in ValidatorIds: OpenHistoricalRecovery(node))\n",
+            "",
+            "AsyncNonRunnerStep omits required production behavior",
+        ),
+        (
+            "AsyncNonRunnerStep",
+            "     \\/ (\\E node \\in asyncHistoricalRecoveryTargets:\n"
+            "           DirectHistoricalCommitCertificateDiscoveryStep(node))\n",
+            "",
+            "AsyncNonRunnerStep omits required production behavior",
+        ),
+        (
+            "AsyncNonRunnerStep",
+            "     \\/ (\\E node \\in asyncHistoricalRecoveryTargets:\n"
+            "           ServiceHistoricalRecoveryIoWorker(node))\n",
+            "",
+            "AsyncNonRunnerStep omits required production behavior",
+        ),
+        (
+            "AsyncNonRunnerStep",
+            "     \\/ (\\E node \\in asyncHistoricalRecoveryTargets:\n"
+            "           EnqueueHistoricalRecoveryIoLocalControl(node))\n",
+            "",
+            "AsyncNonRunnerStep omits required production behavior",
+        ),
+        (
+            "HistoricalCommitCertificateDiscoveryDue",
+            "  /\\ HistoricalRecoveryTarget(node)\n",
+            "",
+            "HistoricalCommitCertificateDiscoveryDue must equal only",
+        ),
+        (
+            "DirectHistoricalCommitCertificateDiscoveryStep",
+            "  /\\ HistoricalCommitCertificateDiscoveryDue(node)\n",
+            "",
+            "DirectHistoricalCommitCertificateDiscoveryStep must equal only",
+        ),
+        (
+            "ServiceHistoricalRecoveryIoWorker",
+            "  /\\ HistoricalRecoveryTarget(node)\n",
+            "",
+            "ServiceHistoricalRecoveryIoWorker must equal only",
+        ),
+        (
+            "EnqueueHistoricalRecoveryIoLocalControl",
+            "  /\\ HistoricalRecoveryTarget(node)\n",
+            "",
+            "EnqueueHistoricalRecoveryIoLocalControl must equal only",
+        ),
+        (
+            "CommitCertificateRequestAuthorized",
+            "       \\in CurrentVoters \\cup asyncHistoricalRecoveryTargets\n",
+            "       \\in CurrentVoters\n",
+            "CommitCertificateRequestAuthorized omits required production behavior",
+        ),
+        (
+            "AsyncTickEnabled",
+            "                       \\cup asyncHistoricalRecoveryTargets:\n",
+            ":\n",
+            "AsyncTickEnabled omits required production behavior",
+        ),
+        (
+            "HistoricalRecoveryPacketCorridor",
+            "  \\/ /\\ HistoricalRecoveryTarget(source)\n"
+            "        /\\ recipient \\in AsyncCurrentResponsiveVoters",
+            "",
+            "HistoricalRecoveryPacketCorridor must equal only",
+        ),
+        (
+            "CommitCertificateResponseAuthorized",
+            "  /\\ item.source \\in CurrentVoters\n",
+            "",
+            "CommitCertificateResponseAuthorized must equal only",
+        ),
+        (
+            "CommitCertificateResponseAuthorized",
+            "  /\\ item.envelope.qc \\in commitQCs\n",
+            "",
+            "CommitCertificateResponseAuthorized must equal only",
+        ),
+        (
+            "CommitCertificateResponseAuthorized",
+            "  /\\ item.envelope.qc.context = context\n",
+            "",
+            "CommitCertificateResponseAuthorized must equal only",
+        ),
+        (
+            "CommitCertificateResponseAuthorized",
+            '  /\\ item.envelope.qc.phase = "Commit"\n',
+            "",
+            "CommitCertificateResponseAuthorized must equal only",
+        ),
+        (
+            "CommitCertificateResponseAuthorized",
+            "  /\\ MatchingCommitCertificateRequests(item) # {}",
+            "  /\\ TRUE",
+            "CommitCertificateResponseAuthorized must equal only",
+        ),
+        (
+            "DrainFairIngressSelected",
+            "              /\\ item \\in asyncSentItems\n",
+            "",
+            "must import only an authorized, sent, not-yet-present Commit-certificate",
+        ),
+        (
+            "DrainFairIngressSelected",
+            "              /\\ CommitCertificateResponseAuthorized(item)\n",
+            "",
+            "must import only an authorized, sent, not-yet-present Commit-certificate",
+        ),
+        (
+            "DrainFairIngressSelected",
+            "              /\\ item.envelope \\notin qcNetwork\n",
+            "",
+            "must import only an authorized, sent, not-yet-present Commit-certificate",
+        ),
+        (
+            "DrainFairIngressSelected",
+            "        THEN ImportAuthenticatedCommitCertificate(item.envelope)\n",
+            "        THEN UNCHANGED vars\n",
+            "must import only an authorized, sent, not-yet-present Commit-certificate",
+        ),
+        (
+            "ExecuteApply",
+            "       asyncHistoricalRecoveryTargets \\ {command.node}",
+            "       asyncHistoricalRecoveryTargets",
+            "ExecuteApply must atomically retire only the applying node's historical recovery target",
+        ),
+        (
+            "ResetNodeSchedulerForRestart",
+            "  /\\ asyncHistoricalRecoveryTargets' =\n"
+            "       asyncHistoricalRecoveryTargets \\ {node}",
+            "",
+            "exactly open, Apply retirement, and restart reset may write",
+        ),
+        (
+            "AsyncTcRecordTyped",
+            "  /\\ tc.votes \\subseteq TimeoutVoteRecordSet",
+            "  /\\ tc \\in TcRecordSet",
+            "AsyncTcRecordTyped must equal only",
+        ),
+        (
+            "AsyncItemTyped",
+            "            AsyncTcEnvelopeTyped(item.envelope)",
+            "            item.envelope \\in TcEnvelopeSet",
+            "AsyncItemTyped must use structural finite-value typing",
+        ),
+        (
+            "AsyncEvidenceTyped",
+            "  \\/ AsyncTcRecordTyped(evidence)\n",
+            "  \\/ evidence \\in TcRecordSet\n",
+            "AsyncEvidenceTyped must use structural finite-value typing",
+        ),
+        (
+            "AsyncCandidateTyped",
+            "  /\\ AsyncEvidenceTyped(candidate.evidence)\n",
+            "  /\\ candidate.evidence \\in AsyncEvidenceSet\n",
+            "AsyncCandidateTyped must use structural finite-value typing",
+        ),
+        (
+            "BusyCompletionCandidates",
+            "{candidate \\in ActiveBusyCompletionCarrier:",
+            "{candidate \\in AsyncCandidateSet:",
+            "must filter the finite ActiveBusyCompletionCarrier",
+        ),
+        (
+            "ActiveBusyCompletionCarrier",
+            "QueuedCandidates \\cup CausalCandidates \\cup TrackedWorkCandidates",
+            "QueuedCandidates \\cup CausalCandidates \\cup "
+            "TrackedWorkCandidates \\cup AsyncCandidateSet",
+            "ActiveBusyCompletionCarrier must equal only",
+        ),
+        (
+            "BusyCompletionWitnessInvariant",
+            "      BusyCompletionCandidates(node) # {}",
+            "      BusyCompletionCandidates(node) \\cap AsyncCandidateSet # {}",
+            "BusyCompletionWitnessInvariant omits required production behavior",
+        ),
+    ),
+)
+def test_async_historical_recovery_and_busy_carrier_mutations_fail_closed(
+    tmp_path: Path,
+    symbol: str,
+    old: str,
+    new: str,
+    expected_error: str,
+) -> None:
+    module = load_checker()
+    formal_dir = copy_async_source_fidelity_fixture(
+        tmp_path,
+        module,
+        "SumeragiV2AsyncNetwork.tla",
+        "SumeragiV2Core.tla",
+    )
+    path = formal_dir / "SumeragiV2AsyncNetwork.tla"
+    source = path.read_text(encoding="utf-8")
+    path.write_text(
+        mutate_tla_operator(source, symbol, old, new), encoding="utf-8"
+    )
+
+    errors = module._async_source_fidelity_errors(formal_dir)
+
+    assert any(expected_error in error for error in errors), errors
+
+
+@pytest.mark.parametrize(
+    ("symbol", "token"),
+    tuple(
+        (symbol, token)
+        for symbol, tokens in {
+            "ChangedRunNodeWorkExecutesCommand": ("RunNodeWork",),
+            "ChangedAsyncRunnerExecutesCommand": (
+                "RunHistoricalRecoveryNode",
+            ),
+            "AsyncNonRunnerStepKeepsTimeoutPool": (
+                "OpenHistoricalRecovery",
+                "DirectHistoricalCommitCertificateDiscoveryStep",
+                "ServiceHistoricalRecoveryIoWorker",
+                "EnqueueHistoricalRecoveryIoLocalControl",
+            ),
+            "AsyncRunnerStepLeavesDiscoveryClock": (
+                "RunHistoricalRecoveryNode",
+                "RunNodeWork",
+            ),
+            "AsyncNonRunnerStepPreservesDiscoveryClockThreshold": (
+                "OpenHistoricalRecovery",
+                "DirectHistoricalCommitCertificateDiscoveryStep",
+                "ServiceHistoricalRecoveryIoWorker",
+                "EnqueueHistoricalRecoveryIoLocalControl",
+            ),
+            "ReplayingRunNodeWorkPreservesCommitCarrierFrame": (
+                "RunNodeWork",
+            ),
+            "ReplayingNonRunnerStepPreservesCommitCarrierFrame": (
+                "OpenHistoricalRecovery",
+                "DirectHistoricalCommitCertificateDiscoveryStep",
+                "ServiceHistoricalRecoveryIoWorker",
+                "EnqueueHistoricalRecoveryIoLocalControl",
+            ),
+            "ReplayingOrdinaryAsyncStepPreservesCommitCarrierFrame": (
+                "RunHistoricalRecoveryNode",
+            ),
+            "EnqueueIoControlPreservesProgressOwnership": (
+                "EnqueueIoLocalControlWork",
+            ),
+            "ServiceIoWorkerPreservesProgressOwnership": (
+                "ServiceIoWorkerWork",
+            ),
+            "DirectCommitDiscoveryPreservesProgressOwnership": (
+                "CommitCertificateDiscoveryStepWork",
+            ),
+            "RunNodeWorkPreservesProgressOwnership": ("RunNodeWork",),
+            "AsyncNonRunnerPreservesProgressOwnership": (
+                "OpenHistoricalRecovery",
+                "DirectHistoricalCommitCertificateDiscoveryStep",
+                "ServiceHistoricalRecoveryIoWorker",
+                "EnqueueHistoricalRecoveryIoLocalControl",
+            ),
+            "AsyncNextPreservesProgressOwnership": (
+                "RunHistoricalRecoveryNode",
+            ),
+            "RunNodeWorkPreservesProgressCommitSlotInvariant": (
+                "RunNodeWork",
+            ),
+            "AsyncNonRunnerStepLeavesProgressCarriers": (
+                "OpenHistoricalRecovery",
+                "DirectHistoricalCommitCertificateDiscoveryStep",
+                "ServiceHistoricalRecoveryIoWorker",
+                "EnqueueHistoricalRecoveryIoLocalControl",
+            ),
+            "AsyncRunnerStepPreservesProgressCommitSlotInvariant": (
+                "RunHistoricalRecoveryNode",
+            ),
+            "RunNodeWorkHasCommitSourceTransition": ("RunNodeWork",),
+            "AsyncNextHasCommitSourceTransition": (
+                "RunHistoricalRecoveryNode",
+                "OpenHistoricalRecovery",
+                "DirectHistoricalCommitCertificateDiscoveryStep",
+                "ServiceHistoricalRecoveryIoWorker",
+                "EnqueueHistoricalRecoveryIoLocalControl",
+            ),
+            "ProtectedStage5UnlessProgress": (
+                "RunHistoricalRecoveryNode",
+                "OpenHistoricalRecovery",
+                "DirectHistoricalCommitCertificateDiscoveryStep",
+                "ServiceHistoricalRecoveryIoWorker",
+                "EnqueueHistoricalRecoveryIoLocalControl",
+            ),
+            "Stage4BlockedAuxStep": (
+                "RunHistoricalRecoveryNode",
+                "OpenHistoricalRecovery",
+                "DirectHistoricalCommitCertificateDiscoveryStep",
+                "ServiceHistoricalRecoveryIoWorker",
+                "EnqueueHistoricalRecoveryIoLocalControl",
+            ),
+            "Stage4CapacityBlockedStep": (
+                "RunHistoricalRecoveryNode",
+                "OpenHistoricalRecovery",
+                "DirectHistoricalCommitCertificateDiscoveryStep",
+                "ServiceHistoricalRecoveryIoWorker",
+                "EnqueueHistoricalRecoveryIoLocalControl",
+            ),
+            "Stage4ActionableUnlessProgress": (
+                "RunHistoricalRecoveryNode",
+                "OpenHistoricalRecovery",
+                "DirectHistoricalCommitCertificateDiscoveryStep",
+                "ServiceHistoricalRecoveryIoWorker",
+                "EnqueueHistoricalRecoveryIoLocalControl",
+            ),
+        }.items()
+        for token in tokens
+    ),
+)
+def test_async_liveness_transition_coverage_mutations_fail_closed(
+    tmp_path: Path,
+    symbol: str,
+    token: str,
+) -> None:
+    module = load_checker()
+    formal_dir = copy_async_source_fidelity_fixture(
+        tmp_path,
+        module,
+        "SumeragiV2AsyncNetwork.tla",
+        "SumeragiV2AsyncLivenessProofs.tla",
+        "SumeragiV2Core.tla",
+    )
+    path = formal_dir / "SumeragiV2AsyncLivenessProofs.tla"
+    source = path.read_text(encoding="utf-8")
+    path.write_text(
+        delete_tla_theorem_token(source, symbol, token),
+        encoding="utf-8",
+    )
+
+    errors = module._async_source_fidelity_errors(formal_dir)
+
+    assert any(
+        f"{symbol} proof omits required transition coverage" in error
+        and token in error
+        for error in errors
+    ), errors
+
+
+@pytest.mark.parametrize(
+    ("old", "expected_action"),
+    (
+        (
+            "  /\\ \\A node \\in Responsive:\n"
+            "       WF_AsyncAllVars(PostGstOpenHistoricalRecovery(node))\n",
+            "PostGstOpenHistoricalRecovery",
+        ),
+        (
+            "  /\\ \\A node \\in Responsive:\n"
+            "       WF_AsyncAllVars(PostGstRunHistoricalRecoveryNode(node))\n",
+            "PostGstRunHistoricalRecoveryNode",
+        ),
+        (
+            "  /\\ \\A node \\in Responsive:\n"
+            "       WF_AsyncAllVars(PostGstHistoricalCommitCertificateDiscovery(node))\n",
+            "PostGstHistoricalCommitCertificateDiscovery",
+        ),
+        (
+            "  /\\ \\A node \\in Responsive:\n"
+            "       WF_AsyncAllVars(PostGstServiceHistoricalRecoveryIoWorker(node))\n",
+            "PostGstServiceHistoricalRecoveryIoWorker",
+        ),
+        (
+            "  /\\ \\A recipient \\in ValidatorIds, source \\in ValidatorIds:\n"
+            "       WF_AsyncAllVars(\n"
+            "         PostGstAdmitHistoricalRecoveryPacket(recipient, source))\n",
+            "PostGstAdmitHistoricalRecoveryPacket",
+        ),
+    ),
+)
+def test_async_historical_recovery_requires_each_fair_action(
+    tmp_path: Path,
+    old: str,
+    expected_action: str,
+) -> None:
+    module = load_checker()
+    formal_dir = copy_async_source_fidelity_fixture(
+        tmp_path,
+        module,
+        "SumeragiV2AsyncNetwork.tla",
+        "SumeragiV2Core.tla",
+    )
+    path = formal_dir / "SumeragiV2AsyncNetwork.tla"
+    source = path.read_text(encoding="utf-8")
+    path.write_text(
+        mutate_tla_operator(source, "AsyncFairnessAt", old, ""),
+        encoding="utf-8",
+    )
+
+    errors = module._async_source_fidelity_errors(formal_dir)
+
+    assert any(
+        "AsyncFairnessAt omits required production behavior" in error
+        and expected_action in error
+        for error in errors
+    ), errors
 
 
 def test_async_source_fidelity_pins_certified_body_serving_authority(
@@ -2932,6 +4501,7 @@ ChainEpochTlcInvariant == TypeInvariant /\\ ChainEpochInvariant
         "asyncIngressLanes",
         "asyncIngressReady",
         "asyncHeldChunks",
+        "asyncHistoricalRecoveryTargets",
     )
     scheduler_mapping = ",\n       ".join(
         f"{field} <- IndexedScheduler(initialContext, {index})"
@@ -3034,7 +4604,7 @@ ChainEpochTlcInvariant == TypeInvariant /\\ ChainEpochInvariant
         "IndexedAsyncStateShape ==\n"
         "  /\\ Len(indexedAsyncState[initialContext]) = 3\n"
         "  /\\ Len(indexedAsyncState[initialContext][1]) = 46\n"
-        "  /\\ Len(indexedAsyncState[initialContext][2]) = 33\n"
+        "  /\\ Len(indexedAsyncState[initialContext][2]) = 34\n"
         "  /\\ Len(indexedAsyncState[initialContext][3]) = 4\n"
         "THEOREM IndexedInstanceVariablesAreExact ==\n"
         "  IndexedAsyncStateShape\n"
@@ -3174,8 +4744,8 @@ def test_chain_indexed_scheduler_mapping_tracks_async_scheduler_tuple(
             1,
         )
         .replace(
+            "Len(indexedAsyncState[initialContext][2]) = 34",
             "Len(indexedAsyncState[initialContext][2]) = 33",
-            "Len(indexedAsyncState[initialContext][2]) = 32",
             1,
         )
         .replace(
@@ -3467,40 +5037,9 @@ def _mutate_chain_operator(
             "       CanonicalIndexedContext(parentContext.height + 1)",
             "successorContext.height = parentContext.height + 1",
         ),
-        (
-            "IndexedHistoricalCatchUpBodyRecovery",
-            '= "DecisionRecovered"',
-            '= "Idle"',
-        ),
-        (
-            "HistoricalCatchUpTarget",
-            "/\\ node \\in Responsive",
-            "/\\ initialContext.height < MaxHeight\n"
-            "  /\\ node \\in Responsive",
-        ),
-        (
-            "HistoricalCatchUpTarget",
-            "/\\ node \\in Responsive",
-            "/\\ node \\in Responsive\n"
-            "  /\\ node \\in VotingRoster(initialContext.epoch)",
-        ),
-        (
-            "IndexedHistoricalCatchUpTerminalApplication",
-            "Chain!RecordKnownApplication(application)",
-            "Chain!RecordAppliedNext(application)",
-        ),
-        (
-            "IndexedHistoricalCatchUpTerminalApplication",
-            "/\\ UNCHANGED <<historicalCatchUpDecisions,\n"
-            "                     indexedAsyncState, joinedByContext,\n"
-            "                     SuccessorActivationVars>>",
-            "/\\ QueueSuccessorActivation(initialContext, node)\n"
-            "     /\\ UNCHANGED <<historicalCatchUpDecisions,\n"
-            "                     indexedAsyncState, joinedByContext>>",
-        ),
     ),
 )
-def test_chain_successor_and_catch_up_mutations_fail_closed(
+def test_chain_successor_mutations_fail_closed(
     tmp_path: Path,
     symbol: str,
     old: str,
@@ -3518,6 +5057,768 @@ def test_chain_successor_and_catch_up_mutations_fail_closed(
 
     errors = module._chain_source_fidelity_errors(formal_dir)
     assert any(symbol in error for error in errors), errors
+
+
+@pytest.mark.parametrize(
+    ("symbol", "old", "new", "expected_error"),
+    (
+        (
+            "IndexedHistoricalRecoveryTargetReady",
+            "  /\\ node \\in Responsive\n",
+            "",
+            "IndexedHistoricalRecoveryTargetReady must equal only",
+        ),
+        (
+            "IndexedHistoricalRecoveryTargetReady",
+            "  /\\ node \\in IndexedCore(initialContext, 6)\n",
+            "",
+            "IndexedHistoricalRecoveryTargetReady must equal only",
+        ),
+        (
+            "IndexedHistoricalRecoveryTargetReady",
+            "  /\\ node \\in joinedByContext[initialContext]\n",
+            "",
+            "IndexedHistoricalRecoveryTargetReady must equal only",
+        ),
+        (
+            "IndexedHistoricalRecoveryTargetReady",
+            "  /\\ ExactNodeLocationAt(initialContext, node)\n",
+            "",
+            "IndexedHistoricalRecoveryTargetReady must equal only",
+        ),
+        (
+            "IndexedHistoricalRecoveryTargetReady",
+            "  /\\ ~IndexedAsync(initialContext)!NodeHasDecision(node)\n",
+            "",
+            "IndexedHistoricalRecoveryTargetReady must equal only",
+        ),
+        (
+            "IndexedHistoricalRecoveryTargetReady",
+            "  /\\ ~IndexedProjectedNodeHasApplication(initialContext, node)\n",
+            "",
+            "IndexedHistoricalRecoveryTargetReady must equal only",
+        ),
+        (
+            "IndexedHistoricalRecoveryTargetReady",
+            "  /\\ ~IndexedAsync(initialContext)!HistoricalRecoveryTarget(node)\n",
+            "",
+            "IndexedHistoricalRecoveryTargetReady must equal only",
+        ),
+        (
+            "IndexedHistoricalRecoverySourceReady",
+            "  /\\ source \\in IndexedCurrentDecisions(initialContext)\n",
+            "",
+            "IndexedHistoricalRecoverySourceReady omits exact successor/exact-recovery behavior",
+        ),
+        (
+            "IndexedHistoricalRecoverySourceReady",
+            "  /\\ source \\in IndexedCurrentApplications(initialContext)\n",
+            "",
+            "IndexedHistoricalRecoverySourceReady omits exact successor/exact-recovery behavior",
+        ),
+        (
+            "IndexedHistoricalRecoverySourceReady",
+            "  /\\ source \\in durableDecisionEvidence\n",
+            "",
+            "IndexedHistoricalRecoverySourceReady omits exact successor/exact-recovery behavior",
+        ),
+        (
+            "IndexedHistoricalRecoverySourceReady",
+            "  /\\ source \\in durableApplicationEvidence\n",
+            "",
+            "IndexedHistoricalRecoverySourceReady omits exact successor/exact-recovery behavior",
+        ),
+        (
+            "IndexedHistoricalRecoverySourceReady",
+            "        /\\ Chain!ReceiptOutsideChainHorizon(source)\n",
+            "        /\\ TRUE\n",
+            "IndexedHistoricalRecoverySourceReady omits exact successor/exact-recovery behavior",
+        ),
+        (
+            "IndexedHistoricalRecoverySourceReady",
+            "  /\\ server \\in source.qc.signers \\cap Honest\n",
+            "",
+            "IndexedHistoricalRecoverySourceReady omits exact successor/exact-recovery behavior",
+        ),
+        (
+            "IndexedHistoricalRecoverySourceReady",
+            "  /\\ BodyHeldBy(IndexedCore(initialContext, 9), server,\n",
+            "  /\\ MissingBodyAuthority(IndexedCore(initialContext, 9), server,\n",
+            "IndexedHistoricalRecoverySourceReady omits exact successor/exact-recovery behavior",
+        ),
+        (
+            "IndexedHistoricalRecoveryReady",
+            "  /\\ node \\in joinedByContext[initialContext]\n",
+            "",
+            "IndexedHistoricalRecoveryReady must equal only",
+        ),
+        (
+            "IndexedHistoricalRecoveryReady",
+            "       IndexedHistoricalRecoverySourceReady(\n"
+            "         initialContext, server, source)",
+            "       TRUE",
+            "IndexedHistoricalRecoveryReady must equal only",
+        ),
+        (
+            "IndexedOpenHistoricalRecovery",
+            "  /\\ IndexedHistoricalRecoveryTargetReady(initialContext, node)\n",
+            "",
+            "IndexedOpenHistoricalRecovery must equal only",
+        ),
+        (
+            "IndexedOpenHistoricalRecovery",
+            "  /\\ IndexedHistoricalRecoverySourceReady(\n"
+            "       initialContext, server, source)\n",
+            "",
+            "IndexedOpenHistoricalRecovery must equal only",
+        ),
+        (
+            "IndexedOpenHistoricalRecovery",
+            "  /\\ IndexedAsync(initialContext)!OpenHistoricalRecovery(node)",
+            "  /\\ TRUE",
+            "IndexedOpenHistoricalRecovery must equal only",
+        ),
+        (
+            "IndexedJoinedRunnerStep",
+            "  \\/ \\E node \\in Responsive:\n"
+            "       IndexedAsync(initialContext)!RunHistoricalRecoveryNode(node)\n",
+            "",
+            "IndexedJoinedRunnerStep omits exact successor/exact-recovery behavior",
+        ),
+        (
+            "IndexedJoinedNonRunnerStep",
+            "     \\/ \\E node \\in Responsive:\n"
+            "          IndexedAsync(initialContext)!\n"
+            "            DirectHistoricalCommitCertificateDiscoveryStep(node)\n",
+            "",
+            "IndexedJoinedNonRunnerStep omits exact successor/exact-recovery behavior",
+        ),
+        (
+            "IndexedJoinedNonRunnerStep",
+            "     \\/ \\E node \\in Responsive:\n"
+            "          IndexedAsync(initialContext)!\n"
+            "            ServiceHistoricalRecoveryIoWorker(node)\n",
+            "",
+            "IndexedJoinedNonRunnerStep omits exact successor/exact-recovery behavior",
+        ),
+        (
+            "IndexedJoinedNonRunnerStep",
+            "     \\/ \\E node \\in Responsive:\n"
+            "          IndexedAsync(initialContext)!\n"
+            "            EnqueueHistoricalRecoveryIoLocalControl(node)\n",
+            "",
+            "IndexedJoinedNonRunnerStep omits exact successor/exact-recovery behavior",
+        ),
+        (
+            "IndexedJoinedNonRunnerStep",
+            "          IndexedOpenHistoricalRecovery(\n"
+            "            initialContext, node, server, source)\n",
+            "          FALSE\n",
+            "IndexedJoinedNonRunnerStep omits exact successor/exact-recovery behavior",
+        ),
+        (
+            "IndexedProductActionAt",
+            "  /\\ IndexedJoinedAsyncNext(initialContext)\n",
+            "  /\\ TRUE\n",
+            "IndexedProductActionAt must equal only",
+        ),
+        (
+            "IndexedHistoricalRecoveryTargetCoherence",
+            "      => /\\ node \\in Responsive\n",
+            "      => /\\ TRUE\n",
+            "IndexedHistoricalRecoveryTargetCoherence must equal only",
+        ),
+        (
+            "IndexedHistoricalRecoveryTargetCoherence",
+            "         /\\ node \\in joinedByContext[initialContext]\n",
+            "",
+            "IndexedHistoricalRecoveryTargetCoherence must equal only",
+        ),
+        (
+            "IndexedHistoricalRecoveryTargetCoherence",
+            "         /\\ ExactNodeLocationAt(initialContext, node)\n",
+            "",
+            "IndexedHistoricalRecoveryTargetCoherence must equal only",
+        ),
+        (
+            "IndexedHistoricalRecoveryTargetCoherence",
+            "         /\\ ~IndexedAsync(initialContext)!NodeHasApplication(node)",
+            "",
+            "IndexedHistoricalRecoveryTargetCoherence must equal only",
+        ),
+        (
+            "HistoricalRecoveryOutstanding",
+            "  /\\ node \\in joinedByContext[initialContext]\n",
+            "",
+            "HistoricalRecoveryOutstanding must equal only",
+        ),
+        (
+            "HistoricalRecoveryOutstanding",
+            "  /\\ ~IndexedAsync(initialContext)!NodeHasApplication(node)",
+            "  /\\ TRUE",
+            "HistoricalRecoveryOutstanding must equal only",
+        ),
+        (
+            "IndexedExactHistoricalRecoveryProgress",
+            "     node \\in Responsive:\n",
+            "     node \\in IndexedAsync(initialContext)!AsyncVotersAt(initialContext):\n",
+            "IndexedExactHistoricalRecoveryProgress must equal only",
+        ),
+        (
+            "IndexedAllResponsiveExactApplicationsAt",
+            "  \\A node \\in Responsive:\n",
+            "  \\A node \\in IndexedAsync(initialContext)!AsyncVotersAt(initialContext):\n",
+            "IndexedAllResponsiveExactApplicationsAt must equal only",
+        ),
+        (
+            "IndexedContextCompleted",
+            "  ELSE \\A node \\in Responsive:\n",
+            "  ELSE \\A node \\in IndexedAsync(initialContext)!AsyncVotersAt(initialContext):\n",
+            "IndexedContextCompleted must equal only",
+        ),
+        (
+            "IndexedContextCompleted",
+            "  THEN IndexedAllResponsiveExactApplicationsAt(initialContext)\n",
+            "  THEN IndexedAsync(initialContext)!AsyncAllResponsiveAppliedAt(initialContext)\n",
+            "IndexedContextCompleted must equal only",
+        ),
+    ),
+)
+def test_chain_exact_historical_recovery_mutations_fail_closed(
+    tmp_path: Path,
+    symbol: str,
+    old: str,
+    new: str,
+    expected_error: str,
+) -> None:
+    module = load_checker()
+    formal_dir = tmp_path / "formal"
+    shutil.copytree(module.FORMAL_DIR, formal_dir)
+    path = formal_dir / "SumeragiV2ChainEpochRefinement.tla"
+    source = path.read_text(encoding="utf-8")
+    path.write_text(
+        mutate_tla_operator(source, symbol, old, new), encoding="utf-8"
+    )
+
+    errors = module._chain_source_fidelity_errors(formal_dir)
+
+    assert any(expected_error in error for error in errors), errors
+
+
+@pytest.mark.parametrize(
+    ("old", "action"),
+    (
+        (
+            "    /\\ \\A node \\in Responsive:\n"
+            "         WF_IndexedChainVars(\n"
+            "           IndexedOpenHistoricalRecoveryStep(initialContext, node))\n",
+            "IndexedOpenHistoricalRecoveryStep",
+        ),
+        (
+            "    /\\ \\A node \\in Responsive:\n"
+            "         WF_IndexedChainVars(\n"
+            "           IndexedRunHistoricalRecoveryStep(initialContext, node))\n",
+            "IndexedRunHistoricalRecoveryStep",
+        ),
+        (
+            "    /\\ \\A node \\in Responsive:\n"
+            "         WF_IndexedChainVars(\n"
+            "           IndexedHistoricalCommitCertificateDiscoveryStep(\n"
+            "             initialContext, node))\n",
+            "IndexedHistoricalCommitCertificateDiscoveryStep",
+        ),
+        (
+            "    /\\ \\A node \\in Responsive:\n"
+            "         WF_IndexedChainVars(\n"
+            "           IndexedHistoricalRecoveryIoWorkerStep(\n"
+            "             initialContext, node))\n",
+            "IndexedHistoricalRecoveryIoWorkerStep",
+        ),
+        (
+            "    /\\ \\A recipient \\in ValidatorIds, source \\in ValidatorIds:\n"
+            "         WF_IndexedChainVars(\n"
+            "           IndexedAdmitHistoricalRecoveryPacketStep(\n"
+            "             initialContext, recipient, source))\n",
+            "IndexedAdmitHistoricalRecoveryPacketStep",
+        ),
+    ),
+)
+def test_chain_exact_historical_recovery_requires_each_fair_product_action(
+    tmp_path: Path,
+    old: str,
+    action: str,
+) -> None:
+    module = load_checker()
+    formal_dir = tmp_path / "formal"
+    shutil.copytree(module.FORMAL_DIR, formal_dir)
+    path = formal_dir / "SumeragiV2ChainEpochRefinement.tla"
+    source = path.read_text(encoding="utf-8")
+    path.write_text(
+        mutate_tla_operator(source, "IndexedFairness", old, ""),
+        encoding="utf-8",
+    )
+
+    errors = module._chain_source_fidelity_errors(formal_dir)
+
+    assert any(
+        "IndexedFairness must contain exactly one all-required-node exact "
+        "historical-recovery product clause" in error
+        and action in error
+        for error in errors
+    ), errors
+
+
+def test_chain_rejects_standalone_catch_up_state_and_transition(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    formal_dir = tmp_path / "formal"
+    shutil.copytree(module.FORMAL_DIR, formal_dir)
+    path = formal_dir / "SumeragiV2ChainEpochRefinement.tla"
+    source = path.read_text(encoding="utf-8")
+    path.write_text(
+        source.replace(
+            "IndexedProductActionAt(initialContext) ==\n",
+            "HistoricalCatchUpStage == [node \\in ValidatorIds |-> \"Idle\"]\n\n"
+            "IndexedHistoricalCatchUpPipelineAction == UNCHANGED indexedAsyncState\n\n"
+            "IndexedProductActionAt(initialContext) ==\n",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    errors = module._chain_source_fidelity_errors(formal_dir)
+
+    assert any(
+        "standalone historical catch-up state or transition HistoricalCatchUpStage"
+        in error
+        for error in errors
+    ), errors
+    assert any(
+        "standalone historical catch-up state or transition "
+        "IndexedHistoricalCatchUpPipelineAction" in error
+        for error in errors
+    ), errors
+
+
+def test_chain_canonical_exact_recovery_production_obligation_is_pinned(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    formal_dir = tmp_path / "formal"
+    shutil.copytree(module.FORMAL_DIR, formal_dir)
+    path = formal_dir / "SumeragiV2ChainEpochRefinement.tla"
+    source = path.read_text(encoding="utf-8")
+    canonical = (
+        "SuccessorActivationAndExactHistoricalRecoveryProductionRefinementObligation"
+    )
+    path.write_text(
+        source.replace(canonical, "RetiredHistoricalCatchUpObligation", 1),
+        encoding="utf-8",
+    )
+
+    errors = module._chain_source_fidelity_errors(formal_dir)
+
+    assert any(
+        "missing canonical exact historical-recovery production refinement obligation"
+        in error
+        for error in errors
+    ), errors
+
+
+@pytest.mark.parametrize(
+    ("kind", "symbol", "old", "new", "expected_error"),
+    (
+        (
+            "operator",
+            "IndexedSuccessorActivationProgress",
+            "      ~> SuccessorPublicationOrSuperseded(parentContext, node)",
+            "      => SuccessorPublicationOrSuperseded(parentContext, node)",
+            "IndexedSuccessorActivationProgress must equal only",
+        ),
+        (
+            "operator",
+            "IndexedJoinedThroughLocalHeight",
+            "                          ExactDurableParentApplication(\n"
+            "                            parentContext, node, application)",
+            "                          ExactDurableParentApplication(\n"
+            "                            parentContext, node, application)\n"
+            "            \\/ /\\ blockHeight = MaxHeight\n"
+            "               /\\ IndexedAsync(\n"
+            "                    CanonicalIndexedContext(blockHeight))!\n"
+            "                    NodeHasApplication(node)",
+            "IndexedJoinedThroughLocalHeight must equal only",
+        ),
+        (
+            "operator",
+            "IndexedActivationPendingIntoContext",
+            "            CanonicalIndexedContext(initialContext.height - 1), node)",
+            "            CanonicalIndexedContext(initialContext.height), node)",
+            "IndexedActivationPendingIntoContext must equal only",
+        ),
+        (
+            "theorem",
+            "IndexedActivationPendingIntoContextEventuallyJoins",
+            "         ~> node \\in joinedByContext[initialContext]",
+            "         => node \\in joinedByContext[initialContext]",
+            "IndexedActivationPendingIntoContextEventuallyJoins must state only",
+        ),
+        (
+            "theorem",
+            "IndexedReachedAncestorEventuallyJoinsEveryResponsiveNode",
+            "           ~> IndexedAllResponsiveJoined(\n",
+            "           => IndexedAllResponsiveJoined(\n",
+            "IndexedReachedAncestorEventuallyJoinsEveryResponsiveNode must state only",
+        ),
+        (
+            "theorem",
+            "HeightLivenessFromOneHeightAndExactRecoveryProgress",
+            "  /\\ IndexedSuccessorActivationProgress\n",
+            "",
+            "HeightLivenessFromOneHeightAndExactRecoveryProgress must state only",
+        ),
+    ),
+)
+def test_chain_activation_to_join_bridge_mutations_fail_closed(
+    tmp_path: Path,
+    kind: str,
+    symbol: str,
+    old: str,
+    new: str,
+    expected_error: str,
+) -> None:
+    module = load_checker()
+    formal_dir = tmp_path / "formal"
+    shutil.copytree(module.FORMAL_DIR, formal_dir)
+    path = formal_dir / "SumeragiV2ChainEpochRefinement.tla"
+    source = path.read_text(encoding="utf-8")
+    mutator = mutate_tla_operator if kind == "operator" else mutate_tla_theorem
+    path.write_text(mutator(source, symbol, old, new), encoding="utf-8")
+
+    errors = module._chain_source_fidelity_errors(formal_dir)
+
+    assert any(expected_error in error for error in errors), errors
+
+
+def test_chain_rejects_retired_static_ancestor_join_theorem(tmp_path: Path) -> None:
+    module = load_checker()
+    formal_dir = tmp_path / "formal"
+    shutil.copytree(module.FORMAL_DIR, formal_dir)
+    path = formal_dir / "SumeragiV2ChainEpochRefinement.tla"
+    source = path.read_text(encoding="utf-8")
+    marker = "THEOREM IndexedReachedAncestorClassifiesEveryResponsiveNode ==\n"
+    path.write_text(
+        source.replace(
+            marker,
+            "THEOREM IndexedReachedAncestorHasEveryResponsiveJoined == TRUE\n"
+            "BY Isa\n\n"
+            + marker,
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    errors = module._chain_source_fidelity_errors(formal_dir)
+
+    assert any(
+        "retired false static ancestor-join theorem is prohibited" in error
+        for error in errors
+    ), errors
+
+
+@pytest.mark.parametrize(
+    ("symbol", "old", "new"),
+    (
+        (
+            "SuccessorActivationRankCarrier",
+            "0..19",
+            "0..20",
+        ),
+        (
+            "SuccessorActivationPipelineDistance",
+            "               THEN 9 ELSE 10",
+            "               THEN 10 ELSE 10",
+        ),
+        (
+            "SuccessorActivationRank",
+            "       THEN 9 + SuccessorActivationPipelineDistance(parentContext, node)",
+            "       THEN 8 + SuccessorActivationPipelineDistance(parentContext, node)",
+        ),
+        (
+            "SuccessorActivationPending",
+            "  IndexedSuccessorActivationPending(parentContext, node)",
+            "  TRUE",
+        ),
+        (
+            "SuccessorActivationHasDurableParentWitness",
+            "       ExactDurableParentApplication(parentContext, node, application)",
+            "       BypassedDurableParentApplication(parentContext, node, application)",
+        ),
+        (
+            "SuccessorActivationAtRank",
+            "  /\\ SuccessorActivationRank(parentContext, node) = rank",
+            "  /\\ SuccessorActivationRank(parentContext, node) = rank + 1",
+        ),
+        (
+            "SuccessorActivationPendingStructureProperty",
+            "         => /\\ SuccessorActivationHasDurableParentWitness(\n"
+            "                  parentContext, node)\n",
+            "         => /\\ TRUE\n",
+        ),
+        (
+            "SuccessorActivationPendingStructureProperty",
+            "            /\\ ENABLED\n"
+            "                 <<IndexedSuccessorActivationProgressStep(\n"
+            "                     parentContext, node)>>_(IndexedChainVars)",
+            "            /\\ ENABLED <<IndexedChainNext>>_(IndexedChainVars)",
+        ),
+        (
+            "SuccessorActivationStepDecreasesRankProperty",
+            "                   < SuccessorActivationRank(parentContext, node)",
+            "                   <= SuccessorActivationRank(parentContext, node)",
+        ),
+        (
+            "SuccessorActivationPendingIsNotOrphanedProperty",
+            "                   <= SuccessorActivationRank(parentContext, node)",
+            "                   < SuccessorActivationRank(parentContext, node)",
+        ),
+        (
+            "SuccessorActivationOutcomeIsStableProperty",
+            "        /\\ [IndexedChainNext]_IndexedChainVars\n",
+            "        /\\ TRUE\n",
+        ),
+        (
+            "SuccessorActivationRankProgressProperty",
+            "      ~> (SuccessorPublicationOrSuperseded(parentContext, node)",
+            "      => (SuccessorPublicationOrSuperseded(parentContext, node)",
+        ),
+        (
+            "SuccessorActivationStarvationFreedomProperty",
+            "      ~> SuccessorPublicationOrSuperseded(parentContext, node)",
+            "      => SuccessorPublicationOrSuperseded(parentContext, node)",
+        ),
+    ),
+)
+def test_successor_activation_rank_corridor_mutations_fail_closed(
+    tmp_path: Path,
+    symbol: str,
+    old: str,
+    new: str,
+) -> None:
+    module = load_checker()
+    formal_dir = tmp_path / "formal"
+    shutil.copytree(module.FORMAL_DIR, formal_dir)
+    path = formal_dir / "SumeragiV2SuccessorActivationRefinementProofs.tla"
+    source = path.read_text(encoding="utf-8")
+    path.write_text(
+        mutate_tla_operator(source, symbol, old, new), encoding="utf-8"
+    )
+
+    errors = module._successor_activation_rank_source_fidelity_errors(formal_dir)
+
+    assert any(symbol in error for error in errors), errors
+
+
+@pytest.mark.parametrize(
+    "symbol",
+    (
+        "SuccessorActivationPendingStructureProperty",
+        "SuccessorActivationStepDecreasesRankProperty",
+        "SuccessorActivationPendingIsNotOrphanedProperty",
+        "SuccessorActivationOutcomeIsStableProperty",
+        "SuccessorActivationRankProgressProperty",
+        "SuccessorActivationStarvationFreedomProperty",
+    ),
+)
+def test_successor_activation_release_properties_are_responsive_only(
+    tmp_path: Path,
+    symbol: str,
+) -> None:
+    module = load_checker()
+    formal_dir = tmp_path / "formal"
+    shutil.copytree(module.FORMAL_DIR, formal_dir)
+    path = formal_dir / "SumeragiV2SuccessorActivationRefinementProofs.tla"
+    source = path.read_text(encoding="utf-8")
+    path.write_text(
+        mutate_tla_operator(
+            source,
+            symbol,
+            "node \\in Responsive",
+            "node \\in ValidatorIds",
+        ),
+        encoding="utf-8",
+    )
+
+    errors = module._successor_activation_rank_source_fidelity_errors(formal_dir)
+
+    assert any(symbol in error for error in errors), errors
+
+
+def test_chain_successor_activation_progress_is_responsive_only(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    formal_dir = tmp_path / "formal"
+    shutil.copytree(module.FORMAL_DIR, formal_dir)
+    path = formal_dir / "SumeragiV2ChainEpochRefinement.tla"
+    source = path.read_text(encoding="utf-8")
+    path.write_text(
+        mutate_tla_operator(
+            source,
+            "IndexedSuccessorActivationProgress",
+            "node \\in Responsive",
+            "node \\in ValidatorIds",
+        ),
+        encoding="utf-8",
+    )
+
+    errors = module._chain_source_fidelity_errors(formal_dir)
+
+    assert any(
+        "IndexedSuccessorActivationProgress must equal only" in error
+        for error in errors
+    ), errors
+
+
+def test_chain_successor_activation_fairness_is_responsive_only(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    formal_dir = tmp_path / "formal"
+    shutil.copytree(module.FORMAL_DIR, formal_dir)
+    path = formal_dir / "SumeragiV2ChainEpochRefinement.tla"
+    source = path.read_text(encoding="utf-8")
+    old = (
+        "    /\\ \\A node \\in Responsive:\n"
+        "         WF_IndexedChainVars(\n"
+        "           IndexedSuccessorActivationProgressStep(\n"
+        "             initialContext, node))\n"
+    )
+    path.write_text(
+        mutate_tla_operator(
+            source,
+            "IndexedFairness",
+            old,
+            old.replace("Responsive", "ValidatorIds"),
+        ),
+        encoding="utf-8",
+    )
+
+    errors = module._chain_source_fidelity_errors(formal_dir)
+
+    assert any(
+        "must contain exactly one responsive-validator fair "
+        "successor-activation pipeline" in error
+        for error in errors
+    ), errors
+
+
+def test_chain_successor_activation_join_bridge_is_responsive_only(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    formal_dir = tmp_path / "formal"
+    shutil.copytree(module.FORMAL_DIR, formal_dir)
+    path = formal_dir / "SumeragiV2ChainEpochRefinement.tla"
+    source = path.read_text(encoding="utf-8")
+    path.write_text(
+        mutate_tla_theorem(
+            source,
+            "IndexedActivationPendingIntoContextEventuallyJoins",
+            "node \\in Responsive",
+            "node \\in ValidatorIds",
+        ),
+        encoding="utf-8",
+    )
+
+    errors = module._chain_source_fidelity_errors(formal_dir)
+
+    assert any(
+        "IndexedActivationPendingIntoContextEventuallyJoins must state only"
+        in error
+        for error in errors
+    ), errors
+
+
+def test_indexed_successor_activation_pending_mutation_fails_closed(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    formal_dir = tmp_path / "formal"
+    shutil.copytree(module.FORMAL_DIR, formal_dir)
+    path = formal_dir / "SumeragiV2ChainEpochRefinement.tla"
+    source = path.read_text(encoding="utf-8")
+    path.write_text(
+        mutate_tla_operator(
+            source,
+            "IndexedSuccessorActivationPending",
+            "  /\\ ~SuccessorPublicationOrSuperseded(parentContext, node)",
+            "  /\\ TRUE",
+        ),
+        encoding="utf-8",
+    )
+
+    errors = module._successor_activation_rank_source_fidelity_errors(formal_dir)
+
+    assert any(
+        "IndexedSuccessorActivationPending must equal only" in error
+        for error in errors
+    ), errors
+
+
+def test_successor_activation_starvation_obligation_pins_every_conjunct(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    formal_dir = tmp_path / "formal"
+    shutil.copytree(module.FORMAL_DIR, formal_dir)
+    path = formal_dir / "SumeragiV2SuccessorActivationRefinementProofs.tla"
+    source = path.read_text(encoding="utf-8")
+    path.write_text(
+        source.replace(
+            "       /\\ SuccessorActivationPendingIsNotOrphanedProperty\n",
+            "",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    errors = module._successor_activation_rank_source_fidelity_errors(formal_dir)
+
+    assert any(
+        "SuccessorActivationStarvationFreedomObligation must state only" in error
+        for error in errors
+    ), errors
+
+
+def test_successor_activation_starvation_chain_progress_equivalence_is_pinned(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    formal_dir = tmp_path / "formal"
+    shutil.copytree(module.FORMAL_DIR, formal_dir)
+    path = formal_dir / "SumeragiV2SuccessorActivationRefinementProofs.tla"
+    source = path.read_text(encoding="utf-8")
+    path.write_text(
+        source.replace(
+            "THEOREM SuccessorActivationStarvationMatchesChainProgress ==\n"
+            "  SuccessorActivationStarvationFreedomProperty\n"
+            "    <=> IndexedSuccessorActivationProgress\n",
+            "THEOREM SuccessorActivationStarvationMatchesChainProgress ==\n"
+            "  SuccessorActivationStarvationFreedomProperty\n"
+            "    => IndexedSuccessorActivationProgress\n",
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    errors = module._successor_activation_rank_source_fidelity_errors(formal_dir)
+
+    assert any(
+        "SuccessorActivationStarvationMatchesChainProgress must state only"
+        in error
+        for error in errors
+    ), errors
 
 
 def test_deductive_liveness_proof_cannot_import_finite_async_spec(
@@ -3603,6 +5904,7 @@ def test_tlc_runner_cannot_claim_or_mutate_proof_completion() -> None:
     assert "machine_checked_completion" not in runner
     assert "SumeragiV2ChainEpoch.tla" in runner
     assert "SumeragiV2AsyncNetwork.tla" in runner
+    assert "SumeragiV2EffectiveLockAcquisition.tla" in runner
     assert "SumeragiV2ResumeVoteWitness.tla" in runner
     assert '[[ "$tlc_status" -ne 12 ]]' in runner
     assert "Invariant NoRecoveredHistoricalLockedCommitSigning is violated." in runner
@@ -3612,7 +5914,37 @@ def test_tlc_runner_cannot_claim_or_mutate_proof_completion() -> None:
     assert "simulation_config=1" in runner
     assert 'grep -Ec "^Running Random Simulation with seed ${seed} with 1 worker "' in runner
     assert 'grep -Fxc "Computed 1 initial states..."' in runner
-    assert "([0-9]+min )?[0-9]+(ms|s)" in runner
+    finish_pattern_match = re.search(
+        r"readonly TLC_FINISHED_PATTERN='([^']+)'", runner
+    )
+    assert finish_pattern_match is not None
+    finish_pattern = finish_pattern_match.group(1)
+    for accepted_footer in (
+        "Finished in 812ms at (2026-07-17 16:30:58)",
+        "Finished in 59s at (2026-07-17 16:30:58)",
+        "Finished in 01min 05s at (2026-07-17 16:30:58)",
+        "Finished in 01h 02min at (2026-07-17 16:30:58)",
+        "Finished in 1d 02h 03min 04s at (2026-07-17 16:30:58)",
+    ):
+        assert subprocess.run(
+            ("grep", "-Eq", finish_pattern),
+            input=f"{accepted_footer}\n",
+            text=True,
+            check=False,
+        ).returncode == 0
+    for rejected_footer in (
+        "Finished in  at (2026-07-17 16:30:58)",
+        "Finished in 01h 02min  at (2026-07-17 16:30:58)",
+        "Finished in 01h 02min at 2026-07-17 16:30:58",
+        "Finished in 01h 02min at (2026-07-17 16:30:58) error",
+    ):
+        assert subprocess.run(
+            ("grep", "-Eq", finish_pattern),
+            input=f"{rejected_footer}\n",
+            text=True,
+            check=False,
+        ).returncode != 0
+    assert 'grep -Ec "$TLC_FINISHED_PATTERN"' in runner
     assert '"$progress_count" -lt 1' in runner
     assert "TLC bounded simulation ${cfg} did not report one exact successful run" in runner
     assert "all exhaustive searches, deterministic simulations, and the recovery witness" in runner
@@ -3622,6 +5954,9 @@ def test_tlc_runner_cannot_claim_or_mutate_proof_completion() -> None:
     assert module.REQUIRED_TLC_CONFIG_HEADERS["liveness.cfg"] == (
         "SPECIFICATION AsyncFiniteSpec"
     )
+    assert module.REQUIRED_TLC_CONFIG_HEADERS[
+        "effective_lock_acquisition.cfg"
+    ] == "SPECIFICATION AcquisitionSpec"
     assert module.REQUIRED_TLC_CONFIG_HEADERS[
         "resume_locked_commit_witness.cfg"
     ] == "SPECIFICATION CoreSpec"
@@ -3638,6 +5973,9 @@ def test_tlc_runner_cannot_claim_or_mutate_proof_completion() -> None:
     assert (module.FORMAL_DIR / "liveness.cfg").read_text().startswith(
         "SPECIFICATION AsyncFiniteSpec\n"
     )
+    assert (
+        module.FORMAL_DIR / "effective_lock_acquisition.cfg"
+    ).read_text().startswith("SPECIFICATION AcquisitionSpec\n")
     assert (
         module.FORMAL_DIR / "resume_locked_commit_witness.cfg"
     ).read_text().startswith("SPECIFICATION CoreSpec\n")
@@ -3867,8 +6205,13 @@ def test_service_rank_replacement_mutation_is_pinned_and_expected_to_fail() -> N
     assert "discovery_debt_fixed.cfg 0" in progress_runner
     assert "io_candidate_index_all_jobs_bug.cfg 12" in progress_runner
     assert "io_candidate_index_consensus_only.cfg 0" in progress_runner
+    assert "effective_lock_rebind_fixed.cfg 0" in progress_runner
+    assert "effective_lock_rebind_bug.cfg 12" in progress_runner
+    assert "effective_lock_no_retry_bug.cfg 13" in progress_runner
+    assert "effective_lock_future_completion_bug.cfg 12" in progress_runner
     assert "ownership_n1.cfg 0" in progress_runner
-    assert "19081 states generated, 3104 distinct states found" in progress_runner
+    assert "42817 states generated, 6208 distinct states found" in progress_runner
+    assert "depth of the complete state graph search is 45" in progress_runner
 
     causal_debt = (formal_dir / "SumeragiV2CausalDebtMutation.tla").read_text(
         encoding="utf-8"
@@ -3887,6 +6230,12 @@ def test_service_rank_replacement_mutation_is_pinned_and_expected_to_fail() -> N
     assert "ConsensusTargetIndices" in (
         formal_dir / "SumeragiV2IoCandidateIndexMutation.tla"
     ).read_text(encoding="utf-8")
+    acquisition_mutation = (
+        formal_dir / "SumeragiV2EffectiveLockAcquisitionMutation.tla"
+    ).read_text(encoding="utf-8")
+    assert "BuggyRebindSameLock" in acquisition_mutation
+    assert "NoRetrySpec" in acquisition_mutation
+    assert "BuggyFutureCompletionFailsClosed" in acquisition_mutation
     ownership = (formal_dir / "SumeragiV2OwnershipInvariantCheck.tla").read_text(
         encoding="utf-8"
     )
@@ -3899,6 +6248,13 @@ def test_tlc_configs_keep_an_externally_invalid_subject(tmp_path: Path) -> None:
     formal_dir = tmp_path / "formal"
     shutil.copytree(module.FORMAL_DIR, formal_dir)
     for cfg_name in module.REQUIRED_TLC_CONFIGS:
+        if cfg_name == "effective_lock_acquisition.cfg":
+            assert (
+                "AcquisitionSubjects = "
+                "{AcquisitionSubjectA, AcquisitionSubjectB}\n"
+                in (formal_dir / cfg_name).read_text(encoding="utf-8")
+            )
+            continue
         assert '  ValidSubjects = {"A"}\n' in (formal_dir / cfg_name).read_text(
             encoding="utf-8"
         )
@@ -4271,8 +6627,18 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters() -> None:
     assert "did not run exactly 30 passing tests" in release_source
     assert "seed_launcher_contract_tests=(" in release_source
     assert "did not run exactly ten passing tests" in release_source
-    assert "did not run exactly four passing tests" in release_source
-    assert "did not run exactly 36 passing tests" in release_source
+    assert "did not run exactly five passing tests" in release_source
+    assert "preflight-chaos-launcher pytest 5" in release_source
+    assert "did not run exactly 37 passing tests" in release_source
+    assert "preflight-release-receipt pytest 37" in release_source
+    assert (
+        '"preflight-chaos-launcher",\n                "pytest",\n                5,'
+        in receipt_source
+    )
+    assert (
+        '"preflight-release-receipt",\n                "pytest",\n                37,'
+        in receipt_source
+    )
     assert "did not run exactly twelve passing tests" in release_source
     assert "taira_release_ignored_contract_list=" in release_source
     assert "required Taira release-evidence contract test is ignored" in release_source

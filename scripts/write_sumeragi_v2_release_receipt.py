@@ -287,14 +287,14 @@ def _corridor_legs() -> list[tuple[str, str, int, str]]:
             (
                 "preflight-chaos-launcher",
                 "pytest",
-                4,
+                5,
                 "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest "
                 "-q -p no:cacheprovider pytests/scripts/sumeragi_v2_chaos_release_test.py",
             ),
             (
                 "preflight-release-receipt",
                 "pytest",
-                36,
+                37,
                 "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest "
                 "-q -p no:cacheprovider pytests/scripts/sumeragi_v2_release_receipt_test.py",
             ),

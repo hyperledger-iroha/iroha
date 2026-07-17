@@ -38,6 +38,14 @@ emitted Core envelope remains in immutable authentication history when a
 hidden packet is lost before GST.  Retransmission scans only the reducer's
 bounded per-class retained controls and active certified-body requests.
 
+Post-GST historical catch-up is also exact scheduler ownership.  A responsive
+validator with no local Decision may be opened as one explicit recovery target
+only when a current responsive server already holds the applied Commit receipt.
+The target then uses its own fair runner, certificate discovery, I/O worker,
+and bidirectional bounded packet corridor; the exact Apply command retires that
+ownership atomically.  Observer recovery therefore does not broaden any normal
+current-voter consensus action.
+
 Most importantly, this module has no shadow decision, application, vote,
 view-change, or chain-rollover transition.  A serviced reducer command invokes
 exactly one Core action, while scheduler, timer-admission, chunk, and hidden-
@@ -373,6 +381,25 @@ AsyncBodyEnvelopeTyped(envelope) ==
   /\ envelope.chunk \in 0..AsyncChunkCount
   /\ envelope.nonce \in 0..(AsyncIngressCapacity - 1)
 
+(***************************************************************************
+Runtime typing must inspect the actual finite evidence value, never enumerate
+the powerset-valued `TcRecordSet` carrier.  `TcEnvelopeSet` is useful as a
+mathematical universe, but constructing it for one membership check exceeds
+the pinned TLC set cap even in the initial state.  These predicates are the
+structural membership expansion for the only unbounded record branch.
+***************************************************************************)
+AsyncTcRecordTyped(tc) ==
+  /\ DOMAIN tc = {"context", "height", "view", "votes"}
+  /\ tc.context \in ContextRecords
+  /\ tc.height \in Heights
+  /\ tc.view \in Views
+  /\ tc.votes \subseteq TimeoutVoteRecordSet
+
+AsyncTcEnvelopeTyped(envelope) ==
+  /\ DOMAIN envelope = {"recipient", "tc"}
+  /\ envelope.recipient \in ValidatorIds
+  /\ AsyncTcRecordTyped(envelope.tc)
+
 AsyncItemTyped(item) ==
   /\ DOMAIN item = {"kind", "source", "envelope"}
   /\ item.kind \in AsyncNetworkKinds
@@ -385,10 +412,21 @@ AsyncItemTyped(item) ==
        [] item.kind \in {"PrepareQC", "CommitQC"} ->
             item.envelope \in QcEnvelopeSet
        [] item.kind = "TimeoutVote" -> item.envelope \in TimeoutEnvelopeSet
-       [] item.kind = "TimeoutCertificate" -> item.envelope \in TcEnvelopeSet
+       [] item.kind = "TimeoutCertificate" ->
+            AsyncTcEnvelopeTyped(item.envelope)
        [] item.kind = "CommitCertificateResponse" ->
             item.envelope \in QcEnvelopeSet
        [] OTHER -> AsyncBodyEnvelopeTyped(item.envelope)
+
+AsyncEvidenceTyped(evidence) ==
+  \/ evidence = NoAsyncItem
+  \/ AsyncItemTyped(evidence)
+  \/ evidence \in ProposalRecordSet
+  \/ evidence \in VoteRecordSet
+  \/ evidence \in TimeoutVoteRecordSet
+  \/ evidence \in QcRecordSet
+  \/ AsyncTcRecordTyped(evidence)
+  \/ evidence \in BodyRecordSet
 
 AsyncCandidateTyped(candidate) ==
   /\ DOMAIN candidate = AsyncCandidateDomain
@@ -402,7 +440,7 @@ AsyncCandidateTyped(candidate) ==
   /\ candidate.consumerContext \in ContextRecords
   /\ candidate.consumerView \in Views
   /\ candidate.consumerGeneration \in Generations
-  /\ candidate.evidence \in AsyncEvidenceSet
+  /\ AsyncEvidenceTyped(candidate.evidence)
   /\ candidate.bodyIdentity \in SubjectOrNone
   /\ candidate.manifestIdentity \in SubjectOrNone
   /\ candidate.commitmentIdentity \in SubjectOrNone
@@ -464,12 +502,30 @@ VARIABLES
   asyncIngressLanes,
   asyncIngressReady,
   asyncHeldChunks,
+  asyncHistoricalRecoveryTargets,
   asyncRecoveryPhase,
   asyncRecoveryNode,
   asyncRecoveryGeneration,
   asyncRecoveryReplayQueue
 
 AsyncSchedulerVars ==
+  <<asyncNow, asyncCommandQueues, asyncNextCommandClass,
+    asyncFifoOwed, asyncTimeoutEmitted,
+    asyncRunnerPhase, asyncRunnerBudget,
+    asyncCausalAdmissionOwed, asyncNextLocalSource, asyncIoQueues,
+    asyncOutstandingWork, asyncIoReadyCompletions,
+    asyncLocalReadyCompletions, asyncNextCompletionSource,
+    asyncIoControlAvailable, asyncDeferredCompletionQueues,
+    asyncDeferredProgressQueues, asyncDeferredNormalQueues,
+    asyncNextDeferredClass, asyncDeferredDrainOwed,
+    asyncCausalQueues, asyncOutstandingTags,
+    asyncNodeDeadlines, asyncRetransmitDeadlines,
+    asyncNodeServiceDeadlines, asyncIoServiceDeadlines,
+    asyncSentItems, asyncRetainedControl, asyncActiveRequests, asyncTransport,
+    asyncIngressLanes, asyncIngressReady, asyncHeldChunks,
+    asyncHistoricalRecoveryTargets>>
+
+AsyncSchedulerExceptHistoricalRecoveryTargets ==
   <<asyncNow, asyncCommandQueues, asyncNextCommandClass,
     asyncFifoOwed, asyncTimeoutEmitted,
     asyncRunnerPhase, asyncRunnerBudget,
@@ -493,6 +549,32 @@ AsyncRecoveryVars ==
     asyncRecoveryReplayQueue>>
 
 AsyncAllVars == <<vars, AsyncSchedulerVars, AsyncRecoveryVars>>
+
+\* Every action named by weak fairness is the exact fully framed AsyncNext arm,
+\* not only its inner scheduler or reducer component.  These suffixes bind
+\* every otherwise-outer primed variable before TLC evaluates ENABLED.  Do not
+\* conjoin the complete Core `Next` relation here: the action itself already
+\* supplies an exact Core transition or `UNCHANGED vars`, and redundantly
+\* searching every Core branch makes ENABLED both noisy and needlessly costly.
+\* `AsyncFairActionsRefineAsyncNext` states the typed executable-relation
+\* claim once, outside the fairness queries;
+\* `SumeragiV2AsyncFairnessRefinementProofs` owns its deductive discharge
+\* without changing this executable action relation.
+AsyncCoreOuterFrame ==
+  UNCHANGED <<height, context>>
+
+AsyncNonCrashOuterFrame ==
+  /\ UNCHANGED up
+  /\ UNCHANGED AsyncRecoveryVars
+  /\ AsyncCoreOuterFrame
+
+AsyncNonRunnerOuterFrame ==
+  /\ UNCHANGED asyncNodeServiceDeadlines
+  /\ AsyncNonCrashOuterFrame
+
+AsyncRecoveryOuterFrame ==
+  /\ UNCHANGED up
+  /\ AsyncCoreOuterFrame
 
 AsyncIoVars ==
   <<asyncIoQueues, asyncOutstandingWork, asyncIoReadyCompletions,
@@ -530,6 +612,9 @@ AsyncVotersAt(initialContext) ==
   Responsive \cap VotingRoster(initialContext.epoch)
 
 AsyncCurrentResponsiveVoters == Responsive \cap CurrentVoters
+
+HistoricalRecoveryTarget(node) ==
+  node \in asyncHistoricalRecoveryTargets
 
 AsyncGenesisResponsiveVoters ==
   AsyncVotersAt(ContextRecord(0, <<>>))
@@ -1371,13 +1456,44 @@ the fair serialized runtime turn remains continuously enabled.  Folding this
 prefix into `RuntimeStep` would let repeated discovery satisfy weak fairness
 while an already queued reducer command never executes.
 ***************************************************************************)
-CommitCertificateDiscoveryDue(node) ==
-  /\ node \in AsyncCurrentResponsiveVoters
+CommitCertificateDiscoveryReady(node) ==
   /\ ~ResponsiveReplayQuarantined(node)
   /\ asyncNow >= AsyncRoundTimeout
   /\ ~NodeHasDecision(node)
   /\ ActiveCommitCertificateRequests(node) = {}
   /\ CommitCertificateRequestOutbox(node) # {}
+
+CommitCertificateDiscoveryDue(node) ==
+  /\ node \in AsyncCurrentResponsiveVoters
+  /\ CommitCertificateDiscoveryReady(node)
+
+HistoricalCommitCertificateDiscoveryDue(node) ==
+  /\ HistoricalRecoveryTarget(node)
+  /\ CommitCertificateDiscoveryReady(node)
+
+(***************************************************************************
+An old-height recovery target is explicit scheduler ownership, not a chain-
+wrapper exception to the exact Async transition relation.  The target may be
+outside the frozen voting roster, but it must be a responsive live validator
+and a current responsive server must already hold the exact applied Commit
+receipt.  Opening is post-GST and only precedes local Decision installation;
+the exact Apply command below retires the target atomically.
+***************************************************************************)
+HistoricalRecoverySourceReady(node) ==
+  /\ node \in Responsive \cap up
+  /\ ~NodeHasDecision(node)
+  /\ ~NodeHasApplication(node)
+  /\ \E server \in (AsyncCurrentResponsiveVoters \cap up) \ {node}:
+       NodeHasApplication(server)
+
+OpenHistoricalRecovery(node) ==
+  /\ gst
+  /\ HistoricalRecoverySourceReady(node)
+  /\ ~HistoricalRecoveryTarget(node)
+  /\ asyncHistoricalRecoveryTargets' =
+       asyncHistoricalRecoveryTargets \cup {node}
+  /\ UNCHANGED <<vars, AsyncSchedulerExceptHistoricalRecoveryTargets,
+                 AsyncRecoveryVars>>
 
 TimeoutDue(node) ==
   /\ node \in AsyncCurrentResponsiveVoters
@@ -1505,7 +1621,7 @@ RegularCoreCommand(command) ==
 AsyncAuxVars ==
   <<asyncOutstandingTags, asyncNodeDeadlines, asyncRetransmitDeadlines,
     asyncSentItems, asyncRetainedControl, asyncActiveRequests, asyncTransport, asyncIngressLanes, asyncIngressReady,
-    asyncHeldChunks
+    asyncHeldChunks, asyncHistoricalRecoveryTargets
     >>
 
 ExecuteRegularCommand(command) ==
@@ -1525,7 +1641,8 @@ ExecuteSignProposal(command) ==
           /\ PublishControlAndEphemeralItems(controlItems, chunkItems)
   /\ UNCHANGED <<asyncOutstandingTags, asyncNodeDeadlines,
                  asyncRetransmitDeadlines,
-                 asyncIngressLanes, asyncIngressReady, asyncHeldChunks>>
+                 asyncIngressLanes, asyncIngressReady, asyncHeldChunks,
+                 asyncHistoricalRecoveryTargets>>
 
 ExecuteSignVote(command) ==
   /\ command.kind = "SignVote"
@@ -1536,7 +1653,8 @@ ExecuteSignVote(command) ==
        /\ PublishControlItems(VoteOutbox(request))
   /\ UNCHANGED <<asyncOutstandingTags, asyncNodeDeadlines,
                  asyncRetransmitDeadlines,
-                 asyncIngressLanes, asyncIngressReady, asyncHeldChunks>>
+                 asyncIngressLanes, asyncIngressReady, asyncHeldChunks,
+                 asyncHistoricalRecoveryTargets>>
 
 ExecuteFormPrepareQC(command) ==
   LET signers == VoteSignersAt(command.node, command.view, "Prepare",
@@ -1549,7 +1667,7 @@ ExecuteFormPrepareQC(command) ==
      /\ UNCHANGED <<asyncOutstandingTags, asyncNodeDeadlines,
                     asyncRetransmitDeadlines,
                     asyncIngressLanes, asyncIngressReady,
-                    asyncHeldChunks
+                    asyncHeldChunks, asyncHistoricalRecoveryTargets
                     >>
 
 ExecuteSignTimeout(command) ==
@@ -1561,7 +1679,8 @@ ExecuteSignTimeout(command) ==
        /\ PublishControlItems(TimeoutOutbox(request))
   /\ UNCHANGED <<asyncOutstandingTags, asyncNodeDeadlines,
                  asyncRetransmitDeadlines,
-                 asyncIngressLanes, asyncIngressReady, asyncHeldChunks>>
+                 asyncIngressLanes, asyncIngressReady, asyncHeldChunks,
+                 asyncHistoricalRecoveryTargets>>
 
 ExecutePersistInstall(command) ==
   /\ command.kind = "PersistInstallTC"
@@ -1580,7 +1699,8 @@ ExecutePersistInstall(command) ==
        [asyncRetransmitDeadlines EXCEPT
           ![command.node] = asyncNow + AsyncRetransmitPeriod]
   /\ UNCHANGED <<asyncOutstandingTags,
-                 asyncIngressLanes, asyncIngressReady, asyncHeldChunks>>
+                 asyncIngressLanes, asyncIngressReady, asyncHeldChunks,
+                 asyncHistoricalRecoveryTargets>>
 
 ExecutePersistDecision(command) ==
   /\ command.kind = "PersistDecision"
@@ -1593,7 +1713,7 @@ ExecutePersistDecision(command) ==
   /\ UNCHANGED <<asyncOutstandingTags, asyncNodeDeadlines,
                  asyncRetransmitDeadlines,
                  asyncIngressLanes, asyncIngressReady,
-                 asyncHeldChunks>>
+                 asyncHeldChunks, asyncHistoricalRecoveryTargets>>
 
 ExecuteRequestCertifiedBody(command) ==
   /\ command.kind = "RequestCertifiedBody"
@@ -1610,7 +1730,8 @@ ExecuteRequestCertifiedBody(command) ==
             CertifiedRequestOutbox(command.node, decision.qc))
   /\ UNCHANGED <<asyncOutstandingTags, asyncNodeDeadlines,
                  asyncRetransmitDeadlines,
-                 asyncIngressLanes, asyncIngressReady, asyncHeldChunks>>
+                 asyncIngressLanes, asyncIngressReady, asyncHeldChunks,
+                 asyncHistoricalRecoveryTargets>>
 
 (***************************************************************************
 The reducer owns one Decision `FetchBody` frontier.  The adapter resolves it
@@ -1636,13 +1757,16 @@ ExecuteDecisionFetch(command) ==
                  CertifiedRequestOutbox(command.node, decision.qc))
   /\ UNCHANGED <<asyncOutstandingTags, asyncNodeDeadlines,
                   asyncRetransmitDeadlines,
-                  asyncIngressLanes, asyncIngressReady, asyncHeldChunks>>
+                  asyncIngressLanes, asyncIngressReady, asyncHeldChunks,
+                  asyncHistoricalRecoveryTargets>>
 
 ExecuteApply(command) ==
   /\ command.kind = "Apply"
   /\ \E qc \in DecisionQcValues:
        /\ CommandMatches(command, command.node, qc.view, qc.subject)
        /\ ApplyDecision(command.node, qc)
+  /\ asyncHistoricalRecoveryTargets' =
+       asyncHistoricalRecoveryTargets \ {command.node}
   /\ UNCHANGED <<asyncOutstandingTags, asyncNodeDeadlines,
                  asyncRetransmitDeadlines, asyncSentItems, asyncRetainedControl, asyncActiveRequests, asyncTransport,
                  asyncIngressLanes, asyncIngressReady, asyncHeldChunks>>
@@ -1676,7 +1800,7 @@ ExecuteCoreDelivery(command) ==
                     asyncRetransmitDeadlines, asyncSentItems,
                     asyncActiveRequests, asyncTransport,
                     asyncIngressLanes, asyncIngressReady,
-                    asyncHeldChunks
+                    asyncHeldChunks, asyncHistoricalRecoveryTargets
                     >>
 
 ExecuteChunkDelivery(command) ==
@@ -1696,7 +1820,8 @@ ExecuteChunkDelivery(command) ==
                                item.envelope.chunk)}
      /\ UNCHANGED <<asyncOutstandingTags, asyncNodeDeadlines,
                     asyncRetransmitDeadlines, asyncTransport,
-                    asyncIngressLanes, asyncIngressReady
+                    asyncIngressLanes, asyncIngressReady,
+                    asyncHistoricalRecoveryTargets
                     >>
 
 ExecuteRejectAuthenticatedJunk(command) ==
@@ -1713,7 +1838,7 @@ ExecuteRejectAuthenticatedJunk(command) ==
      /\ UNCHANGED <<asyncOutstandingTags, asyncNodeDeadlines,
                     asyncRetransmitDeadlines, asyncTransport,
                     asyncIngressLanes, asyncIngressReady,
-                    asyncHeldChunks
+                    asyncHeldChunks, asyncHistoricalRecoveryTargets
                     >>
 
 ExecuteCommand(command) ==
@@ -1775,7 +1900,7 @@ DiscardCommand(command) ==
   /\ UNCHANGED <<asyncOutstandingTags, asyncNodeDeadlines,
                  asyncRetransmitDeadlines, asyncTransport,
                  asyncIngressLanes, asyncIngressReady,
-                 asyncHeldChunks
+                 asyncHeldChunks, asyncHistoricalRecoveryTargets
                  >>
 
 (***************************************************************************
@@ -1889,7 +2014,8 @@ DeferCommand(command) ==
                     asyncOutstandingTags,
                     asyncNodeDeadlines, asyncRetransmitDeadlines,
                     asyncSentItems, asyncRetainedControl, asyncActiveRequests, asyncTransport, asyncIngressLanes,
-                    asyncIngressReady, asyncHeldChunks
+                    asyncIngressReady, asyncHeldChunks,
+                    asyncHistoricalRecoveryTargets
                     >>
 
 DeferredQueueNonempty(node) ==
@@ -2051,7 +2177,8 @@ AdmitHiddenPacket(recipient, source) ==
                     asyncRunnerBudget, AsyncIoVars, asyncOutstandingTags,
                     asyncNodeDeadlines, asyncRetransmitDeadlines,
                     asyncNodeServiceDeadlines, asyncIoServiceDeadlines,
-                    asyncSentItems, asyncRetainedControl, asyncActiveRequests, asyncHeldChunks
+                    asyncSentItems, asyncRetainedControl, asyncActiveRequests,
+                    asyncHeldChunks, asyncHistoricalRecoveryTargets
                     >>
 
 (*
@@ -2079,7 +2206,8 @@ CoalesceHiddenPacket(recipient, source) ==
                     asyncNodeDeadlines, asyncRetransmitDeadlines,
                     asyncNodeServiceDeadlines, asyncIoServiceDeadlines,
                     asyncSentItems, asyncRetainedControl,
-                    asyncActiveRequests, asyncHeldChunks>>
+                    asyncActiveRequests, asyncHeldChunks,
+                    asyncHistoricalRecoveryTargets>>
 
 AdmitFreshHiddenPacket(recipient, source) ==
   AdmitHiddenPacket(recipient, source)
@@ -2117,7 +2245,8 @@ CertifiedResponseAuthorized(item) ==
 
 CommitCertificateRequestAuthorized(item) ==
   /\ item.kind = "CommitCertificateRequest"
-  /\ item.source \in CurrentVoters
+  /\ item.source
+       \in CurrentVoters \cup asyncHistoricalRecoveryTargets
   /\ item.envelope.recipient \in CurrentVoters
   /\ item.envelope.height = context.height
 
@@ -2259,6 +2388,12 @@ DrainFairIngressSelected(node) ==
   IN /\ asyncIngressReady[node] # <<>>
      /\ DrainableIngressIndices(node) # {}
      /\ PopSelectedIngress(node, index, laneIndex)
+     /\ IF /\ item.kind = "CommitCertificateResponse"
+              /\ item \in asyncSentItems
+              /\ CommitCertificateResponseAuthorized(item)
+              /\ item.envelope \notin qcNetwork
+        THEN ImportAuthenticatedCommitCertificate(item.envelope)
+        ELSE UNCHANGED vars
      /\ IF item.kind = "Noise" \/ item \notin asyncSentItems
         THEN /\ UNCHANGED <<asyncCommandQueues,
                             asyncNextCommandClass>>
@@ -2343,10 +2478,10 @@ DrainFairIngressSelected(node) ==
                        /\ UNCHANGED <<asyncSentItems,
                                       asyncRetainedControl,
                                       asyncActiveRequests>>
-     /\ UNCHANGED <<vars, asyncFifoOwed, asyncTimeoutEmitted,
+     /\ UNCHANGED <<asyncFifoOwed, asyncTimeoutEmitted,
                     asyncOutstandingTags, asyncNodeDeadlines,
                     asyncRetransmitDeadlines, asyncTransport,
-                    asyncHeldChunks
+                    asyncHeldChunks, asyncHistoricalRecoveryTargets
                     >>
 
 (***************************************************************************
@@ -2430,7 +2565,8 @@ DrainHistoricalIngressSelected(node) ==
                     asyncCausalQueues, asyncOutstandingTags,
                     asyncNodeDeadlines, asyncRetransmitDeadlines,
                     asyncSentItems, asyncRetainedControl,
-                    asyncActiveRequests, asyncTransport, asyncHeldChunks>>
+                    asyncActiveRequests, asyncTransport, asyncHeldChunks,
+                    asyncHistoricalRecoveryTargets>>
 
 AdmitCausalHead(node) ==
   LET candidate == HeadCausalCandidate(node)
@@ -2465,7 +2601,7 @@ AdmitCausalHead(node) ==
                     asyncOutstandingTags, asyncNodeDeadlines,
                     asyncRetransmitDeadlines, asyncSentItems, asyncRetainedControl, asyncActiveRequests, asyncTransport,
                     asyncIngressLanes, asyncIngressReady,
-                    asyncHeldChunks>>
+                    asyncHeldChunks, asyncHistoricalRecoveryTargets>>
 
 SelectedCompletionSource(node) ==
   IF asyncNextCompletionSource[node] = "Io"
@@ -2565,9 +2701,9 @@ AdmitProducerCompletion(node) ==
                     asyncOutstandingTags, asyncNodeDeadlines,
                     asyncRetransmitDeadlines, asyncSentItems, asyncRetainedControl, asyncActiveRequests, asyncTransport,
                     asyncIngressLanes, asyncIngressReady,
-                    asyncHeldChunks>>
+                    asyncHeldChunks, asyncHistoricalRecoveryTargets>>
 
-ServiceIoWorker(node) ==
+ServiceIoWorkerWork(node) ==
   LET job == Head(asyncIoQueues[node])
       responseItems ==
         IF job.class # "Serve"
@@ -2577,7 +2713,7 @@ ServiceIoWorker(node) ==
              ELSE IF CommitCertificateServeCanRespond(job.candidate.item)
                   THEN CommitCertificateResponseItems(job.candidate.item)
                   ELSE {}
-  IN /\ node \in AsyncCurrentResponsiveVoters \cap up
+  IN /\ node \in up
      /\ ResponsiveReplayExecutorAllowed(node)
      /\ AsyncIoQueueDepth(node) > 0
      /\ asyncIoQueues' =
@@ -2609,10 +2745,18 @@ ServiceIoWorker(node) ==
                     asyncOutstandingTags, asyncNodeDeadlines,
                     asyncRetransmitDeadlines,
                     asyncIngressLanes, asyncIngressReady,
-                    asyncHeldChunks>>
+                    asyncHeldChunks, asyncHistoricalRecoveryTargets>>
 
-EnqueueIoLocalControl(node) ==
-  /\ node \in AsyncCurrentResponsiveVoters \cap up
+ServiceIoWorker(node) ==
+  /\ node \in AsyncCurrentResponsiveVoters
+  /\ ServiceIoWorkerWork(node)
+
+ServiceHistoricalRecoveryIoWorker(node) ==
+  /\ HistoricalRecoveryTarget(node)
+  /\ ServiceIoWorkerWork(node)
+
+EnqueueIoLocalControlWork(node) ==
+  /\ node \in up
   /\ ~ResponsiveReplayQuarantined(node)
   /\ ~NodeHasApplication(node)
   /\ asyncIoControlAvailable[node]
@@ -2633,7 +2777,16 @@ EnqueueIoLocalControl(node) ==
                  asyncOutstandingTags, asyncNodeDeadlines,
                  asyncRetransmitDeadlines, asyncNodeServiceDeadlines,
                  asyncIoServiceDeadlines, asyncSentItems, asyncRetainedControl, asyncActiveRequests, asyncTransport,
-                 asyncIngressLanes, asyncIngressReady, asyncHeldChunks>>
+                 asyncIngressLanes, asyncIngressReady, asyncHeldChunks,
+                 asyncHistoricalRecoveryTargets>>
+
+EnqueueIoLocalControl(node) ==
+  /\ node \in AsyncCurrentResponsiveVoters
+  /\ EnqueueIoLocalControlWork(node)
+
+EnqueueHistoricalRecoveryIoLocalControl(node) ==
+  /\ HistoricalRecoveryTarget(node)
+  /\ EnqueueIoLocalControlWork(node)
 
 RetainedProposalChunks(node) ==
   UNION {
@@ -2682,9 +2835,8 @@ BeginTimeoutEnabled(node) ==
     /\ selectedNode = node
     /\ ENABLED BeginTimeout(selectedNode)
 
-DirectCommitCertificateDiscoveryStep(node) ==
+CommitCertificateDiscoveryStepWork(node) ==
   /\ node \in up
-  /\ CommitCertificateDiscoveryDue(node)
   /\ UNCHANGED <<vars, asyncNow,
                  asyncCommandQueues, asyncNextCommandClass,
                  asyncFifoOwed, asyncTimeoutEmitted,
@@ -2695,10 +2847,19 @@ DirectCommitCertificateDiscoveryStep(node) ==
                  asyncRetransmitDeadlines,
                  asyncNodeServiceDeadlines, asyncIoServiceDeadlines,
                  asyncIngressLanes,
-                 asyncIngressReady, asyncHeldChunks>>
+                 asyncIngressReady, asyncHeldChunks,
+                 asyncHistoricalRecoveryTargets>>
   /\ PublishCommitCertificateRequests(
        CommitCertificateRequestOutbox(node))
   /\ LeaveCausalQueues
+
+DirectCommitCertificateDiscoveryStep(node) ==
+  /\ CommitCertificateDiscoveryDue(node)
+  /\ CommitCertificateDiscoveryStepWork(node)
+
+DirectHistoricalCommitCertificateDiscoveryStep(node) ==
+  /\ HistoricalCommitCertificateDiscoveryDue(node)
+  /\ CommitCertificateDiscoveryStepWork(node)
 
 DirectTimeoutStep(node) ==
   /\ TimeoutDue(node)
@@ -2726,7 +2887,8 @@ DirectTimeoutStep(node) ==
   /\ UNCHANGED <<asyncCommandQueues, asyncNextCommandClass,
                  asyncNodeDeadlines,
                  asyncRetransmitDeadlines, asyncSentItems, asyncRetainedControl, asyncActiveRequests, asyncTransport,
-                 asyncIngressLanes, asyncIngressReady, asyncHeldChunks>>
+                 asyncIngressLanes, asyncIngressReady, asyncHeldChunks,
+                 asyncHistoricalRecoveryTargets>>
 
 DirectRetransmitStep(node) ==
   /\ RetransmitDue(node)
@@ -2755,7 +2917,8 @@ DirectRetransmitStep(node) ==
   /\ UNCHANGED <<vars, asyncCommandQueues, asyncNextCommandClass,
                  asyncTimeoutEmitted,
                  asyncNodeDeadlines, asyncIngressLanes,
-                 asyncIngressReady, asyncHeldChunks
+                 asyncIngressReady, asyncHeldChunks,
+                 asyncHistoricalRecoveryTargets
                  >>
 
 DeferredTimeoutExecutable(node) ==
@@ -2783,7 +2946,8 @@ DeferredTimeoutStep(node) ==
                  asyncFifoOwed,
                  asyncTimeoutEmitted, asyncNodeDeadlines,
                  asyncRetransmitDeadlines, asyncSentItems, asyncRetainedControl, asyncActiveRequests, asyncTransport,
-                 asyncIngressLanes, asyncIngressReady, asyncHeldChunks>>
+                 asyncIngressLanes, asyncIngressReady, asyncHeldChunks,
+                 asyncHistoricalRecoveryTargets>>
 
 DeferredRetransmitStep(node) ==
   /\ "RetransmitElapsed" \in asyncOutstandingTags[node]
@@ -2804,7 +2968,8 @@ DeferredRetransmitStep(node) ==
                  asyncFifoOwed,
                  asyncTimeoutEmitted, asyncNodeDeadlines,
                  asyncRetransmitDeadlines,
-                 asyncIngressLanes, asyncIngressReady, asyncHeldChunks>>
+                 asyncIngressLanes, asyncIngressReady, asyncHeldChunks,
+                 asyncHistoricalRecoveryTargets>>
 
 DeferredTagExecutable(node) ==
   DeferredTimeoutExecutable(node)
@@ -2864,7 +3029,8 @@ DeferredDrainStep(node) ==
                          asyncNextDeferredClass, asyncOutstandingTags,
                          asyncNodeDeadlines, asyncRetransmitDeadlines,
                          asyncSentItems, asyncRetainedControl, asyncActiveRequests, asyncTransport, asyncIngressLanes,
-                         asyncIngressReady, asyncHeldChunks>>
+                         asyncIngressReady, asyncHeldChunks,
+                         asyncHistoricalRecoveryTargets>>
           /\ LeaveCausalQueues
           /\ asyncDeferredDrainOwed' =
                [asyncDeferredDrainOwed EXCEPT ![node] = FALSE]
@@ -2893,7 +3059,8 @@ DeferredDrainStep(node) ==
                                       asyncNodeDeadlines,
                                       asyncRetransmitDeadlines, asyncSentItems, asyncRetainedControl, asyncActiveRequests,
                                       asyncTransport, asyncIngressLanes,
-                                      asyncIngressReady, asyncHeldChunks>>
+                                      asyncIngressReady, asyncHeldChunks,
+                                      asyncHistoricalRecoveryTargets>>
                        /\ asyncDeferredDrainOwed' =
                             [asyncDeferredDrainOwed EXCEPT ![node] = FALSE]
                   ELSE /\ RemoveNextDeferredCommand(node)
@@ -2910,7 +3077,8 @@ IdleRuntimeStep(node) ==
                  AsyncDeferredVars,
                  asyncOutstandingTags, asyncNodeDeadlines,
                  asyncRetransmitDeadlines, asyncSentItems, asyncRetainedControl, asyncActiveRequests, asyncTransport,
-                 asyncIngressLanes, asyncIngressReady, asyncHeldChunks>>
+                 asyncIngressLanes, asyncIngressReady, asyncHeldChunks,
+                 asyncHistoricalRecoveryTargets>>
   /\ LeaveCausalQueues
   /\ asyncFifoOwed' = [asyncFifoOwed EXCEPT ![node] = FALSE]
 
@@ -2973,7 +3141,8 @@ LocalAdmissionStep(node) ==
                           asyncRetransmitDeadlines, asyncSentItems,
                           asyncRetainedControl, asyncActiveRequests,
                           asyncTransport, asyncIngressLanes,
-                          asyncIngressReady, asyncHeldChunks>>
+                          asyncIngressReady, asyncHeldChunks,
+                          asyncHistoricalRecoveryTargets>>
           /\ asyncRunnerPhase' =
                [asyncRunnerPhase EXCEPT ![node] = "Ingress"]
           /\ asyncRunnerBudget' =
@@ -2998,7 +3167,8 @@ IngressDrainStep(node) ==
                          asyncOutstandingTags,
                          asyncNodeDeadlines, asyncRetransmitDeadlines,
                          asyncSentItems, asyncRetainedControl, asyncActiveRequests, asyncTransport, asyncIngressLanes,
-                         asyncIngressReady, asyncHeldChunks
+                         asyncIngressReady, asyncHeldChunks,
+                         asyncHistoricalRecoveryTargets
                          >>
           /\ asyncRunnerPhase' =
                [asyncRunnerPhase EXCEPT ![node] = "Runtime"]
@@ -3014,8 +3184,8 @@ SerializedRuntimeStep(node) ==
   /\ asyncRunnerBudget' =
        [asyncRunnerBudget EXCEPT ![node] = AsyncQueueCapacity]
 
-RunNode(node) ==
-  /\ node \in AsyncCurrentResponsiveVoters \cap up
+RunNodeWork(node) ==
+  /\ node \in up
   /\ ~NodeHasApplication(node)
   /\ IF ResponsiveReplayQuarantined(node)
      THEN /\ ResponsiveReplayDraining(node)
@@ -3032,19 +3202,27 @@ RunNode(node) ==
           ![node] = asyncNow + AsyncDeliveryBound]
   /\ UNCHANGED asyncIoServiceDeadlines
 
+RunNode(node) ==
+  /\ node \in AsyncCurrentResponsiveVoters
+  /\ RunNodeWork(node)
+
+RunHistoricalRecoveryNode(node) ==
+  /\ HistoricalRecoveryTarget(node)
+  /\ RunNodeWork(node)
+
 ResponsiveReplayRunNode ==
   LET node == asyncRecoveryNode
   IN /\ ~gst
      /\ ResponsiveReplayDraining(node)
      /\ RunNode(node)
-     /\ UNCHANGED <<up, AsyncRecoveryVars>>
+     /\ AsyncNonCrashOuterFrame
 
 ResponsiveReplayServiceIoWorker ==
   LET node == asyncRecoveryNode
   IN /\ ~gst
      /\ ResponsiveReplayDraining(node)
      /\ ServiceIoWorker(node)
-     /\ UNCHANGED <<up, AsyncRecoveryVars>>
+     /\ AsyncNonRunnerOuterFrame
 
 HistoricalIdleStep ==
   /\ UNCHANGED <<vars, asyncCommandQueues, asyncNextCommandClass,
@@ -3056,7 +3234,7 @@ HistoricalIdleStep ==
                  asyncSentItems, asyncRetainedControl,
                  asyncActiveRequests, asyncTransport,
                  asyncIngressLanes, asyncIngressReady,
-                 asyncHeldChunks>>
+                 asyncHeldChunks, asyncHistoricalRecoveryTargets>>
 
 RunHistoricalServer(node) ==
   /\ node \in AsyncCurrentResponsiveVoters \cap up
@@ -3357,6 +3535,8 @@ ResetNodeSchedulerForRestart(node, replay) ==
   /\ asyncIngressReady' = [asyncIngressReady EXCEPT ![node] = <<>>]
   /\ asyncHeldChunks' =
        {receipt \in asyncHeldChunks: receipt.node # node}
+  /\ asyncHistoricalRecoveryTargets' =
+       asyncHistoricalRecoveryTargets \ {node}
 
 AsyncSetGST ==
   /\ ~gst
@@ -3365,6 +3545,7 @@ AsyncSetGST ==
   /\ Responsive \subseteq up
   /\ SetGST
   /\ UNCHANGED <<AsyncSchedulerVars, AsyncRecoveryVars>>
+  /\ AsyncNonRunnerOuterFrame
 
 (***************************************************************************
 Faults outside the trusted product loop.  Before GST packets may be lost and
@@ -3385,7 +3566,8 @@ PreGstLosePacket(packet) ==
                  AsyncIoVars, asyncOutstandingTags, asyncNodeDeadlines,
                  asyncRetransmitDeadlines, asyncNodeServiceDeadlines,
                  asyncIoServiceDeadlines, asyncSentItems, asyncRetainedControl, asyncActiveRequests, asyncIngressLanes,
-                 asyncIngressReady, asyncHeldChunks
+                 asyncIngressReady, asyncHeldChunks,
+                 asyncHistoricalRecoveryTargets
                  >>
 
 PreGstCrash(node) ==
@@ -3419,6 +3601,7 @@ PreGstResponsiveRestart ==
      /\ asyncRecoveryNode' = node
      /\ asyncRecoveryGeneration' = generation[node] + 1
      /\ asyncRecoveryReplayQueue' = asyncRecoveryReplayQueue
+     /\ AsyncCoreOuterFrame
 
 RecoveryCoreReplay(node, candidate) ==
   CASE candidate.kind = "SignProposal" ->
@@ -3448,6 +3631,7 @@ PreGstResponsiveReplay ==
      /\ asyncRecoveryGeneration' = generation[node]
      /\ asyncRecoveryReplayQueue' =
           IF Len(signatures) > 0 THEN Tail(signatures) ELSE <<>>
+     /\ AsyncCoreOuterFrame
 
 DriveResponsiveReplayHead ==
   LET node == asyncRecoveryNode
@@ -3475,7 +3659,8 @@ DriveResponsiveReplayHead ==
                      asyncSentItems, asyncRetainedControl,
                      asyncActiveRequests, asyncTransport,
                      asyncIngressLanes, asyncIngressReady,
-                     asyncHeldChunks>>
+                     asyncHeldChunks, asyncHistoricalRecoveryTargets>>
+     /\ AsyncRecoveryOuterFrame
 
 FinishResponsiveReplay ==
   LET node == asyncRecoveryNode
@@ -3508,7 +3693,8 @@ FinishResponsiveReplay ==
                      asyncSentItems, asyncRetainedControl,
                      asyncActiveRequests, asyncTransport,
                      asyncIngressLanes, asyncIngressReady,
-                     asyncHeldChunks>>
+                     asyncHeldChunks, asyncHistoricalRecoveryTargets>>
+     /\ AsyncRecoveryOuterFrame
 
 RearmResponsiveRecovery ==
   /\ ~gst
@@ -3556,7 +3742,7 @@ InjectByzantineNoise(source, recipient, nonce) ==
                     asyncNodeDeadlines, asyncRetransmitDeadlines,
                     asyncNodeServiceDeadlines, asyncIoServiceDeadlines,
                     asyncSentItems, asyncRetainedControl, asyncActiveRequests, asyncIngressLanes, asyncIngressReady,
-                    asyncHeldChunks
+                    asyncHeldChunks, asyncHistoricalRecoveryTargets
                     >>
 
 InjectAuthenticatedJunk(kind, source, recipient, nonce) ==
@@ -3584,7 +3770,7 @@ InjectAuthenticatedJunk(kind, source, recipient, nonce) ==
                     asyncNodeDeadlines, asyncRetransmitDeadlines,
                     asyncNodeServiceDeadlines, asyncIoServiceDeadlines,
                     asyncIngressLanes, asyncIngressReady,
-                    asyncHeldChunks
+                    asyncHeldChunks, asyncHistoricalRecoveryTargets
                     >>
 
 InjectByzantineCertifiedRequest(source, recipient, qc, nonce) ==
@@ -3612,7 +3798,7 @@ InjectByzantineCertifiedRequest(source, recipient, qc, nonce) ==
                     asyncNodeDeadlines, asyncRetransmitDeadlines,
                     asyncNodeServiceDeadlines, asyncIoServiceDeadlines,
                     asyncIngressLanes, asyncIngressReady,
-                    asyncHeldChunks
+                    asyncHeldChunks, asyncHistoricalRecoveryTargets
                     >>
 
 AsyncByzantineProposal(signer, roundView, subject,
@@ -3631,7 +3817,7 @@ AsyncByzantineProposal(signer, roundView, subject,
                     asyncNodeDeadlines, asyncRetransmitDeadlines,
                     asyncNodeServiceDeadlines, asyncIoServiceDeadlines,
                     asyncIngressLanes, asyncIngressReady,
-                    asyncHeldChunks
+                    asyncHeldChunks, asyncHistoricalRecoveryTargets
                     >>
 
 AsyncByzantineVote(signer, roundView, phase, subject) ==
@@ -3647,7 +3833,7 @@ AsyncByzantineVote(signer, roundView, phase, subject) ==
                     asyncNodeDeadlines, asyncRetransmitDeadlines,
                     asyncNodeServiceDeadlines, asyncIoServiceDeadlines,
                     asyncIngressLanes, asyncIngressReady,
-                    asyncHeldChunks
+                    asyncHeldChunks, asyncHistoricalRecoveryTargets
                     >>
 
 AsyncByzantineTimeout(signer, roundView, highRank, highSubject) ==
@@ -3663,7 +3849,7 @@ AsyncByzantineTimeout(signer, roundView, highRank, highSubject) ==
                     asyncNodeDeadlines, asyncRetransmitDeadlines,
                     asyncNodeServiceDeadlines, asyncIoServiceDeadlines,
                     asyncIngressLanes, asyncIngressReady,
-                    asyncHeldChunks
+                    asyncHeldChunks, asyncHistoricalRecoveryTargets
                     >>
 
 AsyncFaultStep ==
@@ -3697,15 +3883,23 @@ AsyncNetworkStep ==
 
 OverdueResponsivePackets ==
   {packet \in asyncTransport:
-     /\ packet.item.source \in AsyncCurrentResponsiveVoters
-     /\ packet.item.envelope.recipient \in AsyncCurrentResponsiveVoters
+     /\ \/ /\ packet.item.source \in AsyncCurrentResponsiveVoters
+              /\ packet.item.envelope.recipient
+                   \in AsyncCurrentResponsiveVoters
+        \/ /\ HistoricalRecoveryTarget(packet.item.source)
+              /\ packet.item.envelope.recipient
+                   \in AsyncCurrentResponsiveVoters
+        \/ /\ packet.item.source \in AsyncCurrentResponsiveVoters
+              /\ HistoricalRecoveryTarget(
+                   packet.item.envelope.recipient)
      /\ packet.deadline <= asyncNow}
 
 AsyncTickEnabled ==
   \/ ~gst
   \/ /\ gst
      /\ OverdueResponsivePackets = {}
-     /\ \A node \in AsyncCurrentResponsiveVoters:
+     /\ \A node \in AsyncCurrentResponsiveVoters
+                       \cup asyncHistoricalRecoveryTargets:
           /\ asyncNodeServiceDeadlines[node] > asyncNow
           /\ \/ AsyncIoQueueDepth(node) = 0
              \/ asyncIoServiceDeadlines[node] > asyncNow
@@ -3720,26 +3914,36 @@ AsyncNonClockVars ==
     asyncOutstandingTags, asyncNodeDeadlines, asyncRetransmitDeadlines,
     asyncNodeServiceDeadlines, asyncIoServiceDeadlines, asyncSentItems, asyncRetainedControl, asyncActiveRequests,
     asyncTransport, asyncIngressLanes, asyncIngressReady,
-    asyncHeldChunks>>
+    asyncHeldChunks, asyncHistoricalRecoveryTargets>>
 
 AsyncTick ==
   /\ AsyncTickEnabled
   /\ asyncNow' = asyncNow + 1
   /\ UNCHANGED AsyncNonClockVars
+  /\ AsyncNonRunnerOuterFrame
 
 AsyncRunnerStep ==
   \/ (\E node \in AsyncCurrentResponsiveVoters: RunNode(node))
+  \/ (\E node \in asyncHistoricalRecoveryTargets:
+        RunHistoricalRecoveryNode(node))
   \/ (\E node \in AsyncCurrentResponsiveVoters:
         RunHistoricalServer(node))
 
 AsyncNonRunnerStep ==
   /\ \/ AsyncSetGST
      \/ AsyncTick
+     \/ (\E node \in ValidatorIds: OpenHistoricalRecovery(node))
      \/ (\E node \in AsyncCurrentResponsiveVoters:
            DirectCommitCertificateDiscoveryStep(node))
+     \/ (\E node \in asyncHistoricalRecoveryTargets:
+           DirectHistoricalCommitCertificateDiscoveryStep(node))
      \/ (\E node \in AsyncCurrentResponsiveVoters: ServiceIoWorker(node))
+     \/ (\E node \in asyncHistoricalRecoveryTargets:
+           ServiceHistoricalRecoveryIoWorker(node))
      \/ (\E node \in AsyncCurrentResponsiveVoters:
            EnqueueIoLocalControl(node))
+     \/ (\E node \in asyncHistoricalRecoveryTargets:
+           EnqueueHistoricalRecoveryIoLocalControl(node))
      \/ AsyncNetworkStep
      \/ AsyncFaultStep
   /\ UNCHANGED asyncNodeServiceDeadlines
@@ -3761,17 +3965,101 @@ AsyncNext ==
   /\ UNCHANGED <<height, context>>
   /\ [Next]_vars
 
-PostGstRunNode(node) == gst /\ RunNode(node)
+PostGstRunNode(node) ==
+  /\ gst
+  /\ RunNode(node)
+  /\ AsyncNonCrashOuterFrame
 
-PostGstRunHistoricalServer(node) == gst /\ RunHistoricalServer(node)
+PostGstOpenHistoricalRecovery(node) ==
+  /\ gst
+  /\ OpenHistoricalRecovery(node)
+  /\ AsyncNonRunnerOuterFrame
+
+PostGstRunHistoricalRecoveryNode(node) ==
+  /\ gst
+  /\ RunHistoricalRecoveryNode(node)
+  /\ AsyncNonCrashOuterFrame
+
+PostGstRunHistoricalServer(node) ==
+  /\ gst
+  /\ RunHistoricalServer(node)
+  /\ AsyncNonCrashOuterFrame
 
 PostGstCommitCertificateDiscovery(node) ==
-  gst /\ DirectCommitCertificateDiscoveryStep(node)
+  /\ gst
+  /\ DirectCommitCertificateDiscoveryStep(node)
+  /\ AsyncNonRunnerOuterFrame
 
-PostGstServiceIoWorker(node) == gst /\ ServiceIoWorker(node)
+PostGstHistoricalCommitCertificateDiscovery(node) ==
+  /\ gst
+  /\ DirectHistoricalCommitCertificateDiscoveryStep(node)
+  /\ AsyncNonRunnerOuterFrame
+
+PostGstServiceIoWorker(node) ==
+  /\ gst
+  /\ ServiceIoWorker(node)
+  /\ AsyncNonRunnerOuterFrame
+
+PostGstServiceHistoricalRecoveryIoWorker(node) ==
+  /\ gst
+  /\ ServiceHistoricalRecoveryIoWorker(node)
+  /\ AsyncNonRunnerOuterFrame
 
 PostGstAdmitHiddenPacket(recipient, source) ==
-  gst /\ AdmitIngressPacket(recipient, source)
+  /\ gst
+  /\ AdmitIngressPacket(recipient, source)
+  /\ AsyncNonRunnerOuterFrame
+
+HistoricalRecoveryPacketCorridor(recipient, source) ==
+  \/ /\ HistoricalRecoveryTarget(recipient)
+        /\ source \in AsyncCurrentResponsiveVoters
+  \/ /\ HistoricalRecoveryTarget(source)
+        /\ recipient \in AsyncCurrentResponsiveVoters
+
+PostGstAdmitHistoricalRecoveryPacket(recipient, source) ==
+  /\ gst
+  /\ HistoricalRecoveryPacketCorridor(recipient, source)
+  /\ AdmitIngressPacket(recipient, source)
+  /\ AsyncNonRunnerOuterFrame
+
+(***************************************************************************
+Exact action inventory shared by the weak-fairness clauses below.  Keeping the
+union separate from `WF` makes the semantic audit executable without wrapping
+each ENABLED query in the entire Core transition relation.  The structural
+checker pins this inventory, every quantifier domain, every action's outer
+frame category, and the typed refinement claim against deletion or
+substitution.
+***************************************************************************)
+AsyncFairActionAt(initialContext) ==
+  \/ AsyncSetGST
+  \/ PreGstResponsiveRestart
+  \/ PreGstResponsiveReplay
+  \/ ResponsiveReplayRunNode
+  \/ ResponsiveReplayServiceIoWorker
+  \/ DriveResponsiveReplayHead
+  \/ FinishResponsiveReplay
+  \/ AsyncTick
+  \/ (\E node \in AsyncVotersAt(initialContext):
+        PostGstRunNode(node))
+  \/ (\E node \in Responsive:
+        PostGstOpenHistoricalRecovery(node))
+  \/ (\E node \in Responsive:
+        PostGstRunHistoricalRecoveryNode(node))
+  \/ (\E node \in AsyncVotersAt(initialContext):
+        PostGstRunHistoricalServer(node))
+  \/ (\E node \in AsyncVotersAt(initialContext):
+        PostGstCommitCertificateDiscovery(node))
+  \/ (\E node \in Responsive:
+        PostGstHistoricalCommitCertificateDiscovery(node))
+  \/ (\E node \in AsyncVotersAt(initialContext):
+        PostGstServiceIoWorker(node))
+  \/ (\E node \in Responsive:
+        PostGstServiceHistoricalRecoveryIoWorker(node))
+  \/ (\E recipient \in AsyncVotersAt(initialContext),
+         source \in AsyncVotersAt(initialContext):
+        PostGstAdmitHiddenPacket(recipient, source))
+  \/ (\E recipient \in ValidatorIds, source \in ValidatorIds:
+        PostGstAdmitHistoricalRecoveryPacket(recipient, source))
 
 AsyncFairnessAt(initialContext) ==
   /\ WF_AsyncAllVars(AsyncSetGST)
@@ -3788,15 +4076,26 @@ AsyncFairnessAt(initialContext) ==
   /\ WF_AsyncAllVars(AsyncTick)
   /\ \A node \in AsyncVotersAt(initialContext):
        WF_AsyncAllVars(PostGstRunNode(node))
+  /\ \A node \in Responsive:
+       WF_AsyncAllVars(PostGstOpenHistoricalRecovery(node))
+  /\ \A node \in Responsive:
+       WF_AsyncAllVars(PostGstRunHistoricalRecoveryNode(node))
   /\ \A node \in AsyncVotersAt(initialContext):
        WF_AsyncAllVars(PostGstRunHistoricalServer(node))
   /\ \A node \in AsyncVotersAt(initialContext):
        WF_AsyncAllVars(PostGstCommitCertificateDiscovery(node))
+  /\ \A node \in Responsive:
+       WF_AsyncAllVars(PostGstHistoricalCommitCertificateDiscovery(node))
   /\ \A node \in AsyncVotersAt(initialContext):
        WF_AsyncAllVars(PostGstServiceIoWorker(node))
+  /\ \A node \in Responsive:
+       WF_AsyncAllVars(PostGstServiceHistoricalRecoveryIoWorker(node))
   /\ \A recipient \in AsyncVotersAt(initialContext),
        source \in AsyncVotersAt(initialContext):
        WF_AsyncAllVars(PostGstAdmitHiddenPacket(recipient, source))
+  /\ \A recipient \in ValidatorIds, source \in ValidatorIds:
+       WF_AsyncAllVars(
+         PostGstAdmitHistoricalRecoveryPacket(recipient, source))
 
 AsyncFairness == AsyncFairnessAt(ContextRecord(0, <<>>))
 
@@ -3855,6 +4154,7 @@ AsyncTransportInit ==
   /\ asyncActiveRequests = {}
   /\ asyncTransport = {}
   /\ asyncHeldChunks = {}
+  /\ asyncHistoricalRecoveryTargets = {}
 
 AsyncIngressInit ==
   /\ asyncIngressLanes =
@@ -4027,8 +4327,11 @@ SerializedBusyOwners ==
 SerializedBusyOwnershipInvariant ==
   RequestsUniqueByNode(SerializedBusyOwners)
 
+ActiveBusyCompletionCarrier ==
+  QueuedCandidates \cup CausalCandidates \cup TrackedWorkCandidates
+
 BusyCompletionCandidates(node) ==
-  {candidate \in AsyncCandidateSet:
+  {candidate \in ActiveBusyCompletionCarrier:
      /\ candidate.node = node
      /\ candidate.class = "Completion"
      /\ candidate.item = NoAsyncItem
@@ -4082,9 +4385,6 @@ BusyCompletionCandidates(node) ==
               /\ candidate.view = request.vote.view
               /\ candidate.subject = request.vote.highSubject}
 
-ActiveBusyCompletionCarrier ==
-  QueuedCandidates \cup CausalCandidates \cup TrackedWorkCandidates
-
 (***************************************************************************
 A busy reducer is never justified by a completion stranded behind the
 production Busy-deferred head: its exact persistence/signature completion is
@@ -4094,7 +4394,7 @@ reachable without first asking the busy reducer to accept unrelated work.
 BusyCompletionWitnessInvariant ==
   \A node \in ValidatorIds:
     ~NodeIdle(node) =>
-      BusyCompletionCandidates(node) \cap ActiveBusyCompletionCarrier # {}
+      BusyCompletionCandidates(node) # {}
 
 AsyncProgressOwnershipInvariant ==
   /\ AsyncLogicalCandidateOwnershipInvariant
@@ -4188,6 +4488,12 @@ AsyncPacketContentTypeInvariant ==
 
 AsyncHeldChunksTypeInvariant ==
   /\ asyncHeldChunks \subseteq AsyncChunkReceiptSet
+
+AsyncHistoricalRecoveryTypeInvariant ==
+  /\ asyncHistoricalRecoveryTargets \subseteq Responsive \cap up
+  /\ (asyncHistoricalRecoveryTargets # {} => gst)
+  /\ \A node \in asyncHistoricalRecoveryTargets:
+       ~NodeHasApplication(node)
 
 AsyncTransportContentTypeInvariant ==
   /\ AsyncTransportHistoryTypeInvariant
@@ -4302,11 +4608,26 @@ AsyncSchedulerTypeInvariant ==
   /\ AsyncDeferredTypeInvariant
   /\ AsyncTransportTypeInvariant
   /\ AsyncIngressTypeInvariant
+  /\ AsyncHistoricalRecoveryTypeInvariant
 
 AsyncTypeInvariant ==
   /\ TypeInvariant
   /\ AsyncSchedulerTypeInvariant
   /\ ReceivedTimeoutVotePoolInvariant
+
+(***************************************************************************
+Exact reachable-state refinement obligation for the fair-action inventory.
+The scheduler relation is intentionally executable over arbitrary TLA+ values,
+while the Core `Next` carriers are typed.  Consequently this implication is
+valid only at the ordinary Core-plus-scheduler type boundary.  It remains an
+explicit proof-ledger obligation until the concrete runner projection is
+discharged; a structural source check is not a deductive proof.
+***************************************************************************)
+AsyncFairActionsRefineAsyncNext ==
+  /\ TypeInvariant
+  /\ AsyncSchedulerTypeInvariant
+  => \A initialContext \in ContextRecords:
+       AsyncFairActionAt(initialContext) => AsyncNext
 
 AsyncCompletionReserveInvariant ==
   \A node \in ValidatorIds:

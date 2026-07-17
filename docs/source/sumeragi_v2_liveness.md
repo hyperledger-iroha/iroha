@@ -359,7 +359,7 @@ manufacture a progress event.
 
 ## Implementation evidence and pending inventory
 
-The following focused checks were recorded through 2026-07-16:
+The following focused checks were recorded through 2026-07-17:
 
 - all 248 `iroha_p2p` library tests, including bounded plaintext retention,
   cancellation-safe flush, read/write arbitration, and direct-post exhaustion;
@@ -419,9 +419,40 @@ genesis rerun passed on all validators in 456.76 seconds, with evidence retained
 under
 `target/sumeragi-v2-genesis-final-hardening-20260716/irohad_test_network_7sJJmM`.
 
+A current-working-tree diagnostic then ran the exact authoritative
+four-validator genesis regression with networking required, network-start
+retries disabled,
+and its exact deterministic seed. The single permitted startup attempt passed
+1/1. Live snapshots crossed the original reset boundary through view 10 while
+retaining the exact view-9 locked Commit intent; the regression then observed
+genesis applied on every validator and a common awaiting-proposal successor
+height. All four peers exited with status 0, and libtest completed in 1192.57
+seconds including the cold re-entrant network binary build. The temporary log
+is `/tmp/iroha-root-genesis.1T17yY/run.log`, and the temporary localnet is
+`/tmp/iroha-root-genesis.1T17yY/irohad_test_network_FbEl6A`. This mutable-source
+diagnostic is not a clean signed or checkout-manifest-bound source-attested
+release receipt and does not complete any remaining release gate.
+
 This is implementation and regression evidence, not a release-completion
-claim. The proof ledger still reports `machine_checked_completion: false`, and
-13 obligations remain `specified_unproved`. The action-by-action safety
+claim. The executable effective-lock acquisition model now covers immutable
+physical load identity across consumer rebinds, higher-lock replacement after
+terminating local work, fail-closed completion classification, certified-store
+waiting, retry, and delivery. Its 15,472 generated / 5,910 distinct-state TLC
+search is green to depth 15. Paired mutations expose reload-per-view,
+no-retry-after-store, and future-completion bugs; these are bounded regression
+witnesses, not deductive proof. The model obligation and the separate
+production worker/runtime refinement obligation both remain
+`specified_unproved`. Two production regressions additionally reject an
+unissued future completion without replacing its owner and preserve the latest
+consumer while a missing body waits for durable recovery and retries.
+
+The 46-entry proof ledger now reports 24 `tlaps_proved`, 15
+`specified_unproved`, 6 `trusted_contract`, and 1 `out_of_scope` entry, with
+`machine_checked_completion: false`. The added successor-activation entry pins
+the finite queue-to-publication rank for responsive validators and remains
+unproved. An honest validator outside `Responsive` may retain activation queued
+before GST; neither the formal fairness premise nor the conditional release
+target promises its local-worker progress. The action-by-action safety
 induction is strict-green at 7,826/7,826 obligations, and the downstream
 `SumeragiV2Proofs` module is strict-green at 565/565; historical TC-lock
 authorization and its dependent direct-or-installed-authorization timeout
@@ -434,7 +465,24 @@ Commit-certificate discovery, Consensus-only I/O indexing, and exact
 ready-completion rank. A source-bound mutation gate requires the old refill,
 replacement, discovery, and I/O-index variants to expose their exact
 counterexamples, while the repaired variants pass; a separate bounded
-ownership check exhausts 19,081 generated / 3,104 distinct states to depth 44.
+ownership check exhausts 42,817 generated / 6,208 distinct states to depth 45.
+The expanded graph reflects the independent non-timeout-progress and
+TimeoutVote ingress reservations.
+
+The asynchronous fairness boundary is also source-pinned. All 18 weak-fairness
+targets carry one of four exact outer frames, so TLC sees a value for every
+primed variable when it evaluates `ENABLED`. The exact quantified
+`AsyncFairActionAt` inventory is stated by the typed
+`AsyncFairActionsRefineAsyncNext` operator and proved by the dedicated
+`AsyncFairActionsRefineAsyncNextObligation`. The decomposed default-limit
+strict run proves all 1,143 obligations, including typed command execution,
+the 18 Core projections, and all runner/non-runner/recovery outer frames. The
+checker mutation-tests action deletion, quantifier drift, frame
+misclassification, claim or theorem weakening, unreviewed helper theorems, and
+any TLC-only duplicate variable or fairness relation. The full Core `Next`
+disjunction is intentionally kept out of individual fairness targets to avoid
+re-evaluating unrelated Core branches. This closes only the fair-action
+refinement entry; it does not complete the 15 remaining deductive obligations.
 This is not the complete protected-rank proof: progress-relevant Normal
 proposal/Prepare work and a productive, decreasing deadlock theorem are still
 missing, so no ledger status is promoted. Formal entrypoints now share a

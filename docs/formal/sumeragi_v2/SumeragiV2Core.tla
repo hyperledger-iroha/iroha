@@ -1328,6 +1328,36 @@ FormPrepareQC(node, roundView, subject) ==
                     signProposals, signVotes, signTimeouts, proposalNetwork,
                     voteNetwork, timeoutNetwork, tcNetwork, decisions, applied>>
 
+(***************************************************************************
+The asynchronous adapter may recover an already authenticated durable Commit
+certificate and place one addressed copy back on the Core transport.  The
+certificate must belong to the exact frozen context and the recipient must be
+both responsive and currently up.  Keeping the envelope insertion idempotent
+models fair retransmission without minting a new certificate or changing any
+reducer-local state.
+***************************************************************************)
+ImportAuthenticatedCommitCertificate(envelope) ==
+  /\ envelope \in QcEnvelopeSet
+  /\ envelope.recipient \in Responsive \cap up
+  /\ envelope.qc \in commitQCs
+  /\ envelope.qc.context = context
+  /\ envelope.qc.phase = "Commit"
+  /\ QcWireValid(envelope.qc)
+  /\ envelope \notin qcNetwork
+  /\ qcNetwork' = qcNetwork \cup {envelope}
+  /\ UNCHANGED <<height, context, contextHistory, nodeView, generation,
+                 up, gst, availableBodies, durableBodies,
+                 retainedLockedBodies, validatedBodies, invalidBodies,
+                 seenProposals, receivedVotes, receivedQCs,
+                 receivedTimeoutVotes, receivedTCs, proposalIntents,
+                 prepareIntents, commitIntents, timeoutIntents, prepareQCs,
+                 commitQCs, formedTCs, installedTCs, lockRank, lockSubject,
+                 highestRank, highestSubject, pendingProposal,
+                 pendingPrepare, pendingObservePrepare, pendingLockCommit,
+                 pendingTimeout, pendingInstallTC, pendingDecision,
+                 signProposals, signVotes, signTimeouts, proposalNetwork,
+                 voteNetwork, timeoutNetwork, tcNetwork, decisions, applied>>
+
 DeliverQC(envelope) ==
   LET received == QcAt(envelope.recipient, envelope.qc)
   IN /\ envelope \in qcNetwork
@@ -1978,6 +2008,8 @@ Next ==
   \/ \E envelope \in voteNetwork: DeliverVote(envelope)
   \/ \E node \in ValidatorIds, roundView \in Views,
        subject \in Subjects: FormPrepareQC(node, roundView, subject)
+  \/ \E envelope \in QcEnvelopeSet:
+       ImportAuthenticatedCommitCertificate(envelope)
   \/ \E envelope \in qcNetwork: DeliverQC(envelope)
   \/ \E node \in ValidatorIds, qc \in ReceivedQcValues:
        BeginObservePrepare(node, qc)

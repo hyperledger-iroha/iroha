@@ -28,6 +28,9 @@ bash scripts/formal/run_sumeragi_v2_progress_mutations.sh
 bash scripts/formal/run_sumeragi_v2_tlc.sh ci
 bash scripts/formal/check_sumeragi_v2_replay_trace.sh
 bash scripts/verify_sumeragi_v2.sh
+python3 scripts/formal/sumeragi_v2_verus_evidence.py validate \
+  --root "$repo_root" \
+  --evidence target/formal/sumeragi_v2/verus_evidence.json
 python3 scripts/formal/check_sumeragi_v2_proof_ledger.py \
   --release \
   --evidence target/formal/sumeragi_v2/proof_evidence.json

@@ -18,7 +18,7 @@ ledger.
   for exact parameterized instancing in the indexed chain refinement.
 - `SumeragiV2Core.tla` models addressed asynchronous delivery, durable intents,
   locks and highest PrepareQCs, grouped timeout certificates, future-view
-  catch-up, old-view CommitQCs, body recovery, decisions, and application.
+  recovery, old-view CommitQCs, body recovery, decisions, and application.
 - `SumeragiV2TimeoutDurability.tla`,
   `SumeragiV2TimeoutSigningInvariant.tla`,
   `SumeragiV2TimeoutViewInvariant.tla`, and
@@ -47,10 +47,20 @@ ledger.
   application without creating a successor or join. Certification and local
   application do not use a global all-node barrier. The production trace
   mapping and temporal multi-height induction remain explicit proof debt.
-- `SumeragiV2AsyncNetwork.tla`, `SumeragiV2LivenessProofs.tla`, and
-  `SumeragiV2AsyncLivenessProofs.tla` model the production scheduler and
-  transport abstractions and state the conditional progress obligations after
-  GST.
+- `SumeragiV2EffectiveLockAcquisition.tla` is an executable, height-scoped
+  locked-body owner. It keeps a physical load ID and subject immutable across
+  same-lock consumer rebinds, defers a higher different-subject replacement
+  until the active load terminates, classifies stale/future/wrong/duplicate
+  completions, and retries only after the exact certified body becomes durable.
+  `SumeragiV2EffectiveLockAcquisitionProofs.tla` owns the separate deductive
+  model obligation; the ordinary Rust worker/runtime refinement is a distinct
+  asynchronous proof obligation.
+- `SumeragiV2AsyncNetwork.tla`,
+  `SumeragiV2AsyncFairnessRefinementProofs.tla`,
+  `SumeragiV2LivenessProofs.tla`, and `SumeragiV2AsyncLivenessProofs.tla`
+  model the production scheduler and transport abstractions, own the typed
+  fair-action-to-`AsyncNext` refinement proof, and state the conditional
+  progress obligations after GST.
   The volatile vote pool is the delivery-epoch witness: an exact vote crosses
   once while present, and TC installation clears the local pool. If the
   resulting lock has the node's exact durable Commit intent, acknowledgement
@@ -96,12 +106,14 @@ ledger.
   The production reducer's shared Rust/Verus refinement gate checks the local
   EnterView selection boundary: the persisted TC, pre-install lock,
   post-install durable lock, effect-carried lock, and immediately following
-  recovery fetch must agree on the effective maximum lock. It deliberately
-  makes no asynchronous ownership or fairness claim. Proving that every
-  executor, runtime, worker, request, byte, and queue owner preserves and
-  eventually services that identity remains the explicit
-  `EffectiveLockBodyAcquisitionCompositionObligation` `specified_unproved`
-  debt.
+  recovery fetch must agree on the effective maximum lock. The executable
+  acquisition owner makes the body-rebind and recovery state machine explicit,
+  but its deductive `EffectiveLockAcquisitionModelObligation` remains
+  `specified_unproved`. Proving that every production executor, runtime,
+  worker, request, byte, and queue owner refines and fairly services that model
+  remains the separate
+  `EffectiveLockBodyAcquisitionProductionRefinementObligation`, also
+  `specified_unproved`.
   Generation-scoped vote delivery is ledgered `tlaps_proved`. The one-height
   `AsyncSpecAt` type-closure wrapper has a checked source proof body but remains
   ledgered `specified_unproved` because it consumes
@@ -305,6 +317,25 @@ distinct. This intentionally over-approximates reachable constructor families
 without promising service to authenticated junk. The composite rank and
 starvation obligations remain `specified_unproved`.
 
+All 18 weak-fairness targets are complete transition actions, not inner
+scheduler fragments. Four exact outer-frame categories bind the Core height
+context, crash/recovery state, and runner service deadline according to the
+variables each action may change. `AsyncFairActionAt` inventories the same
+quantified actions as `AsyncFairnessAt`. `AsyncFairActionsRefineAsyncNext` is
+the typed source claim; the dedicated
+`SumeragiV2AsyncFairnessRefinementProofs!AsyncFairActionsRefineAsyncNextObligation`
+theorem proves that every member is one canonical `AsyncNext` transition at a
+Core-plus-scheduler typed state. Its fully decomposed strict run is green at
+1,143/1,143 obligations. The Core transition relation is deliberately not
+conjoined inside each `WF` target: doing so makes TLC re-search unrelated Core
+branches while evaluating `ENABLED`. The structural checker pins the four
+frames, all 18 action classifications, both quantifier inventories, the typed
+claim, and the exact dedicated theorem inventory. The finite TLC specs and
+deductive specs share the same `AsyncAllVars` and `AsyncFairnessAt`; no
+TLC-only fairness relation exists. This promotes only the fair-action
+refinement entry: the 46-entry ledger still has 15 `specified_unproved`
+obligations and keeps `machine_checked_completion: false`.
+
 The target statement is exactly: after GST, with a responsive dual quorum and
 terminating local work, every height eventually decides and every responsive
 validator eventually applies it. It makes no termination claim during an
@@ -338,41 +369,51 @@ records its first-successor handoff, when a successor height exists, as
 `GenesisHeightSuccessorHandoffObligation`. That theorem also has a source proof
 body but remains `specified_unproved` until the strict proof succeeds after
 rotating-leader, application liveness, and the explicit
-`SuccessorActivationAndHistoricalCatchUpProductionRefinementObligation` are
-proved. At the terminal finite
+`SuccessorActivationStarvationFreedomObligation` and
+`SuccessorActivationAndExactHistoricalRecoveryProductionRefinementObligation`
+are proved. At the terminal finite
 horizon the handoff is explicitly vacuous rather than manufacturing a
-successor instance.
+successor instance. The activation obligation uses the minimal scalar carrier
+`0..19`: the pre-failure path adds 9 to the remaining pipeline distance, so a
+fail-closed reset at any stage still strictly descends before authenticated
+recovery resumes the one-shot suffix. Its rank, enabledness, fairness, and
+starvation clauses range over responsive validators only. An honest validator
+outside `Responsive` may retain work queued before GST without violating the
+conditional production target; the model does not manufacture local-worker
+fairness for that validator.
 The chain refinement now models an indexed family of authoritative
 `AsyncSpecAt` instances and exposes the exact
 `SumeragiV2ChainEpochRefinement!HeightLivenessObligation`. Its source proof body
-now composes instance activation, exact-action fairness on the all-joined
-suffix, authenticated historical catch-up for successor validators absent from
+now composes responsive-validator instance activation and exact-action fairness
+on the all-joined
+suffix, authenticated exact recovery for responsive validators absent from
 an old roster, and finite-height temporal induction. The whole theorem remains
 explicit `specified_unproved` debt until a fresh pinned strict proof succeeds
-after rotating-leader, application liveness, and that production-refinement
-seam are proved. Its exact completion
+after rotating-leader, application liveness, successor-activation starvation,
+and that production-refinement seam are proved. Its exact completion
 predicate requires application
 at terminal `MaxHeight`; at every nonterminal context it requires each
-responsive validator to advance into a successor context. Catch-up copies an
-already canonical exact QC and a certified-signer-held body, then traverses
-`Idle -> DecisionRecovered -> BodyRecovered -> Stored -> Validated -> Applied`;
-it cannot create finality or skip body, store, or validation. Nonterminal
+responsive validator to advance into a successor context. Exact recovery opens
+one per-instance scheduler target and imports only an authenticated canonical
+CommitQC into the ordinary reducer. It then follows the same decision,
+body-fetch, store, validation, and application transitions as live consensus;
+it cannot create finality or skip a consumer boundary. Nonterminal
 application queues the ordinary activation pipeline without joining, while
 terminal application uses `RecordKnownApplication` and creates no successor
 work. Dormant non-genesis instances
 retain their exact `InitAt` parent receipt internally, but only current-context
-and explicit catch-up receipts enter the global ChainEpoch projection, so the
-indexed genesis is non-vacuous. The first-release model does not restore a
+receipts enter the global ChainEpoch projection, so the indexed genesis is
+non-vacuous. The first-release model does not restore a
 favourable-network relation, global asynchronous shadow state, or a second
 consensus transition relation to stand in for that proof.
 
 The ledger also names the previously implicit intermediate obligations.
-Generation-scoped delivery is ledgered `tlaps_proved`. The production
-Rust/Verus gate checks the local EnterView effective-lock selection boundary,
-but there is no separately ledgered or checked TLA+ body-rebind kernel. The
-end-to-end executor/runtime/worker/request/byte/queue ownership and fairness
-composition remains exactly
-`EffectiveLockBodyAcquisitionCompositionObligation`, ledgered
+Generation-scoped delivery is ledgered `tlaps_proved`. The executable
+height-scoped owner now gives the body-rebind/recovery kernel its own
+`EffectiveLockAcquisitionModelObligation`; bounded TLC explores it but does not
+prove it. The end-to-end executor/runtime/worker/request/byte/queue mapping and
+fair-service composition remains separately ledgered as
+`EffectiveLockBodyAcquisitionProductionRefinementObligation`. Both entries are
 `specified_unproved`. Historical TC-lock Commit authorization and the
 direct-or-installed-authorization timeout induction are `tlaps_proved` from
 the full action induction. Post-GST deadlock freedom excludes a bare clock,
@@ -413,13 +454,15 @@ entry remains. Promotion order is also explicit: async type closure depends on
 proved runner scheduler preservation, deadlock freedom depends on proved type
 closure, starvation freedom depends on the proved service-rank theorem, and
 genesis handoff and indexed height liveness each depend on proved
-rotating-leader and application liveness.
+rotating-leader, application liveness, successor-activation starvation, and the
+exact-recovery production refinement.
 Release mode additionally requires fresh source-bound evidence.
 
 Before network startup, the executable wrapper inventories 166 named tests
 across 14 Rust modules. The inventory includes five native-AMX lane-work
 capacity regressions, adapter/runner/watchdog successor-activation boundaries,
-exact recovery-derived successor identity, historical catch-up, and the exact
+exact recovery-derived successor identity, authenticated exact historical
+recovery, and the exact
 `3N+1`/`2N+3` admission boundaries in addition to exact-lock,
 completion-ownership, and executor-batch boundaries. It also runs exact mocked contracts for active Git
 operation rejection, detached source sealing, the 128-run matrix launcher, the
@@ -505,8 +548,9 @@ The protected-rank follow-up checks four additional adversarial families:
 12. indexing every physical I/O job versus indexing only Consensus owners.
 
 An exhaustive one-validator ownership configuration separately checks
-`AsyncProgressOwnershipInvariant` over 19,081 generated states (3,104 distinct,
-depth 44). The deliberately broken configurations must produce their exact
+`AsyncProgressOwnershipInvariant` over 42,817 generated states (6,208 distinct,
+depth 45). The expanded graph covers the independent non-timeout-progress and
+TimeoutVote ingress reservations. The deliberately broken configurations must produce their exact
 counterexamples; all repaired configurations must complete without error.
 
 The producer-first buggy configuration has the pinned three-state fair lasso and exits

@@ -1035,15 +1035,15 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovi
 chaos_launcher_pipeline_status=("${PIPESTATUS[@]}")
 set -e
 chaos_launcher_pass_summary="$(
-  grep -Ec '^4 passed in [0-9]+([.][0-9]+)?s$' "$chaos_launcher_contract_log" || true
+  grep -Ec '^5 passed in [0-9]+([.][0-9]+)?s$' "$chaos_launcher_contract_log" || true
 )"
 if ((chaos_launcher_pipeline_status[0] != 0 || chaos_launcher_pipeline_status[1] != 0)) \
   || [[ "$chaos_launcher_pass_summary" != 1 ]]; then
-  echo "Sumeragi v2 chaos-launcher contract preflight did not run exactly four passing tests (pytest=${chaos_launcher_pipeline_status[0]}, tee=${chaos_launcher_pipeline_status[1]})" >&2
+  echo "Sumeragi v2 chaos-launcher contract preflight did not run exactly five passing tests (pytest=${chaos_launcher_pipeline_status[0]}, tee=${chaos_launcher_pipeline_status[1]})" >&2
   exit 1
 fi
 record_corridor_log \
-  preflight-chaos-launcher pytest 4 \
+  preflight-chaos-launcher pytest 5 \
   "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovider ${chaos_launcher_contract_files[*]}" \
   "$chaos_launcher_contract_log" \
   "${chaos_launcher_pipeline_status[0]}" "${chaos_launcher_pipeline_status[1]}"
@@ -1061,15 +1061,15 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovi
 release_receipt_pipeline_status=("${PIPESTATUS[@]}")
 set -e
 release_receipt_pass_summary="$(
-  grep -Ec '^36 passed in [0-9]+([.][0-9]+)?s$' "$release_receipt_contract_log" || true
+  grep -Ec '^37 passed in [0-9]+([.][0-9]+)?s$' "$release_receipt_contract_log" || true
 )"
 if ((release_receipt_pipeline_status[0] != 0 || release_receipt_pipeline_status[1] != 0)) \
   || [[ "$release_receipt_pass_summary" != 1 ]]; then
-  echo "Sumeragi v2 aggregate-receipt contract preflight did not run exactly 36 passing tests (pytest=${release_receipt_pipeline_status[0]}, tee=${release_receipt_pipeline_status[1]})" >&2
+  echo "Sumeragi v2 aggregate-receipt contract preflight did not run exactly 37 passing tests (pytest=${release_receipt_pipeline_status[0]}, tee=${release_receipt_pipeline_status[1]})" >&2
   exit 1
 fi
 record_corridor_log \
-  preflight-release-receipt pytest 36 \
+  preflight-release-receipt pytest 37 \
   "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovider ${release_receipt_contract_files[*]}" \
   "$release_receipt_contract_log" \
   "${release_receipt_pipeline_status[0]}" "${release_receipt_pipeline_status[1]}"

@@ -37,9 +37,6 @@ VARIABLES
   durableApplicationEvidence,
   indexedAsyncState,
   joinedByContext,
-  historicalCatchUpDecisions,
-  historicalCatchUpApplications,
-  historicalCatchUpStage,
   successorActivationStatus,
   successorPredecessorStatusOwnership,
   successorActivationPrerequisites,
@@ -947,8 +944,9 @@ remain available to RunHistoricalServer after validators advance.
 
 The nested tuple layout is exactly
 <<vars, AsyncSchedulerVars, AsyncRecoveryVars>>: 46 Core components followed
-by 33 scheduler/transport components and four responsive-node recovery
-components. Shape predicates exclude unmodelled fields and make every
+by 34 scheduler/transport components and four responsive-node recovery
+components. The final scheduler component owns the exact historical-recovery
+target set. Shape predicates exclude unmodelled fields and make every
 instance projection extensional.
 ***************************************************************************)
 IndexedCore(initialContext, component) ==
@@ -963,27 +961,29 @@ IndexedRecovery(initialContext, component) ==
 IndexedAsyncStateAt(initialContext) ==
   indexedAsyncState[initialContext]
 
-CatchUpNodeHasApplicationProjection(applicationEvidence,
-                                    applicationContext, node) ==
+HistoricalRecoveryNodeHasApplicationProjection(applicationEvidence,
+                                               applicationContext, node) ==
   \E application \in applicationEvidence:
     /\ application.node = node
     /\ application.qc.context = applicationContext
     /\ application.qc.phase = "Commit"
 
-THEOREM CatchUpVotersProjectionMatchesAsyncVocabulary ==
+THEOREM HistoricalRecoveryVotersProjectionMatchesAsyncVocabulary ==
   \A initialContext:
     AsyncVotersAt(initialContext)
       = Responsive \cap VotingRoster(initialContext.epoch)
 BY DEF AsyncVotersAt
 
-THEOREM CatchUpApplicationProjectionMatchesAsyncVocabulary ==
+THEOREM HistoricalRecoveryApplicationProjectionMatchesAsyncVocabulary ==
   \A node:
     NodeHasApplication(node)
-      <=> CatchUpNodeHasApplicationProjection(applied, context, node)
-BY DEF NodeHasApplication, CatchUpNodeHasApplicationProjection
+      <=> HistoricalRecoveryNodeHasApplicationProjection(
+            applied, context, node)
+BY DEF NodeHasApplication,
+       HistoricalRecoveryNodeHasApplicationProjection
 
 IndexedProjectedNodeHasApplication(initialContext, node) ==
-  CatchUpNodeHasApplicationProjection(
+  HistoricalRecoveryNodeHasApplicationProjection(
     IndexedCore(initialContext, 46),
     IndexedCore(initialContext, 2), node)
 
@@ -1069,6 +1069,7 @@ IndexedAsync(initialContext) ==
        asyncIngressLanes <- IndexedScheduler(initialContext, 31),
        asyncIngressReady <- IndexedScheduler(initialContext, 32),
        asyncHeldChunks <- IndexedScheduler(initialContext, 33),
+       asyncHistoricalRecoveryTargets <- IndexedScheduler(initialContext, 34),
        asyncRecoveryPhase <- IndexedRecovery(initialContext, 1),
        asyncRecoveryNode <- IndexedRecovery(initialContext, 2),
        asyncRecoveryGeneration <- IndexedRecovery(initialContext, 3),
@@ -1219,6 +1220,7 @@ VerificationAsyncProof ==
        asyncIngressLanes <- VerificationScheduler(31),
        asyncIngressReady <- VerificationScheduler(32),
        asyncHeldChunks <- VerificationScheduler(33),
+       asyncHistoricalRecoveryTargets <- VerificationScheduler(34),
        asyncRecoveryPhase <- VerificationRecovery(1),
        asyncRecoveryNode <- VerificationRecovery(2),
        asyncRecoveryGeneration <- VerificationRecovery(3),
@@ -1235,8 +1237,8 @@ IndexedAsyncStateShape ==
        /\ DOMAIN indexedAsyncState[initialContext] = 1..3
        /\ Len(indexedAsyncState[initialContext][1]) = 46
        /\ DOMAIN indexedAsyncState[initialContext][1] = 1..46
-       /\ Len(indexedAsyncState[initialContext][2]) = 33
-       /\ DOMAIN indexedAsyncState[initialContext][2] = 1..33
+       /\ Len(indexedAsyncState[initialContext][2]) = 34
+       /\ DOMAIN indexedAsyncState[initialContext][2] = 1..34
        /\ Len(indexedAsyncState[initialContext][3]) = 4
        /\ DOMAIN indexedAsyncState[initialContext][3] = 1..4
 
@@ -1263,6 +1265,10 @@ IndexedNodeCurrentAt(initialContext, node) ==
   /\ node \in joinedByContext[initialContext]
   /\ nodeContext[node] = initialContext
 
+ExactNodeLocationAt(initialContext, node) ==
+  /\ nodeHeight[node] = initialContext.height
+  /\ nodeContext[node] = initialContext
+
 IndexedDecisions(initialContext) == IndexedCore(initialContext, 45)
 IndexedApplications(initialContext) == IndexedCore(initialContext, 46)
 
@@ -1285,27 +1291,12 @@ IndexedCurrentApplications(initialContext) ==
      /\ application.qc.height = initialContext.height}
 
 IndexedDecisionEvidence ==
-  (UNION {IndexedCurrentDecisions(initialContext):
-            initialContext \in AdmissibleContextRecords})
-    \cup historicalCatchUpDecisions
+  UNION {IndexedCurrentDecisions(initialContext):
+           initialContext \in AdmissibleContextRecords}
 
 IndexedApplicationEvidence ==
-  (UNION {IndexedCurrentApplications(initialContext):
-            initialContext \in AdmissibleContextRecords})
-    \cup historicalCatchUpApplications
-
-HistoricalCatchUpShape ==
-  /\ historicalCatchUpDecisions \subseteq Chain!DecisionEvidenceSet
-  /\ historicalCatchUpApplications \subseteq historicalCatchUpDecisions
-  /\ historicalCatchUpStage
-       \in [AdmissibleContextRecords ->
-             [ValidatorIds ->
-               {"Idle", "DecisionRecovered", "BodyRecovered",
-                "Stored", "Validated", "Applied"}]]
-
-HistoricalCatchUpVars ==
-  <<historicalCatchUpDecisions, historicalCatchUpApplications,
-    historicalCatchUpStage>>
+  UNION {IndexedCurrentApplications(initialContext):
+           initialContext \in AdmissibleContextRecords}
 
 SuccessorActivationStatusValues ==
   {"Idle", "Queued", "Running", "Complete"}
@@ -1422,10 +1413,70 @@ IndexedTotalReceiptProjection ==
   /\ IndexedDecisionReceiptProjection
   /\ IndexedApplicationReceiptProjection
 
+(***************************************************************************
+Authenticated historical recovery is owned by the exact Async instance.
+
+The chain wrapper may open recovery only for a responsive node located at the
+frozen context and only when a joined honest CommitQC signer still holds the
+certified body. `OpenHistoricalRecovery` records that exact target in scheduler
+component 34. From then on the ordinary Async reducer persists the decision,
+recovers and stores the body, validates it, and appends the application to the
+same per-context `decisions` and `applied` sets used by ordinary consensus.
+There is no shadow receipt set, stage variable, or independent recovery step.
+***************************************************************************)
+HistoricalRecoveryRecord(node, source) ==
+  [node |-> node, qc |-> source.qc]
+
+IndexedHistoricalRecoveryTargetReady(initialContext, node) ==
+  /\ node \in Responsive
+  /\ node \in IndexedCore(initialContext, 6)
+  /\ node \in joinedByContext[initialContext]
+  /\ ExactNodeLocationAt(initialContext, node)
+  /\ ~IndexedAsync(initialContext)!NodeHasDecision(node)
+  /\ ~IndexedProjectedNodeHasApplication(initialContext, node)
+  /\ ~IndexedAsync(initialContext)!HistoricalRecoveryTarget(node)
+
+IndexedHistoricalRecoverySourceReady(initialContext, server, source) ==
+  /\ initialContext \in JoinedContexts
+  /\ source \in IndexedCurrentDecisions(initialContext)
+  /\ source \in IndexedCurrentApplications(initialContext)
+  /\ source \in durableDecisionEvidence
+  /\ source \in durableApplicationEvidence
+  /\ source.node = server
+  /\ \/ /\ initialContext.height < MaxHeight
+        /\ Chain!CanonicalCommitForSlot(
+             source.qc, initialContext.height + 1)
+     \/ /\ initialContext.height = MaxHeight
+        /\ Chain!ReceiptOutsideChainHorizon(source)
+  /\ server \in source.qc.signers \cap Honest
+  /\ server \in IndexedAsync(initialContext)!
+                 AsyncCurrentResponsiveVoters
+  /\ server \in IndexedCore(initialContext, 6)
+  /\ server \in joinedByContext[initialContext]
+  /\ BodyHeldBy(IndexedCore(initialContext, 9), server,
+                 initialContext, source.qc.view, source.qc.subject)
+
+IndexedHistoricalRecoveryReady(initialContext, node) ==
+  /\ node \in Responsive
+  /\ node \in IndexedCore(initialContext, 6)
+  /\ node \in joinedByContext[initialContext]
+  /\ ExactNodeLocationAt(initialContext, node)
+  /\ ~IndexedAsync(initialContext)!NodeHasDecision(node)
+  /\ ~IndexedProjectedNodeHasApplication(initialContext, node)
+  /\ \E server \in ValidatorIds,
+       source \in Chain!DecisionEvidenceSet:
+       IndexedHistoricalRecoverySourceReady(
+         initialContext, server, source)
+
+IndexedOpenHistoricalRecovery(initialContext, node, server, source) ==
+  /\ IndexedHistoricalRecoveryTargetReady(initialContext, node)
+  /\ IndexedHistoricalRecoverySourceReady(
+       initialContext, server, source)
+  /\ IndexedAsync(initialContext)!OpenHistoricalRecovery(node)
+
 IndexedChainVars ==
   <<indexedAsyncState, joinedByContext,
-    HistoricalCatchUpVars, SuccessorActivationVars,
-    Chain!ChainEpochVars>>
+    SuccessorActivationVars, Chain!ChainEpochVars>>
 
 (***************************************************************************
 The joined runner is a restriction of the exact AsyncNext relation, never an
@@ -1439,6 +1490,8 @@ IndexedJoinedRunnerStep(initialContext) ==
   \/ \E node \in IndexedAsync(initialContext)!AsyncCurrentResponsiveVoters:
        /\ IndexedNodeCurrentAt(initialContext, node)
        /\ IndexedAsync(initialContext)!RunNode(node)
+  \/ \E node \in Responsive:
+       IndexedAsync(initialContext)!RunHistoricalRecoveryNode(node)
   \/ \E node \in IndexedAsync(initialContext)!AsyncCurrentResponsiveVoters:
        /\ node \in joinedByContext[initialContext]
        /\ IndexedAsync(initialContext)!RunHistoricalServer(node)
@@ -1451,6 +1504,20 @@ IndexedJoinedNonRunnerStep(initialContext) ==
           /\ IndexedNodeCurrentAt(initialContext, node)
           /\ IndexedAsync(initialContext)!
                DirectCommitCertificateDiscoveryStep(node)
+     \/ \E node \in Responsive:
+          IndexedAsync(initialContext)!
+            DirectHistoricalCommitCertificateDiscoveryStep(node)
+     \/ \E node \in Responsive:
+          IndexedAsync(initialContext)!
+            ServiceHistoricalRecoveryIoWorker(node)
+     \/ \E node \in Responsive:
+          IndexedAsync(initialContext)!
+            EnqueueHistoricalRecoveryIoLocalControl(node)
+     \/ \E node \in ValidatorIds,
+           server \in ValidatorIds,
+           source \in Chain!DecisionEvidenceSet:
+          IndexedOpenHistoricalRecovery(
+            initialContext, node, server, source)
      \/ \E node \in IndexedAsync(initialContext)!AsyncCurrentResponsiveVoters:
           /\ node \in joinedByContext[initialContext]
           /\ IndexedAsync(initialContext)!ServiceIoWorker(node)
@@ -1578,7 +1645,7 @@ BY Isa DEF SuccessorContextFor, AdmissibleContextRecords,
 
 IndexedApplicationReceiptHandoff(initialContext, application) ==
   /\ NewIndexedApplicationReceipt(initialContext, application)
-  /\ \/ /\ IndexedNodeCurrentAt(initialContext, application.node)
+  /\ \/ /\ ExactNodeLocationAt(initialContext, application.node)
         /\ Chain!RecordAppliedNext(application)
         /\ QueueSuccessorActivation(initialContext, application.node)
         /\ UNCHANGED joinedByContext
@@ -1608,7 +1675,6 @@ pipeline, but only the Applied publication writes physical `Complete`.
 ***************************************************************************)
 SuccessorActivationEnvironmentStutter ==
   /\ UNCHANGED indexedAsyncState
-  /\ UNCHANGED HistoricalCatchUpVars
   /\ UNCHANGED Chain!ChainEpochVars
 
 SuccessorActivationCredentialReady(parentContext, node,
@@ -2029,7 +2095,7 @@ TerminalSuccessorActivationExcluded ==
 (***************************************************************************
 After the single permitted fail-closed transition has been authenticated and
 the full startup pipeline has reached its publication boundary, failure can
-no longer pre-empt publication.  A later-height catch-up may legitimately
+no longer pre-empt publication. A later-height recovery may legitimately
 supersede this old activation, so the unconditional suffix records that case;
 the stable-height corollary below yields exact publication.
 ***************************************************************************)
@@ -2053,210 +2119,19 @@ SuccessorPublicationOrSuperseded(parentContext, node) ==
   \/ SuccessorHeightActivated(parentContext, node)
   \/ nodeHeight[node] > parentContext.height + 1
 
-(***************************************************************************
-Authenticated historical catch-up.
+IndexedSuccessorActivationPending(parentContext, node) ==
+  /\ parentContext \in AdmissibleContextRecords
+  /\ node \in ValidatorIds
+  /\ parentContext.height < MaxHeight
+  /\ successorActivationStatus[parentContext][node]
+       \in {"Queued", "Running"}
+  /\ ~SuccessorPublicationOrSuperseded(parentContext, node)
 
-Production `V2BlockSyncDiscovery` signs a request for the lagging node's exact
-frozen context. `V2BlockSyncServer` may answer only from canonical Kura history,
-and the historical body server must be one of the CommitQC's certified signers.
-The response then enters the ordinary reducer through the exact staged path
-Idle -> DecisionRecovered -> BodyRecovered -> Stored -> Validated -> Applied.
-For a nonterminal parent, application queues the ordinary successor activation
-pipeline but does not join it. At the finite terminal horizon, a responsive
-observer or validator records known application without advancing nodeHeight,
-creating a successor activation, or joining a fictitious context.
-
-Requester authentication is identity/context based; only the historical body
-responder must be a certified old-roster signer. Exact context, round, subject,
-QC, and signer-backed body identity are copied from already durable canonical
-decision and application evidence; no synthetic finality artifact is created.
-***************************************************************************)
-HistoricalCatchUpRecord(node, source) ==
-  [node |-> node, qc |-> source.qc]
-
-(***************************************************************************
-These are the exact projection-native expansions of `AsyncVotersAt` and
-`NodeHasApplication` from SumeragiV2AsyncNetwork: the IndexedAsync WITH-clause
-maps `applied` to IndexedCore(initialContext, 46) (IndexedApplications) and
-`context` to IndexedCore(initialContext, 2).  Spelling the definitions here
-keeps the parameterized proof INSTANCE out of later ENABLED obligations; no
-roster, context, phase, or per-node application condition is weakened.
-***************************************************************************)
-
-HistoricalCatchUpTarget(initialContext, node) ==
-  /\ node \in Responsive
-  /\ nodeHeight[node] = initialContext.height
-  /\ nodeContext[node] = initialContext
-  /\ ~IndexedProjectedNodeHasApplication(initialContext, node)
-
-HistoricalCatchUpSource(initialContext, server, source) ==
-  /\ initialContext \in JoinedContexts
-  /\ source \in IndexedCurrentDecisions(initialContext)
-  /\ source \in IndexedCurrentApplications(initialContext)
-  /\ source \in durableDecisionEvidence
-  /\ source \in durableApplicationEvidence
-  /\ \/ /\ initialContext.height < MaxHeight
-        /\ Chain!CanonicalCommitForSlot(
-             source.qc, initialContext.height + 1)
-     \/ /\ initialContext.height = MaxHeight
-        /\ Chain!ReceiptOutsideChainHorizon(source)
-  /\ server \in source.qc.signers \cap Honest
-  /\ server \in joinedByContext[initialContext]
-  /\ BodyHeldBy(IndexedCore(initialContext, 9), server,
-                 initialContext, source.qc.view, source.qc.subject)
-
-HistoricalCatchUpDecisionAt(initialContext, node) ==
-  \E decision \in historicalCatchUpDecisions:
-    /\ decision.node = node
-    /\ decision.qc.context = initialContext
-    /\ decision.qc.height = initialContext.height
-
-HistoricalCatchUpApplicationAt(initialContext, node) ==
-  \E application \in historicalCatchUpApplications:
-    /\ application.node = node
-    /\ application.qc.context = initialContext
-    /\ application.qc.height = initialContext.height
-
-IndexedHistoricalCatchUpDecision(initialContext, node, server, source) ==
-  LET decision == HistoricalCatchUpRecord(node, source)
-  IN /\ HistoricalCatchUpTarget(initialContext, node)
-     /\ HistoricalCatchUpSource(initialContext, server, source)
-     /\ historicalCatchUpStage[initialContext][node] = "Idle"
-     /\ decision \notin IndexedDecisionEvidence
-     /\ Chain!RecordKnownDecision(decision)
-     /\ historicalCatchUpDecisions' =
-          historicalCatchUpDecisions \cup {decision}
-     /\ historicalCatchUpStage' =
-          [historicalCatchUpStage EXCEPT
-             ![initialContext][node] = "DecisionRecovered"]
-     /\ UNCHANGED <<historicalCatchUpApplications,
-                     indexedAsyncState, joinedByContext,
-                     SuccessorActivationVars>>
-     /\ IndexedAsyncStateShape'
-     /\ JoinedByContextShape'
-     /\ HistoricalCatchUpShape'
-     /\ SuccessorActivationShape'
-
-IndexedHistoricalCatchUpBodyRecovery(initialContext, node, server, source) ==
-  LET decision == HistoricalCatchUpRecord(node, source)
-  IN /\ HistoricalCatchUpTarget(initialContext, node)
-     /\ HistoricalCatchUpSource(initialContext, server, source)
-     /\ historicalCatchUpStage[initialContext][node]
-          = "DecisionRecovered"
-     /\ decision \in historicalCatchUpDecisions
-     /\ historicalCatchUpStage' =
-          [historicalCatchUpStage EXCEPT
-             ![initialContext][node] = "BodyRecovered"]
-     /\ UNCHANGED <<historicalCatchUpDecisions,
-                     historicalCatchUpApplications,
-                     indexedAsyncState, joinedByContext,
-                     SuccessorActivationVars, Chain!ChainEpochVars>>
-     /\ IndexedAsyncStateShape'
-     /\ JoinedByContextShape'
-     /\ HistoricalCatchUpShape'
-     /\ SuccessorActivationShape'
-
-IndexedHistoricalCatchUpBodyStore(initialContext, node, server, source) ==
-  LET decision == HistoricalCatchUpRecord(node, source)
-  IN /\ HistoricalCatchUpTarget(initialContext, node)
-     /\ HistoricalCatchUpSource(initialContext, server, source)
-     /\ historicalCatchUpStage[initialContext][node] = "BodyRecovered"
-     /\ decision \in historicalCatchUpDecisions
-     /\ historicalCatchUpStage' =
-          [historicalCatchUpStage EXCEPT
-             ![initialContext][node] = "Stored"]
-     /\ UNCHANGED <<historicalCatchUpDecisions,
-                     historicalCatchUpApplications,
-                     indexedAsyncState, joinedByContext,
-                     SuccessorActivationVars, Chain!ChainEpochVars>>
-     /\ IndexedAsyncStateShape'
-     /\ JoinedByContextShape'
-     /\ HistoricalCatchUpShape'
-     /\ SuccessorActivationShape'
-
-IndexedHistoricalCatchUpValidation(initialContext, node, server, source) ==
-  LET decision == HistoricalCatchUpRecord(node, source)
-  IN /\ HistoricalCatchUpTarget(initialContext, node)
-     /\ HistoricalCatchUpSource(initialContext, server, source)
-     /\ historicalCatchUpStage[initialContext][node] = "Stored"
-     /\ decision \in historicalCatchUpDecisions
-     /\ historicalCatchUpStage' =
-          [historicalCatchUpStage EXCEPT
-             ![initialContext][node] = "Validated"]
-     /\ UNCHANGED <<historicalCatchUpDecisions,
-                     historicalCatchUpApplications,
-                     indexedAsyncState, joinedByContext,
-                     SuccessorActivationVars, Chain!ChainEpochVars>>
-     /\ IndexedAsyncStateShape'
-     /\ JoinedByContextShape'
-     /\ HistoricalCatchUpShape'
-     /\ SuccessorActivationShape'
-
-IndexedHistoricalCatchUpNonterminalApplication(
-    initialContext, node, server, source) ==
-  LET application == HistoricalCatchUpRecord(node, source)
-  IN /\ HistoricalCatchUpTarget(initialContext, node)
-     /\ HistoricalCatchUpSource(initialContext, server, source)
-     /\ initialContext.height < MaxHeight
-     /\ historicalCatchUpStage[initialContext][node] = "Validated"
-     /\ application \in historicalCatchUpDecisions
-     /\ application \notin historicalCatchUpApplications
-     /\ Chain!RecordAppliedNext(application)
-     /\ historicalCatchUpApplications' =
-          historicalCatchUpApplications \cup {application}
-     /\ historicalCatchUpStage' =
-          [historicalCatchUpStage EXCEPT
-             ![initialContext][node] = "Applied"]
-     /\ QueueSuccessorActivation(initialContext, node)
-     /\ UNCHANGED <<historicalCatchUpDecisions,
-                     indexedAsyncState, joinedByContext>>
-     /\ IndexedAsyncStateShape'
-     /\ JoinedByContextShape'
-     /\ HistoricalCatchUpShape'
-     /\ SuccessorActivationShape'
-
-IndexedHistoricalCatchUpTerminalApplication(
-    initialContext, node, server, source) ==
-  LET application == HistoricalCatchUpRecord(node, source)
-  IN /\ HistoricalCatchUpTarget(initialContext, node)
-     /\ HistoricalCatchUpSource(initialContext, server, source)
-     /\ initialContext.height = MaxHeight
-     /\ Chain!ReceiptOutsideChainHorizon(application)
-     /\ historicalCatchUpStage[initialContext][node] = "Validated"
-     /\ application \in historicalCatchUpDecisions
-     /\ application \notin historicalCatchUpApplications
-     /\ Chain!RecordKnownApplication(application)
-     /\ historicalCatchUpApplications' =
-          historicalCatchUpApplications \cup {application}
-     /\ historicalCatchUpStage' =
-          [historicalCatchUpStage EXCEPT
-             ![initialContext][node] = "Applied"]
-     /\ UNCHANGED <<historicalCatchUpDecisions,
-                     indexedAsyncState, joinedByContext,
-                     SuccessorActivationVars>>
-     /\ IndexedAsyncStateShape'
-     /\ JoinedByContextShape'
-     /\ HistoricalCatchUpShape'
-     /\ SuccessorActivationShape'
-
-IndexedHistoricalCatchUpApplication(initialContext, node, server, source) ==
-  \/ IndexedHistoricalCatchUpNonterminalApplication(
-       initialContext, node, server, source)
-  \/ IndexedHistoricalCatchUpTerminalApplication(
-       initialContext, node, server, source)
-
-IndexedHistoricalCatchUpPipelineAction(
-    initialContext, node, server, source) ==
-  \/ IndexedHistoricalCatchUpDecision(
-       initialContext, node, server, source)
-  \/ IndexedHistoricalCatchUpBodyRecovery(
-       initialContext, node, server, source)
-  \/ IndexedHistoricalCatchUpBodyStore(
-       initialContext, node, server, source)
-  \/ IndexedHistoricalCatchUpValidation(
-       initialContext, node, server, source)
-  \/ IndexedHistoricalCatchUpApplication(
-       initialContext, node, server, source)
+IndexedSuccessorActivationProgress ==
+  \A parentContext \in AdmissibleContextRecords,
+     node \in Responsive:
+    IndexedSuccessorActivationPending(parentContext, node)
+      ~> SuccessorPublicationOrSuperseded(parentContext, node)
 
 IndexedReceiptFreeAsyncAction(initialContext) ==
   /\ IndexedJoinedAsyncNext(initialContext)
@@ -2273,25 +2148,17 @@ IndexedProductActionAt(initialContext) ==
   /\ IndexedJoinedAsyncNext(initialContext)
   /\ \A otherContext \in AdmissibleContextRecords \ {initialContext}:
        UNCHANGED IndexedAsyncStateAt(otherContext)
-  /\ UNCHANGED HistoricalCatchUpVars
   /\ IndexedAsyncStateShape'
   /\ JoinedByContextShape'
-  /\ HistoricalCatchUpShape'
   /\ SuccessorActivationShape'
   /\ IndexedReceiptClassification(initialContext)
 
 IndexedChainNext ==
   /\ IndexedAsyncStateShape
   /\ JoinedByContextShape
-  /\ HistoricalCatchUpShape
   /\ SuccessorActivationShape
   /\ \/ \E initialContext \in JoinedContexts:
           IndexedProductActionAt(initialContext)
-     \/ \E initialContext \in AdmissibleContextRecords,
-           node \in ValidatorIds, server \in ValidatorIds,
-           source \in Chain!DecisionEvidenceSet:
-          IndexedHistoricalCatchUpPipelineAction(
-            initialContext, node, server, source)
      \/ \E parentContext \in AdmissibleContextRecords,
            node \in ValidatorIds:
           IndexedSuccessorActivationProgressStep(parentContext, node)
@@ -2299,7 +2166,6 @@ IndexedChainNext ==
 IndexedChainInit ==
   /\ IndexedAsyncStateShape
   /\ JoinedByContextShape
-  /\ HistoricalCatchUpShape
   /\ SuccessorActivationShape
   /\ \A initialContext \in AdmissibleContextRecords:
        IndexedAsync(initialContext)!AsyncInitAt(initialContext)
@@ -2309,11 +2175,6 @@ IndexedChainInit ==
           IF initialContext = GenesisContext
           THEN ValidatorIds
           ELSE {}]
-  /\ historicalCatchUpDecisions = {}
-  /\ historicalCatchUpApplications = {}
-  /\ historicalCatchUpStage =
-       [initialContext \in AdmissibleContextRecords |->
-          [node \in ValidatorIds |-> "Idle"]]
   /\ successorActivationStatus =
        [parentContext \in AdmissibleContextRecords |->
           [node \in ValidatorIds |-> "Idle"]]
@@ -2337,7 +2198,9 @@ Fairness is attached to full indexed-product steps. Dormant contexts make each
 action disabled. After the first independent join, the instance scheduler and
 transport become fair. Node-attributed consensus work is fair after that node
 joins, while direct Commit-certificate discovery is fair only for its current
-context; no action tests whether every peer has joined.
+context. Successor activation is weakly fair only for Responsive validators;
+an honest validator outside Responsive may retain queued local work forever
+without strengthening the conditional production liveness target.
 ***************************************************************************)
 IndexedSetGstStep(initialContext) ==
   /\ IndexedChainNext
@@ -2352,11 +2215,28 @@ IndexedRunNodeStep(initialContext, node) ==
   /\ IndexedNodeCurrentAt(initialContext, node)
   /\ IndexedAsync(initialContext)!PostGstRunNode(node)
 
+IndexedOpenHistoricalRecoveryStep(initialContext, node) ==
+  /\ IndexedChainNext
+  /\ \E server \in ValidatorIds,
+       source \in Chain!DecisionEvidenceSet:
+       IndexedOpenHistoricalRecovery(
+         initialContext, node, server, source)
+
+IndexedRunHistoricalRecoveryStep(initialContext, node) ==
+  /\ IndexedChainNext
+  /\ IndexedAsync(initialContext)!
+       PostGstRunHistoricalRecoveryNode(node)
+
 IndexedCommitCertificateDiscoveryStep(initialContext, node) ==
   /\ IndexedChainNext
   /\ IndexedNodeCurrentAt(initialContext, node)
   /\ IndexedAsync(initialContext)!
        PostGstCommitCertificateDiscovery(node)
+
+IndexedHistoricalCommitCertificateDiscoveryStep(initialContext, node) ==
+  /\ IndexedChainNext
+  /\ IndexedAsync(initialContext)!
+       PostGstHistoricalCommitCertificateDiscovery(node)
 
 IndexedHistoricalServerStep(initialContext, node) ==
   /\ IndexedChainNext
@@ -2368,55 +2248,21 @@ IndexedIoWorkerStep(initialContext, node) ==
   /\ node \in joinedByContext[initialContext]
   /\ IndexedAsync(initialContext)!PostGstServiceIoWorker(node)
 
+IndexedHistoricalRecoveryIoWorkerStep(initialContext, node) ==
+  /\ IndexedChainNext
+  /\ IndexedAsync(initialContext)!
+       PostGstServiceHistoricalRecoveryIoWorker(node)
+
 IndexedAdmitPacketStep(initialContext, recipient, source) ==
   /\ IndexedChainNext
   /\ IndexedAsync(initialContext)!
        PostGstAdmitHiddenPacket(recipient, source)
 
-(***************************************************************************
-These weak-fairness clauses are the explicit local-progress premise. Once
-exact canonical source evidence and an honest signer-held body persist, the
-entire decision/body/store/validation/application pipeline cannot be postponed
-forever. Likewise, an enqueued successor activation must either fail closed
-once and recover, or decrease through its exact ordered startup phases to one
-of the two publication actions. No fairness is assumed for unauthenticated or
-noncanonical evidence.
-***************************************************************************)
-IndexedCatchUpPipelineStep(initialContext, node) ==
-  /\ IndexedAsyncStateShape
-  /\ JoinedByContextShape
-  /\ HistoricalCatchUpShape
-  /\ SuccessorActivationShape
-  /\ \E server \in ValidatorIds,
-       source \in Chain!DecisionEvidenceSet:
-       IndexedHistoricalCatchUpPipelineAction(
-         initialContext, node, server, source)
-
-(***************************************************************************
-Proof-facing subactions retained as projections of the fair pipeline. The
-specification attaches fairness to `IndexedCatchUpPipelineStep`; these names
-only let the existing decomposition lemmas state the decision and application
-boundary cases while their staged replacements are discharged.
-***************************************************************************)
-IndexedCatchUpServiceStep(initialContext, node) ==
-  /\ IndexedAsyncStateShape
-  /\ JoinedByContextShape
-  /\ HistoricalCatchUpShape
-  /\ SuccessorActivationShape
-  /\ \E server \in ValidatorIds,
-       source \in Chain!DecisionEvidenceSet:
-       IndexedHistoricalCatchUpDecision(
-         initialContext, node, server, source)
-
-IndexedCatchUpApplicationStep(initialContext, node) ==
-  /\ IndexedAsyncStateShape
-  /\ JoinedByContextShape
-  /\ HistoricalCatchUpShape
-  /\ SuccessorActivationShape
-  /\ \E server \in ValidatorIds,
-       source \in Chain!DecisionEvidenceSet:
-       IndexedHistoricalCatchUpApplication(
-         initialContext, node, server, source)
+IndexedAdmitHistoricalRecoveryPacketStep(
+    initialContext, recipient, source) ==
+  /\ IndexedChainNext
+  /\ IndexedAsync(initialContext)!
+       PostGstAdmitHistoricalRecoveryPacket(recipient, source)
 
 IndexedFairness ==
   \A initialContext \in AdmissibleContextRecords:
@@ -2426,10 +2272,20 @@ IndexedFairness ==
                    AsyncVotersAt(initialContext):
          WF_IndexedChainVars(
            IndexedRunNodeStep(initialContext, node))
+    /\ \A node \in Responsive:
+         WF_IndexedChainVars(
+           IndexedOpenHistoricalRecoveryStep(initialContext, node))
+    /\ \A node \in Responsive:
+         WF_IndexedChainVars(
+           IndexedRunHistoricalRecoveryStep(initialContext, node))
     /\ \A node \in IndexedAsync(initialContext)!
                    AsyncVotersAt(initialContext):
          WF_IndexedChainVars(
            IndexedCommitCertificateDiscoveryStep(
+             initialContext, node))
+    /\ \A node \in Responsive:
+         WF_IndexedChainVars(
+           IndexedHistoricalCommitCertificateDiscoveryStep(
              initialContext, node))
     /\ \A node \in IndexedAsync(initialContext)!
                    AsyncVotersAt(initialContext):
@@ -2439,16 +2295,21 @@ IndexedFairness ==
                    AsyncVotersAt(initialContext):
          WF_IndexedChainVars(
            IndexedIoWorkerStep(initialContext, node))
+    /\ \A node \in Responsive:
+         WF_IndexedChainVars(
+           IndexedHistoricalRecoveryIoWorkerStep(
+             initialContext, node))
     /\ \A recipient \in IndexedAsync(initialContext)!
                         AsyncVotersAt(initialContext),
           source \in IndexedAsync(initialContext)!
                      AsyncVotersAt(initialContext):
          WF_IndexedChainVars(
            IndexedAdmitPacketStep(initialContext, recipient, source))
-    /\ \A node \in ValidatorIds:
+    /\ \A recipient \in ValidatorIds, source \in ValidatorIds:
          WF_IndexedChainVars(
-           IndexedCatchUpPipelineStep(initialContext, node))
-    /\ \A node \in ValidatorIds:
+           IndexedAdmitHistoricalRecoveryPacketStep(
+             initialContext, recipient, source))
+    /\ \A node \in Responsive:
          WF_IndexedChainVars(
            IndexedSuccessorActivationProgressStep(
              initialContext, node))
@@ -2460,9 +2321,10 @@ IndexedChainSpec ==
 
 (***************************************************************************
 Terminal exclusion is an internal model invariant, independent of the still
-external Rust trace-refinement seam.  The terminal application action records
-known evidence while preserving node height/context and the entire activation
-tuple; no terminal context can satisfy the queue guard.
+external Rust trace-refinement seam. A fresh exact Async application receipt
+at the horizon is handed to `RecordKnownApplication`, preserving node
+height/context and the entire activation tuple; no terminal context can
+satisfy the queue guard.
 ***************************************************************************)
 THEOREM TerminalContextCannotQueueSuccessorActivation ==
   \A terminalContext \in AdmissibleContextRecords,
@@ -2471,20 +2333,18 @@ THEOREM TerminalContextCannotQueueSuccessorActivation ==
       => ~QueueSuccessorActivation(terminalContext, node)
 BY DEF QueueSuccessorActivation
 
-THEOREM TerminalHistoricalCatchUpPreservesHorizon ==
+THEOREM TerminalExactApplicationPreservesHorizon ==
   \A terminalContext \in AdmissibleContextRecords,
-     node \in ValidatorIds,
-     server \in ValidatorIds,
-     source \in Chain!DecisionEvidenceSet:
-    IndexedHistoricalCatchUpTerminalApplication(
-      terminalContext, node, server, source)
-      => /\ historicalCatchUpStage'[terminalContext][node] = "Applied"
-         /\ nodeHeight'[node] = terminalContext.height
-         /\ nodeContext'[node] = terminalContext
+     application \in Chain!DecisionEvidenceSet:
+    terminalContext.height = MaxHeight
+      /\ IndexedApplicationReceiptHandoff(terminalContext, application)
+      => /\ nodeHeight'[application.node] = terminalContext.height
+         /\ nodeContext'[application.node] = terminalContext
          /\ UNCHANGED SuccessorActivationVars
-BY Isa DEF IndexedHistoricalCatchUpTerminalApplication,
-           HistoricalCatchUpTarget, HistoricalCatchUpRecord,
-           Chain!RecordKnownApplication, SuccessorActivationVars
+BY Isa DEF IndexedApplicationReceiptHandoff,
+           ExactNodeLocationAt, QueueSuccessorActivation,
+           Chain!RecordAppliedNext, Chain!RecordKnownApplication,
+           SuccessorActivationVars
 
 THEOREM IndexedInitEstablishesTerminalActivationExclusion ==
   IndexedChainInit => TerminalSuccessorActivationExcluded
@@ -2500,12 +2360,6 @@ BY Isa DEF TerminalSuccessorActivationExcluded,
            IndexedReceiptFreeChainStutter,
            IndexedDecisionReceiptHandoff,
            IndexedApplicationReceiptHandoff,
-           IndexedHistoricalCatchUpPipelineAction,
-           IndexedHistoricalCatchUpDecision,
-           IndexedHistoricalCatchUpBodyRecovery,
-           IndexedHistoricalCatchUpBodyStore,
-           IndexedHistoricalCatchUpValidation,
-           IndexedHistoricalCatchUpApplication,
            QueueSuccessorActivation,
            IndexedSuccessorActivationProgressStep,
            BeginSuccessorActivation,
@@ -2592,8 +2446,8 @@ Every joined context is a canonical prefix no higher than the globally
 certified prefix. Application advances the durable per-node chain first, then
 queues a context-exact activation. A node joins the successor only after the
 Applied or Recovered publication action records the exact activation marker.
-Terminal historical catch-up is retained as application evidence without a
-fictitious successor or node-height advance.
+Terminal historical recovery writes the exact instance application evidence
+without a fictitious successor or node-height advance.
 ***************************************************************************)
 IndexedEveryInstanceStrongInvariant ==
   \A initialContext \in AdmissibleContextRecords:
@@ -2622,18 +2476,13 @@ IndexedJoinedThroughLocalHeight ==
                      /\ \E application \in Chain!DecisionEvidenceSet:
                           ExactDurableParentApplication(
                             parentContext, node, application)
-            \/ /\ blockHeight = MaxHeight
-               /\ blockHeight = nodeHeight[node]
-               /\ HistoricalCatchUpApplicationAt(
-                    CanonicalIndexedContext(blockHeight), node)
 
 JoinedRoutingInvariant ==
   \A initialContext \in AdmissibleContextRecords:
     \A node \in joinedByContext[initialContext]:
       \/ IndexedNodeCurrentAt(initialContext, node)
       \/ /\ nodeHeight[node] > initialContext.height
-         /\ \/ IndexedAsync(initialContext)!NodeHasApplication(node)
-            \/ HistoricalCatchUpApplicationAt(initialContext, node)
+         /\ IndexedAsync(initialContext)!NodeHasApplication(node)
 
 IndexedApplicationsRespectNodeHeight ==
   \A initialContext \in AdmissibleContextRecords:
@@ -2642,32 +2491,25 @@ IndexedApplicationsRespectNodeHeight ==
         => \/ initialContext.height = MaxHeight
            \/ nodeHeight[node] > initialContext.height
 
-HistoricalCatchUpReceiptSound(receipt) ==
-  \E initialContext \in AdmissibleContextRecords,
-     server \in ValidatorIds,
-     source \in Chain!DecisionEvidenceSet:
-    /\ receipt.node \in Responsive
-    /\ HistoricalCatchUpSource(initialContext, server, source)
-    /\ receipt = HistoricalCatchUpRecord(receipt.node, source)
+IndexedHistoricalRecoveryTargetCoherence ==
+  \A initialContext \in AdmissibleContextRecords,
+     node \in ValidatorIds:
+    IndexedAsync(initialContext)!HistoricalRecoveryTarget(node)
+      => /\ node \in Responsive
+         /\ node \in joinedByContext[initialContext]
+         /\ ExactNodeLocationAt(initialContext, node)
+         /\ ~IndexedAsync(initialContext)!NodeHasApplication(node)
 
-HistoricalCatchUpEvidenceInvariant ==
-  /\ \A decision \in historicalCatchUpDecisions:
-       HistoricalCatchUpReceiptSound(decision)
-  /\ \A initialContext \in AdmissibleContextRecords,
-       node \in ValidatorIds:
-       HistoricalCatchUpApplicationAt(initialContext, node)
-         => \/ /\ initialContext.height < MaxHeight
-                  /\ nodeHeight[node] > initialContext.height
-             \/ /\ initialContext.height = MaxHeight
-                  /\ nodeHeight[node] = initialContext.height
-                  /\ nodeContext[node] = initialContext
-                  /\ historicalCatchUpStage[initialContext][node]
-                       = "Applied"
+IndexedTerminalExactApplicationBoundaryInvariant ==
+  \A terminalContext \in AdmissibleContextRecords,
+     node \in Responsive:
+    terminalContext.height = MaxHeight
+      /\ IndexedAsync(terminalContext)!NodeHasApplication(node)
+      => ExactNodeLocationAt(terminalContext, node)
 
 IndexedCompositionInvariant ==
   /\ IndexedAsyncStateShape
   /\ JoinedByContextShape
-  /\ HistoricalCatchUpShape
   /\ SuccessorActivationShape
   /\ Chain!ChainEpochInvariant
   /\ IndexedTotalReceiptProjection
@@ -2675,7 +2517,8 @@ IndexedCompositionInvariant ==
   /\ JoinedContextCertificationInvariant
   /\ JoinedRoutingInvariant
   /\ IndexedApplicationsRespectNodeHeight
-  /\ HistoricalCatchUpEvidenceInvariant
+  /\ IndexedHistoricalRecoveryTargetCoherence
+  /\ IndexedTerminalExactApplicationBoundaryInvariant
 
 (***************************************************************************
 Non-temporal composition and refinement kernels.
@@ -2724,6 +2567,22 @@ BY Isa DEF IndexedAsyncStateShape,
            VerificationAsyncProof!AsyncRecoveryVars,
            VerificationRecovery, IndexedRecovery
 
+THEOREM IndexedHistoricalRecoveryTargetProjectionIsExact ==
+  IndexedAsyncStateShape
+    => \A initialContext \in AdmissibleContextRecords:
+         \A node \in ValidatorIds:
+           IndexedAsync(initialContext)!HistoricalRecoveryTarget(node)
+             <=> node \in IndexedScheduler(initialContext, 34)
+BY DEF IndexedAsync!HistoricalRecoveryTarget
+
+THEOREM VerificationHistoricalRecoveryTargetProjectionIsExact ==
+  IndexedAsyncStateShape
+    /\ VerificationContext \in AdmissibleContextRecords
+    => \A node \in ValidatorIds:
+         VerificationAsyncProof!HistoricalRecoveryTarget(node)
+           <=> node \in VerificationScheduler(34)
+BY DEF VerificationAsyncProof!HistoricalRecoveryTarget
+
 THEOREM IndexedInitProjectsEveryAsyncInit ==
   \A initialContext \in AdmissibleContextRecords:
     IndexedChainInit =>
@@ -2738,8 +2597,6 @@ the frozen instance and hence absent from both projected current-receipt sets.
 ***************************************************************************)
 THEOREM IndexedAsyncInitHasNoCurrentReceipts ==
   (IndexedAsyncStateShape
-    /\ historicalCatchUpDecisions = {}
-    /\ historicalCatchUpApplications = {}
     /\ \A initialContext \in AdmissibleContextRecords:
          IndexedAsync(initialContext)!AsyncInitAt(initialContext))
     => /\ IndexedDecisionEvidence = {}
@@ -2795,28 +2652,62 @@ THEOREM HistoricalServiceSurvivesLocalAdvance ==
         => IndexedJoinedRunnerStep(initialContext)
 BY DEF IndexedJoinedRunnerStep
 
-THEOREM HistoricalCatchUpCopiesCanonicalIdentity ==
+(***************************************************************************
+Historical recovery always copies the source QC exactly.  Slot identity is
+split at the finite horizon: nonterminal contexts name the canonical successor
+slot, while a terminal context can only carry outside-horizon receipt identity.
+There is no DecisionSlots member at MaxHeight + 1.
+***************************************************************************)
+
+THEOREM HistoricalRecoveryOpenCopiesExactIdentity ==
   \A initialContext \in AdmissibleContextRecords,
      node \in ValidatorIds, server \in ValidatorIds,
      source \in Chain!DecisionEvidenceSet:
-    (IndexedHistoricalCatchUpDecision(
-       initialContext, node, server, source)
-      \/ IndexedHistoricalCatchUpApplication(
-           initialContext, node, server, source))
-      => /\ HistoricalCatchUpRecord(node, source).qc.context
+    IndexedOpenHistoricalRecovery(initialContext, node, server, source)
+      => /\ HistoricalRecoveryRecord(node, source).qc.context
                 = initialContext
-         /\ HistoricalCatchUpRecord(node, source).qc = source.qc
-         /\ HistoricalCatchUpRecord(node, source).qc.subject
+         /\ HistoricalRecoveryRecord(node, source).qc = source.qc
+         /\ HistoricalRecoveryRecord(node, source).qc.subject
                 = source.qc.subject
-         /\ Chain!CanonicalCommitForSlot(
-              HistoricalCatchUpRecord(node, source).qc,
-              initialContext.height + 1)
-BY DEF IndexedHistoricalCatchUpDecision,
-       IndexedHistoricalCatchUpApplication,
-       HistoricalCatchUpSource, HistoricalCatchUpRecord,
+BY DEF IndexedOpenHistoricalRecovery,
+       IndexedHistoricalRecoverySourceReady, HistoricalRecoveryRecord,
        IndexedCurrentDecisions
 
-THEOREM SuccessorRosterEntrantIsCatchUpEligible ==
+THEOREM NonterminalHistoricalRecoveryCopiesCanonicalSlotIdentity ==
+  \A initialContext \in AdmissibleContextRecords,
+     node \in ValidatorIds, server \in ValidatorIds,
+     source \in Chain!DecisionEvidenceSet:
+    initialContext.height < MaxHeight
+      /\ IndexedOpenHistoricalRecovery(
+           initialContext, node, server, source)
+      => /\ HistoricalRecoveryRecord(node, source).qc.context
+                = initialContext
+         /\ HistoricalRecoveryRecord(node, source).qc = source.qc
+         /\ Chain!CanonicalCommitForSlot(
+              HistoricalRecoveryRecord(node, source).qc,
+              initialContext.height + 1)
+BY Isa DEF IndexedOpenHistoricalRecovery,
+           IndexedHistoricalRecoverySourceReady, HistoricalRecoveryRecord,
+           IndexedCurrentDecisions
+
+THEOREM TerminalHistoricalRecoveryCopiesOutsideHorizonIdentity ==
+  \A initialContext \in AdmissibleContextRecords,
+     node \in ValidatorIds, server \in ValidatorIds,
+     source \in Chain!DecisionEvidenceSet:
+    initialContext.height = MaxHeight
+      /\ IndexedOpenHistoricalRecovery(
+           initialContext, node, server, source)
+      => /\ HistoricalRecoveryRecord(node, source).qc.context
+                = initialContext
+         /\ HistoricalRecoveryRecord(node, source).qc = source.qc
+         /\ Chain!ReceiptOutsideChainHorizon(
+              HistoricalRecoveryRecord(node, source))
+BY Isa DEF IndexedOpenHistoricalRecovery,
+           IndexedHistoricalRecoverySourceReady, HistoricalRecoveryRecord,
+           IndexedCurrentDecisions,
+           Chain!ReceiptOutsideChainHorizon
+
+THEOREM SuccessorRosterEntrantIsHistoricalRecoveryEligible ==
   \A initialContext \in AdmissibleContextRecords,
      node \in ValidatorIds:
     ( /\ initialContext.height < MaxHeight
@@ -2827,8 +2718,12 @@ THEOREM SuccessorRosterEntrantIsCatchUpEligible ==
       /\ nodeHeight[node] = initialContext.height
       /\ nodeContext[node] = initialContext
       /\ ~IndexedAsync(initialContext)!NodeHasApplication(node))
-      => HistoricalCatchUpTarget(initialContext, node)
-BY DEF HistoricalCatchUpTarget
+      => /\ node \in Responsive
+         /\ ExactNodeLocationAt(initialContext, node)
+         /\ ~IndexedProjectedNodeHasApplication(initialContext, node)
+BY DEF ExactNodeLocationAt, IndexedProjectedNodeHasApplication,
+       HistoricalRecoveryNodeHasApplicationProjection,
+       IndexedAsync!NodeHasApplication
 
 (***************************************************************************
 Regression witness for the production restart path: old-roster membership is
@@ -2836,7 +2731,7 @@ not a requester exclusion.  A responsive validator that restarts at its exact
 old context and lacks that context's application is eligible for the same
 authenticated CommitQC/body recovery as an observer or successor entrant.
 ***************************************************************************)
-THEOREM RestartedCurrentRosterValidatorIsCatchUpEligible ==
+THEOREM RestartedCurrentRosterValidatorIsHistoricalRecoveryEligible ==
   \A initialContext \in AdmissibleContextRecords,
      node \in ValidatorIds:
     ( /\ initialContext.height < MaxHeight
@@ -2846,10 +2741,11 @@ THEOREM RestartedCurrentRosterValidatorIsCatchUpEligible ==
       /\ nodeHeight[node] = initialContext.height
       /\ nodeContext[node] = initialContext
       /\ ~IndexedAsync(initialContext)!NodeHasApplication(node))
-      => HistoricalCatchUpTarget(initialContext, node)
-BY DEF HistoricalCatchUpTarget,
-       IndexedProjectedNodeHasApplication,
-       CatchUpNodeHasApplicationProjection,
+      => /\ node \in Responsive
+         /\ ExactNodeLocationAt(initialContext, node)
+         /\ ~IndexedProjectedNodeHasApplication(initialContext, node)
+BY DEF ExactNodeLocationAt, IndexedProjectedNodeHasApplication,
+       HistoricalRecoveryNodeHasApplicationProjection,
        IndexedAsync!NodeHasApplication
 
 THEOREM JoinedMembershipIsMonotone ==
@@ -2860,9 +2756,7 @@ THEOREM JoinedMembershipIsMonotone ==
 BY Isa DEF IndexedChainNext, IndexedReceiptClassification,
            IndexedReceiptFreeChainStutter,
            IndexedDecisionReceiptHandoff,
-           IndexedApplicationReceiptHandoff,
-           IndexedHistoricalCatchUpDecision,
-           IndexedHistoricalCatchUpApplication
+           IndexedApplicationReceiptHandoff
 
 THEOREM IndexedNodeHeightsAreMonotone ==
   IndexedChainNext
@@ -2871,8 +2765,6 @@ BY Isa DEF IndexedChainNext, IndexedReceiptClassification,
            IndexedReceiptFreeChainStutter,
            IndexedDecisionReceiptHandoff,
            IndexedApplicationReceiptHandoff,
-           IndexedHistoricalCatchUpDecision,
-           IndexedHistoricalCatchUpApplication,
            Chain!RecordCertifiedNext, Chain!RecordKnownDecision,
            Chain!RecordAppliedNext, Chain!RecordKnownApplication
 
@@ -2888,8 +2780,6 @@ BY Isa DEF IndexedChainNext, IndexedReceiptClassification,
            IndexedReceiptFreeChainStutter,
            IndexedDecisionReceiptHandoff,
            IndexedApplicationReceiptHandoff,
-           IndexedHistoricalCatchUpDecision,
-           IndexedHistoricalCatchUpApplication,
            Chain!ChainEpochNext
 
 THEOREM IndexedStepProjectsEveryAsyncStep ==
@@ -2898,9 +2788,7 @@ THEOREM IndexedStepProjectsEveryAsyncStep ==
       => [IndexedAsync(observedContext)!AsyncNext]_(
            IndexedAsyncStateAt(observedContext))
 BY Isa DEF IndexedChainNext, JoinedAsyncStepRefinesExactAsyncStep,
-           IndexedInstanceVariablesAreExact,
-           IndexedHistoricalCatchUpDecision,
-           IndexedHistoricalCatchUpApplication
+           IndexedInstanceVariablesAreExact
 
 THEOREM IndexedInitEstablishesReceiptProjection ==
   IndexedChainInit => IndexedTotalReceiptProjection
@@ -2915,9 +2803,6 @@ BY Isa DEF IndexedChainNext, IndexedChainVars,
            IndexedReceiptFreeChainStutter,
            IndexedDecisionReceiptHandoff,
            IndexedApplicationReceiptHandoff,
-           IndexedHistoricalCatchUpDecision,
-           IndexedHistoricalCatchUpApplication,
-           HistoricalCatchUpRecord,
            IndexedTotalReceiptProjection,
            IndexedDecisionReceiptProjection,
            IndexedApplicationReceiptProjection,
@@ -2954,11 +2839,8 @@ BY Isa, Chain!GenesisEstablishesChainEpochInvariant,
        IndexedTotalReceiptProjection,
        IndexedDecisionReceiptProjection,
        IndexedApplicationReceiptProjection,
-       HistoricalCatchUpShape,
        JoinedContextCertificationInvariant, JoinedRoutingInvariant,
        IndexedApplicationsRespectNodeHeight,
-       HistoricalCatchUpEvidenceInvariant,
-       HistoricalCatchUpApplicationAt,
        JoinedContexts,
        IndexedNodeCurrentAt, GenesisContext,
        IndexedAsync!NodeHasApplication,
@@ -3004,20 +2886,13 @@ BY Isa, AppliedSuccessorIsAdmissible,
        IndexedReceiptFreeChainStutter,
        IndexedDecisionReceiptHandoff,
        IndexedApplicationReceiptHandoff,
-       IndexedHistoricalCatchUpDecision,
-       IndexedHistoricalCatchUpApplication,
-       HistoricalCatchUpTarget, HistoricalCatchUpSource,
-       HistoricalCatchUpRecord,
        NewIndexedDecisionReceipt, NewIndexedApplicationReceipt,
        NoNewIndexedDurableReceipt,
        IndexedEveryInstanceStrongInvariant,
        JoinedContextCertificationInvariant, JoinedRoutingInvariant,
        IndexedApplicationsRespectNodeHeight,
-       HistoricalCatchUpEvidenceInvariant,
-       HistoricalCatchUpReceiptSound,
-       HistoricalCatchUpDecisionAt,
-       HistoricalCatchUpApplicationAt,
-       IndexedNodeCurrentAt, JoinedContexts, SuccessorContextFor,
+       IndexedNodeCurrentAt, ExactNodeLocationAt,
+       JoinedContexts, SuccessorContextFor,
        IndexedCurrentDecisions, IndexedCurrentApplications,
        Chain!ChainEpochInvariant, Chain!ChainEpochTypeInvariant,
        Chain!ContextsMatchLocalHistories,
@@ -3044,11 +2919,6 @@ PROOF
              IndexedEveryInstanceStrongInvariant,
              JoinedContextCertificationInvariant, JoinedRoutingInvariant,
              IndexedApplicationsRespectNodeHeight,
-             HistoricalCatchUpShape,
-             HistoricalCatchUpEvidenceInvariant,
-             HistoricalCatchUpReceiptSound,
-             HistoricalCatchUpApplicationAt,
-             HistoricalCatchUpSource, HistoricalCatchUpRecord,
              IndexedTotalReceiptProjection,
              IndexedDecisionReceiptProjection,
              IndexedApplicationReceiptProjection,
@@ -3102,12 +2972,6 @@ BY Isa DEF PostFailureSuccessorPublicationReady,
            IndexedReceiptFreeChainStutter,
            IndexedDecisionReceiptHandoff,
            IndexedApplicationReceiptHandoff,
-           IndexedHistoricalCatchUpPipelineAction,
-           IndexedHistoricalCatchUpDecision,
-           IndexedHistoricalCatchUpBodyRecovery,
-           IndexedHistoricalCatchUpBodyStore,
-           IndexedHistoricalCatchUpValidation,
-           IndexedHistoricalCatchUpApplication,
            IndexedSuccessorActivationProgressStep,
            QueueSuccessorActivation,
            BeginSuccessorActivation,
@@ -3131,13 +2995,13 @@ BY Isa DEF PostFailureSuccessorPublicationReady,
 THEOREM PostFailureSuccessorPublicationFairSuffix ==
   IndexedChainSpec =>
     \A parentContext \in AdmissibleContextRecords,
-       node \in ValidatorIds:
+       node \in Responsive:
       PostFailureSuccessorPublicationReady(parentContext, node)
         ~> SuccessorPublicationOrSuperseded(parentContext, node)
 PROOF
   <1>1. ASSUME IndexedChainSpec,
               NEW parentContext \in AdmissibleContextRecords,
-              NEW node \in ValidatorIds
+              NEW node \in Responsive
          PROVE PostFailureSuccessorPublicationReady(parentContext, node)
                  ~> SuccessorPublicationOrSuperseded(
                       parentContext, node)
@@ -3175,14 +3039,14 @@ PROOF
 THEOREM StableHeightPostFailureSuffixPublishes ==
   IndexedChainSpec =>
     \A parentContext \in AdmissibleContextRecords,
-       node \in ValidatorIds:
+       node \in Responsive:
       []~(nodeHeight[node] > parentContext.height + 1)
         => PostFailureSuccessorPublicationReady(parentContext, node)
              ~> SuccessorHeightActivated(parentContext, node)
 PROOF
   <1>1. ASSUME IndexedChainSpec,
               NEW parentContext \in AdmissibleContextRecords,
-              NEW node \in ValidatorIds,
+              NEW node \in Responsive,
               []~(nodeHeight[node] > parentContext.height + 1)
          PROVE PostFailureSuccessorPublicationReady(parentContext, node)
                  ~> SuccessorHeightActivated(parentContext, node)
@@ -3213,8 +3077,6 @@ BY Isa DEF IndexedJoinedThroughLocalHeight,
            IndexedReceiptFreeChainStutter,
            IndexedDecisionReceiptHandoff,
            IndexedApplicationReceiptHandoff,
-           IndexedHistoricalCatchUpDecision,
-           IndexedHistoricalCatchUpApplication,
            SuccessorContextFor,
            IndexedCompositionInvariant,
            JoinedContextCertificationInvariant,
@@ -3281,8 +3143,7 @@ THEOREM JoinedNonCurrentHasApplicationEvidence ==
       (IndexedCompositionInvariant
         /\ ~IndexedNodeCurrentAt(initialContext, node))
         => /\ nodeHeight[node] > initialContext.height
-           /\ \/ IndexedAsync(initialContext)!NodeHasApplication(node)
-              \/ HistoricalCatchUpApplicationAt(initialContext, node)
+           /\ IndexedAsync(initialContext)!NodeHasApplication(node)
 BY DEF IndexedCompositionInvariant, JoinedRoutingInvariant
 
 THEOREM JoinedNonCurrentDisablesExactRunNode ==
@@ -3293,10 +3154,18 @@ THEOREM JoinedNonCurrentDisablesExactRunNode ==
         => ~IndexedAsync(initialContext)!RunNode(node)
 BY Isa, JoinedNonCurrentHasApplicationEvidence
    DEF IndexedCompositionInvariant,
-       HistoricalCatchUpEvidenceInvariant,
-       HistoricalCatchUpReceiptSound,
-       HistoricalCatchUpApplicationAt,
        IndexedAsync!RunNode, IndexedAsync!AsyncVotersAt
+
+THEOREM ExactHistoricalRecoveryTargetOwnsCurrentLocation ==
+  \A initialContext \in AdmissibleContextRecords,
+     node \in ValidatorIds:
+    IndexedCompositionInvariant
+      /\ IndexedAsync(initialContext)!HistoricalRecoveryTarget(node)
+      => /\ node \in Responsive
+         /\ ExactNodeLocationAt(initialContext, node)
+         /\ ~IndexedAsync(initialContext)!NodeHasApplication(node)
+BY DEF IndexedCompositionInvariant,
+       IndexedHistoricalRecoveryTargetCoherence
 
 (***************************************************************************
 Product enabledness is proved, not assumed through hiding. The strong exact
@@ -3320,7 +3189,7 @@ BY Isa DEF IndexedProductActionAt, IndexedReceiptFreeAsyncAction,
            IndexedReceiptClassification,
            IndexedReceiptFreeChainStutter,
            IndexedCompositionInvariant, IndexedAsyncStateShape,
-           JoinedByContextShape, HistoricalCatchUpShape,
+           JoinedByContextShape,
            IndexedChainVars
 
 THEOREM IndexedFreshReceiptActionHasProductExtension ==
@@ -3341,15 +3210,13 @@ BY Isa, AppliedSuccessorIsAdmissible
        IndexedEveryInstanceStrongInvariant,
        JoinedContextCertificationInvariant, JoinedRoutingInvariant,
        IndexedApplicationsRespectNodeHeight,
-       HistoricalCatchUpShape,
-       HistoricalCatchUpEvidenceInvariant,
-       HistoricalCatchUpReceiptSound,
        IndexedTotalReceiptProjection,
        IndexedDecisionReceiptProjection,
        IndexedApplicationReceiptProjection,
        IndexedDecisionEvidence, IndexedApplicationEvidence,
        IndexedCurrentDecisions, IndexedCurrentApplications,
-       IndexedNodeCurrentAt, JoinedContexts, SuccessorContextFor,
+       IndexedNodeCurrentAt, ExactNodeLocationAt,
+       JoinedContexts, SuccessorContextFor,
        Chain!ChainEpochInvariant, Chain!ChainEpochTypeInvariant,
        Chain!DecisionBacksCertifiedSlot,
        Chain!ReceiptOutsideChainHorizon,
@@ -3408,6 +3275,27 @@ THEOREM IndexedFairActionsRemainEnabledInProduct ==
                                   PostGstServiceIoWorker(node)
                           => ENABLED
                                IndexedIoWorkerStep(initialContext, node))
+         /\ \A node \in Responsive:
+              node \in joinedByContext[initialContext]
+                => /\ (ENABLED IndexedAsync(initialContext)!
+                                  PostGstOpenHistoricalRecovery(node)
+                          => ENABLED IndexedOpenHistoricalRecoveryStep(
+                               initialContext, node))
+                   /\ (ENABLED IndexedAsync(initialContext)!
+                                  PostGstRunHistoricalRecoveryNode(node)
+                          => ENABLED IndexedRunHistoricalRecoveryStep(
+                               initialContext, node))
+                   /\ (ENABLED IndexedAsync(initialContext)!
+                                  PostGstHistoricalCommitCertificateDiscovery(
+                                    node)
+                          => ENABLED
+                               IndexedHistoricalCommitCertificateDiscoveryStep(
+                                 initialContext, node))
+                   /\ (ENABLED IndexedAsync(initialContext)!
+                                  PostGstServiceHistoricalRecoveryIoWorker(node)
+                          => ENABLED
+                               IndexedHistoricalRecoveryIoWorkerStep(
+                                 initialContext, node))
          /\ \A recipient \in IndexedAsync(initialContext)!
                             AsyncVotersAt(initialContext),
                source \in IndexedAsync(initialContext)!
@@ -3416,20 +3304,40 @@ THEOREM IndexedFairActionsRemainEnabledInProduct ==
                         PostGstAdmitHiddenPacket(recipient, source)
                 => ENABLED IndexedAdmitPacketStep(
                      initialContext, recipient, source)
+         /\ \A recipient \in ValidatorIds, source \in ValidatorIds:
+              ENABLED IndexedAsync(initialContext)!
+                        PostGstAdmitHistoricalRecoveryPacket(
+                          recipient, source)
+                => ENABLED IndexedAdmitHistoricalRecoveryPacketStep(
+                     initialContext, recipient, source)
 BY Isa, IndexedJoinedActionHasProductExtension,
-   JoinedNonCurrentDisablesExactRunNode
+   JoinedNonCurrentDisablesExactRunNode,
+   ExactHistoricalRecoveryTargetOwnsCurrentLocation
    DEF IndexedSetGstStep, IndexedTickStep, IndexedRunNodeStep,
+       IndexedOpenHistoricalRecoveryStep,
+       IndexedRunHistoricalRecoveryStep,
        IndexedCommitCertificateDiscoveryStep,
+       IndexedHistoricalCommitCertificateDiscoveryStep,
        IndexedHistoricalServerStep, IndexedIoWorkerStep,
+       IndexedHistoricalRecoveryIoWorkerStep,
        IndexedAdmitPacketStep, IndexedChainNext,
+       IndexedAdmitHistoricalRecoveryPacketStep,
+       IndexedOpenHistoricalRecovery,
+       IndexedHistoricalRecoveryTargetReady,
+       IndexedHistoricalRecoverySourceReady,
        IndexedProductActionAt, IndexedJoinedAsyncNext,
        IndexedJoinedNonCrashStep, IndexedJoinedRunnerStep,
        IndexedJoinedNonRunnerStep, IndexedNodeCurrentAt,
        IndexedAsync!PostGstRunNode,
+       IndexedAsync!PostGstOpenHistoricalRecovery,
+       IndexedAsync!PostGstRunHistoricalRecoveryNode,
        IndexedAsync!PostGstCommitCertificateDiscovery,
+       IndexedAsync!PostGstHistoricalCommitCertificateDiscovery,
        IndexedAsync!PostGstRunHistoricalServer,
        IndexedAsync!PostGstServiceIoWorker,
+       IndexedAsync!PostGstServiceHistoricalRecoveryIoWorker,
        IndexedAsync!PostGstAdmitHiddenPacket,
+       IndexedAsync!PostGstAdmitHistoricalRecoveryPacket,
        IndexedAsync!AsyncNonCrashStep,
        IndexedAsync!AsyncRunnerStep,
        IndexedAsync!AsyncNonRunnerStep,
@@ -3460,17 +3368,16 @@ Temporal induction interface.
 
 IndexedInstanceActivationObligation is the suffix argument: once the finite
 prior-height application induction has eventually joined every responsive
-voter, the already-running restricted behavior satisfies the exact
+validator, the already-running restricted behavior satisfies the exact
 AsyncSpecAt fairness obligations. Early joined work is part of that same
 behavior and is never blocked. IndexedFairActionsRemainEnabledInProduct proves
 that the receipt wrapper does not hide enabled exact actions. Once a joined
 node is no longer current, JoinedNonCurrentDisablesExactRunNode makes its exact
 RunNode fairness obligation vacuous while historical service stays fair.
-The exact Idle and Validated catch-up suffixes consume fairness of the complete
-pipeline.  Progress across the intervening body-recovery, store, and validation
-stages remains the explicit IndexedHistoricalCatchUpRankProgress premise of
-the conditional height kernel; no subaction fairness is inferred from the
-union action. Terminal application has no join.
+Historical recovery is owned by the exact Async target and its ordinary
+decision/body/store/validate/apply corridor; its remaining temporal debt is
+the explicit IndexedExactHistoricalRecoveryProgress premise of the conditional
+height kernel. Terminal application has no successor join.
 VerificationOneHeightCompletion is the exact fixed-context expansion of the
 one-height completion property over the parameterized production-network
 instance. Its wrapper is supplied by the nonparameterized asynchronous
@@ -3480,8 +3387,7 @@ explicit premises over finite Heights; it does not hide them as a new protocol
 relation.
 ***************************************************************************)
 IndexedAllResponsiveJoined(initialContext) ==
-  IndexedAsync(initialContext)!AsyncVotersAt(initialContext)
-    \subseteq joinedByContext[initialContext]
+  Responsive \subseteq joinedByContext[initialContext]
 
 THEOREM IndexedResponsiveVoterSetIsNonempty ==
   \A initialContext \in AdmissibleContextRecords:
@@ -3496,7 +3402,8 @@ THEOREM IndexedAllResponsiveJoinedMakesContextJoined ==
     IndexedAllResponsiveJoined(initialContext)
       => initialContext \in JoinedContexts
 BY Isa, IndexedResponsiveVoterSetIsNonempty
-   DEF IndexedAllResponsiveJoined, JoinedContexts
+   DEF IndexedAllResponsiveJoined, JoinedContexts,
+       IndexedAsync!AsyncVotersAt
 
 THEOREM IndexedAllResponsiveJoinedIsStable ==
   \A initialContext \in AdmissibleContextRecords:
@@ -3569,6 +3476,25 @@ THEOREM IndexedFairProductStepsProjectExactOccurrences ==
                => <<IndexedAsync(initialContext)!
                        PostGstServiceIoWorker(node)>>_(
                     IndexedAsyncStateAt(initialContext)))
+    /\ \A node \in Responsive:
+         /\ (IndexedOpenHistoricalRecoveryStep(initialContext, node)
+               => <<IndexedAsync(initialContext)!
+                       PostGstOpenHistoricalRecovery(node)>>_(
+                    IndexedAsyncStateAt(initialContext)))
+         /\ (IndexedRunHistoricalRecoveryStep(initialContext, node)
+               => <<IndexedAsync(initialContext)!
+                       PostGstRunHistoricalRecoveryNode(node)>>_(
+                    IndexedAsyncStateAt(initialContext)))
+         /\ (IndexedHistoricalCommitCertificateDiscoveryStep(
+                  initialContext, node)
+               => <<IndexedAsync(initialContext)!
+                       PostGstHistoricalCommitCertificateDiscovery(node)>>_(
+                    IndexedAsyncStateAt(initialContext)))
+         /\ (IndexedHistoricalRecoveryIoWorkerStep(
+                  initialContext, node)
+               => <<IndexedAsync(initialContext)!
+                       PostGstServiceHistoricalRecoveryIoWorker(node)>>_(
+                    IndexedAsyncStateAt(initialContext)))
     /\ \A recipient \in IndexedAsync(initialContext)!
                          AsyncVotersAt(initialContext),
           source \in IndexedAsync(initialContext)!
@@ -3577,27 +3503,46 @@ THEOREM IndexedFairProductStepsProjectExactOccurrences ==
            => <<IndexedAsync(initialContext)!
                    PostGstAdmitHiddenPacket(recipient, source)>>_(
                 IndexedAsyncStateAt(initialContext))
+    /\ \A recipient \in ValidatorIds, source \in ValidatorIds:
+         IndexedAdmitHistoricalRecoveryPacketStep(
+           initialContext, recipient, source)
+           => <<IndexedAsync(initialContext)!
+                   PostGstAdmitHistoricalRecoveryPacket(
+                     recipient, source)>>_(
+                IndexedAsyncStateAt(initialContext))
 BY Isa DEF IndexedSetGstStep, IndexedTickStep,
            IndexedRunNodeStep, IndexedHistoricalServerStep,
+           IndexedOpenHistoricalRecoveryStep,
+           IndexedRunHistoricalRecoveryStep,
            IndexedCommitCertificateDiscoveryStep,
-           IndexedIoWorkerStep, IndexedAdmitPacketStep,
+           IndexedHistoricalCommitCertificateDiscoveryStep,
+           IndexedIoWorkerStep, IndexedHistoricalRecoveryIoWorkerStep,
+           IndexedAdmitPacketStep,
+           IndexedAdmitHistoricalRecoveryPacketStep,
            IndexedChainNext, IndexedProductActionAt,
            IndexedReceiptClassification, IndexedReceiptFreeChainStutter,
            IndexedDecisionReceiptHandoff,
            IndexedApplicationReceiptHandoff,
-           IndexedHistoricalCatchUpDecision,
-           IndexedHistoricalCatchUpApplication,
            IndexedChainVars, IndexedAsyncStateAt,
            IndexedAsync!AsyncSetGST, IndexedAsync!SetGST,
            IndexedAsync!AsyncTick,
            IndexedAsync!PostGstRunNode, IndexedAsync!RunNode,
+           IndexedAsync!PostGstOpenHistoricalRecovery,
+           IndexedAsync!OpenHistoricalRecovery,
+           IndexedAsync!PostGstRunHistoricalRecoveryNode,
+           IndexedAsync!RunHistoricalRecoveryNode,
            IndexedAsync!PostGstCommitCertificateDiscovery,
            IndexedAsync!DirectCommitCertificateDiscoveryStep,
+           IndexedAsync!PostGstHistoricalCommitCertificateDiscovery,
+           IndexedAsync!DirectHistoricalCommitCertificateDiscoveryStep,
            IndexedAsync!PostGstRunHistoricalServer,
            IndexedAsync!RunHistoricalServer,
            IndexedAsync!PostGstServiceIoWorker,
            IndexedAsync!ServiceIoWorker,
+           IndexedAsync!PostGstServiceHistoricalRecoveryIoWorker,
+           IndexedAsync!ServiceHistoricalRecoveryIoWorker,
            IndexedAsync!PostGstAdmitHiddenPacket,
+           IndexedAsync!PostGstAdmitHistoricalRecoveryPacket,
            IndexedAsync!AdmitHiddenPacket
 
 THEOREM IndexedFairExactOccurrencesEnableProductOccurrences ==
@@ -3645,6 +3590,35 @@ THEOREM IndexedFairExactOccurrencesEnableProductOccurrences ==
                     => ENABLED
                          <<IndexedIoWorkerStep(initialContext, node)>>_(
                            IndexedChainVars))
+         /\ \A node \in Responsive:
+              /\ (ENABLED
+                    <<IndexedAsync(initialContext)!
+                        PostGstOpenHistoricalRecovery(node)>>_(
+                      IndexedAsyncStateAt(initialContext))
+                    => ENABLED
+                         <<IndexedOpenHistoricalRecoveryStep(
+                             initialContext, node)>>_(IndexedChainVars))
+              /\ (ENABLED
+                    <<IndexedAsync(initialContext)!
+                        PostGstRunHistoricalRecoveryNode(node)>>_(
+                      IndexedAsyncStateAt(initialContext))
+                    => ENABLED
+                         <<IndexedRunHistoricalRecoveryStep(
+                             initialContext, node)>>_(IndexedChainVars))
+              /\ (ENABLED
+                    <<IndexedAsync(initialContext)!
+                        PostGstHistoricalCommitCertificateDiscovery(node)>>_(
+                      IndexedAsyncStateAt(initialContext))
+                    => ENABLED
+                         <<IndexedHistoricalCommitCertificateDiscoveryStep(
+                             initialContext, node)>>_(IndexedChainVars))
+              /\ (ENABLED
+                    <<IndexedAsync(initialContext)!
+                        PostGstServiceHistoricalRecoveryIoWorker(node)>>_(
+                      IndexedAsyncStateAt(initialContext))
+                    => ENABLED
+                         <<IndexedHistoricalRecoveryIoWorkerStep(
+                             initialContext, node)>>_(IndexedChainVars))
          /\ \A recipient \in IndexedAsync(initialContext)!
                             AsyncVotersAt(initialContext),
                source \in IndexedAsync(initialContext)!
@@ -3655,6 +3629,16 @@ THEOREM IndexedFairExactOccurrencesEnableProductOccurrences ==
                   IndexedAsyncStateAt(initialContext))
                 => ENABLED
                      <<IndexedAdmitPacketStep(
+                         initialContext, recipient, source)>>_(
+                       IndexedChainVars)
+         /\ \A recipient \in ValidatorIds, source \in ValidatorIds:
+              ENABLED
+                <<IndexedAsync(initialContext)!
+                    PostGstAdmitHistoricalRecoveryPacket(
+                      recipient, source)>>_(
+                  IndexedAsyncStateAt(initialContext))
+                => ENABLED
+                     <<IndexedAdmitHistoricalRecoveryPacketStep(
                          initialContext, recipient, source)>>_(
                        IndexedChainVars)
 BY IndexedFairActionsRemainEnabledInProduct,
@@ -3831,6 +3815,28 @@ PROOF
     <2> QED BY <2>1, <2>2, <2>3, <2>4, PTL
   <1> QED BY <1>1
 
+THEOREM IndexedHistoricalRecoveryFairnessTransfers ==
+  \A initialContext \in AdmissibleContextRecords:
+    \A node \in Responsive:
+      (/\ IndexedChainSpec
+       /\ TRUE ~> IndexedAllResponsiveJoined(initialContext))
+        => /\ WF_(IndexedAsyncStateAt(initialContext))(
+                  IndexedAsync(initialContext)!
+                    PostGstOpenHistoricalRecovery(node))
+           /\ WF_(IndexedAsyncStateAt(initialContext))(
+                  IndexedAsync(initialContext)!
+                    PostGstRunHistoricalRecoveryNode(node))
+           /\ WF_(IndexedAsyncStateAt(initialContext))(
+                  IndexedAsync(initialContext)!
+                    PostGstHistoricalCommitCertificateDiscovery(node))
+           /\ WF_(IndexedAsyncStateAt(initialContext))(
+                  IndexedAsync(initialContext)!
+                    PostGstServiceHistoricalRecoveryIoWorker(node))
+BY IndexedActivationEventuallyStabilizes,
+   IndexedFairExactOccurrencesEnableProductOccurrences,
+   IndexedFairProductStepsProjectExactOccurrences, PTL
+   DEF IndexedChainSpec, IndexedFairness
+
 THEOREM IndexedPacketFairnessTransfers ==
   \A initialContext \in AdmissibleContextRecords:
     \A recipient \in IndexedAsync(initialContext)!
@@ -3879,6 +3885,19 @@ PROOF
       BY <1>1 DEF IndexedChainSpec, IndexedFairness
     <2> QED BY <2>1, <2>2, <2>3, <2>4, PTL
   <1> QED BY <1>1
+
+THEOREM IndexedHistoricalRecoveryPacketFairnessTransfers ==
+  \A initialContext \in AdmissibleContextRecords:
+    \A recipient \in ValidatorIds, source \in ValidatorIds:
+      (/\ IndexedChainSpec
+       /\ TRUE ~> IndexedAllResponsiveJoined(initialContext))
+        => WF_(IndexedAsyncStateAt(initialContext))(
+             IndexedAsync(initialContext)!
+               PostGstAdmitHistoricalRecoveryPacket(recipient, source))
+BY IndexedActivationEventuallyStabilizes,
+   IndexedFairExactOccurrencesEnableProductOccurrences,
+   IndexedFairProductStepsProjectExactOccurrences, PTL
+   DEF IndexedChainSpec, IndexedFairness
 
 THEOREM IndexedInstanceActivationObligation ==
   \A initialContext \in AdmissibleContextRecords:
@@ -3933,6 +3952,22 @@ PROOF
       BY <1>1, IndexedNodeFairnessTransfers
     <2>7. (/\ IndexedChainSpec
             /\ TRUE ~> IndexedAllResponsiveJoined(initialContext))
+             => \A node \in Responsive:
+                  /\ WF_(IndexedAsyncStateAt(initialContext))(
+                       IndexedAsync(initialContext)!
+                         PostGstOpenHistoricalRecovery(node))
+                  /\ WF_(IndexedAsyncStateAt(initialContext))(
+                       IndexedAsync(initialContext)!
+                         PostGstRunHistoricalRecoveryNode(node))
+                  /\ WF_(IndexedAsyncStateAt(initialContext))(
+                       IndexedAsync(initialContext)!
+                         PostGstHistoricalCommitCertificateDiscovery(node))
+                  /\ WF_(IndexedAsyncStateAt(initialContext))(
+                       IndexedAsync(initialContext)!
+                         PostGstServiceHistoricalRecoveryIoWorker(node))
+      BY <1>1, IndexedHistoricalRecoveryFairnessTransfers
+    <2>8. (/\ IndexedChainSpec
+            /\ TRUE ~> IndexedAllResponsiveJoined(initialContext))
              => \A recipient \in IndexedAsync(initialContext)!
                                   AsyncVotersAt(initialContext),
                    source \in IndexedAsync(initialContext)!
@@ -3941,650 +3976,49 @@ PROOF
                     IndexedAsync(initialContext)!
                       PostGstAdmitHiddenPacket(recipient, source))
       BY <1>1, IndexedPacketFairnessTransfers
-    <2> QED BY <2>1, <2>2, <2>3, <2>4, <2>5, <2>6, <2>7, PTL
+    <2>9. (/\ IndexedChainSpec
+            /\ TRUE ~> IndexedAllResponsiveJoined(initialContext))
+             => \A recipient \in ValidatorIds,
+                   source \in ValidatorIds:
+                  WF_(IndexedAsyncStateAt(initialContext))(
+                    IndexedAsync(initialContext)!
+                      PostGstAdmitHistoricalRecoveryPacket(
+                        recipient, source))
+      BY <1>1, IndexedHistoricalRecoveryPacketFairnessTransfers
+    <2> QED BY <2>1, <2>2, <2>3, <2>4, <2>5, <2>6,
+                 <2>7, <2>8, <2>9, PTL
          DEF IndexedAsync!AsyncSpecAt, IndexedAsync!AsyncFairnessAt
   <1> QED BY <1>1
 
-IndexedCatchUpDecisionReady(initialContext, node) ==
-  \E server \in ValidatorIds,
-     source \in Chain!DecisionEvidenceSet:
-    /\ HistoricalCatchUpTarget(initialContext, node)
-    /\ HistoricalCatchUpSource(initialContext, server, source)
-    /\ HistoricalCatchUpRecord(node, source)
-         \notin IndexedDecisionEvidence
-
-IndexedCatchUpApplicationReady(initialContext, node) ==
-  \E server \in ValidatorIds,
-     source \in Chain!DecisionEvidenceSet:
-    /\ HistoricalCatchUpTarget(initialContext, node)
-    /\ HistoricalCatchUpSource(initialContext, server, source)
-    /\ HistoricalCatchUpRecord(node, source)
-         \in historicalCatchUpDecisions
-    /\ HistoricalCatchUpRecord(node, source)
-         \notin historicalCatchUpApplications
-
 (***************************************************************************
-The broad predicates above are discovery predicates used by the finite-height
-argument.  Enabledness is stage-exact: a decision can enter only at Idle and
-an application can enter only after validation.  Keeping those notions
-separate prevents a durable decision receipt from being mistaken for an
-enabled application action while body recovery, storage, or validation is
-still outstanding.
+Exact historical-recovery progress boundary.
+
+Opening and every subsequent recovery transition belong to the exact Async
+instance. This product therefore carries no second stage rank. The remaining
+temporal debt is stated directly over exact target ownership: once a responsive
+node at its frozen context either has an authenticated source ready to open or
+already owns the exact target, it eventually acquires that context's exact
+application evidence. Nonterminal receipt handoff then advances nodeHeight;
+the terminal horizon intentionally records application without inventing a
+successor. This obligation remains release-incomplete until the Async fairness
+proof discharges the ordinary decision/body/store/validate/apply corridor.
 ***************************************************************************)
-IndexedCatchUpIdleDecisionReady(initialContext, node) ==
-  /\ initialContext.height < MaxHeight
-  /\ historicalCatchUpStage[initialContext][node] = "Idle"
-  /\ IndexedCatchUpDecisionReady(initialContext, node)
+HistoricalRecoveryOutstanding(initialContext, node) ==
+  /\ node \in Responsive
+  /\ node \in joinedByContext[initialContext]
+  /\ ExactNodeLocationAt(initialContext, node)
+  /\ ~IndexedAsync(initialContext)!NodeHasApplication(node)
 
-IndexedCatchUpValidatedApplicationReady(initialContext, node) ==
-  /\ initialContext.height < MaxHeight
-  /\ historicalCatchUpStage[initialContext][node] = "Validated"
-  /\ IndexedCatchUpApplicationReady(initialContext, node)
+HistoricalRecoveryComplete(initialContext, node) ==
+  IF initialContext.height = MaxHeight
+  THEN IndexedAsync(initialContext)!NodeHasApplication(node)
+  ELSE nodeHeight[node] > initialContext.height
 
-HistoricalCatchUpStageRank(stage) ==
-  CASE stage = "Idle"              -> 5
-    [] stage = "DecisionRecovered" -> 4
-    [] stage = "BodyRecovered"     -> 3
-    [] stage = "Stored"            -> 2
-    [] stage = "Validated"         -> 1
-    [] OTHER                        -> 0
-
-IndexedCatchUpStageRankAt(initialContext, node) ==
-  HistoricalCatchUpStageRank(
-    historicalCatchUpStage[initialContext][node])
-
-THEOREM IndexedCatchUpStageRankIsFinite ==
-  HistoricalCatchUpShape
-    => \A initialContext \in AdmissibleContextRecords,
-          node \in ValidatorIds:
-         IndexedCatchUpStageRankAt(initialContext, node) \in 0..5
-BY Isa DEF HistoricalCatchUpShape,
-           IndexedCatchUpStageRankAt, HistoricalCatchUpStageRank
-
-THEOREM IndexedCatchUpPipelineStrictlyDecreasesStageRank ==
+IndexedExactHistoricalRecoveryProgress ==
   \A initialContext \in AdmissibleContextRecords,
-     node \in ValidatorIds:
-    IndexedCatchUpPipelineStep(initialContext, node)
-      => IndexedCatchUpStageRankAt(initialContext, node)'
-           < IndexedCatchUpStageRankAt(initialContext, node)
-BY Isa DEF IndexedCatchUpStageRankAt, HistoricalCatchUpStageRank,
-           IndexedCatchUpPipelineStep,
-           IndexedHistoricalCatchUpPipelineAction,
-           IndexedHistoricalCatchUpDecision,
-           IndexedHistoricalCatchUpBodyRecovery,
-           IndexedHistoricalCatchUpBodyStore,
-           IndexedHistoricalCatchUpValidation,
-           IndexedHistoricalCatchUpApplication
-
-IndexedHistoricalCatchUpRankProgress ==
-  \A initialContext \in AdmissibleContextRecords,
-     node \in ValidatorIds:
-    /\ (initialContext.height < MaxHeight
-          /\ IndexedCatchUpDecisionReady(initialContext, node))
-         ~> nodeHeight[node] > initialContext.height
-    /\ (initialContext.height < MaxHeight
-          /\ IndexedCatchUpApplicationReady(initialContext, node))
-         ~> nodeHeight[node] > initialContext.height
-
-(***************************************************************************
-The Idle/Validated refinements are exact enabledness witnesses for the two
-boundary actions.  The composition invariant supplies the receipt projection
-and canonical-prefix facts required by RecordKnownDecision and
-RecordAppliedNext; stage-exact readiness contributes the particular honest
-signer, body, target, and source.  These lemmas make the supported fairness
-suffixes explicit without treating historical service as a progress oracle.
-***************************************************************************)
-IndexedCatchUpFrameInvariant ==
-  /\ IndexedAsyncStateShape
-  /\ JoinedByContextShape
-  /\ HistoricalCatchUpShape
-  /\ Chain!ChainEpochInvariant
-  /\ IndexedTotalReceiptProjection
-
-THEOREM IndexedCompositionSuppliesCatchUpFrame ==
-  IndexedCompositionInvariant => IndexedCatchUpFrameInvariant
-BY DEF IndexedCompositionInvariant, IndexedCatchUpFrameInvariant
-
-IndexedCatchUpDecisionActionGuard(initialContext, node, server, source) ==
-  LET decision == HistoricalCatchUpRecord(node, source)
-  IN /\ HistoricalCatchUpTarget(initialContext, node)
-     /\ HistoricalCatchUpSource(initialContext, server, source)
-     /\ initialContext.height < MaxHeight
-     /\ historicalCatchUpStage[initialContext][node] = "Idle"
-     /\ decision \notin IndexedDecisionEvidence
-     /\ Chain!DurableCommitDecision(decision)
-     /\ decision \notin durableDecisionEvidence
-     /\ \/ Chain!DecisionBacksCertifiedSlot(decision)
-        \/ Chain!ReceiptOutsideChainHorizon(decision)
-
-THEOREM IndexedCatchUpIdleDecisionReadySuppliesActionGuard ==
-  \A initialContext \in AdmissibleContextRecords,
-     node \in ValidatorIds:
-    IndexedCatchUpFrameInvariant
-      /\ IndexedCatchUpIdleDecisionReady(initialContext, node)
-      => \E server \in ValidatorIds,
-            source \in Chain!DecisionEvidenceSet:
-           IndexedCatchUpDecisionActionGuard(
-             initialContext, node, server, source)
-BY Isa DEF IndexedCatchUpFrameInvariant,
-           IndexedCatchUpIdleDecisionReady,
-           IndexedCatchUpDecisionReady,
-           IndexedCatchUpDecisionActionGuard,
-           HistoricalCatchUpSource, HistoricalCatchUpRecord,
-           IndexedTotalReceiptProjection,
-           IndexedDecisionReceiptProjection,
-           Chain!ChainEpochInvariant,
-           Chain!DurableDecisionEvidenceSound,
-           Chain!DurableCommitDecision,
-           Chain!HistoricalCommitCertificate,
-           Chain!DecisionBacksCertifiedSlot,
-           Chain!ReceiptOutsideChainHorizon
-
-THEOREM IndexedCatchUpDecisionFrameGuardEnablesService ==
-  \A initialContext \in AdmissibleContextRecords,
-     node \in ValidatorIds,
-     server \in ValidatorIds,
-     source \in Chain!DecisionEvidenceSet:
-    IndexedCatchUpFrameInvariant
-      /\ IndexedCatchUpDecisionActionGuard(
-           initialContext, node, server, source)
-      => ENABLED
-           <<IndexedCatchUpServiceStep(initialContext, node)>>_(
-             IndexedChainVars)
-BY ExpandENABLED, Isa
-   DEF IndexedCatchUpFrameInvariant,
-       IndexedCatchUpDecisionActionGuard,
-       IndexedCatchUpServiceStep,
-       IndexedHistoricalCatchUpDecision,
-       HistoricalCatchUpRecord,
-       IndexedChainVars, IndexedAsyncStateShape,
-       JoinedByContextShape, HistoricalCatchUpShape,
-       Chain!RecordKnownDecision, Chain!ChainEpochVars
-
-THEOREM IndexedCatchUpIdleDecisionReadyEnablesService ==
-  \A initialContext \in AdmissibleContextRecords,
-     node \in ValidatorIds:
-    IndexedCompositionInvariant
-      /\ IndexedCatchUpIdleDecisionReady(initialContext, node)
-      => ENABLED
-           <<IndexedCatchUpServiceStep(initialContext, node)>>_(
-             IndexedChainVars)
-PROOF
-  <1>1. ASSUME NEW initialContext \in AdmissibleContextRecords,
-              NEW node \in ValidatorIds,
-              IndexedCompositionInvariant,
-              IndexedCatchUpIdleDecisionReady(initialContext, node)
-         PROVE ENABLED
-                 <<IndexedCatchUpServiceStep(initialContext, node)>>_(
-                   IndexedChainVars)
-    <2>1. IndexedCatchUpFrameInvariant
-      BY <1>1, IndexedCompositionSuppliesCatchUpFrame
-    <2>2. \E server \in ValidatorIds,
-               source \in Chain!DecisionEvidenceSet:
-             IndexedCatchUpDecisionActionGuard(
-               initialContext, node, server, source)
-      BY <1>1, <2>1,
-         IndexedCatchUpIdleDecisionReadySuppliesActionGuard
-    <2> QED BY <2>1, <2>2,
-                 IndexedCatchUpDecisionFrameGuardEnablesService
-  <1> QED BY <1>1
-
-IndexedCatchUpApplicationActionGuard(initialContext, node, server, source) ==
-  LET application == HistoricalCatchUpRecord(node, source)
-      nextHeight == nodeHeight[node] + 1
-  IN /\ HistoricalCatchUpTarget(initialContext, node)
-     /\ HistoricalCatchUpSource(initialContext, server, source)
-     /\ initialContext.height < MaxHeight
-     /\ historicalCatchUpStage[initialContext][node] = "Validated"
-     /\ application \in historicalCatchUpDecisions
-     /\ application \notin historicalCatchUpApplications
-     /\ application \in Chain!DecisionEvidenceSet
-     /\ node \in Honest
-     /\ Chain!DurableCommitDecision(application)
-     /\ nodeHeight[node] < certifiedHeight
-     /\ Chain!CanonicalCommitForSlot(application.qc, nextHeight)
-     /\ Chain!ApplicationHasRecordedDecision(application)
-
-THEOREM IndexedCatchUpValidatedReadySuppliesActionGuard ==
-  \A initialContext \in AdmissibleContextRecords,
-     node \in ValidatorIds:
-    IndexedCatchUpFrameInvariant
-      /\ IndexedCatchUpValidatedApplicationReady(initialContext, node)
-      => \E server \in ValidatorIds,
-            source \in Chain!DecisionEvidenceSet:
-           IndexedCatchUpApplicationActionGuard(
-             initialContext, node, server, source)
-BY Isa DEF IndexedCatchUpFrameInvariant,
-           IndexedCatchUpValidatedApplicationReady,
-           IndexedCatchUpApplicationReady,
-           IndexedCatchUpApplicationActionGuard,
-           HistoricalCatchUpTarget, HistoricalCatchUpSource,
-           HistoricalCatchUpRecord,
-           IndexedTotalReceiptProjection,
-           IndexedDecisionReceiptProjection,
-           IndexedApplicationReceiptProjection,
-           IndexedDecisionEvidence, IndexedApplicationEvidence,
-           Chain!ChainEpochInvariant, Chain!ChainEpochTypeInvariant,
-           Chain!DurableDecisionEvidenceSound,
-           Chain!DurableApplicationEvidenceSound,
-           Chain!NodesDoNotOutrunCertificates,
-           Chain!ApplicationHasRecordedDecision,
-           Chain!DecisionBacksCertifiedSlot,
-           Chain!ReceiptOutsideChainHorizon,
-           Chain!DurableCommitDecision,
-           Chain!CanonicalCommitForSlot,
-           Chain!HistoricalCommitCertificate
-
-THEOREM IndexedCatchUpApplicationFrameGuardEnablesApplication ==
-  \A initialContext \in AdmissibleContextRecords,
-     node \in ValidatorIds,
-     server \in ValidatorIds,
-     source \in Chain!DecisionEvidenceSet:
-    IndexedCatchUpFrameInvariant
-      /\ IndexedCatchUpApplicationActionGuard(
-           initialContext, node, server, source)
-      => ENABLED
-           <<IndexedCatchUpApplicationStep(initialContext, node)>>_(
-             IndexedChainVars)
-BY AppliedSuccessorIsAdmissible, ExpandENABLED, Isa
-   DEF IndexedCatchUpFrameInvariant,
-       IndexedCatchUpApplicationActionGuard,
-       IndexedCatchUpApplicationStep,
-       IndexedHistoricalCatchUpApplication,
-       HistoricalCatchUpRecord, SuccessorContextFor,
-       IndexedChainVars, IndexedAsyncStateShape,
-       JoinedByContextShape, HistoricalCatchUpShape,
-       Chain!RecordAppliedNext, Chain!ChainEpochVars
-
-THEOREM IndexedCatchUpValidatedReadyEnablesApplication ==
-  \A initialContext \in AdmissibleContextRecords,
-     node \in ValidatorIds:
-    IndexedCompositionInvariant
-      /\ IndexedCatchUpValidatedApplicationReady(initialContext, node)
-      => ENABLED
-           <<IndexedCatchUpApplicationStep(initialContext, node)>>_(
-             IndexedChainVars)
-PROOF
-  <1>1. ASSUME NEW initialContext \in AdmissibleContextRecords,
-              NEW node \in ValidatorIds,
-              IndexedCompositionInvariant,
-              IndexedCatchUpValidatedApplicationReady(initialContext, node)
-         PROVE ENABLED
-                 <<IndexedCatchUpApplicationStep(initialContext, node)>>_(
-                   IndexedChainVars)
-    <2>1. IndexedCatchUpFrameInvariant
-      BY <1>1, IndexedCompositionSuppliesCatchUpFrame
-    <2>2. \E server \in ValidatorIds,
-               source \in Chain!DecisionEvidenceSet:
-             IndexedCatchUpApplicationActionGuard(
-               initialContext, node, server, source)
-      BY <1>1, <2>1,
-         IndexedCatchUpValidatedReadySuppliesActionGuard
-    <2> QED BY <2>1, <2>2,
-                 IndexedCatchUpApplicationFrameGuardEnablesApplication
-  <1> QED BY <1>1
-
-THEOREM IndexedCatchUpServiceEstablishesDecision ==
-  \A initialContext \in AdmissibleContextRecords,
-     node \in ValidatorIds:
-    IndexedCatchUpServiceStep(initialContext, node)
-      => HistoricalCatchUpDecisionAt(initialContext, node)'
-BY Isa DEF IndexedCatchUpServiceStep,
-           IndexedHistoricalCatchUpDecision,
-           HistoricalCatchUpDecisionAt,
-           HistoricalCatchUpRecord
-
-THEOREM IndexedCatchUpApplicationEstablishesAdvance ==
-  \A initialContext \in AdmissibleContextRecords,
-     node \in ValidatorIds:
-    initialContext.height < MaxHeight
-      /\ IndexedCatchUpApplicationStep(initialContext, node)
-      => /\ HistoricalCatchUpApplicationAt(initialContext, node)'
-         /\ nodeHeight'[node] > initialContext.height
-BY Isa DEF IndexedCatchUpApplicationStep,
-           IndexedHistoricalCatchUpApplication,
-           HistoricalCatchUpApplicationAt,
-           HistoricalCatchUpRecord,
-           Chain!RecordAppliedNext
-
-THEOREM IndexedCatchUpDecisionReadyPersistsUntilReceipt ==
-  \A initialContext \in AdmissibleContextRecords,
-     node \in ValidatorIds:
-    IndexedCompositionInvariant
-      /\ IndexedCatchUpIdleDecisionReady(initialContext, node)
-      /\ [IndexedChainNext]_IndexedChainVars
-      => \/ IndexedCatchUpIdleDecisionReady(initialContext, node)'
-         \/ HistoricalCatchUpDecisionAt(initialContext, node)'
-         \/ nodeHeight'[node] > initialContext.height
-BY Isa DEF IndexedCatchUpIdleDecisionReady,
-           IndexedCatchUpDecisionReady,
-           HistoricalCatchUpDecisionAt,
-           IndexedChainNext, IndexedChainVars,
-           IndexedProductActionAt, IndexedReceiptClassification,
-           IndexedReceiptFreeChainStutter,
-           IndexedDecisionReceiptHandoff,
-           IndexedApplicationReceiptHandoff,
-           IndexedHistoricalCatchUpDecision,
-           IndexedHistoricalCatchUpBodyRecovery,
-           IndexedHistoricalCatchUpBodyStore,
-           IndexedHistoricalCatchUpValidation,
-           IndexedHistoricalCatchUpApplication,
-           IndexedSuccessorActivationProgressStep,
-           BeginSuccessorActivation,
-           BindAppliedSuccessorActivationToken,
-           FailClosedSuccessorStartup,
-           AuthenticateRecoveredSuccessorActivation,
-           OpenDeferredSuccessorAdapter,
-           ConstructSuccessorRuntime,
-           StartSuccessorServices,
-           ApplySuccessorStartupEffects,
-           ArmSuccessorClocks,
-           PrepareSuccessorActivationMarker,
-           OpenSuccessorIngress,
-           ActivateAppliedSuccessorHeight,
-           ActivateRecoveredSuccessorHeight,
-           SuccessorActivationEnvironmentStutter,
-           HistoricalCatchUpTarget, HistoricalCatchUpSource,
-           HistoricalCatchUpRecord,
-           IndexedCompositionInvariant,
-           IndexedTotalReceiptProjection,
-           IndexedDecisionReceiptProjection,
-           IndexedApplicationReceiptProjection,
-           IndexedDecisionEvidence, IndexedApplicationEvidence,
-           IndexedCurrentDecisions, IndexedCurrentApplications,
-           IndexedEveryInstanceStrongInvariant,
-           HistoricalCatchUpEvidenceInvariant,
-           HistoricalCatchUpReceiptSound,
-           HistoricalCatchUpApplicationAt,
-           JoinedContexts, IndexedNodeCurrentAt,
-           Chain!ChainEpochInvariant, Chain!ChainEpochTypeInvariant,
-           Chain!RecordCertifiedNext, Chain!RecordKnownDecision,
-           Chain!RecordAppliedNext, Chain!RecordKnownApplication,
-           Chain!ChainEpochVars,
-           IndexedAsync!StrongInductiveInvariant,
-           IndexedAsync!Safety, IndexedAsync!TypeInvariant,
-           IndexedAsync!DecisionAgreement,
-           IndexedAsync!AppliedRequiresDecision,
-           IndexedAsync!NodeHasApplication,
-           IndexedAsync!AsyncVotersAt
-
-THEOREM IndexedCatchUpApplicationReadyPersistsUntilAdvance ==
-  \A initialContext \in AdmissibleContextRecords,
-     node \in ValidatorIds:
-    IndexedCompositionInvariant
-      /\ IndexedCatchUpValidatedApplicationReady(initialContext, node)
-      /\ [IndexedChainNext]_IndexedChainVars
-      => \/ IndexedCatchUpValidatedApplicationReady(initialContext, node)'
-         \/ (/\ HistoricalCatchUpApplicationAt(initialContext, node)'
-             /\ nodeHeight'[node] > initialContext.height)
-         \/ nodeHeight'[node] > initialContext.height
-BY Isa DEF IndexedCatchUpValidatedApplicationReady,
-           IndexedCatchUpApplicationReady,
-           HistoricalCatchUpApplicationAt,
-           IndexedChainNext, IndexedChainVars,
-           IndexedProductActionAt, IndexedReceiptClassification,
-           IndexedReceiptFreeChainStutter,
-           IndexedDecisionReceiptHandoff,
-           IndexedApplicationReceiptHandoff,
-           IndexedHistoricalCatchUpDecision,
-           IndexedHistoricalCatchUpBodyRecovery,
-           IndexedHistoricalCatchUpBodyStore,
-           IndexedHistoricalCatchUpValidation,
-           IndexedHistoricalCatchUpApplication,
-           IndexedSuccessorActivationProgressStep,
-           BeginSuccessorActivation,
-           BindAppliedSuccessorActivationToken,
-           FailClosedSuccessorStartup,
-           AuthenticateRecoveredSuccessorActivation,
-           OpenDeferredSuccessorAdapter,
-           ConstructSuccessorRuntime,
-           StartSuccessorServices,
-           ApplySuccessorStartupEffects,
-           ArmSuccessorClocks,
-           PrepareSuccessorActivationMarker,
-           OpenSuccessorIngress,
-           ActivateAppliedSuccessorHeight,
-           ActivateRecoveredSuccessorHeight,
-           SuccessorActivationEnvironmentStutter,
-           HistoricalCatchUpTarget, HistoricalCatchUpSource,
-           HistoricalCatchUpRecord,
-           IndexedCompositionInvariant,
-           IndexedTotalReceiptProjection,
-           IndexedDecisionReceiptProjection,
-           IndexedApplicationReceiptProjection,
-           IndexedDecisionEvidence, IndexedApplicationEvidence,
-           IndexedCurrentDecisions, IndexedCurrentApplications,
-           IndexedEveryInstanceStrongInvariant,
-           HistoricalCatchUpEvidenceInvariant,
-           HistoricalCatchUpReceiptSound,
-           HistoricalCatchUpDecisionAt,
-           JoinedContexts, SuccessorContextFor,
-           Chain!ChainEpochInvariant, Chain!ChainEpochTypeInvariant,
-           Chain!RecordCertifiedNext, Chain!RecordKnownDecision,
-           Chain!RecordAppliedNext, Chain!RecordKnownApplication,
-           Chain!ChainEpochVars,
-           IndexedAsync!StrongInductiveInvariant,
-           IndexedAsync!Safety, IndexedAsync!TypeInvariant,
-           IndexedAsync!DecisionAgreement,
-           IndexedAsync!AppliedRequiresDecision,
-           IndexedAsync!NodeHasApplication,
-           IndexedAsync!AsyncVotersAt
-
-THEOREM IndexedCatchUpServiceStepRefinesPipelineStep ==
-  \A initialContext \in AdmissibleContextRecords,
-     node \in ValidatorIds:
-    IndexedCatchUpServiceStep(initialContext, node)
-      => IndexedCatchUpPipelineStep(initialContext, node)
-BY DEF IndexedCatchUpServiceStep, IndexedCatchUpPipelineStep,
-       IndexedHistoricalCatchUpPipelineAction
-
-THEOREM IndexedCatchUpApplicationStepRefinesPipelineStep ==
-  \A initialContext \in AdmissibleContextRecords,
-     node \in ValidatorIds:
-    IndexedCatchUpApplicationStep(initialContext, node)
-      => IndexedCatchUpPipelineStep(initialContext, node)
-BY DEF IndexedCatchUpApplicationStep, IndexedCatchUpPipelineStep,
-       IndexedHistoricalCatchUpPipelineAction
-
-THEOREM IndexedCatchUpIdleDecisionReadyEnablesPipeline ==
-  \A initialContext \in AdmissibleContextRecords,
-     node \in ValidatorIds:
-    IndexedCompositionInvariant
-      /\ IndexedCatchUpIdleDecisionReady(initialContext, node)
-      => ENABLED
-           <<IndexedCatchUpPipelineStep(initialContext, node)>>_(
-             IndexedChainVars)
-PROOF
-  <1>1. ASSUME NEW initialContext \in AdmissibleContextRecords,
-              NEW node \in ValidatorIds,
-              IndexedCompositionInvariant,
-              IndexedCatchUpIdleDecisionReady(initialContext, node)
-         PROVE ENABLED
-                 <<IndexedCatchUpPipelineStep(initialContext, node)>>_(
-                   IndexedChainVars)
-    <2>1. ENABLED
-             <<IndexedCatchUpServiceStep(initialContext, node)>>_(
-               IndexedChainVars)
-      BY <1>1, IndexedCatchUpIdleDecisionReadyEnablesService
-    <2>2. IndexedCatchUpServiceStep(initialContext, node)
-             => IndexedCatchUpPipelineStep(initialContext, node)
-      BY <1>1, IndexedCatchUpServiceStepRefinesPipelineStep
-    <2> QED BY <2>1, <2>2, Isa
-  <1> QED BY <1>1
-
-THEOREM IndexedCatchUpValidatedReadyEnablesPipeline ==
-  \A initialContext \in AdmissibleContextRecords,
-     node \in ValidatorIds:
-    IndexedCompositionInvariant
-      /\ IndexedCatchUpValidatedApplicationReady(initialContext, node)
-      => ENABLED
-           <<IndexedCatchUpPipelineStep(initialContext, node)>>_(
-             IndexedChainVars)
-PROOF
-  <1>1. ASSUME NEW initialContext \in AdmissibleContextRecords,
-              NEW node \in ValidatorIds,
-              IndexedCompositionInvariant,
-              IndexedCatchUpValidatedApplicationReady(
-                initialContext, node)
-         PROVE ENABLED
-                 <<IndexedCatchUpPipelineStep(initialContext, node)>>_(
-                   IndexedChainVars)
-    <2>1. ENABLED
-             <<IndexedCatchUpApplicationStep(initialContext, node)>>_(
-               IndexedChainVars)
-      BY <1>1, IndexedCatchUpValidatedReadyEnablesApplication
-    <2>2. IndexedCatchUpApplicationStep(initialContext, node)
-             => IndexedCatchUpPipelineStep(initialContext, node)
-      BY <1>1, IndexedCatchUpApplicationStepRefinesPipelineStep
-    <2> QED BY <2>1, <2>2, Isa
-  <1> QED BY <1>1
-
-THEOREM IndexedCatchUpIdlePipelineEstablishesReceiptOrAdvance ==
-  \A initialContext \in AdmissibleContextRecords,
-     node \in ValidatorIds:
-    IndexedCompositionInvariant
-      /\ IndexedCatchUpIdleDecisionReady(initialContext, node)
-      /\ IndexedCatchUpPipelineStep(initialContext, node)
-      => \/ HistoricalCatchUpDecisionAt(initialContext, node)'
-         \/ nodeHeight'[node] > initialContext.height
-BY Isa DEF IndexedCatchUpIdleDecisionReady,
-           IndexedCatchUpDecisionReady,
-           IndexedCatchUpPipelineStep,
-           IndexedHistoricalCatchUpPipelineAction,
-           IndexedHistoricalCatchUpDecision,
-           IndexedHistoricalCatchUpBodyRecovery,
-           IndexedHistoricalCatchUpBodyStore,
-           IndexedHistoricalCatchUpValidation,
-           IndexedHistoricalCatchUpApplication,
-           HistoricalCatchUpDecisionAt, HistoricalCatchUpRecord
-
-THEOREM IndexedCatchUpValidatedPipelineEstablishesAdvance ==
-  \A initialContext \in AdmissibleContextRecords,
-     node \in ValidatorIds:
-    IndexedCompositionInvariant
-      /\ IndexedCatchUpValidatedApplicationReady(initialContext, node)
-      /\ IndexedCatchUpPipelineStep(initialContext, node)
-      => nodeHeight'[node] > initialContext.height
-BY IndexedCatchUpApplicationEstablishesAdvance, Isa
-   DEF IndexedCatchUpValidatedApplicationReady,
-       IndexedCatchUpApplicationReady,
-       IndexedCatchUpPipelineStep,
-       IndexedHistoricalCatchUpPipelineAction,
-       IndexedHistoricalCatchUpDecision,
-       IndexedHistoricalCatchUpBodyRecovery,
-       IndexedHistoricalCatchUpBodyStore,
-       IndexedHistoricalCatchUpValidation,
-       IndexedHistoricalCatchUpApplication
-
-(***************************************************************************
-These are the two genuinely supported fair suffixes.  They consume the weak
-fairness that the specification actually grants to the complete pipeline,
-not fictitious fairness for its proof-facing decision/application projections.
-The intermediate DecisionRecovered -> BodyRecovered -> Stored -> Validated
-rank induction remains explicit below.
-***************************************************************************)
-THEOREM IndexedCatchUpIdleDecisionFairSuffix ==
-  IndexedChainSpec =>
-    \A initialContext \in AdmissibleContextRecords,
-       node \in ValidatorIds:
-      IndexedCatchUpIdleDecisionReady(initialContext, node)
-        ~> (\/ HistoricalCatchUpDecisionAt(initialContext, node)
-            \/ nodeHeight[node] > initialContext.height)
-PROOF
-  <1>1. ASSUME IndexedChainSpec,
-              NEW initialContext \in AdmissibleContextRecords,
-              NEW node \in ValidatorIds
-         PROVE
-           IndexedCatchUpIdleDecisionReady(initialContext, node)
-             ~> (\/ HistoricalCatchUpDecisionAt(initialContext, node)
-                 \/ nodeHeight[node] > initialContext.height)
-    <2>1. []IndexedCompositionInvariant
-      BY <1>1, IndexedChainSpecEstablishesCompositionInvariant, PTL
-    <2>2. [][IndexedChainNext]_IndexedChainVars
-      BY <1>1, PTL DEF IndexedChainSpec
-    <2>3. WF_IndexedChainVars(
-             IndexedCatchUpPipelineStep(initialContext, node))
-      BY <1>1, PTL DEF IndexedChainSpec, IndexedFairness
-    <2>4. IndexedCompositionInvariant
-             /\ IndexedCatchUpIdleDecisionReady(initialContext, node)
-             => ENABLED
-                  <<IndexedCatchUpPipelineStep(
-                      initialContext, node)>>_(IndexedChainVars)
-      BY <1>1, IndexedCatchUpIdleDecisionReadyEnablesPipeline
-    <2>5. IndexedCompositionInvariant
-             /\ IndexedCatchUpIdleDecisionReady(initialContext, node)
-             /\ IndexedCatchUpPipelineStep(initialContext, node)
-             => \/ HistoricalCatchUpDecisionAt(initialContext, node)'
-                \/ nodeHeight'[node] > initialContext.height
-      BY <1>1, IndexedCatchUpIdlePipelineEstablishesReceiptOrAdvance
-    <2>6. IndexedCompositionInvariant
-             /\ IndexedCatchUpIdleDecisionReady(initialContext, node)
-             /\ [IndexedChainNext]_IndexedChainVars
-             => \/ IndexedCatchUpIdleDecisionReady(
-                       initialContext, node)'
-                \/ HistoricalCatchUpDecisionAt(initialContext, node)'
-                \/ nodeHeight'[node] > initialContext.height
-      BY IndexedCatchUpDecisionReadyPersistsUntilReceipt
-    <2> QED BY <2>1, <2>2, <2>3, <2>4, <2>5, <2>6, PTL
-  <1> QED BY <1>1
-
-THEOREM IndexedCatchUpValidatedApplicationFairSuffix ==
-  IndexedChainSpec =>
-    \A initialContext \in AdmissibleContextRecords,
-       node \in ValidatorIds:
-      IndexedCatchUpValidatedApplicationReady(initialContext, node)
-        ~> nodeHeight[node] > initialContext.height
-PROOF
-  <1>1. ASSUME IndexedChainSpec,
-              NEW initialContext \in AdmissibleContextRecords,
-              NEW node \in ValidatorIds
-         PROVE IndexedCatchUpValidatedApplicationReady(
-                 initialContext, node)
-                   ~> nodeHeight[node] > initialContext.height
-    <2>1. []IndexedCompositionInvariant
-      BY <1>1, IndexedChainSpecEstablishesCompositionInvariant, PTL
-    <2>2. [][IndexedChainNext]_IndexedChainVars
-      BY <1>1, PTL DEF IndexedChainSpec
-    <2>3. WF_IndexedChainVars(
-             IndexedCatchUpPipelineStep(initialContext, node))
-      BY <1>1, PTL DEF IndexedChainSpec, IndexedFairness
-    <2>4. IndexedCompositionInvariant
-             /\ IndexedCatchUpValidatedApplicationReady(
-                  initialContext, node)
-             => ENABLED
-                  <<IndexedCatchUpPipelineStep(
-                      initialContext, node)>>_(IndexedChainVars)
-      BY <1>1, IndexedCatchUpValidatedReadyEnablesPipeline
-    <2>5. IndexedCompositionInvariant
-             /\ IndexedCatchUpValidatedApplicationReady(
-                  initialContext, node)
-             /\ IndexedCatchUpPipelineStep(initialContext, node)
-             => nodeHeight'[node] > initialContext.height
-      BY <1>1, IndexedCatchUpValidatedPipelineEstablishesAdvance
-    <2>6. IndexedCompositionInvariant
-             /\ IndexedCatchUpValidatedApplicationReady(
-                  initialContext, node)
-             /\ [IndexedChainNext]_IndexedChainVars
-             => \/ IndexedCatchUpValidatedApplicationReady(
-                       initialContext, node)'
-                \/ nodeHeight'[node] > initialContext.height
-      BY <1>1, IndexedCatchUpApplicationReadyPersistsUntilAdvance
-    <2> QED BY <2>1, <2>2, <2>3, <2>4, <2>5, <2>6, PTL
-  <1> QED BY <1>1
-
-(***************************************************************************
-Irreducible local rank debt.  Weak fairness of the union pipeline does not
-entail weak fairness of each subaction.  A complete proof must show that every
-nonterminal broad readiness state either advances independently or keeps an
-exact source and the union action continuously enabled until its finite rank
-decreases.  Finiteness and strict rank decrease on actual pipeline steps are
-proved above; the stable-enabledness argument and temporal induction through
-DecisionRecovered, BodyRecovered, Stored, and Validated remain.  The former
-proof incorrectly cited subaction fairness from IndexedFairness and is
-intentionally not retained.  IndexedHistoricalCatchUpRankProgress is a premise
-of the non-circular height kernel, not a separately declared release theorem;
-the already-ledgered HeightLivenessObligation owns this remaining debt.
-***************************************************************************)
+     node \in Responsive:
+    HistoricalRecoveryOutstanding(initialContext, node)
+      ~> HistoricalRecoveryComplete(initialContext, node)
 
 VerificationOneHeightCompletion ==
   IndexedAsync(VerificationContext)!AsyncSpecAt(VerificationContext)
@@ -4619,8 +4053,6 @@ BY Isa DEF IndexedChainNext, IndexedChainVars,
            IndexedReceiptFreeChainStutter,
            IndexedDecisionReceiptHandoff,
            IndexedApplicationReceiptHandoff,
-           IndexedHistoricalCatchUpDecision,
-           IndexedHistoricalCatchUpApplication,
            NewIndexedDecisionReceipt, NewIndexedApplicationReceipt,
            NoNewIndexedDurableReceipt, IndexedApplications,
            IndexedAsync!AsyncAllResponsiveAppliedAt,
@@ -4721,9 +4153,8 @@ PROOF
 THEOREM IndexedDecisionEvidenceMemberClassification ==
   \A decision:
     decision \in IndexedDecisionEvidence
-      => \/ decision \in historicalCatchUpDecisions
-         \/ \E sourceContext \in AdmissibleContextRecords:
-              decision \in IndexedCurrentDecisions(sourceContext)
+      => \E sourceContext \in AdmissibleContextRecords:
+           decision \in IndexedCurrentDecisions(sourceContext)
 BY Isa DEF IndexedDecisionEvidence
 
 THEOREM IndexedCurrentCanonicalDecisionIdentifiesContext ==
@@ -4798,117 +4229,21 @@ BY Isa DEF JoinedCanonicalDescendant,
            AdmissibleContextRecords, FrozenContextAdmissible,
            ContextRecords, Heights
 
-THEOREM IndexedAppliedContextProvidesCatchUpSource ==
-  \A initialContext \in AdmissibleContextRecords:
-    (/\ IndexedCompositionInvariant
-     /\ initialContext.height < MaxHeight
-     /\ IndexedAllResponsiveJoined(initialContext)
-     /\ IndexedAsync(initialContext)!
-          AsyncAllResponsiveAppliedAt(initialContext))
-      => \E server \in ValidatorIds,
-            source \in Chain!DecisionEvidenceSet:
-           HistoricalCatchUpSource(initialContext, server, source)
-BY Isa, QuorumIntersectionObligation,
-   IndexedResponsiveVoterSetIsNonempty
-   DEF IndexedCompositionInvariant,
-       IndexedEveryInstanceStrongInvariant,
-       IndexedTotalReceiptProjection,
-       IndexedDecisionReceiptProjection,
-       IndexedApplicationReceiptProjection,
-       IndexedDecisionEvidence, IndexedApplicationEvidence,
-       IndexedCurrentDecisions, IndexedCurrentApplications,
-       IndexedAllResponsiveJoined, HistoricalCatchUpSource,
-       IndexedAsync!AsyncAllResponsiveAppliedAt,
-       IndexedAsync!AsyncVotersAt,
-       IndexedAsync!NodeHasApplication,
-       IndexedAsync!StrongInductiveInvariant,
-       IndexedAsync!Safety, IndexedAsync!TypeInvariant,
-       IndexedAsync!DecisionAgreement,
-       IndexedAsync!AppliedRequiresDecision,
-       IndexedAsync!ReducerProvenanceInvariant,
-       IndexedAsync!CertificatesBackedByIntents,
-       IndexedAsync!HistoricalQcValid,
-       IndexedAsync!HonestDurableIntentsSound,
-       IndexedAsync!HonestIntentSound,
-       IndexedAsync!CertificateBackedBy,
-       IndexedAsync!VoteBacksCertificate,
-       Chain!ChainEpochInvariant, Chain!ChainEpochTypeInvariant,
-       Chain!DurableDecisionEvidenceSound,
-       Chain!DurableApplicationEvidenceSound,
-       Chain!DecisionBacksCertifiedSlot,
-       Chain!ReceiptOutsideChainHorizon,
-       Chain!DurableCommitDecision,
-       Chain!HistoricalCommitCertificate,
-       Chain!CanonicalCommitForSlot,
-       Chain!DecisionEvidenceSet,
-       ModelConfiguration, QuorumConfiguration,
-       DualQuorumIntersectionHasHonest, DualQuorum, CountQuorum,
-       ContextRecords, Heights
-
 IndexedResponsiveLagAt(initialContext, node) ==
   /\ initialContext.height < MaxHeight
   /\ node \in Responsive
   /\ nodeHeight[node] = initialContext.height
 
-THEOREM IndexedHistoricalDecisionMakesApplicationReadyOrAdvance ==
-  \A initialContext \in AdmissibleContextRecords,
-     node \in ValidatorIds:
-    (/\ IndexedCompositionInvariant
-     /\ IndexedResponsiveLagAt(initialContext, node)
-     /\ HistoricalCatchUpDecisionAt(initialContext, node))
-      => \/ IndexedCatchUpApplicationReady(initialContext, node)
-         \/ nodeHeight[node] > initialContext.height
-BY Isa DEF IndexedResponsiveLagAt,
-           IndexedCatchUpApplicationReady,
-           HistoricalCatchUpDecisionAt,
-           HistoricalCatchUpApplicationAt,
-           HistoricalCatchUpTarget, HistoricalCatchUpSource,
-           HistoricalCatchUpRecord,
-           IndexedCompositionInvariant,
-           HistoricalCatchUpEvidenceInvariant,
-           HistoricalCatchUpReceiptSound,
-           IndexedTotalReceiptProjection,
-           IndexedDecisionReceiptProjection,
-           IndexedApplicationReceiptProjection,
-           IndexedDecisionEvidence, IndexedApplicationEvidence,
-           IndexedCurrentDecisions, IndexedCurrentApplications,
-           IndexedProjectedNodeHasApplication,
-           CatchUpNodeHasApplicationProjection,
-           Chain!ChainEpochInvariant, Chain!ChainEpochTypeInvariant,
-           Chain!ContextsMatchLocalHistories,
-           IndexedAsync!AsyncVotersAt
-
-THEOREM IndexedCatchUpReadinessAdvancesResponsiveNode ==
-  /\ IndexedChainSpec
-  /\ IndexedHistoricalCatchUpRankProgress
+THEOREM IndexedHistoricalRecoveryAdvancesResponsiveNode ==
+  IndexedExactHistoricalRecoveryProgress
   =>
     \A initialContext \in AdmissibleContextRecords,
        node \in Responsive:
       initialContext.height < MaxHeight
-        => (\/ IndexedCatchUpDecisionReady(initialContext, node)
-            \/ IndexedCatchUpApplicationReady(initialContext, node))
+        => HistoricalRecoveryOutstanding(initialContext, node)
              ~> nodeHeight[node] > initialContext.height
-PROOF
-  <1>1. ASSUME IndexedChainSpec,
-              IndexedHistoricalCatchUpRankProgress,
-              NEW initialContext \in AdmissibleContextRecords,
-              NEW node \in Responsive,
-              initialContext.height < MaxHeight
-         PROVE (\/ IndexedCatchUpDecisionReady(initialContext, node)
-                \/ IndexedCatchUpApplicationReady(initialContext, node))
-                 ~> nodeHeight[node] > initialContext.height
-    <2>1. (initialContext.height < MaxHeight
-              /\ IndexedCatchUpDecisionReady(initialContext, node))
-             ~> nodeHeight[node] > initialContext.height
-      BY <1>1 DEF IndexedHistoricalCatchUpRankProgress
-    <2>2. (initialContext.height < MaxHeight
-              /\ IndexedCatchUpApplicationReady(initialContext, node))
-             ~> nodeHeight[node] > initialContext.height
-      BY <1>1 DEF IndexedHistoricalCatchUpRankProgress
-    <2>3. [](initialContext.height < MaxHeight)
-      BY <1>1, PTL
-    <2> QED BY <2>1, <2>2, <2>3, PTL
-  <1> QED BY <1>1
+BY PTL DEF IndexedExactHistoricalRecoveryProgress,
+           HistoricalRecoveryComplete
 
 IndexedResponsiveHeightReached(blockHeight) ==
   \A node \in Responsive: nodeHeight[node] >= blockHeight
@@ -4996,87 +4331,159 @@ BY Isa DEF IndexedCompositionInvariant,
            ContextRecords, LineagesAt, Heights,
            Chain!HistoryThrough, Chain!ContextRecord
 
-THEOREM IndexedReachedAncestorHasEveryResponsiveVoterJoined ==
+IndexedActivationPendingIntoContext(initialContext, node) ==
+  IF initialContext.height = 0
+  THEN FALSE
+  ELSE /\ initialContext =
+            CanonicalIndexedContext(initialContext.height)
+       /\ IndexedSuccessorActivationPending(
+            CanonicalIndexedContext(initialContext.height - 1), node)
+
+THEOREM IndexedReachedAncestorClassifiesEveryResponsiveNode ==
   \A targetContext \in AdmissibleContextRecords:
     \A blockHeight \in 0..targetContext.height:
       IndexedCompositionInvariant
         /\ IndexedJoinedThroughLocalHeight
         /\ IndexedTargetJoined(targetContext)
         /\ IndexedResponsiveHeightReached(blockHeight)
-        => IndexedAllResponsiveJoined(
-             IndexedAncestorContext(targetContext, blockHeight))
+        => \A node \in Responsive:
+             \/ node \in joinedByContext[
+                  IndexedAncestorContext(targetContext, blockHeight)]
+             \/ IndexedActivationPendingIntoContext(
+                  IndexedAncestorContext(targetContext, blockHeight), node)
 BY Isa, IndexedJoinedTargetIdentifiesEveryCanonicalAncestor
    DEF IndexedJoinedThroughLocalHeight,
        IndexedResponsiveHeightReached,
-       IndexedAllResponsiveJoined,
-       IndexedAsync!AsyncVotersAt,
+       IndexedActivationPendingIntoContext,
+       IndexedSuccessorActivationPending,
+       SuccessorPublicationOrSuperseded,
+       SuccessorHeightActivated,
        ModelConfiguration, ValidatorIds, Heights
 
-THEOREM IndexedJoinedReachedTargetProvidesAncestorCatchUpSource ==
-  \A targetContext \in AdmissibleContextRecords:
-    \A blockHeight \in 0..targetContext.height:
-      IndexedCompositionInvariant
-        /\ IndexedJoinedThroughLocalHeight
-        /\ IndexedTargetJoined(targetContext)
-        /\ IndexedResponsiveHeightReached(blockHeight)
-        /\ blockHeight < targetContext.height
-        => \E server \in ValidatorIds,
-              source \in Chain!DecisionEvidenceSet:
-             HistoricalCatchUpSource(
-               IndexedAncestorContext(targetContext, blockHeight),
-               server, source)
-BY Isa, QuorumIntersectionObligation,
-   IndexedJoinedTargetIdentifiesEveryCanonicalAncestor,
-   IndexedReachedAncestorHasEveryResponsiveVoterJoined
+THEOREM IndexedActivationOutcomeJoinsExactContext ==
+  \A initialContext \in AdmissibleContextRecords,
+     node \in ValidatorIds:
+    IndexedCompositionInvariant
+      /\ IndexedJoinedThroughLocalHeight
+      /\ initialContext.height > 0
+      /\ initialContext =
+           CanonicalIndexedContext(initialContext.height)
+      /\ SuccessorPublicationOrSuperseded(
+           CanonicalIndexedContext(initialContext.height - 1), node)
+      => node \in joinedByContext[initialContext]
+BY Isa DEF IndexedCompositionInvariant,
+           IndexedJoinedThroughLocalHeight,
+           SuccessorPublicationOrSuperseded,
+           SuccessorHeightActivated,
+           SuccessorActivationMarker,
+           CanonicalIndexedContext,
+           AdmissibleContextRecords, FrozenContextAdmissible,
+           ContextRecords, Heights,
+           Chain!ContextRecord, Chain!HistoryThrough
+
+THEOREM IndexedNodeJoinIsStable ==
+  \A initialContext \in AdmissibleContextRecords,
+     node \in ValidatorIds:
+    node \in joinedByContext[initialContext]
+      /\ [IndexedChainNext]_IndexedChainVars
+      => node \in joinedByContext[initialContext]'
+BY Isa, JoinedMembershipIsMonotone DEF IndexedChainVars
+
+THEOREM IndexedActivationPendingIntoContextEventuallyJoins ==
+  /\ IndexedChainSpec
+  /\ IndexedSuccessorActivationProgress
+  => \A initialContext \in AdmissibleContextRecords,
+       node \in Responsive:
+       IndexedActivationPendingIntoContext(initialContext, node)
+         ~> node \in joinedByContext[initialContext]
+PROOF
+  <1>1. ASSUME IndexedChainSpec,
+              IndexedSuccessorActivationProgress,
+              NEW initialContext \in AdmissibleContextRecords,
+              NEW node \in Responsive
+         PROVE IndexedActivationPendingIntoContext(initialContext, node)
+                 ~> node \in joinedByContext[initialContext]
+    <2>1. IndexedChainSpec => []IndexedCompositionInvariant
+      BY IndexedChainSpecEstablishesCompositionInvariant
+    <2>2. IndexedChainSpec => []IndexedJoinedThroughLocalHeight
+      BY IndexedChainSpecJoinsEveryNodeThroughLocalHeight
+    <2>3. IndexedActivationPendingIntoContext(initialContext, node)
+             ~> SuccessorPublicationOrSuperseded(
+                  CanonicalIndexedContext(initialContext.height - 1), node)
+      BY <1>1, PTL DEF IndexedSuccessorActivationProgress,
+                         IndexedActivationPendingIntoContext
+    <2>4. node \in joinedByContext[initialContext]
+             /\ [IndexedChainNext]_IndexedChainVars
+             => node \in joinedByContext[initialContext]'
+      BY <1>1, IndexedNodeJoinIsStable
+    <2> QED BY <2>1, <2>2, <2>3, <2>4,
+                 IndexedActivationOutcomeJoinsExactContext, PTL
+         DEF IndexedActivationPendingIntoContext
+  <1> QED BY <1>1
+
+THEOREM IndexedActivationOutcomeLeavesPastOrRecoveryOutstanding ==
+  \A initialContext \in AdmissibleContextRecords,
+     node \in Responsive:
+    IndexedCompositionInvariant
+      /\ IndexedJoinedThroughLocalHeight
+      /\ initialContext.height > 0
+      /\ initialContext.height < MaxHeight
+      /\ initialContext =
+           CanonicalIndexedContext(initialContext.height)
+      /\ SuccessorPublicationOrSuperseded(
+           CanonicalIndexedContext(initialContext.height - 1), node)
+      => \/ IndexedNodePastContext(initialContext, node)
+         \/ HistoricalRecoveryOutstanding(initialContext, node)
+BY Isa, IndexedActivationOutcomeJoinsExactContext
    DEF IndexedCompositionInvariant,
-       IndexedEveryInstanceStrongInvariant,
-       IndexedTotalReceiptProjection,
-       IndexedDecisionReceiptProjection,
-       IndexedApplicationReceiptProjection,
-       IndexedDecisionEvidence, IndexedApplicationEvidence,
-       IndexedCurrentDecisions, IndexedCurrentApplications,
-       IndexedJoinedThroughLocalHeight,
-       JoinedContextCertificationInvariant, JoinedRoutingInvariant,
-       IndexedTargetJoined, JoinedContexts,
-       IndexedAncestorContext, CanonicalIndexedContext,
-       IndexedResponsiveHeightReached,
-       IndexedAllResponsiveJoined,
-       HistoricalCatchUpSource, HistoricalCatchUpApplicationAt,
-       HistoricalCatchUpEvidenceInvariant,
-       HistoricalCatchUpReceiptSound, HistoricalCatchUpRecord,
-       IndexedAsync!StrongInductiveInvariant,
-       IndexedAsync!Safety, IndexedAsync!TypeInvariant,
-       IndexedAsync!DecisionAgreement,
-       IndexedAsync!AppliedRequiresDecision,
-       IndexedAsync!ReducerProvenanceInvariant,
-       IndexedAsync!CertificatesBackedByIntents,
-       IndexedAsync!HistoricalQcValid,
-       IndexedAsync!HonestDurableIntentsSound,
-       IndexedAsync!HonestIntentSound,
-       IndexedAsync!CertificateBackedBy,
-       IndexedAsync!VoteBacksCertificate,
-       IndexedAsync!AsyncVotersAt,
+       JoinedRoutingInvariant, IndexedApplicationsRespectNodeHeight,
+       IndexedNodeCurrentAt, ExactNodeLocationAt,
+       IndexedNodePastContext, HistoricalRecoveryOutstanding,
        IndexedAsync!NodeHasApplication,
        Chain!ChainEpochInvariant, Chain!ChainEpochTypeInvariant,
-       Chain!ContextsMatchLocalHistories,
-       Chain!DurableDecisionEvidenceSound,
-       Chain!DurableApplicationEvidenceSound,
-       Chain!DecisionBacksCertifiedSlot,
-       Chain!ReceiptOutsideChainHorizon,
-       Chain!DurableCommitDecision,
-       Chain!HistoricalCommitCertificate,
-       Chain!CanonicalCommitForSlot,
-       Chain!DecisionEvidenceSet,
-       ModelConfiguration, QuorumConfiguration,
-       DualQuorumIntersectionHasHonest, DualQuorum, CountQuorum,
-       AdmissibleContextRecords, FrozenContextAdmissible,
-       ContextRecords, LineagesAt, Heights
+       Chain!ContextsMatchLocalHistories
+
+THEOREM IndexedActivationPendingEventuallyLeavesPastOrRecoveryOutstanding ==
+  /\ IndexedChainSpec
+  /\ IndexedSuccessorActivationProgress
+  => \A initialContext \in AdmissibleContextRecords,
+       node \in Responsive:
+       initialContext.height < MaxHeight
+         => IndexedActivationPendingIntoContext(initialContext, node)
+              ~> (IndexedNodePastContext(initialContext, node)
+                   \/ HistoricalRecoveryOutstanding(initialContext, node))
+PROOF
+  <1>1. ASSUME IndexedChainSpec,
+              IndexedSuccessorActivationProgress,
+              NEW initialContext \in AdmissibleContextRecords,
+              NEW node \in Responsive,
+              initialContext.height < MaxHeight
+         PROVE IndexedActivationPendingIntoContext(initialContext, node)
+                 ~> (IndexedNodePastContext(initialContext, node)
+                      \/ HistoricalRecoveryOutstanding(
+                           initialContext, node))
+    <2>1. IndexedChainSpec => []IndexedCompositionInvariant
+      BY IndexedChainSpecEstablishesCompositionInvariant
+    <2>2. IndexedChainSpec => []IndexedJoinedThroughLocalHeight
+      BY IndexedChainSpecJoinsEveryNodeThroughLocalHeight
+    <2>3. IndexedActivationPendingIntoContext(initialContext, node)
+             ~> SuccessorPublicationOrSuperseded(
+                  CanonicalIndexedContext(initialContext.height - 1), node)
+      BY <1>1, PTL DEF IndexedSuccessorActivationProgress,
+                         IndexedActivationPendingIntoContext
+    <2>4. IndexedActivationPendingIntoContext(initialContext, node)
+             => initialContext.height > 0
+      BY DEF IndexedActivationPendingIntoContext
+    <2> QED BY <1>1, <2>1, <2>2, <2>3, <2>4,
+                 IndexedActivationOutcomeLeavesPastOrRecoveryOutstanding,
+                 PTL DEF IndexedActivationPendingIntoContext
+  <1> QED BY <1>1
 
 IndexedTargetHeightStepPremise(targetContext, blockHeight) ==
   /\ IndexedTargetJoined(targetContext)
   /\ IndexedResponsiveHeightReached(blockHeight)
 
-THEOREM IndexedTargetStepEitherPassedOrCatchUpReady ==
+THEOREM IndexedTargetStepEitherPassedOrRecoveryOutstanding ==
   \A targetContext \in AdmissibleContextRecords:
     \A blockHeight \in 0..targetContext.height:
       \A node \in Responsive:
@@ -5086,44 +4493,40 @@ THEOREM IndexedTargetStepEitherPassedOrCatchUpReady ==
           /\ blockHeight < targetContext.height
           => \/ IndexedNodePastContext(
                   IndexedAncestorContext(targetContext, blockHeight), node)
-             \/ IndexedCatchUpDecisionReady(
+             \/ IndexedActivationPendingIntoContext(
                   IndexedAncestorContext(targetContext, blockHeight), node)
-             \/ IndexedCatchUpApplicationReady(
+             \/ HistoricalRecoveryOutstanding(
                   IndexedAncestorContext(targetContext, blockHeight), node)
 BY Isa, IndexedJoinedTargetIdentifiesEveryCanonicalAncestor,
-   IndexedJoinedReachedTargetProvidesAncestorCatchUpSource
+   IndexedReachedAncestorClassifiesEveryResponsiveNode
    DEF IndexedTargetHeightStepPremise,
        IndexedResponsiveHeightReached, IndexedNodePastContext,
        IndexedResponsiveLagAt,
-       IndexedCatchUpDecisionReady, IndexedCatchUpApplicationReady,
-       HistoricalCatchUpTarget, HistoricalCatchUpSource,
-       HistoricalCatchUpDecisionAt, HistoricalCatchUpApplicationAt,
-       HistoricalCatchUpRecord,
+       HistoricalRecoveryOutstanding,
+       IndexedActivationPendingIntoContext,
        IndexedCompositionInvariant,
        IndexedApplicationsRespectNodeHeight,
-       HistoricalCatchUpEvidenceInvariant,
-       HistoricalCatchUpReceiptSound,
        IndexedTotalReceiptProjection,
        IndexedDecisionReceiptProjection,
        IndexedApplicationReceiptProjection,
        IndexedDecisionEvidence, IndexedApplicationEvidence,
        IndexedCurrentDecisions, IndexedCurrentApplications,
        IndexedProjectedNodeHasApplication,
-       CatchUpNodeHasApplicationProjection,
+       HistoricalRecoveryNodeHasApplicationProjection,
        IndexedAncestorContext, CanonicalIndexedContext,
        Chain!ChainEpochInvariant, Chain!ChainEpochTypeInvariant,
        Chain!ContextsMatchLocalHistories,
        IndexedAsync!NodeHasApplication
 
-THEOREM IndexedAdvanceReadyEitherPassedOrNeedsCatchUp ==
+THEOREM IndexedAdvanceReadyEitherPassedOrNeedsRecovery ==
   \A initialContext \in AdmissibleContextRecords,
      node \in Responsive:
     IndexedCompositionInvariant
       /\ IndexedJoinedThroughLocalHeight
       /\ IndexedContextAdvanceReady(initialContext)
       => \/ IndexedNodePastContext(initialContext, node)
-         \/ IndexedCatchUpDecisionReady(initialContext, node)
-         \/ IndexedCatchUpApplicationReady(initialContext, node)
+         \/ IndexedActivationPendingIntoContext(initialContext, node)
+         \/ HistoricalRecoveryOutstanding(initialContext, node)
 PROOF
   <1>1. ASSUME NEW initialContext \in AdmissibleContextRecords,
               NEW node \in Responsive,
@@ -5131,8 +4534,8 @@ PROOF
               IndexedJoinedThroughLocalHeight,
               IndexedContextAdvanceReady(initialContext)
          PROVE \/ IndexedNodePastContext(initialContext, node)
-               \/ IndexedCatchUpDecisionReady(initialContext, node)
-               \/ IndexedCatchUpApplicationReady(initialContext, node)
+               \/ IndexedActivationPendingIntoContext(initialContext, node)
+               \/ HistoricalRecoveryOutstanding(initialContext, node)
     <2>1. PICK descendantContext \in JoinedContexts:
              /\ descendantContext.height > initialContext.height
              /\ descendantContext =
@@ -5171,20 +4574,21 @@ PROOF
     <2>8. \/ IndexedNodePastContext(
                   IndexedAncestorContext(
                     descendantContext, initialContext.height), node)
-             \/ IndexedCatchUpDecisionReady(
+             \/ IndexedActivationPendingIntoContext(
                   IndexedAncestorContext(
                     descendantContext, initialContext.height), node)
-             \/ IndexedCatchUpApplicationReady(
+             \/ HistoricalRecoveryOutstanding(
                   IndexedAncestorContext(
                     descendantContext, initialContext.height), node)
       BY <1>1, <2>1, <2>2, <2>3, <2>7,
-         IndexedTargetStepEitherPassedOrCatchUpReady
+         IndexedTargetStepEitherPassedOrRecoveryOutstanding
     <2> QED BY <2>6, <2>8
   <1> QED BY <1>1
 
 THEOREM IndexedAdvanceReadyEventuallyPassesEachResponsiveNode ==
   /\ IndexedChainSpec
-  /\ IndexedHistoricalCatchUpRankProgress
+  /\ IndexedExactHistoricalRecoveryProgress
+  /\ IndexedSuccessorActivationProgress
   =>
     \A initialContext \in AdmissibleContextRecords,
        node \in Responsive:
@@ -5192,7 +4596,8 @@ THEOREM IndexedAdvanceReadyEventuallyPassesEachResponsiveNode ==
         ~> IndexedNodePastContext(initialContext, node)
 PROOF
   <1>1. ASSUME IndexedChainSpec,
-              IndexedHistoricalCatchUpRankProgress,
+              IndexedExactHistoricalRecoveryProgress,
+              IndexedSuccessorActivationProgress,
               NEW initialContext \in AdmissibleContextRecords,
               NEW node \in Responsive
          PROVE IndexedContextAdvanceReady(initialContext)
@@ -5205,24 +4610,31 @@ PROOF
              /\ IndexedJoinedThroughLocalHeight
              /\ IndexedContextAdvanceReady(initialContext)
              => \/ IndexedNodePastContext(initialContext, node)
-                \/ IndexedCatchUpDecisionReady(initialContext, node)
-                \/ IndexedCatchUpApplicationReady(initialContext, node)
-      BY <1>1, IndexedAdvanceReadyEitherPassedOrNeedsCatchUp
+                \/ IndexedActivationPendingIntoContext(
+                     initialContext, node)
+                \/ HistoricalRecoveryOutstanding(
+                     initialContext, node)
+      BY <1>1, IndexedAdvanceReadyEitherPassedOrNeedsRecovery
     <2>4. initialContext.height < MaxHeight
       BY <1>1, JoinedCanonicalDescendantStaysWithinHorizon
          DEF IndexedContextAdvanceReady
-    <2>5. (\/ IndexedCatchUpDecisionReady(initialContext, node)
-            \/ IndexedCatchUpApplicationReady(initialContext, node))
+    <2>5. IndexedActivationPendingIntoContext(initialContext, node)
+             ~> (IndexedNodePastContext(initialContext, node)
+                  \/ HistoricalRecoveryOutstanding(initialContext, node))
+      BY <1>1, <2>4,
+         IndexedActivationPendingEventuallyLeavesPastOrRecoveryOutstanding
+    <2>6. HistoricalRecoveryOutstanding(initialContext, node)
              ~> IndexedNodePastContext(initialContext, node)
       BY <1>1, <2>4,
-         IndexedCatchUpReadinessAdvancesResponsiveNode
+         IndexedHistoricalRecoveryAdvancesResponsiveNode
          DEF IndexedNodePastContext
-    <2> QED BY <2>1, <2>2, <2>3, <2>5, PTL
+    <2> QED BY <2>1, <2>2, <2>3, <2>5, <2>6, PTL
   <1> QED BY <1>1
 
 THEOREM IndexedAdvanceReadyPassesEveryFiniteResponsivePrefix ==
   /\ IndexedChainSpec
-  /\ IndexedHistoricalCatchUpRankProgress
+  /\ IndexedExactHistoricalRecoveryProgress
+  /\ IndexedSuccessorActivationProgress
   =>
     \A initialContext \in AdmissibleContextRecords,
        limit \in Nat:
@@ -5230,7 +4642,8 @@ THEOREM IndexedAdvanceReadyPassesEveryFiniteResponsivePrefix ==
         ~> IndexedResponsivePrefixPast(initialContext, limit)
 PROOF
   <1>1. ASSUME IndexedChainSpec,
-              IndexedHistoricalCatchUpRankProgress,
+              IndexedExactHistoricalRecoveryProgress,
+              IndexedSuccessorActivationProgress,
               NEW initialContext \in AdmissibleContextRecords
          PROVE \A limit \in Nat:
                  IndexedContextAdvanceReady(initialContext)
@@ -5291,14 +4704,16 @@ PROOF
 
 THEOREM IndexedAdvanceReadyReachesSuccessorHeight ==
   /\ IndexedChainSpec
-  /\ IndexedHistoricalCatchUpRankProgress
+  /\ IndexedExactHistoricalRecoveryProgress
+  /\ IndexedSuccessorActivationProgress
   =>
     \A initialContext \in AdmissibleContextRecords:
       IndexedContextAdvanceReady(initialContext)
         ~> IndexedResponsiveHeightReached(initialContext.height + 1)
 PROOF
   <1>1. ASSUME IndexedChainSpec,
-              IndexedHistoricalCatchUpRankProgress,
+              IndexedExactHistoricalRecoveryProgress,
+              IndexedSuccessorActivationProgress,
               NEW initialContext \in AdmissibleContextRecords
          PROVE IndexedContextAdvanceReady(initialContext)
                  ~> IndexedResponsiveHeightReached(
@@ -5320,7 +4735,8 @@ PROOF
 
 THEOREM IndexedTargetStepEventuallyPassesEachResponsiveNode ==
   /\ IndexedChainSpec
-  /\ IndexedHistoricalCatchUpRankProgress
+  /\ IndexedExactHistoricalRecoveryProgress
+  /\ IndexedSuccessorActivationProgress
   =>
     \A targetContext \in AdmissibleContextRecords:
       \A blockHeight \in 0..targetContext.height:
@@ -5332,7 +4748,8 @@ THEOREM IndexedTargetStepEventuallyPassesEachResponsiveNode ==
                       node)
 PROOF
   <1>1. ASSUME IndexedChainSpec,
-              IndexedHistoricalCatchUpRankProgress,
+              IndexedExactHistoricalRecoveryProgress,
+              IndexedSuccessorActivationProgress,
               NEW targetContext \in AdmissibleContextRecords,
               NEW blockHeight \in 0..targetContext.height,
               NEW node \in Responsive,
@@ -5353,35 +4770,45 @@ PROOF
              => \/ IndexedNodePastContext(
                      IndexedAncestorContext(targetContext, blockHeight),
                      node)
-                \/ IndexedCatchUpDecisionReady(
+                \/ IndexedActivationPendingIntoContext(
                      IndexedAncestorContext(targetContext, blockHeight),
                      node)
-                \/ IndexedCatchUpApplicationReady(
+                \/ HistoricalRecoveryOutstanding(
                      IndexedAncestorContext(targetContext, blockHeight),
                      node)
-      BY <1>1, IndexedTargetStepEitherPassedOrCatchUpReady
+      BY <1>1,
+         IndexedTargetStepEitherPassedOrRecoveryOutstanding
     <2>4. IndexedAncestorContext(targetContext, blockHeight).height
              < MaxHeight
       BY <1>1, IndexedAdmissibleTargetHasAdmissibleAncestors,
          Isa DEF IndexedAncestorContext,
                  AdmissibleContextRecords, FrozenContextAdmissible,
                  ContextRecords, Heights
-    <2>5. (\/ IndexedCatchUpDecisionReady(
-                   IndexedAncestorContext(targetContext, blockHeight), node)
-            \/ IndexedCatchUpApplicationReady(
-                   IndexedAncestorContext(targetContext, blockHeight), node))
+    <2>5. IndexedActivationPendingIntoContext(
+               IndexedAncestorContext(targetContext, blockHeight), node)
+             ~> (IndexedNodePastContext(
+                    IndexedAncestorContext(targetContext, blockHeight), node)
+                  \/ HistoricalRecoveryOutstanding(
+                       IndexedAncestorContext(targetContext, blockHeight),
+                       node))
+      BY <1>1, <2>4,
+         IndexedAdmissibleTargetHasAdmissibleAncestors,
+         IndexedActivationPendingEventuallyLeavesPastOrRecoveryOutstanding
+    <2>6. HistoricalRecoveryOutstanding(
+               IndexedAncestorContext(targetContext, blockHeight), node)
              ~> IndexedNodePastContext(
                   IndexedAncestorContext(targetContext, blockHeight), node)
       BY <1>1, <2>4,
          IndexedAdmissibleTargetHasAdmissibleAncestors,
-         IndexedCatchUpReadinessAdvancesResponsiveNode
+         IndexedHistoricalRecoveryAdvancesResponsiveNode
          DEF IndexedNodePastContext
-    <2> QED BY <2>1, <2>2, <2>3, <2>5, PTL
+    <2> QED BY <2>1, <2>2, <2>3, <2>5, <2>6, PTL
   <1> QED BY <1>1
 
 THEOREM IndexedTargetStepPassesEveryFiniteResponsivePrefix ==
   /\ IndexedChainSpec
-  /\ IndexedHistoricalCatchUpRankProgress
+  /\ IndexedExactHistoricalRecoveryProgress
+  /\ IndexedSuccessorActivationProgress
   =>
     \A targetContext \in AdmissibleContextRecords:
       \A blockHeight \in 0..targetContext.height:
@@ -5393,7 +4820,8 @@ THEOREM IndexedTargetStepPassesEveryFiniteResponsivePrefix ==
                       limit)
 PROOF
   <1>1. ASSUME IndexedChainSpec,
-              IndexedHistoricalCatchUpRankProgress,
+              IndexedExactHistoricalRecoveryProgress,
+              IndexedSuccessorActivationProgress,
               NEW targetContext \in AdmissibleContextRecords,
               NEW blockHeight \in 0..targetContext.height,
               blockHeight < targetContext.height
@@ -5473,7 +4901,8 @@ PROOF
 
 THEOREM IndexedJoinedTargetAdvancesOneAncestorHeight ==
   /\ IndexedChainSpec
-  /\ IndexedHistoricalCatchUpRankProgress
+  /\ IndexedExactHistoricalRecoveryProgress
+  /\ IndexedSuccessorActivationProgress
   =>
     \A targetContext \in AdmissibleContextRecords:
       \A blockHeight \in 0..targetContext.height:
@@ -5483,7 +4912,8 @@ THEOREM IndexedJoinedTargetAdvancesOneAncestorHeight ==
                ~> IndexedResponsiveHeightReached(blockHeight + 1)
 PROOF
   <1>1. ASSUME IndexedChainSpec,
-              IndexedHistoricalCatchUpRankProgress,
+              IndexedExactHistoricalRecoveryProgress,
+              IndexedSuccessorActivationProgress,
               NEW targetContext \in AdmissibleContextRecords,
               NEW blockHeight \in 0..targetContext.height,
               blockHeight < targetContext.height
@@ -5526,7 +4956,8 @@ PROOF
 
 THEOREM IndexedJoinedTargetEventuallyReachesEveryAncestorHeight ==
   /\ IndexedChainSpec
-  /\ IndexedHistoricalCatchUpRankProgress
+  /\ IndexedExactHistoricalRecoveryProgress
+  /\ IndexedSuccessorActivationProgress
   =>
     \A targetContext \in AdmissibleContextRecords:
       \A blockHeight \in 0..targetContext.height:
@@ -5534,7 +4965,8 @@ THEOREM IndexedJoinedTargetEventuallyReachesEveryAncestorHeight ==
           ~> IndexedResponsiveHeightReached(blockHeight)
 PROOF
   <1>1. ASSUME IndexedChainSpec,
-              IndexedHistoricalCatchUpRankProgress,
+              IndexedExactHistoricalRecoveryProgress,
+              IndexedSuccessorActivationProgress,
               NEW targetContext \in AdmissibleContextRecords
          PROVE \A blockHeight \in 0..targetContext.height:
                  IndexedTargetJoined(targetContext)
@@ -5574,33 +5006,209 @@ PROOF
     <2> QED BY <2>3 DEF P
   <1> QED BY <1>1
 
+IndexedResponsiveJoinPrefixAt(initialContext, limit) ==
+  \A node \in Responsive \cap (0..limit):
+    node \in joinedByContext[initialContext]
+
+THEOREM IndexedResponsiveJoinPrefixAtIsStable ==
+  \A initialContext \in AdmissibleContextRecords,
+     limit \in Nat:
+    IndexedResponsiveJoinPrefixAt(initialContext, limit)
+      /\ [IndexedChainNext]_IndexedChainVars
+      => IndexedResponsiveJoinPrefixAt(initialContext, limit)'
+BY Isa, JoinedMembershipIsMonotone
+   DEF IndexedResponsiveJoinPrefixAt, IndexedChainVars
+
+THEOREM IndexedReachedAncestorEventuallyJoinsResponsiveNode ==
+  /\ IndexedChainSpec
+  /\ IndexedSuccessorActivationProgress
+  => \A targetContext \in AdmissibleContextRecords:
+       \A blockHeight \in 0..targetContext.height:
+         \A node \in Responsive:
+           (IndexedTargetJoined(targetContext)
+             /\ IndexedResponsiveHeightReached(blockHeight))
+             ~> node \in joinedByContext[
+                  IndexedAncestorContext(targetContext, blockHeight)]
+PROOF
+  <1>1. ASSUME IndexedChainSpec,
+              IndexedSuccessorActivationProgress,
+              NEW targetContext \in AdmissibleContextRecords,
+              NEW blockHeight \in 0..targetContext.height,
+              NEW node \in Responsive
+         PROVE (IndexedTargetJoined(targetContext)
+                  /\ IndexedResponsiveHeightReached(blockHeight))
+                 ~> node \in joinedByContext[
+                      IndexedAncestorContext(targetContext, blockHeight)]
+    <2>1. IndexedChainSpec => []IndexedCompositionInvariant
+      BY IndexedChainSpecEstablishesCompositionInvariant
+    <2>2. IndexedChainSpec => []IndexedJoinedThroughLocalHeight
+      BY IndexedChainSpecJoinsEveryNodeThroughLocalHeight
+    <2>3. IndexedCompositionInvariant
+             /\ IndexedJoinedThroughLocalHeight
+             /\ IndexedTargetJoined(targetContext)
+             /\ IndexedResponsiveHeightReached(blockHeight)
+             => \/ node \in joinedByContext[
+                       IndexedAncestorContext(targetContext, blockHeight)]
+                \/ IndexedActivationPendingIntoContext(
+                     IndexedAncestorContext(targetContext, blockHeight), node)
+      BY <1>1, IndexedReachedAncestorClassifiesEveryResponsiveNode
+    <2>4. IndexedActivationPendingIntoContext(
+             IndexedAncestorContext(targetContext, blockHeight), node)
+             ~> node \in joinedByContext[
+                  IndexedAncestorContext(targetContext, blockHeight)]
+      BY <1>1, IndexedAdmissibleTargetHasAdmissibleAncestors,
+         IndexedActivationPendingIntoContextEventuallyJoins
+    <2>5. node \in joinedByContext[
+             IndexedAncestorContext(targetContext, blockHeight)]
+             /\ [IndexedChainNext]_IndexedChainVars
+             => node \in joinedByContext[
+                  IndexedAncestorContext(targetContext, blockHeight)]'
+      BY <1>1, IndexedAdmissibleTargetHasAdmissibleAncestors,
+         IndexedNodeJoinIsStable
+    <2> QED BY <2>1, <2>2, <2>3, <2>4, <2>5, PTL
+  <1> QED BY <1>1
+
+THEOREM IndexedReachedAncestorEventuallyJoinsEveryResponsivePrefix ==
+  /\ IndexedChainSpec
+  /\ IndexedSuccessorActivationProgress
+  => \A targetContext \in AdmissibleContextRecords:
+       \A blockHeight \in 0..targetContext.height:
+         \A limit \in Nat:
+           (IndexedTargetJoined(targetContext)
+             /\ IndexedResponsiveHeightReached(blockHeight))
+             ~> IndexedResponsiveJoinPrefixAt(
+                  IndexedAncestorContext(targetContext, blockHeight), limit)
+PROOF
+  <1>1. ASSUME IndexedChainSpec,
+              IndexedSuccessorActivationProgress,
+              NEW targetContext \in AdmissibleContextRecords,
+              NEW blockHeight \in 0..targetContext.height
+         PROVE \A limit \in Nat:
+                 (IndexedTargetJoined(targetContext)
+                   /\ IndexedResponsiveHeightReached(blockHeight))
+                   ~> IndexedResponsiveJoinPrefixAt(
+                        IndexedAncestorContext(targetContext, blockHeight),
+                        limit)
+    <2> DEFINE P(limit) ==
+           (IndexedTargetJoined(targetContext)
+             /\ IndexedResponsiveHeightReached(blockHeight))
+             ~> IndexedResponsiveJoinPrefixAt(
+                  IndexedAncestorContext(targetContext, blockHeight), limit)
+    <2>1. P(0)
+      <3>1. CASE 0 \in Responsive
+        BY <1>1, <3>1,
+           IndexedReachedAncestorEventuallyJoinsResponsiveNode, PTL
+           DEF P, IndexedResponsiveJoinPrefixAt
+      <3>2. CASE 0 \notin Responsive
+        BY <3>2, PTL DEF P, IndexedResponsiveJoinPrefixAt
+      <3> QED BY <3>1, <3>2
+    <2>2. ASSUME NEW limit \in Nat, P(limit)
+           PROVE P(limit + 1)
+      <3>1. CASE limit + 1 \in Responsive
+        <4>1. (IndexedTargetJoined(targetContext)
+                 /\ IndexedResponsiveHeightReached(blockHeight))
+                 ~> limit + 1 \in joinedByContext[
+                      IndexedAncestorContext(targetContext, blockHeight)]
+          BY <1>1, <3>1,
+             IndexedReachedAncestorEventuallyJoinsResponsiveNode
+        <4>2. IndexedResponsiveJoinPrefixAt(
+                 IndexedAncestorContext(targetContext, blockHeight), limit)
+                 /\ [IndexedChainNext]_IndexedChainVars
+                 => IndexedResponsiveJoinPrefixAt(
+                      IndexedAncestorContext(targetContext, blockHeight),
+                      limit)'
+          BY <1>1, <2>2, IndexedAdmissibleTargetHasAdmissibleAncestors,
+             IndexedResponsiveJoinPrefixAtIsStable
+        <4>3. limit + 1 \in joinedByContext[
+                 IndexedAncestorContext(targetContext, blockHeight)]
+                 /\ [IndexedChainNext]_IndexedChainVars
+                 => limit + 1 \in joinedByContext[
+                      IndexedAncestorContext(targetContext, blockHeight)]'
+          BY <1>1, <3>1, IndexedAdmissibleTargetHasAdmissibleAncestors,
+             IndexedNodeJoinIsStable
+        <4>4. IndexedResponsiveJoinPrefixAt(
+                 IndexedAncestorContext(targetContext, blockHeight),
+                 limit + 1)
+                 <=> /\ IndexedResponsiveJoinPrefixAt(
+                           IndexedAncestorContext(targetContext, blockHeight),
+                           limit)
+                     /\ limit + 1 \in joinedByContext[
+                           IndexedAncestorContext(targetContext, blockHeight)]
+          BY <2>2, <3>1, Isa DEF IndexedResponsiveJoinPrefixAt
+        <4> QED BY <2>2, <4>1, <4>2, <4>3, <4>4, PTL DEF P
+      <3>2. CASE limit + 1 \notin Responsive
+        <4>1. IndexedResponsiveJoinPrefixAt(
+                 IndexedAncestorContext(targetContext, blockHeight), limit)
+                 => IndexedResponsiveJoinPrefixAt(
+                      IndexedAncestorContext(targetContext, blockHeight),
+                      limit + 1)
+          BY <2>2, <3>2, Isa DEF IndexedResponsiveJoinPrefixAt
+        <4> QED BY <2>2, <4>1, PTL DEF P
+      <3> QED BY <3>1, <3>2
+    <2>3. \A limit \in Nat: P(limit)
+      BY <2>1, <2>2, NatInduction
+    <2> QED BY <2>3 DEF P
+  <1> QED BY <1>1
+
+THEOREM IndexedReachedAncestorEventuallyJoinsEveryResponsiveNode ==
+  /\ IndexedChainSpec
+  /\ IndexedSuccessorActivationProgress
+  => \A targetContext \in AdmissibleContextRecords:
+       \A blockHeight \in 0..targetContext.height:
+         (IndexedTargetJoined(targetContext)
+           /\ IndexedResponsiveHeightReached(blockHeight))
+           ~> IndexedAllResponsiveJoined(
+                IndexedAncestorContext(targetContext, blockHeight))
+BY IndexedReachedAncestorEventuallyJoinsEveryResponsivePrefix, SMT
+   DEF IndexedResponsiveJoinPrefixAt,
+       IndexedAllResponsiveJoined,
+       ModelConfiguration, ValidatorIds
+
+IndexedAllResponsiveExactApplicationsAt(initialContext) ==
+  \A node \in Responsive:
+    IndexedAsync(initialContext)!NodeHasApplication(node)
+
 IndexedContextCompleted(initialContext) ==
   IF initialContext.height = MaxHeight
-  THEN IndexedAsync(initialContext)!
-         AsyncAllResponsiveAppliedAt(initialContext)
-  ELSE \A node \in IndexedAsync(initialContext)!
-                    AsyncVotersAt(initialContext):
+  THEN IndexedAllResponsiveExactApplicationsAt(initialContext)
+  ELSE \A node \in Responsive:
          nodeHeight[node] > initialContext.height
 
-THEOREM IndexedAllAppliedImpliesContextCompleted ==
+THEOREM IndexedAllResponsiveExactApplicationsImpliesContextCompleted ==
   \A initialContext \in AdmissibleContextRecords:
     IndexedCompositionInvariant
-      /\ IndexedAsync(initialContext)!
-           AsyncAllResponsiveAppliedAt(initialContext)
+      /\ IndexedAllResponsiveExactApplicationsAt(initialContext)
       => IndexedContextCompleted(initialContext)
 BY Isa DEF IndexedCompositionInvariant,
            IndexedApplicationsRespectNodeHeight,
+           IndexedAllResponsiveExactApplicationsAt,
            IndexedContextCompleted,
-           IndexedAsync!AsyncAllResponsiveAppliedAt
+           IndexedAsync!NodeHasApplication
+
+THEOREM IndexedAllResponsiveExactApplicationsIsStable ==
+  \A initialContext \in AdmissibleContextRecords:
+    IndexedAllResponsiveExactApplicationsAt(initialContext)
+      /\ [IndexedChainNext]_IndexedChainVars
+      => IndexedAllResponsiveExactApplicationsAt(initialContext)'
+BY Isa DEF IndexedAllResponsiveExactApplicationsAt,
+           IndexedChainNext, IndexedChainVars,
+           IndexedProductActionAt, IndexedReceiptClassification,
+           IndexedReceiptFreeChainStutter,
+           IndexedDecisionReceiptHandoff,
+           IndexedApplicationReceiptHandoff,
+           NewIndexedApplicationReceipt,
+           NoNewIndexedDurableReceipt,
+           IndexedApplications, IndexedAsync!NodeHasApplication
 
 THEOREM IndexedContextCompletedIsStable ==
   \A initialContext \in AdmissibleContextRecords:
     IndexedContextCompleted(initialContext)
       /\ [IndexedChainNext]_IndexedChainVars
       => IndexedContextCompleted(initialContext)'
-BY Isa, IndexedAllResponsiveAppliedIsStable,
+BY Isa, IndexedAllResponsiveExactApplicationsIsStable,
    IndexedBracketStepKeepsNodeHeightsMonotone
-   DEF IndexedContextCompleted, IndexedAsync!AsyncVotersAt,
+   DEF IndexedContextCompleted,
+       IndexedAllResponsiveExactApplicationsAt,
        ModelConfiguration, ValidatorIds, Heights,
        AdmissibleContextRecords, FrozenContextAdmissible,
        ContextRecords
@@ -5611,33 +5219,55 @@ THEOREM VerificationSuccessorHeightImpliesContextCompleted ==
     /\ IndexedResponsiveHeightReached(VerificationContext.height + 1)
     => IndexedContextCompleted(VerificationContext)
 BY Isa DEF IndexedResponsiveHeightReached,
-           IndexedContextCompleted, IndexedAsync!AsyncVotersAt,
+           IndexedContextCompleted,
+           IndexedAllResponsiveExactApplicationsAt,
            ModelConfiguration, ValidatorIds,
            AdmissibleContextRecords, FrozenContextAdmissible,
            ContextRecords, Heights
 
-THEOREM VerificationReachedEscapeEitherCompletesOrAdvances ==
-  IndexedCompositionInvariant
-    /\ VerificationContext \in AdmissibleContextRecords
-    /\ IndexedTargetJoined(VerificationContext)
-    /\ IndexedResponsiveHeightReached(VerificationContext.height)
-    /\ VerificationFrontierEscape
-    => \/ IndexedContextCompleted(VerificationContext)
-       \/ IndexedContextAdvanceReady(VerificationContext)
-BY Isa, IndexedAllAppliedImpliesContextCompleted,
-   JoinedCanonicalDescendantBoundsImmediateSuccessor
-   DEF VerificationFrontierEscape, IndexedContextAdvanceReady,
-       IndexedTargetJoined
+(***************************************************************************
+Once the voting roster has applied the exact frontier receipt, every remaining
+responsive observer is either already past the context or has an exact
+historical-recovery source/target. Finiteness of Responsive plus
+IndexedExactHistoricalRecoveryProgress closes those observers one at a time.
+At MaxHeight the outcome is exact per-context application evidence; below the
+horizon the same receipt handoff advances nodeHeight.
+***************************************************************************)
+THEOREM VerificationAppliedFrontierEventuallyCompletes ==
+  /\ IndexedChainSpec
+  /\ IndexedExactHistoricalRecoveryProgress
+  /\ IndexedSuccessorActivationProgress
+  /\ VerificationContext \in AdmissibleContextRecords
+  => (/\ IndexedTargetJoined(VerificationContext)
+      /\ IndexedResponsiveHeightReached(VerificationContext.height)
+      /\ IndexedAsync(VerificationContext)!
+           AsyncAllResponsiveAppliedAt(VerificationContext))
+       ~> IndexedContextCompleted(VerificationContext)
+BY IndexedReachedAncestorEventuallyJoinsEveryResponsiveNode,
+   IndexedJoinedTargetIdentifiesEveryCanonicalAncestor,
+   IndexedHistoricalRecoveryAdvancesResponsiveNode,
+   IndexedContextCompletedIsStable, PTL
+   DEF IndexedTargetJoined, IndexedResponsiveHeightReached,
+       IndexedContextCompleted,
+       IndexedAllResponsiveExactApplicationsAt,
+       HistoricalRecoveryOutstanding,
+       IndexedHistoricalRecoveryReady,
+       HistoricalRecoveryComplete, IndexedAsync!AsyncVotersAt,
+       IndexedAsync!AsyncAllResponsiveAppliedAt,
+       IndexedAsync!NodeHasApplication,
+       ModelConfiguration, ValidatorIds
 
 THEOREM VerificationAdvanceReadyEventuallyCompletes ==
   /\ IndexedChainSpec
-    /\ IndexedHistoricalCatchUpRankProgress
+    /\ IndexedExactHistoricalRecoveryProgress
+    /\ IndexedSuccessorActivationProgress
     /\ VerificationContext \in AdmissibleContextRecords
     => IndexedContextAdvanceReady(VerificationContext)
          ~> IndexedContextCompleted(VerificationContext)
 PROOF
   <1>1. ASSUME IndexedChainSpec,
-              IndexedHistoricalCatchUpRankProgress,
+              IndexedExactHistoricalRecoveryProgress,
+              IndexedSuccessorActivationProgress,
               VerificationContext \in AdmissibleContextRecords
          PROVE IndexedContextAdvanceReady(VerificationContext)
                  ~> IndexedContextCompleted(VerificationContext)
@@ -5659,7 +5289,8 @@ PROOF
 
 THEOREM VerificationReachedEscapeEventuallyCompletes ==
   /\ IndexedChainSpec
-    /\ IndexedHistoricalCatchUpRankProgress
+    /\ IndexedExactHistoricalRecoveryProgress
+    /\ IndexedSuccessorActivationProgress
     /\ VerificationContext \in AdmissibleContextRecords
     => (/\ IndexedTargetJoined(VerificationContext)
         /\ IndexedResponsiveHeightReached(VerificationContext.height)
@@ -5667,32 +5298,38 @@ THEOREM VerificationReachedEscapeEventuallyCompletes ==
          ~> IndexedContextCompleted(VerificationContext)
 PROOF
   <1>1. ASSUME IndexedChainSpec,
-              IndexedHistoricalCatchUpRankProgress,
+              IndexedExactHistoricalRecoveryProgress,
+              IndexedSuccessorActivationProgress,
               VerificationContext \in AdmissibleContextRecords
          PROVE (/\ IndexedTargetJoined(VerificationContext)
                 /\ IndexedResponsiveHeightReached(
                      VerificationContext.height)
                 /\ VerificationFrontierEscape)
                  ~> IndexedContextCompleted(VerificationContext)
-    <2>1. []IndexedCompositionInvariant
-      BY <1>1, IndexedChainSpecEstablishesCompositionInvariant, PTL
-    <2>2. IndexedCompositionInvariant
-             /\ IndexedTargetJoined(VerificationContext)
-             /\ IndexedResponsiveHeightReached(
-                  VerificationContext.height)
-             /\ VerificationFrontierEscape
-             => \/ IndexedContextCompleted(VerificationContext)
-                \/ IndexedContextAdvanceReady(VerificationContext)
-      BY <1>1, VerificationReachedEscapeEitherCompletesOrAdvances
-    <2>3. IndexedContextAdvanceReady(VerificationContext)
+    <2>1. (/\ IndexedTargetJoined(VerificationContext)
+            /\ IndexedResponsiveHeightReached(
+                 VerificationContext.height)
+            /\ JoinedCanonicalDescendant(VerificationContext))
+             => IndexedContextAdvanceReady(VerificationContext)
+      BY <1>1 DEF IndexedContextAdvanceReady, IndexedTargetJoined
+    <2>2. IndexedContextAdvanceReady(VerificationContext)
              ~> IndexedContextCompleted(VerificationContext)
       BY <1>1, VerificationAdvanceReadyEventuallyCompletes
+    <2>3. (/\ IndexedTargetJoined(VerificationContext)
+            /\ IndexedResponsiveHeightReached(
+                 VerificationContext.height)
+            /\ IndexedAsync(VerificationContext)!
+                 AsyncAllResponsiveAppliedAt(VerificationContext))
+             ~> IndexedContextCompleted(VerificationContext)
+      BY <1>1, VerificationAppliedFrontierEventuallyCompletes
     <2> QED BY <2>1, <2>2, <2>3, PTL
+         DEF VerificationFrontierEscape
   <1> QED BY <1>1
 
 THEOREM VerificationJoinedTargetEventuallyReachesAndEscapes ==
   /\ IndexedChainSpec
-    /\ IndexedHistoricalCatchUpRankProgress
+    /\ IndexedExactHistoricalRecoveryProgress
+    /\ IndexedSuccessorActivationProgress
     /\ VerificationOneHeightCompletion
     /\ VerificationContext \in AdmissibleContextRecords
     => IndexedTargetJoined(VerificationContext)
@@ -5702,7 +5339,8 @@ THEOREM VerificationJoinedTargetEventuallyReachesAndEscapes ==
              /\ VerificationFrontierEscape)
 PROOF
   <1>1. ASSUME IndexedChainSpec,
-              IndexedHistoricalCatchUpRankProgress,
+              IndexedExactHistoricalRecoveryProgress,
+              IndexedSuccessorActivationProgress,
               VerificationOneHeightCompletion,
               VerificationContext \in AdmissibleContextRecords
          PROVE IndexedTargetJoined(VerificationContext)
@@ -5731,14 +5369,14 @@ PROOF
       BY <1>1, IndexedResponsiveHeightReachedIsStable,
          Isa DEF AdmissibleContextRecords, FrozenContextAdmissible,
                  ContextRecords, Heights
-    <2>6. IndexedCompositionInvariant
-             /\ IndexedJoinedThroughLocalHeight
-             /\ IndexedTargetJoined(VerificationContext)
+    <2>6. (IndexedTargetJoined(VerificationContext)
              /\ IndexedResponsiveHeightReached(
-                  VerificationContext.height)
-             => IndexedAllResponsiveJoined(VerificationContext)
-      BY <1>1, IndexedReachedAncestorHasEveryResponsiveVoterJoined,
-         Isa DEF IndexedAncestorContext
+                  VerificationContext.height))
+             ~> IndexedAllResponsiveJoined(VerificationContext)
+      BY <1>1,
+         IndexedReachedAncestorEventuallyJoinsEveryResponsiveNode,
+         IndexedJoinedTargetIdentifiesEveryCanonicalAncestor,
+         PTL DEF IndexedAncestorContext
     <2>7. IndexedAllResponsiveJoined(VerificationContext)
              ~> VerificationFrontierEscape
       BY <1>1, VerificationActivatedFrontierEventuallyEscapes
@@ -5768,20 +5406,19 @@ THEOREM ActivatedSuccessorHasExactStateProjection ==
               = "Absent"
 BY DEF SuccessorHeightActivated
 
-TerminalHistoricalCatchUpBoundaryInvariant ==
+TerminalExactHistoricalRecoveryBoundaryInvariant ==
   \A terminalContext \in AdmissibleContextRecords,
-     node \in ValidatorIds:
+     node \in Responsive:
     terminalContext.height = MaxHeight
-      /\ HistoricalCatchUpApplicationAt(terminalContext, node)
+      /\ IndexedAsync(terminalContext)!NodeHasApplication(node)
       => /\ nodeHeight[node] = terminalContext.height
          /\ nodeContext[node] = terminalContext
-         /\ historicalCatchUpStage[terminalContext][node] = "Applied"
          /\ successorActivationStatus[terminalContext][node] = "Idle"
          /\ successorPredecessorStatusOwnership[terminalContext][node]
               = "Absent"
 
-THEOREM IndexedChainAlwaysPreservesTerminalCatchUpBoundary ==
-  IndexedChainSpec => []TerminalHistoricalCatchUpBoundaryInvariant
+THEOREM IndexedChainAlwaysPreservesTerminalExactRecoveryBoundary ==
+  IndexedChainSpec => []TerminalExactHistoricalRecoveryBoundaryInvariant
 PROOF
   <1>1. IndexedChainSpec => []IndexedCompositionInvariant
     BY IndexedChainSpecEstablishesCompositionInvariant
@@ -5789,16 +5426,16 @@ PROOF
     BY IndexedChainAlwaysExcludesTerminalActivation
   <1>3. IndexedCompositionInvariant
            /\ TerminalSuccessorActivationExcluded
-           => TerminalHistoricalCatchUpBoundaryInvariant
+           => TerminalExactHistoricalRecoveryBoundaryInvariant
     BY Isa DEF IndexedCompositionInvariant,
-               HistoricalCatchUpEvidenceInvariant,
+               IndexedTerminalExactApplicationBoundaryInvariant,
                TerminalSuccessorActivationExcluded,
-               TerminalHistoricalCatchUpBoundaryInvariant
+               TerminalExactHistoricalRecoveryBoundaryInvariant,
+               ExactNodeLocationAt
   <1> QED BY <1>1, <1>2, <1>3, PTL
 
-SuccessorActivationAndHistoricalCatchUpProductionRefinementInvariant ==
+SuccessorActivationAndExactHistoricalRecoveryProductionRefinementInvariant ==
   /\ SuccessorActivationShape
-  /\ HistoricalCatchUpShape
   /\ \A parentContext \in AdmissibleContextRecords,
        node \in ValidatorIds:
        SuccessorHeightActivated(parentContext, node)
@@ -5809,9 +5446,9 @@ SuccessorActivationAndHistoricalCatchUpProductionRefinementInvariant ==
             /\ successorPredecessorStatusOwnership[parentContext][node]
                  = "Absent"
   /\ \A terminalContext \in AdmissibleContextRecords,
-       node \in ValidatorIds:
+       node \in Responsive:
        terminalContext.height = MaxHeight
-         /\ historicalCatchUpStage[terminalContext][node] = "Applied"
+         /\ IndexedAsync(terminalContext)!NodeHasApplication(node)
          => /\ nodeHeight[node] = terminalContext.height
             /\ nodeContext[node] = terminalContext
             /\ successorActivationStatus[terminalContext][node] = "Idle"
@@ -5824,34 +5461,37 @@ must connect the production open_deferred_status adapter, serialized runtime,
 effect executor, service startup, startup/recovery effect consumption, clock
 arming, exact marker preparation, authenticated ingress opening, and final
 Applied/Recovered publication to the ordered actions above. It also must map
-block-sync recovery through every historical stage and preserve terminal
-observer application without inventing a successor. The ledger keeps this
+block-sync recovery to `OpenHistoricalRecovery` and the exact Async
+decision/body/store/validate/apply deltas, preserving terminal observer
+application without inventing a successor. The ledger keeps this
 obligation unproved until that trace mapping is machine checked.  The model-
 internal activated-state projection and terminal exclusion are proved above;
 they do not by themselves establish that a Rust execution refines these TLA+
 actions.  In particular, this declaration remains the external trace sentinel
 rather than being discharged from the state-side invariants alone.
 ***************************************************************************)
-THEOREM SuccessorActivationAndHistoricalCatchUpProductionRefinementObligation ==
+THEOREM SuccessorActivationAndExactHistoricalRecoveryProductionRefinementObligation ==
   IndexedChainSpec
-    => []SuccessorActivationAndHistoricalCatchUpProductionRefinementInvariant
+    => []SuccessorActivationAndExactHistoricalRecoveryProductionRefinementInvariant
 
 (***************************************************************************
 Exact indexed multi-height release theorem for the arbitrary free
-VerificationContext. Natural induction catches every responsive node through
-its canonical ancestors using only authenticated historical decisions. At the
+VerificationContext. Natural induction recovers every responsive node through
+its canonical ancestors using only authenticated exact historical targets. At the
 target frontier, either the fixed one-height instance applies or a higher
-canonical context becomes joined; in the latter case the same fair catch-up
-actions move every lagging target voter past the target.
+canonical context becomes joined; in the latter case the exact recovery
+obligation moves every lagging responsive node past the target.
 ***************************************************************************)
-THEOREM HeightLivenessFromOneHeightAndCatchUpProgress ==
+THEOREM HeightLivenessFromOneHeightAndExactRecoveryProgress ==
   /\ IndexedChainSpec
-  /\ IndexedHistoricalCatchUpRankProgress
+  /\ IndexedExactHistoricalRecoveryProgress
+  /\ IndexedSuccessorActivationProgress
   /\ VerificationOneHeightCompletion
   => IndexedHeightLivenessProperty
 PROOF
   <1>1. ASSUME IndexedChainSpec,
-              IndexedHistoricalCatchUpRankProgress,
+              IndexedExactHistoricalRecoveryProgress,
+              IndexedSuccessorActivationProgress,
               VerificationOneHeightCompletion
          PROVE IndexedHeightLivenessProperty
     <2>1. CASE VerificationContext \in AdmissibleContextRecords
@@ -5879,10 +5519,11 @@ PROOF
 (***************************************************************************
 Release-facing declaration.  The finite validator and finite-height
 inductions above are contained in the conditional kernel and do not import an
-unproved theorem.  This already-ledgered declaration owns its two remaining
-temporal debts: exact one-height completion and the middle-stage historical
-catch-up rank proof.  It remains proofless rather than manufacturing a second
-unledgered theorem for the rank premise.
+unproved theorem.  This already-ledgered declaration owns its three remaining
+temporal debts: exact one-height completion, exact historical-recovery
+progress through the ordinary Async pipeline, and successor-activation
+starvation freedom. It remains
+proofless rather than manufacturing a second unledgered transition relation.
 ***************************************************************************)
 THEOREM HeightLivenessObligation ==
   IndexedChainSpec => IndexedHeightLivenessProperty

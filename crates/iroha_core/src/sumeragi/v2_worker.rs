@@ -4610,6 +4610,56 @@ mod tests {
     }
 
     #[test]
+    fn locked_candidate_future_completion_is_rejected_without_replacing_owner() {
+        let (mut service, _) = fixture();
+        let command_rx = attach_locked_candidate_io(&mut service, 4);
+        let subject = locked_candidate_subject(b"future completion owner");
+        service
+            .request_locked_candidate(
+                locked_candidate_tag(0),
+                locked_candidate_round(&service, 0),
+                subject,
+            )
+            .expect("queue owned acquisition");
+        let acquisition_id = match command_rx.try_recv() {
+            Ok(V2IoCommand::LoadCandidate {
+                acquisition_id,
+                subject: queued,
+            }) if queued == subject => acquisition_id,
+            _ => panic!("expected the owned candidate load"),
+        };
+        let future_id = LockedCandidateAcquisitionId(
+            acquisition_id
+                .0
+                .checked_add(1)
+                .expect("test acquisition ID has a successor"),
+        );
+
+        let future = service
+            .complete_locked_candidate_load(LockedCandidateLoad {
+                acquisition_id: future_id,
+                subject,
+                canonical_wire: b"forged future body".to_vec(),
+            })
+            .expect_err("an unissued future completion must fail closed");
+        assert!(future.contains("unknown future acquisition ID"));
+        let acquisition = service
+            .locked_candidate_acquisition
+            .as_ref()
+            .expect("the issued acquisition remains owned");
+        assert_eq!(acquisition.subject, subject);
+        assert!(matches!(
+            acquisition.state,
+            LockedCandidateAcquisitionState::Loading {
+                acquisition_id: owned,
+                subject: owned_subject,
+            } if owned == acquisition_id && owned_subject == subject
+        ));
+        assert!(service.take_loaded_candidate().is_none());
+        detach_locked_candidate_io(&mut service);
+    }
+
+    #[test]
     fn higher_different_lock_replaces_load_and_retires_stale_completion() {
         let (mut service, _) = fixture();
         let command_rx = attach_locked_candidate_io(&mut service, 4);
@@ -4800,6 +4850,90 @@ mod tests {
         assert!(matches!(
             command_rx.try_recv(),
             Ok(V2IoCommand::LoadCandidate { subject: queued, .. }) if queued == subject
+        ));
+        detach_locked_candidate_io(&mut service);
+    }
+
+    #[test]
+    fn unavailable_locked_candidate_rebinds_latest_consumer_before_retry() {
+        let (mut service, _) = fixture();
+        let command_rx = attach_locked_candidate_io(&mut service, 4);
+        let subject = locked_candidate_subject(b"waiting rebound candidate");
+        let canonical_wire = b"recovered exact body".to_vec();
+        service
+            .request_locked_candidate(
+                locked_candidate_tag(0),
+                locked_candidate_round(&service, 0),
+                subject,
+            )
+            .expect("queue initial acquisition");
+        let initial_id = match command_rx.try_recv() {
+            Ok(V2IoCommand::LoadCandidate {
+                acquisition_id,
+                subject: queued,
+            }) if queued == subject => acquisition_id,
+            _ => panic!("expected initial candidate load"),
+        };
+        service
+            .locked_candidate_load_unavailable(initial_id, subject)
+            .expect("local absence waits for certified recovery");
+
+        service
+            .request_locked_candidate(
+                locked_candidate_tag(7),
+                locked_candidate_round(&service, 0),
+                subject,
+            )
+            .expect("same lock rebinds while durable recovery is pending");
+        let acquisition = service
+            .locked_candidate_acquisition
+            .as_ref()
+            .expect("waiting acquisition remains owned");
+        assert_eq!(acquisition.consumer, locked_candidate_tag(7));
+        assert!(matches!(
+            acquisition.state,
+            LockedCandidateAcquisitionState::Waiting {
+                acquisition_id,
+                subject: waiting_subject,
+            } if acquisition_id == initial_id && waiting_subject == subject
+        ));
+        assert!(matches!(
+            command_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+
+        service
+            .retry_locked_candidate_after_store(subject)
+            .expect("matching durable store starts one replacement read");
+        let retry_id = match command_rx.try_recv() {
+            Ok(V2IoCommand::LoadCandidate {
+                acquisition_id,
+                subject: queued,
+            }) if queued == subject => acquisition_id,
+            _ => panic!("expected the matching durable retry"),
+        };
+        assert!(retry_id > initial_id);
+        assert_eq!(
+            service
+                .complete_locked_candidate_load(LockedCandidateLoad {
+                    acquisition_id: retry_id,
+                    subject,
+                    canonical_wire: canonical_wire.clone(),
+                })
+                .expect("complete the recovered exact acquisition"),
+            Some(locked_candidate_tag(7))
+        );
+        let loaded = service
+            .take_loaded_candidate()
+            .expect("deliver recovered bytes only to the latest consumer");
+        assert_eq!(loaded.tag(), locked_candidate_tag(7));
+        assert_eq!(loaded.round(), locked_candidate_round(&service, 0));
+        assert_eq!(loaded.subject(), subject);
+        assert_eq!(loaded.into_canonical_wire(), canonical_wire);
+        assert!(service.take_loaded_candidate().is_none());
+        assert!(matches!(
+            command_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
         ));
         detach_locked_candidate_io(&mut service);
     }
