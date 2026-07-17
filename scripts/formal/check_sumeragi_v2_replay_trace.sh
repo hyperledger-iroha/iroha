@@ -16,6 +16,12 @@ readonly EXPECTED="${FIXTURE_DIR}/tlc_replay_witness.tsv"
 readonly CONFIG="${FIXTURE_DIR}/tlc_replay_witness.cfg"
 readonly NORMALIZER="${REPO_ROOT}/scripts/normalize_sumeragi_v2_tlc_trace.py"
 readonly TLA2TOOLS_JAR="${TLA2TOOLS_JAR:-${REPO_ROOT}/target/tla2tools/${TLA2TOOLS_VERSION}/tla2tools.jar}"
+if [[ -n "${JAVA_BIN:-}" ]]; then
+  resolved_java_bin="$("${REPO_ROOT}/scripts/formal/resolve_java.sh" "$JAVA_BIN")"
+else
+  resolved_java_bin="$("${REPO_ROOT}/scripts/formal/resolve_java.sh")"
+fi
+readonly JAVA_BIN="$resolved_java_bin"
 
 case "$(uname -s)-$(uname -m)" in
   Linux-x86_64) readonly TLAPM_PLATFORM="x86_64-linux-gnu" ;;
@@ -46,11 +52,7 @@ if [[ "$actual_sha256" != "$TLA2TOOLS_SHA256" ]]; then
   echo "actual:   ${actual_sha256}" >&2
   exit 1
 fi
-command -v java >/dev/null 2>&1 || {
-  echo "Java is required for TLC" >&2
-  exit 1
-}
-java -version >/dev/null 2>&1 || {
+"$JAVA_BIN" -version >/dev/null 2>&1 || {
   echo "a working Java runtime is required for TLC" >&2
   exit 1
 }
@@ -87,7 +89,7 @@ tlc_log="${run_dir}/tlc.log"
 set +e
 (
   cd "$FORMAL_DIR"
-  java -XX:+UseParallelGC "-DTLA-Library=${tlapm_compat_dir}" \
+  "$JAVA_BIN" -XX:+UseParallelGC "-DTLA-Library=${tlapm_compat_dir}" \
     -cp "$TLA2TOOLS_JAR" tlc2.TLC \
     -maxSetSize "$TLC_MAX_SET_SIZE" \
     -metadir "${run_dir}/states" \

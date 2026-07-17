@@ -181,6 +181,7 @@ pub proof fn schedule_periodic_delay_is_bounded()
 }
 
 
+
 // ---------------------------------------------------------------------------
 // Common certificate and quorum facts
 // ---------------------------------------------------------------------------
@@ -2675,6 +2676,7 @@ pub struct ProductionTagProjection {
     pub generation: u64,
 }
 
+
 /// Verus-side complete safety identity of one optional quorum certificate.
 ///
 /// Signature bytes remain outside this fixed-width projection. The executable
@@ -4336,5 +4338,7 @@ pub proof fn accepted_production_transition_refines_action(
 {
     reveal(production_transition_action_relation);
 }
+
+
 
 } // verus!

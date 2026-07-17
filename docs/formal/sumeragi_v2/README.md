@@ -26,8 +26,9 @@ ledger.
   from WAL ownership through signing and honest transport. Every honest timeout
   is bound to the frozen voter roster, context and height, carries an
   authenticated PrepareQC high reference, and satisfies `highRank <= view`.
-  These modules do not discharge the historical TC-lock authorization or the
-  dependent direct-or-installed-authorization timeout wrapper.
+  These envelope modules do not by themselves discharge the historical
+  TC-lock authorization or the dependent direct-or-installed-authorization
+  timeout wrapper; the full action induction below discharges both.
 - `SumeragiV2SafetyLemmas.tla`, `SumeragiV2AgreementLemmas.tla`,
   `SumeragiV2Inductive.tla`, `SumeragiV2InductiveProofs.tla`, and
   `SumeragiV2Proofs.tla` contain the action-by-action safety induction and its
@@ -38,11 +39,14 @@ ledger.
   exact local application receipts. The refinement contains both the selected-
   height safety product and an indexed family of dormant, admissible
   `AsyncSpecAt` instances. Exact application receipts join successors one node
-  at a time. Validators absent from an old roster use the production-shaped
-  authenticated historical CommitQC/body service and ordinary local
-  application receipt to catch up and join; certification and local application
-  do not use a global all-node barrier. Its temporal multi-height induction
-  remains explicit proof debt.
+  at a time through an ordered activation pipeline. The node joins only when an
+  Applied or exact durable-tip Recovered path publishes a full-context token.
+  Validators absent from an old roster use the production-shaped authenticated
+  historical CommitQC/body service and explicit decision, body-recovery, store,
+  validation, and application stages. Terminal observers record known
+  application without creating a successor or join. Certification and local
+  application do not use a global all-node barrier. The production trace
+  mapping and temporal multi-height induction remain explicit proof debt.
 - `SumeragiV2AsyncNetwork.tla`, `SumeragiV2LivenessProofs.tla`, and
   `SumeragiV2AsyncLivenessProofs.tla` model the production scheduler and
   transport abstractions and state the conditional progress obligations after
@@ -105,11 +109,12 @@ ledger.
   service-rank prerequisite. The durable progress
   witness and the remaining stable-suffix liveness declarations are likewise
   explicit debt, so this is not a machine-checked completion claim.
-  The Core vote-delivery relation and normalized trace replay now encode the
-  exact durable-lock Commit gate and post-WAL pool pruning. This source/model
-  alignment is not a new TLAPS discharge: the affected inductive and liveness
-  proof-premise repairs remain outstanding, so no proof-ledger status is
-  promoted by this change.
+  The Core vote-delivery relation and normalized trace replay encode the exact
+  durable-lock Commit gate and post-WAL pool pruning. The repaired full strict
+  induction discharged all 7,826 obligations, and the downstream Core safety
+  wrapper discharged all 565 obligations. That closes only the historical
+  TC-lock and timeout-protection ledger entries; the asynchronous liveness
+  proof-premise repairs remain outstanding.
   Logical views are unbounded in the deductive liveness abstraction; finite
   TLC configurations remain counterexample searches only.
 - `proof_coverage.json` is the checked-in theorem/trust-boundary status
@@ -252,14 +257,13 @@ selected core specification, every crash or restart preserves the durable
 projection, interrupted writes stay unacknowledged, and stale generations are
 rejected.
 
-Eight arbitrary-context Core safety wrappers are TLAPS-proved over
+Ten arbitrary-context Core safety wrappers are TLAPS-proved over
 `CoreSpecAt(initialContext)`: durable-vote uniqueness, lock monotonicity,
 external validity, certified-body availability, certificate uniqueness,
-agreement, conflicting-CommitQC exclusion, and crash recovery. Historical
-TC-lock Commit authorization and the dependent direct-or-installed-
-authorization timeout wrapper remain `specified_unproved`. The narrower
-grouped-timeout kernel for Commit
-intents already present at timeout remains proved. The authoritative
+agreement, conflicting-CommitQC exclusion, crash recovery, historical TC-lock
+Commit authorization, and the dependent direct-or-installed-authorization
+timeout wrapper. The narrower grouped-timeout kernel for Commit intents already
+present at timeout remains proved as well. The authoritative
 receipt-driven chain model also TLAPS-proves chain-prefix comparability and
 epoch-boundary isolation; those two obligations are not redirected to the
 one-height Core wrapper.
@@ -296,10 +300,9 @@ must remain described as a paper argument while
 
 The mechanization boundary is narrower than the argument above. The universal
 historical TC-lock authorization and its dependent direct-or-installed-
-authorization timeout wrapper remain `specified_unproved`; the previously
-proved grouped-timeout
-kernel covers only Commit intents already present when timeout votes were
-made. The universal
+authorization timeout wrapper are now ledgered `tlaps_proved`, together with
+the narrower grouped-timeout kernel for Commit intents already present when
+timeout votes were made. The universal
 `AsyncTypeInvariantObligation` has a checked source proof body but remains
 ledgered `specified_unproved` because its concrete runner-preservation
 prerequisite remains `specified_unproved` without a fresh pinned strict proof;
@@ -314,7 +317,9 @@ composition. The concrete genesis chain product separately
 records its first-successor handoff, when a successor height exists, as
 `GenesisHeightSuccessorHandoffObligation`. That theorem also has a source proof
 body but remains `specified_unproved` until the strict proof succeeds after
-rotating-leader and application liveness are proved. At the terminal finite
+rotating-leader, application liveness, and the explicit
+`SuccessorActivationAndHistoricalCatchUpProductionRefinementObligation` are
+proved. At the terminal finite
 horizon the handoff is explicitly vacuous rather than manufacturing a
 successor instance.
 The chain refinement now models an indexed family of authoritative
@@ -324,13 +329,17 @@ now composes instance activation, exact-action fairness on the all-joined
 suffix, authenticated historical catch-up for successor validators absent from
 an old roster, and finite-height temporal induction. The whole theorem remains
 explicit `specified_unproved` debt until a fresh pinned strict proof succeeds
-after rotating-leader and application liveness are proved. Its exact completion
+after rotating-leader, application liveness, and that production-refinement
+seam are proved. Its exact completion
 predicate requires application
 at terminal `MaxHeight`; at every nonterminal context it requires each
 responsive validator to advance into a successor context. Catch-up copies an
-already canonical exact QC and a
-certified-signer-held body, then refines the ordinary decision and application
-receipt boundaries; it cannot create finality. Dormant non-genesis instances
+already canonical exact QC and a certified-signer-held body, then traverses
+`Idle -> DecisionRecovered -> BodyRecovered -> Stored -> Validated -> Applied`;
+it cannot create finality or skip body, store, or validation. Nonterminal
+application queues the ordinary activation pipeline without joining, while
+terminal application uses `RecordKnownApplication` and creates no successor
+work. Dormant non-genesis instances
 retain their exact `InitAt` parent receipt internally, but only current-context
 and explicit catch-up receipts enter the global ChainEpoch projection, so the
 indexed genesis is non-vacuous. The first-release model does not restore a
@@ -345,9 +354,9 @@ end-to-end executor/runtime/worker/request/byte/queue ownership and fairness
 composition remains exactly
 `EffectiveLockBodyAcquisitionCompositionObligation`, ledgered
 `specified_unproved`. Historical TC-lock Commit authorization and the
-direct-or-installed-authorization timeout induction remain explicit
-`specified_unproved` debt. Post-GST deadlock freedom has a checked proof body but
-remains `specified_unproved` behind the async type invariant, which in turn
+direct-or-installed-authorization timeout induction are `tlaps_proved` from
+the full action induction. Post-GST deadlock freedom has a checked proof body
+but remains `specified_unproved` behind the async type invariant, which in turn
 remains behind the runner scheduler-preservation leaf. Durable
 progress-witness preservation, strict protected-service-rank decrease, and
 starvation freedom intentionally remain `specified_unproved`; adding the
@@ -386,17 +395,44 @@ genesis handoff and indexed height liveness each depend on proved
 rotating-leader and application liveness.
 Release mode additionally requires fresh source-bound evidence.
 
-Before network startup, the executable PR wrapper inventories 104 named tests
-across ten Rust modules: the prior 103 plus the executor-batch refinement
-regression. Nine of the 104 cover completion ownership. All ten
-modules are green at 52/52 reducer/core, 10/10 refinement, 4/4 reducer
-source-link, 51/51 adapter, 82/82 effects, 55/55 lane work, 34/34 runtime,
-19/19 runner, 66/66 worker, and 14/14 watchdog tests (387 passed, 0 failed, 0
-ignored); all 104 required tests were also discovered as non-ignored. The
-final-source exact one-attempt four-validator genesis rerun is green at 1/1 in
-456.76 seconds. This execution evidence is not deductive proof. Strict proof
-completion, the complete PR corridor, the 100,000-height chaos run, and the
-24-hour Taira-profile soak remain pending.
+Before network startup, the executable wrapper inventories 146 named tests
+across 12 Rust modules. The inventory includes five native-AMX lane-work
+capacity regressions, adapter/runner/watchdog successor-activation boundaries,
+and exact recovery-derived successor identity in addition to the exact-lock,
+completion-ownership, and executor-batch boundaries. It also runs exact mocked contracts for active Git
+operation rejection, detached source sealing, the 128-run matrix launcher, the
+source-bound 100,000-height chaos receipt, provisional Taira evidence
+promotion, and the aggregate release receipt. These execution contracts are
+not deductive proof. Strict proof completion, the complete PR corridor, the
+source-bound chaos run, and the 24-hour Taira-profile soak remain pending.
+
+Production release execution accepts only a clean committed HEAD, reproduces
+it in a detached read-only worktree, and records both the original checkout
+manifest and the permission-aware sealed manifest. Manifest modes cover
+enumerated file/symlink entries; a separate seal walk checks directories and
+rejects source symlink escapes, writable-output targets, and hard-linked regular
+files. Child builds and evidence bind the sealed manifest actually compiled;
+the aggregate receipt additionally binds original HEAD/tree/`Cargo.lock`, all
+27 pre-network legs and the exact 146-test inventory, the pinned harness lock
+and resolved toolchain, the formal ledger/evidence/log, all matrix logs, chaos
+log, and exact-identity soak evidence. The chmod
+seal is a cooperative ordinary-write guard rather than a same-UID security
+boundary. The complete operator contract is documented in
+[`../../source/sumeragi_v2_liveness.md`](../../source/sumeragi_v2_liveness.md).
+
+The release transcript contract provides cooperative self-consistency only.
+It rejects malformed, incomplete, cross-source, semantically mismatched, or
+digest-mismatched evidence observed during receipt generation; it is not a
+cryptographic attestation of the host or runner. A same-UID actor can synthesize
+a fully self-consistent transcript and recompute its hashes. Cargo/rustc are
+resolved to the repository-pinned 1.93.1 toolchain, run with sanitized semantic
+environment overrides and an isolated configuration-free `CARGO_HOME`, and
+their exact paths, versions, and hashes are retained in the corridor receipt.
+Java resolution rejects a non-working launcher such as the macOS
+`/usr/bin/java` stub, honors an explicit `JAVA_BIN` only when it executes, and
+otherwise selects a canonical working JDK from `JAVA_HOME`, `PATH`, the
+repository-local JDK, or stable package-manager links. The selected binary's
+canonical path and SHA-256 remain receipt-bound.
 
 Run the full gate from the repository root:
 
@@ -407,14 +443,25 @@ bash scripts/formal/install_sumeragi_v2_verus.sh
 bash ci/check_sumeragi_formal.sh
 ```
 
-TLC requires exact no-counterexample completion from six bounded configurations
+TLC requires exact exhaustive completion from two bounded configurations, one
+exact deterministic-simulation transcript from each of four configurations,
 and the exact deliberately violated invariant from the locked-Commit recovery
-witness; neither outcome changes proof status. Its liveness configuration uses
+witness; none of these outcomes changes proof status. Its liveness configuration uses
 finite `65535` timeout and view ceilings, above the configured complete service
 budget and within the
 pinned TLC 1.7.4 integer evaluator; the deductive model keeps these constants
-symbolic. Before those searches, the gate runs eight explicit scheduler
-mutation/repair pairs:
+symbolic. The ChainEpoch simulation uses a separate full-state harness:
+`ChainEpochTlcInit` initializes inherited Core state, `ChainEpochTlcVars`
+subscripts it with the receipt variables, and `ChainEpochTlcNext` freezes Core
+while a directly constructed receipt relation advances. The deductive
+`ChainEpochNext` and `ChainEpochSpec` are unchanged, and
+`ChainEpochTlcReceiptNextRefinesChainEpochNext` checks that every optimized
+harness receipt is an ordinary deductive step. Its focused strict slice is
+green at 5/5 obligations. Simulation
+transcripts must contain one seeded header, one initial-state marker, at least
+one progress marker, one exact single- or multi-unit duration footer, status
+zero, and no TLC error. Before those searches, the gate runs the original eight
+explicit scheduler mutation/repair pairs:
 
 1. equal-value replacement versus exact queued-envelope coalescing;
 2. deferred-owner replacement versus scheduler-wide coalescing;
@@ -426,7 +473,21 @@ mutation/repair pairs:
 8. producer-first local admission versus sticky causal debt and the alternating
    local-source cursor.
 
-The final buggy configuration has the pinned three-state fair lasso and exits
+The protected-rank follow-up checks four additional adversarial families:
+
+9. four causal-capacity refill lassos versus sticky class-specific debt, plus
+   the exact duplicate fast path;
+10. blind causal-successor replacement versus scheduler-wide exact coalescing;
+11. recurring Commit-certificate discovery inside `RunNode` versus its own
+    fairly scheduled auxiliary action; and
+12. indexing every physical I/O job versus indexing only Consensus owners.
+
+An exhaustive one-validator ownership configuration separately checks
+`AsyncProgressOwnershipInvariant` over 19,081 generated states (3,104 distinct,
+depth 44). The deliberately broken configurations must produce their exact
+counterexamples; all repaired configurations must complete without error.
+
+The producer-first buggy configuration has the pinned three-state fair lasso and exits
 TLC with status 13; the repaired alternating configuration exhausts its
 seven-state bounded graph with no error and exits with status 0. The ingress
 capacity mutation separately exposes the two-state invariant failure that its
@@ -452,6 +513,7 @@ The proof ledger keeps the remaining premises explicit:
 
 TLAPM, its backends, Verus, vstd, the SMT solver, the Rust compiler, the
 production-to-proof extraction code, the operating system, and the hardware
-remain part of the implementation proof TCB. Generated evidence attests that
-the configured tools accepted the exact sources; it is not a cryptographic
-attestation of the host that ran them.
+remain part of the implementation proof TCB. Generated evidence records the
+cooperative, hash-bound claim that the configured tools accepted the exact
+sources; it does not authenticate either the host or the runner that produced
+that claim.

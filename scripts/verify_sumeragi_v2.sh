@@ -6,6 +6,7 @@ EXPECTED_VERUS_TOOLCHAIN_VERSION="1.95.0"
 EXPECTED_VSTD_VERSION="0.0.0-2026-05-31-0205"
 REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 PRODUCTION_CORE_DIR="$REPO_ROOT/crates/iroha_core/src/sumeragi/v2_core"
+EFFECTIVE_LOCK_VERUS="$REPO_ROOT/crates/iroha_sumeragi_core/src/effective_lock_verus_proofs.rs"
 VERUS_LOG="${REPO_ROOT}/target/formal/sumeragi_v2/verus.log"
 
 sha256_file() {
@@ -78,7 +79,8 @@ bash "$REPO_ROOT/scripts/check_sumeragi_v2_package_layout.sh"
 
 if rg -n '\b(assume|admit)\s*\(|external_body|external_[[:alnum:]_]*specification|assume_specification' \
   "$PRODUCTION_CORE_DIR" \
-  "$REPO_ROOT/crates/iroha_sumeragi_core/src/verus_proofs.rs"; then
+  "$REPO_ROOT/crates/iroha_sumeragi_core/src/verus_proofs.rs" \
+  "$EFFECTIVE_LOCK_VERUS"; then
   echo "unreviewed Verus trust escape hatch found in iroha_sumeragi_core" >&2
   exit 1
 fi
@@ -145,7 +147,7 @@ bash "$REPO_ROOT/scripts/formal/run_sumeragi_v2_harness.sh" --unit
 bash "$REPO_ROOT/scripts/formal/run_sumeragi_v2_harness.sh" --fast-network
 
 bash "$REPO_ROOT/scripts/formal/run_sumeragi_v2_harness.sh" \
-  cargo verus verify -p iroha_sumeragi_core --features verus \
+  cargo verus verify --locked --offline -p iroha_sumeragi_core --features verus \
   --fwd-verus-args-to roots -- \
   --rlimit 60 \
   --expand-errors \

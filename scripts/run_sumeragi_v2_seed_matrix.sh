@@ -70,6 +70,21 @@ if [[ "$observed_source_manifest_sha256" != "$source_manifest_sha256" ]]; then
   echo "seed-matrix source manifest does not match the parent release invocation: expected ${source_manifest_sha256}, observed ${observed_source_manifest_sha256}" >&2
   exit 1
 fi
+release_head_commit=""
+release_head_tree=""
+release_cargo_lock_sha256=""
+if [[ "$profile" == "release" ]]; then
+  release_head_commit="${IROHA_RELEASE_HEAD_COMMIT:-}"
+  release_head_tree="${IROHA_RELEASE_HEAD_TREE:-}"
+  release_cargo_lock_sha256="${IROHA_RELEASE_CARGO_LOCK_SHA256:-}"
+  if [[ ! "$release_head_commit" =~ ^([0-9a-f]{40}|[0-9a-f]{64})$ \
+    || ! "$release_head_tree" =~ ^([0-9a-f]{40}|[0-9a-f]{64})$ \
+    || ! "$release_cargo_lock_sha256" =~ ^[0-9a-f]{64}$ ]]; then
+    echo "release seed matrix requires exact parent HEAD, tree, and Cargo.lock identities" >&2
+    exit 1
+  fi
+fi
+readonly release_head_commit release_head_tree release_cargo_lock_sha256
 readonly source_bound_root="${repo_root}/target/sumeragi-v2-release/${source_manifest_sha256}"
 export IROHA_RELEASE_SOURCE_MANIFEST_SHA256="$source_manifest_sha256"
 export CARGO_TARGET_DIR="${source_bound_root}/test-suite"
@@ -153,7 +168,7 @@ printf '%s\t%s\n' \
   process_lifetime_enforcement internal_deadlines_no_outer_process_signal \
   completion_file "$(basename "$completion_attestation")" \
   >"$invocation_attestation"
-printf '%s\n' $'profile\tsource_manifest_sha256\tscenario\tseed\tresult\tcargo_status\ttee_status\toutput\tlocalnet\tcommand' >"$summary"
+printf '%s\n' $'profile\tsource_manifest_sha256\tscenario\tseed\tresult\tcargo_status\ttee_status\trun_log_sha256\toutput\tlocalnet\tcommand' >"$summary"
 echo "seed-matrix command evidence: ${summary}" >&2
 
 # `cargo test <filter>` exits successfully when the filter matches no tests.
@@ -223,19 +238,24 @@ for scenario_spec in "${scenarios[@]}"; do
       2>&1 | tee "$run_log"
     pipeline_status=("${PIPESTATUS[@]}")
     set -e
+    run_log_sha256="$(sha256_file "$run_log")"
+    if [[ ! "$run_log_sha256" =~ ^[0-9a-f]{64}$ ]]; then
+      echo "failed to hash seed-matrix run log ${run_log}" >&2
+      exit 1
+    fi
     if ! require_source_manifest "after ${test_name} seed ${seed}"; then
-      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
         "$profile" "$source_manifest_sha256" "$test_name" "$seed" \
         "source_changed" "${pipeline_status[0]}" "${pipeline_status[1]}" \
-        "$run_output" "$localnet_output" "$command" \
+        "$run_log_sha256" "$run_output" "$localnet_output" "$command" \
         >>"$summary"
       exit 1
     fi
     if ((pipeline_status[0] != 0 || pipeline_status[1] != 0)); then
-      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
         "$profile" "$source_manifest_sha256" "$test_name" "$seed" "command_failed" \
-        "${pipeline_status[0]}" "${pipeline_status[1]}" "$run_output" \
-        "$localnet_output" "$command" \
+        "${pipeline_status[0]}" "${pipeline_status[1]}" "$run_log_sha256" \
+        "$run_output" "$localnet_output" "$command" \
         >>"$summary"
       echo "seed-matrix test command failed for ${module}::${test_name} with seed ${seed} (cargo=${pipeline_status[0]}, tee=${pipeline_status[1]}); output: ${run_log}; localnet: ${localnet_dir}; summary: ${summary}" >&2
       exit 1
@@ -251,18 +271,18 @@ for scenario_spec in "${scenarios[@]}"; do
     if [[ "$running_total" != 1 || "$running_one" != 1 \
       || "$result_total" != 1 || "$passing_one" != 1 ]] \
       || ! grep -Fq "test ${module}::${test_name} " "$run_log"; then
-      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
         "$profile" "$source_manifest_sha256" "$test_name" "$seed" "invalid_output" \
-        "${pipeline_status[0]}" "${pipeline_status[1]}" "$run_output" \
-        "$localnet_output" "$command" \
+        "${pipeline_status[0]}" "${pipeline_status[1]}" "$run_log_sha256" \
+        "$run_output" "$localnet_output" "$command" \
         >>"$summary"
       echo "expected exactly one ${module}::${test_name} test to run and pass for seed ${seed}; refusing zero-test or ambiguous Cargo success; output: ${run_log}; localnet: ${localnet_dir}; summary: ${summary}" >&2
       exit 1
     fi
-    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
       "$profile" "$source_manifest_sha256" "$test_name" "$seed" "passed" \
-      "${pipeline_status[0]}" "${pipeline_status[1]}" "$run_output" \
-      "$localnet_output" "$command" \
+      "${pipeline_status[0]}" "${pipeline_status[1]}" "$run_log_sha256" \
+      "$run_output" "$localnet_output" "$command" \
       >>"$summary"
   done
 done
@@ -278,18 +298,31 @@ if [[ ! "$summary_sha256" =~ ^[0-9a-f]{64}$ ]]; then
   exit 1
 fi
 completion_tmp="${evidence_dir}/.COMPLETED.tsv.$$"
-printf '%s\t%s\n' \
-  schema_version 1 \
-  profile "$profile" \
-  source_manifest_sha256 "$source_manifest_sha256" \
-  completed_runs "$run_index" \
-  expected_runs "$expected_runs" \
-  summary_sha256 "$summary_sha256" \
-  >"$completion_tmp"
+{
+  printf '%s\t%s\n' \
+    schema_version 1 \
+    profile "$profile" \
+    source_manifest_sha256 "$source_manifest_sha256"
+  if [[ "$profile" == "release" ]]; then
+    printf '%s\t%s\n' \
+      head_commit "$release_head_commit" \
+      head_tree "$release_head_tree" \
+      cargo_lock_sha256 "$release_cargo_lock_sha256"
+  fi
+  printf '%s\t%s\n' \
+    completed_runs "$run_index" \
+    expected_runs "$expected_runs" \
+    summary_sha256 "$summary_sha256"
+} >"$completion_tmp"
 mv -- "$completion_tmp" "$completion_attestation"
 if ! require_source_manifest "after completion attestation"; then
   rm -f -- "$completion_attestation"
   exit 1
+fi
+if [[ -n "${IROHA_SEED_MATRIX_COMPLETION_PATH_FILE:-}" ]]; then
+  completion_path_tmp="${IROHA_SEED_MATRIX_COMPLETION_PATH_FILE}.$$"
+  printf '%s\n' "$completion_attestation" >"$completion_path_tmp"
+  mv -- "$completion_path_tmp" "$IROHA_SEED_MATRIX_COMPLETION_PATH_FILE"
 fi
 
 echo "seed-matrix completed ${run_index} command runs; evidence: ${summary}; completion: ${completion_attestation}" >&2

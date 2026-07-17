@@ -35,7 +35,7 @@ use crate::kura::KuraV2CommitReceipt;
 
 const AGGREGATE_TOKEN_PREFIX: &[u8] = b"sumeragi-v2:verified-aggregate\0";
 const MAX_DEFERRED_INPUTS: usize = 1024;
-const MAX_DEFERRED_PROGRESS_INPUTS: usize = wire::MAX_VALIDATORS_PER_HEIGHT + 3;
+const MAX_DEFERRED_PROGRESS_INPUTS: usize = wire::MAX_VALIDATORS_PER_HEIGHT * 2 + 3;
 const MAX_INGRESS_SEMANTIC_KEYS: usize = 1024;
 
 /// Node-local fingerprints exported through the compact v2 status record.
@@ -572,7 +572,8 @@ enum DeferredPriority {
     /// Trusted completions and local timer events which untrusted traffic
     /// must not displace.
     Completion,
-    /// Validated QCs/TCs plus exact locked-round Commit reconstruction.
+    /// Validated QCs/TCs, TimeoutVote messages, and exact locked-round Commit
+    /// reconstruction.
     Progress,
     /// Proposals and individual control votes.
     Normal,
@@ -581,27 +582,78 @@ enum DeferredPriority {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum DeferredProgressClass {
     LockedCommitVote,
+    TimeoutVote,
     PrepareCertificate,
     CommitCertificate,
     TimeoutCertificate,
 }
 
-fn deferred_progress_class(input: &DeferredInput) -> Option<DeferredProgressClass> {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DeferredProgressOwner {
+    LockedCommitVote(reducer::ValidatorId),
+    TimeoutVote(reducer::ValidatorId),
+    PrepareCertificate,
+    CommitCertificate,
+    TimeoutCertificate,
+}
+
+impl DeferredProgressOwner {
+    const fn class(self) -> DeferredProgressClass {
+        match self {
+            Self::LockedCommitVote(_) => DeferredProgressClass::LockedCommitVote,
+            Self::TimeoutVote(_) => DeferredProgressClass::TimeoutVote,
+            Self::PrepareCertificate => DeferredProgressClass::PrepareCertificate,
+            Self::CommitCertificate => DeferredProgressClass::CommitCertificate,
+            Self::TimeoutCertificate => DeferredProgressClass::TimeoutCertificate,
+        }
+    }
+}
+
+fn deferred_progress_owner(input: &DeferredInput) -> Option<DeferredProgressOwner> {
     if input.protected_progress {
-        return Some(DeferredProgressClass::LockedCommitVote);
+        return match &input.event {
+            reducer::Event::VoteReceived { vote, .. }
+                if vote.vote().phase() == reducer::Phase::Commit =>
+            {
+                Some(DeferredProgressOwner::LockedCommitVote(
+                    vote.vote().signer(),
+                ))
+            }
+            _ => None,
+        };
     }
     match &input.event {
+        reducer::Event::TimeoutVoteReceived { vote, .. } => {
+            Some(DeferredProgressOwner::TimeoutVote(vote.vote().signer()))
+        }
         reducer::Event::QuorumCertificateReceived { certificate, .. } => {
             Some(match certificate.phase() {
-                reducer::Phase::Prepare => DeferredProgressClass::PrepareCertificate,
-                reducer::Phase::Commit => DeferredProgressClass::CommitCertificate,
+                reducer::Phase::Prepare => DeferredProgressOwner::PrepareCertificate,
+                reducer::Phase::Commit => DeferredProgressOwner::CommitCertificate,
             })
         }
         reducer::Event::TimeoutCertificateReceived { .. } => {
-            Some(DeferredProgressClass::TimeoutCertificate)
+            Some(DeferredProgressOwner::TimeoutCertificate)
         }
         _ => None,
     }
+}
+
+fn deferred_progress_class(input: &DeferredInput) -> Option<DeferredProgressClass> {
+    deferred_progress_owner(input).map(DeferredProgressOwner::class)
+}
+
+const fn deferred_progress_capacity(roster_len: usize) -> usize {
+    let required = roster_len.saturating_mul(2).saturating_add(3);
+    if required < MAX_DEFERRED_PROGRESS_INPUTS {
+        required
+    } else {
+        MAX_DEFERRED_PROGRESS_INPUTS
+    }
+}
+
+const fn semantic_ingress_capacity(roster_len: usize) -> usize {
+    MAX_INGRESS_SEMANTIC_KEYS.saturating_add(roster_len.saturating_mul(2))
 }
 
 /// Completion variant staged directly in the Busy-deferred lane by seam tests.
@@ -880,6 +932,10 @@ pub(crate) enum AdapterError {
     /// Body-store receipt differs from the exact manifest, round, or subject.
     #[error("Sumeragi v2 durable body receipt does not match the reducer work item")]
     DurableBodyMismatch,
+    /// The runner attempted to publish a successor before its live pacemaker
+    /// clocks crossed the one-shot post-startup boundary.
+    #[error("Sumeragi v2 successor activation requires armed live pacemaker clocks")]
+    SuccessorClocksNotArmed,
     /// A complete WAL payload could not be decoded.
     #[error("invalid Sumeragi v2 safety WAL payload: {0}")]
     WalDecode(String),
@@ -1047,6 +1103,34 @@ impl SumeragiV2Adapter {
         )
     }
 
+    /// Open and replay the adapter without publishing its initial reducer
+    /// status.
+    ///
+    /// The serialized runner uses this only while a finalized predecessor owns
+    /// a `Running` successor handoff. It must publish a status snapshot after
+    /// every remaining startup constructor succeeds, live clocks are armed,
+    /// and authenticated ingress is open. All ordinary callers use [`Self::open`].
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn open_deferred_status(
+        wal_path: impl Into<PathBuf>,
+        verified_context: VerifiedHeightContext,
+        local_validator: Option<wire::ValidatorIndex>,
+        generation: reducer::Generation,
+        consensus_key_hash: [u8; 32],
+        fingerprints: AdapterFingerprints,
+    ) -> Result<(Self, Vec<AdapterEffect>), AdapterError> {
+        Self::open_with_aggregator_and_publication(
+            wal_path,
+            verified_context,
+            local_validator,
+            generation,
+            consensus_key_hash,
+            fingerprints,
+            Box::<BlsNormalSignatureAggregator>::default(),
+            false,
+        )
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn open_with_aggregator(
         wal_path: impl Into<PathBuf>,
@@ -1056,6 +1140,29 @@ impl SumeragiV2Adapter {
         consensus_key_hash: [u8; 32],
         fingerprints: AdapterFingerprints,
         aggregator: Box<dyn SignatureAggregator>,
+    ) -> Result<(Self, Vec<AdapterEffect>), AdapterError> {
+        Self::open_with_aggregator_and_publication(
+            wal_path,
+            verified_context,
+            local_validator,
+            generation,
+            consensus_key_hash,
+            fingerprints,
+            aggregator,
+            true,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn open_with_aggregator_and_publication(
+        wal_path: impl Into<PathBuf>,
+        verified_context: VerifiedHeightContext,
+        local_validator: Option<wire::ValidatorIndex>,
+        generation: reducer::Generation,
+        consensus_key_hash: [u8; 32],
+        fingerprints: AdapterFingerprints,
+        aggregator: Box<dyn SignatureAggregator>,
+        publish_initial_status: bool,
     ) -> Result<(Self, Vec<AdapterEffect>), AdapterError> {
         let VerifiedHeightContext {
             context: wire_context,
@@ -1140,7 +1247,9 @@ impl SumeragiV2Adapter {
         let startup = replay.into_effects();
         let startup = adapter.drive_effects(startup)?;
         adapter.replay_complete = true;
-        adapter.publish_status()?;
+        if publish_initial_status {
+            adapter.publish_status()?;
+        }
         Ok((adapter, startup))
     }
 
@@ -1652,10 +1761,13 @@ impl SumeragiV2Adapter {
         }
 
         let capacity_bypass = self.ingress_equivocations.len() >= MAX_INGRESS_SEMANTIC_KEYS;
-        if capacity_bypass && !locked_commit_progress {
-            // This is bounded backpressure for non-certificate traffic. QCs and
-            // TCs, plus the at-most-roster-sized exact locked Commit set, bypass
-            // normal capacity and use the reserved progress queue below.
+        let protected_capacity_bypass =
+            locked_commit_progress || matches!(key, IngressSemanticKey::TimeoutVote { .. });
+        if capacity_bypass && !protected_capacity_bypass {
+            // This is bounded backpressure for ordinary semantic traffic. QCs
+            // and TCs do not consume this table. The at-most-roster-sized exact
+            // locked Commit and current-view TimeoutVote sets bypass ordinary
+            // capacity and use their independent reserved progress partitions.
             return Ok((
                 Some(Self::ignored_outcome(reducer::IgnoreReason::Busy)),
                 None,
@@ -1689,6 +1801,7 @@ impl SumeragiV2Adapter {
 
     fn prune_ingress_records(&mut self) {
         let current_view = self.reducer.current_tag().view();
+        let current_height = self.wire_context.height;
         let retained_vote_views = u64::try_from(self.wire_context.roster.len()).unwrap_or(u64::MAX);
         let oldest_retained_view = current_view.saturating_sub(retained_vote_views);
         let durable_lock = self.reducer.durable_state().locked().and_then(|locked| {
@@ -1716,9 +1829,16 @@ impl SumeragiV2Adapter {
                     && execution_commitment == locked_execution_commitment
             )
         };
+        let matches_current_timeout = |key: IngressSemanticKey| {
+            matches!(
+                key,
+                IngressSemanticKey::TimeoutVote { round, .. }
+                    if round.height == current_height && round.view == current_view
+            )
+        };
         self.ingress_equivocations.retain(|key, record| {
             if record.capacity_bypass {
-                matches_current_lock(*key, record.fingerprint)
+                matches_current_lock(*key, record.fingerprint) || matches_current_timeout(*key)
             } else {
                 key.round().view >= oldest_retained_view
                     || matches_current_lock(*key, record.fingerprint)
@@ -2949,6 +3069,26 @@ impl SumeragiV2Adapter {
         })
     }
 
+    /// Record and snapshot the runner-owned live-successor boundary.
+    ///
+    /// The marker lives in the adapter rather than only in the global status
+    /// registry. Consequently a later ignored input or retransmission cannot
+    /// restore the older replay marker and erase the activation witness.
+    pub(crate) fn successor_activation_status(
+        &mut self,
+    ) -> Result<wire::SumeragiV2Status, AdapterError> {
+        let round = reducer::Round::new(
+            self.reducer.context().height(),
+            self.reducer.current_tag().view(),
+        );
+        self.last_progress = Some((
+            self.reducer.generation(),
+            round,
+            wire::SumeragiV2ProgressTransition::SuccessorHeightActivated,
+        ));
+        self.status()
+    }
+
     fn liveness_status(&mut self) -> Result<wire::SumeragiV2LivenessStatus, AdapterError> {
         let min_signers = u32::try_from(self.reducer.context().minimum_signer_count())
             .map_err(|_| wire::ValidationError::RosterTooLarge)?;
@@ -3283,17 +3423,12 @@ impl SumeragiV2Adapter {
             .values()
             .map(|record| record.admitted_at)
             .min();
-        let progress_capacity = self
-            .wire_context
-            .roster
-            .len()
-            .saturating_add(3)
-            .min(MAX_DEFERRED_PROGRESS_INPUTS);
+        let progress_capacity = deferred_progress_capacity(self.wire_context.roster.len());
         vec![
             queue_status(
                 wire::SumeragiV2QueueKind::Ingress,
                 self.ingress_equivocations.len(),
-                MAX_INGRESS_SEMANTIC_KEYS.saturating_add(self.wire_context.roster.len()),
+                semantic_ingress_capacity(self.wire_context.roster.len()),
                 ingress_oldest.map(|oldest| now.saturating_duration_since(oldest)),
                 0,
             ),
@@ -3349,10 +3484,10 @@ impl SumeragiV2Adapter {
             | reducer::Event::ApplicationCompleted { .. }
             | reducer::Event::TimeoutElapsed { .. }
             | reducer::Event::RetransmitElapsed { .. } => DeferredPriority::Completion,
+            reducer::Event::TimeoutVoteReceived { .. } => DeferredPriority::Progress,
             reducer::Event::ProposalReceived { .. }
             | reducer::Event::VoteReceived { .. }
             | reducer::Event::QuorumCertificateReceived { .. }
-            | reducer::Event::TimeoutVoteReceived { .. }
             | reducer::Event::TimeoutCertificateReceived { .. } => DeferredPriority::Normal,
         };
         self.step_with_defer_policy(event, false, priority, None, completion_evidence)
@@ -3376,6 +3511,7 @@ impl SumeragiV2Adapter {
         let priority = if matches!(
             &event,
             reducer::Event::QuorumCertificateReceived { .. }
+                | reducer::Event::TimeoutVoteReceived { .. }
                 | reducer::Event::TimeoutCertificateReceived { .. }
         ) || admission.is_some_and(|admission| admission.locked_commit_progress)
         {
@@ -3685,12 +3821,7 @@ impl SumeragiV2Adapter {
             admitted_at: Instant::now(),
             eligible_skips: 0,
         };
-        let progress_capacity = self
-            .wire_context
-            .roster
-            .len()
-            .saturating_add(3)
-            .min(MAX_DEFERRED_PROGRESS_INPUTS);
+        let progress_capacity = deferred_progress_capacity(self.wire_context.roster.len());
         let queue = match priority {
             DeferredPriority::Completion => &mut self.deferred_completions,
             DeferredPriority::Progress => &mut self.deferred_progress_inputs,
@@ -3714,19 +3845,29 @@ impl SumeragiV2Adapter {
             }
             DeferredPriority::Progress => {
                 // The progress lane is partitioned before admission: one slot
-                // per frozen validator is reserved for exact locked-round
-                // Commit reconstruction, plus one independent slot for each
-                // PrepareQC, CommitQC, and TC class. Once an item is admitted
-                // it is never displaced by later equal- or higher-ranked traffic.
-                let Some(class) = deferred_progress_class(&input) else {
+                // per frozen validator is reserved independently for exact
+                // locked-round Commit reconstruction and TimeoutVote messages,
+                // plus one slot for each PrepareQC, CommitQC, and TC class.
+                // Exact duplicates coalesce above; a distinct item for an
+                // already-owned signer/class retries after fair service rather
+                // than displacing admitted progress.
+                let Some(owner) = deferred_progress_owner(&input) else {
                     return Ok(false);
                 };
+                let class = owner.class();
                 let class_capacity = match class {
-                    DeferredProgressClass::LockedCommitVote => self.wire_context.roster.len(),
+                    DeferredProgressClass::LockedCommitVote
+                    | DeferredProgressClass::TimeoutVote => self.wire_context.roster.len(),
                     DeferredProgressClass::PrepareCertificate
                     | DeferredProgressClass::CommitCertificate
                     | DeferredProgressClass::TimeoutCertificate => 1,
                 };
+                if queue.iter().any(|queued| {
+                    deferred_progress_owner(queued)
+                        .is_some_and(|queued_owner| queued_owner == owner)
+                }) {
+                    return Ok(false);
+                }
                 let class_len = queue
                     .iter()
                     .filter(|queued| deferred_progress_class(queued) == Some(class))
@@ -5553,6 +5694,71 @@ mod tests {
     }
 
     #[test]
+    fn deferred_adapter_activation_marker_survives_a_no_progress_publication() {
+        let _guard = crate::sumeragi::status::rbc_status_test_guard();
+        crate::sumeragi::status::clear_v2_status();
+        let directory = TempDir::new().expect("temporary directory");
+        let context = context();
+        let (mut adapter, startup) = SumeragiV2Adapter::open_deferred_status(
+            directory.path().join("deferred-status.wal"),
+            verified_genesis(context.clone()),
+            None,
+            reducer::Generation::new(context.height),
+            [0xA6; 32],
+            AdapterFingerprints {
+                node: Hash::new(b"deferred node"),
+                build: Hash::new(b"deferred build"),
+                config: Hash::new(b"deferred config"),
+            },
+        )
+        .expect("open replayed adapter without status publication");
+
+        assert!(startup.is_empty());
+        assert!(
+            crate::sumeragi::status::v2_status().is_none(),
+            "successor replay must remain invisible while its remaining constructors are fallible"
+        );
+        let prepared = adapter
+            .successor_activation_status()
+            .expect("prepare reducer-owned activation snapshot");
+        assert_eq!(prepared.height, context.height);
+        assert!(matches!(
+            prepared.liveness.last_progress,
+            Some(wire::SumeragiV2ProgressTransitionStatus {
+                transition: wire::SumeragiV2ProgressTransition::SuccessorHeightActivated,
+                ..
+            })
+        ));
+        assert!(
+            crate::sumeragi::status::v2_status().is_none(),
+            "preparing a snapshot is not publication"
+        );
+        crate::sumeragi::status::set_v2_status(prepared);
+
+        let stale_tag = reducer::EventTag::new(
+            context.height,
+            0,
+            reducer::Generation::new(context.height.saturating_sub(1)),
+        );
+        let ignored = adapter
+            .retransmit_elapsed(stale_tag)
+            .expect("publish an ignored post-activation retransmission");
+        assert_eq!(
+            ignored.disposition(),
+            reducer::StepDisposition::Ignored(reducer::IgnoreReason::StaleGeneration)
+        );
+        let republished = crate::sumeragi::status::v2_status().expect("republished status");
+        assert!(matches!(
+            republished.liveness.last_progress,
+            Some(wire::SumeragiV2ProgressTransitionStatus {
+                transition: wire::SumeragiV2ProgressTransition::SuccessorHeightActivated,
+                ..
+            })
+        ));
+        crate::sumeragi::status::clear_v2_status();
+    }
+
+    #[test]
     fn executable_leader_rotation_matches_the_canonical_wire_context() {
         let wire_context = context();
         let mut registry = WireRegistry::new(&wire_context).expect("wire registry");
@@ -7159,6 +7365,78 @@ mod tests {
     }
 
     #[test]
+    fn deferred_adapter_replay_with_startup_effects_publishes_no_status() {
+        let _guard = crate::sumeragi::status::rbc_status_test_guard();
+        crate::sumeragi::status::clear_v2_status();
+        let directory = TempDir::new().expect("temporary directory");
+        {
+            let (mut adapter, startup) = open_test_as_leader(&directory).expect("open leader");
+            assert!(startup.is_empty());
+            let proposal = proposal(
+                &adapter.wire_context,
+                adapter.wire_context.leader(0),
+                subject(10),
+            );
+            let wire::ConsensusMessageV2Payload::Proposal(proposal) = proposal.payload else {
+                unreachable!("proposal helper returns a proposal")
+            };
+            let (durable, validated) =
+                validated_receipts_for_manifest(&adapter.wire_context, &proposal.manifest);
+            let proposal_tag = adapter.current_tag();
+            let sign = adapter
+                .local_proposal_ready(proposal_tag, proposal.manifest, &durable, &validated)
+                .expect("persist proposal intent");
+            assert!(matches!(
+                sign.effects(),
+                [AdapterEffect::Sign {
+                    request: SignRequest::Proposal(_),
+                    ..
+                }]
+            ));
+        }
+
+        crate::sumeragi::status::clear_v2_status();
+        let context = context();
+        let leader = context.leader(0);
+        let (mut adapter, startup) = SumeragiV2Adapter::open_deferred_status(
+            directory.path().join("leader-safety.wal"),
+            verified_genesis(context),
+            Some(leader),
+            reducer::Generation::new(1),
+            [0x22; 32],
+            fingerprints(),
+        )
+        .expect("replay leader without publishing status");
+        assert!(matches!(
+            startup.as_slice(),
+            [AdapterEffect::Sign {
+                request: SignRequest::Proposal(_),
+                ..
+            }]
+        ));
+        assert!(
+            crate::sumeragi::status::v2_status().is_none(),
+            "nonempty startup work must not publish the prepared successor"
+        );
+        let prepared = adapter
+            .successor_activation_status()
+            .expect("prepare reducer-owned activation snapshot");
+        assert_eq!(prepared.height, 1);
+        assert!(matches!(
+            prepared.liveness.last_progress,
+            Some(wire::SumeragiV2ProgressTransitionStatus {
+                transition: wire::SumeragiV2ProgressTransition::SuccessorHeightActivated,
+                ..
+            })
+        ));
+        assert!(
+            crate::sumeragi::status::v2_status().is_none(),
+            "snapshot construction must remain separate from publication"
+        );
+        crate::sumeragi::status::clear_v2_status();
+    }
+
+    #[test]
     fn replay_resigns_only_an_acknowledged_intent() {
         let directory = TempDir::new().expect("temporary directory");
         {
@@ -8465,7 +8743,7 @@ mod tests {
 
     #[test]
     #[allow(clippy::too_many_lines)]
-    fn capacity_bypass_records_follow_only_the_current_durable_lock() {
+    fn capacity_bypass_records_follow_current_lock_and_timeout_view() {
         let directory = TempDir::new().expect("temporary directory");
         let (mut adapter, startup) = open_test(&directory).expect("open adapter");
         assert!(startup.is_empty());
@@ -8545,6 +8823,32 @@ mod tests {
                     adapter.record_ingress_delivery(admission);
                 }
             };
+        let admit_timeout_roster =
+            |adapter: &mut SumeragiV2Adapter, wire_round: wire::ConsensusRound| {
+                let roster_len = adapter.wire_context.roster.len();
+                for signer in 0..roster_len {
+                    let signer = u32::try_from(signer).expect("fixture signer index fits u32");
+                    let payload = wire::ConsensusMessageV2Payload::TimeoutVote(wire::TimeoutVote {
+                        round: wire_round,
+                        highest_prepare_qc: None,
+                        signer,
+                        signature: vec![0xE0 ^ u8::try_from(signer).expect("small fixture signer")],
+                    });
+                    let (outcome, admission) = adapter
+                        .admit_authenticated_payload(&payload)
+                        .expect("current TimeoutVote bypasses ordinary capacity");
+                    assert!(outcome.is_none());
+                    let admission = admission.expect("TimeoutVote owns a capacity-bypass record");
+                    assert!(
+                        adapter
+                            .ingress_equivocations
+                            .get(&admission.key)
+                            .expect("inserted TimeoutVote admission")
+                            .capacity_bypass
+                    );
+                    adapter.record_ingress_delivery(admission);
+                }
+            };
 
         let first_lock = install_lock(&mut adapter, 0xDB);
         let ordinary_round = first_lock.0;
@@ -8565,9 +8869,11 @@ mod tests {
         }
         admit_locked_roster(&mut adapter, first_lock.0, first_lock.1, first_lock.2);
         let roster_len = adapter.wire_context.roster.len();
+        admit_timeout_roster(&mut adapter, first_lock.0);
         assert_eq!(
             adapter.ingress_equivocations.len(),
-            MAX_INGRESS_SEMANTIC_KEYS + roster_len
+            semantic_ingress_capacity(roster_len),
+            "ordinary, exact-lock, and current TimeoutVote owners realize the complete live semantic bound"
         );
         let ingress = adapter
             .adapter_queue_statuses()
@@ -8576,10 +8882,37 @@ mod tests {
             .expect("ingress queue status");
         assert_eq!(
             usize::try_from(ingress.depth).unwrap(),
-            MAX_INGRESS_SEMANTIC_KEYS + roster_len
+            semantic_ingress_capacity(roster_len)
         );
         assert_eq!(
             usize::try_from(ingress.capacity).unwrap(),
+            semantic_ingress_capacity(roster_len)
+        );
+        assert_eq!(
+            adapter
+                .ingress_equivocations
+                .values()
+                .filter(|record| record.capacity_bypass)
+                .count(),
+            roster_len * 2
+        );
+        let same_view_equivocations = adapter.ingress_equivocations.clone();
+        let same_view_deliveries = adapter.ingress_deliveries.clone();
+        adapter.prune_ingress_records();
+        assert_eq!(adapter.ingress_equivocations, same_view_equivocations);
+        assert_eq!(adapter.ingress_deliveries, same_view_deliveries);
+
+        // The following lock-replacement half isolates durable-lock retention;
+        // view-advance retirement for these TimeoutVote owners is exercised by
+        // `full_normal_deferred_lane_cannot_drop_absolute_timeout`.
+        adapter
+            .ingress_equivocations
+            .retain(|key, _| !matches!(key, IngressSemanticKey::TimeoutVote { .. }));
+        adapter
+            .ingress_deliveries
+            .retain(|key, _| !matches!(key, IngressSemanticKey::TimeoutVote { .. }));
+        assert_eq!(
+            adapter.ingress_equivocations.len(),
             MAX_INGRESS_SEMANTIC_KEYS + roster_len
         );
 
@@ -9943,33 +10276,43 @@ mod tests {
             }] if vote.phase() == reducer::Phase::Commit
         ));
 
-        let filler_vote = wire::Vote {
-            round: wire_round,
-            phase: wire::GlobalPhase::Commit,
-            subject: locked_subject,
-            execution_commitment: locked_execution_commitment,
-            signer: 0,
-            signature: vec![0xE7],
-        };
-        let filler_vote = adapter
-            .registry
-            .vote_to_core(&filler_vote, &adapter.wire_context)
-            .expect("convert locked-vote capacity fixture");
-        let filler = DeferredInput {
-            event: reducer::Event::VoteReceived {
-                tag: replay_tag,
-                vote: filler_vote,
-            },
-            completion_evidence: None,
-            retag_authenticated_ingress: true,
-            priority: DeferredPriority::Progress,
-            protected_progress: true,
-            admission: None,
-            admitted_at: Instant::now(),
-            eligible_skips: 0,
-        };
-        adapter.deferred_progress_inputs =
-            std::iter::repeat_n(filler, adapter.wire_context.roster.len()).collect();
+        let roster_len = adapter.wire_context.roster.len();
+        let mut fillers = VecDeque::with_capacity(roster_len);
+        for signer in 0..roster_len {
+            let signer = u32::try_from(signer).expect("fixture signer fits u32");
+            let filler_vote = wire::Vote {
+                round: wire_round,
+                phase: wire::GlobalPhase::Commit,
+                subject: locked_subject,
+                execution_commitment: locked_execution_commitment,
+                signer,
+                signature: vec![0xE7 ^ u8::try_from(signer).expect("fixture signer fits u8")],
+            };
+            let filler_vote = adapter
+                .registry
+                .vote_to_core(&filler_vote, &adapter.wire_context)
+                .expect("convert locked-vote capacity fixture");
+            fillers.push_back(DeferredInput {
+                event: reducer::Event::VoteReceived {
+                    tag: replay_tag,
+                    vote: filler_vote,
+                },
+                completion_evidence: None,
+                retag_authenticated_ingress: true,
+                priority: DeferredPriority::Progress,
+                protected_progress: true,
+                admission: None,
+                admitted_at: Instant::now(),
+                eligible_skips: 0,
+            });
+        }
+        adapter.deferred_progress_inputs = fillers;
+        let retried_signer = u32::try_from(
+            roster_len
+                .checked_sub(1)
+                .expect("fixture roster is non-empty"),
+        )
+        .expect("fixture signer fits u32");
 
         let locked_vote =
             wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Vote(wire::Vote {
@@ -9977,13 +10320,13 @@ mod tests {
                 phase: wire::GlobalPhase::Commit,
                 subject: locked_subject,
                 execution_commitment: locked_execution_commitment,
-                signer: 1,
+                signer: retried_signer,
                 signature: vec![0xE8],
             }));
         let key = IngressSemanticKey::Vote {
             round: wire_round,
             phase: wire::GlobalPhase::Commit,
-            signer: 1,
+            signer: retried_signer,
         };
         let registry_before = adapter.registry.clone();
         let active_subject_before = adapter.active_subject;
@@ -10026,6 +10369,270 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn deferred_progress_capacity_matches_partition_geometry() {
+        assert_eq!(deferred_progress_capacity(0), 3);
+        assert_eq!(deferred_progress_capacity(1), 5);
+        assert_eq!(deferred_progress_capacity(4), 11);
+        assert_eq!(
+            deferred_progress_capacity(wire::MAX_VALIDATORS_PER_HEIGHT),
+            MAX_DEFERRED_PROGRESS_INPUTS
+        );
+        assert_eq!(
+            deferred_progress_capacity(wire::MAX_VALIDATORS_PER_HEIGHT.saturating_add(1)),
+            MAX_DEFERRED_PROGRESS_INPUTS,
+            "invalid oversized rosters cannot expand the static adapter bound"
+        );
+        assert_eq!(semantic_ingress_capacity(0), MAX_INGRESS_SEMANTIC_KEYS);
+        assert_eq!(semantic_ingress_capacity(4), MAX_INGRESS_SEMANTIC_KEYS + 8);
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn deferred_progress_partition_owns_every_vote_and_certificate_class() {
+        let directory = TempDir::new().expect("temporary directory");
+        let (mut adapter, startup) = open_test(&directory).expect("open adapter");
+        assert!(startup.is_empty());
+        let roster_len = adapter.wire_context.roster.len();
+        let tag = adapter.current_tag();
+        let wire_round = wire::ConsensusRound {
+            context_id: adapter.wire_context.id(),
+            height: adapter.wire_context.height,
+            view: 0,
+        };
+
+        for signer in 0..roster_len {
+            let signer = u32::try_from(signer).expect("fixture signer fits u32");
+            let marker = u8::try_from(signer).expect("fixture signer fits u8") | 0xA0;
+            let locked_subject = subject(marker);
+            let locked_commitment = execution_commitment(marker);
+            let wire_vote = wire::Vote {
+                round: wire_round,
+                phase: wire::GlobalPhase::Commit,
+                subject: locked_subject,
+                execution_commitment: locked_commitment,
+                signer,
+                signature: vec![marker],
+            };
+            let vote = adapter
+                .registry
+                .vote_to_core(&wire_vote, &adapter.wire_context)
+                .expect("convert locked Commit capacity fixture");
+            let admission = IngressAdmission {
+                key: IngressSemanticKey::Vote {
+                    round: wire_round,
+                    phase: wire::GlobalPhase::Commit,
+                    signer,
+                },
+                fingerprint: IngressFingerprint::Vote(locked_subject, locked_commitment),
+                generation: tag.generation(),
+                inserted_equivocation: false,
+                locked_commit_progress: true,
+            };
+            assert!(
+                adapter
+                    .enqueue_deferred(
+                        reducer::Event::VoteReceived { tag, vote },
+                        true,
+                        DeferredPriority::Progress,
+                        Some(admission),
+                        None,
+                    )
+                    .expect("admit one locked Commit owner per frozen validator")
+            );
+
+            let timeout = wire::TimeoutVote {
+                round: wire_round,
+                highest_prepare_qc: None,
+                signer,
+                signature: vec![marker ^ 0x0F],
+            };
+            let timeout = adapter
+                .registry
+                .timeout_vote_to_core(&timeout, &adapter.wire_context)
+                .expect("convert TimeoutVote capacity fixture");
+            assert!(
+                adapter
+                    .enqueue_deferred(
+                        reducer::Event::TimeoutVoteReceived { tag, vote: timeout },
+                        true,
+                        DeferredPriority::Progress,
+                        None,
+                        None,
+                    )
+                    .expect("admit one TimeoutVote owner per frozen validator")
+            );
+            if signer == 0 {
+                let retained = adapter.deferred_progress_inputs.clone();
+                let distinct_same_signer = wire::TimeoutVote {
+                    round: wire::ConsensusRound {
+                        view: wire_round.view + 1,
+                        ..wire_round
+                    },
+                    highest_prepare_qc: None,
+                    signer,
+                    signature: vec![marker ^ 0xF0],
+                };
+                let distinct_same_signer = adapter
+                    .registry
+                    .timeout_vote_to_core(&distinct_same_signer, &adapter.wire_context)
+                    .expect("convert distinct same-signer TimeoutVote fixture");
+                let distinct_same_signer = reducer::Event::TimeoutVoteReceived {
+                    tag,
+                    vote: distinct_same_signer,
+                };
+                assert!(
+                    !adapter
+                        .enqueue_deferred(
+                            distinct_same_signer.clone(),
+                            true,
+                            DeferredPriority::Progress,
+                            None,
+                            None,
+                        )
+                        .expect("same signer cannot consume a second TimeoutVote slot"),
+                    "TimeoutVote ownership must be signer-injective before the class is full"
+                );
+                assert_eq!(
+                    adapter.deferred_progress_inputs, retained,
+                    "later same-signer traffic must not displace admitted progress"
+                );
+                let core_signer = adapter
+                    .registry
+                    .validator_id(signer)
+                    .expect("fixture signer belongs to the frozen roster");
+                let owned_index = adapter
+                    .deferred_progress_inputs
+                    .iter()
+                    .position(|queued| {
+                        deferred_progress_owner(queued)
+                            == Some(DeferredProgressOwner::TimeoutVote(core_signer))
+                    })
+                    .expect("original same-signer TimeoutVote owns one slot");
+                adapter.deferred_progress_inputs.remove(owned_index);
+                assert!(
+                    adapter
+                        .enqueue_deferred(
+                            distinct_same_signer,
+                            true,
+                            DeferredPriority::Progress,
+                            None,
+                            None,
+                        )
+                        .expect("same signer retries after its prior owner is serviced")
+                );
+            }
+        }
+
+        for (phase, marker) in [
+            (wire::GlobalPhase::Prepare, 0xB0),
+            (wire::GlobalPhase::Commit, 0xB1),
+        ] {
+            let certificate = wire::QuorumCertificate {
+                round: wire_round,
+                phase,
+                subject: subject(marker),
+                execution_commitment: execution_commitment(marker),
+                signers: vec![0, 1, 2],
+                aggregate_signature: vec![marker; 96],
+            };
+            let certificate = adapter
+                .registry
+                .qc_to_core(&certificate, &adapter.wire_context)
+                .expect("convert QC capacity fixture");
+            assert!(
+                adapter
+                    .enqueue_deferred(
+                        reducer::Event::QuorumCertificateReceived { tag, certificate },
+                        true,
+                        DeferredPriority::Progress,
+                        None,
+                        None,
+                    )
+                    .expect("admit the independent QC class owner")
+            );
+        }
+        let timeout_certificate = wire::TimeoutCertificate {
+            round: wire_round,
+            groups: vec![wire::TimeoutVoteGroup {
+                highest_prepare_qc: None,
+                signers: vec![0, 1, 2],
+                aggregate_signature: vec![0xB2; 96],
+            }],
+        };
+        let timeout_certificate = adapter
+            .registry
+            .tc_to_core(&timeout_certificate, &adapter.wire_context)
+            .expect("convert TC capacity fixture");
+        assert!(
+            adapter
+                .enqueue_deferred(
+                    reducer::Event::TimeoutCertificateReceived {
+                        tag,
+                        certificate: timeout_certificate,
+                    },
+                    true,
+                    DeferredPriority::Progress,
+                    None,
+                    None,
+                )
+                .expect("admit the independent TC class owner")
+        );
+
+        assert_eq!(
+            adapter.deferred_progress_inputs.len(),
+            deferred_progress_capacity(roster_len)
+        );
+        for (class, expected) in [
+            (DeferredProgressClass::LockedCommitVote, roster_len),
+            (DeferredProgressClass::TimeoutVote, roster_len),
+            (DeferredProgressClass::PrepareCertificate, 1),
+            (DeferredProgressClass::CommitCertificate, 1),
+            (DeferredProgressClass::TimeoutCertificate, 1),
+        ] {
+            assert_eq!(
+                adapter
+                    .deferred_progress_inputs
+                    .iter()
+                    .filter(|input| deferred_progress_class(input) == Some(class))
+                    .count(),
+                expected,
+                "each protected Progress class owns its exact partition"
+            );
+        }
+
+        let retained = adapter.deferred_progress_inputs.clone();
+        let later_round = wire::ConsensusRound {
+            view: 1,
+            ..wire_round
+        };
+        let overflow = wire::TimeoutVote {
+            round: later_round,
+            highest_prepare_qc: None,
+            signer: 0,
+            signature: vec![0xBF],
+        };
+        let overflow = adapter
+            .registry
+            .timeout_vote_to_core(&overflow, &adapter.wire_context)
+            .expect("convert distinct TimeoutVote overflow fixture");
+        assert!(
+            !adapter
+                .enqueue_deferred(
+                    reducer::Event::TimeoutVoteReceived {
+                        tag,
+                        vote: overflow,
+                    },
+                    true,
+                    DeferredPriority::Progress,
+                    None,
+                    None,
+                )
+                .expect("a full TimeoutVote partition rejects without displacement")
+        );
+        assert_eq!(adapter.deferred_progress_inputs, retained);
     }
 
     #[test]
@@ -10149,6 +10756,224 @@ mod tests {
         ));
     }
 
+    fn saturate_ordinary_semantic_history(
+        adapter: &mut SumeragiV2Adapter,
+        round: wire::ConsensusRound,
+    ) {
+        for index in 0..MAX_INGRESS_SEMANTIC_KEYS {
+            if adapter.ingress_equivocations.len() >= MAX_INGRESS_SEMANTIC_KEYS {
+                break;
+            }
+            let proposer = u32::MAX
+                .checked_sub(u32::try_from(index).expect("semantic index fits u32"))
+                .expect("fixture proposer remains in range");
+            adapter.ingress_equivocations.insert(
+                IngressSemanticKey::Proposal { round, proposer },
+                IngressEquivocationRecord {
+                    fingerprint: IngressFingerprint::Proposal(Hash::new(index.to_le_bytes())),
+                    equivocation_reported: false,
+                    capacity_bypass: false,
+                    admitted_at: Instant::now(),
+                },
+            );
+        }
+        assert_eq!(
+            adapter.ingress_equivocations.len(),
+            MAX_INGRESS_SEMANTIC_KEYS
+        );
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn assert_timeout_vote_owner_rolls_back_across_view_and_retries() {
+        let directory = TempDir::new().expect("temporary directory");
+        let (mut adapter, startup) = open_test(&directory).expect("open adapter");
+        assert!(startup.is_empty());
+        let first_tag = adapter.current_tag();
+        let first_round = wire::ConsensusRound {
+            context_id: adapter.wire_context.id(),
+            height: adapter.wire_context.height,
+            view: first_tag.view(),
+        };
+        saturate_ordinary_semantic_history(&mut adapter, first_round);
+
+        let first_timeout = adapter
+            .timeout_elapsed(first_tag)
+            .expect("start the first local TimeoutVote signature fence");
+        let first_sign_tag = match first_timeout.effects() {
+            [
+                AdapterEffect::Sign {
+                    tag,
+                    request: SignRequest::TimeoutVote(_),
+                },
+            ] => *tag,
+            effects => panic!("unexpected first timeout effects: {effects:?}"),
+        };
+
+        let timeout_certificate = wire::TimeoutCertificate {
+            round: first_round,
+            groups: vec![wire::TimeoutVoteGroup {
+                highest_prepare_qc: None,
+                signers: vec![0, 1, 2],
+                aggregate_signature: vec![0xD7; 96],
+            }],
+        };
+        let deferred_tc = adapter
+            .receive_verified(wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::TimeoutCertificate(timeout_certificate),
+            ))
+            .expect("defer the TC behind the first signature fence");
+        assert_eq!(
+            deferred_tc.disposition(),
+            reducer::StepDisposition::Ignored(reducer::IgnoreReason::Busy)
+        );
+
+        let old_timeout = wire::TimeoutVote {
+            round: first_round,
+            highest_prepare_qc: None,
+            signer: 1,
+            signature: vec![0xD8],
+        };
+        let old_key = IngressSemanticKey::TimeoutVote {
+            round: first_round,
+            signer: 1,
+        };
+        let deferred_old = adapter
+            .receive_verified(wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::TimeoutVote(old_timeout.clone()),
+            ))
+            .expect("defer the old-view TimeoutVote behind the TC");
+        assert_eq!(
+            deferred_old.disposition(),
+            reducer::StepDisposition::Ignored(reducer::IgnoreReason::Busy)
+        );
+        assert!(
+            adapter
+                .ingress_equivocations
+                .get(&old_key)
+                .is_some_and(|record| record.capacity_bypass)
+        );
+        assert!(adapter.ingress_deliveries.contains_key(&old_key));
+        assert_eq!(adapter.deferred_progress_inputs.len(), 2);
+
+        let duplicate_old = adapter
+            .receive_verified(wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::TimeoutVote(old_timeout),
+            ))
+            .expect("coalesce the exact deferred TimeoutVote");
+        assert_eq!(
+            duplicate_old.disposition(),
+            reducer::StepDisposition::Ignored(reducer::IgnoreReason::Duplicate)
+        );
+        assert_eq!(adapter.deferred_progress_inputs.len(), 2);
+
+        let enter_view = adapter
+            .signature_completed(first_sign_tag, vec![0xD9; 96])
+            .expect("complete the first signature and install the deferred TC")
+            .into_effects();
+        assert!(enter_view.iter().any(|effect| matches!(
+            effect,
+            AdapterEffect::EnterView { tag, .. } if tag.view() == 1
+        )));
+        assert_eq!(adapter.current_tag().view(), 1);
+        assert_eq!(
+            adapter.deferred_progress_inputs.len(),
+            1,
+            "EnterView must leave the later old-view TimeoutVote owned until service"
+        );
+        let old_owner = adapter
+            .registry
+            .validator_id(1)
+            .expect("fixture TimeoutVote signer belongs to the frozen roster");
+        assert!(matches!(
+            adapter.deferred_progress_inputs.front(),
+            Some(DeferredInput {
+                event: reducer::Event::TimeoutVoteReceived { vote, .. },
+                ..
+            }) if vote.vote().round().view() == 0
+                && vote.vote().signer() == old_owner
+        ));
+        assert!(
+            !adapter.ingress_equivocations.contains_key(&old_key)
+                && !adapter.ingress_deliveries.contains_key(&old_key),
+            "a capacity-bypass TimeoutVote record must retire when its view is no longer current"
+        );
+
+        let second_tag = adapter.current_tag();
+        let second_timeout = adapter
+            .timeout_elapsed(second_tag)
+            .expect("start the current-view TimeoutVote signature fence");
+        let second_sign_tag = match second_timeout.effects() {
+            [
+                AdapterEffect::Sign {
+                    tag,
+                    request: SignRequest::TimeoutVote(_),
+                },
+            ] => *tag,
+            effects => panic!("unexpected second timeout effects: {effects:?}"),
+        };
+        let second_round = wire::ConsensusRound {
+            view: second_tag.view(),
+            ..first_round
+        };
+        let current_timeout = wire::TimeoutVote {
+            round: second_round,
+            highest_prepare_qc: None,
+            signer: 1,
+            signature: vec![0xDA],
+        };
+        let current_key = IngressSemanticKey::TimeoutVote {
+            round: second_round,
+            signer: 1,
+        };
+        let registry_before = adapter.registry.clone();
+        let active_subject_before = adapter.active_subject;
+        let deferred_before = adapter.deferred_progress_inputs.clone();
+        for attempt in 0..2 {
+            let blocked = adapter
+                .receive_verified(wire::ConsensusMessageV2::new(
+                    wire::ConsensusMessageV2Payload::TimeoutVote(current_timeout.clone()),
+                ))
+                .expect("same-owner TimeoutVote remains retryable before service");
+            assert_eq!(
+                blocked.disposition(),
+                reducer::StepDisposition::Ignored(reducer::IgnoreReason::Busy),
+                "pre-service attempt {attempt} must not be poisoned as a duplicate"
+            );
+            assert_eq!(adapter.deferred_progress_inputs, deferred_before);
+            assert_registry_eq(&adapter.registry, &registry_before);
+            assert_eq!(adapter.active_subject, active_subject_before);
+            assert!(
+                adapter
+                    .ingress_equivocations
+                    .get(&current_key)
+                    .is_some_and(|record| record.capacity_bypass)
+            );
+            assert!(!adapter.ingress_deliveries.contains_key(&current_key));
+        }
+
+        adapter
+            .signature_completed(second_sign_tag, vec![0xDB; 96])
+            .expect("complete the current-view signature and service the old owner");
+        assert!(adapter.deferred_progress_inputs.is_empty());
+
+        let applied = adapter
+            .receive_verified(wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::TimeoutVote(current_timeout.clone()),
+            ))
+            .expect("retry the current-view TimeoutVote after service");
+        assert_eq!(applied.disposition(), reducer::StepDisposition::Applied);
+        assert!(adapter.ingress_deliveries.contains_key(&current_key));
+        let duplicate = adapter
+            .receive_verified(wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::TimeoutVote(current_timeout),
+            ))
+            .expect("coalesce the delivered current-view TimeoutVote");
+        assert_eq!(
+            duplicate.disposition(),
+            reducer::StepDisposition::Ignored(reducer::IgnoreReason::Duplicate)
+        );
+    }
+
     #[test]
     fn full_normal_deferred_lane_cannot_drop_absolute_timeout() {
         let directory = TempDir::new().expect("temporary directory");
@@ -10258,6 +11083,56 @@ mod tests {
         assert!(adapter.ingress_deliveries.contains_key(&backpressured_key));
         assert_eq!(adapter.deferred_inputs.len(), MAX_DEFERRED_INPUTS);
 
+        // Saturate the ordinary semantic table as well. TimeoutVote owns an
+        // independent signer-bounded semantic slot, so it must still reach the
+        // protected Busy-deferred partition instead of being rejected before
+        // the reducer boundary.
+        saturate_ordinary_semantic_history(&mut adapter, round);
+
+        let timeout_vote = wire::TimeoutVote {
+            round,
+            highest_prepare_qc: None,
+            signer: 1,
+            signature: vec![0xD5],
+        };
+        let timeout_key = IngressSemanticKey::TimeoutVote { round, signer: 1 };
+        let deferred_timeout_vote = adapter
+            .receive_verified(wire::ConsensusMessageV2::new(
+                wire::ConsensusMessageV2Payload::TimeoutVote(timeout_vote),
+            ))
+            .expect("defer TimeoutVote through its protected class");
+        assert_eq!(
+            deferred_timeout_vote.disposition(),
+            reducer::StepDisposition::Ignored(reducer::IgnoreReason::Busy)
+        );
+        assert_eq!(adapter.deferred_inputs.len(), MAX_DEFERRED_INPUTS);
+        assert!(
+            adapter
+                .ingress_equivocations
+                .get(&timeout_key)
+                .is_some_and(|record| record.capacity_bypass),
+            "current-view TimeoutVote must bypass saturated ordinary semantic capacity"
+        );
+        assert!(adapter.ingress_deliveries.contains_key(&timeout_key));
+        assert!(matches!(
+            adapter.deferred_progress_inputs.back(),
+            Some(DeferredInput {
+                event: reducer::Event::TimeoutVoteReceived { .. },
+                priority: DeferredPriority::Progress,
+                protected_progress: false,
+                ..
+            })
+        ));
+        assert_eq!(
+            deferred_progress_class(
+                adapter
+                    .deferred_progress_inputs
+                    .back()
+                    .expect("deferred TimeoutVote owns the progress lane")
+            ),
+            Some(DeferredProgressClass::TimeoutVote)
+        );
+
         let timeout = adapter
             .timeout_elapsed(sign_tag)
             .expect("defer trusted absolute timeout");
@@ -10279,14 +11154,29 @@ mod tests {
             .signature_completed(sign_tag, vec![0xD2; 96])
             .expect("complete outstanding Prepare signature")
             .into_effects();
-        assert!(completed.iter().any(|effect| matches!(
-            effect,
-            AdapterEffect::Sign {
-                request: SignRequest::TimeoutVote(_),
-                ..
-            }
-        )));
+        let timeout_sign_tag = completed
+            .iter()
+            .find_map(|effect| match effect {
+                AdapterEffect::Sign {
+                    tag,
+                    request: SignRequest::TimeoutVote(_),
+                } => Some(*tag),
+                _ => None,
+            })
+            .expect("absolute timeout starts the durable local TimeoutVote signature");
         assert!(adapter.deferred_completions.is_empty());
+        assert_eq!(
+            adapter.deferred_progress_inputs.len(),
+            1,
+            "the remote TimeoutVote remains owned while the local TimeoutVote signature fences the reducer"
+        );
+
+        adapter
+            .signature_completed(timeout_sign_tag, vec![0xD6; 96])
+            .expect("complete the local TimeoutVote signature and service protected progress");
+        assert!(adapter.deferred_progress_inputs.is_empty());
+
+        assert_timeout_vote_owner_rolls_back_across_view_and_retries();
     }
 
     #[test]

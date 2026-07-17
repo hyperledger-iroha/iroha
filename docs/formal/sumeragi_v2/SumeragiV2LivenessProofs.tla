@@ -71,6 +71,8 @@ PostGstProgressActionEnabled ==
   \/ \E node \in AsyncCurrentResponsiveVoters:
        ENABLED PostGstRunHistoricalServer(node)
   \/ \E node \in AsyncCurrentResponsiveVoters:
+       ENABLED PostGstCommitCertificateDiscovery(node)
+  \/ \E node \in AsyncCurrentResponsiveVoters:
        ENABLED PostGstServiceIoWorker(node)
   \/ \E recipient \in AsyncCurrentResponsiveVoters,
        source \in AsyncCurrentResponsiveVoters:
@@ -113,7 +115,8 @@ CandidateSequenceIndex(candidate, queue) ==
   CHOOSE index \in 1..Len(queue): queue[index] = candidate
 
 CandidateIoIndex(candidate, queue) ==
-  CHOOSE index \in 1..Len(queue): queue[index].candidate = candidate
+  CHOOSE index \in AsyncIoConsensusIndices(queue):
+    queue[index].candidate = candidate
 
 CandidateInTransport(candidate) ==
   \E packet \in asyncTransport:
@@ -125,8 +128,9 @@ CandidateInIngress(candidate) ==
       IngressLane(candidate.node, source))
 
 CandidateInIoQueue(candidate) ==
-  \E job \in SequenceSet(asyncIoQueues[candidate.node]):
-    job.candidate = candidate
+  \E index \in AsyncIoConsensusIndices(
+                 asyncIoQueues[candidate.node]):
+    asyncIoQueues[candidate.node][index].candidate = candidate
 
 CandidateInReadyQueue(candidate) ==
   candidate \in SequenceSet(
@@ -166,6 +170,31 @@ to dominate the possible zero-to-one cursor reset.
 LocalSourceDistance(node, source) ==
   IF PreferredLocalSource(node) = source THEN 0 ELSE 1
 
+ReadyCompletionQueue(node, source) ==
+  IF source = "Io"
+  THEN asyncIoReadyCompletions[node]
+  ELSE asyncLocalReadyCompletions[node]
+
+ReadyCandidateSource(candidate) ==
+  IF candidate \in SequenceSet(
+                       asyncIoReadyCompletions[candidate.node])
+  THEN "Io"
+  ELSE "Local"
+
+(***************************************************************************
+The ready-completion rank mirrors both serialized scheduler cursors.  The
+queue index is multiplied by four so that consuming an earlier completion
+strictly dominates the possible two-bit reset from changing the completion
+source and then changing the local Producer/Causal source.
+***************************************************************************)
+ReadyCandidatePosition(candidate) ==
+  LET source == ReadyCandidateSource(candidate)
+  IN 4 * CandidateSequenceIndex(
+           candidate, ReadyCompletionQueue(candidate.node, source))
+       + 2 * (IF SelectedCompletionSource(candidate.node) = source
+              THEN 0 ELSE 1)
+       + LocalSourceDistance(candidate.node, "Producer")
+
 CausalCandidatePosition(candidate) ==
   2 * CandidateSequenceIndex(
         candidate, asyncCausalQueues[candidate.node])
@@ -185,7 +214,7 @@ CandidateServiceRank(candidate) ==
   ELSE IF candidate \in QueuedCandidates
        THEN <<3, SchedulerServiceRank(candidate.node, candidate)>>
        ELSE IF CandidateInReadyQueue(candidate)
-            THEN <<4, AsyncCompletionLoad(candidate.node)>>
+            THEN <<4, ReadyCandidatePosition(candidate)>>
             ELSE IF CandidateInIoQueue(candidate)
                  THEN <<5, CandidateIoIndex(
                               candidate,

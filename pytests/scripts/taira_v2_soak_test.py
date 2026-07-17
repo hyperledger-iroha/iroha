@@ -6,13 +6,14 @@ import os
 from pathlib import Path
 import subprocess
 
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = REPO_ROOT / "scripts" / "run_taira_v2_24h_soak.sh"
 EXPECTED_TEST = (
-    "taira_public_localnet::"
-    "taira_profile_24h_packet_impairment_and_restart_soak"
+    "taira_public_localnet::" "taira_profile_24h_packet_impairment_and_restart_soak"
 )
+HEAD_COMMIT = "1" * 40
+HEAD_TREE = "2" * 40
+CARGO_LOCK_SHA256 = "3" * 64
 PINNED_ENV = {
     "IROHA_TEST_REQUIRE_NETWORK": "1",
     "IROHA_TAIRA_SIM_DURATION_SECS": "86400",
@@ -43,15 +44,16 @@ def _stubbed_environment(
     *,
     inventory_mode: str = "one",
     run_mode: str = "one",
+    evidence_check_status: int = 0,
 ) -> tuple[dict[str, str], Path]:
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     python = bin_dir / "python3"
     python.write_text(
-        """#!/bin/sh
+        f"""#!/bin/sh
 case "$1" in
   *compute_workspace_source_manifest.py) printf '%s\n' 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' ;;
-  *check_taira_v2_soak_evidence.py) exit 0 ;;
+  *check_taira_v2_soak_evidence.py) exit {evidence_check_status} ;;
   *) exec /usr/bin/python3 "$@" ;;
 esac
 """,
@@ -112,6 +114,15 @@ case " $* " in
     esac
     ;;
   *)
+    # Mirror required_release_evidence_path in taira_public_localnet: the
+    # release path must be absolute and its final extension must be `json`.
+    case "$IROHA_TAIRA_EVIDENCE_PATH" in
+      /*.json) ;;
+      *)
+        printf '%s\n' 'IROHA_TAIRA_EVIDENCE_PATH must name an absolute JSON file' >&2
+        exit 66
+        ;;
+    esac
     case "${{TAIRA_FAKE_RUN_MODE:-one}}" in
       one)
         mkdir -p "$(dirname "$IROHA_TAIRA_EVIDENCE_PATH")"
@@ -141,6 +152,9 @@ esac
     env["TAIRA_SOAK_CAPTURE"] = str(capture)
     env["TAIRA_FAKE_INVENTORY_MODE"] = inventory_mode
     env["TAIRA_FAKE_RUN_MODE"] = run_mode
+    env["IROHA_RELEASE_HEAD_COMMIT"] = HEAD_COMMIT
+    env["IROHA_RELEASE_HEAD_TREE"] = HEAD_TREE
+    env["IROHA_RELEASE_CARGO_LOCK_SHA256"] = CARGO_LOCK_SHA256
     return env, capture
 
 
@@ -168,6 +182,8 @@ def test_launcher_pins_complete_profile_and_runs_exactly_one_test(
     env["CARGO_BIN_EXE_iroha"] = "/tmp/malicious-cargo-iroha"
     env["IROHA_RELEASE_SOURCE_MANIFEST_SHA256"] = "0" * 64
     env["IROHA_TAIRA_EVIDENCE_PATH"] = "/tmp/malicious-evidence.json"
+    completion_pointer = tmp_path / "taira-completion-path"
+    env["IROHA_TAIRA_COMPLETION_PATH_FILE"] = str(completion_pointer)
 
     mismatch = _run_launcher(env)
 
@@ -195,16 +211,28 @@ def test_launcher_pins_complete_profile_and_runs_exactly_one_test(
         assert captured_lines.count(f"{name}={value}") == 2
         assert f"{name}=inherited-malicious-override" not in captured_lines
     source_root = REPO_ROOT / "target" / "sumeragi-v2-release" / ("a" * 64)
-    assert not (source_root / "evidence" / ".taira_v2_24h_soak.lock").exists()
+    evidence_root = source_root / "evidence" / "taira-v2-24h"
+    assert not (evidence_root / ".taira_v2_24h_soak.lock").exists()
     assert captured.count(f"IROHA_RELEASE_SOURCE_MANIFEST_SHA256={'a' * 64}\n") == 2
     assert captured.count(f"IROHA_TEST_TARGET_DIR={source_root / 'programs'}\n") == 2
     assert captured.count(f"CARGO_TARGET_DIR={source_root / 'test-suite'}\n") == 2
-    assert (
-        captured.count(
-            f"IROHA_TAIRA_EVIDENCE_PATH={source_root / 'evidence/taira_v2_24h_soak.json'}\n"
-        )
-        == 2
-    )
+    evidence_values = {
+        line.split("=", 1)[1]
+        for line in captured_lines
+        if line.startswith("IROHA_TAIRA_EVIDENCE_PATH=")
+    }
+    assert len(evidence_values) == 1
+    partial_evidence = Path(evidence_values.pop())
+    assert partial_evidence.parent.parent == evidence_root
+    assert partial_evidence.name == ".taira_v2_24h_soak.partial.json"
+    assert partial_evidence.is_absolute()
+    assert partial_evidence.suffix == ".json"
+    assert not partial_evidence.exists()
+    durable_evidence = partial_evidence.with_name("taira_v2_24h_soak.json")
+    completion = partial_evidence.with_name("COMPLETED.tsv")
+    assert durable_evidence.is_file()
+    assert completion.is_file()
+    assert completion_pointer.read_text(encoding="utf-8").strip() == str(completion)
     assert captured.count("TEST_NETWORK_BIN_IROHAD=<unset>\n") == 2
     assert captured.count("KAGAMI_BIN=<unset>\n") == 2
     assert captured.count("TEST_NETWORK_BIN_IROHAD_MESSAGE_CONTROL=<unset>\n") == 2
@@ -252,7 +280,7 @@ def test_launcher_rejects_profile_override_arguments_before_cargo(
 def test_launcher_rejects_a_concurrent_source_bound_soak(tmp_path: Path) -> None:
     env, capture = _stubbed_environment(tmp_path)
     source_root = REPO_ROOT / "target" / "sumeragi-v2-release" / ("a" * 64)
-    lock_path = source_root / "evidence" / ".taira_v2_24h_soak.lock"
+    lock_path = source_root / "evidence" / "taira-v2-24h" / ".taira_v2_24h_soak.lock"
     lock_path.mkdir(parents=True, exist_ok=False)
     try:
         result = _run_launcher(env)
@@ -262,3 +290,27 @@ def test_launcher_rejects_a_concurrent_source_bound_soak(tmp_path: Path) -> None
     assert result.returncode == 1
     assert "refusing shared release evidence" in result.stderr
     assert not capture.exists()
+
+
+def test_launcher_does_not_promote_provisional_evidence_when_validation_fails(
+    tmp_path: Path,
+) -> None:
+    env, capture = _stubbed_environment(tmp_path, evidence_check_status=71)
+    completion_pointer = tmp_path / "taira-completion-path"
+    env["IROHA_TAIRA_COMPLETION_PATH_FILE"] = str(completion_pointer)
+
+    result = _run_launcher(env)
+
+    assert result.returncode == 71
+    captured = capture.read_text(encoding="utf-8")
+    partial_values = {
+        Path(line.split("=", 1)[1])
+        for line in captured.splitlines()
+        if line.startswith("IROHA_TAIRA_EVIDENCE_PATH=")
+    }
+    assert len(partial_values) == 1
+    partial = partial_values.pop()
+    assert not partial.exists()
+    assert not partial.with_name("taira_v2_24h_soak.json").exists()
+    assert not partial.with_name("COMPLETED.tsv").exists()
+    assert not completion_pointer.exists()

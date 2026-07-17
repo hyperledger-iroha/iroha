@@ -6,7 +6,12 @@ readonly TLA2TOOLS_SHA256="936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b2
 readonly REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 readonly FORMAL_DIR="${REPO_ROOT}/docs/formal/sumeragi_v2"
 readonly TLA2TOOLS_JAR="${TLA2TOOLS_JAR:-${REPO_ROOT}/target/tla2tools/${TLA2TOOLS_VERSION}/tla2tools.jar}"
-readonly JAVA_BIN="${JAVA_BIN:-java}"
+if [[ -n "${JAVA_BIN:-}" ]]; then
+  resolved_java_bin="$("${REPO_ROOT}/scripts/formal/resolve_java.sh" "$JAVA_BIN")"
+else
+  resolved_java_bin="$("${REPO_ROOT}/scripts/formal/resolve_java.sh")"
+fi
+readonly JAVA_BIN="$resolved_java_bin"
 
 hash_file() {
   if command -v sha256sum >/dev/null 2>&1; then

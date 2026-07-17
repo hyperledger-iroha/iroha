@@ -1620,6 +1620,22 @@ PROOF
        DEF ChainEpochInvariant
   <1> QED BY <1>1
 
+(***************************************************************************
+The bounded TLC harness enumerates only directly constructed, well-typed
+Commit evidence.  This is a performance relation, not a replacement for the
+deductive transition: every harness receipt step is an ordinary ChainEpochNext
+step.  Keeping the implication checked here prevents a bounded-only shortcut
+from silently changing the safety specification.
+***************************************************************************)
+THEOREM DurableDecisionEvidenceSetIsWellTyped ==
+  DurableDecisionEvidenceSet \subseteq DecisionEvidenceSet
+BY Isa DEF DurableDecisionEvidenceSet
+
+THEOREM ChainEpochTlcReceiptNextRefinesChainEpochNext ==
+  ChainEpochTlcReceiptNext => ChainEpochNext
+BY DurableDecisionEvidenceSetIsWellTyped, Isa
+   DEF ChainEpochTlcReceiptNext, ChainEpochNext
+
 THEOREM ChainEpochInductiveStep ==
   ChainEpochInvariant /\ [ChainEpochNext]_ChainEpochVars
     => ChainEpochInvariant'

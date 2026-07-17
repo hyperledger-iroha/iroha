@@ -23,6 +23,9 @@ SCENARIOS = (
     "real_network_divergent_prepare_qcs_converge_after_ordered_release",
 )
 SOURCE_MANIFEST = "a" * 64
+HEAD_COMMIT = "1" * 40
+HEAD_TREE = "2" * 40
+CARGO_LOCK_SHA256 = "3" * 64
 
 
 def _stubbed_environment(
@@ -81,9 +84,11 @@ mkdir -p "$TEST_NETWORK_TMP_DIR/mock_validator"
 printf '%s\n' "$test_name" >"$TEST_NETWORK_TMP_DIR/mock_validator/run-1-stdout.log"
 
 emit_success() {{
+  scenario="${{test_name#sumeragi_v2_runner::}}"
   printf '%s\n' \
     'running 1 test' \
-    "test $test_name ... ok" \
+    "test $test_name ... $scenario: deterministic network seed = $IROHA_TEST_NETWORK_BASE_SEED" \
+    'ok' \
     '' \
     'test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 42 filtered out; finished in 0.01s' \
     >&2
@@ -216,6 +221,8 @@ def test_mocked_seed_matrix_runs_every_exact_scenario_with_one_start_attempt(
     env["TEST_NETWORK_BIN_IROHAD"] = "/tmp/inherited-stale-iroha3d"
     env["IROHA_TEST_SKIP_BUILD"] = "1"
     env["IROHA_TEST_ALLOW_REENTRANT_BUILD"] = "0"
+    completion_pointer = tmp_path / "seed-completion-path"
+    env["IROHA_SEED_MATRIX_COMPLETION_PATH_FILE"] = str(completion_pointer)
 
     result = _run_launcher(env)
 
@@ -273,6 +280,7 @@ def test_mocked_seed_matrix_runs_every_exact_scenario_with_one_start_attempt(
             "sumeragi_v2_runner::"
         )
         assert "running 1 test" in output.read_text(encoding="utf-8")
+        assert row["run_log_sha256"] == hashlib.sha256(output.read_bytes()).hexdigest()
         assert row["seed"] in row["command"]
         assert "IROHA_TEST_REQUIRE_NETWORK=1" in row["command"]
         assert "IROHA_TEST_NETWORK_START_ATTEMPTS=1" in row["command"]
@@ -309,6 +317,9 @@ def test_mocked_seed_matrix_runs_every_exact_scenario_with_one_start_attempt(
     ).hexdigest()
     assert str(invocation / "summary.tsv") in result.stderr
     assert str(invocation / "COMPLETED.tsv") in result.stderr
+    assert completion_pointer.read_text(encoding="utf-8").strip() == str(
+        invocation / "COMPLETED.tsv"
+    )
     assert not (evidence / ".seed-matrix.lock").exists()
 
 
@@ -348,6 +359,9 @@ def test_mocked_seed_matrix_release_profile_uses_32_seeds_per_scenario(
     tmp_path: Path,
 ) -> None:
     env, capture, evidence = _stubbed_environment(tmp_path)
+    env["IROHA_RELEASE_HEAD_COMMIT"] = HEAD_COMMIT
+    env["IROHA_RELEASE_HEAD_TREE"] = HEAD_TREE
+    env["IROHA_RELEASE_CARGO_LOCK_SHA256"] = CARGO_LOCK_SHA256
 
     result = _run_launcher(env, "--release")
 
@@ -367,6 +381,9 @@ def test_mocked_seed_matrix_release_profile_uses_32_seeds_per_scenario(
     completion = _key_values(invocation / "COMPLETED.tsv")
     assert completion["completed_runs"] == "128"
     assert completion["expected_runs"] == "128"
+    assert completion["head_commit"] == HEAD_COMMIT
+    assert completion["head_tree"] == HEAD_TREE
+    assert completion["cargo_lock_sha256"] == CARGO_LOCK_SHA256
 
 
 def test_mocked_seed_matrix_rejects_zero_test_and_preserves_evidence(
@@ -491,6 +508,8 @@ fi
     python3.chmod(0o755)
     env["SEED_MATRIX_MANIFEST_COUNTER"] = str(manifest_counter)
     env["IROHA_RELEASE_SOURCE_MANIFEST_SHA256"] = SOURCE_MANIFEST
+    completion_pointer = tmp_path / "seed-completion-path"
+    env["IROHA_SEED_MATRIX_COMPLETION_PATH_FILE"] = str(completion_pointer)
 
     result = _run_launcher(env)
 
@@ -504,6 +523,7 @@ fi
     assert rows[0]["result"] == "source_changed"
     assert rows[0]["source_manifest_sha256"] == SOURCE_MANIFEST
     assert not (invocation / "COMPLETED.tsv").exists()
+    assert not completion_pointer.exists()
     assert not (evidence / ".seed-matrix.lock").exists()
 
 

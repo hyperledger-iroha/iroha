@@ -25211,14 +25211,29 @@ Outbound retransmission is a peer-delivery source, not a sufficient local
 progress witness because broadcast excludes the sender.
 
 The deferred Progress reserve is now partitioned into non-displacing
-locked-Commit, PrepareQC, CommitQC, and TC ownership classes. Durable Decision
+locked-Commit, TimeoutVote, PrepareQC, CommitQC, and TC ownership classes, with
+one signer-injective locked-Commit and TimeoutVote slot per frozen validator.
+Exact retransmissions coalesce, while distinct same-owner traffic cannot
+displace admitted progress and retries after fair service. Current-view
+TimeoutVote keys also retain one signer-bounded semantic-admission slot beyond
+the ordinary history budget, preventing pre-queue starvation when that table
+is saturated. The pinned adapter boundary realizes the exact `1024 + 2N`
+live bound and crosses TC installation to prove old-view retirement plus
+non-poisoning current-view retry. Durable Decision
 retransmission reconstructs store, validation, and application work from its
 recorded body stage. The height watchdog advances only on bounded semantic or
 Prepare/Commit count-and-power high-water, while candidate status reflects
 actual ownership, validation and Apply sidecar waits remain distinct, and the
 bounded worker completion handoff reports depth, capacity, age, and service
 debt. Successor construction is visible as runner-owned `Running` work and
-emits `SuccessorHeightActivated` only after verified context construction.
+defers the successor reducer status and emits `SuccessorHeightActivated` only
+after adapter/runtime/service startup succeeds, live clocks are armed, and
+authenticated ingress is open. The marker is bound to the successor height and
+generation and retained by the live adapter. Complete-tip and audited-snapshot
+recovery reconstruct the same deferred boundary. Height/context-tagged effect,
+completion, and ingress overlays cannot cross-contaminate the predecessor;
+constructor failure retains its `Running` snapshot with `restart_required` and
+exits fail-closed.
 
 Decision is now an explicit terminal cleanup boundary: losing proposal, body,
 candidate, outbound, lane, and retransmission ownership is retired before the
@@ -25252,23 +25267,36 @@ acknowledgement; second-callback failure, mixed decided-local work, corrupt
 indexes, and post-commit status failure are pinned by adversarial tests.
 Certified-body request conflicts remain nonfatal, and conflicting
 Commit-certificate responses preserve outstanding discovery for retry. The
-complete eleven-module production-liveness wrapper is green: 56/56
-reducer/core, 10/10 refinement, 9/9 reducer source-link, 55/55 adapter, 26/26
-apply, 115/115 effects, 55/55 lane work, 38/38 runtime, 19/19 runner, 66/66
-worker, and 14/14 watchdog tests (463 passed, 0 failed, 0 ignored). The broader
-serialized namespace passed 582/582, and Cargo discovery confirmed all 124
-required release tests are present and non-ignored. The
-final-source exact one-attempt four-validator
+gate pins 162 required tests across 14 modules, including exact
+recovery-derived successor identity plus sequential historical CommitQC/body
+catch-up. Before the three-corridor expansion, all
+twelve then-owning modules were green on the then-current unsealed source:
+56/56 reducer/core, 10/10 refinement, 9/9 reducer source-link, 57/57 adapter,
+26/26 apply, 115/115 effects, 60/60 lane work, 40/40 runtime, 29/29 recovery,
+23/23 runner, 66/66 worker, and 19/19 watchdog tests (510 passed, 0 failed, 0
+ignored). Cargo discovery found every one of the
+146 previously required names among 6,742 tests, with no missing or ignored
+entry. The expanded unsealed inventory now finds all 162 required names among
+6,744 tests with none missing or ignored, and the authoritative-ingress module
+is green at 30/30. Its clean committed, detached, source-sealed serial rerun is
+still pending. The one-shot token binds successor identity to the exact
+verified successor `HeightContextId`, and the adversarial rejection table
+retains the applied predecessor on a same-height foreign-context snapshot. A
+directly pinned adversarial umbrella test exhaustively covers the four
+source-linked body/scheduler kernels, and a pinned runtime regression exercises
+every selector ready-mask through production `pop_next`. The clean committed,
+detached, source-sealed serial release leg remains pending; the unsealed module
+runs are not release evidence. The earlier exact one-attempt four-validator
 genesis rerun passed on all validators in 456.76 seconds, with retained logs at
 `target/sumeragi-v2-genesis-final-hardening-20260716/irohad_test_network_7sJJmM`.
 
-Eight arbitrary-context Core safety obligations are TLAPS-proved: durable-vote
+Ten arbitrary-context Core safety obligations are TLAPS-proved: durable-vote
 uniqueness, lock monotonicity, external validity, certified-body availability,
 certificate uniqueness, agreement, conflicting-CommitQC exclusion, and crash
-recovery. The receipt-backed chain-prefix and epoch-boundary obligations are
-also proved. Historical TC-lock Commit authorization and the dependent full
-timeout-protection wrapper remain `specified_unproved`; only the narrower
-grouped-timeout kernel for Commit intents already present at timeout is proved.
+recovery, together with historical TC-lock Commit authorization and the
+dependent full timeout-protection wrapper. The receipt-backed chain-prefix and
+epoch-boundary obligations and the narrower grouped-timeout kernel for Commit
+intents already present at timeout are also proved.
 
 The focused P2P, fair-ingress, locked-Commit, WAL, leader-crash, Decision
 cleanup, and nonzero-view restart corridors are green. On 2026-07-15, a
@@ -25281,9 +25309,8 @@ deferred-owner replacement mutation now pins scheduler-wide exact-envelope
 coalescing. The proof ledger still reports `machine_checked_completion: false`.
 Strict proof completion therefore remains pending, and post-GST height liveness
 remains a conditional target and paper argument rather than a machine-checked
-completion. The serial lane-work module
-is green at 55/55. The PR gate now inventories 124 production-liveness tests
-across eleven Rust modules before network startup. Exact regressions cover
+completion. The PR gate inventories 162 production-liveness tests across 14
+Rust modules before network startup. Exact regressions cover
 completion coalescing, conflicting evidence, production Busy transfer,
 transactional cross-queue retirement/duplicate rejection,
 installed/destination rebind, and certified cleanup plan/commit boundaries.
@@ -25292,28 +25319,54 @@ cross-SDK fixture authority and exact JavaScript/Python status-parser tests.
 The exact-evidence four-validator reproduction passed its first attempt in
 351.76 seconds, with retained logs under
 `target/sumeragi-v2-genesis-recheck-exact-evidence-20260715/irohad_test_network_3XUobQ`.
-The complete eleven-module wrapper and final exact genesis rerun are green, but
+The earlier eleven-module wrapper and final exact genesis rerun are green, but
 the complete PR corridor still needs a recorded green run. A standalone
-final-source 100,000-height permissioned/NPoS chaos run also preserved both
+focused 100,000-height permissioned/NPoS chaos run also preserved both
 50,000-height chain prefixes in 52.97 seconds. The four-seed PR and 32-seed
 release real-network matrices plus the 24-hour Taira runner remain unexecuted;
 the release profile must also reproduce the chaos result under its
 checkout-manifest-bound evidence root.
 
-The ledger retains exactly 14 `specified_unproved` obligations. Outstanding
+Production release execution is now structurally isolated from mutable source:
+active Git operations are rejected, the candidate must be one clean committed
+HEAD/index/worktree plus a regular ignored `Cargo.lock`, and the complete
+corridor re-enters from a unique detached read-only worktree with external
+outputs. The chmod seal is a cooperative guard against ordinary writes, not a
+same-UID security boundary; detached committed source and identity checkpoints
+remain authoritative. The manifest binds modes of enumerated file/symlink
+entries, while the seal walk checks directories and rejects escaping or
+writable-output symlinks plus hard-linked source files. The original checkout
+manifest and sealed manifest are both retained; every child completion uses the
+latter, while one aggregate receipt also binds original HEAD/tree/`Cargo.lock`,
+all pre-network legs and their exact 162-test inventory, the formal harness
+lock/toolchain, matrix, chaos, and soak evidence. The formal leg archives a
+tee-captured all-legs log plus `proof_coverage.json` and
+`proof_evidence.json`; receipt publication reruns the official proof checker.
+Every matrix summary row hashes its exact Cargo log, and receipt publication
+revalidates all 128 scenario and libtest markers. The 100,000-height launcher
+now publishes its source-bound log receipt, and the soak promotes an
+invocation-local `.partial` JSON only after validation and final identity
+checks, with exact HEAD/tree/`Cargo.lock` in its completion. Cargo/rustc are
+resolved to the repository's pinned 1.93.1 toolchain after Git/Rust semantic
+environment cleanup and run with an isolated configuration-free `CARGO_HOME`;
+exact tool paths, versions, and hashes are receipt-bound. The receipt contract
+is cooperative self-consistency rather than authenticated host/runner
+provenance: malformed, incomplete, cross-source, semantically mismatched, and
+digest-mismatched evidence observed during generation is rejected, but a
+same-UID actor can synthesize a fully self-consistent transcript and recompute
+its hashes. The remaining work is to execute these hardened gates, not to
+accept evidence from the mutable caller.
+
+The ledger retains exactly 13 `specified_unproved` obligations. Outstanding
 release work:
 
-- discharge historical TC-lock Commit authorization and then the dependent
-  direct-or-installed-authorization timeout induction. For every potential
-  Commit quorum, the target TC must either directly protect the round and
-  subject or expose an honest non-strict timeout/Commit intersection witness
-  with durable installed-TC authorization. The exception must remain limited
-  to the exact durably installed lock after body validation, must reject a higher
-  conflicting-subject local Prepare intent or durable highest PrepareQC, and
-  must preserve persistence-before-sign. Higher same-subject reproposals do
-  not block reconstruction. The strict grouped-timeout kernel for Commit
-  intents already present at timeout remains `tlaps_proved`;
-
+- preserve the strict-green 196/196 Stage-4 protected-rank checkpoint and its
+  counterexample gate (four causal refill lassos, causal replacement,
+  Commit-certificate discovery debt, all-I/O indexing, and the 19,081-state
+  ownership check), then extend it to progress-relevant Normal
+  proposal/Prepare work and replace the weak enabled-action deadlock seam with
+  a productive protocol/deadline/rank decrease theorem. The checkpoint is
+  evidence for this sub-slice only and does not discharge any proof debt;
 - discharge the ten concrete asynchronous obligations for the
   production effective-lock body-acquisition composition, runner scheduler
   preservation, async type closure, progress-witness preservation, post-GST
@@ -25330,9 +25383,19 @@ release work:
   rotating-leader progress waits for effective-lock body acquisition,
   witnesses, starvation, and timeout-view progress; application waits for
   witnesses and starvation;
+- discharge the ledgered
+  `SuccessorActivationAndHistoricalCatchUpProductionRefinementObligation` by
+  machine-checking the Rust trace mapping for full-context Applied/Recovered
+  tokens, fail-closed complete-tip recovery, ordered startup prerequisites,
+  kind-specific publication, staged historical body recovery, and terminal
+  observer application without successor activation. The fail-closed static
+  source mapping and its four mutation checks now bind the concrete runner,
+  status, runtime, effect, and block-sync order, but the exact deductive
+  refinement theorem remains unproved;
 - discharge the concrete genesis chain product's exact first-successor handoff,
   ledgered as `GenesisHeightSuccessorHandoffObligation`, only after
-  rotating-leader and application liveness are proved;
+  rotating-leader, application liveness, and the production successor/catch-up
+  refinement seam are proved;
 - prove the indexed multi-height
   `SumeragiV2ChainEpochRefinement!HeightLivenessObligation` over the explicit
   successor-instance product by discharging its activation/fairness suffix,
@@ -25340,10 +25403,10 @@ release work:
   from an old roster, and finite-height temporal induction, without global
   asynchronous shadow state, an alternate consensus transition relation, or a
   favourable-network corridor; this promotion likewise follows the
-  rotating-leader and application-liveness proofs;
+  rotating-leader, application-liveness, and production-refinement proofs;
 - execute the cross-SDK fixture/status-parser legs and complete four-seed PR
-  corridor against the final source tree. The 124-test/eleven-module pre-network
-  production-liveness inventory is already green, including completion
+  corridor against the final source tree. The 162-test/14-module pre-network
+  production-liveness inventory includes completion
   ownership, installed destination rebind, unbound-Vote authority,
   exact-lock/consumer-epoch admission, transactional certified retirement,
   retryable certificate transport, and executor-batch refinement tests. The
@@ -25357,13 +25420,15 @@ release work:
   including the 50-second Taira bound;
 - reproduce and archive the green 100,000-height permissioned/NPoS
   chain-prefix chaos gate inside the source-manifest-bound release corridor;
-  the standalone final-source run completed in 52.97 seconds; and
+  the standalone focused run completed in 52.97 seconds; and
 - complete and archive the fully pinned 24-hour Taira-profile soak, including
   its recorded seed, load, impairment, anchored churn schedule, wall-clock
   throughput, and acceptance bounds, with zero unclassified no-progress
-  intervals. Archive the fixed source-bound evidence JSON only after its
-  checker has re-hashed the checkout manifest, Git revision, daemon, Kagami,
-  test binary, generated configuration, and initial/final status quorums.
+  intervals. Archive the invocation-local canonical evidence JSON only after
+  the provisional `.partial` file's checker has re-hashed the checkout
+  manifest, Git revision, daemon, Kagami, test binary, generated configuration,
+  and initial/final status quorums, and retain its hash-bound completion in the
+  aggregate release receipt.
 
 Transaction inclusion and censorship fairness are outside the consensus
 height-progress theorem. The proof permits a valid empty heartbeat while

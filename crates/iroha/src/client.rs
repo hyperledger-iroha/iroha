@@ -6682,7 +6682,7 @@ mod offline_client_tests {
                 .header("content-type", APPLICATION_NORITO)
                 .body(norito::to_bytes(&readiness).expect("encode readiness"))
                 .expect("response");
-            with_mock_http(
+            let _ = with_mock_http(
                 respond_with(&Arc::new(Mutex::new(Vec::new())), response),
                 || client_with_base_url(base_url()).get_offline_readiness(&requested),
             )
@@ -6853,7 +6853,7 @@ mod offline_client_tests {
                 .header("content-type", APPLICATION_NORITO)
                 .body(norito::to_bytes(&readiness).expect("encode readiness"))
                 .expect("response");
-            with_mock_http(
+            let _ = with_mock_http(
                 respond_with(&Arc::new(Mutex::new(Vec::new())), response),
                 || client_with_base_url(base_url()).get_offline_readiness(&requested),
             )
@@ -28874,7 +28874,9 @@ mod tests {
 
     fn manifest_bundle_from_payload(payload: &[u8]) -> DaManifestBundle {
         let mut store = ChunkStore::new();
-        store.ingest_bytes(payload);
+        store
+            .ingest_bytes(payload)
+            .expect("sample payload must be accepted by the chunk store");
         let profile = ErasureProfile::default();
         let data_shards = usize::from(profile.data_shards);
         let chunk_commitments = store
@@ -29299,7 +29301,7 @@ mod tests {
         for mutate in registry_mutations {
             let mut hostile = valid.clone();
             mutate(&mut hostile);
-            validate_sccp_capabilities(&hostile)
+            let _ = validate_sccp_capabilities(&hostile)
                 .expect_err("drifted fixed SCCP registry limit must reject");
         }
 
@@ -29308,7 +29310,7 @@ mod tests {
                 $({
                     let mut hostile = valid.clone();
                     hostile.resource_limits.$field = 0;
-                    validate_sccp_capabilities(&hostile).expect_err(concat!(
+                    let _ = validate_sccp_capabilities(&hostile).expect_err(concat!(
                         "zero SCCP resource limit must reject: ",
                         stringify!($field),
                     ));
@@ -29370,13 +29372,13 @@ mod tests {
         drifted_outbox
             .resource_limits
             .max_outbound_messages_per_block = 511;
-        validate_sccp_capabilities(&drifted_outbox)
+        let _ = validate_sccp_capabilities(&drifted_outbox)
             .expect_err("drifted fixed SCCP outbound message cap must reject");
         let mut drifted_payload = valid.clone();
         drifted_payload
             .resource_limits
             .max_outbound_message_payload_bytes = 4_095;
-        validate_sccp_capabilities(&drifted_payload)
+        let _ = validate_sccp_capabilities(&drifted_payload)
             .expect_err("drifted fixed SCCP outbound payload cap must reject");
 
         let mut per_proof_over_transaction = valid.clone();
@@ -29386,7 +29388,7 @@ mod tests {
             .resource_limits
             .max_proof_bytes_per_transaction
             + 1;
-        validate_sccp_capabilities(&per_proof_over_transaction)
+        let _ = validate_sccp_capabilities(&per_proof_over_transaction)
             .expect_err("per-proof bytes above transaction bytes must reject");
 
         macro_rules! assert_transaction_over_block_rejects {
@@ -29395,7 +29397,7 @@ mod tests {
                     let mut hostile = valid.clone();
                     hostile.resource_limits.$transaction =
                         hostile.resource_limits.$block + 1;
-                    validate_sccp_capabilities(&hostile).expect_err(concat!(
+                    let _ = validate_sccp_capabilities(&hostile).expect_err(concat!(
                         "transaction SCCP resource limit above block limit must reject: ",
                         stringify!($transaction),
                     ));
@@ -29490,7 +29492,7 @@ mod tests {
             StatusCode::OK,
             &norito::json::to_json(&capability).expect("hostile capability JSON"),
         );
-        with_mock_http(
+        let _ = with_mock_http(
             respond_with(&Arc::new(Mutex::new(Vec::new())), response),
             || client_with_base_url(base_url()).get_sccp_capabilities_json(),
         )
@@ -29512,7 +29514,7 @@ mod tests {
             StatusCode::OK,
             &norito::json::to_json(&recent).expect("hostile recent JSON"),
         );
-        with_mock_http(
+        let _ = with_mock_http(
             respond_with(&Arc::new(Mutex::new(Vec::new())), response),
             || client_with_base_url(base_url()).get_sccp_recent_messages_json(),
         )
@@ -29533,7 +29535,7 @@ mod tests {
             StatusCode::OK,
             &norito::json::to_json(&governance).expect("hostile governance JSON"),
         );
-        with_mock_http(
+        let _ = with_mock_http(
             respond_with(&Arc::new(Mutex::new(Vec::new())), response),
             || client_with_base_url(base_url()).post_sccp_route_governance_draft(&request),
         )
@@ -29584,7 +29586,7 @@ mod tests {
             lower: 21,
             upper: 20,
         });
-        with_mock_http(
+        let _ = with_mock_http(
             |_| panic!("invalid governance window must fail before HTTP"),
             || client_with_base_url(base_url()).post_sccp_route_governance_draft(&invalid_window),
         )
@@ -29614,7 +29616,7 @@ mod tests {
             StatusCode::OK,
             &norito::json::to_json(&wrong_id).expect("wrong-id response"),
         );
-        with_mock_http(
+        let _ = with_mock_http(
             respond_with(&Arc::new(Mutex::new(Vec::new())), response),
             || client_with_base_url(base_url()).post_sccp_route_governance_draft(&request),
         )
@@ -30071,7 +30073,7 @@ mod tests {
                 .header("content-type", APPLICATION_NORITO)
                 .body(norito::to_bytes(&candidate).expect("encode adversarial SCCP bundle"))
                 .expect("response build");
-            with_mock_http(
+            let _ = with_mock_http(
                 respond_with(&Arc::new(Mutex::new(Vec::new())), response),
                 || client_with_base_url(base_url()).get_sccp_message_bundle(&message_id),
             )
@@ -30085,7 +30087,7 @@ mod tests {
             .header("content-type", APPLICATION_NORITO)
             .body(trailing)
             .expect("response build");
-        with_mock_http(
+        let _ = with_mock_http(
             respond_with(&Arc::new(Mutex::new(Vec::new())), response),
             || client_with_base_url(base_url()).get_sccp_message_bundle(&message_id),
         )
@@ -30274,7 +30276,7 @@ mod tests {
             StatusCode::OK,
             &norito::json::to_json(&wrong_hash).expect("encode hostile hash response"),
         );
-        with_mock_http(
+        let _ = with_mock_http(
             respond_with(&Arc::new(Mutex::new(Vec::new())), response),
             || client.post_sccp_destination_proof(&request),
         )
@@ -30299,7 +30301,7 @@ mod tests {
         .expect("decode fixture transaction payload");
         let reject_without_http = |candidate: &SccpDestinationProofSubmitRequest, label: &str| {
             let panic_message = format!("{label} must reject before HTTP");
-            with_mock_http(
+            let _ = with_mock_http(
                 move |_| panic!("{panic_message}"),
                 || client.post_sccp_destination_proof(candidate),
             )
@@ -30415,7 +30417,7 @@ mod tests {
         let (mut client, _key_pair, mut request, _builder, _tx_hash) =
             destination_direct_submit_fixture();
         client.chain = ChainId::from("00000000-0000-0000-0000-000000000000");
-        with_mock_http(
+        let _ = with_mock_http(
             |_| panic!("wrong configured chain must reject before HTTP"),
             || client.post_sccp_destination_proof(&request),
         )
@@ -30423,7 +30425,7 @@ mod tests {
 
         let client = sccp_client_with_base_url(base_url());
         request.transaction_payload_b64 = None;
-        with_mock_http(
+        let _ = with_mock_http(
             |_| panic!("mixed signing state must reject before HTTP"),
             || client.post_sccp_destination_proof(&request),
         )

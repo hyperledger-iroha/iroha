@@ -1989,7 +1989,11 @@ impl ProductionV2Services {
             consensus_io_capacity,
             Arc::clone(&output_guard),
         )?;
-        super::status::set_v2_effect_completion_observer(&io.admission);
+        super::status::set_v2_effect_completion_observer(
+            context.id(),
+            context.height,
+            &io.admission,
+        );
         let mut service = Self {
             context,
             local_peer,
@@ -4019,7 +4023,11 @@ impl V2EffectServices for ProductionV2Services {
             .ok_or_else(|| "Sumeragi v2 consensus requires process restart".to_owned())?;
         let mut status = status.clone();
         if let Some(io) = self.io.as_ref() {
-            super::status::set_v2_effect_completion_observer(&io.admission);
+            super::status::set_v2_effect_completion_observer(
+                self.context.id(),
+                self.context.height,
+                &io.admission,
+            );
         }
         status.pending_candidate_loads = self
             .locked_candidate_acquisition
@@ -4214,6 +4222,13 @@ mod tests {
             _tag: EventTag,
             _round: wire::ConsensusRound,
             _subject: wire::BlockSubject,
+        ) -> Result<(), EnqueueError> {
+            Self::reject_completion()
+        }
+
+        fn enqueue_validation_failures_atomically(
+            &mut self,
+            _failures: &[(EventTag, wire::ConsensusRound, wire::BlockSubject)],
         ) -> Result<(), EnqueueError> {
             Self::reject_completion()
         }

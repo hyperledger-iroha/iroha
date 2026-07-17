@@ -32,6 +32,9 @@ mod types;
 mod verus_proofs;
 #[path = "../../iroha_core/src/sumeragi/v2_core/wal.rs"]
 mod wal;
+#[cfg(all(verus_only, feature = "verus"))]
+#[path = "effective_lock_verus_proofs.rs"]
+mod zz_effective_lock_verus_proofs;
 
 pub use quorum::{Quorum, QuorumError};
 pub use reducer::{

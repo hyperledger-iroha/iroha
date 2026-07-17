@@ -69,7 +69,11 @@ use std::{
     time::{Duration, Instant},
 };
 
-use super::v2_core::{EquivocationKind, EventTag};
+use super::v2_core::{
+    EquivocationKind, EventTag, ExactBodyOwnerProjection, ExactBodyRetirementAccounting,
+    TagProjection, exact_body_stage_is_owned, plan_exact_body_owner_binding,
+    plan_exact_body_owner_rebind, plan_exact_body_retirement_accounting,
+};
 use iroha_crypto::{Hash, HashOf, Signature};
 use iroha_data_model::{
     block::{BlockHeader, CertifiedMergeLedgerReference, consensus_v2 as wire},
@@ -79,7 +83,7 @@ use iroha_data_model::{
 
 use super::{
     output_guard::ConsensusOutputGuard,
-    v2::{AdapterEffect, SignRequest},
+    v2::{AdapterEffect, AdapterError, SignRequest},
     v2_body_store::{
         BlockSignaturePolicy, BodyStoreCompletion, BodyValidationCompletion, DurableBodyReceipt,
         V2BodyStore, ValidatedBodyReceipt,
@@ -531,6 +535,10 @@ impl DurableApplyCompletion {
 /// Operational status of the effect boundary, excluding consensus state.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct EffectExecutorStatus {
+    /// Exact height-context incarnation which owns every counter and queue.
+    pub height_context_id: wire::HeightContextId,
+    /// Height which owns every counter and queue.
+    pub height: u64,
     /// Monotonic instant at which all queue ages in this snapshot were measured.
     pub captured_at: Instant,
     /// Whether an internal boundary failure permanently stopped execution.
@@ -1262,8 +1270,30 @@ enum StaleFetchTransitionPlan {
     Rebind {
         pending: PendingFetch,
         rebound: BodyFetchTask,
+        owner: BodyPipelineOwner,
     },
     Retire(PendingFetchRetirementPlan),
+}
+
+/// Preflighted byte ownership retired by one certified-view cleanup.
+///
+/// The exact residual is computed before any cancellation or runtime queue
+/// mutation. The executor installs it only after every fallible callback has
+/// acknowledged the planned cleanup.
+#[derive(Clone, Debug)]
+struct CertifiedViewBodyCleanupPlan {
+    stale_stores: Vec<EffectWorkId>,
+    stale_ready: Vec<(wire::ConsensusRound, wire::BlockSubject)>,
+    protected_ready_rebinds: Vec<CertifiedViewReadyRebindPlan>,
+    accounting: ExactBodyRetirementAccounting,
+}
+
+#[derive(Clone, Debug)]
+struct CertifiedViewReadyRebindPlan {
+    key: (wire::ConsensusRound, wire::BlockSubject),
+    previous_tag: EventTag,
+    manifest: wire::PayloadManifest,
+    owner: BodyPipelineOwner,
 }
 
 #[derive(Clone, Debug)]
@@ -1422,6 +1452,11 @@ pub(crate) trait EffectRuntime {
         round: wire::ConsensusRound,
         subject: wire::BlockSubject,
     ) -> Result<(), EnqueueError>;
+    /// Atomically admit every deterministic validation rejection in one set.
+    fn enqueue_validation_failures_atomically(
+        &mut self,
+        failures: &[(EventTag, wire::ConsensusRound, wire::BlockSubject)],
+    ) -> Result<(), EnqueueError>;
     fn enqueue_signature(&mut self, tag: EventTag, signature: Vec<u8>) -> Result<(), EnqueueError>;
     fn enqueue_application_completed(
         &mut self,
@@ -1573,6 +1608,13 @@ impl EffectRuntime for SerializedV2Runtime {
         subject: wire::BlockSubject,
     ) -> Result<(), EnqueueError> {
         SerializedV2Runtime::enqueue_validation_failed(self, tag, round, subject)
+    }
+
+    fn enqueue_validation_failures_atomically(
+        &mut self,
+        failures: &[(EventTag, wire::ConsensusRound, wire::BlockSubject)],
+    ) -> Result<(), EnqueueError> {
+        SerializedV2Runtime::enqueue_validation_failures_atomically(self, failures)
     }
 
     fn enqueue_signature(&mut self, tag: EventTag, signature: Vec<u8>) -> Result<(), EnqueueError> {
@@ -1728,6 +1770,14 @@ impl V2EffectExecutor<SerializedV2Runtime> {
     /// Arm the runtime pacemaker after all height startup work has completed.
     pub(crate) fn arm_live_clocks(&mut self, now: Instant) -> Result<(), RuntimeClockError> {
         self.runtime.arm_live_clocks(now)
+    }
+
+    /// Prepare the reducer status installed only when this height's live
+    /// activation boundary succeeds.
+    pub(crate) fn successor_activation_status_snapshot(
+        &mut self,
+    ) -> Result<wire::SumeragiV2Status, AdapterError> {
+        self.runtime.successor_activation_status_snapshot()
     }
 
     /// Bind an interrupted Kura tip to the exact reducer Decision and durable
@@ -2007,6 +2057,11 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             }
             return Ok(false);
         };
+        // This method is also entered directly by locked-body reproposal,
+        // outside EnterView's aggregate preflight. Check the complete owner
+        // sets before even the exact-repetition fast path can return, so no
+        // state-clearing entrypoint can silently preserve corrupt counters.
+        self.preflight_exact_body_byte_accounting()?;
         let (replacement_round, replacement_subject) = replacement;
         if tag.height() != self.context.height
             || replacement_round.context_id != self.context.id()
@@ -2150,18 +2205,6 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                         )
                     })
                 })?;
-        let retired_ready_bytes = retained_bytes.checked_add(ready_bytes).ok_or_else(|| {
-            EffectExecutorError::Contract("superseded locked-body byte count overflowed".to_owned())
-        })?;
-        let remaining_ready_bytes = self
-            .ready_body_bytes
-            .checked_sub(retired_ready_bytes)
-            .ok_or_else(|| {
-                EffectExecutorError::Contract(
-                    "superseded locked-body byte accounting underflow".to_owned(),
-                )
-            })?;
-
         let fetches = self
             .pending_fetches
             .values()
@@ -2190,14 +2233,18 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 )
             })
         })?;
-        let remaining_store_bytes = self
-            .pending_store_bytes
-            .checked_sub(retired_store_bytes)
-            .ok_or_else(|| {
-                EffectExecutorError::Contract(
-                    "superseded pending-store byte accounting underflow".to_owned(),
-                )
-            })?;
+        let accounting = plan_exact_body_retirement_accounting(
+            self.ready_body_bytes,
+            retained_bytes,
+            ready_bytes,
+            self.pending_store_bytes,
+            retired_store_bytes,
+        )
+        .ok_or_else(|| {
+            EffectExecutorError::Contract(
+                "superseded body byte accounting underflow or leakage".to_owned(),
+            )
+        })?;
 
         let validations = self
             .pending_validations
@@ -2284,8 +2331,8 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         if retire_retained {
             self.retained_locked_body = None;
         }
-        self.ready_body_bytes = remaining_ready_bytes;
-        self.pending_store_bytes = remaining_store_bytes;
+        self.ready_body_bytes = accounting.ready_after;
+        self.pending_store_bytes = accounting.store_after;
         self.protected_lock = Some(replacement);
         Ok(true)
     }
@@ -2638,6 +2685,20 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 services,
             ));
         }
+        if let Some(consumer) = &pending.consumer {
+            let consumer_tag = match consumer {
+                StoreConsumer::Reducer { tag } | StoreConsumer::LocalProposal { tag } => *tag,
+            };
+            if !self.exact_body_pipeline_stage_owned(consumer_tag, key, HashOf::new(&manifest)) {
+                return Err(self.close(
+                    EffectExecutorError::Contract(
+                        "body-store completion consumer differs from its immutable pipeline owner"
+                            .to_owned(),
+                    ),
+                    services,
+                ));
+            }
+        }
         let stored_bytes = u64::try_from(pending.task.canonical_wire.len()).map_err(|_| {
             self.close(
                 EffectExecutorError::Contract(
@@ -2739,6 +2800,11 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         };
         let round = pending.task.round();
         let subject = pending.task.subject();
+        if let Err(error) =
+            self.preflight_pending_validation_consumer(completion.work_id(), &pending)
+        {
+            return Err(self.close(error, services));
+        }
         if let Some(reference) = completion.missing_merge_sidecar() {
             if !merge_sidecar_reference_matches_validation(&pending.task, reference) {
                 return Err(self.close(
@@ -2850,7 +2916,9 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
     /// Retry every retained validation or Apply task waiting for one exact
     /// certified merge entry after authentication and durable installation.
     ///
-    /// The pending task and work identifier are reused verbatim. A service
+    /// The complete matching owner set is preflighted before callbacks. The
+    /// pending tasks and work identifiers are reused verbatim, and deferred
+    /// entries are removed only after every enqueue succeeds. A service
     /// failure leaves the executor fail-closed rather than losing accepted
     /// durable work intent.
     pub(crate) fn retry_deferred_merge_sidecar<S: V2EffectServices>(
@@ -2867,23 +2935,45 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             })
             .collect::<Vec<_>>();
         for work_id in &work_ids {
-            if let Some(pending) = self.pending_validations.get(work_id) {
-                if let Err(error) = services.enqueue_body_validation(pending.task.clone()) {
-                    return Err(self.close(service_error(error), services));
-                }
-            } else if let Some(pending) = self.pending_applications.get(work_id) {
-                if let Err(error) = services.enqueue_apply(pending.task.clone()) {
-                    return Err(self.close(service_error(error), services));
-                }
-            } else {
-                return Err(self.close(
-                    EffectExecutorError::Contract(
+            if let Err(error) = self.preflight_deferred_work_owner(*work_id) {
+                return Err(self.close(error, services));
+            }
+        }
+        enum RetryTask {
+            Validation(BodyValidationTask),
+            Application(ApplyTask),
+        }
+        let plans = work_ids
+            .iter()
+            .map(|work_id| {
+                match (
+                    self.pending_validations.get(work_id),
+                    self.pending_applications.get(work_id),
+                ) {
+                    (Some(pending), None) => Ok(RetryTask::Validation(pending.task.clone())),
+                    (None, Some(pending)) => Ok(RetryTask::Application(pending.task.clone())),
+                    (Some(_), Some(_)) => Err(EffectExecutorError::Contract(
+                        "deferred merge sidecar has conflicting validation and application owners"
+                            .to_owned(),
+                    )),
+                    (None, None) => Err(EffectExecutorError::Contract(
                         "deferred merge sidecar has no pending validation or application task"
                             .to_owned(),
-                    ),
-                    services,
-                ));
+                    )),
+                }
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| self.close(error, services))?;
+        for plan in &plans {
+            let result = match plan {
+                RetryTask::Validation(task) => services.enqueue_body_validation(task.clone()),
+                RetryTask::Application(task) => services.enqueue_apply(task.clone()),
+            };
+            if let Err(error) = result {
+                return Err(self.close(service_error(error), services));
             }
+        }
+        for work_id in &work_ids {
             self.deferred_merge_work.remove(work_id);
         }
         if !work_ids.is_empty() {
@@ -2895,6 +2985,10 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
 
     /// Terminally reject every retained task which references one uniquely
     /// invalid certified merge entry. A decided Apply waiter fails closed.
+    ///
+    /// Validation owners and catalog updates are planned as one set; their
+    /// reducer completions are atomically admitted before any waiter is
+    /// removed.
     ///
     /// Transport failures and unavailable holders must not call this method;
     /// those conditions remain recoverable and keep the exact task pending.
@@ -2912,6 +3006,11 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 (*deferred_hash == entry_hash).then_some(*work_id)
             })
             .collect::<Vec<_>>();
+        for work_id in &work_ids {
+            if let Err(error) = self.preflight_deferred_work_owner(*work_id) {
+                return Err(self.close(error, services));
+            }
+        }
         let reason = reason.into();
         if let Some(pending) = work_ids
             .iter()
@@ -2929,22 +3028,55 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 services,
             ));
         }
+        let mut keys = BTreeSet::new();
+        let mut plans = Vec::with_capacity(work_ids.len());
+        let mut failures = Vec::new();
         for work_id in &work_ids {
-            if !self.pending_validations.contains_key(work_id) {
+            let pending = self.pending_validations.get(work_id).ok_or_else(|| {
+                EffectExecutorError::Contract(
+                    "deferred merge sidecar has no pending validation task".to_owned(),
+                )
+            });
+            let pending = match pending {
+                Ok(pending) => pending,
+                Err(error) => return Err(self.close(error, services)),
+            };
+            let round = pending.task.round();
+            let subject = pending.task.subject();
+            let key = (round, subject);
+            if !keys.insert(key) {
                 return Err(self.close(
                     EffectExecutorError::Contract(
-                        "deferred merge sidecar has no pending validation task".to_owned(),
+                        "one exact body has multiple deferred validation owners".to_owned(),
                     ),
                     services,
                 ));
             }
-            self.complete_body_validation(
-                BodyValidationCompletion::Rejected {
-                    work_id: *work_id,
-                    reason: reason.clone(),
-                },
-                services,
-            )?;
+            let durable = pending.task.durable_receipt().clone();
+            if let Err(error) = self.preflight_rejected_body(key, &durable) {
+                return Err(self.close(error, services));
+            }
+            if let Some(ValidationConsumer::Reducer { tag }) = &pending.consumer {
+                failures.push((*tag, round, subject));
+            }
+            plans.push((*work_id, key, durable));
+        }
+        if let Err(error) = self
+            .runtime
+            .enqueue_validation_failures_atomically(&failures)
+        {
+            return Err(self.close(runtime_enqueue_error(error), services));
+        }
+        for (work_id, key, durable) in plans {
+            self.durable_bodies.entry(key).or_insert(durable.clone());
+            self.rejected_bodies.entry(key).or_insert(durable);
+            self.deferred_merge_work.remove(&work_id);
+            self.pending_validations.remove(&work_id);
+            services.validation_rejected(key.0, key.1, &reason);
+        }
+        if !work_ids.is_empty() {
+            self.publish_status(services)
+                .map_err(|error| self.close(error, services))?;
         }
         Ok(work_ids.len())
     }
@@ -2961,6 +3093,9 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         let Some(pending) = self.pending_applications.get(&work_id) else {
             return Ok(CompletionDisposition::Stale);
         };
+        if let Err(error) = self.preflight_pending_application_owner(work_id, pending) {
+            return Err(self.close(error, services));
+        }
         let round = pending.task.certificate().round;
         let subject = pending.task.subject();
         if !merge_sidecar_reference_matches_carrier(round, subject, reference) {
@@ -3005,6 +3140,9 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         self.ensure_open()?;
         if !self.deferred_merge_work.contains_key(&work_id) {
             return Ok(CompletionDisposition::Stale);
+        }
+        if let Err(error) = self.preflight_deferred_work_owner(work_id) {
+            return Err(self.close(error, services));
         }
         if self.pending_applications.contains_key(&work_id) {
             return Err(self.close(
@@ -3321,6 +3459,8 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             .filter(|work_id| self.pending_applications.contains_key(*work_id))
             .count();
         EffectExecutorStatus {
+            height_context_id: self.context.id(),
+            height: self.context.height,
             captured_at,
             fail_closed: self.fatal_reason.is_some() || restart_required,
             fatal_reason: self.fatal_reason.clone().or_else(|| {
@@ -3584,32 +3724,103 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         key: (wire::ConsensusRound, wire::BlockSubject),
         manifest_hash: Option<HashOf<wire::PayloadManifest>>,
     ) -> Result<BodyPipelineOwnerBindingPlan, EffectExecutorError> {
-        if let Some(owner) = self.body_pipeline_owners.get(&key) {
-            if owner.tag != tag {
-                return Err(EffectExecutorError::Contract(
-                    "one exact body pipeline has conflicting reducer ownership".to_owned(),
-                ));
-            }
-            if let (Some(existing), Some(incoming)) = (owner.manifest_hash, manifest_hash)
-                && existing != incoming
-            {
-                return Err(EffectExecutorError::Contract(
-                    "one exact body pipeline has conflicting manifest ownership".to_owned(),
-                ));
-            }
-            return Ok(BodyPipelineOwnerBindingPlan {
-                key,
-                owner: BodyPipelineOwner {
-                    tag,
-                    manifest_hash: owner.manifest_hash.or(manifest_hash),
-                },
-                already_owned: true,
+        let incoming = Self::project_body_pipeline_owner(tag, key, manifest_hash);
+        let current =
+            self.body_pipeline_owners.get(&key).copied().map(|owner| {
+                Self::project_body_pipeline_owner(owner.tag, key, owner.manifest_hash)
             });
-        }
+        let Some(binding) = plan_exact_body_owner_binding(current, incoming) else {
+            let reason = if current.is_some_and(|owner| owner.tag != incoming.tag) {
+                "one exact body pipeline has conflicting reducer ownership"
+            } else {
+                "one exact body pipeline has conflicting manifest ownership"
+            };
+            return Err(EffectExecutorError::Contract(reason.to_owned()));
+        };
         Ok(BodyPipelineOwnerBindingPlan {
             key,
-            owner: BodyPipelineOwner { tag, manifest_hash },
-            already_owned: false,
+            owner: BodyPipelineOwner {
+                tag,
+                manifest_hash: binding.owner.manifest_hash,
+            },
+            already_owned: binding.already_owned,
+        })
+    }
+
+    fn project_body_pipeline_owner(
+        tag: EventTag,
+        key: (wire::ConsensusRound, wire::BlockSubject),
+        manifest_hash: Option<HashOf<wire::PayloadManifest>>,
+    ) -> ExactBodyOwnerProjection<
+        (wire::ConsensusRound, wire::BlockSubject),
+        HashOf<wire::PayloadManifest>,
+    > {
+        ExactBodyOwnerProjection {
+            tag: TagProjection {
+                height: tag.height(),
+                view: tag.view(),
+                generation: tag.generation().get(),
+            },
+            key,
+            manifest_hash,
+        }
+    }
+
+    fn exact_body_pipeline_stage_owned(
+        &self,
+        tag: EventTag,
+        key: (wire::ConsensusRound, wire::BlockSubject),
+        manifest_hash: HashOf<wire::PayloadManifest>,
+    ) -> bool {
+        self.body_pipeline_owners.get(&key).is_some_and(|owner| {
+            exact_body_stage_is_owned(
+                Self::project_body_pipeline_owner(owner.tag, key, owner.manifest_hash),
+                Self::project_body_pipeline_owner(tag, key, Some(manifest_hash)),
+            )
+        })
+    }
+
+    fn plan_body_pipeline_owner_rebind(
+        &self,
+        key: (wire::ConsensusRound, wire::BlockSubject),
+        previous_tag: EventTag,
+        rebound_tag: EventTag,
+        manifest_hash: Option<HashOf<wire::PayloadManifest>>,
+    ) -> Result<BodyPipelineOwner, EffectExecutorError> {
+        let owner = self
+            .body_pipeline_owners
+            .get(&key)
+            .copied()
+            .ok_or_else(|| {
+                EffectExecutorError::Contract(
+                    "protected body work lost its reducer pipeline owner".to_owned(),
+                )
+            })?;
+        let current = Self::project_body_pipeline_owner(owner.tag, key, owner.manifest_hash);
+        let previous = Self::project_body_pipeline_owner(previous_tag, key, manifest_hash);
+        if !exact_body_stage_is_owned(current, previous) {
+            return Err(EffectExecutorError::Contract(
+                "protected body work differs from its immutable pipeline owner".to_owned(),
+            ));
+        }
+        let rebound = plan_exact_body_owner_rebind(
+            current,
+            previous,
+            TagProjection {
+                height: rebound_tag.height(),
+                view: rebound_tag.view(),
+                generation: rebound_tag.generation().get(),
+            },
+        )
+        .ok_or_else(|| {
+            EffectExecutorError::Contract(
+                "protected body consumer rebind did not strictly advance its incarnation"
+                    .to_owned(),
+            )
+        })?;
+        Ok(BodyPipelineOwner {
+            tag: rebound_tag,
+            manifest_hash: rebound.manifest_hash,
         })
     }
 
@@ -4415,6 +4626,175 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         Ok(())
     }
 
+    /// Prove the byte counters equal the complete serialized owner sets.
+    ///
+    /// EnterView may retire one subset during lock reconciliation and a
+    /// disjoint residual subset during stale-view cleanup. Direct reproposal
+    /// reconciliation reaches the same cleanup outside EnterView. Exact global
+    /// accounting at both entrypoints guarantees each later subtraction is a
+    /// partition of an already-accounted owner set; a low counter cannot pass
+    /// one subset and fail only after that subset has been committed.
+    fn preflight_exact_body_byte_accounting(&self) -> Result<(), EffectExecutorError> {
+        let retained_bytes = self
+            .retained_locked_body
+            .as_ref()
+            .map(|(_, bytes)| {
+                u64::try_from(bytes.len()).map_err(|_| {
+                    EffectExecutorError::Contract(
+                        "retained locked-body byte count is not representable".to_owned(),
+                    )
+                })
+            })
+            .transpose()?
+            .unwrap_or(0);
+        let ready_bytes = self.ready_bodies.values().try_fold(0u64, |total, body| {
+            let bytes = u64::try_from(body.bytes.len()).map_err(|_| {
+                EffectExecutorError::Contract(
+                    "ready-body byte count is not representable".to_owned(),
+                )
+            })?;
+            total.checked_add(bytes).ok_or_else(|| {
+                EffectExecutorError::Contract("ready-body byte count overflowed".to_owned())
+            })
+        })?;
+        let store_bytes = self
+            .pending_stores
+            .values()
+            .try_fold(0u64, |total, pending| {
+                let bytes = u64::try_from(pending.task.canonical_wire.len()).map_err(|_| {
+                    EffectExecutorError::Contract(
+                        "pending-store byte count is not representable".to_owned(),
+                    )
+                })?;
+                total.checked_add(bytes).ok_or_else(|| {
+                    EffectExecutorError::Contract("pending-store byte count overflowed".to_owned())
+                })
+            })?;
+        let accounting = plan_exact_body_retirement_accounting(
+            self.ready_body_bytes,
+            retained_bytes,
+            ready_bytes,
+            self.pending_store_bytes,
+            store_bytes,
+        )
+        .ok_or_else(|| {
+            EffectExecutorError::Contract(
+                "body byte accounting is lower than its serialized owners".to_owned(),
+            )
+        })?;
+        if accounting.ready_after != 0 || accounting.store_after != 0 {
+            return Err(EffectExecutorError::Contract(
+                "body byte accounting exceeds its serialized owners".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn plan_certified_view_body_cleanup(
+        &self,
+        tag: EventTag,
+        protected_body: Option<(wire::ConsensusRound, wire::BlockSubject)>,
+    ) -> Result<CertifiedViewBodyCleanupPlan, EffectExecutorError> {
+        let stale_stores = self
+            .pending_stores
+            .iter()
+            .filter_map(|(id, pending)| {
+                let key = (pending.task.manifest.round, pending.task.manifest.subject);
+                (pending.task.manifest.round.view < tag.view()
+                    && !self.durable_bodies.contains_key(&key)
+                    && !self.validated_bodies.contains_key(&key))
+                .then_some(*id)
+            })
+            .collect::<Vec<_>>();
+        let retired_store_bytes = stale_stores.iter().try_fold(0u64, |total, id| {
+            let pending = self.pending_stores.get(id).ok_or_else(|| {
+                EffectExecutorError::Contract(
+                    "stale body-store cleanup lost its executor owner".to_owned(),
+                )
+            })?;
+            let key = (pending.task.manifest.round, pending.task.manifest.subject);
+            if Some(key) == protected_body {
+                return Ok(total);
+            }
+            let bytes = u64::try_from(pending.task.canonical_wire.len()).map_err(|_| {
+                EffectExecutorError::Contract(
+                    "pending-store byte count is not representable".to_owned(),
+                )
+            })?;
+            total.checked_add(bytes).ok_or_else(|| {
+                EffectExecutorError::Contract(
+                    "stale pending-store byte count overflowed".to_owned(),
+                )
+            })
+        })?;
+
+        let stale_ready = self
+            .ready_bodies
+            .keys()
+            .filter(|(round, _)| round.view < tag.view())
+            .copied()
+            .collect::<Vec<_>>();
+        let mut retired_ready_bytes = 0u64;
+        let mut protected_ready_rebinds = Vec::new();
+        for key in &stale_ready {
+            let ready = self.ready_bodies.get(key).ok_or_else(|| {
+                EffectExecutorError::Contract(
+                    "stale ready-body cleanup lost its executor owner".to_owned(),
+                )
+            })?;
+            if Some(*key) == protected_body {
+                if let Some(owner) = self.body_pipeline_owners.get(key).copied() {
+                    protected_ready_rebinds.push(CertifiedViewReadyRebindPlan {
+                        key: *key,
+                        previous_tag: owner.tag,
+                        manifest: ready.manifest.clone(),
+                        owner: self.plan_body_pipeline_owner_rebind(
+                            *key,
+                            owner.tag,
+                            tag,
+                            Some(HashOf::new(&ready.manifest)),
+                        )?,
+                    });
+                }
+                continue;
+            }
+            if let Some(owner) = self.body_pipeline_owners.get(key)
+                && owner.manifest_hash != Some(HashOf::new(&ready.manifest))
+            {
+                return Err(EffectExecutorError::Contract(
+                    "stale ready body differs from its exact pipeline ownership".to_owned(),
+                ));
+            }
+            let bytes = u64::try_from(ready.bytes.len()).map_err(|_| {
+                EffectExecutorError::Contract(
+                    "ready-body byte count is not representable".to_owned(),
+                )
+            })?;
+            retired_ready_bytes = retired_ready_bytes.checked_add(bytes).ok_or_else(|| {
+                EffectExecutorError::Contract("stale ready-body byte count overflowed".to_owned())
+            })?;
+        }
+        let accounting = plan_exact_body_retirement_accounting(
+            self.ready_body_bytes,
+            0,
+            retired_ready_bytes,
+            self.pending_store_bytes,
+            retired_store_bytes,
+        )
+        .ok_or_else(|| {
+            EffectExecutorError::Contract(
+                "certified-view body cleanup byte accounting underflow or leakage".to_owned(),
+            )
+        })?;
+
+        Ok(CertifiedViewBodyCleanupPlan {
+            stale_stores,
+            stale_ready,
+            protected_ready_rebinds,
+            accounting,
+        })
+    }
+
     fn store_body<S: V2EffectServices>(
         &mut self,
         tag: EventTag,
@@ -4424,9 +4804,8 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
     ) -> Result<(), EffectExecutorError> {
         let key = (round, subject);
         if let Some(receipt) = self.durable_bodies.get(&key).cloned() {
-            let owner_matches = self.body_pipeline_owners.get(&key).is_some_and(|owner| {
-                owner.tag == tag && owner.manifest_hash == Some(receipt.manifest_hash())
-            });
+            let owner_matches =
+                self.exact_body_pipeline_stage_owned(tag, key, receipt.manifest_hash());
             let recovered_matches = self.recovered_bodies.get(&key).is_none_or(
                 |(recovered_manifest, recovered_receipt)| {
                     recovered_receipt == &receipt
@@ -4996,12 +5375,11 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         durable_receipt: &DurableBodyReceipt,
     ) -> bool {
         let key = (durable_receipt.round(), durable_receipt.subject());
-        let Some(owner) = self.body_pipeline_owners.get(&key) else {
-            return false;
-        };
-        if owner.tag != consumer.tag()
-            || owner.manifest_hash != Some(durable_receipt.manifest_hash())
-        {
+        if !self.exact_body_pipeline_stage_owned(
+            consumer.tag(),
+            key,
+            durable_receipt.manifest_hash(),
+        ) {
             return false;
         }
         match consumer {
@@ -5011,6 +5389,97 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                     && manifest.subject == key.1
                     && HashOf::new(manifest) == durable_receipt.manifest_hash()
             }
+        }
+    }
+
+    fn preflight_pending_validation_consumer(
+        &self,
+        work_id: EffectWorkId,
+        pending: &PendingValidation,
+    ) -> Result<(), EffectExecutorError> {
+        let durable = pending.task.durable_receipt();
+        let key = (pending.task.round(), pending.task.subject());
+        if pending.task.id() != work_id
+            || durable.context_id() != self.context.id()
+            || durable.round() != key.0
+            || durable.subject() != key.1
+        {
+            return Err(EffectExecutorError::Contract(
+                "pending validation task differs from its serialized work owner".to_owned(),
+            ));
+        }
+        if self.durable_bodies.get(&key) != Some(durable)
+            || !self
+                .recovered_bodies
+                .get(&key)
+                .is_some_and(|(manifest, recovered)| {
+                    recovered == durable && HashOf::new(manifest) == durable.manifest_hash()
+                })
+        {
+            return Err(EffectExecutorError::BodyStore(
+                "pending validation differs from its recovered durable body".to_owned(),
+            ));
+        }
+        if let Some(consumer) = &pending.consumer
+            && !self.validation_consumer_matches_owner(consumer, durable)
+        {
+            return Err(EffectExecutorError::Contract(
+                "validation completion consumer differs from its immutable pipeline owner"
+                    .to_owned(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn preflight_pending_application_owner(
+        &self,
+        work_id: EffectWorkId,
+        pending: &PendingApply,
+    ) -> Result<(), EffectExecutorError> {
+        let task = &pending.task;
+        let certificate = task.certificate();
+        let validated = task.validated_receipt();
+        let durable = validated.durable();
+        let key = (certificate.round, task.subject());
+        if task.id() != work_id
+            || task.tag().height() != self.context.height
+            || certificate.phase != wire::GlobalPhase::Commit
+            || certificate.round.context_id != self.context.id()
+            || certificate.round.height != self.context.height
+            || certificate.subject != task.subject()
+            || durable.context_id() != self.context.id()
+            || durable.round() != certificate.round
+            || durable.subject() != task.subject()
+            || validated.execution_commitment() != certificate.execution_commitment
+            || self.protected_decision != Some(key)
+            || !self.decision_body_drained
+            || self.durable_bodies.get(&key) != Some(durable)
+            || self.validated_bodies.get(&key) != Some(validated)
+        {
+            return Err(EffectExecutorError::Contract(
+                "deferred application differs from its exact decided-body owner".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn preflight_deferred_work_owner(
+        &self,
+        work_id: EffectWorkId,
+    ) -> Result<(), EffectExecutorError> {
+        match (
+            self.pending_validations.get(&work_id),
+            self.pending_applications.get(&work_id),
+        ) {
+            (Some(pending), None) => self.preflight_pending_validation_consumer(work_id, pending),
+            (None, Some(pending)) => self.preflight_pending_application_owner(work_id, pending),
+            (Some(_), Some(_)) => Err(EffectExecutorError::Contract(
+                "deferred merge sidecar has conflicting validation and application owners"
+                    .to_owned(),
+            )),
+            (None, None) => Err(EffectExecutorError::Contract(
+                "deferred merge sidecar has no pending validation or application task".to_owned(),
+            )),
         }
     }
 
@@ -5228,54 +5697,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             drain_decision_body || key != decision
         };
 
-        let all_ready_bytes = self.ready_bodies.values().try_fold(
-            self.retained_locked_body
-                .as_ref()
-                .map_or(Ok(0u64), |(_, bytes)| {
-                    u64::try_from(bytes.len()).map_err(|_| {
-                        EffectExecutorError::Contract(
-                            "retained locked-body byte count is not representable".to_owned(),
-                        )
-                    })
-                })?,
-            |total, body| {
-                let bytes = u64::try_from(body.bytes.len()).map_err(|_| {
-                    EffectExecutorError::Contract(
-                        "ready-body byte count is not representable".to_owned(),
-                    )
-                })?;
-                total.checked_add(bytes).ok_or_else(|| {
-                    EffectExecutorError::Contract(
-                        "terminal ready-body byte count overflowed".to_owned(),
-                    )
-                })
-            },
-        )?;
-        if all_ready_bytes != self.ready_body_bytes {
-            return Err(EffectExecutorError::Contract(
-                "terminal ready-body byte accounting differs from retained owners".to_owned(),
-            ));
-        }
-        let all_store_bytes = self
-            .pending_stores
-            .values()
-            .try_fold(0u64, |total, pending| {
-                let bytes = u64::try_from(pending.task.canonical_wire.len()).map_err(|_| {
-                    EffectExecutorError::Contract(
-                        "pending-store byte count is not representable".to_owned(),
-                    )
-                })?;
-                total.checked_add(bytes).ok_or_else(|| {
-                    EffectExecutorError::Contract(
-                        "terminal pending-store byte count overflowed".to_owned(),
-                    )
-                })
-            })?;
-        if all_store_bytes != self.pending_store_bytes {
-            return Err(EffectExecutorError::Contract(
-                "terminal pending-store byte accounting differs from retained owners".to_owned(),
-            ));
-        }
+        self.preflight_exact_body_byte_accounting()?;
 
         let exact_local_stores = self
             .pending_stores
@@ -5793,6 +6215,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         // Protected fetch rebinding is also fully checked here so no fallible
         // executor lookup remains after its service callback acknowledges.
         self.preflight_certified_fetch_indexes()?;
+        self.preflight_exact_body_byte_accounting()?;
         for pending in self
             .pending_fetches
             .values()
@@ -5808,19 +6231,16 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                         .to_owned(),
                 )
             })?;
-            let owner = self.body_pipeline_owners.get(&key).ok_or_else(|| {
-                EffectExecutorError::Contract(
-                    "protected body-fetch lost its reducer pipeline owner".to_owned(),
-                )
-            })?;
-            if owner.tag != pending.task.tag {
-                return Err(EffectExecutorError::Contract(
-                    "protected body-fetch pipeline owner has a different consumer tag".to_owned(),
-                ));
-            }
+            self.plan_body_pipeline_owner_rebind(
+                key,
+                pending.task.tag,
+                tag,
+                pending.task.manifest.as_ref().map(HashOf::new),
+            )?;
         }
 
         self.reconcile_protected_lock(tag, protected_body, services)?;
+        let stale_body_cleanup = self.plan_certified_view_body_cleanup(tag, protected_body)?;
 
         let stale_fetches = self
             .pending_fetches
@@ -5835,20 +6255,16 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                                 .to_owned(),
                         )
                     })?;
-                    let owner = self.body_pipeline_owners.get(&key).ok_or_else(|| {
-                        EffectExecutorError::Contract(
-                            "protected body-fetch lost its reducer pipeline owner".to_owned(),
-                        )
-                    })?;
-                    if owner.tag != pending.task.tag {
-                        return Err(EffectExecutorError::Contract(
-                            "protected body-fetch pipeline owner has a different consumer tag"
-                                .to_owned(),
-                        ));
-                    }
+                    let owner = self.plan_body_pipeline_owner_rebind(
+                        key,
+                        pending.task.tag,
+                        tag,
+                        pending.task.manifest.as_ref().map(HashOf::new),
+                    )?;
                     Ok(StaleFetchTransitionPlan::Rebind {
                         pending: pending.clone(),
                         rebound,
+                        owner,
                     })
                 } else {
                     self.plan_pending_fetch_retirement(pending)
@@ -5858,7 +6274,9 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             .collect::<Result<Vec<_>, _>>()?;
         for plan in &stale_fetches {
             match plan {
-                StaleFetchTransitionPlan::Rebind { pending, rebound } => {
+                StaleFetchTransitionPlan::Rebind {
+                    pending, rebound, ..
+                } => {
                     services
                         .rebind_body_fetch(&pending.task, rebound.clone())
                         .map_err(service_error)?;
@@ -5872,7 +6290,11 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         }
         for plan in stale_fetches {
             match plan {
-                StaleFetchTransitionPlan::Rebind { pending, rebound } => {
+                StaleFetchTransitionPlan::Rebind {
+                    pending,
+                    rebound,
+                    owner,
+                } => {
                     let work_id = pending.task.id();
                     let current = self
                         .pending_fetches
@@ -5881,9 +6303,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                     debug_assert_eq!(current, &pending);
                     current.task = rebound;
                     self.body_pipeline_owners
-                        .get_mut(&(pending.task.round, pending.task.subject))
-                        .expect("preflighted protected pipeline owner remains serialized")
-                        .tag = tag;
+                        .insert((pending.task.round, pending.task.subject), owner);
                 }
                 StaleFetchTransitionPlan::Retire(retirement) => {
                     self.commit_pending_fetch_retirement(retirement);
@@ -5949,105 +6369,44 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             }
         }
 
-        let stale = self
-            .pending_stores
-            .iter()
-            .filter_map(|(id, pending)| {
-                let key = (pending.task.manifest.round, pending.task.manifest.subject);
-                (pending.task.manifest.round.view < tag.view()
-                    && !self.durable_bodies.contains_key(&key)
-                    && !self.validated_bodies.contains_key(&key))
-                .then_some(*id)
-            })
-            .collect::<Vec<_>>();
-        for id in stale {
+        // Byte residuals for the complete store/ready cleanup were checked
+        // before any cancellation. A corrupt counter therefore cannot retire
+        // worker or runtime ownership and only then discover the underflow.
+        for id in &stale_body_cleanup.stale_stores {
             let key = self
                 .pending_stores
-                .get(&id)
+                .get(id)
                 .map(|pending| (pending.task.manifest.round, pending.task.manifest.subject))
                 .ok_or_else(|| {
                     EffectExecutorError::Contract(
                         "stale body-store work lost its executor owner".to_owned(),
                     )
                 })?;
-            if Some(key) == protected_body {
-                // Persistence work and its canonical bytes are immutable. A
-                // timeout may replace the reducer consumer, but it must not
-                // restart the exact durable-lock store or race cancellation
-                // against a completion already minted by the worker.
-                self.pending_stores
-                    .get_mut(&id)
-                    .ok_or_else(|| {
-                        EffectExecutorError::Contract(
-                            "protected body-store work lost its executor owner".to_owned(),
-                        )
-                    })?
-                    .consumer = None;
-            } else {
-                services.cancel_body_store(id).map_err(service_error)?;
-                let pending = self.pending_stores.remove(&id).ok_or_else(|| {
-                    EffectExecutorError::Contract(
-                        "retired body-store work lost its executor owner".to_owned(),
-                    )
-                })?;
-                let bytes = u64::try_from(pending.task.canonical_wire.len()).map_err(|_| {
-                    EffectExecutorError::Contract(
-                        "pending-store byte count is not representable".to_owned(),
-                    )
-                })?;
-                self.pending_store_bytes =
-                    self.pending_store_bytes.checked_sub(bytes).ok_or_else(|| {
-                        EffectExecutorError::Contract(
-                            "pending-store byte accounting underflow".to_owned(),
-                        )
-                    })?;
+            if Some(key) != protected_body {
+                services.cancel_body_store(*id).map_err(service_error)?;
             }
         }
-
-        let stale_ready = self
-            .ready_bodies
-            .keys()
-            .filter(|(round, _)| round.view < tag.view())
-            .copied()
-            .collect::<Vec<_>>();
-        for key in stale_ready {
-            if Some(key) == protected_body {
-                let ready = self.ready_bodies.get(&key).ok_or_else(|| {
-                    EffectExecutorError::Contract(
-                        "protected ready body disappeared during consumer rebinding".to_owned(),
-                    )
-                })?;
-                if let Some(owner) = self.body_pipeline_owners.get(&key).copied() {
-                    let previous = owner.tag;
-                    if previous.view() >= tag.view() || previous.generation() >= tag.generation() {
-                        return Err(EffectExecutorError::Contract(
-                            "protected ready-body consumer did not precede the certified incarnation"
-                                .to_owned(),
-                        ));
-                    }
-                    let rebound = self
-                        .runtime
-                        .rebind_body_available(previous, tag, &ready.manifest)
-                        .map_err(EffectExecutorError::Runtime)?;
-                    if !rebound {
-                        return Err(EffectExecutorError::Contract(
-                            "protected ready body has no queued reducer completion to rebind"
-                                .to_owned(),
-                        ));
-                    }
-                    self.body_pipeline_owners
-                        .get_mut(&key)
-                        .expect("protected ready-body owner remains present")
-                        .tag = tag;
-                }
-                // A staged body can exist before FetchBody establishes its
-                // reducer owner. Preserve it without inventing a completion;
-                // the new view's ordinary FetchBody effect adopts the bytes
-                // and enqueues BodyAvailable under its current tag.
+        for rebind in &stale_body_cleanup.protected_ready_rebinds {
+            let rebound = self
+                .runtime
+                .rebind_body_available(rebind.previous_tag, tag, &rebind.manifest)
+                .map_err(EffectExecutorError::Runtime)?;
+            if !rebound {
+                return Err(EffectExecutorError::Contract(
+                    "protected ready body has no queued reducer completion to rebind".to_owned(),
+                ));
+            }
+        }
+        for key in &stale_body_cleanup.stale_ready {
+            // A staged protected body can exist before FetchBody establishes
+            // its reducer owner. Preserve it without inventing a completion;
+            // the new view's ordinary FetchBody effect adopts the bytes and
+            // enqueues BodyAvailable under its current tag.
+            if Some(*key) == protected_body {
                 continue;
             }
-            if let Some(owner) = self.body_pipeline_owners.get(&key).copied() {
-                let ready = self.ready_bodies.get(&key).ok_or_else(|| {
+            if let Some(owner) = self.body_pipeline_owners.get(key).copied() {
+                let ready = self.ready_bodies.get(key).ok_or_else(|| {
                     EffectExecutorError::Contract(
                         "superseded ready body disappeared during completion retirement".to_owned(),
                     )
@@ -6062,22 +6421,45 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                             .to_owned(),
                     ));
                 }
-                self.body_pipeline_owners.remove(&key);
-            }
-            if let Some(body) = self.ready_bodies.remove(&key) {
-                let bytes = u64::try_from(body.bytes.len()).map_err(|_| {
-                    EffectExecutorError::Contract(
-                        "ready-body byte count is not representable".to_owned(),
-                    )
-                })?;
-                self.ready_body_bytes =
-                    self.ready_body_bytes.checked_sub(bytes).ok_or_else(|| {
-                        EffectExecutorError::Contract(
-                            "ready-body byte accounting underflow".to_owned(),
-                        )
-                    })?;
             }
         }
+        // Every fallible store/runtime callback has now acknowledged. Commit
+        // the preflighted ownership removals and both exact residual counters
+        // as one infallible serialized phase.
+        for id in &stale_body_cleanup.stale_stores {
+            let key = self
+                .pending_stores
+                .get(id)
+                .map(|pending| (pending.task.manifest.round, pending.task.manifest.subject))
+                .expect("preflighted stale body-store work remains serialized");
+            if Some(key) == protected_body {
+                // Persistence work and its canonical bytes are immutable. A
+                // timeout may replace the reducer consumer, but it must not
+                // restart the exact durable-lock store or race cancellation
+                // against a completion already minted by the worker.
+                self.pending_stores
+                    .get_mut(id)
+                    .expect("preflighted protected store remains serialized")
+                    .consumer = None;
+            } else {
+                self.pending_stores
+                    .remove(id)
+                    .expect("preflighted retired store remains serialized");
+            }
+        }
+        for key in &stale_body_cleanup.stale_ready {
+            if Some(*key) != protected_body {
+                self.body_pipeline_owners.remove(key);
+                self.ready_bodies
+                    .remove(key)
+                    .expect("preflighted stale ready body remains serialized");
+            }
+        }
+        for rebind in stale_body_cleanup.protected_ready_rebinds {
+            self.body_pipeline_owners.insert(rebind.key, rebind.owner);
+        }
+        self.ready_body_bytes = stale_body_cleanup.accounting.ready_after;
+        self.pending_store_bytes = stale_body_cleanup.accounting.store_after;
 
         let retained_apply_owners = self
             .pending_applications
@@ -6804,6 +7186,21 @@ mod tests {
             subject: wire::BlockSubject,
         ) -> Result<(), EnqueueError> {
             self.push(RuntimeCompletion::ValidationFailed(tag, round, subject))
+        }
+
+        fn enqueue_validation_failures_atomically(
+            &mut self,
+            failures: &[(EventTag, wire::ConsensusRound, wire::BlockSubject)],
+        ) -> Result<(), EnqueueError> {
+            if self.fail_enqueue {
+                self.fail_enqueue_hits = self.fail_enqueue_hits.saturating_add(1);
+                return Err(EnqueueError::Full);
+            }
+            self.completions
+                .extend(failures.iter().copied().map(|(tag, round, subject)| {
+                    RuntimeCompletion::ValidationFailed(tag, round, subject)
+                }));
+            Ok(())
         }
 
         fn enqueue_signature(
@@ -7763,6 +8160,53 @@ mod tests {
         )
     }
 
+    fn begin_reachable_merge_validation(
+        fixture: &Fixture,
+        executor: &mut V2EffectExecutor<FakeRuntime>,
+        services: &mut FakeServices,
+        round: wire::ConsensusRound,
+        subject: wire::BlockSubject,
+    ) -> BodyValidationTask {
+        let manifest = wire::PayloadManifest::derive(
+            &fixture.context,
+            round,
+            subject,
+            u64::try_from(fixture.body.len()).expect("body length"),
+            std::slice::from_ref(&fixture.body),
+        )
+        .expect("reachable merge carrier manifest");
+        let durable = DurableBodyReceipt::for_test(
+            fixture.context.id(),
+            round,
+            subject,
+            HashOf::new(&manifest),
+        );
+        let key = (round, subject);
+        executor
+            .recovered_bodies
+            .insert(key, (manifest.clone(), durable.clone()));
+        executor.durable_bodies.insert(key, durable.clone());
+        executor
+            .bind_body_pipeline_owner(tag(round.view), &manifest)
+            .expect("bind the exact production validation owner");
+        executor
+            .begin_validation(
+                round,
+                subject,
+                durable,
+                ValidationConsumer::Reducer {
+                    tag: tag(round.view),
+                },
+                services,
+            )
+            .expect("start validation through the production admission path");
+        services
+            .validation_tasks
+            .last()
+            .expect("production validation task")
+            .clone()
+    }
+
     fn complete_local_proposal_chain(
         executor: &mut V2EffectExecutor<FakeRuntime>,
         services: &mut FakeServices,
@@ -8609,6 +9053,53 @@ mod tests {
         assert_eq!(executor.ready_bodies.len(), 1);
         assert_eq!(executor.ready_body_bytes, body_len * 2);
         assert!(!executor.status().fail_closed);
+
+        // Exact lock repetition used to return before global byte accounting
+        // was checked. Exercise the direct reproposal entrypoint with both
+        // low and inflated counters: neither corruption may hide behind the
+        // idempotent lock fast path or mutate an exact owner.
+        for corruption in ["low", "high"] {
+            let fixture = Fixture::new();
+            let mut executor = fixture.executor(EffectQueueConfig::default());
+            let mut services = fixture.services();
+            let consumer = EventTag::new(1, 3, Generation::new(82));
+            let exact_lock = (round(&fixture.context, 0), fixture.manifest.subject);
+            executor
+                .reconcile_locked_body_for_reproposal(consumer, exact_lock, &mut services)
+                .expect("publish the exact lock before staging bytes");
+            executor
+                .retain_locked_body_for_reproposal(
+                    consumer,
+                    fixture.manifest.subject,
+                    fixture.body.clone(),
+                    &mut services,
+                )
+                .expect("stage one exact retained owner");
+            executor.ready_body_bytes = match corruption {
+                "low" => 0,
+                "high" => executor
+                    .ready_body_bytes
+                    .checked_add(1)
+                    .expect("small test counter"),
+                _ => unreachable!("the test enumerates low and high corruption"),
+            };
+            let before = executor.body_ownership_projection();
+
+            assert!(matches!(
+                executor.reconcile_locked_body_for_reproposal(
+                    consumer,
+                    exact_lock,
+                    &mut services,
+                ),
+                Err(EffectExecutorError::Contract(reason))
+                    if reason.contains("body byte accounting")
+            ));
+            assert_eq!(executor.body_ownership_projection(), before);
+            assert_eq!(executor.protected_lock, Some(exact_lock));
+            assert!(services.cancelled_fetches.is_empty());
+            assert!(services.cancelled_stores.is_empty());
+            assert!(services.cancelled_validations.is_empty());
+        }
     }
 
     #[test]
@@ -9094,12 +9585,17 @@ mod tests {
         let mut executor = fixture.executor(EffectQueueConfig::default());
         let mut services = fixture.services();
         let (pending, reference, entry_hash) = pending_merge_validation(&fixture);
-        let work_id = pending.task.id();
-        let durable = pending.task.durable_receipt().clone();
         let round = pending.task.round();
         let subject = pending.task.subject();
-        let task = pending.task.clone();
-        executor.pending_validations.insert(work_id, pending);
+        let task = begin_reachable_merge_validation(
+            &fixture,
+            &mut executor,
+            &mut services,
+            round,
+            subject,
+        );
+        let work_id = task.id();
+        let durable = task.durable_receipt().clone();
 
         let completion = BodyValidationCompletion::DeferredMergeSidecar {
             work_id,
@@ -9185,10 +9681,16 @@ mod tests {
         let mut executor = fixture.executor(EffectQueueConfig::default());
         let mut services = fixture.services();
         let (pending, reference, entry_hash) = pending_merge_validation(&fixture);
-        let work_id = pending.task.id();
         let round = pending.task.round();
         let subject = pending.task.subject();
-        executor.pending_validations.insert(work_id, pending);
+        let work_id = begin_reachable_merge_validation(
+            &fixture,
+            &mut executor,
+            &mut services,
+            round,
+            subject,
+        )
+        .id();
         executor
             .complete_body_validation(
                 BodyValidationCompletion::DeferredMergeSidecar { work_id, reference },
@@ -9239,26 +9741,31 @@ mod tests {
         let mut executor = fixture.executor(EffectQueueConfig::default());
         let mut services = fixture.services();
         let (first, first_reference, entry_hash) = pending_merge_validation(&fixture);
-        let first_id = first.task.id();
-        let mut second = first.clone();
-        second.task.id = EffectWorkId(78);
+        let first_round = first.task.round();
+        let first_subject = first.task.subject();
         let second_subject = wire::BlockSubject {
             block_hash: HashOf::from_untyped_unchecked(Hash::new(b"conflicting second carrier")),
-            ..second.task.subject()
+            ..first_subject
         };
-        second.task.durable_receipt = DurableBodyReceipt::for_test(
-            fixture.context.id(),
-            second.task.round(),
-            second_subject,
-            HashOf::new(&fixture.manifest),
-        );
-        let second_id = second.task.id();
         let mut second_reference = first_reference.clone();
         second_reference.encoded_len += 1;
-        executor.pending_validations.insert(first_id, first);
-        executor
-            .pending_validations
-            .insert(second_id, second.clone());
+        let retry_reference = first_reference.clone();
+        let first_id = begin_reachable_merge_validation(
+            &fixture,
+            &mut executor,
+            &mut services,
+            first_round,
+            first_subject,
+        )
+        .id();
+        let second_id = begin_reachable_merge_validation(
+            &fixture,
+            &mut executor,
+            &mut services,
+            first_round,
+            second_subject,
+        )
+        .id();
 
         for (work_id, reference) in [(first_id, first_reference), (second_id, second_reference)] {
             executor
@@ -9290,6 +9797,171 @@ mod tests {
         assert_eq!(status.deferred_merge_work, 1);
         assert_eq!(status.deferred_validation_merge_work, 1);
         assert_eq!(status.deferred_application_merge_work, 0);
+
+        // A multi-waiter retry is transactional with respect to executor
+        // ownership. The first external enqueue may acknowledge before the
+        // second fails, but no deferred entry or pending task is committed
+        // away until every callback succeeds.
+        let third_subject = wire::BlockSubject {
+            block_hash: HashOf::from_untyped_unchecked(Hash::new(b"retry third carrier")),
+            ..first_subject
+        };
+        let third_id = begin_reachable_merge_validation(
+            &fixture,
+            &mut executor,
+            &mut services,
+            first_round,
+            third_subject,
+        )
+        .id();
+        executor
+            .complete_body_validation(
+                BodyValidationCompletion::DeferredMergeSidecar {
+                    work_id: third_id,
+                    reference: retry_reference,
+                },
+                &mut services,
+            )
+            .expect("retain a second reachable retry waiter");
+        let before = executor.body_ownership_projection();
+        let validation_tasks_before = services.validation_tasks.len();
+        let validation_calls = services
+            .operation_calls
+            .get("validation")
+            .copied()
+            .expect("production validation admissions were counted");
+        services.fail_on_call = Some(("validation", validation_calls + 2));
+
+        assert!(matches!(
+            executor.retry_deferred_merge_sidecar(entry_hash, &mut services),
+            Err(EffectExecutorError::Service(reason))
+                if reason.contains("validation call")
+        ));
+        assert_eq!(executor.body_ownership_projection(), before);
+        assert_eq!(services.validation_tasks.len(), validation_tasks_before + 1);
+        assert!(executor.deferred_merge_work.contains_key(&first_id));
+        assert!(executor.deferred_merge_work.contains_key(&third_id));
+        assert!(executor.status().fail_closed);
+
+        // Terminal rejection preflights the complete matching set before the
+        // first waiter is completed. A corrupt later owner therefore cannot
+        // allow an earlier validation rejection or ownership removal.
+        {
+            let fixture = Fixture::new();
+            let mut executor = fixture.executor(EffectQueueConfig::default());
+            let mut services = fixture.services();
+            let (pending, reference, entry_hash) = pending_merge_validation(&fixture);
+            let round = pending.task.round();
+            let first_subject = pending.task.subject();
+            let second_subject = wire::BlockSubject {
+                block_hash: HashOf::from_untyped_unchecked(Hash::new(b"corrupt later waiter")),
+                ..first_subject
+            };
+            let first_id = begin_reachable_merge_validation(
+                &fixture,
+                &mut executor,
+                &mut services,
+                round,
+                first_subject,
+            )
+            .id();
+            let second_id = begin_reachable_merge_validation(
+                &fixture,
+                &mut executor,
+                &mut services,
+                round,
+                second_subject,
+            )
+            .id();
+            for work_id in [first_id, second_id] {
+                executor
+                    .complete_body_validation(
+                        BodyValidationCompletion::DeferredMergeSidecar {
+                            work_id,
+                            reference: reference.clone(),
+                        },
+                        &mut services,
+                    )
+                    .expect("retain each reachable rejection waiter");
+            }
+            executor
+                .body_pipeline_owners
+                .get_mut(&(round, second_subject))
+                .expect("second exact validation owner")
+                .tag = EventTag::new(1, round.view, Generation::new(8));
+            let before = executor.body_ownership_projection();
+
+            assert!(matches!(
+                executor.reject_deferred_merge_sidecar(
+                    entry_hash,
+                    "invalid shared merge entry",
+                    &mut services,
+                ),
+                Err(EffectExecutorError::Contract(reason))
+                    if reason.contains("immutable pipeline owner")
+            ));
+            assert_eq!(executor.body_ownership_projection(), before);
+            assert!(services.rejected_validations.is_empty());
+            assert!(executor.runtime.completions.is_empty());
+        }
+
+        // Runtime failure is one atomic batch failure, so a later admission
+        // cannot leave an earlier ValidationFailed completion visible while
+        // every executor waiter is still retained.
+        {
+            let fixture = Fixture::new();
+            let mut executor = fixture.executor(EffectQueueConfig::default());
+            let mut services = fixture.services();
+            let (pending, reference, entry_hash) = pending_merge_validation(&fixture);
+            let round = pending.task.round();
+            let first_subject = pending.task.subject();
+            let second_subject = wire::BlockSubject {
+                block_hash: HashOf::from_untyped_unchecked(Hash::new(b"runtime second waiter")),
+                ..first_subject
+            };
+            let first_id = begin_reachable_merge_validation(
+                &fixture,
+                &mut executor,
+                &mut services,
+                round,
+                first_subject,
+            )
+            .id();
+            let second_id = begin_reachable_merge_validation(
+                &fixture,
+                &mut executor,
+                &mut services,
+                round,
+                second_subject,
+            )
+            .id();
+            for work_id in [first_id, second_id] {
+                executor
+                    .complete_body_validation(
+                        BodyValidationCompletion::DeferredMergeSidecar {
+                            work_id,
+                            reference: reference.clone(),
+                        },
+                        &mut services,
+                    )
+                    .expect("retain each atomic rejection waiter");
+            }
+            let before = executor.body_ownership_projection();
+            executor.runtime.fail_enqueue = true;
+
+            assert!(
+                executor
+                    .reject_deferred_merge_sidecar(
+                        entry_hash,
+                        "invalid shared merge entry",
+                        &mut services,
+                    )
+                    .is_err()
+            );
+            assert_eq!(executor.body_ownership_projection(), before);
+            assert_eq!(executor.runtime.fail_enqueue_hits, 1);
+            assert!(services.rejected_validations.is_empty());
+        }
     }
 
     #[test]
@@ -9298,22 +9970,24 @@ mod tests {
         let mut executor = fixture.executor(EffectQueueConfig::default());
         let mut services = fixture.services();
         let (pending_validation, reference, entry_hash) = pending_merge_validation(&fixture);
-        let work_id = EffectWorkId(91);
         let mut certificate = fixture.qc(wire::GlobalPhase::Commit);
         certificate.round = pending_validation.task.round();
         certificate.subject = pending_validation.task.subject();
-        let task = ApplyTask {
-            id: work_id,
-            tag: tag(3),
-            subject: pending_validation.task.subject(),
-            certificate,
-            validated_receipt: ValidatedBodyReceipt::for_test(
-                pending_validation.task.durable_receipt().clone(),
-            ),
-        };
+        let validated_receipt =
+            ValidatedBodyReceipt::for_test(pending_validation.task.durable_receipt().clone());
+        certificate.execution_commitment = validated_receipt.execution_commitment();
+        executor.durable_bodies.insert(
+            (certificate.round, certificate.subject),
+            validated_receipt.durable().clone(),
+        );
         executor
-            .pending_applications
-            .insert(work_id, PendingApply { task: task.clone() });
+            .validated_bodies
+            .insert((certificate.round, certificate.subject), validated_receipt);
+        executor
+            .begin_apply(tag(3), certificate.subject, certificate, &mut services)
+            .expect("start Apply through the production admission path");
+        let task = services.apply_tasks.pop().expect("production Apply task");
+        let work_id = task.id();
 
         assert_eq!(
             executor
@@ -9325,7 +9999,7 @@ mod tests {
         assert_eq!(status.deferred_merge_work, 1);
         assert_eq!(status.deferred_validation_merge_work, 0);
         assert_eq!(status.deferred_application_merge_work, 1);
-        assert_eq!(services.apply_tasks.len(), 0);
+        assert!(services.apply_tasks.is_empty());
         assert_eq!(
             executor
                 .retry_deferred_merge_sidecar(entry_hash, &mut services)
@@ -9338,6 +10012,30 @@ mod tests {
         );
         assert_eq!(executor.status().deferred_merge_work, 0);
         assert!(executor.pending_applications.contains_key(&work_id));
+
+        // Application deferral is also an ownership boundary. An internally
+        // inconsistent decided task must fail before sidecar registration or
+        // a recovery callback can treat it as legitimate pending work.
+        executor
+            .pending_applications
+            .get_mut(&work_id)
+            .expect("retained exact Apply owner")
+            .task
+            .certificate
+            .subject = wire::BlockSubject {
+            block_hash: HashOf::from_untyped_unchecked(Hash::new(b"corrupt deferred apply")),
+            ..task.subject
+        };
+        let deferred_callbacks = services.deferred_merge_sidecars.len();
+
+        assert!(matches!(
+            executor.defer_application_for_merge_sidecar(work_id, &reference, &mut services,),
+            Err(EffectExecutorError::Contract(reason))
+                if reason.contains("exact decided-body owner")
+        ));
+        assert!(executor.pending_applications.contains_key(&work_id));
+        assert!(executor.deferred_merge_work.is_empty());
+        assert_eq!(services.deferred_merge_sidecars.len(), deferred_callbacks);
     }
 
     #[test]
@@ -9347,7 +10045,16 @@ mod tests {
             let mut executor = fixture.executor(EffectQueueConfig::default());
             let mut services = fixture.services();
             let (pending, mut reference, _) = pending_merge_validation(&fixture);
-            let work_id = pending.task.id();
+            let round = pending.task.round();
+            let subject = pending.task.subject();
+            let work_id = begin_reachable_merge_validation(
+                &fixture,
+                &mut executor,
+                &mut services,
+                round,
+                subject,
+            )
+            .id();
             match mismatch {
                 0 => {
                     reference.merge_qc.carrier_height =
@@ -9359,11 +10066,10 @@ mod tests {
                     );
                 }
                 2 => {
-                    reference.merge_qc.view = pending.task.round().view.saturating_add(1);
+                    reference.merge_qc.view = round.view.saturating_add(1);
                 }
                 _ => unreachable!(),
             }
-            executor.pending_validations.insert(work_id, pending);
             assert!(matches!(
                 executor.complete_body_validation(
                     BodyValidationCompletion::DeferredMergeSidecar { work_id, reference },
@@ -9462,50 +10168,25 @@ mod tests {
         let mut executor = fixture.executor(EffectQueueConfig::default());
         let mut services = fixture.services();
         let (first, reference, entry_hash) = pending_merge_validation(&fixture);
-        let first_id = first.task.id();
         let subject = first.task.subject();
         let first_round = first.task.round();
         let second_round = round(&fixture.context, first_round.view + 1);
-        let second_id = EffectWorkId(79);
-        let mut second = first.clone();
-        second.task.id = second_id;
-        let second_manifest = wire::PayloadManifest::derive(
-            &fixture.context,
-            second_round,
+        let first_id = begin_reachable_merge_validation(
+            &fixture,
+            &mut executor,
+            &mut services,
+            first_round,
             subject,
-            u64::try_from(fixture.body.len()).expect("body length"),
-            std::slice::from_ref(&fixture.body),
         )
-        .expect("second protected manifest");
-        second.task.durable_receipt = DurableBodyReceipt::for_test(
-            fixture.context.id(),
+        .id();
+        let second_id = begin_reachable_merge_validation(
+            &fixture,
+            &mut executor,
+            &mut services,
             second_round,
             subject,
-            HashOf::new(&second_manifest),
-        );
-        second.consumer = Some(ValidationConsumer::Reducer {
-            tag: tag(second_round.view),
-        });
-        for pending in [&first, &second] {
-            let durable = pending.task.durable_receipt().clone();
-            let pending_round = durable.round();
-            let manifest = wire::PayloadManifest::derive(
-                &fixture.context,
-                pending_round,
-                subject,
-                u64::try_from(fixture.body.len()).expect("body length"),
-                std::slice::from_ref(&fixture.body),
-            )
-            .expect("protected manifest");
-            executor
-                .recovered_bodies
-                .insert((pending_round, subject), (manifest, durable.clone()));
-            executor
-                .durable_bodies
-                .insert((pending_round, subject), durable);
-        }
-        executor.pending_validations.insert(first_id, first);
-        executor.pending_validations.insert(second_id, second);
+        )
+        .id();
 
         for work_id in [first_id, second_id] {
             executor
@@ -10762,6 +11443,131 @@ mod tests {
 
     #[test]
     fn view_change_cancels_non_durable_store_and_unprotected_validation() {
+        for corrupt_class in ["store", "ready"] {
+            for corruption in ["low", "high"] {
+                let fixture = Fixture::new();
+                let mut executor = fixture.executor(EffectQueueConfig::default());
+                let mut services = fixture.services();
+                match corrupt_class {
+                    "store" => {
+                        executor
+                            .admit_local_proposal(
+                                tag(0),
+                                fixture.manifest.clone(),
+                                fixture.body.clone(),
+                                &mut services,
+                            )
+                            .expect("queue stale store");
+                        executor.pending_store_bytes = match corruption {
+                            "low" => 0,
+                            "high" => executor
+                                .pending_store_bytes
+                                .checked_add(1)
+                                .expect("small test counter"),
+                            _ => unreachable!("the test enumerates low and high corruption"),
+                        };
+                    }
+                    "ready" => {
+                        executor
+                            .admit_ready_body_for_test(&fixture, &mut services)
+                            .expect("queue stale BodyAvailable completion");
+                        executor.ready_body_bytes = match corruption {
+                            "low" => 0,
+                            "high" => executor
+                                .ready_body_bytes
+                                .checked_add(1)
+                                .expect("small test counter"),
+                            _ => unreachable!("the test enumerates low and high corruption"),
+                        };
+                    }
+                    _ => unreachable!("the test enumerates both byte-owner classes"),
+                }
+                let before = executor.body_ownership_projection();
+
+                assert!(matches!(
+                    executor.consume_effects(
+                        vec![AdapterEffect::EnterView {
+                            tag: EventTag::new(1, 1, Generation::new(7)),
+                            certificate: timeout_at_view(&fixture, 0),
+                            protected_body: None,
+                        }],
+                        &mut services,
+                    ),
+                    Err(EffectExecutorError::Contract(reason))
+                        if reason.contains("body byte accounting")
+                ));
+                assert_eq!(
+                    executor.body_ownership_projection(),
+                    before,
+                    "{corrupt_class}/{corruption} accounting corruption must be rejected before ownership mutation"
+                );
+                assert!(services.cancelled_stores.is_empty());
+                assert!(services.cancelled_fetches.is_empty());
+                assert!(services.cancelled_validations.is_empty());
+            }
+        }
+
+        // The counter covers the first ready body only. Without the global
+        // preflight, lock reconciliation could retire that exact subset and
+        // commit a zero residual before stale-view cleanup discovers the
+        // second body's underflow.
+        {
+            let fixture = Fixture::new();
+            let mut executor = fixture.executor(EffectQueueConfig::default());
+            let mut services = fixture.services();
+            for (view, generation) in [(0, 30), (2, 32)] {
+                let manifest = manifest_at_view(&fixture, view);
+                let key = (manifest.round, manifest.subject);
+                let ready = ReadyBody::derive(
+                    &fixture.context,
+                    manifest.round,
+                    manifest.subject,
+                    fixture.body.clone(),
+                )
+                .expect("derive staged body at the selected view");
+                let owner_tag = EventTag::new(1, view, Generation::new(generation));
+                executor.body_pipeline_owners.insert(
+                    key,
+                    BodyPipelineOwner {
+                        tag: owner_tag,
+                        manifest_hash: Some(HashOf::new(&ready.manifest)),
+                    },
+                );
+                executor
+                    .runtime
+                    .completions
+                    .push(RuntimeCompletion::BodyAvailable(
+                        owner_tag,
+                        ready.manifest.clone(),
+                    ));
+                executor.ready_bodies.insert(key, ready);
+            }
+            executor.ready_body_bytes = u64::try_from(fixture.body.len()).expect("one body length");
+            let before = executor.body_ownership_projection();
+            let mut replacement = fixture.qc(wire::GlobalPhase::Prepare);
+            replacement.round = manifest_at_view(&fixture, 1).round;
+            let mut timeout = timeout_at_view(&fixture, 2);
+            timeout.groups[0].highest_prepare_qc = Some(replacement.clone());
+
+            assert!(matches!(
+                executor.consume_effects(
+                    vec![AdapterEffect::EnterView {
+                        tag: EventTag::new(1, 3, Generation::new(33)),
+                        certificate: timeout,
+                        protected_body: Some((replacement.round, replacement.subject)),
+                    }],
+                    &mut services,
+                ),
+                Err(EffectExecutorError::Contract(reason))
+                    if reason.contains("body byte accounting")
+            ));
+            assert_eq!(executor.body_ownership_projection(), before);
+            assert!(executor.protected_lock.is_none());
+            assert!(services.cancelled_stores.is_empty());
+            assert!(services.cancelled_fetches.is_empty());
+            assert!(services.cancelled_validations.is_empty());
+        }
+
         let fixture = Fixture::new();
         let mut executor = fixture.executor(EffectQueueConfig::new(1, 2, 1_048_576, 1));
         let mut services = fixture.services();
@@ -15310,6 +16116,70 @@ mod tests {
             executor.pending_validations[&validation.id()].task,
             *validation
         );
+
+        // Missing-sidecar completion is still a validation completion: it
+        // cannot mutate deferred ownership or call recovery services before
+        // the immutable consumer owner is checked. Build the state through
+        // the production validation admission path, then corrupt only that
+        // owner projection.
+        for corruption in ["missing", "mismatched", "work-id", "orphan"] {
+            let fixture = Fixture::new();
+            let mut executor = fixture.executor(EffectQueueConfig::default());
+            let mut services = fixture.services();
+            let (pending, reference, _) = pending_merge_validation(&fixture);
+            let round = pending.task.round();
+            let subject = pending.task.subject();
+            let task = begin_reachable_merge_validation(
+                &fixture,
+                &mut executor,
+                &mut services,
+                round,
+                subject,
+            );
+            let key = (round, subject);
+            match corruption {
+                "missing" => {
+                    executor.body_pipeline_owners.remove(&key);
+                }
+                "mismatched" => {
+                    executor
+                        .body_pipeline_owners
+                        .get_mut(&key)
+                        .expect("reachable validation owner")
+                        .tag = EventTag::new(1, round.view, Generation::new(8));
+                }
+                "work-id" => {
+                    executor
+                        .pending_validations
+                        .get_mut(&task.id())
+                        .expect("reachable pending validation")
+                        .task
+                        .id = EffectWorkId(999);
+                }
+                "orphan" => {
+                    executor.durable_bodies.remove(&key);
+                }
+                _ => unreachable!("the test enumerates exact owner corruptions"),
+            }
+            let before = executor.body_ownership_projection();
+
+            let error = executor
+                .complete_body_validation(
+                    BodyValidationCompletion::DeferredMergeSidecar {
+                        work_id: task.id(),
+                        reference,
+                    },
+                    &mut services,
+                )
+                .expect_err("corrupt validation owner must fail closed");
+            assert!(matches!(
+                error,
+                EffectExecutorError::Contract(_) | EffectExecutorError::BodyStore(_)
+            ));
+            assert_eq!(executor.body_ownership_projection(), before);
+            assert!(executor.deferred_merge_work.is_empty());
+            assert!(services.deferred_merge_sidecars.is_empty());
+        }
     }
 
     impl V2EffectExecutor<FakeRuntime> {

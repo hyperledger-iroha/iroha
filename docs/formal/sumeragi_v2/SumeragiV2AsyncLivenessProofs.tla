@@ -122,13 +122,21 @@ BY SMT
    DEF LocalAdmissionCanAdvance, SelectedLocalSource,
        PreferredLocalSource, LocalSourceCanAdmit, OtherLocalSource
 
+THEOREM SelectedProducerCanAdvance ==
+  \A node \in ValidatorIds:
+    /\ LocalAdmissionCanAdvance(node)
+    /\ SelectedLocalSource(node) = "Producer"
+    => ProducerCompletionCanAdvance(node)
+BY SelectedLocalSourceCanAdmit
+   DEF LocalSourceCanAdmit
+
 THEOREM SelectedProducerCanAdmit ==
   \A node \in ValidatorIds:
     /\ LocalAdmissionCanAdvance(node)
     /\ SelectedLocalSource(node) = "Producer"
     => ProducerCompletionCanAdmit(node)
-BY SelectedLocalSourceCanAdmit
-   DEF LocalSourceCanAdmit
+BY SelectedProducerCanAdvance
+   DEF ProducerCompletionCanAdvance
 
 THEOREM LocalAdmissionMetadataUpdatePreservesType ==
   \A node \in ValidatorIds, source \in AsyncLocalSources:
@@ -294,6 +302,190 @@ PROOF
          DEF SchedulerServiceRank, AsyncTypeInvariant,
              AsyncSchedulerTypeInvariant, AsyncRuntimeTypeInvariant,
              AsyncRuntimeScalarTypeInvariant, AsyncConfiguration
+  <1> QED BY <1>1
+
+(***************************************************************************
+Removing a serialized parent and appending its fresh causal children is an
+ownership transfer, so the pre-state coalescing predicate is sound only when
+the parent can never be one of its own children.  Keep the proof split over
+the closed 28-kind parent inventory: adding a successor-producing reducer arm
+must add both a source-fidelity CASE and a disjointness case here.
+***************************************************************************)
+
+THEOREM CandidateKindMismatchIsDistinct ==
+  \A left, right:
+    left.kind # right.kind => left # right
+BY Isa
+
+THEOREM CommandSuccessorParentDisjoint ==
+  \A command:
+    /\ AsyncCandidateTyped(command)
+    /\ command.kind \in CausalSuccessorParentKinds
+    => command \notin SequenceSet(CommandSuccessors(command))
+PROOF
+  <1>1. ASSUME NEW command,
+                AsyncCandidateTyped(command),
+                command.kind \in CausalSuccessorParentKinds
+         PROVE command \notin SequenceSet(CommandSuccessors(command))
+    <2>1. CASE command.kind = "AssembleBody"
+      <3>1. CommandSuccessors(command) =
+               IF ExactDecidedLocalBody(
+                    command.node, command.view, command.subject)
+               THEN <<CausalCandidate("Completion", "Apply", command)>>
+               ELSE <<CausalCandidate(
+                        "Completion", "BeginProposal", command)>>
+        BY <2>1 DEF CommandSuccessors
+      <3>2. CASE ExactDecidedLocalBody(
+                    command.node, command.view, command.subject)
+        <4>1. CommandSuccessors(command) =
+                 <<CausalCandidate("Completion", "Apply", command)>>
+          BY <3>1, <3>2, Isa
+        <4>2. command.kind #
+                 CausalCandidate("Completion", "Apply", command).kind
+          BY <2>1, Isa
+             DEF CausalCandidate, NoItemCandidate, AsyncCandidate
+        <4>3. command #
+                 CausalCandidate("Completion", "Apply", command)
+          BY <4>2, CandidateKindMismatchIsDistinct
+        <4>4. SequenceSet(CommandSuccessors(command)) =
+                 {CausalCandidate("Completion", "Apply", command)}
+          BY <4>1, Isa DEF SequenceSet
+        <4> QED BY <4>3, <4>4
+      <3>3. CASE ~ExactDecidedLocalBody(
+                    command.node, command.view, command.subject)
+        <4>1. CommandSuccessors(command) =
+                 <<CausalCandidate(
+                     "Completion", "BeginProposal", command)>>
+          BY <3>1, <3>3, Isa
+        <4>2. command.kind #
+                 CausalCandidate(
+                   "Completion", "BeginProposal", command).kind
+          BY <2>1, Isa
+             DEF CausalCandidate, NoItemCandidate, AsyncCandidate
+        <4>3. command #
+                 CausalCandidate(
+                   "Completion", "BeginProposal", command)
+          BY <4>2, CandidateKindMismatchIsDistinct
+        <4>4. SequenceSet(CommandSuccessors(command)) =
+                 {CausalCandidate(
+                    "Completion", "BeginProposal", command)}
+          BY <4>1, Isa DEF SequenceSet
+        <4> QED BY <4>3, <4>4
+      <3> QED BY <3>2, <3>3
+    <2>2. CASE command.kind = "BeginProposal"
+      BY <1>1, <2>2, Isa
+         DEF CommandSuccessors, CausalCandidate,
+             NoItemCandidate, SequenceSet
+    <2>3. CASE command.kind = "PersistProposal"
+      BY <1>1, <2>3, Isa
+         DEF CommandSuccessors, CausalCandidate,
+             NoItemCandidate, SequenceSet
+    <2>4. CASE command.kind = "DeliverProposal"
+      BY <1>1, <2>4, Isa
+         DEF CommandSuccessors, RetainedBodyRebindCandidate,
+             CausalCandidate, NoItemCandidate, SequenceSet
+    <2>5. CASE command.kind = "DeliverChunk"
+      BY <1>1, <2>5, Isa
+         DEF CommandSuccessors, CausalCandidate,
+             NoItemCandidate, SequenceSet
+    <2>6. CASE command.kind = "FetchBody"
+      BY <1>1, <2>6, Isa
+         DEF CommandSuccessors, CausalCandidate,
+             NoItemCandidate, SequenceSet
+    <2>7. CASE command.kind = "RebindRetainedBody"
+      BY <1>1, <2>7, Isa
+         DEF CommandSuccessors, CausalCandidate,
+             NoItemCandidate, SequenceSet
+    <2>8. CASE command.kind = "FetchCertifiedBody"
+      BY <1>1, <2>8, Isa
+         DEF CommandSuccessors, CausalCandidate,
+             NoItemCandidate, SequenceSet
+    <2>9. CASE command.kind = "StoreBody"
+      BY <1>1, <2>9, Isa
+         DEF CommandSuccessors, CausalCandidate,
+             NoItemCandidate, SequenceSet
+    <2>10. CASE command.kind = "ValidateBody"
+      BY <1>1, <2>10, Isa
+         DEF CommandSuccessors, CausalCandidate,
+             NoItemCandidate, SequenceSet
+    <2>11. CASE command.kind = "BeginPrepare"
+      BY <1>1, <2>11, Isa
+         DEF CommandSuccessors, CausalCandidate,
+             NoItemCandidate, SequenceSet
+    <2>12. CASE command.kind = "PersistPrepare"
+      BY <1>1, <2>12, Isa
+         DEF CommandSuccessors, CausalCandidate,
+             NoItemCandidate, SequenceSet
+    <2>13. CASE command.kind = "DeliverVote"
+      BY <1>1, <2>13, Isa
+         DEF CommandSuccessors, CausalCandidate,
+             NoItemCandidate, SequenceSet
+    <2>14. CASE command.kind = "DeliverQC"
+      BY <1>1, <2>14, Isa
+         DEF CommandSuccessors, CausalCandidate,
+             NoItemCandidate, SequenceSet
+    <2>15. CASE command.kind = "BeginObservePrepare"
+      BY <1>1, <2>15, Isa
+         DEF CommandSuccessors, CausalCandidate,
+             NoItemCandidate, SequenceSet
+    <2>16. CASE command.kind = "PersistObservePrepare"
+      BY <1>1, <2>16, Isa
+         DEF CommandSuccessors, CausalCandidate,
+             NoItemCandidate, SequenceSet
+    <2>17. CASE command.kind = "BeginLockCommit"
+      BY <1>1, <2>17, Isa
+         DEF CommandSuccessors, CausalCandidate,
+             NoItemCandidate, SequenceSet
+    <2>18. CASE command.kind = "PersistLockCommit"
+      BY <1>1, <2>18, Isa
+         DEF CommandSuccessors, CausalCandidate,
+             NoItemCandidate, SequenceSet
+    <2>19. CASE command.kind = "FormCommitQC"
+      BY <1>1, <2>19, Isa
+         DEF CommandSuccessors, CausalCandidate,
+             NoItemCandidate, SequenceSet
+    <2>20. CASE command.kind = "BeginDecision"
+      BY <1>1, <2>20, Isa
+         DEF CommandSuccessors, CausalCandidate,
+             NoItemCandidate, SequenceSet
+    <2>21. CASE command.kind = "PersistDecision"
+      BY <1>1, <2>21, Isa
+         DEF CommandSuccessors, CausalCandidate,
+             NoItemCandidate, SequenceSet
+    <2>22. CASE command.kind = "BeginTimeout"
+      BY <1>1, <2>22, Isa
+         DEF CommandSuccessors, CausalCandidate,
+             NoItemCandidate, SequenceSet
+    <2>23. CASE command.kind = "PersistTimeout"
+      BY <1>1, <2>23, Isa
+         DEF CommandSuccessors, CausalCandidate,
+             NoItemCandidate, SequenceSet
+    <2>24. CASE command.kind = "DeliverTimeout"
+      BY <1>1, <2>24, Isa
+         DEF CommandSuccessors, CausalCandidate,
+             NoItemCandidate, SequenceSet
+    <2>25. CASE command.kind = "FormTC"
+      BY <1>1, <2>25, Isa
+         DEF CommandSuccessors, CausalCandidate,
+             NoItemCandidate, SequenceSet
+    <2>26. CASE command.kind = "DeliverTC"
+      BY <1>1, <2>26, Isa
+         DEF CommandSuccessors, CausalCandidate,
+             NoItemCandidate, SequenceSet
+    <2>27. CASE command.kind = "BeginInstallTC"
+      BY <1>1, <2>27, Isa
+         DEF CommandSuccessors, CausalCandidate,
+             NoItemCandidate, SequenceSet
+    <2>28. CASE command.kind = "PersistInstallTC"
+      BY <1>1, <2>28, Isa
+         DEF CommandSuccessors, InstallCommandSuccessors,
+             InstallCommitSignSuccessor, InstallProposalSuccessor,
+             NoItemCandidate, SequenceSet
+    <2> QED BY <1>1, <2>1, <2>2, <2>3, <2>4, <2>5, <2>6,
+         <2>7, <2>8, <2>9, <2>10, <2>11, <2>12, <2>13, <2>14,
+         <2>15, <2>16, <2>17, <2>18, <2>19, <2>20, <2>21,
+         <2>22, <2>23, <2>24, <2>25, <2>26, <2>27, <2>28
+         DEF CausalSuccessorParentKinds
   <1> QED BY <1>1
 
 THEOREM ControlWorkerRearmsExactlyAfterService ==
@@ -682,9 +874,8 @@ PROOF
          PROVE AsyncIoCapacityTypeInvariant
     <2>1. ASSUME NEW node \in ValidatorIds
            PROVE /\ AsyncQueueDepth(node) <= AsyncQueueCapacity
-                 /\ AsyncCompletionLoad(node) <= AsyncCompletionReserve
                  /\ AsyncIoQueueDepth(node) <= AsyncIoCapacity
-                 /\ AsyncCompletionLoad(node) <= AsyncIoWorkCapacity
+                 /\ AsyncOutstandingWorkCount(node) <= AsyncIoWorkCapacity
       <3>1. /\ asyncCommandQueues[node] = <<>>
              /\ asyncIoQueues[node] = <<>>
              /\ asyncOutstandingWork[node] = {}
@@ -694,10 +885,11 @@ PROOF
                AsyncDeferredInit
       <3>2. /\ AsyncQueueDepth(node) = 0
              /\ AsyncIoQueueDepth(node) = 0
+             /\ AsyncOutstandingWorkCount(node) = 0
              /\ DeferredCompletionCount(node) = 0
         BY <3>1, Isa
            DEF AsyncQueueDepth, AsyncIoQueueDepth,
-               DeferredCompletionCount
+               AsyncOutstandingWorkCount, DeferredCompletionCount
       <3>3. QueuedCompletionIndices(node) = {}
         BY <3>1, EmptyQueuedCompletionIndexSet, SMT
            DEF QueuedCompletionIndices
@@ -712,7 +904,7 @@ PROOF
         BY <1>1, SMT
            DEF AsyncInitAt, AsyncBaseInitAt, AsyncConfiguration,
                AsyncIoCapacity
-      <3> QED BY <3>2, <3>4, <3>5, SMT
+      <3> QED BY <3>2, <3>5, SMT
     <2> QED BY <2>1 DEF AsyncIoCapacityTypeInvariant
   <1> QED BY <1>1
 
@@ -2997,10 +3189,9 @@ PROOF
          DEF AsyncTypeInvariant
     <2>3. ASSUME NEW other \in ValidatorIds
            PROVE /\ AsyncQueueDepth(other)' <= AsyncQueueCapacity
-                 /\ AsyncCompletionLoad(other)' <=
-                      AsyncCompletionReserve
                  /\ AsyncIoQueueDepth(other)' <= AsyncIoCapacity
-                 /\ AsyncCompletionLoad(other)' <= AsyncIoWorkCapacity
+                 /\ AsyncOutstandingWorkCount(other)' <=
+                      AsyncIoWorkCapacity
       <3>1. CASE other = node
         <4>1. asyncIoQueues[node] \in Seq(Range(asyncIoQueues[node]))
           BY <2>1, <2>2
@@ -3026,15 +3217,13 @@ PROOF
         <4>8. AsyncIoQueueDepth(node)' <= AsyncIoCapacity
           BY <4>7 DEF AsyncIoQueueDepth
         <4>9. /\ AsyncQueueDepth(node)' = AsyncQueueDepth(node)
-              /\ AsyncCompletionLoad(node)' = AsyncCompletionLoad(node)
+              /\ AsyncOutstandingWorkCount(node)' =
+                   AsyncOutstandingWorkCount(node)
           BY <1>1, Isa
              DEF EnqueueIoLocalControl, AsyncDeferredVars,
-                 AsyncQueueDepth, AsyncCompletionLoad,
-                 AsyncOutstandingWorkCount, QueuedCompletionCount,
-                 QueuedCompletionIndices, DeferredCompletionCount
+                 AsyncQueueDepth, AsyncOutstandingWorkCount
         <4>10. /\ AsyncQueueDepth(node) <= AsyncQueueCapacity
-              /\ AsyncCompletionLoad(node) <= AsyncCompletionReserve
-              /\ AsyncCompletionLoad(node) <= AsyncIoWorkCapacity
+              /\ AsyncOutstandingWorkCount(node) <= AsyncIoWorkCapacity
           BY <2>1, <2>2 DEF AsyncIoCapacityTypeInvariant
         <4> QED BY <3>1, <4>8, <4>9, <4>10
       <3>2. CASE other # node
@@ -3043,18 +3232,17 @@ PROOF
              FunctionalAppendUpdateAwayFromKey
              DEF EnqueueIoLocalControl, AsyncIoTopologyTypeInvariant
         <4>2. /\ AsyncQueueDepth(other)' = AsyncQueueDepth(other)
-              /\ AsyncCompletionLoad(other)' =
-                   AsyncCompletionLoad(other)
+              /\ AsyncOutstandingWorkCount(other)' =
+                   AsyncOutstandingWorkCount(other)
               /\ AsyncIoQueueDepth(other)' = AsyncIoQueueDepth(other)
           BY <1>1, <4>1, Isa
              DEF EnqueueIoLocalControl, AsyncDeferredVars,
-                 AsyncQueueDepth, AsyncIoQueueDepth, AsyncCompletionLoad,
-                 AsyncOutstandingWorkCount, QueuedCompletionCount,
-                 QueuedCompletionIndices, DeferredCompletionCount
+                 AsyncQueueDepth, AsyncIoQueueDepth,
+                 AsyncOutstandingWorkCount
         <4>3. /\ AsyncQueueDepth(other) <= AsyncQueueCapacity
-              /\ AsyncCompletionLoad(other) <= AsyncCompletionReserve
               /\ AsyncIoQueueDepth(other) <= AsyncIoCapacity
-              /\ AsyncCompletionLoad(other) <= AsyncIoWorkCapacity
+              /\ AsyncOutstandingWorkCount(other) <=
+                   AsyncIoWorkCapacity
           BY <2>1, <2>3 DEF AsyncIoCapacityTypeInvariant
         <4> QED BY <4>2, <4>3
       <3> QED BY <3>1, <3>2
@@ -8510,28 +8698,24 @@ PROOF
          DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
              AsyncRuntimeTypeInvariant, AsyncRuntimeScalarTypeInvariant,
              AsyncConfiguration, AsyncQueueDepth, AsyncQueueTyped
-    <2>26. /\ AsyncCompletionLoad(node) <= AsyncCompletionReserve
+    <2>26. /\ AsyncOutstandingWorkCount(node) <= AsyncIoWorkCapacity
             /\ AsyncIoQueueDepth(node) <= AsyncIoCapacity
-            /\ AsyncCompletionLoad(node) <= AsyncIoWorkCapacity
       BY <2>1 DEF AsyncIoCapacityTypeInvariant
     <2>27. AsyncQueueDepth(node)' <= AsyncQueueCapacity
       BY <2>8, <2>24, <2>25, SMT
     <2>28. \A otherNode \in ValidatorIds:
              /\ AsyncQueueDepth(otherNode)' <= AsyncQueueCapacity
-             /\ AsyncCompletionLoad(otherNode)' <=
-                  AsyncCompletionReserve
              /\ AsyncIoQueueDepth(otherNode)' <= AsyncIoCapacity
-             /\ AsyncCompletionLoad(otherNode)' <= AsyncIoWorkCapacity
+             /\ AsyncOutstandingWorkCount(otherNode)' <=
+                  AsyncIoWorkCapacity
       <3>1. ASSUME NEW otherNode \in ValidatorIds
              PROVE /\ AsyncQueueDepth(otherNode)' <=
                           AsyncQueueCapacity
-                   /\ AsyncCompletionLoad(otherNode)' <=
-                          AsyncCompletionReserve
                    /\ AsyncIoQueueDepth(otherNode)' <= AsyncIoCapacity
-                   /\ AsyncCompletionLoad(otherNode)' <=
+                   /\ AsyncOutstandingWorkCount(otherNode)' <=
                           AsyncIoWorkCapacity
         <4>1. CASE otherNode = node
-          BY <2>9, <2>23, <2>26, <2>27,
+          BY <2>9, <2>10, <2>13, <2>20, <2>26, <2>27,
              <3>1, <4>1, SMT
         <4>2. CASE otherNode # node
           <5>1. /\ asyncCommandQueues'[otherNode] =
@@ -8547,15 +8731,13 @@ PROOF
                    AdmitProducerCompletion, EnqueueCandidate
           <5>2. /\ AsyncQueueDepth(otherNode)' =
                             AsyncQueueDepth(otherNode)
-                 /\ AsyncCompletionLoad(otherNode)' =
-                            AsyncCompletionLoad(otherNode)
+                 /\ AsyncOutstandingWorkCount(otherNode)' =
+                            AsyncOutstandingWorkCount(otherNode)
                  /\ AsyncIoQueueDepth(otherNode)' =
                             AsyncIoQueueDepth(otherNode)
             BY <5>1, Isa
                DEF AsyncQueueDepth, AsyncIoQueueDepth,
-                   AsyncCompletionLoad, AsyncOutstandingWorkCount,
-                   QueuedCompletionCount, QueuedCompletionIndices,
-                   DeferredCompletionCount
+                   AsyncOutstandingWorkCount
           <5> QED BY <2>1, <3>1, <5>2
                DEF AsyncIoCapacityTypeInvariant
         <4> QED BY <4>1, <4>2
@@ -9152,7 +9334,7 @@ THEOREM AdmitFreshLocalCompletionPreservesIoType ==
       /\ candidate.class = "Completion"
       /\ candidate.node = node
       /\ ~CandidateInFlight(candidate)
-      /\ AsyncCompletionLoad(node) < AsyncIoWorkCapacity
+      /\ AsyncOutstandingWorkCount(node) < AsyncIoWorkCapacity
       /\ asyncLocalReadyCompletions' =
            [asyncLocalReadyCompletions EXCEPT
               ![node] = Append(@, candidate)]
@@ -9171,7 +9353,7 @@ PROOF
                 candidate.class = "Completion",
                 candidate.node = node,
                 ~CandidateInFlight(candidate),
-                AsyncCompletionLoad(node) < AsyncIoWorkCapacity,
+                AsyncOutstandingWorkCount(node) < AsyncIoWorkCapacity,
                 asyncLocalReadyCompletions' =
                   [asyncLocalReadyCompletions EXCEPT
                      ![node] = Append(@, candidate)],
@@ -9454,8 +9636,7 @@ PROOF
         BY <3>4, Isa DEF AsyncCompletionLoad
       <3>6. /\ AsyncQueueDepth(node) <= AsyncQueueCapacity
              /\ AsyncIoQueueDepth(node) <= AsyncIoCapacity
-             /\ AsyncCompletionLoad(node) <= AsyncCompletionReserve
-             /\ AsyncCompletionLoad(node) <= AsyncIoWorkCapacity
+             /\ AsyncOutstandingWorkCount(node) <= AsyncIoWorkCapacity
         BY <2>1 DEF AsyncIoCapacityTypeInvariant
       <3>7. /\ AsyncIoWorkCapacity \in Nat
              /\ AsyncCompletionReserve \in Nat
@@ -9484,31 +9665,20 @@ PROOF
              FS_CardinalityType, LenProperties, SMT
              DEF AsyncOutstandingWorkCount, QueuedCompletionCount,
                  DeferredCompletionCount, AsyncCompletionLoad
-      <3>9. /\ AsyncCompletionLoad(node)' <= AsyncIoWorkCapacity
-             /\ AsyncCompletionLoad(node)' <= AsyncCompletionReserve
-        <4>1. AsyncCompletionLoad(node) + 1 <= AsyncIoWorkCapacity
-          BY <1>1, <3>7, <3>8, SMT
-        <4>2. AsyncCompletionLoad(node)' <= AsyncIoWorkCapacity
-          BY <3>5, <4>1
-        <4>3. AsyncCompletionLoad(node)' <= AsyncCompletionReserve
-          BY <3>7, <4>2, SMTT(30)
-        <4> QED BY <4>2, <4>3
+      <3>9. AsyncOutstandingWorkCount(node)' <= AsyncIoWorkCapacity
+        BY <1>1, <3>4, <3>7, SMT
       <3>10. /\ AsyncQueueDepth(node)' <= AsyncQueueCapacity
               /\ AsyncIoQueueDepth(node)' <= AsyncIoCapacity
-              /\ AsyncCompletionLoad(node)' <= AsyncCompletionReserve
-              /\ AsyncCompletionLoad(node)' <= AsyncIoWorkCapacity
+              /\ AsyncOutstandingWorkCount(node)' <= AsyncIoWorkCapacity
         BY <3>4, <3>6, <3>9
       <3>11. \A other \in ValidatorIds:
                /\ AsyncQueueDepth(other)' <= AsyncQueueCapacity
-               /\ AsyncCompletionLoad(other)' <= AsyncCompletionReserve
                /\ AsyncIoQueueDepth(other)' <= AsyncIoCapacity
-               /\ AsyncCompletionLoad(other)' <= AsyncIoWorkCapacity
+               /\ AsyncOutstandingWorkCount(other)' <= AsyncIoWorkCapacity
         <4>1. ASSUME NEW other \in ValidatorIds
                PROVE /\ AsyncQueueDepth(other)' <= AsyncQueueCapacity
-                     /\ AsyncCompletionLoad(other)' <=
-                          AsyncCompletionReserve
                      /\ AsyncIoQueueDepth(other)' <= AsyncIoCapacity
-                     /\ AsyncCompletionLoad(other)' <=
+                     /\ AsyncOutstandingWorkCount(other)' <=
                           AsyncIoWorkCapacity
           <5>1. CASE other = node
             BY <3>10, <5>1
@@ -9524,13 +9694,11 @@ PROOF
                            AsyncQueueDepth(other)
                    /\ AsyncIoQueueDepth(other)' =
                            AsyncIoQueueDepth(other)
-                   /\ AsyncCompletionLoad(other)' =
-                           AsyncCompletionLoad(other)
+                   /\ AsyncOutstandingWorkCount(other)' =
+                           AsyncOutstandingWorkCount(other)
               BY <1>1, <6>1, Isa
                  DEF AsyncQueueDepth, AsyncIoQueueDepth,
-                     AsyncCompletionLoad, AsyncOutstandingWorkCount,
-                     QueuedCompletionCount, QueuedCompletionIndices,
-                     DeferredCompletionCount
+                     AsyncOutstandingWorkCount
             <6> QED BY <2>1, <4>1, <6>2
                  DEF AsyncIoCapacityTypeInvariant
           <5> QED BY <5>1, <5>2
@@ -10069,48 +10237,35 @@ PROOF
       <3>9. AsyncCompletionLoad(node)' =
                AsyncCompletionLoad(node) + 1
         BY <3>7, <3>8, SMT DEF AsyncCompletionLoad
-      <3>10. /\ AsyncCompletionLoad(node) < AsyncIoWorkCapacity
+      <3>10. /\ AsyncOutstandingWorkCount(node) < AsyncIoWorkCapacity
               /\ AsyncIoQueueDepth(node) <
                    AsyncIoAuxCapacity + AsyncIoWorkCapacity
         BY <1>1 DEF AdmitCausalHead, CausalHeadCanAdvance,
                        CanEnqueueIoClass, AsyncIoAdmissionLimit
       <3>11. /\ AsyncQueueDepth(node) <= AsyncQueueCapacity
-              /\ AsyncCompletionLoad(node) <= AsyncCompletionReserve
               /\ AsyncIoQueueDepth(node) <= AsyncIoCapacity
-              /\ AsyncCompletionLoad(node) <= AsyncIoWorkCapacity
+              /\ AsyncOutstandingWorkCount(node) <= AsyncIoWorkCapacity
         BY <3>1 DEF AsyncIoCapacityTypeInvariant
       <3>12. /\ AsyncQueueDepth(node)' <= AsyncQueueCapacity
-              /\ AsyncCompletionLoad(node)' <= AsyncCompletionReserve
               /\ AsyncIoQueueDepth(node)' <= AsyncIoCapacity
-              /\ AsyncCompletionLoad(node)' <= AsyncIoWorkCapacity
+              /\ AsyncOutstandingWorkCount(node)' <= AsyncIoWorkCapacity
         <4>1. AsyncQueueDepth(node)' <= AsyncQueueCapacity
           BY <3>7, <3>11
-        <4>2. AsyncCompletionLoad(node)' <= AsyncIoWorkCapacity
-          BY <3>1, <3>8, <3>9, <3>10, SMT
+        <4>2. AsyncOutstandingWorkCount(node)' <= AsyncIoWorkCapacity
+          BY <3>1, <3>7, <3>8, <3>10, SMT
              DEF AsyncConfiguration
-        <4>3. AsyncIoWorkCapacity <= AsyncCompletionReserve
-          BY <3>1 DEF AsyncConfiguration
-        <4>4. /\ AsyncCompletionLoad(node)' \in Nat
-               /\ AsyncIoWorkCapacity \in Nat
-               /\ AsyncCompletionReserve \in Nat
-          BY <3>1, <3>8 DEF AsyncConfiguration
-        <4>5. AsyncCompletionLoad(node)' <= AsyncCompletionReserve
-          BY <4>2, <4>3, <4>4, SMT
         <4>6. AsyncIoQueueDepth(node)' <= AsyncIoCapacity
           BY <3>1, <3>7, <3>8, <3>10, SMT
              DEF AsyncConfiguration, AsyncIoCapacity
-        <4> QED BY <4>1, <4>2, <4>5, <4>6
+        <4> QED BY <4>1, <4>2, <4>6
       <3>13. \A other \in ValidatorIds:
                 /\ AsyncQueueDepth(other)' <= AsyncQueueCapacity
-                /\ AsyncCompletionLoad(other)' <= AsyncCompletionReserve
                 /\ AsyncIoQueueDepth(other)' <= AsyncIoCapacity
-                /\ AsyncCompletionLoad(other)' <= AsyncIoWorkCapacity
+                /\ AsyncOutstandingWorkCount(other)' <= AsyncIoWorkCapacity
         <4>1. ASSUME NEW other \in ValidatorIds
                PROVE /\ AsyncQueueDepth(other)' <= AsyncQueueCapacity
-                     /\ AsyncCompletionLoad(other)' <=
-                          AsyncCompletionReserve
                      /\ AsyncIoQueueDepth(other)' <= AsyncIoCapacity
-                     /\ AsyncCompletionLoad(other)' <=
+                     /\ AsyncOutstandingWorkCount(other)' <=
                           AsyncIoWorkCapacity
           <5>1. CASE other = node
             BY <3>12, <5>1
@@ -10126,14 +10281,12 @@ PROOF
                  FunctionalAppendUpdateAwayFromKey,
                  FunctionalUpdateAwayFromKey, Isa
             <6>2. /\ AsyncQueueDepth(other)' = AsyncQueueDepth(other)
-                   /\ AsyncCompletionLoad(other)' =
-                          AsyncCompletionLoad(other)
+                   /\ AsyncOutstandingWorkCount(other)' =
+                          AsyncOutstandingWorkCount(other)
                    /\ AsyncIoQueueDepth(other)' = AsyncIoQueueDepth(other)
               BY <6>1, Isa
                  DEF AsyncQueueDepth, AsyncIoQueueDepth,
-                     AsyncCompletionLoad, AsyncOutstandingWorkCount,
-                     QueuedCompletionCount, QueuedCompletionIndices,
-                     DeferredCompletionCount
+                     AsyncOutstandingWorkCount
             <6> QED BY <3>1, <4>1, <6>2
                  DEF AsyncIoCapacityTypeInvariant
           <5> QED BY <5>1, <5>2
@@ -10375,13 +10528,12 @@ PROOF
         BY <1>1, <3>1, CompletionIndicesAfterNonCompletionAppend
       <3>5. /\ QueuedCompletionCount(node)' =
                     QueuedCompletionCount(node)
-             /\ AsyncCompletionLoad(node)' =
-                    AsyncCompletionLoad(node)
+             /\ AsyncOutstandingWorkCount(node)' =
+                    AsyncOutstandingWorkCount(node)
              /\ AsyncIoQueueDepth(node)' = AsyncIoQueueDepth(node)
         BY <1>1, <3>2, <3>3, <3>4, Isa
            DEF QueuedCompletionCount, QueuedCompletionIndices,
-               AsyncCompletionIndices, AsyncCompletionLoad,
-               AsyncOutstandingWorkCount, DeferredCompletionCount,
+               AsyncCompletionIndices, AsyncOutstandingWorkCount,
                AsyncIoQueueDepth
       <3>6. AsyncQueueDepth(node) < AsyncQueueCapacity
         <4>1. candidate.class \in {"Normal", "Progress"}
@@ -10399,9 +10551,9 @@ PROOF
           <5> QED BY <4>2, <5>1, StrictLessTransitive
         <4> QED BY <4>1, <4>3, <4>4
       <3>7. /\ AsyncQueueDepth(node)' <= AsyncQueueCapacity
-             /\ AsyncCompletionLoad(node)' <= AsyncCompletionReserve
              /\ AsyncIoQueueDepth(node)' <= AsyncIoCapacity
-             /\ AsyncCompletionLoad(node)' <= AsyncIoWorkCapacity
+             /\ AsyncOutstandingWorkCount(node)' <=
+                    AsyncIoWorkCapacity
         <4>1. AsyncQueueDepth(node)' <= AsyncQueueCapacity
           <5>1. /\ AsyncQueueDepth(node) \in Nat
                  /\ AsyncQueueCapacity \in Nat
@@ -10409,24 +10561,21 @@ PROOF
           <5>2. AsyncQueueDepth(node) + 1 <= AsyncQueueCapacity
             BY <3>6, <5>1, NaturalIncrementWithinBound
           <5> QED BY <3>3, <5>2
-        <4>2. /\ AsyncCompletionLoad(node) <=
-                         AsyncCompletionReserve
-               /\ AsyncIoQueueDepth(node) <= AsyncIoCapacity
-               /\ AsyncCompletionLoad(node) <= AsyncIoWorkCapacity
+        <4>2. /\ AsyncIoQueueDepth(node) <= AsyncIoCapacity
+               /\ AsyncOutstandingWorkCount(node) <=
+                      AsyncIoWorkCapacity
           BY <2>1 DEF AsyncIoCapacityTypeInvariant
         <4> QED BY <3>5, <4>1, <4>2
       <3>8. \A other \in ValidatorIds:
                /\ AsyncQueueDepth(other)' <= AsyncQueueCapacity
-               /\ AsyncCompletionLoad(other)' <= AsyncCompletionReserve
                /\ AsyncIoQueueDepth(other)' <= AsyncIoCapacity
-               /\ AsyncCompletionLoad(other)' <= AsyncIoWorkCapacity
+               /\ AsyncOutstandingWorkCount(other)' <=
+                      AsyncIoWorkCapacity
         <4>1. ASSUME NEW other \in ValidatorIds
                PROVE /\ AsyncQueueDepth(other)' <= AsyncQueueCapacity
-                     /\ AsyncCompletionLoad(other)' <=
-                          AsyncCompletionReserve
                      /\ AsyncIoQueueDepth(other)' <= AsyncIoCapacity
-                     /\ AsyncCompletionLoad(other)' <=
-                          AsyncIoWorkCapacity
+                     /\ AsyncOutstandingWorkCount(other)' <=
+                            AsyncIoWorkCapacity
           <5>1. CASE other = node
             BY <3>7, <5>1
           <5>2. CASE other # node
@@ -10436,14 +10585,12 @@ PROOF
                  FunctionalAppendUpdateAwayFromKey
             <6>2. /\ AsyncQueueDepth(other)' =
                            AsyncQueueDepth(other)
-                   /\ AsyncCompletionLoad(other)' =
-                           AsyncCompletionLoad(other)
+                   /\ AsyncOutstandingWorkCount(other)' =
+                           AsyncOutstandingWorkCount(other)
                    /\ AsyncIoQueueDepth(other)' =
                            AsyncIoQueueDepth(other)
               BY <3>2, <6>1, Isa
-                 DEF AsyncQueueDepth, AsyncCompletionLoad,
-                     AsyncOutstandingWorkCount, QueuedCompletionCount,
-                     QueuedCompletionIndices, DeferredCompletionCount,
+                 DEF AsyncQueueDepth, AsyncOutstandingWorkCount,
                      AsyncIoQueueDepth
             <6> QED BY <2>1, <4>1, <6>2
                  DEF AsyncIoCapacityTypeInvariant
@@ -11997,7 +12144,7 @@ PROOF
              TypedCertifiedResponseCandidateFacts
              DEF CertifiedCandidate
         <4>3. /\ ~CandidateInFlight(CertifiedCandidate)
-               /\ AsyncCompletionLoad(node) < AsyncIoWorkCapacity
+               /\ AsyncOutstandingWorkCount(node) < AsyncIoWorkCapacity
           BY <2>4, <3>2, Isa
              DEF IngressItemCanDrain, DrainItem,
                  CertifiedAccepted, CertifiedCandidate,
@@ -12392,6 +12539,64 @@ PROOF
     <2> QED BY <2>1, <2>2
   <1> QED BY <1>1
 
+THEOREM ExecutedFreshCommandSuccessorsTypedAndOwned ==
+  \A command:
+    /\ StrongInductiveInvariant
+    /\ AsyncTypeInvariant
+    /\ AsyncCandidateTyped(command)
+    /\ ExecuteCommand(command)
+    => /\ AsyncQueueTyped(FreshCommandSuccessors(command))
+       /\ AsyncCausalQueueOwnership(
+            command.node, FreshCommandSuccessors(command))
+BY ExecutedCommandSuccessorsTypedAndOwned, Isa
+   DEF FreshCommandSuccessors, FreshCandidateSequence,
+       CommandSuccessors, InstallCommandSuccessors,
+       AsyncQueueTyped,
+       AsyncCausalQueueOwnership, SequenceSet
+
+THEOREM CommandSuccessorsHaveBoundedLength ==
+  \A command:
+    Len(CommandSuccessors(command)) \in 0..3
+BY Isa
+   DEF CommandSuccessors, InstallCommandSuccessors
+
+THEOREM CommandSuccessorInventoryIsClosed ==
+  \A command:
+    /\ (command.kind \notin CausalSuccessorParentKinds
+          => CommandSuccessors(command) = <<>>)
+    /\ (CommandSuccessors(command) # <<>>
+          => command.kind \in CausalSuccessorParentKinds)
+BY Isa
+   DEF CommandSuccessors, InstallCommandSuccessors,
+       CausalSuccessorParentKinds
+
+THEOREM CommandSuccessorsHaveUniqueValues ==
+  \A command:
+    SequenceHasUniqueValues(CommandSuccessors(command))
+BY Isa
+   DEF CommandSuccessors, InstallCommandSuccessors,
+       InstallCommitSignSuccessor, InstallProposalSuccessor,
+       RetainedBodyRebindCandidate, CausalCandidate, NoItemCandidate,
+       AsyncCandidate, SequenceHasUniqueValues, SequenceSet
+
+THEOREM FreshCommandSuccessorsHaveUniqueValues ==
+  \A command:
+    SequenceHasUniqueValues(FreshCommandSuccessors(command))
+BY CommandSuccessorsHaveUniqueValues, Isa
+   DEF FreshCommandSuccessors, FreshCandidateSequence,
+       CommandSuccessors, InstallCommandSuccessors,
+       SequenceHasUniqueValues, SequenceSet
+
+THEOREM FreshCommandSuccessorsAreUnscheduled ==
+  \A command:
+    SequenceSet(FreshCommandSuccessors(command)) \cap
+      (QueuedCandidates \cup DeferredCandidates \cup CausalCandidates
+        \cup TrackedWorkCandidates) = {}
+BY Isa
+   DEF FreshCommandSuccessors, FreshCandidateSequence,
+       CommandSuccessors, InstallCommandSuccessors,
+       CandidateScheduled, SequenceSet
+
 THEOREM TimeoutCausalSuccessorsTypedAndOwned ==
   \A node \in ValidatorIds:
     AsyncTypeInvariant
@@ -12432,6 +12637,20 @@ PROOF
          NonInstallCommandSuccessorsTypedAndOwned
     <2> QED BY <2>2, <2>4
   <1> QED BY <1>1
+
+THEOREM FreshTimeoutCausalSuccessorsTypedAndOwned ==
+  \A node \in ValidatorIds:
+    AsyncTypeInvariant
+      => /\ AsyncQueueTyped(
+              FreshCommandSuccessors(TimeoutCausalCommand(node)))
+         /\ AsyncCausalQueueOwnership(
+              node, FreshCommandSuccessors(TimeoutCausalCommand(node)))
+BY TimeoutCausalSuccessorsTypedAndOwned, Isa
+   DEF FreshCommandSuccessors, FreshCandidateSequence,
+       CommandSuccessors, InstallCommandSuccessors,
+       AsyncQueueTyped,
+       AsyncCausalQueueOwnership, SequenceSet,
+       TimeoutCausalCommand, NoItemCandidate, AsyncCandidate
 
 THEOREM FunctionalConcatUpdateAtKey ==
   \A mapping, key, sequence:
@@ -12778,8 +12997,7 @@ PROOF
                          ![node] = NextCommandClass(
                            SelectedCommandClass(node))]
       BY <1>1, Isa
-         DEF SerializedRuntimeStep, RuntimeStep,
-             DirectCommitCertificateDiscoveryStep, DeferredDrainStep,
+         DEF SerializedRuntimeStep, RuntimeStep, DeferredDrainStep,
              DeferredTagStep, DeferredTimeoutStep,
              DeferredRetransmitStep, DirectTimeoutStep,
              DirectRetransmitStep, FifoRuntimeStep, IdleRuntimeStep,
@@ -12858,8 +13076,7 @@ PROOF
            /\ asyncTimeoutEmitted' \in [ValidatorIds -> BOOLEAN]
       BY <1>1, <2>1, <2>2,
          FunctionalUpdatePreservesType, SMTT(120)
-         DEF SerializedRuntimeStep, RuntimeStep,
-             DirectCommitCertificateDiscoveryStep, DeferredDrainStep,
+         DEF SerializedRuntimeStep, RuntimeStep, DeferredDrainStep,
              DeferredTagStep, DeferredTimeoutStep,
              DeferredRetransmitStep, DirectTimeoutStep,
              DirectRetransmitStep, FifoRuntimeStep, IdleRuntimeStep,
@@ -13885,15 +14102,14 @@ THEOREM NonQueueRuntimeBranchPreservesIoType ==
   \A node \in ValidatorIds:
     /\ AsyncIoTypeInvariant
     /\ SerializedRuntimeStep(node)
-    /\ (DirectCommitCertificateDiscoveryStep(node)
-          \/ DeferredTagStep(node)
+    /\ (DeferredTagStep(node)
           \/ DirectTimeoutStep(node)
           \/ DirectRetransmitStep(node)
           \/ IdleRuntimeStep(node))
     => AsyncIoTypeInvariant'
 BY SchedulerIoStutterPreservesIoType, Isa
    DEF SerializedRuntimeStep,
-       DirectCommitCertificateDiscoveryStep, DeferredTagStep,
+       DeferredTagStep,
        DeferredTimeoutStep, DeferredRetransmitStep,
        DirectTimeoutStep, DirectRetransmitStep, IdleRuntimeStep,
        AsyncIoVars, AsyncDeferredVars, DeferCommand,
@@ -13916,8 +14132,7 @@ PROOF
       BY <1>1, <2>1, <2>2, DeferredDrainRuntimePreservesIoType
     <2>3. CASE FifoRuntimeStep(node)
       BY <1>1, <2>1, <2>3, FifoRuntimePreservesIoType
-    <2>4. CASE DirectCommitCertificateDiscoveryStep(node)
-                   \/ DeferredTagStep(node)
+    <2>4. CASE DeferredTagStep(node)
                    \/ DirectTimeoutStep(node)
                    \/ DirectRetransmitStep(node)
                    \/ IdleRuntimeStep(node)
@@ -13937,8 +14152,7 @@ THEOREM SerializedRuntimeCausalFrame ==
             /\ ExecuteCommand(command)
             /\ AppendCausalSuccessors(command)
 BY RuntimeSelectedCommandsAreTyped, SMTT(120)
-   DEF SerializedRuntimeStep, RuntimeStep,
-       DirectCommitCertificateDiscoveryStep, DeferredDrainStep,
+   DEF SerializedRuntimeStep, RuntimeStep, DeferredDrainStep,
        DeferredTagStep, DeferredTimeoutStep, DeferredRetransmitStep,
        DirectTimeoutStep, DirectRetransmitStep, FifoRuntimeStep,
        IdleRuntimeStep, NodeQueueNonempty, DeferredQueueNonempty,
@@ -13972,14 +14186,14 @@ PROOF
       BY <2>1, <2>3, AsyncCausalTypeStutter DEF LeaveCausalQueues
     <2>4. CASE AppendCausalSuccessors(TimeoutCausalCommand(node))
       <3>1. /\ AsyncQueueTyped(
-                       CommandSuccessors(TimeoutCausalCommand(node)))
+                       FreshCommandSuccessors(TimeoutCausalCommand(node)))
              /\ AsyncCausalQueueOwnership(
-                  node, CommandSuccessors(TimeoutCausalCommand(node)))
-        BY <1>1, <2>1, TimeoutCausalSuccessorsTypedAndOwned
+                  node, FreshCommandSuccessors(TimeoutCausalCommand(node)))
+        BY <1>1, <2>1, FreshTimeoutCausalSuccessorsTypedAndOwned
       <3>2. asyncCausalQueues' =
                [asyncCausalQueues EXCEPT
                   ![node] = @ \o
-                    CommandSuccessors(TimeoutCausalCommand(node))]
+                    FreshCommandSuccessors(TimeoutCausalCommand(node))]
         BY <2>4 DEF AppendCausalSuccessors,
                       TimeoutCausalCommand, NoItemCandidate,
                       AsyncCandidate
@@ -13994,14 +14208,14 @@ PROOF
                     /\ ExecuteCommand(command)
                     /\ AppendCausalSuccessors(command)
         BY <2>5
-      <3>2. /\ AsyncQueueTyped(CommandSuccessors(command))
+      <3>2. /\ AsyncQueueTyped(FreshCommandSuccessors(command))
              /\ AsyncCausalQueueOwnership(
-                  command.node, CommandSuccessors(command))
-        BY <1>1, <3>1, ExecutedCommandSuccessorsTypedAndOwned
+                  command.node, FreshCommandSuccessors(command))
+        BY <1>1, <3>1, ExecutedFreshCommandSuccessorsTypedAndOwned
       <3>3. /\ command.node \in ValidatorIds
              /\ asyncCausalQueues' =
                   [asyncCausalQueues EXCEPT
-                     ![command.node] = @ \o CommandSuccessors(command)]
+                     ![command.node] = @ \o FreshCommandSuccessors(command)]
         BY <3>1 DEF AsyncCandidateTyped, AppendCausalSuccessors
       <3> QED BY <2>1, <3>2, <3>3,
            AppendOwnedCausalSuccessorsPreservesCausalType
@@ -14025,8 +14239,7 @@ THEOREM SerializedRuntimeLeavesIngress ==
     SerializedRuntimeStep(node)
       => UNCHANGED <<asyncIngressLanes, asyncIngressReady>>
 BY ExecuteCommandLeavesIngress, Isa
-   DEF SerializedRuntimeStep, RuntimeStep,
-       DirectCommitCertificateDiscoveryStep, DeferredDrainStep,
+   DEF SerializedRuntimeStep, RuntimeStep, DeferredDrainStep,
        DeferredTagStep, DeferredTimeoutStep, DeferredRetransmitStep,
        DirectTimeoutStep, DirectRetransmitStep, FifoRuntimeStep,
        IdleRuntimeStep, DeferCommand, DiscardCommand, AsyncAuxVars, vars
@@ -14054,7 +14267,7 @@ BY AsyncCurrentResponsiveVotersAreValidators,
    DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
        AsyncTransportTypeInvariant, AsyncTransportClockTypeInvariant,
        RunNode, RunnerServiceFrame, SerializedRuntimeStep, RuntimeStep,
-       DirectCommitCertificateDiscoveryStep, DeferredDrainStep,
+       DeferredDrainStep,
        DeferredTagStep, DeferredTimeoutStep, DeferredRetransmitStep,
        DirectTimeoutStep, DirectRetransmitStep, FifoRuntimeStep,
        IdleRuntimeStep, ExecuteCommand, ExecuteRegularCommand,
@@ -14082,7 +14295,7 @@ BY AsyncCurrentResponsiveVotersAreValidators,
    DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
        AsyncDeferredTypeInvariant, AsyncDeferredTopologyTypeInvariant,
        SerializedRuntimeStep, RuntimeStep,
-       DirectCommitCertificateDiscoveryStep, DeferredDrainStep,
+       DeferredDrainStep,
        DeferredTagStep, DeferredTimeoutStep, DeferredRetransmitStep,
        DirectTimeoutStep, DirectRetransmitStep, FifoRuntimeStep,
        IdleRuntimeStep, NodeQueueNonempty, DeferredQueueNonempty,
@@ -16609,29 +16822,25 @@ PROOF
     <2>1. node \in ValidatorIds
       BY <1>1, AsyncCurrentResponsiveVotersAreValidators
          DEF AsyncTypeInvariant
-    <2>2. CASE DirectCommitCertificateDiscoveryStep(node)
+    <2>2. CASE DeferredDrainStep(node)
       BY <1>1, <2>1, <2>2,
-         DirectCommitDiscoveryPreservesTransportContentType
-    <2>3. CASE DeferredDrainStep(node)
-      BY <1>1, <2>1, <2>3,
          DeferredDrainRuntimePreservesTransportContentType
-    <2>4. CASE DeferredTagStep(node)
-      BY <1>1, <2>1, <2>4,
+    <2>3. CASE DeferredTagStep(node)
+      BY <1>1, <2>1, <2>3,
          DeferredTagPreservesTransportContentType
-    <2>5. CASE DirectTimeoutStep(node)
-      BY <1>1, <2>1, <2>5,
+    <2>4. CASE DirectTimeoutStep(node)
+      BY <1>1, <2>1, <2>4,
          DirectTimeoutPreservesTransportContentType
-    <2>6. CASE FifoRuntimeStep(node)
-      BY <1>1, <2>1, <2>6,
+    <2>5. CASE FifoRuntimeStep(node)
+      BY <1>1, <2>1, <2>5,
          FifoRuntimePreservesTransportContentType
-    <2>7. CASE DirectRetransmitStep(node)
-      BY <1>1, <2>1, <2>7,
+    <2>6. CASE DirectRetransmitStep(node)
+      BY <1>1, <2>1, <2>6,
          DirectRetransmitPreservesTransportContentType
-    <2>8. CASE IdleRuntimeStep(node)
-      BY <1>1, <2>1, <2>8,
+    <2>7. CASE IdleRuntimeStep(node)
+      BY <1>1, <2>1, <2>7,
          IdleRuntimePreservesTransportContentType
-    <2> QED BY <1>1, <2>2, <2>3, <2>4, <2>5, <2>6,
-                  <2>7, <2>8
+    <2> QED BY <1>1, <2>2, <2>3, <2>4, <2>5, <2>6, <2>7
          DEF SerializedRuntimeStep, RuntimeStep
   <1> QED BY <1>1
 
@@ -17464,28 +17673,25 @@ PROOF
               RuntimeStep(node),
               receivedTimeoutVotes' # receivedTimeoutVotes
          PROVE \E command: ExecuteCommand(command)
-    <2>1. CASE DirectCommitCertificateDiscoveryStep(node)
-      BY <1>1, <2>1, Isa
-         DEF DirectCommitCertificateDiscoveryStep, vars
-    <2>2. CASE DeferredDrainStep(node)
+    <2>1. CASE DeferredDrainStep(node)
       <3>1. ExecuteCommand(NextDeferredCommand(node))
-        BY <1>1, <2>2, ChangedDeferredDrainExecutesCommand
+        BY <1>1, <2>1, ChangedDeferredDrainExecutesCommand
       <3> QED BY <3>1
-    <2>3. CASE DeferredTagStep(node)
-      BY <1>1, <2>3, Isa
+    <2>2. CASE DeferredTagStep(node)
+      BY <1>1, <2>2, Isa
          DEF DeferredTagStep, DeferredTimeoutStep,
              DeferredRetransmitStep, BeginTimeout, vars
-    <2>4. CASE DirectTimeoutStep(node)
-      BY <1>1, <2>4, Isa DEF DirectTimeoutStep, BeginTimeout, vars
-    <2>5. CASE FifoRuntimeStep(node)
+    <2>3. CASE DirectTimeoutStep(node)
+      BY <1>1, <2>3, Isa DEF DirectTimeoutStep, BeginTimeout, vars
+    <2>4. CASE FifoRuntimeStep(node)
       <3>1. ExecuteCommand(NextNodeCommand(node))
-        BY <1>1, <2>5, ChangedFifoRuntimeExecutesCommand
+        BY <1>1, <2>4, ChangedFifoRuntimeExecutesCommand
       <3> QED BY <3>1
-    <2>6. CASE DirectRetransmitStep(node)
-      BY <1>1, <2>6, Isa DEF DirectRetransmitStep, vars
-    <2>7. CASE IdleRuntimeStep(node)
-      BY <1>1, <2>7, Isa DEF IdleRuntimeStep, vars
-    <2> QED BY <1>1, <2>1, <2>2, <2>3, <2>4, <2>5, <2>6, <2>7
+    <2>5. CASE DirectRetransmitStep(node)
+      BY <1>1, <2>5, Isa DEF DirectRetransmitStep, vars
+    <2>6. CASE IdleRuntimeStep(node)
+      BY <1>1, <2>6, Isa DEF IdleRuntimeStep, vars
+    <2> QED BY <1>1, <2>1, <2>2, <2>3, <2>4, <2>5, <2>6
          DEF RuntimeStep
   <1> QED BY <1>1
 
@@ -17572,18 +17778,21 @@ PROOF
     <2>2. CASE AsyncTick
       BY <2>2, Isa DEF AsyncTick, AsyncNonClockVars, vars
     <2>3. CASE \E node \in AsyncCurrentResponsiveVoters:
-                  ServiceIoWorker(node)
-      BY <2>3, Isa DEF ServiceIoWorker, vars
+                  DirectCommitCertificateDiscoveryStep(node)
+      BY <2>3, Isa DEF DirectCommitCertificateDiscoveryStep, vars
     <2>4. CASE \E node \in AsyncCurrentResponsiveVoters:
+                  ServiceIoWorker(node)
+      BY <2>4, Isa DEF ServiceIoWorker, vars
+    <2>5. CASE \E node \in AsyncCurrentResponsiveVoters:
                   EnqueueIoLocalControl(node)
-      BY <2>4, Isa DEF EnqueueIoLocalControl, vars
-    <2>5. CASE AsyncNetworkStep
-      BY <2>5, Isa
+      BY <2>5, Isa DEF EnqueueIoLocalControl, vars
+    <2>6. CASE AsyncNetworkStep
+      BY <2>6, Isa
          DEF AsyncNetworkStep, AdmitIngressPacket,
              AdmitHiddenPacket, CoalesceHiddenPacket, vars
-    <2>6. CASE AsyncFaultStep
-      BY <2>6, AsyncFaultStepKeepsTimeoutPool
-    <2> QED BY <1>1, <2>1, <2>2, <2>3, <2>4, <2>5, <2>6
+    <2>7. CASE AsyncFaultStep
+      BY <2>7, AsyncFaultStepKeepsTimeoutPool
+    <2> QED BY <1>1, <2>1, <2>2, <2>3, <2>4, <2>5, <2>6, <2>7
          DEF AsyncNonRunnerStep
   <1> QED BY <1>1
 
@@ -19065,6 +19274,51 @@ PROOF
          DEF AsyncFaultStep
   <1> QED BY <1>1
 
+THEOREM DirectCommitDiscoveryPreservesSchedulerType ==
+  \A node \in AsyncCurrentResponsiveVoters:
+    /\ StrongInductiveInvariant
+    /\ AsyncTypeInvariant
+    /\ DirectCommitCertificateDiscoveryStep(node)
+    => AsyncSchedulerTypeInvariant'
+PROOF
+  <1>1. ASSUME NEW node \in AsyncCurrentResponsiveVoters,
+                StrongInductiveInvariant,
+                AsyncTypeInvariant,
+                DirectCommitCertificateDiscoveryStep(node)
+         PROVE AsyncSchedulerTypeInvariant'
+    <2>1. node \in ValidatorIds
+      BY <1>1, AsyncCurrentResponsiveVotersAreValidators
+         DEF AsyncTypeInvariant
+    <2>2. AsyncSchedulerTypeInvariant
+      BY <1>1 DEF AsyncTypeInvariant
+    <2>3. AsyncTransportContentTypeInvariant'
+      BY <1>1, <2>1,
+         DirectCommitDiscoveryPreservesTransportContentType
+    <2>4. /\ UNCHANGED AsyncRuntimeScalarTypeVars
+           /\ UNCHANGED asyncCausalQueues
+           /\ UNCHANGED AsyncIoTopologyTypeVars
+           /\ UNCHANGED AsyncIoContentTypeVars
+           /\ UNCHANGED AsyncIoCapacityTypeVars
+           /\ UNCHANGED AsyncDeferredTopologyTypeVars
+           /\ UNCHANGED <<asyncDeferredCompletionQueues,
+                           asyncDeferredProgressQueues,
+                           asyncDeferredNormalQueues>>
+           /\ UNCHANGED AsyncTransportClockTypeVars
+           /\ UNCHANGED AsyncIngressTopologyTypeVars
+           /\ UNCHANGED asyncIngressLanes
+      BY <1>1, Isa
+         DEF DirectCommitCertificateDiscoveryStep,
+             PublishCommitCertificateRequests, LeaveCausalQueues,
+             AsyncRuntimeScalarTypeVars, AsyncLocalAdmissionVars,
+             AsyncIoTopologyTypeVars, AsyncIoContentTypeVars,
+             AsyncIoCapacityTypeVars, AsyncIoVars,
+             AsyncDeferredTopologyTypeVars, AsyncDeferredVars,
+             AsyncTransportClockTypeVars,
+             AsyncIngressTopologyTypeVars, vars
+    <2> QED BY <2>2, <2>3, <2>4,
+                AsyncTransportContentChangePreservesSchedulerType
+  <1> QED BY <1>1
+
 THEOREM AsyncNonRunnerStepPreservesSchedulerType ==
   /\ StrongInductiveInvariant
   /\ AsyncTypeInvariant
@@ -19082,16 +19336,20 @@ PROOF
       BY <1>1, <2>2, AsyncTickPreservesSchedulerType
          DEF AsyncTypeInvariant
     <2>3. CASE \E node \in AsyncCurrentResponsiveVoters:
-                  ServiceIoWorker(node)
-      BY <1>1, <2>3, ServiceIoWorkerPreservesSchedulerType
+                  DirectCommitCertificateDiscoveryStep(node)
+      BY <1>1, <2>3,
+         DirectCommitDiscoveryPreservesSchedulerType
     <2>4. CASE \E node \in AsyncCurrentResponsiveVoters:
+                  ServiceIoWorker(node)
+      BY <1>1, <2>4, ServiceIoWorkerPreservesSchedulerType
+    <2>5. CASE \E node \in AsyncCurrentResponsiveVoters:
                   EnqueueIoLocalControl(node)
-      BY <1>1, <2>4, EnqueueIoControlPreservesSchedulerType
-    <2>5. CASE AsyncNetworkStep
-      BY <1>1, <2>5, AsyncNetworkStepPreservesSchedulerType
-    <2>6. CASE AsyncFaultStep
-      BY <1>1, <2>6, AsyncFaultStepPreservesSchedulerType
-    <2> QED BY <1>1, <2>1, <2>2, <2>3, <2>4, <2>5, <2>6
+      BY <1>1, <2>5, EnqueueIoControlPreservesSchedulerType
+    <2>6. CASE AsyncNetworkStep
+      BY <1>1, <2>6, AsyncNetworkStepPreservesSchedulerType
+    <2>7. CASE AsyncFaultStep
+      BY <1>1, <2>7, AsyncFaultStepPreservesSchedulerType
+    <2> QED BY <1>1, <2>1, <2>2, <2>3, <2>4, <2>5, <2>6, <2>7
          DEF AsyncNonRunnerStep
   <1> QED BY <1>1
 
@@ -19977,7 +20235,7 @@ THEOREM LocalProducerAdmissionIsEnabled ==
     /\ LocalAdmissionCanAdvance(node)
     /\ SelectedLocalSource(node) = "Producer"
     => ENABLED LocalAdmissionStep(node)
-BY SelectedProducerCanAdmit, ExpandENABLED, Isa
+BY SelectedProducerCanAdvance, ExpandENABLED, Isa
    DEF LocalAdmissionStep, AdmitProducerCompletion, AdmitCausalHead,
        UpdateLocalAdmissionMetadata, OtherLocalSource,
        EnqueueCandidate, LeaveCausalQueues, AsyncIoVars,
@@ -20135,7 +20393,7 @@ BY LocalDuplicateCausalAdmissionIsEnabled,
 LocalPhaseAdvanceStep(node) ==
   /\ UNCHANGED AsyncDeferredVars
   /\ LeaveCausalQueues
-  /\ UNCHANGED AsyncLocalAdmissionVars
+  /\ RecordBlockedCausalDebt(node)
   /\ UNCHANGED <<vars, asyncCommandQueues,
                   asyncNextCommandClass, asyncFifoOwed,
                   asyncTimeoutEmitted, AsyncIoVars,
@@ -20162,7 +20420,7 @@ PROOF
     <2>1. ENABLED LocalPhaseAdvanceStep(node)
       BY ExpandENABLED, Isa
          DEF LocalPhaseAdvanceStep, LeaveCausalQueues,
-             AsyncLocalAdmissionVars, AsyncIoVars,
+             RecordBlockedCausalDebt, AsyncIoVars,
              AsyncDeferredVars, vars
     <2>2. LocalPhaseAdvanceStep(node) \in BOOLEAN
       BY Isa DEF LocalPhaseAdvanceStep
@@ -20172,7 +20430,8 @@ PROOF
       BY <1>1, Isa
          DEF LocalPhaseAdvanceStep, LocalAdmissionStep,
              AdmitProducerCompletion, AdmitCausalHead,
-             UpdateLocalAdmissionMetadata, EnqueueCandidate,
+             UpdateLocalAdmissionMetadata, RecordBlockedCausalDebt,
+             EnqueueCandidate,
              LeaveCausalQueues,
              AsyncLocalAdmissionVars, AsyncIoVars, AsyncDeferredVars, vars
     <2>5. ENABLED LocalPhaseAdvanceStep(node)
@@ -20423,50 +20682,360 @@ BY IngressSelectedDrainIsEnabled,
    IngressPhaseAdvanceIsEnabled, Isa
 
 (***************************************************************************
-The serialized runtime relation is a priority union, but every selected arm
-still has a concrete successor.  These small lemmas keep the priority tests
-visible while constructing the exact primed-state witnesses used by RunNode.
+The recurring discovery prefix has an independent concrete successor.  The
+serialized runtime relation below is a priority union, but every selected arm
+also has a concrete successor.  These small lemmas keep both outer-loop action
+boundaries and the runtime priority tests visible in enabledness proofs.
 ***************************************************************************)
 
-CommitCertificateDiscoverySerializedStep(node) ==
-  /\ DirectCommitCertificateDiscoveryStep(node)
-  /\ UNCHANGED AsyncIoVars
-  /\ UNCHANGED AsyncLocalAdmissionVars
-  /\ asyncRunnerPhase' =
-       [asyncRunnerPhase EXCEPT ![node] = "Local"]
-  /\ asyncRunnerBudget' =
-       [asyncRunnerBudget EXCEPT ![node] = AsyncQueueCapacity]
-
-THEOREM CommitCertificateDiscoveryRuntimeIsEnabled ==
+THEOREM CommitCertificateDiscoveryPrefixIsEnabled ==
   \A node \in ValidatorIds:
-    /\ asyncRunnerPhase[node] = "Runtime"
-    /\ CommitCertificateDiscoveryDue(node)
-    => ENABLED SerializedRuntimeStep(node)
+    CommitCertificateDiscoveryDue(node)
+      => ENABLED DirectCommitCertificateDiscoveryStep(node)
 PROOF
   <1>1. ASSUME NEW node \in ValidatorIds,
-                /\ asyncRunnerPhase[node] = "Runtime"
-                /\ CommitCertificateDiscoveryDue(node)
-         PROVE ENABLED SerializedRuntimeStep(node)
-    <2>1. ENABLED CommitCertificateDiscoverySerializedStep(node)
+                CommitCertificateDiscoveryDue(node)
+         PROVE ENABLED DirectCommitCertificateDiscoveryStep(node)
+    <2>1. ENABLED DirectCommitCertificateDiscoveryStep(node)
       BY <1>1, ExpandENABLED, Isa
-         DEF CommitCertificateDiscoverySerializedStep,
-             DirectCommitCertificateDiscoveryStep,
+         DEF DirectCommitCertificateDiscoveryStep,
              PublishCommitCertificateRequests, LeaveCausalQueues,
              AsyncIoVars, AsyncDeferredVars, vars
-    <2>2. CommitCertificateDiscoverySerializedStep(node) \in BOOLEAN
-      BY Isa DEF CommitCertificateDiscoverySerializedStep,
-                 DirectCommitCertificateDiscoveryStep
-    <2>3. SerializedRuntimeStep(node) \in BOOLEAN
-      BY Isa DEF SerializedRuntimeStep, RuntimeStep
-    <2>4. CommitCertificateDiscoverySerializedStep(node)
-             => SerializedRuntimeStep(node)
+    <2> QED BY <2>1
+  <1> QED BY <1>1
+
+THEOREM GstCoreStepIsMonotone ==
+  gst /\ [Next]_vars => gst'
+BY IsaM("blast")
+   DEF Next, SetGST, AssembleLocalBody, BeginLocalProposal, PersistProposal,
+       CompleteProposalSignature, ByzantineBroadcastProposal,
+       DeliverProposal, FetchBody, RebindRetainedBody, StoreBody,
+       ValidateBody,
+       ValidateDecidedBody, RejectBody, BeginPrepare, PersistPrepare,
+       CompleteVoteSignature, ByzantineBroadcastVote, DeliverVote,
+       FormPrepareQC, DeliverQC, BeginObservePrepare,
+       PersistObservePrepare, BeginLockCommit, PersistLockCommit,
+       FormCommitQC, BeginDecision, PersistDecision, BeginTimeout,
+       PersistTimeout, CompleteTimeoutSignature, ByzantineBroadcastTimeout,
+       DeliverTimeout, FormTC, DeliverTC, BeginInstallTC, PersistInstallTC,
+       FetchCertifiedBody, ApplyDecision, Crash, Restart, ResumeProposal,
+       ResumeVote, ResumeTimeout, DropProposal, vars
+
+THEOREM GstAsyncStepIsMonotone ==
+  gst /\ [AsyncNext]_AsyncAllVars => gst'
+PROOF
+  <1>1. ASSUME gst, [AsyncNext]_AsyncAllVars
+         PROVE gst'
+    <2>1. CASE AsyncNext
+      <3>1. [Next]_vars
+        BY <2>1, AsyncStepRefinementObligation
+      <3> QED BY <1>1, <3>1, GstCoreStepIsMonotone
+    <2>2. CASE UNCHANGED AsyncAllVars
+      BY <1>1, <2>2, Isa DEF AsyncAllVars, vars
+    <2> QED BY <1>1, <2>1, <2>2
+  <1> QED BY <1>1
+
+CommitCertificateDiscoveryPending(node) ==
+  /\ AsyncStrongTypeInvariant
+  /\ gst
+  /\ CommitCertificateDiscoveryDue(node)
+
+CommitCertificateDiscoveryOutcome(node) ==
+  \/ NodeHasDecision(node)
+  \/ ActiveCommitCertificateRequests(node) # {}
+
+THEOREM DirectCommitCertificateDiscoveryPublishes ==
+  \A node \in ValidatorIds:
+    DirectCommitCertificateDiscoveryStep(node)
+      => ActiveCommitCertificateRequests(node)' # {}
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds,
+                DirectCommitCertificateDiscoveryStep(node)
+         PROVE ActiveCommitCertificateRequests(node)' # {}
+    <2>1. /\ CommitCertificateRequestOutbox(node) # {}
+           /\ asyncActiveRequests' =
+                asyncActiveRequests
+                  \cup CommitCertificateRequestOutbox(node)
+      BY <1>1
+         DEF DirectCommitCertificateDiscoveryStep,
+             CommitCertificateDiscoveryDue,
+             PublishCommitCertificateRequests
+    <2>2. \A item \in CommitCertificateRequestOutbox(node):
+             /\ item.source = node
+             /\ item.kind = "CommitCertificateRequest"
+      BY Isa
+         DEF CommitCertificateRequestOutbox, AsyncNetworkItem
+    <2> QED BY <2>1, <2>2, Isa
+         DEF ActiveCommitCertificateRequests
+  <1> QED BY <1>1
+
+THEOREM CommitCertificateRequestOutboxNonemptyIffRemoteVoter ==
+  \A node:
+    (CommitCertificateRequestOutbox(node) # {})
+      <=> (CurrentVoters \ {node}) # {}
+BY Isa
+   DEF CommitCertificateRequestOutbox, AsyncNetworkItem
+
+THEOREM AsyncRunnerStepLeavesDiscoveryClock ==
+  AsyncRunnerStep => asyncNow' = asyncNow
+BY Isa
+   DEF AsyncRunnerStep, RunNode, RunHistoricalServer
+
+THEOREM AsyncFaultStepLeavesDiscoveryClock ==
+  AsyncFaultStep => asyncNow' = asyncNow
+PROOF
+  <1>1. ASSUME AsyncFaultStep
+         PROVE asyncNow' = asyncNow
+    <2>1. CASE \E packet \in asyncTransport: PreGstLosePacket(packet)
+      BY <2>1, Isa DEF PreGstLosePacket
+    <2>2. CASE \E node \in ValidatorIds: PreGstCrash(node)
+      BY <2>2, Isa DEF PreGstCrash, AsyncSchedulerVars
+    <2>3. CASE \E source \in AsyncIngressSources,
+                  recipient \in ValidatorIds,
+                  nonce \in 0..(AsyncIngressCapacity - 1):
+                  InjectByzantineNoise(source, recipient, nonce)
+      BY <2>3, Isa DEF InjectByzantineNoise
+    <2>4. CASE \E kind \in {"NormalJunk", "ProgressJunk"},
+                  source \in ValidatorIds, recipient \in ValidatorIds,
+                  nonce \in 0..(AsyncIngressCapacity - 1):
+                  InjectAuthenticatedJunk(
+                    kind, source, recipient, nonce)
+      BY <2>4, Isa DEF InjectAuthenticatedJunk
+    <2>5. CASE \E source \in ValidatorIds,
+                  recipient \in ValidatorIds, qc \in commitQCs,
+                  nonce \in 0..(AsyncIngressCapacity - 1):
+                  InjectByzantineCertifiedRequest(
+                    source, recipient, qc, nonce)
+      BY <2>5, Isa DEF InjectByzantineCertifiedRequest
+    <2>6. CASE \E signer \in ValidatorIds, roundView \in Views,
+                  subject \in Subjects, justifyRank \in Ranks,
+                  justifySubject \in SubjectOrNone:
+                  AsyncByzantineProposal(
+                    signer, roundView, subject,
+                    justifyRank, justifySubject)
+      BY <2>6, Isa DEF AsyncByzantineProposal
+    <2>7. CASE \E signer \in ValidatorIds, roundView \in Views,
+                  phase \in Phases, subject \in Subjects:
+                  AsyncByzantineVote(
+                    signer, roundView, phase, subject)
+      BY <2>7, Isa DEF AsyncByzantineVote
+    <2>8. CASE \E signer \in ValidatorIds, roundView \in Views,
+                  highRank \in Ranks, highSubject \in SubjectOrNone:
+                  AsyncByzantineTimeout(
+                    signer, roundView, highRank, highSubject)
+      BY <2>8, Isa DEF AsyncByzantineTimeout
+    <2> QED BY <1>1, <2>1, <2>2, <2>3, <2>4,
+                <2>5, <2>6, <2>7, <2>8
+         DEF AsyncFaultStep
+  <1> QED BY <1>1
+
+THEOREM AsyncNonRunnerStepPreservesDiscoveryClockThreshold ==
+  /\ AsyncTypeInvariant
+  /\ asyncNow >= AsyncRoundTimeout
+  /\ AsyncNonRunnerStep
+  => asyncNow' >= AsyncRoundTimeout
+PROOF
+  <1>1. ASSUME AsyncTypeInvariant,
+              asyncNow >= AsyncRoundTimeout,
+              AsyncNonRunnerStep
+         PROVE asyncNow' >= AsyncRoundTimeout
+    <2>1. /\ asyncNow \in Nat
+           /\ AsyncRoundTimeout \in Nat
+      BY <1>1
+         DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+             AsyncRuntimeTypeInvariant,
+             AsyncRuntimeScalarTypeInvariant, AsyncConfiguration
+    <2>2. CASE AsyncSetGST
+      BY <1>1, <2>2, Isa
+         DEF AsyncSetGST, AsyncSchedulerVars
+    <2>3. CASE AsyncTick
+      BY <1>1, <2>1, <2>3, Isa DEF AsyncTick
+    <2>4. CASE \E node \in AsyncCurrentResponsiveVoters:
+                  DirectCommitCertificateDiscoveryStep(node)
+      BY <1>1, <2>4, Isa
+         DEF DirectCommitCertificateDiscoveryStep
+    <2>5. CASE \E node \in AsyncCurrentResponsiveVoters:
+                  ServiceIoWorker(node)
+      BY <1>1, <2>5, Isa DEF ServiceIoWorker
+    <2>6. CASE \E node \in AsyncCurrentResponsiveVoters:
+                  EnqueueIoLocalControl(node)
+      BY <1>1, <2>6, Isa DEF EnqueueIoLocalControl
+    <2>7. CASE AsyncNetworkStep
+      BY <1>1, <2>7, Isa
+         DEF AsyncNetworkStep, AdmitIngressPacket,
+             AdmitHiddenPacket, CoalesceHiddenPacket
+    <2>8. CASE AsyncFaultStep
+      BY <1>1, <2>8, AsyncFaultStepLeavesDiscoveryClock
+    <2> QED BY <1>1, <2>2, <2>3, <2>4, <2>5,
+                <2>6, <2>7, <2>8
+         DEF AsyncNonRunnerStep
+  <1> QED BY <1>1
+
+THEOREM AsyncBracketNextPreservesDiscoveryClockThreshold ==
+  /\ AsyncTypeInvariant
+  /\ asyncNow >= AsyncRoundTimeout
+  /\ [AsyncNext]_AsyncAllVars
+  => asyncNow' >= AsyncRoundTimeout
+PROOF
+  <1>1. ASSUME AsyncTypeInvariant,
+              asyncNow >= AsyncRoundTimeout,
+              [AsyncNext]_AsyncAllVars
+         PROVE asyncNow' >= AsyncRoundTimeout
+    <2>1. CASE UNCHANGED AsyncAllVars
+      BY <1>1, <2>1, Isa
+         DEF AsyncAllVars, AsyncSchedulerVars
+    <2>2. CASE AsyncNext
+      <3>1. CASE AsyncNonCrashStep
+        <4>1. CASE AsyncRunnerStep
+          BY <1>1, <4>1, AsyncRunnerStepLeavesDiscoveryClock
+        <4>2. CASE AsyncNonRunnerStep
+          BY <1>1, <4>2,
+             AsyncNonRunnerStepPreservesDiscoveryClockThreshold
+        <4> QED BY <3>1, <4>1, <4>2 DEF AsyncNonCrashStep
+      <3>2. CASE \E node \in ValidatorIds: PreGstCrash(node)
+        BY <1>1, <3>2, Isa
+           DEF PreGstCrash, AsyncSchedulerVars
+      <3> QED BY <2>2, <3>1, <3>2 DEF AsyncNext
+    <2> QED BY <1>1, <2>1, <2>2
+  <1> QED BY <1>1
+
+THEOREM CommitCertificateDiscoveryPendingUnlessOutcome ==
+  \A node:
+    CommitCertificateDiscoveryPending(node)
+      /\ [AsyncNext]_AsyncAllVars
+    => CommitCertificateDiscoveryPending(node)'
+         \/ CommitCertificateDiscoveryOutcome(node)'
+PROOF
+  <1>1. ASSUME NEW node,
+                CommitCertificateDiscoveryPending(node),
+                [AsyncNext]_AsyncAllVars
+         PROVE CommitCertificateDiscoveryPending(node)'
+                 \/ CommitCertificateDiscoveryOutcome(node)'
+    <2>1. AsyncStrongTypeInvariant'
+      BY <1>1, AsyncBracketNextPreservesStrongTypeInvariant
+         DEF CommitCertificateDiscoveryPending
+    <2>2. gst'
+      BY <1>1, GstAsyncStepIsMonotone
+         DEF CommitCertificateDiscoveryPending
+    <2>3. asyncNow' >= AsyncRoundTimeout
+      BY <1>1, AsyncStrongTypeProjectsAsyncType,
+         AsyncBracketNextPreservesDiscoveryClockThreshold
+         DEF CommitCertificateDiscoveryPending,
+             CommitCertificateDiscoveryDue
+    <2>4. /\ context' = context
+           /\ CurrentVoters' = CurrentVoters
+           /\ AsyncCurrentResponsiveVoters' =
+                AsyncCurrentResponsiveVoters
       BY <1>1, Isa
-         DEF CommitCertificateDiscoverySerializedStep,
-             SerializedRuntimeStep, RuntimeStep
-    <2>5. ENABLED CommitCertificateDiscoverySerializedStep(node)
-             => ENABLED SerializedRuntimeStep(node)
-      BY <2>2, <2>3, <2>4, ENABLEDaxioms
-    <2> QED BY <2>1, <2>5
+         DEF AsyncNext, AsyncAllVars, vars,
+             AsyncCurrentResponsiveVoters, CurrentVoters, CurrentEpoch
+    <2>5. CommitCertificateRequestOutbox(node)' # {}
+      <3>1. (CurrentVoters \ {node}) # {}
+        BY <1>1, CommitCertificateRequestOutboxNonemptyIffRemoteVoter
+           DEF CommitCertificateDiscoveryPending,
+               CommitCertificateDiscoveryDue
+      <3>2. (CurrentVoters' \ {node}) # {}
+        BY <2>4, <3>1
+      <3> QED BY <3>2,
+           CommitCertificateRequestOutboxNonemptyIffRemoteVoter
+    <2>6. CASE CommitCertificateDiscoveryOutcome(node)'
+      BY <2>6
+    <2>7. CASE ~CommitCertificateDiscoveryOutcome(node)'
+      <3>1. /\ ~NodeHasDecision(node)'
+             /\ ActiveCommitCertificateRequests(node)' = {}
+        BY <2>7 DEF CommitCertificateDiscoveryOutcome
+      <3>2. node \in AsyncCurrentResponsiveVoters'
+        BY <1>1, <2>4
+           DEF CommitCertificateDiscoveryPending,
+               CommitCertificateDiscoveryDue
+      <3>3. CommitCertificateDiscoveryDue(node)'
+        BY <2>3, <2>5, <3>1, <3>2
+           DEF CommitCertificateDiscoveryDue
+      <3>4. CommitCertificateDiscoveryPending(node)'
+        BY <2>1, <2>2, <3>3
+           DEF CommitCertificateDiscoveryPending
+      <3> QED BY <3>4
+    <2> QED BY <2>6, <2>7
+  <1> QED BY <1>1
+
+THEOREM CommitCertificateDiscoveryPendingEnablesFairPrefix ==
+  \A node:
+    CommitCertificateDiscoveryPending(node)
+      => ENABLED
+           <<PostGstCommitCertificateDiscovery(node)>>_AsyncAllVars
+PROOF
+  <1>1. ASSUME NEW node,
+                CommitCertificateDiscoveryPending(node)
+         PROVE ENABLED
+                 <<PostGstCommitCertificateDiscovery(node)>>_AsyncAllVars
+    <2>1. node \in ValidatorIds
+      BY <1>1, AsyncCurrentResponsiveVotersAreValidators
+         DEF CommitCertificateDiscoveryPending,
+             CommitCertificateDiscoveryDue,
+             AsyncStrongTypeInvariant, StrongInductiveInvariant, Safety
+    <2>2. ENABLED DirectCommitCertificateDiscoveryStep(node)
+      BY <1>1, <2>1, CommitCertificateDiscoveryPrefixIsEnabled
+         DEF CommitCertificateDiscoveryPending
+    <2>3. DirectCommitCertificateDiscoveryStep(node) \in BOOLEAN
+      BY Isa DEF DirectCommitCertificateDiscoveryStep
+    <2>4. <<PostGstCommitCertificateDiscovery(node)>>_AsyncAllVars
+             \in BOOLEAN
+      BY Isa DEF PostGstCommitCertificateDiscovery
+    <2>5. DirectCommitCertificateDiscoveryStep(node)
+             => <<PostGstCommitCertificateDiscovery(node)>>_AsyncAllVars
+      BY <1>1, <2>1, DirectCommitCertificateDiscoveryPublishes, Isa
+         DEF CommitCertificateDiscoveryPending,
+             PostGstCommitCertificateDiscovery,
+             ActiveCommitCertificateRequests, AsyncAllVars
+    <2>6. ENABLED DirectCommitCertificateDiscoveryStep(node)
+             => ENABLED
+                  <<PostGstCommitCertificateDiscovery(node)>>_AsyncAllVars
+      BY <2>3, <2>4, <2>5, ENABLEDaxioms
+    <2> QED BY <2>2, <2>6
+  <1> QED BY <1>1
+
+THEOREM FairCommitCertificateDiscoveryPublishesOrDecides ==
+  \A initialContext:
+    AsyncSpecAt(initialContext)
+      => \A node \in AsyncVotersAt(initialContext):
+           CommitCertificateDiscoveryPending(node)
+             ~> CommitCertificateDiscoveryOutcome(node)
+PROOF
+  <1>1. ASSUME NEW initialContext
+         PROVE AsyncSpecAt(initialContext)
+                 => \A node \in AsyncVotersAt(initialContext):
+                      CommitCertificateDiscoveryPending(node)
+                        ~> CommitCertificateDiscoveryOutcome(node)
+    <2>1. ASSUME NEW node \in AsyncVotersAt(initialContext)
+           PROVE AsyncSpecAt(initialContext)
+                   => (CommitCertificateDiscoveryPending(node)
+                         ~> CommitCertificateDiscoveryOutcome(node))
+      <3>1. (CommitCertificateDiscoveryPending(node)
+                /\ ~CommitCertificateDiscoveryOutcome(node))
+               => ENABLED
+                    <<PostGstCommitCertificateDiscovery(node)>>_AsyncAllVars
+        BY CommitCertificateDiscoveryPendingEnablesFairPrefix
+      <3>2. (CommitCertificateDiscoveryPending(node)
+                /\ ~CommitCertificateDiscoveryOutcome(node)
+                /\ <<PostGstCommitCertificateDiscovery(node)>>_AsyncAllVars)
+               => CommitCertificateDiscoveryOutcome(node)'
+        BY DirectCommitCertificateDiscoveryPublishes, Isa
+           DEF CommitCertificateDiscoveryPending,
+               CommitCertificateDiscoveryOutcome,
+               PostGstCommitCertificateDiscovery,
+               ActiveCommitCertificateRequests, AsyncAllVars
+      <3>3. CommitCertificateDiscoveryPending(node)
+                /\ [AsyncNext]_AsyncAllVars
+               => CommitCertificateDiscoveryPending(node)'
+                    \/ CommitCertificateDiscoveryOutcome(node)'
+        BY CommitCertificateDiscoveryPendingUnlessOutcome
+      <3>4. AsyncSpecAt(initialContext)
+               => WF_AsyncAllVars(
+                    PostGstCommitCertificateDiscovery(node))
+        BY <2>1 DEF AsyncSpecAt, AsyncFairnessAt
+      <3> QED BY <3>1, <3>2, <3>3, <3>4, PTL
+           DEF AsyncSpecAt
+    <2> QED BY <2>1
   <1> QED BY <1>1
 
 IdleSerializedRuntimeStep(node) ==
@@ -20481,7 +21050,6 @@ IdleSerializedRuntimeStep(node) ==
 THEOREM IdleSerializedRuntimeIsEnabled ==
   \A node \in ValidatorIds:
     /\ asyncRunnerPhase[node] = "Runtime"
-    /\ ~CommitCertificateDiscoveryDue(node)
     /\ ~asyncDeferredDrainOwed[node]
     /\ ~DeferredTagExecutable(node)
     /\ ~TimeoutDue(node)
@@ -20491,7 +21059,6 @@ THEOREM IdleSerializedRuntimeIsEnabled ==
 PROOF
   <1>1. ASSUME NEW node \in ValidatorIds,
                 /\ asyncRunnerPhase[node] = "Runtime"
-                /\ ~CommitCertificateDiscoveryDue(node)
                 /\ ~asyncDeferredDrainOwed[node]
                 /\ ~DeferredTagExecutable(node)
                 /\ ~TimeoutDue(node)
@@ -20528,7 +21095,6 @@ DirectRetransmitSerializedStep(node) ==
 THEOREM DirectRetransmitRuntimeIsEnabled ==
   \A node \in ValidatorIds:
     /\ asyncRunnerPhase[node] = "Runtime"
-    /\ ~CommitCertificateDiscoveryDue(node)
     /\ ~asyncDeferredDrainOwed[node]
     /\ ~DeferredTagExecutable(node)
     /\ ~TimeoutDue(node)
@@ -20538,7 +21104,6 @@ THEOREM DirectRetransmitRuntimeIsEnabled ==
 PROOF
   <1>1. ASSUME NEW node \in ValidatorIds,
                 /\ asyncRunnerPhase[node] = "Runtime"
-                /\ ~CommitCertificateDiscoveryDue(node)
                 /\ ~asyncDeferredDrainOwed[node]
                 /\ ~DeferredTagExecutable(node)
                 /\ ~TimeoutDue(node)
@@ -20577,7 +21142,6 @@ DeferredRetransmitSerializedStep(node) ==
 THEOREM DeferredRetransmitRuntimeIsEnabled ==
   \A node \in ValidatorIds:
     /\ asyncRunnerPhase[node] = "Runtime"
-    /\ ~CommitCertificateDiscoveryDue(node)
     /\ ~asyncDeferredDrainOwed[node]
     /\ DeferredTagExecutable(node)
     /\ ~DeferredTimeoutExecutable(node)
@@ -20585,7 +21149,6 @@ THEOREM DeferredRetransmitRuntimeIsEnabled ==
 PROOF
   <1>1. ASSUME NEW node \in ValidatorIds,
                 /\ asyncRunnerPhase[node] = "Runtime"
-                /\ ~CommitCertificateDiscoveryDue(node)
                 /\ ~asyncDeferredDrainOwed[node]
                 /\ DeferredTagExecutable(node)
                 /\ ~DeferredTimeoutExecutable(node)
@@ -20641,14 +21204,12 @@ DeferredDrainEmptySerializedStep(node) ==
 THEOREM DeferredDrainEmptyRuntimeIsEnabled ==
   \A node \in ValidatorIds:
     /\ asyncRunnerPhase[node] = "Runtime"
-    /\ ~CommitCertificateDiscoveryDue(node)
     /\ asyncDeferredDrainOwed[node]
     /\ ~DeferredQueueNonempty(node)
     => ENABLED SerializedRuntimeStep(node)
 PROOF
   <1>1. ASSUME NEW node \in ValidatorIds,
                 /\ asyncRunnerPhase[node] = "Runtime"
-                /\ ~CommitCertificateDiscoveryDue(node)
                 /\ asyncDeferredDrainOwed[node]
                 /\ ~DeferredQueueNonempty(node)
          PROVE ENABLED SerializedRuntimeStep(node)
@@ -20693,7 +21254,6 @@ DeferredDrainBusySerializedStep(node) ==
 THEOREM DeferredDrainBusyRuntimeIsEnabled ==
   \A node \in ValidatorIds:
     /\ asyncRunnerPhase[node] = "Runtime"
-    /\ ~CommitCertificateDiscoveryDue(node)
     /\ asyncDeferredDrainOwed[node]
     /\ DeferredQueueNonempty(node)
     /\ ~CommandDispatchable(NextDeferredCommand(node))
@@ -20702,7 +21262,6 @@ THEOREM DeferredDrainBusyRuntimeIsEnabled ==
 PROOF
   <1>1. ASSUME NEW node \in ValidatorIds,
                 /\ asyncRunnerPhase[node] = "Runtime"
-                /\ ~CommitCertificateDiscoveryDue(node)
                 /\ asyncDeferredDrainOwed[node]
                 /\ DeferredQueueNonempty(node)
                 /\ ~CommandDispatchable(NextDeferredCommand(node))
@@ -20741,7 +21300,6 @@ DeferredDrainDiscardSerializedStep(node) ==
 THEOREM DeferredDrainDiscardRuntimeIsEnabled ==
   \A node \in ValidatorIds:
     /\ asyncRunnerPhase[node] = "Runtime"
-    /\ ~CommitCertificateDiscoveryDue(node)
     /\ asyncDeferredDrainOwed[node]
     /\ DeferredQueueNonempty(node)
     /\ ~CommandDispatchable(NextDeferredCommand(node))
@@ -20750,7 +21308,6 @@ THEOREM DeferredDrainDiscardRuntimeIsEnabled ==
 PROOF
   <1>1. ASSUME NEW node \in ValidatorIds,
                 /\ asyncRunnerPhase[node] = "Runtime"
-                /\ ~CommitCertificateDiscoveryDue(node)
                 /\ asyncDeferredDrainOwed[node]
                 /\ DeferredQueueNonempty(node)
                 /\ ~CommandDispatchable(NextDeferredCommand(node))
@@ -20781,7 +21338,6 @@ PROOF
   <1> QED BY <1>1
 
 FifoRuntimeSelected(node) ==
-  /\ ~CommitCertificateDiscoveryDue(node)
   /\ ~asyncDeferredDrainOwed[node]
   /\ ~DeferredTagExecutable(node)
   /\ ~TimeoutDue(node)
@@ -20911,7 +21467,6 @@ DirectTimeoutDeferredSerializedStep(node) ==
 THEOREM DirectTimeoutDeferredRuntimeIsEnabled ==
   \A node \in ValidatorIds:
     /\ asyncRunnerPhase[node] = "Runtime"
-    /\ ~CommitCertificateDiscoveryDue(node)
     /\ ~asyncDeferredDrainOwed[node]
     /\ ~DeferredTagExecutable(node)
     /\ TimeoutDue(node)
@@ -20920,7 +21475,6 @@ THEOREM DirectTimeoutDeferredRuntimeIsEnabled ==
 PROOF
   <1>1. ASSUME NEW node \in ValidatorIds,
                 /\ asyncRunnerPhase[node] = "Runtime"
-                /\ ~CommitCertificateDiscoveryDue(node)
                 /\ ~asyncDeferredDrainOwed[node]
                 /\ ~DeferredTagExecutable(node)
                 /\ TimeoutDue(node)
@@ -20972,7 +21526,6 @@ DeferredTimeoutNoBeginSerializedStep(node) ==
 THEOREM DeferredTimeoutNoBeginRuntimeIsEnabled ==
   \A node \in ValidatorIds:
     /\ asyncRunnerPhase[node] = "Runtime"
-    /\ ~CommitCertificateDiscoveryDue(node)
     /\ ~asyncDeferredDrainOwed[node]
     /\ DeferredTimeoutExecutable(node)
     /\ ~BeginTimeoutEnabled(node)
@@ -20980,7 +21533,6 @@ THEOREM DeferredTimeoutNoBeginRuntimeIsEnabled ==
 PROOF
   <1>1. ASSUME NEW node \in ValidatorIds,
                 /\ asyncRunnerPhase[node] = "Runtime"
-                /\ ~CommitCertificateDiscoveryDue(node)
                 /\ ~asyncDeferredDrainOwed[node]
                 /\ DeferredTimeoutExecutable(node)
                 /\ ~BeginTimeoutEnabled(node)
@@ -21033,7 +21585,6 @@ DirectTimeoutBeginSerializedStep(node) ==
 THEOREM DirectTimeoutBeginRuntimeIsEnabled ==
   \A node \in ValidatorIds:
     /\ asyncRunnerPhase[node] = "Runtime"
-    /\ ~CommitCertificateDiscoveryDue(node)
     /\ ~asyncDeferredDrainOwed[node]
     /\ ~DeferredTagExecutable(node)
     /\ TimeoutDue(node)
@@ -21042,7 +21593,6 @@ THEOREM DirectTimeoutBeginRuntimeIsEnabled ==
 PROOF
   <1>1. ASSUME NEW node \in ValidatorIds,
                 /\ asyncRunnerPhase[node] = "Runtime"
-                /\ ~CommitCertificateDiscoveryDue(node)
                 /\ ~asyncDeferredDrainOwed[node]
                 /\ ~DeferredTagExecutable(node)
                 /\ TimeoutDue(node)
@@ -21094,7 +21644,6 @@ DeferredTimeoutBeginSerializedStep(node) ==
 THEOREM DeferredTimeoutBeginRuntimeIsEnabled ==
   \A node \in ValidatorIds:
     /\ asyncRunnerPhase[node] = "Runtime"
-    /\ ~CommitCertificateDiscoveryDue(node)
     /\ ~asyncDeferredDrainOwed[node]
     /\ DeferredTimeoutExecutable(node)
     /\ BeginTimeoutEnabled(node)
@@ -21102,7 +21651,6 @@ THEOREM DeferredTimeoutBeginRuntimeIsEnabled ==
 PROOF
   <1>1. ASSUME NEW node \in ValidatorIds,
                 /\ asyncRunnerPhase[node] = "Runtime"
-                /\ ~CommitCertificateDiscoveryDue(node)
                 /\ ~asyncDeferredDrainOwed[node]
                 /\ DeferredTimeoutExecutable(node)
                 /\ BeginTimeoutEnabled(node)
@@ -21131,8 +21679,7 @@ PROOF
   <1> QED BY <1>1
 
 ExecutionRuntimeSelected(node) ==
-  /\ ~CommitCertificateDiscoveryDue(node)
-  /\ \/ /\ asyncDeferredDrainOwed[node]
+  \/ /\ asyncDeferredDrainOwed[node]
            /\ DeferredQueueNonempty(node)
      \/ /\ ~asyncDeferredDrainOwed[node]
            /\ FifoRuntimeSelected(node)
@@ -21305,8 +21852,7 @@ THEOREM SerializedRuntimeStepIsEnabled ==
   \A node \in ValidatorIds:
     asyncRunnerPhase[node] = "Runtime"
       => ENABLED SerializedRuntimeStep(node)
-BY CommitCertificateDiscoveryRuntimeIsEnabled,
-   DeferredDrainEmptyRuntimeIsEnabled,
+BY DeferredDrainEmptyRuntimeIsEnabled,
    DeferredDrainBusyRuntimeIsEnabled,
    DeferredDrainDiscardRuntimeIsEnabled,
    DeferredRetransmitRuntimeIsEnabled,
@@ -21411,7 +21957,6 @@ PROOF
       BY <1>1, ExpandENABLED, Isa
          DEF SerializedRunNodeStep, NodeServiceFrame,
              SerializedRuntimeStep, RuntimeStep,
-             DirectCommitCertificateDiscoveryStep,
              DeferredDrainStep, DeferredTagStep,
              DeferredTimeoutStep, DeferredRetransmitStep,
              DirectTimeoutStep, FifoRuntimeStep,
@@ -21565,6 +22110,787 @@ PROOF
              => AsyncStrongTypeInvariant'
       BY AsyncBracketNextPreservesStrongTypeInvariant
     <2> QED BY <2>1, <2>2, PTL DEF AsyncSpecAt
+  <1> QED BY <1>1
+
+(***************************************************************************
+Exact ownership induction for the asynchronous executor.
+
+The progress rank may use an ownership carrier only after that carrier has
+been proved invariant on every concrete scheduler transition.  Keep the
+relevant variable tuple deliberately smaller than `AsyncAllVars`: network
+history, clocks, and protocol certificates may change without changing an
+executor owner, while the pending/signing sets are included because they are
+the source of each Busy completion witness.
+***************************************************************************)
+
+AsyncProgressOwnershipCoreVars ==
+  <<pendingProposal, pendingPrepare, pendingObservePrepare,
+    pendingLockCommit, pendingTimeout, pendingInstallTC, pendingDecision,
+    signProposals, signVotes, signTimeouts>>
+
+AsyncProgressOwnershipSchedulerVars ==
+  <<asyncCommandQueues, asyncIoQueues, asyncOutstandingWork,
+    asyncIoReadyCompletions, asyncLocalReadyCompletions,
+    asyncDeferredCompletionQueues, asyncDeferredProgressQueues,
+    asyncDeferredNormalQueues, asyncCausalQueues>>
+
+AsyncProgressOwnershipVars ==
+  <<AsyncProgressOwnershipCoreVars, AsyncProgressOwnershipSchedulerVars>>
+
+THEOREM AsyncProgressOwnershipStutter ==
+  AsyncProgressOwnershipInvariant /\ UNCHANGED AsyncProgressOwnershipVars
+    => AsyncProgressOwnershipInvariant'
+BY Isa
+   DEF AsyncProgressOwnershipInvariant,
+       AsyncLogicalCandidateOwnershipInvariant,
+       AsyncOutstandingCarrierInvariant,
+       SerializedBusyOwnershipInvariant, BusyCompletionWitnessInvariant,
+       AsyncProgressOwnershipVars, AsyncProgressOwnershipCoreVars,
+       AsyncProgressOwnershipSchedulerVars, QueuedCandidates,
+       DeferredCandidates, CausalCandidates, TrackedWorkCandidates,
+       ConsensusIoCandidates, SerializedBusyOwners,
+       BusyCompletionCandidates, ActiveBusyCompletionCarrier,
+       SequenceHasUniqueValues, SequenceSet, NodeIdle, PendingNodes,
+       SigningNodes, AllPendingRequests, RequestNodeSet,
+       RequestsUniqueByNode
+
+THEOREM AsyncInitEstablishesProgressOwnership ==
+  \A initialContext:
+    AsyncInitAt(initialContext) => AsyncProgressOwnershipInvariant
+BY Isa
+   DEF AsyncInitAt, AsyncBaseInitAt, InitAt, AsyncRuntimeInit,
+       AsyncIoInit, AsyncDeferredInit,
+       AsyncProgressOwnershipInvariant,
+       AsyncLogicalCandidateOwnershipInvariant,
+       AsyncOutstandingCarrierInvariant,
+       SerializedBusyOwnershipInvariant, BusyCompletionWitnessInvariant,
+       QueuedCandidates, DeferredCandidates, CausalCandidates,
+       TrackedWorkCandidates, ConsensusIoCandidates,
+       SerializedBusyOwners, BusyCompletionCandidates,
+       ActiveBusyCompletionCarrier, SequenceHasUniqueValues, SequenceSet,
+       NodeIdle, PendingNodes, SigningNodes, AllPendingRequests,
+       RequestNodeSet, RequestsUniqueByNode, NoItemCandidate,
+       AsyncCandidate
+
+THEOREM AsyncAllVarsStutterPreservesProgressOwnership ==
+  AsyncProgressOwnershipInvariant /\ UNCHANGED AsyncAllVars
+    => AsyncProgressOwnershipInvariant'
+BY AsyncProgressOwnershipStutter, Isa
+   DEF AsyncAllVars, AsyncSchedulerVars,
+       AsyncProgressOwnershipVars, AsyncProgressOwnershipCoreVars,
+       AsyncProgressOwnershipSchedulerVars, vars
+
+THEOREM AsyncSetGstPreservesProgressOwnership ==
+  AsyncProgressOwnershipInvariant /\ AsyncSetGST
+    => AsyncProgressOwnershipInvariant'
+BY AsyncProgressOwnershipStutter, Isa
+   DEF AsyncSetGST, SetGST, AsyncSchedulerVars,
+       AsyncProgressOwnershipVars, AsyncProgressOwnershipCoreVars,
+       AsyncProgressOwnershipSchedulerVars, vars
+
+THEOREM AsyncTickPreservesProgressOwnership ==
+  AsyncProgressOwnershipInvariant /\ AsyncTick
+    => AsyncProgressOwnershipInvariant'
+BY AsyncProgressOwnershipStutter, Isa
+   DEF AsyncTick, AsyncNonClockVars, AsyncIoVars, AsyncDeferredVars,
+       AsyncLocalAdmissionVars, AsyncProgressOwnershipVars,
+       AsyncProgressOwnershipCoreVars,
+       AsyncProgressOwnershipSchedulerVars, vars
+
+THEOREM AdmitIngressPacketPreservesProgressOwnership ==
+  \A recipient \in ValidatorIds, source \in AsyncIngressSources:
+    AsyncProgressOwnershipInvariant /\ AdmitIngressPacket(recipient, source)
+      => AsyncProgressOwnershipInvariant'
+BY AsyncProgressOwnershipStutter, Isa
+   DEF AdmitIngressPacket, AdmitHiddenPacket, CoalesceHiddenPacket,
+       AsyncIoVars, AsyncDeferredVars, LeaveCausalQueues,
+       AsyncLocalAdmissionVars, AsyncProgressOwnershipVars,
+       AsyncProgressOwnershipCoreVars,
+       AsyncProgressOwnershipSchedulerVars, vars
+
+THEOREM TransportOnlyFaultPreservesProgressOwnership ==
+  \A packet, source, recipient, nonce, kind, qc, signer, roundView,
+     subject, justifyRank, justifySubject, phase, highRank, highSubject:
+    /\ AsyncProgressOwnershipInvariant
+    /\ \/ PreGstLosePacket(packet)
+       \/ InjectByzantineNoise(source, recipient, nonce)
+       \/ InjectAuthenticatedJunk(kind, source, recipient, nonce)
+       \/ InjectByzantineCertifiedRequest(source, recipient, qc, nonce)
+       \/ AsyncByzantineProposal(
+            signer, roundView, subject, justifyRank, justifySubject)
+       \/ AsyncByzantineVote(signer, roundView, phase, subject)
+       \/ AsyncByzantineTimeout(
+            signer, roundView, highRank, highSubject)
+    => AsyncProgressOwnershipInvariant'
+BY AsyncProgressOwnershipStutter, Isa
+   DEF PreGstLosePacket, InjectByzantineNoise,
+       InjectAuthenticatedJunk, InjectByzantineCertifiedRequest,
+       AsyncByzantineProposal, AsyncByzantineVote,
+       AsyncByzantineTimeout, ByzantineBroadcastProposal,
+       ByzantineBroadcastVote, ByzantineBroadcastTimeout,
+       PublishEphemeralItems, PacketsForItems, NoSendItem,
+       AsyncIoVars, AsyncDeferredVars, LeaveCausalQueues,
+       AsyncLocalAdmissionVars, AsyncProgressOwnershipVars,
+       AsyncProgressOwnershipCoreVars,
+       AsyncProgressOwnershipSchedulerVars, AsyncAuxVars, vars
+
+THEOREM PreGstCrashPreservesProgressOwnership ==
+  \A node \in ValidatorIds:
+    /\ AsyncProgressOwnershipInvariant
+    /\ PreGstCrash(node)
+    => AsyncProgressOwnershipInvariant'
+BY Isa
+   DEF PreGstCrash, Crash, AsyncSchedulerVars,
+       AsyncProgressOwnershipInvariant,
+       AsyncLogicalCandidateOwnershipInvariant,
+       AsyncOutstandingCarrierInvariant,
+       SerializedBusyOwnershipInvariant, BusyCompletionWitnessInvariant,
+       QueuedCandidates, DeferredCandidates, CausalCandidates,
+       TrackedWorkCandidates, ConsensusIoCandidates,
+       SerializedBusyOwners, BusyCompletionCandidates,
+       ActiveBusyCompletionCarrier, SequenceHasUniqueValues, SequenceSet,
+       NodeIdle, PendingNodes, SigningNodes, AllPendingRequests,
+       RequestNodeSet, RequestsUniqueByNode
+
+THEOREM EnqueueIoControlPreservesProgressOwnership ==
+  \A node \in AsyncCurrentResponsiveVoters:
+    /\ AsyncProgressOwnershipInvariant
+    /\ EnqueueIoLocalControl(node)
+    => AsyncProgressOwnershipInvariant'
+BY Isa
+   DEF EnqueueIoLocalControl, AsyncIoControlJob, AsyncIoJob,
+       AsyncProgressOwnershipInvariant,
+       AsyncLogicalCandidateOwnershipInvariant,
+       AsyncOutstandingCarrierInvariant,
+       SerializedBusyOwnershipInvariant, BusyCompletionWitnessInvariant,
+       QueuedCandidates, DeferredCandidates, CausalCandidates,
+       TrackedWorkCandidates, ConsensusIoCandidates,
+       SerializedBusyOwners, BusyCompletionCandidates,
+       ActiveBusyCompletionCarrier, SequenceHasUniqueValues, SequenceSet,
+       NodeIdle, PendingNodes, SigningNodes, AllPendingRequests,
+       RequestNodeSet, RequestsUniqueByNode, LeaveCausalQueues,
+       AsyncDeferredVars, AsyncLocalAdmissionVars, AsyncIoVars, vars
+
+THEOREM HistoricalRunnerPreservesProgressOwnership ==
+  \A node \in AsyncCurrentResponsiveVoters:
+    /\ AsyncProgressOwnershipInvariant
+    /\ RunHistoricalServer(node)
+    => AsyncProgressOwnershipInvariant'
+BY Isa
+   DEF RunHistoricalServer, DrainHistoricalIngressSelected,
+       HistoricalIdleStep, AsyncIoCertifiedServeJob, AsyncIoJob,
+       PopSelectedIngress, AsyncProgressOwnershipInvariant,
+       AsyncLogicalCandidateOwnershipInvariant,
+       AsyncOutstandingCarrierInvariant,
+       SerializedBusyOwnershipInvariant, BusyCompletionWitnessInvariant,
+       QueuedCandidates, DeferredCandidates, CausalCandidates,
+       TrackedWorkCandidates, ConsensusIoCandidates,
+       SerializedBusyOwners, BusyCompletionCandidates,
+       ActiveBusyCompletionCarrier, SequenceHasUniqueValues, SequenceSet,
+       NodeIdle, PendingNodes, SigningNodes, AllPendingRequests,
+       RequestNodeSet, RequestsUniqueByNode, AsyncDeferredVars,
+       AsyncLocalAdmissionVars, AsyncIoVars, vars
+
+THEOREM ServiceIoWorkerPreservesProgressOwnership ==
+  \A node \in AsyncCurrentResponsiveVoters:
+    /\ AsyncStrongTypeInvariant
+    /\ AsyncProgressOwnershipInvariant
+    /\ ServiceIoWorker(node)
+    => AsyncProgressOwnershipInvariant'
+BY AsyncStrongTypeProjectsAsyncType,
+   ServiceIoWorkerPreservesSchedulerType, HeadTailProperties,
+   SequenceSetAfterAppend, Isa
+   DEF ServiceIoWorker, AsyncProgressOwnershipInvariant,
+       AsyncLogicalCandidateOwnershipInvariant,
+       AsyncOutstandingCarrierInvariant,
+       SerializedBusyOwnershipInvariant, BusyCompletionWitnessInvariant,
+       AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+       AsyncIoTypeInvariant, AsyncIoTopologyTypeInvariant,
+       AsyncIoContentTypeInvariant, AsyncIoQueueContentTypeInvariant,
+       AsyncIoWorkContentTypeInvariant, AsyncIoSequenceTyped,
+       AsyncCompletionSequenceTyped, AsyncIoConsensusCandidateOwnership,
+       AsyncIoConsensusQueueOwnership, AsyncIoConsensusIndices,
+       QueuedCandidates, DeferredCandidates, CausalCandidates,
+       TrackedWorkCandidates, ConsensusIoCandidates,
+       SerializedBusyOwners, BusyCompletionCandidates,
+       ActiveBusyCompletionCarrier, SequenceHasUniqueValues, SequenceSet,
+       NodeIdle, PendingNodes, SigningNodes, AllPendingRequests,
+       RequestNodeSet, RequestsUniqueByNode, PublishEphemeralItems,
+       LeaveCausalQueues, AsyncDeferredVars, AsyncLocalAdmissionVars,
+       AsyncIoConsensusJob, AsyncIoJob, vars
+
+THEOREM LocalPhaseAdvancePreservesProgressOwnership ==
+  \A node \in ValidatorIds:
+    /\ AsyncProgressOwnershipInvariant
+    /\ LocalAdmissionStep(node)
+    /\ ~LocalAdmissionCanAdvance(node)
+    => AsyncProgressOwnershipInvariant'
+BY AsyncProgressOwnershipStutter, Isa
+   DEF LocalAdmissionStep, LeaveCausalQueues, AsyncIoVars,
+       AsyncDeferredVars, AsyncLocalAdmissionVars,
+       AsyncProgressOwnershipVars, AsyncProgressOwnershipCoreVars,
+       AsyncProgressOwnershipSchedulerVars, vars
+
+THEOREM ProducerAdmissionPreservesProgressOwnership ==
+  \A node \in ValidatorIds:
+    /\ AsyncStrongTypeInvariant
+    /\ AsyncProgressOwnershipInvariant
+    /\ LocalAdmissionStep(node)
+    /\ LocalAdmissionCanAdvance(node)
+    /\ SelectedLocalSource(node) = "Producer"
+    => AsyncProgressOwnershipInvariant'
+BY AsyncStrongTypeProjectsAsyncType,
+   LocalAdmissionRunnerPreservesSchedulerType,
+   HeadTailProperties, SequenceSetAfterAppend, Isa
+   DEF LocalAdmissionStep, AdmitProducerCompletion,
+       UpdateLocalAdmissionMetadata, EnqueueCandidate,
+       SelectedCompletionSource, SelectedCompletionCandidate,
+       SelectedCompletionQueueNonempty, ProducerCompletionCanAdmit,
+       AsyncProgressOwnershipInvariant,
+       AsyncLogicalCandidateOwnershipInvariant,
+       AsyncOutstandingCarrierInvariant,
+       SerializedBusyOwnershipInvariant, BusyCompletionWitnessInvariant,
+       AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+       AsyncIoTypeInvariant, AsyncIoTopologyTypeInvariant,
+       AsyncIoContentTypeInvariant, AsyncIoQueueContentTypeInvariant,
+       AsyncIoWorkContentTypeInvariant, AsyncCompletionSequenceTyped,
+       QueuedCandidates, DeferredCandidates, CausalCandidates,
+       TrackedWorkCandidates, ConsensusIoCandidates,
+       SerializedBusyOwners, BusyCompletionCandidates,
+       ActiveBusyCompletionCarrier, SequenceHasUniqueValues, SequenceSet,
+       NodeIdle, PendingNodes, SigningNodes, AllPendingRequests,
+       RequestNodeSet, RequestsUniqueByNode, LeaveCausalQueues,
+       AsyncDeferredVars, AsyncLocalAdmissionVars, AsyncIoVars, vars
+
+THEOREM CausalAdmissionPreservesProgressOwnership ==
+  \A node \in ValidatorIds:
+    /\ AsyncStrongTypeInvariant
+    /\ AsyncProgressOwnershipInvariant
+    /\ LocalAdmissionStep(node)
+    /\ LocalAdmissionCanAdvance(node)
+    /\ SelectedLocalSource(node) = "Causal"
+    => AsyncProgressOwnershipInvariant'
+BY AsyncStrongTypeProjectsAsyncType,
+   LocalAdmissionRunnerPreservesSchedulerType,
+   HeadTailProperties, SequenceSetAfterAppend, Isa
+   DEF LocalAdmissionStep, AdmitCausalHead,
+       UpdateLocalAdmissionMetadata, EnqueueCandidate,
+       HeadCausalCandidate, CausalHeadCanAdvance, CandidateInFlight,
+       AsyncProgressOwnershipInvariant,
+       AsyncLogicalCandidateOwnershipInvariant,
+       AsyncOutstandingCarrierInvariant,
+       SerializedBusyOwnershipInvariant, BusyCompletionWitnessInvariant,
+       AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+       AsyncRuntimeTypeInvariant, AsyncCausalTypeInvariant,
+       AsyncIoTypeInvariant, AsyncIoTopologyTypeInvariant,
+       AsyncIoContentTypeInvariant, AsyncIoQueueContentTypeInvariant,
+       AsyncIoWorkContentTypeInvariant, AsyncIoSequenceTyped,
+       QueuedCandidates, DeferredCandidates, CausalCandidates,
+       TrackedWorkCandidates, ConsensusIoCandidates,
+       SerializedBusyOwners, BusyCompletionCandidates,
+       ActiveBusyCompletionCarrier, SequenceHasUniqueValues, SequenceSet,
+       NodeIdle, PendingNodes, SigningNodes, AllPendingRequests,
+       RequestNodeSet, RequestsUniqueByNode, AsyncIoConsensusJob,
+       AsyncIoJob, AsyncDeferredVars, AsyncLocalAdmissionVars,
+       AsyncIoVars, vars
+
+THEOREM LocalAdmissionPreservesProgressOwnership ==
+  \A node \in AsyncCurrentResponsiveVoters:
+    /\ AsyncStrongTypeInvariant
+    /\ AsyncProgressOwnershipInvariant
+    /\ LocalAdmissionStep(node)
+    => AsyncProgressOwnershipInvariant'
+PROOF
+  <1>1. ASSUME NEW node \in AsyncCurrentResponsiveVoters,
+                AsyncStrongTypeInvariant,
+                AsyncProgressOwnershipInvariant,
+                LocalAdmissionStep(node)
+         PROVE AsyncProgressOwnershipInvariant'
+    <2>1. node \in ValidatorIds
+      BY <1>1, AsyncCurrentResponsiveVotersAreValidators
+         DEF AsyncStrongTypeInvariant, StrongInductiveInvariant, Safety
+    <2>2. CASE ~LocalAdmissionCanAdvance(node)
+      BY <1>1, <2>1, <2>2,
+         LocalPhaseAdvancePreservesProgressOwnership
+    <2>3. CASE LocalAdmissionCanAdvance(node)
+               /\ SelectedLocalSource(node) = "Producer"
+      BY <1>1, <2>1, <2>3,
+         ProducerAdmissionPreservesProgressOwnership
+    <2>4. CASE LocalAdmissionCanAdvance(node)
+               /\ SelectedLocalSource(node) = "Causal"
+      BY <1>1, <2>1, <2>4,
+         CausalAdmissionPreservesProgressOwnership
+    <2> QED BY <2>2, <2>3, <2>4, Isa
+         DEF SelectedLocalSource, PreferredLocalSource,
+             OtherLocalSource, AsyncLocalSources
+  <1> QED BY <1>1
+
+THEOREM IngressPhaseAdvancePreservesProgressOwnership ==
+  \A node \in ValidatorIds:
+    /\ AsyncProgressOwnershipInvariant
+    /\ IngressDrainStep(node)
+    /\ ~(asyncRunnerBudget[node] > 0
+           /\ asyncIngressReady[node] # <<>>
+           /\ DrainableIngressIndices(node) # {})
+    => AsyncProgressOwnershipInvariant'
+BY AsyncProgressOwnershipStutter, Isa
+   DEF IngressDrainStep, LeaveCausalQueues, AsyncIoVars,
+       AsyncDeferredVars, AsyncLocalAdmissionVars,
+       AsyncProgressOwnershipVars, AsyncProgressOwnershipCoreVars,
+       AsyncProgressOwnershipSchedulerVars, vars
+
+THEOREM DrainedIngressPreservesProgressOwnership ==
+  \A node \in ValidatorIds:
+    /\ AsyncStrongTypeInvariant
+    /\ AsyncProgressOwnershipInvariant
+    /\ IngressDrainStep(node)
+    /\ asyncRunnerBudget[node] > 0
+    /\ asyncIngressReady[node] # <<>>
+    /\ DrainableIngressIndices(node) # {}
+    => AsyncProgressOwnershipInvariant'
+BY AsyncStrongTypeProjectsAsyncType,
+   IngressDrainRunnerPreservesSchedulerType,
+   SequenceSetAfterAppend, Isa
+   DEF IngressDrainStep, DrainFairIngressSelected,
+       IngressItemCanDrain, CommitCertificateResponseCandidate,
+       CertifiedResponseCandidate, DiscoveredCommitQcItem,
+       DeliveryCandidate, CandidateInFlight, CandidateScheduled,
+       EnqueueCandidate, AsyncIoCertifiedServeJob, AsyncIoJob,
+       AsyncProgressOwnershipInvariant,
+       AsyncLogicalCandidateOwnershipInvariant,
+       AsyncOutstandingCarrierInvariant,
+       SerializedBusyOwnershipInvariant, BusyCompletionWitnessInvariant,
+       AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+       AsyncRuntimeTypeInvariant, AsyncCausalTypeInvariant,
+       AsyncIoTypeInvariant, AsyncIoTopologyTypeInvariant,
+       AsyncIoContentTypeInvariant, AsyncIoQueueContentTypeInvariant,
+       AsyncIoWorkContentTypeInvariant, AsyncIoSequenceTyped,
+       AsyncCompletionSequenceTyped,
+       QueuedCandidates, DeferredCandidates, CausalCandidates,
+       TrackedWorkCandidates, ConsensusIoCandidates,
+       SerializedBusyOwners, BusyCompletionCandidates,
+       ActiveBusyCompletionCarrier, SequenceHasUniqueValues, SequenceSet,
+       NodeIdle, PendingNodes, SigningNodes, AllPendingRequests,
+       RequestNodeSet, RequestsUniqueByNode, AsyncDeferredVars,
+       AsyncLocalAdmissionVars, AsyncIoVars, LeaveCausalQueues, vars
+
+THEOREM IngressDrainPreservesProgressOwnership ==
+  \A node \in AsyncCurrentResponsiveVoters:
+    /\ AsyncStrongTypeInvariant
+    /\ AsyncProgressOwnershipInvariant
+    /\ IngressDrainStep(node)
+    => AsyncProgressOwnershipInvariant'
+PROOF
+  <1>1. ASSUME NEW node \in AsyncCurrentResponsiveVoters,
+                AsyncStrongTypeInvariant,
+                AsyncProgressOwnershipInvariant,
+                IngressDrainStep(node)
+         PROVE AsyncProgressOwnershipInvariant'
+    <2>1. node \in ValidatorIds
+      BY <1>1, AsyncCurrentResponsiveVotersAreValidators
+         DEF AsyncStrongTypeInvariant, StrongInductiveInvariant, Safety
+    <2>2. CASE asyncRunnerBudget[node] > 0
+               /\ asyncIngressReady[node] # <<>>
+               /\ DrainableIngressIndices(node) # {}
+      BY <1>1, <2>1, <2>2,
+         DrainedIngressPreservesProgressOwnership
+    <2>3. CASE ~(asyncRunnerBudget[node] > 0
+                 /\ asyncIngressReady[node] # <<>>
+                 /\ DrainableIngressIndices(node) # {})
+      BY <1>1, <2>1, <2>3,
+         IngressPhaseAdvancePreservesProgressOwnership
+    <2> QED BY <2>2, <2>3
+  <1> QED BY <1>1
+
+THEOREM RuntimeFrameBranchPreservesProgressOwnership ==
+  \A node \in ValidatorIds:
+    /\ AsyncProgressOwnershipInvariant
+    /\ \/ DirectRetransmitStep(node)
+       \/ DeferredRetransmitStep(node)
+       \/ IdleRuntimeStep(node)
+    => AsyncProgressOwnershipInvariant'
+BY AsyncProgressOwnershipStutter, Isa
+   DEF DirectRetransmitStep,
+       DeferredRetransmitStep, IdleRuntimeStep,
+       SendNodeRetransmissions,
+       PublishEphemeralItems, RememberedControl, NoSendItem,
+       LeaveCausalQueues, AsyncDeferredVars,
+       AsyncProgressOwnershipVars, AsyncProgressOwnershipCoreVars,
+       AsyncProgressOwnershipSchedulerVars, vars
+
+THEOREM DirectCommitDiscoveryPreservesProgressOwnership ==
+  \A node \in ValidatorIds:
+    /\ AsyncProgressOwnershipInvariant
+    /\ DirectCommitCertificateDiscoveryStep(node)
+    => AsyncProgressOwnershipInvariant'
+BY AsyncProgressOwnershipStutter, Isa
+   DEF DirectCommitCertificateDiscoveryStep,
+       PublishCommitCertificateRequests, LeaveCausalQueues,
+       AsyncDeferredVars, AsyncProgressOwnershipVars,
+       AsyncProgressOwnershipCoreVars,
+       AsyncProgressOwnershipSchedulerVars, vars
+
+THEOREM TimeoutRuntimeBranchPreservesProgressOwnership ==
+  \A node \in ValidatorIds:
+    /\ AsyncStrongTypeInvariant
+    /\ AsyncProgressOwnershipInvariant
+    /\ \/ DirectTimeoutStep(node)
+       \/ DeferredTimeoutStep(node)
+    => AsyncProgressOwnershipInvariant'
+BY AsyncStrongTypeProjectsAsyncType,
+   FreshTimeoutCausalSuccessorsTypedAndOwned,
+   FreshCommandSuccessorsHaveUniqueValues,
+   FreshCommandSuccessorsAreUnscheduled,
+   AppendOwnedCausalSuccessorsPreservesCausalType,
+   RangeConcatenation, Isa
+   DEF DirectTimeoutStep, DeferredTimeoutStep, BeginTimeoutEnabled,
+       TimeoutCausalCommand, AppendCausalSuccessors,
+       FreshCommandSuccessors, FreshCandidateSequence,
+       CommandSuccessors, CausalCandidate, NoItemCandidate,
+       AsyncCandidate, BeginTimeout,
+       AsyncProgressOwnershipInvariant,
+       AsyncLogicalCandidateOwnershipInvariant,
+       AsyncOutstandingCarrierInvariant,
+       SerializedBusyOwnershipInvariant, BusyCompletionWitnessInvariant,
+       AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+       AsyncRuntimeTypeInvariant, AsyncCausalTypeInvariant,
+       QueuedCandidates, DeferredCandidates, CausalCandidates,
+       TrackedWorkCandidates, ConsensusIoCandidates,
+       SerializedBusyOwners, BusyCompletionCandidates,
+       ActiveBusyCompletionCarrier, SequenceHasUniqueValues, SequenceSet,
+       NodeIdle, PendingNodes, SigningNodes, AllPendingRequests,
+       RequestNodeSet, RequestsUniqueByNode, LeaveCausalQueues,
+       AsyncDeferredVars, AsyncIoVars, vars
+
+THEOREM DeferredTagPreservesProgressOwnership ==
+  \A node \in ValidatorIds:
+    /\ AsyncStrongTypeInvariant
+    /\ AsyncProgressOwnershipInvariant
+    /\ DeferredTagStep(node)
+    => AsyncProgressOwnershipInvariant'
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds,
+                AsyncStrongTypeInvariant,
+                AsyncProgressOwnershipInvariant,
+                DeferredTagStep(node)
+         PROVE AsyncProgressOwnershipInvariant'
+    <2>1. CASE DeferredTimeoutExecutable(node)
+      <3>1. DeferredTimeoutStep(node)
+        BY <1>1, <2>1 DEF DeferredTagStep
+      <3> QED BY <1>1, <3>1,
+           TimeoutRuntimeBranchPreservesProgressOwnership
+    <2>2. CASE ~DeferredTimeoutExecutable(node)
+      <3>1. DeferredRetransmitStep(node)
+        BY <1>1, <2>2 DEF DeferredTagStep
+      <3> QED BY <1>1, <3>1,
+           RuntimeFrameBranchPreservesProgressOwnership
+    <2> QED BY <2>1, <2>2
+  <1> QED BY <1>1
+
+THEOREM FifoRuntimePreservesProgressOwnership ==
+  \A node \in ValidatorIds:
+    /\ AsyncStrongTypeInvariant
+    /\ AsyncProgressOwnershipInvariant
+    /\ FifoRuntimeStep(node)
+    => AsyncProgressOwnershipInvariant'
+BY AsyncStrongTypeProjectsAsyncType,
+   RuntimeSelectedCommandsAreTyped, NextNodeCommandIndexFacts,
+   SequenceWithoutIndexFacts, TypedOwnedSequenceWithoutIndexFacts,
+   ExecutedFreshCommandSuccessorsTypedAndOwned,
+   FreshCommandSuccessorsHaveUniqueValues,
+   FreshCommandSuccessorsAreUnscheduled,
+   RangeConcatenation, SequenceSetAfterAppend, Isa
+   DEF FifoRuntimeStep, RemoveNextNodeCommand, NextNodeCommand,
+       NextNodeCommandIndex, SequenceWithoutIndex, DeferCommand,
+       DeferredProgressAfter, DiscardCommand, ExecuteCommand,
+       ExecuteRegularCommand, ExecuteSignProposal, ExecuteSignVote,
+       ExecuteFormPrepareQC, ExecuteSignTimeout, ExecutePersistInstall,
+       ExecutePersistDecision, ExecuteRequestCertifiedBody, ExecuteApply,
+       ExecuteCoreDelivery, ExecuteChunkDelivery,
+       ExecuteRejectAuthenticatedJunk, AppendCausalSuccessors,
+       FreshCommandSuccessors, FreshCandidateSequence,
+       AsyncProgressOwnershipInvariant,
+       AsyncLogicalCandidateOwnershipInvariant,
+       AsyncOutstandingCarrierInvariant,
+       SerializedBusyOwnershipInvariant, BusyCompletionWitnessInvariant,
+       AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+       AsyncRuntimeTypeInvariant, AsyncRuntimeScalarTypeInvariant,
+       AsyncCausalTypeInvariant, AsyncDeferredTypeInvariant,
+       AsyncDeferredContentTypeInvariant,
+       QueuedCandidates, DeferredCandidates, CausalCandidates,
+       TrackedWorkCandidates, ConsensusIoCandidates,
+       SerializedBusyOwners, BusyCompletionCandidates,
+       ActiveBusyCompletionCarrier, SequenceHasUniqueValues, SequenceSet,
+       NodeIdle, PendingNodes, SigningNodes, AllPendingRequests,
+       RequestNodeSet, RequestsUniqueByNode, AllPendingRequests,
+       AsyncIoVars, AsyncDeferredVars, AsyncAuxVars, vars
+
+THEOREM DeferredDrainPreservesProgressOwnership ==
+  \A node \in ValidatorIds:
+    /\ AsyncStrongTypeInvariant
+    /\ AsyncProgressOwnershipInvariant
+    /\ DeferredDrainStep(node)
+    => AsyncProgressOwnershipInvariant'
+BY AsyncStrongTypeProjectsAsyncType,
+   RuntimeSelectedCommandsAreTyped,
+   RemoveNextDeferredCommandPreservesDeferredContentType,
+   TypedQueueTailFacts, ExecutedFreshCommandSuccessorsTypedAndOwned,
+   FreshCommandSuccessorsHaveUniqueValues,
+   FreshCommandSuccessorsAreUnscheduled,
+   RangeConcatenation, Isa
+   DEF DeferredDrainStep, DeferredQueueNonempty,
+       NextDeferredCommand, RemoveNextDeferredCommand,
+       DeferredClassQueue, AdvanceNextDeferredClass,
+       DiscardCommand, ExecuteCommand, ExecuteRegularCommand,
+       ExecuteSignProposal, ExecuteSignVote, ExecuteFormPrepareQC,
+       ExecuteSignTimeout, ExecutePersistInstall,
+       ExecutePersistDecision, ExecuteRequestCertifiedBody, ExecuteApply,
+       ExecuteCoreDelivery, ExecuteChunkDelivery,
+       ExecuteRejectAuthenticatedJunk, AppendCausalSuccessors,
+       FreshCommandSuccessors, FreshCandidateSequence,
+       AsyncProgressOwnershipInvariant,
+       AsyncLogicalCandidateOwnershipInvariant,
+       AsyncOutstandingCarrierInvariant,
+       SerializedBusyOwnershipInvariant, BusyCompletionWitnessInvariant,
+       AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+       AsyncRuntimeTypeInvariant, AsyncRuntimeScalarTypeInvariant,
+       AsyncCausalTypeInvariant, AsyncDeferredTypeInvariant,
+       AsyncDeferredContentTypeInvariant,
+       QueuedCandidates, DeferredCandidates, CausalCandidates,
+       TrackedWorkCandidates, ConsensusIoCandidates,
+       SerializedBusyOwners, BusyCompletionCandidates,
+       ActiveBusyCompletionCarrier, SequenceHasUniqueValues, SequenceSet,
+       NodeIdle, PendingNodes, SigningNodes, AllPendingRequests,
+       RequestNodeSet, RequestsUniqueByNode,
+       AsyncIoVars, AsyncDeferredVars, AsyncAuxVars,
+       LeaveCausalQueues, vars
+
+THEOREM SerializedRuntimePreservesProgressOwnership ==
+  \A node \in AsyncCurrentResponsiveVoters:
+    /\ AsyncStrongTypeInvariant
+    /\ AsyncProgressOwnershipInvariant
+    /\ SerializedRuntimeStep(node)
+    => AsyncProgressOwnershipInvariant'
+PROOF
+  <1>1. ASSUME NEW node \in AsyncCurrentResponsiveVoters,
+                AsyncStrongTypeInvariant,
+                AsyncProgressOwnershipInvariant,
+                SerializedRuntimeStep(node)
+         PROVE AsyncProgressOwnershipInvariant'
+    <2>1. node \in ValidatorIds
+      BY <1>1, AsyncCurrentResponsiveVotersAreValidators
+         DEF AsyncStrongTypeInvariant, StrongInductiveInvariant, Safety
+    <2>2. \/ DeferredDrainStep(node)
+           \/ DeferredTagStep(node)
+           \/ DirectTimeoutStep(node)
+           \/ FifoRuntimeStep(node)
+           \/ DirectRetransmitStep(node)
+           \/ IdleRuntimeStep(node)
+      BY <1>1 DEF SerializedRuntimeStep, RuntimeStep
+    <2>3. CASE DirectRetransmitStep(node)
+                   \/ IdleRuntimeStep(node)
+      BY <1>1, <2>1, <2>3,
+         RuntimeFrameBranchPreservesProgressOwnership
+    <2>4. CASE DeferredDrainStep(node)
+      BY <1>1, <2>1, <2>4,
+         DeferredDrainPreservesProgressOwnership
+    <2>5. CASE DeferredTagStep(node)
+      BY <1>1, <2>1, <2>5,
+         DeferredTagPreservesProgressOwnership
+    <2>6. CASE DirectTimeoutStep(node)
+      BY <1>1, <2>1, <2>6,
+         TimeoutRuntimeBranchPreservesProgressOwnership
+    <2>7. CASE FifoRuntimeStep(node)
+      BY <1>1, <2>1, <2>7,
+         FifoRuntimePreservesProgressOwnership
+    <2> QED BY <2>2, <2>3, <2>4, <2>5, <2>6, <2>7
+  <1> QED BY <1>1
+
+THEOREM RunNodePreservesProgressOwnership ==
+  \A node \in AsyncCurrentResponsiveVoters:
+    /\ AsyncStrongTypeInvariant
+    /\ AsyncProgressOwnershipInvariant
+    /\ RunNode(node)
+    => AsyncProgressOwnershipInvariant'
+PROOF
+  <1>1. ASSUME NEW node \in AsyncCurrentResponsiveVoters,
+                AsyncStrongTypeInvariant,
+                AsyncProgressOwnershipInvariant,
+                RunNode(node)
+         PROVE AsyncProgressOwnershipInvariant'
+    <2>1. CASE LocalAdmissionStep(node)
+      BY <1>1, <2>1, LocalAdmissionPreservesProgressOwnership
+    <2>2. CASE IngressDrainStep(node)
+      BY <1>1, <2>2, IngressDrainPreservesProgressOwnership
+    <2>3. CASE SerializedRuntimeStep(node)
+      BY <1>1, <2>3,
+         SerializedRuntimePreservesProgressOwnership
+    <2> QED BY <1>1, <2>1, <2>2, <2>3 DEF RunNode
+  <1> QED BY <1>1
+
+THEOREM AsyncFaultPreservesProgressOwnership ==
+  /\ AsyncStrongTypeInvariant
+  /\ AsyncProgressOwnershipInvariant
+  /\ AsyncFaultStep
+  => AsyncProgressOwnershipInvariant'
+PROOF
+  <1>1. ASSUME AsyncStrongTypeInvariant,
+              AsyncProgressOwnershipInvariant,
+              AsyncFaultStep
+         PROVE AsyncProgressOwnershipInvariant'
+    <2>1. CASE \E node \in ValidatorIds: PreGstCrash(node)
+      <3>1. PICK node \in ValidatorIds: PreGstCrash(node)
+        BY <2>1
+      <3> QED BY <1>1, <3>1,
+           PreGstCrashPreservesProgressOwnership
+    <2>2. CASE \E packet \in asyncTransport: PreGstLosePacket(packet)
+      <3>1. PICK packet \in asyncTransport: PreGstLosePacket(packet)
+        BY <2>2
+      <3> QED BY <1>1, <3>1,
+           TransportOnlyFaultPreservesProgressOwnership
+    <2>3. CASE \E source \in AsyncIngressSources,
+                    recipient \in ValidatorIds,
+                    nonce \in 0..(AsyncIngressCapacity - 1):
+                    InjectByzantineNoise(source, recipient, nonce)
+      BY <1>1, <2>3, TransportOnlyFaultPreservesProgressOwnership
+    <2>4. CASE \E kind \in {"NormalJunk", "ProgressJunk"},
+                    source \in ValidatorIds, recipient \in ValidatorIds,
+                    nonce \in 0..(AsyncIngressCapacity - 1):
+                    InjectAuthenticatedJunk(
+                      kind, source, recipient, nonce)
+      BY <1>1, <2>4, TransportOnlyFaultPreservesProgressOwnership
+    <2>5. CASE \E source \in ValidatorIds,
+                    recipient \in ValidatorIds, qc \in commitQCs,
+                    nonce \in 0..(AsyncIngressCapacity - 1):
+                    InjectByzantineCertifiedRequest(
+                      source, recipient, qc, nonce)
+      BY <1>1, <2>5, TransportOnlyFaultPreservesProgressOwnership
+    <2>6. CASE \E signer \in ValidatorIds, roundView \in Views,
+                    subject \in Subjects, justifyRank \in Ranks,
+                    justifySubject \in SubjectOrNone:
+                    AsyncByzantineProposal(
+                      signer, roundView, subject,
+                      justifyRank, justifySubject)
+      BY <1>1, <2>6, TransportOnlyFaultPreservesProgressOwnership
+    <2>7. CASE \E signer \in ValidatorIds, roundView \in Views,
+                    phase \in Phases, subject \in Subjects:
+                    AsyncByzantineVote(
+                      signer, roundView, phase, subject)
+      BY <1>1, <2>7, TransportOnlyFaultPreservesProgressOwnership
+    <2>8. CASE \E signer \in ValidatorIds, roundView \in Views,
+                    highRank \in Ranks, highSubject \in SubjectOrNone:
+                    AsyncByzantineTimeout(
+                      signer, roundView, highRank, highSubject)
+      BY <1>1, <2>8, TransportOnlyFaultPreservesProgressOwnership
+    <2> QED BY <1>1, <2>1, <2>2, <2>3, <2>4,
+                <2>5, <2>6, <2>7, <2>8 DEF AsyncFaultStep
+  <1> QED BY <1>1
+
+THEOREM AsyncNonRunnerPreservesProgressOwnership ==
+  /\ AsyncStrongTypeInvariant
+  /\ AsyncProgressOwnershipInvariant
+  /\ AsyncNonRunnerStep
+  => AsyncProgressOwnershipInvariant'
+PROOF
+  <1>1. ASSUME AsyncStrongTypeInvariant,
+              AsyncProgressOwnershipInvariant,
+              AsyncNonRunnerStep
+         PROVE AsyncProgressOwnershipInvariant'
+    <2>1. CASE AsyncSetGST
+      BY <1>1, <2>1, AsyncSetGstPreservesProgressOwnership
+    <2>2. CASE AsyncTick
+      BY <1>1, <2>2, AsyncTickPreservesProgressOwnership
+    <2>3. CASE \E node \in AsyncCurrentResponsiveVoters:
+                  DirectCommitCertificateDiscoveryStep(node)
+      BY <1>1, <2>3,
+         DirectCommitDiscoveryPreservesProgressOwnership
+    <2>4. CASE \E node \in AsyncCurrentResponsiveVoters:
+                  ServiceIoWorker(node)
+      BY <1>1, <2>4, ServiceIoWorkerPreservesProgressOwnership
+    <2>5. CASE \E node \in AsyncCurrentResponsiveVoters:
+                  EnqueueIoLocalControl(node)
+      BY <1>1, <2>5, EnqueueIoControlPreservesProgressOwnership
+    <2>6. CASE AsyncNetworkStep
+      BY <1>1, <2>6, AdmitIngressPacketPreservesProgressOwnership
+         DEF AsyncNetworkStep
+    <2>7. CASE AsyncFaultStep
+      BY <1>1, <2>7, AsyncFaultPreservesProgressOwnership
+    <2> QED BY <1>1, <2>1, <2>2, <2>3, <2>4, <2>5, <2>6, <2>7
+         DEF AsyncNonRunnerStep
+  <1> QED BY <1>1
+
+THEOREM AsyncNextPreservesProgressOwnership ==
+  /\ AsyncStrongTypeInvariant
+  /\ AsyncProgressOwnershipInvariant
+  /\ AsyncNext
+  => AsyncProgressOwnershipInvariant'
+PROOF
+  <1>1. ASSUME AsyncStrongTypeInvariant,
+              AsyncProgressOwnershipInvariant,
+              AsyncNext
+         PROVE AsyncProgressOwnershipInvariant'
+    <2>1. CASE AsyncNonCrashStep
+      <3>1. CASE AsyncRunnerStep
+        <4>1. CASE \E node \in AsyncCurrentResponsiveVoters:
+                      RunNode(node)
+          BY <1>1, <2>1, <3>1, <4>1,
+             RunNodePreservesProgressOwnership
+        <4>2. CASE \E node \in AsyncCurrentResponsiveVoters:
+                      RunHistoricalServer(node)
+          BY <1>1, <2>1, <3>1, <4>2,
+             HistoricalRunnerPreservesProgressOwnership
+        <4> QED BY <3>1, <4>1, <4>2 DEF AsyncRunnerStep
+      <3>2. CASE AsyncNonRunnerStep
+        BY <1>1, <2>1, <3>2,
+           AsyncNonRunnerPreservesProgressOwnership
+      <3> QED BY <2>1, <3>1, <3>2 DEF AsyncNonCrashStep
+    <2>2. CASE \E node \in ValidatorIds: PreGstCrash(node)
+      BY <1>1, <2>2, PreGstCrashPreservesProgressOwnership
+    <2> QED BY <1>1, <2>1, <2>2 DEF AsyncNext
+  <1> QED BY <1>1
+
+THEOREM AsyncBracketNextPreservesProgressOwnership ==
+  /\ AsyncStrongTypeInvariant
+  /\ AsyncProgressOwnershipInvariant
+  /\ [AsyncNext]_AsyncAllVars
+  => AsyncProgressOwnershipInvariant'
+PROOF
+  <1>1. ASSUME AsyncStrongTypeInvariant,
+              AsyncProgressOwnershipInvariant,
+              [AsyncNext]_AsyncAllVars
+         PROVE AsyncProgressOwnershipInvariant'
+    <2>1. CASE AsyncNext
+      BY <1>1, <2>1, AsyncNextPreservesProgressOwnership
+    <2>2. CASE UNCHANGED AsyncAllVars
+      BY <1>1, <2>2,
+         AsyncAllVarsStutterPreservesProgressOwnership
+    <2> QED BY <1>1, <2>1, <2>2
+  <1> QED BY <1>1
+
+THEOREM AsyncSpecAlwaysProgressOwnershipInvariant ==
+  \A initialContext:
+    AsyncSpecAt(initialContext) => []AsyncProgressOwnershipInvariant
+PROOF
+  <1>1. ASSUME NEW initialContext
+         PROVE AsyncSpecAt(initialContext)
+                 => []AsyncProgressOwnershipInvariant
+    <2>1. AsyncInitAt(initialContext)
+             => /\ AsyncStrongTypeInvariant
+                /\ AsyncProgressOwnershipInvariant
+      BY AsyncInitEstablishesStrongTypeInvariant,
+         AsyncInitEstablishesProgressOwnership
+    <2>2. /\ AsyncStrongTypeInvariant
+             /\ AsyncProgressOwnershipInvariant
+             /\ [AsyncNext]_AsyncAllVars
+            => /\ AsyncStrongTypeInvariant'
+               /\ AsyncProgressOwnershipInvariant'
+      BY AsyncBracketNextPreservesStrongTypeInvariant,
+         AsyncBracketNextPreservesProgressOwnership
+    <2>3. AsyncSpecAt(initialContext)
+             => [](AsyncStrongTypeInvariant
+                    /\ AsyncProgressOwnershipInvariant)
+      BY <2>1, <2>2, PTL DEF AsyncSpecAt
+    <2> QED BY <2>3, PTL
   <1> QED BY <1>1
 
 (***************************************************************************
@@ -23175,6 +24501,14 @@ PROOF
     <2> QED BY <2>1, <2>2, <2>3, <2>4, <2>5, Isa
   <1> QED BY <1>1
 
+THEOREM FreshCommandSuccessorsHaveProgressCommitSources ==
+  \A command:
+    ProgressCommitSourcesIn(FreshCommandSuccessors(command))
+BY CommandSuccessorsHaveProgressCommitSources, Isa
+   DEF FreshCommandSuccessors, FreshCandidateSequence,
+       CommandSuccessors, InstallCommandSuccessors,
+       ProgressCommitSourcesIn, SequenceSet
+
 (***************************************************************************
 The executable reducer never carries a durable Prepare lock ahead of the
 node's installed view.  This private strengthening supplies the ordering
@@ -23897,23 +25231,23 @@ PROOF
          DEF StrongInductiveInvariant, Safety, AsyncTypeInvariant,
              AsyncRuntimeTypeInvariant, AsyncCausalTypeInvariant,
              AsyncCandidateTyped, CausalProgressCommitHistoryInvariant
-    <2>2. /\ AsyncQueueTyped(CommandSuccessors(command))
-           /\ ProgressCommitSourcesIn(CommandSuccessors(command))
-      BY <1>1, ExecutedCommandSuccessorsTypedAndOwned,
-         CommandSuccessorsHaveProgressCommitSources
+    <2>2. /\ AsyncQueueTyped(FreshCommandSuccessors(command))
+           /\ ProgressCommitSourcesIn(FreshCommandSuccessors(command))
+      BY <1>1, ExecutedFreshCommandSuccessorsTypedAndOwned,
+         FreshCommandSuccessorsHaveProgressCommitSources
     <2>3. /\ AsyncQueueTyped(
                     asyncCausalQueues[command.node]
-                      \o CommandSuccessors(command))
+                      \o FreshCommandSuccessors(command))
            /\ ProgressCommitSourcesIn(
                 asyncCausalQueues[command.node]
-                  \o CommandSuccessors(command))
+                  \o FreshCommandSuccessors(command))
       BY <2>1, <2>2,
          TypedQueueConcatPreservesProgressCommitSources
     <2>4. asyncCausalQueues' =
              [asyncCausalQueues EXCEPT
                 ![command.node] =
                   asyncCausalQueues[command.node]
-                    \o CommandSuccessors(command)]
+                    \o FreshCommandSuccessors(command)]
       BY <1>1 DEF AppendCausalSuccessors
     <2> QED BY <1>1, <2>1, <2>3, <2>4,
          ReplaceCausalQueuePreservesProgressCommitHistory
@@ -23940,17 +25274,17 @@ PROOF
     <2>1. /\ TypeInvariant
            /\ AsyncCausalTypeInvariant
            /\ AsyncQueueTyped(
-                CommandSuccessors(TimeoutCausalCommand(node)))
+                FreshCommandSuccessors(TimeoutCausalCommand(node)))
            /\ ProgressCommitSourcesIn(
-                CommandSuccessors(TimeoutCausalCommand(node)))
-      BY <1>1, TimeoutCausalSuccessorsTypedAndOwned,
-         CommandSuccessorsHaveProgressCommitSources
+                FreshCommandSuccessors(TimeoutCausalCommand(node)))
+      BY <1>1, FreshTimeoutCausalSuccessorsTypedAndOwned,
+         FreshCommandSuccessorsHaveProgressCommitSources
          DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
              AsyncRuntimeTypeInvariant
     <2>2. asyncCausalQueues' =
              [asyncCausalQueues EXCEPT
                 ![node] = asyncCausalQueues[node]
-                  \o CommandSuccessors(TimeoutCausalCommand(node))]
+                  \o FreshCommandSuccessors(TimeoutCausalCommand(node))]
       BY <1>1 DEF AppendCausalSuccessors
     <2> QED BY <1>1, <2>1, <2>2,
          AppendTypedCausalSequencePreservesProgressCommitHistory
@@ -25549,7 +26883,6 @@ PROOF
   <1> QED BY <1>1
 
 NonQueueRuntimeAction(node) ==
-  \/ DirectCommitCertificateDiscoveryStep(node)
   \/ DeferredTagStep(node)
   \/ DirectTimeoutStep(node)
   \/ DirectRetransmitStep(node)
@@ -25599,7 +26932,6 @@ PROOF
                       asyncDeferredProgressQueues>>
       BY <1>1, Isa
          DEF NonQueueRuntimeAction,
-             DirectCommitCertificateDiscoveryStep,
              DeferredTagStep, DeferredTimeoutStep,
              DeferredRetransmitStep, DirectTimeoutStep,
              DirectRetransmitStep, IdleRuntimeStep,
@@ -25616,7 +26948,6 @@ PROOF
            \/ AppendCausalSuccessors(TimeoutCausalCommand(node))
       BY <1>1, Isa
          DEF NonQueueRuntimeAction,
-             DirectCommitCertificateDiscoveryStep,
              DeferredTagStep, DeferredTimeoutStep,
              DeferredRetransmitStep, DirectTimeoutStep,
              DirectRetransmitStep, IdleRuntimeStep,
@@ -25861,7 +27192,8 @@ THEOREM AsyncNonRunnerStepLeavesProgressCarriers ==
                     asyncCausalQueues>>
 BY AsyncFaultStepLeavesProgressCarriers, IsaM("blast")
    DEF AsyncNonRunnerStep, AsyncSetGST, AsyncTick,
-       AsyncNonClockVars, ServiceIoWorker,
+       AsyncNonClockVars, DirectCommitCertificateDiscoveryStep,
+       PublishCommitCertificateRequests, ServiceIoWorker,
        EnqueueIoLocalControl, AsyncNetworkStep,
        AdmitIngressPacket, AdmitHiddenPacket, CoalesceHiddenPacket,
        AsyncSchedulerVars, AsyncDeferredVars, LeaveCausalQueues
@@ -26801,11 +28133,10 @@ PROOF
     <2>3. CASE NonQueueRuntimeAction(node)
       BY <2>3, Isa
          DEF NonQueueRuntimeAction,
-             DirectCommitCertificateDiscoveryStep,
              DeferredTagStep, DeferredTimeoutStep,
              DeferredRetransmitStep, DirectTimeoutStep,
              DirectRetransmitStep, IdleRuntimeStep, BeginTimeout,
-             SendNodeRetransmissions, NoSendItem, PublishCommitCertificateRequests,
+             SendNodeRetransmissions, NoSendItem,
              PublishEphemeralItems, LeaveCausalQueues,
              CommitSourceProjection, ResponsiveCommitSignRequests,
              ResponsiveRetainedCommitItems, vars
@@ -27818,37 +29149,6 @@ PROOF
          DEF ProgressWitnessInvariant
   <1> QED BY <1>1
 
-THEOREM GstCoreStepIsMonotone ==
-  gst /\ [Next]_vars => gst'
-BY IsaM("blast")
-   DEF Next, SetGST, AssembleLocalBody, BeginLocalProposal, PersistProposal,
-       CompleteProposalSignature, ByzantineBroadcastProposal,
-       DeliverProposal, FetchBody, RebindRetainedBody, StoreBody,
-       ValidateBody,
-       ValidateDecidedBody, RejectBody, BeginPrepare, PersistPrepare,
-       CompleteVoteSignature, ByzantineBroadcastVote, DeliverVote,
-       FormPrepareQC, DeliverQC, BeginObservePrepare,
-       PersistObservePrepare, BeginLockCommit, PersistLockCommit,
-       FormCommitQC, BeginDecision, PersistDecision, BeginTimeout,
-       PersistTimeout, CompleteTimeoutSignature, ByzantineBroadcastTimeout,
-       DeliverTimeout, FormTC, DeliverTC, BeginInstallTC, PersistInstallTC,
-       FetchCertifiedBody, ApplyDecision, Crash, Restart, ResumeProposal,
-       ResumeVote, ResumeTimeout, DropProposal, vars
-
-THEOREM GstAsyncStepIsMonotone ==
-  gst /\ [AsyncNext]_AsyncAllVars => gst'
-PROOF
-  <1>1. ASSUME gst, [AsyncNext]_AsyncAllVars
-         PROVE gst'
-    <2>1. CASE AsyncNext
-      <3>1. [Next]_vars
-        BY <2>1, AsyncStepRefinementObligation
-      <3> QED BY <1>1, <3>1, GstCoreStepIsMonotone
-    <2>2. CASE UNCHANGED AsyncAllVars
-      BY <1>1, <2>2, Isa DEF AsyncAllVars, vars
-    <2> QED BY <1>1, <2>1, <2>2
-  <1> QED BY <1>1
-
 THEOREM AsyncSpecKeepsGstOnceSet ==
   \A initialContext:
     AsyncSpecAt(initialContext) => [](gst => []gst)
@@ -27882,10 +29182,131 @@ BY Isa DEF CandidateSequenceIndex, SequenceSet
 THEOREM CandidateIoIndexIsPosition ==
   \A candidate, queue:
     /\ AsyncIoSequenceTyped(queue)
-    /\ \E job \in SequenceSet(queue): job.candidate = candidate
+    /\ \E index \in AsyncIoConsensusIndices(queue):
+         queue[index].candidate = candidate
     => CandidateIoIndex(candidate, queue) \in 1..Len(queue)
 BY Isa
-   DEF CandidateIoIndex, SequenceSet, AsyncIoSequenceTyped
+   DEF CandidateIoIndex, AsyncIoConsensusIndices,
+       AsyncIoSequenceTyped
+
+THEOREM CandidateIoIndexCharacterization ==
+  \A candidate, queue, ioReadyQueue, localReadyQueue:
+    /\ AsyncIoSequenceTyped(queue)
+    /\ AsyncIoConsensusQueueOwnership(
+         queue, ioReadyQueue, localReadyQueue)
+    /\ \E index \in AsyncIoConsensusIndices(queue):
+         queue[index].candidate = candidate
+    => /\ CandidateIoIndex(candidate, queue)
+              \in AsyncIoConsensusIndices(queue)
+       /\ queue[CandidateIoIndex(candidate, queue)].candidate = candidate
+       /\ \A index \in AsyncIoConsensusIndices(queue):
+            queue[index].candidate = candidate
+              => index = CandidateIoIndex(candidate, queue)
+PROOF
+  <1>1. ASSUME NEW candidate, NEW queue,
+                NEW ioReadyQueue, NEW localReadyQueue,
+                AsyncIoSequenceTyped(queue),
+                AsyncIoConsensusQueueOwnership(
+                  queue, ioReadyQueue, localReadyQueue),
+                \E index \in AsyncIoConsensusIndices(queue):
+                  queue[index].candidate = candidate
+         PROVE /\ CandidateIoIndex(candidate, queue)
+                       \in AsyncIoConsensusIndices(queue)
+               /\ queue[CandidateIoIndex(candidate, queue)].candidate
+                    = candidate
+               /\ \A index \in AsyncIoConsensusIndices(queue):
+                    queue[index].candidate = candidate
+                      => index = CandidateIoIndex(candidate, queue)
+    <2>1. /\ CandidateIoIndex(candidate, queue)
+                    \in AsyncIoConsensusIndices(queue)
+           /\ queue[CandidateIoIndex(candidate, queue)].candidate
+                = candidate
+      BY <1>1, Isa DEF CandidateIoIndex
+    <2>2. \A index \in AsyncIoConsensusIndices(queue):
+             queue[index].candidate = candidate
+               => index = CandidateIoIndex(candidate, queue)
+      BY <1>1, <2>1 DEF AsyncIoConsensusQueueOwnership
+    <2> QED BY <2>1, <2>2
+  <1> QED BY <1>1
+
+THEOREM CandidateIoIndexAfterNonTargetHead ==
+  \A candidate, queue, ioReadyQueue, localReadyQueue:
+    /\ AsyncIoSequenceTyped(queue)
+    /\ Len(queue) > 0
+    /\ AsyncCompletionSequenceTyped(ioReadyQueue)
+    /\ AsyncCompletionSequenceTyped(localReadyQueue)
+    /\ AsyncIoConsensusQueueOwnership(
+         queue, ioReadyQueue, localReadyQueue)
+    /\ \E index \in AsyncIoConsensusIndices(queue):
+         queue[index].candidate = candidate
+    /\ ~(Head(queue).class = "Consensus"
+           /\ Head(queue).candidate = candidate)
+    => CandidateIoIndex(candidate, Tail(queue)) + 1
+         = CandidateIoIndex(candidate, queue)
+PROOF
+  <1>1. ASSUME NEW candidate, NEW queue,
+                NEW ioReadyQueue, NEW localReadyQueue,
+                AsyncIoSequenceTyped(queue),
+                Len(queue) > 0,
+                AsyncCompletionSequenceTyped(ioReadyQueue),
+                AsyncCompletionSequenceTyped(localReadyQueue),
+                AsyncIoConsensusQueueOwnership(
+                  queue, ioReadyQueue, localReadyQueue),
+                \E index \in AsyncIoConsensusIndices(queue):
+                  queue[index].candidate = candidate,
+                ~(Head(queue).class = "Consensus"
+                   /\ Head(queue).candidate = candidate)
+         PROVE CandidateIoIndex(candidate, Tail(queue)) + 1
+                 = CandidateIoIndex(candidate, queue)
+    <2> DEFINE Old == CandidateIoIndex(candidate, queue)
+    <2> DEFINE New == Old - 1
+    <2>1. /\ Old \in AsyncIoConsensusIndices(queue)
+           /\ queue[Old].candidate = candidate
+      BY <1>1, CandidateIoIndexCharacterization DEF Old
+    <2>2. /\ queue \in Seq(Range(queue))
+           /\ queue # <<>>
+           /\ Head(queue) = queue[1]
+           /\ Len(Tail(queue)) = Len(queue) - 1
+           /\ \A index \in 1..Len(Tail(queue)):
+                Tail(queue)[index] = queue[index + 1]
+      BY <1>1, PositiveSequenceIsNonempty,
+         NonemptySequenceHeadIsFirst, HeadTailProperties
+         DEF AsyncIoSequenceTyped
+    <2>3. /\ Old \in 2..Len(queue)
+           /\ New \in 1..Len(Tail(queue))
+           /\ Tail(queue)[New] = queue[Old]
+      BY <1>1, <2>1, <2>2, Isa
+         DEF AsyncIoConsensusIndices, New
+    <2>4. New \in AsyncIoConsensusIndices(Tail(queue))
+      BY <2>1, <2>3, Isa DEF AsyncIoConsensusIndices
+    <2>5. AsyncIoConsensusQueueOwnership(
+             Tail(queue),
+             AsyncIoReadyAfterService(queue, ioReadyQueue),
+             localReadyQueue)
+      BY <1>1, ServiceHeadPreservesConsensusQueueOwnership
+         DEF AsyncCompletionSequenceTyped
+    <2>6. AsyncIoSequenceTyped(Tail(queue))
+      BY <1>1, TypedIoTailFacts
+    <2>7. CandidateIoIndex(candidate, Tail(queue)) = New
+      BY <2>3, <2>4, <2>5, <2>6,
+         CandidateIoIndexCharacterization
+    <2> QED BY <2>7, Isa DEF Old, New
+  <1> QED BY <1>1
+
+THEOREM ReadyCandidatePositionIsNatural ==
+  \A candidate:
+    /\ AsyncTypeInvariant
+    /\ CandidateScheduled(candidate)
+    /\ CandidateInReadyQueue(candidate)
+    => ReadyCandidatePosition(candidate) \in Nat
+BY CandidateSequenceIndexIsPosition, Isa
+   DEF ReadyCandidatePosition, ReadyCandidateSource,
+       ReadyCompletionQueue, CandidateInReadyQueue,
+       SelectedCompletionSource, SequenceSet,
+       AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+       AsyncIoTypeInvariant, AsyncIoContentTypeInvariant,
+       AsyncIoWorkContentTypeInvariant,
+       AsyncCompletionSequenceTyped
 
 THEOREM ScheduledCandidateProjectsToOwner ==
   \A candidate:
@@ -28042,7 +29463,7 @@ PROOF
     <2>7. CASE candidate \notin DeferredCandidates
                /\ candidate \notin QueuedCandidates
                /\ CandidateInReadyQueue(candidate)
-      BY <2>2, <2>7, SMT
+      BY <1>1, <2>7, ReadyCandidatePositionIsNatural, Isa
          DEF CandidateServiceRank, OwnedServiceRankCarrier
     <2>8. CASE candidate \notin DeferredCandidates
                /\ candidate \notin QueuedCandidates
@@ -28278,6 +29699,3189 @@ PROOF
                  = AsyncVotersAt(initialContext)
       BY FrozenContextFixesResponsiveVoters
     <2> QED BY <2>1, <2>2, PTL
+  <1> QED BY <1>1
+
+(***************************************************************************
+Stage 5: exact Consensus-I/O FIFO service.
+
+The rank ignores Serve/Control candidate identities but counts their physical
+FIFO positions.  `CandidateIoIndex` therefore selects the unique Consensus
+occurrence, not an arbitrary I/O job carrying an equal record.  Servicing an
+earlier head shifts that occurrence left by one; servicing the occurrence
+itself moves it to stage 4.  No enqueue action inserts before an existing
+job, so the target rank cannot increase between fair worker occurrences.
+***************************************************************************)
+
+ProtectedRankProgressExit(candidate, rank) ==
+  \/ ProtectedServiceOwnershipExit(candidate)
+  \/ ServiceRankLess(CandidateServiceRank(candidate), rank)
+
+ProtectedStage5Pending(candidate, position) ==
+  /\ AsyncStrongTypeInvariant
+  /\ AsyncProgressOwnershipInvariant
+  /\ ProtectedOwnedAtServiceRank(candidate, <<5, position>>)
+
+THEOREM ProtectedStage5CarrierFacts ==
+  \A candidate, position:
+    ProtectedStage5Pending(candidate, position)
+      => /\ candidate.node \in AsyncCurrentResponsiveVoters
+         /\ candidate \in asyncOutstandingWork[candidate.node]
+         /\ CandidateInIoQueue(candidate)
+         /\ CandidateIoIndex(
+              candidate, asyncIoQueues[candidate.node]) = position
+         /\ AsyncIoQueueDepth(candidate.node) > 0
+         /\ AsyncIoSequenceTyped(asyncIoQueues[candidate.node])
+         /\ AsyncIoConsensusQueueOwnership(
+              asyncIoQueues[candidate.node],
+              asyncIoReadyCompletions[candidate.node],
+              asyncLocalReadyCompletions[candidate.node])
+BY CandidateIoIndexCharacterization, Isa
+   DEF ProtectedStage5Pending, ProtectedOwnedAtServiceRank,
+       ResponsiveProtectedCandidateOwned, ProtectedCandidateOwned,
+       CandidateServiceRank, CandidateInIoQueue,
+       AsyncProgressOwnershipInvariant,
+       AsyncOutstandingCarrierInvariant,
+       AsyncLogicalCandidateOwnershipInvariant,
+       AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+       AsyncIoTypeInvariant, AsyncIoTopologyTypeInvariant,
+       AsyncIoContentTypeInvariant, AsyncIoQueueContentTypeInvariant,
+       AsyncIoWorkContentTypeInvariant,
+       AsyncIoConsensusCandidateOwnership,
+       ConsensusIoCandidates, QueuedCandidates, DeferredCandidates,
+       CausalCandidates, TrackedWorkCandidates, CandidateScheduled,
+       CandidateInReadyQueue, SequenceSet, AsyncIoQueueDepth
+
+THEOREM QueuedIoServiceIsNonstuttering ==
+  \A node \in AsyncCurrentResponsiveVoters:
+    /\ AsyncTypeInvariant
+    /\ AsyncIoQueueDepth(node) > 0
+    /\ PostGstServiceIoWorker(node)
+    => <<PostGstServiceIoWorker(node)>>_AsyncAllVars
+PROOF
+  <1>1. ASSUME NEW node \in AsyncCurrentResponsiveVoters,
+                AsyncTypeInvariant,
+                AsyncIoQueueDepth(node) > 0,
+                PostGstServiceIoWorker(node)
+         PROVE <<PostGstServiceIoWorker(node)>>_AsyncAllVars
+    <2>1. /\ node \in ValidatorIds
+           /\ AsyncIoSequenceTyped(asyncIoQueues[node])
+      BY <1>1, AsyncCurrentResponsiveVotersAreValidators
+         DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+             AsyncIoTypeInvariant, AsyncIoContentTypeInvariant,
+             AsyncIoQueueContentTypeInvariant
+    <2>2. /\ asyncIoQueues[node] \in Seq(Range(asyncIoQueues[node]))
+           /\ Len(asyncIoQueues[node]) > 0
+      BY <1>1, <2>1
+         DEF AsyncIoSequenceTyped, AsyncIoQueueDepth
+    <2>3. /\ asyncIoQueues[node] # <<>>
+           /\ Len(Tail(asyncIoQueues[node]))
+                = Len(asyncIoQueues[node]) - 1
+      BY <2>2, PositiveSequenceIsNonempty, HeadTailProperties
+    <2>4. Tail(asyncIoQueues[node]) # asyncIoQueues[node]
+      BY <2>2, <2>3, LenProperties, Isa
+    <2>5. asyncIoQueues'[node] = Tail(asyncIoQueues[node])
+      BY <1>1, <2>1
+         DEF PostGstServiceIoWorker, ServiceIoWorker
+    <2>6. asyncIoQueues' # asyncIoQueues
+      BY <2>4, <2>5, Isa
+    <2> QED BY <1>1, <2>6, Isa
+         DEF AsyncAllVars, AsyncSchedulerVars
+  <1> QED BY <1>1
+
+THEOREM ProtectedStage5EnablesFairWorker ==
+  \A candidate, position:
+    ProtectedStage5Pending(candidate, position)
+      => ENABLED
+           <<PostGstServiceIoWorker(candidate.node)>>_AsyncAllVars
+PROOF
+  <1>1. ASSUME NEW candidate, NEW position,
+                ProtectedStage5Pending(candidate, position)
+         PROVE ENABLED
+                 <<PostGstServiceIoWorker(candidate.node)>>_AsyncAllVars
+    <2>1. /\ AsyncTypeInvariant
+           /\ gst
+           /\ candidate.node \in AsyncCurrentResponsiveVoters
+           /\ AsyncIoQueueDepth(candidate.node) > 0
+      BY <1>1, ProtectedStage5CarrierFacts,
+         AsyncStrongTypeProjectsAsyncType
+         DEF ProtectedStage5Pending, ProtectedOwnedAtServiceRank
+    <2>2. ENABLED PostGstServiceIoWorker(candidate.node)
+      BY <2>1, QueuedIoEnablesPostGstService
+    <2>3. PostGstServiceIoWorker(candidate.node)
+             => <<PostGstServiceIoWorker(candidate.node)>>_AsyncAllVars
+      BY <2>1, QueuedIoServiceIsNonstuttering
+    <2>4. ENABLED
+             <<PostGstServiceIoWorker(candidate.node)>>_AsyncAllVars
+      BY <2>2, <2>3, ENABLEDaxioms
+    <2> QED BY <2>4
+  <1> QED BY <1>1
+
+THEOREM ProtectedStage5WorkerStrictlyProgresses ==
+  \A candidate, position:
+    /\ ProtectedStage5Pending(candidate, position)
+    /\ PostGstServiceIoWorker(candidate.node)
+    => ProtectedRankProgressExit(candidate, <<5, position>>)'
+PROOF
+  <1>1. ASSUME NEW candidate, NEW position,
+                ProtectedStage5Pending(candidate, position),
+                PostGstServiceIoWorker(candidate.node)
+         PROVE ProtectedRankProgressExit(
+                 candidate, <<5, position>>)'
+    <2> DEFINE Queue == asyncIoQueues[candidate.node]
+    <2>1. /\ AsyncTypeInvariant
+           /\ candidate.node \in AsyncCurrentResponsiveVoters
+           /\ candidate \in asyncOutstandingWork[candidate.node]
+           /\ CandidateInIoQueue(candidate)
+           /\ CandidateIoIndex(candidate, Queue) = position
+           /\ AsyncIoQueueDepth(candidate.node) > 0
+           /\ AsyncIoSequenceTyped(Queue)
+           /\ AsyncIoConsensusQueueOwnership(
+                Queue, asyncIoReadyCompletions[candidate.node],
+                asyncLocalReadyCompletions[candidate.node])
+      BY <1>1, ProtectedStage5CarrierFacts,
+         AsyncStrongTypeProjectsAsyncType DEF Queue
+    <2>2. /\ asyncIoQueues'[candidate.node] = Tail(Queue)
+           /\ asyncOutstandingWork'[candidate.node]
+                = asyncOutstandingWork[candidate.node]
+           /\ asyncCommandQueues' = asyncCommandQueues
+           /\ asyncCausalQueues' = asyncCausalQueues
+           /\ asyncDeferredCompletionQueues'
+                = asyncDeferredCompletionQueues
+           /\ asyncDeferredProgressQueues'
+                = asyncDeferredProgressQueues
+           /\ asyncDeferredNormalQueues' = asyncDeferredNormalQueues
+      BY <1>1, Isa
+         DEF PostGstServiceIoWorker, ServiceIoWorker,
+             LeaveCausalQueues, AsyncDeferredVars, vars, Queue
+    <2>3. CASE /\ Head(Queue).class = "Consensus"
+                   /\ Head(Queue).candidate = candidate
+      <3>1. Head(Queue).class = "Consensus"
+        BY <2>3
+      <3>2. candidate \in
+               SequenceSet(asyncIoReadyCompletions'[candidate.node])
+        BY <1>1, <2>3, <3>1, SequenceSetAfterAppend, Isa
+           DEF PostGstServiceIoWorker, ServiceIoWorker, Queue
+      <3>3. CandidateServiceRank(candidate)'[1] = 4
+        BY <1>1, <2>1, <2>2, <3>2, Isa
+           DEF CandidateServiceRank, CandidateInReadyQueue,
+               QueuedCandidates, DeferredCandidates, CausalCandidates,
+               TrackedWorkCandidates, SequenceSet
+      <3> QED BY <3>3, Isa
+           DEF ProtectedRankProgressExit,
+               ServiceRankLess
+    <2>4. CASE ~(Head(Queue).class = "Consensus"
+                   /\ Head(Queue).candidate = candidate)
+      <3>1. CandidateIoIndex(candidate, Tail(Queue)) + 1 = position
+        BY <1>1, <2>1, <2>4,
+           CandidateIoIndexAfterNonTargetHead
+           DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+               AsyncIoTypeInvariant, AsyncIoContentTypeInvariant,
+               AsyncIoWorkContentTypeInvariant, Queue
+      <3>2. /\ CandidateInIoQueue(candidate)'
+             /\ CandidateIoIndex(
+                  candidate, asyncIoQueues'[candidate.node]) < position
+        BY <2>1, <2>2, <3>1, Isa
+           DEF CandidateInIoQueue, AsyncIoConsensusIndices, Queue
+      <3>3. /\ ~ProtectedServiceOwnershipExit(candidate)'
+                 => CandidateServiceRank(candidate)' =
+                      <<5, CandidateIoIndex(
+                              candidate,
+                              asyncIoQueues'[candidate.node])>>
+        BY <1>1, <2>1, <2>2, <3>2, Isa
+           DEF ProtectedServiceOwnershipExit,
+               ResponsiveProtectedCandidateOwned,
+               ProtectedCandidateOwned, CandidateServiceRank,
+               CandidateInReadyQueue, QueuedCandidates,
+               DeferredCandidates, CausalCandidates,
+               TrackedWorkCandidates, CandidateScheduled, SequenceSet
+      <3> QED BY <3>2, <3>3, Isa
+           DEF ProtectedRankProgressExit, ServiceRankLess
+    <2> QED BY <2>3, <2>4
+  <1> QED BY <1>1
+
+THEOREM ProtectedStage5UnlessProgress ==
+  \A candidate, position:
+    ProtectedStage5Pending(candidate, position)
+      /\ [AsyncNext]_AsyncAllVars
+      => ProtectedStage5Pending(candidate, position)'
+           \/ ProtectedRankProgressExit(candidate, <<5, position>>)'
+BY AsyncBracketNextPreservesStrongTypeInvariant,
+   AsyncBracketNextPreservesProgressOwnership,
+   CandidateIoIndexAfterNonTargetHead,
+   AppendProperties, HeadTailProperties, Isa
+   DEF ProtectedStage5Pending, ProtectedOwnedAtServiceRank,
+       ProtectedRankProgressExit, ProtectedServiceOwnershipExit,
+       ResponsiveProtectedCandidateOwned, ProtectedCandidateOwned,
+       CandidateServiceRank, ServiceRankLess, CandidateInIoQueue,
+       CandidateInReadyQueue, QueuedCandidates, DeferredCandidates,
+       CausalCandidates, TrackedWorkCandidates, CandidateScheduled,
+       AsyncNext, AsyncNonCrashStep, AsyncRunnerStep,
+       AsyncNonRunnerStep, RunNode, RunHistoricalServer,
+       LocalAdmissionStep, AdmitProducerCompletion, AdmitCausalHead,
+       IngressDrainStep, DrainFairIngressSelected,
+       SerializedRuntimeStep, RuntimeStep, FifoRuntimeStep,
+       DeferredDrainStep, ServiceIoWorker, EnqueueIoLocalControl,
+       AsyncNetworkStep, AdmitIngressPacket, AsyncFaultStep,
+       PreGstCrash, EnqueueCandidate, AppendCausalSuccessors,
+       RemoveNextNodeCommand, RemoveNextDeferredCommand,
+       SequenceWithoutIndex, DeferCommand, DiscardCommand,
+       AsyncProgressOwnershipInvariant,
+       AsyncLogicalCandidateOwnershipInvariant,
+       AsyncOutstandingCarrierInvariant, ConsensusIoCandidates,
+       SequenceHasUniqueValues, SequenceSet, AsyncIoConsensusIndices,
+       AsyncAllVars
+
+THEOREM FairProtectedStage5RankDescent ==
+  \A initialContext, candidate, position \in Nat:
+    AsyncSpecAt(initialContext)
+      => (ProtectedOwnedAtServiceRank(candidate, <<5, position>>)
+            ~> ProtectedRankProgressExit(candidate, <<5, position>>))
+PROOF
+  <1>1. ASSUME NEW initialContext, NEW candidate, NEW position \in Nat
+         PROVE AsyncSpecAt(initialContext)
+                 => (ProtectedOwnedAtServiceRank(
+                       candidate, <<5, position>>)
+                       ~> ProtectedRankProgressExit(
+                            candidate, <<5, position>>))
+    <2>1. AsyncSpecAt(initialContext)
+             => [](AsyncStrongTypeInvariant
+                    /\ AsyncProgressOwnershipInvariant)
+      BY AsyncSpecAlwaysStrongTypeInvariant,
+         AsyncSpecAlwaysProgressOwnershipInvariant, PTL
+    <2>2. AsyncSpecAt(initialContext)
+             => [](AsyncCurrentResponsiveVoters
+                    = AsyncVotersAt(initialContext))
+      BY AsyncSpecAlwaysUsesFixedResponsiveVoters
+    <2>3. ProtectedStage5Pending(candidate, position)
+               /\ ~ProtectedRankProgressExit(
+                    candidate, <<5, position>>)
+              => ENABLED
+                   <<PostGstServiceIoWorker(candidate.node)>>_AsyncAllVars
+      BY ProtectedStage5EnablesFairWorker
+    <2>4. /\ ProtectedStage5Pending(candidate, position)
+             /\ ~ProtectedRankProgressExit(candidate, <<5, position>>)
+             /\ <<PostGstServiceIoWorker(
+                    candidate.node)>>_AsyncAllVars
+            => ProtectedRankProgressExit(
+                 candidate, <<5, position>>)'
+      BY ProtectedStage5WorkerStrictlyProgresses, Isa
+         DEF ProtectedStage5Pending,
+             ProtectedRankProgressExit
+    <2>5. ProtectedStage5Pending(candidate, position)
+               /\ [AsyncNext]_AsyncAllVars
+              => ProtectedStage5Pending(candidate, position)'
+                   \/ ProtectedRankProgressExit(
+                        candidate, <<5, position>>)'
+      BY ProtectedStage5UnlessProgress
+    <2>6. CASE candidate.node \in AsyncVotersAt(initialContext)
+      <3>1. AsyncSpecAt(initialContext)
+               => WF_AsyncAllVars(
+                    PostGstServiceIoWorker(candidate.node))
+        BY <2>6 DEF AsyncSpecAt, AsyncFairnessAt
+      <3>2. AsyncSpecAt(initialContext)
+               => (ProtectedStage5Pending(candidate, position)
+                     ~> ProtectedRankProgressExit(
+                          candidate, <<5, position>>))
+        BY <2>3, <2>4, <2>5, <3>1, PTL DEF AsyncSpecAt
+      <3> QED BY <3>2
+    <2>7. CASE candidate.node \notin AsyncVotersAt(initialContext)
+      <3>1. AsyncSpecAt(initialContext)
+               => []~ProtectedOwnedAtServiceRank(
+                      candidate, <<5, position>>)
+        BY <2>2, <2>7, PTL
+           DEF ProtectedOwnedAtServiceRank,
+               ResponsiveProtectedCandidateOwned
+      <3>2. AsyncSpecAt(initialContext)
+               => (ProtectedStage5Pending(candidate, position)
+                     ~> ProtectedRankProgressExit(
+                          candidate, <<5, position>>))
+        BY <3>1, PTL DEF ProtectedStage5Pending
+      <3> QED BY <3>2
+    <2>8. AsyncSpecAt(initialContext)
+             => (ProtectedStage5Pending(candidate, position)
+                   ~> ProtectedRankProgressExit(
+                        candidate, <<5, position>>))
+      BY <2>6, <2>7
+    <2>9. AsyncSpecAt(initialContext)
+             => (ProtectedOwnedAtServiceRank(candidate, <<5, position>>)
+                   ~> ProtectedStage5Pending(candidate, position))
+      BY <2>1, PTL DEF ProtectedStage5Pending
+    <2> QED BY <2>8, <2>9, PTL
+  <1> QED BY <1>1
+
+(***************************************************************************
+Stage 4: producer-ready completion service.
+
+A ready completion can be blocked only by a full runtime queue.  The nested
+auxiliary rank follows the exact runtime priority order: establishing sticky
+FIFO debt outranks all later blockers; satisfying the one-view timeout debt
+outranks tags/deferred work; consuming a tag dominates the at-most-one drain
+bit it may set; and ordinary Local/Ingress runner turns decrease the final
+`RuntimeReachRank` component.  A FIFO execution opens a Completion slot and
+leaves the runner in Local, where the next fair RunNode occurrence either
+admits a producer completion or services causal debt; both strictly lower the
+stage-4 position.
+***************************************************************************)
+
+ReadyTimeoutDebt(node) ==
+  IF NodeHasDecision(node)
+       \/ NodeTimedOut(node, nodeView[node])
+       \/ asyncTimeoutEmitted[node]
+       \/ "TimeoutElapsed" \in asyncOutstandingTags[node]
+  THEN 0
+  ELSE IF asyncNow < asyncNodeDeadlines[node]
+       THEN asyncNodeDeadlines[node] - asyncNow + 1
+       ELSE 1
+
+ReadyDeferredCount(node) ==
+  Len(asyncDeferredCompletionQueues[node])
+    + Len(asyncDeferredProgressQueues[node])
+    + Len(asyncDeferredNormalQueues[node])
+
+ReadyTagCount(node) ==
+  Cardinality(
+    asyncOutstandingTags[node]
+      \cap {"TimeoutElapsed", "RetransmitElapsed"})
+
+ReadyTagDrainDebt(node) ==
+  2 * ReadyTagCount(node)
+    + (IF asyncDeferredDrainOwed[node] THEN 1 ELSE 0)
+
+ReadyFifoDebt(node) ==
+  IF NodeQueueNonempty(node) /\ ~asyncFifoOwed[node] THEN 1 ELSE 0
+
+ReadyRunInnerRank(node) ==
+  <<ReadyTagDrainDebt(node), RuntimeReachRank(node)>>
+
+ReadyRunTimeoutRank(node) ==
+  <<ReadyTimeoutDebt(node), ReadyRunInnerRank(node)>>
+
+ReadyRunDeferredRank(node) ==
+  <<ReadyDeferredCount(node), ReadyRunTimeoutRank(node)>>
+
+ReadyRunAuxRank(node) ==
+  <<ReadyFifoDebt(node), ReadyRunDeferredRank(node)>>
+
+ReadyRunInnerCarrier == Nat \X Nat
+ReadyRunTimeoutCarrier == Nat \X ReadyRunInnerCarrier
+ReadyRunDeferredCarrier == Nat \X ReadyRunTimeoutCarrier
+ReadyRunAuxCarrier == (0..1) \X ReadyRunDeferredCarrier
+
+ReadyRunInnerOrdering ==
+  LexPairOrdering(
+    OpToRel(<, Nat), OpToRel(<, Nat), Nat, Nat)
+
+ReadyRunTimeoutOrdering ==
+  LexPairOrdering(
+    OpToRel(<, Nat), ReadyRunInnerOrdering,
+    Nat, ReadyRunInnerCarrier)
+
+ReadyRunDeferredOrdering ==
+  LexPairOrdering(
+    OpToRel(<, Nat), ReadyRunTimeoutOrdering,
+    Nat, ReadyRunTimeoutCarrier)
+
+ReadyRunAuxOrdering ==
+  LexPairOrdering(
+    OpToRel(<, Nat), ReadyRunDeferredOrdering,
+    0..1, ReadyRunDeferredCarrier)
+
+THEOREM ReadyRunAuxOrderingIsWellFounded ==
+  IsWellFoundedOn(ReadyRunAuxOrdering, ReadyRunAuxCarrier)
+PROOF
+  <1>1. IsWellFoundedOn(OpToRel(<, Nat), 0..1)
+    BY NatLessThanWellFounded, IsWellFoundedOnSubset, Isa
+  <1>2. IsWellFoundedOn(
+           ReadyRunInnerOrdering, ReadyRunInnerCarrier)
+    BY NatLessThanWellFounded, WFLexPairOrdering
+       DEF ReadyRunInnerOrdering, ReadyRunInnerCarrier
+  <1>3. IsWellFoundedOn(
+           ReadyRunTimeoutOrdering, ReadyRunTimeoutCarrier)
+    BY NatLessThanWellFounded, <1>2, WFLexPairOrdering
+       DEF ReadyRunTimeoutOrdering, ReadyRunTimeoutCarrier
+  <1>4. IsWellFoundedOn(
+           ReadyRunDeferredOrdering, ReadyRunDeferredCarrier)
+    BY NatLessThanWellFounded, <1>3, WFLexPairOrdering
+       DEF ReadyRunDeferredOrdering, ReadyRunDeferredCarrier
+  <1> QED BY <1>1, <1>4, WFLexPairOrdering
+       DEF ReadyRunAuxOrdering, ReadyRunAuxCarrier
+
+THEOREM ReadyRunAuxRankInCarrier ==
+  \A node \in ValidatorIds:
+    AsyncTypeInvariant => ReadyRunAuxRank(node) \in ReadyRunAuxCarrier
+BY RuntimeReachRankWithinRunnerCycle, FS_Intersection, FS_CardinalityType,
+   Isa
+   DEF ReadyRunAuxRank, ReadyRunDeferredRank, ReadyRunTimeoutRank,
+       ReadyRunInnerRank, ReadyRunAuxCarrier, ReadyRunDeferredCarrier,
+       ReadyRunTimeoutCarrier, ReadyRunInnerCarrier, ReadyFifoDebt,
+       ReadyTimeoutDebt, ReadyTagDrainDebt, ReadyTagCount,
+       ReadyDeferredCount,
+       AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+       AsyncRuntimeTypeInvariant, AsyncRuntimeScalarTypeInvariant,
+       AsyncDeferredTypeInvariant, AsyncDeferredTopologyTypeInvariant,
+       AsyncDeferredContentTypeInvariant, NodeQueueNonempty
+
+(***************************************************************************
+Non-Completion causal debt reserves the exact class prefix that the causal
+head needs.  The debt is one above the number of serialized removals still
+required: when the head is blocked, a FIFO runtime step lowers this quantity
+by one, and the producer/unique-ingress gates prevent an outer source from
+refilling the released command slot before the causal head is admitted.
+***************************************************************************)
+
+CausalHeadCommandLimit(node) ==
+  LET candidate == HeadCausalCandidate(node)
+  IN CASE candidate.class = "Normal" -> AsyncNormalLimit
+       [] candidate.class = "Progress" -> AsyncProgressLimit
+       [] OTHER -> AsyncQueueCapacity
+
+CausalCommandCapacityDebt(node) ==
+  LET candidate == HeadCausalCandidate(node)
+  IN IF NonCompletionCausalAdmissionDebt(node)
+          /\ ~CandidateInFlight(candidate)
+          /\ ~CanEnqueueClass(node, candidate.class)
+     THEN AsyncQueueDepth(node) - CausalHeadCommandLimit(node) + 1
+     ELSE 0
+
+THEOREM CausalCommandCapacityDebtIsNatural ==
+  \A node \in ValidatorIds:
+    AsyncTypeInvariant => CausalCommandCapacityDebt(node) \in Nat
+BY Isa
+   DEF CausalCommandCapacityDebt, CausalHeadCommandLimit,
+       NonCompletionCausalAdmissionDebt, CausalAdmissionDebtActive,
+       AsyncQueueDepth, AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+       AsyncRuntimeTypeInvariant, AsyncRuntimeScalarTypeInvariant,
+       AsyncConfiguration
+
+ProtectedStage4Pending(candidate, position) ==
+  /\ AsyncStrongTypeInvariant
+  /\ AsyncProgressOwnershipInvariant
+  /\ ProtectedOwnedAtServiceRank(candidate, <<4, position>>)
+
+ReadyStage4Actionable(candidate) ==
+  /\ asyncRunnerPhase[candidate.node] = "Local"
+  /\ LocalAdmissionCanAdvance(candidate.node)
+
+ReadyStage4CausalCapacityBlocked(candidate, position) ==
+  /\ ProtectedStage4Pending(candidate, position)
+  /\ NonCompletionCausalAdmissionDebt(candidate.node)
+  /\ ~CausalHeadCanAdvance(candidate.node)
+
+ReadyBlockedAtAux(candidate, position, rank) ==
+  /\ ProtectedStage4Pending(candidate, position)
+  /\ ~ReadyStage4Actionable(candidate)
+  /\ ~ReadyStage4CausalCapacityBlocked(candidate, position)
+  /\ ReadyRunAuxRank(candidate.node) = rank
+
+THEOREM ProtectedStage4CarrierFacts ==
+  \A candidate, position:
+    ProtectedStage4Pending(candidate, position)
+      => /\ candidate.node \in AsyncCurrentResponsiveVoters
+         /\ candidate \in asyncOutstandingWork[candidate.node]
+         /\ CandidateInReadyQueue(candidate)
+         /\ ReadyCandidatePosition(candidate) = position
+         /\ SelectedCompletionQueueNonempty(candidate.node)
+BY Isa
+   DEF ProtectedStage4Pending, ProtectedOwnedAtServiceRank,
+       ResponsiveProtectedCandidateOwned, ProtectedCandidateOwned,
+       CandidateServiceRank, CandidateInReadyQueue,
+       ReadyCandidatePosition, ReadyCandidateSource,
+       ReadyCompletionQueue, SelectedCompletionQueueNonempty,
+       SelectedCompletionSource, AsyncProgressOwnershipInvariant,
+       AsyncOutstandingCarrierInvariant,
+       AsyncLogicalCandidateOwnershipInvariant,
+       QueuedCandidates, DeferredCandidates, CausalCandidates,
+       TrackedWorkCandidates, CandidateScheduled, SequenceSet
+
+THEOREM RunNodeIsNonstuttering ==
+  \A node \in AsyncCurrentResponsiveVoters:
+    /\ AsyncTypeInvariant
+    /\ RunNode(node)
+    => <<RunNode(node)>>_AsyncAllVars
+BY Isa
+   DEF RunNode, LocalAdmissionStep, IngressDrainStep,
+       SerializedRuntimeStep, AsyncAllVars, AsyncSchedulerVars,
+       AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+       AsyncRuntimeTypeInvariant, AsyncRuntimeScalarTypeInvariant
+
+THEOREM ProtectedOwnedCandidateEnablesFairRunNode ==
+  \A candidate:
+    /\ AsyncStrongTypeInvariant
+    /\ gst
+    /\ ResponsiveProtectedCandidateOwned(candidate)
+    => ENABLED <<PostGstRunNode(candidate.node)>>_AsyncAllVars
+PROOF
+  <1>1. ASSUME NEW candidate,
+                AsyncStrongTypeInvariant,
+                gst,
+                ResponsiveProtectedCandidateOwned(candidate)
+         PROVE ENABLED <<PostGstRunNode(candidate.node)>>_AsyncAllVars
+    <2>1. /\ AsyncTypeInvariant
+           /\ candidate.node \in AsyncCurrentResponsiveVoters
+           /\ ~NodeHasApplication(candidate.node)
+      BY <1>1, AsyncStrongTypeProjectsAsyncType
+         DEF ResponsiveProtectedCandidateOwned,
+             ProtectedCandidateOwned
+    <2>2. ENABLED RunNode(candidate.node)
+      BY <2>1, ResponsiveUnappliedRunNodeIsEnabled
+    <2>3. ENABLED PostGstRunNode(candidate.node)
+      BY <1>1, <2>1, <2>2, EnabledRunNodeLiftsPostGst
+    <2>4. PostGstRunNode(candidate.node)
+             => <<PostGstRunNode(candidate.node)>>_AsyncAllVars
+      BY <1>1, <2>1, RunNodeIsNonstuttering
+         DEF PostGstRunNode
+    <2> QED BY <2>3, <2>4, ENABLEDaxioms
+  <1> QED BY <1>1
+
+THEOREM Stage4LocalAdvanceStrictlyProgresses ==
+  \A candidate, position:
+    /\ ProtectedStage4Pending(candidate, position)
+    /\ ReadyStage4Actionable(candidate)
+    /\ PostGstRunNode(candidate.node)
+    => ProtectedRankProgressExit(candidate, <<4, position>>)'
+BY ProducerAdmissionRecordsCausalDebt,
+   OwedAdmissibleCausalCannotBeOvertaken,
+   CandidateSequenceIndexIsPosition, HeadTailProperties,
+   SequenceSetAfterAppend, Isa
+   DEF ProtectedStage4Pending, ProtectedOwnedAtServiceRank,
+       ReadyStage4Actionable, ProtectedRankProgressExit,
+       ProtectedServiceOwnershipExit,
+       ResponsiveProtectedCandidateOwned, ProtectedCandidateOwned,
+       CandidateServiceRank, ServiceRankLess,
+       ReadyCandidatePosition, ReadyCandidateSource,
+       ReadyCompletionQueue, LocalSourceDistance,
+       CandidateSequenceIndex, CandidateInReadyQueue,
+       QueuedCandidates, DeferredCandidates, CausalCandidates,
+       TrackedWorkCandidates, CandidateScheduled, PostGstRunNode,
+       RunNode, LocalAdmissionStep, AdmitProducerCompletion,
+       AdmitCausalHead, UpdateLocalAdmissionMetadata,
+       SelectedLocalSource, PreferredLocalSource,
+       SelectedCompletionSource, SelectedCompletionCandidate,
+       SelectedCompletionQueueNonempty, OtherLocalSource,
+       EnqueueCandidate, SequenceSet, AsyncProgressOwnershipInvariant,
+       AsyncLogicalCandidateOwnershipInvariant, AsyncIoVars,
+       AsyncDeferredVars, vars
+
+Stage4AuxProgress(candidate, position, rank) ==
+  \/ ProtectedRankProgressExit(candidate, <<4, position>>)
+  \/ ReadyStage4Actionable(candidate)
+  \/ ReadyStage4CausalCapacityBlocked(candidate, position)
+  \/ \E lower \in SetLessThan(
+       rank, ReadyRunAuxOrdering, ReadyRunAuxCarrier):
+       ReadyBlockedAtAux(candidate, position, lower)
+
+Stage4AuxStrictResult(candidate, position, rank) ==
+  Stage4AuxProgress(candidate, position, rank)'
+
+Stage4AuxStepResult(candidate, position, rank) ==
+  \/ Stage4AuxStrictResult(candidate, position, rank)
+  \/ ReadyBlockedAtAux(candidate, position, rank)'
+
+THEOREM Stage4LocalAdmissionDecreasesAux ==
+  \A candidate, position, rank \in ReadyRunAuxCarrier:
+    /\ ReadyBlockedAtAux(candidate, position, rank)
+    /\ LocalAdmissionStep(candidate.node)
+    => Stage4AuxStrictResult(candidate, position, rank)
+BY AsyncBracketNextPreservesStrongTypeInvariant,
+   AsyncBracketNextPreservesProgressOwnership,
+   LocalAdmissionStrictlyDecreasesRuntimeReach,
+   ReadyRunAuxRankInCarrier, Isa
+   DEF Stage4AuxStrictResult, Stage4AuxProgress, ReadyBlockedAtAux,
+       ProtectedStage4Pending, ReadyStage4Actionable,
+       ProtectedOwnedAtServiceRank, ProtectedRankProgressExit,
+       ProtectedServiceOwnershipExit,
+       ResponsiveProtectedCandidateOwned, ProtectedCandidateOwned,
+       CandidateServiceRank, ServiceRankLess,
+       ReadyRunAuxRank, ReadyRunDeferredRank, ReadyRunTimeoutRank,
+       ReadyRunInnerRank, ReadyRunAuxOrdering, ReadyRunAuxCarrier,
+       ReadyRunDeferredOrdering, ReadyRunDeferredCarrier,
+       ReadyRunTimeoutOrdering, ReadyRunTimeoutCarrier,
+       ReadyRunInnerOrdering, ReadyRunInnerCarrier,
+       ReadyFifoDebt, ReadyDeferredCount, ReadyTimeoutDebt,
+       ReadyTagDrainDebt, ReadyTagCount, RuntimeReachRank,
+       LocalAdmissionStep, LocalAdmissionCanAdvance,
+       CandidateInReadyQueue, CandidateScheduled, SequenceSet,
+       AsyncProgressOwnershipInvariant,
+       AsyncLogicalCandidateOwnershipInvariant,
+       AsyncOutstandingCarrierInvariant, AsyncAllVars
+
+THEOREM Stage4IngressDrainDecreasesAux ==
+  \A candidate, position, rank \in ReadyRunAuxCarrier:
+    /\ ReadyBlockedAtAux(candidate, position, rank)
+    /\ IngressDrainStep(candidate.node)
+    => Stage4AuxStrictResult(candidate, position, rank)
+BY AsyncBracketNextPreservesStrongTypeInvariant,
+   AsyncBracketNextPreservesProgressOwnership,
+   IngressDrainStrictlyDecreasesRuntimeReach,
+   ReadyRunAuxRankInCarrier, Isa
+   DEF Stage4AuxStrictResult, Stage4AuxProgress, ReadyBlockedAtAux,
+       ProtectedStage4Pending, ReadyStage4Actionable,
+       ProtectedOwnedAtServiceRank, ProtectedRankProgressExit,
+       ProtectedServiceOwnershipExit,
+       ResponsiveProtectedCandidateOwned, ProtectedCandidateOwned,
+       CandidateServiceRank, ServiceRankLess,
+       ReadyRunAuxRank, ReadyRunDeferredRank, ReadyRunTimeoutRank,
+       ReadyRunInnerRank, ReadyRunAuxOrdering, ReadyRunAuxCarrier,
+       ReadyRunDeferredOrdering, ReadyRunDeferredCarrier,
+       ReadyRunTimeoutOrdering, ReadyRunTimeoutCarrier,
+       ReadyRunInnerOrdering, ReadyRunInnerCarrier,
+       ReadyFifoDebt, ReadyDeferredCount, ReadyTimeoutDebt,
+       ReadyTagDrainDebt, ReadyTagCount, RuntimeReachRank,
+       IngressDrainStep, DrainFairIngressSelected,
+       CandidateInReadyQueue, CandidateScheduled, SequenceSet,
+       AsyncProgressOwnershipInvariant,
+       AsyncLogicalCandidateOwnershipInvariant,
+       AsyncOutstandingCarrierInvariant, AsyncAllVars
+
+THEOREM Stage4DiscoveryPrefixPreservesAux ==
+  \A candidate, position, rank \in ReadyRunAuxCarrier:
+    /\ ReadyBlockedAtAux(candidate, position, rank)
+    /\ \E node \in AsyncCurrentResponsiveVoters:
+         DirectCommitCertificateDiscoveryStep(node)
+    => Stage4AuxStepResult(candidate, position, rank)
+BY AsyncBracketNextPreservesStrongTypeInvariant,
+   AsyncBracketNextPreservesProgressOwnership, Isa
+   DEF Stage4AuxStepResult, Stage4AuxStrictResult, Stage4AuxProgress,
+       ReadyBlockedAtAux,
+       ProtectedStage4Pending, ReadyStage4Actionable,
+       ProtectedOwnedAtServiceRank, ProtectedRankProgressExit,
+       ProtectedServiceOwnershipExit,
+       ResponsiveProtectedCandidateOwned, ProtectedCandidateOwned,
+       CandidateServiceRank, ServiceRankLess,
+       ReadyRunAuxRank, ReadyRunDeferredRank, ReadyRunTimeoutRank,
+       ReadyRunInnerRank, DirectCommitCertificateDiscoveryStep,
+       CandidateInReadyQueue, CandidateScheduled, SequenceSet,
+       AsyncProgressOwnershipInvariant,
+       AsyncLogicalCandidateOwnershipInvariant,
+       AsyncOutstandingCarrierInvariant, AsyncAllVars
+
+THEOREM Stage4DeferredDrainDecreasesDebt ==
+  \A candidate, position, rank \in ReadyRunAuxCarrier:
+    /\ ReadyBlockedAtAux(candidate, position, rank)
+    /\ SerializedRuntimeStep(candidate.node)
+    /\ DeferredDrainStep(candidate.node)
+    => Stage4AuxStrictResult(candidate, position, rank)
+BY AsyncBracketNextPreservesStrongTypeInvariant,
+   AsyncBracketNextPreservesProgressOwnership,
+   ReadyRunAuxRankInCarrier, Isa
+   DEF Stage4AuxStrictResult, Stage4AuxProgress, ReadyBlockedAtAux,
+       ProtectedStage4Pending, ReadyStage4Actionable,
+       ProtectedOwnedAtServiceRank, ProtectedRankProgressExit,
+       ProtectedServiceOwnershipExit,
+       ResponsiveProtectedCandidateOwned, ProtectedCandidateOwned,
+       CandidateServiceRank, ServiceRankLess,
+       ReadyRunAuxRank, ReadyRunDeferredRank, ReadyRunTimeoutRank,
+       ReadyRunInnerRank, ReadyRunAuxOrdering, ReadyRunAuxCarrier,
+       ReadyRunDeferredOrdering, ReadyRunDeferredCarrier,
+       ReadyRunTimeoutOrdering, ReadyRunTimeoutCarrier,
+       ReadyRunInnerOrdering, ReadyRunInnerCarrier,
+       ReadyFifoDebt, ReadyDeferredCount, ReadyTimeoutDebt,
+       ReadyTagDrainDebt, ReadyTagCount, RuntimeReachRank,
+       SerializedRuntimeStep, DeferredDrainStep,
+       RemoveNextDeferredCommand, DiscardCommand,
+       AdvanceNextDeferredClass, DeferredQueueNonempty,
+       CandidateInReadyQueue, CandidateScheduled, SequenceSet,
+       AsyncProgressOwnershipInvariant,
+       AsyncLogicalCandidateOwnershipInvariant,
+       AsyncOutstandingCarrierInvariant, AsyncAllVars
+
+THEOREM Stage4DeferredTagDecreasesDebt ==
+  \A candidate, position, rank \in ReadyRunAuxCarrier:
+    /\ ReadyBlockedAtAux(candidate, position, rank)
+    /\ SerializedRuntimeStep(candidate.node)
+    /\ DeferredTagStep(candidate.node)
+    => Stage4AuxStrictResult(candidate, position, rank)
+BY AsyncBracketNextPreservesStrongTypeInvariant,
+   AsyncBracketNextPreservesProgressOwnership,
+   ReadyRunAuxRankInCarrier, Isa
+   DEF Stage4AuxStrictResult, Stage4AuxProgress, ReadyBlockedAtAux,
+       ProtectedStage4Pending, ReadyStage4Actionable,
+       ProtectedOwnedAtServiceRank, ProtectedRankProgressExit,
+       ProtectedServiceOwnershipExit,
+       ResponsiveProtectedCandidateOwned, ProtectedCandidateOwned,
+       CandidateServiceRank, ServiceRankLess,
+       ReadyRunAuxRank, ReadyRunDeferredRank, ReadyRunTimeoutRank,
+       ReadyRunInnerRank, ReadyRunAuxOrdering, ReadyRunAuxCarrier,
+       ReadyRunDeferredOrdering, ReadyRunDeferredCarrier,
+       ReadyRunTimeoutOrdering, ReadyRunTimeoutCarrier,
+       ReadyRunInnerOrdering, ReadyRunInnerCarrier,
+       ReadyFifoDebt, ReadyDeferredCount, ReadyTimeoutDebt,
+       ReadyTagDrainDebt, ReadyTagCount, RuntimeReachRank,
+       SerializedRuntimeStep, DeferredTagStep,
+       DeferredTimeoutStep, DeferredRetransmitStep,
+       CandidateInReadyQueue, CandidateScheduled, SequenceSet,
+       AsyncProgressOwnershipInvariant,
+       AsyncLogicalCandidateOwnershipInvariant,
+       AsyncOutstandingCarrierInvariant, AsyncAllVars
+
+THEOREM Stage4DirectTimeoutDecreasesDebt ==
+  \A candidate, position, rank \in ReadyRunAuxCarrier:
+    /\ ReadyBlockedAtAux(candidate, position, rank)
+    /\ SerializedRuntimeStep(candidate.node)
+    /\ DirectTimeoutStep(candidate.node)
+    => Stage4AuxStrictResult(candidate, position, rank)
+BY AsyncBracketNextPreservesStrongTypeInvariant,
+   AsyncBracketNextPreservesProgressOwnership,
+   ReadyRunAuxRankInCarrier, Isa
+   DEF Stage4AuxStrictResult, Stage4AuxProgress, ReadyBlockedAtAux,
+       ProtectedStage4Pending, ReadyStage4Actionable,
+       ProtectedOwnedAtServiceRank, ProtectedRankProgressExit,
+       ProtectedServiceOwnershipExit,
+       ResponsiveProtectedCandidateOwned, ProtectedCandidateOwned,
+       CandidateServiceRank, ServiceRankLess,
+       ReadyRunAuxRank, ReadyRunDeferredRank, ReadyRunTimeoutRank,
+       ReadyRunInnerRank, ReadyRunAuxOrdering, ReadyRunAuxCarrier,
+       ReadyRunDeferredOrdering, ReadyRunDeferredCarrier,
+       ReadyRunTimeoutOrdering, ReadyRunTimeoutCarrier,
+       ReadyRunInnerOrdering, ReadyRunInnerCarrier,
+       ReadyFifoDebt, ReadyDeferredCount, ReadyTimeoutDebt,
+       ReadyTagDrainDebt, ReadyTagCount, RuntimeReachRank,
+       SerializedRuntimeStep, DirectTimeoutStep, TimeoutDue,
+       CandidateInReadyQueue, CandidateScheduled, SequenceSet,
+       AsyncProgressOwnershipInvariant,
+       AsyncLogicalCandidateOwnershipInvariant,
+       AsyncOutstandingCarrierInvariant, AsyncAllVars
+
+THEOREM Stage4FifoRuntimeOpensCompletionSlot ==
+  \A candidate, position, rank \in ReadyRunAuxCarrier:
+    /\ ReadyBlockedAtAux(candidate, position, rank)
+    /\ SerializedRuntimeStep(candidate.node)
+    /\ FifoRuntimeStep(candidate.node)
+    => Stage4AuxStrictResult(candidate, position, rank)
+BY AsyncBracketNextPreservesStrongTypeInvariant,
+   AsyncBracketNextPreservesProgressOwnership,
+   ReadyRunAuxRankInCarrier, Isa
+   DEF Stage4AuxStrictResult, Stage4AuxProgress, ReadyBlockedAtAux,
+       ProtectedStage4Pending, ReadyStage4Actionable,
+       ProtectedOwnedAtServiceRank, ProtectedRankProgressExit,
+       ProtectedServiceOwnershipExit,
+       ResponsiveProtectedCandidateOwned, ProtectedCandidateOwned,
+       CandidateServiceRank, ServiceRankLess,
+       ReadyRunAuxRank, ReadyRunDeferredRank, ReadyRunTimeoutRank,
+       ReadyRunInnerRank, ReadyRunAuxOrdering, ReadyRunAuxCarrier,
+       ReadyRunDeferredOrdering, ReadyRunDeferredCarrier,
+       ReadyRunTimeoutOrdering, ReadyRunTimeoutCarrier,
+       ReadyRunInnerOrdering, ReadyRunInnerCarrier,
+       ReadyFifoDebt, ReadyDeferredCount, ReadyTimeoutDebt,
+       ReadyTagDrainDebt, ReadyTagCount, RuntimeReachRank,
+       SerializedRuntimeStep, FifoRuntimeStep,
+       RemoveNextNodeCommand, DeferCommand, DiscardCommand,
+       LocalAdmissionCanAdvance, ProducerCompletionCanAdmit,
+       CanEnqueueClass, AsyncQueueDepth, NodeQueueNonempty,
+       CandidateInReadyQueue, CandidateScheduled, SequenceSet,
+       AsyncProgressOwnershipInvariant,
+       AsyncLogicalCandidateOwnershipInvariant,
+       AsyncOutstandingCarrierInvariant, AsyncAllVars
+
+THEOREM Stage4RetransmitDecreasesFifoDebt ==
+  \A candidate, position, rank \in ReadyRunAuxCarrier:
+    /\ ReadyBlockedAtAux(candidate, position, rank)
+    /\ SerializedRuntimeStep(candidate.node)
+    /\ DirectRetransmitStep(candidate.node)
+    /\ ~(NodeQueueNonempty(candidate.node)
+           /\ asyncFifoOwed[candidate.node])
+    => Stage4AuxStrictResult(candidate, position, rank)
+BY AsyncBracketNextPreservesStrongTypeInvariant,
+   AsyncBracketNextPreservesProgressOwnership,
+   ReadyRunAuxRankInCarrier, Isa
+   DEF Stage4AuxStrictResult, Stage4AuxProgress, ReadyBlockedAtAux,
+       ProtectedStage4Pending, ReadyStage4Actionable,
+       ProtectedOwnedAtServiceRank, ProtectedRankProgressExit,
+       ProtectedServiceOwnershipExit,
+       ResponsiveProtectedCandidateOwned, ProtectedCandidateOwned,
+       CandidateServiceRank, ServiceRankLess,
+       ReadyRunAuxRank, ReadyRunDeferredRank, ReadyRunTimeoutRank,
+       ReadyRunInnerRank, ReadyRunAuxOrdering, ReadyRunAuxCarrier,
+       ReadyRunDeferredOrdering, ReadyRunDeferredCarrier,
+       ReadyRunTimeoutOrdering, ReadyRunTimeoutCarrier,
+       ReadyRunInnerOrdering, ReadyRunInnerCarrier,
+       ReadyFifoDebt, ReadyDeferredCount, ReadyTimeoutDebt,
+       ReadyTagDrainDebt, ReadyTagCount, RuntimeReachRank,
+       SerializedRuntimeStep, DirectRetransmitStep,
+       LocalAdmissionCanAdvance, ProducerCompletionCanAdmit,
+       CanEnqueueClass, AsyncQueueDepth, NodeQueueNonempty,
+       CandidateInReadyQueue, CandidateScheduled, SequenceSet,
+       AsyncProgressOwnershipInvariant,
+       AsyncLogicalCandidateOwnershipInvariant,
+       AsyncOutstandingCarrierInvariant, AsyncAllVars
+
+THEOREM Stage4IdleRuntimeMakesReadyActionable ==
+  \A candidate, position, rank \in ReadyRunAuxCarrier:
+    /\ ReadyBlockedAtAux(candidate, position, rank)
+    /\ SerializedRuntimeStep(candidate.node)
+    /\ IdleRuntimeStep(candidate.node)
+    /\ ~NodeQueueNonempty(candidate.node)
+    => Stage4AuxStrictResult(candidate, position, rank)
+BY AsyncBracketNextPreservesStrongTypeInvariant,
+   AsyncBracketNextPreservesProgressOwnership, Isa
+   DEF Stage4AuxStrictResult, Stage4AuxProgress,
+       ReadyBlockedAtAux, ProtectedStage4Pending,
+       ProtectedOwnedAtServiceRank, ReadyStage4Actionable,
+       ProtectedRankProgressExit, ProtectedServiceOwnershipExit,
+       CandidateServiceRank, CandidateInReadyQueue,
+       LocalAdmissionCanAdvance, ProducerCompletionCanAdmit,
+       CanEnqueueClass, AsyncQueueDepth, IdleRuntimeStep,
+       SerializedRuntimeStep, AsyncProgressOwnershipInvariant,
+       AsyncOutstandingCarrierInvariant, AsyncAllVars
+
+THEOREM Stage4SerializedRuntimeDecreasesAux ==
+  \A candidate, position, rank \in ReadyRunAuxCarrier:
+    /\ ReadyBlockedAtAux(candidate, position, rank)
+    /\ SerializedRuntimeStep(candidate.node)
+    => Stage4AuxStrictResult(candidate, position, rank)
+PROOF
+  <1>1. ASSUME NEW candidate,
+                NEW position,
+                NEW rank \in ReadyRunAuxCarrier,
+                ReadyBlockedAtAux(candidate, position, rank),
+                SerializedRuntimeStep(candidate.node)
+         PROVE Stage4AuxStrictResult(candidate, position, rank)
+    <2>1. RuntimeStep(candidate.node)
+      BY <1>1 DEF SerializedRuntimeStep
+    <2>2. CASE DeferredDrainStep(candidate.node)
+      BY <1>1, <2>2, Stage4DeferredDrainDecreasesDebt
+    <2>3. CASE DeferredTagStep(candidate.node)
+      BY <1>1, <2>3, Stage4DeferredTagDecreasesDebt
+    <2>4. CASE DirectTimeoutStep(candidate.node)
+      BY <1>1, <2>4, Stage4DirectTimeoutDecreasesDebt
+    <2>5. CASE FifoRuntimeStep(candidate.node)
+      BY <1>1, <2>5, Stage4FifoRuntimeOpensCompletionSlot
+    <2>6. CASE /\ DirectRetransmitStep(candidate.node)
+                 /\ ~(NodeQueueNonempty(candidate.node)
+                       /\ asyncFifoOwed[candidate.node])
+      BY <1>1, <2>6, Stage4RetransmitDecreasesFifoDebt
+    <2>7. CASE /\ IdleRuntimeStep(candidate.node)
+                 /\ ~NodeQueueNonempty(candidate.node)
+      BY <1>1, <2>7, Stage4IdleRuntimeMakesReadyActionable
+    <2> QED BY <2>1, <2>2, <2>3, <2>4, <2>5, <2>6, <2>7
+         DEF RuntimeStep
+  <1> QED BY <1>1
+
+THEOREM Stage4SameNodeRunDecreasesAux ==
+  \A candidate, position, rank \in ReadyRunAuxCarrier:
+    /\ ReadyBlockedAtAux(candidate, position, rank)
+    /\ PostGstRunNode(candidate.node)
+    => Stage4AuxStrictResult(candidate, position, rank)
+PROOF
+  <1>1. ASSUME NEW candidate,
+                NEW position,
+                NEW rank \in ReadyRunAuxCarrier,
+                ReadyBlockedAtAux(candidate, position, rank),
+                PostGstRunNode(candidate.node)
+         PROVE Stage4AuxStrictResult(candidate, position, rank)
+    <2>1. RunNode(candidate.node)
+      BY <1>1 DEF PostGstRunNode
+    <2>2. CASE LocalAdmissionStep(candidate.node)
+      BY <1>1, <2>2, Stage4LocalAdmissionDecreasesAux
+    <2>3. CASE IngressDrainStep(candidate.node)
+      BY <1>1, <2>3, Stage4IngressDrainDecreasesAux
+    <2>4. CASE SerializedRuntimeStep(candidate.node)
+      BY <1>1, <2>4, Stage4SerializedRuntimeDecreasesAux
+    <2> QED BY <2>1, <2>2, <2>3, <2>4 DEF RunNode
+  <1> QED BY <1>1
+
+THEOREM Stage4OtherRunnerPreservesOrDecreasesAux ==
+  \A candidate, position, rank \in ReadyRunAuxCarrier:
+    /\ ReadyBlockedAtAux(candidate, position, rank)
+    /\ \/ \E node \in AsyncCurrentResponsiveVoters:
+              /\ node # candidate.node
+              /\ RunNode(node)
+       \/ \E node \in AsyncCurrentResponsiveVoters:
+              RunHistoricalServer(node)
+    => Stage4AuxStepResult(candidate, position, rank)
+BY AsyncBracketNextPreservesStrongTypeInvariant,
+   AsyncBracketNextPreservesProgressOwnership, Isa
+   DEF Stage4AuxStepResult, Stage4AuxStrictResult,
+       ReadyBlockedAtAux, ProtectedStage4Pending,
+       ReadyStage4Actionable, ProtectedOwnedAtServiceRank,
+       ProtectedRankProgressExit, ProtectedServiceOwnershipExit,
+       ResponsiveProtectedCandidateOwned, ProtectedCandidateOwned,
+       CandidateServiceRank, ServiceRankLess,
+       ReadyRunAuxRank, ReadyRunDeferredRank, ReadyRunTimeoutRank,
+       ReadyRunInnerRank, RunNode, RunHistoricalServer,
+       CandidateInReadyQueue, CandidateScheduled, SequenceSet,
+       AsyncProgressOwnershipInvariant,
+       AsyncLogicalCandidateOwnershipInvariant,
+       AsyncOutstandingCarrierInvariant, AsyncAllVars
+
+THEOREM Stage4ClockStepPreservesOrDecreasesAux ==
+  \A candidate, position, rank \in ReadyRunAuxCarrier:
+    /\ ReadyBlockedAtAux(candidate, position, rank)
+    /\ AsyncTick
+    => Stage4AuxStepResult(candidate, position, rank)
+BY AsyncBracketNextPreservesStrongTypeInvariant,
+   AsyncBracketNextPreservesProgressOwnership, Isa
+   DEF Stage4AuxStepResult, Stage4AuxStrictResult,
+       ReadyBlockedAtAux, ProtectedStage4Pending,
+       ReadyStage4Actionable, ProtectedOwnedAtServiceRank,
+       ProtectedRankProgressExit, ProtectedServiceOwnershipExit,
+       ResponsiveProtectedCandidateOwned, ProtectedCandidateOwned,
+       CandidateServiceRank, ServiceRankLess,
+       ReadyRunAuxRank, ReadyRunDeferredRank, ReadyRunTimeoutRank,
+       ReadyRunInnerRank, ReadyRunAuxOrdering, ReadyRunAuxCarrier,
+       ReadyRunDeferredOrdering, ReadyRunDeferredCarrier,
+       ReadyRunTimeoutOrdering, ReadyRunTimeoutCarrier,
+       ReadyRunInnerOrdering, ReadyRunInnerCarrier,
+       ReadyFifoDebt, ReadyDeferredCount, ReadyTimeoutDebt,
+       ReadyTagDrainDebt, ReadyTagCount, RuntimeReachRank,
+       AsyncTick, AsyncNonClockVars, AsyncProgressOwnershipInvariant,
+       AsyncLogicalCandidateOwnershipInvariant,
+       AsyncOutstandingCarrierInvariant, AsyncAllVars
+
+THEOREM Stage4IoStepPreservesOrDecreasesAux ==
+  \A candidate, position, rank \in ReadyRunAuxCarrier:
+    /\ ReadyBlockedAtAux(candidate, position, rank)
+    /\ \/ \E node \in AsyncCurrentResponsiveVoters: ServiceIoWorker(node)
+       \/ \E node \in AsyncCurrentResponsiveVoters:
+              EnqueueIoLocalControl(node)
+    => Stage4AuxStepResult(candidate, position, rank)
+BY AsyncBracketNextPreservesStrongTypeInvariant,
+   AsyncBracketNextPreservesProgressOwnership,
+   HeadTailProperties, SequenceSetAfterAppend, Isa
+   DEF Stage4AuxStepResult, Stage4AuxStrictResult,
+       ReadyBlockedAtAux, ProtectedStage4Pending,
+       ReadyStage4Actionable, ProtectedOwnedAtServiceRank,
+       ProtectedRankProgressExit, ProtectedServiceOwnershipExit,
+       ResponsiveProtectedCandidateOwned, ProtectedCandidateOwned,
+       CandidateServiceRank, ServiceRankLess,
+       ReadyCandidatePosition, ReadyCandidateSource,
+       ReadyCompletionQueue, CandidateSequenceIndex,
+       CandidateInReadyQueue, CandidateScheduled, SequenceSet,
+       ServiceIoWorker, EnqueueIoLocalControl,
+       AsyncProgressOwnershipInvariant,
+       AsyncLogicalCandidateOwnershipInvariant,
+       AsyncOutstandingCarrierInvariant, AsyncAllVars
+
+THEOREM Stage4NetworkOrFaultStepPreservesAux ==
+  \A candidate, position, rank \in ReadyRunAuxCarrier:
+    /\ ReadyBlockedAtAux(candidate, position, rank)
+    /\ (AsyncNetworkStep \/ AsyncFaultStep)
+    => Stage4AuxStepResult(candidate, position, rank)
+BY AsyncBracketNextPreservesStrongTypeInvariant,
+   AsyncBracketNextPreservesProgressOwnership, Isa
+   DEF Stage4AuxStepResult, Stage4AuxStrictResult,
+       ReadyBlockedAtAux, ProtectedStage4Pending,
+       ReadyStage4Actionable, ProtectedOwnedAtServiceRank,
+       ProtectedRankProgressExit, ProtectedServiceOwnershipExit,
+       ResponsiveProtectedCandidateOwned, ProtectedCandidateOwned,
+       CandidateServiceRank, ServiceRankLess,
+       ReadyRunAuxRank, ReadyRunDeferredRank, ReadyRunTimeoutRank,
+       ReadyRunInnerRank, AsyncNetworkStep, AdmitIngressPacket,
+       AsyncFaultStep, PreGstCrash, CandidateInReadyQueue,
+       CandidateScheduled, SequenceSet,
+       AsyncProgressOwnershipInvariant,
+       AsyncLogicalCandidateOwnershipInvariant,
+       AsyncOutstandingCarrierInvariant, AsyncAllVars
+
+THEOREM Stage4StutterPreservesAux ==
+  \A candidate, position, rank \in ReadyRunAuxCarrier:
+    /\ ReadyBlockedAtAux(candidate, position, rank)
+    /\ UNCHANGED AsyncAllVars
+    => ReadyBlockedAtAux(candidate, position, rank)'
+BY Isa DEF ReadyBlockedAtAux, ProtectedStage4Pending,
+           ReadyStage4Actionable, ProtectedOwnedAtServiceRank,
+           ReadyRunAuxRank, AsyncAllVars, AsyncSchedulerVars, vars
+
+THEOREM Stage4BlockedAuxStep ==
+  \A candidate, position, rank \in ReadyRunAuxCarrier:
+    /\ ReadyBlockedAtAux(candidate, position, rank)
+    /\ [AsyncNext]_AsyncAllVars
+    => Stage4AuxStepResult(candidate, position, rank)
+PROOF
+  <1>1. ASSUME NEW candidate,
+                NEW position,
+                NEW rank \in ReadyRunAuxCarrier,
+                ReadyBlockedAtAux(candidate, position, rank),
+                [AsyncNext]_AsyncAllVars
+         PROVE Stage4AuxStepResult(candidate, position, rank)
+    <2>1. CASE UNCHANGED AsyncAllVars
+      BY <1>1, <2>1, Stage4StutterPreservesAux
+         DEF Stage4AuxStepResult
+    <2>2. CASE AsyncNext
+      <3>1. CASE \E node \in AsyncCurrentResponsiveVoters:
+                    RunNode(node)
+        <4>1. CASE RunNode(candidate.node)
+          BY <1>1, <2>2, <3>1, <4>1,
+             Stage4SameNodeRunDecreasesAux
+             DEF Stage4AuxStepResult, PostGstRunNode,
+                 ReadyBlockedAtAux, ProtectedStage4Pending,
+                 ProtectedOwnedAtServiceRank
+        <4>2. CASE ~RunNode(candidate.node)
+          BY <1>1, <3>1, <4>2,
+             Stage4OtherRunnerPreservesOrDecreasesAux
+        <4> QED BY <4>1, <4>2
+      <3>2. CASE \E node \in AsyncCurrentResponsiveVoters:
+                    RunHistoricalServer(node)
+        BY <1>1, <3>2, Stage4OtherRunnerPreservesOrDecreasesAux
+      <3>3. CASE AsyncTick
+        BY <1>1, <3>3, Stage4ClockStepPreservesOrDecreasesAux
+      <3>4. CASE \E node \in AsyncCurrentResponsiveVoters:
+                    DirectCommitCertificateDiscoveryStep(node)
+        BY <1>1, <3>4, Stage4DiscoveryPrefixPreservesAux
+      <3>5. CASE \/ \E ioNode \in AsyncCurrentResponsiveVoters:
+                          ServiceIoWorker(ioNode)
+                   \/ \E controlNode \in AsyncCurrentResponsiveVoters:
+                          EnqueueIoLocalControl(controlNode)
+        BY <1>1, <3>5, Stage4IoStepPreservesOrDecreasesAux
+      <3>6. CASE AsyncNetworkStep \/ AsyncFaultStep
+        BY <1>1, <3>6, Stage4NetworkOrFaultStepPreservesAux
+      <3>7. CASE AsyncSetGST
+        BY <1>1, <3>7
+           DEF ReadyBlockedAtAux, ProtectedStage4Pending,
+               ProtectedOwnedAtServiceRank, AsyncSetGST
+      <3>8. CASE \E node \in ValidatorIds: PreGstCrash(node)
+        BY <1>1, <3>8
+           DEF ReadyBlockedAtAux, ProtectedStage4Pending,
+               ProtectedOwnedAtServiceRank, PreGstCrash
+      <3> QED BY <2>2, <3>1, <3>2, <3>3, <3>4, <3>5, <3>6,
+           <3>7, <3>8
+           DEF AsyncNext, AsyncNonCrashStep, AsyncRunnerStep,
+               AsyncNonRunnerStep
+    <2> QED BY <1>1, <2>1, <2>2
+  <1> QED BY <1>1
+
+Stage4AuxGoal(candidate, position) ==
+  \/ ProtectedRankProgressExit(candidate, <<4, position>>)
+  \/ ReadyStage4Actionable(candidate)
+  \/ ReadyStage4CausalCapacityBlocked(candidate, position)
+
+THEOREM FairStage4AuxOneStep ==
+  \A initialContext, candidate, position,
+     rank \in ReadyRunAuxCarrier:
+    AsyncSpecAt(initialContext)
+      => (ReadyBlockedAtAux(candidate, position, rank)
+            ~> Stage4AuxProgress(candidate, position, rank))
+PROOF
+  <1>1. ASSUME NEW initialContext,
+                NEW candidate,
+                NEW position,
+                NEW rank \in ReadyRunAuxCarrier
+         PROVE AsyncSpecAt(initialContext)
+                 => (ReadyBlockedAtAux(candidate, position, rank)
+                       ~> Stage4AuxProgress(candidate, position, rank))
+    <2>1. AsyncSpecAt(initialContext)
+             => [](AsyncStrongTypeInvariant
+                    /\ AsyncProgressOwnershipInvariant)
+      BY AsyncSpecAlwaysStrongTypeInvariant,
+         AsyncSpecAlwaysProgressOwnershipInvariant, PTL
+    <2>2. AsyncSpecAt(initialContext)
+             => [](AsyncCurrentResponsiveVoters
+                    = AsyncVotersAt(initialContext))
+      BY AsyncSpecAlwaysUsesFixedResponsiveVoters
+    <2>3. /\ ReadyBlockedAtAux(candidate, position, rank)
+             /\ ~Stage4AuxProgress(candidate, position, rank)
+            => ENABLED
+                 <<PostGstRunNode(candidate.node)>>_AsyncAllVars
+      BY ProtectedOwnedCandidateEnablesFairRunNode
+         DEF ReadyBlockedAtAux, ProtectedStage4Pending,
+             ProtectedOwnedAtServiceRank, Stage4AuxProgress
+    <2>4. /\ ReadyBlockedAtAux(candidate, position, rank)
+             /\ ~Stage4AuxProgress(candidate, position, rank)
+             /\ <<PostGstRunNode(candidate.node)>>_AsyncAllVars
+            => Stage4AuxProgress(candidate, position, rank)'
+      BY Stage4SameNodeRunDecreasesAux
+         DEF Stage4AuxStrictResult
+    <2>5. ReadyBlockedAtAux(candidate, position, rank)
+              /\ [AsyncNext]_AsyncAllVars
+            => ReadyBlockedAtAux(candidate, position, rank)'
+                 \/ Stage4AuxProgress(candidate, position, rank)'
+      BY Stage4BlockedAuxStep
+         DEF Stage4AuxStepResult, Stage4AuxStrictResult
+    <2>6. CASE candidate.node \in AsyncVotersAt(initialContext)
+      <3>1. AsyncSpecAt(initialContext)
+               => WF_AsyncAllVars(
+                    PostGstRunNode(candidate.node))
+        BY <2>6 DEF AsyncSpecAt, AsyncFairnessAt
+      <3>2. AsyncSpecAt(initialContext)
+               => (ReadyBlockedAtAux(candidate, position, rank)
+                     ~> Stage4AuxProgress(candidate, position, rank))
+        BY <2>3, <2>4, <2>5, <3>1, PTL DEF AsyncSpecAt
+      <3> QED BY <3>2
+    <2>7. CASE candidate.node \notin AsyncVotersAt(initialContext)
+      <3>1. AsyncSpecAt(initialContext)
+               => []~ReadyBlockedAtAux(candidate, position, rank)
+        BY <2>2, <2>7, PTL
+           DEF ReadyBlockedAtAux, ProtectedStage4Pending,
+               ProtectedOwnedAtServiceRank,
+               ResponsiveProtectedCandidateOwned
+      <3>2. AsyncSpecAt(initialContext)
+               => (ReadyBlockedAtAux(candidate, position, rank)
+                     ~> Stage4AuxProgress(candidate, position, rank))
+        BY <3>1, PTL
+      <3> QED BY <3>2
+    <2> QED BY <2>6, <2>7
+  <1> QED BY <1>1
+
+THEOREM FairStage4AuxRankDescent ==
+  \A initialContext, candidate, position:
+    AsyncSpecAt(initialContext)
+      => \A rank \in ReadyRunAuxCarrier:
+           ReadyBlockedAtAux(candidate, position, rank)
+             ~> Stage4AuxGoal(candidate, position)
+PROOF
+  <1>1. ASSUME NEW initialContext, NEW candidate, NEW position
+         PROVE AsyncSpecAt(initialContext)
+                 => \A rank \in ReadyRunAuxCarrier:
+                      ReadyBlockedAtAux(candidate, position, rank)
+                        ~> Stage4AuxGoal(candidate, position)
+    <2>1. ASSUME NEW rank \in ReadyRunAuxCarrier
+           PROVE AsyncSpecAt(initialContext)
+                   => (ReadyBlockedAtAux(candidate, position, rank)
+                         ~> (Stage4AuxGoal(candidate, position)
+                              \/ \E lower \in SetLessThan(
+                                   rank, ReadyRunAuxOrdering,
+                                   ReadyRunAuxCarrier):
+                                   ReadyBlockedAtAux(
+                                     candidate, position, lower)))
+      BY FairStage4AuxOneStep
+         DEF Stage4AuxProgress, Stage4AuxGoal
+    <2>2. AsyncSpecAt(initialContext)
+             => \A rank \in ReadyRunAuxCarrier:
+                  ReadyBlockedAtAux(candidate, position, rank)
+                    ~> (Stage4AuxGoal(candidate, position)
+                         \/ \E lower \in SetLessThan(
+                              rank, ReadyRunAuxOrdering,
+                              ReadyRunAuxCarrier):
+                              ReadyBlockedAtAux(
+                                candidate, position, lower))
+      BY <2>1
+    <2>3. AsyncSpecAt(initialContext)
+             => \A rank \in ReadyRunAuxCarrier:
+                  ReadyBlockedAtAux(candidate, position, rank)
+                    ~> Stage4AuxGoal(candidate, position)
+      BY <2>2, ReadyRunAuxOrderingIsWellFounded,
+         WellFoundedLeadsTo
+    <2> QED BY <2>3
+  <1> QED BY <1>1
+
+(***************************************************************************
+The ordinary Stage-4 auxiliary proof stops when sticky non-Completion causal
+debt owns a class-prefix reservation.  From that point onward the reservation
+gates make command occupancy non-increasing.  This outer rank counts the FIFO
+removals needed to open the exact Normal/Progress prefix; the existing
+ReadyRunAuxRank is the inner rank which forces each such removal through the
+runtime's concrete deferred/tag/timeout/retransmit priority order.
+***************************************************************************)
+
+Stage4CapacityRank(node) ==
+  <<CausalCommandCapacityDebt(node), ReadyRunAuxRank(node)>>
+
+Stage4CapacityCarrier == Nat \X ReadyRunAuxCarrier
+
+Stage4CapacityOrdering ==
+  LexPairOrdering(
+    OpToRel(<, Nat), ReadyRunAuxOrdering,
+    Nat, ReadyRunAuxCarrier)
+
+THEOREM Stage4CapacityOrderingIsWellFounded ==
+  IsWellFoundedOn(Stage4CapacityOrdering, Stage4CapacityCarrier)
+BY NatLessThanWellFounded, ReadyRunAuxOrderingIsWellFounded,
+   WFLexPairOrdering
+   DEF Stage4CapacityOrdering, Stage4CapacityCarrier
+
+THEOREM Stage4CapacityRankInCarrier ==
+  \A node \in ValidatorIds:
+    AsyncTypeInvariant => Stage4CapacityRank(node) \in Stage4CapacityCarrier
+BY CausalCommandCapacityDebtIsNatural, ReadyRunAuxRankInCarrier
+   DEF Stage4CapacityRank, Stage4CapacityCarrier
+
+Stage4CapacityPending(candidate, position) ==
+  /\ ProtectedStage4Pending(candidate, position)
+  /\ NonCompletionCausalAdmissionDebt(candidate.node)
+  /\ ~ReadyStage4Actionable(candidate)
+
+Stage4CapacityBlockedAtRank(candidate, position, rank) ==
+  /\ ProtectedStage4Pending(candidate, position)
+  /\ NonCompletionCausalAdmissionDebt(candidate.node)
+  /\ ~ReadyStage4Actionable(candidate)
+  /\ Stage4CapacityRank(candidate.node) = rank
+
+Stage4CapacityGoal(candidate, position) ==
+  \/ ProtectedRankProgressExit(candidate, <<4, position>>)
+  \/ ReadyStage4Actionable(candidate)
+
+Stage4CapacityProgress(candidate, position, rank) ==
+  \/ Stage4CapacityGoal(candidate, position)
+  \/ \E lower \in SetLessThan(
+       rank, Stage4CapacityOrdering, Stage4CapacityCarrier):
+       Stage4CapacityBlockedAtRank(candidate, position, lower)
+
+Stage4CapacityStrictResult(candidate, position, rank) ==
+  Stage4CapacityProgress(candidate, position, rank)'
+
+Stage4CapacityStepResult(candidate, position, rank) ==
+  \/ Stage4CapacityStrictResult(candidate, position, rank)
+  \/ Stage4CapacityBlockedAtRank(candidate, position, rank)'
+
+THEOREM Stage4CapacityBlockedCoreFacts ==
+  \A candidate, position, rank:
+    Stage4CapacityBlockedAtRank(candidate, position, rank)
+      => /\ candidate.node \in ValidatorIds
+         /\ AsyncStrongTypeInvariant
+         /\ AsyncTypeInvariant
+         /\ AsyncProgressOwnershipInvariant
+         /\ NonCompletionCausalAdmissionDebt(candidate.node)
+PROOF
+  <1>1. ASSUME NEW candidate, NEW position, NEW rank,
+                Stage4CapacityBlockedAtRank(candidate, position, rank)
+         PROVE /\ candidate.node \in ValidatorIds
+               /\ AsyncStrongTypeInvariant
+               /\ AsyncTypeInvariant
+               /\ AsyncProgressOwnershipInvariant
+               /\ NonCompletionCausalAdmissionDebt(candidate.node)
+    <2>1. /\ AsyncStrongTypeInvariant
+           /\ AsyncProgressOwnershipInvariant
+           /\ NonCompletionCausalAdmissionDebt(candidate.node)
+           /\ candidate.node \in AsyncCurrentResponsiveVoters
+      BY <1>1, Isa
+         DEF Stage4CapacityBlockedAtRank, ProtectedStage4Pending,
+             ProtectedOwnedAtServiceRank,
+             ResponsiveProtectedCandidateOwned
+    <2>2. TypeInvariant
+      BY <2>1 DEF AsyncStrongTypeInvariant,
+                    StrongInductiveInvariant, Safety
+    <2>3. AsyncCurrentResponsiveVoters \subseteq ValidatorIds
+      BY <2>2, AsyncCurrentResponsiveVotersAreValidators
+    <2>4. candidate.node \in ValidatorIds
+      BY <2>1, <2>3
+    <2>5. AsyncTypeInvariant
+      BY <2>1, AsyncStrongTypeProjectsAsyncType
+    <2> QED BY <2>1, <2>4, <2>5
+  <1> QED BY <1>1
+
+THEOREM Stage4CapacityBlockedStepPreservesCoreInvariants ==
+  \A candidate, position, rank:
+    /\ Stage4CapacityBlockedAtRank(candidate, position, rank)
+    /\ [AsyncNext]_AsyncAllVars
+    => /\ AsyncStrongTypeInvariant'
+       /\ AsyncProgressOwnershipInvariant'
+PROOF
+  <1>1. ASSUME NEW candidate, NEW position, NEW rank,
+                Stage4CapacityBlockedAtRank(candidate, position, rank),
+                [AsyncNext]_AsyncAllVars
+         PROVE /\ AsyncStrongTypeInvariant'
+               /\ AsyncProgressOwnershipInvariant'
+    <2>1. /\ AsyncStrongTypeInvariant
+           /\ AsyncProgressOwnershipInvariant
+      BY <1>1 DEF Stage4CapacityBlockedAtRank,
+                    ProtectedStage4Pending
+    <2>2. AsyncStrongTypeInvariant'
+      BY <1>1, <2>1, AsyncBracketNextPreservesStrongTypeInvariant
+    <2>3. AsyncProgressOwnershipInvariant'
+      BY <1>1, <2>1, AsyncBracketNextPreservesProgressOwnership
+    <2> QED BY <2>2, <2>3
+  <1> QED BY <1>1
+
+THEOREM SerializedRuntimeReturnsToLocalWithBudget ==
+  \A node \in ValidatorIds:
+    /\ AsyncTypeInvariant
+    /\ SerializedRuntimeStep(node)
+    => /\ asyncRunnerPhase'[node] = "Local"
+       /\ asyncRunnerBudget'[node] = AsyncQueueCapacity
+       /\ AsyncQueueCapacity > 0
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds,
+                AsyncTypeInvariant,
+                SerializedRuntimeStep(node)
+         PROVE /\ asyncRunnerPhase'[node] = "Local"
+               /\ asyncRunnerBudget'[node] = AsyncQueueCapacity
+               /\ AsyncQueueCapacity > 0
+    <2>1. AsyncRuntimeScalarTypeInvariant
+      BY <1>1 DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+                    AsyncRuntimeTypeInvariant
+    <2>2. /\ DOMAIN asyncRunnerPhase = ValidatorIds
+           /\ DOMAIN asyncRunnerBudget = ValidatorIds
+           /\ AsyncQueueCapacity > 0
+      BY <2>1, Isa
+         DEF AsyncRuntimeScalarTypeInvariant, AsyncConfiguration
+    <2>3. /\ asyncRunnerPhase' =
+                 [asyncRunnerPhase EXCEPT ![node] = "Local"]
+           /\ asyncRunnerBudget' =
+                 [asyncRunnerBudget EXCEPT
+                    ![node] = AsyncQueueCapacity]
+      BY <1>1 DEF SerializedRuntimeStep
+    <2>4. asyncRunnerPhase'[node] = "Local"
+      BY <1>1, <2>2, <2>3, FunctionalReplaceUpdateAtKey
+    <2>5. asyncRunnerBudget'[node] = AsyncQueueCapacity
+      BY <1>1, <2>2, <2>3, FunctionalReplaceUpdateAtKey
+    <2> QED BY <2>2, <2>4, <2>5
+  <1> QED BY <1>1
+
+THEOREM SerializedRuntimeStage4CapacityRankInCarrier ==
+  \A node \in ValidatorIds:
+    /\ AsyncTypeInvariant
+    /\ AsyncStrongTypeInvariant'
+    /\ SerializedRuntimeStep(node)
+    => Stage4CapacityRank(node)' \in Stage4CapacityCarrier
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds,
+                AsyncTypeInvariant,
+                AsyncStrongTypeInvariant',
+                SerializedRuntimeStep(node)
+         PROVE Stage4CapacityRank(node)' \in Stage4CapacityCarrier
+    <2>1. AsyncTypeInvariant'
+      BY <1>1 DEF AsyncStrongTypeInvariant, AsyncTypeInvariant,
+                    StrongInductiveInvariant, Safety
+    <2>2. CausalCommandCapacityDebt(node)' \in Nat
+      <3>1. /\ AsyncQueueDepth(node)' \in Nat
+             /\ AsyncNormalLimit \in Nat
+             /\ AsyncProgressLimit \in Nat
+             /\ AsyncQueueCapacity \in Nat
+        BY <2>1, LenProperties, SMT
+           DEF AsyncQueueDepth, AsyncNormalLimit,
+               AsyncProgressLimit, AsyncTypeInvariant,
+               AsyncSchedulerTypeInvariant, AsyncRuntimeTypeInvariant,
+               AsyncRuntimeScalarTypeInvariant, AsyncQueueTyped,
+               AsyncConfiguration
+      <3>2. CausalHeadCommandLimit(node)' \in Nat
+        <4>1. CASE HeadCausalCandidate(node).class' = "Normal"
+          BY <3>1, <4>1 DEF CausalHeadCommandLimit
+        <4>2. CASE HeadCausalCandidate(node).class' = "Progress"
+          BY <3>1, <4>2 DEF CausalHeadCommandLimit
+        <4>3. CASE /\ HeadCausalCandidate(node).class' # "Normal"
+                      /\ HeadCausalCandidate(node).class' # "Progress"
+          BY <3>1, <4>3 DEF CausalHeadCommandLimit
+        <4> QED BY <4>1, <4>2, <4>3
+      <3>3. CASE ~(/\ NonCompletionCausalAdmissionDebt(node)'
+                    /\ ~CandidateInFlight(
+                         HeadCausalCandidate(node))'
+                    /\ ~CanEnqueueClass(
+                         node, HeadCausalCandidate(node).class)')
+        <4>1. CausalCommandCapacityDebt(node)' = 0
+          BY <3>3 DEF CausalCommandCapacityDebt
+        <4> QED BY <4>1
+      <3>4. CASE /\ NonCompletionCausalAdmissionDebt(node)'
+                    /\ ~CandidateInFlight(
+                         HeadCausalCandidate(node))'
+                    /\ ~CanEnqueueClass(
+                         node, HeadCausalCandidate(node).class)'
+        <4>1. /\ NonCompletionCausalAdmissionDebt(node)'
+               /\ ~CandidateInFlight(HeadCausalCandidate(node))'
+               /\ ~CanEnqueueClass(
+                    node, HeadCausalCandidate(node).class)'
+          BY <3>4
+        <4>2. AsyncCandidateTyped(HeadCausalCandidate(node))'
+          <5>1. /\ AsyncQueueTyped(asyncCausalQueues'[node])
+                 /\ Len(asyncCausalQueues'[node]) > 0
+            BY <2>1, <4>1
+               DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+                   AsyncRuntimeTypeInvariant, AsyncCausalTypeInvariant,
+                   NonCompletionCausalAdmissionDebt,
+                   CausalAdmissionDebtActive, CausalQueueNonempty
+          <5> QED BY <5>1, NonemptyTypedQueueHeadIsTyped
+               DEF HeadCausalCandidate
+        <4>3. HeadCausalCandidate(node).class'
+                   \in {"Normal", "Progress"}
+          BY <4>1, <4>2, SMT
+             DEF AsyncCandidateTyped, AsyncCommandClasses,
+                 NonCompletionCausalAdmissionDebt
+        <4>4. CanEnqueueClass(
+                  node, HeadCausalCandidate(node).class)'
+                  <=> AsyncQueueDepth(node)'
+                        < CausalHeadCommandLimit(node)'
+          <5>1. CASE HeadCausalCandidate(node).class' = "Normal"
+            BY <5>1 DEF CanEnqueueClass, CausalHeadCommandLimit
+          <5>2. CASE HeadCausalCandidate(node).class' = "Progress"
+            BY <5>2 DEF CanEnqueueClass, CausalHeadCommandLimit
+          <5> QED BY <4>3, <5>1, <5>2, SMT
+        <4>5. ~(AsyncQueueDepth(node)'
+                    < CausalHeadCommandLimit(node)')
+          BY <4>1, <4>4
+        <4>6. AsyncQueueDepth(node)'
+                    - CausalHeadCommandLimit(node)' + 1 \in Nat
+          BY <3>1, <3>2, <4>5, SMT
+        <4>7. CausalCommandCapacityDebt(node)' =
+                 AsyncQueueDepth(node)'
+                   - CausalHeadCommandLimit(node)' + 1
+          BY <4>1 DEF CausalCommandCapacityDebt
+        <4> QED BY <4>6, <4>7
+      <3> QED BY <3>3, <3>4
+    <2>3. ReadyFifoDebt(node)' \in 0..1
+      BY <2>1, Isa
+         DEF ReadyFifoDebt, NodeQueueNonempty,
+             AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+             AsyncRuntimeTypeInvariant,
+             AsyncRuntimeScalarTypeInvariant
+    <2>4. ReadyDeferredCount(node)' \in Nat
+      BY <2>1, Isa
+         DEF ReadyDeferredCount, AsyncTypeInvariant,
+             AsyncSchedulerTypeInvariant, AsyncDeferredTypeInvariant,
+             AsyncDeferredContentTypeInvariant,
+             AsyncQueueTyped, AsyncCompletionSequenceTyped
+    <2>5. ReadyTimeoutDebt(node)' \in Nat
+      <3>1. asyncNow' \in Nat
+        BY <2>1
+           DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+               AsyncRuntimeTypeInvariant,
+               AsyncRuntimeScalarTypeInvariant
+      <3>2. asyncNodeDeadlines' \in [ValidatorIds -> Nat]
+        BY <2>1
+           DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+               AsyncTransportTypeInvariant,
+               AsyncTransportClockTypeInvariant
+      <3>3. asyncNodeDeadlines'[node] \in Nat
+        BY <1>1, <3>2, Isa
+      <3>4. asyncTimeoutEmitted' \in [ValidatorIds -> BOOLEAN]
+        BY <2>1
+           DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+               AsyncRuntimeTypeInvariant,
+               AsyncRuntimeScalarTypeInvariant
+      <3>6. asyncOutstandingTags'
+                  \in [ValidatorIds -> SUBSET AsyncCompletionTags]
+        BY <2>1
+           DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+               AsyncTransportTypeInvariant,
+               AsyncTransportClockTypeInvariant
+      <3>7. asyncOutstandingTags'[node]
+                  \subseteq AsyncCompletionTags
+        BY <1>1, <3>6, Isa
+      <3>8. CASE /\ ~NodeHasDecision(node)'
+                    /\ ~NodeTimedOut(node, nodeView[node])'
+                    /\ ~asyncTimeoutEmitted'[node]
+                    /\ "TimeoutElapsed"
+                         \notin asyncOutstandingTags'[node]
+                    /\ asyncNow' < asyncNodeDeadlines'[node]
+        BY <3>1, <3>3, <3>8, SMT DEF ReadyTimeoutDebt
+      <3>9. CASE /\ ~NodeHasDecision(node)'
+                    /\ ~NodeTimedOut(node, nodeView[node])'
+                    /\ ~asyncTimeoutEmitted'[node]
+                    /\ "TimeoutElapsed"
+                         \notin asyncOutstandingTags'[node]
+                    /\ ~(asyncNow' < asyncNodeDeadlines'[node])
+        BY <3>9 DEF ReadyTimeoutDebt
+      <3>10. CASE \/ NodeHasDecision(node)'
+                    \/ NodeTimedOut(node, nodeView[node])'
+                    \/ asyncTimeoutEmitted'[node]
+                    \/ "TimeoutElapsed"
+                         \in asyncOutstandingTags'[node]
+        BY <3>10 DEF ReadyTimeoutDebt
+      <3> QED BY <3>8, <3>9, <3>10
+    <2>6. ReadyTagDrainDebt(node)' \in Nat
+      <3>1. asyncOutstandingTags'
+                  \in [ValidatorIds -> SUBSET AsyncCompletionTags]
+        BY <2>1
+           DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+               AsyncTransportTypeInvariant,
+               AsyncTransportClockTypeInvariant
+      <3>2. asyncOutstandingTags'[node]
+                  \subseteq AsyncCompletionTags
+        BY <1>1, <3>1, Isa
+      <3>2a. IsFiniteSet(AsyncCompletionTags)
+        BY FS_EmptySet, FS_AddElement DEF AsyncCompletionTags
+      <3>3. IsFiniteSet(asyncOutstandingTags'[node])
+        BY <3>2, <3>2a, FS_Subset
+      <3>4. IsFiniteSet(
+               asyncOutstandingTags'[node]
+                 \cap {"TimeoutElapsed", "RetransmitElapsed"})
+        BY <3>3, FS_Intersection
+      <3>5. Cardinality(
+               asyncOutstandingTags'[node]
+                 \cap {"TimeoutElapsed", "RetransmitElapsed"}) \in Nat
+        BY <3>4, FS_CardinalityType
+      <3>6. ReadyTagCount(node)' =
+               Cardinality(
+                 asyncOutstandingTags'[node]
+                   \cap {"TimeoutElapsed", "RetransmitElapsed"})
+        BY DEF ReadyTagCount
+      <3>7. ReadyTagCount(node)' \in Nat
+        BY <3>5, <3>6
+      <3>8. asyncDeferredDrainOwed'
+                  \in [ValidatorIds -> BOOLEAN]
+        BY <2>1
+           DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+               AsyncDeferredTypeInvariant,
+               AsyncDeferredTopologyTypeInvariant
+      <3>10. CASE asyncDeferredDrainOwed'[node]
+        BY <3>7, <3>10, SMT DEF ReadyTagDrainDebt
+      <3>11. CASE ~asyncDeferredDrainOwed'[node]
+        BY <3>7, <3>11, SMT DEF ReadyTagDrainDebt
+      <3> QED BY <3>10, <3>11
+    <2>7. RuntimeReachRank(node)' \in Nat
+      BY <1>1, <2>1, SerializedRuntimeReturnsToLocalWithBudget,
+         Isa
+         DEF RuntimeReachRank, AsyncTypeInvariant,
+             AsyncSchedulerTypeInvariant,
+             AsyncRuntimeTypeInvariant,
+             AsyncRuntimeScalarTypeInvariant, AsyncConfiguration
+    <2>8. ReadyRunAuxRank(node)' \in ReadyRunAuxCarrier
+      BY <2>3, <2>4, <2>5, <2>6, <2>7, Isa
+         DEF ReadyRunAuxRank, ReadyRunDeferredRank,
+             ReadyRunTimeoutRank, ReadyRunInnerRank,
+             ReadyRunAuxCarrier, ReadyRunDeferredCarrier,
+             ReadyRunTimeoutCarrier, ReadyRunInnerCarrier
+    <2> QED BY <2>2, <2>8
+         DEF Stage4CapacityRank, Stage4CapacityCarrier
+  <1> QED BY <1>1
+
+THEOREM SerializedRuntimeKeepsStage4PendingUnlessProgress ==
+  \A candidate, position, rank:
+    /\ Stage4CapacityBlockedAtRank(candidate, position, rank)
+    /\ [AsyncNext]_AsyncAllVars
+    /\ SerializedRuntimeStep(candidate.node)
+    /\ ~ProtectedRankProgressExit(candidate, <<4, position>>)'
+    => ProtectedStage4Pending(candidate, position)'
+PROOF
+  <1>1. ASSUME NEW candidate, NEW position, NEW rank,
+                Stage4CapacityBlockedAtRank(candidate, position, rank),
+                [AsyncNext]_AsyncAllVars,
+                SerializedRuntimeStep(candidate.node),
+                ~ProtectedRankProgressExit(
+                   candidate, <<4, position>>)'
+         PROVE ProtectedStage4Pending(candidate, position)'
+    <2>1. /\ candidate.node \in ValidatorIds
+           /\ candidate \in asyncOutstandingWork[candidate.node]
+           /\ CandidateInReadyQueue(candidate)
+           /\ ReadyCandidatePosition(candidate) = position
+      BY <1>1, ProtectedStage4CarrierFacts,
+         Stage4CapacityBlockedCoreFacts
+         DEF Stage4CapacityBlockedAtRank
+    <2>2. /\ AsyncStrongTypeInvariant'
+           /\ AsyncProgressOwnershipInvariant'
+      BY <1>1, Stage4CapacityBlockedStepPreservesCoreInvariants
+    <2>3. gst'
+      BY <1>1, GstAsyncStepIsMonotone
+         DEF Stage4CapacityBlockedAtRank, ProtectedStage4Pending,
+             ProtectedOwnedAtServiceRank
+    <2>4. ResponsiveProtectedCandidateOwned(candidate)'
+      BY <1>1
+         DEF ProtectedRankProgressExit,
+             ProtectedServiceOwnershipExit
+    <2>5. /\ asyncIoReadyCompletions' = asyncIoReadyCompletions
+           /\ asyncLocalReadyCompletions'
+                = asyncLocalReadyCompletions
+           /\ asyncNextCompletionSource'
+                = asyncNextCompletionSource
+           /\ asyncCausalAdmissionOwed'
+                = asyncCausalAdmissionOwed
+           /\ asyncNextLocalSource' = asyncNextLocalSource
+      BY <1>1 DEF SerializedRuntimeStep,
+                    AsyncIoVars, AsyncLocalAdmissionVars
+    <2>6. /\ CandidateInReadyQueue(candidate)'
+           /\ ReadyCandidatePosition(candidate)' = position
+      BY <2>1, <2>5, Isa
+         DEF CandidateInReadyQueue, ReadyCandidatePosition,
+             ReadyCandidateSource, ReadyCompletionQueue,
+             SelectedCompletionSource, LocalSourceDistance,
+             PreferredLocalSource, SequenceSet
+    <2>7. asyncOutstandingWork' = asyncOutstandingWork
+      BY <1>1 DEF SerializedRuntimeStep, AsyncIoVars
+    <2>8. candidate \in asyncOutstandingWork'[candidate.node]
+      BY <2>1, <2>7
+    <2>9. candidate \in TrackedWorkCandidates'
+      BY <2>1, <2>8, Isa DEF TrackedWorkCandidates
+    <2>10. candidate \notin QueuedCandidates'
+      BY <2>2, <2>9, Isa
+         DEF AsyncProgressOwnershipInvariant,
+             AsyncLogicalCandidateOwnershipInvariant
+    <2>11. candidate \notin DeferredCandidates'
+      BY <2>2, <2>9, Isa
+         DEF AsyncProgressOwnershipInvariant,
+             AsyncLogicalCandidateOwnershipInvariant
+    <2>12. CandidateServiceRank(candidate)' = <<4, position>>
+      BY <2>6, <2>9, <2>10, <2>11, Isa
+         DEF CandidateServiceRank, CandidateInReadyQueue
+    <2> QED BY <2>2, <2>3, <2>4, <2>12
+         DEF ProtectedStage4Pending, ProtectedOwnedAtServiceRank
+  <1> QED BY <1>1
+
+THEOREM Stage4CapacityLocalAdmissionStrictlyProgresses ==
+  \A candidate, position, rank \in Stage4CapacityCarrier:
+    /\ Stage4CapacityBlockedAtRank(candidate, position, rank)
+    /\ LocalAdmissionStep(candidate.node)
+    => Stage4CapacityStrictResult(candidate, position, rank)
+BY AsyncBracketNextPreservesStrongTypeInvariant,
+   AsyncBracketNextPreservesProgressOwnership,
+   LocalAdmissionStrictlyDecreasesRuntimeReach,
+   Stage4CapacityRankInCarrier, Isa
+   DEF Stage4CapacityStrictResult, Stage4CapacityProgress,
+       Stage4CapacityGoal, Stage4CapacityBlockedAtRank,
+       Stage4CapacityRank, Stage4CapacityOrdering,
+       Stage4CapacityCarrier, ReadyStage4CausalCapacityBlocked,
+       ProtectedStage4Pending, ReadyStage4Actionable,
+       ProtectedOwnedAtServiceRank, ProtectedRankProgressExit,
+       ProtectedServiceOwnershipExit,
+       ResponsiveProtectedCandidateOwned, ProtectedCandidateOwned,
+       CandidateServiceRank, ServiceRankLess,
+       CausalCommandCapacityDebt, CausalHeadCommandLimit,
+       NonCompletionCausalAdmissionDebt, CausalAdmissionDebtActive,
+       ReadyRunAuxRank, ReadyRunDeferredRank, ReadyRunTimeoutRank,
+       ReadyRunInnerRank, ReadyRunAuxOrdering, ReadyRunAuxCarrier,
+       ReadyRunDeferredOrdering, ReadyRunDeferredCarrier,
+       ReadyRunTimeoutOrdering, ReadyRunTimeoutCarrier,
+       ReadyRunInnerOrdering, ReadyRunInnerCarrier,
+       ReadyFifoDebt, ReadyDeferredCount, ReadyTimeoutDebt,
+       ReadyTagDrainDebt, ReadyTagCount, RuntimeReachRank,
+       LocalAdmissionStep, LocalAdmissionCanAdvance,
+       ProducerCompletionCanAdvance, ProducerCompletionCanAdmit,
+       RecordBlockedCausalDebt, CandidateInReadyQueue,
+       CandidateScheduled, CandidateInFlight, CausalHeadCanAdvance,
+       CanEnqueueClass, AsyncQueueDepth, NodeQueueNonempty,
+       AsyncProgressOwnershipInvariant,
+       AsyncLogicalCandidateOwnershipInvariant,
+       AsyncOutstandingCarrierInvariant, AsyncAllVars
+
+THEOREM Stage4CapacityIngressStrictlyProgresses ==
+  \A candidate, position, rank \in Stage4CapacityCarrier:
+    /\ Stage4CapacityBlockedAtRank(candidate, position, rank)
+    /\ IngressDrainStep(candidate.node)
+    => Stage4CapacityStrictResult(candidate, position, rank)
+BY AsyncBracketNextPreservesStrongTypeInvariant,
+   AsyncBracketNextPreservesProgressOwnership,
+   IngressDrainStrictlyDecreasesRuntimeReach,
+   Stage4CapacityRankInCarrier, Isa
+   DEF Stage4CapacityStrictResult, Stage4CapacityProgress,
+       Stage4CapacityGoal, Stage4CapacityBlockedAtRank,
+       Stage4CapacityRank, Stage4CapacityOrdering,
+       Stage4CapacityCarrier, ReadyStage4CausalCapacityBlocked,
+       ProtectedStage4Pending, ReadyStage4Actionable,
+       ProtectedOwnedAtServiceRank, ProtectedRankProgressExit,
+       ProtectedServiceOwnershipExit,
+       ResponsiveProtectedCandidateOwned, ProtectedCandidateOwned,
+       CandidateServiceRank, ServiceRankLess,
+       CausalCommandCapacityDebt, CausalHeadCommandLimit,
+       NonCompletionCausalAdmissionDebt, CausalAdmissionDebtActive,
+       ReadyRunAuxRank, ReadyRunDeferredRank, ReadyRunTimeoutRank,
+       ReadyRunInnerRank, ReadyRunAuxOrdering, ReadyRunAuxCarrier,
+       ReadyRunDeferredOrdering, ReadyRunDeferredCarrier,
+       ReadyRunTimeoutOrdering, ReadyRunTimeoutCarrier,
+       ReadyRunInnerOrdering, ReadyRunInnerCarrier,
+       ReadyFifoDebt, ReadyDeferredCount, ReadyTimeoutDebt,
+       ReadyTagDrainDebt, ReadyTagCount, RuntimeReachRank,
+       IngressDrainStep, DrainFairIngressSelected,
+       IngressItemCanDrain, PopSelectedIngress,
+       CandidateInReadyQueue, CandidateScheduled, CandidateInFlight,
+       CausalHeadCanAdvance, CanEnqueueClass, AsyncQueueDepth,
+       NodeQueueNonempty, AsyncProgressOwnershipInvariant,
+       AsyncLogicalCandidateOwnershipInvariant,
+       AsyncOutstandingCarrierInvariant, AsyncAllVars
+
+THEOREM Stage4CapacityDeferredDrainStrictlyProgresses ==
+  \A candidate, position, rank \in Stage4CapacityCarrier:
+    /\ Stage4CapacityBlockedAtRank(candidate, position, rank)
+    /\ SerializedRuntimeStep(candidate.node)
+    /\ DeferredDrainStep(candidate.node)
+    => Stage4CapacityStrictResult(candidate, position, rank)
+BY AsyncBracketNextPreservesStrongTypeInvariant,
+   AsyncBracketNextPreservesProgressOwnership,
+   Stage4CapacityRankInCarrier, Isa
+   DEF Stage4CapacityStrictResult, Stage4CapacityProgress,
+       Stage4CapacityGoal, Stage4CapacityBlockedAtRank,
+       Stage4CapacityRank, Stage4CapacityOrdering,
+       Stage4CapacityCarrier, ReadyStage4CausalCapacityBlocked,
+       ProtectedStage4Pending, ReadyStage4Actionable,
+       ProtectedOwnedAtServiceRank, ProtectedRankProgressExit,
+       ProtectedServiceOwnershipExit,
+       ResponsiveProtectedCandidateOwned, ProtectedCandidateOwned,
+       CandidateServiceRank, ServiceRankLess,
+       CausalCommandCapacityDebt, CausalHeadCommandLimit,
+       NonCompletionCausalAdmissionDebt, CausalAdmissionDebtActive,
+       ReadyRunAuxRank, ReadyRunDeferredRank, ReadyRunTimeoutRank,
+       ReadyRunInnerRank, ReadyRunAuxOrdering, ReadyRunAuxCarrier,
+       ReadyRunDeferredOrdering, ReadyRunDeferredCarrier,
+       ReadyRunTimeoutOrdering, ReadyRunTimeoutCarrier,
+       ReadyRunInnerOrdering, ReadyRunInnerCarrier,
+       ReadyFifoDebt, ReadyDeferredCount, ReadyTimeoutDebt,
+       ReadyTagDrainDebt, ReadyTagCount, RuntimeReachRank,
+       SerializedRuntimeStep, DeferredDrainStep,
+       RemoveNextDeferredCommand, DiscardCommand,
+       AdvanceNextDeferredClass, DeferredQueueNonempty,
+       AppendCausalSuccessors, FreshCommandSuccessors,
+       CandidateInReadyQueue, CandidateScheduled, CandidateInFlight,
+       CausalHeadCanAdvance, CanEnqueueClass, AsyncQueueDepth,
+       NodeQueueNonempty, SequenceSet,
+       AsyncProgressOwnershipInvariant,
+       AsyncLogicalCandidateOwnershipInvariant,
+       AsyncOutstandingCarrierInvariant, AsyncAllVars
+
+THEOREM Stage4CapacityDeferredTagStrictlyProgresses ==
+  \A candidate, position, rank \in Stage4CapacityCarrier:
+    /\ Stage4CapacityBlockedAtRank(candidate, position, rank)
+    /\ SerializedRuntimeStep(candidate.node)
+    /\ DeferredTagStep(candidate.node)
+    => Stage4CapacityStrictResult(candidate, position, rank)
+BY AsyncBracketNextPreservesStrongTypeInvariant,
+   AsyncBracketNextPreservesProgressOwnership,
+   Stage4CapacityRankInCarrier, Isa
+   DEF Stage4CapacityStrictResult, Stage4CapacityProgress,
+       Stage4CapacityGoal, Stage4CapacityBlockedAtRank,
+       Stage4CapacityRank, Stage4CapacityOrdering,
+       Stage4CapacityCarrier, ReadyStage4CausalCapacityBlocked,
+       ProtectedStage4Pending, ReadyStage4Actionable,
+       ProtectedOwnedAtServiceRank, ProtectedRankProgressExit,
+       ProtectedServiceOwnershipExit,
+       ResponsiveProtectedCandidateOwned, ProtectedCandidateOwned,
+       CandidateServiceRank, ServiceRankLess,
+       CausalCommandCapacityDebt, CausalHeadCommandLimit,
+       NonCompletionCausalAdmissionDebt, CausalAdmissionDebtActive,
+       ReadyRunAuxRank, ReadyRunDeferredRank, ReadyRunTimeoutRank,
+       ReadyRunInnerRank, ReadyRunAuxOrdering, ReadyRunAuxCarrier,
+       ReadyRunDeferredOrdering, ReadyRunDeferredCarrier,
+       ReadyRunTimeoutOrdering, ReadyRunTimeoutCarrier,
+       ReadyRunInnerOrdering, ReadyRunInnerCarrier,
+       ReadyFifoDebt, ReadyDeferredCount, ReadyTimeoutDebt,
+       ReadyTagDrainDebt, ReadyTagCount, RuntimeReachRank,
+       SerializedRuntimeStep, DeferredTagStep,
+       DeferredTimeoutStep, DeferredRetransmitStep,
+       AppendCausalSuccessors, FreshCommandSuccessors,
+       CandidateInReadyQueue, CandidateScheduled, CandidateInFlight,
+       CausalHeadCanAdvance, CanEnqueueClass, AsyncQueueDepth,
+       NodeQueueNonempty, SequenceSet,
+       AsyncProgressOwnershipInvariant,
+       AsyncLogicalCandidateOwnershipInvariant,
+       AsyncOutstandingCarrierInvariant, AsyncAllVars
+
+THEOREM Stage4CapacityDirectTimeoutStrictlyProgresses ==
+  \A candidate, position, rank \in Stage4CapacityCarrier:
+    /\ Stage4CapacityBlockedAtRank(candidate, position, rank)
+    /\ SerializedRuntimeStep(candidate.node)
+    /\ DirectTimeoutStep(candidate.node)
+    => Stage4CapacityStrictResult(candidate, position, rank)
+BY AsyncBracketNextPreservesStrongTypeInvariant,
+   AsyncBracketNextPreservesProgressOwnership,
+   Stage4CapacityRankInCarrier, Isa
+   DEF Stage4CapacityStrictResult, Stage4CapacityProgress,
+       Stage4CapacityGoal, Stage4CapacityBlockedAtRank,
+       Stage4CapacityRank, Stage4CapacityOrdering,
+       Stage4CapacityCarrier, ReadyStage4CausalCapacityBlocked,
+       ProtectedStage4Pending, ReadyStage4Actionable,
+       ProtectedOwnedAtServiceRank, ProtectedRankProgressExit,
+       ProtectedServiceOwnershipExit,
+       ResponsiveProtectedCandidateOwned, ProtectedCandidateOwned,
+       CandidateServiceRank, ServiceRankLess,
+       CausalCommandCapacityDebt, CausalHeadCommandLimit,
+       NonCompletionCausalAdmissionDebt, CausalAdmissionDebtActive,
+       ReadyRunAuxRank, ReadyRunDeferredRank, ReadyRunTimeoutRank,
+       ReadyRunInnerRank, ReadyRunAuxOrdering, ReadyRunAuxCarrier,
+       ReadyRunDeferredOrdering, ReadyRunDeferredCarrier,
+       ReadyRunTimeoutOrdering, ReadyRunTimeoutCarrier,
+       ReadyRunInnerOrdering, ReadyRunInnerCarrier,
+       ReadyFifoDebt, ReadyDeferredCount, ReadyTimeoutDebt,
+       ReadyTagDrainDebt, ReadyTagCount, RuntimeReachRank,
+       SerializedRuntimeStep, DirectTimeoutStep, TimeoutDue,
+       AppendCausalSuccessors, FreshCommandSuccessors,
+       CandidateInReadyQueue, CandidateScheduled, CandidateInFlight,
+       CausalHeadCanAdvance, CanEnqueueClass, AsyncQueueDepth,
+       NodeQueueNonempty, SequenceSet,
+       AsyncProgressOwnershipInvariant,
+       AsyncLogicalCandidateOwnershipInvariant,
+       AsyncOutstandingCarrierInvariant, AsyncAllVars
+
+THEOREM NonemptyCausalHeadIsCausalCandidate ==
+  \A node \in ValidatorIds:
+    /\ AsyncCausalTypeInvariant
+    /\ CausalQueueNonempty(node)
+    => HeadCausalCandidate(node) \in CausalCandidates
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds,
+                AsyncCausalTypeInvariant,
+                CausalQueueNonempty(node)
+         PROVE HeadCausalCandidate(node) \in CausalCandidates
+    <2>1. /\ AsyncQueueTyped(asyncCausalQueues[node])
+           /\ Len(asyncCausalQueues[node]) > 0
+      BY <1>1 DEF AsyncCausalTypeInvariant, CausalQueueNonempty
+    <2>2. /\ asyncCausalQueues[node]
+                  \in Seq(Range(asyncCausalQueues[node]))
+           /\ asyncCausalQueues[node] # <<>>
+           /\ Head(asyncCausalQueues[node])
+                = asyncCausalQueues[node][1]
+           /\ 1 \in 1..Len(asyncCausalQueues[node])
+      BY <2>1, PositiveSequenceIsNonempty,
+         NonemptySequenceHeadIsFirst, SMT
+         DEF AsyncQueueTyped
+    <2>3. HeadCausalCandidate(node) \in
+             SequenceSet(asyncCausalQueues[node])
+      BY <2>2 DEF HeadCausalCandidate, SequenceSet
+    <2> QED BY <1>1, <2>3, Isa DEF CausalCandidates
+  <1> QED BY <1>1
+
+THEOREM OwnedCausalHeadIsNotInFlight ==
+  \A node \in ValidatorIds:
+    /\ AsyncTypeInvariant
+    /\ AsyncProgressOwnershipInvariant
+    /\ CausalQueueNonempty(node)
+    => ~CandidateInFlight(HeadCausalCandidate(node))
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds,
+                AsyncTypeInvariant,
+                AsyncProgressOwnershipInvariant,
+                CausalQueueNonempty(node)
+         PROVE ~CandidateInFlight(HeadCausalCandidate(node))
+    <2>1. AsyncCausalTypeInvariant
+      BY <1>1 DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+                    AsyncRuntimeTypeInvariant
+    <2>2. HeadCausalCandidate(node) \in CausalCandidates
+      BY <1>1, <2>1, NonemptyCausalHeadIsCausalCandidate
+    <2>3. HeadCausalCandidate(node) \notin QueuedCandidates
+      BY <1>1, <2>2, Isa
+         DEF AsyncProgressOwnershipInvariant,
+             AsyncLogicalCandidateOwnershipInvariant
+    <2>4. HeadCausalCandidate(node) \notin DeferredCandidates
+      BY <1>1, <2>2, Isa
+         DEF AsyncProgressOwnershipInvariant,
+             AsyncLogicalCandidateOwnershipInvariant
+    <2>5. HeadCausalCandidate(node) \notin TrackedWorkCandidates
+      BY <1>1, <2>2, Isa
+         DEF AsyncProgressOwnershipInvariant,
+             AsyncLogicalCandidateOwnershipInvariant
+    <2> QED BY <2>3, <2>4, <2>5 DEF CandidateInFlight
+  <1> QED BY <1>1
+
+THEOREM SerializedFifoRemovesOneCommand ==
+  \A node \in ValidatorIds:
+    /\ AsyncTypeInvariant
+    /\ SerializedRuntimeStep(node)
+    /\ FifoRuntimeStep(node)
+    => AsyncQueueDepth(node)' = AsyncQueueDepth(node) - 1
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds,
+                AsyncTypeInvariant,
+                SerializedRuntimeStep(node),
+                FifoRuntimeStep(node)
+         PROVE AsyncQueueDepth(node)' = AsyncQueueDepth(node) - 1
+    <2> DEFINE Queue == asyncCommandQueues[node]
+    <2> DEFINE Index == NextNodeCommandIndex(node)
+    <2>1. /\ AsyncRuntimeScalarTypeInvariant
+           /\ AsyncQueueTyped(Queue)
+           /\ NodeQueueNonempty(node)
+      BY <1>1 DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+                    AsyncRuntimeTypeInvariant,
+                    AsyncRuntimeScalarTypeInvariant,
+                    FifoRuntimeStep, Queue
+    <2>2. Index \in 1..Len(Queue)
+      BY <1>1, <2>1, NextNodeCommandIndexFacts
+         DEF Index, Queue
+    <2>3. Len(SequenceWithoutIndex(Queue, Index)) = Len(Queue) - 1
+      BY <2>1, <2>2, SequenceWithoutIndexFacts
+         DEF AsyncQueueTyped
+    <2>4. RemoveNextNodeCommand(node)
+      BY <1>1, Isa DEF FifoRuntimeStep
+    <2>5. asyncCommandQueues' =
+             [asyncCommandQueues EXCEPT
+                ![node] = SequenceWithoutIndex(
+                             asyncCommandQueues[node],
+                             NextNodeCommandIndex(node))]
+      BY <2>4 DEF RemoveNextNodeCommand
+    <2>6. node \in DOMAIN asyncCommandQueues
+      BY <1>1, <2>1 DEF AsyncRuntimeScalarTypeInvariant
+    <2>7. [asyncCommandQueues EXCEPT
+             ![node] = SequenceWithoutIndex(
+                          asyncCommandQueues[node],
+                          NextNodeCommandIndex(node))][node]
+             = SequenceWithoutIndex(
+                 asyncCommandQueues[node],
+                 NextNodeCommandIndex(node))
+      BY <2>6, FunctionalReplaceUpdateAtKey
+    <2>8. asyncCommandQueues'[node] =
+             SequenceWithoutIndex(Queue, Index)
+      BY <2>5, <2>7 DEF Queue, Index
+    <2> QED BY <2>3, <2>8 DEF AsyncQueueDepth, Queue
+  <1> QED BY <1>1
+
+THEOREM FreshCandidateSequenceFormsSequence ==
+  \A candidate:
+    FreshCandidateSequence(candidate)
+      \in Seq(Range(FreshCandidateSequence(candidate)))
+PROOF
+  <1>1. ASSUME NEW candidate
+         PROVE FreshCandidateSequence(candidate)
+                 \in Seq(Range(FreshCandidateSequence(candidate)))
+    <2>1. CASE CandidateScheduled(candidate)
+      <3>1. FreshCandidateSequence(candidate) = <<>>
+        BY <2>1 DEF FreshCandidateSequence
+      <3>2. <<>> \in Seq({})
+        BY EmptySeq
+      <3> QED BY <3>1, <3>2, SeqOfRange
+    <2>2. CASE ~CandidateScheduled(candidate)
+      <3>1. FreshCandidateSequence(candidate) = <<candidate>>
+        BY <2>2 DEF FreshCandidateSequence
+      <3>2. <<candidate>> \in Seq({candidate})
+        BY SingletonSequenceFacts
+      <3> QED BY <3>1, <3>2, SeqOfRange
+    <2> QED BY <2>1, <2>2
+  <1> QED BY <1>1
+
+THEOREM SequencesShareUnionCarrier ==
+  \A left, right:
+    /\ left \in Seq(Range(left))
+    /\ right \in Seq(Range(right))
+    => /\ left \in Seq(Range(left) \cup Range(right))
+       /\ right \in Seq(Range(left) \cup Range(right))
+PROOF
+  <1>1. ASSUME NEW left, NEW right,
+                left \in Seq(Range(left)),
+                right \in Seq(Range(right))
+         PROVE /\ left \in Seq(Range(left) \cup Range(right))
+               /\ right \in Seq(Range(left) \cup Range(right))
+    <2>1. Range(left) \subseteq Range(left) \cup Range(right)
+      BY SMT
+    <2>2. Range(right) \subseteq Range(left) \cup Range(right)
+      BY SMT
+    <2>3. left \in Seq(Range(left) \cup Range(right))
+      BY <1>1, <2>1, SeqMonotonic
+    <2>4. right \in Seq(Range(left) \cup Range(right))
+      BY <1>1, <2>2, SeqMonotonic
+    <2> QED BY <2>3, <2>4
+  <1> QED BY <1>1
+
+THEOREM ConcatenatedSequencesFormSequence ==
+  \A left, right:
+    /\ left \in Seq(Range(left))
+    /\ right \in Seq(Range(right))
+    => left \o right \in Seq(Range(left \o right))
+PROOF
+  <1>1. ASSUME NEW left, NEW right,
+                left \in Seq(Range(left)),
+                right \in Seq(Range(right))
+         PROVE left \o right \in Seq(Range(left \o right))
+    <2> DEFINE Carrier == Range(left) \cup Range(right)
+    <2>1. /\ left \in Seq(Carrier)
+           /\ right \in Seq(Carrier)
+      BY <1>1, SequencesShareUnionCarrier DEF Carrier
+    <2>2. left \o right \in Seq(Carrier)
+      BY <2>1, ConcatProperties
+    <2> QED BY <2>2, SeqOfRange
+  <1> QED BY <1>1
+
+THEOREM FreshCommandSuccessorsFormSequence ==
+  \A command:
+    FreshCommandSuccessors(command)
+      \in Seq(Range(FreshCommandSuccessors(command)))
+PROOF
+  <1>1. ASSUME NEW command
+         PROVE FreshCommandSuccessors(command)
+                 \in Seq(Range(FreshCommandSuccessors(command)))
+    <2> DEFINE Successors == CommandSuccessors(command)
+    <2>1. CASE Len(Successors) = 0
+      <3>1. FreshCommandSuccessors(command) = <<>>
+        BY <2>1 DEF FreshCommandSuccessors, Successors
+      <3>2. <<>> \in Seq({})
+        BY EmptySeq
+      <3> QED BY <3>1, <3>2, SeqOfRange
+    <2>2. CASE Len(Successors) = 1
+      <3>1. FreshCommandSuccessors(command) =
+               FreshCandidateSequence(Successors[1])
+        BY <2>2 DEF FreshCommandSuccessors, Successors
+      <3>2. FreshCandidateSequence(Successors[1])
+                 \in Seq(Range(FreshCandidateSequence(Successors[1])))
+        BY FreshCandidateSequenceFormsSequence
+      <3> QED BY <3>1, <3>2
+    <2>3. CASE Len(Successors) = 2
+      <3>1. FreshCommandSuccessors(command) =
+               FreshCandidateSequence(Successors[1])
+                 \o FreshCandidateSequence(Successors[2])
+        BY <2>3 DEF FreshCommandSuccessors, Successors
+      <3>2. /\ FreshCandidateSequence(Successors[1])
+                       \in Seq(Range(
+                            FreshCandidateSequence(Successors[1])))
+             /\ FreshCandidateSequence(Successors[2])
+                       \in Seq(Range(
+                            FreshCandidateSequence(Successors[2])))
+        BY FreshCandidateSequenceFormsSequence
+      <3>3. FreshCandidateSequence(Successors[1])
+                 \o FreshCandidateSequence(Successors[2])
+               \in Seq(Range(
+                    FreshCandidateSequence(Successors[1])
+                      \o FreshCandidateSequence(Successors[2])))
+        BY <3>2, ConcatenatedSequencesFormSequence
+      <3> QED BY <3>1, <3>3
+    <2>4. CASE Len(Successors) = 3
+      <3> DEFINE FirstTwo ==
+            FreshCandidateSequence(Successors[1])
+              \o FreshCandidateSequence(Successors[2])
+      <3>1. FreshCommandSuccessors(command) =
+               FirstTwo \o FreshCandidateSequence(Successors[3])
+        BY <2>4 DEF FreshCommandSuccessors, Successors, FirstTwo
+      <3>2. /\ FreshCandidateSequence(Successors[1])
+                       \in Seq(Range(
+                            FreshCandidateSequence(Successors[1])))
+             /\ FreshCandidateSequence(Successors[2])
+                       \in Seq(Range(
+                            FreshCandidateSequence(Successors[2])))
+             /\ FreshCandidateSequence(Successors[3])
+                       \in Seq(Range(
+                            FreshCandidateSequence(Successors[3])))
+        BY FreshCandidateSequenceFormsSequence
+      <3>3. FirstTwo \in Seq(Range(FirstTwo))
+        BY <3>2, ConcatenatedSequencesFormSequence DEF FirstTwo
+      <3>4. FirstTwo \o FreshCandidateSequence(Successors[3])
+               \in Seq(Range(
+                    FirstTwo \o FreshCandidateSequence(Successors[3])))
+        BY <3>2, <3>3, ConcatenatedSequencesFormSequence
+      <3> QED BY <3>1, <3>4
+    <2>5. CASE Len(Successors) \notin {0, 1, 2, 3}
+      <3>1. FreshCommandSuccessors(command) = <<>>
+        BY <2>5, Isa DEF FreshCommandSuccessors, Successors
+      <3>2. <<>> \in Seq({})
+        BY EmptySeq
+      <3> QED BY <3>1, <3>2, SeqOfRange
+    <2> QED BY <2>1, <2>2, <2>3, <2>4, <2>5, SMT
+  <1> QED BY <1>1
+
+THEOREM NonemptySequenceHeadSurvivesConcat ==
+  \A prefix, suffix:
+    /\ prefix \in Seq(Range(prefix))
+    /\ suffix \in Seq(Range(suffix))
+    /\ Len(prefix) > 0
+    => /\ Len(prefix \o suffix) > 0
+       /\ Head(prefix \o suffix) = Head(prefix)
+PROOF
+  <1>1. ASSUME NEW prefix, NEW suffix,
+                prefix \in Seq(Range(prefix)),
+                suffix \in Seq(Range(suffix)),
+                Len(prefix) > 0
+         PROVE /\ Len(prefix \o suffix) > 0
+               /\ Head(prefix \o suffix) = Head(prefix)
+    <2> DEFINE Carrier == Range(prefix) \cup Range(suffix)
+    <2>1. /\ prefix \in Seq(Carrier)
+           /\ suffix \in Seq(Carrier)
+      BY <1>1, SequencesShareUnionCarrier DEF Carrier
+    <2>2. /\ prefix \o suffix \in Seq(Carrier)
+           /\ Len(prefix \o suffix) = Len(prefix) + Len(suffix)
+           /\ (prefix \o suffix)[1] = prefix[1]
+      BY <1>1, <2>1, ConcatProperties, SMT
+    <2>3. /\ prefix # <<>>
+           /\ Head(prefix) = prefix[1]
+      BY <1>1, PositiveSequenceIsNonempty,
+         NonemptySequenceHeadIsFirst
+    <2>4. /\ Len(prefix \o suffix) > 0
+           /\ prefix \o suffix # <<>>
+           /\ Head(prefix \o suffix) = (prefix \o suffix)[1]
+      BY <1>1, <2>2, PositiveSequenceIsNonempty,
+         NonemptySequenceHeadIsFirst, SMT
+    <2> QED BY <2>2, <2>3, <2>4
+  <1> QED BY <1>1
+
+THEOREM SerializedFifoRetainsExistingCausalHead ==
+  \A node \in ValidatorIds:
+    /\ AsyncTypeInvariant
+    /\ CausalQueueNonempty(node)
+    /\ SerializedRuntimeStep(node)
+    /\ FifoRuntimeStep(node)
+    => /\ CausalQueueNonempty(node)'
+       /\ HeadCausalCandidate(node)' = HeadCausalCandidate(node)
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds,
+                AsyncTypeInvariant,
+                CausalQueueNonempty(node),
+                SerializedRuntimeStep(node),
+                FifoRuntimeStep(node)
+         PROVE /\ CausalQueueNonempty(node)'
+               /\ HeadCausalCandidate(node)'
+                    = HeadCausalCandidate(node)
+    <2> DEFINE Queue == asyncCausalQueues[node]
+    <2> DEFINE Command == NextNodeCommand(node)
+    <2> DEFINE Successors == FreshCommandSuccessors(Command)
+    <2>1. /\ AsyncCausalTypeInvariant
+           /\ AsyncQueueTyped(Queue)
+           /\ Len(Queue) > 0
+           /\ NodeQueueNonempty(node)
+      BY <1>1 DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+                    AsyncRuntimeTypeInvariant,
+                    AsyncCausalTypeInvariant, CausalQueueNonempty,
+                    FifoRuntimeStep, Queue
+    <2>2. /\ AsyncCandidateTyped(Command)
+           /\ Command.node = node
+      BY <1>1, <2>1, RuntimeSelectedCommandsAreTyped DEF Command
+    <2>3. /\ Queue \in Seq(Range(Queue))
+           /\ Successors \in Seq(Range(Successors))
+           /\ Len(Queue \o Successors) > 0
+           /\ Head(Queue \o Successors) = Head(Queue)
+      BY <2>1, FreshCommandSuccessorsFormSequence,
+         NonemptySequenceHeadSurvivesConcat
+         DEF AsyncQueueTyped, Successors
+    <2>4. CASE CommandDispatchable(Command)
+      <3>1. AppendCausalSuccessors(Command)
+        BY <1>1, <2>4, Isa DEF FifoRuntimeStep, Command
+      <3>2. asyncCausalQueues' =
+               [asyncCausalQueues EXCEPT
+                  ![node] = @ \o Successors]
+        BY <2>2, <3>1
+           DEF AppendCausalSuccessors, Command, Successors
+      <3>3. node \in DOMAIN asyncCausalQueues
+        BY <1>1, <2>1 DEF AsyncCausalTypeInvariant
+      <3>4. [asyncCausalQueues EXCEPT
+               ![node] = @ \o Successors][node]
+               = Queue \o Successors
+        BY <3>3, FunctionalConcatUpdateAtKey DEF Queue
+      <3>5. asyncCausalQueues'[node] = Queue \o Successors
+        BY <3>2, <3>4
+      <3> QED BY <2>3, <3>5
+           DEF CausalQueueNonempty, HeadCausalCandidate, Queue
+    <2>5. CASE ~CommandDispatchable(Command)
+      <3>1. LeaveCausalQueues
+        <4>1. CASE ~NodeIdle(node)
+          BY <1>1, <2>5, <4>1, Isa
+             DEF FifoRuntimeStep, Command
+        <4>2. CASE NodeIdle(node)
+          BY <1>1, <2>5, <4>2, Isa
+             DEF FifoRuntimeStep, Command
+        <4> QED BY <4>1, <4>2
+      <3>2. asyncCausalQueues' = asyncCausalQueues
+        BY <3>1 DEF LeaveCausalQueues
+      <3> QED BY <1>1, <3>2
+           DEF CausalQueueNonempty, HeadCausalCandidate
+    <2> QED BY <2>4, <2>5
+  <1> QED BY <1>1
+
+THEOREM NonCompletionCausalHeadCapacityFacts ==
+  \A node \in ValidatorIds:
+    /\ AsyncTypeInvariant
+    /\ NonCompletionCausalAdmissionDebt(node)
+    /\ FifoRuntimeStep(node)
+    => /\ AsyncQueueDepth(node) \in Nat \ {0}
+       /\ CausalHeadCommandLimit(node) \in Nat \ {0}
+       /\ HeadCausalCandidate(node).class \in {"Normal", "Progress"}
+       /\ (CanEnqueueClass(
+              node, HeadCausalCandidate(node).class)
+             <=> AsyncQueueDepth(node)
+                   < CausalHeadCommandLimit(node))
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds,
+                AsyncTypeInvariant,
+                NonCompletionCausalAdmissionDebt(node),
+                FifoRuntimeStep(node)
+         PROVE /\ AsyncQueueDepth(node) \in Nat \ {0}
+               /\ CausalHeadCommandLimit(node) \in Nat \ {0}
+               /\ HeadCausalCandidate(node).class
+                    \in {"Normal", "Progress"}
+               /\ (CanEnqueueClass(
+                      node, HeadCausalCandidate(node).class)
+                     <=> AsyncQueueDepth(node)
+                           < CausalHeadCommandLimit(node))
+    <2>1. /\ AsyncRuntimeScalarTypeInvariant
+           /\ AsyncCausalTypeInvariant
+           /\ CausalQueueNonempty(node)
+           /\ NodeQueueNonempty(node)
+      BY <1>1 DEF AsyncTypeInvariant, AsyncSchedulerTypeInvariant,
+                    AsyncRuntimeTypeInvariant,
+                    NonCompletionCausalAdmissionDebt,
+                    CausalAdmissionDebtActive, FifoRuntimeStep
+    <2>2. AsyncCandidateTyped(HeadCausalCandidate(node))
+      BY <1>1, <2>1, CausalHeadCandidateIsTyped
+    <2>3. AsyncQueueDepth(node) \in Nat \ {0}
+      BY <2>1, Isa
+         DEF AsyncRuntimeScalarTypeInvariant, AsyncQueueTyped,
+             AsyncQueueDepth, NodeQueueNonempty
+    <2>4. HeadCausalCandidate(node).class
+             \in {"Normal", "Progress"}
+      BY <1>1, <2>2, SMT
+         DEF AsyncCandidateTyped, AsyncCommandClasses,
+             NonCompletionCausalAdmissionDebt
+    <2>5. /\ AsyncNormalLimit \in Nat \ {0}
+           /\ AsyncProgressLimit \in Nat \ {0}
+      BY <2>1, SMT
+         DEF AsyncRuntimeScalarTypeInvariant, AsyncConfiguration,
+             AsyncNormalLimit, AsyncProgressLimit
+    <2>6. CausalHeadCommandLimit(node) \in Nat \ {0}
+      BY <2>4, <2>5, Isa DEF CausalHeadCommandLimit
+    <2>7. CanEnqueueClass(
+             node, HeadCausalCandidate(node).class)
+             <=> AsyncQueueDepth(node) < CausalHeadCommandLimit(node)
+      <3>1. CASE HeadCausalCandidate(node).class = "Normal"
+        BY <3>1 DEF CanEnqueueClass, CausalHeadCommandLimit
+      <3>2. CASE HeadCausalCandidate(node).class = "Progress"
+        BY <3>2 DEF CanEnqueueClass, CausalHeadCommandLimit
+      <3> QED BY <2>4, <3>1, <3>2, SMT
+    <2> QED BY <2>3, <2>4, <2>6, <2>7
+  <1> QED BY <1>1
+
+THEOREM SerializedFifoRetainsNonCompletionCausalDebt ==
+  \A node \in ValidatorIds:
+    /\ AsyncTypeInvariant
+    /\ NonCompletionCausalAdmissionDebt(node)
+    /\ SerializedRuntimeStep(node)
+    /\ FifoRuntimeStep(node)
+    => /\ NonCompletionCausalAdmissionDebt(node)'
+       /\ CausalHeadCommandLimit(node)'
+            = CausalHeadCommandLimit(node)
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds,
+                AsyncTypeInvariant,
+                NonCompletionCausalAdmissionDebt(node),
+                SerializedRuntimeStep(node),
+                FifoRuntimeStep(node)
+         PROVE /\ NonCompletionCausalAdmissionDebt(node)'
+               /\ CausalHeadCommandLimit(node)'
+                    = CausalHeadCommandLimit(node)
+    <2>1. /\ asyncCausalAdmissionOwed[node]
+           /\ CausalQueueNonempty(node)
+           /\ HeadCausalCandidate(node).class # "Completion"
+      BY <1>1 DEF NonCompletionCausalAdmissionDebt,
+                    CausalAdmissionDebtActive
+    <2>2. /\ CausalQueueNonempty(node)'
+           /\ HeadCausalCandidate(node)'
+                = HeadCausalCandidate(node)
+      BY <1>1, <2>1, SerializedFifoRetainsExistingCausalHead
+    <2>3. asyncCausalAdmissionOwed' = asyncCausalAdmissionOwed
+      BY <1>1 DEF SerializedRuntimeStep, AsyncLocalAdmissionVars
+    <2> QED BY <2>1, <2>2, <2>3, Isa
+         DEF NonCompletionCausalAdmissionDebt,
+             CausalAdmissionDebtActive, CausalHeadCommandLimit
+  <1> QED BY <1>1
+
+THEOREM NaturalCapacityDebtDropsAfterRemoval ==
+  \A oldDepth, newDepth, limit \in Nat:
+    /\ oldDepth > 0
+    /\ newDepth = oldDepth - 1
+    /\ ~(newDepth < limit)
+    => newDepth - limit + 1 < oldDepth - limit + 1
+BY SMT
+
+THEOREM NonCompletionDebtFifoCapacityProgress ==
+  \A node \in ValidatorIds:
+    /\ AsyncTypeInvariant
+    /\ AsyncProgressOwnershipInvariant
+    /\ NonCompletionCausalAdmissionDebt(node)
+    /\ SerializedRuntimeStep(node)
+    /\ FifoRuntimeStep(node)
+    => \/ CausalHeadCanAdvance(node)'
+       \/ CausalCommandCapacityDebt(node)'
+            < CausalCommandCapacityDebt(node)
+PROOF
+  <1>1. ASSUME NEW node \in ValidatorIds,
+                AsyncTypeInvariant,
+                AsyncProgressOwnershipInvariant,
+                NonCompletionCausalAdmissionDebt(node),
+                SerializedRuntimeStep(node),
+                FifoRuntimeStep(node)
+         PROVE \/ CausalHeadCanAdvance(node)'
+               \/ CausalCommandCapacityDebt(node)'
+                    < CausalCommandCapacityDebt(node)
+    <2>1. /\ AsyncQueueDepth(node) \in Nat \ {0}
+           /\ CausalHeadCommandLimit(node) \in Nat \ {0}
+           /\ HeadCausalCandidate(node).class
+                \in {"Normal", "Progress"}
+           /\ (CanEnqueueClass(
+                  node, HeadCausalCandidate(node).class)
+                 <=> AsyncQueueDepth(node)
+                       < CausalHeadCommandLimit(node))
+      BY <1>1, NonCompletionCausalHeadCapacityFacts
+    <2>2. ~CandidateInFlight(HeadCausalCandidate(node))
+      BY <1>1, OwnedCausalHeadIsNotInFlight
+         DEF NonCompletionCausalAdmissionDebt,
+             CausalAdmissionDebtActive
+    <2>3. AsyncQueueDepth(node)' = AsyncQueueDepth(node) - 1
+      BY <1>1, SerializedFifoRemovesOneCommand
+    <2>4. /\ NonCompletionCausalAdmissionDebt(node)'
+           /\ CausalHeadCommandLimit(node)'
+                = CausalHeadCommandLimit(node)
+      BY <1>1, SerializedFifoRetainsNonCompletionCausalDebt
+    <2>5. /\ CausalQueueNonempty(node)'
+           /\ HeadCausalCandidate(node)'
+                = HeadCausalCandidate(node)
+      BY <1>1, SerializedFifoRetainsExistingCausalHead
+         DEF NonCompletionCausalAdmissionDebt,
+             CausalAdmissionDebtActive
+    <2>6. /\ NonCompletionCausalAdmissionDebt(node)'
+           /\ CausalHeadCommandLimit(node)'
+                = CausalHeadCommandLimit(node)
+           /\ CausalQueueNonempty(node)'
+           /\ HeadCausalCandidate(node)'
+                = HeadCausalCandidate(node)
+      BY <2>4, <2>5
+    <2>7. CASE CandidateInFlight(HeadCausalCandidate(node))'
+      BY <2>6, <2>7
+         DEF CausalHeadCanAdvance
+    <2>8. CASE ~CandidateInFlight(HeadCausalCandidate(node))'
+      <3>1. CASE CanEnqueueClass(
+                    node, HeadCausalCandidate(node).class)'
+        BY <2>1, <2>6, <3>1, Isa
+           DEF CausalHeadCanAdvance
+      <3>2. CASE ~CanEnqueueClass(
+                    node, HeadCausalCandidate(node).class)'
+        <4>1. /\ ~CanEnqueueClass(
+                       node, HeadCausalCandidate(node).class)
+               /\ AsyncQueueDepth(node)' \in Nat
+               /\ ~(AsyncQueueDepth(node)'
+                      < CausalHeadCommandLimit(node))
+          BY <2>1, <2>3, <2>6, <3>2, Isa
+             DEF CanEnqueueClass, AsyncQueueDepth,
+                 CausalHeadCommandLimit
+        <4>2. CausalCommandCapacityDebt(node) =
+                 AsyncQueueDepth(node)
+                   - CausalHeadCommandLimit(node) + 1
+          BY <1>1, <2>2, <4>1
+             DEF CausalCommandCapacityDebt
+        <4>3. CausalCommandCapacityDebt(node)' =
+                 AsyncQueueDepth(node)'
+                   - CausalHeadCommandLimit(node) + 1
+          BY <2>6, <2>8, <3>2
+             DEF CausalCommandCapacityDebt
+        <4>4. AsyncQueueDepth(node)'
+                   - CausalHeadCommandLimit(node) + 1
+                 < AsyncQueueDepth(node)
+                     - CausalHeadCommandLimit(node) + 1
+          BY <2>1, <2>3, <4>1,
+             NaturalCapacityDebtDropsAfterRemoval
+        <4> QED BY <4>2, <4>3, <4>4
+      <3> QED BY <3>1, <3>2
+    <2> QED BY <2>7, <2>8
+  <1> QED BY <1>1
+
+THEOREM Stage4CapacityFifoStrictlyProgresses ==
+  \A candidate, position, rank \in Stage4CapacityCarrier:
+    /\ Stage4CapacityBlockedAtRank(candidate, position, rank)
+    /\ [AsyncNext]_AsyncAllVars
+    /\ SerializedRuntimeStep(candidate.node)
+    /\ FifoRuntimeStep(candidate.node)
+    => Stage4CapacityStrictResult(candidate, position, rank)
+PROOF
+  <1>1. ASSUME NEW candidate,
+                NEW position,
+                NEW rank \in Stage4CapacityCarrier,
+                Stage4CapacityBlockedAtRank(candidate, position, rank),
+                [AsyncNext]_AsyncAllVars,
+                SerializedRuntimeStep(candidate.node),
+                FifoRuntimeStep(candidate.node)
+         PROVE Stage4CapacityStrictResult(candidate, position, rank)
+    <2>1. /\ candidate.node \in ValidatorIds
+           /\ AsyncStrongTypeInvariant
+           /\ AsyncTypeInvariant
+           /\ AsyncProgressOwnershipInvariant
+           /\ NonCompletionCausalAdmissionDebt(candidate.node)
+      BY <1>1, Stage4CapacityBlockedCoreFacts
+    <2>2. \/ CausalHeadCanAdvance(candidate.node)'
+             \/ CausalCommandCapacityDebt(candidate.node)'
+                  < CausalCommandCapacityDebt(candidate.node)
+      BY <1>1, <2>1, NonCompletionDebtFifoCapacityProgress
+    <2>3. /\ AsyncStrongTypeInvariant'
+           /\ AsyncProgressOwnershipInvariant'
+      BY <1>1, Stage4CapacityBlockedStepPreservesCoreInvariants
+    <2>4. CASE CausalHeadCanAdvance(candidate.node)'
+      <3>1. ReadyStage4Actionable(candidate)'
+        BY <1>1, <2>1, <2>4,
+           SerializedRuntimeReturnsToLocalWithBudget, Isa
+           DEF ReadyStage4Actionable, LocalAdmissionCanAdvance,
+               SerializedRuntimeStep
+      <3> QED BY <3>1
+           DEF Stage4CapacityStrictResult, Stage4CapacityProgress,
+               Stage4CapacityGoal
+    <2>5. CASE ~CausalHeadCanAdvance(candidate.node)'
+      <3>1. CausalCommandCapacityDebt(candidate.node)'
+               < CausalCommandCapacityDebt(candidate.node)
+        BY <2>2, <2>5
+      <3>2. CASE ProtectedRankProgressExit(
+                    candidate, <<4, position>>)'
+        BY <3>2
+           DEF Stage4CapacityStrictResult, Stage4CapacityProgress,
+               Stage4CapacityGoal
+      <3>3. CASE ~ProtectedRankProgressExit(
+                    candidate, <<4, position>>)'
+        <4>1. Stage4CapacityRank(candidate.node)'
+                 \in Stage4CapacityCarrier
+          BY <1>1, <2>1, <2>3,
+             SerializedRuntimeStage4CapacityRankInCarrier
+        <4>2. PICK lower \in Stage4CapacityCarrier:
+                 lower = Stage4CapacityRank(candidate.node)'
+          BY <4>1
+        <4>3. <<lower, rank>>
+                 \in Stage4CapacityOrdering
+          BY <1>1, <3>1, <4>2, Isa
+             DEF Stage4CapacityBlockedAtRank, Stage4CapacityRank,
+                 Stage4CapacityOrdering, Stage4CapacityCarrier,
+                 ReadyRunAuxCarrier, ReadyRunDeferredCarrier,
+                 ReadyRunTimeoutCarrier, ReadyRunInnerCarrier,
+                 LexPairOrdering, OpToRel
+        <4>4. lower
+                 \in SetLessThan(
+                      rank, Stage4CapacityOrdering,
+                      Stage4CapacityCarrier)
+          BY <4>2, <4>3 DEF SetLessThan
+        <4>5. NonCompletionCausalAdmissionDebt(candidate.node)'
+          BY <1>1, <2>1,
+             SerializedFifoRetainsNonCompletionCausalDebt
+        <4>6. ~ReadyStage4Actionable(candidate)'
+          BY <1>1, <2>5, <4>5,
+             SerializedRuntimeReturnsToLocalWithBudget, Isa
+             DEF ReadyStage4Actionable, LocalAdmissionCanAdvance,
+                 ProducerCompletionCanAdvance
+        <4>7. ProtectedStage4Pending(candidate, position)'
+          BY <1>1, <3>3,
+             SerializedRuntimeKeepsStage4PendingUnlessProgress
+        <4>8. Stage4CapacityBlockedAtRank(
+                 candidate, position, lower)'
+          BY <4>2, <4>5, <4>6, <4>7
+             DEF Stage4CapacityBlockedAtRank
+        <4> QED BY <4>4, <4>8
+             DEF Stage4CapacityStrictResult,
+                 Stage4CapacityProgress
+      <3> QED BY <3>2, <3>3
+    <2> QED BY <2>4, <2>5
+  <1> QED BY <1>1
+
+THEOREM Stage4CapacityRetransmitStrictlyProgresses ==
+  \A candidate, position, rank \in Stage4CapacityCarrier:
+    /\ Stage4CapacityBlockedAtRank(candidate, position, rank)
+    /\ SerializedRuntimeStep(candidate.node)
+    /\ DirectRetransmitStep(candidate.node)
+    /\ ~(NodeQueueNonempty(candidate.node)
+           /\ asyncFifoOwed[candidate.node])
+    => Stage4CapacityStrictResult(candidate, position, rank)
+BY AsyncBracketNextPreservesStrongTypeInvariant,
+   AsyncBracketNextPreservesProgressOwnership,
+   Stage4CapacityRankInCarrier, Isa
+   DEF Stage4CapacityStrictResult, Stage4CapacityProgress,
+       Stage4CapacityGoal, Stage4CapacityBlockedAtRank,
+       Stage4CapacityRank, Stage4CapacityOrdering,
+       Stage4CapacityCarrier, ReadyStage4CausalCapacityBlocked,
+       ProtectedStage4Pending, ReadyStage4Actionable,
+       ProtectedOwnedAtServiceRank, ProtectedRankProgressExit,
+       ProtectedServiceOwnershipExit,
+       ResponsiveProtectedCandidateOwned, ProtectedCandidateOwned,
+       CandidateServiceRank, ServiceRankLess,
+       CausalCommandCapacityDebt, CausalHeadCommandLimit,
+       NonCompletionCausalAdmissionDebt, CausalAdmissionDebtActive,
+       ReadyRunAuxRank, ReadyRunDeferredRank, ReadyRunTimeoutRank,
+       ReadyRunInnerRank, ReadyRunAuxOrdering, ReadyRunAuxCarrier,
+       ReadyRunDeferredOrdering, ReadyRunDeferredCarrier,
+       ReadyRunTimeoutOrdering, ReadyRunTimeoutCarrier,
+       ReadyRunInnerOrdering, ReadyRunInnerCarrier,
+       ReadyFifoDebt, ReadyDeferredCount, ReadyTimeoutDebt,
+       ReadyTagDrainDebt, ReadyTagCount, RuntimeReachRank,
+       SerializedRuntimeStep, DirectRetransmitStep,
+       CandidateInReadyQueue, CandidateScheduled, CandidateInFlight,
+       CausalHeadCanAdvance, CanEnqueueClass, AsyncQueueDepth,
+       NodeQueueNonempty, SequenceSet,
+       AsyncProgressOwnershipInvariant,
+       AsyncLogicalCandidateOwnershipInvariant,
+       AsyncOutstandingCarrierInvariant, AsyncAllVars
+
+THEOREM Stage4CapacityIdleRuntimeIsImpossible ==
+  \A candidate, position, rank \in Stage4CapacityCarrier:
+    /\ Stage4CapacityBlockedAtRank(candidate, position, rank)
+    /\ IdleRuntimeStep(candidate.node)
+    /\ ~NodeQueueNonempty(candidate.node)
+    => FALSE
+BY Isa
+   DEF Stage4CapacityBlockedAtRank,
+       ReadyStage4CausalCapacityBlocked,
+       NonCompletionCausalAdmissionDebt,
+       CausalAdmissionDebtActive, CausalHeadCanAdvance,
+       CandidateInFlight, CanEnqueueClass, AsyncQueueDepth,
+       AsyncNormalLimit, AsyncProgressLimit, NodeQueueNonempty,
+       ProtectedStage4Pending, AsyncStrongTypeInvariant,
+       StrongInductiveInvariant, Safety, AsyncSchedulerTypeInvariant,
+       AsyncRuntimeTypeInvariant, AsyncRuntimeScalarTypeInvariant,
+       AsyncConfiguration, IdleRuntimeStep
+
+THEOREM Stage4CapacitySerializedRuntimeStrictlyProgresses ==
+  \A candidate, position, rank \in Stage4CapacityCarrier:
+    /\ Stage4CapacityBlockedAtRank(candidate, position, rank)
+    /\ SerializedRuntimeStep(candidate.node)
+    => Stage4CapacityStrictResult(candidate, position, rank)
+PROOF
+  <1>1. ASSUME NEW candidate,
+                NEW position,
+                NEW rank \in Stage4CapacityCarrier,
+                Stage4CapacityBlockedAtRank(candidate, position, rank),
+                SerializedRuntimeStep(candidate.node)
+         PROVE Stage4CapacityStrictResult(candidate, position, rank)
+    <2>1. RuntimeStep(candidate.node)
+      BY <1>1 DEF SerializedRuntimeStep
+    <2>2. CASE DeferredDrainStep(candidate.node)
+      BY <1>1, <2>2, Stage4CapacityDeferredDrainStrictlyProgresses
+    <2>3. CASE DeferredTagStep(candidate.node)
+      BY <1>1, <2>3, Stage4CapacityDeferredTagStrictlyProgresses
+    <2>4. CASE DirectTimeoutStep(candidate.node)
+      BY <1>1, <2>4, Stage4CapacityDirectTimeoutStrictlyProgresses
+    <2>5. CASE FifoRuntimeStep(candidate.node)
+      BY <1>1, <2>5, Stage4CapacityFifoStrictlyProgresses
+    <2>6. CASE /\ DirectRetransmitStep(candidate.node)
+                 /\ ~(NodeQueueNonempty(candidate.node)
+                       /\ asyncFifoOwed[candidate.node])
+      BY <1>1, <2>6, Stage4CapacityRetransmitStrictlyProgresses
+    <2>7. CASE /\ IdleRuntimeStep(candidate.node)
+                 /\ ~NodeQueueNonempty(candidate.node)
+      BY <1>1, <2>7, Stage4CapacityIdleRuntimeIsImpossible
+    <2> QED BY <2>1, <2>2, <2>3, <2>4, <2>5, <2>6, <2>7
+         DEF RuntimeStep
+  <1> QED BY <1>1
+
+THEOREM Stage4CapacitySameNodeRunStrictlyProgresses ==
+  \A candidate, position, rank \in Stage4CapacityCarrier:
+    /\ Stage4CapacityBlockedAtRank(candidate, position, rank)
+    /\ PostGstRunNode(candidate.node)
+    => Stage4CapacityStrictResult(candidate, position, rank)
+PROOF
+  <1>1. ASSUME NEW candidate,
+                NEW position,
+                NEW rank \in Stage4CapacityCarrier,
+                Stage4CapacityBlockedAtRank(candidate, position, rank),
+                PostGstRunNode(candidate.node)
+         PROVE Stage4CapacityStrictResult(candidate, position, rank)
+    <2>1. RunNode(candidate.node)
+      BY <1>1 DEF PostGstRunNode
+    <2>2. CASE LocalAdmissionStep(candidate.node)
+      BY <1>1, <2>2, Stage4CapacityLocalAdmissionStrictlyProgresses
+    <2>3. CASE IngressDrainStep(candidate.node)
+      BY <1>1, <2>3, Stage4CapacityIngressStrictlyProgresses
+    <2>4. CASE SerializedRuntimeStep(candidate.node)
+      BY <1>1, <2>4,
+         Stage4CapacitySerializedRuntimeStrictlyProgresses
+    <2> QED BY <2>1, <2>2, <2>3, <2>4 DEF RunNode
+  <1> QED BY <1>1
+
+THEOREM Stage4CapacityOtherRunnerPreservesOrProgresses ==
+  \A candidate, position, rank \in Stage4CapacityCarrier:
+    /\ Stage4CapacityBlockedAtRank(candidate, position, rank)
+    /\ \/ \E node \in AsyncCurrentResponsiveVoters:
+              /\ node # candidate.node
+              /\ RunNode(node)
+       \/ \E node \in AsyncCurrentResponsiveVoters:
+              RunHistoricalServer(node)
+    => Stage4CapacityStepResult(candidate, position, rank)
+BY AsyncBracketNextPreservesStrongTypeInvariant,
+   AsyncBracketNextPreservesProgressOwnership, Isa
+   DEF Stage4CapacityStepResult, Stage4CapacityStrictResult,
+       Stage4CapacityProgress, Stage4CapacityGoal,
+       Stage4CapacityBlockedAtRank, Stage4CapacityRank,
+       ReadyStage4CausalCapacityBlocked, ProtectedStage4Pending,
+       ProtectedOwnedAtServiceRank, ProtectedRankProgressExit,
+       ProtectedServiceOwnershipExit,
+       ResponsiveProtectedCandidateOwned, ProtectedCandidateOwned,
+       CandidateServiceRank, CausalCommandCapacityDebt,
+       CausalHeadCommandLimit, ReadyRunAuxRank,
+       ReadyRunDeferredRank, ReadyRunTimeoutRank, ReadyRunInnerRank,
+       RunNode, RunHistoricalServer, CandidateInReadyQueue,
+       CandidateScheduled, CandidateInFlight, SequenceSet,
+       AsyncProgressOwnershipInvariant,
+       AsyncLogicalCandidateOwnershipInvariant,
+       AsyncOutstandingCarrierInvariant, AsyncAllVars
+
+THEOREM Stage4CapacityClockPreservesOrProgresses ==
+  \A candidate, position, rank \in Stage4CapacityCarrier:
+    /\ Stage4CapacityBlockedAtRank(candidate, position, rank)
+    /\ AsyncTick
+    => Stage4CapacityStepResult(candidate, position, rank)
+BY AsyncBracketNextPreservesStrongTypeInvariant,
+   AsyncBracketNextPreservesProgressOwnership, Isa
+   DEF Stage4CapacityStepResult, Stage4CapacityStrictResult,
+       Stage4CapacityProgress, Stage4CapacityGoal,
+       Stage4CapacityBlockedAtRank, Stage4CapacityRank,
+       Stage4CapacityOrdering, Stage4CapacityCarrier,
+       ReadyStage4CausalCapacityBlocked, ProtectedStage4Pending,
+       ProtectedOwnedAtServiceRank, ProtectedRankProgressExit,
+       ProtectedServiceOwnershipExit,
+       ResponsiveProtectedCandidateOwned, ProtectedCandidateOwned,
+       CandidateServiceRank, ServiceRankLess,
+       CausalCommandCapacityDebt, CausalHeadCommandLimit,
+       ReadyRunAuxRank, ReadyRunDeferredRank, ReadyRunTimeoutRank,
+       ReadyRunInnerRank, ReadyRunAuxOrdering, ReadyRunAuxCarrier,
+       ReadyRunDeferredOrdering, ReadyRunDeferredCarrier,
+       ReadyRunTimeoutOrdering, ReadyRunTimeoutCarrier,
+       ReadyRunInnerOrdering, ReadyRunInnerCarrier,
+       ReadyFifoDebt, ReadyDeferredCount, ReadyTimeoutDebt,
+       ReadyTagDrainDebt, ReadyTagCount, RuntimeReachRank,
+       AsyncTick, AsyncNonClockVars, CandidateInReadyQueue,
+       CandidateScheduled, CandidateInFlight, SequenceSet,
+       AsyncProgressOwnershipInvariant,
+       AsyncLogicalCandidateOwnershipInvariant,
+       AsyncOutstandingCarrierInvariant, AsyncAllVars
+
+THEOREM Stage4CapacityDiscoveryPreservesOrProgresses ==
+  \A candidate, position, rank \in Stage4CapacityCarrier:
+    /\ Stage4CapacityBlockedAtRank(candidate, position, rank)
+    /\ \E node \in AsyncCurrentResponsiveVoters:
+         DirectCommitCertificateDiscoveryStep(node)
+    => Stage4CapacityStepResult(candidate, position, rank)
+BY AsyncBracketNextPreservesStrongTypeInvariant,
+   AsyncBracketNextPreservesProgressOwnership, Isa
+   DEF Stage4CapacityStepResult, Stage4CapacityStrictResult,
+       Stage4CapacityProgress, Stage4CapacityGoal,
+       Stage4CapacityBlockedAtRank, Stage4CapacityRank,
+       ReadyStage4CausalCapacityBlocked, ProtectedStage4Pending,
+       ProtectedOwnedAtServiceRank, ProtectedRankProgressExit,
+       ProtectedServiceOwnershipExit,
+       ResponsiveProtectedCandidateOwned, ProtectedCandidateOwned,
+       CandidateServiceRank, CausalCommandCapacityDebt,
+       CausalHeadCommandLimit, ReadyRunAuxRank,
+       ReadyRunDeferredRank, ReadyRunTimeoutRank, ReadyRunInnerRank,
+       DirectCommitCertificateDiscoveryStep, CandidateInReadyQueue,
+       CandidateScheduled, CandidateInFlight, SequenceSet,
+       AsyncProgressOwnershipInvariant,
+       AsyncLogicalCandidateOwnershipInvariant,
+       AsyncOutstandingCarrierInvariant, AsyncAllVars
+
+THEOREM Stage4CapacityIoPreservesOrProgresses ==
+  \A candidate, position, rank \in Stage4CapacityCarrier:
+    /\ Stage4CapacityBlockedAtRank(candidate, position, rank)
+    /\ \/ \E node \in AsyncCurrentResponsiveVoters:
+              ServiceIoWorker(node)
+       \/ \E node \in AsyncCurrentResponsiveVoters:
+              EnqueueIoLocalControl(node)
+    => Stage4CapacityStepResult(candidate, position, rank)
+BY AsyncBracketNextPreservesStrongTypeInvariant,
+   AsyncBracketNextPreservesProgressOwnership,
+   HeadTailProperties, SequenceSetAfterAppend, Isa
+   DEF Stage4CapacityStepResult, Stage4CapacityStrictResult,
+       Stage4CapacityProgress, Stage4CapacityGoal,
+       Stage4CapacityBlockedAtRank, Stage4CapacityRank,
+       ReadyStage4CausalCapacityBlocked, ProtectedStage4Pending,
+       ProtectedOwnedAtServiceRank, ProtectedRankProgressExit,
+       ProtectedServiceOwnershipExit,
+       ResponsiveProtectedCandidateOwned, ProtectedCandidateOwned,
+       CandidateServiceRank, CausalCommandCapacityDebt,
+       CausalHeadCommandLimit, ReadyRunAuxRank,
+       ReadyRunDeferredRank, ReadyRunTimeoutRank, ReadyRunInnerRank,
+       ReadyCandidatePosition, ReadyCandidateSource,
+       ReadyCompletionQueue, CandidateSequenceIndex,
+       ServiceIoWorker, EnqueueIoLocalControl,
+       CandidateInReadyQueue, CandidateScheduled, CandidateInFlight,
+       SequenceSet, AsyncProgressOwnershipInvariant,
+       AsyncLogicalCandidateOwnershipInvariant,
+       AsyncOutstandingCarrierInvariant, AsyncAllVars
+
+THEOREM Stage4CapacityNetworkOrFaultPreservesOrProgresses ==
+  \A candidate, position, rank \in Stage4CapacityCarrier:
+    /\ Stage4CapacityBlockedAtRank(candidate, position, rank)
+    /\ (AsyncNetworkStep \/ AsyncFaultStep)
+    => Stage4CapacityStepResult(candidate, position, rank)
+BY AsyncBracketNextPreservesStrongTypeInvariant,
+   AsyncBracketNextPreservesProgressOwnership, Isa
+   DEF Stage4CapacityStepResult, Stage4CapacityStrictResult,
+       Stage4CapacityProgress, Stage4CapacityGoal,
+       Stage4CapacityBlockedAtRank, Stage4CapacityRank,
+       ReadyStage4CausalCapacityBlocked, ProtectedStage4Pending,
+       ProtectedOwnedAtServiceRank, ProtectedRankProgressExit,
+       ProtectedServiceOwnershipExit,
+       ResponsiveProtectedCandidateOwned, ProtectedCandidateOwned,
+       CandidateServiceRank, CausalCommandCapacityDebt,
+       CausalHeadCommandLimit, ReadyRunAuxRank,
+       ReadyRunDeferredRank, ReadyRunTimeoutRank, ReadyRunInnerRank,
+       AsyncNetworkStep, AdmitIngressPacket, AsyncFaultStep,
+       PreGstCrash, CandidateInReadyQueue, CandidateScheduled,
+       CandidateInFlight, SequenceSet, AsyncProgressOwnershipInvariant,
+       AsyncLogicalCandidateOwnershipInvariant,
+       AsyncOutstandingCarrierInvariant, AsyncAllVars
+
+THEOREM Stage4CapacityStutterPreserves ==
+  \A candidate, position, rank \in Stage4CapacityCarrier:
+    /\ Stage4CapacityBlockedAtRank(candidate, position, rank)
+    /\ UNCHANGED AsyncAllVars
+    => Stage4CapacityBlockedAtRank(candidate, position, rank)'
+BY Isa
+   DEF Stage4CapacityBlockedAtRank, Stage4CapacityRank,
+       ReadyStage4CausalCapacityBlocked, ProtectedStage4Pending,
+       ProtectedOwnedAtServiceRank, CausalCommandCapacityDebt,
+       CausalHeadCommandLimit, ReadyRunAuxRank,
+       ReadyRunDeferredRank, ReadyRunTimeoutRank, ReadyRunInnerRank,
+       AsyncAllVars, AsyncSchedulerVars, vars
+
+THEOREM Stage4CapacityBlockedStep ==
+  \A candidate, position, rank \in Stage4CapacityCarrier:
+    /\ Stage4CapacityBlockedAtRank(candidate, position, rank)
+    /\ [AsyncNext]_AsyncAllVars
+    => Stage4CapacityStepResult(candidate, position, rank)
+PROOF
+  <1>1. ASSUME NEW candidate,
+                NEW position,
+                NEW rank \in Stage4CapacityCarrier,
+                Stage4CapacityBlockedAtRank(candidate, position, rank),
+                [AsyncNext]_AsyncAllVars
+         PROVE Stage4CapacityStepResult(candidate, position, rank)
+    <2>1. CASE UNCHANGED AsyncAllVars
+      BY <1>1, <2>1, Stage4CapacityStutterPreserves
+         DEF Stage4CapacityStepResult
+    <2>2. CASE AsyncNext
+      <3>1. CASE \E node \in AsyncCurrentResponsiveVoters:
+                    RunNode(node)
+        <4>1. CASE RunNode(candidate.node)
+          BY <1>1, <2>2, <3>1, <4>1,
+             Stage4CapacitySameNodeRunStrictlyProgresses
+             DEF Stage4CapacityStepResult, PostGstRunNode,
+                 Stage4CapacityBlockedAtRank,
+                 ReadyStage4CausalCapacityBlocked,
+                 ProtectedStage4Pending, ProtectedOwnedAtServiceRank
+        <4>2. CASE ~RunNode(candidate.node)
+          BY <1>1, <3>1, <4>2,
+             Stage4CapacityOtherRunnerPreservesOrProgresses
+        <4> QED BY <4>1, <4>2
+      <3>2. CASE \E node \in AsyncCurrentResponsiveVoters:
+                    RunHistoricalServer(node)
+        BY <1>1, <3>2,
+           Stage4CapacityOtherRunnerPreservesOrProgresses
+      <3>3. CASE AsyncTick
+        BY <1>1, <3>3, Stage4CapacityClockPreservesOrProgresses
+      <3>4. CASE \E node \in AsyncCurrentResponsiveVoters:
+                    DirectCommitCertificateDiscoveryStep(node)
+        BY <1>1, <3>4, Stage4CapacityDiscoveryPreservesOrProgresses
+      <3>5. CASE \/ \E ioNode \in AsyncCurrentResponsiveVoters:
+                          ServiceIoWorker(ioNode)
+                   \/ \E controlNode \in AsyncCurrentResponsiveVoters:
+                          EnqueueIoLocalControl(controlNode)
+        BY <1>1, <3>5, Stage4CapacityIoPreservesOrProgresses
+      <3>6. CASE AsyncNetworkStep \/ AsyncFaultStep
+        BY <1>1, <3>6,
+           Stage4CapacityNetworkOrFaultPreservesOrProgresses
+      <3>7. CASE AsyncSetGST
+        BY <1>1, <3>7
+           DEF Stage4CapacityStepResult, Stage4CapacityStrictResult,
+               Stage4CapacityProgress, Stage4CapacityGoal,
+               Stage4CapacityBlockedAtRank,
+               ReadyStage4CausalCapacityBlocked,
+               ProtectedStage4Pending, ProtectedOwnedAtServiceRank,
+               AsyncSetGST
+      <3>8. CASE \E node \in ValidatorIds: PreGstCrash(node)
+        BY <1>1, <3>8
+           DEF Stage4CapacityStepResult, Stage4CapacityStrictResult,
+               Stage4CapacityProgress, Stage4CapacityGoal,
+               Stage4CapacityBlockedAtRank,
+               ReadyStage4CausalCapacityBlocked,
+               ProtectedStage4Pending, ProtectedOwnedAtServiceRank,
+               PreGstCrash
+      <3> QED BY <2>2, <3>1, <3>2, <3>3, <3>4, <3>5, <3>6,
+           <3>7, <3>8
+           DEF AsyncNext, AsyncNonCrashStep, AsyncRunnerStep,
+               AsyncNonRunnerStep
+    <2> QED BY <1>1, <2>1, <2>2
+  <1> QED BY <1>1
+
+THEOREM FairStage4CapacityOneStep ==
+  \A initialContext, candidate, position,
+     rank \in Stage4CapacityCarrier:
+    AsyncSpecAt(initialContext)
+      => (Stage4CapacityBlockedAtRank(candidate, position, rank)
+            ~> Stage4CapacityProgress(candidate, position, rank))
+PROOF
+  <1>1. ASSUME NEW initialContext,
+                NEW candidate,
+                NEW position,
+                NEW rank \in Stage4CapacityCarrier
+         PROVE AsyncSpecAt(initialContext)
+                 => (Stage4CapacityBlockedAtRank(
+                       candidate, position, rank)
+                       ~> Stage4CapacityProgress(
+                            candidate, position, rank))
+    <2>1. AsyncSpecAt(initialContext)
+             => [](AsyncStrongTypeInvariant
+                    /\ AsyncProgressOwnershipInvariant)
+      BY AsyncSpecAlwaysStrongTypeInvariant,
+         AsyncSpecAlwaysProgressOwnershipInvariant, PTL
+    <2>2. AsyncSpecAt(initialContext)
+             => [](AsyncCurrentResponsiveVoters
+                    = AsyncVotersAt(initialContext))
+      BY AsyncSpecAlwaysUsesFixedResponsiveVoters
+    <2>3. /\ Stage4CapacityBlockedAtRank(
+                  candidate, position, rank)
+             /\ ~Stage4CapacityProgress(candidate, position, rank)
+            => ENABLED
+                 <<PostGstRunNode(candidate.node)>>_AsyncAllVars
+      BY ProtectedOwnedCandidateEnablesFairRunNode
+         DEF Stage4CapacityBlockedAtRank,
+             ReadyStage4CausalCapacityBlocked,
+             ProtectedStage4Pending, ProtectedOwnedAtServiceRank,
+             Stage4CapacityProgress, Stage4CapacityGoal
+    <2>4. /\ Stage4CapacityBlockedAtRank(
+                  candidate, position, rank)
+             /\ ~Stage4CapacityProgress(candidate, position, rank)
+             /\ <<PostGstRunNode(
+                    candidate.node)>>_AsyncAllVars
+            => Stage4CapacityProgress(candidate, position, rank)'
+      BY Stage4CapacitySameNodeRunStrictlyProgresses
+         DEF Stage4CapacityStrictResult
+    <2>5. Stage4CapacityBlockedAtRank(candidate, position, rank)
+              /\ [AsyncNext]_AsyncAllVars
+            => Stage4CapacityBlockedAtRank(
+                 candidate, position, rank)'
+                 \/ Stage4CapacityProgress(candidate, position, rank)'
+      BY Stage4CapacityBlockedStep
+         DEF Stage4CapacityStepResult, Stage4CapacityStrictResult
+    <2>6. CASE candidate.node \in AsyncVotersAt(initialContext)
+      <3>1. AsyncSpecAt(initialContext)
+               => WF_AsyncAllVars(
+                    PostGstRunNode(candidate.node))
+        BY <2>6 DEF AsyncSpecAt, AsyncFairnessAt
+      <3>2. AsyncSpecAt(initialContext)
+               => (Stage4CapacityBlockedAtRank(
+                     candidate, position, rank)
+                     ~> Stage4CapacityProgress(
+                          candidate, position, rank))
+        BY <2>3, <2>4, <2>5, <3>1, PTL DEF AsyncSpecAt
+      <3> QED BY <3>2
+    <2>7. CASE candidate.node \notin AsyncVotersAt(initialContext)
+      <3>1. AsyncSpecAt(initialContext)
+               => []~Stage4CapacityBlockedAtRank(
+                      candidate, position, rank)
+        BY <2>2, <2>7, PTL
+           DEF Stage4CapacityBlockedAtRank,
+               ReadyStage4CausalCapacityBlocked,
+               ProtectedStage4Pending, ProtectedOwnedAtServiceRank,
+               ResponsiveProtectedCandidateOwned
+      <3>2. AsyncSpecAt(initialContext)
+               => (Stage4CapacityBlockedAtRank(
+                     candidate, position, rank)
+                     ~> Stage4CapacityProgress(
+                          candidate, position, rank))
+        BY <3>1, PTL
+      <3> QED BY <3>2
+    <2> QED BY <2>6, <2>7
+  <1> QED BY <1>1
+
+THEOREM FairStage4CapacityRankDescent ==
+  \A initialContext, candidate, position:
+    AsyncSpecAt(initialContext)
+      => \A rank \in Stage4CapacityCarrier:
+           Stage4CapacityBlockedAtRank(candidate, position, rank)
+             ~> Stage4CapacityGoal(candidate, position)
+PROOF
+  <1>1. ASSUME NEW initialContext, NEW candidate, NEW position
+         PROVE AsyncSpecAt(initialContext)
+                 => \A rank \in Stage4CapacityCarrier:
+                      Stage4CapacityBlockedAtRank(
+                        candidate, position, rank)
+                        ~> Stage4CapacityGoal(candidate, position)
+    <2>1. ASSUME NEW rank \in Stage4CapacityCarrier
+           PROVE AsyncSpecAt(initialContext)
+                   => (Stage4CapacityBlockedAtRank(
+                         candidate, position, rank)
+                         ~> (Stage4CapacityGoal(candidate, position)
+                              \/ \E lower \in SetLessThan(
+                                   rank, Stage4CapacityOrdering,
+                                   Stage4CapacityCarrier):
+                                   Stage4CapacityBlockedAtRank(
+                                     candidate, position, lower)))
+      BY FairStage4CapacityOneStep
+         DEF Stage4CapacityProgress
+    <2>2. AsyncSpecAt(initialContext)
+             => \A rank \in Stage4CapacityCarrier:
+                  Stage4CapacityBlockedAtRank(
+                    candidate, position, rank)
+                    ~> (Stage4CapacityGoal(candidate, position)
+                         \/ \E lower \in SetLessThan(
+                              rank, Stage4CapacityOrdering,
+                              Stage4CapacityCarrier):
+                              Stage4CapacityBlockedAtRank(
+                                candidate, position, lower))
+      BY <2>1
+    <2>3. AsyncSpecAt(initialContext)
+             => \A rank \in Stage4CapacityCarrier:
+                  Stage4CapacityBlockedAtRank(
+                    candidate, position, rank)
+                    ~> Stage4CapacityGoal(candidate, position)
+      BY <2>2, Stage4CapacityOrderingIsWellFounded,
+         WellFoundedLeadsTo
+    <2> QED BY <2>3
+  <1> QED BY <1>1
+
+THEOREM FairNonCompletionCausalCapacityOpens ==
+  \A initialContext, candidate, position:
+    AsyncSpecAt(initialContext)
+      => (ReadyStage4CausalCapacityBlocked(candidate, position)
+            ~> Stage4CapacityGoal(candidate, position))
+PROOF
+  <1>1. ASSUME NEW initialContext, NEW candidate, NEW position
+         PROVE AsyncSpecAt(initialContext)
+                 => (ReadyStage4CausalCapacityBlocked(
+                       candidate, position)
+                       ~> Stage4CapacityGoal(candidate, position))
+    <2>1. AsyncSpecAt(initialContext) => []AsyncTypeInvariant
+      BY AsyncSpecAlwaysStrongTypeInvariant,
+         AsyncStrongTypeProjectsAsyncType, PTL
+    <2>2. AsyncSpecAt(initialContext)
+             => (ReadyStage4CausalCapacityBlocked(candidate, position)
+                   ~> \E rank \in Stage4CapacityCarrier:
+                        Stage4CapacityBlockedAtRank(
+                          candidate, position, rank))
+      BY <2>1, Stage4CapacityRankInCarrier, PTL
+         DEF Stage4CapacityBlockedAtRank
+    <2>3. AsyncSpecAt(initialContext)
+             => \A rank \in Stage4CapacityCarrier:
+                  Stage4CapacityBlockedAtRank(
+                    candidate, position, rank)
+                    ~> Stage4CapacityGoal(candidate, position)
+      BY FairStage4CapacityRankDescent
+    <2> QED BY <2>2, <2>3, PTL
+  <1> QED BY <1>1
+
+ProtectedStage4Actionable(candidate, position) ==
+  /\ ProtectedStage4Pending(candidate, position)
+  /\ ReadyStage4Actionable(candidate)
+
+Stage4ActionableStepResult(candidate, position) ==
+  \/ ProtectedStage4Actionable(candidate, position)'
+  \/ ProtectedRankProgressExit(candidate, <<4, position>>)'
+
+THEOREM Stage4ActionableOtherRunnerStep ==
+  \A candidate, position:
+    /\ ProtectedStage4Actionable(candidate, position)
+    /\ \/ \E node \in AsyncCurrentResponsiveVoters:
+              /\ node # candidate.node
+              /\ RunNode(node)
+       \/ \E node \in AsyncCurrentResponsiveVoters:
+              RunHistoricalServer(node)
+    => Stage4ActionableStepResult(candidate, position)
+BY AsyncBracketNextPreservesStrongTypeInvariant,
+   AsyncBracketNextPreservesProgressOwnership, Isa
+   DEF Stage4ActionableStepResult, ProtectedStage4Actionable,
+       ProtectedStage4Pending, ReadyStage4Actionable,
+       ProtectedOwnedAtServiceRank, ProtectedRankProgressExit,
+       ProtectedServiceOwnershipExit,
+       ResponsiveProtectedCandidateOwned, ProtectedCandidateOwned,
+       CandidateServiceRank, CandidateInReadyQueue,
+       LocalAdmissionCanAdvance, RunNode, RunHistoricalServer,
+       AsyncProgressOwnershipInvariant,
+       AsyncOutstandingCarrierInvariant, AsyncAllVars
+
+THEOREM Stage4ActionableClockStep ==
+  \A candidate, position:
+    /\ ProtectedStage4Actionable(candidate, position)
+    /\ AsyncTick
+    => Stage4ActionableStepResult(candidate, position)
+BY AsyncBracketNextPreservesStrongTypeInvariant,
+   AsyncBracketNextPreservesProgressOwnership, Isa
+   DEF Stage4ActionableStepResult, ProtectedStage4Actionable,
+       ProtectedStage4Pending, ReadyStage4Actionable,
+       ProtectedOwnedAtServiceRank, ProtectedRankProgressExit,
+       ProtectedServiceOwnershipExit,
+       ResponsiveProtectedCandidateOwned, ProtectedCandidateOwned,
+       CandidateServiceRank, CandidateInReadyQueue,
+       LocalAdmissionCanAdvance, AsyncTick, AsyncNonClockVars,
+       AsyncProgressOwnershipInvariant,
+       AsyncOutstandingCarrierInvariant, AsyncAllVars
+
+THEOREM Stage4ActionableDiscoveryPrefix ==
+  \A candidate, position:
+    /\ ProtectedStage4Actionable(candidate, position)
+    /\ \E node \in AsyncCurrentResponsiveVoters:
+         DirectCommitCertificateDiscoveryStep(node)
+    => Stage4ActionableStepResult(candidate, position)
+BY AsyncBracketNextPreservesStrongTypeInvariant,
+   AsyncBracketNextPreservesProgressOwnership, Isa
+   DEF Stage4ActionableStepResult, ProtectedStage4Actionable,
+       ProtectedStage4Pending, ReadyStage4Actionable,
+       ProtectedOwnedAtServiceRank, ProtectedRankProgressExit,
+       ProtectedServiceOwnershipExit,
+       ResponsiveProtectedCandidateOwned, ProtectedCandidateOwned,
+       CandidateServiceRank, CandidateInReadyQueue,
+       LocalAdmissionCanAdvance,
+       DirectCommitCertificateDiscoveryStep,
+       AsyncProgressOwnershipInvariant,
+       AsyncOutstandingCarrierInvariant, AsyncAllVars
+
+THEOREM Stage4ActionableIoStep ==
+  \A candidate, position:
+    /\ ProtectedStage4Actionable(candidate, position)
+    /\ \/ \E node \in AsyncCurrentResponsiveVoters: ServiceIoWorker(node)
+       \/ \E node \in AsyncCurrentResponsiveVoters:
+              EnqueueIoLocalControl(node)
+    => Stage4ActionableStepResult(candidate, position)
+BY AsyncBracketNextPreservesStrongTypeInvariant,
+   AsyncBracketNextPreservesProgressOwnership,
+   HeadTailProperties, SequenceSetAfterAppend, Isa
+   DEF Stage4ActionableStepResult, ProtectedStage4Actionable,
+       ProtectedStage4Pending, ReadyStage4Actionable,
+       ProtectedOwnedAtServiceRank, ProtectedRankProgressExit,
+       ProtectedServiceOwnershipExit,
+       ResponsiveProtectedCandidateOwned, ProtectedCandidateOwned,
+       CandidateServiceRank, CandidateInReadyQueue,
+       LocalAdmissionCanAdvance, ServiceIoWorker,
+       EnqueueIoLocalControl, AsyncProgressOwnershipInvariant,
+       AsyncOutstandingCarrierInvariant, AsyncAllVars
+
+THEOREM Stage4ActionableNetworkOrFaultStep ==
+  \A candidate, position:
+    /\ ProtectedStage4Actionable(candidate, position)
+    /\ (AsyncNetworkStep \/ AsyncFaultStep)
+    => Stage4ActionableStepResult(candidate, position)
+BY AsyncBracketNextPreservesStrongTypeInvariant,
+   AsyncBracketNextPreservesProgressOwnership, Isa
+   DEF Stage4ActionableStepResult, ProtectedStage4Actionable,
+       ProtectedStage4Pending, ReadyStage4Actionable,
+       ProtectedOwnedAtServiceRank, ProtectedRankProgressExit,
+       ProtectedServiceOwnershipExit,
+       ResponsiveProtectedCandidateOwned, ProtectedCandidateOwned,
+       CandidateServiceRank, CandidateInReadyQueue,
+       LocalAdmissionCanAdvance, AsyncNetworkStep, AdmitIngressPacket,
+       AsyncFaultStep, PreGstCrash, AsyncProgressOwnershipInvariant,
+       AsyncOutstandingCarrierInvariant, AsyncAllVars
+
+THEOREM Stage4ActionableStutterStep ==
+  \A candidate, position:
+    /\ ProtectedStage4Actionable(candidate, position)
+    /\ UNCHANGED AsyncAllVars
+    => ProtectedStage4Actionable(candidate, position)'
+BY Isa DEF ProtectedStage4Actionable, ProtectedStage4Pending,
+           ReadyStage4Actionable, ProtectedOwnedAtServiceRank,
+           AsyncAllVars, AsyncSchedulerVars, vars
+
+THEOREM Stage4ActionableUnlessProgress ==
+  \A candidate, position:
+    /\ ProtectedStage4Actionable(candidate, position)
+    /\ [AsyncNext]_AsyncAllVars
+    => Stage4ActionableStepResult(candidate, position)
+PROOF
+  <1>1. ASSUME NEW candidate, NEW position,
+                ProtectedStage4Actionable(candidate, position),
+                [AsyncNext]_AsyncAllVars
+         PROVE Stage4ActionableStepResult(candidate, position)
+    <2>1. CASE UNCHANGED AsyncAllVars
+      BY <1>1, <2>1, Stage4ActionableStutterStep
+         DEF Stage4ActionableStepResult
+    <2>2. CASE AsyncNext
+      <3>1. CASE RunNode(candidate.node)
+        BY <1>1, <3>1, Stage4LocalAdvanceStrictlyProgresses
+           DEF Stage4ActionableStepResult,
+               ProtectedStage4Actionable, PostGstRunNode,
+               ProtectedStage4Pending, ProtectedOwnedAtServiceRank
+      <3>2. CASE \/ \E runnerNode \in AsyncCurrentResponsiveVoters:
+                          /\ runnerNode # candidate.node
+                          /\ RunNode(runnerNode)
+                   \/ \E historicalNode \in AsyncCurrentResponsiveVoters:
+                          RunHistoricalServer(historicalNode)
+        BY <1>1, <3>2, Stage4ActionableOtherRunnerStep
+      <3>3. CASE AsyncTick
+        BY <1>1, <3>3, Stage4ActionableClockStep
+      <3>4. CASE \E node \in AsyncCurrentResponsiveVoters:
+                    DirectCommitCertificateDiscoveryStep(node)
+        BY <1>1, <3>4, Stage4ActionableDiscoveryPrefix
+      <3>5. CASE \/ \E ioNode \in AsyncCurrentResponsiveVoters:
+                          ServiceIoWorker(ioNode)
+                   \/ \E controlNode \in AsyncCurrentResponsiveVoters:
+                          EnqueueIoLocalControl(controlNode)
+        BY <1>1, <3>5, Stage4ActionableIoStep
+      <3>6. CASE AsyncNetworkStep \/ AsyncFaultStep
+        BY <1>1, <3>6, Stage4ActionableNetworkOrFaultStep
+      <3>7. CASE AsyncSetGST
+        BY <1>1, <3>7
+           DEF ProtectedStage4Actionable, ProtectedStage4Pending,
+               ProtectedOwnedAtServiceRank, AsyncSetGST
+      <3>8. CASE \E node \in ValidatorIds: PreGstCrash(node)
+        BY <1>1, <3>8
+           DEF ProtectedStage4Actionable, ProtectedStage4Pending,
+               ProtectedOwnedAtServiceRank, PreGstCrash
+      <3> QED BY <2>2, <3>1, <3>2, <3>3, <3>4, <3>5, <3>6,
+           <3>7, <3>8
+           DEF AsyncNext, AsyncNonCrashStep, AsyncRunnerStep,
+               AsyncNonRunnerStep
+    <2> QED BY <1>1, <2>1, <2>2
+  <1> QED BY <1>1
+
+THEOREM FairStage4ActionableProgress ==
+  \A initialContext, candidate, position:
+    AsyncSpecAt(initialContext)
+      => (ProtectedStage4Actionable(candidate, position)
+            ~> ProtectedRankProgressExit(candidate, <<4, position>>))
+PROOF
+  <1>1. ASSUME NEW initialContext, NEW candidate, NEW position
+         PROVE AsyncSpecAt(initialContext)
+                 => (ProtectedStage4Actionable(candidate, position)
+                       ~> ProtectedRankProgressExit(
+                            candidate, <<4, position>>))
+    <2>1. AsyncSpecAt(initialContext)
+             => [](AsyncCurrentResponsiveVoters
+                    = AsyncVotersAt(initialContext))
+      BY AsyncSpecAlwaysUsesFixedResponsiveVoters
+    <2>2. /\ ProtectedStage4Actionable(candidate, position)
+             /\ ~ProtectedRankProgressExit(candidate, <<4, position>>)
+            => ENABLED
+                 <<PostGstRunNode(candidate.node)>>_AsyncAllVars
+      BY ProtectedOwnedCandidateEnablesFairRunNode
+         DEF ProtectedStage4Actionable, ProtectedStage4Pending,
+             ProtectedOwnedAtServiceRank
+    <2>3. /\ ProtectedStage4Actionable(candidate, position)
+             /\ ~ProtectedRankProgressExit(candidate, <<4, position>>)
+             /\ <<PostGstRunNode(candidate.node)>>_AsyncAllVars
+            => ProtectedRankProgressExit(candidate, <<4, position>>)'
+      BY Stage4LocalAdvanceStrictlyProgresses
+         DEF ProtectedStage4Actionable, PostGstRunNode
+    <2>4. ProtectedStage4Actionable(candidate, position)
+              /\ [AsyncNext]_AsyncAllVars
+            => ProtectedStage4Actionable(candidate, position)'
+                 \/ ProtectedRankProgressExit(
+                      candidate, <<4, position>>)'
+      BY Stage4ActionableUnlessProgress
+         DEF Stage4ActionableStepResult
+    <2>5. CASE candidate.node \in AsyncVotersAt(initialContext)
+      <3>1. AsyncSpecAt(initialContext)
+               => WF_AsyncAllVars(
+                    PostGstRunNode(candidate.node))
+        BY <2>5 DEF AsyncSpecAt, AsyncFairnessAt
+      <3>2. AsyncSpecAt(initialContext)
+               => (ProtectedStage4Actionable(candidate, position)
+                     ~> ProtectedRankProgressExit(
+                          candidate, <<4, position>>))
+        BY <2>2, <2>3, <2>4, <3>1, PTL DEF AsyncSpecAt
+      <3> QED BY <3>2
+    <2>6. CASE candidate.node \notin AsyncVotersAt(initialContext)
+      <3>1. AsyncSpecAt(initialContext)
+               => []~ProtectedStage4Actionable(candidate, position)
+        BY <2>1, <2>6, PTL
+           DEF ProtectedStage4Actionable, ProtectedStage4Pending,
+               ProtectedOwnedAtServiceRank,
+               ResponsiveProtectedCandidateOwned
+      <3>2. AsyncSpecAt(initialContext)
+               => (ProtectedStage4Actionable(candidate, position)
+                     ~> ProtectedRankProgressExit(
+                          candidate, <<4, position>>))
+        BY <3>1, PTL
+      <3> QED BY <3>2
+    <2> QED BY <2>5, <2>6
+  <1> QED BY <1>1
+
+THEOREM FairProtectedStage4RankDescent ==
+  \A initialContext, candidate, position \in Nat:
+    AsyncSpecAt(initialContext)
+      => (ProtectedOwnedAtServiceRank(candidate, <<4, position>>)
+            ~> ProtectedRankProgressExit(candidate, <<4, position>>))
+PROOF
+  <1>1. ASSUME NEW initialContext,
+                NEW candidate,
+                NEW position \in Nat
+         PROVE AsyncSpecAt(initialContext)
+                 => (ProtectedOwnedAtServiceRank(
+                       candidate, <<4, position>>)
+                       ~> ProtectedRankProgressExit(
+                            candidate, <<4, position>>))
+    <2>1. AsyncSpecAt(initialContext)
+             => [](AsyncStrongTypeInvariant
+                    /\ AsyncProgressOwnershipInvariant)
+      BY AsyncSpecAlwaysStrongTypeInvariant,
+         AsyncSpecAlwaysProgressOwnershipInvariant, PTL
+    <2>2. AsyncSpecAt(initialContext)
+             => (ProtectedStage4Pending(candidate, position)
+                   ~> (ProtectedRankProgressExit(
+                         candidate, <<4, position>>)
+                        \/ ReadyStage4Actionable(candidate)
+                        \/ ReadyStage4CausalCapacityBlocked(
+                             candidate, position)))
+      <3>1. AsyncSpecAt(initialContext)
+               => (ProtectedStage4Pending(candidate, position)
+                     ~> (ReadyStage4Actionable(candidate)
+                          \/ ReadyStage4CausalCapacityBlocked(
+                               candidate, position)
+                          \/ \E rank \in ReadyRunAuxCarrier:
+                               ReadyBlockedAtAux(
+                                 candidate, position, rank)))
+        BY <2>1, ReadyRunAuxRankInCarrier, PTL
+           DEF ReadyBlockedAtAux
+      <3>2. AsyncSpecAt(initialContext)
+               => \A rank \in ReadyRunAuxCarrier:
+                    ReadyBlockedAtAux(candidate, position, rank)
+                      ~> Stage4AuxGoal(candidate, position)
+        BY FairStage4AuxRankDescent
+      <3> QED BY <3>1, <3>2, PTL DEF Stage4AuxGoal
+    <2>3. AsyncSpecAt(initialContext)
+             => (ReadyStage4CausalCapacityBlocked(candidate, position)
+                   ~> (ProtectedRankProgressExit(
+                         candidate, <<4, position>>)
+                        \/ ReadyStage4Actionable(candidate)))
+      BY FairNonCompletionCausalCapacityOpens
+         DEF Stage4CapacityGoal
+    <2>4. AsyncSpecAt(initialContext)
+             => (ProtectedStage4Actionable(candidate, position)
+                   ~> ProtectedRankProgressExit(
+                        candidate, <<4, position>>))
+      BY FairStage4ActionableProgress
+    <2>5. AsyncSpecAt(initialContext)
+             => (ProtectedStage4Pending(candidate, position)
+                   ~> ProtectedRankProgressExit(
+                        candidate, <<4, position>>))
+      BY <2>2, <2>3, <2>4, PTL DEF ProtectedStage4Actionable
+    <2>6. AsyncSpecAt(initialContext)
+             => (ProtectedOwnedAtServiceRank(candidate, <<4, position>>)
+                   ~> ProtectedStage4Pending(candidate, position))
+      BY <2>1, PTL DEF ProtectedStage4Pending
+    <2> QED BY <2>5, <2>6, PTL
   <1> QED BY <1>1
 
 OneHeightFrameAt(initialContext) ==

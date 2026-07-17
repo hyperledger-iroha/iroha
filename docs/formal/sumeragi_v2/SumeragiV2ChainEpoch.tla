@@ -52,6 +52,29 @@ DurableCommitDecision(decision) ==
   /\ decision \in DecisionEvidenceSet
   /\ HistoricalCommitCertificate(decision.qc)
 
+\* This construction is extensionally equal to the DurableCommitDecision
+\* guard shared by all four receipt actions.  Building the well-formed Commit
+\* certificates directly avoids making TLC traverse every malformed product
+\* member of QcRecordSet at each simulated transition.
+CandidateHistoricalCommitCertificateSet ==
+  {QC(qcContext, roundView, "Commit", subject, signers):
+    qcContext \in ContextRecords,
+    roundView \in Views,
+    subject \in ValidSubjects,
+    signers \in SUBSET ValidatorIds}
+
+HistoricalCommitCertificateSet ==
+  {qc \in CandidateHistoricalCommitCertificateSet:
+    DualQuorum(qc.context.epoch, qc.signers)}
+
+CandidateDurableDecisionEvidenceSet ==
+  {[node |-> node, qc |-> qc]:
+    node \in ValidatorIds, qc \in HistoricalCommitCertificateSet}
+
+DurableDecisionEvidenceSet ==
+  {decision \in CandidateDurableDecisionEvidenceSet:
+    decision \in DecisionEvidenceSet}
+
 CommitFinalityIdentity(qc) ==
   [contextKey |-> qc.context.contextKey,
    height |-> qc.height,
@@ -306,5 +329,34 @@ ChainEpochNext ==
 
 ChainEpochSpec ==
   ChainEpochInit /\ [][ChainEpochNext]_ChainEpochVars
+
+(***************************************************************************
+TLC checks every VARIABLE visible through EXTENDS, even when the deductive
+ChainEpochSpec deliberately projects only ChainEpochVars.  This bounded-check
+harness therefore initializes the inherited Core state and freezes it while
+the receipt-driven chain projection advances.  Keeping the harness separate
+preserves the exact deductive specification proved by ChainEpochProofs while
+preventing a simulation from silently starting with unspecified Core state.
+***************************************************************************)
+ChainEpochTlcVars == <<vars, ChainEpochVars>>
+
+ChainEpochTlcInit == Init /\ ChainEpochInit
+
+ChainEpochTlcReceiptNext ==
+  \/ \E decision \in DurableDecisionEvidenceSet:
+       RecordCertifiedNext(decision)
+  \/ \E decision \in DurableDecisionEvidenceSet:
+       RecordKnownDecision(decision)
+  \/ \E application \in DurableDecisionEvidenceSet:
+       RecordAppliedNext(application)
+  \/ \E application \in DurableDecisionEvidenceSet:
+       RecordKnownApplication(application)
+
+ChainEpochTlcNext == ChainEpochTlcReceiptNext /\ UNCHANGED vars
+
+ChainEpochTlcSpec ==
+  ChainEpochTlcInit /\ [][ChainEpochTlcNext]_ChainEpochTlcVars
+
+ChainEpochTlcInvariant == TypeInvariant /\ ChainEpochInvariant
 
 =============================================================================

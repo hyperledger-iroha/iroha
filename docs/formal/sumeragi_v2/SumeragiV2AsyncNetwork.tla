@@ -82,8 +82,7 @@ AsyncReducerKinds ==
    "PersistObservePrepare", "BeginLockCommit", "PersistLockCommit",
    "FormCommitQC", "BeginDecision", "PersistDecision", "BeginTimeout",
      "PersistTimeout", "SignTimeout", "FormTC", "BeginInstallTC",
-   "PersistInstallTC", "BeginCommitCertificateDiscovery",
-   "RequestCertifiedBody", "FetchCertifiedBody", "Apply"}
+   "PersistInstallTC", "RequestCertifiedBody", "FetchCertifiedBody", "Apply"}
 AsyncWorkKinds == AsyncCompletionTags \cup AsyncDeliveryKinds \cup AsyncReducerKinds
 AsyncCommandClasses == {"Normal", "Progress", "Completion"}
 AsyncIoCommandClasses == {"Serve", "Consensus", "Control"}
@@ -498,6 +497,9 @@ CanEnqueueClass(node, commandClass) ==
 
 SequenceSet(sequence) == {sequence[index]: index \in 1..Len(sequence)}
 
+SequenceHasUniqueValues(sequence) ==
+  Len(sequence) = Cardinality(SequenceSet(sequence))
+
 QueuedCandidates ==
   UNION {SequenceSet(asyncCommandQueues[node]): node \in ValidatorIds}
 
@@ -517,6 +519,29 @@ TrackedWorkCandidates ==
 CandidateScheduled(candidate) ==
   candidate \in QueuedCandidates \cup DeferredCandidates \cup CausalCandidates
     \cup TrackedWorkCandidates
+
+(***************************************************************************
+Every logical reducer candidate has one scheduler owner.  This is stronger
+than the individual FIFO typing facts: an exact candidate may not occur in a
+second queue, move into executor work while retaining its old owner, or be
+re-created behind itself by a causal successor batch.  The invariant follows
+the production idempotent reducer, serialized WAL/signing and Busy-deferred
+owners, plus the executor's exact round/subject and work-ID coalescing
+boundaries.
+***************************************************************************)
+AsyncLogicalCandidateOwnershipInvariant ==
+  /\ \A node \in ValidatorIds:
+       /\ SequenceHasUniqueValues(asyncCommandQueues[node])
+       /\ SequenceHasUniqueValues(asyncCausalQueues[node])
+       /\ SequenceHasUniqueValues(asyncDeferredCompletionQueues[node])
+       /\ SequenceHasUniqueValues(asyncDeferredProgressQueues[node])
+       /\ SequenceHasUniqueValues(asyncDeferredNormalQueues[node])
+  /\ QueuedCandidates \cap DeferredCandidates = {}
+  /\ QueuedCandidates \cap CausalCandidates = {}
+  /\ QueuedCandidates \cap TrackedWorkCandidates = {}
+  /\ DeferredCandidates \cap CausalCandidates = {}
+  /\ DeferredCandidates \cap TrackedWorkCandidates = {}
+  /\ CausalCandidates \cap TrackedWorkCandidates = {}
 
 EnqueueCandidate(candidate) ==
   LET node == candidate.node
@@ -668,6 +693,25 @@ InstallCommandSuccessors(command) ==
   ELSE <<InstallCommitSignSuccessor(command),
          InstallProposalSuccessor(command)>>
 
+(***************************************************************************
+Closed inventory of reducer parents which can emit a causal successor.
+
+Keeping this set next to the CASE relation is intentional: source-fidelity
+checks compare every CASE label with this inventory, so a newly modelled WAL,
+signing, QC, timeout, Decision, or body-pipeline continuation cannot silently
+bypass scheduler-wide exact-child coalescing.
+***************************************************************************)
+CausalSuccessorParentKinds ==
+  {"AssembleBody", "BeginProposal", "PersistProposal",
+   "DeliverProposal", "DeliverChunk", "FetchBody",
+   "RebindRetainedBody", "FetchCertifiedBody", "StoreBody",
+   "ValidateBody", "BeginPrepare", "PersistPrepare", "DeliverVote",
+   "DeliverQC", "BeginObservePrepare", "PersistObservePrepare",
+   "BeginLockCommit", "PersistLockCommit", "FormCommitQC",
+   "BeginDecision", "PersistDecision", "BeginTimeout",
+   "PersistTimeout", "DeliverTimeout", "FormTC", "DeliverTC",
+   "BeginInstallTC", "PersistInstallTC"}
+
 CommandSuccessors(command) ==
   CASE command.kind = "AssembleBody" ->
          IF ExactDecidedLocalBody(command.node, command.view,
@@ -740,10 +784,33 @@ CommandSuccessors(command) ==
          InstallCommandSuccessors(command)
     [] OTHER -> <<>>
 
+(***************************************************************************
+Reducer effects preserve their declared order, but an exact successor which
+already has any scheduler owner is coalesced.  This is the causal equivalent
+of authenticated-ingress duplicate admission.  In particular, a replayed
+Chunk cannot append a second FetchBody behind an already-owned FetchBody and
+thereby keep replacing the value at the same service rank forever.
+***************************************************************************)
+FreshCandidateSequence(candidate) ==
+  IF CandidateScheduled(candidate) THEN <<>> ELSE <<candidate>>
+
+FreshCommandSuccessors(command) ==
+  LET successors == CommandSuccessors(command)
+  IN CASE Len(successors) = 0 -> <<>>
+       [] Len(successors) = 1 -> FreshCandidateSequence(successors[1])
+       [] Len(successors) = 2 ->
+            FreshCandidateSequence(successors[1])
+              \o FreshCandidateSequence(successors[2])
+       [] Len(successors) = 3 ->
+            FreshCandidateSequence(successors[1])
+              \o FreshCandidateSequence(successors[2])
+              \o FreshCandidateSequence(successors[3])
+       [] OTHER -> <<>>
+
 AppendCausalSuccessors(command) ==
   asyncCausalQueues' =
     [asyncCausalQueues EXCEPT
-       ![command.node] = @ \o CommandSuccessors(command)]
+       ![command.node] = @ \o FreshCommandSuccessors(command)]
 
 LeaveCausalQueues == UNCHANGED asyncCausalQueues
 
@@ -1105,6 +1172,14 @@ ActiveCommitCertificateRequests(node) ==
   {item \in asyncActiveRequests:
      item.source = node /\ item.kind = "CommitCertificateRequest"}
 
+(***************************************************************************
+Commit-certificate discovery is recurring auxiliary work which production
+runs before the outer-loop executor turn.  It is therefore modelled as a
+non-runner action: taking discovery does not satisfy `RunNode` fairness, and
+the fair serialized runtime turn remains continuously enabled.  Folding this
+prefix into `RuntimeStep` would let repeated discovery satisfy weak fairness
+while an already queued reducer command never executes.
+***************************************************************************)
 CommitCertificateDiscoveryDue(node) ==
   /\ node \in AsyncCurrentResponsiveVoters
   /\ asyncNow >= AsyncRoundTimeout
@@ -1451,6 +1526,25 @@ CausalHeadCanAdvance(node) ==
               /\ AsyncOutstandingWorkCount(node) < AsyncIoWorkCapacity
         \/ /\ candidate.class # "Completion"
               /\ CanEnqueueClass(node, candidate.class)
+
+(***************************************************************************
+Once a Local turn observes causal work, the debt remains active until the
+exact head is removed.  The class split preserves the production runtime and
+I/O reservations while preventing outer producer/ingress work from stealing
+an admission window that the serialized Rust continuation consumes before it
+returns to outer ingress.
+***************************************************************************)
+CausalAdmissionDebtActive(node) ==
+  /\ asyncCausalAdmissionOwed[node]
+  /\ CausalQueueNonempty(node)
+
+NonCompletionCausalAdmissionDebt(node) ==
+  /\ CausalAdmissionDebtActive(node)
+  /\ HeadCausalCandidate(node).class # "Completion"
+
+CompletionCausalAdmissionDebt(node) ==
+  /\ CausalAdmissionDebtActive(node)
+  /\ HeadCausalCandidate(node).class = "Completion"
 
 DiscardCommand(command) ==
   /\ UNCHANGED vars
@@ -1863,20 +1957,24 @@ IngressItemCanDrain(node, item) ==
           THEN \/ ~(IF item.kind = "CertifiedRequest"
                     THEN CertifiedRequestAuthorized(item)
                     ELSE CommitCertificateRequestAuthorized(item))
-               \/ CanEnqueueIoClass(node, "Serve")
+               \/ /\ ~CompletionCausalAdmissionDebt(node)
+                     /\ CanEnqueueIoClass(node, "Serve")
           ELSE IF item.kind = "CertifiedResponse"
                THEN \/ ~CertifiedResponseAuthorized(item)
-                    \/ /\ AsyncOutstandingWorkCount(node)
+                    \/ /\ ~CompletionCausalAdmissionDebt(node)
+                          /\ AsyncOutstandingWorkCount(node)
                               < AsyncIoWorkCapacity
                           /\ ~CandidateInFlight(
                                CertifiedResponseCandidate(item))
                ELSE IF item.kind = "CommitCertificateResponse"
                     THEN \/ ~CommitCertificateResponseAuthorized(item)
-                         \/ /\ CanEnqueueClass(node, "Progress")
+                         \/ /\ ~NonCompletionCausalAdmissionDebt(node)
+                               /\ CanEnqueueClass(node, "Progress")
                                /\ ~CandidateInFlight(
                                     CommitCertificateResponseCandidate(item))
                ELSE \/ CandidateScheduled(candidate)
-                    \/ CanEnqueueClass(node, candidate.class)
+                    \/ /\ ~NonCompletionCausalAdmissionDebt(node)
+                          /\ CanEnqueueClass(node, candidate.class)
 
 DrainableIngressLaneIndices(node, source) ==
   {index \in 1..Len(IngressLane(node, source)):
@@ -2175,19 +2273,25 @@ ProducerCompletionCanAdmit(node) ==
   /\ SelectedCompletionQueueNonempty(node)
   /\ CanEnqueueClass(node, "Completion")
 
+ProducerCompletionCanAdvance(node) ==
+  /\ ProducerCompletionCanAdmit(node)
+  /\ ~NonCompletionCausalAdmissionDebt(node)
+
 OtherLocalSource(source) ==
   IF source = "Producer" THEN "Causal" ELSE "Producer"
 
 LocalSourceCanAdmit(node, source) ==
   IF source = "Producer"
-  THEN ProducerCompletionCanAdmit(node)
+  THEN ProducerCompletionCanAdvance(node)
   ELSE CausalHeadCanAdvance(node)
 
 (***************************************************************************
 The local admission cursor alternates producer completions with causal work.
-A producer may run while the causal head is temporarily blocked, but doing so
-records sticky causal debt.  Once that head becomes admissible, the debt makes
-it the deterministic preferred source under the existing fair RunNode action.
+The first producer or no-admission turn that observes causal work records
+sticky debt.  Non-Completion debt then reserves command capacity, while
+Completion debt still permits the exact producer retirement needed to free an
+outstanding-work slot.  Once the head is admissible, debt makes it the
+deterministic preferred source under the existing fair RunNode action.
 ***************************************************************************)
 PreferredLocalSource(node) ==
   IF asyncCausalAdmissionOwed[node] = TRUE
@@ -2204,7 +2308,7 @@ SelectedLocalSource(node) ==
 
 LocalAdmissionCanAdvance(node) ==
   /\ asyncRunnerBudget[node] > 0
-  /\ (ProducerCompletionCanAdmit(node) \/ CausalHeadCanAdvance(node))
+  /\ (ProducerCompletionCanAdvance(node) \/ CausalHeadCanAdvance(node))
 
 UpdateLocalAdmissionMetadata(node, source) ==
   /\ asyncNextLocalSource' =
@@ -2217,10 +2321,16 @@ UpdateLocalAdmissionMetadata(node, source) ==
             THEN FALSE
             ELSE ((@ = TRUE) \/ CausalQueueNonempty(node))]
 
+RecordBlockedCausalDebt(node) ==
+  /\ asyncCausalAdmissionOwed' =
+       [asyncCausalAdmissionOwed EXCEPT
+          ![node] = ((@ = TRUE) \/ CausalQueueNonempty(node))]
+  /\ UNCHANGED asyncNextLocalSource
+
 AdmitProducerCompletion(node) ==
   LET source == SelectedCompletionSource(node)
       candidate == SelectedCompletionCandidate(node)
-  IN /\ ProducerCompletionCanAdmit(node)
+  IN /\ ProducerCompletionCanAdvance(node)
      /\ EnqueueCandidate(candidate)
      /\ asyncIoReadyCompletions' =
           IF source = "Io"
@@ -2289,6 +2399,7 @@ EnqueueIoLocalControl(node) ==
   /\ node \in AsyncCurrentResponsiveVoters
   /\ ~NodeHasApplication(node)
   /\ asyncIoControlAvailable[node]
+  /\ ~CompletionCausalAdmissionDebt(node)
   /\ CanEnqueueIoClass(node, "Control")
   /\ asyncIoQueues' =
        [asyncIoQueues EXCEPT ![node] = Append(@, AsyncIoControlJob)]
@@ -2356,11 +2467,16 @@ BeginTimeoutEnabled(node) ==
 
 DirectCommitCertificateDiscoveryStep(node) ==
   /\ CommitCertificateDiscoveryDue(node)
-  /\ UNCHANGED <<vars, asyncCommandQueues, asyncNextCommandClass,
-                 asyncFifoOwed,
-                 asyncTimeoutEmitted, AsyncDeferredVars,
+  /\ UNCHANGED <<vars, asyncNow,
+                 asyncCommandQueues, asyncNextCommandClass,
+                 asyncFifoOwed, asyncTimeoutEmitted,
+                 asyncRunnerPhase, asyncRunnerBudget,
+                 AsyncLocalAdmissionVars, AsyncIoVars,
+                 AsyncDeferredVars,
                  asyncOutstandingTags, asyncNodeDeadlines,
-                 asyncRetransmitDeadlines, asyncIngressLanes,
+                 asyncRetransmitDeadlines,
+                 asyncNodeServiceDeadlines, asyncIoServiceDeadlines,
+                 asyncIngressLanes,
                  asyncIngressReady, asyncHeldChunks>>
   /\ PublishCommitCertificateRequests(
        CommitCertificateRequestOutbox(node))
@@ -2581,44 +2697,35 @@ IdleRuntimeStep(node) ==
   /\ asyncFifoOwed' = [asyncFifoOwed EXCEPT ![node] = FALSE]
 
 RuntimeStep(node) ==
-  \/ /\ CommitCertificateDiscoveryDue(node)
-     /\ DirectCommitCertificateDiscoveryStep(node)
-  \/ /\ ~CommitCertificateDiscoveryDue(node)
-        /\ asyncDeferredDrainOwed[node]
-     /\ DeferredDrainStep(node)
-  \/ /\ ~CommitCertificateDiscoveryDue(node)
-        /\ ~asyncDeferredDrainOwed[node]
+  \/ /\ asyncDeferredDrainOwed[node]
+        /\ DeferredDrainStep(node)
+  \/ /\ ~asyncDeferredDrainOwed[node]
         /\ DeferredTagExecutable(node)
-     /\ DeferredTagStep(node)
-  \/ /\ ~CommitCertificateDiscoveryDue(node)
-        /\ ~asyncDeferredDrainOwed[node]
+        /\ DeferredTagStep(node)
+  \/ /\ ~asyncDeferredDrainOwed[node]
         /\ ~DeferredTagExecutable(node)
         /\ TimeoutDue(node)
         /\ DirectTimeoutStep(node)
-  \/ /\ ~CommitCertificateDiscoveryDue(node)
-        /\ ~asyncDeferredDrainOwed[node]
+  \/ /\ ~asyncDeferredDrainOwed[node]
         /\ ~DeferredTagExecutable(node)
         /\ ~TimeoutDue(node)
         /\ NodeQueueNonempty(node)
         /\ asyncFifoOwed[node]
         /\ FifoRuntimeStep(node)
-  \/ /\ ~CommitCertificateDiscoveryDue(node)
-        /\ ~asyncDeferredDrainOwed[node]
+  \/ /\ ~asyncDeferredDrainOwed[node]
         /\ ~DeferredTagExecutable(node)
         /\ ~TimeoutDue(node)
         /\ ~(NodeQueueNonempty(node) /\ asyncFifoOwed[node])
         /\ RetransmitDue(node)
         /\ DirectRetransmitStep(node)
-  \/ /\ ~CommitCertificateDiscoveryDue(node)
-        /\ ~asyncDeferredDrainOwed[node]
+  \/ /\ ~asyncDeferredDrainOwed[node]
         /\ ~DeferredTagExecutable(node)
         /\ ~TimeoutDue(node)
         /\ ~(NodeQueueNonempty(node) /\ asyncFifoOwed[node])
         /\ ~RetransmitDue(node)
         /\ NodeQueueNonempty(node)
         /\ FifoRuntimeStep(node)
-  \/ /\ ~CommitCertificateDiscoveryDue(node)
-        /\ ~asyncDeferredDrainOwed[node]
+  \/ /\ ~asyncDeferredDrainOwed[node]
         /\ ~DeferredTagExecutable(node)
         /\ ~TimeoutDue(node)
         /\ ~RetransmitDue(node)
@@ -2639,10 +2746,11 @@ LocalAdmissionStep(node) ==
              /\ asyncRunnerBudget' =
                   [asyncRunnerBudget EXCEPT ![node] = @ - 1]
      ELSE /\ LeaveCausalQueues
+          /\ RecordBlockedCausalDebt(node)
           /\ UNCHANGED <<vars, asyncCommandQueues,
                           asyncNextCommandClass,
                           asyncFifoOwed, asyncTimeoutEmitted,
-                          AsyncIoVars, AsyncLocalAdmissionVars,
+                          AsyncIoVars,
                           asyncOutstandingTags, asyncNodeDeadlines,
                           asyncRetransmitDeadlines, asyncSentItems,
                           asyncRetainedControl, asyncActiveRequests,
@@ -2960,6 +3068,8 @@ AsyncRunnerStep ==
 AsyncNonRunnerStep ==
   /\ \/ AsyncSetGST
      \/ AsyncTick
+     \/ (\E node \in AsyncCurrentResponsiveVoters:
+           DirectCommitCertificateDiscoveryStep(node))
      \/ (\E node \in AsyncCurrentResponsiveVoters: ServiceIoWorker(node))
      \/ (\E node \in AsyncCurrentResponsiveVoters:
            EnqueueIoLocalControl(node))
@@ -2981,6 +3091,9 @@ PostGstRunNode(node) == gst /\ RunNode(node)
 
 PostGstRunHistoricalServer(node) == gst /\ RunHistoricalServer(node)
 
+PostGstCommitCertificateDiscovery(node) ==
+  gst /\ DirectCommitCertificateDiscoveryStep(node)
+
 PostGstServiceIoWorker(node) == gst /\ ServiceIoWorker(node)
 
 PostGstAdmitHiddenPacket(recipient, source) ==
@@ -2993,6 +3106,8 @@ AsyncFairnessAt(initialContext) ==
        WF_AsyncAllVars(PostGstRunNode(node))
   /\ \A node \in AsyncVotersAt(initialContext):
        WF_AsyncAllVars(PostGstRunHistoricalServer(node))
+  /\ \A node \in AsyncVotersAt(initialContext):
+       WF_AsyncAllVars(PostGstCommitCertificateDiscovery(node))
   /\ \A node \in AsyncVotersAt(initialContext):
        WF_AsyncAllVars(PostGstServiceIoWorker(node))
   /\ \A recipient \in AsyncVotersAt(initialContext),
@@ -3195,6 +3310,105 @@ AsyncIoWorkContentTypeInvariant ==
             SequenceSet(asyncLocalReadyCompletions[node]) = {}
        /\ SequenceSet(asyncCommandQueues[node]) \cap
             asyncOutstandingWork[node] = {}
+
+ConsensusIoCandidates(node) ==
+  {job.candidate:
+     job \in {entry \in SequenceSet(asyncIoQueues[node]):
+                entry.class = "Consensus"}}
+
+(***************************************************************************
+The outstanding-work set is an exact ownership index, not an upper bound on
+the independent runtime/deferred completion lanes.  Each entry is carried by
+one Consensus I/O job or one producer-ready queue, and those are the only
+places from which the producer can retire it.
+***************************************************************************)
+AsyncOutstandingCarrierInvariant ==
+  \A node \in ValidatorIds:
+    asyncOutstandingWork[node] =
+      ConsensusIoCandidates(node)
+        \cup SequenceSet(asyncIoReadyCompletions[node])
+        \cup SequenceSet(asyncLocalReadyCompletions[node])
+
+SerializedBusyOwners ==
+  AllPendingRequests \cup signProposals \cup signVotes \cup signTimeouts
+
+SerializedBusyOwnershipInvariant ==
+  RequestsUniqueByNode(SerializedBusyOwners)
+
+BusyCompletionCandidates(node) ==
+  {candidate \in AsyncCandidateSet:
+     /\ candidate.node = node
+     /\ candidate.class = "Completion"
+     /\ candidate.item = NoAsyncItem
+     /\ \/ \E request \in pendingProposal:
+              /\ request.node = node
+              /\ candidate.kind = "PersistProposal"
+              /\ candidate.view = request.proposal.view
+              /\ candidate.subject = request.proposal.subject
+        \/ \E request \in pendingPrepare:
+              /\ request.node = node
+              /\ candidate.kind = "PersistPrepare"
+              /\ candidate.view = request.vote.view
+              /\ candidate.subject = request.vote.subject
+        \/ \E request \in pendingObservePrepare:
+              /\ request.node = node
+              /\ candidate.kind = "PersistObservePrepare"
+              /\ candidate.view = request.qc.view
+              /\ candidate.subject = request.qc.subject
+        \/ \E request \in pendingLockCommit:
+              /\ request.node = node
+              /\ candidate.kind = "PersistLockCommit"
+              /\ candidate.view = request.qc.view
+              /\ candidate.subject = request.qc.subject
+        \/ \E request \in pendingTimeout:
+              /\ request.node = node
+              /\ candidate.kind = "PersistTimeout"
+              /\ candidate.view = request.vote.view
+              /\ candidate.subject = request.vote.highSubject
+        \/ \E request \in pendingInstallTC:
+              /\ request.node = node
+              /\ candidate.kind = "PersistInstallTC"
+              /\ candidate.view = request.tc.view
+        \/ \E request \in pendingDecision:
+              /\ request.node = node
+              /\ candidate.kind = "PersistDecision"
+              /\ candidate.view = request.qc.view
+              /\ candidate.subject = request.qc.subject
+        \/ \E request \in signProposals:
+              /\ request.node = node
+              /\ candidate.kind = "SignProposal"
+              /\ candidate.view = request.proposal.view
+              /\ candidate.subject = request.proposal.subject
+        \/ \E request \in signVotes:
+              /\ request.node = node
+              /\ candidate.kind = "SignVote"
+              /\ candidate.view = request.vote.view
+              /\ candidate.subject = request.vote.subject
+        \/ \E request \in signTimeouts:
+              /\ request.node = node
+              /\ candidate.kind = "SignTimeout"
+              /\ candidate.view = request.vote.view
+              /\ candidate.subject = request.vote.highSubject}
+
+ActiveBusyCompletionCarrier ==
+  QueuedCandidates \cup CausalCandidates \cup TrackedWorkCandidates
+
+(***************************************************************************
+A busy reducer is never justified by a completion stranded behind the
+production Busy-deferred head: its exact persistence/signature completion is
+owned by the active causal/I/O/runtime pipeline.  The completion is therefore
+reachable without first asking the busy reducer to accept unrelated work.
+***************************************************************************)
+BusyCompletionWitnessInvariant ==
+  \A node \in ValidatorIds:
+    ~NodeIdle(node) =>
+      BusyCompletionCandidates(node) \cap ActiveBusyCompletionCarrier # {}
+
+AsyncProgressOwnershipInvariant ==
+  /\ AsyncLogicalCandidateOwnershipInvariant
+  /\ AsyncOutstandingCarrierInvariant
+  /\ SerializedBusyOwnershipInvariant
+  /\ BusyCompletionWitnessInvariant
 
 AsyncIoContentTypeInvariant ==
   /\ AsyncIoQueueContentTypeInvariant

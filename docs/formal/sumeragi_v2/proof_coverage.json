@@ -119,14 +119,14 @@
       "requirement": "After a TC durably selects an exact historical Prepare lock, and only when no higher conflicting-subject local Prepare intent or known PrepareQC exists, current-generation durable body validation may create the exact WAL-backed Commit intent; higher same-subject reproposals remain admissible and every lower-high timeout/Commit pair retains installed-TC provenance",
       "module": "SumeragiV2Proofs",
       "symbol": "HistoricalTcLockedCommitAuthorizationObligation",
-      "status": "specified_unproved"
+      "status": "tlaps_proved"
     },
     {
       "id": "timeout-protection",
       "requirement": "Every formed TC and dual-quorum still-formable old-view Commit has either direct protection from that TC's high reference or an honest TC/Commit quorum-intersection witness whose non-strict timeout/Commit pair retains durable installed-TC authorization",
       "module": "SumeragiV2Proofs",
       "symbol": "TimeoutProtectionObligation",
-      "status": "specified_unproved"
+      "status": "tlaps_proved"
     },
     {
       "id": "agreement",
@@ -165,7 +165,7 @@
     },
     {
       "id": "effective-lock-body-acquisition",
-      "requirement": "Beyond the production-checked post-WAL EnterView lock selection, executor, runtime, worker, certified-request hash, outstanding-request index, and queue ownership preserve one immutable matching acquisition while only its reducer consumer advances; subject-level retained bytes obey same-subject reuse; superseded logical work and every pending, request, ready, byte, and capacity owner are retired exactly once; and post-GST fairness with terminating local work eventually services the rebound FetchBody -> BodyAvailable -> StoreBody -> ValidateBody path or a higher lock or decision supersedes it",
+      "requirement": "The source-linked Rust/Verus safety kernel proves post-WAL effective-lock selection, monotonic typed FetchBody -> BodyAvailable -> StoreBody -> ValidateBody identity, strictly advancing same-body consumer rebind, unique cross-lane completion ownership, exact supersession byte residuals, and bounded three-class runtime arbitration. The remaining composition must prove ordinary-Rust map/hash/service projection fidelity plus post-GST fair invocation and terminating local work eventually service the rebound path or a higher lock or decision supersedes it",
       "module": "SumeragiV2AsyncLivenessProofs",
       "symbol": "EffectiveLockBodyAcquisitionCompositionObligation",
       "status": "specified_unproved"
@@ -238,6 +238,13 @@
       "requirement": "For every responsive validator independently, once GST holds and that validator has a durable decision, it eventually recovers, validates, and applies the certified body without waiting for all other validators to decide",
       "module": "SumeragiV2AsyncLivenessProofs",
       "symbol": "ApplicationLivenessObligation",
+      "status": "specified_unproved"
+    },
+    {
+      "id": "successor-activation-catch-up-production-refinement",
+      "requirement": "Production successor startup refines the full-context Applied/Recovered token pipeline through ordered adapter, runtime, services, startup effects, clocks, marker, ingress, and publication actions; fail-closed recovery requires exact durable complete-tip authority and never fabricates physical predecessor completion; historical catch-up copies exact canonical signer-backed evidence through decision, body, store, validation, and application stages, with terminal observers applying without height advance or successor activation",
+      "module": "SumeragiV2ChainEpochRefinement",
+      "symbol": "SuccessorActivationAndHistoricalCatchUpProductionRefinementObligation",
       "status": "specified_unproved"
     },
     {

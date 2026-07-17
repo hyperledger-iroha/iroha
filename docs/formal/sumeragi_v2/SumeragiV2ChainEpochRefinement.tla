@@ -38,7 +38,18 @@ VARIABLES
   indexedAsyncState,
   joinedByContext,
   historicalCatchUpDecisions,
-  historicalCatchUpApplications
+  historicalCatchUpApplications,
+  historicalCatchUpStage,
+  successorActivationStatus,
+  successorPredecessorStatusOwnership,
+  successorActivationPrerequisites,
+  successorActivationTokens,
+  successorRecoveryAuthorities,
+  preparedSuccessorActivationMarkers,
+  publishedSuccessorActivationMarkers,
+  successorActivationFailures,
+  successorActivationFailureHistory,
+  successorActivationCompletions
 
 Chain == INSTANCE SumeragiV2ChainEpochProofs
   WITH certifiedHeight <- certifiedHeight,
@@ -921,7 +932,7 @@ without waiting for its peers. Joined membership is monotone, so old instances
 remain available to RunHistoricalServer after validators advance.
 
 The nested tuple layout is exactly <<vars, AsyncSchedulerVars>>: 46 Core
-components followed by 31 scheduler/transport components. Shape predicates
+components followed by 33 scheduler/transport components. Shape predicates
 exclude unmodelled fields and make every instance projection extensional.
 ***************************************************************************)
 IndexedCore(initialContext, component) ==
@@ -1013,30 +1024,32 @@ IndexedAsync(initialContext) ==
        asyncTimeoutEmitted <- IndexedScheduler(initialContext, 5),
        asyncRunnerPhase <- IndexedScheduler(initialContext, 6),
        asyncRunnerBudget <- IndexedScheduler(initialContext, 7),
-       asyncIoQueues <- IndexedScheduler(initialContext, 8),
-       asyncOutstandingWork <- IndexedScheduler(initialContext, 9),
-       asyncIoReadyCompletions <- IndexedScheduler(initialContext, 10),
-       asyncLocalReadyCompletions <- IndexedScheduler(initialContext, 11),
-       asyncNextCompletionSource <- IndexedScheduler(initialContext, 12),
-       asyncIoControlAvailable <- IndexedScheduler(initialContext, 13),
-       asyncDeferredCompletionQueues <- IndexedScheduler(initialContext, 14),
-       asyncDeferredProgressQueues <- IndexedScheduler(initialContext, 15),
-       asyncDeferredNormalQueues <- IndexedScheduler(initialContext, 16),
-       asyncNextDeferredClass <- IndexedScheduler(initialContext, 17),
-       asyncDeferredDrainOwed <- IndexedScheduler(initialContext, 18),
-       asyncCausalQueues <- IndexedScheduler(initialContext, 19),
-       asyncOutstandingTags <- IndexedScheduler(initialContext, 20),
-       asyncNodeDeadlines <- IndexedScheduler(initialContext, 21),
-       asyncRetransmitDeadlines <- IndexedScheduler(initialContext, 22),
-       asyncNodeServiceDeadlines <- IndexedScheduler(initialContext, 23),
-       asyncIoServiceDeadlines <- IndexedScheduler(initialContext, 24),
-       asyncSentItems <- IndexedScheduler(initialContext, 25),
-       asyncRetainedControl <- IndexedScheduler(initialContext, 26),
-       asyncActiveRequests <- IndexedScheduler(initialContext, 27),
-       asyncTransport <- IndexedScheduler(initialContext, 28),
-       asyncIngressLanes <- IndexedScheduler(initialContext, 29),
-       asyncIngressReady <- IndexedScheduler(initialContext, 30),
-       asyncHeldChunks <- IndexedScheduler(initialContext, 31)
+       asyncCausalAdmissionOwed <- IndexedScheduler(initialContext, 8),
+       asyncNextLocalSource <- IndexedScheduler(initialContext, 9),
+       asyncIoQueues <- IndexedScheduler(initialContext, 10),
+       asyncOutstandingWork <- IndexedScheduler(initialContext, 11),
+       asyncIoReadyCompletions <- IndexedScheduler(initialContext, 12),
+       asyncLocalReadyCompletions <- IndexedScheduler(initialContext, 13),
+       asyncNextCompletionSource <- IndexedScheduler(initialContext, 14),
+       asyncIoControlAvailable <- IndexedScheduler(initialContext, 15),
+       asyncDeferredCompletionQueues <- IndexedScheduler(initialContext, 16),
+       asyncDeferredProgressQueues <- IndexedScheduler(initialContext, 17),
+       asyncDeferredNormalQueues <- IndexedScheduler(initialContext, 18),
+       asyncNextDeferredClass <- IndexedScheduler(initialContext, 19),
+       asyncDeferredDrainOwed <- IndexedScheduler(initialContext, 20),
+       asyncCausalQueues <- IndexedScheduler(initialContext, 21),
+       asyncOutstandingTags <- IndexedScheduler(initialContext, 22),
+       asyncNodeDeadlines <- IndexedScheduler(initialContext, 23),
+       asyncRetransmitDeadlines <- IndexedScheduler(initialContext, 24),
+       asyncNodeServiceDeadlines <- IndexedScheduler(initialContext, 25),
+       asyncIoServiceDeadlines <- IndexedScheduler(initialContext, 26),
+       asyncSentItems <- IndexedScheduler(initialContext, 27),
+       asyncRetainedControl <- IndexedScheduler(initialContext, 28),
+       asyncActiveRequests <- IndexedScheduler(initialContext, 29),
+       asyncTransport <- IndexedScheduler(initialContext, 30),
+       asyncIngressLanes <- IndexedScheduler(initialContext, 31),
+       asyncIngressReady <- IndexedScheduler(initialContext, 32),
+       asyncHeldChunks <- IndexedScheduler(initialContext, 33)
 
 (***************************************************************************
 The indexed INSTANCE adds its context argument to inherited pure operators,
@@ -1154,30 +1167,32 @@ VerificationAsyncProof ==
        asyncTimeoutEmitted <- VerificationScheduler(5),
        asyncRunnerPhase <- VerificationScheduler(6),
        asyncRunnerBudget <- VerificationScheduler(7),
-       asyncIoQueues <- VerificationScheduler(8),
-       asyncOutstandingWork <- VerificationScheduler(9),
-       asyncIoReadyCompletions <- VerificationScheduler(10),
-       asyncLocalReadyCompletions <- VerificationScheduler(11),
-       asyncNextCompletionSource <- VerificationScheduler(12),
-       asyncIoControlAvailable <- VerificationScheduler(13),
-       asyncDeferredCompletionQueues <- VerificationScheduler(14),
-       asyncDeferredProgressQueues <- VerificationScheduler(15),
-       asyncDeferredNormalQueues <- VerificationScheduler(16),
-       asyncNextDeferredClass <- VerificationScheduler(17),
-       asyncDeferredDrainOwed <- VerificationScheduler(18),
-       asyncCausalQueues <- VerificationScheduler(19),
-       asyncOutstandingTags <- VerificationScheduler(20),
-       asyncNodeDeadlines <- VerificationScheduler(21),
-       asyncRetransmitDeadlines <- VerificationScheduler(22),
-       asyncNodeServiceDeadlines <- VerificationScheduler(23),
-       asyncIoServiceDeadlines <- VerificationScheduler(24),
-       asyncSentItems <- VerificationScheduler(25),
-       asyncRetainedControl <- VerificationScheduler(26),
-       asyncActiveRequests <- VerificationScheduler(27),
-       asyncTransport <- VerificationScheduler(28),
-       asyncIngressLanes <- VerificationScheduler(29),
-       asyncIngressReady <- VerificationScheduler(30),
-       asyncHeldChunks <- VerificationScheduler(31)
+       asyncCausalAdmissionOwed <- VerificationScheduler(8),
+       asyncNextLocalSource <- VerificationScheduler(9),
+       asyncIoQueues <- VerificationScheduler(10),
+       asyncOutstandingWork <- VerificationScheduler(11),
+       asyncIoReadyCompletions <- VerificationScheduler(12),
+       asyncLocalReadyCompletions <- VerificationScheduler(13),
+       asyncNextCompletionSource <- VerificationScheduler(14),
+       asyncIoControlAvailable <- VerificationScheduler(15),
+       asyncDeferredCompletionQueues <- VerificationScheduler(16),
+       asyncDeferredProgressQueues <- VerificationScheduler(17),
+       asyncDeferredNormalQueues <- VerificationScheduler(18),
+       asyncNextDeferredClass <- VerificationScheduler(19),
+       asyncDeferredDrainOwed <- VerificationScheduler(20),
+       asyncCausalQueues <- VerificationScheduler(21),
+       asyncOutstandingTags <- VerificationScheduler(22),
+       asyncNodeDeadlines <- VerificationScheduler(23),
+       asyncRetransmitDeadlines <- VerificationScheduler(24),
+       asyncNodeServiceDeadlines <- VerificationScheduler(25),
+       asyncIoServiceDeadlines <- VerificationScheduler(26),
+       asyncSentItems <- VerificationScheduler(27),
+       asyncRetainedControl <- VerificationScheduler(28),
+       asyncActiveRequests <- VerificationScheduler(29),
+       asyncTransport <- VerificationScheduler(30),
+       asyncIngressLanes <- VerificationScheduler(31),
+       asyncIngressReady <- VerificationScheduler(32),
+       asyncHeldChunks <- VerificationScheduler(33)
 
 AdmissibleContextRecords ==
   {initialContext \in ContextRecords:
@@ -1188,12 +1203,15 @@ IndexedAsyncStateShape ==
   /\ \A initialContext \in AdmissibleContextRecords:
        /\ Len(indexedAsyncState[initialContext]) = 2
        /\ Len(indexedAsyncState[initialContext][1]) = 46
-       /\ Len(indexedAsyncState[initialContext][2]) = 31
+       /\ Len(indexedAsyncState[initialContext][2]) = 33
 
 JoinedByContextShape ==
   joinedByContext \in [AdmissibleContextRecords -> SUBSET ValidatorIds]
 
 GenesisContext == ContextRecord(0, <<>>)
+
+CanonicalIndexedContext(blockHeight) ==
+  Chain!ContextRecord(blockHeight, Chain!HistoryThrough(blockHeight))
 
 JoinedContexts ==
   {initialContext \in AdmissibleContextRecords:
@@ -1244,6 +1262,120 @@ IndexedApplicationEvidence ==
 HistoricalCatchUpShape ==
   /\ historicalCatchUpDecisions \subseteq Chain!DecisionEvidenceSet
   /\ historicalCatchUpApplications \subseteq historicalCatchUpDecisions
+  /\ historicalCatchUpStage
+       \in [AdmissibleContextRecords ->
+             [ValidatorIds ->
+               {"Idle", "DecisionRecovered", "BodyRecovered",
+                "Stored", "Validated", "Applied"}]]
+
+HistoricalCatchUpVars ==
+  <<historicalCatchUpDecisions, historicalCatchUpApplications,
+    historicalCatchUpStage>>
+
+SuccessorActivationStatusValues ==
+  {"Idle", "Queued", "Running", "Complete"}
+
+SuccessorPredecessorOwnershipValues == {"Published", "Absent"}
+
+SuccessorActivationRequiredPrerequisites ==
+  {"DeferredStatus", "AdapterReady", "RuntimeReady", "ServicesReady",
+   "StartupApplied", "ClocksArmed", "IngressOpen"}
+
+SuccessorActivationAdapterPrerequisites ==
+  {"DeferredStatus", "AdapterReady"}
+
+SuccessorActivationRuntimePrerequisites ==
+  SuccessorActivationAdapterPrerequisites \cup {"RuntimeReady"}
+
+SuccessorActivationServicePrerequisites ==
+  SuccessorActivationRuntimePrerequisites \cup {"ServicesReady"}
+
+SuccessorActivationStartupPrerequisites ==
+  SuccessorActivationServicePrerequisites \cup {"StartupApplied"}
+
+SuccessorActivationClockPrerequisites ==
+  SuccessorActivationStartupPrerequisites \cup {"ClocksArmed"}
+
+SuccessorActivationOwnerSet ==
+  [parentContext: AdmissibleContextRecords, node: ValidatorIds]
+
+SuccessorActivationTokenSet ==
+  [kind: {"Applied", "Recovered"},
+   parentContext: AdmissibleContextRecords,
+   node: ValidatorIds,
+   successorContext: AdmissibleContextRecords]
+
+SuccessorRecoveryAuthoritySet ==
+  [parentContext: AdmissibleContextRecords,
+   node: ValidatorIds,
+   successorContext: AdmissibleContextRecords,
+   application: Chain!DecisionEvidenceSet]
+
+SuccessorActivationMarkerSet ==
+  [parentContext: AdmissibleContextRecords,
+   node: ValidatorIds,
+   successorContext: AdmissibleContextRecords,
+   successorHeight: Heights,
+   generation: Generations,
+   view: Views,
+   transition: {"SuccessorHeightActivated"}]
+
+SuccessorActivationOwner(parentContext, node) ==
+  [parentContext |-> parentContext, node |-> node]
+
+SuccessorActivationToken(kind, parentContext, node, successorContext) ==
+  [kind |-> kind,
+   parentContext |-> parentContext,
+   node |-> node,
+   successorContext |-> successorContext]
+
+CompleteTipRecoveryAuthorityRecord(parentContext, node,
+                                   successorContext, application) ==
+  [parentContext |-> parentContext,
+   node |-> node,
+   successorContext |-> successorContext,
+   application |-> application]
+
+SuccessorActivationMarker(parentContext, node, successorContext) ==
+  [parentContext |-> parentContext,
+   node |-> node,
+   successorContext |-> successorContext,
+   successorHeight |-> successorContext.height,
+   generation |-> 0,
+   view |-> 0,
+   transition |-> "SuccessorHeightActivated"]
+
+SuccessorActivationVars ==
+  <<successorActivationStatus,
+    successorPredecessorStatusOwnership,
+    successorActivationPrerequisites,
+    successorActivationTokens,
+    successorRecoveryAuthorities,
+    preparedSuccessorActivationMarkers,
+    publishedSuccessorActivationMarkers,
+    successorActivationFailures,
+    successorActivationFailureHistory,
+    successorActivationCompletions>>
+
+SuccessorActivationShape ==
+  /\ successorActivationStatus
+       \in [AdmissibleContextRecords ->
+             [ValidatorIds -> SuccessorActivationStatusValues]]
+  /\ successorPredecessorStatusOwnership
+       \in [AdmissibleContextRecords ->
+             [ValidatorIds -> SuccessorPredecessorOwnershipValues]]
+  /\ successorActivationPrerequisites
+       \in [AdmissibleContextRecords ->
+             [ValidatorIds -> SUBSET SuccessorActivationRequiredPrerequisites]]
+  /\ successorActivationTokens \subseteq SuccessorActivationTokenSet
+  /\ successorRecoveryAuthorities \subseteq SuccessorRecoveryAuthoritySet
+  /\ preparedSuccessorActivationMarkers
+       \subseteq SuccessorActivationMarkerSet
+  /\ publishedSuccessorActivationMarkers
+       \subseteq SuccessorActivationMarkerSet
+  /\ successorActivationFailures \subseteq SuccessorActivationOwnerSet
+  /\ successorActivationFailureHistory \subseteq SuccessorActivationOwnerSet
+  /\ successorActivationCompletions \subseteq SuccessorActivationTokenSet
 
 IndexedDecisionReceiptProjection ==
   durableDecisionEvidence = IndexedDecisionEvidence
@@ -1257,14 +1389,16 @@ IndexedTotalReceiptProjection ==
 
 IndexedChainVars ==
   <<indexedAsyncState, joinedByContext,
-    historicalCatchUpDecisions, historicalCatchUpApplications,
+    HistoricalCatchUpVars, SuccessorActivationVars,
     Chain!ChainEpochVars>>
 
 (***************************************************************************
 The joined runner is a restriction of the exact AsyncNext relation, never an
-alternate step. Current consensus work requires only the selected node's join.
-Historical serving and outstanding IO remain enabled for every node that ever
-joined the context, even after its authoritative nodeContext advances.
+alternate step. Current consensus work requires only the selected node's join;
+both RunNode and direct Commit-certificate discovery also require that this is
+the node's authoritative current context. Historical serving and outstanding
+IO remain enabled for every node that ever joined the context, even after its
+authoritative nodeContext advances.
 ***************************************************************************)
 IndexedJoinedRunnerStep(initialContext) ==
   \/ \E node \in IndexedAsync(initialContext)!AsyncCurrentResponsiveVoters:
@@ -1277,6 +1411,11 @@ IndexedJoinedRunnerStep(initialContext) ==
 IndexedJoinedNonRunnerStep(initialContext) ==
   /\ \/ IndexedAsync(initialContext)!AsyncSetGST
      \/ IndexedAsync(initialContext)!AsyncTick
+     \/ \E node \in IndexedAsync(initialContext)!
+                    AsyncCurrentResponsiveVoters:
+          /\ IndexedNodeCurrentAt(initialContext, node)
+          /\ IndexedAsync(initialContext)!
+               DirectCommitCertificateDiscoveryStep(node)
      \/ \E node \in IndexedAsync(initialContext)!AsyncCurrentResponsiveVoters:
           /\ node \in joinedByContext[initialContext]
           /\ IndexedAsync(initialContext)!ServiceIoWorker(node)
@@ -1285,7 +1424,7 @@ IndexedJoinedNonRunnerStep(initialContext) ==
           /\ IndexedAsync(initialContext)!EnqueueIoLocalControl(node)
      \/ IndexedAsync(initialContext)!AsyncNetworkStep
      \/ IndexedAsync(initialContext)!AsyncFaultStep
-  /\ UNCHANGED IndexedScheduler(initialContext, 23)
+  /\ UNCHANGED IndexedScheduler(initialContext, 25)
 
 IndexedJoinedNonCrashStep(initialContext) ==
   /\ (IndexedJoinedRunnerStep(initialContext)
@@ -1323,14 +1462,65 @@ NoNewIndexedDurableReceipt(initialContext) ==
 
 IndexedDecisionReceiptHandoff(initialContext, decision) ==
   /\ NewIndexedDecisionReceipt(initialContext, decision)
-  /\ UNCHANGED joinedByContext
+  /\ UNCHANGED <<joinedByContext, SuccessorActivationVars>>
   /\ \/ Chain!RecordCertifiedNext(decision)
      \/ Chain!RecordKnownDecision(decision)
 
 SuccessorContextFor(application) ==
-  LET nextHeight == nodeHeight[application.node] + 1
-      nextLineage == Chain!HistoryThrough(nextHeight)
-  IN Chain!ContextRecord(nextHeight, nextLineage)
+  CanonicalIndexedContext(application.qc.context.height + 1)
+
+ExactDurableParentApplication(parentContext, node, application) ==
+  /\ parentContext.height < MaxHeight
+  /\ application \in durableDecisionEvidence
+  /\ application \in durableApplicationEvidence
+  /\ application.node = node
+  /\ application.qc.context = parentContext
+  /\ application.qc.height = parentContext.height
+  /\ Chain!CanonicalCommitForSlot(
+       application.qc, parentContext.height + 1)
+  /\ nodeHeight[node] = parentContext.height + 1
+  /\ nodeContext[node] =
+       CanonicalIndexedContext(parentContext.height + 1)
+
+ExactSuccessorActivationToken(kind, parentContext, node,
+                              successorContext) ==
+  /\ successorContext =
+       CanonicalIndexedContext(parentContext.height + 1)
+  /\ SuccessorActivationToken(
+       kind, parentContext, node, successorContext)
+       \in successorActivationTokens
+
+ExactCompleteTipRecoveryAuthority(parentContext, node,
+                                  successorContext, application) ==
+  /\ ExactDurableParentApplication(parentContext, node, application)
+  /\ successorContext =
+       CanonicalIndexedContext(parentContext.height + 1)
+  /\ CompleteTipRecoveryAuthorityRecord(
+       parentContext, node, successorContext, application)
+       \in successorRecoveryAuthorities
+
+QueueSuccessorActivation(parentContext, node) ==
+  /\ parentContext.height < MaxHeight
+  /\ successorActivationStatus[parentContext][node] = "Idle"
+  /\ successorPredecessorStatusOwnership[parentContext][node] = "Absent"
+  /\ SuccessorActivationOwner(parentContext, node)
+       \notin successorActivationFailures
+  /\ successorActivationStatus' =
+       [successorActivationStatus EXCEPT
+          ![parentContext][node] = "Queued"]
+  /\ successorPredecessorStatusOwnership' =
+       [successorPredecessorStatusOwnership EXCEPT
+          ![parentContext][node] = "Published"]
+  /\ successorActivationPrerequisites' =
+       [successorActivationPrerequisites EXCEPT
+          ![parentContext][node] = {}]
+  /\ UNCHANGED <<successorActivationTokens,
+                  successorRecoveryAuthorities,
+                  preparedSuccessorActivationMarkers,
+                  publishedSuccessorActivationMarkers,
+                  successorActivationFailures,
+                  successorActivationFailureHistory,
+                  successorActivationCompletions>>
 
 (***************************************************************************
 RecordAppliedNext is defined only below the finite chain horizon. The certified
@@ -1355,16 +1545,15 @@ IndexedApplicationReceiptHandoff(initialContext, application) ==
   /\ NewIndexedApplicationReceipt(initialContext, application)
   /\ \/ /\ IndexedNodeCurrentAt(initialContext, application.node)
         /\ Chain!RecordAppliedNext(application)
-        /\ joinedByContext' =
-             [joinedByContext EXCEPT
-                ![SuccessorContextFor(application)] =
-                  @ \cup {application.node}]
-     \/ /\ Chain!RecordKnownApplication(application)
+        /\ QueueSuccessorActivation(initialContext, application.node)
         /\ UNCHANGED joinedByContext
+     \/ /\ Chain!RecordKnownApplication(application)
+        /\ UNCHANGED <<joinedByContext, SuccessorActivationVars>>
 
 IndexedReceiptFreeChainStutter(initialContext) ==
   /\ NoNewIndexedDurableReceipt(initialContext)
-  /\ UNCHANGED <<joinedByContext, Chain!ChainEpochVars>>
+  /\ UNCHANGED <<joinedByContext, SuccessorActivationVars,
+                  Chain!ChainEpochVars>>
 
 IndexedReceiptClassification(initialContext) ==
   \/ IndexedReceiptFreeChainStutter(initialContext)
@@ -1374,21 +1563,440 @@ IndexedReceiptClassification(initialContext) ==
        IndexedApplicationReceiptHandoff(initialContext, application)
 
 (***************************************************************************
+Successor activation is a durable, ordered protocol rather than an atomic
+side effect of application.  `successorPredecessorStatusOwnership` models the
+process-visible predecessor registry entry independently from durable parent
+application evidence.  Applied startup may publish that predecessor entry;
+recovery after a fail-closed reset must authenticate the exact durable tip
+while the predecessor entry is absent.  Both paths share the ordered startup
+pipeline, but only the Applied publication writes physical `Complete`.
+***************************************************************************)
+SuccessorActivationEnvironmentStutter ==
+  /\ UNCHANGED indexedAsyncState
+  /\ UNCHANGED HistoricalCatchUpVars
+  /\ UNCHANGED Chain!ChainEpochVars
+
+SuccessorActivationCredentialReady(parentContext, node,
+                                   successorContext) ==
+  /\ successorActivationStatus[parentContext][node] = "Running"
+  /\ SuccessorActivationOwner(parentContext, node)
+       \notin successorActivationFailures
+  /\ \/ /\ successorPredecessorStatusOwnership[parentContext][node]
+              = "Published"
+        /\ ExactSuccessorActivationToken(
+             "Applied", parentContext, node, successorContext)
+     \/ /\ successorPredecessorStatusOwnership[parentContext][node]
+              = "Absent"
+        /\ ExactSuccessorActivationToken(
+             "Recovered", parentContext, node, successorContext)
+        /\ \E application \in Chain!DecisionEvidenceSet:
+             ExactCompleteTipRecoveryAuthority(
+               parentContext, node, successorContext, application)
+
+BeginSuccessorActivation(parentContext, node, successorContext) ==
+  /\ successorContext =
+       CanonicalIndexedContext(parentContext.height + 1)
+  /\ successorActivationStatus[parentContext][node] = "Queued"
+  /\ successorPredecessorStatusOwnership[parentContext][node] = "Published"
+  /\ \E application \in Chain!DecisionEvidenceSet:
+       ExactDurableParentApplication(parentContext, node, application)
+  /\ successorActivationStatus' =
+       [successorActivationStatus EXCEPT
+          ![parentContext][node] = "Running"]
+  /\ UNCHANGED <<successorPredecessorStatusOwnership,
+                  successorActivationPrerequisites,
+                  successorActivationTokens,
+                  successorRecoveryAuthorities,
+                  preparedSuccessorActivationMarkers,
+                  publishedSuccessorActivationMarkers,
+                  successorActivationFailures,
+                  successorActivationFailureHistory,
+                  successorActivationCompletions,
+                  joinedByContext>>
+  /\ SuccessorActivationEnvironmentStutter
+
+BindAppliedSuccessorActivationToken(parentContext, node,
+                                    successorContext) ==
+  LET token == SuccessorActivationToken(
+                  "Applied", parentContext, node, successorContext)
+  IN /\ successorContext =
+           CanonicalIndexedContext(parentContext.height + 1)
+     /\ successorActivationStatus[parentContext][node] = "Running"
+     /\ successorPredecessorStatusOwnership[parentContext][node]
+          = "Published"
+     /\ successorActivationPrerequisites[parentContext][node] = {}
+     /\ SuccessorActivationOwner(parentContext, node)
+          \notin successorActivationFailures
+     /\ \E application \in Chain!DecisionEvidenceSet:
+          ExactDurableParentApplication(parentContext, node, application)
+     /\ token \notin successorActivationTokens
+     /\ successorActivationTokens' =
+          successorActivationTokens \cup {token}
+     /\ UNCHANGED <<successorActivationStatus,
+                     successorPredecessorStatusOwnership,
+                     successorActivationPrerequisites,
+                     successorRecoveryAuthorities,
+                     preparedSuccessorActivationMarkers,
+                     publishedSuccessorActivationMarkers,
+                     successorActivationFailures,
+                     successorActivationFailureHistory,
+                     successorActivationCompletions,
+                     joinedByContext>>
+     /\ SuccessorActivationEnvironmentStutter
+
+FailClosedSuccessorStartup(parentContext, node) ==
+  LET owner == SuccessorActivationOwner(parentContext, node)
+  IN /\ successorActivationStatus[parentContext][node]
+           \in {"Queued", "Running"}
+     /\ successorPredecessorStatusOwnership[parentContext][node]
+          = "Published"
+     /\ owner \notin successorActivationFailureHistory
+     /\ successorActivationStatus' =
+          [successorActivationStatus EXCEPT
+             ![parentContext][node] = "Queued"]
+     /\ successorPredecessorStatusOwnership' =
+          [successorPredecessorStatusOwnership EXCEPT
+             ![parentContext][node] = "Absent"]
+     /\ successorActivationPrerequisites' =
+          [successorActivationPrerequisites EXCEPT
+             ![parentContext][node] = {}]
+     /\ successorActivationTokens' =
+          {token \in successorActivationTokens:
+             \/ token.parentContext # parentContext
+             \/ token.node # node}
+     /\ successorRecoveryAuthorities' =
+          {authority \in successorRecoveryAuthorities:
+             \/ authority.parentContext # parentContext
+             \/ authority.node # node}
+     /\ preparedSuccessorActivationMarkers' =
+          {marker \in preparedSuccessorActivationMarkers:
+             \/ marker.parentContext # parentContext
+             \/ marker.node # node}
+     /\ successorActivationFailures' =
+          successorActivationFailures \cup {owner}
+     /\ successorActivationFailureHistory' =
+          successorActivationFailureHistory \cup {owner}
+     /\ UNCHANGED <<publishedSuccessorActivationMarkers,
+                     successorActivationCompletions,
+                     joinedByContext>>
+     /\ SuccessorActivationEnvironmentStutter
+
+AuthenticateRecoveredSuccessorActivation(parentContext, node,
+                                          successorContext, application) ==
+  LET owner == SuccessorActivationOwner(parentContext, node)
+      token == SuccessorActivationToken(
+                 "Recovered", parentContext, node, successorContext)
+      authority == CompleteTipRecoveryAuthorityRecord(
+                     parentContext, node, successorContext, application)
+  IN /\ successorContext =
+           CanonicalIndexedContext(parentContext.height + 1)
+     /\ successorActivationStatus[parentContext][node] = "Queued"
+     /\ successorPredecessorStatusOwnership[parentContext][node] = "Absent"
+     /\ successorActivationPrerequisites[parentContext][node] = {}
+     /\ owner \in successorActivationFailures
+     /\ owner \in successorActivationFailureHistory
+     /\ ExactDurableParentApplication(parentContext, node, application)
+     /\ token \notin successorActivationTokens
+     /\ authority \notin successorRecoveryAuthorities
+     /\ successorActivationStatus' =
+          [successorActivationStatus EXCEPT
+             ![parentContext][node] = "Running"]
+     /\ successorActivationTokens' =
+          successorActivationTokens \cup {token}
+     /\ successorRecoveryAuthorities' =
+          successorRecoveryAuthorities \cup {authority}
+     /\ successorActivationFailures' =
+          successorActivationFailures \ {owner}
+     /\ UNCHANGED <<successorPredecessorStatusOwnership,
+                     successorActivationPrerequisites,
+                     preparedSuccessorActivationMarkers,
+                     publishedSuccessorActivationMarkers,
+                     successorActivationFailureHistory,
+                     successorActivationCompletions,
+                     joinedByContext>>
+     /\ SuccessorActivationEnvironmentStutter
+
+OpenDeferredSuccessorAdapter(parentContext, node, successorContext) ==
+  /\ SuccessorActivationCredentialReady(
+       parentContext, node, successorContext)
+  /\ successorActivationPrerequisites[parentContext][node] = {}
+  /\ successorActivationPrerequisites' =
+       [successorActivationPrerequisites EXCEPT
+          ![parentContext][node] = SuccessorActivationAdapterPrerequisites]
+  /\ UNCHANGED <<successorActivationStatus,
+                  successorPredecessorStatusOwnership,
+                  successorActivationTokens,
+                  successorRecoveryAuthorities,
+                  preparedSuccessorActivationMarkers,
+                  publishedSuccessorActivationMarkers,
+                  successorActivationFailures,
+                  successorActivationFailureHistory,
+                  successorActivationCompletions,
+                  joinedByContext>>
+  /\ SuccessorActivationEnvironmentStutter
+
+ConstructSuccessorRuntime(parentContext, node, successorContext) ==
+  /\ SuccessorActivationCredentialReady(
+       parentContext, node, successorContext)
+  /\ successorActivationPrerequisites[parentContext][node]
+       = SuccessorActivationAdapterPrerequisites
+  /\ successorActivationPrerequisites' =
+       [successorActivationPrerequisites EXCEPT
+          ![parentContext][node] = SuccessorActivationRuntimePrerequisites]
+  /\ UNCHANGED <<successorActivationStatus,
+                  successorPredecessorStatusOwnership,
+                  successorActivationTokens,
+                  successorRecoveryAuthorities,
+                  preparedSuccessorActivationMarkers,
+                  publishedSuccessorActivationMarkers,
+                  successorActivationFailures,
+                  successorActivationFailureHistory,
+                  successorActivationCompletions,
+                  joinedByContext>>
+  /\ SuccessorActivationEnvironmentStutter
+
+StartSuccessorServices(parentContext, node, successorContext) ==
+  /\ SuccessorActivationCredentialReady(
+       parentContext, node, successorContext)
+  /\ successorActivationPrerequisites[parentContext][node]
+       = SuccessorActivationRuntimePrerequisites
+  /\ successorActivationPrerequisites' =
+       [successorActivationPrerequisites EXCEPT
+          ![parentContext][node] = SuccessorActivationServicePrerequisites]
+  /\ UNCHANGED <<successorActivationStatus,
+                  successorPredecessorStatusOwnership,
+                  successorActivationTokens,
+                  successorRecoveryAuthorities,
+                  preparedSuccessorActivationMarkers,
+                  publishedSuccessorActivationMarkers,
+                  successorActivationFailures,
+                  successorActivationFailureHistory,
+                  successorActivationCompletions,
+                  joinedByContext>>
+  /\ SuccessorActivationEnvironmentStutter
+
+ApplySuccessorStartupEffects(parentContext, node, successorContext) ==
+  /\ SuccessorActivationCredentialReady(
+       parentContext, node, successorContext)
+  /\ successorActivationPrerequisites[parentContext][node]
+       = SuccessorActivationServicePrerequisites
+  /\ successorActivationPrerequisites' =
+       [successorActivationPrerequisites EXCEPT
+          ![parentContext][node] = SuccessorActivationStartupPrerequisites]
+  /\ UNCHANGED <<successorActivationStatus,
+                  successorPredecessorStatusOwnership,
+                  successorActivationTokens,
+                  successorRecoveryAuthorities,
+                  preparedSuccessorActivationMarkers,
+                  publishedSuccessorActivationMarkers,
+                  successorActivationFailures,
+                  successorActivationFailureHistory,
+                  successorActivationCompletions,
+                  joinedByContext>>
+  /\ SuccessorActivationEnvironmentStutter
+
+ArmSuccessorClocks(parentContext, node, successorContext) ==
+  /\ SuccessorActivationCredentialReady(
+       parentContext, node, successorContext)
+  /\ successorActivationPrerequisites[parentContext][node]
+       = SuccessorActivationStartupPrerequisites
+  /\ successorActivationPrerequisites' =
+       [successorActivationPrerequisites EXCEPT
+          ![parentContext][node] = SuccessorActivationClockPrerequisites]
+  /\ UNCHANGED <<successorActivationStatus,
+                  successorPredecessorStatusOwnership,
+                  successorActivationTokens,
+                  successorRecoveryAuthorities,
+                  preparedSuccessorActivationMarkers,
+                  publishedSuccessorActivationMarkers,
+                  successorActivationFailures,
+                  successorActivationFailureHistory,
+                  successorActivationCompletions,
+                  joinedByContext>>
+  /\ SuccessorActivationEnvironmentStutter
+
+PrepareSuccessorActivationMarker(parentContext, node, successorContext) ==
+  LET marker == SuccessorActivationMarker(
+                  parentContext, node, successorContext)
+  IN /\ SuccessorActivationCredentialReady(
+           parentContext, node, successorContext)
+     /\ successorActivationPrerequisites[parentContext][node]
+          = SuccessorActivationClockPrerequisites
+     /\ marker \notin preparedSuccessorActivationMarkers
+     /\ marker \notin publishedSuccessorActivationMarkers
+     /\ preparedSuccessorActivationMarkers' =
+          preparedSuccessorActivationMarkers \cup {marker}
+     /\ UNCHANGED <<successorActivationStatus,
+                     successorPredecessorStatusOwnership,
+                     successorActivationPrerequisites,
+                     successorActivationTokens,
+                     successorRecoveryAuthorities,
+                     publishedSuccessorActivationMarkers,
+                     successorActivationFailures,
+                     successorActivationFailureHistory,
+                     successorActivationCompletions,
+                     joinedByContext>>
+     /\ SuccessorActivationEnvironmentStutter
+
+OpenSuccessorIngress(parentContext, node, successorContext) ==
+  LET marker == SuccessorActivationMarker(
+                  parentContext, node, successorContext)
+  IN /\ SuccessorActivationCredentialReady(
+           parentContext, node, successorContext)
+     /\ successorActivationPrerequisites[parentContext][node]
+          = SuccessorActivationClockPrerequisites
+     /\ marker \in preparedSuccessorActivationMarkers
+     /\ successorActivationPrerequisites' =
+          [successorActivationPrerequisites EXCEPT
+             ![parentContext][node] =
+               SuccessorActivationRequiredPrerequisites]
+     /\ UNCHANGED <<successorActivationStatus,
+                     successorPredecessorStatusOwnership,
+                     successorActivationTokens,
+                     successorRecoveryAuthorities,
+                     preparedSuccessorActivationMarkers,
+                     publishedSuccessorActivationMarkers,
+                     successorActivationFailures,
+                     successorActivationFailureHistory,
+                     successorActivationCompletions,
+                     joinedByContext>>
+     /\ SuccessorActivationEnvironmentStutter
+
+ActivateAppliedSuccessorHeight(parentContext, node, successorContext) ==
+  LET token == SuccessorActivationToken(
+                  "Applied", parentContext, node, successorContext)
+      marker == SuccessorActivationMarker(
+                   parentContext, node, successorContext)
+  IN /\ SuccessorActivationCredentialReady(
+           parentContext, node, successorContext)
+     /\ ExactSuccessorActivationToken(
+          "Applied", parentContext, node, successorContext)
+     /\ successorPredecessorStatusOwnership[parentContext][node]
+          = "Published"
+     /\ successorActivationStatus[parentContext][node] = "Running"
+     /\ successorActivationPrerequisites[parentContext][node]
+          = SuccessorActivationRequiredPrerequisites
+     /\ marker \in preparedSuccessorActivationMarkers
+     /\ SuccessorActivationOwner(parentContext, node)
+          \notin successorActivationFailures
+     /\ successorActivationStatus' =
+          [successorActivationStatus EXCEPT
+             ![parentContext][node] = "Complete"]
+     /\ successorPredecessorStatusOwnership' =
+          [successorPredecessorStatusOwnership EXCEPT
+             ![parentContext][node] = "Absent"]
+     /\ successorActivationTokens' = successorActivationTokens \ {token}
+     /\ preparedSuccessorActivationMarkers' =
+          preparedSuccessorActivationMarkers \ {marker}
+     /\ publishedSuccessorActivationMarkers' =
+          publishedSuccessorActivationMarkers \cup {marker}
+     /\ successorActivationCompletions' =
+          successorActivationCompletions \cup {token}
+     /\ joinedByContext' =
+          [joinedByContext EXCEPT ![successorContext] = @ \cup {node}]
+     /\ UNCHANGED <<successorActivationPrerequisites,
+                     successorRecoveryAuthorities,
+                     successorActivationFailures,
+                     successorActivationFailureHistory>>
+     /\ SuccessorActivationEnvironmentStutter
+
+ActivateRecoveredSuccessorHeight(parentContext, node, successorContext) ==
+  LET token == SuccessorActivationToken(
+                  "Recovered", parentContext, node, successorContext)
+      marker == SuccessorActivationMarker(
+                   parentContext, node, successorContext)
+  IN /\ SuccessorActivationCredentialReady(
+           parentContext, node, successorContext)
+     /\ ExactSuccessorActivationToken(
+          "Recovered", parentContext, node, successorContext)
+     /\ successorPredecessorStatusOwnership[parentContext][node] = "Absent"
+     /\ successorActivationStatus[parentContext][node] = "Running"
+     /\ successorActivationPrerequisites[parentContext][node]
+          = SuccessorActivationRequiredPrerequisites
+     /\ marker \in preparedSuccessorActivationMarkers
+     /\ SuccessorActivationOwner(parentContext, node)
+          \notin successorActivationFailures
+     /\ \E application \in Chain!DecisionEvidenceSet:
+          ExactCompleteTipRecoveryAuthority(
+            parentContext, node, successorContext, application)
+     /\ UNCHANGED successorActivationStatus
+     /\ successorActivationTokens' = successorActivationTokens \ {token}
+     /\ successorRecoveryAuthorities' =
+          {authority \in successorRecoveryAuthorities:
+             \/ authority.parentContext # parentContext
+             \/ authority.node # node}
+     /\ preparedSuccessorActivationMarkers' =
+          preparedSuccessorActivationMarkers \ {marker}
+     /\ publishedSuccessorActivationMarkers' =
+          publishedSuccessorActivationMarkers \cup {marker}
+     /\ successorActivationCompletions' =
+          successorActivationCompletions \cup {token}
+     /\ joinedByContext' =
+          [joinedByContext EXCEPT ![successorContext] = @ \cup {node}]
+     /\ UNCHANGED <<successorPredecessorStatusOwnership,
+                     successorActivationPrerequisites,
+                     successorActivationFailures,
+                     successorActivationFailureHistory>>
+     /\ SuccessorActivationEnvironmentStutter
+
+SuccessorHeightActivated(parentContext, node) ==
+  LET successorContext ==
+        CanonicalIndexedContext(parentContext.height + 1)
+      marker == SuccessorActivationMarker(
+                  parentContext, node, successorContext)
+  IN /\ parentContext.height < MaxHeight
+     /\ successorPredecessorStatusOwnership[parentContext][node] = "Absent"
+     /\ marker \in publishedSuccessorActivationMarkers
+     /\ node \in joinedByContext[successorContext]
+     /\ \/ /\ SuccessorActivationToken(
+                  "Applied", parentContext, node, successorContext)
+                  \in successorActivationCompletions
+            /\ successorActivationStatus[parentContext][node] = "Complete"
+        \/ /\ SuccessorActivationToken(
+                  "Recovered", parentContext, node, successorContext)
+                  \in successorActivationCompletions
+            /\ successorActivationStatus[parentContext][node] = "Running"
+
+IndexedSuccessorActivationProgressStep(parentContext, node) ==
+  /\ SuccessorActivationShape
+  /\ \E successorContext \in AdmissibleContextRecords:
+       \/ BeginSuccessorActivation(parentContext, node, successorContext)
+       \/ BindAppliedSuccessorActivationToken(
+            parentContext, node, successorContext)
+       \/ FailClosedSuccessorStartup(parentContext, node)
+       \/ \E application \in Chain!DecisionEvidenceSet:
+            AuthenticateRecoveredSuccessorActivation(
+              parentContext, node, successorContext, application)
+       \/ OpenDeferredSuccessorAdapter(
+            parentContext, node, successorContext)
+       \/ ConstructSuccessorRuntime(parentContext, node, successorContext)
+       \/ StartSuccessorServices(parentContext, node, successorContext)
+       \/ ApplySuccessorStartupEffects(
+            parentContext, node, successorContext)
+       \/ ArmSuccessorClocks(parentContext, node, successorContext)
+       \/ PrepareSuccessorActivationMarker(
+            parentContext, node, successorContext)
+       \/ OpenSuccessorIngress(parentContext, node, successorContext)
+       \/ ActivateAppliedSuccessorHeight(
+            parentContext, node, successorContext)
+       \/ ActivateRecoveredSuccessorHeight(
+            parentContext, node, successorContext)
+  /\ SuccessorActivationShape'
+
+(***************************************************************************
 Authenticated historical catch-up.
 
 Production `V2BlockSyncDiscovery` signs a request for the lagging node's exact
 frozen context. `V2BlockSyncServer` may answer only from canonical Kura history,
 and the historical body server must be one of the CommitQC's certified signers.
-The response then enters the ordinary reducer: first the CommitQC is durably
-recorded, then its exact body is stored, deterministically validated, applied,
-and only that node joins the successor context.
+The response then enters the ordinary reducer through the exact staged path
+Idle -> DecisionRecovered -> BodyRecovered -> Stored -> Validated -> Applied.
+For a nonterminal parent, application queues the ordinary successor activation
+pipeline but does not join it. At the finite terminal horizon, a responsive
+observer or validator records known application without advancing nodeHeight,
+creating a successor activation, or joining a fictitious context.
 
-The two actions below expose those two durable receipt boundaries. They do not
-change any authoritative Async instance. A target must be responsive, locally
-behind, and still missing the old context's exact application. Production v2
-block sync applies that same rule to observers, newly entering validators, and
-restarted validators that were members of the frozen old roster: requester
-authentication is identity/context based, while only the historical body
+Requester authentication is identity/context based; only the historical body
 responder must be a certified old-roster signer. Exact context, round, subject,
 QC, and signer-backed body identity are copied from already durable canonical
 decision and application evidence; no synthetic finality artifact is created.
@@ -1406,7 +2014,6 @@ roster, context, phase, or per-node application condition is weakened.
 ***************************************************************************)
 
 HistoricalCatchUpTarget(initialContext, node) ==
-  /\ initialContext.height < MaxHeight
   /\ node \in Responsive
   /\ nodeHeight[node] = initialContext.height
   /\ nodeContext[node] = initialContext
@@ -1418,8 +2025,11 @@ HistoricalCatchUpSource(initialContext, server, source) ==
   /\ source \in IndexedCurrentApplications(initialContext)
   /\ source \in durableDecisionEvidence
   /\ source \in durableApplicationEvidence
-  /\ Chain!CanonicalCommitForSlot(
-       source.qc, initialContext.height + 1)
+  /\ \/ /\ initialContext.height < MaxHeight
+        /\ Chain!CanonicalCommitForSlot(
+             source.qc, initialContext.height + 1)
+     \/ /\ initialContext.height = MaxHeight
+        /\ Chain!ReceiptOutsideChainHorizon(source)
   /\ server \in source.qc.signers \cap Honest
   /\ server \in joinedByContext[initialContext]
   /\ BodyHeldBy(IndexedCore(initialContext, 9), server,
@@ -1441,32 +2051,142 @@ IndexedHistoricalCatchUpDecision(initialContext, node, server, source) ==
   LET decision == HistoricalCatchUpRecord(node, source)
   IN /\ HistoricalCatchUpTarget(initialContext, node)
      /\ HistoricalCatchUpSource(initialContext, server, source)
+     /\ historicalCatchUpStage[initialContext][node] = "Idle"
      /\ decision \notin IndexedDecisionEvidence
      /\ Chain!RecordKnownDecision(decision)
      /\ historicalCatchUpDecisions' =
           historicalCatchUpDecisions \cup {decision}
+     /\ historicalCatchUpStage' =
+          [historicalCatchUpStage EXCEPT
+             ![initialContext][node] = "DecisionRecovered"]
      /\ UNCHANGED <<historicalCatchUpApplications,
-                     indexedAsyncState, joinedByContext>>
+                     indexedAsyncState, joinedByContext,
+                     SuccessorActivationVars>>
      /\ IndexedAsyncStateShape'
      /\ JoinedByContextShape'
      /\ HistoricalCatchUpShape'
+     /\ SuccessorActivationShape'
 
-IndexedHistoricalCatchUpApplication(initialContext, node, server, source) ==
+IndexedHistoricalCatchUpBodyRecovery(initialContext, node, server, source) ==
+  LET decision == HistoricalCatchUpRecord(node, source)
+  IN /\ HistoricalCatchUpTarget(initialContext, node)
+     /\ HistoricalCatchUpSource(initialContext, server, source)
+     /\ historicalCatchUpStage[initialContext][node]
+          = "DecisionRecovered"
+     /\ decision \in historicalCatchUpDecisions
+     /\ historicalCatchUpStage' =
+          [historicalCatchUpStage EXCEPT
+             ![initialContext][node] = "BodyRecovered"]
+     /\ UNCHANGED <<historicalCatchUpDecisions,
+                     historicalCatchUpApplications,
+                     indexedAsyncState, joinedByContext,
+                     SuccessorActivationVars, Chain!ChainEpochVars>>
+     /\ IndexedAsyncStateShape'
+     /\ JoinedByContextShape'
+     /\ HistoricalCatchUpShape'
+     /\ SuccessorActivationShape'
+
+IndexedHistoricalCatchUpBodyStore(initialContext, node, server, source) ==
+  LET decision == HistoricalCatchUpRecord(node, source)
+  IN /\ HistoricalCatchUpTarget(initialContext, node)
+     /\ HistoricalCatchUpSource(initialContext, server, source)
+     /\ historicalCatchUpStage[initialContext][node] = "BodyRecovered"
+     /\ decision \in historicalCatchUpDecisions
+     /\ historicalCatchUpStage' =
+          [historicalCatchUpStage EXCEPT
+             ![initialContext][node] = "Stored"]
+     /\ UNCHANGED <<historicalCatchUpDecisions,
+                     historicalCatchUpApplications,
+                     indexedAsyncState, joinedByContext,
+                     SuccessorActivationVars, Chain!ChainEpochVars>>
+     /\ IndexedAsyncStateShape'
+     /\ JoinedByContextShape'
+     /\ HistoricalCatchUpShape'
+     /\ SuccessorActivationShape'
+
+IndexedHistoricalCatchUpValidation(initialContext, node, server, source) ==
+  LET decision == HistoricalCatchUpRecord(node, source)
+  IN /\ HistoricalCatchUpTarget(initialContext, node)
+     /\ HistoricalCatchUpSource(initialContext, server, source)
+     /\ historicalCatchUpStage[initialContext][node] = "Stored"
+     /\ decision \in historicalCatchUpDecisions
+     /\ historicalCatchUpStage' =
+          [historicalCatchUpStage EXCEPT
+             ![initialContext][node] = "Validated"]
+     /\ UNCHANGED <<historicalCatchUpDecisions,
+                     historicalCatchUpApplications,
+                     indexedAsyncState, joinedByContext,
+                     SuccessorActivationVars, Chain!ChainEpochVars>>
+     /\ IndexedAsyncStateShape'
+     /\ JoinedByContextShape'
+     /\ HistoricalCatchUpShape'
+     /\ SuccessorActivationShape'
+
+IndexedHistoricalCatchUpNonterminalApplication(
+    initialContext, node, server, source) ==
   LET application == HistoricalCatchUpRecord(node, source)
   IN /\ HistoricalCatchUpTarget(initialContext, node)
      /\ HistoricalCatchUpSource(initialContext, server, source)
+     /\ initialContext.height < MaxHeight
+     /\ historicalCatchUpStage[initialContext][node] = "Validated"
      /\ application \in historicalCatchUpDecisions
      /\ application \notin historicalCatchUpApplications
      /\ Chain!RecordAppliedNext(application)
      /\ historicalCatchUpApplications' =
           historicalCatchUpApplications \cup {application}
-     /\ joinedByContext' =
-          [joinedByContext EXCEPT
-             ![SuccessorContextFor(application)] = @ \cup {node}]
-     /\ UNCHANGED <<historicalCatchUpDecisions, indexedAsyncState>>
+     /\ historicalCatchUpStage' =
+          [historicalCatchUpStage EXCEPT
+             ![initialContext][node] = "Applied"]
+     /\ QueueSuccessorActivation(initialContext, node)
+     /\ UNCHANGED <<historicalCatchUpDecisions,
+                     indexedAsyncState, joinedByContext>>
      /\ IndexedAsyncStateShape'
      /\ JoinedByContextShape'
      /\ HistoricalCatchUpShape'
+     /\ SuccessorActivationShape'
+
+IndexedHistoricalCatchUpTerminalApplication(
+    initialContext, node, server, source) ==
+  LET application == HistoricalCatchUpRecord(node, source)
+  IN /\ HistoricalCatchUpTarget(initialContext, node)
+     /\ HistoricalCatchUpSource(initialContext, server, source)
+     /\ initialContext.height = MaxHeight
+     /\ Chain!ReceiptOutsideChainHorizon(application)
+     /\ historicalCatchUpStage[initialContext][node] = "Validated"
+     /\ application \in historicalCatchUpDecisions
+     /\ application \notin historicalCatchUpApplications
+     /\ Chain!RecordKnownApplication(application)
+     /\ historicalCatchUpApplications' =
+          historicalCatchUpApplications \cup {application}
+     /\ historicalCatchUpStage' =
+          [historicalCatchUpStage EXCEPT
+             ![initialContext][node] = "Applied"]
+     /\ UNCHANGED <<historicalCatchUpDecisions,
+                     indexedAsyncState, joinedByContext,
+                     SuccessorActivationVars>>
+     /\ IndexedAsyncStateShape'
+     /\ JoinedByContextShape'
+     /\ HistoricalCatchUpShape'
+     /\ SuccessorActivationShape'
+
+IndexedHistoricalCatchUpApplication(initialContext, node, server, source) ==
+  \/ IndexedHistoricalCatchUpNonterminalApplication(
+       initialContext, node, server, source)
+  \/ IndexedHistoricalCatchUpTerminalApplication(
+       initialContext, node, server, source)
+
+IndexedHistoricalCatchUpPipelineAction(
+    initialContext, node, server, source) ==
+  \/ IndexedHistoricalCatchUpDecision(
+       initialContext, node, server, source)
+  \/ IndexedHistoricalCatchUpBodyRecovery(
+       initialContext, node, server, source)
+  \/ IndexedHistoricalCatchUpBodyStore(
+       initialContext, node, server, source)
+  \/ IndexedHistoricalCatchUpValidation(
+       initialContext, node, server, source)
+  \/ IndexedHistoricalCatchUpApplication(
+       initialContext, node, server, source)
 
 IndexedReceiptFreeAsyncAction(initialContext) ==
   /\ IndexedJoinedAsyncNext(initialContext)
@@ -1483,34 +2203,34 @@ IndexedProductActionAt(initialContext) ==
   /\ IndexedJoinedAsyncNext(initialContext)
   /\ \A otherContext \in AdmissibleContextRecords \ {initialContext}:
        UNCHANGED IndexedAsyncStateAt(otherContext)
-  /\ UNCHANGED <<historicalCatchUpDecisions,
-                  historicalCatchUpApplications>>
+  /\ UNCHANGED HistoricalCatchUpVars
   /\ IndexedAsyncStateShape'
   /\ JoinedByContextShape'
   /\ HistoricalCatchUpShape'
+  /\ SuccessorActivationShape'
   /\ IndexedReceiptClassification(initialContext)
 
 IndexedChainNext ==
   /\ IndexedAsyncStateShape
   /\ JoinedByContextShape
   /\ HistoricalCatchUpShape
+  /\ SuccessorActivationShape
   /\ \/ \E initialContext \in JoinedContexts:
           IndexedProductActionAt(initialContext)
      \/ \E initialContext \in AdmissibleContextRecords,
            node \in ValidatorIds, server \in ValidatorIds,
            source \in Chain!DecisionEvidenceSet:
-          IndexedHistoricalCatchUpDecision(
+          IndexedHistoricalCatchUpPipelineAction(
             initialContext, node, server, source)
-     \/ \E initialContext \in AdmissibleContextRecords,
-           node \in ValidatorIds, server \in ValidatorIds,
-           source \in Chain!DecisionEvidenceSet:
-          IndexedHistoricalCatchUpApplication(
-            initialContext, node, server, source)
+     \/ \E parentContext \in AdmissibleContextRecords,
+           node \in ValidatorIds:
+          IndexedSuccessorActivationProgressStep(parentContext, node)
 
 IndexedChainInit ==
   /\ IndexedAsyncStateShape
   /\ JoinedByContextShape
   /\ HistoricalCatchUpShape
+  /\ SuccessorActivationShape
   /\ \A initialContext \in AdmissibleContextRecords:
        IndexedAsync(initialContext)!AsyncInitAt(initialContext)
   /\ Chain!ChainEpochInit
@@ -1521,13 +2241,33 @@ IndexedChainInit ==
           ELSE {}]
   /\ historicalCatchUpDecisions = {}
   /\ historicalCatchUpApplications = {}
+  /\ historicalCatchUpStage =
+       [initialContext \in AdmissibleContextRecords |->
+          [node \in ValidatorIds |-> "Idle"]]
+  /\ successorActivationStatus =
+       [parentContext \in AdmissibleContextRecords |->
+          [node \in ValidatorIds |-> "Idle"]]
+  /\ successorPredecessorStatusOwnership =
+       [parentContext \in AdmissibleContextRecords |->
+          [node \in ValidatorIds |-> "Absent"]]
+  /\ successorActivationPrerequisites =
+       [parentContext \in AdmissibleContextRecords |->
+          [node \in ValidatorIds |-> {}]]
+  /\ successorActivationTokens = {}
+  /\ successorRecoveryAuthorities = {}
+  /\ preparedSuccessorActivationMarkers = {}
+  /\ publishedSuccessorActivationMarkers = {}
+  /\ successorActivationFailures = {}
+  /\ successorActivationFailureHistory = {}
+  /\ successorActivationCompletions = {}
   /\ IndexedTotalReceiptProjection
 
 (***************************************************************************
 Fairness is attached to full indexed-product steps. Dormant contexts make each
 action disabled. After the first independent join, the instance scheduler and
 transport become fair. Node-attributed consensus work is fair after that node
-joins; no action tests whether every peer has joined.
+joins, while direct Commit-certificate discovery is fair only for its current
+context; no action tests whether every peer has joined.
 ***************************************************************************)
 IndexedSetGstStep(initialContext) ==
   /\ IndexedChainNext
@@ -1541,6 +2281,12 @@ IndexedRunNodeStep(initialContext, node) ==
   /\ IndexedChainNext
   /\ IndexedNodeCurrentAt(initialContext, node)
   /\ IndexedAsync(initialContext)!PostGstRunNode(node)
+
+IndexedCommitCertificateDiscoveryStep(initialContext, node) ==
+  /\ IndexedChainNext
+  /\ IndexedNodeCurrentAt(initialContext, node)
+  /\ IndexedAsync(initialContext)!
+       PostGstCommitCertificateDiscovery(node)
 
 IndexedHistoricalServerStep(initialContext, node) ==
   /\ IndexedChainNext
@@ -1558,17 +2304,35 @@ IndexedAdmitPacketStep(initialContext, recipient, source) ==
        PostGstAdmitHiddenPacket(recipient, source)
 
 (***************************************************************************
-These weak-fairness clauses are the explicit historical-service premise.
-Once exact canonical source evidence and an honest signer-held body persist,
-the signed CommitQC response cannot be postponed forever. Once that decision
-receipt is local, the ordinary store/validate/apply reducer path cannot be
-postponed forever either. No fairness is assumed for an unauthenticated or
-noncanonical response.
+These weak-fairness clauses are the explicit local-progress premise. Once
+exact canonical source evidence and an honest signer-held body persist, the
+entire decision/body/store/validation/application pipeline cannot be postponed
+forever. Likewise, an enqueued successor activation must either fail closed
+once and recover, or decrease through its exact ordered startup phases to one
+of the two publication actions. No fairness is assumed for unauthenticated or
+noncanonical evidence.
+***************************************************************************)
+IndexedCatchUpPipelineStep(initialContext, node) ==
+  /\ IndexedAsyncStateShape
+  /\ JoinedByContextShape
+  /\ HistoricalCatchUpShape
+  /\ SuccessorActivationShape
+  /\ \E server \in ValidatorIds,
+       source \in Chain!DecisionEvidenceSet:
+       IndexedHistoricalCatchUpPipelineAction(
+         initialContext, node, server, source)
+
+(***************************************************************************
+Proof-facing subactions retained as projections of the fair pipeline. The
+specification attaches fairness to `IndexedCatchUpPipelineStep`; these names
+only let the existing decomposition lemmas state the decision and application
+boundary cases while their staged replacements are discharged.
 ***************************************************************************)
 IndexedCatchUpServiceStep(initialContext, node) ==
   /\ IndexedAsyncStateShape
   /\ JoinedByContextShape
   /\ HistoricalCatchUpShape
+  /\ SuccessorActivationShape
   /\ \E server \in ValidatorIds,
        source \in Chain!DecisionEvidenceSet:
        IndexedHistoricalCatchUpDecision(
@@ -1578,6 +2342,7 @@ IndexedCatchUpApplicationStep(initialContext, node) ==
   /\ IndexedAsyncStateShape
   /\ JoinedByContextShape
   /\ HistoricalCatchUpShape
+  /\ SuccessorActivationShape
   /\ \E server \in ValidatorIds,
        source \in Chain!DecisionEvidenceSet:
        IndexedHistoricalCatchUpApplication(
@@ -1594,6 +2359,11 @@ IndexedFairness ==
     /\ \A node \in IndexedAsync(initialContext)!
                    AsyncVotersAt(initialContext):
          WF_IndexedChainVars(
+           IndexedCommitCertificateDiscoveryStep(
+             initialContext, node))
+    /\ \A node \in IndexedAsync(initialContext)!
+                   AsyncVotersAt(initialContext):
+         WF_IndexedChainVars(
            IndexedHistoricalServerStep(initialContext, node))
     /\ \A node \in IndexedAsync(initialContext)!
                    AsyncVotersAt(initialContext):
@@ -1607,10 +2377,11 @@ IndexedFairness ==
            IndexedAdmitPacketStep(initialContext, recipient, source))
     /\ \A node \in ValidatorIds:
          WF_IndexedChainVars(
-           IndexedCatchUpServiceStep(initialContext, node))
+           IndexedCatchUpPipelineStep(initialContext, node))
     /\ \A node \in ValidatorIds:
          WF_IndexedChainVars(
-           IndexedCatchUpApplicationStep(initialContext, node))
+           IndexedSuccessorActivationProgressStep(
+             initialContext, node))
 
 IndexedChainSpec ==
   /\ IndexedChainInit
@@ -1621,11 +2392,11 @@ IndexedChainSpec ==
 Composition invariant.
 
 Every joined context is a canonical prefix no higher than the globally
-certified prefix. A node remains current in a joined instance until its exact
-application receipt atomically advances ChainEpoch; thereafter that receipt
-persists in the old instance. Conversely, every nonterminal current-context
-application is reflected by a strictly greater global node height. The last
-fact is the state bridge from one-height completion to indexed completion.
+certified prefix. Application advances the durable per-node chain first, then
+queues a context-exact activation. A node joins the successor only after the
+Applied or Recovered publication action records the exact activation marker.
+Terminal historical catch-up is retained as application evidence without a
+fictitious successor or node-height advance.
 ***************************************************************************)
 IndexedEveryInstanceStrongInvariant ==
   \A initialContext \in AdmissibleContextRecords:
@@ -1638,16 +2409,26 @@ JoinedContextCertificationInvariant ==
                              Chain!HistoryThrough(initialContext.height))
     /\ initialContext.height <= certifiedHeight
 
-CanonicalIndexedContext(blockHeight) ==
-  Chain!ContextRecord(blockHeight, Chain!HistoryThrough(blockHeight))
-
 IndexedJoinedThroughLocalHeight ==
   \A node \in ValidatorIds, blockHeight \in Heights:
     blockHeight <= nodeHeight[node]
       => /\ CanonicalIndexedContext(blockHeight)
                \in AdmissibleContextRecords
-         /\ node \in joinedByContext[
-                       CanonicalIndexedContext(blockHeight)]
+         /\ \/ node \in joinedByContext[
+                        CanonicalIndexedContext(blockHeight)]
+            \/ /\ blockHeight = nodeHeight[node]
+               /\ blockHeight > 0
+               /\ LET parentContext ==
+                         CanonicalIndexedContext(blockHeight - 1)
+                  IN /\ successorActivationStatus[parentContext][node]
+                           \in {"Queued", "Running"}
+                     /\ \E application \in Chain!DecisionEvidenceSet:
+                          ExactDurableParentApplication(
+                            parentContext, node, application)
+            \/ /\ blockHeight = MaxHeight
+               /\ blockHeight = nodeHeight[node]
+               /\ HistoricalCatchUpApplicationAt(
+                    CanonicalIndexedContext(blockHeight), node)
 
 JoinedRoutingInvariant ==
   \A initialContext \in AdmissibleContextRecords:
@@ -1668,7 +2449,6 @@ HistoricalCatchUpReceiptSound(receipt) ==
   \E initialContext \in AdmissibleContextRecords,
      server \in ValidatorIds,
      source \in Chain!DecisionEvidenceSet:
-    /\ initialContext.height < MaxHeight
     /\ receipt.node \in Responsive
     /\ HistoricalCatchUpSource(initialContext, server, source)
     /\ receipt = HistoricalCatchUpRecord(receipt.node, source)
@@ -1679,12 +2459,19 @@ HistoricalCatchUpEvidenceInvariant ==
   /\ \A initialContext \in AdmissibleContextRecords,
        node \in ValidatorIds:
        HistoricalCatchUpApplicationAt(initialContext, node)
-         => nodeHeight[node] > initialContext.height
+         => \/ /\ initialContext.height < MaxHeight
+                  /\ nodeHeight[node] > initialContext.height
+             \/ /\ initialContext.height = MaxHeight
+                  /\ nodeHeight[node] = initialContext.height
+                  /\ nodeContext[node] = initialContext
+                  /\ historicalCatchUpStage[initialContext][node]
+                       = "Applied"
 
 IndexedCompositionInvariant ==
   /\ IndexedAsyncStateShape
   /\ JoinedByContextShape
   /\ HistoricalCatchUpShape
+  /\ SuccessorActivationShape
   /\ Chain!ChainEpochInvariant
   /\ IndexedTotalReceiptProjection
   /\ IndexedEveryInstanceStrongInvariant
@@ -2182,7 +2969,8 @@ the receipt projection identifies already certified decisions. Joined-context
 certification selects RecordCertifiedNext versus RecordKnownDecision, while
 routing and the certified height select RecordAppliedNext versus
 RecordKnownApplication. AppliedSuccessorIsAdmissible guarantees that the
-atomic join update stays inside the pre-created function domain.
+queued successor context stays inside the pre-created function domain; the
+kind-specific activation publication performs the later join.
 ***************************************************************************)
 THEOREM IndexedReceiptFreeActionHasProductExtension ==
   \A initialContext \in AdmissibleContextRecords:
@@ -2272,6 +3060,11 @@ THEOREM IndexedFairActionsRemainEnabledInProduct ==
                           => ENABLED
                                IndexedRunNodeStep(initialContext, node))
                    /\ (ENABLED IndexedAsync(initialContext)!
+                                  PostGstCommitCertificateDiscovery(node)
+                          => ENABLED
+                               IndexedCommitCertificateDiscoveryStep(
+                                 initialContext, node))
+                   /\ (ENABLED IndexedAsync(initialContext)!
                                   PostGstRunHistoricalServer(node)
                           => ENABLED IndexedHistoricalServerStep(
                                initialContext, node))
@@ -2290,12 +3083,14 @@ THEOREM IndexedFairActionsRemainEnabledInProduct ==
 BY Isa, IndexedJoinedActionHasProductExtension,
    JoinedNonCurrentDisablesExactRunNode
    DEF IndexedSetGstStep, IndexedTickStep, IndexedRunNodeStep,
+       IndexedCommitCertificateDiscoveryStep,
        IndexedHistoricalServerStep, IndexedIoWorkerStep,
        IndexedAdmitPacketStep, IndexedChainNext,
        IndexedProductActionAt, IndexedJoinedAsyncNext,
        IndexedJoinedNonCrashStep, IndexedJoinedRunnerStep,
        IndexedJoinedNonRunnerStep, IndexedNodeCurrentAt,
        IndexedAsync!PostGstRunNode,
+       IndexedAsync!PostGstCommitCertificateDiscovery,
        IndexedAsync!PostGstRunHistoricalServer,
        IndexedAsync!PostGstServiceIoWorker,
        IndexedAsync!PostGstAdmitHiddenPacket,
@@ -2337,8 +3132,9 @@ node is no longer current, JoinedNonCurrentDisablesExactRunNode makes its exact
 RunNode fairness obligation vacuous while historical service stays fair.
 IndexedHistoricalCatchUpProgressObligation is the fairness-transfer lemma for
 nodes absent from an old roster: exact canonical application and signer-held
-body evidence enable authenticated block sync, and its two explicit weak-fair
-actions deliver the node's own application and successor join.
+body evidence enable authenticated block sync, and the fair staged pipeline
+delivers the node's own application before the separate fair activation
+pipeline can publish a nonterminal successor. Terminal application has no join.
 VerificationOneHeightCompletion is the exact fixed-context expansion of the
 one-height completion property over the parameterized production-network
 instance. Its proof is
@@ -2423,6 +3219,11 @@ THEOREM IndexedFairProductStepsProjectExactOccurrences ==
                => <<IndexedAsync(initialContext)!
                        PostGstRunNode(node)>>_(
                     IndexedAsyncStateAt(initialContext)))
+         /\ (IndexedCommitCertificateDiscoveryStep(
+                  initialContext, node)
+               => <<IndexedAsync(initialContext)!
+                       PostGstCommitCertificateDiscovery(node)>>_(
+                    IndexedAsyncStateAt(initialContext)))
          /\ (IndexedHistoricalServerStep(initialContext, node)
                => <<IndexedAsync(initialContext)!
                        PostGstRunHistoricalServer(node)>>_(
@@ -2441,6 +3242,7 @@ THEOREM IndexedFairProductStepsProjectExactOccurrences ==
                 IndexedAsyncStateAt(initialContext))
 BY Isa DEF IndexedSetGstStep, IndexedTickStep,
            IndexedRunNodeStep, IndexedHistoricalServerStep,
+           IndexedCommitCertificateDiscoveryStep,
            IndexedIoWorkerStep, IndexedAdmitPacketStep,
            IndexedChainNext, IndexedProductActionAt,
            IndexedReceiptClassification, IndexedReceiptFreeChainStutter,
@@ -2452,6 +3254,8 @@ BY Isa DEF IndexedSetGstStep, IndexedTickStep,
            IndexedAsync!AsyncSetGST, IndexedAsync!SetGST,
            IndexedAsync!AsyncTick,
            IndexedAsync!PostGstRunNode, IndexedAsync!RunNode,
+           IndexedAsync!PostGstCommitCertificateDiscovery,
+           IndexedAsync!DirectCommitCertificateDiscoveryStep,
            IndexedAsync!PostGstRunHistoricalServer,
            IndexedAsync!RunHistoricalServer,
            IndexedAsync!PostGstServiceIoWorker,
@@ -2483,6 +3287,13 @@ THEOREM IndexedFairExactOccurrencesEnableProductOccurrences ==
                     => ENABLED
                          <<IndexedRunNodeStep(initialContext, node)>>_(
                            IndexedChainVars))
+              /\ (ENABLED
+                    <<IndexedAsync(initialContext)!
+                        PostGstCommitCertificateDiscovery(node)>>_(
+                      IndexedAsyncStateAt(initialContext))
+                    => ENABLED
+                         <<IndexedCommitCertificateDiscoveryStep(
+                             initialContext, node)>>_(IndexedChainVars))
               /\ (ENABLED
                     <<IndexedAsync(initialContext)!
                         PostGstRunHistoricalServer(node)>>_(
@@ -2593,6 +3404,9 @@ THEOREM IndexedNodeFairnessTransfers ==
                   IndexedAsync(initialContext)!PostGstRunNode(node))
            /\ WF_(IndexedAsyncStateAt(initialContext))(
                   IndexedAsync(initialContext)!
+                    PostGstCommitCertificateDiscovery(node))
+           /\ WF_(IndexedAsyncStateAt(initialContext))(
+                  IndexedAsync(initialContext)!
                     PostGstRunHistoricalServer(node))
            /\ WF_(IndexedAsyncStateAt(initialContext))(
                   IndexedAsync(initialContext)!PostGstServiceIoWorker(node))
@@ -2605,6 +3419,9 @@ PROOF
             /\ TRUE ~> IndexedAllResponsiveJoined(initialContext))
              => /\ WF_(IndexedAsyncStateAt(initialContext))(
                        IndexedAsync(initialContext)!PostGstRunNode(node))
+                /\ WF_(IndexedAsyncStateAt(initialContext))(
+                       IndexedAsync(initialContext)!
+                         PostGstCommitCertificateDiscovery(node))
                 /\ WF_(IndexedAsyncStateAt(initialContext))(
                        IndexedAsync(initialContext)!
                          PostGstRunHistoricalServer(node))
@@ -2625,6 +3442,13 @@ PROOF
                                 initialContext, node)>>_(IndexedChainVars))
                 /\ (ENABLED
                        <<IndexedAsync(initialContext)!
+                           PostGstCommitCertificateDiscovery(node)>>_(
+                         IndexedAsyncStateAt(initialContext))
+                       => ENABLED
+                            <<IndexedCommitCertificateDiscoveryStep(
+                                initialContext, node)>>_(IndexedChainVars))
+                /\ (ENABLED
+                       <<IndexedAsync(initialContext)!
                            PostGstRunHistoricalServer(node)>>_(
                          IndexedAsyncStateAt(initialContext))
                        => ENABLED
@@ -2642,6 +3466,11 @@ PROOF
                    => <<IndexedAsync(initialContext)!
                            PostGstRunNode(node)>>_(
                         IndexedAsyncStateAt(initialContext)))
+              /\ (IndexedCommitCertificateDiscoveryStep(
+                       initialContext, node)
+                   => <<IndexedAsync(initialContext)!
+                           PostGstCommitCertificateDiscovery(node)>>_(
+                        IndexedAsyncStateAt(initialContext)))
               /\ (IndexedHistoricalServerStep(initialContext, node)
                    => <<IndexedAsync(initialContext)!
                            PostGstRunHistoricalServer(node)>>_(
@@ -2654,6 +3483,9 @@ PROOF
     <2>4. IndexedChainSpec
              => /\ WF_IndexedChainVars(
                        IndexedRunNodeStep(initialContext, node))
+                /\ WF_IndexedChainVars(
+                       IndexedCommitCertificateDiscoveryStep(
+                         initialContext, node))
                 /\ WF_IndexedChainVars(
                        IndexedHistoricalServerStep(initialContext, node))
                 /\ WF_IndexedChainVars(
@@ -2752,6 +3584,9 @@ PROOF
                                AsyncVotersAt(initialContext):
                   /\ WF_(IndexedAsyncStateAt(initialContext))(
                        IndexedAsync(initialContext)!PostGstRunNode(node))
+                  /\ WF_(IndexedAsyncStateAt(initialContext))(
+                       IndexedAsync(initialContext)!
+                         PostGstCommitCertificateDiscovery(node))
                   /\ WF_(IndexedAsyncStateAt(initialContext))(
                        IndexedAsync(initialContext)!
                          PostGstRunHistoricalServer(node))
@@ -4266,6 +5101,42 @@ IndexedHeightLivenessProperty ==
    /\ VerificationContext \in JoinedContexts
    /\ IndexedCore(VerificationContext, 7))
     ~> IndexedContextCompleted(VerificationContext)
+
+SuccessorActivationAndHistoricalCatchUpProductionRefinementInvariant ==
+  /\ SuccessorActivationShape
+  /\ HistoricalCatchUpShape
+  /\ \A parentContext \in AdmissibleContextRecords,
+       node \in ValidatorIds:
+       SuccessorHeightActivated(parentContext, node)
+         => /\ parentContext.height < MaxHeight
+            /\ node \in joinedByContext[
+                         CanonicalIndexedContext(
+                           parentContext.height + 1)]
+            /\ successorPredecessorStatusOwnership[parentContext][node]
+                 = "Absent"
+  /\ \A terminalContext \in AdmissibleContextRecords,
+       node \in ValidatorIds:
+       terminalContext.height = MaxHeight
+         /\ historicalCatchUpStage[terminalContext][node] = "Applied"
+         => /\ nodeHeight[node] = terminalContext.height
+            /\ nodeContext[node] = terminalContext
+            /\ successorActivationStatus[terminalContext][node] = "Idle"
+            /\ successorPredecessorStatusOwnership[terminalContext][node]
+                 = "Absent"
+
+(***************************************************************************
+This is the deliberately explicit Rust-to-TLA refinement seam. Its discharge
+must connect the production open_deferred_status adapter, serialized runtime,
+effect executor, service startup, startup/recovery effect consumption, clock
+arming, exact marker preparation, authenticated ingress opening, and final
+Applied/Recovered publication to the ordered actions above. It also must map
+block-sync recovery through every historical stage and preserve terminal
+observer application without inventing a successor. The ledger keeps this
+obligation unproved until that trace mapping is machine checked.
+***************************************************************************)
+THEOREM SuccessorActivationAndHistoricalCatchUpProductionRefinementObligation ==
+  IndexedChainSpec
+    => []SuccessorActivationAndHistoricalCatchUpProductionRefinementInvariant
 
 (***************************************************************************
 Exact indexed multi-height release theorem for the arbitrary free

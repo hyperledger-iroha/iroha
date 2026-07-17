@@ -11,6 +11,23 @@ fi
 
 readonly REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 readonly PRODUCTION_CORE_DIR="${REPO_ROOT}/crates/iroha_core/src/sumeragi/v2_core"
+readonly HARNESS_LOCK="${REPO_ROOT}/scripts/formal/sumeragi_v2_harness.lock"
+readonly HARNESS_LOCK_SHA256="9c49a60551d9f66c8786f2497cb107fb3214fb3420c4f5c23ba3d24814b3f97e"
+
+hash_file() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | awk '{print $1}'
+  else
+    shasum -a 256 "$1" | awk '{print $1}'
+  fi
+}
+
+if [[ ! -f "$HARNESS_LOCK" || -L "$HARNESS_LOCK" \
+  || "$(hash_file "$HARNESS_LOCK")" != "$HARNESS_LOCK_SHA256" ]]; then
+  echo "pinned Sumeragi v2 harness lock is missing or has the wrong digest" >&2
+  exit 1
+fi
+export CARGO_NET_OFFLINE=true
 verify_workspace="$(mktemp -d "${TMPDIR:-/tmp}/sumeragi-v2-harness.XXXXXX")"
 cleanup_paths=("$verify_workspace")
 if [[ -z "${CARGO_TARGET_DIR:-}" ]]; then
@@ -56,7 +73,7 @@ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(verus_only)'] }
 EOF
 
 cd "$verify_workspace"
-cargo generate-lockfile
+cp -- "$HARNESS_LOCK" Cargo.lock
 case "$1" in
   --unit)
     if (($# != 1)); then
@@ -71,9 +88,9 @@ case "$1" in
     while IFS= read -r test_name; do
       [[ -n "$test_name" ]] && listed_unit_tests+=("$test_name")
     done < <(sed -n 's/: test$//p' <<<"$unit_test_list")
-    if ((${#listed_unit_tests[@]} != 86)); then
+    if ((${#listed_unit_tests[@]} != 92)); then
       printf '%s\n' "${listed_unit_tests[@]}" >&2
-      echo "expected exactly 86 Sumeragi v2 reducer unit tests" >&2
+      echo "expected exactly 92 Sumeragi v2 reducer unit tests" >&2
       exit 1
     fi
     unit_ignored_test_list="$(
@@ -86,7 +103,7 @@ case "$1" in
     done < <(sed -n 's/: test$//p' <<<"$unit_ignored_test_list")
     if ((${#listed_ignored_unit_tests[@]} != 0)); then
       printf '%s\n' "${listed_ignored_unit_tests[@]}" >&2
-      echo "reducer unit gate requires all 86 tests to be runnable" >&2
+      echo "reducer unit gate requires all 92 tests to be runnable" >&2
       exit 1
     fi
     cargo test --locked --offline -p iroha_sumeragi_core \
@@ -237,6 +254,14 @@ case "$1" in
     exit 2
     ;;
   *)
+    if [[ "$1" == cargo ]]; then
+      command_line=" $* "
+      if [[ "$command_line" != *" --locked "* \
+        || "$command_line" != *" --offline "* ]]; then
+        echo "custom Cargo harness commands require --locked --offline" >&2
+        exit 2
+      fi
+    fi
     "$@"
     ;;
 esac

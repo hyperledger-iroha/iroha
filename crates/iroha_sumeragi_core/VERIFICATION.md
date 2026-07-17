@@ -11,7 +11,7 @@ official pinned Verus release binaries in `PATH`. The script rejects a different
 Verus or vstd version, verifies the official macOS arm64 or Linux x86_64 binary
 checksums (other platforms must supply the two pinned checksum variables), and
 rejects the wrong bundled Rust toolchain or proof escape hatches in the
-production reducer and formal proof module. It also rejects any external
+production reducer and formal proof modules. It also rejects any external
 `#[path]` from the production module, then runs exactly nine deterministic
 adversarial network simulations before invoking Verus.
 The script enables the crate's `verus` feature explicitly; normal production
@@ -34,7 +34,7 @@ forwards `--no-cheating` only to the selected root crate with Cargo Verus's
 `--fwd-verus-args-to roots`; dependencies are still verified, but pinned
 `vstd` is allowed to use its reviewed trusted specifications. Verus, vstd, and
 the solver are therefore part of the proof TCB. The scanned production reducer
-and proof module contain no `assume`, `admit`, external body, or external
+and proof modules contain no `assume`, `admit`, external body, or external
 specification escape hatch.
 
 The primitive source-link kernel was checked with the official pinned macOS
@@ -43,7 +43,7 @@ arm64 release:
 ```text
 $ scripts/verify_sumeragi_v2.sh  # official pinned release already in PATH
 verification results:: 1690 verified, 0 errors  # pinned vstd dependency
-verification results:: 76 verified, 0 errors    # iroha_sumeragi_core root obligations
+verification results:: 105 verified, 0 errors   # iroha_sumeragi_core root obligations
 ```
 
 Evidence for the source-link edit itself uses the isolated harness because
@@ -51,7 +51,7 @@ Evidence for the source-link edit itself uses the isolated harness because
 
 ```text
 bash scripts/formal/run_sumeragi_v2_harness.sh --unit
-  86 unit/reducer/WAL/refinement tests passed
+  92 unit/reducer/WAL/refinement tests passed
 bash scripts/formal/run_sumeragi_v2_harness.sh --model-replay
   8 model-trace replay tests passed
 bash scripts/formal/run_sumeragi_v2_harness.sh --fast-network
@@ -61,7 +61,7 @@ bash scripts/formal/run_sumeragi_v2_harness.sh \
   passed
 PATH=<pinned-verus> CARGO_TARGET_DIR=/tmp/codex-wal-exact-verus-target \
   scripts/verify_sumeragi_v2.sh
-  1690 dependency obligations and 76 root obligations verified, 0 errors
+  1690 dependency obligations and 105 root obligations verified, 0 errors
 ```
 
 The successful run discharges the abstract reducer/WAL obligations, the
@@ -168,6 +168,9 @@ profile's checkout-manifest-bound evidence rerun.
 
 `crates/iroha_sumeragi_core/src/verus_proofs.rs` contains one safety projection
 for the production WAL and reducer rather than independent protocol examples.
+`crates/iroha_sumeragi_core/src/effective_lock_verus_proofs.rs` isolates the
+solver queries for exact-body ownership, retirement accounting, and runtime
+service selection while instantiating the same production macros.
 
 The production timer/FIFO arbiter in
 `crates/iroha_core/src/sumeragi/v2_core/scheduler.rs` is also source linked.
@@ -176,6 +179,33 @@ so absolute-timeout priority, one-slot periodic delay, FIFO debt, ordinary FIFO
 service, and idle selection cannot drift through a separately transcribed
 proof model. The runtime clock and task-invocation premises remain part of the
 post-GST host-service contract; the choice made at each invocation is verified.
+
+The inner runtime `completion -> progress -> normal` selector is now source
+linked in the same way. Production `BoundedIngress::pop_next` calls the typed
+three-class kernel, while Verus proves that every selected class is ready,
+invalid cursors select nothing, and continuously ready classes form one exact
+three-invocation cycle. This is a bounded arbitration theorem only. It does not
+assert that the host invokes the runtime again or that external disk, network,
+validation, or application work terminates.
+
+Exact-body ownership now has a second source-linked kernel at the production
+executor/runtime boundary. Production passes typed tag, `(round, subject)`,
+manifest, lane-owner-count, and byte-counter identities; it cannot pass an
+authorization boolean. The checked relation permits a certified Fetch to fill
+an absent manifest identity once, then requires the same owner through
+`BodyAvailable`, `StoreBody`, and `ValidateBody`. Rebinding requires a strictly
+newer view and generation at the same height and preserves the exact key and
+manifest. Runtime ingress and the Busy-deferred lane jointly admit only one
+exact completion owner. Higher-lock and certified-view retirement uses the
+same sequential subtraction relation proved to leave exactly the original
+counter minus every retired owner, without an overflowing intermediate sum.
+Before either EnterView cleanup or direct locked-body reconciliation, the
+executor also requires both counters to equal the complete serialized
+ready/retained/store owner sets; even exact lock repetition cannot bypass that
+aggregate equality check.
+Collection lookups, manifest hashing, and external service acknowledgements
+remain ordinary Rust extraction/adapter boundaries; temporal service remains
+the conditional liveness obligation.
 
 `src/wal.rs` also owns a dependency-free executable mapping contract for the
 physical WAL. The adapter supplies only the 32-byte hash function (BLAKE3 in
@@ -371,7 +401,7 @@ The module contains transition-by-transition proof functions for:
 | Exact one-shot state/effect relation | Encoded in the production gate | `ACTION_RESUME_AFTER_REPLAY` checks false-to-true, unchanged durable state, and the exact Sign/Fetch/empty effect class |
 | Abstract reducer refinement | Encoded | `ReducerPathProjection::ResumeAfterReplay` preserves WAL, application, and effect fences |
 | Named TLA+ action map | Encoded and spelling-gated | Proposal/vote/timeout resumption maps to the existing `ResumeProposal`, `ResumeVote`, and `ResumeTimeout` actions; decided replay maps to `FetchBody` |
-| Pinned Verus discharge of the changed obligations | **Verified** | Official pinned workflow reports 1690 dependency and 76 root obligations verified with zero errors |
+| Pinned Verus discharge of the changed obligations | **Verified** | Official pinned workflow reports 1690 dependency and 105 root obligations verified with zero errors |
 
 ## Exact production commit gate
 
@@ -441,7 +471,7 @@ ordinary Rust collection lookups that produce those concrete primitives are
 not themselves verified, which remains gap 1 below, but no authorization or
 action-exactness boolean crosses the verified kernel boundary.
 
-The pinned verifier discharged all 76 root obligations with zero errors on a
+The pinned verifier discharged all 105 root obligations with zero errors on a
 clean target. The verification script rejects `assume`, `admit`, unreviewed
 trusted bodies, and external function specifications in the package-local
 reducer and proof modules throughout this crate. It also rejects reintroduction
@@ -499,7 +529,12 @@ production reducer can be described as deductively verified:
    timeout guard additionally compares a full-certificate evidence identity,
    rather than trusting a high-QC-match bit. Rust extraction of validator
    identities into the frozen-roster index and of the exact QC evidence bytes
-   into that identity remains in this gap.
+   into that identity remains in this gap. Exact-body owner binding, stage
+   transfer, rebind, cross-lane uniqueness, retirement arithmetic, and runtime
+   class selection now consume typed primitives through shared production/Verus
+   expressions. Extraction of those primitives from `BTreeMap`, runtime queue,
+   manifest-hash, and service-owned state is still ordinary Rust and remains in
+   this gap.
    Closing this residual source-level gap requires Verus-compatible reducer
    collections or verified projection functions over reviewed external type
    specifications; neither is claimed here.
@@ -536,8 +571,10 @@ production reducer can be described as deductively verified:
    actions also remain outside the executable `Reducer::step` map.
 6. **Temporal liveness.** This module proves safety-style transition
    preservation only. Fair delivery, timeout-certificate progress, rotating
-   honest leaders, and the post-GST commit bound remain TLAPS liveness
-   obligations plus executable simulation/integration evidence.
+   honest leaders, repeated runtime invocation, terminating body service, and
+   the post-GST commit bound remain TLAPS liveness obligations plus executable
+   simulation/integration evidence. The exact three-class cycle and immutable
+   body-owner rebind theorem do not by themselves discharge this gap.
 
 Until all six items are discharged, the successful current run proves the
 listed abstract obligations and the exact production commit-gate relation. It
