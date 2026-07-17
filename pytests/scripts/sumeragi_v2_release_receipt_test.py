@@ -356,7 +356,10 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
         "\n".join(
             (
                 "running 1 test",
-                "test accelerated_100_000_block_chaos_preserves_chain_prefix ... ok",
+                "test accelerated_100_000_block_chaos_preserves_chain_prefix ... "
+                "SUMERAGI_V2_CHAOS_COMPLETED permissioned_heights=50000 "
+                "npos_heights=50000 total_heights=100000",
+                "ok",
                 "",
                 "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; "
                 "9 filtered out; finished in 0.01s",
@@ -374,6 +377,8 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
             "head_tree": tree,
             "source_manifest_sha256": sealed_manifest,
             "cargo_lock_sha256": lock,
+            "permissioned_heights": "50000",
+            "npos_heights": "50000",
             "completed_heights": "100000",
             "log_sha256": sha256(chaos_log),
         },
@@ -383,6 +388,21 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
     taira_dir.mkdir()
     taira_evidence = taira_dir / "taira_v2_24h_soak.json"
     taira_evidence.write_text('{"status":"passed"}\n', encoding="utf-8")
+    taira_log = taira_dir / "taira-v2-24h.log"
+    taira_log.write_text(
+        "\n".join(
+            (
+                "running 1 test",
+                "test taira_public_localnet::"
+                "taira_profile_24h_packet_impairment_and_restart_soak ... ok",
+                "",
+                "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; "
+                "42 filtered out; finished in 86400.01s",
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
     taira_completion = taira_dir / "COMPLETED.tsv"
     write_tsv(
         taira_completion,
@@ -393,6 +413,7 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
             "source_manifest_sha256": sealed_manifest,
             "cargo_lock_sha256": lock,
             "evidence_sha256": sha256(taira_evidence),
+            "log_sha256": sha256(taira_log),
         },
     )
     return {
@@ -420,6 +441,7 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
         "chaos_log": chaos_log,
         "taira_completion": taira_completion,
         "taira_evidence": taira_evidence,
+        "taira_log": taira_log,
         "candidate_manifest": candidate_manifest,
         "sealed_manifest": sealed_manifest,
         "head": head,
@@ -494,6 +516,7 @@ def test_receipt_hashes_every_formal_matrix_chaos_and_soak_artifact(
         "chaos_log": "chaos_log",
         "taira_completion": "taira_completion",
         "taira_evidence": "taira_evidence",
+        "taira_run_log": "taira_log",
     }
     for receipt_name, fixture_name in expected_artifacts.items():
         fixture_path = evidence[fixture_name]
@@ -878,6 +901,33 @@ def test_receipt_rejects_seed_summary_row_with_extra_column(tmp_path: Path) -> N
 def test_receipt_revalidates_archived_taira_semantics(tmp_path: Path) -> None:
     evidence = make_evidence(tmp_path)
     writer = fixture_writer(tmp_path)
+    taira_log = evidence["taira_log"]
+    completion = evidence["taira_completion"]
+    assert isinstance(taira_log, Path)
+    assert isinstance(completion, Path)
+    original_log = taira_log.read_bytes()
+    taira_log.write_text(
+        "running 1 test\n"
+        "test forged_taira_soak ... ok\n\n"
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; "
+        "42 filtered out; finished in 86400.01s\n",
+        encoding="utf-8",
+    )
+    fields = dict(
+        line.split("\t", 1)
+        for line in completion.read_text(encoding="utf-8").splitlines()
+    )
+    fields["log_sha256"] = sha256(taira_log)
+    write_tsv(completion, fields)
+
+    malformed_result = run_writer(evidence, tmp_path / "malformed-receipt.json", writer)
+
+    assert malformed_result.returncode == 1
+    assert "Taira log does not prove its one exact passing soak" in malformed_result.stderr
+
+    taira_log.write_bytes(original_log)
+    fields["log_sha256"] = sha256(taira_log)
+    write_tsv(completion, fields)
     (writer.parent / "check_taira_v2_soak_evidence.py").write_text(
         "raise SystemExit(72)\n", encoding="utf-8"
     )

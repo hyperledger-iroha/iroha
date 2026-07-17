@@ -589,11 +589,15 @@ required_production_liveness_tests=(
   sumeragi::v2_core::tests::higher_conflicting_prepare_intent_fences_historical_commit_reconstruction
   sumeragi::v2_core::tests::higher_same_subject_prepare_allows_historical_commit_reconstruction
   sumeragi::v2_core::tests::replay_does_not_resign_commit_superseded_by_higher_tc_lock
+  sumeragi::v2_core::tests::replay_resigns_current_proposal_prepare_then_historical_locked_commit_fifo
+  sumeragi::v2_core::tests::replay_resigns_current_timeout_then_historical_locked_commit_fifo
   sumeragi::v2_core::tests::current_view_commit_waits_for_the_exact_durable_lock
   sumeragi::v2_core::tests::decision_retains_in_flight_body_pipeline_without_duplicate_fetch
   sumeragi::v2_core::refinement::tests::retransmit_may_reconstruct_one_final_decision_body_stage
   sumeragi::v2_core::refinement::tests::source_linked_effective_lock_body_kernels_reject_adversarial_inputs
   sumeragi::v2_core::reducer::source_link_tests::retransmit_body_stage_requires_an_exact_durable_decision_capability
+  sumeragi::v2_core::reducer::source_link_tests::replay_refinement_binds_the_complete_durable_fifo
+  sumeragi::v2_core::reducer::source_link_tests::replay_refinement_rejects_malformed_post_states_even_with_the_right_first_effect
   sumeragi::authoritative_runtime_gate_tests::anonymous_and_non_roster_v2_sources_share_one_bounded_lane
   sumeragi::authoritative_runtime_gate_tests::byzantine_v2_source_cannot_consume_honest_ingress_reservations_or_service_turns
   sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_minimum_capacity_admits_timeout_votes
@@ -744,7 +748,7 @@ required_production_liveness_tests=(
   sumeragi::status::v2_liveness_watchdog_tests::successor_handoff_rejects_every_incomplete_predecessor_witness
   sumeragi::status::v2_liveness_watchdog_tests::successor_startup_overlays_never_cross_the_height_context_boundary
 )
-readonly expected_production_liveness_test_count=162
+readonly expected_production_liveness_test_count=166
 if (( ${#required_production_liveness_tests[@]} != expected_production_liveness_test_count )); then
   echo "expected exactly ${expected_production_liveness_test_count} production Sumeragi v2 liveness tests, found ${#required_production_liveness_tests[@]}" >&2
   exit 1

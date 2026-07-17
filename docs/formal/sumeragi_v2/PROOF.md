@@ -285,6 +285,19 @@ transport remains a nonfatal remote-input rejection with retry ownership
 preserved.
 
 The runtime queue reserves separate normal, progress, and completion capacity.
+The protected candidate vocabulary also includes the canonical
+constructor-shaped Normal proposal/Prepare slice: leader `AssembleBody`, the
+causal `BeginPrepare` successor, and the frozen Normal delivery shape for
+Proposal, PrepareVote, and CommitVote items. Reachable delivery ownership must
+originate at authenticated ingress, but protection follows the stored class so
+view movement cannot drop an admitted CommitVote when its dynamic classification
+becomes historical Progress. Authenticated `TimeoutVote`/`DeliverTimeout` owns
+a signer-keyed protected Progress slot. Certified-body and Commit-certificate
+recovery requests receive fresh live Serve nonces and occurrence-level FIFO
+ranks, so equal request values cannot collapse one another's starvation
+witness. These constructor families deliberately over-approximate reachable
+provenance; authenticated junk receives no temporal promise, and the composite
+rank obligation remains explicit proof debt.
 The current view's absolute timeout has first priority. A periodic
 retransmission may precede already-admitted command work once, after which
 command debt gives the class-aware ingress the next non-timeout slot. Thus the
@@ -398,10 +411,13 @@ body matches those Rust expressions, nor a temporal theorem that the runtime or
 external body service is eventually invoked. Ordinary-Rust map/hash/service
 projection, worker/request ownership, and post-GST fairness therefore remain
 in `EffectiveLockBodyAcquisitionCompositionObligation`, ledgered
-`specified_unproved`. Post-GST deadlock freedom has a checked source proof from
-the strong async type invariant and the exact enabled `RunNode` frontier, but
-is likewise ledgered `specified_unproved` until that type invariant's runner
-prerequisite is discharged. Runner preservation and starvation now have source
+`specified_unproved`. The exact enabled-`RunNode` result is only a scheduler
+lemma: post-GST deadlock freedom requires an enabled `AsyncNext` step that grows
+current-height protocol evidence, strictly consumes a concrete deadline debt,
+or decreases/exits a protected candidate or Serve-occurrence rank. Repeated
+clock or view-change steps alone do not satisfy that productive obligation.
+Stage-2/3/6, packet-admission, and zero-deadline cases therefore remain explicit
+proof debt. Runner preservation and starvation now have source
 proof bodies, but remain `specified_unproved`; the runner still needs a fresh
 pinned strict proof and starvation depends on the still-unproved service-rank
 theorem. Durable witness,
@@ -463,24 +479,29 @@ replacement, in-runner/independent Commit-discovery, and all-I/O/Consensus-only
 index mutations. An exhaustive one-validator configuration checks the logical
 ownership invariant through 19,081 generated states, 3,104 distinct states,
 and depth 44. These are bounded regression witnesses, not deductive proof and not a reason to
-promote a ledger entry. The production trace replayer and adversarial
+promote a ledger entry. Two additional seam models make the remaining temporal
+gap executable: an unprotected Normal proposal/Prepare candidate starves, and
+a dynamic delivery-class mutation loses a stored CommitVote after a TC, while
+the frozen constructor inventory closes both cases; separately, a
+scheduler-only deadlock claim accepts a bare tick, whereas the productive claim
+rejects it until a concrete deadline, evidence, or rank repair exists. The
+productive release obligation remains `specified_unproved`. The production trace replayer and adversarial
 simulations exercise the exact reducer sources, while the pinned Verus harness
 proves the source-linked reducer/WAL and scheduler kernels. The
 remaining cryptographic, deterministic-execution, operating-system durability,
 post-GST transport, and host-service premises are listed explicitly in the
 ledger and formal README.
 
-The current pre-network release inventory names 146 tests across twelve Rust
+The current pre-network release inventory names 166 tests across fourteen Rust
 modules. It includes exact completion ownership, body-owner binding and
-rebind, byte retirement, three-class production arbitration, successor
-activation/recovery, and watchdog classification. All twelve owning modules
-are green on the current unsealed source: 56/56 reducer/core, 10/10
-refinement, 9/9 reducer source-link, 57/57 adapter, 26/26 apply, 115/115
-effects, 60/60 lane work, 40/40 runtime, 29/29 recovery, 23/23 runner, 66/66
-worker, and 19/19 watchdog tests (510 passed, 0 failed, 0 ignored). Cargo
-discovery found all 146 required names among 6,742 tests with no missing or
-ignored release test. The clean committed, detached, source-sealed serial
-release leg remains pending. An earlier exact one-attempt
+rebind, byte retirement, three-class production arbitration, the exact
+`3N+1` ingress and `2N+3` deferred partitions, successor activation/recovery,
+historical catch-up, and watchdog classification. Cargo discovery found all
+162 then-required names among 6,744 tests with no missing or ignored release
+test before the four replay-FIFO/refinement regressions raised the inventory to
+166; the authoritative ingress module was green at 30/30. Fresh 166-name Cargo
+discovery and the clean committed, detached, source-sealed serial release leg
+remain pending. An earlier exact one-attempt
 four-validator genesis rerun is green at 1/1 in 456.76 seconds. Neither
 inventory presence nor regression evidence is a machine proof.
 The Core delivery relation and normalized trace replay match exact-lock

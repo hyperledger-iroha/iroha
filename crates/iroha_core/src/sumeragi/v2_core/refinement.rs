@@ -101,17 +101,17 @@ pub const SIGNED_MESSAGE_COMMIT: u8 = 3;
 /// Completion of a timeout-vote signature.
 pub const SIGNED_MESSAGE_TIMEOUT: u8 = 4;
 
-/// Replay emitted no safety-relevant effect because the WAL was empty.
+/// Replay's first item is absent because no durable work needs reconstruction.
 pub const REPLAY_EFFECT_NONE: u8 = 0;
-/// Replay resumed an already-durable proposal intent.
+/// Replay's first item resumes an already-durable proposal intent.
 pub const REPLAY_EFFECT_PROPOSAL: u8 = 1;
-/// Replay resumed an already-durable Prepare intent.
+/// Replay's first item resumes an already-durable Prepare intent.
 pub const REPLAY_EFFECT_PREPARE: u8 = 2;
-/// Replay resumed an already-durable Commit intent.
+/// Replay's first item resumes an already-durable Commit intent.
 pub const REPLAY_EFFECT_COMMIT: u8 = 3;
-/// Replay resumed an already-durable timeout intent.
+/// Replay's first item resumes an already-durable timeout intent.
 pub const REPLAY_EFFECT_TIMEOUT: u8 = 4;
-/// Replay resumed acquisition of a durably decided body.
+/// Replay's sole item resumes acquisition of a durably decided body.
 pub const REPLAY_EFFECT_DECISION: u8 = 5;
 
 /// No durable-boundary capability is claimed by a transition.
@@ -808,6 +808,65 @@ pub struct EffectSlotProjection {
     pub(crate) granted: EffectCapabilityKey,
 }
 
+/// One exact item in the durable replay FIFO.
+///
+/// `kind` uses the [`REPLAY_EFFECT_*`] discriminants.  Proposal, Prepare,
+/// Commit, and timeout items carry an [`EFFECT_SIGN`] capability; a Decision
+/// carries the one [`EFFECT_FETCH`] frontier reconstructed on recovery.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ReplayPlanSlotProjection {
+    pub(crate) kind: u8,
+    pub(crate) capability: EffectCapabilityKey,
+}
+
+impl ReplayPlanSlotProjection {
+    /// Canonical absent replay-plan slot.
+    pub(crate) const fn none() -> Self {
+        Self {
+            kind: REPLAY_EFFECT_NONE,
+            capability: EffectCapabilityKey::none(),
+        }
+    }
+}
+
+/// Fixed projection of the complete reducer-owned replay FIFO.
+///
+/// Recovery can reconstruct at most three signable intents, in this order:
+/// current Timeout-or-Proposal, current Prepare, and the exact locked Commit.
+/// A durable Decision is instead represented by one body-fetch frontier.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ReplayPlanProjection {
+    pub(crate) len: u8,
+    pub(crate) slot0: ReplayPlanSlotProjection,
+    pub(crate) slot1: ReplayPlanSlotProjection,
+    pub(crate) slot2: ReplayPlanSlotProjection,
+}
+
+impl ReplayPlanProjection {
+    /// Construct an empty canonical replay plan.
+    pub(crate) const fn empty() -> Self {
+        Self {
+            len: 0,
+            slot0: ReplayPlanSlotProjection::none(),
+            slot1: ReplayPlanSlotProjection::none(),
+            slot2: ReplayPlanSlotProjection::none(),
+        }
+    }
+
+    /// Append one exact replay item, failing closed beyond the protocol bound.
+    pub(crate) fn push(&mut self, kind: u8, capability: EffectCapabilityKey) -> bool {
+        let slot = ReplayPlanSlotProjection { kind, capability };
+        match self.len {
+            0 => self.slot0 = slot,
+            1 => self.slot1 = slot,
+            2 => self.slot2 = slot,
+            _ => return false,
+        }
+        self.len += 1;
+        true
+    }
+}
+
 /// Primitive identity of a durable-boundary action.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct BoundaryCapabilityKey {
@@ -819,6 +878,7 @@ pub struct BoundaryCapabilityKey {
     pub(crate) context_id: ContextId,
     pub(crate) tag: TagProjection,
     pub(crate) subject: SubjectProjection,
+    pub(crate) replay_plan: ReplayPlanProjection,
 }
 
 impl BoundaryCapabilityKey {
@@ -840,6 +900,7 @@ impl BoundaryCapabilityKey {
                 present: false,
                 subject: Subject::repeat(0),
             },
+            replay_plan: ReplayPlanProjection::empty(),
         }
     }
 }
@@ -1400,6 +1461,44 @@ macro_rules! subject_projection_equal_body {
     ($left:expr, $right:expr) => {{ $left.present == $right.present && (!$left.present || $left.subject == $right.subject) }};
 }
 
+macro_rules! replay_plan_slot_well_formed_body {
+    ($slot:expr, $active:expr) => {{
+        if $active {
+            $slot.kind >= 1u8
+                && $slot.kind <= 5u8
+                && $slot.capability.kind == if $slot.kind == 5u8 { 2u8 } else { 5u8 }
+        } else {
+            $slot.kind == 0u8 && $slot.capability.kind == 0u8
+        }
+    }};
+}
+
+macro_rules! replay_plan_well_formed_body {
+    ($plan:expr, $effect_kind:expr) => {{
+        $plan.len <= 3u8
+            && replay_plan_slot_well_formed_body!($plan.slot0, $plan.len > 0u8)
+            && replay_plan_slot_well_formed_body!($plan.slot1, $plan.len > 1u8)
+            && replay_plan_slot_well_formed_body!($plan.slot2, $plan.len > 2u8)
+            && (if $plan.len == 0u8 {
+                $effect_kind == 0u8
+            } else {
+                $effect_kind == $plan.slot0.kind
+            })
+    }};
+}
+
+macro_rules! replay_plan_equal_body {
+    ($left:expr, $right:expr) => {{
+        $left.len == $right.len
+            && $left.slot0.kind == $right.slot0.kind
+            && capability_key_equal_body!($left.slot0.capability, $right.slot0.capability)
+            && $left.slot1.kind == $right.slot1.kind
+            && capability_key_equal_body!($left.slot1.capability, $right.slot1.capability)
+            && $left.slot2.kind == $right.slot2.kind
+            && capability_key_equal_body!($left.slot2.capability, $right.slot2.capability)
+    }};
+}
+
 macro_rules! boundary_capability_equal_body {
     ($left:expr, $right:expr) => {{
         $left.kind == $right.kind
@@ -1412,6 +1511,9 @@ macro_rules! boundary_capability_equal_body {
             && $left.tag.view == $right.tag.view
             && $left.tag.generation == $right.tag.generation
             && subject_projection_equal_body!($left.subject, $right.subject)
+            && replay_plan_well_formed_body!($left.replay_plan, $left.replay_effect_kind)
+            && replay_plan_well_formed_body!($right.replay_plan, $right.replay_effect_kind)
+            && replay_plan_equal_body!($left.replay_plan, $right.replay_plan)
     }};
 }
 
@@ -1841,6 +1943,18 @@ macro_rules! production_action_relation_body {
     ($facts:expr, $signed_gate:ident, $action_gate:ident $(,)?) => {{
         $signed_gate($facts)
             && ($facts.action_kind == 6u8 || $facts.replay_effect_kind == 0u8)
+            // A current, serviceable first ResumeAfterReplay event may not be
+            // reclassified as an ordinary volatile action when its exact
+            // boundary grant fails. Stale tags and duplicate resume events
+            // remain ordinary empty stutters.
+            && ($facts.event_kind != 15u8
+                || !$facts.tag_matches
+                || !$facts.busy_fence_open
+                || (if $facts.volatile_before.replay_resumed {
+                    $facts.action_kind == 0u8
+                } else {
+                    $facts.action_kind == 6u8
+                }))
             && $action_gate($facts)
     }};
 }

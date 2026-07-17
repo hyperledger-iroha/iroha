@@ -2755,6 +2755,22 @@ pub struct ProductionEffectCapabilityKeyProjection {
     pub manifest_count: u64,
 }
 
+/// Verus-side shape of one exact durable replay-plan item.
+#[derive(Copy, Clone)]
+pub struct ProductionReplayPlanSlotProjection {
+    pub kind: u8,
+    pub capability: ProductionEffectCapabilityKeyProjection,
+}
+
+/// Verus-side fixed projection of the complete three-item recovery FIFO.
+#[derive(Copy, Clone)]
+pub struct ProductionReplayPlanProjection {
+    pub len: u8,
+    pub slot0: ProductionReplayPlanSlotProjection,
+    pub slot1: ProductionReplayPlanSlotProjection,
+    pub slot2: ProductionReplayPlanSlotProjection,
+}
+
 /// Verus-side shape of one effect vector slot.
 #[derive(Copy, Clone)]
 pub struct ProductionEffectSlotProjection {
@@ -2850,6 +2866,7 @@ pub struct ProductionBoundaryCapabilityKeyProjection {
     pub context_id: int,
     pub tag: ProductionTagProjection,
     pub subject: ProductionSubjectProjection,
+    pub replay_plan: ProductionReplayPlanProjection,
 }
 
 /// Verus-side primitive projection supplied to the exact production kernel.

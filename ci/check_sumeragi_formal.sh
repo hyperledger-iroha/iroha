@@ -22,6 +22,8 @@ python3 scripts/formal/check_sumeragi_v2_proof_ledger.py \
   --release \
   --evidence target/formal/sumeragi_v2/proof_evidence.json
 bash scripts/formal/run_sumeragi_v2_service_rank_mutation.sh
+bash scripts/formal/run_sumeragi_v2_productive_mutation.sh
+bash scripts/formal/run_sumeragi_v2_candidate_restart_mutation.sh
 bash scripts/formal/run_sumeragi_v2_progress_mutations.sh
 bash scripts/formal/run_sumeragi_v2_tlc.sh ci
 bash scripts/formal/check_sumeragi_v2_replay_trace.sh

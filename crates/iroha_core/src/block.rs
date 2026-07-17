@@ -24354,8 +24354,8 @@ mod commit {
             let binding = binding_for_descriptor(&descriptor);
             let mut first = sample_handle(binding, lane, dsid, 10, policy.manifest_root);
             first.handle.sub_nonce = 3;
-            first.handle.budget.remaining = 10;
-            first.handle.budget.per_use = Some(10);
+            first.handle.budget.remaining = Quantity::from(10_u64);
+            first.handle.budget.per_use = Some(Quantity::from(10_u64));
             first.intent.op.amount = Some("7".parse().expect("canonical spend quantity"));
             first.amount = Some("7".parse().expect("canonical fragment quantity"));
             let mut second = first.clone();
@@ -25236,12 +25236,16 @@ mod commit {
                 Some(5),
                 None,
             );
-            let expected_commitment =
-                ivm::axt::derive_amount_commitment(dsid, 5, Some(proof.payload.as_slice()));
+            let hidden_amount = Quantity::from(5_u64);
+            let expected_commitment = ivm::axt::derive_amount_commitment(
+                dsid,
+                &hidden_amount,
+                Some(proof.payload.as_slice()),
+            );
 
             let mut handle = sample_handle(binding, lane, dsid, 9, policy.manifest_root);
-            handle.intent.op.amount = "hidden".to_owned();
-            handle.amount = 0;
+            handle.intent.op.amount = None;
+            handle.amount = None;
             handle.amount_commitment = Some(expected_commitment);
 
             let envelope = AxtEnvelopeRecord {
@@ -25301,8 +25305,8 @@ mod commit {
             );
 
             let mut handle = sample_handle(binding, lane, dsid, 9, policy.manifest_root);
-            handle.intent.op.amount = "hidden".to_owned();
-            handle.amount = 0;
+            handle.intent.op.amount = None;
+            handle.amount = None;
             handle.amount_commitment = Some([0xFF; 32]);
 
             let envelope = AxtEnvelopeRecord {
@@ -25325,7 +25329,11 @@ mod commit {
             let state_block = state.block(block.header());
 
             let err = validate_axt_envelopes(&block, &state_block).unwrap_err();
-            expect_axt_error(err, AxtRejectReason::Budget, "commitment mismatch");
+            expect_axt_error(
+                err,
+                AxtRejectReason::Budget,
+                "amount commitment does not match",
+            );
         }
     }
 }

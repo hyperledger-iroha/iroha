@@ -44,6 +44,7 @@ RELEASE_PROOF_MODULES = (
     "SumeragiV2TimeoutViewInvariant",
     "SumeragiV2TimeoutWireAuthorization",
     "SumeragiV2ChainEpochRefinement",
+    "SumeragiV2SuccessorActivationRefinementProofs",
     "SumeragiV2TemporalLemmas",
     "SumeragiV2LivenessProofs",
     "SumeragiV2ServiceRankLemmas",
@@ -74,6 +75,7 @@ REQUIRED_MODEL_MODULES = (
     "SumeragiV2ChainEpoch",
     "SumeragiV2ChainEpochProofs",
     "SumeragiV2ChainEpochRefinement",
+    "SumeragiV2SuccessorActivationRefinementProofs",
     "SumeragiV2TemporalLemmas",
     "SumeragiV2LivenessProofs",
     "SumeragiV2ServiceRankLemmas",
@@ -1136,7 +1138,61 @@ def _async_proof_architecture_errors(formal_dir: Path) -> list[str]:
         "AsyncTypeInvariantObligation": (
             "\\A initialContext: AsyncSpecAt(initialContext) => []AsyncTypeInvariant"
         ),
+        "AsyncNextPreservesNormalProposalPrepareCandidate": (
+            "\\A candidate: /\\ NormalProposalPrepareCandidate(candidate) "
+            "/\\ AsyncNext => NormalProposalPrepareCandidate(candidate)'"
+        ),
     }
+    if (
+        (formal_dir / "proof_coverage.json").is_file()
+        and (formal_dir / "SumeragiV2LivenessProofs.tla").is_file()
+    ):
+        expected.update({
+            "AsyncIngressCapacityGeometry": (
+                "ModelConfiguration => "
+                "/\\ Cardinality(ValidatorIds) = N "
+                "/\\ Cardinality(AsyncIngressSources) = N + 1"
+            ),
+            "OneRemovalIncreasesSourceProtectionByAtMostOne": (
+                "\\A source, before, selected: "
+                "/\\ before \\in Seq(Range(before)) "
+                "/\\ selected \\in 1..Len(before) => "
+                "LET after == SequenceWithoutIndex(before, selected) "
+                "IN IngressSourceProtectionPotential(source, after) <= "
+                "IngressSourceProtectionPotential(source, before) + 1"
+            ),
+            "ProtectedProgressSlotUniverseSize": (
+                "ModelConfiguration => "
+                "/\\ IsFiniteSet(ProtectedProgressSlotUniverse) "
+                "/\\ Cardinality(ProtectedProgressSlotUniverse) = 2 * N + 3"
+            ),
+            "ProtectedProgressSlotIdIsBounded": (
+                "\\A command: /\\ N \\in Nat \\ {0} "
+                "/\\ AsyncCandidateTyped(command) "
+                "/\\ ProtectedProgressCommand(command) "
+                "=> ProtectedProgressSlotId(command) \\in 0..(2 * N + 2)"
+            ),
+            "AppendFreshServeJobPreservesNonceOwnership": (
+                "\\A queue, job: /\\ AsyncIoSequenceTyped(queue) "
+                "/\\ AsyncIoServeNonceOwnership(queue) "
+                "/\\ AsyncIoJobTyped(job) /\\ job.class = \" \" "
+                "/\\ job.nonce \\notin {queue[index].nonce: "
+                "index \\in AsyncIoServeIndices(queue)} "
+                "=> AsyncIoServeNonceOwnership(Append(queue, job))"
+            ),
+            "AppendNonServeJobPreservesNonceOwnership": (
+                "\\A queue, job: /\\ AsyncIoSequenceTyped(queue) "
+                "/\\ AsyncIoServeNonceOwnership(queue) "
+                "/\\ job.class # \" \" "
+                "=> AsyncIoServeNonceOwnership(Append(queue, job))"
+            ),
+            "TailPreservesServeNonceOwnership": (
+                "\\A queue: /\\ AsyncIoSequenceTyped(queue) "
+                "/\\ AsyncIoServeNonceOwnership(queue) "
+                "/\\ Len(queue) > 0 "
+                "=> AsyncIoServeNonceOwnership(Tail(queue))"
+            ),
+        })
     errors: list[str] = []
     for symbol, exact_statement in expected.items():
         extracted = _top_level_theorem_body(source, symbol)
@@ -1418,6 +1474,7 @@ def _async_proof_architecture_errors(formal_dir: Path) -> list[str]:
                 r"/\ (gst /\ ResponsiveNodesDecide) ~> ResponsiveNodesApply"
             ),
         }
+        string_property_contracts: dict[str, str] = {}
         if (formal_dir / "proof_coverage.json").is_file():
             property_contracts.update({
               "GenerationScopedVoteDeliveryProperty": (
@@ -1428,7 +1485,62 @@ def _async_proof_architecture_errors(formal_dir: Path) -> list[str]:
               ),
               "DeadlockFreedomProperty": (
                 r"specification => [](gst /\ ~ResponsiveNodesDecide "
-                r"=> PostGstProgressActionEnabled)"
+                r"=> PostGstProductiveActionEnabled)"
+              ),
+              "HeightProtocolEvidenceGrows": (
+                r"\/ SetGains(availableBodies, availableBodies') "
+                r"\/ SetGains(durableBodies, durableBodies') "
+                r"\/ SetGains(retainedLockedBodies, retainedLockedBodies') "
+                r"\/ SetGains(validatedBodies, validatedBodies') "
+                r"\/ SetGains(seenProposals, seenProposals') "
+                r"\/ SetGains(receivedVotes, receivedVotes') "
+                r"\/ SetGains(receivedQCs, receivedQCs') "
+                r"\/ SetGains(proposalIntents, proposalIntents') "
+                r"\/ SetGains(prepareIntents, prepareIntents') "
+                r"\/ SetGains(commitIntents, commitIntents') "
+                r"\/ SetGains(prepareQCs, prepareQCs') "
+                r"\/ SetGains(commitQCs, commitQCs') "
+                r"\/ SetGains(decisions, decisions') "
+                r"\/ SetGains(applied, applied')"
+              ),
+              "SetGains": r"after \ before # {}",
+              "DeadlineDistance": (
+                r"IF now < deadline THEN deadline - now ELSE 0"
+              ),
+              "PostGstProductiveStep": (
+                r"/\ gst /\ AsyncNext /\ \/ HeightProtocolEvidenceGrows "
+                r"\/ PostGstDeadlineDebtDecreases "
+                r"\/ ProtectedServiceRankDecreaseStep "
+                r"\/ ProtectedServeRankDecreaseStep"
+              ),
+              "PostGstProductiveActionEnabled": (
+                r"ENABLED PostGstProductiveStep"
+              ),
+              "PostGstDeadlineDebtDecreases": (
+                r"\/ \E node \in AsyncCurrentResponsiveVoters: "
+                r"\/ DeadlineDistance(asyncNodeDeadlines'[node], asyncNow') "
+                r"< DeadlineDistance(asyncNodeDeadlines[node], asyncNow) "
+                r"\/ DeadlineDistance(asyncRetransmitDeadlines'[node], "
+                r"asyncNow') < DeadlineDistance("
+                r"asyncRetransmitDeadlines[node], asyncNow) "
+                r"\/ DeadlineDistance(asyncNodeServiceDeadlines'[node], "
+                r"asyncNow') < DeadlineDistance("
+                r"asyncNodeServiceDeadlines[node], asyncNow) "
+                r"\/ DeadlineDistance(asyncIoServiceDeadlines'[node], "
+                r"asyncNow') < DeadlineDistance("
+                r"asyncIoServiceDeadlines[node], asyncNow) "
+                r"\/ \E packet \in asyncTransport \cap asyncTransport': "
+                r"DeadlineDistance(packet.deadline, asyncNow') < "
+                r"DeadlineDistance(packet.deadline, asyncNow)"
+              ),
+              "ProtectedServiceRankDecreaseStep": (
+                r"\E candidate \in AsyncCandidateSet, stage \in 2..6, "
+                r"position \in Nat: "
+                r"/\ ResponsiveProtectedCandidateOwned(candidate) "
+                r"/\ CandidateServiceRank(candidate) = <<stage, position>> "
+                r"/\ \/ ~ResponsiveProtectedCandidateOwned(candidate)' "
+                r"\/ ServiceRankLess(CandidateServiceRank(candidate)', "
+                r"<<stage, position>>)"
               ),
               "ResponsiveProtectedCandidateOwned": (
                 r"/\ candidate.node \in AsyncCurrentResponsiveVoters "
@@ -1443,10 +1555,58 @@ def _async_proof_architecture_errors(formal_dir: Path) -> list[str]:
                 r"ServiceRankLess(CandidateServiceRank(candidate), "
                 r"<<stage, position>>))"
               ),
+              "ResponsiveProtectedServeJobOwned": (
+                r"/\ node \in AsyncCurrentResponsiveVoters "
+                r"/\ job \in AsyncServeJobSet "
+                r"/\ job \in SequenceSet(asyncIoQueues[node])"
+              ),
+              "ServeJobIndex": (
+                r"CHOOSE index \in "
+                r"AsyncIoServeIndices(asyncIoQueues[node]): "
+                r"asyncIoQueues[node][index] = job"
+              ),
+              "ServeJobRank": r"<<5, ServeJobIndex(node, job)>>",
+              "ProtectedServeRankDecreaseStep": (
+                r"\E node \in AsyncCurrentResponsiveVoters, "
+                r"job \in AsyncServeJobSet, position \in Nat: "
+                r"/\ ResponsiveProtectedServeJobOwned(node, job) "
+                r"/\ ServeJobRank(node, job) = <<5, position>> "
+                r"/\ \/ ~ResponsiveProtectedServeJobOwned(node, job)' "
+                r"\/ ServiceRankLess(ServeJobRank(node, job)', "
+                r"<<5, position>>)"
+              ),
+              "ProtectedServeRankProgressProperty": (
+                r"specification => \A node \in "
+                r"AsyncCurrentResponsiveVoters, job \in AsyncServeJobSet, "
+                r"position \in Nat: (gst /\ "
+                r"ResponsiveProtectedServeJobOwned(node, job) /\ "
+                r"ServeJobRank(node, job) = <<5, position>>) ~> "
+                r"(~ResponsiveProtectedServeJobOwned(node, job) \/ "
+                r"ServiceRankLess( ServeJobRank(node, job), "
+                r"<<5, position>>))"
+              ),
+              "ProtectedServeStarvationProperty": (
+                r"specification => \A node \in "
+                r"AsyncCurrentResponsiveVoters, job \in AsyncServeJobSet: "
+                r"(gst /\ ResponsiveProtectedServeJobOwned(node, job)) "
+                r"~> ~ResponsiveProtectedServeJobOwned(node, job)"
+              ),
+              "NormalProposalPrepareRankProgressProperty": (
+                r"specification => \A candidate \in AsyncCandidateSet, "
+                r"stage \in 2..6, position \in Nat: (gst /\ "
+                r"ResponsiveProtectedCandidateOwned(candidate) /\ "
+                r"NormalProposalPrepareCandidate(candidate) /\ "
+                r"CandidateServiceRank(candidate) = <<stage, position>>) "
+                r"~> (~ResponsiveProtectedCandidateOwned(candidate) \/ "
+                r"ServiceRankLess(CandidateServiceRank(candidate), "
+                r"<<stage, position>>))"
+              ),
               "StarvationFreedomProperty": (
-                r"specification => \A candidate \in AsyncCandidateSet: "
-                r"(gst /\ ResponsiveProtectedCandidateOwned(candidate)) ~> "
-                r"~ResponsiveProtectedCandidateOwned(candidate)"
+                r"/\ (specification => \A candidate \in "
+                r"AsyncCandidateSet: (gst /\ "
+                r"ResponsiveProtectedCandidateOwned(candidate)) ~> "
+                r"~ResponsiveProtectedCandidateOwned(candidate)) "
+                r"/\ ProtectedServeStarvationProperty(specification)"
               ),
             })
         theorem_contracts: dict[str, str] = {}
@@ -1478,6 +1638,105 @@ def _async_proof_architecture_errors(formal_dir: Path) -> list[str]:
                     r"CanonicalSuccessorContext(initialContext, subject))"
                 ),
             })
+            string_property_contracts.update({
+              "AsyncServeJobSet": (
+                r'{AsyncIoJob("Serve", candidate, nonce): '
+                r"candidate \in AsyncCandidateSet, "
+                r"nonce \in 0..AsyncIoAuxCapacity}"
+              ),
+              "NormalProposalPrepareNoItemKinds": (
+                r'{"AssembleBody", "BeginPrepare"}'
+              ),
+              "NormalProposalPrepareNetworkKinds": (
+                r'{"Proposal", "PrepareVote", "CommitVote"}'
+              ),
+              "NormalBeginPrepareParentKinds": (
+                r'{"DeliverProposal", "ValidateBody"}'
+              ),
+              "FrozenNormalDeliveryCandidate": (
+                r"LET subject == DeliverySubject(item) IN "
+                r'AsyncCandidateWithIdentity( "Normal", DeliveryKind(item), '
+                r"item.envelope.recipient, DeliveryHeight(item), "
+                r"DeliveryView(item), subject, item, consumerContext, "
+                r"consumerView, consumerGeneration, item, subject, subject, "
+                r"subject)"
+              ),
+              "NormalDeliveryCandidate": (
+                r"FrozenNormalDeliveryCandidate( item, context, "
+                r"nodeView[item.envelope.recipient], "
+                r"generation[item.envelope.recipient])"
+              ),
+              "FrozenNormalAssemblyCandidate": (
+                r'AsyncCandidateWithIdentity( "Normal", "AssembleBody", '
+                r"node, blockContext.height, roundView, subject, NoAsyncItem, "
+                r"blockContext, roundView, consumerGeneration, evidence, "
+                r"subject, subject, subject)"
+              ),
+              "NextCandidateGeneration": (
+                r"IF currentGeneration < MaxGeneration THEN "
+                r"currentGeneration + 1 ELSE currentGeneration"
+              ),
+              "FrozenInstallProposalSuccessor": (
+                r'AsyncCandidateWithIdentity( "Normal", "AssembleBody", '
+                r"command.node, installedContext.height, command.view + 1, "
+                r"subject, NoAsyncItem, installedContext, command.view + 1, "
+                r"NextCandidateGeneration(priorGeneration), command.evidence, "
+                r"subject, subject, subject)"
+              ),
+              "FrozenNormalBeginPrepareCandidate": (
+                r'AsyncCandidateWithIdentity( "Normal", "BeginPrepare", '
+                r"parent.node, blockHeight, parent.view, parent.subject, "
+                r"NoAsyncItem, parent.consumerContext, parent.consumerView, "
+                r"parent.consumerGeneration, parent.evidence, "
+                r"parent.bodyIdentity, parent.manifestIdentity, "
+                r"parent.commitmentIdentity)"
+              ),
+              "NormalProposalPrepareNoItemCandidate": (
+                r'/\ candidate.item = NoAsyncItem '
+                r'/\ candidate.kind \in NormalProposalPrepareNoItemKinds '
+                r'/\ \/ \E blockContext \in ContextRecords, '
+                r'node \in ValidatorIds, roundView \in Views, '
+                r'consumerGeneration \in Generations, '
+                r'subject \in SubjectOrNone: candidate = '
+                r'FrozenNormalAssemblyCandidate( blockContext, node, '
+                r'roundView, consumerGeneration, subject, NoAsyncItem) '
+                r'\/ \E command \in AsyncCandidateSet, '
+                r'installedContext \in ContextRecords, '
+                r'priorGeneration \in Generations, '
+                r'subject \in SubjectOrNone: '
+                r'/\ command.kind = "PersistInstallTC" '
+                r'/\ command.view + 1 \in Views '
+                r'/\ candidate = FrozenInstallProposalSuccessor( command, '
+                r'installedContext, priorGeneration, subject) '
+                r'\/ \E parent \in AsyncCandidateSet, '
+                r'blockHeight \in Heights: '
+                r'/\ parent.kind \in NormalBeginPrepareParentKinds '
+                r'/\ candidate = '
+                r'FrozenNormalBeginPrepareCandidate(parent, blockHeight)'
+              ),
+              "NormalProposalPrepareNetworkCandidate": (
+                r'\E item \in AsyncNetworkItems, '
+                r'consumerContext \in ContextRecords, '
+                r'consumerView \in Views, '
+                r'consumerGeneration \in Generations: '
+                r'/\ item.kind \in NormalProposalPrepareNetworkKinds '
+                r'/\ candidate = FrozenNormalDeliveryCandidate( item, '
+                r'consumerContext, consumerView, consumerGeneration)'
+              ),
+              "NormalProposalPrepareCandidate": (
+                r'/\ candidate \in AsyncCandidateSet '
+                r'/\ candidate.class = "Normal" '
+                r'/\ \/ NormalProposalPrepareNoItemCandidate(candidate) '
+                r'\/ NormalProposalPrepareNetworkCandidate(candidate)'
+              ),
+              "ProtectedServiceCandidate": (
+                r'/\ candidate \in AsyncCandidateSet '
+                r'/\ \/ candidate.class = "Completion" '
+                r'\/ /\ candidate.class = "Progress" '
+                r'/\ candidate.kind # "RejectProgress" '
+                r'\/ NormalProposalPrepareCandidate(candidate)'
+              ),
+            })
         for symbol, exact_body in property_contracts.items():
             extracted = _top_level_operator_body(vocabulary_source, symbol)
             if extracted is None:
@@ -1492,20 +1751,22 @@ def _async_proof_architecture_errors(formal_dir: Path) -> list[str]:
                     f"{vocabulary_path}:{line}: {symbol} must equal only "
                     f"{exact_body!r}; found {normalized!r}"
                 )
-        progress_actions = _top_level_operator_body(
-            vocabulary_source,
-            "PostGstProgressActionEnabled",
-            preserve_string_contents=True,
-        )
-        if progress_actions is None:
-            errors.append(
-                f"{vocabulary_path}: missing PostGstProgressActionEnabled"
+        for symbol, exact_body in string_property_contracts.items():
+            extracted = _top_level_operator_body(
+                vocabulary_source, symbol, preserve_string_contents=True
             )
-        elif "PostGstCommitCertificateDiscovery(node)" not in progress_actions[0]:
-            errors.append(
-                f"{vocabulary_path}:{progress_actions[1]}: post-GST progress "
-                "inventory must include fair commit-certificate discovery"
-            )
+            if extracted is None:
+                errors.append(
+                    f"{vocabulary_path}: missing stable liveness property {symbol}"
+                )
+                continue
+            body, line = extracted
+            normalized = " ".join(body.split())
+            if normalized != exact_body:
+                errors.append(
+                    f"{vocabulary_path}:{line}: {symbol} must equal only "
+                    f"{exact_body!r}; found {normalized!r}"
+                )
         for symbol, exact_statement in theorem_contracts.items():
             extracted = _top_level_theorem_body(vocabulary_source, symbol)
             if extracted is None:
@@ -1819,7 +2080,16 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             "subject: Subjects, chunk: 0..AsyncChunkCount, "
             "nonce: 0..(AsyncIngressCapacity - 1)]"
         ),
-        "AsyncSetGST": "/\\ ~gst /\\ SetGST /\\ UNCHANGED AsyncSchedulerVars",
+        "AsyncSetGST": (
+            '/\\ ~gst '
+            '/\\ asyncRecoveryPhase \\notin {"RestartRequired", "ReplayRequired"} '
+            "/\\ Responsive \\subseteq up /\\ SetGST "
+            "/\\ UNCHANGED <<AsyncSchedulerVars, AsyncRecoveryVars>>"
+        ),
+        "AsyncRecoveryVars": (
+            "<<asyncRecoveryPhase, asyncRecoveryNode, asyncRecoveryGeneration>>"
+        ),
+        "AsyncAllVars": "<<vars, AsyncSchedulerVars, AsyncRecoveryVars>>",
         "RetainedControlEmissionItems": (
             "SendableItems(node) \\cup RetainedProposalChunks(node)"
         ),
@@ -1910,6 +2180,7 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
         ),
         "CommandDispatchable": (
             "/\\ AsyncCandidateTyped(command) "
+            "/\\ CandidateConsumerCurrent(command) "
             "/\\ CommandExecutionEnabled(command) "
             "/\\ (NodeIdle(command.node) "
             "\\/ command.class = \"Completion\")"
@@ -1948,14 +2219,46 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
     }
     if (formal_dir / "proof_coverage.json").is_file():
         exact.update({
+            "IngressProgressKinds": (
+                '{"CommitVote", "PrepareQC", "CommitQC", "TimeoutVote", '
+                '"TimeoutCertificate", "Chunk", "CertifiedRequest", '
+                '"CertifiedResponse", "CommitCertificateRequest", '
+                '"CommitCertificateResponse"}'
+            ),
+            "IngressLaneHasNonTimeoutProgressIn": (
+                "\\E queued \\in SequenceSet(lanes[recipient][source]): "
+                '/\\ IngressAdmissionClass(queued) = "Progress" '
+                '/\\ queued.kind # "TimeoutVote"'
+            ),
+            "IngressProtectedSourcesFor": (
+                "{source \\in AsyncIngressSources: "
+                "\\/ Len(lanes[recipient][source]) = 0 "
+                "\\/ /\\ source \\in ValidatorIds "
+                "/\\ ~IngressLaneHasNonTimeoutProgressIn( "
+                "lanes, recipient, source)}"
+            ),
+            "IngressTimeoutVoteProtectedSourcesFor": (
+                "{source \\in ValidatorIds: "
+                "~IngressLaneHasTimeoutVoteIn(lanes, recipient, source)}"
+            ),
             "IngressContinuationProtectedSourcesFor": (
                 "{source \\in ValidatorIds: "
                 "\\/ Len(lanes[recipient][source]) = 0 "
                 "\\/ /\\ Len(lanes[recipient][source]) = 1 "
-                "/\\ IngressLaneHasProgressIn(lanes, recipient, source)}"
+                "/\\ (IngressLaneHasNonTimeoutProgressIn( "
+                "lanes, recipient, source) "
+                "\\/ IngressLaneHasTimeoutVoteIn( "
+                "lanes, recipient, source)) "
+                "\\/ /\\ Len(lanes[recipient][source]) = 2 "
+                "/\\ IngressLaneHasNonTimeoutProgressIn( "
+                "lanes, recipient, source) "
+                "/\\ IngressLaneHasTimeoutVoteIn( "
+                "lanes, recipient, source)}"
             ),
             "IngressProtectedSlotCountFor": (
                 "Cardinality(IngressProtectedSourcesFor(lanes, recipient)) + "
+                "Cardinality( IngressTimeoutVoteProtectedSourcesFor("
+                "lanes, recipient)) + "
                 "Cardinality(IngressContinuationProtectedSourcesFor(lanes, recipient))"
             ),
             "IngressProtectedSlotCountAfterAdmission": (
@@ -1988,6 +2291,78 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
                 "\\E queued \\in SequenceSet(lanes[recipient][source]): "
                 'queued.kind = "TimeoutVote"'
             ),
+            "ProtectedProgressCommand": (
+                'CASE command.kind = "DeliverVote" -> '
+                "HistoricalLockedCommitItem(command.item) "
+                '[] command.kind = "DeliverTimeout" -> '
+                'command.item.kind = "TimeoutVote" '
+                '[] command.kind = "DeliverQC" -> '
+                'command.item.kind \\in {"PrepareQC", "CommitQC"} '
+                '[] command.kind = "DeliverTC" -> '
+                'command.item.kind = "TimeoutCertificate" '
+                "[] OTHER -> FALSE"
+            ),
+            "SameProtectedProgressSlot": (
+                "/\\ ProtectedProgressCommand(left) "
+                "/\\ ProtectedProgressCommand(right) "
+                "/\\ left.node = right.node "
+                '/\\ CASE left.kind = "DeliverVote" -> '
+                '/\\ right.kind = "DeliverVote" '
+                "/\\ left.item.envelope.vote.signer = "
+                "right.item.envelope.vote.signer "
+                '[] left.kind = "DeliverQC" -> '
+                '/\\ right.kind = "DeliverQC" '
+                "/\\ left.item.kind = right.item.kind "
+                '[] left.kind = "DeliverTimeout" -> '
+                '/\\ right.kind = "DeliverTimeout" '
+                "/\\ left.item.envelope.vote.signer = "
+                "right.item.envelope.vote.signer "
+                '[] OTHER -> right.kind = "DeliverTC"'
+            ),
+            "DeferredProgressAfter": (
+                "LET queue == asyncDeferredProgressQueues[node] "
+                "IN IF command \\in SequenceSet(queue) THEN queue "
+                "ELSE IF SameProtectedProgressSlotIndices(node, command) # {} "
+                "THEN queue ELSE IF Len(queue) < "
+                "AsyncDeferredProgressCapacity THEN Append(queue, command) "
+                "ELSE queue"
+            ),
+            "DeliveryClass": (
+                "IF HistoricalLockedCommitItem(item) "
+                '\\/ item.kind \\in {"PrepareQC", "CommitQC", '
+                '"TimeoutVote", "TimeoutCertificate", "Chunk", '
+                '"CertifiedResponse", "CommitCertificateResponse", '
+                '"ProgressJunk"} THEN "Progress" ELSE "Normal"'
+            ),
+            "AsyncIoServeIndices": (
+                '{index \\in 1..Len(queue): queue[index].class = "Serve"}'
+            ),
+            "AsyncIoServeNonces": (
+                "{asyncIoQueues[node][index].nonce: "
+                "index \\in AsyncIoServeIndices(asyncIoQueues[node])}"
+            ),
+            "FreshAsyncIoServeNonce": (
+                "CHOOSE nonce \\in 0..AsyncIoAuxCapacity: "
+                "nonce \\notin AsyncIoServeNonces(node)"
+            ),
+            "AsyncIoCertifiedServeJob": (
+                'AsyncIoJob("Serve", candidate, FreshAsyncIoServeNonce(node))'
+            ),
+            "AsyncIoServeNonceOwnership": (
+                "\\A left, right \\in AsyncIoServeIndices(queue): "
+                "queue[left].nonce = queue[right].nonce => left = right"
+            ),
+            "AsyncIoQueueContentTypeInvariant": (
+                "\\A node \\in ValidatorIds: "
+                "/\\ AsyncIoSequenceTyped(asyncIoQueues[node]) "
+                "/\\ AsyncIoServeNonceOwnership(asyncIoQueues[node]) "
+                "/\\ \\A job \\in SequenceSet(asyncIoQueues[node]): "
+                'job.class = "Consensus" => '
+                "job.candidate \\in asyncOutstandingWork[node] "
+                "/\\ AsyncIoConsensusCandidateOwnership( node, "
+                "asyncIoQueues, asyncIoReadyCompletions, "
+                "asyncLocalReadyCompletions)"
+            ),
             "CanAdmitIngressItem": (
                 "/\\ IngressDepth(item.envelope.recipient) < "
                 "IngressUsableCapacityAfterAdmission(item) "
@@ -2007,6 +2382,16 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             errors.append(
                 f"{path}:{line}: {symbol} must equal only {expected!r}; "
                 f"found {normalized!r}"
+            )
+
+    for retired in (
+        "DominatedProtectedProgressIndices",
+        "ReplaceableUnprotectedProgressIndices",
+        "FirstProgressIndex",
+    ):
+        if re.search(rf"(?m)^{retired}\s*(?:\([^\n]*\))?\s*==", stripped):
+            errors.append(
+                f"{path}: retired displacement operator {retired} is prohibited"
             )
 
     expected_successor_parents = {
@@ -2180,6 +2565,7 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             "CausalCandidates",
             "TrackedWorkCandidates",
             "candidate.item = item",
+            "CandidateConsumerCurrent(candidate)",
         ),
         "IngressItemCanDrain": (
             "CandidateScheduled(candidate)",
@@ -2264,11 +2650,15 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
             "EnqueueCandidate(discoveredCandidate)",
             "MatchingCommitCertificateRequests(item)",
             "CandidateScheduled(candidate)",
+            "AsyncIoCertifiedServeJob(",
+            "node, candidate",
         ),
         "DrainHistoricalIngressSelected": (
             "HistoricalSelectedIngressLaneIndex(node, index)",
             "HistoricalSelectedIngressItemAt(node, index)",
             "PopSelectedIngress(node, index, laneIndex)",
+            "AsyncIoCertifiedServeJob(",
+            "node, candidate",
         ),
         "AsyncFairnessAt": (
             "PostGstRunNode(node)",
@@ -2309,16 +2699,18 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
         required_body_tokens.update({
             "DeliveryClass": (
                 "HistoricalLockedCommitItem(item)",
+                '"TimeoutVote"',
+                '"CertifiedResponse"',
+                '"CommitCertificateResponse"',
                 'THEN "Progress"',
             ),
             "DeferredProgressAfter": (
                 "SameProtectedProgressSlotIndices(node, command)",
-                "DominatedProtectedProgressIndices(node, command)",
-                "ReplaceableUnprotectedProgressIndices(node)",
+                "Append(queue, command)",
             ),
             "AsyncConfiguration": (
-                "AsyncDeferredProgressCapacity >= N + 3",
-                "AsyncIngressCapacity >= Cardinality(AsyncIngressSources) + Cardinality(ValidatorIds)",
+                "AsyncDeferredProgressCapacity >= 2 * N + 3",
+                "AsyncIngressCapacity >= 3 * N + 1",
                 "AsyncValidTimeoutVoteWireByteBound <= AsyncTimeoutVoteByteReserve",
             ),
         })
@@ -2688,6 +3080,41 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
                     "decision body validation"
                 )
 
+    repo_root = formal_dir.parents[2]
+    rust_path = repo_root / "crates" / "iroha_core" / "src" / "sumeragi" / "v2.rs"
+    if rust_path.is_file():
+        rust_source = rust_path.read_text(encoding="utf-8")
+        required_rust_tokens = (
+            "const fn semantic_ingress_capacity(roster_len: usize) -> usize",
+            "let protected_capacity_bypass =",
+            "locked_commit_progress || matches!(key, IngressSemanticKey::TimeoutVote { .. })",
+            "matches!(key, IngressSemanticKey::TimeoutVote { .. })",
+            "if capacity_bypass && !protected_capacity_bypass",
+            "let matches_current_timeout = |key: IngressSemanticKey|",
+            "matches_current_lock(*key, record.fingerprint) || matches_current_timeout(*key)",
+            "semantic_ingress_capacity(self.wire_context.roster.len())",
+            "fn capacity_bypass_records_follow_current_lock_and_timeout_view()",
+            "roster_len * 2",
+            "assert_eq!(adapter.ingress_equivocations, same_view_equivocations)",
+            "fn assert_timeout_vote_owner_rolls_back_across_view_and_retries()",
+            "for attempt in 0..2",
+            "assert_registry_eq(&adapter.registry, &registry_before)",
+            "assert!(!adapter.ingress_deliveries.contains_key(&current_key))",
+            "fn full_normal_deferred_lane_cannot_drop_absolute_timeout()",
+            "assert_timeout_vote_owner_rolls_back_across_view_and_retries();",
+            "MAX_INGRESS_SEMANTIC_KEYS",
+            ".is_some_and(|record| record.capacity_bypass)",
+            "Some(DeferredProgressClass::TimeoutVote)",
+        )
+        missing = [
+            token for token in required_rust_tokens if token not in rust_source
+        ]
+        if missing:
+            errors.append(
+                f"{rust_path}: authenticated TimeoutVote admission must retain "
+                f"its current-view semantic-capacity bypass; missing {missing}"
+            )
+
     liveness_cfg = formal_dir / "liveness.cfg"
     if liveness_cfg.is_file():
         cfg_source = liveness_cfg.read_text(encoding="utf-8")
@@ -2698,6 +3125,80 @@ def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
         if "INVARIANT AsyncProgressOwnershipInvariant\n" not in cfg_source:
             errors.append(
                 f"{liveness_cfg}: scheduler progress ownership must remain a TLC invariant"
+            )
+        if "INVARIANT AsyncRecoveryTypeInvariant\n" not in cfg_source:
+            errors.append(
+                f"{liveness_cfg}: responsive recovery state must remain a TLC invariant"
+            )
+        if "INVARIANT AsyncRestartAuthorityInvariant\n" not in cfg_source:
+            errors.append(
+                f"{liveness_cfg}: responsive restart authority must remain a TLC invariant"
+            )
+    crash_replay_configs = (
+        "crash_replay_signature_fixed.cfg",
+        "crash_replay_body_fixed.cfg",
+        "crash_replay_application_fixed.cfg",
+        "crash_replay_signature_drop_bug.cfg",
+        "crash_replay_body_drop_bug.cfg",
+        "crash_replay_application_drop_bug.cfg",
+        "crash_replay_stale_completion_bug.cfg",
+    )
+    for config_name in crash_replay_configs:
+        config_path = formal_dir / config_name
+        if not config_path.is_file():
+            continue
+        config_source = config_path.read_text(encoding="utf-8")
+        for invariant in (
+            "AsyncRecoveryTypeInvariant",
+            "AsyncRestartAuthorityInvariant",
+        ):
+            if f"INVARIANT {invariant}\n" not in config_source:
+                errors.append(
+                    f"{config_path}: crash/replay TLC search must retain "
+                    f"{invariant}"
+                )
+    return errors
+
+
+def _ownership_n1_configuration_errors(formal_dir: Path) -> list[str]:
+    """Keep the one-validator ownership search on the exact protected geometry."""
+
+    path = formal_dir / "ownership_n1.cfg"
+    if not path.is_file():
+        return [f"{path}: missing one-validator ownership configuration"]
+    source = path.read_text(encoding="utf-8")
+    errors: list[str] = []
+
+    def natural(name: str) -> int | None:
+        matches = re.findall(rf"(?m)^  {re.escape(name)} = ([0-9]+)$", source)
+        if len(matches) != 1:
+            errors.append(
+                f"{path}: ownership search must pin {name} exactly once"
+            )
+            return None
+        return int(matches[0])
+
+    validator_count = natural("N")
+    ingress_capacity = natural("AsyncIngressCapacity")
+    deferred_progress_capacity = natural("AsyncDeferredProgressCapacity")
+    if validator_count is not None and validator_count != 1:
+        errors.append(f"{path}: ownership search must remain the N=1 boundary")
+    if validator_count is not None and ingress_capacity is not None:
+        exact_ingress_capacity = 3 * validator_count + 1
+        if ingress_capacity != exact_ingress_capacity or ingress_capacity != 4:
+            errors.append(
+                f"{path}: N=1 AsyncIngressCapacity must equal exact 3 * N + 1 "
+                f"geometry (4), found {ingress_capacity}"
+            )
+    if validator_count is not None and deferred_progress_capacity is not None:
+        exact_deferred_capacity = 2 * validator_count + 3
+        if (
+            deferred_progress_capacity != exact_deferred_capacity
+            or deferred_progress_capacity != 5
+        ):
+            errors.append(
+                f"{path}: N=1 AsyncDeferredProgressCapacity must equal exact "
+                f"2 * N + 3 geometry (5), found {deferred_progress_capacity}"
             )
     return errors
 
@@ -3145,6 +3646,12 @@ def _chain_source_fidelity_errors(formal_dir: Path) -> list[str]:
         "asyncHeldChunks",
     )
     scheduler_arity = len(scheduler_fields)
+    recovery_fields = (
+        "asyncRecoveryPhase",
+        "asyncRecoveryNode",
+        "asyncRecoveryGeneration",
+    )
+    recovery_arity = len(recovery_fields)
     node_service_deadline_slot = scheduler_fields.index(
         "asyncNodeServiceDeadlines"
     ) + 1
@@ -3173,6 +3680,37 @@ def _chain_source_fidelity_errors(formal_dir: Path) -> list[str]:
                     f"{async_path}:{line}: AsyncSchedulerVars must match the "
                     "chain projection's exact ordered scheduler tuple; found "
                     f"{actual_scheduler_fields!r}"
+                )
+        async_recovery = _top_level_operator_body(async_source, "AsyncRecoveryVars")
+        if async_recovery is None:
+            errors.append(f"{async_path}: missing AsyncRecoveryVars")
+        else:
+            body, line = async_recovery
+            tuple_match = re.fullmatch(r"\s*<<(.+)>>\s*", body, re.DOTALL)
+            actual_recovery_fields = (
+                ()
+                if tuple_match is None
+                else tuple(
+                    field.strip() for field in tuple_match.group(1).split(",")
+                )
+            )
+            if actual_recovery_fields != recovery_fields:
+                errors.append(
+                    f"{async_path}:{line}: AsyncRecoveryVars must match the "
+                    "chain projection's exact ordered recovery tuple; found "
+                    f"{actual_recovery_fields!r}"
+                )
+        async_all_vars = _top_level_operator_body(async_source, "AsyncAllVars")
+        expected_async_all_vars = "<<vars, AsyncSchedulerVars, AsyncRecoveryVars>>"
+        if async_all_vars is None:
+            errors.append(f"{async_path}: missing AsyncAllVars")
+        else:
+            body, line = async_all_vars
+            normalized = " ".join(body.split())
+            if normalized != expected_async_all_vars:
+                errors.append(
+                    f"{async_path}:{line}: AsyncAllVars must equal only "
+                    f"{expected_async_all_vars!r}; found {normalized!r}"
                 )
 
     if chain_path.is_file():
@@ -3363,6 +3901,23 @@ def _chain_source_fidelity_errors(formal_dir: Path) -> list[str]:
                     f"global-barrier operator {forbidden}"
                 )
 
+        indexed_recovery = _top_level_operator_body(
+            raw_source, "IndexedRecovery", preserve_string_contents=True
+        )
+        expected_indexed_recovery = (
+            "indexedAsyncState[initialContext][3][component]"
+        )
+        if indexed_recovery is None:
+            errors.append(f"{refinement_path}: missing IndexedRecovery projection")
+        else:
+            body, line = indexed_recovery
+            normalized = " ".join(body.split())
+            if normalized != expected_indexed_recovery:
+                errors.append(
+                    f"{refinement_path}:{line}: IndexedRecovery must equal only "
+                    f"{expected_indexed_recovery!r}; found {normalized!r}"
+                )
+
         indexed_async = _top_level_operator_body(raw_source, "IndexedAsync")
         indexed_async_normalized: str | None = None
         if indexed_async is None:
@@ -3452,6 +4007,21 @@ def _chain_source_fidelity_errors(formal_dir: Path) -> list[str]:
                     f"{refinement_path}:{line}: IndexedAsync scheduler tuple mapping "
                     f"does not match AsyncSchedulerVars; missing {missing}"
                 )
+            expected_recovery_mappings = tuple(
+                f"{field} <- IndexedRecovery(initialContext, {index})"
+                for index, field in enumerate(recovery_fields, start=1)
+            )
+            missing_recovery = [
+                mapping
+                for mapping in expected_recovery_mappings
+                if mapping not in normalized
+            ]
+            if missing_recovery:
+                errors.append(
+                    f"{refinement_path}:{line}: IndexedAsync recovery tuple mapping "
+                    "does not match AsyncRecoveryVars; missing "
+                    f"{missing_recovery}"
+                )
 
         verification_context = re.search(
             r"(?m)^CONSTANTS?[ \t]+VerificationContext[ \t]*$", source
@@ -3465,6 +4035,9 @@ def _chain_source_fidelity_errors(formal_dir: Path) -> list[str]:
             "VerificationCore": "IndexedCore(VerificationContext, component)",
             "VerificationScheduler": (
                 "IndexedScheduler(VerificationContext, component)"
+            ),
+            "VerificationRecovery": (
+                "IndexedRecovery(VerificationContext, component)"
             ),
         }
         for symbol, expected_body in verification_helpers.items():
@@ -3515,12 +4088,18 @@ def _chain_source_fidelity_errors(formal_dir: Path) -> list[str]:
                     "VerificationScheduler(",
                     expected_proof_mapping,
                 )
+                expected_proof_mapping = re.sub(
+                    r"IndexedRecovery\(initialContext,\s*",
+                    "VerificationRecovery(",
+                    expected_proof_mapping,
+                )
                 if proof_normalized != expected_proof_mapping:
                     errors.append(
                         f"{refinement_path}:{proof_line}: "
                         "VerificationAsyncProof must use the exact IndexedAsync "
-                        "Core/scheduler tuple substitution through the "
-                        "VerificationCore and VerificationScheduler mappings"
+                        "Core/scheduler/recovery tuple substitution through the "
+                        "VerificationCore, VerificationScheduler, and "
+                        "VerificationRecovery mappings"
                     )
 
         indexed_shape = _top_level_operator_body(
@@ -3532,14 +4111,59 @@ def _chain_source_fidelity_errors(formal_dir: Path) -> list[str]:
             body, line = indexed_shape
             normalized = " ".join(body.split())
             required = (
+                "Len(indexedAsyncState[initialContext]) = 3",
                 "Len(indexedAsyncState[initialContext][1]) = 46",
                 f"Len(indexedAsyncState[initialContext][2]) = {scheduler_arity}",
+                f"Len(indexedAsyncState[initialContext][3]) = {recovery_arity}",
             )
             missing = [token for token in required if token not in normalized]
             if missing:
                 errors.append(
                     f"{refinement_path}:{line}: IndexedAsyncStateShape has stale "
-                    f"Core/scheduler tuple arity {missing}"
+                    f"Core/scheduler/recovery tuple arity {missing}"
+                )
+
+        exact_variables = _top_level_theorem_body(
+            raw_source, "IndexedInstanceVariablesAreExact"
+        )
+        exact_variables_statement = (
+            "IndexedAsyncStateShape => \\A initialContext \\in "
+            "AdmissibleContextRecords: IndexedAsync(initialContext)!AsyncAllVars "
+            "= IndexedAsyncStateAt(initialContext)"
+        )
+        if exact_variables is None:
+            errors.append(
+                f"{refinement_path}: missing IndexedInstanceVariablesAreExact"
+            )
+        else:
+            body, line = exact_variables
+            statement = re.split(
+                r"(?m)^[ \t]*(?:BY|PROOF|OBVIOUS)\b", body, maxsplit=1
+            )[0]
+            normalized_statement = " ".join(statement.split())
+            if normalized_statement != exact_variables_statement:
+                errors.append(
+                    f"{refinement_path}:{line}: "
+                    "IndexedInstanceVariablesAreExact must state only "
+                    f"{exact_variables_statement!r}; found "
+                    f"{normalized_statement!r}"
+                )
+            missing_definitions = [
+                definition
+                for definition in (
+                    "IndexedAsyncStateShape",
+                    "IndexedAsyncStateAt",
+                    "IndexedCore",
+                    "IndexedScheduler",
+                    "IndexedRecovery",
+                )
+                if definition not in body
+            ]
+            if missing_definitions:
+                errors.append(
+                    f"{refinement_path}:{line}: "
+                    "IndexedInstanceVariablesAreExact must unfold every exact "
+                    f"tuple projection; missing {missing_definitions}"
                 )
 
         joined_non_runner = _top_level_operator_body(
@@ -4162,6 +4786,7 @@ def validate_ledger(
     errors.extend(_async_proof_architecture_errors(formal_dir))
     errors.extend(_progress_witness_source_fidelity_errors(formal_dir))
     errors.extend(_async_source_fidelity_errors(formal_dir))
+    errors.extend(_ownership_n1_configuration_errors(formal_dir))
     errors.extend(_chain_source_fidelity_errors(formal_dir))
     for cfg_name in REQUIRED_TLC_CONFIGS:
         cfg = formal_dir / cfg_name

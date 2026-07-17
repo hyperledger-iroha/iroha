@@ -18,7 +18,7 @@ use super::{
         EVENT_PERSISTED, EVENT_RESUME_AFTER_REPLAY, EVENT_SIGNED, EffectCapabilityKey, EffectTrace,
         EnterViewProjection, PendingProjection, REPLAY_EFFECT_COMMIT, REPLAY_EFFECT_DECISION,
         REPLAY_EFFECT_NONE, REPLAY_EFFECT_PREPARE, REPLAY_EFFECT_PROPOSAL, REPLAY_EFFECT_TIMEOUT,
-        SIGNED_MESSAGE_COMMIT, SIGNED_MESSAGE_NONE, SIGNED_MESSAGE_PREPARE,
+        ReplayPlanProjection, SIGNED_MESSAGE_COMMIT, SIGNED_MESSAGE_NONE, SIGNED_MESSAGE_PREPARE,
         SIGNED_MESSAGE_PROPOSAL, SIGNED_MESSAGE_TIMEOUT, SafetyProjection, SubjectProjection,
         TagProjection, TimeoutIdentityProjection, TransitionProjection, ValidatorProjection,
         VolatileSummary, WAL_RECORD_DECISION, WAL_RECORD_INSTALL_TIMEOUT,
@@ -1583,6 +1583,7 @@ impl Reducer {
             context_id: pending.entry.record().context_id(),
             tag: Self::tag_projection(tag),
             subject: Self::subject_projection(Some(subject)),
+            replay_plan: ReplayPlanProjection::empty(),
         }
     }
 
@@ -1633,6 +1634,7 @@ impl Reducer {
                 subject: Self::subject_projection(
                     after.durable.decision().map(QuorumCertificate::subject),
                 ),
+                replay_plan: Self::observed_replay_plan(after, effects),
                 ..BoundaryCapabilityKey::none()
             };
         }
@@ -1684,15 +1686,17 @@ impl Reducer {
             refinement::BOUNDARY_RESUME_AFTER_REPLAY
                 if self.resume_after_replay_is_exact(event, after, effects) =>
             {
+                let replay_plan = self.expected_replay_plan();
                 BoundaryCapabilityKey {
                     kind: refinement::BOUNDARY_RESUME_AFTER_REPLAY,
-                    replay_effect_kind: Self::replay_effect_kind(after, effects),
+                    replay_effect_kind: Self::first_replay_plan_kind(replay_plan),
                     persistence_id: after.durable.last_id().get(),
                     context_id: after.context.id(),
                     tag: Self::tag_projection(after.current_tag()),
                     subject: Self::subject_projection(
                         after.durable.decision().map(QuorumCertificate::subject),
                     ),
+                    replay_plan,
                     ..BoundaryCapabilityKey::none()
                 }
             }
@@ -1937,41 +1941,206 @@ impl Reducer {
         if self.replay_resumed || !matches!(event, Event::ResumeAfterReplay { .. }) {
             return false;
         }
-        let mut expected = self.clone();
-        let outcome = expected.on_resume_after_replay();
-        let actual_effect_kind = Self::replay_effect_kind(&expected, outcome.effects());
-        outcome.disposition() == StepDisposition::Applied
-            && expected == *after
-            && outcome.effects() == effects
-            && actual_effect_kind == self.expected_replay_effect_kind()
+        let Some((expected, expected_effects)) = self.independent_replay_transition() else {
+            return false;
+        };
+        expected == *after
+            && expected_effects == effects
+            && Self::observed_replay_plan(after, effects) == self.expected_replay_plan()
     }
 
-    fn expected_replay_effect_kind(&self) -> u8 {
+    /// Derive the complete recovery FIFO from durable sources without calling
+    /// `on_resume_after_replay` or `drive_signature`.
+    ///
+    /// Keeping this derivation separate is intentional: the refinement gate
+    /// must reject an implementation that preserves the first replay effect
+    /// while omitting or reordering later durable intents.
+    fn expected_replay_signatures(&self) -> Vec<SignableMessage> {
         if self.durable.decision().is_some() {
-            return REPLAY_EFFECT_DECISION;
+            return Vec::new();
         }
+        let mut messages = Vec::with_capacity(3);
         let round = Round::new(self.context.height(), self.durable.current_view());
-        if self.durable.timeout_intent(round).is_some() {
-            return REPLAY_EFFECT_TIMEOUT;
+        if let Some(timeout) = self.durable.timeout_intent(round) {
+            messages.push(SignableMessage::TimeoutVote(timeout));
+        } else if let Some(proposal) = self.durable.proposal_intent(round) {
+            messages.push(SignableMessage::Proposal(proposal.clone()));
         }
-        if self.durable.proposal_intent(round).is_some() {
-            return REPLAY_EFFECT_PROPOSAL;
-        }
-        if self
-            .durable
-            .prepare_intents()
-            .any(|vote| Self::durable_vote_is_active(&self.durable, vote))
+        if self.durable.timeout_intent(round).is_none()
+            && let Some(vote) = self.durable.prepare_intent(round)
+            && vote.round() == round
+            && vote.phase() == Phase::Prepare
         {
-            return REPLAY_EFFECT_PREPARE;
+            messages.push(SignableMessage::Vote(vote));
         }
-        if self
-            .durable
-            .commit_intents()
-            .any(|vote| Self::durable_vote_is_active(&self.durable, vote))
+        if let Some(vote) = self.durable.locked().and_then(|locked| {
+            self.durable.commit_intent(locked.round()).filter(|vote| {
+                vote.phase() == Phase::Commit
+                    && vote.round() == locked.round()
+                    && vote.subject() == locked.subject()
+            })
+        }) {
+            messages.push(SignableMessage::Vote(vote));
+        }
+        messages
+    }
+
+    fn replay_kind_for_signable(message: &SignableMessage) -> u8 {
+        match message {
+            SignableMessage::Proposal(_) => REPLAY_EFFECT_PROPOSAL,
+            SignableMessage::Vote(vote) => match vote.phase() {
+                Phase::Prepare => REPLAY_EFFECT_PREPARE,
+                Phase::Commit => REPLAY_EFFECT_COMMIT,
+            },
+            SignableMessage::TimeoutVote(_) => REPLAY_EFFECT_TIMEOUT,
+        }
+    }
+
+    fn replay_sign_capability(&self, message: &SignableMessage) -> EffectCapabilityKey {
+        let mut capability = EffectCapabilityKey {
+            kind: EFFECT_SIGN,
+            tag: Self::tag_projection(self.current_tag()),
+            ..EffectCapabilityKey::none()
+        };
+        Self::apply_signable(&mut capability, message);
+        capability
+    }
+
+    fn expected_decision_fetch(&self) -> Option<Effect> {
+        let certificate = self.durable.decision()?.clone();
+        let round = certificate.round();
+        let subject = certificate.subject();
+        if self.body_state(round, subject) != BodyState::Missing {
+            return None;
+        }
+        Some(Effect::FetchBody {
+            tag: self.current_tag(),
+            round,
+            subject,
+            manifest: self
+                .body_work
+                .get(&(round, subject))
+                .and_then(|work| work.manifest),
+            certified_sources: certificate
+                .signatures()
+                .iter()
+                .map(SignatureShare::signer)
+                .collect(),
+            certificate: Some(certificate),
+        })
+    }
+
+    fn push_replay_plan(
+        plan: &mut ReplayPlanProjection,
+        kind: u8,
+        capability: EffectCapabilityKey,
+    ) {
+        if !plan.push(kind, capability) {
+            // `len = 4` is the canonical fail-closed sentinel beyond the
+            // protocol's three-item recovery bound.
+            plan.len = 4;
+        }
+    }
+
+    fn expected_replay_plan(&self) -> ReplayPlanProjection {
+        let mut plan = ReplayPlanProjection::empty();
+        if let Some(effect) = self.expected_decision_fetch() {
+            Self::push_replay_plan(
+                &mut plan,
+                REPLAY_EFFECT_DECISION,
+                Self::effect_capability(&effect),
+            );
+            return plan;
+        }
+        for message in self.expected_replay_signatures() {
+            let kind = Self::replay_kind_for_signable(&message);
+            let capability = self.replay_sign_capability(&message);
+            Self::push_replay_plan(&mut plan, kind, capability);
+        }
+        plan
+    }
+
+    fn observed_replay_plan(after: &Self, effects: &[Effect]) -> ReplayPlanProjection {
+        let mut plan = ReplayPlanProjection::empty();
+        if after.durable.decision().is_some() {
+            for effect in effects {
+                let kind = match effect {
+                    Effect::FetchBody { .. } => REPLAY_EFFECT_DECISION,
+                    Effect::Sign { message, .. } => Self::replay_kind_for_signable(message),
+                    _ => u8::MAX,
+                };
+                Self::push_replay_plan(&mut plan, kind, Self::effect_capability(effect));
+            }
+            return plan;
+        }
+        if let Some(message) = &after.awaiting_signature {
+            Self::push_replay_plan(
+                &mut plan,
+                Self::replay_kind_for_signable(message),
+                after.replay_sign_capability(message),
+            );
+        }
+        for message in &after.signature_queue {
+            Self::push_replay_plan(
+                &mut plan,
+                Self::replay_kind_for_signable(message),
+                after.replay_sign_capability(message),
+            );
+        }
+        plan
+    }
+
+    const fn first_replay_plan_kind(plan: ReplayPlanProjection) -> u8 {
+        if plan.len == 0 {
+            REPLAY_EFFECT_NONE
+        } else {
+            plan.slot0.kind
+        }
+    }
+
+    /// Independently materialize the exact post-replay state and first effect.
+    /// This must remain structurally separate from the implementation under
+    /// test so a shared omission or reordering cannot grant itself authority.
+    fn independent_replay_transition(&self) -> Option<(Self, Vec<Effect>)> {
+        if self.replay_resumed
+            || self.pending_persistence.is_some()
+            || self.awaiting_signature.is_some()
+            || !self.signature_queue.is_empty()
         {
-            return REPLAY_EFFECT_COMMIT;
+            return None;
         }
-        REPLAY_EFFECT_NONE
+        let mut expected = self.clone();
+        expected.replay_resumed = true;
+        if self.durable.decision().is_some() {
+            let effect = self.expected_decision_fetch()?;
+            let (round, subject) = match &effect {
+                Effect::FetchBody { round, subject, .. } => (*round, *subject),
+                _ => unreachable!("the independent Decision frontier is one FetchBody"),
+            };
+            expected
+                .body_work
+                .entry((round, subject))
+                .or_insert(BodyWork {
+                    manifest: None,
+                    state: BodyState::Missing,
+                });
+            return Some((expected, vec![effect]));
+        }
+        expected
+            .signature_queue
+            .extend(self.expected_replay_signatures());
+        let Some(message) = expected.signature_queue.pop_front() else {
+            return Some((expected, Vec::new()));
+        };
+        if !expected.signable_is_durably_authorized(&message) {
+            return None;
+        }
+        expected.awaiting_signature = Some(message.clone());
+        let effect = Effect::Sign {
+            tag: expected.current_tag(),
+            message,
+        };
+        Some((expected, vec![effect]))
     }
 
     fn signable_message_kind(message: &SignableMessage) -> u8 {
@@ -4058,6 +4227,140 @@ mod source_link_tests {
             id,
         };
         (before, event)
+    }
+
+    fn composite_replay_reducer() -> Reducer {
+        let fixture = reducer();
+        let context = fixture.context.clone();
+        let local = context.leader(1);
+        let subject = Subject::repeat(0xc1);
+        let locked_round = Round::new(context.height(), 0);
+        let current_round = Round::new(context.height(), 1);
+        let locked_prepare = certificate(&context, 0, Phase::Prepare, subject, 0xc2);
+        let timeout = timeout_certificate(&context, 0, Some(locked_prepare.clone()));
+        let manifest =
+            PayloadManifest::new(subject, Digest::repeat(0xc3), Digest::repeat(0xc4), 512, 4);
+        let proposal = Proposal::new(
+            context.id(),
+            current_round,
+            local,
+            manifest,
+            ProposalJustification::Timeout(timeout.clone()),
+        );
+        let entries = [
+            WalEntry::new(
+                PersistenceId::new(1),
+                WalRecord::PrepareIntent(Vote::new(
+                    context.id(),
+                    locked_round,
+                    Phase::Prepare,
+                    subject,
+                    local,
+                )),
+            ),
+            WalEntry::new(
+                PersistenceId::new(2),
+                WalRecord::LockAndCommit {
+                    prepare: locked_prepare,
+                    vote: Vote::new(context.id(), locked_round, Phase::Commit, subject, local),
+                },
+            ),
+            WalEntry::new(PersistenceId::new(3), WalRecord::InstallTimeout(timeout)),
+            WalEntry::new(PersistenceId::new(4), WalRecord::ProposalIntent(proposal)),
+            WalEntry::new(
+                PersistenceId::new(5),
+                WalRecord::PrepareIntent(Vote::new(
+                    context.id(),
+                    current_round,
+                    Phase::Prepare,
+                    subject,
+                    local,
+                )),
+            ),
+        ];
+        Reducer::recover(context, Some(local), Generation::new(9), entries)
+            .expect("recover proposal, Prepare, and exact historical Commit")
+    }
+
+    #[test]
+    fn replay_refinement_binds_the_complete_durable_fifo() {
+        let before = composite_replay_reducer();
+        let expected = before.expected_replay_plan();
+        assert_eq!(expected.len, 3);
+        assert_eq!(expected.slot0.kind, REPLAY_EFFECT_PROPOSAL);
+        assert_eq!(expected.slot1.kind, REPLAY_EFFECT_PREPARE);
+        assert_eq!(expected.slot2.kind, REPLAY_EFFECT_COMMIT);
+
+        let event = Event::ResumeAfterReplay {
+            tag: before.current_tag(),
+        };
+        let mut after = before.clone();
+        let outcome = after
+            .step_in_place(event.clone())
+            .expect("materialize the production replay candidate");
+        let projection = before.transition_projection(&event, &after, outcome.effects());
+        assert!(refinement::accepts(projection));
+        assert_eq!(projection.boundary_claimed.replay_plan, expected);
+        assert_eq!(projection.boundary_granted.replay_plan, expected);
+
+        let duplicate_event = Event::ResumeAfterReplay {
+            tag: after.current_tag(),
+        };
+        let mut destructive_duplicate = after.clone();
+        destructive_duplicate.signature_queue.pop_back();
+        assert!(!after.transition_refines(&duplicate_event, &destructive_duplicate, &[]));
+
+        let mut omitted = projection;
+        omitted.boundary_claimed.replay_plan.len = 2;
+        omitted.boundary_claimed.replay_plan.slot2 = refinement::ReplayPlanSlotProjection::none();
+        assert!(!refinement::accepts(omitted));
+
+        let mut reordered = projection;
+        let prepare_slot = reordered.boundary_claimed.replay_plan.slot1;
+        reordered.boundary_claimed.replay_plan.slot1 = reordered.boundary_claimed.replay_plan.slot2;
+        reordered.boundary_claimed.replay_plan.slot2 = prepare_slot;
+        assert!(!refinement::accepts(reordered));
+
+        let mut substituted = projection;
+        substituted
+            .boundary_claimed
+            .replay_plan
+            .slot2
+            .capability
+            .subject = Subject::repeat(0xc5);
+        assert!(!refinement::accepts(substituted));
+    }
+
+    #[test]
+    fn replay_refinement_rejects_malformed_post_states_even_with_the_right_first_effect() {
+        let before = composite_replay_reducer();
+        let messages = before.expected_replay_signatures();
+        assert_eq!(messages.len(), 3);
+        let first = messages[0].clone();
+        let effect = Effect::Sign {
+            tag: before.current_tag(),
+            message: first.clone(),
+        };
+        let event = Event::ResumeAfterReplay {
+            tag: before.current_tag(),
+        };
+
+        let mut dropped_all = before.clone();
+        dropped_all.replay_resumed = true;
+        assert!(!before.transition_refines(&event, &dropped_all, &[]));
+
+        let mut omitted = before.clone();
+        omitted.replay_resumed = true;
+        omitted.awaiting_signature = Some(first.clone());
+        omitted.signature_queue.push_back(messages[2].clone());
+        assert!(!before.transition_refines(&event, &omitted, std::slice::from_ref(&effect),));
+
+        let mut reordered = before.clone();
+        reordered.replay_resumed = true;
+        reordered.awaiting_signature = Some(first);
+        reordered.signature_queue.push_back(messages[2].clone());
+        reordered.signature_queue.push_back(messages[1].clone());
+        assert!(!before.transition_refines(&event, &reordered, &[effect]));
     }
 
     #[test]

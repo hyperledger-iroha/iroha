@@ -80903,7 +80903,7 @@ mod tests {
         let mut world = World::default();
         world.citizens.insert(
             account_id.clone(),
-            CitizenshipRecord::new(account_id, 10, 1),
+            CitizenshipRecord::new(account_id, Quantity::from(10_u64), 1),
         );
 
         let _state = State::with_telemetry(world, kura, query_handle, telemetry);

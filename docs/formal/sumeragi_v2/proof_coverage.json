@@ -193,28 +193,28 @@
     },
     {
       "id": "progress-witness-preservation",
-      "requirement": "Every active durable locked Commit intent and durable decision retains a concrete signing, retransmission, receipt, certificate, recovery, application, or completion witness; every validated exact TC-promoted lock without intent owns its BeginLockCommit or WAL reconstruction witness; and protected deferred slots remain unique within their validator-count-plus-three bound",
+      "requirement": "Every active durable locked Commit intent and durable decision retains a concrete signing, retransmission, receipt, certificate, recovery, application, or completion witness; every validated exact TC-promoted lock without intent owns its BeginLockCommit or WAL reconstruction witness; and locked-Commit signer, TimeoutVote signer, PrepareQC, CommitQC, and TC deferred owners remain unique within their exact two-times-validator-count-plus-three partition",
       "module": "SumeragiV2AsyncLivenessProofs",
       "symbol": "ProgressWitnessObligation",
       "status": "specified_unproved"
     },
     {
       "id": "post-gst-deadlock-freedom",
-      "requirement": "Every reachable undecided post-GST state enables a concrete clock, runtime, worker, or responsive-transport progress action",
+      "requirement": "Every reachable undecided post-GST state enables an AsyncNext step that grows current-height protocol evidence, strictly decreases a concrete deadline debt, or decreases/exits a protected candidate or Serve-occurrence service rank; a bare clock, runner, or view-change step is insufficient",
       "module": "SumeragiV2AsyncLivenessProofs",
       "symbol": "DeadlockFreedomObligation",
       "status": "specified_unproved"
     },
     {
       "id": "protected-service-rank",
-      "requirement": "Every scheduler-owned progress or completion candidate is eventually serviced or decreases its well-founded deferred, runtime-queue, ready-completion, IO, outstanding-work, or causal rank; transport and ingress occurrences are proved separately",
+      "requirement": "Every scheduler-owned completion, progress, or canonical constructor-shaped Normal proposal/Prepare candidate is eventually serviced or decreases its well-founded deferred, runtime-queue, ready-completion, IO, outstanding-work, or causal rank; authenticated TimeoutVote owns a signer-keyed Progress slot, and every accepted CertifiedRequest or CommitCertificateRequest recovery Serve occurrence owns a fresh nonce and decreasing FIFO position; reachable delivery ownership originates at authenticated ingress and the frozen admitted class remains protected after view movement",
       "module": "SumeragiV2AsyncLivenessProofs",
       "symbol": "ProtectedServiceRankProgressObligation",
       "status": "specified_unproved"
     },
     {
       "id": "post-gst-starvation-freedom",
-      "requirement": "Under the concrete post-GST weak-fairness actions, every admitted protocol progress or completion candidate eventually leaves scheduler ownership",
+      "requirement": "Under the concrete post-GST weak-fairness actions, every admitted protected protocol candidate and every responsive recovery Serve occurrence eventually leaves scheduler ownership",
       "module": "SumeragiV2AsyncLivenessProofs",
       "symbol": "StarvationFreedomObligation",
       "status": "specified_unproved"

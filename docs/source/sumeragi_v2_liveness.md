@@ -397,10 +397,15 @@ The following focused checks were recorded through 2026-07-16:
 
 Those retained serial counts predate the native-AMX, successor-activation,
 source-linked body-kernel, and three-corridor ingress additions. The current
-source-bound inventory contains 162 exact tests across 14 modules, including
+source-bound inventory contains 166 exact tests across 14 modules, including
 the authoritative outer-ingress and historical block-sync modules. It must
 still run as one clean committed, detached, source-sealed release leg before it
 becomes release evidence.
+
+Focused validation of the two new replay-refinement witnesses passed 2/2, the
+complete reducer source-link module passed 11/11, and the isolated reducer
+library passed 96/96. Those unsealed results do not replace the source-sealed
+release leg.
 
 The focused source-bound additions above are green. The gate names nine
 completion-ownership regressions: exact ingress/Busy-deferred
@@ -452,7 +457,7 @@ reducer simulations and model-trace replay:
 bash scripts/run_sumeragi_v2_release_gates.sh --pr
 ```
 
-Before those longer scenarios, the PR gate inventories 162 exact production
+Before those longer scenarios, the PR gate inventories 166 exact production
 liveness tests and executes all 14 owning Rust modules serially. The
 inventory includes the reducer exact-lock and adapter consumer-epoch
 regressions, plus five lane-work tests which pin native-AMX signing-guard
@@ -465,18 +470,18 @@ adapter/runtime legs pin the independent `2N+3` Busy-deferred partitions and
 runtime Progress admission. The adapter leg also realizes the complete
 `1024 + 2N` semantic-admission bound, retains current-view signer slots,
 retires old-view TimeoutVote delivery records, and exercises non-poisoning
-same-owner retry across TC installation. The block-sync leg pins reducer-enqueue ownership,
-strictly sequential context catch-up, and canonical Kura body service by a
-certified historical signer. Nine tests pin the completion-ownership seam described above.
-It then inventories and executes the exact Rust
+same-owner retry across TC installation. The block-sync leg pins
+reducer-enqueue ownership, strictly sequential context catch-up, and canonical
+Kura body service by a certified historical signer. Nine tests pin the
+completion-ownership seam described above. It then inventories and executes the exact Rust
 positive/negative cross-SDK wire-fixture tests and
 the maintained JavaScript and Python authoritative-status parser tests. The
 parser inventory pins normalization, `local_control_pending`,
 `unsafe_proposal`, and the full 12-reason ignore bound; a missing or ignored
 Rust fixture test or a missing named SDK parser test fails the gate. The
 prior inventory and serial 11-module execution are green historical evidence;
-the 162-test/14-module set still needs its clean source-sealed release rerun, and the
-full PR corridor is not claimed passed.
+the 166-test/14-module set still needs its clean source-sealed release rerun,
+and the full PR corridor is not claimed passed.
 
 The same pre-network gate inventories and executes four exact, non-ignored
 Taira release-profile validators plus the Rust summary-JSON schema contract.
@@ -599,9 +604,12 @@ ledger checker again, so a hand-written JSON object claiming
 `machine_checked_completion` cannot satisfy the formal leg.
 
 The chaos runner requires the sealed clean identity before and after execution,
-accepts only the one exact ignored 100,000-height test and libtest summary, and
-atomically publishes a completion record containing HEAD, tree, sealed source
-manifest, `Cargo.lock`, completed height count, and the full log SHA-256.
+accepts only the one exact ignored 100,000-height test, libtest summary, and
+explicit 50,000-per-mode completion marker, and atomically publishes a
+completion record containing HEAD, tree, sealed source manifest, `Cargo.lock`,
+both mode counts, completed height count, and the full log SHA-256. This is an
+accelerated production-reducer chain-prefix test with externally supplied valid
+certificates and synchronous local work, not a real-network fault campaign.
 
 The production soak runner clears inherited daemon/Kagami overrides, pins
 release-profile binaries, `CARGO_NET_OFFLINE=true`, and `RUST_LOG=info`, and
@@ -626,7 +634,9 @@ directory, and re-hashes those artifacts before the runner reports success.
 The test writes to an invocation-local `.partial` path; only successful
 independent validation and final identity checks atomically promote it to the
 canonical JSON and publish a hash-bound `COMPLETED.tsv`. That completion binds
-the exact HEAD, tree, `Cargo.lock`, and sealed source manifest.
+the exact HEAD, tree, `Cargo.lock`, sealed source manifest, canonical JSON, and
+the retained full Cargo/libtest transcript. Failed invocations keep that log
+for diagnosis while provisional JSON is removed.
 Duplicate object keys and non-finite numbers, including finite-syntax exponent
 overflow such as `1e10000`, are rejected recursively before schema validation.
 Retained status snapshots preserve their original validator
@@ -645,12 +655,13 @@ bash scripts/run_sumeragi_v2_release_gates.sh --release
 
 On success, the command prints one atomically published aggregate receipt path.
 That receipt binds the 29 pre-network corridor legs and their exact
-162-test inventory, semantic test names/counts, commands, logs, and resolved
+166-test inventory, semantic test names/counts, commands, logs, and resolved
 tool identities; the formal completion, pinned harness lock, formal toolchain,
 proof ledger/evidence/log; all 128 matrix logs; the chaos completion/log; and
-the exact-identity Taira completion/canonical JSON. It independently revalidates
-matrix/chaos libtest markers and runs the Taira evidence checker against the
-archived canonical JSON. Terminal JSON and its pointer are removed on an
+the exact-identity Taira completion/canonical JSON/full run log. It
+independently revalidates matrix, chaos, and Taira libtest markers and runs the
+Taira evidence checker against the archived canonical JSON. Terminal JSON and
+its pointer are removed on an
 ordinary promotion failure; filesystem `fsync`/power-loss durability is not
 claimed.
 

@@ -268,15 +268,17 @@ for scenario_spec in "${scenarios[@]}"; do
       grep -Ec '^test result: ok\. 1 passed; 0 failed; 0 ignored; 0 measured; [0-9]+ filtered out; finished in .+$' \
         "$run_log" || true
     )"
+    expected_seed_line="test ${module}::${test_name} ... ${test_name}: deterministic network seed = ${seed}"
+    expected_seed_line_count="$(grep -Fxc -- "$expected_seed_line" "$run_log" || true)"
     if [[ "$running_total" != 1 || "$running_one" != 1 \
-      || "$result_total" != 1 || "$passing_one" != 1 ]] \
-      || ! grep -Fq "test ${module}::${test_name} " "$run_log"; then
+      || "$result_total" != 1 || "$passing_one" != 1 \
+      || "$expected_seed_line_count" != 1 ]]; then
       printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
         "$profile" "$source_manifest_sha256" "$test_name" "$seed" "invalid_output" \
         "${pipeline_status[0]}" "${pipeline_status[1]}" "$run_log_sha256" \
         "$run_output" "$localnet_output" "$command" \
         >>"$summary"
-      echo "expected exactly one ${module}::${test_name} test to run and pass for seed ${seed}; refusing zero-test or ambiguous Cargo success; output: ${run_log}; localnet: ${localnet_dir}; summary: ${summary}" >&2
+      echo "expected exactly one ${module}::${test_name} test to run and pass with deterministic seed ${seed}; refusing zero-test, wrong-seed, or ambiguous Cargo success; output: ${run_log}; localnet: ${localnet_dir}; summary: ${summary}" >&2
       exit 1
     fi
     printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \

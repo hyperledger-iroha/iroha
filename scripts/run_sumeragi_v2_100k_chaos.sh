@@ -120,10 +120,11 @@ passing_one="$(
   grep -Ec '^test result: ok\. 1 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in .+$' \
     "$run_log" || true
 )"
+readonly chaos_completion_marker='SUMERAGI_V2_CHAOS_COMPLETED permissioned_heights=50000 npos_heights=50000 total_heights=100000'
+completion_marker_lines="$(grep -Fc -- "$chaos_completion_marker" "$run_log" || true)"
 if [[ "$running_one" != 1 || "$passing_one" != 1 ]] \
-  || ! grep -Fq \
-    'test accelerated_100_000_block_chaos_preserves_chain_prefix ... ok' \
-    "$run_log"; then
+  || [[ "$completion_marker_lines" != 1 ]] \
+  || ! grep -Fq 'test accelerated_100_000_block_chaos_preserves_chain_prefix ... ' "$run_log"; then
   echo "100,000-height chaos output does not prove exactly one passing release test" >&2
   exit 1
 fi
@@ -136,6 +137,8 @@ printf '%s\t%s\n' \
   head_tree "$head_tree" \
   source_manifest_sha256 "$source_manifest_sha256" \
   cargo_lock_sha256 "$cargo_lock_sha256" \
+  permissioned_heights 50000 \
+  npos_heights 50000 \
   completed_heights 100000 \
   log_sha256 "$log_sha256" \
   >"$completion_tmp"

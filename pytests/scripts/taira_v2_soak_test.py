@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 from pathlib import Path
 import subprocess
@@ -230,8 +231,18 @@ def test_launcher_pins_complete_profile_and_runs_exactly_one_test(
     assert not partial_evidence.exists()
     durable_evidence = partial_evidence.with_name("taira_v2_24h_soak.json")
     completion = partial_evidence.with_name("COMPLETED.tsv")
+    run_log = partial_evidence.with_name("taira-v2-24h.log")
     assert durable_evidence.is_file()
+    assert run_log.is_file()
+    assert f"test {EXPECTED_TEST} ... ok" in run_log.read_text(encoding="utf-8")
     assert completion.is_file()
+    completion_fields = dict(
+        line.split("\t", 1)
+        for line in completion.read_text(encoding="utf-8").splitlines()
+    )
+    assert completion_fields["log_sha256"] == hashlib.sha256(
+        run_log.read_bytes()
+    ).hexdigest()
     assert completion_pointer.read_text(encoding="utf-8").strip() == str(completion)
     assert captured.count("TEST_NETWORK_BIN_IROHAD=<unset>\n") == 2
     assert captured.count("KAGAMI_BIN=<unset>\n") == 2
@@ -313,4 +324,5 @@ def test_launcher_does_not_promote_provisional_evidence_when_validation_fails(
     assert not partial.exists()
     assert not partial.with_name("taira_v2_24h_soak.json").exists()
     assert not partial.with_name("COMPLETED.tsv").exists()
+    assert partial.with_name("taira-v2-24h.log").is_file()
     assert not completion_pointer.exists()

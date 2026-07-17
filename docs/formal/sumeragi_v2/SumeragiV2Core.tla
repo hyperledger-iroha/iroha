@@ -369,7 +369,10 @@ It also prevents TLC from materializing the powerset in TcRecordSet.
 ***************************************************************************)
 SeenProposalValues == {entry.proposal: entry \in seenProposals}
 ReceivedQcValues == {entry.qc: entry \in receivedQCs}
-LockCommitQcValues == ReceivedQcValues \cup prepareQCs
+\* A certificate's global authenticity ghost is not local reducer knowledge.
+\* The node which forms a PrepareQC installs its own receipt below; every
+\* other node must receive the certificate through authenticated ingress.
+LockCommitQcValues == ReceivedQcValues
 ReceivedTcValues == {entry.tc: entry \in receivedTCs}
 DecisionQcValues == {decision.qc: decision \in decisions}
 
@@ -1305,15 +1308,17 @@ DeliverVote(envelope) ==
 FormPrepareQC(node, roundView, subject) ==
   LET signers == VoteSignersAt(node, roundView, "Prepare", subject)
       qc == QC(context, roundView, "Prepare", subject, signers)
+      received == QcAt(node, qc)
   IN /\ node \in up
      /\ roundView = nodeView[node]
      /\ QcWireValid(qc)
      /\ qc \in QcRecordSet
      /\ prepareQCs' = prepareQCs \cup {qc}
+     /\ receivedQCs' = receivedQCs \cup {received}
      /\ qcNetwork' = qcNetwork \cup BroadcastQCs(qc)
      /\ UNCHANGED <<height, context, contextHistory, nodeView, generation,
                     up, gst, availableBodies, durableBodies, retainedLockedBodies, validatedBodies,
-                    invalidBodies, seenProposals, receivedVotes, receivedQCs,
+                    invalidBodies, seenProposals, receivedVotes,
                     receivedTimeoutVotes, receivedTCs, proposalIntents,
                     prepareIntents, commitIntents, timeoutIntents, commitQCs,
                     formedTCs, installedTCs, lockRank, lockSubject,
@@ -1792,8 +1797,22 @@ ApplyDecision(node, qc) ==
 Crash(node) ==
   /\ node \in up
   /\ up' = up \ {node}
+  \* Adapter staging, retained aliases, validation receipts, ingress
+  \* knowledge, and quorum accumulators are process-local.  Exact bodies and
+  \* immutable WAL/network ghosts below survive the process boundary.
+  /\ availableBodies' =
+       {body \in availableBodies: body.node # node}
+  /\ retainedLockedBodies' =
+       {body \in retainedLockedBodies: body.node # node}
   /\ validatedBodies' =
        {validation \in validatedBodies: validation.node # node}
+  /\ invalidBodies' = {body \in invalidBodies: body.node # node}
+  /\ seenProposals' = {entry \in seenProposals: entry.node # node}
+  /\ receivedVotes' = {entry \in receivedVotes: entry.node # node}
+  /\ receivedQCs' = {entry \in receivedQCs: entry.node # node}
+  /\ receivedTimeoutVotes' =
+       {entry \in receivedTimeoutVotes: entry.node # node}
+  /\ receivedTCs' = {entry \in receivedTCs: entry.node # node}
   /\ pendingProposal' = {request \in pendingProposal: request.node # node}
   /\ pendingPrepare' = {request \in pendingPrepare: request.node # node}
   /\ pendingObservePrepare' =
@@ -1808,9 +1827,7 @@ Crash(node) ==
   /\ signVotes' = {request \in signVotes: request.node # node}
   /\ signTimeouts' = {request \in signTimeouts: request.node # node}
   /\ UNCHANGED <<height, context, contextHistory, nodeView, generation, gst,
-                 availableBodies, durableBodies, retainedLockedBodies, invalidBodies, seenProposals,
-                 receivedVotes, receivedQCs, receivedTimeoutVotes, receivedTCs,
-                 proposalIntents, prepareIntents, commitIntents,
+                 durableBodies, proposalIntents, prepareIntents, commitIntents,
                  timeoutIntents, prepareQCs, commitQCs, formedTCs,
                  installedTCs, lockRank, lockSubject, highestRank,
                  highestSubject, proposalNetwork, voteNetwork, qcNetwork,

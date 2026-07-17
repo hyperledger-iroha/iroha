@@ -64,7 +64,7 @@ lexicographic service rank must first decrease unless service completes it.
 Neither property treats repeated view changes as height progress.
 ***************************************************************************)
 
-PostGstProgressActionEnabled ==
+PostGstSchedulerActionEnabled ==
   \/ ENABLED AsyncTick
   \/ \E node \in AsyncCurrentResponsiveVoters:
        ENABLED PostGstRunNode(node)
@@ -78,16 +78,175 @@ PostGstProgressActionEnabled ==
        source \in AsyncCurrentResponsiveVoters:
        ENABLED PostGstAdmitHiddenPacket(recipient, source)
 
-DeadlockFreedomProperty(specification) ==
-  specification
-    => [](gst /\ ~ResponsiveNodesDecide
-           => PostGstProgressActionEnabled)
+SetGains(before, after) == after \ before # {}
+
+(***************************************************************************
+Protocol productiveness is exact evidence growth for the current height.
+Timeout certificates and view counters are deliberately absent: rotating
+through views without admitting a body, proposal, vote/QC, durable intent,
+decision, or application is not a height-progress witness.
+***************************************************************************)
+HeightProtocolEvidenceGrows ==
+  \/ SetGains(availableBodies, availableBodies')
+  \/ SetGains(durableBodies, durableBodies')
+  \/ SetGains(retainedLockedBodies, retainedLockedBodies')
+  \/ SetGains(validatedBodies, validatedBodies')
+  \/ SetGains(seenProposals, seenProposals')
+  \/ SetGains(receivedVotes, receivedVotes')
+  \/ SetGains(receivedQCs, receivedQCs')
+  \/ SetGains(proposalIntents, proposalIntents')
+  \/ SetGains(prepareIntents, prepareIntents')
+  \/ SetGains(commitIntents, commitIntents')
+  \/ SetGains(prepareQCs, prepareQCs')
+  \/ SetGains(commitQCs, commitQCs')
+  \/ SetGains(decisions, decisions')
+  \/ SetGains(applied, applied')
+
+DeadlineDistance(deadline, now) ==
+  IF now < deadline THEN deadline - now ELSE 0
+
+(***************************************************************************
+A clock step is productive only while it strictly consumes a concrete
+protocol, retransmission, scheduler, worker, or in-flight delivery deadline.
+Once all such debts are zero, another bare tick is not a deadlock witness.
+***************************************************************************)
+PostGstDeadlineDebtDecreases ==
+  \/ \E node \in AsyncCurrentResponsiveVoters:
+       \/ DeadlineDistance(asyncNodeDeadlines'[node], asyncNow')
+            < DeadlineDistance(asyncNodeDeadlines[node], asyncNow)
+       \/ DeadlineDistance(asyncRetransmitDeadlines'[node], asyncNow')
+            < DeadlineDistance(asyncRetransmitDeadlines[node], asyncNow)
+       \/ DeadlineDistance(asyncNodeServiceDeadlines'[node], asyncNow')
+            < DeadlineDistance(asyncNodeServiceDeadlines[node], asyncNow)
+       \/ DeadlineDistance(asyncIoServiceDeadlines'[node], asyncNow')
+            < DeadlineDistance(asyncIoServiceDeadlines[node], asyncNow)
+  \/ \E packet \in asyncTransport \cap asyncTransport':
+       DeadlineDistance(packet.deadline, asyncNow')
+         < DeadlineDistance(packet.deadline, asyncNow)
+
+NormalProposalPrepareNoItemKinds == {"AssembleBody", "BeginPrepare"}
+
+NormalProposalPrepareNetworkKinds ==
+  {"Proposal", "PrepareVote", "CommitVote"}
+
+NormalBeginPrepareParentKinds == {"DeliverProposal", "ValidateBody"}
+
+(***************************************************************************
+Frozen constructor snapshots for protected Normal work.
+
+None of these operators reads live protocol state.  Every field which
+participates in `ExactAsyncCandidateIdentity` is supplied explicitly, so a
+view/generation/context transition cannot silently reclassify a candidate by
+reconstructing it against the successor state.  The ordinary constructor
+below remains useful at admission, while the predicates quantify the exact
+historical consumer snapshot which admission stored.
+***************************************************************************)
+FrozenNormalDeliveryCandidate(item, consumerContext, consumerView,
+                              consumerGeneration) ==
+  LET subject == DeliverySubject(item)
+  IN AsyncCandidateWithIdentity(
+       "Normal", DeliveryKind(item), item.envelope.recipient,
+       DeliveryHeight(item), DeliveryView(item), subject, item,
+       consumerContext, consumerView, consumerGeneration, item,
+       subject, subject, subject)
+
+NormalDeliveryCandidate(item) ==
+  FrozenNormalDeliveryCandidate(
+    item, context, nodeView[item.envelope.recipient],
+    generation[item.envelope.recipient])
+
+FrozenNormalAssemblyCandidate(blockContext, node, roundView,
+                              consumerGeneration, subject, evidence) ==
+  AsyncCandidateWithIdentity(
+    "Normal", "AssembleBody", node, blockContext.height, roundView,
+    subject, NoAsyncItem, blockContext, roundView, consumerGeneration,
+    evidence, subject, subject, subject)
+
+NextCandidateGeneration(currentGeneration) ==
+  IF currentGeneration < MaxGeneration
+  THEN currentGeneration + 1
+  ELSE currentGeneration
+
+FrozenInstallProposalSuccessor(command, installedContext,
+                               priorGeneration, subject) ==
+  AsyncCandidateWithIdentity(
+    "Normal", "AssembleBody", command.node, installedContext.height,
+    command.view + 1, subject, NoAsyncItem, installedContext,
+    command.view + 1, NextCandidateGeneration(priorGeneration),
+    command.evidence, subject, subject, subject)
+
+FrozenNormalBeginPrepareCandidate(parent, blockHeight) ==
+  AsyncCandidateWithIdentity(
+    "Normal", "BeginPrepare", parent.node, blockHeight, parent.view,
+    parent.subject, NoAsyncItem, parent.consumerContext,
+    parent.consumerView, parent.consumerGeneration, parent.evidence,
+    parent.bodyIdentity, parent.manifestIdentity,
+    parent.commitmentIdentity)
+
+(***************************************************************************
+Canonical historical shapes for the two item-free Normal owners.  Initial and
+restart assembly carries `NoAsyncItem` evidence.  PersistInstallTC has a
+separate explicit family because it inherits the exact durable TC evidence and
+stores the post-install consumer view/generation.  BeginPrepare copies every
+parent-carried identity field and freezes the construction-time block height
+rather than rebuilding either value from live state.
+***************************************************************************)
+NormalProposalPrepareNoItemCandidate(candidate) ==
+  /\ candidate.item = NoAsyncItem
+  /\ candidate.kind \in NormalProposalPrepareNoItemKinds
+  /\ \/ \E blockContext \in ContextRecords, node \in ValidatorIds,
+            roundView \in Views, consumerGeneration \in Generations,
+            subject \in SubjectOrNone:
+           candidate = FrozenNormalAssemblyCandidate(
+                         blockContext, node, roundView,
+                         consumerGeneration, subject, NoAsyncItem)
+     \/ \E command \in AsyncCandidateSet,
+            installedContext \in ContextRecords,
+            priorGeneration \in Generations,
+            subject \in SubjectOrNone:
+          /\ command.kind = "PersistInstallTC"
+          /\ command.view + 1 \in Views
+          /\ candidate = FrozenInstallProposalSuccessor(
+                           command, installedContext,
+                           priorGeneration, subject)
+     \/ \E parent \in AsyncCandidateSet, blockHeight \in Heights:
+          /\ parent.kind \in NormalBeginPrepareParentKinds
+          /\ candidate =
+               FrozenNormalBeginPrepareCandidate(parent, blockHeight)
+
+NormalProposalPrepareNetworkCandidate(candidate) ==
+  \E item \in AsyncNetworkItems,
+     consumerContext \in ContextRecords,
+     consumerView \in Views,
+     consumerGeneration \in Generations:
+    /\ item.kind \in NormalProposalPrepareNetworkKinds
+    /\ candidate = FrozenNormalDeliveryCandidate(
+                     item, consumerContext, consumerView,
+                     consumerGeneration)
+
+(***************************************************************************
+The proposal/Prepare path has immutable constructor families covering initial
+or restart AssembleBody, the explicit PersistInstallTC successor, causal
+BeginPrepare after DeliverProposal/ValidateBody, and canonical
+Proposal/PrepareVote/CommitVote delivery.  Reachable delivery ownership comes
+from authenticated ingress; this state-independent classifier deliberately
+also drains a stale stored candidate after view movement.  Persist, signature,
+validation, and decision continuations are already Completion or Progress.
+Full frozen-constructor equality plus the finite carrier keeps mismatched
+class/kind/item/identity Cartesian records outside the temporal promise.
+***************************************************************************)
+NormalProposalPrepareCandidate(candidate) ==
+  /\ candidate \in AsyncCandidateSet
+  /\ candidate.class = "Normal"
+  /\ \/ NormalProposalPrepareNoItemCandidate(candidate)
+     \/ NormalProposalPrepareNetworkCandidate(candidate)
 
 ProtectedServiceCandidate(candidate) ==
   /\ candidate \in AsyncCandidateSet
   /\ \/ candidate.class = "Completion"
      \/ /\ candidate.class = "Progress"
            /\ candidate.kind # "RejectProgress"
+     \/ NormalProposalPrepareCandidate(candidate)
 
 (***************************************************************************
 `CandidateScheduled` remains a raw structural witness, including queues that
@@ -111,16 +270,34 @@ ResponsiveProtectedCandidateOwned(candidate) ==
   /\ candidate.node \in AsyncCurrentResponsiveVoters
   /\ ProtectedCandidateOwned(candidate)
 
+(***************************************************************************
+Authenticated recovery requests enter the worker as occurrence-owned Serve
+jobs.  Exact retransmissions may create equal candidate values after the
+earlier ingress owner has left, so this obligation is keyed by the fresh live
+job nonce rather than by candidate equality.
+***************************************************************************)
+AsyncServeJobSet ==
+  {AsyncIoJob("Serve", candidate, nonce):
+     candidate \in AsyncCandidateSet,
+     nonce \in 0..AsyncIoAuxCapacity}
+
+ResponsiveProtectedServeJobOwned(node, job) ==
+  /\ node \in AsyncCurrentResponsiveVoters
+  /\ job \in AsyncServeJobSet
+  /\ job \in SequenceSet(asyncIoQueues[node])
+
+ServeJobIndex(node, job) ==
+  CHOOSE index \in AsyncIoServeIndices(asyncIoQueues[node]):
+    asyncIoQueues[node][index] = job
+
+ServeJobRank(node, job) == <<5, ServeJobIndex(node, job)>>
+
 CandidateSequenceIndex(candidate, queue) ==
   CHOOSE index \in 1..Len(queue): queue[index] = candidate
 
 CandidateIoIndex(candidate, queue) ==
   CHOOSE index \in AsyncIoConsensusIndices(queue):
     queue[index].candidate = candidate
-
-CandidateInTransport(candidate) ==
-  \E packet \in asyncTransport:
-    DeliveryCandidate(packet.item) = candidate
 
 CandidateInIngress(candidate) ==
   \E source \in AsyncIngressSources:
@@ -231,6 +408,38 @@ ServiceRankLess(left, right) ==
   \/ /\ left[1] = right[1]
         /\ left[2] < right[2]
 
+ProtectedServiceRankDecreaseStep ==
+  \E candidate \in AsyncCandidateSet,
+     stage \in 2..6, position \in Nat:
+    /\ ResponsiveProtectedCandidateOwned(candidate)
+    /\ CandidateServiceRank(candidate) = <<stage, position>>
+    /\ \/ ~ResponsiveProtectedCandidateOwned(candidate)'
+       \/ ServiceRankLess(CandidateServiceRank(candidate)',
+            <<stage, position>>)
+
+ProtectedServeRankDecreaseStep ==
+  \E node \in AsyncCurrentResponsiveVoters,
+     job \in AsyncServeJobSet, position \in Nat:
+    /\ ResponsiveProtectedServeJobOwned(node, job)
+    /\ ServeJobRank(node, job) = <<5, position>>
+    /\ \/ ~ResponsiveProtectedServeJobOwned(node, job)'
+       \/ ServiceRankLess(ServeJobRank(node, job)', <<5, position>>)
+
+PostGstProductiveStep ==
+  /\ gst
+  /\ AsyncNext
+  /\ \/ HeightProtocolEvidenceGrows
+     \/ PostGstDeadlineDebtDecreases
+     \/ ProtectedServiceRankDecreaseStep
+     \/ ProtectedServeRankDecreaseStep
+
+PostGstProductiveActionEnabled == ENABLED PostGstProductiveStep
+
+DeadlockFreedomProperty(specification) ==
+  specification
+    => [](gst /\ ~ResponsiveNodesDecide
+           => PostGstProductiveActionEnabled)
+
 ProtectedServiceRankProgressProperty(specification) ==
   specification
     => \A candidate \in AsyncCandidateSet,
@@ -242,11 +451,42 @@ ProtectedServiceRankProgressProperty(specification) ==
                 \/ ServiceRankLess(CandidateServiceRank(candidate),
                      <<stage, position>>))
 
-StarvationFreedomProperty(specification) ==
+ProtectedServeRankProgressProperty(specification) ==
   specification
-    => \A candidate \in AsyncCandidateSet:
-         (gst /\ ResponsiveProtectedCandidateOwned(candidate))
-           ~> ~ResponsiveProtectedCandidateOwned(candidate)
+    => \A node \in AsyncCurrentResponsiveVoters,
+          job \in AsyncServeJobSet, position \in Nat:
+         (gst
+           /\ ResponsiveProtectedServeJobOwned(node, job)
+           /\ ServeJobRank(node, job) = <<5, position>>)
+           ~> (~ResponsiveProtectedServeJobOwned(node, job)
+                \/ ServiceRankLess(
+                     ServeJobRank(node, job), <<5, position>>))
+
+ProtectedServeStarvationProperty(specification) ==
+  specification
+    => \A node \in AsyncCurrentResponsiveVoters,
+          job \in AsyncServeJobSet:
+         (gst /\ ResponsiveProtectedServeJobOwned(node, job))
+           ~> ~ResponsiveProtectedServeJobOwned(node, job)
+
+NormalProposalPrepareRankProgressProperty(specification) ==
+  specification
+    => \A candidate \in AsyncCandidateSet,
+          stage \in 2..6, position \in Nat:
+         (gst
+           /\ ResponsiveProtectedCandidateOwned(candidate)
+           /\ NormalProposalPrepareCandidate(candidate)
+           /\ CandidateServiceRank(candidate) = <<stage, position>>)
+           ~> (~ResponsiveProtectedCandidateOwned(candidate)
+                \/ ServiceRankLess(CandidateServiceRank(candidate),
+                     <<stage, position>>))
+
+StarvationFreedomProperty(specification) ==
+  /\ (specification
+        => \A candidate \in AsyncCandidateSet:
+             (gst /\ ResponsiveProtectedCandidateOwned(candidate))
+               ~> ~ResponsiveProtectedCandidateOwned(candidate))
+  /\ ProtectedServeStarvationProperty(specification)
 
 (***************************************************************************
 Durable source-to-consumer witnesses.  The active locked Commit intent is the
@@ -348,7 +588,7 @@ ProtectedDeferredProgressIndices(node) ==
 
 ProtectedDeferredProgressInvariant ==
   \A node \in ValidatorIds:
-    /\ Cardinality(ProtectedDeferredProgressIndices(node)) <= N + 3
+    /\ Cardinality(ProtectedDeferredProgressIndices(node)) <= 2 * N + 3
     /\ \A left, right \in ProtectedDeferredProgressIndices(node):
          SameProtectedProgressSlot(
            asyncDeferredProgressQueues[node][left],

@@ -109,13 +109,10 @@ readonly invocation_dir
 readonly evidence_path="${invocation_dir}/taira_v2_24h_soak.json"
 readonly partial_evidence_path="${invocation_dir}/.taira_v2_24h_soak.partial.json"
 readonly completion_attestation="${invocation_dir}/COMPLETED.tsv"
+readonly run_log="${invocation_dir}/taira-v2-24h.log"
 export IROHA_TAIRA_EVIDENCE_PATH="$partial_evidence_path"
-run_log=""
 cleanup() {
   local status=$?
-  if [[ -n "$run_log" ]]; then
-    rm -f -- "$run_log"
-  fi
   rm -f -- "$partial_evidence_path"
   if [[ ! -f "$completion_attestation" ]]; then
     rm -f -- "$evidence_path"
@@ -145,8 +142,6 @@ if [[ "$inventory_count" != 1 ]]; then
   echo "expected exactly one ignored Taira soak named ${TAIRA_SOAK_TEST}; found ${inventory_count}" >&2
   exit 1
 fi
-
-run_log="$(mktemp "${TMPDIR:-/tmp}/taira-v2-production-soak.XXXXXX")"
 
 set +e
 cargo test --locked --offline --release -p integration_tests --test consensus_and_da \
@@ -207,8 +202,10 @@ fi
 mv -- "$partial_evidence_path" "$evidence_path"
 if command -v sha256sum >/dev/null 2>&1; then
   evidence_sha256="$(sha256sum "$evidence_path" | awk '{print $1}')"
+  log_sha256="$(sha256sum "$run_log" | awk '{print $1}')"
 else
   evidence_sha256="$(shasum -a 256 "$evidence_path" | awk '{print $1}')"
+  log_sha256="$(shasum -a 256 "$run_log" | awk '{print $1}')"
 fi
 completion_tmp="${invocation_dir}/.COMPLETED.tsv.$$"
 printf '%s\t%s\n' \
@@ -218,6 +215,7 @@ printf '%s\t%s\n' \
   source_manifest_sha256 "$source_manifest_sha256" \
   cargo_lock_sha256 "$cargo_lock_sha256" \
   evidence_sha256 "$evidence_sha256" \
+  log_sha256 "$log_sha256" \
   >"$completion_tmp"
 mv -- "$completion_tmp" "$completion_attestation"
 

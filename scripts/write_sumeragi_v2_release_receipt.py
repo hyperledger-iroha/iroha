@@ -60,19 +60,19 @@ _CORRIDOR_SUMMARY_FIELDS = (
     "log",
     "command",
 )
-_PRODUCTION_TEST_COUNT = 162
+_PRODUCTION_TEST_COUNT = 166
 _PRODUCTION_MODULES = (
     (
         "production-authoritative-ingress",
         "sumeragi::authoritative_runtime_gate_tests",
         8,
     ),
-    ("production-v2-core", "sumeragi::v2_core::tests", 10),
+    ("production-v2-core", "sumeragi::v2_core::tests", 12),
     ("production-v2-core-refinement", "sumeragi::v2_core::refinement::tests", 2),
     (
         "production-v2-core-source-link",
         "sumeragi::v2_core::reducer::source_link_tests",
-        1,
+        3,
     ),
     ("production-v2-adapter", "sumeragi::v2::tests", 24),
     ("production-v2-block-sync", "sumeragi::v2_block_sync::tests", 3),
@@ -889,6 +889,8 @@ def build_receipt(
             "head_tree",
             "source_manifest_sha256",
             "cargo_lock_sha256",
+            "permissioned_heights",
+            "npos_heights",
             "completed_heights",
             "log_sha256",
         },
@@ -900,6 +902,8 @@ def build_receipt(
         "head_tree": sealed["head_tree"],
         "source_manifest_sha256": manifest,
         "cargo_lock_sha256": sealed["cargo_lock_sha256"],
+        "permissioned_heights": "50000",
+        "npos_heights": "50000",
         "completed_heights": "100000",
     }
     if any(chaos.get(field) != value for field, value in expected_chaos.items()):
@@ -920,8 +924,15 @@ def build_receipt(
             r"9 filtered out; finished in .+",
             chaos_results[0],
         )
-        or chaos_lines.count(
-            "test accelerated_100_000_block_chaos_preserves_chain_prefix ... ok"
+        or sum(
+            "test accelerated_100_000_block_chaos_preserves_chain_prefix ... " in line
+            for line in chaos_lines
+        )
+        != 1
+        or sum(
+            "SUMERAGI_V2_CHAOS_COMPLETED permissioned_heights=50000 "
+            "npos_heights=50000 total_heights=100000" in line
+            for line in chaos_lines
         )
         != 1
     ):
@@ -939,6 +950,7 @@ def build_receipt(
             "source_manifest_sha256",
             "cargo_lock_sha256",
             "evidence_sha256",
+            "log_sha256",
         },
         "Taira completion",
     )
@@ -955,6 +967,32 @@ def build_receipt(
     )
     if _sha256(taira_evidence) != taira["evidence_sha256"]:
         raise ReceiptError("Taira completion evidence digest mismatch")
+    taira_log = _regular_file(
+        taira_path.with_name("taira-v2-24h.log"), "Taira run log"
+    )
+    if _sha256(taira_log) != taira["log_sha256"]:
+        raise ReceiptError("Taira completion log digest mismatch")
+    try:
+        taira_lines = taira_log.read_text(encoding="utf-8").splitlines()
+    except UnicodeDecodeError as error:
+        raise ReceiptError("Taira run log is not UTF-8") from error
+    taira_results = [line for line in taira_lines if line.startswith("test result:")]
+    if (
+        taira_lines.count("running 1 test") != 1
+        or len(taira_results) != 1
+        or not re.fullmatch(
+            r"test result: ok\. 1 passed; 0 failed; 0 ignored; 0 measured; "
+            r"[0-9]+ filtered out; finished in .+",
+            taira_results[0],
+        )
+        or sum(
+            "test taira_public_localnet::"
+            "taira_profile_24h_packet_impairment_and_restart_soak ... " in line
+            for line in taira_lines
+        )
+        != 1
+    ):
+        raise ReceiptError("Taira log does not prove its one exact passing soak")
     repo_root = Path(__file__).resolve().parents[1]
     taira_checker = repo_root / "scripts" / "check_taira_v2_soak_evidence.py"
     taira_result = subprocess.run(
@@ -1010,6 +1048,7 @@ def build_receipt(
             "chaos_log": _artifact(chaos_log),
             "taira_completion": _artifact(taira_path),
             "taira_evidence": _artifact(taira_evidence),
+            "taira_run_log": _artifact(taira_log),
         },
     }
 

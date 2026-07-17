@@ -931,15 +931,20 @@ by that validator's current nodeContext. Thus an early validator may execute
 without waiting for its peers. Joined membership is monotone, so old instances
 remain available to RunHistoricalServer after validators advance.
 
-The nested tuple layout is exactly <<vars, AsyncSchedulerVars>>: 46 Core
-components followed by 33 scheduler/transport components. Shape predicates
-exclude unmodelled fields and make every instance projection extensional.
+The nested tuple layout is exactly
+<<vars, AsyncSchedulerVars, AsyncRecoveryVars>>: 46 Core components followed
+by 33 scheduler/transport components and four responsive-node recovery
+components. Shape predicates exclude unmodelled fields and make every
+instance projection extensional.
 ***************************************************************************)
 IndexedCore(initialContext, component) ==
   indexedAsyncState[initialContext][1][component]
 
 IndexedScheduler(initialContext, component) ==
   indexedAsyncState[initialContext][2][component]
+
+IndexedRecovery(initialContext, component) ==
+  indexedAsyncState[initialContext][3][component]
 
 IndexedAsyncStateAt(initialContext) ==
   indexedAsyncState[initialContext]
@@ -1049,7 +1054,11 @@ IndexedAsync(initialContext) ==
        asyncTransport <- IndexedScheduler(initialContext, 30),
        asyncIngressLanes <- IndexedScheduler(initialContext, 31),
        asyncIngressReady <- IndexedScheduler(initialContext, 32),
-       asyncHeldChunks <- IndexedScheduler(initialContext, 33)
+       asyncHeldChunks <- IndexedScheduler(initialContext, 33),
+       asyncRecoveryPhase <- IndexedRecovery(initialContext, 1),
+       asyncRecoveryNode <- IndexedRecovery(initialContext, 2),
+       asyncRecoveryGeneration <- IndexedRecovery(initialContext, 3),
+       asyncRecoveryReplayQueue <- IndexedRecovery(initialContext, 4)
 
 (***************************************************************************
 The indexed INSTANCE adds its context argument to inherited pure operators,
@@ -1110,6 +1119,9 @@ VerificationCore(component) ==
 
 VerificationScheduler(component) ==
   IndexedScheduler(VerificationContext, component)
+
+VerificationRecovery(component) ==
+  IndexedRecovery(VerificationContext, component)
 
 VerificationAsyncProof ==
   INSTANCE SumeragiV2AsyncLivenessProofs
@@ -1192,7 +1204,11 @@ VerificationAsyncProof ==
        asyncTransport <- VerificationScheduler(30),
        asyncIngressLanes <- VerificationScheduler(31),
        asyncIngressReady <- VerificationScheduler(32),
-       asyncHeldChunks <- VerificationScheduler(33)
+       asyncHeldChunks <- VerificationScheduler(33),
+       asyncRecoveryPhase <- VerificationRecovery(1),
+       asyncRecoveryNode <- VerificationRecovery(2),
+       asyncRecoveryGeneration <- VerificationRecovery(3),
+       asyncRecoveryReplayQueue <- VerificationRecovery(4)
 
 AdmissibleContextRecords ==
   {initialContext \in ContextRecords:
@@ -1201,9 +1217,10 @@ AdmissibleContextRecords ==
 IndexedAsyncStateShape ==
   /\ DOMAIN indexedAsyncState = AdmissibleContextRecords
   /\ \A initialContext \in AdmissibleContextRecords:
-       /\ Len(indexedAsyncState[initialContext]) = 2
+       /\ Len(indexedAsyncState[initialContext]) = 3
        /\ Len(indexedAsyncState[initialContext][1]) = 46
        /\ Len(indexedAsyncState[initialContext][2]) = 33
+       /\ Len(indexedAsyncState[initialContext][3]) = 4
 
 JoinedByContextShape ==
   joinedByContext \in [AdmissibleContextRecords -> SUBSET ValidatorIds]
@@ -2494,7 +2511,7 @@ THEOREM IndexedInstanceVariablesAreExact ==
          IndexedAsync(initialContext)!AsyncAllVars =
            IndexedAsyncStateAt(initialContext)
 BY Isa DEF IndexedAsyncStateShape, IndexedAsyncStateAt,
-           IndexedCore, IndexedScheduler
+           IndexedCore, IndexedScheduler, IndexedRecovery
 
 THEOREM IndexedInitProjectsEveryAsyncInit ==
   \A initialContext \in AdmissibleContextRecords:
@@ -2827,6 +2844,7 @@ PROOF
              IndexedDecisionEvidence, IndexedApplicationEvidence,
              IndexedCurrentDecisions, IndexedCurrentApplications,
              IndexedAsyncStateAt, IndexedCore, IndexedScheduler,
+             IndexedRecovery,
              JoinedContexts, IndexedNodeCurrentAt,
              Chain!ChainEpochVars
     <2> QED BY <1>1, <2>1, <2>2
@@ -3986,8 +4004,8 @@ PROOF
            VerificationAsyncProof!AsyncAllResponsiveAppliedAt,
            IndexedAsync!AsyncSpecAt,
            IndexedAsync!AsyncAllResponsiveAppliedAt,
-           IndexedAsyncStateAt, IndexedCore,
-           VerificationCore, VerificationScheduler
+           IndexedAsyncStateAt, IndexedCore, IndexedRecovery,
+           VerificationCore, VerificationScheduler, VerificationRecovery
 
 THEOREM IndexedAllResponsiveAppliedIsStable ==
   \A initialContext \in AdmissibleContextRecords:
@@ -4042,7 +4060,9 @@ PROOF
       BY VerificationAsyncProof!AsyncGstEventually
          DEF VerificationAsyncProof!AsyncSpecAt,
              IndexedAsync!AsyncSpecAt, IndexedAsyncStateAt,
-             IndexedCore, VerificationCore, VerificationScheduler
+             IndexedCore, IndexedRecovery,
+             VerificationCore, VerificationScheduler,
+             VerificationRecovery
     <2>5. VerificationOneHeightCompletion
       BY VerificationOneHeightCompletionObligation
     <2> QED BY <2>1, <2>2, <2>3, <2>4, <2>5, PTL

@@ -36,13 +36,21 @@ case "${{CHAOS_FAKE_RUN_MODE:-pass}}" in
   pass)
     printf '%s\n' \\
       'running 1 test' \\
-      'test accelerated_100_000_block_chaos_preserves_chain_prefix ... ok' \\
+      'test accelerated_100_000_block_chaos_preserves_chain_prefix ... SUMERAGI_V2_CHAOS_COMPLETED permissioned_heights=50000 npos_heights=50000 total_heights=100000' \\
+      'ok' \\
       '' \\
       'test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.01s'
     ;;
   zero)
     printf '%s\n' 'running 0 tests' \\
       'test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 10 filtered out; finished in 0.00s'
+    ;;
+  missing-marker)
+    printf '%s\n' \\
+      'running 1 test' \\
+      'test accelerated_100_000_block_chaos_preserves_chain_prefix ... ok' \\
+      '' \\
+      'test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 9 filtered out; finished in 0.01s'
     ;;
   fail) exit 73 ;;
 esac
@@ -136,6 +144,8 @@ def test_chaos_launcher_publishes_source_bound_completion(tmp_path: Path) -> Non
     assert fields["head_tree"] == TREE
     assert fields["source_manifest_sha256"] == MANIFEST
     assert fields["cargo_lock_sha256"] == LOCK
+    assert fields["permissioned_heights"] == "50000"
+    assert fields["npos_heights"] == "50000"
     assert fields["completed_heights"] == "100000"
     assert not (evidence / ".chaos-100k.lock").exists()
 
@@ -154,13 +164,27 @@ def test_chaos_launcher_rejects_post_run_identity_drift(tmp_path: Path) -> None:
 
 
 def test_chaos_launcher_rejects_zero_test_success(tmp_path: Path) -> None:
-    launcher, env, evidence = _fixture(tmp_path, run_mode="zero")
+    zero_root = tmp_path / "zero"
+    zero_root.mkdir()
+    launcher, env, evidence = _fixture(zero_root, run_mode="zero")
 
     result = _run(launcher, env)
 
     assert result.returncode == 1
     assert "does not prove exactly one passing release test" in result.stderr
     assert not (_invocation(evidence) / "COMPLETED.tsv").exists()
+
+    marker_root = tmp_path / "missing-marker"
+    marker_root.mkdir()
+    marker_launcher, marker_env, marker_evidence = _fixture(
+        marker_root, run_mode="missing-marker"
+    )
+
+    marker_result = _run(marker_launcher, marker_env)
+
+    assert marker_result.returncode == 1
+    assert "does not prove exactly one passing release test" in marker_result.stderr
+    assert not (_invocation(marker_evidence) / "COMPLETED.tsv").exists()
 
 
 def test_chaos_launcher_refuses_stale_writer_lock(tmp_path: Path) -> None:

@@ -163,6 +163,12 @@ conditional-liveness proofs.
 A final-source rerun on 2026-07-16 completed in 52.97 seconds with both chain
 prefixes intact. This focused harness result does not replace the release
 profile's checkout-manifest-bound evidence rerun.
+The ignored test emits one exact `SUMERAGI_V2_CHAOS_COMPLETED` marker only after
+both 50,000-height prefixes close. The source-bound launcher and aggregate
+receipt require that marker as well as the one-test libtest result. The harness
+still supplies valid certificates directly and completes local services
+synchronously, so it does not stand in for the real-network seed matrix or the
+Taira-profile soak.
 
 ## Current refinement model
 

@@ -126,6 +126,16 @@ case "${{SEED_MATRIX_FAKE_RUN_MODE:-pass}}" in
       'test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 42 filtered out; finished in 0.01s' \
       >&2
     ;;
+  wrong-seed)
+    scenario="${{test_name#sumeragi_v2_runner::}}"
+    printf '%s\n' \
+      'running 1 test' \
+      "test $test_name ... $scenario: deterministic network seed = wrong-seed" \
+      'ok' \
+      '' \
+      'test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 42 filtered out; finished in 0.01s' \
+      >&2
+    ;;
   cargo-fail)
     emit_success
     exit 73
@@ -394,7 +404,7 @@ def test_mocked_seed_matrix_rejects_zero_test_and_preserves_evidence(
     result = _run_launcher(env)
 
     assert result.returncode == 1
-    assert "refusing zero-test or ambiguous Cargo success" in result.stderr
+    assert "refusing zero-test, wrong-seed, or ambiguous Cargo success" in result.stderr
     assert "running 0 tests" in result.stdout
     assert len(capture.read_text().splitlines()) == 3
     invocation = _single_invocation(evidence)
@@ -415,14 +425,16 @@ def test_mocked_seed_matrix_rejects_zero_test_and_preserves_evidence(
 def test_mocked_seed_matrix_rejects_ambiguous_test_summary(
     tmp_path: Path,
 ) -> None:
+    ambiguous_root = tmp_path / "ambiguous"
+    ambiguous_root.mkdir()
     env, capture, evidence = _stubbed_environment(
-        tmp_path, run_mode="duplicate-summary"
+        ambiguous_root, run_mode="duplicate-summary"
     )
 
     result = _run_launcher(env)
 
     assert result.returncode == 1
-    assert "refusing zero-test or ambiguous Cargo success" in result.stderr
+    assert "refusing zero-test, wrong-seed, or ambiguous Cargo success" in result.stderr
     assert len(capture.read_text().splitlines()) == 3
     invocation = _single_invocation(evidence)
     summary_rows = _summary_rows(invocation)
@@ -431,6 +443,23 @@ def test_mocked_seed_matrix_rejects_ambiguous_test_summary(
     assert (invocation / summary_rows[0]["output"]).is_file()
     assert (invocation / summary_rows[0]["localnet"]).is_dir()
     assert not (invocation / "COMPLETED.tsv").exists()
+
+    wrong_seed_root = tmp_path / "wrong-seed"
+    wrong_seed_root.mkdir()
+    wrong_env, wrong_capture, wrong_evidence = _stubbed_environment(
+        wrong_seed_root, run_mode="wrong-seed"
+    )
+
+    wrong_result = _run_launcher(wrong_env)
+
+    assert wrong_result.returncode == 1
+    assert "wrong-seed" in wrong_result.stderr
+    assert len(wrong_capture.read_text().splitlines()) == 3
+    wrong_invocation = _single_invocation(wrong_evidence)
+    wrong_rows = _summary_rows(wrong_invocation)
+    assert len(wrong_rows) == 1
+    assert wrong_rows[0]["result"] == "invalid_output"
+    assert not (wrong_invocation / "COMPLETED.tsv").exists()
 
 
 def test_mocked_seed_matrix_preserves_cargo_failure_through_tee(

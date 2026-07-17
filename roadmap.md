@@ -25267,7 +25267,8 @@ acknowledgement; second-callback failure, mixed decided-local work, corrupt
 indexes, and post-commit status failure are pinned by adversarial tests.
 Certified-body request conflicts remain nonfatal, and conflicting
 Commit-certificate responses preserve outstanding discovery for retry. The
-gate pins 162 required tests across 14 modules, including exact
+gate pins 166 required tests across 14 modules, including exact composite
+replay-FIFO ordering, its source-linked refinement projection, and
 recovery-derived successor identity plus sequential historical CommitQC/body
 catch-up. Before the three-corridor expansion, all
 twelve then-owning modules were green on the then-current unsealed source:
@@ -25276,10 +25277,14 @@ twelve then-owning modules were green on the then-current unsealed source:
 23/23 runner, 66/66 worker, and 19/19 watchdog tests (510 passed, 0 failed, 0
 ignored). Cargo discovery found every one of the
 146 previously required names among 6,742 tests, with no missing or ignored
-entry. The expanded unsealed inventory now finds all 162 required names among
-6,744 tests with none missing or ignored, and the authoritative-ingress module
-is green at 30/30. Its clean committed, detached, source-sealed serial rerun is
-still pending. The one-shot token binds successor identity to the exact
+entry. The latest expanded unsealed discovery found all 162 then-required names
+among 6,744 tests with none missing or ignored, and the authoritative-ingress
+module is green at 30/30. Two newly pinned replay-FIFO names plus their two
+source-linked refinement witnesses raise the current inventory to 166. The new
+refinement witnesses are green at 2/2, the complete source-link module at
+11/11, and the isolated reducer library at 96/96; clean 166-name discovery and
+the committed, detached, source-sealed serial rerun are still pending. The
+one-shot token binds successor identity to the exact
 verified successor `HeightContextId`, and the adversarial rejection table
 retains the applied predecessor on a same-height foreign-context snapshot. A
 directly pinned adversarial umbrella test exhaustively covers the four
@@ -25309,7 +25314,7 @@ deferred-owner replacement mutation now pins scheduler-wide exact-envelope
 coalescing. The proof ledger still reports `machine_checked_completion: false`.
 Strict proof completion therefore remains pending, and post-GST height liveness
 remains a conditional target and paper argument rather than a machine-checked
-completion. The PR gate inventories 162 production-liveness tests across 14
+completion. The PR gate inventories 166 production-liveness tests across 14
 Rust modules before network startup. Exact regressions cover
 completion coalescing, conflicting evidence, production Busy transfer,
 transactional cross-queue retirement/duplicate rejection,
@@ -25338,15 +25343,17 @@ entries, while the seal walk checks directories and rejects escaping or
 writable-output symlinks plus hard-linked source files. The original checkout
 manifest and sealed manifest are both retained; every child completion uses the
 latter, while one aggregate receipt also binds original HEAD/tree/`Cargo.lock`,
-all pre-network legs and their exact 162-test inventory, the formal harness
+all pre-network legs and their exact 166-test inventory, the formal harness
 lock/toolchain, matrix, chaos, and soak evidence. The formal leg archives a
 tee-captured all-legs log plus `proof_coverage.json` and
 `proof_evidence.json`; receipt publication reruns the official proof checker.
 Every matrix summary row hashes its exact Cargo log, and receipt publication
-revalidates all 128 scenario and libtest markers. The 100,000-height launcher
-now publishes its source-bound log receipt, and the soak promotes an
+revalidates all 128 scenario and exact-seed libtest markers. The 100,000-height
+launcher now requires an explicit 50,000-per-mode completion marker and
+publishes its source-bound log receipt, and the soak promotes an
 invocation-local `.partial` JSON only after validation and final identity
-checks, with exact HEAD/tree/`Cargo.lock` in its completion. Cargo/rustc are
+checks, with exact HEAD/tree/`Cargo.lock` plus the canonical JSON and full
+Cargo/libtest log hashes in its completion. Cargo/rustc are
 resolved to the repository's pinned 1.93.1 toolchain after Git/Rust semantic
 environment cleanup and run with an isolated configuration-free `CARGO_HOME`;
 exact tool paths, versions, and hashes are receipt-bound. The receipt contract
@@ -25405,7 +25412,7 @@ release work:
   favourable-network corridor; this promotion likewise follows the
   rotating-leader, application-liveness, and production-refinement proofs;
 - execute the cross-SDK fixture/status-parser legs and complete four-seed PR
-  corridor against the final source tree. The 162-test/14-module pre-network
+  corridor against the final source tree. The 166-test/14-module pre-network
   production-liveness inventory includes completion
   ownership, installed destination rebind, unbound-Vote authority,
   exact-lock/consumer-epoch admission, transactional certified retirement,
