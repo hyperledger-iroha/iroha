@@ -117,9 +117,8 @@ node has no higher conflicting-subject Prepare intent or known PrepareQC.
 Higher same-subject reproposals are harmless. The grouped-timeout set kernel is
 machine-checked for intents already present at timeout. The temporal induction
 which retains installed-TC authorization for the late exact intent, and the
-dependent direct-or-installed-authorization wrapper, remain explicitly
-ledgered `specified_unproved` until their current strict proof closure
-succeeds.
+dependent direct-or-installed-authorization wrapper, are also ledgered
+`tlaps_proved` after their current strict proof closure succeeded.
 
 ## Agreement and chain prefix
 
@@ -286,6 +285,19 @@ transport remains a nonfatal remote-input rejection with retry ownership
 preserved.
 
 The runtime queue reserves separate normal, progress, and completion capacity.
+The protected candidate vocabulary also includes the canonical
+constructor-shaped Normal proposal/Prepare slice: leader `AssembleBody`, the
+causal `BeginPrepare` successor, and the frozen Normal delivery shape for
+Proposal, PrepareVote, and CommitVote items. Reachable delivery ownership must
+originate at authenticated ingress, but protection follows the stored class so
+view movement cannot drop an admitted CommitVote when its dynamic classification
+becomes historical Progress. Authenticated `TimeoutVote`/`DeliverTimeout` owns
+a signer-keyed protected Progress slot. Certified-body and Commit-certificate
+recovery requests receive fresh live Serve nonces and occurrence-level FIFO
+ranks, so equal request values cannot collapse one another's starvation
+witness. These constructor families deliberately over-approximate reachable
+provenance; authenticated junk receives no temporal promise, and the composite
+rank obligation remains explicit proof debt.
 The current view's absolute timeout has first priority. A periodic
 retransmission may precede already-admitted command work once, after which
 command debt gives the class-aware ingress the next non-timeout slot. Thus the
@@ -357,9 +369,8 @@ deterministic consensus cannot guarantee progress. The paper argument derives
 height progress under those premises, including a valid empty heartbeat; it
 does not prove transaction inclusion or censorship fairness. It is not a
 machine-checked liveness completion while the ledger reports
-`machine_checked_completion: false` and retains the historical TC-lock,
-direct-or-installed-authorization timeout, and downstream liveness obligations as
-`specified_unproved`.
+`machine_checked_completion: false` and retains downstream asynchronous and
+multi-height liveness obligations as `specified_unproved`.
 
 ## Mechanization ledger
 
@@ -375,11 +386,11 @@ proofs change.
 The module set covers quorum algebra, availability, crash recovery,
 reconfiguration, compositional safety, agreement, full action induction,
 receipt-backed selected-height and indexed chain/epoch refinement, and the
-explicit asynchronous scheduler/transport model. Eight arbitrary-context
+explicit asynchronous scheduler/transport model. Ten arbitrary-context
 Core safety wrappers and the receipt-backed chain-prefix and epoch-boundary
-wrappers are TLAPS-proved. The historical TC-lock authorization and the
-dependent direct-or-installed-authorization timeout wrapper are ledgered
-`specified_unproved`; the strict grouped-timeout kernel remains proved. The
+wrappers are TLAPS-proved. This includes the historical TC-lock authorization,
+the dependent direct-or-installed-authorization timeout wrapper, and the strict
+grouped-timeout kernel. The
 one-height asynchronous type-closure wrapper and generation-scoped delivery
 theorem have checked proof bodies. The type-closure wrapper nevertheless
 remains ledgered `specified_unproved` because its induction consumes the
@@ -387,15 +398,31 @@ still-unproved concrete runner scheduler-preservation leaf. The timeout durabili
 view-frontier, and wire-authorization modules additionally prove that every
 honest pending, durable, signing, and transported timeout vote is roster-,
 context-, height-, and authenticated-high-reference bound with a high rank no
-greater than its timeout view. The production Rust/Verus gate checks only the
-local EnterView effective-lock selection boundary; it is not a separately
-ledgered or checked TLA+ body-rebind kernel. The production executor/runtime/
-worker/request/byte/queue ownership and fairness composition remains exactly
-`EffectiveLockBodyAcquisitionCompositionObligation`, ledgered
-`specified_unproved`. Post-GST deadlock freedom has a checked source proof from
-the strong async type invariant and the exact enabled `RunNode` frontier, but
-is likewise ledgered `specified_unproved` until that type invariant's runner
-prerequisite is discharged. Runner preservation and starvation now have source
+greater than its timeout view. The production Rust/Verus gate now checks the
+local EnterView effective-lock selection boundary plus a typed adapter safety
+projection: monotonic Fetch/BodyAvailable/Store/Validate identity, strictly
+advancing same-body consumer rebind, unique cross-lane completion ownership,
+exact supersession byte residuals, and the actual bounded three-class runtime
+selector. The corresponding solver queries are isolated in
+`effective_lock_verus_proofs.rs`, but instantiate the same production macros;
+they are not a separately transcribed protocol. This is not a cross-tool proof
+that the independently parsed TLA+
+body matches those Rust expressions, nor a temporal theorem that the runtime or
+external body service is eventually invoked. The executable height-scoped
+acquisition owner now specifies immutable physical identity, mutable consumer
+rebind, exact completion classification, certified recovery, and retry. Its
+`EffectiveLockAcquisitionModelObligation` is still `specified_unproved`;
+exhaustive bounded TLC is counterexample search, not a deductive discharge.
+Ordinary-Rust map/hash/service projection, worker/request ownership, and
+post-GST fairness remain separately in
+`EffectiveLockBodyAcquisitionProductionRefinementObligation`, also ledgered
+`specified_unproved`. The exact enabled-`RunNode` result is only a scheduler
+lemma: post-GST deadlock freedom requires an enabled `AsyncNext` step that grows
+current-height protocol evidence, strictly consumes a concrete deadline debt,
+or decreases/exits a protected candidate or Serve-occurrence rank. Repeated
+clock or view-change steps alone do not satisfy that productive obligation.
+Stage-2/3/6, packet-admission, and zero-deadline cases therefore remain explicit
+proof debt. Runner preservation and starvation now have source
 proof bodies, but remain `specified_unproved`; the runner still needs a fresh
 pinned strict proof and starvation depends on the still-unproved service-rank
 theorem. Durable witness,
@@ -407,16 +434,30 @@ ledgered `specified_unproved`. The chain
 refinement now contains the authoritative indexed successor-instance product
 and its exact `SumeragiV2ChainEpochRefinement!HeightLivenessObligation`. Its
 source proof body composes instance activation, exact-action fairness,
-historical catch-up for validators absent from an old roster, and finite-height
-temporal induction, but the ledger remains `specified_unproved` until the whole
-theorem passes a fresh pinned strict proof after rotating-leader and application
-liveness. Historical catch-up is receipt-refining rather than a second
-consensus relation: an authenticated certified signer serves an
-already canonical exact CommitQC/body, after which the ordinary reducer records
-the lagging node's decision and application before joining its successor. Its
+exact historical recovery for responsive validators absent from an old roster,
+and finite-height temporal induction, but the ledger remains
+`specified_unproved` until the whole theorem passes a fresh pinned strict proof
+after rotating-leader, application liveness, and the separately ledgered
+`SuccessorActivationStarvationFreedomObligation` and
+`SuccessorActivationAndExactHistoricalRecoveryProductionRefinementObligation`.
+The former pins the minimal `0..19` queue-to-publication rank for each
+responsive validator, including the one-time pre-failure `+9` offset. It makes
+no progress claim for an honest validator outside `Responsive`, which may stop
+with pre-GST local work still queued. The latter maps production startup and
+block-sync traces to the model. Historical recovery is an exact Async reducer path rather than a
+second consensus or receipt relation: an authenticated current voter serves an
+already canonical exact CommitQC, the Core imports that envelope into ordinary
+certificate delivery, and the reducer performs decision persistence, body
+recovery, store, validation, and application. Nonterminal
+application queues successor startup and does not join; only exact Applied or
+Recovered publication joins. Recovered publication requires absent
+process-visible predecessor ownership plus durable complete-tip authority and
+never writes a fictitious predecessor `Complete`. At terminal `MaxHeight`, a
+responsive observer records known application without advancing height or
+creating activation state. Its
 dormant `InitAt` parent receipts remain private to their one-height instances,
-while the global projection contains exact current-context and explicit
-catch-up receipt deltas. No global asynchronous shadow state, alternate
+while the global projection contains only exact current-context receipt deltas.
+No global asynchronous shadow state, alternate
 consensus transition relation, or favourable-network protocol relation may
 stand in for that proof.
 
@@ -427,13 +468,31 @@ TLAPS before machine-checked completion can become true. This is a structural
 rule even outside release mode. The ledger also prohibits promoting async type
 closure ahead of runner scheduler preservation, post-GST deadlock freedom ahead
 of async type closure, starvation freedom ahead of service-rank progress, or
-genesis handoff or indexed height liveness ahead of both rotating-leader and
-application liveness. The
+genesis handoff or indexed height liveness ahead of rotating-leader,
+application liveness, successor-activation starvation freedom, and the
+production successor/exact-recovery refinement seam.
+The
 conditional liveness premises remain visible as trusted contracts rather than
 being restated as the theorem to prove.
 
+Each of the 18 actions named by `AsyncFairnessAt` now carries its complete
+category-specific outer frame. `AsyncFairActionAt` repeats the exact quantified
+inventory. `AsyncFairActionsRefineAsyncNext` is the typed source claim, while
+`SumeragiV2AsyncFairnessRefinementProofs!AsyncFairActionsRefineAsyncNextObligation`
+is its deductive theorem. The decomposed proof projects typed command execution,
+all 18 fair actions, and their runner, non-runner, and recovery outer frames;
+the exact release invocation proves 1,143/1,143 obligations. The proof checker
+rejects a missing action, changed quantifier domain, misclassified frame,
+weakened claim or theorem, unreviewed helper theorem, duplicate TLC-only
+variable tuple, or alternate TLC fairness relation. The complete Core `Next`
+relation is not embedded in every `WF` target, because that redundant search
+causes TLC to test unrelated conflicting Core branches during `ENABLED`.
+This promotes only `async-fair-action-refinement` to `tlaps_proved`; the
+46-entry ledger still contains 15 `specified_unproved`, 6 `trusted_contract`,
+and 1 `out_of_scope` entries, so `machine_checked_completion` remains false.
+
 TLC runs exhaustive constant checks and bounded asynchronous counterexample
-searches. It cannot upgrade a proof status. The scheduler corridor runs eight
+searches. It cannot upgrade a proof status. The scheduler corridor runs the original eight
 mutation/repair pairs: equal-value replacement/coalescing, deferred-owner
 replacement/scheduler-wide coalescing, strict/cyclic deferred-class selection,
 Busy Completion requeue without/with cursor advance, head-only/indexed ingress,
@@ -442,26 +501,42 @@ completion capacity, and producer-first/causal-debt alternating local
 admission. In the last pair, the producer-first model has the pinned
 three-state fair lasso and TLC status 13, while the repaired sticky-debt/cursor
 model exhausts seven bounded states without error and returns status 0. These
-are bounded regression witnesses, not deductive proof and not a reason to
-promote a ledger entry. The production trace replayer and adversarial
+are followed by the causal-capacity refill matrix, blind-successor/coalesced
+replacement, in-runner/independent Commit-discovery, and all-I/O/Consensus-only
+index mutations. An exhaustive one-validator configuration checks the logical
+ownership invariant through 42,817 generated states, 6,208 distinct states,
+and depth 45. The larger graph covers separate non-timeout-progress and
+TimeoutVote ingress reservations. These are bounded regression witnesses, not deductive proof and not a reason to
+promote a ledger entry. Two additional seam models make the remaining temporal
+gap executable: an unprotected Normal proposal/Prepare candidate starves, and
+a dynamic delivery-class mutation loses a stored CommitVote after a TC, while
+the frozen constructor inventory closes both cases; separately, a
+scheduler-only deadlock claim accepts a bare tick, whereas the productive claim
+rejects it until a concrete deadline, evidence, or rank repair exists. The
+productive release obligation remains `specified_unproved`. The production trace replayer and adversarial
 simulations exercise the exact reducer sources, while the pinned Verus harness
 proves the source-linked reducer/WAL and scheduler kernels. The
 remaining cryptographic, deterministic-execution, operating-system durability,
 post-GST transport, and host-service premises are listed explicitly in the
 ledger and formal README.
 
-The current pre-network release inventory names 104 tests across ten Rust
-modules: the prior 103 plus the executor-batch refinement regression. Nine
-cover completion ownership. The complete serial wrapper is green at 52/52
-reducer/core, 10/10 refinement, 4/4 reducer source-link, 51/51
-adapter, 82/82 effects, 55/55 lane work, 34/34 runtime, 19/19 runner, 66/66
-worker, and 14/14 watchdog tests (387 passed, 0 failed, 0 ignored); Cargo
-discovery confirmed all 104 required tests are present and non-ignored. The
-final-source exact one-attempt four-validator genesis rerun is green at 1/1 in
-456.76 seconds. Neither inventory presence nor regression evidence is a
-machine proof.
-The Core delivery relation and normalized trace replay now
-match exact-lock admission and post-WAL pruning, but the affected inductive and
-liveness proof-premise repairs remain outstanding; these source regressions do
-not promote any ledger status. Strict proof completion, the 100,000-height
-chaos run, and the 24-hour Taira-profile soak remain pending.
+The current pre-network release inventory names 166 tests across fourteen Rust
+modules. It includes exact completion ownership, body-owner binding and
+rebind, byte retirement, three-class production arbitration, the exact
+`3N+1` ingress and `2N+3` deferred partitions, successor activation/recovery,
+authenticated exact historical recovery, and watchdog classification. Cargo
+discovery found all
+162 then-required names among 6,744 tests with no missing or ignored release
+test before the four replay-FIFO/refinement regressions raised the inventory to
+166; the authoritative ingress module was green at 30/30. Fresh 166-name Cargo
+discovery and the clean committed, detached, source-sealed serial release leg
+remain pending. An earlier exact one-attempt
+four-validator genesis rerun is green at 1/1 in 456.76 seconds. Neither
+inventory presence nor regression evidence is a machine proof.
+The Core delivery relation and normalized trace replay match exact-lock
+admission and post-WAL pruning. The repaired full strict induction discharged
+all 7,826 obligations and the downstream Core safety wrapper discharged all
+565, promoting only historical TC-lock authorization and timeout protection.
+The asynchronous liveness proof-premise repairs remain outstanding. Full
+strict proof completion, the release-profile 100,000-height chaos rerun, and
+the 24-hour Taira-profile soak remain pending.

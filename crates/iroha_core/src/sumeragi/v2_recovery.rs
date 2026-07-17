@@ -791,6 +791,7 @@ pub(crate) struct RecoveredV2Height {
     context_store: V2ContextStore,
     signature_policy: BlockSignaturePolicy,
     pending_kura_apply: Option<PendingKuraApply>,
+    successor_activation_parent: Option<wire::Height>,
     staged_genesis_nexus_amx_context: Option<StagedGenesisNexusAmxContext>,
 }
 
@@ -847,6 +848,12 @@ impl RecoveredV2Height {
         self.pending_kura_apply
     }
 
+    /// Return the complete durable parent whose recovered successor must cross
+    /// the same live activation boundary as an uninterrupted rollover.
+    pub(crate) const fn successor_activation_parent(&self) -> Option<wire::Height> {
+        self.successor_activation_parent
+    }
+
     /// Consume recovery output into the height runner's owned parts.
     pub(crate) fn into_parts(
         self,
@@ -899,6 +906,7 @@ pub(crate) fn recover_active_height(
             context_store,
             signature_policy: BlockSignaturePolicy::GenesisAuthority(genesis_public_key),
             pending_kura_apply: None,
+            successor_activation_parent: None,
             staged_genesis_nexus_amx_context: Some(staged_genesis_nexus_amx_context),
         });
     }
@@ -936,12 +944,18 @@ pub(crate) fn recover_active_height(
                 bootstrap.context.height,
             ));
         }
+        let successor_activation_parent = bootstrap
+            .context
+            .snapshot_bootstrap
+            .as_ref()
+            .map(|anchor| anchor.snapshot_height);
         let verified_context = VerifiedHeightContext::snapshot_bootstrap(bootstrap)?;
         return Ok(RecoveredV2Height {
             verified_context,
             context_store,
             signature_policy: BlockSignaturePolicy::RotatingLeader,
             pending_kura_apply: None,
+            successor_activation_parent,
             staged_genesis_nexus_amx_context: None,
         });
     }
@@ -963,6 +977,7 @@ pub(crate) fn recover_active_height(
             context_store,
             signature_policy: BlockSignaturePolicy::RotatingLeader,
             pending_kura_apply: None,
+            successor_activation_parent: Some(durable_height),
             staged_genesis_nexus_amx_context: None,
         });
     }
@@ -1012,6 +1027,7 @@ pub(crate) fn recover_active_height(
         context_store,
         signature_policy,
         pending_kura_apply,
+        successor_activation_parent: None,
         staged_genesis_nexus_amx_context: None,
     })
 }
@@ -1827,6 +1843,7 @@ mod tests {
             record.validator_set_pops
         );
         assert!(recovered.pending_kura_apply().is_none());
+        assert_eq!(recovered.successor_activation_parent(), Some(3));
 
         let store =
             V2ContextStore::open(kura.sumeragi_v2_storage_root()).expect("open context store");
@@ -2892,6 +2909,7 @@ mod tests {
             Some(artifact.commit_qc.clone())
         );
         assert!(first.pending_kura_apply().is_none());
+        assert_eq!(first.successor_activation_parent(), Some(1));
         let first_context = first.verified_context().context().clone();
         drop(first);
 
@@ -2900,5 +2918,6 @@ mod tests {
                 .expect("reopen identical successor");
         assert_eq!(repeated.verified_context().context(), &first_context);
         assert!(repeated.pending_kura_apply().is_none());
+        assert_eq!(repeated.successor_activation_parent(), Some(1));
     }
 }

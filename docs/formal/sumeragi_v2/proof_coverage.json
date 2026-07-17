@@ -119,14 +119,14 @@
       "requirement": "After a TC durably selects an exact historical Prepare lock, and only when no higher conflicting-subject local Prepare intent or known PrepareQC exists, current-generation durable body validation may create the exact WAL-backed Commit intent; higher same-subject reproposals remain admissible and every lower-high timeout/Commit pair retains installed-TC provenance",
       "module": "SumeragiV2Proofs",
       "symbol": "HistoricalTcLockedCommitAuthorizationObligation",
-      "status": "specified_unproved"
+      "status": "tlaps_proved"
     },
     {
       "id": "timeout-protection",
       "requirement": "Every formed TC and dual-quorum still-formable old-view Commit has either direct protection from that TC's high reference or an honest TC/Commit quorum-intersection witness whose non-strict timeout/Commit pair retains durable installed-TC authorization",
       "module": "SumeragiV2Proofs",
       "symbol": "TimeoutProtectionObligation",
-      "status": "specified_unproved"
+      "status": "tlaps_proved"
     },
     {
       "id": "agreement",
@@ -164,10 +164,17 @@
       "status": "tlaps_proved"
     },
     {
-      "id": "effective-lock-body-acquisition",
-      "requirement": "Beyond the production-checked post-WAL EnterView lock selection, executor, runtime, worker, certified-request hash, outstanding-request index, and queue ownership preserve one immutable matching acquisition while only its reducer consumer advances; subject-level retained bytes obey same-subject reuse; superseded logical work and every pending, request, ready, byte, and capacity owner are retired exactly once; and post-GST fairness with terminating local work eventually services the rebound FetchBody -> BodyAvailable -> StoreBody -> ValidateBody path or a higher lock or decision supersedes it",
+      "id": "effective-lock-body-acquisition-model",
+      "requirement": "The executable height-scoped acquisition owner keeps physical ID and subject immutable across same-lock consumer rebinds, defers a higher different-subject replacement until the active local read terminates, rejects future/wrong/duplicate completions, waits for the exact certified durable store, retries once, and under weak fairness eventually makes every stable effective lock ready and repeatedly deliverable to the latest consumer",
+      "module": "SumeragiV2EffectiveLockAcquisitionProofs",
+      "symbol": "EffectiveLockAcquisitionModelObligation",
+      "status": "specified_unproved"
+    },
+    {
+      "id": "effective-lock-body-acquisition-production-refinement",
+      "requirement": "The source-linked Rust/Verus safety kernels and ordinary production worker, effect-executor, runtime, and runner state refine the executable effective-lock acquisition owner: post-WAL EnterView emits the exact protected certified fetch; map/hash/byte ownership is exact; the control-reserved physical load and certified recovery callbacks are fairly invoked; and terminating local work eventually delivers the rebound body or a higher lock or decision supersedes it",
       "module": "SumeragiV2AsyncLivenessProofs",
-      "symbol": "EffectiveLockBodyAcquisitionCompositionObligation",
+      "symbol": "EffectiveLockBodyAcquisitionProductionRefinementObligation",
       "status": "specified_unproved"
     },
     {
@@ -185,6 +192,13 @@
       "status": "specified_unproved"
     },
     {
+      "id": "async-fair-action-refinement",
+      "requirement": "At every state satisfying the Core and scheduler type invariants, each of the exact 18 weak-fairness targets is one fully framed AsyncNext transition; the proof must project runner command execution to a typed Core Next arm without conjoining the global Core disjunction to every fairness ENABLED query",
+      "module": "SumeragiV2AsyncFairnessRefinementProofs",
+      "symbol": "AsyncFairActionsRefineAsyncNextObligation",
+      "status": "tlaps_proved"
+    },
+    {
       "id": "generation-scoped-vote-delivery",
       "requirement": "An authenticated vote crosses a volatile receipt pool at most once; Prepare admission is current-view-only while every Commit admission and locally formed CommitQC requires the exact durable lock; TC installation clears the local pool and queues an exact matching durable locked Commit for re-signing; durable LockCommit acknowledgement retires superseded historical pools while preserving current-view work and the new exact locked Commit pool; signature completion reconstructs the local vote; and outbound peer delivery excludes the signer",
       "module": "SumeragiV2AsyncLivenessProofs",
@@ -193,28 +207,28 @@
     },
     {
       "id": "progress-witness-preservation",
-      "requirement": "Every active durable locked Commit intent and durable decision retains a concrete signing, retransmission, receipt, certificate, recovery, application, or completion witness; every validated exact TC-promoted lock without intent owns its BeginLockCommit or WAL reconstruction witness; and protected deferred slots remain unique within their validator-count-plus-three bound",
+      "requirement": "Every active durable locked Commit intent and durable decision retains a concrete signing, retransmission, receipt, certificate, recovery, application, or completion witness; every validated exact TC-promoted lock without intent owns its BeginLockCommit or WAL reconstruction witness; and locked-Commit signer, TimeoutVote signer, PrepareQC, CommitQC, and TC deferred owners remain unique within their exact two-times-validator-count-plus-three partition",
       "module": "SumeragiV2AsyncLivenessProofs",
       "symbol": "ProgressWitnessObligation",
       "status": "specified_unproved"
     },
     {
       "id": "post-gst-deadlock-freedom",
-      "requirement": "Every reachable undecided post-GST state enables a concrete clock, runtime, worker, or responsive-transport progress action",
+      "requirement": "Every reachable undecided post-GST state enables an AsyncNext step that grows current-height protocol evidence, strictly decreases a concrete deadline debt, or decreases/exits a protected candidate or Serve-occurrence service rank; a bare clock, runner, or view-change step is insufficient",
       "module": "SumeragiV2AsyncLivenessProofs",
       "symbol": "DeadlockFreedomObligation",
       "status": "specified_unproved"
     },
     {
       "id": "protected-service-rank",
-      "requirement": "Every scheduler-owned progress or completion candidate is eventually serviced or decreases its well-founded deferred, runtime-queue, ready-completion, IO, outstanding-work, or causal rank; transport and ingress occurrences are proved separately",
+      "requirement": "Every scheduler-owned completion, progress, or canonical constructor-shaped Normal proposal/Prepare candidate is eventually serviced or decreases its well-founded deferred, runtime-queue, ready-completion, IO, outstanding-work, or causal rank; authenticated TimeoutVote owns a signer-keyed Progress slot, and every accepted CertifiedRequest or CommitCertificateRequest recovery Serve occurrence owns a fresh nonce and decreasing FIFO position; reachable delivery ownership originates at authenticated ingress and the frozen admitted class remains protected after view movement",
       "module": "SumeragiV2AsyncLivenessProofs",
       "symbol": "ProtectedServiceRankProgressObligation",
       "status": "specified_unproved"
     },
     {
       "id": "post-gst-starvation-freedom",
-      "requirement": "Under the concrete post-GST weak-fairness actions, every admitted protocol progress or completion candidate eventually leaves scheduler ownership",
+      "requirement": "Under the concrete post-GST weak-fairness actions, every admitted protected protocol candidate and every responsive recovery Serve occurrence eventually leaves scheduler ownership",
       "module": "SumeragiV2AsyncLivenessProofs",
       "symbol": "StarvationFreedomObligation",
       "status": "specified_unproved"
@@ -238,6 +252,20 @@
       "requirement": "For every responsive validator independently, once GST holds and that validator has a durable decision, it eventually recovers, validates, and applies the certified body without waiting for all other validators to decide",
       "module": "SumeragiV2AsyncLivenessProofs",
       "symbol": "ApplicationLivenessObligation",
+      "status": "specified_unproved"
+    },
+    {
+      "id": "successor-activation-starvation-freedom",
+      "requirement": "Every responsive validator's Queued or Running successor activation has an exact durable parent witness, an enabled progress action, and a rank in the minimal finite 0..19 carrier; the one permitted fail-closed reset crosses the pre-failure +9 offset, every later startup action strictly decreases the local distance or publishes/supersedes the successor, no chain step orphans pending responsive activation or increases its rank, and weak fairness eventually reaches publication or legitimate later-height supersession; no progress claim is made for validators outside Responsive",
+      "module": "SumeragiV2SuccessorActivationRefinementProofs",
+      "symbol": "SuccessorActivationStarvationFreedomObligation",
+      "status": "specified_unproved"
+    },
+    {
+      "id": "successor-activation-exact-recovery-production-refinement",
+      "requirement": "Production successor startup refines the full-context Applied/Recovered token pipeline through ordered adapter, runtime, services, startup effects, clocks, marker, ingress, and publication actions; fail-closed recovery requires exact durable complete-tip authority and never fabricates physical predecessor completion; historical recovery opens an exact per-context Async target, imports only an authenticated exact CommitQC, and traverses the ordinary decision, body recovery, store, validation, and application reducer path, with terminal observers applying without height advance or successor activation",
+      "module": "SumeragiV2ChainEpochRefinement",
+      "symbol": "SuccessorActivationAndExactHistoricalRecoveryProductionRefinementObligation",
       "status": "specified_unproved"
     },
     {

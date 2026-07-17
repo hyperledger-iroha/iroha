@@ -16,12 +16,16 @@
 //! Commit vote or a trusted local completion.
 
 use std::{
-    collections::VecDeque,
+    collections::{BTreeSet, VecDeque},
     fmt,
     time::{Duration, Instant},
 };
 
-use super::v2_core::{EventTag, ScheduleState, ScheduledWork};
+use super::v2_core::{
+    EventTag, ExactBodyCompletionOwnership, SERVICE_CLASS_COMPLETION, SERVICE_CLASS_NONE,
+    SERVICE_CLASS_NORMAL, SERVICE_CLASS_PROGRESS, ScheduleState, ScheduledWork,
+    classify_exact_body_completion_ownership, select_bounded_service_class,
+};
 use iroha_data_model::block::consensus_v2 as wire;
 
 use super::{
@@ -57,10 +61,11 @@ fn round_timeout_for_view(base_timeout: Duration, view: u64) -> Duration {
 /// Capacity allocation for the single serialized command ingress.
 ///
 /// Normal network traffic may use only the non-reserved prefix. Progress
-/// messages (PrepareQCs, CommitQCs, and TCs) may additionally use the progress
-/// reserve, and trusted asynchronous completions may use the whole queue. This
-/// prevents an unbounded proposal/vote stream from excluding a CommitQC or a
-/// completion while preserving FIFO order within each service class.
+/// messages (PrepareQCs, CommitQCs, TCs, and authenticated Timeout votes) may
+/// additionally use the progress reserve, and trusted asynchronous completions
+/// may use the whole queue. This prevents an unbounded proposal/Prepare stream
+/// from excluding view-change, CommitQC, or completion work while preserving
+/// FIFO order within each service class.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct RuntimeQueueConfig {
     capacity: usize,
@@ -271,11 +276,20 @@ enum CommandClass {
 }
 
 impl CommandClass {
-    const fn next(self) -> Self {
+    const fn service_code(self) -> u8 {
         match self {
-            Self::Completion => Self::Progress,
-            Self::Progress => Self::Normal,
-            Self::Normal => Self::Completion,
+            Self::Completion => SERVICE_CLASS_COMPLETION,
+            Self::Progress => SERVICE_CLASS_PROGRESS,
+            Self::Normal => SERVICE_CLASS_NORMAL,
+        }
+    }
+
+    const fn from_service_code(code: u8) -> Option<Self> {
+        match code {
+            SERVICE_CLASS_COMPLETION => Some(Self::Completion),
+            SERVICE_CLASS_PROGRESS => Some(Self::Progress),
+            SERVICE_CLASS_NORMAL => Some(Self::Normal),
+            _ => None,
         }
     }
 }
@@ -311,6 +325,22 @@ impl<C> BoundedIngress<C> {
         Ok(())
     }
 
+    fn enqueue_completion_batch(
+        &mut self,
+        commands: Vec<TaggedCommand<C>>,
+    ) -> Result<(), EnqueueError> {
+        debug_assert!(
+            commands
+                .iter()
+                .all(|command| command.class == CommandClass::Completion)
+        );
+        if commands.len() > self.remaining_capacity() {
+            return Err(EnqueueError::Full);
+        }
+        self.commands.extend(commands);
+        Ok(())
+    }
+
     fn check_capacity(&self, class: CommandClass) -> Result<(), EnqueueError> {
         let limit = match class {
             CommandClass::Normal => self.config.normal_limit(),
@@ -332,35 +362,40 @@ impl<C> BoundedIngress<C> {
     }
 
     fn pop_next(&mut self) -> Option<TaggedCommand<C>> {
-        for _ in 0..3 {
-            let class = self.next_class;
-            self.next_class = self.next_class.next();
-            let Some(index) = self
-                .commands
-                .iter()
-                .position(|queued| queued.class == class)
-            else {
-                continue;
-            };
-            for skipped_class in [
-                CommandClass::Completion,
-                CommandClass::Progress,
-                CommandClass::Normal,
-            ] {
-                if skipped_class == class {
-                    continue;
-                }
-                if let Some(oldest) = self
-                    .commands
-                    .iter_mut()
-                    .find(|queued| queued.class == skipped_class)
-                {
-                    oldest.eligible_skips = oldest.eligible_skips.saturating_add(1);
-                }
-            }
-            return self.commands.remove(index);
+        let class_ready = |class| self.commands.iter().any(|queued| queued.class == class);
+        let selection = select_bounded_service_class(
+            self.next_class.service_code(),
+            class_ready(CommandClass::Completion),
+            class_ready(CommandClass::Progress),
+            class_ready(CommandClass::Normal),
+        );
+        let next = CommandClass::from_service_code(selection.next)?;
+        self.next_class = next;
+        if selection.selected == SERVICE_CLASS_NONE {
+            return None;
         }
-        None
+        let class = CommandClass::from_service_code(selection.selected)?;
+        let index = self
+            .commands
+            .iter()
+            .position(|queued| queued.class == class)?;
+        for skipped_class in [
+            CommandClass::Completion,
+            CommandClass::Progress,
+            CommandClass::Normal,
+        ] {
+            if skipped_class == class {
+                continue;
+            }
+            if let Some(oldest) = self
+                .commands
+                .iter_mut()
+                .find(|queued| queued.class == skipped_class)
+            {
+                oldest.eligible_skips = oldest.eligible_skips.saturating_add(1);
+            }
+        }
+        self.commands.remove(index)
     }
 
     fn len(&self) -> usize {
@@ -1596,6 +1631,20 @@ impl<D: RuntimeDriver> SerializedV2Runtime<D> {
 }
 
 impl SerializedV2Runtime<SumeragiV2Adapter> {
+    /// Build the reducer-owned status which the runner will publish at the
+    /// one-shot live-height activation boundary.
+    ///
+    /// The snapshot is unavailable until [`Self::arm_live_clocks`] succeeds,
+    /// so caller ordering alone cannot publish an unarmed successor.
+    pub(crate) fn successor_activation_status_snapshot(
+        &mut self,
+    ) -> Result<wire::SumeragiV2Status, AdapterError> {
+        if !self.clocks_armed {
+            return Err(AdapterError::SuccessorClocksNotArmed);
+        }
+        self.driver.successor_activation_status()
+    }
+
     fn body_pipeline_completion_is_owned(
         &mut self,
         tag: EventTag,
@@ -1610,12 +1659,15 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         let (deferred_owners, deferred_exact) = self
             .driver
             .deferred_body_pipeline_completion_ownership(tag, candidate);
-        let owners = ingress_owners.saturating_add(deferred_owners);
-        let exact = ingress_exact.saturating_add(deferred_exact);
-        match (owners, exact) {
-            (0, 0) => Ok(false),
-            (1, 1) => Ok(true),
-            _ => {
+        match classify_exact_body_completion_ownership(
+            ingress_owners,
+            ingress_exact,
+            deferred_owners,
+            deferred_exact,
+        ) {
+            ExactBodyCompletionOwnership::Vacant => Ok(false),
+            ExactBodyCompletionOwnership::Exact => Ok(true),
+            ExactBodyCompletionOwnership::Invalid => {
                 self.fail_closed = true;
                 Err(EnqueueError::DuplicateCompletionOwnership)
             }
@@ -2198,6 +2250,41 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         )
     }
 
+    /// Atomically enqueue a set of deterministic validation rejections.
+    ///
+    /// Exact pre-existing owners coalesce. Every vacant owner and the complete
+    /// completion-capacity requirement are checked before any command becomes
+    /// visible to the reducer.
+    pub(crate) fn enqueue_validation_failures_atomically(
+        &mut self,
+        failures: &[(EventTag, wire::ConsensusRound, wire::BlockSubject)],
+    ) -> Result<(), EnqueueError> {
+        if self.fail_closed {
+            return Err(EnqueueError::FailClosed);
+        }
+        let mut keys = BTreeSet::new();
+        let mut commands = Vec::with_capacity(failures.len());
+        let admitted_at = Instant::now();
+        for (tag, round, subject) in failures.iter().copied() {
+            if !keys.insert((round, subject)) {
+                self.fail_closed = true;
+                return Err(EnqueueError::DuplicateCompletionOwnership);
+            }
+            let evidence = BodyPipelineCompletionEvidence::ValidationFailed { round, subject };
+            if self.body_pipeline_completion_is_owned(tag, &evidence)? {
+                continue;
+            }
+            commands.push(TaggedCommand {
+                tag,
+                class: CommandClass::Completion,
+                command: AdapterCommand::ValidationFailed { round, subject },
+                admitted_at,
+                eligible_skips: 0,
+            });
+        }
+        self.ingress.enqueue_completion_batch(commands)
+    }
+
     /// Enqueue a signer completion without retagging it to the current view.
     pub(crate) fn enqueue_signature(
         &mut self,
@@ -2228,10 +2315,11 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
 fn network_command_class(payload: &wire::ConsensusMessageV2Payload) -> Option<CommandClass> {
     match payload {
         wire::ConsensusMessageV2Payload::QuorumCertificate(_)
-        | wire::ConsensusMessageV2Payload::TimeoutCertificate(_) => Some(CommandClass::Progress),
-        wire::ConsensusMessageV2Payload::Proposal(_)
-        | wire::ConsensusMessageV2Payload::Vote(_)
-        | wire::ConsensusMessageV2Payload::TimeoutVote(_) => Some(CommandClass::Normal),
+        | wire::ConsensusMessageV2Payload::TimeoutCertificate(_)
+        | wire::ConsensusMessageV2Payload::TimeoutVote(_) => Some(CommandClass::Progress),
+        wire::ConsensusMessageV2Payload::Proposal(_) | wire::ConsensusMessageV2Payload::Vote(_) => {
+            Some(CommandClass::Normal)
+        }
         wire::ConsensusMessageV2Payload::PayloadManifest(_)
         | wire::ConsensusMessageV2Payload::PayloadChunk(_)
         | wire::ConsensusMessageV2Payload::CertifiedBodyRequest(_)
@@ -2659,6 +2747,34 @@ mod tests {
     }
 
     #[test]
+    fn successor_activation_snapshot_requires_armed_live_clocks() {
+        let directory = TempDir::new().expect("temporary successor-clock directory");
+        let (mut runtime, context, _keys) =
+            authenticated_network_runtime(&directory, RuntimeQueueConfig::new(8, 2, 2));
+
+        assert!(matches!(
+            runtime.successor_activation_status_snapshot(),
+            Err(AdapterError::SuccessorClocksNotArmed)
+        ));
+
+        runtime
+            .arm_live_clocks(Instant::now())
+            .expect("arm clocks after all startup work");
+        let status = runtime
+            .successor_activation_status_snapshot()
+            .expect("armed runtime may produce its activation snapshot");
+        assert_eq!(status.height_context_id, context.id());
+        assert_eq!(status.height, context.height);
+        assert!(matches!(
+            status.liveness.last_progress,
+            Some(wire::SumeragiV2ProgressTransitionStatus {
+                transition: wire::SumeragiV2ProgressTransition::SuccessorHeightActivated,
+                ..
+            })
+        ));
+    }
+
+    #[test]
     fn absolute_timeout_fires_once_and_messages_never_reset_it() {
         let start = Instant::now();
         let initial = tag(0);
@@ -2856,6 +2972,55 @@ mod tests {
             .expect("empty progress class is skipped to normal");
         assert_eq!(third.command.record, Some(2));
         assert_eq!(ingress.next_class, CommandClass::Completion);
+    }
+
+    #[test]
+    fn production_ingress_pop_uses_shared_selector_for_every_ready_mask() {
+        let admitted_at = Instant::now();
+        let initial = tag(0);
+        for cursor in [
+            CommandClass::Completion,
+            CommandClass::Progress,
+            CommandClass::Normal,
+        ] {
+            for ready_mask in 0u8..8 {
+                let completion_ready = ready_mask & 0b001 != 0;
+                let progress_ready = ready_mask & 0b010 != 0;
+                let normal_ready = ready_mask & 0b100 != 0;
+                let expected = select_bounded_service_class(
+                    cursor.service_code(),
+                    completion_ready,
+                    progress_ready,
+                    normal_ready,
+                );
+                let mut ingress = BoundedIngress::new(RuntimeQueueConfig::new(6, 2, 1));
+                ingress.next_class = cursor;
+                for (class, ready) in [
+                    (CommandClass::Normal, normal_ready),
+                    (CommandClass::Progress, progress_ready),
+                    (CommandClass::Completion, completion_ready),
+                ] {
+                    if ready {
+                        ingress
+                            .enqueue(TaggedCommand {
+                                tag: initial,
+                                class,
+                                command: FakeCommand::record(class.service_code()),
+                                admitted_at,
+                                eligible_skips: 0,
+                            })
+                            .expect("one command per ready class fits reserved ingress");
+                    }
+                }
+
+                let selected = ingress.pop_next();
+                assert_eq!(
+                    selected.as_ref().and_then(|queued| queued.command.record),
+                    (expected.selected != SERVICE_CLASS_NONE).then_some(expected.selected),
+                );
+                assert_eq!(ingress.next_class.service_code(), expected.next);
+            }
+        }
     }
 
     #[test]
@@ -3977,6 +4142,95 @@ mod tests {
             "Busy-deferred success cannot coalesce an incoming failure"
         );
         assert!(deferred_success_runtime.fail_closed);
+
+        let atomic_directory = TempDir::new().expect("temporary atomic validation directory");
+        let (mut atomic_runtime, context, _keys) =
+            authenticated_network_runtime(&atomic_directory, RuntimeQueueConfig::new(3, 1, 1));
+        let owner_tag = atomic_runtime.round_tag();
+        let manifests = [0x9D, 0x9E, 0x9F, 0xA0].map(|seed| runtime_manifest(&context, seed));
+        let failures = manifests
+            .iter()
+            .enumerate()
+            .map(|(index, manifest)| {
+                let offset = u64::try_from(index).expect("small failure batch");
+                (
+                    EventTag::new(
+                        owner_tag.height(),
+                        owner_tag.view().saturating_add(offset),
+                        Generation::new(owner_tag.generation().get().saturating_add(offset)),
+                    ),
+                    manifest.round,
+                    manifest.subject,
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            atomic_runtime.enqueue_validation_failures_atomically(&failures),
+            Err(EnqueueError::Full)
+        );
+        assert_eq!(
+            atomic_runtime.queued_commands(),
+            0,
+            "a capacity failure cannot publish an earlier member of the batch"
+        );
+        atomic_runtime
+            .enqueue_validation_failures_atomically(&failures[..3])
+            .expect("the complete fitting batch is admitted atomically");
+        assert_eq!(atomic_runtime.queued_commands(), 3);
+        for (queued, (tag, round, subject)) in atomic_runtime
+            .ingress
+            .commands
+            .iter()
+            .zip(failures.iter().copied())
+        {
+            assert_eq!(queued.tag, tag);
+            assert!(matches!(
+                &queued.command,
+                AdapterCommand::ValidationFailed {
+                    round: queued_round,
+                    subject: queued_subject,
+                } if *queued_round == round && *queued_subject == subject
+            ));
+        }
+        atomic_runtime
+            .enqueue_validation_failures_atomically(&failures[..3])
+            .expect("exact pre-owned rows coalesce without spending capacity");
+        assert_eq!(atomic_runtime.queued_commands(), 3);
+
+        let conflict_directory =
+            TempDir::new().expect("temporary conflicting atomic validation directory");
+        let (mut conflict_runtime, conflict_context, _keys) =
+            authenticated_network_runtime(&conflict_directory, RuntimeQueueConfig::new(4, 1, 1));
+        let conflict_tag = conflict_runtime.round_tag();
+        let vacant = runtime_manifest(&conflict_context, 0xA1);
+        let conflicting = runtime_manifest(&conflict_context, 0xA2);
+        let durable = DurableBodyReceipt::for_test(
+            conflict_context.id(),
+            conflicting.round,
+            conflicting.subject,
+            HashOf::new(&conflicting),
+        );
+        conflict_runtime
+            .enqueue_validation_succeeded(
+                conflict_tag,
+                conflicting.round,
+                conflicting.subject,
+                ValidatedBodyReceipt::for_test(durable),
+            )
+            .expect("stage conflicting positive validation evidence");
+        assert_eq!(
+            conflict_runtime.enqueue_validation_failures_atomically(&[
+                (conflict_tag, vacant.round, vacant.subject),
+                (conflict_tag, conflicting.round, conflicting.subject),
+            ]),
+            Err(EnqueueError::DuplicateCompletionOwnership)
+        );
+        assert_eq!(
+            conflict_runtime.queued_commands(),
+            1,
+            "the vacant prefix cannot become visible before a later conflict"
+        );
+        assert!(conflict_runtime.fail_closed);
     }
 
     #[test]
@@ -5310,6 +5564,12 @@ mod tests {
             aggregate_signature: vec![1],
         };
         let commit_qc = wire::ConsensusMessageV2Payload::QuorumCertificate(certificate.clone());
+        let timeout_vote = wire::ConsensusMessageV2Payload::TimeoutVote(wire::TimeoutVote {
+            round,
+            highest_prepare_qc: None,
+            signer: 0,
+            signature: vec![1],
+        });
         let commit_response = wire::ConsensusMessageV2Payload::CommitCertificateResponse(
             wire::CommitCertificateResponse {
                 request_hash: HashOf::from_untyped_unchecked(Hash::new(b"runtime commit request")),
@@ -5323,6 +5583,11 @@ mod tests {
             network_command_class(&commit_qc),
             Some(CommandClass::Progress)
         );
+        assert_eq!(
+            network_command_class(&timeout_vote),
+            Some(CommandClass::Progress),
+            "authenticated TimeoutVote traffic owns the protected progress prefix"
+        );
         assert_eq!(network_command_class(&commit_response), None);
         assert_eq!(
             network_admission_class(&commit_response),
@@ -5330,6 +5595,7 @@ mod tests {
         );
         assert!(runtime.can_admit_network_payload(&vote));
         assert!(runtime.can_admit_network_payload(&commit_qc));
+        assert!(runtime.can_admit_network_payload(&timeout_vote));
         assert!(runtime.can_admit_network_payload(&commit_response));
 
         for value in [1, 2] {
@@ -5354,6 +5620,10 @@ mod tests {
             runtime.can_admit_network_payload(&commit_qc),
             "CommitQC can use the reserved progress slot"
         );
+        assert!(
+            runtime.can_admit_network_payload(&timeout_vote),
+            "TimeoutVote can use the reserved progress slot"
+        );
         assert!(runtime.can_admit_network_payload(&commit_response));
 
         enqueue_fake(
@@ -5367,6 +5637,7 @@ mod tests {
         assert!(!runtime.can_admit_network_payload(&mismatched_commit_vote));
         assert!(!runtime.can_admit_network_payload(&locked_commit_vote));
         assert!(!runtime.can_admit_network_payload(&commit_qc));
+        assert!(!runtime.can_admit_network_payload(&timeout_vote));
         assert!(!runtime.can_admit_network_payload(&commit_response));
 
         let transport = wire::ConsensusMessageV2Payload::PayloadManifest(wire::PayloadManifest {

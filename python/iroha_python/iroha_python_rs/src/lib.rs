@@ -13828,19 +13828,27 @@ impl Instruction {
         let instruction = CommitContractDeployment {
             expected_deploy_nonce,
             contract_address: ContractAddress::from_str(contract_address).map_err(|error| {
-                PyValueError::new_err(format!("invalid contract_address `{contract_address}`: {error}"))
+                PyValueError::new_err(format!(
+                    "invalid contract_address `{contract_address}`: {error}"
+                ))
             })?,
             code_hash: Hash::from_str(code_hash_hex).map_err(|error| {
                 PyValueError::new_err(format!("invalid code_hash_hex `{code_hash_hex}`: {error}"))
             })?,
             contract_alias: ContractAlias::from_str(contract_alias).map_err(|error| {
-                PyValueError::new_err(format!("invalid contract_alias `{contract_alias}`: {error}"))
+                PyValueError::new_err(format!(
+                    "invalid contract_alias `{contract_alias}`: {error}"
+                ))
             })?,
             lease_expiry_ms,
             expected_previous_contract_address: expected_previous_contract_address
-                .map(|value| ContractAddress::from_str(value).map_err(|error| {
-                    PyValueError::new_err(format!("invalid expected_previous_contract_address `{value}`: {error}"))
-                }))
+                .map(|value| {
+                    ContractAddress::from_str(value).map_err(|error| {
+                        PyValueError::new_err(format!(
+                            "invalid expected_previous_contract_address `{value}`: {error}"
+                        ))
+                    })
+                })
                 .transpose()?,
         };
         Ok(Self::new(instruction.into()))

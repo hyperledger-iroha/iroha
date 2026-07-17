@@ -22,6 +22,27 @@ def load_module():
     return module
 
 
+def init_release_repo(path: Path) -> None:
+    subprocess.run(["git", "init", "-q"], cwd=path, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "release-test@example.invalid"],
+        cwd=path,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Release Test"], cwd=path, check=True
+    )
+    (path / ".gitignore").write_text("Cargo.lock\ntarget/\n", encoding="utf-8")
+    (path / "tracked.txt").write_text("source\n", encoding="utf-8")
+    subprocess.run(
+        ["git", "add", ".gitignore", "tracked.txt"], cwd=path, check=True
+    )
+    subprocess.run(
+        ["git", "commit", "-qm", "fixture"], cwd=path, check=True
+    )
+    (path / "Cargo.lock").write_text("version = 3\n", encoding="utf-8")
+
+
 def test_manifest_is_order_independent_and_content_sensitive(tmp_path: Path) -> None:
     module = load_module()
     (tmp_path / "a.txt").write_text("alpha\n", encoding="utf-8")
@@ -117,3 +138,181 @@ def test_workspace_manifest_rejects_unmerged_index(
         match=r"unresolved merge entries: conflict\.rs, docs/note\.md",
     ):
         module._git_source_paths(tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("label", "git_path", "directory"),
+    [
+        ("merge", "MERGE_HEAD", False),
+        ("cherry-pick", "CHERRY_PICK_HEAD", False),
+        ("revert", "REVERT_HEAD", False),
+        ("mailbox apply", "AM_HEAD", False),
+        ("rebase-apply", "rebase-apply", True),
+        ("rebase-merge", "rebase-merge", True),
+        ("sequencer", "sequencer", True),
+        ("bisect", "BISECT_START", False),
+    ],
+)
+def test_workspace_manifest_rejects_active_git_operations(
+    tmp_path: Path, label: str, git_path: str, directory: bool
+) -> None:
+    module = load_module()
+    init_release_repo(tmp_path)
+    marker = module._git_path(tmp_path, git_path)
+    if label == "bisect":
+        marker.symlink_to(marker.parent / "missing-bisect-state")
+    elif directory:
+        marker.mkdir(parents=True)
+    else:
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text("active\n", encoding="utf-8")
+
+    with pytest.raises(module.ActiveGitOperationError, match=label):
+        module.workspace_source_manifest(tmp_path)
+
+
+def test_active_operation_detection_is_linked_worktree_local(tmp_path: Path) -> None:
+    module = load_module()
+    main = tmp_path / "main"
+    linked = tmp_path / "linked"
+    main.mkdir()
+    init_release_repo(main)
+    subprocess.run(
+        ["git", "worktree", "add", "--detach", str(linked), "HEAD"],
+        cwd=main,
+        check=True,
+        stdout=subprocess.DEVNULL,
+    )
+    (linked / "Cargo.lock").write_text("version = 3\n", encoding="utf-8")
+
+    main_marker = module._git_path(main, "MERGE_HEAD")
+    main_marker.write_text("active\n", encoding="utf-8")
+    assert module._active_git_operations(linked) == []
+    module.workspace_source_manifest(linked)
+
+    linked_marker = module._git_path(linked, "MERGE_HEAD")
+    linked_marker.write_text("active\n", encoding="utf-8")
+    with pytest.raises(module.ActiveGitOperationError, match="merge"):
+        module.workspace_source_manifest(linked)
+
+
+def test_workspace_manifest_rejects_resolved_but_uncommitted_merge(
+    tmp_path: Path,
+) -> None:
+    module = load_module()
+    init_release_repo(tmp_path)
+    original_branch = subprocess.run(
+        ["git", "branch", "--show-current"],
+        cwd=tmp_path,
+        check=True,
+        text=True,
+        stdout=subprocess.PIPE,
+    ).stdout.strip()
+    subprocess.run(["git", "switch", "-qc", "merge-side"], cwd=tmp_path, check=True)
+    (tmp_path / "tracked.txt").write_text("merge side\n", encoding="utf-8")
+    subprocess.run(["git", "commit", "-qam", "merge side"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "switch", "-q", original_branch], cwd=tmp_path, check=True)
+    (tmp_path / "tracked.txt").write_text("main side\n", encoding="utf-8")
+    subprocess.run(["git", "commit", "-qam", "main side"], cwd=tmp_path, check=True)
+    merge = subprocess.run(
+        ["git", "merge", "merge-side"],
+        cwd=tmp_path,
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    assert merge.returncode != 0
+    (tmp_path / "tracked.txt").write_text("resolved\n", encoding="utf-8")
+    subprocess.run(["git", "add", "tracked.txt"], cwd=tmp_path, check=True)
+    assert module._git_unmerged_paths(tmp_path) == []
+
+    with pytest.raises(module.ActiveGitOperationError, match="merge"):
+        module.workspace_source_manifest(tmp_path)
+
+
+def test_release_identity_binds_clean_head_tree_manifest_and_lock(tmp_path: Path) -> None:
+    module = load_module()
+    init_release_repo(tmp_path)
+
+    identity = module.release_source_identity(tmp_path)
+    assert identity["head_tree"] == identity["index_tree"]
+    assert identity["workspace_source_manifest_sha256"] == module.workspace_source_manifest(
+        tmp_path
+    )
+    assert len(identity["head_commit"]) == 40
+    assert len(identity["cargo_lock_sha256"]) == 64
+
+    (tmp_path / "Cargo.lock").write_text("version = 4\n", encoding="utf-8")
+    changed = module.release_source_identity(tmp_path)
+    assert changed["head_commit"] == identity["head_commit"]
+    assert changed["head_tree"] == identity["head_tree"]
+    assert changed["cargo_lock_sha256"] != identity["cargo_lock_sha256"]
+    assert (
+        changed["workspace_source_manifest_sha256"]
+        != identity["workspace_source_manifest_sha256"]
+    )
+
+
+def test_release_identity_rejects_staged_source(tmp_path: Path) -> None:
+    module = load_module()
+    init_release_repo(tmp_path)
+    (tmp_path / "tracked.txt").write_text("staged\n", encoding="utf-8")
+    subprocess.run(["git", "add", "tracked.txt"], cwd=tmp_path, check=True)
+
+    with pytest.raises(module.DirtyReleaseSourceError, match="index is not HEAD"):
+        module.release_source_identity(tmp_path)
+
+
+def test_release_identity_rejects_tracked_worktree_drift(tmp_path: Path) -> None:
+    module = load_module()
+    init_release_repo(tmp_path)
+    (tmp_path / "tracked.txt").write_text("dirty\n", encoding="utf-8")
+
+    with pytest.raises(module.DirtyReleaseSourceError, match="tracked changes"):
+        module.release_source_identity(tmp_path)
+
+
+def test_release_identity_rejects_nonignored_untracked_source(tmp_path: Path) -> None:
+    module = load_module()
+    init_release_repo(tmp_path)
+    (tmp_path / "untracked.rs").write_text("fn injected() {}\n", encoding="utf-8")
+
+    with pytest.raises(
+        module.DirtyReleaseSourceError, match="non-ignored untracked paths"
+    ):
+        module.release_source_identity(tmp_path)
+
+
+def test_release_identity_rejects_missing_or_symlinked_lockfile(tmp_path: Path) -> None:
+    module = load_module()
+    init_release_repo(tmp_path)
+    lockfile = tmp_path / "Cargo.lock"
+    lockfile.unlink()
+    with pytest.raises(module.DirtyReleaseSourceError, match="regular workspace Cargo.lock"):
+        module.release_source_identity(tmp_path)
+
+    ignored_target = tmp_path / "target" / "lock-target"
+    ignored_target.parent.mkdir()
+    ignored_target.write_text("version = 3\n", encoding="utf-8")
+    lockfile.symlink_to("target/lock-target")
+    with pytest.raises(module.DirtyReleaseSourceError, match="regular workspace Cargo.lock"):
+        module.release_source_identity(tmp_path)
+
+
+def test_release_identity_detects_same_tree_head_change(tmp_path: Path) -> None:
+    module = load_module()
+    init_release_repo(tmp_path)
+    before = module.release_source_identity(tmp_path)
+    subprocess.run(
+        ["git", "commit", "--allow-empty", "-qm", "same tree, different release"],
+        cwd=tmp_path,
+        check=True,
+    )
+    after = module.release_source_identity(tmp_path)
+
+    assert after["head_commit"] != before["head_commit"]
+    assert after["head_tree"] == before["head_tree"]
+    assert (
+        after["workspace_source_manifest_sha256"]
+        == before["workspace_source_manifest_sha256"]
+    )

@@ -6,6 +6,7 @@ use std::{collections::HashMap, sync::Arc};
 use iroha_data_model::{
     nexus as model,
     nexus::{AxtPolicyBinding, AxtPolicyEntry, AxtPolicySnapshot, DataSpaceId, LaneId},
+    prelude::Quantity,
 };
 use ivm::{
     CoreHost, IVM, IVMHost, PointerType, VMError,
@@ -97,8 +98,8 @@ fn make_handle(
             origin_dsid: None,
         },
         budget: HandleBudget {
-            remaining: 200,
-            per_use: Some(150),
+            remaining: Quantity::from(200_u64),
+            per_use: Some(Quantity::from(150_u64)),
         },
         handle_era,
         sub_nonce,
@@ -237,7 +238,7 @@ fn core_host_handles_axt_syscalls_with_valid_tlvs() {
             kind: "transfer".into(),
             from: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".into(),
             to: "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888".into(),
-            amount: "100".into(),
+            amount: Some(Quantity::from(100_u64)),
         },
     };
     let intent_bytes = norito::to_bytes(&intent).expect("encode intent");
@@ -452,7 +453,7 @@ fn core_host_enforces_space_directory_policy_on_handles() {
             kind: "transfer".into(),
             from: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".into(),
             to: "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888".into(),
-            amount: "50".into(),
+            amount: Some(Quantity::from(50_u64)),
         },
     };
     let intent_bytes = norito::to_bytes(&intent).expect("encode intent");
@@ -488,7 +489,7 @@ fn fixture_intent(dsid: DataSpaceId) -> RemoteSpendIntent {
             kind: "transfer".into(),
             from: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".into(),
             to: "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888".into(),
-            amount: "50".into(),
+            amount: Some(Quantity::from(50_u64)),
         },
     }
 }
@@ -516,8 +517,8 @@ fn convert_handle(model: &model::AssetHandle) -> AssetHandle {
             origin_dsid: model.subject.origin_dsid,
         },
         budget: HandleBudget {
-            remaining: model.budget.remaining,
-            per_use: model.budget.per_use,
+            remaining: model.budget.remaining.clone(),
+            per_use: model.budget.per_use.clone(),
         },
         handle_era: model.handle_era,
         sub_nonce: model.sub_nonce,
@@ -597,7 +598,7 @@ fn run_policy_snapshot_case(
             kind: "transfer".into(),
             from: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".into(),
             to: "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888".into(),
-            amount: "50".into(),
+            amount: Some(Quantity::from(50_u64)),
         },
     };
     let intent_ptr = store_tlv(
@@ -716,7 +717,7 @@ fn run_wsv_policy_case(
             kind: "transfer".into(),
             from: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".into(),
             to: "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888".into(),
-            amount: "50".into(),
+            amount: Some(Quantity::from(50_u64)),
         },
     };
     let intent_ptr = store_tlv(
@@ -854,7 +855,7 @@ fn core_host_enforces_policy_snapshot() {
             kind: "transfer".into(),
             from: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".into(),
             to: "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888".into(),
-            amount: "1".into(),
+            amount: Some(Quantity::from(1_u64)),
         },
     };
     let intent_ptr = store_tlv(
@@ -943,7 +944,7 @@ fn core_host_rejects_inline_proof_manifest_mismatch() {
             kind: "transfer".into(),
             from: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".into(),
             to: "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888".into(),
-            amount: "2".into(),
+            amount: Some(Quantity::from(2_u64)),
         },
     };
     let intent_ptr = store_tlv(
@@ -1058,7 +1059,7 @@ fn core_host_rejects_inline_proof_zero_expiry_slot() {
             kind: "transfer".into(),
             from: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".into(),
             to: "sorauﾛ1Q2ｸBKzrｼStﾊYyXﾌ1ｹHｿｾkSveﾉyｻﾈHﾗｿug7zWﾑヰyRMH888".into(),
-            amount: "1".into(),
+            amount: Some(Quantity::from(1_u64)),
         },
     };
     let intent_ptr = store_tlv(
@@ -1196,7 +1197,7 @@ fn core_host_enforces_fixture_snapshot_fields() {
             handle: base_handle.clone(),
             intent: base_intent.clone(),
             proof: None,
-            amount: 50,
+            amount: Quantity::from(50_u64),
             amount_commitment: None,
         };
         let max_clock_skew_ms = base_handle.max_clock_skew_ms.map(u64::from).unwrap_or(0);

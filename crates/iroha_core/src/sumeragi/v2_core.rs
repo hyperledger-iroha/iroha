@@ -33,6 +33,13 @@ pub(crate) use reducer::{
 };
 #[cfg(test)]
 pub(crate) use reducer::{EquivocationEvidence, StepOutcome};
+pub(crate) use refinement::{
+    ExactBodyCompletionOwnership, ExactBodyOwnerProjection, ExactBodyRetirementAccounting,
+    SERVICE_CLASS_COMPLETION, SERVICE_CLASS_NONE, SERVICE_CLASS_NORMAL, SERVICE_CLASS_PROGRESS,
+    TagProjection, classify_exact_body_completion_ownership, exact_body_stage_is_owned,
+    plan_exact_body_owner_binding, plan_exact_body_owner_rebind,
+    plan_exact_body_retirement_accounting, select_bounded_service_class,
+};
 pub(crate) use scheduler::{ScheduleState, ScheduledWork};
 pub(crate) use types::{
     CertificateRef, ChainId, ConsensusMessageV2, ContextId, Digest, EventTag, Generation,

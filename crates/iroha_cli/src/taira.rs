@@ -1528,7 +1528,7 @@ mod tests {
     use iroha_i18n::{Bundle, Language, Localizer};
     use iroha_torii_shared::uri as torii_uri;
     use std::{
-        io::{Read as _, Write as _},
+        io::Write as _,
         net::{TcpListener, TcpStream},
         sync::{
             Arc, Mutex,

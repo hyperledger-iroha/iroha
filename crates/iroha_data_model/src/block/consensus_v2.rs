@@ -2472,7 +2472,8 @@ pub enum SumeragiV2ProgressTransition {
     DecisionPersisted,
     /// The decided block was applied locally.
     Applied,
-    /// The successor height became active.
+    /// This height became active after its predecessor applied, its live
+    /// clocks were armed, and authenticated ingress opened.
     SuccessorHeightActivated,
     /// WAL recovery reconstructed a pending progress path.
     RecoveryReplayed,

@@ -176,24 +176,28 @@ bounded burst scheduling still gives repair traffic a turn.
 
 The final Sumeragi handoff repeats that source isolation instead of collapsing authenticated
 traffic into one FIFO. Each frozen-roster validator has a bounded ingress lane and anonymous plus
-non-roster traffic shares one untrusted lane. Configuration must provide at least `roster_len + 1`
-total slots. A busy lane may borrow otherwise idle capacity, but admission always preserves one
-slot for every empty lane; dequeue rotates one message per non-empty source. Height rollover closes
+non-roster traffic shares one untrusted lane. Each validator owns an ordinary first-message slot,
+a non-timeout Progress slot, and a distinct signer-bounded TimeoutVote slot; configuration must
+therefore provide at least `3 * roster_len + 1` total slots. A busy lane may borrow only capacity
+which preserves those outstanding reservations, and the continuation potential cannot increase
+when one item is serviced. Dequeue rotates one message per non-empty source. Height rollover closes
 the queue, discards messages owned by the old immutable context, installs the successor roster, and
 reopens only after WAL replay. A Byzantine validator or a swarm of non-roster identities therefore
 cannot indefinitely exclude an honest retransmission at the production ingress boundary.
 
 Removal from that fair ingress is conditional on the exact next queue. A reducer-directed head
 remains in its source lane unless the single runtime FIFO has room in that payload's Normal or
-Progress prefix; a commit-certificate response is charged to Progress because successful
-authentication unwraps it into a CommitQC. A current-height certified-body request likewise
-remains queued until the ordered I/O FIFO has room in its auxiliary service prefix. One dequeue
-attempt examines at most one head from every ready source. A source whose head cannot enter its
-downstream prefix rotates without losing that message, so a blocked Normal head cannot hide a
-later CommitQC that still fits the Progress reserve; a full unsuccessful scan restores the ready
-order. The capacity check, fair rotation, and removal occur under the ingress lock, and the runner
-is the sole downstream producer, so an admitted head cannot become a pop-then-drop race between
-queues.
+Progress prefix. TimeoutVote, Commit votes, QCs, TCs, payload chunks, certified-body requests and
+responses, and Commit-certificate requests and responses all receive outer Progress ownership;
+TimeoutVote keeps its distinct signer-bounded reservation. A commit-certificate response is also
+charged to runtime Progress because successful authentication unwraps it into a CommitQC. A
+current-height certified-body request remains queued until the ordered I/O FIFO has room in its
+authenticated service prefix. One dequeue attempt examines at most one head from every ready
+source. A source whose head cannot enter its downstream prefix rotates without losing that
+message, so a blocked Normal head cannot hide later progress that still fits its reservation; a
+full unsuccessful scan restores the ready order. The capacity check, fair rotation, and removal
+occur under the ingress lock, and the runner is the sole downstream producer, so an admitted head
+cannot become a pop-then-drop race between queues.
 
 Trusted completion admission has a matching finite invariant. The shared configuration bounds
 outstanding asynchronous effect work by the runtime completion reserve. The ordered I/O worker has

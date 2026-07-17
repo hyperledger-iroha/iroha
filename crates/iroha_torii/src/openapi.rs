@@ -31709,8 +31709,7 @@ mod tests {
                     .keys()
                     .map(String::as_str)
                     .collect::<BTreeSet<_>>(),
-                expected_statuses.iter().copied()
-                    .collect(),
+                expected_statuses.iter().copied().collect(),
                 "{method} {path} must document the exact fail-closed response surface"
             );
         }
@@ -31861,18 +31860,12 @@ mod tests {
                 canonical_headers,
                 "POST {path} conditional canonical authentication headers"
             );
-            assert_canonical_auth_required_response(
-                operation,
-                path,
-                "multisig_read_auth_required",
-            );
+            assert_canonical_auth_required_response(operation, path, "multisig_read_auth_required");
             let description = operation
                 .get("description")
                 .and_then(Value::as_str)
                 .unwrap_or_else(|| panic!("POST {path} description"));
-            assert!(
-                description.contains("Both canonical `multisig_account_id`")
-            );
+            assert!(description.contains("Both canonical `multisig_account_id`"));
             assert!(description.contains("`multisig_account_alias` selectors require"));
             assert!(description.contains("body fields never establish signer identity"));
         }

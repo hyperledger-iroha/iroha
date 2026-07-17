@@ -34,8 +34,6 @@ jobs:
         env:
           SUMERAGI_V2_TLC_PROFILE: nightly
         run: bash ci/check_sumeragi_formal.sh
-      - name: Sumeragi v2 100,000-height accelerated chaos gate
-        run: bash scripts/formal/run_sumeragi_v2_harness.sh --chaos-100k
       - name: Formal docs metadata report
         if: always()
         run: python3 ci/check_docs_i18n_metadata.py --paths docs/formal --json-out target/docs-i18n/formal-metadata.json
@@ -48,3 +46,50 @@ jobs:
             target/formal/sumeragi_v2
             target/docs-i18n/formal-metadata.json
           if-no-files-found: ignore
+
+  # Deliberately independent of the strict formal job: incomplete proof debt
+  # must fail that gate without preventing collection of the nightly chaos
+  # evidence for the exact same workflow revision.
+  sumeragi-v2-chaos-100k:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    env:
+      CARGO_TERM_COLOR: never
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target/sumeragi-v2-chaos-build
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+          ref: ${{ github.sha }}
+      - name: Verify exact workflow source
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          expected_commit="$(git rev-parse "${EXPECTED_SHA}^{commit}")"
+          test "$(git rev-parse HEAD)" = "$expected_commit"
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache: "false"
+          toolchain: 1.93.1
+      - name: Resolve the attested workspace lockfile
+        run: cargo generate-lockfile
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: "true"
+          shared-key: sumeragi-v2-chaos-100k-1.93.1
+      - name: Prefetch pinned standalone harness dependencies
+        run: bash scripts/formal/run_sumeragi_v2_harness.sh --fetch
+      - name: Sumeragi v2 source-attested 100,000-height chaos gate
+        run: bash scripts/run_sumeragi_v2_100k_chaos.sh
+      - name: Upload Sumeragi v2 chaos evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sumeragi-v2-chaos-100k-nightly
+          path: |
+            Cargo.lock
+            target/sumeragi-v2-release
+          if-no-files-found: warn

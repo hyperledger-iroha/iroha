@@ -103,6 +103,86 @@ struct CandidateWorkWait {
     next_retry: Instant,
 }
 
+/// Fallible construction ownership of an applied predecessor's successor.
+///
+/// Starting construction changes the predecessor's durable diagnostic witness
+/// from `Queued` to `Running`. Only a successfully verified successor context
+/// can bind this token into [`PendingSuccessorActivation`].
+#[derive(Debug)]
+struct PendingSuccessorConstruction {
+    finalized_height: u64,
+}
+
+impl PendingSuccessorConstruction {
+    fn begin(finalized_height: u64) -> Result<Self, V2RunnerError> {
+        super::status::begin_v2_successor_activation(finalized_height)?;
+        Ok(Self { finalized_height })
+    }
+
+    const fn bind(self, successor_context_id: wire::HeightContextId) -> PendingSuccessorActivation {
+        PendingSuccessorActivation::Applied {
+            finalized_height: self.finalized_height,
+            successor_context_id,
+        }
+    }
+}
+
+/// One-shot ownership of an authenticated successor's activation handoff.
+///
+/// Construction failure simply drops this token, leaving the predecessor's
+/// `Running` work stage visible. The outer runner failure guard then closes
+/// output and requires restart; only [`Self::publish`] can claim activation.
+#[derive(Debug)]
+enum PendingSuccessorActivation {
+    /// Uninterrupted rollover whose published Applied predecessor owns the
+    /// Running handoff.
+    Applied {
+        finalized_height: u64,
+        successor_context_id: wire::HeightContextId,
+    },
+    /// Process restart after recovery authenticated a complete durable tip;
+    /// the process-local predecessor registry was intentionally cleared.
+    Recovered {
+        finalized_height: u64,
+        successor_context_id: wire::HeightContextId,
+    },
+}
+
+impl PendingSuccessorActivation {
+    const fn recovered(finalized_height: u64, successor_context_id: wire::HeightContextId) -> Self {
+        Self::Recovered {
+            finalized_height,
+            successor_context_id,
+        }
+    }
+
+    fn publish(self, successor: wire::SumeragiV2Status) -> Result<(), V2RunnerError> {
+        match self {
+            Self::Applied {
+                finalized_height,
+                successor_context_id,
+            } => {
+                super::status::activate_v2_successor_height(
+                    finalized_height,
+                    successor_context_id,
+                    successor,
+                )?;
+            }
+            Self::Recovered {
+                finalized_height,
+                successor_context_id,
+            } => {
+                super::status::activate_recovered_v2_successor_height(
+                    finalized_height,
+                    successor_context_id,
+                    successor,
+                )?;
+            }
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum LocalValidationDisposition {
     Ignored,
@@ -244,19 +324,22 @@ impl LocalProposalState {
 
 /// Run the v2-only worker until shutdown or a fail-closed error.
 pub(super) fn run(worker: SumeragiWorker) {
-    let _status_clear = V2StatusClearGuard::new();
+    let mut status_clear = V2StatusClearGuard::new();
     let ingress_ready = Arc::clone(&worker.ingress_ready);
     let block_ingress = Arc::clone(&worker.block_rx);
-    super::status::set_v2_network_ingress(&block_ingress);
     let output_guard = Arc::clone(&worker.output_guard);
     let _ingress_clear = V2IngressClearGuard::new(Arc::clone(&ingress_ready), block_ingress);
     // Declared after ingress cleanup so reverse-order unwinding closes the
     // process output gate before readiness state is released.
     let mut failure_guard = V2RunnerFailureGuard::new(Arc::clone(&output_guard));
     match run_inner(worker) {
-        Ok(()) => failure_guard.disarm(),
+        Ok(()) => {
+            failure_guard.disarm();
+            status_clear.clear_on_drop();
+        }
         Err(error) => {
             output_guard.activate_restart_required();
+            super::status::mark_v2_restart_required();
             iroha_logger::error!(%error, "authoritative Sumeragi v2 runner stopped fail-closed");
         }
     }
@@ -321,24 +404,55 @@ impl Drop for V2IngressClearGuard {
     }
 }
 
-struct V2StatusClearGuard;
+struct V2StatusClearGuard {
+    clear_on_drop: bool,
+}
 
 impl V2StatusClearGuard {
     fn new() -> Self {
         super::status::clear_v2_status();
-        Self
+        Self {
+            clear_on_drop: false,
+        }
+    }
+
+    fn clear_on_drop(&mut self) {
+        self.clear_on_drop = true;
     }
 }
 
 impl Drop for V2StatusClearGuard {
     fn drop(&mut self) {
-        super::status::clear_v2_status();
+        if self.clear_on_drop {
+            super::status::clear_v2_status();
+        }
     }
 }
 
 fn close_ingress_for_rollover(ingress_ready: &AtomicBool, block_ingress: &FairV2Ingress) {
     ingress_ready.store(false, Ordering::Release);
     block_ingress.close();
+}
+
+fn open_ingress_for_active_height(
+    output_guard: &ConsensusOutputGuard,
+    ingress_ready: &AtomicBool,
+    block_ingress: &FairV2Ingress,
+    activation: Option<(PendingSuccessorActivation, wire::SumeragiV2Status)>,
+) -> Result<(), V2RunnerError> {
+    let Some(ingress_permit) = output_guard.acquire() else {
+        return Err(V2RunnerError::RestartRequired);
+    };
+    block_ingress.open().map_err(ingress_capacity_error)?;
+    ingress_ready.store(true, Ordering::Release);
+    if let Some((activation, successor)) = activation
+        && let Err(error) = activation.publish(successor)
+    {
+        close_ingress_for_rollover(ingress_ready, block_ingress);
+        return Err(error);
+    }
+    drop(ingress_permit);
+    Ok(())
 }
 
 fn ingress_capacity_error(error: FairV2IngressCapacityError) -> V2RunnerError {
@@ -422,6 +536,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
     )?;
     recovery.complete();
     let mut pending_kura_apply = recovered.pending_kura_apply();
+    let recovered_successor_activation_parent = recovered.successor_activation_parent();
     let (
         mut verified_context,
         context_store,
@@ -464,6 +579,9 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
     validate_deadline_duration(retransmit_interval)?;
     let post_finality_cleanup_timeout = round_timeout;
     let mut cleanup_supervisor = V2CleanupSupervisor::default();
+    let mut pending_successor_activation = recovered_successor_activation_parent.map(|parent| {
+        PendingSuccessorActivation::recovered(parent, verified_context.context().id())
+    });
 
     loop {
         cleanup_supervisor.reap_finished();
@@ -483,6 +601,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
                     .map(|validator| validator.validator.clone()),
             )
             .map_err(ingress_capacity_error)?;
+        super::status::set_v2_network_ingress(context.id(), context.height, &block_rx);
         let validator_set_pops = verified_context.proofs_of_possession().to_vec();
         let shared_config = config.v2_config(block_cadence, context.mode)?;
         let fingerprints = adapter_fingerprints(&local_peer, &shared_config);
@@ -524,14 +643,29 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
         let adapter_construction = output_guard
             .begin_fail_stop_operation()
             .ok_or(V2RunnerError::RestartRequired)?;
-        let (adapter, startup_effects) = SumeragiV2Adapter::open(
-            wal_path,
-            verified_context,
-            local_validator,
-            Generation::new(context.height),
-            consensus_key_hash,
-            fingerprints,
-        )?;
+        let adapter = if pending_successor_activation.is_some() {
+            // Preserve the finalized predecessor's Running handoff until the
+            // complete successor stack is live. No reducer status from this
+            // adapter may escape the construction boundary early.
+            SumeragiV2Adapter::open_deferred_status(
+                wal_path,
+                verified_context,
+                local_validator,
+                Generation::new(context.height),
+                consensus_key_hash,
+                fingerprints,
+            )
+        } else {
+            SumeragiV2Adapter::open(
+                wal_path,
+                verified_context,
+                local_validator,
+                Generation::new(context.height),
+                consensus_key_hash,
+                fingerprints,
+            )
+        };
+        let (adapter, startup_effects) = adapter?;
         adapter_construction.complete();
         let runtime_construction = output_guard
             .begin_fail_stop_operation()
@@ -647,7 +781,11 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
         }
         let mut next_block_sync_attempt = deadline_after(height_started_at, round_timeout);
         let mut next_lane_retransmit = deadline_after(height_started_at, retransmit_interval);
+        let initial_directive = reconcile_executor_locked_body(&mut executor, &mut services)?;
+        let mut local_proposal_state =
+            LocalProposalState::from_replayed_tag(replayed_proposal_tag, initial_directive);
         if recovering_interrupted_tip {
+            debug_assert!(pending_successor_activation.is_none());
             // The replayed Decision may already have crossed Kura or WSV, but it is not a
             // completed height until V2ApplyService has idempotently published the checkpoint,
             // manifest, and finality artifact. Keep all network ingress closed while the normal
@@ -655,18 +793,23 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             // the authenticated successor context.
             close_ingress_for_rollover(&ingress_ready, &block_rx);
         } else {
-            let Some(ingress_permit) = output_guard.acquire() else {
-                return Err(V2RunnerError::RestartRequired);
-            };
-            block_rx.open().map_err(ingress_capacity_error)?;
-            ingress_ready.store(true, Ordering::Release);
-            drop(ingress_permit);
+            let activation = pending_successor_activation
+                .take()
+                .map(|pending| {
+                    executor
+                        .successor_activation_status_snapshot()
+                        .map(|status| (pending, status))
+                })
+                .transpose()?;
+            open_ingress_for_active_height(
+                output_guard.as_ref(),
+                &ingress_ready,
+                &block_rx,
+                activation,
+            )?;
         }
 
         let mut block_sync_request = None;
-        let initial_directive = reconcile_executor_locked_body(&mut executor, &mut services)?;
-        let mut local_proposal_state =
-            LocalProposalState::from_replayed_tag(replayed_proposal_tag, initial_directive);
 
         let finality = loop {
             cleanup_supervisor.reap_finished();
@@ -880,30 +1023,14 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
         };
 
         let (receipt, artifact) = finality;
-        if !super::status::set_v2_successor_work_stage(
-            receipt.height(),
-            wire::SumeragiV2LocalWorkStage::Running,
-        ) {
-            iroha_logger::warn!(
-                height = receipt.height(),
-                "Sumeragi v2 successor construction has no matching published height status"
-            );
-        }
+        let activation = PendingSuccessorConstruction::begin(receipt.height())?;
         let successor_construction = output_guard
             .begin_fail_stop_operation()
             .ok_or(V2RunnerError::RestartRequired)?;
         verified_context =
             build_verified_successor(state.as_ref(), &context_store, &artifact, &receipt)?;
         successor_construction.complete();
-        if !super::status::set_v2_successor_work_stage(
-            receipt.height(),
-            wire::SumeragiV2LocalWorkStage::Complete,
-        ) {
-            iroha_logger::warn!(
-                height = receipt.height(),
-                "Sumeragi v2 successor activation could not update the finalized height status"
-            );
-        }
+        pending_successor_activation = Some(activation.bind(verified_context.context().id()));
         signature_policy = BlockSignaturePolicy::RotatingLeader;
         first_height_genesis = None;
         staged_genesis_nexus_amx_context = None;
@@ -1939,6 +2066,9 @@ pub(super) enum V2RunnerError {
     /// Active-height recovery failed.
     #[error(transparent)]
     Recovery(#[from] super::v2_recovery::V2RecoveryError),
+    /// Runner/status activation ownership was inconsistent.
+    #[error(transparent)]
+    SuccessorActivation(#[from] super::status::V2SuccessorActivationError),
     /// Reducer/WAL adapter failed.
     #[error(transparent)]
     Adapter(#[from] super::v2::AdapterError),
@@ -2074,6 +2204,7 @@ mod tests {
         trigger::DataTriggerSequence,
     };
     use iroha_logger::Level;
+    use tempfile::TempDir;
 
     use super::*;
 
@@ -2118,6 +2249,58 @@ mod tests {
             },
             keys,
         )
+    }
+
+    fn runner_status(context: &wire::HeightContext) -> wire::SumeragiV2Status {
+        wire::SumeragiV2Status {
+            protocol_version: wire::PROTOCOL_VERSION,
+            node_fingerprint: Hash::new(b"runner status node"),
+            build_fingerprint: Hash::new(b"runner status build"),
+            config_fingerprint: Hash::new(b"runner status config"),
+            restart_required: false,
+            height_context_id: context.id(),
+            height: context.height,
+            view: 0,
+            phase: wire::SumeragiV2StatusPhase::AwaitingProposal,
+            leader: context.leader(0),
+            locked_prepare_qc: None,
+            highest_prepare_qc: None,
+            last_timeout_certificate: None,
+            body_state: wire::SumeragiV2BodyState::Missing,
+            pending_persistence_id: None,
+            last_committed_height: context.height.saturating_sub(1),
+            last_committed_subject: None,
+            height_context: wire::SumeragiV2HeightContextStatus {
+                epoch: context.epoch,
+                epoch_end_height: context.epoch_end_height,
+                mode: context.mode,
+                epoch_seed: context.leader_seed,
+                validator_count: u32::try_from(context.roster.len()).expect("validator count"),
+                quorum: context.quorum,
+            },
+            last_commit_qc: None,
+            liveness: Default::default(),
+        }
+    }
+
+    fn publish_applied_runner_status(context: &wire::HeightContext) {
+        let mut status = runner_status(context);
+        status.phase = wire::SumeragiV2StatusPhase::PendingApply;
+        status.body_state = wire::SumeragiV2BodyState::Applied;
+        status.liveness.generation = context.height;
+        status.liveness.work.application = wire::SumeragiV2LocalWorkStage::Complete;
+        status.liveness.work.successor_height = wire::SumeragiV2LocalWorkStage::Queued;
+        status.liveness.last_progress = Some(wire::SumeragiV2ProgressTransitionStatus {
+            generation: context.height,
+            round: wire::ConsensusRound {
+                context_id: context.id(),
+                height: context.height,
+                view: 0,
+            },
+            transition: wire::SumeragiV2ProgressTransition::Applied,
+            age_ms: 0,
+        });
+        super::super::status::set_v2_status(status);
     }
 
     #[test]
@@ -2552,6 +2735,316 @@ mod tests {
                 ))
                 .is_err()
         );
+    }
+
+    #[test]
+    fn successor_activation_is_published_only_after_ingress_is_open() {
+        let _guard = super::super::status::rbc_status_test_guard();
+        super::super::status::clear_v2_status();
+        let (context, _) = context();
+        publish_applied_runner_status(&context);
+        let construction =
+            PendingSuccessorConstruction::begin(context.height).expect("begin successor handoff");
+        let ready = AtomicBool::new(false);
+        let ingress = FairV2Ingress::new(1, 1024 * 1024, 1024 * 1024, 0);
+        ingress
+            .configure_roster(std::iter::empty())
+            .expect("configure untrusted test lane");
+        let before = super::super::status::v2_status().expect("predecessor status");
+        assert_eq!(before.height, context.height);
+        assert_eq!(
+            before.liveness.work.successor_height,
+            wire::SumeragiV2LocalWorkStage::Running
+        );
+        assert_eq!(
+            before
+                .liveness
+                .last_progress
+                .expect("application marker")
+                .transition,
+            wire::SumeragiV2ProgressTransition::Applied
+        );
+        assert!(!ready.load(Ordering::Acquire));
+        assert!(
+            ingress
+                .try_push(InboundBlockMessage::new(
+                    BlockMessage::invalid_wire_sentinel(),
+                    None,
+                ))
+                .is_err(),
+            "closed ingress must precede activation publication"
+        );
+
+        let mut successor_context = context.clone();
+        successor_context.height += 1;
+        let mut successor = runner_status(&successor_context);
+        successor.last_committed_height = context.height;
+        successor.liveness.generation = successor_context.height;
+        successor.liveness.last_progress = Some(wire::SumeragiV2ProgressTransitionStatus {
+            generation: successor.liveness.generation,
+            round: wire::ConsensusRound {
+                context_id: successor.height_context_id,
+                height: successor.height,
+                view: successor.view,
+            },
+            transition: wire::SumeragiV2ProgressTransition::SuccessorHeightActivated,
+            age_ms: 0,
+        });
+        let activation = construction.bind(successor.height_context_id);
+        let output_guard = ConsensusOutputGuard::isolated();
+        open_ingress_for_active_height(
+            output_guard.as_ref(),
+            &ready,
+            &ingress,
+            Some((activation, successor.clone())),
+        )
+        .expect("open ingress and publish one activation");
+
+        assert!(ready.load(Ordering::Acquire));
+        ingress
+            .try_push(InboundBlockMessage::new(
+                BlockMessage::invalid_wire_sentinel(),
+                None,
+            ))
+            .expect("activation publication follows open ingress");
+        let active = super::super::status::v2_status().expect("active successor status");
+        assert_eq!(active.height, successor.height);
+        let marker = active
+            .liveness
+            .last_progress
+            .expect("successor activation marker");
+        assert_eq!(
+            marker.transition,
+            wire::SumeragiV2ProgressTransition::SuccessorHeightActivated
+        );
+        assert_eq!(marker.generation, successor.liveness.generation);
+        assert_eq!(marker.round.context_id, successor.height_context_id);
+        assert_eq!(marker.round.height, successor.height);
+        close_ingress_for_rollover(&ready, &ingress);
+        super::super::status::clear_v2_status();
+
+        publish_applied_runner_status(&context);
+        let construction = PendingSuccessorConstruction::begin(context.height)
+            .expect("begin mismatched-context handoff");
+        let foreign_context_id =
+            wire::HeightContextId(HashOf::<wire::HeightContext>::from_untyped_unchecked(
+                Hash::new(b"foreign successor context"),
+            ));
+        let activation = construction.bind(foreign_context_id);
+        let rejected_ready = AtomicBool::new(false);
+        let rejected_ingress = FairV2Ingress::new(1, 1024 * 1024, 1024 * 1024, 0);
+        rejected_ingress
+            .configure_roster(std::iter::empty())
+            .expect("configure rejected test lane");
+        assert!(
+            open_ingress_for_active_height(
+                output_guard.as_ref(),
+                &rejected_ready,
+                &rejected_ingress,
+                Some((activation, successor)),
+            )
+            .is_err(),
+            "an activation token cannot authorize another successor context"
+        );
+        assert!(!rejected_ready.load(Ordering::Acquire));
+        assert!(
+            rejected_ingress
+                .try_push(InboundBlockMessage::new(
+                    BlockMessage::invalid_wire_sentinel(),
+                    None,
+                ))
+                .is_err(),
+            "foreign-context rejection must close ingress again"
+        );
+        let predecessor = super::super::status::v2_status()
+            .expect("foreign-context rejection retains the predecessor");
+        assert_eq!(predecessor.height, context.height);
+        assert_eq!(
+            predecessor.liveness.work.successor_height,
+            wire::SumeragiV2LocalWorkStage::Running
+        );
+        assert_eq!(
+            predecessor
+                .liveness
+                .last_progress
+                .expect("application remains authoritative")
+                .transition,
+            wire::SumeragiV2ProgressTransition::Applied
+        );
+        super::super::status::clear_v2_status();
+    }
+
+    #[test]
+    fn complete_tip_recovery_uses_the_same_live_successor_boundary() {
+        let _guard = super::super::status::rbc_status_test_guard();
+        super::super::status::clear_v2_status();
+        let (parent_context, _) = context();
+        let ready = AtomicBool::new(false);
+        let ingress = FairV2Ingress::new(1, 1024 * 1024, 1024 * 1024, 0);
+        ingress
+            .configure_roster(std::iter::empty())
+            .expect("configure untrusted test lane");
+
+        let mut successor_context = parent_context.clone();
+        successor_context.height += 1;
+        let mut successor = runner_status(&successor_context);
+        successor.last_committed_height = parent_context.height;
+        successor.liveness.generation = successor_context.height;
+        successor.liveness.last_progress = Some(wire::SumeragiV2ProgressTransitionStatus {
+            generation: successor.liveness.generation,
+            round: wire::ConsensusRound {
+                context_id: successor.height_context_id,
+                height: successor.height,
+                view: successor.view,
+            },
+            transition: wire::SumeragiV2ProgressTransition::SuccessorHeightActivated,
+            age_ms: 0,
+        });
+        let output_guard = ConsensusOutputGuard::isolated();
+        let foreign_context_id =
+            wire::HeightContextId(HashOf::<wire::HeightContext>::from_untyped_unchecked(
+                Hash::new(b"foreign recovered successor context"),
+            ));
+        let foreign_activation =
+            PendingSuccessorActivation::recovered(parent_context.height, foreign_context_id);
+        assert!(
+            open_ingress_for_active_height(
+                output_guard.as_ref(),
+                &ready,
+                &ingress,
+                Some((foreign_activation, successor.clone())),
+            )
+            .is_err(),
+            "recovery cannot authorize a same-height snapshot from another context"
+        );
+        assert!(!ready.load(Ordering::Acquire));
+        assert!(
+            super::super::status::v2_status().is_none(),
+            "rejected recovery must not publish a successor"
+        );
+
+        let activation = PendingSuccessorActivation::recovered(
+            parent_context.height,
+            successor.height_context_id,
+        );
+        open_ingress_for_active_height(
+            output_guard.as_ref(),
+            &ready,
+            &ingress,
+            Some((activation, successor.clone())),
+        )
+        .expect("open recovered successor");
+
+        assert!(ready.load(Ordering::Acquire));
+        let active = super::super::status::v2_status().expect("recovered successor status");
+        assert_eq!(active.height, successor.height);
+        assert_eq!(active.last_committed_height, parent_context.height);
+        assert!(matches!(
+            active.liveness.last_progress,
+            Some(wire::SumeragiV2ProgressTransitionStatus {
+                transition: wire::SumeragiV2ProgressTransition::SuccessorHeightActivated,
+                ..
+            })
+        ));
+        close_ingress_for_rollover(&ready, &ingress);
+        super::super::status::clear_v2_status();
+    }
+
+    #[test]
+    fn successor_startup_failure_stays_running_and_fails_closed_without_activation() {
+        let _guard = super::super::status::rbc_status_test_guard();
+        super::super::status::clear_v2_status();
+        let (context, keys) = context();
+        publish_applied_runner_status(&context);
+        let activation =
+            PendingSuccessorConstruction::begin(context.height).expect("begin successor handoff");
+        let ready = Arc::new(AtomicBool::new(false));
+        let ingress = Arc::new(FairV2Ingress::new(1, 1024 * 1024, 1024 * 1024, 0));
+        ingress
+            .configure_roster(std::iter::empty())
+            .expect("configure untrusted test lane");
+        let output_guard = ConsensusOutputGuard::isolated();
+
+        // Force the real adapter constructor to fail on an existing directory
+        // where it requires a WAL file. Runtime, service, and later startup
+        // failures return through the same armed token/runner-guard boundary.
+        let failure_guard = V2RunnerFailureGuard::new(Arc::clone(&output_guard));
+        let proofs = keys
+            .iter()
+            .map(|key| {
+                iroha_crypto::bls_normal_pop_prove(key.private_key())
+                    .expect("validator proof of possession")
+            })
+            .collect::<Vec<_>>();
+        let verified = super::super::v2::VerifiedHeightContext::genesis(context.clone(), proofs)
+            .expect("verified constructor context");
+        let directory = TempDir::new().expect("temporary directory");
+        let constructor = SumeragiV2Adapter::open_deferred_status(
+            directory.path(),
+            verified,
+            None,
+            Generation::new(context.height),
+            [0xA7; 32],
+            AdapterFingerprints {
+                node: Hash::new(b"failed constructor node"),
+                build: Hash::new(b"failed constructor build"),
+                config: Hash::new(b"failed constructor config"),
+            },
+        );
+        assert!(
+            constructor.is_err(),
+            "a directory cannot be opened as a WAL"
+        );
+        drop(activation);
+        drop(failure_guard);
+
+        assert!(output_guard.restart_required());
+        assert!(!ready.load(Ordering::Acquire));
+        assert!(
+            ingress
+                .try_push(InboundBlockMessage::new(
+                    BlockMessage::invalid_wire_sentinel(),
+                    None,
+                ))
+                .is_err()
+        );
+        let stalled = super::super::status::v2_status().expect("stalled predecessor status");
+        assert_eq!(stalled.height, context.height);
+        assert_eq!(
+            stalled.liveness.work.successor_height,
+            wire::SumeragiV2LocalWorkStage::Running
+        );
+        assert_eq!(
+            stalled
+                .liveness
+                .last_progress
+                .expect("application remains the final progress marker")
+                .transition,
+            wire::SumeragiV2ProgressTransition::Applied,
+            "dropping an incomplete activation token must not claim successor activation"
+        );
+        super::super::status::clear_v2_status();
+    }
+
+    #[test]
+    fn status_guard_retains_failure_snapshot_and_clears_clean_shutdown() {
+        let _guard = super::super::status::rbc_status_test_guard();
+        super::super::status::clear_v2_status();
+        let (context, _) = context();
+
+        let failure_status_guard = V2StatusClearGuard::new();
+        publish_applied_runner_status(&context);
+        super::super::status::mark_v2_restart_required();
+        drop(failure_status_guard);
+        let retained = super::super::status::v2_status().expect("retained failure snapshot");
+        assert_eq!(retained.height, context.height);
+        assert!(retained.restart_required);
+
+        let mut clean_status_guard = V2StatusClearGuard::new();
+        publish_applied_runner_status(&context);
+        clean_status_guard.clear_on_drop();
+        drop(clean_status_guard);
+        assert!(super::super::status::v2_status().is_none());
     }
 
     #[test]

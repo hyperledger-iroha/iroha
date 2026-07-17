@@ -2,7 +2,10 @@
 //! These tests validate big-endian length encoding and basic layout.
 
 use iroha_crypto::Hash;
-use iroha_data_model::nexus::{DataSpaceId, LaneId};
+use iroha_data_model::{
+    nexus::{DataSpaceId, LaneId},
+    prelude::Quantity,
+};
 use ivm::{
     Memory, PointerType,
     axt::{
@@ -198,8 +201,8 @@ fn tlv_asset_handle_roundtrip() {
             origin_dsid: Some(DataSpaceId::new(5)),
         },
         budget: HandleBudget {
-            remaining: 42,
-            per_use: Some(7),
+            remaining: Quantity::from(42_u64),
+            per_use: Some(Quantity::from(7_u64)),
         },
         handle_era: 3,
         sub_nonce: 17,

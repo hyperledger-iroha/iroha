@@ -184,6 +184,25 @@ fn resume_after_replay(reducer: &mut Reducer) -> StepOutcome {
         .expect("replay resumption passes the production refinement gate")
 }
 
+fn complete_signature(reducer: &mut Reducer, marker: u8) -> StepOutcome {
+    reducer
+        .step(Event::Signed {
+            tag: reducer.current_tag(),
+            signature: signature(marker),
+        })
+        .expect("the recovered durable intent accepts its signature completion")
+}
+
+fn assert_signature_frontier(
+    reducer: &Reducer,
+    awaiting: Option<&SignableMessage>,
+    queued: &[SignableMessage],
+) {
+    assert_eq!(reducer.awaiting_signature(), awaiting);
+    let actual = reducer.queued_signatures().cloned().collect::<Vec<_>>();
+    assert_eq!(actual.as_slice(), queued);
+}
+
 #[test]
 fn leader_rotation_reduces_the_full_hashed_seed() {
     let mut leader_seed = [0_u8; 32];
@@ -3133,6 +3152,253 @@ fn every_wal_boundary_replays_to_a_safe_resumable_state() {
             ));
         }
     }
+}
+
+#[test]
+fn replay_resigns_current_proposal_prepare_then_historical_locked_commit_fifo() {
+    let context = context();
+    let local = context.leader(1);
+    let locked_round = Round::new(context.height(), 0);
+    let current_round = Round::new(context.height(), 1);
+    let subject = Subject::repeat(0x86);
+    let locked_prepare = qc(&context, 0, Phase::Prepare, subject, &[1, 2, 3]);
+    let locked_commit = Vote::new(context.id(), locked_round, Phase::Commit, subject, local);
+    let installed_timeout = tc_with_high(&context, 0, locked_prepare.clone(), &[1, 2, 3]);
+    let current_proposal = Proposal::new(
+        context.id(),
+        current_round,
+        local,
+        PayloadManifest::new(subject, Digest::repeat(0x87), Digest::repeat(0x88), 128, 2),
+        ProposalJustification::Timeout(installed_timeout.clone()),
+    );
+    let current_prepare = Vote::new(context.id(), current_round, Phase::Prepare, subject, local);
+    let entries = [
+        WalEntry::new(
+            PersistenceId::new(1),
+            WalRecord::LockAndCommit {
+                prepare: locked_prepare,
+                vote: locked_commit,
+            },
+        ),
+        WalEntry::new(
+            PersistenceId::new(2),
+            WalRecord::InstallTimeout(installed_timeout),
+        ),
+        WalEntry::new(
+            PersistenceId::new(3),
+            WalRecord::ProposalIntent(current_proposal.clone()),
+        ),
+        WalEntry::new(
+            PersistenceId::new(4),
+            WalRecord::PrepareIntent(current_prepare),
+        ),
+    ];
+    let mut recovered = Reducer::recover(context, Some(local), Generation::new(60), entries)
+        .expect("current proposal and Prepare may coexist with the exact older locked Commit");
+
+    assert_eq!(recovered.current_tag().view(), 1);
+    assert_eq!(
+        recovered.durable_state().proposal_intent(current_round),
+        Some(&current_proposal)
+    );
+    assert_eq!(
+        recovered.durable_state().prepare_intent(current_round),
+        Some(current_prepare)
+    );
+    assert_eq!(
+        recovered.durable_state().commit_intent(locked_round),
+        Some(locked_commit)
+    );
+
+    let proposal_message = SignableMessage::Proposal(current_proposal.clone());
+    let prepare_message = SignableMessage::Vote(current_prepare);
+    let commit_message = SignableMessage::Vote(locked_commit);
+    let resumed = resume_after_replay(&mut recovered);
+    assert_eq!(
+        resumed.effects(),
+        [Effect::Sign {
+            tag: recovered.current_tag(),
+            message: proposal_message.clone(),
+        }]
+    );
+    assert_signature_frontier(
+        &recovered,
+        Some(&proposal_message),
+        &[prepare_message.clone(), commit_message.clone()],
+    );
+
+    let proposal_signature = signature(0x91);
+    let proposal_completed = complete_signature(&mut recovered, 0x91);
+    assert_eq!(
+        proposal_completed.effects(),
+        [
+            Effect::Broadcast(ConsensusMessageV2::Proposal(SignedProposal::new(
+                current_proposal.clone(),
+                proposal_signature,
+            ))),
+            Effect::Sign {
+                tag: recovered.current_tag(),
+                message: prepare_message.clone(),
+            },
+        ]
+    );
+    assert_signature_frontier(
+        &recovered,
+        Some(&prepare_message),
+        std::slice::from_ref(&commit_message),
+    );
+
+    let prepare_signature = signature(0x92);
+    let prepare_completed = complete_signature(&mut recovered, 0x92);
+    assert_eq!(
+        prepare_completed.effects(),
+        [
+            Effect::Broadcast(ConsensusMessageV2::Vote(SignedVote::new(
+                current_prepare,
+                prepare_signature,
+            ))),
+            Effect::Sign {
+                tag: recovered.current_tag(),
+                message: commit_message.clone(),
+            },
+        ]
+    );
+    assert_signature_frontier(&recovered, Some(&commit_message), &[]);
+
+    let commit_signature = signature(0x93);
+    let commit_completed = complete_signature(&mut recovered, 0x93);
+    assert_eq!(
+        commit_completed.effects(),
+        [Effect::Broadcast(ConsensusMessageV2::Vote(
+            SignedVote::new(locked_commit, commit_signature,)
+        ))]
+    );
+    assert_signature_frontier(&recovered, None, &[]);
+
+    assert_eq!(
+        recovered.durable_state().proposal_intent(current_round),
+        Some(&current_proposal),
+        "signing must not consume the durable Proposal source"
+    );
+    assert_eq!(
+        recovered.durable_state().prepare_intent(current_round),
+        Some(current_prepare),
+        "signing must not consume the durable Prepare source"
+    );
+    assert_eq!(
+        recovered.durable_state().commit_intent(locked_round),
+        Some(locked_commit),
+        "signing must not consume the durable locked Commit source"
+    );
+    let after_fifo = recovered.clone();
+    let duplicate = resume_after_replay(&mut recovered);
+    assert_eq!(
+        duplicate.disposition(),
+        StepDisposition::Ignored(IgnoreReason::Duplicate)
+    );
+    assert!(duplicate.effects().is_empty());
+    assert_eq!(
+        recovered, after_fifo,
+        "replay cannot enqueue the FIFO twice"
+    );
+}
+
+#[test]
+fn replay_resigns_current_timeout_then_historical_locked_commit_fifo() {
+    let context = context();
+    let local = id(1);
+    let locked_round = Round::new(context.height(), 0);
+    let current_round = Round::new(context.height(), 1);
+    let subject = Subject::repeat(0x89);
+    let locked_prepare = qc(&context, 0, Phase::Prepare, subject, &[1, 2, 3]);
+    let locked_commit = Vote::new(context.id(), locked_round, Phase::Commit, subject, local);
+    let current_timeout = TimeoutVote::new(
+        context.id(),
+        current_round,
+        local,
+        Some(locked_prepare.clone()),
+    );
+    let entries = [
+        WalEntry::new(
+            PersistenceId::new(1),
+            WalRecord::LockAndCommit {
+                prepare: locked_prepare,
+                vote: locked_commit,
+            },
+        ),
+        WalEntry::new(
+            PersistenceId::new(2),
+            WalRecord::InstallTimeout(tc_without_high(&context, 0, &[1, 2, 3])),
+        ),
+        WalEntry::new(
+            PersistenceId::new(3),
+            WalRecord::TimeoutIntent(current_timeout.clone()),
+        ),
+    ];
+    let mut recovered = Reducer::recover(context, Some(local), Generation::new(61), entries)
+        .expect("a current Timeout may coexist with the exact older locked Commit");
+
+    assert_eq!(
+        recovered.durable_state().timeout_intent(current_round),
+        Some(current_timeout.clone())
+    );
+    assert_eq!(
+        recovered.durable_state().commit_intent(locked_round),
+        Some(locked_commit)
+    );
+
+    let timeout_message = SignableMessage::TimeoutVote(current_timeout.clone());
+    let commit_message = SignableMessage::Vote(locked_commit);
+    let resumed = resume_after_replay(&mut recovered);
+    assert_eq!(
+        resumed.effects(),
+        [Effect::Sign {
+            tag: recovered.current_tag(),
+            message: timeout_message.clone(),
+        }]
+    );
+    assert_signature_frontier(
+        &recovered,
+        Some(&timeout_message),
+        std::slice::from_ref(&commit_message),
+    );
+
+    let timeout_signature = signature(0x94);
+    let timeout_completed = complete_signature(&mut recovered, 0x94);
+    assert_eq!(
+        timeout_completed.effects(),
+        [
+            Effect::Broadcast(ConsensusMessageV2::TimeoutVote(SignedTimeoutVote::new(
+                current_timeout.clone(),
+                timeout_signature
+            ),)),
+            Effect::Sign {
+                tag: recovered.current_tag(),
+                message: commit_message.clone(),
+            },
+        ]
+    );
+    assert_signature_frontier(&recovered, Some(&commit_message), &[]);
+
+    let commit_signature = signature(0x95);
+    let commit_completed = complete_signature(&mut recovered, 0x95);
+    assert_eq!(
+        commit_completed.effects(),
+        [Effect::Broadcast(ConsensusMessageV2::Vote(
+            SignedVote::new(locked_commit, commit_signature,)
+        ))]
+    );
+    assert_signature_frontier(&recovered, None, &[]);
+    assert_eq!(
+        recovered.durable_state().timeout_intent(current_round),
+        Some(current_timeout),
+        "signing must not consume the durable Timeout source"
+    );
+    assert_eq!(
+        recovered.durable_state().commit_intent(locked_round),
+        Some(locked_commit),
+        "signing must not consume the durable locked Commit source"
+    );
 }
 
 #[test]

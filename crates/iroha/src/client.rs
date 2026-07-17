@@ -6682,7 +6682,7 @@ mod offline_client_tests {
                 .header("content-type", APPLICATION_NORITO)
                 .body(norito::to_bytes(&readiness).expect("encode readiness"))
                 .expect("response");
-            with_mock_http(
+            let _ = with_mock_http(
                 respond_with(&Arc::new(Mutex::new(Vec::new())), response),
                 || client_with_base_url(base_url()).get_offline_readiness(&requested),
             )
@@ -6853,7 +6853,7 @@ mod offline_client_tests {
                 .header("content-type", APPLICATION_NORITO)
                 .body(norito::to_bytes(&readiness).expect("encode readiness"))
                 .expect("response");
-            with_mock_http(
+            let _ = with_mock_http(
                 respond_with(&Arc::new(Mutex::new(Vec::new())), response),
                 || client_with_base_url(base_url()).get_offline_readiness(&requested),
             )
@@ -7221,7 +7221,10 @@ mod status_tests {
         let response = mk_response(StatusCode::OK, body, Some(APPLICATION_JSON));
         let error = Client::decode_lane_lifecycle_status_for_test(&response)
             .expect_err("forged lifecycle commitment must fail closed");
-        assert!(error.to_string().contains("catalog hash mismatch"));
+        assert!(
+            format!("{error:#}").contains("catalog hash mismatch"),
+            "unexpected validation error: {error:#}"
+        );
 
         let response = mk_response(
             StatusCode::OK,
@@ -8608,7 +8611,7 @@ mod evidence_http_tests {
         let mut bundle = AliasProofBundleV1 {
             binding: AliasBindingV1 {
                 alias: "docs/sora".to_owned(),
-                manifest_cid: vec![0xAA, 0xBB],
+                manifest_cid: sorafs_manifest::canonical_manifest_root_cid([0xAA; 32]),
                 bound_at: 1,
                 expiry_epoch: 100,
             },
@@ -8880,10 +8883,12 @@ mod evidence_http_tests {
         let (authority, key_pair) = gen_account_in("wonderland");
         let descriptor = sorafs_manifest::chunker_registry::default_descriptor();
         let chunking_profile = sorafs_manifest::ChunkingProfileV1::from_descriptor(descriptor);
+        let chunk_digest = [0xCD; 32];
         let manifest = sorafs_manifest::ManifestBuilder::new()
-            .root_cid(vec![0x01, 0x02, 0x03])
+            .root_cid(sorafs_manifest::canonical_manifest_root_cid([0x01; 32]))
             .dag_codec(sorafs_manifest::DagCodecId(0x71))
             .chunking_profile(chunking_profile)
+            .chunk_digest_sha3_256(chunk_digest)
             .content_length(1_024)
             .car_digest([0xAB; 32])
             .car_size(2_048)
@@ -8897,7 +8902,6 @@ mod evidence_http_tests {
 
         let manifest_digest_hex =
             hex::encode(manifest.digest().expect("manifest digest").as_bytes());
-        let chunk_digest = [0xCD; 32];
         let chunk_digest_hex = hex::encode(chunk_digest);
         let alias_bytes = *b"alias-proof";
         let alias = SorafsPinAlias {
@@ -8965,11 +8969,12 @@ mod evidence_http_tests {
         let (authority, key_pair) = gen_account_in("wonderland");
         let descriptor = sorafs_manifest::chunker_registry::default_descriptor();
         let manifest = sorafs_manifest::ManifestBuilder::new()
-            .root_cid(vec![0x05, 0x06, 0x07])
+            .root_cid(sorafs_manifest::canonical_manifest_root_cid([0x05; 32]))
             .dag_codec(sorafs_manifest::DagCodecId(0x71))
             .chunking_profile(sorafs_manifest::ChunkingProfileV1::from_descriptor(
                 descriptor,
             ))
+            .chunk_digest_sha3_256([0xCC; 32])
             .content_length(32)
             .car_digest([0x44; 32])
             .car_size(64)
@@ -9015,11 +9020,12 @@ mod evidence_http_tests {
         let (authority, key_pair) = gen_account_in("wonderland");
         let descriptor = sorafs_manifest::chunker_registry::default_descriptor();
         let manifest = sorafs_manifest::ManifestBuilder::new()
-            .root_cid(vec![0x09])
+            .root_cid(sorafs_manifest::canonical_manifest_root_cid([0x09; 32]))
             .dag_codec(sorafs_manifest::DagCodecId(0x71))
             .chunking_profile(sorafs_manifest::ChunkingProfileV1::from_descriptor(
                 descriptor,
             ))
+            .chunk_digest_sha3_256([0xCC; 32])
             .content_length(1)
             .car_digest([0x55; 32])
             .car_size(1)
@@ -9054,11 +9060,12 @@ mod evidence_http_tests {
         let (authority, key_pair) = gen_account_in("wonderland");
         let descriptor = sorafs_manifest::chunker_registry::default_descriptor();
         let manifest = sorafs_manifest::ManifestBuilder::new()
-            .root_cid(vec![0x09])
+            .root_cid(sorafs_manifest::canonical_manifest_root_cid([0x09; 32]))
             .dag_codec(sorafs_manifest::DagCodecId(0x71))
             .chunking_profile(sorafs_manifest::ChunkingProfileV1::from_descriptor(
                 descriptor,
             ))
+            .chunk_digest_sha3_256([0xCC; 32])
             .content_length(1)
             .car_digest([0x55; 32])
             .car_size(1)
@@ -9066,11 +9073,12 @@ mod evidence_http_tests {
             .build()
             .expect("manifest build");
         let other_manifest = sorafs_manifest::ManifestBuilder::new()
-            .root_cid(vec![0xAA])
+            .root_cid(sorafs_manifest::canonical_manifest_root_cid([0xAA; 32]))
             .dag_codec(sorafs_manifest::DagCodecId(0x71))
             .chunking_profile(sorafs_manifest::ChunkingProfileV1::from_descriptor(
                 descriptor,
             ))
+            .chunk_digest_sha3_256([0xCC; 32])
             .content_length(1)
             .car_digest([0x55; 32])
             .car_size(1)
@@ -20761,7 +20769,6 @@ mod url_join_tests {
             "halo2/ipa:ivm-execution-v1",
             "halo2/pasta/ivm-execution-v1",
             "halo2/pasta/kaigi-roster-v1",
-            "halo2/ipa-pasta-cycle-v1",
             "halo2/pasta/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
             "stark/fri",
             "stark/fri/sha256-goldilocks",
@@ -20784,6 +20791,7 @@ mod url_join_tests {
     fn zk_client_backend_guard_rejects_pending_trusted_setup_and_path_labels() {
         for backend in [
             "unknown/privacy/backend",
+            "halo2/ipa-pasta-cycle-v1",
             " halo2/ipa",
             "halo2/ipa ",
             "\thalo2/ipa",
@@ -21487,7 +21495,7 @@ mod tests {
     const PASSWORD: &str = "ilovetea";
     // `mad_hatter:ilovetea` encoded with base64
     const ENCRYPTED_CREDENTIALS: &str = "bWFkX2hhdHRlcjppbG92ZXRlYQ==";
-    const TEST_WORKER_I105: &str = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
+    const TEST_WORKER_I105: &str = "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE";
     const TEST_AUDITOR_I105: &str = "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D";
 
     fn lifecycle_status_fixture(enabled: bool) -> LaneLifecycleStatusV1 {
@@ -21677,10 +21685,13 @@ mod tests {
         let snapshots = store.lock().expect("snapshot store");
         let snapshot = snapshots.first().expect("snapshot");
         assert_eq!(snapshot.method, HttpMethod::GET);
-        assert_eq!(
-            snapshot.url.path(),
-            format!("/v1/accounts/{}/permissions", client.account)
+        let account_id = client.account.to_string();
+        let expected_url = join_torii_url_with_path_segments(
+            &base_url(),
+            "v1/accounts",
+            &[account_id.as_str(), "permissions"],
         );
+        assert_eq!(snapshot.url.path(), expected_url.path());
         assert_eq!(
             snapshot
                 .url
@@ -21694,10 +21705,6 @@ mod tests {
             ])
         );
         assert!(snapshot.body.is_empty());
-        assert_eq!(
-            snapshot.max_response_bytes,
-            CONTRACT_CODE_ARTIFACT_RESPONSE_MAX_BYTES
-        );
         assert_canonical_account_signed_request(&client, snapshot);
     }
 
@@ -21716,10 +21723,13 @@ mod tests {
         let snapshots = store.lock().expect("snapshot store");
         let snapshot = snapshots.first().expect("snapshot");
         assert_eq!(snapshot.method, HttpMethod::GET);
-        assert_eq!(
-            snapshot.url.path(),
-            format!("/v1/accounts/{}/permissions", client.account)
+        let account_id = client.account.to_string();
+        let expected_url = join_torii_url_with_path_segments(
+            &base_url(),
+            "v1/accounts",
+            &[account_id.as_str(), "permissions"],
         );
+        assert_eq!(snapshot.url.path(), expected_url.path());
         assert_eq!(
             snapshot
                 .url
@@ -21875,6 +21885,10 @@ mod tests {
             format!("/v1/contracts/code-bytes/{code_hash}")
         );
         assert!(snapshot.body.is_empty());
+        assert_eq!(
+            snapshot.max_response_bytes,
+            CONTRACT_CODE_ARTIFACT_RESPONSE_MAX_BYTES
+        );
         assert_canonical_account_signed_request(&client, snapshot);
     }
 
@@ -23800,9 +23814,7 @@ mod tests {
             "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
         )
         .expect("asset definition literal");
-        let asset_account = iroha_data_model::account::AccountId::parse_encoded(TEST_WORKER_I105)
-            .expect("worker account literal")
-            .into_account_id();
+        let asset_account = client.account.clone();
         let asset_id =
             iroha_data_model::asset::AssetId::new(asset_definition, asset_account).to_string();
         let payload = format!(
@@ -28479,7 +28491,7 @@ mod tests {
         let ticket_id = RepairTicketId("REP-401".to_string());
         let manifest_digest = [0x11; 32];
         let provider_id = [0x22; 32];
-        let worker_id = TEST_WORKER_I105.to_string();
+        let worker_id = AccountId::new(key_pair.public_key().clone()).to_string();
         let idempotency_key = "claim-401".to_string();
         let claimed_at_unix = 1_700_000_001;
         let payload = RepairWorkerSignaturePayloadV1 {
@@ -28527,7 +28539,7 @@ mod tests {
         let ticket_id = RepairTicketId("REP-402".to_string());
         let manifest_digest = [0x33; 32];
         let provider_id = [0x44; 32];
-        let worker_id = TEST_WORKER_I105.to_string();
+        let worker_id = AccountId::new(key_pair.public_key().clone()).to_string();
         let idempotency_key = "complete-402".to_string();
         let completed_at_unix = 1_700_000_002;
         let resolution_notes = Some("repaired".to_string());
@@ -28580,7 +28592,7 @@ mod tests {
         let ticket_id = RepairTicketId("REP-403".to_string());
         let manifest_digest = [0x55; 32];
         let provider_id = [0x66; 32];
-        let worker_id = TEST_WORKER_I105.to_string();
+        let worker_id = AccountId::new(key_pair.public_key().clone()).to_string();
         let idempotency_key = "fail-403".to_string();
         let failed_at_unix = 1_700_000_003;
         let reason = "checksum_mismatch".to_string();
@@ -28874,7 +28886,9 @@ mod tests {
 
     fn manifest_bundle_from_payload(payload: &[u8]) -> DaManifestBundle {
         let mut store = ChunkStore::new();
-        store.ingest_bytes(payload);
+        store
+            .ingest_bytes(payload)
+            .expect("sample payload must be accepted by the chunk store");
         let profile = ErasureProfile::default();
         let data_shards = usize::from(profile.data_shards);
         let chunk_commitments = store
@@ -29299,7 +29313,7 @@ mod tests {
         for mutate in registry_mutations {
             let mut hostile = valid.clone();
             mutate(&mut hostile);
-            validate_sccp_capabilities(&hostile)
+            let _ = validate_sccp_capabilities(&hostile)
                 .expect_err("drifted fixed SCCP registry limit must reject");
         }
 
@@ -29308,7 +29322,7 @@ mod tests {
                 $({
                     let mut hostile = valid.clone();
                     hostile.resource_limits.$field = 0;
-                    validate_sccp_capabilities(&hostile).expect_err(concat!(
+                    let _ = validate_sccp_capabilities(&hostile).expect_err(concat!(
                         "zero SCCP resource limit must reject: ",
                         stringify!($field),
                     ));
@@ -29370,13 +29384,13 @@ mod tests {
         drifted_outbox
             .resource_limits
             .max_outbound_messages_per_block = 511;
-        validate_sccp_capabilities(&drifted_outbox)
+        let _ = validate_sccp_capabilities(&drifted_outbox)
             .expect_err("drifted fixed SCCP outbound message cap must reject");
         let mut drifted_payload = valid.clone();
         drifted_payload
             .resource_limits
             .max_outbound_message_payload_bytes = 4_095;
-        validate_sccp_capabilities(&drifted_payload)
+        let _ = validate_sccp_capabilities(&drifted_payload)
             .expect_err("drifted fixed SCCP outbound payload cap must reject");
 
         let mut per_proof_over_transaction = valid.clone();
@@ -29386,7 +29400,7 @@ mod tests {
             .resource_limits
             .max_proof_bytes_per_transaction
             + 1;
-        validate_sccp_capabilities(&per_proof_over_transaction)
+        let _ = validate_sccp_capabilities(&per_proof_over_transaction)
             .expect_err("per-proof bytes above transaction bytes must reject");
 
         macro_rules! assert_transaction_over_block_rejects {
@@ -29395,7 +29409,7 @@ mod tests {
                     let mut hostile = valid.clone();
                     hostile.resource_limits.$transaction =
                         hostile.resource_limits.$block + 1;
-                    validate_sccp_capabilities(&hostile).expect_err(concat!(
+                    let _ = validate_sccp_capabilities(&hostile).expect_err(concat!(
                         "transaction SCCP resource limit above block limit must reject: ",
                         stringify!($transaction),
                     ));
@@ -29490,7 +29504,7 @@ mod tests {
             StatusCode::OK,
             &norito::json::to_json(&capability).expect("hostile capability JSON"),
         );
-        with_mock_http(
+        let _ = with_mock_http(
             respond_with(&Arc::new(Mutex::new(Vec::new())), response),
             || client_with_base_url(base_url()).get_sccp_capabilities_json(),
         )
@@ -29512,7 +29526,7 @@ mod tests {
             StatusCode::OK,
             &norito::json::to_json(&recent).expect("hostile recent JSON"),
         );
-        with_mock_http(
+        let _ = with_mock_http(
             respond_with(&Arc::new(Mutex::new(Vec::new())), response),
             || client_with_base_url(base_url()).get_sccp_recent_messages_json(),
         )
@@ -29533,7 +29547,7 @@ mod tests {
             StatusCode::OK,
             &norito::json::to_json(&governance).expect("hostile governance JSON"),
         );
-        with_mock_http(
+        let _ = with_mock_http(
             respond_with(&Arc::new(Mutex::new(Vec::new())), response),
             || client_with_base_url(base_url()).post_sccp_route_governance_draft(&request),
         )
@@ -29584,7 +29598,7 @@ mod tests {
             lower: 21,
             upper: 20,
         });
-        with_mock_http(
+        let _ = with_mock_http(
             |_| panic!("invalid governance window must fail before HTTP"),
             || client_with_base_url(base_url()).post_sccp_route_governance_draft(&invalid_window),
         )
@@ -29614,7 +29628,7 @@ mod tests {
             StatusCode::OK,
             &norito::json::to_json(&wrong_id).expect("wrong-id response"),
         );
-        with_mock_http(
+        let _ = with_mock_http(
             respond_with(&Arc::new(Mutex::new(Vec::new())), response),
             || client_with_base_url(base_url()).post_sccp_route_governance_draft(&request),
         )
@@ -30071,7 +30085,7 @@ mod tests {
                 .header("content-type", APPLICATION_NORITO)
                 .body(norito::to_bytes(&candidate).expect("encode adversarial SCCP bundle"))
                 .expect("response build");
-            with_mock_http(
+            let _ = with_mock_http(
                 respond_with(&Arc::new(Mutex::new(Vec::new())), response),
                 || client_with_base_url(base_url()).get_sccp_message_bundle(&message_id),
             )
@@ -30085,7 +30099,7 @@ mod tests {
             .header("content-type", APPLICATION_NORITO)
             .body(trailing)
             .expect("response build");
-        with_mock_http(
+        let _ = with_mock_http(
             respond_with(&Arc::new(Mutex::new(Vec::new())), response),
             || client_with_base_url(base_url()).get_sccp_message_bundle(&message_id),
         )
@@ -30274,7 +30288,7 @@ mod tests {
             StatusCode::OK,
             &norito::json::to_json(&wrong_hash).expect("encode hostile hash response"),
         );
-        with_mock_http(
+        let _ = with_mock_http(
             respond_with(&Arc::new(Mutex::new(Vec::new())), response),
             || client.post_sccp_destination_proof(&request),
         )
@@ -30299,7 +30313,7 @@ mod tests {
         .expect("decode fixture transaction payload");
         let reject_without_http = |candidate: &SccpDestinationProofSubmitRequest, label: &str| {
             let panic_message = format!("{label} must reject before HTTP");
-            with_mock_http(
+            let _ = with_mock_http(
                 move |_| panic!("{panic_message}"),
                 || client.post_sccp_destination_proof(candidate),
             )
@@ -30415,7 +30429,7 @@ mod tests {
         let (mut client, _key_pair, mut request, _builder, _tx_hash) =
             destination_direct_submit_fixture();
         client.chain = ChainId::from("00000000-0000-0000-0000-000000000000");
-        with_mock_http(
+        let _ = with_mock_http(
             |_| panic!("wrong configured chain must reject before HTTP"),
             || client.post_sccp_destination_proof(&request),
         )
@@ -30423,7 +30437,7 @@ mod tests {
 
         let client = sccp_client_with_base_url(base_url());
         request.transaction_payload_b64 = None;
-        with_mock_http(
+        let _ = with_mock_http(
             |_| panic!("mixed signing state must reject before HTTP"),
             || client.post_sccp_destination_proof(&request),
         )

@@ -101,17 +101,17 @@ pub const SIGNED_MESSAGE_COMMIT: u8 = 3;
 /// Completion of a timeout-vote signature.
 pub const SIGNED_MESSAGE_TIMEOUT: u8 = 4;
 
-/// Replay emitted no safety-relevant effect because the WAL was empty.
+/// Replay's first item is absent because no durable work needs reconstruction.
 pub const REPLAY_EFFECT_NONE: u8 = 0;
-/// Replay resumed an already-durable proposal intent.
+/// Replay's first item resumes an already-durable proposal intent.
 pub const REPLAY_EFFECT_PROPOSAL: u8 = 1;
-/// Replay resumed an already-durable Prepare intent.
+/// Replay's first item resumes an already-durable Prepare intent.
 pub const REPLAY_EFFECT_PREPARE: u8 = 2;
-/// Replay resumed an already-durable Commit intent.
+/// Replay's first item resumes an already-durable Commit intent.
 pub const REPLAY_EFFECT_COMMIT: u8 = 3;
-/// Replay resumed an already-durable timeout intent.
+/// Replay's first item resumes an already-durable timeout intent.
 pub const REPLAY_EFFECT_TIMEOUT: u8 = 4;
-/// Replay resumed acquisition of a durably decided body.
+/// Replay's sole item resumes acquisition of a durably decided body.
 pub const REPLAY_EFFECT_DECISION: u8 = 5;
 
 /// No durable-boundary capability is claimed by a transition.
@@ -124,6 +124,239 @@ pub const BOUNDARY_ACKNOWLEDGE_WAL: u8 = 2;
 pub const BOUNDARY_COMPLETE_APPLICATION: u8 = 3;
 /// Capability to consume the one recovery-resumption transition.
 pub const BOUNDARY_RESUME_AFTER_REPLAY: u8 = 4;
+
+/// No bounded runtime ingress class was selected.
+#[allow(dead_code)] // Used by the production runtime, outside the pure harness crate.
+pub const SERVICE_CLASS_NONE: u8 = 0;
+/// Trusted local completion ingress class.
+#[allow(dead_code)] // Used by the production runtime, outside the pure harness crate.
+pub const SERVICE_CLASS_COMPLETION: u8 = 1;
+/// Certified protocol progress ingress class.
+#[allow(dead_code)] // Used by the production runtime, outside the pure harness crate.
+pub const SERVICE_CLASS_PROGRESS: u8 = 2;
+/// Ordinary proposal and vote ingress class.
+#[allow(dead_code)] // Used by the production runtime, outside the pure harness crate.
+pub const SERVICE_CLASS_NORMAL: u8 = 3;
+
+// One exact body-pipeline identity is carried unchanged through FetchBody,
+// BodyAvailable, StoreBody, and ValidateBody. These macros are instantiated by
+// typed production helpers below and by Verus over mathematical identities.
+// Callers supply identities, never an authorization boolean.
+macro_rules! exact_body_owner_equal_body {
+    ($left:expr, $right:expr) => {{
+        $left.tag.height == $right.tag.height
+            && $left.tag.view == $right.tag.view
+            && $left.tag.generation == $right.tag.generation
+            && $left.key == $right.key
+            && $left.manifest_hash == $right.manifest_hash
+    }};
+}
+
+macro_rules! exact_body_owner_binding_body {
+    ($current:expr, $incoming:expr, $owner_type:ident, $binding_type:ident) => {{
+        match $current {
+            None => Some($binding_type {
+                owner: $incoming,
+                already_owned: false,
+            }),
+            Some(current) => {
+                if current.tag.height != $incoming.tag.height
+                    || current.tag.view != $incoming.tag.view
+                    || current.tag.generation != $incoming.tag.generation
+                    || current.key != $incoming.key
+                {
+                    None
+                } else {
+                    match (current.manifest_hash, $incoming.manifest_hash) {
+                        (Some(existing), Some(incoming)) if existing != incoming => None,
+                        (Some(existing), _) => Some($binding_type {
+                            owner: $owner_type {
+                                tag: current.tag,
+                                key: current.key,
+                                manifest_hash: Some(existing),
+                            },
+                            already_owned: true,
+                        }),
+                        (None, incoming) => Some($binding_type {
+                            owner: $owner_type {
+                                tag: current.tag,
+                                key: current.key,
+                                manifest_hash: incoming,
+                            },
+                            already_owned: true,
+                        }),
+                    }
+                }
+            }
+        }
+    }};
+}
+
+macro_rules! exact_body_owner_rebind_body {
+    ($current:expr, $previous:expr, $rebound_tag:expr, $owner_type:ident) => {{
+        if !exact_body_owner_equal_body!($current, $previous)
+            || $previous.tag.height != $rebound_tag.height
+            || $previous.tag.view >= $rebound_tag.view
+            || $previous.tag.generation >= $rebound_tag.generation
+        {
+            None
+        } else {
+            Some($owner_type {
+                tag: $rebound_tag,
+                key: $previous.key,
+                manifest_hash: $previous.manifest_hash,
+            })
+        }
+    }};
+}
+
+// Runtime ingress and the Busy-deferred lane jointly own each logical
+// completion slot. Exactly one lane may own one exact evidence value.
+macro_rules! exact_body_completion_ownership_body {
+    (
+        $ingress_owners:expr,
+        $ingress_exact:expr,
+        $deferred_owners:expr,
+        $deferred_exact:expr,
+        $vacant:expr,
+        $exact:expr,
+        $invalid:expr $(,)?
+    ) => {{
+        if $ingress_owners == 0
+            && $ingress_exact == 0
+            && $deferred_owners == 0
+            && $deferred_exact == 0
+        {
+            $vacant
+        } else if ($ingress_owners == 1
+            && $ingress_exact == 1
+            && $deferred_owners == 0
+            && $deferred_exact == 0)
+            || ($ingress_owners == 0
+                && $ingress_exact == 0
+                && $deferred_owners == 1
+                && $deferred_exact == 1)
+        {
+            $exact
+        } else {
+            $invalid
+        }
+    }};
+}
+
+// Supersession retires two independently bounded byte classes. Sequential
+// subtraction makes both the no-underflow precondition and the exact residual
+// explicit without relying on an overflowing `retained + ready` sum.
+macro_rules! exact_body_retirement_accounting_body {
+    (
+        $ready_before:expr,
+        $retained_bytes:expr,
+        $ready_bytes:expr,
+        $store_before:expr,
+        $store_bytes:expr,
+        $accounting_type:ident $(,)?
+    ) => {{
+        if $retained_bytes > $ready_before {
+            None
+        } else {
+            let after_retained = $ready_before - $retained_bytes;
+            if $ready_bytes > after_retained || $store_bytes > $store_before {
+                None
+            } else {
+                Some($accounting_type {
+                    ready_after: after_retained - $ready_bytes,
+                    store_after: $store_before - $store_bytes,
+                })
+            }
+        }
+    }};
+}
+
+// Exact three-class round-robin branch relation used by runtime ingress.
+// Every call examines all classes from the persistent cursor and advances the
+// cursor past the selected class; an empty call makes one full rotation.
+macro_rules! bounded_service_selection_body {
+    (
+        $cursor:expr,
+        $completion_ready:expr,
+        $progress_ready:expr,
+        $normal_ready:expr,
+        $selection_type:ident $(,)?
+    ) => {{
+        if $cursor == 1u8 {
+            if $completion_ready {
+                $selection_type {
+                    selected: 1u8,
+                    next: 2u8,
+                }
+            } else if $progress_ready {
+                $selection_type {
+                    selected: 2u8,
+                    next: 3u8,
+                }
+            } else if $normal_ready {
+                $selection_type {
+                    selected: 3u8,
+                    next: 1u8,
+                }
+            } else {
+                $selection_type {
+                    selected: 0u8,
+                    next: 1u8,
+                }
+            }
+        } else if $cursor == 2u8 {
+            if $progress_ready {
+                $selection_type {
+                    selected: 2u8,
+                    next: 3u8,
+                }
+            } else if $normal_ready {
+                $selection_type {
+                    selected: 3u8,
+                    next: 1u8,
+                }
+            } else if $completion_ready {
+                $selection_type {
+                    selected: 1u8,
+                    next: 2u8,
+                }
+            } else {
+                $selection_type {
+                    selected: 0u8,
+                    next: 2u8,
+                }
+            }
+        } else if $cursor == 3u8 {
+            if $normal_ready {
+                $selection_type {
+                    selected: 3u8,
+                    next: 1u8,
+                }
+            } else if $completion_ready {
+                $selection_type {
+                    selected: 1u8,
+                    next: 2u8,
+                }
+            } else if $progress_ready {
+                $selection_type {
+                    selected: 2u8,
+                    next: 3u8,
+                }
+            } else {
+                $selection_type {
+                    selected: 0u8,
+                    next: 3u8,
+                }
+            }
+        } else {
+            $selection_type {
+                selected: 0u8,
+                next: 0u8,
+            }
+        }
+    }};
+}
 
 // Keep the durability acknowledgement predicate shared between the ordinary
 // Rust WAL lifecycle and its Verus proof.  An append receipt is minted only
@@ -240,6 +473,170 @@ pub struct TagProjection {
     pub(crate) height: u64,
     pub(crate) view: u64,
     pub(crate) generation: u64,
+}
+
+/// Typed identity of the sole reducer consumer for one exact body pipeline.
+///
+/// `K` is the complete `(round, subject)` key and `M` is the canonical
+/// manifest identity. A missing manifest is permitted only while a certified
+/// fetch has not yet acquired the body metadata.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ExactBodyOwnerProjection<K, M> {
+    pub(crate) tag: TagProjection,
+    pub(crate) key: K,
+    pub(crate) manifest_hash: Option<M>,
+}
+
+/// Preflighted exact owner binding derived from typed identities.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(dead_code)] // Constructed by the production executor and refinement tests.
+pub struct ExactBodyOwnerBindingProjection<K, M> {
+    pub(crate) owner: ExactBodyOwnerProjection<K, M>,
+    pub(crate) already_owned: bool,
+}
+
+/// Bind or monotonically enrich one exact body-pipeline owner.
+///
+/// The only permitted enrichment changes an absent manifest identity to a
+/// present one. The reducer tag, round/subject key, and any existing manifest
+/// identity are immutable.
+#[allow(dead_code)] // Called by the production executor, outside the pure harness crate.
+pub fn plan_exact_body_owner_binding<K, M>(
+    current: Option<ExactBodyOwnerProjection<K, M>>,
+    incoming: ExactBodyOwnerProjection<K, M>,
+) -> Option<ExactBodyOwnerBindingProjection<K, M>>
+where
+    K: Copy + Eq,
+    M: Copy + Eq,
+{
+    exact_body_owner_binding_body!(
+        current,
+        incoming,
+        ExactBodyOwnerProjection,
+        ExactBodyOwnerBindingProjection
+    )
+}
+
+/// Return whether a pipeline stage carries the exact immutable owner identity.
+#[must_use]
+#[allow(dead_code)] // Called by the production executor, outside the pure harness crate.
+pub fn exact_body_stage_is_owned<K, M>(
+    owner: ExactBodyOwnerProjection<K, M>,
+    stage: ExactBodyOwnerProjection<K, M>,
+) -> bool
+where
+    K: Copy + Eq,
+    M: Copy + Eq,
+{
+    exact_body_owner_equal_body!(owner, stage)
+}
+
+/// Rebind one exact body-pipeline consumer to a strictly newer incarnation.
+///
+/// The height, round/subject key, and manifest identity remain immutable;
+/// both view and generation must strictly advance. This is only a safety
+/// transition. It does not claim the asynchronous rebind will be scheduled.
+#[allow(dead_code)] // Called by the production executor, outside the pure harness crate.
+pub fn plan_exact_body_owner_rebind<K, M>(
+    current: ExactBodyOwnerProjection<K, M>,
+    previous: ExactBodyOwnerProjection<K, M>,
+    rebound_tag: TagProjection,
+) -> Option<ExactBodyOwnerProjection<K, M>>
+where
+    K: Copy + Eq,
+    M: Copy + Eq,
+{
+    exact_body_owner_rebind_body!(current, previous, rebound_tag, ExactBodyOwnerProjection)
+}
+
+/// Classification of one logical completion stage across serialized owners.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(dead_code)] // Consumed by the production runtime and refinement tests.
+pub enum ExactBodyCompletionOwnership {
+    /// Neither runtime ingress nor the Busy-deferred lane owns the stage.
+    Vacant,
+    /// Exactly one lane owns exactly matching trusted evidence.
+    Exact,
+    /// Evidence conflicts, is duplicated, or its owner count is inconsistent.
+    Invalid,
+}
+
+/// Classify exact completion ownership across runtime and deferred lanes.
+#[must_use]
+#[allow(dead_code)] // Called by the production runtime, outside the pure harness crate.
+pub fn classify_exact_body_completion_ownership(
+    ingress_owners: usize,
+    ingress_exact: usize,
+    deferred_owners: usize,
+    deferred_exact: usize,
+) -> ExactBodyCompletionOwnership {
+    exact_body_completion_ownership_body!(
+        ingress_owners,
+        ingress_exact,
+        deferred_owners,
+        deferred_exact,
+        ExactBodyCompletionOwnership::Vacant,
+        ExactBodyCompletionOwnership::Exact,
+        ExactBodyCompletionOwnership::Invalid,
+    )
+}
+
+/// Exact residual counters after superseding body-pipeline ownership.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(dead_code)] // Constructed by the production executor and refinement tests.
+pub struct ExactBodyRetirementAccounting {
+    pub(crate) ready_after: u64,
+    pub(crate) store_after: u64,
+}
+
+/// Compute exact body-byte residuals, rejecting any underflow or leakage.
+#[must_use]
+#[allow(dead_code)] // Called by the production executor, outside the pure harness crate.
+pub fn plan_exact_body_retirement_accounting(
+    ready_before: u64,
+    retained_bytes: u64,
+    ready_bytes: u64,
+    store_before: u64,
+    store_bytes: u64,
+) -> Option<ExactBodyRetirementAccounting> {
+    exact_body_retirement_accounting_body!(
+        ready_before,
+        retained_bytes,
+        ready_bytes,
+        store_before,
+        store_bytes,
+        ExactBodyRetirementAccounting,
+    )
+}
+
+/// One exact selection made by the bounded three-class ingress kernel.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(dead_code)] // Constructed by the production runtime and refinement tests.
+pub struct BoundedServiceSelection {
+    pub(crate) selected: u8,
+    pub(crate) next: u8,
+}
+
+/// Select one ready runtime class from the persistent round-robin cursor.
+///
+/// Invalid cursors fail closed as `(NONE, NONE)`. This function proves only the
+/// bounded arbitration decision made when production invokes it; repeated
+/// invocation remains an explicit scheduler/host-service premise.
+#[must_use]
+#[allow(dead_code)] // Called by the production runtime, outside the pure harness crate.
+pub fn select_bounded_service_class(
+    cursor: u8,
+    completion_ready: bool,
+    progress_ready: bool,
+    normal_ready: bool,
+) -> BoundedServiceSelection {
+    bounded_service_selection_body!(
+        cursor,
+        completion_ready,
+        progress_ready,
+        normal_ready,
+        BoundedServiceSelection,
+    )
 }
 
 /// Primitive identity of one optional quorum certificate.
@@ -411,6 +808,65 @@ pub struct EffectSlotProjection {
     pub(crate) granted: EffectCapabilityKey,
 }
 
+/// One exact item in the durable replay FIFO.
+///
+/// `kind` uses the [`REPLAY_EFFECT_*`] discriminants.  Proposal, Prepare,
+/// Commit, and timeout items carry an [`EFFECT_SIGN`] capability; a Decision
+/// carries the one [`EFFECT_FETCH`] frontier reconstructed on recovery.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ReplayPlanSlotProjection {
+    pub(crate) kind: u8,
+    pub(crate) capability: EffectCapabilityKey,
+}
+
+impl ReplayPlanSlotProjection {
+    /// Canonical absent replay-plan slot.
+    pub(crate) const fn none() -> Self {
+        Self {
+            kind: REPLAY_EFFECT_NONE,
+            capability: EffectCapabilityKey::none(),
+        }
+    }
+}
+
+/// Fixed projection of the complete reducer-owned replay FIFO.
+///
+/// Recovery can reconstruct at most three signable intents, in this order:
+/// current Timeout-or-Proposal, current Prepare, and the exact locked Commit.
+/// A durable Decision is instead represented by one body-fetch frontier.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ReplayPlanProjection {
+    pub(crate) len: u8,
+    pub(crate) slot0: ReplayPlanSlotProjection,
+    pub(crate) slot1: ReplayPlanSlotProjection,
+    pub(crate) slot2: ReplayPlanSlotProjection,
+}
+
+impl ReplayPlanProjection {
+    /// Construct an empty canonical replay plan.
+    pub(crate) const fn empty() -> Self {
+        Self {
+            len: 0,
+            slot0: ReplayPlanSlotProjection::none(),
+            slot1: ReplayPlanSlotProjection::none(),
+            slot2: ReplayPlanSlotProjection::none(),
+        }
+    }
+
+    /// Append one exact replay item, failing closed beyond the protocol bound.
+    pub(crate) fn push(&mut self, kind: u8, capability: EffectCapabilityKey) -> bool {
+        let slot = ReplayPlanSlotProjection { kind, capability };
+        match self.len {
+            0 => self.slot0 = slot,
+            1 => self.slot1 = slot,
+            2 => self.slot2 = slot,
+            _ => return false,
+        }
+        self.len += 1;
+        true
+    }
+}
+
 /// Primitive identity of a durable-boundary action.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct BoundaryCapabilityKey {
@@ -422,6 +878,7 @@ pub struct BoundaryCapabilityKey {
     pub(crate) context_id: ContextId,
     pub(crate) tag: TagProjection,
     pub(crate) subject: SubjectProjection,
+    pub(crate) replay_plan: ReplayPlanProjection,
 }
 
 impl BoundaryCapabilityKey {
@@ -443,6 +900,7 @@ impl BoundaryCapabilityKey {
                 present: false,
                 subject: Subject::repeat(0),
             },
+            replay_plan: ReplayPlanProjection::empty(),
         }
     }
 }
@@ -1003,6 +1461,44 @@ macro_rules! subject_projection_equal_body {
     ($left:expr, $right:expr) => {{ $left.present == $right.present && (!$left.present || $left.subject == $right.subject) }};
 }
 
+macro_rules! replay_plan_slot_well_formed_body {
+    ($slot:expr, $active:expr) => {{
+        if $active {
+            $slot.kind >= 1u8
+                && $slot.kind <= 5u8
+                && $slot.capability.kind == if $slot.kind == 5u8 { 2u8 } else { 5u8 }
+        } else {
+            $slot.kind == 0u8 && $slot.capability.kind == 0u8
+        }
+    }};
+}
+
+macro_rules! replay_plan_well_formed_body {
+    ($plan:expr, $effect_kind:expr) => {{
+        $plan.len <= 3u8
+            && replay_plan_slot_well_formed_body!($plan.slot0, $plan.len > 0u8)
+            && replay_plan_slot_well_formed_body!($plan.slot1, $plan.len > 1u8)
+            && replay_plan_slot_well_formed_body!($plan.slot2, $plan.len > 2u8)
+            && (if $plan.len == 0u8 {
+                $effect_kind == 0u8
+            } else {
+                $effect_kind == $plan.slot0.kind
+            })
+    }};
+}
+
+macro_rules! replay_plan_equal_body {
+    ($left:expr, $right:expr) => {{
+        $left.len == $right.len
+            && $left.slot0.kind == $right.slot0.kind
+            && capability_key_equal_body!($left.slot0.capability, $right.slot0.capability)
+            && $left.slot1.kind == $right.slot1.kind
+            && capability_key_equal_body!($left.slot1.capability, $right.slot1.capability)
+            && $left.slot2.kind == $right.slot2.kind
+            && capability_key_equal_body!($left.slot2.capability, $right.slot2.capability)
+    }};
+}
+
 macro_rules! boundary_capability_equal_body {
     ($left:expr, $right:expr) => {{
         $left.kind == $right.kind
@@ -1015,6 +1511,9 @@ macro_rules! boundary_capability_equal_body {
             && $left.tag.view == $right.tag.view
             && $left.tag.generation == $right.tag.generation
             && subject_projection_equal_body!($left.subject, $right.subject)
+            && replay_plan_well_formed_body!($left.replay_plan, $left.replay_effect_kind)
+            && replay_plan_well_formed_body!($right.replay_plan, $right.replay_effect_kind)
+            && replay_plan_equal_body!($left.replay_plan, $right.replay_plan)
     }};
 }
 
@@ -1444,6 +1943,18 @@ macro_rules! production_action_relation_body {
     ($facts:expr, $signed_gate:ident, $action_gate:ident $(,)?) => {{
         $signed_gate($facts)
             && ($facts.action_kind == 6u8 || $facts.replay_effect_kind == 0u8)
+            // A current, serviceable first ResumeAfterReplay event may not be
+            // reclassified as an ordinary volatile action when its exact
+            // boundary grant fails. Stale tags and duplicate resume events
+            // remain ordinary empty stutters.
+            && ($facts.event_kind != 15u8
+                || !$facts.tag_matches
+                || !$facts.busy_fence_open
+                || (if $facts.volatile_before.replay_resumed {
+                    $facts.action_kind == 0u8
+                } else {
+                    $facts.action_kind == 6u8
+                }))
             && $action_gate($facts)
     }};
 }
@@ -1801,6 +2312,261 @@ mod tests {
             enter_view_exact: true,
             effects: EffectTrace::empty(),
         }
+    }
+
+    fn owner(
+        height: u64,
+        view: u64,
+        generation: u64,
+        key: u64,
+        manifest_hash: Option<u64>,
+    ) -> ExactBodyOwnerProjection<u64, u64> {
+        ExactBodyOwnerProjection {
+            tag: TagProjection {
+                height,
+                view,
+                generation,
+            },
+            key,
+            manifest_hash,
+        }
+    }
+
+    #[test]
+    fn exact_body_owner_binding_rejects_stale_generation_and_conflicting_evidence() {
+        let current = owner(9, 4, 7, 11, Some(23));
+        for conflicting in [
+            owner(10, 4, 7, 11, Some(23)),
+            owner(9, 5, 7, 11, Some(23)),
+            owner(9, 4, 7, 12, Some(23)),
+        ] {
+            assert!(
+                plan_exact_body_owner_binding(Some(current), conflicting).is_none(),
+                "height, view, and round/subject identity are immutable"
+            );
+        }
+        assert!(
+            plan_exact_body_owner_binding(Some(current), owner(9, 4, 8, 11, Some(23))).is_none(),
+            "a different generation cannot overwrite an exact owner"
+        );
+        assert!(
+            plan_exact_body_owner_binding(Some(current), owner(9, 4, 7, 11, Some(24))).is_none(),
+            "a different manifest identity cannot overwrite an exact owner"
+        );
+
+        let enriched = plan_exact_body_owner_binding(
+            Some(owner(9, 4, 7, 11, None)),
+            owner(9, 4, 7, 11, Some(23)),
+        )
+        .expect("one certified fetch may acquire its exact manifest identity");
+        assert!(enriched.already_owned);
+        assert_eq!(enriched.owner, current);
+    }
+
+    #[test]
+    fn exact_body_owner_rebind_preserves_key_and_evidence_and_advances_incarnation() {
+        let previous = owner(9, 4, 7, 11, Some(23));
+        let rebound = plan_exact_body_owner_rebind(
+            previous,
+            previous,
+            TagProjection {
+                height: 9,
+                view: 5,
+                generation: 8,
+            },
+        )
+        .expect("strict later-view rebind is accepted");
+        assert_eq!(rebound.key, previous.key);
+        assert_eq!(rebound.manifest_hash, previous.manifest_hash);
+
+        for wrong in [
+            TagProjection {
+                height: 10,
+                view: 5,
+                generation: 8,
+            },
+            TagProjection {
+                height: 9,
+                view: 4,
+                generation: 8,
+            },
+            TagProjection {
+                height: 9,
+                view: 5,
+                generation: 7,
+            },
+        ] {
+            assert!(plan_exact_body_owner_rebind(previous, previous, wrong).is_none());
+        }
+        assert!(
+            plan_exact_body_owner_rebind(
+                previous,
+                owner(9, 4, 7, 12, Some(23)),
+                TagProjection {
+                    height: 9,
+                    view: 5,
+                    generation: 8,
+                },
+            )
+            .is_none(),
+            "a wrong round/subject owner cannot be rebound"
+        );
+        assert!(
+            plan_exact_body_owner_rebind(
+                previous,
+                owner(9, 4, 7, 11, Some(24)),
+                TagProjection {
+                    height: 9,
+                    view: 5,
+                    generation: 8,
+                },
+            )
+            .is_none(),
+            "a conflicting manifest identity cannot be rebound"
+        );
+        assert!(
+            plan_exact_body_owner_rebind(
+                previous,
+                owner(9, 3, 6, 11, Some(23)),
+                TagProjection {
+                    height: 9,
+                    view: 5,
+                    generation: 8,
+                },
+            )
+            .is_none(),
+            "the previous stage tag must be the exact installed owner"
+        );
+    }
+
+    #[test]
+    fn exact_body_completion_classifier_rejects_duplicate_or_conflicting_owners() {
+        for ingress_owners in 0..=2 {
+            for ingress_exact in 0..=2 {
+                for deferred_owners in 0..=2 {
+                    for deferred_exact in 0..=2 {
+                        let expected = match (
+                            ingress_owners,
+                            ingress_exact,
+                            deferred_owners,
+                            deferred_exact,
+                        ) {
+                            (0, 0, 0, 0) => ExactBodyCompletionOwnership::Vacant,
+                            (1, 1, 0, 0) | (0, 0, 1, 1) => ExactBodyCompletionOwnership::Exact,
+                            _ => ExactBodyCompletionOwnership::Invalid,
+                        };
+                        assert_eq!(
+                            classify_exact_body_completion_ownership(
+                                ingress_owners,
+                                ingress_exact,
+                                deferred_owners,
+                                deferred_exact,
+                            ),
+                            expected,
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn exact_body_retirement_accounting_rejects_capacity_leakage() {
+        let accounting = plan_exact_body_retirement_accounting(100, 20, 30, 80, 35)
+            .expect("exact owned bytes fit both counters");
+        assert_eq!(accounting.ready_after, 50);
+        assert_eq!(accounting.store_after, 45);
+        assert!(plan_exact_body_retirement_accounting(49, 20, 30, 80, 35).is_none());
+        assert!(plan_exact_body_retirement_accounting(100, 20, 30, 34, 35).is_none());
+        assert_eq!(
+            plan_exact_body_retirement_accounting(u64::MAX, 0, 0, u64::MAX, 0),
+            Some(ExactBodyRetirementAccounting {
+                ready_after: u64::MAX,
+                store_after: u64::MAX,
+            })
+        );
+        assert_eq!(
+            plan_exact_body_retirement_accounting(u64::MAX, u64::MAX, 0, 0, 0),
+            Some(ExactBodyRetirementAccounting {
+                ready_after: 0,
+                store_after: 0,
+            })
+        );
+        assert!(
+            plan_exact_body_retirement_accounting(u64::MAX, u64::MAX, u64::MAX, 0, 0).is_none(),
+            "sequential retirement rejects an overflowing combined claim"
+        );
+    }
+
+    #[test]
+    fn bounded_service_kernel_exhaustively_selects_each_readiness_combination() {
+        let classes = [
+            SERVICE_CLASS_COMPLETION,
+            SERVICE_CLASS_PROGRESS,
+            SERVICE_CLASS_NORMAL,
+        ];
+        for cursor in classes {
+            for ready_mask in 0u8..8 {
+                let completion_ready = ready_mask & 0b001 != 0;
+                let progress_ready = ready_mask & 0b010 != 0;
+                let normal_ready = ready_mask & 0b100 != 0;
+                let ready = |class| match class {
+                    SERVICE_CLASS_COMPLETION => completion_ready,
+                    SERVICE_CLASS_PROGRESS => progress_ready,
+                    SERVICE_CLASS_NORMAL => normal_ready,
+                    _ => false,
+                };
+                let cursor_index = classes
+                    .iter()
+                    .position(|class| *class == cursor)
+                    .expect("cursor is one of the three classes");
+                let expected = (0..3)
+                    .map(|offset| classes[(cursor_index + offset) % 3])
+                    .find(|class| ready(*class));
+                let selection = select_bounded_service_class(
+                    cursor,
+                    completion_ready,
+                    progress_ready,
+                    normal_ready,
+                );
+                assert_eq!(selection.selected, expected.unwrap_or(SERVICE_CLASS_NONE));
+                let expected_next = expected.map_or(cursor, |selected| match selected {
+                    SERVICE_CLASS_COMPLETION => SERVICE_CLASS_PROGRESS,
+                    SERVICE_CLASS_PROGRESS => SERVICE_CLASS_NORMAL,
+                    SERVICE_CLASS_NORMAL => SERVICE_CLASS_COMPLETION,
+                    _ => unreachable!("selected class came from the canonical set"),
+                });
+                assert_eq!(selection.next, expected_next);
+            }
+        }
+
+        let first = select_bounded_service_class(SERVICE_CLASS_COMPLETION, true, true, true);
+        let second = select_bounded_service_class(first.next, true, true, true);
+        let third = select_bounded_service_class(second.next, true, true, true);
+        assert_eq!(
+            [first.selected, second.selected, third.selected],
+            [
+                SERVICE_CLASS_COMPLETION,
+                SERVICE_CLASS_PROGRESS,
+                SERVICE_CLASS_NORMAL,
+            ]
+        );
+        assert_eq!(third.next, SERVICE_CLASS_COMPLETION);
+
+        for invalid_cursor in [0, 4, 99, u8::MAX] {
+            let invalid = select_bounded_service_class(invalid_cursor, true, true, true);
+            assert_eq!(invalid.selected, SERVICE_CLASS_NONE);
+            assert_eq!(invalid.next, SERVICE_CLASS_NONE);
+        }
+    }
+
+    #[test]
+    fn source_linked_effective_lock_body_kernels_reject_adversarial_inputs() {
+        exact_body_owner_binding_rejects_stale_generation_and_conflicting_evidence();
+        exact_body_owner_rebind_preserves_key_and_evidence_and_advances_incarnation();
+        exact_body_completion_classifier_rejects_duplicate_or_conflicting_owners();
+        exact_body_retirement_accounting_rejects_capacity_leakage();
+        bounded_service_kernel_exhaustively_selects_each_readiness_combination();
     }
 
     #[test]
