@@ -397,7 +397,7 @@ The following focused checks were recorded through 2026-07-17:
 
 Those retained serial counts predate the native-AMX, successor-activation,
 source-linked body-kernel, and three-corridor ingress additions. The current
-source-bound inventory contains 166 exact tests across 14 modules, including
+source-bound inventory contains 168 exact tests across 14 modules, including
 the authoritative outer-ingress and historical block-sync modules. It must
 still run as one clean committed, detached, source-sealed release leg before it
 becomes release evidence.
@@ -513,14 +513,16 @@ reducer simulations and model-trace replay:
 bash scripts/run_sumeragi_v2_release_gates.sh --pr
 ```
 
-Before those longer scenarios, the PR gate inventories 166 exact production
+Before those longer scenarios, the PR gate inventories 168 exact production
 liveness tests and executes all 14 owning Rust modules serially. The
 inventory includes the reducer exact-lock and adapter consumer-epoch
 regressions, plus five lane-work tests which pin native-AMX signing-guard
 capacity at small, hard-boundary, oversized, overflow, and production-like
 adapter limits. It also pins adapter-owned successor activation, runner ingress
 handoff, watchdog predecessor/successor separation, and recovery-derived
-successor identity. The authoritative ingress leg pins `3N+1` count potential,
+successor identity. The worker leg also pins rejection of an unissued future
+physical acquisition and exact latest-consumer rebind across unavailable-body
+recovery. The authoritative ingress leg pins `3N+1` count potential,
 the TimeoutVote byte reserve, cross-validator isolation, and fair service; the
 adapter/runtime legs pin the independent `2N+3` Busy-deferred partitions and
 runtime Progress admission. The adapter leg also realizes the complete
@@ -535,9 +537,11 @@ the maintained JavaScript and Python authoritative-status parser tests. The
 parser inventory pins normalization, `local_control_pending`,
 `unsafe_proposal`, and the full 12-reason ignore bound; a missing or ignored
 Rust fixture test or a missing named SDK parser test fails the gate. The
-prior inventory and serial 11-module execution are green historical evidence;
-the 166-test/14-module set still needs its clean source-sealed release rerun,
-and the full PR corridor is not claimed passed.
+prior inventory and serial 11-module execution are green historical evidence.
+Current mutable-source discovery finds all 168 exact names among 6,750 library
+tests with none missing or ignored, and direct exact execution is green at
+168/168. The 168-test/14-module set still needs its clean source-sealed release
+rerun, and the full PR corridor is not claimed passed.
 
 The same pre-network gate inventories and executes four exact, non-ignored
 Taira release-profile validators plus the Rust summary-JSON schema contract.
@@ -714,7 +718,7 @@ bash scripts/run_sumeragi_v2_release_gates.sh --release
 
 On success, the command prints one atomically published aggregate receipt path.
 That receipt binds the 29 pre-network corridor legs and their exact
-166-test inventory, semantic test names/counts, commands, logs, and resolved
+168-test inventory, semantic test names/counts, commands, logs, and resolved
 tool identities; the formal completion, pinned harness lock, formal toolchain,
 proof ledger/evidence/log; all 128 matrix logs; the chaos completion/log; and
 the exact-identity Taira completion/canonical JSON/full run log. It

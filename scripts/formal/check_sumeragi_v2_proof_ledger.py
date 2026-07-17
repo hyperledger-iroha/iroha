@@ -2329,6 +2329,395 @@ def _progress_witness_source_fidelity_errors(formal_dir: Path) -> list[str]:
     return errors
 
 
+def _effective_lock_acquisition_source_fidelity_errors(
+    formal_dir: Path,
+) -> list[str]:
+    """Pin the executable locked-body owner and its adversarial TLC seams."""
+
+    model_path = formal_dir / "SumeragiV2EffectiveLockAcquisition.tla"
+    proof_path = formal_dir / "SumeragiV2EffectiveLockAcquisitionProofs.tla"
+    mutation_path = formal_dir / "SumeragiV2EffectiveLockAcquisitionMutation.tla"
+    errors: list[str] = []
+    if not model_path.is_file():
+        return [f"{model_path}: missing executable effective-lock acquisition model"]
+    if not proof_path.is_file():
+        errors.append(f"{proof_path}: missing effective-lock deductive proof module")
+    if not mutation_path.is_file():
+        errors.append(f"{mutation_path}: missing effective-lock mutation module")
+
+    source = model_path.read_text(encoding="utf-8")
+    stripped = strip_tla_comments(source, preserve_string_contents=True)
+    if ANY_THEOREM_DECLARATION_RE.search(stripped):
+        errors.append(
+            f"{model_path}: executable acquisition model must remain theorem-free; "
+            "deductive claims belong in SumeragiV2EffectiveLockAcquisitionProofs"
+        )
+
+    expected_operators = {
+        "ExactAcquisitionIdentityInvariant": (
+            r"/\ PhysicalLoadIds = 0..(nextPhysicalId - 1) "
+            r"/\ \A left, right \in issuedLoads: left.id = right.id => "
+            r"left.subject = right.subject "
+            r"/\ AcquisitionLoad(physicalId, physicalSubject) \in issuedLoads "
+            r"/\ physicalId < nextPhysicalId "
+            r"/\ physicalSubject # desiredSubject => acquisitionPhase = \"Loading\" "
+            r"/\ acquisitionPhase \in {\"Waiting\", \"Ready\"} => "
+            r"physicalSubject = desiredSubject"
+        ),
+        "PhysicalCompletionDisposition": (
+            r"IF completionId < physicalId THEN \"Stale\" "
+            r"ELSE IF completionId > physicalId THEN \"FailClosed\" "
+            r"ELSE IF acquisitionPhase # \"Loading\" THEN \"FailClosed\" "
+            r"ELSE IF completionSubject # physicalSubject THEN \"FailClosed\" "
+            r"ELSE IF physicalSubject # desiredSubject THEN \"Replace\" "
+            r"ELSE \"Owned\""
+        ),
+        "CompletionClassificationInvariant": (
+            r"/\ \A completionId \in (physicalId + 1)..MaxAcquisitionId, "
+            r"completionSubject \in AcquisitionSubjects: "
+            r"PhysicalCompletionDisposition(completionId, completionSubject) "
+            r"= \"FailClosed\" "
+            r"/\ \A completionId \in 0..(physicalId - 1), "
+            r"completionSubject \in AcquisitionSubjects: "
+            r"PhysicalCompletionDisposition(completionId, completionSubject) "
+            r"= \"Stale\" "
+            r"/\ acquisitionPhase # \"Loading\" => "
+            r"\A completionSubject \in AcquisitionSubjects: "
+            r"PhysicalCompletionDisposition(physicalId, completionSubject) "
+            r"= \"FailClosed\" "
+            r"/\ acquisitionPhase = \"Loading\" => "
+            r"/\ \A completionSubject \in AcquisitionSubjects "
+            r"\ {physicalSubject}: "
+            r"PhysicalCompletionDisposition(physicalId, completionSubject) "
+            r"= \"FailClosed\" "
+            r"/\ PhysicalCompletionDisposition(physicalId, physicalSubject) "
+            r"= IF physicalSubject = desiredSubject THEN \"Owned\" ELSE \"Replace\""
+        ),
+        "RebindSameLock": (
+            r"/\ ~decided "
+            r"/\ nextView \in (consumerView + 1)..MaxAcquisitionConsumerView "
+            r"/\ nextGeneration \in "
+            r"(consumerGeneration + 1)..MaxAcquisitionGeneration "
+            r"/\ consumerView' = nextView "
+            r"/\ consumerGeneration' = nextGeneration "
+            r"/\ UNCHANGED <<desiredRound, desiredSubject, physicalId, "
+            r"nextPhysicalId, physicalSubject, acquisitionPhase, issuedLoads, "
+            r"durableSubjects, DeliveryVars, decided>>"
+        ),
+        "InstallHigherLock": (
+            r"/\ ~decided "
+            r"/\ nextRound \in (desiredRound + 1)..MaxAcquisitionLockRound "
+            r"/\ nextSubject \in AcquisitionSubjects "
+            r"/\ nextView \in consumerView..MaxAcquisitionConsumerView "
+            r"/\ nextGeneration \in consumerGeneration..MaxAcquisitionGeneration "
+            r"/\ nextRound <= nextView "
+            r"/\ \/ /\ nextView = consumerView "
+            r"/\ nextGeneration = consumerGeneration "
+            r"\/ /\ nextView > consumerView "
+            r"/\ nextGeneration > consumerGeneration "
+            r"/\ (nextSubject = desiredSubject \/ acquisitionPhase = \"Loading\" "
+            r"\/ nextPhysicalId <= MaxAcquisitionId) "
+            r"/\ desiredRound' = nextRound "
+            r"/\ desiredSubject' = nextSubject "
+            r"/\ consumerView' = nextView "
+            r"/\ consumerGeneration' = nextGeneration "
+            r"/\ IF nextSubject = desiredSubject \/ acquisitionPhase = \"Loading\" "
+            r"THEN UNCHANGED <<physicalId, nextPhysicalId, physicalSubject, "
+            r"acquisitionPhase, issuedLoads>> "
+            r"ELSE StartPhysicalLoad(nextSubject) "
+            r"/\ UNCHANGED <<durableSubjects, DeliveryVars, decided>>"
+        ),
+        "CompleteAvailableLoad": (
+            r"/\ ~decided /\ acquisitionPhase = \"Loading\" "
+            r"/\ physicalSubject \in durableSubjects "
+            r"/\ (physicalSubject = desiredSubject "
+            r"\/ nextPhysicalId <= MaxAcquisitionId) "
+            r"/\ IF physicalSubject = desiredSubject "
+            r"THEN /\ acquisitionPhase' = \"Ready\" "
+            r"/\ UNCHANGED <<physicalId, nextPhysicalId, physicalSubject, "
+            r"issuedLoads>> ELSE StartPhysicalLoad(desiredSubject) "
+            r"/\ UNCHANGED <<desiredRound, desiredSubject, consumerView, "
+            r"consumerGeneration, durableSubjects, DeliveryVars, decided>>"
+        ),
+        "CompleteUnavailableLoad": (
+            r"/\ ~decided /\ acquisitionPhase = \"Loading\" "
+            r"/\ physicalSubject \notin durableSubjects "
+            r"/\ (physicalSubject = desiredSubject "
+            r"\/ nextPhysicalId <= MaxAcquisitionId) "
+            r"/\ IF physicalSubject = desiredSubject "
+            r"THEN /\ acquisitionPhase' = \"Waiting\" "
+            r"/\ UNCHANGED <<physicalId, nextPhysicalId, physicalSubject, "
+            r"issuedLoads>> ELSE StartPhysicalLoad(desiredSubject) "
+            r"/\ UNCHANGED <<desiredRound, desiredSubject, consumerView, "
+            r"consumerGeneration, durableSubjects, DeliveryVars, decided>>"
+        ),
+        "RecoverDesiredBody": (
+            r"/\ ~decided /\ desiredSubject \notin durableSubjects "
+            r"/\ durableSubjects' = durableSubjects \cup {desiredSubject} "
+            r"/\ UNCHANGED <<desiredRound, desiredSubject, consumerView, "
+            r"consumerGeneration, physicalId, nextPhysicalId, physicalSubject, "
+            r"acquisitionPhase, issuedLoads, DeliveryVars, decided>>"
+        ),
+        "RetryRecoveredBody": (
+            r"/\ ~decided /\ acquisitionPhase = \"Waiting\" "
+            r"/\ physicalSubject = desiredSubject "
+            r"/\ desiredSubject \in durableSubjects "
+            r"/\ StartPhysicalLoad(desiredSubject) "
+            r"/\ UNCHANGED <<desiredRound, desiredSubject, consumerView, "
+            r"consumerGeneration, durableSubjects, DeliveryVars, decided>>"
+        ),
+        "DeliverReadyBody": (
+            r"/\ ~decided /\ acquisitionPhase = \"Ready\" "
+            r"/\ physicalSubject = desiredSubject "
+            r"/\ ~CurrentConsumerDelivered "
+            r"/\ deliveryValid' = TRUE /\ deliveredRound' = desiredRound "
+            r"/\ deliveredSubject' = desiredSubject "
+            r"/\ deliveredView' = consumerView "
+            r"/\ deliveredGeneration' = consumerGeneration "
+            r"/\ UNCHANGED <<desiredRound, desiredSubject, consumerView, "
+            r"consumerGeneration, physicalId, nextPhysicalId, physicalSubject, "
+            r"acquisitionPhase, issuedLoads, durableSubjects, decided>>"
+        ),
+        "AcquisitionNext": (
+            r"\/ \E nextView \in 0..MaxAcquisitionConsumerView, "
+            r"nextGeneration \in 0..MaxAcquisitionGeneration: "
+            r"RebindSameLock(nextView, nextGeneration) "
+            r"\/ \E nextRound \in 0..MaxAcquisitionLockRound, "
+            r"nextSubject \in AcquisitionSubjects, "
+            r"nextView \in 0..MaxAcquisitionConsumerView, "
+            r"nextGeneration \in 0..MaxAcquisitionGeneration: "
+            r"InstallHigherLock(nextRound, nextSubject, nextView, nextGeneration) "
+            r"\/ CompleteOwnedLoad \/ RecoverDesiredBody "
+            r"\/ RetryRecoveredBody \/ DeliverReadyBody \/ RecordDecision"
+        ),
+        "AcquisitionSpec": (
+            r"AcquisitionInit /\ [][AcquisitionNext]_acquisitionVars "
+            r"/\ WF_acquisitionVars(CompleteOwnedLoad) "
+            r"/\ WF_acquisitionVars(RecoverDesiredBody) "
+            r"/\ WF_acquisitionVars(RetryRecoveredBody) "
+            r"/\ WF_acquisitionVars(DeliverReadyBody)"
+        ),
+        "EffectiveLockAcquisitionProgress": (
+            r"\A round \in 0..MaxAcquisitionLockRound, "
+            r"subject \in AcquisitionSubjects: DesiredLock(round, subject) "
+            r"~> (decided \/ desiredRound > round \/ LockReady(round, subject))"
+        ),
+        "StableEffectiveLockDelivery": (
+            r"\A round \in 0..MaxAcquisitionLockRound, "
+            r"subject \in AcquisitionSubjects: "
+            r"(<>[](DesiredLock(round, subject) /\ ~decided)) "
+            r"=> []<>(decided \/ /\ DesiredLock(round, subject) "
+            r"/\ CurrentConsumerDelivered)"
+        ),
+    }
+    for symbol, expected in expected_operators.items():
+        expected = expected.replace(r'\"', '"')
+        extracted = _top_level_operator_body(
+            source, symbol, preserve_string_contents=True
+        )
+        if extracted is None:
+            errors.append(f"{model_path}: missing reviewed acquisition operator {symbol}")
+            continue
+        body, line = extracted
+        normalized = " ".join(body.split())
+        if normalized != expected:
+            errors.append(
+                f"{model_path}:{line}: {symbol} must match the reviewed "
+                "effective-lock acquisition transition"
+            )
+
+    if proof_path.is_file():
+        proof_source = proof_path.read_text(encoding="utf-8")
+        theorem = _top_level_theorem_body(
+            proof_source, "EffectiveLockAcquisitionModelObligation"
+        )
+        expected_statement = (
+            r"AcquisitionSpec => /\ []AcquisitionTypeInvariant "
+            r"/\ EffectiveLockAcquisitionProgress "
+            r"/\ StableEffectiveLockDelivery"
+        )
+        if theorem is None:
+            errors.append(
+                f"{proof_path}: missing EffectiveLockAcquisitionModelObligation"
+            )
+        else:
+            body, line = theorem
+            statement = re.split(
+                r"(?m)^[ \t]*(?:BY|PROOF|OBVIOUS)\b", body, maxsplit=1
+            )[0]
+            if " ".join(statement.split()) != expected_statement:
+                errors.append(
+                    f"{proof_path}:{line}: EffectiveLockAcquisitionModelObligation "
+                    "must state type closure plus both temporal properties"
+                )
+
+    acquisition_cfg = formal_dir / "effective_lock_acquisition.cfg"
+    if acquisition_cfg.is_file():
+        cfg_source = acquisition_cfg.read_text(encoding="utf-8")
+        for clause in (
+            "INVARIANT AcquisitionTypeInvariant\n",
+            "INVARIANT CompletionClassificationInvariant\n",
+            "PROPERTY EffectiveLockAcquisitionProgress\n",
+            "PROPERTY StableEffectiveLockDelivery\n",
+        ):
+            if cfg_source.count(clause) != 1:
+                errors.append(
+                    f"{acquisition_cfg}: executable acquisition search must "
+                    f"contain exactly one {clause.strip()}"
+                )
+
+    if mutation_path.is_file():
+        mutation_source = mutation_path.read_text(encoding="utf-8")
+        mutation_contracts = {
+            "BuggyRebindSameLock": (
+                "StartPhysicalLoad(desiredSubject)",
+                "consumerGeneration' = nextGeneration",
+            ),
+            "NoRetryNext": (
+                r"CompleteOwnedLoad \/ RecoverDesiredBody",
+            ),
+            "BuggyPhysicalCompletionDisposition": (
+                "IF completionId # physicalId",
+                'THEN "Stale"',
+            ),
+            "BuggyFutureCompletionFailsClosed": (
+                "(physicalId + 1)..MaxAcquisitionId",
+                '= "FailClosed"',
+            ),
+        }
+        for symbol, clauses in mutation_contracts.items():
+            extracted = _top_level_operator_body(
+                mutation_source, symbol, preserve_string_contents=True
+            )
+            if extracted is None:
+                errors.append(
+                    f"{mutation_path}: missing reviewed acquisition mutation {symbol}"
+                )
+                continue
+            normalized = " ".join(extracted[0].split())
+            for clause in clauses:
+                if clause not in normalized:
+                    errors.append(
+                        f"{mutation_path}:{extracted[1]}: {symbol} must retain "
+                        f"adversarial clause {clause!r}"
+                    )
+
+    mutation_cfg_contracts = {
+        "effective_lock_rebind_fixed.cfg": (
+            "SPECIFICATION CorrectRebindOnlySpec\n",
+            "INVARIANT AcquisitionTypeInvariant\n",
+            "INVARIANT ViewRebindKeepsOnePhysicalLoad\n",
+        ),
+        "effective_lock_rebind_bug.cfg": (
+            "SPECIFICATION BuggyRebindOnlySpec\n",
+            "INVARIANT ViewRebindKeepsOnePhysicalLoad\n",
+        ),
+        "effective_lock_no_retry_bug.cfg": (
+            "SPECIFICATION NoRetrySpec\n",
+            "PROPERTY EffectiveLockAcquisitionProgress\n",
+        ),
+        "effective_lock_future_completion_bug.cfg": (
+            "INIT AcquisitionInit\n",
+            "NEXT AcquisitionNext\n",
+            "INVARIANT BuggyFutureCompletionFailsClosed\n",
+        ),
+    }
+    for name, clauses in mutation_cfg_contracts.items():
+        config_path = formal_dir / name
+        if not config_path.is_file():
+            errors.append(f"{config_path}: missing effective-lock mutation config")
+            continue
+        config_source = config_path.read_text(encoding="utf-8")
+        for clause in clauses:
+            if config_source.count(clause) != 1:
+                errors.append(
+                    f"{config_path}: mutation config must contain exactly one "
+                    f"{clause.strip()}"
+                )
+    return errors
+
+
+def _effective_lock_acquisition_mutation_runner_errors(repo_root: Path) -> list[str]:
+    """Require the production mutation runner to expect each exact outcome."""
+
+    path = repo_root / "scripts" / "formal" / "run_sumeragi_v2_progress_mutations.sh"
+    if not path.is_file():
+        return [f"{path}: missing protected-progress mutation runner"]
+    source = path.read_text(encoding="utf-8")
+    normalized_source = re.sub(r"[ \t]*\\\r?\n[ \t]*", " ", source)
+    cases = (
+        (
+            "effective-lock-rebind-fixed",
+            "effective_lock_rebind_fixed.cfg",
+            "0",
+            (
+                "Model checking completed. No error has been found.",
+                "10 distinct states",
+                "depth of the complete state graph search is 2",
+            ),
+        ),
+        (
+            "effective-lock-rebind-bug",
+            "effective_lock_rebind_bug.cfg",
+            "12",
+            (
+                "Invariant ViewRebindKeepsOnePhysicalLoad is violated.",
+                "BuggyRebindSameLock",
+            ),
+        ),
+        (
+            "effective-lock-no-retry-bug",
+            "effective_lock_no_retry_bug.cfg",
+            "13",
+            (
+                "Temporal properties were violated.",
+                "5 distinct states",
+                "State 4: Stuttering",
+            ),
+        ),
+        (
+            "effective-lock-future-completion-bug",
+            "effective_lock_future_completion_bug.cfg",
+            "12",
+            (
+                "Invariant BuggyFutureCompletionFailsClosed is violated by the "
+                "initial state",
+            ),
+        ),
+    )
+    errors: list[str] = []
+    offsets: list[int] = []
+    for label, config, expected_status, markers in cases:
+        pattern = re.compile(
+            rf"run_case\s+{re.escape(label)}\s+"
+            r"SumeragiV2EffectiveLockAcquisitionMutation\.tla\s+"
+            rf"{re.escape(config)}\s+{re.escape(expected_status)}\s+"
+            + r"(?P<markers>(?:\"[^\"\n]*\"\s*)+)"
+        )
+        matches = list(pattern.finditer(normalized_source))
+        if len(matches) != 1:
+            errors.append(
+                f"{path}: mutation runner must invoke {label} exactly once with "
+                f"status {expected_status}"
+            )
+            continue
+        match = matches[0]
+        offsets.append(match.start())
+        marker_source = match.group("markers")
+        observed_markers = tuple(re.findall(r'"([^"\n]*)"', marker_source))
+        if observed_markers != markers:
+            errors.append(
+                f"{path}: {label} must require exact markers {markers!r}; "
+                f"found {observed_markers!r}"
+            )
+    if len(offsets) == len(cases) and offsets != sorted(offsets):
+        errors.append(
+            f"{path}: effective-lock mutation cases must keep fixed-before-bug "
+            "and rebind-before-recovery order"
+        )
+    return errors
+
+
 def _async_source_fidelity_errors(formal_dir: Path) -> list[str]:
     """Reject async-model shortcuts that previously made progress circular."""
 
@@ -7324,6 +7713,8 @@ def validate_ledger(
     errors.extend(_async_spec_shape_errors(formal_dir))
     errors.extend(_async_proof_architecture_errors(formal_dir))
     errors.extend(_progress_witness_source_fidelity_errors(formal_dir))
+    errors.extend(_effective_lock_acquisition_source_fidelity_errors(formal_dir))
+    errors.extend(_effective_lock_acquisition_mutation_runner_errors(ROOT_DIR))
     errors.extend(_async_source_fidelity_errors(formal_dir))
     errors.extend(_ownership_n1_configuration_errors(formal_dir))
     errors.extend(_chain_source_fidelity_errors(formal_dir))

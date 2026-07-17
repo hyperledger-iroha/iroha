@@ -722,9 +722,11 @@ required_production_liveness_tests=(
   sumeragi::v2_worker::tests::locked_candidate_completion_uses_latest_consumer_without_reloading
   sumeragi::v2_worker::tests::locked_candidate_consumer_rebind_rejects_stale_or_regressive_tags
   sumeragi::v2_worker::tests::locked_candidate_duplicate_or_wrong_completion_is_rejected
+  sumeragi::v2_worker::tests::locked_candidate_future_completion_is_rejected_without_replacing_owner
   sumeragi::v2_worker::tests::higher_different_lock_replaces_load_and_retires_stale_completion
   sumeragi::v2_worker::tests::superseded_locked_candidate_failure_starts_latest_acquisition
   sumeragi::v2_worker::tests::unavailable_locked_candidate_waits_for_matching_durable_store
+  sumeragi::v2_worker::tests::unavailable_locked_candidate_rebinds_latest_consumer_before_retry
   sumeragi::v2_worker::tests::outbound_payload_retention_is_constant_across_many_view_changes
   sumeragi::v2_worker::tests::late_stale_proposal_signature_cannot_restore_pruned_outbound_payload
   sumeragi::v2_worker::tests::nonzero_view_proposal_intent_replays_through_production_services
@@ -748,7 +750,7 @@ required_production_liveness_tests=(
   sumeragi::status::v2_liveness_watchdog_tests::successor_handoff_rejects_every_incomplete_predecessor_witness
   sumeragi::status::v2_liveness_watchdog_tests::successor_startup_overlays_never_cross_the_height_context_boundary
 )
-readonly expected_production_liveness_test_count=166
+readonly expected_production_liveness_test_count=168
 if (( ${#required_production_liveness_tests[@]} != expected_production_liveness_test_count )); then
   echo "expected exactly ${expected_production_liveness_test_count} production Sumeragi v2 liveness tests, found ${#required_production_liveness_tests[@]}" >&2
   exit 1

@@ -458,13 +458,14 @@ rotating-leader, application liveness, successor-activation starvation, and the
 exact-recovery production refinement.
 Release mode additionally requires fresh source-bound evidence.
 
-Before network startup, the executable wrapper inventories 166 named tests
+Before network startup, the executable wrapper inventories 168 named tests
 across 14 Rust modules. The inventory includes five native-AMX lane-work
 capacity regressions, adapter/runner/watchdog successor-activation boundaries,
 exact recovery-derived successor identity, authenticated exact historical
 recovery, and the exact
 `3N+1`/`2N+3` admission boundaries in addition to exact-lock,
-completion-ownership, and executor-batch boundaries. It also runs exact mocked contracts for active Git
+completion-ownership, future-acquisition rejection, rebound durable retry, and
+executor-batch boundaries. It also runs exact mocked contracts for active Git
 operation rejection, detached source sealing, the 128-run matrix launcher, the
 source-bound 100,000-height chaos receipt, provisional Taira evidence
 promotion, and the aggregate release receipt. These execution contracts are
@@ -478,7 +479,7 @@ enumerated file/symlink entries; a separate seal walk checks directories and
 rejects source symlink escapes, writable-output targets, and hard-linked regular
 files. Child builds and evidence bind the sealed manifest actually compiled;
 the aggregate receipt additionally binds original HEAD/tree/`Cargo.lock`, all
-29 pre-network legs and the exact 166-test inventory, the pinned harness lock
+29 pre-network legs and the exact 168-test inventory, the pinned harness lock
 and resolved toolchain, the formal ledger/evidence/log, all matrix logs, chaos
 log, and exact-identity soak evidence. The chmod
 seal is a cooperative ordinary-write guard rather than a same-UID security

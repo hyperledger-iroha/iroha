@@ -103,7 +103,7 @@ _CORRIDOR_SUMMARY_FIELDS = (
     "log",
     "command",
 )
-_PRODUCTION_TEST_COUNT = 166
+_PRODUCTION_TEST_COUNT = 168
 _PRODUCTION_MODULES = (
     (
         "production-authoritative-ingress",
@@ -125,7 +125,7 @@ _PRODUCTION_MODULES = (
     ("production-v2-runtime", "sumeragi::v2_runtime::tests", 20),
     ("production-v2-recovery", "sumeragi::v2_recovery::tests", 2),
     ("production-v2-runner", "sumeragi::v2_runner::tests", 10),
-    ("production-v2-worker", "sumeragi::v2_worker::tests", 17),
+    ("production-v2-worker", "sumeragi::v2_worker::tests", 19),
     (
         "production-v2-watchdog",
         "sumeragi::status::v2_liveness_watchdog_tests",

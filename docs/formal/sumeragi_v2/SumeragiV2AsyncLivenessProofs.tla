@@ -13463,7 +13463,7 @@ PROOF
                AsyncTransportTypeInvariant, AsyncIngressTypeInvariant
       <3>3. /\ CausalQueueNonempty(node)
              /\ CanEnqueueClass(node, Candidate.class)
-        BY <1>1, SelectedCausalCanAdvance
+        BY <1>1, <2>3, SelectedCausalCanAdvance
            DEF CausalHeadCanAdvance, Candidate
       <3>4. AdmitCausalHead(node)
         BY <1>1 DEF LocalAdmissionStep
@@ -13739,7 +13739,8 @@ PROOF
 THEOREM TypedCommitCertificateResponseCandidateFacts ==
   \A node \in ValidatorIds:
     \A item:
-      (AsyncItemTyped(item)
+      (AsyncTypeInvariant
+        /\ AsyncItemTyped(item)
         /\ item.kind = "CommitCertificateResponse"
         /\ item.envelope.recipient = node)
       => /\ AsyncItemTyped(DiscoveredCommitQcItem(item))
@@ -13750,6 +13751,7 @@ THEOREM TypedCommitCertificateResponseCandidateFacts ==
 PROOF
   <1>1. ASSUME NEW node \in ValidatorIds,
                 NEW item,
+                AsyncTypeInvariant,
                 AsyncItemTyped(item),
                 item.kind = "CommitCertificateResponse",
                 item.envelope.recipient = node
@@ -14664,13 +14666,14 @@ PROOF
     <2>7. /\ AsyncCandidateTyped(Candidate)
            /\ Candidate.node = node
            /\ Candidate.class # "Completion"
-      BY <2>1, <2>6, TypedIngressDeliveryCandidateFacts DEF Candidate
+      BY <1>1, <2>1, <2>6,
+         TypedIngressDeliveryCandidateFacts DEF Candidate
     <2>8. CommitAccepted
              => /\ AsyncItemTyped(DiscoveredItem)
                 /\ AsyncCandidateTyped(CommitCandidate)
                 /\ CommitCandidate.node = node
                 /\ CommitCandidate.class # "Completion"
-      BY <2>1, <2>6,
+      BY <1>1, <2>1, <2>6,
          TypedCommitCertificateResponseCandidateFacts
          DEF CommitAccepted, CommitCandidate, DiscoveredItem,
              CommitCertificateResponseAuthorized
@@ -30010,7 +30013,7 @@ PROOF
            SelectedIngressItemHasLaneOwnership DEF Item, Index
       <3>3. /\ AsyncCandidateTyped(Candidate)
              /\ ProgressCommitSource(Candidate)
-        BY <3>2, TypedIngressDeliveryCandidateFacts,
+        BY <1>1, <3>2, TypedIngressDeliveryCandidateFacts,
            DeliveryCandidateHasProgressCommitSource DEF Candidate
       <3>4. \/ UNCHANGED asyncCommandQueues
              \/ EnqueueCandidate(Candidate)
@@ -30029,7 +30032,7 @@ PROOF
                    /\ EnqueueCandidate(CommitCandidate)
         <4>1. /\ AsyncCandidateTyped(CommitCandidate)
                /\ ProgressCommitSource(CommitCandidate)
-          BY <3>2, <3>7,
+          BY <1>1, <3>2, <3>7,
              TypedCommitCertificateResponseCandidateFacts,
              CommitCertificateResponseCandidateHasProgressCommitSource
              DEF CommitCandidate

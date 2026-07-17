@@ -520,17 +520,21 @@ remaining cryptographic, deterministic-execution, operating-system durability,
 post-GST transport, and host-service premises are listed explicitly in the
 ledger and formal README.
 
-The current pre-network release inventory names 166 tests across fourteen Rust
+The current pre-network release inventory names 168 tests across fourteen Rust
 modules. It includes exact completion ownership, body-owner binding and
-rebind, byte retirement, three-class production arbitration, the exact
+rebind, rejection of future physical completions, durable-recovery retry to the
+latest consumer, byte retirement, three-class production arbitration, the exact
 `3N+1` ingress and `2N+3` deferred partitions, successor activation/recovery,
 authenticated exact historical recovery, and watchdog classification. Cargo
 discovery found all
 162 then-required names among 6,744 tests with no missing or ignored release
 test before the four replay-FIFO/refinement regressions raised the inventory to
-166; the authoritative ingress module was green at 30/30. Fresh 166-name Cargo
-discovery and the clean committed, detached, source-sealed serial release leg
-remain pending. An earlier exact one-attempt
+166 and the two effective-lock acquisition regressions raised it to 168; the
+authoritative ingress module was green at 30/30. Current mutable-source
+discovery finds all 168 exact names among 6,750 library tests with none missing
+or ignored, and direct exact execution is green at 168/168. The clean
+committed, detached, source-sealed serial release leg remains pending. An
+earlier exact one-attempt
 four-validator genesis rerun is green at 1/1 in 456.76 seconds. Neither
 inventory presence nor regression evidence is a machine proof.
 The Core delivery relation and normalized trace replay match exact-lock

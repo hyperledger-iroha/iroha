@@ -25267,7 +25267,7 @@ acknowledgement; second-callback failure, mixed decided-local work, corrupt
 indexes, and post-commit status failure are pinned by adversarial tests.
 Certified-body request conflicts remain nonfatal, and conflicting
 Commit-certificate responses preserve outstanding discovery for retry. The
-gate pins 166 required tests across 14 modules, including exact composite
+gate pins 168 required tests across 14 modules, including exact composite
 replay-FIFO ordering, its source-linked refinement projection, and
 recovery-derived successor identity plus sequential historical CommitQC/body
 catch-up. Before the three-corridor expansion, all
@@ -25280,10 +25280,13 @@ ignored). Cargo discovery found every one of the
 entry. The latest expanded unsealed discovery found all 162 then-required names
 among 6,744 tests with none missing or ignored, and the authoritative-ingress
 module is green at 30/30. Two newly pinned replay-FIFO names plus their two
-source-linked refinement witnesses raise the current inventory to 166. The new
+source-linked refinement witnesses raised the inventory to 166, and the two
+effective-lock acquisition regressions now raise it to 168. The new
 refinement witnesses are green at 2/2, the complete source-link module at
-11/11, and the isolated reducer library at 96/96; clean 166-name discovery and
-the committed, detached, source-sealed serial rerun are still pending. The
+11/11, and the isolated reducer library at 96/96. Current mutable-source
+discovery finds all 168 exact names among 6,750 library tests with none missing
+or ignored, and direct exact execution is green at 168/168. The committed,
+detached, source-sealed serial rerun is still pending. The
 one-shot token binds successor identity to the exact
 verified successor `HeightContextId`, and the adversarial rejection table
 retains the applied predecessor on a same-height foreign-context snapshot. A
@@ -25329,7 +25332,7 @@ deferred-owner replacement mutation now pins scheduler-wide exact-envelope
 coalescing. The proof ledger still reports `machine_checked_completion: false`.
 Strict proof completion therefore remains pending, and post-GST height liveness
 remains a conditional target and paper argument rather than a machine-checked
-completion. The PR gate inventories 166 production-liveness tests across 14
+completion. The PR gate inventories 168 production-liveness tests across 14
 Rust modules before network startup. Exact regressions cover
 completion coalescing, conflicting evidence, production Busy transfer,
 transactional cross-queue retirement/duplicate rejection,
@@ -25365,7 +25368,7 @@ entries, while the seal walk checks directories and rejects escaping or
 writable-output symlinks plus hard-linked source files. The original checkout
 manifest and sealed manifest are both retained; every child completion uses the
 latter, while one aggregate receipt also binds original HEAD/tree/`Cargo.lock`,
-all pre-network legs and their exact 166-test inventory, the formal harness
+all pre-network legs and their exact 168-test inventory, the formal harness
 lock/toolchain, matrix, chaos, and soak evidence. The formal leg archives a
 tee-captured all-legs log plus `proof_coverage.json` and
 `proof_evidence.json`; receipt publication reruns the official proof checker.
@@ -25451,8 +25454,10 @@ remains false. Outstanding release work:
   rotating-leader, application-liveness, successor-activation starvation, and
   production-refinement proofs;
 - execute the cross-SDK fixture/status-parser legs and complete four-seed PR
-  corridor against the final source tree. Current-tree discovery finds all 166
-  required tests with none missing or ignored; the 14-module pre-network
+  corridor against the final source tree. The last complete discovery found all
+  166 then-required tests with none missing or ignored; the inventory now
+  requires 168 after adding future-completion and rebound-retry coverage, so a
+  fresh exact discovery remains pending. The 14-module pre-network
   production-liveness inventory includes completion
   ownership, installed destination rebind, unbound-Vote authority,
   exact-lock/consumer-epoch admission, transactional certified retirement,

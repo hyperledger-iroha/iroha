@@ -962,6 +962,206 @@ def test_effective_lock_body_model_and_production_refinement_remain_separate_deb
         assert f"{proposition} = TRUE" in source
 
 
+def copy_effective_lock_acquisition_fixture(tmp_path: Path, module) -> Path:
+    """Copy the executable owner, proof boundary, and adversarial TLC configs."""
+
+    formal_dir = tmp_path / "sumeragi_v2"
+    formal_dir.mkdir()
+    for name in (
+        "SumeragiV2EffectiveLockAcquisition.tla",
+        "SumeragiV2EffectiveLockAcquisitionProofs.tla",
+        "SumeragiV2EffectiveLockAcquisitionMutation.tla",
+        "effective_lock_acquisition.cfg",
+        "effective_lock_rebind_fixed.cfg",
+        "effective_lock_rebind_bug.cfg",
+        "effective_lock_no_retry_bug.cfg",
+        "effective_lock_future_completion_bug.cfg",
+    ):
+        shutil.copyfile(module.FORMAL_DIR / name, formal_dir / name)
+    return formal_dir
+
+
+def test_effective_lock_acquisition_source_fidelity_is_green(tmp_path: Path) -> None:
+    module = load_checker()
+    formal_dir = copy_effective_lock_acquisition_fixture(tmp_path, module)
+
+    assert module._effective_lock_acquisition_source_fidelity_errors(formal_dir) == []
+
+
+@pytest.mark.parametrize(
+    ("name", "symbol", "old", "new", "expected_error"),
+    (
+        (
+            "SumeragiV2EffectiveLockAcquisition.tla",
+            "PhysicalCompletionDisposition",
+            "completionId > physicalId",
+            "completionId < physicalId",
+            "PhysicalCompletionDisposition must match",
+        ),
+        (
+            "SumeragiV2EffectiveLockAcquisition.tla",
+            "RebindSameLock",
+            "consumerGeneration' = nextGeneration",
+            "consumerGeneration' = consumerGeneration",
+            "RebindSameLock must match",
+        ),
+        (
+            "SumeragiV2EffectiveLockAcquisition.tla",
+            "InstallHigherLock",
+            'acquisitionPhase = "Loading"',
+            'acquisitionPhase = "Waiting"',
+            "InstallHigherLock must match",
+        ),
+        (
+            "SumeragiV2EffectiveLockAcquisition.tla",
+            "AcquisitionSpec",
+            "/\\ WF_acquisitionVars(RetryRecoveredBody)",
+            "",
+            "AcquisitionSpec must match",
+        ),
+        (
+            "SumeragiV2EffectiveLockAcquisition.tla",
+            "StableEffectiveLockDelivery",
+            "/\\ CurrentConsumerDelivered",
+            "/\\ TRUE",
+            "StableEffectiveLockDelivery must match",
+        ),
+        (
+            "SumeragiV2EffectiveLockAcquisitionMutation.tla",
+            "NoRetryNext",
+            "CompleteOwnedLoad",
+            "RetryRecoveredBody",
+            "NoRetryNext must retain adversarial clause",
+        ),
+    ),
+)
+def test_effective_lock_acquisition_operator_mutations_fail_closed(
+    tmp_path: Path,
+    name: str,
+    symbol: str,
+    old: str,
+    new: str,
+    expected_error: str,
+) -> None:
+    module = load_checker()
+    formal_dir = copy_effective_lock_acquisition_fixture(tmp_path, module)
+    path = formal_dir / name
+    source = path.read_text(encoding="utf-8")
+    path.write_text(
+        mutate_tla_operator(source, symbol, old, new), encoding="utf-8"
+    )
+
+    errors = module._effective_lock_acquisition_source_fidelity_errors(formal_dir)
+    assert any(expected_error in error for error in errors), errors
+
+
+def test_effective_lock_acquisition_theorem_weakening_fails_closed(
+    tmp_path: Path,
+) -> None:
+    module = load_checker()
+    formal_dir = copy_effective_lock_acquisition_fixture(tmp_path, module)
+    path = formal_dir / "SumeragiV2EffectiveLockAcquisitionProofs.tla"
+    source = path.read_text(encoding="utf-8")
+    path.write_text(
+        mutate_tla_theorem(
+            source,
+            "EffectiveLockAcquisitionModelObligation",
+            "/\\ StableEffectiveLockDelivery",
+            "/\\ TRUE",
+        ),
+        encoding="utf-8",
+    )
+
+    errors = module._effective_lock_acquisition_source_fidelity_errors(formal_dir)
+    assert any(
+        "must state type closure plus both temporal properties" in error
+        for error in errors
+    )
+
+
+@pytest.mark.parametrize(
+    ("name", "clause", "expected_error"),
+    (
+        (
+            "effective_lock_acquisition.cfg",
+            "PROPERTY StableEffectiveLockDelivery\n",
+            "executable acquisition search must contain exactly one",
+        ),
+        (
+            "effective_lock_rebind_bug.cfg",
+            "INVARIANT ViewRebindKeepsOnePhysicalLoad\n",
+            "mutation config must contain exactly one",
+        ),
+        (
+            "effective_lock_no_retry_bug.cfg",
+            "PROPERTY EffectiveLockAcquisitionProgress\n",
+            "mutation config must contain exactly one",
+        ),
+        (
+            "effective_lock_future_completion_bug.cfg",
+            "INVARIANT BuggyFutureCompletionFailsClosed\n",
+            "mutation config must contain exactly one",
+        ),
+    ),
+)
+def test_effective_lock_acquisition_config_weakening_fails_closed(
+    tmp_path: Path,
+    name: str,
+    clause: str,
+    expected_error: str,
+) -> None:
+    module = load_checker()
+    formal_dir = copy_effective_lock_acquisition_fixture(tmp_path, module)
+    path = formal_dir / name
+    source = path.read_text(encoding="utf-8")
+    assert source.count(clause) == 1
+    path.write_text(source.replace(clause, "", 1), encoding="utf-8")
+
+    errors = module._effective_lock_acquisition_source_fidelity_errors(formal_dir)
+    assert any(expected_error in error for error in errors), errors
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "expected_error"),
+    (
+        (
+            "effective_lock_rebind_bug.cfg 12",
+            "effective_lock_rebind_bug.cfg 0",
+            "effective-lock-rebind-bug exactly once with status 12",
+        ),
+        (
+            '"5 distinct states" "State 4: Stuttering"',
+            '"5 distinct states"',
+            "effective-lock-no-retry-bug must require exact markers",
+        ),
+        (
+            '"Invariant BuggyFutureCompletionFailsClosed is violated by the '
+            'initial state"',
+            '"Invariant BuggyFutureCompletionFailsClosed is violated."',
+            "effective-lock-future-completion-bug must require exact markers",
+        ),
+    ),
+)
+def test_effective_lock_mutation_runner_weakening_fails_closed(
+    tmp_path: Path,
+    old: str,
+    new: str,
+    expected_error: str,
+) -> None:
+    module = load_checker()
+    repo_root = tmp_path / "repo"
+    runner = repo_root / "scripts" / "formal" / "run_sumeragi_v2_progress_mutations.sh"
+    runner.parent.mkdir(parents=True)
+    source = (
+        ROOT_DIR / "scripts" / "formal" / "run_sumeragi_v2_progress_mutations.sh"
+    ).read_text(encoding="utf-8")
+    assert source.count(old) == 1
+    runner.write_text(source.replace(old, new, 1), encoding="utf-8")
+
+    errors = module._effective_lock_acquisition_mutation_runner_errors(repo_root)
+    assert any(expected_error in error for error in errors), errors
+
+
 def test_successor_activation_and_exact_recovery_refinement_remains_explicit_debt() -> None:
     module = load_checker()
     ledger = module.load_ledger()
@@ -6573,8 +6773,8 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters() -> None:
         ].splitlines()
         if line.strip().startswith("sumeragi::")
     )
-    assert len(production_inventory) == 166
-    assert len(set(production_inventory)) == 166
+    assert len(production_inventory) == 168
+    assert len(set(production_inventory)) == 168
     assert (
         "sumeragi::v2_effects::tests::"
         "runtime_step_dispatches_entire_effect_batch_before_returning"
@@ -6583,6 +6783,16 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters() -> None:
     assert (
         "sumeragi::v2_apply::tests::"
         "committed_merge_reservation_rejects_bare_norito"
+        in production_inventory
+    )
+    assert (
+        "sumeragi::v2_worker::tests::"
+        "locked_candidate_future_completion_is_rejected_without_replacing_owner"
+        in production_inventory
+    )
+    assert (
+        "sumeragi::v2_worker::tests::"
+        "unavailable_locked_candidate_rebinds_latest_consumer_before_retry"
         in production_inventory
     )
     production_modules_start = release_source.index("production_liveness_modules=(")
