@@ -21,6 +21,7 @@ use iroha_data_model::{
     da::commitment::DaProofPolicyBundle,
     isi::{
         GrantBox, RegisterBox, SetAssetDefinitionAlias,
+        sns::RegisterSnsName,
         staking::{ActivatePublicLaneValidator, RegisterPublicLaneValidator},
         verifying_keys,
     },
@@ -33,9 +34,14 @@ use iroha_data_model::{
     peer::PeerId,
     prelude::*,
     proof::{VerifyingKeyId, VerifyingKeyRecord},
+    sns::{
+        DATASPACE_ALIAS_SUFFIX_ID, DOMAIN_NAME_SUFFIX_ID, NameControllerV1, NameSelectorV1,
+        PaymentProofV1, RegisterNameRequestV1, SuffixId,
+    },
 };
 use iroha_executor_data_model::permission::{
-    account::{AccountAliasPermissionScope, CanManageAccountAlias},
+    account::{AccountAliasPermissionScope, CanManageAccountAlias, CanResolveAccountAlias},
+    domain::CanRegisterDomain,
     governance::CanEnactGovernance,
     nexus::CanPublishSpaceDirectoryManifest,
 };
@@ -507,6 +513,7 @@ const LOCALNET_FAUCET_POW_MAX_ANCHOR_AGE_BLOCKS: i64 = 6;
 const LOCALNET_FAUCET_POW_ADAPTIVE_LOOKBACK_BLOCKS: i64 = 64;
 const LOCALNET_FAUCET_POW_ADAPTIVE_CLAIMS_PER_EXTRA_BIT: i64 = 4;
 const LOCALNET_FAUCET_POW_ADAPTIVE_MAX_EXTRA_BITS: i64 = 2;
+const LOCALNET_PRIVATE_SNS_LEASE_PAYMENT: &str = "0.5";
 const LOCALNET_NEXUS_DOMAIN: &str = "nexus.universal";
 const LOCALNET_IVM_DOMAIN: &str = "ivm.universal";
 const LOCALNET_UNIVERSAL_DOMAIN: &str = "universal.universal";
@@ -619,6 +626,7 @@ const CBUAE_TRANSFER_ROUTES: &[PrivateDataspaceRoute] = &[PrivateDataspaceRoute 
     matcher: "transfer::asset@cbuae",
     description: "Route transfer destination alias scope cbuae to the CBUAE lane",
 }];
+const SBP_BOOTSTRAP_DOMAINS: &[&str] = &["hbl.sbp", "ubl.sbp"];
 
 fn private_dataspace_spec(sora_profile: Option<SoraProfile>) -> Option<PrivateDataspaceSpec> {
     match sora_profile? {
@@ -1207,6 +1215,12 @@ fn generate_localnet_with_line<T: Write>(
             gas_account_id,
             stake_amount,
             opts.sora_profile,
+            &client_identity.account_id,
+        )?;
+        genesis = append_private_dataspace_genesis_bootstrap_for_client(
+            genesis,
+            opts.sora_profile,
+            &genesis_account_id,
             &client_identity.account_id,
         )?;
     }
@@ -3351,6 +3365,182 @@ fn append_localnet_npos_bootstrap_for_client(
     Ok(builder.build_raw())
 }
 
+fn localnet_private_sns_registration_instruction(
+    suffix_id: SuffixId,
+    label: &str,
+    owner: &AccountId,
+    controller: &NameControllerV1,
+    payer: &AccountId,
+    payment_amount: &Quantity,
+) -> Result<InstructionBox> {
+    let selector = NameSelectorV1::new(suffix_id, label)
+        .map_err(|error| eyre!("invalid private-dataspace SNS selector `{label}`: {error}"))?;
+    Ok(RegisterSnsName::new(RegisterNameRequestV1 {
+        selector,
+        owner: owner.clone(),
+        controllers: vec![controller.clone()],
+        term_years: 1,
+        pricing_class_hint: None,
+        payment: PaymentProofV1 {
+            asset_id: localnet_fee_asset_literal(),
+            gross_amount: payment_amount.clone(),
+            net_amount: payment_amount.clone(),
+            settlement_tx: Json::from_string_unchecked("null".to_owned()),
+            payer: payer.clone(),
+            signature: Json::from_string_unchecked("null".to_owned()),
+        },
+        governance: None,
+        metadata: Metadata::default(),
+    })
+    .into())
+}
+
+#[allow(clippy::too_many_lines)]
+fn append_private_dataspace_genesis_bootstrap_for_client(
+    genesis: RawGenesisTransaction,
+    sora_profile: Option<SoraProfile>,
+    genesis_account_id: &AccountId,
+    client_account_id: &AccountId,
+) -> Result<RawGenesisTransaction> {
+    let domains: &[&str] = match sora_profile {
+        Some(SoraProfile::PrivateSbp) => SBP_BOOTSTRAP_DOMAINS,
+        Some(SoraProfile::PrivateCbuae) => &[],
+        _ => return Ok(genesis),
+    };
+    let spec = private_dataspace_spec(sora_profile)
+        .expect("private bootstrap profiles must have a private dataspace spec");
+    let client_address = client_account_id.to_account_address().map_err(|error| {
+        eyre!(
+            "failed to derive private-dataspace SNS controller for `{client_account_id}`: {error}"
+        )
+    })?;
+    let client_controller = NameControllerV1::account(&client_address);
+    let payment_amount: Quantity = LOCALNET_PRIVATE_SNS_LEASE_PAYMENT
+        .parse()
+        .map_err(|error| eyre!("invalid localnet private SNS lease payment: {error}"))?;
+    let registration_count = u64::try_from(domains.len().saturating_add(1))
+        .expect("private SNS registration count must fit in u64");
+    let payment_reserve = payment_amount
+        .try_mul_decimal(&Numeric::from(registration_count))
+        .map_err(|error| eyre!("localnet private SNS payment reserve overflow: {error}"))?;
+
+    let mut seen_permissions: BTreeSet<(AccountId, Permission)> = genesis
+        .instructions()
+        .filter_map(|instruction| {
+            let grant = instruction.as_any().downcast_ref::<GrantBox>()?;
+            let GrantBox::Permission(grant_permission) = grant else {
+                return None;
+            };
+            Some((
+                grant_permission.destination().clone(),
+                grant_permission.object().clone(),
+            ))
+        })
+        .collect();
+
+    let mut builder = genesis.into_builder().next_transaction();
+    builder = builder.append_instruction(Mint::asset_quantity(
+        payment_reserve,
+        AssetId::new(
+            localnet_fee_asset_definition_id(),
+            genesis_account_id.clone(),
+        ),
+    ));
+    builder = builder.append_instruction(localnet_private_sns_registration_instruction(
+        DATASPACE_ALIAS_SUFFIX_ID,
+        spec.alias,
+        client_account_id,
+        &client_controller,
+        genesis_account_id,
+        &payment_amount,
+    )?);
+    for domain in domains {
+        builder = builder.append_instruction(localnet_private_sns_registration_instruction(
+            DOMAIN_NAME_SUFFIX_ID,
+            domain,
+            client_account_id,
+            &client_controller,
+            genesis_account_id,
+            &payment_amount,
+        )?);
+    }
+
+    let private_dataspace = DataSpaceId::new(spec.id);
+    let mut universal_permissions = vec![
+        Permission::from(CanManageAccountAlias {
+            scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::UNIVERSAL),
+        }),
+        Permission::from(CanResolveAccountAlias {
+            scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::UNIVERSAL),
+        }),
+    ];
+    if !domains.is_empty() {
+        universal_permissions.push(Permission::from(CanRegisterDomain));
+    }
+
+    let mut private_permissions = vec![
+        Permission::from(CanManageAccountAlias {
+            scope: AccountAliasPermissionScope::Dataspace(private_dataspace),
+        }),
+        Permission::from(CanResolveAccountAlias {
+            scope: AccountAliasPermissionScope::Dataspace(private_dataspace),
+        }),
+    ];
+    for domain in domains {
+        let domain = DomainId::parse_fully_qualified(domain)?;
+        private_permissions.push(Permission::from(CanManageAccountAlias {
+            scope: AccountAliasPermissionScope::Domain(domain.clone()),
+        }));
+        private_permissions.push(Permission::from(CanResolveAccountAlias {
+            scope: AccountAliasPermissionScope::Domain(domain),
+        }));
+    }
+
+    // Keep each permission transaction lane-homogeneous. The native router deliberately
+    // collapses a transaction that targets both the universal dataspace and a private
+    // dataspace to the universal coordinator. Mixing these grants would therefore make the
+    // private alias permissions absent from the private lane after genesis.
+    let universal_permissions = universal_permissions
+        .into_iter()
+        .filter(|permission| {
+            seen_permissions.insert((client_account_id.clone(), permission.clone()))
+        })
+        .collect::<Vec<_>>();
+    if !universal_permissions.is_empty() {
+        builder = builder.next_transaction();
+        for permission in universal_permissions {
+            builder = builder.append_instruction(Grant::account_permission(
+                permission,
+                client_account_id.clone(),
+            ));
+        }
+    }
+
+    let private_permissions = private_permissions
+        .into_iter()
+        .filter(|permission| {
+            seen_permissions.insert((client_account_id.clone(), permission.clone()))
+        })
+        .collect::<Vec<_>>();
+    if !private_permissions.is_empty() {
+        // The client is registered in universal bootstrap state already, but the first
+        // private-lane transaction needs an account row before its grants can execute.
+        // A label-less registration has no routing target, so the scoped grants below remain
+        // the transaction's single private dataspace target.
+        builder = builder
+            .next_transaction()
+            .append_instruction(Register::account(Account::new(client_account_id.clone())));
+        for permission in private_permissions {
+            builder = builder.append_instruction(Grant::account_permission(
+                permission,
+                client_account_id.clone(),
+            ));
+        }
+    }
+
+    Ok(builder.build_raw())
+}
+
 struct GenesisConsensusPolicies {
     da_proof_policies: Option<DaProofPolicyBundle>,
     confidential_policy_hash: [u8; 32],
@@ -4133,7 +4323,7 @@ mod tests {
         },
         transaction::Executable,
     };
-    use norito::{json, literal};
+    use norito::{codec::Decode, json, literal};
 
     use super::*;
 
@@ -4168,6 +4358,15 @@ mod tests {
     }
 
     fn localnet_genesis_for_opts(opts: &LocalnetOptions) -> RawGenesisTransaction {
+        localnet_genesis_for_opts_and_client(opts, &localnet_client_account_id())
+    }
+
+    fn localnet_genesis_for_opts_and_client(
+        opts: &LocalnetOptions,
+        client_account_id: &AccountId,
+    ) -> RawGenesisTransaction {
+        let default_client_account_id = localnet_client_account_id();
+        let uses_default_client = client_account_id == &default_client_account_id;
         let seed_bytes = opts.seed.as_ref().map(String::as_bytes);
         let peers = build_peers(
             opts.peers.get(),
@@ -4189,7 +4388,11 @@ mod tests {
         let (genesis_public_key, _) = generate_genesis_key_pair(seed_bytes, GENESIS_SEED)
             .expect("test localnet genesis key generation should succeed");
         let genesis_account_id = AccountId::new(genesis_public_key.clone());
-        let assets = effective_localnet_assets(&opts.assets);
+        let assets = if uses_default_client {
+            effective_localnet_assets(&opts.assets)
+        } else {
+            effective_localnet_assets_for_client(&opts.assets, client_account_id)
+        };
         let mut genesis =
             generate_raw_genesis(&genesis_public_key, opts.consensus_mode, DEFAULT_CHAIN_ID)
                 .expect("generate raw genesis");
@@ -4209,7 +4412,15 @@ mod tests {
             block_max_transactions,
             opts.consensus_mode,
         );
-        genesis = append_localnet_contract_permissions(genesis, &genesis_account_id);
+        genesis = if uses_default_client {
+            append_localnet_contract_permissions(genesis, &genesis_account_id)
+        } else {
+            append_localnet_contract_permissions_for_client(
+                genesis,
+                &genesis_account_id,
+                client_account_id,
+            )
+        };
         genesis = append_peer_pop(genesis, &peers);
         if npos_bootstrap {
             let gas_account_id = localnet_gas_account_id(&genesis_public_key)
@@ -4220,16 +4431,356 @@ mod tests {
                     .expect("generated localnet genesis has one structured parameter block"),
                 requested_stake_amount,
             );
-            genesis = append_localnet_npos_bootstrap(
-                genesis,
-                &peers,
-                &gas_account_id,
-                stake_amount,
-                opts.sora_profile,
-            )
+            genesis = if uses_default_client {
+                append_localnet_npos_bootstrap(
+                    genesis,
+                    &peers,
+                    &gas_account_id,
+                    stake_amount,
+                    opts.sora_profile,
+                )
+            } else {
+                append_localnet_npos_bootstrap_for_client(
+                    genesis,
+                    &peers,
+                    &gas_account_id,
+                    stake_amount,
+                    opts.sora_profile,
+                    client_account_id,
+                )
+            }
             .expect("append localnet NPoS bootstrap");
+            genesis = append_private_dataspace_genesis_bootstrap_for_client(
+                genesis,
+                opts.sora_profile,
+                &genesis_account_id,
+                client_account_id,
+            )
+            .expect("append private-dataspace genesis bootstrap");
         }
         apply_localnet_crypto_overrides(genesis, npos_bootstrap)
+    }
+
+    fn decode_sns_registration(instruction: &InstructionBox) -> Option<RegisterNameRequestV1> {
+        let register = instruction.as_any().downcast_ref::<RegisterSnsName>()?;
+        let mut input = register.request.as_slice();
+        let request = RegisterNameRequestV1::decode(&mut input)
+            .expect("private-profile SNS registration payload must decode");
+        assert!(
+            input.is_empty(),
+            "private-profile SNS registration payload must not contain trailing bytes"
+        );
+        Some(request)
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn private_profiles_seed_exact_sns_owners_and_least_privilege_permissions() {
+        struct Case {
+            profile: SoraProfile,
+            alias: &'static str,
+            dataspace_id: u64,
+            domains: &'static [&'static str],
+        }
+
+        for case in [
+            Case {
+                profile: SoraProfile::PrivateSbp,
+                alias: "sbp",
+                dataspace_id: LOCALNET_PAYNET_ALIAS_DATASPACE_ID,
+                domains: SBP_BOOTSTRAP_DOMAINS,
+            },
+            Case {
+                profile: SoraProfile::PrivateCbuae,
+                alias: "cbuae",
+                dataspace_id: LOCALNET_CBUAE_ALIAS_DATASPACE_ID,
+                domains: &[],
+            },
+        ] {
+            let seed = format!("private-profile-sns-bootstrap-{}", case.alias);
+            let opts = LocalnetOptions {
+                build_line: BuildLine::Iroha3,
+                sora_profile: Some(case.profile),
+                perf_profile: None,
+                peers: NonZeroU16::new(4).expect("non-zero"),
+                seed: Some(seed.clone()),
+                bind_host: DEFAULT_PUBLIC_HOST.to_owned(),
+                public_host: DEFAULT_PUBLIC_HOST.to_owned(),
+                base_api_port: 29_080,
+                base_p2p_port: 33_337,
+                out_dir: PathBuf::from("unused"),
+                extra_accounts: 0,
+                assets: Vec::new(),
+                block_cadence_ms: None,
+                consensus_mode: SumeragiConsensusMode::Npos,
+            };
+            let (genesis_public_key, _) =
+                generate_genesis_key_pair(Some(seed.as_bytes()), GENESIS_SEED)
+                    .expect("derive test genesis account");
+            let genesis_account_id = AccountId::new(genesis_public_key);
+            let client_identity = localnet_client_identity(Some(seed.as_bytes()), true)
+                .expect("derive fresh private-profile client");
+            let client_account_id = client_identity.account_id;
+            let client_address = client_account_id
+                .to_account_address()
+                .expect("derive expected SNS controller");
+            let expected_controller = NameControllerV1::account(&client_address);
+            let payment_amount: Quantity = LOCALNET_PRIVATE_SNS_LEASE_PAYMENT
+                .parse()
+                .expect("parse expected SNS lease payment");
+            let registration_count = u64::try_from(case.domains.len().saturating_add(1))
+                .expect("registration count fits in u64");
+            let expected_payment_reserve = payment_amount
+                .try_mul_decimal(&Numeric::from(registration_count))
+                .expect("expected payment reserve must fit");
+
+            let manifest = localnet_genesis_for_opts_and_client(&opts, &client_account_id);
+            let manifest_json =
+                json::to_json(&manifest).expect("serialize private-profile genesis manifest");
+            let manifest: RawGenesisTransaction = json::from_str(&manifest_json)
+                .expect("deserialize private-profile genesis manifest");
+            let normalized = manifest
+                .clone()
+                .normalize()
+                .expect("normalize private-profile genesis");
+            let sns_batches = normalized
+                .transactions
+                .iter()
+                .enumerate()
+                .filter(|(_, instructions)| {
+                    instructions.iter().any(|instruction| {
+                        instruction
+                            .as_any()
+                            .downcast_ref::<RegisterSnsName>()
+                            .is_some()
+                    })
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(
+                sns_batches.len(),
+                1,
+                "private profile must emit exactly one SNS bootstrap transaction"
+            );
+            let (sns_batch_index, sns_batch) = sns_batches[0];
+            assert_eq!(
+                sns_batch.len(),
+                case.domains.len().saturating_add(2),
+                "SNS bootstrap transaction must contain one reserve mint followed by the exact registrations"
+            );
+            let reserve_mint = sns_batch[0]
+                .as_any()
+                .downcast_ref::<MintBox>()
+                .expect("SNS bootstrap transaction must start with its payment reserve mint");
+            let MintBox::Asset(reserve_mint) = reserve_mint else {
+                panic!("SNS bootstrap reserve must mint the fee asset");
+            };
+            assert_eq!(
+                reserve_mint.destination(),
+                &AssetId::new(
+                    localnet_fee_asset_definition_id(),
+                    genesis_account_id.clone()
+                )
+            );
+            assert_eq!(
+                reserve_mint.object().as_numeric(),
+                expected_payment_reserve.as_numeric(),
+                "genesis authority must receive exactly the reserve consumed by the SNS registrations"
+            );
+
+            let registrations = sns_batch[1..]
+                .iter()
+                .map(|instruction| {
+                    decode_sns_registration(instruction)
+                        .expect("only SNS registrations may follow the reserve mint")
+                })
+                .collect::<Vec<_>>();
+            let mut expected_selectors = vec![(DATASPACE_ALIAS_SUFFIX_ID, case.alias.to_owned())];
+            expected_selectors.extend(
+                case.domains
+                    .iter()
+                    .map(|domain| (DOMAIN_NAME_SUFFIX_ID, (*domain).to_owned())),
+            );
+            assert_eq!(
+                registrations
+                    .iter()
+                    .map(|request| { (request.selector.suffix_id, request.selector.label.clone()) })
+                    .collect::<Vec<_>>(),
+                expected_selectors,
+                "private-profile SNS selectors and their ordering must be exact"
+            );
+            for request in &registrations {
+                assert_eq!(request.owner, client_account_id);
+                assert_eq!(request.controllers, vec![expected_controller.clone()]);
+                assert_eq!(request.term_years, 1);
+                assert_eq!(request.pricing_class_hint, None);
+                assert_eq!(request.payment.asset_id, localnet_fee_asset_literal());
+                assert_eq!(request.payment.gross_amount, payment_amount);
+                assert_eq!(request.payment.net_amount, payment_amount);
+                assert_eq!(request.payment.payer, genesis_account_id);
+                assert_eq!(request.governance, None);
+                assert_eq!(request.metadata, Metadata::default());
+            }
+
+            let private_dataspace = DataSpaceId::new(case.dataspace_id);
+            let mut expected_universal_permissions = vec![
+                Permission::from(CanManageAccountAlias {
+                    scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::UNIVERSAL),
+                }),
+                Permission::from(CanResolveAccountAlias {
+                    scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::UNIVERSAL),
+                }),
+            ];
+            if !case.domains.is_empty() {
+                expected_universal_permissions.push(Permission::from(CanRegisterDomain));
+            }
+            let mut expected_private_permissions = vec![
+                Permission::from(CanManageAccountAlias {
+                    scope: AccountAliasPermissionScope::Dataspace(private_dataspace),
+                }),
+                Permission::from(CanResolveAccountAlias {
+                    scope: AccountAliasPermissionScope::Dataspace(private_dataspace),
+                }),
+            ];
+            for domain in case.domains {
+                let domain = DomainId::parse_fully_qualified(domain)
+                    .expect("static private-profile domain must parse");
+                expected_private_permissions.push(Permission::from(CanManageAccountAlias {
+                    scope: AccountAliasPermissionScope::Domain(domain.clone()),
+                }));
+                expected_private_permissions.push(Permission::from(CanResolveAccountAlias {
+                    scope: AccountAliasPermissionScope::Domain(domain),
+                }));
+            }
+            let expected_permissions = expected_universal_permissions
+                .iter()
+                .chain(&expected_private_permissions)
+                .cloned()
+                .collect::<Vec<_>>();
+
+            let observed_permissions = manifest
+                .instructions()
+                .filter_map(|instruction| instruction.as_any().downcast_ref::<GrantBox>())
+                .filter_map(|grant| match grant {
+                    GrantBox::Permission(grant) if grant.destination() == &client_account_id => {
+                        let permission = grant.object();
+                        matches!(
+                            permission.name(),
+                            "CanManageAccountAlias"
+                                | "CanResolveAccountAlias"
+                                | "CanRegisterDomain"
+                        )
+                        .then(|| permission.clone())
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(
+                observed_permissions
+                    .iter()
+                    .cloned()
+                    .collect::<BTreeSet<_>>()
+                    .len(),
+                observed_permissions.len(),
+                "private-profile permission grants must remain distinct after genesis JSON round-trip"
+            );
+            assert_eq!(
+                observed_permissions, expected_permissions,
+                "private-profile client grants must be exact, ordered, and deduplicated"
+            );
+
+            let universal_permission_batch = normalized
+                .transactions
+                .get(sns_batch_index.saturating_add(1))
+                .expect("SNS bootstrap must be followed by its universal permission transaction");
+            assert_eq!(
+                universal_permission_batch.len(),
+                expected_universal_permissions.len().saturating_sub(1),
+                "the existing universal Manage grant must be deduplicated from the universal permission transaction"
+            );
+            assert_eq!(
+                universal_permission_batch
+                    .iter()
+                    .map(|instruction| {
+                        let grant = instruction
+                            .as_any()
+                            .downcast_ref::<GrantBox>()
+                            .expect("universal permission transaction must contain only grants");
+                        let GrantBox::Permission(grant) = grant else {
+                            panic!("universal permission transaction must contain account grants");
+                        };
+                        assert_eq!(grant.destination(), &client_account_id);
+                        grant.object().clone()
+                    })
+                    .collect::<Vec<_>>(),
+                expected_universal_permissions[1..].to_vec(),
+                "universal permission transaction must follow SNS ownership and preserve grant order"
+            );
+
+            let private_permission_batch = normalized
+                .transactions
+                .get(sns_batch_index.saturating_add(2))
+                .expect(
+                    "universal permissions must be followed by a private permission transaction",
+                );
+            assert_eq!(
+                private_permission_batch.len(),
+                expected_private_permissions.len().saturating_add(1),
+                "private permission transaction must materialize the client exactly once before its grants"
+            );
+            let private_registration = private_permission_batch[0]
+                .as_any()
+                .downcast_ref::<RegisterBox>()
+                .expect("private permission transaction must start with account registration");
+            let RegisterBox::Account(private_registration) = private_registration else {
+                panic!("private permission transaction must start with account registration");
+            };
+            assert_eq!(private_registration.object().id, client_account_id);
+            assert_eq!(private_registration.object().metadata, Metadata::default());
+            assert_eq!(private_registration.object().label, None);
+            assert_eq!(private_registration.object().uaid, None);
+            assert!(private_registration.object().opaque_ids.is_empty());
+            assert_eq!(
+                private_permission_batch[1..]
+                    .iter()
+                    .map(|instruction| {
+                        let grant = instruction
+                            .as_any()
+                            .downcast_ref::<GrantBox>()
+                            .expect("private permission transaction must contain only grants");
+                        let GrantBox::Permission(grant) = grant else {
+                            panic!("private permission transaction must contain account grants");
+                        };
+                        assert_eq!(grant.destination(), &client_account_id);
+                        grant.object().clone()
+                    })
+                    .collect::<Vec<_>>(),
+                expected_private_permissions,
+                "the label-less registration must leave the scoped grants as the private transaction's sole routing target"
+            );
+
+            let forbidden_domains = case
+                .domains
+                .iter()
+                .map(|domain| {
+                    DomainId::parse_fully_qualified(domain)
+                        .expect("static private-profile domain must parse")
+                })
+                .collect::<BTreeSet<_>>();
+            assert!(
+                !manifest.instructions().any(|instruction| {
+                    instruction
+                        .as_any()
+                        .downcast_ref::<RegisterBox>()
+                        .is_some_and(|register| match register {
+                            RegisterBox::Domain(register) => {
+                                forbidden_domains.contains(&register.object().id)
+                            }
+                            _ => false,
+                        })
+                }),
+                "private-profile app domains must retain SNS ownership without being registered by genesis"
+            );
+        }
     }
 
     fn genesis_json_from_path(path: &Path) -> json::Value {

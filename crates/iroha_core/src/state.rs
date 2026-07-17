@@ -10289,6 +10289,11 @@ impl<'state> StateBlock<'state> {
         &self.lane_incarnation_lineage
     }
 
+    /// Return the block-local autoscale history exactly as commit would publish it.
+    pub(crate) fn autoscale_sample_history_for_snapshot(&self) -> &VecDeque<AutoscaleSampleRecord> {
+        &self.autoscale_sample_history
+    }
+
     /// Serialize transaction membership exactly as this block commit would publish it.
     pub(crate) fn json_serialize_transactions_after_commit(&self, out: &mut String) {
         let height = NonZeroUsize::new(
@@ -17996,7 +18001,9 @@ impl World {
                 ));
             }
         }
-        self.account_aliases = index.into_iter().collect();
+        // `account_aliases` is the authoritative binding ledger. Preserve its MV revert map so a
+        // restored node can still roll back the latest block; only the skipped reverse index is
+        // derived from it here.
         self.account_aliases_by_account = reverse.into_iter().collect();
         Ok(())
     }
@@ -18036,6 +18043,7 @@ impl World {
 
     fn rebuild_account_rekey_records(&mut self) -> Result<(), String> {
         let mut records = BTreeMap::new();
+        let mut normalized_legacy_record = false;
         let mut active_account_id_rekey_targets = BTreeMap::<AccountId, AccountId>::new();
         let existing_records: Vec<_> = self
             .account_rekey_records
@@ -18063,11 +18071,13 @@ impl World {
                     "Account rekey record {label:?} looks like raw PII; use UAID/opaque identifiers"
                 ));
             }
+            let original_record = record.clone();
             record
                 .normalize_legacy_transition_provenance()
                 .map_err(|error| {
                     format!("Account rekey record {label:?} has malformed provenance: {error}")
                 })?;
+            normalized_legacy_record |= record != original_record;
             if let Some(existing) = records.get(&label) {
                 if existing != &record {
                     return Err(format!(
@@ -18154,14 +18164,18 @@ impl World {
             }
         }
 
-        self.account_rekey_records = records.into_iter().collect();
+        // Current canonical records must retain the serialized MV revert map. Historical records
+        // that genuinely require the explicit legacy-provenance migration keep the established
+        // normalization behavior; signed first-release snapshots will still reject the resulting
+        // non-canonical payload at their exact round-trip check.
+        if normalized_legacy_record {
+            self.account_rekey_records = records.into_iter().collect();
+        }
         Ok(())
     }
 
     fn rebuild_asset_definition_alias_indexes(&mut self) -> Result<(), String> {
         let mut by_alias = BTreeMap::new();
-        let mut by_definition =
-            BTreeMap::<AssetDefinitionId, AssetDefinitionAliasBindingRecord>::new();
         let definitions = self.asset_definitions.view();
 
         for (definition_id, binding) in self.asset_definition_alias_bindings.view().iter() {
@@ -18191,7 +18205,6 @@ impl World {
                 ));
             }
             by_alias.insert(binding.alias.clone(), definition_id.clone());
-            by_definition.insert(definition_id.clone(), binding.clone());
         }
 
         for (definition_id, definition) in definitions.iter() {
@@ -18202,21 +18215,15 @@ impl World {
             }
         }
         self.asset_definition_aliases = by_alias.into_iter().collect();
-        let normalized_definitions: BTreeMap<AssetDefinitionId, AssetDefinition> = definitions
-            .iter()
-            .map(|(definition_id, definition)| (definition_id.clone(), definition.clone()))
-            .collect();
-        if normalized_definitions.len() != definitions.iter().count() {
-            return Err("asset definition rebuild lost entries".to_owned());
-        }
-        self.asset_definition_alias_bindings = by_definition.into_iter().collect();
-        self.asset_definitions = normalized_definitions.into_iter().collect();
+        // `asset_definition_alias_bindings` and `asset_definitions` are authoritative MV
+        // storages. Their revert maps are required to roll back the latest block and are part of
+        // the canonical restart snapshot. Rebuilding either storage from its live view would
+        // silently discard that history. Only the derived alias lookup index belongs here.
         Ok(())
     }
 
     fn rebuild_contract_alias_indexes(&mut self) -> Result<(), String> {
         let mut by_alias = BTreeMap::new();
-        let mut by_contract = BTreeMap::<ContractAddress, ContractAliasBindingRecord>::new();
 
         for (contract_address, binding) in self.contract_alias_bindings.view().iter() {
             validate_alias_lease_window(
@@ -18239,11 +18246,11 @@ impl World {
                 ));
             }
             by_alias.insert(binding.alias.clone(), contract_address.clone());
-            by_contract.insert(contract_address.clone(), binding.clone());
         }
 
         self.contract_aliases = by_alias.into_iter().collect();
-        self.contract_alias_bindings = by_contract.into_iter().collect();
+        // `contract_alias_bindings` is authoritative and includes the latest block's rollback
+        // journal. Rebuild only the skipped alias lookup index.
         Ok(())
     }
 
@@ -52114,14 +52121,25 @@ fn load_verified_v2_replay_artifact(
             state.chain_id
         ));
     }
-    let payload_hash = Hash::new(
-        block
-            .encode_wire()
-            .wrap_err_with(|| format!("failed to encode replayed block #{height}"))?,
-    );
-    if artifact.subject.payload_hash != payload_hash {
+    let proposal_wire_hash = block
+        .canonical_proposal_wire_hash()
+        .wrap_err_with(|| format!("failed to encode replayed proposal block #{height}"))?;
+    if artifact.subject.payload_hash != proposal_wire_hash {
         return Err(eyre!(
-            "replayed block #{height} v2 finality payload hash does not bind the canonical block wire"
+            "replayed block #{height} v2 finality payload hash does not bind the canonical resultless proposal wire"
+        ));
+    }
+    let executed_block_wire_hash = block
+        .executed_block_wire_hash()
+        .wrap_err_with(|| format!("failed to encode replayed executed block #{height}"))?;
+    if artifact
+        .commit_qc
+        .execution_commitment
+        .executed_block_wire_hash
+        != executed_block_wire_hash
+    {
+        return Err(eyre!(
+            "replayed block #{height} v2 execution commitment does not bind the exact result-bearing block wire"
         ));
     }
     if !manifest.binds_authenticated_v2_commit_authority(&artifact) {
@@ -53134,18 +53152,45 @@ fn replay_blocks_from_kura_range_inner(
         replay_timing.topology += topology_start.elapsed();
         let validation_start = Instant::now();
         let validation_topology = block_topology;
-        let candidate = signed_block.clone();
-        ValidBlock::validate_signatures_subset_v2_artifact_exact(&candidate, finality)
-            .map_err(|error| eyre!(error))
-            .wrap_err_with(|| format!("failed to verify replayed block #{height} signatures"))?;
-        let expected_leader = finality.height_context.leader(view);
-        if !candidate
-            .signatures()
-            .any(|signature| signature.index() == u64::from(expected_leader))
-        {
-            return Err(eyre!(
-                "replayed block #{height} is missing the frozen origin-view leader signature at validator index {expected_leader}"
-            ));
+        // Production V2 validates and executes the canonical resultless proposal. The
+        // result-bearing Kura image was authenticated above against the CommitQC and
+        // commit manifest; feeding that execution image back into the proposal validator
+        // would incorrectly treat committed outputs (including the fragment count) as
+        // proposal inputs. Rebuild those outputs exactly as live consensus did, then
+        // compare the resulting execution commitment and wire image below.
+        let candidate = signed_block.canonical_resultless_proposal();
+        if candidate.header().is_genesis() {
+            let mut signatures = candidate.signatures();
+            let signature = signatures.next().ok_or_else(|| {
+                eyre!("replayed genesis block #{height} has no authority signature")
+            })?;
+            if signatures.next().is_some() || signature.index() != 0 {
+                return Err(eyre!(
+                    "replayed genesis block #{height} signatures must contain exactly one signature at index 0"
+                ));
+            }
+            signature
+                .signature()
+                .verify_hash(genesis_account.signatory(), candidate.hash())
+                .map_err(|error| eyre!(error))
+                .wrap_err_with(|| {
+                    format!("failed to verify replayed genesis block #{height} signatures")
+                })?;
+        } else {
+            ValidBlock::validate_signatures_subset_v2_artifact_exact(&candidate, finality)
+                .map_err(|error| eyre!(error))
+                .wrap_err_with(|| {
+                    format!("failed to verify replayed block #{height} signatures")
+                })?;
+            let expected_leader = finality.height_context.leader(view);
+            if !candidate
+                .signatures()
+                .any(|signature| signature.index() == u64::from(expected_leader))
+            {
+                return Err(eyre!(
+                    "replayed block #{height} is missing the frozen origin-view leader signature at validator index {expected_leader}"
+                ));
+            }
         }
         let mut voting_block: Option<crate::sumeragi::VotingBlock> = None;
         let validation = ValidBlock::validate_sumeragi_v2_candidate_keep_voting_block(
@@ -62366,6 +62411,87 @@ mod tests {
                 .is_none(),
             "stored asset definition alias must stay empty; bindings drive alias reads"
         );
+    }
+
+    #[test]
+    fn rebuild_asset_definition_alias_indexes_preserves_mv_revert_maps() {
+        let (mut world, existing_definition_id) = asset_alias_test_world();
+        let existing_definition = world
+            .asset_definitions
+            .view()
+            .get(&existing_definition_id)
+            .expect("fixture definition")
+            .clone();
+        let added_definition_id = AssetDefinitionId::new(
+            existing_definition_id
+                .try_domain()
+                .expect("fixture definition has a domain projection")
+                .clone(),
+            "rollback".parse().expect("asset name"),
+        );
+        let added_definition = AssetDefinition::numeric(added_definition_id.clone())
+            .with_name("rollback".to_owned())
+            .build(existing_definition.owned_by());
+        let alias: AssetDefinitionAlias = "rollback#universal".parse().expect("asset alias");
+        let binding = AssetDefinitionAliasBindingRecord {
+            alias,
+            lease_expiry_ms: None,
+            grace_until_ms: None,
+            bound_at_ms: 100,
+        };
+
+        {
+            let mut definitions = world.asset_definitions.block();
+            assert!(
+                definitions
+                    .insert(added_definition_id.clone(), added_definition)
+                    .is_none()
+            );
+            definitions.commit();
+        }
+        {
+            let mut bindings = world.asset_definition_alias_bindings.block();
+            assert!(
+                bindings
+                    .insert(added_definition_id.clone(), binding)
+                    .is_none()
+            );
+            bindings.commit();
+        }
+
+        let definitions_before =
+            norito::json::to_json(&world.asset_definitions).expect("serialize definitions");
+        let bindings_before = norito::json::to_json(&world.asset_definition_alias_bindings)
+            .expect("serialize alias bindings");
+
+        world
+            .rebuild_asset_definition_alias_indexes()
+            .expect("rebuild should succeed");
+
+        assert_eq!(
+            norito::json::to_json(&world.asset_definitions).expect("serialize definitions"),
+            definitions_before,
+            "rebuilding a derived index must preserve the authoritative definition MV history"
+        );
+        assert_eq!(
+            norito::json::to_json(&world.asset_definition_alias_bindings)
+                .expect("serialize alias bindings"),
+            bindings_before,
+            "rebuilding a derived index must preserve the authoritative binding MV history"
+        );
+
+        let definitions = world.asset_definitions.block_and_revert();
+        assert!(
+            definitions.get(&added_definition_id).is_none(),
+            "the latest definition insertion must remain rollback-capable"
+        );
+        definitions.commit();
+        let bindings = world.asset_definition_alias_bindings.block_and_revert();
+        assert!(
+            bindings.get(&added_definition_id).is_none(),
+            "the latest alias binding insertion must remain rollback-capable"
+        );
+        bindings.commit();
     }
 
     #[test]
@@ -84694,11 +84820,15 @@ mod tests {
         configured: &LaneCatalog,
     ) -> (Arc<Kura>, State) {
         let kura = authenticated_kura_for_testing(store_root, configured);
-        let mut state = State::new_for_testing(
+        let mut state = State::try_new_with_chain(
             World::default(),
             Arc::clone(&kura),
             LiveQueryStore::start_test(),
-        );
+            (*DEFAULT_TEST_CHAIN_ID).clone(),
+            #[cfg(feature = "telemetry")]
+            <_>::default(),
+        )
+        .expect("construct production-like authenticated startup State");
         state
             .prepare_configured_primary_geometry_anchor(configured)
             .expect("anchor authenticated configured primary");
@@ -85259,11 +85389,9 @@ mod tests {
                 .set_nexus_from_config(startup_nexus_for_catalog(configured.clone()))
                 .expect("publish configured baseline before the first durable block");
             let keypair = crate::state::checked_keypair();
-            let block: SignedBlock = BlockBuilder::new(vec![dummy_accepted_transaction()])
-                .chain(0, None)
-                .sign(keypair.private_key())
-                .unpack(|_| {})
-                .into();
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let block = iroha_data_model::block::builder::BlockBuilder::new(header)
+                .build_with_signature(0, keypair.private_key());
             kura.store_block(Arc::new(block))
                 .expect("store first block after configured baseline");
         }
@@ -85305,6 +85433,7 @@ mod tests {
                 .set_nexus_from_config(startup_nexus_for_catalog(configured.clone()))
                 .expect("publish configured snapshot baseline");
             seed_committed_height_for_state_test(&state, 5);
+            seed_autoscale_sample_history_for_snapshot_test(&state);
             state
                 .apply_lane_lifecycle(&iroha_data_model::nexus::LaneLifecyclePlan {
                     additions: vec![LaneConfig {

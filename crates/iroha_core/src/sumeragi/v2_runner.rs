@@ -521,6 +521,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
     let GenesisWithPubKey {
         genesis,
         public_key: genesis_public_key,
+        block_cadence,
         v2_bootstrap,
     } = genesis_network;
     let genesis_body = genesis.map(|block| block.0);
@@ -566,11 +567,10 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
     let genesis_account = AccountId::new(genesis_public_key);
     let mut first_height_genesis = genesis_body;
     let mut block_sync_server = None;
-    // The first-release cadence is selected by the signed startup state and
-    // remains immutable for the lifetime of this consensus process. Reading
-    // mutable world parameters again at each height would let an unrelated
-    // parameter update change the handshake/config fingerprint mid-chain.
-    let block_cadence = state.sumeragi_block_cadence();
+    // The first-release cadence comes from authenticated signed-genesis or
+    // snapshot startup metadata and remains immutable for this process.
+    // In particular, fresh startup cannot read the uncommitted base State here:
+    // its placeholder cadence predates execution of signed genesis.
     let block_cadence_ms = u64::try_from(block_cadence.as_millis())?;
     let (round_timeout_ms, retransmit_interval_ms) = sumeragi_v2_timing_ms(block_cadence_ms)?;
     let round_timeout = Duration::from_millis(round_timeout_ms);

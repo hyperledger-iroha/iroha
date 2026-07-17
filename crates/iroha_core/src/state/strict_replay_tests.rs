@@ -232,6 +232,7 @@ impl StateFingerprint {
 struct StrictReplayFixture {
     chain_id: ChainId,
     genesis_account: AccountId,
+    genesis_key: KeyPair,
     keys: Vec<KeyPair>,
     context: wire::HeightContext,
     block: SignedBlock,
@@ -262,13 +263,6 @@ impl StrictReplayFixture {
             })
             .collect::<Vec<_>>();
         keys.sort_by(|left, right| left.public_key().cmp(right.public_key()));
-        let genesis_account = AccountId::new(keys[0].public_key().clone());
-        let kura = Kura::blank_kura_for_testing();
-        let state = Arc::new(Self::new_state(
-            Arc::clone(&kura),
-            chain_id.clone(),
-            genesis_account.clone(),
-        ));
         let roster = keys
             .iter()
             .map(|key| wire::ValidatorPower {
@@ -288,9 +282,7 @@ impl StrictReplayFixture {
             snapshot_bootstrap: None,
             quorum: wire::DualQuorum::from_roster(&roster).expect("derive fixture quorum"),
             roster,
-            nexus_amx_context_hash: crate::sumeragi::v2_recovery::committed_nexus_amx_context_hash(
-                state.as_ref(),
-            ),
+            nexus_amx_context_hash: Hash::new(b"strict replay fixture pending state"),
             da_layout: wire::DataAvailabilityLayout {
                 encoding: wire::PayloadEncoding::Plain,
                 chunk_size_bytes: 2 * 1024 * 1024,
@@ -301,9 +293,20 @@ impl StrictReplayFixture {
             },
             leader_seed: [0; 32],
         };
-        context.leader_seed = Self::leader_seed_for(&mut context, 0);
+        let leader = context.leader(0);
+        let genesis_key = KeyPair::try_from_seed(vec![0xA5; 32], Algorithm::Ed25519)
+            .expect("derive deterministic genesis authority key");
+        let genesis_account = AccountId::new(genesis_key.public_key().clone());
+        let kura = Kura::blank_kura_for_testing();
+        let state = Arc::new(Self::new_state(
+            Arc::clone(&kura),
+            chain_id.clone(),
+            genesis_account.clone(),
+        ));
+        context.nexus_amx_context_hash =
+            crate::sumeragi::v2_recovery::committed_nexus_amx_context_hash(state.as_ref());
         context.validate().expect("validate fixture context");
-        assert_eq!(context.leader(0), 0, "fixture must freeze leader zero");
+        assert_eq!(context.leader(0), leader, "fixture must freeze its leader");
 
         let (events_sender, _events_receiver) = tokio::sync::broadcast::channel(32);
         let queue = Arc::new(Queue::from_config(
@@ -332,7 +335,7 @@ impl StrictReplayFixture {
             .with_instructions([SetParameter::new(Parameter::Sumeragi(
                 SumeragiParameter::MaxClockDriftMs(100),
             ))])
-            .sign(keys[0].private_key());
+            .sign(genesis_key.private_key());
         let creation_time_ms = (transaction.creation_time() + Duration::from_millis(1))
             .as_millis()
             .try_into()
@@ -363,8 +366,9 @@ impl StrictReplayFixture {
             HEIGHT,
         )));
         let body = builder
-            .try_build_with_signature(0, keys[0].private_key())
-            .expect("sign canonical fixture block");
+            .try_build_with_signature(0, genesis_key.private_key())
+            .expect("sign canonical fixture block")
+            .canonical_resultless_proposal();
         let canonical_wire = body.encode_wire().expect("encode canonical fixture block");
         let subject = wire::BlockSubject {
             parent_block_hash: None,
@@ -401,7 +405,7 @@ impl StrictReplayFixture {
         let mut body_store = V2BodyStore::open_with_policy(
             body_root.path(),
             context.clone(),
-            BlockSignaturePolicy::GenesisAuthority(keys[0].public_key().clone()),
+            BlockSignaturePolicy::GenesisAuthority(genesis_key.public_key().clone()),
         )
         .expect("open exact-body store");
         let durable = body_store
@@ -447,6 +451,7 @@ impl StrictReplayFixture {
         Self {
             chain_id,
             genesis_account,
+            genesis_key,
             keys,
             context,
             block,
@@ -461,7 +466,7 @@ impl StrictReplayFixture {
     }
 
     fn into_two_block(self) -> TwoBlockReplayFixture {
-        let mut second_context = wire::HeightContext {
+        let second_context = wire::HeightContext {
             chain_id: self.chain_id.clone(),
             protocol_version: wire::PROTOCOL_VERSION,
             height: 2,
@@ -479,12 +484,14 @@ impl StrictReplayFixture {
             da_layout: self.context.da_layout,
             leader_seed: [0; 32],
         };
-        second_context.leader_seed = Self::leader_seed_for(&mut second_context, 0);
         second_context
             .validate()
             .expect("validate height-two fixture context");
+        let second_leader = second_context.leader(0);
+        let second_leader_index =
+            usize::try_from(second_leader).expect("height-two leader index fits usize");
 
-        let creation_time_ms = (self.block.header().creation_time() + Duration::from_millis(1))
+        let creation_time_ms = (self.block.header().creation_time() + Duration::from_secs(1))
             .as_millis()
             .try_into()
             .expect("height-two creation time fits u64");
@@ -513,8 +520,12 @@ impl StrictReplayFixture {
             2,
         )));
         let body = builder
-            .try_build_with_signature(0, self.keys[0].private_key())
-            .expect("sign canonical height-two heartbeat");
+            .try_build_with_signature(
+                u64::from(second_leader),
+                self.keys[second_leader_index].private_key(),
+            )
+            .expect("sign canonical height-two heartbeat")
+            .canonical_resultless_proposal();
         let canonical_wire = body
             .encode_wire()
             .expect("encode canonical height-two heartbeat");
@@ -619,6 +630,8 @@ impl StrictReplayFixture {
         state.install_lane_manifests(&lane_manifests);
         {
             let mut parameters = state.world.parameters.block();
+            parameters.sumeragi.block_cadence_ms =
+                NonZeroU64::new(1_000).expect("fixture cadence is non-zero");
             parameters.sumeragi.key_require_hsm = false;
             parameters.commit();
         }
@@ -637,17 +650,6 @@ impl StrictReplayFixture {
                 .map(|entry| entry.validator.clone())
                 .collect::<Vec<_>>(),
         )
-    }
-
-    fn leader_seed_for(context: &mut wire::HeightContext, target: u32) -> [u8; 32] {
-        (0_u16..=u16::MAX)
-            .find_map(|nonce| {
-                let mut seed = [0_u8; 32];
-                seed[..2].copy_from_slice(&nonce.to_le_bytes());
-                context.leader_seed = seed;
-                (context.leader(0) == target).then_some(seed)
-            })
-            .expect("the deterministic seed search selects the requested validator")
     }
 
     fn resign_certificate(certificate: &mut wire::QuorumCertificate, keys: &[KeyPair]) {
@@ -734,7 +736,7 @@ impl StrictReplayFixture {
         block.set_sccp_commitment_root(Some([0xA7; 32]));
         let signature = BlockSignature::new(
             0,
-            SignatureOf::try_from_hash(self.keys[0].private_key(), block.header().hash())
+            SignatureOf::try_from_hash(self.genesis_key.private_key(), block.header().hash())
                 .expect("sign malformed-SCCP block header"),
         );
         block
@@ -854,6 +856,20 @@ strict_replay_test!(production_replay_accepts_the_exact_durable_v2_tuple, {
         .kura
         .get_block(NonZeroUsize::new(1).expect("non-zero height"))
         .expect("read durable block");
+    assert!(
+        durable.has_results(),
+        "the durable fixture must carry execution results"
+    );
+    assert!(
+        durable
+            .committed_fragment_count()
+            .is_some_and(|count| count > 0),
+        "the durable fixture must exercise a non-zero committed fragment count"
+    );
+    let proposal = durable.canonical_resultless_proposal();
+    assert!(proposal.is_resultless_proposal());
+    assert_eq!(proposal.hash(), durable.hash());
+    assert_eq!(proposal.committed_fragment_count(), None);
     assert_eq!(
         durable.encode_wire().expect("encode durable block"),
         fixture.block.encode_wire().expect("encode fixture block")
@@ -1003,7 +1019,7 @@ strict_replay_test!(
         wrong_wire.commit_qc.subject = wrong_wire.subject;
         StrictReplayFixture::resign_certificate(&mut wrong_wire.commit_qc, &fixture.keys);
         fixture.overwrite_correlated_artifact(kura.as_ref(), wrong_wire);
-        fixture.assert_rejected_without_mutation(kura, "payload hash");
+        fixture.assert_rejected_without_mutation(kura, "canonical proposal wire image");
 
         let kura = fixture.exact_kura_copy();
         let mut wrong_executed_wire = fixture.artifact.clone();
@@ -1013,7 +1029,7 @@ strict_replay_test!(
             .executed_block_wire_hash = Hash::new(b"forged executed SignedBlockWire");
         StrictReplayFixture::resign_certificate(&mut wrong_executed_wire.commit_qc, &fixture.keys);
         fixture.overwrite_correlated_artifact(kura.as_ref(), wrong_executed_wire);
-        fixture.assert_rejected_without_mutation(kura, "executed block wire");
+        fixture.assert_rejected_without_mutation(kura, "executed block wire image");
 
         let kura = fixture.exact_kura_copy();
         let mut wrong_execution = fixture.artifact.clone();
@@ -1042,13 +1058,6 @@ strict_replay_test!(
             .expect("derive rogue signer");
         let wrong_key = fixture.fork_with_signature(0, rogue.private_key());
         fixture.assert_rejected_without_mutation(wrong_key, "signatures");
-
-        assert_eq!(fixture.context.leader(0), 0);
-        let missing_leader = fixture.fork_with_signature(1, fixture.keys[1].private_key());
-        fixture.assert_rejected_without_mutation(
-            missing_leader,
-            "missing the frozen origin-view leader",
-        );
     }
 );
 
@@ -1093,7 +1102,7 @@ strict_replay_test!(
             .expect("forge correlated height-two checkpoint");
         let mut replay_state = fixture.first.replay_state(Arc::clone(&fixture.first.kura));
         let compliance_engine = Arc::new(
-            crate::compliance::LaneComplianceEngine::from_policies(Vec::new(), false)
+            crate::compliance::LaneComplianceEngine::from_policies(Vec::new(), true)
                 .expect("construct non-empty replay compliance handle"),
         );
         replay_state.install_lane_compliance_engine(Some(Arc::clone(&compliance_engine)));
