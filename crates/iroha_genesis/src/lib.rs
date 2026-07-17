@@ -1423,14 +1423,9 @@ pub mod genesis_instructions_json {
         if let Some(grant) = instruction.as_any().downcast_ref::<GrantBox>() {
             return match grant {
                 GrantBox::Permission(grant_perm) => {
-                    let mut permission_name = grant_perm.object().to_string();
-                    if let Some(idx) = permission_name.find('(') {
-                        permission_name.truncate(idx);
-                    }
-                    let mut permission = Map::new();
-                    permission.insert("name".to_string(), Value::String(permission_name));
+                    let permission = norito::json::value::to_value(grant_perm.object()).ok()?;
                     let mut fields = Map::new();
-                    fields.insert("object".to_string(), Value::Object(permission));
+                    fields.insert("object".to_string(), permission);
                     let destination = account_literal(grant_perm.destination())?;
                     fields.insert("destination".to_string(), Value::String(destination));
                     Some(wrap("Grant", "Permission", Value::Object(fields)))
@@ -1528,7 +1523,7 @@ pub mod genesis_instructions_json {
 
     #[cfg(test)]
     mod tests {
-        use std::{num::NonZeroU64, path::PathBuf};
+        use std::{collections::BTreeSet, num::NonZeroU64, path::PathBuf};
 
         #[allow(unused_imports)]
         use iroha_data_model::{
@@ -1540,14 +1535,18 @@ pub mod genesis_instructions_json {
             },
             level::Level,
             metadata::Metadata,
-            nexus::LaneId,
+            nexus::{DataSpaceId, LaneId},
             parameter::{Parameter, TransactionParameter},
+            permission::Permission,
             prelude::{
                 AccountId, AssetDefinitionId, AssetId, Grant, InstructionBox, Mint, Register,
                 Transfer,
             },
         };
-        use iroha_executor_data_model::permission::parameter::CanSetParameters;
+        use iroha_executor_data_model::permission::{
+            account::{AccountAliasPermissionScope, CanManageAccountAlias, CanResolveAccountAlias},
+            parameter::CanSetParameters,
+        };
         use iroha_primitives::json::Json;
         use iroha_test_samples::ALICE_ID;
 
@@ -1716,6 +1715,90 @@ pub mod genesis_instructions_json {
                     assert_eq!(set_alias.lease_expiry_ms(), &None);
                 }
                 other => panic!("unexpected set-asset-definition-alias instruction: {other:?}"),
+            }
+        }
+
+        #[test]
+        fn scoped_alias_permission_grants_preserve_payloads_through_genesis_json() {
+            let account_id = ALICE_ID.clone();
+            let universal = AccountAliasPermissionScope::Dataspace(DataSpaceId::UNIVERSAL);
+            let private = AccountAliasPermissionScope::Dataspace(DataSpaceId::new(10));
+            let domain = AccountAliasPermissionScope::Domain(
+                DomainId::parse_fully_qualified("hbl.sbp").expect("domain scope must parse"),
+            );
+            let cases = [universal, private, domain]
+                .into_iter()
+                .flat_map(|scope| {
+                    [
+                        (
+                            Permission::from(CanManageAccountAlias {
+                                scope: scope.clone(),
+                            }),
+                            scope.clone(),
+                        ),
+                        (
+                            Permission::from(CanResolveAccountAlias {
+                                scope: scope.clone(),
+                            }),
+                            scope,
+                        ),
+                    ]
+                })
+                .collect::<Vec<_>>();
+            let instructions = cases
+                .iter()
+                .map(|(permission, _)| {
+                    Grant::account_permission(permission.clone(), account_id.clone()).into()
+                })
+                .collect::<Vec<InstructionBox>>();
+
+            let encoded = instructions_to_value(&instructions);
+            for instruction in encoded.as_array().expect("instruction array") {
+                let payload = instruction
+                    .get("Grant")
+                    .and_then(|value| value.get("Permission"))
+                    .and_then(|value| value.get("object"))
+                    .and_then(|value| value.get("payload"))
+                    .expect("structured permission grant must include its payload");
+                assert_ne!(
+                    payload,
+                    &Value::Null,
+                    "scoped permission payload must not collapse to null"
+                );
+            }
+
+            let decoded = from_value(&encoded).expect("decode structured permission grants");
+            assert_eq!(decoded.len(), cases.len());
+            let mut unique = BTreeSet::new();
+            for (instruction, (expected_permission, expected_scope)) in decoded.iter().zip(&cases) {
+                let GrantBox::Permission(grant) = instruction
+                    .as_any()
+                    .downcast_ref::<GrantBox>()
+                    .expect("decoded instruction must be a permission grant")
+                else {
+                    panic!("decoded grant must target an account");
+                };
+                assert_eq!(grant.destination(), &account_id);
+                assert_eq!(grant.object(), expected_permission);
+                assert!(
+                    unique.insert((grant.destination().clone(), grant.object().clone())),
+                    "scoped permission grants must remain distinct"
+                );
+                match expected_permission.name() {
+                    "CanManageAccountAlias" => assert_eq!(
+                        CanManageAccountAlias::try_from(grant.object())
+                            .expect("decode manage permission")
+                            .scope,
+                        expected_scope.clone()
+                    ),
+                    "CanResolveAccountAlias" => assert_eq!(
+                        CanResolveAccountAlias::try_from(grant.object())
+                            .expect("decode resolve permission")
+                            .scope,
+                        expected_scope.clone()
+                    ),
+                    name => panic!("unexpected alias permission `{name}`"),
+                }
             }
         }
 
@@ -2070,6 +2153,12 @@ impl norito::json::JsonSerialize for RawGenesisTx {
 }
 
 impl RawGenesisTx {
+    /// Instructions carried by this raw genesis transaction.
+    #[must_use]
+    pub fn instructions(&self) -> &[InstructionBox] {
+        &self.instructions
+    }
+
     /// Topology entries carried by this transaction.
     #[must_use]
     pub fn topology(&self) -> &[GenesisTopologyEntry] {
@@ -2779,6 +2868,60 @@ impl RawGenesisTransaction {
     #[must_use]
     pub fn transactions(&self) -> &[RawGenesisTx] {
         &self.transactions
+    }
+
+    /// Replace one instruction-only raw transaction with one or more
+    /// instruction-only transactions.
+    ///
+    /// This deliberately refuses to rewrite a transaction that also carries
+    /// parameters, IVM triggers, or topology. Callers can therefore perform a
+    /// narrow transaction-boundary migration without silently moving any
+    /// other genesis semantics.
+    pub fn replace_instruction_only_transaction(
+        &mut self,
+        index: usize,
+        replacement_batches: Vec<Vec<InstructionBox>>,
+    ) -> Result<()> {
+        if replacement_batches.is_empty() {
+            return Err(eyre!(
+                "replacement for raw genesis transaction {index} must contain at least one batch"
+            ));
+        }
+        if let Some((batch_index, _)) = replacement_batches
+            .iter()
+            .enumerate()
+            .find(|(_, batch)| batch.is_empty())
+        {
+            return Err(eyre!(
+                "replacement batch {batch_index} for raw genesis transaction {index} must not be empty"
+            ));
+        }
+
+        let original = self.transactions.get(index).ok_or_else(|| {
+            eyre!(
+                "raw genesis transaction index {index} is out of bounds for {} transactions",
+                self.transactions.len()
+            )
+        })?;
+        if original.parameters.is_some()
+            || !original.ivm_triggers.is_empty()
+            || !original.topology.is_empty()
+        {
+            return Err(eyre!(
+                "raw genesis transaction {index} is not instruction-only; refusing to move parameters, IVM triggers, or topology"
+            ));
+        }
+
+        let replacements = replacement_batches
+            .into_iter()
+            .map(|instructions| RawGenesisTx {
+                parameters: None,
+                instructions,
+                ivm_triggers: Vec::new(),
+                topology: Vec::new(),
+            });
+        self.transactions.splice(index..=index, replacements);
+        Ok(())
     }
 
     /// Remove topology entries from all transactions.

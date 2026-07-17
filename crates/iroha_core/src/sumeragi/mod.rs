@@ -669,6 +669,11 @@ pub struct GenesisWithPubKey {
     pub genesis: Option<GenesisBlock>,
     /// Public key used to sign the genesis payload.
     pub public_key: PublicKey,
+    /// Signed, authenticated cadence frozen for this consensus process.
+    ///
+    /// Fresh startup must not read this value from the pre-genesis world, whose
+    /// placeholder parameters have not yet been replaced by signed genesis.
+    pub block_cadence: Duration,
     /// Verified, uncommitted height-one context derived from fresh genesis.
     /// Absent only on the preserved non-empty-storage restart path.
     pub v2_bootstrap: Option<GenesisV2Bootstrap>,

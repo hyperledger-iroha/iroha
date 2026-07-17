@@ -2382,12 +2382,22 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
     /// Consume startup or reducer effects in their exact emitted order.
     pub(crate) fn consume_effects<S: V2EffectServices>(
         &mut self,
-        effects: Vec<AdapterEffect>,
+        mut effects: Vec<AdapterEffect>,
         services: &mut S,
     ) -> Result<usize, EffectExecutorError> {
         self.ensure_open()?;
-        if let Err(error) = self.reconcile_runtime_decision(services) {
-            return Err(self.close(error, services));
+        let decision = match self.reconcile_runtime_decision(services) {
+            Ok(decision) => decision,
+            Err(error) => return Err(self.close(error, services)),
+        };
+        if let Some(decision) = decision {
+            // A single serialized runtime step may drain work that was queued before a
+            // CommitQC and then install that Decision later in the same returned batch.
+            // Decision reconciliation has already retired every competing owner, including
+            // outbound proposal chunks. Retire the corresponding in-flight effects as well:
+            // dispatching them would either resurrect terminal work or ask the transport for
+            // chunks that finality has deliberately released.
+            effects.retain(|effect| Self::effect_survives_decision(effect, decision));
         }
         let count = effects.len();
         for effect in effects {
@@ -2399,6 +2409,51 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             return Err(self.close(error, services));
         }
         Ok(count)
+    }
+
+    /// Return whether an already-emitted effect remains owned after durable finality.
+    ///
+    /// The exact CommitQC may still need propagation, and the exact decided body must finish its
+    /// local recovery/application pipeline. Diagnostic reports do not create consensus work.
+    /// Every other effect belongs to a pre-Decision transition and is terminally stale.
+    fn effect_survives_decision(
+        effect: &AdapterEffect,
+        decision: (
+            wire::ConsensusRound,
+            wire::BlockSubject,
+            wire::ExecutionCommitment,
+        ),
+    ) -> bool {
+        let (decision_round, decision_subject, decision_commitment) = decision;
+        match effect {
+            AdapterEffect::Broadcast(message) => matches!(
+                &message.payload,
+                wire::ConsensusMessageV2Payload::QuorumCertificate(certificate)
+                    if certificate.phase == wire::GlobalPhase::Commit
+                        && certificate.round == decision_round
+                        && certificate.subject == decision_subject
+                        && certificate.execution_commitment == decision_commitment
+            ),
+            AdapterEffect::FetchBody { round, subject, .. }
+            | AdapterEffect::StoreBody { round, subject, .. }
+            | AdapterEffect::ValidateBody { round, subject, .. } => {
+                (*round, *subject) == (decision_round, decision_subject)
+            }
+            AdapterEffect::Apply {
+                subject,
+                certificate,
+                ..
+            } => {
+                *subject == decision_subject
+                    && certificate.phase == wire::GlobalPhase::Commit
+                    && certificate.round == decision_round
+                    && certificate.subject == decision_subject
+                    && certificate.execution_commitment == decision_commitment
+            }
+            AdapterEffect::ReportEquivocation { .. }
+            | AdapterEffect::ReportInvalidCertifiedBody { .. } => true,
+            AdapterEffect::Sign { .. } | AdapterEffect::EnterView { .. } => false,
+        }
     }
 
     /// Consume only the local exact-body/application pipeline permitted while recovering an
@@ -5174,7 +5229,14 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
     fn reconcile_runtime_decision<S: V2EffectServices>(
         &mut self,
         services: &mut S,
-    ) -> Result<(), EffectExecutorError> {
+    ) -> Result<
+        Option<(
+            wire::ConsensusRound,
+            wire::BlockSubject,
+            wire::ExecutionCommitment,
+        )>,
+        EffectExecutorError,
+    > {
         let decision = self
             .runtime
             .decided_body()
@@ -5182,7 +5244,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         if let Some(decision) = decision {
             self.reconcile_decision_work(decision, false, services)?;
         }
-        Ok(())
+        Ok(decision)
     }
 
     /// Reconcile volatile ownership immediately after the reducer installs a
@@ -6410,6 +6472,11 @@ mod tests {
             wire::BlockSubject,
             wire::ExecutionCommitment,
         )>,
+        decision_on_next_step: Option<(
+            wire::ConsensusRound,
+            wire::BlockSubject,
+            wire::ExecutionCommitment,
+        )>,
         round_tag: Option<EventTag>,
         fail_enqueue: bool,
         fail_enqueue_hits: usize,
@@ -6486,7 +6553,13 @@ mod tests {
     impl EffectRuntime for FakeRuntime {
         fn step_effects(&mut self, _now: Instant) -> Result<RuntimeStep<AdapterEffect>, String> {
             assert!(!self.panic_step, "model safety-WAL step panic");
-            self.steps.pop_front().unwrap_or(Ok(RuntimeStep::Idle))
+            let step = self.steps.pop_front().unwrap_or(Ok(RuntimeStep::Idle));
+            if matches!(&step, Ok(RuntimeStep::Advanced(_)))
+                && let Some(decision) = self.decision_on_next_step.take()
+            {
+                self.decided_body = Some(decision);
+            }
+            step
         }
 
         fn step_recovery_effects(
@@ -7638,6 +7711,19 @@ mod tests {
             signer: 0,
             signature: Vec::new(),
         }
+    }
+
+    fn proposal(fixture: &Fixture) -> wire::ConsensusMessageV2 {
+        wire::ConsensusMessageV2::new(wire::ConsensusMessageV2Payload::Proposal(wire::Proposal {
+            round: fixture.manifest.round,
+            proposer: fixture.context.leader(fixture.manifest.round.view),
+            subject: fixture.manifest.subject,
+            manifest: fixture.manifest.clone(),
+            justification: wire::ProposalJustification::ParentCommit(
+                wire::ParentCommitJustification { certificate: None },
+            ),
+            signature: vec![0x91],
+        }))
     }
 
     fn timeout_certificate(fixture: &Fixture) -> wire::TimeoutCertificate {
@@ -11910,6 +11996,109 @@ mod tests {
             pending.task.round == commit.round && pending.task.subject == commit.subject
         }));
         assert_eq!(services.cancelled_fetches, vec![losing_id]);
+        assert_eq!(services.retired_all_outbound, 1);
+        assert_eq!(services.retired_candidate_work, 1);
+        assert!(!executor.status().fail_closed);
+        assert!(services.closed.is_empty());
+    }
+
+    #[test]
+    fn decision_installed_by_same_runtime_step_retires_stale_terminal_effects() {
+        let fixture = Fixture::new();
+        let mut executor = fixture.executor(EffectQueueConfig::default());
+        let mut services = fixture.services();
+        let commit = fixture.qc(wire::GlobalPhase::Commit);
+        executor.runtime.decision_on_next_step =
+            Some((commit.round, commit.subject, commit.execution_commitment));
+        executor
+            .runtime
+            .steps
+            .push_back(Ok(RuntimeStep::Advanced(vec![
+                AdapterEffect::Broadcast(proposal(&fixture)),
+                AdapterEffect::Sign {
+                    tag: tag(0),
+                    request: SignRequest::Vote(vote(&fixture)),
+                },
+            ])));
+        services.fail_on = Some("broadcast");
+
+        assert_eq!(
+            executor
+                .step(Instant::now(), &mut services)
+                .expect("durable Decision retires stale in-flight effects"),
+            EffectExecutorStep::Advanced { effects: 0 }
+        );
+        assert_eq!(services.fail_on, Some("broadcast"));
+        assert!(services.broadcasts.is_empty());
+        assert!(services.sign_tasks.is_empty());
+        assert_eq!(services.retired_all_outbound, 1);
+        assert_eq!(services.retired_candidate_work, 1);
+        assert!(!executor.status().fail_closed);
+        assert!(services.closed.is_empty());
+    }
+
+    #[test]
+    fn decision_installed_by_same_runtime_step_keeps_exact_commit_and_body_work() {
+        let fixture = Fixture::new();
+        let mut executor = fixture.executor(EffectQueueConfig::default());
+        let mut services = fixture.services();
+        let commit = fixture.qc(wire::GlobalPhase::Commit);
+        let decision = (commit.round, commit.subject, commit.execution_commitment);
+        let exact_commit_message = wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::QuorumCertificate(commit.clone()),
+        );
+        let (losing_subject, _) = distinct_body(&fixture);
+        let mut losing_commit = commit.clone();
+        losing_commit.subject = losing_subject;
+        let losing_commit_message = wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::QuorumCertificate(losing_commit),
+        );
+        let certified_sources = commit
+            .signers
+            .iter()
+            .map(|index| fixture.context.roster[*index as usize].validator.clone())
+            .collect();
+        executor.runtime.decision_on_next_step = Some(decision);
+        executor
+            .runtime
+            .steps
+            .push_back(Ok(RuntimeStep::Advanced(vec![
+                AdapterEffect::Broadcast(proposal(&fixture)),
+                AdapterEffect::Broadcast(losing_commit_message),
+                AdapterEffect::Broadcast(exact_commit_message.clone()),
+                AdapterEffect::FetchBody {
+                    tag: tag(0),
+                    round: commit.round,
+                    subject: losing_subject,
+                    manifest: None,
+                    certified_sources: Vec::new(),
+                    certificate: None,
+                },
+                AdapterEffect::FetchBody {
+                    tag: tag(0),
+                    round: commit.round,
+                    subject: commit.subject,
+                    manifest: None,
+                    certified_sources,
+                    certificate: Some(commit.clone()),
+                },
+                AdapterEffect::Sign {
+                    tag: tag(0),
+                    request: SignRequest::Vote(vote(&fixture)),
+                },
+            ])));
+
+        assert_eq!(
+            executor
+                .step(Instant::now(), &mut services)
+                .expect("dispatch only exact post-Decision effects"),
+            EffectExecutorStep::Advanced { effects: 2 }
+        );
+        assert_eq!(services.broadcasts, vec![exact_commit_message]);
+        assert!(services.sign_tasks.is_empty());
+        assert_eq!(services.fetch_tasks.len(), 1);
+        assert_eq!(services.fetch_tasks[0].round, commit.round);
+        assert_eq!(services.fetch_tasks[0].subject, commit.subject);
         assert_eq!(services.retired_all_outbound, 1);
         assert_eq!(services.retired_candidate_work, 1);
         assert!(!executor.status().fail_closed);

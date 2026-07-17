@@ -5006,15 +5006,18 @@ impl Iroha {
                 .as_deref(),
             config.settlement.offline.kagemusha_artifact_dir.as_deref(),
         ) {
-            (None, None) => iroha_core::smartcontracts::isi::offline::KagemushaReleaseCatalogV4::empty(),
+            (None, None) => {
+                iroha_core::smartcontracts::isi::offline::KagemushaReleaseCatalogV4::empty()
+            }
             (Some(policy_path), Some(artifact_dir)) => {
                 iroha_core::smartcontracts::isi::offline::KagemushaReleaseCatalogV4::load(
                     policy_path,
                     artifact_dir,
                 )
                 .map_err(|error| {
-                    Report::new(StartError::InitKura)
-                        .attach(format!("failed to authenticate Kagemusha V4 release catalog: {error}"))
+                    Report::new(StartError::InitKura).attach(format!(
+                        "failed to authenticate Kagemusha V4 release catalog: {error}"
+                    ))
                 })?
             }
             _ => {
@@ -5496,6 +5499,16 @@ impl Iroha {
                 confidential_features,
             )
         };
+        let authenticated_block_cadence = Duration::from_millis(signed_block_cadence_ms);
+        if state.committed_height() > 0
+            && state.sumeragi_block_cadence() != authenticated_block_cadence
+        {
+            return Err(Report::new(StartError::InitKura).attach(format!(
+                "committed state cadence {:?} differs from authenticated startup cadence {:?}",
+                state.sumeragi_block_cadence(),
+                authenticated_block_cadence,
+            )));
+        }
         iroha_logger::info!(
             mode=%consensus_caps.mode_tag,
             proto=%consensus_caps.proto_version,
@@ -5821,6 +5834,17 @@ impl Iroha {
                 .unpack(|_| {});
                 match validation {
                     Ok((_valid_block, state_block)) => {
+                        let staged_block_cadence_ms = state_block
+                            .world()
+                            .parameters()
+                            .sumeragi()
+                            .block_cadence_ms()
+                            .get();
+                        if staged_block_cadence_ms != fresh_block_cadence_ms {
+                            return Err(Report::new(StartError::InitKura).attach(format!(
+                                "staged genesis cadence {staged_block_cadence_ms} ms differs from authenticated signed cadence {fresh_block_cadence_ms} ms",
+                            )));
+                        }
                         let (mode, signed_parameters) =
                             signed_v2_genesis_context_metadata(genesis_block)
                                 .map_err(|error| Report::new(StartError::InitKura).attach(error))?;
@@ -6161,6 +6185,7 @@ impl Iroha {
             genesis_network: GenesisWithPubKey {
                 genesis: genesis_for_consensus,
                 public_key: effective_genesis_public_key.clone(),
+                block_cadence: authenticated_block_cadence,
                 v2_bootstrap: staged_v2_genesis,
             },
         }

@@ -8,6 +8,7 @@ use crate::{Outcome, RunArgs};
 
 mod embed_pop;
 mod generate;
+mod migrate_private_dataspace;
 mod normalize;
 mod npos;
 mod pop;
@@ -48,6 +49,8 @@ pub enum Args {
     EmbedPop(embed_pop::Args),
     /// Expand a genesis manifest and show the final ordered transactions
     Normalize(normalize::Args),
+    /// Split the exact legacy private-dataspace permission tail for retained custody material
+    MigratePrivateDataspaceBootstrap(migrate_private_dataspace::Args),
 }
 
 impl<T: Write> RunArgs<T> for Args {
@@ -59,6 +62,7 @@ impl<T: Write> RunArgs<T> for Args {
             Args::Pop(args) => args.run(writer),
             Args::EmbedPop(args) => args.run(writer),
             Args::Normalize(args) => args.run(writer),
+            Args::MigratePrivateDataspaceBootstrap(args) => args.run(writer),
         }
     }
 }
